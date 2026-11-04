@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-download.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 513fb395-c640-4bb6-b76c-d9fe80b3224e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -42,7 +42,8 @@ the ABO extraction plan ([09](09-abo-on-core.md) S7) builds:
 |---|---|---|
 | `Client` interface (all methods, incl. `Add` and `Remove`, so adapter conformance covers them), `Adapter`, instances (05-metadata M1), path mapping (§4.4) | **1** | ABO (Deluge) |
 | `Pool.Instances`, `Lease`, `Items`, `Files`, `Relocate` | **1** | ABO: discovery by label, details/files, move-after-organize (§10) |
-| `Pool.Grab`, grab records and recovery (§4.3), monitor/poll task and outbox topics (§4.5), `Watch`, `Tracked`, `Refresh`, `MarkImported`, `Pool.Remove`, seed goals, the `core.download.*` poll keys | **2 — deferred-build: not in the ABO extraction plan** | `acquire` (TV/Movies) |
+| `Pool.Grab`, grab records and recovery (§4.3), monitor/poll task and outbox topics (§4.5), `Watch`, `Tracked`, `Refresh`, `MarkImported`, `Pool.Remove`, seed goals, the `core.download.*` poll keys and the `core.download.schedules.poll` schedule key | **2 — deferred-build: not in the ABO extraction plan** | `acquire` (TV/Movies) |
+| books' `BookVersion.TorrentHash`/`BookFile.DelugeHash` → stored `download.ItemRef` (a library-scale books row rewrite) | **2** — when a second download instance can exist; ships with its own 09-style stage entry (rollback, mirror or read-in-place, done-check) | books (SIMP2-7) |
 
 Phase-2 contracts below are kept at proof depth so `acquire` can be checked against them; nothing in
 phase 2 is built until the first TV/Movies app starts.
@@ -84,8 +85,12 @@ const (
 // or v2 where the client reports it), SABnzbd nzo_id, NZBGet NZBID.
 type ItemID string
 
-// ItemRef is the stable, cross-instance identity of a download. Apps store
-// this, never a bare hash (fixes BookVersion.TorrentHash ambiguity).
+// ItemRef is the stable, cross-instance identity of a download. Phase 1:
+// books keeps its hash fields unchanged and builds
+// ItemRef{Instance: download/deluge, ID: ItemID(hash)} at the call site
+// (Pool.Files, Pool.Relocate). Storing ItemRef instead of a bare hash (which
+// is ambiguous only once a second instance exists) is the phase-2 books
+// migration (§1 table, SIMP2-7).
 type ItemRef struct {
 	Instance integrations.Ref
 	ID       ItemID
@@ -347,8 +352,12 @@ type GrabEvent struct {
 ```
 
 Registrar slice (06 owns the type; phase 2): `func (r *Registrar) DownloadWatch(w ...download.Watch)`.
-Owners consume the topics below as ordinary outbox consumers ([05-events](05-events.md)); every topic is
-declared once in the events catalog (SIMP-5).
+Owners consume the topics below as ordinary outbox consumers ([05-events](05-events.md)), each selecting its own
+messages with the consumer filter `outbox.Where` (§4.5, COR2-10). Every topic is declared once in the events
+catalog (SIMP-5), in its **deferred-build** topic table: phase 1 declares none of the six, so no topic picker
+(notify rules, UI) offers a topic without a producer (SIMP2-10). Only the bus topic `item.changed.v1` carries
+`Realtime` metadata; the five durable topics carry none, because a Durable topic never reaches the bus the
+realtime hub reads (05-events rejects Realtime on a Durable topic; COR2-17).
 
 | Topic (phase 2) | Kind | When |
 |---|---|---|
@@ -367,13 +376,14 @@ Instances are `download/<id>` records in the one instance store (05-metadata §M
 `integrations.download.<id>.<field>` (05-config §2.3 grammar). Secret fields per adapter: Deluge `password`;
 qBittorrent `username`, `password`; Transmission `username`, `password`; SABnzbd `api_key`; NZBGet
 `username`, `password`. Every adapter declares `Meta.Egress = EgressConfigured`: a client on the LAN (the
-usual case) needs `Local=true`, which only an interactive admin can set, and a URL change clears the stored
-password (05-metadata M1.3, SEC-15). Adapters log in lazily on first call and re-login once on an auth error with the
+usual case) needs `Local=true`, which only an interactive `core:admin` holder can set (05-metadata M1.3,
+SEC2-7), or its host listed in `core.integrations.egress.lan_allow`; a URL change clears the stored password
+(SEC-15). Adapters log in lazily on first call and re-login once on an auth error with the
 generation guard of `internal/deluge/client.go:198-221` (concurrent callers log in once).
 
 | Adapter | Wire (raw/16 §4.6) | Health probe | Phase |
 |---|---|---|---|
-| `core.deluge` | Web JSON-RPC: `auth.login`, `web.connected`, `web.get_hosts`/`web.connect`, `core.add_torrent_magnet`/`_file`/`_url`, `core.get_torrents_status`, `core.move_storage`, `core.remove_torrent`, `core.set_torrent_options`, `label.*` | `web.connected` (and connect to the first host when false) | **1** — extracted from ABO with ABO's needs first (list, by label, details/files, move, remove), Add/Status added |
+| `core.deluge` | Web JSON-RPC: `auth.login`, `web.connected`, `web.get_hosts`/`web.connect`, `core.add_torrent_magnet`/`_file`/`_url`, `core.get_torrents_status`, `core.move_storage`, `core.remove_torrent`, `core.set_torrent_options`, `label.*` | `web.connected` (and connect to the first host when false) | **1** — extracted from ABO with ABO's needs first (list, by label, details/files, move), Add/Status/Remove added for adapter conformance (`RemoveTorrent` has no caller at HEAD, `git grep '\.RemoveTorrent('` @748fd787a is empty; SIMP2-17) |
 | `core.qbittorrent` | WebUI API v2: `auth/login`, `app/webapiVersion`, `torrents/info`, `torrents/files`, `torrents/add`, `torrents/delete`, `torrents/setLocation`, `torrents/setCategory`, `torrents/createCategory`, `torrents/categories`, `torrents/setShareLimits`, `torrents/addTags`, `torrents/topPrio` | `app/version` | **2** — first non-Deluge torrent adapter: richest surface in the evidence (categories, tags, share limits, post-import category, priority) |
 | `core.sabnzbd` | HTTP `api?mode=`: `addurl`/`addfile`, `queue`, `history`, `fullstatus`, `get_config`, `version`, `delete` (+ `apikey` query, redacted) | `mode=version` then `fullstatus` | **2** — first usenet adapter; failed-download handling in *arr is compatible by default only with SABnzbd/NZBGet (raw/16 §4.8) |
 | `core.transmission` | JSON-RPC: `torrent-add`, `torrent-get`, `torrent-set`, `torrent-set-location`, `torrent-remove`, `session-get`, `session-stats`; `X-Transmission-Session-Id` 409 handshake | `session-get` | **3** |
@@ -453,7 +463,8 @@ through the library's `os.Root` and reports unmapped ones as `HealthDegraded`.
 ### 4.5 Monitor and handoff (phase 2, deferred-build)
 
 Task `core.download.poll` (05-tasks) is the only client poller in core. It is scheduled by
-`tasks.ScheduleFromConfig("core.download.poll_interval")` (SIMP-6) and started on demand by `Pool.Refresh`
+`tasks.ScheduleFromConfig("core.download.schedules.poll")` (the one schedule-key rule, R2-7) and started on
+demand by `Pool.Refresh`
 (`acquire` calls it after a grab, the facade's `RefreshMonitoredDownloads` command calls it). `Refresh` starts
 a run only when none of the kind is queued, and the kind's `ConcurrencyKey` keeps runs from overlapping, so
 on-demand bursts collapse without a debounce timer. Per enabled instance, with parallelism
@@ -467,12 +478,18 @@ on-demand bursts collapse without a debounce timer. Per enabled instance, with p
 4. An instance whose poll fails keeps its snapshots untouched (no "removed" storm on an outage); removal is
    declared only after `core.download.removed_after` consecutive successful polls without the item.
 
-**Routing by owner.** Every outbox message carries `Owner` and `Refs` from the grab record. Items whose
-`Owner` is a module go to that module's consumer; items owned by `"core.acquire"` go to `acquire`, which
-applies the tracked-download transition in the relay batch (`ConsumeTx`) and starts its import task
-(`ConsumeIntoTask`, 05-events); foreign items go to the modules in `WatchedBy`. A consumer ignores messages
-it does not own. The owner imports (its own code: match entities, hardlink/copy/move via `library`, rename)
-and calls `Pool.MarkImported` **after** the import commits. Delivery is at-least-once; consumers are
+**Routing by owner (COR2-10).** Every outbox message carries `Owner` and `Refs` from the grab record. A
+consumer selects its messages with the consumer filter `outbox.Where` (05-events); unmatched messages are acked
+without effect, so no consumer starts a run or applies a write for another owner's download:
+
+| Owner | Consumer |
+|---|---|
+| `"core.acquire"` | **one** consumer, `core.acquire.download-events` (`ConsumeTx`, `Where(Owner == "core.acquire")`): it applies the tracked-download transition in the relay batch and, for `ImportPending`, stages the module's import run in that same batch ([10](10-tv-movies-proof.md) §10.5.4), so an import never starts before its transition. It is in the kernel's static core-consumer list, so outbox retention keeps each message until it has acked (05-events) |
+| a module | that module's `ConsumeIntoTask[Raw]` consumer with `Where(Owner == "<module>")` |
+| foreign item (no grab record) | each module in `WatchedBy`, with `Where(slices.Contains(WatchedBy, "<module>"))` |
+
+The owner imports (its own code, in its own task kind: match entities, hardlink/copy/move via `library`,
+rename) and calls `Pool.MarkImported` **after** the import commits. Delivery is at-least-once; consumers are
 idempotent (keyed by `ItemRef` + `CompletedAt`).
 
 ### 4.6 Shutdown
@@ -503,9 +520,11 @@ in-flight batches first.
 
 Adapters are goroutine-safe (login guarded; RPC ids atomic as `client.go:48`). Every method takes ctx; there
 is no `context.Background()` path in core (HEAD's no-ctx methods, `client.go:193-195`, are not carried).
-Phase 2: poll fan-out is bounded (§4.5). Grab is serialized per `IdempotencyKey` (keyed mutex,
-`internal/keyedmutex` moves to core per 03 §3.2.1 E2); serializing grabs **across** keys for the same entity
-is the owner's job (`acquire`'s per-entity grab lock, 10 §10.5.6). Monitor writes per instance are sequential
+Phase 2: poll fan-out is bounded (§4.5). Grab is serialized per `IdempotencyKey` with core's own internal
+keyed mutex, `core/internal/keyedmutex` (a core-internal copy added at S3 by 04 §9; ABO's
+`internal/keyedmutex` stays in ABO, 03 §3.2.1, and core cannot import it, R1; COR2-16). Serializing grabs
+**across** keys for the same entity is the owner's job: `acquire`'s per-entity grab lock is the executor's
+ref-lock table (10 §10.5.6, 05-tasks §5T.3.4). Monitor writes per instance are sequential
 (one poller per instance at a time; the kind's `ConcurrencyKey` keeps runs from overlapping). Library-scale app work over download items (ABO link-backfill,
 centralize) runs as module tasks through `RunItems` with declared parallelism; the providerhttp bucket of the
 instance bounds the request rate regardless of worker count.
@@ -515,19 +534,22 @@ instance bounds the request rate regardless of worker count.
 Instance records are data in the one instance store (05-metadata M1), not config keys (SIMP-4); the rows
 marked "instance setting" are fields of a `download/<id>` record.
 
-| Key | Type | Default | Hot-reload |
-|---|---|---|---|
-| instance setting `category` | string | `""` | yes |
-| instance setting `post_import_category` (phase 2) | string | `""` | yes |
-| instance setting `remove_completed` / `remove_failed` (phase 2) | bool | `true` / `true` (raw/16 §4.6 definition defaults) | yes |
-| instance setting `limits.*` | providerhttp limits | adapter default: RPS 10, burst 10, timeout 30s (Add 120s), no daily quota | yes |
-| `core.library.mappings` (Source `download:<id>`) | list of `library.Mapping` (05-library) | `[]` | yes |
-| `core.download.caps_ttl` | duration | `1h` | yes |
-| `core.download.poll_interval` (phase 2; bound by `tasks.ScheduleFromConfig`) | duration | `60s` | yes |
-| `core.download.removed_after` (phase 2) | int (polls) | `3` | yes |
-| `core.download.warning_to_failed` (phase 2) | duration | `24h` (0 = never) | yes |
-| `core.download.pending_recovery` (phase 2) | duration | `10m` | yes |
-| `core.download.snapshot_retention` (phase 2) | duration | `30d` after imported/removed | yes |
+Protection classes per 05-config §1.3.7 (SEC2-8). Instance fields follow the instance rules of 05-metadata M1.3
+(`core:integrations.manage`; `Local` only with the ProtectAdmin check).
+
+| Key | Type | Default | Hot-reload | Protection |
+|---|---|---|---|---|
+| instance setting `category` | string | `""` | yes | instance rules |
+| instance setting `post_import_category` (phase 2) | string | `""` | yes | instance rules |
+| instance setting `remove_completed` / `remove_failed` (phase 2) | bool | `true` / `true` (raw/16 §4.6 definition defaults) | yes | instance rules |
+| instance setting `limits.*` | providerhttp limits | adapter default: RPS 10, burst 10, timeout 30s (Add 120s), no daily quota | yes | instance rules |
+| `core.library.mappings` (Source `download:<id>`) | list of `library.Mapping` (05-library) | `[]` | yes | as 05-library declares it |
+| `core.download.caps_ttl` | duration | `1h` | yes | none |
+| `core.download.schedules.poll` (phase 2) | `tasks.ScheduleConfig`, declared by `download`, registered through `tasks.ScheduleFromConfig` (R2-7) | `{enabled: true, every: 1m}` | yes (re-read every scheduler poll) | none |
+| `core.download.removed_after` (phase 2) | int (polls) | `3` | yes | none |
+| `core.download.warning_to_failed` (phase 2) | duration | `24h` (0 = never) | yes | none |
+| `core.download.pending_recovery` (phase 2) | duration | `10m` | yes | none |
+| `core.download.snapshot_retention` (phase 2) | duration | `30d` after imported/removed | yes | none |
 
 ## 8. Metrics
 
@@ -552,7 +574,8 @@ Core, phase 2 (with `acquire`): `TestGrab_IdempotencyKeyDedupes`, `TestGrab_Ambi
 `TestGrab_RecordFuncInSameBatch`, `TestGrab_AddedEventStaged`, `TestPool_SelectionPriorityRoundRobin`,
 `TestPool_PinnedInstance`, `TestMonitor_TransitionWritesSnapshotAndOutboxInOneBatch`,
 `TestMonitor_OutageFreezesSnapshots`, `TestMonitor_RemovedAfterNPolls` (synctest),
-`TestMonitor_WatchFiltersForeignItems`, `TestMonitor_RoutesByOwner`, `TestPool_RefreshDoesNotStackRuns`,
+`TestMonitor_WatchFiltersForeignItems`, `TestMonitor_RoutesByOwner` (each owner's `Where` filter acks other
+owners' messages without a run or a write; COR2-10), `TestPool_RefreshDoesNotStackRuns`,
 `TestMarkImported_RemovesOnlyWhenSeedGoalMet`.
 Adapters: `coretest.DownloadConformance(t, factory, fixtures)` — one suite every adapter passes: add (magnet,
 file, URL), duplicate add, items/state mapping golden table, files, relocate, category, remove ± data, auth
@@ -566,13 +589,13 @@ client with a scriptable clock-driven state machine (`Advance(id, State)`), capa
 |---|---|
 | `internal/deluge/client.go` | `core/integrations/download/deluge` adapter (`core.deluge`); RPC/auth code reused; every method gains ctx; `http.Client` from `env.HTTP` (5-minute timeout becomes per-op limits) |
 | `deluge.GetClient()` global, `ResetGlobalClientForTest`, `SetGlobalClientForTest` | deleted; `Pool.Lease` |
-| `DelugeWebURL/Password`, `download_client.torrent.deluge` | one `download/deluge` record in the instance store created at first boot, `Local=true` when the host is loopback/private (05-metadata M1.10); password into `secrets` as `integrations.download.deluge.password` (instance ID fixed by 05-metadata M1.10's import table); env-authoritative behaviour preserved as an `Origin=pinned` row while an operator value is set (env names permanent, 05-metadata M1.4 step 2), not by a config key |
+| `DelugeWebURL/Password`, `download_client.torrent.deluge` | one `download/deluge` record in the instance store created at first boot, `Local=true` when the host is loopback/private (05-metadata M1.10); password into `secrets` as `integrations.download.deluge.password` (instance ID fixed by 05-metadata M1.10's import table); env-authoritative behaviour preserved as an **in-memory operator overlay** on the effective instance while an operator value is set — never written to the row or to `c/secrets/`, so removing the env value restores the stored password as HEAD does (env names permanent, 05-metadata M1.4 step 2, SIMP2-5); until 09 C7 an edit of `download/deluge` re-renders the legacy Deluge keys in the same batch and an edit made on the previous build is re-imported URL and password together (05-metadata M1.4 step 2a, DATA2-10) |
 | `deluge_move_enabled`, `deluge_discovery_label`, `deluge_discovery_enabled` | `modules.books.download.*` settings (they are ABO behaviour, not client config) |
-| `BookVersion.TorrentHash`, `BookFile.DelugeHash` | books stores `download.ItemRef`; legacy hashes resolved to the migrated Deluge instance (`Instance=download/deluge`) by a books migration |
+| `BookVersion.TorrentHash`, `BookFile.DelugeHash` | **phase 1: unchanged** — no books row rewrite; books builds `download.ItemRef{Instance: download/deluge, ID: ItemID(hash)}` at the call site. Storing `ItemRef` is the phase-2 books migration (§1 table), with its own stage entry when it ships (SIMP2-7) |
 | `NotifyDelugeAfterOrganize/AfterVersionSwap/MoveStorage(ToDir)` | books code calling `Pool.Relocate` (reached as `module.Deps.Downloads`, COR-1) for every `ItemRef` of the book's active versions, behind `Caps.Relocate` |
 | `deluge.path-update` (triggered by `book.relocated`), `deluge.centralize`, `deluge.link-backfill`, `deluge.protected-paths-sync`, `maintenance.bulk-deluge-import` | books tasks `books.download.*` calling `Pool`; `protected-paths-sync` gets a real schedule (fixes raw/06 note (d)) |
 | `ProtectedPathCache`, discovery, import, mark-in-place (`internal/deluge/*.go` minus client) | stay in ABO (audiobook behaviour) using `Pool.Items` (discovery: `ItemFilter{Categories: [<discovery label>]}`) and `Pool.Files` across **all** download instances; no `Watch`, monitor or grab is needed (phase 1 only) |
-| `/api/v1/deluge/*` routes (`internal/server/deluge_integration.go:139`) | `/api/books/v1/downloads/*` for ABO behaviour + core instance routes; legacy paths aliased (09) |
+| `/api/v1/deluge/*` routes (`internal/server/deluge_integration.go:139`) | books behaviour routes stay on the books legacy mount (cross-cutting 2; no reason of their own to rewrite them); generic client routes (test connection, status) become core instance routes with aliases (09 S7; SIMP2-17) |
 | `internal/plugin` `DownloadClient`, `TorrentInfo` | deleted (N4) |
 
 ## 11. Open items
@@ -606,12 +629,35 @@ Round 1 (`docs/plans/platform-core/reviews/spec-round-1-dispositions.md`):
 - COR-17: `events.EntityRef` replaced by `entity.Ref` / `[]entity.Ref` everywhere.
 - COR-1: modules reach the Pool as `module.Deps.Downloads`.
 - SIMP-4: instance records live in the 05-metadata M1 store; config rows removed; secret names
-  `integrations/download/<id>/<field>`; env-pinned Deluge settings via `Origin=pinned`.
+  `integrations/download/<id>/<field>` (superseded by the dotted form `integrations.download.<id>.<field>` in the
+  integration pass); env-pinned Deluge settings via `Origin=pinned` (superseded in round 2 by the in-memory
+  overlay, SIMP2-5).
 - SIMP-5: download topics declared once in the events catalog; `state_changed` renamed `changed` (03 §3.6 grammar).
-- SIMP-6: poll scheduled by `tasks.ScheduleFromConfig`; `refresh_debounce` timer key removed.
+- SIMP-6: poll scheduled by `tasks.ScheduleFromConfig` (key superseded in round 2 by `core.download.schedules.poll`,
+  R2-7); `refresh_debounce` timer key removed.
 - SIMP-17: `tasks.Fixed(n, reason)`.
 - SEC-15: adapters declare `EgressConfigured` (LAN clients need `Local`); `Source.URL` fetched `EgressPublicOnly`.
 
 Integration pass (cross-cluster requests, 2026-11-04):
 
 - integration pass: R-E request (SIMP-4) — secret names use 05-config's dotted `integrations.download.<id>.<field>` grammar; `download/deluge` cites 05-metadata M1.10's import table; pinned rows follow the one permanent-env rule.
+
+Round 2 (`docs/plans/platform-core/reviews/spec-round-2-dispositions.md`):
+
+- R2-7 / COR2-6 / SIMP2-1 — `core.download.poll_interval` (duration) replaced by the declared schedule key
+  `core.download.schedules.poll` (`tasks.ScheduleConfig`, phase 2) in §1, §4.5 and §7.
+- COR2-10 — §4.5 routing by owner via `outbox.Where`: one acquire consumer (`core.acquire.download-events`,
+  `ConsumeTx`) that stages the import run in the transition batch; module and `WatchedBy` filters; test wording.
+- COR2-16 — the grab mutex is `core/internal/keyedmutex` (04 §9 core-internal copy), not ABO's package; acquire's
+  cross-key lock is the executor ref-lock table.
+- COR2-17 / SIMP2-10 — the six topics live in the events catalog's deferred-build table; only the bus topic
+  `item.changed.v1` carries Realtime metadata.
+- SIMP2-7 — the `TorrentHash`/`DelugeHash` → `ItemRef` books migration moved to phase 2 (§1, §3, §10); phase 1
+  builds `ItemRef` at the call site.
+- SIMP2-17 — "remove" dropped from ABO's Deluge needs; books Deluge behaviour routes stay on the legacy mount.
+- SIMP2-5 — Deluge env values are an in-memory overlay, never persisted (§10).
+- DATA2-10 — `download/deluge` edits mirror back to the legacy keys until 09 C7; previous-build edits re-import
+  URL and password together (§10).
+- SEC2-7 — `Local` is set only by an interactive `core:admin` holder; `lan_allow` named.
+- SEC2-8 — §7 gains a Protection column.
+- SIMP2-16 — the slash-form secret-name history line marked superseded by the dotted form.

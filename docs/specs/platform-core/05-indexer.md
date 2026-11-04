@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-indexer.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 5e2d5cda-5f98-4db2-87b1-b4c8d6519ec7 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -288,15 +288,29 @@ which translates onto core's instance API. The contract core must offer the faca
 | `POST /api/v3/indexer/test` | `FacadeWriter.Test` (unsaved; class and status only, no body); response header `X-Application-Version` set by the facade |
 | `GET /api/v3/indexer` (Prowlarr finds "its" indexers by `baseUrl`/`apiKey`) | list instances; the facade compares `base_url` and a **hash** of the key (core never returns secret values: the facade answers with the masked form and Prowlarr's own match on `baseUrl` + implementation) — open item 2 |
 
-Requirements this places on core (all satisfied by 05-metadata §M1): the facade calls `Registry.Put` only
+Requirements this places on core (all satisfied by 05-metadata §M1, as **deferred-build members** of the
+packages that hold them; SIMP2-6): the facade calls `Registry.Put` only
 through **`integrations.FacadeWriter`**, which accepts the principal when it holds `<m>:arr.indexers` (the
 facade-confined key of [08](08-arr-facade.md) §8.5, which never carries `core:integrations.manage`) and forces
 `Origin=arrfacade` with the egress restrictions of SEC-15: `Local` is always false, and every URL field must be
 http(s) and resolve to public addresses or a host the operator listed in `core.integrations.egress.lan_allow`
 (a Prowlarr on the LAN needs that entry). Also: a stable external-origin marker; unsaved `Test` that returns no
 remote text; settings schema export; instance tags. The rule that a facade-confined key is refused on every
-non-facade route is owned by [05-http-api](05-http-api.md) §4.2 (SEC-5). Prowlarr then talks to each pushed
-indexer as an ordinary `core.newznab`/`core.torznab` instance at `<prowlarr>/<id>/api` — no special code path.
+non-facade route is owned by [05-http-api](05-http-api.md) (the stage-13 facade clause, SEC-5). Prowlarr then
+talks to each pushed indexer as an ordinary `core.newznab`/`core.torznab` instance at `<prowlarr>/<id>/api` — no
+special code path.
+
+**Deferred-build members this section depends on** (SIMP2-6; deferral applies to features inside built
+packages as well as to packages, 03 §3.4). None of them is built in 09's S2, S4 or S7; all land with `arrfacade`
+([08](08-arr-facade.md)) together with this package:
+
+| Member | Package (built stage) | Owning spec |
+|---|---|---|
+| `integrations.FacadeWriter`, `Registry.FacadeWriter`, `Origin "arrfacade"` | `integrations` (S7) | [05-metadata](05-metadata.md) M1.3 |
+| `KeySpec.Purpose`/`Module`, `PurposeFacade`, `X-Api-Key`/`apikey` query-key extraction | `auth` (S4) | [05-authn](05-authn.md) |
+| `Router.FacadeGroup`, `RouteKind Facade`, the stage-13 facade refusal | `httpapi` (S2) | [05-http-api](05-http-api.md) |
+
+Until they land, no facade-confined key can be minted, so SEC-5's refusal holds trivially.
 
 ## 4. Lifecycle
 
@@ -307,7 +321,8 @@ indexer as an ordinary `core.newznab`/`core.torznab` instance at `<prowlarr>/<id
 3. **Search**: `Pool.SearchAll` → per instance `Plan` → `Gate.Acquire("query")` (daily query limit) →
    paged requests (`offset += limit`, stop at `MaxPages` or a short page) → parse XML (RSS 2.0 items with
    `newznab:attr`/`torznab:attr`) → normalize → de-duplicate.
-4. **RSS**: scheduled by `acquire` (`core.acquire.rss-sync`, interval 10-120 min per raw/16 §4.1); core
+4. **RSS**: scheduled by `acquire` (`core.acquire.rss-sync` on the schedule key `core.acquire.schedules.rss_sync`,
+   every 10-120 min per raw/16 §4.1; [10](10-tv-movies-proof.md) §10.5.7); core
    provides one cursor per (instance, feed), paging back to it, and acknowledgement-based cursor advance, so a
    crash mid-sync re-delivers rather than skips.
 5. **Fetch** at grab time: `Gate.Acquire("grab")`, download through providerhttp with
@@ -351,15 +366,18 @@ declares the write resource `tasks.Res("core", "indexer").With(<id>)`, a `tasks.
 
 ## 7. Config keys
 
-| Key | Type | Default | Hot-reload |
-|---|---|---|---|
-| `indexer/<id>` instance records (+ `InstanceSettings`) | 05-metadata M1 store, not config (SIMP-4) | none | yes |
-| instance setting `limits.*` | providerhttp limits | RPS 0.5, burst 2, timeout 30s, retries 2 | yes |
-| `core.indexer.caps_ttl` | duration | `24h` | yes |
-| `core.indexer.per_indexer_timeout` | duration | `30s` | yes |
-| `core.indexer.rss_max_pages` | int | `5` | yes |
-| `core.indexer.max_fetch_bytes` | int | `10 MiB` | yes |
-| `core.indexer.max_attrs_per_item` | int | `64` | yes |
+Protection classes per 05-config §1.3.7 (SEC2-8); egress trust is the instance's `Local` flag and
+`core.integrations.egress.lan_allow` (05-metadata M1.3, M1.7).
+
+| Key | Type | Default | Hot-reload | Protection |
+|---|---|---|---|---|
+| `indexer/<id>` instance records (+ `InstanceSettings`) | 05-metadata M1 store, not config (SIMP-4) | none | yes | instance rules (05-metadata M1.3) |
+| instance setting `limits.*` | providerhttp limits | RPS 0.5, burst 2, timeout 30s, retries 2 | yes | instance rules |
+| `core.indexer.caps_ttl` | duration | `24h` | yes | none |
+| `core.indexer.per_indexer_timeout` | duration | `30s` | yes | none |
+| `core.indexer.rss_max_pages` | int | `5` | yes | none |
+| `core.indexer.max_fetch_bytes` | int | `10 MiB` | yes | none |
+| `core.indexer.max_attrs_per_item` | int | `64` | yes | none |
 
 ## 8. Metrics
 
@@ -420,9 +438,19 @@ Round 1 (`docs/plans/platform-core/reviews/spec-round-1-dispositions.md`):
 - SEC-15: facade-pushed URLs validated (public or `lan_allow`); same-host fetches stay under the instance's guard.
 - COR-25: `RSSOptions.Feeds` — one feed (type, categories, cursor) per consuming module.
 - COR-1: modules reach the Pool as `module.Deps.Indexers`.
-- SIMP-4: instance records in the 05-metadata M1 store; secret `integrations/indexer/<id>/api_key`.
+- SIMP-4: instance records in the 05-metadata M1 store; secret `integrations/indexer/<id>/api_key` (superseded by
+  the dotted form `integrations.indexer.<id>.api_key` in the integration pass).
 - SIMP-16 / COR-17: RSS resource written as `tasks.Res(...)` (= `entity.Ref`).
 
 Integration pass (cross-cluster requests, 2026-11-04):
 
 - integration pass: R-E request (SIMP-4) — secret name in dotted form.
+
+Round 2 (`docs/plans/platform-core/reviews/spec-round-2-dispositions.md`):
+
+- SIMP2-6 — §3.1 lists the facade machinery it relies on (`FacadeWriter`, `PurposeFacade`, query-key extraction,
+  `FacadeGroup`, the stage-13 clause) as deferred-build members of `integrations`, `auth` and `httpapi`, built with
+  `arrfacade`, not in S2/S4/S7; the refusal reference points at the stage-13 clause.
+- R2-7 — §4 names acquire's schedule key `core.acquire.schedules.rss_sync`.
+- SEC2-8 — §7 gains a Protection column.
+- SIMP2-16 — the slash-form secret-name history line marked superseded by the dotted form.

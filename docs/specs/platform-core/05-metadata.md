@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -42,8 +42,9 @@ key, no `core.download.clients`, `core.notify.mail.*` or `core.ai.*` instance ro
 `"<ID>/"` secret for an instance. Secret names follow 05-config §2.3's grammar:
 `integrations.<kind>.<instance>.<field>` (e.g. `integrations.download.deluge.password`). Operator-layer
 values (file, env, flag) of ABO's legacy integration-bound keys reach this package only as 05-config
-`Passthrough` values at those same paths (M1.4 step 2). Every kind file
-(05-ai, 05-download, 05-indexer, 05-notify) and the ABO migration (09 S6/S7) point here.
+`Passthrough` values at those same paths, and are applied as an **in-memory overlay** that is never
+persisted (M1.4 step 2, SIMP2-5). Every kind file (05-ai, 05-download, 05-indexer, 05-notify) and the ABO
+migration (09 S7, which builds this package and notify v1 together, SIMP2-4) point here.
 
 ### M1.2 Current state at HEAD
 
@@ -142,22 +143,30 @@ type InstanceConfig struct {
 	Tags     []string            // scoping (raw/16 §7.1 row 15)
 	Origin   Origin              // set by the Registry from the writing principal, never by the caller
 	// Local allows the instance's configured URLs to reach loopback and private
-	// networks (M2 egress guard). Only an interactive principal holding
-	// core:integrations.manage may set it or keep it across a URL change (SEC-15).
+	// networks (M2 egress guard). Setting it, or keeping it across a URL change,
+	// needs the ProtectAdmin check: core:admin AND an interactive principal
+	// (05-config §1.3.7; SEC-15, SEC2-7). Any other writer's instance reaches
+	// public addresses plus the hosts in core.integrations.egress.lan_allow only.
 	Local    bool
 	Settings map[string]any      // validated against Meta.Settings; secret fields hold secrets.Ref only
 	Limits   *Limits             // optional per-instance override of Meta.Limits (zero fields inherit)
 	Version  uint64              // optimistic concurrency for PUT
 	Updated  time.Time
+	// Locked lists the fields an operator-layer value currently overlays
+	// (field -> OperatorValue.By, e.g. "env OPENAI_API_KEY"). Set by the
+	// Registry on the effective view only; never stored (M1.4 step 2, SIMP2-5).
+	Locked   map[string]string
+	// Stored is false for an effective instance that exists only because an
+	// operator value names it (no row in c/integrations/instances/).
+	Stored   bool
 }
 
-// Origin records who wrote the instance last.
+// Origin records who wrote the stored row last.
 //   "ui"        interactive session holding core:integrations.manage
 //   "api"       API-key principal holding core:integrations.manage (cannot set Local)
-//   "arrfacade" written through FacadeWriter (08; deferred-build, M1.3)
-//   "pinned"    applied at boot from an operator-layer value (05-config
-//               Passthrough) while one is set (M1.4 step 2); read-only in
-//               the API, lock reason surfaced
+//   "import"    the ABO import / re-import (M1.4 step 2a, M1.10)
+//   "arrfacade" written through FacadeWriter (deferred-build member, see below)
+// There is no "pinned" origin: operator values are an overlay, not a writer.
 type Origin string
 
 // Env is everything an instance may use. It is constructed per instance by
@@ -301,20 +310,29 @@ type Health struct {
 type Registry struct{ /* unexported */ }
 
 func (r *Registry) Adapters(kind Kind) iter.Seq[Meta]
-func (r *Registry) Instances(kind Kind) iter.Seq[InstanceConfig]
-func (r *Registry) Config(ref Ref) (InstanceConfig, bool)
+func (r *Registry) Instances(kind Kind) iter.Seq[InstanceConfig] // effective views (stored row + overlay)
+func (r *Registry) Config(ref Ref) (InstanceConfig, bool)        // effective view
 // Put validates and persists one instance with its secrets (one batch, M1.4).
-// The principal in ctx sets Origin. Put refuses (403) an "api" principal that
-// sets Local or changes it, and refuses any write to an Origin=pinned row. When
+// The principal in ctx sets Origin. URL-typed fields are written by any holder
+// of core:integrations.manage (interactive or API key; SEC2-7). Put refuses
+// (403) a principal without the ProtectAdmin check (core:admin + interactive)
+// that sets Local, or keeps Local=true across a URL change. A Put that changes
+// a field in Locked is refused whole (409, ErrFieldLocked); one that omits the
+// locked fields or repeats their effective value stores the other fields and
+// keeps each locked field's stored value as it was (HEAD semantics). When
 // the scheme, host or port of any URL-typed settings field changes, every
 // secret field is cleared unless secretsIn re-supplies it, Local is reset to
-// false unless the writer is interactive and sets it again, and the audit
-// record core.integration.update carries secrets_dropped=true (SEC-15).
+// false unless the writer passes the ProtectAdmin check and sets it again, and
+// the audit record core.integration.update carries secrets_dropped=true
+// (SEC-15). During the compatibility window, a Put on an instance imported
+// from a legacy key also re-renders that legacy key in the same batch (M1.4
+// step 2a).
 func (r *Registry) Put(ctx context.Context, inst InstanceConfig, secretsIn map[string]secrets.Value) (InstanceConfig, error)
 func (r *Registry) Delete(ctx context.Context, ref Ref) error
 // Test builds a throwaway instance from an UNSAVED config, runs Health and
 // the kind's extra test (caps fetch, login), and discards it. Nothing is
-// persisted. The same egress guard as a saved instance applies. TestResult
+// persisted. The same egress guard as a saved instance applies; a config with
+// Local=true needs the same ProtectAdmin check as Put (SEC2-7). TestResult
 // carries only OK, the Class and the HTTP/protocol status: never a response
 // body or remote error text (a test must not be a read oracle, SEC-15).
 func (r *Registry) Test(ctx context.Context, inst InstanceConfig, secretsIn map[string]secrets.Value) (TestResult, error)
@@ -326,9 +344,10 @@ type TestResult struct {
 	Status int
 }
 
-// FacadeWriter is the only write path of the *arr facade (08, SEC-5). It is
-// deferred-build with arrfacade and integrations/indexer (not in the ABO
-// extraction plan). It accepts a principal holding "<module>:arr.indexers"
+// FacadeWriter is the only write path of the *arr facade (08, SEC-5). It is a
+// deferred-build member of this package (lands with arrfacade and
+// integrations/indexer; not in the ABO extraction plan, SIMP2-6). It accepts a
+// principal holding "<module>:arr.indexers"
 // (not core:integrations.manage), writes and deletes only KindIndexer
 // instances whose Origin is arrfacade, forces Origin=arrfacade and
 // Local=false, and validates every URL-typed field before Put: scheme http or
@@ -390,8 +409,16 @@ var (
 	ErrNotConfigured = errors.New("integrations: instance not configured")
 	ErrDisabled      = errors.New("integrations: instance disabled")
 	ErrUnknownAdapter = errors.New("integrations: unknown adapter")
+	ErrFieldLocked   = errors.New("integrations: field is set by an operator value")
 )
 ```
+
+**Deferred-build members** (lands with `arrfacade`, [08](08-arr-facade.md); SIMP2-6). The contract text above
+is kept, but the 09 S7 build of `integrations` contains none of: `FacadeWriter` and `Registry.FacadeWriter`,
+the `"arrfacade"` origin, the M1.5 facade row and `TestFacadeIndexer_LANRefused`. The S7 done-check
+greps for `FacadeWriter` under `core/integrations` and must find nothing. The facade-confined key, query-key
+extraction and the facade route group that the writer depends on are deferred members of `auth` and `httpapi`
+([05-authn](05-authn.md), [05-http-api](05-http-api.md)).
 
 Registration (the integration-facing slice of `module.Registrar`, which [06-app-sdk](06-app-sdk.md) owns):
 
@@ -424,22 +451,48 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
 2. **Load**: rows from `c/integrations/instances/<kind>/<id>`, the only instance store (SIMP-4). There is no
    `core.integrations.<kind>.instances.<id>` config form of an instance. Operator-set values of the legacy
    integration-bound keys (the env-bound Deluge, OpenAI and SMTP settings ABO reads today, 09 S7) arrive from
-   `config.Store.PassthroughValues()` (05-config §1.4 step 8) at the paths of the M1.10 import table, and are
-   applied on every boot onto their instance row with `Origin=pinned`: the row is read-only in the API and
-   the lock reason is the value's `OperatorValue.By` (e.g. `env OPENAI_API_KEY`). One rule, shared with
-   05-config C7: the env names ABO reads today are **permanent** aliases, and a pinned row exists exactly
-   while an operator value for it is set — when none is set on a boot, the row reverts to `Origin=ui` with
-   its last values (the operator's trust, e.g. `Local`, is kept) and becomes editable. The import writes through `Put`, so there is no second lock model.
+   `config.Store.PassthroughValues()` (05-config §1.4 step 8) at the paths of the M1.10 import table.
+   **Operator overlay (SIMP2-5).** They are an in-memory overlay, applied at `Load` and at every config hot
+   swap, and **never persisted**: no instance row, no `c/secrets/` value and no audit record is written
+   from them. The effective instance is the stored row (if any) with the overlaid fields on top; the API
+   returns it with `Locked` naming each overlaid field and its `OperatorValue.By` (e.g. `env OPENAI_API_KEY`),
+   and those fields are read-only (`ErrFieldLocked`). An operator value for an instance with no stored row
+   yields an effective instance with the stable ID of the M1.10 table and `Stored=false`. Removing the
+   operator value reverts to the stored row — the operator's own stored password comes back, as HEAD does
+   (`internal/config/persistence.go:1959-1971` @748fd787a) — or removes the effective instance when no row
+   exists. An overlaid URL is trusted for private networks without `Local`: the operator layer carries the
+   same authority as `lan_allow`. One rule, shared with 05-config C7/C11: the env names ABO reads today are
+   **permanent** aliases onto these paths. This is config's operator-layer lock (05-config §1.3.5) applied to
+   instance fields; there is no second lock model.
+
+   **2a. Legacy import, re-import and mirror (DATA2-10).** From the 09 S7 build until the integrations
+   contract (09 C7), the legacy integration-bound keys get config's treatment (05-config §1.12.2), owned
+   here: every boot, for each M1.10 row, the registry reads the **stored** legacy values (the config blob
+   through `configstore`, the legacy secret row, the legacy `ai_endpoints` and `metadata_sources` settings;
+   never the operator overlay) and computes `h = SHA-256(canonical JSON)` over **all** of that instance's
+   legacy fields, URL and secret together. When `c/integrations/import/<legacy-key>` is missing or holds a
+   different `h`, it re-imports the instance through `Put` (`Origin=import`, every secret re-supplied, so a
+   URL and its password always move together and SEC-15's drop rule cannot pair a new password with an old
+   URL) and records `h` in the same batch. In the other direction, a `Put` on an imported instance
+   (`download/deluge`, `ai/<id>`, `metadata/<id>`, `notify/email`, `notify/webhook-<n>`) re-renders the
+   corresponding legacy keys (blob keys via `configstore`'s mirror participant, legacy-format secret rows as
+   05-config mirror rule 2, legacy settings rows) and their import hashes in the **same batch**. The S6
+   build therefore runs on current settings after a rollback, and an edit made on the S6 build is re-imported
+   whole on the next roll-forward. At C7 the import runs one last time, the mirror stops and
+   `c/integrations/import/` is deleted.
+
    A row whose adapter is not registered (module disabled, binary without the adapter) is **kept** and
    reported `HealthMisconfigured` with reason `adapter not in this binary` (restart-bound enablement, 03 §3.7).
 3. **Build lazily** on first `Lease`; construction must not do network I/O (so boot never waits on a
    remote). Validation errors make the instance `HealthMisconfigured`, never fail boot.
-4. **Hot swap** on `Put`: validate → apply the trust rules (Origin from the principal; URL change drops
-   secrets and `Local`, SEC-15) → persist row and secrets in one storage batch → build new → atomically
+4. **Hot swap** on `Put`, and on a config hot swap that changes an overlaid value: validate → apply the trust
+   rules (Origin from the principal; `Local` only with the ProtectAdmin check; URL change drops secrets and
+   `Local`, SEC-15) → persist row, secrets and (during the window) the legacy mirror in one storage batch
+   (an overlay change persists nothing) → build new → atomically
    replace → old instance drains its leases → `Close`. providerhttp state (bucket, holds, breaker, quota) is
    keyed by `Ref` and **survives** the swap; the egress trust (`Local`, `lan_allow`) is re-read per dial.
 5. **Health task** `core.integrations.health` (05-tasks), scheduled by
-   `tasks.ScheduleFromConfig("core.integrations.health_interval")` (the one schedule mechanism, SIMP-6),
+   `tasks.ScheduleFromConfig("core.integrations.schedules.health")` (the one schedule-key rule, R2-7),
    probes every enabled instance with parallelism `tasks.Fixed(n, "network-bound probes")` where n is
    `core.integrations.health_parallelism`, and publishes `core.integration.health.changed.v1` on status
    change (consumed by [05-health](05-health.md) and [05-notify](05-notify.md) global rules).
@@ -458,8 +511,10 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
 | Secrets backend unavailable on `Put` | closed (503, row not written) | Row and secret are one batch; never a row pointing at a secret that was not stored. |
 | `Test` with remote failure | n/a (returns `TestResult{OK:false, Class, Status}` with 200; no body, no remote text) | A failed test is a successful API call; echoing remote text would make `Test` an SSRF read oracle (SEC-15). |
 | URL field host/scheme/port changed without re-supplied secrets | open for the write; secrets cleared, `Local` reset, audited | A stored password or API key must never follow a URL to a new host (SEC-15). |
-| API-key principal sets `Local`, or any write to `Origin=pinned` | closed (403) | Private-network trust needs an interactive admin; pinned rows belong to the operator's environment. |
-| Facade-pushed URL not http(s), or private and not in `lan_allow` | closed (422, nothing written) | One leaked facade key must not aim scheduled fetches at the LAN (SEC-15, SEC-5). |
+| A principal without the ProtectAdmin check (core:admin + interactive) sets `Local`, keeps it across a URL change, or calls `Test` with `Local=true` | closed (403) | Private-network trust is admin-level network trust, like `lan_allow` (SEC-15, SEC2-7). |
+| Write to a field in `Locked` | closed (409 `ErrFieldLocked`); other fields of the same `Put` are not written either | The operator's environment owns that value; the API must not appear to change it. |
+| Legacy re-import or mirror write fails (window only) | closed for that `Put` (nothing written); at boot the instance keeps its current row and the boot logs the key | The legacy copy and the instance row must not diverge silently (DATA2-10). |
+| Facade-pushed URL not http(s), or private and not in `lan_allow` (deferred-build member) | closed (422, nothing written) | One leaked facade key must not aim scheduled fetches at the LAN (SEC-15, SEC-5). |
 
 ### M1.6 Concurrency contract
 
@@ -471,15 +526,19 @@ probes at most `core.integrations.health_parallelism` instances at once; each pr
 
 ### M1.7 Config keys
 
-| Key | Type | Default | Hot-reload |
-|---|---|---|---|
-| (instance records) | data in `c/integrations/instances/`, **not** config (SIMP-4) | — | yes (hot swap, M1.4) |
-| `core.integrations.egress.lan_allow` | list of host, `host:port` or CIDR; `ProtectAdmin` (SEC-15; 05-config §1.3.7) | `[]` | yes (read per dial) |
-| `core.integrations.health_interval` | duration (bound by `tasks.ScheduleFromConfig`) | `5m` | yes |
-| `core.integrations.health_parallelism` | int ≥1 | `4` | yes |
-| `core.integrations.probe_timeout` | duration | `10s` | yes |
-| `core.integrations.drain_timeout` | duration | `30s` | yes |
-| `core.integrations.max_instances_per_kind` | int | `32` | yes (bounds metric label cardinality) |
+Protection classes per 05-config §1.3.7 (SEC2-8).
+
+| Key | Type | Default | Hot-reload | Protection |
+|---|---|---|---|---|
+| (instance records) | data in `c/integrations/instances/`, **not** config (SIMP-4) | — | yes (hot swap, M1.4) | `core:integrations.manage`; `Local` needs the ProtectAdmin check (M1.3) |
+| `core.integrations.egress.lan_allow` | list of host, `host:port` or CIDR (SEC-15); applies to every instance without `Local` | `[]` | yes (read per dial) | admin |
+| `core.integrations.schedules.health` | `tasks.ScheduleConfig`, declared by `integrations`, registered through `tasks.ScheduleFromConfig` (R2-7) | `{enabled: true, every: 5m}` | yes (re-read every scheduler poll) | none |
+| `core.integrations.health_parallelism` | int ≥1 | `4` | yes | none |
+| `core.integrations.probe_timeout` | duration | `10s` | yes | none |
+| `core.integrations.drain_timeout` | duration | `30s` | yes | none |
+| `core.integrations.max_instances_per_kind` | int | `32` | yes (bounds metric label cardinality) | none |
+
+The schedule key is new with core (HEAD has no integration health task), so it has no legacy alias.
 
 ### M1.8 Metrics
 
@@ -493,9 +552,14 @@ probes at most `core.integrations.health_parallelism` instances at once; each pr
 ### M1.9 Tests
 
 `TestRegistry_RejectsForeignAdapterPrefix`, `TestRegistry_UnknownAdapterRowRetained`,
-`TestRegistry_HotSwapDrainsLeases` (synctest), `TestRegistry_PinnedInstanceReadOnly`,
+`TestRegistry_HotSwapDrainsLeases` (synctest), `TestRegistry_OverlayNeverPersisted` (env value present: no row,
+no `c/secrets/` write; SIMP2-5), `TestRegistry_OverlayRemovedRevertsToStoredRow` (the stored password returns),
+`TestRegistry_LockedFieldWriteRefused`, `TestRegistry_EnvOnlyInstanceHasStableID`,
 `TestRegistry_PutWritesRowAndSecretsAtomically`, `TestRegistry_TestDoesNotPersist`,
-`TestRegistry_URLChangeDropsSecrets`, `TestRegistry_APIKeyCannotSetLocal`, `TestRegistry_TestReturnsNoBody`,
+`TestRegistry_URLChangeDropsSecrets`, `TestRegistry_APIKeyCannotSetLocal`, `TestRegistry_LocalNeedsAdmin`
+(interactive non-admin holding `core:integrations.manage`: `Put` and `Test` with `Local=true` refused; SEC2-7),
+`TestRegistry_TestReturnsNoBody`, `TestLegacyMirror_PutRerendersLegacyKeys` (same batch; DATA2-10),
+`TestLegacyReimport_URLAndSecretTogether` (an edit on the previous build re-imports URL and password as one `Put`),
 `TestFacadeIndexer_LANRefused` (FacadeWriter; with the deferred facade build),
 `TestRegistry_BuildDoesNoIO` (transport that fails the test on any request),
 `TestClassOf_Table` (one row per class, incl. the done-parent rule), `TestError_RedactsDetail`,
@@ -510,11 +574,14 @@ archtest `IntegrationsDescriptorCallers` (only kind packages call `NewDescriptor
 | (egress trust) | instances migrated from operator-set ABO config are written with `Local=true` when their host is loopback or private (today they have no egress guard at all); the migration is an operator-trust path, recorded in the migration ledger |
 | `ai_endpoints` rows (`internal/config/ai_endpoints.go:36-68`) | `ai/<id>` instances (05-ai) |
 | `config.Plugins["webhook"].Settings` | `notify/<id>` webhook instances (05-notify) |
+| `handleDelugeTestConnection`, `/ai/test-connection` | `POST /api/core/v1/integrations/{kind}/test` |
+| `internal/plugin` (`Plugin`, `Registry`, `DownloadClient`, `Notifier`, `MediaPlayer`) | deleted (N4); `MediaPlayer` has no successor until a media-server kind is specified |
 
 **Integrations import table** (normative; fixes the instance ID of every legacy singleton before the
 09 S3 build ships, because S3 stages each secret once under its final name, 05-config §2.2). Instance IDs
 follow `InstanceID`'s grammar; IDs that exist in ABO today are kept verbatim. The *Passthrough path* column
-is the operator-layer path 05-config hands over (M1.4 step 2); env aliases onto it are permanent.
+is the operator-layer path 05-config hands over (M1.4 step 2, an in-memory overlay); env aliases onto it are
+permanent.
 
 | ABO source | Instance | Secret names | Passthrough paths (operator layers) |
 |---|---|---|---|
@@ -528,9 +595,9 @@ is the operator-layer path 05-config hands over (M1.4 step 2); env aliases onto 
 | `config.Plugins["webhook"]` URLs | `notify/webhook-<n>` (n = 1… in list order) | `integrations.notify.webhook-<n>.<field>` | — |
 
 A legacy ID that does not match `InstanceID` (none at HEAD) is lower-cased with `_` → `-` by the same migration
-and the mapping is recorded in the migration ledger.
-| `handleDelugeTestConnection`, `/ai/test-connection` | `POST /api/core/v1/integrations/{kind}/test` |
-| `internal/plugin` (`Plugin`, `Registry`, `DownloadClient`, `Notifier`, `MediaPlayer`) | deleted (N4); `MediaPlayer` has no successor until a media-server kind is specified |
+and the mapping is recorded in the migration ledger. Every row is imported at the first S7 boot and kept
+current in both directions until 09 C7 by M1.4 step 2a; the Passthrough paths feed the overlay of M1.4 step 2,
+never the stored row.
 
 ### M1.11 Open items
 
@@ -709,16 +776,16 @@ it is what makes restarts safe, `dailyquota.go:151-153`).
 
 ### M2.7 Config keys
 
-| Key | Type | Default | Hot-reload |
-|---|---|---|---|
-| `core.providerhttp.fallback.rps` | float | `2.0` | yes |
-| `core.providerhttp.fallback.burst` | int | `2` | yes |
-| `core.providerhttp.fallback.max_retries` | int | `3` | yes |
-| `core.providerhttp.fallback.timeout` | duration | `30s` | yes |
-| `core.providerhttp.retry_after_max` | duration | `5m` | yes |
-| `core.providerhttp.hold.max` | duration | `24h` | yes |
-| `core.providerhttp.user_agent` | string | `<app>/<version> (+mediacore/<v>)` | no |
-| per instance: `limits.rps`, `limits.burst`, `limits.max_retries`, `limits.timeout`, `limits.tier` (`low`=0.5×, `medium`=1×, `high`=2× the adapter default, `internal/config/config.go:165-190`), `limits.daily.total`, `limits.daily.background`, `limits.daily.zone` | per field | adapter default | yes (in place, M2.3 `SetLimits`) |
+| Key | Type | Default | Hot-reload | Protection |
+|---|---|---|---|---|
+| `core.providerhttp.fallback.rps` | float | `2.0` | yes | none |
+| `core.providerhttp.fallback.burst` | int | `2` | yes | none |
+| `core.providerhttp.fallback.max_retries` | int | `3` | yes | none |
+| `core.providerhttp.fallback.timeout` | duration | `30s` | yes | none |
+| `core.providerhttp.retry_after_max` | duration | `5m` | yes | none |
+| `core.providerhttp.hold.max` | duration | `24h` | yes | none |
+| `core.providerhttp.user_agent` | string | `<app>/<version> (+mediacore/<v>)` | no | none |
+| per instance: `limits.rps`, `limits.burst`, `limits.max_retries`, `limits.timeout`, `limits.tier` (`low`=0.5×, `medium`=1×, `high`=2× the adapter default, `internal/config/config.go:165-190`), `limits.daily.total`, `limits.daily.background`, `limits.daily.zone` | per field | adapter default | yes (in place, M2.3 `SetLimits`) | instance rules (M1.3) |
 
 ### M2.8 Metrics
 
@@ -933,12 +1000,12 @@ own declared parallelism; the provider bucket, not the worker count, bounds the 
 
 ### M3.7 Config keys
 
-| Key | Type | Default | Hot-reload |
-|---|---|---|---|
-| `metadata/<id>` instance records | M1 store, not config | none | yes |
-| instance setting `cache.positive_ttl` | duration | module default (books: `metadata_fetch_cache_ttl_days`) | yes |
-| instance setting `cache.negative_ttl` | duration | module default (books: `metadata_fetch.negative_ttl_days`, `internal/metafetch/pcache.go:52-53`) | yes |
-| `core.metadata.per_provider_timeout` | duration | `20s` | yes |
+| Key | Type | Default | Hot-reload | Protection |
+|---|---|---|---|---|
+| `metadata/<id>` instance records | M1 store, not config | none | yes | instance rules (M1.3) |
+| instance setting `cache.positive_ttl` | duration | module default (books: `metadata_fetch_cache_ttl_days`) | yes | instance rules (M1.3) |
+| instance setting `cache.negative_ttl` | duration | module default (books: `metadata_fetch.negative_ttl_days`, `internal/metafetch/pcache.go:52-53`) | yes | instance rules (M1.3) |
+| `core.metadata.per_provider_timeout` | duration | `20s` | yes | none |
 
 ### M3.8 Metrics
 
@@ -998,14 +1065,16 @@ removed by the design.)
 Round 1 (`docs/plans/platform-core/reviews/spec-round-1-dispositions.md`):
 
 - SIMP-4: `integrations` is the one integration-instance store (settings + `secrets.Ref`s, secret names
-  `integrations/<kind>/<id>/<field>`); file-defined config instances removed; legacy env sources applied as
-  read-only `Origin=pinned` rows for the compat window.
+  `integrations/<kind>/<id>/<field>` — superseded by the dotted form `integrations.<kind>.<id>.<field>` in the
+  integration pass); file-defined config instances removed; legacy env sources applied as read-only
+  `Origin=pinned` rows for the compat window (superseded in round 2 by the in-memory overlay, SIMP2-5).
 - SEC-15: private, loopback and link-local egress refused by default in the providerhttp dial guard
   (`Policy.Private`, `InstanceConfig.Local`, `core.integrations.egress.lan_allow`); URL change clears secrets
   and `Local`; API keys cannot set `Local`; `TestResult` carries no body; facade-pushed URLs validated.
 - SEC-5: `integrations.FacadeWriter` (deferred-build) accepts `<m>:arr.indexers`, forces `Origin=arrfacade`
   and the SEC-15 egress restrictions.
-- SIMP-6: health task scheduled by `tasks.ScheduleFromConfig("core.integrations.health_interval")`.
+- SIMP-6: health task scheduled by `tasks.ScheduleFromConfig` (key superseded in round 2 by
+  `core.integrations.schedules.health`, R2-7).
 - SIMP-10: `InstanceConfig.Owner` (personal instances) removed with notify's personal channels.
 - SIMP-17: `tasks.Fixed(n, reason)` with a reason.
 - COR-17: `EntityRef` open item removed; `entity.Ref` (03 v1.2.0) is the one reference type.
@@ -1014,6 +1083,25 @@ Round 1 (`docs/plans/platform-core/reviews/spec-round-1-dispositions.md`):
 Integration pass (cross-cluster requests, 2026-11-04):
 
 - integration pass: R-E request (SIMP-4, SIMP-15) — M1.10 integrations import table fixes every legacy singleton's instance ID (`download/deluge`, `ai/openai`, `metadata/google-books`, `metadata/hardcover`, `notify/email`, `notify/webhook-<n>`) before the S3 build; secret names use 05-config's `integrations.<kind>.<instance>.<field>`; operator values arrive through `Passthrough`; `config.Schema` already used.
-- integration pass: R-H request — one `OPENAI_*` rule: permanent env aliases; `Origin=pinned` rows exist while an operator value is set (M1.4 step 2), matching 05-config C7.
+- integration pass: R-H request — one `OPENAI_*` rule: permanent env aliases; `Origin=pinned` rows exist while an operator value is set (M1.4 step 2), matching 05-config C7. (Superseded in round 2: pinned rows replaced by the in-memory overlay, SIMP2-5.)
 - integration pass: R-D request (SEC-15) — SSRF and URL-change rules verified present; `lan_allow` corrected to `ProtectAdmin` (was `ProtectInteractive`, contradicting SEC-15 and 05-config §1.3.7).
 - integration pass: Global sweep — providerhttp `Options.Meter metrics.Registry` → `Metrics *metrics.Scope` (05-metrics has no `Registry`).
+
+Round 2 (`docs/plans/platform-core/reviews/spec-round-2-dispositions.md`):
+
+- R2-7 / COR2-6 / SIMP2-1 — `core.integrations.health_interval` (duration) replaced by the declared schedule key
+  `core.integrations.schedules.health` (`tasks.ScheduleConfig`) in M1.4 step 5 and M1.7.
+- SEC2-7 — `Local` (set, or kept across a URL change) and `Test` with `Local=true` need the ProtectAdmin check
+  (`core:admin` + interactive); URL fields are written by any `core:integrations.manage` holder; other writers
+  get public + `lan_allow`, which applies to every instance without `Local`; `TestRegistry_LocalNeedsAdmin`.
+- SIMP2-5 — operator values are an in-memory overlay (never persisted; `Locked` field map, `Stored`,
+  `ErrFieldLocked`); `Origin` loses `"pinned"` and gains `"import"`; removal reverts to the stored row (HEAD
+  semantics); overlay tests replace `TestRegistry_PinnedInstanceReadOnly`; history lines marked superseded.
+- DATA2-10 — M1.4 step 2a: hash-keyed re-import of every M1.10 instance (URL and secret together) every boot
+  and a same-batch mirror of instance edits back to the legacy keys until 09 C7; two tests; M1.5 row.
+- SIMP2-6 — FacadeWriter, the `arrfacade` origin, its error row and test listed as deferred-build members with
+  an S7 grep done-check.
+- SIMP2-4 — the ABO migration of this package is 09 S7 only (with notify v1).
+- SIMP2-16 — the slash-form secret-name history line marked superseded by the dotted form.
+- SEC2-8 — M1.7 gains a Protection column (M2.7 and M3.7 too, for the same rule).
+- M1.10's two migration rows that had been displaced below the import table moved back into their table.

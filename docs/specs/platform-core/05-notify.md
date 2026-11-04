@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-notify.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 785812fd-5ddd-4540-be24-d061c0127788 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -21,12 +21,19 @@ topic catalog of its own.
 **v1 (SIMP-10, cross-cutting resolution 1)** is exactly what ABO uses or needs to fix today's defects
 (no retry, publisher ctx, replayable HMAC, §2):
 
-| In v1 (built in [09](09-abo-on-core.md) S6/S7) | Deferred (contract not frozen; built when a second app or the owner asks) |
+| In v1 (built in [09](09-abo-on-core.md) S7, with the instance store and `providerhttp` it needs; SIMP2-4) | Deferred (contract not frozen; built when a second app or the owner asks) |
 |---|---|
-| `Notification`, `Notifier`, `Service.Publish` | in-app **inbox** (`core.inbox`) and the UI bell (07) |
+| `Notification`, `Notifier`, `Publisher` (`Service.Publish`, and `module.Deps.Notify` for modules) | in-app **inbox** (`core.inbox`) and the UI bell (07) |
 | `core.email` channel to a fixed address list (from `internal/mail`) | **per-user subscriptions** and per-user email to a verified address |
 | `core.webhook` channel, preset `json` + the legacy ABO headers | **personal channels** (user-owned instances); when they ship, `personal_channels` defaults to **false** |
-| global admin `Rule`s; outbox dispatch and per-target delivery with retries | **templating** (per-instance/per-topic templates); ntfy, Gotify, Apprise presets and `custom` bodies |
+| global admin `Rule`s resolved at publish; per-target delivery through the outbox with retries | **templating** (per-instance/per-topic templates); ntfy, Gotify, Apprise presets and `custom` bodies; a dispatch stage (returns with digests or per-user delivery, §11) |
+
+**How a module notifies (COR2-3).** A module reaches notify only through `module.Deps.Notify`, a
+`notify.Publisher` scoped to the module's own catalog topics (06 owns the `Deps` field). It calls
+`Publish(ctx, b, n)` with the batch of its own state change, so the notification commits with the change
+it reports. `Publish` is the **only** entry point: declaring a topic with notify metadata makes it offerable
+to rules but produces no notification by itself, and notify subscribes to nothing on the events bus (the bus is
+lossy, and 05-events §5E.5.4 forbids external effects through it).
 
 Out of scope: transactional mail that is not a notification (invites, password reset) — those use the
 `mail.Sender` primitive directly ([05-authn](05-authn.md)); media-server sync.
@@ -103,19 +110,46 @@ func Adapter(m integrations.Meta,
 	build func(ctx context.Context, env integrations.Env, inst integrations.InstanceConfig) (Notifier, error),
 ) integrations.Descriptor
 
-// ---- service (per App) ---------------------------------------------------------
+// ---- publishing (the only entry point, COR2-3) -----------------------------------
+
+// Publisher records notifications for delivery. Core subsystems call the
+// *Service, which implements it for every core.* topic; a module holds the
+// module-scoped Publisher the kernel builds with Service.For and hands out as
+// module.Deps.Notify (06).
+type Publisher interface {
+	// Publish validates n, resolves the enabled global Rules for n.Topic and
+	// n.Severity from the in-memory rule set, and stages ONE durable
+	// core.notify.deliver.v1 entry per resolved target (idempotency key
+	// n.ID + target) through the outbox's participant handle in b, so the
+	// entries commit atomically with the caller's own state change (the reason
+	// to notify and the notification cannot diverge). b == nil: Publish writes
+	// its own batch. It never blocks on channel I/O. Zero matching targets:
+	// nothing is staged (counted no_rule). n.Topic must be a declared event
+	// topic whose catalog entry carries notify metadata (05-events TopicSpec).
+	Publish(ctx context.Context, b *storage.Batch, n Notification) error
+}
 
 type Service struct{ /* unexported */ }
 
-// Publish records n for delivery. With a batch, the outbox entry commits
-// atomically with the caller's own state change (the reason to notify and
-// the notification cannot diverge). Without one, Publish writes its own batch.
-// It never blocks on channel I/O. n.Topic must be a declared event topic
-// whose catalog entry carries notify metadata (05-events TopicSpec); the
-// permission notify enforces is the topic's declared Permission.
+var _ Publisher = (*Service)(nil)
+
 func (s *Service) Publish(ctx context.Context, b *storage.Batch, n Notification) error
 
+// For returns the Publisher for one module: it refuses (ErrForeignTopic) any
+// topic outside "<module>.", so a module can notify only about its own topics.
+// Kernel-only; modules never see the *Service.
+func (s *Service) For(module string) Publisher
+
+var (
+	ErrUndeclaredTopic = errors.New("notify: topic not in the events catalog")
+	ErrNoNotifyMeta    = errors.New("notify: topic has no notify metadata")
+	ErrForeignTopic    = errors.New("notify: topic belongs to another module")
+	ErrFieldsTooLarge  = errors.New("notify: fields exceed bounds")
+)
+
 // Rule is global routing data, written by a holder of core:integrations.manage.
+// Rules are small admin data: the Service keeps them in memory, loaded at
+// start and replaced when a PutRule/DeleteRule batch commits.
 type Rule struct {
 	ID          string
 	Topics      []string // exact event topic names or "<module>.*"
@@ -141,7 +175,7 @@ the topic's `Permission` and its notify metadata (display name, default severity
 | Adapter | Target | Settings (secret fields in *italics*) | Egress |
 |---|---|---|---|
 | `core.email` | fixed address list | `host`, `port`, `username`, *`password`*, `from`, `to` (list, required) | SMTP through `env.Gate`; private hosts need `Local` (05-metadata M1.3) |
-| `core.webhook` | one URL | `url`, `method` (POST/PUT), `headers`, *`secret`* (HMAC), *`token`* (bearer), `legacy_headers` (bool, migrated instances only) | `EgressConfigured`: a LAN receiver needs `Local`, which only an interactive admin sets; a URL change clears *secret* and *token* (SEC-15) |
+| `core.webhook` | one URL | `url`, `method` (POST/PUT), `headers`, *`secret`* (HMAC), *`token`* (bearer), `legacy_headers` (bool, migrated instances only) | `EgressConfigured`: a LAN receiver needs `Local`, which only an interactive `core:admin` holder sets (SEC2-7), or a `lan_allow` entry; a URL change clears *secret* and *token* (SEC-15) |
 
 The webhook body is fixed (the `json` preset): `POST url`, body
 `{"schema":"mediacore.notification.v1","id","topic","severity","title","body","links","entity","fields","at","app"}`.
@@ -155,16 +189,22 @@ compatibility window (09). Email renders a fixed plain-text layout (title, body,
 
 1. **Register**: channel adapters from `app.Options.Adapters`. Notifiable topics come from the events catalog;
    notify registers nothing of its own.
-2. **Publish**: validate (declared event topic with notify metadata, bounded fields) → one outbox entry
-   `core.notify.dispatch.v1{Notification}` staged in the caller's batch.
-3. **Dispatch** (outbox consumer): resolve targets **at delivery time** from enabled global `Rule`s → global
-   channel instances. One outbox entry per target, `core.notify.deliver.v1{NotificationID, Target}`,
-   idempotency key `ID + target`, written in one batch (`ConsumeTx`).
-4. **Deliver** (outbox consumer per target): render the channel's fixed body → `Gate.Acquire` (instance
-   providerhttp limits) → `Send` with `core.notify.send_timeout` → classify → ack, or return a retryable
-   error so the outbox retries with its backoff; permanent failures are dead-lettered and counted in
-   instance health.
-5. **Shutdown**: nothing in memory to flush — undelivered work is in the outbox by construction.
+2. **Publish** (the only entry point; core via `Service`, modules via `Deps.Notify`): validate (declared event
+   topic with notify metadata, own topic for a module Publisher, bounded fields) → resolve enabled global
+   `Rule`s from the in-memory rule set → one durable entry `core.notify.deliver.v1{Notification, Target}` per
+   target, idempotency key `ID + target`, staged in the caller's batch (SIMP2-11: there is no dispatch stage).
+   A topic's notify metadata alone produces nothing: an event published on the bus, or a durable message staged
+   on a topic, never becomes a notification unless its producer also calls `Publish`.
+3. **Deliver** (core outbox consumer `core.notify.deliver`, one entry per target; listed in the kernel's static
+   core-consumer list, so outbox retention keeps an entry until it is acked, 05-events): render the channel's
+   fixed body → `Gate.Acquire` (instance providerhttp limits) → `Send` with `core.notify.send_timeout` →
+   classify → ack, or return a retryable error so the outbox retries with its backoff; permanent failures are
+   dead-lettered and counted in instance health. An entry older than `core.notify.max_age` is dead-lettered
+   and counted instead of sent (OPS2-20): deliveries left in `c/outbox/` by a rollback to a build without
+   notify are delivered once on roll-forward if still fresh, never days late.
+4. **Shutdown**: nothing in memory to flush — undelivered work is in the outbox by construction.
+
+A rule change applies to notifications published after it commits, not to deliveries already staged.
 
 Global channels deliver to whoever reads that channel, so who may route what is decided when the `Rule` is
 written: `PutRule` requires `core:integrations.manage`, and the caller must satisfy each named topic's
@@ -177,12 +217,13 @@ filtering at delivery time arrives with per-user subscriptions (deferred).
 |---|---|---|
 | `Publish` with an undeclared topic, a topic without notify metadata, or oversize fields | closed (error to caller) | Programming error; caught in tests. |
 | `Publish` storage write fails | closed (caller's batch fails) | Same-batch outbox: the state change and the notification are one fact. |
-| No rule matches | open (dispatch completes with zero targets, counted) | Nobody asked to hear it. |
+| No rule matches | open (`Publish` stages nothing; counted `no_rule`) | Nobody asked to hear it. |
+| Module `Publisher` given another module's (or a core) topic | closed (`ErrForeignTopic`) | A module may notify only about what it owns (COR2-3). |
 | `PutRule` names a topic whose `Permission` the caller lacks | closed (403) | A rule must not route entities its author cannot see to a shared channel. |
 | `ClassTransient`, `ClassRateLimited` from a channel | retry via outbox backoff (honour `RetryAfter`), up to `core.notify.max_attempts` | Receivers go down and come back. |
 | `ClassAuth`, `ClassInvalid` (4xx other than 408/429), SMTP 5xx permanent reply, `mail.ErrInvalidHeader` | dead-letter after 1 attempt; instance `HealthAuthFailed`/`Degraded` (its `core.integration.health.changed.v1` reaches **other** channels through their rules) | Retrying cannot fix it; avoid a loop on the broken channel. |
-| Attempts exhausted, or older than `core.notify.max_age` | dead-letter; visible in UI with "retry" action | No silent loss. |
-| Egress guard refuses a webhook URL | closed (`ClassRefusedLocal`, dead-letter) | Private, loopback and link-local targets are refused unless an interactive admin marked the instance `Local` (05-metadata M1.3, SEC-15). |
+| Attempts exhausted, or older than `core.notify.max_age` (including entries left pending across a rollback, OPS2-20) | dead-letter, counted; visible in UI with "retry" action | No silent loss, and no stale delivery days later. |
+| Egress guard refuses a webhook URL | closed (`ClassRefusedLocal`, dead-letter) | Private and loopback targets are refused unless an interactive `core:admin` holder marked the instance `Local` or the host is in `lan_allow`; link-local always (05-metadata M1.3, SEC-15, SEC2-7). |
 | SMTP to a non-loopback host without TLS | closed (refused before MAIL FROM) | Kept from `internal/mail/mail.go:16-20`. |
 
 ## 6. Concurrency contract
@@ -198,11 +239,14 @@ delays another. Each `Send` runs under its own timeout derived from a detached, 
 Channel instances are records in the one instance store (05-metadata M1, SIMP-4), not config keys; secrets are
 `integrations.notify.<id>.<field>` (05-config §2.3 grammar). Rules are data in `c/notify/rules/<id>`.
 
-| Key | Type | Default | Hot-reload |
-|---|---|---|---|
-| `core.notify.send_timeout` | duration | `15s` (email: `mail.DefaultTimeout`) | yes |
-| `core.notify.max_attempts` | int | `10` | yes |
-| `core.notify.max_age` | duration | `24h` (older undelivered → dead-letter) | yes |
+Protection classes per 05-config §1.3.7 (SEC2-8). Channel URLs, credentials and `Local` follow the instance rules
+of 05-metadata M1.3; rules need `core:integrations.manage` plus each named topic's `Permission` (§4).
+
+| Key | Type | Default | Hot-reload | Protection |
+|---|---|---|---|---|
+| `core.notify.send_timeout` | duration | `15s` (email: `mail.DefaultTimeout`) | yes | none |
+| `core.notify.max_attempts` | int | `10` | yes | none |
+| `core.notify.max_age` | duration | `24h` (older undelivered, including entries pending across a rollback → dead-letter, counted; OPS2-20) | yes | none |
 
 ## 8. Metrics
 
@@ -219,12 +263,14 @@ Channel instances are records in the one instance store (05-metadata M1, SIMP-4)
 ## 9. Tests
 
 `TestPublish_SameBatchAsCallerState`, `TestPublish_UndeclaredTopicRejected`, `TestPublish_TopicWithoutNotifyMetaRejected`,
-`TestDispatch_ResolvesAtDeliveryTime` (rule edited between publish and dispatch),
+`TestPublish_OneDeliveryPerTargetInCallerBatch`, `TestPublish_NoRuleStagesNothing`,
+`TestPublisher_ForeignTopicRefused` (module Publisher; COR2-3), `TestNotifyMeta_BusEventSendsNothing`,
 `TestPutRule_RequiresTopicPermission`, `TestDeliver_TransientRetriedPermanentDeadLettered`,
 `TestDeliver_RetryAfterHonoured` (synctest), `TestDeliver_BrokenChannelAlertsOtherChannels`,
 `TestDeliver_PublisherCtxCancelDoesNotCancelDelivery`, `TestWebhook_SignatureWithTimestamp`,
 `TestWebhook_DeliveryHeaderStable`, `TestWebhook_JSONBodyGolden`, `TestWebhook_LegacyHeaders`,
-`TestWebhook_PrivateURLNeedsLocal`, `TestEmail_ReusesMailTLSRules` (the `internal/mail` tests move with it).
+`TestWebhook_PrivateURLNeedsLocal`, `TestEmail_ReusesMailTLSRules` (the `internal/mail` tests move with it),
+`TestDeliver_EntryOlderThanMaxAgeDeadLettered` (synctest; the rollback case of OPS2-20).
 Fakes: `coretest.FakeNotifier` (records `Send` calls; scriptable classes) and `coretest.WebhookReceiver(t)`
 (`httptest.Server` that verifies signatures and records deliveries); `mailtest.Recorder` moves to
 `coretest` as `coretest.MailRecorder`.
@@ -234,9 +280,9 @@ Fakes: `coretest.FakeNotifier` (records `Send` calls; scriptable classes) and `c
 | ABO | Becomes |
 |---|---|
 | `internal/mail` (`Sender`, `SMTPSender`, `Message`) | `core/integrations/notify/mail` (public `mail.Sender` stays the primitive for transactional mail); `core.email` channel wraps it |
-| `smtp_*` keys | one `notify/email` record in the instance store at first boot (password into `secrets` as `integrations.notify.email.password`; operator-set `smtp_*` values pin the row while set, 05-metadata M1.4 step 2 and M1.10); auth invites read the same instance's sender through `notify` (05-authn), so SMTP is configured once |
-| `internal/plugins/webhook` + `config.Plugins["webhook"]` | one `notify/webhook-<n>` record per configured URL (`legacy_headers` on; `Local=true` when the host is loopback/private, 05-metadata M1.10), a global `Rule` for the configured event list mapped to `books.*` topics; secret into `secrets` |
-| plugin event types (`internal/plugin/events.go:18-31`) | books event topics declared notifiable in the events catalog: `book.imported`→`books.book.imported.v1`, `book.deleted`→`books.book.deleted.v1`, `metadata.applied`→`books.metadata.applied.v1`, `tags.written`→`books.tags.written.v1`, `file.organized`→`books.file.organized.v1`, `dedup.detected`→`books.dedup.detected.v1`, `dedup.merged`→`books.dedup.merged.v1`, `cover.changed`→`books.cover.changed.v1`, `read_status.changed`→`books.read-status.changed.v1`, `scan.completed`→`books.scan.completed.v1`, `book.quarantined`→`books.book.quarantined.v1`, `book.unquarantined`→`books.book.unquarantined.v1` (the last two exist at HEAD but are not in the webhook's default list, `internal/plugins/webhook/plugin.go:146-159`); books publishes through `notify.Publish` in the same batch as the change |
+| `smtp_*` keys | one `notify/email` record in the instance store at the first 09 S7 boot (password into `secrets` as `integrations.notify.email.password`); operator-set `smtp_*` values are an in-memory overlay on the effective instance while set, never persisted (05-metadata M1.4 step 2, SIMP2-5; M1.10); until 09 C7 an edit re-renders the legacy `smtp_*` keys in the same batch (M1.4 step 2a, DATA2-10). Invites keep their own `mail.Sender` (05-authn): before S7 it is built from the legacy SMTP settings as today; from S7 the kernel builds it from the effective `notify/email` settings, so SMTP is configured once (an S7-or-later change that 05-authn records; SIMP2-4) |
+| `internal/plugins/webhook` + `config.Plugins["webhook"]` | at 09 S7 (with the instance store; SIMP2-4): one `notify/webhook-<n>` record per configured URL (`legacy_headers` on; `Local=true` when the host is loopback/private, 05-metadata M1.10), a global `Rule` for the configured event list mapped to `books.*` topics; secret into `secrets`; mirrored back to `config.Plugins["webhook"]` until 09 C7 (M1.4 step 2a) |
+| plugin event types (`internal/plugin/events.go:18-31`) | books event topics declared notifiable in the events catalog: `book.imported`→`books.book.imported.v1`, `book.deleted`→`books.book.deleted.v1`, `metadata.applied`→`books.metadata.applied.v1`, `tags.written`→`books.tags.written.v1`, `file.organized`→`books.file.organized.v1`, `dedup.detected`→`books.dedup.detected.v1`, `dedup.merged`→`books.dedup.merged.v1`, `cover.changed`→`books.cover.changed.v1`, `read_status.changed`→`books.read-status.changed.v1`, `scan.completed`→`books.scan.completed.v1`, `book.quarantined`→`books.book.quarantined.v1`, `book.unquarantined`→`books.book.unquarantined.v1` (the last two exist at HEAD but are not in the webhook's default list, `internal/plugins/webhook/plugin.go:146-159`); books publishes through `Deps.Notify.Publish` in the same batch as the change (COR2-3) |
 | `plugin.Notifier`, plugin `EventBus` (for notifications) | deleted (N4); the notify-only bus role is `core/events` (05-events) |
 | `mailSenderOverride` test seam (`internal/server/server.go:424`) | `coretest.MailRecorder` injected as the email instance |
 
@@ -244,7 +290,9 @@ Fakes: `coretest.FakeNotifier` (records `Send` calls; scriptable classes) and `c
 
 1. Storm control: an import of 2,000 books would produce 2,000 notifications per channel. Proposed:
    per-rule `digest_window` that folds notifications of one topic into a summary — specified when the first
-   high-volume topic is defined; the outbox design already allows it (dispatch can coalesce).
+   high-volume topic is defined. A digest window, like per-user delivery (item 2), reintroduces a dispatch stage
+   between `Publish` and delivery (one durable entry per notification, resolved and coalesced by a consumer);
+   v1 has none (SIMP2-11).
 2. Deferred features (§1 table) are listed for the owner; none has a consumer in S0–S10 (09 §9.3). When per-user
    delivery ships it reintroduces delivery-time RBAC filtering of each recipient against the topic's
    `Permission` for `Entity`, and personal instances are forced to `EgressPublicOnly`.
@@ -271,11 +319,29 @@ Round 1 (`docs/plans/platform-core/reviews/spec-round-1-dispositions.md`):
 - SIMP-5: notify's own topic catalog (`TopicSpec`, `Registrar.NotificationTopic`) removed; `Notification.Topic`
   is an event topic; the permission is the topic's declared `Permission`; books topic names take the
   `.v1` suffix and 03 §3.6 grammar.
-- SIMP-4: channel instances in the 05-metadata M1 store; config instance row removed; secret names `integrations/notify/<id>/<field>`.
+- SIMP-4: channel instances in the 05-metadata M1 store; config instance row removed; secret names `integrations/notify/<id>/<field>` (superseded by the dotted form `integrations.notify.<id>.<field>` in the integration pass).
 - COR-17: `*events.EntityRef` replaced by `*entity.Ref`.
 - SEC-15: webhook egress `EgressConfigured` with the private-network guard; URL change clears secrets; `SendTest` returns class + status only.
 
 Integration pass (cross-cluster requests, 2026-11-04):
 
-- integration pass: R-E request (SIMP-4) — secret names in dotted form; `notify/email` per 05-metadata M1.10, env/file-only SMTP values pin it while set.
+- integration pass: R-E request (SIMP-4) — secret names in dotted form; `notify/email` per 05-metadata M1.10, env/file-only SMTP values pin it while set (superseded in round 2 by the in-memory overlay, SIMP2-5).
 - integration pass: R-H request — stage range S0–S10.
+
+Round 2 (`docs/plans/platform-core/reviews/spec-round-2-dispositions.md`):
+
+- COR2-3 — `notify.Publisher` defined; modules get a topic-scoped one as `module.Deps.Notify` (`Service.For`,
+  `ErrForeignTopic`); `Publish` stated as the only entry point; notify metadata alone and bus events produce
+  nothing; books publishes through `Deps.Notify`; two tests.
+- SIMP2-11 — dispatch stage removed: `Publish` resolves rules from the in-memory set and stages one
+  `core.notify.deliver.v1` per target in the caller's batch; `TestDispatch_ResolvesAtDeliveryTime` deleted; §11
+  records that digests or per-user delivery bring a dispatch stage back.
+- SIMP2-4 — notify v1 (webhook import included) is built in 09 S7; invites keep `mail.Sender`, built from
+  `notify/email` from S7 on (a 05-authn change), instead of reading through notify.
+- OPS2-20 — `core.notify.max_age` stated as the bound for entries left pending across a rollback (dead-lettered
+  and counted on roll-forward); test added. No second key: `max_age` already is that bound.
+- COR2-4 — the deliver consumer is named as a kernel core consumer, so retention keeps undelivered entries.
+- SIMP2-5 — SMTP env values are an in-memory overlay, never persisted (§10).
+- DATA2-10 — `notify/email` and `notify/webhook-<n>` mirror back to the legacy keys until 09 C7 (§10).
+- SEC2-8 — §7 gains a Protection column.
+- SIMP2-16 — the slash-form secret-name history line marked superseded by the dotted form.

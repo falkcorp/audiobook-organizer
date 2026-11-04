@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/10-tv-movies-proof.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: e9ed438b-6097-4a4d-8b51-d2eacaca8221 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -152,13 +152,13 @@ predicate that depends on the clock or on hot-reloadable config.
 | Capability | Core package (spec) | How `tv` uses it |
 |---|---|---|
 | Storage keyspace | `storage` ([05-storage](05-storage.md)) | `Deps.Storage` hands the module `Keyspace("m/tv/")`; writes outside it are refused (R8). Scans are `codec.Typed[Series].All` (`iter.Seq2[Series, error]`). Integer IDs from `Keyspace.Sequence("series").Next` (§10.4 G10). |
-| Tasks | `tasks` ([05-tasks](05-tasks.md)) | Module task kinds: `tv.metadata.refresh` (every 12 h like Sonarr, `raw/16 §1.1` notes; `tasks.Fixed(4, "metadata provider rate limits")`), `tv.search.missing`, `tv.search.series`, `tv.search.episodes`, `tv.disk.rescan` (`tasks.CPU()`; per-series partition), `tv.recent.search` (aired in last 14 days or 1 day ahead, `raw/16 §1.3`). RSS sync is a **core** `acquire` task and download polling a **core** `integrations/download` task (§10.5.4); neither is the module's. Every `RunItems` declares parallelism (R7). |
+| Tasks | `tasks` ([05-tasks](05-tasks.md)) | Module task kinds: `tv.metadata.refresh` (every 12 h like Sonarr, `raw/16 §1.1` notes; `tasks.Fixed(4, "metadata provider rate limits")`), `tv.search.missing`, `tv.search.series`, `tv.search.episodes`, `tv.disk.rescan` (`tasks.CPU()`; per-series partition), `tv.recent.search` (aired in last 14 days or 1 day ahead, `raw/16 §1.3`). RSS sync is a **core** `acquire` task and download polling a **core** `integrations/download` task (§10.5.4); neither is the module's. The import of a completed download **is** the module's: kind `tv.acquire.import`, built by `acquire.ImportTask` and registered by `tv` (§10.5.4, COR2-11), so its writes run under `tv`'s own `Effects`. Every `RunItems` declares parallelism (R7). |
 | RSS sync & search | `acquire` + `integrations/indexer` | The module registers an `acquire.MediaType[tv.Target]` (§10.5.3), reaching the service as `module.Deps.Acquire` (06, COR-1): Newznab categories (TV 5000 family + anime 5070, `raw/16 §4.2`) and RSS type `TypeTV`, a release parser, a mapper release → series/episodes, its search-criteria builder (`t=tvsearch` + `tvdbid/tmdbid/imdbid`, `season`/`ep`; daily `season=<yyyy>&ep=<MM>/<dd>`; anime `q=<title>+<abs>`, `raw/16 §1.2, §4.2`), and its own specs (§10.5.3 table). |
-| Library roots, path mapping, import | `library` ([05-library](05-library.md)) | Root folders = `library.Manager.Roots(filter)`; free space from `Root.Usage`; "unmapped folders" from a `RootFS.Walk`; remote-path mapping of download-client paths (`raw/16 §4.6` last bullet) = `library.PathMapper` over `library.Mapping` rows (already applied in `download.Item.LocalPath`); hardlink-or-copy for torrents, move for usenet (`raw/16 §4.7`) = `Manager.TransferIn(tx.Batch(), …)` with `TransferOptions` mode `library.Auto` or `Move`. The module supplies naming (Standard/Daily/Anime episode formats, series/season folder formats, `raw/16 §1.4`). |
+| Library roots, path mapping, import | `library` ([05-library](05-library.md)) | Root folders = `library.Manager.Roots(filter)`; free space from `Root.Usage`; "unmapped folders" from a `RootFS.Walk`; remote-path mapping of download-client paths (`raw/16 §4.6` last bullet) = `library.PathMapper` over `library.Mapping` rows (already applied in `download.Item.LocalPath`); hardlink-or-copy for torrents, move for usenet (`raw/16 §4.7`) = `d.Library.TransferIn(tx.Batch(), …)` on the module's `library.Scope` (06) with `TransferOptions` mode `library.Auto` or `Move`. The module supplies naming (Standard/Daily/Anime episode formats, series/season folder formats, `raw/16 §1.4`). |
 | Download clients | `integrations/download` ([05-download](05-download.md)) | Never called directly by the module: `acquire` grabs with a media-neutral `download.GrabRequest{Owner: "core.acquire", Refs}` and consumes download's grab and item events; it never polls (§10.4 G2, G5; COR-3). |
 | Indexers | `integrations/indexer` ([05-indexer](05-indexer.md)) | Newznab/Torznab transport, caps, paging, attribute parsing are core; the module supplies only the query mapping above. |
 | Metadata | `integrations/metadata` ([05-metadata](05-metadata.md)) | Two instances of the generic contract: `metadata.Provider[tv.SeriesQuery, tv.SeriesRecord]` and `metadata.Provider[tv.EpisodeListQuery, []tv.EpisodeRecord]`, adapters TMDB and TVmaze (§10.3), each behind its own `providerhttp` instance (throttle, daily quota, breaker). |
-| Notify | `integrations/notify` ([05-notify](05-notify.md)) | Module event topics `tv.episode.grabbed.v1`, `tv.episode.imported.v1`, `tv.episode.upgraded.v1`, `tv.download.failed.v1`, `tv.series.added.v1`, `tv.series.deleted.v1` (03 §3.6 topic convention) are declared once in the events catalog with notify metadata and so are offered to notification rules (SIMP-5); payloads are module DTOs. |
+| Notify | `integrations/notify` ([05-notify](05-notify.md)) | Module event topics `tv.episode.grabbed.v1`, `tv.episode.imported.v1`, `tv.episode.upgraded.v1`, `tv.download.failed.v1`, `tv.series.added.v1`, `tv.series.deleted.v1` (03 §3.6 topic convention) are declared once in the events catalog with notify metadata and so are offered to notification rules (SIMP-5); payloads are module DTOs. The module produces each notification with `module.Deps.Notify.Publish(ctx, b, n)` in the batch of the change it reports (05-notify §1, COR2-3); the catalog metadata alone sends nothing. |
 | Events / outbox | `events`, `outbox` ([05-events](05-events.md)) | "Episode imported → refresh media server" is notify-only (bus). "Import committed → mark tracked download Imported" is correctness-critical: the module's `EpisodeFile` rows, the journaled file transfer, acquire's history row and `StateImported` commit in **one** storage batch (`acquire.ImportTx`, §10.5.3; G4 of 02 §2.4; COR-4). |
 | RBAC | `rbac` ([05-rbac](05-rbac.md)) | Module-declared permissions: `tv:view` (read library, calendar, queue entries owned by `tv`), `tv:request` (add a series with the **default** profile/root and a restricted set of monitor presets — the Seerr-style "request" path), `tv:search` (trigger automatic/interactive search, push a release), `tv:manage` (edit series, profiles, custom formats, delay profiles scoped to `tv`), `tv:files.delete` (delete files/series with files). Core permissions it relies on: `core:integrations.manage` (clients, indexers — shared across modules, 05-metadata M1), `core:admin`. |
 | HTTP API | `httpapi` ([05-http-api](05-http-api.md)) | Native routes under `/api/tv/v1/…` (`series`, `episodes`, `files`, `calendar`, `calendar.ics`, `wanted`, `search`, `releases`), each with a permission (R6). Queue/history/blocklist are **core** routes under `/api/core/v1/acquire/…` filtered by the caller's module permissions (§10.5). |
@@ -292,7 +292,8 @@ Identical rows to §10.1.2 except where listed:
 | Metadata | `metadata.Provider[movies.Query, movies.MetadataRecord]` and `metadata.Provider[movies.CollectionQuery, movies.CollectionRecord]`, adapter TMDB (§10.3). |
 | RBAC | `movies:view`, `movies:request`, `movies:search`, `movies:manage`, `movies:files.delete`. |
 | *arr facade | Radarr-v3 subset: `/movie`, `/movie/lookup`, `/qualityProfile`, `/rootfolder`, `/tag`, `/queue`, `/history`, `/command` (`MoviesSearch`, `RefreshMonitoredDownloads`), `/system/status` (`raw/16 §5.2`). Radarr's profile-level `Language` (`RAD Profiles/Qualities/QualityProfile.cs` L24, `raw/16 §3.4`) is rendered by the facade from a language custom format, not stored as a profile field (§10.5.3). |
-| Notify topics | `movies.movie.grabbed.v1`, `movies.movie.imported.v1`, `movies.movie.upgraded.v1`, `movies.download.failed.v1`, `movies.movie.added.v1`. |
+| Notify topics | `movies.movie.grabbed.v1`, `movies.movie.imported.v1`, `movies.movie.upgraded.v1`, `movies.download.failed.v1`, `movies.movie.added.v1`, published through `Deps.Notify` as for `tv`. |
+| Import kind | `movies.acquire.import` (`acquire.ImportTask`), as for `tv`. |
 
 ## 10.3 Metadata sources (D9: nothing paid)
 
@@ -331,7 +332,7 @@ the spec that closes it; rows closed here are specified in §10.5.
 | G6 | **Pending-release store** (temporary rejections retried on next RSS sync). | `raw/16 §3.3` delay profiles (`ProcessDownloadDecisions.cs` L61-L63, `RssSyncService.cs` L41-L46) | `acquire` pending store (§10.5). |
 | G7 | **Tags as cross-cutting scope** (series ↔ delay profile, indexer, release profile, client). | `raw/16 §7.1` row 15 | `acquire.TagID` and tag store under `c/acquire/tag/`; modules attach tag IDs to their entities. Kept inside `acquire` because only acquisition scoping uses tags; promotion to its own package follows the 03 §3.4 rule if a second consumer appears. |
 | G8 | **Provider registry + settings schema** (`Implementation`, `ConfigContract`, `Fields[]`, `/schema`) shared by indexers, clients, notifications (`raw/16 §5.1`, §7.1 row 1). | ABO builds providers in a `switch src.ID` (`raw/11-integrations.md` §3) | [05-metadata](05-metadata.md) M1: the one integration-instance store (adapter `Meta.Settings` as a `config.Schema`, instance records, `secrets.Ref`s; SIMP-4), used by [05-download](05-download.md)/[05-indexer](05-indexer.md)/[05-notify](05-notify.md). The facade renders the *arr `Fields[]` shape from that schema ([08-arr-facade](08-arr-facade.md)). |
-| G9 | **Calendar** (air dates, release dates, iCal feed). | `raw/16 §7.1` row 18 (app-level); no calendar code in ABO (grep `calendar` over `internal/*.go`: test strings only) | **App-level**, by the time indexes in §10.1.1/§10.2.1. Core requirement only: an iCal client cannot send headers, so [05-authn](05-authn.md) must support a per-route opt-in **feed token** in the query string (scoped, revocable, read-only), which is also what the *arr facade's `?apikey=` needs (`raw/16 §5.1`). A shared iCal writer moves to `core/shared/ical` only once both apps use it (03 §3.4). |
+| G9 | **Calendar** (air dates, release dates, iCal feed). | `raw/16 §7.1` row 18 (app-level); no calendar code in ABO (grep `calendar` over `internal/*.go`: test strings only) | **App-level**, by the time indexes in §10.1.1/§10.2.1. Core requirement only: an iCal client cannot send headers, so [05-authn](05-authn.md) must support a per-route opt-in **feed token** in the query string (scoped, revocable, read-only), which is also what the *arr facade's `?apikey=` needs (`raw/16 §5.1`). Both are **deferred-build members** of `auth` (SIMP2-6): the feed token lands with the first TV/Movies app, query-key extraction with `arrfacade`; the S4 build of `auth` has neither. A shared iCal writer moves to `core/shared/ical` only once both apps use it (03 §3.4). |
 | G10 | **Integer IDs.** Seerr/Bazarr send integer `seriesId`/`movieIds` (`raw/16 §5.2`). | — | [05-storage](05-storage.md) §5S.3.2 `Keyspace.Sequence(name).Next(ctx)` (leased ranges; `NextIn(b)` inside a batch). Closed. |
 | G11 | **Release profiles** (Required/Ignored term filters, indexer and tag scope). | `raw/16 §3.3` (`ReleaseProfile.cs` L10-L17) | `acquire.ReleaseRestriction` + generic spec (§10.5.3). Sonarr-v5-only air-date fields are a `tv` spec. |
 | G12 | **Remote path mapping** (client path → local path). | `raw/16 §4.6`; ABO has only iTunes path mappings (`internal/server/handlers/itunes.go:30`) | [05-library](05-library.md) `library.PathMapper` over `library.Mapping` rows (source `download:<instance>`), applied by `download.Pool` into `Item.LocalPath`. |
@@ -382,7 +383,8 @@ therefore the public Sonarr/Radarr model (`raw/16 §3–§4`), not ABO code.
 
 Package `github.com/falkcorp/mediacore/acquire`, R4 L5. Imports: `entity`, `log`, `metrics`, `config`,
 `storage`, `events`, `outbox`, `tasks`, `library`, `integrations`, `integrations/download`,
-`integrations/indexer`.
+`integrations/indexer`. acquire runs module code (the `Importer`) only inside a **module** task kind
+(`ImportTask`): no core run invokes a module callback that writes module entities (COR2-11).
 
 ```go
 package acquire
@@ -516,11 +518,22 @@ type ConditionFactory func(params jsontext.Value) (Condition, error)
 // Engine is per module; its profile/format/delay/restriction snapshot is swapped atomically.
 type Engine[T Target] struct{ /* unexported */ }
 
-func (e *Engine[T]) Decide(ctx context.Context, cands []*Candidate[T]) iter.Seq[*Decision[T]] // approved best-first, then rejected
+// Decide evaluates cands with tasks.ForEach(ctx, par, ...), so it joins the
+// calling run's CPU budget and pause gate (COR-23, COR2-16). Approved best-first, then rejected.
+func (e *Engine[T]) Decide(ctx context.Context, par tasks.Parallelism, cands []*Candidate[T]) iter.Seq[*Decision[T]]
 func (e *Engine[T]) Grade(ctx context.Context, p ProfileID, f *Facts) (Grade, error)          // current snapshot (COR-5)
 func (e *Engine[T]) CutoffUnmet(ctx context.Context, t T) (bool, error)                        // worst held grade vs cutoff
-// Grab takes the per-entity grab lock, re-checks, and grabs (§10.5.4 step 5, COR-7).
-func (e *Engine[T]) Grab(ctx context.Context, d *Decision[T]) (*TrackedDownload, error)
+// Grab takes the per-entity grab lock through l (the calling run's ref-lock
+// table), re-checks, and grabs (§10.5.4 step 5, COR-7, COR2-16).
+func (e *Engine[T]) Grab(ctx context.Context, l RefLocker, d *Decision[T]) (*TrackedDownload, error)
+
+// RefLocker is satisfied by *tasks.RC and *tasks.ItemRC: the executor's one
+// ref-lock table (05-tasks §5T.3.4), acquired in sorted tasks.FormatRef order.
+// Every grab runs inside a run (rss-sync, a module search task), so the grab
+// lock and module ExclusiveRefs/Subjects interlock.
+type RefLocker interface {
+	LockRefs(refs ...entity.Ref) (release func(), err error)
+}
 
 // ---------- Module registration ----------
 
@@ -549,13 +562,26 @@ func Register[T Target](svc *Service, mt MediaType[T]) (*Engine[T], error)
 
 type Importer[T Target] interface {
 	// Import writes the module's rows into tx.Batch() (after Bind-ing its own keyspace),
-	// moves files with Manager.TransferIn(tx.Batch(), ...), and calls tx.Imported(refs...).
+	// moves files with d.Library.TransferIn(tx.Batch(), ...) on the module's library.Scope
+	// (06), and calls tx.Imported(refs...). For a multi-file pack it fans out with
+	// tasks.ForEach(ctx, tasks.Fixed(2, "disk-bound moves/hardlinks"), ...).
 	// It must be idempotent by (td.ID, destination digest).
 	Import(ctx context.Context, td *TrackedDownload, files iter.Seq[library.Entry], tx *ImportTx) (ImportResult, error)
 }
 
-// ImportTx carries ONE batch, created on c/acquire/. acquire adds the history rows and
-// StateImported to it and commits once; the module never commits it.
+// ImportTask returns the module kind "<module>.acquire.import" (COR2-11). Params
+// carry the TD ID; Subjects returns TD.Refs, so the dispatch conflict rule
+// serialises an import against any module run writing an overlapping entity
+// (tv.disk.rescan, another import of a pack that shares an episode). effects
+// names the module's own resources. The run moves the TD ImportPending ->
+// Importing, calls the module Importer, and commits once through rc.Writer().
+// The module registers it with r.Tasks(...); Register fails boot for a
+// MediaType whose module registered none.
+func ImportTask[T Target](e *Engine[T], effects tasks.Effects) tasks.Definition
+
+// ImportTx carries ONE batch: the import run's fenced write (rc.Writer().Do),
+// with c/acquire/ Bound to it by acquire as a core participant. acquire adds the
+// history rows and StateImported to it and commits once; the module never commits it.
 type ImportTx struct{ /* unexported */ }
 
 func (tx *ImportTx) Batch() *storage.Batch
@@ -658,8 +684,9 @@ unavailable monitored movie in the pending store on every sync until `core.acqui
    manifest declares it (otherwise the service, its routes and its tasks do not exist — G1 of 02 §2.4), with
    `storage.Keyspace("c/acquire/")`, `download.Pool`, `indexer.Pool`, `library`, `tasks`, `outbox`, `events`, a
    child logger and the per-App metrics registry. Modules reach it as `module.Deps.Acquire`.
-2. **Registration (P6).** `Module.Register` calls `acquire.RegisterVocabulary` then `acquire.Register[T]`, which
-   only attaches the typed hooks. Boot fails (fail-closed) on a duplicate module, a condition-kind collision, a
+2. **Registration (P6).** `Module.Register` calls `acquire.RegisterVocabulary`, then `acquire.Register[T]`, which
+   only attaches the typed hooks, and registers its import kind with `r.Tasks(acquire.ImportTask(engine,
+   tasks.Writes(...)))`. Boot fails (fail-closed) on a duplicate module, a missing import kind, a condition-kind collision, a
    category claimed by two modules (an overlapping claim would double-grab), an unknown vocabulary, a
    vocabulary registered twice with different content, or a `MediaType` that disagrees with its manifest
    `AcquireDecl`.
@@ -667,22 +694,32 @@ unavailable monitored movie in the pending store on every sync until `core.acqui
    `restriction/<module>/<id>`, `tag/<id>`, `pending/<module>/<guid>`, `tracked/<id>`,
    `ix/tracked-by-grab/<grabID>`, `ix/tracked-by-ref/<module>/<kind>/<id>/<tdID>` (live tracked downloads per
    entity, COR-7), `history/<ulid>`, `ix/history-by-ref/<module>/<kind>/<id>/<ulid>`, `blocklist/<ulid>`,
-   `ix/blocklist-by-ref/<module>/<kind>/<id>/<ulid>`, `ix/blocklist-by-hash/<hash>`. Seed data (default
+   `ix/blocklist-by-ref/<module>/<kind>/<id>/<ulid>`, `ix/blocklist-by-hash/<hash>`,
+   `ix/import-retry/<due:be64-unix>/<tdID>` (ImportPending TDs awaiting a retry). Seed data (default
    profiles per module) is the module's migration, not acquire's.
-4. **Tasks** (03 §3.6 kinds; schedules through the one mechanism, SIMP-6):
+4. **Tasks** (03 §3.6 kinds; every schedule is a declared key registered through `tasks.ScheduleFromConfig`,
+   R2-7):
 
    | Kind | Schedule | Parallelism | What |
    |---|---|---|---|
-   | `core.acquire.rss-sync` | `tasks.ScheduleFromConfig("core.acquire.rss.interval")` | fetch: `tasks.Fixed(4, "indexer rate limits; providerhttp throttles per indexer")`; decide: `tasks.CPU()` | `indexer.Pool.RSS` with one `Feed` per registered media type (its `RSSType`, `Categories`, own cursor; COR-25), route by category, append that module's pending releases, `Decide`, `Engine.Grab` approved decisions in comparer order, park temporary rejections. Pages back to the last processed release after downtime (`raw/16 §4.3`). |
-   | `core.acquire.import` | on demand: `outbox.ConsumeIntoTask` from `core.download.item.completed.v1` | `tasks.Fixed(2, "disk-bound moves/hardlinks")`, partitioned by union-find over `TD.Refs` | call the module `Importer` with an `ImportTx`, commit, then `download.Pool.MarkImported`. |
-   | `core.acquire.housekeeping` | `tasks.Every(24 * time.Hour)` | `tasks.Sequential("single pass over small keyspace; prunes pending/history by retention")` | prune expired pending releases and history/blocklist past retention. |
+   | `core.acquire.rss-sync` | `tasks.ScheduleFromConfig("core.acquire.schedules.rss_sync")` | fetch: `tasks.Fixed(4, "indexer rate limits; providerhttp throttles per indexer")`; decide: `tasks.CPU()` passed to `Decide` | `indexer.Pool.RSS` with one `Feed` per registered media type (its `RSSType`, `Categories`, own cursor; COR-25), route by category, append that module's pending releases, `Decide`, `Engine.Grab(ctx, rc, …)` approved decisions in comparer order, park temporary rejections. Pages back to the last processed release after downtime (`raw/16 §4.3`). |
+   | `<module>.acquire.import` (a **module** kind, `ImportTask`) | none: staged by acquire's consumer in the transition batch (below), or by `core.acquire.import-retry` | one run per TD; `Subjects` = `TD.Refs`, so overlapping imports serialise and disjoint ones run in parallel (dispatch conflict rule); file transfers inside a pack: `tasks.Fixed(2, "disk-bound moves/hardlinks")` | call the module `Importer` with an `ImportTx`, commit, then `download.Pool.MarkImported`. |
+   | `core.acquire.import-retry` | `tasks.ScheduleFromConfig("core.acquire.schedules.import_retry")` | `tasks.Sequential("one key-range scan of ix/import-retry/; stages runs only")` | stage the module import run of every TD in `ImportPending` whose backoff has passed (the `Executor.StartIn` handle the kernel gives the service in P5; `ModeLive`, the owning module's system actor); it never calls module code. |
+   | `core.acquire.housekeeping` | `tasks.ScheduleFromConfig("core.acquire.schedules.housekeeping")` | `tasks.Sequential("single pass over small keyspace; prunes pending/history by retention")` | prune expired pending releases and history/blocklist past retention. |
 
-   There is **no** acquire poller (COR-3). acquire is an outbox consumer of download's events, filtered to
-   `Owner == "core.acquire"`: `core.download.grab.{added,failed}.v1` and
-   `core.download.item.{completed,failed,removed}.v1`, each applied with `ConsumeTx` so the tracked-download
-   transition commits in the relay batch. Module search tasks (`tv.search.*`, `movies.search.*`) call
-   `Engine.Decide` with `SourceSearch`/`SourceUserSearch` and `Engine.Grab`.
-5. **Grab** (`Engine.Grab`, COR-3 + COR-7): take the per-entity grab lock on the decision's refs (§10.5.6) →
+   There is **no** acquire poller (COR-3). acquire has **one** outbox consumer of download's events,
+   `core.acquire.download-events` (COR2-10): `ConsumeTx` with the filter `outbox.Where(Owner == "core.acquire")`
+   over `core.download.grab.{added,failed}.v1` and `core.download.item.{completed,failed,removed}.v1`; messages of
+   other owners are acked without effect. It applies the tracked-download transition in the relay batch and,
+   when the transition is `Downloading → ImportPending` (with `OutputPath` set), stages the module's import run
+   **in that same batch** (`tx.StartRun(kind, StartRequest{Mode: ModeLive, Params: TD.ID})`, backed by
+   `Executor.StartIn`). An import therefore never starts before its transition has committed, and a completion
+   cannot be consumed without its import being queued. The consumer is in the kernel's static core-consumer list
+   (05-events), so retention keeps each message until it has acked. Module search tasks (`tv.search.*`,
+   `movies.search.*`) call `Engine.Decide` with `SourceSearch`/`SourceUserSearch` and their run's parallelism,
+   and `Engine.Grab` with their `rc`.
+5. **Grab** (`Engine.Grab`, COR-3 + COR-7): take the per-entity grab lock on the decision's refs through the
+   caller's `RefLocker` (§10.5.6) →
    re-run the StageDatabase specs against `ix/tracked-by-ref`, history and blocklist under the lock (a better or
    equal live download rejects `core.already_grabbed`) → allocate `TD.ID` → `download.Pool.Grab(GrabRequest{
    Owner: "core.acquire", Refs, IdempotencyKey: TD.ID, …}, sel, rec)` where `rec` binds `c/acquire/` and writes
@@ -692,7 +729,8 @@ unavailable monitored movie in the pending store on every sync until `core.acqui
 6. **Config change.** Profiles/formats/delay profiles are edited through core routes; each write rebuilds the
    module's snapshot and swaps it with `atomic.Pointer` — in-flight `Decide` calls keep the old snapshot.
 7. **Shutdown.** RSS sync observes `ctx`; a grab either committed its grab-record batch (download recovers the
-   client side) or wrote nothing; imports are idempotent and resumed through the outbox.
+   client side) or wrote nothing; an import is an idempotent module run, resumed per its declared `Resume`
+   policy or re-staged by `core.acquire.import-retry`.
 
 Tracked-download transitions (complete table; `→` legal; the event names are download's topics):
 
@@ -701,7 +739,7 @@ Tracked-download transitions (complete table; `→` legal; the event names are d
 | Grabbing | `grab.added` | — | — | — | — | — | `grab.failed` (release re-parked as pending `core.client_unavailable` when the class is retryable; blocklisted when `ClassInvalid`) | user |
 | Downloading | — | `item.completed`, `LocalPath` unmapped | `item.completed`, mapped | — | — | `item.failed` | — | `item.removed`, user |
 | ImportBlocked | — | — | user resolved / rescan | — | — | — | — | user |
-| ImportPending | — | — | — | import started | — | — | — | user |
+| ImportPending | — | — | — | import run started (the run's first fenced write) | — | — | — | user |
 | Importing | — | importer Blocked | importer Pending | — | importer done (same batch as the module's rows) | — | — | — |
 | FailedPending | — | — | — | — | — | — | blocklisted (+research) | user |
 | Imported, Failed, Ignored | terminal (removed from queue view; history retained) | | | | | | | |
@@ -722,7 +760,8 @@ Tracked-download transitions (complete table; `→` legal; the event names are d
 | Crash during a grab | handled by download's single recovery (05-download §4.3); the TD was written in the grab-record batch, so there is nothing for acquire to reconcile | One owner for intent and recovery (COR-3). |
 | Client unreachable | download freezes its snapshots and emits nothing; the queue shows the instance's health | **fail-open**: never mark Failed (and blocklist) because a client was briefly down. |
 | Client reports failed / encrypted / dangerous extension | `item.failed` → `FailedPending` → `Failed`, blocklist, optional remove and `Research` (`raw/16 §4.8`) | Matches Failed Download Handling semantics. |
-| Importer returns error | `ImportPending`, attempts++, backoff; after `core.acquire.import.max_attempts` → `ImportBlocked` with message; the `ImportTx` batch is discarded | Never delete from client on import failure (data safety). |
+| Importer returns error or `Pending` | the import run's `ImportTx` batch is discarded; a separate fenced write records `ImportPending`, attempts++ and the next attempt time in `ix/import-retry/`; `core.acquire.import-retry` re-stages the run when it is due; after `core.acquire.import.max_attempts` → `ImportBlocked` with message | Never delete from client on import failure (data safety); retries do not depend on a redelivery the outbox will not make (05-tasks §5T.3.12). |
+| Import run started for a TD that is not `ImportPending` (replay, user action meanwhile) | the run ends without effect | Idempotent by TD state; the transition table stays authoritative. |
 | Importer reports Blocked | `ImportBlocked` | User action required. |
 | `Research` callback errors | history event + log; no automatic retry | Avoid search storms against indexers. |
 | Illegal state transition | `ErrIllegalTransition`, transition refused, error logged | Bug signal; state stays consistent. |
@@ -732,18 +771,23 @@ Tracked-download transitions (complete table; `→` legal; the event names are d
 
 - `Service`, `Engine[T]` and compiled formats are goroutine-safe. Snapshots are immutable and swapped via
   `atomic.Pointer`; compiled regexes are cached per pattern.
-- `Decide` evaluates candidates on a bounded pool sized by the calling task's `tasks.CPU()` parallelism.
-  StageDatabase/StageDisk specs do I/O with the task context and check `ctx.Err()`.
-- **Per-entity grab lock (COR-7).** `Engine.Grab` holds an in-process keyed lock (core `keyedmutex`,
-  03 §3.2.1 E2) on every ref of the decision, keyed by the ref as a `tasks.Resource` (= `entity.Ref`, SIMP-16)
-  and taken in `entity.Ref.AppendKey` order so two grabs never deadlock. The re-check and the TD write happen
-  under the lock, so rss-sync and any number of `tv.search.*`/`movies.search.*` runs cannot grab two releases
-  for one entity, and a season pack and an overlapping single episode serialize because they share a ref.
-  Within one rss-sync run, approved decisions are still grouped by union-find over their refs and processed in
-  comparer order per group, stopping at the first successful grab (the CLAUDE.md "partition into disjoint
-  sets" rule); groups run in parallel under `tasks.Fixed(4, …)`.
-- **Imports are partitioned by union-find over `TD.Refs`** (COR-7): two tracked downloads that share any ref
-  (a pack and an episode it contains, or two downloads for one movie) import serially; disjoint ones in parallel.
+- `Decide` evaluates candidates with `tasks.ForEach(ctx, par, …)`, `par` being the calling task's declared
+  parallelism (rss-sync passes `tasks.CPU()`), so it joins that run's CPU budget and pause gate (COR-23,
+  COR2-16). StageDatabase/StageDisk specs do I/O with the task context and check `ctx.Err()`.
+- **Per-entity grab lock (COR-7, COR2-16).** `Engine.Grab` locks every ref of the decision in the executor's
+  one ref-lock table (`rc.LockRefs`/`ic.LockRefs` through `RefLocker`, 05-tasks §5T.3.4), keyed by the ref as a
+  `tasks.Resource` (= `entity.Ref`, SIMP-16) and acquired in sorted `tasks.FormatRef` order, all-or-wait, so two
+  grabs never deadlock. There is no separate acquire mutex: the grab lock, module `ExclusiveRefs` and run
+  `Subjects` share one table and interlock. The re-check and the TD write happen under the lock, so rss-sync and
+  any number of `tv.search.*`/`movies.search.*` runs cannot grab two releases for one entity, and a season pack
+  and an overlapping single episode serialize because they share a ref. Within one rss-sync run, approved
+  decisions are still grouped by union-find over their refs and processed in comparer order per group, stopping
+  at the first successful grab (the CLAUDE.md "partition into disjoint sets" rule); groups run in parallel under
+  `tasks.Fixed(4, …)`.
+- **Imports are serialised by `SubjectsFunc` over `TD.Refs`** (dispatch conflict rule, 05-tasks §5T.3.4)
+  **plus `rc.LockRefs` in the importer** for any further entity it learns while running (COR2-11): two tracked
+  downloads that share any ref (a pack and an episode it contains, or two downloads for one movie) import
+  serially; disjoint ones in parallel, each as its own module run.
 - Tracked-download transitions from download events are applied by one outbox consumer in the relay batch;
   user actions (remove, ignore) use a per-ID keyed mutex plus storage compare-and-set on the row.
 - Cancellation: every task honours `ctx`; persistence of a terminal state after cancellation uses
@@ -755,23 +799,29 @@ Tracked-download transitions (complete table; `→` legal; the event names are d
 Core keys (05-config conventions; `core.*`). Module-scoped values (profiles, formats, delay profiles,
 restrictions) are **data** in `c/acquire/`, not config.
 
-| Key | Type | Default | Hot-reload? |
-|---|---|---|---|
-| `core.acquire.rss.interval` | duration, bound by `tasks.ScheduleFromConfig` | `15m` (min `10m`, max `120m`, `0` disables automatic grabbing — `raw/16 §4.1`) | yes |
-| `core.acquire.usenet.retention_days` | int | `0` (unlimited) | yes |
-| `core.acquire.usenet.minimum_age` | duration | `0` | yes |
-| `core.acquire.maximum_size_bytes` | int64 | `0` (unlimited) | yes |
-| `core.acquire.prefer_propers` | enum `prefer`/`do_not_prefer`/`do_not_upgrade` → `Propers` | `prefer` | yes |
-| `core.acquire.pending.max_age` | duration | `168h` | yes |
-| `core.acquire.failed.enabled` | bool | `true` | yes |
-| `core.acquire.failed.redownload` | bool | `true` | yes |
-| `core.acquire.failed.remove_from_client` | bool | `true` | yes |
-| `core.acquire.completed.enabled` | bool | `true` | yes |
-| `core.acquire.import.max_attempts` | int | `5` | yes |
-| `core.acquire.history.retention` | duration | `0` (keep) | yes |
-| `core.acquire.availability_delay` | duration | `0` (movies; may be negative, `raw/16 §2`); read at query time, never written into an index (COR-6) | yes |
+Protection classes per 05-config §1.3.7 (SEC2-8). Schedule keys are `tasks.ScheduleConfig` values declared by
+`acquire` under its own namespace and registered through `tasks.ScheduleFromConfig` (R2-7); they are new with
+`acquire`, so none has a legacy alias.
 
-Client polling cadence is `core.download.poll_interval` (05-download), not an acquire key.
+| Key | Type | Default | Hot-reload? | Protection |
+|---|---|---|---|---|
+| `core.acquire.schedules.rss_sync` | `tasks.ScheduleConfig`; `every` validated to `10m`–`120m` (`raw/16 §4.1`); automatic grabbing is turned off with `enabled: false` (Sonarr's interval `0`) | `{enabled: true, every: 15m}` | yes (re-read every scheduler poll) | none |
+| `core.acquire.schedules.import_retry` | `tasks.ScheduleConfig` | `{enabled: true, every: 5m}` | yes | none |
+| `core.acquire.schedules.housekeeping` | `tasks.ScheduleConfig` | `{enabled: true, every: 24h}` | yes | none |
+| `core.acquire.usenet.retention_days` | int | `0` (unlimited) | yes | none |
+| `core.acquire.usenet.minimum_age` | duration | `0` | yes | none |
+| `core.acquire.maximum_size_bytes` | int64 | `0` (unlimited) | yes | none |
+| `core.acquire.prefer_propers` | enum `prefer`/`do_not_prefer`/`do_not_upgrade` → `Propers` | `prefer` | yes | none |
+| `core.acquire.pending.max_age` | duration | `168h` | yes | none |
+| `core.acquire.failed.enabled` | bool | `true` | yes | none |
+| `core.acquire.failed.redownload` | bool | `true` | yes | none |
+| `core.acquire.failed.remove_from_client` | bool | `true` | yes | none |
+| `core.acquire.completed.enabled` | bool | `true` | yes | none |
+| `core.acquire.import.max_attempts` | int | `5` | yes | none |
+| `core.acquire.history.retention` | duration | `0` (keep) | yes | none |
+| `core.acquire.availability_delay` | duration | `0` (movies; may be negative, `raw/16 §2`); read at query time, never written into an index (COR-6) | yes | none |
+
+Client polling cadence is the schedule key `core.download.schedules.poll` (05-download), not an acquire key.
 
 ### 10.5.8 Metrics
 
@@ -804,10 +854,12 @@ Per-App registry (R5). Label values are bounded enums or configured names.
 | `TestAcceptableSizeUsesRuntimeHook` / `TestUnknownRuntimeRejects` | per-runtime bounds incl. profile override |
 | `TestDefaultComparatorOrder` | invariant 6; deterministic tie-break |
 | `TestTrackedTransitionsExhaustive` | every State×State pair against the table |
-| `TestDownloadEventsDriveTransitions` | each download topic, filtered to `Owner=core.acquire`, applied in the relay batch; other owners ignored |
+| `TestDownloadEventsDriveTransitions` | each download topic, filtered by `outbox.Where(Owner == "core.acquire")`, applied in the relay batch by the one consumer; other owners' messages acked with no write and no run |
+| `TestImportNeverRunsBeforeTransition` | the import run is staged in the batch that commits `ImportPending`; under injected crashes no import run exists without that transition, and no `ImportPending` TD lacks a queued run or a retry entry (COR2-10) |
+| `TestImportRunsAsModuleKind` | the import kind is `<module>.acquire.import`; an importer write outside the module's `Effects` fails with `ErrOutsideEffects`; an import and `tv.disk.rescan` over an overlapping series never run at once (COR2-11) |
 | `TestGrabWritesTDInGrabRecordBatch` | TD exists iff download's grab record exists, under injected crashes (COR-3) |
 | `TestGrabLockAcrossTasksNoDoubleGrab` | `-race`: rss-sync and search runs racing on overlapping pack+episode refs → exactly one grab (COR-7) |
-| `TestImportPartitionUnionFindOverRefs` | a pack and an episode it covers never import in parallel |
+| `TestImportSubjectsSerialiseOverlappingRefs` | a pack and an episode it covers never import in parallel; disjoint imports do |
 | `TestImportTxHistoryInSameBatch` | crash between module rows and history impossible: both or neither (COR-4) |
 | `TestImportIdempotentByTDAndDigest` | replayed completion imports once |
 | `TestMinimumAvailabilityAtQueryTime` | availability passing overnight and a delay change need no index rewrite; user search bypasses it (COR-6) |
@@ -907,7 +959,7 @@ Round 1 (`docs/plans/platform-core/reviews/spec-round-1-dispositions.md`):
   history and `StateImported`.
 - COR-5: `Facts` persisted on file rows; `Target.HeldFacts`, `Engine.Grade`, `Engine.CutoffUnmet`; three-valued `Propers`.
 - COR-6: TV wanted index time-free; movies `ix/avail/<availableAt>` evaluated at query time; `MinimumAvailability` Permanent, skipped for user/interactive search.
-- COR-7: per-entity grab lock (keyed by `tasks.Resource` = `entity.Ref`) with re-check against `ix/tracked-by-ref`; imports partitioned by union-find over `TD.Refs`.
+- COR-7: per-entity grab lock (keyed by `tasks.Resource` = `entity.Ref`) with re-check against `ix/tracked-by-ref`; imports partitioned by union-find over `TD.Refs` (superseded in round 2: executor ref-lock table and `Subjects`, COR2-11/COR2-16).
 - COR-25: one RSS feed per media type (`MediaType.RSSType`); `acquire.RegisterVocabulary`, idempotent.
 - COR-27: `library.RelPath`/`Location` → `library.Path`; `PathMap` → `PathMapper`/`Mapping`; `PreferHardlink` → mode `Auto`;
   `Transfer` → `Manager.Transfer`/`TransferIn`; `indexer.ID`/`download.ClientID` → `integrations.Ref`;
@@ -917,6 +969,27 @@ Round 1 (`docs/plans/platform-core/reviews/spec-round-1-dispositions.md`):
 - COR-17: `[]entity.Ref` for multi-entity grabs and imports throughout.
 - SIMP-4: G8 closed by the 05-metadata M1 instance store.
 - SIMP-5: TV/Movies notify topics are event topics with notify metadata.
-- SIMP-6: rss-sync via `tasks.ScheduleFromConfig`; `core.acquire.refresh.interval` removed.
+- SIMP-6: rss-sync via `tasks.ScheduleFromConfig`; `core.acquire.refresh.interval` removed (rss key superseded in
+  round 2 by `core.acquire.schedules.rss_sync`, R2-7).
 - SIMP-17: `tasks.Network` replaced by `tasks.Fixed(n, reason)`.
 - COR-19: objections O1/O2 removed as resolved by 03 v1.2.0.
+
+Round 2 (`docs/plans/platform-core/reviews/spec-round-2-dispositions.md`):
+
+- R2-7 / COR2-6 / SIMP2-1 — `core.acquire.rss.interval` (duration) and `tasks.Every(24h)` replaced by declared
+  schedule keys `core.acquire.schedules.{rss_sync, housekeeping}` (`tasks.ScheduleConfig`; Sonarr's `0` is
+  `enabled: false`); `core.download.schedules.poll` named.
+- COR2-10 — one acquire consumer `core.acquire.download-events` (`ConsumeTx`, `outbox.Where(Owner ==
+  "core.acquire")`) applies the transition and stages the import run in the same batch;
+  `TestImportNeverRunsBeforeTransition`.
+- COR2-11 — the import is a module kind `<module>.acquire.import` (`acquire.ImportTask`, `Subjects` = `TD.Refs`)
+  registered by the module; `ImportTx` is the run's fenced write; union-find for imports replaced by
+  `SubjectsFunc` plus `rc.LockRefs`; retries via the new stage-only core kind `core.acquire.import-retry` (key
+  `core.acquire.schedules.import_retry`), because a failed run is not redelivered; `TestImportRunsAsModuleKind`.
+- COR2-16 — the grab lock is the executor ref-lock table through `RefLocker` (`Engine.Grab(ctx, l, d)`), sorted
+  by `tasks.FormatRef`; `Decide` takes `par tasks.Parallelism` and uses `tasks.ForEach`.
+- COR2-19 — `Importer` doc and the library row say `d.Library.TransferIn(tx.Batch(), …)` on the module's
+  `library.Scope`.
+- COR2-3 — TV/Movies notifications are produced through `module.Deps.Notify.Publish`; metadata alone sends nothing.
+- SIMP2-6 — G9's feed token and the facade's query key marked deferred-build members of `auth`.
+- SEC2-8 — §10.5.7 gains a Protection column.
