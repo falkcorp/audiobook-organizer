@@ -1,13 +1,13 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
 <!-- last-edited: 2026-11-04 -->
 
 # mediacore — platform-core design spec
 
 **Status:** draft under antagonistic review (see `docs/plans/platform-core/reviews/`). Round 1's 192
-findings, round 2's 162, round 3's 130, round 4's 117, round 5's 115 and round 6's 80 are dispositioned
-(`spec-round-{1,2,3,4,5,6}-dispositions.md`) and applied to the files. Round 3's resolutions R3-1…R3-5 are
+findings, round 2's 162, round 3's 130, round 4's 117, round 5's 115, round 6's 80 and round 7's 96 are
+dispositioned (`spec-round-{1,2,3,4,5,6,7}-dispositions.md`) and applied to the files. Round 3's resolutions R3-1…R3-5 are
 binding and supersede round-2 R2-1…R2-3: during the extraction every key family keeps one stored format
 (no adoption copies or mirrors), and per-family cutover to native keyspaces is deferred (02 decision 13,
 N15). Round 4's resolutions R4-1…R4-6 are binding; R4-1 refines R3-1: core reaches ABO's data through SDK
@@ -24,7 +24,14 @@ identifier that exists only for an app's legacy stores lives in one package, `le
 promise like `kernel`, so a cutover removes it without a breaking change (R6-3); a staged restore is not a
 foreign open (R6-4); API-key writes never race, shipped early as the sixth early fix (R6-5); an operator
 value that enables auth always takes effect (R6-6); staging copies are scrubbed and inert before they boot
-(R6-7).
+(R6-7). Round 7's resolutions R7-1…R7-8 are binding: operator-enabled auth survives a rollback, because
+the legacy config store writes the narrowing legacy value (R7-1); a factory reset only stages, nothing
+destructive runs before the restart, its core route lands at S4 r2 in `internal/storagehttp`, and whether
+it keeps HEAD's library and Open Library wipes is owner question Q-K (R7-2); run-store write checking is
+per guard row (R7-3); a restore boot or offline command never yields a false "replaced store" verdict
+(R7-4); the S4 r2 upgrade signs no one out (R7-5); staging has one inert, measurable procedure (R7-6);
+mirror tests live in the owner's external test package (R7-7); a file whose ABO imports have no
+import-path-only replacement is a re-implementation, not a move (R7-8).
 **Evidence commit:** `748fd787a`. **Raw data:** [`docs/plans/platform-core/raw/`](../../plans/platform-core/raw/00-index.md).
 **Plan:** `docs/plans/platform-core/implementation-plan.md` (written after this spec merges).
 
@@ -59,7 +66,8 @@ app starts:
 | Per-family cutover of the ABO families core services use (03 §3.7 names them; the store interfaces are 03 §3.3's one list) to native core keyspaces | [02](02-decision-record.md) N15, [05-storage](05-storage.md) |
 | Members of built packages that only that cutover can use: storage grants (`Grant`, `GrantMode`) and the served-run preconditions; backup encryption; the seed-role merge diff | [05-storage](05-storage.md) §5S.3.13, [05-backup](05-backup.md) B3, [05-rbac](05-rbac.md) §4.8 |
 | `Online` data migrations (read adapters, the kernel-synthesised `<ID>.datamigrate.<name>` kind): no S0–S10 consumer; extraction data migrations are `BootBlocking` | [05-storage](05-storage.md) §5S.3.14, [03 §3.3](03-architecture.md) `storage/datamigrate` |
-| The config basis mechanism (`config.Basis` and the suspension and confirmation of config extension records it drives): no key of S0–S10 declares a basis | [05-config](05-config.md) §1.12.3, [03 §3.4](03-architecture.md) |
+| The config basis mechanism (`config.Basis` and the suspension and confirmation of config extension records it drives): no key of S0–S10 declares a basis | [05-config](05-config.md) §1.12.5, [03 §3.4](03-architecture.md) |
+| Import-root extension suspension and confirmation (`ReadShares` on a legacy-served root, its `confirm` route and health token): a legacy-served root takes no shares and ABO has one module | [05-library](05-library.md) `Deferred-build members`, [03 §3.4](03-architecture.md) |
 
 The Build column of 03 §3.3 is the authoritative list of deferred packages and is re-checked at every
 stage gate. Deferral also applies to members of built packages (03 §3.4): each file lists them under a
@@ -76,7 +84,8 @@ extraction; amended in round 4: store interfaces with books-supplied legacy impl
 data in a books-owned extension family, moved secrets replaced by a never-matching sentinel; amended in
 round 5: only plaintext secrets move, HEAD's legacy-key precedence holds until cutover, extension
 fingerprints cover security-relevant fields only; amended in round 6: legacy-only identifiers in the
-`legacy` package outside the API promise, and an operator value that enables auth always takes effect), 15 new
+`legacy` package outside the API promise, and an operator value that enables auth always takes effect;
+amended in round 7: that operator tightening survives a rollback through one narrowing legacy write), 15 new
 decisions (N1–N15; N13, the round-2 Teach-build rollback floor, is superseded; N14 names the **floor
 release** that deletes books' legacy migration code and the **stepping-stone release** a store must run
 first, checked on the store; N15 defers per-family cutover and the storage grants with it), the eight
@@ -180,3 +189,9 @@ Round 6 (dispositions in `docs/plans/platform-core/reviews/spec-round-6-disposit
 
 - R6-1…R6-7 (DATA6-1, MOD6-1, SIMP6-2, SIMP6-3, DATA6-2, SEC6-3, SEC6-1, OPS6-4) — status line: round 6 dispositioned and applied; the binding resolutions summarised; decisions paragraph: decision 13's round-6 amendment (`legacy` package, auth-enable exemption).
 - SIMP6-1 — "Build scope": the config basis mechanism is deferred-build (no consumer in S0–S10).
+
+Round 7 (dispositions in `docs/plans/platform-core/reviews/spec-round-7-dispositions.md`; resolutions R7-1…R7-8):
+
+- R7-1…R7-8 — status line: round 7 (96 findings) dispositioned and applied; the binding resolutions summarised; decisions paragraph: decision 13's round-7 amendment (R7-1).
+- SIMP7-9 — Build scope: the config basis deferral cites 05-config §1.12.5.
+- SIMP7-2 — Build scope: new row for import-root extension suspension and confirmation (05-library deferred-build members).

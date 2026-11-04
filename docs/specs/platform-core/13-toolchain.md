@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/13-toolchain.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: a1e1b657-1c87-4a3e-8407-43269415455f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -168,7 +168,7 @@ day it is written down.
 | Package | ABO installed (`raw/15`) | Latest | Published | Core `core/web` target | Note |
 |---|---|---|---|---|---|
 | react / react-dom | 19.3.1 | 19.3.1 | 2026-10-14 | `^19.3.1` peer | |
-| @mui/material / icons-material | 9.5.0 | 9.5.0 | 2026-10-09 | `^9.5.0` peer (`@mediacore/ui-kit`) | |
+| @mui/material / icons-material | 9.5.0 | 9.5.0 | 2026-10-09 | `^9.5.0` peer of `@mediacore/ui-kit` **and** `@mediacore/shell` | 23 of the 35 shell- and ui-kit-bound files import `@mui/icons-material` (07 §7.11 move list, `web/src/components/layout/TopBar.tsx` and others @748fd787a); apps already depend on it (`web/package.json:29`); contributed nav icons are typed `ComponentType<SvgIconProps>` (07 §7.3.1; FE7-11) |
 | @emotion/react / styled | 11.14.0 / 11.14.1 | same | 2024-12 / 2025 | peer via MUI | |
 | vite | 8.3.4 | 8.3.5 | 2026-10-21 | `^8.3.5` | |
 | react-router | — (ABO uses `react-router-dom` 7.18.5) | **8.5.1** (dist-tag `latest`; `version-7` = 7.18.5) | 8.0.0: 2026-06-16; 8.5.1: 2026-10-27 | **`react-router@^8.5.1` peer** | see exception/migration E4 |
@@ -363,3 +363,7 @@ Round 4 (dispositions in `docs/plans/platform-core/reviews/spec-round-4-disposit
 Round 5 (dispositions in `docs/plans/platform-core/reviews/spec-round-5-dispositions.md`; resolutions R5-1…R5-7):
 
 - MOD5-15 — §13.2.2 guard item 4: the core copies of the errcheck and interface-width ratchet scripts under `core/scripts/ci/` carry the "not a pin" comments and are allowlisted by path and line like the root originals.
+
+Round 7 (dispositions in `docs/plans/platform-core/reviews/spec-round-7-dispositions.md`; resolutions R7-1…R7-8):
+
+- FE7-11 — §13.4: `@mui/icons-material ^9.5.0` is a peer of `@mediacore/ui-kit` and `@mediacore/shell` (the moved shell files import it), matching 07 §7.3.1.

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/01-summary.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: d2956830-373c-4b12-9504-ccace49f7f6d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -93,7 +93,7 @@ moves platform machinery, not every route.
 |---|---|
 | **core** / **mediacore** | The Go module `github.com/falkcorp/mediacore` (at `core/` until the split) and its npm workspace. |
 | **SDK** | Core's public, versioned packages — everything outside `core/internal/`, `core/kernel/` and `core/legacy/`. Measured by the API-stability gate (§12). |
-| **legacy package** | `core/legacy` (with `legacy/legacytest`): the one core package holding every identifier that exists only to serve an app's legacy stores — the optional legacy-only capabilities, `legacy.Stores`, the legacy-only `legacy.RootSource` and their conformance suites. Public, so ABO imports it, but outside the API promise like `kernel`, so a family's cutover deletes its identifiers without a breaking change (03 §3.3; R6-3). |
+| **legacy package** | `core/legacy` (with `legacy/legacytest`): the one core package holding every identifier that exists only to serve an app's legacy stores — the optional legacy-only capabilities, `legacy.Stores`, the legacy-only `legacy.LibraryRootSource`, the pre-core maintenance handle `legacy.Maintenance` (R7-2) and their conformance suites. Public, so ABO imports it, but outside the API promise like `kernel`, so the first release after a family's cutover that no longer sets its member deletes its identifiers without a breaking change (03 §3.3; R6-3, COR7-5). Owners never import it; each checks its unexported mirror of a capability in the mirror test of 03 §3.3 (R7-7). |
 | **kernel** | Core's composition machinery (`core/kernel/...`): module catalog, manifest validation, lifecycle supervisor and the typed services struct (no DI container). Imported only by `core/app`. |
 | **deferred-build** | A core package whose contract is specified at proof depth but which the extraction plan does not build (03 §3.4): `acquire`, `arrfacade`, `integrations/indexer`, the download grab/monitor pipeline. Built when the first TV/Movies app starts. |
 | **legacy mount** | ABO's gin router mounted through `httpapi.MountLegacy` behind core's perimeter middleware; permanent (02 N7). |
@@ -168,3 +168,7 @@ Round 5 (dispositions in `docs/plans/platform-core/reviews/spec-round-5-disposit
 Round 6 (dispositions in `docs/plans/platform-core/reviews/spec-round-6-dispositions.md`; resolutions R6-1…R6-7):
 
 - SIMP6-2, SIMP6-3 (R6-3) — glossary: "SDK" excludes `core/legacy/`; new entry "legacy package"; "store interface" names `legacy.Stores`.
+
+Round 7 (dispositions in `docs/plans/platform-core/reviews/spec-round-7-dispositions.md`; resolutions R7-1…R7-8):
+
+- R7-2, SIMP7-8, COR7-5, R7-7 — glossary "legacy package": names `legacy.LibraryRootSource` and `legacy.Maintenance`, deletion in the first release after the cutover that no longer sets the member, and the mirror test of 03 §3.3.
