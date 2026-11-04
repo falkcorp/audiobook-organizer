@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-events.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 6dbdef8e-e3f3-4088-bdb9-ba37a706165d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -153,7 +153,7 @@ picker offers a topic without a producer; SIMP2-10, COR2-19):
 
 | Topic | Channel (05-download) |
 |---|---|
-| `core.download.event.v1` — the whole download lifecycle of one item on **one** durable topic: `{Kind: grab_added \| grab_failed \| completed \| failed \| removed, Owner, Refs, GrabID, ItemRef, …}`, keyed by `GrabID` (an item with no grab record: by `ItemRef`); an item's key never changes over its lifetime | outbox (`Durable`) |
+| `core.download.item.transitioned.v1` (noun `download`, qualifier `item`, verb `transitioned`; COR4-15) — the whole download lifecycle of one item on **one** durable topic: `{Kind: grab_added \| grab_failed \| completed \| failed \| removed, Owner, Refs, GrabID, ItemRef, …}`, keyed by `GrabID` (an item with no grab record: by `ItemRef`); an item's key never changes over its lifetime | outbox (`Durable`) |
 | `core.download.item.changed.v1` | bus, notify-only (the realtime companion of the durable topic) |
 
 One topic per item lifecycle is what gives a consumer its order (COR3-4): ordering exists only within
@@ -266,7 +266,11 @@ type Writer struct{ /* unexported: the Outbox plus the calling module's ID */ }
 // a discarded batch leaves nothing. Stage binds the outbox keyspace to b
 // (storage.Batch.Bind / In, 05-storage §5S.3.2) and writes only
 // c/outbox/in/ inside it, so R8 holds even though b was opened by a module.
-// Only the topic's owner may stage it.
+// Only the topic's owner may stage it. The intake ULID comes from ONE
+// monotonic generator per Outbox (strictly increasing within the process,
+// also within one millisecond and across a backward clock step), so intake
+// keys preserve Stage call order within a process; two messages staged in one
+// batch therefore commit, and are sequenced, in Stage order (COR4-14).
 func Stage[T any](w Writer, b *storage.Batch, t Topic[T], key string, payload T, opts ...StageOption) error
 
 type StageOption func(*stageConfig)
@@ -351,7 +355,9 @@ func (tx *Tx) Batch() *storage.Batch
 // StartRun stages a run of any registered kind -- core, or a module kind built
 // for core to start, such as <module>.acquire.import (05-tasks 5T.3.12, COR2-11)
 // -- in the relay batch through Executor.StartIn (the relay's own starter;
-// core services use tasks.Stager, COR3-8), with Trigger Outbox. A module kind's
+// core services use tasks.Stager, COR3-8), with Trigger Outbox. The run's rows
+// are staged by whichever tasks.RunStore serves the install, bound to the same
+// batch by participant binding (05-tasks 5T.3.13, R4-1). A module kind's
 // run is stamped with that module's system actor, as Stager does (SEC2-15).
 // req.Mode must be ModeLive or ModePreview (unset: tasks.ErrModeUnset, a
 // programming error that dead-letters). The run carries its own kind's
@@ -447,7 +453,7 @@ Storage (`c/outbox/` core keyspace):
 | No reissue (DATA-19, consumer side) | A seq and the high-water mark that covers it commit in the same batch; a crash before that commit leaves the intake rows in place to be sequenced again, and nothing after it needs redoing. There is no lease and no shared `storage.Sequence`. |
 | No horizon, no global stall (COR-10) | Only committed messages receive a seq, so a cursor can never skip one and no relay waits for an unresolved batch. A long-open or leaked producer batch (error path, panic, a large migration step) delays only its own messages. Topics are sequenced independently, so one topic's backlog never holds another's — and, for the same reason, **there is no order across topics**: a consumer reads one topic (5E.4), and events whose relative order matters share a topic and key (COR3-4). |
 | Intake latency | `Stage` nudges the relay (in memory); the relay scans intake after the nudge and at least every `core.outbox.intake_poll` (1 s). The scan loop runs **inside** the relay's task run and is that run's progress heartbeat (5E.5.3); it is not a separate in-process component (COR2-5). An empty prefix costs one seek. |
-| Partitioning / order | `partition = fnv1a32(key) % partitions`. Messages of one key are sequenced in intake order; rows taken in one scan are ordered by their stage-time ULID. Two batches that stage the same key **concurrently** have no defined order between their state changes either, so a producer needing strict per-key order serialises those writes (for example under the entity's ref lock, 05-tasks 5T.3.4). Per (consumer, partition), messages are delivered one at a time in seq order. A failing head message blocks later messages of that partition for that consumer (head-of-line) — the cost of per-key order. `Unordered()` consumers skip HOL blocking and process a partition with up to `core.outbox.unordered_parallelism` in flight. |
+| Partitioning / order | `partition = fnv1a32(key) % partitions`. Messages of one key are sequenced in intake order; rows taken in one scan are ordered by their stage-time ULID, which the per-`Outbox` monotonic generator makes the `Stage` call order within a process, so a producer that stages two transitions of one key in one batch (05-download's recovery stages `grab_added` then `completed`) gets them delivered in that order (COR4-14). Two batches that stage the same key **concurrently** have no defined order between their state changes either, so a producer needing strict per-key order serialises those writes (for example under the entity's ref lock, 05-tasks 5T.3.4). Per (consumer, partition), messages are delivered one at a time in seq order. A failing head message blocks later messages of that partition for that consumer (head-of-line) — the cost of per-key order. `Unordered()` consumers skip HOL blocking and process a partition with up to `core.outbox.unordered_parallelism` in flight. |
 | At-least-once | A message is redelivered until its consumer acks (handler returned nil and the cursor write committed). Crash after a core handler's external effect but before the ack → redelivery; handlers dedupe on `IdempotencyKey`. `ConsumeTx` and `ConsumeIntoTask[Raw]` commit effect (or the run's queue row) + cursor in one batch: effectively once. |
 | Retry | Exponential backoff with full jitter between `Backoff(min,max)`; `ErrPermanent`, `ErrSchema` or `MaxAttempts` reached → dead letter, cursor advances, `core.outbox` health component Degraded while any dead letter exists. A message that is valid but **stale** for the handler's state (e.g. a transition its entity has already passed) is acked, logged and counted by the handler, never returned as an error: an error head-of-line-blocks every later message of that partition and finally dead-letters a valid message (COR3-4). |
 | Retention (COR-12, COR2-4) | A message is deleted when every consumer in its topic's **declared-consumer set** has a persisted cursor past it. That set is the union of (a) `Manifest.OutboxConsumers` of every manifest in the build, enabled **and disabled** (06), and (b) the kernel's static core consumer list (`kernel/catalog`, 5E.4): core consumers (`core.notify.deliver`, `core.acquire.download-events`) are registered by the kernel, not by a manifest, and still hold their messages until acked. A disabled module's consumers therefore keep their messages: not delivered, not dropped, until the module is re-enabled (delivery resumes from the persisted cursor) or an operator purges that consumer's backlog (5E.11, audited). A declared consumer that has never run holds no messages; its cursor is created at first registration ("now", or the oldest retained message with `FromBeginning()`). A topic whose declared-consumer set is **empty** is never "acked by everyone" vacuously: its messages are kept for `core.outbox.orphan_retention` (7 d). Apart from that, `orphan_retention` applies only to cursors of consumer names in **neither** set (a consumer removed from the build); those messages are then dropped with a counted metric (fail-open: a removed consumer must not grow the store forever). Dead letters stay until an operator retries or discards them. |
@@ -619,6 +625,7 @@ names included), so cardinality is bounded.
 | `TestOnRaw_CrossModuleWithoutImport`, `TestOnRaw_DisabledModuleWarns` | R3, G1 |
 | `TestOutbox_StageCommitsWithBatch`, `TestOutbox_DiscardLeavesNothing` | atomicity |
 | `TestOutbox_IntakeOutOfOrderCommitsNoSkip` (two batches commit out of stage order; both delivered) | COR-10 |
+| `TestStageOrderWithinBatch` (many `Stage` calls of one key in one batch within one millisecond, and across a backward clock step: delivered in call order) | COR4-14 |
 | `TestOutbox_LeakedBatchDoesNotStall` (one batch never closed; other messages and topics flow) | COR-10 |
 | `TestOutbox_IntakeCrashNoReissue` (`CrashClone` at every point of the intake batch) | DATA-19 |
 | `TestOutbox_ZombieRelayCannotDoubleSequence` | conditional write |
@@ -632,7 +639,7 @@ names included), so cardinality is bounded.
 | `TestOutbox_ConsumeIntoTaskRawWithoutImport` | COR-11 |
 | `TestArchtest_ModuleConsumeFlagged` | COR-9 |
 | `TestOutbox_DisabledConsumerRetainsUntilReenableOrPurge` (another consumer acks; orphan window passes; nothing deleted) | COR-12 |
-| `TestCoreOnlyTopicRetainedUntilAck` (`core.notify.deliver.v1` with only its core consumer `core.notify.deliver`: a retention sweep and the orphan window pass before the consumer runs; nothing deleted until its cursor passes) | COR2-4 |
+| `TestCoreOnlyTopicRetainedUntilAck` (`core.notify.delivery.requested.v1` with only its core consumer `core.notify.deliver`: a retention sweep and the orphan window pass before the consumer runs; nothing deleted until its cursor passes) | COR2-4 |
 | `TestOutbox_WhereAcksUnmatchedWithoutRun`, `TestOutbox_WhereWrongTypeRefused` | COR2-10 |
 | `TestOutbox_TxStartRunSameBatchAsTransition` (crash injection: transition and run both or neither; the run never sees the pre-transition state) | COR2-10 |
 | `TestOutbox_ConsumeIntoTaskRequiresMode` (no `Live()`/`Preview()` → boot fails; `Live()` → the run is Live) | COR2-5 |
@@ -725,3 +732,9 @@ Round 3:
 - SIMP3-5 — static core consumer list: `core.notify.deliver` from 09 S7, with `notify`.
 - SIMP3-8 — enqueue dedupe removed (`IdempotencyKey` StageOption, `c/outbox/idem/`, "Idempotency at enqueue", `core.outbox.idempotency_ttl`, the drop metric and test); `Message.IdempotencyKey` is the stable message ULID; `ConsumeIntoTask`/`StartRun` set no start key.
 - R3-1 — verified: no adoption, mirror or Teach-build machinery in this file.
+
+Round 4:
+
+- COR4-14 — `Stage` takes intake ULIDs from one monotonic generator per `Outbox`, so intake order is `Stage` call order within a process and same-batch messages of one key are delivered in that order; `TestStageOrderWithinBatch`.
+- COR4-15 — deferred download topic renamed `core.download.item.transitioned.v1`; the notify delivery topic is `core.notify.delivery.requested.v1` (test row); both now follow 03's `<noun>[.<qualifier>].<verb-past>` grammar.
+- R4-1 (consistency) — `Tx.StartRun`'s run rows are staged by whichever `tasks.RunStore` serves the install, bound to the relay batch; the outbox itself is unaffected (`c/outbox/` is core's own keyspace).

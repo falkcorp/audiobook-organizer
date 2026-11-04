@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.4.1 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -81,9 +81,11 @@ type ReleaseManifest struct {
 	Version string            `json:"version"`
 	Channel Channel           `json:"channel"`
 	Assets  map[string]string `json:"assets"` // asset name -> lowercase hex SHA-256
-	// MinUpgradeFrom is what the STORE must already have recorded before this
-	// release may run on it (R2-4, OPS2-11, OPS3-7): the release's declared
-	// upgrade floors (05-storage §5S.3.5). nil = none. Signed with the rest,
+	// MinUpgradeFrom is the release's upgrade-floor requirement: what the STORE
+	// must already have recorded before this release may run on it (R2-4,
+	// OPS2-11, OPS3-7), i.e. the floors the release declares (05-storage
+	// §5S.3.5). It is set by a floor release (05-tasks T8) and names that
+	// release's stepping stone; nil = none. Signed with the rest,
 	// so it cannot be stripped. It is checked against the store's recorded
 	// migration state, never against the running binary's version: a store
 	// meets a floor only by running the steps, not because a binary that
@@ -94,10 +96,15 @@ type ReleaseManifest struct {
 
 // UpgradeRequirement is the release pipeline's copy of the new binary's
 // declared upgrade floors, printed by `<exe> --print-upgrade-floor` (5U.5).
+// Two releases are involved and never share a name (OPS4-5): the FLOOR
+// release is the one carrying this requirement (it deleted code an older
+// store needs); the STEPPING-STONE release, named in Release, still carries
+// that code and contains no deletion.
 type UpgradeRequirement struct {
-	Release string            `json:"release"`          // the release to install and run first; named in messages and the banner
-	Owners  map[string]uint64 `json:"owners,omitempty"` // owner -> minimum applied version, e.g. {"books": 66}
-	Steps   []string          `json:"steps,omitempty"`  // storage StepRefs that must be done (e.g. a later cutover); none in the extraction
+	Release string            `json:"release"`          // the stepping-stone release to install and run first; named in messages and the banner
+	Owners  map[string]uint64 `json:"owners,omitempty"` // owner -> minimum applied version, e.g. {"books": LegacyCap}
+	// A Steps member (storage StepRefs that must be done) lands with the first
+	// cutover; it is a deferred-build member (5U.3), not part of the extraction.
 }
 
 type Mode uint8
@@ -155,12 +162,15 @@ type Status struct {
 	RollbackBlocked string   // fixed token when an automatic rollback was refused by the guard (5U.4)
 	Unsigned        bool     // the legacy unsigned path is enabled (5U.5)
 	DisabledReason  string   // "off", "container", "no_trusted_keys", "dev_build", "binary_not_writable" (OPS2-4)
+	// LocalBuild: the current version carries a `git describe` suffix (OPS4-17);
+	// Latest is not compared with it and scheduled apply never runs.
+	LocalBuild bool
 	// SkippedAfterRollback names the newest version that Boot rolled back; scheduled
 	// apply skips every version <= it until a manual apply or a newer release (OPS2-6).
 	SkippedAfterRollback string
-	// SteppingStone names the release to install and run first when the store
-	// does not yet meet Latest's signed MinUpgradeFrom (OPS2-11, OPS3-7); apply
-	// refuses until the store's recorded state meets it.
+	// SteppingStone names the stepping-stone release to install and run first
+	// when the store does not yet meet Latest's signed MinUpgradeFrom (OPS2-11,
+	// OPS3-7); apply refuses until the store's recorded state meets it.
 	SteppingStone string
 }
 
@@ -211,7 +221,7 @@ type Deps struct {
 type ReaderCheck func(ctx context.Context, dbPath, exe string, opt ReaderCheckOptions) error
 
 // StoreState reports the store's recorded migration state — the applied
-// version per owner and the finished data-migration steps — by reading the
+// version per owner — by reading the
 // applied-steps sidecar that 05-storage defines and every guard-aware boot
 // rewrites beside the DB (a file, like the level sidecar ReaderCheck reads,
 // so the same answer is available to tools outside the process, e.g. 09's
@@ -220,12 +230,13 @@ type ReaderCheck func(ctx context.Context, dbPath, exe string, opt ReaderCheckOp
 type StoreState func(ctx context.Context, dbPath string) (StoreApplied, error)
 
 type StoreApplied struct {
-	Owners    map[string]uint64
-	StepsDone []string
+	Owners map[string]uint64
+	// StepsDone (finished data migrations) lands with the first cutover, as a
+	// deferred-build member (5U.3; SIMP4-4).
 }
 
 // Meets reports whether s satisfies r: every listed owner at or above its
-// version and every listed step done. A nil r is always met.
+// version. A nil r is always met.
 func (s StoreApplied) Meets(r *UpgradeRequirement) bool
 
 type ReaderCheckOptions struct {
@@ -245,15 +256,27 @@ type Restarter interface {
 // Boot is boot phase P−1 of 06 §6.5.1 (OPS2-3): it runs FIRST in app.New,
 // before P0a's restore swap, before the config file is read and before storage
 // opens, so that a config-stage refusal or a failing migration cannot prevent
-// rollback. Like P0a it resolves the state directory from flags, environment
-// and app.Options.StateDir only, never from the config file or the DB, and it
-// takes the DB path ReaderCheck needs from its own marker (db_path, recorded
-// by the build that applied the update). It reads the file marker, counts boots, and after the marker's
-// max_boot_attempts failed boots rolls back to <exe>.prev only if check allows
-// it (OPS-6). On Unix a rollback execs the restored binary in place (same PID,
-// same argv/env), so no supervisor start is spent (OPS2-18); Boot returns only
-// when it continues, when exec fails, or on platforms without exec.
-func Boot(stateDir, exe string, check ReaderCheck) (BootResult, error)
+// rollback. stateDir is the directory the kernel resolved ONCE before P−1
+// (05-config §1.7: flags, environment and app.Options.StateDir only, never the
+// config file or the DB), the same value P0a, P0 and every consumer use; Boot
+// resolves nothing itself. The marker inside it supplies only db_path, the DB
+// path ReaderCheck needs (recorded by the build that applied the update), and
+// is never an input to locating a directory (OPS4-8). A marker whose to and
+// to_build are not self's was left for another binary (make deploy or make
+// rollback inside the confirmation window, or a rollback to a build that never
+// deletes markers): Boot appends it to updates/history.jsonl as "superseded",
+// deletes it and counts nothing (OPS4-9). Otherwise it counts boots, and after
+// the marker's max_boot_attempts failed boots rolls back to <exe>.prev only if
+// check allows it (OPS-6). On Unix a rollback execs the restored binary in
+// place (same PID, same argv/env), so no supervisor start is spent (OPS2-18);
+// Boot returns only when it continues, when exec fails, or on platforms
+// without exec.
+func Boot(stateDir, exe string, self Self, check ReaderCheck) (BootResult, error)
+
+// Self identifies the running binary: the version and build ID its own
+// --version-json prints (the build ID is the embedded bundle's, 05-http-api
+// §4.2; "dev" when nothing is embedded).
+type Self struct{ Version, Build string }
 
 type BootResult struct {
 	RolledBack      bool   // true only when exec was impossible: the previous binary was restored; the caller exits with the restart code
@@ -281,6 +304,16 @@ func TokenSecret(name string) Option
 ABO passes `github.New("falkcorp", "audiobook-organizer")`; a TV app passes its own slug and its own
 key. Nothing in core names a repository.
 
+### Deferred-build members
+
+Built only with the first per-family cutover (05-storage §5S.3.13), the only step whose floor needs
+them; no extraction stage builds, stamps or reads them (SIMP4-4):
+
+| Member | What it adds |
+|---|---|
+| `UpgradeRequirement.Steps` (`json:"steps"`) | storage `StepRef`s (a cutover's data migration) that must be done before the release may run |
+| `StoreApplied.StepsDone` and the `Steps` half of `Meets` | the finished data migrations, read from the applied-steps sidecar's `<owner> done <id>` lines (05-storage, deferred with them) |
+
 ## 5U.4 Lifecycle
 
 **Check** — task `core.updater.check`: Shape Task, `Effects: Writes(tasks.Res("core","updater"))`,
@@ -289,7 +322,11 @@ key. Nothing in core names a repository.
 the one schedule mechanism on the durable clock, with the key in the updater's own namespace
 ([05-tasks](05-tasks.md) 5T.3.8; SIMP-6, R2-7; fixes the restart-reset ticker); the check route starts
 it with `mode: live`. It calls `Source.Latest`, compares semver (`golang.org/x/mod/semver`), refuses
-to report an update for a `dev`/unversioned build, probes that the executable's directory is writable
+to report an update for a `dev`/unversioned build or for a **local build** — a current version carrying
+a `git describe` suffix (`-<n>-g<hex>` or `-dirty`; main builds take `VERSION` from
+`git describe --tags --always --dirty`, `Makefile:9`), which semver reads as a prerelease and so orders
+below its own base tag: such a status sets `LocalBuild` and reports "local build, not compared" instead
+of offering an older release as newer (OPS4-17) — probes that the executable's directory is writable
 (apply step 1), records `Status`, and sets component `core.updater` (Up / Degraded `check_failed`,
 `no_trusted_keys`, `unsigned_updates`, `rollback_blocked`, `binary_not_writable`). When a version first
 appears it writes `c/updater/seen` `{version, at}` and, in the **same batch** (through the run's
@@ -307,8 +344,9 @@ maintenance-window step 1 and the separate ticker are deleted). Because the sche
 system actor, `core.updater.mode` carries `ProtectAdmin` (5U.8, SEC-6): only a `core:admin` holder
 with an interactive method can turn automatic apply on. Steps, each a `rc.Phase`:
 
-1. Preconditions: not in a container; current build is versioned; target newer than current; for a
-   **scheduled** run, target newer than `Status.SkippedAfterRollback` (OPS2-6); inside the window when
+1. Preconditions: not in a container; current build is versioned; target newer than current, except
+   that on a local build (`LocalBuild`) a scheduled run never applies and a manual run applies only the
+   version the operator names explicitly; for a **scheduled** run, target newer than `Status.SkippedAfterRollback` (OPS2-6); inside the window when
    scheduled; no staged restore pending (05-backup §5B.3.4's journal: a swap would make the restore be
    rejected as foreign, 09 S1/S8); either `TrustedKeys` non-empty or the legacy path enabled (5U.5);
    and the **executable's directory is writable by the process**, checked by creating and removing a
@@ -336,7 +374,8 @@ with an interactive method can turn automatic apply on. Steps, each a `rc.Phase`
    `<exe>.new` in the executable's directory (same filesystem, so the rename is atomic); fsync
    file and directory.
 5. Self-test (second check, kept): run `<exe>.new --version-json` (10 s timeout, empty environment
-   except `PATH`); it must print `{app: AppID, version: target}`.
+   except `PATH`); it must print `{app: AppID, version: target}`, and its `build` is what step 7
+   records as `to_build`.
 6. Pre-update backup through `backup.Runner` ([05-backup](05-backup.md), in the format the previous
    build can restore during the window); failure aborts unless `core.updater.require_backup=false`.
 7. Write the pending marker file `<state-dir>/updates/pending.json`
@@ -352,10 +391,15 @@ with an interactive method can turn automatic apply on. Steps, each a `rc.Phase`
    `Restart=always`) or `exec` the new binary in place (`core.updater.restart_mode=exec`, Unix only).
 
 **Confirm / roll back** — `Boot` is boot phase **P−1** of [06](06-app-sdk.md) §6.5.1 (OPS2-3): in the
-new process, before P0a's restore swap, before the config file is read and before storage opens; it
-resolves the state directory from flags, environment and `app.Options.StateDir` only, and reads the DB
-path `ReaderCheck` needs from its own marker (`db_path`, the absolute `core.storage.path` the applying
-build recorded), never from the config file or the DB (06 §6.5.1 P−1). It
+new process, before P0a's restore swap, before the config file is read and before storage opens. It
+works in the state directory the kernel resolved once before P−1 (05-config §1.7) and resolves none
+itself; the marker's `db_path` (the absolute `core.storage.path` the applying build recorded) is used
+only as `ReaderCheck`'s DB path, never to locate a directory (06 §6.5.1 P−1; OPS4-8). It first checks
+that the marker is this binary's: when the marker's `to`/`to_build` differ from the running binary's
+version and build ID (a `make deploy` or `make rollback` inside the confirmation window, or a rollback
+to a pre-S8 build, which never deletes the marker), it appends the marker to `updates/history.jsonl` as
+`superseded`, deletes it and counts nothing, so a different binary is never rolled back against an old
+update (OPS4-9). Otherwise it
 increments `boots` in the marker **first**, so every boot that ends before confirmation counts as a
 failed boot, whatever stopped it: a P0 config refusal (`*RetiredAliasError`, a validation error), a
 P2/P4 storage refusal (including `ErrUpgradeFloor`), or a crash during
@@ -413,26 +457,35 @@ opens.
 | Containers | forced off, `DisabledReason: container` (`sysinfo.Info.Container`, [05-health](05-health.md)) | replacing a binary inside an image is wrong |
 | No trusted keys | check allowed; apply impossible (`no_trusted_keys`) unless the legacy path is enabled; while mode ≥ check, component Degraded `no_trusted_keys` and a UI banner (OPS-23) | fail closed on unverifiable artifacts, but never silently |
 | Legacy unsigned path (OPS-23) | `core.updater.allow_unsigned_legacy=false`; set to `true` only by the config migration of an install that had `auto_update.enabled=true` | existing auto-update users must not silently stop receiving updates at key introduction |
-| Downgrades | never automatic; only `Rollback` to the kept previous binary, and only when `ReaderCheck` allows it | string-inequality defect (`updater.go:153`); OPS-6 |
+| Downgrades | never automatic; only `Rollback` to the kept previous binary, and only when `ReaderCheck` allows it; a describe-suffixed local build is never compared, so it is never offered an older release as newer | string-inequality defect (`updater.go:153`); OPS-6; semver orders `v0.223.0-5-gabc1234` below `v0.223.0` (OPS4-17) |
 | Window | apply only inside the window its schedule key names (`nightly` by default) when scheduled; manual apply any time | one window instead of two (5U.2) |
 | Who | check: `core:system.manage`; apply/rollback: `core:admin` (audited as `core.update.apply` / `core.update.rollback`, 05-rbac §7.1; credential-guarded route as today); turning on scheduled apply: `ProtectAdmin` on `core.updater.mode` | RBAC (05-rbac); SEC-6 |
 | Binary directory | the process must be able to create files in the executable's directory; otherwise `binary_not_writable` (apply and rollback refused, Degraded while mode ≥ check) | the swap is two renames in that directory (steps 4 and 8); OPS2-4 |
-| Stepping stones | a release whose signed `min_upgrade_from` the store's **recorded state** does not meet is never applied; `stepping_stone_required` names the release to install and run first | R2-4: books legacy migration code is kept only until the declared minimum-upgrade-from release (09), so a store below books 66 needs that release to have **run**, which only the store can prove (OPS3-7); later floors (a cutover release's own) use the same field; OPS2-11 |
+| Stepping stones | a release whose signed `min_upgrade_from` the store's **recorded state** does not meet is never applied; `stepping_stone_required` names the stepping-stone release to install and run first. This protection exists only where the running updater is this one or the 09 S0 hotfix; a pre-S0 updater swaps any newer binary unchecked (`internal/updater/updater.go:214-280`), so such an auto-updating install that takes the floor release exits 78 at boot with `ErrUpgradeFloor` and no automatic way back, and the floor release's note and the Docker last-line message name the stepping stone (DATA4-18) | R2-4, OPS4-5: books legacy migration code is kept in every release before the **floor release** (the first T8 release, which deletes it and declares books' floor, 05-tasks 5T.6.2), so a store below books' `LegacyCap` needs the **stepping-stone release** (`min_upgrade_from.release`, which still carries that code) to have **run**, which only the store can prove (OPS3-7); a later cutover floor uses the same field; OPS2-11 |
 | Boot attempts | `max_boot_attempts ≤ StartLimitBurst − 2` of the unit; capped at 3 when `NOTIFY_SOCKET` is set | the committed unit (`StartLimitBurst=5` in 60 s, `RestartSec=5`, `deploy/audiobook-organizer.service:81-82,112`) then has one spare start for a crash of the restored binary; the in-place exec spends none; OPS2-18 |
 
-**Supported install layouts (OPS2-4).** The updater replaces the binary in place, so it works only
-where the service user owns the executable's directory: (a) a service-owned binary directory, e.g.
-`<state-dir>/bin/<binary>`, referenced by the unit's `ExecStart` (and by `make deploy`/`make rollback`,
-which then need no root for the copy); (b) a launchd agent whose binary lives in a user-writable
+**Supported install layouts (OPS2-4, OPS4-4).** The updater replaces the binary in place, so it works
+only where the service user owns the executable's directory: (a) a dedicated service-owned binary
+directory **outside** the state directory — for example a service-owned `bin` directory under the
+install prefix — mode 0755 with binaries 0755, referenced by the unit's `ExecStart`. It must not be
+under the state directory: that directory is 0700 and holds credentials
+(`internal/config/state_dir.go:112-116,135`), while `make rollback` and `deploy-match-unit-type.sh` run
+their `.prev` probes (`--print-storage-format`, `--print-storage-levels`, `--print-upgrade-floor`,
+`--print-capabilities`) as the unprivileged deploy user (`Makefile:899-902`), which could not enter it,
+so every rollback would report "no .prev found". The recipes keep those unprivileged probes and copy
+the binary with literal sudoers lines (`cp` as the service user or as root); (b) a launchd agent whose binary lives in a user-writable
 directory; (c) a manual install the operator owns. The committed systemd unit copies the binary into a
 root-owned system binary directory with `sudo cp` and runs it as an unprivileged `User=` with
 `NoNewPrivileges=yes` (`deploy/audiobook-organizer.service:42,88,122`), so HEAD's
 `os.OpenFile(<exe>.new)` already fails there with EACCES (`internal/updater/updater.go:254-258`): on
 that layout the core updater reports `binary_not_writable` until the owner moves the binary to layout
 (a) (an owner action of 09 S8, which owns its checklist: the committed unit with layout (a) as default,
-the drop-in `ExecStart`, the sudoers template, `DEPLOY_BIN` and `deploy-match-unit-type.sh` updated,
-**both** the binary and `.prev` copied to the new directory so the first `make rollback` still finds a
-`.prev`, and a dry-run `make rollback` plus `binary_not_writable` clearing as the check; OPS3-15). A
+the drop-in `ExecStart`, the sudoers template's `cp` lines, `DEPLOY_BIN` and
+`deploy-match-unit-type.sh` updated, the launchd plist's `ProgramArguments` binary path
+(`deploy/com.audiobook-organizer.plist:30-33`, which may name a root-owned system directory), **both**
+the binary and `.prev` copied to the new directory so the first `make rollback` still finds a `.prev`,
+and, as the check, a dry-run `make rollback` **run as the deploy user** that prints the `.prev` levels,
+plus `binary_not_writable` clearing; OPS3-15, OPS4-4). A
 privileged helper is deliberately not provided: it would need a
 setuid binary or a polkit rule, contradicting `NoNewPrivileges=yes`, for a convenience the
 service-owned layout gives for free.
@@ -453,9 +506,10 @@ key is compiled in, so a migrated install's first update is normally already sig
 **Release pipeline requirements** (cost surfaced: the reusable release workflow lives outside this
 repo, and signing is new work there): publish per-platform archives named by the app's `AssetName`,
 `release-manifest.json` = `{app, version, channel, assets: {name: sha256}, min_upgrade_from?}` for that
-app only (`min_upgrade_from` = `{release, owners, steps}`, copied from the built binary's
+app only (`min_upgrade_from` = `{release, owners}`, copied from the built binary's
 `--print-upgrade-floor` output, so the signed requirement is exactly the floor that binary enforces at
-boot; 09 names `release`), and
+boot; `release` is the stepping-stone release, which 05-tasks T8 fixes as the newest production tag
+when the T8 PR merges), and
 `release-manifest.json.sig` = ed25519 signature over the manifest bytes with **that app's** key (one
 key per app; never shared between ABO and a TV/Movies app), key id in the signature file; the private
 key is a CI secret. `checksums.txt` stays (goreleaser produces it). Key rotation: ship the new public
@@ -482,6 +536,8 @@ the compiled-in revoked list in the next release.
 | Restart fails after swap | closed: the process keeps running the old code in memory; marker says pending; next manual or supervisor restart boots the new binary under the boot counter | — |
 | New binary fails to become ready within `max_boot_attempts` boots, `.prev` allowed by `ReaderCheck` | closed: automatic binary rollback in `Boot` | the purpose of the marker |
 | Same, but `ReaderCheck` refuses `.prev` | open: no rollback; `rollback_blocked`, Degraded, boot continues on the new binary | rolling back to a binary that refuses the store leaves the unit failed with no automatic recovery (OPS-6) |
+| Marker left for another binary (`to`/`to_build` ≠ the running binary's) | open: recorded `superseded` in `history.jsonl`, deleted, nothing counted | a deploy or rollback inside the confirmation window must not be rolled back against an old update (OPS4-9) |
+| Current version is a local (describe-suffixed) build | open for check (`LocalBuild`, not compared); closed for scheduled apply; manual apply only of an explicitly named version | semver cannot order it against its base tag (OPS4-17) |
 | Marker unreadable | closed: treat as `boots = max` → roll back if `<exe>.prev` exists and `ReaderCheck` allows, else continue and report Degraded `marker_corrupt` | a corrupt marker must not loop |
 | Running in a container / dev build | closed: apply refused with reason | policy |
 
@@ -550,7 +606,7 @@ The `/api/v1/update/*` paths are aliases for the compatibility window (09 §9.2.
 
 | Test | Proves |
 |---|---|
-| `TestCheck_SemverNeverDowngrades`, `TestCheck_DevBuildNeverAvailable` | comparison |
+| `TestCheck_SemverNeverDowngrades`, `TestCheck_DevBuildNeverAvailable`, `TestCheck_DescribeSuffixedCurrentNotCompared` (current `v0.223.0-5-gabc1234` or `-dirty`, latest `v0.223.0` or older → no update offered, `LocalBuild` set, scheduled apply refused, manual apply of a named version allowed) | comparison, OPS4-17 |
 | `TestGithubSource_ParameterisedSlugAndBaseURL` (httptest) | no hard-coded repo |
 | `TestGoreleaserArchive_MatchesTemplate` (golden against `.goreleaser.yml` naming) | asset contract |
 | `TestApply_BadSignatureAborts`, `TestApply_ChecksumMismatchAborts`, `TestApply_UnknownKeyAborts`, `TestApply_RevokedKeyAborts`, `TestApply_OversizeAborts` | verification |
@@ -563,12 +619,14 @@ The `/api/v1/update/*` paths are aliases for the compatibility window (09 §9.2.
 | `TestBoot_RollsBackAfterMaxAttempts`, `TestBoot_ConfirmAfterReady` (synctest) | rollback/confirm |
 | `TestBoot_RollbackBlockedWhenPrevRefusesStore` (fake `.prev` reporting a lower format/level) | OPS-6 |
 | `TestBoot_CorruptMarker` | marker safety |
+| `TestBoot_IgnoresMarkerOfAnotherBuild` (marker `to_build` ≠ the running build: appended to `history.jsonl` as `superseded`, deleted, no boot counted, no rollback) | OPS4-9 |
+| `TestBoot_UsesKernelStateDirMarkerOnlyForDBPath` (a marker naming another `db_path` never changes the state directory; `ReaderCheck` receives that path) | OPS4-8 |
 | `TestBoot_ConfigRefusalCountsAsFailedBoot` (P0 `*RetiredAliasError` on every boot → rollback after the attempts), `TestBoot_RunsBeforeRestoreSwap_IgnoresOwnStagedRestore` | OPS2-3 |
 | `TestBoot_NoLevelRaiseWhilePending` (level-raising release, first boot fails readiness → `Boot` rollback allowed; R-test cell d') | OPS2-2 |
 | `TestBoot_RollbackExecsInPlace` (fake supervisor counts starts: ≤ `StartLimitBurst` − 2 + 1), `TestConfig_MaxBootAttemptsCappedUnderNotify` | OPS2-18 |
 | `TestApply_SkipsVersionThatRolledBack`, `TestApply_ManualApplyLiftsSkip` | OPS2-6 |
 | `TestApply_BinaryDirNotWritableRefusedAndDegraded` (read-only temp directory) | OPS2-4 |
-| `TestApply_SteppingStoneRequired` (store at books 63 with a running binary newer than `min_upgrade_from.release` → refused before any swap; store at books 66 → allowed), `TestApply_StoreStateErrorRefuses` | OPS2-11, OPS3-7 |
+| `TestApply_SteppingStoneRequired` (store at books 63 with a running binary newer than the stepping-stone release → refused before any swap; store at books `LegacyCap` → allowed), `TestApply_StoreStateErrorRefuses` | OPS2-11, OPS3-7 |
 | `TestApply_UnsignedNewerThanLastUnsignedRefused` | SEC2-23 |
 | `TestCheck_NotifiesOncePerVersionAcrossRestart` | COR2-3 |
 | `TestPolicy_ContainerForcesOff`, `TestPolicy_NoKeysCheckOnlyAndDegraded`, `TestPolicy_NilOptionsNoRoutesNoTasks` | policy, absence |
@@ -583,7 +641,7 @@ The `/api/v1/update/*` paths are aliases for the compatibility window (09 §9.2.
 | `internal/updater.Updater` (`updater.go`) | `core/updater` + `core/updater/github`; ABO's `main` passes its slug, binary name, asset namer and its own public key |
 | `internal/updater.Scheduler` + `SchedulerStarterAdapter` + `updatescheduler` service | deleted; `core.updater.check`/`apply` tasks with schedule keys |
 | maintenance-window step 1 (`scheduler_maintenance_window_op.go:73-92`) and setting `maintenance_window_update_completed` | deleted; the window runs `core.updater.apply` as member 0 |
-| `RestartSelf` (`os.Exit(0)`, `updater.go:329-334`) | `Restarter.Restart` (graceful, exit 75). Until then, 09 S0 owns the HEAD updater hotfix (exit 75, `.prev` kept, semver comparison, a reader check of `<exe>.new` against the store before the swap, and **both** auto-apply paths of 5U.2 check-only; OPS3-12) and its scheduled-apply policy until S8 (OPS-6, OPS2-5); on the committed unit's layout the HEAD updater cannot write the binary at all (5U.5, OPS2-4) |
+| `RestartSelf` (`os.Exit(0)`, `updater.go:329-334`) | `Restarter.Restart` (graceful, exit 75). Until then, 09 S0 owns the HEAD updater hotfix (exit 75, `.prev` kept, semver comparison that treats a describe-suffixed current version as a local build and offers nothing (OPS4-17), a reader check of `<exe>.new` against the store before the swap, and **both** auto-apply paths of 5U.2 check-only; OPS3-12) and its scheduled-apply policy until S8 (OPS-6, OPS2-5); on the committed unit's layout the HEAD updater cannot write the binary at all (5U.5, OPS2-4) |
 | `<exe>.old`, deleted after the swap (`updater.go:267-280`) | `<exe>.prev`, kept; shared with `make rollback` |
 | `/api/v1/update/*` handlers (`update_handlers.go`) | core routes + aliases |
 | `auto_update.*` config | `core.updater.*` and `core.updater.schedules.*` with aliases (5U.8) |
@@ -665,3 +723,13 @@ Round 3:
 Integration pass (round 3, 2026-11-04):
 
 - integration pass (round 3): `ReaderCheck` lists all of `CheckReader`'s tokens (`upgrade_floor`, `restore_inflight`, `cannot_determine` added) with error rows; open item 6 closed (05-storage defines the applied-steps sidecar and `--print-upgrade-floor`).
+
+Round 4:
+
+- OPS4-4 — supported layout (a) is a service-owned 0755 binary directory outside the 0700 state directory; recipes keep unprivileged probes and copy with literal sudoers lines; "no root for the copy" deleted; S8 checklist gains the plist path and a dry-run `make rollback` as the deploy user.
+- OPS4-5 — floor release vs stepping-stone release named distinctly (`UpgradeRequirement` comment, `MinUpgradeFrom`, `Status.SteppingStone`, policy row, pipeline note); "minimum-upgrade-from release" no longer used.
+- OPS4-8 — `Boot` uses the state directory the kernel resolved once; the marker's `db_path` is only `ReaderCheck`'s DB path; test.
+- OPS4-9 — `Boot(stateDir, exe, self, check)` ignores a marker of another build (`superseded` in `history.jsonl`); self-test's `build` recorded as `to_build`; error row; `TestBoot_IgnoresMarkerOfAnotherBuild`.
+- OPS4-17 — describe-suffixed current versions are local builds: not compared, no scheduled apply, manual apply only of a named version; `Status.LocalBuild`; error row and test.
+- DATA4-18 — the stepping-stone refusal is scoped to S0+ updaters; what a pre-S0 auto-updating install sees on the floor release is stated.
+- SIMP4-4 — `UpgradeRequirement.Steps`, `StoreApplied.StepsDone` and the step half of `Meets` moved under "Deferred-build members"; manifest `min_upgrade_from` = `{release, owners}`.

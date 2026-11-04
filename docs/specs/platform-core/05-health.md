@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.4.1 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -128,7 +128,13 @@ type ComponentState struct {
 
 `tasks.ReadySignal` is `health.ComponentID`; `Common.Ready` defaults to `{"core.storage"}`; the
 books warm-up becomes component `books.memdb` (Readiness, not Critical) so book-reading tasks wait
-on it exactly as they wait on the store warm-up today ([05-tasks](05-tasks.md) 5T.4).
+on it exactly as they wait on the store warm-up today ([05-tasks](05-tasks.md) 5T.4). Because the
+executor lands at 09 S5 and dispatches from its first release, this **readiness core** —
+`Status`, `ComponentID`, `Result`, `Check`, `Reporter`, `Reporters`, `ErrNotOwned` and `Registry` with
+`Register`, `Ready` and `Wait` — lands **with `tasks` at S5**, not with the rest of `health` at S8
+(COR4-8): storage registers `core.storage` (engine ping), books registers `books.memdb` through
+`Registrar.Health` and pushes it through `Deps.Health`, and HEAD's warm-up gating (D44) has a source
+from the first core-executor release. What lands when is in 5H.10.
 
 Core registers: `core.storage` (open + a cheap engine ping, replacing `CountAuthors`),
 `core.config`, `core.secrets`, `core.tasks` (executor running; Degraded when paused or a zombie cap
@@ -179,13 +185,17 @@ component `core.startup.<token>` with `StatusDegraded`.
 | `POST /api/core/v1/diagnostics` | `core:system.manage` | 202 + run ref | starts `core.diagnostics.export` |
 | `GET /api/core/v1/diagnostics/{run}` | route `Perm` `core:system.manage` with `Guards.Interactive`; the handler **also** requires that the caller is the run's actor or holds `core:admin` (SEC2-13) | 200 zip / 403 / 404 / 410 expired | bundle, re-filtered at download time (5H.3.5); every download audited as `core.diagnostics.download` (05-rbac §7.1) |
 
-**Status topic.** `health` declares `core.system.status-changed.v1` in the one catalog
-([05-events](05-events.md)): bus only, `Realtime{Coalesce: 1s}`, `Permission` `core:system.status`
+**Status topic.** From **S8** (with the probes and routes, 5H.10), `health` declares
+`core.system.status-changed.v1` in the one catalog ([05-events](05-events.md)); no earlier build
+declares it, so before S8 05-realtime's legacy projection A must not subscribe to it and carries
+HEAD's 5-second `system.status` frame from a books topic instead (05-realtime §4.9, COR4-7). Bus only, `Realtime{Coalesce: 1s}`, `Permission` `core:system.status`
 ([05-rbac](05-rbac.md) §4.8 seeds it to `editor` and `viewer`). Its payload is exactly the
 `GET /api/core/v1/system/status` body, `{ready, not_ready[]}` with fixed `<component>:<reason>`
 tokens — never `Detail`, durations, versions or counts. It is published when `Ready()` or the set of
 not-ready tokens changes, and once with `ready:false` when shutdown starts; the shell's status banner
-and the legacy stream A `system.status` projection read it ([05-realtime](05-realtime.md) §4.7).
+and, from S8, the legacy stream A `system.status` projection read it ([05-realtime](05-realtime.md)
+§4.7); the frame's payload then changes from HEAD's counters to `{ready, not_ready}`, a change the
+compat ledger records (COR4-7).
 
 **Probe paths are exact (FE2-6).** The liveness path is `/livez` everywhere (05-http-api uses the same
 name). `/livez` and `/readyz` are `Router.Infra` exact patterns, and their first segments, with
@@ -234,14 +244,17 @@ and launchd have no equivalent):
    timer**, so a step that hangs is still killed when its own budget runs out. Lower layers do not import
    `health`: the kernel hands storage and the search-index opener `ExtendStart` as a plain
    `func(step string)`, and hands the same func to modules as `module.Deps.ExtendStart` (06 §6.4.4,
-   from S2), through which ABO's search code that stays in ABO during 09 S2–S7
-   (`internal/search/register.go:55`) keeps extending the start deadline after `internal/sdnotify`
+   from S2). Below layer 6 an ABO package never imports `module` or `app` (03 §3.5.1, MOD4-18), so
+   ABO's search code that stays in ABO during 09 S2–S7 (`internal/search/register.go:55`) does not call
+   `Deps` itself: its `IndexService` takes an injected `func(step string)`, which `books.Module()`
+   wires from `Deps.ExtendStart`, and so keeps extending the start deadline after `internal/sdnotify`
    moves to core (04 §8.3). Code that runs **before** `app.New` and so has no `Deps` — at S2, ABO's
    `serve` opens the store and runs books' migrations first (`internal/database/startup_notify.go`) —
-   calls the stateless `app.ExtendStart(step)` (06 §6.4.5): the same `EXTEND_TIMEOUT_USEC` write with
-   the same per-step budget, reading `NOTIFY_SOCKET` per call (no package state, R5), never from a
-   timer, a no-op without the socket and a failed write logged, never returned. From S2b core storage
-   opens the store and calls the kernel's func itself.
+   receives the stateless `app.ExtendStart` (06 §6.4.5) the same way, as a `func(step string)` that
+   `serve` injects, never by importing `app`: the same `EXTEND_TIMEOUT_USEC` write with the same
+   per-step budget, reading `NOTIFY_SOCKET` per call (no package state, R5), never from a timer, a
+   no-op without the socket and a failed write logged, never returned. From S2b core storage opens the
+   store and calls the kernel's func itself.
 2. **Stop** — the tasks executor's one bounded extension for an in-flight `Uninterruptible` run
    ([05-tasks](05-tasks.md) 5T.4), at most `core.tasks.shutdown_extend_max` beyond the stop budget.
 
@@ -505,7 +518,7 @@ internally.
 | `TestReadyz_FlipsBeforeHTTPDrain` | drain order |
 | `TestProbes_BodyHasOnlyTokens` (fuzz Reason/Detail with secrets and paths) | no leak |
 | `TestCheck_PanicAndTimeoutBecomeDown` (synctest) | isolation |
-| `TestRegistry_Wait_UnblocksOnUp` | tasks readiness |
+| `TestRegistry_Wait_UnblocksOnUp` (on the S5 readiness core alone: `books.memdb` pushed Up through `Deps.Health` releases a waiting `Wait`) | tasks readiness, COR4-8 |
 | `TestStartup_UnknownStepRefused`, `archtest.StartupSteps` self-test | table discipline |
 | `TestHeartbeat_StallFailsLivezAndStopsWatchdog` (synctest) | liveness |
 | `TestStopBudget_PhasesNeverExceedTotal` (synctest; each phase sleeps past its slice) | budget |
@@ -535,14 +548,26 @@ internally.
 | SlimBook/authors/series/version-groups/iTunes/missing-fields sections, `BuildBatchJSONL` | `books` `Contributor` sections; the AI batch builder goes with [05-ai](05-ai.md) |
 | op `diagnostics.export` | `core.diagnostics.export` (`FormerKinds: ["diagnostics.export"]`); `diagnostics.ai-analyze` stays `books` |
 
+**Landing by stage** (09 assigns the stages; this is what `health` needs at each):
+
+| Stage | What of `health` exists | Why then |
+|---|---|---|
+| S1 | the flight recorder, rewritten onto a `*slog.Logger` (04 §8.1) | a leaf with no ABO import |
+| S2 | `Supervisor` (`ExtendStart` behind `Deps.ExtendStart` and the stateless `app.ExtendStart`; `READY=1`/`STATUS=`/`STOPPING=1` from the kernel) | `internal/sdnotify` moves at S2 and all five importers are rewired then (04) |
+| S5 | the readiness core: `Status`, `ComponentID`, `Result`, `Check`, `Reporter`, `Reporters`, `ErrNotOwned`, `Registry.Register`/`Ready`/`Wait`; `Registrar.Health` and `Deps.Health`; components `core.storage` and `books.memdb` | the executor's dispatch waits on `Ready` signals from its first release (05-tasks 5T.4 step 2, COR4-8) |
+| S8 | the rest: probes and `/api/core/v1/health`, `/system/*` routes, the status topic, `Snapshot` over every core component, `Startup` and `Registrar.StartupSteps`, the watchdog ping, diagnostics, sysinfo | 04 §8.1 S8 ("the rest of `health`") |
+
 ## 5H.11 Open items
 
 1. Should `/readyz` require module warm-up (e.g. `books.memdb`) or only core? This spec says modules
    decide per component via `Readiness`; ABO's deploy currently waits on `/health` `ready`, so `books.memdb`
    is Readiness=true to keep that behaviour.
 2. Ring-buffer size and format for `core.logs` depend on [05-logging](05-logging.md).
-3. Whether `/metrics` stays unauthenticated is decided in [05-metrics](05-metrics.md); `core.metrics`
-   section in bundles is unaffected.
+3. Whether `/metrics` stays unauthenticated, and who serves it at each stage (gin from the default
+   registry until S8, the kernel's `Provider.Handler()` from S8), are decided in
+   [05-metrics](05-metrics.md) (MOD4-3). `health` serves no `/metrics`; it only keeps `metrics` among
+   the non-SPA segments (5H.3.3). The `core.metrics` bundle section lands with diagnostics at S8 and
+   renders the App registry, which from that stage also carries the legacy families (MOD4-3 (c)).
 4. (Closed: 06 §6.5.2 takes its deadlines from `core.shutdown.budget`; `Registrar.StartupSteps` and
    `Registrar.Diagnostics` use `health.StartupStep` as here.)
 5. (Closed: 05-rbac defines `core:system.status` (`ClassView`) and seeds it to `editor`/`viewer`, SEC-8.)
@@ -604,3 +629,10 @@ Round 3:
 Integration pass (round 3, 2026-11-04):
 
 - integration pass (round 3): §5H.3.4: code that runs before `app.New` (ABO's S2 `serve`: store open and books' migrations) uses the stateless `app.ExtendStart` (06 §6.4.5); search keeps `module.Deps.ExtendStart`.
+
+Round 4:
+
+- COR4-8 — the readiness core (`ComponentID`, `Reporter`, `Reporters`, `Registry.Register`/`Ready`/`Wait`, `Registrar.Health`, `Deps.Health`; `core.storage`, `books.memdb`) lands with `tasks` at S5; "Landing by stage" table in 5H.10; test reworded.
+- COR4-7 — the status topic is declared from S8 only; before S8 projection A carries books' status frame; the S8 payload change is recorded in the compat ledger.
+- MOD4-18 — ABO's search and store-open code receive `ExtendStart` as an injected `func(step string)` (`IndexService`, `serve`), never by importing `module` or `app` below layer 6.
+- MOD4-3 — open item 3: `/metrics` ownership per stage is 05-metrics'; `health` serves none; the `core.metrics` bundle section exists from S8.
