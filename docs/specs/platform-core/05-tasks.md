@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.12.2 -->
+<!-- version: 1.12.3 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -861,7 +861,36 @@ type Client interface {
 	// PauseState reads the operator pause marker (any authenticated caller;
 	// HEAD's GET /api/v1/operations/pause keeps its library.view gate on the
 	// gin route). paused is false when no marker is set.
-	PauseState(ctx context.Context) (p Pause, paused bool, err error)
+		PauseState(ctx context.Context) (p Pause, paused bool, err error)
+	// Timeline, Log and Discard serve books' legacy GET /operations/timeline,
+	// GET /operations/v2/:id/logs/download and DELETE /operations/v2/:id/record
+	// from T0+T1 (FIN12-3); native GET /timeline and GET /runs/{id}/log run the
+	// same code. Timeline needs core:tasks.view and filters by each def's View.
+	Timeline(ctx context.Context, q TimelineQuery) ([]RunView, error)
+	// Log reads one run's log page, gated by the def's View, each line redacted
+	// by RedactRunView's rule. Books keeps mayReadLogsOf, readableLogs and the
+	// gzip rendering of its download route.
+	Log(ctx context.Context, id RunID, q PageQuery) iter.Seq2[LogLine, error]
+	// Discard deletes one run and every record it owns, with Cancel's
+	// permission rule (HEAD's "same permission as cancel"). ErrRunNotFound
+	// (404); ErrRunActive (409) while the run is queued, running, waiting or
+	// held by a live worker, which only the executor knows from T0+T1
+	// (operations_v2.go:665-679). The executor stages RunStore.Delete inside
+	// WriteRuns, so the delete shares the run lock (books: HEAD's opsMu) and
+	// the resume sweep never sees a half-deleted run.
+	Discard(ctx context.Context, id RunID) error
+}
+
+// TimelineQuery is Client.Timeline's and GET /timeline's query (FIN12-3).
+// HEAD bounds its timeline window on the finish time and keeps unfinished
+// runs (the store rule quoted at operations_v2.go:298), which RunFilter's
+// Created bound cannot express.
+type TimelineQuery struct {
+	Kinds  []Kind     // registered or former kinds, resolved by the executor; empty = every kind the caller may view
+	States []RunState // empty = every state
+	From   time.Time  // Finished >= From, unfinished runs included; zero = no bound
+	To     time.Time  // Finished < To, unfinished runs included; zero = no bound
+	Limit  int        // clamped as HEAD's GetOperationTimeline clamps it (operations_v2.go:237)
 }
 
 // RunFilter is what a run listing filters on besides the kind. The zero value
@@ -1069,12 +1098,16 @@ type Executor interface {
 | `POST /runs/{id}/approve` | v3 approve | `Approve` + verified method |
 | `POST /runs/{id}/decide` `{resume\|finish\|drop}` | none (the v1 retry and finish routes stay books', below; `raw/08` §7 finish-without-resuming) | `Approve`/`Start` + verified method |
 | `GET /counts`, `GET /timeline` | v3 counts/timeline | `core:tasks.view` |
-| `GET /schedules`, `PATCH /schedules/{kind}` | `/api/v1/tasks`, `PUT /tasks/:name`, `/maintenance-window/*` | view / `core:tasks.manage`; PATCH writes the kind's `ScheduleConfig` key through `config` (DB override layer; a key locked by an operator-set layer is refused with 409) |
+| `GET /schedules`, `PATCH /schedules/{kind}` | `/api/v1/tasks`, `PUT /tasks/:name` | view / `core:tasks.manage`; PATCH writes the kind's `ScheduleConfig` key through `config` (DB override layer; a key locked by an operator-set layer is refused with 409) |
 | `POST /pause`, `POST /unpause` | none (`/api/v1/operations/pause\|resume` stay books', below) | `core:tasks.manage` |
 | (no tasks route: events) | `GET /api/v3/ops/events` (`/api/v1/operations/events` stays a books gin route, 05-http-api §8.1 S6 row) | not routes of `/api/core/v1/tasks` (FE2-18): the bus topics `core.task.run-changed.v1` and `core.task.log-appended.v1` are bridged one-to-one to realtime streams ([05-events](05-events.md) 5E.3.2, [05-realtime](05-realtime.md)), which serve the legacy paths; topic permission `AnyAuthenticated`, per-envelope visibility = the definition's `View` (COR-20), payload through `RedactRunView` |
 
 Compat: `/api/v3/ops/*`, `/api/v1/op-defs` and `/api/v1/tasks` are aliases onto the table's native routes with a `Deprecation` header and log line
-for the compatibility window, defined once in [09](09-abo-on-core.md) §9.2.1 and implemented by `compat` (SIMP-7). Alias handlers
+for the compatibility window, defined once in [09](09-abo-on-core.md) §9.2.1 and implemented by `compat` (SIMP-7).
+**`/api/v1/maintenance-window/*` is kept, not aliased (FIN12-4):** HEAD's `POST …/run`, `GET …/status` and
+`PUT …/config` (`wire_operations_routes.go:121-123` @748fd787a, `settings.manage`) stay books' gin routes, as R11-3's
+rule keeps the operations prefix, with HEAD's bodies, and from T0+T1 their handlers reach the maintenance-window kind
+through `Deps.Tasks` (`run` calls `Client.Start`); the legacy SPA's MaintenanceTab calls them until S9 (07). Alias handlers
 translate legacy def IDs through `FormerKinds`/`LegacyDefID`, and render the legacy response body through
 05-http-api's `LegacyPath.Shape` (there is no `WithLegacyShape`; FE3-6). An alias request never reaches the
 legacy gin mount, so core's stage 2 records it, with the `http_route` value 05-http-api §4.2 states for an
@@ -1088,8 +1121,11 @@ HEAD's `s.perm` atoms; the five operations-component routes below are among them
 listed as replaced call core's tasks client, `Deps.Tasks`, from T0+T1 and render HEAD's response body themselves:
 `POST …/v2` calls `Client.Start`, `DELETE …/v2/:id` calls `Client.Cancel`, `POST …/v2/:id/retry` and `…/finish`
 call `Client.Decide` (`Resume`, `Finish`), and `POST …/pause` and `…/resume` call `Client.Pause`/`Unpause`, while
-`GET …/pause` reads `Client.PauseState` (`wire_operations_routes.go:28-46` @748fd787a). Books' handlers with no core
-target (`stale`, `clear-stale`, `optimize-database`, `sweep-tombstones`, `set-internal-flag`, `audit-files`,
+`GET …/pause` reads `Client.PauseState` (`wire_operations_routes.go:28-46` @748fd787a). `GET …/timeline` calls `Client.Timeline`, `GET …/v2/:id/logs/download` calls `Client.Log` and `DELETE
+…/v2/:id/record` calls `Client.Discard` (`wire_operations_routes.go:24,26,37`, handlers `operations_v2.go:237,494,680`
+@748fd787a; FIN12-3); `TestS5_OperationsTimelineLogDiscardParity` checks HEAD's timeline window and log body, a 409
+for the discard of a running run, and that the discard of a terminal run removes every key and the resume sweep does
+not bring it back. Books' handlers with no core target (`stale`, `clear-stale`, `optimize-database`, `sweep-tombstones`, `set-internal-flag`, `audit-files`,
 `:id/class-lists/:class`, `:id/undo/preflight`, `:id/revert`, `reconcile/*`, the version-group maintenance routes;
 `wire_operations_routes.go:101-112`, `server_lifecycle.go:1953-1965`) are books' domain code and stay as they are,
 and the rest of the prefix keeps the treatment 09 S5 gives it. `/api/v1/operations/events` stays a gin manifest route over the realtime
@@ -1338,6 +1374,13 @@ type RunStore interface {
 	DebounceBuckets(ctx context.Context) iter.Seq2[DebounceBucket, error]
 	Strike(ctx context.Context, b *storage.Batch, id RunID, s Strike) error
 
+		// Delete stages the removal of one run and every record it owns (row,
+	// queue entry, indexes, pages, checkpoints, chunks, rows, errors); only
+	// Client.Discard calls it, inside WriteRuns, after the executor has
+	// refused an active run (books: HEAD's registry discard key set, under
+	// opsMu; FIN12-3). ErrRunNotFound; ErrRunActive when the run is not terminal.
+	Delete(ctx context.Context, b *storage.Batch, id RunID) error
+
 	// Requires stamps: when a kind last completed for a subject.
 	Stamp(ctx context.Context, b *storage.Batch, subject entity.Ref, k StoredKind, at time.Time) error
 	Stamped(ctx context.Context, subject entity.Ref, k StoredKind) (time.Time, bool, error)
@@ -1395,7 +1438,10 @@ type StandDownStore interface {
 var (
 	ErrRunNotFound   = errors.New("tasks: run not found")
 	ErrRunConflict   = errors.New("tasks: run changed since read")
-	ErrClockConflict = errors.New("tasks: schedule clock changed since read")
+		ErrClockConflict = errors.New("tasks: schedule clock changed since read")
+	// ErrRunActive: Discard of a run that is not terminal or that a live
+	// worker holds (409; FIN12-3).
+	ErrRunActive = errors.New("tasks: run is active")
 	// ErrStoreUnsupported: a legacy store has no place in its app's format for
 	// this record (5T.6.2); the native store never returns it.
 	ErrStoreUnsupported = errors.New("tasks: the run store cannot hold this record")
@@ -1657,6 +1703,7 @@ the same PR.
 | `ReplaceRows` fails part-way | open for the caller: the rows already written stay; the caller clears its prefix again (`n == 0`) and reports the failure, and a reader checks the row count its summary recorded | HEAD's `ReplaceOpRowsPrefix` contract (`internal/database/iface_op_rows.go:40-61`); not atomic across batches by design (DATA9-7) |
 | A legacy store asked for a record its app's format cannot hold (5T.6.2) | closed: `ErrStoreUnsupported`; the write fails, nothing is stored elsewhere | A-2: no extension family |
 | Cancel/approve/decide on a held run | closed: `409 tasks.held` | read-only while its module is disabled (5T.3.11) |
+| `Client.Discard` of a run that is queued, running, waiting or held by a live worker | closed: `ErrRunActive`, 409, nothing deleted | HEAD's discard refused the same states (`operations_v2.go:665-679`); deleting an active run would race the executor (FIN12-3) |
 | Ledger line resolving to nothing (not held) | closed: boot fails | a rename without an alias strands stored rows (current `opCatalogGate`) |
 | Stored run whose def ID resolves to no kind, alias, ledger line or held module (a newer build's kind after a rollback; a removed module) | open: the resume sweep sets a non-terminal one `interrupted_dropped` (reason `unknown_kind`), as HEAD does (`resume.go:86-96`); terminal ones are hidden from census, counted, WARN once | a rollback between core builds must not fail boot (5T.6 rule 3) |
 | `ForEach` with `Watermark` | closed: `*ItemsError{First: ErrNoRunContext}` before any item | checkpointing needs a run |
@@ -2139,6 +2186,7 @@ nightly rehearsal.
 | `legacytest.TasksRunStoreSuite` **(ABO, over books' store)**: the `legacy.TasksRecoverer` and `legacy.WriteLock` cases (5T.3.13), beside `taskstest.StoresSuite` | R6-3, SIMP6-6, A-3, R9-1 |
 | `TestLegacyRunLockSpansCommit` **(ABO)** (`synctest`, books' store: a second `WriteRuns` blocks from the first one's first read until its `storage.CommitLocked` commit returns, also with a native participant (an outbox cursor) in the batch; a clock advance, an `Executor.Pause` and a stand-down marker write block the same way; a write staged without a hold → `legacy.ErrRunsNotLocked`, and a write staged inside a hold into a second batch → `legacy.ErrRunsNotLocked` (R10-4); a nested `WriteRuns` → `ErrWriteRunsNested`, no deadlock; `Prune` takes the lock per chunk) | A-3, R9-1, COR9-8 |
 | `TestLegacyReplaceRowsTakesNoRunLock` **(ABO)** (`synctest`, books' store: a `ReplaceRows` of more rows than one `opRowBatchRows` chunk runs while another `WriteRuns` holds `opsMu`; it completes without waiting for that hold, a transition started during it commits before it returns, and it is not refused with `legacy.ErrRunsNotLocked`) | DATA9-7 |
+| `TestS5_OperationsTimelineLogDiscardParity` **(ABO)** (from T0+T1: books' `GET /api/v1/operations/timeline` returns HEAD's rows for a finished-at window with in-flight runs included; `…/v2/:id/logs/download` returns HEAD's body; `DELETE …/v2/:id/record` answers 409 for a running run and, for a terminal run, removes every key of HEAD's discard set, and the next resume sweep does not resurrect it) | FIN12-3 |
 | `TestLegacyStoresAreSingletons` **(ABO)** (the P4c `legacy.Stores.Tasks` result, the store books' `Register` receives at P6, and the stores opsbridge, `childop` and the books ticker use are one instance with one `opsMu`; the umbrella over every legacy family is 06's) | R9-1, DATA9-2 |
 | `TestABOMetricsGatherNoDuplicateOrMissing` **(ABO, from S5)** (builds the stage's kernel `Provider` together with ABO's real recorders: `opsmetrics.Default()`, the books run-event recorder and `internal/metrics`; runs one adapted executor task of a v2 def with a plugin ID, one core-scheduler tick and one v3-loop tick reported through `ReportScheduleTick`, one of them folded; `Gather()` returns no error, and the full family, label-key and series (label-value) set equals the HEAD golden plus the stage's declared additions: no family missing, none duplicated, `plugin` and `def_id` values as HEAD's) | R9-3, MOD9-1, MOD9-2 |
 | `TestStandDown_MarkerAtBootDefersQuiescedRun` (a hold's marker survives a crash; the next boot leaves the quiesced run `interrupted_quiesced`, clears the marker and warns; the boot after resumes it) and its **(ABO)** twin over HEAD's `registry.scan_standdown` row with a HEAD-written fixture | MOD6-4 |
@@ -2565,3 +2613,8 @@ Round 11:
 - VER11-3 (R11-3) — 5T.3.10: the compat sentence no longer makes any `/api/v1/operations*` route a core alias; the aliases are `/api/v3/ops/*`, `/api/v1/op-defs` and `/api/v1/tasks`; the table's "Replaces" column drops every `/api/v1/operations` path; new paragraph "No `/api/v1/operations*` route is a core alias": all 38 HEAD routes stay books' gin routes, the formerly listed ones calling `Deps.Tasks`; T0+T1 done-check and the package row restated.
 - VER11-3 (R11-3) — 5T.3.10 `Client`: `Cancel`, `Decide`, `Pause`, `Unpause` (actor stamped from ctx, the native route's permission rule) and `PauseState`, so books' legacy handlers reach runs through the client; `Executor`'s actor-taking methods renamed `CancelAs`, `DecideAs`, `PauseAs`, `UnpauseAs` (an embedded method cannot be redeclared with another signature); 5T.3.13 references follow.
 - VER11-1 (R11-1) — 5T.3.10 compat paragraph: otelgin and stage 2 write into one instrument set.
+
+Final verification:
+
+- FIN12-3 — 5T.3.10 `Client` gains `Timeline` (new `TimelineQuery`, finished-at window with unfinished runs), `Log` and `Discard` (new `ErrRunActive`, 409); `RunStore.Delete` staged inside `WriteRuns`; the R11-3 paragraph names the three routes; error row and `TestS5_OperationsTimelineLogDiscardParity` added.
+- FIN12-4 — 5T.3.10: `/maintenance-window/*` dropped from the schedules row's "Replaces"; the three routes are kept as books' gin routes on `Deps.Tasks`.

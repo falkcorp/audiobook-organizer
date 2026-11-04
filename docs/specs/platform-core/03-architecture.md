@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/03-architecture.md -->
-<!-- version: 1.14.2 -->
+<!-- version: 1.14.3 -->
 <!-- guid: 8af6d935-7143-4d06-8562-b04a18504d81 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -242,11 +242,16 @@ Why this mechanism, and why this path:
    `check_module_skew.py --pin` (13 §13.5.2). `check_module_skew.py` carries three guarantees (no skew,
    the empty `core/go.sum` of item 4 exists, the `--pin` pins hold), so it is a **blocking** root-side
    check: it runs in root `make ci` (and therefore in the merge requirement of 09 §9.2.1) from S0, not
-   only as the reported readiness criterion 12 SC4(c). These bot PRs, and the root-tidy step's pushed
-   commit, carry no `Stage-Release:` trailer and need none: the soak gate's check (d) counts a commit by a
-   dependency or workflow bot (Dependabot, Renovate, GitHub Actions) as `Stage-Release: none` when the PR
-   touches nothing outside dependency manifests, lockfiles and `.github/`, and refuses it otherwise
-   (09 §9.2.1, resolution R11-2), so this item holds with the gate in force from S0.
+   only as the reported readiness criterion 12 SC4(c). These bot PRs carry no `Stage-Release:`
+   trailer and need none: the soak gate's check (d) counts a commit by a dependency or workflow bot (Dependabot,
+   Renovate, GitHub Actions) as `Stage-Release: none` when every path its PR touches is admitted for one of the five
+   ecosystems `.github/dependabot.yml` configures (the gomod and npm manifests and lockfiles, `Dockerfile*` in the
+   docker directories, `.github/`, and the gitlinks `.gitmodules` lists; 09 §9.2.1's table), so HEAD's grouped
+   weekly PR merges, and refuses it otherwise (09 §9.2.1, resolutions R11-2 and FIN12-1). The root-tidy step is
+   repo-controlled, so it does not rely on the bot rule: its commit carries `Stage-Release: none` in its own message
+   and is pushed with the PAT, as HEAD's `auto-revert.yml` pushes, because a `GITHUB_TOKEN` push triggers no
+   workflow and the PR's required checks would not re-run on the tidy commit. So this item holds with the gate in
+   force from S0.
 
 ### 3.2.1 Experiment results (control and mechanism)
 
@@ -1183,3 +1188,7 @@ Round 11:
 - VER11-1 (R11-1) — §3.6 "Metric name": the wrapper clears `r.Pattern` before gin and the SEC2-22 check reads `httpapi.MatchedPattern(ctx)`; stage 2 records into the same OTel instruments as otelgin (`app.Options.HTTPMetricsScope`), so identical label sets aggregate and no duplicate family can reach a scrape; `WithoutScopeInfo` stays; otelgin's chain position cited from 05-http-api.
 - VER11-2 (R11-2) — §3.2 item 6: the Dependabot and root-tidy bot commits need no `Stage-Release:` trailer under check (d)'s bot rule (09 §9.2.1); the item holds.
 - R11-5 note (R10-9 justification) — §3.5.1 item 4: the `embed_frontend`-only files are named with their real imports (`static_embed.go` and its test import more than `embed`); the conclusion (no GOOS constraint) is unchanged.
+
+Final verification:
+
+- FIN12-1 — §3.2 item 6: the bot rule admits the paths of all five Dependabot ecosystems (09 §9.2.1's table); the root-tidy commit carries its own `Stage-Release: none` and is pushed with the PAT.

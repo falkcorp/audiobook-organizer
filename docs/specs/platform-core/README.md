@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.11.2 -->
+<!-- version: 1.11.3 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -20,7 +20,9 @@ mechanism rather than adding one (R10-1 supersedes R9-2's route move; R10-3 supe
 Round 11, a narrow verification of the round-10 fixes (`spec-round-11-verification.md` and
 `spec-round-11-blocker-sweep.md`: 1 BLOCKER, 3 MAJOR, all accepted with their notes; `spec-round-11-dispositions.md`),
 is applied too; its resolutions **R11-1…R11-5** amend R10-3 (one HTTP instrument set), R10-7 (bot commits, soak
-naming for UI-0 and H1–H3) and complete R10-1 (no operations alias).
+naming for UI-0 and H1–H3) and complete R10-1 (no operations alias). The round-12 final verification
+(`spec-round-12-final-verification.md`: 0 BLOCKER, 3 MAJOR, 7 MINOR, all accepted; `spec-round-12-dispositions.md`)
+confirms R11-1 by experiment and closes the review loop; its fixes **FIN12-1…FIN12-10** are applied in one pass.
 The design they fix, in brief:
 
 - **One stored format per family during the extraction** (R3-1): core reaches ABO's data through SDK **store
@@ -58,10 +60,13 @@ The design they fix, in brief:
   carries a `Stage-Release:` trailer — `<stage> <n|flip>` when it ships stage behaviour, with stages S0–S10,
   UI-0 and the cutovers H1–H3 (R11-4), required on any PR that touches a not-yet-flipped stage's packages, and
   `none` otherwise (feature work included); a dependency or workflow bot's commit counts as `none` when its PR
-  touches only dependency manifests, lockfiles and `.github/` (R11-2) — and the gate admits a stage trailer, and
-  every flip, only after the predecessor release's 14-day soak row, which passes only with every owner at the
-  levels the release declares, checked against the build and the store (09 §9.2.1; A-9, R9-8, R10-7, R11-4;
-  OPS10-11);
+  touches only the paths admitted for the five Dependabot ecosystems HEAD configures (gomod, npm, docker,
+  github-actions, gitsubmodule), and a merge commit has no exemption because merges are rebase-only (R11-2,
+  FIN12-1, FIN12-9) — and the gate admits a stage trailer, and every flip, only after the predecessor release's
+  14-day soak row, which passes only with every owner at the levels the release ships, checked against the build and
+  the store and written into the row by the owner command, never by a PR; an H flip can be reverted only before it
+  ships, and `UI0` soaks beside the next stage release, not before it (09 §9.2.1; A-9, R9-8, R10-7, R11-4, FIN12-2,
+  FIN12-5; OPS10-11);
   every done-check names its environment (R9-9); `staging-scrub` needs a staging marker (A-10); concurrent feature
   work has move windows (A-11).
 - A factory reset only stages, as a kind of the one journaled swap (R7-2, R8-1); the native factory-reset route
@@ -266,3 +271,7 @@ Round 10 (dispositions in `docs/plans/platform-core/reviews/spec-round-10-dispos
 Round 11:
 
 - R11-1…R11-5 — status line: round 11 (1 BLOCKER, 3 MAJOR and the listed notes) dispositioned and applied; design summary: no `/api/v1/operations*` alias (R11-3), one HTTP instrument set with `r.Pattern` cleared before gin (R11-1); soak bullet: bot commits (R11-2), UI-0 and H1–H3 in the grammar, declared-levels criterion (R11-4).
+
+Final verification:
+
+- FIN12-1…FIN12-10 — status line: round 12 final verification dispositioned and applied; soak bullet: five-ecosystem bot rule, no merge-commit exemption (FIN12-1, FIN12-9), levels written into the soak row and H-flip revert window (FIN12-2), `UI0` soaks in parallel (FIN12-5).

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metrics.md -->
-<!-- version: 1.11.2 -->
+<!-- version: 1.11.3 -->
 <!-- guid: 5cdf765d-aec1-4ed7-981a-e2e698afde61 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -186,20 +186,28 @@ creates instruments through the process-global provider and registers client_gol
 App shares. The Provider records the translated family name (`otlptranslator`, the pinned strategy below) of:
 
 - every instrument created on the App's `MeterProvider`, through a `Scope` **or not**: `MeterProvider()` returns a
-  wrapper that records `(scope name, scope version, instrument name, kind, unit)` → family for every instrument,
+  wrapper that records `(scope name, scope version, schema URL, instrument name, kind, number type, unit, description)`
+  → family for every instrument, the SDK's own instrument identity (meters cached by scope, `sdk/metric@v1.47.0`
+  `provider.go:79-98`; instruments by name, description, unit and kind, `meter.go:703-717`; FIN12-7),
   and it is that wrapper `app.InstallProcessDefaults` installs as the OTel global, so ABO's `otel.GetMeterProvider()`
   callers (`opsmetrics.Default()`, `aidispatch`, …) are seen too;
 - every collector registered through `Registerer()`, and, while `Options.PromRegisterer` is set, every collector
   registered through the app's `*metrics.Shared` (above), so registration through the shared registry is covered.
 
-A second **owner** of a family is refused with `ErrFamilyTaken`: a different instrument identity (another scope,
-kind or unit) or a collector for a name an instrument holds, and the reverse. There is **no exception** (R11-1,
+A second **owner** of a family is refused with `ErrFamilyTaken`: a different instrument identity (another scope name,
+version or schema URL, kind, number type, unit or description) or a collector for a name an instrument holds, and the reverse. There is **no exception** (R11-1,
 which deletes R10-3's two-scope exception for the three `http.server.*` families). Creating the identical instrument
 twice in one scope is the OTel SDK's one instrument, not a second owner, and that is how the two HTTP recorders
 share their families: on an app with a legacy mount, core's stage 2 creates the three instruments in the mount
-recorder's scope (`app.Options.HTTPMetricsScope`; ABO: otelgin's `ScopeName` and `Version`, passed as data) with
-the same name, kind, number type, unit and description, on the same SDK provider, so the Provider records one owner
-and the SDK one instrument per family (05-http-api §4.2 stage 2 (b)). `TestABOMetricsGatherNoDuplicateOrMissing`
+recorder's scope (`app.Options.HTTPMetricsScope`; ABO: otelgin's `ScopeName` and `Version` and its empty schema URL, passed as data)
+with the same name, kind, number type, unit and description, on the same SDK provider, so the Provider records one owner
+and the SDK one instrument per family (05-http-api §4.2 stage 2 (b)). **The round-12 experiment's load-bearing details
+(FIN12-7):** the attribute values are typed as otelgin types them (status code and port as integers; as strings the
+gather fails with duplicate series and `/metrics` answers 500); the scope `Version` is otelgin's exact version (empty,
+the same failure); and the description is identical (a semconv skew between core and otelgin gives a second
+instrument, the same failure, which `ErrFamilyTaken` now refuses at creation). Bucket advice is not part of the
+identity: the SDK keeps the first creation's, so stage 2 passes otelgin's boundaries explicitly, and ABO's
+`MetricViews` set HEAD's buckets in any case. `TestABOMetricsGatherNoDuplicateOrMissing`
 and `TestNoRouteSeriesSharedNoDuplicate` prove it on every gather. The refused instrument is a no-op (a
 refused collector is not registered). During boot (through 06 P6) a refusal fails boot; after boot (an instrument
 created lazily, as `opsmetrics.Default()` does on first use) it is logged at error with both owners and raises the
@@ -546,7 +554,7 @@ of them (R1). Their values decode with HEAD's per-type semantics (05-config §1.
 | `TestFamilyTaken_SharedNamespaceAndPrefix` | `MetricNamespace` = `MetricPrefix`: a module instrument and a core instrument that translate to one family → the second gets `ErrFamilyTaken`; the same for an OTel instrument against a collector registered through `Registerer()`, in both orders; distinct families under the shared prefix register (A-5) |
 | `TestFamilyTaken_ThroughGlobalProvider` | after `app.InstallProcessDefaults`, an instrument created through `otel.GetMeterProvider()` in another scope with a name a core `Scope` instrument holds (the `ops.zombies` case of MOD9-1) → `ErrFamilyTaken`, a no-op instrument, boot fails during boot and `metrics_family_taken` is raised after it; the identical instrument created twice in one scope is one instrument (R9-3) |
 | `TestFamilyTaken_SharedRegisterer` | a client_golang collector registered through `*metrics.Shared` with a family name a Provider instrument holds → refused, and the reverse order → `ErrFamilyTaken`; disjoint names register (R9-3) |
-| `TestFamilyTaken_SemconvHTTPOneInstrument` | core's stage-2 `http.server.request.duration` created in `HTTPMetricsScope` and an identical instrument created through the global provider in that scope are one instrument: two recordings with one attribute set gather as one series; an instrument of that name in any other scope, or with another unit or description, gets `ErrFamilyTaken` (R11-1, replacing R10-3's two-scope test) |
+| `TestFamilyTaken_SemconvHTTPOneInstrument` | core's stage-2 `http.server.request.duration` created in `HTTPMetricsScope` and an identical instrument created through the global provider in that scope are one instrument: two recordings with one attribute set gather as one series; an instrument of that name in any other scope (another name, version or schema URL), or with another kind, number type, unit or description, gets `ErrFamilyTaken` (R11-1, replacing R10-3's two-scope test; FIN12-7) |
 | `TestMetricViews_InstalledAtConstruction` | `Options.MetricViews` with an entry for an instrument created through the raw `MeterProvider` outside any `Scope`, one for an instrument in another scope (otelgin's name), and one that also has a `Scope.View`: each histogram's `le` set is the entry's, no instrument yields two streams, and a `Scope.View` made before creation applies where no entry exists (MOD10-6) |
 | `TestResource_ServiceNameAndSDKDefaults` | `ServiceName` = `audiobook-organizer` → `target_info{service_name="audiobook-organizer", telemetry_sdk_language, telemetry_sdk_name, telemetry_sdk_version, …}`; unset → `service_name` = `AppID` (MOD10-11) |
 | `TestStage2_ServerAddressIgnoresHost` (`httpapi`, with 05-http-api) | two requests to one core route with different `Host` headers produce one `server_address` value, `Options.ServiceName` (MOD10-2) |
@@ -795,3 +803,7 @@ Round 11:
 
 - VER11-1 (R11-1) — M3 and §3 `ErrFamilyTaken`: R10-3's two-scope exception for the `http.server.*` families deleted; the two HTTP recorders share one instrument per family because stage 2 creates them in otelgin's scope (`app.Options.HTTPMetricsScope`) with identical identity; §8 row and §12 `TestFamilyTaken_SemconvHTTPOneInstrument` (replacing `…TwoScopes`) follow.
 - VER11-1 (R11-1) — §3 rules 1–3 and "One instrument set, no scope label": the wrapper clears `r.Pattern` before gin (otelgin's fallback), so `NoRoute` and SPA loads keep no route; stage 2 records into the same instruments; the "disjoint by `http_route`" argument deleted; otelgin's chain position cited from 05-http-api §4.2, its one statement; §6 seeding wording, §12 contract-test summary and §13 `http_server_*` row restated; objections paragraph updated.
+
+Final verification:
+
+- FIN12-7 — §3 "One family, one owner": the recorded identity is (scope name, version, schema URL, instrument name, kind, number type, unit, description); the experiment's load-bearing details (typed attributes, exact scope version, identical description) recorded; bucket advice is not part of the identity; `TestFamilyTaken_SemconvHTTPOneInstrument` covers the full tuple.

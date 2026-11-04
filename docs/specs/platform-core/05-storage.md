@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-storage.md -->
-<!-- version: 1.12.2 -->
+<!-- version: 1.12.3 -->
 <!-- guid: 940ce8be-6f86-4450-b43a-77bf78827b12 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1873,7 +1873,10 @@ their `done` phase, **this one list**:
    the step is deferred as in item 3 (health `storage_step_pending`, naming the missing archive;
    `storage.ErrCutoverNoArchive` in the log; never a boot failure). The deferred boot still serves the
    pre-cutover store, so the operator can take the archive on it (`core.backup.create`, reason `pre-cutover`,
-   with `core.backup.verify_after_create`) and restart. `CreatedAt` is read here only as a freshness bound; no
+   with `core.backup.verify_after_create`) and restart. Each boot logs the store's levels after its steps (09's
+   `boot levels=<vector>` line), so the deferred boot logs the pre-cutover vector and the H release's soak clock starts
+   only at the boot that completes the cutover (09 §9.2.1 `<since>`; FIN12-10). `CreatedAt` is read here only as a
+   freshness bound; no
    restore rule reads it (05-backup, DATA2-7).
 
 The done-checks
@@ -3523,3 +3526,7 @@ Round 11:
 
 - R11-5 (VER11 note) — §5S.3.2 rank table: rows 960 (the revocation journal's per-process append mutex, taken inside auth's identity `stage`) and 970 (books' gap-fill file mutex, taken inside the `OnCommitted` step), both inner leaves, so `TestLockRanksTotalOrder`'s "every core-side mutex on a commit path has a row" holds.
 - R11-5 (BLK11 note) — §5S.3.13 "What a cutover leaves on disk" item 4: H1 and H2 run only once the catalogue holds a fresh, verified archive of this store at the pre-cutover levels, else deferred (`storage_step_pending`, `storage.ErrCutoverNoArchive`); deferred-build members gain `ErrCutoverNoArchive`, `core.storage.cutover.archive_max_age` and the kernel's catalogue check.
+
+Final verification:
+
+- FIN12-10 — §5S.3.13 item 4: each boot logs the store's levels after its steps, so a deferred H1/H2 boot logs the pre-cutover vector and the H soak clock starts only when the cutover completes (09 §9.2.1).
