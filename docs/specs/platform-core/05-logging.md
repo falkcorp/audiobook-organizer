@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -199,8 +199,9 @@ type JournalStore interface {
 
 // Importer is the native journal's one-time import path for an app's pre-core system-log rows (§5; 03 §3.3
 // "Store interfaces"). The kernel builds it over the native store and hands it to the owning app's cutover
-// step in module.Importers (06 §6.4.2). Unlike the other importers it does not stage into the caller's batch:
-// log is L0 and cannot name a storage type, the same reason JournalStore commits its own batches. Instead
+// step in module.Importers (06 §6.4.2). Unlike the other importers it does not stage into the caller's batch
+// (the one exception 03 §3.3's importer rule allows): log is L0 and cannot name a storage type, the same
+// reason JournalStore commits its own batches. Instead
 // Import is idempotent: each record's key is derived from its Time and SourceID, so a step that resumes after
 // a crash between an import and its source deletes rewrites the same keys and imports nothing twice.
 type Importer interface {
@@ -401,7 +402,7 @@ type Schedules struct { // section core.log.schedules
   ULIDs from the record time, so `Query` and `Prune` are prefix scans and range deletes. Every app, `hello` and
   `coretest` use it; it lands with `logjournal` in R2's flip F5 (`logjournal` imports `tasks`). Core holds no ABO row
   shape and no storage grant for the journal (R4-1).
-- **ABO's rows: imported once (M5; D10, D12 F2).** HEAD's system-log rows (`syslog:<RFC3339Nano>:<source>`,
+- **ABO's rows: imported once (M5; D10, D12 (b)).** HEAD's system-log rows (`syslog:<RFC3339Nano>:<source>`,
   `internal/database/pebble_store_activity.go:20-37`; user ID, source, level, message, time,
   `internal/database/store.go:675-682`) are history that R2 keeps. Books' BootBlocking step M5 of the R2
   migration list (03 §3.8; [09](09-abo-on-core.md) §9.4), carried by the tasks flip F5, decodes them in chunks
@@ -571,13 +572,11 @@ call sites to injected loggers is an optional ratchet, not an extraction stage.
 
 ## Objections to 03
 
-1. **Open (D10–D12 revision): `log.Importer` cannot stage into the caller's batch.** 03 §3.3 "Store interfaces"
-   says every importer stages into the caller's batch, but `log` is L0 and imports no storage type (R4), the
-   reason `JournalStore` already commits its own batches. `log.Importer` is therefore idempotent instead (§3:
-   keys derived from each record's time and source ID), which gives books' M5 the same exactly-once result.
-   Proposed: 03 notes this exception beside the `log` row.
+None open. `log.Importer` is idempotent instead of staging into the caller's batch, because `log` is L0 and
+imports no storage type (R4); 03 §3.3's importer rule states this exception, and keys derived from each
+record's time and source ID give books' M5 the same exactly-once result (§3).
 
-Earlier items: none open. Both earlier items are resolved by 03 v1.3.0: §3.3's `log` row names the journal and
+Earlier items: both are resolved by 03 v1.3.0: §3.3's `log` row names the journal and
 `internal/logjournal`, and R4's bridge rule places `logjournal` at L4 (COR-19).
 
 ## Out-of-scope defects found
@@ -667,7 +666,7 @@ Advisor:
 
 D10–D12 revision (2026-11-04):
 
-- Owner decisions D10 (no backward compatibility), D11 (no soaks) and D12 F2 (log history kept, converted)
+- Owner decisions D10 (no backward compatibility), D11 (no soaks) and D12 (b) (log history kept, converted)
   applied. L5, §3 `JournalStore`, §4 step 2 and §5: the journal has one implementation, the native store;
   ABO's own `JournalStore` over HEAD's `syslog:` rows (`Manifest.LegacyStores.Logs`, the HEAD-shaped
   `Append`/`Query`/`Prune`, its rollback paragraph) is deleted. New `log.Importer` and
@@ -678,4 +677,5 @@ D10–D12 revision (2026-11-04):
 - §8: `retention_days` is converted once by M2, not aliased. §10: the suite runs over the native store only;
   importer cases and `TestCutover_SyslogImported` added. §11: stages re-keyed to R1/R2; the
   `log_retention_days` alias replaced by the one-time conversion. L3 and §3: `PromRegisterer` mention removed;
-  the invite path rule's S4–S9 window removed.
+  the invite path rule's S4–S9 window removed. Consistency pass: the `log.Importer` objection settled (03 §3.3
+  states the idempotent-importer exception) and D12's answers cited as D12 (a)–(d).
