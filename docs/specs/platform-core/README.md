@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.11.1 -->
+<!-- version: 1.11.2 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -17,6 +17,10 @@ core now drives HEAD's code — the commit point, route ownership and metric own
 deleted machinery. Round 10, the final confirmation review (52 findings: 2 BLOCKER, 27 MAJOR, 23 MINOR, all accepted;
 `spec-round-10-dispositions.md`), is applied too; its resolutions **R10-1…R10-11** fix each defect by removing a
 mechanism rather than adding one (R10-1 supersedes R9-2's route move; R10-3 supersedes R9-3's single HTTP emitter).
+Round 11, a narrow verification of the round-10 fixes (`spec-round-11-verification.md` and
+`spec-round-11-blocker-sweep.md`: 1 BLOCKER, 3 MAJOR, all accepted with their notes; `spec-round-11-dispositions.md`),
+is applied too; its resolutions **R11-1…R11-5** amend R10-3 (one HTTP instrument set), R10-7 (bot commits, soak
+naming for UI-0 and H1–H3) and complete R10-1 (no operations alias).
 The design they fix, in brief:
 
 - **One stored format per family during the extraction** (R3-1): core reaches ABO's data through SDK **store
@@ -31,11 +35,13 @@ The design they fix, in brief:
   (`legacy.WriteLock` through `storage.CommitLocked`), and each legacy store family has exactly one instance per
   process (R9-1); the hold is a mark on the batch (`storage.LocksHeld(b, l)`), every lock has a rank in one total
   order, and the gap-fill file write runs inside the hold (R10-4, R10-5).
-- **One owner per route-conflict set and per metric series** (R10-1, R9-3, R10-3): the operations routes stay
-  books' at every stage, and core's run route is a different path, not an alias; ABO's `opsmetrics` stops emitting
-  what the executor records, checked against a HEAD golden with label values; the legacy gin mount keeps `otelgin`
-  as HEAD's recorder for every request that reaches gin, core records only its own and module routes, and HEAD's
-  bucket layouts arrive through `app.Options.MetricViews`. Scoped API keys keep HEAD's authenticated-only reach
+- **One owner per route-conflict set and per metric series** (R10-1, R11-3, R9-3, R10-3, R11-1): every
+  `/api/v1/operations*` route stays books' at every stage, none is a core alias, and core's run route is a different
+  path; ABO's `opsmetrics` stops emitting what the executor records, checked against a HEAD golden with label values;
+  the legacy gin mount keeps `otelgin` as HEAD's recorder for every request that reaches gin (its wrapper clears
+  `r.Pattern`, so `NoRoute` keeps no route), core records only its own and module routes, both into one shared
+  instrument set so no duplicate series can fail a scrape, and HEAD's bucket layouts arrive through
+  `app.Options.MetricViews`. Scoped API keys keep HEAD's authenticated-only reach
   (R9-4), and ambient scopes never reach a worker-confined key, in H1 included (R10-2); the Basic gate and HEAD's file-only keys keep
   HEAD's storage, and H3 moves only auth-enable precedence (R9-5).
 - **No predictive stage machinery** (A-4): Go's `internal/` rule, the layering and SDK guards and
@@ -49,10 +55,13 @@ The design they fix, in brief:
   `coretest/crashmatrix` that ABO also runs over its own boot (R9-7); 14-day soaks are owner checkpoints in
   `ci/soak.txt`, one row per landing of a release, bound to the soaked binary, which must be built at or after
   that landing commit, so a re-landed release soaks afresh; every commit of a PR that touches a non-doc file
-  carries a `Stage-Release:` trailer — `<stage> <n|flip>` when it ships stage behaviour, required on any PR that
-  touches a not-yet-flipped stage's packages, and `none` otherwise (feature work included) — and the gate admits
-  a stage trailer, and every flip, only after the predecessor release's 14-day soak row (09 §9.2.1; A-9, R9-8,
-  R10-7; OPS10-11);
+  carries a `Stage-Release:` trailer — `<stage> <n|flip>` when it ships stage behaviour, with stages S0–S10,
+  UI-0 and the cutovers H1–H3 (R11-4), required on any PR that touches a not-yet-flipped stage's packages, and
+  `none` otherwise (feature work included); a dependency or workflow bot's commit counts as `none` when its PR
+  touches only dependency manifests, lockfiles and `.github/` (R11-2) — and the gate admits a stage trailer, and
+  every flip, only after the predecessor release's 14-day soak row, which passes only with every owner at the
+  levels the release declares, checked against the build and the store (09 §9.2.1; A-9, R9-8, R10-7, R11-4;
+  OPS10-11);
   every done-check names its environment (R9-9); `staging-scrub` needs a staging marker (A-10); concurrent feature
   work has move windows (A-11).
 - A factory reset only stages, as a kind of the one journaled swap (R7-2, R8-1); the native factory-reset route
@@ -253,3 +262,7 @@ Round 10 (dispositions in `docs/plans/platform-core/reviews/spec-round-10-dispos
 - R10-1…R10-11 — status line: round 10 (52 findings) dispositioned and applied; design summary: operations routes stay books' (R10-1), ambient scopes never reach a confined key (R10-2), otelgin stays HEAD's recorder with `app.Options.MetricViews` (R10-3), the hold on the batch and one total lock order (R10-4), the gap-fill write inside the hold (R10-5), vet and guards on any tree and the fixed-sample history assertion (R10-9).
 - OPS10-11, R10-7 — soak bullet aligned with 09 §9.2.1: the trailer covers every stage (`<stage> <n|flip>`), is required on not-yet-flipped packages, and soaks count from the release's first PR.
 - integration pass (round 10): soak bullet matches 09 §9.2.1: every commit of a non-doc PR carries a `Stage-Release:` trailer (`none` allowed), soak rows per landing commit, R10-7's soak rules.
+
+Round 11:
+
+- R11-1…R11-5 — status line: round 11 (1 BLOCKER, 3 MAJOR and the listed notes) dispositioned and applied; design summary: no `/api/v1/operations*` alias (R11-3), one HTTP instrument set with `r.Pattern` cleared before gin (R11-1); soak bullet: bot commits (R11-2), UI-0 and H1–H3 in the grammar, declared-levels criterion (R11-4).

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metrics.md -->
-<!-- version: 1.11.1 -->
+<!-- version: 1.11.2 -->
 <!-- guid: 5cdf765d-aec1-4ed7-981a-e2e698afde61 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -22,7 +22,7 @@ names unchanged; ABO keeps its metric names, A-5; HTTP series keep HEAD's record
 |---|---|
 | M1 | One `metrics.Provider` per `App` owns a `*prometheus.Registry` (private, unless the app supplies a registerer for the S2 r3–S8 bridge, §6), an OTel `MeterProvider`, a `TracerProvider` and a propagator. All are **injected**; nothing in core names `prometheus.DefaultRegisterer`/`DefaultGatherer` or calls `otel.Set*`/`otel.Get*`, except that `app.InstallProcessDefaults` sets the three OTel globals to this Provider's values for an app that opts in ([05-logging](05-logging.md) §3, MOD4-3). Components receive a `*metrics.Scope`; only the kernel holds the `*Provider`. There is no `metrics.Registry` type. |
 | M2 | The authoring API is the **OTel metric API** (`metric.Meter`), continuing ABO's in-flight migration (client_golang family ceiling 64 and falling, `internal/telemetry/testdata/client_golang_baseline.txt`). Prometheus is an exporter bound to the App's registry. client_golang is used directly only inside `core/metrics` (registry, Go/process collectors, promhttp) and through one escape hatch, `Provider.Registerer()`, for third-party and legacy collectors. |
-| M3 | Names: core instruments `<namespace>.<subsystem>.<what>` → `<namespace>_<subsystem>_<what>[_unit][_total]`, where the namespace is the app's **metric namespace** `app.Options.MetricNamespace` (default `mediacore`, the name every table of this spec shows; ABO passes `audiobook_organizer`, A-5). Module instruments use the app's **metric prefix** `app.Options.MetricPrefix` (ABO: `audiobook_organizer`): `<prefix>.<what>` when the app **ships** one module, `<prefix>.<module>.<what>` when it ships two or more. "Ships" means the module list passed to `app.New`, which never changes at run time, so enabling or disabling a module never renames another module's series (SIMP2-13). The Prometheus translation strategy is **pinned** (`UnderscoreEscapingWithSuffixes`), not left to the exporter's process-global default. OTel semantic-convention instruments (`http.server.*`) keep their standard names. **Every Prometheus family has exactly one owner per App, at every stage (R9-3):** one instrument identity or one collector produces it, whether it was created through a `Scope`, through the App's raw or process-global `MeterProvider`, or registered on the shared registry of the S2 r3–S8 bridge (`ErrFamilyTaken`, §3), so a namespace equal to the module prefix cannot merge two series and two emitters can never serve one family. **One exception, by series (R10-3):** the three semconv `http.server.*` families may have two instrument identities, the legacy mount's `otelgin` and core's stage 2, because their series are disjoint by construction (§3 "Tracing and HTTP"); every **series** still has exactly one owner. |
+| M3 | Names: core instruments `<namespace>.<subsystem>.<what>` → `<namespace>_<subsystem>_<what>[_unit][_total]`, where the namespace is the app's **metric namespace** `app.Options.MetricNamespace` (default `mediacore`, the name every table of this spec shows; ABO passes `audiobook_organizer`, A-5). Module instruments use the app's **metric prefix** `app.Options.MetricPrefix` (ABO: `audiobook_organizer`): `<prefix>.<what>` when the app **ships** one module, `<prefix>.<module>.<what>` when it ships two or more. "Ships" means the module list passed to `app.New`, which never changes at run time, so enabling or disabling a module never renames another module's series (SIMP2-13). The Prometheus translation strategy is **pinned** (`UnderscoreEscapingWithSuffixes`), not left to the exporter's process-global default. OTel semantic-convention instruments (`http.server.*`) keep their standard names. **Every Prometheus family has exactly one owner per App, at every stage (R9-3):** one instrument identity or one collector produces it, whether it was created through a `Scope`, through the App's raw or process-global `MeterProvider`, or registered on the shared registry of the S2 r3–S8 bridge (`ErrFamilyTaken`, §3), so a namespace equal to the module prefix cannot merge two series and two emitters can never serve one family. **No exception (R11-1, deleting R10-3's):** the three semconv `http.server.*` families have one instrument identity each, which the legacy mount's `otelgin` and core's stage 2 both record into (stage 2 creates the identical instrument in otelgin's scope, §3 "Tracing and HTTP"), so a label set both produce is one series. |
 | M4 | Cardinality is a contract: closed attribute-key allow-list per scope, bounded value sets only, no identifiers; SDK per-instrument limit 2000; a series golden per scope. |
 | M5 | `/metrics` is a core route mounted by the kernel through `Router.Infra(path, "core:metrics.read", h)` on **every** app, with the permission the chain **enforces** (stages 10–13 run for an `Infra` route whose permission is not Public, SEC2-14), outside response compression. For ABO the kernel mounts it at 09 S8; until then ABO's legacy gin route serves it (from S2 r3 `Provider.Handler()` over the default registry) with HEAD's any-credential check. From S8 every ABO principal that is not `Confined()` holds `core:metrics.read` through `app.Options.LegacyAmbientScopes` (05-rbac §6.3), and a confined credential (a worker-scoped key, whatever its owner) never does (R10-2), so the kernel's mount admits exactly HEAD's set (COR10-8; §6). |
 | M6 | **ABO keeps every metric name and series identity (A-5, R9-3).** No series is renamed at any stage and there is no alias layer: no gather-time alias, no metric ledger row, no dashboard or rule switch. Every family of ABO's HEAD series golden keeps its name, type, label set **and label values** (series identity: the values HEAD records for the same input, histogram `le` boundaries and `target_info`'s resource labels included, MOD10-6, MOD10-11), with exactly one owner per series, through S10 and after, except the one recorded HTTP change of §3 (requests a core stage answers before the legacy mount, R10-3); `TestABOMetricsGatherNoDuplicateOrMissing` checks all of it against a HEAD golden (§6, MOD9-1, MOD9-2). When the code that emits a HEAD family moves into a core subsystem, the family keeps its name by one of two rules, chosen per family in §13 item 3: the moved emitter keeps its names under ABO's namespace, or ABO's own code keeps recording the family. Core's own families of that subsystem are additions. Trade: cross-app dashboards need a per-app query (`<namespace>_…`). |
@@ -193,13 +193,14 @@ App shares. The Provider records the translated family name (`otlptranslator`, t
   registered through the app's `*metrics.Shared` (above), so registration through the shared registry is covered.
 
 A second **owner** of a family is refused with `ErrFamilyTaken`: a different instrument identity (another scope,
-kind or unit) or a collector for a name an instrument holds, and the reverse. **The one exception (R10-3):** each of
-the three semconv families `http.server.request.duration`, `.request.body.size` and `.response.body.size` admits
-core's stage-2 instrument and at most one instrument of one other scope (on ABO the legacy mount's `otelgin`), of
-the same kind, unit and description, with bucket boundaries from the same `MetricViews` entry; a third scope, or a
-mismatch, is refused as above. They may share a family because their series are disjoint (below), and
-`TestABOMetricsGatherNoDuplicateOrMissing` proves it on every gather. Creating the identical instrument
-twice in one scope is the OTel SDK's one instrument, not a second owner. The refused instrument is a no-op (a
+kind or unit) or a collector for a name an instrument holds, and the reverse. There is **no exception** (R11-1,
+which deletes R10-3's two-scope exception for the three `http.server.*` families). Creating the identical instrument
+twice in one scope is the OTel SDK's one instrument, not a second owner, and that is how the two HTTP recorders
+share their families: on an app with a legacy mount, core's stage 2 creates the three instruments in the mount
+recorder's scope (`app.Options.HTTPMetricsScope`; ABO: otelgin's `ScopeName` and `Version`, passed as data) with
+the same name, kind, number type, unit and description, on the same SDK provider, so the Provider records one owner
+and the SDK one instrument per family (05-http-api §4.2 stage 2 (b)). `TestABOMetricsGatherNoDuplicateOrMissing`
+and `TestNoRouteSeriesSharedNoDuplicate` prove it on every gather. The refused instrument is a no-op (a
 refused collector is not registered). During boot (through 06 P6) a refusal fails boot; after boot (an instrument
 created lazily, as `opsmetrics.Default()` does on first use) it is logged at error with both owners and raises the
 health token `metrics_family_taken` (degraded), and CI catches it first through
@@ -224,14 +225,19 @@ emitters:
 
 1. **The legacy gin mount keeps `otelgin`, configured as at HEAD**, with its tracer off (stage 2's spans cover the
    request): the same middleware (`tracingMiddleware`, `internal/server/server.go:1668-1673` @748fd787a), the server
-   name `audiobook-organizer`, the same place in gin's chain (after gin's logger, recovery, security headers, CORS
-   and the Basic gate), HEAD's scope and, through `MetricViews`, HEAD's buckets. It records through the OTel global
+   name `audiobook-organizer`, HEAD's place in gin's chain (05-http-api §4.2 stage 2 (a) states it once: after the
+   Basic gate from S2 r2 until S3 moves the gate to stage 8, the engine's first middleware from S3), HEAD's scope
+   and, through `MetricViews`, HEAD's buckets. It records through the OTel global
    `MeterProvider`, as at HEAD, which is the served Provider at every stage (the S1 façade's until S2 r3, then the
    App's through `app.InstallProcessDefaults`, §6). It is the **sole** recorder of every request that reaches gin,
-   with gin's `c.FullPath()` as `http_route` (no route for gin's `NoRoute`, as at HEAD). So nothing has to carry a
-   route out of gin, and no route-report hook exists.
-2. **Core's stage 2** (05-http-api §4.2) records, with its own three semconv instruments and HEAD's attribute set,
-   only requests to core and module routes, and never a request the legacy mount records: native and `Infra`
+   with gin's `c.FullPath()` as `http_route` (no route for gin's `NoRoute` and SPA loads, as at HEAD). That holds
+   because the mount's wrapper clears `r.Pattern` before it calls gin (05-http-api §8.2, R11-1): otelgin v0.72.0
+   records `r.Pattern` whenever gin matched no route (`internal/semconv/server.go:392` in that module), and the
+   SEC2-22 post-match check reads the pattern from `httpapi.MatchedPattern(ctx)` instead. So nothing has to carry
+   a route out of gin, and no route-report hook exists.
+2. **Core's stage 2** (05-http-api §4.2) records, into **the same three instruments** as rule 1 (created once, in
+   otelgin's scope, with otelgin's `httpconv` constructors and typed attribute values; R11-1) and with HEAD's
+   attribute set, only requests to core and module routes, and never a request the legacy mount records: native and `Infra`
    routes record their pattern with method and host stripped; an `Alias` of a HEAD route records HEAD's gin template
    of its `LegacyPath` (`{name}` → `:name`, `{name...}` → `*name`, method and host stripped; a pure function, so
    a HEAD route keeps its `http_route` value when it becomes an alias, COR10-3); `Router.SPA` records no route, as
@@ -244,23 +250,25 @@ emitters:
    (MOD10-5).
 3. **A request a core stage answers before the legacy mount** (on a legacy path: a CORS preflight, a Basic-gate
    401, a stage-7 refusal, a 429 from stage 10, a 413 from stage 11, a 401 or 403 from stages 12–13) never reaches
-   gin, so core records it, under core's scope, **with no `http_route`**. HEAD recorded the 429, 413 and 401 with
+   gin, so stage 2 records it **with no `http_route`**. HEAD recorded the 429, 413 and 401 with
    the gin template (its limiter, body limit and `RequireAuth` ran after routing) and never recorded preflights or
-   Basic-gate 401s (they aborted before `otelgin`). Recording the template would let one series have two owners
-   whenever a gin handler answers the same route with the same status (a handler's own 401 or 403), and a
-   duplicate series fails client_golang's `Gather`; no route is a value set gin never produces for these statuses
-   (gin's `NoRoute` answers 404 or the SPA's 200). This is the one HTTP series change: a 09 §9.2.1
+   Basic-gate 401s (they aborted before `otelgin`). With one instrument set either value would gather (R11-1); no
+   route is kept from R10-3's LEAD correction because it keeps a perimeter refusal apart from a gin handler's own
+   401 or 403 on the same route. A router 404 that matches no route (an unmatched legacy-prefix path, the `/`
+   fallback's `NonSPA` 404) also carries none, and where gin's `NoRoute` produces the same label set the two
+   aggregate into one series, as HEAD's one `NoRoute` series did. This is the one HTTP series change: a 09 §9.2.1
    observable-change row with a release note ("Requests refused before they reach a route, for rate limit, body size
    or sign-in, are now counted in `http_server_*` without an `http_route` label"; cross-cluster).
 
-**One owner per series, scopes told apart in OTel only.** The two emitters are two OTel scopes, which the scope name
-distinguishes in OTLP push and in the Provider's owner record. On `/metrics` no scope label is exported, as at HEAD:
-the exporter keeps `WithoutScopeInfo` (`internal/telemetry/telemetry.go:446-447` @748fd787a: "no otel_scope_name /
-otel_scope_version labels"), and HEAD's contract test asserts that no `otel_scope_` label is served
-(`internal/telemetry/contract/series_contract_test.go:727-728`). So on a scrape the two owners' series are kept
-apart by their label values, by the three rules above, never by a scope label; the one family is the semconv
-exception to `ErrFamilyTaken` (above). When a HEAD route becomes an alias (S4 r2 and later), its series moves from
-`otelgin` to core in that PR with the same label values, and gin no longer routes it. `TestLegacySeriesLabelValuesMatchHEAD`
+**One instrument set, no scope label (R11-1).** The two emitters record into one scope's instruments, so OTLP push
+carries HEAD's single scope for the family and the Provider's owner record holds one identity. On `/metrics` no
+scope label is exported, as at HEAD: the exporter keeps `WithoutScopeInfo` (`internal/telemetry/telemetry.go:446-447`
+@748fd787a: "no otel_scope_name / otel_scope_version labels"), and HEAD's contract test asserts that no `otel_scope_`
+label is served (`internal/telemetry/contract/series_contract_test.go:727-728`). The series are **not** kept apart by
+label values: two requests with one label set, whichever recorder saw them, aggregate into one series, so no
+duplicate can reach `Gather` (an earlier "disjoint by `http_route`" argument failed at otelgin v0.72.0, VER11-1).
+When a HEAD route becomes an alias (S4 r2 and later), its series moves from `otelgin` to stage 2 in that PR with the
+same label values, and gin no longer routes it. `TestLegacySeriesLabelValuesMatchHEAD`
 and `TestABOMetricsGatherNoDuplicateOrMissing` (§6, §12) check all of it. 05-http-api §4.2, 09 S2 and 13 §13.5.1
 (`otelgin` kept, three files) state the same (cross-cluster).
 
@@ -400,7 +408,7 @@ at S8, when they move to the private registry. So:
   which would stay green even if production stopped serving them. From the S2 PR the test seeds them through ABO's
   real legacy gin engine, with its production `tracingMiddleware`, mounted by `MountLegacy` on the stage's
   `coretest` boot, and records one request through each emitter: a sampled `:id` legacy route (`otelgin`), from S2
-  r2 one legacy-path request a core stage refuses (429, core's scope, no route), and from S2 r3 one core route.
+  r2 one legacy-path request a core stage refuses (429, stage 2, no route), and from S2 r3 one core route.
   The golden's source column for the three rows stays `otelgin` (the legacy mount still records HEAD's series), so
   **no HEAD golden line changes**, and the test passes unchanged at S2 r2 (HEAD's scrape of the default registry,
   which the S1 façade's provider and `app.Options.ServedMeterProvider` feed), at S5 (the shared default registry)
@@ -423,7 +431,7 @@ at S8, when they move to the private registry. So:
   HEAD golden of **family, type, label names and label values** (`testdata/head_series_identity.golden`, captured
   by the S0 PR from the HEAD build driven with the same seeds, `target_info`'s resource labels included), with only
   the stage's listed additions and §3's one recorded HTTP change beside it: no family missing, no series identity
-  changed, no series with two owners (the two `http.server.*` scopes included). It is a done-check of S5, T3, T6, T7,
+  changed, no series with two owners (the `http.server.*` families included, one instrument set since R11-1). It is a done-check of S5, T3, T6, T7,
   S7 and S8 (09).
 
 The stage's done-check is the golden diff that PR shows:
@@ -474,7 +482,7 @@ nothing). That list must contain a short fixed set of always-on families: `proce
 | OTLP export errors at runtime | fail-open, rate-limited log, counter | collector outages are routine |
 | Instrument name/unit/view violation | fail-closed at construction (`ErrInstrumentName`) | contract violations caught at boot and in CI |
 | Duplicate scope | fail-closed (`ErrScopeTaken`) | two owners for one name |
-| A second owner of one Prometheus family (another instrument identity, through a `Scope`, the raw or the global `MeterProvider`, or a collector through `Registerer()` or the app's `*metrics.Shared`), except the one admitted second scope of each `http.server.*` semconv family (§3, R10-3) | fail-closed during boot (`ErrFamilyTaken`); after boot the second is a no-op, logged at error, health `metrics_family_taken` (degraded) | two owners merge silently or make every scrape fail (M3, R9-3, MOD9-1) |
+| A second owner of one Prometheus family (another instrument identity, through a `Scope`, the raw or the global `MeterProvider`, or a collector through `Registerer()` or the app's `*metrics.Shared`); no exception (the `http.server.*` recorders share one instrument per family, §3, R11-1) | fail-closed during boot (`ErrFamilyTaken`); after boot the second is a no-op, logged at error, health `metrics_family_taken` (degraded) | two owners merge silently or make every scrape fail (M3, R9-3, MOD9-1) |
 | Redactor nil while tracing is on | fail-closed (boot) | spans would export credentials |
 | Cardinality limit reached | fail-open (overflow series), test failure in CI | data loss for one instrument only |
 | Gather error in `/metrics` | `promhttp.ContinueOnError`: partial scrape + `promhttp_metric_handler_errors_total` | one bad collector must not blank the scrape |
@@ -538,7 +546,7 @@ of them (R1). Their values decode with HEAD's per-type semantics (05-config §1.
 | `TestFamilyTaken_SharedNamespaceAndPrefix` | `MetricNamespace` = `MetricPrefix`: a module instrument and a core instrument that translate to one family → the second gets `ErrFamilyTaken`; the same for an OTel instrument against a collector registered through `Registerer()`, in both orders; distinct families under the shared prefix register (A-5) |
 | `TestFamilyTaken_ThroughGlobalProvider` | after `app.InstallProcessDefaults`, an instrument created through `otel.GetMeterProvider()` in another scope with a name a core `Scope` instrument holds (the `ops.zombies` case of MOD9-1) → `ErrFamilyTaken`, a no-op instrument, boot fails during boot and `metrics_family_taken` is raised after it; the identical instrument created twice in one scope is one instrument (R9-3) |
 | `TestFamilyTaken_SharedRegisterer` | a client_golang collector registered through `*metrics.Shared` with a family name a Provider instrument holds → refused, and the reverse order → `ErrFamilyTaken`; disjoint names register (R9-3) |
-| `TestFamilyTaken_SemconvHTTPTwoScopes` | core's stage-2 `http.server.request.duration` and an instrument of the same name, kind, unit and description in one other scope both register and gather without error when their attribute sets differ; a third scope, or a second scope with another unit or description, gets `ErrFamilyTaken`; the exception holds for the three semconv names only (R10-3) |
+| `TestFamilyTaken_SemconvHTTPOneInstrument` | core's stage-2 `http.server.request.duration` created in `HTTPMetricsScope` and an identical instrument created through the global provider in that scope are one instrument: two recordings with one attribute set gather as one series; an instrument of that name in any other scope, or with another unit or description, gets `ErrFamilyTaken` (R11-1, replacing R10-3's two-scope test) |
 | `TestMetricViews_InstalledAtConstruction` | `Options.MetricViews` with an entry for an instrument created through the raw `MeterProvider` outside any `Scope`, one for an instrument in another scope (otelgin's name), and one that also has a `Scope.View`: each histogram's `le` set is the entry's, no instrument yields two streams, and a `Scope.View` made before creation applies where no entry exists (MOD10-6) |
 | `TestResource_ServiceNameAndSDKDefaults` | `ServiceName` = `audiobook-organizer` → `target_info{service_name="audiobook-organizer", telemetry_sdk_language, telemetry_sdk_name, telemetry_sdk_version, …}`; unset → `service_name` = `AppID` (MOD10-11) |
 | `TestStage2_ServerAddressIgnoresHost` (`httpapi`, with 05-http-api) | two requests to one core route with different `Host` headers produce one `server_address` value, `Options.ServiceName` (MOD10-2) |
@@ -563,7 +571,8 @@ OPS6-3), and every HEAD line in it stays unchanged (M6). Four ABO tests go with 
 without error and equal to a HEAD golden of family, label and series identity; R9-3) and
 `TestLegacySeriesLabelValuesMatchHEAD` (§3, from S2: one request to a sampled `:id` legacy route through the
 production gin engine, whose `http_route` and `server_address` equal HEAD's, also with a foreign `Host` header; from
-S2 r2 a legacy-path 429 recorded under core's scope with no route, the one listed change; from S4 r2 one request per
+S2 r2 a legacy-path 429 recorded by stage 2 with no route, the one listed change; a gin `NoRoute` 404 and an SPA
+load with no route, as at HEAD (R11-1); from S4 r2 one request per
 alias kind of a HEAD route, recording HEAD's gin template; from S5 one adapted run, whose `def_id`/`plugin` values of
 `ops_inflight` equal HEAD's; MOD9-2, R10-3). Core's own `TestKernelFamiliesGathered`
 asserts the kernel-emitted families in core as well (§6, OPS8-10).
@@ -642,7 +651,7 @@ asserts the kernel-emitted families in core as well (§6, OPS8-10).
 | `audiobook_organizer_ops_abandoned_calls` (label `source`) | ABO's shrunk `opsmetrics` for **both** HEAD sources until T6; then books' own observable on its own scope for both `source` values (`repairs_resolver`, `retired_versions_stat`; `internal/opsmetrics/opsmetrics.go:370-371` @748fd787a). The owner changes in **exactly one** PR, the T6 sub-batch PR that converts `retired_versions_fixer.go`: it creates books' observable for both sources and deletes `opsmetrics`' instrument, so no stage has two owners (`ErrFamilyTaken`); T3's repairs conversion keeps reporting through `opsmetrics.RegisterAbandoned` until then (05-tasks 5T.8.1, 5T.11 own the table; MOD10-7) | T6 | (b) |
 | `ai_dispatch_*`, `ai_*` (unprefixed) | ABO's recorder around the AI calls books makes and over the core `ai` subsystem's public API; [05-ai](05-ai.md) names the recorder of each family. `MetricNamespace` does not touch them: the recorder creates the instruments `ai_dispatch.*` and `ai.*` under exactly HEAD's names (`internal/aidispatch/metrics.go:54-66`, `meter.go:20-37`) on the App's `MeterProvider`, outside any `Scope`, so the namespace is never prepended and the families stay byte-identical; the core `ai` subsystem's own families are `<namespace>_ai_*` beside them, and `ErrFamilyTaken` still guards every name | S7 | (b) |
 | `audiobook_organizer_process_memory_alloc_bytes`, `_process_goroutines` | books' status worker, as at HEAD (`internal/server/server_lifecycle.go:432-433`); the gauges move to `Provider.Registerer()` with the other legacy families (item 2) | S8 | unchanged |
-| `http_server_*` (semconv) | **not moved for HEAD's routes (R10-3):** the legacy mount's `otelgin`, configured as at HEAD (tracer off), records every request that reaches gin with HEAD's `http_route`, `server_address`, scope and buckets; core's stage 2 records only core and module routes (an alias of a HEAD route with HEAD's gin template) and, under core's scope with no route, a legacy-path request a core stage answers before the mount, the one recorded change (§3). One owner per series, disjoint by `http_route` (no scope label is served, `WithoutScopeInfo`); no route-report hook; `otelgin` stays (13 §13.5.1) | S2 (stage 2 lands); per alias PR (a HEAD route's series moves to core with its values) | (b) |
+| `http_server_*` (semconv) | **not moved for HEAD's routes (R10-3):** the legacy mount's `otelgin`, configured as at HEAD (tracer off), records every request that reaches gin with HEAD's `http_route`, `server_address`, scope and buckets (the wrapper clears `r.Pattern`, so `NoRoute` keeps no route); core's stage 2 records only core and module routes (an alias of a HEAD route with HEAD's gin template) and, with no route, a legacy-path request a core stage answers before the mount, the one recorded change (§3). Both write into **one instrument set** in otelgin's scope, so a label set both produce is one series (R11-1; no scope label is served, `WithoutScopeInfo`); no route-report hook; `otelgin` stays (13 §13.5.1) | S2 (stage 2 lands); per alias PR (a HEAD route's series moves to core with its values) | (b) |
 | every other `audiobook_organizer_<x>` (books, search index, catalog, cache, ABS, review, fixer, metadata fetch, …) | books, unchanged | — | — |
 
    A family under rule (b) is recorded from the PR that moves its HEAD emitter, so the seeded test's golden shows
@@ -673,8 +682,8 @@ asserts the kernel-emitted families in core as well (§6, OPS8-10).
 
 None open. The round-10 wording objection is resolved in 03 v1.14.1 (integration pass, round 10): 03 §3.6 "Metric
 name" now says HEAD's exporter drops scope information (`WithoutScopeInfo`, `internal/telemetry/telemetry.go:446-447`
-@748fd787a), so the two `http_server_*` recorders are not told apart by scope label and their series stay
-disjoint by `http_route`, a pre-mount refusal carrying none (09 §9.2.7, §9.2.1 row 12). Earlier: 03 v1.11 §3.6 "Metric name" adopts this file's namespace rule (`<MetricNamespace>_<subsystem>_*`,
+@748fd787a), so the two `http_server_*` recorders are not told apart by scope label. Since round 11 they share one
+instrument set (R11-1), which 03 §3.6 states too (09 §9.2.7, §9.2.1 row 12). Earlier: 03 v1.11 §3.6 "Metric name" adopts this file's namespace rule (`<MetricNamespace>_<subsystem>_*`,
 `app.Options.MetricNamespace`, default `mediacore`; A-5) and leaves to this file how each moved series keeps its
 exact name (§13 item 3). The module rule (`app.Options.MetricPrefix`, default `AppID`, ABO `audiobook_organizer`,
 counted over the modules the app ships, SIMP2-13) and the semantic-convention names are as 03 states; the app ID
@@ -781,3 +790,8 @@ Round 10:
 - Objections — new open objection: 03 §3.6's "told apart by `otel_scope_name`, as at HEAD" contradicts HEAD's `WithoutScopeInfo`.
 - Header — 03 reference v1.14.0.
 - integration pass (round 10): objection to 03 resolved (03 v1.14.1 §3.6 matches `WithoutScopeInfo`); §3 rule 1 and §13 `http_server_*` row name no route-report identifier. Already as requested: §13 and 5T.8.1 name the T6 PR in which `ops_abandoned_calls` changes owner for both books sources; `app.Options.MetricViews`, `ServiceName`, `ServedMeterProvider`.
+
+Round 11:
+
+- VER11-1 (R11-1) — M3 and §3 `ErrFamilyTaken`: R10-3's two-scope exception for the `http.server.*` families deleted; the two HTTP recorders share one instrument per family because stage 2 creates them in otelgin's scope (`app.Options.HTTPMetricsScope`) with identical identity; §8 row and §12 `TestFamilyTaken_SemconvHTTPOneInstrument` (replacing `…TwoScopes`) follow.
+- VER11-1 (R11-1) — §3 rules 1–3 and "One instrument set, no scope label": the wrapper clears `r.Pattern` before gin (otelgin's fallback), so `NoRoute` and SPA loads keep no route; stage 2 records into the same instruments; the "disjoint by `http_route`" argument deleted; otelgin's chain position cited from 05-http-api §4.2, its one statement; §6 seeding wording, §12 contract-test summary and §13 `http_server_*` row restated; objections paragraph updated.

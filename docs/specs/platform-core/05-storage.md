@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-storage.md -->
-<!-- version: 1.12.1 -->
+<!-- version: 1.12.2 -->
 <!-- guid: 940ce8be-6f86-4450-b43a-77bf78827b12 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -477,6 +477,8 @@ extends all four, and pairs HEAD never nests (`sessionWriteMu`/`apiKeyMu`, the i
 | 170 | `legacy.LockRuns` (`opsMu`) | books' run store | `CommitLocked` |
 | 900 | secrets' per-name keyed mutex | core `secrets` (05-config §2.4, §2.6) | inner: only inside a `stage`, after `legacy.LockConfigSettings` |
 | 950 | `counterMu` | books' one store instance (`nextID`) | inner leaf: `nextID` takes nothing while it holds it, so it may run inside any hold |
+| 960 | the revocation journal's per-process append mutex | core `backup`'s journal component (05-backup §5B.3.6, §5B.6; `RevocationJournal.Append`) | inner leaf: taken inside auth's identity `stage` (05-authn §4.12) while `Append` writes and fsyncs one line; takes nothing while held (R11-5) |
+| 970 | books' gap-fill file mutex | books' config store (05-config §1.12.2) | inner leaf: taken only inside the gap-fill `storage.OnCommitted` step, which runs inside the hold, and inside the post-reset hook; takes nothing while held (R11-5) |
 
 Two rules complete it. **No `stage` function calls a books method that takes a HEAD mutex of a family the
 hold covers** (HEAD's mutexes are not re-entrant, and `ErrLockOrder` cannot see a mutex taken directly: for
@@ -1860,6 +1862,19 @@ their `done` phase, **this one list**:
    precondition defers a step (health `storage_step_pending`, naming the paths; `storage.ErrCutoverResidue` in
    the log; never a boot failure), until the kernel's sweep after `keep_previous` removes them or the operator
    sets `core.storage.cutover.sweep_set_asides`, with which the cutover boot deletes them first (DATA10-6).
+4. **A fresh verified archive, checked before the cutover starts (R11-5; BLK11 note).** Items 1–3 delete every
+   pre-cutover copy in and beside the store, so the pre-cutover backup is the only way back, and nothing else
+   mandates one (S8's pre-update backup is a deferred-build member, 05-updater). H1 and H2 therefore do not run
+   until the backup catalogue (05-backup §5B.3.5, derived from the backup directory's sidecars, so no open store
+   or backup service is needed; the kernel supplies the check to the step at 06 P4b, because `storage` imports no
+   `backup`) holds an archive of **this** store (manifest `InstallID` = `c/storage/install`) whose level stamps are
+   the pre-cutover vector, created within `core.storage.cutover.archive_max_age` before the cutover boot, and with
+   a passing `VerifyOpen` result written after it was created (`<main>.verify.json`, §5B.3.5 step 7). Until then
+   the step is deferred as in item 3 (health `storage_step_pending`, naming the missing archive;
+   `storage.ErrCutoverNoArchive` in the log; never a boot failure). The deferred boot still serves the
+   pre-cutover store, so the operator can take the archive on it (`core.backup.create`, reason `pre-cutover`,
+   with `core.backup.verify_after_create`) and restart. `CreatedAt` is read here only as a freshness bound; no
+   restore rule reads it (05-backup, DATA2-7).
 
 The done-checks
 `TestH1_NoRawTokenOnDisk` and `TestH2_NoPlaintextSecretOnDisk` plant the canary **before** a fixture upgrade,
@@ -1920,7 +1935,7 @@ PR that builds a member deletes its entry. The table is planning information: no
 
 | Member | Also deferred (not checked) |
 |---|---|
-| `storage.Grant`, `storage.GrantMode`, `storage.Spec.Grants`, `storage.ErrGrantNotOwned`, `storage.ErrCutoverResidue`, `module.ProblemGrant` | the config key `core.storage.cutover.sweep_set_asides` (bool, `ProtectOperator`, default false; DATA10-6), the claim-ledger field `grants`, metric `mediacore_storage_grant_ops_total`, `storage_grants.golden`. Only a cutover's delete reaches another owner's range (R4-1). Round 3's `Exclusive`, `GrantReadWrite`, the legacy-migration grant and `ErrGrantConflict`/`ErrGrantNotSerialized`/`ErrGrantMissing` are not deferred: they are deleted |
+| `storage.Grant`, `storage.GrantMode`, `storage.Spec.Grants`, `storage.ErrGrantNotOwned`, `storage.ErrCutoverResidue`, `storage.ErrCutoverNoArchive`, `module.ProblemGrant` | the config key `core.storage.cutover.sweep_set_asides` (bool, `ProtectOperator`, default false; DATA10-6), the config key `core.storage.cutover.archive_max_age` (duration, `ProtectOperator`, default 24h) and the kernel's catalogue check for item 4 of "What a cutover leaves on disk" (R11-5), the claim-ledger field `grants`, metric `mediacore_storage_grant_ops_total`, `storage_grants.golden`. Only a cutover's delete reaches another owner's range (R4-1). Round 3's `Exclusive`, `GrantReadWrite`, the legacy-migration grant and `ErrGrantConflict`/`ErrGrantNotSerialized`/`ErrGrantMissing` are not deferred: they are deleted |
 | `storage.Served`, `storage.Migration.RequiresServed` | the per-level records `c/storage/served/<owner>/<level>`, health token `storage_step_deferred`. No extraction step waits for a served run (SIMP4-4) |
 | `storage.UpgradeFloor.Requires`, `storage.ErrUpgradeFloor.Missing` | the `.storage-applied` line `<owner> done <id>`, and 05-updater's deferred requirement members (listed there, not here). The only floor of the extraction is books' `Version` floor (SIMP4-4) |
 | `datamigrate.Online`, `datamigrate.DataMigration.Writes`, `storage.ReadAdapter`, `storage.Spec.ReadAdapters` | the `Online` precondition-only `StepWriter` rule, an `Online` migration's `Barrier` hold and restart, the kernel-registered kinds `core.storage.migrate` and `<module>.datamigrate.<name>` with their synthesised definition, 05-tasks' dispatch exemption for those kinds (5T.3.12, 5T.4 step 0), tests `TestModuleOnlineMigrationRunsAsModuleKind` (the one name, run over a test module fixture, not hello; COR5-17), `TestOnlineMigrationYieldsPastTimeout` and `TestOnlineCopyNeverOverwritesOwnerWrite` (05-tasks 5T.3.12 and 06 cite the first two by these names). No S0–S10 consumer (SIMP5-7). `datamigrate.DataMigration.RewritesInPlace` is **not** deferred: the storage-efficiency release B, a `BootBlocking` re-encoding of keys inside its own `Source`, needs it |
@@ -3503,3 +3518,8 @@ Round 10 (`docs/plans/platform-core/reviews/spec-round-10-*.md`, dispositions bi
 - SEC10-9 — §5S.4 offline-open users: the complete `app.OfflineCommands` list with each command's open mode (`export-keyring` opens no store).
 - OPS10-3 (R10-7) — §5S.9.4: the `S2br1`/`S2br2` soak rows pass on no violation newer than `<since>`; retention unchanged.
 - integration pass (round 10): §5S.3.11 one list: `legacy.ConfigCommitObserver` removed (05-config deleted it; the gap-fill write is a `storage.OnCommitted` step, R10-5).
+
+Round 11:
+
+- R11-5 (VER11 note) — §5S.3.2 rank table: rows 960 (the revocation journal's per-process append mutex, taken inside auth's identity `stage`) and 970 (books' gap-fill file mutex, taken inside the `OnCommitted` step), both inner leaves, so `TestLockRanksTotalOrder`'s "every core-side mutex on a commit path has a row" holds.
+- R11-5 (BLK11 note) — §5S.3.13 "What a cutover leaves on disk" item 4: H1 and H2 run only once the catalogue holds a fresh, verified archive of this store at the pre-cutover levels, else deferred (`storage_step_pending`, `storage.ErrCutoverNoArchive`); deferred-build members gain `ErrCutoverNoArchive`, `core.storage.cutover.archive_max_age` and the kernel's catalogue check.

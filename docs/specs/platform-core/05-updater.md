@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.12.1 -->
+<!-- version: 1.12.2 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -545,7 +545,9 @@ The `/api/v1/update/*` paths are aliases for the compatibility window (09 §9.2.
 
 **S8 done-check.** The move is checked against the hotfix it moves: 09 S0's updater tests, re-pointed
 at `core/updater`, pass with unchanged expectations (exit 75, `.prev` kept, the semver and local-build
-rule, the reader and floor refusals of the new binary, check-only scheduled runs), and 5U.11 is green,
+rule, the reader and floor refusals of the new binary, check-only scheduled runs). Their one fixture change: the
+fake asset they download answers `--version-json` with `app == AppID` and `version ==` the target, because the
+self-test of step 3 is new in the moved pipeline and the S0 hotfix runs none (VER11 note, R11-5). 5U.11 is green,
 `TestApply_RawAssetNoBackup` included: an apply fetches HEAD's raw asset and takes no backup (R10-8,
 OPS10-6).
 Those tests inject a test source, so they do not check ABO's own wiring, and a wrong slug or asset namer
@@ -706,3 +708,7 @@ Round 10:
 
 - R10-8 / OPS10-6 — §5U.4 apply restated as HEAD's pipeline as the S0 hotfix leaves it, five steps: preconditions; HEAD's raw asset (`RawBinary`, `audiobook-organizer-<GOOS>-<GOARCH>`) streamed straight into `<exe>.new` with HEAD's user agent (`<BinaryName>/<version>`) and a `max_download` cap; the hotfix's self-test, level and floor checks (now step 3); the `.prev` swap; the exit-75 restart. Archive download, checksums and member extraction (`GoreleaserArchive`, `Deps.StateDir`), the pre-update backup (`Deps.Backup`, `require_backup`), the container refusal and the exec-mode restart (`restart_mode`) moved to the deferred-build table with their tests, error rows, metric outcomes and keys; the layer list drops `backup`; manual rollback keeps the replaced binary as `<exe>.rolled-back`, `make rollback`'s name; `TestRawBinary_MatchesHEAD`, `TestApply_RawAssetNoBackup` (in the S8 done-check) and `TestApply_FailedDownloadDeletesNew` added.
 - integration pass (round 10): §5U.4 intro: the moved pipeline makes exactly two additions to HEAD's, the `max_download` cap and the `--version-json` self-test; the exec-mode restart is deferred-build (LEAD, 09 S8).
+
+Round 11:
+
+- R11-5 (VER11 note) — 5U.12 "S8 done-check": S0's re-pointed updater tests keep their expectations, and their fake asset answers `--version-json`, the step-3 self-test being new in the moved pipeline.

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.12.1 -->
+<!-- version: 1.12.2 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -848,6 +848,20 @@ type Client interface {
 	Start(ctx context.Context, kind Kind, req StartRequest) (RunRef, error)
 	Get(ctx context.Context, id RunID) (RunView, error)
 	Runs(ctx context.Context, q RunQuery) iter.Seq2[RunView, error]
+	// Cancel, Decide, Pause and Unpause act as the actor the kernel stamps from
+	// ctx, as Start does (below), and apply the native route's permission rule to
+	// that actor (the table below: Cancel = the run's actor or Perms.Cancel;
+	// Decide = Approve/Start + verified method; Pause/Unpause =
+	// core:tasks.manage). Books' legacy /api/v1/operations handlers call them
+	// from T0+T1, because no route under that prefix is a core alias (R11-3).
+	Cancel(ctx context.Context, id RunID) error
+	Decide(ctx context.Context, id RunID, d Decision) error // Resume | Finish | Drop
+	Pause(ctx context.Context, reason string) error
+	Unpause(ctx context.Context) error
+	// PauseState reads the operator pause marker (any authenticated caller;
+	// HEAD's GET /api/v1/operations/pause keeps its library.view gate on the
+	// gin route). paused is false when no marker is set.
+	PauseState(ctx context.Context) (p Pause, paused bool, err error)
 }
 
 // RunFilter is what a run listing filters on besides the kind. The zero value
@@ -1019,19 +1033,24 @@ var ErrWriteRunsNested = errors.New("tasks: WriteRuns called inside WriteRuns")
 // Executor is kernel-only (core/kernel holds it; apps see Client).
 type Executor interface {
 	Client
-	Cancel(ctx context.Context, id RunID, by Actor) error
+	// CancelAs and DecideAs take the actor explicitly (kernel-internal callers:
+	// the HTTP route); Client's Cancel and Decide stamp it from ctx. Distinct
+	// names, because Go refuses an embedded method redeclared with another
+	// signature (as COR3-13 notes for Start).
+	CancelAs(ctx context.Context, id RunID, by Actor) error
 	Approve(ctx context.Context, id RunID, a ApproveRequest) error
-	Decide(ctx context.Context, id RunID, d Decision, by Actor) error // Resume | Finish | Drop
+	DecideAs(ctx context.Context, id RunID, d Decision, by Actor) error // Resume | Finish | Drop
 	// StartIn stages a run into b (kernel-internal). The outbox relay uses it to
 	// enqueue an outbox-triggered run in the same batch as its cursor advance (5T.3.12).
 	StartIn(ctx context.Context, b *storage.Batch, kind Kind, req StartRequest) (RunRef, error)
 	// WriteRuns is Stager.WriteRuns for kernel-internal builders (the relay,
 	// 05-events 5E.4); the executor's own builders use it too (5T.7).
 	WriteRuns(ctx context.Context, open func() *storage.Batch, stage func(ctx context.Context, b *storage.Batch) error) error
-	// Pause and Unpause stage the pause marker (PauseStore.Set) and commit it
-	// inside WriteRuns, as the stand-down marker writes do (5T.3.7; COR9-8).
-	Pause(reason string, by Actor) error
-	Unpause(by Actor) error
+	// PauseAs and UnpauseAs stage the pause marker (PauseStore.Set) and commit it
+	// inside WriteRuns, as the stand-down marker writes do (5T.3.7; COR9-8);
+	// Client's Pause and Unpause call them with the stamped actor.
+	PauseAs(reason string, by Actor) error
+	UnpauseAs(by Actor) error
 	// Lifecycle. Not named Start: Client.Start(ctx, kind, req) is already a
 	// method of the embedded interface, and Go refuses the duplicate (COR3-13).
 	Run(ctx context.Context) error      // resume sweep, dispatcher, workers (5T.4 step 2)
@@ -1044,24 +1063,38 @@ type Executor interface {
 | Route | Replaces | Permission |
 |---|---|---|
 | `GET /definitions`, `GET /definitions/{kind}` | `GET /api/v3/ops/defs[/:id]`, `/api/v1/op-defs` | `AnyAuthenticated` + per-def `View` filter |
-| `POST /definitions/{kind}/runs` | `POST /api/v3/ops/defs/:id/runs`, `POST /api/v3/ops/runs`, `POST /api/v1/operations/v2` | per-def `Start`. An `Idempotency-Key` header is copied into `StartRequest.IdempotencyKey`; a duplicate within `core.tasks.idempotency_ttl` returns `200` with the existing `RunView` and `Idempotent-Replayed: true` (the only idempotency store on this route; httpapi keeps none, SIMP2-8) |
+| `POST /definitions/{kind}/runs` | `POST /api/v3/ops/defs/:id/runs`, `POST /api/v3/ops/runs` | per-def `Start`. An `Idempotency-Key` header is copied into `StartRequest.IdempotencyKey`; a duplicate within `core.tasks.idempotency_ttl` returns `200` with the existing `RunView` and `Idempotent-Replayed: true` (the only idempotency store on this route; httpapi keeps none, SIMP2-8) |
 | `GET /runs`, `GET /runs/{id}`, `/runs/{id}/rows`, `/runs/{id}/items`, `/runs/{id}/log` | v3 `runs` | per-def `View`; each `RunView` passes `RedactRunView` |
-| `POST /runs/{id}/cancel` | v3 cancel, `DELETE /api/v1/operations/v2/:id` | actor or `Cancel` |
+| `POST /runs/{id}/cancel` | v3 cancel | actor or `Cancel` |
 | `POST /runs/{id}/approve` | v3 approve | `Approve` + verified method |
-| `POST /runs/{id}/decide` `{resume\|finish\|drop}` | v1 retry/finish routes (`retry.go:70`, `finish.go:73`; `raw/08` §7 finish-without-resuming) | `Approve`/`Start` + verified method |
+| `POST /runs/{id}/decide` `{resume\|finish\|drop}` | none (the v1 retry and finish routes stay books', below; `raw/08` §7 finish-without-resuming) | `Approve`/`Start` + verified method |
 | `GET /counts`, `GET /timeline` | v3 counts/timeline | `core:tasks.view` |
 | `GET /schedules`, `PATCH /schedules/{kind}` | `/api/v1/tasks`, `PUT /tasks/:name`, `/maintenance-window/*` | view / `core:tasks.manage`; PATCH writes the kind's `ScheduleConfig` key through `config` (DB override layer; a key locked by an operator-set layer is refused with 409) |
-| `POST /pause`, `POST /unpause` | `/api/v1/operations/pause|resume` | `core:tasks.manage` |
-| (no tasks route: events) | `GET /api/v3/ops/events`, `/api/v1/operations/events` | not routes of `/api/core/v1/tasks` (FE2-18): the bus topics `core.task.run-changed.v1` and `core.task.log-appended.v1` are bridged one-to-one to realtime streams ([05-events](05-events.md) 5E.3.2, [05-realtime](05-realtime.md)), which serve the legacy paths; topic permission `AnyAuthenticated`, per-envelope visibility = the definition's `View` (COR-20), payload through `RedactRunView` |
+| `POST /pause`, `POST /unpause` | none (`/api/v1/operations/pause\|resume` stay books', below) | `core:tasks.manage` |
+| (no tasks route: events) | `GET /api/v3/ops/events` (`/api/v1/operations/events` stays a books gin route, 05-http-api §8.1 S6 row) | not routes of `/api/core/v1/tasks` (FE2-18): the bus topics `core.task.run-changed.v1` and `core.task.log-appended.v1` are bridged one-to-one to realtime streams ([05-events](05-events.md) 5E.3.2, [05-realtime](05-realtime.md)), which serve the legacy paths; topic permission `AnyAuthenticated`, per-envelope visibility = the definition's `View` (COR-20), payload through `RedactRunView` |
 
-Compat: `/api/v3/ops/*` and `/api/v1/operations*`/`/op-defs`/`/tasks` (except the five books routes
-below) are aliases onto the same handlers with a `Deprecation` header and log line for the compatibility
-window, defined once in [09](09-abo-on-core.md) §9.2.1 and implemented by `compat` (SIMP-7). Alias handlers
+Compat: `/api/v3/ops/*`, `/api/v1/op-defs` and `/api/v1/tasks` are aliases onto the table's native routes with a `Deprecation` header and log line
+for the compatibility window, defined once in [09](09-abo-on-core.md) §9.2.1 and implemented by `compat` (SIMP-7). Alias handlers
 translate legacy def IDs through `FormerKinds`/`LegacyDefID`, and render the legacy response body through
 05-http-api's `LegacyPath.Shape` (there is no `WithLegacyShape`; FE3-6). An alias request never reaches the
 legacy gin mount, so core's stage 2 records it, with the `http_route` value 05-http-api §4.2 states for an
-alias; every request that reaches gin, the five books routes below included, is recorded by the mount's
-`otelgin` as at HEAD, never by both (R10-3).
+alias; every request that reaches gin, every `/api/v1/operations` route below included, is recorded by the
+mount's `otelgin` as at HEAD, never by both (R10-3); both write into one instrument set (R11-1, 05-http-api §4.2).
+
+**No `/api/v1/operations*` route is a core alias (R11-3, VER11-3; completes R10-1).** All 38 routes HEAD registers
+under `/api/v1/operations` (`grep 'protected.*("/operations' internal/server/*.go` @748fd787a; a count the test
+generates at the stage's base commit) stay books' gin manifest routes at every stage, with HEAD's handlers' shapes and
+HEAD's `s.perm` atoms; the five operations-component routes below are among them. The routes this table once
+listed as replaced call core's tasks client, `Deps.Tasks`, from T0+T1 and render HEAD's response body themselves:
+`POST …/v2` calls `Client.Start`, `DELETE …/v2/:id` calls `Client.Cancel`, `POST …/v2/:id/retry` and `…/finish`
+call `Client.Decide` (`Resume`, `Finish`), and `POST …/pause` and `…/resume` call `Client.Pause`/`Unpause`, while
+`GET …/pause` reads `Client.PauseState` (`wire_operations_routes.go:28-46` @748fd787a). Books' handlers with no core
+target (`stale`, `clear-stale`, `optimize-database`, `sweep-tombstones`, `set-internal-flag`, `audit-files`,
+`:id/class-lists/:class`, `:id/undo/preflight`, `:id/revert`, `reconcile/*`, the version-group maintenance routes;
+`wire_operations_routes.go:101-112`, `server_lifecycle.go:1953-1965`) are books' domain code and stay as they are,
+and the rest of the prefix keeps the treatment 09 S5 gives it. `/api/v1/operations/events` stays a gin manifest route over the realtime
+bridge (05-http-api §8.1 S6 row). `TestS5_OperationsComponentStaysBooks` asserts that the gin engine holds exactly
+the generated count of routes under the prefix and that no alias or core route is registered under it.
 
 **The five operations routes stay books' (R10-1, COR10-1).** `GET /api/v1/operations/v2/{id}` and
 `GET /api/v1/operations/{id}/{activity,changes,result,results}` (`internal/server/wire_operations_routes.go:27,103,110`,
@@ -1330,7 +1363,7 @@ type ClockStore interface {
 	Advance(ctx context.Context, b *storage.Batch, k StoredKind, prev Clock, had bool, next Clock) error
 }
 
-// Pause is the executor's operator pause marker (Executor.Pause/Unpause).
+// Pause is the executor's operator pause marker (Executor.PauseAs/UnpauseAs, Client.Pause/Unpause).
 type Pause struct {
 	Reason string
 	By     Actor
@@ -1482,7 +1515,7 @@ DATA10-3, R10-4) and
   hold.
 - **One hold for the four stores.** `Clocks`, `Pause` and `StandDown` are served by the same taskstore
   instance as `Runs` and are guarded by the same lock: a `ClockStore.Advance`, a `PauseStore.Set`
-  (`Executor.Pause`, `Unpause`) and a `StandDownStore.Set` are staged and committed inside `WriteRuns` like a
+  (`Executor.PauseAs`, `UnpauseAs`, which `Client.Pause`/`Unpause` call) and a `StandDownStore.Set` are staged and committed inside `WriteRuns` like a
   run write.
 - **A write outside a hold is refused, checked on the batch (R10-4, COR10-2, DATA10-1).** `CommitLocked`
   marks the batch it commits with the locks it holds, from before `stage` until `Commit` returns, so the
@@ -1943,7 +1976,7 @@ T0–T8 prepares for it.
 - **One build-and-commit path (A-3, R9-1).** Every caller that builds a batch carrying a `RunStore`,
   `ClockStore`, `PauseStore` or `StandDownStore` write — the executor's claim and terminal transitions, a
   cancel or decide, the watchdog's stop, the shutdown quiesce, the per-run writer's ticks and ledger
-  writes, `Client.Start`, the scheduler's enqueue, `Executor.Pause`/`Unpause`, a stand-down's marker
+  writes, `Client.Start`, the scheduler's enqueue, `Executor.PauseAs`/`UnpauseAs`, a stand-down's marker
   writes, the outbox relay (05-events 5E.4) and a core service's `Stager.StartIn` — builds it inside
   `WriteRuns`, which commits it through `storage.CommitLocked` under `storage.RetryOnConflict` (bounded,
   jittered) and, when `Stores.Runs` implements `legacy.WriteLock`, holds the kernel-resolved `RunLocks`
@@ -2019,7 +2052,7 @@ T0–T8 prepares for it.
 | `internal/opscatalog`, `pkg/plugin/sdk`, `addOpRegistrar`, `serviceregistry` op wiring | `module.Registrar.Tasks` |
 | `internal/opsmetrics` | executor metrics (5T.11), a **re-implementation** in `mediacore/internal/executor`, its one core destination; nothing of it is public `tasks` (an 04 §8.6 row; `opsmetrics.go` reads HEAD's `state` vocabulary; MOD7-1, MOD8-2). The ABO package **stays at its path**, as opsbridge-side code, until its last ABO user is gone (R8-6): opsbridge's registry files (T8), the ABO scheduler's v3 loop (`internal/scheduler/v3_schedule.go:444,447`, T7) and the `RegisterAbandoned` callers `internal/repairs/guards.go:209` and `internal/plugins/maintenance/retired_versions_fixer.go:240`; it is deleted with opsbridge at T8. The T0+T1 PR makes the executor record HEAD's run instruments under their HEAD names and label values, deletes the v2 engine's calls, and **shrinks the surviving `opsmetrics` to the one family core does not emit**, `ops.abandoned_calls`: its `New`/`Default()` no longer creates or observes `ops.runs`, `ops.run.duration`, `ops.items`, `ops.inflight`, `ops.progress_age`, `ops.progress_timeout` or `ops.zombies`, nor `ops.schedule_lag` or `ops.schedule_missed`, whose v3-loop calls (until T7) become a `ReportScheduleTick` call on the tasks client into core's scheduler's instruments (5T.11 "One owner per family"), so every family has exactly one owner and no scrape sees two samples of one series (R9-3, MOD9-1). **`ops_abandoned_calls` changes owner in exactly one PR (R10-3, MOD10-7):** the shrunk `opsmetrics` owns it for both of its sources, `source="repairs_resolver"` (HEAD's `SourceRepairsResolver`, `internal/repairs/guards.go:209`) and `source="retired_versions_stat"` (`SourceRetiredVersionsStat`, `internal/plugins/maintenance/retired_versions_fixer.go:240`; `internal/opsmetrics/opsmetrics.go:370-371`), until the T6 sub-batch PR that converts `retired_versions_fixer.go`, the later of the two callers. The repairs source, converted at T3, keeps calling `opsmetrics.RegisterAbandoned` until then. That one T6 PR creates books' observable on a books scope through the public `metrics` API (05-metrics) as the single owner of both sources with HEAD's two `source` values, repoints both callers and deletes `opsmetrics`' instrument, so no build ever holds two instruments for the family and `ErrFamilyTaken` never fires; no core `RegisterAbandoned` with ABO names exists |
 | `internal/lifecycle` | `core/lifecycle` (03 §3.3, L0) |
-| `internal/server/handlers/opsv3`, v1 operations handlers | `mediacore/internal/taskhttp` (05-http-api §5), a **re-implementation** (an 04 §8.6 row; `opsv3/*` read HEAD's `state` vocabulary; MOD7-1), except the handlers of the five `GET /api/v1/operations/…` routes of 5T.3.10, which **stay books'** at their HEAD paths and from T0+T1 read runs through `Deps.Tasks` (R10-1) |
+| `internal/server/handlers/opsv3`, v1 operations handlers | `mediacore/internal/taskhttp` (05-http-api §5), a **re-implementation** (an 04 §8.6 row; `opsv3/*` read HEAD's `state` vocabulary; MOD7-1), except every `/api/v1/operations` handler (38 routes at the evidence commit, the five operations-component routes among them), which **stays books'** at its HEAD path and from T0+T1 reaches runs through `Deps.Tasks` (R10-1, R11-3; 5T.3.10) |
 | `internal/database` ops storage (`pebble_store_ops_v2.go`, `pebble_store_ops_v3*.go`, `ReconcileOpsV3WithV2`) and HEAD's v1 history reader | **stays in ABO** as books' legacy `tasks.Stores` (`internal/books/taskstore`, 5T.6.2; `ReconcileOpsV3WithV2`, the ops part of `InitializeStore`, is its `Recover`, the v1 reader feeds its `List`), with the bodies of legacy steps 62, 65 and 66 (`pebble_store_plan_legacy.go` included) moved in the same T0+T1 PR; imports run taskstore → the remaining store, never the reverse (R5-2, MOD5-1); nothing moves into core and core has no copy (R4-1, SIMP4-2). The code only books' legacy steps 62, 65 and 66 call is deleted by the floor release (T8) |
 
 ### 5T.8.2 Batches
@@ -2044,7 +2077,7 @@ generated at its own base commit (A-16, ADV-11).
 
 | Batch | Content | Count | Gate to finish | Behaviour change / rollback |
 |---|---|---|---|---|
-| T0 + T1 (one release) | `core/tasks` + executor + scheduler land; ABO adapter `opsbridge` (the `internal/operations/registry` path re-implemented in place as the v2 adapter, not a new package; MOD5-11) wraps every v2 `OperationDef` as a core Task with `LegacyDefID` = its def ID (`Run(ctx, params, Reporter)` called with a `Reporter` implemented over `RC`; legacy `registry.RunItems` re-implemented over `tasks.RunItems` with `Fixed(n, "legacy Concurrency")` from its non-zero `Concurrency`, or `Sequential("legacy zero Concurrency")`, a 1:1 mapping; any change of a def's parallelism is a separate PR under CLAUDE.md's concurrency rules, never part of T0+T1, G1); `/api/v3/ops` aliases; books' legacy `tasks.Stores` (`internal/books/taskstore`: HEAD's ops store code and v1 history reader behind the interfaces, 5T.6.2) supplied as `legacy.Stores.Tasks`, with every runtime write of the ops families routed through it; ABO's scheduler keeps ticking the 38 `TaskDefinition`s through `Deps.Tasks` and the store's `ClockStore` until T7; the readiness core of `health` with `books.memdb` (5T.4 step 2); the books-side legacy-stream bridge (5T.4 step 3); the activity mirror moved into `internal/activity` (MOD8-8); the calls of the five `operations_*` client_golang vectors of `internal/metrics` (`metrics.go:20-47`; helpers `IncOperation{Started,Completed,Failed,Canceled}` and `ObserveOperationDuration`, `:351-358`) moved from the registry worker (`worker.go:611,1204,1293-1297`) into a books bus subscriber, the families keeping their HEAD names, and HEAD's run instruments recorded by the executor under their HEAD names and label values, with ABO's `internal/opsmetrics` shrunk to `ops.abandoned_calls` in the same PR and the v3 loop reporting its ticks through `ReportScheduleTick` until T7 (5T.11; A-5, R9-3); the five `GET /api/v1/operations/…` routes kept as books' gin routes, their handlers reading runs through `Deps.Tasks` (5T.3.10; R10-1); one taskstore instance per process (5T.6.2; R9-1) | every registered def runs on core (233 at `748fd787a`, informative) | op-ID ledger green; HEAD's resume, cancel and shutdown suites ported to run against both engines and green on both (G1); `taskstest.StoresSuite` green on both implementations; `TestOpsFamiliesWrittenOnlyByTaskstore`, `TestOneSchedulerPerKind`, `TestDispatch_WaitsForReadySignal`, `TestLegacyRunTransitionVsCancelOneWins`, `TestLegacyRunLockSpansCommit`, `TestLegacyReplaceRowsTakesNoRunLock`, `TestLegacyStoresAreSingletons`, `TestLegacyProgressVsCancelKeepsState`, `TestLedgerCommitAfterTerminalRefused`, `TestConcurrentTransitionsOfDistinctRunsAllCommit`, `TestCancelCommitsUnderProgressTicks`, `TestFixerMarksLandDuringQuiesce`, `TestStandDown_MarkerAtBootDefersQuiescedRun`, `TestLegacyStepPreconditionsResolve`, `TestLegacyRunStoreRecovers`; `TestScheduleParity_AllDefinitions` (normative), and the staging smoke: every enabled definition with an interval of 24 h or less fires within one interval, the rest listed with their next due time (DATA5-8, OPS8-4; 5T.6.2 "One writer per family"; 09 §9.3, R7-6); 05-metrics' seeded series contract test with no HEAD ops family changed in name, type, label keys or label values (5T.11; A-5); `TestABOMetricsGatherNoDuplicateOrMissing` (5T.11; R9-3); `TestS5_OperationsComponentStaysBooks` (the five routes on the gin engine, no core route or alias in their component; 05-http-api; R10-1); `TestHistogramBucketsPinned` with `histogram_buckets.golden` unchanged for `ops_run_duration_seconds` and `ops_schedule_lag_seconds` (5T.11; MOD10-6); G5 rollback test (5T.9) | yes: executor swap (CPU budget, cancellation fix) over the **same** stored format; no level step, no Teach build; rollback = binary swap under the G5 rules of 5T.6 |
+| T0 + T1 (one release) | `core/tasks` + executor + scheduler land; ABO adapter `opsbridge` (the `internal/operations/registry` path re-implemented in place as the v2 adapter, not a new package; MOD5-11) wraps every v2 `OperationDef` as a core Task with `LegacyDefID` = its def ID (`Run(ctx, params, Reporter)` called with a `Reporter` implemented over `RC`; legacy `registry.RunItems` re-implemented over `tasks.RunItems` with `Fixed(n, "legacy Concurrency")` from its non-zero `Concurrency`, or `Sequential("legacy zero Concurrency")`, a 1:1 mapping; any change of a def's parallelism is a separate PR under CLAUDE.md's concurrency rules, never part of T0+T1, G1); `/api/v3/ops` aliases; books' legacy `tasks.Stores` (`internal/books/taskstore`: HEAD's ops store code and v1 history reader behind the interfaces, 5T.6.2) supplied as `legacy.Stores.Tasks`, with every runtime write of the ops families routed through it; ABO's scheduler keeps ticking the 38 `TaskDefinition`s through `Deps.Tasks` and the store's `ClockStore` until T7; the readiness core of `health` with `books.memdb` (5T.4 step 2); the books-side legacy-stream bridge (5T.4 step 3); the activity mirror moved into `internal/activity` (MOD8-8); the calls of the five `operations_*` client_golang vectors of `internal/metrics` (`metrics.go:20-47`; helpers `IncOperation{Started,Completed,Failed,Canceled}` and `ObserveOperationDuration`, `:351-358`) moved from the registry worker (`worker.go:611,1204,1293-1297`) into a books bus subscriber, the families keeping their HEAD names, and HEAD's run instruments recorded by the executor under their HEAD names and label values, with ABO's `internal/opsmetrics` shrunk to `ops.abandoned_calls` in the same PR and the v3 loop reporting its ticks through `ReportScheduleTick` until T7 (5T.11; A-5, R9-3); the five `GET /api/v1/operations/…` routes kept as books' gin routes, their handlers reading runs through `Deps.Tasks` (5T.3.10; R10-1); one taskstore instance per process (5T.6.2; R9-1) | every registered def runs on core (233 at `748fd787a`, informative) | op-ID ledger green; HEAD's resume, cancel and shutdown suites ported to run against both engines and green on both (G1); `taskstest.StoresSuite` green on both implementations; `TestOpsFamiliesWrittenOnlyByTaskstore`, `TestOneSchedulerPerKind`, `TestDispatch_WaitsForReadySignal`, `TestLegacyRunTransitionVsCancelOneWins`, `TestLegacyRunLockSpansCommit`, `TestLegacyReplaceRowsTakesNoRunLock`, `TestLegacyStoresAreSingletons`, `TestLegacyProgressVsCancelKeepsState`, `TestLedgerCommitAfterTerminalRefused`, `TestConcurrentTransitionsOfDistinctRunsAllCommit`, `TestCancelCommitsUnderProgressTicks`, `TestFixerMarksLandDuringQuiesce`, `TestStandDown_MarkerAtBootDefersQuiescedRun`, `TestLegacyStepPreconditionsResolve`, `TestLegacyRunStoreRecovers`; `TestScheduleParity_AllDefinitions` (normative), and the staging smoke: every enabled definition with an interval of 24 h or less fires within one interval, the rest listed with their next due time (DATA5-8, OPS8-4; 5T.6.2 "One writer per family"; 09 §9.3, R7-6); 05-metrics' seeded series contract test with no HEAD ops family changed in name, type, label keys or label values (5T.11; A-5); `TestABOMetricsGatherNoDuplicateOrMissing` (5T.11; R9-3); `TestS5_OperationsComponentStaysBooks` (the five routes on the gin engine, no core route or alias in their component, and the gin engine holding exactly the generated count of `/api/v1/operations` routes, 38 at the evidence commit, with no alias under the prefix; 05-http-api; R10-1, R11-3); `TestHistogramBucketsPinned` with `histogram_buckets.golden` unchanged for `ops_run_duration_seconds` and `ops_schedule_lag_seconds` (5T.11; MOD10-6); G5 rollback test (5T.9) | yes: executor swap (CPU budget, cancellation fix) over the **same** stored format; no level step, no Teach build; rollback = binary swap under the G5 rules of 5T.6 |
 | T2 | 34 `MaintenanceJob`s → native `books.maintenance.*` Tasks (mechanical: `Run(ctx, JobStore, ProgressReporter, dryRun)` `internal/maintenance/job.go:498` → `TaskSpec.Run(rc, p)`; `Policy()` → `Common`); their v1 checkpoint writers move to `rc.Checkpoint` and their v1 result and summary writers to the run's result (`TestLegacyOpsWriters` ratchet) | 34 | `internal/maintenance` deleted | no, when kind, params and effects are unchanged (binary swap); a v1-checkpoint → `rc.Checkpoint` move resumes from zero once after a rollback, listed per job in 09 §9.2.1's rollback table (OPS4-11) |
 | T3 | 24 repairs fixers → `tasks.Fixer`; `repairs.plan/apply` removed | 24 (+2 defs) | Fixer conformance suite | no (binary swap) |
 | T4 | Generic ops → `core.*` (activity-log cleanup/compaction family, backups prune, db optimize/census, temp/trash/reports cleanup, throttle reset, tombstone cleanup, retention-and-hygiene, metrics TTL sweep): the `generic` class rows of `raw/06` §6, each re-checked in [04-package-mapping](04-package-mapping.md) (some, e.g. `opchange-book-index-rebuild`, are book-bound despite the class) | ≤ 24 | owner per kind recorded in 04 | no; kind renames ride `FormerKinds`, a core kind's ABO ID through `app.Options.LegacyTaskAliases` (5T.8.2, MOD6-6) (binary swap) |
@@ -2526,3 +2559,9 @@ Round 10:
 - MOD10-6 — 5T.11: `ops.run.duration` and `ops.schedule_lag` default boundaries are HEAD's lists (`views.go:42,58`), overridable by `metrics.Options.HistogramBuckets`; `TestHistogramBucketsPinned` in the T0+T1 done-check.
 - R10-8 (consistency with 05-updater) — 5T.6.2 and T8 row: the S8 updater's floor check is 05-updater 5U.4 step 3.
 - integration pass (round 10): `WriteRuns` comment: `storage.LocksHeld(b, l)`; `legacy.ErrRunsNotLocked` wraps `storage.ErrNotLocked`; 5T.3.13 cites the executor's outer-lock ranks 50–80; one store instance per App (COR10-10); 5T.11 boundaries overridable through `app.Options.MetricViews`. Already as requested: the "(core aliases, no native path…)" row is gone; HEAD's buckets are the executor's defaults; 5T.8.1 names the T6 PR.
+
+Round 11:
+
+- VER11-3 (R11-3) — 5T.3.10: the compat sentence no longer makes any `/api/v1/operations*` route a core alias; the aliases are `/api/v3/ops/*`, `/api/v1/op-defs` and `/api/v1/tasks`; the table's "Replaces" column drops every `/api/v1/operations` path; new paragraph "No `/api/v1/operations*` route is a core alias": all 38 HEAD routes stay books' gin routes, the formerly listed ones calling `Deps.Tasks`; T0+T1 done-check and the package row restated.
+- VER11-3 (R11-3) — 5T.3.10 `Client`: `Cancel`, `Decide`, `Pause`, `Unpause` (actor stamped from ctx, the native route's permission rule) and `PauseState`, so books' legacy handlers reach runs through the client; `Executor`'s actor-taking methods renamed `CancelAs`, `DecideAs`, `PauseAs`, `UnpauseAs` (an embedded method cannot be redeclared with another signature); 5T.3.13 references follow.
+- VER11-1 (R11-1) — 5T.3.10 compat paragraph: otelgin and stage 2 write into one instrument set.
