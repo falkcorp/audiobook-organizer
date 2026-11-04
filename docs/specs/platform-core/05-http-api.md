@@ -450,6 +450,7 @@ type Deps struct {
 func (r *Router) ModuleGroup(moduleID string) *Group    // /api/<id>/v1
 func (r *Router) CoreGroup() *Group                     // /api/core/v1; used only by core/internal/<capability>http, uihttp included (03 §3.3, COR2-19)
 func (r *Router) CoreFixedGroup(base string) *Group     // a core group at a path a kept contract fixes (below); core/internal/authhttp only, from F4
+func CoreExactPatterns() []string                       // the declared exact core patterns allowed inside a module claim (§4.9); exactly one entry
 func (r *Router) Infra(pattern string, perm rbac.Requirement, h http.Handler) // /livez, /readyz, /metrics; non-Public perms are enforced (§4.2, SEC2-14)
 func (r *Router) MountLegacy(m LegacyMount) error       // §8.2
 func (r *Router) SPA(h http.Handler, o SPAOptions) error // §4.10; ErrPrefixCollision while a legacy mount ServesSPA
@@ -504,13 +505,11 @@ type RouteInfo struct {
 
 **One core path outside `/api/core/v1` (03 §3.8 kept contracts).** HEAD's OAuth/OIDC callback
 `GET /api/v1/auth/oauth/{provider}/callback` keeps its path, so no identity provider needs its redirect URI
-re-registered; from F4 core serves it (05-authn §4.13). The kernel calls `CoreFixedGroup` once, with the
-callback base the app configures (ABO: `/api/v1/auth/oauth`; 05-authn names the option; an app that sets none
-keeps its callback under `/api/core/v1`, so core holds no app path, rule R1), and `core/internal/authhttp`
-registers the callback on it. Its routes run the whole core chain like `CoreGroup()`'s and record
-`RouteInfo.Owner` `core`. The base is core's exact claim nested inside books' `/api/v1/` legacy prefix:
-`ServeMux` specificity sends its paths to core, `ErrShadow` still applies, and `Build` fails with
-`ErrPrefixCollision` while any manifest route lies under it, so F4 deletes HEAD's gin callback in the same PR.
+re-registered; from F4 core serves it (05-authn §4.13). `core/internal/authhttp` registers it on
+`CoreFixedGroup("/api/v1/auth/oauth")`, whose routes run the whole core chain like `CoreGroup()`'s and record
+`RouteInfo.Owner` `core`. The path lies inside books' `/api/v1/` claim, so it is admitted only as an entry of
+`CoreExactPatterns()`, the declared exception list of §4.9; `Build` refuses a `CoreFixedGroup` route whose
+pattern is not on it.
 
 **App root segments: two inputs with different meanings (FE2-11, 03 §3.6).** ABO's ABS-compatible
 routes, a fixed contract that books mounts (D12 (c), §4.6), occupy two different kinds of segment.
@@ -560,7 +559,7 @@ the API-stability gate.
 | `/api/<moduleID>/v{N}/…` | module | a new major only for breaking changes; the old major is deleted in a later release (§4.6) |
 | `/livez`, `/readyz` (Public), `/metrics` (`core:metrics.read`, which ABO's identity migration stores on every principal that is not `Confined()`, 05-rbac §6) | core infra | payloads in 05-health / 05-metrics; probe names as 05-health defines them (FE2-6) |
 | `/api/v1/…`, `/health`, the ABS-compatible root routes (§4.6); until their R2 flips also `/auth/temp-login` (F4), `/api/v3/ops/…` (F5), `/api/events` (F6) and `/api/health` (F8) | `books` legacy mount (**permanent**, §8) | gin routes from the manifest. Each R2 flip deletes the gin routes its native core routes replace (identity, settings, tasks, events, …; §8.1), with no alias; the SPA, the first-party callers and the deploy files that call them switch in the same PR |
-| `/api/v1/auth/oauth/{provider}/callback`, from F4 | core (`CoreFixedGroup`, §3.5) | HEAD's OAuth/OIDC callback path, kept so no identity provider is re-registered (03 §3.8) |
+| `/api/v1/auth/oauth/{provider}/callback`, from F4 | core (`CoreFixedGroup`, §3.5; the one `CoreExactPatterns()` entry, §4.9) | HEAD's OAuth/OIDC callback path, kept so no identity provider is re-registered (03 §3.8) |
 | `/api/v3/…` (or `/<moduleID>/api/v3/…`) | *arr facade owner (`tv`/`movies`) | §4.9; deferred-build (§3.6) |
 | `/` | the `books` legacy mount (`ServesSPA`) **until ABO adopts the shell build**; then `core/ui` | §4.10; never both (FE-1) |
 
@@ -670,7 +669,7 @@ side-effect route that needs idempotency adds it then, in its owner.
 - **No aliases (D10).** A path that changes is deleted and registered under its new pattern in one
   PR, and the SPA, the first-party scripts and the agent skills that call it switch in the same
   PR (09). Core's own routes exist only under `/api/core/v1`, except the OAuth/OIDC callback, which
-  keeps HEAD's path (§3.5 `CoreFixedGroup`); each R2 flip deletes the gin routes that its native routes
+  keeps HEAD's path (§3.5, §4.9 `CoreExactPatterns()`); each R2 flip deletes the gin routes that its native routes
   replace (§8.1).
 - **Books legacy routes** stay gin routes under the permanent legacy mount (§8); `/api/v1/…` is a
   permanent `books` prefix. A books group rewritten natively moves to `/api/books/v1/…` and its gin
@@ -777,15 +776,22 @@ yielding (SIMP-22, as 06 §6.4.2 states it).
 
 **Patterns stay inside their owner's claims (SEC3-8).** ServeMux panics only on *conflicting*
 patterns; a strictly more specific one wins silently, so a claim alone does not stop one owner from
-capturing another's requests (a legacy manifest route at `POST /api/core/v1/auth/login` would receive
-core's sign-in bodies). `Build` therefore fails with `ErrOutsideClaim` when a
+capturing another's requests (a legacy manifest route at `GET /api/core/v1/auth/oidc/google/callback`
+would receive the OIDC `code` and `state`). `Build` therefore fails with `ErrOutsideClaim` when a
 legacy manifest route is outside its mount owner's `LegacyPrefixes` (a native route cannot be: its
 pattern is relative to its `Group`), and with `ErrShadow` when any route of one owner is strictly more
-specific than a route of another owner over the same path set. There is no exemption. The two
+specific than a route of another owner over the same path set. There is no exemption other than the one below. The two
 fallbacks are not subtree claims: `/` (the SPA fallback, §4.10) and the legacy `/api/` redirect
-handler (item 3), both matched last by `ServeMux` specificity. The one exception to the overlap rule is a `CoreFixedGroup`
-base, an exact core claim nested inside a legacy prefix, which `Build` refuses while any manifest route
-lies under it (§3.5).
+handler (item 3), both matched last by `ServeMux` specificity.
+
+**The one exception: exact core patterns inside a module claim.** `CoreExactPatterns()` (a function, R5)
+declares the exact core patterns that may lie inside another owner's claim, and it holds exactly one entry,
+`GET /api/v1/auth/oauth/{provider}/callback`, HEAD's OAuth/OIDC callback, which core serves from F4 so no
+identity provider is re-registered (03 §3.8, 05-authn §4.13). For that pattern alone `Build` raises neither
+`ErrPrefixCollision` against books' `/api/v1/` claim nor `ErrShadow` against books' routes; it still fails
+with `ErrPrefixCollision` when a manifest route matches a path the pattern matches, so the F4 PR deletes
+HEAD's gin callback in the same change. Every other core route stays under `/api/core/`. Adding an entry is a
+spec change: `TestCoreExactPatterns_OneEntry` pins the list's length at 1.
 
 **`/api/v3` is reserved for *arr facades**, whose clients call `<base>/api/v3/…` (`raw/16` §5.1).
 ABO's HEAD `/api/v3/ops/*` (12 routes, `internal/server/server_lifecycle.go:2127-2135`) is HEAD's task
@@ -900,7 +906,7 @@ nothing collides in either release.
 |---|---|---|---|
 | Route without `Perm` | boot error `ErrNoPermission` | closed | R6 |
 | Route `Perm` scope unknown / foreign namespace | boot error | closed | prevents typos and cross-module escalation (05-rbac §4.9) |
-| Pattern conflict that the collision rule of §4.8 cannot resolve (a cross-owner component, members with different requirements or shapes, a generalised pattern that conflicts again) / duplicate / prefix collision (a `CoreFixedGroup` base with a manifest route under it included) / two owners of `/` | boot error `ErrPatternConflict` / `ErrDuplicateRoute` / `ErrPrefixCollision` | closed | silent shadowing is worse than not starting; a resolvable same-owner set registers as one generalised pattern (A-1) |
+| Pattern conflict that the collision rule of §4.8 cannot resolve (a cross-owner component, members with different requirements or shapes, a generalised pattern that conflicts again) / duplicate / prefix collision (a manifest route over the `CoreExactPatterns()` entry included) / two owners of `/` | boot error `ErrPatternConflict` / `ErrDuplicateRoute` / `ErrPrefixCollision` | closed | silent shadowing is worse than not starting; a resolvable same-owner set registers as one generalised pattern (A-1) |
 | Native JSON property not snake_case | boot error `ErrJSONName` | closed | one wire convention (FE-12) |
 | Legacy route missing from the manifest or without a permission | boot error `ErrLegacyManifest` | closed | R6 over the running table (SEC-13) |
 | `LegacyAuthGin` mount not named by `app.Options.LegacyAuthGinUntil`; `OwnAuth` route naming no auth method its module registered | boot error `ErrLegacyAuthGin` / `ErrOwnAuthMethod` | closed | no module skips stages 8, 12, 13 by self-declaration (SEC2-17) |
@@ -1307,8 +1313,8 @@ follow.
 | `TestDecode_StrictUnknownField` | 400 `unknown_field` on a route not marked `Lenient` |
 | `TestPage_OffsetDefaultHasTotal` / `TestCursor_FilterMismatch` | SIMP-8 |
 | `TestTaskStart_IdempotencyKeyReplaysRunView` | a repeated `Idempotency-Key` on task start → 200, the existing `RunView`, `Idempotent-Replayed: true` (SIMP2-8; store in 05-tasks) |
-| `TestOutsideClaim_Refused` / `TestBuild_CrossOwnerShadowRefused` | a legacy route outside its mount's `LegacyPrefixes` (for example at `POST /api/core/v1/auth/login`) → `ErrOutsideClaim`; one owner's pattern strictly more specific than another's → `ErrShadow` (SEC3-8) |
-| `TestCoreFixedGroup_OIDCCallback` | from F4: `GET /api/v1/auth/oauth/{provider}/callback` reaches core's callback through the whole core chain (`RouteInfo.Owner` `core`, Public, `RateAuth`); with no base configured the callback is only under `/api/core/v1`; a manifest route under the base → `ErrPrefixCollision` (§3.5, 03 §3.8) |
+| `TestOutsideClaim_Refused` / `TestBuild_CrossOwnerShadowRefused` | a legacy route outside its mount's `LegacyPrefixes` (for example at `GET /api/core/v1/auth/oidc/google/callback`) → `ErrOutsideClaim`; one owner's pattern strictly more specific than another's → `ErrShadow` (SEC3-8) |
+| `TestCoreFixedGroup_OIDCCallback` / `TestCoreExactPatterns_OneEntry` | from F4: `GET /api/v1/auth/oauth/{provider}/callback` reaches core's callback through the whole core chain (`RouteInfo.Owner` `core`, Public, `RateAuth`) with no `ErrPrefixCollision` or `ErrShadow` against books' claim; a `CoreFixedGroup` route not in `CoreExactPatterns()` and a manifest route over the entry → `ErrPrefixCollision`; `len(CoreExactPatterns()) == 1` (§3.5, §4.9, 03 §3.8) |
 | `TestPublicRoutesGolden` / `TestBuild_PublicNotInManifestRefused` | the reviewed set of every `Public` route, native and legacy; a module native route with `rbac.Public` absent from `Manifest.PublicRoutes` → `ErrPublicNotAllowed` (COR3-3) |
 | `TestCompressionExclusionsEqualHEAD` | golden from HEAD's `compressionMiddleware` lists: the legacy exclusions that still exist carry `NoCompress`; `text/event-stream` responses are never gzipped; the log download is gzipped once (COR3-6) |
 | `TestPerimeterHonoursBlobOnlyValues` | release R1: rate limit disabled only in ABO's settings blob → stage 10 off from boot; from F3: the migrated stored value keeps stage 10 off and a runtime edit applies without restart (COR3-1) |
@@ -1588,4 +1594,4 @@ Plan-phase consistency:
 - PC-15 — §4.6: the `all=true` admin list is `GET /api/core/v1/api-keys` (05-authn §4.13), selected only for `core:users.manage`; §12 `TestAlias_ListAllKeysNeedsUsersManage`.
 - PC-16 — §8.1 and §12: the Basic-password rollback cell uses 05-config §1.12.2's names, `TestRollback_BasicGateNeverOpenOnPrev` and `TestRollback_BasicGateClearedStaysClosed`; `TestBasicGate_PasswordReadInPlaceAcrossRollback` retired.
 
-- D10–D12 revision (2026-11-04): aliases and retirement deleted: `Alias`, `LegacyPath`, `Gone`, `Route.Deprecated`, `Deps.Compat`, the compat import, `ErrAliasTarget`, `Problem.Successor`, `legacy_field_unsupported`, deprecation headers and the compat counter (§1, §3, §3.1, §3.3, §3.4, §3.5, §6, §7, §11); §4.6 is versioning only (`oasdiff` gate kept, no aliases, ABS root routes a fixed contract mounted by books, D12 F3); otelgin co-recording, `r.Pattern` clearing, `HTTPMetricsScope`/`InstrumentScope` and `MetricViews` deleted: stage 2 records every request, gin's included, on core's `httpapi` meter (`Deps.MeterProvider`), and `MatchedPattern` stays for the post-match check only (§1.1, §3.5, §4.2 stage 2, §8.2); §4.8 collision rule kept, "The operations component" special case deleted; §4.9 is the `/api/v3` reservation (HEAD's `/api/v3/ops` deleted by the R2 tasks flip), `ErrAliasOutsideClaim` renamed `ErrOutsideClaim`; §8.1 re-keyed to R1 and the R2 flips (gin routes deleted as native routes replace them, no redirect routes, rollback = restore); §8.3 bridge over books' atom table (no `LegacyAtom`, `LegacyCheck`, `LegacyReach` or legacy stores); §10 without `BelowStored`, file-only legacy keys and rollback text (operator lock, more restrictive Basic-gate value wins, rename table); §11 semconv families for every request, duplicate and gone counters deleted; §12 alias, rollback, otelgin and HEAD-series tests deleted, `TestStage2_RecordsEveryRequest`, `TestBasicGate_MoreRestrictiveWins`, `TestMetricsScrape_MigratedReach`, `TestOpenAPI_BreakingGate`, `TestCoreRoutesReplaceGin` added; stage references S0–S10/UI-0 re-keyed to R0–R3. Consistency pass: flips labelled F3–F9 and D12's answers cited as D12 (a)–(d); the OIDC callback keeps HEAD's path on the new `Router.CoreFixedGroup`; `core.http.basic_gate.enabled` declared `FailClosed`; the R1 factory reset is offline only; F5/F6 route deletions split as 05-tasks has them; `BasicExempt` moves to `/health` at F8 and the golden is renamed `TestBasicGate_ExemptSetGolden`; the reach oracle is `TestIdentityCutover_ReachOracle`; the rename table is 05-config §1.12.3.
+- D10–D12 revision (2026-11-04): aliases and retirement deleted: `Alias`, `LegacyPath`, `Gone`, `Route.Deprecated`, `Deps.Compat`, the compat import, `ErrAliasTarget`, `Problem.Successor`, `legacy_field_unsupported`, deprecation headers and the compat counter (§1, §3, §3.1, §3.3, §3.4, §3.5, §6, §7, §11); §4.6 is versioning only (`oasdiff` gate kept, no aliases, ABS root routes a fixed contract mounted by books, D12 F3); otelgin co-recording, `r.Pattern` clearing, `HTTPMetricsScope`/`InstrumentScope` and `MetricViews` deleted: stage 2 records every request, gin's included, on core's `httpapi` meter (`Deps.MeterProvider`), and `MatchedPattern` stays for the post-match check only (§1.1, §3.5, §4.2 stage 2, §8.2); §4.8 collision rule kept, "The operations component" special case deleted; §4.9 is the `/api/v3` reservation (HEAD's `/api/v3/ops` deleted by the R2 tasks flip), `ErrAliasOutsideClaim` renamed `ErrOutsideClaim`; §8.1 re-keyed to R1 and the R2 flips (gin routes deleted as native routes replace them, no redirect routes, rollback = restore); §8.3 bridge over books' atom table (no `LegacyAtom`, `LegacyCheck`, `LegacyReach` or legacy stores); §10 without `BelowStored`, file-only legacy keys and rollback text (operator lock, more restrictive Basic-gate value wins, rename table); §11 semconv families for every request, duplicate and gone counters deleted; §12 alias, rollback, otelgin and HEAD-series tests deleted, `TestStage2_RecordsEveryRequest`, `TestBasicGate_MoreRestrictiveWins`, `TestMetricsScrape_MigratedReach`, `TestOpenAPI_BreakingGate`, `TestCoreRoutesReplaceGin` added; stage references S0–S10/UI-0 re-keyed to R0–R3. Consistency pass: flips labelled F3–F9 and D12's answers cited as D12 (a)–(d); the OIDC callback keeps HEAD's path on the new `Router.CoreFixedGroup` under the one-entry `CoreExactPatterns()` exception of §4.9; `core.http.basic_gate.enabled` declared `FailClosed`; the R1 factory reset is offline only; F5/F6 route deletions split as 05-tasks has them; `BasicExempt` moves to `/health` at F8 and the golden is renamed `TestBasicGate_ExemptSetGolden`; the reach oracle is `TestIdentityCutover_ReachOracle`; the rename table is 05-config §1.12.3.
