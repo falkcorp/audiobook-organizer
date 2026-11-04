@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.23.0 -->
+<!-- version: 1.24.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -42,7 +42,7 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 
 ## Next action
 
-Phase 4 advisor review done (`reviews/spec-advisor-review.md`: READY WITH CHANGES, 1 BLOCKER, 6 MAJOR, 5 MINOR, 9 simplifications). All accepted and all simplifications adopted (`reviews/spec-advisor-dispositions.md`, A-1..A-17). Headline: a representation-neutral extraction (A-2) where legacy stores keep HEAD formats through S10, and hardening moves to post-S10 cutovers. The round-8 design is recoverable at commit 2a54afb5f. Applied by 8 cluster revisers plus an integration pass (09 v1.9.1, 04 v1.9.0 regenerated, informative). Confirmation round 9 (5 lenses): 71 findings, 4 BLOCKER (3 distinct), 27 MAJOR, 40 MINOR (`reviews/spec-round-9-dispositions.md`, R9-1..R9-11). All three blockers are HEAD-parity gaps where core now drives HEAD code (commit-time locks, cross-owner route conflict, duplicate metric family). No deleted machinery comes back. Applied by 8 revisers plus an integration pass (09 v1.10.1, 04 v1.10.0 regenerated). Round 10: 52 findings (2 BLOCKER, 27 MAJOR, 23 MINOR), dispositioned as R10-1..R10-11 (`reviews/spec-round-10-dispositions.md`). Both blockers are fixed by removing a mechanism: the operations routes stay with books, and ambient scopes never reach confined keys. Revisers are applying them; then an integration pass and a narrow verification round 11; then Phase 5. Incident: the shared disk filled up (Go build cache 25 GB), was cleared with go clean -cache, and nothing was lost. Changelog fragment and supersede marker are already committed.
+Phase 4 advisor review done (`reviews/spec-advisor-review.md`: READY WITH CHANGES, 1 BLOCKER, 6 MAJOR, 5 MINOR, 9 simplifications). All accepted and all simplifications adopted (`reviews/spec-advisor-dispositions.md`, A-1..A-17). Headline: a representation-neutral extraction (A-2) where legacy stores keep HEAD formats through S10, and hardening moves to post-S10 cutovers. The round-8 design is recoverable at commit 2a54afb5f. Applied by 8 cluster revisers plus an integration pass (09 v1.9.1, 04 v1.9.0 regenerated, informative). Confirmation round 9 (5 lenses): 71 findings, 4 BLOCKER (3 distinct), 27 MAJOR, 40 MINOR (`reviews/spec-round-9-dispositions.md`, R9-1..R9-11). All three blockers are HEAD-parity gaps where core now drives HEAD code (commit-time locks, cross-owner route conflict, duplicate metric family). No deleted machinery comes back. Applied by 8 revisers plus an integration pass (09 v1.10.1, 04 v1.10.0 regenerated). Round 10: 52 findings (2 BLOCKER, 27 MAJOR, 23 MINOR), dispositioned as R10-1..R10-11 (`reviews/spec-round-10-dispositions.md`). Both blockers are fixed by removing a mechanism: the operations routes stay with books, and ambient scopes never reach confined keys. Applied (8 revisers, an integration pass, 04 v1.11.1 regenerated). Narrow verification round 11 is running: 2 reviewers, one verifying the R10 fixes and one sweeping the whole spec for blockers. If it finds zero BLOCKERs, Phase 5 follows. Incident: the shared disk filled up (Go build cache 25 GB), was cleared with go clean -cache, and nothing was lost. Changelog fragment and supersede marker are already committed.
 
 ## Incidents
 
@@ -54,5 +54,5 @@ Phase 4 advisor review done (`reviews/spec-advisor-review.md`: READY WITH CHANGE
 - Subagents use `general-purpose` / `Explore` with explicit model and effort.
 
 COMPLETED: 3 — phase 1 (raw data), phase 2 (spec draft v1), phase 3 (8 review rounds)
-REMAINING: 6 — phases 4–9 (phase 4: round-10 revision in progress)
+REMAINING: 6 — phases 4–9 (phase 4: verification round 11 running)
 BLOCKED: 0 —
