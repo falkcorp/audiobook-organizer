@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-download.md -->
-<!-- version: 1.4.1 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 513fb395-c640-4bb6-b76c-d9fe80b3224e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -42,7 +42,7 @@ the ABO extraction plan ([09](09-abo-on-core.md) S7) builds:
 |---|---|---|
 | `Client` (`Caps`, `Status`, `Items`), the optional `FileLister` and `Relocator`, the phase-1 `Caps` fields, `Adapter`, instances (05-metadata M1), path mapping (§4.4) | **1** | ABO (Deluge) |
 | `Pool.Instances`, `Lease`, `Items`, `Files`, `Relocate` | **1** | ABO: discovery by label, details/files, move-after-organize (§10) |
-| The optional `Adder`, `Remover`, `Categorizer`, `Pauser`, `SeedLimiter` and their `Caps` fields; the grab types `GrabRequest`, `ResolvedGrab`, `GrabID`, `AddResult`, `Source`, `Priority`, `SeedGoal`, `RemoveOptions`; `Pool.Grab`, grab records and recovery (§4.3), monitor/poll task and the `core.download.event.v1` topic (§4.5), `Watch`, `Tracked`, `Refresh`, `MarkImported`, `Pool.Remove`, seed goals, the `core.download.*` poll keys and the `core.download.schedules.poll` schedule key | **2 — deferred-build: not in the ABO extraction plan** | `acquire` (TV/Movies) |
+| The optional `Adder`, `Remover`, `Categorizer`, `Pauser`, `SeedLimiter` and their `Caps` fields; the grab types `GrabRequest`, `ResolvedGrab`, `GrabID`, `AddResult`, `Source`, `Priority`, `SeedGoal`, `RemoveOptions`; `Pool.Grab`, grab records and recovery (§4.3), monitor/poll task and the `core.download.item.transitioned.v1` topic (§4.5), `Watch`, `Tracked`, `Refresh`, `MarkImported`, `Pool.Remove`, seed goals, the `core.download.*` poll keys and the `core.download.schedules.poll` schedule key | **2 — deferred-build: not in the ABO extraction plan** | `acquire` (TV/Movies) |
 | books' `BookVersion.TorrentHash`/`BookFile.DelugeHash` → stored `download.ItemRef` (a library-scale books row rewrite) | **2** — when a second download instance can exist; ships as a books format change of its own: one-way, checkpointed, behind the per-owner level guard, with its own stage entry and done-check (R3-1; no mirror) | books (SIMP2-7) |
 
 Phase-2 contracts below are kept at proof depth so `acquire` can be checked against them; nothing in
@@ -51,6 +51,22 @@ phase 2 is built until the first TV/Movies app starts. HEAD's Deluge client has 
 member whose only consumer is deferred (03 §3.4), and the API-stability gate would otherwise freeze the grab types
 before `acquire`, their only consumer, exists to validate them. Phase 2 adds `Adder` and `Remover` beside
 `FileLister`/`Relocator`, which is additive (SIMP3-4).
+
+### Deferred-build members
+
+The phase-2 members of this built package (the §1 table's phase-2 row). None is in the 09 S7 build; each is
+absent per `archtest.DeferredMembersAbsent` (03 §3.4), matched package-qualified so that `audit.Event` or
+`events.Watch…` never match `download.Event` or `download.Watch`, and the PR that builds a member deletes its row
+(SIMP4-1, COR4-19). This covers the grab pipeline the 09 S7 done-check wants absent.
+
+| Member | Lands with | Contract |
+|---|---|---|
+| `download.Adder`, `download.Remover`, `download.Categorizer`, `download.Pauser`, `download.SeedLimiter` | `acquire` (phase 2) | §3 optional capabilities |
+| `download.Caps.Add`, `.ClientFetchesURL`, `.CreateCategory`, `.Tags`, `.Pause`, `.SeedGoals`, `.RemoveWithData`, `.PostImportCategory`, `.Priority`; `download.SeedGoalCaps` | `acquire` | §3 `Caps` comment (appended fields, SIMP3-4) |
+| `download.GrabRequest`, `download.ResolvedGrab`, `download.GrabID`, `download.AddResult`, `download.Source`, `download.Priority`, `download.SeedGoal`, `download.RemoveOptions`, `download.Selection`, `download.RecordFunc`, `download.ImportOutcome` | `acquire` | §3 grab types, §4.3 |
+| `download.Pool.Grab`, `download.Pool.Remove`, `download.Pool.MarkImported`, `download.Pool.Refresh`, `download.Pool.Tracked`, `download.Tracked`, `download.TrackedFilter` | `acquire` | §3, §4.3, §4.5 |
+| `download.Watch`, `module.Registrar.DownloadWatch` | `acquire` | §3 `Watch` |
+| `download.Event`, `download.EventKind`, topic `core.download.item.transitioned.v1`, task kind `core.download.poll`, keys `core.download.schedules.poll`, `core.download.removed_after`, `core.download.warning_to_failed`, `core.download.pending_recovery`, `core.download.snapshot_retention` | `acquire` | §3 topic table, §4.5, §7 |
 
 Out of scope: release selection and the decision engine (10), indexers ([05-indexer](05-indexer.md)), file
 import operations (hardlink/copy/move, [05-library](05-library.md)).
@@ -347,7 +363,7 @@ const (
 	EventRemoved                         // a tracked, not-yet-imported item disappeared from the client
 )
 
-// Event is the payload of the ONE durable topic core.download.event.v1
+// Event is the payload of the ONE durable topic core.download.item.transitioned.v1
 // (COR3-4). Message key: GrabID; a foreign item (no grab record) uses
 // ItemRef.String(). One key is one partition and one cursor per consumer, so a
 // consumer sees a download's events in the order they were staged (§4.5).
@@ -380,14 +396,15 @@ a Durable topic; COR2-17).
 
 | Topic (phase 2) | Kind | When |
 |---|---|---|
-| `core.download.event.v1` (`Event`; key `GrabID`, foreign items `ItemRef`) | outbox | `grab_added`: a grab record reaches `added`, synchronously or by recovery; `grab_failed`: it reaches `failed` (invalid, every instance failed, or unrecovered after `core.download.pending_recovery`); `completed`: client state reaches `Completed` for a tracked item; `failed`: it reaches `Failed` (or `Warning` for longer than `core.download.warning_to_failed`); `removed`: a tracked, not-yet-imported item disappears from the client |
+| `core.download.item.transitioned.v1` (`Event`; key `GrabID`, foreign items `ItemRef`) | outbox | `grab_added`: a grab record reaches `added`, synchronously or by recovery; `grab_failed`: it reaches `failed` (invalid, every instance failed, or unrecovered after `core.download.pending_recovery`); `completed`: client state reaches `Completed` for a tracked item; `failed`: it reaches `Failed` (or `Warning` for longer than `core.download.warning_to_failed`); `removed`: a tracked, not-yet-imported item disappears from the client |
 | `core.download.item.changed.v1` | events bus, notify-only | any transition; for UI/realtime |
 
 ## 4. Lifecycle
 
 ### 4.1 Instances and adapters
 
-Instances are `download/<id>` records in the one instance store (05-metadata §M1, SIMP-4); secrets are
+Instances are `download/<id>` records in the one instance registry (05-metadata §M1, SIMP-4; stored by the
+native store, or for ABO's Deluge by the app's legacy store, R4-1); secrets are
 `integrations.download.<id>.<field>` (05-config §2.3 grammar). Secret fields per adapter: Deluge `password`;
 qBittorrent `username`, `password`; Transmission `username`, `password`; SABnzbd `api_key`; NZBGet
 `username`, `password`. Every adapter declares `Meta.Egress = EgressConfigured`: a client on the LAN (the
@@ -457,11 +474,11 @@ registered module ID; `Refs` non-empty) → look up `c/download/grabs/by-key/<ke
 `RecordFunc` rows** in one batch → resolve (map `SavePathHint`; fetch a `Source.URL` via `env.HTTP` with
 `EgressPublicOnly` unless the client fetches; parse torrent info-hash locally when bytes are present)
 → `Adder.Add` (no `Adder`: `ClassUnsupported`, the next instance is tried) → write grab record `added{Ref}`,
-a tracked snapshot and the outbox message `core.download.event.v1{Kind: grab_added}` in one batch. On a timeout or
+a tracked snapshot and the outbox message `core.download.item.transitioned.v1{Kind: grab_added}` in one batch. On a timeout or
 ambiguous error after Add was sent, the record stays `pending` and the next monitor pass **recovers** it by core
 tag `mc:<grabID>` (when `Caps.Tags`), else by info-hash, else by job name, and stages
-`event.v1{Kind: grab_added, Recovered: true}`; unrecovered after `core.download.pending_recovery` → `failed` with
-`event.v1{Kind: grab_failed}`. No blind re-add. This is the **only** grab-intent record and the only recovery
+`item.transitioned.v1{Kind: grab_added, Recovered: true}`; unrecovered after `core.download.pending_recovery` → `failed` with
+`item.transitioned.v1{Kind: grab_failed}`. No blind re-add. This is the **only** grab-intent record and the only recovery
 path in core: `acquire` keeps none (COR-3).
 
 **Per-grab event order (COR3-4).** Every event of a grab is staged with message key `GrabID`, so all of them
@@ -472,6 +489,11 @@ land in one partition and each consumer reads them through one cursor in staging
 events (`completed`, `failed`, `removed`) only for grabs whose `added` record has committed, so `grab_added`
 always precedes them, also for a cached torrent or usenet job that is complete on its first poll. A recovery
 pass that finds the item already complete stages `grab_added` and then `completed` in that order in one batch.
+Both intake rows of that batch commit together, so their relative order is their key order: it holds because
+`Stage` takes message IDs from one monotonic generator per `Outbox`, so intake keys preserve `Stage` call order
+within a process (05-events §5E.4, §5E.5.2, `TestStageOrderWithinBatch`; COR4-14). As defence in depth, acquire applies a
+`completed` that reaches a TD still in `Grabbing` as `Grabbing → Downloading → ImportPending` (or `ImportBlocked`)
+in one transition ([10](10-tv-movies-proof.md) §10.5.4), so a reorder can never lose a completion.
 
 ### 4.4 Path mapping
 
@@ -499,7 +521,7 @@ on-demand bursts collapse without a debounce timer. Per enabled instance, with p
    Watch asks for it — large seedboxes have tens of thousands).
 2. Diff against snapshots in `c/download/items/<instance>/<id>`.
 3. For each transition: one storage **batch** containing the new snapshot and, for completed/failed/removed,
-   the `core.download.event.v1` message keyed by the item's `GrabID` (a foreign item: its `ItemRef`) (same-batch
+   the `core.download.item.transitioned.v1` message keyed by the item's `GrabID` (a foreign item: its `ItemRef`) (same-batch
    outbox, 03 §3.3 `outbox`). The bus event is published after commit.
 4. An instance whose poll fails keeps its snapshots untouched (no "removed" storm on an outage); removal is
    declared only after `core.download.removed_after` consecutive successful polls without the item.
@@ -510,7 +532,7 @@ without effect, so no consumer starts a run or applies a write for another owner
 
 | Owner | Consumer |
 |---|---|
-| `"core.acquire"` | **one** consumer, `core.acquire.download-events` (`ConsumeTx` over `core.download.event.v1`, `Where(Owner == "core.acquire")`): it applies the tracked-download transition in the relay batch and, for `ImportPending`, stages the module's import run in that same batch ([10](10-tv-movies-proof.md) §10.5.4), so an import never starts before its transition. A stale or illegal transition is acked, logged and counted, never returned as an error, so it cannot block the partition (10 §10.5.5, COR3-4). It is in the kernel's static core-consumer list, so outbox retention keeps each message until it has acked (05-events) |
+| `"core.acquire"` | **one** consumer, `core.acquire.download-events` (`ConsumeTx` over `core.download.item.transitioned.v1`, `Where(Owner == "core.acquire")`): it applies the tracked-download transition in the relay batch and, for `ImportPending`, stages the module's import run in that same batch ([10](10-tv-movies-proof.md) §10.5.4), so an import never starts before its transition. A stale or illegal transition is acked, logged and counted, never returned as an error, so it cannot block the partition (10 §10.5.5, COR3-4). It is in the kernel's static core-consumer list, so outbox retention keeps each message until it has acked (05-events) |
 | a module | that module's `ConsumeIntoTask[Raw]` consumer with `Where(Owner == "<module>")` |
 | foreign item (no grab record) | each module in `WatchedBy`, with `Where(slices.Contains(WatchedBy, "<module>"))` |
 
@@ -530,7 +552,7 @@ in-flight batches first.
 | Client unreachable / 5xx during poll | open for the App, closed for that instance's transitions (snapshots frozen) | An outage must not look like every item being removed. |
 | Auth rejected (Deluge RPC code 1 after one re-login; qBittorrent 403 after re-login; SAB `API Key Incorrect`) | closed: `ClassAuth`, `HealthAuthFailed`, hold 6h | Needs a human; retrying looks like an attack (`internal/metadata/throttle.go:47-49` rationale). |
 | Item not found on `Remove` (phase 2) / `Relocate` | `ClassNotFound` → treated as success for Remove, error for Relocate | Already gone is the goal of Remove (Deluge `ErrTorrentNotFound`, `client.go:97-101`). |
-| `Add` rejected as invalid (bad torrent/nzb; phase 2) | closed: `ClassInvalid`, grab `failed` (+ `event.v1{Kind: grab_failed}`), no fallback to another instance | Another client would reject the same file. |
+| `Add` rejected as invalid (bad torrent/nzb; phase 2) | closed: `ClassInvalid`, grab `failed` (+ `item.transitioned.v1{Kind: grab_failed}`), no fallback to another instance | Another client would reject the same file. |
 | `Owner` neither `core.acquire` nor a registered module, or empty `Refs` | closed: `ClassInvalid`, nothing written | Every completion must have exactly one consumer. |
 | `RecordFunc` returns an error | closed: nothing written, nothing sent to a client | The owner's row and the grab record are one fact. |
 | `Add` transport failure before send (phase 2) | fall back to next instance (Selection.Fallback) | Capacity is per instance. |
@@ -595,8 +617,9 @@ Phase 2 metrics are marked; phase 1 ships only the unmarked ones.
 
 Core, phase 1: `TestPool_ItemsFillsLocalPath`, `TestPool_RelocateGroupsByInstance`,
 `TestPaths_UnmappedRelocateRefused`, `TestPaths_WindowsRemote`, `TestDeluge_PrivateHostNeedsLocal`,
-`TestDelugeInstance_LegacyBackedReadInPlace` (05-metadata M1.4 step 2a: `download/deluge` is read from and written
-to the legacy keys; no `c/integrations/instances/download/deluge` row is written; R3-1).
+`TestDelugeInstance_LegacyBackedReadInPlace` (05-metadata M1.4 step 2a, with a fake legacy instance store covering
+`download/deluge`: it is read from and written through that store; no `c/integrations/instances/download/deluge`
+row is written; R4-1).
 Core, phase 2 (with `acquire`): `TestGrab_IdempotencyKeyDedupes`, `TestGrab_AmbiguousAddRecoveredByTag`,
 `TestGrab_FallbackOnTransportOnly`, `TestGrab_InvalidNoFallback`, `TestGrab_OwnerAcquireAccepted`,
 `TestGrab_RecordFuncInSameBatch`, `TestGrab_AddedEventStaged`, `TestPool_SelectionPriorityRoundRobin`,
@@ -620,7 +643,7 @@ client with a scriptable clock-driven state machine (`Advance(id, State)`), capa
 |---|---|
 | `internal/deluge/client.go` | `core/integrations/download/deluge` adapter (`core.deluge`); RPC/auth code reused; every method gains ctx; `http.Client` from `env.HTTP` (5-minute timeout becomes per-op limits) |
 | `deluge.GetClient()` global, `ResetGlobalClientForTest`, `SetGlobalClientForTest` | deleted; `Pool.Lease` |
-| `DelugeWebURL/Password`, `download_client.torrent.deluge` | the **legacy-backed** instance `download/deluge` (05-metadata M1.4 step 2a, M1.10; R3-1): its URL and settings stay in the config blob and are read and written in place through 05-config's legacy-format adapter until the integrations cutover, which is outside the extraction; nothing is copied into `c/integrations/instances/`, so the current build and any older build read the same values. The password moves to `secrets` as `integrations.download.deluge.password` the first time this build writes it, and the blob field is blanked in that batch (a rollback then needs the Deluge password re-entered on the older build, stated in the release note). `Local` is native-only: it lives in the core-only extension record, is granted once, at the first S7 boot, only when the host is an IP-literal loopback or private address, and is bound to that host (05-metadata M1.10 egress trust, SEC3-5). Env-authoritative behaviour is preserved as an **in-memory operator overlay** on the effective instance while an operator value is set — never written to the blob, the extension record or `c/secrets/`, so removing the env value restores the stored password as HEAD does (env names permanent, 05-metadata M1.4 step 2, SIMP2-5) |
+| `DelugeWebURL/Password`, `download_client.torrent.deluge` | the **legacy-backed** instance `download/deluge` (05-metadata M1.4 step 2a, M1.10; R4-1): its URL and settings stay in the config blob, served in place by books' legacy instance store (ABO code; no core adapter and no grant) until the integrations cutover, which is outside the extraction; nothing is copied into `c/integrations/instances/`, so the current build and any older build read the same values. The password moves to `secrets` as `integrations.download.deluge.password` the first time this build writes it, and in that batch books' store replaces the blob value, and every other plaintext copy, with the never-matching sentinel (05-config §2.2, R4-2) — not a blank, which an older build would replace with Deluge's factory-default password (`internal/deluge/integration.go:27-67` @748fd787a). After a rollback the older build's Deluge login therefore fails until the operator re-enters the password there (stated in the release note); a value re-entered that way is re-imported on roll-forward. `Local` is native-only: books' store keeps it in its extension family, granted once, at S7, only when the host is an IP-literal loopback or private address, bound to that host, and suspended until an admin confirms it (`Registry.Confirm`) if an older build changes the instance (05-metadata M1.10 egress trust, M1.4 step 2a; SEC3-5). Env-authoritative behaviour is preserved as an **in-memory operator overlay** on the effective instance while an operator value is set — never written to the blob, the extension record or `c/secrets/`, so removing the env value restores the stored password as HEAD does (env names permanent, 05-metadata M1.4 step 2, SIMP2-5) |
 | `deluge_move_enabled`, `deluge_discovery_label`, `deluge_discovery_enabled` | `modules.books.download.*` settings (they are ABO behaviour, not client config) |
 | `BookVersion.TorrentHash`, `BookFile.DelugeHash` | **phase 1: unchanged** — no books row rewrite; books builds `download.ItemRef{Instance: download/deluge, ID: ItemID(hash)}` at the call site. Storing `ItemRef` is the phase-2 books migration (§1 table), with its own stage entry when it ships (SIMP2-7) |
 | `NotifyDelugeAfterOrganize/AfterVersionSwap/MoveStorage(ToDir)` | books code calling `Pool.Relocate` (reached as `module.Deps.Downloads`, COR-1) for every `ItemRef` of the book's active versions, behind `Caps.Relocate` |
@@ -717,3 +740,13 @@ Round 3 (`docs/plans/platform-core/reviews/spec-round-3-dispositions.md`):
 Integration pass (round 3, 2026-11-04):
 
 - integration pass (round 3): `internal/plugin` `DownloadClient` deleted at 09 S7.
+
+Round 4 (`docs/plans/platform-core/reviews/spec-round-4-dispositions.md`):
+
+- R4-1 — §4.1, §9 and the §10 Deluge row: `download/deluge` is served by the app's legacy instance store (books
+  code), not a core adapter under a grant; `Local` in books' extension family, suspended after an older build's change.
+- R4-2 — §10 Deluge row: the blob password and every plaintext copy get the never-matching sentinel, not a blank.
+- COR4-14 — §4.3: intra-batch order rests on `Stage`'s monotonic per-`Outbox` ID generator (05-events §5E.4);
+  defence in depth in acquire (10).
+- COR4-15 — the durable topic is `core.download.item.transitioned.v1` (03 topic grammar).
+- SIMP4-1 / COR4-19 — `Deferred-build members` heading in §1 listing the phase-2 members package-qualified.

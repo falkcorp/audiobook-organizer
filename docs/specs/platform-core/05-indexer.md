@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-indexer.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 5e2d5cda-5f98-4db2-87b1-b4c8d6519ec7 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -272,8 +272,10 @@ Core-shipped adapters: `core.newznab` and `core.torznab` — one implementation,
 `api_key` (secret), plus `InstanceSettings`. Auth is the `apikey` query parameter (raw/16 §4.2), always
 redacted by providerhttp. Phase: built with `acquire` (phase 2 of [05-download](05-download.md) §1; deferred-build);
 ABO does not need indexers to run on core, and an audiobook search (`CatAudiobook`, `TypeBook`/`TypeSearch`) is
-possible later without contract change. Instances are records in the one instance store (05-metadata M1,
-SIMP-4); the API key is the secret `integrations.indexer.<id>.api_key` (05-config §2.3 grammar).
+possible later without contract change. Instances are records in the one instance registry (05-metadata M1,
+SIMP-4), always in core's `NativeInstanceStore`: no app has pre-core indexer instances, so no legacy store covers
+them (R4-1); their `query`/`grab` quota counters are in `NativeGateStore` (05-metadata M2.4). The API key is the
+secret `integrations.indexer.<id>.api_key` (05-config §2.3 grammar).
 
 ### 3.1 Prowlarr interop through the *arr facade
 
@@ -454,3 +456,8 @@ Round 2 (`docs/plans/platform-core/reviews/spec-round-2-dispositions.md`):
 - R2-7 — §4 names acquire's schedule key `core.acquire.schedules.rss_sync`.
 - SEC2-8 — §7 gains a Protection column.
 - SIMP2-16 — the slash-form secret-name history line marked superseded by the dotted form.
+
+Round 4 (`docs/plans/platform-core/reviews/spec-round-4-dispositions.md`):
+
+- R4-1 / SIMP4-3 — §3: indexer instances and their named quota counters live in core's native stores
+  (`NativeInstanceStore`, `NativeGateStore`); no legacy store covers them.
