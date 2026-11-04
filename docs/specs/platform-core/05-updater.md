@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -167,8 +167,11 @@ type Deps struct {
 // ReaderCheck asks whether the binary at exe may open the data directory as
 // it is now: the decision scripts/storage_format_guard.py makes for
 // `make rollback`, implemented once by 05-storage's guard (SIMP-18) over the
-// sidecar files, so it needs no open store. nil error = allowed; otherwise a
-// fixed reason token ("format_newer", "compat_level_required", "no_sd_notify", ...).
+// sidecar files, so it needs no open store. The kernel binds it to
+// core/internal/pebble.CheckReader (05-storage §5S.3.7). nil error = allowed;
+// otherwise an error carrying one of CheckReader's fixed reason tokens:
+// "level_newer", "format_newer" (pre-guard binary), "restore_pending",
+// "sidecar_unreadable".
 type ReaderCheck func(ctx context.Context, exe string) error
 
 type Restarter interface {
@@ -452,3 +455,8 @@ Round 1 findings applied to this file (v1.1.0):
 - SIMP-5 — `core.update.found.v1` declared in the one topic catalog.
 - SIMP-6 — check and apply use `ScheduleFromConfig`; `core.updater.check_interval` removed.
 - SIMP-7 — aliases reference 09 §9.2.1.
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: R-B request (SIMP-18) — `ReaderCheck` documents `CheckReader`'s reason tokens (`level_newer`, `format_newer`, `restore_pending`, `sidecar_unreadable`) instead of invented ones.
+- integration pass: Verified already present (R-D request): SEC-27 signed release manifest; `core.update.found.v1` declared in the one catalog.

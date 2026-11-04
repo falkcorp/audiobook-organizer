@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-storage.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 940ce8be-6f86-4450-b43a-77bf78827b12 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -529,8 +529,9 @@ type StepRef struct {
 }
 
 // Served is a precondition on the store's served ledger (§5S.3.7): the step
-// refuses to run unless Level of Owner has served this store for at least For.
-// 09 decides which steps use it (OPS-2 policy).
+// runs only once Level of Owner has served this store for at least For. An
+// unmet precondition DEFERS the step (it never fails boot): see "Skipped
+// releases" in §5S.3.5. 09 decides which steps use it (OPS-2 policy).
 type Served struct {
 	Owner Owner
 	Level int
@@ -596,7 +597,7 @@ Runner rules:
 | Failure | A failed versioned `Up` discards its batch; a failed legacy step may leave idempotent partial writes. Either way `app.New` returns an error wrapping `ErrMigrationFailed`, the process exits non-zero, earlier steps stay committed, and the boot's checkpoint stays **unconsumed** (it is the restore point). No partial versioned step is ever visible. |
 | Unreadable version | Fail closed (`ErrBookkeepingUnreadable`), never "assume 0" (contrast `migrations.go:582`). |
 | Newer version on disk | Unknown applied steps all `Additive` → boot continues with a warning (G5: an older build reads a newer DB). Any unknown `Breaking` step (or compat-less books record) → `ErrKeyspaceTooNew`. This is a secondary check: a `Breaking` step also raised the owner's level, which the guard checks first (§5S.3.7). |
-| Skipped releases (resolution 6, OPS-2) | A contract — any step that deletes legacy data an adoption copied — lists its adopt steps in `Adopts`. Before it runs, the store's bookkeeping must hold an applied record for each. If the adopt step is registered in this build, the DAG simply runs it first (a skipped expand is replayed); if the build no longer registers it, boot refuses with `ErrAdoptMissing` naming the release to install first. A contract never deletes legacy data on an unadopted store. `RequiresServed`, when set, additionally refuses unless the served ledger shows the named level served this store long enough (09 policy). |
+| Skipped releases (resolution 6, OPS-2) | A contract — any step that deletes legacy data an adoption copied — lists its adopt steps in `Adopts`. Before it runs, the store's bookkeeping must hold an applied record for each. If the adopt step is registered in this build, the DAG simply runs it first (a skipped expand is replayed); if the build no longer registers it, boot refuses with `ErrAdoptMissing` naming the release to install first. A contract never deletes legacy data on an unadopted store. `RequiresServed`, when set, **defers** the step while the served ledger does not yet show the named level serving this store for `For` (09 policy): the step and every step that depends on it (`After`, and later versions of the same owner, which stay contiguous) are skipped for this boot, the owner serves at its last applied version (a deferred contract does not count toward `MinVersionToServe`), the boot log and health detail name the step and the remaining time (token `storage_contract_deferred`, status Up), and every later boot re-checks it. Deferral never deletes, never fails boot, and never raises a level. Only `ErrAdoptMissing` refuses to start. |
 | Barrier and serving | An owner starts only when its applied version ≥ `MinVersionToServe` (default: its latest registered version). When an `Online` data migration's `Barrier` or a deferred edge holds the owner below that, the owner is not started in this process, health is `degraded` with the reason, and when the blocking migration completes the kernel requests a graceful restart through the lifecycle supervisor. |
 | Systemd budget | Each step extends the start timeout (kept from `migrations.go:559`) through `health`'s notifier. |
 
@@ -1105,6 +1106,7 @@ the next time it is enabled; steps of other owners that declared `After` on them
 | `core.storage.snapshot_max_age` | duration | 30s | yes |
 | `core.storage.sequence.lease` | int | 64 | no |
 | `core.storage.claims.mode` | enum `strict`/`shadow` | `strict` (books' first release on core: `shadow`, 09) | no |
+| `core.storage.claims.violation_flush` | duration | 1m | yes |
 | `core.storage.checkpoint_dir` | string (path) | `<db parent>/.mediacore-checkpoints` (must be on the DB's filesystem) | no |
 | `core.storage.checkpoint.free_space_margin` | int64 | 2 GiB | no |
 | `core.storage.migration.max_batch_bytes` | int64 | 64 MiB | no |
@@ -1264,6 +1266,14 @@ credentials.
 2. Books moves onto `LegacyRange` with claims in **shadow** mode for one release; every
    `mediacore_storage_claim_violations_total` hit (reads and writes) is fixed by registering or
    correcting the access. ABO's full test suite also runs in strict mode in CI from the start.
+   Because the counter resets on every restart, shadow and strict violations are also **persisted**:
+   `c/storage/claimviol/<owner>/<op>/<family>` = `{first_at, last_at, count, mode, build}`, where
+   `<family>` is the key's longest registered family prefix (or the first 16 bytes, hex, for an
+   unregistered key — never a value), written by one coalescing writer at most once per
+   `core.storage.claims.violation_flush` per entry and never inside the caller's batch. The census
+   (`c/storage/census`) and `GET /api/core/v1/storage/claim-violations` (`core:system.manage`) list
+   them; 09 S2b's done-check ("zero persisted violations ≥ 14 days") reads `last_at`. Entries are
+   kept until a strict-mode release has run 14 days with none newer.
 3. Strict mode. Then the mirrors and adoptions of 09's stages, each with its window and its contract.
 
 ## 5S.10 Tests
@@ -1348,11 +1358,8 @@ credentials.
 
 ## 5S.12 Objections to 03
 
-1. **R4 needs `storage/datamigrate` at L4.** It is a public package (modules declare data migrations)
-   that imports `tasks` for `tasks.Parallelism` (SIMP-17); 03 §3.3 and R4 do not list it yet.
-2. **R8 says "refuses writes"**; this spec refuses reads outside the handle's claims too (DATA-17), and
-   names the claim modes and the same-owner nesting rule (DATA-16). R8's wording should say "reads and
-   writes" and point here for modes.
+None open. 03 v1.4.0 places `storage/datamigrate` at L4 (§3.3, R4) and R8 says "reads and writes"
+and points here for claim modes and nesting.
 
 ## 5S.13 Out-of-scope defects found
 
@@ -1404,3 +1411,9 @@ Round-1 findings applied to this file (`docs/plans/platform-core/reviews/spec-ro
 - OPS-26 — raise rewrites sidecars after a commit error; sudoers note for the new sidecar.
 - SIMP-6 — index reconciler is an in-process component, not a task schedule.
 - SIMP-17 — `storage.Shards` deleted; data migrations declare `tasks.Parallelism` in L4 `storage/datamigrate`.
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: R-H request (OPS-2) — an unmet `RequiresServed` defers the step and its dependants (never fails boot); `Served` comment and the skipped-releases row say so, matching 09 §9.2.2.
+- integration pass: R-H request (09 S2b done-check) — claim violations persisted in `c/storage/claimviol/…` with a coalescing writer, a listing route and `core.storage.claims.violation_flush` (§5S.9.4).
+- integration pass: Objections to 03 removed: both adopted by 03 v1.4.0 (`storage/datamigrate` at L4; R8 reads and writes).

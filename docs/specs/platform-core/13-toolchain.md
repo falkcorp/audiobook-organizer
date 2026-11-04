@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/13-toolchain.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: a1e1b657-1c87-4a3e-8407-43269415455f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -186,7 +186,7 @@ releases). Core targets v8.
 | E1 | Two TypeScripts: TS 7.0.2 type-checks (`"@typescript/native": "npm:typescript@^7.0.2"`, `web/package.json:53`, scripts `:8-9`), while the `typescript` name resolves to TS 6 (`"npm:@typescript/typescript6@^6.0.2"`, `web/package.json:66`) | TS 7 ships no JS API, and `typescript-eslint` 8.72.1 peers `typescript >=4.8.4 <6.1.0` (`npm view`); rationale recorded in `CHANGELOG.md:2909-2924` | `typescript-eslint` declares TS 7 support → drop the alias, single `typescript@^7`. `core/web` copies the same two-alias layout until then. (knip is not a blocker: knip 6.44.1 depends on `oxc-parser`/`oxc-resolver` and declares no `typescript` dependency or peer, `npm view knip@6.44.1 dependencies`, checked 2026-11-04.) |
 | E2 | Stay on `@babel/core` 7.29.x | 8.1.0 is two days old (release-age rule); `babel-plugin-react-compiler` 1.0.0 depends on `@babel/types ^7.26.0` (`npm view`), so Babel 8 core would run a compiler plugin built against Babel 7 AST types; the compiler path is the only Babel use (`web/vite.config.ts:8-21`) | react-compiler publishes Babel 8 support **and** 8.x has passed the 14-day soak → bump, run the React Compiler memo tests (`CHANGELOG.md` records them, e.g. `DupesSpine.memo.test.tsx`). |
 | E3 | `jsdom` pinned at 30.0.1 | 30.1.0 broke MUI FocusTrap unmount ("5 failed / 7 passed" vs 12/12), `.github/dependabot.yml:90-104` | the 12/12 check in that comment passes on the newest 30.1.x (30.1.3 untested here). |
-| E4 | ABO stays on `react-router-dom` 7.18.5 until its own react-router 8 migration | v8 removed `react-router-dom` (react-router 8.0.0 changelog: "Remove `react-router-dom` package", #15076; DOM bits from `react-router/dom`, everything else from `react-router`); ABO imports it in **121** files, 53 of them outside `*.test.*` files (one of those is the test helper `web/src/test/renderWithProviders.tsx`), `git grep -l "from 'react-router-dom'" -- web/src`; `@mediacore/shell` needs v8 as a peer, so the migration must be **finished before** ABO adopts the shell | A separate ABO PR series migrates to `react-router@8` (imports, data-router APIs, test harness) and **precedes** the shell-adoption stage ([07-ui-shell](07-ui-shell.md) §7.19, [09-abo-on-core](09-abo-on-core.md)); exit when `web/package.json` no longer lists `react-router-dom`. |
+| E4 | ABO stays on `react-router-dom` 7.18.5 until its own react-router 8 migration | v8 removed `react-router-dom` (react-router 8.0.0 changelog: "Remove `react-router-dom` package", #15076; DOM bits from `react-router/dom`, everything else from `react-router`); ABO imports it in **121** files, 53 of them outside `*.test.*` files (one of those is the test helper `web/src/test/renderWithProviders.tsx`), `git grep -l "from 'react-router-dom'" -- web/src`; `@mediacore/shell` needs v8 as a peer, so the migration must be **finished before** ABO adopts the shell | A separate ABO PR series migrates to `react-router@8` (imports, data-router APIs, test harness): 09 stage **UI-0**, which ships before S4 and **precedes** shell adoption ([07-ui-shell](07-ui-shell.md) §7.19 step 1, [09-abo-on-core](09-abo-on-core.md) §9.3). Exit condition: `web/package.json` no longer lists `react-router-dom`, reached **before** ABO's first `createShell` call (07 §7.19 step 1). |
 
 ## 13.5 Go dependencies: what core drops and keeps
 
@@ -272,7 +272,7 @@ go1.27.3 (2026-10-19) is 16 days old and adoptable.
 | vitest 5.1.0, plugin-react 6.2.1 (peer `oxc-transform-react >=0.152.0 <0.157.0`), globals 17.14.0 are days old | npm `time` | release-age rule |
 | jsdom 30.1.x has a known MUI FocusTrap regression | `.github/dependabot.yml:90-104` | E3 |
 | TS 7 has no JS API; lint tooling capped below TS 6.1 | `typescript-eslint` peer range | E1 |
-| react-router 8 removes `react-router-dom`; 121 ABO files | §13.4.1 E4 | separate migration series that precedes shell adoption (E4) |
+| react-router 8 removes `react-router-dom`; 121 ABO files | §13.4.1 E4 | separate migration series (09 UI-0) that ends before `createShell` (E4) |
 | `otel/exporters/prometheus` is v0 (minor may break) | v0.69.0 | pin exact minor; bump deliberately |
 | Stale Dependabot ignores block golang 1.27.x and Vite 8 updates, including security updates | `.github/dependabot.yml:30-34`, `:80-89` | remove in the toolchain bump PR (§13.2.2) |
 | `go.dev/dl` stable flag unverifiable from sandbox | §13.2.1 | re-check on a networked machine before the bump |
@@ -307,3 +307,7 @@ Round 1 (dispositions in `docs/plans/platform-core/reviews/spec-round-1-disposit
 - MOD-11 — skew risk recorded in §13.7.
 - MOD-17 — guard extended to `core/Makefile`, `core/go.mod`, `core/tools/*/go.mod`, `tools/*/go.mod`; the "tools are tier 3" sentence corrected (they are not guarded today).
 - MOD-19 — pinned tools modules for apidiff/gorelease/govulncheck; no `@latest` (§13.6).
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: R-G request (FE-2, SIMP-25) — E4 exit condition: `react-router-dom` gone before ABO's first `createShell`; names 09 stage UI-0.

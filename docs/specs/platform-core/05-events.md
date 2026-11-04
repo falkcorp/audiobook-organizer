@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-events.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 6dbdef8e-e3f3-4088-bdb9-ba37a706165d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -150,15 +150,30 @@ type RawEnvelope struct {
 	Payload json.RawMessage
 }
 
-// Bus is one per App (R5: never a package global). Constructed by the kernel;
-// modules hold it as *events.Bus (module.Deps.Events).
+// Bus is one per App (R5: never a package global). Constructed by the kernel
+// and held only by core; modules never see a *Bus.
 type Bus struct{ /* unexported */ }
+
+// Scope is a module's publish handle, module.Deps.Events (06 §6.4.4, COR-21):
+// the App's Bus bound to one module ID by the kernel. Publishing through it
+// is accepted only for catalog entries the bound module declared; that rule
+// needs the module ID, which a shared *Bus cannot know. Safe for concurrent use.
+type Scope struct{ /* bus + module ID */ }
+
+// Scope binds the bus to moduleID. Kernel-only: called once per enabled module
+// when it builds that module's Deps.
+func (b *Bus) Scope(moduleID string) Scope
+
+// Publisher is implemented by *Bus (core publishers: core.* topics only) and by
+// Scope (one module's own topics). The interface is sealed (unexported method).
+type Publisher interface{ publisher() }
 
 // Publish never blocks on subscribers and never returns an error: it is
 // notify-only. ctx is read for actor/run/trace values only; it is NOT handed
-// to handlers. Publishing to an undeclared topic, another module's topic or a
+// to handlers. Publishing to an undeclared topic, a topic outside the
+// publisher's namespace (another module's, or core.* through a Scope) or a
 // Durable topic is counted (publish_rejected) and logged once per topic.
-func Publish[T any](b *Bus, ctx context.Context, t Topic[T], key string, payload T)
+func Publish[T any](p Publisher, ctx context.Context, t Topic[T], key string, payload T)
 
 type Handler[T any] func(ctx context.Context, e Envelope[T])
 type RawHandler func(ctx context.Context, e RawEnvelope)
@@ -342,7 +357,7 @@ Storage (`c/outbox/` core keyspace):
 | Property | Contract |
 |---|---|
 | Atomicity | `Stage` writes an intake row into the caller's batch; commit = durable, discard = nothing. Same Pebble, same batch (no two-phase anything). |
-| Commit-ordered intake (COR-10) | The relay is the single writer of `m/` and `seq/`. It scans `in/<topic>/` and, in one batch per topic chunk, deletes the intake rows, writes them to `m/<topic>/<pp>/<seq>` with consecutive seqs, and advances `seq/<topic>`. The batch goes through the relay run's fenced write path, and `seq/<topic>` is written with 05-storage's conditional write under its key lock (`SetIfUnchanged` / `Keyspace.Lock`, DATA-13), so a zombie relay can never number a message twice. |
+| Commit-ordered intake (COR-10) | The relay is the single writer of `m/` and `seq/`. It scans `in/<topic>/` and, in one batch per topic chunk, deletes the intake rows, writes them to `m/<topic>/<pp>/<seq>` with consecutive seqs, and advances `seq/<topic>`. The batch goes through the relay run's fenced write path, and `seq/<topic>` lies in a `Serialized` sub-prefix of `c/outbox/` and is read with `Batch.GetForUpdate` (an `Expect` precondition checked at commit, 05-storage §5S.3.2, DATA-13), so a zombie relay whose read went stale fails its commit and can never number a message twice. |
 | No reissue (DATA-19, consumer side) | A seq and the high-water mark that covers it commit in the same batch; a crash before that commit leaves the intake rows in place to be sequenced again, and nothing after it needs redoing. There is no lease and no shared `storage.Sequence`. |
 | No horizon, no global stall (COR-10) | Only committed messages receive a seq, so a cursor can never skip one and no relay waits for an unresolved batch. A long-open or leaked producer batch (error path, panic, a large migration step) delays only its own messages. Topics are sequenced independently, so one topic's backlog never holds another's. |
 | Intake latency | `Stage` nudges the relay (in memory); the relay scans intake after the nudge and at least every `core.outbox.intake_poll` (1 s; an in-process tick, 05-tasks 5T.3.8). An empty prefix costs one seek. |
@@ -539,23 +554,19 @@ and the realtime hub subscribes; (4) remove `internal/plugin` events and `regist
 
 1. Inventory of handler-side "change then enqueue" sequences that should become outbox consumers is a
    09 task; its size is UNKNOWN at HEAD (no grep can tell correctness-critical from cosmetic).
-2. [06-app-sdk](06-app-sdk.md) must: drop `Registrar.OutboxTopics` and `Registrar.NotificationTopic`
-   (one catalog via `Registrar.Topics`); add `Registrar.Subscribe(...events.Subscription)` and
-   `Registrar.OutboxHandler(...outbox.Handler)` (COR-1) and the manifest field
-   `OutboxConsumers []string` (COR-12); state the start/stop order with `Bus.Open`/`Bus.Close` (COR-8).
+2. (Closed: 06 v1.1.0 has `Registrar.Topics`, `Registrar.Subscribe`, `Registrar.OutboxHandler`,
+   `Manifest.OutboxConsumers` and the start/stop order with `Bus.Open`/`Bus.Close` in §6.5.2, and no
+   `OutboxTopics`/`NotificationTopic`.)
 3. Multi-app-in-one-binary: buses are per `App`; cross-app events are out of scope (lowest priority,
    not ruled out).
-4. Import cycle: SIMP-5 makes `events` import `rbac` for `TopicSpec.Permission`, but 05-rbac's
-   `Deps.Events *events.Bus` makes `rbac` import `events`. 05-rbac must publish `core.rbac.changed.v1`
-   through a kernel-bound callback (`OnChanged func(ctx context.Context, generation uint64)`) instead.
-5. 05-storage must provide the conditional write and key lock (DATA-13) on core keyspaces; it no
-   longer needs `Batch.OnResolve` for this file.
+4. (Closed: 05-rbac publishes `core.rbac.changed.v1` through the kernel-bound `OnChange` callback and
+   does not import `events`, so `events` → `rbac` for `TopicSpec.Permission` is acyclic.)
+5. (Closed: 05-storage provides `Serialized` ranges with `Batch.Expect`/`GetForUpdate` on core
+   keyspaces, DATA-13; no `Batch.OnResolve` is needed.)
 
 ## Objections to 03
 
-1. **Topic noun qualifier.** 03 §3.6 shows `<moduleID>.<noun>.<verb-past>`; core topics such as
-   `core.download.grab.added.v1` need a one-segment qualifier on the noun. Proposed: "`<noun>` may be
-   `<noun>.<qualifier>`". Clarification, not a change of intent.
+None open. (The topic noun qualifier is in 03 v1.4.0 §3.6.)
 
 ## Review history
 
@@ -575,3 +586,9 @@ Round 1 findings applied to this file (v1.1.0):
 - SIMP-5 — events owns the single topic catalog (`TopicSpec` with permission, visibility, durable, notify and realtime metadata); core topic list incl. 05-download's topics.
 - SIMP-6 — relay keeps a fixed core `Every` schedule; intake poll listed as an in-process tick.
 - SIMP-7 — dual-publish window references 09 §9.2.1.
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: R-G request (COR-21) — `events.Scope` (module-bound publisher, `Bus.Scope(moduleID)`, kernel-only) is `module.Deps.Events`; `Publish` takes the sealed `Publisher` interface so core keeps `*Bus`.
+- integration pass: R-B request (COR-10, DATA-13) — commit-ordered intake was already specified; the high-water-mark write now names 05-storage's real primitive (`Serialized` + `GetForUpdate`/`Expect`) instead of the non-existent `SetIfUnchanged`/`Keyspace.Lock`.
+- integration pass: Open items 2, 4 and 5 closed (06 v1.1.0, 05-rbac `OnChange`, 05-storage DATA-13); objection on the topic qualifier removed (03 v1.4.0).

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/06-app-sdk.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: d581911c-8f90-48bb-a307-5cd6288a9695 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -32,7 +32,7 @@ the UI side of a module (07), the *arr facade (08), ABO's module internals (09).
 
 **Build scope (03 promotion rule, cross-cutting resolution 1).** `acquire`, `arrfacade`,
 `integrations/indexer` and the download grab/monitor pipeline are **deferred-build**: their contracts
-are specified, but no S0–S11 stage builds them. The `module` package therefore cannot import them in
+are specified, but no S0–S10 stage (09 §9.3) builds them. The `module` package therefore cannot import them in
 v1. Every SDK member that depends on one of them is marked **deferred-build** below. It is added
 additively, with no change to existing fields, in the wave that builds the package (§6.4.9).
 
@@ -87,7 +87,7 @@ A container earns its keep when the composition set is open-ended and assembled 
 registrants. That is exactly what this design removes (N4). With ≤ 30 core services in a fixed
 order and modules that own their internals, a container would re-introduce `any` and string keys for
 no remaining benefit. The kernel therefore has **a typed services struct, not a container**. 03 §3.3
-already says so in its `kernel/...` row; see "Objections to 03" for the §3.7 diagram wording.
+already says so in its `kernel/...` row, and its §3.7 diagram points at §6.5.2 for the start order.
 
 ## 6.4 Go API
 
@@ -211,8 +211,13 @@ type Manifest struct {
 	// Storage is the module's storage declaration (05-storage §5S.3): its
 	// m/<ID>/ keyspace, legacy claims (books: ABO's 258 families), versioned
 	// migrations (run before Register, under the boot's single pre-migration
-	// checkpoint, G2), data migrations, derived indexes and read adapters.
+	// checkpoint, G2), derived indexes and read adapters.
 	Storage storage.Spec
+
+	// DataMigrations are the module's large, resumable rewrites
+	// (05-storage §5S.3.6). They live outside storage.Spec because
+	// storage/datamigrate (L4) imports tasks and storage (L1) cannot.
+	DataMigrations []datamigrate.DataMigration
 
 	// Library declares the library-root roles the module needs (05-library).
 	Library []library.RoleRequirement
@@ -393,7 +398,7 @@ func (r *Registrar) Err() error
 
 // Deferred-build registrar methods (§6.4.9), added with their packages:
 //   func (r *Registrar) ArrFacade(p arrfacade.Provider)   // 08; at most one per module
-//   func (r *Registrar) DownloadWatch(w ...download.Watch) // 05-download monitor pipeline
+//   func (r *Registrar) DownloadWatch(w ...download.Watch) // 05-download phase 2 monitor pipeline
 
 type Hook struct {
 	Name  string                          // "<ID>.<name>", unique
@@ -433,7 +438,7 @@ type Deps struct {
 	Log     *slog.Logger   // child of the app logger with attr module=<ID> (05-logging)
 	Metrics *metrics.Scope // module series under app.Options.MetricPrefix on the App's registry, never the global one (05-metrics, 03 §3.6)
 
-	Storage storage.Handles // Keyspace m/<ID>/, Legacy claims, Indexes, Aux opener (05-storage)
+	Storage StorageHandles // Keyspace m/<ID>/, Legacy claims, Indexes, Aux opener, Derived generations (05-storage)
 
 	Tasks  tasks.Client  // start/observe runs of any kind by Kind string (R3); actor stamped by the kernel (05-tasks 5T.3.10)
 	Events events.Scope  // publish only this module's catalog topics (subscriptions: Registrar.Subscribe) (05-events)
@@ -442,7 +447,8 @@ type Deps struct {
 	Secrets secrets.Scope // names under "modules.<ID>."; values never logged (05-config part 2)
 	Library library.Scope // roots, FS(rootID), Transfer/TransferIn with the module's owner implied (05-library)
 
-	Auth  auth.Identities // read view: user lookup by ID/username, principal from ctx (05-authn)
+	Auth      auth.Identities // read view: user lookup by ID/username, principal from ctx (05-authn §3.1)
+	AuthAdmin auth.Admin      // actor-checked identity participants: StageUserMerge (05-authn §3.1, 05-storage DATA-18)
 	Audit audit.Logger    // Record/RecordIn/Emit; actor from ctx (05-rbac §3.5)
 
 	Health health.Reporters // push status for the module's own declared checks only (05-health)
@@ -458,6 +464,17 @@ type Deps struct {
 	// Deferred-build (§6.4.9):
 	//   Acquire  *acquire.Service // 10; built in P5 when an enabled manifest sets Acquire
 	//   Indexers *indexer.Pool    // 05-indexer
+}
+
+// StorageHandles is what Deps.Storage carries. It lives in module (L7), not
+// in storage, because it names storage/index, which imports storage (05-storage
+// §5S.3.4, COR-2). Core subsystems receive the same values from the kernel.
+type StorageHandles struct {
+	Keyspace storage.Keyspace           // m/<ID>/
+	Legacy   storage.LegacyRange        // zero value unless the manifest declared claims
+	Indexes  index.Opener               // full-text indexes the module declared (05-storage §5S.3.8)
+	Aux      storage.AuxOpener          // auxiliary DBs under <data-dir>/aux/<ID>/ (§5S.3.10)
+	Derived  map[string]storage.Derived // generation handle per declared DerivedIndex (§5S.3.9)
 }
 
 // ErrStopped is returned by any handle used after the app stopped.
@@ -476,20 +493,21 @@ reviser's cross-cluster list; the owning file wins on detail:
 |---|---|---|---|
 | `Log` | `*slog.Logger` | 05-logging | attr `module=<ID>` |
 | `Metrics` | `*metrics.Scope` | 05-metrics §7 (defined) | module series named `<MetricPrefix>_*` while the app hosts one module, `<MetricPrefix>_<ID>_*` with two or more; `MetricPrefix` is `app.Options.MetricPrefix` (03 §3.6) |
-| `Storage` | `storage.Handles` | 05-storage §5S.3.4; `Aux storage.AuxOpener` field requested (§5S.3.10 already says "exposed to modules through module.Deps") | writes outside `m/<ID>/` and the module's claims refused (R8) |
-| `Tasks` | `tasks.Client` | 05-tasks 5T.3.10 (defined) | the kernel overwrites `StartRequest.Actor` with the ctx principal, or with the module's system actor outside a request, so a module cannot start a run as another actor (rule requested in 05-tasks) |
-| `Events` | `events.Scope` | 05-events (requested: 05-events v1.1.0 hands modules `*events.Bus` and says `Publish` refuses another module's topic, which a shared `*Bus` cannot know; a scope carrying the module ID is what makes that rule enforceable) | `Publish` refuses topics outside this module's catalog entries |
+| `Storage` | `module.StorageHandles` | this file (above); field types 05-storage §5S.3.4, §5S.3.8–§5S.3.10 (defined) | reads and writes outside `m/<ID>/` and the module's claims refused (R8) |
+| `Tasks` | `tasks.Client` | 05-tasks 5T.3.10 (defined, with `RunView`) | the kernel overwrites `StartRequest.Actor` with the ctx principal, or with the module's system actor outside a request, so a module cannot start a run as another actor (05-tasks 5T.3.10, defined) |
+| `Events` | `events.Scope` | 05-events §5E.3.2 (defined: `Bus.Scope(moduleID)`, kernel-only) | `Publish` refuses topics outside this module's catalog entries |
 | `Outbox` | `outbox.Writer` | 05-events §5E.4 (defined) | stages only into topics this module declared `Durable` |
-| `Secrets` | `secrets.Scope` | 05-config §2.3 (requested, SEC-29) | prefix `modules.<ID>.`; integration-instance secrets are reachable only through `integrations.Env.Secrets`, never through a module scope |
-| `Library` | `library.Scope` | 05-library (requested; today `Manager` + caller-supplied `Root.FS(caller)`) | owner is the module, so "role written by its owner only" cannot be spoofed |
-| `Auth` | `auth.Identities` | 05-authn §3.1 (requested: the read-only subset of `*auth.Service`: `User`, `UserByUsername`, `Users`, `PrincipalFrom`) | no credential or session mutation |
+| `Secrets` | `secrets.Scope` | 05-config §2.3 (defined, SEC-29) | prefix `modules.<ID>.`; integration-instance secrets are reachable only through `integrations.Env.Secrets`, never through a module scope |
+| `Library` | `library.Scope` | 05-library (defined, incl. `TransferIn(b, …)` and `PendingTransfers`) | owner is the module, so "role written by its owner only" cannot be spoofed |
+| `Auth` | `auth.Identities` | 05-authn §3.1 (defined: `User`, `UserByUsername`, `Users`, `PrincipalFrom`) | no credential or session mutation |
+| `AuthAdmin` | `auth.Admin` | 05-authn §3.1 (defined: `StageUserMerge`) | every method re-checks the ctx principal (`core:users.manage`, interactive, dominance, owner rule); joins the caller's batch, never commits |
 | `Audit` | `audit.Logger` | 05-rbac §3.5 (defined) | actor from ctx; action namespace `<ID>.` checked |
-| `Health` | `health.Reporters` | 05-health (requested: `Reporter(id ComponentID) (Reporter, error)` for IDs this module registered) | cannot report another component's status |
+| `Health` | `health.Reporters` | 05-health §5H.3.1 (defined: `Reporter(id)`, `ErrNotOwned`) | cannot report another component's status |
 | `HTTP` | `*providerhttp.Registry` | 05-metadata (defined) | instance-scoped throttles and quotas (R5) |
 | `Integrations` | `*integrations.Registry` | 05-metadata M1 (defined) | adapter IDs outside the module prefix refused at registration |
 | `Downloads` | `*download.Pool` | 05-download (defined) | grab/monitor methods are deferred-build (SIMP-12) |
 | `AI` | `*ai.Router` | 05-ai (defined) | only capabilities the module declared |
-| `Backup` | `backup.Ensurer` | 05-backup (requested: the `Ensure` method of `Service` as its own interface) | no restore or prune |
+| `Backup` | `backup.Ensurer` | 05-backup §5B.3.2 (defined) | no restore or prune |
 
 Settings are not in `Deps`: a module reads its own sections through `module.Setting(r, section)`
 handles obtained in `Register`, and core's public settings through the core service handles that
@@ -758,7 +776,7 @@ symbol refers to them.
 | `Deps.Acquire *acquire.Service` | `acquire` (10) | `acquire.Register[T](d.Acquire, mediaType)` in `Register` attaches typed hooks only |
 | `Deps.Indexers *indexer.Pool` | `integrations/indexer` (05-indexer) | `SearchAll`, `RSS`, `Fetch`, `Caps` for module search tasks |
 | `Registrar.ArrFacade(arrfacade.Provider)` | `arrfacade` (08) | at most one per module; checks in P7 (`ProblemFacadeIncomplete`, `ProblemFacadeURLBaseCollision`) |
-| `Registrar.DownloadWatch(...download.Watch)` | `integrations/download` monitor (05-download) | the grab/monitor pipeline; ABO does not use it (SIMP-12) |
+| `Registrar.DownloadWatch(...download.Watch)` | `integrations/download` monitor (05-download phase 2) | the grab/monitor pipeline, built with `acquire`; ABO does not use it (SIMP-12) |
 
 ## 6.5 Lifecycle
 
@@ -1448,7 +1466,7 @@ func TestHello(t *testing.T) {
 | O4 | `metricsstore` and activity-log destinations | 04, 05-metrics, 05-rbac |
 | O5 | The `go`-statement warning list in `archtest` may be noisy for books during K1–K3; ratchet rather than fail | 06 / plan |
 | O6 | Module-level settings that need a restart vs hot reload: per field in `config.Section` tags (`reload:"restart"`) | 05-config |
-| O7 | The scope types requested in §6.4.4 (`events.Scope`, `library.Scope`, `secrets.Scope`, `auth.Identities`, `health.Reporters`, `backup.Ensurer`, `storage.Handles.Aux`) and the kernel's actor stamping in `tasks.Client`: until each owning file defines its type, `Deps` cannot be implemented as written | 05-events, 05-library, 05-config, 05-authn, 05-health, 05-backup, 05-storage, 05-tasks |
+| O7 | (Closed in the integration pass: every `Deps` type of §6.4.4 is defined by its owning file, and 05-tasks states the actor stamping.) | — |
 
 ## 6.14 Alignment with the parallel contract files
 
@@ -1458,9 +1476,9 @@ owning symbol. Where an owning file still describes a superseded path, the row s
 | Contract | What 06 uses (owning symbol) | Reconciliation |
 |---|---|---|
 | 05-http-api v1.1.0 §3, §4.9–§4.10, §8.2 | `Registrar.HTTP() *httpapi.Group`, `httpapi.Handle`, `httpapi.Route`, `httpapi.Invalid(httpapi.Field(...))`, `MountLegacy(httpapi.LegacyMount)` with `ServesSPA`, `Router.SPA`, `httpapi.ReservedSegments()`, subtree claims | `Manifest.LegacyPrefixes` feeds subtree claims; the narrowed rule (no two owners overlap, SIMP-22), `ServesSPA` and `Router.SPA` are 05-http-api's (FE-1) |
-| 05-storage §5S.3 | `Manifest.Storage storage.Spec`; `Deps.Storage storage.Handles` (+ `Aux storage.AuxOpener`); `c/storage/claims/<owner>`; cross-keyspace migration DAG with one checkpoint per boot | P2 and P4 follow 05-storage (DATA-9, DATA-28) |
+| 05-storage §5S.3 | `Manifest.Storage storage.Spec`; `Manifest.DataMigrations []datamigrate.DataMigration`; `Deps.Storage module.StorageHandles{Keyspace, Legacy, Indexes, Aux, Derived}`; `c/storage/claims/<owner>`; cross-keyspace migration DAG with one checkpoint per boot | P2 and P4 follow 05-storage (DATA-9, DATA-28) |
 | 05-tasks v1.1.0 | `Registrar.Tasks`, `Resources`, `Lanes`, `ChangeSink(tasks.ChangeSink)`; `Manifest.TaskLedger` (5T.3.11 held runs); `tasks.Common.Schedule` (+ `tasks.ScheduleFromConfig`); `Deps.Tasks tasks.Client`; `tasks.CPU()`, `RunItems(rc, par, items, fn, opts...)` | closes 05-tasks open item 6 and the `Registrar.Schedule` question (it does not exist). Held runs and the ledger-gate rule of §6.5.3 are 05-tasks mechanics (COR-13) |
-| 05-events v1.1.0 | `Registrar.Topics(...events.TopicSpec)` (one catalog incl. `Durable`, `Notify`, `Realtime`, `Permission`, `Visible`), `Registrar.Subscribe(...events.Subscription)` built with `events.On`/`OnRaw`, `Registrar.OutboxHandler(...outbox.Handler)` incl. `ConsumeRaw`/`ConsumeIntoTaskRaw`, `Manifest.OutboxConsumers`; `Deps.Outbox outbox.Writer`; `Bus.Open`/`Bus.Close` in §6.5.2 | adopted as 05-events states it; one difference: `Deps.Events` is a module-scoped `events.Scope`, not `*events.Bus` (COR-21; requested from 05-events) |
+| 05-events v1.1.0 | `Registrar.Topics(...events.TopicSpec)` (one catalog incl. `Durable`, `Notify`, `Realtime`, `Permission`, `Visible`), `Registrar.Subscribe(...events.Subscription)` built with `events.On`/`OnRaw`, `Registrar.OutboxHandler(...outbox.Handler)` incl. `ConsumeRaw`/`ConsumeIntoTaskRaw`, `Manifest.OutboxConsumers`; `Deps.Outbox outbox.Writer`; `Bus.Open`/`Bus.Close` in §6.5.2 | adopted as 05-events states it, including `Deps.Events events.Scope` (COR-21) |
 | 05-realtime v1.1.0 | catalog topics with `TopicSpec.Realtime` are streamed with no registrar call; `Registrar.Realtime() realtime.Registrar` (`Redact`) and books' legacy projections (`Hub.Projection`) | adopted as 05-realtime states it (SIMP-5) |
 | 05-notify | notify metadata on the catalog entry (`TopicSpec.Notify`) | `Registrar.NotificationTopic` deleted (SIMP-5) |
 | 05-rbac §3.1–§3.5 | `rbac.Permission`, `PermissionSpec{Name, Title, DefaultGrants, Sensitive, …}`, `RoleSeed`, `RoleName` (`"<ns>.<name>"`), `LegacyAlias`, `Requirement`, `Need`, `CoreAdmin`, `audit.Logger` | manifest lists are fed to `Service.Declarer(moduleID)` by the kernel in P1; no `Grant`, `Scope` or `PermissionDef` type exists (COR-16) |
@@ -1479,14 +1497,9 @@ owning symbol. Where an owning file still describes a superseded path, the row s
 
 ## Objections to 03
 
-1. **§3.7 `App.Run` line.** 03 v1.3.0's diagram lists "start executor, scheduler, outbox relay,
-   realtime hub, listeners". The single start/stop order is §6.5.2 here (COR-8: hub first, then hooks,
-   workers, `Bus.Open`, executor, scheduler with the relay via `OnStart`, listeners). Proposed: the
-   diagram line points to 06 §6.5.2 instead of listing an order.
-
-Resolved in 03 v1.3.0 and removed here: the "service container" diagram wording (SIMP-26), the
-Role-ID grammar (`<moduleID>.<name>`, COR-16), the public L0 `version` package (MOD-12),
-`examples/hello` in the tree (MOD-7), and `module`'s layer (L7).
+None open. 03 v1.4.0's §3.7 diagram points at §6.5.2 for the start/stop order (COR-8). Resolved
+earlier: the "service container" wording (SIMP-26), the Role-ID grammar (COR-16), the public L0
+`version` package (MOD-12), `examples/hello` in the tree (MOD-7), and `module`'s layer (L7).
 
 ## Out-of-scope defects found
 
@@ -1528,3 +1541,11 @@ Round 1 (2026-11-04), findings applied to this file:
 - Cross-cutting 1, 2 — deferred-build members; books' legacy mount is permanent.
 - OPS-13 (R-C/R-E request) — `core.shutdown.budget` from 05-health replaces the `core.lifecycle` stop/budget keys.
 - Cross-cluster alignment — `app.Options.Updater *updater.Options` (05-updater); `Deps.Indexers`/`Deps.Acquire`/`AcquireDecl` deferred placeholders named as in 05-indexer/10.
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: R-B request (COR-2, SIMP-17) — `Deps.Storage` is `module.StorageHandles{Keyspace, Legacy, Indexes, Aux, Derived}`, defined here; `Manifest.DataMigrations []datamigrate.DataMigration` added.
+- integration pass: R-B request (DATA-18) — `Deps.AuthAdmin auth.Admin` for the `StageUserMerge` participant (05-authn §3.1).
+- integration pass: R-G owner check (COR-21) — ownership table rows updated from "requested" to "defined" (`events.Scope`, `library.Scope`, `secrets.Scope`, `auth.Identities`, `health.Reporters`, `backup.Ensurer`, actor stamping); O7 closed.
+- integration pass: R-F requests — `Deps.Downloads`, `AI`, deferred `Indexers`/`Acquire`/`AcquireDecl` and the dropped `NotificationTopic` were already applied; `DownloadWatch` marked as 05-download phase 2.
+- integration pass: Objection to 03 (§3.7 diagram) removed: adopted by 03 v1.4.0. Stage range S0–S10.

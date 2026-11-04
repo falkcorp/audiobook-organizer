@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -366,7 +366,7 @@ whose every assignment in the analysed packages is (a); (c) a field of an option
 `//mediacore:required` whose owner calls `Parallelism.Validate` when the options are constructed
 (e.g. 05-indexer's search options). (b) and (c) admit pass-through, so core's own
 `RunItems(rc, o.Parallelism, …)` is legal (COR-23). It flags `tasks.Parallelism{}` literals, a zero
-`var`, and `Sequential("")` / `Fixed(n, "")`. See "Objections to 03" for the R7 text this needs.
+`var`, and `Sequential("")` / `Fixed(n, "")`. 03 R7 (v1.4.0) states the same rule.
 
 ### 5T.3.3 Run context
 
@@ -743,10 +743,60 @@ type StartRequest struct {
 	Priority       Priority
 	PlanRef        RunID  // Fixer / Approval.PlanRequired
 	Parent         RunID
-	Actor          Actor
+	Actor          Actor  // on Client (module handle) overwritten by the kernel, see below
 	Trigger        Trigger
 	IdempotencyKey string // dedupe window core.tasks.idempotency_ttl; the outbox relay always sets it
 }
+
+// RunView is the read model of one run: what Client.Get/Runs return, what
+// GET /runs[/{id}] serialise, and the payload of core.task.run-changed.v1.
+type RunView struct {
+	ID       RunID
+	Kind     Kind
+	Mode     Mode
+	State    RunState
+	Held     bool   // computed at read time, never stored (5T.3.11)
+	Reason   string // fixed token for interrupted_*/failed/timed_out/canceled states ("" otherwise)
+	Actor    Actor  // the stamped actor
+	Trigger  Trigger
+	Parent   RunID
+	PlanRef  RunID
+	Created  time.Time
+	Started  time.Time // zero until first dispatch
+	Finished time.Time // zero until terminal
+	Done     int    // completed items (Batch/Fixer/RunItems; Task: last reported)
+	Total    int    // 0 = unknown
+	Current  string // current item label; user-identifying text redacted per 05-realtime
+}
+
+// RunState is the stored state of a run. Terminal: succeeded, failed,
+// timed_out, canceled, interrupted_dropped. "held" is not a state (5T.3.11).
+type RunState string
+
+const (
+	StateQueued              RunState = "queued"
+	StateWaitingDeps         RunState = "waiting_deps"         // Requires / NotWhile not yet satisfied
+	StateRunning             RunState = "running"
+	StateStopping            RunState = "stopping"             // Reason: cancel | quiesce | shutdown
+	StateInterrupted         RunState = "interrupted"          // resume policy decides at next boot (5T.3.6)
+	StateInterruptedQuiesced RunState = "interrupted_quiesced" // stood down; re-queued when the hold is released (5T.3.7)
+	StateAwaitingDecision    RunState = "awaiting_decision"    // ResumeAsk
+	StateSucceeded           RunState = "succeeded"
+	StateFailed              RunState = "failed"
+	StateTimedOut            RunState = "timed_out"
+	StateCanceled            RunState = "canceled"
+	StateInterruptedDropped  RunState = "interrupted_dropped"  // ResumeDrop, adopt_over_cap, or Decide(Drop)
+)
+
+func (s RunState) Terminal() bool
+
+// Actor stamping (COR-21). On Client.Start — the module handle,
+// module.Deps.Tasks — the kernel overwrites req.Actor with the principal in
+// ctx (a request) or, outside a request, with the calling module's system
+// actor; a module therefore cannot start a run as another actor, and
+// Perms.Start is checked against the stamped actor. Only kernel-internal
+// callers (Executor.Start/StartIn: the HTTP route, the scheduler, the outbox
+// relay) set Actor themselves.
 
 // Executor is kernel-only (core/kernel holds it; apps see Client).
 type Executor interface {
@@ -936,11 +986,13 @@ read-only history. Runs created by the new release are invisible to the previous
 rollback and roll-forward they continue under their `ResumePolicy`, and at worst the previous release
 re-runs a prerequisite or a scheduled kind, which is idempotent by contract.
 
-**Compat level and contract (OPS-7).** The first boot that adopts makes `c/tasks/` the truth, so it
-raises the stamped level through the single compat/format guard ([05-storage](05-storage.md)
-§5S.3.7, SIMP-18). [09](09-abo-on-core.md) numbers that level (stage S5) and the contract C5 that
-removes the reconcile and the mirrors; the contract requires the stamped level to prove the adoption
-ran (cross-cutting resolution 6). This file owns the mechanism; 09 references it. Before the upgrade,
+**Compat level and contract (OPS-7).** The first boot that adopts makes `c/tasks/` the truth, and it
+records that in the **adopt-step-applied record** of its adopt step (`c/storage/ks/core/applied/<v>`,
+[05-storage](05-storage.md) §5S.3.5); the adopt step is `Additive` and raises no level. The stamped
+level of the single compat/format guard (§5S.3.7, SIMP-18) is raised only by a `Breaking` step: here
+the contract C5 ([09](09-abo-on-core.md); it raises `core` to 4), which removes the reconcile and the
+mirrors and lists the adopt step in `Adopts`, so it runs only on a store whose applied record proves
+the adoption ran (cross-cutting resolution 6). This file owns the mechanism; 09 references it. Before the upgrade,
 the operator preflight (09 P-commands) counts `opv2:act:`/`interrupted_*`/`waiting_deps` rows with
 their record sizes, and `--print-upgrade-blockers` names the runs that would be dropped as over-cap,
 so they can be finished or canceled on the previous release first.
@@ -1119,17 +1171,8 @@ for the compatibility window (09 §9.2.1) for dashboard continuity, then removed
 
 ## Objections to 03
 
-1. **R7 wording.** "Fails any call whose parallelism argument is not a call to a `tasks`
-   constructor" rejects pass-through (core's own `RunItems(rc, o.Parallelism, …)`), and code that holds
-   no `*RC` cannot call `RunItems` at all (COR-23). Proposed R7 text: "Batch/Fixer parallelism is
-   validated at registration. `RunItems`, `RunSeq` and `ForEach` take a required positional
-   `tasks.Parallelism` with no valid zero value; a zero value returns `*ItemsError` wrapping
-   `tasks.ErrNoParallelism` before any item. `archtest.RunItemsDeclareParallelism` accepts a
-   constructor call, a `Parallelism`-typed value whose every assignment is a constructor call, or a
-   required options field validated at construction." The error name already matches 03.
-2. **Task-kind segment grammar.** 03 §3.6 allows `[a-z0-9_-]+` segments; this spec uses
-   `[a-z][a-z0-9-]*`. No ABO op ID contains an underscore (`internal/server/testdata/op_ids.golden`,
-   288 lines), so the stricter rule is safe; 03 should adopt it (COR-26).
+None open. 03 v1.4.0 adopted both v1.1.0 items: R7's wording (pass-through, `ForEach`, one
+return shape, COR-23) and the `[a-z][a-z0-9-]*` task-kind segment grammar (COR-26).
 
 ## Out-of-scope defects found
 
@@ -1172,3 +1215,10 @@ Round 1 findings applied to this file (v1.1.0):
 - SIMP-7 — compat aliases and legacy windows reference 09 §9.2.1.
 - SIMP-17 — `IO` merged into `Fixed(n, reason)`; `MaxFixed`; no `tasks.Network`.
 - SIMP-21 — `Pipeline` shape dropped (amendment A7).
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: R-G request (COR-21) — `RunView` and `RunState` defined (states as used across this file); kernel stamps `StartRequest.Actor` on `Client.Start`.
+- integration pass: R-H request (OPS-7) — §5T.6: the adopting boot records the adopt-step-applied record; only contract C5 raises the level (to 4).
+- integration pass: Objections to 03 removed: both adopted by 03 v1.4.0 (R7 text, task-kind grammar).
+- integration pass: Verified already present (R-F/R-D requests): `ScheduleFromConfig`, `Fixed(n, reason)`, `Resource = entity.Ref`, no `tasks.Network`, SEC-9 start floor with `AllOf(books:scan, books:view)`.

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -237,6 +237,7 @@ type Deps struct {
 	Store   storage.Keyspace // c/rbac/
 	Audit   audit.Logger
 	OnChange func(generation uint64) // kernel publishes core.rbac.changed.v1 on the bus; rbac never imports events
+	Revocations backup.RevocationJournal // Append(role.removed) before DeleteRole or a permission removal commits (05-backup §5B.3.6)
 	Log     *slog.Logger
 	Metrics *metrics.Scope   // "mediacore.rbac" (05-metrics)
 }
@@ -713,7 +714,11 @@ Data movement follows cross-cutting resolution 5 of the round-1 dispositions and
 - **Native-only data** (canonical scopes with no exact legacy form, a seed role's
   `Added`/`Removed`/`PendingSeed`, `Origin=custom`, tombstones) lives in core **side records**
   keyed by the legacy ID (`c/rbac/side/role/<id>`, `c/auth/side/apikey/<id>`) and is merged in at
-  rebuild. A side record whose legacy row was revoked or deleted is dropped.
+  rebuild. A side record whose legacy row was deleted, or revoked/disabled by the previous build, is
+  dropped — **except** a row the mirror itself wrote disabled (`SideRecord.MirrorDisabled`) that is
+  still `Fresh` (05-storage §5S.3.11): that is a native-only key and stays active natively, so a narrow
+  native API key survives every boot of the new build; once the previous build rewrites the row,
+  legacy wins and the side record is dropped.
 - **Roles** translate legacy `Permissions` through §6.1 into `SeedPermissions` for seed roles (diff
   empty — ABO never allowed edits) or `Added` for any non-seed row (09 probe P2: any atom outside
   §6.1 makes boot refuse naming the role — fail-closed, owner maps it). The mirrored legacy row
@@ -722,8 +727,10 @@ Data movement follows cross-cutting resolution 5 of the round-1 dispositions and
 - **API keys never widen on rollback (SEC-1).** In the legacy binary an empty scope list means
   "every permission of the owner's roles" (`middleware/auth.go:405-408`). A native key is mirrored
   with legacy atoms **only when the atoms re-expand to exactly its canonical scopes**; otherwise the
-  legacy row is written **revoked** (`Revoked=true`, reason `"no exact legacy scope set"`) and the
-  canonical scopes live in the side record, so the old build can never read the key as unscoped. A
+  legacy row is written **disabled** (`LegacyProjection{Disabled: true, Reason: "no exact legacy scope
+  set"}`, recorded as `SideRecord.MirrorDisabled`, 05-storage §5S.3.11) and the canonical scopes live
+  in the side record, so the old build can never read the key as unscoped, while the new build keeps
+  serving it natively. A
   legacy key with empty scopes is adopted as `LegacyFullScope=true` and mirrored back unchanged.
   Property test `TestMirror_NarrowKeyNeverBecomesEmptyScope`: for random native scope sets, the
   legacy effective set is ⊆ the native effective set, and empty only for `LegacyFullScope`.
@@ -765,10 +772,13 @@ Routine successful reads are **not** audited (that is the access log's job); dow
 diagnostics, backups and the audit export are, because each copies sensitive data off the host.
 
 **Restore does not erase its own trail (SEC-17).** The restore record is written to 05-backup's
-out-of-DB restore journal (cross-cutting resolution 8), and after the restore swap the kernel copies
-the pre-swap `c/audit/` records newer than the archive's `CreatedAt` from the undo copy into the
-restored store, then appends `core.system.backup.restored`, before listeners open. Boot fails if the
-copy fails.
+out-of-DB restore journal (cross-cutting resolution 8). `audit` and `rbac` each implement
+`backup.RestoreHook` (05-backup §5B.3.2), run by the kernel after the swap and before listeners open:
+audit's hook opens `rc.Previous("core/audit")` — the read-only view of the pre-swap store limited to
+`c/audit/` — copies every record newer than `rc.Manifest.CreatedAt` forward into the restored store,
+appends the staged and applied records of `rc.Journal`, then `core.system.backup.restored`; when
+`rc.Previous` is nil (no live store before the restore) only the journal records are appended. rbac's
+hook re-applies the `role.removed` entries of `rc.Revocations`. Boot fails if either hook fails.
 
 ### 7.2 Storage layout
 
@@ -970,13 +980,8 @@ option governed by the compat ledger (§6.3, SIMP-7).
 
 ## Objections to 03
 
-1. **Amendment:** R6's "explicit `rbac.Public` / `rbac.AnyAuthenticated`" should note that
-   `AnyAuthenticated` excludes confined credentials (§4.10); otherwise a worker or facade key could
-   reach every "any authenticated" route, which is exactly the hole the fingerprint-worker path
-   confinement patches today (`internal/server/middleware/auth.go:265-298`).
-
-(v1.0.0's objections on role IDs and audit action names are resolved: 03 v1.3.0 §3.6 has both rows,
-with module seed roles `<moduleID>.<name>` and custom roles `custom.<slug>`, COR-16.)
+None open. 03 v1.3.0+ R6 states that `AnyAuthenticated` never admits a confined credential (the
+v1.1.0 amendment), and §3.6 has the role-ID and audit-action rows.
 
 ## Out-of-scope defects found
 
@@ -1025,3 +1030,10 @@ Round 1 (2026-11-04), findings applied to this file:
 - SIMP-7 — legacy alias window references 09 §9.2.1 / compat ledger; runtime flag removed (§6.3, §10).
 - SIMP-20 — audit hash chain, anchor and verify route dropped (§7.4).
 - Correction found while applying SEC-2 — read-only admin routes mapped to non-AuthRequired scopes so auth-off reach is unchanged (§6.2; evidence `wire_admin_role.go:19-57`).
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: R-B request (SEC-17) — restore copy-forward is audit's `backup.RestoreHook`, reading the pre-swap `c/audit/` through `RestoreContext.Previous`; rbac's hook re-applies `role.removed`; `Deps.Revocations backup.RevocationJournal`.
+- integration pass: R-H request (SEC-1, DATA-3) — §6.3: mirror-disabled keys that are still `Fresh` keep their side record; the legacy row is written **disabled** (`LegacyProjection.Disabled` / `SideRecord.MirrorDisabled`), matching 05-storage's terms.
+- integration pass: Stale objection to 03 (R6 confinement) removed: applied in 03.
+- integration pass: Verified already present (R-F request): `core:integrations.read`, implied by `core:integrations.manage`.

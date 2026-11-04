@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -31,7 +31,7 @@ carry no window logic of their own.
 | C8 | Every recoverable secret is encrypted at rest by `core/secrets` with **one keyring design** (AES-256-GCM, key IDs in every record, AAD = app + name, a separate derivation key); config fields are `secrets.Ref`, never strings. Rotation and prune tooling are **deferred**; the format already carries key IDs so it never changes. Verifiers (passwords, API keys, session ids) are hashed by `auth`, never stored in `secrets`. | `raw/10` G12: 4 of at least 10 secret-bearing fields are encrypted, and 3 of those 4 are also written in plaintext to a mirror YAML file (`persistence.go:168-178`). Rotation does not exist today (`raw/10` §7). |
 | C9 | Secrets are **write-only** over the API: the UI receives `{set, source, updated_at, fingerprint}`, never a mask. | Masks reveal the last 2 characters (`internal/database/settings.go:250-277`) and force echo-detection logic (`update_service.go:353-373`). |
 | C10 | **One JSON-Schema reflector**: `github.com/google/jsonschema-go` v0.4.3, pinned exactly, with a config-owned override table; [05-http-api](05-http-api.md) reuses the same table for OpenAPI. | §1.10.2; verified 2026-11-04. |
-| C11 | **Config holds no integration instances.** Instance records (kind, instance, settings, `secrets.Ref`s) live in the `integrations` store ([05-metadata](05-metadata.md) M1, keyspace `c/integrations/instances/`). Config only reads operator-file instance blocks raw and hands them over (§1.3.3 `Passthrough`). | One store for one fact (SIMP-4): the Deluge password had four destinations across the specs. |
+| C11 | **Config holds no integration instances.** Instance records (kind, instance, settings, `secrets.Ref`s) live in the `integrations` store ([05-metadata](05-metadata.md) M1, keyspace `c/integrations/instances/`). Config only reads the operator-layer values (file, env, flag) of the legacy integration-bound keys raw, at their `integrations.<kind>.<instance>.<field>` paths, and hands them over (§1.3.3 `Passthrough`); integrations turns them into read-only `Origin=pinned` instance rows (05-metadata M1.4 step 2). There is no `core.integrations.<kind>.instances.<id>` config form. | One store for one fact (SIMP-4): the Deluge password had four destinations across the specs. |
 | C12 | This file owns the **config and secrets migration mechanism** (§1.12.2); 09 S3/C3 sequence it and reference it. | Specified twice with contradictory semantics before (SIMP-15, OPS-9). |
 
 ---
@@ -248,8 +248,9 @@ type Options struct {
 	FilePath    string            // operator YAML file; "" = none. Read-only: core never writes it.
 	Flags       map[Path]string   // ONLY flags the operator explicitly set (FromFlagSet / app adapter)
 	BootRecord  *os.Root          // opened on core.paths.state_dir; holds config.boot.json (§1.3.5)
-	Passthrough func(Path) bool   // operator-layer paths config reads raw and does not own (v1: file-defined
-	                              // integration instances, core.integrations.<kind>.instances.<id>.*)
+	Passthrough func(Path) bool   // operator-layer paths config reads raw and does not own (v1: the legacy
+	                              // integration-bound keys of §1.12.3, at the integrations.<kind>.<instance>.<field>
+	                              // paths of 05-metadata M1.10's import table; their env aliases, e.g. OPENAI_*, are permanent)
 	OnLegacyUse func(a Alias, entry string) // kernel wires this to compat's legacy-use counter; entry ∈ file, env, blob, api
 	Logger      *slog.Logger
 	Metrics     *metrics.Scope    // core scope "mediacore.config" (05-metrics)
@@ -473,11 +474,11 @@ declares keys; each key table in the 05 files carries a **Protection** column.
 
 | ABO class today | Protection | Keys (core examples; owning spec tables each key) |
 |---|---|---|
-| `FieldSignIn` | `ProtectAdmin` | everything that decides who signs in and how: `core.auth.*` sign-in keys (auth on/off, basic auth, OAuth/OIDC providers, client ids and secrets, redirect base, allowed e-mails, default role, CF Access team and audience) ([05-authn](05-authn.md)); the books ABS token sign-in switch |
+| `FieldSignIn` | `ProtectAdmin` | everything that decides who signs in and how: `core.auth.*` sign-in keys (auth on/off, basic auth, OAuth/OIDC providers, client ids and secrets, redirect base, allowed e-mails, default role) ([05-authn](05-authn.md)); the books ABS token sign-in switch and books' Cloudflare Access keys `modules.books.identity.{cf_access_team_domain, cf_access_aud}` (ABO's `internal/cfaccess`, 04 §2.4) |
 | — (new, SEC-6) | `ProtectAdmin` | `core.http.{trusted_proxies, client_ip_header, peer_allowlist, cors.allowed_origins, basic_gate.*}` ([05-http-api](05-http-api.md)); `core.updater.{mode, channel, restart_*}` ([05-updater](05-updater.md)); OTLP endpoints and `core.metrics.{path, listen}` ([05-metrics](05-metrics.md)); `core.integrations.egress.lan_allow` (SEC-15; see below) |
 | `FieldExecutable` | `ProtectAdmin` | a program the server runs, or the managed-copy-vs-path switch |
 | `FieldServerPath` | `ProtectAdmin` | a path the server reads, writes, scans or serves (`core.log.file.path`, library and tool paths) |
-| owner trust root (`update_service.go:770-800`) | `ProtectOwner` | the owner identity (`core.auth.owner.*`) |
+| owner trust root (`update_service.go:770-800`) | `ProtectOwner` | the owner identity: books' `modules.books.identity.owner_email` (the e-mail ABO's `internal/cfaccess` proves; core ships no owner verifier, 05-authn §4.8) |
 | `FieldDatabase` | `ProtectOperator` | `core.storage.path`, `core.paths.*` |
 
 `core.integrations.egress.lan_allow` — `[]string` of CIDRs or host names, default `[]`, restart-free, owned and
@@ -803,11 +804,12 @@ the mirror is active (SEC-20).
 
 The per-key golden `core/config/testdata/abo_keys.golden` is generated by walking ABO's `Config` and is owned by
 [09-abo-on-core](09-abo-on-core.md). Of the 173 top-level keys (nested sub-keys move with their parent), 64
-match platform families and 109 are audiobook; 6 of the 64 (Cloudflare guest provisioning) stay app-side per
-`raw/10` G11. Of the remaining 58, **9 become integration instances** (rows marked *integrations*), leaving
-**49 → `core.*`**. Books families that become integration instances (Deluge web `deluge_*`, `metadata_sources`,
+match platform families and 109 are audiobook; 9 of the 64 stay app-side per `raw/10` G11: 6 Cloudflare guest
+provisioning keys and the 3 Cloudflare Access identity keys (`cf_access_team_domain`, `cf_access_aud`,
+`owner_email`, `config.go:1603-1613`, read by ABO's `internal/cfaccess`, 04 §2.4). Of the remaining 55, **9 become
+integration instances** (rows marked *integrations*), leaving **46 → `core.*`**. Books families that become integration instances (Deluge web `deluge_*`, `metadata_sources`,
 the Google Books and Hardcover keys) are identified per key in the golden and in 05-metadata M1's import table,
-so **≤115 → `modules.books.*`**.
+so **≤118 → `modules.books.*`**.
 
 | ABO flat key family | Count | New home | Owner spec |
 |---|---|---|---|
@@ -815,7 +817,8 @@ so **≤115 → `modules.books.*`**.
 | `api_rate_limit_per_minute`, `json_body_limit_mb`, `upload_body_limit_mb`, `enable_rate_limit`, `public_base_url`, `tunnel_connector_addrs`, `allowed_peer_cidrs`, `login_saturated_*` | 9 | `core.http.*` | 05-http-api |
 | `log_level`, `log_retention_days` | 2 | `core.log.level`, `core.log.journal.retention_days` | 05-logging |
 | `otel_*` (4), `telemetry_environment` | 5 | `core.metrics.*`, `core.tracing.*` | 05-metrics |
-| `enable_auth`, `basic_auth_*`, `oauth_*`, `cf_access_*`, `owner_email`, `bootstrap_key_ttl*`, `write_startup_readonly_key` | 18 | `core.auth.*` | 05-authn |
+| `enable_auth`, `basic_auth_*`, `oauth_*`, `bootstrap_key_ttl*`, `write_startup_readonly_key` | 15 | `core.auth.*` | 05-authn |
+| `cf_access_team_domain`, `cf_access_aud`, `owner_email` | 3 | `modules.books.identity.*` | app-side (G11; 09 S4) |
 | `cf_account_id`, `cf_guests_policy_id`, `cf_policy_api_token`, `cf_guest_service_tokens`, `cf_service_auth_policy_id`, `invite_email_service_token` | 6 | `modules.books.cfguests.*` | app-side (G11) |
 | `smtp_*` | 5 | *integrations*: a `notify/<id>` mail instance | 05-notify, 05-metadata M1 |
 | `backup_dir`, `backup_max_total_bytes`, `backup_compression[_level]`, `backup_retention_days` | 5 | `core.backup.*` | 05-backup |
@@ -1105,6 +1108,12 @@ so a lost key file loses the secrets. Rules:
   state dir). It records the exported key IDs and time in `<state_dir>/secrets.keyring.exported` (no key
   material). Health warning `secrets_keyring_not_exported` stays raised while any key in the keyring is missing
   from that record.
+- **Host-loss restore** ([05-backup](05-backup.md) §5B.3.3 procedure): the operator copies the exported file
+  into the new state directory as `<state_dir>/secrets.keyring` (mode 0600) before the first start; there is
+  no import command, and the next `Open` loads it as the keyring-present case above. Copying it back is
+  **optional**: without it the restore still runs (05-backup `AcceptUnreadableSecrets`), the data restores,
+  and the secrets it cannot decrypt show "must be re-entered". The archive's MAC is then unverifiable, so the
+  restore is foreign (05-backup B5).
 - Losing the state directory without an exported keyring means re-entering secrets (each affected secret shows
   "must be re-entered"); the data restores. Restore reports key IDs referenced by restored records
   (`KeyIDsReferenced`, computed by scanning, not from a manifest) that the current keyring lacks, before it
@@ -1256,3 +1265,10 @@ reported through `Options.OnLegacyUse` (§1.3.6); no R4 change is needed.
 - COR-26 — `Options.AppID` documented as `app.Options.AppID`.
 - SEC-15 (R-F request) — §1.3.7: `core.integrations.egress.lan_allow` classified `ProtectAdmin` (request asked `ProtectInteractive`; SEC-15 fix says admin).
 - SIMP-6 — §1.6, §1.12.3: no timers in config; `scheduled.*` via `tasks.ScheduleFromConfig`; rotate schedule removed.
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: R-H request — one rule for `OPENAI_*` and the other integration-bound env names: permanent aliases onto `Passthrough` paths `integrations.<kind>.<instance>.<field>`; 05-metadata applies `Origin=pinned` rows while an operator value is set (C11, §1.3.3).
+- integration pass: R-H request (G11) — Cloudflare Access keys (`cf_access_team_domain`, `cf_access_aud`, `owner_email`) are books keys `modules.books.identity.*`; protection table and §1.12.3 counts updated (46 → `core.*`, ≤118 → books).
+- integration pass: R-B request (SIMP-9) — §2.4: host-loss restore copies the exported keyring file into the state directory; copying it is optional (secrets then re-entered, restore foreign).
+- integration pass: Verified already present (R-D/R-E requests): `ProtectAdmin` defined; SEC-28 `DeriveKey` from a derivation key stable across data-key rotation; SEC-29 name grammar and `secrets.Scope`; no integration-instance rows; `core.integrations.egress.lan_allow` is `ProtectAdmin` (the R-F request for `ProtectInteractive` stays rejected per SEC-15).

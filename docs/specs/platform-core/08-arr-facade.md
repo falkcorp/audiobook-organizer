@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/08-arr-facade.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 6d9b089a-fb08-4087-9ccd-43b9aa4ec555 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -14,7 +14,7 @@ apps implement it per resource; there is **no** commitment to Sonarr/Radarr pari
 database, or to endpoints no named client uses (N3).
 
 **Build status: deferred-build** (03 §3.3, cross-cutting resolution 1, SIMP-1). This file is the
-contract at proof depth (D5). No S0–S11 stage builds `arrfacade`; it is built with the first TV/Movies
+contract at proof depth (D5). No S0–S10 stage (09 §9.3) builds `arrfacade`; it is built with the first TV/Movies
 app. During the extraction only two things exist: core's reservation of `/api/v3/` (05-http-api
 §4.1) and the move of ABO's conformance engine to core (§8.14). The `module` hooks it needs
 (`Registrar.ArrFacade`, the facade problem kinds) are deferred-build members of 06 §6.4.9.
@@ -599,3 +599,8 @@ Round 1 (2026-11-04), findings applied to this file:
 - COR-27 — `LibraryRootFolders(library.Scope, library.RootFilter)`, `CoreIndexers(*indexer.Pool, *integrations.FacadeWriter, *IDMap)`, `CommandSpec.Kind tasks.Kind`.
 - COR-14 — URL-base collision checked in P7, after config load.
 - COR-1 — `Registrar.ArrFacade`, `Deps.Indexers` referenced as 06 §6.4.9 deferred-build members.
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: R-H request — stage range S0–S10.
+- integration pass: Verified already present (R-F/R-G request): `integrations.FacadeWriter`, `*indexer.Pool`, `IDMap` over `entity.Ref`.

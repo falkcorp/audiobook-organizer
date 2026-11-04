@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/14-risks-open-questions.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: e270beb6-8eea-48b1-8397-4ef4ec709956 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -14,7 +14,7 @@ cited by ID (`docs/plans/platform-core/reviews/spec-round-1-*.md`; dispositions 
 
 | # | Risk | Likelihood / impact | Evidence | Mitigation (where specified) |
 |---|---|---|---|---|
-| K1 | **Scale of the books-module residue.** ~620k LOC and 154 packages stay in ABO; 333 `Store` methods remain books-owned; 114 + ~22 test files use full-store mocks. The extraction can stall halfway with two half-systems. | High / High | [04](04-package-mapping.md), `raw/04-database-store.md` | Strangler stages each end shippable ([09](09-abo-on-core.md)); adapters keep old call sites compiling; ratchet tests stop regressions; the plan sequences the keystone (`database`, `config`, `server` wiring) first. Scope is smaller than v1.0.0 assumed: gin retirement and ABO-global removal are no longer stages (02 N7, 03 R5). |
+| K1 | **Scale of the books-module residue.** ~620k LOC and 160 packages stay in ABO (04 §8 note 6: 55 leave, 2 new paths); 333 `Store` methods remain books-owned; 114 + ~22 test files use full-store mocks. The extraction can stall halfway with two half-systems. | High / High | [04](04-package-mapping.md), `raw/04-database-store.md` | Strangler stages each end shippable ([09](09-abo-on-core.md)); adapters keep old call sites compiling; ratchet tests stop regressions; the plan sequences the keystone (`database`, `config`, `server` wiring) first. Scope is smaller than v1.0.0 assumed: gin retirement and ABO-global removal are no longer stages (02 N7, 03 R5). |
 | K2 | **Data compatibility during identity-family adoption** (users, roles, sessions, API keys copied into `c/...`). A rollback to the previous release must still open and read the DB (gate G5). | Medium / Critical | [05-storage](05-storage.md), [09](09-abo-on-core.md); DATA-1, DATA-3, SEC-1 | Legacy rows stay authoritative for the window; the new build writes legacy and core rows in one batch (including the `idx:` rows the old build resolves through) and rebuilds the core copy from legacy at every boot (02 decision 13). The settings families (`setting:`, `preference:`, `pref:`) are not adopted; core config overrides use `c/config/`. One store-level compatibility guard (stamped level + sidecar + flag + rollback-script check, owned by 05-storage); pre-migration checkpoint; over-cap families fall back to a resumable, checkpointed data migration with dry-run. |
 | K3 | **Two auth stacks, permanently.** ABO's gin router stays mounted through `httpapi.MountLegacy` with gin's own auth chain inside (02 N7), next to core `httpapi`+`rbac`. What v1.0.0 treated as a transition is now the steady state. | Medium / High | [05-rbac](05-rbac.md), [05-http-api](05-http-api.md); SIMP-2, SEC-13, OPS-11 | Core perimeter middleware (peer allowlist, recovery, headers, CSRF, rate limit) wraps the legacy mount; the auth engine swap happens in exactly one stage (09 S4); the permission-equivalence test (allow/deny identical across all 572 routes for every seed role) becomes a **permanent** CI test; every legacy route is in a reviewed manifest with a permission (03 R6); fail-closed registration; live defects hot-fixed independently (`todo.d/2026-11-04_platform_core_followups.md`). |
 | K4 | **Toolchain churn:** several "latest" releases are days old (bleve v2.6.2, @babel/core 8, vitest 5.1, plugin-react 6.2.1); TypeScript 7 has no JS API so lint and `openapi-typescript` stay on the TS 6 alias; react-router 8 removes `react-router-dom` (121 ABO files). | High / Medium | [13 §13.7](13-toolchain.md) | 14-day release-age rule, owned by 13 §13.6 and binding on every version target in the spec (FE-21); exceptions E1–E4 recorded with exit conditions; the react-router 8 migration is a separate ABO series that **precedes** shell adoption (13 E4, FE-2, SIMP-25). |
@@ -25,11 +25,12 @@ cited by ID (`docs/plans/platform-core/reviews/spec-round-1-*.md`; dispositions 
 | K9 | **Licence mismatch with D9.** The repo is PolyForm Noncommercial 1.0.0 (`LICENSE`), which is source-available, not OSI open source; core's history inherits it. | Certain / Medium | `LICENSE:1`, [12](12-repo-split.md) open item 1 | Owner decision Q-A below, before the split. |
 | K10 | **Production unknowns** (key counts per family, session counts, op-history size) drive whether adoption rebuilds fit the batch cap or take the resumable path. | Certain / Low | [05-storage](05-storage.md), [09](09-abo-on-core.md) | Both branches designed; read-only census commands listed in 09 for the owner to run. |
 | K11 | **The first core wave breaks the Docker and web builds.** Both Dockerfiles copy only `go.mod go.sum` before `go mod download` (`Dockerfile:54-55`, `Dockerfile.build-cgo:52-53`), which fails once the root `replace`s `./core` (MOD-1 X1); eleven-plus `cd web && npm ci` entry points break once `web/` depends on built `@mediacore/*` (MOD-9, FE-13). Prereleases do not build images, so only the production release would find out. | High (if unmitigated) / High | MOD-1, OPS-1, MOD-9, FE-13; `.github/workflows/prerelease.yml:48` (`docker-enabled: false`) | S0 updates both Dockerfiles (copy `core/go.mod`, `core/go.sum`), `.dockerignore`, and every `npm ci` entry point (one `scripts/ci/build_web.sh` behind `make web-deps`), and adds a PR job that builds the image (03 §3.2 item 4; 09 S0 owns the list and the done-check). |
-| K12 | **Releases are skipped.** Installs jump from release N to the latest (the updater fetches the latest release, Docker users pull `:latest`, archives from old releases are restored), so a contract step can meet a store that never ran the matching expand/adopt and delete legacy rows that were never adopted; a build can also pass the guard yet be unable to read the config format a contract wrote. | Medium / Critical | OPS-2, OPS-3; `internal/updater/updater.go:295` (fetches `releases/latest`) | Every contract step requires the stamped level to prove the prior expand/adopt ran on **this** store; otherwise it adopts first or refuses to start with a clear message; legacy data is never deleted on an unadopted store; compatibility levels are defined by reader capability (09 §9.2.1, §9.2.2, §9.5). |
-| K13 | **The identity adoption model has deliberate costs.** Rebuilding the core identity copy from legacy at every boot costs boot time that grows with the families; an API key whose scopes have no exact legacy equivalent is mirrored **disabled**, so it stops working after a rollback (never widened); sessions are not mirrored raw, so a rollback costs one re-login. | Certain / Medium | DATA-3, DATA-4, DATA-5, SEC-1, SEC-19, OPS-19 | Accepted trades of the round-1 resolution (dispositions, cross-cutting resolution 5). Boot-time budget covers the rebuild (09); over-cap falls back to the resumable path (K10); the disabled-key reason is recorded so the operator can see why a narrowed key stopped working; rollback runbooks state the re-login. |
+| K12 | **Releases are skipped.** Installs jump from release N to the latest (the updater fetches the latest release, Docker users pull `:latest`, archives from old releases are restored), so a contract step can meet a store that never ran the matching expand/adopt and delete legacy rows that were never adopted; a build can also pass the guard yet be unable to read the config format a contract wrote. | Medium / Critical | OPS-2, OPS-3; `internal/updater/updater.go:295` (fetches `releases/latest`) | Every contract step lists its adopt step (`Adopts`) and needs that step's applied record on **this** store; otherwise it runs the adopt step first, and only a build that no longer registers it refuses to start (`ErrAdoptMissing`, naming the release to install). A contract whose expand level has not served the store long enough (`RequiresServed`) is **deferred** — the build boots and retries later, never fails boot (05-storage §5S.3.5). Legacy data is never deleted on an unadopted store; compatibility levels are defined by reader capability (09 §9.2.1, §9.2.2, §9.5). |
+| K13 | **The identity adoption model has deliberate costs.** Rebuilding the core identity copy from legacy at every boot costs boot time that grows with the families; an API key whose scopes have no exact legacy equivalent is mirrored **disabled** — it keeps working natively while the side record is `Fresh` (05-storage §5S.3.11) and stops working only after a rollback (never widened); sessions are not mirrored raw, so a rollback costs one re-login. | Certain / Medium | DATA-3, DATA-4, DATA-5, SEC-1, SEC-19, OPS-19 | Accepted trades of the round-1 resolution (dispositions, cross-cutting resolution 5). Boot-time budget covers the rebuild (09); over-cap falls back to the resumable path (K10); the disabled-key reason is recorded so the operator can see why a narrowed key stopped working; rollback runbooks state the re-login. |
 | K14 | **Dependency skew between the binary and core CI.** The root build takes the MVS maximum over the root and `core/go.mod`; core CI tests only core's requirements. | Medium / Medium | MOD-11 | Dependabot gomod for `/` and `/core` in one group; `scripts/ci/check_module_skew.py` (12 S4(c), 03 §3.2 item 6). |
 | K15 | **A dropped legacy env name silently points ABO at a new, empty database** (`DATABASE_PATH` is the only DB-path source in the shipped unit and plist), or turns basic auth off for compose users. | Low after mitigation / Critical | OPS-5 | Env names that are the only source of a required setting in a shipped deploy file are **permanent** (compat ledger "permanent" class); boot refuses to start on an empty store when a legacy DB path is set but unread (09, 05-config). |
 | K16 | **The live restore path stays broken while contracts start deleting rows.** Today's restore extracts over the live store under a running engine; the staged restore arrives only with backup's stage. | Medium / Critical | OPS-15 | Staged restore pulled forward (or live-target extraction disabled with an offline runbook) and "staged restore shipped" made a precondition of the identity and config contract steps (09 §9.5, 05-backup). |
+| K17 | **Merging single-app installs into one store needs a new core contract** (DATA-30). Two installs each hold `c/auth/`, `c/rbac/`, `c/tasks/`, `c/config/`, `c/secrets/` under different keyrings, plus their own `c/storage/install`, bookkeeping, levels and `Sequence` high-water marks, so "copy the keyspaces" collides. | Low (only when a multi-app suite merges existing installs) / High | DATA-30; [05-storage](05-storage.md) §5S.11 item 6; [11](11-multi-app.md) §11.5 row 4 | A core **storage export/import** capability (per keyspace, version and level check, ID-remap hooks for users, roles and keys, keyring merge, sequence rebase; module keyspaces copy as-is). It changes a core contract, is not built until multi-app exists (lowest priority), and needs no change now: per-owner levels already keep one app's raise from blocking another's rollback. |
 
 ## 14.2 Migration hazards (each has a guard)
 
@@ -48,8 +49,9 @@ cited by ID (`docs/plans/platform-core/reviews/spec-round-1-*.md`; dispositions 
 | Route added without permission, including on the legacy mount | R6 (registration error + `archtest.RoutesHavePermissions` over the router and the legacy manifest) |
 | Two writers of one key family across owners | R8 claims + boot overlap check |
 | Event bus used for correctness | Outbox ([05-events](05-events.md)); review checklist |
-| Contract step on a store that skipped the matching expand/adopt | Stamped-level check before any legacy delete (K12) |
-| Rollback widens an API key | Keys without an exact legacy scope equivalent are mirrored disabled (K13, SEC-1) |
+| Contract step on a store that skipped the matching expand/adopt | `Adopts` applied-record check before any legacy delete; `RequiresServed` defers, never fails boot (K12) |
+| Rollback widens an API key | Keys without an exact legacy scope equivalent are mirrored disabled and stay active natively while `Fresh` (K13, SEC-1) |
+| Books' legacy reads/writes outside its claims go unnoticed in shadow mode | Violations are persisted (`c/storage/claimviol/`), so 09 S2b's "zero persisted violations ≥ 14 days" survives restarts (05-storage §5S.9.4) |
 | Restore into a live store | Staged restore applied at next boot ([05-backup](05-backup.md)); until it ships, live-target extraction is disabled and the contract steps wait for it (K16) |
 
 ## 14.3 Questions for the owner (with recommendations)
@@ -85,11 +87,40 @@ every alias kind; removal only by a contract PR, never by a clock; 02 §2.5).
 ## 14.5 Remaining open items by file
 
 These are design details each section resolves in review; none blocks the plan. Each file's "Open
-items" section is authoritative; counts are not repeated here because round 1 revises those sections in
-parallel, and a census taken mid-revision would be stale. Files with open items: 04, 05-ai, 05-authn,
-05-backup, 05-config, 05-download, 05-events, 05-health, 05-http-api, 05-indexer, 05-library,
-05-logging, 05-metadata, 05-metrics, 05-notify, 05-rbac, 05-realtime, 05-storage, 05-tasks,
-05-updater, 06, 07, 08, 09, 10, 12. Round 2 re-counts them.
+items" section is authoritative. Census taken at the end of the round-1 integration pass
+(2026-11-04), after every file had settled: an item is a numbered list entry or an ID'd table row
+(`O1`, `1`, …) under a heading containing "Open items"; entries the file itself marks "(Closed …)" are
+counted separately. Files without an "Open items" section (01, 02, 03, 11, 13, 15, README) are not
+listed. **118** items remain open across 26 files.
+
+| File | Open | Closed in place |
+|---|---|---|
+| [04-package-mapping](04-package-mapping.md) | 5 | 0 |
+| [05-ai](05-ai.md) | 4 | 0 |
+| [05-authn](05-authn.md) | 4 | 0 |
+| [05-backup](05-backup.md) | 3 | 0 |
+| [05-config](05-config.md) | 7 | 0 |
+| [05-download](05-download.md) | 3 | 0 |
+| [05-events](05-events.md) | 2 | 3 |
+| [05-health](05-health.md) | 3 | 2 |
+| [05-http-api](05-http-api.md) | 6 | 0 |
+| [05-indexer](05-indexer.md) | 3 | 0 |
+| [05-library](05-library.md) | 4 | 0 |
+| [05-logging](05-logging.md) | 2 | 0 |
+| [05-metadata](05-metadata.md) | 6 | 0 |
+| [05-metrics](05-metrics.md) | 3 | 0 |
+| [05-notify](05-notify.md) | 2 | 0 |
+| [05-rbac](05-rbac.md) | 5 | 0 |
+| [05-realtime](05-realtime.md) | 2 | 0 |
+| [05-storage](05-storage.md) | 6 | 0 |
+| [05-tasks](05-tasks.md) | 8 | 0 |
+| [05-updater](05-updater.md) | 6 | 0 |
+| [06-app-sdk](06-app-sdk.md) | 6 | 1 |
+| [07-ui-shell](07-ui-shell.md) | 4 | 0 |
+| [08-arr-facade](08-arr-facade.md) | 8 | 0 |
+| [09-abo-on-core](09-abo-on-core.md) | 8 | 0 |
+| [10-tv-movies-proof](10-tv-movies-proof.md) | 5 | 0 |
+| [12-repo-split](12-repo-split.md) | 3 | 0 |
 
 ## Review history
 
@@ -112,3 +143,9 @@ Round 1 (dispositions in `docs/plans/platform-core/reviews/spec-round-1-disposit
 - MOD-2, MOD-5, MOD-7, MOD-8, MOD-12, MOD-14, MOD-16 — hazards rows added or updated.
 - MOD-3, MOD-4 — K7 and K8 updated for the exclude in `core/go.mod`.
 - MOD-11 — K14 added.
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: R-G request (DATA-30) — K17 added: store merge needs a core storage export/import contract (deferred, lowest priority).
+- integration pass: Post-revision state — K1 package count (160 remain); K12 and hazards: `Adopts` check, `RequiresServed` defers instead of failing boot; K13 and hazards: mirror-disabled keys stay active natively while `Fresh`; shadow-mode claim violations persisted.
+- integration pass: §14.5 re-counted per file (118 open items in 26 files) with the method stated there.

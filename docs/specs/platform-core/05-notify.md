@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-notify.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 785812fd-5ddd-4540-be24-d061c0127788 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -196,7 +196,7 @@ delays another. Each `Send` runs under its own timeout derived from a detached, 
 ## 7. Config keys
 
 Channel instances are records in the one instance store (05-metadata M1, SIMP-4), not config keys; secrets are
-`integrations/notify/<id>/<field>`. Rules are data in `c/notify/rules/<id>`.
+`integrations.notify.<id>.<field>` (05-config §2.3 grammar). Rules are data in `c/notify/rules/<id>`.
 
 | Key | Type | Default | Hot-reload |
 |---|---|---|---|
@@ -234,7 +234,7 @@ Fakes: `coretest.FakeNotifier` (records `Send` calls; scriptable classes) and `c
 | ABO | Becomes |
 |---|---|
 | `internal/mail` (`Sender`, `SMTPSender`, `Message`) | `core/integrations/notify/mail` (public `mail.Sender` stays the primitive for transactional mail); `core.email` channel wraps it |
-| `smtp_*` keys | one `notify/email` record in the instance store at first boot (password into `secrets` as `integrations/notify/email/password`); auth invites read the same instance's sender through `notify` (05-authn), so SMTP is configured once |
+| `smtp_*` keys | one `notify/email` record in the instance store at first boot (password into `secrets` as `integrations.notify.email.password`; operator-set `smtp_*` values pin the row while set, 05-metadata M1.4 step 2 and M1.10); auth invites read the same instance's sender through `notify` (05-authn), so SMTP is configured once |
 | `internal/plugins/webhook` + `config.Plugins["webhook"]` | one `notify/webhook-<n>` record per configured URL (`legacy_headers` on; `Local=true` when the host is loopback/private, 05-metadata M1.10), a global `Rule` for the configured event list mapped to `books.*` topics; secret into `secrets` |
 | plugin event types (`internal/plugin/events.go:18-31`) | books event topics declared notifiable in the events catalog: `book.imported`→`books.book.imported.v1`, `book.deleted`→`books.book.deleted.v1`, `metadata.applied`→`books.metadata.applied.v1`, `tags.written`→`books.tags.written.v1`, `file.organized`→`books.file.organized.v1`, `dedup.detected`→`books.dedup.detected.v1`, `dedup.merged`→`books.dedup.merged.v1`, `cover.changed`→`books.cover.changed.v1`, `read_status.changed`→`books.read-status.changed.v1`, `scan.completed`→`books.scan.completed.v1`, `book.quarantined`→`books.book.quarantined.v1`, `book.unquarantined`→`books.book.unquarantined.v1` (the last two exist at HEAD but are not in the webhook's default list, `internal/plugins/webhook/plugin.go:146-159`); books publishes through `notify.Publish` in the same batch as the change |
 | `plugin.Notifier`, plugin `EventBus` (for notifications) | deleted (N4); the notify-only bus role is `core/events` (05-events) |
@@ -245,7 +245,7 @@ Fakes: `coretest.FakeNotifier` (records `Send` calls; scriptable classes) and `c
 1. Storm control: an import of 2,000 books would produce 2,000 notifications per channel. Proposed:
    per-rule `digest_window` that folds notifications of one topic into a summary — specified when the first
    high-volume topic is defined; the outbox design already allows it (dispatch can coalesce).
-2. Deferred features (§1 table) are listed for the owner; none has a consumer in S0–S11. When per-user
+2. Deferred features (§1 table) are listed for the owner; none has a consumer in S0–S10 (09 §9.3). When per-user
    delivery ships it reintroduces delivery-time RBAC filtering of each recipient against the topic's
    `Permission` for `Entity`, and personal instances are forced to `EgressPublicOnly`.
 
@@ -274,3 +274,8 @@ Round 1 (`docs/plans/platform-core/reviews/spec-round-1-dispositions.md`):
 - SIMP-4: channel instances in the 05-metadata M1 store; config instance row removed; secret names `integrations/notify/<id>/<field>`.
 - COR-17: `*events.EntityRef` replaced by `*entity.Ref`.
 - SEC-15: webhook egress `EgressConfigured` with the private-network guard; URL change clears secrets; `SendTest` returns class + status only.
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: R-E request (SIMP-4) — secret names in dotted form; `notify/email` per 05-metadata M1.10, env/file-only SMTP values pin it while set.
+- integration pass: R-H request — stage range S0–S10.

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -65,8 +65,9 @@ its own credential hashes (that is `secrets`), and does not own app protocols (A
 ## 3. Go API
 
 Package `github.com/falkcorp/mediacore/auth` (layer L4 with `rbac`, `audit`, `tasks`; imports `rbac`,
-`audit`, `entity`, `storage`, `config`, `secrets`, `log`, `metrics`, `events`). Subpackages:
-`auth/password`, `auth/oidc`, `auth/cfaccess` (optional extension). Storage keyspace `c/auth/`
+`audit`, `entity`, `storage`, `config`, `secrets`, `log`, `metrics`, `events`, `backup` for the restore hook and revocation journal types). Subpackages:
+`auth/password`, `auth/oidc`. Cloudflare Access is not a core package (§3.3: ABO's `internal/cfaccess`
+behind the authenticator extension point). Storage keyspace `c/auth/`
 (05-storage). The `_system` principal constructor lives in `core/internal/authsys` (not SDK, §3.1).
 
 ### 3.1 Identities and principals
@@ -154,6 +155,48 @@ type Principal struct {
 func WithPrincipal(ctx context.Context, p *Principal) context.Context
 func PrincipalFrom(ctx context.Context) (*Principal, bool)
 
+// Identities is the read-only identity view a module receives as
+// module.Deps.Auth (06 §6.4.4, COR-21): lookups and the request principal, no
+// credential, session or user mutation. *Service implements it.
+type Identities interface {
+	User(ctx context.Context, id UserID) (*User, error)
+	UserByUsername(ctx context.Context, name string) (*User, error)
+	Users(ctx context.Context, f UserFilter) iter.Seq2[*User, error]
+	PrincipalFrom(ctx context.Context) (*Principal, bool) // same as the package function
+}
+
+// Admin is the participant surface for multi-owner commits that rewrite
+// identity rows (05-storage §5S.3.2, DATA-18); a module receives it as
+// module.Deps.AuthAdmin. *Service implements it. Every method re-checks the
+// ctx principal (core:users.manage, Interactive, dominance over both users,
+// and the owner rule of §4.8), so holding the handle grants nothing.
+type Admin interface {
+	// StageUserMerge binds c/auth/ and auth's legacy claims (u:, apikey:,
+	// idx:apikey:user:, oauthid:, idx:oauth:user:, invite:, inviteallow:) to
+	// the caller's batch b, rewrites the owner of every row in plan from
+	// Source to Target with its mirror rows (05-storage §5S.3.11), disables
+	// Source and bumps its CredentialEpoch, and adds one Expect per row on the
+	// bytes the plan was built from. The caller commits; a row changed since
+	// the plan was built fails the commit with storage.ErrConflict,
+	// which the caller reports as auth.ErrMergeConflict (today's
+	// UserMergeConflictError under userMergeApplyMu/inviteMu/apiKeyMu,
+	// internal/database/user_merge.go:507-531).
+	StageUserMerge(ctx context.Context, b *storage.Batch, plan UserMergePlan) error
+}
+
+// UserMergePlan is the auth half of an admin user merge; books builds it from
+// its preview (internal/usermerge stays in ABO).
+type UserMergePlan struct {
+	Source, Target UserID
+	Rows           []MergeRow
+}
+
+type MergeRow struct {
+	Family string // "apikey", "oauthid", "invite", "inviteallow"
+	ID     string
+	Seen   []byte // the legacy row bytes the preview read (the Expect value)
+}
+
 // Failure is what stage 12 records when an authenticator refused a presented
 // credential (05-http-api §4.2). Stage 13 turns it into a response.
 type Failure struct {
@@ -185,6 +228,7 @@ type Deps struct {
 	Audit    audit.Logger
 	Secrets  secrets.Store  // OIDC client secrets, derived keys (05-config)
 	Events   *events.Bus    // publishes core.principal.invalidated.v1
+	Revocations backup.RevocationJournal // §4.12: Append before every revocation commits (05-backup §5B.3.6)
 	Clock    func() time.Time
 	Log      *slog.Logger
 	Metrics  *metrics.Scope // "mediacore.auth" (05-metrics)
@@ -280,14 +324,12 @@ func (s *Service) Middleware() func(http.Handler) http.Handler
 // from an in-memory generation table invalidated by events.
 func (s *Service) Revalidate(ctx context.Context, p *Principal) error
 
-// PostRestore is called by the kernel after a backup restore swap, before
-// listeners open (§4.14, SEC-16).
-func (s *Service) PostRestore(ctx context.Context, in RestoreInfo) error
-
-type RestoreInfo struct {
-	ArchiveCreatedAt time.Time
-	Revocations      iter.Seq[Revocation] // from 05-backup's out-of-DB revocation journal; nil when unavailable
-}
+// PostRestore implements backup.RestoreHook (05-backup §5B.3.2); the kernel
+// calls it after a restore swap, before listeners open (§4.14, SEC-16).
+// rc.Manifest.CreatedAt is the archive time; rc.Revocations yields the typed
+// backup.Revocation entries recorded after it, or is nil when the journal
+// does not cover the interval.
+func (s *Service) PostRestore(ctx context.Context, rc backup.RestoreContext) error
 ```
 
 ### 3.3 Authenticators (extension point, G11/G15)
@@ -335,26 +377,18 @@ var (
 	ErrLastAdmin          = errors.New("auth: change would leave no active core:admin holder")
 	ErrEmailInUse         = errors.New("auth: email belongs to an account this provider may not link")
 	ErrStoreUnavailable   = errors.New("auth: credential store unavailable")
+	ErrMergeConflict      = errors.New("auth: an identity row changed since the merge preview")
 )
 ```
 
-Optional extension shipped by core (a separate package, wired only when configured):
-
-```go
-package cfaccess // github.com/falkcorp/mediacore/auth/cfaccess
-
-// New verifies Cf-Access-Jwt-Assertion / CF_Authorization (issuer, AUD, expiry,
-// JWKS via go-oidc), resolves an allowlisted email to a user through
-// auth.Service.PrincipalFor, and, when OwnerEmail matches, sets AssuranceOwner.
-func New(ctx context.Context, cfg Config, svc *auth.Service) (auth.Authenticator, error)
-
-type Config struct {
-	TeamDomain          string
-	AUD                 string
-	OwnerEmail          string // optional
-	TrustClientIPHeader bool   // when verified, believe the CDN client-IP header (feeds httpapi client address)
-}
-```
+Core ships **no** identity extension. The one ABO uses, Cloudflare Access, stays in ABO as
+`internal/cfaccess` ([04](04-package-mapping.md) §2.4; G11: deployment-specific): it verifies
+`Cf-Access-Jwt-Assertion` / `CF_Authorization` (issuer, AUD, expiry, JWKS via go-oidc), resolves an
+allowlisted e-mail to a user through `auth.Service.PrincipalFor`, implements `OwnerVerifier` (sets
+`AssuranceOwner` when the owner e-mail matches), and may mark the CDN client-IP header believable for
+verified requests. ABO registers it with `Registrar.AddAuthenticator(a, MethodSpec{Method:
+"ext:cfaccess", Interactive: true}, order)`; its settings are books keys under
+`modules.books.identity.*` ([09](09-abo-on-core.md) S4).
 
 v1.0.0 also specified an `auth/clientcert` mTLS authenticator. It is dropped (SIMP-23): it has no
 consumer, and the `Authenticator` extension point leaves room for it. ABO's mTLS MCP bridge stays in
@@ -585,12 +619,12 @@ Core owns it; nothing refers to an app, a module or `users.manage`.
 
 - `RequireOwner` (`internal/auth/owner.go:44-108`) becomes the route guard `Guards.Owner`: the
   principal must carry `AssuranceOwner`, which only an `OwnerVerifier` authenticator can set.
-  `auth/cfaccess` is the only one shipped; deployments without it have no owner assurance, so
+  core ships none; ABO's `internal/cfaccess` is the one in use; deployments without one have no owner assurance, so
   owner-guarded routes (user merge, factory reset, restore while an owner is set — 9 routes today,
   `raw/10` §2.4) fall back to `Guards.Interactive` + `core:admin` **only if**
   `core.auth.owner.required=false` (default false when no OwnerVerifier is configured, true when
   one is). This keeps today's behaviour where `owner_email` unset means no owner gate.
-- `auth/cfaccess` = verification only. Cloudflare **policy editing** (`internal/cfaccesspolicy`)
+- Core holds no Cloudflare code. ABO's `internal/cfaccess` holds verification and owner proof (04 §2.4); Cloudflare **policy editing** (`internal/cfaccesspolicy`)
   and **guest service tokens** (`internal/cfservicetoken`, `internal/server/guest_service_tokens.go`)
   are deployment features of ABO and stay in the app (`books` module or an ABO-only `deploy`
   package), using `auth.Service` APIs; they are not core.
@@ -610,7 +644,7 @@ Core owns it; nothing refers to an app, a module or `users.manage`.
   zoned addresses**, `TUNNEL_CONNECTOR_ADDRS` is aliased onto them, and the client-IP header is
   believed only from them (SEC-18; zone semantics of `client_trust.go:133-201` kept). Without that
   migration every tunnelled request would share the connector's address, and one attacker's 15
-  failures would throttle every user. `auth/cfaccess` can mark the CDN header as believable for
+  failures would throttle every user. An extension authenticator (ABO's `internal/cfaccess`) can mark the CDN header as believable for
   verified requests (today's rule, `middleware/cfaccess.go:24-41`).
 - State is in-memory: a restart resets counters. Documented as core behaviour (single process per
   storage); persisting counters would turn every failed login into a durable write.
@@ -666,6 +700,12 @@ and 4).
   generation counter (05-rbac §9), so changes apply on the next request.
 - Every revocation publishes `core.principal.invalidated.v1{user_id, credential_id?, reason}` on
   `events`; `realtime` closes affected streams (05-realtime §4.6), `Revalidate` uses it.
+- Every key revocation, user disable, credential-epoch bump and session revocation is first recorded
+  with `Deps.Revocations.Append(ctx, backup.Revocation{At, Kind, Subject, Epoch})` — `Kind` one of
+  `apikey.revoked`, `user.disabled`, `credential_epoch.bumped`, `session.revoked`; `Subject` an
+  `entity.Ref{core, user|apikey|session, <id>}` — **before** the revocation's batch commits. If
+  `Append` fails, the revocation still commits and `Revocations.Gap(b, at)` is staged into the same
+  batch (05-backup §5B.3.6), so a restore over that interval treats the journal as incomplete.
 
 ### 4.13 Core auth routes (all under `/api/core/v1`)
 
@@ -703,16 +743,16 @@ invite path (05-http-api §4.2).
 
 ### 4.14 Post-restore hook (SEC-16)
 
-`PostRestore` runs in the kernel after a restore swap and before listeners open, in one storage
-batch per family, failing boot on error:
+`PostRestore` is auth's `backup.RestoreHook`: the kernel runs it after a restore swap and before
+listeners open, in one storage batch per family, failing boot on error:
 
-1. Re-apply every revocation recorded after the archive's `CreatedAt` (key revocations, user
-   disables, role removals) from 05-backup's out-of-DB revocation journal (cross-cutting
-   resolution 8), so a key revoked after the backup stays revoked.
+1. Re-apply every `backup.Revocation` in `rc.Revocations` (key revocations, user disables, epoch
+   bumps, session revocations; role removals are 05-rbac's hook) from 05-backup's out-of-DB
+   revocation journal (cross-cutting resolution 8), so a key revoked after the backup stays revoked.
 2. Revoke every session and every one-time token (invite, temp-login, bootstrap); bump every user's
    `CredentialEpoch`. Everyone signs in again once.
-3. When the revocation journal is unavailable or does not cover the whole interval (a foreign or
-   host-loss restore), set every API key to `needs_confirmation`: refused until an admin re-enables
+3. When `rc.Revocations` is nil (the journal is unavailable or does not cover the whole interval: a
+   foreign or host-loss restore), set every API key to `needs_confirmation`: refused until an admin re-enables
    it from the keys page. Otherwise keys stay active.
 4. Audit `core.auth.restore_revoked` with counts per family.
 
@@ -802,10 +842,10 @@ interactive method). Every key that decides who may sign in, with which role, or
 | `core.auth.oidc.redirect_base_url` | URL | — | yes | admin |
 | `core.auth.oidc.providers[]` | list `{id, kind (oidc/github), issuer, client_id, client_secret (secret ref), scopes, allowed_emails, allowed_domains, default_role, link_existing_by_email}` | `[]` | yes (provider set rebuilt) | admin |
 | `core.auth.owner.required` | bool | derived (§4.8) | no | admin |
-| `core.auth.extensions.cfaccess.{team_domain,aud,owner_email}` | strings | unset (off) | no | admin |
 
-ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `cf_access_team_domain`,
-`cf_access_aud`, `owner_email`, `oauth_default_role`, `bootstrap_key_ttl`
+Cloudflare Access settings are not core keys: `cf_access_team_domain`, `cf_access_aud` and
+`owner_email` become books keys under `modules.books.identity.*`, read by ABO's `internal/cfaccess` (09 S4).
+ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `oauth_default_role`, `bootstrap_key_ttl`
 (`internal/config/config.go:1558,1586-1613,1753`).
 
 ## 9. Metrics
@@ -863,9 +903,10 @@ ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `cf_ac
 
 | ABO today | Becomes |
 |---|---|
-| `internal/auth/context.go`, `owner.go`, `user_active.go` | `core/auth` (`Principal`, `Method`, assurance) |
+| `internal/auth/context.go`, `user_active.go` | `core/auth` (`Principal`, `Method`, assurance) |
+| `internal/auth/owner.go` | ABO `internal/cfaccess` (owner proof, G11; 04 §2.4) |
 | `internal/server/middleware/auth.go` (`RequireAuth`, key auth, `EffectivePermissionsFor`) | `auth.Service.Middleware` + `rbac.Service.Compile`; `RequirePermission`/`RequireAdmin` → httpapi stage 13; inside the legacy mount from 09 S4, `RequireAuth` becomes the read-only bridge of 05-http-api §8.3 |
-| `internal/server/middleware/cfaccess.go`, `internal/oauth/cfaccess.go` | `core/auth/cfaccess` |
+| `internal/server/middleware/{cfaccess,cfbounce,owner_guard}.go`, `internal/oauth/cfaccess.go` | ABO `internal/cfaccess` (04 §2.4), registered through §3.3's `Registrar.AddAuthenticator`; not core |
 | `internal/oauth/{oauth,providers,resolve,state}.go` | `core/auth/oidc` |
 | `internal/server/absauth/password.go` | `core/auth/password` |
 | `internal/server/absauth/throttle.go`, `internal/server/login_ceiling.go`, `bootstrap_rate_limit.go`, `invite_rate_limit.go` | `core/auth` throttle (instance) |
@@ -882,13 +923,17 @@ small. During the compatibility window (09 §9.2.1) **legacy rows stay authorita
 writes the legacy row, its `idx:` rows and the core row in one batch, and rebuilds the core copy
 from legacy at every boot, so a change made by an older build after a rollback (a deactivation, a
 revoked key, a password reset that bumped the epoch) is always honoured. Native-only data lives in
-core side records keyed by the legacy ID, merged at rebuild and dropped when the legacy row is gone
-or revoked. Contract C4 (09) stops the mirror and deletes the legacy rows.
+core side records keyed by the legacy ID and merged at rebuild. A side record is dropped when its
+legacy row is gone or was revoked/disabled by the previous build — **except** a row the mirror itself
+wrote disabled (`SideRecord.MirrorDisabled`) that is still `Fresh` (05-storage §5S.3.11): that is a
+native-only key and stays active natively; once the previous build rewrites the row, legacy wins.
+Without that exception every narrow native API key would be revoked on the next boot. Contract C4
+(09) stops the mirror and deletes the legacy rows.
 
 | Legacy family | New | Transform |
 |---|---|---|
 | `u:` + `idx:user:username:` (and the other `idx:` user sub-prefixes) | `c/auth/user/…`, `c/auth/idx/…` | user IDs and role IDs unchanged (`admin`, `editor`, `viewer`, `fp-worker`; 05-rbac §6.2); mirrored both ways as above |
-| `apikey:` + `idx:apikey:` | `c/auth/apikey/…` | hash reused as-is (already SHA-256 of raw); scopes translated (05-rbac §6.1); empty scopes → `LegacyFullScope=true`; native keys mirrored with legacy atoms only on exact re-expansion, otherwise mirrored **revoked** with canonical scopes and `Purpose` in the side record (05-rbac §6.3) |
+| `apikey:` + `idx:apikey:` | `c/auth/apikey/…` | hash reused as-is (already SHA-256 of raw); scopes translated (05-rbac §6.1); empty scopes → `LegacyFullScope=true`; native keys mirrored with legacy atoms only on exact re-expansion, otherwise the legacy row is written **disabled** (`LegacyProjection.Disabled`, side record `MirrorDisabled`) with canonical scopes and `Purpose` in the side record (05-rbac §6.3) |
 | `sess:<raw>` + `idx:sess:user:` | `c/auth/session/h/<sha256>` + new `PublicID` | **no raw mirror** (SEC-19): new sessions are hashed only. A presented legacy raw-ULID cookie is looked up in `sess:` with epoch, status, revoked and expiry checks; on a hit the service issues a hashed `mcs_` session, sets the cookie and deletes the legacy row in one batch (upgrade on use). Legacy sessions live at most 7 d (`handlers/auth.go:90-96`), so the fallback matches nothing after that; its code is removed by the first contract PR after S4 + 7 days, independent of C4. Cost: a rollback signs users out once; API keys, which automation uses, keep working |
 | `invite:<raw>` | `c/auth/onetime/invite/<sha256>` | legacy invites stay readable in place by presented token until they expire (72 h); native invites are hash-only and not mirrored (a rollback within an invite's TTL voids invites issued by the new build; resend) |
 | `oauthid:`, `inviteallow:` | `c/auth/ident/…`, `c/auth/inviteallow/…` | mirrored both ways as above |
@@ -910,7 +955,7 @@ or revoked. Contract C4 (09) stops the mirror and deletes the legacy rows.
 |---|---|
 | G9 auth wiring inline, closes over `*Server` and global `AppConfig.EnableAuth` | **Fixed**: `auth.Service` instance with explicit `Deps`/`Options`; `core.auth.mode` read through `config` (§3.2, §4.11) |
 | G10 bootstrap assumes one binary, admin = first `users.manage` holder | **Fixed**: core-owned, app-agnostic bootstrap; admin = `core:admin` holder (§4.6) |
-| G11 owner/CF machinery embedded in auth | **Fixed**: `Authenticator`/`OwnerVerifier` extension point; `auth/cfaccess` optional; policy editing and service tokens stay in ABO (§4.8) |
+| G11 owner/CF machinery embedded in auth | **Fixed**: `Authenticator`/`OwnerVerifier` extension point; Cloudflare Access verification, owner proof, policy editing and service tokens stay in ABO (`internal/cfaccess`, `internal/cfaccesspolicy`, `internal/cfservicetoken`; §3.3, §4.8) |
 | G12 sessions unhashed (secrets part → 05-config) | **Fixed for auth credentials**: every session/invite/temp-login/bootstrap/key stored as SHA-256 (§4.1, §4.3); no raw session mirror (§11); config secrets → `core/secrets` (05-config) |
 | G14 rate limit/lockout tied to tunnel topology, in memory | **Fixed + documented**: instance throttle, client address from `httpapi` trusted-proxy config with the connector set migrated, no hard lockout, in-memory by design (§4.9) |
 | G15 two parallel auth stacks | **Fixed**: compat stays in app, resolves via `PrincipalFor` (§4.10) |
@@ -970,3 +1015,11 @@ Round 1 (2026-11-04), findings applied to this file:
 - FE-6 — per-app cookie names; foreign cookie never causes a 401 on Public routes (§4.3).
 - FE-7 — Public auth flows answer 401 with domain codes, shown in place (§6).
 - FE-19 — served at the origin root only; cookie `Path=/` (§4.3).
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: R-G request (COR-21) — `auth.Identities` (read-only module view) defined for `module.Deps.Auth`.
+- integration pass: R-B request (DATA-18) — `auth.Admin.StageUserMerge(ctx, b, plan)` participant with `UserMergePlan`/`MergeRow` and per-row `Expect`; handed to modules as `module.Deps.AuthAdmin` (06).
+- integration pass: R-B request (SEC-16) — `PostRestore` implements `backup.RestoreHook` over `backup.RestoreContext`; revocations recorded with `RevocationJournal.Append` as typed `backup.Revocation` before commit, `Gap` on failure (§3.2, §4.12, §4.14); `RestoreInfo` removed.
+- integration pass: R-H request (SEC-1, DATA-3) — §11: mirror-disabled keys that are still `Fresh` keep their side record and stay active natively; "revoked" → "disabled" to match 05-storage.
+- integration pass: R-H request (G11) — Cloudflare Access is ABO's `internal/cfaccess` (04 §2.4), not `core/auth/cfaccess`; its keys are `modules.books.identity.*` (09 S4); `owner.go` row corrected.

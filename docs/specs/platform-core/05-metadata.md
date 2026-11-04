@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -39,7 +39,10 @@ classifying their errors into one taxonomy. Out of scope: what an instance *does
 adapter, settings, and the `secrets.Ref`s of its secret fields — in `c/integrations/instances/<kind>/<id>`.
 `config` holds **no** integration instances: there is no `core.integrations.<kind>.instances.<id>` config
 key, no `core.download.clients`, `core.notify.mail.*` or `core.ai.*` instance row, and no module-scoped
-`"<ID>/"` secret for an instance. Secret names are `integrations/<kind>/<id>/<field>`. Every kind file
+`"<ID>/"` secret for an instance. Secret names follow 05-config §2.3's grammar:
+`integrations.<kind>.<instance>.<field>` (e.g. `integrations.download.deluge.password`). Operator-layer
+values (file, env, flag) of ABO's legacy integration-bound keys reach this package only as 05-config
+`Passthrough` values at those same paths (M1.4 step 2). Every kind file
 (05-ai, 05-download, 05-indexer, 05-notify) and the ABO migration (09 S6/S7) point here.
 
 ### M1.2 Current state at HEAD
@@ -152,8 +155,9 @@ type InstanceConfig struct {
 //   "ui"        interactive session holding core:integrations.manage
 //   "api"       API-key principal holding core:integrations.manage (cannot set Local)
 //   "arrfacade" written through FacadeWriter (08; deferred-build, M1.3)
-//   "pinned"    applied at boot from an operator-pinned legacy source for the
-//               compat window (09); read-only in the API, lock reason surfaced
+//   "pinned"    applied at boot from an operator-layer value (05-config
+//               Passthrough) while one is set (M1.4 step 2); read-only in
+//               the API, lock reason surfaced
 type Origin string
 
 // Env is everything an instance may use. It is constructed per instance by
@@ -418,10 +422,14 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
    `Registrar.Adapter`. Duplicate `AdapterID`, a module registering outside its prefix, or a `Settings`
    schema with a secret field lacking `Secret: true` fails boot.
 2. **Load**: rows from `c/integrations/instances/<kind>/<id>`, the only instance store (SIMP-4). There is no
-   config-file form of an instance. For the compat window only, legacy operator-pinned sources that ABO
-   treats as authoritative today (the env-bound Deluge and OpenAI keys, 09 S7) are applied by the 09 compat
-   import on every boot onto their instance row with `Origin=pinned`: the row is read-only in the API and the
-   lock reason names the env variable. The import writes through `Put`, so there is no second lock model.
+   `core.integrations.<kind>.instances.<id>` config form of an instance. Operator-set values of the legacy
+   integration-bound keys (the env-bound Deluge, OpenAI and SMTP settings ABO reads today, 09 S7) arrive from
+   `config.Store.PassthroughValues()` (05-config §1.4 step 8) at the paths of the M1.10 import table, and are
+   applied on every boot onto their instance row with `Origin=pinned`: the row is read-only in the API and
+   the lock reason is the value's `OperatorValue.By` (e.g. `env OPENAI_API_KEY`). One rule, shared with
+   05-config C7: the env names ABO reads today are **permanent** aliases, and a pinned row exists exactly
+   while an operator value for it is set — when none is set on a boot, the row reverts to `Origin=ui` with
+   its last values (the operator's trust, e.g. `Local`, is kept) and becomes editable. The import writes through `Put`, so there is no second lock model.
    A row whose adapter is not registered (module disabled, binary without the adapter) is **kept** and
    reported `HealthMisconfigured` with reason `adapter not in this binary` (restart-bound enablement, 03 §3.7).
 3. **Build lazily** on first `Lease`; construction must not do network I/O (so boot never waits on a
@@ -466,7 +474,7 @@ probes at most `core.integrations.health_parallelism` instances at once; each pr
 | Key | Type | Default | Hot-reload |
 |---|---|---|---|
 | (instance records) | data in `c/integrations/instances/`, **not** config (SIMP-4) | — | yes (hot swap, M1.4) |
-| `core.integrations.egress.lan_allow` | list of host, `host:port` or CIDR; `ProtectInteractive` | `[]` | yes (read per dial) |
+| `core.integrations.egress.lan_allow` | list of host, `host:port` or CIDR; `ProtectAdmin` (SEC-15; 05-config §1.3.7) | `[]` | yes (read per dial) |
 | `core.integrations.health_interval` | duration (bound by `tasks.ScheduleFromConfig`) | `5m` | yes |
 | `core.integrations.health_parallelism` | int ≥1 | `4` | yes |
 | `core.integrations.probe_timeout` | duration | `10s` | yes |
@@ -497,11 +505,30 @@ archtest `IntegrationsDescriptorCallers` (only kind packages call `NewDescriptor
 
 | ABO today | Becomes |
 |---|---|
-| `config.MetadataSources[]` (`internal/config/config.go:147-163`) | `metadata/<id>` instance rows, adapters `books.<id>`; `Credentials` values moved into `secrets` under `integrations/metadata/<id>/<field>` |
+| `config.MetadataSources[]` (`internal/config/config.go:147-163`) | `metadata/<id>` instance rows, adapters `books.<id>`; `Credentials` values moved into `secrets` under `integrations.metadata.<id>.credentials.<k>` |
 | `DelugeWebURL/Password`, `DownloadClient.Torrent.Deluge` (`config.go:225-240,1776-1780`) | one `download/deluge` instance (05-download §10) |
 | (egress trust) | instances migrated from operator-set ABO config are written with `Local=true` when their host is loopback or private (today they have no egress guard at all); the migration is an operator-trust path, recorded in the migration ledger |
 | `ai_endpoints` rows (`internal/config/ai_endpoints.go:36-68`) | `ai/<id>` instances (05-ai) |
 | `config.Plugins["webhook"].Settings` | `notify/<id>` webhook instances (05-notify) |
+
+**Integrations import table** (normative; fixes the instance ID of every legacy singleton before the
+09 S3 build ships, because S3 stages each secret once under its final name, 05-config §2.2). Instance IDs
+follow `InstanceID`'s grammar; IDs that exist in ABO today are kept verbatim. The *Passthrough path* column
+is the operator-layer path 05-config hands over (M1.4 step 2); env aliases onto it are permanent.
+
+| ABO source | Instance | Secret names | Passthrough paths (operator layers) |
+|---|---|---|---|
+| `deluge_web_url`, `deluge_web_password`, `download_client.torrent.deluge.*` (`config.go:225-240,1776-1780`) | `download/deluge` | `integrations.download.deluge.password` | `integrations.download.deluge.{url, password}` |
+| `openai_api_key`, `openai_base_url` (the row ABO itself synthesises with ID `openai`, `internal/config/ai_endpoints.go:74,403-440`) | `ai/openai` | `integrations.ai.openai.api_key` | `integrations.ai.openai.{api_key, base_url}` (`OPENAI_API_KEY`, `OPENAI_BASE_URL`) |
+| other `ai_endpoints[]` rows (`local-llm`, `local-uv`, user rows; `ai_endpoints.go:73-75`) | `ai/<row id>` | `integrations.ai.<row id>.api_key` where `auth_ref` is set | — (DB only today) |
+| `google_books_api_key` (`persistence.go:1956`) | `metadata/google-books` (the source ID, `config.go:3769`) | `integrations.metadata.google-books.api_key` | `integrations.metadata.google-books.api_key` |
+| `hardcover_api_token` (`persistence.go:1957`) | `metadata/hardcover` (`config.go:3779`) | `integrations.metadata.hardcover.api_token` | `integrations.metadata.hardcover.api_token` |
+| other `metadata_sources[]` entries | `metadata/<source id>` | `integrations.metadata.<source id>.credentials.<k>` | — |
+| `smtp_host/port/username/password/from` (`internal/config/invite_config.go:40-44`; env/file only today) | `notify/email` | `integrations.notify.email.password` | `integrations.notify.email.{host, port, username, password, from}` |
+| `config.Plugins["webhook"]` URLs | `notify/webhook-<n>` (n = 1… in list order) | `integrations.notify.webhook-<n>.<field>` | — |
+
+A legacy ID that does not match `InstanceID` (none at HEAD) is lower-cased with `_` → `-` by the same migration
+and the mapping is recorded in the migration ledger.
 | `handleDelugeTestConnection`, `/ai/test-connection` | `POST /api/core/v1/integrations/{kind}/test` |
 | `internal/plugin` (`Plugin`, `Registry`, `DownloadClient`, `Notifier`, `MediaPlayer`) | deleted (N4); `MediaPlayer` has no successor until a media-server kind is specified |
 
@@ -568,7 +595,7 @@ type Options struct {
 	Store     storage.Keyspace       // c/providerhttp/ ; nil = in-memory (tests)
 	Base      http.RoundTripper      // default: a cloned http.DefaultTransport, never the global itself
 	UserAgent string                 // "<app>/<version> (+mediacore/<v>)"
-	Meter     metrics.Registry       // 05-metrics
+	Metrics   *metrics.Scope         // core scope "mediacore.providerhttp" (05-metrics)
 	Log       *slog.Logger
 	Now       func() time.Time
 }
@@ -983,3 +1010,10 @@ Round 1 (`docs/plans/platform-core/reviews/spec-round-1-dispositions.md`):
 - SIMP-17: `tasks.Fixed(n, reason)` with a reason.
 - COR-17: `EntityRef` open item removed; `entity.Ref` (03 v1.2.0) is the one reference type.
 - COR-19: stale objections (root `integrations` package, `Registrar.Adapter`) removed as resolved by 03 v1.2.0.
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: R-E request (SIMP-4, SIMP-15) — M1.10 integrations import table fixes every legacy singleton's instance ID (`download/deluge`, `ai/openai`, `metadata/google-books`, `metadata/hardcover`, `notify/email`, `notify/webhook-<n>`) before the S3 build; secret names use 05-config's `integrations.<kind>.<instance>.<field>`; operator values arrive through `Passthrough`; `config.Schema` already used.
+- integration pass: R-H request — one `OPENAI_*` rule: permanent env aliases; `Origin=pinned` rows exist while an operator value is set (M1.4 step 2), matching 05-config C7.
+- integration pass: R-D request (SEC-15) — SSRF and URL-change rules verified present; `lan_allow` corrected to `ProtectAdmin` (was `ProtectInteractive`, contradicting SEC-15 and 05-config §1.3.7).
+- integration pass: Global sweep — providerhttp `Options.Meter metrics.Registry` → `Metrics *metrics.Scope` (05-metrics has no `Registry`).

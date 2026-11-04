@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-http-api.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: fcd387ab-7a8e-49e2-a4b4-a6901aaee1e3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -434,7 +434,7 @@ func (r *Router) Infra(pattern string, perm rbac.Requirement, h http.Handler) //
 func (r *Router) MountLegacy(m LegacyMount) error       // §8.2
 func (r *Router) SPA(h http.Handler) error              // §4.10; ErrPrefixCollision while a legacy mount ServesSPA
 func (r *Router) NonSPA() func(*http.Request) bool      // claimed prefixes + compat segments, for ui.Options (FE-3)
-func (r *Router) Claim(c PrefixClaim) error             // §4.9
+func (r *Router) Claim(owner, prefix string) error      // subtree claim, §4.9
 func (r *Router) Routes() iter.Seq[RouteInfo]           // archtest, OpenAPI, docs
 func (r *Router) Build() (http.Handler, error)          // registers into a fresh ServeMux; errors.Join of all registration errors
 func (r *Router) OpenAPI(module string) (*openapi.Document, error)
@@ -615,9 +615,12 @@ the request ID as `origin_request_id` (05-tasks).
 
 ### 4.9 Prefix claims and the `/api/v3` collision
 
-`Router.Claim(PrefixClaim{Prefix, Owner, Kind})` records every subtree an owner occupies. `Build`
-fails with `ErrPrefixCollision` when two owners claim overlapping prefixes, unless the more-specific
-claim is a `Legacy` claim and the less-specific one declares `YieldsTo` it.
+`Router.Claim(owner, prefix)` records every subtree an owner occupies (core groups, module groups,
+facade groups, and each `module.Manifest.LegacyPrefixes` entry). `Build` fails with
+`ErrPrefixCollision` when two owners claim overlapping prefixes — one rule, no claim kinds and no
+yielding (SIMP-22, as 06 §6.4.2 states it). The two fallbacks are not subtree claims: `/` (the SPA
+fallback, §4.10) and the legacy `/api/` redirect handler (item 4), both matched last by `ServeMux`
+specificity.
 
 The concrete collision: ABO's legacy `/api/v3/ops/*` (12 routes, `internal/server/server_lifecycle.go:2127-2135`)
 and an *arr-v3 facade, whose clients call `<base>/api/v3/…` (`raw/16` §5.1). Resolution:
@@ -830,7 +833,7 @@ decision already taken by stages 12–13. Denials in adapters go through `rbac.R
 | `RequireAuth` (store nil → pass; session/key lookup) | `middleware/auth.go:152-262` | `legacyauth.FromCorePrincipal`: reads the `auth.Principal` bound by stage 12 and fills the legacy context values (`auth.WithUser`, `WithPermissions` with reverse-mapped atoms, `WithMethod`); never authenticates; a missing principal on a non-Public route is a defensive 401 (stage 13 already answered) |
 | zero users → pass everything | `middleware/auth.go:165-169` | gone: stage 13 allows only Public + setup/bootstrap (05-authn §4.2) |
 | worker-only path confinement | `middleware/auth.go:265-298` | `Confining` scopes at stage 13 (05-rbac §4.10); `abortWorkerOnlyOutsideWorkerAPI` deleted |
-| Cloudflare Access fail-open binder | `middleware/cfaccess.go:20-139` | `auth/cfaccess` authenticator in stage 12; gin binder removed |
+| Cloudflare Access fail-open binder | `middleware/cfaccess.go:20-139` | ABO's `internal/cfaccess` authenticator (04 §2.4), registered through 05-authn §3.3, runs in stage 12; gin binder removed |
 | `s.perm(atom)`, in-handler `auth.Can(ctx, atom)` | `server_lifecycle.go:1693-1698` | adapter over `rbac.Require` with the full `Catalog.Legacy` expansion (05-rbac §6.3) |
 | `RequireAdmin` by role name; `adminRole` pass-through vs 401 with auth off | `middleware/auth.go:522-537`, `wire_admin_role.go:18-45` | the manifest carries 05-rbac §6.2's permission per admin kind; the gin gate becomes `rbac.Require(that permission)`; auth-off reach follows from the auth-disabled checker |
 | `credGuard` | `credential_guard.go:28` | `Guards.Interactive` at stage 13; gin adapter checks `Principal.Method.MayChangeCredentials()` |
@@ -1030,3 +1033,9 @@ Round 1 (2026-11-04), findings applied to this file:
 - Cross-cluster (R-E) — `*metrics.Scope`; Protection column; invite-token access-log test (`TestAccessLog_NoInviteToken`).
 - COR-20 — `*metrics.Scope` in `Deps` (§3.5).
 - SIMP-6 — idempotency prune on `tasks.Schedule` (§4.5).
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: Global sweep (SIMP-22, as recorded in 06) — §4.9 narrowed to one subtree-claim rule: `Router.Claim(owner, prefix)`, no `PrefixClaim.Kind`, no `YieldsTo`; `/` and the legacy `/api/` redirect are fallbacks, not claims.
+- integration pass: Verified already present (R-D request, SEC-5): stage 13 refuses a facade-purpose key on non-facade routes and a non-facade key on facade routes.
+- integration pass: R-H request (G11) — §8.4: Cloudflare Access authenticator is ABO's `internal/cfaccess`, not `auth/cfaccess`.

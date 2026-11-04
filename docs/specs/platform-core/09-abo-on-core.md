@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/09-abo-on-core.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 3c82c917-2fc4-4385-b085-73d143a2374f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -498,7 +498,7 @@ bundle and an external ABS client wherever the stage changes their request path 
 |---|---|
 | Goal | Capability contracts in core with ABO's adapters behind them; one integration-instance store (SIMP-4); per-instance HTTP resilience (R5); the search index behind `storage/index`. |
 | Moves | 04 §8.1 row S7: `internal/metadata/{providerhttp,dailyquota}`, `internal/security/safehttp` → `integrations/providerhttp` (instance-scoped); `internal/ai/{aijobs,resultjournal}`, generic `internal/aidispatch` → `integrations/ai`; Deluge client → `integrations/download/deluge` + books glue; `internal/mail` → `integrations/notify/mail`; generic `internal/fileops`, `internal/watcher`, `internal/pathutil` parts → `library`; search engine lifecycle → `internal/bleveindex`, dirty set and reconciler → `storage/index`. Metadata sources stay books, implementing `metadata.Provider[Q,R]`. |
-| Data/keys | First-boot import of Deluge (`download/deluge`), AI endpoints (`ai/<id>`), metadata sources and SMTP (`notify/email`) into the instance store, `Local=true` for loopback/private hosts (05-metadata M1.10); secrets under `integrations/<kind>/<id>/<field>`. Env-bound values ABO treats as authoritative today (Deluge, OpenAI) are re-applied every boot as read-only `Origin=pinned` rows (05-metadata M1.4). `provider_throttle:`, `provider_daily_budget:`, `aijob*`, `aijournal:` stay books claims read through adapters until their owning spec adopts them. The search index format is unchanged (or rebuilt; it is derived data). |
+| Data/keys | First-boot import of Deluge (`download/deluge`), AI endpoints (`ai/<id>`), metadata sources and SMTP (`notify/email`) into the instance store, `Local=true` for loopback/private hosts (05-metadata M1.10); secrets under `integrations.<kind>.<instance>.<field>` (05-config §2.2). Env-bound values ABO treats as authoritative today (Deluge, OpenAI) are re-applied every boot as read-only `Origin=pinned` rows (05-metadata M1.4). `provider_throttle:`, `provider_daily_budget:`, `aijob*`, `aijournal:` stay books claims read through adapters until their owning spec adopts them. The search index format is unchanged (or rebuilt; it is derived data). |
 | Config | `deluge_*`, `download_client`, `openai_*`, `ai_endpoints*`, `smtp_*`, `metadata_sources` → instance records (window aliases for the flat keys; the 05-config mirror keeps the blob current for rollback); `deluge_move_enabled` etc. → `modules.books.download.*`. `OPENAI_API_KEY`/`OPENAI_BASE_URL` stay permanent env aliases (§9.2.5). |
 | Endpoints | Native `/api/core/v1/integrations/{kind}/...` and `POST /api/core/v1/integrations/{kind}/test`; aliases (W): generic parts of `/api/v1/ai` (14), `/api/v1/deluge` (6), `/api/v1/metadata-sources`. Books Deluge behaviour routes stay on the legacy mount unless 05-download rewrites them (§9.2.4). |
 | Rollback | To S6: S6 reads Deluge/AI/SMTP settings from the blob, which the mirror keeps current; instance rows are ignored. Binary swap otherwise. |
@@ -814,3 +814,4 @@ Round 1 (dispositions in `docs/plans/platform-core/reviews/spec-round-1-disposit
 - FE-11 — S4 replaces the UI's permission constants and scope list.
 - COR-17 / COR-26 — no `EntityRef` or `Resource{…}` spellings; task kinds follow 03 §3.6 (`books.<id>`, segments `[a-z][a-z0-9-]*`).
 - SIMP-1 — deferred-build packages built in no stage; S7 done-check asserts they do not exist.
+- integration pass (lead): secret names use the dotted `integrations.<kind>.<instance>.<field>` form of 05-config §2.2.

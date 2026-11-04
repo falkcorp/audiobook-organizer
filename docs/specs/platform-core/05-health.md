@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -100,6 +100,17 @@ type Reporter interface {
 	Report(res Result) // push model: breakers, outbox dead letters, watchdog, warm-up
 }
 
+// Reporters is the module handle, module.Deps.Health (06 §6.4.4, COR-21): it
+// hands out the push Reporter of a component the module itself declared with
+// Registrar.Health. The kernel builds one per enabled module.
+type Reporters interface {
+	// Reporter returns ErrNotOwned for an ID this module did not register,
+	// so a module can never report another component's status.
+	Reporter(id ComponentID) (Reporter, error)
+}
+
+var ErrNotOwned = errors.New("health: component not registered by this module")
+
 type Snapshot struct {
 	Ready      bool
 	Live       bool
@@ -167,6 +178,14 @@ component `core.startup.<token>` with `StatusDegraded`.
 | `GET /api/core/v1/system/status` | `core:system.status` (readiness tokens only; seeded to editor/viewer if the shell shows a status banner, 05-rbac) | 200 | `{ready, not_ready[]}` — the `/readyz` body, authenticated |
 | `POST /api/core/v1/diagnostics` | `core:system.manage` | 202 + run ref | starts `core.diagnostics.export` |
 | `GET /api/core/v1/diagnostics/{run}` | the run's actor or `core:admin` | 200 zip / 404 / 410 expired | bundle |
+
+**Status topic.** `health` declares `core.system.status-changed.v1` in the one catalog
+([05-events](05-events.md)): bus only, `Realtime{Coalesce: 1s}`, `Permission` `core:system.status`
+([05-rbac](05-rbac.md) §4.8 seeds it to `editor` and `viewer`). Its payload is exactly the
+`GET /api/core/v1/system/status` body, `{ready, not_ready[]}` with fixed `<component>:<reason>`
+tokens — never `Detail`, durations, versions or counts. It is published when `Ready()` or the set of
+not-ready tokens changes, and once with `ready:false` when shutdown starts; the shell's status banner
+and the legacy stream A `system.status` projection read it ([05-realtime](05-realtime.md) §4.7).
 
 Unauthenticated bodies follow today's rule (`handler.go:223-228`): booleans, fixed tokens,
 milliseconds — never error text, versions, counts or paths. ABO's `/health` shape (`status`,
@@ -423,10 +442,9 @@ internally.
 2. Ring-buffer size and format for `core.logs` depend on [05-logging](05-logging.md).
 3. Whether `/metrics` stays unauthenticated is decided in [05-metrics](05-metrics.md); `core.metrics`
    section in bundles is unaffected.
-4. [06-app-sdk](06-app-sdk.md) §6.5.2 must reference `core.shutdown.budget` and drop
-   `core.lifecycle.shutdown_budget`/`stop_timeout` (OPS-13); 06 already has `Registrar.StartupSteps`
-   and `Registrar.Diagnostics` (type name `health.StartupStep`, used here).
-5. [05-rbac](05-rbac.md) must define `core:system.status` if the shell's status banner needs it (SEC-8).
+4. (Closed: 06 §6.5.2 takes its deadlines from `core.shutdown.budget`; `Registrar.StartupSteps` and
+   `Registrar.Diagnostics` use `health.StartupStep` as here.)
+5. (Closed: 05-rbac defines `core:system.status` (`ClassView`) and seeds it to `editor`/`viewer`, SEC-8.)
 
 ## Out-of-scope defects found
 
@@ -450,3 +468,9 @@ Round 1 findings applied to this file (v1.1.0):
 - SEC-8 — detailed health and system info require `core:system.manage`; token-only `core:system.status` route.
 - SIMP-6 — diagnostics prune scheduled through `ScheduleFromConfig`; probes and heartbeat stated as in-process ticks.
 - COR-16 (alignment) — `Step` renamed `StartupStep` to match 06.
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: R-G request (COR-21) — `health.Reporters` (module handle, `ErrNotOwned`) defined for `module.Deps.Health`.
+- integration pass: R-D request (SEC-8) — `core.system.status-changed.v1` declared here with permission `core:system.status` and a token-only payload, as 05-realtime §4.7 consumes it.
+- integration pass: Open items 4 and 5 closed (06 §6.5.2; 05-rbac `core:system.status`).

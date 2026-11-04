@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-download.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 513fb395-c640-4bb6-b76c-d9fe80b3224e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -364,7 +364,7 @@ declared once in the events catalog (SIMP-5).
 ### 4.1 Instances and adapters
 
 Instances are `download/<id>` records in the one instance store (05-metadata §M1, SIMP-4); secrets are
-`integrations/download/<id>/<field>`. Secret fields per adapter: Deluge `password`;
+`integrations.download.<id>.<field>` (05-config §2.3 grammar). Secret fields per adapter: Deluge `password`;
 qBittorrent `username`, `password`; Transmission `username`, `password`; SABnzbd `api_key`; NZBGet
 `username`, `password`. Every adapter declares `Meta.Egress = EgressConfigured`: a client on the LAN (the
 usual case) needs `Local=true`, which only an interactive admin can set, and a URL change clears the stored
@@ -566,7 +566,7 @@ client with a scriptable clock-driven state machine (`Advance(id, State)`), capa
 |---|---|
 | `internal/deluge/client.go` | `core/integrations/download/deluge` adapter (`core.deluge`); RPC/auth code reused; every method gains ctx; `http.Client` from `env.HTTP` (5-minute timeout becomes per-op limits) |
 | `deluge.GetClient()` global, `ResetGlobalClientForTest`, `SetGlobalClientForTest` | deleted; `Pool.Lease` |
-| `DelugeWebURL/Password`, `download_client.torrent.deluge` | one `download/deluge` record in the instance store created at first boot, `Local=true` when the host is loopback/private (05-metadata M1.10); password into `secrets` as `integrations/download/deluge/password`; env-authoritative behaviour preserved for the compat window by the 09 compat import as an `Origin=pinned` row (05-metadata M1.4), not by a config key |
+| `DelugeWebURL/Password`, `download_client.torrent.deluge` | one `download/deluge` record in the instance store created at first boot, `Local=true` when the host is loopback/private (05-metadata M1.10); password into `secrets` as `integrations.download.deluge.password` (instance ID fixed by 05-metadata M1.10's import table); env-authoritative behaviour preserved as an `Origin=pinned` row while an operator value is set (env names permanent, 05-metadata M1.4 step 2), not by a config key |
 | `deluge_move_enabled`, `deluge_discovery_label`, `deluge_discovery_enabled` | `modules.books.download.*` settings (they are ABO behaviour, not client config) |
 | `BookVersion.TorrentHash`, `BookFile.DelugeHash` | books stores `download.ItemRef`; legacy hashes resolved to the migrated Deluge instance (`Instance=download/deluge`) by a books migration |
 | `NotifyDelugeAfterOrganize/AfterVersionSwap/MoveStorage(ToDir)` | books code calling `Pool.Relocate` (reached as `module.Deps.Downloads`, COR-1) for every `ItemRef` of the book's active versions, behind `Caps.Relocate` |
@@ -611,3 +611,7 @@ Round 1 (`docs/plans/platform-core/reviews/spec-round-1-dispositions.md`):
 - SIMP-6: poll scheduled by `tasks.ScheduleFromConfig`; `refresh_debounce` timer key removed.
 - SIMP-17: `tasks.Fixed(n, reason)`.
 - SEC-15: adapters declare `EgressConfigured` (LAN clients need `Local`); `Source.URL` fetched `EgressPublicOnly`.
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: R-E request (SIMP-4) — secret names use 05-config's dotted `integrations.download.<id>.<field>` grammar; `download/deluge` cites 05-metadata M1.10's import table; pinned rows follow the one permanent-env rule.

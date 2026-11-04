@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/07-ui-shell.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 651865f1-0fad-4e15-8169-ceaf4a573f13 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -960,12 +960,8 @@ that 1.0.0 left undesigned is specified in §7.4.5 and owned by this file.
 
 ## Objections to 03
 
-1. **03 §3.6 UI-route example `/system/tasks`.** The shell's tasks page is `/activity` (§7.4.3; 09 S9
-   and 05-logging §5 already use it). Proposed: change the example to `/activity`. (`tasks` stays
-   reserved, which is harmless.)
-
-Resolved in 03 v1.3.0 and removed here: the ui-kit SDK-row objection (FE-24) and the reserved-segment
-objection (03 now reserves `invite`, `activity`, … through one `module.ReservedIDs()`, FE-23).
+None open. 03 v1.4.0 §3.6 uses `/activity` as the shell UI-route example (the v1.1.0 objection).
+Resolved earlier: the ui-kit SDK-row objection (FE-24) and the reserved-segment objection (FE-23).
 
 ## Review history
 
@@ -1003,3 +999,7 @@ Round 1 (2026-11-04), findings applied to this file:
 - SIMP-27 — no Go emitter; spike result recorded.
 - MOD-20 — embed files beside `web/` (reference to 06 §6.12.5).
 - Cross-cutting 2, 9 — `/` legacy until shell adoption; one web build entry point and `.dockerignore`.
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: Objection to 03 (UI-route example `/system/tasks`) removed: 03 v1.4.0 uses `/activity`.

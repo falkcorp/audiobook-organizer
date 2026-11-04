@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-indexer.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 5e2d5cda-5f98-4db2-87b1-b4c8d6519ec7 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -273,7 +273,7 @@ Core-shipped adapters: `core.newznab` and `core.torznab` — one implementation,
 redacted by providerhttp. Phase: built with `acquire` (phase 2 of [05-download](05-download.md) §1; deferred-build);
 ABO does not need indexers to run on core, and an audiobook search (`CatAudiobook`, `TypeBook`/`TypeSearch`) is
 possible later without contract change. Instances are records in the one instance store (05-metadata M1,
-SIMP-4); the API key is the secret `integrations/indexer/<id>/api_key`.
+SIMP-4); the API key is the secret `integrations.indexer.<id>.api_key` (05-config §2.3 grammar).
 
 ### 3.1 Prowlarr interop through the *arr facade
 
@@ -422,3 +422,7 @@ Round 1 (`docs/plans/platform-core/reviews/spec-round-1-dispositions.md`):
 - COR-1: modules reach the Pool as `module.Deps.Indexers`.
 - SIMP-4: instance records in the 05-metadata M1 store; secret `integrations/indexer/<id>/api_key`.
 - SIMP-16 / COR-17: RSS resource written as `tasks.Res(...)` (= `entity.Ref`).
+
+Integration pass (cross-cluster requests, 2026-11-04):
+
+- integration pass: R-E request (SIMP-4) — secret name in dotted form.
