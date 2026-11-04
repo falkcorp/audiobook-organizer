@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-realtime.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.7.1 -->
 <!-- guid: 9f4f16ae-e4d9-4fd1-a6df-e409e07602ad -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -433,8 +433,10 @@ Names are shown under core's default metric namespace `mediacore`. An app passes
 
 All of it is R2, in the flip order of [09](09-abo-on-core.md) §9.4; nothing is kept for old clients (D10).
 HEAD's three stream URLs (`/api/events`, `/api/v1/operations/events`, `/api/v3/ops/events`) have no
-successor URL and no projection: their only consumer is the embedded SPA, which moves to
-`/api/core/v1/events` in the same PR that deletes them.
+successor URL and no projection: their only consumer is the embedded SPA, which leaves each stream in the PR
+that deletes it. The run streams B and C go with HEAD's engine in the tasks flip F5, whose PR switches the
+Activity page to polling `GET /api/core/v1/tasks/runs`; hub A goes in the events and realtime flip F6, whose PR
+moves the whole SPA, the Activity page included, to `/api/core/v1/events`.
 
 | ABO today | Becomes | Deleted by |
 |---|---|---|
@@ -443,7 +445,8 @@ successor URL and no projection: their only consumer is the embedded SPA, which 
 | `internal/server/handlers/opsv3/events.go` broker (stream C) | its algorithm becomes `core/internal/sse` | the tasks flip (F5) |
 | `opaccess.Repairs.ForStream`/`StreamOpen` | the catalog `Visible` of the repairs topics (books) + `auth.Service.Revalidate` | F5 |
 | `withUserText` (`opsv3/events.go:609-616`) | `tasks.RedactRunView` as the `TopicSpec.Redact` of `core.task.run-changed.v1` and the same function in the REST run serializer (§4.7) | F5 |
-| `web/src/services/eventSourceManager.ts`, `openOperationsSSE` (`api.ts:733-740`), `useOperationsStore` SSE | `@mediacore/shell`'s `useTopic<T>(topic, onEvent, {key})` and `useResync(handler)` (07 §7.4.2, §7.9; one signature, FE2-20) over the fetch-based reader of §4.8, one stream per browser per app. Between F5 and F6 the Activity page polls `GET /api/core/v1/tasks/runs` (05-tasks 5T.3.10), because HEAD's run streams are gone and the hub is not yet wired | F6 |
+| `openOperationsSSE` (`api.ts:733-740`) and `useOperationsStore`'s SSE (stream B's client) | the Activity page polls `GET /api/core/v1/tasks/runs` (05-tasks 5T.3.10) until F6, because HEAD's run streams are gone and the hub is not yet wired | F5 |
+| `web/src/services/eventSourceManager.ts` (hub A's client) | `@mediacore/shell`'s `useTopic<T>(topic, onEvent, {key})` and `useResync(handler)` (07 §7.4.2, §7.9; one signature, FE2-20) over the fetch-based reader of §4.8, one stream per browser per app; the Activity page moves from polling to the stream in the same PR | F6 |
 
 ## 12. Open items
 
@@ -529,4 +532,5 @@ D10–D12 revision (2026-11-04):
 - Rewritten: §4.1 compression (no legacy routes), §4.5 caps (one bucket), §4.7 (no projection consumers),
   §9 (nothing renamed: HEAD has no realtime series), §11 (HEAD's three stream URLs deleted with no successor:
   streams B and C by the tasks flip F5, hub A and the SPA's `eventSourceManager` by the events and realtime
-  flip F6; between them the Activity page polls the native runs route).
+  flip F6; between them the Activity page polls the native runs route). Consistency pass: §11 deletes each
+  SPA stream client in the flip that deletes its stream (stream B's client in F5, `eventSourceManager` in F6).
