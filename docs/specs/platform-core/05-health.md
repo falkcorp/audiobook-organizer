@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.8.1 -->
+<!-- version: 1.9.0 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -162,15 +162,41 @@ behaviour (05-http-api §10, SEC6-9), so there is no `basic_gate_no_username`.
 **Advisory tokens owned by other files.** Health has three statuses, so a token another file calls `warn` is a
 `Reason` on a `StatusDegraded` result (readiness unaffected: Degraded passes it), and one it calls `info` is a
 `Reason` on a `StatusUp` result (no probe or readiness effect; shown on the authenticated endpoints and the
-token-only route). Two such tokens: `config_legacy_name_shadowed` on `core.config` (warn: a `BelowStored` legacy
+token-only route). Three such tokens. Two are `config_legacy_name_shadowed` on `core.config` (warn: a `BelowStored` legacy
 name of a `ProtectAdmin`+ key is set and differs from the stored value, which stays effective; 05-config §1.3.5
 "Shadowed legacy names", SEC6-1), and `revocation_journal_colocated` on `core.backup` (info: the revocation
 journal shares the store's filesystem device, so a whole-volume snapshot rollback would revert both; 05-backup
-§5B.3.6 "Where", SEC6-10). One reason an integration instance component
+§5B.3.6 "Where", SEC6-10). A third, `config_narrowing_owed` on `core.config` (warn), is reported while a
+declared narrowing is owed and its commit has not succeeded (05-config §1.3.5, §1.5), so the next rollback,
+which would boot with the wider value, is visible beyond one boot-log line; the boot also writes the owed key
+names to `<state_dir>/operator-names.json`, which `make rollback` and the updater print (SEC8-9). From the
+first release that declares a narrowing until S8 it travels through HEAD's `degraded` token list as the
+SEC7-12 tokens do (above). One reason an integration instance component
 (`core.integrations.<capability>.<instance>`) reports on a `StatusDegraded` result is
-`operator_secret_withheld`: an operator-sourced secret is withheld, and nothing sent, because a destination
-field (URL-typed, or host and port) of that instance is not operator-sourced or names another origin; the
-result names the withheld fields, never their values (05-metadata M1.4 step 2, SEC7-3).
+`operator_secret_withheld`: an operator-sourced secret is withheld, and nothing sent, because the effective
+origin of a destination field (URL-typed, or host and port) of that instance equals neither the origin of
+that field's operator value (or the adapter default, when there is none) nor the instance's
+`OperatorSecretOrigin`; the result names the withheld fields, never their values (05-metadata M1.4 step 2;
+SEC7-3, R8-5, SEC8-2).
+
+**Factory-reset tokens (R8-1).** A factory reset is the `KindReset` swap of storage's one restore slot
+(05-storage §5S.3.15), so a reset staged or in flight is reported with the swap's own reasons, never a
+reset-only token. Two reasons on `core.storage`, both owned by 05-storage §5S.3.15, report its two
+non-crash outcomes:
+
+- `factory_reset_failed` (`StatusDegraded`): a set-aside of the staged reset failed; the boot moved back
+  what it had moved, journaled `rejected` and serves the untouched store (COR8-3, DATA8-1). It is reported
+  while the newest swap journal is that rejected `KindReset` journal, so it clears when the next swap is
+  staged.
+- `factory_reset_cleanup_incomplete` (warn, `StatusDegraded`): the post-reset hook recorded `hook_done`
+  with per-entry failures (an entry it could not delete, as HEAD warns and continues). The hook never fails
+  boot (COR8-4, OPS8-5). The authenticated `Detail` names the count and the paths; the probes and the
+  token-only route show the token alone. It is reported while the newest `KindReset` journal's `hook_done`
+  record lists failures.
+
+Both exist from S2b, where the staged reset ships, before this file's readiness core (S5) and `Snapshot`
+(S8). Until S8 they travel through HEAD's `degraded` token list, through the same fixed-token source as
+the SEC7-12 tokens above, so the S2b release note's promise of a health token holds from S2b.
 
 ### 5H.3.2 Startup steps
 
@@ -584,7 +610,7 @@ internally.
 | `plugin.Registry.HealthCheckAll` + `/system/status` `plugin_health` | adapter components; `/system/status` stays a `books` route (it is mostly library data) and reads component states |
 | `aidispatch.defaultHealth` global (`health.go:55`) | instance owned by the AI integration, reporting components ([05-ai](05-ai.md)) |
 | `internal/sdnotify` | `core/internal/sdnotify` (+ watchdog ping) |
-| `internal/sysinfo` host parts (memory, uptime, runtime) and service status | `health/sysinfo`, a **re-implementation**, not a move (04 §8.6 row, R7-8): `service.go`'s `RecentOperations` (`internal/sysinfo/service.go:28,48,77-82` @748fd787a) converts HEAD's v2 run rows into v1 `database.Operation` for the dashboard and has no import-path-only replacement, so that reader stays books' dashboard code over taskstore's row types until 05-tasks T2–T7 re-point it at `tasks` |
+| `internal/sysinfo` host parts (memory, uptime, runtime) and service status | `health/sysinfo`, a **re-implementation**, not a move (04 §8.6 row, R7-8). `service.go` is a **divided file** (MOD8-5): only its host and runtime status is re-implemented in `health`; the rest stays in `internal/sysinfo` at its path. What stays: `RecentOperations` (`internal/sysinfo/service.go:77-99` @748fd787a), which converts HEAD's v2 run rows into v1 `database.Operation` for the dashboard and has no import-path-only replacement, so it stays books' dashboard code over taskstore's row types until 05-tasks T2–T7 re-point it at `tasks`; `CollectSystemStatus`' library and import fields (`config.AppConfig.RootDir`, `database.ImportPath`, `DashboardStats`, `:197-210`); and the v1 `OperationLog` helpers (`:287-340`) |
 | `internal/sysinfo` library parts, `DashboardService` | `books` dashboard; `GetHealthCheckResponse` deleted (no caller) |
 | `internal/diagnostics` zip/section machinery | `health/diagnostics` |
 | SlimBook/authors/series/version-groups/iTunes/missing-fields sections, `BuildBatchJSONL` | `books` `Contributor` sections; the AI batch builder goes with [05-ai](05-ai.md) |
@@ -697,3 +723,10 @@ Round 7:
 - SEC7-12 — 5H.3.1: `auth_disabled_remote` and `config_legacy_name_shadowed` are carried by HEAD's `degraded` token list from S4 r2 until S8, beside `basic_gate_no_password`.
 - SEC7-3 (cross-cluster request, R-F) — 5H.3.1 lists the integration instance reason `operator_secret_withheld` (05-metadata M1.4 step 2).
 - integration pass (round 7): §5H.3.6 and §5H.10: `internal/sysinfo` is a re-implementation in `health` (04 §8.6), its `RecentOperations` reader of HEAD's v2 run rows staying books' (R-H request); SEC7-12 tokens checked: already present.
+
+Round 8:
+
+- R8-1 / COR8-3 / COR8-4 / DATA8-1 / OPS8-5 — 5H.3.1 "Factory-reset tokens": `factory_reset_failed` and `factory_reset_cleanup_incomplete` on `core.storage`, carried by HEAD's `degraded` token list from S2b until S8; a staged or in-flight reset uses the one swap's reasons, with no reset-only token.
+- SEC8-9 — advisory token `config_narrowing_owed` on `core.config` (warn), carried by HEAD's token list until S8.
+- R8-5 / SEC8-2 (R-F request) — `operator_secret_withheld` is raised when a destination's origin matches neither the operator or adapter-default origin nor the instance's `OperatorSecretOrigin`.
+- MOD8-5 — 5H.10 `internal/sysinfo` row: `service.go` is a divided file; host and runtime status → `health`, while `RecentOperations`, the library and import fields and the `OperationLog` helpers stay in `internal/sysinfo`.

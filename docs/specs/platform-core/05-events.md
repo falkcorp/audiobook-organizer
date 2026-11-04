@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-events.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: 6dbdef8e-e3f3-4088-bdb9-ba37a706165d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -662,7 +662,10 @@ names included), so cardinality is bounded.
 | `internal/dedup/lifecycle.go:94` subscriber | `events.On` declared in `books`' `Register` |
 | webhook plugin (`internal/plugins/webhook/plugin.go:79`) | a [05-notify](05-notify.md) webhook channel adapter. `books` emits each of the 12 legacy event types as a notification through `Deps.Notify` (`notify.Publish`, staged in the batch of the state change; its topics carry `Notify` metadata), and the kernel's core consumer `core.notify.deliver` delivers it to the webhook instance; no bus subscriber is involved (COR2-3) |
 | `internal/operations/registry.EventHub` + `op.*` names | core topics `core.task.run-changed.v1` (merges `op.created`, `op.updated`, `op.current_item`, `op.terminal`), `core.task.log-appended.v1` (`op.log`) and `core.task.finished.v1`; published by the executor after each commit; realtime bridges the first two one-to-one, and its legacy projections map them back to the old frame names ([05-realtime](05-realtime.md)). Between the executor's move (09 S5) and the projections (09 S6) a **books** bus subscriber on the two task topics feeds the legacy streams A, B (`registry.EventHub`, `op.*`) and C (the v3 broker), forwarding only kinds with a legacy def ID, under that ID; the executor publishes nothing outside core (05-tasks 5T.4 step 3; FE2-3, COR3-9, FE3-12, SEC3-9) |
-| `internal/operations/registry` side effects of the terminal and log paths: the v1 status bridge (`propagateLegacyOpStatus`, `legacy_op_status.go`, called from `publishOpTerminal`) and the activity mirror (`activity_mirror.go`, `reporter_db.go:37,866`, writing books' `database.ActivityEntry`) | **books** bus subscribers, not executor code (R7-8, MOD7-2): from T0+T1 a books subscriber on `core.task.finished.v1` (only kinds with a legacy def ID, under that ID) drives the v1 status bridge, which stays ABO code in opsbridge until T8 ([05-tasks](05-tasks.md) 5T.8.1); a books subscriber on `core.task.log-appended.v1` writes books' activity feed. Both are post-commit and lossy under 5E.5.1's drop policy, as HEAD's post-commit `publishOpTerminal` path and the mirror's bounded queue are; the executor publishes nothing outside core and calls no ABO code (R1) |
+| `internal/operations/registry` side effects of the terminal and log paths: the v1 status bridge (`propagateLegacyOpStatus`, `legacy_op_status.go`, called from `publishOpTerminal`) and the activity mirror (`activity_mirror.go`, `reporter_db.go:37,866`, writing books' `database.ActivityEntry`) | **books** bus subscribers, not executor code (R7-8, MOD7-2): from T0+T1 a books subscriber on `core.task.finished.v1` (only kinds with a legacy def ID, under that ID) drives the v1 status bridge, which stays ABO code in opsbridge until T8 ([05-tasks](05-tasks.md) 5T.8.1); a books subscriber on `core.task.log-appended.v1` writes books' activity feed. The mirror is permanent
+books behaviour (the activity feed is books', 03 §3.3 `log`), so the T0+T1 PR moves `activity_mirror.go`
+and the mirror part of `reporter_db.go` out of opsbridge into `internal/activity`, which already owns
+`ActivityEntry` writing and outlives T8's deletion of the registry path (MOD8-8). Both are post-commit and lossy under 5E.5.1's drop policy, as HEAD's post-commit `publishOpTerminal` path and the mirror's bounded queue are; the executor publishes nothing outside core and calls no ABO code (R1) |
 | `realtime.EventHub` `Send*` helpers (3 call sites outside the package) and `BookChangeCoalescer` | publishes of typed topics; the SSE hub ([05-realtime](05-realtime.md)) is a core subscriber; book-change coalescing becomes a `Coalesce` subscription or `RealtimeMeta.Coalesce` inside `books` |
 | `OperationDef.Triggers` (1 dead declaration) | `outbox.ConsumeIntoTask`: `books` stages the durable topic `books.book.relocated.v1` in the same batch that moves a book, and a books consumer starts `books.deluge.path-update` (or the 05-download successor) with the book ID — this makes the relocation follow-up durable for the first time |
 | direct `EnqueueOp` from handlers after a state change | case by case: `outbox.ConsumeIntoTask` where the follow-up is correctness-critical (inventory in [09-abo-on-core](09-abo-on-core.md)) |
@@ -754,3 +757,7 @@ Round 7:
 
 - MOD7-2 / R7-8 — 5E.13 row: the v1 status bridge and the activity mirror become books subscribers on `core.task.finished.v1` and `core.task.log-appended.v1` (the bridge stays in opsbridge until T8), so no ABO legacy format enters the executor.
 - R7-3 / DATA7-2 (consistency) — `Tx.StartRun`: `Insert`'s precondition is the guard row's `Expect(absent)` (books: plus the census row); a conflict rebuilds the relay batch under `storage.RetryOnConflict` before any redelivery.
+
+Round 8:
+
+- MOD8-8 — 5E.13 row: the activity mirror moves at T0+T1 from opsbridge into `internal/activity`, so the books subscriber on `core.task.log-appended.v1` survives T8.
