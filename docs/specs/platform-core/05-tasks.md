@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.13.2 -->
+<!-- version: 1.13.3 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -629,7 +629,9 @@ type Approval struct {
 | approve / decide (`awaiting_decision`) | `Perms.Approve` (decide on a run interrupted under ResumeAsk: `Perms.Approve` if set, else `Perms.Start`) **and** a verified method, the same rule as 05-rbac §4.10 (SEC-24): an interactive session, a sign-in through an app-level authenticator extension whose `MethodSpec.Interactive` is true (only `app.Options.Authenticators` may set it, 06 §6.4.5, SEC2-16; ABO's Cloudflare Access is one; a module's `Registrar.AuthMethod` never is), or an API key whose scopes **name** the required scope explicitly (not via `core:admin` or another implying scope; the identity cutover gives a migrated all-atom or admin key each such scope explicitly, so its HEAD approval reach is kept, 05-rbac §6). Refused: a delegated session (`MethodSessionDelegated`) and a forwarded header, which is never identity (current rule, `opsv3/runs.go:395-410`) | closed |
 | pause/resume executor, edit schedules | `core:tasks.manage` | closed |
 
-Every approve, decide, cancel-by-other and schedule edit writes an `audit` record, named per [05-rbac](05-rbac.md)
+The `core:tasks.view` and `core:tasks.manage` scopes are in the fixed `core:*` catalog that F2 declares, whichever
+subsystem is wired ([05-rbac](05-rbac.md) §5), so the identity flip F4 can write them into migrated roles before
+the tasks flip F5 serves them. Every approve, decide, cancel-by-other and schedule edit writes an `audit` record, named per [05-rbac](05-rbac.md)
 §7.1: `core.task.approve` / `core.task.reject` (approve and decide), `core.task.cancel` (cancel by another
 actor); a schedule edit is a write of its config key and is recorded as `core.settings.update`.
 
@@ -739,7 +741,10 @@ through `ScheduleFromConfig`. There are no schedule-key aliases (D10). A former 
 05-config's rename table) into the new key's value: a duration `d` → `{enabled: d > 0, every: d}`, so
 "0 disables" becomes `enabled: false`. HEAD's 16 `scheduled.<entry>` entries (`config.go:991-1046`) are
 converted the same way, each by HEAD's own reading of the entry, into `modules.books.scheduler.schedules.<entry>`,
-which books declares for the kind the entry fires (05-config's rename table; 5T.8.2's map names the kind). The
+which books declares for the kind the entry fires (05-config's rename table; 5T.8.2's map names the kind).
+Every key M2 writes is registered in the build that runs M2: books declares its `modules.books.scheduler.schedules.*`
+keys with its config section from the config flip F3, and every `core.*` section, schedule keys included, is
+registered dark from F2 (IMPL-1), although the kinds that read them register at F5 or at their owner's flip. The
 one entry whose op becomes a core kind, `db_optimize`, also seeds that owner's key `core.storage.schedules.compact`,
 and its books key drives the books half `books.maintenance.aux-store-compact` (5T.8.2). Non-timing tuning keys
 are not schedule keys; the rename table moves them like any other key. Spec CI carries a doc-lint: every `ScheduleFromConfig("…")` literal in
@@ -770,7 +775,8 @@ change the owner decides per def (open item 1). The 38 `TaskDefinition`s become
 default; `RunOnStart` → `.OnStart()`; `IsEnabled` → the key's `enabled` (or `.When` for gates that
 are not schedule settings); window membership (`maintenanceOrder`, `internal/scheduler/scheduler.go:197-246`)
 → `Window: "nightly", Order: idx`. `transcode` (enqueues nothing) is deleted; `batch_poller` becomes the
-schedule of the core kind `core.ai.batch-poll` ([05-ai](05-ai.md)). The definitions' bodies and these
+schedule of the core kind `core.ai.batch-poll` ([05-ai](05-ai.md)), registered from F5 by its minimal owner
+registration (5T.8.2) and extended by the AI flip F7. The definitions' bodies and these
 declarations land dark and are registered by the tasks flip (F5, 5T.8.2), which deletes ABO's scheduler in
 the same PR, so no kind ever has two schedulers.
 
@@ -1443,7 +1449,7 @@ phases and steps. Nothing in `tasks` writes before 06's pre-migration checkpoint
    reload → dispatcher (100 ms tick + wake), watchdog (30 s), N workers (`core.tasks.workers`, default
    8). The scheduler goroutine starts in the next 06 step, and the outbox relay starts there from its
    schedule's `OnStart`. Dispatch waits for each def's `Ready` signals through `health.Registry.Wait`,
-   the readiness core of [05-health](05-health.md), which lands with `tasks` (COR4-8): storage reports
+   the readiness core of [05-health](05-health.md), which lands with `tasks` in F2 (COR4-8): storage reports
    `core.storage`, and books' warm-up reports `books.memdb` through `Registrar.Health` and
    `Deps.Health`, so a book-reading run is never dispatched before the memdb is warm (D44,
    `TestDispatch_WaitsForReadySignal`). Waiting runs hold no worker, key or clock (current warm-up rule,
@@ -1528,7 +1534,7 @@ rather than runs:
 ### 5T.6.1 Native store (`c/tasks/`)
 
 `tasks.NativeStores` is what every app, `examples/hello` and `coretest` use (SIMP4-3). It lands with
-`tasks`, dark in ABO until the tasks flip (5T.8.2): under 03 §3.4 rule (b) `hello` and `coretest` are core
+`tasks` in F2, dark in ABO until the tasks flip F5 (5T.8.2): under 03 §3.4 rule (b) `hello` and `coretest` are core
 consumers, and `hello.count` runs on it from the PR that lands it (06). Values are `codec.JSON[T](1)` of the
 core type.
 
@@ -1629,7 +1635,11 @@ refuses inside one (05-storage §5S.3.4, DATA7-1). `TestNativeStores_RoundTrip` 
 
 Every ABO definition is converted to a native core definition **before** the tasks flip, and the flip
 (F5 of the R2 release, [09](09-abo-on-core.md) §9.4) registers all of them at once, adds books' tasks cutover step and deletes
-HEAD's engine in the same PR (D10, D11). There is no adapter, no alias field and no separate floor release
+HEAD's engine in the same PR (D10, D11). `core/tasks` itself, with its executor, scheduler, stores, `Importer`
+and `ForEach`, lands earlier, in **F2, the foundation PRs** that open R2 dark before F3 (09 §9.4; the Core
+group of 5T.8.2): no books kind is registered on it before F5, and before F5 ABO's build uses only its pure
+loop surface (`Parallelism`, `ForEach`, `ItemsError`), through `internal/storagemigrate`'s cutover steps from
+F3. There is no adapter, no alias field and no separate floor release
 for the tasks code: the flip is the one point where ABO's runs
 move from HEAD's engine to core's, and the R2 cutover is the one point where its run data moves.
 
@@ -1638,7 +1648,7 @@ move from HEAD's engine to core's, and the R2 cutover is the one point where its
 | ABO today | Becomes |
 |---|---|
 | `internal/operations/registry` (dispatcher, worker, watchdog, resume, shutdown, batch runner, chunk ledger, fence, deps, debounce, pause, stand-down, warm-up) | `mediacore/internal/executor`, a **re-implementation** (an 04 §8.6 row with a generated count; R7-8, MOD7-1) written fresh against `tasks.RunStore` and `tasks.RunState`, because the engine's files use HEAD's run vocabulary (`internal/operations/state`) and v2 row types, so no file moves. The figures are the generated ones of 04 §8.6's registry row (MOD8-7): 30 non-test files, 14 of them on HEAD's v2/v3 row types, 5 of them holding 39 code references to `internal/operations/state`. The ABO package is **deleted by the flip**, with its v1 status bridge (`legacy_op_status.go`) and backfill (`legacy_backfill.go`, `internal/server/legacy_backfill_op.go`), which have nothing left to bridge once no v1 writer exists. The activity mirror (`activity_mirror.go`, `reporter_db.go:37,866`, which writes books' `database.ActivityEntry`) becomes a **books** subscriber on `core.task.log-appended.v1` in `internal/activity`, keeping HEAD's bounded queue and counted drops ([05-events](05-events.md) 5E.13; MOD8-8) |
-| `internal/operations/state` | read only by books' tasks cutover step (5T.8.3), which decodes HEAD's stored vocabulary with it (the v2 status table, the V3 constants, `FromV2`); it stays in place as an ABO package that `internal/books/cutover` imports (03 §3.5.1), and is deleted with the HEAD-format readers in R3 (09 §9.4, PC-14-01). Core's state machine over `tasks.RunState` is part of the executor's re-implementation. From the flip the SPA's Activity page no longer reads `web/src/generated/ops.ts`; `tools/cmd/opsgen` and that file are deleted in R3 with the HEAD-format readers (03 §3.5.1 keeps opsgen in ABO until then). The page reads the generated tasks client and `RunState` values ([07](07-ui-shell.md)) |
+| `internal/operations/state` | read only by books' tasks cutover step (5T.8.3), which decodes HEAD's stored vocabulary with it (the v2 status table, the V3 constants, `FromV2`); it stays in place as an ABO package that `internal/books/cutover` imports (03 §3.5.1), and is deleted with the HEAD-format readers in R3 (09 §9.4, PC-14-01). Core's state machine over `tasks.RunState` is part of the executor's re-implementation. From the flip (F5) the SPA's Activity page no longer reads `web/src/generated/ops.ts`; it reads the generated tasks client and `RunState` values ([07](07-ui-shell.md)). `tools/cmd/opsgen` (which imports this package), `web/src/generated/ops.ts` and `internal/operations/state` are deleted **together**, in one R3 PR with the HEAD-format readers, so no build holds opsgen without the package it reads; the F5 flip deletes none of the three, and the R3 PR moves `ops.ts`'s remaining importers first ([07](07-ui-shell.md) §7.8) |
 | `internal/operations` (`progress.go`, `trigger_source.go`, `state.go`, `selection.go`, `types.go`) | `progress.go` and `trigger_source.go` → `tasks`; `state.go`'s v1 checkpoint helpers (`OperationState`, `SaveCheckpoint`, `LoadCheckpoint`, `ClearState`, `state.go:14-100`, 11 books call sites) are replaced by `rc.Checkpoint` in each caller's conversion PR and deleted by the flip; `BulkMetadataFetchParams` (`state.go:27-30`) → `internal/server`, its only user (`metadata_ops.go:196,796,885`); `selection.go`, `types.go` → `internal/books/contract` (04 §3) |
 | `pkg/ops` (Task/Batch/Fixer, Effects, Schedule, contracts, RC, Approval, opstest; `Pipeline` dropped, A7) | `core/tasks`, `core/tasks/taskstest` (from `pkg/ops/opstest`), with A1–A7; `pkg/ops/opstest` is a **re-implementation** in `taskstest` over `tasks.RunState` and core's in-memory storage, because its files read HEAD's V3 states and build HEAD's v2/v3 rows; its Book-typed fakes are re-implemented in `internal/books/store/storetest` (04 §8.6 rows; MOD7-1) |
 | `pkg/ops/writer.go` typed methods + `internal/operations/opswriter` | run fencing (`opswriter/fence.go`: `ErrFenced`, `WithFence`, `FenceFromContext`) → public `tasks` (04 §3 `opswriter` *Split*); the generic gated write of 5T.3.5 is core code in `mediacore/internal/executor` (MOD7-13); typed `ModifyBook*` over `tasks.Writer`: the contract interface → `internal/books/contract`, the implementation (`writer.go`, `evidence.go`, `history.go`, `intent.go`, `evidence_journal.go`) → `internal/books/writer` (the `opswriter` rename; 04 §2.4, §8.6; MOD6-12) |
@@ -1670,14 +1680,14 @@ summary row. The groups are disjoint by definition and sum to HEAD's 233 (34 + 2
 
 | Group | Content | Count | Gate |
 |---|---|---|---|
-| Core (PC-12-01…06) | `core/tasks`, the executor, the scheduler, `NativeStores`, `Importer`, `taskhttp`, `taskstest`; `hello` and `coretest` run on them | — | `taskstest.StoresSuite` with its importer cases, the core rows of 5T.9 |
+| Core (PC-12-01…06), in **F2** (the foundation PRs, 09 §9.4) | `core/tasks` (with `Parallelism`, `RunItems`, `ForEach` and `ItemsError`), the executor, the scheduler, `NativeStores`, `Importer`, `taskhttp`, `taskstest`; `hello` and `coretest` run on them; the `core.tasks` config section (5T.10) and the `core:tasks.*` scopes (5T.3.7) are declared here; the three minimal owner registrations below are created here. Dark in ABO: no books kind is registered, ABO's kernel starts no executor or scheduler and mounts no `taskhttp` route before F5, and ABO calls only the loop surface, from `internal/storagemigrate` (05-storage) at F3 and F4 | — | `taskstest.StoresSuite` with its importer cases, the core rows of 5T.9 |
 | T2 | the 34 `MaintenanceJob`s (`internal/maintenance/jobs`) → books Task kinds (`Run(ctx, JobStore, ProgressReporter, dryRun)` `internal/maintenance/job.go:498` → `TaskSpec.Run(rc, p)`; `Policy()` → `Common`) | 34 | `taskstest.Conformance` per kind |
 | T3 | 24 repairs fixers → `tasks.Fixer` kinds `books.repairs.<fixer-id>`; the 2 defs `repairs.plan`/`repairs.apply` removed | 24 fixers, 2 defs | Fixer conformance suite |
 | T4 | the ops that become **core kinds** (table below), each in its owner's package: 4 maintenance-plugin defs and 2 server defs | 6 defs → 6 core kinds, plus the new `core.tasks.prune` | the owner file's tests |
 | T5 | service-registry plugin defs, per plugin: acoustid 8, dedup 32, metafetch 3, itunes 1, Deluge 4 (through 05-download's client adapter) | 48 | `pkg/plugin/sdk` unused by them |
 | T6 | the maintenance plugin's defs not in T3 or T4, in sub-batches of ≤ 15 by file group | 98 | — |
 | T7 | the server-package defs not in T4 (`internal/server/*_op*.go`) and `scheduler.metadata-upgrade`; the 38 `TaskDefinition`s → `ScheduleFromConfig` declarations on their kinds (5T.3.8); the 15 v2 crons → none (listed in the release note) | 45 + 38 | `TestScheduleParity_AllDefinitions` |
-| **F5 flip** (PC-12-08, with the schedule conversion PC-13-14) | registers every converted definition on core's executor and core's scheduler; adds books' tasks cutover step M4 with the kind-rename map (5T.8.3); deletes HEAD's engine (5T.8.1: `registry`, `opscatalog`, `maintenance`, `scheduler`, `childop`, `opmode`, `opsmetrics`, the v1 checkpoint helpers, the handlers and HEAD routes of 5T.3.10, `opsgen`); moves the SPA's Activity page and the first-party callers to the native routes; updates the dashboards and rules whose `def_id` values or series change (5T.11) | every definition | `make ci` and e2e; the parity suites (resume, cancel, shutdown, schedules); the cutover rows of 5T.9; `TestKindRenameMapCoversLedger`; 05-metrics' dashboard-reference test |
+| **F5 flip** (PC-12-08, with the schedule conversion PC-13-14) | starts core's executor and scheduler in ABO's kernel and registers every converted definition on them, and the three core kinds of the minimal owner registrations below; adds books' tasks cutover step M4 with the kind-rename map (5T.8.3); deletes HEAD's engine (5T.8.1: `registry`, `opscatalog`, `maintenance`, `scheduler`, `childop`, `opmode`, `opsmetrics`, the v1 checkpoint helpers, the handlers and HEAD routes of 5T.3.10; not `opsgen`, `ops.ts` or `internal/operations/state`, which go together in R3, 5T.8.1); moves the SPA's Activity page and the first-party callers to the native routes; updates the dashboards and rules whose `def_id` values or series change (5T.11) | every definition | `make ci` and e2e; the parity suites (resume, cancel, shutdown, schedules); the cutover rows of 5T.9; `TestKindRenameMapCoversLedger`; 05-metrics' dashboard-reference test |
 
 **HEAD's generic ops: which become core kinds (resolves the T4 gap; SI-21).** `raw/06` §6 classes 24 of
 HEAD's 233 definitions `generic`. One rule decides each: a definition becomes a **core** kind only if
@@ -1692,8 +1702,8 @@ targets in 05-storage, 05-logging, 05-metadata, 05-health and 05-ai:
 | `maintenance.db-optimize` | `core.storage.compact` | `core/storage` ([05-storage](05-storage.md)) | full compaction of the main store (`db.go:65-80`, `db.Compact(nil, 0xff)`), `ConcurrencyKey` `core.storage.exclusive` (5T.3.4); schedule `core.storage.schedules.compact` (HEAD's `db_optimize` task, nightly window). HEAD's same op also compacts books' separate AI-scan and OpenLibrary stores: that half becomes the new books kind `books.maintenance.aux-store-compact`, a nightly-window member with no imported runs |
 | `maintenance.db-census-exact` | `core.storage.census` | `core/storage`, `storage.Admin.Census` (05-storage §5S.9.1) | exact per-family count by claims and keyspaces into `c/storage/census/`; HEAD's `book_ver:` special case stays books code behind the census hook |
 | `maintenance.purge-old-logs` | `core.log.journal.prune` | `core/internal/logjournal` ([05-logging](05-logging.md) §5) | the system-log journal by `core.log.journal.retention_days`; HEAD's other half, `operationlog:` rows, is run-log history that M4 imports, so `core.tasks.prune` covers it |
-| `maintenance.throttle-reset` | `core.integrations.release-holds` | `integrations/providerhttp` ([05-metadata](05-metadata.md) M2) | lists, and in Live releases, the quota, auth and rate-limit holds of every instance (`Registry.ReleaseHold`); `DELETE …/instances/{id}/hold` is its one-instance route |
-| `diagnostics.export` | `core.diagnostics.export` | `health/diagnostics` ([05-health](05-health.md)) | already declared there; `diagnostics.ai-analyze` stays books (05-health) |
+| `maintenance.throttle-reset` | `core.integrations.release-holds` | `integrations/providerhttp` ([05-metadata](05-metadata.md) M2); minimal owner registration from F5, full owner at F7 (below) | lists, and in Live releases, the quota, auth and rate-limit holds of every instance (`Registry.ReleaseHold`); `DELETE …/instances/{id}/hold` is its one-instance route |
+| `diagnostics.export` | `core.diagnostics.export` | `health/diagnostics` ([05-health](05-health.md)); minimal owner registration from F5, full owner at F8 (below) | already declared there; `diagnostics.ai-analyze` stays books (05-health) |
 | `maintenance.window` | `core.window.nightly` | `core/internal/scheduler` (5T.3.8) | the window run; its members are kinds with `ScheduleConfig.Window = "nightly"` |
 | (the operation-record half of `maintenance.retention-and-hygiene`) | `core.tasks.prune` | `core/tasks`, the executor (5T.6.1, 5T.10) | terminal-run retention by `core.tasks.history_retention` through `RunStore.Prune`; the job's other half, the one-off `book:series:`/`book:author:` dead-prefix sweep, stays the books kind `books.maintenance.retention-and-hygiene`, under which its stored runs are imported |
 
@@ -1712,6 +1722,26 @@ replaced by T3's per-fixer kinds. Core kinds with no HEAD definition (`core.outb
 `core.updater.check`/`apply`, the auth, audit, diagnostics and library prune kinds) are declared by their
 owners' files and need no map entry, except that `core.ai.batch-poll` takes `batch_poller`'s clock.
 
+**Three core kinds whose owners flip after F5: minimal owner registrations (IMPL-5).** F5 deletes HEAD's engine
+and scheduler, but the owners of `core.integrations.release-holds` (`integrations/providerhttp`, F7),
+`core.ai.batch-poll` (`integrations/ai`, F7) and `core.diagnostics.export` (`health/diagnostics`, F8) land later.
+So that every intermediate `main` keeps HEAD's throttle reset, AI batch polling and diagnostics export, and M4
+renames HEAD's runs and `batch_poller`'s clock only to kinds the F5 build registers, F2 creates in each owner's
+package a **minimal owner registration**: the kind's final `TaskSpec` (name, shape, `Perms`, `Resume`,
+`Timeout`, `Parallelism`, `Effects` on the owner's own core resource, and its schedule key, `core.ai.schedules.batch_poll` for the
+poll) over a one-method interim backend interface declared by that package: `providerhttp.InterimHolds`,
+`ai.InterimPoll`, `diagnostics.InterimExport`. ABO's `main` hands the three backends to the kernel from F5
+through `app.Options.InterimBackends`, and the kernel registers the three kinds at P6 only when their
+backend is set. Each backend is books code over HEAD's state and writes no module entity under the core kind
+(COR2-11): `InterimHolds` lists and, in a Live run, releases HEAD's provider holds; `InterimExport` writes
+HEAD's bundle into the run's zip (`ReadOnly`); `InterimPoll` advances HEAD's AI jobs and stages each ready
+job's apply as a books run through `tasks.Stager.StartIn`, as 05-ai's poll does, so result handlers run only
+under books kinds. The flip that lands each owner **extends** its registration with the native body over the
+owner's store and, in the same PR, deletes the interim interface, its `app.Options.InterimBackends` field and
+the books backend (D10): F7 for release-holds and the poll, F8 for the export. The kind name, its stored runs,
+the poll's clock and the schedule key never change, so no second rename exists; `TestKindRenameMapCoversLedger`
+runs against the F5 build, where the three kinds are registered.
+
 **The kind-rename map (one map, applied once by M4).** Books code, generated at the flip commit from HEAD's op-ID ledger
 (`internal/server/testdata/op_ids.golden`, every canonical ID and `FormerIDs` alias HEAD ever registered),
 `opscatalog.Tombstones` and `taskV2DefIDs` (`internal/scheduler/maintenance.go:154-175`); core holds none
@@ -1728,9 +1758,24 @@ of it (03 R1(c)). Its rules, first match wins:
 
 A scheduler task name maps to the kind it fires through `taskV2DefIDs`, then rule 1 or 4 (`batch_poller` →
 `core.ai.batch-poll`; `transcode` fires nothing and its clock is dropped). M4 applies the map to every
-stored reference to a def ID: runs, clocks, debounce buckets, `Requires` stamps, and the books rows that
-store a def ID (an inventory the step generates and `TestCutover_KindReferencesRewritten` checks); rows that
-store a run ID need nothing, because run IDs are kept. HEAD's 16 `scheduled.<entry>` keys reach the keys of
+stored reference to a def ID: runs, clocks, debounce buckets, `Requires` stamps (all inside the retired ops
+claims), and the books rows **outside** those claims that store a def ID. Those are exactly the activity
+feed's families (05-storage §5S.9.1 row 15), because HEAD's activity mirror writes the def ID into every
+operation entry (`internal/operations/registry/reporter_db.go:848-870`):
+
+| Family | What M4 rewrites |
+|---|---|
+| `act:audit:`, `act:batch:`, `act:change:`, `act:debug:`, `act:info:`, `act:system:` (tier primary rows) | an entry's `type` when it is a HEAD def ID, its `details.def_id`, and its `def:<id>` tag |
+| `act:digest:` (daily-digest rollups) | each digest item's `type` and `def:<id>` tag, as above |
+| `act:typ:` (filter index by type) | an entry keyed by a HEAD def ID is re-keyed to the kind (delete and put in one batch, with its primary row) |
+
+`act:op:` (by run ID), `act:src:` (by HEAD's plugin name, which is kept as stored), `act:bk:` and `act:lvl:`
+need nothing. Rows that store a run ID need nothing anywhere, because run IDs are kept. This list is the
+"rewritten in place by M4" entry of 05-storage §5S.9.1 (DATA-5), and
+`TestCutoverLeavesOtherFamiliesByteIdentical` excludes exactly that column's list (these families, and the
+keys M3 and M6 write in place, which their owners name there) beside the retired claims.
+`TestCutover_KindReferencesRewritten` scans the whole R0-written store for HEAD def IDs and fails if one sits
+in a books family outside the retired claims that this table does not name. HEAD's 16 `scheduled.<entry>` keys reach the keys of
 the kinds they fire through M2 (5T.3.8). After R2 a rename is an owner's data migration through `Importer.RenameKind` (5T.3.13).
 
 ### 5T.8.3 The tasks cutover (M4)
@@ -1748,8 +1793,15 @@ mandatory pre-migration checkpoint (05-storage §5S.3.12), in P4, before the exe
 2. In chunks, each chunk one batch holding the `Importer` calls and the deletes of exactly the source rows
    it imported, with a persisted cursor per family (resumable; 05-storage's crash matrix):
    - **runs:** v3 records, falling back to the v2 row for a run without a projection (open item 5), with
-     their trails, intents, items, log, checkpoints, chunk ledgers, item-key snapshots, rows and row marks,
-     and HEAD's v1 history (`operation:` with its `operationlog:` lines, results, summaries and statuses)
+     their trails, intents, items, log, checkpoints, chunk ledgers, item-key snapshots, and the Fixer rows
+     and marks: `opv2:row:` (read with its index `opv2:rowix:`) → `c/tasks/row/`, and `opv3:mark:` and
+     `opv3:rowmark:` → `c/tasks/mark/` (5T.6.1). They are plan and resume state, not derived data (DATA-3):
+     an imported `awaiting_decision` plan run (rule 2 of the map: `books.repairs.<fixer_id>`, `ModePreview`)
+     keeps the rows its approver decides on, and an interrupted apply run keeps HEAD's rule that a row counts
+     as applied only while its mark exists (`pebble_store_ops_v3_rowmarks.go:13-30`), so it never re-applies a
+     row it already applied. Open runs import them with the run; a terminal run's rows and marks convert with
+     its history. 05-storage §5S.9.1 row 13 names these four families as imported, not deleted. HEAD's v1
+     history (`operation:` with its `operationlog:` lines, results, summaries and statuses) is imported
      as terminal runs with their log pages (D12 (b): task-run and log history are kept). Every run keeps
      its HEAD op ID; its kind goes through the map; `Priority` 0/1/2 → Low/Normal/High
      (`internal/operations/registry/types.go:329-331`). A v1 checkpoint (`operations.SaveCheckpoint`'s
@@ -1789,13 +1841,16 @@ mandatory pre-migration checkpoint (05-storage §5S.3.12), in P4, before the exe
 
 A row the step cannot decode is quarantined and reported, never dropped (5T.5). Every run, clock and stamp
 it imports is counted and checked against the source (5T.9). Rollback is the offline restore of the
-pre-migration checkpoint (or the owner's off-host archive) plus the R1 binary (05-storage, 09): runs started
-after the upgrade are lost with every other post-upgrade write.
+pre-migration checkpoint (or the owner's off-host archive) plus the pre-freeze release's binary, the last
+production release before F3 merged (`.prev` after R2 deploys; 05-storage, 09): runs started after the upgrade
+are lost with every other post-upgrade write.
 
 ## 5T.9 Tests (core must ship)
 
-Rows marked **(ABO)** run in the root module: the cutover rows over a fixture corpus written by the R0
-binary itself, never by hand, and the parity rows against HEAD's behaviour; the rest are
+Rows marked **(ABO)** run in the root module: the cutover rows over 09 §9.3's fixture corpus, which the R0
+binary writes, plus its separate, labelled, hand-built overlay for the cases R0's API cannot write (for this
+file: the corrupt and undecodable ops rows of `TestCutover_UndecodableRowQuarantined`), each overlay case
+listed there; and the parity rows against HEAD's behaviour; the rest are
 core's. Every row is part of `make ci`; there is no previous-build test and no `PREV_REF`.
 
 | Test | Proves |
@@ -1843,13 +1898,14 @@ core's. Every row is part of `make ci`; there is no previous-build test and no `
 | `TestParity_ResumeCancelShutdown` **(ABO)** (HEAD's resume, cancel and shutdown suites, ported as behaviour oracles: each case's HEAD outcome is the expected outcome of the converted definition on core's executor) | G1, PC-12-03 |
 | `TestUnknownKindRun_DroppedAtResume` (a non-terminal run of an unregistered, unheld kind → `interrupted_dropped`, reason `unknown_kind`; a terminal one stays listed; boot succeeds) | 5T.5 |
 | the importer cases of `taskstest.StoresSuite` (over `NativeStores`: an imported run keeps its ID, kind, state and `Seq`; a second import of one ID fails with `ErrRunConflict`; `RunData` lands only on an imported run; `CrashClone` at every point of an import batch leaves the chunk wholly imported or wholly not; `RenameKind` rewrites runs, clock, snapshot and stamps and is idempotent) | 5T.3.13 |
-| `TestKindRenameMapCoversLedger` **(ABO)** (every line of HEAD's `op_ids.golden` and every `opscatalog.Tombstones` key maps to exactly one kind by 5T.8.2's rules; every target is a registered kind of the flip build or a `books.retired.*` kind; no two HEAD canonical IDs map to one registered kind; the core targets are exactly 5T.8.2's table) | 5T.8.2, SI-21 |
+| `TestKindRenameMapCoversLedger` **(ABO)** (every line of HEAD's `op_ids.golden` and every `opscatalog.Tombstones` key maps to exactly one kind by 5T.8.2's rules; every target is a registered kind of the flip build (the three minimal owner registrations included) or a `books.retired.*` kind; no two HEAD canonical IDs map to one registered kind; the core targets are exactly 5T.8.2's table) | 5T.8.2, SI-21 |
 | `TestCutover_TasksFixtureFromR0` **(ABO)** (a store written by the R0 binary, with queued, waiting, running, stopping (each reason), interrupted, quiesced, awaiting-decision and terminal runs of every shape, v1 history, checkpoints, ledgers, rows, marks, pages, clocks, the pause and stand-down markers, debounce buckets and stamps: after M4 every source row is gone or quarantined, every run is present with HEAD's ID, the renamed kind and 5T.8.3's state, every count and cross-reference matches the source, and the first boot's resume sweep acts per policy) | 5T.8.3 |
 | `TestCutover_CheckpointsResume` **(ABO)** (every converted `ResumeContinue` kind resumes from a HEAD-written checkpoint, `v1` checkpoints included, or is listed as resuming from zero once) | 5T.3.6 |
 | `TestCutover_NoCatchUpStorm` **(ABO, fake clock)** (first boot after M4: no kind fires before its next due instant from HEAD's clock; the window clock, imported with `TZ` west of UTC after a run at 23:30 local, is not due again that day) | OPS-7, MOD7-3 |
-| `TestCutover_KindReferencesRewritten` **(ABO)** (every books row of the step's inventory that stored a HEAD def ID names the renamed kind afterwards; `Requires` stamps are honoured for the renamed kind) | 5T.8.2 |
+| `TestCutover_KindReferencesRewritten` **(ABO)** (every row of 5T.8.2's activity-family table that stored a HEAD def ID names the renamed kind afterwards in `type`, `details.def_id` and its `def:` tag, and `act:typ:` holds the re-keyed entry and not the old one; a scan of the R0 corpus finds no HEAD def ID in any other family outside the retired claims; `Requires` stamps are honoured for the renamed kind) | 5T.8.2, DATA-5 |
+| `TestCutover_RepairsRowsAndMarksImported` **(ABO)** (an R0 store with a repairs plan run awaiting decision and an apply run interrupted mid-way: after M4 no `opv2:row:`, `opv2:rowix:`, `opv3:mark:` or `opv3:rowmark:` row is left; the plan run shows every row it held; the apply run, resumed, applies only the rows that had no mark) | 5T.8.3, DATA-3 |
 | `TestCutover_SharedSettingFamilyOnlyRunKeysMove` **(ABO)** (every `setting:` row other than the moved run keys is byte-identical before and after) | 5T.8.3 |
-| `TestCutover_UndecodableRowQuarantined` **(ABO)** (a corrupt ops row is copied under `c/storage/quarantine/`, deleted at its source in the same batch, counted in health; the step completes) | 5T.5 |
+| `TestCutover_UndecodableRowQuarantined` **(ABO)** (a corrupt ops row, from the hand-built overlay, is copied under `c/storage/quarantine/`, deleted at its source in the same batch, counted in health; the step completes) | 5T.5 |
 | `TestCutover_ResumableCrashMatrix` **(ABO)** (`CrashClone` at every chunk boundary and inside a chunk: the resumed step imports each row exactly once) | A-8, 05-storage crash matrix |
 | `TestDispatch_WaitsForReadySignal` (a `books.*` run that reads books is not dispatched before `books.memdb` reports Up) | COR4-8 |
 | (deferred with the `Online` mode, SIMP5-7) 05-storage's `TestModuleOnlineMigrationRunsAsModuleKind` and `TestOnlineMigrationYieldsPastTimeout`, over a test module fixture (5T.3.12); one name each, the owner's (COR5-17) | COR4-5, COR4-6 |
@@ -1884,6 +1940,11 @@ URLs; a schedule key's protection is declared by its owner with the key.
 | `core.tasks.schedules.prune` | `tasks.ScheduleConfig` (declared by `core/tasks` for `core.tasks.prune`, R2-7) | `{"enabled": true, "every": "24h"}` | yes (re-read every poll) | — |
 | `core.<subsystem>.schedules.<name>` / `modules.<id>.<subsystem>.schedules.<name>` (declared by each kind's owner; 5T.3.8, R2-7) | `tasks.ScheduleConfig` | declared per kind by its owner | yes (re-read every poll) | declared by the owner (e.g. 05-updater's apply schedule is `ProtectAdmin`) |
 | `modules.<id>.tasks.max_concurrent` | int | 0 = unlimited | yes | — |
+
+The `core.tasks` section (every row above except the per-owner schedule keys, which their owners declare) is
+registered dark from F2, the foundation PRs (09 §9.4), as every core section is, so that M2 at F3 converts
+HEAD's `operation_log_retention_days` and `maintenance.*` values into registered keys (05-config's rename
+table; IMPL-1); the executor and scheduler read them from F5.
 
 There is no separate history window: history is the run store's terminal rows (the runs the cutover
 imported included), aged out by `history_retention` through `RunStore.Prune`, which the core kind
@@ -2245,3 +2306,12 @@ subsystem) and D12 applied:
   `scheduled.<entry>` keys mapped to `modules.books.scheduler.schedules.<entry>` (`db_optimize` also to
   `core.storage.schedules.compact`), D12's answers cited as D12 (a)–(d), the route-deletion objection settled for F5,
   the approval reach of migrated all-atom keys kept (05-rbac §6), and leftover removed names dropped.
+
+Round 13 (2026-11-04): IMPL-1, IMPL-2, IMPL-4, IMPL-5, IMPL-8, XFILE-2, XFILE-4, DATA-3, DATA-5, CONFORM-1.
+`core/tasks` (executor, scheduler, stores, `Importer`, `ForEach`) lands dark in F2, the foundation PRs, with the
+`core.tasks` section and `core:tasks.*` scopes; the three core kinds whose owners flip later are registered at
+F5 by F2's minimal owner registrations over interim backends (`app.Options.InterimBackends`) and extended at
+F7/F8; F5 no longer deletes opsgen, which goes with `ops.ts` and `internal/operations/state` in one R3 PR; M4
+imports the Fixer rows and marks by family name, and its in-place rewrite of the activity families is listed
+for the byte-identity test; the fixture corpus gains its hand-built overlay; rollback names the pre-freeze
+release.
