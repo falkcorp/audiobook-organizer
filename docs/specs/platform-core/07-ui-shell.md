@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/07-ui-shell.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.6.1 -->
 <!-- guid: 651865f1-0fad-4e15-8169-ceaf4a573f13 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -440,7 +440,7 @@ it), not `/system/tasks` (FE-16).
   core mints `/invite/<token>` (the link form is the app's choice: `auth.Options.InviteLinkForm`, passed as
   `app.Options.Auth`, 05-authn §4.13 owns the option; ABO sets `InviteLinkPath` from S4 to S9) and
   the legacy `AcceptInvite` sends the path token in the body of the same core calls. As at HEAD, that
-  token reaches the server in the request path, where the `DefaultPathRules` invite shape redacts it
+  token reaches the server in the request path, where the `log.DefaultPathRules()` invite shape redacts it
   from logs and spans. The fragment form starts with the shell build (S9). Its reader ships earlier
   (FE5-4, the reader-before-writer rule of 09 §9.2.1): the S4 legacy SPA change also makes the public
   branch's guard `pathname === '/invite' || pathname.startsWith('/invite/')` and adds
@@ -457,7 +457,7 @@ it), not `/system/tasks` (FE-16).
   `login`), so it is a reserved ID but never `NonSPA`: `GET /invite` stays the SPA page before and after
   S9, the more specific legacy pattern wins over the `/` owner, and the P8 shell-segment check passes.
   These two routes are the only implementation for the whole window of 09 §9.6, counted from the
-  release that starts each (S4 for temp login, S9 for invite). Both paths are in 05-logging's `DefaultPathRules` (SIMP5-14), so the
+  release that starts each (S4 for temp login, S9 for invite). Both paths are in 05-logging's `log.DefaultPathRules()` (SIMP5-14), so the
   one request that carries a token is redacted (`TestLegacyInviteLink_302NoToken`).
 * **No `/logout` page (FE2-7).** Signing out is an action in the user menu:
   `POST /api/core/v1/auth/logout`, then navigate to `/login`. `logout` is a server segment in ABO (the ABS
@@ -1503,3 +1503,4 @@ Round 5 (2026-11-04), findings applied to this file:
 - SIMP5-14 — `DefaultPathRules` is 05-logging's.
 - FE5-12 — checked: 07 already has `checkBuild` from UI-0 and keeps `opsgen`; §7.6.3's "now in" wording corrected to "keeps running in … (since UI-0)".
 - FE5-7 — checked: §7.5.1/§7.6.3 already say `ui_build_id` is `""` while a legacy mount owns `/`; §7.6.3 adds that `X-App-Build` then carries the mount's ID (03's row is the cross-cluster fix).
+- integration pass (round 5): §7.4.3 invite paths cite `log.DefaultPathRules()` as a function (MOD5-5, SIMP5-14).

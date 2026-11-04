@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/03-architecture.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: 8af6d935-7143-4d06-8562-b04a18504d81 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -277,7 +277,7 @@ builds none of it, and it is built when the first TV/Movies app starts.
 | `secrets` | public | ABO | Encrypted-at-rest secret store with one keyring; config fields reference secrets by name. Only a secret an app stores in **plaintext** moves: the four secrets HEAD already stores encrypted in its own secret rows (OpenAI key, Google Books key, Hardcover token, Basic password; `internal/config/persistence.go:1955-1958` @748fd787a blanks them in the blob, `:1989-2003` writes them as encrypted setting rows, `SetSetting(…, true)`) are **not moved** during the extraction, and the books legacy config store reads HEAD's encrypted rows, so a rollback never strands the Basic gate (R5-1). The first core write of a plaintext secret stores it here, encrypted, and replaces **every** legacy copy — the legacy blob field **and** the second copy in `config.yaml` beside the database — with an unguessable, never-matching sentinel, never an empty value (the books legacy config store writes it; R4-2); the sentinel carries a fixed prefix, so a core reader treats an orphaned one (no core record left) as unset (05-config). After a rollback the older build's gate therefore refuses every credential until the operator re-enters the secret (fail-closed; the release note says so). On roll-forward the encrypted copy wins unless the legacy value differs from the sentinel, which means an operator re-entered it on the older build: that value is re-imported and re-sentinelled (02 decision 13). | [05-config](05-config.md) |
 | `httpapi` | public | ABO | `net/http` (Go 1.22+ `ServeMux` patterns) API framework: typed routes, mandatory permission per route, error envelope, pagination, versioning, OpenAPI 3.1 generation, core perimeter middleware, and `MountLegacy` — a **permanent, supported** way to mount an app's existing router (ABO's gin engine) behind core's perimeter; it never returns a chain-less group (R6). | [05-http-api](05-http-api.md) |
 | `realtime` | public | ABO | SSE hub with resumable, permission-filtered streams. | [05-realtime](05-realtime.md) |
-| `auth` | public | ABO | Identity: users, sessions, API keys, bootstrap, OIDC/OAuth, credential epochs; middleware. Persists through its identity store interface (below): natively in `c/auth/`; for ABO the books legacy implementation keeps users and API keys in ABO's rows and stores hashed sessions and native one-time tokens in books' extension family, which no older build reads; a new API key always has explicit, non-empty scopes, and a key with no legacy-equivalent scope is written to its legacy row with a scope that grants nothing on an older build, never an empty list (R5-6; 02 decision 13). | [05-authn](05-authn.md) |
+| `auth` | public | ABO | Identity: users, sessions, API keys, bootstrap, OIDC/OAuth, credential epochs; middleware. Persists through its identity store interface (below): natively in `c/auth/`; for ABO the books legacy implementation keeps users and API keys in ABO's rows and stores hashed sessions and native one-time tokens in books' extension family, which no older build reads; a new API key always has explicit, non-empty scopes, and a key with no legacy-equivalent scope is written to its legacy row with a scope that grants nothing on an older build (ABO: `["none"]`, 05-authn §4.4), never an empty list (R5-6; 02 decision 13). | [05-authn](05-authn.md) |
 | `rbac` | public | ABO | Permission scopes (`<ns>:<action>`), roles as data, module-declared permissions, enforcement helpers. Roles persist through `rbac.Store` (below): natively in `c/rbac/`; for ABO in ABO's role rows with legacy atoms only, and namespaced scopes only in books' extension family — never as extra strings in a legacy row, because HEAD's worker confinement is a "nothing else" test that an extra string defeats (`internal/server/middleware/auth.go:271-297`; 02 decision 13). | [05-rbac](05-rbac.md) |
 | `audit` | public | ABO | Append-only audit log (auth events, permission denials, admin actions, task approvals); targets are `entity.Ref`. | [05-rbac](05-rbac.md) |
 | `compat` | public | ABO | Compatibility primitives for strangler migrations: alias tables (paths, config keys, env vars, permission atoms, metric names) registered against one compatibility window (09 §9.2.1), Deprecation/Sunset headers, `mediacore_compat_legacy_use_total`. Every alias needs a row in the compatibility ledger, which `compat.Ledger` merges from two sources: the **app's** ledger (`app.Options.CompatLedger []byte`; a core `//go:embed` cannot reach outside `core/`. ABO's source of truth stays `docs/compat-surfaces.md`, but the Docker build context excludes `docs` (§3.2 item 4), so the books composition root `internal/books` embeds a generated copy, `internal/books/compat-surfaces.md`, which a CI freshness check keeps byte-equal to the source, and `main` passes it on; R4-4; CI's `changes` classifier counts both copies and `core/compat/*.md` as Go inputs, so a ledger-only PR runs the ledger tests, 09 S0, OPS5-4) and a core-owned fragment `core/compat/core-ledger.md` embedded by `compat`, which holds only names every app shares — the permanent `OTEL_*` env aliases (05-config C7); every window alias, of a metric or a config key, is the app's, and a test asserts that every core-fragment row has gate `permanent`. A row ID in both is a boot error. The store-level compatibility guard is the merged storage-format/compat-level mechanism owned by 05-storage (§3.7). | [09-abo-on-core](09-abo-on-core.md) |
@@ -463,13 +463,14 @@ rule, and the stage-visibility gate (§3.5.1 item 4) checks it on every PR.
 Verified assumptions that the extraction breaks (`raw/03-layering-guard.md` §2–§4):
 
 - the **package floor** `minModulePackages = 150` (`internal/arch/layering_test.go:38`). The root has
-  213 packages today. Under 04's mapping 51 packages leave and 5 new paths appear
+  213 packages today. Under 04's mapping 50 packages leave (`tools/cmd/opsgen` stays in ABO until its
+  last importer is native, which may never happen; FE5-12) and 5 new paths appear
   (`internal/books`, the composition root; `internal/books/contract`, the books helper package below
-  it, item 1 and R4-5; `internal/books/taskstore`, books' legacy `tasks.Stores`, 05-tasks 5T.6.2;
+  it, created at S5, item 1 and R4-5; `internal/books/taskstore`, books' legacy `tasks.Stores`, 05-tasks 5T.6.2;
   `internal/books/configstore` (name open), books' legacy `config.OverrideStore`, `integrations.InstanceStore`
   and the books-root half of `library.RootSource`, which need `internal/config` and so cannot live in the
   store residue that `internal/config` imports (MOD5-2, R5-2); `internal/cfaccess`), so
-  213 − 51 + 5 = **167** remain: a margin of 17 that further moves consume (04 §8.4 note 6;
+  213 − 50 + 5 = **168** remain: a margin of 18 that further moves consume (04 §8.4 note 6;
   `raw/03-layering-guard.md` §3's 154 predates the new paths and the 8 packages 04 keeps in ABO, among them
   `internal/logger/logtest` (MOD3-3), `internal/telemetry` (MOD4-4), `internal/metadata/dailyquota` (books'
   legacy gate store, R4-1) and `internal/ai/resultjournal` (plain books code over books' own family, not a
@@ -510,9 +511,11 @@ The guard is **redesigned, not deleted**:
      layer 6 an ABO package never imports `module` or `app`: it receives what it needs (`ExtendStart`,
      loggers, scopes) as funcs or interfaces that `internal/books` wires. A guard assertion fails when any
      package other than `.`, `cmd` and `internal/books` imports `mediacore/module` or `mediacore/app`
-     (non-test imports). Every new path enters `layerOf` in the PR that creates it — the two books
-     packages and `internal/books/configstore` at S2, `internal/books/taskstore` at S5 — so no stale key
-     and no placeholder file is needed (MOD5-9; 04 §8.1 says what `internal/books/contract` holds at S2).
+     (non-test imports). Every new path enters `layerOf` in the PR that creates it — `internal/books`
+     and `internal/books/configstore` at S2, `internal/books/contract` and `internal/books/taskstore` at
+     S5, when every source of contract's content (`pkg/ops`, `pkg/plugin/sdk`, `internal/operations`,
+     `internal/opscatalog`) leaves — so no stale key and no placeholder file is needed (MOD5-9; 04 §2.4,
+     §8.1).
      The legacy store packages import downward only: `internal/books/taskstore` imports the store residue,
      never the reverse, and the residue reaches the code it shares with the moved task store (books legacy
      steps 62/65/66, the every-boot ops reconcile) only through funcs that `internal/books` wires; a legacy
@@ -842,3 +845,4 @@ Round 5 (dispositions in `docs/plans/platform-core/reviews/spec-round-5-disposit
 - SIMP5-8 — the §3.3 table is the one list; `secrets.LegacyStore` named in the `config` row.
 - SIMP5-10 — store paragraph: S2's `app.Options.LegacyConfigStore` is the sole exception to "never through `app.Options`".
 - OPS5-4 — §3.4 and `compat` row: spec Markdown and both ledger copies are Go inputs for CI's `changes` classifier.
+- integration pass (round 5): §3.5.1 counts follow 04 §8.4 note 6 (50 leave, `tools/cmd/opsgen` staying, FE5-12; 5 new; 213 − 50 + 5 = 168, margin 18); `internal/books/contract` enters `layerOf` at S5 with `taskstore` (MOD5-9); §3.3 `auth` row names ABO's `["none"]` scope.

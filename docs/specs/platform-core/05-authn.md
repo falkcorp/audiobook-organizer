@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.6.1 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1135,7 +1135,7 @@ the legacy SMTP settings, as today; from S7 it is built from the `notify/email` 
 
 `PostRestore` is auth's `journal.RestoreHook`. The kernel runs it in P4d's post-restore step (06
 §6.5.1), only on a boot that applied a restore or found a replaced store (below), in the order of
-COR3-2 and COR5-2: **after** config's `OverrideStore.Open`, `secrets.Open` and `AttachOverrides` (so
+COR3-2 and COR5-2: **after** the config store's legacy `Open` (`config.LegacyOpener`), `secrets.Open` and `AttachOverrides` (so
 journal lines are verified with the keyring and the journal is read from the effective
 `core.backup.dir`) and after the
 journal tail was re-applied; before any service is built and before listeners open; it fails boot on
@@ -1219,8 +1219,8 @@ it in the legacy code.
    (DATA4-2). A store constructor writes nothing (DATA4-10). The kernel detects the optional
    capabilities (`LegacySignIns`, `Reconciler`, `KeyConfirmer`, §3.4) by type assertion here, once.
 2. **P4d, post-DAG reconcilers** (06 §6.5.1 is the order; COR3-2), from 09 S4 r2: step 1 is
-   config's `OverrideStore.Open` (ABO's key guard and encryption init), then
-   `secrets.Open(…, OverrideStore.Secrets())` (keyring, `k0-legacy` capture, the roll-forward re-import
+   the config store's legacy `Open` (`config.LegacyOpener`: ABO's key guard and encryption init), then
+   `secrets.Open(…, Secrets())` (`config.LegacySecrets`) (keyring, `k0-legacy` capture, the roll-forward re-import
    of moved config secrets), then the override store's `SetSecrets` and `Attach` (`Load`, read-only)
    (R3-1, R4-6, COR5-2); then 05-backup's
    revocation-journal step, whose auth kinds write through auth's Store (the replaced-store test and
@@ -1781,3 +1781,4 @@ Round 5 (2026-11-04), findings applied to this file:
 - DATA5-18 — books retention sweep for expired `sess:` rows; claim `AgingOut` from the fallback-removal release (§11).
 - FE5-4 — option (a), matching 07 and 09: the S4 legacy SPA gains the `/invite#token=` reader, so invites minted on S9 open after a rollback to S8; core keeps minting the path form until S9; fragment test cell and S9 R-test row (§3.2, §4.13, §10).
 - MOD5-5 / SIMP5-14 — `log.DefaultPathRules()` / `log.DefaultRedactQuery()` cited as functions (§4.13).
+- integration pass (round 5): §4.14 and §5 cite the config store's legacy `Open` and `Secrets` as the optional `config.LegacyOpener` / `config.LegacySecrets` (05-storage §5S.3.11 "Legacy capabilities"), not as `OverrideStore` members.

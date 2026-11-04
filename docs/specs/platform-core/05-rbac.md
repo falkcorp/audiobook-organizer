@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.6.1 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1433,13 +1433,17 @@ option governed by the compat ledger (§6.3, SIMP-7).
    move. The round-3 option "keep the route on the legacy mount under its legacy gate" is deleted: the
    legacy gate is exactly the widening R4-3 removes (SEC4-2).
 
-8. **Replaced-store restores and unjournaled demotions (SEC5-10, decision for the lead).** A restore by
-   an older build has no pre-swap store, so a demotion made only on that build can come back. The
-   stronger option is to set `SignInRestricted` on every `core:admin` holder except the bootstrap
-   path after such a restore, until an owner-verified reset; its cost is that every older-build
-   restore during a rollback locks every admin out until a reset link or the offline
-   `<app> users reset-password`. This file applies the weaker rule (residual in 14 K22; admin holders
-   listed for review, §7.1) pending that decision.
+8. **Resolved (round 5, lead decision): replaced-store restores and unjournaled demotions take the
+   weaker rule (SEC5-10).** A restore by an older build has no pre-swap store, so a demotion made only on that
+   build can come back. This file applies the **weaker rule**, which the lead accepted: after such a
+   restore every `core:admin` holder is listed for review in the restore report and in health
+   (`restore_admins_review`) until an interactive admin acknowledges each one, with auth's fallback
+   having already bumped their epochs and set their keys `needs_confirmation` (§7.1); the remaining
+   window is the residual 14 K22 states. The stronger option, recorded and not taken, is to set
+   `SignInRestricted` on every `core:admin` holder except the bootstrap path after such a restore,
+   until an owner-verified reset; its cost is that every older-build restore during a rollback locks
+   every admin out until a reset link or the offline `<app> users reset-password`. Kept here only so a
+   later decision can revisit it; nothing in the extraction depends on it.
 
 ## Objections to 03
 
@@ -1585,3 +1589,4 @@ Round 5 (2026-11-04), findings applied to this file:
 - SIMP5-9 — `TestNativeBackend_RoundTrip` renamed `TestNativeStore_RoundTrip` (§6.3, §12).
 - COR5-15 — the S4 r1 census is P4d step 1c (§5).
 - DATA5-4 (via 05-authn) — audit action `core.apikey.confirm` added (§7.1).
+- integration pass (round 5): §14 item 8 marked resolved — the lead accepted the weaker rule (admin holders listed for review, `restore_admins_review`, after an older-build restore; residual in 14 K22); the stronger sign-in restriction kept as a recorded, untaken option.

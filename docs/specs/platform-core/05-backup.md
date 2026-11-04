@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-backup.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.5.1 -->
 <!-- guid: 604febb0-a09e-4cf9-99ee-5f3722534da6 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1159,3 +1159,4 @@ Round 5:
 - DATA5-19 — B1: an older build restoring an S3+/S4+ archive pays rows 1–5's rollback costs.
 - FE5-3 / R5-7 — `StagedByBuild` and `Revocation.Source` hold the binary ID; `TestStagedByBinaryID`.
 - COR5-16 / SIMP5-6 — §5B.3.9 table: package-qualified identifiers only in the first column; the re-encryption behaviour of `Rewrap` and the non-identifier items moved to "Also deferred (not checked)".
+- integration pass (round 5): history completed for the R-D requests already in the body — `RestoreContext.Previous` hands auth a read-only `auth.Store` as `auth.RestoreDeps.Previous` and rbac a read-only `rbac.Store` (SEC5-10, built by the kernel at 06 P4d step 3); the `c/backup/served_boot` content marker (SEC5-6, row "Content marker") is the replaced-store signal 14 K22 cites.

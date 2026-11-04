@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/15-evidence-appendix.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.5.1 -->
 <!-- guid: 28e48d7f-7c8d-45af-90cd-14880b2b5988 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -39,11 +39,10 @@ public URLs in `raw/16-arr-domain-research.md` and `raw/15-dependencies.md` with
 
 ## Anchor census per spec file
 
-Regenerated on 2026-11-04 **during the round-5 revision**, from the working tree with the round-1 method
-unchanged (32 files, 31994 lines, 1077 line anchors), while other round-5 revisers were still editing, so
-rows for files under revision are a snapshot that the integration pass re-takes. Run on the round-4 tree,
-the same script reproduces that census's rows (e.g. 01, 02, 05-ai and 13), which confirms the method is
-unchanged. Method (exact, so the next run is comparable):
+Regenerated on 2026-11-04 **in the round-5 integration pass**, after every round-5 reviser had finished
+and after this pass's own edits, from the working tree with the round-1 method unchanged (32 files, 32644
+lines, 1098 line anchors). Run on the round-4 tree, the same script reproduces that census's rows (e.g. 01,
+02, 05-ai and 13, whose rows are unchanged here too), which confirms the method is unchanged. Method (exact, so the next run is comparable):
 
 - every backticked span in the file is tokenized into path-shaped tokens
   (`[A-Za-z0-9_.-]` segments joined by `/`, optionally followed by `:<line>[-<line>][,<line>…]`);
@@ -60,38 +59,38 @@ The v1.0.0 table used a looser, unrecorded method, so its numbers are not compar
 | Spec file | Lines | Anchors with line | Distinct repo paths | Raw files cited |
 |---|---|---|---|---|
 | [01-summary.md](01-summary.md) | 165 | 0 | 3 | 00-baseline-build, 01-package-inventory |
-| [02-decision-record.md](02-decision-record.md) | 148 | 6 | 12 | 00-baseline-build, 05-storage, 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 10-auth-rbac, 11-integrations, 12-cross-cutting, 16-arr-domain-research |
-| [03-architecture.md](03-architecture.md) | 841 | 16 | 43 | 00-baseline-build, 00-index, 03-layering-guard, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting, 14-build-ci |
-| [04-package-mapping.md](04-package-mapping.md) | 1496 | 64 | 287 | 01-package-inventory, 02-import-graph-hotspots, 03-layering-guard, 04-database-store, 05-storage, 06-tasks-ops, 07-plugin-registry-sdk, 09-http-api, 10-auth-rbac, 11-integrations, 12-cross-cutting |
+| [02-decision-record.md](02-decision-record.md) | 149 | 6 | 12 | 00-baseline-build, 05-storage, 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 10-auth-rbac, 11-integrations, 12-cross-cutting, 16-arr-domain-research |
+| [03-architecture.md](03-architecture.md) | 848 | 16 | 48 | 00-baseline-build, 00-index, 03-layering-guard, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting, 14-build-ci |
+| [04-package-mapping.md](04-package-mapping.md) | 1653 | 66 | 298 | 01-package-inventory, 02-import-graph-hotspots, 03-layering-guard, 04-database-store, 05-storage, 06-tasks-ops, 07-plugin-registry-sdk, 09-http-api, 10-auth-rbac, 11-integrations, 12-cross-cutting |
 | [05-ai.md](05-ai.md) | 903 | 30 | 26 | 11-integrations, 12-cross-cutting |
 | [05-authn.md](05-authn.md) | 1784 | 71 | 57 | 09-http-api, 10-auth-rbac, 12-cross-cutting, 13-frontend |
-| [05-backup.md](05-backup.md) | 1124 | 16 | 15 | 05-storage, 10-auth-rbac, 12-cross-cutting |
-| [05-config.md](05-config.md) | 2160 | 68 | 52 | 02-import-graph-hotspots, 03-layering-guard, 10-auth-rbac, 12-cross-cutting, 15-dependencies |
+| [05-backup.md](05-backup.md) | 1162 | 18 | 15 | 05-storage, 10-auth-rbac, 12-cross-cutting |
+| [05-config.md](05-config.md) | 2180 | 68 | 52 | 02-import-graph-hotspots, 03-layering-guard, 10-auth-rbac, 12-cross-cutting, 15-dependencies |
 | [05-download.md](05-download.md) | 765 | 16 | 14 | 06-tasks-ops, 11-integrations, 16-arr-domain-research |
 | [05-events.md](05-events.md) | 748 | 12 | 8 | 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting |
-| [05-health.md](05-health.md) | 649 | 24 | 25 | 09-http-api, 11-integrations, 12-cross-cutting |
-| [05-http-api.md](05-http-api.md) | 1382 | 77 | 46 | 09-http-api, 10-auth-rbac, 12-cross-cutting, 13-frontend |
+| [05-health.md](05-health.md) | 656 | 25 | 25 | 09-http-api, 11-integrations, 12-cross-cutting |
+| [05-http-api.md](05-http-api.md) | 1412 | 80 | 49 | 09-http-api, 10-auth-rbac, 12-cross-cutting, 13-frontend |
 | [05-indexer.md](05-indexer.md) | 463 | 3 | 3 | 11-integrations, 16-arr-domain-research |
-| [05-library.md](05-library.md) | 788 | 44 | 47 | 02-import-graph-hotspots, 05-storage, 08-prior-art, 12-cross-cutting, 16-arr-domain-research |
-| [05-logging.md](05-logging.md) | 620 | 37 | 23 | 05-storage, 10-auth-rbac, 12-cross-cutting, 15-dependencies |
+| [05-library.md](05-library.md) | 822 | 45 | 48 | 02-import-graph-hotspots, 05-storage, 08-prior-art, 12-cross-cutting, 16-arr-domain-research |
+| [05-logging.md](05-logging.md) | 641 | 37 | 23 | 05-storage, 10-auth-rbac, 12-cross-cutting, 15-dependencies |
 | [05-metadata.md](05-metadata.md) | 1556 | 57 | 42 | 11-integrations, 12-cross-cutting, 16-arr-domain-research |
-| [05-metrics.md](05-metrics.md) | 480 | 19 | 26 | 12-cross-cutting, 15-dependencies |
+| [05-metrics.md](05-metrics.md) | 505 | 19 | 26 | 12-cross-cutting, 15-dependencies |
 | [05-notify.md](05-notify.md) | 442 | 19 | 14 | 10-auth-rbac, 11-integrations, 12-cross-cutting, 16-arr-domain-research |
-| [05-rbac.md](05-rbac.md) | 1521 | 49 | 26 | 09-http-api, 10-auth-rbac, 12-cross-cutting, 13-frontend |
-| [05-realtime.md](05-realtime.md) | 589 | 15 | 11 | 09-http-api, 12-cross-cutting, 13-frontend |
-| [05-storage.md](05-storage.md) | 2142 | 59 | 49 | 02-import-graph-hotspots, 04-database-store, 05-storage, 08-prior-art, 12-cross-cutting |
-| [05-tasks.md](05-tasks.md) | 1891 | 84 | 90 | 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting |
+| [05-rbac.md](05-rbac.md) | 1592 | 49 | 26 | 09-http-api, 10-auth-rbac, 12-cross-cutting, 13-frontend |
+| [05-realtime.md](05-realtime.md) | 594 | 16 | 11 | 09-http-api, 12-cross-cutting, 13-frontend |
+| [05-storage.md](05-storage.md) | 2190 | 59 | 49 | 02-import-graph-hotspots, 04-database-store, 05-storage, 08-prior-art, 12-cross-cutting |
+| [05-tasks.md](05-tasks.md) | 1894 | 84 | 90 | 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting |
 | [05-updater.md](05-updater.md) | 781 | 18 | 12 | 07-plugin-registry-sdk, 12-cross-cutting, 14-build-ci |
-| [06-app-sdk.md](06-app-sdk.md) | 2562 | 60 | 67 | 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting |
-| [07-ui-shell.md](07-ui-shell.md) | 1505 | 33 | 31 | 08-prior-art, 09-http-api, 13-frontend, 14-build-ci, 15-dependencies |
-| [08-arr-facade.md](08-arr-facade.md) | 653 | 10 | 13 | 09-http-api, 10-auth-rbac, 16-arr-domain-research |
-| [09-abo-on-core.md](09-abo-on-core.md) | 1330 | 86 | 137 | 00-index, 05-storage |
+| [06-app-sdk.md](06-app-sdk.md) | 2570 | 61 | 67 | 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting |
+| [07-ui-shell.md](07-ui-shell.md) | 1506 | 33 | 31 | 08-prior-art, 09-http-api, 13-frontend, 14-build-ci, 15-dependencies |
+| [08-arr-facade.md](08-arr-facade.md) | 661 | 10 | 13 | 09-http-api, 10-auth-rbac, 16-arr-domain-research |
+| [09-abo-on-core.md](09-abo-on-core.md) | 1489 | 95 | 142 | 00-index, 05-storage |
 | [10-tv-movies-proof.md](10-tv-movies-proof.md) | 1070 | 8 | 7 | 08-prior-art, 11-integrations, 16-arr-domain-research |
-| [11-multi-app.md](11-multi-app.md) | 115 | 2 | 2 | — |
+| [11-multi-app.md](11-multi-app.md) | 121 | 2 | 2 | — |
 | [12-repo-split.md](12-repo-split.md) | 706 | 10 | 32 | 08-prior-art, 14-build-ci, 15-dependencies |
 | [13-toolchain.md](13-toolchain.md) | 365 | 48 | 43 | 00-baseline-build, 06-tasks-ops, 14-build-ci, 15-dependencies |
-| [14-risks-open-questions.md](14-risks-open-questions.md) | 250 | 16 | 14 | 00-baseline-build, 04-database-store, 08-prior-art |
-| **Total** | 31994 | 1077 | — | — |
+| [14-risks-open-questions.md](14-risks-open-questions.md) | 251 | 17 | 16 | 00-baseline-build, 04-database-store, 08-prior-art |
+| **Total** | 32644 | 1098 | — | — |
 
 ## Key evidence by decision
 
@@ -208,3 +207,4 @@ Round 5 (dispositions in `docs/plans/platform-core/reviews/spec-round-5-disposit
 - R5-7 (FE5-1) — key-evidence row: `make build` runs `npm run build` directly (`Makefile:154`, `:198-201`).
 - SEC5-6 — key-evidence row: HEAD's in-place restore into the live DB directory (`backup.go:777-850`).
 - (all) — review-evidence paragraph names round-5 experiments Z1–Z7 and the data-migration simulations; anchor census regenerated with the unchanged method during the round-5 revision (32 files, 31994 lines, 1077 line anchors; snapshot while other files were still under revision).
+- integration pass (round 5): anchor census regenerated with the unchanged method after every round-5 reviser and this pass had finished (32 files, 32644 lines, 1098 line anchors); replaces the in-revision snapshot.

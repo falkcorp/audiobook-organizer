@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.6.1 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -142,7 +142,13 @@ is hit), `core.scheduler`, `core.outbox` (Degraded while any dead letter exists)
 (Degraded while drops exceed a rate), `core.metrics`, `core.updater` (only when enabled), and one
 component per configured integration adapter instance (`core.integrations.<capability>.<instance>`,
 reported by `providerhttp` breakers and adapter checks; [05-metadata](05-metadata.md),
-[05-download](05-download.md), [05-ai](05-ai.md)).
+[05-download](05-download.md), [05-ai](05-ai.md)). The fixed degraded token `basic_gate_no_password` belongs to the
+perimeter: while the Basic gate is enabled and its password is unset, cleared, empty or unreadable,
+the gate answers 401 on every non-exempt route and health reports `degraded` with that token — from
+S3 core's stage 8 ([05-http-api](05-http-api.md) §4.2, resolution R5-1(c), SEC5-4), before S3 ABO's
+hotfixed gate (05-authn §11.1 early fix 5) through HEAD's `degraded` token list
+(`internal/server/handlers/system/handler.go:222-275`), which keeps serving until this file's
+readiness core lands (5H.10).
 
 ### 5H.3.2 Startup steps
 
@@ -647,3 +653,4 @@ Round 4:
 Round 5:
 
 - COR5-9 (COR4-7 residue) — 5H.3.3 "Stream A's `system.status` frame" is the authoritative statement: the status topic is native-stream only and never added to projection A; stream A's frame keeps HEAD's payload at every stage (books' `books.system.status-ticked.v1` from S6); no compat-ledger row; the "from S8 the frame's payload changes" sentence deleted (supersedes the round-4 COR4-7 line's compat-ledger clause).
+- integration pass (round 5): §5H.3.1 component registry — the perimeter's fixed degraded token `basic_gate_no_password` (from S3 core stage 8, before S3 ABO's hotfixed gate through HEAD's token list; R5-1(c), SEC5-4, 05-authn §11.1 early fix 5).

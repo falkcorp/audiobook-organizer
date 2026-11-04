@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/04-package-mapping.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.5.1 -->
 <!-- guid: a52b0af6-8e36-41c8-a78d-94859f6cac27 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -757,8 +757,7 @@ core module path. After this, no exported core identifier mentions a books type,
   R3-1, R4-1); the four secret rows HEAD already stores encrypted stay in place and are never moved
   (R5-1(b)), and only a **plaintext** secret's first core write stores it encrypted in `c/secrets/` and
   replaces both legacy copies with a never-matching sentinel (R4-2); the loader for
-  core sections lands at S2 with the `config.OverrideStore` interface's read half (`Open`, `Load`,
-  `Changed`, `Suspended`), the native implementation and `LegacyStores.Config` at S2b, the write methods
+  core sections lands at S2 with the `config.OverrideStore` interface's read half (`Load`; the optional capabilities `LegacyOpener` (`Open`) and `CommitObserver` (`Changed`) at S2, `Suspender` (`Suspended`) at S3 — 05-storage "Legacy capabilities"), the native implementation and `LegacyStores.Config` at S2b, the write methods
   and the `config.AppConfig` façade at S3 (§8.6; COR5-14). The state directory keeps
   HEAD's fallback next to the database (`state_dir.go:118-155`; R3-4).
   This removes all five wrong-way `allowed` edges from config (`layering_test.go:291-295`) because
@@ -1149,7 +1148,7 @@ every-boot reconcile. So every residue → taskstore reference, including every 
 whose only concrete implementation is in taskstore, is listed with how the S5 PR cuts it, and every
 unexported residue name taskstore uses is listed with how taskstore reaches it; an unlisted reference or a
 stale entry fails the generator. (`errStoreClosing` is declared in `pebble_gate.go`, which goes to core
-`storage` at S2b, so taskstore reaches it through `storage`'s exported error, not through the residue.)
+`storage` at S2b, so taskstore reaches it through `storage.ErrClosed`, not through the residue.)
 
 | residue file | names it uses from the part (typed scan) | how the stage PR cuts them |
 |---|---|---|
@@ -1507,10 +1506,10 @@ Every package of `go list ./...` exactly once, linking to its row in §3.
    §2.1 (f)'s stated exception (MOD4-16). (Resolved since v1.2.x: `storage/keys`, `storage/codec`,
    `backup/journal`, `lifecycle.NotifySocketEnv` and hello's S2 landing are in 03 v1.6.0; the round-3
    package-count objection is withdrawn, 03 having adopted 54/161, MOD4-16.)
-2. **Package count (03 §3.5.1).** 03 v1.8.0 counts 51 leaving, 5 new paths and 167 remaining. Under this
+2. *(Withdrawn — 03 v1.8.1 adopts 50 / 5 / 168.)* **Package count (03 §3.5.1).** 03 v1.8.0 counted 51 leaving, 5 new paths and 167 remaining. Under this
    mapping `tools/cmd/opsgen` stays in ABO (it is retired only when its last importer is native, which
    may never happen; FE5-12), so **50** leave, 5 new paths appear and **168** remain (§8.4 note 6).
-3. **`internal/books/contract` is created at S5, not S2** (MOD5-9). 03 §3.5.1 item 1 says the two books
+3. *(Withdrawn — 03 v1.8.1 creates contract at S5.)* **`internal/books/contract` is created at S5, not S2** (MOD5-9). 03 §3.5.1 item 1 says the two books
    packages enter `layerOf` at S2; every source of contract's content leaves at S5 (`pkg/ops`,
    `pkg/plugin/sdk`, `internal/operations`, `internal/opscatalog`) or T8 (the registry's `deps.go`), and
    nothing imports it earlier, so creating it at S2 would need a placeholder file or a stale `layerOf`
@@ -1651,3 +1650,4 @@ Round 5 (dispositions in `docs/plans/platform-core/reviews/spec-round-5-disposit
 - SIMP5-8 — the store-interface list is cited from 03 §3.3 instead of restated (§1).
 - FE5-12 — `tools/cmd/opsgen` stays in ABO, not a stage-bound move (§3 row, §8.4 note 6).
 - integration pass (round 4, lead), folded into the generator inputs: `rbac.Store`, `tasks.Stores`, `module.Manifest.LegacyStores`.
+- integration pass (round 5, lead): config optional capabilities named; `storage.ErrClosed`; objections 2–3 withdrawn.
