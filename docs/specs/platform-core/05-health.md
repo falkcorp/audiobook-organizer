@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -162,22 +162,19 @@ behaviour (05-http-api §10, SEC6-9), so there is no `basic_gate_no_username`.
 **Advisory tokens owned by other files.** Health has three statuses, so a token another file calls `warn` is a
 `Reason` on a `StatusDegraded` result (readiness unaffected: Degraded passes it), and one it calls `info` is a
 `Reason` on a `StatusUp` result (no probe or readiness effect; shown on the authenticated endpoints and the
-token-only route). Three such tokens. Two are `config_legacy_name_shadowed` on `core.config` (warn: a `BelowStored` legacy
-name of a `ProtectAdmin`+ key is set and differs from the stored value, which stays effective; 05-config §1.3.5
-"Shadowed legacy names", SEC6-1), and `revocation_journal_colocated` on `core.backup` (info: the revocation
+token-only route). Two such tokens: `config_legacy_name_shadowed` on `core.config` (warn: a legacy name of a
+`ProtectAdmin`+ key is set and differs from the stored value, which stays effective, HEAD's precedence; 05-config
+§1.3.5 "Shadowed legacy names", SEC6-1), and `revocation_journal_colocated` on `core.backup` (info: the revocation
 journal shares the store's filesystem device, so a whole-volume snapshot rollback would revert both; 05-backup
-§5B.3.6 "Where", SEC6-10). A third, `config_narrowing_owed` on `core.config` (warn), is reported while a
-declared narrowing is owed and its commit has not succeeded (05-config §1.3.5, §1.5), so the next rollback,
-which would boot with the wider value, is visible beyond one boot-log line; the boot also writes the owed key
-names to `<state_dir>/operator-names.json`, which `make rollback` and the updater print (SEC8-9). From the
-first release that declares a narrowing until S8 it travels through HEAD's `degraded` token list as the
-SEC7-12 tokens do (above). One reason an integration instance component
+§5B.3.6 "Where", SEC6-10). One reason an integration instance component
 (`core.integrations.<capability>.<instance>`) reports on a `StatusDegraded` result is
-`operator_secret_withheld`: an operator-sourced secret is withheld, and nothing sent, because the effective
-origin of a destination field (URL-typed, or host and port) of that instance equals neither the origin of
-that field's operator value (or the adapter default, when there is none) nor the instance's
-`OperatorSecretOrigin`; the result names the withheld fields, never their values (05-metadata M1.4 step 2;
-SEC7-3, R8-5, SEC8-2).
+`operator_secret_withheld`, and only on a **native-backed** install (hello, TV, Movies), whose instances keep
+origin binding: an operator-sourced secret is withheld, and nothing sent, because the effective origin of a
+destination field (URL-typed, or host and port) of that instance equals neither the origin of that field's
+operator value (or the adapter default, when there is none) nor the instance's `OperatorSecretOrigin`; the
+result names the withheld fields, never their values (05-metadata M1.4 step 2; SEC7-3, R8-5, SEC8-2). A
+legacy-backed instance (ABO) keeps HEAD's behaviour, has no `OperatorSecretOrigin` and never reports the token
+(A-2).
 
 **Factory-reset tokens (R8-1).** A factory reset is the `KindReset` swap of storage's one restore slot
 (05-storage §5S.3.15), so a reset staged or in flight is reported with the swap's own reasons, never a
@@ -485,6 +482,11 @@ The boot phases are defined once, in [06](06-app-sdk.md) §6.5.1 (R2-8), and the
    see 503 before connections drop), `STOPPING=1`, then the kernel runs the stop order of
    [06](06-app-sdk.md) §6.5.2 (COR-8) with deadlines carved from **one** budget.
 
+**No boot writer (A-8).** `health` writes no storage key and no state-directory file at any boot
+phase, and the supervisor signals it sends (`READY=1`, `STATUS=`, `EXTEND_TIMEOUT_USEC`, `WATCHDOG=1`)
+are not durable, so it adds no entry to 05-storage's crash matrix. The diagnostics bundle files are
+written inside the `core.diagnostics.export` run, after boot.
+
 **One budget key (OPS-13).** `core.shutdown.budget` is the only total; it is defined here and 06
 references it. 06's `core.lifecycle.shutdown_budget` and per-hook `core.lifecycle.stop_timeout` are
 replaced by this key and the phase slices below (a hook's stop gets the hooks phase's remaining time).
@@ -563,6 +565,10 @@ internally.
 | `core.diagnostics.max_file_bytes` | int | 64 MiB | yes | — |
 
 ## 5H.8 Metrics
+
+Names are shown under the default namespace `mediacore`; an app's `app.Options.MetricNamespace`
+replaces it (06; 05-metrics owns the naming rule; A-5). HEAD emits none of these series, so no ABO
+series is renamed or aliased.
 
 | Name | Type | Labels |
 |---|---|---|
@@ -730,3 +736,10 @@ Round 8:
 - SEC8-9 — advisory token `config_narrowing_owed` on `core.config` (warn), carried by HEAD's token list until S8.
 - R8-5 / SEC8-2 (R-F request) — `operator_secret_withheld` is raised when a destination's origin matches neither the operator or adapter-default origin nor the instance's `OperatorSecretOrigin`.
 - MOD8-5 — 5H.10 `internal/sysinfo` row: `service.go` is a divided file; host and runtime status → `health`, while `RecentOperations`, the library and import fields and the `OperationLog` helpers stay in `internal/sysinfo`.
+
+Advisor (2026-11-04):
+
+- A-2 / ADV-S1 — `config_narrowing_owed` (and its `operator-names.json` write) deleted with the narrowing writes; `operator_secret_withheld` scoped to native-backed installs, a legacy-backed instance keeping HEAD's behaviour; `config_legacy_name_shadowed` restated as HEAD's precedence (stored value wins); advisory tokens now two.
+- A-2 / A-14 — checked: no narrowing, canonical-only, extension-suspension or usage-gate token remains in the normative text.
+- A-5 / ADV-S4 — 5H.8: names under the default namespace, replaced by `app.Options.MetricNamespace`; no ABO series renamed.
+- A-8 / ADV-4 — 5H.4 "No boot writer": `health` writes nothing durable at boot, so it adds no crash-matrix entry.
