@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_superseded_rows_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6b04e19d-83f7-4c52-a1e6-9d275f3b0c48
-// last-edited: 2026-09-21
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -29,7 +29,7 @@ import (
 func TestRankKeeper_PresentRowAlwaysWins(t *testing.T) {
 	present := map[string]bool{"/lib/B/real.m4b": true, "/lib/B/phantom.m4b": false}
 	rows := []database.BookFile{
-		{ID: "phantom", FilePath: "/lib/B/phantom.m4b", Duration: 1800, FileHash: "h",
+		{ID: "phantom", FilePath: "/lib/B/phantom.m4b", Duration: database.Secs(1800), FileHash: "h",
 			AcoustIDFingerprint: []byte("fp")},
 		{ID: "real", FilePath: "/lib/B/real.m4b"},
 	}

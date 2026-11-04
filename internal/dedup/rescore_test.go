@@ -1,7 +1,7 @@
 // file: internal/dedup/rescore_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: c4a70f81-92db-4e35-8a16-0d5f7c2e9b41
-// last-edited: 2026-10-11
+// last-edited: 2026-11-04
 
 package dedup
 
@@ -52,7 +52,7 @@ func mkBookWithHash(t *testing.T, store *database.PebbleStore, title, hash strin
 		FilePath: "/audio/" + title + ".m4b",
 		FileHash: hash,
 		FileSize: 5 << 20,
-		Duration: durationSec,
+		Duration: database.Secs(durationSec),
 	}); err != nil {
 		t.Fatalf("CreateBookFile %q: %v", title, err)
 	}

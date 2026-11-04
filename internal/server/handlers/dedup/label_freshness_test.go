@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/label_freshness_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4d7a2c81-6e39-4b05-9f28-1a3c7e0d5b62
-// last-edited: 2026-09-25
+// last-edited: 2026-11-04
 
 // Tests for the label-write freshness refresh: dismissing / relabeling a pair
 // (re)snapshots its ScoreBreakdown onto the LabeledExample via the engine's
@@ -31,7 +31,7 @@ func allowFreshnessStoreReads(d testDeps) {
 	d.store.EXPECT().GetBookByID(mock.Anything).
 		Return(&database.Book{ID: "x", Title: "T"}, nil).Maybe()
 	d.store.EXPECT().GetBookFiles(mock.Anything).
-		Return([]database.BookFile{{FilePath: "/lib/a.m4b", FileSize: 5 << 20, Duration: 3600}}, nil).Maybe()
+		Return([]database.BookFile{{FilePath: "/lib/a.m4b", FileSize: 5 << 20, Duration: database.Secs(3600)}}, nil).Maybe()
 }
 
 // TestDismiss_PersistsBelowBandBreakdown proves that dismissing a pair to not_dup

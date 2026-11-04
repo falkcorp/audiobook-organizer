@@ -1,7 +1,7 @@
 // file: internal/database/pebble_delete_bookfile_seek_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: e8187d63-0c08-49b4-9879-6cab49841d0b
-// last-edited: 2026-10-03
+// last-edited: 2026-11-04
 
 package database
 
@@ -33,7 +33,7 @@ func TestDeleteBookFile_ResolvesViaIDIndexNotAScan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBook: %v", err)
 	}
-	target := &BookFile{BookID: book.ID, FilePath: "/lib/Seek Book/01.m4b", Duration: 3600}
+	target := &BookFile{BookID: book.ID, FilePath: "/lib/Seek Book/01.m4b", Duration: Secs(3600)}
 	if err := s.CreateBookFile(target); err != nil {
 		t.Fatalf("CreateBookFile: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestDeleteBookFile_FallsBackToScanWhenIndexEntryMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBook: %v", err)
 	}
-	legacy := &BookFile{BookID: book.ID, FilePath: "/lib/Legacy Book/01.mp3", Duration: 1200}
+	legacy := &BookFile{BookID: book.ID, FilePath: "/lib/Legacy Book/01.mp3", Duration: Secs(1200)}
 	if err := s.CreateBookFile(legacy); err != nil {
 		t.Fatalf("CreateBookFile: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestDeleteBookFile_LeavesSiblingRowsIntact(t *testing.T) {
 	}
 	var ids []string
 	for i := range 5 {
-		f := &BookFile{BookID: book.ID, FilePath: fmt.Sprintf("/lib/Sibling Book/%02d.mp3", i), Duration: 600}
+		f := &BookFile{BookID: book.ID, FilePath: fmt.Sprintf("/lib/Sibling Book/%02d.mp3", i), Duration: Secs(600)}
 		if err := s.CreateBookFile(f); err != nil {
 			t.Fatalf("CreateBookFile %d: %v", i, err)
 		}

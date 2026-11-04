@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.18.2
+// version: 1.18.3
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package metabatch
 
@@ -361,7 +361,7 @@ func TestResolveCandidateSearchQuery_SiblingPartRowsAreSkipped(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%ds", tc.name, dur), func(t *testing.T) {
 				path := tc.dir + "/" + tc.self
 				book := database.Book{ID: "self", Title: tc.title, FilePath: path, TranscribedTitle: new("Whole Work Title"), Duration: new(dur)}
-				file := database.BookFile{FilePath: path, Duration: dur, FileSize: int64(dur) * 8000, TranscribedTitle: new("Whole Work Title")}
+				file := database.BookFile{FilePath: path, Duration: database.Secs(dur), FileSize: int64(dur) * 8000, TranscribedTitle: new("Whole Work Title")}
 				files := fakeBookFiles{files: []database.BookFile{file}, dir: siblingRows(tc.dir, tc.self, tc.sibs...)}
 				for _, memo := range []*FolderMemo{nil, NewFolderMemo(files)} {
 					q := ResolveCandidateSearchQueryMemo(files, &book, memo)
@@ -400,7 +400,7 @@ func TestResolveCandidateSearchQuery_UnknownDurationNeedsABigSet(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := dir + "/001 The Sunrise Lands 1.mp3"
 			book := database.Book{ID: "self", Title: "The Sunrise Lands 1", FilePath: path}
-			files := fakeBookFiles{files: []database.BookFile{{FilePath: path, Duration: tc.dur, FileSize: tc.size}},
+			files := fakeBookFiles{files: []database.BookFile{{FilePath: path, Duration: database.Secs(tc.dur), FileSize: tc.size}},
 				dir: siblingRows(dir, "001 The Sunrise Lands 1.mp3", tc.sibs...)}
 			if q := ResolveCandidateSearchQuery(files, &book); q.Usable != tc.usable {
 				t.Fatalf("got %+v, want usable=%v", q, tc.usable)
@@ -464,7 +464,7 @@ func TestResolveCandidateSearchQuery_SiblingShapesWithoutSiblingsAreSearched(t *
 			dir:  siblingRows("/library/Authors/Pierce Brown", "Golden Son (Part 1 of 2).m4b", "Golden Son (Part 2 of 2).m4b"),
 			want: "Golden Son (Part 1 of 2)", wantSrc: SearchQuerySourceTitle},
 		{name: "Dark Age (2 of 3) beside its parts, whole-part duration", book: database.Book{ID: "self", Title: "Dark Age (2 of 3)", FilePath: "/library/Authors/Pierce Brown/Dark Age (2 of 3).m4b"},
-			files: []database.BookFile{{FilePath: "/library/Authors/Pierce Brown/Dark Age (2 of 3).m4b", Duration: long, FileSize: longSize}},
+			files: []database.BookFile{{FilePath: "/library/Authors/Pierce Brown/Dark Age (2 of 3).m4b", Duration: database.Secs(long), FileSize: longSize}},
 			dir:   siblingRows("/library/Authors/Pierce Brown", "Dark Age (2 of 3).m4b", "Dark Age (1 of 3).m4b", "Dark Age (3 of 3).m4b"),
 			want:  "Dark Age (2 of 3)", wantSrc: SearchQuerySourceTitle, noList: true},
 		{name: "Shadow's Edge (1 of 2) [Dramatized Adaptation]", book: database.Book{ID: "self", Title: "Shadow's Edge (1 of 2) [Dramatized Adaptation]", FilePath: "/library/Authors/Brent Weeks/Shadow's Edge (1 of 2).m4b"},
@@ -678,7 +678,7 @@ func TestResolveCandidateSearchQuery_PartRowEvidence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := tc.dir + "/" + tc.self
 			book := database.Book{ID: "self", Title: tc.title, FilePath: path, Duration: tc.bookDur, FileSize: tc.bookSize}
-			files := fakeBookFiles{files: []database.BookFile{{FilePath: path, Duration: tc.fileDur, FileSize: tc.fileSize}},
+			files := fakeBookFiles{files: []database.BookFile{{FilePath: path, Duration: database.Secs(tc.fileDur), FileSize: tc.fileSize}},
 				dir: siblingRows(tc.dir, tc.self, tc.sibs...)}
 			q := ResolveCandidateSearchQuery(files, &book)
 			if got := q.SkipKind == SkipKindSiblingPart; got != tc.skip {
@@ -1002,7 +1002,7 @@ func TestResolveCandidateSearchQuery_FolderWrappedPartRowsAreSkipped(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			path := wrappedPath(tc.parent, tc.self)
 			book := database.Book{ID: "self", Title: tc.title, FilePath: path, TranscribedTitle: new("Whole Work Title")}
-			file := database.BookFile{FilePath: path, Duration: tc.dur, FileSize: int64(tc.dur) * 8000}
+			file := database.BookFile{FilePath: path, Duration: database.Secs(tc.dur), FileSize: int64(tc.dur) * 8000}
 			files := fakeBookFiles{files: []database.BookFile{file}, dir: wrappedRows(tc.parent, tc.self, tc.cousins...)}
 			for _, memo := range []*FolderMemo{nil, NewFolderMemo(files)} {
 				q := ResolveCandidateSearchQueryMemo(files, &book, memo)
@@ -1133,7 +1133,7 @@ func TestResolveCandidateSearchQuery_FolderWrappedWholeBooksAreSearched(t *testi
 			}
 			calls := map[string]int{}
 			f := fakeBookFiles{dir: dir, callsByDir: calls,
-				files: []database.BookFile{{FilePath: path, Duration: tc.dur, FileSize: size}}}
+				files: []database.BookFile{{FilePath: path, Duration: database.Secs(tc.dur), FileSize: size}}}
 			if tc.dirErr {
 				f.dirErr = errors.New("boom")
 			}
@@ -1167,7 +1167,7 @@ func TestResolveCandidateSearchQuery_CousinParentCapIsReported(t *testing.T) {
 		rows[fmt.Sprintf("filler%d", i)] = fmt.Sprintf("%s/Other/%04d.mp3", parent, i)
 	}
 	path := wrappedPath(parent, "Great Sky River 18 6.mp3")
-	f := fakeBookFiles{dir: rows, files: []database.BookFile{{FilePath: path, Duration: 68, FileSize: 68 * 8000}}}
+	f := fakeBookFiles{dir: rows, files: []database.BookFile{{FilePath: path, Duration: database.Secs(68), FileSize: 68 * 8000}}}
 	book := database.Book{ID: "self", Title: "Great Sky River 18 6", FilePath: path}
 	before, listBefore := cousinCapWarn.failures.Load(), listWarn.failures.Load()
 	memo := NewFolderMemo(f)
@@ -1202,7 +1202,7 @@ func TestFolderMemo_ListsWrappedParentOnce(t *testing.T) {
 			id = fmt.Sprintf("cousin%d", i-1)
 		}
 		book := database.Book{ID: id, Title: strings.TrimSuffix(name, ".mp3"), FilePath: path}
-		f := fakeBookFiles{dir: rows, callsByDir: calls, files: []database.BookFile{{FilePath: path, Duration: 1200, FileSize: 1200 * 8000}}}
+		f := fakeBookFiles{dir: rows, callsByDir: calls, files: []database.BookFile{{FilePath: path, Duration: database.Secs(1200), FileSize: 1200 * 8000}}}
 		if q := ResolveCandidateSearchQueryMemo(f, &book, memo); q.Usable {
 			t.Fatalf("%s: got usable %+v, want a skip", name, q)
 		}

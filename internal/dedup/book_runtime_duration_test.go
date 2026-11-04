@@ -1,7 +1,7 @@
 // file: internal/dedup/book_runtime_duration_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 6ae0f0e7-3cf7-42c7-b2c5-88b2a24e8c27
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package dedup
 
@@ -22,7 +22,7 @@ func chapterRows(bookID string, n, sec, known int) []database.BookFile {
 	for i := range out {
 		out[i] = database.BookFile{ID: fmt.Sprintf("%s-f%02d", bookID, i), BookID: bookID}
 		if i < known {
-			out[i].Duration = sec
+			out[i].Duration = database.Secs(sec)
 		}
 	}
 	return out
@@ -79,7 +79,7 @@ func runDurationPair(t *testing.T, durA, durB int, filesA, filesB []database.Boo
 // A genuinely 40-minute BOOK_B must NOT pair with it on duration: the
 // partial sum is a lower bound, not the book's length.
 func TestDurationMatch_PartialRuntimeIsNotEvidence(t *testing.T) {
-	filesB := []database.BookFile{{ID: "B-f", BookID: "BOOK_B", Duration: 2400}}
+	filesB := []database.BookFile{{ID: "B-f", BookID: "BOOK_B", Duration: database.Secs(2400)}}
 	if n := runDurationPair(t, 2400, 2400, chapterRows("BOOK_A", 30, 1200, 2), filesB); n != 0 {
 		t.Fatalf("partial-runtime book paired on duration: %d candidates, want 0", n)
 	}
@@ -89,7 +89,7 @@ func TestDurationMatch_PartialRuntimeIsNotEvidence(t *testing.T) {
 // all probed (10 h) but its Book.Duration is stale at one chapter. The 10 h
 // single-file BOOK_B must pair with it — the runtime is the sum of the files.
 func TestDurationMatch_MultiFileComparedAtFullRuntime(t *testing.T) {
-	filesB := []database.BookFile{{ID: "B-f", BookID: "BOOK_B", Duration: 36000}}
+	filesB := []database.BookFile{{ID: "B-f", BookID: "BOOK_B", Duration: database.Secs(36000)}}
 	if n := runDurationPair(t, 1200, 36000, chapterRows("BOOK_A", 30, 1200, 30), filesB); n == 0 {
 		t.Fatal("10h multi-file book did not pair with a 10h copy: compared at the stale aggregate")
 	}
@@ -98,11 +98,11 @@ func TestDurationMatch_MultiFileComparedAtFullRuntime(t *testing.T) {
 // introAndMissingChapters is a book whose only present file is a 45 s intro;
 // its 20 × 30 min chapters are rows flagged missing with no present copy.
 func introAndMissingChapters(bookID string) []database.BookFile {
-	files := []database.BookFile{{ID: bookID + "-intro", BookID: bookID, FilePath: "/lib/x/00 intro.mp3", Duration: 45}}
+	files := []database.BookFile{{ID: bookID + "-intro", BookID: bookID, FilePath: "/lib/x/00 intro.mp3", Duration: database.Secs(45)}}
 	for i := range 20 {
 		files = append(files, database.BookFile{
 			ID: fmt.Sprintf("%s-m%02d", bookID, i), BookID: bookID,
-			FilePath: fmt.Sprintf("/old/x/%02d.mp3", i+1), Duration: 1800, Missing: true,
+			FilePath: fmt.Sprintf("/old/x/%02d.mp3", i+1), Duration: database.Secs(1800), Missing: true,
 		})
 	}
 	return files

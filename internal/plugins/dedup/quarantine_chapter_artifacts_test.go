@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/quarantine_chapter_artifacts_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9c2e7a14-5b80-4d36-8f21-3a6e0c9d5b18
-// last-edited: 2026-09-13
+// last-edited: 2026-11-04
 
 package dedup
 
@@ -31,7 +31,7 @@ func mkBook(t *testing.T, pebble *database.PebbleStore, title string, idx, durat
 	// Derive ~128 kbps (16000 bytes/sec) plus a 1 MiB floor for zero-duration.
 	fileSize := int64(durationSec)*16000 + 1<<20
 	if err := pebble.CreateBookFile(&database.BookFile{
-		BookID: created.ID, FilePath: path, Duration: durationSec, FileSize: fileSize,
+		BookID: created.ID, FilePath: path, Duration: database.Secs(durationSec), FileSize: fileSize,
 	}); err != nil {
 		t.Fatalf("CreateBookFile: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestQuarantineChapterArtifacts_SkipsITunesLibrary(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := pebble.CreateBookFile(&database.BookFile{BookID: created.ID, FilePath: path, Duration: 30, FileSize: 30*16000 + 1<<20}); err != nil {
+		if err := pebble.CreateBookFile(&database.BookFile{BookID: created.ID, FilePath: path, Duration: database.Secs(30), FileSize: 30*16000 + 1<<20}); err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, created.ID)

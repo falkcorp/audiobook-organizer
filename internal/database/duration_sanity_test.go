@@ -1,11 +1,15 @@
 // file: internal/database/duration_sanity_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c4e7a1b9-3d62-4f08-8a15-6b9e2c0f7d43
-// last-edited: 2026-07-11
+// last-edited: 2026-11-04
 
 package database
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
+)
 
 func bytesForKbps(durationSec, kbps int) int64 {
 	return int64(durationSec) * int64(kbps) * 1000 / 8
@@ -38,35 +42,35 @@ func TestDurationLooksLikeMillis(t *testing.T) {
 
 func TestNormalizeBookFileDuration(t *testing.T) {
 	t.Run("repairs ms value", func(t *testing.T) {
-		f := &BookFile{FileSize: bytesForKbps(3600, 64), Duration: 3600 * 1000}
+		f := &BookFile{FileSize: bytesForKbps(3600, 64), Duration: Secs(3600 * 1000)}
 		if !normalizeBookFileDuration(f) {
 			t.Fatal("expected repair=true")
 		}
-		if f.Duration != 3600 {
-			t.Errorf("Duration=%d want 3600", f.Duration)
+		if durtest.Sec(f.Duration) != 3600 {
+			t.Errorf("Duration=%d want 3600", durtest.Sec(f.Duration))
 		}
 	})
 	t.Run("leaves plausible seconds untouched", func(t *testing.T) {
-		f := &BookFile{FileSize: bytesForKbps(3600, 64), Duration: 3600}
+		f := &BookFile{FileSize: bytesForKbps(3600, 64), Duration: Secs(3600)}
 		if normalizeBookFileDuration(f) {
 			t.Fatal("expected repair=false")
 		}
-		if f.Duration != 3600 {
-			t.Errorf("Duration=%d want 3600 (unchanged)", f.Duration)
+		if durtest.Sec(f.Duration) != 3600 {
+			t.Errorf("Duration=%d want 3600 (unchanged)", durtest.Sec(f.Duration))
 		}
 	})
 	t.Run("idempotent", func(t *testing.T) {
-		f := &BookFile{FileSize: bytesForKbps(3600, 64), Duration: 3600 * 1000}
+		f := &BookFile{FileSize: bytesForKbps(3600, 64), Duration: Secs(3600 * 1000)}
 		normalizeBookFileDuration(f)
 		if normalizeBookFileDuration(f) {
 			t.Fatal("second pass must not re-divide a corrected value")
 		}
-		if f.Duration != 3600 {
-			t.Errorf("Duration=%d want 3600", f.Duration)
+		if durtest.Sec(f.Duration) != 3600 {
+			t.Errorf("Duration=%d want 3600", durtest.Sec(f.Duration))
 		}
 	})
 	t.Run("no FileSize cannot judge", func(t *testing.T) {
-		f := &BookFile{FileSize: 0, Duration: 3600 * 1000}
+		f := &BookFile{FileSize: 0, Duration: Secs(3600 * 1000)}
 		if normalizeBookFileDuration(f) {
 			t.Fatal("must not change a row it cannot bound")
 		}

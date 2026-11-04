@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates_bookinfo_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 52b4b4c0-7157-4e40-901c-2a88bddf805e
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package metabatch_test
 
@@ -126,7 +126,7 @@ func TestResolveSeriesNames_NoReadWhenNothingMissingAndSafeOnFailure(t *testing.
 func TestBuildCandidateBookInfo_PartialRuntimeUpperBound(t *testing.T) {
 	book := &database.Book{ID: "b1"}
 	sized := &mockBookFileStore{files: []database.BookFile{
-		{ID: "f1", FileSize: 4_000_000, Duration: 480},
+		{ID: "f1", FileSize: 4_000_000, Duration: database.Secs(480)},
 		{ID: "f2", FileSize: 4_000_000},
 	}}
 	info := metabatch.BuildCandidateBookInfo(sized, book)
@@ -136,7 +136,7 @@ func TestBuildCandidateBookInfo_PartialRuntimeUpperBound(t *testing.T) {
 
 	// No sizes: no estimate, so no upper bound; the lower bound still shows.
 	unsized := &mockBookFileStore{files: []database.BookFile{
-		{ID: "f1", Duration: 480},
+		{ID: "f1", Duration: database.Secs(480)},
 		{ID: "f2"},
 	}}
 	info = metabatch.BuildCandidateBookInfo(unsized, book)
@@ -146,8 +146,8 @@ func TestBuildCandidateBookInfo_PartialRuntimeUpperBound(t *testing.T) {
 
 	// A complete runtime is a total, not a bound.
 	complete := &mockBookFileStore{files: []database.BookFile{
-		{ID: "f1", FileSize: 4_000_000, Duration: 480},
-		{ID: "f2", FileSize: 4_000_000, Duration: 500},
+		{ID: "f1", FileSize: 4_000_000, Duration: database.Secs(480)},
+		{ID: "f2", FileSize: 4_000_000, Duration: database.Secs(500)},
 	}}
 	info = metabatch.BuildCandidateBookInfo(complete, book)
 	if info.Duration != 980 || info.RuntimeLowerBoundSec != 0 || info.RuntimeUpperBoundSec != 0 {

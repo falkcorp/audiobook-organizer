@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_review_scale_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 3f7b2d90-5c1e-4a86-9e43-8b6d1f0c2a75
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package handlers
 
@@ -70,7 +70,7 @@ func reviewSeed(tb testing.TB, n int) (*database.PebbleStore, *metafetch.Service
 				BookID:      created.ID,
 				FilePath:    fmt.Sprintf("%s/part%02d.mp3", path, f),
 				TrackNumber: f + 1,
-				Duration:    1800 + i%600,
+				Duration:    database.Secs(1800 + i%600),
 				ITunesPath:  fmt.Sprintf("itunes/%d/%d", i, f),
 			}))
 		}

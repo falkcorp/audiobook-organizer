@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.54.1
+// version: 1.54.2
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-11-04
 
@@ -1772,8 +1772,8 @@ func (lib *fragLibrary) dcBookOf(id string) *dcBook {
 	asin := b.ASIN
 	d := &dcBook{Core: database.BookCore{ID: id, ASIN: &asin}, Title: dcTitleKey(b.Title), Author: dcAuthorKey(lib.authors, b.AuthorID)}
 	for _, r := range lib.files[id] {
-		// direct: building a Core from a fragFile's plain int projection.
-		d.Rows = append(d.Rows, database.BookFileCore{ID: r.ID, BookID: id, FilePath: r.Path, Duration: r.Duration,
+		// fragFile.Duration is a plain int projection, 0 = unknown; Secs maps 0 to nil.
+		d.Rows = append(d.Rows, database.BookFileCore{ID: r.ID, BookID: id, FilePath: r.Path, Duration: database.Secs(r.Duration),
 			FileHash: r.Hash, OriginalFileHash: r.OrigHash})
 	}
 	return d
@@ -1799,8 +1799,8 @@ func (lib *fragLibrary) dcBookOf(id string) *dcBook {
 // note says why when the rule would have acted but could not read the
 // owner's verdicts; the fragment's ambiguous row carries it.
 func (f *fragmentFixer) disregardITunesParents(lib *fragLibrary, c *fragCandidate, ms []fragMatch) (kept []fragMatch, ignored []string, ok bool, note string) {
-	// direct: building a Core from a fragFile's plain int projection.
-	if !dcLinkRow(database.BookFileCore{ID: c.File.ID, FilePath: c.File.Path, Duration: c.File.Duration}) ||
+	// fragFile.Duration is a plain int projection, 0 = unknown; Secs maps 0 to nil.
+	if !dcLinkRow(database.BookFileCore{ID: c.File.ID, FilePath: c.File.Path, Duration: database.Secs(c.File.Duration)}) ||
 		boilerplate.IsBoilerplateTitle(c.Book.Title) {
 		return nil, nil, false, ""
 	}

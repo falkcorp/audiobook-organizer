@@ -1,13 +1,15 @@
 // file: internal/database/bookfile_rescan_content_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 3b8e1f52-6c4d-4a97-9e20-7d5b1c8a4f63
-// last-edited: 2026-10-03
+// last-edited: 2026-11-04
 
 package database
 
 import (
 	"reflect"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // A derivation only makes sense on a field the upsert would otherwise restore;
@@ -120,7 +122,7 @@ func TestBatchUpsertBookFiles_ITunesShapedRowKeepsMissing(t *testing.T) {
 		TrackNumber:        3,
 		Title:              "iTunes Track Name",
 		Format:             "m4b",
-		Duration:           1234,
+		Duration:           Secs(1234),
 		FileSize:           4242,
 	}
 	if err := s.BatchUpsertBookFiles([]*BookFile{row}); err != nil {
@@ -221,7 +223,7 @@ func TestUpdateBookFileHashes_KindAndNoAggregateRecompute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBook: %v", err)
 	}
-	if err := s.CreateBookFile(&BookFile{BookID: book.ID, FilePath: "/lib/Hash Updates/01.m4b", FileHash: "pre", OriginalFileHash: "legacy-whole", Duration: 600}); err != nil {
+	if err := s.CreateBookFile(&BookFile{BookID: book.ID, FilePath: "/lib/Hash Updates/01.m4b", FileHash: "pre", OriginalFileHash: "legacy-whole", Duration: Secs(600)}); err != nil {
 		t.Fatalf("CreateBookFile: %v", err)
 	}
 	f := onlyBookFile(t, s, book.ID)
@@ -323,6 +325,15 @@ func expectAfterChange(t *testing.T, before, row, after *BookFile, audioDropped 
 		switch d := bookFileFieldClasses[name].derived; {
 		case d == derivedBytes, d == derivedAudio && audioDropped:
 			want = rv.Field(i).Interface()
+		case name == "Scan" && audioDropped:
+			// Scan is kept, except the duration stage: it described the OLD
+			// file's measurement and is reset with the Duration it belongs to,
+			// unless the row measured a new Duration and the stored stage is Done.
+			kept := before.Scan
+			if row.Duration == nil || !before.Scan.DurationOK.Done {
+				kept.DurationOK = StageStatus{}
+			}
+			want = kept
 		}
 		if !reflect.DeepEqual(want, av.Field(i).Interface()) {
 			t.Errorf("%s after a changed-hash rescan: got %v, want %v", name, av.Field(i).Interface(), want)
@@ -354,7 +365,7 @@ func TestBatchUpsertScannedBookFiles_ChangedHashNoDurationDropsAudio(t *testing.
 	}
 	after := onlyBookFile(t, s, bookID)
 	expectAfterChange(t, before, &rowCopy, &after, true, "Missing")
-	if len(after.AcoustIDFingerprint) != 0 || after.IntroTranscription != nil || after.Duration != 0 || after.TranscribeStatus != nil {
+	if len(after.AcoustIDFingerprint) != 0 || after.IntroTranscription != nil || after.Duration != nil || after.TranscribeStatus != nil {
 		t.Error("an unverified content change kept the old file's fingerprint, transcript or duration")
 	}
 	if after.NeedsRescan == nil || *after.NeedsRescan {
@@ -370,7 +381,7 @@ func TestUpsertBookFile_ChangedHashAndDurationDropsAudio(t *testing.T) {
 	before, bookID := seedFullyPopulatedBookFile(t, s)
 	row := scannerShapedRow(bookID, before.FilePath)
 	row.FileHash = "new-bytes-hash"
-	row.Duration = before.Duration + 600
+	row.Duration = Secs(durtest.Sec(before.Duration) + 600)
 	rowCopy := *row
 	if err := s.UpsertBookFile(row); err != nil {
 		t.Fatalf("UpsertBookFile: %v", err)
@@ -391,7 +402,7 @@ func TestBatchUpsertBookFiles_ChangedHashSameDurationOtherCodecDropsAudio(t *tes
 	before, bookID := seedFullyPopulatedBookFile(t, s)
 	row := scannerShapedRow(bookID, before.FilePath)
 	row.FileHash = "new-bytes-hash"
-	row.Duration = before.Duration
+	row.Duration = Secs(durtest.Sec(before.Duration)) // a fresh pointer at the same value
 	row.Codec = before.Codec + "-other"
 	rowCopy := *row
 	if err := s.BatchUpsertBookFiles([]*BookFile{row}); err != nil {
@@ -409,7 +420,7 @@ func TestBatchUpsertBookFiles_ChangedHashSameDurationKeepsAudio(t *testing.T) {
 	before, bookID := seedWithNeedsRescanFalse(t, s)
 	row := scannerShapedRow(bookID, before.FilePath)
 	row.FileHash = "new-bytes-hash"
-	row.Duration = before.Duration + 1
+	row.Duration = Secs(durtest.Sec(before.Duration) + 1)
 	row.Codec = before.Codec
 	rowCopy := *row
 	if err := s.BatchUpsertBookFiles([]*BookFile{row}); err != nil {

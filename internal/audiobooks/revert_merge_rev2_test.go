@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_rev2_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 5d0c7a52-8e7b-4f1e-9c36-2a4b6f1d8e90
-// last-edited: 2026-10-25
+// last-edited: 2026-11-04
 
 package audiobooks
 
@@ -126,7 +126,7 @@ func TestRevert_CombineOverride_FinalJournalPutFails(t *testing.T) {
 func TestRevert_PendingCombine_KeepsLaterRenumber(t *testing.T) {
 	store := dbtest.NewStore(t)
 	f := seedCrashFixture(t, store)
-	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: ulid.Make().String(), BookID: f.keep, FilePath: "/tmp/crash/keep-own.mp3", Format: "mp3", TrackNumber: 1, Duration: 60}))
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: ulid.Make().String(), BookID: f.keep, FilePath: "/tmp/crash/keep-own.mp3", Format: "mp3", TrackNumber: 1, Duration: database.Secs(60)}))
 	opID := "op-" + ulid.Make().String()
 	func() {
 		defer func() { _ = recover() }()

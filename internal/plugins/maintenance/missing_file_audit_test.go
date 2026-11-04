@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_audit_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5c8e2a17-96d4-4b3f-a70e-1d92f4c6b085
-// last-edited: 2026-09-11
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -290,10 +290,10 @@ func TestMissingFileAudit_SignalCensusSeparatesMissingFromPresent(t *testing.T) 
 		// PRESENT arm — both hashes, no fingerprint, and the soft signals spread
 		// across the two rows so that a counter which double-counts is visible.
 		{ID: "p1", BookID: "b-present", FilePath: write("p1.m4b"),
-			FileHash: "h1", OriginalFileHash: "o1", Duration: 100, FileSize: 10,
+			FileHash: "h1", OriginalFileHash: "o1", Duration: database.Secs(100), FileSize: 10,
 			PostMetadataHash: "pm1", DownloadHash: "dl1"},
 		{ID: "p2", BookID: "b-present", FilePath: write("p2.m4b"),
-			FileHash: "h2", OriginalFileHash: "o2", Duration: 200, FileSize: 20,
+			FileHash: "h2", OriginalFileHash: "o2", Duration: database.Secs(200), FileSize: 20,
 			ITunesPersistentID: "pid2", TranscribedTitle: str("Chapter One"),
 			IntroTranscribedAt: &transcribedAt},
 
@@ -325,7 +325,7 @@ func TestMissingFileAudit_SignalCensusSeparatesMissingFromPresent(t *testing.T) 
 	// nothing else in this package would notice.
 	rows = append(rows, database.BookFileCore{
 		ID: "u1", BookID: "b-unreadable", FilePath: "/tmp/cannot\x00stat.m4b",
-		FileHash: "uh1", Duration: 300, FileSize: 30,
+		FileHash: "uh1", Duration: database.Secs(300), FileSize: 30,
 	})
 
 	rep := runAudit(t, rows, missingFileAuditParams{})

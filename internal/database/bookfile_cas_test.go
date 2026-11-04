@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_cas_test.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 0f3c52d8-7e19-4b64-a2d0-91c8b5e46a17
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 package database
 
@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // The compare-and-swap in commitBookFileBatch. Every test here injects a
@@ -65,7 +67,7 @@ func newCASFixture(t *testing.T) *casFixture {
 	}
 	if err := s.CreateBookFile(&BookFile{
 		BookID: book.ID, FilePath: casPath, ITunesPersistentID: casPID,
-		FileHash: "gotham-hash-old", Duration: 100, FileSize: 1000,
+		FileHash: "gotham-hash-old", Duration: Secs(100), FileSize: 1000,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +131,7 @@ func (f *casFixture) ref() string { return f.book.ID + ":" + f.file.ID }
 func (f *casFixture) upsertScan(t *testing.T, hash string, duration int, size int64) {
 	t.Helper()
 	err := f.s.BatchUpsertBookFiles([]*BookFile{{
-		BookID: f.book.ID, FilePath: casPath, FileHash: hash, Duration: duration, FileSize: size,
+		BookID: f.book.ID, FilePath: casPath, FileHash: hash, Duration: Secs(duration), FileSize: size,
 	}})
 	if err != nil {
 		t.Fatalf("injected BatchUpsertBookFiles: %v", err)
@@ -176,7 +178,7 @@ func (f *casFixture) strayWrite(t *testing.T, mutate func(*BookFile)) {
 // duration and size on the fixture's file, written without a file stripe.
 func (f *casFixture) strayScan(t *testing.T, hash string, duration int, size int64) {
 	t.Helper()
-	f.strayWrite(t, func(r *BookFile) { r.FileHash, r.Duration, r.FileSize = hash, duration, size })
+	f.strayWrite(t, func(r *BookFile) { r.FileHash, r.Duration, r.FileSize = hash, Secs(duration), size })
 }
 
 // Victim SetBookFileHash, concurrent writer: a create that claims the file's
@@ -233,9 +235,9 @@ func TestCAS_ModifyBookFile_KeepsConcurrentBatchUpsert(t *testing.T) {
 		t.Errorf("fn saw hashes %v, want it re-run once on the fresh row: [gotham-hash-old gotham-hash-scan]", seenHashes)
 	}
 	row := f.row(t)
-	if row.FileHash != "gotham-hash-scan" || row.Duration != 250 || row.FileSize != 2500 {
+	if row.FileHash != "gotham-hash-scan" || durtest.Sec(row.Duration) != 250 || row.FileSize != 2500 {
 		t.Errorf("row = hash %q duration %d size %d, want the concurrent upsert's gotham-hash-scan/250/2500 kept",
-			row.FileHash, row.Duration, row.FileSize)
+			row.FileHash, durtest.Sec(row.Duration), row.FileSize)
 	}
 	if row.Title != "Batman: Year One, Chapter 1" || got.Title != row.Title {
 		t.Errorf("title = %q (returned %q), want the caller's change applied", row.Title, got.Title)
@@ -264,7 +266,7 @@ func TestCAS_ModifyBookFileDeferAggregates_KeepsConcurrentWriteAndDefersTheRecom
 		r.Title = "Batman: Year One, Chapter 1"
 		// A Duration the book aggregates read: without the deferral guard the
 		// commit reports "aggregates need a recompute" and the notify would fire.
-		r.Duration = 300
+		r.Duration = Secs(300)
 		return nil
 	})
 	if err != nil {
@@ -275,9 +277,9 @@ func TestCAS_ModifyBookFileDeferAggregates_KeepsConcurrentWriteAndDefersTheRecom
 		t.Errorf("fn saw hashes %v, want it re-run once on the fresh row: [gotham-hash-old gotham-hash-scan]", seenHashes)
 	}
 	row := f.row(t)
-	if row.FileHash != "gotham-hash-scan" || row.Duration != 300 || row.FileSize != 2500 {
+	if row.FileHash != "gotham-hash-scan" || durtest.Sec(row.Duration) != 300 || row.FileSize != 2500 {
 		t.Errorf("row = hash %q duration %d size %d, want the concurrent upsert's gotham-hash-scan and size 2500 kept, and the callback's duration 300",
-			row.FileHash, row.Duration, row.FileSize)
+			row.FileHash, durtest.Sec(row.Duration), row.FileSize)
 	}
 	if row.Title != "Batman: Year One, Chapter 1" || got.Title != row.Title {
 		t.Errorf("title = %q (returned %q), want the caller's change applied", row.Title, got.Title)
@@ -333,8 +335,8 @@ func TestCAS_UpsertBookFile_MergesAgainstTheFreshRow(t *testing.T) {
 		t.Fatalf("UpsertBookFile: %v", err)
 	}
 	row := f.row(t)
-	if row.Duration != 321 {
-		t.Errorf("duration = %d, want 321: the upsert merged against the row it read, not the row it replaced", row.Duration)
+	if durtest.Sec(row.Duration) != 321 {
+		t.Errorf("duration = %d, want 321: the upsert merged against the row it read, not the row it replaced", durtest.Sec(row.Duration))
 	}
 	if row.Title != "Batman: Year One, Chapter 3" {
 		t.Errorf("title = %q, want the upsert's", row.Title)
@@ -357,8 +359,8 @@ func TestCAS_BatchUpsert_KeepsConcurrentModifyBookFile(t *testing.T) {
 	if row.Title != "Batman: Year One, Chapter 4" {
 		t.Errorf("title = %q, want the concurrent ModifyBookFile's kept (an upsert row leaves it zero)", row.Title)
 	}
-	if row.Duration != 400 {
-		t.Errorf("duration = %d, want the upsert's 400", row.Duration)
+	if durtest.Sec(row.Duration) != 400 {
+		t.Errorf("duration = %d, want the upsert's 400", durtest.Sec(row.Duration))
 	}
 }
 
@@ -376,8 +378,8 @@ func TestCAS_PIDTransferPriorOwner_NotRevertedByStaleRead(t *testing.T) {
 	}
 
 	row := f.row(t)
-	if row.FileHash != "gotham-hash-scan" || row.Duration != 250 {
-		t.Errorf("prior owner = hash %q duration %d, want the scan's gotham-hash-scan/250 kept", row.FileHash, row.Duration)
+	if row.FileHash != "gotham-hash-scan" || durtest.Sec(row.Duration) != 250 {
+		t.Errorf("prior owner = hash %q duration %d, want the scan's gotham-hash-scan/250 kept", row.FileHash, durtest.Sec(row.Duration))
 	}
 	if row.ITunesPersistentID != "" {
 		t.Errorf("prior owner kept PID %q after the transfer", row.ITunesPersistentID)
@@ -408,8 +410,8 @@ func TestCAS_MoveBookFiles_CarriesTheFreshRow(t *testing.T) {
 	if err != nil || moved == nil {
 		t.Fatalf("moved row: %v %v", moved, err)
 	}
-	if moved.FileHash != "gotham-hash-scan" || moved.Duration != 250 {
-		t.Errorf("moved row = hash %q duration %d, want the scan's change carried", moved.FileHash, moved.Duration)
+	if moved.FileHash != "gotham-hash-scan" || durtest.Sec(moved.Duration) != 250 {
+		t.Errorf("moved row = hash %q duration %d, want the scan's change carried", moved.FileHash, durtest.Sec(moved.Duration))
 	}
 	if ref := f.indexRef(t, "book_file_hash:gotham-hash-scan"); ref != dst.ID+":"+f.file.ID {
 		t.Errorf("hash index = %q, want it under the new owner", ref)
@@ -431,10 +433,10 @@ func TestCAS_PatchBookFileFields_ReAppliesOnTheFreshRow(t *testing.T) {
 		t.Fatalf("PatchBookFileFields: %v", err)
 	}
 	row := f.row(t)
-	if row.TrackNumber != 7 || row.Duration != 250 || row.FileHash != "gotham-hash-scan" {
-		t.Errorf("row = track %d duration %d hash %q, want 7/250/gotham-hash-scan", row.TrackNumber, row.Duration, row.FileHash)
+	if row.TrackNumber != 7 || durtest.Sec(row.Duration) != 250 || row.FileHash != "gotham-hash-scan" {
+		t.Errorf("row = track %d duration %d hash %q, want 7/250/gotham-hash-scan", row.TrackNumber, durtest.Sec(row.Duration), row.FileHash)
 	}
-	if before == nil || before.Duration != 250 || after == nil || after.TrackNumber != 7 {
+	if before == nil || durtest.Sec(before.Duration) != 250 || after == nil || after.TrackNumber != 7 {
 		t.Errorf("before/after = %+v / %+v, want the fresh read's", before, after)
 	}
 }
@@ -482,8 +484,8 @@ func TestCAS_RecordIntroTimeout_KeepsConcurrentWriteAndStillStrikes(t *testing.T
 	if row.IntroTimeouts != 1 || row.IntroTimeoutHash != "gotham-hash-old" || row.IntroTimeoutWorker != "m:batcave" {
 		t.Errorf("row strikes = %d hash %q worker %q, want 1 on gotham-hash-old by m:batcave", row.IntroTimeouts, row.IntroTimeoutHash, row.IntroTimeoutWorker)
 	}
-	if row.Duration != 250 || row.FileSize != 2500 {
-		t.Errorf("row = %d s / %d bytes, want the concurrent writer's 250 / 2500 kept", row.Duration, row.FileSize)
+	if durtest.Sec(row.Duration) != 250 || row.FileSize != 2500 {
+		t.Errorf("row = %d s / %d bytes, want the concurrent writer's 250 / 2500 kept", durtest.Sec(row.Duration), row.FileSize)
 	}
 }
 
@@ -538,8 +540,8 @@ func TestCAS_ClearIntroTimeouts_KeepsConcurrentWriteAndStillClears(t *testing.T)
 	if row.TranscribeStatus != nil || row.TranscribeError != nil || row.IntroRunOpID != "" {
 		t.Errorf("transcribe status %v error %v run %q, want the transcribe_timeout verdict cleared with the strikes", row.TranscribeStatus, row.TranscribeError, row.IntroRunOpID)
 	}
-	if row.Duration != 250 || row.FileSize != 2500 {
-		t.Errorf("row = %d s / %d bytes, want the concurrent writer's 250 / 2500 kept", row.Duration, row.FileSize)
+	if durtest.Sec(row.Duration) != 250 || row.FileSize != 2500 {
+		t.Errorf("row = %d s / %d bytes, want the concurrent writer's 250 / 2500 kept", durtest.Sec(row.Duration), row.FileSize)
 	}
 }
 
@@ -586,8 +588,8 @@ func TestCAS_StampFileScanCache_KeepsConcurrentWrite(t *testing.T) {
 		t.Fatalf("stampFileScanCache: %v", err)
 	}
 	row := f.row(t)
-	if calls != 2 || row.Duration != 250 || row.NeedsRescan == nil {
-		t.Errorf("calls=%d duration=%d needsRescan=%v, want 2 / 250 / set", calls, row.Duration, row.NeedsRescan)
+	if calls != 2 || durtest.Sec(row.Duration) != 250 || row.NeedsRescan == nil {
+		t.Errorf("calls=%d duration=%d needsRescan=%v, want 2 / 250 / set", calls, durtest.Sec(row.Duration), row.NeedsRescan)
 	}
 }
 
@@ -667,17 +669,17 @@ func TestCAS_ModifyBookFile_SkipOnRetry(t *testing.T) {
 	calls := 0
 	got, err := f.s.ModifyBookFile(f.book.ID, f.file.ID, func(r *BookFile) error {
 		calls++
-		if r.Duration == 250 { // already what we wanted: nothing to change
+		if durtest.Sec(r.Duration) == 250 { // already what we wanted: nothing to change
 			return ErrSkipBookFileWrite
 		}
-		r.Duration = 250
+		r.Duration = Secs(250)
 		return nil
 	})
 	if err != nil || got == nil || calls != 2 {
 		t.Fatalf("got=%v err=%v calls=%d, want a skipped re-run", got, err, calls)
 	}
-	if row := f.row(t); row.FileHash != "gotham-hash-scan" || row.Duration != 250 {
-		t.Errorf("row = %q/%d, want the concurrent upsert left alone", row.FileHash, row.Duration)
+	if row := f.row(t); row.FileHash != "gotham-hash-scan" || durtest.Sec(row.Duration) != 250 {
+		t.Errorf("row = %q/%d, want the concurrent upsert left alone", row.FileHash, durtest.Sec(row.Duration))
 	}
 }
 
@@ -698,8 +700,8 @@ func TestCAS_SweepBookFileSegDrop_KeepsConcurrentWrite(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("row: %v %v", got, err)
 	}
-	if got.Duration != 250 {
-		t.Errorf("duration = %d, want the concurrent write's 250 (the sweep put the snapshot back)", got.Duration)
+	if durtest.Sec(got.Duration) != 250 {
+		t.Errorf("duration = %d, want the concurrent write's 250 (the sweep put the snapshot back)", durtest.Sec(got.Duration))
 	}
 	if got.AcoustIDSeg0 != "" {
 		t.Errorf("seg0 = %q, want it dropped", got.AcoustIDSeg0)
@@ -734,7 +736,7 @@ func newSegSweepFixture(t *testing.T, id, name, seg string) (*PebbleStore, *Book
 	}
 	row := &BookFile{
 		ID: id, BookID: book.ID, FilePath: "/lib/Gotham/Hush/" + name,
-		FileHash: "gotham-hash-old", Duration: 100, AcoustIDSeg0: seg,
+		FileHash: "gotham-hash-old", Duration: Secs(100), AcoustIDSeg0: seg,
 	}
 	writeLegacyBookFileRow(t, s, row)
 	return s, book, row
@@ -747,7 +749,7 @@ func newSegSweepFixture(t *testing.T, id, name, seg string) (*PebbleStore, *Book
 func setDuration(t *testing.T, s *PebbleStore, row *BookFile, d int) {
 	t.Helper()
 	cp := *row
-	cp.Duration = d
+	cp.Duration = Secs(d)
 	writeLegacyBookFileRow(t, s, &cp)
 }
 
@@ -770,8 +772,8 @@ func TestCAS_ClearAllAcoustIDFingerprints_KeepsConcurrentWrite(t *testing.T) {
 		t.Errorf("cleared=%d total=%d, want 1/1", cleared, total)
 	}
 	got := f.row(t)
-	if len(got.AcoustIDFingerprint) != 0 || got.Duration != 250 {
-		t.Errorf("row = fp %v duration %d, want fingerprint cleared and the concurrent upsert's 250 kept", got.AcoustIDFingerprint, got.Duration)
+	if len(got.AcoustIDFingerprint) != 0 || durtest.Sec(got.Duration) != 250 {
+		t.Errorf("row = fp %v duration %d, want fingerprint cleared and the concurrent upsert's 250 kept", got.AcoustIDFingerprint, durtest.Sec(got.Duration))
 	}
 }
 
@@ -801,7 +803,7 @@ func TestCAS_ClearAllAcoustIDFingerprints_ChurnIsCountableAndKeepsTheIndex(t *te
 // is not a casFixture.
 func setDuration2(t *testing.T, s *PebbleStore, bookID, fileID string, d int) {
 	t.Helper()
-	if _, err := s.ModifyBookFile(bookID, fileID, func(r *BookFile) error { r.Duration = d; return nil }); err != nil {
+	if _, err := s.ModifyBookFile(bookID, fileID, func(r *BookFile) error { r.Duration = Secs(d); return nil }); err != nil {
 		t.Errorf("injected ModifyBookFile: %v", err)
 	}
 }
@@ -881,7 +883,7 @@ func TestCAS_SweepBookFileSegDrop_CountsReReadCleanRowAsSkipped(t *testing.T) {
 	s, book, row := newSegSweepFixture(t, "01HUSH0000000000000000000D", "04.m4b", "AQADtAcSRV")
 	injectBeforeCommit(t, 1, func(int) {
 		// A scan rewrites the row through the segs-dropping encoder.
-		if _, err := s.ModifyBookFile(book.ID, row.ID, func(r *BookFile) error { r.Duration = 250; return nil }); err != nil {
+		if _, err := s.ModifyBookFile(book.ID, row.ID, func(r *BookFile) error { r.Duration = Secs(250); return nil }); err != nil {
 			t.Errorf("injected ModifyBookFile: %v", err)
 		}
 	})
@@ -920,9 +922,9 @@ func rewriteRaw(t *testing.T, s *PebbleStore, bookID, fileID string, mutate func
 // index keys follow the fresh row.
 func TestCAS_RetireBookFiles_KeepsConcurrentScanWrite(t *testing.T) {
 	fx := newRetiredFixture(t)
-	row := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/Retire/01.m4b", FileHash: "gotham-hash-old", Duration: 100})
+	row := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/Retire/01.m4b", FileHash: "gotham-hash-old", Duration: Secs(100)})
 	injectBeforeCommit(t, 1, func(int) {
-		strayWriteByPath(t, fx.ps, row.FilePath, func(r *BookFile) { r.FileHash, r.Duration = "gotham-hash-scan", 250 })
+		strayWriteByPath(t, fx.ps, row.FilePath, func(r *BookFile) { r.FileHash, r.Duration = "gotham-hash-scan", Secs(250) })
 	})
 
 	if err := fx.retire(t, row); err != nil {
@@ -932,8 +934,8 @@ func TestCAS_RetireBookFiles_KeepsConcurrentScanWrite(t *testing.T) {
 	if err != nil || got == nil || !got.Retired {
 		t.Fatalf("retired row = %+v err %v", got, err)
 	}
-	if got.FileHash != "gotham-hash-scan" || got.Duration != 250 {
-		t.Errorf("retired row = hash %q duration %d, want the scan's gotham-hash-scan/250 kept", got.FileHash, got.Duration)
+	if got.FileHash != "gotham-hash-scan" || durtest.Sec(got.Duration) != 250 {
+		t.Errorf("retired row = hash %q duration %d, want the scan's gotham-hash-scan/250 kept", got.FileHash, durtest.Sec(got.Duration))
 	}
 	if o := indexOwner(t, fx.ps, "book_file_hash:gotham-hash-scan"); o != fx.holder.ID+":"+row.ID {
 		t.Errorf("hash index = %q, want it under the holder", o)
@@ -1017,9 +1019,9 @@ func TestCAS_BatchCreateBookFiles_PriorPIDOwnerKeepsConcurrentWrite(t *testing.T
 		t.Fatalf("BatchCreateBookFiles: %v", err)
 	}
 	row := f.row(t)
-	if row.FileHash != "gotham-hash-scan" || row.Duration != 250 || row.ITunesPersistentID != "" {
+	if row.FileHash != "gotham-hash-scan" || durtest.Sec(row.Duration) != 250 || row.ITunesPersistentID != "" {
 		t.Errorf("prior owner = hash %q duration %d pid %q, want the scan's change kept and the PID released",
-			row.FileHash, row.Duration, row.ITunesPersistentID)
+			row.FileHash, durtest.Sec(row.Duration), row.ITunesPersistentID)
 	}
 	if ref := f.indexRef(t, "book_file_hash:gotham-hash-scan"); ref != f.ref() {
 		t.Errorf("scan's hash index key = %q, want %q", ref, f.ref())
@@ -1038,13 +1040,13 @@ func TestCAS_BatchUpsert_MatchByIDKeepsConcurrentWrite(t *testing.T) {
 	})
 
 	const movedPath = "/lib/Gotham/Batman-Year-One/renamed.m4b"
-	err := f.s.BatchUpsertBookFiles([]*BookFile{{ID: f.file.ID, BookID: f.book.ID, FilePath: movedPath, Duration: 400}})
+	err := f.s.BatchUpsertBookFiles([]*BookFile{{ID: f.file.ID, BookID: f.book.ID, FilePath: movedPath, Duration: Secs(400)}})
 	if err != nil {
 		t.Fatalf("BatchUpsertBookFiles: %v", err)
 	}
 	row := f.row(t)
-	if row.Title != "Batman: Year One, Chapter 5" || row.FilePath != movedPath || row.Duration != 400 {
-		t.Errorf("row = title %q path %q duration %d, want the concurrent title kept and the upsert's path/duration", row.Title, row.FilePath, row.Duration)
+	if row.Title != "Batman: Year One, Chapter 5" || row.FilePath != movedPath || durtest.Sec(row.Duration) != 400 {
+		t.Errorf("row = title %q path %q duration %d, want the concurrent title kept and the upsert's path/duration", row.Title, row.FilePath, durtest.Sec(row.Duration))
 	}
 }
 
@@ -1063,8 +1065,8 @@ func TestCAS_ClearBookFileIntro_KeepsConcurrentWrite(t *testing.T) {
 	if err != nil || !cleared {
 		t.Fatalf("ClearBookFileIntro: cleared=%v err=%v", cleared, err)
 	}
-	if row := f.row(t); row.IntroTranscription != nil || row.Duration != 250 {
-		t.Errorf("row = transcript %v duration %d, want the intro cleared and the concurrent upsert's 250 kept", row.IntroTranscription, row.Duration)
+	if row := f.row(t); row.IntroTranscription != nil || durtest.Sec(row.Duration) != 250 {
+		t.Errorf("row = transcript %v duration %d, want the intro cleared and the concurrent upsert's 250 kept", row.IntroTranscription, durtest.Sec(row.Duration))
 	}
 }
 
@@ -1083,7 +1085,7 @@ func TestCAS_MoveBookFiles_SurvivesMoreLostRoundsThanASingleRowWrite(t *testing.
 		t.Fatalf("MoveBookFilesToBook after %d lost rounds: %v", *n, err)
 	}
 	moved, _ := f.s.GetBookFileByID(dst.ID, f.file.ID)
-	if moved == nil || moved.Duration != 100+lost {
+	if moved == nil || durtest.Sec(moved.Duration) != 100+lost {
 		t.Errorf("moved row = %+v, want the last concurrent write (duration %d) carried", moved, 100+lost)
 	}
 }
@@ -1108,7 +1110,7 @@ func TestCAS_MoveBookFiles_GivesUpAfterTheBudget(t *testing.T) {
 	if got, _ := f.s.GetBookFileByID(dst.ID, f.file.ID); got != nil {
 		t.Errorf("a refused move wrote the row under the target: %+v", got)
 	}
-	if f.row(t).Duration != 100+maxBatchStageRounds {
+	if durtest.Sec(f.row(t).Duration) != 100+maxBatchStageRounds {
 		t.Errorf("source row = %+v, want it left as the concurrent writer stored it", f.row(t))
 	}
 }
@@ -1173,7 +1175,7 @@ func TestCAS_MoveBookFiles_RereadsOnlyTheStaleRows(t *testing.T) {
 		}
 	}
 	moved, _ := f.s.GetBookFileByID(dst.ID, f.file.ID)
-	if moved == nil || moved.Duration != 102 || moved.FileHash != "gotham-hash-2" {
+	if moved == nil || durtest.Sec(moved.Duration) != 102 || moved.FileHash != "gotham-hash-2" {
 		t.Errorf("moved row = %+v, want the last concurrent write carried", moved)
 	}
 	for _, id := range ids {
@@ -1212,7 +1214,7 @@ func TestCAS_BatchUpsert_BoundsRestagingUnderRotatingChurn(t *testing.T) {
 	const rows = 4 * maxBatchStageRounds
 	batch, paths := rotatingChurnFixture(t, f, rows)
 	n := injectBeforeCommit(t, 0, func(i int) {
-		strayWriteByPath(t, f.s, paths[i-1], func(r *BookFile) { r.Duration = 100 + i })
+		strayWriteByPath(t, f.s, paths[i-1], func(r *BookFile) { r.Duration = Secs(100 + i) })
 	})
 
 	err := f.s.BatchUpsertBookFiles(batch)
@@ -1244,7 +1246,7 @@ func TestCAS_BatchUpsert_RefusesStaleRowsPastTheBudgetAndCommitsTheRest(t *testi
 	const churnRounds = maxBatchStageRounds + 2
 	batch, paths := rotatingChurnFixture(t, f, rows)
 	n := injectBeforeCommit(t, churnRounds, func(i int) {
-		strayWriteByPath(t, f.s, paths[i-1], func(r *BookFile) { r.Duration = 100 + i })
+		strayWriteByPath(t, f.s, paths[i-1], func(r *BookFile) { r.Duration = Secs(100 + i) })
 	})
 
 	err := f.s.BatchUpsertBookFiles(batch)
@@ -1603,7 +1605,7 @@ func TestCAS_DeleteBookFilesByIDs_ReturnsTheRowsAsDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteBookFilesByIDs: %v", err)
 	}
-	if len(deleted) != 1 || deleted[0].FileHash != "gotham-hash-rewritten" || deleted[0].Duration != 250 {
+	if len(deleted) != 1 || deleted[0].FileHash != "gotham-hash-rewritten" || durtest.Sec(deleted[0].Duration) != 250 {
 		t.Errorf("deleted = %+v, want the row as the concurrent writer left it", deleted)
 	}
 }
@@ -1748,7 +1750,7 @@ func TestCAS_ConcurrentWriters_LeaveExactlyTheStoredRowsIndexKeys(t *testing.T) 
 		defer wg.Done()
 		for i := range rounds {
 			err := f.s.BatchUpsertBookFiles([]*BookFile{{
-				BookID: f.book.ID, FilePath: casPath, FileHash: fmt.Sprintf("gotham-scan-%03d", i), Duration: 100 + i, FileSize: 1000,
+				BookID: f.book.ID, FilePath: casPath, FileHash: fmt.Sprintf("gotham-scan-%03d", i), Duration: Secs(100 + i), FileSize: 1000,
 			}})
 			scanLast.Store(seq.Add(1))
 			failed("BatchUpsertBookFiles", i, err)

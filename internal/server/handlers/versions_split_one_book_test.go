@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions_split_one_book_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6f8a0c2e-4b1d-4a3f-9c5e-7d9f1b3a5c64
-// last-edited: 2026-10-04
+// last-edited: 2026-11-04
 
 package handlers_test
 
@@ -28,9 +28,9 @@ func splitSource() *database.Book {
 
 func splitFiles() []database.BookFile {
 	return []database.BookFile{
-		{ID: "f1", BookID: "src", FilePath: "/lib/Omnibus/Book 1/01.mp3", Duration: 100, FileSize: 10},
-		{ID: "f2", BookID: "src", FilePath: "/lib/Omnibus/Book 1/02.mp3", Duration: 200, FileSize: 20},
-		{ID: "f3", BookID: "src", FilePath: "/lib/Omnibus/Book 2/01.mp3", Duration: 300, FileSize: 30},
+		{ID: "f1", BookID: "src", FilePath: "/lib/Omnibus/Book 1/01.mp3", Duration: database.Secs(100), FileSize: 10},
+		{ID: "f2", BookID: "src", FilePath: "/lib/Omnibus/Book 1/02.mp3", Duration: database.Secs(200), FileSize: 20},
+		{ID: "f3", BookID: "src", FilePath: "/lib/Omnibus/Book 2/01.mp3", Duration: database.Secs(300), FileSize: 30},
 	}
 }
 

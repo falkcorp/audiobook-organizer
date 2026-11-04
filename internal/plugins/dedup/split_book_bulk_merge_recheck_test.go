@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/split_book_bulk_merge_recheck_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4b9e7c13-a5d2-4e68-9f40-c1d8e3a72b56
-// last-edited: 2026-10-21
+// last-edited: 2026-11-04
 
 package dedup
 
@@ -42,7 +42,7 @@ func seedRecheckCluster(t *testing.T, store database.Store, titleOf func(i int) 
 		path := fmt.Sprintf("/tmp/bulk-recheck/Sample Author/Sample Work/%02d.mp3", i)
 		_, err := store.CreateBook(&database.Book{ID: id, Title: titleOf(i), Format: "mp3", FilePath: path})
 		require.NoError(t, err)
-		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: ulid.Make().String(), BookID: id, FilePath: path, Format: "mp3", TrackNumber: 1, Duration: fileSecs}))
+		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: ulid.Make().String(), BookID: id, FilePath: path, Format: "mp3", TrackNumber: 1, Duration: database.Secs(fileSecs)}))
 	}
 	return ids
 }

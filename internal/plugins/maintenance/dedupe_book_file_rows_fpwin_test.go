@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_fpwin_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9578f32b-f95b-4ff6-a7bf-4ceead8fea41
-// last-edited: 2026-09-19
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -111,7 +111,7 @@ func TestDedupeBookFileRows_ZeroWindowGroupWithUnrepresentableIDsStillCollapses(
 		t.Fatalf("CreateBook: %v", err)
 	}
 	for _, id := range []string{"legacy;a", "legacy;b", "legacy;c"} {
-		f := &database.BookFile{ID: id, BookID: bk.ID, FilePath: "/lib/odd/track.m4b", Duration: 3600, FileSize: 58000000}
+		f := &database.BookFile{ID: id, BookID: bk.ID, FilePath: "/lib/odd/track.m4b", Duration: database.Secs(3600), FileSize: 58000000}
 		if err := s.CreateBookFile(f); err != nil {
 			t.Fatalf("CreateBookFile(%s): %v", id, err)
 		}

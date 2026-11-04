@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.130.1
+// version: 2.130.2
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 package database
 
@@ -1162,17 +1162,28 @@ type BookFile struct {
 	// binary artwork. Populated on scan/import so full provenance is always
 	// recoverable — no future bug can lose tag data we never recorded. Additive
 	// JSON field; nil on rows imported before lossless capture (backfill later).
-	RawTags          map[string]string `json:"raw_tags,omitempty"`
-	Format           string            `json:"format,omitempty"`
-	Codec            string            `json:"codec,omitempty"`
-	Duration         int               `json:"duration,omitempty"`
-	FileSize         int64             `json:"file_size,omitempty"`
-	BitrateKbps      int               `json:"bitrate_kbps,omitempty"`
-	SampleRateHz     int               `json:"sample_rate_hz,omitempty"`
-	Channels         int               `json:"channels,omitempty"`
-	BitDepth         int               `json:"bit_depth,omitempty"`
-	FileHash         string            `json:"file_hash,omitempty"`
-	OriginalFileHash string            `json:"original_file_hash,omitempty"`
+	RawTags map[string]string `json:"raw_tags,omitempty"`
+	Format  string            `json:"format,omitempty"`
+	Codec   string            `json:"codec,omitempty"`
+	// Duration is the measured length in seconds. nil means NOT MEASURED; a
+	// stored value is always > 0 (a probe that finds 0 s is a failed probe, not a
+	// zero-second file). Read it through DurationSec/DurationState and write it
+	// through SetMeasuredDuration/ResetDuration: a writer must assign a FRESH
+	// pointer, never `*f.Duration = x`, because Core() and AsBookFile() copy the
+	// pointer and would alias the write into every copy.
+	//
+	// omitzero rather than omitempty, as for Scan: v1 and v2 disagree about
+	// omitempty, and a nil pointer omits the key in both, so the wire and stored
+	// shape of an unknown duration is the same as the old omitempty 0. A legacy
+	// row never stored "duration":0, so it decodes to nil (not measured).
+	Duration         *int   `json:"duration,omitzero"`
+	FileSize         int64  `json:"file_size,omitempty"`
+	BitrateKbps      int    `json:"bitrate_kbps,omitempty"`
+	SampleRateHz     int    `json:"sample_rate_hz,omitempty"`
+	Channels         int    `json:"channels,omitempty"`
+	BitDepth         int    `json:"bit_depth,omitempty"`
+	FileHash         string `json:"file_hash,omitempty"`
+	OriginalFileHash string `json:"original_file_hash,omitempty"`
 	// OriginalFileHashKind names the digest OriginalFileHash holds.
 	// FileHashKindSampled (filehash.BookFileHash, the same digest as FileHash)
 	// is the only kind the merge freezes and the only kind the integrity check

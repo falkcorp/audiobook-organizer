@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/split_book_bulk_merge_revert_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0b7e4c19-5a62-4f38-9d81-e2c6a7f30d95
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package dedup
 
@@ -43,8 +43,8 @@ func TestSplitBookBulkMerge_UndoneByRevertingTheOp(t *testing.T) {
 			_, err := store.CreateBook(&database.Book{ID: id, Title: "Chapter " + id, Format: "mp3", FilePath: "/tmp/bulk-revert/" + id})
 			require.NoError(t, err)
 		}
-		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: ulid.Make().String(), BookID: p.keep, FilePath: "/tmp/bulk-revert/" + p.keep + "/01.mp3", Format: "mp3", TrackNumber: 1, Duration: 30}))
-		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: p.srcFile, BookID: p.src, FilePath: "/tmp/bulk-revert/" + p.src + "/02.mp3", Format: "mp3", TrackNumber: 1, Duration: 30}))
+		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: ulid.Make().String(), BookID: p.keep, FilePath: "/tmp/bulk-revert/" + p.keep + "/01.mp3", Format: "mp3", TrackNumber: 1, Duration: database.Secs(30)}))
+		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: p.srcFile, BookID: p.src, FilePath: "/tmp/bulk-revert/" + p.src + "/02.mp3", Format: "mp3", TrackNumber: 1, Duration: database.Secs(30)}))
 		pairs = append(pairs, p)
 		items = append(items, dedupengine.BulkSplitBookMergeItem{CandidateID: "cand-" + p.keep, BookIDs: []string{p.keep, p.src}, KeepID: p.keep})
 	}

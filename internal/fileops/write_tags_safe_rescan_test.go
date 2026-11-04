@@ -1,7 +1,7 @@
 // file: internal/fileops/write_tags_safe_rescan_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9d4a2c61-7e38-4b05-a1f6-52c8e0b7d493
-// last-edited: 2026-09-13
+// last-edited: 2026-11-04
 
 package fileops
 
@@ -12,6 +12,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // B1: a tag write-back followed by a library rescan must not cost the file its
@@ -44,7 +45,7 @@ func TestWriteTagsSafe_ThenScannerRescan_KeepsAudioDerivedData(t *testing.T) {
 		FilePath:            path,
 		FileHash:            firstHash,
 		OriginalFileHash:    firstHash,
-		Duration:            3600,
+		Duration:            database.Secs(3600),
 		Codec:               "aac",
 		AcoustIDFingerprint: []byte{9, 8, 7, 6},
 		IntroTranscription:  &intro,
@@ -115,8 +116,8 @@ func TestWriteTagsSafe_ThenScannerRescan_KeepsAudioDerivedData(t *testing.T) {
 	if after.TranscribeStatus == nil || *after.TranscribeStatus != status {
 		t.Errorf("transcribe status lost after write-back + rescan: %v", after.TranscribeStatus)
 	}
-	if after.Duration != 3600 || after.Codec != "aac" {
-		t.Errorf("media info lost after write-back + rescan: duration=%d codec=%q", after.Duration, after.Codec)
+	if durtest.Sec(after.Duration) != 3600 || after.Codec != "aac" {
+		t.Errorf("media info lost after write-back + rescan: duration=%d codec=%q", durtest.Sec(after.Duration), after.Codec)
 	}
 	if after.RawTags["TITLE"] != "new" {
 		t.Errorf("RawTags = %v, want the rescan's new tags", after.RawTags)

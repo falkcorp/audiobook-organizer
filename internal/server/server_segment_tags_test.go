@@ -1,7 +1,7 @@
 // file: internal/server/server_segment_tags_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a7b8c9d0-e1f2-3456-7890-abcdef123456
-// last-edited: 2026-09-02
+// last-edited: 2026-11-04
 
 package server
 
@@ -75,7 +75,7 @@ func TestGetSegmentTags_Success(t *testing.T) {
 		FilePath:    "/tmp/multi-file-book/part1.m4b",
 		Format:      "m4b",
 		FileSize:    1024,
-		Duration:    3600000,
+		Duration:    database.Secs(3600000),
 		TrackNumber: 1,
 		TrackCount:  2,
 	})

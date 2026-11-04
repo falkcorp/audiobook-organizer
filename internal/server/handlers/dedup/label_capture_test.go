@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/label_capture_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9b3d1f57-4c20-4e8a-bf16-2a7e9c5d013a
-// last-edited: 2026-10-06
+// last-edited: 2026-11-04
 
 package deduphandler_test
 
@@ -24,7 +24,7 @@ func allowLabelCaptureReads(d testDeps) {
 	d.store.EXPECT().GetBookByID(mock.Anything).
 		Return(&database.Book{ID: "x", Title: "T"}, nil).Maybe()
 	d.store.EXPECT().GetBookFiles(mock.Anything).
-		Return([]database.BookFile{{FilePath: "/lib/a.m4b", FileSize: 5 << 20, Duration: 3600}}, nil).Maybe()
+		Return([]database.BookFile{{FilePath: "/lib/a.m4b", FileSize: 5 << 20, Duration: database.Secs(3600)}}, nil).Maybe()
 	// The label-write path now (re)snapshots the pair's ScoreBreakdown via the
 	// engine's shared scorer. It is best-effort; allow it any number of times
 	// (incl. zero) and return an empty (zero-signal) result so nothing is

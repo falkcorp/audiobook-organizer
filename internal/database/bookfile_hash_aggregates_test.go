@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_hash_aggregates_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0e7b9a52-4d3c-4f18-9a6b-c1d58e2f7a34
-// last-edited: 2026-10-31
+// last-edited: 2026-11-04
 
 package database
 
@@ -45,7 +45,7 @@ var hashAggShapes = []hashAggShape{
 			return &BookFile{
 				BookID: bookID, FilePath: "/old/Batcave/zz.m4b", OriginalFilename: "zz.m4b",
 				OriginalFileHash: hashAggTwin, Missing: true,
-				Duration: hashAggDur, FileSize: hashAggSize,
+				Duration: Secs(hashAggDur), FileSize: hashAggSize,
 			}
 		},
 	},
@@ -57,7 +57,7 @@ var hashAggShapes = []hashAggShape{
 			return &BookFile{
 				BookID: bookID, FilePath: "/elsewhere/Batcave/zz.m4b", OriginalFilename: "zz.m4b",
 				FileHash: hashAggTwin,
-				Duration: hashAggDur, FileSize: hashAggSize,
+				Duration: Secs(hashAggDur), FileSize: hashAggSize,
 			}
 		},
 	},
@@ -74,7 +74,7 @@ func hashAggBook(t *testing.T, shape hashAggShape) (s *PebbleStore, bookID, aID,
 	require.NoError(t, err)
 	require.NoError(t, s.CreateBookFile(&BookFile{
 		BookID: book.ID, FilePath: "/lib/Batcave/01.m4b", OriginalFilename: "01.m4b",
-		Duration: hashAggDur, FileSize: hashAggSize,
+		Duration: Secs(hashAggDur), FileSize: hashAggSize,
 	}))
 	require.NoError(t, s.CreateBookFile(shape.twin(book.ID)))
 	files, err := s.GetBookFiles(book.ID)
@@ -162,7 +162,7 @@ func TestHashWriters_UnrelatedHashesDoNotRecompute(t *testing.T) {
 	for i := range 6 {
 		require.NoError(t, s.CreateBookFile(&BookFile{
 			BookID: book.ID, FilePath: fmt.Sprintf("/lib/Gotham/%02d.m4b", i), OriginalFilename: fmt.Sprintf("%02d.m4b", i),
-			Duration: 100 + i, FileSize: int64(1000 + i),
+			Duration: Secs(100 + i), FileSize: int64(1000 + i),
 		}))
 	}
 	files, err := s.GetBookFiles(book.ID)
@@ -194,7 +194,7 @@ func TestDeferredHashBulkPath_RecomputesOncePerBook(t *testing.T) {
 	for i := range 4 {
 		require.NoError(t, s.CreateBookFile(&BookFile{
 			BookID: bookID, FilePath: fmt.Sprintf("/lib/Batcave/x%02d.m4b", i), OriginalFilename: fmt.Sprintf("x%02d.m4b", i),
-			Duration: 50 + i, FileSize: int64(2000 + i),
+			Duration: Secs(50 + i), FileSize: int64(2000 + i),
 		}))
 	}
 	all, err := s.GetBookFiles(bookID)

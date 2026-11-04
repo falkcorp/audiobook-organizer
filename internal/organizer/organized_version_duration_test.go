@@ -1,7 +1,7 @@
 // file: internal/organizer/organized_version_duration_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0d6c3b7e-94a2-4f1e-8c5d-7b2a1e9f4c36
-// last-edited: 2026-09-25
+// last-edited: 2026-11-04
 
 package organizer
 
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // On 2026-09-23 library.scan created "Monster Makers" with a book_file row of
@@ -77,7 +78,7 @@ func TestCreateOrganizedVersion_ZeroDurationSourceRowsAreFilledFromTheNewPath(t 
 	require.Len(t, rows, 2)
 	got := map[string]int{}
 	for _, r := range rows {
-		got[r.FilePath] = r.Duration
+		got[r.FilePath] = durtest.Sec(r.Duration)
 		require.Equal(t, "MP3", r.Codec, "an empty codec is filled from the same probe")
 	}
 	require.Equal(t, map[string]int{dst1: 1200, dst2: 1500}, got,
@@ -116,5 +117,5 @@ func TestCreateOrganizedVersion_SingleFileZeroDurationRowTakesBookDuration(t *te
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, dst, rows[0].FilePath)
-	require.Equal(t, 36000, rows[0].Duration)
+	require.Equal(t, 36000, durtest.Sec(rows[0].Duration))
 }

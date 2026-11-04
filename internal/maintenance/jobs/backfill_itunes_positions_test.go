@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_itunes_positions_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 5577372a-b3ed-4283-9217-345d654e2a57
-// last-edited: 2026-09-02
+// last-edited: 2026-11-04
 
 // Package jobs_test — coverage for the backfill-itunes-positions maintenance
 // job. The owner is migrating off iTunes/Apple Books and their existing
@@ -53,7 +53,7 @@ func seedBookmarkedBook(t *testing.T, store *database.PebbleStore, title string,
 		require.NoError(t, store.CreateBookFile(&database.BookFile{
 			BookID:   book.ID,
 			FilePath: fmt.Sprintf("/library/%s/track-%02d.mp3", title, i),
-			Duration: secs,
+			Duration: database.Secs(secs),
 		}))
 	}
 	return book

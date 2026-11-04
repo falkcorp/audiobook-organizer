@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_intro_provenance_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f8a2c6e-91d4-4b7a-a5e0-6d2b4c8f1e73
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package database
 
@@ -37,7 +37,7 @@ func introSeed(t *testing.T, s *PebbleStore) (*BookFile, string) {
 		FilePath:               "/lib/Intro Provenance/01.m4b",
 		Format:                 "m4b",
 		Codec:                  "aac",
-		Duration:               3600,
+		Duration:               Secs(3600),
 		FileHash:               "hash-of-the-bytes",
 		OriginalFileHash:       "hash-of-the-bytes",
 		OriginalFileHashKind:   FileHashKindSampled,
@@ -162,7 +162,7 @@ func TestRescan_ReplacedFileDropsPerFileIntroGroup(t *testing.T) {
 
 	row := scanRow(bookID, before)
 	row.FileHash = "hash-of-different-bytes"
-	row.Duration = 7200       // a different recording, not a re-wrap of the same audio
+	row.Duration = Secs(7200) // a different recording, not a re-wrap of the same audio
 	row.FileSize = 90_000_000 // a plausible size for it, so the duration is not read as milliseconds
 	if err := s.BatchUpsertBookFiles([]*BookFile{row}); err != nil {
 		t.Fatalf("BatchUpsertBookFiles: %v", err)

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_folder_sets_test.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 3b7d2c55-1a4e-4f0b-9c61-8e2f5d7a0b14
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/stretchr/testify/require"
 )
@@ -1104,7 +1105,7 @@ func TestFragmentFixer_ChapterSetRecheckSeesWritesBetweenRows(t *testing.T) {
 			require.NoError(t, err)
 			name := fmt.Sprintf("h%02d.mp3", i)
 			p := f.file(t, filepath.Join("lib/Elsewhere/Holder", name), int(rs[0].FileSize))
-			f.row(t, name, other, p, name, rs[0].FileSize, rs[0].Duration, i+1)
+			f.row(t, name, other, p, name, rs[0].FileSize, durtest.Sec(rs[0].Duration), i+1)
 		}
 		return other
 	}

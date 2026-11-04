@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_fpwin_review_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8d2c6f14-3a5e-4b71-9c08-e4f1a7b2d953
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package database
 
@@ -172,7 +172,7 @@ func TestFpwin_BatchUpsertKeepsWindows(t *testing.T) {
 	env := newBookSigEnv(t)
 	bookID, id := fpwinSeedFile(t, env.store, "/lib/nit/up.m4b", nil)
 	seedWindowsFor(t, env.store, id)
-	require.NoError(t, env.store.BatchUpsertBookFiles([]*BookFile{{ID: id, BookID: bookID, FilePath: "/lib/nit/up.m4b", Format: "m4b", Duration: 99}}))
+	require.NoError(t, env.store.BatchUpsertBookFiles([]*BookFile{{ID: id, BookID: bookID, FilePath: "/lib/nit/up.m4b", Format: "m4b", Duration: Secs(99)}}))
 	got, err := env.store.GetFingerprintWindows(FileWindowRef(id))
 	require.NoError(t, err)
 	require.Len(t, got, 3)

@@ -1,5 +1,5 @@
 // file: internal/database/duration_sanity.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 8b1f4d2c-5e69-4a30-9c71-2f8a6b0d4e95
 // last-edited: 2026-11-04
 
@@ -73,20 +73,23 @@ func NormalizeDurationSec(fileSizeBytes int64, durationSec int) int {
 // bug); it never loops.
 // direct: this is the write chokepoint that repairs the raw stored value
 // (it may legitimately rewrite a known duration), so it reads the field itself.
+// A nil or non-positive Duration is not measured and is left alone.
 func normalizeBookFileDuration(file *BookFile) bool {
-	if file == nil {
+	if file == nil || file.Duration == nil {
 		return false
 	}
-	if !DurationLooksLikeMillis(file.FileSize, file.Duration) {
+	if !DurationLooksLikeMillis(file.FileSize, *file.Duration) {
 		return false
 	}
-	old := file.Duration
-	file.Duration = file.Duration / 1000
+	old := *file.Duration
+	// Assign a fresh pointer: the row may share its Duration with a Core copy.
+	fixed := old / 1000
+	file.Duration = &fixed
 	slog.Warn("normalizeBookFileDuration: repaired millisecond duration at write chokepoint",
 		"book_id", file.BookID,
 		"file_id", file.ID,
 		"old_duration", old,
-		"new_duration_sec", file.Duration,
+		"new_duration_sec", fixed,
 		"file_size", file.FileSize,
 	)
 	return true

@@ -1,5 +1,5 @@
 // file: internal/testutil/rapidgen/rapidgen_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2931b48a-8535-4f2a-a455-cf322f99cea5
 
 package rapidgen
@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"pgregory.net/rapid"
 )
 
@@ -76,8 +77,8 @@ func TestGen_BookFile(t *testing.T) {
 		if f.Format == "" {
 			t.Errorf("Format must be non-empty")
 		}
-		if f.Duration <= 0 {
-			t.Errorf("Duration must be positive, got %d", f.Duration)
+		if f.Duration == nil {
+			t.Errorf("Duration must be positive, got %d", durtest.Sec(f.Duration))
 		}
 		if f.TrackCount < f.TrackNumber {
 			t.Errorf("TrackCount (%d) must be >= TrackNumber (%d)", f.TrackCount, f.TrackNumber)

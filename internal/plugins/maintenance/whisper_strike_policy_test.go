@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/whisper_strike_policy_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e1b94d2-3a65-4c80-9f17-d2a8b6c05e34
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -311,7 +311,7 @@ func TestIntroTranscribe_TheRunIDIsTheRegistryOpID(t *testing.T) {
 	t.Setenv(serverdecode.EnvVar, "")
 	p, s, ids := newRemoteRun(t, 1)
 	b, _ := s.GetBookByID(ids[0])
-	if err := s.CreateBookFile(&database.BookFile{BookID: b.ID, FilePath: b.FilePath, Format: "m4b", Duration: 600, TrackNumber: 1, FileHash: "ns2-hash"}); err != nil {
+	if err := s.CreateBookFile(&database.BookFile{BookID: b.ID, FilePath: b.FilePath, Format: "m4b", Duration: database.Secs(600), TrackNumber: 1, FileHash: "ns2-hash"}); err != nil {
 		t.Fatal(err)
 	}
 	var calls atomic.Int32

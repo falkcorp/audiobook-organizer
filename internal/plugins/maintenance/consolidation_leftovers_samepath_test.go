@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: f05ffd91-1eeb-4d83-be86-1d16d9d8e1e8
-// last-edited: 2026-10-06
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -52,7 +52,7 @@ func (f *lfFixture) splashdown(t *testing.T) (leftover, owner, other string) {
 		return nil
 	})
 	require.NoError(t, err)
-	obf := &database.BookFile{BookID: o.ID, FilePath: sharedPath, FileSize: 5000, FileHash: "hh-owner", Duration: spOwnerDur, TrackNumber: 1}
+	obf := &database.BookFile{BookID: o.ID, FilePath: sharedPath, FileSize: 5000, FileHash: "hh-owner", Duration: database.Secs(spOwnerDur), TrackNumber: 1}
 	require.NoError(t, f.s.CreateBookFile(obf))
 	f.rowIDs["O"] = obf.ID
 
@@ -299,7 +299,7 @@ func TestLeftoversSamePath_MultiFileOwnerSlice(t *testing.T) {
 	_, err := f.s.ModifyBookFile(o, f.rowIDs["O"], func(bf *database.BookFile) error { bf.TrackNumber = 3; return nil })
 	require.NoError(t, err)
 	p1 := f.file(t, spSeries+"/35 - Splashdown/part 2.m4b", 100)
-	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: o, FilePath: p1, FileSize: 100, Duration: 600, TrackNumber: 2}))
+	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: o, FilePath: p1, FileSize: 100, Duration: database.Secs(600), TrackNumber: 2}))
 	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: o, FilePath: f.path(spSeries + "/35 - Splashdown/gone.m4b"),
 		FileSize: 100, TrackNumber: 1, Missing: true}))
 	r, ok := lfRow(f.planLF(t, "op-plan"), l)
@@ -314,7 +314,7 @@ func TestLeftoversSamePath_MultiFileOwnerSlice(t *testing.T) {
 func (f *lfFixture) ownerRowMissingOnDisk(t *testing.T, o string) {
 	t.Helper()
 	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: o, FilePath: f.path(spSeries + "/35 - Splashdown/part0.m4b"),
-		FileSize: 100, Duration: 60, TrackNumber: 2}))
+		FileSize: 100, Duration: database.Secs(60), TrackNumber: 2}))
 }
 
 // TestLeftoversSamePath_DurationEvidenceCarriesWholeBook: agreeing file
@@ -322,7 +322,7 @@ func (f *lfFixture) ownerRowMissingOnDisk(t *testing.T, o string) {
 func TestLeftoversSamePath_DurationEvidenceCarriesWholeBook(t *testing.T) {
 	f := newLFFixture(t)
 	l, o, _ := f.splashdown(t)
-	_, err := f.s.ModifyBookFile(l, f.rowIDs["L"], func(bf *database.BookFile) error { bf.Duration = spOwnerDur; return nil })
+	_, err := f.s.ModifyBookFile(l, f.rowIDs["L"], func(bf *database.BookFile) error { bf.Duration = database.Secs(spOwnerDur); return nil })
 	require.NoError(t, err)
 	uid := f.finishedReader(t, l)
 	r, ok := lfRow(f.planLF(t, "op-plan"), l)
@@ -359,7 +359,7 @@ func TestLeftoversSamePath_NoEvidenceMultiFileOwner(t *testing.T) {
 	_, err := f.s.ModifyBookFile(o, f.rowIDs["O"], func(bf *database.BookFile) error { bf.TrackNumber = 2; return nil })
 	require.NoError(t, err)
 	p1 := f.file(t, spSeries+"/35 - Splashdown/part 1.m4b", 100)
-	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: o, FilePath: p1, FileSize: 100, Duration: 600, TrackNumber: 1}))
+	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: o, FilePath: p1, FileSize: 100, Duration: database.Secs(600), TrackNumber: 1}))
 	r, ok := lfRow(f.planLF(t, "op-plan"), l)
 	require.True(t, ok)
 	require.True(t, r.Applicable(), r.SkipReason)
@@ -387,7 +387,7 @@ func TestLeftoversSamePath_Holds(t *testing.T) {
 			require.NoError(t, err)
 		}, leftoverSkipSamePathOwnerITunes},
 		"leftover audio differs": {func(t *testing.T, f *lfFixture, l, _ string) {
-			_, err := f.s.ModifyBookFile(l, f.rowIDs["L"], func(bf *database.BookFile) error { bf.Duration = 3600; return nil })
+			_, err := f.s.ModifyBookFile(l, f.rowIDs["L"], func(bf *database.BookFile) error { bf.Duration = database.Secs(3600); return nil })
 			require.NoError(t, err)
 		}, leftoverSkipSamePathAudio},
 		"owner not listed": {func(t *testing.T, f *lfFixture, _, o string) {

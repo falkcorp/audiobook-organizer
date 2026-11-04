@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/window_backfill_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 28adbfaa-a61f-4e34-ae2b-516e70cf775f
-// last-edited: 2026-09-25
+// last-edited: 2026-11-04
 
 package acoustid
 
@@ -173,7 +173,7 @@ func (e *wbEnv) addFile(bookID, rel string, present bool, durSec int) (string, s
 		require.NoError(e.t, os.MkdirAll(filepath.Dir(path), 0o755))
 		require.NoError(e.t, os.WriteFile(path, []byte("audio:"+rel), 0o644))
 	}
-	f := &database.BookFile{BookID: bookID, FilePath: path, Format: "m4b", Duration: durSec}
+	f := &database.BookFile{BookID: bookID, FilePath: path, Format: "m4b", Duration: database.Secs(durSec)}
 	require.NoError(e.t, e.store.CreateBookFile(f))
 	return bookID, f.ID
 }
@@ -512,7 +512,7 @@ func TestWindowBackfill_Integration_RealBinaries(t *testing.T) {
 	require.NoError(t, err, "%s", out)
 	b, err := store.CreateBook(&database.Book{Title: "Tone", FilePath: lib})
 	require.NoError(t, err)
-	f := &database.BookFile{BookID: b.ID, FilePath: path, Format: "m4a", Duration: 200}
+	f := &database.BookFile{BookID: b.ID, FilePath: path, Format: "m4a", Duration: database.Secs(200)}
 	require.NoError(t, store.CreateBookFile(f))
 
 	reg := tools.NewToolRegistry(&tools.ToolsConfig{Fpcalc: tools.ToolConfig{Mode: tools.ToolModeSystem}})
@@ -583,7 +583,7 @@ func TestWindowBackfill_TombstoneClearsWhenDurationIsCorrected(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, e.tombstone(id))
 	n := len(e.invoked())
-	_, err = e.store.ModifyBookFile(b, id, func(f *database.BookFile) error { f.Duration = 900; return nil })
+	_, err = e.store.ModifyBookFile(b, id, func(f *database.BookFile) error { f.Duration = database.Secs(900); return nil })
 	require.NoError(t, err)
 	_, err = e.run(context.Background(), nil, WindowBackfillParams{Live: true})
 	require.NoError(t, err)
@@ -637,7 +637,7 @@ func TestWindowBackfill_ITunesTreeFingerprintedThroughCaseAndSymlinks(t *testing
 	require.NoError(t, os.Symlink(filepath.Join(e.lib, "books/itunes/iTunes Media/real"), filepath.Join(e.lib, "via-link")))
 	b, err := e.store.CreateBook(&database.Book{Title: "Link", FilePath: filepath.Join(e.lib, "via-link")})
 	require.NoError(t, err)
-	link := &database.BookFile{BookID: b.ID, FilePath: filepath.Join(e.lib, "via-link", "b.m4b"), Format: "m4b", Duration: 300}
+	link := &database.BookFile{BookID: b.ID, FilePath: filepath.Join(e.lib, "via-link", "b.m4b"), Format: "m4b", Duration: database.Secs(300)}
 	require.NoError(t, e.store.CreateBookFile(link))
 	_, _ = e.addFile("", "books/audiobook-organizer/c.m4b", true, 300)
 

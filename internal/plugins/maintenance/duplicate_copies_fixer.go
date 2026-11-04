@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
 // last-edited: 2026-11-04
 
@@ -899,8 +899,9 @@ func (f *duplicateCopiesFixer) detail(store OpsStore, run *dcRun, b *dcBook) err
 		if fi, err := f.statFn(r.FilePath); err == nil && fi.Mode().IsRegular() {
 			b.Present[r.ID] = true
 		}
+		dur, _ := r.DurationSec() // unknown stays unknown: Secs(0) is nil
 		files = append(files, database.BookFile{ID: r.ID, BookID: id, FilePath: r.FilePath, Missing: r.Missing,
-			Duration: r.Duration, BitrateKbps: r.BitrateKbps, FileSize: r.FileSize}) // direct: Core->BookFile field-for-field copy
+			Duration: database.Secs(dur), BitrateKbps: r.BitrateKbps, FileSize: r.FileSize})
 	}
 	exts, err := store.GetExternalIDsForBook(id)
 	if err != nil {

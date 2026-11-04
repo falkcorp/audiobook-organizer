@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_hash_copy_gate_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3e8b1c47-9a52-4d06-8f73-c5d2a9e04b16
-// last-edited: 2026-10-21
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -92,7 +92,7 @@ func TestFragmentFixer_HashCopyGate_DegenerateHashesAreHeld(t *testing.T) {
 			require.NoError(t, os.WriteFile(f.path("lib/Stray c3/stray-c3.mp3"), fragFixtureBytes("longer", 3000), 0o644))
 		}},
 		{name: "a known duration under a minute", want: fragSkipShortOrBoilerplate, setup: func(t *testing.T, f *fragFixture) {
-			f.updateRow(t, f.ids["c3"], f.rowIDs["c3"], func(r *database.BookFile) { r.Duration = 30 })
+			f.updateRow(t, f.ids["c3"], f.rowIDs["c3"], func(r *database.BookFile) { r.Duration = database.Secs(30) })
 		}},
 		{name: "a boilerplate title", title: "Opening Credits", want: fragSkipShortOrBoilerplate, setup: func(t *testing.T, f *fragFixture) {}},
 	}
@@ -136,7 +136,7 @@ func TestFragmentFixer_HashCopyGate_UnknownDurationIsNotShort(t *testing.T) {
 	t.Parallel()
 	f := hcSeed(t)
 	child := f.hcChild(t, "c3", "Stray Recording", "hash-p03")
-	f.updateRow(t, child, f.rowIDs["c3"], func(r *database.BookFile) { r.Duration = 0 })
+	f.updateRow(t, child, f.rowIDs["c3"], func(r *database.BookFile) { r.Duration = nil })
 	r := hcOnlyRow(t, f.plan(t, "op-plan"))
 	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
 	require.Equal(t, 1, f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil).Applied)
@@ -271,7 +271,7 @@ func TestFragmentFixer_HashCopyGate_ITunesCopyOfTheParentIsNotASecondParent(t *t
 		// Parent track 02 is 101 bytes; the child is a plain-named copy of it.
 		fp := d.file(t, "lib/Stray/stray.mp3", 101)
 		c := d.book(t, "c3", "Stray Recording", fp, nil)
-		require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: c, FilePath: fp, OriginalFilename: "stray.mp3", FileSize: 101, Duration: 600, FileHash: "h2"}))
+		require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: c, FilePath: fp, OriginalFilename: "stray.mp3", FileSize: 101, Duration: database.Secs(600), FileHash: "h2"}))
 		d.organized(t, c)
 		return d, parent, it, c
 	}

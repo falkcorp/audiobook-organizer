@@ -1,7 +1,7 @@
 // file: internal/database/book_file_copies_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2b7e9c41-5d06-4f38-a1c2-8e4d7f0b3a95
-// last-edited: 2026-09-26
+// last-edited: 2026-11-04
 
 package database
 
@@ -22,40 +22,40 @@ func TestIsBookFileCopy_CopySuffixAndUnknownDuration(t *testing.T) {
 		want bool
 	}{
 		{"_copy1 twin beside its original: same size and duration",
-			BookFile{FilePath: "/lib/A/Flame/Flame - 01.m4a", FileSize: 5000, Duration: 3600},
-			BookFile{FilePath: "/lib/A/Flame/Flame - 01_copy1.m4a", FileSize: 5000, Duration: 3600}, true},
+			BookFile{FilePath: "/lib/A/Flame/Flame - 01.m4a", FileSize: 5000, Duration: Secs(3600)},
+			BookFile{FilePath: "/lib/A/Flame/Flame - 01_copy1.m4a", FileSize: 5000, Duration: Secs(3600)}, true},
 		{"_copy2 twin whose duration was never measured, same folder",
-			BookFile{FilePath: "/lib/A/Flame/Flame - 01.m4a", FileSize: 5000, Duration: 3600},
+			BookFile{FilePath: "/lib/A/Flame/Flame - 01.m4a", FileSize: 5000, Duration: Secs(3600)},
 			BookFile{FilePath: "/lib/A/Flame/Flame - 01_copy2.m4a", FileSize: 5000}, true},
 		{"both twins unmeasured, same folder",
 			BookFile{FilePath: "/lib/A/Flame/Flame - 01.m4a", FileSize: 5000},
 			BookFile{FilePath: "/lib/A/Flame/Flame - 01_copy1.m4a", FileSize: 5000}, true},
 		{"_copyN suffix in OriginalFilename too",
-			BookFile{FilePath: "/lib/A/Flame/x.m4a", OriginalFilename: "Flame - 01_copy1.m4a", FileSize: 5000, Duration: 3600},
-			BookFile{FilePath: "/lib/A/Flame/Flame - 01.m4a", FileSize: 5000, Duration: 3600}, true},
+			BookFile{FilePath: "/lib/A/Flame/x.m4a", OriginalFilename: "Flame - 01_copy1.m4a", FileSize: 5000, Duration: Secs(3600)},
+			BookFile{FilePath: "/lib/A/Flame/Flame - 01.m4a", FileSize: 5000, Duration: Secs(3600)}, true},
 		// Axiom in prod: organize suffixed a DIFFERENT chapter that collided.
 		{"Axiom: distinct chapter collision-renamed to _copy1, different size",
-			BookFile{FilePath: "/lib/A/Axiom/Axiom - 02.m4a", FileSize: 41_000_000, Duration: 2400},
-			BookFile{FilePath: "/lib/A/Axiom/Axiom - 02_copy1.m4a", FileSize: 38_500_000, Duration: 2250}, false},
+			BookFile{FilePath: "/lib/A/Axiom/Axiom - 02.m4a", FileSize: 41_000_000, Duration: Secs(2400)},
+			BookFile{FilePath: "/lib/A/Axiom/Axiom - 02_copy1.m4a", FileSize: 38_500_000, Duration: Secs(2250)}, false},
 		{"Axiom: distinct _copy1 chapter, different size, durations unmeasured",
 			BookFile{FilePath: "/lib/A/Axiom/Axiom - 02.m4a", FileSize: 41_000_000},
 			BookFile{FilePath: "/lib/A/Axiom/Axiom - 02_copy1.m4a", FileSize: 38_500_000}, false},
 		{"same size, durations 2 s apart",
-			BookFile{FilePath: "/lib/A/B/01.m4a", FileSize: 5000, Duration: 3600},
-			BookFile{FilePath: "/lib/A/B/01_copy1.m4a", FileSize: 5000, Duration: 3602}, false},
+			BookFile{FilePath: "/lib/A/B/01.m4a", FileSize: 5000, Duration: Secs(3600)},
+			BookFile{FilePath: "/lib/A/B/01_copy1.m4a", FileSize: 5000, Duration: Secs(3602)}, false},
 		{"one duration unknown, different folders: no evidence",
-			BookFile{FilePath: "/lib/A/B/01.m4a", FileSize: 5000, Duration: 3600},
+			BookFile{FilePath: "/lib/A/B/01.m4a", FileSize: 5000, Duration: Secs(3600)},
 			BookFile{FilePath: "/srv/old/B/01.m4a", FileSize: 5000}, false},
 		{"_copy with no number is a different name",
-			BookFile{FilePath: "/lib/A/B/01.m4a", FileSize: 5000, Duration: 3600},
-			BookFile{FilePath: "/lib/A/B/01_copy.m4a", FileSize: 5000, Duration: 3600}, false},
+			BookFile{FilePath: "/lib/A/B/01.m4a", FileSize: 5000, Duration: Secs(3600)},
+			BookFile{FilePath: "/lib/A/B/01_copy.m4a", FileSize: 5000, Duration: Secs(3600)}, false},
 		// <Book>/<Book> - N/<same name>: the shared name is the layout.
 		{"chapter folders: same name and size, both unmeasured",
 			BookFile{FilePath: "/lib/A/Steamforged Sorcery/Steamforged Sorcery - 03/32.m4b", FileSize: 9000},
 			BookFile{FilePath: "/lib/A/Steamforged Sorcery/Steamforged Sorcery - 04/32.m4b", FileSize: 9000}, false},
 		{"chapter folders: same name, size and duration",
-			BookFile{FilePath: "/lib/A/Steamforged Sorcery/Steamforged Sorcery - 03/32.m4b", FileSize: 9000, Duration: 600},
-			BookFile{FilePath: "/lib/A/Steamforged Sorcery/Steamforged Sorcery - 04/32.m4b", FileSize: 9000, Duration: 600}, false},
+			BookFile{FilePath: "/lib/A/Steamforged Sorcery/Steamforged Sorcery - 03/32.m4b", FileSize: 9000, Duration: Secs(600)},
+			BookFile{FilePath: "/lib/A/Steamforged Sorcery/Steamforged Sorcery - 04/32.m4b", FileSize: 9000, Duration: Secs(600)}, false},
 		{"chapter folders: a shared hash still counts",
 			BookFile{FilePath: "/lib/A/Steamforged Sorcery/Steamforged Sorcery - 03/32.m4b", FileHash: "h", FileSize: 9000},
 			BookFile{FilePath: "/lib/A/Steamforged Sorcery/Steamforged Sorcery - 04/32.m4b", FileHash: "h", FileSize: 9000}, true},
@@ -99,10 +99,10 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 			name:     "Flame: same-folder _copyN twins, one unmeasured",
 			bookPath: flame,
 			rows: []BookFile{
-				{ID: "01", FilePath: flame + "/Flame - 01.m4a", FileSize: 5000, Duration: 3600},
+				{ID: "01", FilePath: flame + "/Flame - 01.m4a", FileSize: 5000, Duration: Secs(3600)},
 				{ID: "01c", FilePath: flame + "/Flame - 01_copy1.m4a", FileSize: 5000},
-				{ID: "02", FilePath: flame + "/Flame - 02.m4a", FileSize: 6000, Duration: 4000},
-				{ID: "02c", FilePath: flame + "/Flame - 02_copy1.m4a", FileSize: 6000, Duration: 4000},
+				{ID: "02", FilePath: flame + "/Flame - 02.m4a", FileSize: 6000, Duration: Secs(4000)},
+				{ID: "02c", FilePath: flame + "/Flame - 02_copy1.m4a", FileSize: 6000, Duration: Secs(4000)},
 				{ID: "03", FilePath: flame + "/Flame - 03.m4a", FileSize: 7000},
 			},
 			copies: []string{"01c", "02c"},
@@ -111,8 +111,8 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 			name:     "Axiom: distinct-size _copy1 chapters all count",
 			bookPath: "/lib/A/Axiom",
 			rows: []BookFile{
-				{ID: "02", FilePath: "/lib/A/Axiom/Axiom - 02.m4a", FileSize: 41_000_000, Duration: 2400},
-				{ID: "02c", FilePath: "/lib/A/Axiom/Axiom - 02_copy1.m4a", FileSize: 38_500_000, Duration: 2250},
+				{ID: "02", FilePath: "/lib/A/Axiom/Axiom - 02.m4a", FileSize: 41_000_000, Duration: Secs(2400)},
+				{ID: "02c", FilePath: "/lib/A/Axiom/Axiom - 02_copy1.m4a", FileSize: 38_500_000, Duration: Secs(2250)},
 				{ID: "03", FilePath: "/lib/A/Axiom/Axiom - 03.m4a", FileSize: 40_000_000},
 				{ID: "03c", FilePath: "/lib/A/Axiom/Axiom - 03_copy1.m4a", FileSize: 39_000_000},
 			},
@@ -121,8 +121,8 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 			name:     "the _copy1 row listed first: the original is kept",
 			bookPath: "/lib/A/B",
 			rows: []BookFile{
-				{ID: "c", FilePath: "/lib/A/B/01_copy1.m4a", FileSize: 5000, Duration: 3600},
-				{ID: "o", FilePath: "/lib/A/B/01.m4a", FileSize: 5000, Duration: 3600},
+				{ID: "c", FilePath: "/lib/A/B/01_copy1.m4a", FileSize: 5000, Duration: Secs(3600)},
+				{ID: "o", FilePath: "/lib/A/B/01.m4a", FileSize: 5000, Duration: Secs(3600)},
 			},
 			copies: []string{"c"},
 		},
@@ -131,7 +131,7 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 			bookPath: "/lib/A/B",
 			rows: []BookFile{
 				{ID: "o", FilePath: "/lib/A/B/01.m4a", FileSize: 5000},
-				{ID: "c", FilePath: "/lib/A/B/01_copy1.m4a", FileSize: 5000, Duration: 3600},
+				{ID: "c", FilePath: "/lib/A/B/01_copy1.m4a", FileSize: 5000, Duration: Secs(3600)},
 			},
 			copies: []string{"o"},
 		},
@@ -139,8 +139,8 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 			name:     "a present twin is kept over a missing original",
 			bookPath: "/lib/A/B",
 			rows: []BookFile{
-				{ID: "o", FilePath: "/lib/A/B/01.m4a", FileSize: 5000, Duration: 3600, Missing: true},
-				{ID: "c", FilePath: "/lib/A/B/01_copy1.m4a", FileSize: 5000, Duration: 3600},
+				{ID: "o", FilePath: "/lib/A/B/01.m4a", FileSize: 5000, Duration: Secs(3600), Missing: true},
+				{ID: "c", FilePath: "/lib/A/B/01_copy1.m4a", FileSize: 5000, Duration: Secs(3600)},
 			},
 			copies: []string{"o"},
 		},
@@ -150,7 +150,7 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 			name:     "a present unmeasured twin is kept over a missing measured original",
 			bookPath: "/lib/A/B",
 			rows: []BookFile{
-				{ID: "o", FilePath: "/lib/A/B/01.m4a", FileSize: 5000, Duration: 3600, Missing: true},
+				{ID: "o", FilePath: "/lib/A/B/01.m4a", FileSize: 5000, Duration: Secs(3600), Missing: true},
 				{ID: "c", FilePath: "/lib/A/B/01_copy1.m4a", FileSize: 5000},
 			},
 			copies: []string{"o"},
@@ -163,9 +163,9 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 			name:     "two out-of-folder copies of each other count once",
 			bookPath: "/lib/A/B",
 			rows: []BookFile{
-				{ID: "own", FilePath: "/lib/A/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: 60},
-				{ID: "itunes", FilePath: "/srv/books/itunes/A/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: 70},
-				{ID: "old", FilePath: "/srv/old/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: 70},
+				{ID: "own", FilePath: "/lib/A/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: Secs(60)},
+				{ID: "itunes", FilePath: "/srv/books/itunes/A/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: Secs(70)},
+				{ID: "old", FilePath: "/srv/old/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: Secs(70)},
 			},
 			copies: []string{"itunes"},
 		},
@@ -177,8 +177,8 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 			name:     "no own row in the cluster: non-iTunes row kept over measured iTunes twin",
 			bookPath: "/lib/A/B",
 			rows: []BookFile{
-				{ID: "own", FilePath: "/lib/A/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: 60},
-				{ID: "itunes", FilePath: "/srv/books/itunes/A/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: 70},
+				{ID: "own", FilePath: "/lib/A/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: Secs(60)},
+				{ID: "itunes", FilePath: "/srv/books/itunes/A/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: Secs(70)},
 				{ID: "old", FilePath: "/srv/old/B/02.m4b", FileHash: "h2", FileSize: 200},
 			},
 			copies: []string{"itunes"},
@@ -189,9 +189,9 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 			name:     "present iTunes row kept over a missing non-iTunes twin",
 			bookPath: "/lib/A/B",
 			rows: []BookFile{
-				{ID: "own", FilePath: "/lib/A/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: 60},
+				{ID: "own", FilePath: "/lib/A/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: Secs(60)},
 				{ID: "old", FilePath: "/srv/old/B/02.m4b", FileHash: "h2", FileSize: 200, Missing: true},
-				{ID: "itunes", FilePath: "/srv/books/itunes/A/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: 70},
+				{ID: "itunes", FilePath: "/srv/books/itunes/A/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: Secs(70)},
 			},
 			copies: []string{"old"},
 		},
@@ -202,7 +202,7 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 			name:     "unmeasured own row kept over a measured iTunes twin",
 			bookPath: "/lib/A/B",
 			rows: []BookFile{
-				{ID: "itunes", FilePath: "/srv/books/itunes/A/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: 60},
+				{ID: "itunes", FilePath: "/srv/books/itunes/A/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: Secs(60)},
 				{ID: "own", FilePath: "/lib/A/B/01.m4b", FileHash: "h1", FileSize: 100},
 			},
 			copies: []string{"itunes"},
@@ -211,8 +211,8 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 			name:     "out-of-folder _copy1 of an own row",
 			bookPath: "/lib/A/B",
 			rows: []BookFile{
-				{ID: "own", FilePath: "/lib/A/B/01.m4b", FileSize: 100, Duration: 60},
-				{ID: "old", FilePath: "/srv/old/B/01_copy1.m4b", FileSize: 100, Duration: 60},
+				{ID: "own", FilePath: "/lib/A/B/01.m4b", FileSize: 100, Duration: Secs(60)},
+				{ID: "old", FilePath: "/srv/old/B/01_copy1.m4b", FileSize: 100, Duration: Secs(60)},
 			},
 			copies: []string{"old"},
 		},
@@ -223,9 +223,9 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 			name:     "no own basis: same-folder twin only",
 			bookPath: "/lib/A/Gone",
 			rows: []BookFile{
-				{ID: "x", FilePath: "/srv/old/X/01.mp3", FileSize: 1000, Duration: 100},
-				{ID: "xc", FilePath: "/srv/old/X/01_copy1.mp3", FileSize: 1000, Duration: 100},
-				{ID: "y", FilePath: "/srv/old/Y/01.mp3", FileSize: 1000, Duration: 100},
+				{ID: "x", FilePath: "/srv/old/X/01.mp3", FileSize: 1000, Duration: Secs(100)},
+				{ID: "xc", FilePath: "/srv/old/X/01_copy1.mp3", FileSize: 1000, Duration: Secs(100)},
+				{ID: "y", FilePath: "/srv/old/Y/01.mp3", FileSize: 1000, Duration: Secs(100)},
 			},
 			copies: []string{"xc"},
 		},
@@ -235,8 +235,8 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 			name:     "chapter-folder layout: every chapter counts",
 			bookPath: "/lib/A/Steamforged Sorcery",
 			rows: []BookFile{
-				{ID: "c1", FilePath: "/lib/A/Steamforged Sorcery/Steamforged Sorcery - 01/32.m4b", FileSize: 9000, Duration: 600},
-				{ID: "c2", FilePath: "/lib/A/Steamforged Sorcery/Steamforged Sorcery - 02/32.m4b", FileSize: 9000, Duration: 600},
+				{ID: "c1", FilePath: "/lib/A/Steamforged Sorcery/Steamforged Sorcery - 01/32.m4b", FileSize: 9000, Duration: Secs(600)},
+				{ID: "c2", FilePath: "/lib/A/Steamforged Sorcery/Steamforged Sorcery - 02/32.m4b", FileSize: 9000, Duration: Secs(600)},
 				{ID: "c3", FilePath: "/lib/A/Steamforged Sorcery/Steamforged Sorcery - 03/32.m4b", FileSize: 9000},
 				{ID: "c4", FilePath: "/lib/A/Steamforged Sorcery/Steamforged Sorcery - 04/32.m4b", FileSize: 9100},
 			},
@@ -265,14 +265,14 @@ func TestSplitOwnFolderFiles_Copies(t *testing.T) {
 			// copy may give way to a present unmeasured twin; the backfill
 			// fills all three. See keeperLess.)
 			for _, cp := range s.Copies {
-				if cp.Duration <= 0 || cp.Missing {
+				if cp.Duration == nil || cp.Missing {
 					continue
 				}
 				found := false
 				for _, k := range counted {
 					ownRow := s.Dir != "" && pathutil.IsWithin(k.FilePath, s.Dir)
 					overITunes := pathutil.UnderFrozenITunesTree(cp.FilePath) && !pathutil.UnderFrozenITunesTree(k.FilePath)
-					found = found || (k.FileSize == cp.FileSize && (k.Duration > 0 || ownRow || overITunes))
+					found = found || (k.FileSize == cp.FileSize && (k.Duration != nil || ownRow || overITunes))
 				}
 				assert.True(t, found, "copy %s carried a duration no counted twin has", cp.ID)
 			}
@@ -291,11 +291,11 @@ func TestRecomputeBookAggregates_SameFolderCopiesCorrectDown(t *testing.T) {
 	b, err := store.CreateBook(&Book{Title: "Flame", FilePath: dir, Duration: new(15200), FileSize: new(int64(260_000_000))})
 	require.NoError(t, err)
 	rows := []BookFile{
-		{FilePath: dir + "/Flame - 01.m4a", FileSize: 50_000_000, Duration: 3600},
-		{FilePath: dir + "/Flame - 01_copy1.m4a", FileSize: 50_000_000, Duration: 3600},
-		{FilePath: dir + "/Flame - 02.m4a", FileSize: 60_000_000, Duration: 4000},
+		{FilePath: dir + "/Flame - 01.m4a", FileSize: 50_000_000, Duration: Secs(3600)},
+		{FilePath: dir + "/Flame - 01_copy1.m4a", FileSize: 50_000_000, Duration: Secs(3600)},
+		{FilePath: dir + "/Flame - 02.m4a", FileSize: 60_000_000, Duration: Secs(4000)},
 		{FilePath: dir + "/Flame - 02_copy1.m4a", FileSize: 60_000_000}, // unmeasured twin
-		{FilePath: dir + "/Flame - 03.m4a", FileSize: 40_000_000, Duration: 2000},
+		{FilePath: dir + "/Flame - 03.m4a", FileSize: 40_000_000, Duration: Secs(2000)},
 	}
 	for i := range rows {
 		f := rows[i]
@@ -320,9 +320,9 @@ func TestRecomputeBookAggregates_SameFolderCopiesCorrectDown(t *testing.T) {
 func TestSplitOwnFolderFiles_LegacyPrefixHashCollision(t *testing.T) {
 	const dir = "/lib/A/Prefix"
 	rows := []BookFile{
-		{ID: "01", FilePath: dir + "/01.mp3", FileHash: "prefix", FileSize: 10_000_000, Duration: 1800},
-		{ID: "02", FilePath: dir + "/02.mp3", FileHash: "prefix", FileSize: 12_000_000, Duration: 2100},
-		{ID: "03", FilePath: dir + "/03.mp3", FileHash: "prefix", FileSize: 11_000_000, Duration: 1950},
+		{ID: "01", FilePath: dir + "/01.mp3", FileHash: "prefix", FileSize: 10_000_000, Duration: Secs(1800)},
+		{ID: "02", FilePath: dir + "/02.mp3", FileHash: "prefix", FileSize: 12_000_000, Duration: Secs(2100)},
+		{ID: "03", FilePath: dir + "/03.mp3", FileHash: "prefix", FileSize: 11_000_000, Duration: Secs(1950)},
 	}
 	book := &Book{FilePath: dir}
 	s := SplitOwnFolderFiles(book, rows)
@@ -332,13 +332,13 @@ func TestSplitOwnFolderFiles_LegacyPrefixHashCollision(t *testing.T) {
 	t.Run("equal sizes, durations apart: still a copy", func(t *testing.T) {
 		// The two durations can come from different measurements (iTunes'
 		// Total Time vs the backfill's), so they never veto a hash match.
-		a := BookFile{FilePath: "/srv/books/itunes/A/Prefix/01.mp3", FileHash: "prefix", FileSize: 5000, Duration: 1800}
-		b := BookFile{FilePath: dir + "/01.mp3", FileHash: "prefix", FileSize: 5000, Duration: 1805}
+		a := BookFile{FilePath: "/srv/books/itunes/A/Prefix/01.mp3", FileHash: "prefix", FileSize: 5000, Duration: Secs(1800)}
+		b := BookFile{FilePath: dir + "/01.mp3", FileHash: "prefix", FileSize: 5000, Duration: Secs(1805)}
 		assert.True(t, IsBookFileCopy(a, b))
 		assert.True(t, IsBookFileCopy(b, a))
 	})
 	t.Run("an unknown size or duration does not veto a shared hash", func(t *testing.T) {
-		a := BookFile{FilePath: dir + "/01.mp3", FileHash: "h", FileSize: 5000, Duration: 1800}
+		a := BookFile{FilePath: dir + "/01.mp3", FileHash: "h", FileSize: 5000, Duration: Secs(1800)}
 		b := BookFile{FilePath: "/srv/other/01.mp3", FileHash: "h"}
 		assert.True(t, IsBookFileCopy(a, b))
 		assert.True(t, IsBookFileCopy(b, a))
@@ -361,7 +361,7 @@ func TestSplitOwnFolderFiles_OwnRowKeptOverMeasuredOutOfFolderTwin(t *testing.T)
 	rows := []BookFile{
 		{ID: "own01", FilePath: dir + "/01.m4a", FileHash: "h1", FileSize: 100},
 		{ID: "own02", FilePath: dir + "/02.m4a", FileHash: "h2", FileSize: 200},
-		{ID: "itunes01", FilePath: "/srv/books/itunes/A/Book/01 Track.m4a", FileHash: "h1", FileSize: 100, Duration: 60},
+		{ID: "itunes01", FilePath: "/srv/books/itunes/A/Book/01 Track.m4a", FileHash: "h1", FileSize: 100, Duration: Secs(60)},
 	}
 	s := SplitOwnFolderFiles(&Book{FilePath: dir}, rows)
 	assert.Equal(t, []string{"itunes01"}, ownFolderIDs(s.Copies))

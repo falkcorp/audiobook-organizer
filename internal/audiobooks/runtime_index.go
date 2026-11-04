@@ -1,5 +1,5 @@
 // file: internal/audiobooks/runtime_index.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2b9f4c61-8e3a-4a7d-9c05-5d1e7f3a6b28
 // last-edited: 2026-11-04
 
@@ -161,9 +161,9 @@ func buildRuntimeEntries(rows []runtimeRow) map[string]runtimeEntry {
 				buf = buf[:0]
 				for _, i := range byBook[id] {
 					r := &rows[i]
-					// direct: rebuilding a BookFile from the projected runtimeRow.
+					// A runtimeRow projects an unknown duration as 0, which Secs maps back to nil.
 					buf = append(buf, database.BookFile{
-						BookID: r.bookID, Duration: r.dur, FileSize: r.size, Missing: r.missing,
+						BookID: r.bookID, Duration: database.Secs(r.dur), FileSize: r.size, Missing: r.missing,
 						FileHash: r.fileHash, OriginalFileHash: r.origHash, OriginalFilename: r.origName,
 						AcoustIDFingerprintDurationSec: r.acoustid,
 					})

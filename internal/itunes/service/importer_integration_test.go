@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_integration_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 8f2e4a1b-7c3d-4f9b-a0e5-3d6c2f8b5a7e
-// last-edited: 2026-09-11
+// last-edited: 2026-11-04
 
 package itunesservice
 
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -327,7 +328,7 @@ func TestITunesImport_MultiTrackBookSegments(t *testing.T) {
 			FilePath:    trackPath,
 			Format:      "m4b",
 			FileSize:    int64(track.Size),
-			Duration:    trackDurationSeconds(track), // CONS-16: seconds, not raw ms
+			Duration:    database.Secs(trackDurationSeconds(track)), // CONS-16: seconds, not raw ms
 			TrackNumber: track.TrackNumber,
 			TrackCount:  len(mobyGroup.tracks),
 		}
@@ -346,8 +347,8 @@ func TestITunesImport_MultiTrackBookSegments(t *testing.T) {
 	}
 	for _, bf := range files {
 		assert.Equal(t, len(mobyGroup.tracks), bf.TrackCount)
-		assert.NotZero(t, bf.Duration)
-		assert.Equal(t, wantSecByTrack[bf.TrackNumber], bf.Duration,
+		assert.NotNil(t, bf.Duration)
+		assert.Equal(t, wantSecByTrack[bf.TrackNumber], durtest.Sec(bf.Duration),
 			"BookFile.Duration must be seconds, not milliseconds")
 	}
 }

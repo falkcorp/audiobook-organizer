@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_duration_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 9a3d6e14-2c7b-4f58-8e01-6b4f2d9c7a35
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package audiobooks
 
@@ -156,9 +156,9 @@ func (c coreFiles) GetAllBookFilesCore() ([]database.BookFileCore, error) { retu
 func TestRuntimeIndex_UsesCanonicalRuntime(t *testing.T) {
 	files := coreFiles{
 		// Complete multi-file book: 3 x 20 min = 1 h, stored aggregate stale.
-		{BookID: "multi", Duration: 1200}, {BookID: "multi", Duration: 1200}, {BookID: "multi", Duration: 1200},
+		{BookID: "multi", Duration: database.Secs(1200)}, {BookID: "multi", Duration: database.Secs(1200)}, {BookID: "multi", Duration: database.Secs(1200)},
 		// Partial: one known 10-min chapter, one unprobed → unknown, not 10 min.
-		{BookID: "partial", Duration: 600}, {BookID: "partial"},
+		{BookID: "partial", Duration: database.Secs(600)}, {BookID: "partial"},
 		// Single file, unprobed row: the stored aggregate stands in.
 		{BookID: "single"},
 	}
@@ -190,10 +190,10 @@ func TestRuntimeIndex_RebuildsInBackgroundWhenStale(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	ri := newRuntimeIndex()
 	ri.now = func() time.Time { return now }
-	require.True(t, ri.ensure(coreFiles{{BookID: "a", Duration: 100}}))
+	require.True(t, ri.ensure(coreFiles{{BookID: "a", Duration: database.Secs(100)}}))
 	now = now.Add(runtimeIndexTTL + time.Second)
 	// Stale: still usable immediately (serves the old copy).
-	assert.True(t, ri.ensure(coreFiles{{BookID: "a", Duration: 200}}))
+	assert.True(t, ri.ensure(coreFiles{{BookID: "a", Duration: database.Secs(200)}}))
 	assert.Eventually(t, func() bool {
 		sec, _ := ri.runtimeOf(&database.Book{ID: "a"})
 		return sec == 200
@@ -213,13 +213,13 @@ func syntheticLibrary(n int) ([]database.Book, coreFiles) {
 		switch {
 		case i%100 < 36:
 			b.Duration = new(300 + i%600)
-			files = append(files, database.BookFileCore{BookID: id, Duration: *b.Duration})
+			files = append(files, database.BookFileCore{BookID: id, Duration: database.Secs(*b.Duration)})
 		case i%100 < 53:
 			files = append(files, database.BookFileCore{BookID: id})
 		default:
 			b.Duration = new(8 * 1800)
 			for range 8 {
-				files = append(files, database.BookFileCore{BookID: id, Duration: 1800})
+				files = append(files, database.BookFileCore{BookID: id, Duration: database.Secs(1800)})
 			}
 		}
 		if i%5 == 0 {
@@ -273,7 +273,7 @@ func BenchmarkRuntimeIndexBuild_742kFiles(b *testing.B) {
 	for i := range files {
 		files[i] = database.BookFileCore{
 			BookID:   fmt.Sprintf("book-%06d", i%books),
-			Duration: 600 + i%1200,
+			Duration: database.Secs(600 + i%1200),
 			FileSize: int64(5_000_000 + i),
 		}
 	}

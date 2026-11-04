@@ -1,7 +1,7 @@
 // file: internal/applygate/partial_upper_bound_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 8b4e1d27-5c93-4a60-b7f2-0d6a9e3c1f58
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package applygate
 
@@ -12,6 +12,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // Synthetic fixtures only.
@@ -20,7 +21,7 @@ import (
 // estimate is ~16 min, the upper bound the physical floor 8 MB / 1000 B/s = 8000 s.
 func ownerCaseRows() []database.BookFile {
 	return []database.BookFile{
-		{ID: "f1", BookID: "b", FileSize: 4_000_000, Duration: 480},
+		{ID: "f1", BookID: "b", FileSize: 4_000_000, Duration: database.Secs(480)},
 		{ID: "f2", BookID: "b", FileSize: 4_000_000},
 	}
 }
@@ -31,7 +32,7 @@ func tenHourRows() []database.BookFile {
 	for i := range out {
 		out[i] = database.BookFile{ID: fmt.Sprintf("c%02d", i), BookID: "b", FileSize: 28_800_000}
 		if i < 2 {
-			out[i].Duration = 1800
+			out[i].Duration = database.Secs(1800)
 		}
 	}
 	return out
@@ -126,7 +127,7 @@ func TestCheckEvidenceInBatch_PartialUpperBound(t *testing.T) {
 }
 
 func coverArtIntroRows() []database.BookFile {
-	files := []database.BookFile{{ID: "intro", BookID: "b", FileSize: 25*8000 + 500_000, Duration: 25}}
+	files := []database.BookFile{{ID: "intro", BookID: "b", FileSize: 25*8000 + 500_000, Duration: database.Secs(25)}}
 	for i := range 20 {
 		files = append(files, database.BookFile{ID: fmt.Sprintf("ch%02d", i), BookID: "b", FileSize: 1800*8000 + 500_000})
 	}
@@ -135,8 +136,8 @@ func coverArtIntroRows() []database.BookFile {
 
 func mixedEncodeRows() []database.BookFile {
 	files := []database.BookFile{
-		{ID: "p0", BookID: "b", FileSize: 1800 * 16000, Duration: 1800},
-		{ID: "p1", BookID: "b", FileSize: 1800 * 16000, Duration: 1800},
+		{ID: "p0", BookID: "b", FileSize: 1800 * 16000, Duration: database.Secs(1800)},
+		{ID: "p1", BookID: "b", FileSize: 1800 * 16000, Duration: database.Secs(1800)},
 	}
 	for i := range 18 {
 		files = append(files, database.BookFile{ID: fmt.Sprintf("q%02d", i), BookID: "b", FileSize: 1800 * 4000})
@@ -167,7 +168,7 @@ func TestCheckRuntime_NonRepresentativeSampleDoesNotBlockTheRightCandidate(t *te
 func rt0(files []database.BookFile) int {
 	sum := 0
 	for _, f := range files {
-		sum += f.Duration
+		sum += durtest.Sec(f.Duration)
 	}
 	return sum
 }

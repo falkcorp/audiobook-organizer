@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: c1cb262a-d405-4d1a-9eb7-a3c341190585
-// last-edited: 2026-10-19
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -126,7 +126,7 @@ func (d *dcFixture) copyBook(t *testing.T, role, title, dir string, rows ...dcRo
 		if !r.gone {
 			d.file(t, filepath.Join(dir, name), 100+i)
 		}
-		bf := &database.BookFile{BookID: b.ID, FilePath: p, FileSize: int64(100 + i), Duration: r.dur, TrackNumber: r.track,
+		bf := &database.BookFile{BookID: b.ID, FilePath: p, FileSize: int64(100 + i), Duration: database.Secs(r.dur), TrackNumber: r.track,
 			FileHash: r.hash, Missing: r.gone}
 		require.NoError(t, d.s.CreateBookFile(bf))
 		d.rowIDs[fmt.Sprintf("%s/%d", role, r.track)] = bf.ID
@@ -511,7 +511,7 @@ func TestDuplicateCopies_UnlocksAnAmbiguousFragment(t *testing.T) {
 	s, l := d.dune(t)
 	fp := d.file(t, "lib/Dune frag/02.mp3", 777)
 	frag := d.book(t, "frag", "02", fp, nil)
-	require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: frag, FilePath: fp, OriginalFilename: "02.mp3", FileSize: 777, Duration: 600, FileHash: "h2"}))
+	require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: frag, FilePath: fp, OriginalFilename: "02.mp3", FileSize: 777, Duration: database.Secs(600), FileHash: "h2"}))
 
 	before := d.planFor(t, fragFixerID, "op-frag-1", nil)
 	require.Equal(t, fragClassAmbiguous, findRow(t, before, "ambiguous:"+frag).Class)
@@ -549,10 +549,10 @@ func TestFragmentFixer_DisregardsITunesParents(t *testing.T) {
 	it := d.copyBook(t, "I", "Dune", "books/itunes/Dune", dcRow{track: 1, dur: 600, hash: "h1"}, dcRow{track: 2, dur: 600, hash: "h2"})
 	fp := d.file(t, "lib/Dune frag/02.mp3", 777)
 	frag := d.book(t, "frag", "02", fp, nil)
-	require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: frag, FilePath: fp, OriginalFilename: "02.mp3", FileSize: 777, Duration: 600, FileHash: "h2"}))
+	require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: frag, FilePath: fp, OriginalFilename: "02.mp3", FileSize: 777, Duration: database.Secs(600), FileHash: "h2"}))
 	ip := d.file(t, "books/itunes/frags/02.mp3", 778)
 	itFrag := d.book(t, "itFrag", "02", ip, nil)
-	require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: itFrag, FilePath: ip, OriginalFilename: "02.mp3", FileSize: 778, Duration: 600, FileHash: "h1"}))
+	require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: itFrag, FilePath: ip, OriginalFilename: "02.mp3", FileSize: 778, Duration: database.Secs(600), FileHash: "h1"}))
 	beforeI, err := d.s.GetBookByID(it)
 	require.NoError(t, err)
 	beforeIRows, err := d.s.GetBookFiles(it)
@@ -593,7 +593,7 @@ func TestFragmentFixer_DisregardsITunesMediaParent(t *testing.T) {
 	it := d.copyBook(t, "I", "Dune", "lib/Media/iTunes Media/Audiobooks/Dune", dcRow{track: 1, dur: 600, hash: "h1"}, dcRow{track: 2, dur: 600, hash: "h2"})
 	fp := d.file(t, "lib/Dune frag/02.mp3", 777)
 	frag := d.book(t, "frag", "02", fp, nil)
-	require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: frag, FilePath: fp, OriginalFilename: "02.mp3", FileSize: 777, Duration: 600, FileHash: "h2"}))
+	require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: frag, FilePath: fp, OriginalFilename: "02.mp3", FileSize: 777, Duration: database.Secs(600), FileHash: "h2"}))
 	before, err := d.s.GetBookByID(it)
 	require.NoError(t, err)
 	r := findRow(t, d.planFor(t, fragFixerID, "op-plan", nil), "copy:"+parent)
@@ -616,7 +616,7 @@ func TestDuplicateCopies_IdentityGate(t *testing.T) {
 		return &dcBook{Core: database.BookCore{ID: id, Title: title, ASIN: asin, AuthorID: &author}, Rows: rows, Title: dcTitleKey(title), Author: "frankherbert"}
 	}
 	row := func(dur int, hash string) database.BookFileCore {
-		return database.BookFileCore{ID: hash + fmt.Sprint(dur), Duration: dur, FileHash: hash, FilePath: "/x/" + hash + ".mp3"}
+		return database.BookFileCore{ID: hash + fmt.Sprint(dur), Duration: database.Secs(dur), FileHash: hash, FilePath: "/x/" + hash + ".mp3"}
 	}
 	base := func() (*dcBook, *dcBook) {
 		return mk("a", "Dune", nil, row(900, "h1"), row(100, "h2")),
@@ -636,13 +636,13 @@ func TestDuplicateCopies_IdentityGate(t *testing.T) {
 			return none
 		}, dcEdgeUnproven},
 		{"short shared intro is the only overlap", func(a, b *dcBook) dcRejections {
-			intro := database.BookFileCore{ID: "intro", Duration: 59, FileHash: "intro", FilePath: "/x/track.mp3"}
+			intro := database.BookFileCore{ID: "intro", Duration: database.Secs(59), FileHash: "intro", FilePath: "/x/track.mp3"}
 			a.Rows = []database.BookFileCore{intro}
 			b.Rows = []database.BookFileCore{intro, row(900, "other")}
 			return none
 		}, dcEdgeUnproven},
 		{"boilerplate credits are the only overlap", func(a, b *dcBook) dcRejections {
-			credits := database.BookFileCore{ID: "cr", Duration: 300, FileHash: "cr", FilePath: "/x/x.mp3", Title: "Opening Credits"}
+			credits := database.BookFileCore{ID: "cr", Duration: database.Secs(300), FileHash: "cr", FilePath: "/x/x.mp3", Title: "Opening Credits"}
 			a.Rows = []database.BookFileCore{credits}
 			b.Rows = []database.BookFileCore{credits, row(900, "other")}
 			return none

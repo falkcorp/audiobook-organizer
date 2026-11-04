@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/calibrate_scoring_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b3e6a1c8-9d24-4f57-8a06-1c2d3e4f5a61
-// last-edited: 2026-10-29
+// last-edited: 2026-11-04
 
 package metafetch
 
@@ -334,7 +334,7 @@ func TestEvaluateBook_PartialRuntimeUpperBoundDemotesTooLongCandidate(t *testing
 	hash := candidateSourceHash(long)
 	book := &database.Book{ID: "b1", Title: "The Long Halloween", MetadataSourceHash: &hash}
 	files := []database.BookFile{
-		{ID: "f1", BookID: "b1", FileSize: 4_000_000, Duration: 480},
+		{ID: "f1", BookID: "b1", FileSize: 4_000_000, Duration: database.Secs(480)},
 		{ID: "f2", BookID: "b1", FileSize: 4_000_000},
 	}
 	grid := buildSweepGrid(defaultSweepKnobs(), 3)

@@ -1,7 +1,7 @@
 // file: internal/dedup/field_locks_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 1e6b8d2c-5f93-4a07-b7c4-9d3e2a8f0b61
-// last-edited: 2026-10-21
+// last-edited: 2026-11-04
 
 package dedup
 
@@ -39,11 +39,11 @@ func TestMergeSplitBookCluster_LockedKeepTitleStands(t *testing.T) {
 	m.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
 		switch bookID {
 		case src1:
-			return []database.BookFile{{ID: "f1", BookID: src1, Duration: 100}}, nil
+			return []database.BookFile{{ID: "f1", BookID: src1, Duration: database.Secs(100)}}, nil
 		case src2:
-			return []database.BookFile{{ID: "f2", BookID: src2, Duration: 200}}, nil
+			return []database.BookFile{{ID: "f2", BookID: src2, Duration: database.Secs(200)}}, nil
 		default:
-			return []database.BookFile{{ID: "f1", Duration: 100}, {ID: "f2", Duration: 200}}, nil
+			return []database.BookFile{{ID: "f1", Duration: database.Secs(100)}, {ID: "f2", Duration: database.Secs(200)}}, nil
 		}
 	}
 	var keepWrite *database.Book
@@ -98,7 +98,7 @@ func TestMergeSplitBookCluster_LockReadErrorKeepsTitle(t *testing.T) {
 	prevFiles := m.GetBookFilesFunc
 	m.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
 		if bookID == keepID {
-			return []database.BookFile{{ID: "fk", BookID: keepID, Duration: 300}}, nil
+			return []database.BookFile{{ID: "fk", BookID: keepID, Duration: database.Secs(300)}}, nil
 		}
 		return prevFiles(bookID)
 	}

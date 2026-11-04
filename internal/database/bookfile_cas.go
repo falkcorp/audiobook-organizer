@@ -1,13 +1,12 @@
 // file: internal/database/bookfile_cas.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6b991179-c549-4086-9050-022c32b0cfce
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 package database
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -238,7 +237,7 @@ var bookFileRowCacheMissHook func(key string)
 func (c *bookFileRowCache) read(s *PebbleStore, key []byte) (*BookFile, []byte, error) {
 	if raw, ok := c.raw[string(key)]; ok {
 		var f BookFile
-		if err := json.Unmarshal(raw, &f); err != nil {
+		if err := unmarshalBookFile(raw, &f); err != nil {
 			return nil, nil, fmt.Errorf("decode book_file %s: %w", key, err)
 		}
 		return &f, raw, nil
@@ -298,13 +297,13 @@ func (s *PebbleStore) loadBookFileRowAt(key []byte, copyRaw bool) (*BookFile, []
 	defer closer.Close()
 	var f BookFile
 	if !copyRaw {
-		if err := json.Unmarshal(value, &f); err != nil {
+		if err := unmarshalBookFile(value, &f); err != nil {
 			return nil, nil, err
 		}
 		return &f, nil, nil
 	}
 	raw := append([]byte(nil), value...)
-	if err := json.Unmarshal(raw, &f); err != nil {
+	if err := unmarshalBookFile(raw, &f); err != nil {
 		return nil, nil, err
 	}
 	return &f, raw, nil

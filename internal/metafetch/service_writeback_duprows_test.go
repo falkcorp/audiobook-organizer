@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback_duprows_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2c65b832-5fea-41f4-9b1e-551dd05d7eb8
-// last-edited: 2026-09-02
+// last-edited: 2026-11-04
 
 package metafetch
 
@@ -87,7 +87,7 @@ func TestDedupeBookFilesByPath_KeepsTheFingerprintedTwin(t *testing.T) {
 func TestDedupeBookFilesByPath_KeeperOrderMatchesRankKeeper(t *testing.T) {
 	t.Run("fingerprint_beats_duration", func(t *testing.T) {
 		out := dedupeBookFilesByPath("book-1", []database.BookFile{
-			{ID: "dur", FilePath: "/a/1.m4b", Duration: 3600},
+			{ID: "dur", FilePath: "/a/1.m4b", Duration: database.Secs(3600)},
 			{ID: "fp", FilePath: "/a/1.m4b", AcoustIDFingerprint: []byte{0x01}},
 		})
 		require.Len(t, out, 1)
@@ -97,7 +97,7 @@ func TestDedupeBookFilesByPath_KeeperOrderMatchesRankKeeper(t *testing.T) {
 	t.Run("duration_beats_nothing", func(t *testing.T) {
 		out := dedupeBookFilesByPath("book-1", []database.BookFile{
 			{ID: "bare", FilePath: "/a/1.m4b"},
-			{ID: "dur", FilePath: "/a/1.m4b", Duration: 3600},
+			{ID: "dur", FilePath: "/a/1.m4b", Duration: database.Secs(3600)},
 		})
 		require.Len(t, out, 1)
 		assert.Equal(t, "dur", out[0].ID)

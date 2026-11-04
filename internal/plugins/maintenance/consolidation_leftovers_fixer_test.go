@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 240c6560-a115-459f-a156-ce41853ac125
-// last-edited: 2026-10-06
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -36,7 +36,7 @@ func (f *lfFixture) leftover(t *testing.T, role, rel string, size int64, hash st
 	b, err := f.s.CreateBook(&database.Book{Title: role, FilePath: p})
 	require.NoError(t, err)
 	f.ids[role] = b.ID
-	bf := &database.BookFile{BookID: b.ID, FilePath: p, FileSize: size, FileHash: hash, Duration: 600, TrackNumber: 1}
+	bf := &database.BookFile{BookID: b.ID, FilePath: p, FileSize: size, FileHash: hash, Duration: database.Secs(600), TrackNumber: 1}
 	require.NoError(t, f.s.CreateBookFile(bf))
 	f.rowIDs[role] = bf.ID
 	return b.ID
@@ -58,7 +58,7 @@ func (f *lfFixture) combined(t *testing.T, role, dir string, files map[string]in
 	for i, name := range names {
 		size, track := files[name], i+1
 		p := f.file(t, filepath.Join(dir, name), size)
-		bf := &database.BookFile{BookID: b.ID, FilePath: p, FileSize: int64(size), FileHash: hashes[name], Duration: 600, TrackNumber: track}
+		bf := &database.BookFile{BookID: b.ID, FilePath: p, FileSize: int64(size), FileHash: hashes[name], Duration: database.Secs(600), TrackNumber: track}
 		require.NoError(t, f.s.CreateBookFile(bf))
 		f.rowIDs[role+"/"+name] = bf.ID
 	}
@@ -404,7 +404,7 @@ func TestLeftovers_TwinNeedsEvidence(t *testing.T) {
 	// size only: the owner's file has another chapter number and duration.
 	ne := f.leftover(t, "NE", "lib/D1/S1/04 - Four/04 - Four.mp3", 4100, "")
 	cne := f.combined(t, "CNE", "lib/D1/S1/Four", map[string]int{"Four - 09.mp3": 4100}, nil)
-	_, err := f.s.ModifyBookFile(cne, f.rowIDs["CNE/Four - 09.mp3"], func(bf *database.BookFile) error { bf.Duration = 1234; return nil })
+	_, err := f.s.ModifyBookFile(cne, f.rowIDs["CNE/Four - 09.mp3"], func(bf *database.BookFile) error { bf.Duration = database.Secs(1234); return nil })
 	require.NoError(t, err)
 	// two candidates on one owner, both chapter 5 with the same duration.
 	ta := f.leftover(t, "TA", "lib/D2/S2/05 - Five/05 - Five.mp3", 4200, "")

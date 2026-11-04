@@ -1,7 +1,7 @@
 // file: internal/merge/service_b3_realstore_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 6a2f9e14-3c7b-4d8a-9e10-b8f2a5c6d7e1
-// last-edited: 2026-10-25
+// last-edited: 2026-11-04
 
 package merge
 
@@ -10,6 +10,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -426,5 +427,5 @@ func TestB3_AttachVirtualFile_SetsDurationFromBook(t *testing.T) {
 	files, err := store.GetBookFiles(b.ID)
 	require.NoError(t, err)
 	require.Len(t, files, 1)
-	assert.Equal(t, dur, files[0].Duration)
+	assert.Equal(t, dur, durtest.Sec(files[0].Duration))
 }

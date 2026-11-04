@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/userdata_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7ac71a7b-e1cb-4416-a393-1fa38af8871f
-// last-edited: 2026-09-25
+// last-edited: 2026-11-04
 
 package abs_test
 
@@ -91,7 +91,7 @@ func (f *udFake) addBook(bookID string, bookDuration *int, trackDurations ...int
 		f.files[bookID] = append(f.files[bookID], database.BookFile{
 			ID: fmt.Sprintf("%s-f%d", bookID, i), BookID: bookID,
 			FilePath: fmt.Sprintf("/lib/%s/%02d.m4b", bookID, i),
-			Duration: d, TrackNumber: i + 1,
+			Duration: database.Secs(d), TrackNumber: i + 1,
 		})
 	}
 }

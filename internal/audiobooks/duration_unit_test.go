@@ -1,7 +1,7 @@
 // file: internal/audiobooks/duration_unit_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4d9e2a71-6b58-4c03-9f14-8e7a05b3d62c
-// last-edited: 2026-09-02
+// last-edited: 2026-11-04
 
 package audiobooks
 
@@ -35,7 +35,7 @@ func TestAggregateFileMetadata_DoesNotDivideCorrectSeconds(t *testing.T) {
 	const size = 4_800_000 // 4.8 MB -> 64 kbps at 600 s
 	files := make([]database.BookFileCore, 0, 5)
 	for range 5 {
-		files = append(files, database.BookFileCore{Duration: track, FileSize: size})
+		files = append(files, database.BookFileCore{Duration: database.Secs(track), FileSize: size})
 	}
 
 	books := []database.Book{{ID: "b1"}}
@@ -59,7 +59,7 @@ func TestAggregateFileMetadata_StillNormalizesMillisecondRows(t *testing.T) {
 	// 4.8 MB with a 600,000 "second" duration implies 64 bits/sec — far below
 	// the 4 kbps floor — while /1000 lands back at a plausible 64 kbps. That is
 	// exactly the millisecond signature DurationLooksLikeMillis detects.
-	files := []database.BookFileCore{{Duration: 600_000, FileSize: 4_800_000}}
+	files := []database.BookFileCore{{Duration: database.Secs(600_000), FileSize: 4_800_000}}
 
 	books := []database.Book{{ID: "b1"}}
 	svc.aggregateFileMetadataWithFiles(books, map[string][]database.BookFileCore{"b1": files})
@@ -77,8 +77,8 @@ func TestAggregateFileMetadata_MixedUnitsInOneBook(t *testing.T) {
 	svc := &AudiobookService{}
 
 	files := []database.BookFileCore{
-		{Duration: 600, FileSize: 4_800_000},     // seconds — keep
-		{Duration: 600_000, FileSize: 4_800_000}, // milliseconds — normalize to 600
+		{Duration: database.Secs(600), FileSize: 4_800_000},     // seconds — keep
+		{Duration: database.Secs(600_000), FileSize: 4_800_000}, // milliseconds — normalize to 600
 	}
 
 	books := []database.Book{{ID: "b1"}}

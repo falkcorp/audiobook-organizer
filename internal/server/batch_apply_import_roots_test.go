@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_import_roots_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 9e4b27c1-5a3d-4f80-b6c2-0d7e18a9f354
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package server
 
@@ -73,7 +73,7 @@ func TestBulkApply_ManualOnlyGuardSurvivesAMissedImportRoot(t *testing.T) {
 	path := root + "/01.mp3"
 	book := &database.Book{ID: "b1", Title: "", TranscribedTitle: new(chimes), FilePath: path, Duration: &dur}
 	rows := map[string]string{"b1": path, "b2": root + "/02.mp3", "b3": root + "/03.mp3", "b4": root + "/04.mp3"}
-	files := map[string][]database.BookFile{"b1": {{FilePath: path, Duration: dur, FileSize: int64(dur) * 8000, TranscribedTitle: new(chimes)}}}
+	files := map[string][]database.BookFile{"b1": {{FilePath: path, Duration: database.Secs(dur), FileSize: int64(dur) * 8000, TranscribedTitle: new(chimes)}}}
 	// Audible answered with a record that names nothing manual-only.
 	cand := metafetch.MetadataCandidate{Title: "The Chimes of Midnight", Author: "Robert Shearman", Score: 0.95, DurationSec: dur, Source: "Audible"}
 	blob, err := json.Marshal(cand)
@@ -185,7 +185,7 @@ func TestBulkApply_MissedRootTranscriptionUnderABulkPinIsRefused(t *testing.T) {
 	book := &database.Book{ID: "b1", Title: "", TranscribedTitle: new(chimes), FilePath: path, Duration: &dur}
 	books := importRootBooks{fakeBooks: fakeBooks{"b1": book},
 		rows:     map[string]string{"b1": path, "b2": root + "/02.mp3", "b3": root + "/03.mp3", "b4": root + "/04.mp3"},
-		files:    map[string][]database.BookFile{"b1": {{FilePath: path, Duration: dur, FileSize: int64(dur) * 8000, TranscribedTitle: new(chimes)}}},
+		files:    map[string][]database.BookFile{"b1": {{FilePath: path, Duration: database.Secs(dur), FileSize: int64(dur) * 8000, TranscribedTitle: new(chimes)}}},
 		rootsErr: errors.New("store down")}
 	if q := metabatch.ResolveCandidateSearchQuery(books, book); q.Usable || q.Title != "" {
 		t.Fatalf("fixture: resolver returned %+v; the test needs the missed-root skip (no query)", q)
@@ -263,7 +263,7 @@ func TestBulkApply_ManualOnlyTranscribedAuthorIsRefused(t *testing.T) {
 	t.Run("file", func(t *testing.T) {
 		book := &database.Book{ID: "b1", Title: "", FilePath: path, Duration: &dur}
 		books := importRootBooks{fakeBooks: fakeBooks{"b1": book}, rows: map[string]string{"b1": path},
-			files: map[string][]database.BookFile{"b1": {{FilePath: path, Duration: dur, TranscribedAuthor: new("Big Finish Productions")}}}}
+			files: map[string][]database.BookFile{"b1": {{FilePath: path, Duration: database.Secs(dur), TranscribedAuthor: new("Big Finish Productions")}}}}
 		requireManualOnlyRefusal(t, planWithBulkPin(t, books, cand), "file transcribed author")
 	})
 }
@@ -283,7 +283,7 @@ func TestBulkApply_BookTranscribedTitleAloneIsRefused(t *testing.T) {
 	book := &database.Book{ID: "b1", Title: "", TranscribedTitle: new(chimes), FilePath: path, Duration: &dur}
 	books := importRootBooks{fakeBooks: fakeBooks{"b1": book},
 		rows:     map[string]string{"b1": path, "b2": root + "/02.mp3", "b3": root + "/03.mp3", "b4": root + "/04.mp3"},
-		files:    map[string][]database.BookFile{"b1": {{FilePath: path, Duration: dur, FileSize: int64(dur) * 8000}}},
+		files:    map[string][]database.BookFile{"b1": {{FilePath: path, Duration: database.Secs(dur), FileSize: int64(dur) * 8000}}},
 		rootsErr: errors.New("store down")}
 	if q := metabatch.ResolveCandidateSearchQuery(books, book); q.Usable || q.Title != "" {
 		t.Fatalf("fixture: resolver returned %+v; the test needs the missed-root skip (no query)", q)

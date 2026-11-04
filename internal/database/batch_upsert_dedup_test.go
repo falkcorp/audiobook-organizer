@@ -1,7 +1,7 @@
 // file: internal/database/batch_upsert_dedup_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0944459c-a178-4e09-a2a0-ba64568d7d43
-// last-edited: 2026-09-10
+// last-edited: 2026-11-04
 
 package database
 
@@ -52,9 +52,9 @@ func TestBatchUpsertBookFilesDedupesRowsSharingAFilePath(t *testing.T) {
 	// last-wins on content.
 	files := []*BookFile{
 		{BookID: book.ID, FilePath: sharedPath, Title: "first observation", TrackNumber: 1,
-			Duration: dedupTestDuration, FileSize: dedupTestFileSize},
+			Duration: Secs(dedupTestDuration), FileSize: dedupTestFileSize},
 		{BookID: book.ID, FilePath: sharedPath, Title: "second observation", TrackNumber: 1,
-			Duration: dedupTestDuration, FileSize: dedupTestFileSize},
+			Duration: Secs(dedupTestDuration), FileSize: dedupTestFileSize},
 	}
 	require.NoError(t, store.BatchUpsertBookFiles(files))
 
@@ -104,10 +104,10 @@ func TestBatchUpsertBookFilesDedupesRowsSharingAnITunesPID(t *testing.T) {
 	files := []*BookFile{
 		{BookID: book.ID, FilePath: "/lib/dedup/pid/old-name.m4b", ITunesPersistentID: sharedPID,
 			Title: "first observation", TrackNumber: 1,
-			Duration: dedupTestDuration, FileSize: dedupTestFileSize},
+			Duration: Secs(dedupTestDuration), FileSize: dedupTestFileSize},
 		{BookID: book.ID, FilePath: "/lib/dedup/pid/new-name.m4b", ITunesPersistentID: sharedPID,
 			Title: "second observation", TrackNumber: 1,
-			Duration: dedupTestDuration, FileSize: dedupTestFileSize},
+			Duration: Secs(dedupTestDuration), FileSize: dedupTestFileSize},
 	}
 	require.NoError(t, store.BatchUpsertBookFiles(files))
 
@@ -168,15 +168,15 @@ func TestBatchUpsertBookFilesChecksBothStagedMapsBeforeEitherCommittedLookup(t *
 	require.NoError(t, store.CreateBookFile(&BookFile{
 		BookID: otherBook.ID, FilePath: "/lib/dedup/order/other/held.m4b",
 		ITunesPersistentID: sharedPID, TrackNumber: 1,
-		Duration: dedupTestDuration, FileSize: dedupTestFileSize,
+		Duration: Secs(dedupTestDuration), FileSize: dedupTestFileSize,
 	}))
 
 	files := []*BookFile{
 		{BookID: book.ID, FilePath: sharedPath, Title: "first observation", TrackNumber: 1,
-			Duration: dedupTestDuration, FileSize: dedupTestFileSize},
+			Duration: Secs(dedupTestDuration), FileSize: dedupTestFileSize},
 		{BookID: book.ID, FilePath: sharedPath, ITunesPersistentID: sharedPID,
 			Title: "second observation", TrackNumber: 1,
-			Duration: dedupTestDuration, FileSize: dedupTestFileSize},
+			Duration: Secs(dedupTestDuration), FileSize: dedupTestFileSize},
 	}
 	require.NoError(t, store.BatchUpsertBookFiles(files))
 

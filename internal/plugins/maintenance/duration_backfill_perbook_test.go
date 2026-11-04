@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_perbook_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4d727c43-4cac-44cd-a1d2-3e4c07c99da4
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/aggtest"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 func applyReextractParams(t *testing.T) json.RawMessage {
@@ -46,7 +47,7 @@ func reextractSegs(bookID string, n int) []database.BookFile {
 			FilePath:                       fmt.Sprintf("/lib/%s/part%03d.mp3", bookID, i),
 			TrackNumber:                    i + 1,
 			FileSize:                       2_000_000,
-			Duration:                       50,
+			Duration:                       database.Secs(50),
 			AcoustIDFingerprintDurationSec: 100,
 		}
 	}
@@ -82,8 +83,8 @@ func TestDurationReextract_ManySegmentBook_RecomputesAggregatesOnce(t *testing.T
 	}
 	files, _ := s.GetBookFiles(book.ID)
 	for _, f := range files {
-		if f.Duration != 100 {
-			t.Fatalf("segment %s Duration=%d, want 100", f.ID, f.Duration)
+		if durtest.Sec(f.Duration) != 100 {
+			t.Fatalf("segment %s Duration=%d, want 100", f.ID, durtest.Sec(f.Duration))
 		}
 	}
 	got, _ := s.GetBookByID(book.ID)

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/audiobooth_browse_gaps_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 21a537e2-8789-4517-9ef9-576957a6fe05
-// last-edited: 2026-09-25
+// last-edited: 2026-11-04
 
 package abs_test
 
@@ -51,7 +51,7 @@ func newBrowseGapsFixture(t *testing.T) *browseGapsFixture {
 		// A path that does not exist, so the mapper's os.Stat override does not
 		// apply and the displayed size is the stored one.
 		return database.BookFile{ID: book + "-f", BookID: book, FilePath: "/nonexistent/" + book + ".m4b",
-			FileSize: size, Duration: 600, Format: "m4b"}
+			FileSize: size, Duration: database.Secs(600), Format: "m4b"}
 	}
 	// big: Book.FileSize tiny, files large. small: the reverse. nofiles: fallback.
 	add(&database.Book{ID: "big", Genre: strp("Fiction, Adventure"), Language: strp("English"),

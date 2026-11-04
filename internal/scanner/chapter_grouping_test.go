@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_grouping_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 950c3ace-c8d3-4885-9a1d-d90682d41415
-// last-edited: 2026-10-11
+// last-edited: 2026-11-04
 
 package scanner
 
@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
@@ -239,7 +240,7 @@ func TestGroupFileDurationSec_UsesTheStoredRowDuration(t *testing.T) {
 	require.NoError(t, err)
 	var known, stale string
 	for i, r := range rows {
-		r.Duration = 777
+		r.Duration = database.Secs(777)
 		r.FileSize = 1 // every fixture file is one byte
 		if i == 1 {
 			r.FileSize = 99 // the file changed since the row was written

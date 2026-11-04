@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_counters_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 01caa381-c1de-491b-b20f-5e348267cd4e
-// last-edited: 2026-10-06
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -61,7 +61,7 @@ func TestDurationBackfill_MissingOnDiskSplitFromReadErrors(t *testing.T) {
 	pid := "pid-1"
 	book := database.Book{ID: "b1", Duration: new(100), ITunesPersistentID: &pid}
 	// iTunes-linked, so the stored-duration shortcut is off and the file is read.
-	segs := []database.BookFile{{ID: "s1", BookID: "b1", FilePath: gone, Duration: 50, ITunesPersistentID: pid}}
+	segs := []database.BookFile{{ID: "s1", BookID: "b1", FilePath: gone, Duration: database.Secs(50), ITunesPersistentID: pid}}
 	summary := runCounterBackfill(t, counterStore(book, segs), map[string]any{"dry_run": true})
 	assertSummaryHas(t, summary, "missing-on-disk=1 (e.g. "+gone+")", "read-errors=0",
 		"recently-verified-skipped=0", "write-errors=0")
@@ -78,7 +78,7 @@ func TestDurationBackfill_UnreadableFileIsReadError(t *testing.T) {
 	}
 	pid := "pid-1"
 	book := database.Book{ID: "b1", Duration: new(100), ITunesPersistentID: &pid}
-	segs := []database.BookFile{{ID: "s1", BookID: "b1", FilePath: locked, Duration: 50, ITunesPersistentID: pid}}
+	segs := []database.BookFile{{ID: "s1", BookID: "b1", FilePath: locked, Duration: database.Secs(50), ITunesPersistentID: pid}}
 	summary := runCounterBackfill(t, counterStore(book, segs), map[string]any{"dry_run": true})
 	assertSummaryHas(t, summary, "read-errors=1 (e.g. "+locked+")", "missing-on-disk=0")
 }
@@ -86,7 +86,7 @@ func TestDurationBackfill_UnreadableFileIsReadError(t *testing.T) {
 // A failed segment write is a write error; it used to be counted as a read error.
 func TestDurationBackfill_WriteFailureIsWriteError(t *testing.T) {
 	book := database.Book{ID: "b1", Duration: new(100)}
-	segs := []database.BookFile{{ID: "s1", BookID: "b1", FilePath: "/x/01.mp3", Duration: 50, AcoustIDFingerprintDurationSec: 1800}}
+	segs := []database.BookFile{{ID: "s1", BookID: "b1", FilePath: "/x/01.mp3", Duration: database.Secs(50), AcoustIDFingerprintDurationSec: 1800}}
 	store := counterStore(book, segs)
 	store.UpdateBookFilesFunc = func(context.Context, []*database.BookFile, func(int, bool)) (int, error) {
 		return 0, errors.New("disk full")

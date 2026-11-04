@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_claims_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c41f7a0e-2b95-4d63-8e1a-5f90d3b7a264
-// last-edited: 2026-10-25
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -33,7 +33,7 @@ func retireFileOnto(t *testing.T, ps *database.PebbleStore, holderID, path strin
 		RetiredFromBookID: shell.ID, RetireOpID: "op-test", RetiredAt: &now,
 	})
 	require.NoError(t, err)
-	row := &database.BookFile{BookID: shell.ID, FilePath: path, Format: "mp3", Duration: 100, FileSize: 1000}
+	row := &database.BookFile{BookID: shell.ID, FilePath: path, Format: "mp3", Duration: database.Secs(100), FileSize: 1000}
 	require.NoError(t, ps.CreateBookFile(row))
 	require.NoError(t, ps.RetireBookFiles([]database.BookFileMove{{FileIDs: []string{row.ID}, SourceBookID: shell.ID}}, holderID, v.ID))
 	got, err := ps.GetBookFileByID(holderID, row.ID)

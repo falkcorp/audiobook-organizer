@@ -1,7 +1,7 @@
 // file: internal/dedup/exact_provenance_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 29b011fa-6878-4516-b7f1-e680f303d4ea
-// last-edited: 2026-09-28
+// last-edited: 2026-11-04
 
 // Tests for the placeholder-title guard and exact-rule provenance
 // (exact_provenance.go). The fixtures mirror the production pairs of
@@ -358,7 +358,7 @@ func setupProvenanceDrain(t *testing.T, authors map[int]string, books ...provBoo
 	}
 	mock.GetBookFilesFunc = func(id string) ([]database.BookFile, error) {
 		b := byID[id]
-		f := database.BookFile{ID: id + "-f0", BookID: id, Duration: 3600}
+		f := database.BookFile{ID: id + "-f0", BookID: id, Duration: database.Secs(3600)}
 		f.FileHash = b.fileHash
 		return []database.BookFile{f}, nil
 	}

@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_narrow_decode_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d3e5b71-6c42-4f08-b1a7-2e8c0f4d6a93
-// last-edited: 2026-10-14
+// last-edited: 2026-11-04
 
 package database
 
@@ -23,7 +23,7 @@ func narrowDecodeFile(bookID, name string, disc, track int) *BookFile {
 		FilePath:            "/synthetic/" + bookID + "/" + name + ".m4b",
 		DiscNumber:          disc,
 		TrackNumber:         track,
-		Duration:            90,
+		Duration:            Secs(90),
 		FileSize:            2_000,
 		FileHash:            "hash-" + name,
 		RawTags:             map[string]string{"album": "Synthetic " + name},

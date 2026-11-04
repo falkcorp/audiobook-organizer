@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_exact_guard_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 4a1e6d3f-9c72-4a0b-8e35-1f6b2c7d9e40
-// last-edited: 2026-10-17
+// last-edited: 2026-11-04
 
 // Regression guard for DEDUP-INTRO-1 (residual): upsertExactCandidate is the
 // shared chokepoint for every exact-family emitter. It must reject pairs
@@ -183,10 +183,10 @@ func TestUpsertExactCandidateGateParityWithDrain(t *testing.T) {
 			a:    primaryBook("A", "Real Title"),
 			b:    primaryBook("B", "Real Title"),
 			files: map[string][]database.BookFile{
-				"A": {{ID: "FA1", BookID: "A", Duration: 100}},
+				"A": {{ID: "FA1", BookID: "A", Duration: database.Secs(100)}},
 				"B": {
-					{ID: "FB1", BookID: "B", Duration: 500},
-					{ID: "FB2", BookID: "B", Duration: 500},
+					{ID: "FB1", BookID: "B", Duration: database.Secs(500)},
+					{ID: "FB2", BookID: "B", Duration: database.Secs(500)},
 				},
 			},
 			wantReason: drainReasonPartVsWhole,
@@ -365,8 +365,8 @@ func TestUpsertExactCandidate_NilDurationConservativeBothGates(t *testing.T) {
 	b.Duration = nil
 
 	files := map[string][]database.BookFile{
-		"A": {{ID: "FA1", BookID: "A", Duration: 100}},
-		"B": {{ID: "FB1", BookID: "B", Duration: 100}},
+		"A": {{ID: "FA1", BookID: "A", Duration: database.Secs(100)}},
+		"B": {{ID: "FB1", BookID: "B", Duration: database.Secs(100)}},
 	}
 	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) { return files[bookID], nil }
 

@@ -1,7 +1,7 @@
 // file: internal/dedup/drain_stale_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6b8c9a6c-b168-4fb9-ba23-99937427b562
-// last-edited: 2026-09-28
+// last-edited: 2026-11-04
 
 // Tests for Engine.DrainStaleCandidates (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -140,11 +140,11 @@ func TestDrainStale_IdentifierConflict(t *testing.T) {
 func TestDrainStale_PartVsWhole(t *testing.T) {
 	engine, es := setupDrainTest(t, []drainBook{
 		{id: "BOOK_A", title: "A Real Book", duration: new(3600), files: []database.BookFile{
-			{ID: "FA1", BookID: "BOOK_A", Duration: 100},
+			{ID: "FA1", BookID: "BOOK_A", Duration: database.Secs(100)},
 		}},
 		{id: "BOOK_B", title: "A Real Book", duration: new(3600), files: []database.BookFile{
-			{ID: "FB1", BookID: "BOOK_B", Duration: 500},
-			{ID: "FB2", BookID: "BOOK_B", Duration: 500},
+			{ID: "FB1", BookID: "BOOK_B", Duration: database.Secs(500)},
+			{ID: "FB2", BookID: "BOOK_B", Duration: database.Secs(500)},
 		}},
 	})
 	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")

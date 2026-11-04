@@ -1,5 +1,5 @@
 // file: internal/database/signal_coverage.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 3933e507-6dbe-4a9c-be3f-fc3512d67d44
 // last-edited: 2026-11-04
 
@@ -344,7 +344,7 @@ func CountBookFileSignalsFromCores(ctx context.Context, cores []BookFileCore, wo
 			FileHash:                       c.FileHash,
 			OriginalFileHash:               c.OriginalFileHash,
 			AcoustIDFingerprintDurationSec: c.AcoustIDFingerprintDurationSec,
-			Duration:                       c.Duration, // direct: field-for-field Core->BookFile projection
+			Duration:                       cloneBookFileScalar(c.Duration),
 			RawTags:                        c.RawTags,
 			Missing:                        c.Missing,
 			SkipScan:                       c.SkipScan,
@@ -556,7 +556,7 @@ func (r *bookFileSignalRow) asBookFile() *BookFile {
 	f := &BookFile{
 		FileHash:                       r.FileHash,
 		OriginalFileHash:               r.OriginalFileHash,
-		Duration:                       r.Duration, // direct: constructing a row from a query result
+		Duration:                       Secs(r.Duration),
 		AcoustIDFingerprintDurationSec: r.FPDuration,
 		AcoustIDFPVersion:              r.FPVersion,
 		AcoustIDSeg0:                   mark(r.Seg0),

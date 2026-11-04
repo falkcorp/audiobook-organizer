@@ -1,7 +1,7 @@
 // file: internal/metafetch/segment_titles_stale_write_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2b9d6f14-c3a7-4e58-9f01-d8e6a4b7c250
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package metafetch
 
@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -73,14 +74,14 @@ func TestGenerateSegmentTitles_KeepsFileFieldsWrittenAfterTheRead(t *testing.T) 
 		require.NoError(t, err)
 		for i := range files {
 			f := files[i]
-			f.Duration = 3600 + i
+			f.Duration = database.Secs(3600 + i)
 			require.NoError(t, inner.UpdateBookFile(f.ID, &f))
 		}
 		after, err := inner.GetBookFiles(book.ID)
 		require.NoError(t, err)
 		for _, f := range after {
-			require.NotZero(t, f.Duration)
-			wantDur[f.ID] = f.Duration
+			require.NotNil(t, f.Duration)
+			wantDur[f.ID] = durtest.Sec(f.Duration)
 		}
 	}
 
@@ -92,7 +93,7 @@ func TestGenerateSegmentTitles_KeepsFileFieldsWrittenAfterTheRead(t *testing.T) 
 	require.Len(t, got, 2)
 	tracks := map[int]bool{}
 	for _, f := range got {
-		require.Equal(t, wantDur[f.ID], f.Duration, "file %s: concurrent Duration write reverted", f.ID)
+		require.Equal(t, wantDur[f.ID], durtest.Sec(f.Duration), "file %s: concurrent Duration write reverted", f.ID)
 		require.NotEmpty(t, f.Title, "file %s: title not written", f.ID)
 		require.Equal(t, 2, f.TrackCount)
 		tracks[f.TrackNumber] = true

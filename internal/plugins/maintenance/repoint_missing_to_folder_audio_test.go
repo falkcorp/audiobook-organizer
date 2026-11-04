@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 7aa3a17c-fb70-48c4-ad3c-0911029bae0b
-// last-edited: 2026-10-24
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -195,7 +196,7 @@ func TestRepointFolderAudio_ConsolidatedRepointsOneRowAndMarksRestMissing(t *tes
 	require.Equal(t, target, kept.FilePath)
 	require.False(t, kept.Missing)
 	require.Equal(t, int64(250), kept.FileSize, "a consolidated row must carry the new file's size")
-	require.Equal(t, 3600, kept.Duration, "duration comes from the header probe")
+	require.Equal(t, 3600, durtest.Sec(kept.Duration), "duration comes from the header probe")
 	require.Equal(t, "m4b", kept.Format)
 	require.Empty(t, kept.FileHash, "the chapter's hash does not describe the new file")
 	require.Nil(t, kept.AcoustIDFingerprint, "the chapter's fingerprint does not describe the new file")
@@ -222,7 +223,7 @@ func TestRepointFolderAudio_OneToOneSizeMatchRepoints(t *testing.T) {
 	store := &rfFakeStore{
 		books: []database.BookCore{rfBookCore("b1", folder)},
 		rows: map[string][]database.BookFile{"b1": {
-			{ID: "p1", BookID: "b1", FilePath: present, FileSize: 500, Duration: 600},
+			{ID: "p1", BookID: "b1", FilePath: present, FileSize: 500, Duration: database.Secs(600)},
 			{ID: "p2", BookID: "b1", FilePath: filepath.Join(folder, "Part 2.mp3"), FileSize: 777,
 				AcoustIDFingerprint: []byte("same-bytes-fp")},
 		}},
@@ -237,7 +238,7 @@ func TestRepointFolderAudio_OneToOneSizeMatchRepoints(t *testing.T) {
 	require.Equal(t, renamed, u.FilePath)
 	require.False(t, u.Missing)
 	require.Equal(t, []byte("same-bytes-fp"), u.AcoustIDFingerprint, "same bytes: the fingerprint is kept")
-	require.Equal(t, 1200, u.Duration)
+	require.Equal(t, 1200, durtest.Sec(u.Duration))
 }
 
 func TestRepointFolderAudio_AmbiguousCasesAreUntouched(t *testing.T) {
@@ -551,7 +552,7 @@ func TestRepointFolderAudio_SupersededRowWithDurationIsAmbiguous(t *testing.T) {
 	root := t.TempDir()
 	rfStubProbe(t, 3600)
 	store, _ := seedConsolidated(t, root, 250)
-	store.rows["b1"][2].Duration = 900 // "Book - 03.mp3": would be marked missing
+	store.rows["b1"][2].Duration = database.Secs(900) // "Book - 03.mp3": would be marked missing
 	got := rfOnly(t, rfRun(t, store, root, false))
 	require.Equal(t, "superseded-rows-carry-duration", got.Reason)
 	require.Empty(t, store.updates)
@@ -609,7 +610,7 @@ func TestRepointFolderAudio_ConsolidationResetsKeptRowEvenOnEqualSize(t *testing
 	for i := range store.rows["b1"] {
 		if store.rows["b1"][i].ID == "fb" { // track 1: the kept row
 			store.rows["b1"][i].FileSize = 250
-			store.rows["b1"][i].Duration = 120
+			store.rows["b1"][i].Duration = database.Secs(120)
 		}
 	}
 	got := rfOnly(t, rfRun(t, store, root, false))
@@ -617,7 +618,7 @@ func TestRepointFolderAudio_ConsolidationResetsKeptRowEvenOnEqualSize(t *testing
 	kept, ok := store.updateByID("fb")
 	require.True(t, ok)
 	require.Equal(t, target, kept.FilePath)
-	require.Equal(t, 3600, kept.Duration, "the chapter's 120 s must not survive as the whole file's duration")
+	require.Equal(t, 3600, durtest.Sec(kept.Duration), "the chapter's 120 s must not survive as the whole file's duration")
 }
 
 func TestRepointFolderAudio_ReportsRequestedIDsOutOfScope(t *testing.T) {

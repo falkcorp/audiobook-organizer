@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.52.6
+// version: 1.52.7
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-11-04
 
@@ -960,8 +960,8 @@ func (s *PebbleStore) updateBookFileOver(old *BookFile, raw []byte, file *BookFi
 	s.UpsertBookFileToMemDB(file)
 	// Recompute book-level Duration/FileSize aggregates now that a file was updated.
 	// Best-effort: the file write already committed; don't fail on aggregate errors.
-	// direct: change detection compares the raw stored values.
-	return recomputeAggregates || old.Duration != file.Duration || old.FileSize != file.FileSize || old.BookID != file.BookID, durErr
+	// direct: change detection compares the raw stored values (by value, not pointer).
+	return recomputeAggregates || !durationPtrEqual(old.Duration, file.Duration) || old.FileSize != file.FileSize || old.BookID != file.BookID, durErr
 }
 
 // GetBookFiles returns the BookFile records of the given bookID by iterating
@@ -1007,7 +1007,7 @@ func (s *PebbleStore) bookFilesForBook(bookID string, filter bookFileRetiredFilt
 	var files []BookFile
 	if err := forEachKeyInRange(s.db, prefix, append(append([]byte(nil), prefix...), 0xFF), func(_, value []byte) error {
 		var f BookFile
-		if err := json.Unmarshal(value, &f); err != nil {
+		if err := unmarshalBookFile(value, &f); err != nil {
 			return err
 		}
 		if !filter.keeps(f.Retired) {
@@ -1121,6 +1121,7 @@ func decodeBookFileCore(value []byte) (BookFileCore, error) {
 	if err := json.Unmarshal(value, &c); err != nil {
 		return BookFileCore{}, err
 	}
+	normalizeDecodedDuration(&c.Duration)
 	return c, nil
 }
 
@@ -1260,7 +1261,7 @@ func (s *PebbleStore) getAllBookFilesPebbleScanFiltered(filter bookFileRetiredFi
 			return nil
 		}
 		var f BookFile
-		if err := json.Unmarshal(value, &f); err != nil {
+		if err := unmarshalBookFile(value, &f); err != nil {
 			return err
 		}
 		if !filter.keeps(f.Retired) {
@@ -1488,7 +1489,7 @@ func (s *PebbleStore) GetBookFileByAcoustIDFuzzy(fp string, minSimilarity float6
 
 	for iter.First(); iter.Valid(); iter.Next() {
 		var f BookFile
-		if err := json.Unmarshal(iter.Value(), &f); err != nil {
+		if err := unmarshalBookFile(iter.Value(), &f); err != nil {
 			continue
 		}
 		// A retired row is not a file of the book it is keyed under; matching
@@ -1542,7 +1543,7 @@ func (s *PebbleStore) lookupBookFileByIDIndex(id string) *BookFile {
 	}
 	defer closer.Close()
 	var f BookFile
-	if err := json.Unmarshal(val, &f); err != nil {
+	if err := unmarshalBookFile(val, &f); err != nil {
 		return nil
 	}
 	return &f
@@ -1573,7 +1574,7 @@ func (s *PebbleStore) scanForBookFileRowByID(id string) (*BookFile, []byte, erro
 			return nil
 		}
 		var f BookFile
-		if jsonErr := json.Unmarshal(value, &f); jsonErr == nil {
+		if jsonErr := unmarshalBookFile(value, &f); jsonErr == nil {
 			found, at = &f, append([]byte(nil), key...)
 		}
 		return errStopScan
@@ -3203,7 +3204,7 @@ func (s *PebbleStore) ClearAllAcoustIDFingerprints(ctx context.Context, batchSiz
 		}
 
 		var f BookFile
-		if err := json.Unmarshal(r.raw, &f); err != nil {
+		if err := unmarshalBookFile(r.raw, &f); err != nil {
 			return nil, false, nil
 		}
 
@@ -3440,7 +3441,7 @@ func (s *PebbleStore) SweepBookFileSegDrop(
 			return func() { result.Skipped++ }, false, nil
 		}
 		var f BookFile
-		if err := json.Unmarshal(r.raw, &f); err != nil {
+		if err := unmarshalBookFile(r.raw, &f); err != nil {
 			slog.Warn("SweepBookFileSegDrop: unmarshal error; skipping row",
 				"key", string(r.key), "error", err)
 			return func() { result.Errors++ }, false, nil
@@ -3554,7 +3555,7 @@ func (s *PebbleStore) resolveBookFileByIDStrict(id string) (*BookFile, error) {
 	}
 	defer closer.Close()
 	var f BookFile
-	if err := json.Unmarshal(val, &f); err != nil {
+	if err := unmarshalBookFile(val, &f); err != nil {
 		return nil, fmt.Errorf("decode book_file row %s: %w", primaryKey, err)
 	}
 	return &f, nil

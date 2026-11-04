@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_refusal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 25c4fe3e-8309-4f4c-ae42-148ff9105880
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 //
 // metadata.batch-apply-cached remembers structural gate refusals and does not
 // re-offer a book whose inputs are unchanged. The tests drive the same three
@@ -98,7 +98,7 @@ func refusalFixture(t *testing.T) (*refusalBooks, *fakeApplySvc, metafetch.Metad
 	dur := 3600
 	books := &refusalBooks{
 		fakeBooks: fakeBooks{"b1": {ID: "b1", Title: "The Long Halloween", FilePath: "/lib/Jeph Loeb/The Long Halloween/The Long Halloween.m4b", Duration: &dur}},
-		files:     []database.BookFile{{ID: "f1", BookID: "b1", FilePath: "/lib/Jeph Loeb/The Long Halloween/The Long Halloween.m4b", FileSize: 1000, Duration: 3600}},
+		files:     []database.BookFile{{ID: "f1", BookID: "b1", FilePath: "/lib/Jeph Loeb/The Long Halloween/The Long Halloween.m4b", FileSize: 1000, Duration: database.Secs(3600)}},
 	}
 	cand := metafetch.MetadataCandidate{Title: "The Long Halloween", Author: "Jeph Loeb", Source: "Google Books", ISBN13: "9780000000001", Score: 0.95}
 	return books, &fakeApplySvc{candidates: candidateJSON(t, cand)}, cand
@@ -151,10 +151,10 @@ func TestBatchApplyRefusal_ChangedInputsReofferTheBook(t *testing.T) {
 			svc.candidates = candidateJSON(t, *c)
 		},
 		"the file set": func(_ *testing.T, b *refusalBooks, _ *fakeApplySvc, _ *metafetch.MetadataCandidate) {
-			b.files = append(b.files, database.BookFile{ID: "f2", BookID: "b1", FilePath: "/lib/Jeph Loeb/The Long Halloween/The Long Halloween 2.m4b", FileSize: 1000, Duration: 3600})
+			b.files = append(b.files, database.BookFile{ID: "f2", BookID: "b1", FilePath: "/lib/Jeph Loeb/The Long Halloween/The Long Halloween 2.m4b", FileSize: 1000, Duration: database.Secs(3600)})
 		},
 		"a file duration backfilled": func(_ *testing.T, b *refusalBooks, _ *fakeApplySvc, _ *metafetch.MetadataCandidate) {
-			b.files = []database.BookFile{{ID: "f1", BookID: "b1", FilePath: b.files[0].FilePath, FileSize: 1000, Duration: 7200}}
+			b.files = []database.BookFile{{ID: "f1", BookID: "b1", FilePath: b.files[0].FilePath, FileSize: 1000, Duration: database.Secs(7200)}}
 		},
 		"the transcribed title": func(_ *testing.T, b *refusalBooks, _ *fakeApplySvc, _ *metafetch.MetadataCandidate) {
 			tt := "Dark Victory"

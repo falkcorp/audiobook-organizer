@@ -1,6 +1,6 @@
 // file: internal/readstatus/readstatus_test.go
-// version: 1.1.0
-// last-edited: 2026-10-18
+// version: 1.1.1
+// last-edited: 2026-11-04
 // guid: 9e2a8c4d-5b1f-4f70-a7c6-2d8e0f1b9a57
 
 package readstatus
@@ -33,7 +33,7 @@ func setupReadTestStore(t *testing.T) database.Store {
 			ID: segID, BookID: "b1",
 			FilePath:    "/tmp/" + segID,
 			TrackNumber: i + 1,
-			Duration:    600, // seconds
+			Duration:    database.Secs(600), // seconds
 		}); err != nil {
 			t.Fatalf("create bookfile %s: %v", segID, err)
 		}

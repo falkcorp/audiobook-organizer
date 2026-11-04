@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/repoint_version_primary_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 8c3f1b52-6a04-4de7-9b18-2f7a05c9d6e1
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package jobs
 
@@ -60,14 +60,14 @@ func rvpSeedPair(t *testing.T, s *database.PebbleStore, dir, name string, i int,
 		Title: fmt.Sprint(i), FilePath: ipath, Duration: new(1200), AuthorID: &author,
 		IsPrimaryVersion: new(false), VersionGroupID: new(vgid), LibraryState: new("imported"),
 	})
-	ddMustFile(t, s, &database.BookFile{BookID: imported.ID, FilePath: ipath, Duration: 1200})
+	ddMustFile(t, s, &database.BookFile{BookID: imported.ID, FilePath: ipath, Duration: database.Secs(1200)})
 
 	tpath := fmt.Sprintf("/lib/org/%s %d/%s %d.mp3", name, i, name, i)
 	twin = ddMustBook(t, s, &database.Book{
 		Title: fmt.Sprintf("%s %d", name, i), FilePath: tpath, Duration: new(1200), AuthorID: &author,
 		IsPrimaryVersion: new(true), VersionGroupID: new(vgid), LibraryState: new("organized"),
 	})
-	ddMustFile(t, s, &database.BookFile{BookID: twin.ID, FilePath: tpath, Duration: 1200})
+	ddMustFile(t, s, &database.BookFile{BookID: twin.ID, FilePath: tpath, Duration: database.Secs(1200)})
 	return imported, twin
 }
 

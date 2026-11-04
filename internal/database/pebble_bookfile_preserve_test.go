@@ -1,7 +1,7 @@
 // file: internal/database/pebble_bookfile_preserve_test.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: 7e1a9c43-2b86-4d05-9f71-3c6e8a0d2b54
-// last-edited: 2026-10-03
+// last-edited: 2026-11-04
 
 package database
 
@@ -33,7 +33,7 @@ func TestBatchUpsertBookFiles_PreservesFingerprintOnEmptyIncoming(t *testing.T) 
 		BookID:                   book.ID,
 		FilePath:                 path,
 		FileHash:                 "deadbeef",
-		Duration:                 3600,
+		Duration:                 Secs(3600),
 		AcoustIDFingerprint:      []byte{1, 2, 3, 4, 5},
 		FingerprintFailureReason: &reason,
 	}); err != nil {
@@ -48,7 +48,7 @@ func TestBatchUpsertBookFiles_PreservesFingerprintOnEmptyIncoming(t *testing.T) 
 		BookID:   book.ID,
 		FilePath: path,
 		FileHash: "deadbeef",
-		Duration: 3600,
+		Duration: Secs(3600),
 		RawTags:  map[string]string{"ALBUM": "FP Book", "TRACKNUMBER": "1"},
 	}}); err != nil {
 		t.Fatalf("BatchUpsertBookFiles: %v", err)
@@ -120,7 +120,7 @@ func TestUpsertBookFile_PreservesFingerprintOnEmptyIncoming(t *testing.T) {
 		BookID:                    book.ID,
 		FilePath:                  path,
 		FileHash:                  "cafebabe",
-		Duration:                  7200,
+		Duration:                  Secs(7200),
 		AcoustIDFingerprint:       []byte{10, 20, 30, 40},
 		FingerprintFailureReason:  nil,
 		FingerprintFailureDetail:  &detail,
@@ -135,7 +135,7 @@ func TestUpsertBookFile_PreservesFingerprintOnEmptyIncoming(t *testing.T) {
 		BookID:   book.ID,
 		FilePath: path,
 		FileHash: "cafebabe",
-		Duration: 7200,
+		Duration: Secs(7200),
 		RawTags:  map[string]string{"ALBUM": "Upsert FP Book", "TRACKNUMBER": "1"},
 	}); err != nil {
 		t.Fatalf("UpsertBookFile: %v", err)
@@ -209,7 +209,7 @@ func TestUpsertBookFile_PreservesFingerprintViaPIDLookup(t *testing.T) {
 		BookID:             book.ID,
 		FilePath:           "/lib/iTunes FP Book/01.m4b",
 		ITunesPersistentID: pid,
-		Duration:           1800,
+		Duration:           Secs(1800),
 	}); err != nil {
 		t.Fatalf("UpsertBookFile via PID: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestUpdateBookFile_PreservesFingerprintOnEmptyIncoming(t *testing.T) {
 		BookID:              book.ID,
 		FilePath:            path,
 		FileHash:            "feedface",
-		Duration:            5400,
+		Duration:            Secs(5400),
 		AcoustIDFingerprint: []byte{11, 22, 33, 44},
 	}); err != nil {
 		t.Fatalf("CreateBookFile: %v", err)
@@ -260,7 +260,7 @@ func TestUpdateBookFile_PreservesFingerprintOnEmptyIncoming(t *testing.T) {
 		BookID:     book.ID,
 		FilePath:   path,
 		FileHash:   "feedface",
-		Duration:   5400,
+		Duration:   Secs(5400),
 		ITunesPath: "/Music/Update FP Book/01.m4b",
 	}
 	if err := s.UpdateBookFile(id, slim); err != nil {

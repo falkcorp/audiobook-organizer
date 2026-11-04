@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_part_vs_whole_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 6d3a9f21-4b7c-4e58-9a01-2f5c8d6e7b34
-// last-edited: 2026-10-17
+// last-edited: 2026-11-04
 
 // Regression guard for CONS-15: upsertExactCandidate must reject a pair where
 // one side is a single-file book whose duration is a small fraction of the
@@ -28,12 +28,12 @@ func TestUpsertExactCandidate_PartVsWholeGuard(t *testing.T) {
 		switch bookID {
 		case "A":
 			// Single file, short duration relative to B's total.
-			return []database.BookFile{{ID: "FA1", BookID: "A", Duration: 600}}, nil
+			return []database.BookFile{{ID: "FA1", BookID: "A", Duration: database.Secs(600)}}, nil
 		case "B":
 			// Ten files totalling far more than A's single file.
 			files := make([]database.BookFile, 0, 10)
 			for i := range 10 {
-				files = append(files, database.BookFile{ID: "FB" + string(rune('0'+i)), BookID: "B", Duration: 3600})
+				files = append(files, database.BookFile{ID: "FB" + string(rune('0'+i)), BookID: "B", Duration: database.Secs(3600)})
 			}
 			return files, nil
 		}
@@ -59,9 +59,9 @@ func TestUpsertExactCandidate_ComparableSingleFilesStillPersisted(t *testing.T) 
 	mock.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
 		switch bookID {
 		case "A":
-			return []database.BookFile{{ID: "FA1", BookID: "A", Duration: 3600}}, nil
+			return []database.BookFile{{ID: "FA1", BookID: "A", Duration: database.Secs(3600)}}, nil
 		case "B":
-			return []database.BookFile{{ID: "FB1", BookID: "B", Duration: 3650}}, nil
+			return []database.BookFile{{ID: "FB1", BookID: "B", Duration: database.Secs(3650)}}, nil
 		}
 		return nil, nil
 	}
@@ -111,12 +111,12 @@ func TestIsPartVsWholeMismatchAlignedRatio(t *testing.T) {
 				switch bookID {
 				case "A":
 					// Single-file "part" side.
-					return []database.BookFile{{ID: "FA1", BookID: "A", Duration: tc.partDuration}}, nil
+					return []database.BookFile{{ID: "FA1", BookID: "A", Duration: database.Secs(tc.partDuration)}}, nil
 				case "B":
 					// Two-file "whole" side totalling wholeTotal.
 					return []database.BookFile{
-						{ID: "FB1", BookID: "B", Duration: wholeTotal / 2},
-						{ID: "FB2", BookID: "B", Duration: wholeTotal / 2},
+						{ID: "FB1", BookID: "B", Duration: database.Secs(wholeTotal / 2)},
+						{ID: "FB2", BookID: "B", Duration: database.Secs(wholeTotal / 2)},
 					}, nil
 				}
 				return nil, nil
@@ -143,11 +143,11 @@ func TestIsPartVsWholeMismatchNonPositiveDurations(t *testing.T) {
 		switch bookID {
 		case "A":
 			// Zero-duration single file (unknown duration).
-			return []database.BookFile{{ID: "FA1", BookID: "A", Duration: 0}}, nil
+			return []database.BookFile{{ID: "FA1", BookID: "A"}}, nil
 		case "B":
 			return []database.BookFile{
-				{ID: "FB1", BookID: "B", Duration: 500},
-				{ID: "FB2", BookID: "B", Duration: 500},
+				{ID: "FB1", BookID: "B", Duration: database.Secs(500)},
+				{ID: "FB2", BookID: "B", Duration: database.Secs(500)},
 			}, nil
 		}
 		return nil, nil

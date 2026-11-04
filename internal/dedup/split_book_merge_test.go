@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7c4e1a92-6d3b-4f18-b0a5-2e9c7d514af3
-// last-edited: 2026-10-21
+// last-edited: 2026-11-04
 
 package dedup
 
@@ -26,9 +26,9 @@ func newSplitMergeMock(src1, src2, moveFailSrc string, softDeleted, hardDeleted 
 	m.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
 		switch bookID {
 		case src1:
-			return []database.BookFile{{ID: "f-" + src1, BookID: src1, Duration: 100}}, nil
+			return []database.BookFile{{ID: "f-" + src1, BookID: src1, Duration: database.Secs(100)}}, nil
 		case src2:
-			return []database.BookFile{{ID: "f-" + src2, BookID: src2, Duration: 200}}, nil
+			return []database.BookFile{{ID: "f-" + src2, BookID: src2, Duration: database.Secs(200)}}, nil
 		default: // keep: files land here after moves; irrelevant to this test
 			return nil, nil
 		}

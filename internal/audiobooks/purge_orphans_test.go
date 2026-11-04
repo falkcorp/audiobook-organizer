@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_orphans_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f6b1d8e-2a47-4c95-8e0b-7d4a9c2e51f6
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package audiobooks
 
@@ -84,10 +84,10 @@ func mergeFixture(t *testing.T, store *database.PebbleStore, root string, loserP
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CreateBookFile(&database.BookFile{BookID: keep.ID, FilePath: keepPath, FileSize: 5, Duration: 60}); err != nil {
+	if err := store.CreateBookFile(&database.BookFile{BookID: keep.ID, FilePath: keepPath, FileSize: 5, Duration: database.Secs(60)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CreateBookFile(&database.BookFile{BookID: loser.ID, FilePath: loserPath, FileSize: 5, Duration: 60}); err != nil {
+	if err := store.CreateBookFile(&database.BookFile{BookID: loser.ID, FilePath: loserPath, FileSize: 5, Duration: database.Secs(60)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -160,7 +160,7 @@ func TestPurge_DeleteFilesNeverRemovesSurvivorsFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CreateBookFile(&database.BookFile{BookID: keep.ID, FilePath: keepPath, FileSize: 5, Duration: 60}); err != nil {
+	if err := store.CreateBookFile(&database.BookFile{BookID: keep.ID, FilePath: keepPath, FileSize: 5, Duration: database.Secs(60)}); err != nil {
 		t.Fatal(err)
 	}
 	loser, err := store.CreateBook(&database.Book{Title: "Loser", FilePath: keepPath})

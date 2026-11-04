@@ -1,7 +1,7 @@
 // file: internal/versions/ingest_link_cas_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 91d19c19-e81f-4b9b-9706-59e4789058f3
-// last-edited: 2026-10-11
+// last-edited: 2026-11-04
 
 package versions
 
@@ -13,6 +13,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // CreateIngestVersion's link write is a compare-and-set on the current row
@@ -61,9 +62,9 @@ func modifyRow(t *testing.T, store *database.PebbleStore, bookID string, fn func
 // replaced reverted TrackNumber, Missing and Duration here.
 func TestCreateIngestVersion_LinkKeepsConcurrentRowEdit(t *testing.T) {
 	const torrent = "2123456789abcdef0123456789abcdef01234567"
-	pebble, book, filePath := ingestFixture(t, database.BookFile{TrackNumber: 1, Duration: 100})
+	pebble, book, filePath := ingestFixture(t, database.BookFile{TrackNumber: 1, Duration: database.Secs(100)})
 	store := &interleaveIngestStore{PebbleStore: pebble, beforeCreate: func() {
-		modifyRow(t, pebble, book.ID, func(r *database.BookFile) { r.TrackNumber, r.Missing, r.Duration = 7, true, 4242 })
+		modifyRow(t, pebble, book.ID, func(r *database.BookFile) { r.TrackNumber, r.Missing, r.Duration = 7, true, database.Secs(4242) })
 	}}
 
 	ver, linked, err := CreateIngestVersion(store, IngestVersionParams{
@@ -77,9 +78,9 @@ func TestCreateIngestVersion_LinkKeepsConcurrentRowEdit(t *testing.T) {
 	if row.VersionID != ver.ID || row.DelugeHash != torrent {
 		t.Errorf("link: VersionID=%q DelugeHash=%q, want %q and %q", row.VersionID, row.DelugeHash, ver.ID, torrent)
 	}
-	if row.TrackNumber != 7 || !row.Missing || row.Duration != 4242 {
+	if row.TrackNumber != 7 || !row.Missing || durtest.Sec(row.Duration) != 4242 {
 		t.Errorf("concurrent write reverted: TrackNumber=%d Missing=%v Duration=%d, want 7 true 4242",
-			row.TrackNumber, row.Missing, row.Duration)
+			row.TrackNumber, row.Missing, durtest.Sec(row.Duration))
 	}
 	want, err := filehash.BookFileHash(filePath)
 	if err != nil {

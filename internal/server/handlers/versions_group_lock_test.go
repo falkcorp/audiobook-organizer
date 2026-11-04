@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions_group_lock_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5b2e9c47-1d8a-4f36-b0e7-3c6a9d1f8e24
-// last-edited: 2026-10-02
+// last-edited: 2026-11-04
 
 package handlers_test
 
@@ -82,7 +82,7 @@ func seedGroupedSource(t *testing.T, store *database.PebbleStore, g *string) (*d
 	}
 	var ids []string
 	for _, p := range []string{"/lib/Src/a/01.mp3", "/lib/Src/a/02.mp3", "/lib/Src/b/03.mp3"} {
-		f := &database.BookFile{BookID: src.ID, FilePath: p, Format: "mp3", Duration: 100, FileSize: 10}
+		f := &database.BookFile{BookID: src.ID, FilePath: p, Format: "mp3", Duration: database.Secs(100), FileSize: 10}
 		if err := store.CreateBookFile(f); err != nil {
 			t.Fatalf("create file: %v", err)
 		}

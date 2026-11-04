@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: de3f610d-605b-4338-96c9-3316a2dcd8d4
-// last-edited: 2026-11-03
+// last-edited: 2026-11-04
 
 package metafetch
 
@@ -341,7 +341,7 @@ func TestSearchFanout_TitleOnlyAnswerNeedsAPerson(t *testing.T) {
 		return nil
 	}}
 	book := &database.Book{ID: "b1", Title: "Hunted"}
-	files := []database.BookFile{{ID: "f1", BookID: "b1", Duration: 1800000}, {ID: "f2", BookID: "b1"}}
+	files := []database.BookFile{{ID: "f1", BookID: "b1", Duration: database.Secs(1800000)}, {ID: "f2", BookID: "b1"}}
 	svc := fanoutHarnessFiles(t, book, files, audible)
 	require.Zero(t, svc.bookRuntimeSec(book), "fixture: a partial runtime is unknown")
 

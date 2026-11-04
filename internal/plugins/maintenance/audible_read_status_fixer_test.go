@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/audible_read_status_fixer_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 569aec15-d845-4f39-9a8e-63ba7e93162a
-// last-edited: 2026-10-25
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -79,7 +79,7 @@ func (l *arsLib) book(key string, b arsBook) string {
 	created, err := l.store.CreateBook(nb)
 	require.NoError(l.t, err)
 	require.NoError(l.t, l.store.CreateBookFile(&database.BookFile{BookID: created.ID, FilePath: "/lib/" + key + "/01.m4b",
-		Format: "m4b", Duration: b.minutes * 60}))
+		Format: "m4b", Duration: database.Secs(b.minutes * 60)}))
 	l.ids[key] = created.ID
 	return created.ID
 }

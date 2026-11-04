@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/probe_directory_books_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4a71c9e6-2b58-4d03-8f19-7c6e0b2a5d84
-// last-edited: 2026-09-02
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // ── test doubles ─────────────────────────────────────────────────────────────
@@ -369,7 +370,7 @@ func TestLinkProbedFolder_WritesMeasuredDurations(t *testing.T) {
 	}
 	byName := map[string]int{}
 	for _, r := range rows {
-		byName[filepath.Base(r.FilePath)] = r.Duration
+		byName[filepath.Base(r.FilePath)] = durtest.Sec(r.Duration)
 	}
 	for name, want := range map[string]int{files[0]: 1500, files[1]: 1480, files[2]: 1520} {
 		if got := byName[name]; got != want {

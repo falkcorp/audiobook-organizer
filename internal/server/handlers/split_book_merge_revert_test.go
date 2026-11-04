@@ -1,7 +1,7 @@
 // file: internal/server/handlers/split_book_merge_revert_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a1d9e53-2f74-4c08-8b6e-d30f5a72c194
-// last-edited: 2026-10-18
+// last-edited: 2026-11-04
 
 package handlers
 
@@ -37,8 +37,8 @@ func TestMergeSplitBookCandidate_UndoneByOperationRevert(t *testing.T) {
 		require.NoError(t, err)
 	}
 	keepFile, srcFile := ulid.Make().String(), ulid.Make().String()
-	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: keepFile, BookID: keep, FilePath: "/tmp/split-revert/" + keep + "/01.mp3", Format: "mp3", TrackNumber: 1, Duration: 30}))
-	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: srcFile, BookID: src, FilePath: "/tmp/split-revert/" + src + "/02.mp3", Format: "mp3", TrackNumber: 1, Duration: 30}))
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: keepFile, BookID: keep, FilePath: "/tmp/split-revert/" + keep + "/01.mp3", Format: "mp3", TrackNumber: 1, Duration: database.Secs(30)}))
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: srcFile, BookID: src, FilePath: "/tmp/split-revert/" + src + "/02.mp3", Format: "mp3", TrackNumber: 1, Duration: database.Secs(30)}))
 
 	cands := &splitBookBulkStore{candidates: map[string]*dedup.SplitBookCandidate{
 		"cand": {ID: "cand", BookIDs: []string{keep, src}},

@@ -1,7 +1,7 @@
 // file: internal/metafetch/partial_runtime_scoring_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 3d0c8a52-6b1e-4f87-9a4d-5e2f7c1b8d93
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package metafetch
 
@@ -25,7 +25,7 @@ import (
 // 1000 B/s = 8000 s.
 func ownerCaseFiles() []database.BookFile {
 	return []database.BookFile{
-		{ID: "f1", BookID: "b1", FileSize: 4_000_000, Duration: 480},
+		{ID: "f1", BookID: "b1", FileSize: 4_000_000, Duration: database.Secs(480)},
 		{ID: "f2", BookID: "b1", FileSize: 4_000_000},
 	}
 }
@@ -36,7 +36,7 @@ func tenHourFiles() []database.BookFile {
 	for i := range files {
 		files[i] = database.BookFile{ID: fmt.Sprintf("c%02d", i), BookID: "b1", FileSize: 28_800_000}
 		if i < 2 {
-			files[i].Duration = 1800
+			files[i].Duration = database.Secs(1800)
 		}
 	}
 	return files
@@ -104,7 +104,7 @@ func TestLocalRuntime_NoEstimateBehavesAsBefore(t *testing.T) {
 	allSizeless := ownerCaseFiles()
 	allSizeless[0].FileSize, allSizeless[1].FileSize = 0, 0
 	unmeasured := ownerCaseFiles()
-	unmeasured[0].Duration = 0
+	unmeasured[0].Duration = nil
 
 	for name, files := range map[string][]database.BookFile{
 		"unmeasured file has no size": sizeless,
@@ -314,7 +314,7 @@ func TestSearch_PartialRuntimePenalisesDirectASINAnswer(t *testing.T) {
 // file; only the 25 s intro file is measured. The measured bytes-per-second is
 // 3.5x the book's, so x3 over the estimate (~3 h) is far below the real 10 h.
 func coverArtIntroFiles() []database.BookFile {
-	files := []database.BookFile{{ID: "intro", BookID: "b1", FileSize: 25*8000 + 500_000, Duration: 25}}
+	files := []database.BookFile{{ID: "intro", BookID: "b1", FileSize: 25*8000 + 500_000, Duration: database.Secs(25)}}
 	for i := range 20 {
 		files = append(files, database.BookFile{ID: fmt.Sprintf("ch%02d", i), BookID: "b1", FileSize: 1800*8000 + 500_000})
 	}
@@ -325,8 +325,8 @@ func coverArtIntroFiles() []database.BookFile {
 // 32 kbps; 10 h in all, measured rate 4x the rest.
 func mixedEncodeFiles() []database.BookFile {
 	files := []database.BookFile{
-		{ID: "p0", BookID: "b1", FileSize: 1800 * 16000, Duration: 1800},
-		{ID: "p1", BookID: "b1", FileSize: 1800 * 16000, Duration: 1800},
+		{ID: "p0", BookID: "b1", FileSize: 1800 * 16000, Duration: database.Secs(1800)},
+		{ID: "p1", BookID: "b1", FileSize: 1800 * 16000, Duration: database.Secs(1800)},
 	}
 	for i := range 18 {
 		files = append(files, database.BookFile{ID: fmt.Sprintf("q%02d", i), BookID: "b1", FileSize: 1800 * 4000})

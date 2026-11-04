@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_review9_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 3bc1296c-6b8c-481b-b190-a196671cd4a8
-// last-edited: 2026-10-31
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // fragSweepFull reports whether the cut-point sweeps run every point of
@@ -730,7 +731,7 @@ func retireKeepingRows(t *testing.T, twinOnX bool) {
 	}
 	if twinOnX {
 		require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: x, FilePath: twin.FilePath + ".x.mp3",
-			OriginalFilename: twin.OriginalFilename, FileSize: twin.FileSize, Duration: twin.Duration, FileHash: twin.FileHash}))
+			OriginalFilename: twin.OriginalFilename, FileSize: twin.FileSize, Duration: database.Secs(durtest.Sec(twin.Duration)), FileHash: twin.FileHash}))
 	}
 
 	// The fold: every row but the twin moves onto x, then S is retired into

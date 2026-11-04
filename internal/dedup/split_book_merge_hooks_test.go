@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge_hooks_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0c7e2f4a-9b13-4d58-a6e1-3f82d5b7c904
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package dedup
 
@@ -31,7 +31,7 @@ func hookCluster(t *testing.T, store database.Store, n int) (keep string, srcs [
 		_, err := store.CreateBook(&database.Book{ID: id, Title: title, Format: "mp3", FilePath: dir + "/01.mp3"})
 		require.NoError(t, err)
 		fid := ulid.Make().String()
-		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: fid, BookID: id, FilePath: dir + "/01.mp3", Format: "mp3", Duration: 60, TrackNumber: track}))
+		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: fid, BookID: id, FilePath: dir + "/01.mp3", Format: "mp3", Duration: database.Secs(60), TrackNumber: track}))
 		files[id] = fid
 		return id
 	}

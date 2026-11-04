@@ -1,7 +1,7 @@
 // file: internal/database/retired_book_files_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 7e41c2b9-3d58-4f06-a1b7-9c20d6e85f13
-// last-edited: 2026-10-28
+// last-edited: 2026-11-04
 
 package database
 
@@ -15,6 +15,8 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // retiredFixture is a live holder book, a shell book whose files will be
@@ -84,9 +86,9 @@ func TestRetireBookFiles_RepointsRowsAndDeletesNone(t *testing.T) {
 	for _, useMem := range []bool{true, false} {
 		t.Run(map[bool]string{true: "memdb", false: "pebble"}[useMem], func(t *testing.T) {
 			fx := newRetiredFixture(t)
-			live := fx.create(t, fx.holder.ID, BookFile{FilePath: "/lib/ret/holder/01.mp3", Duration: 100, FileSize: 1000, TrackNumber: 1})
-			x1 := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/shell/01.mp3", FileHash: "hash-x1", Duration: 111, FileSize: 111, TrackNumber: 1, ITunesPersistentID: "PID-X1"})
-			x2 := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/shell/02.mp3", FileHash: "hash-x2", Duration: 222, FileSize: 222, TrackNumber: 2})
+			live := fx.create(t, fx.holder.ID, BookFile{FilePath: "/lib/ret/holder/01.mp3", Duration: Secs(100), FileSize: 1000, TrackNumber: 1})
+			x1 := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/shell/01.mp3", FileHash: "hash-x1", Duration: Secs(111), FileSize: 111, TrackNumber: 1, ITunesPersistentID: "PID-X1"})
+			x2 := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/shell/02.mp3", FileHash: "hash-x2", Duration: Secs(222), FileSize: 222, TrackNumber: 2})
 			before := countAllRows(t, fx.ps)
 			require.Equal(t, 3, before)
 
@@ -122,7 +124,7 @@ func TestRetireBookFiles_RepointsRowsAndDeletesNone(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, got)
 			require.Equal(t, "hash-x1", got.FileHash)
-			require.Equal(t, 111, got.Duration)
+			require.Equal(t, 111, durtest.Sec(got.Duration))
 			require.Equal(t, "PID-X1", got.ITunesPersistentID)
 			old, err := fx.ps.GetBookFileByID(fx.shell.ID, x1.ID)
 			require.NoError(t, err)
@@ -684,18 +686,18 @@ func TestRetiredRowsAreInvisibleToDefaultReads(t *testing.T) {
 		_, err = fx.ps.UpdateBook(fx.holder.ID, fx.holder)
 		require.NoError(t, err)
 		live := fx.create(t, fx.holder.ID, BookFile{
-			FilePath: "/lib/ret/par/shared.mp3", FileHash: "par-hash", Duration: 100, FileSize: 1000,
+			FilePath: "/lib/ret/par/shared.mp3", FileHash: "par-hash", Duration: Secs(100), FileSize: 1000,
 			LastScanMtime: &liveStamp,
 		})
 		if withRetired {
 			failedAt := time.Now()
 			x := fx.create(t, fx.shell.ID, BookFile{
-				FilePath: "/lib/ret/par/shared.mp3", FileHash: "par-hash", Duration: 555, FileSize: 5555,
+				FilePath: "/lib/ret/par/shared.mp3", FileHash: "par-hash", Duration: Secs(555), FileSize: 5555,
 				LastScanMtime:       &retiredStamp,
 				FingerprintFailedAt: &failedAt,
 			})
 			// A path of its own so the retired row is not hidden just by sharing a key.
-			x2 := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/par/own.mp3", FileHash: "par-hash", Duration: 7, FileSize: 77, LastScanMtime: &ownStamp})
+			x2 := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/par/own.mp3", FileHash: "par-hash", Duration: Secs(7), FileSize: 77, LastScanMtime: &ownStamp})
 			require.NoError(t, fx.retire(t, x, x2))
 		}
 		// The shells the apply targets are trashed (soft-deleted) books, which
@@ -752,7 +754,7 @@ func TestRetiredRowsAreInvisibleToDefaultReads(t *testing.T) {
 // importers rebuild rows from a fresh struct that has Retired=false.
 func TestRetiredFlagSurvivesGenericRewrites(t *testing.T) {
 	fx := newRetiredFixture(t)
-	x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/rw/01.mp3", FileHash: "rw-hash", Duration: 5})
+	x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/rw/01.mp3", FileHash: "rw-hash", Duration: Secs(5)})
 	require.NoError(t, fx.retire(t, x))
 	assertStillRetired := func(label string) {
 		t.Helper()
@@ -764,7 +766,7 @@ func TestRetiredFlagSurvivesGenericRewrites(t *testing.T) {
 		require.Equal(t, fx.holder.ID, got.BookID, label)
 	}
 	fresh := func() *BookFile {
-		return &BookFile{ID: x.ID, BookID: fx.holder.ID, FilePath: "/lib/ret/rw/01.mp3", FileHash: "rw-hash", Duration: 9, Retired: false, VersionID: fx.version.ID}
+		return &BookFile{ID: x.ID, BookID: fx.holder.ID, FilePath: "/lib/ret/rw/01.mp3", FileHash: "rw-hash", Duration: Secs(9), Retired: false, VersionID: fx.version.ID}
 	}
 	require.NoError(t, fx.ps.UpdateBookFile(x.ID, fresh()))
 	assertStillRetired("UpdateBookFile")
@@ -863,7 +865,7 @@ func TestUpsertIgnoresRetiredRowsAtItsPathAndPID(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := newRetiredFixture(t)
 			const path = "/lib/ret/ign/01.mp3"
-			x := fx.create(t, fx.shell.ID, BookFile{FilePath: path, FileHash: "ign-hash", ITunesPersistentID: "PID-IGN", Duration: 42})
+			x := fx.create(t, fx.shell.ID, BookFile{FilePath: path, FileHash: "ign-hash", ITunesPersistentID: "PID-IGN", Duration: Secs(42)})
 			require.NoError(t, fx.retire(t, x))
 			rows := countAllRows(t, fx.ps)
 
@@ -889,7 +891,7 @@ func TestUpsertIgnoresRetiredRowsAtItsPathAndPID(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, old)
 			require.True(t, old.Retired)
-			require.Equal(t, 42, old.Duration, "the retired row's content is untouched")
+			require.Equal(t, 42, durtest.Sec(old.Duration), "the retired row's content is untouched")
 			require.Equal(t, "PID-IGN", old.ITunesPersistentID)
 		})
 	}

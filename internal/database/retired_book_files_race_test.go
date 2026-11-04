@@ -1,7 +1,7 @@
 // file: internal/database/retired_book_files_race_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 91e6c4d2-7a3b-4f05-b8d9-2c1a5e60f7b4
-// last-edited: 2026-10-23
+// last-edited: 2026-11-04
 
 package database
 
@@ -14,6 +14,8 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // installBeforeCommitHook sets bookFileBeforeCommitHook for one test. The hook
@@ -136,7 +138,7 @@ func TestIndexCAS_Verify(t *testing.T) {
 func TestBatchUpsertBookFiles_WaitsForARetireHoldingTheRowsStripe(t *testing.T) {
 	fx := newRetiredFixture(t)
 	const path = "/lib/ret/race/up.mp3"
-	x := fx.create(t, fx.shell.ID, BookFile{FilePath: path, Duration: 100, Format: "mp3"})
+	x := fx.create(t, fx.shell.ID, BookFile{FilePath: path, Duration: Secs(100), Format: "mp3"})
 
 	upsertDone := make(chan error, 1)
 	var finishedInsideRetire atomic.Bool
@@ -150,7 +152,7 @@ func TestBatchUpsertBookFiles_WaitsForARetireHoldingTheRowsStripe(t *testing.T) 
 		}
 		go func() {
 			upsertDone <- fx.ps.BatchUpsertBookFiles([]*BookFile{
-				{BookID: fx.shell.ID, FilePath: path, Duration: 999, Format: "mp3"},
+				{BookID: fx.shell.ID, FilePath: path, Duration: Secs(999), Format: "mp3"},
 			})
 		}()
 		select {
@@ -174,12 +176,12 @@ func TestBatchUpsertBookFiles_WaitsForARetireHoldingTheRowsStripe(t *testing.T) 
 	require.NoError(t, err)
 	require.NotNil(t, retired)
 	require.True(t, retired.Retired)
-	require.Equal(t, 100, retired.Duration, "the retired row is as the retire read it")
+	require.Equal(t, 100, durtest.Sec(retired.Duration), "the retired row is as the retire read it")
 	liveRow, err := fx.ps.GetBookFileByPath(path)
 	require.NoError(t, err)
 	require.NotNil(t, liveRow, "the upsert's row was written, not lost")
 	require.False(t, liveRow.Retired)
-	require.Equal(t, 999, liveRow.Duration)
+	require.Equal(t, 999, durtest.Sec(liveRow.Duration))
 }
 
 // The attempt's candidate set is a lock-free guess. A row that appears between
@@ -195,11 +197,11 @@ func TestBatchUpsertBookFiles_StaleCandidateSetIsRetriedUnderTheStripes(t *testi
 	var calls atomic.Int32
 	batchUpsertAfterCandidatesHook = func() {
 		if calls.Add(1) == 1 {
-			created = &BookFile{BookID: fx.holder.ID, FilePath: path, Duration: 5, Format: "mp3"}
+			created = &BookFile{BookID: fx.holder.ID, FilePath: path, Duration: Secs(5), Format: "mp3"}
 			require.NoError(t, fx.ps.CreateBookFile(created))
 		}
 	}
-	row := &BookFile{BookID: fx.holder.ID, FilePath: path, Duration: 321, Format: "mp3"}
+	row := &BookFile{BookID: fx.holder.ID, FilePath: path, Duration: Secs(321), Format: "mp3"}
 	require.NoError(t, fx.ps.BatchUpsertBookFiles([]*BookFile{row}))
 
 	require.NotNil(t, created)
@@ -207,7 +209,7 @@ func TestBatchUpsertBookFiles_StaleCandidateSetIsRetriedUnderTheStripes(t *testi
 	rows, err := fx.ps.BookFilesAtPath(path)
 	require.NoError(t, err)
 	require.Len(t, rows, 1, "no second row at the path")
-	require.Equal(t, 321, rows[0].Duration)
+	require.Equal(t, 321, durtest.Sec(rows[0].Duration))
 }
 
 // The staging pass alone: a matched row outside the locked set is reported as
@@ -216,27 +218,27 @@ func TestBatchUpsertBookFiles_StaleCandidateSetIsRetriedUnderTheStripes(t *testi
 func TestBatchUpsertBookFilesStaged_ReportsAnUnlockedMatch(t *testing.T) {
 	fx := newRetiredFixture(t)
 	const path = "/lib/ret/race/staged.mp3"
-	existing := fx.create(t, fx.holder.ID, BookFile{FilePath: path, Duration: 10, Format: "mp3"})
+	existing := fx.create(t, fx.holder.ID, BookFile{FilePath: path, Duration: Secs(10), Format: "mp3"})
 	released := 0
 	release := func() { released++ }
 
-	row := &BookFile{BookID: fx.holder.ID, FilePath: path, Duration: 77, Format: "mp3"}
+	row := &BookFile{BookID: fx.holder.ID, FilePath: path, Duration: Secs(77), Format: "mp3"}
 	_, need, err := fx.ps.batchUpsertBookFilesStaged([]*BookFile{row}, nil, bookFileUpsertOpts{}, map[string]struct{}{}, release)
 	require.NoError(t, err)
 	require.Equal(t, []string{existing.ID}, need)
 	require.Zero(t, released, "nothing was committed, so nothing was released")
 	got, err := fx.ps.GetBookFileByID(fx.holder.ID, existing.ID)
 	require.NoError(t, err)
-	require.Equal(t, 10, got.Duration, "an unlocked match writes nothing")
+	require.Equal(t, 10, durtest.Sec(got.Duration), "an unlocked match writes nothing")
 
-	row = &BookFile{BookID: fx.holder.ID, FilePath: path, Duration: 77, Format: "mp3"}
+	row = &BookFile{BookID: fx.holder.ID, FilePath: path, Duration: Secs(77), Format: "mp3"}
 	_, need, err = fx.ps.batchUpsertBookFilesStaged([]*BookFile{row}, nil, bookFileUpsertOpts{}, map[string]struct{}{existing.ID: {}}, release)
 	require.NoError(t, err)
 	require.Empty(t, need)
 	require.Equal(t, 1, released, "the stripes are released right after the commit")
 	got, err = fx.ps.GetBookFileByID(fx.holder.ID, existing.ID)
 	require.NoError(t, err)
-	require.Equal(t, 77, got.Duration)
+	require.Equal(t, 77, durtest.Sec(got.Duration))
 }
 
 // Lock-order sanity: upserts that take many file stripes in opposite row order,
@@ -247,9 +249,9 @@ func TestBatchUpsertBookFiles_StripeOrderDoesNotDeadlock(t *testing.T) {
 	const n = 24
 	var upRows []*BookFile
 	for i := range n {
-		upRows = append(upRows, fx.create(t, fx.holder.ID, BookFile{FilePath: "/lib/ret/lock/u" + string(rune('a'+i)) + ".mp3", Duration: 1, Format: "mp3"}))
+		upRows = append(upRows, fx.create(t, fx.holder.ID, BookFile{FilePath: "/lib/ret/lock/u" + string(rune('a'+i)) + ".mp3", Duration: Secs(1), Format: "mp3"}))
 	}
-	cycler := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/lock/cycle.mp3", Duration: 1, Format: "mp3"})
+	cycler := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/lock/cycle.mp3", Duration: Secs(1), Format: "mp3"})
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 64)
@@ -269,7 +271,7 @@ func TestBatchUpsertBookFiles_StripeOrderDoesNotDeadlock(t *testing.T) {
 			if reverse {
 				src = upRows[n-1-i]
 			}
-			out = append(out, &BookFile{BookID: fx.holder.ID, FilePath: src.FilePath, Duration: dur, Format: "mp3"})
+			out = append(out, &BookFile{BookID: fx.holder.ID, FilePath: src.FilePath, Duration: Secs(dur), Format: "mp3"})
 		}
 		return out
 	}

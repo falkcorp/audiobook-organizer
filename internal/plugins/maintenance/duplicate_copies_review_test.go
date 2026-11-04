@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_review_test.go
-// version: 1.6.4
+// version: 1.6.5
 // guid: 6e2d9c41-3b7a-4f05-8c1e-a94d2f7b3e58
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -69,7 +69,7 @@ func itunesRuleFixture(t *testing.T, pTitle string, pRows []dcRow, iTitle string
 	fp := d.file(t, "lib/frag/02.mp3", 777)
 	frag = d.book(t, "frag", fragTitle, fp, nil)
 	require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: frag, FilePath: fp, OriginalFilename: "02.mp3", FileSize: 777,
-		Duration: fragDur, FileHash: fragHash}))
+		Duration: database.Secs(fragDur), FileHash: fragHash}))
 	return d, p, i, frag
 }
 
@@ -231,7 +231,7 @@ func TestDuplicateCopies_ZeroDurationRowIsNeverFolded(t *testing.T) {
 	require.True(t, ok.Applicable(), "%s: %s", ok.Skipped, ok.SkipReason)
 	for i := range run.books[l].Rows {
 		if run.books[l].Rows[i].TrackNumber == 5 {
-			run.books[l].Rows[i].Duration = 0
+			run.books[l].Rows[i].Duration = nil
 		}
 	}
 	r := f.mergeRow(run, edges, []string{s, l}, nil)
@@ -243,7 +243,7 @@ func TestDuplicateCopies_ZeroDurationRowIsNeverFolded(t *testing.T) {
 // copies of one junk file outweighing the real audio.
 func TestDuplicateCopies_DuplicatedJunkCountsOnce(t *testing.T) {
 	row := func(id string, dur int, hash string) database.BookFileCore {
-		return database.BookFileCore{ID: id, Duration: dur, FileHash: hash, FilePath: "/x/" + id + ".mp3"}
+		return database.BookFileCore{ID: id, Duration: database.Secs(dur), FileHash: hash, FilePath: "/x/" + id + ".mp3"}
 	}
 	a := &dcBook{Core: database.BookCore{ID: "a"}, Title: "dune", Rows: []database.BookFileCore{
 		row("a1", 3600, "j"), row("a2", 3600, "j"), row("a3", 3600, "j"), row("a4", 1200, "other")}}
@@ -460,7 +460,7 @@ func TestDuplicateCopies_BoxSetOwnerCasesStillMerge(t *testing.T) {
 		d, s, _ := hwfwm(t)
 		fp := d.file(t, "lib/strays/Chapter 40.mp3", 900)
 		stray := d.book(t, "stray", "Chapter 40", fp, nil)
-		require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: stray, FilePath: fp, FileSize: 900, Duration: 37740, FileHash: "w5"}))
+		require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: stray, FilePath: fp, FileSize: 900, Duration: database.Secs(37740), FileHash: "w5"}))
 		r := rowOf(t, d.planFor(t, dcFixerID, "op-plan", nil), s)
 		require.Equal(t, dcSkipBoxSet, r.Skipped, r.SkipReason)
 		require.Contains(t, r.SkipReason, "fragment consolidation")
@@ -525,7 +525,7 @@ func TestDuplicateCopies_DanglingAuthorIsUnknownNotAWildcard(t *testing.T) {
 	five := 5
 	require.Equal(t, "?author#5", dcAuthorKey(map[int]string{}, &five))
 	require.Equal(t, "", dcAuthorKey(map[int]string{5: "Unknown Author"}, &five))
-	row := database.BookFileCore{ID: "r", Duration: 600, FileHash: "h", FilePath: "/x/r.mp3"}
+	row := database.BookFileCore{ID: "r", Duration: database.Secs(600), FileHash: "h", FilePath: "/x/r.mp3"}
 	a := &dcBook{Core: database.BookCore{ID: "a"}, Title: "dune", Author: dcAuthorKey(map[int]string{}, &five), Rows: []database.BookFileCore{row}}
 	b := &dcBook{Core: database.BookCore{ID: "b"}, Title: "dune", Author: "frankherbert", Rows: []database.BookFileCore{row}}
 	require.Equal(t, dcEdgeUnproven, dcJudge(a, b, nil).Kind, "a dangling author against a known one is doubt: held, not unrelated")
@@ -567,13 +567,13 @@ func keyOwnerFixture(t *testing.T) (d *dcFixture, path, aRow, bRow, xBook, xRow 
 	path = d.file(t, "lib/shared/01.mp3", 500)
 	other := d.file(t, "lib/x/01.mp3", 501)
 	bBook := d.book(t, "B", "B", path, nil)
-	bf := &database.BookFile{BookID: bBook, FilePath: path, FileSize: 500, Duration: 600, FileHash: "k"}
+	bf := &database.BookFile{BookID: bBook, FilePath: path, FileSize: 500, Duration: database.Secs(600), FileHash: "k"}
 	require.NoError(t, d.s.CreateBookFile(bf))
 	aBook := d.book(t, "A", "A", path, nil)
-	af := &database.BookFile{BookID: aBook, FilePath: path, FileSize: 500, Duration: 600, FileHash: "k"}
+	af := &database.BookFile{BookID: aBook, FilePath: path, FileSize: 500, Duration: database.Secs(600), FileHash: "k"}
 	require.NoError(t, d.s.CreateBookFile(af))
 	xBook = d.book(t, "X", "X", other, nil)
-	xf := &database.BookFile{BookID: xBook, FilePath: other, FileSize: 501, Duration: 600, FileHash: "k"}
+	xf := &database.BookFile{BookID: xBook, FilePath: other, FileSize: 501, Duration: database.Secs(600), FileHash: "k"}
 	require.NoError(t, d.s.CreateBookFile(xf))
 	owner, err := d.s.GetBookFileByPath(path)
 	require.NoError(t, err)
@@ -680,10 +680,10 @@ func TestRevertRepoint_LegacyFallbackNeverPicksAnITunesRow(t *testing.T) {
 	path := d.file(t, "lib/shared/01.mp3", 500)
 	other := d.file(t, "lib/x/01.mp3", 501)
 	it := d.book(t, "I", "I", path, nil)
-	require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: it, FilePath: path, FileSize: 500, Duration: 600, FileHash: "k",
+	require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: it, FilePath: path, FileSize: 500, Duration: database.Secs(600), FileHash: "k",
 		ITunesPersistentID: "TRK1"}))
 	xBook := d.book(t, "X", "X", other, nil)
-	xf := &database.BookFile{BookID: xBook, FilePath: other, FileSize: 501, Duration: 600, FileHash: "k"}
+	xf := &database.BookFile{BookID: xBook, FilePath: other, FileSize: 501, Duration: database.Secs(600), FileHash: "k"}
 	require.NoError(t, d.s.CreateBookFile(xf))
 	repointAndRevert(t, d, xBook, xf.ID, path, true)
 	got, err := d.s.GetBookFileByPath(path)
@@ -699,9 +699,9 @@ func TestRevertRepoint_NeverRewritesAnITunesRow(t *testing.T) {
 	pid := "PIDSHARED"
 	_, err := d.s.ModifyBook(it, func(b *database.Book) error { b.ITunesPersistentID = &pid; return nil })
 	require.NoError(t, err)
-	require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: it, FilePath: path, FileSize: 500, Duration: 600, FileHash: "k"}))
+	require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: it, FilePath: path, FileSize: 500, Duration: database.Secs(600), FileHash: "k"}))
 	xBook := d.book(t, "X", "X", other, nil)
-	xf := &database.BookFile{BookID: xBook, FilePath: other, FileSize: 501, Duration: 600, FileHash: "k"}
+	xf := &database.BookFile{BookID: xBook, FilePath: other, FileSize: 501, Duration: database.Secs(600), FileHash: "k"}
 	require.NoError(t, d.s.CreateBookFile(xf))
 	before, err := d.s.GetBookFiles(it)
 	require.NoError(t, err)
@@ -733,7 +733,7 @@ func TestRevertRepoint_KeyGoesBackToAnITunesOwnerNotTheLoser(t *testing.T) {
 	pid := "PIDX"
 	_, err := d.s.ModifyBook(it, func(b *database.Book) error { b.ITunesPersistentID = &pid; return nil })
 	require.NoError(t, err)
-	itRow := &database.BookFile{BookID: it, FilePath: lPath, FileSize: 500, Duration: 600, ITunesPersistentID: "TRK"}
+	itRow := &database.BookFile{BookID: it, FilePath: lPath, FileSize: 500, Duration: database.Secs(600), ITunesPersistentID: "TRK"}
 	require.NoError(t, d.s.CreateBookFile(itRow))
 	owner, err := d.s.GetBookFileByPath(lPath)
 	require.NoError(t, err)

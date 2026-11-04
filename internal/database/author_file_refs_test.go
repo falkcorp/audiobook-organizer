@@ -1,7 +1,7 @@
 // file: internal/database/author_file_refs_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4d889ab5-fb0f-4d3a-af64-09f66cdaa453
-// last-edited: 2026-10-03
+// last-edited: 2026-11-04
 
 package database
 
@@ -59,7 +59,7 @@ func addAuthorFileRefFiles(t *testing.T, s *PebbleStore, bookID string, n int) {
 		require.NoError(t, s.CreateBookFile(&BookFile{
 			BookID:   bookID,
 			FilePath: "/filerefs/" + bookID + "/" + string(rune('a'+i)) + ".m4b",
-			Duration: 60,
+			Duration: Secs(60),
 			FileSize: 1_000,
 		}))
 	}

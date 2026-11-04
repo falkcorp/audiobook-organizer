@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 5169412c-6469-4f70-9073-b544025dd08e
 // last-edited: 2026-11-04
 
@@ -838,9 +838,8 @@ func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 		})
 		keep := rows[0]
 		for _, f := range rows[1:] {
-			// direct: scratch copy of the row's raw duration to ask BookFileRuntimeSec.
-			bf := database.BookFile{Duration: f.Duration, FileSize: f.FileSize,
-				AcoustIDFingerprintDurationSec: f.AcoustIDFingerprintDurationSec}
+			// Scratch BookFile (own Duration pointer) to ask BookFileRuntimeSec.
+			bf := f.AsBookFile()
 			if database.BookFileRuntimeSec(&bf) > 0 {
 				return amb("superseded-rows-carry-duration",
 					"row "+f.ID+" would be marked missing but carries a duration ABS would still sum")

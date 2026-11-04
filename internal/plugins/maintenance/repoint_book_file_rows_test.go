@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 4c8e1a57-92d3-4f6b-b0a4-6e3f9d2c7b18
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -17,6 +17,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,10 +76,10 @@ func newRBFFixture(t *testing.T, rowSize int64, rowHash string) rbfFixture {
 	_, err = s.CreateBook(&database.Book{ID: f.book, Title: "Rebels of Last World", FilePath: filepath.Dir(f.oldPath)})
 	require.NoError(t, err)
 	require.NoError(t, s.CreateBookFile(&database.BookFile{ID: f.row, BookID: f.book, FilePath: f.oldPath,
-		TrackNumber: 1, Duration: 600, FileSize: rowSize, FileHash: rowHash, Missing: true}))
+		TrackNumber: 1, Duration: database.Secs(600), FileSize: rowSize, FileHash: rowHash, Missing: true}))
 	f.siblingDuration = 700
 	require.NoError(t, s.CreateBookFile(&database.BookFile{ID: f.sibling, BookID: f.book, FilePath: f.siblingPath,
-		TrackNumber: 2, Duration: f.siblingDuration, FileSize: 7}))
+		TrackNumber: 2, Duration: database.Secs(f.siblingDuration), FileSize: 7}))
 	return f
 }
 
@@ -151,7 +152,7 @@ func TestRepointBookFileRows_LiveRepointsJournalsAndRefreshes(t *testing.T) {
 	require.False(t, row.Missing)
 	require.Equal(t, f.contentHash, row.FileHash, "the hash is recomputed from the new file")
 	require.Equal(t, 1, row.TrackNumber, "track kept")
-	require.Equal(t, 600, row.Duration, "row kept")
+	require.Equal(t, 600, durtest.Sec(row.Duration), "row kept")
 
 	byNew, err := f.s.GetBookFileByPath(f.newPath)
 	require.NoError(t, err)

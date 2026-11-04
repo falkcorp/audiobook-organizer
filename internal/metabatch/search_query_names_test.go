@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query_names_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4d230bdc-f5c8-4daf-a1a4-8ae60cd023e0
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package metabatch
 
@@ -35,7 +35,7 @@ func knownPeople(t *testing.T, names ...string) map[string][]byte {
 // the title field -- is no title: the folder stands in. Made-up names.
 func TestResolveCandidateSearchQuery_PersonNameTitleFallsBack(t *testing.T) {
 	path := "/library/Mara Quill/The Paper Garden/The Paper Garden.m4b"
-	files := fakeBookFiles{files: []database.BookFile{{FilePath: path, Duration: 9 * 3600}}, raw: knownPeople(t, "Mara Quill")}
+	files := fakeBookFiles{files: []database.BookFile{{FilePath: path, Duration: database.Secs(9 * 3600)}}, raw: knownPeople(t, "Mara Quill")}
 	for _, title := range []string{"Mara Quill", "mara_quill", "Mara-Quill"} {
 		book := database.Book{ID: "b1", Title: title, FilePath: path, Duration: new(9 * 3600)}
 		q := ResolveCandidateSearchQuery(files, &book)
@@ -65,7 +65,7 @@ func TestResolveCandidateSearchQuery_PersonShapedTitleWithoutEvidenceIsSearched(
 func TestResolveCandidateSearchQuery_FilenameShapedTitleIsSearched(t *testing.T) {
 	for _, title := range []string{"2018 - Glasswake", "Driftworld 24 - The Seventh Lantern - 01", "J.K. Marlow - Freighter for Hire 02 [Fixed]"} {
 		path := "/library/Someone/" + title + "/" + title + ".m4b"
-		files := fakeBookFiles{files: []database.BookFile{{FilePath: path, Duration: 9 * 3600}}}
+		files := fakeBookFiles{files: []database.BookFile{{FilePath: path, Duration: database.Secs(9 * 3600)}}}
 		book := database.Book{ID: "b1", Title: title, FilePath: path, Duration: new(9 * 3600)}
 		q := ResolveCandidateSearchQuery(files, &book)
 		require.True(t, q.Usable, title)
@@ -83,7 +83,7 @@ func TestResolveCandidateSearchQuery_TrackSuffixPartRowsStillSkipped(t *testing.
 	path := dir + "/" + self
 	book := database.Book{ID: "self", Title: "Driftworld 24 - The Seventh Lantern - 02", FilePath: path, Duration: new(20 * 60)}
 	files := fakeBookFiles{
-		files: []database.BookFile{{FilePath: path, Duration: 20 * 60, FileSize: 20 * 60 * 8000}},
+		files: []database.BookFile{{FilePath: path, Duration: database.Secs(20 * 60), FileSize: 20 * 60 * 8000}},
 		dir:   siblingRows(dir, self, "Driftworld 24 - The Seventh Lantern - 01.mp3", "Driftworld 24 - The Seventh Lantern - 03.mp3"),
 	}
 	q := ResolveCandidateSearchQuery(files, &book)
@@ -95,7 +95,7 @@ func TestResolveCandidateSearchQuery_TrackSuffixPartRowsStillSkipped(t *testing.
 // the title of a book by someone else is a biography -> searched.
 func TestResolveCandidateSearchQuery_PersonNameNeedsTheBooksOwnPerson(t *testing.T) {
 	path := "/library/Mara Quill/The Paper Garden/The Paper Garden.m4b"
-	files := fakeBookFiles{files: []database.BookFile{{FilePath: path, Duration: 9 * 3600}}, raw: knownPeople(t, "Mara Quill", "Ada Penn")}
+	files := fakeBookFiles{files: []database.BookFile{{FilePath: path, Duration: database.Secs(9 * 3600)}}, raw: knownPeople(t, "Mara Quill", "Ada Penn")}
 
 	own := database.Book{ID: "b1", Title: "Mara Quill", FilePath: path, Author: &database.Author{Name: "Mara Quill"}}
 	q := ResolveCandidateSearchQuery(files, &own)

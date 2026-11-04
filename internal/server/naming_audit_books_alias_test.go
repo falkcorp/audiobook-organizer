@@ -1,7 +1,7 @@
 // file: internal/server/naming_audit_books_alias_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-28
+// last-edited: 2026-11-04
 
 package server
 
@@ -54,7 +54,7 @@ func TestDeprecatedBooksAliases_RemainingSixRoutesAnswer(t *testing.T) {
 		t.Fatalf("create book: %v", err)
 	}
 	if err := store.CreateBookFile(&database.BookFile{
-		ID: "s1", BookID: "b1", FilePath: "/tmp/s1", TrackNumber: 1, Duration: 600,
+		ID: "s1", BookID: "b1", FilePath: "/tmp/s1", TrackNumber: 1, Duration: database.Secs(600),
 	}); err != nil {
 		t.Fatalf("create book file: %v", err)
 	}

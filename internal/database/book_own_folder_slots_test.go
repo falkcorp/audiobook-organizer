@@ -1,7 +1,7 @@
 // file: internal/database/book_own_folder_slots_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5a1bde02-c19b-425f-be41-1c41e77c2ec2
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 package database
 
@@ -23,10 +23,10 @@ const slotBookDir = "/srv/library/Gotham/Batman Hush"
 // the slot row.
 func slotRows() []BookFile {
 	return []BookFile{
-		{ID: "alt-slot", FilePath: slotBookDir + "/.versions/v-alt/01 Hush.m4b", VersionID: "v-alt", FileHash: "h1", FileSize: 100, Duration: 60},
-		{ID: "trash-slot", FilePath: slotBookDir + "/.versions/v-trash/02 Hush.m4b", VersionID: "v-trash", FileHash: "h2", FileSize: 200, Duration: 70},
-		{ID: "live-1", FilePath: slotBookDir + "/01 Hush.m4b", VersionID: "v-live", FileHash: "h1", FileSize: 100, Duration: 60},
-		{ID: "live-cd2", FilePath: slotBookDir + "/CD2/02 Hush.m4b", VersionID: "v-live", FileHash: "h3", FileSize: 300, Duration: 80},
+		{ID: "alt-slot", FilePath: slotBookDir + "/.versions/v-alt/01 Hush.m4b", VersionID: "v-alt", FileHash: "h1", FileSize: 100, Duration: Secs(60)},
+		{ID: "trash-slot", FilePath: slotBookDir + "/.versions/v-trash/02 Hush.m4b", VersionID: "v-trash", FileHash: "h2", FileSize: 200, Duration: Secs(70)},
+		{ID: "live-1", FilePath: slotBookDir + "/01 Hush.m4b", VersionID: "v-live", FileHash: "h1", FileSize: 100, Duration: Secs(60)},
+		{ID: "live-cd2", FilePath: slotBookDir + "/CD2/02 Hush.m4b", VersionID: "v-live", FileHash: "h3", FileSize: 300, Duration: Secs(80)},
 	}
 }
 
@@ -79,8 +79,8 @@ func TestSplitOwnFolderFiles_SlotRowWithoutVersionID(t *testing.T) {
 	// A row with no version id under the book's own .versions/ is still a slot
 	// row (the folder test).
 	rows := []BookFile{
-		{ID: "live", FilePath: slotBookDir + "/01 Hush.m4b", FileHash: "h1", FileSize: 100, Duration: 60},
-		{ID: "slot", FilePath: slotBookDir + "/.versions/v-old/01 Hush.m4b", FileHash: "h9", FileSize: 111, Duration: 61},
+		{ID: "live", FilePath: slotBookDir + "/01 Hush.m4b", FileHash: "h1", FileSize: 100, Duration: Secs(60)},
+		{ID: "slot", FilePath: slotBookDir + "/.versions/v-old/01 Hush.m4b", FileHash: "h9", FileSize: 111, Duration: Secs(61)},
 	}
 	s := SplitOwnFolderFiles(&Book{FilePath: slotBookDir}, rows)
 	assert.Equal(t, []string{"live"}, ownFolderIDs(s.Own))
@@ -92,8 +92,8 @@ func TestSplitOwnFolderFiles_VersionsNamedLikeAFolderOutsideTheBook(t *testing.T
 	// A .versions component in or above the book's own folder is not a slot of
 	// it, and a similar-looking name is not .versions.
 	rows := []BookFile{
-		{ID: "a", FilePath: "/srv/library/.versions/Gotham/Hush/01.m4b", FileHash: "a", FileSize: 1, Duration: 10},
-		{ID: "b", FilePath: "/srv/library/.versions/Gotham/Hush/.versions-old/02.m4b", FileHash: "b", FileSize: 2, Duration: 20},
+		{ID: "a", FilePath: "/srv/library/.versions/Gotham/Hush/01.m4b", FileHash: "a", FileSize: 1, Duration: Secs(10)},
+		{ID: "b", FilePath: "/srv/library/.versions/Gotham/Hush/.versions-old/02.m4b", FileHash: "b", FileSize: 2, Duration: Secs(20)},
 	}
 	b := &Book{FilePath: "/srv/library/.versions/Gotham/Hush"}
 	s := SplitOwnFolderFiles(b, rows)

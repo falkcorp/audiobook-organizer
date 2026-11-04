@@ -1,7 +1,7 @@
 // file: internal/server/handlers/admindebug/fields.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 61820a5b-9226-486c-b5cd-efc491764ce4
-// last-edited: 2026-10-19
+// last-edited: 2026-11-04
 
 package admindebug
 
@@ -52,6 +52,37 @@ type entitySpec struct {
 	// itunesOwned fields are values copied from the iTunes library itself;
 	// they are refused outright.
 	itunesOwned map[string]bool
+	// zeroIsUnset names pointer fields whose nil is the record's "not set", and
+	// that this API has always shown and accepted as 0 (book_file.duration:
+	// nil is not measured, and a stored value is always > 0). Reads render nil
+	// as 0, and a value written as 0 (or below) is stored as nil, never as a
+	// pointer to 0. Without it the PATCH diff would change from 0 to null, and a
+	// PATCH of 0 would store the "duration":0 that no row may carry.
+	zeroIsUnset map[string]bool
+}
+
+// encodeField is the canonical JSON of a field value of this spec's record
+// type: json.Marshal, except a zeroIsUnset field that is nil encodes as 0.
+func (s *entitySpec) encodeField(name string, v reflect.Value) (json.RawMessage, error) {
+	if s.zeroIsUnset[name] && v.Kind() == reflect.Pointer && v.IsNil() {
+		return json.RawMessage("0"), nil
+	}
+	return json.Marshal(v.Interface())
+}
+
+// decodeField decodes raw into a FRESH value of the field's type (a pointer
+// field never aliases or merges into a value the record held before). A
+// zeroIsUnset pointer that decodes to a value <= 0 becomes nil.
+func (s *entitySpec) decodeField(t reflect.Type, name string, raw json.RawMessage) (reflect.Value, error) {
+	fresh := reflect.New(t)
+	if err := json.Unmarshal(raw, fresh.Interface()); err != nil {
+		return reflect.Value{}, err
+	}
+	v := fresh.Elem()
+	if s.zeroIsUnset[name] && v.Kind() == reflect.Pointer && !v.IsNil() && v.Elem().CanInt() && v.Elem().Int() <= 0 {
+		v = reflect.Zero(t)
+	}
+	return v, nil
 }
 
 // patchPlan is a validated PATCH: the requested fields in a stable order and
@@ -94,7 +125,7 @@ func (s *entitySpec) validatePatch(zero any, raw map[string]json.RawMessage) (*p
 // pointer).
 func (s *entitySpec) fieldJSON(rec any, name string) (json.RawMessage, error) {
 	v := reflect.ValueOf(rec).Elem().Field(s.fields[name])
-	b, err := json.Marshal(v.Interface())
+	b, err := s.encodeField(name, v)
 	if err != nil {
 		return nil, fmt.Errorf("encode %s.%s: %w", s.name, name, err)
 	}
@@ -106,11 +137,11 @@ func (s *entitySpec) fieldJSON(rec any, name string) (json.RawMessage, error) {
 // the record held before.
 func (s *entitySpec) setField(rec any, name string, raw json.RawMessage) error {
 	f := reflect.ValueOf(rec).Elem().Field(s.fields[name])
-	fresh := reflect.New(f.Type())
-	if err := json.Unmarshal(raw, fresh.Interface()); err != nil {
+	v, err := s.decodeField(f.Type(), name, raw)
+	if err != nil {
 		return fmt.Errorf("decode %s.%s: %w", s.name, name, err)
 	}
-	f.Set(fresh.Elem())
+	f.Set(v)
 	return nil
 }
 
@@ -119,11 +150,11 @@ func (s *entitySpec) setField(rec any, name string, raw json.RawMessage) error {
 // decoding into the field's type first).
 func (s *entitySpec) canonical(zero any, name string, raw json.RawMessage) (json.RawMessage, error) {
 	t := reflect.TypeOf(zero).Elem().Field(s.fields[name]).Type
-	v := reflect.New(t)
-	if err := json.Unmarshal(raw, v.Interface()); err != nil {
+	v, err := s.decodeField(t, name, raw)
+	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(v.Elem().Interface())
+	return s.encodeField(name, v)
 }
 
 func jsonEqual(a, b json.RawMessage) bool {

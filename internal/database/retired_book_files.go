@@ -1,7 +1,7 @@
 // file: internal/database/retired_book_files.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
-// last-edited: 2026-10-31
+// last-edited: 2026-11-04
 
 package database
 
@@ -162,7 +162,7 @@ func (p *PebbleStore) retiredRowsOfVersionRaw(holderID, versionID string) ([]Boo
 	raws := map[string][]byte{}
 	err := forEachKeyInRange(p.db, prefix, prefixEnd(prefix), func(_, value []byte) error {
 		var f BookFile
-		if err := json.Unmarshal(value, &f); err != nil {
+		if err := unmarshalBookFile(value, &f); err != nil {
 			return err
 		}
 		if !f.Retired || f.VersionID != versionID {

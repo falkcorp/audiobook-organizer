@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_recheck_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8d3f5b21-6a94-4c70-b1e8-2f7a4c9d0e35
-// last-edited: 2026-10-21
+// last-edited: 2026-11-04
 
 package dedup
 
@@ -42,7 +42,7 @@ func (r *recheckReader) add(id, title, path string, fileSecs int) {
 	}
 	r.books[id] = &database.Book{ID: id, Title: title, FilePath: path}
 	if fileSecs != 0 {
-		r.files[id] = []database.BookFile{{ID: "f-" + id, BookID: id, Duration: fileSecs}}
+		r.files[id] = []database.BookFile{{ID: "f-" + id, BookID: id, Duration: database.Secs(fileSecs)}}
 	}
 }
 
@@ -82,8 +82,8 @@ func TestRecheckSplitBookMembers_Refusals(t *testing.T) {
 		}, chapterIDs, "gone or already retired"},
 		{"a member has no file rows", func(r *recheckReader) { delete(r.files, "b3") }, chapterIDs, "no file rows"},
 		{"a member has no stored path", func(r *recheckReader) { r.books["b3"].FilePath = "" }, chapterIDs, "no stored path"},
-		{"a file has no recorded duration", func(r *recheckReader) { r.files["b1"][0].Duration = 0 }, chapterIDs, "no recorded duration"},
-		{"a file is at the duration limit", func(r *recheckReader) { r.files["b1"][0].Duration = testChapterMaxSec }, chapterIDs, "run 120 min or longer"},
+		{"a file has no recorded duration", func(r *recheckReader) { r.files["b1"][0].Duration = nil }, chapterIDs, "no recorded duration"},
+		{"a file is at the duration limit", func(r *recheckReader) { r.files["b1"][0].Duration = database.Secs(testChapterMaxSec) }, chapterIDs, "run 120 min or longer"},
 		{"V3: a book's own duration is over the limit", func(r *recheckReader) {
 			d := testChapterMaxSec + 60
 			r.books["b2"].Duration = &d
@@ -166,7 +166,7 @@ func TestMergeSplitBookClusterRechecked_RefusesVetoedWithoutWriting(t *testing.T
 
 func TestMergeSplitBookClusterRechecked_RefusesUnknownDurationWithoutWriting(t *testing.T) {
 	r := chapters()
-	r.files["b2"][0].Duration = 0
+	r.files["b2"][0].Duration = nil
 	writes := 0
 	_, err := MergeSplitBookClusterRechecked(recheckMergeMock(r, &writes), chapterIDs, "b1", "", SplitMergeOptions{})
 	assert.True(t, errors.Is(err, ErrSplitBookRefused))
@@ -226,7 +226,7 @@ func TestMergeSplitBookClusterRechecked_CallerPrecheckStillRuns(t *testing.T) {
 	assert.Zero(t, writes)
 
 	r := chapters()
-	r.files["b2"][0].Duration = 0
+	r.files["b2"][0].Duration = nil
 	called = 0
 	_, err = MergeSplitBookClusterRechecked(recheckMergeMock(r, &writes), chapterIDs, "b1", "", opts)
 	assert.True(t, errors.Is(err, ErrSplitBookRefused))
@@ -239,7 +239,7 @@ func TestMergeSplitBookClusterRechecked_CallerPrecheckStillRuns(t *testing.T) {
 func TestMergeSplitBookClusterRechecked_ErrorTextHasNoDoubledPrefix(t *testing.T) {
 	writes := 0
 	r := chapters()
-	r.files["b2"][0].Duration = 0
+	r.files["b2"][0].Duration = nil
 	_, err := MergeSplitBookClusterRechecked(recheckMergeMock(r, &writes), chapterIDs, "b1", "", SplitMergeOptions{})
 	require.Error(t, err)
 	assert.Equal(t, 1, strings.Count(err.Error(), "split-book merge refused"), err.Error())

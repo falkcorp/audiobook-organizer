@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_scancache.go
-// version: 3.8.0
+// version: 3.8.1
 // guid: 5737e19f-0c4c-4762-a8ea-928619a02862
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package database
 
@@ -74,7 +74,7 @@ func (p *PebbleStore) GetScanCacheMapContext(ctx context.Context) (map[string]Sc
 			}
 		}
 		var bf BookFile
-		if err := json.Unmarshal(value, &bf); err != nil {
+		if err := unmarshalBookFile(value, &bf); err != nil {
 			return nil
 		}
 		if bf.FilePath == "" || bf.LastScanMtime == nil {
@@ -191,7 +191,7 @@ func (p *PebbleStore) BackfillBookFileScanCache(dryRun bool) (*BackfillBookFileS
 	// creation pass below would mint a duplicate for it.
 	if err := forEachKeyInRange(p.db, []byte("book_file:"), []byte("book_file;"), func(_, value []byte) error {
 		var bf BookFile
-		if err := json.Unmarshal(value, &bf); err != nil {
+		if err := unmarshalBookFile(value, &bf); err != nil {
 			return nil
 		}
 		// A retired row is not a file of the book it is keyed under: counting

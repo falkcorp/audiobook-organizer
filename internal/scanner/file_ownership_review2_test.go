@@ -1,7 +1,7 @@
 // file: internal/scanner/file_ownership_review2_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4d8b2f6a-1c3e-4a97-b5d0-7e2c9f1a3b68
-// last-edited: 2026-10-29
+// last-edited: 2026-11-04
 
 package scanner
 
@@ -196,10 +196,10 @@ func TestStoredBookFileDurationSec_IgnoresLegacyMillis(t *testing.T) {
 	require.NoError(t, os.Truncate(f.chapters[0], size))
 	require.True(t, database.DurationLooksLikeMillis(size, 3_600_000), "fixture must look like milliseconds")
 	useScannerStore(t, rawRowsStore{PebbleStore: f.store, path: f.chapters[0],
-		row: database.BookFile{ID: "raw", BookID: f.parent.ID, FilePath: f.chapters[0], FileSize: size, Duration: 3_600_000}})
+		row: database.BookFile{ID: "raw", BookID: f.parent.ID, FilePath: f.chapters[0], FileSize: size, Duration: database.Secs(3_600_000)}})
 	require.Zero(t, storedBookFileDurationSec(f.chapters[0]), "a millisecond duration was trusted as seconds")
 
 	useScannerStore(t, rawRowsStore{PebbleStore: f.store, path: f.chapters[0],
-		row: database.BookFile{ID: "raw", BookID: f.parent.ID, FilePath: f.chapters[0], FileSize: size, Duration: 3600}})
+		row: database.BookFile{ID: "raw", BookID: f.parent.ID, FilePath: f.chapters[0], FileSize: size, Duration: database.Secs(3600)}})
 	require.Equal(t, 3600, storedBookFileDurationSec(f.chapters[0]), "a plausible seconds value was not used")
 }

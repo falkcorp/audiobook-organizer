@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/personalized_shelves_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: bfebef16-8d78-4765-909a-90ec835b61f4
-// last-edited: 2026-10-11
+// last-edited: 2026-11-04
 
 package abs_test
 
@@ -67,7 +67,7 @@ func newShelfFixtureUndated(t *testing.T, undated int) *shelfFixture {
 		}
 		lib.addBook(b, []database.BookFile{{
 			ID: id + "-f", BookID: id, FilePath: "/nonexistent/" + id + ".m4b",
-			FileSize: 1000, Duration: 600, Format: "m4b",
+			FileSize: 1000, Duration: database.Secs(600), Format: "m4b",
 		}}, nil)
 		f.at[id] = created
 	}

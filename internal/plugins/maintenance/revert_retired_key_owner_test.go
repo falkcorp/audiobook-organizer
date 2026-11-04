@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/revert_retired_key_owner_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c4a7d915-2e63-48b0-9f1d-5b8e3a07c162
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -28,11 +28,11 @@ func retiredKeyFixture(t *testing.T) (d *dcFixture, path, kRow, holder, xBook, x
 		RetiredFromBookID: shell, RetireOpID: "op-ret", RetiredAt: new(time.Now()),
 	})
 	require.NoError(t, err)
-	kf := &database.BookFile{BookID: shell, FilePath: path, FileSize: 500, Duration: 600, FileHash: "k"}
+	kf := &database.BookFile{BookID: shell, FilePath: path, FileSize: 500, Duration: database.Secs(600), FileHash: "k"}
 	require.NoError(t, d.s.CreateBookFile(kf))
 	require.NoError(t, d.s.RetireBookFiles([]database.BookFileMove{{FileIDs: []string{kf.ID}, SourceBookID: shell}}, holder, v.ID))
 	xBook = d.book(t, "X", "X", other, nil)
-	xf := &database.BookFile{BookID: xBook, FilePath: other, FileSize: 501, Duration: 600, FileHash: "k"}
+	xf := &database.BookFile{BookID: xBook, FilePath: other, FileSize: 501, Duration: database.Secs(600), FileHash: "k"}
 	require.NoError(t, d.s.CreateBookFile(xf))
 	owner, err := d.s.GetBookFileByPathIncludingRetired(path)
 	require.NoError(t, err)
@@ -89,7 +89,7 @@ func TestRevertRepoint_LiveRowAtPathOutranksTheRetiredOwner(t *testing.T) {
 	was := repointOnto(t, d, xBook, xRow, path, false)
 
 	liveBook := d.book(t, "L", "Live", path, nil)
-	lf := &database.BookFile{BookID: liveBook, FilePath: path, FileSize: 500, Duration: 600, FileHash: "k"}
+	lf := &database.BookFile{BookID: liveBook, FilePath: path, FileSize: 500, Duration: database.Secs(600), FileHash: "k"}
 	require.NoError(t, d.s.CreateBookFile(lf))
 	atPath, err := d.s.GetBookFileByPathIncludingRetired(path)
 	require.NoError(t, err)
@@ -120,7 +120,7 @@ func TestRevertRepoint_LiveITunesRowAtPathKeepsTheKeyFromTheRetiredOwner(t *test
 	was := repointOnto(t, d, xBook, xRow, path, false)
 
 	itBook := d.book(t, "I", "Knightfall", path, nil)
-	itRow := &database.BookFile{BookID: itBook, FilePath: path, FileSize: 500, Duration: 600, FileHash: "k", ITunesPersistentID: "TRK-KF"}
+	itRow := &database.BookFile{BookID: itBook, FilePath: path, FileSize: 500, Duration: database.Secs(600), FileHash: "k", ITunesPersistentID: "TRK-KF"}
 	require.NoError(t, d.s.CreateBookFile(itRow))
 
 	rec := &retiredClaimRecorder{PebbleStore: d.s}

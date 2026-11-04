@@ -1,7 +1,7 @@
 // file: internal/database/move_bookfiles_aggregates_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8b41d7e2-3f95-4c60-a1d8-6e0937b2c5f4
-// last-edited: 2026-08-24
+// last-edited: 2026-11-04
 
 package database
 
@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // TestMoveBookFilesToBookRecomputesBothBooks is the reason this fix exists.
@@ -35,15 +37,15 @@ func TestMoveBookFilesToBookRecomputesBothBooks(t *testing.T) {
 	// Three files on the source, one already on the target so the target has a
 	// non-nil starting aggregate to be wrong about.
 	srcFiles := []*BookFile{
-		{BookID: src.ID, FilePath: "/lib/mv/src/t1.m4b", Duration: 100, FileSize: 1_000, TrackNumber: 1},
-		{BookID: src.ID, FilePath: "/lib/mv/src/t2.m4b", Duration: 200, FileSize: 2_000, TrackNumber: 2},
-		{BookID: src.ID, FilePath: "/lib/mv/src/t3.m4b", Duration: 300, FileSize: 3_000, TrackNumber: 3},
+		{BookID: src.ID, FilePath: "/lib/mv/src/t1.m4b", Duration: Secs(100), FileSize: 1_000, TrackNumber: 1},
+		{BookID: src.ID, FilePath: "/lib/mv/src/t2.m4b", Duration: Secs(200), FileSize: 2_000, TrackNumber: 2},
+		{BookID: src.ID, FilePath: "/lib/mv/src/t3.m4b", Duration: Secs(300), FileSize: 3_000, TrackNumber: 3},
 	}
 	for _, f := range srcFiles {
 		require.NoError(t, store.CreateBookFile(f))
 	}
 	require.NoError(t, store.CreateBookFile(&BookFile{
-		BookID: dst.ID, FilePath: "/lib/mv/dst/t1.m4b", Duration: 50, FileSize: 500, TrackNumber: 1,
+		BookID: dst.ID, FilePath: "/lib/mv/dst/t1.m4b", Duration: Secs(50), FileSize: 500, TrackNumber: 1,
 	}))
 
 	// Preconditions: both books already carry correct totals, so a no-op
@@ -132,8 +134,8 @@ func TestMoveBookFilesToBookRefreshesMemDB(t *testing.T) {
 	dst, err := store.CreateBook(&Book{Title: "MemDB Target", FilePath: "/lib/mm/dst"})
 	require.NoError(t, err)
 
-	keep := &BookFile{BookID: src.ID, FilePath: "/lib/mm/src/keep.m4b", Duration: 90, FileSize: 900, TrackNumber: 1}
-	move := &BookFile{BookID: src.ID, FilePath: "/lib/mm/src/move.m4b", Duration: 60, FileSize: 600, TrackNumber: 2}
+	keep := &BookFile{BookID: src.ID, FilePath: "/lib/mm/src/keep.m4b", Duration: Secs(90), FileSize: 900, TrackNumber: 1}
+	move := &BookFile{BookID: src.ID, FilePath: "/lib/mm/src/move.m4b", Duration: Secs(60), FileSize: 600, TrackNumber: 2}
 	require.NoError(t, store.CreateBookFile(keep))
 	require.NoError(t, store.CreateBookFile(move))
 
@@ -189,7 +191,7 @@ func TestMoveBookFilesToBookBulkRecomputesOncePerBook(t *testing.T) {
 			f := &BookFile{
 				BookID:      b.ID,
 				FilePath:    "/lib/bk/s" + string(rune('1'+i)) + "/t" + string(rune('1'+j)) + ".m4b",
-				Duration:    100 * (j + 1),
+				Duration:    Secs(100 * (j + 1)),
 				FileSize:    int64(1_000 * (j + 1)),
 				TrackNumber: j + 1,
 			}
@@ -237,7 +239,7 @@ func TestMoveBookFilesToBookBulkRecomputesOncePerBook(t *testing.T) {
 		sb, err := store.GetBookByID(s.book.ID)
 		require.NoError(t, err)
 		require.NotNil(t, sb.Duration)
-		require.Equal(t, left[0].Duration, *sb.Duration, "source total must drop to its remaining file")
+		require.Equal(t, durtest.Sec(left[0].Duration), *sb.Duration, "source total must drop to its remaining file")
 	}
 }
 
@@ -256,7 +258,7 @@ func TestMoveBookFilesToBookBulkIsAtomic(t *testing.T) {
 	src, err := store.CreateBook(&Book{Title: "Atomic Source", FilePath: "/lib/at/s"})
 	require.NoError(t, err)
 
-	good := &BookFile{BookID: src.ID, FilePath: "/lib/at/s/t1.m4b", Duration: 100, FileSize: 1_000}
+	good := &BookFile{BookID: src.ID, FilePath: "/lib/at/s/t1.m4b", Duration: Secs(100), FileSize: 1_000}
 	require.NoError(t, store.CreateBookFile(good))
 
 	err = store.MoveBookFilesToBookBulk([]BookFileMove{

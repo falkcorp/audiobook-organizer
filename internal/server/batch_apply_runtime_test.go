@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_runtime_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6742e59d-bc2b-4c69-997e-ccbfa8ba1b0c
-// last-edited: 2026-09-19
+// last-edited: 2026-11-04
 
 package server
 
@@ -21,7 +21,7 @@ func chapterFiles(bookID string, n, sec, known int) []database.BookFile {
 	for i := range out {
 		out[i] = database.BookFile{ID: fmt.Sprintf("%s-%02d", bookID, i), BookID: bookID, FilePath: fmt.Sprintf("/lib/Robert Jordan/Shadow Rising/%02d.mp3", i)}
 		if i < known {
-			out[i].Duration = sec
+			out[i].Duration = database.Secs(sec)
 		}
 	}
 	return out

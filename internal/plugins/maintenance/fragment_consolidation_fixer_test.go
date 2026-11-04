@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.31.5
+// version: 1.31.6
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
-// last-edited: 2026-10-25
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -132,7 +132,7 @@ func (f *fragFixture) book(t *testing.T, role, title, importPath string, seriesI
 
 func (f *fragFixture) row(t *testing.T, role, bookID, path, orig string, size int64, dur, track int) {
 	t.Helper()
-	bf := &database.BookFile{BookID: bookID, FilePath: path, OriginalFilename: orig, FileSize: size, Duration: dur, TrackNumber: track}
+	bf := &database.BookFile{BookID: bookID, FilePath: path, OriginalFilename: orig, FileSize: size, Duration: database.Secs(dur), TrackNumber: track}
 	require.NoError(t, f.s.CreateBookFile(bf))
 	f.rowIDs[role] = bf.ID
 }
@@ -1304,7 +1304,7 @@ func TestFragmentFixer_CopyNeedsPathOrHash(t *testing.T) {
 	f.seed(t)
 	h, err := f.s.GetBookFileByID(f.ids["fragH"], f.rowIDs["h01"])
 	require.NoError(t, err)
-	h.Duration = 600 // now equal to the parent row's
+	h.Duration = database.Secs(600) // now equal to the parent row's
 	require.NoError(t, f.s.UpdateBookFile(h.ID, h))
 	// The plan compares the two files' content: other bytes, so held.
 	r := findRow(t, f.plan(t, "op-plan"), fragClassHeld+":"+f.ids["fragH"])
@@ -1316,7 +1316,7 @@ func TestFragmentFixer_CopyNeedsPathOrHash(t *testing.T) {
 	f2.seed(t)
 	h2, err := f2.s.GetBookFileByID(f2.ids["fragH"], f2.rowIDs["h01"])
 	require.NoError(t, err)
-	h2.Duration = 600
+	h2.Duration = database.Secs(600)
 	require.NoError(t, f2.s.UpdateBookFile(h2.ID, h2))
 	f2.noContentReads(t)
 	r2 := findRow(t, f2.plan(t, "op-plan"), fragRowCopyUnproven+":"+f2.ids["suns"])

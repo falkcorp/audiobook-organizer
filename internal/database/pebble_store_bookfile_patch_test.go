@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfile_patch_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1a7e4c92-8d35-4b6f-9e20-6f3b8a5d1c47
-// last-edited: 2026-09-13
+// last-edited: 2026-11-04
 
 package database
 
@@ -10,13 +10,15 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 func seedPatchFile(t *testing.T, s *PebbleStore) *BookFile {
 	t.Helper()
 	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/lib/T"})
 	require.NoError(t, err)
-	f := &BookFile{BookID: b.ID, FilePath: "/lib/T/01.mp3", Format: "mp3", Duration: 100, TrackNumber: 1, DiscNumber: 1}
+	f := &BookFile{BookID: b.ID, FilePath: "/lib/T/01.mp3", Format: "mp3", Duration: Secs(100), TrackNumber: 1, DiscNumber: 1}
 	require.NoError(t, s.CreateBookFile(f))
 	return f
 }
@@ -29,7 +31,7 @@ func TestPatchBookFileFields_KeepsOtherWritersColumns(t *testing.T) {
 	f := seedPatchFile(t, s)
 
 	enriched := *f
-	enriched.Duration = 555
+	enriched.Duration = Secs(555)
 	require.NoError(t, s.UpdateBookFile(f.ID, &enriched))
 
 	track := 7
@@ -41,7 +43,7 @@ func TestPatchBookFileFields_KeepsOtherWritersColumns(t *testing.T) {
 	got, err := s.GetBookFileByID(f.BookID, f.ID)
 	require.NoError(t, err)
 	require.Equal(t, 7, got.TrackNumber)
-	require.Equal(t, 555, got.Duration, "the concurrent writer's Duration must not be reverted")
+	require.Equal(t, 555, durtest.Sec(got.Duration), "the concurrent writer's Duration must not be reverted")
 	require.Equal(t, 1, got.DiscNumber)
 }
 

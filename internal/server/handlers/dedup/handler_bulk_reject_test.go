@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler_bulk_reject_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5d65b248-8432-43e0-9a13-2da6e1228ceb
-// last-edited: 2026-10-06
+// last-edited: 2026-11-04
 
 package deduphandler_test
 
@@ -164,7 +164,7 @@ func TestBulkRejectDedupCandidates_ConcurrentWorkersCaptureEveryLabel(t *testing
 	d.store.EXPECT().GetBookByID(mock.Anything).
 		Return(&database.Book{ID: "x", Title: "T"}, nil).Maybe()
 	d.store.EXPECT().GetBookFiles(mock.Anything).
-		Return([]database.BookFile{{FilePath: "/lib/a.m4b", FileSize: 5 << 20, Duration: 3600}}, nil).Maybe()
+		Return([]database.BookFile{{FilePath: "/lib/a.m4b", FileSize: 5 << 20, Duration: database.Secs(3600)}}, nil).Maybe()
 	var scored atomic.Int32
 	d.engine.EXPECT().ScorePairsForBook(mock.Anything, mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, _ string, _ []dedupengine.RescorePairInput) ([]dedupengine.RescorePairResult, error) {

@@ -1,5 +1,5 @@
 // file: internal/database/book_file_known_duration_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2e9b6f40-7a15-4c83-b0d2-4f1a8e5c3d69
 // last-edited: 2026-11-04
 
@@ -11,7 +11,7 @@ func TestKnownDurationAtPath(t *testing.T) {
 	const size = int64(90_000_000)
 	const hush = 27000 // 7.5 h of "Batman: Hush"
 	row := func(mod func(*BookFileCore)) BookFileCore {
-		r := BookFileCore{FilePath: "/lib/Batman Hush.m4b", FileSize: size, FileHash: "h1", Duration: hush}
+		r := BookFileCore{FilePath: "/lib/Batman Hush.m4b", FileSize: size, FileHash: "h1", Duration: Secs(hush)}
 		if mod != nil {
 			mod(&r)
 		}
@@ -31,10 +31,10 @@ func TestKnownDurationAtPath(t *testing.T) {
 		{"size differs", []BookFileCore{row(nil)}, size + 1, "h1", 0},
 		{"unknown caller size", []BookFileCore{row(nil)}, 0, "h1", 0},
 		{"missing row", []BookFileCore{row(func(r *BookFileCore) { r.Missing = true })}, size, "h1", 0},
-		{"zero duration row", []BookFileCore{row(func(r *BookFileCore) { r.Duration = 0 })}, size, "h1", 0},
-		{"millisecond value", []BookFileCore{row(func(r *BookFileCore) { r.Duration = hush * 1000 })}, size, "h1", 0},
+		{"zero duration row", []BookFileCore{row(func(r *BookFileCore) { r.Duration = nil })}, size, "h1", 0},
+		{"millisecond value", []BookFileCore{row(func(r *BookFileCore) { r.Duration = Secs(hush * 1000) })}, size, "h1", 0},
 		{"skips unusable row for a usable one",
-			[]BookFileCore{row(func(r *BookFileCore) { r.Duration = 0 }), row(nil)}, size, "h1", hush},
+			[]BookFileCore{row(func(r *BookFileCore) { r.Duration = nil }), row(nil)}, size, "h1", hush},
 		{"no rows", nil, size, "h1", 0},
 	}
 	for _, c := range cases {

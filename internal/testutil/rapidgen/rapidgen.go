@@ -1,5 +1,5 @@
 // file: internal/testutil/rapidgen/rapidgen.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b093c713-a945-4937-8871-a7786dd843cb
 
 // Package rapidgen provides reusable `pgregory.net/rapid` generators for the
@@ -118,7 +118,7 @@ func BookFile(t *rapid.T, bookID string) database.BookFile {
 		FilePath:    "/library/" + bookID + "/" + alnum(t, "bf_file", 4, 16) + "." + format,
 		Format:      format,
 		Codec:       rapid.SampledFrom([]string{"aac", "mp3", "flac", "opus"}).Draw(t, "bf_codec"),
-		Duration:    rapid.IntRange(60, 36000).Draw(t, "bf_duration"), // direct: struct-literal generator (keeps rapid draw order); a later PR also draws unknown states
+		Duration:    database.Secs(rapid.IntRange(60, 36000).Draw(t, "bf_duration")), // always known; a later PR also draws unknown and failed states
 		FileSize:    rapid.Int64Range(1024, 2<<30).Draw(t, "bf_size"),
 		TrackNumber: track,
 		TrackCount:  rapid.IntRange(track, track+20).Draw(t, "bf_trackcount"),

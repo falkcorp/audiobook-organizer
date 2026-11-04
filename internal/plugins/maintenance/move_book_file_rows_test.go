@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/move_book_file_rows_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: ec59dece-f7b5-45f6-83e1-f69b95f45340
-// last-edited: 2026-09-26
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,7 +41,7 @@ func newMBFFixture(t *testing.T) mbfFixture {
 	}
 	mk := func(id, book, path string, track, dur int, hash string) {
 		require.NoError(t, s.CreateBookFile(&database.BookFile{ID: id, BookID: book, FilePath: path,
-			TrackNumber: track, Duration: dur, FileSize: int64(dur) * 1000, FileHash: hash}))
+			TrackNumber: track, Duration: database.Secs(dur), FileSize: int64(dur) * 1000, FileHash: hash}))
 	}
 	f.ch01 = "01ROW01000000000000000000A"
 	f.srcOwn = "01ROWSRC00000000000000000B"
@@ -114,7 +115,7 @@ func TestMoveBookFileRows_LiveMovesKeepsHashSetsTrackRecomputesBoth(t *testing.T
 	require.NotNil(t, row)
 	require.Equal(t, "hash01", row.FileHash, "the move must keep the row's hash")
 	require.Equal(t, 1, row.TrackNumber, "track number comes from the filename")
-	require.Equal(t, 854, row.Duration)
+	require.Equal(t, 854, durtest.Sec(row.Duration))
 
 	require.Equal(t, srcBefore-854, mbfDuration(t, f.s, f.src))
 	require.Equal(t, dstBefore+854, mbfDuration(t, f.s, f.dst))
@@ -132,7 +133,7 @@ func TestMoveBookFileRows_Refusals(t *testing.T) {
 	// before any other check.
 	mkSrc := func(id, name string, track int, pid string) {
 		require.NoError(t, f.s.CreateBookFile(&database.BookFile{ID: id, BookID: f.src,
-			FilePath: mbfDirA + "/" + name, TrackNumber: track, Duration: 10, ITunesPersistentID: pid}))
+			FilePath: mbfDirA + "/" + name, TrackNumber: track, Duration: database.Secs(10), ITunesPersistentID: pid}))
 	}
 	itunesRow := "01ROWITUNES00000000000000F"
 	mkSrc(itunesRow, "Warforged Sorcerer - 04.mp3", 4, "ABCDEF0123456789")

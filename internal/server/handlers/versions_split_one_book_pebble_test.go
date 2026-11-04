@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions_split_one_book_pebble_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2b4d6f8a-0c1e-4f3a-8d5b-9e1f3a5c7b86
-// last-edited: 2026-09-13
+// last-edited: 2026-11-04
 
 package handlers_test
 
@@ -36,7 +36,7 @@ func seedSplitBook(t *testing.T, store *database.PebbleStore, bookPath string, f
 	}
 	ids := make([]string, 0, len(files))
 	for _, p := range files {
-		f := &database.BookFile{BookID: src.ID, FilePath: p, Format: "mp3", Duration: 100, FileSize: 10}
+		f := &database.BookFile{BookID: src.ID, FilePath: p, Format: "mp3", Duration: database.Secs(100), FileSize: 10}
 		if err := store.CreateBookFile(f); err != nil {
 			t.Fatalf("create file: %v", err)
 		}
@@ -174,7 +174,7 @@ func TestSplitSegmentsToBooks_AsOneBook_PebbleStore(t *testing.T) {
 		t.Fatalf("create book: %v", err)
 	}
 	mk := func(path string, d int, s int64) string {
-		f := &database.BookFile{BookID: src.ID, FilePath: path, Format: "mp3", Duration: d, FileSize: s}
+		f := &database.BookFile{BookID: src.ID, FilePath: path, Format: "mp3", Duration: database.Secs(d), FileSize: s}
 		if err := store.CreateBookFile(f); err != nil {
 			t.Fatalf("create file: %v", err)
 		}

@@ -1,7 +1,7 @@
 // file: internal/database/book_file_clone.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7b0e4c18-52fd-4a6e-9c33-1d8a5f2e6b40
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package database
 
@@ -27,6 +27,7 @@ import (
 func cloneBookFile(f *BookFile) BookFile {
 	c := *f
 	c.RawTags = maps.Clone(f.RawTags)
+	c.Duration = cloneBookFileScalar(f.Duration)
 	c.AcoustIDFingerprint = slices.Clone(f.AcoustIDFingerprint)
 	c.LastScanMtime = cloneBookFileScalar(f.LastScanMtime)
 	c.LastScanSize = cloneBookFileScalar(f.LastScanSize)

@@ -1,7 +1,7 @@
 // file: internal/database/delete_book_files_for_book_memdb_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2b81f6d4-9e07-4a53-b2c9-e15a08d47f36
-// last-edited: 2026-09-02
+// last-edited: 2026-11-04
 
 package database
 
@@ -44,7 +44,6 @@ func TestDeleteBookFilesForBook_RemovesMemdbRows(t *testing.T) {
 		require.NoError(t, store.CreateBookFile(&BookFile{
 			BookID:   book.ID,
 			FilePath: fmt.Sprintf("/lib/doomed/part-%d.mp3", i),
-			Duration: 0,
 		}))
 	}
 
