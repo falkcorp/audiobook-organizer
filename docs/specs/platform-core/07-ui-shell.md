@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/07-ui-shell.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: 651865f1-0fad-4e15-8169-ceaf4a573f13 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1223,7 +1223,10 @@ The OpenAPI 3.1 documents and the TypeScript client pipeline are owned by
   palette keys and legacy event names, FE2-17): it fails on a string literal passed to
   `usePermission`/`useAction`/`hasPermission`, assigned to a `permission` or `*_PERMISSION` property or
   constant, or placed in the API-key scope list, unless it comes from `manifest.permissions` or the
-  generated client.
+  generated client. On a legacy-backed store (ABO through S10) roles and API keys hold legacy atoms
+  only, and canonical names are an API-level mapping over them (A-2), so a role or key write that
+  names a permission with no legacy atom is refused by 05-rbac; the Roles and API-keys pages show that
+  refusal as a field error (05-rbac owns the code), and a native app's pages never see it.
 * `/invite` and `/login/temp` render before auth gates and read their token from the fragment
   (§7.4.3); `/setup` and the first-run wizard (shell frame plus every enabled module's `setup` steps
   whose `isRequired()` is true) keep today's gate order (`App.tsx:200-251`). From 09 S4, when invite
@@ -1485,6 +1488,9 @@ pattern, the cookie path and the SSE URL together, with the shell reading `<base
 item O7, not a v1 feature.
 
 ## 7.16 Metrics
+
+Names are shown with the default core namespace; each family is `<app.Options.MetricNamespace>_ui_*`
+(ABO: `audiobook_organizer_ui_*`; 06 §6.4.5, A-5).
 
 | Name | Type | Labels |
 |---|---|---|
@@ -1814,3 +1820,8 @@ Round 8 (2026-11-04), findings applied to this file:
 - FE8-8 — §7.19 step 4: ABO's `vite.config.ts` adopts `mediacore(…)` in the same PR as, or before, the one that passes `UIBundle()` to `app.Options.UI`; that PR's image job boots the bundle.
 - FE8-9 — §7.4.4 `FakeRealtime.reset/close/fail` with 05-realtime §4.2's reasons; §7.5.2 heading, §7.9.2, §7.12, §7.13: `core.stream.reset.v1` and an unresumable reconnect run `useResync`, no `resync` frame; `realtime.resume.test.ts` case.
 - FE8-10 — §7.8: `createCoreClient({ buildId, shell })`, no no-argument form.
+
+Advisor (2026-11-04), resolutions applied to this file:
+
+- A-2 / ADV-S1 — §7.9.1: on a legacy-backed store roles and keys hold legacy atoms only; the Roles and API-keys pages show 05-rbac's refusal of a permission without a legacy atom.
+- A-5 / ADV-S4 — §7.16: `ui` series use `app.Options.MetricNamespace` (default `mediacore`).

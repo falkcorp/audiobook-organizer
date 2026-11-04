@@ -1,9 +1,16 @@
 <!-- file: docs/specs/platform-core/08-arr-facade.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 6d9b089a-fb08-4087-9ccd-43b9aa4ec555 -->
 <!-- last-edited: 2026-11-04 -->
 
 # 08 — *arr-v3 facade: `core/arrfacade`
+
+**Status: design sketch (non-normative; A-15, ADV-S9).** Nothing in this file is a contract. The v1
+SDK and the API-stability gate freeze none of it: no type, route, key purpose, scope, config key,
+metric or test named here. The build that creates `arrfacade` with the first TV/Movies app writes the
+normative contract, using this sketch and its fixtures as input; until then the words "must" and
+"required" below describe the sketch's intent, not an obligation on any S0–S10 build. D5's proof depth
+is carried by 10, which shows that the frozen contracts fit TV and Movies.
 
 Evidence commit: `748fd787a`. Raw data: [`raw/16-arr-domain-research.md`](../../plans/platform-core/raw/16-arr-domain-research.md)
 §5 (conventions and endpoint table, public sources fetched 2026-11-03),
@@ -13,8 +20,8 @@ Decision D2: core provides an **extension point and a contract** for an *arr-v3-
 apps implement it per resource; there is **no** commitment to Sonarr/Radarr parity, to their
 database, or to endpoints no named client uses (N3).
 
-**Build status: deferred-build** (03 §3.3, cross-cutting resolution 1, SIMP-1). This file is the
-contract at proof depth (D5). No S0–S10 stage (09 §9.3) builds `arrfacade`; it is built with the first TV/Movies
+**Build status: deferred-build** (03 §3.3, cross-cutting resolution 1, SIMP-1). This file is a design
+sketch at proof depth (D5). No S0–S10 stage (09 §9.3) builds `arrfacade`; it is built with the first TV/Movies
 app. During the extraction only one thing exists: core's reservation of `/api/v3/` (05-http-api
 §4.1). ABO's conformance engine moves to core (`httpapi/conformance`) **when `arrfacade` is built**;
 until then it stays `internal/syncapi/conformance` in ABO, as 04 records, because during S0–S10 it has
@@ -23,13 +30,9 @@ kinds) are deferred-build members of 06 §6.4.9.
 
 **Deferred-build members of built packages (SIMP2-6).** Deferral applies to features inside built
 packages as well as to packages (03 §3.4). Everything below exists only for this facade, has no ABO
-consumer, and is therefore **not** built in S2/S4; each owning file keeps its contract text under a
-heading whose text, after an optional section number, is exactly `Deferred-build members` (03 §3.4),
-with the package-qualified identifiers in its table's first column (exactly `—` for a row with nothing
-to check) and every other item (query-key extraction, the facade clause, tests) in its column headed
-exactly `Also deferred (not checked)`, in any position (COR5-16, SIMP5-6, SIMP6-8),
-and it lands additively in the build that creates `arrfacade`. The table below is a reader's index of
-those entries, not a source of the check:
+consumer, and is therefore **not** built in S2/S4; each owning file keeps its sketch under its
+`Deferred-build members` heading (03 §3.4), and it lands additively in the build that creates
+`arrfacade`. The table below is a reader's index of those entries:
 
 | Member | Owning file | Notes |
 |---|---|---|
@@ -38,19 +41,8 @@ those entries, not a source of the check:
 | `httpapi.Router.FacadeGroup`, `httpapi.RouteKindFacade`, the stage-13 facade refusal clause | 05-http-api §3, §4.2, §4.9 | the `/api/v3/` reservation itself is built |
 | `TestAPIKey_FacadePurposeBoundToModule`, `TestConfining_FacadeKeyRefusedOnNative` | 05-authn, 05-rbac | `Confining` itself is built (the fingerprint worker needs it, SEC-3) |
 
-Absence is checked by one test, not a prose grep: the deferred-members archtest
-`archtest.DeferredMembersAbsent` runs in the root module's `make ci` from S2 (06 §6.4.9, 09 S2) and fails
-when any listed identifier appears in non-test code under `core/`, because `test ! -e core/arrfacade`
-cannot see a feature inside a built package. Its list is generated from the first column of every
-`Deferred-build members` heading under `docs/specs/platform-core/` (03 §3.4; a section number before
-the words is allowed), with package-qualified entries
-(`module.Registrar.ArrFacade`, `auth.PurposeFacade`, `httpapi.Router.FacadeGroup`,
-`httpapi.RouteKindFacade`, `module.ProblemFacadeIncomplete`, `module.ProblemFacadeURLBaseCollision`, …).
 The two facade problem kinds are appended to the end of 06's `ProblemKind` block when this package
-lands, so adding them renumbers nothing (SIMP3-2, SIMP3-11). The PR that adds `arrfacade` deletes the
-facade members' entries only; other deferred members (the download grab pipeline, `acquire`, the AI
-usage ledger, notify's inbox) keep their guard, and the test is deleted when the list is empty
-(SIMP4-1).
+lands, so adding them renumbers nothing (SIMP3-11).
 
 ## 8.1 Purpose & scope
 
@@ -369,7 +361,7 @@ keeps only their `int32` ↔ `integrations.Ref` mapping in `IDMap`. `AppInfo` ca
 ### 8.6.2 Wire resources (proof depth)
 
 D5 limits TV/Movies to proof depth and the facade is deferred-build, so this file does not carry Go
-wire DTOs (SIMP-24). **The contract is the conformance fixtures of §8.14**, which hold every field
+wire DTOs (SIMP-24). **The sketch's reference is the conformance fixtures of §8.14**, which hold every field
 each named client reads, transcribed with provenance; raw/16 §5.2 is the field-level source. Core
 still owns the DTOs when the facade is built (F2): they are written then, from the fixtures, in
 package `arrfacade`. The resources and the fields that matter for behaviour:
@@ -548,6 +540,9 @@ from core `events` topics to SignalR messages inside `arrfacade`, not a core rea
 
 ## 8.13 Metrics
 
+Names are shown with the default core namespace; when built, each family is
+`<app.Options.MetricNamespace>_arrfacade_*` (06 §6.4.5, A-5).
+
 | Name | Type | Labels |
 |---|---|---|
 | `mediacore_arrfacade_requests_total` | counter | `module`, `resource`, `method`, `status` |
@@ -665,3 +660,9 @@ Round 6 (2026-11-04), findings applied to this file:
 
 - SIMP6-8 — §8.0: the heading grammar as 03 §3.4 and 06 §6.4.9 now state it (a first-column entry is a package-qualified identifier or exactly `—`; the unchecked column in any position).
 - R6-3 — checked: the facade supplies no legacy store and names no `legacy` identifier; nothing else to change.
+
+Advisor (2026-11-04), resolutions applied to this file:
+
+- A-15 / ADV-S9 — labelled "design sketch (non-normative)": the SDK and the API-stability gate freeze none of it; the build that creates `arrfacade` writes the contract; §8.6.2 fixtures are the sketch's reference.
+- A-4 / ADV-S3 — §8.0: the `archtest.DeferredMembersAbsent` paragraph and the column grammar removed; the deferred-members table stays a reader's index.
+- A-5 / ADV-S4 — §8.13: facade series named under `app.Options.MetricNamespace`.
