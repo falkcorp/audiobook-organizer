@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-http-api.md -->
-<!-- version: 1.9.1 -->
+<!-- version: 1.10.0 -->
 <!-- guid: fcd387ab-7a8e-49e2-a4b4-a6901aaee1e3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -64,7 +64,9 @@ Measured gin feature use in non-test code at HEAD (`grep` counts over `internal/
 The table is what **native** routes use instead of gin; ABO's existing handlers keep gin under the
 legacy mount, and core never imports gin either way. The only gin-specific *behaviour* with no
 stdlib default is struct-tag validation, which native routes replace deliberately (explicit
-`Validate`, visible in OpenAPI). One gin behaviour the repo documents as a hazard disappears for
+`Validate`, visible in OpenAPI). For the **legacy** routes a second one matters: gin's tree routes a
+static segment before a parameter, so HEAD has route pairs that `ServeMux` cannot register side by
+side, which §4.8's collision rule handles (A-1). One gin behaviour the repo documents as a hazard disappears for
 everything core wraps: gin binds a route's chain at registration, so a later `router.Use` silently
 misses earlier routes (`internal/server/server_lifecycle.go:1712-1717`; the `Alt-Svc` middleware
 added at `:957-960` after `setupRoutes` is the live instance, `raw/09` §2.2 note c). In `httpapi`
@@ -575,22 +577,15 @@ model.
 These land with `arrfacade` (08). Cross-cutting resolution 1 defers `arrfacade`, and deferral applies to features inside built packages
 as well as to packages (SIMP2-6, 03 §3.4). These members of `httpapi` are specified here so that 08
 can rely on them, and are **not built** in 09 S2/S4; they land in the PR that adds `arrfacade`. The
-first column holds only package-qualified identifiers, which the archtest reads; everything else is
-in "Also deferred (not checked)" (COR5-16, SIMP5-6):
+table is planning information (resolution A-4: no archtest checks the absence of these members):
 
 | Member | Also deferred (not checked) | Lands with | Contract |
 |---|---|---|---|
 | `httpapi.Router.FacadeGroup`, `httpapi.RouteKindFacade` | stage 13's facade clause; the OpenAPI `apiKeyHeader` (`X-Api-Key`) security scheme; tests `TestFacadeKey_RefusedOnCoreAndModuleGroups`, `TestFacadeKey_RefusedOnABS`, `TestBuild_PrefixCollision_FacadeVsLegacyV3Ops` | `arrfacade` (08) | `func (r *Router) FacadeGroup(owner, base string) *Group` mounts an *arr facade (§4.9) with route kind `Facade`; stage 13 refuses a facade-purpose key on every non-facade route and a non-facade key on facade routes (SEC-5, 05-authn §3.5) |
 
-Until then SEC-5 holds trivially: no facade key can be minted (05-authn §3.5). Their absence is
-checked by the deferred-members archtest, `archtest.DeferredMembersAbsent` (03 §3.4, 09 S2), from S2 on
-rather than first at S7 (SIMP3-2). Its list is generated from every heading whose text, after an
-optional section number, is `Deferred-build members` under `docs/specs/platform-core/` (03 §3.4 is the
-one definition), reads only the table's first column and matches package-qualified identifiers
-(`httpapi.Router.FacadeGroup`, `httpapi.RouteKindFacade`), never bare names; the PR that
-builds a deferred member deletes **that member's** entry, and the test is deleted when the list is
-empty (COR4-19, SIMP4-1). When the facade lands, the additions are additive and pass the
-API-stability gate.
+Until then SEC-5 holds trivially: no facade key can be minted (05-authn §3.5). The PR that builds a
+deferred member deletes that member's row. When the facade lands, the additions are additive and pass
+the API-stability gate.
 
 ## 4. Behaviour
 
@@ -598,10 +593,10 @@ API-stability gate.
 
 | Prefix | Owner | Notes |
 |---|---|---|
-| `/api/core/v1/…` | core | auth, users, roles, api-keys, sessions, audit, tasks, settings, system, events (SSE), openapi; and the confirmation routes that clear native-only data an app's legacy store suspended because an older build changed its legacy row (R4-1): `POST /roles/{name}/reconfirm` (05-rbac §6.3), API-key re-enable (05-authn §4.4), and `POST /integrations/{kind}/instances/{id}/confirm`, which re-confirms a suspended widening field such as `Local` (`core:admin`, `Guards.Interactive`, audited; 05-metadata) |
+| `/api/core/v1/…` | core | auth, users, roles, api-keys, sessions, audit, tasks, settings, system, events (SSE), openapi |
 | `/api/<moduleID>/v1/…` | module | e.g. `/api/books/v1/books/{id}` (03 §3.6) |
 | `/api/<moduleID>/v{N}/…` | module | a new major only for breaking changes; the old major follows the compat window (09 §9.2.1) |
-| `/livez`, `/readyz` (Public), `/metrics` (`core:metrics.read`) | core infra | payloads in 05-health / 05-metrics; probe names as 05-health defines them (FE2-6) |
+| `/livez`, `/readyz` (Public), `/metrics` (`core:metrics.read`; on ABO every `AnyAuthenticated` principal holds it, 05-rbac §6.3, resolution A-5) | core infra | payloads in 05-health / 05-metrics; probe names as 05-health defines them (FE2-6) |
 | `/api/v1/…`, `/api/v3/ops/…`, `/api/events`, `/health`, `/api/health`, `/auth/temp-login`, ABS unversioned paths | `books` legacy mount (**permanent**, §8) | gin routes from the manifest; the paths of core subsystems that moved to native (auth, users, tasks, …) are `Alias`es of the native routes for the compat window; the three legacy event streams are manifest routes wrapping realtime projections (05-realtime §4.9) |
 | `/api/v3/…` (or `/<moduleID>/api/v3/…`) | *arr facade owner (`tv`/`movies`) | §4.9; deferred-build (§3.6) |
 | `/` | the `books` legacy mount (`ServesSPA`) **until ABO adopts the shell build**; then `core/ui` | §4.10; never both (FE-1) |
@@ -712,7 +707,8 @@ side-effect route that needs idempotency adds it then, in its owner.
   `Deprecation: @<unix time of the row's shipped date>`, `Sunset: <HTTP-date of the row's earliest
   removal>` (advisory), `Link: <target pattern>; rel="successor-version"`, counts
   `mediacore_compat_legacy_use_total{surface="http",name=<legacy pattern>,entry="request"}` (09 §9.2.4;
-  the counter the removal gate P8 reads), and logs once per (alias, principal) per hour at `INFO`.
+  a process-local counter that the owner reads on the reference host before a contract PR; nothing is
+  persisted, resolution A-14), and logs once per (alias, principal) per hour at `INFO`.
 - **Aliases never retarget an action (SEC2-5).** One legacy path may front several native routes when
   the legacy handler multiplexed on a body or query field: `POST /api/v1/auth/api-keys` creates a key
   for the caller, or with `user_id` for another user (`credential_routes.go:93`), so its alias has
@@ -726,7 +722,8 @@ side-effect route that needs idempotency adds it then, in its owner.
   gin pattern is not deleted at S4. One ServeMux pattern cannot be both an alias and a gin route
   (`ErrDuplicateRoute`), and an alias's `Targets` name only native routes (COR3-12).
 - **No clock flips anything.** An alias is replaced by a `Gone` stub only in a contract PR, which
-  `TestNoContractBeforeSunset` and the zero-use gate of 09 §9.2.1 allow; the stub is deleted one minor
+  `TestNoContractBeforeSunset` and the owner's check of 09 §9.2.1 allow (the ledger's dates plus the
+  counter above, A-14); the stub is deleted one minor
   release later — the existing `gone()` convention (`internal/server/gone.go:20-32`) kept, with its
   auth-first ordering. A pinned or old build restarted after its advisory sunset keeps serving its
   aliases.
@@ -751,13 +748,66 @@ the request ID as `origin_request_id` (05-tasks).
 
 | Behaviour of `net/http.ServeMux` (Go 1.22+) | Handling |
 |---|---|
-| Registering two conflicting patterns panics | `Build` registers inside a function with `recover()`, converts the panic text (which names both patterns) into `ErrPatternConflict`; duplicates are detected earlier by our own map for a clearer message |
+| Registering two conflicting patterns panics | `Build` registers inside a function with `recover()`, converts the panic text (which names both patterns) into `ErrPatternConflict`; duplicates are detected earlier by our own map for a clearer message. Legacy routes that gin accepts but `ServeMux` cannot register side by side are resolved before registration by the collision rule below |
 | Subtree pattern `/x/` redirects `/x` → `/x/` | native and legacy manifest routes use exact patterns (`{$}` where needed; gin runs with `RedirectTrailingSlash=false`, `server.go:639`); subtree patterns are allowed only for the legacy `/api/` and `/` fallbacks and the SPA |
 | Unclean paths (`//x`, `/./x`, `/a/../b`) are 301-redirected to the clean path | gin does not do this (`RedirectFixedPath=false`, `server.go:640`), and the SPA fallback answers such variants itself (`spa_fallback.go:90`). The router checks `path.Clean` before the mux: an unclean `/api/` path → problem 404; any other unclean path goes to the `/` owner (legacy mount or SPA handler) unchanged, whose own normalization decides |
 | More specific pattern wins across methods/paths | the basis of native routes shadowing legacy ones (§8.1) and of prefix claims (§4.9) |
 | `{name...}` wildcard | translation of gin `*name`; gin `:name` → `{name}` |
 | 405 + `Allow` generated automatically | wrapped into problem+json (§4.3) |
-| Wildcards match **escaped** segments (`/a%2Fb` is one segment), while gin with `UseRawPath=false` routes on the decoded `r.URL.Path` (`server.go:637-641`), so the two can pick different routes for one request | the legacy handler wrapper passes the matched `r.Pattern` to gin, and after gin routed, a request whose `c.FullPath()` is not the manifest entry of that pattern gets 404 in the legacy error shape before any gin handler runs (SEC2-22, §8.2) |
+| Wildcards match **escaped** segments (`/a%2Fb` is one segment), while gin with `UseRawPath=false` routes on the decoded `r.URL.Path` (`server.go:637-641`), so the two can pick different routes for one request | the legacy handler wrapper passes the matched `r.Pattern` to gin, and after gin routed, a request whose `c.FullPath()` is not the manifest entry of that pattern (for a generalised pattern, of one of its members) gets 404 in the legacy error shape before any gin handler runs (SEC2-22, §8.2) |
+
+**Route collision rule (resolution A-1, ADV-1).** Gin's tree accepts two routes that `ServeMux` refuses
+as a pair: gin routes a static segment before a parameter at the same depth, while two `ServeMux`
+patterns that both match some path, and of which neither is more specific, conflict and panic. HEAD has
+such pairs. The advisor registered the HEAD route dump (`raw/09-http-api.md` §3.1–3.2, 572 routes at
+`748fd787a`) pair by pair in a go1.27.0 `ServeMux` under this section's translation (`:name` →
+`{name}`, `*name` → `{name...}`, `/` → `/{$}`) and found exactly five conflicting pairs
+(`reviews/spec-advisor-review.md` appendix A, re-checked against the code):
+
+| Pattern A | Pattern B | Build | Anchors (@748fd787a) |
+|---|---|---|---|
+| `GET /api/v1/operations/{id}/activity` | `GET /api/v1/operations/v2/{id}` | default | `internal/server/wire_library_routes.go:48`; `internal/server/wire_operations_routes.go:27` |
+| `GET /api/v1/operations/{id}/changes` | `GET /api/v1/operations/v2/{id}` | default | `wire_operations_routes.go:110`; `:27` |
+| `GET /api/v1/operations/{id}/result` | `GET /api/v1/operations/v2/{id}` | default | `wire_operations_routes.go:103`; `:27` |
+| `GET /api/v1/operations/{id}/results` | `GET /api/v1/operations/v2/{id}` | default | `internal/server/server_lifecycle.go:1952`; `wire_operations_routes.go:27` |
+| `GET /api/me/item/{id}/remove-from-continue-listening` | `GET /api/me/item/listening-sessions/{id}` | ABS on | `internal/server/handlers/abs/handler.go:871`; `:885` (the comment at `:882-884` records that gin routes the static sibling first) |
+
+Go reports, for example, that both patterns of the first pair match `/api/v1/operations/v2/activity`
+and neither is more specific. Every default-build route above is `s.perm(library.view)`, and both ABS
+routes run `ABSRequireAuth` with `loginCeiling` and no route permission. The rule:
+
+1. **Conflict graph.** `Build` (the manifest generator of §8.2) registers every manifest route (and, from S4, every
+   native route and alias of the same build) pair by pair as above, for each build variant (ABS on and
+   off), and takes the connected components of the "conflicts with" relation. A component that holds
+   routes of more than one owner fails `Build` with `ErrPatternConflict`.
+2. **Kept and folded routes.** In a component, a route stays its **own** pattern when gin routes every
+   overlap with each of its conflicting partners to it (a static segment where the partner has a
+   parameter, gin's tree rule). Every other route of the component is **folded**. For the five pairs
+   the kept routes are `GET /api/v1/operations/v2/{id}` and `GET /api/me/item/listening-sessions/{id}`.
+3. **One generalised pattern.** The folded routes, the component's **members**, register as one
+   pattern: their shared path with every segment in which a member or a kept partner differs replaced
+   by a wildcard named by position (`GET /api/v1/operations/{p4}/{p5}`, `GET /api/me/item/{p4}/{p5}`).
+   Every kept route must be strictly more specific than it, so `…/operations/v2/{id}` stays its own,
+   strictly more specific pattern, and the generalised pattern must conflict with no other route.
+   Members of different segment counts, or with a `{name...}` wildcard, cannot share a pattern. Each of
+   these cases fails `Build` with `ErrPatternConflict`.
+4. **Identical requirements.** The members must agree in every field a stage before gin reads: `Perm`
+   (the same `rbac.LegacyAtom` atom included), `Guards`, `Public`, `RateClass`, `OwnAuth` with its
+   `AuthMethod`, `BasicExempt` and `NoCompress`. Any difference fails `Build` with `ErrPatternConflict`, so the judgment
+   stages 8–13 make on the generalised pattern is the judgment for each member. Both sets meet this
+   today.
+5. **Post-gin check.** The pattern check of the previous row and of §8.2 accepts the `c.FullPath()` of
+   any member of the matched pattern and refuses everything else (404, legacy shape), so a path the
+   generalised pattern matches but no member does (`/api/v1/operations/x/y`) never reaches a handler.
+6. **Real engine.** From S2 r1 the test runs over `(*gin.Engine).Routes()` of the real engine, built
+   with ABS on and with ABS off, never over a fixture (`TestLegacyManifest_RegistersAsMuxPatterns`).
+   For each conflicting pair it also sends Go's overlap example through the mux and through gin and
+   asserts that the mux pattern chosen has gin's route among its members, or is that route.
+7. **S5.** At T0+T1 the core alias `GET /api/v1/operations/v2/{id}` (05-tasks) replaces books' kept
+   route. It is strictly more specific than books' generalised pattern, so it registers beside it, and
+   as a ledger-listed core alias it is exempt from `ErrShadow` (§4.9, SEC3-8);
+   `TestS5_CoreAliasesRegisterBesideLegacy` asserts both. Moving the four `…/{id}/…` routes to core in
+   the same PR would also work and is not chosen.
 
 ### 4.9 Prefix claims and the `/api/v3` collision
 
@@ -850,10 +900,16 @@ and an *arr-v3 facade, whose clients call `<base>/api/v3/…` (`raw/16` §5.1). 
    `core/internal/<capability>http` (`authhttp`, `rbachttp`, `audithttp`, `taskhttp`, `eventhttp`,
    `confighttp`, `backuphttp`, `updaterhttp`, `healthhttp`, `libraryhttp`, `storagehttp` (from S4 r2:
    `POST /api/core/v1/system/factory-reset`, request `{"confirm": "RESET"}`, 422 `confirm_required`
-   otherwise; it receives the kernel's staging function as a storagehttp-local `Stager`, never
+   otherwise; it deletes the library files under `RootDir` only with `"delete_library_files": true`,
+   confirmed by `"library_root"` and `"library_file_count"` equal to the configured `RootDir` and the file
+   count found under it at staging: a missing or mismatched confirmation answers 422
+   `library_files_confirm_required` whose problem body names the current `library_root` and
+   `library_file_count`, and success answers 200 `{"reset_id", "message", "library_root",
+   "library_file_count"}` (05-rbac §6.2, resolution A-17); it receives the kernel's staging function as a storagehttp-local `Stager`, never
    `*storage.Admin`, COR8-2. HEAD's `POST /api/v1/system/factory-reset` (`ResetFactory`) and
    `POST /api/v1/system/reset` (`ResetStore`) both become its aliases with `LegacyError` and a `Shape`
-   keeping HEAD's `{"data": {"message": …}}`; the reset alias picks its kind with the path value of §3.1's
+   keeping HEAD's `{"data": {"message": …}}`; the factory-reset alias passes `delete_library_files: true`,
+   keeping HEAD's wipe; the reset alias picks its kind with the path value of §3.1's
    `Request`; 05-rbac §6.2, resolutions R7-2, R8-1, COR8-1), `modulehttp` for
    `GET /api/core/v1/modules` (the kernel passes it a read-only `ModulesView` — catalog snapshot,
    `restart_required`, the `ui_build_id` source: the served **shell** bundle's ID,
@@ -887,7 +943,7 @@ and an *arr-v3 facade, whose clients call `<base>/api/v3/…` (`raw/16` §5.1). 
 |---|---|---|---|
 | Route without `Perm` | boot error `ErrNoPermission` | closed | R6 |
 | Route `Perm` scope unknown / foreign namespace | boot error | closed | prevents typos and cross-module escalation (05-rbac §4.9) |
-| Pattern conflict / duplicate / prefix collision / two owners of `/` | boot error | closed | silent shadowing is worse than not starting |
+| Pattern conflict that the collision rule of §4.8 cannot resolve (a cross-owner component, members with different requirements or shapes, a generalised pattern that conflicts again) / duplicate / prefix collision / two owners of `/` | boot error `ErrPatternConflict` / `ErrDuplicateRoute` / `ErrPrefixCollision` | closed | silent shadowing is worse than not starting; a resolvable same-owner set registers as one generalised pattern (A-1) |
 | Native JSON property not snake_case | boot error `ErrJSONName` | closed | one wire convention (FE-12) |
 | Legacy route missing from the manifest or without a permission | boot error `ErrLegacyManifest` | closed | R6 over the running table (SEC-13) |
 | `LegacyAuthGin` mount not named by `app.Options.LegacyAuthGinUntil`; `OwnAuth` route naming no compat method its module registered | boot error `ErrLegacyAuthGin` / `ErrOwnAuthMethod` | closed | no module skips stages 8, 12, 13 by self-declaration (SEC2-17) |
@@ -895,7 +951,7 @@ and an *arr-v3 facade, whose clients call `<base>/api/v3/…` (`raw/16` §5.1). 
 | Shell route segment equals a non-SPA server segment | boot error `ProblemSPASegmentCollision` (06) | closed | FE2-7 |
 | Alias or legacy route outside its owner's claims; a cross-owner more specific pattern | boot error `ErrAliasOutsideClaim` / `ErrShadow` | closed | silent capture of another owner's requests (SEC3-8) |
 | Alias request carries a legacy field the target does not know | 400 `legacy_field_unsupported` | closed | a dropped selector retargets the action (SEC2-5) |
-| Mux pattern and gin's own match disagree (escaped segment) | 404 in the legacy shape, gin handler not run | closed | SEC2-22 |
+| Mux pattern and gin's own match disagree (escaped segment; a generalised pattern matched by no member) | 404 in the legacy shape, gin handler not run | closed | SEC2-22, A-1 |
 | Non-Public `Infra` route without the scope (`/metrics`) | 401 / 403 like any route | closed | SEC2-14 |
 | Request ID generation fails (crypto/rand) | fall back to monotonic counter id `local-<n>` | open | correlation only, not security |
 | Tracing exporter down | request proceeds | open | observability must not take the API down |
@@ -912,7 +968,7 @@ and an *arr-v3 facade, whose clients call `<base>/api/v3/…` (`raw/16` §5.1). 
 | Missing scope / confined principal | 403 + audit denial (access log `security_event` before 09 S4) | closed | |
 | Audit write for a denial fails | request still 403; `mediacore_audit_dropped_total` | open (audit) / closed (request) | the denial is enforced regardless |
 | Cursor invalid or filter mismatch | 400 `invalid_cursor` | closed | |
-| Alias past its advisory sunset | still served, still counted | open | removal is a contract PR (OPS-10) |
+| Alias past its advisory sunset | still served, still counted | open | removal is a contract PR after the owner's check (OPS-10, A-14) |
 | Gone stub | 410 `gone` | closed | contract |
 | Response encode error after headers sent | log + abort connection | — | nothing else possible |
 
@@ -1029,9 +1085,9 @@ stage, 09 S4 (OPS-11). There is no gin-retirement stage.
 
 | 09 stage | What changes in HTTP | Who authenticates / authorizes the legacy mount | Rollback |
 |---|---|---|---|
-| S2 (H0) | `core/httpapi` exists; ABO's `main` builds `app.New(opts, books.Module())` with `app.Options.LegacyAuthGinUntil: "books"`; `books` calls `MountLegacy(Auth: LegacyAuthGin)` with the whole gin engine; **every manifest route is its own mux pattern**; at **S2 r2** the perimeter moves to core stages 0–11 and is removed from gin in the same PR (logger, recovery, security headers with `DefaultCSP` = today's per-response `contentSecurityPolicy()` and `Reporting-Endpoints` (FE2-1), CORS, gzip with HEAD's per-path exclusions, tracing, the `/api` rate limiter with per-route `RateClass`), **except the Basic gate (stage 8), which stays in gin until S3** because core reads its password, a legacy encrypted secret row, only through the config and secrets stores that land at S3 (09 S2); stage 5 emits `X-App-Build` on every response (FE2-5, OPS2-13). **Perimeter settings keep their UI-saved values (COR3-1, R3-1):** the perimeter keys (`core.http.rate_limit.*` = `enable_rate_limit`/`api_rate_limit_per_minute`, CORS origins, peer allow-list; from S3 also `core.http.basic_gate.*` = `basic_auth_enabled`) are read through config's override store from S2 — for ABO the books-supplied legacy config store over ABO's settings blob (05-config; resolutions R4-1, R4-6) — so a value saved only in the UI and a live edit through `PUT /api/v1/config` reach stages 0, 6 and 10 as they do today (and stage 8 from S3; until then gin's `basicauth.go:26` reads it live). For these legacy keys books' store keeps HEAD's precedence until cutover: a value persisted through the UI wins over an environment default exactly as at HEAD, so compose's always-set `BASIC_AUTH_ENABLED=${BASIC_AUTH_ENABLED:-false}` (`docker-compose.yml:20`) cannot switch off a gate enabled in the UI (resolution R5-1(a), OPS5-1; 05-config); done-check `TestPerimeterHonoursBlobOnlyValues`; cross-origin protection (stage 7) is new, and its refusals go to the access log as `security_event` until `audit` exists at S4 (SEC2-20); the 36 permission-less routes are annotated `AnyAuthenticated` in the manifest (R6 must hold at S2), and **every `s.perm(atom)` route's `Perm` records `rbac.LegacyAtom(atom)`** from the S2 leaf constructor, which needs no catalog (05-rbac §3, COR6-1): the reviewed manifest is final from S2, nothing re-annotates those entries later (only `/metrics` changes, at S4 r2), and stage 13 starts enforcing the recorded values at S4 r2 (`TestS2Manifest_SPermRoutesCarryLegacyAtom`). **Client address (SEC2-19):** stage 0 resolves it and publishes it (`ClientAddrFrom`); ABO's `client_trust.go` stays in ABO until S4, and from S2 its `trustedClientIP` (used by the bootstrap, invite and ABS limiters, `bootstrap_rate_limit.go:207`, `invite_rate_limit.go:405`, `client_trust.go:600`) starts from that value and keeps only its "local peer + verified Access assertion" branch on top; at S4 that branch moves into ABO's `internal/cfaccess` authenticator | gin only (CF binder, `RequireAuth`, `s.perm`, `RequireAdmin`, `credGuard`, `RequireOwner` unchanged); core stages 12–13 off for the mount | revert to the old `main`; storage untouched |
-| S3 | The Basic gate (stage 8) moves from gin into the core perimeter with HEAD's exempt set (`OwnAuth`, `BasicExempt`, `BasicExemptAssets`; SEC-14, COR4-9) and refuses an enabled gate with no password (§4.2 stage 8, R5-1(c)); stage 8 reads `core.http.basic_gate.*` through config (§10), and for ABO books' legacy config store serves the password from HEAD's own encrypted row and `basic_auth_enabled` with HEAD's precedence (R5-1(a),(b)); `basicauth.go` is deleted from gin in the same PR (04 §7) | gin only, as S2 | binary swap. The Basic password is **not moved** during the extraction: HEAD already stores it encrypted (`internal/config/persistence.go:1955-1958`), books' store reads and writes that row in place, and no sentinel is written (resolution R5-1(b), OPS5-2). After a rollback the older build's gate accepts the same password, a password re-entered there is the one the next roll-forward reads, and a password cleared there leaves core's gate closed (stage 8) and the hotfixed older gate closed (05-authn §11.1 item 5) |
-| S4 | **r1 (dark):** `auth` and `rbac` land and are built over the stores the books module supplies (`module.Manifest.LegacyStores`, 05-authn §3.4, 05-rbac §3.4: ABO code over ABO's own rows, so core holds no audiobook key name and no storage grant is involved, resolution R4-1); the kernel runs their read-only decode census at P4d; the mount stays `LegacyAuthGin`, no native route exists, and nothing is written through the stores (COR4-4). **r2 (flip):** `LegacyAuth` switches to `LegacyAuthCore`, and the same PR removes `LegacyAuthGinUntil` from `app.Options` (an archtest fails if it is still present after S4, SEC2-17): stage 12 binds the core principal and stage 13 enforces each manifest route's `Perm`/`Guards` — for an `s.perm(atom)` route, the `rbac.LegacyAtom(atom)` its entry has recorded since S2: for a role principal `AllOf` the native scope set equivalent to the atom's **full** legacy reach (resolution R4-3), for a key whose scopes come from its legacy row (no extension record holding canonical scopes, 05-authn §4.4) HEAD's role ∩ key reach (SEC5-7, SEC6-2), for the auth-disabled principal the atom's expansion (COR5-4) (§8.2, 05-rbac §3.1, §6.3); the same PR re-annotates the legacy `/metrics` entry from `AnyAuthenticated` to `core:metrics.read`, so scoped legacy scrape keys change at S4, as 09 §9.2.6 records (OPS5-5, SEC5-13; `TestLegacyMetricsRoute_RequiresScopeFromS4`); inside gin the auth middleware becomes the bridge of §8.3 (it never authenticates; its authorization adapters still enforce through `rbac.Require`); core auth/users/roles/keys/sessions routes and the settings routes (`/api/core/v1/settings`, `/settings/schema`, 05-config §1.3.4; FE3-11; until S4 settings go through ABO's `/api/v1/config`) go native under `/api/core/v1` and the legacy identity paths become `Alias`es with targets and selectors (§4.6; more specific than the gin patterns they replace, which are deleted in the same PR), except paths that cannot be mapped (`PUT /api/v1/auth/me/password` with `user_id` stays a gin route calling `auth.Service`, SEC2-5); the core factory-reset route lands in `internal/storagehttp` and `POST /api/v1/system/factory-reset` becomes its `Alias` (from S2b until this PR books' gin handler, behind HEAD's chain, only stages the reset through `legacy.Maintenance.StageFactoryReset`; no core route exists before r2; 05-rbac §6.2, resolution R7-2); stage 7 and stage 13 refusals are audited from here | r1: gin only, as S2–S3; r2: core; gin bridge | binary swap (r2 → r1 and S4 → S3). Identity rows keep their one stored format and are read and written by books' own legacy stores in both r1 and r2, so a rollback between the S4 releases never meets a missing grant (DATA4-2). Native-only data (canonical scopes, hashed sessions, native one-time tokens) lives in a books-owned extension family that older builds never read, never as extra strings in legacy rows (SEC4-3): an older build refuses every key and user restricted here, grants a role only the legacy atoms the row rule admitted, and its browser users sign in once; an extension whose legacy row an older build changed is suspended on roll-forward (05-authn §11, 05-rbac §6.3). There is no rollback floor for S4 and no identity level step |
+| S2 (H0) | `core/httpapi` exists; ABO's `main` builds `app.New(opts, books.Module())` with `app.Options.LegacyAuthGinUntil: "books"`; `books` calls `MountLegacy(Auth: LegacyAuthGin)` with the whole gin engine; **every manifest route is a mux pattern**, its own or, for a conflicting same-owner set, one generalised pattern (§4.8 collision rule, resolution A-1; `TestLegacyManifest_RegistersAsMuxPatterns` runs on the real engine, ABS on and off, from S2 r1); at **S2 r2** the perimeter moves to core stages 0–11 and is removed from gin in the same PR (logger, recovery, security headers with `DefaultCSP` = today's per-response `contentSecurityPolicy()` and `Reporting-Endpoints` (FE2-1), CORS, gzip with HEAD's per-path exclusions, tracing, the `/api` rate limiter with per-route `RateClass`), **except the Basic gate (stage 8), which stays in gin until S3** because core reads its password, a legacy encrypted secret row, only through the config and secrets stores that land at S3 (09 S2); stage 5 emits `X-App-Build` on every response (FE2-5, OPS2-13). **Perimeter settings keep their UI-saved values (COR3-1, R3-1):** the perimeter keys (`core.http.rate_limit.*` = `enable_rate_limit`/`api_rate_limit_per_minute`, CORS origins, peer allow-list; from S3 also `core.http.basic_gate.*` = `basic_auth_enabled`) are read through config's override store from S2 — for ABO the books-supplied legacy config store over ABO's settings blob (05-config; resolutions R4-1, R4-6) — so a value saved only in the UI and a live edit through `PUT /api/v1/config` reach stages 0, 6 and 10 as they do today (and stage 8 from S3; until then gin's `basicauth.go:26` reads it live). For these legacy keys books' store keeps HEAD's precedence until cutover: a value persisted through the UI wins over an environment default exactly as at HEAD, so compose's always-set `BASIC_AUTH_ENABLED=${BASIC_AUTH_ENABLED:-false}` (`docker-compose.yml:20`) cannot switch off a gate enabled in the UI (resolution R5-1(a), OPS5-1; 05-config); done-check `TestPerimeterHonoursBlobOnlyValues`; cross-origin protection (stage 7) is new, and its refusals go to the access log as `security_event` until `audit` exists at S4 (SEC2-20); the 36 permission-less routes are annotated `AnyAuthenticated` in the manifest (R6 must hold at S2), and **every `s.perm(atom)` route's `Perm` records `rbac.LegacyAtom(atom)`** from the S2 leaf constructor, which needs no catalog (05-rbac §3, COR6-1): the reviewed manifest is final from S2 and nothing re-annotates those entries later (`/metrics` keeps `AnyAuthenticated` on ABO, resolution A-5), and stage 13 starts enforcing the recorded values at S4 r2 (`TestS2Manifest_SPermRoutesCarryLegacyAtom`). **Client address (SEC2-19):** stage 0 resolves it and publishes it (`ClientAddrFrom`); ABO's `client_trust.go` stays in ABO until S4, and from S2 its `trustedClientIP` (used by the bootstrap, invite and ABS limiters, `bootstrap_rate_limit.go:207`, `invite_rate_limit.go:405`, `client_trust.go:600`) starts from that value and keeps only its "local peer + verified Access assertion" branch on top; at S4 that branch moves into ABO's `internal/cfaccess` authenticator | gin only (CF binder, `RequireAuth`, `s.perm`, `RequireAdmin`, `credGuard`, `RequireOwner` unchanged); core stages 12–13 off for the mount | revert to the old `main`; storage untouched |
+| S3 | The Basic gate (stage 8) moves from gin into the core perimeter with HEAD's exempt set (`OwnAuth`, `BasicExempt`, `BasicExemptAssets`; SEC-14, COR4-9) and refuses an enabled gate with no password (§4.2 stage 8, R5-1(c)); stage 8 reads `core.http.basic_gate.*` through config (§10), and for ABO books' legacy config store serves the password from HEAD's own encrypted row and `basic_auth_enabled` with HEAD's precedence (R5-1(a),(b)); `basicauth.go` is deleted from gin in the same PR (04 §7) | gin only, as S2 | binary swap. The Basic password is **not moved** during the extraction: HEAD already stores it encrypted (`internal/config/persistence.go:1955-1958`), books' store reads and writes that row in place (resolution R5-1(b), OPS5-2). After a rollback the older build's gate accepts the same password, a password re-entered there is the one the next roll-forward reads, and a password cleared there leaves core's gate closed (stage 8) and the hotfixed older gate closed (05-authn §11.1 item 5) |
+| S4 | **r1 (dark):** `auth` and `rbac` land and are built over the stores the books module supplies (`module.Manifest.LegacyStores`, 05-authn §3.4, 05-rbac §3.4: ABO code over ABO's own rows, so core holds no audiobook key name and no storage grant is involved, resolution R4-1); the kernel runs their read-only decode census at P4d; the mount stays `LegacyAuthGin`, no native route exists, and nothing is written through the stores (COR4-4). **r2 (flip):** `LegacyAuth` switches to `LegacyAuthCore`, and the same PR removes `LegacyAuthGinUntil` from `app.Options` (an archtest fails if it is still present after S4, SEC2-17): stage 12 binds the core principal and stage 13 enforces each manifest route's `Perm`/`Guards` — for an `s.perm(atom)` route, the `rbac.LegacyAtom(atom)` its entry has recorded since S2: for a role principal `AllOf` the native scope set equivalent to the atom's **full** legacy reach (resolution R4-3), for a key of books' legacy store (every ABO key holds legacy atoms through S10, 05-authn §4.4) HEAD's role ∩ key reach (SEC5-7), for the auth-disabled principal the atom's expansion (COR5-4) (§8.2, 05-rbac §3.1, §6.3); the legacy `/metrics` entry stays `AnyAuthenticated`, because ABO's roles and keys cannot hold the core-only `core:metrics.read` before the identity hardening cutover (resolution A-5, 05-rbac §6.3); inside gin the auth middleware becomes the bridge of §8.3 (it never authenticates; its authorization adapters still enforce through `rbac.Require`); core auth/users/roles/keys/sessions routes and the settings routes (`/api/core/v1/settings`, `/settings/schema`, 05-config §1.3.4; FE3-11; until S4 settings go through ABO's `/api/v1/config`) go native under `/api/core/v1` and the legacy identity paths become `Alias`es with targets and selectors (§4.6; more specific than the gin patterns they replace, which are deleted in the same PR), except paths that cannot be mapped (`PUT /api/v1/auth/me/password` with `user_id` stays a gin route calling `auth.Service`, SEC2-5); the core factory-reset route lands in `internal/storagehttp` and `POST /api/v1/system/factory-reset` becomes its `Alias`, which passes `delete_library_files: true` and so keeps HEAD's wipe (resolution A-17, 05-rbac §6.2; from S2b until this PR books' gin handler, behind HEAD's chain, only stages the reset through `legacy.Maintenance.StageFactoryReset`; no core route exists before r2; 05-rbac §6.2, resolution R7-2); stage 7 and stage 13 refusals are audited from here | r1: gin only, as S2–S3; r2: core; gin bridge | binary swap (r2 → r1 and S4 → S3). Identity rows keep HEAD's stored representation through S10 and are read and written by books' own legacy stores in both r1 and r2, so a rollback between the S4 releases never meets a missing grant (DATA4-2). Sessions stay raw `sess:` rows, keys `abk_` keys holding legacy atoms, and roles hold legacy atoms only (resolution A-2): an older build reads every session, key, invite and role this build wrote, refuses every key and user restricted here, grants a role only the legacy atoms the row rule admitted, and signs no one out (05-authn §11, 05-rbac §6.3). There is no rollback floor for S4 and no identity level step |
 | S5, S6, … | each core subsystem's routes go native in the stage that moves it (tasks S5, events S6, …), legacy paths aliased; at S6 the three legacy event streams stay gin manifest routes (`Perm` `AnyAuthenticated`, `OwnAuth` false) whose handler is the realtime projection obtained through `Registrar.Realtime().Projection` (05-realtime §4.9, COR2-1) | core | per stage |
 | any later | a books route group moves to `/api/books/v1` **only when rewritten for its own reasons** (SIMP-2); its old paths become aliases | core | per group |
 
@@ -1045,7 +1101,7 @@ blob turns stage 8 on also with compose's `BASIC_AUTH_ENABLED=false` in the envi
 Basic-gate half of `TestPerimeterHonoursBlobOnlyValues`, OPS5-1), an enabled gate with no password
 refuses (`TestBasicGate_EmptyPasswordRefuses`), and the R-test row keeps the password across a
 rollback (`TestBasicGate_PasswordReadInPlaceAcrossRollback`, OPS5-2).
-`TestLegacyRoleReachUnchanged` (572 routes × 4 roles, plus scoped keys, auth-off and a custom-role half
+`TestLegacyRoleReachUnchanged` (every manifest route × the 4 seed roles, 572 routes at `748fd787a`, a count the test generates at the stage's base commit, ADV-11; plus scoped keys, auth-off and a custom-role half
 over random native roles, SEC4-2) belongs to S4 r2, where the engine moves, and stays a permanent CI
 test because the mount is permanent.
 
@@ -1055,7 +1111,7 @@ test because the mount is permanent.
 type LegacyMount struct {
 	Owner      string                // "books"
 	Handler    http.Handler          // *gin.Engine
-	Routes     iter.Seq[LegacyRoute] // manifest: every gin route; each becomes its own mux pattern
+	Routes     iter.Seq[LegacyRoute] // manifest: every gin route; each becomes its own mux pattern or a member of one generalised pattern (§4.8 collision rule)
 	Auth       LegacyAuth            // LegacyAuthGin only while app.Options.LegacyAuthGinUntil names Owner (09 S2–S3) | LegacyAuthCore
 	ServesSPA  bool                  // owns "/" and serves the SPA through gin NoRoute (§4.10)
 	DefaultCSP func(*http.Request) string // stage 5 policy for this mount's responses, evaluated per response (ABO: today's contentSecurityPolicy(), FE2-1)
@@ -1069,7 +1125,7 @@ type LegacyMount struct {
 
 type LegacyRoute struct {
 	Method, GinPath string
-	Perm            rbac.Requirement // s.perm atom: rbac.LegacyAtom(atom), recorded from S2 (COR6-1), enforced from S4 r2 — roles: Catalog.LegacyReach(atom), AllOf the atom's full legacy reach (R4-3); keys whose scopes come from the legacy row: role ∩ key atoms (SEC5-7, SEC6-2); auth-disabled: the expansion (COR5-4); 05-rbac §3.1, §6.3. Admin kind: 05-rbac §6.2; Delegated when OwnAuth
+	Perm            rbac.Requirement // s.perm atom: rbac.LegacyAtom(atom), recorded from S2 (COR6-1), enforced from S4 r2 — roles: Catalog.LegacyReach(atom), AllOf the atom's full legacy reach (R4-3); keys of a legacy-backed store, whose scopes are legacy atoms: role ∩ key atoms (SEC5-7); auth-disabled: the expansion (COR5-4); 05-rbac §3.1, §6.3. Admin kind: 05-rbac §6.2; Delegated when OwnAuth
 	Guards          Guards           // from credRoute / RequireOwner recording
 	Public          bool             // on the reviewed list of 15 (raw/09 §2.4)
 	OwnAuth         bool             // the route's gin chain runs a compat authenticator (ABSRequireAuth); stages 8 (Basic), 12, 13 skip it (SEC-14)
@@ -1109,10 +1165,11 @@ set after S4), else `ErrLegacyAuthGin`. `OwnAuth: true` (skips stages 8, 12, 13)
   `internal/server/wire_admin_role.go:63-70`) to `s.perm`, the ABS auth middleware and the rate
   limiter, and by walking `(*gin.Engine).Routes()`. `Build` fails with `ErrLegacyManifest` when the
   walk and the manifest differ (a gin route without an entry, or an entry without a gin route).
-- **Each manifest route is registered as its own `ServeMux` pattern** (gin path → mux pattern, §4.8)
-  with the gin engine as the handler (SEC-13), behind a wrapper that passes the matched `r.Pattern`
-  to gin and refuses (404, legacy shape) a request whose gin match `c.FullPath()` is not that
-  pattern's manifest entry, so the route stages 8, 10 and 13 judged is the route gin runs (SEC2-22,
+- **Each manifest route is registered as its own `ServeMux` pattern** (gin path → mux pattern, §4.8),
+  or, when it belongs to a conflicting same-owner set, as a member of that set's one generalised pattern
+  (§4.8 collision rule, resolution A-1), with the gin engine as the handler (SEC-13), behind a wrapper
+  that passes the matched `r.Pattern` to gin and refuses (404, legacy shape) a request whose gin match
+  `c.FullPath()` is not that pattern's manifest entry or one of its members, so the route stages 8, 10 and 13 judged is the route gin runs (SEC2-22,
   §4.8). From S4, stage 13 enforces its `Perm` and `Guards`,
   so the manifest is the running chain, not documentation, and `archtest.RoutesHavePermissions`
   checks what is served. A request matching no manifest route never reaches gin's `NoRoute`, except
@@ -1137,7 +1194,7 @@ gin route that ever disagreed with its mux pattern would still be checked (SEC2-
 | zero users → pass everything | `middleware/auth.go:165-169` | gone: stage 13 allows only Public + setup/bootstrap (05-authn §4.2) |
 | worker-only path confinement | `middleware/auth.go:265-298`, ABS half `middleware/absauth.go:629-632` | `Confining` scopes at stage 13 (05-rbac §4.10) for every route stage 13 runs on; for `OwnAuth` (ABS) routes, which stage 13 skips, the ABS adapter keeps the check (next rows) — `abortWorkerOnlyOutsideWorkerAPI` is **replaced**, not deleted (SEC2-4) |
 | Cloudflare Access fail-open binder | `middleware/cfaccess.go:20-139` | ABO's `internal/cfaccess` authenticator (04 §2.4), registered app-level through `app.Options.Authenticators` (05-authn §3.3, SEC2-16), runs in stage 12; gin binder removed |
-| `s.perm(atom)` | `server_lifecycle.go:1693-1698` | adapter over `rbac.Require(ctx, rbac.LegacyAtom(atom))`, the same requirement as the route's manifest `Perm`, so stage 13 and the adapter agree (COR5-4). A role principal needs `Catalog.LegacyReach(atom)`: `AllOf` the native scope set equivalent to the atom's **full** legacy reach, taken from the frozen reach snapshot, not the atom's expansion — so a custom role holding part of `settings.manage`'s reach passes no `settings.manage` route (resolution R4-3, SEC4-2, SEC4-4). A key whose scopes come from its legacy row (a pre-core `abk_` key with no extension record holding canonical scopes, 05-authn §4.4) passes iff the atom is in its stored atoms (or the list is empty) and its owner's roles satisfy that reach, HEAD's role ∩ key semantics (SEC5-7, SEC6-2). The auth-disabled principal is judged against the atom's expansion, as HEAD's `s.perm` passed every request with auth off (05-rbac §3.1, §4.11) |
+| `s.perm(atom)` | `server_lifecycle.go:1693-1698` | adapter over `rbac.Require(ctx, rbac.LegacyAtom(atom))`, the same requirement as the route's manifest `Perm`, so stage 13 and the adapter agree (COR5-4). A role principal needs `Catalog.LegacyReach(atom)`: `AllOf` the native scope set equivalent to the atom's **full** legacy reach, taken from the frozen reach snapshot, not the atom's expansion — so a custom role holding part of `settings.manage`'s reach passes no `settings.manage` route (resolution R4-3, SEC4-2, SEC4-4). A key of books' legacy store (every ABO key holds legacy atoms through S10, 05-authn §4.4) passes iff the atom is in its stored atoms (or the list is empty) and its owner's roles satisfy that reach, HEAD's role ∩ key semantics (SEC5-7). The auth-disabled principal is judged against the atom's expansion, as HEAD's `s.perm` passed every request with auth off (05-rbac §3.1, §4.11) |
 | in-handler `auth.Can(ctx, atom)` | `internal/auth/context.go:171-178`; sites in the reach snapshot's in-handler list | each site is replaced by `legacyauth.Can(ctx, rbac.LegacyCheck(atom, readSide))` with the site's entry from the snapshot's in-handler list (an ABO archtest finds no raw `auth.Can` left in the mount): `LegacyAtom`'s role and key rules, except that the auth-disabled principal is denied, as HEAD's `auth.Can` returns false with no permission set bound (sites with their own auth-off bypass keep it), and a `read_side` site is judged against its read-side successor (`core:users.view` for `users.manage`; 05-rbac §6.1, §6.3; SEC5-9, SEC5-14) |
 | `RequireAdmin` by role name; `adminRole` pass-through vs 401 with auth off | `middleware/auth.go:522-537`, `wire_admin_role.go:18-45` | the manifest carries 05-rbac §6.2's permission per admin kind; the gin gate becomes `rbac.Require(that permission)`; auth-off reach follows from the auth-disabled checker |
 | `credGuard` | `credential_routes.go:79-87` (a pass-through with auth off) | `Guards.Interactive` at stage 13; gin adapter checks `Principal.Method.MayChangeCredentials()`. The auth-disabled principal is refused, a recorded auth-off tightening from S4 (05-authn §4.11, 05-rbac §4.11, SEC5-8) |
@@ -1199,13 +1256,13 @@ interactive method). Keys that decide who reaches the server or which client add
 | `core.http.cors.allowed_origins` | []string | `[]` (same-origin only); also stage 7's trusted origins | yes | admin |
 | `core.http.body.json_max_bytes` | int | 1 MiB | yes | none |
 | `core.http.body.upload_max_bytes` | int | 10 MiB | yes | none |
-| `core.http.rate_limit.enabled` | bool; 05-config's `BelowStored` alias `enable_rate_limit` / `ENABLE_RATE_LIMIT` maps to it. **An operator's tightening survives a rollback (resolution R8-4, SEC8-6):** the http section declares, **from S3**, `config.NarrowStored("core.http.rate_limit.enabled", narrow = value == true)` (05-config §1.3.1), so an effective `true` from an operator layer (`ABO_CORE_HTTP_RATE_LIMIT_ENABLED`, the operator file) over a stored `enable_rate_limit: false` writes `enable_rate_limit: true` at P4d step 1 (audited `core.config.legacy_narrowed`), and an older build after a rollback keeps stage 10 on. A blob without the field already reads HEAD's default `true` | true | yes | admin |
+| `core.http.rate_limit.enabled` | bool; 05-config's `BelowStored` alias `enable_rate_limit` / `ENABLE_RATE_LIMIT` maps to it, with HEAD's precedence (a stored value beats the legacy name). A blob without the field reads HEAD's default `true` | true | yes | admin |
 | `core.http.rate_limit.per_minute` | int | 100 | yes | none |
 | `core.http.rate_limit.burst` | int | `max(per_minute/5, 10)` | yes | none |
 | `core.http.rate_limit.max_clients` | int | 10000 | no | none |
-| `core.http.basic_gate.enabled` | bool; 05-config's `BelowStored` alias `basic_auth_enabled` / `BASIC_AUTH_ENABLED` maps to it. **An operator's tightening survives a rollback (resolutions R7-1, R8-4; SEC7-1, SEC8-1):** the http section declares, **from S3**, `config.NarrowStored("core.http.basic_gate.enabled", narrow = value == true)` (05-config §1.3.1; an explicit predicate, as `core.auth.mode` uses its `SafeLegacyValue` one, SIMP8-6). From S3, when stage 8 reads the key through config, an effective `true` from an operator layer (`ABO_CORE_HTTP_BASIC_GATE_ENABLED`, the operator file) over a stored `basic_auth_enabled: false`, or over a blob without that field (an absent field counts as HEAD's default `false`, SEC8-12), makes the legacy config store write `basic_auth_enabled: true` at P4d step 1 (audited `core.config.legacy_narrowed`, 05-config §1.3.5; 05-authn §4.11 applies the same rule to `enable_auth`). It narrows whenever the effective value is `true`, whatever the password's source. Writing `true` is never wider than not writing it: without a password the older build can read (its encrypted row or its legacy `BASIC_AUTH_PASSWORD`), a hotfixed older build refuses every request (early fix 5, 05-authn §11.1), which is fail-closed, never open; a build older than early fix 5 admits `<username>:`, no wider than the disabled gate it would otherwise run. **Release note (09 §9.2.1 row 19):** "If the Basic password is set only through `ABO_CORE_HTTP_BASIC_GATE_PASSWORD`, also set `BASIC_AUTH_PASSWORD` before rolling back below S3, or the older release refuses every request." `TestRollback_OperatorEnabledAuthStaysOn`'s Basic-gate cells cover a stored password, a canonical-only password and an env-only `BASIC_AUTH_PASSWORD`, and each asserts the gate is enabled on `prev` (05-authn §10) | false | yes | admin |
+| `core.http.basic_gate.enabled` | bool; 05-config's `BelowStored` alias `basic_auth_enabled` / `BASIC_AUTH_ENABLED` maps to it, with HEAD's precedence: a value saved in the UI beats the legacy env name, so compose's always-set `BASIC_AUTH_ENABLED=false` cannot switch off a gate enabled in the UI (R5-1(a), OPS5-1). The canonical `ABO_CORE_HTTP_BASIC_GATE_ENABLED` locks the key, and no build before S3 reads it (below) | false | yes | admin |
 | `core.http.basic_gate.username` | string; 05-config's `BelowStored` alias `basic_auth_username` / `BASIC_AUTH_USERNAME` maps to it (SEC6-9). Stage 8 compares it in constant time. An enabled gate with an empty username keeps HEAD's behaviour (HEAD's default is `""`, `internal/config/config.go:2806`, and its gate then admits `:<password>`): the password is the secret, and refusing an empty username would lock out every deployment that set only a password, with no security gain; an empty **password** is what stage 8 refuses | `""` | yes | admin |
-| `core.http.basic_gate.password` | secret (one canonical name; 05-config's alias `basic_auth_password` maps to it, SEC4-10); core reads it from S3, when the gate moves (until then gin reads it itself). It is **not moved** during the extraction: for ABO, books' legacy config store reads and writes HEAD's own **encrypted** row in place, with no sentinel, so a rollback leaves the older gate as configured (resolution R5-1(b); 05-config). Enabled with this unset, empty or unreadable → stage 8 refuses (R5-1(c)) | — | yes | admin |
+| `core.http.basic_gate.password` | secret (one canonical name; 05-config's alias `basic_auth_password` maps to it, SEC4-10); core reads it from S3, when the gate moves (until then gin reads it itself). It is **not moved** during the extraction: for ABO, books' legacy config store reads and writes HEAD's own **encrypted** row in place, so a rollback leaves the older gate as configured (resolution R5-1(b); 05-config). Enabled with this unset, empty or unreadable → stage 8 refuses (R5-1(c)) | — | yes | admin |
 | `core.http.openapi.public` | bool | false | yes | admin |
 | `core.http.read_header_timeout` / `idle_timeout` | duration | 15s / 120s | no | none |
 
@@ -1218,18 +1275,14 @@ still beats a `BelowStored` legacy name (05-config §1.3.5, SEC7-2): a blob's `e
 (HEAD's default, `internal/config/config.go:2802`, saved by HEAD's whole-config save) keeps stage 10 on
 when the legacy env name is set to false, as at HEAD.
 
-**Canonical-only operator values across a rollback (resolution R8-4, SEC8-6).** A canonical `ABO_CORE_HTTP_*`
-name exists only from the stage that registers its key, and every older build reads only the legacy name.
-The two `NarrowStored` declarations above carry an operator's tightening of a switch that has a legacy blob
-field. A value that has no blob field cannot be carried that way: `core.http.peer_allowlist` is env-only
-at HEAD (`allowed_peer_cidrs`, `json:"-"`, `internal/config/config.go:1709-1719`, where empty admits every
-peer), and the same holds for a canonical-only Basic password or rate-limit value. Such a value is lost on a
-rollback below the stage that introduced the name. From S3 every boot writes
-`<state_dir>/operator-names.json`, which lists names only, never values: the set canonical names whose key
-has a legacy name that is unset. `CheckReader` reports it as the advisory token
-`canonical_only_operator_values`, which `make rollback` and the updater print before they swap (05-storage,
-05-updater). 09 §9.2.1 carries the release-note row: keep the legacy name set to the same value while you may
-roll back below the release that introduced the canonical one.
+**Canonical names across a rollback (resolution A-2).** A canonical `ABO_CORE_HTTP_*` name exists only from
+the stage that registers its key, and every older build reads only the legacy name and the stored field.
+Nothing writes an operator value back into the stored blob, so a value given only under a canonical name
+(the Basic gate switch or password, the rate-limit switch, `core.http.peer_allowlist`, which is env-only at
+HEAD as `allowed_peer_cidrs`, `json:"-"`, `internal/config/config.go:1709-1719`) is not seen after a
+rollback below the stage that introduced the name. 09 §9.2.1 carries the release-note row: while you may
+roll back below that release, keep the legacy name set to the same value or save the setting through the
+settings page.
 
 ## 11. Metrics
 
@@ -1246,9 +1299,14 @@ roll back below the release that introduced the canonical one.
 | `mediacore_http_peer_refused_total` | counter | — |
 
 Alias use is counted by `compat`'s `mediacore_compat_legacy_use_total{surface="http",…}` (09
-§9.2.4), not by an httpapi-specific counter, so the removal gate reads the series that is actually
-incremented (OPS-10). Unmatched paths use `route="unmatched"` so cardinality stays bounded by the
-route table.
+§9.2.4), not by an httpapi-specific counter, so the owner's check before a contract PR reads the series
+that is actually incremented (OPS-10, A-14). Unmatched paths use `route="unmatched"` so cardinality stays
+bounded by the route table.
+
+Names are shown under core's default metric namespace `mediacore`. An app passes its own namespace as an
+`app.Options` value, and ABO passes HEAD's `audiobook_organizer` (`internal/metrics/metrics.go:10-60`
+@748fd787a), so no metric is renamed during the extraction (resolution A-5, 05-metrics). 05-metrics owns the
+inventory of HEAD's series.
 
 ## 12. Tests
 
@@ -1269,8 +1327,8 @@ route table.
 | `TestBasicGate_PasswordReadInPlaceAcrossRollback` | (R-test cells) Basic password saved on `cur` is HEAD's encrypted row: roll back, `prev`'s gate accepts it and refuses `<username>:`; re-entered on `prev`, roll forward: `cur` accepts the re-entered one; cleared on `prev`, roll forward: 401 for `<username>:` (R5-1(b),(c), OPS5-2, SEC5-4) |
 | `TestCSP_DefaultPerOwner` | SPA, legacy `DefaultCSP(r)`, native default; a handler-set CSP is kept (FE-4); the legacy SPA response carries the inline-script hash, the configured Access team host and `Reporting-Endpoints` (FE2-1) |
 | `TestPerimeter_XAppBuildOnEveryResponse` | legacy, native, infra, 404, 405 and 410 responses all carry `X-App-Build` (FE2-5, OPS2-13) |
-| `TestInfra_MetricsRequiresScope` | `/metrics` without a credential → 401, with a key lacking `core:metrics.read` → 403; `/livez`, `/readyz` stay Public (SEC2-14) |
-| `TestLegacyMetricsRoute_RequiresScopeFromS4` | S4 r2 to S7: the legacy `/metrics` manifest entry is `core:metrics.read`; a scoped legacy key without it → 403, an `editor` session → 200 (OPS5-5, SEC5-13) |
+| `TestInfra_MetricsRequiresScope` | (native role store) `/metrics` without a credential → 401, with a key lacking `core:metrics.read` → 403; `/livez`, `/readyz` stay Public (SEC2-14) |
+| `TestLegacyMetrics_AnyAuthenticated` | (ABO) S4 r2 to S7: the legacy `/metrics` manifest entry is `AnyAuthenticated`; from S8 the `Infra` route requires `core:metrics.read`, which every `AnyAuthenticated` principal of ABO holds (05-rbac §6.3); in both, an `editor` session and a key scoped `["library.view"]` → 200, an `fp-worker` key → 403, no credential → 401 (resolution A-5) |
 | `TestClientIP_ZonedConnectorTrusted` | zoned link-local connector peer: header believed, peer admitted (SEC-18) |
 | `TestTrace_NoApikeyInSpanAttributes` | every `log.DefaultRedactQuery()` value (`apikey`, `token`, `code`, `code_verifier`, `refresh_token`, …) absent from span attributes and the access log (SEC-22, SEC2-18; the list's superset-of-HEAD test is `TestRedactQuery_SupersetOfHEAD` in 05-logging) |
 | `TestAccessLog_NoInviteToken` | no one-time token in the access log, journal or span attributes (SEC-21) |
@@ -1307,17 +1365,20 @@ route table.
 | `TestContractGoldens_ValidateAgainstSchema` | every example matches its schema |
 | `archtest.RoutesHavePermissions` | over native + legacy manifest + SPA/infra set (R6) |
 | `TestS2Manifest_SPermRoutesCarryLegacyAtom` | S2 on: every manifest entry recorded from an `s.perm(atom)` gin route has `Perm == rbac.LegacyAtom(atom)`, built with no catalog; `Handle` refuses a `LegacyAtom`/`LegacyCheck` requirement; a `LegacyAtom` manifest is accepted under `LegacyAuthGin` at S2 and under `LegacyAuthCore` from S4 r2, and S4's `Freeze` refuses an atom no legacy alias names (COR6-1) |
-| `TestLegacyManifest_MatchesGinRoutes` / `TestLegacyManifest_RegistersAsMuxPatterns` | `ErrLegacyManifest` on drift; every gin route is a mux pattern, no conflict (SEC-13) |
+| `TestLegacyManifest_MatchesGinRoutes` / `TestLegacyManifest_RegistersAsMuxPatterns` | `ErrLegacyManifest` on drift; from S2 r1, over `(*gin.Engine).Routes()` of the real engine built with ABS on and with ABS off (never a fixture): every gin route is a mux pattern or a member of one generalised pattern, `Build` raises no conflict, the two generalised patterns of §4.8 and the kept routes `GET /api/v1/operations/v2/{id}` and `GET /api/me/item/listening-sessions/{id}` are present, and for each conflicting pair Go's overlap example is routed by the mux to a pattern holding gin's route (SEC-13, resolution A-1) |
+| `TestCollisionRule_RefusesUnmergeableSets` | fixtures: a component spanning two owners, members differing in `Perm`, `Guards`, `RateClass`, `OwnAuth`, `BasicExempt` or `NoCompress`, members of different segment counts, a kept route not strictly more specific than the generalised pattern, and a generalised pattern that conflicts with another route → `ErrPatternConflict` naming the routes (A-1) |
+| `TestLegacyMount_GeneralisedPatternAcceptsAnyMember` | each member of `GET /api/v1/operations/{p4}/{p5}` reaches its gin handler; `/api/v1/operations/x/y`, which the pattern matches and no member does, → 404 in the legacy shape with no handler run; `/api/v1/operations/v2/activity` reaches `GetOperationV2` (A-1, SEC2-22) |
+| `TestS5_CoreAliasesRegisterBesideLegacy` | S5 T0+T1 on the real engine (ABS on and off): the core alias `GET /api/v1/operations/v2/{id}` registers beside books' generalised pattern, `ErrShadow` is not raised for it (ledger-listed core alias, SEC3-8), `/api/v1/operations/v2/x` reaches the core target and `/api/v1/operations/x/activity` the books gin route (A-1) |
 | `TestLegacyMount_AliasShadowsGinRoute` | after `Alias`, the gin handler for that method+path is never invoked |
 | `TestLegacyMount_MuxAndGinAgreeOnEncodedSlash` | a request with `%2F` in a segment whose gin match differs from its mux pattern → 404, no gin handler runs (SEC2-22) |
 | `TestOwnAuthRoutesGolden` / `TestLegacyAuthGin_RefusedWithoutOption` | the reviewed `OwnAuth` set; `LegacyAuthGin` without `LegacyAuthGinUntil`, and `OwnAuth` without a registered method → boot errors (SEC2-17) |
-| `TestLegacyRoleReachUnchanged` (09 S4 r2, permanent) | 572 routes × 4 seed roles, scoped API keys (a pre-core key keeps HEAD's role ∩ key reach, SEC5-7), auth-off mode (`settings.manage` routes 200; in-handler `deny` sites deny; the recorded tightenings of 05-rbac §4.11 asserted refused; COR5-4, SEC5-8, SEC5-9); custom-role half: for random native roles, stage 13 admits a legacy route only if the route's successor admits (SEC4-2) |
+| `TestLegacyRoleReachUnchanged` (09 S4 r2, permanent) | every manifest route (572 at `748fd787a`; the count is generated at the stage's base commit, ADV-11) × 4 seed roles, scoped API keys (a pre-core key keeps HEAD's role ∩ key reach, SEC5-7), auth-off mode (`settings.manage` routes 200; in-handler `deny` sites deny; the recorded tightenings of 05-rbac §4.11 asserted refused; COR5-4, SEC5-8, SEC5-9); custom-role half: for random native roles, stage 13 admits a legacy route only if the route's successor admits (SEC4-2) |
 | `TestLegacyRoute_SettingsAtomNeverWiderThanSuccessor` | every manifest route gated by `settings.manage` or `users.manage` carries `Catalog.LegacyReach` of its atom; a custom role holding the four `settings.manage` expansion scopes gets 403 on backup restore, backup create, logs, tool install and plugin settings (R4-3, SEC4-2) |
 
 ## 13. Open items
 
 1. Whether `encoding/json/v2` replaces `encoding/json` in `Handle` (only once it is non-experimental in the pinned toolchain; 13-toolchain).
-2. Whether `/metrics` moves under `/api/core/v1/metrics` or stays at `/metrics` (05-metrics decides; either way it carries `core:metrics.read`, 05-rbac §6).
+2. Whether `/metrics` moves under `/api/core/v1/metrics` or stays at `/metrics` (05-metrics decides; either way it carries `core:metrics.read`, which every `AnyAuthenticated` principal holds on ABO, 05-rbac §6.3, A-5).
 3. **Resolved** (coordination with 06-app-sdk, 06 O2, COR-16): 06 registers routes through
    `Registrar.HTTP() *httpapi.Group` with `httpapi.Handle` (or `Register(g, Get(...))` above) and legacy
    routers through `Registrar.MountLegacy(httpapi.LegacyMount)` (§8.2); there is no `Registrar.Route` or
@@ -1511,3 +1572,13 @@ Round 8 (2026-11-04), findings applied to this file:
 - FE8-6 — §7: "`ops.ts` is imported by `services/api.ts` and `utils/operationPolling.ts` (5 non-test importers)"; page list dropped.
 - FE8-10 — §7: `opsgen` writes `web/src/generated/ops.ts`; `createCoreClient({ buildId, shell })`.
 - integration pass (round 8): §10: both `NarrowStored` declarations drop `when = nil` (`NarrowStored` has no `when` parameter; R-E request); §4.10 names the P8 app-ID check `ProblemUIAppIDMismatch` over `ui.Bundle.AppID()` beside the segment check (R-G request); the `opsgen` output `web/src/generated/ops.ts` and the FE8-6 importer sentence in §7 were already applied.
+
+Advisor (2026-11-04), resolutions and findings applied to this file:
+
+- A-1 (ADV-1, BLOCKER) — §1.1, §4.8: the route collision rule (conflict graph per build variant; same-owner components with identical pre-gin fields register as one generalised pattern; gin-preferred routes such as `…/operations/v2/{id}` stay their own, strictly more specific pattern; the post-gin check accepts any member's `c.FullPath()`; S5's core alias registers beside books' pattern), with the advisor's appendix A conflict list re-anchored as evidence; §6 rows, §8.1 S2 row, §8.2 struct comment and rule; `TestLegacyManifest_RegistersAsMuxPatterns` on the real engine with ABS on and off from S2 r1, `TestCollisionRule_RefusesUnmergeableSets`, `TestLegacyMount_GeneralisedPatternAcceptsAnyMember`, `TestS5_CoreAliasesRegisterBesideLegacy` (§12).
+- A-2 (ADV-3, ADV-S1) — §8.1 S4 row and §8.2/§8.3: books' identity stores keep HEAD's representation (raw sessions, `abk_` keys with legacy atoms, atom-only roles), so the rollback cell no longer mentions native-only records or suspension; §4.1: the confirmation routes for suspended native-only data removed; §10: both narrowing declarations and the canonical-name list file removed, replaced by the release-note rule for canonical-only values.
+- A-5 (ADV-S4) — §4.1, §8.1, §12, §13: `/metrics` stays `AnyAuthenticated` for ABO (the legacy entry is never re-annotated; from S8 every `AnyAuthenticated` ABO principal holds `core:metrics.read`), `TestLegacyMetricsRoute_RequiresScopeFromS4` replaced by `TestLegacyMetrics_AnyAuthenticated`; §11: metric names under the app's namespace.
+- A-14 (ADV-S8) — §4.6, §6, §11: no persisted usage and no zero-use gate; the `compat` counter is process-local and read by the owner before a contract PR (this file defined no `/compat/usage` route).
+- A-17 — §5 item 2, §8.1 S4 row: the native factory-reset route deletes library files only with `delete_library_files: true`, confirmed by `RootDir` and the file count; the legacy alias passes it.
+- A-4 (ADV-S3) — §3.6: the deferred-members archtest is gone; the table is planning information.
+- ADV-11 — §8.1, §12: the 572-route count is marked informative and generated at the stage's base commit.

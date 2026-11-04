@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-realtime.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 9f4f16ae-e4d9-4fd1-a6df-e409e07602ad -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -367,8 +367,9 @@ obtains each handler from `Registrar.Realtime().Projection(p)` during P6 and ser
 **gin legacy manifest** at the three legacy paths (`Perm: rbac.AnyAuthenticated`, as for the native
 stream; `OwnAuth: false`; per-topic permissions are applied per event inside the hub, §4.4). They are
 recorded in the compat ledger as surface `sse` (09 §9.2.1), their use is counted in
-`mediacore_compat_legacy_use_total{surface="sse",name=<projection>}`, and a contract PR removes them
-once the window and the zero-use gate allow. No clock removes them.
+`mediacore_compat_legacy_use_total{surface="sse",name=<projection>}` (a process-local counter, never
+persisted), and a contract PR removes them once the ledger's dates allow and the owner has checked
+that counter on the reference host (09 §9.2.1; resolution A-14). No clock removes them.
 
 | Legacy URL | Projection |
 |---|---|
@@ -486,6 +487,11 @@ its projections arrive at S6, so one stage needs an explicit feed:
 
 Legacy projection use is counted by `compat` (`mediacore_compat_legacy_use_total{surface="sse"}`).
 
+Names are shown under core's default metric namespace `mediacore`. An app passes its own namespace as an
+`app.Options` value, and ABO passes HEAD's `audiobook_organizer` (`internal/metrics/metrics.go:10-60`
+@748fd787a), so ABO's series carry that prefix and no metric is renamed during the extraction
+(resolution A-5, 05-metrics). 05-metrics owns the inventory of HEAD's series.
+
 ## 10. Tests
 
 | Test | Asserts |
@@ -592,3 +598,8 @@ Round 4 (2026-11-04), findings applied to this file:
 Round 5 (2026-11-04), findings applied to this file:
 
 - COR5-9 — COR4-7 residue: `books.system.status-ticked.v1` added to §4.7's table; the S8 row states no legacy frame type and no compat-ledger row is added, and that 05-health and 09 S6 follow this rule (§4.7, §4.9).
+
+Advisor (2026-11-04), resolutions applied to this file:
+
+- A-14 (ADV-S8) — §4.9: the legacy projections' removal waits for the ledger dates and the owner's check of the process-local `compat` counter on the reference host; the "zero-use gate" wording is gone.
+- A-5 (ADV-S4) — §9: metric names are under the app's namespace (`app.Options`); ABO passes HEAD's `audiobook_organizer`, so nothing is renamed.

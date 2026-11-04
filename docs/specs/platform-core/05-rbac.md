@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.9.1 -->
+<!-- version: 1.10.0 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -15,8 +15,10 @@ Layers (L0–L9), `entity.Ref`, naming and the compatibility window are from
 [03-architecture](03-architecture.md) and [09-abo-on-core](09-abo-on-core.md) §9.2.1. Stored roles follow
 round-4 resolution R4-1 (refining R3-1): `rbac.Store` is an SDK interface; core ships a native
 implementation over `c/rbac/`, and an app with pre-core roles (ABO) passes its own implementation,
-written in the app over the app's rows, with native-only data in an app-owned extension family that
-older builds never read (§3.4, §6.3). Core holds no app key name or row format.
+written in the app over the app's rows. ABO's rows keep HEAD's representation through S10 (resolution
+A-2): roles and keys hold legacy atoms only, and core-namespaced scopes are an API-level mapping over
+those atoms through the app's alias table and `rbac.LegacyAtom` (§6.3), so D7 holds. Native role stores
+keep native scopes. Core holds no app key name or row format.
 
 ## 1. Purpose & scope
 
@@ -148,13 +150,12 @@ func Delegated(reason string) Requirement
 //   - the auth-disabled principal: iff it holds the atom's canonical
 //     expansion (Catalog.Legacy), because HEAD's s.perm and op checks pass
 //     every request with auth off;
-//   - a key whose scopes come from its legacy row (a pre-core abk_ key with
-//     no extension record, or one whose record holds no canonical scopes,
-//     CheckerInput.LegacyKey; 05-authn §4.4, SEC6-2): iff the atom is in the
-//     key's stored atoms (or the list is empty, LegacyFullScope) AND the
-//     owner's roles satisfy Catalog.LegacyReach(atom) — HEAD's role ∩ key
-//     semantics (middleware/auth.go:364-365,405-421) with the row rule's
-//     dominance on the role side (SEC5-7);
+//   - a key of a legacy-backed store, whose scopes are legacy atoms
+//     (CheckerInput.LegacyKey; every ABO key through S10, 05-authn §4.4):
+//     iff the atom is in the key's stored atoms (or the list is empty,
+//     LegacyFullScope) AND the owner's roles satisfy Catalog.LegacyReach(atom)
+//     — HEAD's role ∩ key semantics (middleware/auth.go:364-365,405-421) with
+//     the row rule's dominance on the role side (SEC5-7);
 //   - every other principal: iff it satisfies Catalog.LegacyReach(atom)
 //     (resolution R4-3).
 // The constructor only records the atom and is an S2 leaf; the rules above
@@ -276,30 +277,16 @@ type Role struct {
 	PendingSeed     []Permission // restricted seed additions held for admin acceptance (§4.8, SEC-25)
 	Added           []Permission // custom roles: the role's whole set (patterns allowed); on seed roles the operator diff is deferred-build (§3.6)
 	Locked          bool         // "admin": immutable, undeletable, outside the seed merge (§4.8)
-	// Legacy is the role's legacy-only state, nil from a native store (03 §3.3
-	// "Legacy-only identifiers", SIMP6-7). Its type stays in rbac because
-	// legacy imports rbac and rbac can never name a legacy type.
-	Legacy          *RoleLegacyState
 	CreatedAt, UpdatedAt time.Time
 	Version         int64
 	// Removed and Tombstone are deferred-build members (§3.6).
 }
 
-// RoleLegacyState is what only a legacy role store reports (§6.3).
-type RoleLegacyState struct {
-	// Suspended: the store found the role's native-only data stale against
-	// its stored row (an older build changed the row); while set, the role
-	// grants only what the stored row grants on an older build, until an admin
-	// re-confirms or discards it (ReconfirmRole).
-	Suspended bool
-}
-
-// Suspended reports r.Legacy != nil && r.Legacy.Suspended.
-func (r *Role) Suspended() bool
-
 // Permissions returns the role's effective patterns: SeedPermissions for a
-// seed role, Added for a custom role; for a suspended role, the translation of
-// the stored legacy atoms (§6.3). PendingSeed is not effective until accepted.
+// seed role, Added for a custom role. A legacy-backed store returns both
+// already mapped from its row's atoms by §6.3's read mapping, so a Role
+// carries no legacy-only state. PendingSeed is not effective until accepted
+// (native stores only, §4.8).
 func (r *Role) Permissions() []Permission
 
 type RoleInput struct {
@@ -345,7 +332,6 @@ func (s *Service) CreateRole(ctx context.Context, actor Checker, in RoleInput) (
 func (s *Service) UpdateRole(ctx context.Context, actor Checker, id RoleName, in RoleInput, ifVersion int64) (*Role, error)
 func (s *Service) DeleteRole(ctx context.Context, actor Checker, id RoleName, ifVersion int64) error
 func (s *Service) AcceptSeed(ctx context.Context, actor Checker, id RoleName, ifVersion int64) (*Role, error) // apply PendingSeed; allowed on seed roles (§4.8)
-func (s *Service) ReconfirmRole(ctx context.Context, actor Checker, id RoleName, accept bool, ifVersion int64) (*Role, error) // clear Suspended through the store's legacy.ExtConfirmer: accept re-applies the native-only data; discard also writes the translation of the row's atoms as the role's set, in the same batch (§6.3, SIMP6-4)
 // ResetRole is a deferred-build member (§3.6).
 
 // CanAssign reports whether actor may give or take away roles (actor must hold
@@ -368,12 +354,12 @@ type CheckerInput struct {
 	Roles       []RoleName
 	Scopes      []Permission // key scopes; nil = role permissions only (sessions, LegacyFullScope keys)
 	Interactive bool         // auth.Method.Interactive() of the credential (§4.4)
-	// LegacyKey: the key's scopes come from its legacy row — no extension
-	// record, or a record holding no canonical scopes (scopes_source is not
-	// "canonical"; 05-authn §4.4, SEC6-2). LegacyAtoms is its stored atom
-	// list (empty = LegacyFullScope); Scopes then holds the atoms' canonical
-	// expansion, which native requirements read, while LegacyAtom/LegacyCheck
-	// read LegacyAtoms against the role-only set (SEC5-7).
+	// LegacyKey: the key comes from a legacy-backed store, so its scopes are
+	// legacy atoms (every ABO key through S10, 05-authn §4.4). LegacyAtoms is
+	// its stored atom list (empty = LegacyFullScope); Scopes then holds the
+	// atoms' canonical expansion (§6.3), which native requirements read, while
+	// LegacyAtom/LegacyCheck read LegacyAtoms against the role-only set
+	// (SEC5-7).
 	LegacyKey   bool
 	LegacyAtoms []string
 }
@@ -414,7 +400,7 @@ var (
 	ErrVersionMismatch  = errors.New("rbac: version mismatch")
 	ErrLastAdmin        = errors.New("rbac: change would remove the last core:admin")
 	ErrSeedRoleLocked   = errors.New("rbac: seed roles are read-only until the role cutover")
-	ErrConfiningNoLegacyAtom = errors.New("rbac: a Confining scope without a legacy atom cannot be put in a role before the role cutover")
+	ErrNoLegacyAtom     = errors.New("rbac: the scope set is not a union of whole legacy atoms the row rule admits, so a legacy-backed store cannot hold it before the identity hardening cutover")
 	ErrUndecodableRole  = errors.New("rbac: stored role cannot be decoded") // per row, from Store.ScanRoles (§6.3)
 )
 
@@ -458,13 +444,6 @@ package legacy
 type RBACAtomWriter interface {
 	PutRoleAtoms(b *storage.Batch, r *rbac.Role, legacyAtoms []string) error
 }
-
-// Role re-confirmation uses the shared extension-confirm capability,
-// ExtConfirmer (05-storage §5S.3.11 defines it; formerly storage.ExtConfirmer):
-// Confirm(ctx, b, "role/"+string(name)) re-stamps the role's extension record
-// from its current row and clears the suspension. A store without it never
-// reports a suspended role. There is no role-specific confirm interface (the
-// round-5 rbac.Reconfirmer is deleted, SIMP6-4).
 ```
 
 `legacy` (L5) imports `rbac` for the types it names, so `rbac` never imports it (03 §3.3). The kernel
@@ -475,8 +454,8 @@ only by `rbac` itself (its service and its restore hook, §5, §7.1), through it
 each mirror, and `legacy_mirror_test.go` in rbac's external test package (`package rbac_test`, which may
 import `legacy`) asserts that each alias and its `legacy` counterpart are mutually assignable, so a
 renamed or retyped member fails rbac's tests.
-`legacytest.RBACStoreSuite` (one suite for the store, a case per capability: the atom writer, confirm
-accept and discard; SIMP6-6) drives the service over an implementation.
+`legacytest.RBACStoreSuite` (one suite for the store, a case per capability: today the atom writer;
+SIMP6-6) drives the service over an implementation.
 
 **Privileged checkers are not SDK (SEC-26).** The two checkers that bypass role resolution are
 constructed only in `core/internal/authz`: `authz.AuthDisabled(cat *rbac.Catalog) rbac.Checker`
@@ -585,11 +564,9 @@ func ActorFrom(ctx context.Context) (Actor, bool)
 ### 3.6 Deferred-build members
 
 Deferral applies to features inside built packages (SIMP2-6, 03 §3.4). These members of `rbac` are
-specified so the role cutover and 08 can rely on them, and are **not built** during the extraction;
-the archtest `archtest.DeferredMembersAbsent` (03 §3.4) checks the absence of the identifiers in the
-first column, and the PR that builds one deletes that member's entry (COR4-19, SIMP4-1). The first
-column holds only package-qualified identifiers; everything else is in "Also deferred (not
-checked)" (COR5-16, SIMP5-6):
+specified so the role cutover and 08 can rely on them, and are **not built** during the extraction.
+The table is planning information (resolution A-4: no archtest checks the absence of these members),
+and the PR that builds one deletes that member's row:
 
 | Member | Also deferred (not checked) | Lands with | Contract |
 |---|---|---|---|
@@ -655,22 +632,18 @@ cached by (sorted role IDs, sorted scopes, interactive, `Generation()`).
   explicit, not a wildcard, and §4.4 rule 1 still applies to it.
 - At creation every scope must be in the catalog and held by the actor (and by the key owner when
   creating for another user, 05-authn §4.4).
-- **One scope-source predicate (SEC6-2; the same sentence in 05-authn §4.4, §11, 05-storage row 3 and
-  09 rule 1).** A key's scopes come from its extension record **iff the record holds canonical scopes**
-  (`scopes_source: canonical`, written only when the key is created natively). Otherwise — no record,
-  or a record holding only Independent restriction fields (`scopes_source: legacy`, written by the
-  post-restore fallback or the stale-status stamp, 05-authn §4.14) — they come from the legacy row:
-  `LegacyFullScope=true` for an empty list (effective = role permissions, today's semantics, shown in
-  the UI as "legacy full-access key, expires <date>", never creatable; the row keeps the empty list as
-  written, 05-authn §11), and on legacy surfaces `LegacyAtom`/`LegacyCheck` (§3.1) admit it iff the
-  atom is in its stored atoms (or the list is empty) and its owner's roles satisfy the atom's
-  `LegacyReach`, while native requirements read its atoms' expansion (SEC5-7). A key whose record holds
-  canonical scopes is never `LegacyFullScope` and grants nothing while that record is suspended; this
-  build never writes an empty list (a key with no legacy-equivalent scope holds the reserved no-scope
-  string, resolution R5-6, SEC5-1). So a pre-core key that a restore restricted and an admin re-enabled
-  keeps exactly its pre-restore reach (`TestRestoredLegacyKey_ReenabledKeepsLegacySemantics`, 05-authn
-  §10). All keys expire within 365 days (`raw/10` §2.3), so the state ends by itself; no forced
-  revocation.
+- **Keys of a legacy-backed store (resolution A-2).** Every key of ABO's legacy store holds legacy
+  atoms in its row, as at HEAD, and every such key is a `LegacyKey` (§3.4): `LegacyFullScope=true` for
+  an empty list (effective = role permissions, HEAD's semantics, shown in the UI as "legacy full-access
+  key, expires <date>", never creatable), and on legacy surfaces `LegacyAtom`/`LegacyCheck` (§3.1)
+  admit it iff the atom is in its stored atoms (or the list is empty) and its owner's roles satisfy the
+  atom's `LegacyReach`, while native requirements read its atoms' expansion (SEC5-7). A key created
+  through the core API on such a store is written with the atoms of §6.3's write mapping; a requested
+  set that is not a union of whole atom expansions is refused with 422 `no_legacy_atom`
+  (`ErrNoLegacyAtom`), and the list this build writes is never empty. A restore that restricted a
+  pre-core key leaves its atoms alone, so an admin or the owner re-enabling it gives back exactly its
+  pre-restore reach (05-authn §4.14). All keys expire within 365 days (`raw/10` §2.3), so the
+  `LegacyFullScope` state ends by itself; no forced revocation.
 - Per-key module binding is expressed by scopes plus the key's `Purpose` (05-authn §4.4); a facade
   key's scopes are all `<m>:arr.*`, which are `Confining`.
 
@@ -708,7 +681,6 @@ Routes under `/api/core/v1` (all writes: `Guards.Interactive`, `If-Match` on ver
 | `POST /roles` (custom only, name `custom.<slug>`) | `core:roles.manage` |
 | `PATCH /roles/{name}` (title, description, permissions) | `core:roles.manage` |
 | `POST /roles/{name}/accept-seed` (apply `PendingSeed`; allowed on seed roles, §4.8) | `core:roles.manage` |
-| `POST /roles/{name}/reconfirm` `{accept}` (clear `Suspended`, §6.3) | `core:roles.manage` |
 | `DELETE /roles/{name}` (custom: delete if unassigned or `?reassign=`) | `core:roles.manage` |
 | `POST /roles/{name}/reset`; `PATCH`/`DELETE` of a seed role | deferred-build (§3.6); 409 `seed_role_locked` until the role cutover |
 | `PUT /users/{id}/roles` | `core:users.manage` (05-authn §4.13) |
@@ -729,6 +701,10 @@ Escalation rules (enforced in `Service` and `auth.Service`, not only in handlers
    scope the target's roles hold, or holds `core:admin`. Enforced inside `auth.Service`, so the
    legacy mount's handlers (which call it from 09 S4, 05-http-api §8) cannot bypass it. Refusal:
    403 `dominance_required`, audited.
+6. **Representable sets on a legacy-backed store (A-2).** A role write on ABO's legacy store must
+   name a set that §6.3's write mapping turns into legacy atoms the row rule admits, and nothing more;
+   otherwise 422 `no_legacy_atom` (`ErrNoLegacyAtom`), naming the permissions that have no atom.
+   Native stores take any set rules 1–3 allow.
 
 ### 4.8 Seed merge (G3)
 
@@ -737,20 +713,27 @@ naming it ∪ (for module roles) the module's `RoleSeed.Permissions`. Each seed 
 `SeedPermissions` (the seed input last applied), `SeedDigest` and `PendingSeed`. The rules differ
 between the extraction and the role cutover (SIMP4-6).
 
-**During the extraction (built).** At `Freeze`, for every seed role:
+**Seed rows of a legacy-backed store (resolution A-2).** ABO's seed rows keep HEAD's representation:
+atoms only, rewritten on every boot, as HEAD's `SeedRoles` does (`internal/auth/seed.go:44-130`
+@748fd787a). From S4 r2 the P7 seed commit writes each of ABO's seed rows as the atoms of §6.3's write
+mapping over the role's seed, which are HEAD's lists exactly: `admin` all 13 atoms (HEAD's `All()`),
+`editor` HEAD's eight, `viewer` `library.view` and `requests.create`, `fp-worker` `fingerprint.worker`
+(`TestLegacySeedAtomsEqualHEAD`). A seed scope with no atom is not written: it is held only through
+the app's ambient list (§6.3) or not at all. `SeedDigest`, `PendingSeed` and the restricted hold below
+exist only in native stores, because ABO's seeds are HEAD's atoms and no release adds a scope to them
+before the identity hardening cutover. The table below is the native merge.
+
+**During the extraction (built, native stores).** At `Freeze`, for every seed role:
 
 | Stored state | Action |
 |---|---|
-| the locked role `admin` | **outside the merge** (DATA4-11): always written as `{core:admin}`, with the legacy atoms the row rule admits for it (all of them, §6.3); never `PendingSeed` |
+| the locked role `admin` | **outside the merge** (DATA4-11): always written as `{core:admin}`; never `PendingSeed` |
 | absent | create with `SeedPermissions = seed` |
 | present, `SeedDigest` equal | nothing |
-| present, digest differs, or no `SeedDigest` (written by an older build, which re-seeds every boot, `internal/auth/seed.go:80-129`) | set `SeedPermissions = new seed` minus any **restricted** addition (below); put restricted additions in `PendingSeed`; log + audit `core.role.update_seed` with the permissions the release added, held or withdrew. A role without `SeedDigest` counts as last seeded with the translation of its stored atoms (§6.1) |
+| present, digest differs | set `SeedPermissions = new seed` minus any **restricted** addition (below); put restricted additions in `PendingSeed`; log + audit `core.role.update_seed` with the permissions the release added, held or withdrew. |
 
 A *restricted* addition is a scope that is `Sensitive`, `AuthRequired` or `Confining`, or any
-`*:settings.manage` / `*:integrations.manage`, added to a role that already existed, **unless the
-legacy reach of the role's stored atoms already implies it** (DATA4-11: compared against the union of
-`LegacyAlias.Reach` over those atoms, §3.2 — `core:admin` is implied for HEAD's `admin` — so re-seeding
-a role from HEAD-written rows never parks a scope the role already held in substance). It becomes effective only when an admin accepts it
+`*:settings.manage` / `*:integrations.manage`, added to a role that already existed. It becomes effective only when an admin accepts it
 (`POST /roles/{name}/accept-seed`, audited `core.role.accept_seed`); the Roles page shows the pending
 set (SEC-25). Roles created fresh from the seed take the full seed. Effective = `SeedPermissions`;
 today's behaviour (overwrite every boot, `internal/auth/seed.go:117-127`) plus the restricted hold.
@@ -762,10 +745,9 @@ rewrites every seed row with its own seed on every boot (`internal/auth/seed.go:
 `internal/server/server_lifecycle.go:1102`), so an operator's narrowing of `editor` made here would be
 silently widened for the whole rollback. `UpdateRole` and `DeleteRole` on a seed role therefore answer
 409 `seed_role_locked` (`ErrSeedRoleLocked`) until the role cutover; `ResetRole` does not exist yet
-(§3.6). `AcceptSeed` **is allowed**: accepting adds a scope the older build does not know, and that
-build's re-seed overwrites the row with its own, narrower seed — fail-closed — so the restricted hold
-is never a dead end (a release adding a restricted scope to an existing seed role becomes effective
-once an admin accepts it, as HEAD applies it on the next boot). `ErrLockedRole` keeps covering `admin`
+(§3.6). `AcceptSeed` **is allowed** on a native store, so the restricted hold is never a dead end (a
+release adding a restricted scope to an existing seed role becomes effective once an admin accepts it);
+ABO's seed rows have no `PendingSeed` (above). `ErrLockedRole` keeps covering `admin`
 on every path. Custom roles stay fully editable — older builds never rewrite non-seed rows — and the
 Roles page offers "duplicate as custom role". This is no regression: HEAD has no seed-role edits at
 all (G3). Of the reviewer's two options in round 3, refusal is chosen over silently cloning a seed
@@ -794,15 +776,15 @@ shell's banner needs. `core:self` (own profile, own sessions and keys) is the ex
 self-service routes; a role without it (a worker role) cannot use them.
 
 `core:metrics.read` is seeded to `editor` and `viewer` only (SEC3-13), which keeps `/metrics`
-reachable for every interactive seed role as today (any credential reads it at HEAD,
-`server_lifecycle.go:1736-1747`). It is never seeded to a role holding a `Confining` scope: `fp-worker`
-would then hold a non-`Confining` scope, stop being `Confined()` and lose SEC-3's confinement
-everywhere (`TestSeed_NoNonConfiningScopeOnConfinedRole`). A scoped legacy key whose atoms do not
-expand to `core:metrics.read` loses `/metrics` **from S4 r2**: that PR changes the legacy manifest
-entry for `/metrics` from `AnyAuthenticated` to `core:metrics.read`, so stage 13 enforces it while
-the route is still gin's (S4–S7), and the kernel's `Infra` mount keeps the same requirement from S8;
-the change and its release note are recorded at S4 in 09 §9.2.6, and 05-metrics §6 states the same
-stage (OPS5-5, SEC5-13; `TestLegacyMetricsRoute_RequiresScopeFromS4`).
+reachable for every interactive seed role of a native store. It is never seeded to a role holding a
+`Confining` scope: `fp-worker` would then hold a non-`Confining` scope, stop being `Confined()` and lose
+SEC-3's confinement everywhere (`TestSeed_NoNonConfiningScopeOnConfinedRole`). **On ABO `/metrics` stays
+`AnyAuthenticated` (resolution A-5).** HEAD lets any credential read it
+(`internal/server/server_lifecycle.go:1736-1747` @748fd787a), and `core:metrics.read` has no legacy
+atom, so ABO's roles and keys cannot hold it before the identity hardening cutover. The legacy
+manifest entry keeps `AnyAuthenticated` through S7, and from S8 the kernel's `Infra` route requires
+`core:metrics.read`, which ABO lists as an ambient scope (§6.3), so every `AnyAuthenticated` principal
+holds it there (`TestLegacyMetrics_AnyAuthenticated`, 05-http-api).
 
 ### 4.9 Module declarations and escalation validation
 
@@ -846,7 +828,7 @@ admitted through `Manifest.LegacyRoleIDs []rbac.RoleName` (06 §6.4.2), which re
 | Tasks (05-tasks §5T.3.7) | definition declares `Permissions{Start, Cancel, Approve, View}`; `Start` **required** (registration fails like R6) and **not satisfiable by a `ClassView` scope** unless the definition sets `StartableByViewers` with a reviewed reason (SEC-9; the legacy translation of an op def declaring only `library.view` becomes `AllOf(books:scan, books:view)`, which keeps today's floor, `opsv3/handler.go:236-246`); `Cancel` zero = `Start`, the run's own actor may always cancel, `core:tasks.manage` may cancel any; `Approve` required iff the definition needs approval; `View` zero = `core:tasks.view`. **Approval** (SEC-24, today's rule kept, `opsv3/runs.go:395-410`): by a `session`, an API key, or a verified identity extension (CF Access); an API key must name the `Approve` scope **explicitly** in its scopes (not through implication or `core:admin`); `LegacyFullScope` keys and `session_delegated` are refused | closed |
 | Realtime topics (05-realtime) | the topic's permission from the one events topic catalog (05-events, SIMP-5) checked per subscriber per event; principal revalidated on heartbeat and invalidation | closed |
 | Settings sections (05-config) | each section declares `ReadPerm`, `WritePerm` (default write `<ns>:settings.manage`, core sections `core:settings.manage`); keys carry a `Protection` level (05-config), and keys whose change could mint admins, spoof client addresses or apply updates are `ProtectAdmin` (needs `core:admin` + an interactive method, SEC-6; the per-key column is in 05-authn §8 and 05-http-api §10); secret fields are write-only regardless | closed |
-| Storage/backup/updater admin ops | core routes; backups per 05-backup's route table (SEC2-8): list `core:system.view`; verify and create `core:system.manage` (verify opens a checkpoint and hashes the archive, so it is not a view-class start, SEC3-12); delete and import `core:system.manage` + `Guards.Interactive` (import audited); **download `core:admin` + `Guards.Interactive` + `Guards.Owner`** (with 05-authn §4.8's fallback; audited) — an archive holds every credential verifier, so it is credential-equivalent and never behind a grantable non-admin scope (SEC3-7); restore `core:backup.restore` (§6.1, SEC-16); **factory reset** `POST /api/core/v1/system/factory-reset` (from S4 r2, in `internal/storagehttp`; it only stages, through the kernel's staging function handed as `storagehttp.Stager`, never `*storage.Admin`, 05-storage §5S.3.15, COR8-2; request `{"confirm": "RESET"}`, 422 `confirm_required` otherwise): `core:admin` + `Guards.Interactive` + `Guards.Owner` (with 05-authn §4.8's fallback; audited `core.system.factory_reset`) — it sets aside every credential, role and secret record of the install, so like the archive download it is never behind a grantable non-admin scope (DATA6-6); the legacy `POST /api/v1/system/factory-reset` (`ResetFactory`) and `POST /api/v1/system/reset` (`ResetStore`) are its aliases with the same guards; before S4 r2 no core route exists and both legacy routes keep HEAD's chain (§6.2, resolutions R7-2, R8-1); other storage and updater admin `core:system.manage` | closed |
+| Storage/backup/updater admin ops | core routes; backups per 05-backup's route table (SEC2-8): list `core:system.view`; verify and create `core:system.manage` (verify opens a checkpoint and hashes the archive, so it is not a view-class start, SEC3-12); delete and import `core:system.manage` + `Guards.Interactive` (import audited); **download `core:admin` + `Guards.Interactive` + `Guards.Owner`** (with 05-authn §4.8's fallback; audited) — an archive holds every credential verifier, so it is credential-equivalent and never behind a grantable non-admin scope (SEC3-7); restore `core:backup.restore` (§6.1, SEC-16); **factory reset** `POST /api/core/v1/system/factory-reset` (from S4 r2, in `internal/storagehttp`; it only stages, through the kernel's staging function handed as `storagehttp.Stager`, never `*storage.Admin`, 05-storage §5S.3.15, COR8-2; request `{"confirm": "RESET"}`, 422 `confirm_required` otherwise; library files under `RootDir` are deleted only with `"delete_library_files": true`, confirmed by `RootDir` and the file count, §6.2, resolution A-17): `core:admin` + `Guards.Interactive` + `Guards.Owner` (with 05-authn §4.8's fallback; audited `core.system.factory_reset`) — it sets aside every credential, role and secret record of the install, so like the archive download it is never behind a grantable non-admin scope (DATA6-6); the legacy `POST /api/v1/system/factory-reset` (`ResetFactory`, passing `delete_library_files: true`) and `POST /api/v1/system/reset` (`ResetStore`) are its aliases with the same guards; before S4 r2 no core route exists and both legacy routes keep HEAD's chain (§6.2, resolutions R7-2, R8-1); other storage and updater admin `core:system.manage` | closed |
 | UI hints | `/api/core/v1/me` returns `permissions` (concrete, expanded) and `patterns`; `@mediacore/shell` `can(scope)` implements §4.4 in TS. **Advisory only**: the server is authoritative. Matching vectors shared in `core/rbac/testdata/match_vectors.json`, run by Go and vitest | n/a |
 
 ### 4.11 Interplay with auth modes
@@ -907,7 +889,7 @@ admitted through `Manifest.LegacyRoleIDs []rbac.RoleName` (06 §6.4.2), which re
    `ReconcileVerifiedEmails` (05-authn §5), so a fresh store booted on r1 has the four seed roles and an
    older build's re-seed semantics are unchanged; the r2 flip PR deletes that call in the same change
    that turns on P7's seed commit (05-authn §5 lists the whole `seedRolesAndTokens` sequence). The
-   service detects the store's capabilities (`legacy.RBACAtomWriter`, `legacy.ExtConfirmer`, §3.4)
+   service detects the store's capability (`legacy.RBACAtomWriter`, §3.4)
    through its unexported mirrors when it is built over the store P4c built, as rbac's restore hook does
    over the store it is handed; the kernel asserts none of them (SIMP7-5).
 2. **P5**: the kernel creates `rbac.Service` (over the `Store` built in P4c, with `Deps.Compile =
@@ -1030,21 +1012,36 @@ hook). Nothing destructive runs before the restart, and there is no core route b
   - **Request and response.** The request is `{"confirm": "RESET"}`; any other body answers 422
     `confirm_required` and stages nothing. Success answers 200 `{"reset_id", "message"}`; the restart
     follows (05-storage §5S.3.15).
+  - **Library files only on request (resolution A-17).** The native route deletes the library files
+    under `RootDir` only when the body also carries `"delete_library_files": true`; without it the reset
+    keeps every library file. With it, the body must also carry `"library_root"` and
+    `"library_file_count"` equal to the configured `RootDir` and the file count the server finds under
+    it at staging; a missing or mismatched value answers 422 `library_files_confirm_required`, stages
+    nothing, and its problem body carries the current `library_root` and `library_file_count`, which the
+    UI's confirmation dialog shows ("delete <count> files under <RootDir>") before the second request.
+    Success answers 200 `{"reset_id", "message", "library_root", "library_file_count"}`, so the response
+    names what will be deleted. The staged intent records the flag, the root and the count in
+    `hook_args`, and the hook deletes only under that root. `ResetStore` refuses the flag (422), because it has no file effect.
   - **Aliases.** Both legacy paths become the route's `Alias`es (05-http-api §4.6), in the r2 PR with the
     other native admin routes, and books' two gin handlers are deleted with them. The `/system/factory-reset`
-    alias stages `ResetFactory`. The `/system/reset` alias selects `ResetStore` through its
-    `LegacyPath.Request`, which sets the path value `reset_kind=store` (05-http-api §3.1). No native request
-    can carry that value, because the route's pattern has no such wildcard, so neither path can retarget the
-    other's action (SEC2-5).
+    alias stages `ResetFactory` and keeps HEAD's wipe: its `LegacyPath.Request` sets
+    `delete_library_files: true` and the path value `library_confirm=legacy`, under which the route
+    takes HEAD's `{"confirm": "RESET"}` as the whole confirmation, as HEAD did. The `/system/reset`
+    alias selects `ResetStore` through its `LegacyPath.Request`, which sets the path value
+    `reset_kind=store` (05-http-api §3.1). No native request
+    can carry either path value, because the route's pattern has no such wildcard, so neither path can
+    retarget the other's action and no native request skips the `RootDir` confirmation (SEC2-5).
   - **Legacy wire shape.** Both aliases set `LegacyError` and a `Shape` that returns HEAD's
     `{"data": {"message": …}}` with HEAD's message text (`handler.go:491,596`). `factoryReset` in
     `web/src/services/api.ts:3260-3271` @748fd787a reads `body.data`. The one wire difference is the
     confirm refusal: the alias answers 422 where HEAD answered 400, and that caller treats every non-2xx
     alike (`buildApiError`).
-- **HEAD's side effects.** For `ResetFactory` only, the gap-fill config file reset, the Open Library data
-  and the library `RootDir` wipe (`internal/server/handlers/system/handler.go:538-589` @748fd787a) run in
-  books' post-reset hook at the reset boot. They are stated as not undoable; whether to keep the `RootDir`
-  wipe is owner question Q-K in 14 (recommended: HEAD parity, with a release-note line). A dangerous
+- **HEAD's side effects.** For `ResetFactory` only, the gap-fill config file reset and the Open Library
+  data, and, when the intent's `delete_library_files` is true, the library `RootDir` wipe
+  (`internal/server/handlers/system/handler.go:538-589` @748fd787a), run in books' post-reset hook at the
+  reset boot. They are stated as not undoable. Q-K in 14 is answered by A-17: the legacy alias keeps
+  HEAD's wipe, and the native route wipes `RootDir` only on the explicit, count-confirmed request above,
+  with a release-note line. A dangerous
   `RootDir` is refused at staging with 400 and nothing is staged, as HEAD refuses it
   (`handler.go:565-570`). The hook never fails boot: per-entry errors are logged, audited and reported as
   `factory_reset_cleanup_incomplete`, and `hook_done` is always recorded. `ResetStore` has no hook effect,
@@ -1093,55 +1090,64 @@ no claim hand-over and **no storage grant** during the extraction. `rbac` reache
 
 | Key | Value |
 |---|---|
-| `c/rbac/role/<name>` | `codec.JSON[Role](1)` (every field of §3.3; `Legacy` always nil) |
+| `c/rbac/role/<name>` | `codec.JSON[Role](1)` (every field of §3.3) |
 
 User role assignments live in auth's user records (05-authn §3.4). `TestNativeStore_RoundTrip`
 (rbac) runs `rbactest.StoreSuite` over it.
 
 **ABO's legacy store (books-supplied).** The `books` module passes `module.Manifest.LegacyStores.Roles`
-(06 §6.4.2, §6.11.6): ABO code, over ABO's existing role rows and their name index in their legacy format
-(`Role{ID, Name, Description, Permissions []string, IsSeed, Version}`,
+(06 §6.4.2, §6.11.6): ABO code, over ABO's existing role rows and their name index in HEAD's
+representation (`Role{ID, Name, Description, Permissions []string, IsSeed, Version}`,
 `internal/database/store.go:966-977`), reached through books' own claims. User role assignments stay
 in the legacy user rows' role list (05-authn §11). Write exclusivity on those families is an ABO
 archtest (only the legacy-store package writes them), not a storage grant; grants for these families
 are part of the deferred cutover (05-storage). It runs `rbactest.StoreSuite` with HEAD fixtures, and
-`legacytest.RBACStoreSuite` for its capabilities (§3.4).
+`legacytest.RBACStoreSuite` for its capability (§3.4). **Through S10 the rows keep HEAD's
+representation, and nothing native-only is stored beside them (resolution A-2).** What a native role could hold beyond its
+atoms waits for the identity hardening cutover (05-authn §11.2).
 
 - **Legacy row content: legacy atoms only (SEC4-3).** A role row this build writes holds, in its
-  `Permissions` list, **only** the legacy atoms the row rule admits (`legacy.RBACAtomWriter.PutRoleAtoms`' `legacyAtoms`)
-  — never a namespaced string. HEAD's permission set is the union of the role rows' raw strings, and
-  worker confinement is a "nothing else" test: `workerOnly` holds only if every string is
-  `fingerprint.worker` (`internal/server/middleware/auth.go:271-297`), so one extra string in a
-  confining role's row would un-confine it on an older build. A natively `Confined()` role is
-  therefore written as exactly its atoms (`fingerprint.worker`), which keeps it worker-only there
-  (`TestRowRule_ConfinedRoleStaysWorkerOnlyOnPrev`); a `Confining` scope with no legacy atom (the
-  deferred `<m>:arr.*`) cannot be put in a role before the role cutover
-  (`ErrConfiningNoLegacyAtom`). Exact-match checks grant nothing for an unknown string, so the
-  premise "an older build ignores namespaced strings" held only for positive checks; the one negative
-  check is handled by never writing such strings.
-- **Native-only data in books' extension family.** The role's canonical permissions (patterns
-  included), `Title`, `Origin`, `SeedPermissions`, `SeedDigest` and `PendingSeed` are kept by the
-  legacy store in a **books-owned extension record** keyed by the role's ID, in a family no older build
-  reads, written in the same batch as the row. The record never repeats a field the row holds and
-  carries `legacy_ref.fp`, the SHA-256 of the role row's **guarded projection** (the extension-record
-  rule of 05-storage §5S.3.11). The projection covers the security-relevant fields only: `id`,
-  `permissions`, `is_seed`; `name`, `description`, `version` and timestamps are excluded, so an older
-  build's seed re-write that leaves a row's atoms unchanged suspends nothing (resolution R5-6,
-  SEC5-12, DATA5-16). The canonical permissions are **Widening**; `Title`, `Origin` and the seed
-  bookkeeping are Independent.
-- **Suspension on roll-forward.** When the row's hash differs from `legacy_ref` — an older build
-  changed the row while rolled back, or the row was restored or edited by hand — the extension is
-  **suspended**: the store reports it in `Role.Legacy.Suspended`, and the role grants only the translation of the
-  row's atoms through `LegacyAlias.New` (§6.1), which is never wider than what the older build
-  granted (no silent widening). A custom role stays suspended until an admin re-confirms it
-  (`POST /roles/{name}/reconfirm`, accept or discard; audited `core.role.reconfirm`). Both go through
-  the store's `legacy.ExtConfirmer` (`Confirm(ctx, b, "role/"+name)`, re-stamping the record from the
-  current row); discard also writes, in the same batch, the translation of the row's atoms as the
-  role's canonical set, so the role keeps exactly what the older build left it (SIMP6-4); health reports
-  `degraded` (`rbac_role_suspended`) naming the roles. Seed roles and `admin` carry no operator data
-  in their extension: on a mismatch the next `Freeze` re-derives it from the seed (§4.8), and a
-  restricted addition an admin had accepted returns to `PendingSeed`. A missing row makes the
-  extension an orphan, ignored and deleted by the next write of that key.
+  `Permissions` list, **only** the legacy atoms of the write mapping below
+  (`legacy.RBACAtomWriter.PutRoleAtoms`' `legacyAtoms`) — never a namespaced string. HEAD's permission
+  set is the union of the role rows' raw strings, and worker confinement is a "nothing else" test:
+  `workerOnly` holds only if every string is `fingerprint.worker`
+  (`internal/server/middleware/auth.go:271-297`), so one extra string in a confining role's row would
+  un-confine it on an older build. A natively `Confined()` role is therefore written as exactly its
+  atoms (`fingerprint.worker`), which keeps it worker-only there
+  (`TestRowRule_ConfinedRoleStaysWorkerOnlyOnPrev`).
+- **The API-level mapping (D7).** Core-namespaced scopes are what the API, the checker and the UI see;
+  legacy atoms are what the rows hold. The app's alias table (`app.Options.LegacyPermissionAliases`,
+  §4.9) is the one mapping:
+  - **read:** a role or key row's atom list maps to the union of the atoms' canonical expansions (for a
+    role the legacy store applies it over the app's alias table and returns the mapped set; for a key
+    auth does, 05-authn §3.4)
+    (`LegacyAlias.New`, §6.1), except that a list holding **every** atom of the table maps to
+    `{core:admin}`. HEAD's `admin` seed is `All()` (`internal/auth/seed.go:44-46` @748fd787a) and so is
+    HEAD's bootstrap key (`internal/server/bootstrap.go:402` @748fd787a), and with early fix 4 a key
+    holding every atom is HEAD's admin-equivalent credential (05-authn §11.1). The locked role `admin`
+    reads as `{core:admin}` by its ID. Each role read from the store also gets the app's ambient scopes
+    (below) when it is not `Confined()`;
+  - **write:** a requested set `S` (after the implication closure, minus the ambient scopes) is written
+    as `{core:admin}` → every atom, else as the atoms whose expansion lies inside `S`, which the row
+    rule below must admit. The write is accepted only when the read mapping of those atoms gives `S`
+    back; otherwise it is refused with 422 `no_legacy_atom` (`ErrNoLegacyAtom`), naming the
+    permissions that have no atom (§4.7 rule 6, §4.5). So a role or key holds exactly what its row
+    grants an older build, never more, and no write can be silently narrowed.
+- **Scopes legacy rows cannot hold (resolutions A-2, A-5).** A core-only scope has no legacy atom, so
+  no role or key of ABO's store holds it before the identity hardening cutover. Where HEAD gated such a
+  scope's routes by authentication alone, the app lists it in the compile-time
+  `app.Options.LegacyAmbientScopes []rbac.Permission` (06 §6.4.5; ABO: `core:self`, `core:metrics.read`,
+  `books:reading`). On an instance whose role store is legacy-backed, every principal that satisfies
+  `AnyAuthenticated` (§4.10) holds those scopes as well, so their routes keep HEAD's
+  authenticated-only reach: own profile, sessions and keys, `/metrics` (HEAD: any credential,
+  `internal/server/server_lifecycle.go:1736-1747`) and own reading state. A `Confined()` principal never
+  holds them. `Freeze` refuses the option on a native role store, and refuses a listed scope that is
+  `Sensitive`, `AuthRequired`, `Confining` or a `*:settings.manage`/`*:integrations.manage` scope
+  (`ErrRestrictedGrant`). Every other core-only scope (`core:system.manage`, `core:audit.view`,
+  `core:backup.restore`, …) is reached on ABO only through `core:admin`, as its HEAD predecessor was
+  reached only by `admin`; `core:system.status` is not ambient, because HEAD's status route needs
+  `settings.manage` (`wire_system_routes.go:28`), so ABO's readiness banner is admin-only until the
+  cutover.
 - **Row rule (never widen on rollback; SEC3-1, SEC4-4).** A legacy atom is written into a role row
   only if the role's native checker satisfies `Catalog.LegacyReach(atom)` — `AllOf` the native scope
   set equivalent to **every** legacy route and in-handler check that atom gates on the **snapshot
@@ -1166,10 +1172,21 @@ are part of the deferred cutover (05-storage). It runs `rbactest.StoreSuite` wit
   Reach on releases older than the snapshot is K21's territory (the runbooks name the
   oldest supported rollback target). §6.1's fourth column states the outcome; for `users.manage` and
   `settings.manage`, whose reach includes acting on any account and admin-minting sign-in fields, only
-  `core:admin` qualifies. A role that fails the rule simply lacks the atom on an older build:
-  narrower, never wider. Property test `TestRowRuleDominatesLegacyReach` reads the snapshot (random
+  `core:admin` qualifies, so with atom-only rows only `admin`, or a custom role written as every atom,
+  holds them. A role that fails the rule cannot be written (the write mapping refuses it); it is never
+  stored narrower than asked. Property test `TestRowRuleDominatesLegacyReach` reads the snapshot (random
   native roles; for each legacy route, a request the older build would admit from the row's atoms is
   one the native role admits on the route's successor).
+- **On ABO the row rule reduces to HEAD's own check (A-2).** Because every role and key of a
+  legacy-backed store is its atom list, and the write mapping stores only sets that the row rule
+  admits, `LegacyAtom(atom)` and `LegacyCheck(atom, "")` decide exactly as HEAD's `s.perm` and
+  `auth.Can` do: a role principal satisfies them iff the atom is in the union of its roles' rows
+  (`internal/server/middleware/auth.go:430-455` @748fd787a), and a key iff the atom is also in its
+  list or the list is empty (`:405-425`). For the eleven atoms whose `Reach` equals their expansion no
+  other atom's expansion covers it (§6.1), and `users.manage` and `settings.manage` are written only into
+  every-atom rows, which read as `core:admin`. The auth-disabled rules of §3.1 and the `read_side`
+  rule stay as specified. `TestLegacyAtomEqualsHEADCheck` asserts the equivalence over every atom set
+  and every key list, and the reach machinery below matters only for native roles.
 - **Legacy routes require the full reach (R4-3, SEC4-2).** The legacy manifest's `Perm` of every
   `s.perm(atom)` route records `LegacyAtom(atom)` from S2 (05-http-api §8.1, COR6-1); from 09 S4 r2
   stage 13 enforces it, the mount's `s.perm(atom)` adapter carries the same value, an adapted
@@ -1177,62 +1194,59 @@ are part of the deferred cutover (05-storage). It runs `rbactest.StoreSuite` wit
   `auth.Can(ctx, atom)` site is replaced by the bridge's adapter over `LegacyCheck(atom, readSide)`
   from the snapshot's in-handler list (an ABO archtest finds no raw `auth.Can` left in the legacy
   mount and every site's requirement equal to its list entry). For a role principal both require
-  `Catalog.LegacyReach(atom)`, not the atom's expansion: a custom role holding the four
+  `Catalog.LegacyReach(atom)`, not the atom's expansion: a native role holding the four
   `settings.manage` expansion scopes — a natural "settings admin" — passes no `settings.manage` gin
   route (backup restore and create, logs, storage, diagnostics, filesystem browse and import paths,
   tool installs, AI model pulls, plugin settings, op definitions declaring `settings.manage`), so it
   cannot restore an archive from before its own demotion. Seed-role reach is unchanged (only `admin`
-  holds those atoms, and it holds `core:admin`); auth-off reach is unchanged (§4.11); and a pre-core
-  scoped key keeps HEAD's role ∩ key reach (SEC5-7): an admin's `abk_` key scoped
-  `["settings.manage"]` (backup or maintenance automation) still passes every `settings.manage` route
-  and op start, because its owner's roles satisfy the reach and the atom is in its list, while no
-  native scope short of `core:admin` could rebuild it. `TestLegacyRoleReachUnchanged` gains a
-  custom-role half and a scoped-key cell for each half, and
-  `TestLegacyRoute_SettingsAtomNeverWiderThanSuccessor` checks the two atoms.
-- **Reading a row.** A row whose extension is current is read as the extension's canonical
-  permissions. A row with no extension (written by an older build, or never touched) is translated
-  through §6.1's expansion. An atom outside §6.1 grants nothing (fail-closed), the role is reported
-  `degraded` naming it, and the S4 probe P2 lists it; boot continues, so one bad row never
-  crash-loops the unit (SEC4-13, 09 §9.2.3 rule 3). The S4 r1 decode census reports such rows before
-  the flip.
+  holds those atoms, and it holds `core:admin`); auth-off reach is unchanged (§4.11); and a key keeps
+  HEAD's role ∩ key reach (SEC5-7): an admin's `abk_` key scoped `["settings.manage"]` (backup or
+  maintenance automation) still passes every `settings.manage` route and op start, because its owner's
+  roles satisfy the reach and the atom is in its list, while no native scope short of `core:admin`
+  could rebuild it. `TestLegacyRoleReachUnchanged` gains a custom-role half and a scoped-key cell for
+  each half, and `TestLegacyRoute_SettingsAtomNeverWiderThanSuccessor` checks the two atoms.
+- **Reading a row.** A row is read through the read mapping above. An atom outside §6.1 grants
+  nothing (fail-closed), the role is reported `degraded` naming it, and the S4 probe P2 lists it; boot
+  continues, so one bad row never crash-loops the unit (SEC4-13, 09 §9.2.3 rule 3). The S4 r1 decode
+  census reports such rows before the flip.
 - **One write, every build.** A role write — create, edit, delete, and every revocation (a role
   unassigned, narrowed or deleted, interactively, by journal re-application or by the post-restore
-  hook, §7.1) — rewrites that row, its extension record and the affected user rows in one batch with
-  its audit record and journal line. Narrowing removes the atoms the rule no longer admits in the same
-  row write, so the restriction holds for an older build after a rollback with nothing else to keep
-  in step.
-- **Seed roles** are re-seeded by every build at boot (HEAD: every boot, `internal/auth/seed.go:80-129`).
-  An older build's rewrite after a rollback changes the row, so this build's next `Freeze` re-derives
-  the extension (§4.8; a row without a current extension counts as last seeded with the translation
-  of its atoms). Operator edits of seed roles are refused until the cutover (§4.8).
+  hook, §7.1) — rewrites that row and the affected user rows in one batch with its audit record and
+  journal line. Narrowing removes atoms in the same row write, so the restriction holds for an older
+  build after a rollback, and a change an older build makes is what this build reads after the roll
+  forward: the row is the only copy.
+- **Seed roles** are re-seeded by every build at boot with HEAD's atoms (§4.8; HEAD: every boot,
+  `internal/auth/seed.go:80-129`). Operator edits of seed roles are refused until the role cutover
+  (§4.8).
 - **Custom roles** (`custom.<slug>`) are new rows older builds never rewrite; on an older build they
-  grant only the atoms the row rule admitted.
-- **API keys never widen (SEC-1).** Keys keep their own scope lists; new keys never store an empty
-  list and never a namespaced string in the legacy row (a key with no admitted atom holds the
-  reserved no-scope string), legacy keys keep what they were created with, and an empty legacy list
-  is read as `LegacyFullScope` exactly when the key's scopes come from its legacy row (no extension
-  record holding canonical scopes; §4.5's one predicate; 05-authn §4.4, §11, SEC6-2).
-  `TestAPIKey_StoredScopesNeverEmpty` (05-authn §10).
+  grant exactly their atoms, which the write mapping made equal to what they grant here.
+- **API keys never widen (SEC-1).** Keys keep their own atom lists, written by the same write mapping
+  (05-authn §4.4): never empty, never a namespaced string; legacy keys keep what they were created with,
+  and an empty legacy list is `LegacyFullScope` (§4.5). `TestAPIKey_StoredScopesNeverEmpty` (05-authn
+  §10).
 - **Compatibility window.** The window is the one defined in 09 §9.2.1 and recorded in the `compat`
   ledger (09 §9.2.9) under surface `rbac_atom`; the legacy alias table **is** the compile-time
   `app.Options.LegacyPermissionAliases` (§4.9; no runtime flag, SIMP-7). During the window:
-  - key-creation and role-write APIs accept legacy atoms, store the canonical expansion, count
-    `mediacore_compat_legacy_use_total{surface="rbac_atom"}`, and answer with `Deprecation` and a
-    `deprecated_permissions` field;
+  - key-creation and role-write APIs also accept legacy atoms as input, store them through the write
+    mapping, count `mediacore_compat_legacy_use_total{surface="rbac_atom"}` (process-local), and answer
+    with `Deprecation` and a `deprecated_permissions` field;
   - `/api/v1/auth/me` (legacy alias) keeps the legacy wire shape (FE3-7): `permissions` holds the
     legacy atoms whose `Catalog.LegacyReach` the principal's checker satisfies (the test the bridge's
     `s.perm` applies), so a previous-release tab shows exactly the controls its user may use
     (`web/src/hooks/useLibraryPermission.ts:9,11`), and the alias adds `canonical_permissions`. The
     native `/api/core/v1/me` returns canonical names only (§4.10).
-- Contract (09, gated by `TestNoContractBeforeSunset` and the usage counter): the alias table is
-  removed by a PR and legacy strings are refused with 400 `unknown_permission` naming the canonical
-  permission. It writes no stored data.
-- **Deferred: cutover.** Moving ABO's roles to the native store (and with it lifting
-  `ErrSeedRoleLocked`, the operator diff of §3.6, and the storage grant the move needs) is not part of
-  the extraction: a later, one-way, checkpointed step behind the per-owner level guard, decided on
-  measured data (02 decision 13), whose floor is the cutover release itself. The cutover stops
-  supplying `legacy.Stores.Roles` and may delete `legacy.RBACAtomWriter` and `RBACStoreSuite`: they live
-  in `legacy`, outside the API promise, so that is not a v1 break (resolution R6-3).
+- Contract (09, gated by `TestNoContractBeforeSunset`, the ledger's dates and the owner's check of the
+  counter, resolution A-14): legacy atoms as API input are refused with 400 `unknown_permission` naming
+  the canonical permission. The alias table itself stays as long as rows hold atoms, which is until the
+  identity hardening cutover. It writes no stored data.
+- **Deferred: cutover.** Moving ABO's roles to the native store is part of the identity hardening
+  cutover (05-authn §11.2): a later, one-way, checkpointed step behind the per-owner level guard,
+  decided on measured data (02 decision 13), whose floor is the cutover release itself. It brings native
+  scopes in role rows (core-only scopes included, so `app.Options.LegacyAmbientScopes` goes),
+  `SeedDigest`/`PendingSeed` for ABO, the lift of `ErrSeedRoleLocked` with the operator diff of §3.6,
+  and the storage grant the move needs. It stops supplying `legacy.Stores.Roles` and may delete
+  `legacy.RBACAtomWriter` and `RBACStoreSuite`: they live in `legacy`, outside the API promise, so that
+  is not a v1 break (resolution R6-3).
 
 ## 7. Audit log (`core/audit`, G13)
 
@@ -1247,9 +1261,9 @@ is normative; other files use these names.
 |---|---|---|
 | `core.auth.*` | login success **sync**; failure/throttle **async** | `login` (success/failure; `Reason` `throttled` when the throttle refused), `logout`, `setup` |
 | `core.bootstrap.*`, `core.identity.*`, `core.templogin.*`, `core.invite.*` | sync | `bootstrap.redeem`; `identity.link`, `identity.unlink`, `identity.displace` (email displacement); `templogin.mint`, `templogin.consume`; `invite.create`, `invite.accept` |
-| `core.session.*`, `core.apikey.*` | sync (in batch) | `session.revoke`, `session.revoke_after_rollback` (05-authn §4.3); `apikey.create`, `apikey.revoke`, `apikey.set_status`, `apikey.require_confirmation`, `apikey.confirm` (05-authn §4.4) |
+| `core.session.*`, `core.apikey.*` | sync (in batch) | `session.revoke` (05-authn §4.3); `apikey.create`, `apikey.revoke`, `apikey.set_status`, `apikey.require_confirmation` (05-authn §4.4, §4.14) |
 | `core.user.*` | sync (in batch) | `create`, `disable`, `enable`, `delete`, `reset_password`, `set_roles` |
-| `core.role.*` | sync (in batch) | `create`, `update`, `delete`, `update_seed`, `accept_seed`, `reconfirm` (§6.3), `review_admin` (§7.1); `reset` with the role cutover (§3.6) |
+| `core.role.*` | sync (in batch) | `create`, `update`, `delete`, `update_seed`, `accept_seed`, `review_admin` (§7.1); `reset` with the role cutover (§3.6) |
 | `core.permission.deny` | async, coalesced | every 403 from httpapi stage 13, from `rbac.Require` (including the legacy mount's `s.perm` adapter from 09 S4), every 403 `dominance_required` and every 403 `cross_origin_rejected` (from 09 S4; before that the access log's `security_event`, 05-http-api §4.2) |
 | `core.task.*` | sync | `approve`, `reject`, `cancel` (by another actor) |
 | `core.settings.*` | sync (in batch) | `update`: section + changed key names (values of secret fields never) |
@@ -1285,13 +1299,14 @@ open; boot fails if either fails. They also run on a replaced-store boot (05-aut
   the last active `core:admin` holder, the role is **kept** — a lockout is worse than a stale admin —
   but the account is restricted without being removed (SEC3-15, SEC4-12): its `password_hash` is
   blanked with `password_reset_required` set (05-authn §4.14 step 1), its API keys are set
-  `needs_confirmation`, and its sign-in through identity links is suspended (`User.SignInRestricted`,
-  05-authn §4.14): OIDC and identity extensions refuse it as password sign-in does, until an
-  owner-verified reset link or the offline `<app> users reset-password` clears it (opened through
-  `kernel.OpenOffline`, so it is not a foreign open; 05-authn §4.14, DATA7-11). On an older build
-  the blanked hash plus the deletion of its external-identity links (journaled `identity.unlinked`)
-  hold; the residual is Cloudflare Access sign-in on an older build, which resolves users by
-  allow-listed e-mail and is stated in the restore report. So the demoted, possibly compromised,
+  `needs_confirmation` (`disabled` on a legacy-backed store, 05-authn §4.4), its external-identity
+  links are deleted (journaled `identity.unlinked`), and on a native store its sign-in is restricted
+  (`User.SignInRestricted`, 05-authn §4.14): OIDC and identity extensions refuse it as password sign-in
+  does, until an owner-verified reset link or the offline `<app> users reset-password` clears it
+  (opened through `kernel.OpenOffline`, so it is not a foreign open; 05-authn §4.14, DATA7-11). On a
+  legacy-backed store, and on an older build, the blanked hash, the restricted keys and the deleted
+  links hold; the residual is Cloudflare Access sign-in, which resolves users by allow-listed e-mail,
+  is stated in the restore report and ends with the identity hardening cutover (05-authn §11.2). So the demoted, possibly compromised,
   account cannot sign in with its restored password, keys or SSO links here;
   health reports `degraded` (`restore_last_admin_kept`) naming the recovery path (a reset link through
   the owner verifier, or the offline `<app> users reset-password`), and the audit record says which
@@ -1320,7 +1335,7 @@ open; boot fails if either fails. They also run on a replaced-store boot (05-aut
   `core:admin` holder in the restore report and health reports `degraded` (`restore_admins_review`)
   naming them until an interactive `core:admin` session acknowledges each one (audited
   `core.role.review_admin`), and auth's fallback has already bumped their epochs (every session gone)
-  and set their keys `needs_confirmation`, so nothing they held before the restore is usable without a
+  and restricted their keys (`needs_confirmation`, or `disabled` on a legacy-backed store), so nothing they held before the restore is usable without a
   fresh sign-in. §14 item 8 records the stronger option (sign-in restriction) and its cost.
 - **audit's hook** opens `rc.Previous("core/audit")` — the read-only view of the pre-swap store
   limited to `c/audit/`. The boundary is clock-free (DATA2-7): the archive's manifest records the
@@ -1407,14 +1422,13 @@ account IDs only, as today, `internal/oauth/oauth.go:67-71`).
 | Last-admin removal | 409 `last_admin` | closed | lockout protection |
 | Seed merge storage error at boot | boot error | closed | partial seed state is worse than not starting |
 | A legacy-only role row holds an atom outside §6.1 | the atom grants nothing; the role is reported `degraded` naming it; P2 lists it; boot continues (09 §9.2.3 rule 3) | closed (that atom) | one bad row never crash-loops the unit (SEC4-13) |
-| A role's extension is stale against its row (an older build changed it) | `Suspended`: the role grants only the translation of the row's atoms until an admin re-confirms; seed roles re-derived at `Freeze`; health `degraded` (`rbac_role_suspended`) | closed | no silent widening on roll-forward (R4-1) |
-| A `Confining` scope with no legacy atom in a role write | 400 `confining_no_legacy_atom` (`ErrConfiningNoLegacyAtom`) | closed | its row could not stay confined on an older build (SEC4-3) |
+| A role or key write on a legacy-backed store naming a set that is not a union of whole legacy atoms the row rule admits (a core-only scope, part of an atom's expansion, a `Confining` scope without an atom) | 422 `no_legacy_atom` (`ErrNoLegacyAtom`), naming the permissions; nothing written | closed | the row is the only copy, and an older build grants exactly its atoms (A-2, SEC4-3) |
 | The role store's backend differs from the claim ledger's record | boot error `ErrLegacyStoreMissing` (05-storage) | closed | a build without the app's legacy store must not serve a store that has one |
 | Sync audit write fails | the change fails (same batch) | closed | attribution of security changes is required |
 | Async audit queue full | drop + metric | open | availability |
 | Audit query store error | 503 | closed | |
 | Restore audit copy-forward fails | boot error | closed | SEC-17 |
-| Restore role re-application would remove the last admin | role kept, account restricted (password reset required, keys `needs_confirmation`); health `degraded`; audited | open (that entry) | lockout protection (SEC2-10, SEC3-15) |
+| Restore role re-application would remove the last admin | role kept, account restricted (password reset required, keys `needs_confirmation` or, on a legacy-backed store, `disabled`); health `degraded`; audited | open (that entry) | lockout protection (SEC2-10, SEC3-15) |
 | Staged restore (a pre-swap store exists), with or without journal coverage | role rows and assignments: most restrictive of restored and pre-swap state | closed | an unjournaled or undetected demotion is not undone (SEC5-10, SEC6-4) |
 | Seed-role edit or delete before the role cutover (`accept-seed` excepted) | 409 `seed_role_locked` | closed | an older build's per-boot re-seed would silently widen it after a rollback (DATA2-20) |
 | Prune fails | task fails, retried next run; growth alarm when > 1.5 × max_records | open | |
@@ -1466,6 +1480,10 @@ option governed by the compat ledger (§6.3, SIMP-7).
 | `mediacore_audit_write_errors_total` | counter | `path` (`sync`,`async`) |
 | `mediacore_audit_pruned_total` | counter | — |
 
+Names are shown under core's default metric namespace `mediacore`; an app passes its own as an
+`app.Options` value, ABO HEAD's `audiobook_organizer`, so nothing is renamed (resolution A-5, 05-metrics).
+`mediacore_rbac_pending_seed_roles` is always 0 on a legacy-backed store (§4.8).
+
 ## 12. Tests
 
 | Test | Asserts |
@@ -1480,23 +1498,28 @@ option governed by the compat ledger (§6.3, SIMP-7).
 | `TestAuthDisabled_CheckerHasNoAdmin` | `authz.AuthDisabled` holds no `AuthRequired`/`Sensitive` scope, `admin=false`, `Has(core:system.manage)` false (SEC-2) |
 | `TestAuthOff_AdminRouteKindsUnchanged` | the §6.2 table: read-only kinds open, always-authenticated kinds 401 with auth off |
 | `TestUserMerge_ScopedAdminKeyRefused` | legacy (early fix 4, ABO's current code) then core (S4 on): an admin's API key scoped `["users.manage"]` passes the route guard of `GET /users/:id/footprint` and `GET /users/merges` and is refused by the merge actor check (403); it is refused on every merge POST (credential route); the admin's session reads and merges (§4.6, SEC8-7) |
-| `TestFactoryResetCoreRouteRecordsHookArgs` | S4 r2: the intent staged through `POST /api/core/v1/system/factory-reset` and through the `/api/v1/system/factory-reset` alias carries `kind: factory` and `hook_args`, written through the kernel's `Stager` (§6.2, COR8-2) |
+| `TestFactoryResetCoreRouteRecordsHookArgs` | S4 r2: the intent staged through `POST /api/core/v1/system/factory-reset` and through the `/api/v1/system/factory-reset` alias carries `kind: factory` and `hook_args`, written through the kernel's `Stager`; the alias's `hook_args` carry `delete_library_files: true` (§6.2, COR8-2, A-17) |
+| `TestFactoryReset_LibraryFilesNeedCountedConfirm` | S4 r2, native route: without `delete_library_files` the intent keeps every library file; with it but without, or with a stale, `library_root`/`library_file_count` → 422 `library_files_confirm_required` carrying the current root and count, nothing staged; with matching values 200 naming the root and count, and the hook deletes only under that root; `ResetStore` with the flag → 422; no native request can set `library_confirm` (resolution A-17, SEC2-5) |
 | `TestFactoryResetAliasKeepsConfirmAndShape` | S4 r2, both legacy aliases: a missing or wrong `confirm` answers 422 and stages nothing; success returns HEAD's `{"data": {"message": …}}`; the `/api/v1/system/reset` alias stages `kind: store`, and no body field steers it to `factory` (§6.2, COR8-1, COR8-2) |
 | `TestConfining_WorkerKeyRefusedOnPlaylists` | `books:fingerprint.worker` key → 403 on the playlist routes and every `AnyAuthenticated` route (regression for `middleware/auth.go:289`), 200 on the worker routes |
 | `TestConfining_FacadeKeyRefusedOnNative` (deferred-build: lands with `arrfacade`, SIMP2-6) | `tv:arr.read` key → 403 on every non-facade route (SEC-5) |
 | `TestRestore_DemotedAdminStaysDemoted` | archive taken before an admin's demotion; restore, restart, roll back to the previous release: the account is not admin anywhere; a re-application that would remove the last admin keeps the role, blanks the password, sets the keys `needs_confirmation` and reports health `degraded` (SEC2-10, SEC3-15) |
 | `TestAudit_CopyForwardThenWriteNoOverwrite` | after a restore with copied records, the next N records get fresh `seq`s and no copied record or index row changes (SEC2-12, DATA2-16) |
 | `TestSeedRole_EditRefused` | `PATCH /roles/editor` and `DELETE /roles/editor` → 409 `seed_role_locked`; `accept-seed` → 200; custom roles editable (DATA2-20, SIMP4-6) |
-| `TestSeed_NoNonConfiningScopeOnConfinedRole` | no seed merge gives a role holding a `Confining` scope a non-`Confining` one; `fp-worker` stays `Confined()`; `editor`/`viewer` hold `core:metrics.read` (SEC3-13) |
+| `TestSeed_NoNonConfiningScopeOnConfinedRole` | no seed merge gives a role holding a `Confining` scope a non-`Confining` one; `fp-worker` stays `Confined()`; on a native store `editor`/`viewer` hold `core:metrics.read` (SEC3-13) |
 | `TestRowRuleDominatesLegacyReach` **(ABO)**, over core's `rbactest.RowRuleSuite` (core runs the suite over its synthetic fixture `core/rbac/testdata/legacy_reach_synthetic.json`) | property test of §6.3's row rule over the frozen reach snapshot books supplies (`internal/books/rbacreach/legacy_reach_v<release>.json`, name open): for random native roles, every legacy route the snapshot release admits from the row's atoms is admitted natively on its successor; `users.manage`/`settings.manage` only with `core:admin`; every other atom's `Reach` equals its expansion (SEC3-1, SEC4-4) |
-| `TestRoleRow_PrevBuildSeesAdmittedAtomsOnly` | a custom role written by this build holds only admitted atoms in its row, never a namespaced string; read by the previous release's real binary it grants exactly those atoms; a narrowing here is narrower there at once (R4-1, SEC4-3) |
+| `TestRoleRow_PrevBuildSeesAdmittedAtomsOnly` | a custom role written by this build holds only its atoms in its row, never a namespaced string; read by the previous release's real binary it grants exactly those atoms, which is what it grants here; a narrowing here is narrower there at once (R4-1, SEC4-3, A-2) |
 | `TestRowRule_ConfinedRoleStaysWorkerOnlyOnPrev` | a custom role `{books:fingerprint.worker}` is written as `["fingerprint.worker"]`; HEAD's `workerOnly` over the row is true; the S4 R-test cell "a custom confining role created on cur is confined on prev" (SEC4-3) |
-| `TestRoleExtension_SuspendedAfterPrevWrite` | a custom role's row changed by the previous release → on roll-forward `Suspended`, grants only the row's translated atoms, health `rbac_role_suspended`, `reconfirm` restores or discards; a seed role's extension is re-derived at `Freeze` (R4-1) |
-| `TestReseedFromHEADRows_AdminKeepsCoreAdmin` | a store seeded by HEAD (rows without `SeedDigest`): after the first S4 r2 boot `admin` holds `core:admin`, `PendingSeed` is empty for every role whose stored atoms' reach implies the addition (DATA4-11) |
+| `TestLegacyRoleRow_PrevWriteIsReadAsIs` | (ABO, R-test cell) a custom role's row changed by the previous release is read on roll-forward exactly as its atoms map, with no other state; a seed row is re-seeded with HEAD's atoms at the next boot (A-2) |
+| `TestLegacyRoleWrite_RefusesUnrepresentableSet` | (ABO) a role or key write naming `core:audit.view`, `books:view` without `core:tasks.view`, or `books:fingerprint.worker` plus `books:view` on a custom role → 422 `no_legacy_atom` naming the permissions, nothing written; `{core:admin}` is written as every atom and reads back as `{core:admin}`; a write of whole atom expansions round-trips (§4.7 rule 6, §6.3, A-2) |
+| `TestLegacyAmbientScopes` | (ABO) every `AnyAuthenticated` principal holds `core:self`, `core:metrics.read` and `books:reading`, a key scoped `["library.view"]` included; an `fp-worker` key holds none; the option on a native store, or listing a `Sensitive`, `AuthRequired` or `Confining` scope, fails `Freeze` (§6.3, A-2, A-5) |
+| `TestLegacyAtomEqualsHEADCheck` | (ABO) property test over random atom sets for roles and random key lists (empty included): `LegacyAtom(atom)` and `LegacyCheck(atom, "")` admit a principal of the legacy-backed store iff HEAD's `s.perm`/`auth.Can` over the same rows admits it (§6.3, A-2) |
+| `TestLegacySeedAtomsEqualHEAD` | (ABO) the atoms the P7 seed commit writes for `admin`, `editor`, `viewer` and `fp-worker` equal HEAD's `SeedRoles` output (`internal/auth/seed.go:44-80`); no `SeedDigest` or `PendingSeed` is stored (§4.8, A-2) |
+| `TestReseedFromHEADRows_AdminKeepsCoreAdmin` | a store seeded by HEAD: after the first S4 r2 boot `admin` reads as `{core:admin}` from its all-atom row and the HEAD bootstrap key reads as a `{core:admin}` key; the rows are byte-identical to HEAD's re-seed (DATA4-11, A-2) |
 | `TestUnknownAtom_RoleDegradedBootContinues` | a legacy-only row with an atom outside §6.1 → the atom grants nothing, health `degraded` names the role, boot continues (SEC4-13) |
-| `TestNativeStore_RoundTrip` / `rbactest.StoreSuite` / `legacytest.RBACStoreSuite` | the native store and ABO's legacy store pass the same `StoreSuite` (ABO's with HEAD fixtures); ABO's also passes `legacytest.RBACStoreSuite`, which drives the service with one case per capability (`RBACAtomWriter`; `ExtConfirmer` accept and discard), so a method-set drift between `legacy` and rbac's unexported assertion fails it (SIMP4-3, R4-1, SIMP5-4, SIMP5-9, SIMP6-4, SIMP6-6, R6-3) |
+| `TestNativeStore_RoundTrip` / `rbactest.StoreSuite` / `legacytest.RBACStoreSuite` | the native store and ABO's legacy store pass the same `StoreSuite` (ABO's with HEAD fixtures); ABO's also passes `legacytest.RBACStoreSuite`, which drives the service with one case per capability (`RBACAtomWriter`), so a method-set drift between `legacy` and rbac's unexported assertion fails it (SIMP4-3, R4-1, SIMP5-4, SIMP5-9, SIMP6-6, R6-3) |
 | `TestS2Manifest_SPermRoutesCarryLegacyAtom` | (in 05-http-api) from S2 every `s.perm(atom)` manifest entry's `Perm` is `LegacyAtom(atom)`, built from the S2 leaf constructor with no catalog; `Handle` refuses it; S4's `Freeze` refuses an atom no legacy alias names (COR6-1) |
-| `TestLegacyAtom_AuthOffLegacyKeyAndRole` | `LegacyAtom("settings.manage")`: the auth-disabled checker satisfies it, an admin's `abk_` key scoped `["settings.manage"]` without an extension satisfies it, the same key of a non-admin owner and a custom role holding the four expansion scopes do not; `LegacyCheck` is never satisfied by the auth-disabled checker, and a `read_side` site admits a `core:users.view` holder (COR5-4, SEC5-7, SEC5-9, SEC5-14) |
+| `TestLegacyAtom_AuthOffLegacyKeyAndRole` | `LegacyAtom("settings.manage")`: the auth-disabled checker satisfies it, an admin's `abk_` key scoped `["settings.manage"]` satisfies it, the same key of a non-admin owner and a custom role holding the four expansion scopes do not; `LegacyCheck` is never satisfied by the auth-disabled checker, and a `read_side` site admits a `core:users.view` holder (COR5-4, SEC5-7, SEC5-9, SEC5-14) |
 | `TestRestore_UnjournaledDemotionHeldByPreSwapStore` | staged restore of an archive taken before an unjournaled demotion (older build's interval, failed `Append`) with nil coverage, **and** with complete coverage over an interval detection missed: the role stays unassigned and narrowed, deleted roles stay deleted, the last-admin rule still holds (SEC5-10, SEC6-4) |
 | `TestAppLegacyAliases_MayTargetCore` | an app-level alias from `app.Options.LegacyPermissionAliases` targeting `core:*` passes `Freeze`; one whose `Reach` does not dominate `New` or names an unknown scope fails; the same alias in a module manifest → `ErrCoreGrant` (COR5-5) |
 | `TestLegacyRoute_SettingsAtomNeverWiderThanSuccessor` | (in 05-http-api) the two `{core:admin}`-reach atoms gate their routes with `core:admin`; a role holding the four `settings.manage` expansion scopes gets 403 on restore and the other admin-equivalent routes (R4-3, SEC4-2) |
@@ -1515,7 +1538,7 @@ option governed by the compat ledger (§6.3, SIMP-7).
 | `TestLegacyAtomMapping_Golden` | the 13 rows of §6.1 |
 | `TestLegacyRows_ReadInPlace` | (ABO, through books' legacy stores) fixture DB from ABO's role, user and key families → expected roles, checkers and keys, with no row written by the read (R4-1) |
 | `TestLegacyRevocationHonoured` | key revoked or user deactivated on the previous release → refused here at the next request, with no rebuild (R3-1) |
-| `TestLegacyRoleReachUnchanged` (09) | extended to scoped API keys (HEAD's role ∩ key reach on legacy routes and op starts, SEC5-7), auth-off mode (200 on a `settings.manage` route and a started `settings.manage` op; in-handler `deny` sites with response-content cells; the recorded tightenings of §4.11 asserted refused, COR5-4, SEC5-8, SEC5-9) and random custom roles (stage 13 admits a legacy route only if its successor admits, SEC4-2), not only the 4 seed roles; runs on a HEAD-seeded store, not only a fresh one (DATA4-11); S2b and S3 cells assert HEAD's reach for the legacy `POST /api/v1/system/factory-reset` and `POST /api/v1/system/reset` under HEAD's chain (no core route exists; the handlers stage through `legacy.Maintenance`), and from S4 r2 the aliases' reach, `core:admin` + Interactive + Owner for both (§6.2, resolutions R7-2, R8-1, SEC7-4, COR8-1) |
+| `TestLegacyRoleReachUnchanged` (09) | extended to scoped API keys (HEAD's role ∩ key reach on legacy routes and op starts, SEC5-7), auth-off mode (200 on a `settings.manage` route and a started `settings.manage` op; in-handler `deny` sites with response-content cells; the recorded tightenings of §4.11 asserted refused, COR5-4, SEC5-8, SEC5-9) and random custom roles (stage 13 admits a legacy route only if its successor admits, SEC4-2), not only the 4 seed roles, over every manifest route (572 at `748fd787a`, generated at the stage's base commit, ADV-11); runs on a HEAD-seeded store, not only a fresh one (DATA4-11); S2b and S3 cells assert HEAD's reach for the legacy `POST /api/v1/system/factory-reset` and `POST /api/v1/system/reset` under HEAD's chain (no core route exists; the handlers stage through `legacy.Maintenance`), and from S4 r2 the aliases' reach, `core:admin` + Interactive + Owner for both (§6.2, resolutions R7-2, R8-1, SEC7-4, COR8-1) |
 | `TestAudit_SyncInSameBatch` | failing batch → neither change nor record |
 | `TestAudit_SeqUniqueAcrossCrash` | `Sequence` reservation: after a simulated crash, no `seq` is reissued; gaps allowed |
 | `TestAudit_DenialCoalescing` | `synctest` clock |
@@ -1540,7 +1563,7 @@ option governed by the compat ledger (§6.3, SIMP-7).
 | G9 auth wiring inline/global | **Fixed** | 05-authn §13 |
 | G10 single-binary bootstrap | **Fixed** | 05-authn §4.6 |
 | G11 CF/owner machinery in auth layer | **Fixed** (extension point; policy editing stays in ABO) | 05-authn §4.8 |
-| G12 secrets at rest | **Fixed**: auth credentials hashed (05-authn §4.1); config secrets encrypted via `core/secrets` (05-config); N10 | 05-authn, 05-config |
+| G12 secrets at rest | **Fixed in native stores**: auth credentials hashed (05-authn §4.1); config secrets encrypted via `core/secrets` (05-config); N10. For ABO **deferred** to the identity and secrets hardening cutovers (A-2; 05-authn §11.2) | 05-authn, 05-config |
 | G13 no uniform audit trail | **Fixed**: `core/audit` schema, sync/async paths, retention, query API, restore copy-forward (no hash chain, §7.4) | §7 |
 | G14 throttling tied to tunnel topology | **Fixed + documented** | 05-authn §4.9 |
 | G15 two auth stacks | **Fixed**: compat resolves via `auth.Service.PrincipalFor` | 05-authn §4.10 |
@@ -1550,7 +1573,8 @@ option governed by the compat ledger (§6.3, SIMP-7).
 1. Whether `core:self` should be implicit for every active human user instead of a grant in the
    `editor`/`viewer` seeds; granted is chosen here because it keeps "a user with no roles can do
    nothing" (today's safe default, `middleware/auth.go:424-427`) and keeps worker roles out of
-   self-service routes.
+   self-service routes. On ABO it is ambient until the identity hardening cutover
+   (§6.3), which keeps HEAD's reach: HEAD's self-service routes need authentication only.
 2. Resource-level permissions (per-library or per-root ACLs) are not designed; `rbac.Require` plus
    module-side filtering covers today's per-user ownership (playlists, reading state).
 3. Audit export to an external sink (syslog/OTLP logs) — 05-logging may add a sink; not required.
@@ -1777,3 +1801,12 @@ Round 8 (2026-11-04), findings applied to this file:
 - SEC8-7 — §4.6, "Out-of-scope defects" item 1: `mergeActor` (`user_merge.go:67`) is the third in-handler role-name check; from S4 the merge handler checks `Can(core:admin)` with key scoping; the reachable bypass is the two merge reads, since the merge POSTs are credential routes at HEAD; `TestUserMerge_ScopedAdminKeyRefused` (§12).
 - SIMP8-3 — §3.4: "the capabilities it drives" replaced by "the capabilities 03 §3.3 lists".
 - integration pass (round 8): §12 cites 05-tasks' tests by the names 05-tasks defines (`TestStart_ViewOnlyDefRefusedAtRegister`, `TestApprove_RequiresVerifiedMethodAndPermission`) (sweep (h)).
+
+Advisor (2026-11-04), resolutions and findings applied to this file:
+
+- A-2 (ADV-3, ADV-S1) — header, §3.1, §3.3, §3.4, §4.5, §4.7 rule 6, §4.8, §6.3, §7.1, §8, §12, §13: ABO's roles and keys keep HEAD's representation through S10 (legacy atoms only); core-namespaced scopes are an API-level read/write mapping over the app's alias table (every atom ↔ `core:admin`), so D7 holds; unrepresentable writes refused with 422 `no_legacy_atom` (`ErrNoLegacyAtom`, replacing `ErrConfiningNoLegacyAtom`); `RoleLegacyState` deleted (the legacy store returns the mapped set; `legacy.RBACAtomWriter` confirmed for writes, R-B request); the role extension record, its fingerprint, suspension, `ReconfirmRole`, `POST /roles/{name}/reconfirm`, `rbac_role_suspended`, `core.role.reconfirm`, `core.apikey.confirm`, `core.session.revoke_after_rollback`, the shared confirm capability and their tests are deleted; ABO's seed rows are HEAD's atoms with no `SeedDigest`/`PendingSeed`; `app.Options.LegacyAmbientScopes` (`core:self`, `core:metrics.read`, `books:reading`) keeps HEAD's authenticated-only reach; the row rule reduces to HEAD's own check on ABO (`TestLegacyAtomEqualsHEADCheck`, R-C request); the restricted last admin and restored keys use `disabled` on a legacy-backed store; the role cutover is part of 05-authn §11.2.
+- A-5 (ADV-S4) — §4.8, §11: `/metrics` stays `AnyAuthenticated` on ABO (ambient `core:metrics.read`; the S4 r2 re-annotation and `TestLegacyMetricsRoute_RequiresScopeFromS4` deleted); metric names under the app's namespace.
+- A-17 — §4.10, §6.2, §12: the native factory reset deletes library files only with `delete_library_files: true` and a matching `library_root`/`library_file_count` (422 `library_files_confirm_required` names them; success names them too); the legacy alias passes the flag and keeps HEAD's confirmation; `TestFactoryReset_LibraryFilesNeedCountedConfirm`.
+- A-14 (ADV-S8) — §6.3: the atom-input contract waits for the ledger dates and the owner's check of the process-local counter.
+- A-4 (ADV-S3) — §3.6: no deferred-members archtest; the table is planning information.
+- ADV-11 — §12: the 572-route count in `TestLegacyRoleReachUnchanged` is informative and generated at the stage's base commit.

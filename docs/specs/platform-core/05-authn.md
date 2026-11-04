@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.9.1 -->
+<!-- version: 1.10.0 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -15,9 +15,11 @@ Secret storage: [05-config](05-config.md) (`core/secrets`). Layers (L0–L9), `e
 [03-architecture](03-architecture.md). Stage numbers for the rollout are 09-abo-on-core's (the auth
 engine moves in exactly one stage, 09 S4). Stored data follows round-4 resolution R4-1 (refining R3-1):
 `auth.Store` is an SDK interface (§3.4); core ships a native implementation over `c/auth/`, and an app
-with pre-core identities (ABO) passes its own implementation, written in the app over the app's rows,
-which keeps every family in its one stored format and puts native-only data in an app-owned extension
-family that older builds never read (§11). Core holds no app key name or row format.
+with pre-core identities (ABO) passes its own implementation, written in the app over the app's rows.
+Under resolution A-2 ABO's store keeps HEAD's stored representation through S10 — raw `sess:` rows and
+HEAD's one-time tokens, `abk_` keys holding legacy atoms, roles holding legacy atoms only — and stores
+nothing beside them; the hashing, `mck_` keys and native scopes stay the native design and reach ABO
+only at the identity hardening cutover after S10 (§11.2). Core holds no app key name or row format.
 
 ## 1. Purpose & scope
 
@@ -79,10 +81,10 @@ is not a core package (§3.3: ABO's `internal/cfaccess` behind the authenticator
 Storage (R4-1, §3.4, §11): every identity record is read and written through `auth.Store`. The native
 implementation `core/internal/authstore` keeps them in the core keyspace `c/auth/` (`hello`,
 `coretest`, new apps); ABO's `books` module passes a legacy implementation through
-`module.Manifest.LegacyStores.Auth` (06 §6.4.2) that keeps ABO's identity rows in their legacy format and
-native-only data in a books-owned extension family. No storage grant is involved during the
-extraction; core holds no app key name or row format. What only such a legacy store can give meaning
-to — its optional capabilities and their conformance suite — is not in `auth` but in `legacy`
+`module.Manifest.LegacyStores.Auth` (06 §6.4.2) that keeps ABO's identity rows in HEAD's representation
+(A-2). No storage grant is involved during the extraction; core holds no app key name or row format.
+What only such a legacy store can give meaning to — its optional capabilities and their conformance
+suite — is not in `auth` but in `legacy`
 (resolution R6-3, §3.4), the one core package outside the API promise. The `_system` principal
 constructor lives in `core/internal/authsys` (not SDK, §3.1).
 
@@ -130,12 +132,15 @@ type User struct {
 	// PasswordResetRequired: the stored hash may be one the user replaced after
 	// an archive was taken (§4.14 step 1, SEC2-11). Password sign-in is refused
 	// with 401 password_reset_required; the user signs in through a reset link.
+	// A legacy-backed store derives it from HEAD's fields: a blanked
+	// password_hash under a password algorithm other than "oauth" (§11).
 	PasswordResetRequired bool
 	// SignInRestricted: every authenticator — password, OIDC and identity
 	// extensions — refuses this user (401 password_reset_required) until an
 	// owner-verified reset link or the offline "<app> users reset-password"
 	// clears it; set on a last admin a restore had to keep (05-rbac §7.1,
-	// §4.14, SEC4-12).
+	// §4.14, SEC4-12). Native stores only: HEAD's rows have no field for it, so
+	// a legacy-backed store reports false and PutUser ignores it (§11.2).
 	SignInRestricted bool
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
@@ -206,8 +211,9 @@ type Admin interface {
 	// StageUserMerge binds the auth Store to the caller's batch b and has it
 	// rewrite the owner of every record in plan from Source to Target in the
 	// store's one stored format (Store.StageMerge, R4-1), disables Source and
-	// bumps its CredentialEpoch, with one Expect per record on the bytes the
-	// plan was built from. Invites the store holds for Source that an older
+	// bumps its CredentialEpoch. A native store stages one Expect per record on
+	// the bytes the plan was built from; ABO's legacy store keeps HEAD's own
+	// conflict check under HEAD's locks (resolution A-3). Invites the store holds for Source that an older
 	// build issued are deleted, not re-owned, and the deletion is listed in
 	// the merge's audit record (DATA4-9). The caller commits; a record changed
 	// since the plan was built fails the commit with storage.ErrConflict,
@@ -314,7 +320,7 @@ func (s *Service) RevokeSession(ctx context.Context, actor *Principal, publicID 
 func (s *Service) RevokeAllSessions(ctx context.Context, actor *Principal, user UserID, except string) error
 
 type IssuedSession struct {
-	Token     string // returned once; "mcs_..." (§4.1)
+	Token     string // returned once, in the store's format: native "mcs_..." (§4.1); ABO HEAD's raw ULID (§11)
 	PublicID  string // ULID, safe to show, used for revoke
 	ExpiresAt time.Time
 }
@@ -330,23 +336,13 @@ type SessionView struct {
 // API keys.
 func (s *Service) CreateAPIKey(ctx context.Context, actor *Principal, spec KeySpec) (raw string, key *APIKey, err error)
 func (s *Service) APIKeys(ctx context.Context, owner UserID) iter.Seq2[*APIKey, error]
-func (s *Service) SetAPIKeyStatus(ctx context.Context, actor *Principal, id string, st KeyStatus) error // 409 key_suspended while the key's extension is suspended (§4.4)
+func (s *Service) SetAPIKeyStatus(ctx context.Context, actor *Principal, id string, st KeyStatus) error // monotone toward revoked (§4.4)
 func (s *Service) RevokeAPIKey(ctx context.Context, actor *Principal, id string) error
-// ConfirmAPIKey is the one way out of a suspended key (§4.4, §11; SEC5-1,
-// DATA5-4): core:users.manage, Interactive, dominance over the owner, audited
-// core.apikey.confirm. accept re-stamps the key's extension over its current
-// legacy row through the store's legacy.ExtConfirmer (Confirm(ctx, b,
-// "apikey/"+id), SIMP6-4) and sets the stale rule's derived status, a derived
-// needs_confirmation becoming active; a derived revoked refuses the call (409
-// key_revoked). The actor is shown what the key will grant: its canonical
-// scopes, or for a key whose scopes come from its legacy row "legacy scopes:
-// <atoms>" / "full access" (SEC6-2). !accept revokes the key.
-func (s *Service) ConfirmAPIKey(ctx context.Context, actor *Principal, id string, accept bool) error
 
 type KeySpec struct {
 	Owner     UserID
 	Name      string
-	Scopes    []rbac.Permission // REQUIRED non-empty, no wildcards (05-rbac §4.5); the stored row is never empty (R3-1)
+	Scopes    []rbac.Permission // REQUIRED non-empty, no wildcards (05-rbac §4.5); the stored row is never empty (R3-1); on a legacy-backed store a union of whole legacy atoms, else 422 no_legacy_atom (§4.4)
 	ExpiresIn time.Duration     // 0 = default; > max = error
 	// Purpose and Module are deferred-build members (§3.5).
 }
@@ -356,7 +352,7 @@ type KeyStatus string
 const (
 	KeyActive            KeyStatus = "active"
 	KeyDisabled          KeyStatus = "disabled"
-	KeyNeedsConfirmation KeyStatus = "needs_confirmation" // set by the post-restore hook (§4.14); refused until an admin re-enables; stored as legacy status "revoked" with revoked_at = the stamp its extension records (§4.4, §11)
+	KeyNeedsConfirmation KeyStatus = "needs_confirmation" // set by the post-restore hook (§4.14); refused until an admin re-enables; native stores only: a legacy-backed store writes KeyDisabled instead (§4.4)
 	KeyRevoked           KeyStatus = "revoked"
 )
 
@@ -408,13 +404,7 @@ type RestoreDeps struct {
 	// on a staged restore, once more at P4d step 3 (COR7-8). §4.14 step 3
 	// reads it (SEC5-10).
 	Previous    Store
-	Revocations journal.RevocationJournal  // BootWrites' revoke-after-rollback lines
-	// Duties is the kernel-built served-ledger duty handle (05-storage
-	// §5S.3.7, COR6-2): Owed("auth") reports the store-wide owed auth duty
-	// with its Since and Detected times; StageDone(b, "auth") binds storage's
-	// own handle to b and deletes that duty for the store in the batch that
-	// performs it.
-	Duties      storage.Duties
+	Revocations journal.RevocationJournal  // the lines the hook appends (§4.12)
 	StateDir    *os.Root                   // bootstrap token file
 	Clock       func() time.Time
 }
@@ -422,22 +412,13 @@ type RestoreDeps struct {
 // BootWrites are auth's every-boot writes, run by the kernel in P4d step 4,
 // after the post-restore step (06 write rule, DATA3-18), from 09 S4 r2:
 // seed the _system user; mint the bootstrap token and, when enabled, the
-// start-up read-only key (§4.6, COR4-13); when d.Duties.Owed("auth") reports
-// the duty owed (05-storage records it for a boot that lacked the duty, a
-// foreign open, or a state it cannot rule either out of), revoke every session
-// and native one-time token created before Owed.Detected, and delete every
-// legacy session and legacy invite only when the store's session cut-off
-// record exists and either predates a non-zero Owed.Since or Owed reports an
-// unreadable previous record (a zero Since from an absent record never
-// deletes, DATA8-10), staging StageDone(b, "auth") in that
-// same batch (§4.3, DATA4-14, SEC4-9, SEC5-5, COR6-2, DATA6-4, DATA6-14,
-// DATA7-9); write the session cut-off record when it is absent (the first r2
-// boot, which therefore deletes no legacy sign-in, resolution R7-5); and,
-// when the Store implements legacy.AuthReconciler, run its open-time
-// maintenance (ABO: HEAD's verified-email reconcile and one-shot key expiry
-// stamp, §11; DATA4-10, DATA4-12). auth.New and a Store constructor write
-// nothing. Through S4 r1 none of this runs, and books' start hook keeps HEAD's
-// own sequence instead (§5, COR6-3).
+// start-up read-only key (§4.6, COR4-13); and, when the Store implements
+// legacy.AuthReconciler, run its open-time maintenance (ABO: HEAD's
+// verified-email reconcile and one-shot key expiry stamp, §11; DATA4-10,
+// DATA4-12). auth.New and a Store constructor write nothing. Through S4 r1
+// none of this runs, and books' start hook keeps HEAD's own sequence instead
+// (§5, COR6-3). Nothing here depends on what an older build did while
+// rolled back: it read and wrote the same rows (A-2).
 func BootWrites(ctx context.Context, d RestoreDeps) error
 
 type RestoreCounts map[string]int // family -> rows revoked, deleted or restricted
@@ -541,21 +522,27 @@ ABO (§4.8).
 // app without pre-core identities; §11 "Native store"). An app with pre-core
 // identities passes its own implementation through
 // module.Manifest.LegacyStores.Auth (06 §6.4.2), written in the app over the
-// app's own rows: core holds no app key name or row format (03 R1). Core
-// enforces its invariants above the interface — never-empty key scopes,
-// upgrade-on-use checks, status, epoch and expiry checks, dominance — and
-// auth/authtest.StoreSuite is the conformance suite every implementation
-// runs. Every write takes the caller's *storage.Batch, never a copy, so the
-// staged writes commit with the journal line and audit record (COR2-12).
-// Every Take* stages Expect(key, seen) plus Delete in that batch over a
-// Serialized family, so of two concurrent consumers of one token exactly one
-// commits (DATA4-9). Every write derived from a record it read (a status,
-// expiry or usage write) stages Expect on the bytes it read, so no writer of a
-// key or session record is blind (SEC6-3, DATA6-8, resolution R6-5). The
-// interface holds the native contract only: capabilities that only a pre-core
-// app's store can give meaning are declared in legacy (below), outside
-// the API promise (SIMP5-4, resolution R6-3; 05-storage §5S.3.11 "Legacy
-// capabilities").
+// app's own rows: core holds no app key name or row format (03 R1).
+//
+// The interface is representation-neutral (resolution A-2): a credential
+// crosses it as the raw presented value, and the store alone decides how it
+// is minted and kept. The native store mints mcs_/mck_/mcb_/mci_/mct_ values
+// and keeps only their SHA-256 (§4.1); ABO's legacy store mints and keeps
+// HEAD's formats (raw ULID sessions, abk_ keys, raw invite tokens, the abbs_
+// bootstrap hash, in-memory temp-login; §11). Core enforces its invariants
+// above the interface — never-empty key scopes, status, epoch and expiry
+// checks, dominance — and auth/authtest.StoreSuite is the conformance suite
+// every implementation runs. Every write takes the caller's *storage.Batch,
+// never a copy, so the staged writes commit with the journal line and audit
+// record (COR2-12). Single use and lost-update safety: the native store stages
+// Expect(key, seen) plus Delete for every Take* over a Serialized family, and
+// Expect on the bytes it read for every write derived from a record (DATA4-9,
+// SEC6-3, DATA6-8, R6-5); a legacy store keeps its app's own lock discipline
+// on its legacy rows (ABO: HEAD's keyed mutexes, inviteMu, bootstrapMu and
+// apiKeyMu with early fix 6; resolution A-3). The interface holds the native
+// contract only: capabilities that only a pre-core app's store can give
+// meaning are declared in legacy (below), outside the API promise (SIMP5-4,
+// resolution R6-3; 05-storage §5S.3.11 "Legacy capabilities").
 type Store interface {
 	// users
 	PutUser(b *storage.Batch, u *User) error
@@ -563,35 +550,37 @@ type Store interface {
 	UserByUsername(ctx context.Context, fold string) (*User, error)
 	ScanUsers(ctx context.Context) iter.Seq2[*User, error] // an undecodable stored record yields ErrUndecodableRecord for that record only
 
-	// sessions: hashed, never a raw token (§4.3)
-	PutSession(b *storage.Batch, s *SessionRecord) error
-	SessionByHash(ctx context.Context, h [32]byte) (*SessionRecord, error)
+	// sessions (§4.3)
+	IssueSession(b *storage.Batch, s *SessionRecord) (token string, err error) // mints the token in the store's format and stages the record
+	SessionByToken(ctx context.Context, token string) (*SessionRecord, error)
 	SessionByPublicID(ctx context.Context, id string) (*SessionRecord, error)
 	ScanUserSessions(ctx context.Context, u UserID) iter.Seq2[*SessionRecord, error]
 	DeleteSession(b *storage.Batch, s *SessionRecord) error
-	// TouchSession records a session's last use: it stages GetForUpdate on
-	// the current record and changes only LastSeen, and stages nothing when
-	// the record is absent, expired or epoch-stale, so a flush after a logout
-	// or a revoke never re-creates the session (DATA6-8).
-	TouchSession(b *storage.Batch, h [32]byte, at time.Time) error
-	// RevokeSignInsBefore deletes every session and native one-time token
-	// created before t (zero t: all) (§4.3 rollback rule, §4.14 step 2).
+	// TouchSession records a session's last use: it changes only LastSeen on
+	// the current record and stages nothing when the record is absent,
+	// expired or epoch-stale, so a flush after a logout or a revoke never
+	// re-creates the session (DATA6-8). A store whose rows have no last-use
+	// field (ABO's) stages nothing.
+	TouchSession(b *storage.Batch, publicID string, at time.Time) error
+	// RevokeSignInsBefore deletes every session and one-time token the store
+	// holds, in whatever representation, created before t (zero t: all)
+	// (§4.14 step 2).
 	RevokeSignInsBefore(b *storage.Batch, t time.Time) (int, error)
 
-	// API keys, looked up by SHA-256 of the raw key
-	PutAPIKey(b *storage.Batch, k *APIKey) error
+	// API keys
+	IssueAPIKey(b *storage.Batch, k *APIKey) (raw string, err error) // mints the key in the store's format
+	PutAPIKey(b *storage.Batch, k *APIKey) error                     // status, expiry, name
 	// TouchAPIKey records a key's last use (last_used_at, last_used_ip,
-	// use_count): it stages GetForUpdate on the current record and changes
-	// only those fields, and stages nothing for an absent, revoked or inactive
-	// key; a commit conflict drops the update, which is advisory (§4.4;
-	// SEC6-3, DATA6-8, resolution R6-5).
+	// use_count), changes only those fields and stages nothing for an absent,
+	// revoked or inactive key; it never undoes a revocation (§4.4; SEC6-3,
+	// DATA6-8, resolution R6-5; on ABO's store through early fix 6's lock).
 	TouchAPIKey(b *storage.Batch, id string, at time.Time, ip netip.Addr) error
-	APIKeyByHash(ctx context.Context, h [32]byte) (*APIKey, error)
+	APIKeyByToken(ctx context.Context, raw string) (*APIKey, error)
 	ScanAPIKeys(ctx context.Context, owner UserID) iter.Seq2[*APIKey, error] // owner "" = every key
 
-	// native one-time tokens, keyed by token hash: invite, temp-login, bootstrap
-	PutOneTime(b *storage.Batch, t *OneTimeToken) error
-	TakeOneTime(b *storage.Batch, kind OneTimeKind, h [32]byte) (*OneTimeToken, error)
+	// one-time tokens: invite, temp-login, bootstrap
+	IssueOneTime(b *storage.Batch, t *OneTimeToken) (token string, err error)
+	TakeOneTime(b *storage.Batch, kind OneTimeKind, token string) (*OneTimeToken, error) // single use (above)
 
 	// external identities and the invite allow-list (§4.7)
 	PutIdentity(b *storage.Batch, id *ExternalIdentity) error
@@ -606,44 +595,33 @@ type Store interface {
 var ErrUndecodableRecord = errors.New("auth: stored identity record cannot be decoded")
 
 type SessionRecord struct {
-	Hash            [32]byte
-	PublicID        string
+	PublicID        string        // safe to show and used for revoke; ABO: early fix 1's derived handle (§11.1)
 	UserID          UserID
-	Origin          SessionOrigin // password, oidc:<provider>, delegated:temp_login, delegated:invite, legacy
+	Origin          SessionOrigin // password, oidc:<provider>, delegated:temp_login, delegated:invite; ABO: HEAD's Origin field, "" = delegated
 	CredentialEpoch int64
 	CreatedAt, ExpiresAt, LastSeen time.Time
 	ClientAddr      netip.Addr
 	UserAgent       string
 	Version         int64
 }
+
+// KeyLegacyState is APIKey.Legacy, set only for a key read from a
+// legacy-backed store: the legacy atoms its row holds (empty =
+// LegacyFullScope; 05-rbac §4.5, §6.3), whose canonical expansion is then in
+// APIKey.Scopes. Its type stays in auth because legacy imports auth.
+type KeyLegacyState struct {
+	Atoms []string
+}
 ```
 
-**Legacy capabilities of the identity store (`legacy`, resolution R6-3, SIMP6-2, SIMP6-4,
-SIMP6-6).** Every identifier that exists only to serve a pre-core app's identity store lives in the core
-package `legacy` (with its test-support sub-package `legacy/legacytest`), which the API-stability gate
-excludes as it excludes `kernel/` (03 §3.3 "Legacy-only identifiers"; 12 SC1). Removing them at an identity
-family's cutover is therefore not a breaking change, and nothing in `auth`'s frozen surface names them:
+**Legacy capabilities of the identity store (`legacy`, resolution R6-3, SIMP6-2).** Every identifier
+that exists only to serve a pre-core app's identity store lives in the core package `legacy` (with its
+test-support sub-package `legacy/legacytest`), which the API-stability gate excludes as it excludes
+`kernel/` (03 §3.3 "Legacy-only identifiers"; 12 SC1). Removing them at the identity hardening cutover
+is therefore not a breaking change, and nothing in `auth`'s frozen surface names them:
 
 ```go
 package legacy
-
-// AuthSignIns is implemented by an identity store that holds credentials an
-// older build of the app issued: accepted for their own lifetime, never
-// written (05-authn §4.3, §4.13, §11). Absent = there are none.
-// TakeLegacySession accepts only a session created before the store's
-// cut-off: the record auth.BootWrites writes once, when it is absent, in the
-// store's extension family at P4d step 4 of the first S4 r2 boot; it returns
-// the session as an auth.SessionRecord with Origin "legacy" and a zero Hash.
-// TakeLegacyInvite returns an invite-kind auth.OneTimeToken (role, creator,
-// expiry; zero hash). A missing cut-off is not replaced-store evidence: a
-// store restored in place from a pre-r2 archive has no served_boot pair while
-// backup.location.json has one, which 05-backup §5B.3.6 (2)(a) already
-// classifies as replaced (resolution R7-4, DATA7-10).
-type AuthSignIns interface {
-	TakeLegacySession(b *storage.Batch, raw string) (*auth.SessionRecord, error)
-	TakeLegacyInvite(b *storage.Batch, raw string) (*auth.OneTimeToken, error)
-	DeleteLegacySignIns(b *storage.Batch) (int, error) // every legacy session and legacy invite (05-authn §4.14 step 2)
-}
 
 // AuthReconciler is implemented by an identity store with its own every-boot
 // maintenance, run by auth.BootWrites at P4d step 4 into b (ABO: HEAD's
@@ -652,31 +630,27 @@ type AuthReconciler interface {
 	Reconcile(ctx context.Context, b *storage.Batch) error
 }
 
-// Key confirmation uses the shared extension-confirm capability, ExtConfirmer
-// (05-storage §5S.3.11 defines it; formerly storage.ExtConfirmer):
-// Confirm(ctx, b, "apikey/"+id) re-stamps legacy_ref.fp from the current row
-// and clears the suspension; only auth.Service.ConfirmAPIKey calls it
-// (DATA5-4). A store without it never suspends a key. The user record declares
-// no Widening field, so it is never suspended and needs no confirmation
-// (05-authn §11). There is no auth-specific confirm interface (the round-5
-// auth.KeyConfirmer is deleted, SIMP6-4).
+// AuthAtomWriter is implemented by an identity store whose key rows an older
+// build reads and that therefore holds legacy atoms (05-rbac §6.3): auth calls
+// IssueAPIKeyAtoms instead of IssueAPIKey with the atoms of 05-rbac §6.3's
+// write mapping (never empty), and refuses a key that mapping cannot
+// represent (422 no_legacy_atom). Absent = IssueAPIKey with canonical scopes.
+type AuthAtomWriter interface {
+	IssueAPIKeyAtoms(b *storage.Batch, k *auth.APIKey, atoms []string) (raw string, err error)
+}
 ```
 
 `legacy` (L5) imports `auth` for the types it names (and for `legacy.Stores.Auth`'s `auth.Store`), so
 `auth` never imports it (03 §3.3). The kernel asserts only the capabilities 03 §3.3 lists, none of
-them this section's (SIMP8-3), and hands the store to `auth` as an
-`auth.Store`; every capability of this section is detected only by `auth` itself, through its mirrors
-(SIMP7-5).
-The service and the package functions `PostRestore` and `BootWrites` name a capability only through an
-**unexported** interface of their own with the identical method set. The mirror test is 03 §3.3's
-(resolution R7-7, COR7-2, SIMP7-1): auth's `export_test.go` (`package auth`) only exports a test alias
-of each mirror, and `legacy_mirror_test.go` in auth's external test package (`package auth_test`, which
-may import `legacy`) asserts that each alias and its `legacy` counterpart are mutually assignable, so a
-renamed or retyped member fails auth's tests.
-The signatures therefore name only `auth` and `storage` types: a legacy session is returned as an
-`auth.SessionRecord`, a legacy invite as an `auth.OneTimeToken`, and there are no separate
-`LegacySession`/`LegacyInvite` types. `legacytest.AuthStoreSuite` (one suite for the store, a case per
-capability: legacy sign-ins, `Reconcile`, confirm; SIMP6-6) drives the service over an implementation.
+them this section's (SIMP8-3), and hands the store to `auth` as an `auth.Store`; every capability of
+this section is detected only by `auth` itself, through its mirrors (SIMP7-5). The service and the
+package function `BootWrites` name a capability only through an **unexported** interface of their own
+with the identical method set. The mirror test is 03 §3.3's (resolution R7-7, COR7-2, SIMP7-1):
+auth's `export_test.go` (`package auth`) only exports a test alias of each mirror, and
+`legacy_mirror_test.go` in auth's external test package (`package auth_test`, which may import
+`legacy`) asserts that each alias and its `legacy` counterpart are mutually assignable, so a renamed or
+retyped member fails auth's tests. `legacytest.AuthStoreSuite` (one suite for the store, a case per
+capability: `Reconcile`, the atom writer; SIMP6-6) drives the service over an implementation.
 
 ### 3.5 Deferred-build members
 
@@ -698,23 +672,19 @@ Also deferred, with no Go identifier of its own (not checked by the archtest; CO
 Until they land, SEC-5 holds trivially (no facade key can be minted) and HEAD's extraction rule is
 kept exactly: Bearer and the session cookie only (`APIKeyFromRequest`,
 `internal/server/middleware/auth.go:83-98`). The additions are additive and pass the API-stability
-gate. Their absence is checked by the deferred-members archtest (`archtest.DeferredMembersAbsent`,
-03 §3.4, 09 S2) from the stage that builds `auth` rather than first at S7 (SIMP3-2). Its list is
-generated from every heading whose text, after an optional section number, is `Deferred-build
-members` under `docs/specs/platform-core/` (03 §3.4 is the one definition), and reads only the first
-column of the table, which holds only package-qualified identifiers (`auth.KeySpec.Purpose`,
-`auth.PurposeFacade`), never bare names or prose; the PR that builds a deferred member deletes that
-member's entry, and the test is deleted when the list is empty (COR4-19, SIMP4-1, COR5-16,
-SIMP5-6).
+gate. The table is planning information (resolution A-4: no archtest checks the absence of these
+members); the PR that builds a deferred member deletes that member's row.
 
 ## 4. Behaviour
 
 ### 4.1 Credential formats
 
-All secrets are 32 bytes from `crypto/rand`, encoded base64url without padding (43 chars), with a
-type prefix and a 6-char CRC32 checksum suffix (base62) so secret scanners can recognise and
-offline-validate a leaked value without a database. Stored only as `SHA-256(raw)`; 256-bit random
-input makes a slow KDF unnecessary and keeps verification O(1).
+These are the **native** store's formats. All secrets are 32 bytes from `crypto/rand`, encoded
+base64url without padding (43 chars), with a type prefix and a 6-char CRC32 checksum suffix (base62) so
+secret scanners can recognise and offline-validate a leaked value without a database. Stored only as
+`SHA-256(raw)`; 256-bit random input makes a slow KDF unnecessary and keeps verification O(1). A
+legacy-backed store mints and keeps its app's own formats instead, because the store decides the
+representation (§3.4; resolution A-2).
 
 | Credential | Format | Lifetime | Stored as |
 |---|---|---|---|
@@ -723,11 +693,11 @@ input makes a slow KDF unnecessary and keeps verification O(1).
 | Bootstrap | `mcb_<43>_<6>` | 10 min, single use | `SHA-256` as a native one-time token in the store + 0600 file |
 | Invite | `mci_<43>_<6>` | default 72 h (today, `handlers/user.go:177-181`), single use | `SHA-256` |
 | Temp-login | `mct_<43>_<6>` | 15 min, single use | `SHA-256` in storage (not a process map, R5) |
-| Legacy (accepted, never issued) | `abk_…` keys; raw-ULID session cookies; raw legacy invite tokens | until their own expiry | §11 |
+| ABO's legacy store, through S10 (issued and accepted) | HEAD's: raw-ULID session cookies, `abk_…` keys, raw invite tokens, `abbs_` bootstrap token, temp-login tokens in memory | HEAD's lifetimes (the same defaults as above) | HEAD's rows: sessions and invites raw, keys and bootstrap as SHA-256 (§11) |
 
-The prefixes are core's, not per-app: one binary may host several modules, and a key is a
+The native prefixes are core's, not per-app: one binary may host several modules, and a key is a
 core credential. `auth.Options.LegacyKeyPrefixes` (ABO: `["abk_"]`) lets the API-key
-authenticator recognise old keys (the "presented key wins" rule needs to know a key when it sees
+authenticator recognise the keys an app's legacy store issues (the "presented key wins" rule needs to know a key when it sees
 one, `internal/server/middleware/auth.go:76-99`). One-time tokens never travel in a URL path
 (§4.13, SEC-21).
 
@@ -771,7 +741,7 @@ confinement (`middleware/auth.go:265-298`) for every route stage 13 runs on, inc
 no permission; for `OwnAuth` routes, which stage 13 skips, `CheckCredentialFor` applies the same rule
 (§4.10, SEC2-4).
 
-### 4.3 Sessions (hashed at rest)
+### 4.3 Sessions (hashed at rest in the native store)
 
 - Issued by password login, OIDC callback, temp-login consumption, invite acceptance.
 - **Cookie (SEC-11).** Name `core.auth.session.cookie_name`, default `<AppID>_session` (03 §3.6
@@ -796,68 +766,22 @@ no permission; for `OwnAuth` routes, which stage 13 skips, `CheckCredentialFor` 
   cookie never blocks login, setup, bootstrap or invite pages. On a non-Public route the answer is
   401 with the failure code (and the cookie is cleared). An invalid Bearer or API-key credential is
   a 401 on every route, Public included.
-- Lookup is by `SHA-256(token)`; the token never touches storage, logs or API responses. Listing
-  returns `SessionView` with `PublicID`; revoke takes `PublicID`. This closes the token leak through
-  `GET /api/v1/auth/sessions` (§2).
-- **Native-only records (R4-1).** Session records are hashed and live only where the store keeps
-  native-only data — `c/auth/session/…` in the native store, books' extension family in ABO's legacy
-  store — which no older build reads; they are never projected into the app's legacy session rows
-  (SEC-19). A rollback therefore costs every browser user one sign-in; legacy `abk_` API keys, which
-  existing automation uses, keep working because they stay in their legacy rows (§4.4). Sessions an
-  older build issues during a rollback are not honoured after the roll-forward (§11, upgrade-on-use
-  cut-off).
-- **Re-login both ways (DATA4-14, SEC4-9).** Native sessions issued before a rollback are invisible to
-  the older build, which can neither list nor revoke them (`internal/server/handlers/auth.go:540-570`),
-  so a session the user ended there (a lost device, a "log out") would come back on roll-forward. When
-  the served ledger owes the `auth` duty — a boot without it, or a foreign open, since the last boot
-  that had it (05-storage §5S.3.7; 09 §9.2.1 row 2) — `BootWrites` therefore revokes every session and
-  native one-time token created before **`Owed.Detected`**, the time the owed entry was first recorded
-  (the same value on a retry; read through `RestoreDeps.Duties`, COR6-2, DATA6-14), in one batch with
-  `Duties.StageDone(b, "auth")`. The same batch deletes every legacy session and legacy invite the store
-  holds (`DeleteLegacySignIns`), **but only under R7-5's condition** (resolution R7-5, DATA7-9, DATA8-13):
-  the store's session cut-off record exists, and either it predates a non-zero `Owed.Since` (an interval
-  that followed the first r2 boot) or the previous core record is **unreadable** (fail-closed). A zero
-  `Since` from an **absent** previous record (no core record yet, the first core boot of a HEAD store)
-  never deletes, even with a cut-off present (DATA8-10): a retried first boot of a pre-S0 store, whose
-  failed attempt wrote the cut-off and cleared `auth` before (3b), owes `auth` again with `Since` zero, and
-  must not delete every HEAD sign-in. Storage tells the two zero cases apart (`Owed` reports an unreadable
-  record, 05-storage §5S.3.7). Under that condition an in-place restore that detection cannot see never
-  honours pre-cut-off legacy sessions (DATA6-4). On a **replaced** store it is `PostRestore` step 2
-  (§4.14), not this consumer, that deletes every legacy sign-in. Every build before S4 r2 omits `auth`
-  from its served record, so the first r2 boot always owes `auth`; that boot finds no cut-off, deletes
-  nothing, and writes the cut-off in the same batch (staged with `Expect` absent), so every HEAD-issued
-  session and open invite survives the upgrade and is upgraded on use (§11). From then on the cut-off
-  itself refuses every later legacy session (`TestFirstR2BootKeepsLegacySessions`). The revoke is
-  journaled `session.revoked` and audited
-  `core.session.revoke_after_rollback`: an older build issues no native sign-in, so that is exactly the
-  set issued before the interval, and the value needs no clock from the older build. A rollback then
-  costs one sign-in on the way back as well. **Detection (SEC5-5, SEC6-4, COR5-3, DATA5-6; coordinated
-  with 05-storage).** The signal is 05-storage's: the owed entry persists until the batch that performs
-  the duty deletes it (resolution R5-5, COR6-2), so a roll-forward boot that fails between P4b and this
-  step leaves the signal for the next boot. A foreign open is detected by two signals: the sidecar's
-  full stat identity, and the **Pebble open stamp** (`c/storage/pebble_options`: every read-write Pebble
-  open writes a fresh `OPTIONS-<n>` file whether or not the app's own sidecar write succeeds, so a
-  number that differs from both the recorded one and its `pending` means another binary opened the
-  store, SEC6-4, DATA7-18). Core's own offline commands open the store through `kernel.OpenOffline`,
-  which promotes its own open stamp and sidecar identity at a clean close, so they are not foreign opens
-  (§4.14, resolution R7-4, DATA7-11). **An offline open never launders a foreign open (resolution R8-2,
-  SEC8-4, DATA8-3):** `OpenOffline` computes the boot verdicts first, and when it finds a foreign open, a
-  missing or unreadable record or a behind lineage, its close batch stages the owed entries a serve boot
-  would stage, `auth` among them, before it promotes. So an offline command run after a rollback to a
-  pre-S0 build and before the first serve boot leaves the evidence, and that serve boot still revokes
-  here (`TestOfflineOpenAfterForeignOpenKeepsEvidence`, 05-storage). Together they see two
-  opens by a pre-guard build that end on a reused inode and a pre-guard boot whose sidecar write
-  failed. The boot lineage (`c/storage/boot` against `storage.boot.json`) is a content signal for
-  restores, not an open detector. When 05-storage cannot rule a foreign open out (an unreadable DB
-  directory, a missing record), it reports one and this step revokes (fail closed). A staged restore's
-  own swap is not a foreign open: the restore-pending record names the boot that applies it, and that
-  boot records owed duties only from the restored store's own evidence (05-storage step 2, 05-backup;
-  resolution R6-4, DATA6-2). The step is idempotent on re-detection: a retried boot revokes nothing new,
-  because no listener opened in between.
-- `LastSeen` is updated at most once per minute per session: the coalescer keeps only `(hash, at)` per
-  session and flushes through `Store.TouchSession`, which changes only `LastSeen` on the current record
-  and skips one that a logout or revoke deleted (DATA6-8), written with `NoSync`, so authentication
-  stays a read on the hot path.
+- The native store looks a session up by `SHA-256(token)`; the token never touches its storage. On
+  every store the token never reaches logs or API responses: listing returns `SessionView` with
+  `PublicID`, and revoke takes `PublicID`. This closes the token leak through
+  `GET /api/v1/auth/sessions` (§2); ABO's `PublicID` is early fix 1's derived handle (§11.1).
+- **Rollback (resolution A-2).** ABO's legacy store keeps HEAD's session rows through S10: raw-ULID
+  `sess:` rows with HEAD's `Origin`, epoch, revoked and expiry fields (§11). An older build therefore
+  lists, revokes and honours exactly the sessions this build issued, and this build does the same with
+  the sessions an older build issued while rolled back, each checked on use for epoch, status,
+  revocation and expiry. A rollback signs no one out and a session ended on either side stays ended, so
+  no boot-time revoke step exists. Raw tokens at rest stay as at HEAD (no regression) until the identity
+  hardening cutover hashes them (§11.2).
+- `LastSeen` is updated at most once per minute per session: the coalescer keeps only `(publicID, at)`
+  per session and flushes through `Store.TouchSession`, which changes only `LastSeen` on the current
+  record and skips one that a logout or revoke deleted (DATA6-8), written with `NoSync`, so
+  authentication stays a read on the hot path. ABO's rows have no last-use field, so its store stages
+  nothing and `SessionView.LastSeen` is zero there, as HEAD shows none.
 - Expiry sweep: from 09 S5, when `tasks` lands, core task `core.auth.sessions.prune` on
   `tasks.ScheduleFromConfig("core.auth.schedules.session_prune")` (a declared `tasks.ScheduleConfig`
   key in auth's own namespace, default every 1 h; resolution R2-7); deletes expired/revoked records.
@@ -867,36 +791,22 @@ no permission; for `OwnAuth` routes, which stage 13 skips, `CheckCredentialFor` 
 ### 4.4 API keys
 
 - Create: `Scopes` required and non-empty, no wildcards, each scope must be held by the actor's
-  effective set (05-rbac §4.5). The key's canonical scopes are native-only data (R4-1). In ABO's legacy
-  store the key is a legacy key row whose `scopes` list holds **only** the legacy atoms the canonical
-  scopes admit under the row rule (05-rbac §6.3) — never a namespaced string — while the canonical
-  scopes live in books' extension record. A key with **no** admitted atom (a `core:metrics.read`
-  scrape key, for example) is written with a legacy scope list of exactly one reserved string that
-  no role of any build holds (ABO: `["none"]`), so HEAD's intersect (`middleware/auth.go:410-425`)
-  yields the empty set; its legacy status mirrors its real status like any other key (resolution
-  R5-6, SEC5-1, DATA5-5). The legacy list is therefore **never empty**, so no build that reads it can
-  take it for "all role permissions" (`middleware/auth.go:405-408`), and an older build grants from it
-  at most what the row rule admitted. Such a key carries the `mck_` prefix, which older builds do not
-  recognise as a key at all (`APIKeyFromRequest` accepts only `abk_`, `:76-99`), so it does not
-  authenticate after a rollback; legacy `abk_` keys keep working there. Scopes are fixed at creation
-  (no scope-edit route), so a legacy key's stored list keeps its legacy atoms, or its empty list, for
-  its whole life.
-- **Where a key's scopes come from: one predicate (SEC6-2; the same sentence in 05-rbac §4.5, 05-storage
-  row 3 and 09 rule 1).** A key's scopes come from its extension record **iff the record holds canonical
-  scopes** (`scopes_source: canonical`, written only when the key is created natively here). Otherwise —
-  no record, or a record holding only Independent restriction fields (`scopes_source: legacy`) — they
-  come from the legacy row: `LegacyFullScope` (05-rbac §4.5) for an empty list, and on legacy surfaces
-  HEAD's semantics: an `s.perm(atom)` route, an in-handler atom check and an adapted legacy task
-  definition admit the key iff the atom is in its stored atoms (or the list is empty) **and** the
-  owner's roles satisfy the atom's full legacy reach (`rbac.LegacyAtom`, 05-rbac §3.1, §6.3; SEC5-7);
-  native routes read the atoms' canonical expansion, as for every key. The post-restore fallback and the
-  stale-status stamp (§4.14 step 3) write `scopes_source: legacy` records for pre-core `abk_` keys, so
-  a pre-core key that a restore restricted and an admin then re-enabled keeps exactly its pre-restore
-  reach: an empty-scope automation key stays `LegacyFullScope`, and a `["settings.manage"]` admin
-  automation key keeps every `settings.manage` legacy route and op start it had at HEAD. A
-  `scopes_source: legacy` record never gains canonical scopes later (no scope-edit route exists). A key
-  whose record holds canonical scopes takes them only from it — current, stale or suspended — and
-  grants nothing while the record is suspended (below).
+  effective set (05-rbac §4.5). The native store mints an `mck_` key and keeps its canonical scopes.
+- **ABO's keys keep HEAD's representation (resolution A-2).** ABO's legacy store implements
+  `legacy.AuthAtomWriter` (§3.4): a key created here is an `abk_` key (HEAD's format,
+  `internal/database/apikey_token.go:16-35`) whose row's `scopes` list holds the legacy atoms of
+  05-rbac §6.3's write mapping, never a namespaced string and never empty. A requested set that is not a
+  union of whole atom expansions (a core-only scope such as `core:metrics.read`, or part of an atom's
+  expansion) is refused with 422 `no_legacy_atom` (`rbac.ErrNoLegacyAtom`); `["core:admin"]` is written
+  as every atom, HEAD's admin key (05-rbac §6.3). Every ABO key is therefore a legacy key on reading
+  (`APIKey.Legacy`, `rbac.CheckerInput.LegacyKey`): an empty list, which only an older build writes, is
+  `LegacyFullScope` (05-rbac §4.5); on legacy surfaces an `s.perm(atom)` route, an in-handler atom check
+  and an adapted legacy task definition admit the key iff the atom is in its stored atoms (or the list is
+  empty) **and** the owner's roles satisfy the atom's legacy reach (`rbac.LegacyAtom`, 05-rbac §3.1,
+  §6.3; SEC5-7), which on ABO is HEAD's own check; native routes read the atoms' canonical expansion.
+  An older build after a rollback reads every key this build created and grants it exactly its atoms,
+  and this build reads every key an older build created the same way. Scopes are fixed at creation (no
+  scope-edit route), so a key's stored list keeps its atoms, or its empty list, for its whole life.
 - A key-authenticated actor may create keys only for itself, with
   scopes ⊆ its own key's effective set and expiry clamped to its own key's expiry (today's clamp,
   `handlers/apikeys.go:40-60`, kept). This closes the scoped-key → full-key escalation (§2).
@@ -907,59 +817,28 @@ no permission; for `OwnAuth` routes, which stage 13 skips, `CheckCredentialFor` 
   `arrfacade` lands.
 - Last-use tracking stays synchronous in the request goroutine (reason recorded at
   `middleware/auth.go:366-382`), coalesced per key per minute. It writes only `last_used_at`,
-  `last_used_ip` and `use_count`, which the key's guarded projection excludes (§11), so neither
-  this build's last-use writes nor HEAD's per-request `TouchAPIKeyLastUsed` on an older build make
-  the extension stale (resolution R5-6, DATA5-2, SEC5-12).
-- **No `apikey:` writer is blind (resolution R6-5, SEC6-3, DATA6-8).** A legacy key row is one JSON
+  `last_used_ip` and `use_count`, through `Store.TouchAPIKey`.
+- **No key writer undoes a revocation (resolutions R6-5, A-3; SEC6-3).** A legacy key row is one JSON
   value, so even a three-field last-use write is a read-modify-write of the whole row, `status` and
-  `revoked_at` included. Books' legacy store therefore runs every `apikey:` writer under the same
-  commit-time check: `TouchAPIKey` stages `GetForUpdate`/`Expect` on the bytes it read, skips a
-  revoked or inactive key, and **drops** the update on `ErrConflict` (last-use is advisory); every
-  status, expiry and scope write (`SetAPIKeyStatus`, `ConfirmAPIKey`, the post-restore and stale
-  stamps, merge) stages `Expect` on the bytes it read too. A revoke that commits between a touch's read
-  and its commit therefore makes the touch conflict, never the revoke, so a request with a key can
-  never undo that key's revocation, with or without an extension record (without this, a key with an
-  extension would be suspended with a derived `needs_confirmation` from the stale `"active"`, which
-  breaks R5-6's monotone rule). 05-storage row 3 (`apikey:`) gains `CheckedWrites` from S4 r2, when
-  the last HEAD writer of the family is converted, so storage enforces the rule. The same race exists
-  in HEAD's own code and ships fixed early as early fix 6 (§11.1).
+  `revoked_at` included. ABO's legacy store keeps HEAD's lock discipline: every `apikey:` writer —
+  `TouchAPIKey`, status and expiry writes, the post-restore restrictions, the user merge — runs under
+  `apiKeyMu`, which early fix 6 extends to the two HEAD writers that lacked it (§11.1), so a revoke and
+  a touch never interleave. The native store stages `Expect` on the bytes it read for every key writer
+  and drops a conflicting touch, which is advisory (§3.4). Either way a request with a key can never
+  undo that key's revocation.
 - Display: `id`, name, first 8 chars of the hash as identifier (today, `raw/10` §7), scopes,
   expiry, last used, status; the raw value is shown once.
 - **Status transitions are monotone toward revoked.** `revoked` is terminal: `SetAPIKeyStatus`
   refuses any transition out of it (409 `key_revoked`), and `needs_confirmation` can only go to
-  `active` (admin re-enable, interactive, audited) or `revoked`. In ABO's legacy row `revoked` and
-  `needs_confirmation` are both status `"revoked"` with `revoked_at` set, and `disabled` is
-  `"inactive"`: the legacy auth path refuses exactly those two statuses (`middleware/auth.go:335-344`),
-  so an older build never accepts a restricted key, and early fix 3 makes a `"revoked"` row terminal
-  there. Books' extension record tells the two `"revoked"` cases apart by an Independent field, the
-  `revoked_at` stamp this build wrote when it set `needs_confirmation`. **The one sanctioned exit
-  from a legacy `"revoked"` row (DATA5-3)** is books' legacy store moving `needs_confirmation` to
-  `active`: it clears `revoked_at` only when the key's extension record is current (or confirmed in
-  the same batch) and its stamp equals the row's `revoked_at`; every other transition out of
-  `"revoked"` is refused at store level, as early fix 3 requires.
-- **Stale extension (an older build changed the row's guarded projection, §11; resolution R5-6,
-  SEC5-2, DATA5-3).** The key is **suspended**: its canonical scopes are not applied, it is refused,
-  `SetAPIKeyStatus` answers 409 `key_suspended`, and only `ConfirmAPIKey` (which shows the canonical
-  scopes) or a revoke leaves that state. Its status is derived from the legacy row **first**, so a
-  revocation made by an older build is monotone:
-  - `"revoked"` whose `revoked_at` differs from the extension's stamp (or no stamp) → `revoked`,
-    terminal: the older build revoked it (409 `key_revoked` on every re-enable, confirm included);
-  - `"revoked"` whose `revoked_at` equals the stamp → `needs_confirmation`;
-  - `"inactive"` → `disabled`, or `needs_confirmation` if the extension records that restriction;
-  - `"active"` → `needs_confirmation` (an owner may activate an `"inactive"` row on HEAD,
-    `handlers/apikeys.go:336-372`, which proves nothing to this build).
-  A rename or a last-use write on the older build changes only excluded fields and suspends nothing.
-  The legacy re-activation defect is fixed in the legacy code itself by early fix 3 (§11.1),
-  independently of the extraction.
-- **Every fingerprint mismatch, suspended or not (SEC7-7).** The status derivation above, legacy row
-  first, and early fix 3's "a row with `revoked_at` set is refused whatever its status" apply on
-  **every** fingerprint mismatch, not only to a suspended key. A `scopes_source: legacy` record holds no
-  Widening field, so it is never suspended (§11), but its Independent restriction still binds: when a
-  pre-early-fix-3 rollback target re-activated its `"revoked"` row (HEAD's `SetAPIKeyStatus` leaves
-  `revoked_at` set, `pebble_store_auth.go:1234-1240`, and HEAD's auth path reads only `Status`,
-  `middleware/auth.go:335-344`), the row's `"active"` does not win. The record keeps its legacy scopes,
-  and its `needs_confirmation` restriction stands until `ConfirmAPIKey`
-  (`TestLegacyRecordStale_ReactivatedRowStaysRestricted`).
+  `active` (admin re-enable, interactive, audited) or `revoked`. **On ABO's store the statuses are
+  HEAD's:** `active` ↔ `"active"`, `disabled` ↔ `"inactive"`, `revoked` ↔ `"revoked"` with `revoked_at`
+  set. HEAD's rows have no field that tells a restriction apart from a disable, so a
+  `needs_confirmation` restriction (§4.14) is written as `"inactive"` and read back as `disabled`; the
+  key's owner or an admin re-enables it as any disabled key, as at HEAD
+  (`handlers/apikeys.go:336-372`). The legacy auth path refuses `"inactive"` and `"revoked"`
+  (`middleware/auth.go:335-344`), so an older build never accepts a restricted key, and early fix 3
+  makes a row with `revoked_at` set terminal on every build that carries it (§11.1). Admin-only
+  confirmation of a restored key is native-only until the identity hardening cutover (§11.2).
 
 ### 4.5 Passwords
 
@@ -975,15 +854,17 @@ Core owns it; nothing refers to an app, a module or `users.manage`.
 
 1. At every start, if `core.auth.bootstrap.enabled` (default true), `BootWrites` (P4d step 4, 06's
    write rule; COR4-13; from S4 r2 — through S4 r1 books' start hook runs HEAD's `InitBootstrapToken`,
-   §5, COR6-3) mints `mcb_…`, writes `bootstrap-token` (mode 0600) via `os.Root` in the
-   app's state dir, stores hash + expiry as a native one-time token of kind bootstrap through the
-   `Store` (an app's own legacy bootstrap hash is never read by core, §11), and logs the **path and
-   expiry only** (never the value; today's rule, `bootstrap.go:165-175`).
+   §5, COR6-3) mints the token through `Store.IssueOneTime` (kind bootstrap) in the store's format
+   — native `mcb_…` with its hash as a one-time token; ABO HEAD's `abbs_` token with its hash and
+   expiry in HEAD's settings row (§11) — writes `bootstrap-token` (mode 0600) via `os.Root` in the
+   app's state dir, and logs the **path and expiry only** (never the value; today's rule,
+   `bootstrap.go:165-175`).
 2. `POST /api/core/v1/auth/bootstrap` (Public, `RateAuth`, per-client limiter): validate then spend
-   atomically (`TakeOneTime` = `Expect` + delete in one batch over a `Serialized` family — replaces the
-   process mutex `bootstrapMu`), then find or create the admin: **first active user holding `core:admin`**
+   atomically (`TakeOneTime`: in the native store `Expect` + delete in one batch over a `Serialized`
+   family; in ABO's store under HEAD's `bootstrapMu`, A-3), then find or create the admin: **first active user holding `core:admin`**
    (role-resolved, 05-rbac §4.6); none → create `admin` (suffixing on collision) with role
-   `admin` and a generated password returned once. Returns an API key scoped `["core:admin"]`,
+   `admin` and a generated password returned once. Returns an API key scoped `["core:admin"]` (on
+   ABO an `abk_` key holding every atom, HEAD's bootstrap key, `bootstrap.go:402`; 05-rbac §6.3),
    TTL `core.auth.bootstrap.key_ttl` (8 h default, 24 h max — today's values). The key is
    non-interactive, so `Sensitive` scopes stay out of its reach (05-rbac §4.4). Audit:
    `core.bootstrap.redeem` (05-rbac §7.1).
@@ -1137,60 +1018,32 @@ The *arr facade's key purpose and `X-Api-Key`/`apikey` extraction are deferred-b
   `BASIC_AUTH_*`, or LAN-only) would otherwise crash-loop at S4 r2. While `disabled` runs
   remote-reachable, health reports `degraded` (`auth_disabled_remote`) with a banner, as HEAD's warning
   did; the release note states it and 09 §9.2.6 records it (`TestS4_AuthOffDockerBoots`, image job).
-- **Turning auth on with auth off (SEC4-8, SEC6-1).** `ProtectAdmin` keys need `core:admin` and an
-  interactive method, which the auth-disabled principal never has, so with auth off no request can
-  change them — `core.auth.mode` included — where HEAD let protected fields change with auth off
-  (`internal/config/update_service.go:781`). The path is the operator layers, and it always works:
-  **the auth-enable switch is exempt from "stored value wins" (resolution R6-6).** An operator value
-  that **enables** auth — `<APP>_CORE_AUTH_MODE=required` (05-config §1.3.7), ABO's legacy
-  `ENABLE_AUTH=true`, or `required`/`true` under either spelling in the operator config file (env or
-  operator file only: no command-line flag sets auth at HEAD, and 05-config limits `BelowStored` to env
-  names and file keys, SEC7-13) — always takes effect over a stored `disabled` and locks the key, after a
-  restart. A stored `disabled` is common: every install that ever saved settings while running with
-  `ENABLE_AUTH=false` holds `enable_auth=false` in its blob, because HEAD's save marshals the whole
-  effective config (`internal/config/persistence.go:1932-1977`). The mechanism is 05-config's: auth's
-  core section declares `config.SafeLegacyValue` on `core.auth.mode` with `safe` true exactly for the
-  canonical value `required` (05-config §1.3.1, C3), so a `BelowStored` alias value that converts to
-  `required` is an operator-layer value; the key's owner declares it, so no app alias table can opt out.
-  The exemption is one-directional: an operator
-  value that **disables** auth keeps its ordinary precedence (for the legacy spellings, 05-config
-  §1.12.4's `BelowStored`, HEAD's), so a stale `ENABLE_AUTH=false` left in an environment can never turn
-  off auth that the UI turned on, which would be a widening. This holds also when the stored value equals
-  the default: every HEAD blob holds `enable_auth: true` (the default, `internal/config/config.go:2801`,
-  written by HEAD's whole-config save), and a stored value equal to the default still beats a
-  `BelowStored` legacy value; it reports `SourceDefault` only when no operator or `BelowStored` value is
-  set for the key, and an `Apply` that "unsets" a legacy blob field writes the default explicitly and
-  never removes the field an older build reads (05-config §1.3.5, §1.12.2; resolution R7-1, SEC7-2).
-  When a `BelowStored` legacy name of a key at
-  `ProtectAdmin` or higher is set and differs from the effective value (for `core.auth.mode`, only a
-  disabling value can), the boot logs at warn and raises the health token `config_legacy_name_shadowed`
-  naming the key and its canonical variable (05-config owns the check). The release note names the
-  canonical variables, 09 §9.2.6 records the exemption, `TestAuthOn_LegacyAliasEnablesOverStoredOff`
-  asserts both directions, and the auth-off half of `TestLegacyRoleReachUnchanged` asserts the 403 for
-  protected keys through the `/api/v1/config` alias.
-- **An operator's tightening survives a rollback (resolution R7-1, SEC7-1).** The exemption above
-  turns auth on without writing the blob, and every build below S4 r1 decides auth from the stored
-  `enable_auth` (HEAD and S0–S3 keep HEAD's precedence and do not know `<APP>_CORE_AUTH_MODE`), so on
-  its own a rollback would boot with auth **off**, and with ABO's `disabled_allow_remote=true` reachable
-  from the network. Therefore, when the effective `core.auth.mode` is `required` and the legacy store's
-  row stores `enable_auth: false`, the legacy config store writes `enable_auth: true` at P4d step 1, as
-  an audited core write (`core.config.legacy_narrowed`; 05-config §1.3.5 owns the mechanism, and auth's
-  section declares it from S4 r1 as `config.NarrowStored("core.auth.mode", nil)`, whose nil `narrow`
-  reuses the `SafeLegacyValue` predicate above, true exactly for `"required"`, §8, SIMP8-6). It is the
-  one exception to "stored values of locked keys are kept", and it only ever narrows an older build. The
-  Basic gate gets the same rule **from S3** (when core's stage 8 and the façade first own it):
-  `basic_auth_enabled: true` is written whenever the effective value is `true`, whatever the password's
-  source, because without a password the older build can read a hotfixed older build refuses every
-  request (early fix 5), which is fail-closed (05-http-api §10, resolution R8-4, SEC8-1); auth's own
-  narrowing write runs from S4 r1. **S4 r1 follows the effective value:** from the S3 façade `config.AppConfig` is a
-  projection of core's effective config through the alias table (05-config §1.12.1), and `enable_auth`'s
-  alias of `core.auth.mode` and auth's config section land with `auth` in r1 (09 S4), so gin's auth at
-  r1 reads `AppConfig.EnableAuth` = (effective `core.auth.mode` is `required`), the R6-6 exemption
-  included; r1 therefore performs the narrowing write too, which is a config write, not one of the
-  identity writes r1 skips (§5). Release note: "After you turn authentication on with `ENABLE_AUTH=true`
-  or `ABO_CORE_AUTH_MODE=required`, removing that variable does not turn it off again; use
-  `ABO_CORE_AUTH_MODE=disabled` or the owner settings page." 09 §9.2.1 has the row, and
-  `TestRollback_OperatorEnabledAuthStaysOn` is the R-test cell.
+- **Turning auth on with auth off: HEAD's behaviour on ABO (SEC4-8, resolution A-2).** The auth switch
+  keeps HEAD's precedence on ABO: a stored `enable_auth` beats the legacy `ENABLE_AUTH` (05-config §1.12.4's
+  `BelowStored`), in both directions, as at HEAD (`internal/config/config.go:2435`,
+  `persistence.go:915`). A stored `disabled` is common: every install that ever saved settings while
+  running with `ENABLE_AUTH=false` holds `enable_auth=false` in its blob, because HEAD's save marshals the
+  whole effective config (`internal/config/persistence.go:1932-1977`). Two ways turn auth on:
+  - **the settings page and API, which write the stored field, exactly as at HEAD.** HEAD's rule is
+    `if !prior.EnableAuth || auth.MethodFromContext(ctx).MayChangeCredentials() { return true }`
+    (`internal/config/update_service.go:781` @748fd787a): while auth is off, every protected field may
+    be changed, after HEAD's owner-trust-root check, which is not skipped with auth off
+    (`:772-779`). On ABO, legacy-backed through S10, the auth-disabled principal may therefore store
+    `enable_auth: true` (`core.auth.mode` = `required`) through the settings page or the `/api/v1/config`
+    alias under that same rule; it is written to the legacy `enable_auth` field in place, so every build
+    reads it after a rollback. SEC4-8's `ProtectAdmin` refusal of the auth-disabled principal applies to
+    native apps only (05-config owns the check; `TestAuthEnable_MatchesHEAD`);
+  - **the canonical `<APP>_CORE_AUTH_MODE=required`**, an operator-layer value that locks the key
+    (05-config §1.3.7). No build before S4 r1 reads it, and nothing writes it back into the blob, so
+    after a rollback below S4 r1 auth follows the stored `enable_auth`. The release note says: "To turn
+    authentication on so that it stays on if you roll back, use the settings page; `ABO_CORE_AUTH_MODE`
+    is not read by releases before S4." 09's canonical-only row carries this cost.
+  An operator value that disables auth keeps its ordinary precedence, so a stale `ENABLE_AUTH=false` left
+  in an environment can never turn off auth that the UI turned on. When a `BelowStored` legacy name of a
+  key at `ProtectAdmin` or higher is set and differs from the effective value, the boot logs at warn and
+  raises the health token `config_legacy_name_shadowed` naming the key and its canonical variable
+  (05-config owns the check). 09 §9.2.6 records that ABO keeps HEAD's auth-enable behaviour through S10.
+  The hardening of this precedence is the auth-precedence cutover (§11.2).
 - **Health tokens before S8 (SEC7-12).** `auth_disabled_remote` and `config_legacy_name_shadowed` exist
   from S4 r2, before core health's component snapshot (S8); until then they are carried, beside
   `basic_gate_no_password`, by HEAD's degraded token list
@@ -1230,10 +1083,9 @@ The *arr facade's key purpose and `X-Api-Key`/`apikey` extraction are deferred-b
 - **One stored copy (R4-1).** A revocation — interactive, by task, by journal re-application or by
   the post-restore hook (§4.14) — goes through the `Store` in the revoking batch. In ABO's legacy store
   it writes the legacy row itself (`status`, `revoked_at`, `credential_epoch`, `password_hash`, the role
-  list), and only the restriction's native detail goes to books' extension record. There is no second
-  copy that a boot could rebuild over it, and every build that can open the store reads the same
-  field, so the restriction holds after a restart and after a rollback alike. Session revocations touch
-  only native-only session records, which older builds never read (§4.3).
+  list) and nothing else. There is no second copy that a boot could rebuild over it, and every build
+  that can open the store reads the same field, so the restriction holds after a restart and after a
+  rollback alike. A session revocation deletes the store's session row, which every build reads (§4.3).
 
 ### 4.13 Core auth routes (all under `/api/core/v1`)
 
@@ -1247,8 +1099,8 @@ form until the shell stage (09 S9), because HEAD's SPA opens only that form
 to `InviteLinkPath` from S4 and drops in the S9 PR that adopts the shell. **The reader ships before
 the writer (FE5-4):** the S4 build's legacy SPA already reads the fragment form too — its invite guard
 accepts `pathname === '/invite'` as well as `/invite/…`, and an `/invite` route prefers `#token=` and
-removes it with `history.replaceState` (07 §7.4.3) — so an invite minted on S9 (a native one-time
-token, valid on S8, which runs core auth too) opens after an S9 → S8 rollback; 09 §9.2.1's cost table
+removes it with `history.replaceState` (07 §7.4.3) — so an invite minted on S9 (a HEAD invite row on
+ABO, valid on every build) opens after an S9 → S8 rollback; 09 §9.2.1's cost table
 carries the row, and `TestLegacyInviteLink_EndToEnd` and the R-test row assert it. A fragment never
 reaches a server; a path-form invite link reaches it only as the page request, as at HEAD, redacted
 from the access log and spans by 05-logging's `log.DefaultPathRules()` (`/invite/{token}`), and the
@@ -1281,10 +1133,10 @@ service for both cases — `ChangeOwnPassword` without `user_id`, the dominance-
 path with it; the core API has no "set another user's password" route — an admin uses the reset
 link.
 
-**Legacy invites are re-checked on accept (SEC3-2).** A legacy invite (created by an older
-build, before S4 or during a rollback) carries `RoleID` and `CreatedByUserID`
-(`handlers/user.go:155-197,239`). Accepting it on this build re-runs `rbac.CanAssign` for the creator
-over `RoleID` and refuses (`invite_invalid`, audited `core.invite.accept` with `Outcome: denied`) when the check fails or the creator no
+**Invites are re-checked on accept (SEC3-2).** An invite row carries `RoleID` and `CreatedByUserID`
+(`handlers/user.go:155-197,239`), and on ABO it may have been created by an older build (before S4 or
+during a rollback), which runs no `CanAssign`. Accepting any invite on this build re-runs
+`rbac.CanAssign` for the creator over `RoleID` and refuses (`invite_invalid`, audited `core.invite.accept` with `Outcome: denied`) when the check fails or the creator no
 longer exists, so an invite into a role its creator could not assign natively never yields an
 account.
 
@@ -1307,9 +1159,8 @@ authenticated branches that reads `#token=` and calls `POST /api/core/v1/auth/te
 `web/src/App.tsx:249-250`). `TestLegacyTempLoginLink_EndToEnd` and `TestLegacyInviteLink_EndToEnd`
 (an invite created on S4 r2, opened signed out, accepted, signed in; opened signed in, the invite page
 and not `NotFound`) are in 09 S4's done-check. 09 S4's R-test cell reads "an invite link created on cur
-opens in cur's UI; prev-release UI tabs (cell a) still open a legacy `/invite/<token>` link" — an
-invite created on cur is a native one-time token and is void on a pre-S4 prev (§11). When prev is S4 r2 or later it
-also runs core auth and reads the token; the S9 R-test row "invite minted on S9 (`/invite#token=`),
+opens in cur's UI; prev-release UI tabs (cell a) still open a legacy `/invite/<token>` link" — on
+ABO an invite created on cur is a HEAD invite row, valid on every prev (§11); the S9 R-test row "invite minted on S9 (`/invite#token=`),
 roll back to S8, open signed out → invite page, accepted" asserts the reader-before-writer order
 (FE5-4, 07 §7.4.3).
 
@@ -1335,15 +1186,14 @@ through and no confirming rebuild.
    revocations and disables, user disables and deletes, epoch bumps, session revocations (role kinds
    are 05-rbac's hook). For each `password.changed` user, blank the restored `password_hash` (an empty
    hash never authenticates in any build, `absauth/password.go:131-190`) and set
-   `PasswordResetRequired` (native-only data: in ABO's store an extension member, §11), which only
-   selects the 401 code (it may be the pre-compromise password,
+   `PasswordResetRequired` (a native store's field; ABO's store derives it from the blanked hash, §3.1,
+   §11), which only selects the 401 code (it may be the pre-compromise password,
    SEC2-11); for each `identity.unlinked` entry, delete the re-appeared `(provider, subject)` link.
-2. **Invalidate restored sign-ins.** Revoke every native session and every native one-time token
-   (invite, temp-login, bootstrap; `Store.RevokeSignInsBefore` with zero time), and **delete every
-   legacy session and legacy invite** the store holds (`legacy.AuthSignIns.DeleteLegacySignIns`; otherwise the
-   upgrade-on-use session fallback and the in-place invite lookup of §11 would honour them, and so
-   would an older build after a rollback). Bump every user's `CredentialEpoch`. Everyone signs in
-   again once.
+2. **Invalidate restored sign-ins.** Delete every session and every one-time token the store holds
+   (invite, temp-login, bootstrap), in whatever representation (`Store.RevokeSignInsBefore` with zero
+   time): on ABO HEAD's `sess:` and `invite:` rows, so neither this build nor an older build after a
+   rollback honours one. Bump every user's `CredentialEpoch` (HEAD's own `credential_epoch` field on
+   ABO). Everyone signs in again once.
 3. **Pre-swap restrictions win whenever there is a pre-swap store (SEC5-10, SEC6-4).** When
    `RestoreDeps.Previous` is non-nil (a staged restore: the pre-swap store holds every restriction,
    journaled or not — an older build's interval, an `Append` that failed, an interval foreign-open
@@ -1360,34 +1210,30 @@ through and no confirming rebuild.
    never a staged restore's own swap, which appends no `gap` line and keeps its coverage, resolution
    R6-4, DATA6-2), set every restored API key whose status is still `active` or `disabled` to
    `needs_confirmation`: refused until an admin re-enables it from the keys page. A key restored as
-   `revoked` stays revoked — terminal, never re-enableable (DATA4-13). In ABO's legacy row the
-   restricted key is status `"revoked"` with `revoked_at` set to the stamp its extension records
-   (§4.4), which every build refuses; for a pre-core `abk_` key the stamp creates a `scopes_source:
-   legacy` record, so after re-enabling the key keeps its legacy scope semantics (SEC6-2).
+   `revoked` stays revoked — terminal, never re-enableable (DATA4-13). **On ABO's store (A-2) the
+   restriction is HEAD's own `"inactive"` status** (§4.4), never `"revoked"`, which early fix 3 makes
+   terminal: every build refuses the key, its owner or an admin re-enables it like any disabled key,
+   and its atoms are untouched, so a re-enabled key keeps exactly its pre-restore reach (an empty list
+   stays `LegacyFullScope`; 05-rbac §4.5). 05-backup's restore record states the same choice.
 4. Return the counts per family; audit's restore hook records them as `core.restore.revoke`
    (05-rbac §7.1 action names).
 
 **Restricted last admin (SEC3-15, SEC4-12).** When rbac's hook keeps the last active `core:admin`
 holder's role (05-rbac §7.1), this hook's restriction of that account is: password hash blanked with
-`password_reset_required`, API keys `needs_confirmation`, `SignInRestricted` set (every authenticator,
-OIDC and identity extensions included, refuses it until an owner-verified reset link or the offline
-`<app> users reset-password` clears it), and its external-identity links deleted (journaled
-`identity.unlinked`), so an older build cannot sign it in through OAuth either. The residual — an
-older build admitting it through Cloudflare Access, which resolves users by allow-listed e-mail — is
-named in the restore report. **The offline command is not a foreign open (resolution R7-4, DATA7-11).**
+`password_reset_required`, API keys `needs_confirmation` (`"inactive"` on ABO), on a native store
+`SignInRestricted` set (every authenticator, OIDC and identity extensions included, refuses it until an
+owner-verified reset link or the offline `<app> users reset-password` clears it), and its
+external-identity links deleted (journaled `identity.unlinked`), so no build can sign it in through
+OAuth. The residual — Cloudflare Access admitting it, which resolves users by allow-listed e-mail — is
+named in the restore report; on ABO it applies to this build too, because HEAD's rows cannot hold
+`SignInRestricted`, until the identity hardening cutover (§11.2). **The offline command is not a foreign open (resolution R7-4, DATA7-11).**
 `<app> users reset-password` opens the store through `kernel.OpenOffline` (05-storage §5S.4 "Offline
 open"): the read-only checks of P2 and P3 (storage's steps 1–4: the guard, the floor and the claims),
 refusing on `CheckReader`'s swap tokens and on pending P4 migrations; it writes the user row through
-`auth.Store`. It computes the boot verdicts as a serve boot does (resolution R8-2, SEC8-4, DATA8-3). At a
-clean close, its batch first stages the owed entries a serve boot would stage when those verdicts found a
-foreign open, a missing or unreadable record, or a behind lineage (`auth`, `journal`, `gen`, `usage`;
-`since` = the core record's `at`, zero when there is none; `detected` = now; an entry already present
-keeps its own). Only then does it promote its own Pebble open stamp and sidecar identity; it keeps `last`
-and the lineage unchanged, and records an owed `journal` duty if it committed a revoking write without
-journaling it. So the command's **own** open is never read as foreign: when the store was clean before
-it, the next serve boot revokes no session and appends no `gap` line for it. An earlier foreign open,
-though, is never erased by it: the next serve boot still finds `auth` owed and revokes the sessions
-issued before it (§4.3).
+`auth.Store`. It computes the boot verdicts as a serve boot does and, at a clean close, stages the owed
+entries a serve boot would stage before it promotes its own Pebble open stamp and sidecar identity
+(05-storage §5S.4 owns the list; resolution R8-2). So the command's **own** open is never read as
+foreign, and an earlier foreign open is never erased by it.
 
 **Replaced store, and restores by an older build (DATA3-8, SEC3-3, SEC3-10, DATA4-7, SEC4-6).** An
 older build (after a rollback) restores with its own code, which neither journals nor runs hooks.
@@ -1397,11 +1243,7 @@ head regression or a crash after `Append` also leaves the head behind) — the c
 (`c/backup/served_boot` against `backup.location.json`'s pair, SEC5-6), the journal's committed end
 anchored outside the store (`backup.location.json`'s `head`: a store whose `head_before` is below it is
 replaced, whatever its marker, which also catches an in-place restore of an archive the last journaling
-boot itself made, DATA6-4) and the lineage verdict. A missing session cut-off is **not** a signal
-(resolution R7-4, DATA7-10): it had a crash window on the first r2 boot, between the `served_boot`
-pair written at the end of P4d step 2 and the cut-off written at step 4, and it detected nothing more,
-because a store restored in place from a pre-r2 archive has no pair while `backup.location.json` has
-one, which (2)(a) already classifies as replaced; 05-backup (2) is the one classifier. A store that a staged
+boot itself made, DATA6-4) and the lineage verdict; 05-backup (2) is the one classifier. A store that a staged
 restore or a relocation moved (another generation or directory, with the evidence above saying "same
 content") is **not** replaced and runs no hook (DATA5-7). A restore whose hook fails swaps back and
 leaves the original store classified "same store" on the next boot: 05-backup writes `served_boot`,
@@ -1414,8 +1256,8 @@ the store's head before any line is appended on this boot (SEC4-5).
 - Replaced per 05-backup (2), with no staged restore (an older build's restore, a file copy, a
   checkpoint copied by hand): the kernel re-applies the verified tail first, so every known revocation
   holds, and then runs this hook with `KindExternal` and **`rc.Revocations == nil`** — steps 2 and 3:
-  restored sessions and legacy invites deleted, every epoch bumped, every active or disabled key
-  `needs_confirmation`. The verified tail is not passed as coverage even when it verifies: the journal
+  restored sessions and invites deleted, every epoch bumped, every active or disabled key
+  `needs_confirmation` (on ABO HEAD's `"inactive"`). The verified tail is not passed as coverage even when it verifies: the journal
   lives in the backup directory, whose end only the pre-swap store's head anchored, and a journal
   truncated after the archive's boundary verifies cleanly (SEC4-6; 05-backup §5B.3.6, 14 K22).
 - Chain break (a missing, edited or unverifiable line) with the head behind: the same fallback, and
@@ -1432,26 +1274,23 @@ it in the legacy code.
    (ABO), else the native `core/internal/authstore`. A build whose choice differs from the claim
    ledger's `backends` record fails boot with `ErrLegacyStoreMissing` (05-storage); because books
    supplies its store in every S4 release, a rollback from S4 r2 to r1 never meets a missing grant
-   (DATA4-2). A store constructor writes nothing (DATA4-10). Its capabilities (`legacy.AuthSignIns`,
-   `legacy.AuthReconciler`, `legacy.ExtConfirmer`, §3.4) are detected only by `auth`, through its
+   (DATA4-2). A store constructor writes nothing (DATA4-10). Its capabilities (`legacy.AuthReconciler`,
+   `legacy.AuthAtomWriter`, §3.4) are detected only by `auth`, through its
    unexported mirrors over the store built here; the kernel asserts only the capabilities 03 §3.3 lists
    (SIMP7-5, SIMP8-3, §3.4).
 2. **P4d, post-DAG reconcilers** (06 §6.5.1 is the order; COR3-2), from 09 S4 r2: step 1 is
    the config store's legacy `Open` (`legacy.ConfigOpener`: ABO's key guard and encryption init), then
-   `secrets.Open(…, Secrets())` (`legacy.ConfigSecrets`) (keyring, `k0-legacy` capture, the roll-forward re-import
-   of moved config secrets), then the override store's `SetSecrets` and `Attach` (`Load`, read-only)
+   `secrets.Open(…, Secrets())` (`legacy.ConfigSecrets`) (keyring, `k0-legacy` capture), then the override store's `SetSecrets` and `Attach` (`Load`, read-only)
    (R3-1, R4-6, COR5-2); then 05-backup's
    revocation-journal step, whose auth kinds write through auth's Store (the replaced-store test and
    re-apply read the head before this boot appends a `gap` or `restore` line, SEC4-5); then, on a boot
    that applied a restore or found a replaced store, `auth.PostRestore` (§4.14); then
    `auth.BootWrites` — seed `_system`, mint the bootstrap token and the optional read-only key (§4.6),
-   revoke sign-ins from before a rollback interval and clear the owed `auth` duty in that batch (§4.3,
-   `RestoreDeps.Duties`, COR6-2), and run the store's `legacy.AuthReconciler` when it has one (ABO:
-   HEAD's open-time identity writers, §11) — moved out of P5 so P5 writes nothing
-   (DATA3-18, COR4-13); last,
-   the compat usage records buffered in P0. There is no tasks step and no identity rebuild.
+   and run the store's `legacy.AuthReconciler` when it has one (ABO: HEAD's open-time identity writers,
+   §11) — moved out of P5 so P5 writes nothing (DATA3-18, COR4-13). There is no tasks step and no
+   identity rebuild.
    **At S4 r1 (dark, COR4-4)** auth's part of P4d only runs, as step 1c (06 §6.5.1, COR5-15), the read-only decode census over the
-   Store's scans (config's step 1, §4.11's narrowing write included, runs as on every core build) (records reported `ErrUndecodableRecord` are counted and listed for the probe P1;
+   Store's scans (config's step 1 runs as on every core build) (records reported `ErrUndecodableRecord` are counted and listed for the probe P1;
    nothing is written by core); the journal re-apply's auth kinds, `PostRestore` and `BootWrites` are
    skipped and logged, gin still performs every revocation without journaling, and r1 therefore does
    not list the `journal` duty (05-backup), so its interval becomes a `gap` line at the first r2 boot.
@@ -1500,21 +1339,16 @@ it in the legacy code.
 | Confined principal on an `OwnAuth` route not naming its scope | ABS 403 (`ErrConfined`) | closed | SEC2-4 |
 | Stored identity record cannot be decoded by the store (unknown status, malformed JSON; `ErrUndecodableRecord`) | the record is treated as restricted (user inactive, key refused) and counted; boot continues | closed | fail closed on data an older build wrote |
 | Store backend differs from the claim ledger's `backends` record | boot error `ErrLegacyStoreMissing` (05-storage) | closed | a build without the app's legacy store must not serve its store (R4-1) |
-| A key's extension is stale against its legacy row's guarded projection (ABO: an older build changed a security-relevant field) | suspended: canonical scopes ignored, key refused, status derived from the legacy row first (a revocation made there stays `revoked`); only `ConfirmAPIKey` or a revoke leaves it; health `degraded` (`auth_extension_suspended`) | closed | no silent widening and no un-revocation on roll-forward (R4-1, R5-6) |
-| Status change on a suspended key | 409 `key_suspended` | closed | the confirmation shows the canonical scopes (SEC5-1) |
-| A user's extension is stale | restrictions (`PasswordResetRequired`, `SignInRestricted`) kept; no Widening field, so never suspended; re-stamped by the next write | closed | DATA5-4 |
 | User with `SignInRestricted` | every authenticator refuses: 401 `password_reset_required` | closed | restricted last admin (SEC4-12) |
 | Legacy invite whose creator no longer may assign its role | `invite_invalid`, audited | closed | SEC3-2 |
-| Replaced store, as 05-backup §5B.3.6 (2) classifies it (content marker, out-of-store journal head, lineage; a missing session cut-off is not a signal), verified tail or not; a relocated store is not replaced and runs no hook | tail re-applied, then the hook with `rc.Revocations == nil`: every active or disabled key `needs_confirmation`, every epoch bumped; a chain break adds health `revocation_journal_broken` | closed | SEC3-10, SEC4-6, SEC5-6, DATA6-4, DATA6-5, DATA7-10 |
-| First S4 r2 boot (the `auth` duty is owed, no session cut-off yet) | native sign-ins before `Owed.Detected` revoked (none exist); no legacy session or invite deleted; the cut-off is written in that batch | n/a (HEAD parity: each legacy session is still checked for epoch, status, revocation and expiry on use) | the upgrade signs no one out; the cut-off refuses later legacy sessions (resolution R7-5, DATA7-9) |
-| A key's fingerprint differs and its record is `scopes_source: legacy` (not suspendable) | status derived from the legacy row first; a row with `revoked_at` set is refused whatever its status; the `needs_confirmation` restriction stands until `ConfirmAPIKey`; legacy scopes kept | closed | SEC7-7 |
-| Effective `core.auth.mode` `required` (from an operator layer) over a stored `enable_auth: false` | the legacy config store writes `enable_auth: true` at P4d step 1, audited `core.config.legacy_narrowed`; an older build after a rollback boots with auth on | closed | resolution R7-1, SEC7-1 |
+| Replaced store, as 05-backup §5B.3.6 (2) classifies it (content marker, out-of-store journal head, lineage), verified tail or not; a relocated store is not replaced and runs no hook | tail re-applied, then the hook with `rc.Revocations == nil`: every session and invite deleted, every active or disabled key `needs_confirmation` (on ABO HEAD's `"inactive"`), every epoch bumped; a chain break adds health `revocation_journal_broken` | closed | SEC3-10, SEC4-6, SEC5-6, DATA6-4, DATA6-5, A-2 |
 | Staged restore (a pre-swap store exists), with or without journal coverage | the pre-swap store's restrictions win over the restored rows (§4.14 step 3; a key keeps the most restrictive of its two statuses); its own swap appends no `gap` line, so its coverage holds | closed | SEC5-10, SEC6-4, DATA6-2, SEC7-8 |
-| A key's last-use write races a revoke or status change | the touch's `Expect` conflicts and the touch is dropped; the revoke stands | closed | SEC6-3, resolution R6-5 |
+| A key's last-use write races a revoke or status change | native store: the touch's `Expect` conflicts and the touch is dropped; ABO's store: both run under `apiKeyMu` (early fix 6); the revoke stands either way | closed | SEC6-3, resolutions R6-5, A-3 |
 | A `LastSeen` flush for a session that was logged out or revoked | `TouchSession` stages nothing; the session stays deleted | closed | DATA6-8 |
 | Bootstrap token wrong/expired/spent | 401 `bootstrap_invalid`, uniform message | closed | |
 | Bootstrap file write fails at start | log error, bootstrap unavailable this run; setup still requires token → operator restarts after fixing perms | closed | |
 | Key create with escalation | 403 `scope_escalation` | closed | |
+| Key create on a legacy-backed store with a set that is not a union of whole legacy atoms | 422 `no_legacy_atom` (`rbac.ErrNoLegacyAtom`), nothing written | closed | the row is the only copy an older build reads (A-2, 05-rbac §6.3) |
 | Action on a user the actor does not dominate | 403 `dominance_required` | closed | SEC-4 |
 | Facade key off its facade group, or general key on a facade group (deferred-build, §3.5) | 403 `permission_denied` | closed | SEC-5 |
 | OIDC subject whose email matches an unlinkable account | 409 `email_in_use` | closed | SEC-7 |
@@ -1536,17 +1370,17 @@ it in the legacy code.
   store, which from S2b is core's staged, restart-bound reset of either kind (`ResetStore` behind HEAD's
   `POST /system/reset`, `ResetFactory` behind the factory reset; 05-storage §5S.3.15, DATA6-6, resolution
   R8-1): the next boot is a fresh install, so `auth.New` loads `HasUsers` false.
-- Every `Take*` (one-time tokens, legacy sessions, legacy invites) stages `Expect(key, seen)` plus
-  `Delete` in the caller's batch over a `Serialized` family — the native store declares
-  `c/auth/onetime/` and `c/auth/session/` `Spec.Serialized`; ABO's legacy store declares its legacy
-  invite and session claims and its extension family `Serialized` (05-storage §5S.9.1) — so of two
-  concurrent consumers of one token exactly one commits, as HEAD's `inviteMu` guaranteed
-  (`internal/database/user_merge.go:510-520`; DATA4-9). Tests with `testing/synctest`:
+- Of two concurrent consumers of one token exactly one commits. The native store's `TakeOneTime`
+  stages `Expect(key, seen)` plus `Delete` in the caller's batch over its `Serialized` families
+  (`c/auth/onetime/`, `c/auth/session/`); ABO's legacy store keeps HEAD's own mutexes for its legacy
+  rows, `inviteMu` for invites (`internal/database/user_merge.go:510-520`) and `bootstrapMu` for the
+  bootstrap token (resolution A-3; DATA4-9). Tests with `testing/synctest`:
   `TestBootstrap_SingleUseConcurrent`, `TestLegacyInviteDoubleAcceptOneWins`.
 - Password hashing: bounded semaphore (`runtime.NumCPU()`).
-- `LastSeen` coalescer: one goroutine, a map `hash → at` under a mutex (never whole records), flushed
-  every 60 s and on stop through `Store.TouchSession` (DATA6-8). API-key last use: coalesced per key per
-  minute, written through `Store.TouchAPIKey` with `Expect`, dropped on conflict (§4.4, SEC6-3).
+- `LastSeen` coalescer: one goroutine, a map `publicID → at` under a mutex (never whole records),
+  flushed every 60 s and on stop through `Store.TouchSession` (DATA6-8). API-key last use: coalesced per
+  key per minute, written through `Store.TouchAPIKey`: with `Expect`, dropped on conflict, in the native
+  store; under `apiKeyMu` in ABO's (§4.4, SEC6-3, A-3).
 - Throttle: one instance, mutex-sharded LRU, one sweeper goroutine; all stopped by the app context
   (`wg.Go` in `Service.Run`).
 
@@ -1560,7 +1394,7 @@ interactive method). Every key that decides who may sign in, with which role, or
 
 | Key | Type | Default | Hot-reload | Protection |
 |---|---|---|---|---|
-| `core.auth.mode` | enum `required`/`disabled`; declares `config.SafeLegacyValue` accepting `required`, so an enabling legacy value always takes effect (§4.11, R6-6), and, **from S4 r1**, `config.NarrowStored("core.auth.mode", nil)` (a nil `narrow` uses the key's `SafeLegacyValue` predicate, so the predicate is declared once, SIMP8-6), so an operator-enabled auth over a stored `enable_auth: false` is written back as `enable_auth: true` at P4d step 1 (§4.11, R7-1; 05-config §1.3.5) | `required` | no | owner (SEC3-6, §4.8) |
+| `core.auth.mode` | enum `required`/`disabled`. On ABO through S10 the legacy `enable_auth` / `ENABLE_AUTH` keep HEAD's behaviour exactly: a stored value beats the legacy env name, and the auth-disabled principal may store `required` under HEAD's `!prior.EnableAuth` rule (§4.11, resolution A-2); the canonical `ABO_CORE_AUTH_MODE` is an additional operator name that locks | `required` | no | owner (SEC3-6, §4.8); native apps: SEC4-8's rule (no change by the auth-disabled principal) |
 | `core.auth.disabled_allow_remote` | bool | false (ABO: true, §4.11) | no | admin |
 | `core.auth.session.ttl` | duration | 24h | yes (new sessions) | none |
 | `core.auth.session.remember_ttl` | duration | 168h | yes | none |
@@ -1605,7 +1439,9 @@ ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `oauth
 | `mediacore_auth_bootstrap_redemptions_total` | counter | `outcome` |
 | `mediacore_auth_extension_errors_total` | counter | `extension` |
 | `mediacore_auth_principal_invalidations_total` | counter | `reason` |
-| `mediacore_auth_legacy_session_fallback_total` | counter | `outcome` (`upgraded`,`refused`) |
+
+Names are shown under core's default metric namespace `mediacore`; an app passes its own as an
+`app.Options` value, ABO HEAD's `audiobook_organizer`, so nothing is renamed (resolution A-5, 05-metrics).
 
 ## 10. Tests
 
@@ -1613,7 +1449,7 @@ ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `oauth
 |---|---|
 | `TestSession_TokenNeverStored` | after `IssueSession`, no storage value or key contains the token bytes |
 | `TestSessions_ListNeverReturnsToken` | JSON of `GET /me/sessions` has no field equal to any live token (regression for `handlers/auth.go:513-537`) |
-| `TestSession_LegacyRawULIDCookieUpgradesOnUse` | a legacy session cookie (raw ULID, a legacy session row) created before the cut-off (epoch, status, revoked, expiry checked) yields a hashed `mcs_` session, a new cookie, and the legacy row deleted (SEC-19) |
+| `TestLegacyStore_SessionsKeepHEADRows` | (ABO) a session issued by this build is a raw-ULID `sess:` row with HEAD's fields and `Origin`; `GET /me/sessions` shows its derived handle, never the token; revoking by that handle deletes the row; a HEAD-issued session is checked for epoch, status, revocation and expiry on use and is not rewritten (resolution A-2) |
 | `TestCookie_SiblingAppCookieDoesNotBlockLogin` | two apps on one host: distinct default cookie names; a foreign or stale cookie on a Public route → anonymous + cleared (SEC-11, FE-6) |
 | `TestStage12_InvalidKeyPlusValidSessionIs401` | stop rule (SEC-12) |
 | `TestCredentialFormat_ChecksumAndPrefix` (+ `FuzzParseCredential`) | prefix, length, CRC; malformed → `ErrNoCredential` vs `ErrInvalidCredentials` correctly |
@@ -1621,32 +1457,24 @@ ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `oauth
 | `TestAPIKey_CreateRequiresScopes` / `TestAPIKey_KeyCannotWiden` | empty scopes 400; key with `[books:view]` cannot mint `[books:edit]` or empty (regression for `handlers/apikeys.go:199-226`) |
 | `TestAPIKey_FacadePurposeBoundToModule` (deferred-build, §3.5) | facade key refused off its facade group; general key with extra scopes refused on it (SEC-5) |
 | `TestAPIKey_RevokedIsTerminal` | `SetAPIKeyStatus(active)` on a revoked key → 409; `needs_confirmation` → only `active` (admin, interactive) or `revoked` |
-| `TestOneFormat_LegacyRowsReadByPrevBuild` | (ABO, in `make ci` with `prev` built from `PREV_REF` and cached by tag, OPS4-6) rollback cells against the previous release's real binary on a store written by this build: a native key's legacy row holds only admitted legacy atoms (no namespaced string) or exactly the reserved no-scope string, and grants at most those atoms there; a disabled, revoked and `needs_confirmation` key is refused there (`inactive` / `revoked`); a user disabled or epoch-bumped here is refused there; roll forward: nothing was widened, and an extension whose row prev changed is suspended |
-| `TestAPIKey_StoredScopesNeverEmpty` | property test over ABO's legacy store: every legacy key row written for a new key has a non-empty `scopes` list: admitted legacy atoms only, or exactly the reserved no-scope string; never empty, never a namespaced string (SEC-1, R4-1, SEC4-3, R5-6) |
-| `TestSuspendedNativeKey_NeverLegacyFullScope` | (ABO, R-test cell) a metrics-only key created on cur; on prev its owner sets it active; roll forward: the key is suspended and refused, `SetAPIKeyStatus` → 409 `key_suspended`, and admin confirmation keeps `core:metrics.read` only; the same for a key whose row prev activated from `inactive` (SEC5-1, DATA5-5) |
-| `TestStaleKey_RevokedOnPrevStaysRevoked` | (ABO, R-test cell) a native key, and an `abk_` key with an extension, revoked on prev; roll forward: `revoked`, 409 `key_revoked` on re-enable and on confirm; a `needs_confirmation` key untouched by prev stays re-enableable through the sanctioned store exit (SEC5-2, DATA5-3) |
-| `TestKeyUseOnPrev_DoesNotSuspend` | (ABO, R-test cell) re-enable a key on cur, roll back, use and rename it on prev, roll forward: not suspended, not `needs_confirmation`; cur's own last-use writes never suspend (SEC5-12, DATA5-2) |
-| `TestSuspendedKey_ConfirmClears` | `ConfirmAPIKey(accept)` clears the suspension through the store's `legacy.ExtConfirmer` (`"apikey/"+id`) and sets the derived status; `!accept` revokes; a routine `PutAPIKey` keeps the suspension (DATA5-4, SIMP6-4) |
-| `TestRestoredLegacyKey_ReenabledKeepsLegacySemantics` | (ABO) an empty-scope `abk_` key and an admin's `["settings.manage"]` `abk_` key, a nil-coverage restore (both `needs_confirmation`, `scopes_source: legacy` records), then re-enable: the same legacy-route and op-start reach as before the restore; the empty-scope key is `LegacyFullScope` again; `ConfirmAPIKey` shows "legacy scopes" / "full access" (SEC6-2) |
-| `TestLegacyKeyExtension_NeverHoldsCanonicalScopes` | (ABO) no path writes canonical scopes into a `scopes_source: legacy` record; only native creation writes `scopes_source: canonical` (SEC6-2) |
-| `TestRevokeRacesLastUse_NeverUnrevokes` | (ABO, `synctest`) a revoke committed between a `TouchAPIKey` read and its commit: the touch conflicts and is dropped, the key stays `revoked`, with and without an extension record (SEC6-3, R6-5) |
+| `TestOneFormat_LegacyRowsReadByPrevBuild` | (ABO, in `make ci` with `prev` built from `PREV_REF` and cached by tag, OPS4-6) rollback cells against the previous release's real binary on a store written by this build: a session issued here stays signed in there and one ended there stays ended here; an invite created here is accepted there; a key created here is an `abk_` key whose row holds only its atoms and grants exactly those there; a disabled, restricted (`"inactive"`) or revoked key is refused there; a user disabled or epoch-bumped here is refused there; roll forward: every row prev wrote (a key re-enabled or revoked, a session issued) is read as is (resolution A-2) |
+| `TestAPIKey_StoredScopesNeverEmpty` | property test over ABO's legacy store: every key row written for a new key has a non-empty `scopes` list of legacy atoms only, never a namespaced string; a requested set that is not a union of whole atom expansions → 422 `no_legacy_atom` and no row (SEC-1, R4-1, SEC4-3, A-2) |
+| `TestLegacyStore_BootstrapKeepsHEADFormat` | (ABO) the bootstrap token minted at P4d is HEAD's `abbs_` token with its hash in HEAD's settings row; it redeems once (`synctest`, under `bootstrapMu`) for an `abk_` key holding every atom, which reads as `["core:admin"]`; every start replaces the hash, as at HEAD (A-2) |
+| `TestRestoredLegacyKey_ReenabledKeepsLegacySemantics` | (ABO) an empty-scope `abk_` key and an admin's `["settings.manage"]` `abk_` key, a nil-coverage restore: both are HEAD's `"inactive"`, never `"revoked"`, and refused; re-enabled by the owner or an admin, each has the same legacy-route and op-start reach as before the restore, the empty-scope key `LegacyFullScope` again (resolution A-2) |
+| `TestRevokeRacesLastUse_NeverUnrevokes` | (ABO, `synctest`) a revoke and a `TouchAPIKey` racing on one key: both run under `apiKeyMu` (early fix 6), the key ends `revoked` in every interleaving (SEC6-3, R6-5, A-3) |
 | `TestKeyLastUseNeverRevertsRevoke` / `TestLastSeenFlushNeverResurrectsRevokedSession` | (`authtest.StoreSuite`, `synctest`) a coalesced key touch after a revoke leaves the key revoked; a `LastSeen` flush after a logout or an admin revoke re-creates no session (DATA6-8) |
-| `TestAuthOn_LegacyAliasEnablesOverStoredOff` | blob `enable_auth=false`, env `ENABLE_AUTH=true` (and `<APP>_CORE_AUTH_MODE=required`, and the operator file): auth enabled after restart; blob `required`, env `ENABLE_AUTH=false`: auth stays enabled and health `config_legacy_name_shadowed` names `core.auth.mode`; the same with the blob's `enable_auth: true` equal to the default (resolution R6-6, R7-1, SEC6-1, SEC7-2) |
-| `TestRollback_OperatorEnabledAuthStaysOn` | (R-test cell) blob `enable_auth: false`, `ENABLE_AUTH=true` on cur: the boot writes `enable_auth: true` (audited `core.config.legacy_narrowed`); roll back to S3 and to S4 r1 without the variable: auth required on both; on S4 r1 `AppConfig.EnableAuth` follows the effective `core.auth.mode`; a Basic gate enabled through `ABO_CORE_HTTP_BASIC_GATE_ENABLED` over a stored `basic_auth_enabled: false` is enabled on `prev` in three cases: a stored password (requests with it pass), a password set only through `ABO_CORE_HTTP_BASIC_GATE_PASSWORD`, and one set only through `BASIC_AUTH_PASSWORD` in the env (an older build without a readable password refuses every request, early fix 5); a blob without `basic_auth_enabled` is narrowed the same way (resolutions R7-1, R8-4, SEC7-1, SEC8-1, SEC8-12) |
-| `TestLegacyRecordStale_ReactivatedRowStaysRestricted` | (ABO, R-test cell) a pre-core `abk_` key set `needs_confirmation` by a nil-coverage restore (`scopes_source: legacy`); a pre-early-fix-3 `prev` sets its row `"active"`; roll forward: the key is refused, its status is derived from the row first and `revoked_at` refuses it, legacy scopes kept, and only `ConfirmAPIKey` re-enables it (SEC7-7) |
-| `TestForeignOpen_SidecarWriteFailedDetected` | (R-test cell) a pre-S0 `prev` whose sidecar path is read-only opens the store; roll forward: the Pebble open stamp reports a foreign open, the `auth` duty is owed and pre-rollback native sessions are revoked (SEC6-4) |
-| `TestLegacyScopedKey_KeepsLegacyRouteReach` | an admin's `abk_` key scoped `["settings.manage"]` (no extension) passes every `settings.manage` legacy route and starts a `settings.manage` adapted op; the same key of a custom-role owner without `core:admin` does not; on native routes it holds the expansion only (SEC5-7; cell of `TestLegacyRoleReachUnchanged`) |
+| `TestAuthEnable_MatchesHEAD` | (ABO, against HEAD's behaviour) blob `enable_auth=false`, env `ENABLE_AUTH=true`: auth stays off, as at HEAD; with auth off, `PUT /api/v1/config {enable_auth: true}` by the auth-disabled principal succeeds when no owner is set and is refused by the owner trust root when one is, as HEAD's `update_service.go:772-781`; after it the blob holds `enable_auth: true` and `prev` boots with auth on; blob `enable_auth: true`, env `ENABLE_AUTH=false`: auth stays on and health `config_legacy_name_shadowed` names `core.auth.mode`; `ABO_CORE_AUTH_MODE=required` over a stored `false`: auth on and locked; on a native app the auth-disabled principal cannot change `core.auth.mode` (SEC4-8, SEC7-2, resolution A-2) |
+| `TestLegacyScopedKey_KeepsLegacyRouteReach` | an admin's `abk_` key scoped `["settings.manage"]` passes every `settings.manage` legacy route and starts a `settings.manage` adapted op; the same key of a custom-role owner without `core:admin` does not; on native routes it holds the expansion only (SEC5-7; cell of `TestLegacyRoleReachUnchanged`) |
 | `TestLegacySPA_InviteFragmentReader` (the fragment cell of `TestLegacyInviteLink_EndToEnd`; the name 09 S4's done-check uses, FE6-5) | S4 r2: the legacy SPA opens `/invite#token=<t>` signed out and signed in, removes the fragment with `history.replaceState`, and accepts; the S9 R-test row: an invite minted on S9 opens after a rollback to S8 (FE5-4) |
-| `TestRestore_PreSwapRevocationsWin` | staged restore with nil coverage, and with complete coverage over an interval detection missed: a key revoked and a user disabled after the archive, unjournaled, stay revoked and disabled; a key `disabled` or `needs_confirmation` in the pre-swap store and `active` in the archive keeps the pre-swap status; a changed password blanks the restored hash (SEC5-10, SEC6-4, SEC7-8) |
+| `TestRestore_PreSwapRevocationsWin` | staged restore with nil coverage, and with complete coverage over an interval detection missed: a key revoked and a user disabled after the archive, unjournaled, stay revoked and disabled; a key `disabled` or `needs_confirmation` in the pre-swap store and `active` in the archive keeps the pre-swap status; a changed password blanks the restored hash; on ABO every restricted status is a HEAD status (SEC5-10, SEC6-4, SEC7-8) |
 | `TestStagedRestoreKeepsCoverage` | (with 05-backup) a staged restore after a clean run: no `gap` line for its own swap, `rc.Revocations` non-nil, only keys revoked after the archive are revoked, no key is set `needs_confirmation` (resolution R6-4, DATA6-2) |
-| `TestFirstR2BootKeepsLegacySessions` | a HEAD-seeded store with legacy sessions and open legacy invites, first S4 r2 boot (`auth` owed, no cut-off): nothing legacy deleted, the cut-off written in the `BootWrites` batch, a HEAD session cookie upgraded on use and a HEAD invite accepted; after a later rollback interval (`Owed.Since` after the cut-off) the roll-forward deletes legacy sign-ins; a crash between P4d steps 2 and 4 of the first r2 boot is not a replaced store on the next boot; a first boot of a pre-S0 store that fails after P4d step 4 (cut-off written, `auth` cleared) and is retried deletes no legacy sign-in (zero `Since` from an absent record), while an unreadable previous core record with a cut-off present deletes them (resolution R7-5, R7-4, DATA7-9, DATA7-10, DATA8-10) |
-| `TestSession_NativeOnlyRecord` | no session issued by this build appears in the app's legacy session rows; a legacy session created after the store's cut-off is refused by the upgrade-on-use fallback (§11) |
-| `TestPostRestoreSurvivesRestart` | restore, restart: the re-revoked key, a restored legacy session cookie and a restored legacy invite are refused, and their legacy rows are gone (SEC2-3, DATA2-4) |
-| `TestReplacedStore_RunsPostRestoreHook` / `TestReplacedStore_TruncatedJournalKeysNeedConfirmation` | store file-copied back to an older generation (no staged restore): the next boot re-applies the verified tail and runs the hook with `rc.Revocations == nil` — every active or disabled key `needs_confirmation`, every epoch bumped — also when the journal was truncated after the archive and verifies cleanly; same generation with the head behind (a crash after `Append`) re-applies the tail only, no hook (DATA3-8, SEC3-10, DATA4-7, SEC4-6) |
+| `TestSession_NativeOnlyRecord` | (native store) no session record holds the token bytes; a lookup by a token whose hash is unknown is refused |
+| `TestPostRestoreSurvivesRestart` | restore, restart: the re-revoked key, a restored session cookie and a restored invite are refused, and their rows are gone (SEC2-3, DATA2-4) |
+| `TestReplacedStore_RunsPostRestoreHook` / `TestReplacedStore_TruncatedJournalKeysNeedConfirmation` | store file-copied back to an older generation (no staged restore): the next boot re-applies the verified tail and runs the hook with `rc.Revocations == nil` — every active or disabled key `needs_confirmation` (on ABO `"inactive"`), every epoch bumped — also when the journal was truncated after the archive and verifies cleanly; same generation with the head behind (a crash after `Append`) re-applies the tail only, no hook (DATA3-8, SEC3-10, DATA4-7, SEC4-6) |
 | `TestLegacyInviteAcceptRechecksCanAssign` | a legacy invite whose creator cannot `CanAssign` its `RoleID`, or whose creator is deleted, is refused on accept (SEC3-2) |
 | `TestOwnerTrustRootKeysAreOwnerProtected` | port of HEAD's owner-trust-root test: with an owner set, a non-owner admin session cannot change `core.auth.mode`, a provider's `allowed_emails`/`allowed_domains`, `core.auth.owner.required` or the three `modules.books.identity.*` keys (SEC3-6) |
 | `TestLegacyTempLoginLink_EndToEnd` | admin reset on the S4 build → legacy `/auth/temp-login?token=` link → 302 to `/login/temp#token=` → legacy SPA page consumes it → signed in (FE3-5) |
-| `TestBootWrites_RunInP4d` | `_system` seeding, the bootstrap mint, the read-only key, the revoke-after-rollback step and the store's `Reconcile` happen after the checkpoint, in P4d step 4; P5 and the store constructor write nothing (DATA3-18, COR4-13, DATA4-10) |
+| `TestBootWrites_RunInP4d` | `_system` seeding, the bootstrap mint, the read-only key and the store's `Reconcile` happen after the checkpoint, in P4d step 4; P5 and the store constructor write nothing (DATA3-18, COR4-13, DATA4-10) |
 | `TestRestore_PostArchivePasswordChangeNotReverted` / `TestRevocationCommittedAfterCheckpointReapplied` | a password changed after the archive → `password_reset_required`, old password refused; a revocation journaled before and committed after the checkpoint is re-applied (SEC2-11, DATA2-7) |
 | `TestStage12_ExtensionPermsIgnored` / `TestModuleAuthMethod_CannotBeInteractive` | an authenticator's assertion cannot raise its checker; a module compat method declared interactive or with credential/owner rights → `ErrMethodSpec` (SEC2-16) |
 | `TestConfining_WorkerKeyRefusedOnABS` | `CheckCredentialFor` refuses an `fp-worker` key and a worker ABS login on ABS routes not naming the worker scope (SEC2-4) |
@@ -1674,16 +1502,14 @@ ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `oauth
 | `TestPostRestore_RevokedKeyStaysRevoked` / `TestPostRestore_NoJournalKeysNeedConfirmation` / `TestRestoreNilCoverageKeepsRevokedTerminal` | SEC-16; refused by the previous release too; with nil coverage a key restored as revoked stays revoked, only active or disabled keys become `needs_confirmation` (DATA4-13) |
 | `TestAccessLog_NoInviteToken` | (in 05-http-api) no one-time token in access log, journal or span attributes (SEC-21) |
 | `TestNoGlobals` (archtest) | temp-login state and throttles are instance state (R5) |
-| `TestNativeStore_RoundTrip` / `authtest.StoreSuite` / `legacytest.AuthStoreSuite` | the native store and ABO's legacy store pass `StoreSuite` (ABO's with HEAD fixtures, today's `TestGrantedFamilyGolden` cases); ABO's also passes `legacytest.AuthStoreSuite`, one case per capability (legacy sign-ins, `Reconcile`, confirm), which drives the service so a drift from auth's unexported twins fails it (SIMP4-3, R4-1, SIMP5-4, SIMP5-9, SIMP6-6, R6-3) |
-| `TestIdentityExtension_SuspendedAfterPrevWrite` | (ABO) a key's legacy row whose guarded projection the previous release changed → on roll-forward the key is suspended with the derived status, health `auth_extension_suspended`; a user's row changed there keeps its restrictions and is not suspended; nothing wider than the legacy row (R4-1, R5-6) |
+| `TestNativeStore_RoundTrip` / `authtest.StoreSuite` / `legacytest.AuthStoreSuite` | the native store and ABO's legacy store pass `StoreSuite` (ABO's with HEAD fixtures, today's `TestGrantedFamilyGolden` cases); ABO's also passes `legacytest.AuthStoreSuite`, one case per capability (`Reconcile`, the atom writer), which drives the service so a drift from auth's unexported twins fails it (SIMP4-3, R4-1, SIMP5-4, SIMP5-9, SIMP6-6, R6-3) |
 | `TestDarkReleaseWritesNoIdentityRow` / `TestDarkReleaseRecordsJournalGap` | S4 r1: core writes no identity row (the census reads every record through books' store and writes none; `PostRestore` and `BootWrites` do not run); r1 lists no `journal` duty, so the first r2 boot appends a `gap` line (COR4-4, COR6-3) |
 | `TestDarkRelease_HEADSeedWritersKeepRunning` | S4 r1 done-check: a fresh store booted on r1 has the four seed roles and `_system`; every r1 restart writes a new bootstrap token file whose token redeems; the expiry stamp keeps HEAD's one-shot flag; at r2 the books start-hook call is gone and P7/`BootWrites` produce the same rows (COR6-3) |
 | `TestRollbackR2ToR1Boots` | a store served by S4 r2 boots on S4 r1: books supplies the same store, no missing-grant or backend error (DATA4-2) |
 | `TestLegacyInviteDoubleAcceptOneWins` / `TestUserMergeWithLegacyInvite` | `synctest`: two concurrent accepts of one legacy invite, exactly one account; a merge whose source has an open legacy invite succeeds and deletes it (DATA4-9) |
-| `TestNativeSessionsRevokedAfterRollback` | a session issued on cur, a rollback boot on prev (no `auth` duty in its served record), roll forward: the session is refused, legacy sessions are deleted (the cut-off written by the first r2 boot predates `Owed.Since`, R7-5), the owed `auth` duty is gone after the revoking batch, audited `core.session.revoke_after_rollback` (DATA4-14, SEC4-9, COR6-2, DATA6-4); also when prev is a pre-guard build opened twice so the sidecar ends on its recorded inode (R-test cell, SEC5-5), and when the roll-forward boot fails after P4b and is retried (`TestCrashAfterStep9RevokesSessions`, COR5-3, DATA5-6); and when, between a pre-S0 open and the first serve boot, the offline `users reset-password` runs: the session is still refused, because the offline close batch staged the owed `auth` entry before it promoted its own open (resolution R8-2, SEC8-4, DATA8-3) |
 | `TestS4_AuthOffDockerBoots` | (image job) ABO with `enable_auth=false` in a container boots at S4 r2 and reports `auth_disabled_remote` (SEC4-8) |
 | `TestOwnerGate_AccessWithoutOwnerFallsBack` | Access configured, no owner identity: restore, factory reset and user merge fall back to Interactive + `core:admin`; owner keys are `ProtectAdmin` (SEC4-14) |
-| `TestRestrictedLastAdmin_SSORefused` | a last admin kept by a restore cannot sign in by password, key, OIDC or an identity extension until a reset clears `SignInRestricted` (SEC4-12) |
+| `TestRestrictedLastAdmin_SSORefused` | a last admin kept by a restore cannot sign in by password, key or OIDC until a reset; on a native store an identity extension refuses it too (`SignInRestricted`), on ABO's store its keys are `"inactive"` and the Cloudflare Access residual is named in the restore report (SEC4-12, A-2) |
 | `TestVerifiedEmailReconcileInBootWrites` / `TestExpiryStamp_OneShot` | (ABO) HEAD's verified-email reconcile runs in the store's `legacy.AuthReconciler` at P4d step 4; the key expiry stamp honours HEAD's one-shot done flag (DATA4-10, DATA4-12) |
 
 ## 11. Migration from ABO
@@ -1705,12 +1531,12 @@ ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `oauth
 | `internal/mtls`, `cmd/mtls-bridge` | stay in ABO |
 | `internal/security/safehttp` | `core/integrations/providerhttp` (05-metadata); `safepath`, `pathvalidation` → `core/library` (05-library) — not auth |
 
-**Stored data: store interface, one format per family (resolution R4-1, refining R3-1; supersedes
-cross-cutting resolution 5 and R2-1/R2-2 here).** Core auth does not copy ABO's identity data and holds
-none of its key names or row formats: every record goes through `auth.Store` (§3.4). There is no
-adoption copy, no mirror, no rebuild at boot, no claim hand-over, no claim-mode level step for identity
-and **no storage grant** during the extraction (grants for these families belong to the deferred
-cutover), so an older build after a rollback and this build after a roll-forward read the same bytes.
+**Stored data: store interface, HEAD's representation (resolutions R4-1, A-2).** Core auth does not copy
+ABO's identity data and holds none of its key names or row formats: every record goes through
+`auth.Store` (§3.4). There is no adoption copy, no mirror, no rebuild at boot, no claim hand-over, no
+claim-mode level step for identity and **no storage grant** during the extraction (grants for these
+families belong to the identity hardening cutover, §11.2), so an older build after a rollback and this
+build after a roll-forward read the same bytes.
 
 **Native store (apps without pre-core identities; SIMP4-3).** `core/internal/authstore`, landing with
 `auth` at 09 S4, used by `hello`, `coretest` and every app that passes no legacy store. Values are
@@ -1722,78 +1548,32 @@ cutover), so an older build after a rollback and this build after a roll-forward
 | `c/auth/apikey/<id>`; `c/auth/apikey/h/<sha256>` → id; `c/auth/apikey/u/<user>/<id>` | `APIKey` |
 | `c/auth/identity/<provider>/<subject>`; `c/auth/identity/u/<user>/<provider>/<subject>` | `ExternalIdentity` |
 | `c/auth/inviteallow/<folded e-mail>` | allow-list entry |
-| `c/auth/session/h/<sha256>`; `c/auth/session/id/<publicID>` → hash; `c/auth/session/u/<user>/<publicID>` (`Serialized`) | `SessionRecord` |
+| `c/auth/session/h/<sha256>`; `c/auth/session/id/<publicID>` → hash; `c/auth/session/u/<user>/<publicID>` (`Serialized`) | `SessionRecord` with its token hash |
 | `c/auth/onetime/<kind>/<sha256>` (`Serialized`) | `OneTimeToken` (invite, temp-login, bootstrap) |
 
-It implements none of the `legacy` capabilities of §3.4 (no legacy credentials, no open-time
-maintenance, no extension records). `TestNativeStore_RoundTrip` runs `authtest.StoreSuite` over it.
+It implements none of the `legacy` capabilities of §3.4. `TestNativeStore_RoundTrip` runs
+`authtest.StoreSuite` over it.
 
 **ABO's legacy store (books-supplied).** The `books` module passes `module.Manifest.LegacyStores.Auth`
 (06 §6.4.5): ABO's existing identity store code — the auth methods of `internal/database` stay in ABO
-behind the interface instead of moving into core (04 §4.5) — over ABO's rows in their legacy format,
-through books' own claims. Write exclusivity on those families is an ABO archtest (only the
-legacy-store package writes them), not a storage grant. ABO runs `authtest.StoreSuite` with HEAD
-fixtures. What the legacy format cannot carry goes to a **books-owned extension family that older
-builds never read — never additively into legacy rows** (SEC4-3: an extra string in a legacy row can
-widen on an older build):
-
-- **Extension records** extend one legacy row each, keyed by its primary key, never repeat a field the
-  row holds, and carry `legacy_ref.fp`, the SHA-256 of the row's **guarded projection** (05-storage
-  §5S.3.11), written in the same batch. The projection covers the security-relevant fields only
-  (resolution R5-6, DATA5-2, SEC5-12, DATA5-16):
-  - `apikey:` — `id`, `user_id`, `token_hash`, `scopes`, `status`, `expires_at`, `deactivated_at`,
-    `revoked_at`; excluded: `name`, `description`, `created_at`, `last_used_at`, `last_used_ip`,
-    `use_count` (HEAD rewrites the last three on every authenticated request,
-    `middleware/auth.go:382`, `pebble_store_auth.go:1284-1302`);
-  - `u:` — `id`, `username`, `email`, `email_source`, `password_hash_algo`, `password_hash`, `roles`,
-    `status`, `credential_epoch`, `merged_into_user_id`, `merged_at`; excluded: `created_at`,
-    `updated_at`, `version`.
-  Every write path of a row with an extension either goes through the store's `Extension.Put` or
-  changes only excluded fields (last-use tracking, §4.4, under the same commit-time check as every
-  other `apikey:` writer). Field classes: a key's canonical scopes are **Widening**; `scopes_source`
-  (`canonical` only at native creation, `legacy` for a record the post-restore fallback or the
-  stale-status stamp creates for a pre-core key, SEC6-2), the `needs_confirmation` stamp and
-  restriction, `password_reset_required`, `SignInRestricted` and display data are **Independent**. A
-  `scopes_source: legacy` record holds no Widening field, so it is never suspended; on a fingerprint
-  mismatch its status is still derived from the legacy row first and its `needs_confirmation`
-  restriction stands until `ConfirmAPIKey` (§4.4, SEC7-7). When the projection's hash differs — an
-  older build changed a security-relevant field while rolled back — a key's record is **suspended**:
-  its canonical scopes are not applied, its restrictions stay in force, and the key is refused until
-  `ConfirmAPIKey` (audited `core.apikey.confirm`) or a revoke (§4.4); health reports `degraded`
-  (`auth_extension_suspended`). A user record has no Widening field, so it is never suspended: its
-  restrictions are kept and its next write re-stamps it (DATA5-4). A record whose row is gone is an
-  orphan, ignored and deleted by the next write of that key.
-- **Writers and their preconditions (R7-3, DATA7-8; 05-storage §5S.3.11 "Writers in the extension
-  family" is the table).** Books declares the extension family `Serialized`, so every key a writer sets
-  or deletes in it carries an `Expect` and none issues a `DeleteRange`:
-  - key and user records: `Extension.Put` with an `Expect` on the record bytes the caller's `Get` saw
-    (`seen`), the caller adding its `Expect` on the legacy row; `ConfirmAPIKey` through
-    `Extension.Confirm`, which reads the record and the legacy row with `GetForUpdate`; a record deleted
-    with its row, by an orphan sweep, a key or user delete or the user merge through
-    `Extension.Delete(ctx, b, legacyKey, entryID, seen)`, an `Expect` on the record bytes seen;
-  - standalone records consumed once (hashed sessions, native one-time tokens and invites): created
-    with `Expect(key, nil)`; consumed or deleted with an `Expect` on the bytes read, then `Delete`
-    (DATA4-9);
-  - `TouchSession`: `GetForUpdate` on the record; nothing is staged for an absent, expired or
-    epoch-stale one (§3.4);
-  - the bootstrap hash, rewritten at every start: `GetForUpdate` on the key, then `Set` or `Delete`;
-  - the session cut-off record: written once, `Expect(key, nil)`.
-- **Standalone native-only records**: hashed sessions, native one-time tokens (invite, temp-login,
-  bootstrap) and the session cut-off record. A rollback costs one sign-in per browser and voids invites
-  and temp-login links issued by this build (resend) — stated in the release note.
-- **Every restriction is also in a field the legacy build reads**: `status` (`"inactive"`/`"revoked"`),
-  `revoked_at`, `credential_epoch` and a blanked `password_hash`; a new key's legacy `scopes` list
-  holds only admitted legacy atoms, or the reserved no-scope string, and is never empty (§4.4).
+behind the interface instead of moving into core (04 §4.5) — over ABO's rows in **HEAD's representation
+through S10**, through books' own claims, with HEAD's lock discipline (resolution A-3). Write
+exclusivity on those families is an ABO archtest (only the legacy-store package writes them), not a
+storage grant. ABO runs `authtest.StoreSuite` with HEAD fixtures. Nothing is stored beside the legacy
+rows, and nothing is added to them (SEC4-3: an extra string in a legacy row can widen on an older
+build). Every restriction is a field HEAD reads: `status` (`"inactive"`/`"revoked"`), `revoked_at`,
+`credential_epoch` and a blanked `password_hash`. A rollback therefore costs nothing: no re-login, no
+voided invite, no refused key.
 
 | Legacy family (ABO) | Read and written as | Notes |
 |---|---|---|
-| `u:` + `idx:user:username:` (and the other `idx:` user sub-prefixes) | the legacy `User` row (`internal/database/store.go:734-780`) | IDs and role IDs unchanged (`admin`, `editor`, `viewer`, `fp-worker`; 05-rbac §6.2); `StatusDisabled` ↔ `"inactive"`, `pending`/`system` are statuses an older build refuses (`user_active.go`); `EmailVerified` derives from `email_source`; `PasswordResetRequired` and `SignInRestricted` = blanked hash in the row + the extension member (§4.14) |
-| `apikey:` + `idx:apikey:` | the legacy `APIKey` row (`store.go:982-997`) | hash reused as-is (already SHA-256 of raw); for a key whose scopes come from its legacy row (no extension record, or a `scopes_source: legacy` one; §4.4's one predicate, SEC6-2), legacy atoms translated on read (05-rbac §6.1) for native routes and kept as stored atoms for legacy routes (`rbac.LegacyAtom`, SEC5-7), and empty legacy scopes → `LegacyFullScope=true` (05-rbac §4.5), kept as written; new keys: admitted legacy atoms (or the reserved no-scope string) in the row, canonical scopes in a `scopes_source: canonical` extension, never empty (§4.4); every writer stages `Expect` on the bytes it read, last use included (§4.4, R6-5); status mapping and stale rule §4.4 |
-| `sess:<raw>` + `idx:sess:user:` | read and deleted, never written | **no raw session in any family this build writes** (SEC-19). A presented legacy raw-ULID cookie is looked up with epoch, status, revoked and expiry checks and accepted only if the row was created before the store's cut-off record (in the extension family, written once, when absent, by `BootWrites` at P4d step 4 of the first r2 boot, which deletes no legacy sign-in, §4.3); on a hit the service issues a hashed `mcs_` session, sets the cookie and deletes the legacy row in one batch (`TakeLegacySession`: `Expect` + delete, DATA4-9). Sessions an older build issues during a rollback are newer than the cut-off and are refused after the roll-forward, and native sessions from before the rollback are revoked (§4.3): rollback = re-login, both ways. Legacy sessions live at most 7 d (`handlers/auth.go:90-96`); the fallback's code is removed by the first release after S4 + 7 days. Books keeps a retention sweep that deletes expired `sess:` and `idx:sess:user:` rows, so raw tokens an older build writes during a later rollback do not stay at rest once the fallback is gone; the claim becomes `AgingOut` from the fallback-removal release (DATA5-18) |
-| `invite:<raw>` + `idx:invite:username:` | read in place by presented token, deleted on accept, on expiry and by §4.14; never written | the raw token is never copied (SEC-19's reasoning); accept re-checks `CanAssign` (§4.13, SEC3-2) and stages `Expect` + delete (DATA4-9); a user merge deletes the source's legacy invites, never re-owns them. Native invites are hash-only in the extension family and void on an older build |
+| `u:` + `idx:user:username:` (and the other `idx:` user sub-prefixes) | the legacy `User` row (`internal/database/store.go:734-780`) | IDs and role IDs unchanged (`admin`, `editor`, `viewer`, `fp-worker`; 05-rbac §6.2); `StatusDisabled` ↔ `"inactive"`, `pending`/`system` are statuses an older build refuses (`user_active.go`); `EmailVerified` derives from `email_source`; `PasswordResetRequired` = a blanked `password_hash` under an algorithm other than `oauth` (`internal/server/absauth/password.go:31-34,165-170`); `SignInRestricted` is not representable (§3.1, §11.2) |
+| `apikey:` + `idx:apikey:` | the legacy `APIKey` row (`store.go:982-997`) | hash reused as-is (already SHA-256 of raw); new keys are `abk_` keys whose `scopes` hold the atoms of 05-rbac §6.3's write mapping, never empty (§4.4); read as `APIKey.Legacy` atoms with their canonical expansion, an empty list `LegacyFullScope`; statuses HEAD's (§4.4); every writer under `apiKeyMu` (early fix 6) |
+| `sess:<raw>` + `idx:sess:user:` | HEAD's session rows, read and written | issued as HEAD issues them (ULID from `crypto/rand`, `pebble_store_auth.go:1656-1675`; `Origin` as HEAD records it, `""` = delegated; TTL 24 h, remember-me 7 d); checked on use for epoch, status, revoked and expiry; `PublicID` is early fix 1's derived handle; HEAD's expired-row retention is kept; raw at rest as at HEAD until §11.2 |
+| `invite:<raw>` + `idx:invite:username:` | HEAD's invite rows, read and written | created as HEAD creates them; accept re-checks `CanAssign` (§4.13, SEC3-2) and deletes the row under `inviteMu`; a user merge deletes the source's invites, never re-owns them (DATA4-9) |
 | `oauthid:`, `idx:oauth:user:`, `inviteallow:` | the legacy rows | the invite allow-list feeds OIDC admission (§4.7) |
-| bootstrap hash in settings | not read by core | books' row; core's bootstrap hash is a native one-time token, regenerated at every start; an older build regenerates its own |
-| temp-login map | — | in-memory today; nothing to migrate |
+| bootstrap hash in settings | HEAD's row, read and written | the store's `IssueOneTime` writes HEAD's `abbs_` hash and expiry, regenerated at every start as at HEAD; redeemed under `bootstrapMu` (§4.6) |
+| temp-login map | instance memory of the store, as at HEAD | HEAD's tokens live in a process map (`auth_temp_login.go:30-75`); the legacy store keeps them per instance (R5: no package state), lost on restart as at HEAD |
 
 **HEAD's open-time identity writers (DATA4-10, DATA4-12).** `initPebbleStore` writes on every open;
 its identity part moves into the legacy store's `Reconcile` (the `legacy.AuthReconciler` capability, §3.4), run by `BootWrites` at P4d step 4 from S4 r2 (through S4 r1 books' start hook runs HEAD's own sequence, §5, COR6-3):
@@ -1803,19 +1583,6 @@ index; `internal/database/pebble_store_verified_email_backfill.go:310-330`) and 
 **one-shot** semantics by reading HEAD's own done flag (`setting:system:migration:apikey_expiry_stamp_v1_done`)
 and afterwards only logs never-expiring keys found later. The books module's constructor writes
 nothing (05-storage §5S.9.3 lists HEAD's other open-time writers).
-
-`TestMirror_NarrowKeyNeverBecomesEmptyScope` and the rebuild tests of round 2 are replaced by
-`TestAPIKey_StoredScopesNeverEmpty` and `TestOneFormat_LegacyRowsReadByPrevBuild` (§10).
-
-**Deferred: cutover.** Moving ABO's identity families to the native store and deleting the legacy
-rows is **not part of the extraction**. It is a later, per-family, one-way step behind the single
-per-owner level guard (05-storage §5S.3.7), after its own pre-migration checkpoint, decided on
-measured data (02 decision 13), and the only step that needs core to read books' rows — so the storage
-grant for these families belongs to it; its floor is the cutover release itself. Until then no level
-step exists for identity (the level guard still applies to books' own migrations). The cutover stops
-supplying `legacy.Stores.Auth` and may delete `legacy.AuthSignIns`, `legacy.AuthReconciler` and
-`legacytest.AuthStoreSuite`: they live in `legacy`, outside the API promise, so that is not a v1
-break (resolution R6-3).
 
 ### 11.1 Early fixes in the legacy code (independent of the extraction)
 
@@ -1871,12 +1638,29 @@ the release notes name.
    stolen key widens the window by sending requests in a loop. Hotfix: `SetAPIKeyStatus`,
    `SetAPIKeyExpiry` and every other `apikey:` writer take `apiKeyMu` (the lock's one other user, user
    merge, `user_merge.go:528`, already does), so every writer of the family is serialized by one lock;
-   test `TestLegacyRevokeRacesTouch_NeverUnrevokes`, in ABO's current code. Books' legacy store
-   carries the same rule into the core era as a commit-time check on every `apikey:` writer (§4.4).
+   test `TestLegacyRevokeRacesTouch_NeverUnrevokes`, in ABO's current code. Books' legacy store keeps
+   that lock in the core era (§4.4; resolution A-3).
    Tracked as a hotfix in `todo.d/2026-11-04_platform_core_followups.md` (defect 4 below).
 
 The revocation journal is not on this list: its lines are MAC'd with a key from the S3 keyring
 (05-backup §5B.3.6), so it ships with the build that has the keyring (DATA3-19).
+
+### 11.2 Identity hardening cutover (post-S10)
+
+The extraction leaves ABO's identity stores in HEAD's representation (resolution A-2). The hardening
+the native design gives hello, TV and Movies reaches ABO later, as named one-way cutovers on N15's
+floored machinery (05-storage §5S.3.7's per-owner level guard, its own pre-migration checkpoint, a floor
+at the cutover release, decided on measured data, 02 decision 13). 12 and 14 list them; each is the only
+step that needs core to read books' rows, so the storage grants for these families belong to it.
+
+| Cutover | What moves | What it removes |
+|---|---|---|
+| Identity | sessions and one-time tokens hashed (`mcs_`, `mci_`, `mct_`, `mcb_`; §4.1), keys re-issued or re-stored as `mck_` with native scopes, roles with native scopes (core-only scopes, `SeedDigest`/`PendingSeed`, the seed-role operator diff and the lift of `ErrSeedRoleLocked`, 05-rbac §3.6, §4.8), `needs_confirmation` and `SignInRestricted` as stored fields, the native `LastSeen` | `legacy.Stores.Auth`/`Roles`, `legacy.AuthReconciler`, `legacy.AuthAtomWriter`, `legacy.RBACAtomWriter` and their `legacytest` suites (outside the API promise, so no v1 break, R6-3); `app.Options.LegacyAmbientScopes`; `LegacyFullScope` for any key still holding an empty list |
+| Secrets | plaintext blob secrets encrypted into `core/secrets` (05-config) | the plaintext fields |
+| Auth precedence | operator-layer precedence for the auth switch on ABO (the native rule of §4.11 and SEC4-8) | HEAD's stored-value-wins precedence and `!prior.EnableAuth` rule for `enable_auth` |
+
+Until then, raw session and invite tokens stay at rest exactly as at HEAD (no regression, no
+improvement), and ABO's roles and keys cannot hold core-only scopes (05-rbac §6.3).
 
 ## 12. Open items
 
@@ -1894,7 +1678,7 @@ The revocation journal is not on this list: its lines are MAC'd with a key from 
 | G9 auth wiring inline, closes over `*Server` and global `AppConfig.EnableAuth` | **Fixed**: `auth.Service` instance with explicit `Deps`/`Options`; `core.auth.mode` read through `config` (§3.2, §4.11) |
 | G10 bootstrap assumes one binary, admin = first `users.manage` holder | **Fixed**: core-owned, app-agnostic bootstrap; admin = `core:admin` holder (§4.6) |
 | G11 owner/CF machinery embedded in auth | **Fixed**: `Authenticator`/`OwnerVerifier` extension point; Cloudflare Access verification, owner proof, policy editing and service tokens stay in ABO (`internal/cfaccess`, `internal/cfaccesspolicy`, `internal/cfservicetoken`; §3.3, §4.8) |
-| G12 sessions unhashed (secrets part → 05-config) | **Fixed for auth credentials**: every session/invite/temp-login/bootstrap/key stored as SHA-256 (§4.1, §4.3); sessions only in the core-only family, never as raw rows (§11); config secrets → `core/secrets` (05-config) |
+| G12 sessions unhashed (secrets part → 05-config) | **Fixed in the native store**: every session/invite/temp-login/bootstrap/key stored as SHA-256 (§4.1, §4.3); config secrets → `core/secrets` (05-config). **For ABO deferred** to the identity and secrets hardening cutovers (§11.2, resolution A-2): through S10 ABO keeps HEAD's raw session and invite rows |
 | G14 rate limit/lockout tied to tunnel topology, in memory | **Fixed + documented**: instance throttle, client address from `httpapi` trusted-proxy config with the connector set migrated, no hard lockout, in-memory by design (§4.9) |
 | G15 two parallel auth stacks | **Fixed**: compat stays in app, resolves via `PrincipalFor` (§4.10) |
 
@@ -2136,3 +1920,12 @@ Round 8 (2026-11-04), findings applied to this file:
 - SIMP8-3 — §3.4, §5: "the capabilities it drives" replaced by "the capabilities 03 §3.3 lists".
 - R8-1 — §4.8, §7: HEAD's `POST /system/reset` named among the owner-guarded routes; `HasUsers` is cleared by either reset kind.
 - integration pass (round 8): §4.11 and §8 declare `config.NarrowStored("core.auth.mode", nil)`, with no `when` parameter (R-E request); §4.12: hook-appended lines carry their restore's seq in `Revocation.RestoreSeq` (`restore_seq`), not as a `Detail` element, as 05-backup defines it (DATA8-7, R-B request).
+
+Advisor (2026-11-04), resolutions and findings applied to this file:
+
+- A-2 (ADV-3, ADV-S1) — header, §3, §3.1–§3.4, §4.1, §4.3, §4.4, §4.6, §4.11–§4.14, §5–§10, §11, §13: ABO's identity store keeps HEAD's representation through S10 (raw `sess:` rows and HEAD's one-time tokens, `abk_` keys holding legacy atoms, HEAD's statuses, HEAD's bootstrap hash, in-memory temp-login); `auth.Store` made representation-neutral (`IssueSession`/`SessionByToken`, `IssueAPIKey`/`APIKeyByToken`, `IssueOneTime`/`TakeOneTime` by raw value); deleted for ABO: the extension records with `legacy_ref.fp`, Widening fields, suspension, `ConfirmAPIKey` and the shared confirm capability, `legacy.AuthSignIns` with the upgrade-on-use fallback, `DeleteLegacySignIns` and the session cut-off, the `auth` revoke-after-rollback duty and `RestoreDeps.Duties`, `["none"]`, ABO `mck_` keys, the R6-6 exemption, the `NarrowStored` declaration and their tests and rows; core-namespaced key scopes are the API-level mapping through `rbac.LegacyAtom` (`legacy.AuthAtomWriter`, 422 `no_legacy_atom`); a nil-coverage restore sets ABO keys to HEAD's `"inactive"` and deletes every session (R-B's choice (b)); the restricted last admin's Cloudflare Access residual applies on ABO; new §11.2 "Identity hardening cutover (post-S10)"; the native design and the six early fixes kept.
+- A-2 / lead decision (R-E) — §4.11, §8, §10: ABO's auth enable is HEAD's exactly (stored value wins; the auth-disabled principal may store `enable_auth: true` under HEAD's `!prior.EnableAuth` rule, `update_service.go:781`); SEC4-8's restriction is native-only; `TestAuthOn_LegacyAliasEnablesOverStoredOff` rewritten as `TestAuthEnable_MatchesHEAD`; `ABO_CORE_AUTH_MODE`'s rollback cost goes to 09's canonical-only row.
+- A-3 (ADV-S2) — §3.4, §4.4, §4.6, §6, §7, §11.1: ABO's legacy rows keep HEAD's mutexes (`apiKeyMu` with early fix 6, `inviteMu`, `bootstrapMu`); `Expect`-based single use and lost-update checks are native-store only; the `apikey:` `CheckedWrites` request withdrawn.
+- A-4 (ADV-S3) — §3.5: no deferred-members archtest.
+- A-5 (ADV-S4) — §9: metric names under the app's namespace; the legacy-session fallback counter deleted.
+- A-14 (ADV-S8) — §5: the P4d compat usage-record step removed.
