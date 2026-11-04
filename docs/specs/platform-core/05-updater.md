@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.7.1 -->
+<!-- version: 1.8.0 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -220,8 +220,17 @@ type Deps struct {
 // (05-storage §5S.3.7): "level_newer", "format_newer" (pre-guard binary),
 // "upgrade_floor" (the store has not applied what exe's declared floor
 // requires), "restore_pending", "restore_inflight" (a restore journal holds
-// inflight.json, DATA3-6), "sidecar_unreadable", "cannot_determine" (a probe
-// could not answer; refuses).
+// inflight.json, DATA3-6), "reset_pending" (a staged factory reset intent
+// reset/pending.json, or a reset journal reset/<id>/journal.json not yet
+// applied, 05-storage §5S.3.15; R7-2, DATA7-6, OPS7-11), "sidecar_unreadable",
+// "cannot_determine" (a probe could not answer; refuses). One journal passes:
+// a KindCheckpoint restore journal at swapped (the offline
+// restore-checkpoint path) does not refuse a candidate exe whose levels and
+// floors admit the restored store, so `make rollback` after a checkpoint
+// restore reaches the previous binary (R7-4, DATA7-12); every other started
+// swap refuses. The scripts' overrides ROLLBACK_IGNORE_RESTORE=1 and
+// ROLLBACK_IGNORE_RESET=1 belong to scripts/storage_format_guard.py (make
+// rollback, deploy) only; the updater has no override and refuses.
 type ReaderCheck func(ctx context.Context, dbPath, exe string, opt ReaderCheckOptions) error
 
 // StoreState reports the store's recorded migration state — the applied
@@ -230,7 +239,12 @@ type ReaderCheck func(ctx context.Context, dbPath, exe string, opt ReaderCheckOp
 // rewrites beside the DB (a file, like the level sidecar ReaderCheck reads,
 // so the same answer is available to tools outside the process, e.g. 09's
 // P-command, and needs no open store). Never the binary version (OPS3-7).
-// A missing or unreadable sidecar is an error (fail-closed).
+// A missing or unreadable sidecar is an error (fail-closed). It is consulted
+// only against a NON-EMPTY floor: an empty --print-upgrade-floor (and a
+// manifest without MinUpgradeFrom) passes without reading the sidecar, so a
+// HEAD store, which has none until an S0+ boot writes it, never blocks an
+// update whose binary declares no floor; a non-empty floor with a missing
+// sidecar refuses with "boot any release >= S0 once" (OPS7-10).
 type StoreState func(ctx context.Context, dbPath string) (StoreApplied, error)
 
 type StoreApplied struct {
@@ -289,9 +303,11 @@ func Boot(stateDir, exe string, self Self, check ReaderCheck) (BootResult, error
 // kernel computes it before P−1 (06 §6.4.5, §6.5.1; FE6-3). It needs no ldflags and no .git, so every
 // build path yields one, and two binaries differ in it whenever their bytes
 // differ. It is opaque and compared only for equality. It is NEVER the UI
-// bundle's build ID (07 §7.6.3; X-App-Build, ui_build_id), which is "dev" for
-// every API-only build and every app without an embedded shell bundle, so it
-// cannot tell two such binaries apart. The same value is the binary identity
+// bundle's build ID (07 §7.6.3; the value X-App-Build reports and
+// --version-json prints as ui_build_id: the embedded bundle's meta, legacy
+// or shell), which is "dev" for every API-only build, so it cannot tell two
+// such binaries apart; /api/core/v1/modules' ui_build_id is a different
+// value, the shell bundle's only ("" without one; FE7-13). The same value is the binary identity
 // storage and backup record (05-storage's served ledger build and self-served
 // record, 05-backup's StagedByBuild).
 type Self struct{ Version, BinaryID string }
@@ -368,8 +384,12 @@ with an interactive method can turn automatic apply on. Steps, each a `rc.Phase`
 1. Preconditions: not in a container; current build is versioned; target newer than current, except
    that on a local build (`LocalBuild`) a scheduled run never applies and a manual run applies only the
    version the operator names explicitly; for a **scheduled** run, target newer than `Status.SkippedAfterRollback` (OPS2-6); inside the window when
-   scheduled; no staged restore pending (05-backup §5B.3.4's journal: a swap would make the restore be
-   rejected as foreign, 09 S1/S8); either `TrustedKeys` non-empty or the legacy path enabled (5U.5);
+   scheduled; no staged restore pending and none in flight (05-backup §5B.3.4's journal: a swap would make
+   the restore be rejected as foreign, 09 S1/S8), and no factory reset staged or in flight
+   (`reset_pending`, 05-storage §5S.3.15: a swap would turn the admin's audited reset into a rejected
+   intent, or leave a half-done set-aside to a binary that cannot finish it; R7-2, OPS7-11), both read
+   through `ReaderCheck` on `<exe>` with no override (a `KindCheckpoint` journal at `swapped` passes for a
+   candidate that admits the restored store, R7-4); either `TrustedKeys` non-empty or the legacy path enabled (5U.5);
    and the **executable's directory is writable by the process**, checked by creating and removing a
    probe file through an `os.Root` opened on that directory (OPS2-4). An unwritable directory sets
    `DisabledReason: "binary_not_writable"`, refuses apply and rollback, and keeps component
@@ -384,8 +404,8 @@ with an interactive method can turn automatic apply on. Steps, each a `rc.Phase`
    `Channel` allowed by the configured channel (a stable install accepts only `stable`; a prerelease
    install accepts both); then the archive's SHA-256 against `Assets[name]`. Any mismatch: abort,
    delete the download, never fall back to the legacy path. Then the stepping-stone rule (R2-4,
-   OPS2-11, OPS3-7): if `MinUpgradeFrom` is set and `StoreState(core.storage.path)` — the applied-steps
-   sidecar of 05-storage — does not `Meet` it, abort with
+   OPS2-11, OPS3-7): if `MinUpgradeFrom` is set (a non-empty floor) and `StoreState(core.storage.path)` —
+   the applied-steps sidecar of 05-storage — does not `Meet` it, abort with
    `stepping_stone_required`, set `Status.SteppingStone = MinUpgradeFrom.Release` and a UI banner
    ("install <release> and run it until the store has applied what this release needs"); nothing is
    swapped. A `StoreState` error refuses the same way (fail-closed). This is why the updater can never
@@ -401,8 +421,9 @@ with an interactive method can turn automatic apply on. Steps, each a `rc.Phase`
    informational here. The self-test requires `app == AppID`, `version == target` and a non-empty
    `binary_id`; that `binary_id` (the binary ID it computes over its own bytes, which the step-8 rename
    does not change; never its `ui_build_id`, R5-7) is what step 7 records as `to_build`. It then runs
-   `<exe>.new --print-upgrade-floor` and refuses with `stepping_stone_required` unless `StoreState`
-   `Meets` the floor the binary itself enforces at boot — the check the 09 S0 hotfix makes (OPS6-1), kept
+   `<exe>.new --print-upgrade-floor` and refuses with `stepping_stone_required` unless that output is empty
+   (no floor: the sidecar is not read, OPS7-10) or `StoreState` `Meets` the floor the binary itself
+   enforces at boot — the check the 09 S0 hotfix makes (OPS6-1), kept
    beside step 3's signed copy so a release whose manifest omits or understates the floor is still
    never swapped in.
 6. Pre-update backup through `backup.Runner` ([05-backup](05-backup.md), in the format the previous
@@ -577,10 +598,11 @@ the compiled-in revoked list in the next release.
 | Backup fails | closed (unless `require_backup=false`) | recovery path must exist before a swap |
 | Rename fails | closed: restore `<exe>` from `<exe>.prev` if the first rename happened; abort | atomic swap or nothing |
 | Executable directory not writable | closed for apply/rollback (`binary_not_writable`); open for check (Degraded, banner) | OPS2-4: say so instead of failing at the swap |
-| Store's recorded state does not meet the signed `min_upgrade_from` (step 3) or the new binary's own `--print-upgrade-floor` (step 5), or `StoreState` fails | closed: apply refused (`stepping_stone_required`), the download and `<exe>.new` deleted, nothing swapped | R2-4, OPS3-7, OPS6-1 |
+| Store's recorded state does not meet the signed `min_upgrade_from` (step 3) or the new binary's own non-empty `--print-upgrade-floor` (step 5), or `StoreState` fails against a non-empty floor (a missing sidecar: "boot any release ≥ S0 once"); an empty floor passes without reading the sidecar | closed: apply refused (`stepping_stone_required`), the download and `<exe>.new` deleted, nothing swapped | R2-4, OPS3-7, OPS6-1, OPS7-10 |
 | Unsigned release newer than `LastUnsignedVersion` | closed: `verify_failed` | SEC2-23 |
 | Scheduled apply of a version that rolled back here | open: skipped, `SkippedAfterRollback` set, no download | OPS2-6 |
-| Staged restore pending, or a restore in flight | closed: apply and rollback refused (`restore_pending`, `restore_inflight`) | 09 S1/S8; the swap would discard the restore (DATA3-6) |
+| Staged restore pending, or a restore in flight (except a `KindCheckpoint` journal at `swapped` whose restored store the candidate admits) | closed: apply and rollback refused (`restore_pending`, `restore_inflight`); in `Boot`, `rollback_blocked` | 09 S1/S8; the swap would discard the restore (DATA3-6); the checkpoint exception lets the documented failed-migration recovery reach `.prev` (R7-4, DATA7-12) |
+| Factory reset staged (`reset/pending.json`) or a reset journal not yet `applied` | closed: apply and rollback refused (`reset_pending`); in `Boot`, `rollback_blocked`; no updater override (`ROLLBACK_IGNORE_RESET=1` is the scripts' only) | a swap would reject the audited reset or half-apply it (R7-2, DATA7-6, OPS7-11) |
 | `ReaderCheck` cannot determine the answer (`cannot_determine`) | closed: apply and rollback refused | fail-closed, as `make rollback` (09 §9.2.2) |
 | `exec` of the restored binary fails in `Boot` | open: `RolledBack: true`; `main` exits with the restart code | fallback to the supervisor restart |
 | Restart fails after swap | closed: the process keeps running the old code in memory; marker says pending; next manual or supervisor restart boots the new binary under the boot counter | — |
@@ -680,6 +702,8 @@ The `/api/v1/update/*` paths are aliases for the compatibility window (09 §9.2.
 | `TestApply_BinaryDirNotWritableRefusedAndDegraded` (read-only temp directory) | OPS2-4 |
 | `TestApply_SteppingStoneRequired` (store at books 63 with a running binary newer than the stepping-stone release → refused before any swap; store at books `LegacyCap` → allowed), `TestApply_StoreStateErrorRefuses`, `TestApply_NewBinaryFloorUnmetRefused` (a signed manifest with no `min_upgrade_from` and a fake new binary whose `--print-upgrade-floor` the sidecar does not meet → refused at step 5, nothing swapped) | OPS2-11, OPS3-7, OPS6-1 |
 | `TestSelfTest_VersionJSONFieldList` (the new binary must print exactly `{app, version, commit, ui_build_id, binary_id}`; a missing `app` or an empty `binary_id` fails the self-test; `commit` may be `""`) | FE6-4 |
+| `TestApply_RefusedWhileResetPending` (a staged `reset/pending.json`, then a reset journal at `set_aside`: apply and manual rollback refused with `reset_pending`, nothing downloaded or swapped; `Boot` records `rollback_blocked:reset_pending`), `TestApply_CheckpointJournalAdmitsCandidate` (a `KindCheckpoint` journal at `swapped`: a candidate whose levels and floors admit the restored store passes `ReaderCheck`, one that does not refuses with `restore_inflight`) | R7-2, R7-4, OPS7-11, DATA7-12 |
+| `TestApply_EmptyFloorSkipsSidecar` (no `.storage-applied`, new binary prints an empty floor → allowed; a non-empty floor with no sidecar → `stepping_stone_required` naming "boot any release ≥ S0 once") | OPS7-10 |
 | `TestApply_UnsignedNewerThanLastUnsignedRefused` | SEC2-23 |
 | `TestCheck_NotifiesOncePerVersionAcrossRestart` | COR2-3 |
 | `TestPolicy_ContainerForcesOff`, `TestPolicy_NoKeysCheckOnlyAndDegraded`, `TestPolicy_NilOptionsNoRoutesNoTasks` | policy, absence |
@@ -699,6 +723,16 @@ The `/api/v1/update/*` paths are aliases for the compatibility window (09 §9.2.
 | `/api/v1/update/*` handlers (`update_handlers.go`) | core routes + aliases |
 | `auto_update.*` config | `core.updater.*` and `core.updater.schedules.*` with aliases (5U.8) |
 | release pipeline (reusable workflow, UNKNOWN details) | must add the signed `release-manifest.json` per app before the S8 release; ABO's asset namer must match what the pipeline publishes — verify before enabling apply |
+
+**S8 done-check on staging (09 §9.3, R7-6, OPS7-3).** The staging copy boots with egress denied by
+firewall, so this updater's S8 check never reaches a real release source. `scripts/staging/provision.sh
+--updater-check` starts a **local fake signed-release server** on the staging host: the S0 updater test's
+fake server behind `Options.Source` (the GitHub source's base URL is a parameter,
+`TestGithubSource_ParameterisedSlugAndBaseURL`), serving a signed `release-manifest.json` either with a
+test key compiled into a staging build or with the real key over a locally re-served copy of the newest
+signed release. The script allows egress to that one loopback or bridge address only and sets
+`auto_update.enabled=true` after the scrub. The check passes when the updater applies that release and
+`Boot` confirms it, so it is measurable at S8 without waiting for a later real release.
 
 ## 5U.13 Open items
 
@@ -803,3 +837,11 @@ Round 6:
 - OPS6-5 — floor-refusal paragraph: launchd relaunches a 78 exit; `Boot` counts boots there regardless.
 - SIMP6-8 — deferred-members intro names the `Also deferred (not checked)` column by heading, not position.
 - integration pass (round 6): `Self` comment names `buildid.Binary` in the L0 leaf `core/buildid` (03 §3.3). Already applied: step 5's five-field `--version-json` list (FE6-4).
+
+Round 7:
+
+- R7-2 / DATA7-6 / OPS7-11 — `reset_pending` joins `ReaderCheck`'s tokens; apply step 1 and the error table refuse apply and rollback while a reset is staged or its journal is not `applied`, `Boot` records `rollback_blocked`; `ROLLBACK_IGNORE_RESET=1` is the scripts' override only; `TestApply_RefusedWhileResetPending`.
+- R7-4 / DATA7-12 — a `KindCheckpoint` journal at `swapped` passes `ReaderCheck` for a candidate whose levels and floors admit the restored store; error row and `TestApply_CheckpointJournalAdmitsCandidate`.
+- OPS7-10 — an empty `--print-upgrade-floor` passes without reading `.storage-applied`; a non-empty floor with a missing sidecar refuses ("boot any release ≥ S0 once"); `StoreState` doc, steps 3 and 5, error row, `TestApply_EmptyFloorSkipsSidecar`.
+- FE7-13 — `Self` comment: the UI build ID is the value `X-App-Build` reports (`dev` for every API-only build), distinct from `/modules`' shell-only `ui_build_id`.
+- R7-6 / OPS7-3 — new 5U.12 paragraph: the S8 staging check runs against a local fake signed-release server (`provision.sh --updater-check`), egress allowed to that address only; passes when the release applies and `Boot` confirms it.

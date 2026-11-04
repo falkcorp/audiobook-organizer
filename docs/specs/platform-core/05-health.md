@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.7.1 -->
+<!-- version: 1.8.0 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -150,7 +150,13 @@ the gate answers 401 on every non-exempt route and health reports `degraded` wit
 S3 core's stage 8 ([05-http-api](05-http-api.md) §4.2, resolution R5-1(c), SEC5-4), before S3 ABO's
 hotfixed gate (05-authn §11.1 early fix 5) through HEAD's `degraded` token list
 (`internal/server/handlers/system/handler.go:222-275`), which keeps serving until this file's
-readiness core lands (5H.10). An enabled gate with an empty **username** raises no token: it keeps HEAD's
+readiness core lands (5H.10). Two tokens that first exist at S4 r2 travel the same way (SEC7-12):
+`auth_disabled_remote` (warn: auth mode `disabled` while remote-reachable, 05-authn §4.11, SEC4-8) and
+`config_legacy_name_shadowed` (below). From S4 r2 until S8, when `Snapshot` over every core component
+and `/api/core/v1/health` land (5H.10), HEAD's `degraded` token list carries both, through the same
+fixed-token source it merges today (`getDegraded`, `handler.go:258-264`), so the release-note promise of
+a health token and banner holds from the release that introduces them, not only as a log line; from S8
+the permanent `/health` shape reads them from the registry like every other token. An enabled gate with an empty **username** raises no token: it keeps HEAD's
 behaviour (05-http-api §10, SEC6-9), so there is no `basic_gate_no_username`.
 
 **Advisory tokens owned by other files.** Health has three statuses, so a token another file calls `warn` is a
@@ -160,7 +166,11 @@ token-only route). Two such tokens: `config_legacy_name_shadowed` on `core.confi
 name of a `ProtectAdmin`+ key is set and differs from the stored value, which stays effective; 05-config §1.3.5
 "Shadowed legacy names", SEC6-1), and `revocation_journal_colocated` on `core.backup` (info: the revocation
 journal shares the store's filesystem device, so a whole-volume snapshot rollback would revert both; 05-backup
-§5B.3.6 "Where", SEC6-10).
+§5B.3.6 "Where", SEC6-10). One reason an integration instance component
+(`core.integrations.<capability>.<instance>`) reports on a `StatusDegraded` result is
+`operator_secret_withheld`: an operator-sourced secret is withheld, and nothing sent, because a destination
+field (URL-typed, or host and port) of that instance is not operator-sourced or names another origin; the
+result names the withheld fields, never their values (05-metadata M1.4 step 2, SEC7-3).
 
 ### 5H.3.2 Startup steps
 
@@ -680,3 +690,8 @@ Round 6:
 - COR6-9 — header: `health/diagnostics` takes `health`'s layer (L4) under 03 R4.
 - OPS6-6 — verified: this file already uses `basic_gate_no_password` (5H.3.1); no change.
 - integration pass (round 6): §5H.3.1 registers `core.backup` (S8) and states the advisory tokens owned by other files: `config_legacy_name_shadowed` on `core.config` (warn = `StatusDegraded`, SEC6-1) and `revocation_journal_colocated` on `core.backup` (info = `StatusUp` with a reason, SEC6-10); no `basic_gate_no_username`, because 05-http-api keeps the empty Basic username at HEAD parity (SEC6-9).
+
+Round 7:
+
+- SEC7-12 — 5H.3.1: `auth_disabled_remote` and `config_legacy_name_shadowed` are carried by HEAD's `degraded` token list from S4 r2 until S8, beside `basic_gate_no_password`.
+- SEC7-3 (cross-cluster request, R-F) — 5H.3.1 lists the integration instance reason `operator_secret_withheld` (05-metadata M1.4 step 2).
