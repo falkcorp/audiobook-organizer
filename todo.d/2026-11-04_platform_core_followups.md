@@ -19,3 +19,25 @@
         offers "sqlite" (`raw/04-database-store.md` §1, `raw/05-storage.md` §4.2).
   - [ ] `RunItems` doc promises the first error under `ErrModeFail` but parallel mode returns
         `errors.Join` (`raw/06-tasks-ops.md` §2).
+  - [ ] **SECURITY (hotfix, do not wait for the extraction):** `GET /api/v1/auth/sessions` returns
+        `database.Session` including `id`, which is the bearer session token
+        (`internal/server/handlers/auth.go:525-536`, `internal/database/store.go:1044-1045`); the route
+        has no permission or credential guard, so any API key of the user can read and replay the
+        user's session tokens and gain session-level credential rights. Return a view without `id`.
+  - [ ] **SECURITY (hotfix):** a scoped API key can mint an unscoped key: `POST /api/v1/auth/api-keys`
+        with `"scopes": []` skips the subset check (`internal/server/handlers/apikeys.go:199-210`) and
+        empty scopes mean "all role permissions" (`internal/server/middleware/auth.go:405-408`).
+        Refuse empty scopes when the caller is an API key with non-empty scopes.
+  - [ ] **SECURITY (hotfix):** `RequireAdmin` checks role names and ignores API-key scopes
+        (`internal/server/middleware/auth.go:522-537`), so a key scoped to `library.view` on an admin
+        account passes admin-gated routes not also behind `credGuard`.
+  - [ ] **SECURITY:** 3 of the 4 encrypted config secrets are also written in plaintext to a second
+        `config.yaml` (see `docs/specs/platform-core/05-config.md`, "Out-of-scope defects found").
+  - [ ] Invite role not bounded by the creator's permissions (`internal/server/handlers/user.go:155-190`);
+        latent while only `admin` holds `users.manage`.
+  - [ ] Deluge path-update trigger never fires; shutdown phases can total 45 s against a 30 s stop
+        limit; updater's expected asset name does not match the goreleaser archives
+        (`docs/specs/platform-core/05-tasks.md`, `05-updater.md` "Out-of-scope defects found").
+  - [ ] 8 writes to `config.AppConfig` bypass `Mutate`; in `serve` the log file stops receiving output
+        after `NewServer`; `log_level` is never applied to the handler (`05-config.md`, `05-logging.md`).
+  - [ ] The shipped systemd unit sets `AUDIOBOOK_ROOT_DIR`, which nothing reads (`09-abo-on-core.md`).

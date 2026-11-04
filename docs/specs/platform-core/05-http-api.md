@@ -198,6 +198,19 @@ type LegacyPath struct {
 // Gone registers a retired route: auth and permission still run first, then
 // 410 with problem code "gone" (and legacy {"error":"gone","message":…} on legacy paths).
 func Gone(g *Group, rt Route, successor string)
+
+// Sugar used by 06-app-sdk's examples and module.Registrar.Route: a deferred
+// registration built from method helpers. Exactly equivalent to Handle.
+type Registration interface{ apply(g *Group) }
+type RouteOption func(*Route)
+
+func Get[Req, Resp any](path string, perm rbac.Permission, fn func(context.Context, *In[Req]) (Resp, error), opts ...RouteOption) Registration
+func Post[Req, Resp any](path string, perm rbac.Permission, fn func(context.Context, *In[Req]) (Resp, error), opts ...RouteOption) Registration
+// Put, Patch, Delete likewise.
+func Requires(r rbac.Requirement) RouteOption // Public / AnyAuthenticated / AllOf instead of perm ("" perm + no Requires = ErrNoPermission)
+func Summary(s string) RouteOption
+func Named(name string) RouteOption
+func Register(g *Group, regs ...Registration)
 ```
 
 ### 3.2 Typed input
@@ -292,7 +305,7 @@ func (e *Error) Unwrap() error
 func NotFound(kind, id string) *Error
 func Conflict(code, detail string) *Error
 func Invalid(fields ...FieldError) *Error
-func Forbidden(scope rbac.Scope) *Error
+func Forbidden(scope rbac.Permission) *Error
 func Unavailable(detail string, retryAfter time.Duration) *Error
 
 // Sentinel causes that modules may wrap; core maps them without a constructor.
@@ -575,7 +588,7 @@ types:
 - `paths` from patterns; parameters from `path`/`query`/`header` tags; request body from the
   `body:"json"` field; responses: success schema, and `default` → `Problem`.
 - Schemas: `jsonschema.For[T]` with `TypeSchemas` overrides (`time.Time` → `string/date-time`,
-  `json.RawMessage` → `{}`, `rbac.Scope` → pattern string, `Page[T]` → generic expansion
+  `json.RawMessage` → `{}`, `rbac.Permission` → pattern string, `Page[T]` → generic expansion
   `Page_<T>`); component names `<module>.<GoType>`; two Go types mapping to one name → `ErrSchema`.
 - Extensions: `x-mediacore-permission` (scope or `public`/`authenticated`), `x-mediacore-guards`,
   `x-mediacore-sunset`; `deprecated: true` for aliases and deprecated routes.
@@ -756,7 +769,11 @@ Unmatched paths use `route="unmatched"` so cardinality stays bounded by the rout
 1. Whether `encoding/json/v2` replaces `encoding/json` in `Handle` (only once it is non-experimental in the pinned toolchain; 13-toolchain).
 2. Exact sunset dates per alias depend on the release plan (09-abo-on-core).
 3. Whether `/metrics` moves under `/api/core/v1/metrics` or stays at `/metrics` (05-metrics decides; either way it carries `core:metrics.read`, 05-rbac §6).
-4. HTTP/3 `Alt-Svc`: becomes a listener option that sets the header in stage 5, fixing the
+4. Coordination with 06-app-sdk: its `Registrar.Route(routes ...httpapi.Route)` and
+   `httpapi.Get[Q,R](path, perm, h, opts...)` correspond to `Register(g, Get(...))` above, and its
+   `Registrar.LegacyHandler(prefix, policy, h)` to `Router.MountLegacy` (§8.2); this file owns the
+   final signatures (06 O2).
+5. HTTP/3 `Alt-Svc`: becomes a listener option that sets the header in stage 5, fixing the
    registration-order miss noted in `raw/09` §2.2(c) — to be confirmed by a test once implemented.
 
 ## Objections to 03
