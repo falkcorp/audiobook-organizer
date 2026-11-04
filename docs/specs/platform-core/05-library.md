@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-library.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: dafe380b-f703-41cb-99d0-2b2ba32f70e5 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -17,17 +17,20 @@ handle `library.Scope` (`module.Deps.Library`, [06](06-app-sdk.md)), which carri
 
 ## 5L.0 Decisions in one table
 
+Decision IDs carry a `D-L` prefix so they never read as 03's layers L0–L9 (the rule COR2-19 applies to
+05-storage's decisions).
+
 | # | Decision |
 |---|---|
-| L1 | A **media root** (`library.Root`) is a core concept: an ID, a host path, a role (library, import, download, external), one owner, optional read shares. Modules address files as `library.Path{Root, Rel}`, never as bare absolute strings. |
-| L2 | All file access under a root goes through a `RootFS` backed by **`os.Root`** (Go 1.24+; Go 1.25 added `Rename`, `Link`, `Symlink`, `MkdirAll`, `RemoveAll`), so `..` and symlinks cannot escape. Operations `os.Root` cannot express (no-clobber rename, cross-root link/rename, reflink) use `*at` syscalls on directory descriptors opened *through* the root. |
-| L3 | **One** transfer engine (move / copy / hardlink / reflink / symlink / auto-fallback) that never clobbers, fsyncs file and directory, verifies, journals for crash recovery, checks free space first, and refuses to move or delete a file a download client is still seeding (fail-closed when that is unknown). It replaces three no-clobber renames, six byte copies and four reflinks ABO has had. |
-| L4 | **Path mapping** (download-client / remote-worker path ↔ `library.Path`) is a core service keyed by source, separator-boundary longest-prefix, byte-exact (no Unicode folding). |
-| L5 | A **sentinel file** proves a root is the right, mounted volume before any destructive action; the existing "has non-dot content" heuristic becomes the bootstrap for legacy roots only. |
-| L6 | Watchers (fsnotify) are core, per root, debounced, with **overflow → rescan** and **watch-limit exhaustion → polling** instead of silent loss. |
-| L7 | Quarantine is a core *primitive* (move into the root's quarantine area + record + release); the decision of what to quarantine stays in modules. |
-| L8 | Root paths of different owners never overlap; download roots are core-owned and shared read/move-out with every module that has the download capability; this is the multi-app rule. |
-| L9 | **Q4 answer**: one core `library.Root` abstraction; modules cannot bring their own storage driver now; `RootFS` is an interface so a remote driver can be added later without changing callers. |
+| D-L1 | A **media root** (`library.Root`) is a core concept: an ID, a host path, a role (library, import, download, external), one owner, optional read shares. Modules address files as `library.Path{Root, Rel}`, never as bare absolute strings. |
+| D-L2 | All file access under a root goes through a `RootFS` backed by **`os.Root`** (Go 1.24+; Go 1.25 added `Rename`, `Link`, `Symlink`, `MkdirAll`, `RemoveAll`), so `..` and symlinks cannot escape. Operations `os.Root` cannot express (no-clobber rename, cross-root link/rename, reflink) use `*at` syscalls on directory descriptors opened *through* the root. |
+| D-L3 | **One** transfer engine (move / copy / hardlink / reflink / symlink / auto-fallback) that never clobbers, fsyncs file and directory, verifies, journals for crash recovery, checks free space first, and refuses to move or delete a file a download client is still seeding (fail-closed when that is unknown). It replaces three no-clobber renames, six byte copies and four reflinks ABO has had. |
+| D-L4 | **Path mapping** (download-client / remote-worker path ↔ `library.Path`) is a core service keyed by source, separator-boundary longest-prefix, byte-exact (no Unicode folding). |
+| D-L5 | A **sentinel file** proves a root is the right, mounted volume before any destructive action; the existing "has non-dot content" heuristic becomes the bootstrap for legacy roots only. |
+| D-L6 | Watchers (fsnotify) are core, per root, debounced, with **overflow → rescan** and **watch-limit exhaustion → polling** instead of silent loss. |
+| D-L7 | Quarantine is a core *primitive* (move into the root's quarantine area + record + release); the decision of what to quarantine stays in modules. |
+| D-L8 | Root paths of different owners never overlap; download roots are core-owned and shared read/move-out with every module that has the download capability; this is the multi-app rule. |
+| D-L9 | **Q4 answer**: one core `library.Root` abstraction; modules cannot bring their own storage driver now; `RootFS` is an interface so a remote driver can be added later without changing callers. |
 
 ## 5L.1 Purpose & scope
 
@@ -412,8 +415,9 @@ path-history resumption, author/title folder naming) and calls the primitive per
 `RootSpec.Quarantine = ".failed"` keeps today's on-disk location. The same primitive is the
 Sonarr/Radarr "recycle bin" for TV/Movies deletes (`raw/16-arr-domain-research.md` row 11), with
 `core.library.quarantine.retention` as its cleanup age, applied by task `core.library.quarantine-prune`
-(`Schedule: tasks.ScheduleFromConfig("core.library.quarantine.prune_schedule")`, SIMP-6; no bespoke
-timer; a no-op while the retention is 0).
+(`Schedule: tasks.ScheduleFromConfig("core.library.quarantine.prune_schedule")`, a key declared in
+library's own namespace with type `tasks.ScheduleConfig`, SIMP-6, R2-7; no bespoke timer; a no-op while
+the retention is 0).
 
 ### 5L.3.6 Path mapping
 
@@ -479,7 +483,11 @@ type Event struct {
 ```
 
 `WatchAuto` picks notify for local filesystems and poll for network filesystems (statfs `f_type` of
-NFS/SMB/FUSE), because inotify does not observe changes made by other clients. The supervisor
+NFS/SMB/FUSE), because inotify does not observe changes made by other clients. The poll fallback is an
+in-process tick of the watcher component, not a task schedule, although it is slower than a minute: it
+runs only while the platform watcher is unavailable for that root, is per root, and holds no durable
+work (a missed tick loses nothing; the next one rescans). 05-tasks §5T.3.8 lists it, with that reason,
+as the one above-a-minute exception (SIMP2-1). The supervisor
 reconciles watched roots whenever the registry changes, without a restart (kept from
 `server_lifecycle.go:501-503`).
 
@@ -517,7 +525,7 @@ quarantine purge), `core:library.browse` (directory picker; replaces `BrowseDire
 
 | Error path | Fail-open / fail-closed | Why |
 |---|---|---|
-| Path escapes root (`..`, symlink out, absolute rel) | closed | Confinement is the point (L2). |
+| Path escapes root (`..`, symlink out, absolute rel) | closed | Confinement is the point (D-L2). |
 | Sentinel missing/mismatched | closed for destructive ops (remove, move-out, quarantine, "not found ⇒ gone" decisions); open for reads | An unmounted share reads as an empty tree (`libroot.go:25-30`); reading is harmless, acting on absence is data loss. |
 | Root path unresolvable at boot | closed for that root (disabled), open for the app | One bad mount must not take down the other roots. |
 | Destination exists | closed (`fs.ErrExist`), unless `Replace` CAS matches | POSIX rename and `os.Create` silently clobber (`saferename.go:14-20`, `reflink.go:29-35`). |
@@ -536,8 +544,9 @@ quarantine purge), `core:library.browse` (directory picker; replaces `BrowseDire
 ## 5L.6 Concurrency contract
 
 - `Manager`, `Root`, `RootFS` (local), `PathMapper` are goroutine-safe; `File` is not.
-- Transfers take a striped per-path lock on **both** `src` and `dst` (`core/internal/keyedmutex`,
-  moved to core per 03 §3.2.1 E2), acquired in sorted order to avoid deadlock; two workers can
+- Transfers take a striped per-path lock on **both** `src` and `dst` (`core/internal/keyedmutex`, a
+  core-internal copy of ABO's package that 04 §8.1 adds at S3; ABO keeps its own `internal/keyedmutex`,
+  and core never imports it, R1, COR2-16), acquired in sorted order to avoid deadlock; two workers can
   never race on one destination name (the stat-then-create race documented at `reflink.go:29-35`
   cannot occur because creation is `O_EXCL`/`link` anyway, the lock removes wasted work).
 - Library-scale work (hash backfills, rescans) runs only as `tasks` with declared
@@ -550,19 +559,24 @@ quarantine purge), `core:library.browse` (directory picker; replaces `BrowseDire
 
 ## 5L.7 Config keys
 
-| Key | Type | Default | Hot-reload? |
-|---|---|---|---|
-| `core.library.roots` | list of `RootSpec` (DB-backed) | empty | yes (supervisor reconcile) |
-| `core.library.mappings` | list of `Mapping` (DB-backed) | empty | yes |
-| `core.library.transfer.workers` | int | 4 | yes |
-| `core.library.hash.max_bytes_per_sec` | int64 | 0 (unlimited) | yes |
-| `core.library.hash.workers_per_device` | int | `min(4, NumCPU)` | yes |
-| `core.library.watch.debounce` | duration | 5s | yes |
-| `core.library.watch.poll_interval` | duration | 15m | yes |
-| `core.library.free_space.warn_percent` | int | 10 | yes |
-| `core.library.free_space.default_min_bytes` | int64 | 5 GiB | yes |
-| `core.library.quarantine.retention` | duration | 0 (keep until purged) | yes |
-| `core.library.quarantine.prune_schedule` | schedule (`tasks.ScheduleFromConfig`) | daily | yes |
+Protection levels are 05-config's (SEC-6, SEC2-8): a root is a path the server reads, writes, scans and
+moves files under (`FieldServerPath`), so the root list is `ProtectAdmin`; a mapping decides where an
+import lands, a free-space floor and a quarantine retention decide when files are refused or deleted, so
+they need an interactive session.
+
+| Key | Type | Default | Hot-reload? | Protection |
+|---|---|---|---|---|
+| `core.library.roots` | list of `RootSpec` (DB-backed) | empty | yes (supervisor reconcile) | admin |
+| `core.library.mappings` | list of `Mapping` (DB-backed) | empty | yes | interactive |
+| `core.library.transfer.workers` | int | 4 | yes | none |
+| `core.library.hash.max_bytes_per_sec` | int64 | 0 (unlimited) | yes | none |
+| `core.library.hash.workers_per_device` | int | `min(4, NumCPU)` | yes | none |
+| `core.library.watch.debounce` | duration | 5s | yes | none |
+| `core.library.watch.poll_interval` | duration | 15m | yes | none |
+| `core.library.free_space.warn_percent` | int | 10 | yes | none |
+| `core.library.free_space.default_min_bytes` | int64 | 5 GiB | yes | interactive |
+| `core.library.quarantine.retention` | duration | 0 (keep until purged) | yes | interactive |
+| `core.library.quarantine.prune_schedule` | `tasks.ScheduleConfig` | `{enabled: true, every: 24h}` | yes | none |
 
 ABO compatibility (09 owns aliases): `root_dir` → root `books-library`; `import_path:` rows →
 `import-<id>` roots; `protected_paths` → `RoleExternal` roots or oracle entries;
@@ -678,3 +692,10 @@ Round-1 findings applied to this file (`docs/plans/platform-core/reviews/spec-ro
 - COR-19 — `library` is L4.
 - SIMP-6 — quarantine prune is a `tasks.ScheduleFromConfig` task; transfer recovery runs once at start; watcher polling is an in-process component.
 - R7 / SIMP-17 — hashing backfills declare `tasks.Fixed(n, reason)`.
+
+Round 2:
+
+- COR2-6 / SIMP2-1 (R2-7) — `core.library.quarantine.prune_schedule` typed `tasks.ScheduleConfig` in library's namespace; the 15-minute watcher fallback poll stays an in-process tick, with its reason, as 05-tasks §5T.3.8's listed exception.
+- COR2-16 — transfer locks use `core/internal/keyedmutex`, a core-internal copy added by 04 at S3; ABO keeps its own package.
+- COR2-19 — decision IDs renamed `D-L1`…`D-L9` so they no longer collide with layer names (same rule as 05-storage's `D-S`).
+- SEC2-8 — Protection column in §5L.7 (roots `ProtectAdmin`; mappings, free-space floor and quarantine retention `ProtectInteractive`).
