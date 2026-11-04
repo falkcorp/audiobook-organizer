@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.10.1 -->
+<!-- version: 1.11.0 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -200,8 +200,8 @@ type InstanceConfig struct {
 	// addresses plus the hosts in core.integrations.egress.lan_allow only. A
 	// legacy-backed instance stores no Local: it reads true, because its
 	// configured hosts keep HEAD's reach and only a ProtectAdmin writer can
-	// change them (M1.4 step 2a, A-2); a Put that sets it false is refused
-	// (ErrFieldNotStorable).
+	// create the instance or change them (M1.4 step 2a, A-2, SEC9-6); a Put
+	// that sets it false is refused (ErrFieldNotStorable).
 	Local    bool
 	Settings map[string]any      // validated against Meta.Settings; secret fields hold secrets.Ref only
 	Limits   *Limits             // optional per-instance override of Meta.Limits (zero fields inherit)
@@ -410,13 +410,20 @@ type InstanceStore interface {
 // identical method set (M1.1; checked by the mirror test, 03 §3.3). The
 // native store does not implement it. A legacy store asserts it at compile
 // time (books: var _ legacy.Covering), because a failed assertion is silent;
-// legacytest.IntegrationsInstanceStoreSuite runs its case (M1.9). There is one:
+// legacytest.IntegrationsInstanceStoreSuite runs its case (M1.9). There are two:
 //   - legacy.Covering: Covers(id) with id = legacy.IntegrationsCoverID(ref,
 //     adapter) reports whether the store holds ref, or would hold a NEW
 //     instance ref of that adapter (a legacy store covers its list families
 //     and only the fixed IDs of its singleton families, M1.4 step 2a). A
 //     legacy store without it covers every record and the backends ledger
 //     records legacy (SIMP6-5); the native store is never asked.
+//   - legacy.WriteLock (R9-1; 05-storage owns it): Lock(keys) (unlock func())
+//     over the in-process mutex the store's HEAD code relies on. The Registry
+//     passes it to storage.CommitLocked for every batch the legacy store
+//     staged into (M1.4 step 2a "Write"), so the mutex is held from the
+//     store's first read through the commit. Books' store implements it over
+//     HEAD's configBlobSaveMu (internal/config/persistence.go:1890-1897),
+//     the same mutex books' legacy config store holds (05-config §1.6).
 
 // StoredInstance is one persisted record: InstanceConfig without the
 // effective-view fields, plus the trust fields of a native row. A legacy
@@ -491,12 +498,23 @@ func (r *Registry) Config(ref Ref) (InstanceConfig, bool)        // effective vi
 // field's entry, so the key never follows a non-admin's URL.
 // A Put on a legacy-backed instance goes to the legacy store, which writes the
 // legacy fields in their legacy format into the batch that also holds the
-// secrets (M1.4 step 2a). Its destination and secret fields keep HEAD's
-// writers: a Put that changes one needs the protection 05-config §1.3.7
-// gives the same field on the legacy config alias (ProtectAdmin: core:admin
-// AND an interactive principal; SEC4-7) and is otherwise refused whole (403),
-// so the two write paths agree and an operator-sourced secret beside it
-// follows only an admin's URL, as at HEAD (M1.4 step 2). A Put that sets a
+// secrets (M1.4 step 2a); the Registry commits that batch through
+// storage.CommitLocked with the store's legacy.WriteLock (R9-1). Its
+// destination and secret fields keep HEAD's writers: a Put that changes one
+// needs the protection 05-config §1.3.7 gives the same field on the legacy
+// config alias (ProtectAdmin: core:admin AND an interactive principal;
+// SEC4-7) and is otherwise refused whole (403), so the two write paths agree
+// and an operator-sourced secret beside it follows only an admin's URL, as at
+// HEAD (M1.4 step 2). Creating a legacy-backed instance, and changing any
+// field that selects which secret is sent (an ai_endpoints row's auth_ref, a
+// metadata source's credential keys, the family-level webhook secret), count
+// as a destination and secret change: each needs the ProtectAdmin check,
+// else 403 with nothing written (R9-4, SEC9-6). At HEAD only settings.manage
+// holders wrote these rows (internal/config/protected_fields.go:138-165), and
+// a new legacy-backed instance reads Local=true and may name an operator-held
+// secret (05-ai §10), so a non-admin holder of core:integrations.manage would
+// otherwise gain private-network reach or send the operator's key to a host
+// of their choosing. A Put that sets a
 // field HEAD's format has no place for (Local=false, a Limits field the
 // format does not hold) is refused whole (422, ErrFieldNotStorable).
 // A Put that changes a secret field releases the instance's ClassAuth hold
@@ -772,16 +790,26 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
      writes the settings blob through books' legacy config store (05-config §1.3.3, R4-6), so the blob keeps one
      writer: it lives in the same books package as that store, joins the caller's `*storage.Batch` and shares that
      store's pending blob render (05-config §1.6, C11), so a config write and an instance write in one batch render
-     and commit the blob once. The store keeps HEAD's lock discipline for these rows (A-3).
+     and commit the blob once. The store keeps HEAD's lock discipline for these rows across core's commit (A-3,
+     R9-1): it offers `legacy.WriteLock` over HEAD's `configBlobSaveMu`, and the Registry commits every batch this
+     store staged into through `storage.CommitLocked(ctx, b, lock)` (05-storage), which holds the mutex from the
+     store's `GetForUpdate` read of the blob through the commit, as HEAD's `SaveConfigToDatabase` held it across its
+     own write (`persistence.go:1943`). A conflict still fails the later commit (`storage.ErrConflict`) and the
+     `Put` re-reads and retries (`storage.RetryOnConflict`). The kernel builds one instance of this store per
+     process and hands that one to every user (`TestLegacyStoresAreSingletons`, R9-1); it shares the one
+     `configBlobSaveMu` and the pending blob render with books' legacy config store. Both stores therefore name the same lock, and a
+     batch both staged into (the legacy config alias, 05-config §1.12.2) holds it once: `storage.CommitLocked` takes
+     each distinct lock once (05-storage), because `configBlobSaveMu` is not re-entrant.
    - **No native-only state.** HEAD's format has no place for `Local`, `LocalOrigin`, `SecretsOrigin`,
      `OperatorSecretOrigin` or any `Limits` field it does not already hold, and the store keeps none of them
      anywhere else (A-2). In their place the instance behaves as at HEAD:
      - **Private-network reach.** Its configured hosts keep HEAD's reach: `Local` reads true, so the dial guard
        admits loopback and private addresses on the hosts of its own configured URL-typed fields (M2 `Policy.Private`).
        Redirects to another private host and data-derived URLs stay refused (M2.4, SEC4-15). This is not a widening,
-       because those fields keep HEAD's writers: a `Put` that changes a destination field needs the ProtectAdmin check
-       (M1.3 `Put`), as the config façade does from S3 (05-config §1.3.7, SEC4-7), the same check that grants
-       `Local` on a native row (SEC2-7).
+       because those fields keep HEAD's writers: a `Put` that creates the instance, changes a destination field or
+       changes a field that selects which secret is sent needs the ProtectAdmin check (M1.3 `Put`; SEC9-6), as the
+       config façade does from S3 (05-config §1.3.7, SEC4-7), the same check that grants `Local` on a native row
+       (SEC2-7).
      - **Operator secrets** are served as at HEAD (step 2, "Legacy-backed instances keep HEAD's behaviour").
      - **Limits** are what HEAD's format holds (for a metadata source, its `limits.tier`, M2.7), else the adapter's
        `Meta.Limits`.
@@ -810,7 +838,12 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
      changes it changes it for every legacy-backed instance of that family.
    - **New instances.** A new instance whose adapter has a legacy representation is created in the legacy store
      when that family is a list (`Covers` is true for the new instance's `legacy.IntegrationsCoverID`), so older builds see it too; a singleton
-     family accepts only its fixed ID (M1.10). Every other instance is native.
+     family accepts only its fixed ID (M1.10). Every other instance is native. **Creating a legacy-backed instance
+     needs the ProtectAdmin check** (R9-4, SEC9-6): it reads `Local=true` and, for an `ai_endpoints` row, may name
+     an operator-held secret through `auth_ref` (05-ai §10), so a `Put` by anyone else that would create one is
+     refused (403, nothing written) rather than routed to the native store. The same holds for a later change to a
+     field that selects which secret is sent (`auth_ref`, a metadata source's credential keys, the family-level
+     webhook secret; M1.3 `Put`).
 
    A row whose adapter is not registered (module disabled, binary without the adapter) is **kept** and
    reported `HealthMisconfigured` with reason `adapter not in this binary` (restart-bound enablement, 03 §3.7).
@@ -819,8 +852,11 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
 4. **Hot swap** on `Put`, and on a config hot swap that changes an overlaid value: validate → apply the trust
    rules (Origin from the principal; `Local` only with the ProtectAdmin check; URL change drops secrets and
    `Local`, SEC-15; on a native row `OperatorSecretOrigin` recorded only from an admin's provenance, step 2, R8-5;
-   on a legacy-backed instance a destination change only with the ProtectAdmin check, step 2a) → persist through
-   the instance's store (native, or the legacy store, step 2a), with the secrets in one storage batch (an overlay change persists nothing) → build new → atomically
+   on a legacy-backed instance its creation, a destination change or a secret-selecting change only with the
+   ProtectAdmin check, step 2a) → persist through
+   the instance's store (native, or the legacy store, step 2a), with the secrets in one storage batch (an overlay
+   change persists nothing), committed through `storage.CommitLocked` with the legacy store's `legacy.WriteLock`
+   when the legacy store staged into it (R9-1) → build new → atomically
    replace → old instance drains its leases → `Close`. providerhttp state (bucket, holds, breaker, quota) is
    keyed by `Ref` and **survives** the swap; the egress trust (`Local`, `lan_allow`) is re-read per dial.
 5. **Health task** `core.integrations.health` (05-tasks), scheduled by
@@ -882,7 +918,7 @@ rollback are never delivered to it; only deliveries already pending in `c/outbox
 | Store write fails (native or legacy store) | closed for that `Put` (nothing written: the record and the secrets are one batch) | The store's form is the only stored copy (R4-1). |
 | Stored value undecodable at `Load` (`StoredInstance.Malformed`) | open for boot, closed for that instance: `HealthMisconfigured` naming the field; nothing is rewritten | It is the only copy; the operator repairs it through `Put`, as at HEAD. |
 | App supplies no legacy store, or its `Load` fails | no legacy store: every instance is native (open). `Load` error: closed for the legacy-backed instances (none served; health `integration_store_unavailable`), open for boot and for native instances | A store that cannot be read must not be mistaken for "no instances" and overwritten. |
-| `Put` without the ProtectAdmin check that changes a destination or secret field of a legacy-backed instance (M1.3 `Put`) | closed (403); nothing written | Those fields keep HEAD's writers, so the legacy alias and `Put` agree, private-network reach stays admin-granted, and an operator secret follows only an admin's URL (A-2, SEC2-7, SEC4-7). |
+| `Put` without the ProtectAdmin check that creates a legacy-backed instance, or changes its destination field, secret field or a field that selects which secret is sent (`auth_ref`, a metadata source's credential keys, the family-level webhook secret; M1.3 `Put`) | closed (403); nothing written | Those fields keep HEAD's writers, so the legacy alias and `Put` agree, private-network reach stays admin-granted, and an operator secret follows only an admin's URL (A-2, SEC2-7, SEC4-7); a new legacy-backed instance reads `Local=true` and may name an operator-held secret, so creating one is the same change (R9-4, SEC9-6). |
 | `Put` on a legacy-backed instance that sets a field HEAD's format has no place for (`Local=false`, an unheld `Limits` field) | closed (422 `ErrFieldNotStorable`); nothing written | No record beside the legacy fields exists to hold it (A-2); it becomes settable at the family's cutover. |
 | In-place encrypted legacy secret undecryptable (the app's cipher key missing) | open for boot, closed for that secret: `HealthMisconfigured` (`integration_secret_unreadable`); the row is kept | It is the only copy; the operator re-enters it (R5-1(b), DATA3-12). |
 | `core.integrations.disabled` true (a staging copy, R6-7) | closed for every outbound call (`ErrDisabled`, `HealthDisabled` reason `integrations_disabled`); open for boot, reads and `Put`. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances (the health task probes nothing). `staging-scrub` also clears every legacy integration URL, webhooks included, at every stage (09 §9.3, R7-6, R8-3, A-12); native rows are covered by the switch | A copy of a production store must never act on production systems (OPS6-4); schedules must still fire there (DATA5-8), and an older build that ignores the switch must find no URL to call (SEC7-6); only S7+ binaries, which always carry the switch on staging, read native rows (R8-3). |
@@ -951,6 +987,15 @@ legacy-backed instance whose stored URL is a private address is dialled; a redir
 and a data-derived private URL are refused; A-2, SEC4-15), `TestPut_LegacyBackedDestinationNeedsProtectAdmin` (a
 non-admin holder of `core:integrations.manage`, and an API key holding `core:admin`, `Put` a new URL or secret on
 legacy-backed `ai/openai` and get 403 with nothing written; an interactive admin's `Put` succeeds; A-2, SEC4-7),
+`TestPut_LegacyBackedCreateNeedsProtectAdmin` (a non-admin holder of `core:integrations.manage`, and an API key
+holding `core:admin`, create a legacy-backed `ai/<id>`, `notify/webhook-<n>` or `metadata/<id>`: 403, nothing
+written in the legacy store or the native store; an interactive admin's create succeeds; SEC9-6),
+`TestPut_LegacyBackedAuthRefNeedsProtectAdmin` (the same principals set `auth_ref: openai_api_key` on an admin-made
+`ai/<id>` whose URL is unchanged, change a metadata source's credential keys, or change the family-level webhook
+secret: 403, nothing written; SEC9-6), `TestNonAdminCannotBindOperatorSecret` (R9-4, SEC9-6; 05-ai §9: neither path
+lets a non-admin send `ai/openai`'s operator-held key to a URL they chose; a fake endpoint there receives nothing),
+`TestPut_LegacyBackedCommitsUnderWriteLock` (with books' store: the `Put` commits through `storage.CommitLocked`
+holding `configBlobSaveMu`, and a concurrent config `Apply` that renders the blob waits for it and then re-reads; R9-1),
 `TestLegacyBacked_NativeOnlyFieldRefused` (`Local=false` or an unheld `Limits` field: 422 `ErrFieldNotStorable`),
 `TestLegacyBacked_OperatorSecretServedAsHEAD` (env `OPENAI_API_KEY` beside an admin-stored non-default URL, and an
 env Deluge password beside an admin-stored web URL: both are served and health is not `operator_secret_withheld`;
@@ -1004,7 +1049,7 @@ that names an ABO key describes that books code, not core.
 |---|---|
 | `config.MetadataSources[]` (`internal/config/config.go:147-163`) | legacy-backed `metadata/<id>` instances, adapters `books.<id>`, served in place from `metadata_sources` by books' store (M1.4 step 2a); `Credentials` values stay plaintext in the blob and the Google Books key and the Hardcover token stay in HEAD's encrypted rows, each read and written in place under its secret name until the secrets cutover (A-2, R5-1(b); table below) |
 | `DelugeWebURL/Password`, `DownloadClient.Torrent.Deluge` (`config.go:225-240,1776-1780`) | the legacy-backed `download/deluge` instance (05-download §10) |
-| (egress trust) | Today these instances have no egress guard at all. From S7 the guard applies to every instance, and a legacy-backed instance keeps HEAD's reach for its **own configured hosts**: it stores no `Local` (books keeps no record beside the legacy fields, A-2) and reads `Local=true`, so a Deluge, AI endpoint or webhook on the LAN keeps working with no upgrade step and no confirmation; redirects to other private hosts and data-derived URLs are refused (M1.4 step 2a). Its destination fields keep HEAD's writers: `settings.manage` at HEAD (seed: `admin` only, `internal/config/protected_fields.go:148` @748fd787a), `ProtectAdmin` on the config façade from S3 (05-config §1.3.7, §1.12.2; `TestPreS7Facade_IntegrationURLIsProtectAdmin`; SEC4-7), and `ProtectAdmin` on `Registry.Put` from S7 (M1.3). A URL-origin change through the façade or `Put` clears that instance's stored secret unless the same request re-supplies it (SEC-15). No books migration runs for egress trust. |
+| (egress trust) | Today these instances have no egress guard at all. From S7 the guard applies to every instance, and a legacy-backed instance keeps HEAD's reach for its **own configured hosts**: it stores no `Local` (books keeps no record beside the legacy fields, A-2) and reads `Local=true`, so a Deluge, AI endpoint or webhook on the LAN keeps working with no upgrade step and no confirmation; redirects to other private hosts and data-derived URLs are refused (M1.4 step 2a). Its destination fields keep HEAD's writers: `settings.manage` at HEAD (seed: `admin` only, `internal/config/protected_fields.go:148` @748fd787a), `ProtectAdmin` on the config façade from S3 (05-config §1.3.7, §1.12.2; `TestPreS7Facade_IntegrationURLIsProtectAdmin`; SEC4-7), and `ProtectAdmin` on `Registry.Put` from S7 (M1.3), for a new legacy-backed instance and a secret-selecting field as well (SEC9-6). A URL-origin change through the façade or `Put` clears that instance's stored secret unless the same request re-supplies it (SEC-15). No books migration runs for egress trust. |
 | `ai_endpoints` rows (`internal/config/ai_endpoints.go:36-68`) | legacy-backed `ai/<id>` instances, served in place from `ai_endpoints` by books' store (05-ai §10) |
 | `config.Plugins["webhook"].Settings` | legacy-backed `notify/webhook-<n>` instances, served in place from `plugins.webhook` by books' store (05-notify §10) |
 | `handleDelugeTestConnection`, `/ai/test-connection` | `POST /api/core/v1/integrations/{kind}/test` |
@@ -1021,7 +1066,7 @@ in-memory overlay); env aliases onto it are permanent.
 |---|---|---|---|
 | `deluge_web_url`, `deluge_web_password`, `download_client.torrent.deluge.*` (`config.go:225-240,1776-1780`) | `download/deluge` | `integrations.download.deluge.password` (plaintext in the blob) | `integrations.download.deluge.{url, password}` |
 | `openai_api_key`, `openai_base_url` (the row ABO itself synthesises with ID `openai`, `internal/config/ai_endpoints.go:74,403-440`) | `ai/openai` | `integrations.ai.openai.api_key` (HEAD's encrypted row `persistence.go:1955`) | `integrations.ai.openai.{api_key, base_url}` (`OPENAI_API_KEY`, `OPENAI_BASE_URL`) |
-| other `ai_endpoints[]` rows (`local-llm`, `local-uv`, user rows; `ai_endpoints.go:73-75`) | `ai/<row id>` | `integrations.ai.<row id>.api_key` where `auth_ref` is set | — (DB only today) |
+| other `ai_endpoints[]` rows (`local-llm`, `local-uv`, user rows; `ai_endpoints.go:73-75`) | `ai/<row id>` | none of its own: HEAD's row holds no secret (`ai_endpoints.go:63-65`), and the row is sent the secret its `auth_ref` names, as HEAD's `poolSecret` does (`openai_api_key` → `integrations.ai.openai.api_key`, any other name → none; `internal/ai/pool_routing.go:70-79`, 05-ai §10). Creating such a row or setting its `auth_ref` needs ProtectAdmin (M1.3 `Put`; SEC9-6) | — (DB only today) |
 | `google_books_api_key` (`persistence.go:1956`) | `metadata/google-books` (the source ID, `config.go:3769`) | `integrations.metadata.google-books.api_key` (encrypted row) | `integrations.metadata.google-books.api_key` |
 | `hardcover_api_token` (`persistence.go:1957`) | `metadata/hardcover` (`config.go:3779`) | `integrations.metadata.hardcover.api_token` (encrypted row) | `integrations.metadata.hardcover.api_token` |
 | other `metadata_sources[]` entries | `metadata/<source id>` | `integrations.metadata.<source id>.credentials.<k>` (plaintext in the blob) | — |
@@ -1782,3 +1827,7 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
 - A-12 / ADV-S6 — M1.4 "Staging", M1.5 and M1.7 rows: integrations disabled and schedules run on staging; `staging-scrub` clears legacy URLs; `--network none` replaces the firewall; `make rollback` dropped from the staging list.
 - A-15 / ADV-S9 — M1.3 "Deferred-build members": the `FacadeWriter` and `Tags` members are a design sketch (non-normative) that the SDK does not freeze.
 - integration pass (advisor): 09 §9.2.1 row 8 cited; `StoredInstanceLegacyState` and the confirm-suspended-`Local` route confirmed absent; `OperatorSecretOrigin` remains native-only.
+- Round 9:
+  - R9-4 / SEC9-6 — M1.3 `InstanceConfig.Local` and `Put` comments, M1.4 step 2a "Private-network reach" and "New instances", step 4, M1.5 row, M1.10 egress row: creating a legacy-backed instance, or changing a field that selects which secret is sent (`auth_ref`, a metadata source's credential keys, the family-level webhook secret), needs ProtectAdmin; M1.9 `TestPut_LegacyBackedCreateNeedsProtectAdmin`, `TestPut_LegacyBackedAuthRefNeedsProtectAdmin`, `TestNonAdminCannotBindOperatorSecret`.
+  - SEC9-6 (evidence) — M1.10 table: other `ai_endpoints` rows hold no secret of their own; they are sent what `auth_ref` names, as HEAD's `poolSecret` (the per-row `integrations.ai.<row id>.api_key` name had no place in HEAD's format, A-2).
+  - R9-1 — M1.3 legacy capabilities gain `legacy.WriteLock` (books: `configBlobSaveMu`); M1.3 `Put`, M1.4 step 2a "Write" and step 4: a batch the legacy instance store staged into commits through `storage.CommitLocked`; one store instance per process; M1.9 `TestPut_LegacyBackedCommitsUnderWriteLock`.
