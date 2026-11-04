@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/03-architecture.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 8af6d935-7143-4d06-8562-b04a18504d81 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -15,7 +15,7 @@ Evidence commit: `748fd787a`. Raw data: [`docs/plans/platform-core/raw/`](../../
 | Layer | What it is | Where it lives (in-repo phase) | Where it lives (after split) |
 |---|---|---|---|
 | **Core** | Platform services every app needs: storage, tasks, events, config, secrets, logging, metrics, HTTP framework, realtime, authN, RBAC, audit, library roots, integration contracts and adapters, backup, updater, health, UI shell. | Nested Go module at `core/`, module path **`github.com/falkcorp/mediacore`**, plus npm workspace `core/web/` | Its own repo `falkcorp/mediacore` |
-| **SDK** | The *public, versioned subset* of core that an app is allowed to import: `module`, the capability contracts, `tasks`, `storage`, `httpapi`, `rbac`, `config`, `events`, `log`, `metrics`, `coretest`, `archtest`, and the npm packages `@mediacore/shell` and `@mediacore/api-client`. The SDK is not a separate module; it is the set of core packages **outside** `core/internal/` and outside `core/kernel/`, and is what the API-stability gate (§12) measures. | same module | same module |
+| **SDK** | The *public, versioned subset* of core that an app is allowed to import: `module`, the capability contracts, `tasks`, `storage`, `httpapi`, `rbac`, `config`, `events`, `log`, `metrics`, `coretest`, `archtest`, `entity`, `lifecycle`, `integrations/*`, `compat`, and the npm packages `@mediacore/shell`, `@mediacore/api-client` and `@mediacore/ui-kit`. The SDK is not a separate module; it is the set of core packages **outside** `core/internal/` and outside `core/kernel/`, and is what the API-stability gate (§12) measures. | same module | same module |
 | **App** | A deliverable product = one `main` + one or more **modules** (a module is a self-contained domain: manifest, routes, jobs, migrations, permissions, settings schema, UI contribution, adapters). ABO is the first app; its domain becomes module `books` (§3.6). | Root module `github.com/falkcorp/audiobook-organizer` (this repo) | This repo; future `falkcorp/tv-*`, `falkcorp/movies-*` repos |
 
 "Plugin" is **not** used as an architectural term in this spec (the 2026-09-18 evaluation's
@@ -97,21 +97,25 @@ directly; `internal/` holds implementations.
 |---|---|---|---|
 | `app` | public | Composition root. `app.New(ctx, app.Options, ...module.Module) (*app.App, error)`; `(*App).Run(ctx) error`. The **only** way to assemble a process. | [06-app-sdk](06-app-sdk.md) |
 | `module` | public | `Module` interface, `Manifest`, `Registrar` (routes, tasks, migrations, permissions, settings, events, UI, adapters), `Deps` handed to a module. | [06-app-sdk](06-app-sdk.md) |
+| `entity` | public | Leaf package (layer 0): `entity.Ref{Module, Kind, ID string}` — the polymorphic reference to any module-owned entity, used by tasks resources, outbox/notify payloads, download grabs, acquisition history/blocklist/queue, audit. Never a shared media row (decision 6). | [10](10-tv-movies-proof.md), [05-tasks](05-tasks.md) |
+| `lifecycle` | public | Leaf package (layer 0): `Component{Start, Stop}` ordering contract and shutdown budget types used by kernel, tasks, realtime, outbox relay. | [05-tasks](05-tasks.md), [05-health](05-health.md) |
 | `storage` | public | Pebble-backed ordered KV: `DB`, `Keyspace`, `Batch`, `Snapshot`, `iter.Seq2` scans, per-keyspace migrations, legacy-prefix claims. | [05-storage](05-storage.md) |
 | `storage/index` | public | Full-text search index contract (bleve implementation in `internal/bleveindex`). | [05-storage](05-storage.md) |
 | `library` | public | Media roots, `os.Root`-confined filesystem access, path mapping, safe move/copy/hardlink, hashing, quarantine, free-space checks. | [05-library](05-library.md) |
 | `tasks` | public | Durable task/job system: `Definition`, `Run`, `RunItems`, `Parallelism` (required), `Schedule`, `Resource` (namespaced write-sets), checkpoints, preview/dry-run, cancellation. | [05-tasks](05-tasks.md) |
 | `events` | public | Notify-only in-process bus with typed, namespaced topics. | [05-events](05-events.md) |
 | `outbox` | public | Durable, at-least-once, same-batch outbox for correctness-critical cross-module work. | [05-events](05-events.md) |
-| `log` | public | `log/slog` construction, per-module child loggers, redaction. | [05-logging](05-logging.md) |
+| `log` | public | `log/slog` construction, per-module child loggers, redaction, and the **system log journal** (persisted, queryable operational log; the books activity feed stays in the books module). | [05-logging](05-logging.md) |
 | `metrics` | public | Per-`App` Prometheus registry and OTel providers (never the process globals). | [05-metrics](05-metrics.md) |
-| `config` | public | Layered config (defaults → file → env → flags → DB overrides), per-module typed sections, schema for the UI, change notification. | [05-config](05-config.md) |
+| `config` | public | Layered config: defaults → file → env → flags (operator-set values **lock** their key) → DB overrides (one row per key, apply only to unlocked keys); per-module typed sections declared in the manifest; JSON Schema for the UI; change notification. | [05-config](05-config.md) |
 | `secrets` | public | Encrypted-at-rest secret store; config fields reference secrets by name. | [05-config](05-config.md) |
 | `httpapi` | public | `net/http` (Go 1.22+ `ServeMux` patterns) API framework: typed routes, mandatory permission per route, error envelope, pagination, versioning, OpenAPI 3.1 generation. | [05-http-api](05-http-api.md) |
 | `realtime` | public | SSE hub with resumable, permission-filtered streams. | [05-realtime](05-realtime.md) |
 | `auth` | public | Identity: users, sessions, API keys, bootstrap, OIDC/OAuth, credential epochs; middleware. | [05-authn](05-authn.md) |
 | `rbac` | public | Permission scopes (`<ns>:<action>`), roles as data, module-declared permissions, enforcement helpers. | [05-rbac](05-rbac.md) |
 | `audit` | public | Append-only audit log (auth events, permission denials, admin actions, task approvals). | [05-rbac](05-rbac.md) |
+| `compat` | public | Compatibility primitives for strangler migrations: alias tables (paths, config keys, env vars, permission atoms, metric names), Deprecation/Sunset headers, `mediacore_compat_legacy_use_total`, the compat-level guard (`c/compat/required_level`). | [09-abo-on-core](09-abo-on-core.md) |
+| `integrations` | public | Root of the integration contracts: `integrations.Ref{Kind, Instance}`, instance records (integrations are data, configured per instance), the shared error taxonomy (retryable/permanent/auth/rate-limited), `Factory`/`Descriptor` types modules use to contribute adapters (`Registrar.Adapter`). Imports nothing in `module` (R4). | [05-metadata](05-metadata.md) |
 | `integrations/ai` | public | Provider-neutral AI contract (text/structured generation, embeddings, transcription) plus routing/health. | [05-ai](05-ai.md) |
 | `integrations/download` | public | Download-client contract (`Client`, `GrabRequest`, `Item` status) + adapters `download/deluge`, `download/qbittorrent`, `download/transmission`, `download/sabnzbd`, `download/nzbget`. | [05-download](05-download.md) |
 | `integrations/indexer` | public | Indexer/search contract + Newznab/Torznab adapter. | [05-indexer](05-indexer.md) |
@@ -127,7 +131,8 @@ directly; `internal/` holds implementations.
 | `coretest` | public | Test kit: in-memory `App` harness, fake clock, fake adapters, permission assertions. | [06-app-sdk](06-app-sdk.md) |
 | `archtest` | public | Reusable architecture guards an app runs in its own tests (§3.5). | §3.5 |
 | `shared/...` | public | Cross-app *domain* packages that are not platform concerns but are used by ≥2 apps (§3.4). | [04-package-mapping](04-package-mapping.md) |
-| `kernel/...` | public-but-unstable | Module catalog, lifecycle supervisor, service container. Imported only by `app`. Excluded from the API-stability gate; apps that import it fail `archtest`. | [06-app-sdk](06-app-sdk.md) |
+| `kernel/...` | public-but-unstable | Module catalog, manifest validation, lifecycle supervisor, and the **typed services struct** that builds core services in a fixed order with explicit constructors. There is **no generic DI container** (no `Get[T]`-of-`any`). Imported only by `app`. Excluded from the API-stability gate; apps that import it fail `archtest`. | [06-app-sdk](06-app-sdk.md) |
+| `examples/hello` | public (example) | The minimal "hello" app from 06 §hello, built and tested in core CI; the second consumer for the split criteria (§12). | [06-app-sdk](06-app-sdk.md), [12](12-repo-split.md) |
 | `internal/...` | internal | Implementations: `internal/pebble`, `internal/executor`, `internal/scheduler`, `internal/sse`, `internal/bleveindex`, `internal/openapi`, … | per contract |
 
 npm workspace `core/web/` (D6):
@@ -160,16 +165,16 @@ helpers stay in ABO unless they are needed by core itself. The package mapping
 | R1 | Core never imports app code. | (a) `core/go.mod` must not `require` any app module — checked by `core/archtest.TestNoAppRequire` reading `core/go.mod`; (b) `core/archtest.TestCoreImportsOnlyCore`: `go list -deps` of every core package contains no path outside `github.com/falkcorp/mediacore/...`, stdlib, and the allowlisted third-party set; runs in core's own `go test ./...`. Note that Go *does* allow module dependency cycles, so (a) is required, not redundant. |
 | R2 | Apps import only core's public packages. | Go's `internal/` rule for `core/internal/...`; `archtest.NoKernelImports(t, "github.com/falkcorp/audiobook-organizer/...")` for `kernel/...` (called from the root module's `internal/arch`). |
 | R3 | A module never imports another module's packages; modules talk through core contracts (events, outbox, tasks, capability lookups). | `archtest.ModulesIsolated(t, map[moduleID]pkgPrefix)`; for ABO there is one module, so the rule is vacuous until a second exists, but the test is wired from wave 0 so the second module cannot land without it. |
-| R4 | Core layers: `log`,`metrics` → `config`,`secrets`,`storage` → `events`,`outbox`,`tasks`,`library`,`auth`,`rbac`,`audit`,`integrations/*`,`backup`,`updater`,`health` → `httpapi`,`realtime`,`arrfacade`,`ui` → `module` → `kernel` → `app`. A package may import only its own or lower layers. | `core/internal/archtest_layers_test.go` — the redesigned successor of `internal/arch/layering_test.go` for core (§3.5.1). |
-| R5 | No process-global mutable registries in core. No `func init()` in core except allowlisted pure ones (e.g. none at start); no exported package-level variables of map, slice, func or pointer type; no use of `prometheus.DefaultRegisterer`, `otel.SetMeterProvider`/`SetTracerProvider`, `slog.SetDefault`, `http.DefaultServeMux`, `http.DefaultClient` inside core packages. | `core/archtest.TestNoGlobals` (AST scan). Rationale: several apps in one binary (D-lowest), and test isolation (`raw/07-plugin-registry-sdk.md` §6, `raw/12-cross-cutting.md` §9). |
+| R4 | Core layers (a package may import only its own or lower layers): **L0** `entity`, `lifecycle`, `log`, `metrics` → **L1** `storage`, `storage/index` → **L2** `secrets` → **L3** `config` → **L4** `events`, `outbox`, `tasks`, `library`, `auth`, `rbac`, `audit`, `compat`, `integrations`, `integrations/*`, `backup`, `updater`, `health` → **L5** `acquire` → **L6** `httpapi`, `realtime`, `arrfacade`, `ui` → **L7** `module` → **L8** `kernel` → **L9** `app`, `examples/*`. `coretest` and `archtest` are test-support packages (may import any core package; no core non-test package imports them). `internal/*` packages take the layer of the public package they implement. | `core/internal/archtest_layers_test.go` — the redesigned successor of `internal/arch/layering_test.go` for core (§3.5.1). |
+| R5 | No process-global mutable state in core. No `func init()` in core except allowlisted pure ones (none at start); no exported package-level variables of map, slice, func or pointer type; core packages never call `prometheus.DefaultRegisterer`/`MustRegister` on the default registry, `otel.SetMeterProvider`, `otel.SetTracerProvider`, `otel.SetLogger`, `otel.SetTextMapPropagator`, `otel.SetErrorHandler`, `slog.SetDefault`, `log.SetOutput`, `http.DefaultServeMux`, `http.DefaultClient`/`http.DefaultTransport` mutation, or `signal.Notify`. The single exception is `app.InstallProcessDefaults`, an opt-in helper a `main` may call. | `core/archtest.TestNoGlobals` (AST scan). Rationale: several apps in one binary, and test isolation (`raw/07-plugin-registry-sdk.md` §6, `raw/12-cross-cutting.md` §9). |
 | R6 | Every route declares a permission (or explicit `rbac.Public` / `rbac.AnyAuthenticated`). | Registration-time error in `httpapi` (fail-closed) **and** `archtest.RoutesHavePermissions` over the built router. |
-| R7 | Every library-scale `RunItems` declares parallelism. | The `tasks.Parallelism` type has no usable zero value (§05-tasks); construction fails at registration. Replaces the repo-level lint `internal/plugins/runitems_concurrency_lint_test.go`. |
-| R8 | Every module storage key lives in the module's keyspace or a declared legacy claim. | `storage` refuses writes outside the handed `Keyspace`; boot fails on overlapping claims (§05-storage). |
+| R7 | Every library-scale loop declares parallelism. | `tasks.Parallelism` has no valid zero value. For `Batch`/`Fixer` definitions the parallelism is a definition field and a missing value **fails registration**. For a `tasks.RunItems` call inside a task body, a zero value returns `tasks.ErrNoParallelism` before any item runs (fail-closed), and `archtest.RunItemsDeclareParallelism` (AST) fails any call whose parallelism argument is not a call to a `tasks` constructor. Replaces `internal/plugins/runitems_concurrency_lint_test.go`. |
+| R8 | Every module storage key lives in the module's keyspace or a declared legacy claim. | `storage` refuses writes outside the handed `Keyspace`; claims are of three kinds — prefix, exact key, and prefix-with-exceptions (sub-prefixes carved out for another owner, e.g. the shared `idx:`/`pref:` families) — resolved by longest match; boot fails on any overlap between owners (§05-storage). |
 
 ### 3.5.1 Redesign of `internal/arch/layering_test.go`
 
 Verified assumptions that the extraction breaks (`raw/03-layering-guard.md` §2–§4):
-the `>= 150` package floor (213 today; it fails once 64 packages leave the root module), the
+the `>= 150` package floor (213 today; it the mapping in 04 moves 59 packages out, leaving the root at the floor's edge, and any further move fails it), the
 `internal/server -> internal/database` positive-control edge (both packages are split by the
 extraction), `layerOf` completeness keyed on root-module paths, and the `allowed` shrink-only map
 (5 of its 12 edges are `config` reaching up).
@@ -198,15 +203,17 @@ The guard is **redesigned, not deleted**:
 
 | Thing | Convention | Example |
 |---|---|---|
-| Module ID | lowercase `[a-z][a-z0-9]{1,15}` | `books`, `tv`, `movies` |
+| Module ID | lowercase `[a-z][a-z0-9]{1,15}`; **reserved**: `core`, `api`, `v` followed by digits, `auth`, `admin`, `events`, `health`, `metrics`, `system`, `settings`, `users`, `login`, `logout`, `setup`, `static`, `assets`, `ui`, plus every top-level path segment a module claims for a compatibility surface (the books module claims the ABS-compatible unversioned `/api/*` segments, so no future module may use those IDs) | `books`, `tv`, `movies` |
 | Core namespace | the reserved module ID `core` | `core:admin` |
 | Permission | `<moduleID>:<action>[.<sub>]` | `books:edit`, `tv:request`, `core:users.manage` |
-| Task kind | `<moduleID>.<name>` | `books.scan`, `core.backup` |
+| Task kind | `<moduleID>.<name>`, where `<name>` matches `[a-z0-9_-]+(\.[a-z0-9_-]+)*` (dots allowed after the module ID) | `books.scan`, `books.dedup.full-scan`, `core.backup` |
 | Event topic | `<moduleID>.<noun>.<verb-past>` with a version suffix | `books.book.updated.v1` |
 | Storage keyspace | `m/<moduleID>/` for modules, `c/<subsystem>/` for core | `m/tv/series/…`, `c/tasks/run/…` |
 | Native API path | `/api/core/v1/...`, `/api/<moduleID>/v1/...` | `/api/books/v1/books/{id}` |
 | Config section | `core.*`, `modules.<moduleID>.*` | `modules.books.scan.interval` |
-| Metric name | `mediacore_<subsystem>_*`, `<app>_<moduleID>_*` | `mediacore_tasks_runs_total` |
+| Role ID | `<moduleID>:<role>` for module seed roles, bare names for core seed roles | `admin`, `books:editor` |
+| Audit action | `<moduleID>.<noun>.<verb>` | `core.apikey.create`, `books.book.merge` |
+| Metric name | `mediacore_<subsystem>_*` for core; `<app>_<moduleID>_*` for modules, where `<app>` is `app.Options.AppID` (e.g. `abo`); standard OTel semantic-convention names (e.g. `http_server_*`) are kept unchanged | `mediacore_tasks_runs_total`, `abo_books_scan_items_total` |
 | UI route | `/<moduleID>/...` for module pages; `/settings`, `/system/...`, `/users` for shell pages | `/books/library` |
 
 ABO's existing un-namespaced names (13 permission atoms, 258 key families, `/api/v1/...` paths,

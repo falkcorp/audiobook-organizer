@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/02-decision-record.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: cd524ddf-51e6-46ad-b7fe-f6fc8b6d9dc9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -67,7 +67,7 @@ Each is mapped to the spec section that satisfies it and the plan wave that prov
 | Gate | Satisfied by |
 |---|---|
 | G1 a disabled module contributes no route, scheduled op, worker, nav entry or filesystem mutation after restart | §03 §3.7, §06 (kernel enablement), `coretest` disabled-module test |
-| G2 a failed module migration prevents startup without corrupting data | §05-storage (migrations run in a batch per step; boot halts on error; checkpoint before each module) |
+| G2 a failed module migration prevents startup without corrupting data | §05-storage (each migration step commits in one batch; boot halts on error with the step uncommitted; one pre-migration checkpoint per boot) |
 | G3 the client rejects unknown or version-incompatible module descriptors | §07 (shell intersects server manifest with compile-time registry; version check) |
 | G4 no correctness-critical transition depends solely on the in-memory bus | §05-events (outbox), rule enforced in review checklist |
 | G5 the existing audiobook DB opens unchanged and stays readable by the previous release | §05-storage legacy claims; §09 compatibility windows and rollback per stage |
