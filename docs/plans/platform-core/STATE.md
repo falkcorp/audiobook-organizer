@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.25.0 -->
+<!-- version: 1.26.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -10,21 +10,21 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 | Item | Value |
 |---|---|
 | Spec branch | `docs/platform-core-spec` |
-| Spec PR | (not opened) |
+| Spec PR | (opening after the confidentiality gate) |
 | Plan branch | `docs/platform-core-plan` (not created) |
 | Plan PR | (not opened) |
 | plan-op plugin | not installed; following the prompt's §5 manually |
-| Advisor mechanism | (TBD) |
+| Advisor mechanism | no `advisor` tool exists; a single fresh reviewer at max effort (`reviews/spec-advisor-review.md`) |
 
 ## Phases
 
 | # | Phase | Status |
 |---|---|---|
 | 1 | Raw data gathering | done (17 raw files incl. raw/00-baseline-build.md) |
-| 2 | Design spec | done (draft v1): 34 files under docs/specs/platform-core/ |
-| 3 | Spec review loop | distinct BLOCKERs per round: R1 20, R2 10, R3 9, R4 6, R5 5, R6 2, R7 1, R8 0 — rounds 1–6 dispositioned and applied (+ integration passes); round 7 (96 findings: 1 BLOCKER, 31 MAJOR, 64 MINOR) dispositioned and applied (8 cluster revisers + integration pass; 04 regenerated, 213 rows, gates pass); round 8 (80 findings: 0 BLOCKER, 31 MAJOR, 49 MINOR) meets the exit rule; dispositioned (R8-1..R8-6) and applied (8 cluster revisers + integration pass; 04 v1.8.0 regenerated, 213 rows, gates pass) |
-| 4 | Spec advisor review | pending |
-| 5 | Spec confidentiality gate + PR + merge | pending |
+| 2 | Design spec | done: 34 files under docs/specs/platform-core/ (~41k lines) |
+| 3 | Spec review loop | done: 8 rounds of 7 antagonistic lenses, distinct BLOCKERs 20 → 10 → 9 → 6 → 5 → 2 → 1 → 0; every finding dispositioned (`reviews/spec-round-N-dispositions.md`) |
+| 4 | Spec advisor review | done: READY WITH CHANGES; all findings accepted, simplifications adopted (A-1..A-17); then confirmation rounds 9–12 with BLOCKERs 3 → 2 → 1 → 0 |
+| 5 | Spec confidentiality gate + PR + merge | in progress: branch rebased on main and pushed; gate reviewer running |
 | 6 | Implementation plan | pending |
 | 7 | Plan review loop | pending |
 | 8 | Plan advisor review | pending |
@@ -33,8 +33,10 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 ## Artifacts
 
 - `docs/plans/platform-core/raw/00-index.md` … `16-arr-domain-research.md`
-- `docs/specs/platform-core/` README + 01–15 (34 files, ~18k lines); 03 is normative
-- `todo.d/2026-11-04_platform_core_followups.md` (out-of-scope defects, incl. 3 live security hotfix items)
+- `docs/specs/platform-core/` README + 01–15 (34 files, ~41k lines); 03 is normative
+- `docs/plans/platform-core/reviews/`: 12 review rounds, the advisor review, and a dispositions file for each
+- `changelog.d/2026-11-04_platform_core_spec.md`; supersede marker on `docs/architecture/2026-09-18-pluggable-media-platform-decision-record.md`
+- `todo.d/2026-11-04_platform_core_followups.md` (out-of-scope defects, incl. the six live security hotfixes of 05-authn §11.1)
 
 ## Blockers
 
@@ -42,17 +44,19 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 
 ## Next action
 
-Phase 4 advisor review done (`reviews/spec-advisor-review.md`: READY WITH CHANGES, 1 BLOCKER, 6 MAJOR, 5 MINOR, 9 simplifications). All accepted and all simplifications adopted (`reviews/spec-advisor-dispositions.md`, A-1..A-17). Headline: a representation-neutral extraction (A-2) where legacy stores keep HEAD formats through S10, and hardening moves to post-S10 cutovers. The round-8 design is recoverable at commit 4478f5523. Applied by 8 cluster revisers plus an integration pass (09 v1.9.1, 04 v1.9.0 regenerated, informative). Confirmation round 9 (5 lenses): 71 findings, 4 BLOCKER (3 distinct), 27 MAJOR, 40 MINOR (`reviews/spec-round-9-dispositions.md`, R9-1..R9-11). All three blockers are HEAD-parity gaps where core now drives HEAD code (commit-time locks, cross-owner route conflict, duplicate metric family). No deleted machinery comes back. Applied by 8 revisers plus an integration pass (09 v1.10.1, 04 v1.10.0 regenerated). Round 10: 52 findings (2 BLOCKER, 27 MAJOR, 23 MINOR), dispositioned as R10-1..R10-11 (`reviews/spec-round-10-dispositions.md`). Both blockers are fixed by removing a mechanism: the operations routes stay with books, and ambient scopes never reach confined keys. Applied (8 revisers, an integration pass, 04 v1.11.1 regenerated). Round 11 (narrow, 2 reviewers): 1 BLOCKER (VER11-1, HTTP metrics recorder overlap) and 3 MAJOR, dispositioned as R11-1..R11-5 and applied (04 v1.11.2 regenerated). A final verification reviewer is checking R11-1..R11-5, including a scratch experiment for R11-1. Phase 5 follows if it finds zero BLOCKERs. Incident: the shared disk filled up (Go build cache 25 GB), was cleared with go clean -cache, and nothing was lost. Changelog fragment and supersede marker are already committed.
+Phase 5: the confidentiality gate (Sonnet/high over `git log -p origin/main..HEAD`) is running. On PASS: open draft PR #1, wait for CI, admin rebase-merge, then cut `docs/platform-core-plan` from the updated main for Phases 6–9. The pre-advisor (round-8) design is recoverable at commit 4478f5523.
 
 ## Incidents
 
 - 2026-11-04: one commit (`b45193d9f`) was pushed while the per-commit gate reported hits, because the gate's exit status was hidden by a pipe. All hits were verified false positives (long identifiers; a header name); nothing confidential was pushed; no history rewrite was needed. The gate now runs under `pipefail`, stages only named paths, and blocks on any hit.
+- 2026-11-04: the shared disk filled up (a 25 GB Go build cache); it was cleared with `go clean -cache` and nothing was lost.
+- 2026-11-04: the branch was rebased onto 17 new main commits (no overlap), and in-doc commit references were remapped.
 - Module-layout experiments: an early batch used a reset that did not undo staged renames; those runs were discarded and re-run cleanly (`raw/00-baseline-build.md`).
 
 ## Fallbacks in use
 
 - Subagents use `general-purpose` / `Explore` with explicit model and effort.
 
-COMPLETED: 3 — phase 1 (raw data), phase 2 (spec draft v1), phase 3 (8 review rounds)
-REMAINING: 6 — phases 4–9 (phase 4: final verification running)
+COMPLETED: 4 — phase 1 (raw data), phase 2 (spec), phase 3 (8 review rounds), phase 4 (advisor review + confirmation rounds 9–12)
+REMAINING: 5 — phase 5 (gate running, then PR #1 and merge), phases 6–9 (plan, plan review, plan advisor, PR #2)
 BLOCKED: 0 —
