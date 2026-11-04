@@ -1,11 +1,13 @@
 <!-- file: docs/architecture/2026-09-18-pluggable-media-platform-decision-record.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: b0b3170b-f4c0-4030-b6ee-d69f47323db1 -->
-<!-- last-edited: 2026-09-18 -->
+<!-- last-edited: 2026-11-04 -->
 
 # Pluggable Media Platform Decision Record
 
 ## Status
+
+Superseded by [`../specs/platform-core/02-decision-record.md`](../specs/platform-core/02-decision-record.md).
 
 Proposed. This record accompanies
 [`2026-09-18-pluggable-media-platform-evaluation.md`](2026-09-18-pluggable-media-platform-evaluation.md).
