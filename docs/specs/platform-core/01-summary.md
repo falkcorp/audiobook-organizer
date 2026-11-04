@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/01-summary.md -->
-<!-- version: 1.4.1 -->
+<!-- version: 1.5.0 -->
 <!-- guid: d2956830-373c-4b12-9504-ccace49f7f6d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -49,8 +49,10 @@ moves platform machinery, not every route.
    every key family keeps one stored format, written only by ABO code: core reaches ABO's data through
    store interfaces whose implementation the `books` module supplies, so the previous release reads
    every row the new build wrote (02 decision 13). A rollback's costs and consequences are listed once,
-   in the table of 09 §9.2.1, and every narrowing they cause is fail-closed (a moved secret leaves a
-   never-matching sentinel, so an older build's gate refuses until the secret is re-entered). An install
+   in the table of 09 §9.2.1, and every narrowing they cause is fail-closed (a moved plaintext secret leaves
+   a never-matching sentinel, so the older build fails closed on it until it is re-entered; the secrets HEAD
+   already stores encrypted, the Basic password among them, are not moved, so a rollback never strands the
+   Basic gate, R5-1). An install
    whose store has not applied the books migrations that the floor release requires installs the
    stepping-stone release first (02 N14).
 4. **Correct by construction.** The boundaries are enforced mechanically (rules R1–R8 in §03): core
@@ -72,10 +74,8 @@ moves platform machinery, not every route.
 - Hot enable/disable of modules (restart-bound, kept decision 10).
 - A universal media table (kept decision 6).
 - Renaming or moving any of ABO's existing 258 Pebble key families during the extraction (02
-  decision 13): core services use the generic ones (users, sessions, API keys, roles, ops history and
-  runs, the clock and pause keys, the config blob and secret rows, system log rows, import roots, AI
-  batch jobs, provider throttle rows) in place through store interfaces whose implementation over those
-  keys is books code. Moving a family to a native keyspace is a later, one-way **cutover** (02 N15), not
+  decision 13): core services use the generic ones (03 §3.7 names them) in place through the store
+  interfaces of 03 §3.3, whose implementation over those keys is books code. Moving a family to a native keyspace is a later, one-way **cutover** (02 N15), not
   an extraction stage.
 - Retiring ABO's gin router or renaming its `/api/v1/...` routes: the router stays mounted through
   `httpapi.MountLegacy` (02 N7); a route group moves to native `httpapi` only when rewritten for its
@@ -103,8 +103,8 @@ moves platform machinery, not every route.
 | **capability contract** | A narrow Go interface in `core/integrations/*` (AI, download, indexer, metadata, notify). |
 | **keyspace** | A prefix of the shared Pebble database handed to one owner: `c/<subsystem>/` for core, `m/<module>/` for modules. |
 | **legacy claim** | A module's declaration that it owns pre-existing un-namespaced key families (ABO's 258), so they stay in place. |
-| **store interface** | The SDK interface through which a core service persists its state (identity, roles, runs, config overrides, the log journal, import roots, the full-text dirty set, AI jobs, provider holds, integration instances, notification rules; 03 §3.3 "Store interfaces"). Core ships a **native implementation** over its own `c/<subsystem>/` keyspace, used by new apps and `hello`; an app with pre-core data supplies a **legacy implementation** over its existing keys on `module.Manifest.LegacyStores` (for ABO, books code), so core holds no app key name and no storage grant during the extraction (02 decision 13, R4-1). |
-| **extension family** | The books-owned family, never read by an older build, in which ABO's legacy store implementations keep native-only data (namespaced scopes, hashed sessions, native one-time tokens) instead of adding it to legacy rows. Each record carries a hash of the legacy row it extends and is suspended until an admin re-confirms it when an older build changed that row (02 decision 13). |
+| **store interface** | The SDK interface through which a core service persists state an app may already hold; the one list is 03 §3.3 "Store interfaces" (SIMP5-8). Core ships a **native implementation** over its own keyspace, used by new apps and `hello`; an app with pre-core data supplies a **legacy implementation** over its existing keys on `module.Manifest.LegacyStores` (for ABO, books code; S2's `app.Options.LegacyConfigStore` bridge is the one exception, DATA5-16), so core holds no app key name and no storage grant during the extraction (02 decision 13, R4-1). |
+| **extension family** | The books-owned family, never read by an older build, in which ABO's legacy store implementations keep native-only data (namespaced scopes, hashed sessions, native one-time tokens) instead of adding it to legacy rows. Each record carries a fingerprint (`legacy_ref.fp`) of the security-relevant fields of the legacy row it extends. When an older build changed those fields, a record holding a Widening field is suspended until an admin re-confirms it, and a record without one has its Derived fields reset until its next write; a revocation the older build made stays revoked (02 decision 13; R5-6, DATA5-4). |
 | **cutover** | The later, per-family, one-way step that moves a family to a native core keyspace and deletes the legacy rows; outside the extraction, checkpointed, behind the per-owner level guard; the only step in which core reads an app's rows, so storage grants land with it; its rollback floor is the cutover release itself (02 N15). |
 | **task** | A durable unit of background work in `core/tasks` (formerly "operation"/"op"/"job"); kind `<module>.<name>`. |
 | **Parallelism** | The required declaration of how a library-scale loop runs (`tasks.CPU()`, `tasks.Fixed(n, reason)`, `tasks.Sequential(reason)`; §05-tasks). |
@@ -156,3 +156,10 @@ Round 4 (dispositions in `docs/plans/platform-core/reviews/spec-round-4-disposit
 Integration pass (round 4):
 
 - integration pass (round 4): glossary "store interface" lists every interface of 03 §3.3 (dirty set, integration instances, notification rules) and names `module.Manifest.LegacyStores`.
+
+Round 5 (dispositions in `docs/plans/platform-core/reviews/spec-round-5-dispositions.md`; resolutions R5-1…R5-7):
+
+- R5-1 (OPS5-2) — goal 3: only plaintext secrets move and are sentinelled; the secrets HEAD already encrypts, the Basic password among them, are not moved.
+- R5-6, DATA5-4 — glossary "extension family": `legacy_ref.fp` over security-relevant fields; Widening records suspended, Derived fields reset; older-build revocations stay revoked.
+- DATA5-16 — glossary "store interface": S2's `app.Options.LegacyConfigStore` is the one exception to `module.Manifest.LegacyStores`.
+- SIMP5-8 — glossary "store interface" and non-goals cite 03 §3.3 and §3.7 instead of restating the store and family lists.

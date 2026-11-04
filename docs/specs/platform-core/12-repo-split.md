@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/12-repo-split.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: eb47baa1-640b-4c96-96cc-f6b2bdeaa57e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -184,7 +184,8 @@ make -C "$TMP/core" ci
 (b) The core workflow (`.github/workflows/core-ci.yml`, job `core-ci`, runs `make -C core ci`,
 §12.3.11) is one of the **named required checks** of the merge requirement (09 §9.2.1, 14 Q-I): root
 `make ci` is a local target that does not contain core's merge gate (MOD4-8). The workflow triggers on
-every PR; a `changes` classifier job decides whether its inputs changed (`core/**` and the workflow file),
+every PR; a `changes` classifier job decides whether its inputs changed — one trigger list, 09 §9.2.1's
+(`core/**`, root `go.mod`, root `go.sum`) plus the workflow file (MOD5-15) —
 and a job-level `if:` skips the job otherwise, so a skip reports success instead of leaving a required
 check waiting. When `core/go.mod` or `core/go.sum` changes it also runs the root `go build ./...` and
 `tidy-check`, because every core dependency change needs the root's `go.mod`/`go.sum` too (03 §3.2
@@ -279,7 +280,7 @@ root `Makefile` pin, `scripts/check_toolchain_versions.py:44-46,329-351`; see
 Every criterion is also a **reported** CI job from the stage that introduces it, so readiness is
 continuously visible rather than measured once. Only the criteria that must hold at every merged PR head —
 SC2, SC7 and SC10 — are also part of the merge gate (`make -C core ci`; SC2's root-side
-`TestCoreHoldsNoAppKeyNames` runs in root `make ci`, because it reads books' claim list); SC1, SC5, SC6 and SC9 are
+`TestCoreHoldsNoAppKeyNames` runs in root `make ci`, because it reads books' generated claim list through `KeyFamilies()`, ABO's setting keys and op IDs, 03 R1(c)); SC1, SC5, SC6 and SC9 are
 readiness reports (`make -C core readiness`), and SC3, SC4(b), SC4(c) and SC8 run in the root
 (SC4(c)'s script is also a blocking root `make ci` check, above).
 SC10's parity half (core pin = root pin) is a root-side job (`scripts/check_toolchain_versions.py`, 13
@@ -296,7 +297,7 @@ split, the core repo has nothing else. It is specified now so that it does not g
 |---|---|
 | Toolchain pin | `export GOTOOLCHAIN := go1.27.x`, equal to the root `Makefile` pin. This is one more pinned copy; the toolchain guard checks it (SC10, 13 §13.2.2), so it cannot drift silently. A `print-toolchain` target prints it, so commands and scripts never repeat the literal. |
 | Tools | `tools` target: `go -C tools/apidiff install tool`, `go -C tools/govulncheck install tool`, and a core copy of the staticcheck tools module, `tools/staticcheck`, pinned to the same version as the root's `tools/staticcheck` (`check_module_skew.py`, SC4(c), also compares the two tools modules' requirements). |
-| `ci` target (merge gate) | `build vet test-short fmt-check fix-check tidy-check staticcheck archtest exclude-check coverage-floor replace-check toolchain-check version-check` — i.e. Go build/vet/short tests with `-race`, `gofmt -l` excluding `web/` and `examples/*/web/`, `go fix -diff ./...` empty (13 §13.3), `go mod tidy -diff`, staticcheck, archtest (R1, R2, R5 and the R4 layer guard: SC2), the genproto exclude check in **core mode only** plus the present/misplaced scan of `core/` (03 §3.2 item 1; the root mode and the tree-wide scan are the root job `genproto-exclude-root`), the coverage ratchet floor (SC5), the `replace`/`exclude` check (SC7), core's own toolchain copies (SC10) and `check_core_version.py`'s core-only checks (§12.4.3). Every check here holds at every **merged PR head** (the repo merges rebase/fast-forward only, so intermediate commits of a PR are not built; MOD4-14), so a red `ci` always means a defect. SC4 is the workflow running this target. |
+| `ci` target (merge gate) | `build vet test-short fmt-check fix-check tidy-check staticcheck archtest exclude-check coverage-floor replace-check toolchain-check version-check errcheck-ratchet interface-width mocks-check pprof-check web-test` — i.e. Go build/vet/short tests with `-race`, `gofmt -l` excluding `web/` and `examples/*/web/`, `go fix -diff ./...` empty (13 §13.3), `go mod tidy -diff`, staticcheck, archtest (R1, R2, R5 and the R4 layer guard: SC2), the genproto exclude check in **core mode only** plus the present/misplaced scan of `core/` (03 §3.2 item 1; the root mode and the tree-wide scan are the root job `genproto-exclude-root`), the coverage ratchet floor (SC5), the `replace`/`exclude` check (SC7), core's own toolchain copies (SC10), `check_core_version.py`'s core-only checks (§12.4.3), and the gates that ran for core only through root `make ci` before (MOD5-15): the errcheck and interface-width ratchets over `core/.errcheck-baseline` and `core/.interface-width-baseline`, `mocks-check` over core's mockery config, `pprof-check`, and the `core/web` workspace tests (`npm ci` then vitest, from UI-0; "not applicable" before). Their scripts are core copies under `core/scripts/ci/`, so SC4(a)'s export and the post-split repo run them, and cutover step 6 drops none of them. Every check here holds at every **merged PR head** (the repo merges rebase/fast-forward only, so intermediate commits of a PR are not built; MOD4-14), so a red `ci` always means a defect. SC4 is the workflow running this target. |
 | `readiness` target (report-only) | `apidiff-gate coverage coredoc-check vulncheck` — SC1, SC5's thresholds, SC6 and SC9. It never fails a merge and never writes outside `core/`: it writes a JSON and Markdown report, with date and commit, to `$(READINESS_OUT)` (default `core/.ci/readiness/`, gitignored), which CI uploads as an artifact. Pre-split, a root-side nightly job folds the artifact into `docs/plans/platform-core/split-readiness.md` through a PR; that job is dropped at cutover step 6. SC3 and SC8 run in the root (pre-split) because they need ABO's `web/` or a temp module; the history dry run and the missing-origin list (§12.8.1) are also reported here. |
 | `release` target | post-split only: `make release VERSION=vX.Y.Z` runs §12.5 steps 1–5. |
 
@@ -411,9 +412,12 @@ No goreleaser: core ships no binary. Steps (a `make release VERSION=vX.Y.Z` targ
    (If the repo is private: apps set `GOPRIVATE=github.com/falkcorp/*` and authenticate with a GitHub
    token; the proxy step is skipped. Both are free.)
 5. GitHub release with the changelog section as body (`gh release create vX.Y.Z --notes-file …`).
-6. Publish npm packages at `X.Y.Z`: public repo → the npm registry (free for public packages); private
-   repo → GitHub Release tarballs (07 §7.17); GitHub Packages is not used (it needs a token on every
-   machine). `npm publish -w packages/ui-kit -w packages/api-client -w packages/shell --access …`
+6. Publish npm packages at `X.Y.Z`: public repo → the npm registry (free for public packages). A private
+   repo has no token-free option (FE5-16): GitHub Release tarballs of a private repo need an authenticated
+   download, the same cost that rejected GitHub Packages — every machine and CI job needs an `.npmrc` with a
+   fine-grained read token — and an exact `"X.Y.Z"` specifier cannot name a tarball, so apps pin tarball
+   URLs that `check_mediacore_lockstep.py` parses for `X.Y.Z` and that Dependabot's npm updater does not
+   bump (07 §7.17). A public core repo is therefore the precondition of the token-free npm path (14 Q-B). `npm publish -w packages/ui-kit -w packages/api-client -w packages/shell --access …`
    (explicit order, as in SC8; hello's web package is private).
 7. Dispatch the downstream matrix (§12.7) against the tag.
 8. Dependabot in each app repo opens the bump PRs (§12.6).
@@ -429,8 +433,9 @@ require github.com/falkcorp/mediacore vX.Y.Z      // no replace
 ```
 
 Exact npm versions (no `^`), from the npm registry for a public core repo (07 §7.17 states the same
-mechanism; GitHub Release tarballs for a private one; GitHub Packages is not used), because the Go side
-and the npm side must move together. Before the split ABO's `web/` uses `file:` dependencies on
+mechanism), because the Go side and the npm side must move together. For a private core repo the
+dependencies are tarball URLs fetched with a read token on every machine, and npm bumps are manual
+(§12.5 step 6; FE5-16). Before the split ABO's `web/` uses `file:` dependencies on
 `core/web/packages/*`; there is no root npm workspace.
 
 Updates come from **Dependabot** (already configured here, free):
@@ -489,8 +494,8 @@ The path file is generated from **real history at the freeze commit `F`**, not f
 04's cells cannot express a source file divided between destinations (e.g. `internal/metrics/metrics.go`,
 whose `operations_*` series go to `tasks`), give no destination file names (`internal/operations/state.go`
 and `internal/operations/state/state.go` both land in `mediacore/tasks`), and cannot express a
-copy-then-delete window (05-tasks copies the scheduler at T0 while ABO's `internal/scheduler` lives on to
-T7). Mapping two coexisting, diverging files to one path either aborts filter-repo with
+coexistence window (core's scheduler is a re-implementation, 04 §8.6, written at T0, while ABO's
+`internal/scheduler` lives on until T7 deletes it; MOD5-4). Mapping two coexisting, diverging files to one path either aborts filter-repo with
 `File renaming caused colliding pathnames!` when one commit touches both (round-2 X13), or splices the
 ABO copy's later edits into core history. Rule:
 
@@ -498,7 +503,9 @@ ABO copy's later edits into core history. Rule:
   `core/scripts/split/origins.txt` (below), written by the PR that deleted the source; a pure rename
   (source deleted in the same commit, `git log --follow` similarity ≥ 90 %) without such a line is reported,
   so the line can be added;
-- a copied or split file keeps only its post-arrival history; the core repo's first commit message
+- a copied, split or re-implemented file keeps only its post-arrival history and gets no `origins.txt`
+  line (e.g. `internal/telemetry/telemetry.go`, whose provider construction core re-implements in
+  `metrics` while the file keeps its install code until S2, 04 §8.6; MOD5-14); the core repo's first commit message
   records its origin path and the ABO commit it was copied from (e.g. the `core/internal/keyedmutex`
   copy, 03 §3.2.1, whose origin stays in ABO);
 - files that never arrived in `core/` are not listed, so no ABO-only code (`internal/keyedmutex`, the
@@ -509,8 +516,8 @@ ABO copy's later edits into core history. Rule:
 # core-history-paths.txt (generated by core/scripts/split/history_paths.py at F from core/scripts/split/origins.txt,
 # cross-checked against `git log -M90% --diff-filter=R`)
 core/
-internal/telemetry/telemetry.go==>core/metrics/telemetry.go
-internal/telemetry/resource.go==>core/metrics/resource.go
+internal/logging/sanitize.go==>core/log/sanitize.go
+internal/logging/structured.go==>core/log/structured.go
 ...
 ```
 
@@ -520,10 +527,10 @@ rewrites), so a small file can fall under 90 % similarity and lose its detected 
 first commit would not help: the repo merges rebase/fast-forward only, so that commit would land on
 `main` unbuildable (ABO users still import the old path, moved files still import ABO), `git bisect` would
 hit it, and `auto-revert.yml` refuses spans over its `max_span` of 3 commits (MOD4-14). Instead every
-move PR appends one `old-path ==> new-path` line per moved file to the committed
-`core/scripts/split/origins.txt`, and only for a file whose source path the same PR deletes (a move, never
+move PR appends one `old-path ==> new-path` line (this exact separator, with one space on each side, in
+04 §2.2, 09 S0 and here; MOD5-14) per moved file to the committed `core/scripts/split/origins.txt`, and only for a file whose source path the same PR deletes (a move, never
 a copy, so two coexisting files never map to one path, X13). `history_paths.py` takes those lines as the
-**authoritative** origins and uses pure-rename detection only as a cross-check; every commit of a move PR
+**authoritative** origins (and writes them in filter-repo's spaceless `old==>new` form, as above) and uses pure-rename detection only as a cross-check; every commit of a move PR
 builds. Its readiness report lists every `core/` file whose content is older than its arrival commit but
 that has neither an `origins.txt` line nor a detected rename, so a lost history is visible before
 cutover.
@@ -573,8 +580,12 @@ Precondition: T and SC1–SC10 hold, recorded in `split-readiness.md`.
      root-mode genproto job `genproto-exclude-root` of 03 §3.2 item 1, the readiness fold-in job); drop `core/go.mod`, `core/Makefile` and
      `core/tools/*/go.mod` from the toolchain guard; remove `core/web/**`, `core/go.mod`, `core/go.sum`
      from path filters and `/core` and `/core/web` from Dependabot; `web/package.json` `file:` deps →
-     exact `@mediacore/*` versions; `npm ci --prefix web` to refresh the lockfile; the Dockerfiles stop
-     copying `core/go.mod`.
+     exact `@mediacore/*` versions; `npm ci --prefix web` to refresh the lockfile; the Dockerfiles' Go stage stops copying
+     `core/go.mod` and `core/go.sum`, and the Docker frontend stage drops its `core/web` copies, its
+     `core/web` `npm ci` and its core package builds (back to `npm ci` and the build in `web/`); `make
+     web-deps` drops its `core/web` prerequisites, and `scripts/ci/build_web.sh` already skips `core/web`
+     when it is absent (07 §7.3.2; FE5-15). Without this, step 7's `docker build .` fails on the first
+     `COPY core/web/…`.
    - Root `internal/arch` keeps calling `archtest` — now from the versioned module.
    - Add a guard that fails if a `core/` directory reappears.
 7. **Verify ABO**: `make ci`, e2e, `binary-smoke.yml`, `docker build .`; `go version -m ./audiobook-organizer | grep mediacore`
@@ -606,8 +617,9 @@ and after (03 §3.2 item 2), so a rollback is a `replace` line plus a directory,
    source-available, not OSI open source; whether core keeps it or is relicensed (e.g. Apache-2.0/MIT) is
    an owner decision needed before step 4, and relicensing requires the copyright holder's consent for all
    contributions in the rewritten history. Flagged for [14-risks-open-questions](14-risks-open-questions.md) Q-A.
-2. **Public or private core repo.** Decides proxy vs `GOPRIVATE`, npm registry vs GitHub Release
-   tarballs, and the Actions-minutes note in §12.7. Free either way (D9). 14 Q-B.
+2. **Public or private core repo.** Decides proxy vs `GOPRIVATE`, npm registry vs token-authenticated
+   GitHub Release tarballs with URL specifiers (§12.5 step 6), and the Actions-minutes note in §12.7. Free
+   either way (D9), but only the public repo keeps npm installs token-free. 14 Q-B.
 3. Thresholds in SC1 (3 checkpoints, 6 weeks) and SC5 (70 %/60 %) are proposals; the owner may tune them
    before S0 wires the readiness report, not after. 14 Q-G.
 
@@ -683,3 +695,12 @@ Round 4 (dispositions in `docs/plans/platform-core/reviews/spec-round-4-disposit
 - MOD4-8, OPS4-7 — SC4(b): `core-ci` is a named required check; it triggers on every PR and skips through a job-level `if:` on a `changes` classifier, so a skip reports success.
 - MOD4-13 — §12.4.3: the constant is kept ≥ the newest checkpoint; `check_core_version.py` runs in core `ci` (`version-check`) with core-only checks (checkpoint half "not applicable" in the export); books' `MinCoreVersion` assertion moves to a root-side test in `internal/books`.
 - MOD4-14 — §12.3.11 and SC summary: checks hold at every merged PR head; §12.8.1: the rename-only-first-commit rule is dropped; move PRs append `old ==> new` lines to `core/scripts/split/origins.txt`, which `history_paths.py` treats as authoritative (rename detection is a cross-check).
+
+Round 5 (dispositions in `docs/plans/platform-core/reviews/spec-round-5-dispositions.md`; resolutions R5-1…R5-7):
+
+- MOD5-3 — SC summary: the root-side `TestCoreHoldsNoAppKeyNames` reads books' claim generator output through `KeyFamilies()`, ABO's setting keys and op IDs (03 R1(c)).
+- MOD5-4 — §12.8.1: core's scheduler is a re-implementation written at T0 while ABO's path lives on to T7, so it keeps only post-arrival history; no copy is recorded as a move.
+- MOD5-14 — §12.8.1: one `old-path ==> new-path` separator (04 §2.2, 09 S0, here); `history_paths.py` writes filter-repo's `old==>new`; the example is a verbatim move (`internal/logging` → `core/log`), and a re-implemented file such as `internal/telemetry/telemetry.go` gets no line.
+- MOD5-15 — §12.3.11 `ci` target gains `errcheck-ratchet interface-width mocks-check pprof-check web-test` with scripts under `core/scripts/ci/`; SC4(b) uses 09 §9.2.1's trigger list plus the workflow file.
+- FE5-15 — §12.8.2 step 6: the Docker frontend stage drops its `core/web` copies and builds, `web-deps` its `core/web` prerequisites.
+- FE5-16 — §12.5 step 6, §12.6, §12.10 item 2: the private-repo npm path needs a read token on every machine and tarball URL specifiers the lockstep check parses and Dependabot does not bump; a public repo is the precondition of the token-free path (14 Q-B).

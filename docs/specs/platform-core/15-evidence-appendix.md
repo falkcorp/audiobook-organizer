@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/15-evidence-appendix.md -->
-<!-- version: 1.4.1 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 28e48d7f-7c8d-45af-90cd-14880b2b5988 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -25,8 +25,13 @@ an R5 scan of the S1/S2 movers). Round-4 reviews (`spec-round-4-*.md`) add exper
 dropped, the imports of build-tagged files, `internal/telemetry`'s used identifiers, the `internal/logger`
 split, `.dockerignore`, the release and CI entry points, the `core/go.mod` template, the npm workspace
 layout, both `cockroachdb/errors` versions' genproto edge) and the data-migration lens's rollback
-simulations (`spec-round-4-data-migration.md`, "Simulations"). Spec files cite those experiments by ID
-where a decision rests on them.
+simulations (`spec-round-4-data-migration.md`, "Simulations"). Round-5 reviews (`spec-round-5-*.md`) add
+experiments Z1–Z7 (`spec-round-5-modules-build.md`, "Experiments run for this review": importer sets split
+into non-test, tagged-only and test-only users, the names crossing the planned taskstore split in both
+directions, check (h)'s family-prefix scan over the spec's Go blocks and over the files 04 sends to core,
+the `//go:embed` sites, every `npm ci` site, the toolchain pin copies) and the data-migration lens's
+forward and rollback simulations (`spec-round-5-data-migration.md`, "Simulations"). Spec files cite those
+experiments by ID where a decision rests on them.
 
 **Rule:** a claim about the current code without an anchor or a raw-file link is a review finding (see
 `docs/plans/platform-core/reviews/`). External claims (Sonarr/Radarr behaviour, package versions) cite
@@ -34,10 +39,11 @@ public URLs in `raw/16-arr-domain-research.md` and `raw/15-dependencies.md` with
 
 ## Anchor census per spec file
 
-Regenerated on 2026-11-04 **in the round-4 integration pass**, after every round-4 reviser had finished,
-from the working tree with the round-1 method unchanged (32 files, 30564 lines, 1033 line anchors). Run on
-the files the round-4 revision snapshot had already settled, the same method reproduces that snapshot's
-rows (e.g. 05-ai, 05-events, 13), which confirms it is stable. Method (exact, so the next run is comparable):
+Regenerated on 2026-11-04 **during the round-5 revision**, from the working tree with the round-1 method
+unchanged (32 files, 31994 lines, 1077 line anchors), while other round-5 revisers were still editing, so
+rows for files under revision are a snapshot that the integration pass re-takes. Run on the round-4 tree,
+the same script reproduces that census's rows (e.g. 01, 02, 05-ai and 13), which confirms the method is
+unchanged. Method (exact, so the next run is comparable):
 
 - every backticked span in the file is tokenized into path-shaped tokens
   (`[A-Za-z0-9_.-]` segments joined by `/`, optionally followed by `:<line>[-<line>][,<line>…]`);
@@ -53,39 +59,39 @@ The v1.0.0 table used a looser, unrecorded method, so its numbers are not compar
 
 | Spec file | Lines | Anchors with line | Distinct repo paths | Raw files cited |
 |---|---|---|---|---|
-| [01-summary.md](01-summary.md) | 158 | 0 | 3 | 00-baseline-build, 01-package-inventory |
-| [02-decision-record.md](02-decision-record.md) | 140 | 3 | 10 | 00-baseline-build, 05-storage, 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 10-auth-rbac, 11-integrations, 12-cross-cutting, 16-arr-domain-research |
-| [03-architecture.md](03-architecture.md) | 733 | 14 | 39 | 00-baseline-build, 00-index, 03-layering-guard, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting, 14-build-ci |
-| [04-package-mapping.md](04-package-mapping.md) | 1497 | 64 | 287 | 01-package-inventory, 02-import-graph-hotspots, 03-layering-guard, 04-database-store, 05-storage, 06-tasks-ops, 07-plugin-registry-sdk, 09-http-api, 10-auth-rbac, 11-integrations, 12-cross-cutting |
-| [05-ai.md](05-ai.md) | 815 | 28 | 20 | 11-integrations, 12-cross-cutting |
-| [05-authn.md](05-authn.md) | 1619 | 67 | 56 | 09-http-api, 10-auth-rbac, 12-cross-cutting, 13-frontend |
+| [01-summary.md](01-summary.md) | 165 | 0 | 3 | 00-baseline-build, 01-package-inventory |
+| [02-decision-record.md](02-decision-record.md) | 148 | 6 | 12 | 00-baseline-build, 05-storage, 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 10-auth-rbac, 11-integrations, 12-cross-cutting, 16-arr-domain-research |
+| [03-architecture.md](03-architecture.md) | 841 | 16 | 43 | 00-baseline-build, 00-index, 03-layering-guard, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting, 14-build-ci |
+| [04-package-mapping.md](04-package-mapping.md) | 1496 | 64 | 287 | 01-package-inventory, 02-import-graph-hotspots, 03-layering-guard, 04-database-store, 05-storage, 06-tasks-ops, 07-plugin-registry-sdk, 09-http-api, 10-auth-rbac, 11-integrations, 12-cross-cutting |
+| [05-ai.md](05-ai.md) | 903 | 30 | 26 | 11-integrations, 12-cross-cutting |
+| [05-authn.md](05-authn.md) | 1784 | 71 | 57 | 09-http-api, 10-auth-rbac, 12-cross-cutting, 13-frontend |
 | [05-backup.md](05-backup.md) | 1124 | 16 | 15 | 05-storage, 10-auth-rbac, 12-cross-cutting |
-| [05-config.md](05-config.md) | 1976 | 57 | 50 | 02-import-graph-hotspots, 03-layering-guard, 10-auth-rbac, 12-cross-cutting, 15-dependencies |
-| [05-download.md](05-download.md) | 752 | 16 | 14 | 06-tasks-ops, 11-integrations, 16-arr-domain-research |
-| [05-events.md](05-events.md) | 740 | 12 | 8 | 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting |
-| [05-health.md](05-health.md) | 638 | 23 | 25 | 09-http-api, 11-integrations, 12-cross-cutting |
+| [05-config.md](05-config.md) | 2160 | 68 | 52 | 02-import-graph-hotspots, 03-layering-guard, 10-auth-rbac, 12-cross-cutting, 15-dependencies |
+| [05-download.md](05-download.md) | 765 | 16 | 14 | 06-tasks-ops, 11-integrations, 16-arr-domain-research |
+| [05-events.md](05-events.md) | 748 | 12 | 8 | 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting |
+| [05-health.md](05-health.md) | 649 | 24 | 25 | 09-http-api, 11-integrations, 12-cross-cutting |
 | [05-http-api.md](05-http-api.md) | 1382 | 77 | 46 | 09-http-api, 10-auth-rbac, 12-cross-cutting, 13-frontend |
 | [05-indexer.md](05-indexer.md) | 463 | 3 | 3 | 11-integrations, 16-arr-domain-research |
 | [05-library.md](05-library.md) | 788 | 44 | 47 | 02-import-graph-hotspots, 05-storage, 08-prior-art, 12-cross-cutting, 16-arr-domain-research |
 | [05-logging.md](05-logging.md) | 620 | 37 | 23 | 05-storage, 10-auth-rbac, 12-cross-cutting, 15-dependencies |
-| [05-metadata.md](05-metadata.md) | 1414 | 56 | 42 | 11-integrations, 12-cross-cutting, 16-arr-domain-research |
+| [05-metadata.md](05-metadata.md) | 1556 | 57 | 42 | 11-integrations, 12-cross-cutting, 16-arr-domain-research |
 | [05-metrics.md](05-metrics.md) | 480 | 19 | 26 | 12-cross-cutting, 15-dependencies |
-| [05-notify.md](05-notify.md) | 420 | 19 | 14 | 10-auth-rbac, 11-integrations, 12-cross-cutting, 16-arr-domain-research |
-| [05-rbac.md](05-rbac.md) | 1420 | 47 | 25 | 09-http-api, 10-auth-rbac, 12-cross-cutting, 13-frontend |
+| [05-notify.md](05-notify.md) | 442 | 19 | 14 | 10-auth-rbac, 11-integrations, 12-cross-cutting, 16-arr-domain-research |
+| [05-rbac.md](05-rbac.md) | 1521 | 49 | 26 | 09-http-api, 10-auth-rbac, 12-cross-cutting, 13-frontend |
 | [05-realtime.md](05-realtime.md) | 589 | 15 | 11 | 09-http-api, 12-cross-cutting, 13-frontend |
-| [05-storage.md](05-storage.md) | 2045 | 53 | 47 | 02-import-graph-hotspots, 04-database-store, 05-storage, 08-prior-art, 12-cross-cutting |
-| [05-tasks.md](05-tasks.md) | 1783 | 79 | 88 | 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting |
-| [05-updater.md](05-updater.md) | 735 | 18 | 12 | 07-plugin-registry-sdk, 12-cross-cutting, 14-build-ci |
-| [06-app-sdk.md](06-app-sdk.md) | 2386 | 56 | 63 | 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting |
-| [07-ui-shell.md](07-ui-shell.md) | 1425 | 34 | 33 | 08-prior-art, 09-http-api, 13-frontend, 14-build-ci, 15-dependencies |
+| [05-storage.md](05-storage.md) | 2142 | 59 | 49 | 02-import-graph-hotspots, 04-database-store, 05-storage, 08-prior-art, 12-cross-cutting |
+| [05-tasks.md](05-tasks.md) | 1891 | 84 | 90 | 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting |
+| [05-updater.md](05-updater.md) | 781 | 18 | 12 | 07-plugin-registry-sdk, 12-cross-cutting, 14-build-ci |
+| [06-app-sdk.md](06-app-sdk.md) | 2562 | 60 | 67 | 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting |
+| [07-ui-shell.md](07-ui-shell.md) | 1505 | 33 | 31 | 08-prior-art, 09-http-api, 13-frontend, 14-build-ci, 15-dependencies |
 | [08-arr-facade.md](08-arr-facade.md) | 653 | 10 | 13 | 09-http-api, 10-auth-rbac, 16-arr-domain-research |
-| [09-abo-on-core.md](09-abo-on-core.md) | 1329 | 86 | 137 | 00-index, 05-storage |
-| [10-tv-movies-proof.md](10-tv-movies-proof.md) | 1048 | 8 | 7 | 08-prior-art, 11-integrations, 16-arr-domain-research |
+| [09-abo-on-core.md](09-abo-on-core.md) | 1330 | 86 | 137 | 00-index, 05-storage |
+| [10-tv-movies-proof.md](10-tv-movies-proof.md) | 1070 | 8 | 7 | 08-prior-art, 11-integrations, 16-arr-domain-research |
 | [11-multi-app.md](11-multi-app.md) | 115 | 2 | 2 | — |
-| [12-repo-split.md](12-repo-split.md) | 685 | 10 | 30 | 08-prior-art, 14-build-ci, 15-dependencies |
-| [13-toolchain.md](13-toolchain.md) | 359 | 48 | 43 | 00-baseline-build, 06-tasks-ops, 14-build-ci, 15-dependencies |
-| [14-risks-open-questions.md](14-risks-open-questions.md) | 233 | 12 | 12 | 00-baseline-build, 04-database-store, 08-prior-art |
-| **Total** | 30564 | 1033 | — | — |
+| [12-repo-split.md](12-repo-split.md) | 706 | 10 | 32 | 08-prior-art, 14-build-ci, 15-dependencies |
+| [13-toolchain.md](13-toolchain.md) | 365 | 48 | 43 | 00-baseline-build, 06-tasks-ops, 14-build-ci, 15-dependencies |
+| [14-risks-open-questions.md](14-risks-open-questions.md) | 250 | 16 | 14 | 00-baseline-build, 04-database-store, 08-prior-art |
+| **Total** | 31994 | 1077 | — | — |
 
 ## Key evidence by decision
 
@@ -93,6 +99,14 @@ The v1.0.0 table used a looser, unrecorded method, so its numbers are not compar
 |---|---|
 | HEAD resolves permissions by exact string over the role's stored list, so an unknown string grants nothing; but worker confinement is a negative "nothing else" test, so an extra namespaced string beside `fingerprint.worker` un-confines a custom worker role on an older build; an empty API-key scope list widens to every role permission. R3-1's "additive strings are safe" premise is therefore false, and R4-1 keeps native-only data out of legacy rows (books' extension family) | `internal/server/middleware/auth.go:430-455` (`EffectivePermissionsFor`), `:271-297` (`workerOnly`, `abortWorkerOnlyOutsideWorkerAPI`), `:405-408` (`intersectPermissions`, empty scopes); SEC4-3; 02 decision 13 |
 | An enabled Basic gate with an empty stored password admits `<username>:` with an empty password, so a moved secret must leave a never-matching sentinel, not an empty value (R4-2) | `internal/server/middleware/basicauth.go:81-87` (`subtle.ConstantTimeCompare` of two empty slices is 1); SEC4-1, DATA4-1, OPS4-1; 02 decision 13 |
+| HEAD already stores four secrets encrypted in its own setting rows (OpenAI key, Google Books key, Hardcover token, Basic password) and blanks them in the blob, so they are not moved during the extraction and a rollback never strands the Basic gate (R5-1) | `internal/config/persistence.go:1955-1958` (blanked in the blob), `:1989-2003` (`SetSetting(…, true)`); OPS5-2; 02 decision 13, 03 §3.3 `secrets` |
+| The shipped compose file always sets `BASIC_AUTH_ENABLED` (default `false`), so an env value that locked its key would switch off a gate enabled in the UI; HEAD lets the stored value win (R5-1) | `docker-compose.yml:20-22`; OPS5-1; 03 §3.3 `config`, 14 K15 |
+| `library:` is an ABO key family and `KeyFamilies()` is exported, so check (h) / R1(c) reads the claim generator's output and treats a prefix followed by a space as a Go error string, not a key | `internal/database/keyfamilies.go:126`, `:330`; round-5 modules-build review Z3, Z4; MOD5-3, MOD5-4; 03 R1(c) |
+| `internal/config` imports `internal/database`, so books' config-blob-backed legacy stores need their own package above both (R5-2) | `internal/config/persistence.go:915` (`LoadConfigFromDatabase(store database.SettingsStore)`); MOD5-2; 03 §3.5.1 |
+| The planned taskstore split is bidirectional (residue → taskstore 23 names, taskstore → residue 13), so it must import in one direction only (R5-2) | round-5 modules-build review Z2; MOD5-1; 03 §3.5.1 item 1 |
+| Every `//go:embed` today sits in a `*.go` file, so a path filter cannot catch an embed input outside the Docker context; `check_embed_context.py` reads `EmbedFiles` instead | round-5 modules-build review Z5; MOD5-7; 03 §3.2 item 4 |
+| `make build` runs `npm run build` directly, so the UI build ID must be generated by the npm build itself (R5-7) | `Makefile:154` (`build: web-build`), `:198-201`; FE5-1; 03 §3.6 "Build identity" |
+| HEAD restores by extracting the archive into the live DB directory, so an older build's in-place restore keeps the directory identity and needs a content marker to be classified as replaced | `internal/backup/backup.go:777-850`; SEC5-6; 14 K22 |
 | The Docker build context excludes `docs` and root-level `*.md`, so a `//go:embed` of `docs/compat-surfaces.md` fails every image build; a Markdown file below the root stays in the context (R4-4) | `.dockerignore:11` (`docs`), `:30` (`*.md`); round-4 modules-build review Y5; 03 §3.2 item 4 |
 | A default-tag `go list` lists build-tagged files only under `IgnoredGoFiles`, without imports, so the stage-visibility gate must union every CI tag set | round-4 modules-build review Y2; 03 §3.5.1 item 4 |
 | Dependabot gomod joins the top-level `multi-ecosystem-groups` entry; the repo uses no `groups` key, so `applies-to` cannot be set there | `.github/dependabot.yml:8-20,59-64`; MOD4-15; 03 §3.2 item 6 |
@@ -184,3 +198,13 @@ Round 4 (dispositions in `docs/plans/platform-core/reviews/spec-round-4-disposit
 Integration pass (round 4):
 
 - integration pass (round 4): anchor census regenerated with the unchanged method after every round-4 reviser and the integration pass had finished (32 files, 30564 lines, 1033 line anchors).
+
+Round 5 (dispositions in `docs/plans/platform-core/reviews/spec-round-5-dispositions.md`; resolutions R5-1…R5-7):
+
+- R5-1 (OPS5-1, OPS5-2) — key-evidence rows: HEAD's four encrypted secret rows (`persistence.go:1955-1958`, `:1989-2003`) and compose's always-set `BASIC_AUTH_*` (`docker-compose.yml:20-22`).
+- R5-2 (MOD5-1, MOD5-2) — key-evidence rows: the bidirectional taskstore split (Z2) and `internal/config` → `internal/database` (`persistence.go:915`).
+- MOD5-3, MOD5-4 — key-evidence row: `library:` is an ABO family and `KeyFamilies()` is exported (`keyfamilies.go:126`, `:330`; Z3, Z4).
+- MOD5-7 — key-evidence row: every embed sits in a `*.go` file (Z5).
+- R5-7 (FE5-1) — key-evidence row: `make build` runs `npm run build` directly (`Makefile:154`, `:198-201`).
+- SEC5-6 — key-evidence row: HEAD's in-place restore into the live DB directory (`backup.go:777-850`).
+- (all) — review-evidence paragraph names round-5 experiments Z1–Z7 and the data-migration simulations; anchor census regenerated with the unchanged method during the round-5 revision (32 files, 31994 lines, 1077 line anchors; snapshot while other files were still under revision).

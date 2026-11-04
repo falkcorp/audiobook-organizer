@@ -1,19 +1,23 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.4.1 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
 <!-- last-edited: 2026-11-04 -->
 
 # mediacore — platform-core design spec
 
 **Status:** draft under antagonistic review (see `docs/plans/platform-core/reviews/`). Round 1's 192
-findings, round 2's 162, round 3's 130 and round 4's 117 are dispositioned
-(`spec-round-{1,2,3,4}-dispositions.md`) and applied to the files. Round 3's resolutions R3-1…R3-5 are
+findings, round 2's 162, round 3's 130, round 4's 117 and round 5's 115 are dispositioned
+(`spec-round-{1,2,3,4,5}-dispositions.md`) and applied to the files. Round 3's resolutions R3-1…R3-5 are
 binding and supersede round-2 R2-1…R2-3: during the extraction every key family keeps one stored format
 (no adoption copies or mirrors), and per-family cutover to native keyspaces is deferred (02 decision 13,
 N15). Round 4's resolutions R4-1…R4-6 are binding; R4-1 refines R3-1: core reaches ABO's data through SDK
 **store interfaces** whose legacy implementation the `books` module supplies, so core holds no audiobook
 key name and no storage grant during the extraction, and a moved secret leaves a never-matching sentinel
-(R4-2).
+(R4-2). Round 5's resolutions R5-1…R5-7 are binding and close local consistency and timing defects: only
+plaintext secrets move (the four HEAD already encrypts, the Basic password among them, stay in place) and
+HEAD's precedence for legacy keys holds until cutover (R5-1); legacy store packages import downward only
+(R5-2); extension fingerprints cover security-relevant fields only and older-build revocations stay revoked
+(R5-6); the UI build ID and the binary ID are separate values (R5-7).
 **Evidence commit:** `748fd787a`. **Raw data:** [`docs/plans/platform-core/raw/`](../../plans/platform-core/raw/00-index.md).
 **Plan:** `docs/plans/platform-core/implementation-plan.md` (written after this spec merges).
 
@@ -45,12 +49,14 @@ app starts:
 | Download grab/monitor/pending-recovery pipeline and the adapters other than Deluge | [05-download](05-download.md) |
 | AI usage ledger and monthly cap; notify inbox, per-user subscriptions, personal channels, templating | [05-ai](05-ai.md), [05-notify](05-notify.md) |
 | Facade-only members of built packages: key and route machinery in `auth`/`httpapi` (`PurposeFacade`, query-key extraction, `FacadeGroup`) and the auth feed token | [05-authn](05-authn.md) §3.5, [05-http-api](05-http-api.md) §3.6 |
-| Per-family cutover of the ABO families core services use (users, sessions, API keys, roles, ops history and runs, the clock and pause keys, the config blob and secret rows, system log rows, import roots, AI batch jobs, provider throttle rows) to native core keyspaces | [02](02-decision-record.md) N15, [05-storage](05-storage.md) |
+| Per-family cutover of the ABO families core services use (03 §3.7 names them; the store interfaces are 03 §3.3's one list) to native core keyspaces | [02](02-decision-record.md) N15, [05-storage](05-storage.md) |
 | Members of built packages that only that cutover can use: storage grants (`Grant`, `GrantMode`) and the served-run preconditions; backup encryption; the seed-role merge diff | [05-storage](05-storage.md) §5S.3.13, [05-backup](05-backup.md) B3, [05-rbac](05-rbac.md) §4.8 |
+| `Online` data migrations (read adapters, the kernel-synthesised `<ID>.datamigrate.<name>` kind): no S0–S10 consumer; extraction data migrations are `BootBlocking` | [05-storage](05-storage.md) §5S.3.14, [03 §3.3](03-architecture.md) `storage/datamigrate` |
 
 The Build column of 03 §3.3 is the authoritative list of deferred packages and is re-checked at every
 stage gate. Deferral also applies to members of built packages (03 §3.4): each file lists them under a
-`Deferred-build members` heading, and `archtest.DeferredMembersAbsent` checks the list generated from every
+`Deferred-build members` heading (an optional section number may precede it), whose first column holds only
+package-qualified Go identifiers, and `archtest.DeferredMembersAbsent` checks the list generated from every
 such heading from S2.
 
 ## Decisions
@@ -59,7 +65,9 @@ The superseding decision record is [02-decision-record.md](02-decision-record.md
 `docs/architecture/2026-09-18-pluggable-media-platform-decision-record.md`): all 13 old decisions marked
 kept / changed / dropped (decision 13 extended in round 3: one stored format per family during the
 extraction; amended in round 4: store interfaces with books-supplied legacy implementations, native-only
-data in a books-owned extension family, moved secrets replaced by a never-matching sentinel), 15 new
+data in a books-owned extension family, moved secrets replaced by a never-matching sentinel; amended in
+round 5: only plaintext secrets move, HEAD's legacy-key precedence holds until cutover, extension
+fingerprints cover security-relevant fields only), 15 new
 decisions (N1–N15; N13, the round-2 Teach-build rollback floor, is superseded; N14 names the **floor
 release** that deletes books' legacy migration code and the **stepping-stone release** a store must run
 first, checked on the store; N15 defers per-family cutover and the storage grants with it), the eight
@@ -151,3 +159,10 @@ Round 4 (dispositions in `docs/plans/platform-core/reviews/spec-round-4-disposit
 Integration pass (round 4):
 
 - integration pass (round 4): "Build scope": deferred cutover members are `Grant` and `GrantMode` (`Exclusive` deleted).
+
+Round 5 (dispositions in `docs/plans/platform-core/reviews/spec-round-5-dispositions.md`; resolutions R5-1…R5-7):
+
+- R5-1, R5-2, R5-6, R5-7 — status line: round 5 dispositioned and applied; the binding resolutions summarised; decisions paragraph: decision 13's round-5 amendment (plaintext secrets only, legacy-key precedence, security-relevant fingerprints).
+- SIMP5-7 — "Build scope": `Online` data migrations are deferred-build members.
+- SIMP5-6, COR5-16 — "Build scope": `Deferred-build members` headings may carry a section number; first column package-qualified identifiers only.
+- SIMP5-8 — "Build scope": the cutover row cites 03 §3.7 and §3.3 instead of restating the family list.

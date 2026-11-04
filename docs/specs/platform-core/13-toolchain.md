@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/13-toolchain.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: a1e1b657-1c87-4a3e-8407-43269415455f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -89,8 +89,10 @@ exact patch for every build path, major.minor for `repository-config.yml`, minim
 4. **No literals outside the guarded copies.** Commands and scripts never repeat the pin: 12's
    measurement and release commands take it from `make -s -C core print-toolchain` (12 §12.3), and the
    guard gains a check that fails on a `go1.N.N` literal in `scripts/**`, `core/scripts/**` and
-   workflow `run:` steps (comments that record past behaviour, listed under "Not a pin" below, are
-   allowlisted by path and line). Without it, every command copied from 12 into a script would be an
+   workflow `run:` steps (comments that record past behaviour, listed under "Not a pin" above, are
+   allowlisted by path and line; the core copies of `scripts/check-errcheck-ratchet.sh` and
+   `scripts/check-interface-width.sh` that core's own `ci` target runs from `core/scripts/ci/`
+   (12 §12.3.11, MOD5-15) carry the same comments and are allowlisted the same way). Without it, every command copied from 12 into a script would be an
    unguarded 36th copy.
 
 **Who performs the bump, and when.** The bump to go1.27.3 is one PR, `toolchain: go1.27.3`, which is the
@@ -357,3 +359,7 @@ Round 4 (dispositions in `docs/plans/platform-core/reviews/spec-round-4-disposit
 
 - MOD4-14 — §13.3 `go fix` row: no rename-only commit; a move PR's history is kept by its `core/scripts/split/origins.txt` lines (12 §12.8.1), so every commit builds.
 - MOD4-15 — §13.5.2 "How pinned works" and §13.7 skew row: one gomod entry with `directories: ["/", "/core"]` under the existing `multi-ecosystem-group` (no `applies-to`); security PRs handled by the root-tidy step and the skew check.
+
+Round 5 (dispositions in `docs/plans/platform-core/reviews/spec-round-5-dispositions.md`; resolutions R5-1…R5-7):
+
+- MOD5-15 — §13.2.2 guard item 4: the core copies of the errcheck and interface-width ratchet scripts under `core/scripts/ci/` carry the "not a pin" comments and are allowlisted by path and line like the root originals.
