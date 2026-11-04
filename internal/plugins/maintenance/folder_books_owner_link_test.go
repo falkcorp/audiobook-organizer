@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_owner_link_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5b8e2f41-9c07-4d6a-b3e5-1a7d40c92f68
 // last-edited: 2026-11-03
 
@@ -75,10 +75,10 @@ func (f *fragFixture) linked(t *testing.T) *database.Book {
 }
 
 func TestFolderBooksOwnerLink_JoinsAnExistingGroupAsANonPrimaryVersion(t *testing.T) {
-	f, row, twin := linkRow(t, "vg-arkham")
+	f, _, twin := linkRow(t, "vg-arkham")
 	sibling := f.fbTwin(t, "sibling")
 	f.setVG(t, sibling, "vg-arkham", false)
-	row = f.fbSingleRow(t, "op-plan-b")
+	row := f.fbSingleRow(t, "op-plan-b")
 
 	st := fbRowState(t, row)
 	require.True(t, st.DupSingle)
