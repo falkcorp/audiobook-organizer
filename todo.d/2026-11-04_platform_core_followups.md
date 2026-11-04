@@ -46,3 +46,8 @@
         `SetAPIKeyStatus`, which overwrites `Status` to `active` without checking `RevokedAt`
         (`internal/database/pebble_store_auth.go:1226-1247`). Refuse any status change on a revoked key
         (and confirm the auth path also checks `RevokedAt`).
+  - [ ] **SECURITY (hotfix):** a revocation can be silently undone by a concurrent request using the
+        key: `TouchAPIKeyLastUsed` reads and rewrites the whole `apikey:` row under `apiKeyMu`
+        (`internal/database/pebble_store_auth.go:1284-1302`), but `SetAPIKeyStatus` writes the row
+        without taking that lock (`:1226-1247`), so an in-flight touch can write back the pre-revocation
+        row. Take `apiKeyMu` in every `apikey:` writer (or write `last_used` to a separate key).
