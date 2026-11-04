@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-storage.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.9.1 -->
 <!-- guid: 940ce8be-6f86-4450-b43a-77bf78827b12 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1163,8 +1163,8 @@ non-zero exit, or stderr starting with `sudo:` (no rule, password required), is 
 **refuses**, naming the missing line. The one override, `ROLLBACK_IGNORE_RESTORE=1` for both recipes,
 passes `restore_pending` only — the intent left behind is rejected at its next core boot, because the older
 build's open moves the open stamp (05-backup step a) — and never `restore_inflight`: a started swap is
-finished by booting the current build once (OPS3-13, OPS4-3, OPS7-11, OPS8-7; `DEPLOY_DISCARD_RESTORE` and
-`ROLLBACK_IGNORE_RESET` do not exist, SIMP8-1). The probe is one S0 owner action, so it is in place before
+finished by booting the current build once (OPS3-13, OPS4-3, OPS7-11, OPS8-7,
+SIMP8-1). The probe is one S0 owner action, so it is in place before
 S2b. The `--print-*` probes of `.prev` and the current binary run as the deploy user without sudo, so the
 binary directory must be readable by that user — never inside the 0700 state directory (05-updater's install
 layout, OPS4-4). Both implementations are tested against one fixture set (`TestReaderCheckMatchesRollbackScript`,
@@ -1442,7 +1442,7 @@ so that older text resolves.
 | `legacy.Stores`, set on the permanent `module.Manifest.LegacyStores` field | `module.LegacyStores` | [06](06-app-sdk.md) | field `Config` at S2b, every other field with its subsystem |
 | `legacy.Handles` | `storage.LegacyHandles` | this file (below) | S2b |
 | `legacy.Maintenance` (handed as `module.StorageHandles.Maintenance` to the module that declares legacy claims, in a serve process) | — (round 7: `storage.Admin.UpgradeFloors`/`StageFactoryReset` were named for app code that cannot reach `storage.Admin`, COR7-1; `UpgradeFloors` deleted, SIMP8-4) | this file (below), [06](06-app-sdk.md) | S2b; deleted in the S4 r2 PR, with `module.StorageHandles.Maintenance` and books' gin reset handlers (SIMP8-4) |
-| `legacy.ConfigResetArgs`, `legacy.ConfigResetPlan`, `legacy.ConfigResetRun` | `legacy.ResetRun` (round 7; renamed by the naming rule, SIMP8-7) | this file (§5S.3.15); `ConfigResetRun` reaches books' config store as `legacy.ConfigOpenEnv.Reset` ([05-config](05-config.md)) | S2b |
+| `legacy.ConfigResetArgs`, `legacy.ConfigResetPlan`, `legacy.ConfigResetRun` | — (round 7 had one carrier type, renamed and split by the naming rule, SIMP8-7) | this file (§5S.3.15); `ConfigResetRun` reaches books' config store as `legacy.ConfigOpenEnv.Reset` ([05-config](05-config.md)) | S2b |
 | `legacy.Extension[T]`, `legacy.ExtRecord[T]` | `storage.Extension[T]`, `storage.ExtRecord[T]` | this file (below); per-field classes in the owner specs | S4 (the first extension records) |
 | `legacy.ExtConfirmer` | `storage.ExtConfirmer`; it also replaces `auth.KeyConfirmer` and `rbac.Reconfirmer` (SIMP6-4) | this file (below); record IDs in the owner specs | S4 |
 | `legacy.Covering` | `storage.Covering` | this file (below) | S7 |
@@ -1796,8 +1796,8 @@ destructive runs before the restart** (R7-2; COR7-1, SEC7-4, SEC7-5, DATA7-6). I
 slot** (`restore/pending.json` with its `kind`, created atomically), **one sentinel** (`storage.ErrSwapPending`),
 **one rejection rule** for every kind (`expires_at`, `staged_by_build`, a moved open stamp), **one journal**
 (`restore/<id>/journal.json`), **one token pair** (`restore_pending`/`restore_inflight`) and **one override**
-(`ROLLBACK_IGNORE_RESTORE=1`, pending only). There is no `reset/` directory, no reset-only token, no reset-only
-override and no precedence rule between a reset and a restore (SIMP8-1).
+(`ROLLBACK_IGNORE_RESTORE=1`, pending only). There is no reset-only directory, token or override, and no precedence
+rule between a reset and a restore (SIMP8-1).
 
 | Step | Specification |
 |---|---|
@@ -1993,7 +1993,7 @@ kernel.Open(storage)                                                   06 P2 —
     app-supplied legacy store from legacy.Handles of its owning module (§5S.3.11, Ext segment per the
     table there) and hand it to its subsystem; assert the driven capabilities (legacy.ConfigOpener,
     legacy.ConfigSecrets) and legacy.Covering on each routed legacy half (legacy.ConfigResetArgs,
-    the fourth of 03 §3.3's list, is asserted at staging, §5S.3.15), then compare the full
+    also on 03 §3.3's list, is asserted at staging, §5S.3.15), then compare the full
     backends value (legacy / legacy+native / native) with the ledger → ErrLegacyStoreMissing before
     any P4d write (COR7-4, SIMP7-5, SIMP8-3); in a serve boot, build legacy.Maintenance for the module
     that declares claims (S2b to the S4 r2 PR; R7-2, SIMP8-4)
@@ -2229,9 +2229,9 @@ them wait (§5S.3.5).
 | `core.storage.self_served_min` | duration | 1h (the floor is `max(core.updater.confirm_after, this)`) | no |
 | `core.storage.data_migration.chunk_bytes` | int64 | 4 MiB | yes |
 | `core.storage.data_migration.chunk_items` | int | 2000 | yes |
-| `core.storage.swap.intent_ttl` | duration (a staged swap intent of any kind expires after it; 05-backup reuses it, SIMP8-1) | 24h | yes |
-| `core.storage.swap.keep_previous` | duration (`previous/` of any swap kind kept, then swept after a boot reaches readiness; SIMP8-1) | 168h | yes |
-| `core.storage.swap.reset_hook_timeout` | duration (the post-reset hook's bound, instead of the 60 s start limit; COR8-4) | 30m | no |
+| `core.storage.swap.intent_ttl` | duration (a staged swap intent of any kind expires after it; 05-backup reuses it, SIMP8-1; lands at S2b with the journaled swap, 09 S2b) | 24h | yes |
+| `core.storage.swap.keep_previous` | duration (`previous/` of any swap kind kept, then swept after a boot reaches readiness; SIMP8-1; lands at S2b) | 168h | yes |
+| `core.storage.swap.reset_hook_timeout` | duration (the post-reset hook's bound, instead of the 60 s start limit; COR8-4; lands at S2b) | 30m | no |
 | `core.index.reconcile.workers` | int | `runtime.NumCPU()` | yes |
 | `core.index.reconcile.interval` | duration | 5s (in-process component, not a task schedule) | yes |
 
@@ -2898,3 +2898,4 @@ Round 8:
 - SIMP8-9 — `Maintenance` nil in an offline session (§5S.3.4 handles, offline step 3).
 - SEC8-6 / SEC8-9 — `CheckReader` returns advisories `canonical_only_operator_values` and `config_narrowing_owed` from `operator-names.json` (R-C, R-E requests).
 - §5S.7: `core.storage.swap.intent_ttl`, `core.storage.swap.keep_previous`, `core.storage.swap.reset_hook_timeout` (SIMP8-1, COR8-4).
+- integration pass (round 8): `CheckReader` override paragraph, §5S.3.15 intro and the §5S.3.11 former-names row no longer name the deleted reset-only override, path or carrier type (sweep (a)); P4c step 10 cites 03 §3.3's list without a count (sweep (g)); §5S.7: the three `core.storage.swap.*` keys state that they land at S2b (R-H request); confirmed for R-H that every test 09's S2b done-check cites from this file exists here, and for R-G that step 14b already follows 06 (3b) on a restore boot (DATA8-13) and that `ConfigResetRun.Done` is `(ctx, failed)`.

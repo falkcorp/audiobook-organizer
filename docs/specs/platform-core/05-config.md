@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.9.1 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -569,8 +569,8 @@ type ConfigOpenEnv struct {
 	Logger *slog.Logger
 }
 
-// ConfigResetArgs (05-storage §5S.3.15 owns it) is implemented by books' legacy config store. When a factory reset
-// is staged, the kernel's staging function, the one implementation behind legacy.Maintenance.StageFactoryReset and
+// ConfigResetArgs (05-storage §5S.3.15 owns it) is implemented by books' legacy config store. When a reset of
+// either kind (ResetStore or ResetFactory) is staged, the kernel's staging function, the one implementation behind legacy.Maintenance.StageFactoryReset and
 // internal/storagehttp's route and its Alias, asserts it on the built config store, calls ResetArgs with the
 // reset kind and passes the result into the swap's intent, so no L1 code names legacy and the S4 r2 route records
 // the same arguments as the S2b handler (COR8-2, COR8-5). It returns two things:
@@ -583,6 +583,27 @@ type ConfigOpenEnv struct {
 //     reset boot (SEC8-5).
 // The staging binary is the reset boot's binary (an intent from another build is rejected), so rendering the rows
 // at staging gives the bytes the reset boot would render. S2b.
+type ConfigResetArgs interface {
+	ResetArgs(ctx context.Context, kind restorejournal.ResetKind) (ConfigResetPlan, error)
+}
+
+// ConfigResetPlan and ConfigResetRun mirror 05-storage §5S.3.15, which wins on spelling (06 declares the same).
+// The plan is recorded in the intent: Hook as hook_args (ResetFactory only, nil for ResetStore), Rows as fresh_rows,
+// which the reset boot's fresh-install batch writes inside the declaring module's claims (books: HEAD's
+// factory-default blob, the same for both kinds, §1.12.2). The run is the applied ResetFactory swap handed as
+// ConfigOpenEnv.Reset: Args is the plan's Hook, Delete the Recreatable auxiliary DBs outside the DB's filesystem
+// that the hook removes, and Done journals hook_done with the entries the hook could not remove; the hook calls it
+// once every action has been attempted, whatever failed, so only a crash reruns the hook (COR8-4).
+type ConfigResetPlan struct {
+	Hook []byte
+	Rows []storage.KV
+}
+type ConfigResetRun struct {
+	ID     string
+	Args   []byte
+	Delete []string
+	Done   func(ctx context.Context, failed []string) error
+}
 
 // ConfigExternalWriter: Changed fires when a writer other than config.Store changed stored values (the app's own
 // legacy config path, 05-config §1.12.2); config then re-runs OverrideStore.Load (05-config §1.4 step 8). A stage
@@ -906,7 +927,7 @@ a non-admin chose, while HEAD's stored copy of the operator's own `OPENAI_BASE_U
 host keep working. Because `OperatorSecretOrigin` is S7-only state that an older build cannot see, **until the
 integrations cutover** a `Put` on a legacy-backed instance that moves a destination field to another origin while any
 secret field of that instance is operator-sourced needs the ProtectAdmin check, and without it is refused whole with
-403 `ErrOperatorSecretBound` naming the bound field's canonical variable, so no build, before or after a rollback,
+403 `ErrOperatorSecretBound` naming the bound secret field and its canonical variable, so no build, before or after a rollback,
 sends an env secret to a URL a non-admin chose. The wide trust therefore never needs less than the narrow list does.
 
 **Integration-bound blob fields before S7 (SEC4-7).** Until 09 S7 hands ABO's legacy singletons to
@@ -1666,8 +1687,9 @@ SEC7-4, SEC7-5, DATA7-6):
   module enablement returns to its defaults, as every other stored setting does;
 - the keyring (data, derive and `k0-legacy` keys) and ABO's legacy key file are **kept** unchanged, and the
   keyring export stays valid. Keeping them is the lead's decision (round 6), 14 Q-J's recommendation (a); the
-  owner may override it (DATA6-6). Moving `previous/` back restores the store, its secrets and its settings; files
-  deleted by the post-reset hook (below) are not restored. The reset boot, and only it, rewrites the keyring
+  owner may override it (DATA6-6). Moving `previous/` back, with the other steps of 05-storage §5S.3.15's manual
+  undo (the keyring header's `install_id` set back with `<app> secrets set-install-id`, §2.4), restores the store,
+  its secrets and its settings; files deleted by the post-reset hook (below) are not restored. The reset boot, and only it, rewrites the keyring
   header's `install_id` to the fresh install's: the kernel sets `secrets.Options.ResetBoot` on the boot whose
   `KindReset` journal reads `set_aside`, `secrets.Open` rewrites the header at P4d step 1, and only then does the
   kernel mark the journal `applied` (DATA7-17, 05-storage). An ordinary `Open` never rewrites it, because a
@@ -1815,8 +1837,8 @@ into `abo_keys.golden`, not maintained by hand.
   step 2, §1.3.7): it is served while every destination field (URL, host or port) of its instance has the origin of
   that field's operator value (HEAD's stored copy of `OPENAI_BASE_URL` included, SEC8-2), the adapter default, or the
   instance's `OperatorSecretOrigin`, and withheld otherwise (`ErrOperatorSecretWithheld`, health
-  `operator_secret_withheld`); until the integrations cutover a non-admin change of such a destination on a
-  legacy-backed instance gets 403 `ErrOperatorSecretBound` (SEC8-3). One value is
+  `operator_secret_withheld`); until the integrations cutover a `Put` without the ProtectAdmin check that moves such a
+  destination of a legacy-backed instance to another origin gets 403 `ErrOperatorSecretBound` (SEC8-3). One value is
   exempt (R6-6, §1.3.5): `ENABLE_AUTH` and the file key `enable_auth` stay `BelowStored`, but a value of theirs that
   enables auth is applied as an operator-layer value through `core.auth.mode`'s `SafeLegacyValue`
   (`TestAuthOn_LegacyAliasEnablesOverStoredOff`, §2.9).
@@ -1930,7 +1952,8 @@ re-sentinels and in-place writes of kept secrets.
 alias table and the `secrets.Ref` fields; `TestSecretClassListMatchesLegacyStore` fails when that list and the
 names for which the books store's `SecretsStore.Has` or `Kept` is true disagree. 09 §9.3, the one staging procedure,
 blanks every secret field of a restored copy before its first boot with ABO's offline subcommand `staging-scrub`
-(R7-6). Its field list exists before the generated one does: **S0 commits `scripts/staging/secret_fields.txt`**,
+(R7-6), which also clears every legacy integration URL and runs with the binary of the release that wrote the
+archive (R8-3). Its field list exists before the generated one does: **S0 commits `scripts/staging/secret_fields.txt`**,
 written by hand from this table (every row, the "—" rows and `plugins[].settings` included), because staging is
 needed from S0 while the books `SecretsStore` lands only at S3. **From S3**, `TestSecretClassListMatchesLegacyStore`
 also asserts that `secret_fields.txt` equals the generated list, so the scrub cannot drift from what the store
@@ -2279,6 +2302,15 @@ so a lost key file loses the secrets. Rules:
   available (05-backup §5B.3.4 step 8, DATA3-12). It records the exported key IDs and time in
   `<state_dir>/secrets.keyring.exported` (no key material). Health warning `secrets_keyring_not_exported` stays raised while any key in the keyring is missing
   from that record.
+- **Setting the header's `install_id` back (DATA8-12 (b), R8-1).** `<app> secrets set-install-id --install-id <id>`
+  (CLI, offline: refuses while the server holds the store lock, as `rotate-derive` does) rewrites only the keyring
+  header's `install_id` (temp file, fsync, rename, mode 0600; the keys are untouched, so the export record stays
+  valid) and prints the old and the new value. It is the step of 05-storage §5S.3.15's manual factory-reset undo that
+  restores the old install's lineage once the `previous/` directories are moved back: `<id>` is the one the swap
+  journal's `set_aside` record names. It refuses an `<id>` that differs from the `c/storage/install` marker of the
+  store at the resolved `core.storage.path` (read offline), so the header can only be set to the lineage of the store
+  beside it, and refuses with no keyring file. ABO ships it from S2b with the reset (09 §9.4 row 17); before S3 the
+  state directory has no keyring, so the command has nothing to set and the undo has no such step.
 - **Host-loss restore** ([05-backup](05-backup.md) §5B.3.3 procedure): the operator copies the exported file
   into the new state directory as `<state_dir>/secrets.keyring` (mode 0600) before the first start; there is
   no import command, and the next `Open` loads it as the keyring-present case above, then
@@ -2374,6 +2406,7 @@ All on scope `mediacore.secrets`.
 | `TestRotateDerive_JournalStaysVerifiable` | after `rotate-derive` and the rewrap, `d1` stays `verify` while a retained revocation-journal line (or the header) names it; `Open` retires nothing; `RetireUnused` in P5 sees the overridden `core.backup.dir` (DATA3-13, SEC3-10, COR3-2) |
 | `TestOpen_LegacyStoreTypeMismatchFails` | `Options.LegacyStore` set to a value lacking one `legacyStore` method → `Open` returns `storage.ErrLegacyStoreType` and writes nothing; nil → no legacy copies; a `legacytest` fake → accepted (R7-7) |
 | `TestOpen_ResetBootRewritesInstallID` | with `ResetBoot` the header's `install_id` becomes the fresh store's; without it an existing header field is never changed (DATA7-17) |
+| `TestSetInstallID_RestoresLineageOffline` | after a reset and a manual undo, `secrets set-install-id` with the `set_aside` record's ID rewrites only the header's `install_id` (keys and export record unchanged); it refuses while the server holds the lock, an ID that differs from the store's marker, and a missing keyring (DATA8-12) |
 | `TestStage_TakesBatchPointer` | `Stage` writes and its `Supersede` commit with the caller's batch and are refused outside its bound keyspaces (COR2-12) |
 
 **ABO-side tests of the books legacy config store** (ABO repo; they run `configtest.OverrideStoreSuite` with HEAD fixtures
@@ -2671,3 +2704,4 @@ Round 8:
 - COR8-9 / DATA8-13 — every body occurrence: the gap-fill file is `<db parent>/config.yaml`.
 - Out-of-scope defect 6 — HEAD's `ResetSystem` leaves the gap-fill file, kept by `ResetStore`.
 - Header — 03 reference v1.10.1.
+- integration pass (round 8): §1.3.3 `ConfigResetArgs` is called for both reset kinds and is declared, with `legacy.ConfigResetPlan{Hook, Rows}` and `legacy.ConfigResetRun` (`Done(ctx, failed)`) mirrored from 05-storage §5S.3.15 (R-B request); §2.4 defines `<app> secrets set-install-id` (offline, header `install_id` only, checked against the store's marker), used by 05-storage's manual reset undo and cited from §1.12.2, with `TestSetInstallID_RestoresLineageOffline` (R-B request); §1.3.7 and §1.12.4: the `ErrOperatorSecretBound` wording matches 05-metadata M1.4 step 2 (sweep (e)); §2.2 staging paragraph: `staging-scrub` clears the legacy integration URLs and runs with the archive's binary (sweep (f)).

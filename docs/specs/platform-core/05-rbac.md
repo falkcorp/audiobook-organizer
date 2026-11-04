@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.9.1 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1509,8 +1509,8 @@ option governed by the compat ledger (§6.3, SIMP-7).
 | `TestSeedMerge_RestrictedAdditionHeldPending` | a release adding a `Sensitive` scope to an existing role leaves it in `PendingSeed` until `accept-seed`, which succeeds on a seed role during the extraction (SEC-25, SIMP4-6) |
 | `TestRoleWrite_EscalationRefused` / `TestCanAssign_CannotGrantUnheld` / `TestCanAssign_RemovalCheckedLikeAssignment` | |
 | `TestUsersManage_CannotTempLoginAdmin` / `TestUsersManage_CannotResetDominatingUser` | a custom role with `core:users.manage` only → 403 `dominance_required` (SEC-4) |
-| `TestStart_ViewOnlyDefRefusedForViewer` | (in 05-tasks) a def whose `Start` is `ClassView` fails registration without `StartableByViewers` (SEC-9) |
-| `TestApprove_KeyMustNameScope` | (in 05-tasks) API key approves only with the `Approve` scope named; `LegacyFullScope` and delegated sessions refused (SEC-24) |
+| `TestStart_ViewOnlyDefRefusedAtRegister` | (in 05-tasks) a def whose `Start` is `ClassView` fails registration without `StartableByViewers` (SEC-9) |
+| `TestApprove_RequiresVerifiedMethodAndPermission` | (in 05-tasks) among its cells: an API key approves only with the `Approve` scope named; `LegacyFullScope` and delegated sessions refused (SEC-24) |
 | `TestLastAdmin_ConcurrentDemotions` | `testing/synctest`, two concurrent demotions → one 409 |
 | `TestLegacyAtomMapping_Golden` | the 13 rows of §6.1 |
 | `TestLegacyRows_ReadInPlace` | (ABO, through books' legacy stores) fixture DB from ABO's role, user and key families → expected roles, checkers and keys, with no row written by the read (R4-1) |
@@ -1776,3 +1776,4 @@ Round 8 (2026-11-04), findings applied to this file:
 - SIMP8-4 — §6.2: books' two gin handlers are deleted with the aliases in the S4 r2 PR.
 - SEC8-7 — §4.6, "Out-of-scope defects" item 1: `mergeActor` (`user_merge.go:67`) is the third in-handler role-name check; from S4 the merge handler checks `Can(core:admin)` with key scoping; the reachable bypass is the two merge reads, since the merge POSTs are credential routes at HEAD; `TestUserMerge_ScopedAdminKeyRefused` (§12).
 - SIMP8-3 — §3.4: "the capabilities it drives" replaced by "the capabilities 03 §3.3 lists".
+- integration pass (round 8): §12 cites 05-tasks' tests by the names 05-tasks defines (`TestStart_ViewOnlyDefRefusedAtRegister`, `TestApprove_RequiresVerifiedMethodAndPermission`) (sweep (h)).

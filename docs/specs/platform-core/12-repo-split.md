@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/12-repo-split.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: eb47baa1-640b-4c96-96cc-f6b2bdeaa57e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -553,9 +553,8 @@ internal/logging/structured.go==>core/log/structured.go
 ```
 
 **Move PRs record their origins.** A move PR routinely carries rewrites besides import paths
-(`go fix` modernizers required by core's `fix-check`, 13 §13.3; and, for an ABO import, one of 04 §2.2's
-enumerated mechanical rewrites, the logger cut and the store-interface cut, which leave a file a move by 03
-R1(c)'s rule, R8-6), so a small file can fall under 90 % similarity and lose its detected rename. Every such
+(`go fix` modernizers required by core's `fix-check`, 13 §13.3; and, for an ABO import, one of the mechanical
+rewrites 04 §2.2 enumerates, its one list of six cuts, which leave a file a move by 03 R1(c)'s rule, R8-6), so a small file can fall under 90 % similarity and lose its detected rename. Every such
 file, all 21 rows of 04 §8.5 among them, gets its `origins.txt` line (MOD8-1); a file whose ABO import needs
 any other rewrite is a re-implementation and gets none. A rename-only
 first commit would not help: the repo merges rebase/fast-forward only, so that commit would land on
@@ -759,3 +758,4 @@ Round 8 (dispositions in `docs/plans/platform-core/reviews/spec-round-8-disposit
 - R8-6 (MOD8-1) — §12.8.1 "Move PRs record their origins": a move may carry 04 §2.2's enumerated mechanical rewrites (logger cut, store-interface cut) and keeps its `origins.txt` line, so all 21 §8.5 rows keep theirs; any other rewrite makes a re-implementation.
 - R8-6 (MOD8-2) — §12.8.1: `childop` and `opsmetrics` stay as opsbridge until their last ABO user is native; `opsmetrics`' successor is in `internal/executor`.
 - FE8-4 — SC4(a): `core/.gitignore` (S0) ignores `/.ci/readiness/`, `/hello`, `**/playwright-report/`, `**/blob-report/`; `core/web/.gitignore` adds the two Playwright entries; the export becomes a fresh repository before the run and the check asserts `git status --porcelain` is empty; §12.3.11 `readiness` names the ignoring file.
+- integration pass (round 8): §12.8.1 cites 04 §2.2 as the one list of the six mechanical rewrites instead of naming two as if they were the rule (R-H request, consistency with 03 R1(c)); SC4's git work tree and `core/.gitignore` (FE8-4) and the 21 §8.5 rows' `origins.txt` lines were already applied.

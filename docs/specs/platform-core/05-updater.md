@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.9.1 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -785,11 +785,10 @@ signed prereleases** of S8: staging runs release candidate *n* with `core.update
 by the real release pipeline (the prerelease workflow publishes the signed manifest, 5U.5). Egress stays
 denied except for the release host names, which `scripts/staging/provision.sh --updater-check` adds as one
 nftables set resolved from them for the duration of the check; the scrubbed copy has nothing else to call.
-The check passes when the updater applies candidate *n+1* and `Boot` confirms it. There is no fake
-release server on staging and no staging build with a test key: a production binary's release source is
-the `github.New(owner, repo, …)` constructor argument in the app's `main` (5U.3), not a setting, so a local
-server cannot be reached without impersonating the host, and a test-key build is not the artefact that
-ships. The S8 updater also refuses a target that is not newer (apply step 1), so re-serving the newest
+The check passes when the updater applies candidate *n+1* and `Boot` confirms it. It uses shipped
+artefacts only: a production binary's release source is the `github.New(owner, repo, …)` constructor
+argument in the app's `main` (5U.3), not a setting, so no other source can be substituted without
+impersonating the host, and a binary built with any other trusted key is not the artefact that ships. The S8 updater also refuses a target that is not newer (apply step 1), so re-serving the newest
 release to it measures nothing. 5U.11's unit tests keep their fake key and `httptest` source
 (`TestGithubSource_ParameterisedSlugAndBaseURL`).
 
@@ -917,3 +916,4 @@ Round 8:
 - OPS8-8 — 5U.12: the S0–S7 hotfix updater runs the decision in process as the service user, stats `restore/` directly (no `sudo` under `NoNewPrivileges=yes`) and calls `CheckReader` through the kernel binding from S2b.
 - OPS8-9 — the marker code is listed in `ci/state_writers.txt`.
 - OPS8-12 — `Restarter` is bound to `Lifecycle.RequestRestart` (06 §6.5.2); `core.updater.restart_exit_code` replaced by 06's `core.lifecycle.restart_exit_code` (never shipped, no alias); marker comment and step 9.
+- integration pass (round 8): 5U.12's S8 done-check paragraph states that it uses shipped artefacts only (real signed RC *n* → RC *n+1*), with no text left describing a substitute server or key (SIMP8-10, sweep (c)).

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metrics.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: 5cdf765d-aec1-4ed7-981a-e2e698afde61 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -274,9 +274,11 @@ aliases (they exist only in `Provider.Handler()`) and loses every books family a
 private registry. So:
 
 - **From S2 r3** the test builds the same `metrics.Provider` the kernel builds at that stage, through the public
-  test constructor `coretest.MetricsProvider` (06 `coretest`; it applies the kernel's `metrics.Options` defaults,
-  the stage's `PromRegisterer` and `AddAliases` exactly as §7 steps 1 and 3 do), passing ABO's
-  metric-alias rows from the same table ABO's `main` passes as `app.Options.MetricAliases`. It scrapes that
+  test constructor `coretest.MetricsProvider(t, opts)` (06 `coretest`): it **boots one zero-module `coretest`
+  harness** (G7's) with `opts` (`MetricPrefix`, `MetricAliases` and, until S8, `PromRegisterer`), so the kernel
+  applies its `metrics.Options` defaults, the stage's `PromRegisterer` and `AddAliases` exactly as §7 steps 1 and 3
+  do, and returns that boot's Provider. ABO passes its metric-alias rows from the same table its `main` passes as
+  `app.Options.MetricAliases`. It scrapes that
   Provider's `Handler()`, never `promhttp.Handler()`. Before S2 r3 (HEAD–S2 r2) the default registry is the
   served one (table above) and the test keeps HEAD's scrape.
 - **The S2 r3 PR adds `mediacore_` to `inScopePrefixes`** (today `audiobook_organizer_`, `ai_dispatch_`, `ai_`,
@@ -285,15 +287,14 @@ private registry. So:
 - **Seeding rows for core-owned emitters go through public SDK paths**, because ABO cannot import
   `mediacore/internal/...`: the Pebble collector through a store opened with `coretest`/`storage`, the tasks
   instruments through one `hello.count` run, the AI instruments through a fake endpoint.
-- **The kernel's own families are not in ABO's golden (OPS8-10).** `mediacore_kernel_boot_phase_seconds`
-  ([06](06-app-sdk.md) §6.9), `mediacore_compat_*` (S2b), `mediacore_storage_level` and
-  `mediacore_storage_checkpoint_bytes` are recorded by kernel code during a boot, never by the Provider, and
-  `coretest.MetricsProvider` builds the Provider without booting, so ABO's test records no sample for them and they
-  export nothing there. A second, booted Provider in the same test cannot be added instead: on the default registry
-  it would collide with the first on `target_info` (OPS5-14). So core asserts them in its own seeded test,
-  `TestKernelFamiliesGathered` (a `kernel` test, §12): one zero-module `coretest` boot (G7's harness) with
-  `PromRegisterer` set to a fresh registry, scraping that App's `Provider.Handler()` and comparing the kernel
-  families of each stage with core's golden.
+- **Seeding row for the kernel's own families (OPS8-10):** the zero-module `coretest` boot inside
+  `coretest.MetricsProvider`, with the stage's `app.Options`, whose Provider is the one scraped.
+  `mediacore_kernel_boot_phase_seconds` ([06](06-app-sdk.md) §6.9), `mediacore_compat_*` (S2b),
+  `mediacore_storage_level` and `mediacore_storage_checkpoint_bytes` are recorded by kernel code during a boot,
+  never by the Provider, and a family with no sample exports nothing, so the constructor boots rather than only
+  building the Provider. There is one Provider per test, so nothing collides on `target_info` (OPS5-14). Core
+  also asserts the same families in its own seeded test, `TestKernelFamiliesGathered` (a `kernel` test, §12), so
+  core CI checks them without ABO.
 - Because the test builds the stage's Provider, **at S8 its registry becomes the private one in the same PR** that
   makes the App's registry private.
 - `TestContractScrapesServedHandler` asserts that the handler under test is the one the `/metrics` mount serves at
@@ -304,8 +305,8 @@ The stage's done-check is the golden diff that PR shows:
 | Stage | Golden diff of the seeded contract test |
 |---|---|
 | S1, S2 r1, S2 r2 | empty |
-| S2 r3 | empty in ABO's golden; the kernel's own `mediacore_*` families, now gathered, are asserted by core's `TestKernelFamiliesGathered` (OPS8-10) |
-| S2b (Pebble), S5 (tasks/ops, T0+T1), the T7 PR (schedule lag and missed), S7 (AI) | only the families renamed in that stage: each new `mediacore_*` family added, and its alias family present under the old name; the alias's ledger row and the `deploy/` dashboard and rule switch ship in the same PR (§13 item 4). At S5 the five `operations_*` families keep their golden lines, now produced by their aliases: the T0+T1 PR deletes their client_golang vectors and replaces their seeding rows with alias rows (§13 item 2, OPS8-1) |
+| S2 r3 | only the kernel's own `mediacore_*` families, now gathered and seeded by `coretest.MetricsProvider`'s zero-module boot (OPS8-10); core's `TestKernelFamiliesGathered` asserts the same families in core |
+| S2b (Pebble), S5 (tasks/ops, T0+T1), the T7 PR (schedule lag and missed), S7 (AI) | only the families renamed in that stage: each new `mediacore_*` family added, and its alias family present under the old name; plus any kernel-emitted family that lands in that stage (at S2b `mediacore_compat_*` and the storage families), seeded by `coretest.MetricsProvider`'s boot (OPS8-10); the alias's ledger row and the `deploy/` dashboard and rule switch ship in the same PR (§13 item 4). At S5 the five `operations_*` families keep their golden lines, now produced by their aliases: the T0+T1 PR deletes their client_golang vectors and replaces their seeding rows with alias rows (§13 item 2, OPS8-1) |
 | S8 | only `mediacore_build_info` (09 S8; labelled with the binary's version, never the UI bundle's build ID, R5-7) and the listed additions of that PR. The two retired process gauges keep their golden lines, now produced by their aliases over the Go collector's families: the same PR deletes the gauges and replaces their two seeding rows with alias rows (§13 item 3, OPS7-5). Every aliased family is still present |
 
 The Go collector's `go_goroutines` and `go_memstats_alloc_bytes` are not S8 additions: HEAD's `/metrics` serves
@@ -432,8 +433,8 @@ a series into core. Its seeded golden is the normative series check of every sta
 with it: `TestContractScrapesServedHandler` (§6), `TestS5_FullAliasSetBoots` (ABO's whole S5 metric-alias table plus
 every legacy collector `metrics.Register()` still registers at S5, on the S5 Provider → `AddAliases` returns nil;
 OPS8-1) and `TestS8_FullAliasSetBoots` (the same at S8, on the S8 Provider; OPS7-5). Each makes sure no alias
-collides with a live family, so the stage's build boots. Core's own `TestKernelFamiliesGathered` covers the
-kernel-emitted families (§6, OPS8-10).
+collides with a live family, so the stage's build boots. Core's own `TestKernelFamiliesGathered` asserts the
+kernel-emitted families in core as well (§6, OPS8-10).
 
 ## 13. Migration from ABO
 
@@ -603,3 +604,4 @@ Round 8:
 - R8-6 / MOD8-2 — §13 item 1 and the rename table: `opsmetrics`' one core successor is `mediacore/internal/executor`, and the ABO package stays as opsbridge-side code until its last user is gone; books' gauges use books' own scope; gather-time aliases are the one name mechanism.
 - R-C request (05-tasks v1.9.0 5T.11) — §13 table: the T0+T1 PR also deletes the v2-only `opsmetrics` instruments; `_ops_schedule_lag_seconds` and `_ops_schedule_missed_total` move to T7; `_ops_abandoned_calls` stays a books series with no alias.
 - Header — 03 reference v1.10.1.
+- integration pass (round 8): §6 aligned with 06's `coretest.MetricsProvider(t, opts)`, which boots one zero-module harness: new seeding row for the kernel's own families (that boot's Provider is the one scraped), so they are in ABO's golden from the stage that lands each (S2 r3 row; the S2b row adds those landing at S2b); `TestKernelFamiliesGathered` stays as core's own check of the same families (OPS8-10, R-G request).

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/14-risks-open-questions.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.9.1 -->
 <!-- guid: e270beb6-8eea-48b1-8397-4ef4ec709956 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -59,7 +59,7 @@ grants of the extraction are gone (grants return with the deferred cutover).
 | Layering guard fails on the first move, or passes with a loader that sees nothing | Guard redesign (03 §3.5.1) is the first code task; ratio floor; in-module control `. → cmd`; classifier control (MOD-14); core guard's control staged S0 → S1 → S2 (MOD3-8) |
 | Core imports hide wrong-way edges in ABO (every core package legal from every ABO layer) | Core layers mapped onto ABO's scale (L0–L5 → −1, L6 → transport 5, L7–L9 → entry 6), mapped layers feed the computed layer, `loadGraph` keeps mediacore imports, `allowed` edges re-evaluated when their target moves (03 §3.5.1, MOD2-7, MOD3-5) |
 | The books composition root doubles as a helper package (import cycle with every plugin that uses a helper; wrong-way layer edges) | Composition root `internal/books` imported only by `.` and `cmd`; shared helpers in a package below it; no ABO package below layer 6 imports `module`/`app`; guard assertion (03 §3.5.1 item 1; MOD4-2, MOD4-18, R4-5) |
-| Core copies an app's key names or row formats (a copy passes the import checks), or carries an ABO format into core inside a "moved" file | Store interfaces with app-supplied legacy implementations (03 §3.3); `TestCoreHoldsNoAppKeyNames` with its one match rule (03 R1(c); R4-1, SIMP4-2, MOD7-7); a file is a move only when each ABO import changes by import path alone or by one of 04 §2.2's enumerated mechanical rewrites (logger cut, store-interface cut), and it then keeps its `origins.txt` line; anything else is a re-implementation with a 04 §8.6 row, its ABO formats stay in ABO, and the generator fails on one without the row; a struct tag is matched per key; build-tag twins travel with their partner (R7-8, R8-6; MOD7-1, MOD7-2, MOD8-1, MOD8-3, MOD8-4) |
+| Core copies an app's key names or row formats (a copy passes the import checks), or carries an ABO format into core inside a "moved" file | Store interfaces with app-supplied legacy implementations (03 §3.3); `TestCoreHoldsNoAppKeyNames` with its one match rule (03 R1(c); R4-1, SIMP4-2, MOD7-7); a file is a move only when each ABO import changes by import path alone or by one of the mechanical rewrites 04 §2.2 enumerates (its one list of six cuts), and it then keeps its `origins.txt` line; anything else is a re-implementation with a 04 §8.6 row, its ABO formats stay in ABO, and the generator fails on one without the row; a struct tag is matched per key; build-tag twins travel with their partner (R7-8, R8-6; MOD7-1, MOD7-2, MOD8-1, MOD8-3, MOD8-4) |
 | A core dependency change breaks the root build (`missing go.sum entry`) | Tidy-coupling rule, per-module `tidy-check`, `core-ci.yml` builds the root on `core/go.mod` changes (K14, MOD2-6) |
 | Rollback widens access | One stored format per family, so no mirrored legacy row exists to widen (02 decision 13); legacy rows carry no namespaced string — native-only scopes live in books' extension family, because HEAD's worker confinement is a "nothing else" test (`internal/server/middleware/auth.go:271-297`, SEC4-3) — and an extension record holding a Widening field whose legacy row's security-relevant fields changed on the older build is suspended until an admin re-confirms it, while a revocation the older build made stays revoked (R4-1, R5-6); new API keys never carry empty scopes (`auth.go:405-408`), and a key with no legacy-equivalent scope carries one that grants nothing on an older build (R5-6); the six early fixes of 05-authn §11.1 ship independently and early (K13, K21); auth or a Basic gate enabled through an operator name stays on after a rollback, because the legacy config store writes the narrowing legacy value (`enable_auth: true` from S4 r1, the gate's `true` whenever it is enabled from S3, fail-closed on an older build without a readable password, and `core.http.rate_limit.enabled` likewise; R8-4), the one exception to "stored values of locked keys are kept" (R7-1, SEC7-1; `TestRollback_OperatorEnabledAuthStaysOn`) |
 | Moving a secret blanks a value an older build's gate compares with (an empty Basic password matches an empty presented one, `internal/server/middleware/basicauth.go:81-87`), or strands a gate the older build cannot reopen | Only plaintext secrets move; the four HEAD already stores encrypted, the Basic password among them, are not moved, so an older build keeps reading them (R5-1, OPS5-2). Every legacy copy of a moved secret — the blob field and the `config.yaml` copy — gets a never-matching sentinel, never an empty value; the older build fails closed until the secret is re-entered (R4-2; SEC4-1, DATA4-1, OPS4-1; K13). The core Basic gate refuses every non-exempt request when it is enabled with an unset, empty or unreadable password (R5-1, SEC5-4) |
@@ -119,15 +119,15 @@ every alias kind; removal only by a contract PR, never by a clock; 02 §2.5).
 ## 14.5 Remaining open items by file
 
 These are design details each section resolves in review; none blocks the plan. Each file's "Open
-items" section is authoritative. Census re-taken **during the round-8 revision** (2026-11-04), from the working
-tree with the round-1 method unchanged (on the round-7 integration tree the same script reproduces that census
-exactly, 109 items in 26 files); it is a snapshot while the other round-8 revisers were still editing, and the
-round-8 integration pass re-takes it: an item is a
+items" section is authoritative. Census re-taken **by the round-8 integration pass** (2026-11-04), after every
+round-8 reviser and the integration edits, from the working tree with the round-1 method unchanged (the same
+script reproduces the round-8 revision snapshot it replaces, 109 open and 23 closed in 26 files); an item is a
 numbered list entry or an ID'd table row (`O1`, `1`, …) under a heading containing "Open items" (fenced code
 excluded); entries the file itself marks closed or resolved ("(Closed …)", "(closed by …)", "**Resolved …**")
 are counted separately. Files without an "Open items" section (01, 02, 03, 11, 13, 15, README) and this file
 are not listed. **109** items remain open across 26 files, **23** are closed in place (round-7 integration pass:
-109 open, 23 closed). Change since round 7 in the counted files: **0 opened, 0 closed**. Round 8 opened no owner
+109 open, 23 closed). Change since round 7 in the counted files: **0 opened, 0 closed**; the integration pass
+opened and closed none. Round 8 opened no owner
 question. Its 80 findings (0 BLOCKER, 31 MAJOR, 49 MINOR) are all accepted, each decided by a round-8 resolution
 (R8-1…R8-6, recorded above: R8-1 in K22, the reset hazard row, Q-K and Q-J; R8-2 in K21 and the offline-open
 hazard row; R8-3 in the staging hazard row; R8-4 in K13, K15 and two hazard rows; R8-5 in the destination-field
@@ -143,13 +143,17 @@ restore) stays open (K22 residual (b)). **Residual risks stated but not closed:*
   the release note tells the operator to set `BASIC_AUTH_PASSWORD` first; R8-4).
 - An operator value given only under a canonical `ABO_CORE_*` name is still dropped by a rollback: the advisory token
   `canonical_only_operator_values` and the release note warn, nothing restores it (R8-4).
-- Until the integrations cutover a non-admin cannot change a destination of a legacy-backed instance whose secret
-  is operator-sourced (403 `ErrOperatorSecretBound`), and an SMTP host or port edit drops the stored password
-  (R8-5, §14.2).
+- Until the integrations cutover a `Put` without the ProtectAdmin check cannot move a destination of a legacy-backed
+  instance whose secret is operator-sourced to another origin (403 `ErrOperatorSecretBound`), and an SMTP host or
+  port edit drops the stored password (R8-5, §14.2).
 - HEAD's break-glass `diagnostics reserved-prefs` stays a direct open, which the next boot reads as a foreign open
   (R8-2, DATA8-4).
 - A staging copy is only as fresh as its archive, and `staging-restore` and `staging-scrub` must run with the
   binary of the release that wrote it (R8-3).
+- The S8 updater done-check needs two real signed release candidates of S8 (*n* applies *n+1*) and egress to the
+  release hosts for the length of the check, with no substitute artefact (SIMP8-10, 05-updater 5U.12).
+- A manual undo of a factory reset needs the service stopped and every step of 05-storage §5S.3.15's "Undo" row,
+  `<app> secrets set-install-id` among them; the hook's deletions stay lost (K22 (e), DATA8-12).
 
 | File | Open | Closed in place |
 |---|---|---|
@@ -340,3 +344,4 @@ Round 8 (dispositions in `docs/plans/platform-core/reviews/spec-round-8-disposit
 - DATA8-10 — K13: a zero `Since` from an absent record never deletes legacy sign-ins.
 - DATA8-13 — K22: on a replaced store `PostRestore` step 2 deletes legacy sign-ins; the owed-`auth` consumer only under R7-5's condition.
 - §14.5 re-counted with the round-1 method during the round-8 revision (109 open items in 26 files, 23 closed in place; snapshot while other files were still under revision); eight open owner questions, Q-K narrowed; round-8 residual risks listed.
+- integration pass (round 8): §14.5 census re-taken after every round-8 edit (109 open, 23 closed in 26 files; unchanged) and the residual-risk list re-checked against the files, adding the S8 updater check's dependence on two real signed candidates (SIMP8-10) and the manual reset undo's steps (DATA8-12); the "Core copies" row cites 04 §2.2's one list of six rewrites (R-H request); the `ErrOperatorSecretBound` residual uses 05-metadata's wording (sweep (e)).

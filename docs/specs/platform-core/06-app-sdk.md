@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/06-app-sdk.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.9.1 -->
 <!-- guid: d581911c-8f90-48bb-a307-5cd6288a9695 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1589,8 +1589,8 @@ type Maintenance interface {
 
 // ConfigResetArgs, ConfigResetPlan and ConfigResetRun (05-storage §5S.3.11
 // and §5S.3.15 own them and win on member spelling; 05-config §1.3.3 owns the books side;
-// R7-2, S2b). ConfigResetRun is the former ResetRun, renamed by 03 §3.3's
-// naming rule because only the config capability carries it (SIMP8-7).
+// R7-2, S2b). ConfigResetRun follows 03 §3.3's naming rule because only the
+// config capability carries it (SIMP8-7).
 //
 // kernel.stageReset calls ResetArgs with the kind on an app's legacy config
 // store that implements it. It returns, for both kinds, the settings rows
@@ -1650,13 +1650,11 @@ deferred-build with the config basis mechanism (05-config "Deferred-build member
 
 - **Detection (SIMP7-5, COR7-3).** An owner package (L1–L4) cannot import `legacy`, which imports it.
   Each capability is detected once, by the party that consumes it, and nothing records what was found.
-  The kernel asserts only the capabilities 03 §3.3 lists, which are the ones it uses itself (SIMP8-3).
-  At P4c: the two it drives, whose signatures name `legacy` types (`legacy.ConfigOpener`: the kernel
-  calls `Open` at P4d step 1(i); `legacy.ConfigSecrets`: the kernel passes `Secrets()` to `secrets.Open`
-  at step 1(ii); 05-config §1.3.3), and `legacy.Covering` on a routed store's legacy half, because its
-  presence is part of the backend value P4c compares (COR7-4). At staging: `legacy.ConfigResetArgs`,
-  which `kernel.stageReset` calls with the reset kind and whose plan it passes to `restoreswap`, so
-  storage never names `legacy` (COR8-2). Every other capability is called by its owner through an
+  The kernel asserts only the capabilities 03 §3.3 lists, which are the ones it uses itself; 03 §3.3 is
+  the one statement of that list and of why each is on it (SIMP8-3). In this file's phases: P4c asserts
+  the driven ones and `legacy.Covering` (P4d step 1(i) calls `Open`, step 1(ii) passes `Secrets()` to
+  `secrets.Open`, 05-config §1.3.3), and `kernel.stageReset` asserts the staging one at staging, for
+  both reset kinds (COR8-2). Every other capability is called by its owner through an
   **unexported** mirror interface with the identical method set, asserted on the store value the kernel
   hands it. At S2, before P4 exists, config itself detects `legacy.ConfigExternalWriter` on
   `Options.LegacyConfigStore` when it attaches that store at P3. A native implementation implements
@@ -2770,9 +2768,8 @@ owning symbol. Where an owning file still describes a superseded path, the row s
 
 ## Objections to 03
 
-None open. Resolved in 03 v1.11.0 (round 8): §3.3 lists the kernel's four asserted capabilities as the
-one list (`legacy.ConfigOpener`, `legacy.ConfigSecrets`, `legacy.Covering` on a routed legacy half, and
-`legacy.ConfigResetArgs` at staging; SIMP8-3), which this file cites, and R4 places
+None open. Resolved in 03 v1.11.0 (round 8): §3.3 is the one list of the capabilities the kernel asserts
+(SIMP8-3), which this file cites, and R4 places
 `internal/restoreswap` at L1, importing `storage` and imported only by `kernel` (R8-1, COR8-5). 03's round-7 revision states, and this file follows: the naming rule in Go initialism form
 with the renames `legacy.TasksRecoverer`, `legacy.LibraryRootSource` and `legacy.RBACAtomWriter`
 (SIMP7-8); the mirror test in the owner's external test package and the `any`-typed legacy option
@@ -3097,3 +3094,4 @@ Round 8 (2026-11-04), findings applied to this file:
 - FE8-4 — §6.12.5: hello builds to `core/bin/hello`, ignored by `core/.gitignore`.
 - MOD8-11 — §6.12.5: hello's embed pattern is normalised per 03 §3.2 item 4.
 - FE8-7 — §6.4.7 `ProblemUIAppIDMismatch` (P8, S9), §6.6 row and `TestUIAppIDMismatch`: the kernel refuses a bundle whose `mediacore-app` meta differs from `Options.AppID`.
+- integration pass (round 8): `legacy` reset comment no longer names the former carrier type (sweep (a)); the detection bullet and "Objections to 03" cite 03 §3.3 as the one statement of the kernel's asserted capabilities instead of restating it (sweep (g)), keeping only where in this file's phases each is asserted and that the staging one is asserted for both reset kinds.

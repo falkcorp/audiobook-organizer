@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-backup.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: 604febb0-a09e-4cf9-99ee-5f3722534da6 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -376,8 +376,8 @@ var (
 // reset and with ABO's pre-S8 staging (R8-1, COR8-6): storage.ErrSwapPending
 // (an intent of any kind is staged, or a swap is in flight) and
 // storage.ErrRenameRefused (a target cannot be swapped by rename);
-// ErrRestorePending above is the first one's alias, and there is no reset
-// sentinel (ErrResetPending is deleted, R8-1).
+// ErrRestorePending above is the first one's alias, and no swap kind has a
+// sentinel of its own (R8-1).
 ```
 
 ```go
@@ -693,7 +693,7 @@ interactive owner proof; §5B.3.8). The same steps run offline in `<app> restore
    the restore. The one override, `ROLLBACK_IGNORE_RESTORE=1` for both recipes, passes `restore_pending`
    only — an intent left behind is then rejected by step a, because the older build's open moves the open
    stamp — and never `restore_inflight`: a swap that has started is finished by booting this build once
-   (OPS8-7; `DEPLOY_DISCARD_RESTORE` is deleted, SIMP8-1). Over ssh the recipes probe the three paths with
+   (OPS8-7, SIMP8-1). Over ssh the recipes probe the three paths with
    the one literal sudoers command of 05-storage §5S.3.7, which passes on a store that never staged
    anything, and a probe that cannot run refuses (OPS3-13, OPS4-3). One exception (DATA7-12, DATA8-6): a
    `KindCheckpoint` journal at `swapped` or `failed` does not refuse a candidate whose levels and floors
@@ -1336,3 +1336,4 @@ Round 8:
 - DATA8-5 — "Checkpoint restore" rule (1): the offline close batch with the step-e identities before `applied_offline`; `TestOpenCheckpointRestoreThenRollbackIsNotForeign`.
 - DATA8-6 — step 9, P0a, step x's exception, error row, rule (3): a `KindCheckpoint` journal at `swapped` or `failed` admits only a candidate with the journaled swap (`--print-restore-journal`), not the failed binary (`Build`), and that candidate resumes it; test row extended.
 - DATA8-7 — `Revocation.RestoreSeq` (`restore_seq`) on hook lines, never re-applied after an aborted restore (§5B.3.6 (3), step x; R-D request); the journal is not moved on a restore boot (row "Where"); step c saves and step x restores `storage.boot.json`; `TestRestoreFailureSwapsBack` and the swap-back error row extended.
+- integration pass (round 8): sentinel comment and step 9 no longer name the deleted reset sentinel and deploy override (sweep (a)); the S8 updater check has no fake-server text here (SIMP8-10, already applied); `ErrRestorePending` is the alias of `storage.ErrSwapPending` and the journal is not moved before `applied` on a restore boot (DATA8-7), both already applied.

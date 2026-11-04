@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.9.1 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1175,7 +1175,7 @@ The *arr facade's key purpose and `X-Api-Key`/`apikey` extraction are deferred-b
   from the network. Therefore, when the effective `core.auth.mode` is `required` and the legacy store's
   row stores `enable_auth: false`, the legacy config store writes `enable_auth: true` at P4d step 1, as
   an audited core write (`core.config.legacy_narrowed`; 05-config §1.3.5 owns the mechanism, and auth's
-  section declares it from S4 r1 as `config.NarrowStored("core.auth.mode", nil, nil)`, whose nil `narrow`
+  section declares it from S4 r1 as `config.NarrowStored("core.auth.mode", nil)`, whose nil `narrow`
   reuses the `SafeLegacyValue` predicate above, true exactly for `"required"`, §8, SIMP8-6). It is the
   one exception to "stored values of locked keys are kept", and it only ever narrows an older build. The
   Basic gate gets the same rule **from S3** (when core's stage 8 and the façade first own it):
@@ -1220,8 +1220,8 @@ The *arr facade's key purpose and `X-Api-Key`/`apikey` extraction are deferred-b
   (05-backup §5B.3.6), so a restore over that interval treats the journal as incomplete. (`Object`
   and `Detail` are 05-backup's SEC2-10 additions; role kinds are 05-rbac §7.1's.)
 - **Hook lines name their restore (DATA8-7).** A line the post-restore hook (§4.14) appends carries the
-  seq of its restore's `restore` line as a `Detail` element, `restore_seq=<seq>`, after any kind-specific
-  elements. The
+  seq of its restore's `restore` line in the field `Revocation.RestoreSeq` (JSON `restore_seq`, 05-backup
+  §5B.3.6); its `Detail` keeps only the kind-specific elements. The
   hooks commit in several batches (auth, rbac, audit), so a later hook's failure that swaps back leaves
   auth's committed lines between the `restore` line and its `restore_aborted` line. 05-backup's boot
   re-apply verifies such lines but never re-applies them, and the exact span comes from `restore_seq`.
@@ -1560,7 +1560,7 @@ interactive method). Every key that decides who may sign in, with which role, or
 
 | Key | Type | Default | Hot-reload | Protection |
 |---|---|---|---|---|
-| `core.auth.mode` | enum `required`/`disabled`; declares `config.SafeLegacyValue` accepting `required`, so an enabling legacy value always takes effect (§4.11, R6-6), and, **from S4 r1**, `config.NarrowStored("core.auth.mode", nil, nil)` (a nil `narrow` uses the key's `SafeLegacyValue` predicate, so the predicate is declared once, SIMP8-6), so an operator-enabled auth over a stored `enable_auth: false` is written back as `enable_auth: true` at P4d step 1 (§4.11, R7-1; 05-config §1.3.5) | `required` | no | owner (SEC3-6, §4.8) |
+| `core.auth.mode` | enum `required`/`disabled`; declares `config.SafeLegacyValue` accepting `required`, so an enabling legacy value always takes effect (§4.11, R6-6), and, **from S4 r1**, `config.NarrowStored("core.auth.mode", nil)` (a nil `narrow` uses the key's `SafeLegacyValue` predicate, so the predicate is declared once, SIMP8-6), so an operator-enabled auth over a stored `enable_auth: false` is written back as `enable_auth: true` at P4d step 1 (§4.11, R7-1; 05-config §1.3.5) | `required` | no | owner (SEC3-6, §4.8) |
 | `core.auth.disabled_allow_remote` | bool | false (ABO: true, §4.11) | no | admin |
 | `core.auth.session.ttl` | duration | 24h | yes (new sessions) | none |
 | `core.auth.session.remember_ttl` | duration | 168h | yes | none |
@@ -2135,3 +2135,4 @@ Round 8 (2026-11-04), findings applied to this file:
 - SEC8-7 — §11.1 item 4: `mergeActor` (`user_merge.go:62-75`) added to early fix 4; from S4 the merge handler checks `Can(core:admin)` with key scoping.
 - SIMP8-3 — §3.4, §5: "the capabilities it drives" replaced by "the capabilities 03 §3.3 lists".
 - R8-1 — §4.8, §7: HEAD's `POST /system/reset` named among the owner-guarded routes; `HasUsers` is cleared by either reset kind.
+- integration pass (round 8): §4.11 and §8 declare `config.NarrowStored("core.auth.mode", nil)`, with no `when` parameter (R-E request); §4.12: hook-appended lines carry their restore's seq in `Revocation.RestoreSeq` (`restore_seq`), not as a `Detail` element, as 05-backup defines it (DATA8-7, R-B request).
