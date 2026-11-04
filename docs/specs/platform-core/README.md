@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.11.0 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -14,7 +14,10 @@ resolutions **A-1…A-17** supersede them (notably R6-6, R7-1, R7-3, R7-6, R7-8,
 confirmation review after the advisor pass (71 findings: 4 BLOCKER, 3 of them distinct, 27 MAJOR, 40 MINOR, all
 accepted; `spec-round-9-dispositions.md`), is applied too; its resolutions **R9-1…R9-11** restore HEAD parity where
 core now drives HEAD's code — the commit point, route ownership and metric ownership — and re-add none of the
-deleted machinery. The design they fix, in brief:
+deleted machinery. Round 10, the final confirmation review (52 findings: 2 BLOCKER, 27 MAJOR, 23 MINOR, all accepted;
+`spec-round-10-dispositions.md`), is applied too; its resolutions **R10-1…R10-11** fix each defect by removing a
+mechanism rather than adding one (R10-1 supersedes R9-2's route move; R10-3 supersedes R9-3's single HTTP emitter).
+The design they fix, in brief:
 
 - **One stored format per family during the extraction** (R3-1): core reaches ABO's data through SDK **store
   interfaces** whose legacy implementation the `books` module supplies, so core holds no audiobook key name and no
@@ -26,20 +29,28 @@ deleted machinery. The design they fix, in brief:
 - **Legacy rows keep HEAD's lock discipline** (A-3): storage-enforced write checks cover native keyspaces and
   core-written rows only; claims roll out shadow → strict. A legacy store's HEAD mutex spans core's commit
   (`legacy.WriteLock` through `storage.CommitLocked`), and each legacy store family has exactly one instance per
-  process (R9-1).
-- **One owner per route-conflict set and per metric family** (R9-2, R9-3): the S5 operations routes move to core
-  together; ABO's `opsmetrics` stops emitting what the executor records, checked against a HEAD golden with label
-  values. Scoped API keys keep HEAD's authenticated-only reach (R9-4); the Basic gate and HEAD's file-only keys keep
+  process (R9-1); the hold is a mark on the batch (`storage.LocksHeld(b, l)`), every lock has a rank in one total
+  order, and the gap-fill file write runs inside the hold (R10-4, R10-5).
+- **One owner per route-conflict set and per metric series** (R10-1, R9-3, R10-3): the operations routes stay
+  books' at every stage, and core's run route is a different path, not an alias; ABO's `opsmetrics` stops emitting
+  what the executor records, checked against a HEAD golden with label values; the legacy gin mount keeps `otelgin`
+  as HEAD's recorder for every request that reaches gin, core records only its own and module routes, and HEAD's
+  bucket layouts arrive through `app.Options.MetricViews`. Scoped API keys keep HEAD's authenticated-only reach
+  (R9-4), and ambient scopes never reach a worker-confined key, in H1 included (R10-2); the Basic gate and HEAD's file-only keys keep
   HEAD's storage, and H3 moves only auth-enable precedence (R9-5).
 - **No predictive stage machinery** (A-4): Go's `internal/` rule, the layering and SDK guards and
   `TestCoreHoldsNoAppKeyNames` stay; 04 is an informative map, and the split's history uses git rename detection.
 - **ABO keeps its metric names** (A-5); **S8 moves the updater** rather than rebuilding it (A-6). Every
   (GOOS, tag set) that ships is vetted on every PR, and the split's history keeps each moved file's pre-move
-  commits, asserted with `git log --follow` (R9-10).
+  commits, asserted with `git log --follow` on a real rewrite for a fixed sample (R9-10, R10-9); the vet and guard
+  jobs run on any tree, built frontend or not (R10-9).
 - **Boot and operations safety:** HEAD's routes register with a same-owner collision rule (A-1); legacy env names
   decode with HEAD's semantics (A-7); one crash matrix covers the whole boot (A-8), as the public kit
   `coretest/crashmatrix` that ABO also runs over its own boot (R9-7); 14-day soaks are owner checkpoints in
-  `ci/soak.txt`, bound to the soaked binary and gating every PR through a `Stage-Release:` trailer (A-9, R9-8);
+  `ci/soak.txt`, bound to the soaked binary; every PR that ships behaviour in a stage carries a `Stage-Release:
+  <stage> <n|flip>` trailer, required on any PR that touches a not-yet-flipped stage's packages, and the gate
+  admits it only after the predecessor release's soak, counted from the release's first PR (A-9, R9-8, R10-7;
+  OPS10-11);
   every done-check names its environment (R9-9); `staging-scrub` needs a staging marker (A-10); concurrent feature
   work has move windows (A-11).
 - A factory reset only stages, as a kind of the one journaled swap (R7-2, R8-1); the native factory-reset route
@@ -234,3 +245,8 @@ Advisor (dispositions in `docs/plans/platform-core/reviews/spec-advisor-disposit
 Round 9 (dispositions in `docs/plans/platform-core/reviews/spec-round-9-dispositions.md`; resolutions R9-1…R9-11):
 
 - R9-1…R9-11 — status line: round 9 (71 findings) dispositioned and applied; the design summary gains the commit-spanning legacy lock and one instance per family (R9-1), one owner per conflict set and metric family (R9-2, R9-3), HEAD parity for scoped keys, the Basic gate, file-only keys and H3's scope (R9-4, R9-5), the reset contract (R9-6), the public crash-matrix kit (R9-7), soaks bound to content (R9-8), done-check environments (R9-9), tag-set vetting and history (R9-10) and the hardening cutovers' reach (R9-11).
+
+Round 10 (dispositions in `docs/plans/platform-core/reviews/spec-round-10-dispositions.md`; resolutions R10-1…R10-11):
+
+- R10-1…R10-11 — status line: round 10 (52 findings) dispositioned and applied; design summary: operations routes stay books' (R10-1), ambient scopes never reach a confined key (R10-2), otelgin stays HEAD's recorder with `app.Options.MetricViews` (R10-3), the hold on the batch and one total lock order (R10-4), the gap-fill write inside the hold (R10-5), vet and guards on any tree and the fixed-sample history assertion (R10-9).
+- OPS10-11, R10-7 — soak bullet aligned with 09 §9.2.1: the trailer covers every stage (`<stage> <n|flip>`), is required on not-yet-flipped packages, and soaks count from the release's first PR.

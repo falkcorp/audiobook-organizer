@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/12-repo-split.md -->
-<!-- version: 1.10.1 -->
+<!-- version: 1.11.0 -->
 <!-- guid: eb47baa1-640b-4c96-96cc-f6b2bdeaa57e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -317,8 +317,8 @@ split, the core repo has nothing else. It is specified now so that it does not g
 |---|---|
 | Toolchain pin | `export GOTOOLCHAIN := go1.27.x`, equal to the root `Makefile` pin. This is one more pinned copy; the toolchain guard checks it (SC10, 13 §13.2.2), so it cannot drift silently. A `print-toolchain` target prints it, so commands and scripts never repeat the literal. |
 | Tools | `tools` target: `go -C tools/apidiff install tool`, `go -C tools/govulncheck install tool`, and a core copy of the staticcheck tools module, `tools/staticcheck`, pinned to the same version as the root's `tools/staticcheck` (`check_module_skew.py`, SC4(c), also compares the two tools modules' requirements). |
-| `ci` target (merge gate) | `build vet vet-darwin vet-integration test-short fmt-check fix-check tidy-check staticcheck archtest exclude-check coverage-floor replace-check toolchain-check version-check errcheck-ratchet interface-width mocks-check pprof-check web-test embed-check` — i.e. Go build/vet/short tests with `-race`, `go vet` for `GOOS=darwin CGO_ENABLED=0 -tags embed_frontend` (goreleaser's darwin set) and with `-tags integration`, so every (GOOS, tag set) of 03 §3.5.1 item 4 that core files can carry is compiled on every PR (root `make ci` runs the same two vets over the root; R9-10, MOD9-3), `gofmt -l` excluding `web/` and `examples/*/web/`, `go fix -diff ./...` empty (13 §13.3), `go mod tidy -diff`, staticcheck, archtest (R1, R2, R5 and the R4 layer guard: SC2), the genproto exclude check in **core mode only** plus the present/misplaced scan of `core/` (03 §3.2 item 1; the root mode and the tree-wide scan are the root job `genproto-exclude-root`), the coverage ratchet floor (SC5), the `replace`/`exclude` check (SC7), core's own toolchain copies (SC10), `check_core_version.py`'s core-only checks (§12.4.3), and the gates that ran for core only through root `make ci` before (MOD5-15): the errcheck and interface-width ratchets over `core/.errcheck-baseline` and `core/.interface-width-baseline`, `mocks-check` over core's mockery config, `pprof-check`, and the `core/web` workspace tests (`npm ci` then vitest, from UI-0; "not applicable" before); `embed-check` (`core/scripts/ci/check_embed_outputs.py`) runs `go list -e -json` over core for 03 §3.5.1 item 4's tag sets and fails on a "no matching files" embed error for any path not on core's own list `core/scripts/ci/embed_build_outputs.txt` (hello's `examples/hello/web/dist` from S9; no Dockerfile cross-check, core builds no image; 03 §3.2 item 4, MOD7-6). Their scripts are core copies under `core/scripts/ci/`, so SC4(a)'s export and the post-split repo run them, and cutover step 6 drops none of them. Every check here holds at every **merged PR head** (the repo merges rebase/fast-forward only; MOD4-14), so a red `ci` always means a defect. Intermediate commits are built only for **move PRs**: for any PR whose diff renames a file into `core/`, `scripts/ci/check_commits_build.py` in `extraction-gates` builds every commit of the PR (`go build ./... && go -C core build ./...`) and reports each moved file whose first-commit similarity falls below §12.8.1's threshold, because the history split needs the move in a buildable first commit (MOD9-5). SC4 is the workflow running this target. |
-| `readiness` target (report-only) | `apidiff-gate coverage coredoc-check vulncheck` — SC1, SC5's thresholds, SC6 and SC9. It never fails a merge and never writes outside `core/`: it writes a JSON and Markdown report, with date and commit, to `$(READINESS_OUT)` (default `core/.ci/readiness/`, ignored by `core/.gitignore`, SC4(a)), which CI uploads as an artifact. Pre-split, a root-side nightly job folds the artifact into `docs/plans/platform-core/split-readiness.md` through a PR; that job is dropped at cutover step 6. SC3 and SC8 run in the root (pre-split) because they need ABO's `web/` or a temp module; the history dry run, with its `--follow` assertion, and the missing-origin list (§12.8.1) are also reported here. |
+| `ci` target (merge gate) | `build vet vet-darwin vet-integration test-short fmt-check fix-check tidy-check staticcheck archtest exclude-check coverage-floor replace-check toolchain-check version-check errcheck-ratchet interface-width mocks-check pprof-check web-test embed-check` — i.e. Go build/vet/short tests with `-race`, `go vet` for `GOOS=darwin CGO_ENABLED=0` (goreleaser's darwin target, vetted **without** `embed_frontend`, because `go vet` has no `-e` and hello's `examples/hello/web/dist` is unbuilt in `ci`; the embed-only files carry no GOOS constraint, and the tag-union guards still read the darwin `embed_frontend` set through `go list -e`; 03 §3.5.1 item 4, R10-9, MOD10-8) and with `-tags integration`, so every (GOOS, tag set) of 03 §3.5.1 item 4 that core files can carry is compiled on every PR (root `make ci` runs the same two vets over the root; R9-10, MOD9-3), `gofmt -l` excluding `web/` and `examples/*/web/`, `go fix -diff ./...` empty (13 §13.3), `go mod tidy -diff`, staticcheck, archtest (R1, R2, R5 and the R4 layer guard: SC2), the genproto exclude check in **core mode only** plus the present/misplaced scan of `core/` (03 §3.2 item 1; the root mode and the tree-wide scan are the root job `genproto-exclude-root`), the coverage ratchet floor (SC5), the `replace`/`exclude` check (SC7), core's own toolchain copies (SC10), `check_core_version.py`'s core-only checks (§12.4.3), and the gates that ran for core only through root `make ci` before (MOD5-15): the errcheck and interface-width ratchets over `core/.errcheck-baseline` and `core/.interface-width-baseline`, `mocks-check` over core's mockery config, `pprof-check`, and the `core/web` workspace tests (`npm ci` then vitest, from UI-0; "not applicable" before); `embed-check` (`core/scripts/ci/check_embed_outputs.py`) runs `go list -e -json` over core for 03 §3.5.1 item 4's tag sets and fails on a "no matching files" embed error for any path not on core's own list `core/scripts/ci/embed_build_outputs.txt` (hello's `examples/hello/web/dist` from S9; no Dockerfile cross-check, core builds no image; 03 §3.2 item 4, MOD7-6). Their scripts are core copies under `core/scripts/ci/`, so SC4(a)'s export and the post-split repo run them, and cutover step 6 drops none of them. Every check here holds at every **merged PR head** (the repo merges rebase/fast-forward only; MOD4-14), so a red `ci` always means a defect. Intermediate commits are built only for **move PRs**: for any PR whose diff renames a file into `core/`, `scripts/ci/check_commits_build.py` in `extraction-gates` builds every commit of the PR (`go build ./... && go -C core build ./...`) and reports each moved file whose first-commit similarity falls below §12.8.1's threshold, because the history split needs the move in a buildable first commit (MOD9-5). SC4 is the workflow running this target. |
+| `readiness` target (report-only) | `apidiff-gate coverage coredoc-check vulncheck` — SC1, SC5's thresholds, SC6 and SC9. It never fails a merge and never writes outside `core/`: it writes a JSON and Markdown report, with date and commit, to `$(READINESS_OUT)` (default `core/.ci/readiness/`, ignored by `core/.gitignore`, SC4(a)), which CI uploads as an artifact. Pre-split, a root-side nightly job folds the artifact into `docs/plans/platform-core/split-readiness.md` through a PR; that job is dropped at cutover step 6. SC3 and SC8 run in the root (pre-split) because they need ABO's `web/` or a temp module; the history rewrite on a throwaway clone, with its fixed-sample `--follow` assertion, and the missing-origin list (§12.8.1) are also reported here. |
 | `release` target | post-split only: `make release VERSION=vX.Y.Z` runs §12.5 steps 1–5. |
 
 ## 12.4 Versioning and semver policy
@@ -432,22 +432,25 @@ its rollback floor):
 
 | Cutover | What it changes for ABO | Until it runs (as at HEAD) |
 |---|---|---|
-| **H1 — identity cutover** | sessions and one-time tokens stored hashed; `mck_` keys; roles and keys hold native scopes, and every non-confined role and existing key gains the scopes it held only through `LegacyAmbientScopes` (`core:self`, `core:metrics.read`, `books:reading`; SEC9-8); every credential epoch bumped | raw `sess:` rows and HEAD's one-time tokens; `abk_` keys and roles holding legacy atoms, with namespaced scopes as an API-level mapping (`rbac.LegacyAtom`) |
+| **H1 — identity cutover** | sessions and one-time tokens stored hashed; existing sessions, invites and other one-time tokens are **deleted**, not rehashed, so raw tokens in older archives are dead against the live store (05-authn §11.2 owns this; SEC10-7); `mck_` keys; roles and keys hold native scopes. The scopes a principal held only through `LegacyAmbientScopes` (`core:self`, `core:metrics.read`, `books:reading`) are written into a role iff the role is not `Confined()`, and into a key iff the key's **effective** S4–S10 set before Ambient (the owner's role atoms ∩ the key's atoms) is not `Confined()`, never from its owner, so a worker-scoped key stays confined and every principal's answers are unchanged across H1 (05-rbac §6.3 owns the rule; R10-2, SEC10-1) | raw `sess:` rows and HEAD's one-time tokens; `abk_` keys and roles holding legacy atoms, with namespaced scopes as an API-level mapping (`rbac.LegacyAtom`) |
 | **H2 — secrets cutover** | the plaintext blob secrets are encrypted into `c/secrets/` and their blob fields removed; HEAD's four encrypted secret rows move there too (05-config §1.12.5 decides this, 09 §9.13 cites it; DATA9-8) | plaintext blob secret fields; the four secrets HEAD already encrypts stay as they are |
-| **H3 — auth-precedence cutover** | an operator value that enables auth takes effect over a stored `false`; a disabling value keeps HEAD's precedence; the auth-disabled principal can no longer store `enable_auth` (05-config clears `HEADAuthOffWritable` on that key only, and the Basic gate keys keep HEAD's auth-off write rule); nothing else moves: every other `BelowStored` legacy flag (the Basic gate's among them, which compose always sets) keeps HEAD's precedence until a separate, owner-decided cutover (R9-5, SEC9-2, SEC9-7) | HEAD's precedence: the stored value wins |
+| **H3 — auth-precedence cutover** | an operator value that enables auth takes effect over a stored `false`; a disabling value keeps HEAD's precedence; the auth-disabled principal can no longer store `enable_auth` (05-config clears `HEADAuthOffWritable` on that key only; the Basic gate keys keep HEAD's auth-off write rule until the settings cutover, which precedes or ships with H3, and the three gate keys lose it together, 05-config §1.3.1; SEC10-5, SEC10-6); nothing else moves: every other `BelowStored` legacy flag (the Basic gate's among them, which compose always sets) keeps HEAD's precedence until a separate, owner-decided cutover (R9-5, SEC9-2, SEC9-7) | HEAD's precedence: the stored value wins |
 
 **Their real reach (R9-11; SEC9-3, DATA9-8).**
 
 - **Level.** Each cutover raises the level of **every** owner whose rows it rewrites: `books` for every rewrite of
   a books legacy family (H1's identity rows, H2's blob fields, H3's flags), plus `core` when it changes `c/` rows. The
   guard therefore refuses the store on every older build, the pre-guard builds through the legacy projection. The
-  first cutover also lifts books' `{core, 0}` legacy restore bound (09 §9.13). The guard models each owner it raises.
-- **What is deleted.** H1 and H2 rewrite the live store, then delete the pre-cutover checkpoint and the old Pebble
-  files through a forced compaction in the cutover boot, so no raw token (H1 stores some in **keys**, `sess:<raw>`)
-  and no plaintext secret survives in an SST, a WAL segment or the checkpoint.
+  first cutover **that raises `core`** also lifts books' `{core, 0}` legacy restore bound (09 §9.13); one that raises
+  only `books` does not (DATA10-7). The guard models each owner it raises.
+- **What is deleted.** H1 and H2 rewrite the live store, then delete **every** pre-cutover checkpoint of the store
+  and every old Pebble file, not only their own attempt's, through a forced compaction in the cutover boot, so no raw
+  token (H1 stores some in **keys**, `sess:<raw>`) and no plaintext secret survives in an SST, a WAL segment or any
+  checkpoint (R10-11, DATA10-6; 05-storage §5S.3.13 owns the list of what a cutover clears).
 - **What is not.** Archives taken before the cutover still hold the old representation. The done-checks say so
-  plainly, and the release note tells the operator to rotate third-party secrets and re-issue keys if old archives
-  are a concern.
+  plainly. API keys are stored as SHA-256 hashes at HEAD, so an old archive exposes no usable key; the release note,
+  whose one text per cutover 09 §9.13 owns and every other file quotes, tells the operator to rotate third-party
+  secrets if old archives are a concern (SEC10-7).
 
 They are not split criteria: neither T nor SC1–SC10 waits on them, and each may run before or after the split.
 A cutover that runs after the split is an ABO change to its legacy store implementations plus native
@@ -576,7 +579,13 @@ history. Rule:
 - an origin path that history **re-creates** after its move commit (the package stays, as `internal/fileops` does)
   fails `history_paths.py` and is listed in the readiness report; such a path is mapped by a `--commit-callback`
   that renames it only in commits up to its move commit, so a later ABO file at the vacated path is never spliced
-  into core's history (MOD9-4);
+  into core's history (MOD9-4). The callback must see the path **before** any filter does: within one filter-repo
+  run, path filtering runs before the commit callback and its result is cached per filename, so a re-created origin
+  with no `==>` line would be dropped by the `core/` line before a callback in that run ever saw it (git-filter-repo
+  2.47.0; round-10 modules-build E6). So these paths get a separate **pass 0** with no path filter, whose
+  `--commit-callback` renames each listed origin to its `core/` path only in the commits of `git rev-list
+  <move-commit>`; pass 1's path file then carries no line for them, because pass 0 already renamed them (R10-9,
+  MOD10-9);
 - files that never arrived in `core/` are not listed, so no ABO-only code (`internal/keyedmutex`, the
   `internal/telemetry/contract/` suite, `internal/telemetry/ratchet_test.go`, `cmd/`) enters core's
   history; core-owned scripts were born under `core/scripts/ci/`, so the `core/` line carries them.
@@ -602,16 +611,28 @@ still falls under 90 % similarity loses its earlier history; that is the accepte
 curated origins list (A-4). `history_paths.py`'s readiness report lists every `core/` path whose first commit
 is not a detected rename, so the owner sees which files start their history in `core/` before cutover.
 
-A dry run (`git filter-repo --dry-run --paths-from-file …` on a fresh clone of `main`) is part of the
-readiness report (§12.3.11), so a collision surfaces long before cutover step 3. It checks the **rewritten** clone,
-not the source repo (R9-10, MOD9-4): for every mapped path, `git log --follow` on its `core/` path in the rewritten
-clone must reach the commit that first created its pre-move path, and a path whose history starts at its move commit
-fails the report. Cutover step 3 repeats the assertion before anything is pushed.
+The readiness report (§12.3.11) runs the **real** rewrite below on a throwaway `--no-local` clone of `main`, so a
+collision and a lost history both surface long before cutover step 3; `--dry-run`, which does not change the
+repository, is used only as the cheap collision probe (R10-9, MOD10-9). The history assertion runs on the
+**filter-repo output**, never on the source repo, for a **fixed sample** of moved files, the committed list
+`core/scripts/split/history_sample.txt` (a verbatim move such as `internal/logging/sanitize.go`, one file of a
+transitively mapped rename chain, and every re-created origin of pass 0): for each, `git log --follow --format=%H --
+<path>` in the rewritten clone (the path as it stands after the subdirectory pass, without `core/`) must end at the
+commit that first created its earliest mapped name at `F`, translated through the `.git/filter-repo/commit-map`
+files saved after each pass and composed in pass order, since rewritten commits have new SHAs. A sampled path whose
+history ends at its move commit, or at any other commit, fails the report. `history_paths.py`'s list of `core/`
+paths whose first commit is not a detected rename covers the rest. Cutover step 3 repeats the assertion before
+anything is pushed.
 
 ```sh
 git clone --no-local --branch main <abo-remote-url> mediacore-split
-(cd mediacore-split && git filter-repo --paths-from-file ../core-history-paths.txt)
-(cd mediacore-split && git filter-repo --subdirectory-filter core)
+# pass 0 (only when history_paths.py lists re-created origins): no path filter; the callback renames each listed
+# origin to its core/ path only in commits of `git rev-list <move-commit>` (history_paths.py generates it)
+(cd mediacore-split && git filter-repo --commit-callback "$(cat ../core-history-recreated.py)" && cp .git/filter-repo/commit-map ../map-0)
+(cd mediacore-split && git filter-repo --paths-from-file ../core-history-paths.txt && cp .git/filter-repo/commit-map ../map-1)
+(cd mediacore-split && git filter-repo --subdirectory-filter core && cp .git/filter-repo/commit-map ../map-2)
+python3 core/scripts/split/history_assert.py --clone mediacore-split --sample core/scripts/split/history_sample.txt \
+  --maps ../map-0 ../map-1 ../map-2 --freeze F                              # the fixed-sample --follow assertion
 (cd mediacore-split && git tag -l | xargs -r git tag -d)                 # drop every ABO tag (v0.2xx.x, RCs)
 (cd mediacore-split && test -z "$(git for-each-ref refs/core-checkpoints)")  # never fetched by a clone
 (cd mediacore-split && git log --oneline | wc -l)                         # recorded in split-readiness.md
@@ -635,8 +656,10 @@ Precondition: T and SC1–SC10 hold, recorded in `split-readiness.md`.
 
 1. **Freeze** `core/` in ABO: a CI check fails any PR touching `core/` (label `core-freeze`), announced.
 2. **Re-measure** SC1–SC10 on the freeze commit `F`.
-3. **Filter** (§12.8.1) from `F`; assert that every mapped file's `git log --follow` reaches its pre-move first
-   commit; delete tags; scan; build; test.
+3. **Filter** (§12.8.1) from `F` (pass 0 when needed, then the path file, then the subdirectory pass); run §12.8.1's
+   fixed-sample history assertion on the output, which must pass (on a failure the cutover stops at this step and
+   nothing has been pushed: fix the path file or the sample's generator, re-run from a fresh clone); delete tags;
+   scan; build; test.
 4. **Create** `falkcorp/mediacore` (`gh repo create falkcorp/mediacore --private|--public`), set branch
    protection, add `core-ci.yml`, `downstream.yml`, `dependabot.yml`, `CODEOWNERS`, the
    reusable-workflow ref, `LICENSE` (§12.10 item 1). Push **only** `main`, with an explicit refspec:
@@ -816,3 +839,13 @@ Round 9 (dispositions in `docs/plans/platform-core/reviews/spec-round-9-disposit
 - R9-5 (SEC9-2, SEC9-7) — §12.4.4 H3 row: only auth-enable precedence moves; a disabling value and every other `BelowStored` flag keep HEAD's precedence.
 - SEC9-8 — §12.4.4 H1 row: non-confined roles and existing keys gain the scopes they held only through `LegacyAmbientScopes`; epochs bumped.
 - integration pass (round 9): §12.4.4 H3 row: H3 clears `HEADAuthOffWritable` on `enable_auth` only; the Basic gate keys keep HEAD's auth-off write rule. H2's four encrypted rows moving into `c/secrets/` was already stated.
+
+Round 10 (dispositions in `docs/plans/platform-core/reviews/spec-round-10-dispositions.md`; resolutions R10-1…R10-11):
+
+- R10-9 (MOD10-9) — §12.8.1: the history assertion runs `git log --follow` on the filter-repo output of a real rewrite on a throwaway clone, for the fixed sample `core/scripts/split/history_sample.txt`, compared through the saved commit-maps; `--dry-run` is only the collision probe; re-created origins get a pass 0 with no path filter, so the commit callback sees them before the `core/` filter drops them; §12.8.2 step 3 runs the assertion and states the stop.
+- R10-9 (MOD10-8, OPS10-8) — §12.3.11 `ci` target: `vet-darwin` runs without `embed_frontend`; the readiness row names the throwaway-clone rewrite.
+- R10-2 (SEC10-1) — §12.4.4 H1 row: ambient scopes go into a key iff its effective pre-Ambient set is not `Confined()`, never from its owner; worker-scoped keys stay confined.
+- SEC10-7 — §12.4.4 H1 row and "What is not": sessions, invites and one-time tokens deleted, not rehashed; the epoch clause and "re-issue keys" removed; 09 §9.13 owns the release-note text.
+- SEC10-5, SEC10-6 — §12.4.4 H3 row: the Basic gate keys keep HEAD's auth-off rule until the settings cutover, which precedes or ships with H3, and lose it together.
+- DATA10-7 — §12.4.4 "Level": the first cutover that raises `core` lifts `{core, 0}`.
+- R10-11 (DATA10-6) — §12.4.4 "What is deleted": every pre-cutover checkpoint and old Pebble file, not only the attempt's.
