@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/08-arr-facade.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 6d9b089a-fb08-4087-9ccd-43b9aa4ec555 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -24,8 +24,8 @@ kinds) are deferred-build members of 06 §6.4.9.
 **Deferred-build members of built packages (SIMP2-6).** Deferral applies to features inside built
 packages as well as to packages (03 §3.4). Everything below exists only for this facade, has no ABO
 consumer, and is therefore **not** built in S2/S4; each owning file keeps its contract text under a
-"Deferred-build (lands with `arrfacade`, 08)" heading, and it lands additively in the build that
-creates `arrfacade`:
+heading named exactly `Deferred-build members` (03 §3.4), and it lands additively in the build that
+creates `arrfacade`. The table below is a reader's index of those entries, not a source of the check:
 
 | Member | Owning file | Notes |
 |---|---|---|
@@ -36,11 +36,16 @@ creates `arrfacade`:
 
 Absence is checked by one test, not a prose grep: the deferred-members archtest
 `archtest.DeferredMembersAbsent` runs in the root module's `make ci` from S2 (06 §6.4.9, 09 S2) and fails
-when any listed identifier (`ArrFacade`, `PurposeFacade`, `FacadeGroup`, `RouteKindFacade`,
-`ProblemFacadeIncomplete`, `ProblemFacadeURLBaseCollision`, …) appears in non-test code under `core/`,
-because `test ! -e core/arrfacade` cannot see a feature inside a built package. The two facade problem
-kinds are appended to the end of 06's `ProblemKind` block when this package lands, so adding them
-renumbers nothing (SIMP3-2, SIMP3-11). The PR that adds `arrfacade` deletes the test.
+when any listed identifier appears in non-test code under `core/`, because `test ! -e core/arrfacade`
+cannot see a feature inside a built package. Its list is generated from every `Deferred-build members`
+heading under `docs/specs/platform-core/` (03 §3.4), with package-qualified entries
+(`module.Registrar.ArrFacade`, `auth.PurposeFacade`, `httpapi.Router.FacadeGroup`,
+`httpapi.RouteKindFacade`, `module.ProblemFacadeIncomplete`, `module.ProblemFacadeURLBaseCollision`, …).
+The two facade problem kinds are appended to the end of 06's `ProblemKind` block when this package
+lands, so adding them renumbers nothing (SIMP3-2, SIMP3-11). The PR that adds `arrfacade` deletes the
+facade members' entries only; other deferred members (the download grab pipeline, `acquire`, the AI
+usage ledger, notify's inbox) keep their guard, and the test is deleted when the list is empty
+(SIMP4-1).
 
 ## 8.1 Purpose & scope
 
@@ -642,3 +647,7 @@ Round 3 (2026-11-04), findings applied to this file:
 - SIMP3-12 — round-1 SIMP-1 history line marked superseded by SIMP2-9.
 - R3-1 — checked: no dual-format machinery here; facade keys keep explicit, non-empty `Confining` scopes, consistent with R3-1's never-empty-scope rule.
 
+Round 4 (2026-11-04), findings applied to this file:
+
+- SIMP4-1 — §8.0: owning files keep facade members under a `Deferred-build members` heading; the archtest list is generated from every such heading (03 §3.4) with package-qualified entries; the `arrfacade` PR deletes only the facade entries, and the test goes when the list is empty.
+- R4-1 — checked: the facade touches no legacy store or grant; nothing else to change.

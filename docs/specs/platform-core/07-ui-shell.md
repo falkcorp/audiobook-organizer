@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/07-ui-shell.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 651865f1-0fad-4e15-8169-ceaf4a573f13 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -129,14 +129,24 @@ Shell-classified ABO files that import audiobook code are therefore cut loose **
   `make web-deps` instead (the script directly where `make` is unavailable):
   `.github/workflows/ci.yml:379-383`, `e2e.yml:161-167,185`, `binary-smoke.yml:40,55`,
   `prerelease.yml:51` and `release-prod.yml:58` (goreleaser `pre-build-script`), `security.yml:81-82`,
-  `vulnerability-scan.yml:59-62`, the reusable `frontend-ci.yml`, `Dockerfile:13-21`,
-  `Dockerfile.build-cgo:14-19`, `scripts/ci_remote.py:516`, and the CLAUDE.md worktree recipe
-  `npm ci --prefix web`. Each `cache-dependency-path` adds `core/web/package-lock.json`; path filters
-  (`frontend-ci.yml:11-17`, `e2e.yml:68`) add `core/web/**`; `ci.yml`'s `changes` classifier sets
-  `web=true` for `core/web/*` and `scripts/ci/build_web.sh` as well as `web/*` (today only `web/*`
-  and workflows, `ci.yml:81`); the PR image job's trigger list adds `go.sum`, `core/go.sum`,
-  `scripts/ci/build_web.sh` and `core/examples/hello/web/**` (MOD2-16); Dependabot's npm entry adds
-  `/core/web`. The list is the S0 checklist in 09; this file owns the mechanism. The Docker
+  `vulnerability-scan.yml:59-62`, `Dockerfile:13-21`, `Dockerfile.build-cgo:14-19`,
+  `scripts/ci_remote.py:516`, and the CLAUDE.md worktree recipe `npm ci --prefix web`.
+* **Reusable workflows cannot call it (MOD4-10).** Three jobs install and build `web/` inside external
+  reusable workflows whose steps ABO cannot change: `ci.yml:127` (`reusable-ci-minimal.yml`,
+  `run-frontend`), `frontend-ci.yml:64` and `nightly.yml:31` (`reusable-ci.yml`). Once `web/` depends on
+  `file:../core/web/packages/api-client`, whose `exports` point at an unbuilt `dist/`, their typecheck
+  and build fail. As a precondition of UI-0, those callers set `run-frontend: false` and drop their
+  frontend half, and ABO-local jobs (as `ci.yml:372-383` already has) run the frontend checks after
+  `make web-deps`. A github-common input that runs `build_web.sh` before install, with the
+  `.github/ghcommon-ref.txt` bump in the same PR, is the alternative if the owner prefers to keep the
+  reusable frontend half.
+* **Caches, filters and triggers.** Each `cache-dependency-path` adds `core/web/package-lock.json`;
+  path filters (`frontend-ci.yml:11-17`, `e2e.yml:68`) add `core/web/**`; `ci.yml`'s `changes`
+  classifier sets `web=true` for `core/web/*` and `scripts/ci/build_web.sh` as well as `web/*` (today
+  only `web/*` and workflows, `ci.yml:81`); the PR image job's trigger list is every input of the image,
+  so no PR that changes one can skip it: `core/**`, `go.mod`/`go.sum` and `core/go.mod`/`core/go.sum`,
+  both Dockerfiles, `.dockerignore`, `scripts/ci/build_web.sh`, `web/**` and every `//go:embed` input
+  (MOD2-16, MOD4-8); Dependabot's npm entry adds `/core/web`. The list is the S0 checklist in 09; this file owns the mechanism. The Docker
   frontend-stage change below lands in the UI-0 PR that creates `core/web`, because a `COPY` of
   `core/web/package.json` fails before that file exists; S0 changes only the Go stage and
   `.dockerignore` (MOD3-13).
@@ -149,9 +159,9 @@ Shell-classified ABO files that import audiobook code are therefore cut loose **
   the ordered build above; (3) copy `web/package.json` and `web/package-lock.json`, run `npm ci` in
   `web/` (its `file:` dependencies resolve `exports` to the `dist/` built in step 2); (4) copy `web/`
   and build it. Copying only the manifests before building is not enough, because the `file:`
-  dependencies point at built `dist/` directories. The stage declares `ARG BUILD_ID` and passes it
-  to `build_web.sh`, as the Go stage does to its link step, so both stages embed the one value the
-  release workflow (or the PR image job) passes (§7.6.3, MOD3-14).
+  dependencies point at built `dist/` directories. The stage declares an optional `ARG BUILD_ID`,
+  which `build_web.sh` uses when set (the context has no `.git` to derive one from); the Go stage
+  receives no build ID (§7.6.3, FE4-1, MOD4-9).
 * **After the split:** the specifier becomes an exact registry version (§7.17); nothing else changes.
 
 ### 7.3.3 Versions (D8)
@@ -365,6 +375,11 @@ export interface ShellConfig {
   app: { id: string; displayName: string; logo?: ComponentType };
   modules: readonly ModuleUI[];
   theme?: import('@mediacore/ui-kit').MediaThemeInput;
+  // Literal localStorage keys of shell preferences that exist before the
+  // shell (ABO: its themeMode, activity-source-prefs and activity-ops-pinned
+  // keys), read and written in place so no preference resets at adoption;
+  // storageKey() names only keys that do not exist today (FE4-4, §7.7).
+  legacyStorageKeys?: Readonly<Partial<Record<'themeMode' | 'activitySourcePrefs' | 'activityOpsPinned', string>>>;
 }
 
 export interface Shell {
@@ -405,18 +420,28 @@ it), not `/system/tasks` (FE-16).
   `/login/temp#token=…`: the page reads `location.hash`, removes it with `history.replaceState`, and
   sends the token in the request body (`POST /api/core/v1/auth/invites/lookup|accept`,
   `POST /api/core/v1/auth/temp-login/consume`, 05-authn §4.13). A full page load therefore never
-  carries the token to the server, an access log, a trace or a `Referer`.
-* **Legacy link forms are ABO's, served by books from S4 to the end of their window (FE3-5,
-  SEC3-16).** Links in the old forms exist only for ABO, so `ui.Handler` has no code for them. From the
-  S4 build that mints fragment links, books' legacy manifest serves `GET /invite/{token}` (Public,
-  `RateAuth`) with a 302 to `/invite#token=<token>` and `Referrer-Policy: no-referrer`, and rewrites
-  the existing `GET /auth/temp-login?token=` to a 302 to `/login/temp#token=<token>`. `invite` is in
-  books' `LegacyMount.SPAShared` (with `login`), so it is a reserved ID but never `NonSPA`: `GET
-  /invite` stays the SPA page before and after S9, the more specific legacy pattern wins over the `/`
-  owner, and the P8 shell-segment check passes. These two routes are the only implementation for the
-  whole window (S4 + max(W, invite TTL), 09 §9.6), and the S9 PR does not move them. Both paths are in
-  05-http-api's `DefaultPathRules`, so the one request that carries a token is redacted
-  (`TestLegacyInviteLink_302NoToken`).
+  carries the token to the server, an access log, a trace or a `Referer`. For an app that already has
+  a SPA, each link form starts with the first build whose SPA can open it.
+* **Invite links keep the path form until the shell (FE4-2).** The legacy SPA opens an invite only at
+  `/invite/:token` (its public branch tests `pathname.startsWith('/invite/')`; `web/src/App.tsx:201-206`
+  @748fd787a); `/invite#token=` would land a signed-out invitee on `/login` with the fragment dropped
+  (`App.tsx:249-250`) and a signed-in one on `NotFound`. So from S4, when invite creation moves to core,
+  core mints `/invite/<token>` (the link form is the app's choice, 05-authn §4.13 owns the option) and
+  the legacy `AcceptInvite` sends the path token in the body of the same core calls. As at HEAD, that
+  token reaches the server in the request path, where the `DefaultPathRules` invite shape redacts it
+  from logs and spans. The fragment form starts with the shell build (S9).
+* **Legacy link forms are ABO's, served by books to the end of their window (FE3-5, SEC3-16).** Links
+  in the old forms exist only for ABO, so `ui.Handler` has no code for them. Books' legacy manifest
+  rewrites the existing `GET /auth/temp-login?token=` to a 302 to `/login/temp#token=<token>` from S4
+  (the legacy SPA gains a `/login/temp` route in the same build, §7.9.1), and serves
+  `GET /invite/{token}` (Public, `RateAuth`) with a 302 to `/invite#token=<token>` and
+  `Referrer-Policy: no-referrer` from S9, when the shell page reads only the fragment and path-form
+  links minted from S4 to S9 must still open. `invite` is in books' `LegacyMount.SPAShared` (with
+  `login`), so it is a reserved ID but never `NonSPA`: `GET /invite` stays the SPA page before and after
+  S9, the more specific legacy pattern wins over the `/` owner, and the P8 shell-segment check passes.
+  These two routes are the only implementation for the whole window of 09 §9.6, counted from the
+  release that starts each (S4 for temp login, S9 for invite). Both paths are in 05-http-api's `DefaultPathRules`, so the
+  one request that carries a token is redacted (`TestLegacyInviteLink_302NoToken`).
 * **No `/logout` page (FE2-7).** Signing out is an action in the user menu:
   `POST /api/core/v1/auth/logout`, then navigate to `/login`. `logout` is a server segment in ABO (the ABS
   logout route), and a shell page with that segment would get a 404 problem+json on a full page load.
@@ -550,18 +575,24 @@ Then, for each module `S` in the server list and the compile-time entry `C = reg
 | `C` with no matching `S` | not mounted (disabled or unknown module) | `module-not-enabled` (admin only) |
 | `S.ui` ID with no client item | ignored | `descriptor-without-ui` (debug log) |
 
-**Stale-build rule (one rule, one place; FE3-3, OPS3-11).** The rule lives in the API runtime's
-response middleware: ABO's `apiFetch` from 09 S0, and `@mediacore/api-client`'s runtime from the moment
-`apiFetch` moves into it (§7.8, §7.11); it is never deleted, so the pre-shell bundle and the shell
-bundle run the same code. Comparing every API response with the bundle's define
-`MEDIACORE_BUILD_ID`, it offers a reload when:
+**Stale-build rule (one rule, one place; FE3-3, OPS3-11, FE4-9).** The rule lives in the API
+runtime's response middleware: ABO's `apiFetch` from 09 S0 to UI-0; from UI-0 `@mediacore/api-client`'s
+runtime exports it as `checkBuild(response)`, which the runtime's own middleware and ABO's `apiFetch`
+(still used for legacy calls until they are native) both call, so there is one implementation while
+the two transports coexist; it is never deleted, so the pre-shell bundle and the shell bundle run the
+same code. 05-http-api §7 lists it among the runtime's middleware. Comparing every API response with
+the bundle's define `MEDIACORE_BUILD_ID`, it offers a reload when:
 
 1. the response carries `X-App-Build` and the value differs from the define; or
 2. the response is `/api/core/v1/modules`, `app.ui_build_id` is `""` and `X-App-Build` is non-empty and
    not `"dev"`: the server serves a legacy SPA at `/` (an S9 tab after a rollback to S8); or
-3. `X-App-Build` is missing on a 2xx or 4xx response that carries `X-Request-ID` (the perimeter's
-   stage 1, so the response came from the app: a pre-S0 server). A response without `X-Request-ID` (a
-   reverse proxy's 502 during a restart, an Access interstitial) never counts (FE3-2).
+3. `X-App-Build` is missing on a 2xx or 4xx response that carries a `Reporting-Endpoints` header
+   naming a `csp` group: HEAD sets that header on every response (`securityHeadersMiddleware`,
+   `internal/server/server_middleware.go:102-109` @748fd787a) and from S2 stage 5 writes it with every
+   CSP, so it marks a response of the app, here a pre-S0 server (an S0+ tab after a rollback past S0).
+   A response without it (a reverse proxy's 502 during a restart, an Access interstitial) never counts.
+   `X-Request-ID` is not the discriminator: HEAD writes none, and every build that writes it also writes
+   `X-App-Build` (FE4-3).
 
 A define of `""` or `"dev"` never triggers it. In the shell the offer is the non-dismissable "new
 version — reload" banner, the only one, because there is one rule (FE2-5, OPS2-13); module mounting
@@ -624,10 +655,12 @@ func (b Bundle) BuildID() string
 type AppOptions struct {
 	// PageMiddleware wraps only index.html responses (page navigations), e.g.
 	// ABO's Cloudflare service-token recovery (cf_recovery.go:36-60, from
-	// internal/cfaccess). ABO's middleware also records surface ui_route (one
-	// compat call, 09 §9.2.9) for a full page load of a path in books'
-	// UIDescriptor.LegacyRedirects, the Go-side list that manifest.gen.ts also
-	// exports (FE2-16, FE3-17).
+	// internal/cfaccess). AppOptions is built in main before app.New, so a
+	// func that needs state built during boot (ABO: the CF config and token
+	// store, the Access team host) reads an atomic.Pointer the module fills in
+	// its Start hook, and is a pass-through (or returns an empty list) until
+	// then; P8 only wraps it (FE4-5). ui_route recording is not app code: see
+	// Options.OnRedirectUse.
 	PageMiddleware func(http.Handler) http.Handler
 
 	// CSP: ExtraDirectives are appended to the default policy (§7.6.2).
@@ -661,6 +694,16 @@ type Options struct {
 
 	Config  *config.Handle[Settings] // core.ui.* (§7.15); hot keys swap the policy atomically
 	Metrics *metrics.Scope
+
+	// Redirects are every enabled module's UIDescriptor.LegacyRedirects, and
+	// OnRedirectUse records one use of the compat entry (surface ui_route)
+	// the kernel registered for each at P7 (09 §9.2.9). The handler calls it
+	// for a full page load whose path matches a From pattern, before serving
+	// index.html, so the recording is core-generic and the same Go list feeds
+	// manifest.gen.ts and the client redirects (FE2-16, FE3-17, FE4-5). Both
+	// are set by the kernel; nil OnRedirectUse records nothing.
+	Redirects     []Redirect
+	OnRedirectUse func(from string)
 }
 
 // Handler serves the SPA:
@@ -673,7 +716,10 @@ type Options struct {
 //   - any other existing regular file of the bundle's fsys (Vite's public/
 //     files at the dist root, e.g. /favicon.svg, which index.html
 //     references): served with Cache-Control "no-cache" (FE3-14); this rule
-//     is checked before the extension rule above
+//     is checked before the extension rule above. index.html itself is never
+//     served by this rule: GET /index.html takes the index rule below
+//     ("no-store", full CSP, through PageMiddleware), as HEAD runs its SPA
+//     middleware before every NoRoute file (static_embed.go:59-66, FE4-11)
 //   - every other unmatched GET/HEAD: index.html, "no-store", with the full
 //     CSP of §7.6.2, through PageMiddleware
 //   (the pre-fragment /invite/<token> link is not the shell's: books' legacy
@@ -685,15 +731,16 @@ func Handler(b Bundle, opts Options) http.Handler
 
 // ReservedSegments lists the first segment of every shell route (§7.4.3);
 // module.ReservedIDs() includes them. Returns a fresh slice on every call
-// (R5: no exported slice variable). It lives in its own dependency-free
-// file and is the only member of package ui that lands at S2; the rest of
-// the package lands at S9 (FE3-8).
+// (R5: no exported slice variable). It and the plain types ModuleManifest,
+// UIIDs and Redirect below form the dependency-free leaf of package ui that
+// lands at S2, so internal/modulehttp (L6, S4) has a type for modules[].ui;
+// the rest of the package lands at S9 (FE3-8, FE4-6).
 func ReservedSegments() []string
 
 // ModuleManifest is one module's UI manifest: what /api/core/v1/modules
 // reports and what manifest.gen.ts prints (§7.4.1). It lives in ui (L6), not
 // in app (L9), so ui never imports app (R4); app.Description.UIManifests is a
-// []ui.ModuleManifest (COR2-18).
+// []ui.ModuleManifest (COR2-18). S2 leaf type (FE4-6).
 type ModuleManifest struct {
 	ID          string
 	Version     string
@@ -758,7 +805,7 @@ changes after construction (§7.14).
 | Phase | `app.Options.UI` | `/` owner | Notes |
 |---|---|---|---|
 | Before ABO adopts the shell build (09 S2 up to S9) | zero `Bundle` | the books `LegacyMount` with `ServesSPA: true`; gin keeps `NoRoute` SPA serving and CF recovery | from S2 the CSP and `Reporting-Endpoints` headers are written by `httpapi` stage 5 from the mount's per-request `DefaultCSP` (today's computed policy, §7.6.2), not by gin's removed middleware (FE2-1); `httpapi` registers no `/` pattern while a legacy mount owns it, and its `ServesSPA` fallback consults `Router.NonSPA()` before handing a request to gin, so one predicate serves both owners and the S8 probes `/livez/`, `/READYZ` never answer HTML (FE3-13, 05-http-api §4.10); `ui.Handler` is not mounted; `ui_build_id` is `""`; the stale-build rule (§7.5.2) runs in ABO's `apiFetch`, fed by the same build ID (below) |
-| From shell adoption (09 S9) | `UIBundle()`, ABO's adoption of the hello pattern (below) | `ui.Handler`, mounted by the kernel with `Router.SPA` (05-http-api §4.10) | in the same PR: books drops `ServesSPA`; gin's `NoRoute` SPA serving, `setupStaticFiles` and the `static_embed.go` SPA code are deleted (the latter moves to `ui`); ABO passes `app.Options.UIOptions` (`PageMiddleware`: CF recovery from `internal/cfaccess` and `ui_route` recording; `ConnectSrcFrom`: its Access team host; FE3-4), which the kernel merges into `ui.Options`; its compat segments reach `NonSPA` through its mount's `TopSegments` (not `SPAShared`); the stale-build rule keeps running, now in `@mediacore/api-client`'s runtime, and the shell banner renders it (FE3-3) |
+| From shell adoption (09 S9) | `UIBundle()`, ABO's adoption of the hello pattern (below) | `ui.Handler`, mounted by the kernel with `Router.SPA` (05-http-api §4.10) | in the same PR: books drops `ServesSPA`; gin's `NoRoute` SPA serving, `setupStaticFiles` and the `static_embed.go` SPA code are deleted (the latter moves to `ui`); ABO passes `app.Options.UIOptions` (`PageMiddleware`: CF recovery from `internal/cfaccess`; `ConnectSrcFrom`: its Access team host; both read pointers books fills in its Start hook; FE3-4, FE4-5), which the kernel merges into `ui.Options`, adding its own `ui_route` recorder over books' `LegacyRedirects` from the URL-move release (§7.19 step 5); its compat segments reach `NonSPA` through its mount's `TopSegments` (not `SPAShared`); the stale-build rule keeps running, now in `@mediacore/api-client`'s runtime, and the shell banner renders it (FE3-3) |
 
 **ABO adopts the hello pattern at S9 (FE2-10).** `web_embed.go` (`//go:build embed_frontend`)
 defines `func UIBundle() ui.Bundle { return ui.MustFromFS(WebFS, "web/dist") }`, `web_nonembed.go`
@@ -785,31 +832,33 @@ contains `web/`, as hello does in 06 §6.12.5) and `ui_nonembed.go` (`//go:build
 zero `ui.Bundle`). `make build`, goreleaser, Docker and e2e set the tag; `make build-api` and
 `go test ./...` do not.
 
-**One build ID, one source (FE2-5, FE2-12, OPS2-13, FE3-2, MOD3-14).** The build ID (`BUILD_ID`, git
-commit plus build timestamp) is generated **once per release, before anything is bundled or linked**:
-by the release workflow for a release (exported before goreleaser, whose `pre-build-script` runs
-`build_web.sh` and whose four targets link with `-X main.buildID={{ .Env.BUILD_ID }}` instead of their
-own `{{.Date}}`), by the PR image job for a PR image, and by the Makefile once per `make build`
-locally. Every consumer receives that one value; none derives its own:
+**One build ID, one source: the embedded bundle (FE2-5, FE2-12, OPS2-13, FE3-2, FE4-1, MOD4-9).**
+The build ID is generated by `scripts/ci/build_web.sh`, before Vite runs, and nowhere else. It uses
+`BUILD_ID` when the caller sets it; otherwise it derives `<git rev-parse --short HEAD>-<commit unix
+time>[-dirty]` from the checkout, so a rebuild of one commit gets one ID; where there is no `.git` and
+no `BUILD_ID` (a Docker frontend stage built without the optional `ARG BUILD_ID`), it generates
+`<UTC timestamp>-<8 random hex>`. No Go link step receives it, so no build path (Makefile,
+Dockerfiles, goreleaser's `pre-build-script` inside the external reusable release workflow) has to
+carry an environment variable to the linker, and goreleaser's config is unchanged:
 
-* `scripts/ci/build_web.sh` passes it to Vite, which writes it into the bundle as
+* `build_web.sh` passes it to Vite, which writes it into the bundle as
   `import.meta.env.MEDIACORE_BUILD_ID` (`define`) and into `index.html` as
   `<meta name="mediacore-build" content="…">` (before S9 ABO's own `vite.config.ts` does this, from S9
   the `@mediacore/shell/vite` preset does). It is never a hash of chunk names, which would be circular.
-* The Go link step (`-ldflags -X main.buildID=…`, the Makefile's three ldflags sets, the Go stage of
-  both Dockerfiles with `ARG BUILD_ID`, and goreleaser) puts it in `main`, which passes it to core as
-  `app.Options.BuildID` (06 §6.4.5). From S2 `httpapi` stage 5 writes it as `X-App-Build` on every
-  response, legacy mount, 404 and 410 included (05-http-api §4.2, §8.1).
-* The `/` owner's embedded ID (S9: `ui.Bundle.BuildID()` from the meta tag; before S9: the mount's
-  `LegacyMount.BuildID`, which ABO reads from its embedded `web/dist/index.html`) must equal
-  `app.Options.BuildID`: P8 fails boot with `ProblemBuildID` otherwise (06 §6.5.1), and the PR image job
-  asserts that the meta tag equals the `X-App-Build` header (`TestBuildID_HeaderEqualsEmbeddedMeta`).
+* The server reads the ID from the bundle it embeds: from S2 `httpapi` stage 5 writes
+  `ui.Bundle.BuildID()` (S9) or the `ServesSPA` mount's `LegacyMount.BuildID` (before S9; ABO reads it
+  from its embedded `web/dist/index.html`) as `X-App-Build` on every response, legacy mount, 404 and
+  410 included, otherwise `dev` (05-http-api §4.2, §8.1). Before S2 ABO's `main` reads the meta from
+  `WebFS` and writes `X-App-Build` itself (09 S0). A server therefore always reports the ID of the
+  bundle it serves; a mismatch between them cannot exist, and nothing is compared at boot.
+* The PR image job asserts that the meta tag equals the `X-App-Build` header
+  (`TestBuildID_HeaderEqualsEmbeddedMeta`).
 * `/api/core/v1/modules` reports the served shell bundle's ID as `ui_build_id` (`""` before S9), and the
   one stale-build rule of §7.5.2 compares the header (and that field) with the define, in ABO's
-  `apiFetch` from S0 and in the api-client runtime after it moves; it is never deleted, so a tab left
-  open across a rollback from S9 is still offered a reload (FE3-3, OPS3-11).
-* `"dev"` under `vite serve` and in `make build-api` binaries, so `make build-api` plus `make web-dev`
-  never shows the check.
+  `apiFetch` from S0 and through the api-client runtime's `checkBuild` from UI-0; it is never deleted,
+  so a tab left open across a rollback from S9 is still offered a reload (FE3-3, OPS3-11).
+* `"dev"` under `vite serve` and in `make build-api` binaries (no embedded bundle), so `make build-api`
+  plus `make web-dev` never shows the check.
 
 ## 7.7 Theming
 
@@ -829,10 +878,12 @@ export function themeBootScript(storageKey: string): string; // inline pre-mount
   as `web/src/theme.ts:154-165` does today; mode toggling flips one attribute, no re-render.
 * The pre-mount boot script (no light-mode flash) is injected into `index.html` by the vite preset;
   the Go `ui` handler hashes it into CSP automatically (§7.6.2).
-* Mode storage key: `storageKey('shell', 'themeMode')`; ABO passes its existing key so saved
-  preferences carry over (the same trick `main.tsx:28-34` already uses). ABO's `localStorage` keys are
-  read in place, never moved or renamed, during the extraction, so a rollback from S9 to S8 keeps every
-  preference (FE3-18).
+* Mode storage key: `storageKey('shell', 'themeMode')` for a new app; ABO passes its existing key in
+  `createShell({ legacyStorageKeys: { themeMode, activitySourcePrefs, activityOpsPinned } })`, with the
+  literal values of today, so saved preferences carry over (the same trick `main.tsx:28-34` already
+  uses). ABO's `localStorage` keys are read in place, never moved, renamed or copied, during the
+  extraction, so a rollback from S9 to S8 keeps every preference and nothing deletes the old keys
+  (FE3-18, FE4-4).
 * Module tokens stay in the module: each module's `themeExtend` (§7.4.2) is merged by the shell after
   the app's `extend`, in module ID order (FE-16). ABO's dedup signal palette (`theme.ts:24-40`) moves
   to `web/src/modules/books/theme.ts` and is passed as books' `themeExtend`.
@@ -858,7 +909,8 @@ The OpenAPI 3.1 documents and the TypeScript client pipeline are owned by
   (`ApiTimeoutError`), SSO login-page bounce detection (`ApiAuthRedirectError`,
   `web/src/utils/apiFetch.ts:51`), `credentials: 'include'`, `X-Request-ID` surfacing, RFC 9457
   `Problem` as the error type (05-http-api §3.3), the 401 rule of §7.9, and the one stale-build rule
-  of §7.5.2, carried over from ABO's `apiFetch` and never deleted (FE3-3). Each generated operation
+  of §7.5.2, carried over from ABO's `apiFetch` as the exported `checkBuild(response)` that `apiFetch`
+  itself calls from UI-0, and never deleted (FE3-3, FE4-9). Each generated operation
   whose OpenAPI `x-mediacore-permission` is `public` is marked `skipAuthRedirect`. The shell creates
   one client in `ClientProvider`; `useApi()` returns it.
 * **The generated client arrives before identity moves (FE-12).** `@mediacore/api-client` (runtime,
@@ -873,9 +925,15 @@ The OpenAPI 3.1 documents and the TypeScript client pipeline are owned by
   generates correctly from an OpenAPI 3.1 document with `type: ["string","null"]` and dotted component
   names. `make generate-api-client` failing is a CI failure; there is no fallback generator.
 * Freshness gates (`make generate-api-client`, `make openapi-check`) follow 05-http-api; tygo is
-  deleted once its routes are native. `opsgen` (raw/13 §8), the source of the legacy `ops.ts` enums
-  that `useOperationsStore` compares, is kept, with its freshness gate, until S9, when its only consumer
-  moves to native routes (FE3-6; 04's `opsgen` row reads "retired at S9").
+  deleted once its routes are native. `opsgen` (raw/13 §8) generates the legacy `ops.ts` enums. They
+  have more than one consumer: `useOperationsStore` and `services/api.ts:14-15,590`, and
+  `utils/operationPolling.ts:7` with its 16 non-test importers, among them books pages that keep
+  legacy calls after S9 (`Library.tsx`, the review lanes, `ITunesImport.tsx`, `stagedMetadataApply.ts`,
+  `MaintenanceTab.tsx`, `ThrottlePanel.tsx`) (@748fd787a). So `opsgen` and its freshness gate stay
+  until the last `ops.ts` importer is native, which is the end of §7.19 step 6, not S9; 05-http-api §7
+  and 04's `opsgen` row state the same rule. At S5, when its input `internal/operations/state` moves to
+  `mediacore/tasks`, `opsgen` is repointed to `tasks`' state constants and the gate proves `ops.ts`
+  byte-identical (FE3-6, FE4-7).
 
 ## 7.9 Auth, session and realtime
 
@@ -918,8 +976,11 @@ The OpenAPI 3.1 documents and the TypeScript client pipeline are owned by
 * `/invite` and `/login/temp` render before auth gates and read their token from the fragment
   (§7.4.3); `/setup` and the first-run wizard (shell frame plus every enabled module's `setup` steps
   whose `isRequired()` is true) keep today's gate order (`App.tsx:200-251`). From 09 S4, when invite
-  creation switches to core and links use the fragment form, ABO's legacy `AcceptInvite` reads
-  `#token=` as well as the path parameter in the same build (FE2-8), and the same build adds a
+  creation switches to core, invite links keep the path form `/invite/<token>` that the legacy SPA
+  routes today (§7.4.3, FE4-2): ABO's legacy `AcceptInvite` takes the token from the path, as now, and
+  sends it in the body of `POST /api/core/v1/auth/invites/lookup|accept`; the fragment form, and the
+  books 302 that turns path-form links into it, start with the shell build (S9), whose `/invite` page
+  reads only `#token=` (`TestLegacyInviteLink_EndToEnd`). The same S4 build adds a
   `/login/temp` route to the legacy SPA's unauthenticated **and** authenticated branches that reads
   `#token=`, removes it with `history.replaceState` and calls
   `POST /api/core/v1/auth/temp-login/consume` (05-authn §4.13), because admin password reset and temp
@@ -969,7 +1030,7 @@ The shell side:
   REST side does not move ahead of its stream: from S5 to S9 `useOperationsStore` and `ActivityLog`
   keep their hand-written `api.ts` operations calls on the legacy paths (served by the task aliases,
   whose legacy shape is `LegacyPath.Shape`, 05-http-api §3.1, and is not in the generated client),
-  with the legacy enums from `opsgen`'s `ops.ts` (kept until S9, §7.8); REST and stream move to the
+  with the legacy enums from `opsgen`'s `ops.ts` (kept until its last importer is native, §7.8); REST and stream move to the
   native vocabulary and the generated core client together at S9, so one store never mixes native runs
   with legacy `op.*` frames (FE3-6). Until S6 provides the projections, a **books-registered bus
   subscriber** feeds the three legacy streams, A (`/api/events`), B (`/api/v1/operations/events`) and
@@ -1031,7 +1092,8 @@ first, and the core-web import rule (§7.3.1) proves the cut (FE-16).
 | `pages/Diagnostics.tsx` | shell `/system/diagnostics` frame | AI-dedup diagnostics → books widget |
 | `pages/FileBrowser.tsx` | books page `/books/files` | uses ui-kit `ServerFileBrowser` |
 | `components/wizard/WelcomeWizard.tsx` (989 LOC) | shell first-run frame + books `setup` | the wizard gate `config.root_dir \|\| config.setup_complete` (`App.tsx:87-89`) becomes books' `setup.isRequired` |
-| `contexts/AuthContext.tsx`, `components/toast/ToastProvider.tsx`, `stores/useAppStore.ts`, `lib/storageKeys.ts` | shell | `AuthContext`'s `* as api` import (`AuthContext.tsx:16`) is rewired to the generated core client before the move |
+| `contexts/AuthContext.tsx`, `components/toast/ToastProvider.tsx`, `stores/useAppStore.ts` | shell | `AuthContext`'s `* as api` import (`AuthContext.tsx:16`) is rewired to the generated core client before the move |
+| `lib/storageKeys.ts` (21 keys, 13 of them audiobook-specific, `storageKeys.ts:7-30` @748fd787a) | split (FE4-4) | the books keys (`itunes_import_settings`, the `library*`, `metadata-review-*` and `dedup-*` keys) move to `web/src/modules/books/storageKeys.ts` with their literal values; the shell keys (`themeMode`, `activity-source-prefs`, `activity-ops-pinned`) stay ABO literals passed through `createShell({ legacyStorageKeys })` (§7.4.2, §7.7), so no audiobook key name enters `core/web` (R1) and no preference resets |
 | `components/operations/OperationTrackerProvider.tsx` | shell `TaskTrackerProvider` (follow a run app-wide) + books provider for merge/combine/purge locks | |
 | `components/layout/{MainLayout,TopBar,UserMenu,sidebarSelection}.tsx`, `Sidebar.tsx` minus its arrays | shell | `ReviewBanner` and `usePendingFileOps` (`MainLayout.tsx:9-10,25`) become books `banners`; `librarySubItems`/`menuItems` (`Sidebar.tsx:53-100`) become books `nav` (with children) plus shell entries; the Review badge becomes `useBadge: useReviewCount` where `const useReviewCount = () => useReviewStore(s => s.count)` (FE-22) |
 | `components/common/*` (ConfigurableTable, ServerFileBrowser, PathLinks, BulkConfirmDialog, FilterTagBar), `ErrorBoundary`, `KeyboardShortcutsDialog`, `AnnouncementBanner` | ui-kit (presentational) / shell (stateful) | |
@@ -1041,8 +1103,8 @@ first, and the core-web import rule (§7.3.1) proves the cut (FE-16).
 | `services/api.ts` (8,747 LOC) | split: auth/users/operations/system/settings → generated core client (from the UI stage before 09 S4); books routes → generated books client in `modules/books/api/`; hand-written calls to `/api/v1` remain in `modules/books/legacyApi.ts` during the compatibility window and shrink route-group by route-group | |
 | `services/activityApi.ts` (256), `collectionApi.ts` (193), `fileOpsApi.ts` (29), `playlistApi.ts` (126), `readingApi.ts` (63), `versionApi.ts` (212) | books: generated books client where the route is native, else `modules/books/legacyApi.ts` during the window (FE-28) | none is shell code |
 | `theme.ts` | ui-kit `createMediaTheme` + books `themeExtend` (signal palette) | |
-| `generated/ops.ts`, `types/generated/*` | replaced by OpenAPI-generated types | `ops.ts` and `opsgen` stay until S9 (FE3-6) |
-| all other pages/components (Library, BookDetail, Authors, Series, Works, Collections, Playlists, TrashedVersions, review workspace, …) | `modules/books/` | URLs move to `/books/...`; old paths and `ABS_REDIRECTS` (`web/src/utils/absRedirects.ts:17-25`) become books' Go `UIDescriptor.LegacyRedirects` (exported through `manifest.gen.ts`, read by ABO's `PageMiddleware`, FE3-17), including the pages the shell absorbs: `/dashboard → /` (today's home, `App.tsx:256-258`), `/files → /books/files`, `/diagnostics → /system/diagnostics`, `/operations → /activity`, `/maintenance → /system` (FE2-16) |
+| `generated/ops.ts`, `types/generated/*` | replaced by OpenAPI-generated types | `ops.ts` and `opsgen` stay until the last `ops.ts` importer is native (end of §7.19 step 6; the Activity page stops importing it at S9, books pages through `operationPolling` later; FE3-6, FE4-7) |
+| all other pages/components (Library, BookDetail, Authors, Series, Works, Collections, Playlists, TrashedVersions, review workspace, …) | `modules/books/` | URLs move to `/books/...`; old paths and `ABS_REDIRECTS` (`web/src/utils/absRedirects.ts:17-25`) become books' Go `UIDescriptor.LegacyRedirects` (exported through `manifest.gen.ts`; the kernel registers a `ui_route` entry per row and `ui.Handler` records full page loads that match one, FE3-17, FE4-5; filled in the step-5 release, FE4-8), including the pages the shell absorbs: `/dashboard → /` (today's home, `App.tsx:256-258`), `/files → /books/files`, `/diagnostics → /system/diagnostics`, `/operations → /activity`, `/maintenance → /system` (FE2-16) |
 
 ## 7.12 Lifecycle
 
@@ -1056,8 +1118,8 @@ Server: `UIBundle()` runs in the app's `main` before `app.New`; only its `embed_
 calls `ui.MustFromFS`, so a malformed shell bundle (no `index.html`, no build meta) fails boot exactly
 when the tag is set, and an API-only build passes the zero `Bundle` and serves the placeholder
 (FE2-10). The kernel mounts `ui.Handler` in P8, with `app.Options.UIOptions` merged into its
-options, unless a legacy mount owns `/` (06 §6.5.1, FE3-4); P8 also checks the bundle's build ID
-against `app.Options.BuildID` (FE3-2).
+options, unless a legacy mount owns `/` (06 §6.5.1, FE3-4). There is no boot-time build-ID check:
+the served bundle is the only source of the ID (§7.6.3, FE4-1).
 
 ## 7.13 Error semantics
 
@@ -1067,8 +1129,7 @@ against `app.Options.BuildID` (FE3-2).
 | Unknown module ID in client registry vs server | not mounted, admin diagnostic | G3; old decision 8 |
 | Version-incompatible module | not mounted, diagnostic | G3 |
 | Client descriptor ID not declared by server (any slot) | item dropped, diagnostic | G3 |
-| Stale SPA build (the §7.5.2 rule: header differs, or the server serves a legacy SPA, or a header-less app response) | banner, keep working | reload is the user's choice; APIs still versioned |
-| Embedded build ID differs from `app.Options.BuildID` | boot fails (`ProblemBuildID`) | a broken build pipeline would prompt a reload that never clears (FE3-2) |
+| Stale SPA build (the §7.5.2 rule: header differs, or the server serves a legacy SPA, or an app response without `X-App-Build`) | banner, keep working | reload is the user's choice; APIs still versioned |
 | `/api/core/v1/modules` fails | shell renders only shell pages + retry banner (fail-closed for modules) | never guess which modules exist |
 | Lazy chunk load error | route-level ErrorBoundary with reload button; the server answers a missing chunk with 404, never `index.html` | network blips and stale tabs after deploy |
 | Page render throws | route-level ErrorBoundary; other routes keep working | as today (`App.tsx` wraps each route) |
@@ -1138,8 +1199,8 @@ two are merged together. In-repo, apps use `file:` dependencies; there is no roo
 | Test | Where | Proves |
 |---|---|---|
 | `intersect.test.ts` (one case per §7.5.2 row, incl. the core-version row and every slot) | shell, vitest | G3, FE-15, FE-16 |
-| `buildId.test.ts` | api-client runtime + shell | the §7.5.2 rule: header mismatch, legacy-SPA server (`ui_build_id` `""` with a non-dev header) and a header-less 2xx/4xx carrying `X-Request-ID` offer a reload; a header-less 5xx without `X-Request-ID` does not; skipped for `""` and `"dev"` defines; the define and the meta tag carry the same ID (FE3-2, FE3-3) |
-| `TestBuildID_HeaderEqualsEmbeddedMeta` | 06 §6.10; PR image job | `X-App-Build` equals the embedded meta for a `make build` binary and a Docker image built with one `BUILD_ID` (FE3-2, MOD3-14) |
+| `buildId.test.ts` | api-client runtime (`checkBuild`) + ABO `apiFetch` + shell | the §7.5.2 rule: header mismatch, legacy-SPA server (`ui_build_id` `""` with a non-dev header) and a header-less 2xx/4xx carrying `Reporting-Endpoints: csp=…` offer a reload; a header-less 502 without it does not; skipped for `""` and `"dev"` defines; `apiFetch` and the runtime call the one `checkBuild`; the define and the meta tag carry the same ID (FE3-2, FE3-3, FE4-3, FE4-9) |
+| `TestBuildID_HeaderEqualsEmbeddedMeta` | 06 §6.10; PR image job | `X-App-Build` equals the embedded meta for a `make build` binary, a Docker image (with and without `BUILD_ID`) and a goreleaser artefact; no build path links an ID (FE3-2, FE4-1) |
 | R-test row "S9 tab, roll back to S8, reload offered" | 09 §9.10 | an open S9 shell tab is offered a reload by the stale-build rule after a rollback to S8 (FE3-3, OPS3-11) |
 | `defineModule.types.test.ts` (`// @ts-expect-error` on undeclared IDs in every slot) | shell, typecheck | compile-time descriptor safety |
 | `nav.permissions.test.tsx` | shell | hidden nav for missing permission; `useBadge` called inside `<NavBadge>` |
@@ -1150,16 +1211,18 @@ two are merged together. In-repo, apps use `file:` dependencies; there is no roo
 | ESLint permission-literal rule (`no-restricted-syntax`) | ABO web `make ci` | no string literal in a permission position (`usePermission`/`useAction`/`hasPermission` argument, `permission`/`*_PERMISSION` property or constant, API-key scope list) unless from `manifest.permissions` or the generated client (FE-11, FE2-17) |
 | `reservedSegments.test.ts` | shell + `core/ui` | shell route table equals `ui.ReservedSegments()`; no `/logout` page |
 | `TestReservedSegmentsDisjointFromNonSPA` | kernel (06 §6.10; the one test of the P8 check, FE3-9) | a `TopSegments` entry that is a shell segment fails boot with `ProblemSPASegmentCollision`; a `SPAShared` shell segment (`login`, `invite`) passes (FE2-7, FE3-1) |
-| `TestLegacyInviteLink_302NoToken` | ABO books legacy routes + `httpapi`, at S4 and after S9 | `GET /invite/<token>` answers 302 to `/invite#token=…` with `Referrer-Policy: no-referrer`, `GET /auth/temp-login?token=` answers 302 to `/login/temp#token=…`, `GET /invite` serves the SPA page, and the access log and span show the redacted path (SEC2-6, FE3-5, SEC3-16) |
+| `TestLegacyInviteLink_302NoToken` | ABO books legacy routes + `httpapi` | from S4: `GET /auth/temp-login?token=` answers 302 to `/login/temp#token=…`; from S9: `GET /invite/<token>` answers 302 to `/invite#token=…` with `Referrer-Policy: no-referrer`; before S9 `GET /invite/<token>` serves the legacy SPA page; `GET /invite` serves the SPA page throughout; the access log and span show the redacted path (SEC2-6, FE3-5, SEC3-16, FE4-2) |
 | `TestLegacyTempLoginLink_EndToEnd` | ABO e2e, S4 done-check | admin reset on the S4 build → link → the legacy SPA's `/login/temp` route consumes the fragment → logged in (FE3-5) |
+| `TestLegacyInviteLink_EndToEnd` | ABO e2e, S4 done-check, repeated at S9 | an invite created on the build in which core auth decides requests mints `/invite/<token>`; opened signed out, it shows the invite page, accepting it signs the invitee in; opened signed in, it shows the invite page, not `NotFound`; at S9 a path-form link minted on S8 still opens through the 302 (FE4-2) |
 | `theme.contrast.test.ts` | ui-kit | contrast in both schemes |
 | `runtime.errors.test.ts` | api-client | envelope decoding, timeout, bounce detection, `skipAuthRedirect` from `x-mediacore-permission: public` |
 | `check-singletons.mjs` | core/web CI | one copy of each peer singleton and of `react/compiler-runtime` |
 | ESLint import boundary | core/web `make ci` from UI-0 | no specifier outside `core/web` (FE-16) |
 | bundle check | core/web e2e and ABO e2e | `/login` with an empty cache fetches no page chunk; entry and `mui` size budgets (FE-18) |
-| `TestHandler_AssetsImmutable`, `_IndexNoStore`, `_CSPPolicyVerbatim`, `_CSPHotSwap`, `_API404JSON`, `_Placeholder`, `_ServesRootPublicFile` (a `dist/` root file such as `/favicon.svg` is served with `no-cache`, FE3-14) | `core/ui`, Go | server semantics |
+| `TestHandler_AssetsImmutable`, `_IndexNoStore` (incl. `GET /index.html`: `no-store`, full CSP, through `PageMiddleware`, FE4-11), `_CSPPolicyVerbatim`, `_CSPHotSwap`, `_API404JSON`, `_Placeholder`, `_ServesRootPublicFile` (a `dist/` root file such as `/favicon.svg` is served with `no-cache`, FE3-14) | `core/ui`, Go | server semantics |
 | `TestHandler_NonSPASegments` (incl. case, `//`, trailing-slash variants, `/health/`, `/HEALTH`, `/metrics/`, `/livez/`, with the `Router.NonSPA()` predicate), `TestHandler_NonGETRefused`, `TestHandler_MissingAssetIs404`, `TestHandler_PageMiddlewareOnlyOnIndex` | `core/ui` | FE-3, FE2-6 |
-| port of `static_embed_recovery_test.go` | ABO, booted through `app.New` with `app.Options.UIOptions` (not a hand-built `ui.Handler`) | CF recovery still runs on page loads only, and the Access team host is in `connect-src` of the shell's policy (FE3-4) |
+| port of `static_embed_recovery_test.go` | ABO, booted through `app.New` with `app.Options.UIOptions` (not a hand-built `ui.Handler`) | CF recovery still runs on page loads only, and the Access team host is in `connect-src` of the shell's policy (FE3-4); a page load during boot, before books' Start hook fills the pointers, serves `index.html` with no panic (FE4-5) |
+| `TestHandler_RecordsLegacyRedirectUse` | `core/ui` + kernel | a full page load of a `LegacyRedirects` `From` path calls `OnRedirectUse` once with that pattern; an API call, an asset or a shell path does not; with no `LegacyRedirects` nothing is registered (FE4-5, FE4-8) |
 | `TestBundle_MissingMeta` | `core/ui` | fail-closed for shell bundles |
 | API-only boot | ABO S9 done-check | `make build-api && ./audiobook-organizer serve` answers `/` with the placeholder (FE2-10) |
 | `TestHandler_OutsideRouteChain` | `core/ui` + `httpapi` | no rate limit or permission stage on SPA responses; listed in the infra set (FE-25) |
@@ -1185,7 +1248,7 @@ step 4 (FE-1, FE-2, SIMP-25):
 3. **Generated core client consumed by ABO via `file:`** from UI-0, generated from the `core.json`
    that the S2 hello skeleton emits into `core/openapi/core.json` (§7.8); 09 S4–S6 switch `api.ts`
    sections straight to generated operations, S4's build replaces the legacy permission constants and
-   adds the legacy `/login/temp` route (§7.9.1), and from S5 to S9 the Activity page keeps its
+   adds the legacy `/login/temp` route while invite links keep their path form (§7.9.1, FE4-2), and from S5 to S9 the Activity page keeps its
    hand-written legacy-path calls (§7.9.2, FE3-6).
 4. **Shell adoption (09 S9), one PR series.** Create `@mediacore/ui-kit` and `@mediacore/shell`
    (with `/vite` and `/testing`) and add hello's web package to the workspace; cut the audiobook
@@ -1194,15 +1257,18 @@ step 4 (FE-1, FE-2, SIMP-25):
    onto `renderInShell`, which needs the providers to have moved (FE-17, FE2-4); delete
    `useUnsavedChangesBlocker`; the shell realtime client replaces `eventSourceManager` and the
    operations stream, and the Activity page moves to native REST and stream together with the
-   generated core client (`opsgen` retired); the preset writes the build-ID meta tag, and the
+   generated core client (it no longer imports `ops.ts`; `opsgen` stays for books' `operationPolling` users, §7.8); the preset writes the build-ID meta tag, and the
    stale-build rule keeps running in the api-client runtime (§7.5.2, §7.6.3); ABO adopts the
    `UIBundle()` pattern and `main.go` passes it to `app.Options.UI` together with `app.Options.UIOptions`
-   (FE3-4); books drops `ServesSPA` and gin's SPA serving is deleted in the same PR, while books' legacy
-   `/invite/{token}` and `/auth/temp-login` 302 routes stay manifest routes (§7.4.3, §7.6.3). Preconditions: UI-0 and the S4–S8 native routes the
+   (FE3-4); books drops `ServesSPA` and gin's SPA serving is deleted in the same PR; invite links switch
+   to the fragment form and books' legacy `/invite/{token}` 302 starts, beside the `/auth/temp-login`
+   302 that has served since S4, both manifest routes (§7.4.3, §7.6.3, FE4-2). Preconditions: UI-0 and the S4–S8 native routes the
    shell pages call (§7.5.1, FE2-25). Done when, among the e2e checks, `make build-api &&
    ./audiobook-organizer serve` answers `/` with the placeholder (FE2-10).
 5. **Server manifest and intersection on** (§7.5); ABO URLs move to `/books/...` with redirects
-   (§7.11).
+   (§7.11). Books fills `UIDescriptor.LegacyRedirects` in this release, not before, so the kernel's
+   `ui_route` entries exist, page loads are recorded and 09's C9 clock starts only once a legacy page
+   path is really a redirect; steps 4 and 5 may ship in one release (FE4-8).
 6. Replace the remaining `api.ts` and sibling service sections by generated clients as their native
    routes ship (09).
 
@@ -1328,3 +1394,19 @@ Round 3 (2026-11-04), findings applied to this file:
 - MOD3-13 — Docker frontend-stage change lands at UI-0.
 - R3-1 — checked: no dual-format machinery in this file; nothing to remove.
 
+
+Round 4 (2026-11-04), findings applied to this file:
+
+- FE4-1 / MOD4-9 / COR4-18 — meta-only build ID (per FE4-1's disposition): `build_web.sh` is the only generator (`BUILD_ID` if set, else a git-derived ID, else timestamp plus random hex); no ldflags, no `app.Options.BuildID`, no P8 check; Docker frontend stage keeps an optional `ARG BUILD_ID`; §7.3.2, §7.6.3, §7.12, §7.13 and the test rows rewritten.
+- FE4-2 — invite links keep the `/invite/<token>` path form the legacy SPA routes until the shell build; the fragment form and books' `/invite/{token}` 302 start at S9 (temp-login 302 stays from S4); §7.4.3, §7.9.1, §7.19; `TestLegacyInviteLink_302NoToken` staged, `TestLegacyInviteLink_EndToEnd` added.
+- FE4-3 — stale-build case 3 discriminator is a `Reporting-Endpoints` `csp` group, not `X-Request-ID`; `buildId.test.ts` row.
+- FE4-4 — `lib/storageKeys.ts` split (books keys to `modules/books/`), `createShell({ legacyStorageKeys })` keeps the shell keys' literal values; no copies.
+- FE4-5 — `AppOptions` funcs read pointers filled in a Start hook; `ui_route` recording moved into `ui.Handler` (`Options.Redirects`, `OnRedirectUse`, entries registered by the kernel at P7); boot-time page-load and recorder tests.
+- FE4-6 — `ModuleManifest`, `UIIDs`, `Redirect` are S2 leaf types beside `ReservedSegments`.
+- FE4-7 — `opsgen` stays until the last `ops.ts` importer is native (end of step 6), repointed to `tasks`' constants at S5 with a byte-identical gate; §7.8, §7.9.2, §7.11, §7.19.
+- FE4-8 — books fills `LegacyRedirects` in the URL-move release (step 5), so `ui_route` recording and the C9 clock start there.
+- FE4-9 — one `checkBuild(response)` in the api-client runtime from UI-0, called by ABO's `apiFetch` too.
+- FE4-11 — `GET /index.html` always takes the index rule (`no-store`, full CSP, `PageMiddleware`); test case.
+- MOD4-8 — the PR image job's triggers cover every image input (`core/**`, both modules' `go.mod`/`go.sum`, Dockerfiles, `.dockerignore`, `web/**`, every `//go:embed` input).
+- MOD4-10 — `ci.yml:127`, `frontend-ci.yml:64` and `nightly.yml:31` named; UI-0 precondition: reusable callers drop their frontend half (`run-frontend: false`) and ABO-local jobs run after `make web-deps`, or a github-common pre-install input.
+- R4-1 — checked: no store or grant machinery in this file; nothing to change.
