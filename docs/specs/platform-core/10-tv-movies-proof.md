@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/10-tv-movies-proof.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: e9ed438b-6097-4a4d-8b51-d2eacaca8221 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -339,7 +339,7 @@ the spec that closes it; rows closed here are specified in §10.5.
 | G6 | **Pending-release store** (temporary rejections retried on next RSS sync). | `raw/16 §3.3` delay profiles (`ProcessDownloadDecisions.cs` L61-L63, `RssSyncService.cs` L41-L46) | `acquire` pending store (§10.5). |
 | G7 | **Tags as cross-cutting scope** (series ↔ delay profile, indexer, release profile, client). | `raw/16 §7.1` row 15 | `acquire.TagID` and tag store under `c/acquire/tag/`; modules attach tag IDs to their entities. Kept inside `acquire` because only acquisition scoping uses tags; promotion to its own package follows the 03 §3.4 rule if a second consumer appears. |
 | G8 | **Provider registry + settings schema** (`Implementation`, `ConfigContract`, `Fields[]`, `/schema`) shared by indexers, clients, notifications (`raw/16 §5.1`, §7.1 row 1). | ABO builds providers in a `switch src.ID` (`raw/11-integrations.md` §3) | [05-metadata](05-metadata.md) M1: the one integration-instance store (adapter `Meta.Settings` as a `config.Schema`, instance records, `secrets.Ref`s; SIMP-4), used by [05-download](05-download.md)/[05-indexer](05-indexer.md)/[05-notify](05-notify.md). The facade renders the *arr `Fields[]` shape from that schema ([08-arr-facade](08-arr-facade.md)). |
-| G9 | **Calendar** (air dates, release dates, iCal feed). | `raw/16 §7.1` row 18 (app-level); no calendar code in ABO (grep `calendar` over `internal/*.go`: test strings only) | **App-level**, by the time indexes in §10.1.1/§10.2.1. Core requirement only: an iCal client cannot send headers, so [05-authn](05-authn.md) must support a per-route opt-in **feed token** in the query string (scoped, revocable, read-only), which is also what the *arr facade's `?apikey=` needs (`raw/16 §5.1`). Both are **deferred-build members** of `auth` (SIMP2-6): the feed token lands with the first TV/Movies app, query-key extraction with `arrfacade`; the S4 build of `auth` has neither. A shared iCal writer moves to `core/shared/ical` only once both apps use it (03 §3.4). |
+| G9 | **Calendar** (air dates, release dates, iCal feed). | `raw/16 §7.1` row 18 (app-level); no calendar code in ABO (grep `calendar` over `internal/*.go`: test strings only) | **App-level**, by the time indexes in §10.1.1/§10.2.1. Core requirement only: an iCal client cannot send headers, so [05-authn](05-authn.md) must support a per-route opt-in **feed token** in the query string (scoped, revocable, read-only), which is also what the *arr facade's `?apikey=` needs (`raw/16 §5.1`). Both are **deferred-build members** of `auth` (SIMP2-6): the feed token lands with the first TV/Movies app, query-key extraction with `arrfacade`; the `auth` that R2's identity flip (F4) ships has neither. A shared iCal writer moves to `core/shared/ical` only once both apps use it (03 §3.4). |
 | G10 | **Integer IDs.** Seerr/Bazarr send integer `seriesId`/`movieIds` (`raw/16 §5.2`). | — | [05-storage](05-storage.md) §5S.3.2 `Keyspace.Sequence(name).Next(ctx)` (leased ranges; `NextIn(b)` inside a batch). Closed. |
 | G11 | **Release profiles** (Required/Ignored term filters, indexer and tag scope). | `raw/16 §3.3` (`ReleaseProfile.cs` L10-L17) | `acquire.ReleaseRestriction` + generic spec (§10.5.3). Sonarr-v5-only air-date fields are a `tv` spec. |
 | G12 | **Remote path mapping** (client path → local path). | `raw/16 §4.6`; ABO has only iTunes path mappings (`internal/server/handlers/itunes.go:30`) | [05-library](05-library.md) `library.PathMapper` over `library.Mapping` rows (source `download:<instance>`), applied by `download.Pool` into `Item.LocalPath`. |
@@ -1096,5 +1096,5 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
 - D10–D12 revision (2026-11-04): §10.1.2's persisted-state row says ABO gets the same native design (its
   pre-core rows are migrated into the native stores in R2); the `Manifest.LegacyStores`, `legacy` package,
   exclusive/routed store and `legacy.Covering` wording removed; "so none has a legacy alias" dropped from the
-  `acquire` keys. The design sketch is otherwise unchanged.
+  `acquire` keys. The design sketch is otherwise unchanged. Consistency pass: G9's last stage key re-keyed to R2's identity flip (F4).
 
