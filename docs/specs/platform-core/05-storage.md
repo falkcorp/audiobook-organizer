@@ -543,7 +543,7 @@ const ( StateInvalid State = iota; Ready; Rebuilding; Degraded )
 ```
 
 Implementation `core/internal/bleveindex` generalises `internal/search/bleve_index.go`: scorch, mapping
-marker and rebuilding marker as **siblings** of the index directory (`bleve_index.go:176-184,252-260`),
+marker and rebuilding marker as **siblings** of the index directory (`bleve_index.go:177-184,257-264`),
 open failure = `Degraded` not boot failure (`register.go:42-60`), mapping change = drop + rebuild.
 The dirty set lives at `c/index/<module>/<name>/dirty/<id>` (generalising `idx:sidx:dirty:`,
 `pebble_store_search_dirty.go:39`) and is drained by a core reconciler (generalising
@@ -601,6 +601,7 @@ construction. `NewAIScanStore` (`ai_scan_store.go:156`, no non-test caller) is d
 
 ```
 kernel.Open(storage)
+  0 <data-dir>/restore/pending.json present? → apply staged restore first (05-backup §5B.3.4)
   1 resolve path (core.storage.path; ABO: database_path)            fail → boot error
   2 pebble.Open with no format version → read stamp, marker, sidecar  too new → refuse (StorageFormatTooNewError)
   3 pending RaisesFormat data migrations? → cut-over mode (§5S.3.7) else serve mode refuses older/marked
@@ -833,31 +834,31 @@ hold bearer credentials.
 | Test | Proves |
 |---|---|
 | `TestKeyspaceWritesCannotEscapePrefix` | relative keys always land under `Prefix()` incl. `Sub`, `DeleteRange` bounds |
-| `TestLegacyRangeRefusesUnclaimedAndForeignKeys` | R8 for absolute keys, longest-match resolution, carve-outs |
+| `TestLegacyRangeRefusesForeignKeys` | R8 for absolute keys, longest-match resolution, carve-outs |
 | `TestClaimOverlapFailsBoot` / `TestClaimCarveOutAccepted` | overlap rules, multi-owner conflicts listed together |
-| `TestABOClaimsDoNotTouchCoreOrModulePrefixes` | all 258 generated claims vs `m/`, `c/` (static) |
-| `TestFirstBootRefusesKeysUnderCoreAndModulePrefixes` | runtime `ErrForeignKeys` |
+| `TestABOClaimsAvoidCorePrefixes` | all 258 generated claims vs `m/`, `c/` (static) |
+| `TestFirstBootRefusesForeignKeys` | runtime `ErrForeignKeys` |
 | `TestBatchAtomicAcrossBoundKeyspaces` | outbox/dirty-mark in same commit; crash via `CrashClone` shows all or nothing |
 | `TestMigrationStepAtomicWithBookkeeping` | crash at every point of a step: either nothing or step+version+record |
-| `TestMigrationFailureHaltsBootAndLeavesStepUncommitted` | G2 |
-| `TestPremigrationCheckpointTakenOnceAndOpenable` | checkpoint opens read-only and matches pre-step data |
+| `TestMigrationFailureHaltsBoot` | G2 |
+| `TestPremigrationCheckpointOpens` | checkpoint opens read-only and matches pre-step data |
 | `TestMigrationTooLargeRefused` | cap enforcement |
 | `TestUnreadableVersionFailsClosed` | contrast with ABO fail-open |
 | `TestOlderBuildAcceptsNewerAdditiveSteps` / `TestOlderBuildRefusesNewerBreakingStep` | G5 vs `ErrKeyspaceTooNew` |
 | `TestBreakingMigrationRequiresFormat` | registration rule |
-| `TestDataMigrationResumesExactlyAfterLastCommittedKey` | crash between chunks; no item processed twice or skipped |
+| `TestDataMigrationResumesExactly` | crash between chunks; no item processed twice or skipped |
 | `TestDataMigrationShardsDisjoint` (`-race`) | parallel shards never touch the same key |
 | `TestDataMigrationDryRunWritesNothing` | preview leaves the DB byte-identical except the report |
-| `TestDataMigrationVerifyFailureBlocksBarrier` | later versions cannot run |
+| `TestDataMigrationVerifyBlocksBarrier` | later versions cannot run |
 | `TestCutoverRaisesStampBeforeFirstDelete` | B6a ordering; previous build refuses the half-converted store |
-| `TestAdoptionUnderCapIsAtomic` / `TestAdoptionOverCapBecomesOnlineDataMigration` | either production answer works |
-| `TestAdoptionDualWriteKeepsLegacyReadable` | previous release's reads see current data during the window |
+| `TestAdoptionUnderCapIsAtomic` / `TestAdoptionOverCapGoesOnline` | either production answer works |
+| `TestAdoptionDualWriteLegacyReadable` | previous release's reads see current data during the window |
 | `TestSequenceNeverReusesAfterCrash` | lease burn semantics |
 | `TestSnapshotAgeMetricAndRefresh` (`synctest`) | long-pass rule |
 | `TestCloseWaitsForLeases` (`synctest`) | gate drain/seal |
 | `TestIndexMarkDirtyInSameBatch` / `TestIndexReconcilerDrainsAfterCrash` | G4 for search |
 | `TestIndexOpenFailureDegrades` / `TestIndexMappingChangeRebuilds` | kept ABO behaviours |
-| `TestDerivedIndexRebuiltAfterVersionChangeAndRestore` | lifecycle |
+| `TestDerivedIndexRebuildTriggers` | lifecycle |
 | `TestAuxiliaryDBUsesPinnedFormat` | no `FormatNewest` |
 | `BenchmarkKeyspaceScan`, `BenchmarkBatchCommit` | overhead of the prefixing layer vs raw Pebble (< 5 % target) |
 
