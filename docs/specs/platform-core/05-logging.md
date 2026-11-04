@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.4.1 -->
+<!-- version: 1.5.0 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -9,7 +9,7 @@ Evidence commit `748fd787a` (all `path:line` anchors). Raw inputs:
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md) §3, §8, §9;
 [`raw/10-auth-rbac.md`](../../plans/platform-core/raw/10-auth-rbac.md) §6–7;
 [`raw/15-dependencies.md`](../../plans/platform-core/raw/15-dependencies.md) (`go-logr/logr` v1.4.4).
-Normative: [03-architecture](03-architecture.md) v1.6.1 R4 (`log` is in **L0** with `entity`, `lifecycle`,
+Normative: [03-architecture](03-architecture.md) v1.8.0 R4 (`log` is in **L0** with `entity`, `lifecycle`,
 `version`, `metrics`; the journal service `core/internal/logjournal` imports `storage` and `tasks`, so by
 R4's bridge rule it sits at **L4** and only the kernel imports it), R5 (no `slog.SetDefault` in core except the
 opt-in `app.InstallProcessDefaults`; R5 binds core only, and ABO's logger shim is an allowed books-module value),
@@ -22,7 +22,7 @@ mechanics: [05-config](05-config.md).
 |---|---|
 | L1 | `log/slog` is the only logging API in core. Core hands out `*slog.Logger` values; there is no core `Logger` interface. ABO's printf-style `logger.Logger` (with progress, change recording and cancellation folded in) is not carried into core; it survives in ABO as a books-module shim over core handles (§11). |
 | L2 | One handler pipeline per `App`; per-module child loggers carry `module=<id>` (and optionally `subsystem=<name>`); levels are settable per module (and per module.subsystem) at runtime. |
-| L3 | Core never calls `slog.SetDefault`, `log.SetOutput`, `otel.SetLogger`, `otel.SetErrorHandler`, `otel.SetMeterProvider`, `otel.SetTracerProvider` or `otel.SetTextMapPropagator`. `app.InstallProcessDefaults` is the single opt-in helper that does all of them, with this App's pipeline and telemetry providers, for an app that wants it (ABO does, from S2; MOD4-3). |
+| L3 | Core never calls `slog.SetDefault`, `log.SetOutput`, `otel.SetLogger`, `otel.SetErrorHandler`, `otel.SetMeterProvider`, `otel.SetTracerProvider` or `otel.SetTextMapPropagator`. `app.InstallProcessDefaults` is the single opt-in helper that does all of them, with this App's pipeline and telemetry providers, for an app that wants it (ABO does, from S2 r3, the release that deletes its façade's installs and sets `PromRegisterer`; MOD4-3, OPS5-14). |
 | L4 | Redaction is in the pipeline, once, before fan-out: type-based (`secrets.Value`, `LogValuer`), key-based (deny-list), URL-based (userinfo and credential query params) and **path-based** (one-time tokens in URL paths, including core's own invite route). The same `*log.Redactor` redacts trace span attributes ([05-metrics](05-metrics.md) §3, SEC-22). |
 | L5 | The **system log journal** (persisted operational records ≥ info, queryable, retained N days) is core and is readable only with `core:system.manage`. It persists through a store interface, `log.JournalStore` (R4-1): core's native store keeps records in `c/log/journal/`; an app with legacy system-log rows supplies its own store, written in its code over its keys (ABO's from S5). The **domain activity feed** stays in the app module. Security events go to core `audit`; task run logs to core `tasks`. |
 | L6 | The `go-logr/logr` adapter stays, but only as the value-dropping OTel SDK sink inside `app.InstallProcessDefaults`; `logr` is never imported by other core packages. |
@@ -184,7 +184,9 @@ type Record struct {
 type OtherUserPredicate func(rec Record, viewer string) bool
 
 // JournalStore persists the system log journal (R4-1). It is SDK, frozen by the API-stability gate, and
-// names only log types, so log (L0) imports nothing for it. Core's native store (core/internal/logjournal)
+// names only log types, so log (L0) imports nothing for it. It is the stated exception to "every write method
+// takes the caller's *storage.Batch" (06 LegacyStores, 05-storage "Store interfaces"; COR5-12, MOD5-10): it is
+// append-only, each call commits its own batch, and it never joins a multi-owner commit. Core's native store (core/internal/logjournal)
 // keeps records in c/log/journal/<ULID>; an app with legacy system-log rows supplies its own through its
 // module's Manifest.LegacyStores.Logs (06), written in the app's code over the app's keys (§5). logtest.JournalStoreSuite is the
 // contract every store runs (§10). Records reaching a store are already redacted.
@@ -218,7 +220,7 @@ func AttrsFrom(ctx context.Context) []slog.Attr
 // Redaction.
 type Redactor struct{ /* immutable */ }
 
-func NewRedactor(extraKeys []string, extraPaths ...PathRule) *Redactor // always includes the defaults below
+func NewRedactor(extraKeys []string, extraPaths ...PathRule) *Redactor // always includes the defaults below (fresh copies)
 func (r *Redactor) Attr(a slog.Attr) slog.Attr
 func (r *Redactor) URL(raw string) string           // userinfo removed, credential query params replaced, path rules applied
 func (r *Redactor) Path(p string) string            // path rules only
@@ -230,34 +232,37 @@ type PathRule struct {
 	Fn   func(path string) string // must fail closed (return a redacted path) when unsure
 }
 
+// The four default lists are functions that return a fresh copy on every call, never exported package-level
+// slices: R5 forbids exported mutable package state in core (TestNoGlobals), and a shared slice any importer
+// could append to would weaken redaction for every App in the process (MOD5-5, SIMP5-14). Same pattern as
+// jsonschemax.Base() (03 R4).
+
 // DefaultPathRules covers core's own token-bearing routes: any "invite"/"invites" segment followed by
 // another segment, at any position, after percent-decoding and dot-walk checks — ABO's RedactInvitePath
 // algorithm (internal/logging/redact_path.go:99-120) moved into core. It covers the core route
-// /api/core/v1/auth/invites/{token} (05-authn), the books legacy invite routes, and the legacy shell link
-// /invite/{token} that is answered by a redirect to /invite#token= during the window (SEC2-6, 07).
+// /api/core/v1/auth/invites/{token} (05-authn), the books legacy invite routes, and the legacy
+// /invite/{token} page, which is served in path form from S4 to S9 (FE4-2, 05-authn, 07).
 // Fragment-form links (/invite#token=, /login/temp#token=) never reach the server.
-var DefaultPathRules = []PathRule{ /* invite */ }
+func DefaultPathRules() []PathRule // [invite]
 
-var DefaultRedactKeys = []string{ // matched case-insensitively after stripping '-', '_', '.'
-	"password", "passwd", "secret", "token", "apikey", "authorization", "cookie", "setcookie",
-	"privatekey", "clientsecret", "credential", "credentials", "accesstoken", "refreshtoken", "sessionid",
-}
+// DefaultRedactKeys: matched case-insensitively after stripping '-', '_', '.':
+// "password", "passwd", "secret", "token", "apikey", "authorization", "cookie", "setcookie",
+// "privatekey", "clientsecret", "credential", "credentials", "accesstoken", "refreshtoken", "sessionid".
+func DefaultRedactKeys() []string
 
-// Query parameters whose values are always replaced, matched case-insensitively after one round of
-// percent-decoding of the name (also /auth/temp-login?token=, 05-authn). A superset of HEAD's
+// DefaultRedactQuery: query parameters whose values are always replaced, matched case-insensitively after one
+// round of percent-decoding of the name (also /auth/temp-login?token=, 05-authn). A superset of HEAD's
 // credentialQueryKeys (internal/server/middleware/log_redact.go:26-37), so OAuth authorization codes,
 // PKCE verifiers and refresh tokens in a callback URL never reach the log or a span (SEC2-18). This is
-// the one list: 05-http-api's stages reference it instead of restating it.
-var DefaultRedactQuery = []string{
-	"token", "access_token", "refresh_token", "api_key", "apikey", "key", "password", "secret",
-	"code", "code_verifier", "sig", "signature",
-}
+// the one list: 05-http-api's stages reference it instead of restating it:
+// "token", "access_token", "refresh_token", "api_key", "apikey", "key", "password", "secret",
+// "code", "code_verifier", "sig", "signature".
+func DefaultRedactQuery() []string
 
-// URL-keyed attributes: string values under these keys always get URL and path handling,
-// whatever they look like (a bare path "/api/core/v1/auth/invites/…" is not URL-shaped).
-var URLKeys = []string{
-	"path", "url", "uri", "request_uri", "referer", "url.full", "url.path", "url.query", "http.target", "http.url",
-}
+// URLKeys: URL-keyed attributes whose string values always get URL and path handling, whatever they look
+// like (a bare path "/api/core/v1/auth/invites/…" is not URL-shaped):
+// "path", "url", "uri", "request_uri", "referer", "url.full", "url.path", "url.query", "http.target", "http.url".
+func URLKeys() []string
 
 // RotatingFile is the built-in size-based rotator for Output="file" (no third-party dependency).
 type RotatingFile struct{ /* unexported */ }
@@ -269,8 +274,8 @@ func (f *RotatingFile) Close() error
 
 **Pipeline (normative order):** level gate (per scope, atomic) → append ctx attrs and trace/span ids from
 `trace.SpanContextFromContext(ctx)` → redact (resolve `LogValuer`; deny-listed keys → `"[REDACTED]"`; for
-`*url.URL` values, values under `URLKeys` and other URL-shaped string values: userinfo removed, query params in
-`DefaultRedactQuery` replaced, path rules applied) → fan-out to the primary `slog.TextHandler`/`slog.JSONHandler`
+`*url.URL` values, values under `URLKeys()` and other URL-shaped string values: userinfo removed, query params in
+`DefaultRedactQuery()` replaced, path rules applied) → fan-out to the primary `slog.TextHandler`/`slog.JSONHandler`
 and to taps. Because taps receive redacted records, nothing the journal or the realtime tail stores holds a
 token the redactor recognises. The text and JSON handlers already quote control characters in messages and
 values, so core adds **no** message sanitizer (locked by `TestHandler_EscapesControlChars`); ABO's two
@@ -390,10 +395,12 @@ type Schedules struct { // section core.log.schedules
     older build reads as its own system log. The record's remainder that HEAD's shape cannot hold (module,
     subsystem, attributes, trace and span IDs) goes to a **books-owned extension record** keyed by the row key
     (books' `m/books/ext/logs/`, `storage.Extension`, 05-storage §5S.3.11), which older builds never read and
-    which carries a hash of the row it extends; never extra members in the legacy row (R4-1). Every field of it
-    is Derived in 05-storage's terms.
+    which carries the fingerprint `legacy_ref.fp` of the row it extends; never extra members in the legacy row
+    (R4-1). Every field of it is Derived in 05-storage's terms and it declares no Widening field, so under
+    05-storage's rule a stale extension is never marked `Suspended` and never counts toward a suspension health
+    token (DATA5-4); log records are never rewritten, so `Query` simply ignores a stale one (below).
   - `Query` returns rows as `Record`s and merges each extension whose row is present and whose hash matches.
-    An extension whose row is gone or changed is ignored (and deleted by the next prune): a log record grants
+    An extension whose row is gone or whose fingerprint no longer matches is ignored (and deleted by the next prune): a log record grants
     nothing, so ignoring it is enough. Without its extension a record has no `user_id`, so the other-user
     predicate fails closed on it (below).
   - `Prune` deletes aged rows and their extensions in bounded chunks, as HEAD does
@@ -403,7 +410,11 @@ type Schedules struct { // section core.log.schedules
   release that starts the journal, ABO's own writers and pruner of those rows are removed (§11), so each row
   has one writer and one pruner. **Rollback:** an older build reads every journal record written by S5 or later
   as its own system-log row and prunes it itself; rows it writes during a rollback are served after
-  roll-forward. Logging adds no rollback cost and no stated consequence.
+  roll-forward, so the journal adds no rollback cost. One consequence comes from the same S5 release removing the
+  activity `Writer`'s line parsing (§11): from S5 no `system` entries are added to the books activity feed, so
+  after a rollback the older build's Activity page shows none for the time spent on S5 or later, while its
+  system-log route still shows them. 09 §9.2.1 lists it (OPS5-12); after roll-forward the journal serves the
+  whole period.
 - User data in system log lines: HEAD serves the system activity log to `settings.manage` but
   drops lines that name another user's data, and blanks their user ID, unless the caller also holds
   `users.manage` (`activity.NamesOthersUserLog`, `internal/server/handlers/system/handler.go:444-458`). The query
@@ -478,11 +489,12 @@ These are recorded by a kernel-side bridge (`log` cannot import `metrics`, R4): 
 
 | Test | Asserts |
 |---|---|
-| `TestNoGlobals` (archtest, R5) | no `slog.SetDefault`, `log.SetOutput`, `otel.SetLogger`, `otel.SetErrorHandler`, `otel.SetMeterProvider`, `otel.SetTracerProvider`, `otel.SetTextMapPropagator` in core outside `app.InstallProcessDefaults` (its exception list names exactly these seven) |
+| `TestNoGlobals` (archtest, R5) | no `slog.SetDefault`, `log.SetOutput`, `otel.SetLogger`, `otel.SetErrorHandler`, `otel.SetMeterProvider`, `otel.SetTracerProvider`, `otel.SetTextMapPropagator` in core outside `app.InstallProcessDefaults` (its exception list names exactly these seven); `log` exports no package-level variable of slice, map, func or pointer type (the default lists are functions, MOD5-5) |
+| `TestDefaultLists_FreshCopies` | appending to or editing the slice one call of `DefaultPathRules()`, `DefaultRedactKeys()`, `DefaultRedactQuery()` or `URLKeys()` returns leaves the next call's result and every `Redactor` unchanged |
 | `TestModuleLevels_Live` | `SetLevels` changes `Enabled` for `books` and `books.scanner` without new loggers |
 | `TestRedact_DefaultKeys` / `_NestedGroups` / `_URLUserinfoAndQuery` / `_SecretsValue` | values replaced; `secrets.Value` prints `[REDACTED]` in text and JSON |
 | `TestRedact_CoreInvitePath` | `/api/core/v1/auth/invites/<token>` and the legacy shell link `/invite/<token>` under `path`, `url.path`, inside a full URL and percent-encoded → token absent in text, JSON, journal record and realtime tail record |
-| `TestRedactQuery_SupersetOfHEAD` | every key of HEAD's `credentialQueryKeys` (fixture copy) is in `DefaultRedactQuery`; `?code=…&code_verifier=…&refresh_token=…&SECRET=…` → all values redacted |
+| `TestRedactQuery_SupersetOfHEAD` | every key of HEAD's `credentialQueryKeys` (fixture copy) is in `DefaultRedactQuery()`; `?code=…&code_verifier=…&refresh_token=…&SECRET=…` → all values redacted |
 | `TestRedact_TempLoginTokenQuery` | `/api/core/v1/auth/temp-login?token=<t>` → `token=[REDACTED]` |
 | `TestRedact_PathRuleFailsClosed` | over-long / over-escaped / dot-walked invite paths → `/[REDACTED]` (ABO fixtures ported) |
 | `TestRedactor_SpanAttributes` | `Redactor.String` on `url.full`, `url.query`, `http.target` with `apikey=` / `token=` → redacted (consumed by 05-metrics' span exporter test) |
@@ -535,7 +547,8 @@ call sites to injected loggers is an optional ratchet, not an extraction stage.
    `InstallProcessDefaults` stays only for third-party libraries that log via the default. Listed in the 11 §11.5
    checklist with the config façade removal (prerequisite only for multi-module binaries).
 4. `internal/telemetry/sdklog.go` and `errorhandler.go` stay in ABO's thin `internal/telemetry` façade, which
-   installs them, until `app.InstallProcessDefaults` exists at S2; they then move into `app`. At S2 that helper
+   installs them, until ABO calls `app.InstallProcessDefaults` at S2 r3; they then move into `app`. At S2 r3 that
+   helper
    takes over **every** install the façade did — the logger, the error handler, the meter and tracer providers
    and the propagator (§3) — and the façade's install code, including `InitOTEL`'s automatic install
    (`telemetry.go:49`), is deleted; the rest of `internal/telemetry` stays in ABO as books telemetry (03 R5,
@@ -618,3 +631,11 @@ Round 4:
 Integration pass (round 4):
 
 - integration pass (round 4): §5: ABO key names (`syslog:`) removed from the store contract and user-data bullet; the HEAD→core table labelled as an ABO-migration table.
+
+Round 5:
+
+- MOD5-5 / SIMP5-14 — §3: `DefaultPathRules`, `DefaultRedactKeys`, `DefaultRedactQuery` and `URLKeys` are functions returning fresh copies (R5, `TestNoGlobals`); the invite comment says the legacy `/invite/{token}` page is served in path form S4–S9 (FE4-2); pipeline and test references updated; `TestDefaultLists_FreshCopies`.
+- COR5-12 / MOD5-10 — §3 `JournalStore`: stated as the exception to "every write method takes the caller's `*storage.Batch`" (append-only, own batch, never a multi-owner commit).
+- DATA5-4 — §5 ABO's store: the journal extension declares no Widening field, so it is never `Suspended`; fingerprint named `legacy_ref.fp` (DATA5-16).
+- OPS5-12 — §5 rollback: the S5 removal of the activity `Writer`'s line parsing leaves the older build's activity feed without `system` entries for the S5+ period (09 §9.2.1); the journal itself adds no cost.
+- OPS5-14 — L3, §11 item 4: ABO calls `app.InstallProcessDefaults` at S2 r3, the release that deletes the façade's installs and sets `PromRegisterer`.
