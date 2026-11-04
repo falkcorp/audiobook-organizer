@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.11.1 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -542,10 +542,11 @@ ABO (§4.8).
 // SEC6-3, DATA6-8, R6-5). A legacy store whose pre-core code serialises its
 // rows with in-process mutexes implements legacy.WriteLock instead, and every
 // batch carrying an identity write that core commits is built and committed
-// inside storage.CommitLocked with the lock names of its writes, so the
-// store's mutexes are held from the first read through the commit (resolution
-// R9-1, below; ABO: apiKeyMu with early fix 6, inviteMu, userWriteMu,
-// sessionWriteMu, the bootstrap mutex). The interface holds the native
+// inside storage.CommitLocked(ctx, b, d, stage, locks...) with the locks the
+// store's WriteLocks returns for the lock names of its writes, so the store's
+// mutexes are held from the first read through the commit (resolution R9-1,
+// below; ABO: apiKeyMu with early fix 6, inviteMu, userWriteMu,
+// sessionWriteMu, bootstrapMu, userMergeApplyMu). The interface holds the native
 // contract only: capabilities that only a pre-core app's store can give
 // meaning are declared in legacy (below), outside the API promise (SIMP5-4,
 // resolution R6-3; 05-storage §5S.3.11 "Legacy capabilities").
@@ -704,10 +705,11 @@ e-mail uniqueness check runs under `inviteMu`, `internal/database/pebble_store.g
 identity store holds from S4 r2, when `bootstrap.go`'s redeem moves into core (§11); `LockMerge` →
 `userMergeApplyMu` and every lock above. Their `LockRank`s follow HEAD's order (`inviteMu`, `userWriteMu`,
 `sessionWriteMu`, `pebble_store_auth.go:509-525`; `userMergeApplyMu`, `inviteMu`, `apiKeyMu`,
-`internal/database/user_merge.go:507-529`). The same instance's `WriteLock` also exposes HEAD's
-`counterMu`, which no identity write names (no identity row takes an ID from `nextID`,
-`pebble_store.go:966-989`); the library root source's `import_path` allocation does (05-library,
-DATA9-2).
+`internal/database/user_merge.go:507-529`). HEAD's `counterMu` is **not** one of these locks (lead
+decision, round 9; 05-storage §5S.3.2): HEAD's `nextID` takes it around its own `Sync` commit of the
+counter (`pebble_store.go:966-989`), outside any caller's batch, and no identity row takes an ID from
+it; the library root source's `import_path` allocation does, and shares it only because the kernel
+builds one store instance per family (05-library, DATA9-2).
 
 - **Staging takes no mutex.** Books' staging methods (`PutAPIKey(b, …)`, `TouchAPIKey(b, …)`,
   `TakeOneTime(b, …)`, …) never lock themselves, because `sync.Mutex` is not re-entrant: the hold is
@@ -1348,7 +1350,8 @@ entries a serve boot would stage before it promotes its own Pebble open stamp an
 (05-storage §5S.4 owns the list; resolution R8-2). So the command's **own** open is never read as
 foreign, and an earlier foreign open is never erased by it. ABO, which keeps its own cobra tree,
 reaches the command through `app.OfflineCommands` (06 §6.4.5), which returns `storage restore-checkpoint`,
-`users reset-password` and `secrets set-install-id` as name, help and `Run(ctx, args)` for ABO to wrap
+`users reset-password`, `secrets export-keyring`, `secrets rotate-derive` and `secrets set-install-id` as
+name, help and `Run(ctx, args)` for ABO to wrap
 (`TestCLIExposesCoreOfflineCommands`, COR9-6).
 
 **Replaced store, and restores by an older build (DATA3-8, SEC3-3, SEC3-10, DATA4-7, SEC4-6).** An
@@ -1828,7 +1831,7 @@ rotate those secrets and re-issue API keys."
 |---|---|---|
 | **H1 — identity cutover** (raises `books`, and `core` for the `c/auth/` and `c/rbac/` rows) | sessions and one-time tokens hashed (`mcs_`, `mci_`, `mct_`, `mcb_`; §4.1), keys re-issued or re-stored as `mck_` with native scopes, roles with native scopes (core-only scopes, `SeedDigest`/`PendingSeed`, the seed-role operator diff and the lift of `ErrSeedRoleLocked`, 05-rbac §3.6, §4.8), `needs_confirmation` and `SignInRestricted` as stored fields, the native `LastSeen`. **The ambient scopes are carried over (SEC9-8):** every role that is not `Confined()` and every existing key whose owner is not confined gains the app's `LegacyAmbientScopes` (ABO: `core:self`, `core:metrics.read`, `books:reading`) in its native scope set, so scrape keys, own-profile and reading-state reach are unchanged (`TestH1_AmbientScopesPreserved`). Then the checkpoint deletion and compaction above | `legacy.Stores.Auth`/`Roles`, `legacy.AuthReconciler`, `legacy.AuthAtomWriter`, the identity keys of `legacy.WriteLock`, `legacy.RBACAtomWriter` and their `legacytest` suites (outside the API promise, so no v1 break, R6-3); `app.Options.LegacyAmbientScopes`; `LegacyFullScope` for any key still holding an empty list |
 | **H2 — secrets cutover** (raises `books`, and `core` for `c/secrets/`) | plaintext blob secrets encrypted into `core/secrets` (05-config), then the checkpoint deletion and compaction above | the plaintext fields |
-| **H3 — auth-precedence cutover** (raises `books`) | for `enable_auth` only (resolution R9-5, SEC9-2, SEC9-7): an operator value that **enables** auth wins over a stored `false`; a value that disables auth keeps HEAD's precedence, so a stale `ENABLE_AUTH=false` still loses to a stored `true`. Every other `BelowStored` legacy flag, the Basic gate's included, keeps HEAD's precedence until a separate, owner-decided cutover of its family (05-config §1.12.5) | for `enable_auth`: HEAD's stored-value-wins precedence over an enabling operator value, and the auth-disabled principal's `!prior.EnableAuth` write rule (`Alias.HEADAuthOffWritable` cleared on that key, so SEC4-8 applies to ABO's auth switch). The Basic gate keys keep that write rule. Release note: "With authentication off, the auth switch can no longer be changed in Settings; set `ABO_CORE_AUTH_MODE` or `ENABLE_AUTH`." |
+| **H3 — auth-precedence cutover** (raises `books`) | for `enable_auth` only (resolution R9-5, SEC9-2, SEC9-7): an operator value that **enables** auth wins over a stored `false`; a value that disables auth keeps HEAD's precedence, so a stale `ENABLE_AUTH=false` still loses to a stored `true`. Every other `BelowStored` legacy flag, the Basic gate's included, keeps HEAD's precedence until a separate, owner-decided cutover of its family (05-config §1.12.5) | for `enable_auth`: HEAD's stored-value-wins precedence over an enabling operator value, and the auth-disabled principal's `!prior.EnableAuth` write rule (`Alias.HEADAuthOffWritable` cleared on that key, so SEC4-8 applies to ABO's auth switch). The Basic gate keys keep that write rule. H3 does not remove HEAD's auth-off write rule otherwise: `HEADAuthOffWritable` is cleared on `enable_auth` only (05-config §1.12.5). Release note (09 §9.13): "With authentication off, Settings can no longer turn it on; set `ENABLE_AUTH=true` or `ABO_CORE_AUTH_MODE=required` and restart." |
 
 Until then, raw session and invite tokens stay at rest exactly as at HEAD (no regression, no
 improvement), and ABO's roles and keys cannot hold core-only scopes (05-rbac §6.3).
@@ -2121,3 +2124,4 @@ Round 9 (2026-11-04), findings applied to this file:
 - DATA9-8 (R9-11) — §11.2: each cutover names the owners it raises (`books`, plus `core` for `c/` rows); `TestHardeningCutoverRefusedByEveryOlderRelease`.
 - OPS9-7 — §11.1 item 5: the hotfix (and stage 8 from S3) uses `BASIC_AUTH_PASSWORD` in memory when the stored password is empty; S0 release note.
 - SEC9-14 — §11.1: each `todo.d` entry says "implement 05-authn §11.1 item N exactly"; `mergeActor` folded into early fix 4.
+- integration pass (round 9): §3.4: `counterMu` is not an identity lock (lead decision; 05-storage §5S.3.2); `Store` comment names `CommitLocked(ctx, b, d, stage, locks...)` and the full identity mutex list; §4.14: `app.OfflineCommands` also returns `secrets export-keyring` and `secrets rotate-derive`; §11.2 H3 row: H3 clears `HEADAuthOffWritable` on `enable_auth` only and does not otherwise remove HEAD's auth-off write rule; release note is 09 §9.13's text.

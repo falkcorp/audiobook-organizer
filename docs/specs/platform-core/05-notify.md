@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-notify.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.11.1 -->
 <!-- guid: 785812fd-5ddd-4540-be24-d061c0127788 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -205,11 +205,13 @@ func (s *Service) Rules(ctx context.Context) iter.Seq2[Rule, error]
 // package legacy at the integrations cutover, which is not a breaking change.
 // A legacy store refuses a rule its format cannot express with
 // ErrRuleNotExpressible (422). PutRule and DeleteRule commit their batch
-// through storage.CommitLocked (05-storage; R9-1), naming the legacy store's
-// legacy.WriteLock when it offers one: books' store writes the legacy
-// webhook event list into the config blob, so it offers the lock over HEAD's
-// configBlobSaveMu, the one books' config and instance stores also name
-// (05-metadata M1.4 step 2a "Write"), and the mutex spans the commit. The
+// through storage.CommitLocked(ctx, b, d, stage, locks...) (05-storage;
+// R9-1), passing the locks the legacy store's legacy.WriteLock returns when
+// it offers one: books' store writes the legacy webhook event list into the
+// config blob, so its WriteLocks returns HEAD's configBlobSaveMu for
+// legacy.LockConfigSettings, the same storage.Lock value books' config and
+// instance stores return (05-metadata M1.4 step 2a "Write"), so CommitLocked
+// takes it once and the mutex spans the commit. The
 // kernel builds one instance of it per process (TestLegacyStoresAreSingletons).
 type RuleStore interface {
 	Load(ctx context.Context) ([]Rule, error)
@@ -362,7 +364,7 @@ Fakes: `coretest.FakeNotifier` (records `Send` calls; scriptable classes) and `c
 | ABO | Becomes |
 |---|---|
 | `internal/mail` (`Sender`, `SMTPSender`, `Message`) | `core/integrations/notify/mail` (public `mail.Sender` stays the primitive for transactional mail); `core.email` channel wraps it |
-| `smtp_*` keys | no stored form at HEAD (environment only, 05-metadata M1.10): operator-set `smtp_*` values are the in-memory overlay that yields the effective `notify/email` instance (`Stored=false`) while set, never persisted (05-metadata M1.4 step 2, SIMP2-5). HEAD never lays a stored value over them, so they are not `BelowStored` names (05-config §1.12.4): under the one precedence rule of 05-metadata M1.4 step 2 (SEC6-5) they overlay and lock the matching fields of a stored `notify/email` row while set, and private-network trust follows the effective value's source. An operator-set `smtp_password` is bound to the
+| `smtp_*` keys | no stored form at HEAD and none here: HEAD's `json:"-"` fields, read from the environment and the operator file only (`internal/config/invite_config.go:28-29` @748fd787a; 05-config §1.3.7, §2.2, 05-metadata M1.10), so no config write stores them in the blob or in `c/config/`, as at HEAD: operator-set `smtp_*` values are the in-memory overlay that yields the effective `notify/email` instance (`Stored=false`) while set, never persisted (05-metadata M1.4 step 2, SIMP2-5). HEAD never lays a stored value over them, so they are not `BelowStored` names (05-config §1.12.4): under the one precedence rule of 05-metadata M1.4 step 2 (SEC6-5) they overlay and lock the matching fields of a stored `notify/email` row while set, and private-network trust follows the effective value's source. An operator-set `smtp_password` is bound to the
 destination `smtp://host:port` by origin plus provenance (05-metadata M1.4 step 2; SEC7-3, R8-5): it is served while
 the effective host and port equal the operator-set `smtp_host`/`smtp_port` (or the adapter default for one the
 operator does not set), or equal the native row's `OperatorSecretOrigin` (`notify/email` has no legacy row, so its stored instance is native on ABO too), which a ProtectAdmin `Put` records, so an env password beside an admin-set host works (`TestOperatorSecret_AdminStoredHostServed`, SEC8-2);
@@ -522,3 +524,4 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
 - Round 9:
   - R9-1 — §3 `RuleStore` comment: `PutRule`/`DeleteRule` commit through `storage.CommitLocked` with the legacy rule store's `legacy.WriteLock` (books: `configBlobSaveMu`); one instance per process.
   - R9-4 / SEC9-6 — §10 webhook row: creating a legacy-backed webhook or changing the family-level secret needs ProtectAdmin (05-metadata M1.3).
+- integration pass (round 9): §3 `RuleStore` comment: the rule store returns the `legacy.LockConfigSettings` lock (`configBlobSaveMu`), passed to `storage.CommitLocked(ctx, b, d, stage, locks...)`; §10 `smtp_*` row: HEAD's `json:"-"` SMTP fields are environment and operator-file only, never stored, as at HEAD.

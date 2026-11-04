@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.11.1 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -610,14 +610,16 @@ type StateFiles interface {
 // (05-storage owns it; R9-6): the reset kind, the confirm token, delete_library_files and the echoed library_root
 // and library_file_count of 05-rbac §6.2, the one confirmation contract; the HEAD-shaped legacy paths mark it as
 // such (05-rbac's library_confirm=legacy). ResetArgs:
-//   - for ResetFactory with delete_library_files set, counts the library first: the file count is the number of
-//     entries the hook would remove, RootDir's top-level entries, as HEAD removes them
-//     (internal/server/handlers/system/handler.go:571-577 @748fd787a), an exact count, so a live import changes it
-//     only when it creates a new top-level entry. A RootDir that HEAD's IsDangerousRoot refuses is an error
-//     wrapping storage.ErrResetRefused (400, nothing staged; handler.go:563-568). Unless the request is the legacy
-//     one (HEAD counts nothing), a library_root or library_file_count that differs from the count just taken is
-//     05-storage's library-confirm error carrying the current root and count (422 library_files_confirm_required,
-//     the values in the problem body), and nothing is staged (SEC9-4, COR9-4);
+//   - for ResetFactory with delete_library_files set, runs the preflight first: it resolves RootDir and counts the
+//     top-level entries the hook would remove, as HEAD removes each with everything under it
+//     (internal/server/handlers/system/handler.go:571-577 @748fd787a), without the hook's kept paths, so the count is
+//     one directory read, exact, and a live import changes it only when it creates a new top-level entry; it returns
+//     them as ConfigResetPlan.LibraryRoot and LibraryFiles. A RootDir that HEAD's IsDangerousRoot refuses is an error
+//     wrapping storage.ErrResetRefused (400, nothing staged; handler.go:563-568). ResetArgs compares nothing:
+//     kernel.stageReset compares the preflight's values with req and, unless req.LegacyConfirm is set (HEAD's wipe
+//     with no count check), answers a library_root or library_file_count that differs with 05-storage's
+//     *storage.LibraryConfirmError carrying the current root and count (422 library_files_confirm_required, the
+//     values in the problem body), and nothing is staged (05-storage §5S.3.15; SEC9-4, COR9-4);
 //   - with delete_library_files unset (the native route's default), records no library root, counts nothing,
 //     runs no dangerous-root check, and the hook touches no file under RootDir (A-17);
 //   - for ResetFactory, returns the hook arguments: the Open Library dump directory, the gap-fill file's path and,
@@ -636,7 +638,8 @@ type ConfigResetArgs interface {
 // The plan is recorded in the intent: Hook as hook_args (ResetFactory only, nil for ResetStore), Rows as fresh_rows,
 // which the reset boot's fresh-install batch writes inside the declaring module's claims (books: HEAD's
 // factory-default blob, the same for both kinds, §1.12.2), and LibraryRoot/LibraryFiles, the root and count
-// ResetArgs confirmed (only with delete_library_files; "" and 0 otherwise), which the route's 200 answer and its
+// the preflight found, which kernel.stageReset compares with the request (only with delete_library_files; "" and
+// 0 otherwise), which the route's 200 answer and its
 // audit record name. The run is the applied ResetFactory swap handed as ConfigOpenEnv.Reset: Args is the plan's
 // Hook, Delete the Recreatable auxiliary DBs outside the DB's filesystem that the hook removes,
 // DeleteLibraryFiles the intent's delete_library_files (the hook wipes the recorded root only when it is set),
@@ -978,7 +981,7 @@ off:
   `core.http.peer_allowlist`, the tunnel connector addresses `core.http.trusted_proxies`, the login-saturation
   bucket, `public_base_url`, the Cloudflare guest and invite keys, `bootstrap_key_ttl*`, the ABS JWT secret;
   `internal/config/config.go:1636-1759` @748fd787a; the `json:"-"` SMTP fields are integration-bound passthrough
-  values, which integrations' legacy SMTP instance likewise never stores, 05-notify) are `ProtectOperator` whatever their declared class, with auth
+  values, file and env only and never stored, as at HEAD: they are `notify/email`'s in-memory overlay, 05-notify §10) are `ProtectOperator` whatever their declared class, with auth
   on or off: no caller stores them, as at HEAD, so nothing an older build would not read is ever stored for them and
   a rollback never empties a perimeter list (R9-5, DATA9-6; `TestFileOnlyLegacyKeysNeverDBStored`). A native app
   keeps each key's declared class (05-http-api tables `peer_allowlist` and `trusted_proxies` as `admin`).
@@ -1705,7 +1708,7 @@ SEC7-4, SEC7-5, DATA7-6):
   `legacy.ConfigResetArgs.ResetArgs` on the built config store and passes the result into the intent (§1.3.3,
   COR8-2), so the core route and its aliases record the same arguments as the S2b handlers. They all pass the one
   request struct `storage.ResetRequest` (05-storage; R9-6), whose confirmation contract is 05-rbac §6.2's: with
-  `delete_library_files` the root and count are compared before anything is staged (422
+  `delete_library_files` `kernel.stageReset` compares the root and count with the preflight's before anything is staged (422
   `library_files_confirm_required` on a mismatch, §1.3.3), and the HEAD-shaped legacy paths keep HEAD's wipe with no
   count. Every target is pre-validated at staging; a dangerous `RootDir` answers 400 and nothing is staged only
   when the reset will wipe the library (COR8-4, SEC9-4).
@@ -2335,14 +2338,14 @@ so a lost key file loses the secrets. Rules:
   restores the old install's lineage once the `previous/` directories are moved back: `<id>` is the one the swap
   journal's `set_aside` record names. It refuses an `<id>` that differs from the `c/storage/install` marker of the
   store at the resolved `core.storage.path` (read offline), so the header can only be set to the lineage of the store
-  beside it, and refuses with no keyring file. ABO ships it from S2b with the reset (09 §9.4 row 17), as an entry of `app.OfflineCommands` (06 §6.4.5); before S3 the
+  beside it, and refuses with no keyring file. ABO ships it from S3, when the keyring lands (09 §9.4 row 17), as an entry of `app.OfflineCommands` (06 §6.4.5); before S3 the
   state directory has no keyring, so the command has nothing to set and the undo has no such step.
 - **How an app's CLI reaches these commands (COR9-6, R9-9).** `secrets export-keyring`, `secrets rotate-derive` and
   `secrets set-install-id` are core offline commands: they read the store's install marker and lock through the
   kernel, which an app cannot import. `app.OfflineCommands(opts, mods...)` (06 §6.4.5) returns them, with core's
   other offline commands, as `app.Command` values, and ABO wraps each in its cobra tree, as it does
-  `storage restore-checkpoint` and `users reset-password` (`TestCLIExposesCoreOfflineCommands`, ABO). 06's list names
-  `set-install-id`; `export-keyring` and `rotate-derive` belong in it too (cross-cluster).
+  `storage restore-checkpoint` and `users reset-password` (`TestCLIExposesCoreOfflineCommands`, ABO); 06 §6.4.5's
+  list names all three secrets commands, each from S3.
 - **Host-loss restore** ([05-backup](05-backup.md) §5B.3.3 procedure): the operator copies the exported file
   into the new state directory as `<state_dir>/secrets.keyring` (mode 0600) before the first start; there is
   no import command, and the next `Open` loads it as the keyring-present case above, then
@@ -2760,3 +2763,4 @@ Round 9:
 - R9-7 / COR9-5 (R-G request) — §1.3.3 `legacy.ConfigOpenEnv.Files` and `legacy.StateFiles`: the labelled state filesystem through which books' key-file, gap-fill and post-reset-hook writes go, so `coretest/crashmatrix` sees them.
 - R-D requests — §1.3.1: `FileOnly()` is derived (a `LegacyYAML` key with no `LegacyBlob`), not a declared flag; `HEADAuthOffWritable` comment, §1.3.7 and §1.12.5: H3 clears it on `enable_auth` only (release note), the Basic gate keys keep it to their settings cutover; §1.3.3 and §1.6: the lock is 05-storage's `WriteLocks(names []string) []storage.Lock` under the config lock name `legacy.LockConfigSettings`, committed inside `storage.CommitLocked(ctx, b, d, stage, locks...)`.
 - OPS9-7 (R-D request) — §1.3.5, §1.12.2, §1.11: an empty stored Basic password counts as no stored value, so `BASIC_AUTH_PASSWORD` is effective in memory only; `TestBasicGate_EmptyStoredPasswordDoesNotShadowEnv`.
+- integration pass (round 9): §1.3.3 `ConfigResetArgs`: `ResetArgs` runs the preflight (top-level entries the hook would remove, one directory read) and compares nothing; `kernel.stageReset` compares, skipping the check only for `LegacyConfirm`; §1.12.2 likewise; §1.3.7: the `json:"-"` SMTP fields are file and env only, never stored (05-notify); §2.4: `secrets set-install-id` ships at S3 with the keyring (09 §9.4 row 17), and the cross-cluster note on 06's offline-command list is resolved.

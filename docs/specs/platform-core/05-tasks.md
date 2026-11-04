@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.11.1 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -997,9 +997,9 @@ type Stager interface {
 	//   storage.CommitLocked(ctx, open(), storage.Sync, stage, runLocks...)
 	// under storage.RetryOnConflict: stage performs every read the batch's
 	// writes derive from and stages the caller's rows and its run writes (here
-	// StartIn), and never commits. runLocks are the run store's
-	// legacy.WriteLock locks (books: HEAD's opsMu, 5T.3.13), none on the
-	// native store, so the lock is held from before stage's first store read
+	// StartIn), and never commits. runLocks are what the run store's
+	// legacy.WriteLock returns for WriteLocks([]string{legacy.LockRuns})
+	// (books: HEAD's opsMu, 5T.3.13), none on the native store, so the lock is held from before stage's first store read
 	// until the commit returns, and re-taken on every attempt.
 	// WriteRuns is not re-entrant: called from inside another WriteRuns'
 	// stage it returns ErrWriteRunsNested and runs nothing. A nested
@@ -1424,14 +1424,25 @@ var ErrScheduleTickRefused = errors.New("legacy: schedule tick for a kind the ca
 // the run store's lock (storage.LocksHeld false), a programming error the
 // conformance suite catches (R9-1; 5T.3.13 below).
 var ErrRunsNotLocked = errors.New("legacy: run write staged outside the run lock")
+
+// LockRuns is the run store's one lock name of legacy.WriteLock (R9-1;
+// WriteLock itself, WriteLocks(names []string) []storage.Lock, is declared
+// once in 05-storage §5S.3.11, beside LockConfigSettings; the identity names
+// are 05-authn §3.4's). It names what a write touches, the run families and
+// the clock, pause and stand-down rows the same store serves, never an app
+// mutex or key (03 R1): books' run store returns HEAD's opsMu for it. S5.
+const LockRuns = "tasks.runs"
 ```
 
 **The run store's write lock: a use of `legacy.WriteLock` (R9-1, COR9-8).** There is no tasks-specific
-lock capability: `legacy.TasksWriteLock` is gone, generalised into the one cross-owner capability
-`legacy.WriteLock` that every legacy store whose HEAD code relies on an in-process mutex implements
-(identity: `apiKeyMu`, `inviteMu` and the others 05-authn §3.4 lists; tasks: `opsMu`; 05-storage §5S.3.2
-lists the rest, books' ID counter `counterMu` among them, which is not an identity lock), and
-whose locks `storage.CommitLocked` holds from staging through commit. 05-storage §5S.3.2 and §5S.3.11 own
+lock capability: round 8's run-store-only lock capability is gone, generalised into the one cross-owner
+capability `legacy.WriteLock` (`WriteLocks(names []string) []storage.Lock`) that every legacy store whose
+HEAD code relies on an in-process mutex implements (identity: `userWriteMu`, `sessionWriteMu`, `apiKeyMu`,
+`inviteMu`, `bootstrapMu` and `userMergeApplyMu` behind 05-authn §3.4's lock names; tasks: `opsMu`;
+config, integration instances and notify rules: `configBlobSaveMu` behind `legacy.LockConfigSettings`;
+05-storage §5S.3.2 lists them; books' ID counter `counterMu` is not among them, because HEAD's `nextID`
+takes it around its own commit), and whose locks `storage.CommitLocked(ctx, b, d, stage, locks...)` takes,
+each distinct lock once in ascending `LockRank`, from staging through commit. 05-storage §5S.3.2 and §5S.3.11 own
 both identifiers, their signatures, the lock order and `storage.LocksHeld`; this file states only how the
 run store uses them:
 
@@ -1439,8 +1450,8 @@ run store uses them:
   `legacy.WriteLock` on the built `Stores.Runs` value at P4c (03 §3.3, 06 §6.4.10) and hands its locks to
   the executor with the stores; books asserts it at compile time
   (`var _ legacy.WriteLock = (*taskstore.RunStore)(nil)`).
-- **One lock name, one lock.** The run store's one lock name is `runs`, and it returns one lock for it,
-  HEAD's `opsMu`. No store method takes it itself; each one reads, compares and stages under the caller's
+- **One lock name, one lock.** The run store's one lock name is `legacy.LockRuns` (`"tasks.runs"`, above),
+  and it returns one lock for it, HEAD's `opsMu`. No store method takes it itself; each one reads, compares and stages under the caller's
   hold.
 - **One hold for the four stores.** `Clocks`, `Pause` and `StandDown` are served by the same taskstore
   instance as `Runs` and are guarded by the same lock: a `ClockStore.Advance`, a `PauseStore.Set`
@@ -2439,3 +2450,4 @@ Round 9:
 - MOD9-8 — 5T.11 states the scope `<ns>.ops` (native apps' series are `mediacore_ops_*`) and that the S5 golden diff is additions only (nine new instruments), not empty.
 - OPS9-16 — `TestUpgradeFloor_RefusedBelowBooks66` renamed `TestUpgradeFloor_RefusedBelowLegacyCap` in the T8 row and 5T.9.
 - Cross-cluster (R-E, lead-approved) — `counterMu` is not listed as an identity lock in 5T.3.13.
+- integration pass (round 9): 5T.3.10 and 5T.3.13: new `legacy.LockRuns` (`"tasks.runs"`), the run store's one lock name, used by `WriteRuns`; the lock list matches 05-storage (identity mutexes, `opsMu`, `configBlobSaveMu`; `counterMu` is not one) and `CommitLocked(ctx, b, d, stage, locks...)` with `LockRank`; the former run-store lock identifier is no longer named.

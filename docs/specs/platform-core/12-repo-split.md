@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/12-repo-split.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.10.1 -->
 <!-- guid: eb47baa1-640b-4c96-96cc-f6b2bdeaa57e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -434,7 +434,7 @@ its rollback floor):
 |---|---|---|
 | **H1 — identity cutover** | sessions and one-time tokens stored hashed; `mck_` keys; roles and keys hold native scopes, and every non-confined role and existing key gains the scopes it held only through `LegacyAmbientScopes` (`core:self`, `core:metrics.read`, `books:reading`; SEC9-8); every credential epoch bumped | raw `sess:` rows and HEAD's one-time tokens; `abk_` keys and roles holding legacy atoms, with namespaced scopes as an API-level mapping (`rbac.LegacyAtom`) |
 | **H2 — secrets cutover** | the plaintext blob secrets are encrypted into `c/secrets/` and their blob fields removed; HEAD's four encrypted secret rows move there too (05-config §1.12.5 decides this, 09 §9.13 cites it; DATA9-8) | plaintext blob secret fields; the four secrets HEAD already encrypts stay as they are |
-| **H3 — auth-precedence cutover** | an operator value that enables auth takes effect over a stored `false`; a disabling value keeps HEAD's precedence; nothing else moves: every other `BelowStored` legacy flag (the Basic gate's among them, which compose always sets) keeps HEAD's precedence until a separate, owner-decided cutover (R9-5, SEC9-2, SEC9-7) | HEAD's precedence: the stored value wins |
+| **H3 — auth-precedence cutover** | an operator value that enables auth takes effect over a stored `false`; a disabling value keeps HEAD's precedence; the auth-disabled principal can no longer store `enable_auth` (05-config clears `HEADAuthOffWritable` on that key only, and the Basic gate keys keep HEAD's auth-off write rule); nothing else moves: every other `BelowStored` legacy flag (the Basic gate's among them, which compose always sets) keeps HEAD's precedence until a separate, owner-decided cutover (R9-5, SEC9-2, SEC9-7) | HEAD's precedence: the stored value wins |
 
 **Their real reach (R9-11; SEC9-3, DATA9-8).**
 
@@ -815,3 +815,4 @@ Round 9 (dispositions in `docs/plans/platform-core/reviews/spec-round-9-disposit
 - DATA9-8 — §12.4.4 H2 row: the four HEAD-encrypted rows move into `c/secrets/` with the plaintext ones, as 05-config §1.12.5 decides.
 - R9-5 (SEC9-2, SEC9-7) — §12.4.4 H3 row: only auth-enable precedence moves; a disabling value and every other `BelowStored` flag keep HEAD's precedence.
 - SEC9-8 — §12.4.4 H1 row: non-confined roles and existing keys gain the scopes they held only through `LegacyAmbientScopes`; epochs bumped.
+- integration pass (round 9): §12.4.4 H3 row: H3 clears `HEADAuthOffWritable` on `enable_auth` only; the Basic gate keys keep HEAD's auth-off write rule. H2's four encrypted rows moving into `c/secrets/` was already stated.

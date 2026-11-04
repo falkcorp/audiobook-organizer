@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metrics.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.10.1 -->
 <!-- guid: 5cdf765d-aec1-4ed7-981a-e2e698afde61 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -200,11 +200,13 @@ family has two owners. The semconv names (`http_server_request_duration_seconds`
 and label keys are HEAD's (series golden). The label **values** are HEAD's too: HEAD's `http_route` is gin's route
 template (`c.FullPath()`, for example `/api/v1/books/:id`; otelgin v0.72.0), which a `ServeMux` pattern before
 routing cannot give. So for a request served through `MountLegacy` the legacy mount reports gin's `c.FullPath()`
-to stage 2 after gin has routed it, through the request's `otelhttp` labeler (or the in-request carrier 05-http-api
-§4.2 names), and stage 2 records that as `http_route`; native and `Infra` routes record their `ServeMux` pattern.
+to stage 2 after gin has routed it, through the one per-request carrier `httpapi.ReportLegacyRoute(ctx, fullPath)`
+that stage 2 puts into the request context (05-http-api §4.2 stage 2, §8.2), and stage 2, which records the series
+after the handler returns, records that value as `http_route` (as the request's `otelhttp` metric attribute, or
+through its own semconv instruments where `otelhttp` cannot take it; 05-http-api §4.2 decides); native, alias and
+`Infra` routes record their `ServeMux` pattern.
 `TestLegacySeriesLabelValuesMatchHEAD` (ABO, §12) drives a sampled `:id` legacy route and compares the recorded
-values with HEAD's. 05-http-api §4.2, 09 S2 and 13 §13.5.1 state the same (cross-cluster: 13's "gin keeps
-`otelgin`" goes).
+values with HEAD's. 05-http-api §4.2, 09 S2 and 13 §13.5.1 state the same.
 
 **Span redaction (normative, SEC-22).** `otelhttp` records the request target and query as span attributes,
 and the slog redactor does not see spans. The Provider therefore wraps every span exporter in a redacting
@@ -550,7 +552,7 @@ asserts the kernel-emitted families in core as well (§6, OPS8-10).
 | `audiobook_organizer_ops_abandoned_calls` (label `source`) | ABO's shrunk `opsmetrics` until T3/T6, then books' own observable on its own scope (05-tasks 5T.8.1): one owner at a time, the T3/T6 PR deleting the old one | T3, T6 | (b) |
 | `ai_dispatch_*`, `ai_*` (unprefixed) | ABO's recorder around the AI calls books makes and over the core `ai` subsystem's public API; [05-ai](05-ai.md) names the recorder of each family. `MetricNamespace` does not touch them: the recorder creates the instruments `ai_dispatch.*` and `ai.*` under exactly HEAD's names (`internal/aidispatch/metrics.go:54-66`, `meter.go:20-37`) on the App's `MeterProvider`, outside any `Scope`, so the namespace is never prepended and the families stay byte-identical; the core `ai` subsystem's own families are `<namespace>_ai_*` beside them, and `ErrFamilyTaken` still guards every name | S7 | (b) |
 | `audiobook_organizer_process_memory_alloc_bytes`, `_process_goroutines` | books' status worker, as at HEAD (`internal/server/server_lifecycle.go:432-433`); the gauges move to `Provider.Registerer()` with the other legacy families (item 2) | S8 | unchanged |
-| `http_server_*` (semconv) | `httpapi`'s stage-2 `otelhttp`, the one emitter for every request, with HEAD's `http_route` values for `MountLegacy` requests (gin's `c.FullPath()`, §3); gin's `otelgin` is removed in the same PR (MOD9-2) | S2 | (a) |
+| `http_server_*` (semconv) | `httpapi`'s stage-2 `otelhttp`, the one emitter for every request; for a `MountLegacy` request the legacy mount reports gin's `c.FullPath()` back through `httpapi.ReportLegacyRoute` after gin has routed it, and stage 2 records that value as `http_route` once the handler returns, so the label keeps HEAD's values (§3; 05-http-api §4.2 stage 2, §8.2); gin's `otelgin` is removed in the same PR (MOD9-2, R9-3) | S2 | (a) |
 | every other `audiobook_organizer_<x>` (books, search index, catalog, cache, ABS, review, fixer, metadata fetch, …) | books, unchanged | — | — |
 
    A family under rule (b) is recorded from the PR that moves its HEAD emitter, so the seeded test's golden shows
@@ -669,3 +671,4 @@ Round 9:
 - R9-3 / MOD9-2 — M6, §3 "Tracing and HTTP", §6, §12, §13 table: series identity (label values) is part of the contract; stage 2 is the one `http_server_*` emitter with gin's route template as `http_route` for legacy requests and `otelgin` removed; `plugin` keeps HEAD's values for adapted kinds; `TestABOMetricsGatherNoDuplicateOrMissing` (ABO's real recorders plus the kernel Provider, gathered without error, against a HEAD golden of family, label and series identity) and `TestLegacySeriesLabelValuesMatchHEAD`.
 - MOD9-8 — §3 `Scope.Prefix` and §4 examples use the executor's `ops` scope (`<ns>_ops_runs_total`); §6 golden row names 05-tasks' new executor families at S5 and the schedule instruments' move at S5.
 - Header — 03 reference v1.12.1.
+- integration pass (round 9): §3 "Tracing and HTTP" and §13 `http_server_*` row: stage 2 takes `http_route` from the legacy mount's `httpapi.ReportLegacyRoute(ctx, c.FullPath())` carrier (05-http-api §4.2, §8.2); the resolved cross-cluster note on 13 removed.

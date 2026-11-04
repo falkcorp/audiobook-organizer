@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.11.1 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1045,12 +1045,14 @@ hook). Nothing destructive runs before the restart, and there is no core route b
   exactly as one staged through the legacy handler.
   - **One confirmation contract: `storage.ResetRequest` (resolution R9-6; COR9-4, SEC9-4).** 05-storage
     owns the struct and its rules; this route states only its guards and wire shape. The request carries
-    `{kind, confirm: "RESET", delete_library_files?, library_root?, library_file_count?}`. A missing or
+    `{kind, confirm: "RESET", delete_library_files?, library_root?, library_file_count?}`; the struct's
+    `LegacyConfirm` (`json:"-"`) is never decoded from a body, only set by the alias below. A missing or
     wrong `confirm` answers 422 `confirm_required` and stages nothing. The native route deletes the
     library files under `RootDir` only when `delete_library_files` is true; without it the reset keeps
     every library file (resolution A-17). With it, `library_root` and `library_file_count` must match the
-    configured `RootDir` and a fresh preflight count taken before anything is staged (05-storage defines
-    what is counted); otherwise the route answers 422 `library_files_confirm_required`, stages nothing,
+    configured `RootDir` and a fresh preflight count taken before anything is staged, which
+    `kernel.stageReset` compares (05-storage defines what is counted: the top-level entries the hook would
+    remove, one directory read); otherwise the route answers 422 `library_files_confirm_required`, stages nothing,
     and its problem body carries the current `library_root` and `library_file_count`, which the UI's
     confirmation dialog shows ("delete <count> files under <RootDir>") before the second request.
     Success answers 200 `{"reset_id", "message"}`, plus the confirmed `library_root` and
@@ -1863,3 +1865,4 @@ Round 9 (2026-11-04), findings applied to this file:
 - COR9-4 / SEC9-4 (R9-6) — §6.2: the factory reset uses 05-storage's one `storage.ResetRequest` (422 `library_files_confirm_required` against a fresh preflight count, nothing staged), carried unchanged through `Stager.StageReset`, `kernel.stageReset` and `ResetArgs`; the alias sets path values only; the dangerous-root check runs only when files will be deleted; tests restated (§12).
 - SEC9-9 — §4.6, §6.3: the role-name inventory adds `repairs/handler.go:529`, `usermerge/plan.go:342,400` and `adminRole`, each with its replacement and reason; the reach snapshot's in-handler list names them; `TestRoleNameChecksUseCoreAdmin`.
 - SEC9-8 — §6.3 deferred cutover: H1 writes the ambient scopes into every non-confined role and key before `LegacyAmbientScopes` goes.
+- integration pass (round 9): §6.2 reset contract: `storage.ResetRequest`'s `LegacyConfirm` (`json:"-"`) and the comparison in `kernel.stageReset` (top-level entries, one directory read).

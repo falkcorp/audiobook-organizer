@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.11.1 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -417,13 +417,16 @@ type InstanceStore interface {
 //     and only the fixed IDs of its singleton families, M1.4 step 2a). A
 //     legacy store without it covers every record and the backends ledger
 //     records legacy (SIMP6-5); the native store is never asked.
-//   - legacy.WriteLock (R9-1; 05-storage owns it): Lock(keys) (unlock func())
-//     over the in-process mutex the store's HEAD code relies on. The Registry
-//     passes it to storage.CommitLocked for every batch the legacy store
-//     staged into (M1.4 step 2a "Write"), so the mutex is held from the
-//     store's first read through the commit. Books' store implements it over
-//     HEAD's configBlobSaveMu (internal/config/persistence.go:1890-1897),
-//     the same mutex books' legacy config store holds (05-config §1.6).
+//   - legacy.WriteLock (R9-1; 05-storage §5S.3.11 owns it):
+//     WriteLocks(names []string) []storage.Lock over the in-process mutex the
+//     store's HEAD code relies on. The Registry passes the locks it returns
+//     for legacy.LockConfigSettings to storage.CommitLocked(ctx, b, d, stage,
+//     locks...) for every batch the legacy store staged into (M1.4 step 2a
+//     "Write"), so the mutex is held from the store's first read through the
+//     commit. Books' store returns HEAD's configBlobSaveMu
+//     (internal/config/persistence.go:1890-1897) for that name, the same
+//     storage.Lock value books' legacy config store returns (05-config §1.6),
+//     so CommitLocked takes it once.
 
 // StoredInstance is one persisted record: InstanceConfig without the
 // effective-view fields, plus the trust fields of a native row. A legacy
@@ -499,7 +502,8 @@ func (r *Registry) Config(ref Ref) (InstanceConfig, bool)        // effective vi
 // A Put on a legacy-backed instance goes to the legacy store, which writes the
 // legacy fields in their legacy format into the batch that also holds the
 // secrets (M1.4 step 2a); the Registry commits that batch through
-// storage.CommitLocked with the store's legacy.WriteLock (R9-1). Its
+// storage.CommitLocked with the lock the store's legacy.WriteLock returns
+// for legacy.LockConfigSettings (R9-1). Its
 // destination and secret fields keep HEAD's writers: a Put that changes one
 // needs the protection 05-config §1.3.7 gives the same field on the legacy
 // config alias (ProtectAdmin: core:admin AND an interactive principal;
@@ -791,8 +795,9 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
      writer: it lives in the same books package as that store, joins the caller's `*storage.Batch` and shares that
      store's pending blob render (05-config §1.6, C11), so a config write and an instance write in one batch render
      and commit the blob once. The store keeps HEAD's lock discipline for these rows across core's commit (A-3,
-     R9-1): it offers `legacy.WriteLock` over HEAD's `configBlobSaveMu`, and the Registry commits every batch this
-     store staged into through `storage.CommitLocked(ctx, b, lock)` (05-storage), which holds the mutex from the
+     R9-1): it offers `legacy.WriteLock`, whose `WriteLocks` returns HEAD's `configBlobSaveMu` for
+     `legacy.LockConfigSettings`, and the Registry commits every batch this store staged into through
+     `storage.CommitLocked(ctx, b, d, stage, locks...)` (05-storage), which holds the mutex from the
      store's `GetForUpdate` read of the blob through the commit, as HEAD's `SaveConfigToDatabase` held it across its
      own write (`persistence.go:1943`). A conflict still fails the later commit (`storage.ErrConflict`) and the
      `Put` re-reads and retries (`storage.RetryOnConflict`). The kernel builds one instance of this store per
@@ -855,8 +860,8 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
    on a legacy-backed instance its creation, a destination change or a secret-selecting change only with the
    ProtectAdmin check, step 2a) → persist through
    the instance's store (native, or the legacy store, step 2a), with the secrets in one storage batch (an overlay
-   change persists nothing), committed through `storage.CommitLocked` with the legacy store's `legacy.WriteLock`
-   when the legacy store staged into it (R9-1) → build new → atomically
+   change persists nothing), committed through `storage.CommitLocked` with the `legacy.LockConfigSettings` lock of
+   the legacy store's `legacy.WriteLock` when the legacy store staged into it (R9-1) → build new → atomically
    replace → old instance drains its leases → `Close`. providerhttp state (bucket, holds, breaker, quota) is
    keyed by `Ref` and **survives** the swap; the egress trust (`Local`, `lan_allow`) is re-read per dial.
 5. **Health task** `core.integrations.health` (05-tasks), scheduled by
@@ -1831,3 +1836,4 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
   - R9-4 / SEC9-6 — M1.3 `InstanceConfig.Local` and `Put` comments, M1.4 step 2a "Private-network reach" and "New instances", step 4, M1.5 row, M1.10 egress row: creating a legacy-backed instance, or changing a field that selects which secret is sent (`auth_ref`, a metadata source's credential keys, the family-level webhook secret), needs ProtectAdmin; M1.9 `TestPut_LegacyBackedCreateNeedsProtectAdmin`, `TestPut_LegacyBackedAuthRefNeedsProtectAdmin`, `TestNonAdminCannotBindOperatorSecret`.
   - SEC9-6 (evidence) — M1.10 table: other `ai_endpoints` rows hold no secret of their own; they are sent what `auth_ref` names, as HEAD's `poolSecret` (the per-row `integrations.ai.<row id>.api_key` name had no place in HEAD's format, A-2).
   - R9-1 — M1.3 legacy capabilities gain `legacy.WriteLock` (books: `configBlobSaveMu`); M1.3 `Put`, M1.4 step 2a "Write" and step 4: a batch the legacy instance store staged into commits through `storage.CommitLocked`; one store instance per process; M1.9 `TestPut_LegacyBackedCommitsUnderWriteLock`.
+- integration pass (round 9): M1.3 legacy capabilities, `Put` comment, M1.4 step 2a "Write" and step 4: `legacy.WriteLock` is `WriteLocks(names []string) []storage.Lock`, the instance store returns `configBlobSaveMu` for `legacy.LockConfigSettings`, committed through `storage.CommitLocked(ctx, b, d, stage, locks...)`.

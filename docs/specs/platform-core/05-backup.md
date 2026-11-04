@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-backup.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.10.1 -->
 <!-- guid: 604febb0-a09e-4cf9-99ee-5f3722534da6 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -44,8 +44,8 @@ when each step ships.
   run only from S4 r2, so on S2b–S4 r1 a restored key keeps its archived status, which is HEAD's behaviour;
   from S4 r2 to S7 every API key needs an admin to re-enable it after the restore (step h: HEAD's `inactive`
   status for a legacy key) and every session is deleted (05-authn §4.14; DATA9-15). That is a cost of the
-  restore, which the restore record states and 09's S4 r2 release note carries (OPS9-5); it is not a
-  rollback cost, so 09 §9.2.1 has no row for it (DATA7-16). So a boot that fails after the swap swaps back, a crash between swap and hooks resumes
+  restore, which the restore record states and 09 §9.2.1 row 11 carries with its S4 r2 release note
+  (OPS9-5, DATA9-13): a restore cost, not a format change (DATA7-16). So a boot that fails after the swap swaps back, a crash between swap and hooks resumes
   them once, `inflight.json` is gone after the hooks, and a failed migration has its checkpoint
   restore, from the first release on core storage. ABO's former `app.Options.PreBootRestore` does not
   exist.
@@ -1387,3 +1387,4 @@ Round 9 (`docs/plans/platform-core/reviews/spec-round-9-*.md`, dispositions bind
 - COR9-13 — step 8 and "Stages": both stagers create the intent through `restorejournal.CreateIntent` with `restorejournal.Intent` (`id` added to the field list).
 - COR9-15 — the open-checkpoint finish commits through `kernel.offlineCloseBatch`, not the public `OpenOffline`.
 - DATA9-15 / OPS9-5 — "Stages": the key and session cost of a staged restore applies from S4 r2 to S7 (S2b–S4 r1 keep the archived key status, HEAD's behaviour); 09's S4 r2 release note carries it.
+- integration pass (round 9): "Stages": the S4 r2 key and session restore cost is 09 §9.2.1 row 11 (09 v1.10.0), no longer "no row".
