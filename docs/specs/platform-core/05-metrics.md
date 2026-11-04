@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metrics.md -->
-<!-- version: 1.9.1 -->
+<!-- version: 1.10.0 -->
 <!-- guid: 5cdf765d-aec1-4ed7-981a-e2e698afde61 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -8,7 +8,7 @@
 Evidence commit `748fd787a` (all `path:line` anchors). Raw inputs:
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md) §4, §9;
 [`raw/15-dependencies.md`](../../plans/platform-core/raw/15-dependencies.md) (OTel v1.47.0, exporter
-v0.69.0, client_golang v1.25.0). Normative: [03-architecture](03-architecture.md) v1.11.1 R4 (`metrics` is in
+v0.69.0, client_golang v1.25.0). Normative: [03-architecture](03-architecture.md) v1.12.1 R4 (`metrics` is in
 **L0** with `entity`, `lifecycle`, `version`, `log`), R5 (no `prometheus.DefaultRegisterer`, no `otel.Set*Provider`
 in core except the opt-in `app.InstallProcessDefaults`; R5 binds core only), §3.6 "Metric name" (core series
 `<MetricNamespace>_<subsystem>_*`, `MetricNamespace` = `app.Options.MetricNamespace`, default `mediacore`; module
@@ -22,10 +22,10 @@ names unchanged; ABO keeps its metric names, A-5).
 |---|---|
 | M1 | One `metrics.Provider` per `App` owns a `*prometheus.Registry` (private, unless the app supplies a registerer for the S2 r3–S8 bridge, §6), an OTel `MeterProvider`, a `TracerProvider` and a propagator. All are **injected**; nothing in core names `prometheus.DefaultRegisterer`/`DefaultGatherer` or calls `otel.Set*`/`otel.Get*`, except that `app.InstallProcessDefaults` sets the three OTel globals to this Provider's values for an app that opts in ([05-logging](05-logging.md) §3, MOD4-3). Components receive a `*metrics.Scope`; only the kernel holds the `*Provider`. There is no `metrics.Registry` type. |
 | M2 | The authoring API is the **OTel metric API** (`metric.Meter`), continuing ABO's in-flight migration (client_golang family ceiling 64 and falling, `internal/telemetry/testdata/client_golang_baseline.txt`). Prometheus is an exporter bound to the App's registry. client_golang is used directly only inside `core/metrics` (registry, Go/process collectors, promhttp) and through one escape hatch, `Provider.Registerer()`, for third-party and legacy collectors. |
-| M3 | Names: core instruments `<namespace>.<subsystem>.<what>` → `<namespace>_<subsystem>_<what>[_unit][_total]`, where the namespace is the app's **metric namespace** `app.Options.MetricNamespace` (default `mediacore`, the name every table of this spec shows; ABO passes `audiobook_organizer`, A-5). Module instruments use the app's **metric prefix** `app.Options.MetricPrefix` (ABO: `audiobook_organizer`): `<prefix>.<what>` when the app **ships** one module, `<prefix>.<module>.<what>` when it ships two or more. "Ships" means the module list passed to `app.New`, which never changes at run time, so enabling or disabling a module never renames another module's series (SIMP2-13). The Prometheus translation strategy is **pinned** (`UnderscoreEscapingWithSuffixes`), not left to the exporter's process-global default. OTel semantic-convention instruments (`http.server.*`) keep their standard names. One Prometheus family has one owner per App (`ErrFamilyTaken`, §3), so a namespace equal to the module prefix cannot merge two series. |
+| M3 | Names: core instruments `<namespace>.<subsystem>.<what>` → `<namespace>_<subsystem>_<what>[_unit][_total]`, where the namespace is the app's **metric namespace** `app.Options.MetricNamespace` (default `mediacore`, the name every table of this spec shows; ABO passes `audiobook_organizer`, A-5). Module instruments use the app's **metric prefix** `app.Options.MetricPrefix` (ABO: `audiobook_organizer`): `<prefix>.<what>` when the app **ships** one module, `<prefix>.<module>.<what>` when it ships two or more. "Ships" means the module list passed to `app.New`, which never changes at run time, so enabling or disabling a module never renames another module's series (SIMP2-13). The Prometheus translation strategy is **pinned** (`UnderscoreEscapingWithSuffixes`), not left to the exporter's process-global default. OTel semantic-convention instruments (`http.server.*`) keep their standard names. **Every Prometheus family has exactly one owner per App, at every stage (R9-3):** one instrument identity or one collector produces it, whether it was created through a `Scope`, through the App's raw or process-global `MeterProvider`, or registered on the shared registry of the S2 r3–S8 bridge (`ErrFamilyTaken`, §3), so a namespace equal to the module prefix cannot merge two series and two emitters can never serve one family. |
 | M4 | Cardinality is a contract: closed attribute-key allow-list per scope, bounded value sets only, no identifiers; SDK per-instrument limit 2000; a series golden per scope. |
 | M5 | `/metrics` is a core route mounted by the kernel through `Router.Infra` with permission `core:metrics.read`, which the chain **enforces** (stages 10–13 run for an `Infra` route whose permission is not Public, SEC2-14), outside response compression. For ABO the kernel mounts it at 09 S8; until then ABO's legacy gin route serves it (from S2 r3 `Provider.Handler()` over the default registry). ABO's requirement stays HEAD's any-credential check through S10, on the legacy route and on the kernel's mount alike, because ABO's roles hold legacy atoms only until the identity cutover (A-2; §6). |
-| M6 | **ABO keeps every metric name (A-5).** No series is renamed at any stage and there is no alias layer: no gather-time alias, no metric ledger row, no dashboard or rule switch. Every family of ABO's HEAD series golden keeps its name, type and label set, with exactly one emitter, through S10 and after. When the code that emits a HEAD family moves into a core subsystem, the family keeps its name by one of two rules, chosen per family in §13 item 3: the moved emitter keeps its names under ABO's namespace, or ABO's own code keeps recording the family. Core's own families of that subsystem are additions. Trade: cross-app dashboards need a per-app query (`<namespace>_…`). |
+| M6 | **ABO keeps every metric name and series identity (A-5, R9-3).** No series is renamed at any stage and there is no alias layer: no gather-time alias, no metric ledger row, no dashboard or rule switch. Every family of ABO's HEAD series golden keeps its name, type, label set **and label values** (series identity: the values HEAD records for the same input), with exactly one owner, through S10 and after; `TestABOMetricsGatherNoDuplicateOrMissing` checks all of it against a HEAD golden (§6, MOD9-1, MOD9-2). When the code that emits a HEAD family moves into a core subsystem, the family keeps its name by one of two rules, chosen per family in §13 item 3: the moved emitter keeps its names under ABO's namespace, or ABO's own code keeps recording the family. Core's own families of that subsystem are additions. Trade: cross-app dashboards need a per-app query (`<namespace>_…`). |
 | M7 | Spans are redacted before export with the logging pipeline's `*log.Redactor` (credential query values, invite paths, userinfo), so `apikey`/`token` values never reach a trace backend (SEC-22). |
 
 ## 1. Purpose & scope
@@ -87,9 +87,10 @@ type Options struct {
 	// PromRegisterer, when set, replaces the private registry (app.Options.PromRegisterer, the S2 r3–S8 bridge,
 	// §6): the exporter and the core collectors register there, Handler gathers from it (it must also implement
 	// prometheus.Gatherer, as a *prometheus.Registry does; New fails otherwise), and the Go and process collectors
-	// are not added (the caller's registry has its own). ABO passes prometheus.DefaultRegisterer from S2 r3 (the
-	// release that deletes its façade's exporter; nil, private and unserved, in S2 r1 and r2, OPS5-14) and stops
-	// at S8. nil = a private registry with the Go and process collectors (every other app).
+	// are not added (the caller's registry has its own). It must be a *Shared (above, R9-3). ABO passes
+	// metrics.NewShared(prometheus.DefaultRegisterer) from S2 r3 (the release that deletes its façade's exporter;
+	// nil, private and unserved, in S2 r1 and r2, OPS5-14), registers its legacy client_golang families through
+	// the same value, and stops at S8. nil = a private registry with the Go and process collectors (every other app).
 	PromRegisterer   prometheus.Registerer
 	Logger           *slog.Logger
 }
@@ -111,7 +112,8 @@ type Provider struct{ /* unexported */ }
 
 func New(ctx context.Context, o Options) (*Provider, error)
 
-func (p *Provider) MeterProvider() metric.MeterProvider
+func (p *Provider) MeterProvider() metric.MeterProvider       // the family-checking wrapper (below); also what
+                                                              // app.InstallProcessDefaults installs as the global
 func (p *Provider) TracerProvider() trace.TracerProvider
 func (p *Provider) Propagator() propagation.TextMapPropagator // TraceContext + Baggage
 func (p *Provider) Registerer() prometheus.Registerer          // escape hatch for third-party and legacy collectors
@@ -127,7 +129,7 @@ func (p *Provider) Module(id string, allowed ...attribute.Key) (*Scope, error)
 // Scope is what components and modules receive (module.Deps.Metrics, constructor params): *metrics.Scope.
 type Scope struct{ /* unexported */ }
 
-func (s *Scope) Prefix() string                 // "mediacore.tasks" (default namespace), "audiobook_organizer"
+func (s *Scope) Prefix() string                 // "mediacore.ops" (default namespace), "audiobook_organizer"
 func (s *Scope) Meter() metric.Meter            // validating wrapper over the App's MeterProvider
 func (s *Scope) Tracer() trace.Tracer           // tracer named "<prefix>"
 func (s *Scope) Propagator() propagation.TextMapPropagator
@@ -139,6 +141,18 @@ var (
 	ErrScopeTaken     = errors.New("metrics: scope already registered")
 	ErrFamilyTaken    = errors.New("metrics: Prometheus family already registered by another instrument or collector")
 )
+
+// Shared wraps the registerer an app passes as Options.PromRegisterer for the S2 r3–S8 bridge (06
+// app.Options.PromRegisterer). It records the descriptor names of every collector registered through it, and the
+// Provider checks its own families against them and the reverse (R9-3). The app registers its own legacy
+// collectors on the shared registry through the same value, never through prometheus.MustRegister. New fails when
+// Options.PromRegisterer is set and is not a *Shared.
+type Shared struct{ /* unexported */ }
+
+func NewShared(reg prometheus.Registerer) *Shared // reg must also be a prometheus.Gatherer
+func (s *Shared) Register(c prometheus.Collector) error
+func (s *Shared) MustRegister(cs ...prometheus.Collector)
+func (s *Shared) Unregister(c prometheus.Collector) bool
 ```
 
 **Instrument rules enforced by `Scope.Meter()`** (constructor returns `ErrInstrumentName` and a no-op
@@ -147,12 +161,26 @@ instrument, which the module surfaces at registration so boot fails closed): nam
 have a unit (`s`, `By`, or `{thing}`) and a declared view (buckets); gauges whose legacy name ends in `_total`
 use a bracket unit, exactly as ABO's rules (`meter.go:20-37`). These rules are ABO's, made per-scope.
 
-**One family, one owner (A-5).** An app may pass the same string as `MetricNamespace` and `MetricPrefix` (ABO does), so
-a core family and a module family could translate to one Prometheus name. The Provider records the translated
-family name (`otlptranslator`, the pinned strategy below) of every instrument a `Scope` creates and the descriptor
-names of every collector registered through `Registerer()`, and refuses a second owner of a name with
-`ErrFamilyTaken` (the instrument is a no-op and its registration fails boot). Two instruments of one scope that the
-SDK would merge are that scope's own concern, as today.
+**One family, one owner (A-5, R9-3).** An app may pass the same string as `MetricNamespace` and `MetricPrefix` (ABO
+does), so a core family and a module family could translate to one Prometheus name; and from S2 r3 ABO's own code
+creates instruments through the process-global provider and registers client_golang collectors on the registry the
+App shares. The Provider records the translated family name (`otlptranslator`, the pinned strategy below) of:
+
+- every instrument created on the App's `MeterProvider`, through a `Scope` **or not**: `MeterProvider()` returns a
+  wrapper that records `(scope name, scope version, instrument name, kind, unit)` → family for every instrument,
+  and it is that wrapper `app.InstallProcessDefaults` installs as the OTel global, so ABO's `otel.GetMeterProvider()`
+  callers (`opsmetrics.Default()`, `aidispatch`, …) are seen too;
+- every collector registered through `Registerer()`, and, while `Options.PromRegisterer` is set, every collector
+  registered through the app's `*metrics.Shared` (above), so registration through the shared registry is covered.
+
+A second **owner** of a family is refused with `ErrFamilyTaken`: a different instrument identity (another scope,
+kind or unit) or a collector for a name an instrument holds, and the reverse. Creating the identical instrument
+twice in one scope is the OTel SDK's one instrument, not a second owner. The refused instrument is a no-op (a
+refused collector is not registered). During boot (through 06 P6) a refusal fails boot; after boot (an instrument
+created lazily, as `opsmetrics.Default()` does on first use) it is logged at error with both owners and raises the
+health token `metrics_family_taken` (degraded), and CI catches it first through
+`TestABOMetricsGatherNoDuplicateOrMissing` (§6). Two instruments of one scope that the SDK would merge are that
+scope's own concern, as today.
 
 **Exporter construction (normative):**
 `prometheus.New(prometheus.WithRegisterer(reg), prometheus.WithoutScopeInfo(),
@@ -164,10 +192,19 @@ explicitly (the default registry had them implicitly; ABO's memory alert reads
 `process_resident_memory_bytes`). `Handler` wraps `promhttp.HandlerFor(gatherer, opts)` in
 `promhttp.InstrumentMetricHandler(reg, …)` so `promhttp_metric_handler_*` series also survive the move.
 
-**Tracing and HTTP.** `httpapi` instruments with `otelhttp` using `WithTracerProvider`,
-`WithMeterProvider` and `WithPropagators` from the Provider — never the globals. The semconv metric names
-(`http_server_request_duration_seconds`, request/response body size) are identical to what `otelgin`
-emits today (series golden), so moving off gin does not change them.
+**Tracing and HTTP (one emitter, HEAD's series; MOD9-2, R9-3).** `httpapi` instruments with `otelhttp` using
+`WithTracerProvider`, `WithMeterProvider` and `WithPropagators` from the Provider — never the globals. From S2 core's
+chain stage 2 is the **one** emitter of the `http_server_*` families for every request, `MountLegacy` requests
+included, and gin carries no `otelgin` (neither its spans nor its metrics), so no request is recorded twice and no
+family has two owners. The semconv names (`http_server_request_duration_seconds`, request and response body size)
+and label keys are HEAD's (series golden). The label **values** are HEAD's too: HEAD's `http_route` is gin's route
+template (`c.FullPath()`, for example `/api/v1/books/:id`; otelgin v0.72.0), which a `ServeMux` pattern before
+routing cannot give. So for a request served through `MountLegacy` the legacy mount reports gin's `c.FullPath()`
+to stage 2 after gin has routed it, through the request's `otelhttp` labeler (or the in-request carrier 05-http-api
+§4.2 names), and stage 2 records that as `http_route`; native and `Infra` routes record their `ServeMux` pattern.
+`TestLegacySeriesLabelValuesMatchHEAD` (ABO, §12) drives a sampled `:id` legacy route and compares the recorded
+values with HEAD's. 05-http-api §4.2, 09 S2 and 13 §13.5.1 state the same (cross-cluster: 13's "gin keeps
+`otelgin`" goes).
 
 **Span redaction (normative, SEC-22).** `otelhttp` records the request target and query as span attributes,
 and the slog redactor does not see spans. The Provider therefore wraps every span exporter in a redacting
@@ -181,7 +218,7 @@ and nothing to redact.
 
 | Kind | OTel instrument name | Prometheus family | Example |
 |---|---|---|---|
-| Core subsystem | `<namespace>.<subsystem>.<what>` | `<namespace>_<subsystem>_<what>[_<unit>][_total]` | `mediacore.tasks.runs` → `mediacore_tasks_runs_total`; for ABO `audiobook_organizer_tasks_runs_total` |
+| Core subsystem | `<namespace>.<subsystem>.<what>` | `<namespace>_<subsystem>_<what>[_<unit>][_total]` | `mediacore.ops.runs` → `mediacore_ops_runs_total`; for ABO `audiobook_organizer_ops_runs_total` (the task executor's subsystem scope is `ops` for every app, 05-tasks 5T.11; MOD9-8) |
 | Module, app ships one module | `<prefix>.<what>` | `<prefix>_<what>…` | `audiobook_organizer.books` → `audiobook_organizer_books_total` (today's name, unchanged) |
 | Module, app ships two or more | `<prefix>.<module>.<what>` | `<prefix>_<module>_<what>…` | `suite.tv.scan.files` → `suite_tv_scan_files_total` |
 | Semconv | spec name | translated | `http.server.request.duration` → `http_server_request_duration_seconds` |
@@ -245,7 +282,7 @@ never drops:
 |---|---|---|---|
 | HEAD–S1 | default registry (ABO's façade installs the S1 core providers, §13) | gin, `promhttp.Handler()` | default registry (`metrics.Register`) |
 | S2 r1–r2 | the App's Provider uses a **private, unserved** registry (`PromRegisterer` nil): the S1 façade's exporter is still installed on the default registry, and two exporters on one registry could collide on `target_info` and fail the scrape (OPS5-14). Trade: the kernel's own series (e.g. `<namespace>_kernel_boot_phase_seconds`) are not scraped until r3 | gin, `promhttp.Handler()`, as at S1 | default registry, unchanged |
-| S2 r3–S7 | `Options.PromRegisterer` = the default registry (ABO passes `app.Options.PromRegisterer`, 06, in the same release that deletes the façade's exporter); `app.InstallProcessDefaults` points the OTel globals at the App's providers, so the six global-reading ABO packages keep their series | ABO's **legacy gin route** under `MountLegacy`, unchanged in path, compression exclusion and HEAD's any-credential check, whose handler becomes `Provider.Handler()` | default registry, unchanged |
+| S2 r3–S7 | `Options.PromRegisterer` = the default registry, wrapped as a `*metrics.Shared` through which ABO's `metrics.Register` registers its legacy families too (ABO passes `app.Options.PromRegisterer`, 06, in the same release that deletes the façade's exporter; R9-3); `app.InstallProcessDefaults` points the OTel globals at the App's providers, so the six global-reading ABO packages keep their series | ABO's **legacy gin route** under `MountLegacy`, unchanged in path, compression exclusion and HEAD's any-credential check, whose handler becomes `Provider.Handler()` | default registry, unchanged |
 | S8 on | the App's private registry (`PromRegisterer` nil; the `app.Options` field is removed, 06) | the kernel's `Router.Infra(core.metrics.path, …)` mount, with HEAD's any-credential requirement for ABO through S10 (above); the legacy gin route is removed in the same PR | moved to `Provider.Registerer()` with their names in the same PR; `cache.go:99` and `cache_snapshotter.go:24` take `Provider.Gatherer()` |
 
 **Series-name checks (OPS5-6, OPS5-9, OPS6-3).** This section is the one statement of every stage's series check;
@@ -259,6 +296,7 @@ scrape cannot be the normative check.
 **Normative: the seeded contract test.** ABO's series contract test (HEAD's `internal/telemetry/contract`, kept
 in ABO as `internal/telemetrypolicy` from S1, 09 S1) builds the telemetry in its own process, records one sample
 per row of its **seeding table**, scrapes, and compares the family set (family, type, label set) with its golden.
+From S5 it is joined by the gather test below, which also checks label values.
 A PR that adds a family adds its seeding row and its golden line. **No PR through S10 removes or changes a line of
 HEAD's golden** (M6); a PR that moves the emitter of a HEAD family keeps that family's seeding row green through the
 new emitter (§13 item 3). **What it scrapes (OPS7-1).** HEAD's test scrapes `promhttp.Handler()` on the default
@@ -292,6 +330,19 @@ at S8, when they move to the private registry. So:
 - `TestHEADSeriesStillPresent` compares the scrape with HEAD's golden, committed unchanged as
   `testdata/head_series.golden`: every HEAD family is present with its type and label set. It is the M6 check of
   every stage, independent of what later PRs add.
+- **`TestABOMetricsGatherNoDuplicateOrMissing` (ABO, from S5; R9-3, MOD9-1, MOD9-2).** A seeded test with
+  `coretest` alone cannot see a second emitter, because it never builds ABO's own recorders. This one builds the
+  stage's kernel Provider (through `coretest.MetricsProvider`, with the stage's `PromRegisterer` as a
+  `*metrics.Shared`) **together with ABO's real recorders on it**: `app.InstallProcessDefaults`, ABO's legacy
+  client_golang families registered through the `*metrics.Shared`, `opsmetrics.Default()` while the package exists,
+  books' run-event recorder and op-items collector, the v3 loop until T7 and, from S7, books' AI recorder (05-ai §8).
+  It drives one adapted executor run, one v3 tick (until T7), one legacy HTTP request on a sampled `:id` route and
+  one AI call through a fake endpoint (from S7). Then `Gatherer().Gather()` must return **no error** (two samples
+  of one family with equal label values fail it, as client_golang does at a scrape) and the result must equal a
+  HEAD golden of **family, type, label names and label values** (`testdata/head_series_identity.golden`, captured
+  by the S0 PR from the HEAD build driven with the same seeds), with only the stage's listed additions beside it:
+  no family missing, no series identity changed, no family with two owners. It is a done-check of S5, T3, T6, T7,
+  S7 and S8 (09).
 
 The stage's done-check is the golden diff that PR shows:
 
@@ -299,7 +350,7 @@ The stage's done-check is the golden diff that PR shows:
 |---|---|
 | S1, S2 r1, S2 r2 | empty |
 | S2 r3 | additions only: the kernel's own families under ABO's namespace, seeded by `coretest.MetricsProvider`'s zero-module boot (OPS8-10); core's `TestKernelFamiliesGathered` asserts the same families in core |
-| every later stage through S10 | additions only: the families that stage's new code emits (for example `<namespace>_compat_*` and the storage families at S2b, any new executor family at S5, `<namespace>_ai_*` at S7, `<namespace>_build_info` at S8, labelled with the binary's version, never the UI bundle's build ID, R5-7). A PR that moves the emitter of a HEAD family (the Pebble collector at S2b, the run instruments at S5, the schedule instruments at T7, the AI instruments at S7, the legacy client_golang families' registry at S8) shows **no** diff for that family (§13 item 3) |
+| every later stage through S10 | additions only: the families that stage's new code emits (for example `<namespace>_compat_*` and the storage families at S2b, the new executor families of 05-tasks 5T.11 at S5, `<namespace>_ai_*` at S7, `<namespace>_build_info` at S8, labelled with the binary's version, never the UI bundle's build ID, R5-7). A PR that moves the emitter of a HEAD family (the Pebble collector at S2b, the run and schedule instruments at S5, the AI instruments at S7, the legacy client_golang families' registry at S8) shows **no** diff for that family, and `TestABOMetricsGatherNoDuplicateOrMissing` shows no change of its series identity (§13 item 3) |
 
 The Go collector's `go_goroutines` and `go_memstats_alloc_bytes` are present at every stage: HEAD's `/metrics`
 serves `promhttp.Handler()` over the default registry, which already carries the Go collector
@@ -339,7 +390,7 @@ nothing). That list must contain a short fixed set of always-on families: `proce
 | OTLP export errors at runtime | fail-open, rate-limited log, counter | collector outages are routine |
 | Instrument name/unit/view violation | fail-closed at construction (`ErrInstrumentName`) | contract violations caught at boot and in CI |
 | Duplicate scope | fail-closed (`ErrScopeTaken`) | two owners for one name |
-| A second instrument or collector for one Prometheus family | fail-closed at construction or registration (`ErrFamilyTaken`) | a core family and a module family under one shared namespace would merge silently (M3) |
+| A second owner of one Prometheus family (another instrument identity, through a `Scope`, the raw or the global `MeterProvider`, or a collector through `Registerer()` or the app's `*metrics.Shared`) | fail-closed during boot (`ErrFamilyTaken`); after boot the second is a no-op, logged at error, health `metrics_family_taken` (degraded) | two owners merge silently or make every scrape fail (M3, R9-3, MOD9-1) |
 | Redactor nil while tracing is on | fail-closed (boot) | spans would export credentials |
 | Cardinality limit reached | fail-open (overflow series), test failure in CI | data loss for one instrument only |
 | Gather error in `/metrics` | `promhttp.ContinueOnError`: partial scrape + `promhttp_metric_handler_errors_total` | one bad collector must not blank the scrape |
@@ -396,11 +447,13 @@ of them (R1). Their values decode with HEAD's per-type semantics (05-config §1.
 | Test | Asserts |
 |---|---|
 | `TestNoGlobals` (archtest, R5) | no `prometheus.DefaultRegisterer/DefaultGatherer/MustRegister/Register`, `promhttp.Handler()`, `otel.Set*`/`otel.Get*Provider`/`otel.Tracer`/`otel.Meter` in core, except `otel.SetMeterProvider`, `otel.SetTracerProvider` and `otel.SetTextMapPropagator` inside `app.InstallProcessDefaults` (05-logging §10) |
-| `TestProvider_ExternalRegisterer` | with `Options.PromRegisterer` set to a fresh registry that already holds Go and process collectors: no duplicate-registration error, the exporter's families appear in `Handler()`'s scrape, nothing lands in a private registry; a registerer that is not a `prometheus.Gatherer` fails `New`; with it nil the private registry carries the Go and process collectors (MOD4-3) |
+| `TestProvider_ExternalRegisterer` | with `Options.PromRegisterer` set to a `*metrics.Shared` over a fresh registry that already holds Go and process collectors: no duplicate-registration error, the exporter's families appear in `Handler()`'s scrape, nothing lands in a private registry; a registerer that is not a `*metrics.Shared`, or whose registry is not a `prometheus.Gatherer`, fails `New`; with it nil the private registry carries the Go and process collectors (MOD4-3) |
 | `TestTwoProvidersIsolated` | two Providers register identical instruments without panic; scrapes are disjoint |
 | `TestScope_RejectsBadNames` | prefix, `_total` suffix, missing unit/view → `ErrInstrumentName` |
 | `TestNamespace_CoreScopesUseAppNamespace` | `MetricNamespace` unset → core scope prefix `mediacore.<subsystem>`; `MetricNamespace` = `audiobook_organizer` → `audiobook_organizer.<subsystem>` and families `audiobook_organizer_<subsystem>_…`; an invalid namespace fails `New` (A-5) |
 | `TestFamilyTaken_SharedNamespaceAndPrefix` | `MetricNamespace` = `MetricPrefix`: a module instrument and a core instrument that translate to one family → the second gets `ErrFamilyTaken`; the same for an OTel instrument against a collector registered through `Registerer()`, in both orders; distinct families under the shared prefix register (A-5) |
+| `TestFamilyTaken_ThroughGlobalProvider` | after `app.InstallProcessDefaults`, an instrument created through `otel.GetMeterProvider()` in another scope with a name a core `Scope` instrument holds (the `ops.zombies` case of MOD9-1) → `ErrFamilyTaken`, a no-op instrument, boot fails during boot and `metrics_family_taken` is raised after it; the identical instrument created twice in one scope is one instrument (R9-3) |
+| `TestFamilyTaken_SharedRegisterer` | a client_golang collector registered through `*metrics.Shared` with a family name a Provider instrument holds → refused, and the reverse order → `ErrFamilyTaken`; disjoint names register (R9-3) |
 | `TestModulePrefix_SingleAndMulti` | one compiled-in module → scope prefix `MetricPrefix`; two → `<MetricPrefix>.<module>` |
 | `TestModulePrefix_StableUnderEnablement` | two compiled-in modules, one disabled: the other's prefix is still `<MetricPrefix>.<module>`; series names identical before and after the toggle |
 | `TestTranslationStrategyPinned` | names identical with the global validation scheme set to legacy and to utf8 |
@@ -416,8 +469,12 @@ of them (R1). Their values decode with HEAD's per-type semantics (05-config §1.
 ABO keeps its own series contract test (HEAD's `internal/telemetry/contract`, `internal/telemetrypolicy` from S1);
 from S2 r3 it scrapes the served `Provider.Handler()` of a Provider built through `coretest.MetricsProvider` with
 ABO's namespace and prefix (§6, OPS7-1). Its seeded golden is the normative series check of every stage (§6,
-OPS6-3), and every HEAD line in it stays unchanged (M6). Two ABO tests go with it:
-`TestContractScrapesServedHandler` and `TestHEADSeriesStillPresent` (§6). Core's own `TestKernelFamiliesGathered`
+OPS6-3), and every HEAD line in it stays unchanged (M6). Four ABO tests go with it:
+`TestContractScrapesServedHandler`, `TestHEADSeriesStillPresent`, `TestABOMetricsGatherNoDuplicateOrMissing` (§6,
+from S5: ABO's real recorders plus the kernel Provider, gathered without error and equal to a HEAD golden of
+family, label and series identity; R9-3) and `TestLegacySeriesLabelValuesMatchHEAD` (§3, from S2: one request to a
+sampled `:id` legacy route and, from S5, one adapted run; the `http_route` value of
+`http_server_request_duration_seconds` and the `def_id`/`plugin` values of `ops_inflight` equal HEAD's; MOD9-2). Core's own `TestKernelFamiliesGathered`
 asserts the kernel-emitted families in core as well (§6, OPS8-10).
 
 ## 13. Migration from ABO
@@ -448,7 +505,18 @@ asserts the kernel-emitted families in core as well (§6, OPS8-10).
    The three `otel.Tracer` package vars, `otel.GetMeterProvider()` calls and `opsmetrics.Default()` become injected
    scopes when touched. `opsmetrics`' core successor is written fresh in one place, `mediacore/internal/executor`
    ([05-tasks](05-tasks.md)), whose HEAD-named instruments sit on scope `<namespace>.ops` (item 3); ABO's `internal/opsmetrics` stays in ABO, as
-   opsbridge-side code, until its last ABO user is gone (04 §8.6 records it as planning information). Books' own
+   opsbridge-side code, until its last ABO user is gone (04 §8.6 records it as planning information). **It shrinks in
+   the T0+T1 PR (R9-3, MOD9-1):** from that PR `opsmetrics.New` creates and observes only `ops.abandoned_calls` (for
+   its `RegisterAbandoned` callers until T3 and T6); it no longer creates `ops.runs`, `ops.run.duration`,
+   `ops.items`, `ops.inflight`, `ops.progress_age`, `ops.progress_timeout`, `ops.zombies`, `ops.schedule_lag` or
+   `ops.schedule_missed`, which have exactly one owner from then on, core's executor and scheduler. HEAD's recorder
+   observes an attribute-less `ops.zombies` 0 on every collection from scope `audiobook-organizer/operations`
+   (`opsmetrics.go:214-273` @748fd787a); left beside the executor's, it would put two samples of
+   `audiobook_organizer_ops_zombies{}` on every scrape and client_golang's `Gather` would fail the whole
+   `/metrics` answer. Until T7 ABO's v3 loop records its ticks' lag and folded fires into the core scheduler's two
+   instruments through the tasks client (the due time and fold count of a tick it starts; 05-tasks 5T.11 defines the
+   call, cross-cluster), never through instruments of its own, so `def_id` comes from core's `StoredKind` and no
+   ABO `RegisterDefID` is needed. Books' own
    gauges register through books' own `metrics.Scope`, never through core instrumentation with ABO names. HEAD's
    series names survive because each HEAD family keeps an emitter with its name (item 3), never through an alias.
 2. **client_golang families** in `internal/metrics` finish the move to OTel when convenient (the ratchet continues
@@ -475,14 +543,14 @@ asserts the kernel-emitted families in core as well (§6, OPS8-10).
 | HEAD family | Emitter after the move | Stage of the move | Rule |
 |---|---|---|---|
 | `audiobook_organizer_pebble_*` (label `store`) | core `storage`'s Pebble collector, which moves with HEAD's family names, help strings, types and `store` label (`pebble_collector.go:119-146`) and registers `<namespace>_pebble_*` ([05-storage](05-storage.md) tables it) | S2b | (a) |
-| `audiobook_organizer_ops_runs_total`, `_ops_run_duration_seconds`, `_ops_items_total`, `_ops_inflight`, `_ops_progress_age_seconds`, `_ops_progress_timeout_seconds`, `_ops_zombies` (labels `def_id`, `outcome`, `plugin`) | the core executor, whose instruments keep HEAD's names in the scope `<namespace>.ops` that the app's namespace supplies (`opsmetrics.go:216-250` @748fd787a), so under ABO's namespace they are HEAD's families with HEAD's labels; [05-tasks](05-tasks.md) 5T.11 tables them | S5 (T0+T1) | (a) |
+| `audiobook_organizer_ops_runs_total`, `_ops_run_duration_seconds`, `_ops_items_total`, `_ops_inflight`, `_ops_progress_age_seconds`, `_ops_progress_timeout_seconds`, `_ops_zombies` (labels `def_id`, `outcome`, `plugin`) | the core executor alone, whose instruments keep HEAD's names in the scope `<namespace>.ops` that the app's namespace supplies (`opsmetrics.go:216-250` @748fd787a), so under ABO's namespace they are HEAD's families with HEAD's label names **and values**: `def_id` is the `StoredKind` (an adapted kind's HEAD def ID), and `plugin` is, for an adapted kind, the HEAD plugin ID opsbridge supplies beside `LegacyDefID` (an app-supplied value, so no ABO name enters core), else the owning module ID; ABO's `opsmetrics` stops creating them in the same PR (item 1; R9-3, MOD9-1, MOD9-2); [05-tasks](05-tasks.md) 5T.11 tables them | S5 (T0+T1) | (a) |
 | `audiobook_organizer_operations_{started,completed,failed,canceled}_total`, `_operation_duration_seconds` (label `type`) | books, through a subscriber of the run events on the bus that records them on books' side with HEAD's names and `type` values (05-tasks 5T.11) | S5 (T0+T1) | (b) |
 | `audiobook_organizer_op_items_processed`, `_op_items_total` (labels `op_id`, `op_type`) | books' legacy collector, set from the same run events (05-tasks 5T.11) | S5 (T0+T1) | (b) |
-| `audiobook_organizer_ops_schedule_lag_seconds`, `_ops_schedule_missed_total` (label `def_id`) | ABO's v3 ticker until T7 (`v3_schedule.go:444,447` @748fd787a), then the core scheduler's instruments in the same `<namespace>.ops` scope under HEAD's names (05-tasks 5T.11) | T7 | (a) |
-| `audiobook_organizer_ops_abandoned_calls` (label `source`) | books' own observable on its own scope (05-tasks 5T.8.1) | T3, T6 | (b) |
+| `audiobook_organizer_ops_schedule_lag_seconds`, `_ops_schedule_missed_total` (label `def_id`) | the core scheduler's instruments in the `<namespace>.ops` scope under HEAD's names, the one owner from T0+T1; until T7 ABO's v3 ticker (`v3_schedule.go:444,447` @748fd787a) reports its ticks into them through the tasks client and creates no instrument (item 1; 05-tasks 5T.11) | S5 (T0+T1) | (a) |
+| `audiobook_organizer_ops_abandoned_calls` (label `source`) | ABO's shrunk `opsmetrics` until T3/T6, then books' own observable on its own scope (05-tasks 5T.8.1): one owner at a time, the T3/T6 PR deleting the old one | T3, T6 | (b) |
 | `ai_dispatch_*`, `ai_*` (unprefixed) | ABO's recorder around the AI calls books makes and over the core `ai` subsystem's public API; [05-ai](05-ai.md) names the recorder of each family. `MetricNamespace` does not touch them: the recorder creates the instruments `ai_dispatch.*` and `ai.*` under exactly HEAD's names (`internal/aidispatch/metrics.go:54-66`, `meter.go:20-37`) on the App's `MeterProvider`, outside any `Scope`, so the namespace is never prepended and the families stay byte-identical; the core `ai` subsystem's own families are `<namespace>_ai_*` beside them, and `ErrFamilyTaken` still guards every name | S7 | (b) |
 | `audiobook_organizer_process_memory_alloc_bytes`, `_process_goroutines` | books' status worker, as at HEAD (`internal/server/server_lifecycle.go:432-433`); the gauges move to `Provider.Registerer()` with the other legacy families (item 2) | S8 | unchanged |
-| `http_server_*` (semconv) | `httpapi`'s `otelhttp` | S2 | (a) |
+| `http_server_*` (semconv) | `httpapi`'s stage-2 `otelhttp`, the one emitter for every request, with HEAD's `http_route` values for `MountLegacy` requests (gin's `c.FullPath()`, §3); gin's `otelgin` is removed in the same PR (MOD9-2) | S2 | (a) |
 | every other `audiobook_organizer_<x>` (books, search index, catalog, cache, ABS, review, fixer, metadata fetch, …) | books, unchanged | — | — |
 
    A family under rule (b) is recorded from the PR that moves its HEAD emitter, so the seeded test's golden shows
@@ -594,3 +662,10 @@ Advisor:
 - ADV-11 — §2: the series-golden count marked informative at `748fd787a`.
 - Header — 03 reference v1.11.1; Objections updated (03 v1.11 §3.6 adopts the namespace rule).
 - integration pass (advisor): §13 op-items row labels are `op_id`, `op_type` (`internal/metrics/metrics.go:275-284`).
+
+Round 9:
+
+- R9-3 / MOD9-1 — M3, §3 (`MeterProvider()` wrapper, `metrics.Shared`, extended `ErrFamilyTaken`, `metrics_family_taken`), §6, §8, §12, §13 item 1 and table: every family has exactly one owner at every stage; the T0+T1 PR shrinks ABO's `opsmetrics` to `ops.abandoned_calls`, so the executor and core scheduler alone own the run and schedule families (no duplicate `ops_zombies{}` sample); `ErrFamilyTaken` covers instruments made through the raw and global provider and collectors registered through the shared registry; `TestFamilyTaken_ThroughGlobalProvider`, `TestFamilyTaken_SharedRegisterer`.
+- R9-3 / MOD9-2 — M6, §3 "Tracing and HTTP", §6, §12, §13 table: series identity (label values) is part of the contract; stage 2 is the one `http_server_*` emitter with gin's route template as `http_route` for legacy requests and `otelgin` removed; `plugin` keeps HEAD's values for adapted kinds; `TestABOMetricsGatherNoDuplicateOrMissing` (ABO's real recorders plus the kernel Provider, gathered without error, against a HEAD golden of family, label and series identity) and `TestLegacySeriesLabelValuesMatchHEAD`.
+- MOD9-8 — §3 `Scope.Prefix` and §4 examples use the executor's `ops` scope (`<ns>_ops_runs_total`); §6 golden row names 05-tasks' new executor families at S5 and the schedule instruments' move at S5.
+- Header — 03 reference v1.12.1.
