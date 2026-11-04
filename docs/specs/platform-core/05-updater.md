@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -220,11 +220,14 @@ type Deps struct {
 // (05-storage §5S.3.7): "level_newer", "format_newer" (pre-guard binary),
 // "upgrade_floor" (the store has not applied what exe's declared floor
 // requires), "restore_pending", "restore_inflight" (a restore journal holds
-// inflight.json, DATA3-6), "reset_pending" (a staged factory reset intent
-// reset/pending.json, or a reset journal reset/<id>/journal.json not yet
-// applied, 05-storage §5S.3.15; R7-2, DATA7-6, OPS7-11), "sidecar_unreadable",
+// inflight.json, or for a checkpoint restore inflight-checkpoint.json,
+// DATA3-6), "reset_pending" (a staged factory reset intent
+// reset/pending.json exists), "reset_inflight" (a reset/<id>/inflight.json
+// exists: from the set-aside until the post-reset hook journals hook_done;
+// 05-storage §5S.3.15; R7-2, DATA7-6, OPS7-11), "sidecar_unreadable",
 // "cannot_determine" (a probe could not answer; refuses). One journal passes:
-// a KindCheckpoint restore journal at swapped (the offline
+// a KindCheckpoint restore journal at swapped (its
+// restore/<id>/inflight-checkpoint.json; the offline
 // restore-checkpoint path) does not refuse a candidate exe whose levels and
 // floors admit the restored store, so `make rollback` after a checkpoint
 // restore reaches the previous binary (R7-4, DATA7-12); every other started
@@ -386,7 +389,7 @@ with an interactive method can turn automatic apply on. Steps, each a `rc.Phase`
    version the operator names explicitly; for a **scheduled** run, target newer than `Status.SkippedAfterRollback` (OPS2-6); inside the window when
    scheduled; no staged restore pending and none in flight (05-backup §5B.3.4's journal: a swap would make
    the restore be rejected as foreign, 09 S1/S8), and no factory reset staged or in flight
-   (`reset_pending`, 05-storage §5S.3.15: a swap would turn the admin's audited reset into a rejected
+   (`reset_pending`, `reset_inflight`, 05-storage §5S.3.15: a swap would turn the admin's audited reset into a rejected
    intent, or leave a half-done set-aside to a binary that cannot finish it; R7-2, OPS7-11), both read
    through `ReaderCheck` on `<exe>` with no override (a `KindCheckpoint` journal at `swapped` passes for a
    candidate that admits the restored store, R7-4); either `TrustedKeys` non-empty or the legacy path enabled (5U.5);
@@ -602,7 +605,7 @@ the compiled-in revoked list in the next release.
 | Unsigned release newer than `LastUnsignedVersion` | closed: `verify_failed` | SEC2-23 |
 | Scheduled apply of a version that rolled back here | open: skipped, `SkippedAfterRollback` set, no download | OPS2-6 |
 | Staged restore pending, or a restore in flight (except a `KindCheckpoint` journal at `swapped` whose restored store the candidate admits) | closed: apply and rollback refused (`restore_pending`, `restore_inflight`); in `Boot`, `rollback_blocked` | 09 S1/S8; the swap would discard the restore (DATA3-6); the checkpoint exception lets the documented failed-migration recovery reach `.prev` (R7-4, DATA7-12) |
-| Factory reset staged (`reset/pending.json`) or a reset journal not yet `applied` | closed: apply and rollback refused (`reset_pending`); in `Boot`, `rollback_blocked`; no updater override (`ROLLBACK_IGNORE_RESET=1` is the scripts' only) | a swap would reject the audited reset or half-apply it (R7-2, DATA7-6, OPS7-11) |
+| Factory reset staged (`reset/pending.json`) or in flight (a `reset/<id>/inflight.json`, kept until `hook_done`) | closed: apply and rollback refused (`reset_pending`, `reset_inflight`); in `Boot`, `rollback_blocked`; no updater override (`ROLLBACK_IGNORE_RESET=1` is the scripts' only) | a swap would reject the audited reset or half-apply it (R7-2, DATA7-6, OPS7-11) |
 | `ReaderCheck` cannot determine the answer (`cannot_determine`) | closed: apply and rollback refused | fail-closed, as `make rollback` (09 §9.2.2) |
 | `exec` of the restored binary fails in `Boot` | open: `RolledBack: true`; `main` exits with the restart code | fallback to the supervisor restart |
 | Restart fails after swap | closed: the process keeps running the old code in memory; marker says pending; next manual or supervisor restart boots the new binary under the boot counter | — |
@@ -702,7 +705,7 @@ The `/api/v1/update/*` paths are aliases for the compatibility window (09 §9.2.
 | `TestApply_BinaryDirNotWritableRefusedAndDegraded` (read-only temp directory) | OPS2-4 |
 | `TestApply_SteppingStoneRequired` (store at books 63 with a running binary newer than the stepping-stone release → refused before any swap; store at books `LegacyCap` → allowed), `TestApply_StoreStateErrorRefuses`, `TestApply_NewBinaryFloorUnmetRefused` (a signed manifest with no `min_upgrade_from` and a fake new binary whose `--print-upgrade-floor` the sidecar does not meet → refused at step 5, nothing swapped) | OPS2-11, OPS3-7, OPS6-1 |
 | `TestSelfTest_VersionJSONFieldList` (the new binary must print exactly `{app, version, commit, ui_build_id, binary_id}`; a missing `app` or an empty `binary_id` fails the self-test; `commit` may be `""`) | FE6-4 |
-| `TestApply_RefusedWhileResetPending` (a staged `reset/pending.json`, then a reset journal at `set_aside`: apply and manual rollback refused with `reset_pending`, nothing downloaded or swapped; `Boot` records `rollback_blocked:reset_pending`), `TestApply_CheckpointJournalAdmitsCandidate` (a `KindCheckpoint` journal at `swapped`: a candidate whose levels and floors admit the restored store passes `ReaderCheck`, one that does not refuses with `restore_inflight`) | R7-2, R7-4, OPS7-11, DATA7-12 |
+| `TestApply_RefusedWhileResetPending` (a staged `reset/pending.json`, refused with `reset_pending`; then a reset journal at `set_aside`, and again at `applied` without `hook_done`, with its `inflight.json`: refused with `reset_inflight`; apply and manual rollback refused, nothing downloaded or swapped; `Boot` records `rollback_blocked:reset_pending` and `rollback_blocked:reset_inflight`), `TestApply_CheckpointJournalAdmitsCandidate` (a `KindCheckpoint` journal at `swapped`: a candidate whose levels and floors admit the restored store passes `ReaderCheck`, one that does not refuses with `restore_inflight`) | R7-2, R7-4, OPS7-11, DATA7-12 |
 | `TestApply_EmptyFloorSkipsSidecar` (no `.storage-applied`, new binary prints an empty floor → allowed; a non-empty floor with no sidecar → `stepping_stone_required` naming "boot any release ≥ S0 once") | OPS7-10 |
 | `TestApply_UnsignedNewerThanLastUnsignedRefused` | SEC2-23 |
 | `TestCheck_NotifiesOncePerVersionAcrossRestart` | COR2-3 |
@@ -845,3 +848,4 @@ Round 7:
 - OPS7-10 — an empty `--print-upgrade-floor` passes without reading `.storage-applied`; a non-empty floor with a missing sidecar refuses ("boot any release ≥ S0 once"); `StoreState` doc, steps 3 and 5, error row, `TestApply_EmptyFloorSkipsSidecar`.
 - FE7-13 — `Self` comment: the UI build ID is the value `X-App-Build` reports (`dev` for every API-only build), distinct from `/modules`' shell-only `ui_build_id`.
 - R7-6 / OPS7-3 — new 5U.12 paragraph: the S8 staging check runs against a local fake signed-release server (`provision.sh --updater-check`), egress allowed to that address only; passes when the release applies and `Boot` confirms it.
+- integration pass (round 7): `ReaderCheck` tokens, apply step 1, error row and `TestApply_RefusedWhileResetPending`: `reset_pending` (`reset/pending.json`) and `reset_inflight` (`reset/<id>/inflight.json` until `hook_done`) as 05-storage and 09 define them; the `KindCheckpoint` file `restore/<id>/inflight-checkpoint.json` (R-B, R-H request).

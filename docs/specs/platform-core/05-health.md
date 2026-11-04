@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -438,7 +438,8 @@ func Collect(ctx context.Context, roots []library.Root) Info
 ```
 
 Platform files `memory_{linux,darwin,windows}.go` and `uptime_{linux,darwin,windows}.go` move from
-`internal/sysinfo` unchanged in behaviour.
+`internal/sysinfo` unchanged in behaviour; the package as a whole is a re-implementation in `health` (04 §8.6,
+R7-8), because its `RecentOperations` reader of HEAD's v2 run rows stays books' (§5H.10 table).
 
 ## 5H.4 Lifecycle and stop budget
 
@@ -583,7 +584,7 @@ internally.
 | `plugin.Registry.HealthCheckAll` + `/system/status` `plugin_health` | adapter components; `/system/status` stays a `books` route (it is mostly library data) and reads component states |
 | `aidispatch.defaultHealth` global (`health.go:55`) | instance owned by the AI integration, reporting components ([05-ai](05-ai.md)) |
 | `internal/sdnotify` | `core/internal/sdnotify` (+ watchdog ping) |
-| `internal/sysinfo` host parts (memory, uptime, runtime) | `health/sysinfo` |
+| `internal/sysinfo` host parts (memory, uptime, runtime) and service status | `health/sysinfo`, a **re-implementation**, not a move (04 §8.6 row, R7-8): `service.go`'s `RecentOperations` (`internal/sysinfo/service.go:28,48,77-82` @748fd787a) converts HEAD's v2 run rows into v1 `database.Operation` for the dashboard and has no import-path-only replacement, so that reader stays books' dashboard code over taskstore's row types until 05-tasks T2–T7 re-point it at `tasks` |
 | `internal/sysinfo` library parts, `DashboardService` | `books` dashboard; `GetHealthCheckResponse` deleted (no caller) |
 | `internal/diagnostics` zip/section machinery | `health/diagnostics` |
 | SlimBook/authors/series/version-groups/iTunes/missing-fields sections, `BuildBatchJSONL` | `books` `Contributor` sections; the AI batch builder goes with [05-ai](05-ai.md) |
@@ -695,3 +696,4 @@ Round 7:
 
 - SEC7-12 — 5H.3.1: `auth_disabled_remote` and `config_legacy_name_shadowed` are carried by HEAD's `degraded` token list from S4 r2 until S8, beside `basic_gate_no_password`.
 - SEC7-3 (cross-cluster request, R-F) — 5H.3.1 lists the integration instance reason `operator_secret_withheld` (05-metadata M1.4 step 2).
+- integration pass (round 7): §5H.3.6 and §5H.10: `internal/sysinfo` is a re-implementation in `health` (04 §8.6), its `RecentOperations` reader of HEAD's v2 run rows staying books' (R-H request); SEC7-12 tokens checked: already present.

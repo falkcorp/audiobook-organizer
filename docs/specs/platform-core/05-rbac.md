@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -450,9 +450,9 @@ therefore not a breaking change, and nothing in `rbac`'s frozen surface names th
 ```go
 package legacy
 
-// RBACAtomWriter (formerly rbac.LegacyAtomWriter, then legacy.AtomWriter;
-// SIMP7-8's naming rule: an owner-specific legacy identifier takes its former
-// package's name in Go initialism form) is implemented by a role store
+// RBACAtomWriter (former names: 05-storage §5S.3.11; SIMP7-8's naming rule:
+// an owner-specific legacy identifier takes its former package's name in Go
+// initialism form) is implemented by a role store
 // whose rows an older build reads: rbac calls PutRoleAtoms instead of PutRole
 // with the legacy atoms the row rule admits (05-rbac §6.3). Absent = PutRole.
 type RBACAtomWriter interface {
@@ -1449,7 +1449,7 @@ option governed by the compat ledger (§6.3, SIMP-7).
 | `TestRoleExtension_SuspendedAfterPrevWrite` | a custom role's row changed by the previous release → on roll-forward `Suspended`, grants only the row's translated atoms, health `rbac_role_suspended`, `reconfirm` restores or discards; a seed role's extension is re-derived at `Freeze` (R4-1) |
 | `TestReseedFromHEADRows_AdminKeepsCoreAdmin` | a store seeded by HEAD (rows without `SeedDigest`): after the first S4 r2 boot `admin` holds `core:admin`, `PendingSeed` is empty for every role whose stored atoms' reach implies the addition (DATA4-11) |
 | `TestUnknownAtom_RoleDegradedBootContinues` | a legacy-only row with an atom outside §6.1 → the atom grants nothing, health `degraded` names the role, boot continues (SEC4-13) |
-| `TestNativeStore_RoundTrip` / `rbactest.StoreSuite` / `legacytest.RBACStoreSuite` | the native store and ABO's legacy store pass the same `StoreSuite` (ABO's with HEAD fixtures); ABO's also passes `legacytest.RBACStoreSuite`, which drives the service with one case per capability (`AtomWriter`; `ExtConfirmer` accept and discard), so a method-set drift between `legacy` and rbac's unexported assertion fails it (SIMP4-3, R4-1, SIMP5-4, SIMP5-9, SIMP6-4, SIMP6-6, R6-3) |
+| `TestNativeStore_RoundTrip` / `rbactest.StoreSuite` / `legacytest.RBACStoreSuite` | the native store and ABO's legacy store pass the same `StoreSuite` (ABO's with HEAD fixtures); ABO's also passes `legacytest.RBACStoreSuite`, which drives the service with one case per capability (`RBACAtomWriter`; `ExtConfirmer` accept and discard), so a method-set drift between `legacy` and rbac's unexported assertion fails it (SIMP4-3, R4-1, SIMP5-4, SIMP5-9, SIMP6-4, SIMP6-6, R6-3) |
 | `TestS2Manifest_SPermRoutesCarryLegacyAtom` | (in 05-http-api) from S2 every `s.perm(atom)` manifest entry's `Perm` is `LegacyAtom(atom)`, built from the S2 leaf constructor with no catalog; `Handle` refuses it; S4's `Freeze` refuses an atom no legacy alias names (COR6-1) |
 | `TestLegacyAtom_AuthOffLegacyKeyAndRole` | `LegacyAtom("settings.manage")`: the auth-disabled checker satisfies it, an admin's `abk_` key scoped `["settings.manage"]` without an extension satisfies it, the same key of a non-admin owner and a custom role holding the four expansion scopes do not; `LegacyCheck` is never satisfied by the auth-disabled checker, and a `read_side` site admits a `core:users.view` holder (COR5-4, SEC5-7, SEC5-9, SEC5-14) |
 | `TestRestore_UnjournaledDemotionHeldByPreSwapStore` | staged restore of an archive taken before an unjournaled demotion (older build's interval, failed `Append`) with nil coverage, **and** with complete coverage over an interval detection missed: the role stays unassigned and narrowed, deleted roles stay deleted, the last-admin rule still holds (SEC5-10, SEC6-4) |
@@ -1715,3 +1715,4 @@ Round 7 (2026-11-04), findings applied to this file:
 - COR7-2 / SIMP7-1 (R7-7) — the mirror test is 03 §3.3's: `export_test.go` exports aliases, `legacy_mirror_test.go` in `package rbac_test` asserts both directions (§3.4).
 - SIMP7-5 — the kernel asserts only the capabilities it drives; rbac's service and restore hook detect the role-store capabilities through their mirrors (§3.4, §5).
 - SIMP7-8 — `legacy.AtomWriter` renamed `legacy.RBACAtomWriter` (owner-specific identifiers take the former package's name) (§3.4, §5, §6.3).
+- integration pass (round 7): SIMP7-8 sweep: `RBACAtomWriter` comment cites 05-storage for former names; `legacytest.RBACStoreSuite` row names `RBACAtomWriter`.

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-notify.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: 785812fd-5ddd-4540-be24-d061c0127788 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -224,7 +224,7 @@ the topic's `Permission` and its notify metadata (display name, default severity
 
 | Adapter | Target | Settings (secret fields in *italics*) | Egress |
 |---|---|---|---|
-| `core.email` | fixed address list | `host`, `port`, `username`, *`password`*, `from`, `to` (list, required) | SMTP through `env.Gate`; private hosts need `Local` (05-metadata M1.3); `host` and `port` are its destination fields (origin `smtp://host:port`), to which an operator-sourced *password* is bound (05-metadata M1.4 step 2, SEC7-3) |
+| `core.email` | fixed address list | `host`, `port`, `username`, *`password`*, `from`, `to` (list, required) | SMTP through `env.Gate`; private hosts need `Local` (05-metadata M1.3); `host` and `port` are its destination fields (origin `smtp://host:port`), to which an operator-sourced *password* is bound (05-metadata M1.4 step 2, SEC7-3); a change to `host` or `port` clears the stored *password* unless the write re-supplies it, exactly like a URL change (05-metadata M1.3 `Put`; lead decision, round 7) |
 | `core.webhook` | one URL | `url`, `method` (POST/PUT), `headers`, *`secret`* (HMAC), *`token`* (bearer), `legacy_headers` (bool; on, and only, for legacy-backed instances, §10) | `EgressConfigured`: a LAN receiver needs `Local`, which only an interactive `core:admin` holder sets (SEC2-7), or a `lan_allow` entry; a URL change clears *secret* and *token* (SEC-15) |
 
 The webhook body is fixed (the `json` preset): `POST url`, body
@@ -482,3 +482,4 @@ Round 7 (`docs/plans/platform-core/reviews/spec-round-7-dispositions.md`):
 - R7-6 / SEC7-6 / OPS7-3 — §5 `core.integrations.disabled` row: a schedule against a disabled integration fails closed but is enqueued and advances its clock; staging clears every legacy and native integration URL, webhooks included, at every stage.
 - R7-7 / SIMP7-1 / COR7-2 — §3 `RuleStore` comment and §9 `TestRulesLegacyMirrorsMatch`: "export_test.go" → the mirror test (03 §3.3), asserted in `legacy_mirror_test.go` of `package notify_test`.
 - SIMP7-5 — §3 `RuleStore` comment: the Service detects `legacy.Covering` once through its mirror; the kernel does not.
+- integration pass (round 7): §3.1 `core.email` row: a `host` or `port` change clears the stored password unless re-supplied (lead decision, R-F item 6; 05-metadata M1.3).

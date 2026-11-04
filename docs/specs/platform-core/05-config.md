@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -542,8 +542,20 @@ type ConfigOpenEnv struct {
 	// hook has completed (05-storage §5S.3.15, 05-config §1.12.2): the store then serves no copy from a file
 	// the reset has not yet rewritten (ABO: the gap-fill file), so no secret of the old install is effective.
 	ResetUnfinished bool
-	Logger          *slog.Logger
+	// Reset is the factory reset whose post-reset hook has not yet recorded hook_done (nil otherwise): the kernel
+	// sets it, with ResetUnfinished, on the reset boot (whose journal reads set_aside at Open and applied once P4d
+	// step 1 has run) and on every later boot whose reset journal reads applied without hook_done (05-storage
+	// §5S.3.15). The app's start hook runs its post-reset hook with Reset.Args at Run step 2, after applied, and
+	// calls Reset.Done, which journals hook_done; until then every boot hands it again, so the hook is idempotent
+	// (R7-2, DATA7-17).
+	Reset  *ResetRun
+	Logger *slog.Logger
 }
+
+// ConfigResetArgs (05-storage §5S.3.15 owns it) is implemented by books' legacy config store: inside every
+// StageFactoryReset the kernel calls ResetArgs and records the bytes in the reset intent (books: the pre-reset
+// library RootDir, the Open Library dump directory and the gap-fill file's path), so the post-reset hook acts on
+// the recorded paths, never on what the fresh settings say. S2b.
 
 // ConfigExternalWriter: Changed fires when a writer other than config.Store changed stored values (the app's own
 // legacy config path, 05-config §1.12.2); config then re-runs OverrideStore.Load (05-config §1.4 step 8). A stage
@@ -1297,7 +1309,7 @@ for them; books' runtime handle over its own claims is the one handle involved.
 layer 2 in ABO's `layerOf`; 04 §2.4 owns the name. It shares only its last element with core's
 `core/internal/configstore`, the native store and the kernel's committer, so this file always writes both paths in
 full, MOD6-11), with the legacy `integrations.InstanceStore` and the books-root half of
-`legacy.LibraryRootSource` (SIMP7-8's initialism rule; formerly `legacy.RootSource`) that render the same blob (C11): it imports `internal/config`, the residue and core
+`legacy.LibraryRootSource` (SIMP7-8) that render the same blob (C11): it imports `internal/config`, the residue and core
 `config`, `secrets`, `integrations`, `library` and `legacy`, and is imported only by `internal/books` (the
 `Manifest.LegacyStores` constructors) and, at S2 only, ABO's `main` (`app.Options.LegacyConfigStore`). Nothing
 imports it back. Only the row cipher (`internal/database/settings.go:110-235`) stays in the residue. 04 §2.4
@@ -1551,9 +1563,10 @@ therefore storage's staged, restart-bound operation (05-storage §5S.3.15), and 
   install has no blob, so its settings are the build's defaults without any write. An intent that the next boot
   rejects (`expires_at` passed, another binary, the live store's open stamp moved) therefore leaves the store and
   every setting, the Basic gate's `basic_auth_enabled` among them, exactly as they were
-  (`TestFactoryResetRejectedLeavesStoreAndSettings`, 05-storage). `reset_pending` makes `make rollback`, `deploy`
-  and the updater refuse while the intent is pending (05-storage `CheckReader`).
-- the boot record `<state_dir>/config.boot.json` is set aside with the database (to `reset/<id>/previous/`), so
+  (`TestFactoryResetRejectedLeavesStoreAndSettings`, 05-storage). `reset_pending` (while `reset/pending.json` exists)
+  and `reset_inflight` (while a `reset/<id>/inflight.json` exists, from the set-aside until `hook_done`) make
+  `make rollback`, `deploy` and the updater refuse (05-storage `CheckReader`).
+- the boot record `<state_dir>/config.boot.json` is set aside with the database (to `<db parent>/.mediacore-reset/<id>/previous/`, 05-storage §5S.3.15), so
   module enablement returns to its defaults, as every other stored setting does;
 - the keyring (data, derive and `k0-legacy` keys) and ABO's legacy key file are **kept** unchanged, and the
   keyring export stays valid. Keeping them is the lead's decision (round 6), 14 Q-J's recommendation (a); the
@@ -1568,7 +1581,8 @@ therefore storage's staged, restart-bound operation (05-storage §5S.3.15), and 
   rewrites HEAD's gap-fill file `<db dir>/config.yaml` as HEAD's reset leaves it, without the three kept secrets'
   plaintext copies (`persistence.go:168-178`). That file sits beside the DB directory, so the set-aside does not
   move it, and the fresh blob's empty kept-secret fields would otherwise gap-fill the old install's keys. Until the
-  hook has completed, the kernel sets `legacy.ConfigOpenEnv.ResetUnfinished`, and the books store serves no
+  hook has completed, the kernel sets `legacy.ConfigOpenEnv.ResetUnfinished` (and hands the run as
+  `legacy.ConfigOpenEnv.Reset`), and the books store serves no
   gap-fill copy, so no old key is effective on the reset boot or after a crash before the hook
   (`TestFactoryResetClearsGapFillSecrets`). The same hook carries HEAD's Open Library data deletion and its library
   `RootDir` wipe (`handler.go:556-583`); whether to keep the `RootDir` wipe is owner question **Q-K** in 14 (the
@@ -1919,7 +1933,7 @@ type Options struct {
 	// LegacyStore is the app's legacy copies: a legacy.SecretsStore (the store's legacy.ConfigSecrets Secrets()),
 	// set by the kernel (05-config §1.3.3); nil = none. It is typed any, never by the mirror, so no SDK type freezes
 	// legacy.SecretsStore's method set (R7-7, SIMP7-4). Open asserts legacyStore on it and fails with
-	// ErrLegacyStoreType (boot fails) when the value does not implement it: never a silent skip. After the
+	// storage.ErrLegacyStoreType (boot fails) when the value does not implement it: never a silent skip. After the
 	// settings cutover the field stays, inert and nil.
 	LegacyStore   any
 	// ResetBoot is set by the kernel only on the reset boot of a core build's factory reset (the reset journal
@@ -2019,8 +2033,9 @@ var (
 	ErrKeyMissing      = errors.New("secrets: no keyring and encrypted values exist")
 	ErrOutOfScope      = errors.New("secrets: name outside this handle's scope")
 	ErrAppIDMismatch   = errors.New("secrets: store belongs to a different app ID")
-	// ErrLegacyStoreType: Options.LegacyStore is non-nil and does not implement legacyStore (R7-7).
-	ErrLegacyStoreType = errors.New("secrets: legacy store does not implement the legacy secrets contract")
+	// A non-nil Options.LegacyStore that does not implement legacyStore fails Open with
+	// storage.ErrLegacyStoreType, the one sentinel for every owner's any-typed legacy input (05-storage
+	// §5S.3.11; R7-7); secrets defines no sentinel of its own for it.
 )
 ```
 
@@ -2095,7 +2110,7 @@ var (
 1. After storage opens and after the pre-migration checkpoint and DAG, as the first P4d reconciler (§1.4
    step 5, C13), after the books store's `Open` (`legacy.ConfigOpener`) ran ABO's own key guard and loaded ABO's
    legacy key (§1.12.2; the order 06 §6.5.1 states, COR5-2): `Open` first asserts its `legacyStore` mirror on a
-   non-nil `Options.LegacyStore` (`ErrLegacyStoreType` otherwise, R7-7), then checks
+   non-nil `Options.LegacyStore` (`storage.ErrLegacyStoreType` otherwise, R7-7), then checks
    `c/secrets/meta` (written on first open) and resolves the keyring:
    - keyring present → load; mode looser than 0600 → try `chmod 0600`; if that fails → `ErrKeyfileInsecure`
      (fail-closed);
@@ -2173,7 +2188,7 @@ so a lost key file loses the secrets. Rules:
 | Keyring too permissive and not fixable | fail-closed | secret material exposure |
 | No keyring, encrypted records exist | fail-closed unless `allow_key_regen`; with override, records kept, not deleted | recovery must stay possible |
 | `c/secrets/meta` app ID ≠ `Options.AppID` | fail-closed (`ErrAppIDMismatch`) | a rename would otherwise make every secret `ErrCorrupt` |
-| `Options.LegacyStore` set but not implementing the mirror | fail-closed (boot, `ErrLegacyStoreType`) | a silently skipped legacy store would read every kept secret as unset and stop the roll-forward (R7-7) |
+| `Options.LegacyStore` set but not implementing the mirror | fail-closed (boot, `storage.ErrLegacyStoreType`) | a silently skipped legacy store would read every kept secret as unset and stop the roll-forward (R7-7) |
 | Record under unknown key id | fail-open per secret: `ErrKeyUnavailable`, health `secrets_undecryptable`, UI "re-enter" | the app keeps working; the integration using it reports itself unconfigured |
 | AAD/auth failure | fail-open per secret: `ErrCorrupt`, same reporting | tampering or swap; never "repaired" automatically |
 | `Put` storage error | fail-closed: error to caller, nothing changed | |
@@ -2241,7 +2256,7 @@ All on scope `mediacore.secrets`.
 | `TestRotateDerive_VerifyThenRetire` | after `rotate-derive`: `DeriveKey` uses `d2`; `DeriveKeyFor("d1", …)` works until `retire_after`, then `ErrKeyUnavailable`; data records still decrypt; refused while the store is locked; export warning raised |
 | `TestRotateDerive_NotRetiredWhileArchiveUsesIt` | a `verify` key past `retire_after` stays `verify` while the in-use check reports a retained archive under it (health `derive_key_retire_blocked`); after the rewrap it retires |
 | `TestRotateDerive_JournalStaysVerifiable` | after `rotate-derive` and the rewrap, `d1` stays `verify` while a retained revocation-journal line (or the header) names it; `Open` retires nothing; `RetireUnused` in P5 sees the overridden `core.backup.dir` (DATA3-13, SEC3-10, COR3-2) |
-| `TestOpen_LegacyStoreTypeMismatchFails` | `Options.LegacyStore` set to a value lacking one `legacyStore` method → `Open` returns `ErrLegacyStoreType` and writes nothing; nil → no legacy copies; a `legacytest` fake → accepted (R7-7) |
+| `TestOpen_LegacyStoreTypeMismatchFails` | `Options.LegacyStore` set to a value lacking one `legacyStore` method → `Open` returns `storage.ErrLegacyStoreType` and writes nothing; nil → no legacy copies; a `legacytest` fake → accepted (R7-7) |
 | `TestOpen_ResetBootRewritesInstallID` | with `ResetBoot` the header's `install_id` becomes the fresh store's; without it an existing header field is never changed (DATA7-17) |
 | `TestStage_TakesBatchPointer` | `Stage` writes and its `Supersede` commit with the caller's batch and are refused outside its bound keyspaces (COR2-12) |
 
@@ -2511,3 +2526,4 @@ Round 7:
 - SIMP7-9 — verified: this file cites the basis deferral as §1.12.5 everywhere; the wrong citations are in 03 and README (cross-cluster request).
 - Header — 03 reference v1.9.1.
 - SIMP7-8 — §1.12.2 package paragraph: `legacy.RootSource` → `legacy.LibraryRootSource` (initialism naming rule, cross-cluster note from R-D).
+- integration pass (round 7): §1.3.3 `legacy.ConfigOpenEnv.Reset *legacy.ResetRun` beside `ResetUnfinished`, books' legacy config store implements `legacy.ConfigResetArgs` (R-B request); secrets defines no sentinel of its own: `storage.ErrLegacyStoreType` throughout §2.3–§2.9 (R-G request); factory-reset paragraph: `reset_pending`/`reset_inflight`, the set-aside path `<db parent>/.mediacore-reset/<id>/previous/`, test name `TestFactoryResetRejectedLeavesStoreAndSettings` (09's); §1.12.2 package paragraph drops the former name.

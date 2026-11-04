@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -60,7 +60,7 @@ records it covers, decided by the legacy store's `Covers(id)` (the optional `leg
 `legacy.ProviderHTTPCoverID`, M1.3 "Legacy members"). Only the legacy half implements `Covers`; a legacy half
 without it covers every record, the native half is never asked, and the `backends` ledger then records `legacy`
 (SIMP6-5). `notify.RuleStore` ([05-notify](05-notify.md) §3) is the third routed store; library's pre-core roots
-(`legacy.RootSource`, [05-library](05-library.md)) are legacy-only beside its config entries, not routed (03 §3.3,
+(`legacy.LibraryRootSource`, [05-library](05-library.md)) are legacy-only beside its config entries, not routed (03 §3.3,
 SIMP6-3); every other store interface of 03 §3.3 (`auth.Store`, `rbac.Store`, `tasks.Stores`,
 `config.OverrideStore`, `log.JournalStore`, `ai.JobStore`, the full-text dirty set) is **exclusive**: the legacy
 implementation, when supplied, replaces the native one. For ABO the native `InstanceStore` and `GateStore`
@@ -68,7 +68,7 @@ therefore run in production during the extraction (a stored `notify/email`, a se
 non-metadata gate scope), and the claim ledger's `backends` value for both is `legacy+native` (05-storage §5S.3.11).
 
 **Legacy-only identifiers live in package `legacy` (R6-3).** The capabilities this file's routers consume
-(`legacy.Covering`, `legacy.ExtConfirmer`), the record-ID helpers, `legacy.LocalCandidate` and the legacy
+(`legacy.Covering`, `legacy.ExtConfirmer`), the record-ID helpers, `legacy.IntegrationsLocalCandidate` and the legacy
 conformance suites (`legacy/legacytest`) are members of core's `legacy` package, which sits at L5, imports
 `integrations` and `providerhttp`, and is excluded from the API-stability gate (03 §3.3 "Legacy-only identifiers"),
 so deleting them at the integrations cutover is not a breaking change. `integrations` and `providerhttp` never
@@ -484,7 +484,10 @@ func (r *Registry) Config(ref Ref) (InstanceConfig, bool)        // effective vi
 // a field in Locked is refused whole (409, ErrFieldLocked); one that omits the
 // locked fields or repeats their effective value stores the other fields and
 // keeps each locked field's stored value as it was (HEAD semantics). When
-// the scheme, host or port of any URL-typed settings field changes, every
+// ANY destination field of the instance changes (the scheme, host or port of
+// a URL-typed settings field, or a host or port field of an adapter that
+// dials a host and port, such as core.email's host and port, 05-notify §3.1;
+// the destination fields of M1.4 step 2; lead decision, round 7), every
 // secret field is cleared unless secretsIn re-supplies it, Local is reset to
 // false unless the writer passes the ProtectAdmin check and sets it again, and
 // the write is audited as core.integration.change_url with secrets_dropped=true
@@ -629,13 +632,13 @@ func IntegrationsCoverID(ref integrations.Ref, a integrations.AdapterID) string
 // in providerhttp (M2.3).
 func ProviderHTTPCoverID(scope, counter string) string
 
-// LocalCandidate is the egress-trust predicate for instances that predate
+// IntegrationsLocalCandidate is the egress-trust predicate for instances that predate
 // core (M1.10, SEC3-5, DATA5-9): ok only when rawURL's host is an IP literal
 // in the loopback or private ranges; origin is the URL's scheme://host:port.
 // It decides only whether an admin is OFFERED the origin to confirm; it
 // grants nothing. A legacy store's one-time migration calls it; core never
 // calls it at runtime.
-func LocalCandidate(rawURL string) (origin string, ok bool)
+func IntegrationsLocalCandidate(rawURL string) (origin string, ok bool)
 ```
 
 The legacy conformance suites are `legacytest.IntegrationsInstanceStoreSuite` and
@@ -787,6 +790,15 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
      A suspended instance reports `HealthDegraded` with reason `integration_local_suspended` naming it; one whose `secrets` copy is withheld reports
      `integration_secret_origin_changed`. An `ExtOrphan` record is ignored and deleted by the store's next write.
      Nothing widens silently on roll-forward.
+   - **Extension writers and their preconditions (R7-3, DATA7-8; 05-storage §5S.3.11 "Writers in the extension
+     family" is the table).** The extension family is `Serialized`, so every key the legacy store sets or deletes
+     in it carries an `Expect`, and none of its writers issues a `DeleteRange`. `Put` writes the record through
+     `legacy.Extension.Put` with an `Expect` on the record bytes the store's `Get` saw (`seen`), and the legacy
+     store adds its `Expect` on the legacy row it rewrites; the S7 `Local` step's `PendingLocal` records are
+     written the same way; `Registry.Confirm` uses `legacy.Extension.Confirm`, which reads the record and the
+     legacy row with `GetForUpdate`; `Delete`, and the next write that removes an `ExtOrphan` record, use
+     `legacy.Extension.Delete(ctx, b, legacyKey, entryID, seen)`, a conditional delete with an `Expect` on the
+     record bytes seen.
    - **Secrets: one mechanism, `secrets` over 05-config's `legacy.SecretsStore` (lead decision, round 6).** The
      Registry stages and reads **every** secret field of a legacy-backed instance through `secrets` under its M1.10
      name, exactly as for a native instance (`secrets.Stage` in the `Put`'s batch, `Get` through `Env.Secrets`); the
@@ -884,7 +896,7 @@ rollback are never delivered to it; only deliveries already pending in `c/outbox
 | `Put` version conflict | closed (409) | Two admins editing one instance must not silently overwrite. |
 | Secrets backend unavailable on `Put` | closed (503, row not written) | Row and secret are one batch; never a row pointing at a secret that was not stored. |
 | `Test` with remote failure | n/a (returns `TestResult{OK:false, Class, Status}` with 200; no body, no remote text) | A failed test is a successful API call; echoing remote text would make `Test` an SSRF read oracle (SEC-15). |
-| URL field host/scheme/port changed without re-supplied secrets | open for the write; secrets cleared, `Local` reset, audited (`core.integration.change_url`) | A stored password or API key must never follow a URL to a new host (SEC-15). |
+| A destination field changed (a URL field's host/scheme/port, or a host or port field such as `core.email`'s) without re-supplied secrets | open for the write; secrets cleared, `Local` reset, audited (`core.integration.change_url`) | A stored password or API key must never follow a URL to a new host (SEC-15). |
 | A principal without the ProtectAdmin check (core:admin + interactive) sets `Local`, keeps it across a URL change, or calls `Test` with `Local=true` | closed (403) | Private-network trust is admin-level network trust, like `lan_allow` (SEC-15, SEC2-7). |
 | Write to a field in `Locked` | closed (409 `ErrFieldLocked`); other fields of the same `Put` are not written either | The operator's environment owns that value; the API must not appear to change it. |
 | Store write fails (native or legacy store) | closed for that `Put` (nothing written: the record, its extension record and the secrets are one batch) | The store's form is the only stored copy (R4-1). |
@@ -941,7 +953,7 @@ such switch), so neither has a legacy alias.
 no `c/secrets/` write; SIMP2-5), `TestRegistry_OverlayRemovedRevertsToStoredRow` (the stored password returns),
 `TestRegistry_LockedFieldWriteRefused`, `TestRegistry_EnvOnlyInstanceHasStableID`,
 `TestRegistry_PutWritesRowAndSecretsAtomically`, `TestRegistry_TestDoesNotPersist`,
-`TestRegistry_URLChangeDropsSecrets`, `TestRegistry_APIKeyCannotSetLocal`, `TestRegistry_LocalNeedsAdmin`
+`TestRegistry_URLChangeDropsSecrets`, `TestRegistry_DestinationChangeDropsSecrets` (a `core.email` instance whose `host` or `port` changes loses its stored password unless re-supplied; lead decision, round 7), `TestRegistry_APIKeyCannotSetLocal`, `TestRegistry_LocalNeedsAdmin`
 (interactive non-admin holding `core:integrations.manage`: `Put` and `Test` with `Local=true` refused; SEC2-7),
 `TestRegistry_TestReturnsNoBody`, `TestPut_EchoedMaskIsNotResupply` (a URL change whose secret field carries an
 echoed mask clears the secret; SEC3-4), `TestNativeInstanceStore_RoundTrip` (SIMP4-3),
@@ -957,7 +969,7 @@ by `Get` and re-imported by `secrets.Open`'s reconcile, never by the Registry; R
 `integration_local_suspended`; R4-1), `TestLegacyBacked_RoutinePutKeepsSuspension`, `TestLegacyBacked_ConfirmNeedsAdmin`
 (ProtectAdmin, audited), `TestLegacyBacked_StaleSecretUsedOnlyForSameOrigin` (SEC3-5),
 `TestLegacyBacked_StoreLoadFailureServesNone`, `TestPut_SecretChangeReleasesAuthHold`,
-`TestLocalCandidate_IPLiteralOnly` (package `legacy`; SEC3-5), `TestLocalStepGrantsNothing` (the S7 migration records
+`TestIntegrationsLocalCandidate_IPLiteralOnly` (package `legacy`; SEC3-5), `TestLocalStepGrantsNothing` (the S7 migration records
 `PendingLocal` only; `Local` reads false until `Registry.Confirm`; DATA5-9), `TestLocalStepSkippedStoreGrantsNothing`
 (a HEAD store booted directly on S7+), `TestLocalStepAfterOldArchiveRestore` (a pre-S7 archive restored on S7+:
 the migration re-runs and again only records candidates), `TestConfirmPendingLocal_OriginChangedDropsCandidate`,
@@ -1006,7 +1018,7 @@ that names an ABO key describes that books code, not core.
 |---|---|
 | `config.MetadataSources[]` (`internal/config/config.go:147-163`) | legacy-backed `metadata/<id>` instances, adapters `books.<id>`, served in place from `metadata_sources` by books' store (M1.4 step 2a); `Credentials` values (plaintext in the blob) move into `secrets` under `integrations.metadata.<id>.credentials.<k>` on this build's first write of them, the legacy values sentinelled (R4-2); the Google Books key and the Hardcover token, which HEAD keeps encrypted in their own rows, stay there (kept names of 05-config §2.2, R5-1(b); table below) |
 | `DelugeWebURL/Password`, `DownloadClient.Torrent.Deluge` (`config.go:225-240,1776-1780`) | the legacy-backed `download/deluge` instance (05-download §10) |
-| (egress trust) | `Local` is native-only (books' extension family, M1.4 step 2a). Today these instances have no egress guard at all; from S7 a private host needs `Local` or `lan_allow`. **The upgrade grants no `Local` (DATA5-9).** At S7 books ships one versioned `Migration` (05-storage §5S.3.5; `Additive`, P4b, raises no level; never a `LegacyMigration`, which `TestNoNewLegacyMigrations` forbids after S2b; SIMP5-11, DATA5-17) that writes only books' extension family `m/books/ext/integrations/` and nothing older builds read: for each legacy-backed instance whose URL core's `legacy.LocalCandidate` accepts — the host is an **IP literal** in the loopback or private ranges — it records that URL origin as `PendingLocal`, with the legacy-field hash of M1.4 step 2a. A candidate grants nothing: the instance reads `Local=false`, reports `HealthDegraded` with reason `integration_local_pending`, and is listed on the Integrations page until an admin accepts it with `Registry.Confirm` (ProtectAdmin, audited `core.integration.confirm`), which grants `Local` bound to that origin only while it still equals the instance's URL origin. This holds whatever wrote the URL: values HEAD's `PUT /api/v1/config` wrote before S3 (a HEAD custom role holding `settings.manage` could write them), a HEAD store that skips S3–S6 and boots S7+ directly, and a pre-S7 archive restored on S7+ — whose store lacks the migration's applied record, so the migration runs again on the archive's URLs and again only records candidates. A private host given by **name** is never a candidate (a name can resolve anywhere at dial time): it is `HealthMisconfigured` with reason "private host needs Local or lan_allow" until an admin sets `Local` or lists it in `lan_allow` (SEC3-5). A host change by any writer resets `Local` and drops a candidate (M1.3 `Put`; for an older build's change, the suspension of M1.4 step 2a). From S3 every integration-bound blob field (URL, host, credentials, headers) is also `ProtectAdmin` on the config façade until S7 hands it to `Registry.Put`, and a URL-origin change through the façade before S7 clears that instance's stored secret unless the same request re-supplies it (05-config §1.3.7, §1.12.2; `TestPreS7Facade_IntegrationURLIsProtectAdmin`; SEC4-7). Release note (S7): "Integrations that reach a LAN address by IP need one confirmation by an admin on the Integrations page after this upgrade; until then they cannot connect." |
+| (egress trust) | `Local` is native-only (books' extension family, M1.4 step 2a). Today these instances have no egress guard at all; from S7 a private host needs `Local` or `lan_allow`. **The upgrade grants no `Local` (DATA5-9).** At S7 books ships one versioned `Migration` (05-storage §5S.3.5; `Additive`, P4b, raises no level; never a `LegacyMigration`, which `TestNoNewLegacyMigrations` forbids after S2b; SIMP5-11, DATA5-17) that writes only books' extension family `m/books/ext/integrations/` and nothing older builds read: for each legacy-backed instance whose URL core's `legacy.IntegrationsLocalCandidate` accepts — the host is an **IP literal** in the loopback or private ranges — it records that URL origin as `PendingLocal`, with the legacy-field hash of M1.4 step 2a. A candidate grants nothing: the instance reads `Local=false`, reports `HealthDegraded` with reason `integration_local_pending`, and is listed on the Integrations page until an admin accepts it with `Registry.Confirm` (ProtectAdmin, audited `core.integration.confirm`), which grants `Local` bound to that origin only while it still equals the instance's URL origin. This holds whatever wrote the URL: values HEAD's `PUT /api/v1/config` wrote before S3 (a HEAD custom role holding `settings.manage` could write them), a HEAD store that skips S3–S6 and boots S7+ directly, and a pre-S7 archive restored on S7+ — whose store lacks the migration's applied record, so the migration runs again on the archive's URLs and again only records candidates. A private host given by **name** is never a candidate (a name can resolve anywhere at dial time): it is `HealthMisconfigured` with reason "private host needs Local or lan_allow" until an admin sets `Local` or lists it in `lan_allow` (SEC3-5). A host change by any writer resets `Local` and drops a candidate (M1.3 `Put`; for an older build's change, the suspension of M1.4 step 2a). From S3 every integration-bound blob field (URL, host, credentials, headers) is also `ProtectAdmin` on the config façade until S7 hands it to `Registry.Put`, and a URL-origin change through the façade before S7 clears that instance's stored secret unless the same request re-supplies it (05-config §1.3.7, §1.12.2; `TestPreS7Facade_IntegrationURLIsProtectAdmin`; SEC4-7). Release note (S7): "Integrations that reach a LAN address by IP need one confirmation by an admin on the Integrations page after this upgrade; until then they cannot connect." |
 | `ai_endpoints` rows (`internal/config/ai_endpoints.go:36-68`) | legacy-backed `ai/<id>` instances, served in place from `ai_endpoints` by books' store (05-ai §10) |
 | `config.Plugins["webhook"].Settings` | legacy-backed `notify/webhook-<n>` instances, served in place from `plugins.webhook` by books' store (05-notify §10) |
 | `handleDelugeTestConnection`, `/ai/test-connection` | `POST /api/core/v1/integrations/{kind}/test` |
@@ -1758,3 +1770,4 @@ Round 7 (`docs/plans/platform-core/reviews/spec-round-7-dispositions.md`):
 - SIMP7-5 — M1.1, M1.3: the Registry and the gate router detect their capabilities once, through their mirrors; the kernel asserts only `legacy.ConfigOpener` and `legacy.ConfigSecrets`.
 - SIMP7-3 — M1.1: the "stays in v1" members are cited as this file's rows of 05-storage §5S.3.11's one table.
 - SIMP7-6 — M1.4 step 2a: the reference to `storage_extension_suspended` is deleted; `integration_local_suspended` is the owner's token.
+- integration pass (round 7): SIMP7-8 sweep: `legacy.LibraryRootSource`, `legacy.IntegrationsLocalCandidate` (M1.1, M1.3 Go block), `TestIntegrationsLocalCandidate_IPLiteralOnly`; M1.3 `Put` and the M1.5 row: a change to any destination field (URL host/scheme/port, or a host or port field such as `core.email`'s) clears stored secrets (lead decision, R-F item 6), `TestRegistry_DestinationChangeDropsSecrets`; M1.4 step 2a: the `Expect` each extension-family writer stages, per 05-storage §5S.3.11 (R-B request).

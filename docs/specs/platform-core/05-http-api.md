@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-http-api.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: fcd387ab-7a8e-49e2-a4b4-a6901aaee1e3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1182,7 +1182,7 @@ interactive method). Keys that decide who reaches the server or which client add
 | `core.http.rate_limit.per_minute` | int | 100 | yes | none |
 | `core.http.rate_limit.burst` | int | `max(per_minute/5, 10)` | yes | none |
 | `core.http.rate_limit.max_clients` | int | 10000 | no | none |
-| `core.http.basic_gate.enabled` | bool; 05-config's `BelowStored` alias `basic_auth_enabled` / `BASIC_AUTH_ENABLED` maps to it. **An operator's tightening survives a rollback (resolution R7-1, SEC7-1):** from S3, when stage 8 reads the key through config, an effective `true` from an operator layer (`ABO_CORE_HTTP_BASIC_GATE_ENABLED`, the operator file) over a stored `basic_auth_enabled: false` makes the legacy config store write `basic_auth_enabled: true` at P4d step 1 (audited `core.config.legacy_narrowed`, 05-config §1.3.5; 05-authn §4.11 applies the same rule to `enable_auth`), **only when a stored password exists**, so an older build after a rollback keeps the gate on with the same password; with no stored password nothing is written, and stage 8 here and early fix 5 on a hotfixed older build keep the gate closed (`TestRollback_OperatorEnabledAuthStaysOn`'s Basic-gate cell) | false | yes | admin |
+| `core.http.basic_gate.enabled` | bool; 05-config's `BelowStored` alias `basic_auth_enabled` / `BASIC_AUTH_ENABLED` maps to it. **An operator's tightening survives a rollback (resolution R7-1, SEC7-1):** the http section declares, **from S3**, `config.NarrowStored("core.http.basic_gate.enabled", narrow = value == true, when = core.http.basic_gate.password has a stored value (`Secret.Set` with `SourceStored` or `SourceLegacy`))` (05-config §1.3.1); from S3, when stage 8 reads the key through config, an effective `true` from an operator layer (`ABO_CORE_HTTP_BASIC_GATE_ENABLED`, the operator file) over a stored `basic_auth_enabled: false` makes the legacy config store write `basic_auth_enabled: true` at P4d step 1 (audited `core.config.legacy_narrowed`, 05-config §1.3.5; 05-authn §4.11 applies the same rule to `enable_auth`), **only when a stored password exists**, so an older build after a rollback keeps the gate on with the same password; with no stored password nothing is written, and stage 8 here and early fix 5 on a hotfixed older build keep the gate closed (`TestRollback_OperatorEnabledAuthStaysOn`'s Basic-gate cell) | false | yes | admin |
 | `core.http.basic_gate.username` | string; 05-config's `BelowStored` alias `basic_auth_username` / `BASIC_AUTH_USERNAME` maps to it (SEC6-9). Stage 8 compares it in constant time. An enabled gate with an empty username keeps HEAD's behaviour (HEAD's default is `""`, `internal/config/config.go:2806`, and its gate then admits `:<password>`): the password is the secret, and refusing an empty username would lock out every deployment that set only a password, with no security gain; an empty **password** is what stage 8 refuses | `""` | yes | admin |
 | `core.http.basic_gate.password` | secret (one canonical name; 05-config's alias `basic_auth_password` maps to it, SEC4-10); core reads it from S3, when the gate moves (until then gin reads it itself). It is **not moved** during the extraction: for ABO, books' legacy config store reads and writes HEAD's own **encrypted** row in place, with no sentinel, so a rollback leaves the older gate as configured (resolution R5-1(b); 05-config). Enabled with this unset, empty or unreadable → stage 8 refuses (R5-1(c)) | — | yes | admin |
 | `core.http.openapi.public` | bool | false | yes | admin |
@@ -1240,7 +1240,7 @@ route table.
 | `TestClientIP_ZonedConnectorTrusted` | zoned link-local connector peer: header believed, peer admitted (SEC-18) |
 | `TestTrace_NoApikeyInSpanAttributes` | every `log.DefaultRedactQuery()` value (`apikey`, `token`, `code`, `code_verifier`, `refresh_token`, …) absent from span attributes and the access log (SEC-22, SEC2-18; the list's superset-of-HEAD test is `TestRedactQuery_SupersetOfHEAD` in 05-logging) |
 | `TestAccessLog_NoInviteToken` | no one-time token in the access log, journal or span attributes (SEC-21) |
-| `TestStage13_InvalidKeyPlusValidSessionIs401` | stop rule (SEC-12) |
+| `TestStage12_InvalidKeyPlusValidSessionIs401` (05-authn §10 owns it: stage 12's stop rule, refused at stage 13) | stop rule (SEC-12) |
 | `TestStage13_StaleCookieOnPublicRouteIsAnonymous` | cookie cleared, request proceeds (SEC-11) |
 | `TestFacadeKey_RefusedOnCoreAndModuleGroups` (deferred-build, §3.6) | SEC-5 |
 | `TestConfining_WorkerKeyRefusedOnABS` | an `fp-worker` key and a worker user's ABS login get ABS 403 on every ABS route whose `Perm` does not name `books:fingerprint.worker` (SEC2-4) |
@@ -1463,3 +1463,4 @@ Round 7 (2026-11-04), findings applied to this file:
 - COR7-1 / SEC7-4 (R7-2) — the factory-reset core route lands in `internal/storagehttp` at S4 r2 and the legacy path becomes its alias; before r2 books' gin handler stages through `legacy.Maintenance` behind HEAD's chain (§5, §8.1).
 - FE7-5 — `checkBuild` returns `StaleReason | null` with `onStaleBuild`; `readPageBuildId()` is the one meta reader; `createCoreClient`'s options are required; ABO's pre-shell client and `createModuleClient` named; `apiFetch` wording corrected; listener test (§7, §8.4).
 - FE7-13 — `/modules`' `ui_build_id` contrasted with `--version-json`'s (§5).
+- integration pass (round 7): §10 `core.http.basic_gate.enabled` declares `config.NarrowStored` from S3 (R-E request, R7-1); §12 stop-rule test is 05-authn's `TestStage12_InvalidKeyPlusValidSessionIs401`.

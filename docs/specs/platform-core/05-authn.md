@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1162,10 +1162,13 @@ The *arr facade's key purpose and `X-Api-Key`/`apikey` extraction are deferred-b
   its own a rollback would boot with auth **off**, and with ABO's `disabled_allow_remote=true` reachable
   from the network. Therefore, when the effective `core.auth.mode` is `required` and the legacy store's
   row stores `enable_auth: false`, the legacy config store writes `enable_auth: true` at P4d step 1, as
-  an audited core write (`core.config.legacy_narrowed`; 05-config §1.3.5 owns the mechanism). It is the
+  an audited core write (`core.config.legacy_narrowed`; 05-config §1.3.5 owns the mechanism, and auth's
+  section declares it from S4 r1 as `config.NarrowStored("core.auth.mode", narrow, nil)` with `narrow`
+  true exactly for `"required"`, §8). It is the
   one exception to "stored values of locked keys are kept", and it only ever narrows an older build. The
-  Basic gate gets the same rule, `basic_auth_enabled: true` written only when a stored password exists
-  (05-http-api §10). **S4 r1 follows the effective value:** from the S3 façade `config.AppConfig` is a
+  Basic gate gets the same rule **from S3** (when core's stage 8 and the façade first own it),
+  `basic_auth_enabled: true` written only when a stored password exists (05-http-api §10); auth's own
+  narrowing write runs from S4 r1. **S4 r1 follows the effective value:** from the S3 façade `config.AppConfig` is a
   projection of core's effective config through the alias table (05-config §1.12.1), and `enable_auth`'s
   alias of `core.auth.mode` and auth's config section land with `auth` in r1 (09 S4), so gin's auth at
   r1 reads `AppConfig.EnableAuth` = (effective `core.auth.mode` is `required`), the R6-6 exemption
@@ -1527,7 +1530,7 @@ interactive method). Every key that decides who may sign in, with which role, or
 
 | Key | Type | Default | Hot-reload | Protection |
 |---|---|---|---|---|
-| `core.auth.mode` | enum `required`/`disabled`; declares `config.SafeLegacyValue` accepting `required`, so an enabling legacy value always takes effect (§4.11, R6-6) | `required` | no | owner (SEC3-6, §4.8) |
+| `core.auth.mode` | enum `required`/`disabled`; declares `config.SafeLegacyValue` accepting `required`, so an enabling legacy value always takes effect (§4.11, R6-6), and, **from S4 r1**, `config.NarrowStored("core.auth.mode", narrow = value == "required", when = nil)`, so an operator-enabled auth over a stored `enable_auth: false` is written back as `enable_auth: true` at P4d step 1 (§4.11, R7-1; 05-config §1.3.5) | `required` | no | owner (SEC3-6, §4.8) |
 | `core.auth.disabled_allow_remote` | bool | false (ABO: true, §4.11) | no | admin |
 | `core.auth.session.ttl` | duration | 24h | yes (new sessions) | none |
 | `core.auth.session.remember_ttl` | duration | 168h | yes | none |
@@ -1730,6 +1733,21 @@ widen on an older build):
   (`auth_extension_suspended`). A user record has no Widening field, so it is never suspended: its
   restrictions are kept and its next write re-stamps it (DATA5-4). A record whose row is gone is an
   orphan, ignored and deleted by the next write of that key.
+- **Writers and their preconditions (R7-3, DATA7-8; 05-storage §5S.3.11 "Writers in the extension
+  family" is the table).** Books declares the extension family `Serialized`, so every key a writer sets
+  or deletes in it carries an `Expect` and none issues a `DeleteRange`:
+  - key and user records: `Extension.Put` with an `Expect` on the record bytes the caller's `Get` saw
+    (`seen`), the caller adding its `Expect` on the legacy row; `ConfirmAPIKey` through
+    `Extension.Confirm`, which reads the record and the legacy row with `GetForUpdate`; a record deleted
+    with its row, by an orphan sweep, a key or user delete or the user merge through
+    `Extension.Delete(ctx, b, legacyKey, entryID, seen)`, an `Expect` on the record bytes seen;
+  - standalone records consumed once (hashed sessions, native one-time tokens and invites): created
+    with `Expect(key, nil)`; consumed or deleted with an `Expect` on the bytes read, then `Delete`
+    (DATA4-9);
+  - `TouchSession`: `GetForUpdate` on the record; nothing is staged for an absent, expired or
+    epoch-stale one (§3.4);
+  - the bootstrap hash, rewritten at every start: `GetForUpdate` on the key, then `Set` or `Delete`;
+  - the session cut-off record: written once, `Expect(key, nil)`.
 - **Standalone native-only records**: hashed sessions, native one-time tokens (invite, temp-login,
   bootstrap) and the session cut-off record. A rollback costs one sign-in per browser and voids invites
   and temp-login links issued by this build (resend) — stated in the release note.
@@ -2069,3 +2087,4 @@ Round 7 (2026-11-04), findings applied to this file:
 - SEC7-12 — `auth_disabled_remote` and `config_legacy_name_shadowed` are carried by HEAD's degraded token list until S8 (§4.11).
 - SEC7-13 — "a command-line flag aliasing either" removed: env or operator file only (§4.11).
 - DATA7-18 — the open stamp signal reads "differs from both the recorded number and its `pending`", as 05-storage (§4.3).
+- integration pass (round 7): §8 `core.auth.mode` row and §4.11 declare `config.NarrowStored` (from S4 r1), and §4.11 states the Basic-gate narrowing from S3 (R-E request, R7-1); §11 "ABO's legacy store": the `Expect`/`GetForUpdate` each extension-family writer stages, per 05-storage §5S.3.11's table (R-B request, R7-3).

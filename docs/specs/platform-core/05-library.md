@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-library.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.7.1 -->
 <!-- guid: dafe380b-f703-41cb-99d0-2b2ba32f70e5 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -772,7 +772,7 @@ this build changed.
 | `TestRootExtensionStaleAfterPrevWrite` | a root the previous release renamed: the sentinel back to bootstrap, `Watch`/`Quarantine`/`AppDir`/`MinFree` kept, the record never suspended; a root it deleted: the extension record swept through the conditional `legacy.Extension.Delete` (DATA4-8, DATA7-8; the `ReadShares` half is deferred, §5L.13) |
 | `TestLegacyRootRefusesReadShares` | creating or updating a root that books' source holds with a non-empty `ReadShares` fails with `ErrLegacyRootShares`, in library before the source is called and in the source itself (a `legacytest.LibraryRootSourceSuite` case); a config-entry root keeps its shares (SIMP7-2) |
 | `TestLibraryNewRejectsWrongLegacySource` | `library.New` with an `Options.LegacySource` that does not satisfy library's mirror returns `storage.ErrLegacyStoreType`; nil means no source (R7-7, SIMP7-4) |
-| `TestConfigEntryRoots_RoundTrip` | without a root source, every root and mapping round-trips through `core.library.roots`/`mappings` (SIMP4-3; renamed from `TestNativeRootStore_RoundTrip`, which named a store that does not exist, SIMP7-8) |
+| `TestConfigEntryRoots_RoundTrip` | without a root source, every root and mapping round-trips through `core.library.roots`/`mappings` (SIMP4-3, SIMP7-8: the native roots are config entries, not a store) |
 | `TestRootRouting_CoversDecides` | with books' source: a new import root lands in the source (`Covers("import/")`), a new download root in `core.library.roots`; updates and deletes reach the half that holds the root; the root list merges both; a source-served root carries `RootSpec.Legacy`, a config-entry root none; books' source passes `legacytest.LibraryRootSourceSuite`; library's mirror test (`legacy_mirror_test.go` in `package library_test`: both-way assignability and the `LibraryCoverID` table) passes (SIMP5-1, SIMP5-4, SIMP6-3, SIMP6-5, SIMP7-1) |
 | `TestLibraryErrorsPassKeyNameGate` (ABO, a case of `TestCoreHoldsNoAppKeyNames`) | the `"library: …"` sentinels pass the key-name gate; a `"library:" + id` literal fails it (MOD5-3) |
 
@@ -920,3 +920,4 @@ Round 7:
 - SIMP7-8 — renames: `legacy.RootSource` → `legacy.LibraryRootSource`, `RootLegacyState` → `RootSpecLegacyState`, `legacytest.RootSourceSuite` → `legacytest.LibraryRootSourceSuite`, `TestNativeRootStore_RoundTrip` → `TestConfigEntryRoots_RoundTrip`.
 - SIMP7-6 — `library_root_extension_suspended` moved with the suspension into the deferred table (no producer).
 - R7-3 / DATA7-8 — `LibraryRootSource.Update`/`Delete` and the orphan sweep go through `legacy.Extension.Put` and the conditional `legacy.Extension.Delete`.
+- integration pass (round 7): §5L.9 `TestConfigEntryRoots_RoundTrip` row drops the former test name (SIMP7-8 sweep).

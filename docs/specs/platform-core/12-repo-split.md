@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/12-repo-split.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.7.1 -->
 <!-- guid: eb47baa1-640b-4c96-96cc-f6b2bdeaa57e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -528,7 +528,7 @@ ABO copy's later edits into core history. Rule:
 - a copied, split or re-implemented file keeps only its post-arrival history and gets no `origins.txt`
   line (e.g. `internal/telemetry/telemetry.go`, whose provider construction core re-implements in
   `metrics` while the file keeps its install code until S2, 04 §8.6; MOD5-14; and the registry engine,
-  `childop`, `opsmetrics`, `opsv3` and the state-using `opstest` files, which core re-implements in
+  `childop`, `opsmetrics`, `opsv3` and the whole `pkg/ops/opstest` package, which core re-implements in
   `internal/executor`, `tasks`, `internal/taskhttp` and `taskstest`, 04 §8.6; MOD7-1); the core repo's first commit message
   records its origin path and the ABO commit it was copied from (e.g. the `core/internal/keyedmutex`
   copy, 03 §3.2.1, whose origin stays in ABO);
@@ -742,3 +742,4 @@ Round 7 (dispositions in `docs/plans/platform-core/reviews/spec-round-7-disposit
 - FE7-1 — SC4(a): `core/web/.gitignore` travels with the export and into the split repo's `web/`; the run leaves the tree clean.
 - MOD7-6 — §12.3.11 `ci` gains `embed-check` over core's own embed list (no Dockerfile cross-check).
 - SIMP7-8, R7-2 — SC1 names `legacy.LibraryRootSource` and `legacy.Maintenance`.
+- integration pass (round 7): §12.8.1: the whole `pkg/ops/opstest` package is re-implemented (R-H request).
