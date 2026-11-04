@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.13.0 -->
+<!-- version: 1.13.1 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -570,7 +570,7 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
 2. **Load**: `Load` of the native store, the only one (one owner, one stored form per instance; SIMP-4, R4-1).
    There is no `core.integrations.<kind>.instances.<id>` config form of an instance. Operator-set values of the
    integration-bound config keys (the env-bound Deluge, OpenAI and SMTP settings, M1.10) arrive from
-   `config.Store.PassthroughValues()` (05-config §1.4 step 8) at the operator paths of the M1.10 table.
+   `config.Store.PassthroughValues()` (05-config §1.4 step 7) at the operator paths of the M1.10 table.
    **Operator overlay (SIMP2-5).** They are an in-memory overlay, applied at `Load` and at every config hot
    swap, and **never persisted**: no instance row, no `c/secrets/` value and no audit record is written
    from them. **One precedence rule (SEC6-5; 05-config §1.3.5).** An operator value overlays the stored field and
@@ -784,9 +784,11 @@ ABO's pre-core instances are migrated once, in R2's integrations flip (09), by *
 BootBlocking, resumable migration step behind the pre-migration checkpoint (05-storage §5S.3.13; 06 §6.5.1). The
 step is `books` code, so core never names an ABO key or row format (03 R1): it decodes HEAD's blob fields and rows,
 writes each instance through the `integrations.Importer` the kernel hands it in `module.Importers` (M1.3; 06 §6.4.2), and deletes what it read in the
-same batch. The secret values were moved before it by the config-and-secrets step M2 (05-config), which encrypts
-them under the keyring at the names of the table below; this step writes each instance's secret fields as
-`secrets.Ref`s to those names. A row it cannot decode is quarantined with its raw bytes and reported, never dropped
+same batch. The config-and-secrets step M2 (05-config §1.12.2) runs before it: M2 leaves the blob's integration and
+library fields (class `i`) in `setting:config_blob` for this step, and moves their secret values out of them,
+encrypting them under the keyring at the names of the table below; this step writes each instance's secret fields as
+`secrets.Ref`s to those names. M6 deletes the `setting:config_blob` row once its integration part and its library-roots
+part ([05-library](05-library.md) §5L.10) have converted their fields, so no blob survives R2. A row it cannot decode is quarantined with its raw bytes and reported, never dropped
 (05-storage's cutover). After the step every instance is an ordinary native row: no instance keeps HEAD's reach,
 HEAD's writers or HEAD's auth-off rule, and none is served from HEAD's rows.
 
@@ -806,7 +808,7 @@ name of every HEAD secret. IDs that exist in ABO today are kept verbatim. The *O
 
 | ABO source | Instance | Secret names (values moved by M2, 05-config) | Operator paths |
 |---|---|---|---|
-| `deluge_web_url`, `deluge_web_password`, `download_client.torrent.deluge.*` (`config.go:225-240,1776-1780`) | `download/deluge` | `integrations.download.deluge.password` (plaintext in the blob at HEAD) | `integrations.download.deluge.{url, password}` |
+| `deluge_web_url`, `deluge_web_password`, `download_client.torrent.deluge.*` (`config.go:225-240,1776-1780`) | `download/deluge` | `integrations.download.deluge.password` (`deluge_web_password`) and `integrations.download.deluge.daemon_password` (`download_client.torrent.deluge.password`), both plaintext in the blob at HEAD | `integrations.download.deluge.{url, password}` |
 | `openai_api_key`, `openai_base_url` (the row ABO synthesises with ID `openai`, `internal/config/ai_endpoints.go:74,403-440`) | `ai/openai` | `integrations.ai.openai.api_key` (HEAD's encrypted row, `persistence.go:1955`) | `integrations.ai.openai.{api_key, base_url}` (`OPENAI_API_KEY`, `OPENAI_BASE_URL`) |
 | other `ai_endpoints[]` rows (`local-llm`, `local-uv`, user rows; `ai_endpoints.go:73-75`) | `ai/<row id>` | `integrations.ai.<row id>.api_key`, written only for a row whose `auth_ref` is `openai_api_key`, as a copy of the stored OpenAI key (HEAD's `poolSecret`, `internal/ai/pool_routing.go:70-79`; 05-ai §10); none otherwise | `integrations.ai.<row id>.api_key` |
 | `google_books_api_key` (`persistence.go:1956`) | `metadata/google-books` (the source ID, `config.go:3769`) | `integrations.metadata.google-books.api_key` (encrypted row at HEAD) | `integrations.metadata.google-books.api_key` |
@@ -1128,7 +1130,7 @@ exactly N; R5-4). Store conformance: `providerhttptest.GateStoreSuite(t, factory
 | `internal/metadata/throttle.go`, `throttle_registry.go` (`ThrottleRegistry`, `ThrottleStore`) | `providerhttp` holds; `ClassifyProviderError` → `providerhttp.Classify` |
 | `internal/metadata/circuitbreaker.go` `CircuitBreaker` | `providerhttp` breaker (with probe lease); `ProtectedSource`/`NewChainSource` deleted — the gate is in the transport |
 | `internal/security/safehttp` | the dial guard for every `EgressPolicy` (private ranges refused unless `Policy.Private`); package stays for non-integration callers (`internal/covers`) until 04 moves it |
-| Pebble keys `provider_throttle:<id>` (`internal/database/provider_throttle.go:29`), `provider_daily_budget:<id>` (`dailyquota.go:85`) | **dropped** by books' R2 step M6 (M1.10): holds and quota counts are transient and are reset, not converted (D12 F2), so the first R2 boot starts with no hold and a fresh day's count, and the step deletes HEAD's rows. A provider whose own daily limit is already spent answers with its quota error, and the gate sets the hold again (M2.4). From R2 every hold and counter is in `NativeGateStore` (`c/providerhttp/`, M2.4) |
+| Pebble keys `provider_throttle:<id>` (`internal/database/provider_throttle.go:29`), `provider_daily_budget:<id>` (`dailyquota.go:85`) | **dropped** by books' R2 step M6 (M1.10): holds and quota counts are transient and are reset, not converted (D12 (b)), so the first R2 boot starts with no hold and a fresh day's count, and the step deletes HEAD's rows. A provider whose own daily limit is already spent answers with its quota error, and the gate sets the hold again (M2.4). From R2 every hold and counter is in `NativeGateStore` (`c/providerhttp/`, M2.4) |
 | `cmd/root.go:405-418` attach ordering | constructor ordering inside `app.New` |
 | `/api/v1/metadata/providers/throttles` (`internal/server/handlers/metadata/provider_throttles.go:43`) | `GET .../instances/{id}/health` (`Hold`) and `DELETE .../hold`; the old path is deleted in R2, and the SPA and the first-party scripts switch in the same release (09) |
 
@@ -1344,7 +1346,7 @@ and `coretest.ProviderHTTP(t)` (Registry over `httptest.Server`, fake clock, in-
 | 6 clients in `internal/metadata/{audible,audnexus,googlebooks,hardcover,openlibrary,wikipedia}.go` | stay in ABO as adapters `books.<id>` registered via `Registrar.Adapter`; HTTP from `env.HTTP`; credentials via `env.Secrets` |
 | `switch src.ID` in `buildSourceChainFromConfig` | deleted; instances from M1 |
 | `BuildSourceChain` memoization + `ProtectedSource` | `metadata.Chain` (no memo needed; no per-build breaker) |
-| `pcache` (`internal/metafetch/pcache.go`, `internal/database/metadata_fetch_cache.go`) | `metadata.Cache` in `m/books/` keyspace; existing `pcache:` rows are claimed as a legacy prefix by `books` (02 #13) and read in place behind the cache's key function until expiry |
+| `pcache` (`internal/metafetch/pcache.go`, `internal/database/metadata_fetch_cache.go`) | `metadata.Cache` in `m/books/` keyspace; existing `pcache:` rows stay a `books` family (02 #13) and are read in place behind the cache's key function until expiry |
 | `AuthorLister` (`internal/metadata/audible_author_list.go:32`) | an app-side optional interface on the books adapter (type-assert on the leased provider) |
 | `MetadataCandidateScorer` (`internal/ai/metadata_scorer.go:29`) | stays in ABO; may call `ai.Router` (05-ai) |
 
@@ -1579,5 +1581,5 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
   after M2, `Local` bound to the stored origin and `OperatorSecretOrigin` for the four operator-secret pairs,
   `auth_ref` rows get a key copy; the auth-off writability is not carried). M2.10: throttle and quota rows dropped
   (D12 F2); the throttles route is deleted, not aliased. M1.9 and M2.9 reduced to the native tests plus migration
-  tests. Stage references re-keyed to R2.
+  tests. Stage references re-keyed to R2. Consistency pass: M1.4 cites 05-config §1.4 step 7; M1.10 states that M2 leaves the class-`i` blob fields and M6 deletes the blob (lead decision L10); the Deluge daemon password gets its own secret `integrations.download.deluge.daemon_password`; `pcache:` is a plain books family; D12's answers cited as D12 (a)–(d).
 
