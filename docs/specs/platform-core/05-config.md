@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.11.1 -->
+<!-- version: 1.12.0 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -11,7 +11,7 @@ Evidence commit `748fd787a` (all `path:line` anchors). Raw inputs:
 [`raw/02-import-graph-hotspots.md`](../../plans/platform-core/raw/02-import-graph-hotspots.md) finding 3;
 [`raw/03-layering-guard.md`](../../plans/platform-core/raw/03-layering-guard.md) `allowed` rows 1–5;
 [`raw/15-dependencies.md`](../../plans/platform-core/raw/15-dependencies.md). Normative names come from
-[03-architecture](03-architecture.md) v1.12.1: R4 layers **L1** `storage` → **L2** `secrets` → **L3** `config`
+[03-architecture](03-architecture.md) v1.14.0: R4 layers **L1** `storage` → **L2** `secrets` → **L3** `config`
 (`metrics` and `log` are L0; `compat` and `integrations` are L4, above config); R5 (no globals) binds **core**
 only; §3.6 `core.*` / `modules.<id>.*`. The compatibility window is defined **once**, in
 [09-abo-on-core](09-abo-on-core.md) §9.2.1, and implemented once in `compat`; config aliases reference it and
@@ -181,10 +181,18 @@ type Alias struct {
 	                                                          // LegacyBlob is non-empty (the legacy config store writes it, §1.12.2)
 	// HEADAuthOffWritable keeps HEAD's auth-off write rule for this key (§1.3.7; SEC9-1, SEC9-13): with auth off the
 	// auth-disabled principal may store it after the owner-trust-root check, as HEAD's !prior.EnableAuth allows
-	// (update_service.go:770-786 @748fd787a). ABO generates it for enable_auth and the three basic_auth_* keys only.
-	// It is honoured only while the key is routed to a built legacy config store (its value lives in HEAD's row), so
-	// a native app, which has none, never inherits it. H3 clears it on enable_auth only; the Basic gate keys keep it
-	// until their family's settings cutover (§1.12.5, R9-5).
+	// (update_service.go:770-786 @748fd787a). ABO generates it for enable_auth, the three basic_auth_* keys and every
+	// integration-bound blob field of §1.12.3 (the rows marked integrations: AI endpoint rows and the openai_* pair,
+	// metadata sources, webhooks, Deluge and download_client, list rows and singletons alike; all FieldUnprotected
+	// at HEAD, protected_fields.go:137-165; R10-10, SEC10-3).
+	// One predicate decides it (SEC10-5): it is honoured while the app supplies a legacy config store AND the key's
+	// value lives in a legacy row, either its LegacyBlob field (for an integration-bound field, through the legacy
+	// instance store that shares the blob, 05-metadata M1.4 step 2a) or a legacy.SecretsStore row (the encrypted
+	// basic_auth_password and the three kept integration keys). A native app, which has no legacy store, never
+	// inherits it. The keys of one group lose it together, at the earlier of the secrets cutover H2 (which moves the
+	// group's secrets into c/secrets/) and the group's own cutover: the three Basic gate keys at the settings cutover,
+	// which precedes or ships with H3; an integration instance's fields at its family's integrations cutover
+	// (05-metadata M1.10); one release note per group. H3 clears it on enable_auth only (§1.12.5, R9-5, SEC10-6).
 	HEADAuthOffWritable bool
 	Ledger     string              // ledger row ID: the app's ledger (app.Options.CompatLedger) or core's own fragment
 	                               // (09 §9.2.9, SIMP3-3); TestCompatLedgerMatchesCode joins them from S2b, when
@@ -435,11 +443,14 @@ type OverrideStore interface {
 // secret with a legacy copy is written in place, a native one to c/secrets/, §2.3), and the audit record
 // core.settings.update (05-rbac §7.1: section and changed key names, never secret values; actor = Override.By).
 // When the store (or any store that staged into the batch) has legacy.WriteLock, it builds and commits the batch
-// inside storage.CommitLocked(ctx, b, d, stage, locks...) with the locks WriteLocks returns for
-// legacy.LockConfigSettings, held from the first staged read through the commit (R9-1, §1.6); it
-// retries with storage.RetryOnConflict and then calls legacy.ConfigCommitObserver.Committed when the store has that
-// capability. It detects WriteLock through an unexported mirror like the other capabilities. config never imports
-// audit (L4).
+// inside storage.CommitLocked(ctx, b, d, stage, locks...) with its SettingsLocks: the []storage.Lock the kernel
+// resolved at 06 P4c by calling WriteLocks with legacy.LockConfigSettings and handed it with the store. The
+// Committer never calls WriteLocks and names no lock string (it cannot import legacy, L5; COR10-5). CommitLocked
+// marks b with the hold (storage.LocksHeld(b, l), R10-4) and holds the locks from the first staged read through the
+// commit and through every post-commit step a store registered on b while staging (the books store's gap-fill
+// file write, §1.12.2), so the file step is inside the lock as HEAD's SaveConfigToDatabase had it (R9-1, R10-5,
+// §1.6); it retries with storage.RetryOnConflict, each attempt a fresh batch and a fresh hold. config never
+// imports audit (L4).
 type Committer interface {
 	Commit(ctx context.Context, c Commit) error
 }
@@ -524,6 +535,10 @@ type AttachReport struct {
 	// Shadowed: keys at ProtectAdmin or higher whose BelowStored legacy name is set to a value that differs from the
 	// stored effective value -> the legacy name; health config_legacy_name_shadowed (§1.3.5, SEC6-1)
 	Shadowed    map[Path]string
+	// DeployDefaults: the same condition for a name on §1.12.5's list of names a shipped deploy file sets
+	// unconditionally, whose value equals that file's default (compose's BASIC_AUTH_ENABLED=false,
+	// BASIC_AUTH_USERNAME=admin) -> the legacy name; logged once at info, never a health token (SEC10-11)
+	DeployDefaults map[Path]string
 }
 ```
 
@@ -538,9 +553,11 @@ at 06 P4c and drives: it calls `ConfigOpener.Open` at P4d step 1 and passes `Con
 when a reset of either kind is staged, with the one `storage.ResetRequest` (COR8-2, R9-6, §1.12.2). Every other capability is detected once,
 by its consumer, through an **unexported mirror interface** with the same method set: config detects
 `ConfigExternalWriter` itself (`externalWriter`) when it attaches the store, at P3 through
-`app.Options.LegacyConfigStore` at S2 and at P4d step 1 at S2b; the kernel's committer detects
-`ConfigCommitObserver` (`commitObserver`); and `secrets` asserts its `SecretsStore` mirror on the value it is
-handed (§2.3). Each consumer's mirror is checked by **the mirror test (03 §3.3)**: the consumer's `export_test.go`
+`app.Options.LegacyConfigStore` at S2 and at P4d step 1 at S2b; and `secrets` asserts its `SecretsStore` mirror on
+the value it is handed (§2.3). The former `ConfigCommitObserver` is gone (R10-5): its `Committed` ran after the
+lock was released and only on the config `Committer`'s path, so the gap-fill write is now a post-commit step the
+store registers on the batch it stages into, which `storage.CommitLocked` runs inside the hold on every writer's
+path (§1.12.2). Each consumer's mirror is checked by **the mirror test (03 §3.3)**: the consumer's `export_test.go`
 only exports a test alias of the mirror, and `legacy_mirror_test.go` in the consumer's external test package
 (`package <consumer>_test`, which may import `legacy`) asserts mutual assignability in both directions (R7-7,
 SIMP7-1, COR7-2). Names follow 03's rule
@@ -584,17 +601,21 @@ type ConfigOpenEnv struct {
 	// Files is the labelled state filesystem (06 §6.4.8, R9-7, COR9-5; R-G request): every write, rename, fsync and
 	// removal the app's legacy store makes outside Pebble goes through it, with the label of its row in 06 §6.5.1's
 	// boot-writer table: ABO's legacy key file .encryption_key (InitEncryption in Open), the gap-fill file
-	// <db parent>/config.yaml (Committed and the post-reset hook) and the post-reset hook's deletions (the delete
-	// entries, the Open Library dump files and, only with DeleteLibraryFiles, RootDir's entries). The store keeps it
-	// for its later writers. In production it is the plain OS calls; coretest/crashmatrix injects faults through it,
-	// so ABO's TestBootCrashMatrix_ABO breaks books' boot at every such write.
+	// <db parent>/config.yaml (the store's post-commit step, §1.12.2, and the post-reset hook) and the post-reset
+	// hook's deletions (the delete entries, the Open Library dump files and, only with DeleteLibraryFiles, RootDir's
+	// entries). The store keeps it for its later writers. In production it is the plain OS calls;
+	// coretest/crashmatrix injects faults through it, so ABO's TestBootCrashMatrix_ABO breaks books' boot at every
+	// such write.
 	Files  StateFiles
 	Logger *slog.Logger
 }
 
 // StateFiles is the labelled filesystem of ConfigOpenEnv.Files. Paths are absolute; label names the writer-table
-// row. It never follows a path outside the directories the kernel resolved for this boot (the state directory,
-// <db parent>, and the paths the reset intent recorded). S2b.
+// row. Its confinement is defined once, in 05-storage §5S.3.15 (COR10-4): the state directory, <db parent>, the
+// reset intent's Delete entries and its HookPaths (the directories ConfigResetPlan.Paths named at staging: the
+// Open Library dump directory and, only with DeleteLibraryFiles, the confirmed library root), so the post-reset
+// hook reaches exactly HEAD's wipe targets without the kernel parsing hook_args; and StateFiles itself refuses the
+// kept paths of 05-storage's rule (4), so a library root that holds the store cannot reach it. S2b.
 type StateFiles interface {
 	WriteFile(label, path string, data []byte, perm fs.FileMode) error // temp file, fsync, rename, directory fsync
 	Rename(label, from, to string) error
@@ -624,12 +645,14 @@ type StateFiles interface {
 //     runs no dangerous-root check, and the hook touches no file under RootDir (A-17);
 //   - for ResetFactory, returns the hook arguments: the Open Library dump directory, the gap-fill file's path and,
 //     only when delete_library_files is set, the confirmed library root, so the post-reset hook acts on the
-//     recorded paths, never on what the fresh settings say (COR8-4);
+//     recorded paths, never on what the fresh settings say (COR8-4); and, separately in Paths, the directories the
+//     hook deletes under (the dump directory and, only with delete_library_files, the library root), which the
+//     intent records as hook_paths so the kernel bounds StateFiles without reading hook_args (COR10-4);
 //   - for both kinds, returns the settings rows the fresh install starts with (books: HEAD's factory-default blob,
 //     §1.12.2 "The reset boot stages HEAD's factory defaults"), which storage's fresh-install batch writes at the
 //     reset boot (SEC8-5).
-// The staging binary is the reset boot's binary (an intent from another build is rejected), so rendering the rows
-// at staging gives the bytes the reset boot would render. S2b.
+// The rows are rendered by the staging binary, and a build that resumes the reset writes them as given. They are
+// factory defaults, so a key they lack takes the resuming build's default (DATA10-9 (b), as 05-storage states). S2b.
 type ConfigResetArgs interface {
 	ResetArgs(ctx context.Context, req storage.ResetRequest) (ConfigResetPlan, error)
 }
@@ -640,7 +663,8 @@ type ConfigResetArgs interface {
 // factory-default blob, the same for both kinds, §1.12.2), and LibraryRoot/LibraryFiles, the root and count
 // the preflight found, which kernel.stageReset compares with the request (only with delete_library_files; "" and
 // 0 otherwise), which the route's 200 answer and its
-// audit record name. The run is the applied ResetFactory swap handed as ConfigOpenEnv.Reset: Args is the plan's
+// audit record name; and Paths as hook_paths (restorejournal.Intent.HookPaths, COR10-4), the only input from
+// which the kernel extends StateFiles beyond the state directory and <db parent>. The run is the applied ResetFactory swap handed as ConfigOpenEnv.Reset: Args is the plan's
 // Hook, Delete the Recreatable auxiliary DBs outside the DB's filesystem that the hook removes,
 // DeleteLibraryFiles the intent's delete_library_files (the hook wipes the recorded root only when it is set),
 // and Done journals hook_done with the entries the hook could not remove; the hook calls it once every action has
@@ -650,6 +674,7 @@ type ConfigResetPlan struct {
 	Rows         []storage.KV
 	LibraryRoot  string
 	LibraryFiles int
+	Paths        []string // hook_paths: the dump directory and, only with DeleteLibraryFiles, LibraryRoot (COR10-4)
 }
 type ConfigResetRun struct {
 	ID                 string
@@ -662,7 +687,13 @@ type ConfigResetRun struct {
 // LockConfigSettings is the config lock name of legacy.WriteLock (R9-1; WriteLock itself, WriteLocks(names
 // []string) []storage.Lock, is declared once in 05-storage §5S.3.11). It names what a write touches, the app's
 // stored settings and its legacy secret copies, never an app mutex or key (03 R1): books' config, instance and
-// notify-rule stores return HEAD's configBlobSaveMu for it. S3.
+// notify-rule stores return HEAD's configBlobSaveMu for it, at its one place in 05-storage §5S.3.2's total rank
+// table (R10-4). Only the kernel names it: at 06 P4c it calls WriteLocks([]string{LockConfigSettings}) on the
+// built store and hands the result as SettingsLocks to the config Committer, the integrations Registry, notify's
+// rule store and secrets (§2.3), none of which can import legacy (L2–L4) or ever calls WriteLocks (COR10-5).
+// Each of books' three stores refuses a write staged into a batch that does not carry a CommitLocked hold of this
+// lock (storage.LocksHeld(b, l) false; R10-4): OverrideStore.Stage, the instance and rule stores' writes and
+// SecretsStore.Write alike. S3.
 const LockConfigSettings = "config.settings"
 
 // ConfigExternalWriter: Changed fires when a writer other than config.Store changed stored values (the app's own
@@ -692,13 +723,11 @@ type SecretsStore interface {
 	Check(ctx context.Context, r storage.Reader, key []byte) (secrets.LegacyCheck, error)
 }
 
-// ConfigCommitObserver: Committed runs after a batch the store joined has committed, for side effects outside
-// the store (the books store rewrites HEAD's gap-fill file there, 05-config §1.12.2). The kernel's Committer
-// (core/internal/configstore) calls it through an unexported mirror. A failure is logged and repaired at the next
-// write; never an error. From S3.
-type ConfigCommitObserver interface {
-	Committed(ctx context.Context)
-}
+// There is no ConfigCommitObserver (R10-5, DATA10-2). A side effect outside the store that HEAD ran under
+// configBlobSaveMu (books: the gap-fill file write) is a post-commit step the store registers on the batch it stages
+// into, through 05-storage's batch hook (storage.OnCommitted(b, step)); storage.CommitLocked runs every registered
+// step after Commit succeeded and before it releases the locks, so every writer of the blob and the four rows gets
+// it inside the hold without calling anything (§1.12.2).
 ```
 
 The value types `SecretsStore`'s methods carry (`secrets.LegacyCopies`, `secrets.LegacyCheck`), and
@@ -817,6 +846,13 @@ is set and differs from the stored value (a stored value equal to the default in
 carries the token, as it carries `basic_gate_no_password` (05-health, SEC7-12). Secret values are compared in
 constant time and never logged. An operator who expected the legacy name to win, for example rotating
 the Basic password through `BASIC_AUTH_PASSWORD` with auth off from S4 r2, is told which name does.
+**Deploy-file defaults are not shadows (SEC10-11).** A name on §1.12.5's list of names a shipped deploy file sets
+unconditionally (compose's `BASIC_AUTH_*`, `docker-compose.yml:20-22` @748fd787a) whose value equals that file's
+default (`BASIC_AUTH_ENABLED=false`, `BASIC_AUTH_USERNAME=admin`) is listed in `AttachReport.DeployDefaults`
+instead and logged once at info; it raises no token. Every default compose install sets them and HEAD's
+whole-config save stores `basic_auth_username: ""` (`persistence.go:1932-1977`), so reporting them would raise
+`config_legacy_name_shadowed` on every such install for ever and hide a real stale override. A value that differs
+from the file's default is still a shadow.
 
 **Empty env values.** An env variable set to the empty string is **unset**, for canonical and legacy names
 alike, as viper treats it at HEAD (ABO never calls `AllowEmptyEnv`): compose's `BASIC_AUTH_PASSWORD=` supplies
@@ -960,19 +996,33 @@ off:
   field in place (`enable_auth`, `basic_auth_enabled`, `basic_auth_username`, and the password into HEAD's encrypted
   `basic_auth_password` row), so every build reads it after a rollback (05-authn §4.11, `TestAuthEnable_MatchesHEAD`,
   `TestRollback_AuthOffBasicGateStaysOnPrev`). **What selects HEAD's rule (SEC9-13):** the generated per-key
-  `Alias.HEADAuthOffWritable` flag (§1.3.1), honoured only while the key is routed to the app's legacy config
-  store, so a native app never inherits it (`TestAuthOff_NativeAppRefusesAuthModeWrite`). H3 clears it on
-  `enable_auth` only; the Basic gate keys keep it until their family's settings cutover, whose release note says so
-  (§1.12.5, SEC9-7, R9-5). The canonical
+  `Alias.HEADAuthOffWritable` flag (§1.3.1), honoured under §1.3.1's one predicate (the app supplies a legacy
+  config store and the key's value lives in a legacy row: its `LegacyBlob` field or a `legacy.SecretsStore` row;
+  SEC10-5), so a native app never inherits it (`TestAuthOff_NativeAppRefusesAuthModeWrite`). H3 clears it on
+  `enable_auth` only; the three Basic gate keys keep it together until the earlier of H2 and the settings cutover,
+  which precedes or ships with H3, with one release note (§1.12.5, SEC9-7, R9-5, SEC10-6). The canonical
   `<APP>_CORE_AUTH_MODE=required` is an additional operator name that locks the key (C3) and that no build before
   S4 r1 reads (S4 r1's gin auth follows the effective key; 05-authn §4.11, 09 §9.2.1 row 3; SEC9-11); ABO's legacy
   `ENABLE_AUTH=true` / `enable_auth: true` keeps HEAD's precedence and does not beat a stored `false` (§1.3.5) until
   the auth-precedence cutover H3 (§1.12.5). The Basic gate's legacy names keep HEAD's precedence through H3 and
   after it (§1.12.5).
-- **Every other `ProtectAdmin`/`ProtectOwner` key on ABO** is refused through `Apply` with auth off (403, the
-  auth-off half of 09's `TestLegacyRoleReachUnchanged`), a tightening recorded in 09 §9.2.6 (SEC4-8). An auth-off
-  operator changes such a key through its **canonical** name, which locks: its legacy names stay `BelowStored`, and
-  `config_legacy_name_shadowed` says so. A value given only under a canonical name is not read by an older build, so
+- **Integration-bound fields keep HEAD's rule too on a legacy-backed install (R10-10, SEC10-3; lead ruling).** Every
+  integration-bound blob field of §1.12.3 (AI endpoint rows and the `openai_*` pair, metadata sources, webhooks,
+  Deluge and `download_client`; URLs, hosts, credentials, headers, `auth_ref`, and the creation of a list row) is
+  `FieldUnprotected` at HEAD (`internal/config/protected_fields.go:137-165` @748fd787a), so with auth off every
+  write passes there (`update_service.go:781`). Their aliases are `HEADAuthOffWritable` (§1.3.1): with auth off
+  the auth-disabled principal passes their `ProtectAdmin` check after the owner-trust-root check, on the S3
+  façade, on the `/api/v1/config` alias and, from S7, through `integrations.Registry.Put` and `Test`, which apply
+  the same rule (05-metadata M1.3). So an auth-off ABO operator keeps creating and editing AI endpoints, metadata
+  sources, webhooks and the legacy singletons in Settings, as at HEAD, and every value is written in place in
+  HEAD's row, which every older build reads. A list-family row has no operator layer at all, and no spec
+  promises an `ABO_CORE_*` name for these fields. The flag ends for an instance's fields together, at the earlier
+  of H2 and its family's integrations cutover (05-metadata M1.10).
+- **Every other `ProtectAdmin`/`ProtectOwner` key on ABO** (server paths, executables, perimeter, updater and
+  sign-in keys other than the four above) is refused through `Apply` with auth off (403, the auth-off half of
+  09's `TestLegacyRoleReachUnchanged`), a tightening recorded in 09 §9.2.6 (SEC4-8). An auth-off operator changes
+  such a key through its **canonical** name where the key has one, which locks: its legacy names stay
+  `BelowStored`, and `config_legacy_name_shadowed` says so. A value given only under a canonical name is not read by an older build, so
   while a rollback below that release is possible the operator keeps the stored setting (or, for a key HEAD
   re-applies from env, its legacy name) at the same value (§1.3.5; 09 §9.2.1 row 3). With authentication off, the
   Basic gate is set in Settings, not only through `<APP>_CORE_HTTP_BASIC_GATE_*`, so that it stays on after a
@@ -1000,7 +1050,9 @@ integration-bound destination and secret fields on the façade from S3 to S7 (be
 On a legacy-backed instance, **creating** an instance (an `ai_endpoints` row, a webhook, a metadata source) and
 changing any field that selects which secret is sent (an `ai_endpoints` row's `auth_ref`, a metadata source's
 credential keys, the family-level webhook secret) count as a destination and secret change and need the
-`ProtectAdmin` check, else 403 with nothing written (R9-4, SEC9-6; 05-metadata M1.3 states the same).
+`ProtectAdmin` check, else 403 with nothing written (R9-4, SEC9-6; 05-metadata M1.3 states the same). With auth
+off on a legacy-backed install the auth-disabled principal passes that check (the integration-bound bullet above,
+R10-10).
 
 **Integration-bound blob fields before S7 (SEC4-7).** Until 09 S7 hands ABO's legacy singletons to
 `integrations.Registry.Put`, their blob fields (URL, host, credentials, headers of the rows marked
@@ -1016,7 +1068,9 @@ these fields are `FieldUnprotected` (`internal/config/protected_fields.go:137-16
 `settings.manage` API key could change them through `PUT /api/v1/config`; from S3 `ProtectAdmin` needs an interactive
 admin session. 09 §9.2.6 records it under "Recorded changes" with the release note "API keys can no longer change
 integration URLs or credentials in Settings; use an interactive admin session" (cross-cluster), and
-`TestLegacyRoleReachUnchanged` carries the cell.
+`TestLegacyRoleReachUnchanged` carries the cell. The tightening applies with authentication on only: with auth off
+these fields keep HEAD's rule (`HEADAuthOffWritable`, above; R10-10), so 09 records no auth-off loss for them and
+its auth-off release note promises no `ABO_CORE_*` path for them (cross-cluster).
 
 `TestEveryURLPathOrSignInKeyClassified` (port of `protected_fields_test.go`) fails when a registered key whose
 name or format looks like a URL (`format=uri`, `*_url`, `*endpoint*`), a path (`format=path`, `*_dir`, `*_path`,
@@ -1097,7 +1151,8 @@ handles are issued to services and before any listener opens. Config's boot writ
    key reaches the running perimeter without a restart at S2 **and** S2b, as at HEAD (COR3-1, COR4-2).
 9. Runtime (from S3): `Apply` = authorize (permission, then protection) → decode candidate per touched section →
    `Validate` → write the boot record if boot keys changed → `Committer.Commit` (one batch: `OverrideStore.Stage`,
-   staged secrets (legacy copies in place, native ones in `c/secrets/`), audit) → publish snapshots for live keys (atomic swap) → bump
+   staged secrets (legacy copies in place, native ones in `c/secrets/`), audit; for a legacy store, inside its
+   `CommitLocked` hold with the store's post-commit step, §1.3.3) → publish snapshots for live keys (atomic swap) → bump
    generation → `AfterCommit` hooks → wake `OnChange` subscribers. If `Commit` fails after the boot record was
    written, the previous boot record is restored before `Apply` returns (boot keys are restart-class, so nothing
    was published). A value equal to this binary's default is staged as an unset (C4). For a key with a legacy blob
@@ -1139,6 +1194,7 @@ value; `Pending` shows the stored value; `KeyState.Pending` drives a "restart re
 | `Apply` missing permission / protection | refuse `ErrForbidden` / `*ProtectedError` | fail-closed security |
 | `Apply` validation failure | refuse `ErrInvalid` with `*FieldError`s | nothing partially applied |
 | `Committer.Commit` fails (incl. a render conflict after `storage.RetryOnConflict`'s attempts) | fail-closed: nothing published, generation unchanged, boot record restored | durable-before-visible; the blob is never half-written |
+| A books legacy store write (`OverrideStore.Stage`, `SecretsStore.Write`, an instance or rule write) staged into a batch that carries no `CommitLocked` hold of `LockConfigSettings` (`storage.LocksHeld(b, l)` false) | fail-closed: refused, nothing staged | a commit outside `configBlobSaveMu` is the race R9-1 closed; the check is on the batch, so a write staged into another batch inside a hold is refused too (R10-4) |
 | `AfterCommit` hook error | committed; `Result.PostCommit` set | hooks cannot veto; caller must know (ABO contract `update_service.go:30-48`) |
 | `OnChange` fn panics | fail-open: recovered, logged, metric; others continue | one subscriber must not break config |
 | `Ref.Resolve` on unset secret | `secrets.ErrNotSet` to the consumer | consumer decides (e.g. provider disabled) |
@@ -1158,17 +1214,31 @@ value; `Pending` shows the stored value; `KeyState.Pending` drives a "restart re
   mutex `configBlobSaveMu` (`persistence.go:1890-1897`) **stays**: the three books stores expose it through the
   one capability `legacy.WriteLock` (`WriteLocks(names []string) []storage.Lock`, declared once in 05-storage
   §5S.3.11; this file's lock name is `legacy.LockConfigSettings`, the blob and the four secret rows, for which each
-  of the three stores returns the one `configBlobSaveMu` lock with one `LockRank`), and the kernel's `Committer`
-  builds and commits every batch one of them stages into inside `storage.CommitLocked(ctx, b, d, stage, locks...)`,
-  which takes that lock once and holds it from
-  staging through the commit, so HEAD's serialisation of blob saves spans core's commit as it spanned HEAD's direct
-  one. Core config's `Apply` mutex sits outside it (taken first, never inside a held `WriteLock`), so the two never
-  invert. The store also reads the stored bytes with `GetForUpdate`, so a render staged by a writer outside the lock
-  (none exists from S3, by the exclusive-writer rule of §1.12.2) still fails the later commit with
-  `storage.ErrConflict` and the `Committer` re-reads and retries (`storage.RetryOnConflict`, 3 attempts). That read
-  check is books' own code: the blob carries no storage-enforced `CheckedWrites` during the extraction (A-3). The
-  store keeps one pending render per batch, so a key change and a plaintext secret's in-place write in one batch are
-  one blob write. `TestLegacyStoresAreSingletons` (R9-1) covers the one instance, and so the one mutex, per process.
+  of the three stores returns the one `configBlobSaveMu` lock at its one rank in 05-storage §5S.3.2's total lock
+  order, R10-4). The kernel resolves it at 06 P4c and hands it as `SettingsLocks` to every writer; no writer calls
+  `WriteLocks` (COR10-5). **Every writer path HEAD covered goes through `storage.CommitLocked` with it (R10-5,
+  DATA10-2):** the config `Committer` (`Apply`), `integrations.Registry.Put`/`Delete` (05-metadata M1.4 step 2a),
+  notify's rule store (05-notify) and `secrets.(*Store).Put`/`Delete` of a kept name (§2.3), which before R10-5
+  committed outside it. `CommitLocked` takes the lock once and holds it from staging through the commit **and
+  through the store's post-commit step**, the gap-fill file write (§1.12.2), so HEAD's serialisation of a save
+  from its snapshot through its file step (`persistence.go:1940-1944` @748fd787a) spans core's commit as it spanned
+  HEAD's direct one. The hold is marked on the batch, and each books store refuses a write staged into a batch
+  without it (`storage.LocksHeld(b, l)`, R10-4; `OverrideStore.Stage` and `SecretsStore.Write` are checked), so a
+  path that forgets `CommitLocked`, or stages into a batch captured from outside the hold, fails its test.
+  **Core-side mutexes (R10-4, DATA10-3):** core config's `Apply` mutex, like the integrations Registry's writer
+  mutex and the rule store's, is taken **before** `CommitLocked`, never inside a `stage` function, so none of them
+  inverts with `configBlobSaveMu`; secrets' per-name keyed mutex (§2.6) is the one exception, taken only inside a
+  `stage`, after the config lock. A `stage` function never calls a books method that takes a HEAD mutex of a family
+  the hold covers (`configBlobSaveMu` is not re-entrant). The legacy `PUT /api/v1/config` alias **splits** each
+  request into `Registry.Put` and `Store.Apply` (§1.12.2), each committing its own batch in its own hold, so no
+  batch carries both and neither takes the other's core-side mutex inside a hold. The store also reads the stored
+  bytes with `GetForUpdate`, so a conflicting render (none can be staged outside the lock from S3, by the
+  exclusive-writer rule of §1.12.2 and the batch check above) fails the later commit with `storage.ErrConflict` and
+  the writer re-reads and retries (`storage.RetryOnConflict`, 3 attempts, each a fresh hold). That read check is
+  books' own code: the blob carries no storage-enforced `CheckedWrites` during the extraction (A-3). The store
+  keeps one pending render per batch, so a key change and a plaintext secret's in-place write in one batch are one
+  blob write. `TestLegacyStoresAreSingletons` (R9-1) covers the one store instance per App; `configBlobSaveMu` is a
+  package variable at HEAD, so it is one mutex per process anyway (COR10-10).
 - `OnChange`: one goroutine per subscription with a one-slot coalescing mailbox; never blocks `Apply`.
   Subscription count is bounded by code (registered at init). `stop()` is idempotent and waits for an
   in-flight call.
@@ -1368,9 +1438,10 @@ the dependency as adopted.
 | `TestPrecedence_Matrix` | table over every (default, file, env, flag, boot record, override) combination: effective value, `Source`, `LockedBy` |
 | `TestAlias_BelowStoredFeedsDefaultLayer` | a `BelowStored` alias set in env or file: a stored value beats it, it is effective while nothing is stored, `LockedBy` is empty and `Apply` succeeds; the canonical name of the same key still locks; ignored on a `ProtectOperator` key (R5-1(a), OPS5-1) |
 | `TestBelowStored_StoredDefaultStillWins` | a fixture key whose `BelowStored` alias is set to a non-default value while the stored value equals the default → the stored value is effective with `Source` `SourceOverride`, and the shadow token is raised; with nothing set under any operator or `BelowStored` name the same stored value reports `SourceDefault`. ABO's instances: blob `enable_auth: true`, env `ENABLE_AUTH=false` → auth `required`; blob `enable_auth: false`, env `ENABLE_AUTH=true` → auth off, as at HEAD; both raise `config_legacy_name_shadowed` (SEC7-2, A-2) |
-| `TestAttach_LegacyNameShadowedReported` | a `BelowStored` alias of a `ProtectAdmin` key (and of a secret key) set to a value that differs from the stored one → `AttachReport.Shadowed` names it, one warning naming the canonical variable, health `config_legacy_name_shadowed`; no secret value in the log; a `ProtectNone` key is not reported (SEC6-1) |
+| `TestAttach_LegacyNameShadowedReported` | a `BelowStored` alias of a `ProtectAdmin` key (and of a secret key) set to a value that differs from the stored one → `AttachReport.Shadowed` names it, one warning naming the canonical variable, health `config_legacy_name_shadowed`; no secret value in the log; a `ProtectNone` key is not reported (SEC6-1). Compose cell: compose's default environment (`BASIC_AUTH_ENABLED=false`, `BASIC_AUTH_USERNAME=admin`) over HEAD's stored blob with no UI change → `AttachReport.DeployDefaults` lists them, one info line, no health token; `BASIC_AUTH_USERNAME=bob` is still a shadow (SEC10-11) |
 | `TestBasicGate_EmptyStoredPasswordDoesNotShadowEnv` | gate enabled, an empty stored `basic_auth_password` row and `BASIC_AUTH_PASSWORD=p`: the effective password is `p` with `Source` `SourceEnv`, nothing is written to the row, one warning names the variable; with a non-empty stored row the stored value wins; with neither, every non-exempt request gets 401 (OPS9-7) |
-| `TestAuthOff_NativeAppRefusesAuthModeWrite` | hello (no legacy config store) with auth off: the auth-disabled principal's `Apply` of `core.auth.mode=required` and of `core.http.basic_gate.enabled` → 403, nothing stored; the same writes on a fixture with a legacy store whose aliases are `HEADAuthOffWritable` succeed after the owner-trust-root check and land in the legacy fields (SEC9-13, SEC9-1) |
+| `TestAuthOff_NativeAppRefusesAuthModeWrite` | hello (no legacy config store) with auth off: the auth-disabled principal's `Apply` of `core.auth.mode=required` and of `core.http.basic_gate.enabled` → 403, nothing stored; the same writes on a fixture with a legacy store whose aliases are `HEADAuthOffWritable` succeed after the owner-trust-root check and land in the legacy fields, the Basic password included (its `legacy.SecretsStore` row, SEC10-5); an integration-bound URL field of the fixture lands in its blob field (R10-10); a fixture whose password lives in `c/secrets/` (after H2) refuses the password write (SEC9-13, SEC9-1) |
+| `TestAuthOff_IntegrationFieldsWritableAsHEAD` | (ABO, from S4 r2) auth off: `PUT /api/v1/config` adding an `ai_endpoints` row with a URL and `auth_ref`, adding a metadata source, editing the webhook URL and the Deluge host → 200, each written in place in HEAD's blob field, and a HEAD-built `prev` reads them; the same requests with auth on from a non-admin `core:settings.manage` key → 403 (R10-10, SEC10-3) |
 | `TestFileOnlyKey_OperatorWhileLegacyStoreAttached` | a `FileOnly` alias's key declared `ProtectAdmin`: with a legacy store attached, `KeyState.Protection` is operator, `Apply` → `*ProtectedError{Need: ProtectOperator}`, a planted `c/config/` row is ignored and reported; without one (native app) the declared class applies; `FileOnly()` is true exactly for a `LegacyYAML` key with no `LegacyBlob` (R9-5) |
 | `TestPassthroughValues_ReportBelowStored` | a passthrough value given under a `BelowStored` legacy name carries `OperatorValue.BelowStored=true`; under a canonical spelling, `false` (C11, SEC6-5) |
 | `TestEnv_EmptyValueIsUnset` | `ABO_X=""` and a legacy name set to `""` supply nothing: no lock, no value (HEAD parity with viper) |
@@ -1402,7 +1473,7 @@ the dependency as adopted.
 | `TestLegacyBool_SilentFalseOnAuthKeyFailsBoot` | `ENABLE_AUTH=yes`, `BASIC_AUTH_ENABLED=on` and the same spellings as legacy file keys → boot error naming the variable, the spelling and the canonical name; the same spelling on a `ProtectNone` bool → `false` with one warning (A-7) |
 | `TestNativeOverrideStore_RoundTrip` | the native store over `c/config/`: set, unset and reload of scalar, map and boot-adjacent keys; one row per explicitly set key; passes `configtest.OverrideStoreSuite`; implements none of package `legacy`'s config capabilities (SIMP4-3, SIMP5-4, R6-3) |
 | `configtest.OverrideStoreSuite` (exported contract) | run by every implementation, ABO's with HEAD fixtures: `Load` is read-only; `Stage` changes exactly the staged keys (others byte-equal after a JSON round trip); an unset writes the default, and for a key with a legacy field writes it explicitly and never removes the field (`TestLegacyUnsetWritesDefault`, SEC7-2); `Alias.Revert` applies to converted keys; two concurrent `Stage`s on one row both survive through the `Committer`'s retry; an unparsable row quarantines its keys and is never overwritten (R4-1) |
-| `legacytest.ConfigOverrideStoreSuite` (exported contract, in package `legacy`'s test package, outside the API-stability gate with it, R6-3) | the one legacy suite of `config.OverrideStore` (SIMP6-6: one legacy suite per store interface, running a case for each capability the implementation has, SIMP5-4): `ConfigOpener.Open` writes nothing; `ConfigExternalWriter.Changed` after an outside write republishes a live key without a restart; `ConfigSecrets.Secrets` returns a `legacy.SecretsStore` that passes the secrets read-order cases; `ConfigCommitObserver.Committed` runs once per committed batch |
+| `legacytest.ConfigOverrideStoreSuite` (exported contract, in package `legacy`'s test package, outside the API-stability gate with it, R6-3) | the one legacy suite of `config.OverrideStore` (SIMP6-6: one legacy suite per store interface, running a case for each capability the implementation has, SIMP5-4): `ConfigOpener.Open` writes nothing; `ConfigExternalWriter.Changed` after an outside write republishes a live key without a restart; `ConfigSecrets.Secrets` returns a `legacy.SecretsStore` that passes the secrets read-order cases; a write staged into a batch without a `CommitLocked` hold of the store's lock is refused, also when the write is staged inside a hold into a second batch (R10-4); the post-commit step a write registers runs once per committed batch, inside the hold (a probe lock-holder blocked on the lock does not run until the step returned), and not at all for a batch that failed to commit (R10-5) |
 | `TestOverrideStore_ChangedRepublishesAtS2AndS2b` | a fake legacy config store at the S2 shape (attached at P3 through `app.Options.LegacyConfigStore`) and the S2b shape (built at P4c, attached at P4d step 1): a core key set only in the stored row (the rate-limiter switch, the CORS origins) is effective after attach; an outside write signalled on `legacy.ConfigExternalWriter.Changed` reaches the live key without a restart (COR3-1, COR4-2) |
 | `TestPreS7Facade_IntegrationURLIsProtectAdmin` | from S3 to S7, a `core:settings.manage` actor without `core:admin` gets `*ProtectedError` on an integration-bound URL, host, credential or header field; an admin's URL-origin change without the credential clears the stored secret in place (the blob field or the encrypted row, and a kept one's file copy) (SEC4-7). An **S3 variant** fills the actor by §1.12.1's S3 rule (seed `admin` role or auth off holds `core:admin`); an **S4 variant** uses the native rule from S4 r2 (SEC5-15) |
 | `TestCoreLedgerFragmentPermanentOnly` | every row of core's ledger fragment has gate `permanent` and names no app key (SIMP4-10) |
@@ -1448,8 +1519,11 @@ an optional ratchet, not an extraction stage.
    (`internal/config/update_service.go:781`): `Can("core:admin")` holds iff the request's permission set came
    from the seed `admin` role, or auth is off; `Interactive` is `auth.Method.MayChangeCredentials()`, or auth
    is off; `Owner` is HEAD's owner proof. From S4 r2 the auth-off principal never holds `core:admin`, and §1.3.7's
-   auth-off rule applies: on ABO `core.auth.mode` and the Basic gate's three keys keep HEAD's `!prior.EnableAuth`
-   rule through S10 (`HEADAuthOffWritable`, R9-5) and every other protected key is refused with auth off, the tightening 09 §9.2.6 records for SEC4-8; never earlier.
+   auth-off rule applies: on ABO `core.auth.mode`, the Basic gate's three keys and every integration-bound field
+   keep HEAD's `!prior.EnableAuth` rule (`HEADAuthOffWritable`, R9-5, R10-10): `core.auth.mode` until H3, the gate
+   keys until the earlier of H2 and the settings cutover, the integration-bound fields until the earlier of H2 and
+   their family's integrations cutover (§1.3.1; SEC10-6). Every other protected key is refused with auth off, the
+   tightening 09 §9.2.6 records for SEC4-8; never earlier.
    `TestPreS7Facade_IntegrationURLIsProtectAdmin` has an S3 and an S4 variant.
 3. **Optional ratchet — accessor.** `TestAppConfigRatchet` is added with stage 1: a per-package ceiling of
    `config.AppConfig`/`Snapshot`/`Mutate` uses that may only go down, like
@@ -1625,10 +1699,11 @@ the secrets cutover (§1.12.5).
   three encrypted keys below, `persistence.go:168-178`), and no core build gives one any.
 - **Encrypted** (`openai_api_key`, `google_books_api_key`, `hardcover_api_token`, `basic_auth_password`;
   `persistence.go:1955-1958,1989-2006`): core builds read them from HEAD's encrypted rows, in ABO's cipher, and write
-  them **in place** exactly as HEAD's `SaveConfigToDatabase` does: a set rewrites the encrypted row in the batch and,
-  in `Committed`, HEAD's gap-fill file copy (`<db parent>/config.yaml`, the three that have one); a clear deletes the
-  row in the batch and removes the file key **before** the batch commits, so a failed file rewrite fails the write
-  instead of leaving a value HEAD's gap fill would bring back (`persistence.go:42-92`). Until the cutover they keep
+  them **in place** exactly as HEAD's `SaveConfigToDatabase` does: a set rewrites the encrypted row in the batch and
+  HEAD's gap-fill file copy (`<db parent>/config.yaml`, the three that have one) is rewritten by the store's
+  post-commit step, inside the same `configBlobSaveMu` hold (below; R10-5); a clear deletes the row in the batch and
+  removes the file key during staging, inside the hold and **before** the batch commits, so a failed file rewrite
+  fails the write instead of leaving a value HEAD's gap fill would bring back (`persistence.go:42-92`). Until the cutover they keep
   HEAD's cipher (no key ID, no AAD, out-of-scope defect 3) and the file keeps HEAD's plaintext copies (out-of-scope
   defect 2); `k0-legacy` in the keyring still recovers the rows (§2.4).
 
@@ -1642,10 +1717,25 @@ older build, which reads it from env or file only, reads the same value as the c
 (ABO's key missing) reads as "must be re-entered" (`Meta.Err = ErrKeyUnavailable`), the boot continues and the row
 is kept (DATA3-12).
 
-**The gap-fill file holds only what HEAD manages (ADV-8).** The gap-fill file is rewritten by HEAD's merge
-(`SaveConfigToFile`: read, merge, temp file, fsync, rename) under one process-wide mutex in the books store,
-re-reading the file under the lock, so two concurrent commits can never leave one secret's stale copy behind
-(DATA5-20). The merge writes only the keys HEAD's `SaveConfigToFile` manages (twelve settings and the three
+**The gap-fill write is a post-commit step inside the lock (R10-5, DATA10-2).** HEAD's `SaveConfigToDatabase` holds
+`configBlobSaveMu` from before its snapshot until its `config.yaml` step is done (`persistence.go:1940-1944`
+@748fd787a), so the file always carries the latest save. Core keeps that: whenever a books store stages a write of
+the blob or of a kept secret into a batch (`OverrideStore.Stage`, the legacy instance and rule stores,
+`SecretsStore.Write`), it registers its post-commit step on that batch (`storage.OnCommitted`, 05-storage), and
+`storage.CommitLocked` runs the step after the commit succeeded and before it releases `configBlobSaveMu`. So
+**every** writer path HEAD covered gets it, whichever owner commits: the config `Committer`, `integrations.Registry`,
+notify's rule store and `secrets.(*Store).Put`/`Delete` of a kept name (§1.6). The step renders HEAD's managed keys
+from the rows and blob it reads **inside the hold**, never from the commit's own values, so a late set can never put
+back a key that a clear on another route removed after it, and a `Registry.Put` set rewrites the file copy as an
+`Apply` set does (`TestGapFillClearNotUndoneByLateSet`, `TestRegistryPutRewritesGapFillCopy`). A batch that failed to
+commit runs no step. A failed step is fail-open (§2.5): the row holds the value, so HEAD's gap fill never consults the
+file while it is set, and the next commit's step repairs it.
+
+**The gap-fill file holds only what HEAD manages (ADV-8).** The step writes the file by HEAD's merge
+(`SaveConfigToFile`: read, merge, temp file, fsync, rename) under the books store's file mutex, a leaf lock taken only
+inside the step and inside the post-reset hook and never held while another lock is taken, re-reading the file under
+it, so the hook and a commit can never leave one secret's stale copy behind (DATA5-20); between commits
+`configBlobSaveMu` already serialises it. The merge writes only the keys HEAD's `SaveConfigToFile` manages (twelve settings and the three
 encrypted secrets, `persistence.go:150-178`) and keeps every other key as it found it, because the same file may be
 the operator's `--config` (`:110-112`); no core build writes any other key into it
 (`TestCoreWritesOnlyHEADGapFillKeys`).
@@ -1668,7 +1758,8 @@ it (the façade from S3, `Registry.Put` from S7, or the clear that a URL-origin 
 `PUT /api/v1/config` path splits each request: the integration-bound fields go to `integrations.Registry.Put` (so
 M1.3's trust rules, the `Local` reset on a URL change and the change-URL audit apply once, whichever route wrote
 them) and the rest to `Store.Apply` (05-metadata M1.4 step 2a); from S3 to S7 the façade writes them through
-`Store.Apply` as `ProtectAdmin` blob fields (§1.3.7, SEC4-7). The blob is owned by books, written from S3 only by
+`Store.Apply` as `ProtectAdmin` blob fields (§1.3.7, SEC4-7), which with auth off keep HEAD's rule on every route
+(`HEADAuthOffWritable`, §1.3.7; R10-10). The blob is owned by books, written from S3 only by
 the books store, and outlives every stage of the extraction (DATA3-3).
 
 **Rollback matrix** (inputs to 09's R-test and to 09 §9.2.1's one table of rollback costs and consequences):
@@ -1895,32 +1986,42 @@ named here as post-S10 cutovers on N15's one-way, floored machinery (02 N15; 12 
 release, its floor is that release, and its release note names what an older build loses. **The owners each one
 raises (DATA9-8, R9-11):** H2 raises `books` (it rewrites books' legacy blob fields and secret rows) and `core` (it
 writes `c/secrets/`); H3 raises `books` (it changes how books' stored `enable_auth` is read against the legacy
-names). The first of them also lifts books' `{core, 0}` legacy restore bound. Every release from S0 up to the one
+names). The first cutover that raises `core` (H2, or H1 when it moves the identity families) lifts books' `{core,
+0}` legacy restore bound, because 05-backup §5B.3.9 rule 3 passes the bound only when the store's `core` level
+exceeds 0; H3 raises `books` only and lifts nothing (DATA10-7). Every release from S0 up to the one
 before the cutover declares both owners, so every older build refuses a store a cutover stamped, through boot and
 `CheckReader` (`TestHardeningCutoverRefusedByEveryOlderRelease`, 09 §9.13).
 
 - **H2 — secrets cutover** (09 §9.13). This file decides the four encrypted rows (DATA9-8): the books store's
   plaintext blob secrets **and** the four encrypted rows move into `c/secrets/`, encrypted with the keyring (key IDs,
   AAD), and their legacy copies and gap-fill file keys are removed; the `legacy.SecretsStore` capability goes with
-  it. An older build then has no copy to read, which the floor refuses. 14 Q-E is deferred to it. **What it can and
-  cannot clean (SEC9-3, R9-11):** the cutover boot rewrites the live store, then deletes its own pre-cutover
-  checkpoint and forces a compaction of the rewritten key ranges with a WAL rotation, so no obsolete SST, WAL
-  segment or checkpoint under the DB directory keeps a plaintext copy; the gap-fill file's three keys are removed in
-  the same boot. Recovery from a failed H2 is then the pre-cutover archive, the floor's restore point. Archives
-  taken before H2 still hold every plaintext secret and the encrypted rows in ABO's cipher, and H2 cannot reach them.
-  Its done-check says so plainly and is a test, not a live-key read: `TestH2_NoPlaintextSecretOnDisk` plants a
-  canary secret, runs the cutover and scans every file under the DB directory, its checkpoint directories and the
-  gap-fill file. Release note: "Backups made before this release still contain your third-party keys and passwords
-  unencrypted. Delete them or take new ones after the upgrade, and rotate those keys at their providers if your
-  backup directory may have been exposed."
+  it, and with it every remaining `HEADAuthOffWritable` flag on a secret it moves (the Basic password and the
+  kept integration secrets, so each group's flag ends together, §1.3.1; SEC10-5). An older build then has no copy
+  to read, which the floor refuses. 14 Q-E is deferred to it. **What it can and cannot clean (SEC9-3, R9-11,
+  R10-11):** the cutover boot rewrites the live store, then deletes **every** pre-cutover checkpoint of this store
+  (its own attempt's and every retained or open one under `<db parent>/.mediacore-checkpoints/`, with their records)
+  and forces a compaction of the rewritten key ranges with a WAL rotation, so no obsolete SST, WAL segment or
+  checkpoint keeps a plaintext copy; the gap-fill file's three keys are removed in the same boot. A swap set-aside
+  inside `core.storage.swap.keep_previous` (a restore's `.mediacore-restore/<id>/previous/` and `failed/`, a reset's
+  `<state_dir>/restore/<id>/previous/` and its beside-itself destinations) is a full pre-H2 store outside the DB
+  directory, so H2 refuses to start while one exists (`ErrCutoverResidue`, naming the paths) unless the operator
+  passes the cutover's sweep flag, which removes them in the cutover boot first (DATA10-6). Recovery from a failed
+  H2 is then the pre-cutover archive, the floor's restore point. Archives taken before H2 still hold every
+  plaintext secret and the encrypted rows in ABO's cipher, and H2 cannot reach them. Its done-check says so plainly
+  and is a test, not a live-key read: `TestH2_NoPlaintextSecretOnDisk` plants a canary secret **before** a fixture
+  upgrade, a restore and a reset, so retained checkpoints and set-asides hold it, runs the cutover and scans the DB
+  directory, `.mediacore-checkpoints/`, `.mediacore-restore/` beside the DB and every recorded beside-itself
+  destination, `<state_dir>/restore/` and the gap-fill file. Its release note is 09 §9.13's H2 note, the one text,
+  owned there and not restated here (SEC10-7).
 - **H3 — auth-precedence cutover** (09 §9.13). One H3, stated the same in 05-authn §11.2 and 09 §9.13 (SEC9-7,
   cross-cluster): H3 moves **only auth-enable precedence**, and only in the enabling direction. An operator value
   that enables auth (`ENABLE_AUTH=true`, `enable_auth: true` in the operator file) beats a stored `false`; a value
   that disables auth keeps HEAD's precedence (a stored `true` beats it). H3 also clears `HEADAuthOffWritable` on
   `enable_auth` (R9-5): from H3 the auth-disabled principal can no longer store `core.auth.mode` through `Apply`, and
   auth is turned on by an operator value or by an admin once auth is on, as SEC4-8 states for native apps. The Basic
-  gate keys keep the flag, and HEAD's auth-off write rule, until their family's settings cutover, whose release note
-  says so. H3's release note: "With authentication off, Settings can no longer turn it on; set `ENABLE_AUTH=true`
+  gate keys keep the flag, and HEAD's auth-off write rule, until the earlier of H2 and the settings cutover, which
+  precedes or ships with H3, so after H3 none of them has it; the cutover that ends it carries their one release
+  note (§1.3.1; SEC10-5, SEC10-6). H3's release note: "With authentication off, Settings can no longer turn it on; set `ENABLE_AUTH=true`
   or `ABO_CORE_AUTH_MODE=required` and restart." **Every other `BelowStored` flag keeps HEAD's precedence** after H3,
   until a separate cutover the owner decides per key (R9-5, SEC9-2). That later cutover is bound by two rules, so an
   always-set deploy value can never override a UI setting: a name a shipped deploy file sets unconditionally
@@ -2131,6 +2232,12 @@ type Options struct {
 	// storage.ErrLegacyStoreType (boot fails) when the value does not implement it: never a silent skip. After the
 	// settings cutover the field stays, inert and nil.
 	LegacyStore   any
+	// SettingsLocks are the locks the kernel resolved at 06 P4c for legacy.LockConfigSettings on the store that
+	// supplies LegacyStore (nil without one; COR10-5). Put and Delete of a kept name build their batch inside
+	// storage.CommitLocked(ctx, b, d, stage, SettingsLocks...), so the in-place write and the store's post-commit
+	// gap-fill step run under configBlobSaveMu as every other writer's do (R10-5, DATA10-2); Stage is called by a
+	// caller that already holds them. secrets never calls WriteLocks.
+	SettingsLocks []storage.Lock
 	// ResetBoot is set by the kernel only on the reset boot of a core build's factory reset (the KindReset swap
 	// journal reads set_aside, 05-storage §5S.3.15): Open then rewrites the keyring header's install_id to the fresh
 	// store's (§2.4, DATA7-17). Every other Open leaves that field alone.
@@ -2158,9 +2265,11 @@ type legacyStore interface {
 	// "—" rows of 05-config §2.2 return false (they are FileOnly, never stored on a legacy-backed install, R9-5).
 	Kept(n Name) bool
 	// Write joins b with an in-place write of a kept name in the app's own form: a plaintext copy as its blob field,
-	// an encrypted one in the app's own cipher (clear = empty the field or delete the row). Secondary copies are
-	// rewritten after b commits (legacy.ConfigCommitObserver.Committed) for a set, and removed before Write returns
-	// for a clear, so a failed removal fails the write (05-config §1.12.2).
+	// an encrypted one in the app's own cipher (clear = empty the field or delete the row). It refuses, staging
+	// nothing, when b carries no CommitLocked hold of the store's LockConfigSettings lock (storage.LocksHeld(b, l);
+	// R10-4, COR10-2). Secondary copies are rewritten by the post-commit step Write registers on b, which
+	// CommitLocked runs inside the hold, rendered from the rows (R10-5); a clear also removes its secondary copy
+	// before Write returns, so a failed removal fails the write (05-config §1.12.2).
 	Write(b *storage.Batch, n Name, v Value, clear bool) error
 	// KeyMaterial returns the key the app's legacy cipher uses (nil when it has none), recorded opaque in the
 	// keyring as k0-legacy so the one keyring export also recovers the legacy rows (C8, §2.4).
@@ -2274,7 +2383,9 @@ var (
   HEAD's base layer); (5) a non-empty secondary copy (`SourceLegacy`, `LegacySecondary`: HEAD's gap fill, which
   applies only when the field is still empty, `persistence.go:42-92`); (6) `ErrNotSet`. Every `Put`, `Stage` and
   `Delete` of a kept name calls `SecretsStore.Write` in the same batch and never writes `c/secrets/`; of a native
-  name it writes the record (05-config §1.12.2).
+  name it writes the record (05-config §1.12.2). `Put` and `Delete` of a kept name commit through
+  `storage.CommitLocked` with `Options.SettingsLocks`, taking the per-name keyed mutex inside the `stage` function,
+  after the config lock and never before it, so they never invert with `Apply` → `Stage` (§2.6; R10-4, R10-5).
 - Store metadata at `c/secrets/meta`: `{"app_id":"abo","keyring_format":"mediacore-keyring/1","created":"…"}`.
   `Open` compares it with `Options.AppID`; a mismatch is `ErrAppIDMismatch` (boot error naming both IDs), so an
   accidental AppID change fails loudly instead of turning every secret into `ErrCorrupt` (SEC-28). AppID is a
@@ -2320,11 +2431,13 @@ so a lost key file loses the secrets. Rules:
   holds the keyring can decrypt the archives, which adds only the non-secret data to what that holder could
   already decrypt; an operator who wants the two separated adds an operator recipient (05-backup).
 - The keyring is **never** stored only inside an archive it protects. Unencrypted archives never contain key
-  material, so the secrets in them stay ciphertext. No archive carries a copy of the keyring as its recovery
-  path.
+  material, so their secrets stay as the store holds them: ciphertext for native secrets and for HEAD's four
+  encrypted rows, plaintext for ABO's plaintext blob secrets until H2 (05-backup §5B; 14 K25; SEC10-8). No archive
+  carries a copy of the keyring as its recovery path.
 - Recovery is an explicit operator action: `<app> secrets export-keyring --out <file>` (CLI, filesystem access
-  required, refuses to write a file looser than 0600, works while the server runs because it reads only the
-  state dir). The exported file carries, next to the keys, the install's `install_id` (the `c/storage/install`
+  required, refuses to write a file looser than 0600). **It opens no store (SEC10-9):** it reads the keyring file
+  and the `install_id` in the keyring header from the state dir only, takes no store lock and is not a foreign
+  open, so it works while the server runs. The exported file carries, next to the keys, the install's `install_id` (the `c/storage/install`
   marker's, 05-storage §5S.3.4 rule 4; `Open` writes it into the keyring file's header when it creates the
   keyring or finds the field absent, so the export, which reads only the state dir, has it), so a host-loss
   restore of a marker-less (pre-S0) archive keeps the install's lineage when no revocation journal header is
@@ -2338,11 +2451,13 @@ so a lost key file loses the secrets. Rules:
   restores the old install's lineage once the `previous/` directories are moved back: `<id>` is the one the swap
   journal's `set_aside` record names. It refuses an `<id>` that differs from the `c/storage/install` marker of the
   store at the resolved `core.storage.path` (read offline), so the header can only be set to the lineage of the store
-  beside it, and refuses with no keyring file. ABO ships it from S3, when the keyring lands (09 §9.4 row 17), as an entry of `app.OfflineCommands` (06 §6.4.5); before S3 the
+  beside it, and refuses with no keyring file. ABO ships it from S3, when the keyring lands (09 S3), as an entry of `app.OfflineCommands` (06 §6.4.5); before S3 the
   state directory has no keyring, so the command has nothing to set and the undo has no such step.
 - **How an app's CLI reaches these commands (COR9-6, R9-9).** `secrets export-keyring`, `secrets rotate-derive` and
-  `secrets set-install-id` are core offline commands: they read the store's install marker and lock through the
-  kernel, which an app cannot import. `app.OfflineCommands(opts, mods...)` (06 §6.4.5) returns them, with core's
+  `secrets set-install-id` are core commands an app cannot build itself. `export-keyring` opens no store (above).
+  `rotate-derive` and `set-install-id` go through `kernel.OpenOffline`, which refuses while the server holds the
+  store lock; `set-install-id` reads the install marker read-only (SEC10-9; 05-storage's `OfflineCommands` list
+  names all three, cross-cluster). `app.OfflineCommands(opts, mods...)` (06 §6.4.5) returns them, with core's
   other offline commands, as `app.Command` values, and ABO wraps each in its cobra tree, as it does
   `storage restore-checkpoint` and `users reset-password` (`TestCLIExposesCoreOfflineCommands`, ABO); 06 §6.4.5's
   list names all three secrets commands, each from S3.
@@ -2377,15 +2492,17 @@ so a lost key file loses the secrets. Rules:
 | `Put` storage error | fail-closed: error to caller, nothing changed | |
 | `Scope` name outside prefix | `ErrOutOfScope` | handle scoping (06 A3) |
 | Legacy row undecryptable by the app's cipher (key missing or bad ciphertext), no record | fail-open per secret: `Meta.Err = ErrKeyUnavailable` or `ErrCorrupt`, "must be re-entered", health `secrets_undecryptable`, legacy row kept, boot continues | same as ABO's guard, without the deletion (DATA3-12) |
-| `SecretsStore.Write` fails inside a write of a kept name (incl. the secondary-copy removal of a clear) | fail-closed: the batch is not committed, nothing changed | a cleared row with its file copy left would be refilled by HEAD's gap fill |
-| Secondary-copy rewrite fails after a kept name's set commits (`Committed`) | fail-open: logged; the next commit's rewrite repairs it | the row holds the value, so HEAD's gap fill never consults the file while it is set |
+| `SecretsStore.Write` fails inside a write of a kept name (incl. the secondary-copy removal of a clear, and a batch with no `CommitLocked` hold, R10-4) | fail-closed: the batch is not committed, nothing changed | a cleared row with its file copy left would be refilled by HEAD's gap fill |
+| Secondary-copy rewrite fails in the store's post-commit step, after a kept name's set committed, still inside the hold (R10-5) | fail-open: logged; the next commit's step, rendered from the rows, repairs it | the row holds the value, so HEAD's gap fill never consults the file while it is set |
 | `Ref.Resolve` with no value | `ErrNotSet` | consumer decides |
 | `Value` JSON/text marshal | error `ErrNotSerializable` | accidental exposure fails the response instead of leaking |
 
 ### 2.6 Concurrency contract
 
 `Store` is safe for concurrent use. Reads take a read lock on the in-memory keyring only; storage reads are
-lock-free snapshots. `Put`/`Delete`/`Stage` serialize per name via a keyed mutex from the core-internal copy
+lock-free snapshots. `Put`/`Delete`/`Stage` serialize per name via a keyed mutex, which for a kept name is taken
+only inside a `CommitLocked` `stage` function, after the config lock (the one core-side mutex taken inside a hold,
+§1.6; R10-4, DATA10-3). The keyed mutex comes from the core-internal copy
 `core/internal/keyedmutex` (04 §9, added at S3; ABO keeps its own `internal/keyedmutex`, which core cannot
 import, COR2-16). The keyring changes only at `Open`. The store starts
 no goroutine.
@@ -2421,7 +2538,8 @@ All on scope `mediacore.secrets`.
 | `TestScope_RefusesOutsidePrefix` | `modules.books.` scope cannot read `core.*` or `integrations.*` names |
 | `TestLegacyKeyMaterial_RecordedOpaque` | a fake `legacy.SecretsStore` with key material → `k0-legacy` (`use: legacy`) in the keyring, never used to encrypt or decrypt; changed material replaces it and raises the export warning; `ReadLegacyKey` returns it without opening the store |
 | `TestGet_ReadOrder` | operator > kept name's legacy primary (plaintext or encrypted) > native record (cleared marker = `ErrNotSet`) > `EphemeralDefault` > secondary > `ErrNotSet` (R5-1, A-2) |
-| `TestStage_KeptNameWritesInPlace` | `Stage`, `Put` and `Delete` of a kept name, an encrypted one and a plaintext one, call `SecretsStore.Write` in the batch and never write `c/secrets/`; a clear whose secondary removal fails commits nothing; an older-build fixture reading the row or blob field after the commit sees the new value (R5-1(b), OPS5-2, A-2) |
+| `TestStage_KeptNameWritesInPlace` | `Stage`, `Put` and `Delete` of a kept name, an encrypted one and a plaintext one, call `SecretsStore.Write` in the batch and never write `c/secrets/`; `Put` and `Delete` commit inside `CommitLocked` with `SettingsLocks` and the keyed mutex is taken inside the `stage`; a `Stage` into a batch with no hold is refused; a clear whose secondary removal fails commits nothing; an older-build fixture reading the row or blob field after the commit sees the new value (R5-1(b), OPS5-2, A-2, R10-4, R10-5) |
+| `TestExportKeyring_OpensNoStore` | with the server holding the store lock, `secrets export-keyring` succeeds, reads only the state dir and the keyring header's `install_id`, and the next boot sees no foreign open; `rotate-derive` and `set-install-id` are refused while the lock is held (SEC10-9) |
 | `TestKeyIDsReferenced_ReportsLegacyRows` | a staged pre-S3 store whose `SecretsStore.Check` reports encrypted copies and that has no `c/secrets/` reports `k0-legacy` (DATA3-12) |
 | `TestLegacyCheck_TrialDecryptForeignArchive` | `Check` with this keyring's `k0-legacy` over a staged archive from another install returns its legacy names as unreadable (DATA4-22) |
 | `TestEphemeral_NeverPersisted` | env secret never reaches storage |
@@ -2446,7 +2564,11 @@ password 200; OPS5-1), `TestAliasBelowStoredMatchesHEAD` (R5-1(a)), `TestOnlyLeg
 `TestSetInternalFlagRefusesConfigRows` (DATA4-4), `TestLegacyGuard_RowsWithoutKeyRefuses` (HEAD's
 key-regeneration guard inside the store's `Open`, R4-6), `TestLegacyOpen_NoCorruptSecretRepair` (an
 undecryptable row is kept, nothing is written, DATA5-11), `TestGapFillFileRewriteSerialised` (two concurrent
-commits leave both values in the file, DATA5-20), `TestIntegrationStoreSharesBlobRender`,
+commits leave both values in the file, DATA5-20), `TestGapFillClearNotUndoneByLateSet` (a set of a kept name through
+the `/api/v1/config` alias and a clear of it through the integrations route, raced: neither the row nor the file key
+survives the clear, because the step renders from the rows inside the hold; R10-5, DATA10-2),
+`TestGapFillStepOnEveryWriterPath` (a kept-name write through `Apply`, `Registry.Put`, the notify rule store and
+`secrets.Put`/`Delete` each leaves `config.yaml` equal to the rows before `configBlobSaveMu` is released; R10-5), `TestIntegrationStoreSharesBlobRender`,
 `TestFreshInstall_EmbedCoverArtFalseSurvivesRestart` (a fresh S2b+ install, and a store upgraded from a pre-marker
 build, keep an operator's `embed_cover_art=false`, `log_retention_days` and 0–0 maintenance window across restarts;
 the three one-shots ran once as books migrations, which wrote HEAD's markers; `Open` wrote nothing; COR6-5),
@@ -2764,3 +2886,24 @@ Round 9:
 - R-D requests — §1.3.1: `FileOnly()` is derived (a `LegacyYAML` key with no `LegacyBlob`), not a declared flag; `HEADAuthOffWritable` comment, §1.3.7 and §1.12.5: H3 clears it on `enable_auth` only (release note), the Basic gate keys keep it to their settings cutover; §1.3.3 and §1.6: the lock is 05-storage's `WriteLocks(names []string) []storage.Lock` under the config lock name `legacy.LockConfigSettings`, committed inside `storage.CommitLocked(ctx, b, d, stage, locks...)`.
 - OPS9-7 (R-D request) — §1.3.5, §1.12.2, §1.11: an empty stored Basic password counts as no stored value, so `BASIC_AUTH_PASSWORD` is effective in memory only; `TestBasicGate_EmptyStoredPasswordDoesNotShadowEnv`.
 - integration pass (round 9): §1.3.3 `ConfigResetArgs`: `ResetArgs` runs the preflight (top-level entries the hook would remove, one directory read) and compares nothing; `kernel.stageReset` compares, skipping the check only for `LegacyConfirm`; §1.12.2 likewise; §1.3.7: the `json:"-"` SMTP fields are file and env only, never stored (05-notify); §2.4: `secrets set-install-id` ships at S3 with the keyring (09 §9.4 row 17), and the cross-cluster note on 06's offline-command list is resolved.
+
+Round 10:
+
+- R10-5 / DATA10-2 — §1.3.3 `Committer` and `legacy` block (`ConfigCommitObserver` deleted; the gap-fill write is a post-commit step the store registers on the batch, `storage.OnCommitted`, which `CommitLocked` runs inside the hold), §1.4 step 9, §1.6, §1.12.2 (rendered from the rows inside the hold; every writer path HEAD covered: `Apply`, `Registry.Put`, notify, `secrets.Put`/`Delete` of a kept name), §2.3 `SecretsStore.Write` and `Options.SettingsLocks`, §2.5, §2.9 `TestGapFillClearNotUndoneByLateSet`, `TestGapFillStepOnEveryWriterPath`.
+- R10-10 / SEC10-3 (lead ruling) — §1.3.1 `HEADAuthOffWritable` extended to every integration-bound blob field (AI endpoints, `openai_*`, metadata sources, webhooks, Deluge, `download_client`), §1.3.7 new bullet (façade, alias, `Registry.Put`/`Test`; no `ABO_CORE_*` promise; ends at the earlier of H2 and the family's integrations cutover), SEC4-7 paragraph (tightening is auth-on only), §1.12.1, §1.12.2, §1.11 `TestAuthOff_IntegrationFieldsWritableAsHEAD`.
+- R10-4 / COR10-2 / DATA10-1 — §1.3.3 `LockConfigSettings`, §1.5 new row, §1.6, §2.3: books' stores and `SecretsStore.Write` refuse a write staged into a batch without the hold (`storage.LocksHeld(b, l)`); legacy suite case for a second batch inside a hold.
+- R10-4 / DATA10-3 — §1.6: `configBlobSaveMu` at its place in 05-storage's total rank table; core-side mutexes (`Apply`, Registry writer, rule store) taken before `CommitLocked`, secrets' keyed mutex the one exception inside a `stage`; no `stage` calls a books method that takes a HEAD mutex; the alias split stated as the resolution of the one-batch contradiction; §2.3 read-order paragraph, §2.6.
+- COR10-5 — §1.3.3 `Committer`, `LockConfigSettings`, §1.6, §2.3: the kernel resolves the lock at P4c and hands `SettingsLocks`; no owner calls `WriteLocks`.
+- COR10-4 — §1.3.3 `StateFiles` (confinement defined once in 05-storage §5S.3.15: state dir, `<db parent>`, intent `Delete` and `HookPaths`, rule (4) kept paths), `ConfigResetArgs`, `ConfigResetPlan.Paths` (recorded as `hook_paths`).
+- COR10-10 — §1.6: one store instance per App; `configBlobSaveMu` is one mutex per process because it is a package variable.
+- DATA10-6 / R10-11 — §1.12.5 H2: deletes every checkpoint of the store; `ErrCutoverResidue` while a swap set-aside exists unless swept; the canary is planted before a fixture upgrade, restore and reset and every location is scanned.
+- DATA10-7 — §1.12.5: the first cutover that raises `core` lifts `{core, 0}`; H3 lifts nothing.
+- DATA10-9 (b) — §1.3.3 `ConfigResetArgs`: the reset rows are rendered by the staging binary and written as given by a resuming build (consistency with 05-storage).
+- SEC10-5 — §1.3.1, §1.3.7, §1.11: one predicate (legacy store supplied and the value in a `LegacyBlob` field or a `legacy.SecretsStore` row); each group loses the flag together at the earlier of H2 and its own cutover; the password in the legacy test half.
+- SEC10-6 — §1.3.1, §1.3.7, §1.12.1 ("through S10" replaced), §1.12.5: the gate keys keep the rule until the settings cutover, which precedes or ships with H3.
+- SEC10-7 — §1.12.5: H2's release note is 09 §9.13's one text, not restated.
+- SEC10-8 — §2.4: an unencrypted archive holds ABO's plaintext blob secrets until H2.
+- SEC10-9 — §2.4, §2.9: `export-keyring` opens no store; `rotate-derive` and `set-install-id` use `kernel.OpenOffline`; `TestExportKeyring_OpensNoStore`.
+- SEC10-11 — §1.3.3 `AttachReport.DeployDefaults`, §1.3.5, §1.11: a shipped deploy file's always-set name at that file's default is reported at info, not as a shadow.
+- OPS10-11 — §2.4: `set-install-id` lands at 09 S3 (the dangling "§9.4 row 17" citation).
+- Header — 03 reference v1.14.0.
