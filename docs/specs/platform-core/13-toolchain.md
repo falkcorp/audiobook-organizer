@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/13-toolchain.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: a1e1b657-1c87-4a3e-8407-43269415455f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -49,7 +49,7 @@ uses the same directive and also no `toolchain` line (03 §3.2); the pin lives i
 
 ### 13.2.2 What adopting go1.27.3 costs: every copy of the pin
 
-The pin `go1.27.2` appears in **34 machine-checked places** plus **7 prose copies** and **3 image
+The pin `go1.27.2` appears in **34 machine-checked places** plus **9 prose copies** and **3 image
 digests** that must be re-resolved. Counted with `git grep -n -E '1\.27\.2'` excluding `docs/` and
 `CHANGELOG.md`, then classified by hand:
 
@@ -64,8 +64,8 @@ digests** that must be re-resolved. Counted with `git grep -n -E '1\.27\.2'` exc
 | Woodpecker image (tag **and** digest) | 1 | `.woodpecker/checks-lint.yaml:50` (`golang:1.27.2-bookworm@sha256:5cf287…`) | 1 + single-digest rule |
 | Remote CI script | 1 | `scripts/ci_remote.py:77` | 1 |
 | **Machine-checked total** | **34** | | |
-| Prose that names the pin | 7 | `CLAUDE.md:180`, `agents/go-specialist.md:15`, `skills/project-context/SKILL.md:52`, `Makefile.local.example:21`, `.github/codeql/README.md:127,142`, `.woodpecker/checks-build.yaml:21` (comment) | not checked — stale prose is how a wrong pin gets copied |
-| Not a pin (leave alone) | — | historical comments that record go1.27.2 *behaviour*: `Makefile:463,507`, `ci.yml:525`, `checks-lint.yaml:73`, `internal/diag/flight/flight.go:628`, `flight_test.go:494`, `internal/pathutil/protected.go:52`, `scripts/check-errcheck-ratchet.sh:121`, `scripts/check-interface-width.sh:128`, `scripts/setup-mockery.sh:11`; file-header versions `1.27.2` in `internal/audiobooks/audiobook_service_unit_test.go:2` and `internal/config/persistence_test.go:2` | — |
+| Prose that names the pin | 9 | `Dockerfile:25` and `Dockerfile.build-cgo:21` (the comments "SHA pinned … (golang:1.27.2-alpine manifest-list)" directly above the pinned `FROM` lines, updated with the digest; MOD8-12), `CLAUDE.md:180`, `agents/go-specialist.md:15`, `skills/project-context/SKILL.md:52`, `Makefile.local.example:21`, `.github/codeql/README.md:127,142`, `.woodpecker/checks-build.yaml:21` (comment) | not checked — stale prose is how a wrong pin gets copied |
+| Not a pin (leave alone) | — | historical comments that record go1.27.2 *behaviour*: `Makefile:463,507`, `ci.yml:525`, `checks-lint.yaml:73`, `internal/diag/flight/flight.go:628`, `flight_test.go:494`, `internal/pathutil/protected.go:52`, `scripts/check-errcheck-ratchet.sh:121`, `scripts/check-interface-width.sh:128`, `scripts/setup-mockery.sh:11`; file-header versions `1.27.2` in `internal/audiobooks/audiobook_service_unit_test.go:2` and `internal/config/persistence_test.go:2`; the guard's own history and example text, `scripts/check_toolchain_versions.py:39` and `scripts/tests/test_check_toolchain_versions.py:31` (MOD8-12) | — |
 
 Unchanged by a patch bump: `go.mod:3` (`go 1.27.0`, tier 3), `tools/*/go.mod:8` (`go 1.27.0`, **not
 guarded today**: the script reads only the root `go.mod`, `scripts/check_toolchain_versions.py:329-351`),
@@ -367,3 +367,7 @@ Round 5 (dispositions in `docs/plans/platform-core/reviews/spec-round-5-disposit
 Round 7 (dispositions in `docs/plans/platform-core/reviews/spec-round-7-dispositions.md`; resolutions R7-1…R7-8):
 
 - FE7-11 — §13.4: `@mui/icons-material ^9.5.0` is a peer of `@mediacore/ui-kit` and `@mediacore/shell` (the moved shell files import it), matching 07 §7.3.1.
+
+Round 8 (dispositions in `docs/plans/platform-core/reviews/spec-round-8-dispositions.md`; resolutions R8-1…R8-6):
+
+- MOD8-12 — §13.2.2: the two Dockerfile comments naming `golang:1.27.2-alpine` (`Dockerfile:25`, `Dockerfile.build-cgo:21`) join the prose row (9 prose copies, updated with the digest); the guard's history and docstring lines (`scripts/check_toolchain_versions.py:39`, `scripts/tests/test_check_toolchain_versions.py:31`) join "Not a pin".

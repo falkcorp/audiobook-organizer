@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/12-repo-split.md -->
-<!-- version: 1.7.1 -->
+<!-- version: 1.8.0 -->
 <!-- guid: eb47baa1-640b-4c96-96cc-f6b2bdeaa57e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -180,15 +180,22 @@ published; it is the first verification step of the cutover (§12.8.2 step 8).
 `go build/vet/test`, so a target that calls a script outside `core/` fails here. Once `core/web` exists
 (UI-0, 04 §8.1), `npm ci` runs first, so the run also proves that `core/go.mod`'s `ignore ./web` keeps
 npm-shipped `.go` files out of `./...` (03 §3.2); before UI-0 there is no `core/web/package.json` and
-the step is skipped. `core/web/.gitignore` (`node_modules/`, `dist/`, `*.tsbuildinfo`, `coverage/`,
-`test-results/`; created by the UI-0 PR, 07 §7.3 and 09 UI-0) lies inside `core/`, so it travels with the export
-and into the split repo's `web/`, and the run leaves `git status --porcelain` empty there without the
-root `.gitignore` (FE7-1):
+the step is skipped. Core's own build outputs are ignored by files inside `core/`, so they travel with the export
+and into the split repo, and the run leaves the tree clean without the root `.gitignore` (FE7-1, FE8-4):
+`core/.gitignore`, created by the S0 PR that creates `core/`, lists `/.ci/readiness/` (the `readiness` report,
+§12.3.11), `/hello` (the hello binary; or the hello target writes it under an ignored directory with `-o`),
+`**/playwright-report/` and `**/blob-report/`; `core/web/.gitignore` (`node_modules/`, `dist/`, `*.tsbuildinfo`,
+`coverage/`, `test-results/`, `playwright-report/`, `blob-report/`; created by the UI-0 PR, 07 §7.3 and 09 UI-0)
+covers the workspace. A `git archive` extract is not a git work tree, so the check makes the export one
+before the run (a fresh repository holding only `core/`, which keeps the "only `core/`" property) and then
+asserts that `git status --porcelain` is empty:
 
 ```sh
 git archive HEAD core | tar -x -C "$TMP"
+(cd "$TMP/core" && git init -q && git add -A && git -c user.name=export -c user.email=export@localhost commit -qm export)
 if [ -f "$TMP/core/web/package.json" ]; then (cd "$TMP/core/web" && npm ci); fi
 make -C "$TMP/core" ci
+test -z "$(git -C "$TMP/core" status --porcelain)"
 ```
 
 (b) The core workflow (`.github/workflows/core-ci.yml`, job `core-ci`, runs `make -C core ci`,
@@ -309,7 +316,7 @@ split, the core repo has nothing else. It is specified now so that it does not g
 | Toolchain pin | `export GOTOOLCHAIN := go1.27.x`, equal to the root `Makefile` pin. This is one more pinned copy; the toolchain guard checks it (SC10, 13 §13.2.2), so it cannot drift silently. A `print-toolchain` target prints it, so commands and scripts never repeat the literal. |
 | Tools | `tools` target: `go -C tools/apidiff install tool`, `go -C tools/govulncheck install tool`, and a core copy of the staticcheck tools module, `tools/staticcheck`, pinned to the same version as the root's `tools/staticcheck` (`check_module_skew.py`, SC4(c), also compares the two tools modules' requirements). |
 | `ci` target (merge gate) | `build vet test-short fmt-check fix-check tidy-check staticcheck archtest exclude-check coverage-floor replace-check toolchain-check version-check errcheck-ratchet interface-width mocks-check pprof-check web-test embed-check` — i.e. Go build/vet/short tests with `-race`, `gofmt -l` excluding `web/` and `examples/*/web/`, `go fix -diff ./...` empty (13 §13.3), `go mod tidy -diff`, staticcheck, archtest (R1, R2, R5 and the R4 layer guard: SC2), the genproto exclude check in **core mode only** plus the present/misplaced scan of `core/` (03 §3.2 item 1; the root mode and the tree-wide scan are the root job `genproto-exclude-root`), the coverage ratchet floor (SC5), the `replace`/`exclude` check (SC7), core's own toolchain copies (SC10), `check_core_version.py`'s core-only checks (§12.4.3), and the gates that ran for core only through root `make ci` before (MOD5-15): the errcheck and interface-width ratchets over `core/.errcheck-baseline` and `core/.interface-width-baseline`, `mocks-check` over core's mockery config, `pprof-check`, and the `core/web` workspace tests (`npm ci` then vitest, from UI-0; "not applicable" before); `embed-check` (`core/scripts/ci/check_embed_outputs.py`) runs `go list -e -json` over core for 03 §3.5.1 item 4's tag sets and fails on a "no matching files" embed error for any path not on core's own list `core/scripts/ci/embed_build_outputs.txt` (hello's `examples/hello/web/dist` from S9; no Dockerfile cross-check, core builds no image; 03 §3.2 item 4, MOD7-6). Their scripts are core copies under `core/scripts/ci/`, so SC4(a)'s export and the post-split repo run them, and cutover step 6 drops none of them. Every check here holds at every **merged PR head** (the repo merges rebase/fast-forward only, so intermediate commits of a PR are not built; MOD4-14), so a red `ci` always means a defect. SC4 is the workflow running this target. |
-| `readiness` target (report-only) | `apidiff-gate coverage coredoc-check vulncheck` — SC1, SC5's thresholds, SC6 and SC9. It never fails a merge and never writes outside `core/`: it writes a JSON and Markdown report, with date and commit, to `$(READINESS_OUT)` (default `core/.ci/readiness/`, gitignored), which CI uploads as an artifact. Pre-split, a root-side nightly job folds the artifact into `docs/plans/platform-core/split-readiness.md` through a PR; that job is dropped at cutover step 6. SC3 and SC8 run in the root (pre-split) because they need ABO's `web/` or a temp module; the history dry run and the missing-origin list (§12.8.1) are also reported here. |
+| `readiness` target (report-only) | `apidiff-gate coverage coredoc-check vulncheck` — SC1, SC5's thresholds, SC6 and SC9. It never fails a merge and never writes outside `core/`: it writes a JSON and Markdown report, with date and commit, to `$(READINESS_OUT)` (default `core/.ci/readiness/`, ignored by `core/.gitignore`, SC4(a)), which CI uploads as an artifact. Pre-split, a root-side nightly job folds the artifact into `docs/plans/platform-core/split-readiness.md` through a PR; that job is dropped at cutover step 6. SC3 and SC8 run in the root (pre-split) because they need ABO's `web/` or a temp module; the history dry run and the missing-origin list (§12.8.1) are also reported here. |
 | `release` target | post-split only: `make release VERSION=vX.Y.Z` runs §12.5 steps 1–5. |
 
 ## 12.4 Versioning and semver policy
@@ -517,7 +524,7 @@ whose `operations_*` series go to `tasks`), give no destination file names (`int
 window (core's scheduler is a re-implementation, 04 §8.6, written at T0, while ABO's
 `internal/scheduler` lives on until T7 deletes it, MOD5-4; core's executor is a re-implementation
 written against `tasks.RunStore` at S5, while ABO's `internal/operations/registry` files stay at their
-path as opsbridge until T8, R7-8, MOD7-1). Mapping two coexisting, diverging files to one path either aborts filter-repo with
+path as opsbridge until T8, and `childop` and `opsmetrics` until their last ABO user is native, R7-8, MOD7-1, MOD8-2). Mapping two coexisting, diverging files to one path either aborts filter-repo with
 `File renaming caused colliding pathnames!` when one commit touches both (round-2 X13), or splices the
 ABO copy's later edits into core history. Rule:
 
@@ -529,7 +536,7 @@ ABO copy's later edits into core history. Rule:
   line (e.g. `internal/telemetry/telemetry.go`, whose provider construction core re-implements in
   `metrics` while the file keeps its install code until S2, 04 §8.6; MOD5-14; and the registry engine,
   `childop`, `opsmetrics`, `opsv3` and the whole `pkg/ops/opstest` package, which core re-implements in
-  `internal/executor`, `tasks`, `internal/taskhttp` and `taskstest`, 04 §8.6; MOD7-1); the core repo's first commit message
+  `internal/executor` (`opsmetrics`' one successor among them), `tasks`, `internal/taskhttp` and `taskstest`, 04 §8.6; MOD7-1, MOD8-2); the core repo's first commit message
   records its origin path and the ABO commit it was copied from (e.g. the `core/internal/keyedmutex`
   copy, 03 §3.2.1, whose origin stays in ABO);
 - files that never arrived in `core/` are not listed, so no ABO-only code (`internal/keyedmutex`, the
@@ -546,8 +553,11 @@ internal/logging/structured.go==>core/log/structured.go
 ```
 
 **Move PRs record their origins.** A move PR routinely carries rewrites besides import paths
-(`go fix` modernizers required by core's `fix-check`, 13 §13.3; logger → `*slog.Logger` cuts; R1 and R5
-rewrites), so a small file can fall under 90 % similarity and lose its detected rename. A rename-only
+(`go fix` modernizers required by core's `fix-check`, 13 §13.3; and, for an ABO import, one of 04 §2.2's
+enumerated mechanical rewrites, the logger cut and the store-interface cut, which leave a file a move by 03
+R1(c)'s rule, R8-6), so a small file can fall under 90 % similarity and lose its detected rename. Every such
+file, all 21 rows of 04 §8.5 among them, gets its `origins.txt` line (MOD8-1); a file whose ABO import needs
+any other rewrite is a re-implementation and gets none. A rename-only
 first commit would not help: the repo merges rebase/fast-forward only, so that commit would land on
 `main` unbuildable (ABO users still import the old path, moved files still import ABO), `git bisect` would
 hit it, and `auto-revert.yml` refuses spans over its `max_span` of 3 commits (MOD4-14). Instead every
@@ -743,3 +753,9 @@ Round 7 (dispositions in `docs/plans/platform-core/reviews/spec-round-7-disposit
 - MOD7-6 — §12.3.11 `ci` gains `embed-check` over core's own embed list (no Dockerfile cross-check).
 - SIMP7-8, R7-2 — SC1 names `legacy.LibraryRootSource` and `legacy.Maintenance`.
 - integration pass (round 7): §12.8.1: the whole `pkg/ops/opstest` package is re-implemented (R-H request).
+
+Round 8 (dispositions in `docs/plans/platform-core/reviews/spec-round-8-dispositions.md`; resolutions R8-1…R8-6):
+
+- R8-6 (MOD8-1) — §12.8.1 "Move PRs record their origins": a move may carry 04 §2.2's enumerated mechanical rewrites (logger cut, store-interface cut) and keeps its `origins.txt` line, so all 21 §8.5 rows keep theirs; any other rewrite makes a re-implementation.
+- R8-6 (MOD8-2) — §12.8.1: `childop` and `opsmetrics` stay as opsbridge until their last ABO user is native; `opsmetrics`' successor is in `internal/executor`.
+- FE8-4 — SC4(a): `core/.gitignore` (S0) ignores `/.ci/readiness/`, `/hello`, `**/playwright-report/`, `**/blob-report/`; `core/web/.gitignore` adds the two Playwright entries; the export becomes a fresh repository before the run and the check asserts `git status --porcelain` is empty; §12.3.11 `readiness` names the ignoring file.
