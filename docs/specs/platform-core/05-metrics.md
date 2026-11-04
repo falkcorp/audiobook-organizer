@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metrics.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.12.1 -->
 <!-- guid: 5cdf765d-aec1-4ed7-981a-e2e698afde61 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -8,7 +8,7 @@
 Evidence commit `748fd787a` (all `path:line` anchors). Raw inputs:
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md) §4, §9;
 [`raw/15-dependencies.md`](../../plans/platform-core/raw/15-dependencies.md) (OTel v1.47.0, exporter
-v0.69.0, client_golang v1.25.0). Normative: [03-architecture](03-architecture.md) v1.14.0 R4 (`metrics` is in
+v0.69.0, client_golang v1.25.0). Normative: [03-architecture](03-architecture.md) v1.15.0 R4 (`metrics` is in
 **L0** with `entity`, `lifecycle`, `version`, `log`), R5 (no `prometheus.DefaultRegisterer`, no `otel.Set*Provider`
 in core except the opt-in `app.InstallProcessDefaults`; R5 binds core only), §3.6 "Metric name" (one namespace,
 `app.Options.MetricNamespace`, default `mediacore`: core series `<MetricNamespace>_<subsystem>_*`, module series
@@ -24,7 +24,7 @@ names may change, and the dashboards and rules in `deploy/` change in the same P
 | M2 | The authoring API is the **OTel metric API** (`metric.Meter`), continuing ABO's in-flight migration (client_golang family ceiling 64 and falling, `internal/telemetry/testdata/client_golang_baseline.txt`). Prometheus is an exporter bound to the App's registry. client_golang is used directly only inside `core/metrics` (registry, Go/process collectors, promhttp) and through one escape hatch, `Provider.Registerer()`, for third-party and legacy collectors. |
 | M3 | Names: core instruments `<namespace>.<subsystem>.<what>` → `<namespace>_<subsystem>_<what>[_unit][_total]`, where the namespace is the app's **metric namespace** `app.Options.MetricNamespace` (default `mediacore`, the name every table of this spec shows; ABO passes `audiobook_organizer`). Module instruments use the same namespace: `<namespace>.<what>` when the app **ships** one module, `<namespace>.<module>.<what>` when it ships two or more. "Ships" means the module list passed to `app.New`, which never changes at run time, so enabling or disabling a module never renames another module's series (SIMP2-13). The Prometheus translation strategy is **pinned** (`UnderscoreEscapingWithSuffixes`), not left to the exporter's process-global default. OTel semantic-convention instruments (`http.server.*`) keep their standard names. **Every Prometheus family has exactly one owner per App (R9-3):** one instrument identity or one collector produces it, whether it was created through a `Scope`, through the App's raw or process-global `MeterProvider`, or registered through `Registerer()` (`ErrFamilyTaken`, §3), so a module family and a core family that translate to one name cannot merge and two emitters can never serve one family. |
 | M4 | Cardinality is a contract: closed attribute-key allow-list per scope, bounded value sets only, no identifiers; SDK per-instrument limit 2000; a series golden per scope. |
-| M5 | `/metrics` is a core route mounted by the kernel through `Router.Infra(path, "core:metrics.read", h)` on **every** app, with the permission the chain **enforces** (stages 10–13 run for an `Infra` route whose permission is not Public, SEC2-14), outside response compression. For ABO the kernel mounts it in the R2 metrics flip; from R1 until then ABO's gin route serves `Provider.Handler()`. ABO's identity migration stores `core:metrics.read` on every principal that is not `Confined()` and on none that is (05-rbac §6), so the scrape key keeps working (D12 F2 keeps API keys) and a worker-scoped key never scrapes (§6). |
+| M5 | `/metrics` is a core route mounted by the kernel through `Router.Infra(path, "core:metrics.read", h)` on **every** app, with the permission the chain **enforces** (stages 10–13 run for an `Infra` route whose permission is not Public, SEC2-14), outside response compression. For ABO the kernel mounts it in the metrics flip F8; from R1 until then ABO's gin route serves `Provider.Handler()`. ABO's identity migration stores `core:metrics.read` on every principal that is not `Confined()` and on none that is (05-rbac §6), so the scrape key keeps working (D12 (b) keeps API keys) and a worker-scoped key never scrapes (§6). |
 | M6 | **Names may change (D10), and the deploy files follow in the same PR.** A PR that renames a family, changes its labels or deletes it updates every reference in `deploy/grafana/dashboards/*.json` and `deploy/prometheus/*.yml` in the same PR, and `TestDeployReferencedSeriesServed` fails it otherwise (§6, §12). There is no alias, no HEAD golden and no compat recording rule. A family keeps its name where its emitter stays (ABO's books families) or where core's name already equals it under ABO's namespace; a rename that buys nothing is not made. §13 lists every HEAD family that changes. |
 | M7 | Spans are redacted before export with the logging pipeline's `*log.Redactor` (credential query values, invite paths, userinfo), so `apikey`/`token` values never reach a trace backend (SEC-22). |
 
@@ -238,8 +238,8 @@ restart, breaking dashboards (SIMP2-13).
    enabled module IDs, configured adapter/endpoint IDs, route templates. **Forbidden as values:** entity IDs,
    task run IDs, user IDs, request IDs, file paths, raw URLs, error strings, titles/names, and any value taken
    from a request header: `server.address` is an app constant, `Options.ServiceName`, never the `Host` header (§3,
-   MOD10-2). HEAD's per-run `op_id` gauges (§2) break this rule; they go with HEAD's ops engine in the R2 tasks
-   flip (§13 item 3).
+   MOD10-2). HEAD's per-run `op_id` gauges (§2) break this rule; they go with HEAD's ops engine in the tasks
+   flip F5 (§13 item 3).
 3. Per-instrument SDK cardinality limit `core.metrics.cardinality_limit` (default 2000,
    `sdk/metric@v1.47.0/config.go:183`); overflow lands in the SDK's overflow series and fails
    `metricstest` in CI.
@@ -270,7 +270,7 @@ access. For ABO, HEAD admits any authenticated credential except a worker-confin
 `fingerprint.worker` stays confined whatever its owner, as HEAD's `workerOnly` tests the effective set,
 `internal/server/middleware/auth.go:266-297` @748fd787a). The R2 identity migration stores `core:metrics.read` on
 every migrated role and key whose principal is not `Confined()` (05-rbac §6), so the owner's scrape key keeps
-working (D12 F2 keeps API keys) and the admitted set equals HEAD's. A key created after R2 scrapes only if its
+working (D12 (b) keeps API keys) and the admitted set equals HEAD's. A key created after R2 scrapes only if its
 scopes include `core:metrics.read`.
 
 **Who serves `/metrics` (MOD4-3).** One registry, the App's, is served from R1:
@@ -278,8 +278,8 @@ scopes include `core:metrics.read`.
 | Release | Registry | Who serves `/metrics` |
 |---|---|---|
 | R0 | HEAD's default registry | gin, `promhttp.Handler()`, HEAD's any-credential check |
-| R1 | the App's private registry. ABO's legacy client_golang families register through `Provider.Registerer()` and `app.InstallProcessDefaults` points the OTel globals at the App's providers, in the PR that wires `app.New`, so the six global-reading ABO packages keep their series; `cache.go:99` and `cache_snapshotter.go:24` take `Provider.Gatherer()` in the same PR | ABO's **legacy gin route** under `MountLegacy`, unchanged in path and compression exclusion, whose handler becomes `Provider.Handler()`; HEAD's any-credential check until the R2 identity flip, then the manifest's `core:metrics.read` (05-http-api §8.1) |
-| R2 metrics flip on | the App's private registry | the kernel's `Router.Infra(core.metrics.path, "core:metrics.read", …)` mount; the legacy gin route is removed in the same PR |
+| R1 | the App's private registry. ABO's legacy client_golang families register through `Provider.Registerer()` and `app.InstallProcessDefaults` points the OTel globals at the App's providers, in the PR that wires `app.New`, so the six global-reading ABO packages keep their series; `cache.go:99` and `cache_snapshotter.go:24` take `Provider.Gatherer()` in the same PR | ABO's **legacy gin route** under `MountLegacy`, unchanged in path and compression exclusion, whose handler becomes `Provider.Handler()`; HEAD's any-credential check until the identity flip F4, then the manifest's `core:metrics.read` (05-http-api §8.1) |
+| R2, from the metrics flip F8 | the App's private registry | the kernel's `Router.Infra(core.metrics.path, "core:metrics.read", …)` mount; the legacy gin route is removed in the same PR |
 
 **Series checks (OPS5-6, OPS5-9, OPS6-3).** A live scrape lists only the families that have recorded a sample
 since boot: a client_golang `Vec` with no observed label set, an OTel instrument with no data point and the Pebble
@@ -316,7 +316,7 @@ files with them (M6). **What it scrapes (OPS7-1):**
   gin engine mounted by `MountLegacy` on the `coretest` boot, so stage 2 records them; the golden's source column
   for the three rows becomes `httpapi`.
 - `TestContractScrapesServedHandler` asserts that the handler under test is the one the `/metrics` mount serves
-  (the legacy gin route's handler in R1, the kernel's `Router.Infra` mount from the R2 metrics flip).
+  (the legacy gin route's handler in R1, the kernel's `Router.Infra` mount from F8).
 - **`TestABOMetricsGatherNoDuplicate` (ABO, from R1; R9-3, MOD9-1).** A seeded test with `coretest` alone cannot
   see a second emitter, because it never builds ABO's own recorders. This one builds the kernel Provider (through
   `coretest.MetricsProvider`) **together with ABO's real recorders on it**: `app.InstallProcessDefaults`, ABO's
@@ -340,7 +340,7 @@ serves `promhttp.Handler()` over the default registry, which already carries the
 (`internal/server/server_lifecycle.go:1746-1747` @748fd787a), and the private registry adds it from R1 (OPS6-2).
 
 **Smoke check: the live scrape (optional, D11).** After a deploy a credentialed scrape (a key holding
-`core:metrics.read`; for ABO before the R2 identity flip any non-confined credential, as at HEAD) must answer 200
+`core:metrics.read`; for ABO before F4 any non-confined credential, as at HEAD) must answer 200
 with a non-empty family list (comment lines dropped, label part cut, sorted unique; an unauthenticated scrape gets
 401 and would compare nothing). That list must contain a short fixed set of always-on families:
 `process_resident_memory_bytes` and `go_goroutines`, plus `<namespace>_build_info` from R2. It is an item of the
@@ -415,8 +415,8 @@ namespace is an `app.Options` value compiled into the app's `main`, never a conf
 operational dials. The `OTEL_*` names are the OpenTelemetry ecosystem's own and are these keys' canonical env
 bindings (05-config §1.3.6). ABO's HEAD names (`otel_metrics_otlp_endpoint`, `otel_metrics_otlp_interval`,
 `otel_metrics_otlp_insecure`, `otel_exporter_otlp_endpoint`, `telemetry_environment`, `resource.go:25`) are rows of
-05-config's generated rename table, which the R2 config migration applies once (05-config §1.12.4); core holds none
-of them (R1).
+05-config's generated rename table (05-config §1.12.3), which M2 applies once at the config flip F3; core holds
+none of them (03 rule R1).
 
 ## 11. Metrics (of this subsystem)
 
@@ -471,9 +471,9 @@ own `TestKernelFamiliesGathered` asserts the kernel-emitted families in core as 
      `views.go` (the bucket table keyed by ABO family names) and `HistogramBuckets()`, the `meter.go` scope helper
      (`Meter(name)`, `MeterFrom`) and `SetVersion`/`Version`. ABO's instruments created outside a `Scope` pass
      their `HistogramBuckets()` entry as creation advice (§3), and the rest feed `Scope.Allowed` and
-     `Options.ServiceVersion` at registration, so no ABO vocabulary enters core (R1; MOD10-6).
-     `LoadConfig`/`WithMetricsOTLP`/`WithEnvironment`/`ParseMetricsInterval`/`Config` stay in ABO until the R2
-     config flip, when the kernel builds `metrics.Options` from `core.metrics`/`core.tracing`; they are deleted when
+     `Options.ServiceVersion` at registration, so no ABO vocabulary enters core (03 rule R1; MOD10-6).
+     `LoadConfig`/`WithMetricsOTLP`/`WithEnvironment`/`ParseMetricsInterval`/`Config` stay in ABO until the
+     config flip F3, when the kernel builds `metrics.Options` from `core.metrics`/`core.tracing`; they are deleted when
      their last importer is gone (04 §8.2 lists, informatively, which importers rewire when).
    - **the process-global installs** (`otel.SetTracerProvider`, `telemetry.go:287`; `otel.SetMeterProvider`,
      `:461`; `otel.SetErrorHandler`, `errorhandler.go:121`; `otel.SetLogger`, `sdklog.go:39`; the propagator;
@@ -488,7 +488,7 @@ own `TestKernelFamiliesGathered` asserts the kernel-emitted families in core as 
    The three `otel.Tracer` package vars, `otel.GetMeterProvider()` calls and `opsmetrics.Default()` become injected
    scopes when touched. `opsmetrics`' core successor is written fresh in one place, `mediacore/internal/executor`
    ([05-tasks](05-tasks.md)), whose instruments sit on scope `<namespace>.ops` (item 3). ABO's `internal/opsmetrics`
-   is deleted with HEAD's ops engine in the R2 tasks flip. **One owner per family:** the PR that gives a HEAD
+   is deleted with HEAD's ops engine in the tasks flip F5. **One owner per family:** the PR that gives a HEAD
    family a new emitter deletes the old one in the same change (`ErrFamilyTaken`, R9-3); in particular the PR that
    lands the executor's `ops.*` instruments in ABO's App stops `opsmetrics` from creating the same names (HEAD's
    recorder observes an attribute-less `ops.zombies` 0 on every collection, `opsmetrics.go:214-273` @748fd787a;
@@ -502,21 +502,52 @@ own `TestKernelFamiliesGathered` asserts the kernel-emitted families in core as 
 3. **Names: every HEAD family that changes (D10).** ABO passes `audiobook_organizer` as its namespace, so books'
    families and the core families whose names already equal HEAD's keep their names. Where HEAD's shape carries
    vocabulary that the native code does not keep, the family takes core's name and labels, and the deploy files
-   follow in that PR (M6). 05-tasks 5T.11, 05-storage and 05-ai table the core families named here.
+   follow in that PR (M6). 05-tasks 5T.11, 05-storage and 05-ai table the core families named here; the
+   `operations_*` and `ai_*` rows are listed one by one after the table.
 
 | HEAD family | After the move | PR | Deploy files |
 |---|---|---|---|
 | `audiobook_organizer_pebble_*` (label `store`) | core `storage`'s Pebble collector, which moves with HEAD's family names, help strings, types and `store` label (`pebble_collector.go:119-146`) and registers `<namespace>_pebble_*`, the same names under ABO's namespace ([05-storage](05-storage.md) tables it) | R1 (storage) | unchanged |
-| `audiobook_organizer_ops_runs_total`, `_ops_run_duration_seconds`, `_ops_items_total`, `_ops_inflight`, `_ops_progress_age_seconds`, `_ops_progress_timeout_seconds`, `_ops_zombies`, `_ops_schedule_lag_seconds`, `_ops_schedule_missed_total` | the core executor's and scheduler's instruments in the scope `<namespace>.ops`: the same names under ABO's namespace, with core's label set and values ([05-tasks](05-tasks.md) 5T.11); `def_id` values are the native kinds after the kind-rename map | R2 tasks flip (the executor's first emission in ABO's App) | queries that select by a HEAD `def_id` value are updated through the kind-rename map in the same PR |
-| `audiobook_organizer_operations_{started,completed,failed,canceled}_total`, `_operation_duration_seconds` (label `type`) | **deleted** with HEAD's ops engine: core's `<namespace>_ops_runs_total{outcome}` and `<namespace>_ops_run_duration_seconds` carry the same information | R2 tasks flip | the dashboards' and alert rules' `operations_*`/`operation_duration` queries move to the `ops_*` families in that PR |
-| `audiobook_organizer_op_items_processed`, `_op_items_total` (labels `op_id`, `op_type`) | **deleted** with HEAD's ops engine (they break §5 rule 2); core's `<namespace>_ops_items_total` replaces them | R2 tasks flip | the `audiobook_organizer:ops_items_by_op_type:sum` recording rule (`recording-rules.yml:14-19`, HEAD's `label_replace` compat rule) and its dashboard panels move to `ops_items_total` in that PR |
-| `audiobook_organizer_ops_abandoned_calls` (label `source`) | books' own observable on its own scope for both `source` values (`repairs_resolver`, `retired_versions_stat`; `internal/opsmetrics/opsmetrics.go:370-371` @748fd787a), created in the PR that converts the second of its two sources (05-tasks 5T.8.1); that PR deletes `opsmetrics`' instrument | R2 tasks stream | unchanged |
-| `ai_dispatch_*`, `ai_*` (unprefixed) | core `ai`'s families `<namespace>_ai_*` replace them; [05-ai](05-ai.md) §8 maps each HEAD family to its successor | R2 integrations flip | the AI dashboard and the AI alert rules move to `<namespace>_ai_*` in that PR |
+| `audiobook_organizer_ops_runs_total`, `_ops_run_duration_seconds`, `_ops_items_total`, `_ops_inflight`, `_ops_progress_age_seconds`, `_ops_progress_timeout_seconds`, `_ops_zombies`, `_ops_schedule_lag_seconds`, `_ops_schedule_missed_total` | the core executor's and scheduler's instruments in the scope `<namespace>.ops`: the same names under ABO's namespace, with core's label set and values ([05-tasks](05-tasks.md) 5T.11); `def_id` values are the native kinds after the kind-rename map, and HEAD's `plugin` label is `module` | F5 (the tasks flip PR, the executor's first emission in ABO's App) | queries that select by a HEAD `def_id` value or by `plugin` move to the native kinds and `module` in the same PR |
+| `audiobook_organizer_operations_*`, `_operation_*` and `_op_*` (HEAD's ops-engine client_golang families) | **deleted** with HEAD's ops engine; the executor's `ops_*` families carry the information (the list below) | F5 | the list below |
+| `audiobook_organizer_ops_abandoned_calls` (label `source`) | books' own observable on its own scope for both `source` values (`repairs_resolver`, `retired_versions_stat`; `internal/opsmetrics/opsmetrics.go:370-371` @748fd787a), created in the tasks flip PR, which deletes `opsmetrics`' instrument (05-tasks 5T.11) | F5 | unchanged |
+| `ai_dispatch_*`, `ai_*` (unprefixed) | core `ai`'s families `<namespace>_ai_*` replace them, except books' `ai_parse_results_total` ([05-ai](05-ai.md) §8; the list below) | F7 (the integrations flip PR that moves the router and the client) | the list below |
 | `audiobook_organizer_process_memory_alloc_bytes`, `_process_goroutines` | books' status worker, as at HEAD (`internal/server/server_lifecycle.go:432-433`), registered through `Provider.Registerer()` (item 2) | R1 | unchanged |
 | `http_server_*` (semconv) | core's stage 2, for every request, with mux patterns as `http_route` (§3) | R1 (perimeter move) | none reference them |
 | every other `audiobook_organizer_<x>` (books, search index, catalog, cache, ABS, review, fixer, metadata fetch, …) | books, unchanged | — | unchanged |
 
-4. **Dashboards and rules** in `deploy/` change only in the PRs of the table above, each with its seeding rows and
+**The `operations_*` and `ai_*` families, one by one (D10).** Each row lands in the flip PR named, and that PR
+also changes every consumer that reads the family: the dashboards, the alert and recording rules and their
+`alert-rules.test.yml` cases, the first-party scripts and the repo's agent skills. None of it waits for R2's last
+PR, which carries only the runbook and the release note. `TestDeployReferencedSeriesServed` and
+`promtool test rules` gate each such PR (§6). The task routes and the Activity page move in the same F5 PR, and
+the page polls `GET /api/core/v1/tasks/runs` until F6 (05-tasks 5T.3.10), so no panel of the page and no rule is
+left reading an ops-engine family after F5. ABO's successors are shown under its namespace `audiobook_organizer`.
+
+| HEAD family (labels) | Successor | Flip | Consumers changed in that PR |
+|---|---|---|---|
+| `audiobook_organizer_operations_started_total` (`type`) | `audiobook_organizer_ops_runs_total{outcome="started"}` (`def_id`, `outcome`) | F5 | none reads it |
+| `audiobook_organizer_operations_completed_total` (`type`) | `audiobook_organizer_ops_runs_total{outcome="completed"}` | F5 | the overnight dashboard's panel, by `def_id` instead of `type` |
+| `audiobook_organizer_operations_failed_total` (`type`) | `audiobook_organizer_ops_runs_total{outcome=~"failed\|timed_out"}` | F5 | the overnight dashboard's panel; the alert `AudiobookOrganizerOpFailuresHigh` is deleted and its `ops_runs_total` twin `AudiobookOrganizerOpFailuresHighV2` stays |
+| `audiobook_organizer_operations_canceled_total` (`type`) | `audiobook_organizer_ops_runs_total{outcome="canceled"}` | F5 | the overnight dashboard's panel |
+| `audiobook_organizer_operation_duration_seconds` (`type`) | `audiobook_organizer_ops_run_duration_seconds` (`def_id`, `outcome`; HEAD's bucket list, 05-tasks 5T.11) | F5 | the overnight dashboard's histogram panel, by `def_id` |
+| `audiobook_organizer_op_items_processed`, `audiobook_organizer_op_items_total` (`op_id`, `op_type`; they break §5 rule 2) | `audiobook_organizer_ops_items_total` (`def_id`, `outcome`); stall detection is `ops_progress_age_seconds` against `ops_progress_timeout_seconds` | F5 | the overnight dashboard's panel moves to `ops_items_total`; the alert `AudiobookOrganizerOpStalled` is deleted and `AudiobookOrganizerOpStalledV2` stays, joined on `def_id` and `module` (05-tasks 5T.11); HEAD's `label_replace` compat rule `audiobook_organizer:ops_items_by_op_type:sum` (`recording-rules.yml:14-19`) is deleted and its readers query `ops_items_total` by `def_id` |
+| `audiobook_organizer_operation_deprecated_def_id_total` (`alias`, `entry`) | none: HEAD's def-ID aliases are gone, and M4's kind-rename map renames stored kinds once (05-tasks §5T.8.2) | F5 | none reads it |
+| `audiobook_organizer_op_activity_mirror_dropped_total` | unchanged: books' activity subscriber in `internal/activity` keeps HEAD's bounded queue and its drop counter (05-events) | F5 (emitter moves) | none reads it |
+| `ai_requests_total` (`model`, `outcome`, `provider`, `task`), `ai_dispatch_requests_total` (`capability`, `endpoint`, `outcome`) | `audiobook_organizer_ai_requests_total` (`capability`, `instance`, `model`, `class`; 05-ai §8) | F7 | the AI dashboard's panels; the alert `AudiobookOrganizerAIFailureRatioHigh` and its rule-test cases become the share of non-`ok` `class` in `ai_requests_total`, by `capability` instead of `task` |
+| `ai_failures_total` (`model`, `provider`, `reason`, `task`) | the non-`ok` `class` values of `audiobook_organizer_ai_requests_total`; its `reply_parse` and `count_mismatch` reasons are books' `ai_parse_results_total` outcomes (05-ai §8) | F7 | the AI dashboard's panels; the same alert, whose `reason!~"reply_parse\|count_mismatch"` filter becomes `class!="ok"` |
+| `ai_request_duration_seconds` (`model`, `provider`, `task`) | `audiobook_organizer_ai_request_seconds` (`capability`, `kind`) | F7 | the AI dashboard's latency panels |
+| `ai_tokens_total` (`direction`, `model`, `provider`, `task`) | `audiobook_organizer_ai_tokens_total` (`capability`, `instance`, `model`, `direction`, `mode`) | F7 | the AI dashboard's token panels |
+| `ai_dispatch_inflight` (`endpoint`) | `audiobook_organizer_ai_inflight` (`instance`) | F7 | the AI dashboard's panel |
+| `ai_dispatch_failover_total` (`capability`, `class`, `endpoint`) | `audiobook_organizer_ai_failovers_total` (`capability`, `instance`, `class`) | F7 | the AI dashboard's panel |
+| `ai_dispatch_no_capable_total` (`capability`) | `audiobook_organizer_ai_no_capable_total` (`capability`) | F7 | the AI dashboard's `ai_dispatch_` name-prefix query, which becomes `audiobook_organizer_ai_` |
+| `ai_dispatch_slot_wait_seconds` (`endpoint`) | `audiobook_organizer_ai_slot_wait_seconds` (`kind`) | F7 | the AI dashboard's panel |
+| `ai_parse_results_total` (`accepted`, `task`) | unchanged, books' parser family (05-ai §8) | — | none |
+
+The PR that deletes the last `ai_*` family also deletes the `ai_dispatch_` and `ai_` entries of the contract
+test's `inScopePrefixes` (§6).
+
+4. **Dashboards and rules** in `deploy/` change only in the PRs of the tables above, each with its seeding rows and
    golden lines; `TestDeployReferencedSeriesServed` fails any PR that leaves a reference to a series nobody serves.
    The R2 release note lists every renamed or deleted family with its successor, and the owner reloads the rules
    and dashboards at the R2 deploy (09). The core families an app adds appear in no shipped dashboard until one is
@@ -534,13 +565,12 @@ own `TestKernelFamiliesGathered` asserts the kernel-emitted families in core as 
 
 ## Objections to 03
 
-One, against 03's text as it stands before its D10 revision: 03 §3.6 "Metric name" must say what this file uses,
+None open. The one this file raised is resolved: 03 v1.15.0 §3.6 "Metric name" says what this file uses,
 namely one namespace (`app.Options.MetricNamespace`, default `mediacore`) for core series
 (`<MetricNamespace>_<subsystem>_*`) and module series (`<MetricNamespace>_*` when the app ships one module,
 `<MetricNamespace>_<moduleID>_*` when it ships two or more, counted over the modules the app ships, SIMP2-13),
-semantic-convention names unchanged, and that names may change with the deploy files in the same PR (D10). Its
-`MetricPrefix`, "ABO keeps its metric names", HEAD-golden, `otelgin`, `HTTPMetricsScope` and `MetricViews` text
-goes. The app ID field is `app.Options.AppID` (COR-26).
+semantic-convention names unchanged, and that names may change with the deploy files in the same PR (D10). The
+app ID field is `app.Options.AppID` (COR-26).
 
 ## Out-of-scope defects found
 
@@ -657,4 +687,4 @@ Plan-phase consistency:
 
 - PC-13 — §6: `TestHistogramBucketsPinned` is part of every stage's series check in every release from S1 on, S2 r1–r3 included; the stage list names where it matters most.
 
-- D10–D12 revision (2026-11-04): M1, M3, M5, M6 rewritten: one namespace (`MetricNamespace`) for core and module series, `MetricPrefix` deleted; names may change, with the deploy files in the same PR (D10); HEAD goldens (`head_series.golden`, `head_series_identity.golden`, `TestHEADSeriesStillPresent`, `TestHistogramBucketsPinned`) and the per-stage golden-diff table deleted; `TestABOMetricsGatherNoDuplicateOrMissing` reduced to `TestABOMetricsGatherNoDuplicate`; new `TestDeployReferencedSeriesServed` (every series in `deploy/grafana` and `deploy/prometheus` is served) beside HEAD's promtool test (§6, §12); `MetricViews`, `PromRegisterer`, `Shared`, `ServedMeterProvider`, the `HTTPMetricsScope` instrument sharing and otelgin co-recording deleted: stage 2 is the only `http.server.*` recorder, out-of-scope instruments carry bucket advice (§3, §5, §7, §8, §12); §6 `/metrics`: the App's private registry served from R1 by the gin route, the kernel's `Infra` mount from the R2 metrics flip, `core:metrics.read` stored by the identity migration instead of `LegacyAmbientScopes`; §10 `OTEL_*` as canonical env bindings, ABO names in the rename table, no window aliases; §13 rewritten as the list of HEAD families that change (operations, op-items and `ai_*` families replaced by core's, `ops_abandoned_calls` hand-over choreography deleted); stage references re-keyed to R0–R2; objection to 03 §3.6 recorded.
+- D10–D12 revision (2026-11-04): M1, M3, M5, M6 rewritten: one namespace (`MetricNamespace`) for core and module series, `MetricPrefix` deleted; names may change, with the deploy files in the same PR (D10); HEAD goldens (`head_series.golden`, `head_series_identity.golden`, `TestHEADSeriesStillPresent`, `TestHistogramBucketsPinned`) and the per-stage golden-diff table deleted; `TestABOMetricsGatherNoDuplicateOrMissing` reduced to `TestABOMetricsGatherNoDuplicate`; new `TestDeployReferencedSeriesServed` (every series in `deploy/grafana` and `deploy/prometheus` is served) beside HEAD's promtool test (§6, §12); `MetricViews`, `PromRegisterer`, `Shared`, `ServedMeterProvider`, the `HTTPMetricsScope` instrument sharing and otelgin co-recording deleted: stage 2 is the only `http.server.*` recorder, out-of-scope instruments carry bucket advice (§3, §5, §7, §8, §12); §6 `/metrics`: the App's private registry served from R1 by the gin route, the kernel's `Infra` mount from the R2 metrics flip, `core:metrics.read` stored by the identity migration instead of `LegacyAmbientScopes`; §10 `OTEL_*` as canonical env bindings, ABO names in the rename table, no window aliases; §13 rewritten as the list of HEAD families that change (operations, op-items and `ai_*` families replaced by core's, `ops_abandoned_calls` hand-over choreography deleted); stage references re-keyed to R0–R2; objection to 03 §3.6 recorded. Consistency pass: flips labelled F3–F9 and D12's answers cited as D12 (a)–(d), §13 lists each `operations_*`, `op_*` and `ai_*` family with its successor, flip and the consumers changed in that same PR (the F5 move of the task routes and Activity page included), `ops_abandoned_calls` moves in the F5 PR, the rename table is 05-config §1.12.3, rule R1 is written "03 rule R1", and the objection to 03 §3.6 is closed.
