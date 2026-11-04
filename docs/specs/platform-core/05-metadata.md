@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.13.1 -->
+<!-- version: 1.13.2 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -773,7 +773,7 @@ ID; counts per kind match; every reference to an instance ID in books' rows stil
 `TestIntegrationsMigration_SecretsByRef` (no secret value in any row; each ref resolves to the value HEAD sent),
 `TestIntegrationsMigration_TrustCarried` (`Local` bound to the stored origin and `OperatorSecretOrigin` for the four
 operator-secret pairs, as M1.10 states; a later non-admin URL change resets both),
-`TestIntegrationsMigration_AuthRefRowGetsKeyCopy` (05-ai §10), `TestIntegrationsMigration_UnreadableSecretReEnter`
+05-ai's `TestAIEndpointMigration_AuthRefKeyCopy` (05-ai §9, the `auth_ref` key copy of §10), `TestIntegrationsMigration_UnreadableSecretReEnter`
 (HEAD's encrypted row with no `.encryption_key`: the instance is kept, `integration_secret_unreadable`, boot
 continues), `TestIntegrationsMigration_HEADRowsGone` (the fields and rows the step read are deleted; the gate rows
 of M2.10 are dropped).
@@ -1590,5 +1590,5 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
   after M2, `Local` bound to the stored origin and `OperatorSecretOrigin` for the four operator-secret pairs,
   `auth_ref` rows get a key copy; the auth-off writability is not carried). M2.10: throttle and quota rows dropped
   (D12 F2); the throttles route is deleted, not aliased. M1.9 and M2.9 reduced to the native tests plus migration
-  tests. Stage references re-keyed to R2. Consistency pass: M1.4 cites 05-config §1.4 step 7; M1.10 states that M2 leaves the class-`i` blob fields and M6 deletes the blob (lead decision L10); the Deluge daemon password gets its own secret `integrations.download.deluge.daemon_password`; `pcache:` is a plain books family; M2.4 declares the task `core.integrations.release-holds` (HEAD's `maintenance.throttle-reset`, 05-tasks) with its test and migration row; D12's answers cited as D12 (a)–(d).
+  tests. Stage references re-keyed to R2. Consistency pass: M1.4 cites 05-config §1.4 step 7; M1.10 states that M2 leaves the class-`i` blob fields and M6 deletes the blob (lead decision L10); the Deluge daemon password gets its own secret `integrations.download.deluge.daemon_password`; `pcache:` is a plain books family; M2.4 declares the task `core.integrations.release-holds` (HEAD's `maintenance.throttle-reset`, 05-tasks) with its test and migration row; D12's answers cited as D12 (a)–(d). Final consistency sweep: the AI endpoint key-copy test is cited by 05-ai's own name, `TestAIEndpointMigration_AuthRefKeyCopy` (05-ai §9).
 
