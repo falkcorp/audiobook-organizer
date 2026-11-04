@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/01-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: d2956830-373c-4b12-9504-ccace49f7f6d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -46,10 +46,13 @@ moves platform machinery, not every route.
    (inherited gate G6).
 3. **ABO ships at every step.** Every stage of the extraction leaves `main` green under `make ci`
    and ABO deployable, with a rollback that opens the same database (gate G5). During the extraction
-   every key family keeps one stored format, so the previous release reads every row the new build
-   wrote (02 decision 13); a rollback's only stated costs are one re-login and re-entering secrets the
-   new build moved to the encrypted store. An install whose store has not applied what the declared
-   minimum-upgrade-from release requires upgrades through it first (02 N14).
+   every key family keeps one stored format, written only by ABO code: core reaches ABO's data through
+   store interfaces whose implementation the `books` module supplies, so the previous release reads
+   every row the new build wrote (02 decision 13). A rollback's costs and consequences are listed once,
+   in the table of 09 §9.2.1, and every narrowing they cause is fail-closed (a moved secret leaves a
+   never-matching sentinel, so an older build's gate refuses until the secret is re-entered). An install
+   whose store has not applied the books migrations that the floor release requires installs the
+   stepping-stone release first (02 N14).
 4. **Correct by construction.** The boundaries are enforced mechanically (rules R1–R8 in §03): core
    cannot import app code, routes cannot be registered without a permission, library-scale loops
    cannot be written without declaring parallelism, modules cannot write outside their keyspace.
@@ -69,9 +72,11 @@ moves platform machinery, not every route.
 - Hot enable/disable of modules (restart-bound, kept decision 10).
 - A universal media table (kept decision 6).
 - Renaming or moving any of ABO's existing 258 Pebble key families during the extraction (02
-  decision 13): core services read and write the generic ones (users, roles, API keys, settings and
-  the config blob, ops history, activity) in place through legacy-format adapters. Moving a family to
-  a native keyspace is a later, one-way **cutover** (02 N15), not an extraction stage.
+  decision 13): core services use the generic ones (users, sessions, API keys, roles, ops history and
+  runs, the clock and pause keys, the config blob and secret rows, system log rows, import roots, AI
+  batch jobs, provider throttle rows) in place through store interfaces whose implementation over those
+  keys is books code. Moving a family to a native keyspace is a later, one-way **cutover** (02 N15), not
+  an extraction stage.
 - Retiring ABO's gin router or renaming its `/api/v1/...` routes: the router stays mounted through
   `httpapi.MountLegacy` (02 N7); a route group moves to native `httpapi` only when rewritten for its
   own reasons.
@@ -98,8 +103,9 @@ moves platform machinery, not every route.
 | **capability contract** | A narrow Go interface in `core/integrations/*` (AI, download, indexer, metadata, notify). |
 | **keyspace** | A prefix of the shared Pebble database handed to one owner: `c/<subsystem>/` for core, `m/<module>/` for modules. |
 | **legacy claim** | A module's declaration that it owns pre-existing un-namespaced key families (ABO's 258), so they stay in place. |
-| **legacy-format adapter** | How a core service uses an ABO key family during the extraction: it reads and writes the existing un-namespaced rows in their stored format through an explicit, logged **storage grant** (05-storage), so each family keeps one stored format and the previous release reads every row. Native-only data is added where the legacy format tolerates it (namespaced scope strings, which older builds ignore) or kept in a core-only family older builds never read (02 decision 13). |
-| **cutover** | The later, per-family, one-way step that moves a family to a native core keyspace and deletes the legacy rows; outside the extraction, checkpointed, behind the per-owner level guard; its rollback floor is the cutover release itself (02 N15). |
+| **store interface** | The SDK interface through which a core service persists its state (identity, roles, runs, config overrides, the log journal, import roots, AI jobs, provider holds; 03 §3.3 "Store interfaces"). Core ships a **native implementation** over its own `c/<subsystem>/` keyspace, used by new apps and `hello`; an app with pre-core data supplies a **legacy implementation** over its existing keys (for ABO, books code), so core holds no app key name and no storage grant during the extraction (02 decision 13, R4-1). |
+| **extension family** | The books-owned family, never read by an older build, in which ABO's legacy store implementations keep native-only data (namespaced scopes, hashed sessions, native one-time tokens) instead of adding it to legacy rows. Each record carries a hash of the legacy row it extends and is suspended until an admin re-confirms it when an older build changed that row (02 decision 13). |
+| **cutover** | The later, per-family, one-way step that moves a family to a native core keyspace and deletes the legacy rows; outside the extraction, checkpointed, behind the per-owner level guard; the only step in which core reads an app's rows, so storage grants land with it; its rollback floor is the cutover release itself (02 N15). |
 | **task** | A durable unit of background work in `core/tasks` (formerly "operation"/"op"/"job"); kind `<module>.<name>`. |
 | **Parallelism** | The required declaration of how a library-scale loop runs (`tasks.CPU()`, `tasks.Fixed(n, reason)`, `tasks.Sequential(reason)`; §05-tasks). |
 | **outbox** | A durable queue written in the same Pebble batch as the state change it announces; relayed at least once. |
@@ -108,7 +114,8 @@ moves platform machinery, not every route.
 | ***arr facade** | An optional, per-app HTTP adapter exposing an *arr-v3-compatible subset for ecosystem clients (Overseerr/Jellyseerr, Prowlarr, Bazarr) through `core/arrfacade` (deferred-build). |
 | **ABO** | audiobook-organizer, this repository. |
 | **strangler stage** | One step of the extraction in §09 (S0–S10, with S2b and UI-0), after which ABO is still shippable. "Wave" is not used. |
-| **minimum-upgrade-from release** | The oldest release from which an install may upgrade directly to a given build; older installs must pass through it first (`min_upgrade_from` in the release manifest; boot refuses with a message naming it) (02 N14). |
+| **floor release** | The first release that deletes books' legacy migration code (and the code paths it calls; the 05-tasks T8 deletion) and declares books' upgrade floor. Whether a store may take it is a property of the **store** — the books migrations it has applied, recorded in its applied-steps sidecar — not of the binary being replaced (02 N14). |
+| **stepping-stone release** | The release a floor release's manifest names to install first (`InstallFirst`): it carries books' legacy migrations and contains no deletion. A store that has not applied what the floor release requires runs it first; an updater from S0 on offers it instead of the floor release, and boot refuses with a message naming it (02 N14). Never the same release as the floor release (OPS4-5). |
 | **split criteria SC1–SC10** | The measurable readiness criteria for moving core to its own repository (§12.3); named `SC` so they never collide with the 09 stages S0–S10. |
 | **gate G1–G8** | The eight acceptance gates inherited from the 2026-09-18 adversarial review (`02-decision-record.md` §2.4). |
 | **R1–R8** | The mechanically enforced dependency/registration rules in `03-architecture.md` §3.5. |
@@ -137,3 +144,11 @@ Round 3 (dispositions in `docs/plans/platform-core/reviews/spec-round-3-disposit
 - R3-1 — goal 3: one stored format per family, rollback costs (re-login, re-enter moved secrets), no Teach-build floor; non-goals: no family moves during the extraction, cutover is later (02 N15); glossary: "identity-family adoption" and "Teach build" removed, "legacy-format adapter" and "cutover" added.
 - DATA3-17 — superseded by R3-1: the glossary entry with the old contract precondition is removed with the adoption model.
 - OPS3-7 — goal 3: the minimum-upgrade-from requirement is what the store has applied (02 N14).
+
+Round 4 (dispositions in `docs/plans/platform-core/reviews/spec-round-4-dispositions.md`; R4-1 refines R3-1):
+
+- SIMP4-2, SIMP4-3 (R4-1) — goal 3 and non-goals: core reaches ABO's data through store interfaces implemented by books code; glossary: "legacy-format adapter" replaced by "store interface" and "extension family"; "cutover" brings the storage grants.
+- SEC4-1, OPS4-1 (R4-2) — goal 3: a moved secret leaves a never-matching sentinel, so a rollback fails closed.
+- OPS4-11 — goal 3 refers to the one cost-and-consequence table of 09 §9.2.1 instead of restating two costs.
+- OPS4-5, DATA4-18 — glossary: "minimum-upgrade-from release" replaced by "floor release" and "stepping-stone release", defined by what the store has applied; goal 3 uses both.
+- DATA4-20 — non-goals list the families core services use (config blob and secret rows, clock and pause keys, system log rows), not "settings" and "activity".

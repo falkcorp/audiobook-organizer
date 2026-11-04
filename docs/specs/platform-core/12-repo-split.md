@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/12-repo-split.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: eb47baa1-640b-4c96-96cc-f6b2bdeaa57e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -75,7 +75,11 @@ a `go1.x.y` literal; the pin has exactly the guarded copies listed in 13 §13.2.
 
 *Definition.* Zero incompatible changes in SDK packages (03 §3.1: every core package outside
 `internal/` and `kernel/`; `examples/` is also excluded) between checkpoint *n−1* and *n*, for the last
-three checkpoints, spanning at least 6 weeks.
+three checkpoints, spanning at least 6 weeks. The SDK includes the **store interfaces** of 03 §3.3
+(R4-1), through which core services persist their state and an app supplies its legacy implementation, so
+a change to one counts like any other SDK change. Because ABO's implementations stay in ABO, no ABO key
+name or row format is in core at the split; the split ships only the interfaces and core's native
+implementations.
 
 *Why not `gorelease` yet.* `gorelease -base=vX` fetches the base version through the module proxy.
 Before the split, `github.com/falkcorp/mediacore` has no fetchable versions (the repo does not exist
@@ -130,6 +134,7 @@ same pinned tools module.
 ```sh
 (cd core && go test ./archtest/ -run 'TestNoAppRequire|TestCoreImportsOnlyCore|TestNoGlobals' -count=1)
 ! (cd core && go list -m all) | grep -q 'falkcorp/audiobook-organizer'
+go test ./internal/arch/ -run 'TestCoreHoldsNoAppKeyNames' -count=1   # root side: R1(c), no app key name in core
 ```
 
 (`grep -c` would print `0` but exit 1 on the passing case; the negated `grep -q` exits 0 exactly when
@@ -176,10 +181,15 @@ if [ -f "$TMP/core/web/package.json" ]; then (cd "$TMP/core/web" && npm ci); fi
 make -C "$TMP/core" ci
 ```
 
-(b) The core workflow (`.github/workflows/core-ci.yml`, path filter `core/**`, runs `make -C core ci`,
-§12.3.11; when `core/go.mod` or `core/go.sum` changes it also runs the root `go build ./...` and
-`tidy-check`, because every core dependency change needs the root's `go.mod`/`go.sum` too, 03 §3.2
-item 4) was green on the last 20 runs on `main`. This measures the merge gate `ci`, not `readiness`:
+(b) The core workflow (`.github/workflows/core-ci.yml`, job `core-ci`, runs `make -C core ci`,
+§12.3.11) is one of the **named required checks** of the merge requirement (09 §9.2.1, 14 Q-I): root
+`make ci` is a local target that does not contain core's merge gate (MOD4-8). The workflow triggers on
+every PR; a `changes` classifier job decides whether its inputs changed (`core/**` and the workflow file),
+and a job-level `if:` skips the job otherwise, so a skip reports success instead of leaving a required
+check waiting. When `core/go.mod` or `core/go.sum` changes it also runs the root `go build ./...` and
+`tidy-check`, because every core dependency change needs the root's `go.mod`/`go.sum` too (03 §3.2
+item 4). SC4(b) holds when it was green on the last 20 runs on `main`. This measures the merge gate
+`ci`, not `readiness`:
 
 ```sh
 gh run list --workflow core-ci.yml --branch main --limit 20 --json conclusion \
@@ -267,8 +277,9 @@ root `Makefile` pin, `scripts/check_toolchain_versions.py:44-46,329-351`; see
 [13-toolchain](13-toolchain.md) §13.2.2). There is no `core/examples/hello/go.mod` to check (SC3).
 
 Every criterion is also a **reported** CI job from the stage that introduces it, so readiness is
-continuously visible rather than measured once. Only the criteria that must hold at every commit —
-SC2, SC7 and SC10 — are also part of the merge gate (`make -C core ci`); SC1, SC5, SC6 and SC9 are
+continuously visible rather than measured once. Only the criteria that must hold at every merged PR head —
+SC2, SC7 and SC10 — are also part of the merge gate (`make -C core ci`; SC2's root-side
+`TestCoreHoldsNoAppKeyNames` runs in root `make ci`, because it reads books' claim list); SC1, SC5, SC6 and SC9 are
 readiness reports (`make -C core readiness`), and SC3, SC4(b), SC4(c) and SC8 run in the root
 (SC4(c)'s script is also a blocking root `make ci` check, above).
 SC10's parity half (core pin = root pin) is a root-side job (`scripts/check_toolchain_versions.py`, 13
@@ -285,7 +296,7 @@ split, the core repo has nothing else. It is specified now so that it does not g
 |---|---|
 | Toolchain pin | `export GOTOOLCHAIN := go1.27.x`, equal to the root `Makefile` pin. This is one more pinned copy; the toolchain guard checks it (SC10, 13 §13.2.2), so it cannot drift silently. A `print-toolchain` target prints it, so commands and scripts never repeat the literal. |
 | Tools | `tools` target: `go -C tools/apidiff install tool`, `go -C tools/govulncheck install tool`, and a core copy of the staticcheck tools module, `tools/staticcheck`, pinned to the same version as the root's `tools/staticcheck` (`check_module_skew.py`, SC4(c), also compares the two tools modules' requirements). |
-| `ci` target (merge gate) | `build vet test-short fmt-check fix-check tidy-check staticcheck archtest exclude-check coverage-floor replace-check toolchain-check` — i.e. Go build/vet/short tests with `-race`, `gofmt -l` excluding `web/` and `examples/*/web/`, `go fix -diff ./...` empty (13 §13.3), `go mod tidy -diff`, staticcheck, archtest (R1, R2, R5 and the R4 layer guard: SC2), the genproto exclude check in **core mode only** plus the present/misplaced scan of `core/` (03 §3.2 item 1; the root mode and the tree-wide scan are the root job `genproto-exclude-root`), the coverage ratchet floor (SC5), the `replace`/`exclude` check (SC7) and core's own toolchain copies (SC10). Every check here holds at every commit, so a red `ci` always means a defect. SC4 is the workflow running this target. |
+| `ci` target (merge gate) | `build vet test-short fmt-check fix-check tidy-check staticcheck archtest exclude-check coverage-floor replace-check toolchain-check version-check` — i.e. Go build/vet/short tests with `-race`, `gofmt -l` excluding `web/` and `examples/*/web/`, `go fix -diff ./...` empty (13 §13.3), `go mod tidy -diff`, staticcheck, archtest (R1, R2, R5 and the R4 layer guard: SC2), the genproto exclude check in **core mode only** plus the present/misplaced scan of `core/` (03 §3.2 item 1; the root mode and the tree-wide scan are the root job `genproto-exclude-root`), the coverage ratchet floor (SC5), the `replace`/`exclude` check (SC7), core's own toolchain copies (SC10) and `check_core_version.py`'s core-only checks (§12.4.3). Every check here holds at every **merged PR head** (the repo merges rebase/fast-forward only, so intermediate commits of a PR are not built; MOD4-14), so a red `ci` always means a defect. SC4 is the workflow running this target. |
 | `readiness` target (report-only) | `apidiff-gate coverage coredoc-check vulncheck` — SC1, SC5's thresholds, SC6 and SC9. It never fails a merge and never writes outside `core/`: it writes a JSON and Markdown report, with date and commit, to `$(READINESS_OUT)` (default `core/.ci/readiness/`, gitignored), which CI uploads as an artifact. Pre-split, a root-side nightly job folds the artifact into `docs/plans/platform-core/split-readiness.md` through a PR; that job is dropped at cutover step 6. SC3 and SC8 run in the root (pre-split) because they need ABO's `web/` or a temp module; the history dry run and the missing-origin list (§12.8.1) are also reported here. |
 | `release` target | post-split only: `make release VERSION=vX.Y.Z` runs §12.5 steps 1–5. |
 
@@ -358,11 +369,18 @@ split, the core repo has nothing else. It is specified now so that it does not g
   fail-closed.
 - **Initial value.** S1 lands `const Version = "0.1.0"` (03 §3.3), so the S2 `hello` skeleton
   (`MinCoreVersion: "0.1.0"`, 06 §6.12) passes P1 before any checkpoint exists.
-- **Kept honest by CI.** Pre-split, `core/scripts/ci/check_core_version.py` asserts that `version.Version`
-  is ≥ the newest checkpoint name, that every in-tree `Manifest.MinCoreVersion` (hello, books) is ≤
-  `version.Version`, and that every `core/web/packages/*/package.json` `version` equals
-  `version.Version` (the in-repo `file:` dependencies make the lockstep check of §12.6 a no-op, so this is
-  what keeps the shell's reported version, 07 §7.5.2, equal to the Go constant). The `core-checkpoint`
+- **Kept honest by CI.** `version.Version` is kept **≥** the newest checkpoint (03 §3.3): the one
+  "core version" PR raises it above the newest checkpoint before the release that records the next one,
+  so equality alone would fail that flow. Pre-split, `core/scripts/ci/check_core_version.py` runs in
+  core's merge gate (`version-check`, §12.3.11) and checks only what core holds: the constant is ≥ the
+  newest checkpoint name (it needs the explicitly fetched `refs/core-checkpoints/*`, SC1; in the SC4(a)
+  export, which has no refs, that half reports "not applicable", as the exclude check does for a probe that
+  does not apply), hello's `Manifest.MinCoreVersion` is ≤ `version.Version`, and every
+  `core/web/packages/*/package.json` `version` equals `version.Version` (the in-repo `file:` dependencies
+  make the lockstep check of §12.6 a no-op, so this is what keeps the shell's reported version, 07 §7.5.2,
+  equal to the Go constant). Books' `MinCoreVersion` ≤ `version.Version` is a **root-side** test in
+  `internal/books` (listed in 09 S0's classification table), because a core-owned script cannot read an
+  app's manifest from the `core/` export or after the split (MOD4-13). The `core-checkpoint`
   job (§12.4.1) refuses to record `refs/core-checkpoints/v0.Y.Z` on a commit whose constant is not
   `0.Y.Z`. Post-split, step 1 of
   `make release VERSION=vX.Y.Z` (§12.5) asserts `version.Version == "X.Y.Z"`.
@@ -476,8 +494,10 @@ T7). Mapping two coexisting, diverging files to one path either aborts filter-re
 `File renaming caused colliding pathnames!` when one commit touches both (round-2 X13), or splices the
 ABO copy's later edits into core history. Rule:
 
-- an origin path is mapped **only** for a file whose arrival in `core/` was a **pure rename**: the source
-  was deleted in the same commit and `git log --follow`'s similarity is ≥ 90 %;
+- an origin path is mapped **only** for a file whose arrival in `core/` was a **move**: its line in
+  `core/scripts/split/origins.txt` (below), written by the PR that deleted the source; a pure rename
+  (source deleted in the same commit, `git log --follow` similarity ≥ 90 %) without such a line is reported,
+  so the line can be added;
 - a copied or split file keeps only its post-arrival history; the core repo's first commit message
   records its origin path and the ABO commit it was copied from (e.g. the `core/internal/keyedmutex`
   copy, 03 §3.2.1, whose origin stays in ABO);
@@ -486,21 +506,27 @@ ABO copy's later edits into core history. Rule:
   history; core-owned scripts were born under `core/scripts/ci/`, so the `core/` line carries them.
 
 ```text
-# core-history-paths.txt (generated by core/scripts/split/history_paths.py from `git log -M90% --diff-filter=R` at F)
+# core-history-paths.txt (generated by core/scripts/split/history_paths.py at F from core/scripts/split/origins.txt,
+# cross-checked against `git log -M90% --diff-filter=R`)
 core/
 internal/telemetry/telemetry.go==>core/metrics/telemetry.go
 internal/telemetry/resource.go==>core/metrics/resource.go
 ...
 ```
 
-**Move PRs keep the rename detectable.** A move PR routinely carries rewrites besides import paths
+**Move PRs record their origins.** A move PR routinely carries rewrites besides import paths
 (`go fix` modernizers required by core's `fix-check`, 13 §13.3; logger → `*slog.Logger` cuts; R1 and R5
-rewrites). If those land in the rename commit, a small file falls under 90 % similarity and loses its
-history silently. So every move PR's **first commit** contains only the `git mv` plus import-path
-rewrites, and later commits carry the `go fix`, R1 and R5 changes (04 §2.2, 09 per-stage checklist; the
-repo merges rebase/fast-forward only, so the commit structure survives the merge). `history_paths.py`'s
-readiness report lists every `core/` file whose content is older than its arrival commit but that has no
-detected origin, so a lost history is visible before cutover.
+rewrites), so a small file can fall under 90 % similarity and lose its detected rename. A rename-only
+first commit would not help: the repo merges rebase/fast-forward only, so that commit would land on
+`main` unbuildable (ABO users still import the old path, moved files still import ABO), `git bisect` would
+hit it, and `auto-revert.yml` refuses spans over its `max_span` of 3 commits (MOD4-14). Instead every
+move PR appends one `old-path ==> new-path` line per moved file to the committed
+`core/scripts/split/origins.txt`, and only for a file whose source path the same PR deletes (a move, never
+a copy, so two coexisting files never map to one path, X13). `history_paths.py` takes those lines as the
+**authoritative** origins and uses pure-rename detection only as a cross-check; every commit of a move PR
+builds. Its readiness report lists every `core/` file whose content is older than its arrival commit but
+that has neither an `origins.txt` line nor a detected rename, so a lost history is visible before
+cutover.
 
 A dry run (`git filter-repo --dry-run --paths-from-file …` on a fresh clone of `main`) is part of the
 readiness report (§12.3.11), so a collision surfaces long before cutover step 3.
@@ -650,3 +676,10 @@ Round 3 (dispositions in `docs/plans/platform-core/reviews/spec-round-3-disposit
 - MOD3-18 — §12.3 and §12.3.11: `readiness` writes to `$(READINESS_OUT)` (default `core/.ci/readiness/`, gitignored, uploaded as an artifact); a root nightly job folds it into `split-readiness.md` through a PR and is dropped at cutover step 6.
 - MOD3-19 — §12.4.3: initial `Version = "0.1.0"` at S1; `check_core_version.py` asserts every in-tree `MinCoreVersion` ≤ `version.Version`.
 
+
+Round 4 (dispositions in `docs/plans/platform-core/reviews/spec-round-4-dispositions.md`; R4-1 refines R3-1):
+
+- SIMP4-2 (R4-1) — SC1: the store interfaces of 03 §3.3 are measured SDK; ABO's implementations stay in ABO, so no ABO key name or row format ships at the split; SC2 adds the root-side `TestCoreHoldsNoAppKeyNames` (03 R1(c)).
+- MOD4-8, OPS4-7 — SC4(b): `core-ci` is a named required check; it triggers on every PR and skips through a job-level `if:` on a `changes` classifier, so a skip reports success.
+- MOD4-13 — §12.4.3: the constant is kept ≥ the newest checkpoint; `check_core_version.py` runs in core `ci` (`version-check`) with core-only checks (checkpoint half "not applicable" in the export); books' `MinCoreVersion` assertion moves to a root-side test in `internal/books`.
+- MOD4-14 — §12.3.11 and SC summary: checks hold at every merged PR head; §12.8.1: the rename-only-first-commit rule is dropped; move PRs append `old ==> new` lines to `core/scripts/split/origins.txt`, which `history_paths.py` treats as authoritative (rename detection is a cross-check).

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/03-architecture.md -->
-<!-- version: 1.6.1 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 8af6d935-7143-4d06-8562-b04a18504d81 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -140,9 +140,15 @@ Why this mechanism, and why this path:
    - **Docker.** `Dockerfile:54-55` and `Dockerfile.build-cgo:52-53` copy only `go.mod go.sum` and run
      `go mod download && go mod verify`; with the `replace` and no `core/go.mod` in that layer both
      exit 1 (X1). Both Dockerfiles copy `core/go.mod core/go.sum` into `./core/` before
-     `go mod download`; `.dockerignore` (today only `node_modules`, `web/node_modules`, `web/dist`,
-     `.dockerignore:18-20`) adds `**/node_modules` and `core/web/packages/*/dist`; a PR job builds the
-     image. These land in the same stage as the `replace` (09 S0). At S0 core holds only the
+     `go mod download`; `.dockerignore` adds `**/node_modules` and `core/web/packages/*/dist`. Today it
+     excludes far more than build output (`.dockerignore:5-32`): `.git`, `.github`, **`docs`** (`:11`),
+     root-level `*.md` (`:30`; the pattern has no `**/`, so a Markdown file below the root, such as
+     `core/compat/core-ledger.md`, stays in the context), `testdata`, `dist`, root `node_modules`,
+     `web/node_modules` and `web/dist`, among others. So **every `//go:embed` input of the root module and
+     of core lies inside the Docker build context**; the PR image job is the check (an input outside the
+     context fails it with "no matching files found"), and the compat ledger is embedded from a generated
+     copy outside `docs/` for this reason (§3.3 `compat`, R4-4). `.dockerignore` keeps its exclusions. A PR
+     job builds the image. These land in the same stage as the `replace` (09 S0). At S0 core holds only the
      stdlib-only `archtest` engine (`internal/arch/layering_test.go:20-31`), and `go mod tidy` writes
      no `go.sum` for a module without requirements (round-2 X12), so S0 commits an **empty
      `core/go.sum`** (tidy keeps it) and `check_module_skew.py` asserts that it exists; the literal
@@ -170,14 +176,16 @@ Why this mechanism, and why this path:
 6. **Cost accepted: dependency skew.** The root build takes the MVS maximum over the root and
    `core/go.mod`, while core CI tests only core's requirements, and Dependabot's gomod entry
    targets `directory: /` only (`.github/dependabot.yml:59-60`). So the binary can ship dependency
-   versions core CI never ran. Mitigation: Dependabot gomod `directories: ["/", "/core"]` in one
-   group, and `scripts/ci/check_module_skew.py`, which fails when any module path in
-   `(cd core && go list -m all)` resolves to a different version in the root's `go list -m all`
-   (12 SC4(c)). S0 verifies that the Dependabot group produces **one** PR spanning `/` and `/core`;
-   if it does not, a workflow step runs the root `go mod tidy` on Dependabot `/core` PRs and pushes
-   the result (tidy coupling, item 4). The group sets `applies-to` for **both** version and security
-   updates, because a security update is not grouped by a version-update group otherwise and could
-   create skew on its own. Dependencies that must not float are pinned by a Dependabot `ignore` plus
+   versions core CI never ran. Mitigation: the gomod entry gains `directories: ["/", "/core"]` under the
+   top-level `multi-ecosystem-group: dependencies` it already joins (`.github/dependabot.yml:8-20,59-64`;
+   the repo uses no `groups` key, and `applies-to` is a single-valued key of a `groups` entry, so no one
+   group could cover both update kinds), and `scripts/ci/check_module_skew.py`, which fails when any
+   module path in `(cd core && go list -m all)` resolves to a different version in the root's
+   `go list -m all` (12 SC4(c)). S0 verifies that version updates arrive as **one** PR spanning `/` and
+   `/core`; if they do not, a workflow step runs the root `go mod tidy` on Dependabot `/core` PRs and
+   pushes the result (tidy coupling, item 4). Security updates are opened per directory whatever the
+   grouping, so a `/core` security PR is made consistent by that same root-tidy step and, failing that,
+   caught by the blocking skew check. Dependencies that must not float are pinned by a Dependabot `ignore` plus
    `check_module_skew.py --pin` (13 §13.5.2). `check_module_skew.py` carries three guarantees (no skew,
    the empty `core/go.sum` of item 4 exists, the `--pin` pins hold), so it is a **blocking** root-side
    check: it runs in root `make ci` (and therefore in the merge requirement of 09 §9.2.1) from S0, not
@@ -243,27 +251,27 @@ builds none of it, and it is built when the first TV/Movies app starts.
 | `module` | public | ABO | `Module` interface, `Manifest`, `Registrar` (routes, tasks, migrations, permissions, settings, events, UI, adapters), `Deps` handed to a module; `module.ReservedIDs()` (§3.6). | [06-app-sdk](06-app-sdk.md) |
 | `entity` | public | core | Leaf package (L0): `entity.Ref{Module, Kind, ID string}` — **the one** polymorphic reference to any module-owned entity. Every file uses this type: tasks resources (`tasks.Resource` is `entity.Ref`), outbox/notify payloads, download grabs (multi-entity grabs carry `[]entity.Ref`), acquisition history/blocklist/queue, audit targets. No other `EntityRef`/`Resource{Module, Kind, ID}` struct exists; an `archtest` check fails any core identifier named `EntityRef` outside `entity`. Never a shared media row (decision 6). | [10](10-tv-movies-proof.md), [05-tasks](05-tasks.md) |
 | `lifecycle` | public | core | Leaf package (L0): `Component{Start, Stop}` ordering contract and shutdown budget types used by kernel, tasks, realtime, outbox relay; the public constant `lifecycle.NotifySocketEnv` (the systemd notify-socket variable name, read by apps that strip it from subprocess environments; 04 §8.3, from S2). | [05-tasks](05-tasks.md), [05-health](05-health.md) |
-| `version` | public | core | Leaf package (L0): `const Version = "0.Y.Z"`, the core version; S1 lands it as `"0.1.0"`, so the S2 `hello` skeleton's `MinCoreVersion: "0.1.0"` passes P1 before any checkpoint exists. **Never** derived from `debug.ReadBuildInfo` (under the `replace` that reports the zero pseudo-version, which is below every `MinCoreVersion`). Read by the kernel's `MinCoreVersion` check, `GET /api/core/v1/modules` and the backup manifest; CI keeps it equal to the newest checkpoint or release tag (12 §12.4.3). | [12](12-repo-split.md) |
-| `storage` | public | ABO | Pebble-backed ordered KV: `DB`, `Keyspace`, `Batch`, `Snapshot`, `iter.Seq2` scans, per-keyspace migrations, legacy-prefix claims, and the explicit, logged **storage grants** through which a core service's legacy-format adapter reads and writes a legacy family in its stored format during the extraction (02 decision 13). | [05-storage](05-storage.md) |
+| `version` | public | core | Leaf package (L0): `const Version = "0.Y.Z"`, the core version; S1 lands it as `"0.1.0"`, so the S2 `hello` skeleton's `MinCoreVersion: "0.1.0"` passes P1 before any checkpoint exists. **Never** derived from `debug.ReadBuildInfo` (under the `replace` that reports the zero pseudo-version, which is below every `MinCoreVersion`). Read by the kernel's `MinCoreVersion` check, `GET /api/core/v1/modules` and the backup manifest; CI keeps it **≥** the newest checkpoint (12 §12.4.3: the one "core version" PR bumps it above the newest checkpoint before the release that records the next one). | [12](12-repo-split.md) |
+| `storage` | public | ABO | Pebble-backed ordered KV: `DB`, `Keyspace`, `Batch`, `Snapshot`, `iter.Seq2` scans, per-keyspace migrations and legacy-prefix claims. During the extraction no core service reaches an app's legacy family: each service that persists state uses its **store interface** and the app supplies the implementation over its own claims (table "Store interfaces" below; 02 decision 13). Storage **grants** (`Grant`, `GrantMode`, `Exclusive`) are deferred-build members of the per-family cutover (02 N15, 05-storage §5S.3.13), the only step in which core reads an app's rows. | [05-storage](05-storage.md) |
 | `storage/keys` | public | ABO | Leaf package (L0): pure tuple-key functions (the core key encoding). Lands at S0, so S0's guard writes its `c/storage/` records in core's encoding (04 §8.1). | [05-storage](05-storage.md) |
 | `storage/codec` | public | ABO | Leaf package (L0): generic value codecs for stored values. | [05-storage](05-storage.md) |
-| `storage/index` | public | ABO | Full-text search index contract (bleve implementation in `internal/bleveindex`). Depends on `storage`, never the reverse; index wiring lives in `kernel`. | [05-storage](05-storage.md) |
+| `storage/index` | public | ABO | Full-text search index contract (bleve implementation in `internal/bleveindex`). Depends on `storage`, never the reverse; index wiring lives in `kernel`; the full-text dirty set behind it is a store interface (below). | [05-storage](05-storage.md) |
 | `storage/datamigrate` | public | ABO | Declarations of large, resumable data migrations (`DataMigration` with a required `tasks.Parallelism`, shard plan, dry run); imports `storage` and `tasks`, so it sits at L4, not with `storage`. Modules list them in `module.Manifest.DataMigrations`; the runner is `internal/storagemigrate`. | [05-storage](05-storage.md) §5S.3.6 |
-| `library` | public | ABO | Media roots, `os.Root`-confined filesystem access, path mapping, safe move/copy/hardlink, hashing, quarantine, free-space checks. | [05-library](05-library.md) |
-| `tasks` | public | ABO | Durable task/job system: `Definition`, `Run`, `RunItems`, `Parallelism` (required), `Schedule` (the one schedule mechanism), `Resource` (= `entity.Ref`, namespaced write-sets), checkpoints, preview/dry-run, cancellation. | [05-tasks](05-tasks.md) |
+| `library` | public | ABO | Media roots, `os.Root`-confined filesystem access, path mapping, safe move/copy/hardlink, hashing, quarantine, free-space checks; import roots persist through a store interface (below). | [05-library](05-library.md) |
+| `tasks` | public | ABO | Durable task/job system: `Definition`, `Run`, `RunItems`, `Parallelism` (required), `Schedule` (the one schedule mechanism), `Resource` (= `entity.Ref`, namespaced write-sets), checkpoints, preview/dry-run, cancellation; runs, queues, checkpoints, schedule clocks and the pause marker persist through the run store interface (below). | [05-tasks](05-tasks.md) |
 | `events` | public | ABO | Notify-only in-process bus with typed, namespaced topics; the one topic catalog. | [05-events](05-events.md) |
 | `outbox` | public | ABO | Durable, at-least-once, same-batch outbox for correctness-critical cross-module work. | [05-events](05-events.md) |
-| `log` | public | ABO | `log/slog` construction, per-module child loggers, redaction, and the `Record`/`Tap` types of the **system log journal** (persisted, queryable operational log; implementation `internal/logjournal`; the books activity feed stays in the books module). | [05-logging](05-logging.md) |
+| `log` | public | ABO | `log/slog` construction, per-module child loggers, redaction, and the `Record`/`Tap` types of the **system log journal** (persisted, queryable operational log; implementation `internal/logjournal`, persisting through the journal store interface below; the books activity feed stays in the books module). | [05-logging](05-logging.md) |
 | `metrics` | public | ABO | Per-`App` Prometheus registry and OTel providers (never the process globals). | [05-metrics](05-metrics.md) |
-| `config` | public | ABO | Layered config: defaults → file → env → flags (operator-set values **lock** their key) → DB overrides (apply only to unlocked keys; during the extraction a key that ABO already stores is read and written in place in its legacy row — the config blob or a settings family — through config's legacy-format adapter, and a native-only key lives in the core-only family `c/config/`, 02 decision 13); per-module typed sections declared in the manifest; JSON Schema for the UI; change notification. Holds no integration instances (those are `integrations` records). | [05-config](05-config.md) |
-| `secrets` | public | ABO | Encrypted-at-rest secret store with one keyring; config fields reference secrets by name. A plaintext secret in ABO's config blob moves here the first time the new build writes it and is blanked in the blob (a rollback needs it re-entered; 02 decision 13). | [05-config](05-config.md) |
+| `config` | public | ABO | Layered config: defaults → file → env → flags (operator-set values **lock** their key) → DB overrides (apply only to unlocked keys; stored through `config.OverrideStore`: natively in `c/config/`, and for ABO in place in its config blob and secret rows by the books legacy implementation, which also runs ABO's settings load, settings-encryption init and key-regeneration guard through the kernel's one DB handle at the boot phase 06 assigns — never a second Pebble open, never defaults written over the stored blob (R4-6); a key with no legacy name goes to books' extension family, 02 decision 13); per-module typed sections declared in the manifest; JSON Schema for the UI; change notification. Holds no integration instances (those are `integrations` records). | [05-config](05-config.md) |
+| `secrets` | public | ABO | Encrypted-at-rest secret store with one keyring; config fields reference secrets by name. The first core write of a secret stores it here, encrypted, and replaces **every** legacy copy — the legacy row (blob field or secret row) **and** the second copy in `config.yaml` beside the database — with an unguessable, never-matching sentinel, never an empty value (the books legacy config store writes it; R4-2). After a rollback the older build's gate therefore refuses every credential until the operator re-enters the secret (fail-closed; the release note says so). On roll-forward the encrypted copy wins unless the legacy value differs from the sentinel, which means an operator re-entered it on the older build: that value is re-imported and re-sentinelled (02 decision 13). | [05-config](05-config.md) |
 | `httpapi` | public | ABO | `net/http` (Go 1.22+ `ServeMux` patterns) API framework: typed routes, mandatory permission per route, error envelope, pagination, versioning, OpenAPI 3.1 generation, core perimeter middleware, and `MountLegacy` — a **permanent, supported** way to mount an app's existing router (ABO's gin engine) behind core's perimeter; it never returns a chain-less group (R6). | [05-http-api](05-http-api.md) |
 | `realtime` | public | ABO | SSE hub with resumable, permission-filtered streams. | [05-realtime](05-realtime.md) |
-| `auth` | public | ABO | Identity: users, sessions, API keys, bootstrap, OIDC/OAuth, credential epochs; middleware. During the extraction users and API keys stay in ABO's rows, used through legacy-format adapters; sessions are hashed in a core-only family no older build reads; a new API key always has explicit, non-empty scopes (02 decision 13). | [05-authn](05-authn.md) |
-| `rbac` | public | ABO | Permission scopes (`<ns>:<action>`), roles as data, module-declared permissions, enforcement helpers. | [05-rbac](05-rbac.md) |
+| `auth` | public | ABO | Identity: users, sessions, API keys, bootstrap, OIDC/OAuth, credential epochs; middleware. Persists through its identity store interface (below): natively in `c/auth/`; for ABO the books legacy implementation keeps users and API keys in ABO's rows and stores hashed sessions and native one-time tokens in books' extension family, which no older build reads; a new API key always has explicit, non-empty scopes (02 decision 13). | [05-authn](05-authn.md) |
+| `rbac` | public | ABO | Permission scopes (`<ns>:<action>`), roles as data, module-declared permissions, enforcement helpers. Roles persist through `rbac.RoleStore` (below): natively in `c/rbac/`; for ABO in ABO's role rows with legacy atoms only, and namespaced scopes only in books' extension family — never as extra strings in a legacy row, because HEAD's worker confinement is a "nothing else" test that an extra string defeats (`internal/server/middleware/auth.go:271-297`; 02 decision 13). | [05-rbac](05-rbac.md) |
 | `audit` | public | ABO | Append-only audit log (auth events, permission denials, admin actions, task approvals); targets are `entity.Ref`. | [05-rbac](05-rbac.md) |
-| `compat` | public | ABO | Compatibility primitives for strangler migrations: alias tables (paths, config keys, env vars, permission atoms, metric names) registered against one compatibility window (09 §9.2.1), Deprecation/Sunset headers, `mediacore_compat_legacy_use_total`. Every alias needs a row in the compatibility ledger, which `compat.Ledger` merges from two sources: the **app's** ledger (`app.Options.CompatLedger []byte`; ABO embeds its root `docs/compat-surfaces.md` in the root `main` package, because a core `//go:embed` cannot reach outside `core/`) and a core-owned fragment `core/compat/core-ledger.md` (core metric and config aliases) embedded by `compat`; a row ID in both is a boot error. The store-level compatibility guard is the merged storage-format/compat-level mechanism owned by 05-storage (§3.7). | [09-abo-on-core](09-abo-on-core.md) |
-| `integrations` | public | ABO | Root of the integration contracts and **the one store for integration instances**: `integrations.Ref{Kind, Instance}`, instance records (kind, instance, settings, `secrets.Ref`s), the shared error taxonomy (retryable/permanent/auth/rate-limited), `Factory`/`Descriptor` types modules use to contribute adapters (`Registrar.Adapter`). Imports nothing in `module` (R4). | [05-metadata](05-metadata.md) |
+| `compat` | public | ABO | Compatibility primitives for strangler migrations: alias tables (paths, config keys, env vars, permission atoms, metric names) registered against one compatibility window (09 §9.2.1), Deprecation/Sunset headers, `mediacore_compat_legacy_use_total`. Every alias needs a row in the compatibility ledger, which `compat.Ledger` merges from two sources: the **app's** ledger (`app.Options.CompatLedger []byte`; a core `//go:embed` cannot reach outside `core/`. ABO's source of truth stays `docs/compat-surfaces.md`, but the Docker build context excludes `docs` (§3.2 item 4), so the books composition root `internal/books` embeds a generated copy, `internal/books/compat-surfaces.md`, which a CI freshness check keeps byte-equal to the source, and `main` passes it on; R4-4) and a core-owned fragment `core/compat/core-ledger.md` embedded by `compat`, which holds only names every app shares — the permanent `OTEL_*` env aliases (05-config C7); every window alias, of a metric or a config key, is the app's, and a test asserts that every core-fragment row has gate `permanent`. A row ID in both is a boot error. The store-level compatibility guard is the merged storage-format/compat-level mechanism owned by 05-storage (§3.7). | [09-abo-on-core](09-abo-on-core.md) |
+| `integrations` | public | ABO | Root of the integration contracts and **the one registry for integration instances** (native ones in `c/integrations/instances/`; during the extraction ABO's existing instances are legacy-backed in their blob fields, 05-metadata M1): `integrations.Ref{Kind, Instance}`, instance records (kind, instance, settings, `secrets.Ref`s), the shared error taxonomy (retryable/permanent/auth/rate-limited), `Factory`/`Descriptor` types modules use to contribute adapters (`Registrar.Adapter`). Imports nothing in `module` (R4). | [05-metadata](05-metadata.md) |
 | `integrations/ai` | public | ABO | Provider-neutral AI contract (text/structured generation, embeddings, transcription) plus routing/health. v1 records usage metrics only; the usage ledger and monthly cap are deferred. | [05-ai](05-ai.md) |
 | `integrations/download` | public | ABO (contract, `download/deluge`, what ABO uses today); deferred (other adapters; grab/monitor/pending-recovery/`MarkImported`) | Download-client contract (`Client`, `GrabRequest`, `Item` status) + adapters `download/deluge`, `download/qbittorrent`, `download/transmission`, `download/sabnzbd`, `download/nzbget`. Owns client polling, item state and completion events; the grab pipeline belongs to `acquire`. | [05-download](05-download.md) |
 | `integrations/indexer` | public | **deferred** | Indexer/search contract + Newznab/Torznab adapter. | [05-indexer](05-indexer.md) |
@@ -276,14 +284,43 @@ builds none of it, and it is built when the first TV/Movies app starts.
 | `updater` | public | ABO | Self-update check/apply, parameterized by the app's release source. | [05-updater](05-updater.md) |
 | `health` | public | ABO | Liveness/readiness, component health, diagnostics bundle. | [05-health](05-health.md) |
 | `arrfacade` | public | **deferred** | Extension point for an *arr-v3-compatible API adapter (D2). During the extraction only the `/api/v3/` path reservation exists (05-http-api §4.1). | [08-arr-facade](08-arr-facade.md) |
-| `ui` | public | ABO (from the stage in which ABO adopts the shell build; `ui.ReservedSegments` from S2) | Go side of the UI shell: serves an app's embedded **shell** SPA build with the core's headers/CSP/caching; `ui.ReservedSegments` (§3.6). `ui.ReservedSegments()` is a static function with no dependencies that lands at **S2** together with `module`, so `module.ReservedIDs()` reserves the shell segments and its "equals §3.6's row" test passes from S2; the rest of `ui` lands at S9 (04 §8.1). Until an app ships a shell build, `ui.Handler` is not mounted and the legacy mount owns `/`. | [07-ui-shell](07-ui-shell.md) |
+| `ui` | public | ABO (from the stage in which ABO adopts the shell build; `ui.ReservedSegments` from S2) | Go side of the UI shell: serves an app's embedded **shell** SPA build with the core's headers/CSP/caching; `ui.ReservedSegments` (§3.6). `ui.ReservedSegments()` is a static function with no dependencies that lands at **S2** together with `module`, so `module.ReservedIDs()` reserves the shell segments and its "equals §3.6's row" test passes from S2. The dependency-free leaf types `ui.ModuleManifest`, `UIIDs` and `Redirect` land with it at S2, because `internal/modulehttp` (L6) reports `modules[].ui` from S4 and cannot name the L7 `module.UIDescriptor` (FE4-6); the rest of `ui` lands at S9 (04 §8.1). Until an app ships a shell build, `ui.Handler` is not mounted and the legacy mount owns `/`. | [07-ui-shell](07-ui-shell.md) |
 | `coretest` | public | core | Test kit: in-memory `App` harness, fake clock, fake adapters, permission assertions. | [06-app-sdk](06-app-sdk.md) |
 | `archtest` | public | core | Reusable architecture guards an app runs in its own tests (§3.5). | §3.5 |
 | `shared/...` | public | none yet | Cross-app *domain* packages that are not platform concerns but are used by ≥2 apps (§3.4). Zero promoted (04 §9). | [04-package-mapping](04-package-mapping.md) |
 | `kernel/...` | public-but-unstable | core | Module catalog, manifest validation, lifecycle supervisor, and the **typed services struct** that builds core services in a fixed order with explicit constructors. There is **no generic DI container** (no `Get[T]`-of-`any`). Imported only by `app`. Excluded from the API-stability gate; apps that import it fail `archtest`. | [06-app-sdk](06-app-sdk.md) |
 | `examples/hello` | public (example) | core | The minimal "hello" app from 06 §hello: a **package in the core module** (not a separate module), built and tested in core CI and importable by ABO's G6 test; the in-tree second consumer for the split criteria (12 SC3) and the producer of the core OpenAPI document `core.json` (07 §7.8). It lands at S2 as a skeleton and grows with the stages, using only what each stage has built (04 §8.1; rule (b) of §3.4). | [06-app-sdk](06-app-sdk.md), [12](12-repo-split.md) |
-| `internal/<capability>http` | internal | ABO (`internal/acquirehttp`: deferred) | **Core capability HTTP routes** (`/api/core/v1/...`): one package per capability — e.g. `internal/taskhttp`, `internal/authhttp`, `internal/rbachttp`, `internal/audithttp`, `internal/confighttp`, `internal/libraryhttp`, `internal/backuphttp`, `internal/updaterhttp`, `internal/healthhttp`, `internal/eventhttp`, and `internal/modulehttp` (`GET /api/core/v1/modules`; the kernel hands it a read-only `ModulesView` interface — catalog snapshot, `restart_required`, the `ui_build_id` source — so it imports nothing above L6). Each imports its capability package(s) and `httpapi` (and `realtime` for stream routes), sits at L6 (R4), registers on `httpapi`'s core group, and is imported **only by `kernel`**. | per capability |
+| `internal/<capability>http` | internal | ABO (`internal/acquirehttp`: deferred) | **Core capability HTTP routes** (`/api/core/v1/...`): one package per capability — e.g. `internal/taskhttp`, `internal/authhttp`, `internal/rbachttp`, `internal/audithttp`, `internal/confighttp`, `internal/libraryhttp`, `internal/backuphttp`, `internal/updaterhttp`, `internal/healthhttp`, `internal/eventhttp`, and `internal/modulehttp` (`GET /api/core/v1/modules`; the kernel hands it a read-only `ModulesView` interface — catalog snapshot, `restart_required`, and the `ui_build_id`, which is read from the build-ID meta tag of the bundle the binary embeds — its one source; there is no ldflags value and no boot-time comparison (05-http-api §4.2) — so it imports nothing above L6). Each imports its capability package(s) and `httpapi` (and `realtime` for stream routes), sits at L6 (R4), registers on `httpapi`'s core group, and is imported **only by `kernel`**. | per capability |
 | `internal/...` | internal | per contract | Implementations: `internal/pebble`, `internal/executor`, `internal/scheduler`, `internal/sse`, `internal/bleveindex`, `internal/openapi`, `internal/storagemigrate`, `internal/logjournal`, `internal/jsonschemax` (the one JSON Schema reflector, R4), … | per contract |
+
+**Store interfaces (R4-1).** Every core service that persists state an app may already keep in its own
+key families defines a **store interface** in its SDK package and ships a **native implementation** over
+its own `c/<subsystem>/` keyspace. The native implementation is the one `examples/hello`, `coretest` and
+every new app use, and it lands with its subsystem (rule (b) of §3.4). An app with pre-core data passes a
+**legacy implementation** of the same interface through its manifest or `app.Options` (06 names the
+field); for ABO that is code in the `books` module, over ABO's existing keys and row formats, and it
+stays in ABO. So core holds no app key name or row format (R1(c)) and holds no storage grant during the
+extraction. Core enforces its invariants above the interface (never-empty API-key scopes, upgrade-on-use,
+staging rules) and ships one conformance suite per interface, which every implementation runs (ABO's with
+HEAD fixtures). Native-only data that an older build must never see (namespaced scopes, hashed sessions,
+native one-time tokens, native-only clock or job fields) is stored by the legacy implementation in a
+**books-owned extension family that no older build reads**, never additively in a legacy row. Each
+extension record carries a hash of the legacy row it extends; if an older build changed that row while
+rolled back, the extension is suspended until an admin re-confirms it, so a roll-forward never widens
+anything silently (02 decision 13). The interfaces are SDK and frozen by the API-stability gate
+(12 SC1); that is the price of keeping app formats out of core (14 K23).
+
+| Package | Store interface (named in its spec file) | What it persists | Native keyspace | ABO's legacy implementation (books module) | Lands (09) |
+|---|---|---|---|---|---|
+| `auth` | identity store ([05-authn](05-authn.md) §3.4) | users, API keys, OAuth identities, invites, sessions, one-time tokens | `c/auth/` | ABO's user, API-key, OAuth-identity and invite rows; legacy sessions read and deleted on upgrade-on-use; hashed sessions and native one-time tokens in the extension family | S4 |
+| `rbac` | `rbac.RoleStore` ([05-rbac](05-rbac.md)) | roles | `c/rbac/` | ABO's role rows, legacy atoms only; namespaced scopes in the extension family | S4 |
+| `config` (with `secrets`) | `config.OverrideStore` ([05-config](05-config.md)) | DB overrides; the sentinel that replaces a moved secret's legacy copies | `c/config/` (encrypted secrets in `c/secrets/`) | ABO's config blob and secret rows; ABO's settings load, settings-encryption init and key-regeneration guard (R4-6) | S2b |
+| `tasks` | run store ([05-tasks](05-tasks.md) §5T.6) | runs, queues, checkpoints, schedule clocks, the pause marker | `c/tasks/` | ABO's ops-history and run families, clock and pause keys | S5 |
+| `log` | journal store ([05-logging](05-logging.md)) | the system log journal | `c/log/` | system log rows (`syslog:`) | S5 |
+| `library` | import-root source ([05-library](05-library.md)) | import roots | `c/library/` | ABO's import-root rows and their counter | S7 |
+| `storage/index` | dirty set ([05-storage](05-storage.md) §5S.3.8) | full-text dirty marks | `c/index/` | ABO's dirty set, drained by both builds | S7 |
+| `integrations/ai` | batch-job store ([05-ai](05-ai.md)) | AI batch jobs | `c/ai/` | ABO's AI job rows | S7 |
+| `integrations/providerhttp` | gate store ([05-metadata](05-metadata.md) M2) | throttle holds, daily quotas | `c/providerhttp/` | ABO's provider throttle and budget rows | S7 |
 
 npm workspace `core/web/` (D6):
 
@@ -307,16 +344,24 @@ package is **built** in core only if
 A package that meets neither keeps its contract in the spec at proof depth (D5) and is marked
 **deferred** in §3.3: the plan builds none of it, and it is built, against that contract, when the
 first TV/Movies app starts. Today that is `acquire`, `arrfacade`, `integrations/indexer`, the
-download grab/monitor pipeline, the download adapters other than Deluge, and the AI usage ledger.
+download grab/monitor pipeline, the download adapters other than Deluge, and the AI usage ledger;
+inside built packages it is also the members that only the deferred cutover uses (storage grants and the
+served-run preconditions, 05-storage §5S.3.13), backup encryption (05-backup B3) and the seed-role merge
+diff (05-rbac §4.8).
 **Deferral applies to features inside built packages as well as to packages**: a built package carries
 no member whose only consumer is deferred — for example the facade-only key machinery
 (`KeySpec.Purpose`/`Module`, `PurposeFacade`, query-key extraction, `Router.FacadeGroup`, the facade
 route kind and its stage-13 clause) lands with `arrfacade`, not in `auth`, `rbac` or `httpapi` at S2/S4.
-Each 05 file lists its deferred members under a "Deferred-build" heading, and a permanent root-module
-test, `archtest.DeferredMembersAbsent(t, list)`, fails from **S2** (the first stage that builds a package
-with deferred members) if any listed identifier exists in `core/`; its list is taken from those headings,
-and the PR that builds the deferred package (e.g. `arrfacade`) deletes its entries (09 S2). One list and one
-test replace per-file grep claims, because the Build column alone cannot see inside a built package.
+Every spec file that has deferred members in a built package lists them under a heading named exactly
+`Deferred-build members`, as **package-qualified** identifiers (`download.Pool.Grab`, `download.Event`), so
+a bare name such as `Event` never matches `audit.Event`. A permanent root-module test,
+`archtest.DeferredMembersAbsent(t, list)`, fails from **S2** (the first stage that builds a package with
+deferred members) if any listed identifier exists in `core/`. Its list is generated from **every**
+`Deferred-build members` heading under `docs/specs/platform-core/`; no file names a subset of sources. The
+PR that builds a deferred member deletes **that member's** entry, and the test itself is deleted only when
+the list is empty, so building `arrfacade` does not unguard the download, `acquire`, AI-ledger, notify or
+cutover members (09 S2). One generated list and one test replace per-file grep claims, because the Build
+column alone cannot see inside a built package.
 Cross-app domain helpers enter `shared/` only when they have **two real consumers**; until a second
 app exists they stay in ABO unless a built core package needs them. The guard against the 2026-09-18
 adversarial review's residual risk "small core becoming a god package" (`raw/08-prior-art.md` §2) is
@@ -339,31 +384,32 @@ rule, and the stage-visibility gate (§3.5.1 item 4) checks it on every PR.
 | core kernel/SDK | built under (a) or (b) above | storage, tasks, auth, rbac, httpapi, config, log, metrics |
 | core, deferred | contract only; built with the first TV/Movies app | `acquire`, `arrfacade`, `integrations/indexer` |
 | core `shared/` | domain logic with ≥2 real consumers across apps, or needed by a built core package | text normalization (`titleutil`, `personname`) once TV/Movies parsers need them |
-| app (ABO) | everything audiobook-specific | scanner, organizer, dedup, itunes, ABS compatibility surface, narrators |
+| app (ABO) | everything audiobook-specific | scanner, organizer, dedup, itunes, ABS compatibility surface, narrators, the legacy store implementations over ABO's key families (§3.3, R4-1) |
 | delete/merge | dead or duplicated mechanisms | v3/v2/v1 op duplication collapsed into `tasks`; legacy `internal/plugin` |
 
 ## 3.5 Dependency direction rules and their mechanical enforcement
 
 | # | Rule | Enforced by |
 |---|---|---|
-| R1 | Core never imports app code. | (a) `core/go.mod` must not `require` any app module — checked by `core/archtest.TestNoAppRequire` reading `core/go.mod`; (b) `core/archtest.TestCoreImportsOnlyCore`: `go list -deps -test` of every core package (test imports included, because the E2 hazard came from a test file; the synthetic `.test` and `[pkg.test]` packages are filtered) contains no path outside `github.com/falkcorp/mediacore/...`, stdlib, and the allowlisted third-party set; runs in core's own `go test ./...`. Note that Go *does* allow module dependency cycles, so (a) is required, not redundant. |
+| R1 | Core never imports app code, and holds no app key name or row format. | (a) `core/go.mod` must not `require` any app module — checked by `core/archtest.TestNoAppRequire` reading `core/go.mod`; (b) `core/archtest.TestCoreImportsOnlyCore`: `go list -deps -test` of every core package (test imports included, because the E2 hazard came from a test file; the synthetic `.test` and `[pkg.test]` packages are filtered) contains no path outside `github.com/falkcorp/mediacore/...`, stdlib, and the allowlisted third-party set; runs in core's own `go test ./...`. Note that Go *does* allow module dependency cycles, so (a) is required, not redundant. (c) A core service that needs data an app already stores defines a store interface and the app supplies the implementation (§3.3 "Store interfaces", R4-1); because a **copied** format passes (a) and (b), the root module's `TestCoreHoldsNoAppKeyNames` (`internal/arch`) fails when a string literal in a non-test `core/` file begins with a family prefix of books' generated claim list (`keyfamilies.go`). |
 | R2 | Apps import only core's public packages. No stage rewires an ABO import onto `internal/` or `kernel/` (visibility rule, §3.4). | Go's `internal/` rule for `core/internal/...`; `archtest.NoKernelImports(t, "github.com/falkcorp/audiobook-organizer/...")` for `kernel/...` (called from the root module's `internal/arch`); `archtest.SDKOnly(t, "github.com/falkcorp/mediacore/examples/...")` for the examples, which the path-based `internal/` rule does not cover (X5); and, for moves before they happen, the stage-visibility gate (§3.5.1 item 4), which reads the **non-test imports of every root package, including `cmd/*` and the root `main`** (R3-3). |
 | R3 | A module never imports another module's packages; modules talk through core contracts (events, outbox, tasks, capability lookups). | `archtest.ModulesIsolated(t, map[moduleID]pkgPrefix)`; for ABO there is one module, so the rule is vacuous until a second exists, but the test is wired from S0 so the second module cannot land without it. |
 | R4 | Core layers (a package may import only its own or lower layers): **L0** `entity`, `lifecycle`, `version`, `log`, `metrics`, `storage/keys`, `storage/codec` → **L1** `storage`, `storage/index` → **L2** `secrets` → **L3** `config` → **L4** `events`, `outbox`, `tasks`, `storage/datamigrate`, `library`, `auth`, `rbac`, `audit`, `compat`, `integrations`, `integrations/*`, `backup`, `backup/journal`, `updater`, `health` → **L5** `acquire` → **L6** `httpapi`, `realtime`, `arrfacade`, `ui`, `internal/<capability>http` (including `internal/modulehttp`) → **L7** `module` → **L8** `kernel` → **L9** `app`, `examples/*`. Deferred packages keep their layer so their contracts are checked when built. `coretest` and `archtest` are test-support packages (may import any core package; no core non-test package imports them). An `internal/*` package takes the layer of the public package it implements; an `internal/*` package that **bridges** capabilities (imports a package above the one it implements) takes the layer of its **highest import**, is never imported by a lower-layer package, and is wired by `kernel` — e.g. `internal/storagemigrate` (storage migrations run as tasks: L4), `internal/logjournal` (persisted journal over storage and tasks: L4), `internal/<capability>http` (L6). `internal/jsonschemax` is an **L0** leaf (it imports only `github.com/google/jsonschema-go`): it owns the one JSON Schema reflector wrapper, the tag pass and an extensible override table (`type Overrides map[reflect.Type]*jsonschema.Schema`, `For[T any](o Overrides)`); each package contributes the overrides for its own types at its own layer, through a function so no exported package-level map exists (R5): `jsonschemax.Base()`: `time.Time`; `config.Overrides()`: `config.Duration`, `secrets.Ref`; `httpapi`: `rbac.Permission` — so `config` (L3) never names `rbac` (L4). There is one composition, `jsonschemax.Base().With(config.Overrides()).With(<httpapi's own>)`, used by both the settings schema and OpenAPI: `httpapi` imports the static `config.Overrides()` value (L6 may import L3), never a `*config.Store` (SIMP2-3, SIMP3-1). | `core/internal/archtest_layers_test.go` — the redesigned successor of `internal/arch/layering_test.go` for core (§3.5.1). |
 | R5 | No process-global mutable state **in core**. No `func init()` in core except allowlisted pure ones (none at start); no exported package-level variables of map, slice, func or pointer type; core packages never call `prometheus.DefaultRegisterer`/`MustRegister` on the default registry, `otel.SetMeterProvider`, `otel.SetTracerProvider`, `otel.SetLogger`, `otel.SetTextMapPropagator`, `otel.SetErrorHandler`, `slog.SetDefault`, `log.SetOutput`, `http.DefaultServeMux`, `http.DefaultClient`/`http.DefaultTransport` mutation, or `signal.Notify`. The single exception is `app.InstallProcessDefaults`, an opt-in helper a `main` may call; until it exists (S2), the process-global installs that ABO's metrics need stay in ABO (a thin `internal/telemetry` façade or `cmd/root.go`), and core `metrics` only returns providers (04). R5 covers the test-support packages `coretest` and `archtest` too: `coretest` captures logs through an injected handler (it hands the test a `*slog.Logger`) and never calls `slog.SetDefault`, so core tests stay parallel-safe; a helper that sets the process default for ABO code stays in ABO (MOD3-3). R5 binds core only: an app may keep façades over core handles (ABO keeps `config.AppConfig` and its logger shim as books-module values); they are per-`App` values, so several apps in one binary stay possible, and removing them is an optional ratchet, not an extraction stage. | `core/archtest.TestNoGlobals` (AST scan). Rationale: several apps in one binary, and test isolation (`raw/07-plugin-registry-sdk.md` §6, `raw/12-cross-cutting.md` §9). |
 | R6 | Every route declares a permission (or explicit `rbac.Public` / `rbac.AnyAuthenticated`; `AnyAuthenticated` never admits a confined credential, 05-rbac). Routes served through `httpapi.MountLegacy` (ABO's gin engine, mounted permanently behind core's perimeter middleware) are covered by a reviewed legacy route manifest in which every route names its permission. **No API returns a chain-less route group or mount** (the G8 failure mode was a missing chain, not a missing permission): a non-Public `Router.Infra` route runs the authenticated stages like any other route (05-http-api §4.2); `MountLegacy`'s `LegacyAuthGin` mode (gin's own auth chain instead of core's stages 12–13) is accepted only for the module named in the compile-time `app.Options.LegacyAuthGinUntil`, which ABO removes in its S4 PR; and a legacy route marked `OwnAuth` is accepted only when it names a compat method registered through `Registrar.AuthMethod` (non-interactive, never `MayChangeCredentials`). | Registration-time error in `httpapi` (fail-closed) **and** `archtest.RoutesHavePermissions` over the built router and the legacy manifest — a permanent test, not a migration test; `TestOwnAuthRoutesGolden` records every `OwnAuth` route; an archtest fails if `LegacyAuthGinUntil` is still set after S4 (05-http-api §8.2). |
 | R7 | Every library-scale loop declares parallelism. | `tasks.Parallelism` has no valid zero value. `Batch`/`Fixer` parallelism is a definition field validated at **registration** (a missing value fails it). `tasks.RunItems`, `tasks.RunSeq` and `tasks.ForEach` (the same loop for code that holds no `*RC`) take a required positional `tasks.Parallelism`; a zero value returns `*tasks.ItemsError` wrapping `tasks.ErrNoParallelism` before any item runs (fail-closed). `archtest.RunItemsDeclareParallelism` (AST) accepts, for that argument and for the `BatchSpec`/`FixerSpec` field: (a) a call to a `tasks` constructor (`CPU`, `Fixed(n, reason)`, `Sequential(reason)`); (b) a `tasks.Parallelism`-typed variable, parameter or field whose every assignment in the analysed packages is (a) — so passed-through values are legal; (c) a `//mediacore:required` options field whose owner calls `Parallelism.Validate` at construction. It flags zero literals and empty reasons (05-tasks §5T.3.2). Replaces `internal/plugins/runitems_concurrency_lint_test.go`. |
-| R8 | Every module storage key lives in the module's keyspace or a declared legacy claim. | `storage` refuses **reads and writes** outside the handed `Keyspace` and claims (`ErrOutsideKeyspace`; DATA-17); claim modes (read-write, read-only, aging-out, retired) and the same-owner nesting rule are 05-storage §5S.3.4's; another owner's range is reached only through a `storage.Grant` its owner declares and boot logs (`GrantMode`: read, read-delete or read-write, optionally `Exclusive`; 05-storage §5S.3.11, R3-1); claims are of three kinds — prefix, exact key, and prefix-with-exceptions (sub-prefixes or exact keys carved out for another owner, e.g. the shared `idx:`, `setting:` and `preference:` families, 05-storage §5S.9.1) — resolved by longest match; boot fails on any overlap between owners (§05-storage). |
+| R8 | Every module storage key lives in the module's keyspace or a declared legacy claim. | `storage` refuses **reads and writes** outside the handed `Keyspace` and claims (`ErrOutsideKeyspace`; DATA-17); claim modes (read-write, read-only, aging-out, retired) and the same-owner nesting rule are 05-storage §5S.3.4's; `storage.Grant` (`GrantMode`, `Exclusive`), through which a core service would reach another owner's range, is a deferred-build member that lands with the first cutover (05-storage §5S.3.13, 02 N15); claims are of three kinds — prefix, exact key, and prefix-with-exceptions (sub-prefixes or exact keys carved out as the same owner's nested claims with their own mode, e.g. inside `setting:` and `idx:`, 05-storage §5S.9.1) — resolved by longest match; boot fails on any overlap between owners (§05-storage). During the extraction no owner reaches another owner's range: core services reach an app's data only through the app-supplied store implementations, which run on the app's own claims (§3.3, R4-1). |
 
 ### 3.5.1 Redesign of `internal/arch/layering_test.go`
 
 Verified assumptions that the extraction breaks (`raw/03-layering-guard.md` §2–§4):
 
 - the **package floor** `minModulePackages = 150` (`internal/arch/layering_test.go:38`). The root has
-  213 packages today. Under 04's mapping 54 packages leave and 2 new paths appear
-  (`internal/books`, `internal/cfaccess`), so 213 − 54 + 2 = **161** remain: a margin of 11 that
-  further moves consume (04 §8.4 note 6; `raw/03-layering-guard.md` §3's 154 predates the 2 new paths
-  and the 5 packages 04 keeps in ABO, the last being `internal/logger/logtest`, MOD3-3).
+  213 packages today. Under 04's mapping 54 packages leave and 3 new paths appear
+  (`internal/books`, the composition root; the books helper package below it, item 1 and R4-5;
+  `internal/cfaccess`), so 213 − 54 + 3 = **162** remain: a margin of 12 that further moves consume
+  (04 §8.4 note 6; `raw/03-layering-guard.md` §3's 154 predates the new paths and the 5 packages 04
+  keeps in ABO, the last being `internal/logger/logtest`, MOD3-3).
   The count is re-derived whenever 04's moves change;
 - the **positive-control edge** `internal/server -> internal/database` (`layering_test.go:40`): both
   packages are split by the extraction;
@@ -385,8 +431,17 @@ The guard is **redesigned, not deleted**:
      R4 layer, so core imports keep the domain/transport/entry split instead of hiding wrong-way edges:
      core **L0–L5** → **−1** (platform, legal from every ABO layer); core **L6** (`httpapi`,
      `realtime`, `ui`) → ABO layer **5**; core **L7–L9** (`module`, `app`, `examples/*`) → ABO layer
-     **6**, plus one explicit allowance for ABO's module composition package `internal/books` (it
-     implements `module.Module`). A core import is never counted as an in-module edge, but it is
+     **6**, with no allowance. ABO's composition root `internal/books` implements `module.Module` and
+     makes the `Registrar` calls, so it imports `module`/`app` and every books package it registers; its
+     computed layer is 6, and only `.` and `cmd` import it. The shared books helpers (`PageBooks`, the
+     books `Writer` contract, selection helpers, task `Resource` declarations and resolvers, task-kind
+     aliases) live in a package **below** it (`internal/books/contract`, name open, 04 §2.4; layer 3) that
+     imports neither `module`/`app` nor anything that imports the composition root; otherwise a plugin
+     that imports a helper closes the cycle `internal/books` → plugin → `internal/books` (R4-5). Below
+     layer 6 an ABO package never imports `module` or `app`: it receives what it needs (`ExtendStart`,
+     loggers, scopes) as funcs or interfaces that `internal/books` wires. A guard assertion fails when any
+     package other than `.`, `cmd` and `internal/books` imports `mediacore/module` or `mediacore/app`;
+     both books packages enter `layerOf` in the S2 PR. A core import is never counted as an in-module edge, but it is
      checked against the importer's layer like one: an ABO domain package that imports
      `mediacore/realtime` is a wrong-way edge exactly as an import of today's `internal/realtime` is,
      so an `allowed` entry such as `plugins/* → itunes/service` is re-evaluated against the mapped
@@ -428,11 +483,18 @@ The guard is **redesigned, not deleted**:
 4. **Stage-visibility gate (MOD-2, R2-5, R3-3).** The visibility rule (§3.4) is checked before a move,
    not discovered by a compile failure after it. A committed generator, `scripts/ci/check_stage_visibility.py`
    (with its mapping input committed next to it), reads `go list -deps -test -json` for the root module
-   and classifies every importer from its **non-test** imports — every package, **including `cmd/*` and
+   **once per tag set that CI builds** (default, `bench`, `integration`, `embed_frontend`, `native_taglib`,
+   `pprof`, and `GOOS=darwin` for the goreleaser targets) and takes the union, because a default-tag
+   `go list` reports a build-tagged file only under `IgnoredGoFiles`, without its imports (round-4 Y2:
+   `cmd`'s and `internal/server`'s `bench` files, `internal/server/static_embed.go`, an `integration` test
+   that calls `opsregistry.New`); a user found only under a tag is declared with that tag. It drops the
+   `ForTest` variants (`p [q.test]`) and the `.test` mains that `-test` adds, and classifies every importer
+   from its **non-test** imports — every package, **including `cmd/*` and
    the root `main`** — and its test imports separately, so a non-test user can never be declared
    test-only (MOD3-1: `cmd/root.go:274` is a non-test user of `internal/startup`). On HEAD it evaluates
-   the **next unshipped stage point** and fails on any user that 04 §8.2/§8.3 does not declare and
-   rewire; each stage PR regenerates those tables from HEAD and commits the diff. It runs in root
+   **every remaining stage point** — those after the committed marker `shipped_stage:` in its mapping
+   input, which each stage's flip PR sets — so a new user of a package gated at a later stage (e.g. T8) is
+   declared when it is added; it fails on any user that 04 §8.2/§8.3 does not declare and rewire; each stage PR regenerates those tables from HEAD and commits the diff. It runs in root
    `make ci`, so every PR that touches a root `*.go` file is checked (the merge requirement of 09
    §9.2.1), not only PRs that touch `core/`.
 
@@ -453,7 +515,7 @@ The guard is **redesigned, not deleted**:
 | Role ID | core seed roles: bare names (`admin`, `editor`, `viewer`, kept from ABO); module seed roles: `<moduleID>.<name>`; custom roles: `custom.<slug>` | `admin`, `tv.admin`, `books.editor`, `custom.night-shift` |
 | Audit action | `<moduleID>.<noun>.<verb>`: exactly three segments `[a-z][a-z0-9_]*`, the verb in the present tense (an action, not an event; no version suffix, because records are stored, not consumed); core's actions are the normative table of 05-rbac §7.1 | `core.apikey.create`, `core.role.update`, `core.restore.stage`, `books.user.merge` |
 | Metric name | core: `mediacore_<subsystem>_*`. Module series: `<MetricPrefix>_*` while the app **ships** one module, `<MetricPrefix>_<moduleID>_*` when it ships two or more — counted over the modules compiled into the app (the `app.New` module list, enabled or not), so enabling or disabling a module never renames another module's series. `MetricPrefix` is `app.Options.MetricPrefix` (`[a-z][a-z0-9_]*`, defaults to `AppID`); ABO sets `audiobook_organizer`, so its 73 existing families keep their names (`internal/telemetry/contract/testdata/series.golden`) and need no alias. Standard OTel semantic-convention names (e.g. `http_server_*`) are kept unchanged. | `mediacore_tasks_runs_total`, `audiobook_organizer_books_total` |
-| UI route | `/<moduleID>/...` for module pages; shell pages under the segments of `ui.ReservedSegments`; one-time tokens travel in the URL fragment, never in the path (05-authn §4.13) | `/books/library`, `/settings`, `/activity`, `/invite#token=…` |
+| UI route | `/<moduleID>/...` for module pages; shell pages under the segments of `ui.ReservedSegments`; from the shell stage (S9) one-time tokens travel in the URL fragment, never in the path (05-authn §4.13); until then invite links keep the `/invite/<token>` path form that the legacy SPA routes (`web/src/App.tsx:201-206`; FE4-2) | `/books/library`, `/settings`, `/activity`, `/invite#token=…` |
 
 ABO's existing un-namespaced names (13 permission atoms, 258 key families, `/api/v1/...` paths,
 flat config keys, `/api/v3/ops`) are mapped onto these conventions with explicit compatibility
@@ -474,35 +536,47 @@ worker, nav entry or filesystem mutation, and its data is retained.
 The order of boot phases is defined **once**, in 06 §6.5.1's boot-phase table; every other file
 references it. Three properties of that order are architectural and hold for every app:
 
-- **One stored format per family; the level guard only for real format changes.** During the
-  extraction a core service reaches an existing ABO family (users, roles, API keys, settings and the
-  config blob, ops history, activity) through a **legacy-format adapter** over the existing keys, by an
-  explicit storage grant that boot logs; native-only data is additive in the legacy row where the
-  format tolerates it, or in a core-only family no older build reads (02 decision 13). Nothing is
-  copied, mirrored, rebuilt at boot or handed over between owners, so a rollback lands on the previous
-  release with no floor build in between. Opening the store runs the single per-owner level guard
-  (05-storage §5S.3.7): it refuses a store stamped above the build's level. Only a real format change
-  raises a level — books' own migrations, and later a per-family **cutover** to a native keyspace, which
-  is outside the extraction, one-way and checkpointed, and whose floor is the cutover release itself
-  (02 N15).
-- **Checkpoint before any write.** The one pre-migration checkpoint of the boot is taken before the
-  first write of that boot, by any subsystem (config overrides, storage bookkeeping, tasks); a boot
-  that cannot take it halts before writing anything.
-- **Legacy migrations before claims.** Books' existing legacy migrations run in a phase before core
-  claims are enforced, under an explicit, logged legacy-migration grant, and their code is kept until
-  the declared minimum-upgrade-from release. The requirement is checked on the store's applied steps,
-  not on the binary being replaced: a store that has not applied what that release requires must have
-  it installed first, the updater refuses to skip it, and boot refuses with a message naming it (02 N14).
+- **One stored format per family; core reaches app data only through store interfaces; the level
+  guard only for real format changes.** During the extraction a core service that persists state an
+  ABO family already holds (users, sessions, API keys, roles, ops history and runs, the clock and pause
+  keys, the config blob and secret rows, system log rows (`syslog:`), import roots, AI batch jobs,
+  provider throttle rows) uses its store interface, and the `books` module supplies the implementation
+  over ABO's existing keys and row formats (§3.3 "Store interfaces", R4-1; 02 decision 13). Core holds
+  no ABO key name and no storage grant. Native-only data lives in books' extension family, which no
+  older build reads, and an extension whose legacy row an older build changed is suspended until an
+  admin re-confirms it. Nothing is copied, mirrored, rebuilt at boot or handed over between owners, so
+  a rollback lands on the previous release with no floor build in between. Opening the store runs the
+  single per-owner level guard (05-storage §5S.3.7): it refuses a store stamped above the build's
+  level. Only a real format change raises a level — books' own migrations, and later a per-family
+  **cutover** to a native keyspace, which is outside the extraction, one-way and checkpointed, brings
+  the storage grants with it, and whose floor is the cutover release itself (02 N15).
+- **Checkpoint before the first shape-changing write.** A boot that will run a migration step, a level
+  ratchet or a marker write takes the one pre-migration checkpoint before its first write (05-storage
+  §5S.3.12); a boot with none of these takes none, and a boot that cannot take it halts before writing
+  anything.
+- **Legacy migrations first.** Books' existing legacy migrations run in the phase before every core and
+  module migration, on books' own claims; no core grant exists over a books family during the
+  extraction, so they need none. Their code, and every code path they call, is kept in every release
+  before the **floor release**: the first release that deletes it (the 05-tasks T8 deletion) and declares books' upgrade floor.
+  The **stepping-stone release** is the release the floor release's manifest names to install first
+  (`InstallFirst`); it carries those steps and contains no deletion. The two terms always name these two
+  different releases (OPS4-5). The requirement is checked on the store's applied steps, not on the binary
+  being replaced: an updater from S0 on refuses to apply the floor release to a store that has not
+  applied the steps and offers the stepping stone instead, and boot refuses with a message naming it
+  (02 N14). A pre-S0 updater swaps any newer binary unchecked (`internal/updater/updater.go:214-280`),
+  so such an install meets the boot refusal; the floor release's release note and its last log line
+  name the stepping stone (14 K18).
 
 ```
 main ──► app.New(opts, books.Module(), …)
            │  kernel: (phases P0a–P8 of 06 §6.5.1)
            │          pending-restore swap → config boot → validate manifests
-           │          → open storage (per-owner level guard; storage grants logged)
-           │          → pre-migration checkpoint (before any write)
-           │          → books legacy migrations (before core claims are enforced)
+           │          → open storage (per-owner level guard)
+           │          → pre-migration checkpoint (before the first shape-changing write)
+           │          → books legacy migrations (first, on books' own claims)
            │          → core and module migrations (05-storage cross-keyspace DAG)
-           │          → build the typed services struct (explicit constructors, no init())
+           │          → build the typed services struct (explicit constructors, no init();
+           │            each store interface bound to its native or app-supplied implementation)
            │          → register tasks/schedules
            │          → mount httpapi: core routes (internal/<capability>http), module routes,
            │            legacy mount (httpapi.MountLegacy, permanent for ABO's gin engine),
@@ -625,3 +699,26 @@ Round 3 (dispositions in `docs/plans/platform-core/reviews/spec-round-3-disposit
 Integration pass (round 3, 2026-11-04):
 
 - integration pass (round 3): §3.5.1 package count 54 leave / 161 remain (`internal/logger/logtest` stays, 04 §8.4 note 6, MOD3-3); R8 claim modes are read-write, read-only, aging-out, retired — `migrating`/`read-share` dropped, another owner's range only through a `storage.Grant` (`GrantMode` read, read-delete, read-write, optionally `Exclusive`; R3-1); R4 `jsonschemax.Base()` and `config.Overrides()` are functions (R5).
+
+Round 4 (dispositions in `docs/plans/platform-core/reviews/spec-round-4-dispositions.md`; R4-1 refines R3-1):
+
+- SIMP4-2, SIMP4-3, COR4-4, DATA4-2 (R4-1) — §3.3 new "Store interfaces" table: SDK store interface + native `c/<subsystem>/` implementation per persisting service (landing with its subsystem) + books-supplied legacy implementation; `storage` row: grants are deferred-build members of the cutover; `auth`, `rbac`, `config`, `tasks`, `log`, `library`, `storage/index` rows point at their store; R1 gains (c) "no app key name or row format" with `TestCoreHoldsNoAppKeyNames`; R8: no cross-owner reach during the extraction; §3.4 bucket "app" lists the legacy store implementations; §3.7 first property rewritten (no legacy-format adapters, no grants; extension family with legacy-row hash).
+- SEC4-3 (R4-1) — `rbac` row: legacy role rows carry legacy atoms only; namespaced scopes live in books' extension family, because HEAD's worker confinement is a "nothing else" test (`auth.go:271-297`).
+- SEC4-1, DATA4-1, OPS4-1 (R4-2) — `secrets` row: the first core write replaces the legacy row and the `config.yaml` copy with a never-matching sentinel; rollback fails closed; roll-forward re-imports a re-entered value.
+- MOD4-1 (R4-4) — §3.2 item 4 quotes `.dockerignore` as it is (`docs`, root `*.md`, `.git`, `.github`, `testdata`, `dist`, …) and adds the rule that every `//go:embed` input lies in the Docker context; `compat` row: generated ledger copy `internal/books/compat-surfaces.md` with a CI freshness check.
+- MOD4-2 (R4-5) — §3.5.1 item 1: the `internal/books` allowance is deleted; composition root (layer 6, imported only by `.`/`cmd`) vs helper package below it (layer 3); guard assertion on `module`/`app` importers; package count 162 (3 new paths).
+- COR4-1 (R4-6) — `config` row: ABO's settings load, encryption init and key-regeneration guard run inside the books legacy config store through the one DB handle.
+- MOD4-7 — §3.5.1 item 4: generator unions `go list` over every CI tag set, drops `ForTest` variants and `.test` mains, evaluates every remaining stage point after the committed `shipped_stage:` marker.
+- MOD4-13 — `version` row: CI keeps it ≥ the newest checkpoint.
+- MOD4-15 — §3.2 item 6: Dependabot via `directories` under the existing `multi-ecosystem-group`; the `applies-to` sentence deleted; security PRs handled by the root-tidy step and the skew check.
+- MOD4-18 — §3.5.1 item 1: below layer 6 no ABO package imports `module` or `app`; values are injected by `internal/books`.
+- SIMP4-1, COR4-19 — §3.4: `Deferred-build members` headings in every file, package-qualified identifiers, list generated from every heading, per-member deletion, test deleted only when the list is empty.
+- SIMP4-4, SIMP4-5, SIMP4-6 — §3.4 deferral list names the cutover-only members, backup encryption and the seed-merge diff.
+- SIMP4-10 — `compat` row: core's fragment holds only shared permanent names (`OTEL_*`); every window alias is the app's; gate test.
+- SIMP4-12 — `integrations` row: "the one registry for integration instances", native vs legacy-backed.
+- FE4-1, MOD4-9, COR4-18 — `internal/<capability>http` row: `ui_build_id` comes from the embedded bundle's meta tag only; no ldflags value, no boot comparison.
+- FE4-6 — `ui` row: `ui.ModuleManifest`, `UIIDs`, `Redirect` land as leaf types with `ReservedSegments` at S2.
+- FE4-2 (disposition note) — §3.6 UI-route row: fragment tokens from the shell stage; `/invite/<token>` until then.
+- DATA4-18, OPS4-5 — §3.7: "floor release" and "stepping-stone release" named distinctly; the updater refusal is scoped to S0+ updaters; what pre-S0 installs see.
+- DATA4-20 — §3.7 lists the families core services use (config blob and secret rows, clock and pause keys, system log rows), not "settings" and "activity".
+- DATA4-21 — §3.7: checkpoint only for a boot that runs a step, ratchet or marker write.

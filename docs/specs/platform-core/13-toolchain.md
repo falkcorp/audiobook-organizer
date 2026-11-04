@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/13-toolchain.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: a1e1b657-1c87-4a3e-8407-43269415455f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -155,7 +155,7 @@ rewritten to.
 | `net/http` ServeMux patterns (1.22) + `http.CrossOriginProtection` (1.25) + `MaxHeaderValueCount` (1.27) | Core HTTP is stdlib (02 N7); method+wildcard patterns; CSRF via `CrossOriginProtection` as its own stage of the fixed middleware chain ([05-http-api](05-http-api.md) §4.2, which owns the stage); every `http.Server` sets the timeout trio and `MaxHeaderValueCount` (`go.md:331-333`) | `httpapi`, `realtime`, `ui` | 13 files `http.NewServeMux`; 446 files import gin; 0 `CrossOriginProtection` |
 | stdlib `uuid` (1.27) | New random identifiers (`uuid.NewV7()`/`NewV4()`); ULIDs (`oklog/ulid`) stay where time-sortability matters (`go.md:325-327`) | request/correlation IDs, API-key IDs | 0 files (`github.com/google/uuid` only indirect, `go.mod:108`) |
 | `new(expr)` (1.26), `min`/`max`, `range n`, `slices`/`maps` | `go.md:300-317` | everywhere | — |
-| `go vet` (with `stdversion` in `go test`) and `go fix` modernizers | Core CI runs `go vet ./...` and **`go fix -diff ./...` must be empty** (`-diff` exits non-zero on any pending fix; verified in `go help fix` on go1.27.3). The 26 analyzers on go1.27.3 (`go tool fix help`): `any atomictypes buildtag embedlit errorsastype forvar hostport inline mapsloop minmax newexpr omitzero plusbuild rangeint reflecttypefor slicesbackward slicescontains slicessort stditerators stringsbuilder stringscut stringscutprefix stringsseq testingcontext unsafefuncs waitgroupgo` — identical to `go.md:263-268`. When ABO code moves into core, the per-class review rules of `go.md:275-287` apply to the resulting hunks, and the move PR applies `go fix` to the files it moves **in a separate commit after the rename commit**, so the rename stays detectable (12 §12.8.1). | `core-ci.yml` | ABO does not gate on `go fix`, and gains no such gate (03 §3.2 item 4): at HEAD `go fix -diff ./...` in the root exits 1 with pending fixes in 245 files (round-3 X20), so a root gate would be red from S0 |
+| `go vet` (with `stdversion` in `go test`) and `go fix` modernizers | Core CI runs `go vet ./...` and **`go fix -diff ./...` must be empty** (`-diff` exits non-zero on any pending fix; verified in `go help fix` on go1.27.3). The 26 analyzers on go1.27.3 (`go tool fix help`): `any atomictypes buildtag embedlit errorsastype forvar hostport inline mapsloop minmax newexpr omitzero plusbuild rangeint reflecttypefor slicesbackward slicescontains slicessort stditerators stringsbuilder stringscut stringscutprefix stringsseq testingcontext unsafefuncs waitgroupgo` — identical to `go.md:263-268`. When ABO code moves into core, the per-class review rules of `go.md:275-287` apply to the resulting hunks, and the move PR applies `go fix` to the files it moves; their history does not depend on rename detection, because the PR records each move in `core/scripts/split/origins.txt` (12 §12.8.1), so every commit of the PR builds and no rename-only commit lands on `main`. | `core-ci.yml` | ABO does not gate on `go fix`, and gains no such gate (03 §3.2 item 4): at HEAD `go fix -diff ./...` in the root exits 1 with pending fixes in 245 files (round-3 X20), so a root gate would be red from S0 |
 
 ## 13.4 Frontend versions (`core/web` workspace and ABO `web/`)
 
@@ -250,8 +250,8 @@ except where noted).
 
 **How "pinned" works.** A Go `require` is a minimum: any module in either build list that requires a
 higher version wins silently, and Dependabot's `/core` entry would open bump PRs. A pinned dependency
-therefore gets (a) a Dependabot `ignore` entry for all update types in both the `/` and `/core` gomod
-entries, so it is bumped only by a deliberate PR, and (b) a `--pin module=version` argument to
+therefore gets (a) a Dependabot `ignore` entry for all update types in the gomod entry, which covers
+both `/` and `/core` through `directories` (03 §3.2 item 6), so it is bumped only by a deliberate PR, and (b) a `--pin module=version` argument to
 `scripts/ci/check_module_skew.py`, which asserts the resolved version in both `go list -m all`
 outputs and fails when a transitive requirement lifts it. Pinned today: `github.com/google/jsonschema-go`
 v0.4.3 (`TestSchema_Golden` would catch drift only after the fact) and
@@ -302,7 +302,7 @@ go1.27.3 (2026-10-19) is 16 days old and adoptable.
 | `go.dev/dl` stable flag unverifiable from sandbox | §13.2.1 | re-check on a networked machine before the bump |
 | Docker image digests for golang 1.27.3 not resolved | §13.2.2 | resolve at bump time; guard enforces digest equality |
 | The monolithic genproto returns through `cockroachdb/errors` whenever a workspace includes core without core's exclude | 03 §3.2.1 X2; round-2 X10, X16 | exclude in `core/go.mod` from S0; `core/scripts/ci/check_genproto_exclude.py` checks, in a temp copy, that the line is present, that the workspaces build with it, and that without it `go mod graph` still shows the requirer **and** the build fails with `ambiguous import` — otherwise the exclude is stale (03 §3.2 item 1). The live graph cannot be probed: an excluded version never appears in it (X10) |
-| Root and `core/go.mod` resolve different versions of shared dependencies (the binary ships versions core CI never tested) | 03 §3.2 item 6 | Dependabot gomod for `/` and `/core` in one group (verified to yield one PR); `check_module_skew.py` (12 SC4(c)), with `--pin` for pinned modules; per-module `tidy-check` and the tidy-coupling rule (03 §3.2 item 4) |
+| Root and `core/go.mod` resolve different versions of shared dependencies (the binary ships versions core CI never tested) | 03 §3.2 item 6 | Dependabot gomod entry with `directories: ["/", "/core"]` under the existing `multi-ecosystem-group` (verified to yield one version-update PR; security PRs per directory are fixed up by the root-tidy step and caught by the skew check); `check_module_skew.py` (12 SC4(c)), with `--pin` for pinned modules; per-module `tidy-check` and the tidy-coupling rule (03 §3.2 item 4) |
 
 ## Objections to 03
 
@@ -352,3 +352,8 @@ Round 3 (dispositions in `docs/plans/platform-core/reviews/spec-round-3-disposit
 - FE3-20 — §13.4: rows for `openapi-typescript` 7.13.0 and `openapi-fetch` 0.17.0 (published 2026-02-11, checked with `npm view` on 2026-11-04); E1 carries the generator's `overrides` note; react-router stays `^8.5.1` here (07 uses this range).
 - MOD3-6 — §13.3 `go fix` row: a move PR applies `go fix` in a separate commit after the rename commit; the root gains no `go fix` gate (245 files pending at HEAD, X20).
 
+
+Round 4 (dispositions in `docs/plans/platform-core/reviews/spec-round-4-dispositions.md`):
+
+- MOD4-14 — §13.3 `go fix` row: no rename-only commit; a move PR's history is kept by its `core/scripts/split/origins.txt` lines (12 §12.8.1), so every commit builds.
+- MOD4-15 — §13.5.2 "How pinned works" and §13.7 skew row: one gomod entry with `directories: ["/", "/core"]` under the existing `multi-ecosystem-group` (no `applies-to`); security PRs handled by the root-tidy step and the skew check.
