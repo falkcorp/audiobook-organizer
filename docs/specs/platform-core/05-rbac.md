@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.11.1 -->
+<!-- version: 1.12.0 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -365,8 +365,11 @@ type CheckerInput struct {
 	// Ambient: the app's LegacyAmbientScopes, filled by rbac itself from
 	// app.Options when the role store is legacy-backed (§6.3), never by a
 	// caller and never read from a role. Compile decides Confined() on the
-	// set before Ambient and, for a principal that is not confined, adds
-	// Ambient after the key intersection (§4.4; COR9-3, resolution R9-4).
+	// set before Ambient (for a key, its effective set: role set ∩ key
+	// scopes, HEAD's workerOnly input) and, for a principal that is not
+	// confined, adds Ambient after the key intersection, so a
+	// worker-confined key never holds it, whoever owns it (§4.4; COR9-3,
+	// SEC10-1, resolutions R9-4, R10-2).
 	Ambient []Permission
 }
 
@@ -628,6 +631,14 @@ an intersection taken after the ambient scopes were added would remove them agai
 reading state). Ambient scopes are never grantable: role writes, key creation, `CanAssign` and
 `Dominates` compare against the set before Ambient, and a role's own permissions, as role editors show
 them, never include them.
+**A worker-confined key never gains them (resolution R10-2, SEC10-1).** For a key, the set before Ambient
+is its **effective** set: the owner's role set ∩ the key's scopes (for a legacy key, its atoms' expansion,
+an empty atom list meaning the role set), holding the `admin` flag only when the key itself names
+`core:admin`. That is the set HEAD's confinement tests: `workerOnly` reads the bound permissions, role ∩
+key (`internal/server/middleware/auth.go:268-297` @748fd787a, "an API key scoped to fingerprint.worker, or
+a user holding only the fp-worker role"). So a key scoped `["fingerprint.worker"]` is `Confined()` whoever
+owns it, an admin included, and holds no ambient scope at any stage; the owner's roles never decide it.
+`TestWorkerKey_NoAmbientScopes`.
 `Has(s)` is evaluated in this order:
 
 1. `s` is `Sensitive` and the principal is not interactive → **false**, even with `admin`
@@ -1179,7 +1190,11 @@ atoms waits for the identity hardening cutover (05-authn §11.2).
   `app.Options.LegacyAmbientScopes []rbac.Permission` (06 §6.4.5; ABO: `core:self`, `core:metrics.read`,
   `books:reading`). On an instance whose role store is legacy-backed, `rbac` puts the list in every
   principal's `CheckerInput.Ambient`, and `Compile` adds it after the key intersection to every principal
-  that is not `Confined()` before it (§4.4; resolution R9-4, COR9-3). Every principal that satisfies
+  that is not `Confined()` before it (§4.4; resolution R9-4, COR9-3). **The confinement condition (R10-2):**
+  for a key, "before it" means the key's effective set, the owner's role set ∩ the key's atoms' expansion
+  (an empty list meaning the role set), which is HEAD's `workerOnly` input
+  (`internal/server/middleware/auth.go:268-297` @748fd787a); the owner's roles alone never decide it, so a
+  worker-confined key never holds an ambient scope, whoever owns it. Every principal that satisfies
   `AnyAuthenticated` (§4.10) — a session, a `LegacyFullScope` key, a key scoped `["library.view"]`, a key
   whose effective set is empty — therefore holds those scopes, so their routes keep HEAD's
   authenticated-only reach: own profile, sessions and keys, `/api/v1/auth/me`, `/metrics` (HEAD: any
@@ -1286,13 +1301,23 @@ atoms waits for the identity hardening cutover (05-authn §11.2).
 - **Deferred: cutover.** Moving ABO's roles to the native store is part of the identity hardening
   cutover (05-authn §11.2): a later, one-way, checkpointed step behind the per-owner level guard,
   decided on measured data (02 decision 13), whose floor is the cutover release itself. It brings native
-  scopes in role rows (core-only scopes included, so `app.Options.LegacyAmbientScopes` goes, after the
-  cutover writes the ambient scopes into every non-`Confined()` role and every key whose owner is not
-  confined, so no reach is lost; 05-authn §11.2 H1, SEC9-8),
+  scopes in role rows (core-only scopes included, so `app.Options.LegacyAmbientScopes` goes after the
+  cutover carries the ambient scopes over by the one rule below),
   `SeedDigest`/`PendingSeed` for ABO, the lift of `ErrSeedRoleLocked` with the operator diff of §3.6,
   and the storage grant the move needs. It stops supplying `legacy.Stores.Roles` and may delete
   `legacy.RBACAtomWriter` and `RBACStoreSuite`: they live in `legacy`, outside the API promise, so that
   is not a v1 break (resolution R6-3).
+- **H1's ambient carry-over (resolution R10-2, SEC10-1; the one statement, which 05-authn §11.2, 09 §9.13
+  and 12 §12.4.4 cite).** H1 writes the app's `LegacyAmbientScopes` into a role iff the role is not
+  `Confined()`, and into a key iff the key's effective set before Ambient is not `Confined()`. H1 derives
+  each native key's scopes from that **effective** set, never from its owner: the key is stored with its
+  effective set (the owner's role atoms' expansion ∩ the key's atoms' expansion, an empty list meaning the
+  role set; §4.4), plus the ambient scopes when that set is not `Confined()`. This is §4.4's runtime rule,
+  so a worker-confined key stays `Confined()` across H1, and every principal's `Has()` is unchanged, with
+  one narrowing: a key whose effective set is empty and whose owner's roles are `Confined()` (an `fp-worker`
+  user's key naming only atoms the role lacks) keeps no ambient reach, because after H1 its owner's role
+  holds no ambient scope for the native intersection to pass. Nothing widens.
+  `TestH1_ConfinedKeyStaysConfined` and `TestH1_AmbientScopesPreserved` (05-authn §10).
 
 ## 7. Audit log (`core/audit`, G13)
 
@@ -1558,7 +1583,8 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestRowRule_ConfinedRoleStaysWorkerOnlyOnPrev` | a custom role `{books:fingerprint.worker}` is written as `["fingerprint.worker"]`; HEAD's `workerOnly` over the row is true; the S4 R-test cell "a custom confining role created on cur is confined on prev" (SEC4-3) |
 | `TestLegacyRoleRow_PrevWriteIsReadAsIs` | (ABO, R-test cell) a custom role's row changed by the previous release is read on roll-forward exactly as its atoms map, with no other state; a seed row is re-seeded with HEAD's atoms at the next boot (A-2) |
 | `TestLegacyRoleWrite_RefusesUnrepresentableSet` | (ABO) a role or key write naming `core:audit.view`, `books:view` without `core:tasks.view`, or `books:fingerprint.worker` plus `books:view` on a custom role → 422 `no_legacy_atom` naming the permissions, nothing written; `{core:admin}` is written as every atom and reads back as `{core:admin}`; a write of whole atom expansions round-trips (§4.7 rule 6, §6.3, A-2) |
-| `TestLegacyAmbientScopes` | (ABO) every `AnyAuthenticated` principal holds `core:self`, `core:metrics.read` and `books:reading`; a session, a `LegacyFullScope` key, a key scoped `["library.view"]` and a key with an empty effective set each get 200 on `/api/v1/auth/me`, `/api/v1/auth/me/api-keys` and `/metrics`; an `fp-worker` key holds none; no role read from the store and no role editor view lists them, and a role or key write naming one → 422 `no_legacy_atom`; the option on a native store, or listing a `Sensitive`, `AuthRequired` or `Confining` scope, fails `Freeze` (§4.4, §6.3, A-2, A-5, R9-4) |
+| `TestLegacyAmbientScopes` | (ABO) every `AnyAuthenticated` principal holds `core:self`, `core:metrics.read` and `books:reading`; a session, a `LegacyFullScope` key, a key scoped `["library.view"]` and a key with an empty effective set each get 200 on `/api/v1/auth/me`, `/api/v1/auth/me/api-keys` and `/metrics`; an `fp-worker` user's key and an admin-owned key scoped `["fingerprint.worker"]` hold none; no role read from the store and no role editor view lists them, and a role or key write naming one → 422 `no_legacy_atom`; the option on a native store, or listing a `Sensitive`, `AuthRequired` or `Confining` scope, fails `Freeze` (§4.4, §6.3, A-2, A-5, R9-4, R10-2) |
+| `TestWorkerKey_NoAmbientScopes` | (ABO, every stage from S4 r2, and in `TestH1_ConfinedKeyStaysConfined` after H1) an admin-owned key scoped `["fingerprint.worker"]`, an `fp-worker` user's key and an `fp-worker` session: `Confined()` is true and none holds `core:self`, `core:metrics.read` or `books:reading`; each gets 403 on `/api/v1/auth/me`, `/api/v1/auth/sessions`, `/metrics` and a reading-state route and reaches `/api/v1/fingerprint/worker/…`, as HEAD's `workerOnly` decides (`internal/server/middleware/auth.go:268-297`; R10-2, SEC10-1) |
 | `TestRoleNameChecksUseCoreAdmin` | (ABO) every site of §4.6's inventory: a holder of `core:admin` through a custom every-atom role passes it; an admin's key scoped `["users.manage"]` fails the actor checks (`user.go`, `mergeActor`, repairs owner apply); the survivor and task-actor checks read the account's roles, not the request's key (SEC9-9) |
 | `TestLegacyAtomEqualsHEADCheck` | (ABO) property test over random atom sets for roles and random key lists (empty included): `LegacyAtom(atom)` and `LegacyCheck(atom, "")` admit a principal of the legacy-backed store iff HEAD's `s.perm`/`auth.Can` over the same rows admits it (§6.3, A-2) |
 | `TestLegacySeedAtomsEqualHEAD` | (ABO) the atoms the P7 seed commit writes for `admin`, `editor`, `viewer` and `fp-worker` equal HEAD's `SeedRoles` output (`internal/auth/seed.go:44-80`); no `SeedDigest` or `PendingSeed` is stored (§4.8, A-2) |
@@ -1866,3 +1892,7 @@ Round 9 (2026-11-04), findings applied to this file:
 - SEC9-9 — §4.6, §6.3: the role-name inventory adds `repairs/handler.go:529`, `usermerge/plan.go:342,400` and `adminRole`, each with its replacement and reason; the reach snapshot's in-handler list names them; `TestRoleNameChecksUseCoreAdmin`.
 - SEC9-8 — §6.3 deferred cutover: H1 writes the ambient scopes into every non-confined role and key before `LegacyAmbientScopes` goes.
 - integration pass (round 9): §6.2 reset contract: `storage.ResetRequest`'s `LegacyConfirm` (`json:"-"`) and the comparison in `kernel.stageReset` (top-level entries, one directory read).
+
+Round 10:
+
+- SEC10-1 (R10-2) — §3.4 `CheckerInput.Ambient`, §4.4, §6.3: a key's confinement is decided on its effective set (role set ∩ key scopes, `admin` only when the key names `core:admin`), HEAD's `workerOnly` input, so a worker-confined key never gains the ambient scopes at any stage, whoever owns it; §6.3 states H1's carry-over once (roles iff not `Confined()`, keys iff their effective set is not `Confined()`, native key scopes derived from the effective set, never from the owner), with its one narrowing; `TestWorkerKey_NoAmbientScopes` added, `TestLegacyAmbientScopes` extended, `TestH1_ConfinedKeyStaysConfined` cited.

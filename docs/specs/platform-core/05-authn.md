@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.11.1 -->
+<!-- version: 1.12.0 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -214,14 +214,16 @@ type Admin interface {
 	// bumps its CredentialEpoch. A native store stages one Expect per record on
 	// the bytes the plan was built from; ABO's legacy store keeps HEAD's own
 	// conflict check under HEAD's locks, which the caller holds across its
-	// commit: it builds and commits b inside storage.CommitLocked with
+	// commit: books, the caller and the store's owner, builds and commits b
+	// inside storage.CommitLocked holding its store's locks for
 	// legacy.LockMerge (§3.4, resolution R9-1). Invites the store holds for Source that an older
 	// build issued are deleted, not re-owned, and the deletion is listed in
-	// the merge's audit record (DATA4-9). The caller commits; a record changed
-	// since the plan was built fails the commit with storage.ErrConflict,
-	// which the caller reports as auth.ErrMergeConflict (today's
-	// UserMergeConflictError under userMergeApplyMu/inviteMu/apiKeyMu,
-	// internal/database/user_merge.go:507-531).
+	// the merge's audit record (DATA4-9). The caller commits. A record changed
+	// since the plan was built is reported as auth.ErrMergeConflict in both
+	// stores, detected differently (DATA10-9): the native store fails the
+	// commit with storage.ErrConflict; ABO's store raises HEAD's conflict
+	// error at staging, inside the hold (UserMergeConflictError under
+	// userMergeApplyMu/inviteMu/apiKeyMu, internal/database/user_merge.go:507-545).
 	StageUserMerge(ctx context.Context, b *storage.Batch, plan UserMergePlan) error
 }
 
@@ -273,7 +275,33 @@ type Deps struct {
 	Clock    func() time.Time
 	Log      *slog.Logger
 	Metrics  *metrics.Scope // "mediacore.auth" (05-metrics)
-	StateDir *os.Root       // bootstrap token file (os.Root-confined)
+	// StateFiles is the labelled state filesystem (below) through which the
+	// bootstrap token file is written (COR10-7).
+	StateFiles StateFiles
+	// Locks are the store's write locks, resolved by the kernel at P4c
+	// (StoreLocks, §3.4; COR10-5). All nil for a store without
+	// legacy.WriteLock (the native store).
+	Locks    StoreLocks
+}
+
+// StoreLocks holds, per identity write class, the locks the kernel resolved
+// at P4c by calling the store's legacy.WriteLock.WriteLocks with the lock
+// name of that class (§3.4's table). auth (L4) never imports legacy (L5),
+// never names a lock string and never calls WriteLocks: it passes the
+// field of each write to storage.CommitLocked (03 R4, COR10-5).
+type StoreLocks struct {
+	Users, Sessions, APIKeys, Invites, Bootstrap, Merge []storage.Lock
+}
+
+// StateFiles is auth's view of the labelled state filesystem, the
+// core/internal/statefs value that the kernel also hands an app's legacy
+// config store as legacy.ConfigOpenEnv.Files (05-config §1.3.3), so
+// coretest/crashmatrix sees, labels and can kill auth's file writes
+// (COR10-7). Names are relative to the app's state directory, and a name
+// that leaves it is refused, as os.Root refused it.
+type StateFiles interface {
+	WriteFile(label, name string, data []byte, perm fs.FileMode) error // temp file, fsync, rename, directory fsync
+	Remove(label, name string) error
 }
 
 // Options is the app's compile-time auth configuration, passed as
@@ -407,7 +435,8 @@ type RestoreDeps struct {
 	// reads it (SEC5-10).
 	Previous    Store
 	Revocations journal.RevocationJournal  // the lines the hook appends (§4.12)
-	StateDir    *os.Root                   // bootstrap token file
+	StateFiles  StateFiles                 // bootstrap token file (COR10-7)
+	Locks       StoreLocks                 // as Deps.Locks: BootWrites and PostRestore commit through storage.CommitLocked with them
 	Clock       func() time.Time
 }
 
@@ -543,7 +572,7 @@ ABO (§4.8).
 // rows with in-process mutexes implements legacy.WriteLock instead, and every
 // batch carrying an identity write that core commits is built and committed
 // inside storage.CommitLocked(ctx, b, d, stage, locks...) with the locks the
-// store's WriteLocks returns for the lock names of its writes, so the store's
+// kernel resolved for its writes (Deps.Locks, StoreLocks), so the store's
 // mutexes are held from the first read through the commit (resolution R9-1,
 // below; ABO: apiKeyMu with early fix 6, inviteMu, userWriteMu,
 // sessionWriteMu, bootstrapMu, userMergeApplyMu). The interface holds the native
@@ -650,10 +679,11 @@ type AuthAtomWriter interface {
 // The identity lock names of legacy.WriteLock (resolution R9-1). WriteLock
 // itself, WriteLocks(names []string) []storage.Lock, is declared once, in
 // 05-storage §5S.3.11, with storage.CommitLocked, storage.LocksHeld and the
-// lock ranks; these are the names auth passes. A name says what a write
-// touches, never an app mutex or key (03 R1): the store returns its own
-// locks for it, and CommitLocked takes each distinct lock once, in ascending
-// LockRank, so no two callers deadlock.
+// lock ranks. The kernel passes these names to WriteLocks at P4c and hands
+// auth the result as auth.StoreLocks (COR10-5); auth never names them. A
+// name says what a write touches, never an app mutex or key (03 R1): the
+// store returns its own locks for it, and CommitLocked takes each distinct
+// lock once, in ascending LockRank, so no two callers deadlock.
 const (
 	LockUsers     = "auth.users"     // a user row and its indexes
 	LockSessions  = "auth.sessions"  // a session row
@@ -682,12 +712,14 @@ twice, and a deactivation could be reverted. Books' identity store therefore imp
 `legacy.WriteLock`, and **every** batch carrying an identity write that core commits — auth's own
 writes, the post-restore hook, `BootWrites`, the journal re-apply and the caller of `StageUserMerge` — is
 built and committed inside `storage.CommitLocked(ctx, b, d, stage, locks...)`, with the locks the store's
-`WriteLocks` returns for the names of the batch's writes. The wrapper takes them before `stage` makes
+`WriteLocks` returned for the names of the batch's writes, which the kernel resolved at P4c and handed to
+auth as `Deps.Locks` (`auth.StoreLocks`; auth never imports `legacy` and never calls `WriteLocks`, 03 R4,
+COR10-5). The wrapper takes them before `stage` makes
 the batch's first store read and releases them only after the commit returns (05-storage §5S.3.2 owns
 the wrapper, its signature, its lock order and its conflict retry; `Executor.WriteRuns` is another use
-of it). Auth names the locks per write:
+of it). Auth takes the locks per write from the `StoreLocks` field of the name:
 
-| Write (auth) | Lock names |
+| Write (auth) | Lock names (`StoreLocks` field) |
 |---|---|
 | `PutUser` (create, status, password, roles, e-mail) | `LockUsers` |
 | `IssueSession`, `DeleteSession`, `TouchSession` | `LockSessions` |
@@ -696,26 +728,41 @@ of it). Auth names the locks per write:
 | `IssueOneTime`/`TakeOneTime` of the bootstrap token | `LockBootstrap` (the redeem that creates the admin and its key adds `LockUsers` and `LockAPIKeys`) |
 | `RevokeSignInsBefore` | `LockSessions`, `LockInvites`, `LockBootstrap` |
 | `StageMerge` | `LockMerge` |
+| `legacy.AuthReconciler.Reconcile` (`BootWrites`: the verified-email reconcile and the key expiry stamp, §11) | `LockInvites`, `LockUsers`, `LockAPIKeys`: HEAD runs the reconcile under `inviteMu`, then `userWriteMu` (`internal/database/pebble_store_verified_email_backfill.go:321-324` @748fd787a), and the expiry stamp rewrites key rows (COR10-6) |
 | temp-login | none: the store's in-memory map keeps its own mutex, as at HEAD |
+
+In this file, "inside `storage.CommitLocked` with `legacy.LockX`" means holding `Deps.Locks.X`, the locks
+the kernel resolved for that name.
 
 On ABO's store the names map to HEAD's mutexes: `LockUsers` → `inviteMu` then `userWriteMu` (HEAD's
 e-mail uniqueness check runs under `inviteMu`, `internal/database/pebble_store.go:232`); `LockSessions` →
 `sessionWriteMu`; `LockAPIKeys` → `apiKeyMu` (early fix 6); `LockInvites` → `inviteMu`; `LockBootstrap`
 → the bootstrap mutex, HEAD's `bootstrapMu` (`internal/server/bootstrap.go:135-136`), which books'
 identity store holds from S4 r2, when `bootstrap.go`'s redeem moves into core (§11); `LockMerge` →
-`userMergeApplyMu` and every lock above. Their `LockRank`s follow HEAD's order (`inviteMu`, `userWriteMu`,
-`sessionWriteMu`, `pebble_store_auth.go:509-525`; `userMergeApplyMu`, `inviteMu`, `apiKeyMu`,
-`internal/database/user_merge.go:507-529`). HEAD's `counterMu` is **not** one of these locks (lead
+`userMergeApplyMu` and every lock above. Their `LockRank`s are 05-storage §5S.3.2's one rank table for
+books, a total order over every lock a commit path may take (resolution R10-4, DATA10-3:
+`userMergeApplyMu` < `bootstrapMu` < `inviteMu` < `userWriteMu` < `sessionWriteMu` < `apiKeyMu` <
+`configBlobSaveMu` < `opsMu`), which extends HEAD's orders (`inviteMu`, `userWriteMu`, `sessionWriteMu`,
+`pebble_store_auth.go:509-525`; `userMergeApplyMu`, `inviteMu`, `apiKeyMu`,
+`internal/database/user_merge.go:507-529`; `bootstrapMu` before `inviteMu`, `bootstrap.go:212`), and
+`TestLockRanksTotalOrder` checks it. Auth takes no core-side mutex inside a `stage`: the `LastSeen`
+coalescer's map mutex and the throttle's shards are released before `CommitLocked` is called. HEAD's `counterMu` is **not** one of these locks (lead
 decision, round 9; 05-storage §5S.3.2): HEAD's `nextID` takes it around its own `Sync` commit of the
 counter (`pebble_store.go:966-989`), outside any caller's batch, and no identity row takes an ID from
 it; the library root source's `import_path` allocation does, and shares it only because the kernel
 builds one store instance per family (05-library, DATA9-2).
 
-- **Staging takes no mutex.** Books' staging methods (`PutAPIKey(b, …)`, `TouchAPIKey(b, …)`,
-  `TakeOneTime(b, …)`, …) never lock themselves, because `sync.Mutex` is not re-entrant: the hold is
-  the batch's. A staged identity write whose ctx does not carry the hold of its lock
-  (`storage.LocksHeld`) is refused, a programming error that `legacytest.AuthStoreSuite` catches. Auth
-  never nests `CommitLocked`: one call builds one batch.
+- **Staging takes no mutex; the hold is on the batch (resolution R10-4; COR10-2, DATA10-1).** Books'
+  staging methods (`PutAPIKey(b, …)`, `TouchAPIKey(b, …)`, `TakeOneTime(b, …)`, …) never lock themselves,
+  because `sync.Mutex` is not re-entrant: the hold is the batch's. `storage.CommitLocked` marks the batch it
+  commits with the locks it holds, and each staging method checks the batch it was handed with
+  `storage.LocksHeld(b, l)` for each lock of its write, so the frozen `auth.Store` signatures need no `ctx`.
+  A write staged into a batch whose hold does not include its lock is refused, a programming error that
+  `legacytest.AuthStoreSuite` catches; that includes a write staged inside a hold into another batch that
+  would commit after the hold ends. No `stage` function calls a books method that takes a HEAD mutex of a
+  family the hold covers (`MarkInviteEmailSent`, `RecordInviteGuestPolicy`, `RehashUserPassword`), which
+  would deadlock on itself where `ErrLockOrder` cannot see it (DATA10-3). Auth never nests `CommitLocked`:
+  one call builds one batch.
 - **One instance per process.** HEAD's writers that still commit their own batch — gin through S4 r1,
   and from S4 r2 books' invite delivery (`MarkInviteEmailSent`, `RecordInviteGuestPolicy`), guest tokens
   and the ABS password rehash — keep taking the same mutexes, and serialise with core's commits only if
@@ -950,8 +997,9 @@ Core owns it; nothing refers to an app, a module or `users.manage`.
    write rule; COR4-13; from S4 r2 — through S4 r1 books' start hook runs HEAD's `InitBootstrapToken`,
    §5, COR6-3) mints the token through `Store.IssueOneTime` (kind bootstrap) in the store's format
    — native `mcb_…` with its hash as a one-time token; ABO HEAD's `abbs_` token with its hash and
-   expiry in HEAD's settings row (§11) — writes `bootstrap-token` (mode 0600) via `os.Root` in the
-   app's state dir, and logs the **path and expiry only** (never the value; today's rule,
+   expiry in HEAD's settings row (§11) — writes `bootstrap-token` (mode 0600) through
+   `Deps.StateFiles` (label `auth.bootstrap_token`), confined to the app's state dir as `os.Root` was
+   and visible to `coretest/crashmatrix` (COR10-7), and logs the **path and expiry only** (never the value; today's rule,
    `bootstrap.go:165-175`).
 2. `POST /api/core/v1/auth/bootstrap` (Public, `RateAuth`, per-client limiter): validate then spend
    atomically (`TakeOneTime`: in the native store `Expect` + delete in one batch over a `Serialized`
@@ -1155,7 +1203,10 @@ The *arr facade's key purpose and `X-Api-Key`/`apikey` extraction are deferred-b
   (`TestRollback_AuthOffBasicGateStaysOnPrev`, an R-test cell.)
 - **What selects HEAD's auth-off rule (SEC9-13).** 05-config generates the per-key flag
   `Alias.HEADAuthOffWritable` from HEAD's list (`enable_auth` and the three Basic-gate keys) and honours
-  it only while a legacy config store is supplied (05-config owns the predicate). Every other key, and
+  it while the app supplies a legacy config store and the key's value lives in a legacy row, its
+  `LegacyBlob` field or a `legacy.SecretsStore` row (05-config §1.3.1 owns this one predicate, SEC10-5).
+  The three Basic-gate keys lose the flag together, at the earlier of H2 and their settings cutover, with
+  one release note. Every other key, and
   every key of an app without a legacy config store, takes SEC4-8's refusal of the auth-disabled
   principal (`TestAuthOff_NativeAppRefusesAuthModeWrite`: on hello the auth-disabled principal's write
   of `core.auth.mode` → 403). H3 clears the flag on `enable_auth` only (§11.2).
@@ -1424,7 +1475,9 @@ it in the legacy code.
    start hook (06 Run step 2) over books' own code — exactly as for `ReconcileVerifiedEmails` (COR5-7)
    — and the S4 r2 flip PR deletes it in the change that turns on P7 seeding and `BootWrites`. The
    `seed.go` and `bootstrap.go` moves into core (§11, 04 S4) land with that r2 PR, so r1 still has
-   HEAD's code to call. Without this, a fresh store booted on r1 would have no seed roles (gin's HEAD
+   HEAD's code to call. From S2b until that PR, the start hook's two token-file writes, `.bootstrap-token`
+   and `.readonly-key` (`internal/server/bootstrap.go:121,166` @748fd787a), go through
+   `legacy.ConfigOpenEnv.Files` with their 06 §6.5.1 labels, so the crash matrix sees them (COR10-7). Without this, a fresh store booted on r1 would have no seed roles (gin's HEAD
    authorizer, `internal/server/middleware/auth.go:430-455`, would grant the first admin nothing), and
    an r1 restart would mint no bootstrap token, breaking the bootstrap runbook once the previous token's
    10 minutes passed. `TestDarkRelease_HEADSeedWritersKeepRunning` is the r1 done-check.
@@ -1465,7 +1518,7 @@ it in the legacy code.
 | Replaced store, as 05-backup §5B.3.6 (2) classifies it (content marker, out-of-store journal head, lineage), verified tail or not; a relocated store is not replaced and runs no hook | tail re-applied, then the hook with `rc.Revocations == nil`: every session and invite deleted, every active or disabled key `needs_confirmation` (on ABO HEAD's `"inactive"`), every epoch bumped; a chain break adds health `revocation_journal_broken` | closed | SEC3-10, SEC4-6, SEC5-6, DATA6-4, DATA6-5, A-2 |
 | Staged restore (a pre-swap store exists), with or without journal coverage | the pre-swap store's restrictions win over the restored rows (§4.14 step 3; a key keeps the most restrictive of its two statuses); its own swap appends no `gap` line, so its coverage holds | closed | SEC5-10, SEC6-4, DATA6-2, SEC7-8 |
 | A key's last-use write races a revoke or status change | native store: the touch's `Expect` conflicts and the touch is dropped; ABO's store: both commit inside `storage.CommitLocked` holding `apiKeyMu` (early fix 6); the revoke stands either way | closed | SEC6-3, resolutions R6-5, R9-1 |
-| ABO's store asked to stage an identity write outside a `CommitLocked` hold of the write's lock (`storage.LocksHeld` false) | refused, nothing staged; `legacytest.AuthStoreSuite` fails in CI | closed | a mutex released before the commit protects nothing (R9-1, COR9-1) |
+| ABO's store asked to stage an identity write into a batch whose `CommitLocked` hold lacks the write's lock (`storage.LocksHeld(b, l)` false), a batch built inside another hold included | refused, nothing staged; `legacytest.AuthStoreSuite` fails in CI | closed | a mutex released before the commit protects nothing (R9-1, COR9-1, R10-4) |
 | A `LastSeen` flush for a session that was logged out or revoked | `TouchSession` stages nothing; the session stays deleted | closed | DATA6-8 |
 | Bootstrap token wrong/expired/spent | 401 `bootstrap_invalid`, uniform message | closed | |
 | Bootstrap file write fails at start | log error, bootstrap unavailable this run; setup still requires token → operator restarts after fixing perms | closed | |
@@ -1589,7 +1642,7 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestRestoredLegacyKey_ReenabledKeepsLegacySemantics` | (ABO) an empty-scope `abk_` key and an admin's `["settings.manage"]` `abk_` key, a nil-coverage restore: both are HEAD's `"inactive"`, never `"revoked"`, and refused; re-enabled by the owner or an admin, each has the same legacy-route and op-start reach as before the restore, the empty-scope key `LegacyFullScope` again (resolution A-2) |
 | `TestLegacyRevokeRacesTouch_NeverUnrevokes` | (ABO, `legacytest.AuthStoreSuite` through `auth.Service` over books' store, `synctest`) a revoke and a `TouchAPIKey` racing on one key, each built and committed inside `storage.CommitLocked` with `legacy.LockAPIKeys`: the key ends `revoked` in every interleaving, including the touch read before the revoke commits (SEC6-3, R6-5, R9-1; one name with early fix 6's hotfix test, §11.1) |
 | `TestLegacyUserDeactivateRacesPasswordChange` | (ABO, `legacytest.AuthStoreSuite`, `synctest`) a deactivation and a password change of one user, each staged from a row read before the other commits: the user ends inactive with the new password, never `active` again (DATA9-1, R9-1) |
-| `TestLegacyStagedIdentityWriteOutsideLockRefused` | (ABO, `legacytest.AuthStoreSuite`) each staging method called outside a `CommitLocked` hold of its lock → refused (`storage.LocksHeld`), nothing staged; a staging method takes no mutex itself (R9-1) |
+| `TestLegacyStagedIdentityWriteOutsideLockRefused` | (ABO, `legacytest.AuthStoreSuite`) each staging method called with a batch no `CommitLocked` holds its lock on → refused (`storage.LocksHeld(b, l)`), nothing staged; a write staged inside a hold into a second batch, committed after the hold, → refused; a staging method takes no mutex itself (R9-1, R10-4) |
 | `TestLegacyStoresAreSingletons` | (ABO, with 06) the P4c constructors and books' P6 store share one `*PebbleStore`, so `apiKeyMu`, `inviteMu` and `counterMu` have one owner; books' invite-delivery write and core's invite accept serialise (DATA9-2, R9-1) |
 | `TestLegacyAPIKeyCreate_EmptyEffectiveKeyCannotMint` | (ABO; legacy in ABO's current code, early fix 2, then core) a key of a demoted owner and an admin-made key for a viewer, each with an empty effective set, create a key → 403, nothing written (SEC9-5) |
 | `TestKeyLastUseNeverRevertsRevoke` / `TestLastSeenFlushNeverResurrectsRevokedSession` | (`authtest.StoreSuite`, `synctest`) a coalesced key touch after a revoke leaves the key revoked; a `LastSeen` flush after a logout or an admin revoke re-creates no session (DATA6-8) |
@@ -1642,8 +1695,8 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestS4_AuthOffDockerBoots` | (image job) ABO with `enable_auth=false` in a container boots at S4 r2 and reports `auth_disabled_remote` (SEC4-8) |
 | `TestOwnerGate_AccessWithoutOwnerFallsBack` | Access configured, no owner identity: restore, factory reset and user merge fall back to Interactive + `core:admin`; owner keys are `ProtectAdmin` (SEC4-14) |
 | `TestRestrictedLastAdmin_SSORefused` | a last admin kept by a restore cannot sign in by password, key or OIDC until a reset; on a native store an identity extension refuses it too (`SignInRestricted`), on ABO's store its keys are `"inactive"` and the Cloudflare Access residual is named in the restore report (SEC4-12, A-2) |
-| `TestHardeningCutoverRefusedByEveryOlderRelease` / `TestH1_AmbientScopesPreserved` / `TestH1_NoRawTokenOnDisk` / `TestH2_NoPlaintextSecretOnDisk` | (post-S10, with 09 §9.13) every release tag from S0 to the previous one refuses a store stamped by each cutover, through boot and `CheckReader`; after H1 a key scoped `["library.view"]` and an `editor` session still reach `/metrics`, `/api/v1/auth/me` and own reading state, and an `fp-worker` key does not; a planted canary token or secret is found in no file under the DB directory or its checkpoint directories after the cutover's compaction, and the done-check states that archives taken before the cutover still hold it (§11.2; DATA9-8, SEC9-3, SEC9-8, R9-11) |
-| `TestVerifiedEmailReconcileInBootWrites` / `TestExpiryStamp_OneShot` | (ABO) HEAD's verified-email reconcile runs in the store's `legacy.AuthReconciler` at P4d step 4; the key expiry stamp honours HEAD's one-shot done flag (DATA4-10, DATA4-12) |
+| `TestHardeningCutoverRefusedByEveryOlderRelease` / `TestH1_AmbientScopesPreserved` / `TestH1_ConfinedKeyStaysConfined` / `TestH1_NoRawTokenOnDisk` / `TestH2_NoPlaintextSecretOnDisk` | (post-S10, with 09 §9.13) every release tag from S0 to the previous one refuses a store stamped by each cutover, through boot and `CheckReader`; H1 is a before/after parity matrix over every principal kind (an `editor` session, a key scoped `["library.view"]`, a `LegacyFullScope` key, an admin-owned key scoped `["fingerprint.worker"]`, an `fp-worker` user's key, an empty-effective-set key of a non-confined owner): each keeps exactly its pre-H1 answers on `/metrics`, `/api/v1/auth/me`, `/api/v1/auth/sessions` and a reading-state route, and both worker-scoped keys stay `Confined()` with no ambient scope (05-rbac §6.3, `TestWorkerKey_NoAmbientScopes`); after H1 no pre-H1 session or invite token authenticates; a canary token or secret planted before a fixture upgrade is found in no file under the DB directory or its checkpoint directories after the cutover's compaction, and the done-check states that archives and swap set-asides taken before the cutover still hold it (§11.2; DATA9-8, SEC9-3, SEC9-8, R9-11, R10-2, R10-11) |
+| `TestVerifiedEmailReconcileInBootWrites` / `TestExpiryStamp_OneShot` | (ABO) HEAD's verified-email reconcile runs in the store's `legacy.AuthReconciler` at P4d step 4, committed through `storage.CommitLocked` holding the `Invites`, `Users` and `APIKeys` locks, and none of its writes is refused by the hold check; the key expiry stamp honours HEAD's one-shot done flag (DATA4-10, DATA4-12, COR10-6) |
 
 ## 11. Migration from ABO
 
@@ -1810,28 +1863,38 @@ step that needs core to read books' rows, so the storage grants for these famili
 every older release's guard models, because an owner a build does not declare is left dormant, not
 refused (05-storage §5S.3.7). Each cutover therefore raises `books` for every rewrite of a books legacy
 family (H1's identity rows, H2's blob fields, H3's flags), plus `core` when it changes `c/` rows, and the
-first cutover also lifts the `{core, 0}` legacy restore bound (09 §9.13).
+first cutover that raises `core` also lifts the `{core, 0}` legacy restore bound (09 §9.13; a cutover that
+raises only `books` lifts nothing, DATA10-7).
 `TestHardeningCutoverRefusedByEveryOlderRelease` asserts that every release tag from S0 to the previous
 one refuses a store stamped by each cutover, through boot and `CheckReader`.
 
-**What a rewrite leaves behind (resolution R9-11, SEC9-3).** H1 and H2 rewrite the live store. A Pebble
-delete is a tombstone (raw tokens sit in keys too: `sess:<raw>`, `idx:sess:user:<user>:<raw>`,
-`invite:<raw>`, `pebble_store_auth.go:1666-1670` @748fd787a), so once the rewrite has committed and
-verified, the cutover boot deletes the pre-cutover checkpoint and the old Pebble files through a forced
-compaction of the rewritten ranges and a WAL rotation; the cutover's floor then reads "restore from the
-pre-cutover archive". The done-checks (`TestH1_NoRawTokenOnDisk`, `TestH2_NoPlaintextSecretOnDisk`) plant
-a canary, run the cutover, and scan every file under the DB directory and its checkpoint directories,
-and they state plainly that archives taken before the cutover still hold the old representation. The
-release note says: "Backups made before this release still contain sign-in tokens and plaintext
-third-party secrets. Delete them or take new ones; if the backup directory may have been exposed,
-rotate those secrets and re-issue API keys."
+**What a rewrite leaves behind (resolutions R9-11, R10-11; SEC9-3, DATA10-6, SEC10-7).** H1 and H2 rewrite
+the live store. A Pebble delete is a tombstone (raw tokens sit in keys too: `sess:<raw>`,
+`idx:sess:user:<user>:<raw>`, `invite:<raw>`, `pebble_store_auth.go:1666-1670` @748fd787a), so once the
+rewrite has committed and verified, the cutover boot deletes **every** pre-cutover checkpoint of the store,
+not only its own attempt's (a retained, consumed checkpoint from the last upgrade holds the old rows too,
+05-storage §5S.3.12), and the old Pebble files under the DB directory, through a forced compaction of the
+rewritten ranges and a WAL rotation; the cutover's floor then reads "restore from the pre-cutover archive".
+H1 **deletes** every existing session, invite and other one-time token rather than rehashing it, so a raw
+token in an older archive is dead against the live store and the residual is bounded by the tokens' TTLs;
+API keys are SHA-256 hashes of high-entropy tokens already (§11 table), so an archive exposes no usable
+key. The done-checks (`TestH1_NoRawTokenOnDisk`, `TestH2_NoPlaintextSecretOnDisk`) plant the canary
+**before** a fixture upgrade, so a retained checkpoint holds it, run the cutover, and scan every file
+under the DB directory and its checkpoint directories. They state plainly that archives taken before the
+cutover, and a swap set-aside made before it (`previous/`, `failed/`, kept for
+`core.storage.swap.keep_previous`, 05-backup), still hold the old representation until deleted or
+expired. 09 §9.13 owns one release-note text per cutover, quoted here verbatim. H1: "Backups made before
+this release still contain sign-in tokens. They no longer work against this server, but restoring such a
+backup brings them back until they expire; delete those backups or take new ones." H2: "Backups made
+before this release still contain plaintext third-party secrets. Delete them or take new ones; if the
+backup directory may have been exposed, rotate those secrets."
 
 
 | Cutover (09 §9.13) | What moves | What it removes |
 |---|---|---|
-| **H1 — identity cutover** (raises `books`, and `core` for the `c/auth/` and `c/rbac/` rows) | sessions and one-time tokens hashed (`mcs_`, `mci_`, `mct_`, `mcb_`; §4.1), keys re-issued or re-stored as `mck_` with native scopes, roles with native scopes (core-only scopes, `SeedDigest`/`PendingSeed`, the seed-role operator diff and the lift of `ErrSeedRoleLocked`, 05-rbac §3.6, §4.8), `needs_confirmation` and `SignInRestricted` as stored fields, the native `LastSeen`. **The ambient scopes are carried over (SEC9-8):** every role that is not `Confined()` and every existing key whose owner is not confined gains the app's `LegacyAmbientScopes` (ABO: `core:self`, `core:metrics.read`, `books:reading`) in its native scope set, so scrape keys, own-profile and reading-state reach are unchanged (`TestH1_AmbientScopesPreserved`). Then the checkpoint deletion and compaction above | `legacy.Stores.Auth`/`Roles`, `legacy.AuthReconciler`, `legacy.AuthAtomWriter`, the identity keys of `legacy.WriteLock`, `legacy.RBACAtomWriter` and their `legacytest` suites (outside the API promise, so no v1 break, R6-3); `app.Options.LegacyAmbientScopes`; `LegacyFullScope` for any key still holding an empty list |
+| **H1 — identity cutover** (raises `books`, and `core` for the `c/auth/` and `c/rbac/` rows) | sessions and one-time tokens hashed (`mcs_`, `mci_`, `mct_`, `mcb_`; §4.1), existing sessions, invites and other one-time tokens deleted, not rehashed (above), keys re-issued or re-stored as `mck_` with native scopes derived from each key's effective set (05-rbac §6.3), roles with native scopes (core-only scopes, `SeedDigest`/`PendingSeed`, the seed-role operator diff and the lift of `ErrSeedRoleLocked`, 05-rbac §3.6, §4.8), `needs_confirmation` and `SignInRestricted` as stored fields, the native `LastSeen`. **The ambient scopes are carried over by 05-rbac §6.3's one rule (SEC9-8; resolution R10-2, SEC10-1):** a role gains the app's `LegacyAmbientScopes` (ABO: `core:self`, `core:metrics.read`, `books:reading`) iff it is not `Confined()`, and a key iff its effective set before Ambient (role set ∩ the key's atoms' expansion) is not `Confined()`, never by its owner's confinement, so a worker-confined key stays `Confined()` whoever owns it (HEAD's rule, `internal/server/middleware/auth.go:268-297`), and scrape keys, own-profile and reading-state reach are unchanged (`TestH1_AmbientScopesPreserved`, `TestH1_ConfinedKeyStaysConfined`). Then the checkpoint deletion and compaction above | `legacy.Stores.Auth`/`Roles`, `legacy.AuthReconciler`, `legacy.AuthAtomWriter`, the identity keys of `legacy.WriteLock`, `legacy.RBACAtomWriter` and their `legacytest` suites (outside the API promise, so no v1 break, R6-3); `app.Options.LegacyAmbientScopes`; `LegacyFullScope` for any key still holding an empty list |
 | **H2 — secrets cutover** (raises `books`, and `core` for `c/secrets/`) | plaintext blob secrets encrypted into `core/secrets` (05-config), then the checkpoint deletion and compaction above | the plaintext fields |
-| **H3 — auth-precedence cutover** (raises `books`) | for `enable_auth` only (resolution R9-5, SEC9-2, SEC9-7): an operator value that **enables** auth wins over a stored `false`; a value that disables auth keeps HEAD's precedence, so a stale `ENABLE_AUTH=false` still loses to a stored `true`. Every other `BelowStored` legacy flag, the Basic gate's included, keeps HEAD's precedence until a separate, owner-decided cutover of its family (05-config §1.12.5) | for `enable_auth`: HEAD's stored-value-wins precedence over an enabling operator value, and the auth-disabled principal's `!prior.EnableAuth` write rule (`Alias.HEADAuthOffWritable` cleared on that key, so SEC4-8 applies to ABO's auth switch). The Basic gate keys keep that write rule. H3 does not remove HEAD's auth-off write rule otherwise: `HEADAuthOffWritable` is cleared on `enable_auth` only (05-config §1.12.5). Release note (09 §9.13): "With authentication off, Settings can no longer turn it on; set `ENABLE_AUTH=true` or `ABO_CORE_AUTH_MODE=required` and restart." |
+| **H3 — auth-precedence cutover** (raises `books`) | for `enable_auth` only (resolution R9-5, SEC9-2, SEC9-7): an operator value that **enables** auth wins over a stored `false`; a value that disables auth keeps HEAD's precedence, so a stale `ENABLE_AUTH=false` still loses to a stored `true`. Every other `BelowStored` legacy flag, the Basic gate's included, keeps HEAD's precedence until a separate, owner-decided cutover of its family (05-config §1.12.5) | for `enable_auth`: HEAD's stored-value-wins precedence over an enabling operator value, and the auth-disabled principal's `!prior.EnableAuth` write rule (`Alias.HEADAuthOffWritable` cleared on that key, so SEC4-8 applies to ABO's auth switch). The Basic gate keys keep that write rule until their settings cutover, which precedes or ships with H3, or H2 if earlier (§4.11, SEC10-5, SEC10-6). H3 does not remove HEAD's auth-off write rule otherwise: `HEADAuthOffWritable` is cleared on `enable_auth` only (05-config §1.12.5). Release note (09 §9.13): "With authentication off, Settings can no longer turn it on; set `ENABLE_AUTH=true` or `ABO_CORE_AUTH_MODE=required` and restart." |
 
 Until then, raw session and invite tokens stay at rest exactly as at HEAD (no regression, no
 improvement), and ABO's roles and keys cannot hold core-only scopes (05-rbac §6.3).
@@ -2125,3 +2188,18 @@ Round 9 (2026-11-04), findings applied to this file:
 - OPS9-7 — §11.1 item 5: the hotfix (and stage 8 from S3) uses `BASIC_AUTH_PASSWORD` in memory when the stored password is empty; S0 release note.
 - SEC9-14 — §11.1: each `todo.d` entry says "implement 05-authn §11.1 item N exactly"; `mergeActor` folded into early fix 4.
 - integration pass (round 9): §3.4: `counterMu` is not an identity lock (lead decision; 05-storage §5S.3.2); `Store` comment names `CommitLocked(ctx, b, d, stage, locks...)` and the full identity mutex list; §4.14: `app.OfflineCommands` also returns `secrets export-keyring` and `secrets rotate-derive`; §11.2 H3 row: H3 clears `HEADAuthOffWritable` on `enable_auth` only and does not otherwise remove HEAD's auth-off write rule; release note is 09 §9.13's text.
+
+Round 10:
+
+- COR10-2 / DATA10-1 (R10-4) — §3.4 staging bullet, §6 error row, §10 `TestLegacyStagedIdentityWriteOutsideLockRefused`: the hold is read from the batch (`storage.LocksHeld(b, l)`), so the frozen `auth.Store` signatures need no `ctx`; a write staged inside a hold into another batch is refused.
+- DATA10-3 (R10-4) — §3.4: identity lock ranks cite 05-storage §5S.3.2's one total rank table (`bootstrapMu` below `inviteMu`, `sessionWriteMu` below `apiKeyMu`); `TestLockRanksTotalOrder`; auth takes no core-side mutex inside a `stage`; no `stage` calls a books method that takes a HEAD mutex of a covered family.
+- COR10-5 — §3.2 `Deps.Locks`/`RestoreDeps.Locks` and `auth.StoreLocks`, §3.4: the kernel resolves the lock names at P4c; auth never imports `legacy`, never names a lock string and never calls `WriteLocks`; books' merge caller uses its own store's locks.
+- COR10-6 — §3.4 table: a `legacy.AuthReconciler.Reconcile` row (`LockInvites`, `LockUsers`, `LockAPIKeys`; HEAD's `inviteMu` then `userWriteMu`, lead-approved R-G request); `TestVerifiedEmailReconcileInBootWrites`.
+- COR10-7 — §3.2 `auth.StateFiles` replaces `*os.Root` in `Deps` and `RestoreDeps`; §4.6 the bootstrap token file goes through it; §5 the S2b–S4 r1 `.bootstrap-token` and `.readonly-key` writes go through `legacy.ConfigOpenEnv.Files`.
+- DATA10-6 (R10-11) — §11.2: H1 and H2 delete every pre-cutover checkpoint, not only their own attempt's; the canary is planted before a fixture upgrade; swap set-asides named as residual.
+- DATA10-7 — §11.2: "the first cutover that raises `core`" lifts `{core, 0}`.
+- DATA10-9 — §3.2 `Admin.StageUserMerge`: native store `storage.ErrConflict` at commit, ABO's store HEAD's conflict error at staging inside the hold, both `auth.ErrMergeConflict`.
+- SEC10-1 (R10-2) — §11.2 H1 row, §10: the ambient carry-over follows 05-rbac §6.3's one rule (keys by their effective set, never their owner); `TestH1_ConfinedKeyStaysConfined` and the before/after parity matrix.
+- SEC10-5 — §4.11: one `HEADAuthOffWritable` predicate (legacy config store supplied and the value in a `LegacyBlob` field or `legacy.SecretsStore` row, 05-config §1.3.1); the gate keys lose it together.
+- SEC10-6 — §11.2 H3 row: the Basic gate keys keep the rule until their settings cutover, which precedes or ships with H3.
+- SEC10-7 — §11.2: H1 deletes existing sessions, invites and one-time tokens rather than rehashing them; "re-issue API keys" dropped; one release-note text per cutover, owned by 09 §9.13.
