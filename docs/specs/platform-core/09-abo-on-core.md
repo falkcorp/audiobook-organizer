@@ -327,7 +327,7 @@ The mechanism is 05-rbac (§6 the migration, §6.1 the table) and 05-http-api §
 - **The ambient rule.** HEAD let any credential reach `/metrics`, the profile and reading state. M3 stores
   `core:self`, `core:metrics.read` and `books:reading` on a principal iff it is not `Confined()` (HEAD's worker
   confinement, `internal/server/middleware/auth.go:268-297`), so the scrape key keeps working and worker keys stay
-  confined (`TestWorkerKey_NoAmbientScopes`, `TestIdentityCutover_WorkerKeyStaysConfined`).
+  confined (`TestWorkerKey_Confined`, `TestIdentityCutover_WorkerKeyStaysConfined`).
 - **Keys and roles.** An `abk_` key with empty scopes, which holds all of its owner's role permissions at HEAD (P3), is
   converted per 05-rbac §6 and never stored empty; a new key never has empty or wildcard scopes. An all-atom or admin
   key maps to `core:admin` plus every explicit scope its HEAD reach needs, task-run approval included, so the reach
