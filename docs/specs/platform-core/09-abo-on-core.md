@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/09-abo-on-core.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.10.1 -->
 <!-- guid: 3c82c917-2fc4-4385-b085-73d143a2374f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -474,9 +474,9 @@ storage-enforced write checks during the extraction** — no `CheckedWrites` and
 blind-write record; a legacy writer may still stage a voluntary `Expect` inside a `Serialized` claim as a
 compare-and-set (05-storage), which storage does not enforce — and keep HEAD's lock discipline **across core's commit**
 (R9-1): every legacy store whose HEAD code relies on an in-process mutex exposes it as one capability, `legacy.WriteLock`
-(`Lock(keys) (unlock func())`) — identity's `apiKeyMu` (early fix 6), `inviteMu`, `userWriteMu`, `sessionWriteMu`,
+(`WriteLocks(names []string) []storage.Lock`, ranked by `LockRank`) — identity's `apiKeyMu` (early fix 6), `inviteMu`, `userWriteMu`, `sessionWriteMu`,
 `bootstrapMu` and `userMergeApplyMu`, the run families' `opsMu`, and any other its owner finds — and core commits a batch
-that a legacy store staged into through one wrapper, `storage.CommitLocked(ctx, b, locks...)`, which holds every named
+that a legacy store staged into through one wrapper, `storage.CommitLocked(ctx, b, d, stage, locks...)`, which holds every named
 lock from staging through commit (`Executor.WriteRuns` and `Stager.WriteRuns` are uses of it). The kernel builds
 **exactly one** instance of each legacy store family per process and hands the same instance to every user, books'
 own code included, so every HEAD lock is shared (`TestLegacyStoresAreSingletons`). The single-writer AST ratchet of
@@ -1329,7 +1329,7 @@ phases and no contract checkpoints. The contract build's release notes list ever
 | 14 | Config in DB (`config_blob`) and legacy secret rows | 1 blob + 4 rows | read and written in place by books' legacy config store (05-config §1.12.2) | stored format, plaintext secrets included, until the config cutover and the secrets cutover H2 (§9.13; A-2) | none in the extraction | `persistence.go:359-884,1996-2008` |
 | 15 | Env vars, window | `BindEnv` names + implicit `AutomaticEnv` names + `ABK_*` (counts: 05-config §1.12.4) | 05-config §1.3.6 | W after S3 | not read; `ProtectAdmin`+ and secret-class keys refuse to start (§9.2.5) | `cmd/root.go:625` |
 | 16 | Env vars, permanent and runtime | the single list of 05-config §1.12.4 (permanent aliases, including every read name a shipped deploy file sets; runtime/ecosystem names config does not read) | unchanged | **permanent** (OPS-5) | none | 05-config §1.12.4; §9.2.5 |
-| 17 | CLI commands | `serve scan playlist tag organize inspect-metadata seed diagnostics{cleanup-invalid,reserved-prefs,query} fp-worker dedup-bench` (bench tag) | unchanged; added: `staging-restore` and `staging-scrub` (S0, §9.3; R8-3) and core's offline commands, which `app.Offline` exposes and ABO's `cmd` wraps in cobra (06; R9-9, COR9-6): `storage restore-checkpoint`, `users reset-password` and `secrets set-install-id` (S3, when the keyring lands — a reset undone before S3 has no keyring header to restore; the manual reset undo, R8-1) | **permanent** | none | `cmd/*.go` `Use:` |
+| 17 | CLI commands | `serve scan playlist tag organize inspect-metadata seed diagnostics{cleanup-invalid,reserved-prefs,query} fp-worker dedup-bench` (bench tag) | unchanged; added: `staging-restore` and `staging-scrub` (S0, §9.3; R8-3) and core's offline commands, which `app.Offline` exposes and ABO's `cmd` wraps in cobra (06; R9-9, COR9-6): `storage restore-checkpoint`, `users reset-password`, `secrets export-keyring`, `secrets rotate-derive` and `secrets set-install-id` (the `secrets` commands from S3 with the keyring; `set-install-id` at S3, when the keyring lands — a reset undone before S3 has no keyring header to restore; the manual reset undo, R8-1) | **permanent** | none | `cmd/*.go` `Use:` |
 | 18 | CLI flags in shipped artifacts | `--host --port --db --config --dir --log-level --playlists --tls-cert --tls-key --http3-port --external-url --workers --read-timeout --write-timeout --idle-timeout` | same flags feed canonical keys | until next **major** (1.0) | release note at the major; not usage-gated | `cmd/root.go:486-535`; `Dockerfile:104` |
 | 19 | Removed/no-op flags | `--db-type`, SQLite flag | — | W after S2 | deleted S10 | `cmd/root.go:489,508` |
 | 20 | Fast-exit protocol | `--print-storage-format`, `--print-capabilities`, new `--print-storage-levels`, `--version-json` (`{app, version, commit, ui_build_id, binary_id}`, FE6-4) and `--print-upgrade-floor` (all three from S0) | unchanged | **permanent** | none (rollback and stepping-stone protocol) | `main.go:40,52`; `Makefile:892` |
@@ -1423,7 +1423,7 @@ caller's batch (participant binding) and keep **HEAD's lock discipline across co
 COR9-1, DATA9-1, DATA9-2): every HEAD mutex a legacy store relies on — identity's `apiKeyMu`, `inviteMu`, `userWriteMu`, `sessionWriteMu`, `bootstrapMu` and `userMergeApplyMu`
 (`apiKeyMu` over every `apikey:` writer is early fix 6, §9.1), the run families' `opsMu`, and any other its owner
 finds — is the store's `legacy.WriteLock` capability, and core commits a batch that a legacy store staged into only
-through `storage.CommitLocked(ctx, b, locks...)`, which holds every named lock from staging through the commit
+through `storage.CommitLocked(ctx, b, d, stage, locks...)`, which holds every named lock from staging through the commit
 (`Executor.WriteRuns` and `Stager.WriteRuns` are uses of it). The kernel builds exactly one instance of each legacy
 store family per process and hands it to every user, books' own code included, so every HEAD lock is shared
 (`TestLegacyStoresAreSingletons`); `ReplaceOpRowsPrefix`'s lock rule is stated once, in 05-tasks. With the
@@ -2022,3 +2022,4 @@ Round 9 (dispositions in `docs/plans/platform-core/reviews/spec-round-9-disposit
 - SEC9-9 — S4 Permissions lists every role-name site of 05-rbac §4.6 with its replacement; `TestRoleNameChecksUseCoreAdmin`.
 - SEC9-10 — legacy-backed integration edits by API key are a recorded tightening with its release note (§9.2.6, S3).
 - SEC9-11 — the auth mode's canonical name is unread below S4 r1 (row 3).
+- Integration pass (round 9, lead) — §9.2.3 and S4: lock vocabulary `WriteLocks(names) []storage.Lock` / `CommitLocked(ctx, b, d, stage, locks...)` as 05-storage; row 17 lists `secrets export-keyring` and `secrets rotate-derive`.
