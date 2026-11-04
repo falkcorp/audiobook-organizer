@@ -1,5 +1,5 @@
 // file: internal/database/book_file_duration_pointer_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d41c9b2-6e83-4a15-b0f7-2c95e8a1d304
 // last-edited: 2026-11-04
 
@@ -182,6 +182,11 @@ func TestStoreReadsNormalizeStoredZeroDuration(t *testing.T) {
 func TestNormalizeBookFileDurationOnPointer(t *testing.T) {
 	require.False(t, normalizeBookFileDuration(nil))
 	require.False(t, normalizeBookFileDuration(&BookFile{FileSize: 1 << 30}), "an unknown duration has nothing to repair")
+	for _, v := range []int{0, -5} {
+		bad := BookFile{FileSize: 1 << 30, Duration: &v}
+		require.True(t, normalizeBookFileDuration(&bad), "a non-positive duration is not a measurement")
+		require.Nil(t, bad.Duration, "stored means > 0: %d must become unknown", v)
+	}
 
 	// 3,600,000 "seconds" over 100 MB is 0.2 kbps: milliseconds.
 	f := BookFile{FileSize: 100 << 20, Duration: Secs(3_600_000)}
