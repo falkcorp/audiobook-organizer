@@ -1,7 +1,7 @@
 // file: internal/repairs/owner.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 7a3d5f81-2c94-4e0b-b6a7-1f8e3c2d9b54
-// last-edited: 2026-11-03
+// last-edited: 2026-11-04
 
 package repairs
 
@@ -18,8 +18,8 @@ import (
 // OWNER APPLY (owner decision 2026-10-06). Some rows a fixer lists as
 // manual-only are ones the owner may apply himself, by clicking Apply on the
 // row, after reading the row's preview (Row.OwnerApplyReason). The folder-books
-// fixer's mixed-shelf rows are the live case (owner decision 2026-11-03: every
-// hold on the row is one the owner may resolve); the fragment-consolidation
+// fixer's rows are the live case (owner decisions 2026-11-03 and 2026-11-04:
+// any row, one shelf or two, on which every hold is one the owner may resolve); the fragment-consolidation
 // fixer's iTunes-tracked library copies were the first. The fixer marks such a
 // row at plan time (Row.OwnerApplicable); the row stays skipped, so no bulk
 // selection, scheduled run or plain apply ever writes it. A fixer that writes

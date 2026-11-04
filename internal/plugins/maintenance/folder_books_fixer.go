@@ -106,23 +106,23 @@
 // folder-book itself or among its external ids; listening progress; Doctor Who
 // / Big Finish / Torchwood (framework guard).
 //
-// OWNER APPLY (owner decisions 2026-11-03). A row is checked against EVERY
-// reason it is held back (buildRow's fbBlock list; row.Skipped stays the first,
-// so a plain apply reports what it always did). The row is owner-applicable
-// when it is a mixed-shelf row (it has a mixed_shelf hold: files on a second
-// shelf), its base verdict is applicable (fbEval.BaseTier, kept when Tier is
-// overwritten with mixed-shelf), its majority shelf holds at least
-// fbMajorityShelf of the files, and EVERY hold is one the owner may resolve:
-// the second shelf itself, a new book for files in the library folder (never
+// OWNER APPLY (owner decisions 2026-11-03 and 2026-11-04). A row is checked
+// against EVERY reason it is held back (buildRow's fbBlock list; row.Skipped
+// stays the first, so a plain apply reports what it always did). The row is
+// owner-applicable when it has at least one hold and EVERY hold is one the
+// owner may resolve, whether it sits on one shelf or two (owner decision
+// 2026-11-04; the 2026-11-03 rule offered mixed-shelf rows only). A hold is
+// owner-resolvable when it is: the second shelf itself (only when the base
+// verdict is applicable, fbEval.BaseTier, kept when Tier is overwritten with
+// mixed-shelf, and the majority shelf holds at least fbMajorityShelf of the
+// files), a new book for files in the library folder (never
 // an import path; created library_state organized), and a duplicate title that
 // resolves to exactly one live book (a version link, below). Every other hold
 // (deep, root folder, too large, resolved, unclear, split, fragmentary, an
 // iTunes id, progress, no heir, a duplicate no link can resolve) stays hard.
 // The apply is the ordinary Apply, run only for the owner's own click on the
 // row (repairs.OwnerApplyFor on ctx, plus the plan under the lock still marking
-// it). A row that is not mixed-shelf but whose every hold is owner-resolvable
-// stays listed and carries fbFlagSingleShelfOwnerResolvable, which is how the
-// owner measures that population.
+// it).
 //
 // VERSION LINK (owner decision 2026-11-03, owner rows only). An orphan group
 // whose core title and author (the same author id; an authorless group or
@@ -190,7 +190,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -291,12 +290,6 @@ const (
 )
 
 const (
-	// fbFlagSingleShelfOwnerResolvable is the Row.Flags entry (so the plan's
-	// by_flag tally and the flag:<name> filter carry it) of a row held back
-	// only by blocks the owner could resolve that is NOT a mixed-shelf row.
-	// Owner decision 2026-11-03: such a row stays listed, never owner-applicable;
-	// the count measures how many it would have been.
-	fbFlagSingleShelfOwnerResolvable = "single_shelf_owner_resolvable"
 	// fbLibraryState is the library_state of a book created from files in the
 	// library folder (owner decision 2026-11-03): Audiobookshelf serves it at
 	// once. iTunes-shelf books keep the folder-book's state.
@@ -1630,10 +1623,8 @@ func (f *folderBooksFixer) Plan(ctx context.Context, raw json.RawMessage, rep re
 	}); err != nil {
 		return nil, fmt.Errorf("%s: rows: %w", fbFixerID, err)
 	}
-	// After the pool, in one sequential pass: the owner measurement of
-	// 2026-11-03. The rows carry fbFlagSingleShelfOwnerResolvable, so the
-	// plan's by_flag tally holds the same count and pages the rows.
-	owner, singleShelf, applicable := 0, 0, 0
+	// After the pool, in one sequential pass: the count the log reports.
+	owner, applicable := 0, 0
 	for i := range rows {
 		switch {
 		case rows[i].Applicable():
@@ -1641,14 +1632,10 @@ func (f *folderBooksFixer) Plan(ctx context.Context, raw json.RawMessage, rep re
 		case rows[i].OwnerApplicable:
 			owner++
 		}
-		if slices.Contains(rows[i].Flags, fbFlagSingleShelfOwnerResolvable) {
-			singleShelf++
-		}
 	}
 	if rep != nil {
-		_ = rep.Log(slog.LevelInfo, fmt.Sprintf("%s: %d row(s): %d applicable, %d owner-applicable (mixed-shelf, before the "+
-			"framework guards), %d single_shelf_owner_resolvable (every hold the owner could resolve, but not mixed-shelf: "+
-			"listed, never owner-applicable)", fbFixerID, len(rows), applicable, owner, singleShelf))
+		_ = rep.Log(slog.LevelInfo, fmt.Sprintf("%s: %d row(s): %d applicable, %d owner-applicable (every hold one the "+
+			"owner may resolve, before the framework guards)", fbFixerID, len(rows), applicable, owner))
 	}
 	return rows, nil
 }
@@ -2305,15 +2292,12 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		row.Holds = append(row.Holds, repairs.RowHold{Kind: b.kind, Why: b.why, OwnerOK: b.ownerOK})
 	}
 	resolvable := len(blocks) > 0 && fbAllOwnerOK(blocks)
-	switch {
-	case !resolvable:
-	case !fbHasKind(blocks, fbSkipMixedShelf):
-		// Owner decision 2026-11-03: only mixed-shelf rows are the owner's.
-		// Rows whose every block the owner could resolve but that sit on one
-		// shelf stay listed; the flag counts them (Plan reports the total),
-		// so the population is measured before anyone widens the rule.
-		row.Flags = append(row.Flags, fbFlagSingleShelfOwnerResolvable)
-	default:
+	if resolvable {
+		// Owner decision 2026-11-04 (supersedes 2026-11-03, mixed-shelf rows
+		// only): a row whose every hold the owner may resolve is his, on one
+		// shelf or two. The mixed-shelf hold itself is ownerOK only on an
+		// applicable base verdict with a majority shelf (mixedOK), so a deep
+		// or majority-less two-shelf row stays hard.
 		row.OwnerApplicable = true
 		row.OwnerApplyReason = fbOwnerReason(lead, len(set), held, byFolder, missingPaths, plan, blocks, members)
 		row.OwnerWrites = append([]string(nil), row.BookIDs...)
@@ -2336,15 +2320,6 @@ func fbAllOwnerOK(blocks []fbBlock) bool {
 		}
 	}
 	return true
-}
-
-func fbHasKind(blocks []fbBlock, kind string) bool {
-	for _, b := range blocks {
-		if b.kind == kind {
-			return true
-		}
-	}
-	return false
 }
 
 // inLibrary: every file of g sits directly on the library folder shelf (the
@@ -2371,8 +2346,9 @@ func (lib *fbLib) inLibrary(g *fbGroup) bool {
 // counted.
 func fbOwnerReason(lead fbEval, files, held, byFolder int, missing []string, plan *fbPlan, blocks []fbBlock, members []string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Owner apply of a mixed-shelf folder-book row over %s (%d file(s)): database only, no file moves "+
-		"and no iTunes id changes. %d file(s) already held by proper books stay with them", lead.Root, files, held)
+	// The row's own class (Row.Class = lead.Tier): mixed-shelf, shelf or author-copy.
+	fmt.Fprintf(&b, "Owner apply of a %s folder-book row over %s (%d file(s)): database only, no file moves "+
+		"and no iTunes id changes. %d file(s) already held by proper books stay with them", lead.Tier, lead.Root, files, held)
 	if byFolder > 0 {
 		fmt.Fprintf(&b, "; %d held by a smaller folder-book row stay with it", byFolder)
 	}

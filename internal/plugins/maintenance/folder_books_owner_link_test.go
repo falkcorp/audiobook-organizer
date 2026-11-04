@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_owner_link_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 5b8e2f41-9c07-4d6a-b3e5-1a7d40c92f68
-// last-edited: 2026-11-03
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -299,7 +299,7 @@ func TestFolderBooksOwnerLink_APlainApplyNeverLinks(t *testing.T) {
 	require.Nil(t, f.liveAtDir(t, filepath.Join("Alfred Pennyworth", "Arkham Asylum")))
 }
 
-// A plain (single-shelf) row keeps skipped_duplicate_title, and its preview
+// A single-shelf row keeps skipped_duplicate_title for a plain apply, is the owner's, and its preview
 // names the book the owner's apply would link to.
 func TestFolderBooksOwnerLink_APlainRowNamesTheWouldBeTarget(t *testing.T) {
 	f := newGlobalRootFragFixture(t)
@@ -310,8 +310,8 @@ func TestFolderBooksOwnerLink_APlainRowNamesTheWouldBeTarget(t *testing.T) {
 	require.NoError(t, err)
 	row := f.fbSingleRow(t, "op-plan")
 	require.Equal(t, fbSkipDupTitle, row.Skipped, "%s", row.SkipReason)
-	require.False(t, row.OwnerApplicable)
-	require.Equal(t, []string{fbFlagSingleShelfOwnerResolvable}, row.Flags)
+	require.True(t, row.OwnerApplicable, "%s", row.SkipReason)
+	require.Empty(t, row.Flags)
 	found := false
 	for _, e := range row.Evidence {
 		if strings.Contains(e, twin.ID) {
