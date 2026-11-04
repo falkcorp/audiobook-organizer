@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.9.1 -->
+<!-- version: 1.10.0 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -10,8 +10,11 @@ findings, round 2's 162, round 3's 130, round 4's 117, round 5's 115, round 6's 
 dispositioned (`spec-round-{1,2,3,4,5,6,7,8}-dispositions.md`) and applied to the files, and so is the independent
 advisor review (phase 4: 1 BLOCKER, 6 MAJOR, 5 MINOR, 9 simplification candidates, all accepted;
 `spec-advisor-dispositions.md`). The round resolutions R2-n…R8-n stay binding except where the advisor's
-resolutions **A-1…A-17** supersede them (notably R6-6, R7-1, R7-3, R7-6, R7-8, R8-4, R8-5 and R8-6). The design they
-fix, in brief:
+resolutions **A-1…A-17** supersede them (notably R6-6, R7-1, R7-3, R7-6, R7-8, R8-4, R8-5 and R8-6). Round 9, the
+confirmation review after the advisor pass (71 findings: 4 BLOCKER, 3 of them distinct, 27 MAJOR, 40 MINOR, all
+accepted; `spec-round-9-dispositions.md`), is applied too; its resolutions **R9-1…R9-11** restore HEAD parity where
+core now drives HEAD's code — the commit point, route ownership and metric ownership — and re-add none of the
+deleted machinery. The design they fix, in brief:
 
 - **One stored format per family during the extraction** (R3-1): core reaches ABO's data through SDK **store
   interfaces** whose legacy implementation the `books` module supplies, so core holds no audiobook key name and no
@@ -21,16 +24,29 @@ fix, in brief:
   re-login or secret re-entry; the hardening becomes the post-S10 **identity, secrets and auth-precedence
   cutovers** on 02 N15's one-way machinery. Native stores (hello, TV, Movies) keep the hardened design.
 - **Legacy rows keep HEAD's lock discipline** (A-3): storage-enforced write checks cover native keyspaces and
-  core-written rows only; claims roll out shadow → strict.
+  core-written rows only; claims roll out shadow → strict. A legacy store's HEAD mutex spans core's commit
+  (`legacy.WriteLock` through `storage.CommitLocked`), and each legacy store family has exactly one instance per
+  process (R9-1).
+- **One owner per route-conflict set and per metric family** (R9-2, R9-3): the S5 operations routes move to core
+  together; ABO's `opsmetrics` stops emitting what the executor records, checked against a HEAD golden with label
+  values. Scoped API keys keep HEAD's authenticated-only reach (R9-4); the Basic gate and HEAD's file-only keys keep
+  HEAD's storage, and H3 moves only auth-enable precedence (R9-5).
 - **No predictive stage machinery** (A-4): Go's `internal/` rule, the layering and SDK guards and
   `TestCoreHoldsNoAppKeyNames` stay; 04 is an informative map, and the split's history uses git rename detection.
-- **ABO keeps its metric names** (A-5); **S8 moves the updater** rather than rebuilding it (A-6).
+- **ABO keeps its metric names** (A-5); **S8 moves the updater** rather than rebuilding it (A-6). Every
+  (GOOS, tag set) that ships is vetted on every PR, and the split's history keeps each moved file's pre-move
+  commits, asserted with `git log --follow` (R9-10).
 - **Boot and operations safety:** HEAD's routes register with a same-owner collision rule (A-1); legacy env names
-  decode with HEAD's semantics (A-7); one crash matrix covers the whole boot (A-8); 14-day soaks are owner
-  checkpoints in `ci/soak.txt` (A-9); `staging-scrub` needs a staging marker (A-10); concurrent feature work has
-  move windows (A-11).
+  decode with HEAD's semantics (A-7); one crash matrix covers the whole boot (A-8), as the public kit
+  `coretest/crashmatrix` that ABO also runs over its own boot (R9-7); 14-day soaks are owner checkpoints in
+  `ci/soak.txt`, bound to the soaked binary and gating every PR through a `Stage-Release:` trailer (A-9, R9-8);
+  every done-check names its environment (R9-9); `staging-scrub` needs a staging marker (A-10); concurrent feature
+  work has move windows (A-11).
 - A factory reset only stages, as a kind of the one journaled swap (R7-2, R8-1); the native factory-reset route
-  deletes library files only when asked, while the legacy alias keeps HEAD's wipe (A-17).
+  deletes library files only when asked, under one confirmation contract, `storage.ResetRequest`, while the legacy
+  alias keeps HEAD's wipe (A-17, R9-6).
+- The post-S10 hardening cutovers state their real reach: H1 and H2 purge the old files from the store, and
+  archives taken before them keep the old representation (R9-11).
 - Deferred-build contracts are **non-normative design sketches** (A-15).
 
 **Evidence commit:** `748fd787a`. **Raw data:** [`docs/plans/platform-core/raw/`](../../plans/platform-core/raw/00-index.md).
@@ -214,3 +230,7 @@ Advisor (dispositions in `docs/plans/platform-core/reviews/spec-advisor-disposit
 - A-15 (ADV-S9) — Build scope: deferred parts are non-normative design sketches.
 - ADV-12 — reading order: per-stage normative digests under `docs/plans/platform-core/digests/`.
 - integration pass (advisor): deferred table and file list cite 05-indexer, 08 and 10 as design sketches (non-normative).
+
+Round 9 (dispositions in `docs/plans/platform-core/reviews/spec-round-9-dispositions.md`; resolutions R9-1…R9-11):
+
+- R9-1…R9-11 — status line: round 9 (71 findings) dispositioned and applied; the design summary gains the commit-spanning legacy lock and one instance per family (R9-1), one owner per conflict set and metric family (R9-2, R9-3), HEAD parity for scoped keys, the Basic gate, file-only keys and H3's scope (R9-4, R9-5), the reset contract (R9-6), the public crash-matrix kit (R9-7), soaks bound to content (R9-8), done-check environments (R9-9), tag-set vetting and history (R9-10) and the hardening cutovers' reach (R9-11).
