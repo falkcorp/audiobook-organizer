@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-library.md -->
-<!-- version: 1.11.2 -->
+<!-- version: 1.11.3 -->
 <!-- guid: dafe380b-f703-41cb-99d0-2b2ba32f70e5 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -539,7 +539,9 @@ reconciles watched roots whenever the registry changes, without a restart (kept 
 
 Permissions declared by core (names per 03 §3.6): `core:library.manage` (roots, mappings,
 quarantine purge), `core:library.browse` (directory picker; replaces `BrowseDirectory`'s allow-list,
-`fileops/service.go:46-118`, with "inside a registered root or a path an admin is registering").
+`fileops/service.go:46-118`, with "inside a registered root or a path an admin is registering"). Both are in the full
+`core:*` scope catalog that F2, the foundation PRs, declares with their class and flags (05-rbac §5), so M3's atom
+table can write them and `httpapi.Build` can validate them from F4, although `library` is wired only at F7 (IMPL-4).
 
 ## 5L.4 Lifecycle
 
@@ -669,7 +671,7 @@ and ABO passes its own (05-metrics).
 | `TestTransferInCommitsWithCallerBatch` | `TransferIn` + caller rows land in one commit; `CrashClone` before the commit leaves a `done` row reported by `PendingTransfers`, never undone |
 | `TestScopeCannotActAsAnotherOwner` | a module's `Scope` cannot write another owner's root or quarantine its files |
 | `TestConfigEntryRoots_RoundTrip` | every root, mapping and protected path round-trips through `core.library.roots`/`mappings`/`protected_paths`, and a change made through `config.Store.Apply` reaches the registry without a restart (SIMP4-3, SIMP7-8: the roots are config entries, not a store) |
-| `TestRootsCutover_FromHEADFixture` (ABO, on the R0-written fixture corpus of 05-config §1.12.2) | after M6: the books root and every import root are `core.library.roots` entries with the IDs of §5L.10 (`books-library`, `import-<n>` for HEAD ID `n`), paths, names, roles and `Watch` as the table says; `path_aliases`, `itunes.path_mappings` and `protected_paths` are the matching entries; books' per-root record holds `Enabled`, `CreatedAt`, `LastScan` and `BookCount` byte-for-byte; no `import_path:` row, path index row or `counter:import_path` remains; an iTunes mapping whose local prefix is under no root and a nested import root are reported, the first quarantined; re-running the step changes nothing; a crash at each point of the crash matrix leaves either the HEAD rows or the finished entries (14 E1, E2) |
+| `TestRootsCutover_FromHEADFixture` (ABO, on the R0-written fixture corpus of 05-config §1.12.2) | after M6: the books root and every import root are `core.library.roots` entries with the IDs of §5L.10 (`books-library`, `import-<n>` for HEAD ID `n`), paths, names, roles and `Watch` as the table says; `path_aliases`, `itunes.path_mappings` and `protected_paths` are the matching entries; books' per-root record `rootscan:<root ID>` holds `Enabled`, `CreatedAt`, `LastScan` and `BookCount` byte-for-byte; no `import_path:` row, path index row or `counter:import_path` remains; an iTunes mapping whose local prefix is under no root and a nested import root are reported, the first quarantined; re-running the step changes nothing; a crash at each point of the crash matrix leaves either the HEAD rows or the finished entries (14 E1, E2) |
 | `TestLibraryErrorsPassKeyNameGate` (ABO, a case of `TestCoreHoldsNoAppKeyNames`) | the `"library: …"` sentinels pass the key-name gate; a `"library:" + id` literal fails it (MOD5-3) |
 
 ## 5L.10 Migration from ABO
@@ -688,7 +690,7 @@ and ABO passes its own (05-metrics).
 | `internal/diskstats` | `Root.Usage` (moved into core as an internal package) |
 | `deluge.ProtectedPathCache` | a `ProtectionOracle` implemented by the Deluge adapter (05-download); static `protected_paths` → `RoleExternal` roots |
 | `itunes.path_mappings`, `WHISPER_PATH_MAP`, fingerprint worker wire format | `PathMapper` sources `itunes`, `worker:whisper`, `worker:fingerprint` |
-| `ImportPathStore` methods minus `CountBooksByPathPrefix` (`internal/database/pebble_store_importpaths.go`; 04's `database.Store` split table: `ImportPathStore` → `library`) | deleted at F7, the integrations flip: the roots cutover (below) turns every `import_path:` row into a `core.library.roots` entry, and books' scanner, autoscan and filesystem handlers (`internal/scanner/service.go:677`, `internal/server/folder_autoscan_op.go:147`, `internal/server/handlers/filesystem.go:247,319`) read roots through `library.Scope` and write `LastScan`/`BookCount` into books' own per-root record |
+| `ImportPathStore` methods minus `CountBooksByPathPrefix` (`internal/database/pebble_store_importpaths.go`; 04's `database.Store` split table: `ImportPathStore` → `library`) | deleted at F7, the integrations flip: the roots cutover (below) turns every `import_path:` row into a `core.library.roots` entry, and books' scanner, autoscan and filesystem handlers (`internal/scanner/service.go:677`, `internal/server/folder_autoscan_op.go:147`, `internal/server/handlers/filesystem.go:247,319`) read roots through `library.Scope` and write `LastScan`/`BookCount` into books' own per-root record `rootscan:<root ID>` |
 | `pending_file_op:` (`file_io_pool.go:31`) | stays a books family with its books writer: it is books' per-book file I/O job pool (tag and metadata writes), not a transfer journal, so nothing is drained or moved. Core transfers journal only in `c/library/transfer/` |
 | `filehash.BookFileHash` | stays books (identity algorithm), reads through `RootFS` |
 
@@ -696,13 +698,14 @@ and ABO passes its own (05-metrics).
 step is books code (03 rule R1: core holds no ABO key name), one of the BootBlocking steps of the R2 migration list
 (05-storage §5S.3.13 owns the step contract: behind the pre-migration checkpoint, resumable, one batch, rollback by
 restoring the checkpoint). It runs in the integrations step M6, after the config and secrets step M2 (05-config
-§1.12.2), which hands it the blob fields its rename table marks for M6 and leaves them in the blob. In one batch it
+§1.12.2), which hands it the blob fields its rename table marks for M6 and leaves them in the blob, an active books
+claim until M6 retires it; M6 deletes the blob row once its parts have read it (05-config §1.12.2). In one batch it
 reads HEAD's rows, writes the entries through `config.Importer` (05-config §1.3.3) and deletes the rows:
 
 | HEAD source | Becomes |
 |---|---|
 | blob `root_dir` (non-empty), with `path_aliases` | entry `books-library`: `Path` = `root_dir`, `Role` library, `Owner` books, `Aliases` = `path_aliases`, `Watch` off (HEAD watches import paths only, `internal/watcher/supervisor.go:73`), `Sentinel` bootstrap, `Quarantine` `.failed`, `AppDir` `.mediacore`, `MinFree` 0 (HEAD has no floor) |
-| row `import_path:<n>` (`ID, Path, Name, Enabled, CreatedAt, LastScan, BookCount`, `internal/database/store.go:596-604`), its index row `import_path:path:<path>` and the counter `counter:import_path` | entry `import-<n>`: `Path`, `Name`, `Role` import, `Owner` books, `Watch` auto when `Enabled` else off (whether books acts on the events stays books' `modules.books.scan.auto_scan_enabled`), `Sentinel` bootstrap, library's defaults for the rest; `Enabled`, `CreatedAt`, `LastScan` and `BookCount` go to books' own per-root record keyed by the root ID (a books family; 04 names it), because they are books' scan state, not library's. Rows, index rows and counter are deleted |
+| row `import_path:<n>` (`ID, Path, Name, Enabled, CreatedAt, LastScan, BookCount`, `internal/database/store.go:596-604`), its index row `import_path:path:<path>` and the counter `counter:import_path` | entry `import-<n>`: `Path`, `Name`, `Role` import, `Owner` books, `Watch` auto when `Enabled` else off (whether books acts on the events stays books' `modules.books.scan.auto_scan_enabled`), `Sentinel` bootstrap, library's defaults for the rest; `Enabled`, `CreatedAt`, `LastScan` and `BookCount` go to books' own per-root record `rootscan:<root ID>` (a new books family, name coined here), because they are books' scan state, not library's. Rows, index rows and counter are deleted |
 | blob `itunes.path_mappings` (`From`, `To`) | `core.library.mappings` entries `{Source: "itunes", Remote: From, Local: Resolve(To)}`, `Fold` for a Windows-form `From` (HEAD's `normalizeWindowsPrefix`, `internal/config/config.go:62-90`) |
 | blob `protected_paths` | `core.library.protected_paths` |
 
@@ -713,8 +716,13 @@ is quarantined with its raw value (05-storage's quarantine record, reported in h
 root nested inside another root of the same owner (an import path inside `root_dir`) is registered as §5L.3.8's
 same-owner rule requires (excluded from the outer root's walks) and
 reported, the decision to keep it staying with the owner (§5L.12 item 1); a row that does not decode is quarantined. Rollback is
-the offline restore of the pre-migration checkpoint with the previous binary (05-storage); after the level step M7
-no older build opens the store.
+the offline restore of the pre-migration checkpoint with the pre-freeze release's binary (05-storage; 09 §9.2.1);
+after the level step M7 no older build opens the store.
+
+**M6's write outside its retired claims (DATA-5).** The `rootscan:` rows are the one family this part of M6 writes
+that is not a retired claim it drains. 05-storage §5S.9.1 lists it in its "rewritten in place by" column with M6,
+`TestCutoverLeavesOtherFamiliesByteIdentical` excludes exactly that family, and `TestRootsCutover_FromHEADFixture`
+is its before/after oracle (each `rootscan:` row equals the HEAD row's four fields).
 
 A migrated root has no sentinel yet, so it keeps `SentinelBootstrap`: the sentinel is created when HEAD's heuristic
 passes, a present sentinel must name this install and root, and an absent one leaves the decision to the heuristic,
@@ -856,3 +864,9 @@ Round 9 (`docs/plans/platform-core/reviews/spec-round-9-*.md`, dispositions bind
   `TestSentinelBootstrapLegacyRoot` to `TestSentinelBootstrapMigratedRoot`.
   Consistency pass: 03's rules cited as "03 rule R1", the one-module claim re-pointed to 03 §3.4, the risk ID as 14 E2,
   and the roots cutover and `ImportPathStore` deletion keyed to the integrations flip F7. Final consistency sweep: the cutover test's hazard citation reads 14 E1, E2.
+
+Round 13 (2026-11-04): IMPL-4, DATA-1 (as ruled), DATA-5 (as ruled), CONFORM-1. `core:library.manage` and
+`core:library.browse` stated as part of the full `core:*` catalog declared at F2 (§5L.3.8); the blob stays an
+active books claim until M6 retires and deletes it; books' per-root record named `rootscan:<root ID>` and stated as
+M6's one write outside its retired claims, excluded by name from the byte-identity test with the roots cutover test
+as its oracle; rollback names the pre-freeze release's binary.
