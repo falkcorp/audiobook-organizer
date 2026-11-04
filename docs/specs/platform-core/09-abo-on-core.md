@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/09-abo-on-core.md -->
-<!-- version: 1.11.2 -->
+<!-- version: 1.11.3 -->
 <!-- guid: 3c82c917-2fc4-4385-b085-73d143a2374f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -332,7 +332,7 @@ commit whose `Stage-Release:` value is not `none`, carries no trailer of its own
 tree equals the PR's base with those reverts applied (`check_soak.py` recomputes `git revert --no-commit <sha>…` and
 compares the trees); check (c) still applies except its backwards-value clause, and the commit message decides
 nothing. **An H flip is revertible only before it ships (FIN12-2):** the revert of a commit whose trailer is
-`<H> flip` is admitted this way only while no production release tag contains that commit (`check_soak.py` fetches
+`<H> flip` is admitted this way only while no production release tag (a `v<major>.<minor>.<patch>` tag with no pre-release suffix, the form `prerelease.yml` promotes; `-rc.N` tags do not count) contains that commit (`check_soak.py` fetches
 the tags and runs `git tag --contains`); after that the H release is one-way, its floor refuses every older build on
 the raised store (§9.13), and the gate refuses the revert. Re-landing a reverted release
 needs a fresh row, because its landing commit changes. Writing a soak row is an **owner checkpoint**: no agent may run
@@ -2262,3 +2262,4 @@ Final verification:
 - FIN12-6 — S2 HTTP row: the wrapper clears `r.Pattern` and carries `httpapi.MatchedPattern(ctx)`; stage 2 records into otelgin's instruments (`app.Options.HTTPMetricsScope`).
 - FIN12-9 — §9.2.1 and §9.8 row 37: the merge-commit exemption is deleted (rebase-only merges); an untrailered merge commit is refused.
 - FIN12-10 — §9.2.1 `<since>` and boot log, §9.13: a second boot line `boot levels=<vector>`; an H release's clock starts at the first boot that logged its raised levels, so a deferred H1/H2 boot does not start it.
+- Final verification (lead) — §9.2.x: "production release tag" defined as a `v<major>.<minor>.<patch>` tag without a pre-release suffix (FIN12-2 residual).
