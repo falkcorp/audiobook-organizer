@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.7.1 -->
+<!-- version: 1.8.0 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -450,10 +450,12 @@ therefore not a breaking change, and nothing in `rbac`'s frozen surface names th
 ```go
 package legacy
 
-// AtomWriter (formerly rbac.LegacyAtomWriter) is implemented by a role store
+// RBACAtomWriter (formerly rbac.LegacyAtomWriter, then legacy.AtomWriter;
+// SIMP7-8's naming rule: an owner-specific legacy identifier takes its former
+// package's name in Go initialism form) is implemented by a role store
 // whose rows an older build reads: rbac calls PutRoleAtoms instead of PutRole
 // with the legacy atoms the row rule admits (05-rbac §6.3). Absent = PutRole.
-type AtomWriter interface {
+type RBACAtomWriter interface {
 	PutRoleAtoms(b *storage.Batch, r *rbac.Role, legacyAtoms []string) error
 }
 
@@ -466,10 +468,14 @@ type AtomWriter interface {
 ```
 
 `legacy` (L5) imports `rbac` for the types it names, so `rbac` never imports it (03 §3.3). The kernel
-detects each capability by type assertion once at P4c and hands the store to `rbac`, which names a
-capability only through an **unexported** interface of its own with the identical method set; an
-`export_test.go` assertion checks, from rbac's external test package, that the unexported interface and
-the `legacy` one are mutually assignable, so a renamed or retyped member fails rbac's tests.
+asserts only the capabilities it drives (`legacy.ConfigOpener`, `legacy.ConfigSecrets`, 05-config
+§1.3.3) and hands the store to `rbac` as an `rbac.Store`; the capabilities of this section are detected
+only by `rbac` itself (its service and its restore hook, §5, §7.1), through its mirrors (SIMP7-5). `rbac` names a capability only through an
+**unexported** interface of its own with the identical method set. The mirror test is 03 §3.3's
+(resolution R7-7, COR7-2, SIMP7-1): rbac's `export_test.go` (`package rbac`) only exports a test alias of
+each mirror, and `legacy_mirror_test.go` in rbac's external test package (`package rbac_test`, which may
+import `legacy`) asserts that each alias and its `legacy` counterpart are mutually assignable, so a
+renamed or retyped member fails rbac's tests.
 `legacytest.RBACStoreSuite` (one suite for the store, a case per capability: the atom writer, confirm
 accept and discard; SIMP6-6) drives the service over an implementation.
 
@@ -833,7 +839,7 @@ admitted through `Manifest.LegacyRoleIDs []rbac.RoleName` (06 §6.4.2), which re
 | Tasks (05-tasks §5T.3.7) | definition declares `Permissions{Start, Cancel, Approve, View}`; `Start` **required** (registration fails like R6) and **not satisfiable by a `ClassView` scope** unless the definition sets `StartableByViewers` with a reviewed reason (SEC-9; the legacy translation of an op def declaring only `library.view` becomes `AllOf(books:scan, books:view)`, which keeps today's floor, `opsv3/handler.go:236-246`); `Cancel` zero = `Start`, the run's own actor may always cancel, `core:tasks.manage` may cancel any; `Approve` required iff the definition needs approval; `View` zero = `core:tasks.view`. **Approval** (SEC-24, today's rule kept, `opsv3/runs.go:395-410`): by a `session`, an API key, or a verified identity extension (CF Access); an API key must name the `Approve` scope **explicitly** in its scopes (not through implication or `core:admin`); `LegacyFullScope` keys and `session_delegated` are refused | closed |
 | Realtime topics (05-realtime) | the topic's permission from the one events topic catalog (05-events, SIMP-5) checked per subscriber per event; principal revalidated on heartbeat and invalidation | closed |
 | Settings sections (05-config) | each section declares `ReadPerm`, `WritePerm` (default write `<ns>:settings.manage`, core sections `core:settings.manage`); keys carry a `Protection` level (05-config), and keys whose change could mint admins, spoof client addresses or apply updates are `ProtectAdmin` (needs `core:admin` + an interactive method, SEC-6; the per-key column is in 05-authn §8 and 05-http-api §10); secret fields are write-only regardless | closed |
-| Storage/backup/updater admin ops | core routes; backups per 05-backup's route table (SEC2-8): list `core:system.view`; verify and create `core:system.manage` (verify opens a checkpoint and hashes the archive, so it is not a view-class start, SEC3-12); delete and import `core:system.manage` + `Guards.Interactive` (import audited); **download `core:admin` + `Guards.Interactive` + `Guards.Owner`** (with 05-authn §4.8's fallback; audited) — an archive holds every credential verifier, so it is credential-equivalent and never behind a grantable non-admin scope (SEC3-7); restore `core:backup.restore` (§6.1, SEC-16); **factory reset** `POST /api/core/v1/system/factory-reset` (`storage.Admin.StageFactoryReset`, 05-storage §5S.3.15): `core:admin` + `Guards.Interactive` + `Guards.Owner` (with 05-authn §4.8's fallback; audited `core.system.factory_reset`) — it sets aside every credential, role and secret record of the install, so like the archive download it is never behind a grantable non-admin scope (DATA6-6); other storage and updater admin `core:system.manage` | closed |
+| Storage/backup/updater admin ops | core routes; backups per 05-backup's route table (SEC2-8): list `core:system.view`; verify and create `core:system.manage` (verify opens a checkpoint and hashes the archive, so it is not a view-class start, SEC3-12); delete and import `core:system.manage` + `Guards.Interactive` (import audited); **download `core:admin` + `Guards.Interactive` + `Guards.Owner`** (with 05-authn §4.8's fallback; audited) — an archive holds every credential verifier, so it is credential-equivalent and never behind a grantable non-admin scope (SEC3-7); restore `core:backup.restore` (§6.1, SEC-16); **factory reset** `POST /api/core/v1/system/factory-reset` (from S4 r2, in `internal/storagehttp`; it only stages, `storage.Admin.StageFactoryReset`, 05-storage §5S.3.15): `core:admin` + `Guards.Interactive` + `Guards.Owner` (with 05-authn §4.8's fallback; audited `core.system.factory_reset`) — it sets aside every credential, role and secret record of the install, so like the archive download it is never behind a grantable non-admin scope (DATA6-6); before S4 r2 no core route exists and the legacy route keeps HEAD's chain (§6.2, resolution R7-2); other storage and updater admin `core:system.manage` | closed |
 | UI hints | `/api/core/v1/me` returns `permissions` (concrete, expanded) and `patterns`; `@mediacore/shell` `can(scope)` implements §4.4 in TS. **Advisory only**: the server is authoritative. Matching vectors shared in `core/rbac/testdata/match_vectors.json`, run by Go and vitest | n/a |
 
 ### 4.11 Interplay with auth modes
@@ -894,8 +900,9 @@ admitted through `Manifest.LegacyRoleIDs []rbac.RoleName` (06 §6.4.2), which re
    `ReconcileVerifiedEmails` (05-authn §5), so a fresh store booted on r1 has the four seed roles and an
    older build's re-seed semantics are unchanged; the r2 flip PR deletes that call in the same change
    that turns on P7's seed commit (05-authn §5 lists the whole `seedRolesAndTokens` sequence). The
-   service detects the store's capabilities (`legacy.AtomWriter`, `legacy.ExtConfirmer`, §3.4) by
-   type assertion when it is built over the store P4c built.
+   service detects the store's capabilities (`legacy.RBACAtomWriter`, `legacy.ExtConfirmer`, §3.4)
+   through its unexported mirrors when it is built over the store P4c built, as rbac's restore hook does
+   over the store it is handed; the kernel asserts none of them (SIMP7-5).
 2. **P5**: the kernel creates `rbac.Service` (over the `Store` built in P4c, with `Deps.Compile =
    authz.Compile`) and `audit.Store` (R4: L4, same layer as `auth`) (COR2-7, COR4-12).
 3. Core declares its permissions and seeds, the kernel declares the app-level aliases of
@@ -983,9 +990,34 @@ stay identical:
 | read-only (`adminRole`) + `users.manage` | master-list routes | `AllOf(core:users.manage, books:admin.view)` | open |
 | always-authenticated | `PATCH /admin/debug/books/:id`, `PATCH /admin/debug/book-files/:id`, `POST /admin/debug/edits/:edit_id/undo` | `books:admin.debug` | 401 |
 | always-authenticated | `POST /system/reset` | `core:system.manage` | 401 |
-| always-authenticated (and owner-guarded at HEAD, 05-authn §4.8) | `POST /system/factory-reset` (from S2b an alias of `POST /api/core/v1/system/factory-reset`, which stages core's factory reset instead of HEAD's in-place `Reset`, 05-storage §5S.3.15, DATA6-6) | `core:admin` + `Guards.Interactive` + `Guards.Owner` (the core route's guards; only `admin` holds `core:admin`, so the reach equals HEAD's `RequireAdmin`) | 401 |
+| always-authenticated (and owner-guarded at HEAD, 05-authn §4.8) | `POST /system/factory-reset` (stages core's factory reset instead of HEAD's in-place `Reset`, 05-storage §5S.3.15, DATA6-6; stages below the table) | from S4 r2 `core:admin` + `Guards.Interactive` + `Guards.Owner` (the core route's guards; only `admin` holds `core:admin`, so the reach equals HEAD's `RequireAdmin`); S2b to S4 r1 HEAD's chain unchanged | 401 |
 | always-authenticated | retired 410 stubs `/maintenance/wipe`, `/cache/invalidate`, `/admin/recompact-digests` | `core:admin` (stub keeps auth-first ordering) | 401 |
 | always-authenticated | guest service tokens list, plan, revoke | `core:admin` | 401 |
+
+**Factory reset by stage (resolution R7-2; COR7-1, SEC7-4, SEC7-5, DATA7-6).** Nothing destructive runs
+before the restart, and there is no core route before core auth exists:
+
+- **S2b until S4 r2.** Books' gin handler for the legacy path, behind HEAD's chain unchanged (`credRoute`
+  + `adminGroup(adminRouteAlwaysAuthenticated)` + `ownerGateWhenOwnerSet`,
+  `internal/server/wire_system_routes.go:47-48` @748fd787a), calls `legacy.Maintenance.StageFactoryReset`.
+  That is a narrow handle the kernel hands to the module that declares legacy claims, as
+  `module.StorageHandles.Maintenance` (06 §6.4.4; 05-storage), because `storage.Admin` is kernel-only. Gin
+  decides who may call it, as at HEAD; `rbac`, the guards and `audit` do not exist yet (no `rbac` in P5
+  before S4, 06 §6.5.1), and an alias would bypass gin's chain. The handler only stages: it writes no
+  default into the live config blob and deletes no file.
+- **From S4 r2.** The core route `POST /api/core/v1/system/factory-reset` lands in a new
+  `internal/storagehttp` (L6, imported only by `kernel`, 03 §3.3), with the guards and audit event of the
+  row above, and the legacy path becomes its `Alias` (05-http-api §4.6), in the r2 PR with the other
+  native admin routes.
+- **HEAD's side effects** (the gap-fill config file reset, the Open Library data and the library
+  `RootDir` wipe, `internal/server/handlers/system/handler.go:538-589` @748fd787a) run in a books
+  post-reset hook only after the reset journal reads `applied`, at the reset boot, and are stated as not
+  undoable; whether to keep the `RootDir` wipe is owner question Q-K in 14 (recommended: HEAD parity, with
+  a release-note line). Staging records the live Pebble open stamp and is rejected when it moved; a staged
+  reset and a staged restore exclude each other, and `reset_pending` makes `make rollback`, `deploy` and
+  the updater refuse (05-storage §5S.3.15 owns these rules).
+- `TestLegacyRoleReachUnchanged` asserts HEAD's reach for the legacy path at S2b and S3 (the four seed
+  roles, scoped keys, auth off: 401), and from S4 r2 the alias's reach as in the row above.
 
 v1.0.0 mapped the read-only debug and master-list routes to `books:admin.debug`, which is
 `AuthRequired` and would have closed them with auth off, contrary to today's pass-through. Only
@@ -1034,7 +1066,7 @@ are part of the deferred cutover (05-storage). It runs `rbactest.StoreSuite` wit
 `legacytest.RBACStoreSuite` for its capabilities (§3.4).
 
 - **Legacy row content: legacy atoms only (SEC4-3).** A role row this build writes holds, in its
-  `Permissions` list, **only** the legacy atoms the row rule admits (`legacy.AtomWriter.PutRoleAtoms`' `legacyAtoms`)
+  `Permissions` list, **only** the legacy atoms the row rule admits (`legacy.RBACAtomWriter.PutRoleAtoms`' `legacyAtoms`)
   — never a namespaced string. HEAD's permission set is the union of the role rows' raw strings, and
   worker confinement is a "nothing else" test: `workerOnly` holds only if every string is
   `fingerprint.worker` (`internal/server/middleware/auth.go:271-297`), so one extra string in a
@@ -1157,7 +1189,7 @@ are part of the deferred cutover (05-storage). It runs `rbactest.StoreSuite` wit
   `ErrSeedRoleLocked`, the operator diff of §3.6, and the storage grant the move needs) is not part of
   the extraction: a later, one-way, checkpointed step behind the per-owner level guard, decided on
   measured data (02 decision 13), whose floor is the cutover release itself. The cutover stops
-  supplying `legacy.Stores.Roles` and may delete `legacy.AtomWriter` and `RBACStoreSuite`: they live
+  supplying `legacy.Stores.Roles` and may delete `legacy.RBACAtomWriter` and `RBACStoreSuite`: they live
   in `legacy`, outside the API promise, so that is not a v1 break (resolution R6-3).
 
 ## 7. Audit log (`core/audit`, G13)
@@ -1213,7 +1245,8 @@ open; boot fails if either fails. They also run on a replaced-store boot (05-aut
   blanked with `password_reset_required` set (05-authn §4.14 step 1), its API keys are set
   `needs_confirmation`, and its sign-in through identity links is suspended (`User.SignInRestricted`,
   05-authn §4.14): OIDC and identity extensions refuse it as password sign-in does, until an
-  owner-verified reset link or the offline `<app> users reset-password` clears it. On an older build
+  owner-verified reset link or the offline `<app> users reset-password` clears it (opened through
+  `kernel.OpenOffline`, so it is not a foreign open; 05-authn §4.14, DATA7-11). On an older build
   the blanked hash plus the deletion of its external-identity links (journaled `identity.unlinked`)
   hold; the residual is Cloudflare Access sign-in on an older build, which resolves users by
   allow-listed e-mail and is stated in the restore report. So the demoted, possibly compromised,
@@ -1228,8 +1261,10 @@ open; boot fails if either fails. They also run on a replaced-store boot (05-aut
   and one made during an interval that foreign-open detection missed yields no `gap` line at all, so
   coverage reads complete while the demotion is absent from it. Re-applying the journal alone would
   hand the role back in either case. So whenever the kernel can open the pre-swap store (a staged
-  restore: a read-only `rbac.Store` over `rc.Previous`, built with the same constructor, 05-backup
-  §5B.3.6), whatever `rc.Revocations` holds, rbac's hook takes the **most restrictive** of the
+  restore: a read-only `rbac.Store` over the pre-swap store, built by calling the live store's
+  constructor once more over the handles `storage.Admin.OpenReadOnly` issues for the pre-swap directory,
+  whose writes fail `ErrReadOnly`, 05-backup §5B.3.6, 05-storage, 05-authn §3.2 `RestoreDeps.Previous`;
+  COR7-8), whatever `rc.Revocations` holds, rbac's hook takes the **most restrictive** of the
   restored and the pre-swap state for every role row and every user's role list: an assignment absent
   in the pre-swap store is removed, a role's permissions are the intersection, a role deleted there is
   deleted, and the last-admin rule above still applies. With full coverage this equals the journal
@@ -1435,7 +1470,7 @@ option governed by the compat ledger (§6.3, SIMP-7).
 | `TestLegacyAtomMapping_Golden` | the 13 rows of §6.1 |
 | `TestLegacyRows_ReadInPlace` | (ABO, through books' legacy stores) fixture DB from ABO's role, user and key families → expected roles, checkers and keys, with no row written by the read (R4-1) |
 | `TestLegacyRevocationHonoured` | key revoked or user deactivated on the previous release → refused here at the next request, with no rebuild (R3-1) |
-| `TestLegacyRoleReachUnchanged` (09) | extended to scoped API keys (HEAD's role ∩ key reach on legacy routes and op starts, SEC5-7), auth-off mode (200 on a `settings.manage` route and a started `settings.manage` op; in-handler `deny` sites with response-content cells; the recorded tightenings of §4.11 asserted refused, COR5-4, SEC5-8, SEC5-9) and random custom roles (stage 13 admits a legacy route only if its successor admits, SEC4-2), not only the 4 seed roles; runs on a HEAD-seeded store, not only a fresh one (DATA4-11) |
+| `TestLegacyRoleReachUnchanged` (09) | extended to scoped API keys (HEAD's role ∩ key reach on legacy routes and op starts, SEC5-7), auth-off mode (200 on a `settings.manage` route and a started `settings.manage` op; in-handler `deny` sites with response-content cells; the recorded tightenings of §4.11 asserted refused, COR5-4, SEC5-8, SEC5-9) and random custom roles (stage 13 admits a legacy route only if its successor admits, SEC4-2), not only the 4 seed roles; runs on a HEAD-seeded store, not only a fresh one (DATA4-11); S2b and S3 cells assert HEAD's reach for the legacy `POST /api/v1/system/factory-reset` under HEAD's chain (no core route exists; the handler stages through `legacy.Maintenance`), and from S4 r2 the alias's reach (§6.2, resolution R7-2, SEC7-4) |
 | `TestAudit_SyncInSameBatch` | failing batch → neither change nor record |
 | `TestAudit_SeqUniqueAcrossCrash` | `Sequence` reservation: after a simulated crash, no `seq` is reissued; gaps allowed |
 | `TestAudit_DenialCoalescing` | `synctest` clock |
@@ -1670,3 +1705,13 @@ Round 6 (2026-11-04), findings applied to this file:
 - SIMP6-7 — `Role.Suspended` becomes `Role.Legacy *RoleLegacyState{Suspended}` (nil from a native store) with a `Role.Suspended()` reader, per 03's one rule for legacy-only record state (§3.3, §6.3).
 - R6-3 / SIMP6-2 — role-store capabilities live in the `legacy` package outside the API promise (`rbac.LegacyAtomWriter` → `legacy.AtomWriter`); the kernel detects them at P4c and `rbac` names them through unexported twins checked by `export_test.go`; cutover removal is not a v1 break (§3, §3.4, §5, §6.3, Objections).
 - integration pass (round 6): §4.10 and §6.2: `POST /api/core/v1/system/factory-reset` is `core:admin` + `Guards.Interactive` + `Guards.Owner` (05-authn §4.8 fallback; audited `core.system.factory_reset`), and the legacy `POST /system/factory-reset` row, split from `/system/reset`, carries the same guards (reach equal to HEAD's `RequireAdmin`; DATA6-6).
+
+Round 7 (2026-11-04), findings applied to this file:
+
+- COR7-1 / SEC7-4 / SEC7-5 / DATA7-6 (R7-2) — factory reset by stage: S2b–S4 r1 books' gin handler, behind HEAD's chain unchanged, calls `legacy.Maintenance.StageFactoryReset` (no core route, no alias); from S4 r2 the core route lands in `internal/storagehttp` and the legacy path becomes its `Alias`; HEAD's side effects run in a books post-reset hook after `applied`, not undoable (Q-K); the handler writes no default and deletes nothing (§4.10, §6.2).
+- SEC7-4 — `TestLegacyRoleReachUnchanged` gains S2b and S3 cells for the legacy factory-reset path (§6.2, §12).
+- COR7-8 (R7-4) — the pre-swap `rbac.Store` is built by calling the constructor once more over `storage.Admin.OpenReadOnly`'s handles (§7.1).
+- DATA7-11 (R7-4) — the offline `users reset-password` opens through `kernel.OpenOffline` (§7.1).
+- COR7-2 / SIMP7-1 (R7-7) — the mirror test is 03 §3.3's: `export_test.go` exports aliases, `legacy_mirror_test.go` in `package rbac_test` asserts both directions (§3.4).
+- SIMP7-5 — the kernel asserts only the capabilities it drives; rbac's service and restore hook detect the role-store capabilities through their mirrors (§3.4, §5).
+- SIMP7-8 — `legacy.AtomWriter` renamed `legacy.RBACAtomWriter` (owner-specific identifiers take the former package's name) (§3.4, §5, §6.3).
