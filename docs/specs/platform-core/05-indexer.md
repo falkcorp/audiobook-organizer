@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-indexer.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5e2d5cda-5f98-4db2-87b1-b4c8d6519ec7 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -7,7 +7,12 @@
 
 Evidence commit `748fd787a`. Raw inputs: [`raw/16-arr-domain-research.md`](../../plans/platform-core/raw/16-arr-domain-research.md)
 §4.1-§4.4, §5.2 (Prowlarr rows), §6, §7.1 rows 1, 6, 7, 15; [`raw/11-integrations.md`](../../plans/platform-core/raw/11-integrations.md) §1, §4.
-Builds on [05-metadata](05-metadata.md) §M1 (instances, health, taxonomy) and §M2 (`providerhttp`).
+Builds on [05-metadata](05-metadata.md) §M1 (instances, health, egress trust, taxonomy) and §M2 (`providerhttp`).
+
+> **Deferred-build: not in the ABO extraction plan** (cross-cutting resolution 1, SIMP-1). ABO consumes no
+> indexer. This file is the contract of record at proof depth; `integrations/indexer` is built with `acquire`
+> when the first TV/Movies app starts ([10](10-tv-movies-proof.md)), and [09](09-abo-on-core.md) S7 does not
+> create the package.
 
 ## 1. Purpose & scope
 
@@ -165,7 +170,9 @@ type Page struct {
 	Total    int // -1 unknown
 }
 
-// Indexer is what every indexer adapter instance implements.
+// Indexer is what every indexer adapter instance implements. Adapters declare
+// Meta.Egress = EgressConfigured for the API URL; Fetch uses
+// EgressSameHostOrPublic (05-metadata M1.3, SEC-15).
 type Indexer interface {
 	integrations.Instance
 	Caps(ctx context.Context, refresh bool) (Caps, error) // cached; refresh forces t=caps
@@ -193,7 +200,7 @@ type InstanceSettings struct {
 	GrabLimitPerDay         int               // 0 = none → providerhttp daily counter "grab"
 }
 
-// ---- pool (per App) ---------------------------------------------------------
+// ---- pool (per App; modules reach it as module.Deps.Indexers, 06 / COR-1) ----
 
 type Pool struct{ /* unexported */ }
 
@@ -227,20 +234,33 @@ type IndexerOutcome struct {
 // outcome per indexer. err is non-nil only when every eligible indexer failed.
 func (p *Pool) SearchAll(ctx context.Context, q Query, o SearchOptions) ([]Release, []IndexerOutcome, error)
 
-// RSS pages each RSS-enabled indexer from newest back to its persisted cursor
-// (last GUID + published time), capped at core.indexer.rss_max_pages, and
-// advances the cursor only after the caller acknowledges processing.
+// RSS pages each (RSS-enabled indexer, feed) pair from newest back to its
+// persisted cursor (last GUID + published time), capped at
+// core.indexer.rss_max_pages, and advances the cursor only after the caller
+// acknowledges processing. One feed per consuming module (COR-25): with TV and
+// Movies in one app sharing an indexer, each gets its own query type,
+// categories and cursor, so neither module's RSS type wins over the other's.
 func (p *Pool) RSS(ctx context.Context, o RSSOptions) iter.Seq2[RSSBatch, error]
 
 type RSSOptions struct {
-	Types       map[integrations.Ref]SearchType // per-indexer RSS type; default TypeSearch with empty q (TV app passes TypeTV, Movies TypeMovie: raw/16 §4.2 RSS row)
+	Feeds       []Feed // required, ≥1; acquire passes one per registered media type
 	Parallelism tasks.Parallelism
+}
+
+// Feed is one RSS query shape (raw/16 §4.2 RSS row: TV passes TypeTV, Movies
+// TypeMovie). An indexer whose caps lack Type falls back to TypeSearch with
+// empty q and the same Categories (Plan).
+type Feed struct {
+	Name       string // cursor namespace, the module ID ("tv", "movies")
+	Type       SearchType
+	Categories []int
 }
 
 type RSSBatch struct {
 	Indexer  integrations.Ref
+	Feed     string
 	Releases []Release
-	Ack      func(ctx context.Context) error // advances the cursor in storage
+	Ack      func(ctx context.Context) error // advances c/indexer/rss/<instance>/<feed>
 }
 
 func (p *Pool) Fetch(ctx context.Context, r Release) (download.Source, error)
@@ -250,9 +270,10 @@ func (p *Pool) Caps(ctx context.Context, ref integrations.Ref, refresh bool) (Ca
 Core-shipped adapters: `core.newznab` and `core.torznab` — one implementation, the adapter ID fixes
 `Release.Protocol` and enables the Torznab attribute set. Settings: `base_url`, `api_path` (default `/api`),
 `api_key` (secret), plus `InstanceSettings`. Auth is the `apikey` query parameter (raw/16 §4.2), always
-redacted by providerhttp. Phase: built with `acquire` (phase 2 of [05-download](05-download.md) §4.1); ABO does
-not need indexers to run on core, and an audiobook search (`CatAudiobook`, `TypeBook`/`TypeSearch`) is
-possible later without contract change.
+redacted by providerhttp. Phase: built with `acquire` (phase 2 of [05-download](05-download.md) §1; deferred-build);
+ABO does not need indexers to run on core, and an audiobook search (`CatAudiobook`, `TypeBook`/`TypeSearch`) is
+possible later without contract change. Instances are records in the one instance store (05-metadata M1,
+SIMP-4); the API key is the secret `integrations/indexer/<id>/api_key`.
 
 ### 3.1 Prowlarr interop through the *arr facade
 
@@ -262,31 +283,37 @@ which translates onto core's instance API. The contract core must offer the faca
 | Prowlarr call (raw/16 §5.2) | Facade translation onto core |
 |---|---|
 | `GET /api/v3/indexer/schema` | `GET /api/core/v1/integrations/adapters?kind=indexer` → *arr `{implementation: "Newznab"\|"Torznab", configContract, fields[]}`; field names `baseUrl`, `apiPath`, `apiKey`, `categories`, `animeCategories` (→ `ExtraCategories["anime"]` for a TV app; omitted by Movies), `minimumSeeders`, `seedCriteria.seedRatio/seedTime/seasonPackSeedTime` are a **fixed alias table** in the facade, not core field names |
-| `POST /api/v3/indexer` (`?forceSave=true` retry on 400) | `Registry.Put` with `Origin=arrfacade`, tag `managed-by:prowlarr`; `forceSave` skips the connectivity test, never schema validation |
-| `GET/PUT/DELETE /api/v3/indexer/{id}` | facade keeps a stable integer id ↔ `InstanceID` map in its own keyspace; PUT/DELETE map to `Put`/`Delete` |
-| `POST /api/v3/indexer/test` | `Registry.Test` (unsaved); response header `X-Application-Version` set by the facade |
+| `POST /api/v3/indexer` (`?forceSave=true` retry on 400) | `FacadeWriter.Put` (forces `Origin=arrfacade`, `Local=false`), tag `managed-by:prowlarr`; `forceSave` skips the connectivity test, never schema or URL validation |
+| `GET/PUT/DELETE /api/v3/indexer/{id}` | facade keeps a stable integer id ↔ `InstanceID` map in its own keyspace; PUT/DELETE map to `FacadeWriter.Put`/`Delete` (only `Origin=arrfacade` instances) |
+| `POST /api/v3/indexer/test` | `FacadeWriter.Test` (unsaved; class and status only, no body); response header `X-Application-Version` set by the facade |
 | `GET /api/v3/indexer` (Prowlarr finds "its" indexers by `baseUrl`/`apiKey`) | list instances; the facade compares `base_url` and a **hash** of the key (core never returns secret values: the facade answers with the masked form and Prowlarr's own match on `baseUrl` + implementation) — open item 2 |
 
-Requirements this places on core (all satisfied by 05-metadata §M1): instances creatable by an API caller
-holding `core:integrations.manage` via an API key; a stable external-origin marker; unsaved `Test`; settings
-schema export; instance tags. Prowlarr then talks to each pushed indexer as an ordinary `core.newznab`/
-`core.torznab` instance at `<prowlarr>/<id>/api` — no special code path.
+Requirements this places on core (all satisfied by 05-metadata §M1): the facade calls `Registry.Put` only
+through **`integrations.FacadeWriter`**, which accepts the principal when it holds `<m>:arr.indexers` (the
+facade-confined key of [08](08-arr-facade.md) §8.5, which never carries `core:integrations.manage`) and forces
+`Origin=arrfacade` with the egress restrictions of SEC-15: `Local` is always false, and every URL field must be
+http(s) and resolve to public addresses or a host the operator listed in `core.integrations.egress.lan_allow`
+(a Prowlarr on the LAN needs that entry). Also: a stable external-origin marker; unsaved `Test` that returns no
+remote text; settings schema export; instance tags. The rule that a facade-confined key is refused on every
+non-facade route is owned by [05-http-api](05-http-api.md) §4.2 (SEC-5). Prowlarr then talks to each pushed
+indexer as an ordinary `core.newznab`/`core.torznab` instance at `<prowlarr>/<id>/api` — no special code path.
 
 ## 4. Lifecycle
 
-1. Instances `indexer/<id>` are created via UI, file, or facade (05-metadata §M1).
+1. Instances `indexer/<id>` are created via UI, API, or the facade's `FacadeWriter` (05-metadata §M1).
 2. **Caps**: fetched lazily on first use and by `Test`, cached in `c/indexer/caps/<instance>` for
    `core.indexer.caps_ttl`; a caps fetch failure leaves the previous caps in use (marked stale) and the
    instance `HealthDegraded`. Defaults from raw/16 §4.2 apply when the server omits a section.
 3. **Search**: `Pool.SearchAll` → per instance `Plan` → `Gate.Acquire("query")` (daily query limit) →
    paged requests (`offset += limit`, stop at `MaxPages` or a short page) → parse XML (RSS 2.0 items with
    `newznab:attr`/`torznab:attr`) → normalize → de-duplicate.
-4. **RSS**: scheduled by the app (TV/Movies RSS-sync task in `acquire`, interval 10-120 min per raw/16 §4.1);
-   core provides paging back to the cursor and acknowledgement-based cursor advance, so a crash mid-sync
-   re-delivers rather than skips.
+4. **RSS**: scheduled by `acquire` (`core.acquire.rss-sync`, interval 10-120 min per raw/16 §4.1); core
+   provides one cursor per (instance, feed), paging back to it, and acknowledgement-based cursor advance, so a
+   crash mid-sync re-delivers rather than skips.
 5. **Fetch** at grab time: `Gate.Acquire("grab")`, download through providerhttp with
-   `EgressSameHostOrPublic` (links normally point at the indexer host or Prowlarr), size cap
-   `core.indexer.max_fetch_bytes`, then hand `download.Source` to `download.Pool.Grab`.
+   `EgressSameHostOrPublic` (links normally point at the indexer host or Prowlarr; the "same host" is the
+   instance's configured host under that instance's own guard, so a facade-pushed indexer cannot use it to
+   reach the LAN), size cap `core.indexer.max_fetch_bytes`, then hand `download.Source` to `download.Pool.Grab`.
 6. **Back-off**: providerhttp breaker and holds per instance (05-metadata §M2) plus Newznab error-code
    classification (§5); `Health` exposes `Hold.Until`, which is the "disabled till" users see in *arr UIs.
 
@@ -319,15 +346,15 @@ fixtures when built:
 required `tasks.Parallelism` (network-bound; default recommendation 4); each indexer's own providerhttp
 bucket enforces its rate regardless of fan-out. Pages of one indexer are fetched sequentially (offset
 order). Caps fetch is single-flight per instance. Cursor `Ack` is a storage write keyed per instance;
-concurrent RSS runs for the same instance are prevented by a per-instance keyed mutex (the app's RSS task
-should also declare a `tasks.Resource` on `indexer/<id>`).
+concurrent RSS runs for the same instance are prevented by a per-instance keyed mutex (the RSS task also
+declares the write resource `tasks.Res("core", "indexer").With(<id>)`, a `tasks.Resource` = `entity.Ref`).
 
 ## 7. Config keys
 
 | Key | Type | Default | Hot-reload |
 |---|---|---|---|
-| `core.integrations.indexer.instances.<id>.*` | instance row (+ `InstanceSettings`) | none | yes |
-| per instance `limits.*` | providerhttp limits | RPS 0.5, burst 2, timeout 30s, retries 2 | yes |
+| `indexer/<id>` instance records (+ `InstanceSettings`) | 05-metadata M1 store, not config (SIMP-4) | none | yes |
+| instance setting `limits.*` | providerhttp limits | RPS 0.5, burst 2, timeout 30s, retries 2 | yes |
 | `core.indexer.caps_ttl` | duration | `24h` | yes |
 | `core.indexer.per_indexer_timeout` | duration | `30s` | yes |
 | `core.indexer.rss_max_pages` | int | `5` | yes |
@@ -353,7 +380,8 @@ should also declare a `tasks.Resource` on `indexer/<id>`).
 `TestErrors_CodeTable` (one fixture per code above), `TestErrors_Error200BodyBeatsStatus`,
 `TestSearchAll_PartialResultsAndOutcomes`, `TestSearchAll_AllFailedIsError`, `TestSearchAll_FanOutBounded`,
 `TestRSS_PagesBackToCursor`, `TestRSS_AckAdvancesCursorOnly`, `TestRSS_GapReported`,
-`TestFetch_GrabCounterAndSizeCap`, `TestFetch_SameHostOrPublicEgress`, `TestRedaction_ApikeyNeverLogged`.
+`TestRSS_FeedPerModuleOwnCursor`, `TestFetch_GrabCounterAndSizeCap`, `TestFetch_SameHostOrPublicEgress`,
+`TestFetch_FacadeIndexerSameHostStillGuarded`, `TestRedaction_ApikeyNeverLogged`.
 Fakes: `coretest.NewznabServer(t, fixtures)` — an `httptest.Server` serving caps/search/RSS/error XML from
 fixtures with request assertions; `coretest.FakeIndexer` for app-level tests. Facade-side Prowlarr
 round-trip tests live with 08.
@@ -376,8 +404,21 @@ acquisition feature is planned for it; that is a books-module decision, not part
 
 ## Objections to 03
 
-None beyond [05-metadata](05-metadata.md) "Objections to 03".
+None.
 
 ## Out-of-scope defects found
 
 None.
+
+## Review history
+
+Round 1 (`docs/plans/platform-core/reviews/spec-round-1-dispositions.md`):
+
+- Cross-cutting resolution 1 / SIMP-1: marked deferred-build (not in the ABO extraction plan); contract kept at proof depth.
+- SEC-5: facade writes go through `integrations.FacadeWriter` (`<m>:arr.indexers`, forced `Origin=arrfacade`);
+  the `core:integrations.manage` API-key requirement removed; refusal rule referenced to 05-http-api §4.2.
+- SEC-15: facade-pushed URLs validated (public or `lan_allow`); same-host fetches stay under the instance's guard.
+- COR-25: `RSSOptions.Feeds` — one feed (type, categories, cursor) per consuming module.
+- COR-1: modules reach the Pool as `module.Deps.Indexers`.
+- SIMP-4: instance records in the 05-metadata M1 store; secret `integrations/indexer/<id>/api_key`.
+- SIMP-16 / COR-17: RSS resource written as `tasks.Res(...)` (= `entity.Ref`).

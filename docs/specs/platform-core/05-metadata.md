@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -16,7 +16,7 @@ stand on the first two:
 
 | § | Contract | Package |
 |---|---|---|
-| M1 | Integration-instance base: adapter descriptors, per-instance configuration, host-owned secrets, health, test, error taxonomy | `integrations` (new root package, see "Objections to 03") |
+| M1 | Integration-instance base: adapter descriptors, the **one** integration-instance store (settings + `secrets.Ref`s), health, test, egress trust, error taxonomy | `integrations` (03 §3.3 root package, R4 L4) |
 | M2 | Outbound HTTP for every adapter: throttle, daily quota, circuit breaker, persisted holds, retry, egress policy, redaction — **per `App`, not package globals** | `integrations/providerhttp` |
 | M3 | Generic metadata provider `Provider[Q, R]`, provider chain, answer cache | `integrations/metadata` |
 
@@ -34,6 +34,13 @@ One mechanism, used by all five integration kinds, for: declaring an adapter (se
 egress policy, default limits); creating, updating and deleting **instances** as data; resolving
 their secrets through core `secrets`; building, health-checking, testing and hot-swapping them; and
 classifying their errors into one taxonomy. Out of scope: what an instance *does* (each kind's file).
+
+**One store (SIMP-4).** `integrations` owns every integration-instance record — kind, instance ID,
+adapter, settings, and the `secrets.Ref`s of its secret fields — in `c/integrations/instances/<kind>/<id>`.
+`config` holds **no** integration instances: there is no `core.integrations.<kind>.instances.<id>` config
+key, no `core.download.clients`, `core.notify.mail.*` or `core.ai.*` instance row, and no module-scoped
+`"<ID>/"` secret for an instance. Secret names are `integrations/<kind>/<id>/<field>`. Every kind file
+(05-ai, 05-download, 05-indexer, 05-notify) and the ABO migration (09 S6/S7) point here.
 
 ### M1.2 Current state at HEAD
 
@@ -61,7 +68,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/secrets"
@@ -121,7 +127,9 @@ func NewDescriptor[T Instance](m Meta, build func(ctx context.Context, env Env, 
 
 func (d Descriptor) Meta() Meta
 
-// InstanceConfig is one stored instance row.
+// InstanceConfig is one stored instance row (c/integrations/instances/<kind>/<id>).
+// All instances are global (admin-managed); per-user instances are deferred with
+// notify's personal channels (05-notify §11).
 type InstanceConfig struct {
 	Ref      Ref
 	Adapter  AdapterID
@@ -129,15 +137,24 @@ type InstanceConfig struct {
 	Enabled  bool
 	Priority int                 // lower is preferred; meaning is per kind
 	Tags     []string            // scoping (raw/16 §7.1 row 15)
-	Owner    *auth.UserID        // nil: global (admin-managed); set: personal (notify only, 05-notify)
-	Origin   Origin              // UI, File (read-only, lock reason shown), ArrFacade (08)
+	Origin   Origin              // set by the Registry from the writing principal, never by the caller
+	// Local allows the instance's configured URLs to reach loopback and private
+	// networks (M2 egress guard). Only an interactive principal holding
+	// core:integrations.manage may set it or keep it across a URL change (SEC-15).
+	Local    bool
 	Settings map[string]any      // validated against Meta.Settings; secret fields hold secrets.Ref only
 	Limits   *Limits             // optional per-instance override of Meta.Limits (zero fields inherit)
 	Version  uint64              // optimistic concurrency for PUT
 	Updated  time.Time
 }
 
-type Origin string // "ui" | "file" | "arrfacade"
+// Origin records who wrote the instance last.
+//   "ui"        interactive session holding core:integrations.manage
+//   "api"       API-key principal holding core:integrations.manage (cannot set Local)
+//   "arrfacade" written through FacadeWriter (08; deferred-build, M1.3)
+//   "pinned"    applied at boot from an operator-pinned legacy source for the
+//               compat window (09); read-only in the API, lock reason surfaced
+type Origin string
 
 // Env is everything an instance may use. It is constructed per instance by
 // the Registry and is the ONLY way an adapter reaches the outside world.
@@ -209,12 +226,19 @@ type HoldPolicy struct {
 	Persist   bool                    // default true
 }
 
+// EgressPolicy says which URLs an adapter dials. Whatever the policy, the
+// providerhttp dial guard (M2.4) checks the RESOLVED address at dial time and
+// refuses loopback, RFC 1918 / RFC 4193 private, CGNAT and unspecified
+// addresses unless the instance is trusted for private networks, i.e.
+// InstanceConfig.Local is true or the host is listed in
+// core.integrations.egress.lan_allow. Link-local addresses (IPv4 169.254/16,
+// fe80::/10, which include cloud metadata endpoints) are refused even then (SEC-15).
 type EgressPolicy uint8
 
 const (
-	EgressAny              EgressPolicy = iota // operator-configured targets incl. LAN: download clients, local AI, self-hosted ntfy
-	EgressPublicOnly                           // data-derived URLs: cover art, links found in responses (safehttp rules)
-	EgressSameHostOrPublic                     // indexer download links: the instance's own host, else public only
+	EgressConfigured       EgressPolicy = iota // the instance's own configured URLs: download clients, AI endpoints, webhooks, indexer API
+	EgressPublicOnly                           // data-derived URLs (cover art, links found in responses): never private, even for a Local instance
+	EgressSameHostOrPublic                     // indexer download links: the instance's configured host under that instance's own guard, else public only
 )
 
 // Hold is a persisted stand-off for one Scope.
@@ -275,12 +299,43 @@ type Registry struct{ /* unexported */ }
 func (r *Registry) Adapters(kind Kind) iter.Seq[Meta]
 func (r *Registry) Instances(kind Kind) iter.Seq[InstanceConfig]
 func (r *Registry) Config(ref Ref) (InstanceConfig, bool)
+// Put validates and persists one instance with its secrets (one batch, M1.4).
+// The principal in ctx sets Origin. Put refuses (403) an "api" principal that
+// sets Local or changes it, and refuses any write to an Origin=pinned row. When
+// the scheme, host or port of any URL-typed settings field changes, every
+// secret field is cleared unless secretsIn re-supplies it, Local is reset to
+// false unless the writer is interactive and sets it again, and the audit
+// record core.integration.update carries secrets_dropped=true (SEC-15).
 func (r *Registry) Put(ctx context.Context, inst InstanceConfig, secretsIn map[string]secrets.Value) (InstanceConfig, error)
 func (r *Registry) Delete(ctx context.Context, ref Ref) error
 // Test builds a throwaway instance from an UNSAVED config, runs Health and
-// the kind's extra test (caps fetch, login), and discards it. Nothing is persisted.
+// the kind's extra test (caps fetch, login), and discards it. Nothing is
+// persisted. The same egress guard as a saved instance applies. TestResult
+// carries only OK, the Class and the HTTP/protocol status: never a response
+// body or remote error text (a test must not be a read oracle, SEC-15).
 func (r *Registry) Test(ctx context.Context, inst InstanceConfig, secretsIn map[string]secrets.Value) (TestResult, error)
 func (r *Registry) Health(ctx context.Context, ref Ref) (Health, error)
+
+type TestResult struct {
+	OK     bool
+	Class  Class
+	Status int
+}
+
+// FacadeWriter is the only write path of the *arr facade (08, SEC-5). It is
+// deferred-build with arrfacade and integrations/indexer (not in the ABO
+// extraction plan). It accepts a principal holding "<module>:arr.indexers"
+// (not core:integrations.manage), writes and deletes only KindIndexer
+// instances whose Origin is arrfacade, forces Origin=arrfacade and
+// Local=false, and validates every URL-typed field before Put: scheme http or
+// https, and a host that resolves to public addresses or is listed in
+// core.integrations.egress.lan_allow. Anything else is refused (422).
+type FacadeWriter struct{ /* unexported */ }
+
+func (r *Registry) FacadeWriter(module string) *FacadeWriter
+func (w *FacadeWriter) Put(ctx context.Context, inst InstanceConfig, secretsIn map[string]secrets.Value) (InstanceConfig, error)
+func (w *FacadeWriter) Delete(ctx context.Context, ref Ref) error
+func (w *FacadeWriter) Test(ctx context.Context, inst InstanceConfig, secretsIn map[string]secrets.Value) (TestResult, error)
 
 // Lease returns the current built instance as T plus a release func; the
 // instance cannot be Closed while a lease is held. Kind packages wrap this.
@@ -362,19 +417,24 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
 1. **Register** (kernel, before listeners): descriptors from `app.Options.Adapters` and each module's
    `Registrar.Adapter`. Duplicate `AdapterID`, a module registering outside its prefix, or a `Settings`
    schema with a secret field lacking `Secret: true` fails boot.
-2. **Load**: rows from `c/integrations/instances/<kind>/<id>` plus file-defined instances
-   (`core.integrations.<kind>.instances.<id>`); a file instance shadows a DB row of the same Ref and is
-   read-only (`Origin=file`, lock reason surfaced like `config.SettingLockedBy`, `internal/config/config.go:2391`).
+2. **Load**: rows from `c/integrations/instances/<kind>/<id>`, the only instance store (SIMP-4). There is no
+   config-file form of an instance. For the compat window only, legacy operator-pinned sources that ABO
+   treats as authoritative today (the env-bound Deluge and OpenAI keys, 09 S7) are applied by the 09 compat
+   import on every boot onto their instance row with `Origin=pinned`: the row is read-only in the API and the
+   lock reason names the env variable. The import writes through `Put`, so there is no second lock model.
    A row whose adapter is not registered (module disabled, binary without the adapter) is **kept** and
    reported `HealthMisconfigured` with reason `adapter not in this binary` (restart-bound enablement, 03 §3.7).
 3. **Build lazily** on first `Lease`; construction must not do network I/O (so boot never waits on a
    remote). Validation errors make the instance `HealthMisconfigured`, never fail boot.
-4. **Hot swap** on `Put`: validate → persist row and secrets in one storage batch → build new →
-   atomically replace → old instance drains its leases → `Close`. providerhttp state (bucket, holds,
-   breaker, quota) is keyed by `Ref` and **survives** the swap.
-5. **Health task** `core.integrations.health` (05-tasks) probes every enabled instance on an interval
-   with bounded parallelism and publishes `core.integration.health.changed.v1` on status change
-   (consumed by [05-health](05-health.md) and [05-notify](05-notify.md)).
+4. **Hot swap** on `Put`: validate → apply the trust rules (Origin from the principal; URL change drops
+   secrets and `Local`, SEC-15) → persist row and secrets in one storage batch → build new → atomically
+   replace → old instance drains its leases → `Close`. providerhttp state (bucket, holds, breaker, quota) is
+   keyed by `Ref` and **survives** the swap; the egress trust (`Local`, `lan_allow`) is re-read per dial.
+5. **Health task** `core.integrations.health` (05-tasks), scheduled by
+   `tasks.ScheduleFromConfig("core.integrations.health_interval")` (the one schedule mechanism, SIMP-6),
+   probes every enabled instance with parallelism `tasks.Fixed(n, "network-bound probes")` where n is
+   `core.integrations.health_parallelism`, and publishes `core.integration.health.changed.v1` on status
+   change (consumed by [05-health](05-health.md) and [05-notify](05-notify.md) global rules).
 6. **Shutdown**: stop issuing leases, wait for drain up to `core.integrations.drain_timeout`, `Close` all.
 
 ### M1.5 Error semantics
@@ -388,7 +448,10 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
 | Health probe fails | open (instance stays usable; status Down) | A probe is advisory; calls carry their own classification. |
 | `Put` version conflict | closed (409) | Two admins editing one instance must not silently overwrite. |
 | Secrets backend unavailable on `Put` | closed (503, row not written) | Row and secret are one batch; never a row pointing at a secret that was not stored. |
-| `Test` with remote failure | n/a (returns `TestResult{OK:false, Class, Message}` with 200) | A failed test is a successful API call. |
+| `Test` with remote failure | n/a (returns `TestResult{OK:false, Class, Status}` with 200; no body, no remote text) | A failed test is a successful API call; echoing remote text would make `Test` an SSRF read oracle (SEC-15). |
+| URL field host/scheme/port changed without re-supplied secrets | open for the write; secrets cleared, `Local` reset, audited | A stored password or API key must never follow a URL to a new host (SEC-15). |
+| API-key principal sets `Local`, or any write to `Origin=pinned` | closed (403) | Private-network trust needs an interactive admin; pinned rows belong to the operator's environment. |
+| Facade-pushed URL not http(s), or private and not in `lan_allow` | closed (422, nothing written) | One leaked facade key must not aim scheduled fetches at the LAN (SEC-15, SEC-5). |
 
 ### M1.6 Concurrency contract
 
@@ -402,8 +465,9 @@ probes at most `core.integrations.health_parallelism` instances at once; each pr
 
 | Key | Type | Default | Hot-reload |
 |---|---|---|---|
-| `core.integrations.<kind>.instances.<id>.*` | instance row | none | yes (file reload via 05-config notification) |
-| `core.integrations.health_interval` | duration | `5m` | yes |
+| (instance records) | data in `c/integrations/instances/`, **not** config (SIMP-4) | — | yes (hot swap, M1.4) |
+| `core.integrations.egress.lan_allow` | list of host, `host:port` or CIDR; `ProtectInteractive` | `[]` | yes (read per dial) |
+| `core.integrations.health_interval` | duration (bound by `tasks.ScheduleFromConfig`) | `5m` | yes |
 | `core.integrations.health_parallelism` | int ≥1 | `4` | yes |
 | `core.integrations.probe_timeout` | duration | `10s` | yes |
 | `core.integrations.drain_timeout` | duration | `30s` | yes |
@@ -421,8 +485,10 @@ probes at most `core.integrations.health_parallelism` instances at once; each pr
 ### M1.9 Tests
 
 `TestRegistry_RejectsForeignAdapterPrefix`, `TestRegistry_UnknownAdapterRowRetained`,
-`TestRegistry_HotSwapDrainsLeases` (synctest), `TestRegistry_FileInstanceReadOnly`,
+`TestRegistry_HotSwapDrainsLeases` (synctest), `TestRegistry_PinnedInstanceReadOnly`,
 `TestRegistry_PutWritesRowAndSecretsAtomically`, `TestRegistry_TestDoesNotPersist`,
+`TestRegistry_URLChangeDropsSecrets`, `TestRegistry_APIKeyCannotSetLocal`, `TestRegistry_TestReturnsNoBody`,
+`TestFacadeIndexer_LANRefused` (FacadeWriter; with the deferred facade build),
 `TestRegistry_BuildDoesNoIO` (transport that fails the test on any request),
 `TestClassOf_Table` (one row per class, incl. the done-parent rule), `TestError_RedactsDetail`,
 archtest `IntegrationsDescriptorCallers` (only kind packages call `NewDescriptor`).
@@ -431,8 +497,9 @@ archtest `IntegrationsDescriptorCallers` (only kind packages call `NewDescriptor
 
 | ABO today | Becomes |
 |---|---|
-| `config.MetadataSources[]` (`internal/config/config.go:147-163`) | `metadata/<id>` instance rows, adapters `books.<id>`; `Credentials` values moved into `secrets` |
-| `DelugeWebURL/Password`, `DownloadClient.Torrent.Deluge` (`config.go:225-240,1776-1780`) | one `download/deluge` instance (05-download §Migration) |
+| `config.MetadataSources[]` (`internal/config/config.go:147-163`) | `metadata/<id>` instance rows, adapters `books.<id>`; `Credentials` values moved into `secrets` under `integrations/metadata/<id>/<field>` |
+| `DelugeWebURL/Password`, `DownloadClient.Torrent.Deluge` (`config.go:225-240,1776-1780`) | one `download/deluge` instance (05-download §10) |
+| (egress trust) | instances migrated from operator-set ABO config are written with `Local=true` when their host is loopback or private (today they have no egress guard at all); the migration is an operator-trust path, recorded in the migration ledger |
 | `ai_endpoints` rows (`internal/config/ai_endpoints.go:36-68`) | `ai/<id>` instances (05-ai) |
 | `config.Plugins["webhook"].Settings` | `notify/<id>` webhook instances (05-notify) |
 | `handleDelugeTestConnection`, `/ai/test-connection` | `POST /api/core/v1/integrations/{kind}/test` |
@@ -442,15 +509,7 @@ archtest `IntegrationsDescriptorCallers` (only kind packages call `NewDescriptor
 
 1. `config.Schema`, `secrets.Ref`/`secrets.Value` and `UserID` are owned by 05-config / 05-authn; this file
    uses those names and changes import paths, not shapes, if they land elsewhere.
-2. **Shape of `module.Adapter` (06-app-sdk §6.4.3).** The 06 draft has kind packages return
-   `module.Adapter{Capability, Kind, Factory any}` (e.g. `metadata.AdapterOf[Q, R]`). That makes
-   `integrations/*` import `module`, which is above them in R4, and moves the type check to a runtime
-   assertion. This file's shape avoids both: kind packages return `integrations.Descriptor` (type safety via
-   the unexported build func) and `Registrar.Adapter` accepts it (or `module.Adapter` wraps it). To be
-   reconciled with 06.
-3. `events.EntityRef{Module, Kind, ID}` (02 decision 6) is used by 05-download and 05-notify; its home
-   package is not fixed yet (05-rbac has `audit.Target` with the same shape). Same shape wherever it lands.
-4. A sixth kind (media-server sync: Plex/Jellyfin/ABS outbound) is not specified; `plugin.MediaPlayer`
+2. A sixth kind (media-server sync: Plex/Jellyfin/ABS outbound) is not specified; `plugin.MediaPlayer`
    is deleted rather than carried forward because it has zero implementors (`internal/plugin/plugin.go:76-81`).
 
 ---
@@ -528,6 +587,12 @@ type Policy struct {
 	// (e.g. "google-books:" + hex(sha256(key))[:12]).
 	Scope   string
 	Redact  []string // extra query/header names to redact; apikey, api_key, token, password, Authorization, X-Api-Key, Cookie are always redacted
+	// Private reports whether this instance may reach loopback/private
+	// addresses on host (InstanceConfig.Local, or host in
+	// core.integrations.egress.lan_allow). Read on every dial, so a trust
+	// change applies without a rebuild. Never consulted for EgressPublicOnly,
+	// and never for link-local addresses (M1.3 EgressPolicy).
+	Private func(host string) bool
 }
 
 // Client implements integrations.HTTP: an *http.Client whose transport runs
@@ -584,7 +649,7 @@ hold active and !WithBypassHold → ClassRefusedLocal
 breaker Open → ClassRefusedLocal; Open & cooldown elapsed → take the single probe lease (others refused)
 bucket.Wait(ctx)
 quota.Reserve(tier, counter) → ClassRefusedLocal when spent (counted per request SENT; never refunded)
-egress dial guard (EgressPolicy)
+egress dial guard (EgressPolicy + Policy.Private, on the resolved address: no DNS-rebinding bypass)
 base.RoundTrip
 classify → breaker/hold/metrics update → retry if Class.Retryable() && attempt < MaxRetries && replayable
 ```
@@ -600,7 +665,7 @@ classify → breaker/hold/metrics update → retry if Class.Retryable() && attem
 | Daily quota spent | closed for Background at `Background`, for Interactive at `Total` | Reserve quota for people (owner decision recorded at `dailyquota.go:6-11`). |
 | Quota store read fails | **closed** (`ErrBudgetUnavailable`) | Over-counting is the safe direction (`dailyquota.go:100-106` rationale); a quota we cannot read could be spent. |
 | Hold store write fails | open (hold stays in memory; one warning per Scope) | Losing persistence must not disable the hold for this process. |
-| Egress guard refuses the address | closed (`ClassRefusedLocal`) | Security control; data-derived URLs must not reach the LAN. |
+| Egress guard refuses the address | closed (`ClassRefusedLocal`) | Security control: by default nothing reaches loopback, private or link-local networks; only an instance an interactive admin marked `Local` (or a `lan_allow` host) may, and data-derived URLs never may (SEC-15). |
 | Retry-After beyond `RetryAfterMax` | clamp | Never park a worker indefinitely (`providerhttp.go:389-401`). |
 | Non-replayable body on a retryable status | return response as-is | Never resend an empty body (`providerhttp.go:311-326`). |
 | Error strings containing the request URL | redacted before return and log | Newznab/Torznab put `apikey` in the query (raw/16 §4.2); `*url.Error` embeds the URL. |
@@ -651,7 +716,8 @@ change), `TestHoldPersistsAcrossRegistryRestart`, `TestHoldClampedToMaxOnLoad`,
 `TestQuotaDayRollsInZone` (DST boundary, embedded tzdata), `TestQuotaStoreReadFailureFailsClosed`,
 `TestClassify_Google403RateLimitIsRateLimited`, `TestClassify_DailyQuotaBodyBeatsStatus`,
 `TestRetryHonoursRetryAfterAndClamp`, `TestNoRetryWithoutGetBody`, `TestEgressPublicOnlyRefusesPrivate`,
-`TestEgressSameHostOrPublic`, `TestRedactsApikeyInURLError`, `TestNoGlobals` (R5 archtest covers the package).
+`TestEgress_PrivateRefusedUnlessLocal`, `TestEgress_LANAllowListAdmits`, `TestEgress_LinkLocalAlwaysRefused`,
+`TestEgress_RebindingCheckedAtDial`, `TestEgressSameHostOrPublic` (same host still under the instance's guard), `TestRedactsApikeyInURLError`, `TestNoGlobals` (R5 archtest covers the package).
 
 ### M2.10 Migration from ABO
 
@@ -661,7 +727,7 @@ change), `TestHoldPersistsAcrossRegistryRestart`, `TestHoldClampedToMaxOnLoad`,
 | `internal/metadata/dailyquota` | `providerhttp` daily quota (same counter semantics; zone configurable) |
 | `internal/metadata/throttle.go`, `throttle_registry.go` (`ThrottleRegistry`, `ThrottleStore`) | `providerhttp` holds; `ClassifyProviderError` → `providerhttp.Classify` |
 | `internal/metadata/circuitbreaker.go` `CircuitBreaker` | `providerhttp` breaker (with probe lease); `ProtectedSource`/`NewChainSource` deleted — the gate is in the transport |
-| `internal/security/safehttp` | dial guard behind `EgressPublicOnly`; package stays for non-integration callers (`internal/covers`) until 04 moves it |
+| `internal/security/safehttp` | the dial guard for every `EgressPolicy` (private ranges refused unless `Policy.Private`); package stays for non-integration callers (`internal/covers`) until 04 moves it |
 | Pebble keys `provider_throttle:<id>` (`internal/database/provider_throttle.go:29`), `provider_daily_budget:<id>` (`dailyquota.go:85`) | one-time import into `c/providerhttp/holds/<scope>` and `c/providerhttp/quota/<scope>/<counter>/<day>` at the books module's first core boot; old keys deleted in the same batch; scope for each = `metadata/<id>` |
 | `cmd/root.go:405-418` attach ordering | constructor ordering inside `app.New` |
 | `/api/v1/metadata/providers/throttles` (`internal/server/handlers/metadata/provider_throttles.go:43`) | `GET .../instances/{id}/health` (`Hold`) and `DELETE .../hold`; legacy path aliased (09) |
@@ -739,7 +805,7 @@ type Result[R any] struct {
 
 type ChainOptions[Q any] struct {
 	Instances   func() []integrations.Ref // ordered; default: enabled metadata instances whose adapter is Provider[Q,R], by Priority
-	Parallelism tasks.Parallelism         // required (R7 type); network-bound: e.g. tasks.Fixed(4)
+	Parallelism tasks.Parallelism         // required (R7 type); network-bound: e.g. tasks.Fixed(4, "provider rate limits")
 	PerProvider time.Duration             // per-provider deadline inside the call; default 20s
 	Mode        ChainMode                 // FirstHit (stop at first provider with results, in priority order) | All
 	Cache       *Cache[Q]                 // optional
@@ -842,9 +908,9 @@ own declared parallelism; the provider bucket, not the worker count, bounds the 
 
 | Key | Type | Default | Hot-reload |
 |---|---|---|---|
-| `core.integrations.metadata.instances.<id>.*` | instance row (M1) | none | yes |
-| per instance `cache.positive_ttl` | duration | module default (books: `metadata_fetch_cache_ttl_days`) | yes |
-| per instance `cache.negative_ttl` | duration | module default (books: `metadata_fetch.negative_ttl_days`, `internal/metafetch/pcache.go:52-53`) | yes |
+| `metadata/<id>` instance records | M1 store, not config | none | yes |
+| instance setting `cache.positive_ttl` | duration | module default (books: `metadata_fetch_cache_ttl_days`) | yes |
+| instance setting `cache.negative_ttl` | duration | module default (books: `metadata_fetch.negative_ttl_days`, `internal/metafetch/pcache.go:52-53`) | yes |
 | `core.metadata.per_provider_timeout` | duration | `20s` | yes |
 
 ### M3.8 Metrics
@@ -891,16 +957,29 @@ and `coretest.ProviderHTTP(t)` (Registry over `httptest.Server`, fake clock, in-
 
 ## Objections to 03
 
-1. **Add a root package `integrations`** (path `core/integrations`, layer = the `integrations/*` layer of
-   R4). 03 §3.3 lists only the five kind packages and `providerhttp`. The instance descriptor, `Ref`,
-   health type, registry and error taxonomy are shared by all six and cannot live in `providerhttp`
-   (SMTP and subprocess adapters have no HTTP) or in any one kind without the others importing a sibling.
-   R4's "own or lower layer" already allows `integrations/download` → `integrations`; R1/R5 are unaffected.
-2. **`module.Registrar` needs `Adapter(integrations.Descriptor)`** and the kind-specific registrations in
-   05-ai/05-notify (`AICapability`, `AIBatchHandler`, `NotificationTopic`). 03 §3.3 says the Registrar
-   covers "adapters"; this is the concrete shape, for 06 to adopt.
+None. The two objections of v1.0.0 are resolved in 03 v1.2.0: the root package `integrations` is in §3.3
+and R4 (L4), and `Registrar.Adapter(integrations.Descriptor)` is the shape 06 adopted. Notification topics
+are event topics (05-notify §3), so no `NotificationTopic` registrar method is needed.
 
 ## Out-of-scope defects found
 
 None outside this file's area. (The four providerhttp/breaker defects in M2.2 are in scope and are
 removed by the design.)
+
+## Review history
+
+Round 1 (`docs/plans/platform-core/reviews/spec-round-1-dispositions.md`):
+
+- SIMP-4: `integrations` is the one integration-instance store (settings + `secrets.Ref`s, secret names
+  `integrations/<kind>/<id>/<field>`); file-defined config instances removed; legacy env sources applied as
+  read-only `Origin=pinned` rows for the compat window.
+- SEC-15: private, loopback and link-local egress refused by default in the providerhttp dial guard
+  (`Policy.Private`, `InstanceConfig.Local`, `core.integrations.egress.lan_allow`); URL change clears secrets
+  and `Local`; API keys cannot set `Local`; `TestResult` carries no body; facade-pushed URLs validated.
+- SEC-5: `integrations.FacadeWriter` (deferred-build) accepts `<m>:arr.indexers`, forces `Origin=arrfacade`
+  and the SEC-15 egress restrictions.
+- SIMP-6: health task scheduled by `tasks.ScheduleFromConfig("core.integrations.health_interval")`.
+- SIMP-10: `InstanceConfig.Owner` (personal instances) removed with notify's personal channels.
+- SIMP-17: `tasks.Fixed(n, reason)` with a reason.
+- COR-17: `EntityRef` open item removed; `entity.Ref` (03 v1.2.0) is the one reference type.
+- COR-19: stale objections (root `integrations` package, `Registrar.Adapter`) removed as resolved by 03 v1.2.0.
