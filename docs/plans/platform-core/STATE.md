@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.27.0 -->
+<!-- version: 1.28.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -10,8 +10,8 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 | Item | Value |
 |---|---|
 | Spec branch | `docs/platform-core-spec` |
-| Spec PR | #4359 (draft; gate PASS recorded in the PR body) |
-| Plan branch | `docs/platform-core-plan` (not created) |
+| Spec PR | #4359 (ready; gate PASS; CI green; **merge BLOCKED**, see Blockers) |
+| Plan branch | `docs/platform-core-plan`, stacked on `docs/platform-core-spec` while #4359 is unmerged |
 | Plan PR | (not opened) |
 | plan-op plugin | not installed; following the prompt's §5 manually |
 | Advisor mechanism | no `advisor` tool exists; a single fresh reviewer at max effort (`reviews/spec-advisor-review.md`) |
@@ -24,7 +24,7 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 | 2 | Design spec | done: 34 files under docs/specs/platform-core/ (~41k lines) |
 | 3 | Spec review loop | done: 8 rounds of 7 antagonistic lenses, distinct BLOCKERs 20 → 10 → 9 → 6 → 5 → 2 → 1 → 0; every finding dispositioned (`reviews/spec-round-N-dispositions.md`) |
 | 4 | Spec advisor review | done: READY WITH CHANGES; all findings accepted, simplifications adopted (A-1..A-17); then confirmation rounds 9–12 with BLOCKERs 3 → 2 → 1 → 0 |
-| 5 | Spec confidentiality gate + PR + merge | in progress: gate PASS (reviewer, scrub, gitleaks, full read of raw files); PR #4359 open; waiting for CI, then admin rebase-merge |
+| 5 | Spec confidentiality gate + PR + merge | BLOCKED on merge: gate PASS, CI green, PR #4359 ready; rebase-merge refused by GitHub (see Blockers) |
 | 6 | Implementation plan | pending |
 | 7 | Plan review loop | pending |
 | 8 | Plan advisor review | pending |
@@ -40,11 +40,11 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 
 ## Blockers
 
-(none)
+- PR #4359 rebase-merge (MCP `merge_pull_request`, `merge_method: rebase`), two attempts on head `095806637`: `405 This branch can't be rebased`. Checked: no merge commits, no empty commits, no conflicts, main has not moved, and a local `git rebase origin/main` applies cleanly. The likely cause is GitHub's undocumented "unsafe rebase" check on a 257-commit PR. Options for the owner: (a) rebase-merge it from the UI or with `gh pr merge 4359 --rebase --admin`; (b) allow the branch to be consolidated into a few logical commits (same final tree; a rebase-merge, not a squash-merge), then rebase-merge. Squash-merge and merge-commit stay forbidden (D4).
 
 ## Next action
 
-Phase 5: PR #4359 is open and the gate passed. Wait for CI, then admin rebase-merge (never squash). Then cut `docs/platform-core-plan` from the updated main for Phases 6–9. The pre-advisor (round-8) design is recoverable at commit 4478f5523.
+Phase 6: the implementation plan on `docs/platform-core-plan`, stacked on the spec branch. It is rebased onto main once #4359 merges.
 
 ## Incidents
 
@@ -58,5 +58,5 @@ Phase 5: PR #4359 is open and the gate passed. Wait for CI, then admin rebase-me
 - Subagents use `general-purpose` / `Explore` with explicit model and effort.
 
 COMPLETED: 4 — phase 1 (raw data), phase 2 (spec), phase 3 (8 review rounds), phase 4 (advisor review + confirmation rounds 9–12)
-REMAINING: 5 — phase 5 (PR #4359: CI then merge), phases 6–9 (plan, plan review, plan advisor, PR #2)
-BLOCKED: 0 —
+REMAINING: 5 — phase 5 merge (blocked), phases 6–9 (plan, plan review, plan advisor, PR #2)
+BLOCKED: 1 — PR #4359 merge (GitHub 405 "This branch can't be rebased")
