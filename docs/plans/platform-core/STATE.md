@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.19.0 -->
+<!-- version: 1.20.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -42,7 +42,7 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 
 ## Next action
 
-Phase 4 advisor review done (`reviews/spec-advisor-review.md`: READY WITH CHANGES, 1 BLOCKER, 6 MAJOR, 5 MINOR, 9 simplifications). All accepted and all simplifications adopted (`reviews/spec-advisor-dispositions.md`, A-1..A-17). Headline: a representation-neutral extraction (A-2) where legacy stores keep HEAD formats through S10, and hardening moves to post-S10 cutovers. The round-8 design is recoverable at commit 2a54afb5f. Eight cluster revisers are applying it; then an integration pass, then a confirmation review round 9 (fresh reviewers), then Phase 5 (gate, PR #1). Changelog fragment and supersede marker are already committed.
+Phase 4 advisor review done (`reviews/spec-advisor-review.md`: READY WITH CHANGES, 1 BLOCKER, 6 MAJOR, 5 MINOR, 9 simplifications). All accepted and all simplifications adopted (`reviews/spec-advisor-dispositions.md`, A-1..A-17). Headline: a representation-neutral extraction (A-2) where legacy stores keep HEAD formats through S10, and hardening moves to post-S10 cutovers. The round-8 design is recoverable at commit 2a54afb5f. Applied by 8 cluster revisers plus an integration pass (09 v1.9.1, 04 v1.9.0 regenerated, informative). Confirmation review round 9 is running with 5 fresh reviewers (correctness, data/migration, security, ops/rollback, modules/build). Frontend and simplicity are skipped because the advisor pass barely touched frontend and was itself the simplicity review. Then Phase 5 (gate, PR #1). Changelog fragment and supersede marker are already committed.
 
 ## Incidents
 
@@ -54,5 +54,5 @@ Phase 4 advisor review done (`reviews/spec-advisor-review.md`: READY WITH CHANGE
 - Subagents use `general-purpose` / `Explore` with explicit model and effort.
 
 COMPLETED: 3 — phase 1 (raw data), phase 2 (spec draft v1), phase 3 (8 review rounds)
-REMAINING: 6 — phases 4–9 (phase 4: advisor dispositions being applied)
+REMAINING: 6 — phases 4–9 (phase 4: advisor fixes applied; confirmation round 9 running)
 BLOCKED: 0 —
