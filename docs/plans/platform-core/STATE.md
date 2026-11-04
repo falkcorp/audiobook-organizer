@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -22,7 +22,7 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 |---|---|---|
 | 1 | Raw data gathering | done (17 raw files incl. raw/00-baseline-build.md) |
 | 2 | Design spec | done (draft v1): 34 files under docs/specs/platform-core/ |
-| 3 | Spec review loop | round 1 reviewed (192 findings: 20 BLOCKER / 118 MAJOR / 54 MINOR) and dispositioned (192 accepted, 0 rejected); 8 revisers applying |
+| 3 | Spec review loop | round 1: 192 findings, all dispositioned and applied (8 revisers + integration pass); round 2 in progress (7 fresh reviewers) |
 | 4 | Spec advisor review | pending |
 | 5 | Spec confidentiality gate + PR + merge | pending |
 | 6 | Implementation plan | pending |
@@ -42,7 +42,7 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 
 ## Next action
 
-Round 1 revision: 8 revisers (clusters R-A … R-H in `reviews/spec-round-1-dispositions.md`) are editing disjoint spec files. When all return: apply cross-cluster requests, commit, then run spec review round 2 with 7 fresh reviewers (same lenses) on the revised spec. If resuming cold: check each spec file's `## Review history` section — a file without one has not been revised yet; re-dispatch its cluster's reviser with `$HOME/scrub`-equivalent rules (the rules are restated in the dispositions file header).
+Round 2: 7 fresh reviewers write `reviews/spec-round-2-<lens>.md` (regression check of round-1 BLOCKER/MAJOR + new issues). Then `spec-round-2-dispositions.md`, revise, and repeat until zero open BLOCKERs and every MAJOR dispositioned. Then Phase 4 (advisor = single fresh reviewer at max effort; no `advisor` tool exists in this environment).
 
 ## Incidents
 
