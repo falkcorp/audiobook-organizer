@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/09-abo-on-core.md -->
-<!-- version: 1.12.1 -->
+<!-- version: 1.12.2 -->
 <!-- guid: 3c82c917-2fc4-4385-b085-73d143a2374f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -130,11 +130,15 @@ the release:
 - **Across R2 the store is migrated and stamped**, so HEAD's storage-format guard refuses `make rollback` (it reads the
   raised projection, §9.2.2) and the rollback is **`make rollback-restore`** (05-storage §5S.3.12): stop the service;
   run the current binary's `storage restore-offline --checkpoint <latest> --accept-loss` (the checkpoint holds the
-  store and the state files outside the DB directory, `.encryption_key`, the gap-fill `<db parent>/config.yaml` and the
-  keyring, and lives 7 days), or `--archive <file>` with the owner's off-host archive (a pre-R2 archive holds no state
+  store and the state files outside the DB directory, `.encryption_key`, the gap-fill `<db parent>/config.yaml` and,
+  once a boot has created it, the keyring, which the first R2 boot creates only after its checkpoint; it lives 7 days), or `--archive <file>` with the owner's off-host archive (a pre-R2 archive holds no state
   files: `.encryption_key` is still on the host until R3, and the gap-fill `config.yaml`, which M2 stripped, comes
   back from the owner's off-host copy, as both do after a host loss); reinstall the previous binary from `.prev`; start. Its one probe refuses while a
-  swap is in flight (`restore_inflight`), and nothing overrides it: boot the current build once to finish the swap. A
+  swap is in flight (`restore_inflight`), and nothing overrides it: boot the current build once to finish the swap.
+  The one exception is a checkpoint restore boot whose migration failed (journal `failed`, 05-backup §5B.3.4 step x):
+  the runbook stops the service and runs the **previous** binary's `storage restore-offline --checkpoint <name>` (any
+  release from R1), the one recipe admitted while `inflight.json` exists; on success it deletes `inflight.json`, and
+  the previous binary is installed and started (05-storage §5S.3.12). A
   staged intent that has not started is rejected by the restore itself, which supersedes it.
 - **What a restore costs.** It discards everything written after the upgrade: imports, edits and the listening progress
   the phone apps synced. Fixing forward is therefore the default, and the decision to roll back belongs to the smoke
@@ -311,7 +315,7 @@ the cutover). Policy:
 - **Precedence (from F3).** An operator value locks its key. For the auth and Basic-gate keys one
   fail-closed rule applies: the more restrictive of the operator and the stored value wins, and health reports the
   disagreement, so compose's always-set `BASIC_AUTH_ENABLED=false` (§9.1) cannot switch off a gate enabled in Settings
-  (`TestComposeEnvKeepsUIBasicGate`). Compose passes the Basic-gate variables only when they are set.
+  (05-config's `TestFailClosed_MoreRestrictiveWins`, §1.11). Compose passes the Basic-gate variables only when they are set.
 - **Files beside the DB.** M2 imports the gap-fill `config.yaml` once and strips its managed keys (M2b), and core writes
   no gap-fill file. The state
   directory keeps HEAD's fallback beside the DB (`TestStateDirFallbackMatchesHEAD`), so on Docker and launchd
@@ -347,8 +351,9 @@ The mechanism is 05-rbac (§6 the migration, §6.1 the table) and 05-http-api §
 
 - Core takes its namespace as `app.Options.MetricNamespace`, which ABO sets to `audiobook_organizer`; new core series
   are `<namespace>_<subsystem>_*` (03 §3.6).
-- A moved emitter may take core's name: Pebble's series from R1, the task series at F5, the AI series at F7, the two
-  process gauges at F8 (05-metrics §13 lists each). A rename and its edits to `deploy/grafana/dashboards/*.json` and
+- A moved emitter may take core's name: Pebble's series from R1, the task series at F5, and at F7 HEAD's AI families,
+  which core's AI families replace (05-metrics §13 lists each; 05-ai §8). Books' two process gauges stay books' series,
+  unchanged. A rename and its edits to `deploy/grafana/dashboards/*.json` and
   `deploy/prometheus/{alert-rules,recording-rules,alert-rules.test}.yml` are one PR. The dashboard-reference test (every
   series those files name is served; 05-metrics §12) and `promtool test rules` gate it, and no series is renamed for
   nothing. Every family has one owner: a plain gather returns no error and no duplicate family (05-metrics §6).
@@ -534,7 +539,7 @@ and passes e2e; the release freeze starts before F3 merges (§9.2.1):
 | **F5** | tasks and the log journal | M4, M5 | every definition native and HEAD's engine deleted; HEAD's task routes, `/api/v3/ops/*` and the two operation streams deleted; the Activity page on core's task routes, polling `GET /runs` until F6 (05-tasks §5T.8, 05-realtime §11) |
 | **F6** | events, outbox and realtime | — | the SPA's realtime client on `/api/core/v1/events`, which the Activity page uses instead of polling; `/api/events` and the SPA's `eventSourceManager` deleted |
 | **F7** | integrations, AI jobs, provider gates, library roots, notify | M6 | `internal/plugin` deleted; webhook and mail instances native, deliveries in core's webhook format; the AI series renamed with their dashboards and alerts |
-| **F8** | backup, the updater move, health, metrics | — | the kernel's `/metrics` mount; the metric renames with their dashboards and rules; HEAD's `/api/health` and `/api/v1/health` deleted, every caller of them switched to `/health` |
+| **F8** | backup, the updater move, health, metrics | — | the kernel's `/metrics` mount; the metric renames with their dashboards and rules; HEAD's `/api/health` and `/api/v1/health` deleted, every caller of them switched to `/health`, which becomes Basic-exempt in their place (`TestBasicGate_ExemptSetGolden`, 05-http-api §12; 05-health) |
 | **F9** | the shell, if ready (otherwise R3) | — | 07 §7.19 steps 4–5 in one release; gin's SPA serving deleted |
 | — | the last PR of R2 | — | the runbook and the release note; the freeze ends with the release |
 
@@ -661,7 +666,7 @@ stopped. Never print `sess:` or secret values, which hold credentials; count key
 | Core Basic gate enabled with an unset or empty password | **closed**: 401 on every non-exempt route, health `basic_gate_no_password` | early fix 5 (R5-1(c)) |
 | New API key with empty or wildcard scopes | **refused** (400) | a new key never has empty scopes |
 | `make rollback` onto a migrated store | **refused** by HEAD's storage-format guard (the projection is raised) | rollback across R2 is a restore |
-| `make rollback` or `make rollback-restore` while a swap is in flight | **refused** (`restore_inflight`), with no override: boot the current build once to finish the swap | an older build must not open a half-moved store |
+| `make rollback` or `make rollback-restore` while a swap is in flight | **refused** (`restore_inflight`), with no override: boot the current build once to finish the swap; a `failed` checkpoint restore is escaped by the previous binary's `storage restore-offline --checkpoint` (§9.2.1) | an older build must not open a half-moved store |
 | `storage restore-offline --checkpoint` of a checkpoint that is not the latest attempt's, or after its 7-day deletion | **refused**, naming the latest checkpoint or the off-host archive | it would also discard a later upgrade's work |
 | A swap intent (restore or reset) that expired or was staged by another build; a second staging while the slot is taken | **rejected** (closed), store untouched; `storage.ErrSwapPending` for the second | one rejection rule for every kind (R7-2, R8-1) |
 | A reset: staging with a dangerous `RootDir`; a set-aside rename that fails; a post-reset hook that cannot delete an entry | refused (400), nothing staged; the rename moves back what it moved, journals `rejected` and boots the untouched store `degraded` (`factory_reset_failed`); the entry is logged, audited and reported (`factory_reset_cleanup_incomplete`), and the hook still records `hook_done` (**open**) | a reset never leaves a half-moved store, and a hook that never finishes would block every swap (COR8-3, DATA8-1, OPS8-5) |
@@ -1238,4 +1243,4 @@ Plan-phase consistency:
 - PC-18 — §9.2.3 core-rows row: `c/secrets/` lands at S3 with `c/config/`; each `c/` keyspace carries its stage.
 - PC-20 — S4 Moves: the bridge is `internal/server/legacyauth` (03 §3.5.1).
 
-- D10–D12 revision (2026-11-04): retitled "ABO on core: releases and the cutover" (file name kept); the S0–S10 stage sequence, UI-0 as its own release and H1–H3 replaced by the releases R0–R3 of 03 §3.8. Deleted outright: the compatibility window, the rollback cost table, soaks, the soak ledger, `ci/stage.txt`, the `Stage-Release:` trailer and the bot table (old §9.2.1); the served ledger, foreign-open record, open stamp, boot lineage, applied-steps sidecar, stepping-stone release and pre-swap floor checks (old §9.2.2); books' legacy stores and HEAD's locks across core's commit (old §9.2.3, §9.9); aliases, permanent env names, legacy env decoding, legacy atoms on input, `LegacyAmbientScopes`, `otelgin` co-recording and the HEAD metric goldens (old §9.2.4–§9.2.7); the compat ledger and `compat.Ledger` (old §9.2.9); the S0–S10 stage tables; surface contracts C3–C9 (§9.5); P8, P10, P11, P13 and P15 (§9.7); the staging scrub, staging marker, `binary_id` coupling, per-stage boot A/B and R-test (old §9.3, §9.10); the deferred per-family and hardening cutovers (§9.13). Rewritten: §9.0; §9.1 trimmed; §9.2 as the R2 cutover model (§9.2.1 release safety, keeping the named required checks, adding the release freeze of D12 F1 and rollback by restore; §9.2.2 the level stamps and the R3 floor; §9.2.3 the one-way migration with M1–M8, the checkpoint's 7-day deletion and quarantine; §9.2.4–§9.2.9 the per-surface rules and the release note; §9.2.10 kept, re-keyed); §9.3 the release overview and the reduced rehearsal; §9.4 the release tables R0–R3, with R1's CI classification and R2's flips F3–F9; §9.4.1 re-keyed; §9.6 "changed in R2" and the one kept contract (the ABS API, pinned by its conformance suite); §9.8–§9.12 cut to the native design, with a new risk table. The webhook format and the OIDC callback path are listed as changed, following 05-notify and 05-authn. M7 runs before M2 (Objections to 03, item 1, as 05-storage §5S.3.13 also requires); items 2–5 record the other differences from 03 §3.8, F5 deleting HEAD's task routes among them (with 05-tasks and 05-realtime). Restore commands, checkpoint retention and the gap-fill rule follow 05-storage §5S.3.12 and 05-config §1.12.2. Consistency pass: the five Objections to 03 are settled in 03 §3.8 (the section now records none open), so the OIDC callback path is kept (§9.6 row 4, no re-registration step), D12's answers are cited as D12 (a)–(d), the R1 reset is offline-only, the dirty set is replaced by the index rebuild, the AI series rename at F7, and the renamed tests and 05-config's rename-table section are cited.
+- D10–D12 revision (2026-11-04): retitled "ABO on core: releases and the cutover" (file name kept); the S0–S10 stage sequence, UI-0 as its own release and H1–H3 replaced by the releases R0–R3 of 03 §3.8. Deleted outright: the compatibility window, the rollback cost table, soaks, the soak ledger, `ci/stage.txt`, the `Stage-Release:` trailer and the bot table (old §9.2.1); the served ledger, foreign-open record, open stamp, boot lineage, applied-steps sidecar, stepping-stone release and pre-swap floor checks (old §9.2.2); books' legacy stores and HEAD's locks across core's commit (old §9.2.3, §9.9); aliases, permanent env names, legacy env decoding, legacy atoms on input, `LegacyAmbientScopes`, `otelgin` co-recording and the HEAD metric goldens (old §9.2.4–§9.2.7); the compat ledger and `compat.Ledger` (old §9.2.9); the S0–S10 stage tables; surface contracts C3–C9 (§9.5); P8, P10, P11, P13 and P15 (§9.7); the staging scrub, staging marker, `binary_id` coupling, per-stage boot A/B and R-test (old §9.3, §9.10); the deferred per-family and hardening cutovers (§9.13). Rewritten: §9.0; §9.1 trimmed; §9.2 as the R2 cutover model (§9.2.1 release safety, keeping the named required checks, adding the release freeze of D12 F1 and rollback by restore; §9.2.2 the level stamps and the R3 floor; §9.2.3 the one-way migration with M1–M8, the checkpoint's 7-day deletion and quarantine; §9.2.4–§9.2.9 the per-surface rules and the release note; §9.2.10 kept, re-keyed); §9.3 the release overview and the reduced rehearsal; §9.4 the release tables R0–R3, with R1's CI classification and R2's flips F3–F9; §9.4.1 re-keyed; §9.6 "changed in R2" and the one kept contract (the ABS API, pinned by its conformance suite); §9.8–§9.12 cut to the native design, with a new risk table. The webhook format and the OIDC callback path are listed as changed, following 05-notify and 05-authn. M7 runs before M2 (Objections to 03, item 1, as 05-storage §5S.3.13 also requires); items 2–5 record the other differences from 03 §3.8, F5 deleting HEAD's task routes among them (with 05-tasks and 05-realtime). Restore commands, checkpoint retention and the gap-fill rule follow 05-storage §5S.3.12 and 05-config §1.12.2. Consistency pass: the five Objections to 03 are settled in 03 §3.8 (the section now records none open), so the OIDC callback path is kept (§9.6 row 4, no re-registration step), D12's answers are cited as D12 (a)–(d), the R1 reset is offline-only, the dirty set is replaced by the index rebuild, the AI series rename at F7, and the renamed tests and 05-config's rename-table section are cited. Final consistency sweep: F8 makes `/health` Basic-exempt (`TestBasicGate_ExemptSetGolden`), §9.2.7 keeps books' process gauges unchanged and has core's AI families replace HEAD's at F7, the undefined compose test is replaced by 05-config's `TestFailClosed_MoreRestrictiveWins`, the checkpoint's keyring is stated per L9, and the runbook escapes a `failed` checkpoint restore with the previous binary's `storage restore-offline --checkpoint`.
