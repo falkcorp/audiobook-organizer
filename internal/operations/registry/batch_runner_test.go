@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch_runner_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 398171ae-de60-4dbe-9766-d9819c610ace
-// last-edited: 2026-10-20
+// last-edited: 2026-11-03
 
 package registry
 
@@ -96,6 +96,12 @@ func (s *memLedgerStore) GetChunkOffsetsV3(string) ([]int32, bool, error) {
 }
 
 func (s *memLedgerStore) CommitLedgerV3(_ string, b database.LedgerBatch) error {
+	// Stamped on entry, the closest point to the runner's own commit decision
+	// (lastCommit = the now read just before this call). Stamping after the
+	// lock, goroutineID's stack parse and the batch copy measured this fake's
+	// own latency: under -race on a loaded agent that put two commits 275 ms
+	// apart while the runner had spaced them 500 ms (TestLedgerWriteRateBounded).
+	entered := time.Now()
 	if s.inFlight.Add(1) > 1 {
 		s.t.Error("two goroutines are inside CommitLedgerV3 at once")
 	}
@@ -117,7 +123,7 @@ func (s *memLedgerStore) CommitLedgerV3(_ string, b database.LedgerBatch) error 
 		}
 	}
 	s.commits = append(s.commits, b)
-	s.commitAt = append(s.commitAt, time.Now())
+	s.commitAt = append(s.commitAt, entered)
 	return nil
 }
 
