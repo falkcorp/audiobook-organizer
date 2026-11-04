@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/11-multi-app.md -->
-<!-- version: 1.11.1 -->
+<!-- version: 1.11.2 -->
 <!-- guid: 74ed9015-8ae0-4b4b-8049-4c09cfbba343 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -68,7 +68,7 @@ nothing in core is process-global) nor multi-tenancy (D7: no tenant IDs).
 
 | # | Item | Size |
 |---|---|---|
-| 1 | A suite repo or `cmd/suite` with `main` calling `app.New` with all modules; suite `app.Options` identity | S |
+| 1 | A suite repo or `cmd/suite` with `main` calling `app.New` with all modules; suite `app.Options` identity. Licences (12 §12.10 item 1, D13/D14): core is Apache-2.0, `books` stays PolyForm Noncommercial 1.0.0, so a suite artifact that ships `books` carries ABO's licence and its commercial use needs ABO's commercial licence; `tv` and `movies` choose their own | S |
 | 2 | Suite web workspace: `createShell({ modules: [booksModule, tvModule, moviesModule] })`; each app's module UI must be publishable as its own package (today ABO keeps `modules/books/` as a directory, 07 §7.11 — promote it) | M |
 | 3 | Embed the suite SPA with `embed_frontend` like any app (07 §7.6) | S |
 | 4 | Merging existing single-app installs into one store is **not** "copy keyspaces" (DATA-30): each install holds its own core data, users, roles, API keys, config and run history in core's native `c/<subsystem>/` stores (ABO's since its R2 cutover), plus its own `c/secrets/` (different keyrings), `c/storage/install`, per-keyspace versions, per-owner reader levels, and `Sequence` high-water marks, which collide. It needs a **core storage export/import capability**: per keyspace **and per core store**, with version checks and ID-remap hooks for core subsystems (users by username, roles by ID, keyring merge, sequence rebase) that read and write through the same store interface and importer the subsystem uses, so core still never reads a module's rows; module keyspaces (`m/<id>/`) and a module's legacy claims copy as-is. This is a new core contract, recorded in 14. An install-wide level would also couple every app's rollback in a suite, which is why levels are per owner (05-storage per-owner reader levels, DATA-20) | L |
@@ -145,3 +145,5 @@ Round 10 (2026-11-04), findings applied to this file:
 - MOD10-11 (consistency) — §11.4 "One app identity per process": `app.Options.ServiceName` (06 §6.4.5) is part of the one identity.
 
 - D10–D12 revision (2026-11-04): §11.2 storage row rewritten (no legacy stores or `legacy` package; books' core-service families are migrated into native `c/<subsystem>/` stores by the R2 cutover steps, so a suite shares one native user database and instance store); permission row no longer waits for an identity cutover; metric rows use `app.Options.MetricNamespace` (`MetricPrefix` deleted). §11.3: the compatibility-window row rewritten (no permission, task or config aliases; only `LegacyPrefixes`, `LegacyRoleIDs` and `ReservedAPINamespaces` remain) and the legacy-atom hazard deleted. §11.5 row 4 rewritten for native stores and importers; row 14 (books' identity cutover before a suite) deleted, since R2 does it. Stage references re-keyed to R1. Consistency pass: `Manifest.LegacyRoleIDs` is `Manifest.ImportedRoleIDs` (06 §6.4.2).
+
+Round 13 (2026-11-04): D13, D14. §11.5 row 1 states the licences a suite inherits (core Apache-2.0, `books` PolyForm Noncommercial 1.0.0, 12 §12.10 item 1).
