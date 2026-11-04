@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.13.3 -->
+<!-- version: 1.13.4 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1027,7 +1027,10 @@ touches only `c/providerhttp/holds/`; quota counters and breaker state are left 
 .../instances/{id}/hold` (M1.3) is its one-instance form, calling the same `ReleaseHold`. The kind is registered on
 core's executor from F5, when the tasks flip deletes HEAD's engine, through the minimal owner registration F2
 creates; `providerhttp` extends that registration with this behaviour when it lands at F7 (03 §3.8 "The three
-late-owner kinds", 05-tasks §5T.8.2; IMPL-5).
+late-owner kinds", 05-tasks §5T.8.2; IMPL-5). Until then the kind's final `TaskSpec` runs over
+`providerhttp.InterimHolds`, a one-method interface this package declares, whose books backend (set through
+`app.Options.InterimBackends`) lists and, in a Live run, releases HEAD's provider holds; F7 deletes the interface,
+the field and the backend.
 
 **Native store (SIMP4-3).** `NativeGateStore` lands with `providerhttp` in R2 and holds every scope of every app:
 
@@ -1594,4 +1597,4 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
   `auth_ref` rows get a key copy; the auth-off writability is not carried). M2.10: throttle and quota rows dropped
   (D12 F2); the throttles route is deleted, not aliased. M1.9 and M2.9 reduced to the native tests plus migration
   tests. Stage references re-keyed to R2. Consistency pass: M1.4 cites 05-config §1.4 step 7; M1.10 states that M2 leaves the class-`i` blob fields and M6 deletes the blob (lead decision L10); the Deluge daemon password gets its own secret `integrations.download.deluge.daemon_password`; `pcache:` is a plain books family; M2.4 declares the task `core.integrations.release-holds` (HEAD's `maintenance.throttle-reset`, 05-tasks) with its test and migration row; D12's answers cited as D12 (a)–(d). Final consistency sweep: the AI endpoint key-copy test is cited by 05-ai's own name, `TestAIEndpointMigration_AuthRefKeyCopy` (05-ai §9).
-- Round 13 (2026-11-04): IMPL-5 (`core.integrations.release-holds` registered from F5 through F2's minimal owner registration, extended at F7).
+- Round 13 (2026-11-04): IMPL-5 (`core.integrations.release-holds` registered from F5 through F2's minimal owner registration, extended at F7; the interim backend `providerhttp.InterimHolds`).
