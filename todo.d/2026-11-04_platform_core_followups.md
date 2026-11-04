@@ -41,3 +41,8 @@
   - [ ] 8 writes to `config.AppConfig` bypass `Mutate`; in `serve` the log file stops receiving output
         after `NewServer`; `log_level` is never applied to the handler (`05-config.md`, `05-logging.md`).
   - [ ] The shipped systemd unit sets `AUDIOBOOK_ROOT_DIR`, which nothing reads (`09-abo-on-core.md`).
+  - [ ] **SECURITY (hotfix):** a revoked API key can be re-activated: `PATCH /api/v1/auth/api-keys/:id`
+        with `{"status":"active"}` (`internal/server/handlers/apikeys.go:336-372`) calls
+        `SetAPIKeyStatus`, which overwrites `Status` to `active` without checking `RevokedAt`
+        (`internal/database/pebble_store_auth.go:1226-1247`). Refuse any status change on a revoked key
+        (and confirm the auth path also checks `RevokedAt`).
