@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-library.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.11.1 -->
 <!-- guid: dafe380b-f703-41cb-99d0-2b2ba32f70e5 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -254,13 +254,13 @@ var (
 ```
 
 **No root takes read shares (SIMP7-2, SIMP8-5).** A share names a second module that may read a root, and no app
-of R0–R3 has two modules: ABO ships one (03 R3), the TV and Movies proofs are single-module apps, and
+of R0–R3 has two modules: ABO ships one (03 §3.4), the TV and Movies proofs are single-module apps, and
 `examples/hello` reads no one else's roots. `RootSpec` therefore has no `ReadShares` field; it and its read clause
 land together with the first app that shares a root (§5L.13).
 
 **Error strings and the key-name gate (MOD5-3).** Every sentinel of this package follows Go's
 `pkg: message` form, and `library:` is also an ABO key family (`internal/database/keyfamilies.go:126`,
-"legacy library paths"). The ABO-side `TestCoreHoldsNoAppKeyNames` (03 R1(c), 04 §2.1 (h), 05-storage
+"legacy library paths"). The ABO-side `TestCoreHoldsNoAppKeyNames` (03 rule R1(c), 04 §2.1 (h), 05-storage
 §5S.9.1) matches a family prefix only when the character after it is not a space, so these strings pass,
 while a key literal such as `"library:" + id` would fail; its cases include one of these sentinels. Core
 never builds a `library:` key: the only code that reads ABO's root rows is books' R2 cutover step (§5L.10).
@@ -584,7 +584,7 @@ quarantine purge), `core:library.browse` (directory picker; replaces `BrowseDire
 - `Manager`, `Root`, `RootFS` (local), `PathMapper` are goroutine-safe; `File` is not.
 - Transfers take a striped per-path lock on **both** `src` and `dst` (`core/internal/keyedmutex`, a
   core-internal copy of ABO's package that 04 §8.1 adds; ABO keeps its own `internal/keyedmutex`,
-  and core never imports it, R1, COR2-16), acquired in sorted order to avoid deadlock; two workers can
+  and core never imports it, 03 rule R1, COR2-16), acquired in sorted order to avoid deadlock; two workers can
   never race on one destination name (the stat-then-create race documented at `reflink.go:29-35`
   cannot occur because creation is `O_EXCL`/`link` anyway, the lock removes wasted work).
 - Library-scale work (hash backfills, rescans) runs only as `tasks` with declared
@@ -688,12 +688,12 @@ and ABO passes its own (05-metrics).
 | `internal/diskstats` | `Root.Usage` (moved into core as an internal package) |
 | `deluge.ProtectedPathCache` | a `ProtectionOracle` implemented by the Deluge adapter (05-download); static `protected_paths` → `RoleExternal` roots |
 | `itunes.path_mappings`, `WHISPER_PATH_MAP`, fingerprint worker wire format | `PathMapper` sources `itunes`, `worker:whisper`, `worker:fingerprint` |
-| `ImportPathStore` methods minus `CountBooksByPathPrefix` (`internal/database/pebble_store_importpaths.go`; 04's `database.Store` split table: `ImportPathStore` → `library`) | deleted in R2: the roots cutover (below) turns every `import_path:` row into a `core.library.roots` entry, and books' scanner, autoscan and filesystem handlers (`internal/scanner/service.go:677`, `internal/server/folder_autoscan_op.go:147`, `internal/server/handlers/filesystem.go:247,319`) read roots through `library.Scope` and write `LastScan`/`BookCount` into books' own per-root record |
+| `ImportPathStore` methods minus `CountBooksByPathPrefix` (`internal/database/pebble_store_importpaths.go`; 04's `database.Store` split table: `ImportPathStore` → `library`) | deleted at F7, the integrations flip: the roots cutover (below) turns every `import_path:` row into a `core.library.roots` entry, and books' scanner, autoscan and filesystem handlers (`internal/scanner/service.go:677`, `internal/server/folder_autoscan_op.go:147`, `internal/server/handlers/filesystem.go:247,319`) read roots through `library.Scope` and write `LastScan`/`BookCount` into books' own per-root record |
 | `pending_file_op:` (`file_io_pool.go:31`) | stays a books family with its books writer: it is books' per-book file I/O job pool (tag and metadata writes), not a transfer journal, so nothing is drained or moved. Core transfers journal only in `c/library/transfer/` |
 | `filehash.BookFileHash` | stays books (identity algorithm), reads through `RootFS` |
 
 **The roots cutover (R2, migration step M6).** ABO's roots move once, one-way, into the config entries. The
-step is books code (03 R1: core holds no ABO key name), one of the BootBlocking steps of the R2 migration list
+step is books code (03 rule R1: core holds no ABO key name), one of the BootBlocking steps of the R2 migration list
 (05-storage §5S.3.13 owns the step contract: behind the pre-migration checkpoint, resumable, one batch, rollback by
 restoring the checkpoint). It runs in the integrations step M6, after the config and secrets step M2 (05-config
 §1.12.2), which hands it the blob fields its rename table marks for M6 and leaves them in the blob. In one batch it
@@ -706,7 +706,7 @@ reads HEAD's rows, writes the entries through `config.Importer` (05-config §1.3
 | blob `itunes.path_mappings` (`From`, `To`) | `core.library.mappings` entries `{Source: "itunes", Remote: From, Local: Resolve(To)}`, `Fold` for a Windows-form `From` (HEAD's `normalizeWindowsPrefix`, `internal/config/config.go:62-90`) |
 | blob `protected_paths` | `core.library.protected_paths` |
 
-**IDs are kept (E2).** HEAD's import-path ID `n` and the root ID `import-<n>` map to each other by one pure function
+**IDs are kept (14 E2).** HEAD's import-path ID `n` and the root ID `import-<n>` map to each other by one pure function
 in books, so no books row and no client that names `n` is rewritten; a root created after R2 gets an `import-<n>` ID
 with `n` above every migrated one. **Nothing is dropped silently:** an iTunes mapping whose `To` is under no root
 is quarantined with its raw value (05-storage's quarantine record, reported in health) and the step goes on; a
@@ -721,7 +721,7 @@ passes, a present sentinel must name this install and root, and an absent one le
 which is HEAD's behaviour (`libroot.go:25-59`). An admin can switch the entry to `SentinelRequired` once the
 sentinel exists. A root created after R2 starts as `SentinelRequired`.
 
-Order: `library` lands dark on `main` beside HEAD's code; the R2 integrations flip (09) wires it, ships M6 and
+Order: `library` lands dark on `main` beside HEAD's code; the R2 integrations flip F7 (09) wires it, ships M6 and
 deletes `ImportPathStore`; the writers then move onto `Transfer` one subsystem at a time behind the same tests
 (organizer, versions, quarantine, deluge import, iTunes transfer), and `fileops` copy/reflink and the three renames
 are deleted.
@@ -854,3 +854,5 @@ Round 9 (`docs/plans/platform-core/reviews/spec-round-9-*.md`, dispositions bind
   for migrated roots), §5L.12 item 1; `enable_disk_quota`/`disk_quota_percent` no longer map to `MinFree` (they stay
   display-only books keys, 05-config §1.12.3). Added `TestRootsCutover_FromHEADFixture`; renamed
   `TestSentinelBootstrapLegacyRoot` to `TestSentinelBootstrapMigratedRoot`.
+  Consistency pass: 03's rules cited as "03 rule R1", the one-module claim re-pointed to 03 §3.4, the risk ID as 14 E2,
+  and the roots cutover and `ImportPathStore` deletion keyed to the integrations flip F7.
