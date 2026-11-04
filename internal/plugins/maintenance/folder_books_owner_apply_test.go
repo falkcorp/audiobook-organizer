@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_owner_apply_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7c41e9b8-2d05-4f36-a8c1-5e3b9d0f6a24
 // last-edited: 2026-11-04
 
@@ -361,7 +361,7 @@ func TestFolderBooksOwner_AHardHoldWithdrawsTheOwnerRow(t *testing.T) {
 			require.Equal(t, row.Skipped, row.Holds[0].Kind, "the first hold is the row's Skipped")
 			require.NotEmpty(t, fbHardHoldWhy(row.Holds, tc.hard), "the hard hold %s is listed and marked hard: %+v", tc.hard, row.Holds)
 			require.Zero(t, res.OwnerApplicable)
-						out := f.fbOwnerApply(t, "op-plan", "op-owner", []string{row.RowID})
+			out := f.fbOwnerApply(t, "op-plan", "op-owner", []string{row.RowID})
 			require.Zero(t, out.Applied)
 			require.Equal(t, repairs.OutcomeOwnerRefused, fbOutcome(out, row.RowID).Outcome)
 			require.True(t, f.live(t, "fb"))
