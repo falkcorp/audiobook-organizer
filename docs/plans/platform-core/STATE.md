@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -20,9 +20,9 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 
 | # | Phase | Status |
 |---|---|---|
-| 1 | Raw data gathering | done (16 raw files; module experiments being finalized into raw/00-baseline-build.md) |
-| 2 | Design spec | in progress: 02, 03 drafted by lead; 9 Opus writers drafting 04–13 |
-| 3 | Spec review loop | pending |
+| 1 | Raw data gathering | done (17 raw files incl. raw/00-baseline-build.md) |
+| 2 | Design spec | done (draft v1): 34 files under docs/specs/platform-core/ |
+| 3 | Spec review loop | round 1 in progress (7 lenses) |
 | 4 | Spec advisor review | pending |
 | 5 | Spec confidentiality gate + PR + merge | pending |
 | 6 | Implementation plan | pending |
@@ -33,7 +33,8 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 ## Artifacts
 
 - `docs/plans/platform-core/raw/00-index.md` … `16-arr-domain-research.md`
-- `docs/specs/platform-core/02-decision-record.md`, `03-architecture.md` (normative)
+- `docs/specs/platform-core/` README + 01–15 (34 files, ~18k lines); 03 is normative
+- `todo.d/2026-11-04_platform_core_followups.md` (out-of-scope defects, incl. 3 live security hotfix items)
 
 ## Blockers
 
@@ -41,12 +42,17 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 
 ## Next action
 
-Phase 2: collect writer drafts for 04–13 (one file set per writer, see `docs/specs/platform-core/03-architecture.md` file map), write `raw/00-baseline-build.md` from the experiment logs, then write README, 01, 14, 15 and fill 03 §3.2.1. If resuming cold: any 05-*/06–13 file missing under `docs/specs/platform-core/` must be (re)drafted by a fresh Opus/high writer given 03 + 02 + the raw files.
+Phase 3 round 1: 7 reviewers (correctness, modules/build, data/migration, security, ops/rollback, simplicity, frontend) write `docs/plans/platform-core/reviews/spec-round-1-<lens>.md`. Then write `spec-round-1-dispositions.md` (every finding accepted+changed or rejected+evidence), revise the spec, run round 2 with fresh reviewers until zero open BLOCKERs and no undispositioned MAJOR.
+
+## Incidents
+
+- 2026-11-04: one commit (`01247778b`) was pushed while the per-commit gate reported hits, because the gate's exit status was hidden by a pipe. All hits were verified false positives (long identifiers; a header name); nothing confidential was pushed; no history rewrite was needed. The gate now runs under `pipefail`, stages only named paths, and blocks on any hit.
+- Module-layout experiments: an early batch used a reset that did not undo staged renames; those runs were discarded and re-run cleanly (`raw/00-baseline-build.md`).
 
 ## Fallbacks in use
 
 - Subagents use `general-purpose` / `Explore` with explicit model and effort.
 
-COMPLETED: 1 — phase 1 (raw data)
-REMAINING: 8 — phases 2–9
+COMPLETED: 2 — phase 1 (raw data), phase 2 (spec draft v1)
+REMAINING: 7 — phases 3–9
 BLOCKED: 0 —
