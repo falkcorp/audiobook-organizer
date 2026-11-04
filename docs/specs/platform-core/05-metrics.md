@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metrics.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 5cdf765d-aec1-4ed7-981a-e2e698afde61 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -8,7 +8,7 @@
 Evidence commit `748fd787a` (all `path:line` anchors). Raw inputs:
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md) §4, §9;
 [`raw/15-dependencies.md`](../../plans/platform-core/raw/15-dependencies.md) (OTel v1.47.0, exporter
-v0.69.0, client_golang v1.25.0). Normative: [03-architecture](03-architecture.md) v1.8.1 R4 (`metrics` is in
+v0.69.0, client_golang v1.25.0). Normative: [03-architecture](03-architecture.md) v1.9.1 R4 (`metrics` is in
 **L0** with `entity`, `lifecycle`, `version`, `log`), R5 (no `prometheus.DefaultRegisterer`, no `otel.Set*Provider`
 in core except the opt-in `app.InstallProcessDefaults`; R5 binds core only), §3.6 (`mediacore_<subsystem>_*`; module series `<MetricPrefix>_*` for an app that ships one module
 and `<MetricPrefix>_<moduleID>_*` otherwise (decided by the modules compiled in, not by enablement, §4), `MetricPrefix` = `app.Options.MetricPrefix`; semantic-convention names
@@ -268,6 +268,28 @@ scrape cannot be the normative check.
 in ABO as `internal/telemetrypolicy` from S1, 09 S1) builds the telemetry in its own process, records one sample
 per row of its **seeding table**, scrapes, and compares the family set (family, type, label set) with its golden.
 The PR that renames a family adds the new family's seeding row and the alias's expected family to the golden.
+**What it scrapes (OPS7-1).** HEAD's test scrapes `promhttp.Handler()` on the default registry
+(`internal/telemetry/contract/series_contract_test.go:451-456` @748fd787a), which never carries the gather-time
+aliases (they exist only in `Provider.Handler()`) and loses every books family at S8, when they move to the
+private registry. So:
+
+- **From S2 r3** the test builds the same `metrics.Provider` the kernel builds at that stage, through the public
+  test constructor `coretest.MetricsProvider` (06 `coretest`; it applies the kernel's `metrics.Options` defaults,
+  the stage's `PromRegisterer` and `AddAliases` exactly as §7 steps 1 and 3 do), passing ABO's
+  metric-alias rows from the same table ABO's `main` passes as `app.Options.MetricAliases`. It scrapes that
+  Provider's `Handler()`, never `promhttp.Handler()`. Before S2 r3 (HEAD–S2 r2) the default registry is the
+  served one (table above) and the test keeps HEAD's scrape.
+- **The S2 r3 PR adds `mediacore_` to `inScopePrefixes`** (today `audiobook_organizer_`, `ai_dispatch_`, `ai_`,
+  `http_server_`, `series_contract_test.go:69-71`), so the kernel's and every renamed core family enter the
+  comparison.
+- **Seeding rows for core-owned emitters go through public SDK paths**, because ABO cannot import
+  `mediacore/internal/...`: the Pebble collector through a store opened with `coretest`/`storage`, the tasks
+  instruments through one `hello.count` run, the AI instruments through a fake endpoint.
+- Because the test builds the stage's Provider, **at S8 its registry becomes the private one in the same PR** that
+  makes the App's registry private.
+- `TestContractScrapesServedHandler` asserts that the handler under test is the one the `/metrics` mount serves at
+  that stage (the legacy gin route's handler from S2 r3 to S7, the kernel's `Router.Infra` mount from S8).
+
 The stage's done-check is the golden diff that PR shows:
 
 | Stage | Golden diff of the seeded contract test |
@@ -275,7 +297,7 @@ The stage's done-check is the golden diff that PR shows:
 | S1, S2 r1, S2 r2 | empty |
 | S2 r3 | only the kernel's own `mediacore_*` families, now gathered |
 | S2b (Pebble), S5 (tasks/ops, T0+T1), S7 (AI) | only the families renamed in that stage: each new `mediacore_*` family added, and its alias family present under the old name; the alias's ledger row and the `deploy/` dashboard and rule switch ship in the same PR (§13 item 4) |
-| S8 | only `mediacore_build_info` (09 S8; labelled with the binary's version, never the UI bundle's build ID, R5-7) and the listed additions of that PR. The two retired process gauges keep their golden lines, now produced by their aliases over the Go collector's families. Every aliased family is still present |
+| S8 | only `mediacore_build_info` (09 S8; labelled with the binary's version, never the UI bundle's build ID, R5-7) and the listed additions of that PR. The two retired process gauges keep their golden lines, now produced by their aliases over the Go collector's families: the same PR deletes the gauges and replaces their two seeding rows with alias rows (§13 item 3, OPS7-5). Every aliased family is still present |
 
 The Go collector's `go_goroutines` and `go_memstats_alloc_bytes` are not S8 additions: HEAD's `/metrics` serves
 `promhttp.Handler()` over the default registry, which already carries the Go collector
@@ -394,8 +416,12 @@ with rows in ABO's ledger; core holds none of them (R1).
 | `metricstest.AssertSeries` (per scope) | series golden for each core scope |
 
 ABO keeps its own series contract test (HEAD's `internal/telemetry/contract`, `internal/telemetrypolicy` from S1);
-after the move it scrapes `Provider.Gatherer()` and its 74 `audiobook_organizer_*` lines change only where §13
-retires or moves a series into core. Its seeded golden is the normative series check of every stage (§6, OPS6-3).
+from S2 r3 it scrapes the served `Provider.Handler()` of a Provider built through `coretest.MetricsProvider`, with
+`mediacore_` in scope (§6, OPS7-1), and its 74 `audiobook_organizer_*` lines change only where §13 retires or moves
+a series into core. Its seeded golden is the normative series check of every stage (§6, OPS6-3). Two ABO tests go
+with it: `TestContractScrapesServedHandler` (§6) and `TestS8_FullAliasSetBoots` (ABO's whole metric-alias table
+plus ABO's legacy collectors on the S8 Provider → `AddAliases` returns nil, so no alias collides with a live
+family; OPS7-5).
 
 ## 13. Migration from ABO
 
@@ -426,8 +452,8 @@ retires or moves a series into core. Its seeded golden is the normative series c
    `mediacore.tasks`. At S8 `cache.go:99` and `cache_snapshotter.go:24` take `Provider.Gatherer()` (§6).
 2. **client_golang families** in `internal/metrics` finish the move to OTel when convenient (the ratchet continues
    to zero). They stay on the default registry, which the App shares from S2 r3 to S8 (§6), and move to
-   `Provider.Registerer()` with their current names in the S8 PR that makes the registry private;
-   `metrics.Register`'s `sync.Once` global disappears then.
+   `Provider.Registerer()` with their current names in the S8 PR that makes the registry private, except the two
+   process gauges, which that PR deletes (item 3); `metrics.Register`'s `sync.Once` global disappears then.
 3. **Names.** The books module scope's prefix is `audiobook_organizer` (single-module rule, M3), so every books
    series keeps its exact name and needs no alias. Only series that move into a core subsystem are renamed; their
    aliases are ledger rows of 09 §9.2.9 and are removed by a contract PR after 09's window, never by a clock.
@@ -442,7 +468,7 @@ retires or moves a series into core. Its seeded golden is the normative series c
 | `audiobook_organizer_operations_{started,completed,failed,canceled}_total`, `_operation_duration_seconds` (label `type`) | superseded by the tasks family | S5 | yes: one alias per family, `Filter` on `mediacore_tasks_runs_total` by outcome (dashboards and alerts use them) |
 | `audiobook_organizer_op_items_processed`, `_op_items_total` (label `op_id`) | **retired** (forbidden per-run label; progress is served by the tasks API/realtime) | S5 | no alias; kept emitting by the books module's legacy collector for the window under a dated exemption, then deleted |
 | `ai_dispatch_*`, `ai_*` (unprefixed legacy) | `mediacore_ai_dispatch_*`, `mediacore_ai_*` | S7 ([05-ai](05-ai.md)) | yes |
-| `audiobook_organizer_process_memory_alloc_bytes`, `_process_goroutines` | `go_memstats_alloc_bytes`, `go_goroutines` (Go collector; both in `RuntimeFamilies()`, so `AddAliases` accepts them, OPS6-2; present in every scrape since HEAD) | S8 (private registry with its own Go collector) | yes |
+| `audiobook_organizer_process_memory_alloc_bytes`, `_process_goroutines` | `go_memstats_alloc_bytes`, `go_goroutines` (Go collector; both in `RuntimeFamilies()`, so `AddAliases` accepts them, OPS6-2; present in every scrape since HEAD) | S8 (private registry with its own Go collector). **The same PR deletes the two gauges** (OPS7-5): `memoryAllocGauge`, `goroutinesGauge`, `SetMemoryAlloc` and `SetGoroutines` (`internal/metrics/metrics.go:188-197,302-303,422-423` @748fd787a) and the two calls in the books status worker (HEAD's ticker, `internal/server/server_lifecycle.go:432-433`); the `books.system.status-ticked.v1` payload keeps its `memory_alloc` and `goroutines` fields, read from `runtime`; the gauges' seeding rows become alias rows. Moved with the other legacy families, they would be live on the private registry and `AddAliases` would refuse the aliases with the same names (§8), so the S8 build would not boot (`TestS8_FullAliasSetBoots`) | yes |
 | `http_server_*` (semconv) | unchanged | — | not needed |
 | every other `audiobook_organizer_<x>` (books, search index, catalog, cache, ABS, review, fixer, metadata fetch, …) | **unchanged** | — | none (no rename, no alias layer) |
 
@@ -535,3 +561,9 @@ Round 6:
 
 - OPS6-2 — M6, §3 (`Alias` comment, new `metrics.RuntimeFamilies()`, `ErrAliasNotCore` text), §6, §8 row, §12 `TestAliases_GatherTimeCopy` and new `TestAlias_GoCollectorTargetAccepted`, §13 item 3: an alias may target `mediacore_*` or a core runtime-collector family (`go_goroutines`, `go_memstats_alloc_bytes`), so the S8 process-gauge aliases no longer fail boot; the two `go_*` names are dropped from the S8 additions, present since HEAD.
 - OPS6-3 — §6 "Series-name checks", §12 closing paragraph: the normative per-stage check is the golden diff of ABO's seeded series contract test (`internal/telemetrypolicy`), with each renamed family's seeding row and alias added in the renaming PR; the live credentialed scrape is only a smoke check (200, non-empty, a fixed always-on set).
+
+Round 7:
+
+- OPS7-1 — §6 "What it scrapes", §12 closing paragraph: from S2 r3 ABO's seeded contract test builds the stage's Provider through `coretest.MetricsProvider` with ABO's alias rows and scrapes the served `Provider.Handler()`, never `promhttp.Handler()`; the S2 r3 PR adds `mediacore_` to `inScopePrefixes`; core-owned emitters are seeded through public SDK paths; the test's registry becomes private in the S8 PR; `TestContractScrapesServedHandler`.
+- OPS7-5 — §6 S8 row, §12, §13 items 2–3: the S8 PR deletes `memoryAllocGauge`, `goroutinesGauge`, `SetMemoryAlloc`, `SetGoroutines` and their two status-worker calls together with adding the aliases (payload fields read from `runtime`), and replaces their seeding rows with alias rows; `TestS8_FullAliasSetBoots`.
+- Header — 03 reference v1.9.1.

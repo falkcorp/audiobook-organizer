@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.5.1 -->
+<!-- version: 1.6.0 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -9,7 +9,7 @@ Evidence commit `748fd787a` (all `path:line` anchors). Raw inputs:
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md) §3, §8, §9;
 [`raw/10-auth-rbac.md`](../../plans/platform-core/raw/10-auth-rbac.md) §6–7;
 [`raw/15-dependencies.md`](../../plans/platform-core/raw/15-dependencies.md) (`go-logr/logr` v1.4.4).
-Normative: [03-architecture](03-architecture.md) v1.8.0 R4 (`log` is in **L0** with `entity`, `lifecycle`,
+Normative: [03-architecture](03-architecture.md) v1.9.1 R4 (`log` is in **L0** with `entity`, `lifecycle`,
 `version`, `metrics`; the journal service `core/internal/logjournal` imports `storage` and `tasks`, so by
 R4's bridge rule it sits at **L4** and only the kernel imports it), R5 (no `slog.SetDefault` in core except the
 opt-in `app.InstallProcessDefaults`; R5 binds core only, and ABO's logger shim is an allowed books-module value),
@@ -394,7 +394,8 @@ type Schedules struct { // section core.log.schedules
   - `Append` writes each record as a row of exactly HEAD's shape (source, level, message, time), which every
     older build reads as its own system log. The record's remainder that HEAD's shape cannot hold (module,
     subsystem, attributes, trace and span IDs) goes to a **books-owned extension record** keyed by the row key
-    (books' `m/books/ext/logs/`, `legacy.Extension`, 05-storage §5S.3.11), which older builds never read and
+    (books' `m/books/ext/logs/`, the fixed segment `logs` that 05-storage §5S.3.11 assigns to
+    `legacy.Stores.Logs` (COR7-7); `legacy.Extension`, 05-storage §5S.3.11), which older builds never read and
     which carries the fingerprint `legacy_ref.fp` of the row it extends; never extra members in the legacy row
     (R4-1). Every field of it is Derived in 05-storage's terms and it declares no Widening field, so under
     05-storage's rule a stale extension is never marked `Suspended` and never counts toward a suspension health
@@ -404,7 +405,10 @@ type Schedules struct { // section core.log.schedules
     nothing, so ignoring it is enough. Without its extension a record has no `user_id`, so the other-user
     predicate fails closed on it (below).
   - `Prune` deletes aged rows and their extensions in bounded chunks, as HEAD does
-    (`pebble_store_activity.go:428-434`), by `core.log.journal.retention_days`.
+    (`pebble_store_activity.go:428-434`), by `core.log.journal.retention_days`. Each extension delete is a
+    `legacy.Extension.Delete(ctx, b, legacyKey, entryID, seen)` call with the record the chunk read, which stages
+    an `Expect` on those bytes plus the delete; books' `ext` sub-prefix is `Serialized`, so a blind delete there
+    would be refused as `ErrBlindWrite` (R7-3, DATA7-8). An orphaned extension (row gone) is deleted the same way.
   - `logtest.JournalStoreSuite` with HEAD fixtures is its test (`TestJournal_ReadsLegacySyslog` moves there).
   There is no copy, no `core/log` migration step and no level step (DATA3-14, resolved by R3-1). In the S5
   release that starts the journal, ABO's own writers and pruner of those rows are removed (§11), so each row
@@ -643,3 +647,9 @@ Round 5:
 Round 6:
 
 - integration pass (round 6): §5 names `legacy.Extension` (was `storage.Extension`; R6-3, 05-storage's one list).
+
+Round 7:
+
+- DATA7-8 / R7-3 — §5 ABO's store: `Prune` deletes extension records through `legacy.Extension.Delete` with the record it read (`ctx`, `seen`), a conditional delete, never a blind one in books' `Serialized` `ext` sub-prefix.
+- COR7-7 — §5: the extension segment `logs` is cited as 05-storage §5S.3.11's fixed segment for `legacy.Stores.Logs`.
+- Header — 03 reference v1.9.1.
