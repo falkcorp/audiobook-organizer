@@ -1,13 +1,13 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
 <!-- last-edited: 2026-11-04 -->
 
 # mediacore — platform-core design spec
 
 **Status:** draft under antagonistic review (see `docs/plans/platform-core/reviews/`). Round 1's 192
-findings, round 2's 162, round 3's 130, round 4's 117 and round 5's 115 are dispositioned
-(`spec-round-{1,2,3,4,5}-dispositions.md`) and applied to the files. Round 3's resolutions R3-1…R3-5 are
+findings, round 2's 162, round 3's 130, round 4's 117, round 5's 115 and round 6's 80 are dispositioned
+(`spec-round-{1,2,3,4,5,6}-dispositions.md`) and applied to the files. Round 3's resolutions R3-1…R3-5 are
 binding and supersede round-2 R2-1…R2-3: during the extraction every key family keeps one stored format
 (no adoption copies or mirrors), and per-family cutover to native keyspaces is deferred (02 decision 13,
 N15). Round 4's resolutions R4-1…R4-6 are binding; R4-1 refines R3-1: core reaches ABO's data through SDK
@@ -17,7 +17,14 @@ key name and no storage grant during the extraction, and a moved secret leaves a
 plaintext secrets move (the four HEAD already encrypts, the Basic password among them, stay in place) and
 HEAD's precedence for legacy keys holds until cutover (R5-1); legacy store packages import downward only
 (R5-2); extension fingerprints cover security-relevant fields only and older-build revocations stay revoked
-(R5-6); the UI build ID and the binary ID are separate values (R5-7).
+(R5-6); the UI build ID and the binary ID are separate values (R5-7). Round 6's resolutions R6-1…R6-7 are
+binding: every write to a serialized family, progress ticks and ledger commits included, is checked at
+commit (R6-1); `internal/operations/state` stays in ABO (49 packages leave, 5 new, 169 remain; R6-2); every
+identifier that exists only for an app's legacy stores lives in one package, `legacy`, outside the API
+promise like `kernel`, so a cutover removes it without a breaking change (R6-3); a staged restore is not a
+foreign open (R6-4); API-key writes never race, shipped early as the sixth early fix (R6-5); an operator
+value that enables auth always takes effect (R6-6); staging copies are scrubbed and inert before they boot
+(R6-7).
 **Evidence commit:** `748fd787a`. **Raw data:** [`docs/plans/platform-core/raw/`](../../plans/platform-core/raw/00-index.md).
 **Plan:** `docs/plans/platform-core/implementation-plan.md` (written after this spec merges).
 
@@ -52,6 +59,7 @@ app starts:
 | Per-family cutover of the ABO families core services use (03 §3.7 names them; the store interfaces are 03 §3.3's one list) to native core keyspaces | [02](02-decision-record.md) N15, [05-storage](05-storage.md) |
 | Members of built packages that only that cutover can use: storage grants (`Grant`, `GrantMode`) and the served-run preconditions; backup encryption; the seed-role merge diff | [05-storage](05-storage.md) §5S.3.13, [05-backup](05-backup.md) B3, [05-rbac](05-rbac.md) §4.8 |
 | `Online` data migrations (read adapters, the kernel-synthesised `<ID>.datamigrate.<name>` kind): no S0–S10 consumer; extraction data migrations are `BootBlocking` | [05-storage](05-storage.md) §5S.3.14, [03 §3.3](03-architecture.md) `storage/datamigrate` |
+| The config basis mechanism (`config.Basis` and the suspension and confirmation of config extension records it drives): no key of S0–S10 declares a basis | [05-config](05-config.md) §1.12.3, [03 §3.4](03-architecture.md) |
 
 The Build column of 03 §3.3 is the authoritative list of deferred packages and is re-checked at every
 stage gate. Deferral also applies to members of built packages (03 §3.4): each file lists them under a
@@ -67,7 +75,8 @@ kept / changed / dropped (decision 13 extended in round 3: one stored format per
 extraction; amended in round 4: store interfaces with books-supplied legacy implementations, native-only
 data in a books-owned extension family, moved secrets replaced by a never-matching sentinel; amended in
 round 5: only plaintext secrets move, HEAD's legacy-key precedence holds until cutover, extension
-fingerprints cover security-relevant fields only), 15 new
+fingerprints cover security-relevant fields only; amended in round 6: legacy-only identifiers in the
+`legacy` package outside the API promise, and an operator value that enables auth always takes effect), 15 new
 decisions (N1–N15; N13, the round-2 Teach-build rollback floor, is superseded; N14 names the **floor
 release** that deletes books' legacy migration code and the **stepping-stone release** a store must run
 first, checked on the store; N15 defers per-family cutover and the storage grants with it), the eight
@@ -166,3 +175,8 @@ Round 5 (dispositions in `docs/plans/platform-core/reviews/spec-round-5-disposit
 - SIMP5-7 — "Build scope": `Online` data migrations are deferred-build members.
 - SIMP5-6, COR5-16 — "Build scope": `Deferred-build members` headings may carry a section number; first column package-qualified identifiers only.
 - SIMP5-8 — "Build scope": the cutover row cites 03 §3.7 and §3.3 instead of restating the family list.
+
+Round 6 (dispositions in `docs/plans/platform-core/reviews/spec-round-6-dispositions.md`; resolutions R6-1…R6-7):
+
+- R6-1…R6-7 (DATA6-1, MOD6-1, SIMP6-2, SIMP6-3, DATA6-2, SEC6-3, SEC6-1, OPS6-4) — status line: round 6 dispositioned and applied; the binding resolutions summarised; decisions paragraph: decision 13's round-6 amendment (`legacy` package, auth-enable exemption).
+- SIMP6-1 — "Build scope": the config basis mechanism is deferred-build (no consumer in S0–S10).

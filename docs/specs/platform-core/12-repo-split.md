@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/12-repo-split.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: eb47baa1-640b-4c96-96cc-f6b2bdeaa57e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -74,10 +74,13 @@ a `go1.x.y` literal; the pin has exactly the guarded copies listed in 13 §13.2.
 ### SC1 — Public API stable across 3 consecutive core checkpoints
 
 *Definition.* Zero incompatible changes in SDK packages (03 §3.1: every core package outside
-`internal/` and `kernel/`; `examples/` is also excluded) between checkpoint *n−1* and *n*, for the last
-three checkpoints, spanning at least 6 weeks. The SDK includes the **store interfaces** of 03 §3.3
+`internal/`, `kernel/` and `legacy/`; `examples/` is also excluded) between checkpoint *n−1* and *n*, for
+the last three checkpoints, spanning at least 6 weeks. The SDK includes the **store interfaces** of 03 §3.3
 (R4-1), through which core services persist their state and an app supplies its legacy implementation, so
-a change to one counts like any other SDK change. Because ABO's implementations stay in ABO, no ABO key
+a change to one counts like any other SDK change. The identifiers that exist only to serve an app's legacy
+stores (optional capabilities, `legacy.Stores`, `legacy.RootSource`, their suites) live in `legacy/`
+instead and are **not** measured, like `kernel/`, so a family's cutover deletes them without a breaking
+change (03 §3.3 "Legacy-only identifiers"; R6-3, SIMP6-2). Because ABO's implementations stay in ABO, no ABO key
 name or row format is in core at the split; the split ships only the interfaces and core's native
 implementations.
 
@@ -98,7 +101,7 @@ forbid an allowed change from the first core PR. It runs in `make -C core readin
 *Output format the filter relies on (X7).* In module mode apidiff prints `- ./<rel>.<Obj>: <msg>` for a
 changed object and `- package <full path>: removed` for a removed package; `-incompatible` prints no
 header; `internal/` packages are already filtered by apidiff itself. The filter below therefore drops
-lines for `kernel/` and `examples/` in both forms.
+lines for `kernel/`, `legacy/` and `examples/` in both forms.
 
 *Command (pre-split)*, wrapped by `core/scripts/ci/core_api_gate.py`:
 
@@ -112,7 +115,7 @@ pair() {   # $1 = older checkpoint ref, $2 = newer checkpoint ref
   (cd "$TMP/a/core" && apidiff -m -w "$TMP/a.api" github.com/falkcorp/mediacore)
   (cd "$TMP/b/core" && apidiff -m -w "$TMP/b.api" github.com/falkcorp/mediacore)
   apidiff -m -incompatible "$TMP/a.api" "$TMP/b.api" \
-    | grep -v -E '^- (\./(kernel|examples)(/[^.: ]+)*\.|package github\.com/falkcorp/mediacore/(kernel|examples)(/|:))' \
+    | grep -v -E '^- (\./(kernel|legacy|examples)(/[^.: ]+)*\.|package github\.com/falkcorp/mediacore/(kernel|legacy|examples)(/|:))' \
     > "$TMP/incompatible.txt" || true          # grep -v exits 1 when nothing is left: the passing case
   git worktree remove --force "$TMP/a"
   git worktree remove --force "$TMP/b"
@@ -122,12 +125,15 @@ refs=$(git for-each-ref --sort=-v:refname --format='%(refname)' refs/core-checkp
 # pair(n-1, n), pair(n-2, n-1), pair(n-3, n-2), then the date span with git log -1 --format=%cs <ref>
 ```
 
-`core_api_gate.py` carries a fixture test: a known `kernel/` break must be filtered and a known SDK
-break must be reported, so a change in x/exp's output format fails loudly instead of silently passing
+`core_api_gate.py` carries a fixture test: a known `kernel/` break and a known `legacy/` break must be
+filtered and a known SDK break must be reported, so a change in x/exp's output format fails loudly instead of silently passing
 or failing every run.
 
-*Command (post-split, in the core repo):* `gorelease -base=$(git describe --tags --abbrev=0)` from the
-same pinned tools module.
+*Command (post-split, in the core repo):* the same `pair` function with the previous tag as the older ref,
+from the same pinned tools module, then `gorelease -base=$(git describe --tags --abbrev=0)` for its
+module-level checks. `gorelease` cannot exclude packages, so a `kernel/` or `legacy/` removal makes it
+suggest a major; `core_api_gate.py` overrides that suggestion only when every incompatible line it reports
+lies under `kernel/` or `legacy/` (R6-3).
 
 ### SC2 — R1 guard green and core requires no app module
 
@@ -218,7 +224,7 @@ never lowered by a PR), the same mechanism as the root's.
 ```sh
 (cd core && go test -short -coverprofile="$TMP/core.out" ./... \
   && go tool cover -func="$TMP/core.out" | tail -1)                    # total
-python3 core/scripts/ci/core_coverage_by_package.py "$TMP/core.out" --min 60 --exclude 'kernel/|internal/|examples/'
+python3 core/scripts/ci/core_coverage_by_package.py "$TMP/core.out" --min 60 --exclude 'kernel/|internal/|examples/|legacy/'
 ```
 
 ### SC6 — Every core contribution point is documented
@@ -337,7 +343,8 @@ split, the core repo has nothing else. It is specified now so that it does not g
   checkpoint minor, (b) carry a changelog fragment in category `Removed` or `Changed` whose first line
   starts with `BREAKING:`, and (c) reset the SC1 counter. Additive changes bump the minor; fixes bump
   the patch.
-- `kernel/`, `internal/` and `examples/` are outside every promise in every phase (03 §3.3).
+- `kernel/`, `internal/`, `legacy/` and `examples/` are outside every promise in every phase (03 §3.3; `legacy/`
+  by R6-3).
 
 ### 12.4.2 At and after the split
 
@@ -353,6 +360,10 @@ split, the core repo has nothing else. It is specified now so that it does not g
 - **Deprecation of SDK identifiers.** A deprecated Go identifier gets a
   `// Deprecated: use X; removed in vN+1.0.0` doc line (picked up by `staticcheck` SA1019 in app CI) and
   stays for **at least two minor releases and 90 days**. Removal therefore only happens in a major.
+  `legacy/` is outside this policy (R6-3, SIMP6-2): a family's legacy-only identifiers are deleted in the
+  release that ships that family's cutover, a minor, with a changelog fragment that names them; an app
+  that still refers to one fails to compile, which is the intended signal, and an app with no pre-core
+  data never imports `legacy`.
   This is core's library deprecation policy for its Go API. It is **not** ABO's compatibility window
   for wire, config, permission and storage surfaces, which is defined once in
   [09](09-abo-on-core.md) §9.2.1 and implemented in `compat`.
@@ -401,9 +412,10 @@ split, the core repo has nothing else. It is specified now so that it does not g
 No goreleaser: core ships no binary. Steps (a `make release VERSION=vX.Y.Z` target in the core repo,
 §12.3.11, runs 1–5; 6–8 are the release workflow):
 
-1. Assert `version.Version == "X.Y.Z"` (§12.4.3); then `gorelease -base=<previous tag> -version=vX.Y.Z`
-   from the pinned tools module — fails if the requested version understates the API change
-   (post-split form of SC1).
+1. Assert `version.Version == "X.Y.Z"` (§12.4.3); then `core_api_gate.py --base <previous tag>` and
+   `gorelease -base=<previous tag> -version=vX.Y.Z` from the pinned tools module — fails if the requested
+   version understates the API change of the SDK; a suggested major caused only by `kernel/` or `legacy/`
+   lines is overridden (post-split form of SC1, R6-3).
 2. `scriv collect --version X.Y.Z` with the same `scriv.ini` shape as this repo
    (`changelog.d/scriv.ini:8-21`: Markdown, Keep-a-Changelog categories) → `CHANGELOG.md`; PR; merge.
 3. `git tag -a vX.Y.Z -m "mediacore vX.Y.Z"` on the merge commit (signed if the owner's key is configured);
@@ -704,3 +716,7 @@ Round 5 (dispositions in `docs/plans/platform-core/reviews/spec-round-5-disposit
 - MOD5-15 — §12.3.11 `ci` target gains `errcheck-ratchet interface-width mocks-check pprof-check web-test` with scripts under `core/scripts/ci/`; SC4(b) uses 09 §9.2.1's trigger list plus the workflow file.
 - FE5-15 — §12.8.2 step 6: the Docker frontend stage drops its `core/web` copies and builds, `web-deps` its `core/web` prerequisites.
 - FE5-16 — §12.5 step 6, §12.6, §12.10 item 2: the private-repo npm path needs a read token on every machine and tarball URL specifiers the lockstep check parses and Dependabot does not bump; a public repo is the precondition of the token-free path (14 Q-B).
+
+Round 6 (dispositions in `docs/plans/platform-core/reviews/spec-round-6-dispositions.md`; resolutions R6-1…R6-7):
+
+- SIMP6-2 (R6-3) — SC1 definition, apidiff filter, fixture test, SC5 coverage exclusion, §12.4.1 and §12.4.2: `legacy/` is outside the API promise like `kernel/`; a family's legacy-only identifiers are deleted with its cutover in a minor, not deprecated until a major; post-split SC1 and release step 1 run the filtered apidiff pair and override a `gorelease` major caused only by `kernel/` or `legacy/` lines.

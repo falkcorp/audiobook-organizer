@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/01-summary.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: d2956830-373c-4b12-9504-ccace49f7f6d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -92,7 +92,8 @@ moves platform machinery, not every route.
 | Term | Meaning |
 |---|---|
 | **core** / **mediacore** | The Go module `github.com/falkcorp/mediacore` (at `core/` until the split) and its npm workspace. |
-| **SDK** | Core's public, versioned packages — everything outside `core/internal/` and `core/kernel/`. Measured by the API-stability gate (§12). |
+| **SDK** | Core's public, versioned packages — everything outside `core/internal/`, `core/kernel/` and `core/legacy/`. Measured by the API-stability gate (§12). |
+| **legacy package** | `core/legacy` (with `legacy/legacytest`): the one core package holding every identifier that exists only to serve an app's legacy stores — the optional legacy-only capabilities, `legacy.Stores`, the legacy-only `legacy.RootSource` and their conformance suites. Public, so ABO imports it, but outside the API promise like `kernel`, so a family's cutover deletes its identifiers without a breaking change (03 §3.3; R6-3). |
 | **kernel** | Core's composition machinery (`core/kernel/...`): module catalog, manifest validation, lifecycle supervisor and the typed services struct (no DI container). Imported only by `core/app`. |
 | **deferred-build** | A core package whose contract is specified at proof depth but which the extraction plan does not build (03 §3.4): `acquire`, `arrfacade`, `integrations/indexer`, the download grab/monitor pipeline. Built when the first TV/Movies app starts. |
 | **legacy mount** | ABO's gin router mounted through `httpapi.MountLegacy` behind core's perimeter middleware; permanent (02 N7). |
@@ -103,7 +104,7 @@ moves platform machinery, not every route.
 | **capability contract** | A narrow Go interface in `core/integrations/*` (AI, download, indexer, metadata, notify). |
 | **keyspace** | A prefix of the shared Pebble database handed to one owner: `c/<subsystem>/` for core, `m/<module>/` for modules. |
 | **legacy claim** | A module's declaration that it owns pre-existing un-namespaced key families (ABO's 258), so they stay in place. |
-| **store interface** | The SDK interface through which a core service persists state an app may already hold; the one list is 03 §3.3 "Store interfaces" (SIMP5-8). Core ships a **native implementation** over its own keyspace, used by new apps and `hello`; an app with pre-core data supplies a **legacy implementation** over its existing keys on `module.Manifest.LegacyStores` (for ABO, books code; S2's `app.Options.LegacyConfigStore` bridge is the one exception, DATA5-16), so core holds no app key name and no storage grant during the extraction (02 decision 13, R4-1). |
+| **store interface** | The SDK interface through which a core service persists state an app may already hold; the one list is 03 §3.3 "Store interfaces" (SIMP5-8). Core ships a **native implementation** over its own keyspace, used by new apps and `hello`; an app with pre-core data supplies a **legacy implementation** over its existing keys on `module.Manifest.LegacyStores` (a `legacy.Stores` value; for ABO, books code; S2's `app.Options.LegacyConfigStore` bridge is the one exception, DATA5-16), so core holds no app key name and no storage grant during the extraction (02 decision 13, R4-1). |
 | **extension family** | The books-owned family, never read by an older build, in which ABO's legacy store implementations keep native-only data (namespaced scopes, hashed sessions, native one-time tokens) instead of adding it to legacy rows. Each record carries a fingerprint (`legacy_ref.fp`) of the security-relevant fields of the legacy row it extends. When an older build changed those fields, a record holding a Widening field is suspended until an admin re-confirms it, and a record without one has its Derived fields reset until its next write; a revocation the older build made stays revoked (02 decision 13; R5-6, DATA5-4). |
 | **cutover** | The later, per-family, one-way step that moves a family to a native core keyspace and deletes the legacy rows; outside the extraction, checkpointed, behind the per-owner level guard; the only step in which core reads an app's rows, so storage grants land with it; its rollback floor is the cutover release itself (02 N15). |
 | **task** | A durable unit of background work in `core/tasks` (formerly "operation"/"op"/"job"); kind `<module>.<name>`. |
@@ -163,3 +164,7 @@ Round 5 (dispositions in `docs/plans/platform-core/reviews/spec-round-5-disposit
 - R5-6, DATA5-4 — glossary "extension family": `legacy_ref.fp` over security-relevant fields; Widening records suspended, Derived fields reset; older-build revocations stay revoked.
 - DATA5-16 — glossary "store interface": S2's `app.Options.LegacyConfigStore` is the one exception to `module.Manifest.LegacyStores`.
 - SIMP5-8 — glossary "store interface" and non-goals cite 03 §3.3 and §3.7 instead of restating the store and family lists.
+
+Round 6 (dispositions in `docs/plans/platform-core/reviews/spec-round-6-dispositions.md`; resolutions R6-1…R6-7):
+
+- SIMP6-2, SIMP6-3 (R6-3) — glossary: "SDK" excludes `core/legacy/`; new entry "legacy package"; "store interface" names `legacy.Stores`.
