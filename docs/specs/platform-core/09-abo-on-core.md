@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/09-abo-on-core.md -->
-<!-- version: 1.12.3 -->
+<!-- version: 1.12.4 -->
 <!-- guid: 3c82c917-2fc4-4385-b085-73d143a2374f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -7,7 +7,7 @@
 
 Evidence commit: `748fd787a`. Raw data: [`raw/`](../../plans/platform-core/raw/00-index.md).
 Names, paths and rules come from [03-architecture](03-architecture.md) (normative). The release keys R0–R3, the flip
-labels F3–F9 and the migration steps M1–M8 are 03 §3.8's; D12's four owner answers are cited as D12 (a)–(d). Package
+labels F2–F9 and the migration steps M1–M8 are 03 §3.8's; D12's four owner answers are cited as D12 (a)–(d). Package
 moves are **not restated here**: [04-package-mapping](04-package-mapping.md) §8 keys every move by release; its rows
 are the planning list (informative, A-4), and each PR's build and the guards of 03 §3.5 decide what it may move. This
 file owns **sequencing**: what each release ships, the order of the R2 flips and migration steps, how each release is
@@ -18,7 +18,7 @@ verified and rolled back, and what the owner does. Where a 05-* "Migration from 
 
 ABO becomes **app = core + module `books`** in four releases (§9.3): **R0** the hotfixes; **R1** the core runtime,
 with no change to user data; **R2** the one-way cutover of every core-service family, with its UI, as one release;
-**R3** cleanup and the one upgrade floor. Three owner decisions set the shape ([02](02-decision-record.md)):
+**R3** cleanup and the one upgrade floor. Four owner decisions set the shape ([02](02-decision-record.md)):
 
 - **D10, no backward compatibility.** Data formats, storage layouts, key names, HTTP paths, metric names, config keys,
   env names, CLI flags, the webhook format, the OAuth callback path and the fingerprint-worker API may change. A rename
@@ -28,14 +28,19 @@ with no change to user data; **R2** the one-way cutover of every core-service fa
 - **D11, no soaks.** Code lands dark on `main`, one flip PR switches each subsystem on, and every merge passes
   `make ci` and the e2e suite (§9.2.1). The owner's work is decisions, deploys and an optional 1-day smoke run.
 - **D12, the cutover's scope.** (a) R2 is **one** release: automatic promotion pauses from the first R2 flip until
-  R2 ships. (b) API keys and the Audiobookshelf (ABS) phone apps' sessions survive it; web sessions and one-time
+  R2 ships; a lead extension, which the owner may override, pauses it from R1's first core PR until R1 ships too
+  (§9.2.1). (b) API keys and the Audiobookshelf (ABS) phone apps' sessions survive it; web sessions and one-time
   tokens are reset; task-run and log history are converted; throttle and quota holds, indexes and caches are reset
   or rebuilt. (c) The only frozen external contract is the ABS-compatible API (§9.6). (d) The pre-migration
-  checkpoint is deleted automatically after 7 days.
+  checkpoint is deleted automatically 7 days after it stops being needed (§9.2.3).
+- **D13, identity rows and merges.** A user, or one of its keys or identities, that the cutover cannot convert stops
+  the upgrade, and an account merge in progress refuses it, until the owner fixes the cause (§9.2.3); finished
+  merges become permanent. The UI shell builds no old-URL redirects. Core is `github.com/falkcorp/mediacore`, public,
+  under Apache-2.0.
 
 Kept from before: D1–D9 (02); the six early fixes of 05-authn §11.1, which ship first (R0) and whose tests are ported
 onto core auth in R2; data migrated forward one-way by in-binary steps and never dropped, a row that does not decode
-being quarantined and reported (§9.2.3); rollback by an offline restore plus the previous binary (§9.2.1); and the
+being quarantined and reported, except an identity row, which stops the upgrade (§9.2.3); rollback by an offline restore plus the previous binary (§9.2.1); and the
 hardened identity, secrets and precedence design, which lands directly in R2.
 
 Out of scope: TV/Movies (10), multi-app (11) and the repo split (12). The deferred-build packages (`acquire`,
@@ -80,10 +85,11 @@ Go's `internal/` rule (A-4). The storage-efficiency program that owns `storage_f
 
 Five rules, used by every release (03 §3.7, §3.8): (1) a core service never runs over HEAD's rows: in R2 a
 books-owned step decodes them, writes them through the subsystem's importer and deletes them (§9.2.3); (2) every boot
-that will migrate takes the pre-migration checkpoint first, and it is deleted after 7 days (§9.2.3); (3) R2 raises
+that will migrate takes the pre-migration checkpoint first, and it is deleted 7 days after it stops being needed (§9.2.3); (3) R2 raises
 the level stamps before its first rewritten row, so older binaries refuse a migrated store instead of misreading it
-(§9.2.2); (4) nothing is dropped in silence: an undecodable row is quarantined, and what D12 resets is in the release
-note (§9.6); (5) rollback across R2 is an offline restore plus R1 (§9.2.1).
+(§9.2.2); (4) nothing is dropped in silence: an undecodable row is quarantined, an unconvertible identity row stops
+the upgrade (D13), and what D12 resets is in the release note (§9.6); (5) rollback across R2 is an offline restore
+plus the pre-freeze release (§9.2.1).
 
 ### 9.2.1 Release safety: the merge gate, no soaks, rollback by restore
 
@@ -94,13 +100,22 @@ carries the migration step of its families and switches every first-party caller
 release-gating commit trailer or stage record. There are no soaks. After a deploy the owner may run a 1-day smoke run
 (R2's list is in §9.4 R2).
 
-**The release freeze (D12 (a)).** From the merge of R2's first flip PR (F3) until the R2 release, automatic promotion is
+**The release freezes (D12 (a)).** From the merge of R2's first flip PR (F3) until the R2 release, automatic promotion is
 off: `check-rc-ordinal` dispatches no production release (§9.1), so `releases/latest` and the `:latest` image stay on
-R1 and no install runs a half-flipped `main`. RCs are still cut, and none is promoted. Unattended updates are
-check-only from R0 on (05-updater). The freeze starts with the PR that turns the dispatch off and ends with the R2
-release, which turns it on again. Feature PRs keep merging and ship with R2. A production defect found during the
-freeze is fixed by default in a release cut from the R1 tag plus the fix; the owner may decide otherwise for a given
-defect (§9.11).
+the pre-freeze release and no install runs a half-flipped `main`. RCs are still cut, and none is promoted. Unattended
+updates are check-only from R0 on (05-updater). The freeze starts with the PR that turns the dispatch off and ends with
+the R2 release, which turns it on again. Feature PRs keep merging and ship with R2. F2's foundation PRs land dark
+before F3 and are outside the freeze. **R1 freeze (lead extension of D12 (a), round 13 R3; the owner may override
+it).** The same mechanism pauses promotion from R1's first core PR until R1 ships, so no production minor carries part
+of R1 (its perimeter move, the deleted reset routes, the first checkpoint) without R1's P12 check and release note:
+R1 and R2 each ship as exactly one production release; a defect found during it is fixed the same way, from the last
+production release before R1's first core PR. Between R1 and F3, production minors ship as usual.
+
+**The pre-freeze release** is the last production release before F3 merges; once R2 is deployed it is also the `.prev`
+binary. A production defect found during the R2 freeze is fixed by default in a release cut from the pre-freeze
+release plus the fix, never from the R1 tag, because a minor after R1 may have run a books step that the R1 tag cannot
+open (exit 78); the owner may decide otherwise for a given defect (§9.11). `TestCutoverRefusedByOlderBuilds` and the
+restore drill (§9.3) run that release's binary.
 
 **Release gating is a list of named required checks (R3-2; OPS4-7, MOD4-8, OPS4-6).** Every PR to `main` passes, on
 an up-to-date branch or through a merge queue (rebase merges otherwise put an untested tree on `main`), these required
@@ -123,26 +138,35 @@ the main safety, so Q-I matters more than before.
 **Rollback (D12).** Rollback is an **offline restore plus the previous binary**. What there is to restore depends on
 the release:
 
-- **R0, R1 and R3 change no user data**, so the restore part is empty and `make rollback`, HEAD's binary swap to
-  `.prev` (`Makefile:892-917`) with R1's in-flight probe, is the whole rollback. R0 writes no new state. R1 writes only
-  core's `c/storage/` bookkeeping, which R0 ignores (`TestR0OpensR1Store`, 05-storage's one previous-build test). R3
-  adds only a boot-time floor. Nothing written after the upgrade is lost.
+- **R0, R1 and R3 change no user data in the store**, so the restore part is empty and `make rollback`, HEAD's binary
+  swap to `.prev` (`Makefile:892-917`) with R1's in-flight probe, is the whole rollback. R0 writes no new state. R1
+  writes only core's `c/storage/` bookkeeping, which R0 ignores (`TestR0OpensR1Store`, 05-storage's one previous-build
+  test), after the checkpoint its first boot takes on a non-empty store. R3 adds a boot-time floor and deletes two
+  files beside the store through one named boot step, `.encryption_key` and HEAD's `library.bleve` directory, which R2
+  no longer reads on a migrated store (§9.4 R3). Nothing written after the upgrade is lost.
 - **Across R2 the store is migrated and stamped**, so HEAD's storage-format guard refuses `make rollback` (it reads the
   raised projection, §9.2.2) and the rollback is **`make rollback-restore`** (05-storage §5S.3.12): stop the service;
+  compare the checkpoint record's `from_vector` levels with `.prev --print-storage-levels` and refuse, with a message
+  naming the binary to install (the pre-freeze release), when they differ, so that after an R2 hotfix whose `.prev` is
+  an R2 build the recipe never re-migrates (round 13 R11; DATA-9);
   run the current binary's `storage restore-offline --checkpoint <latest> --accept-loss` (the checkpoint holds the
   store and the state files outside the DB directory, `.encryption_key`, the gap-fill `<db parent>/config.yaml` and,
   once a boot has created it, the keyring, which the first R2 boot creates only after its checkpoint; it lives 7 days), or `--archive <file>` with the owner's off-host archive (a pre-R2 archive holds no state
   files: `.encryption_key` is still on the host until R3, and the gap-fill `config.yaml`, which M2 stripped, comes
-  back from the owner's off-host copy, as both do after a host loss); reinstall the previous binary from `.prev`; start. Its one probe refuses while a
+  back from the owner's off-host copy, as both do after a host loss); a restore replaces only the state files its source
+  holds and never removes a keyring the source lacks; reinstall the previous binary from `.prev`; start. Its one probe refuses while a
   swap is in flight (`restore_inflight`), and nothing overrides it: boot the current build once to finish the swap.
   The one exception is a checkpoint restore boot whose migration failed (journal `failed`, 05-backup §5B.3.4 step x):
   the runbook stops the service and runs the **previous** binary's `storage restore-offline --checkpoint <name>` (any
-  release from R1), the one recipe admitted while `inflight.json` exists; on success it deletes `inflight.json`, and
+  release from R1), the one recipe admitted while `inflight.json` exists; on success it writes `applied_offline` with
+  `HooksOwed` set when the store it restores still owes its hooks (R11; DATA-7) and deletes `inflight.json`, and
   the previous binary is installed and started (05-storage §5S.3.12). A
   staged intent that has not started is rejected by the restore itself, which supersedes it.
 - **What a restore costs.** It discards everything written after the upgrade: imports, edits and the listening progress
-  the phone apps synced. Fixing forward is therefore the default, and the decision to roll back belongs to the smoke
-  day. The runbook says so plainly.
+  the phone apps synced. It also undoes every revocation made on R2: an API key revoked, a user disabled or a password
+  changed after the upgrade is live again on the pre-freeze release, so after a compromise the owner repeats those
+  revocations once the rollback is up (SEC-10). Fixing forward is therefore the default, and the decision to roll back
+  belongs to the smoke day. The runbook says both plainly.
 
 ### 9.2.2 The store guard: level stamps, the refusal and the R3 floor
 
@@ -155,7 +179,8 @@ ships it in core `storage`, with the re-home of `internal/database`.
 **Policy.**
 
 - **R0 and R1 raise no level.** Every owner is served at level 0 and the projection stays at HEAD's format 1, so the
-  previous binary opens the store and `make rollback` passes.
+  previous binary opens the store and `make rollback` passes. R1's first boot on a non-empty store still takes a
+  checkpoint (§9.2.3), which its sweeper deletes after 7 days.
 - **R2 raises `books` and `core`** in its level step M7, before the first rewritten row (§9.2.3), and sets the
   projection to `LegacyMaxFormat + 1`. From that batch on, every older binary refuses the store at open, before any
   write: HEAD and R0 through HEAD's storage-format guard, R1 through the level guard, which exits 78 and names both
@@ -177,8 +202,10 @@ ships it in core `storage`, with the re-home of `internal/database`.
 **Fresh installs (DATA2-28, DATA3-21).** On the boot that creates `c/storage/install` on an empty store, the marker,
 every owner's level stamp at the build's level and the applied record of every registered step below each owner's
 lowest `Seed` step are written in **one** batch, so a crash leaves either an empty store or a fully stamped one. Books'
-fresh-install batch records its legacy steps 1..`LegacyCap` and the R2 cutover steps as applied, so a fresh install or
-a factory reset is never migrated and passes R3's floor on every boot (`TestFreshInstallPostFloorBootsTwice`).
+fresh-install batch records its legacy steps 1..`LegacyCap` as applied and every step ID that a declared
+`UpgradeFloor.Requires` names, M2–M6, as satisfied, whether or not the build still registers it, so a fresh install or
+a factory reset is never migrated and passes R3's floor on every boot, in R3 too, which no longer registers M2–M6
+(`TestFreshInstallPostFloorBootsTwice`; round 13 R6, IMPL-7).
 
 **The R3 floor (02 N14).** R3 deletes books' legacy steps 1..66 (`LegacyCap`), the HEAD-format readers and the cutover
 steps, and declares `UpgradeFloor{InstallFirst: R2}`:
@@ -196,8 +223,10 @@ steps, and declares `UpgradeFloor{InstallFirst: R2}`:
   swap: neither the updater nor the deploy recipe reads the store (03 §3.7).
 - A restore stages an archive only if it meets the build's floor: staging refuses a pre-R2 archive with
   `ErrUpgradeFloor{InstallFirst}` before it extracts anything (05-backup §5B.3.4), so a fresh host never ends with an
-  empty store. The host-loss procedure for such an archive after R3: install R2, restore the archive with
-  `storage restore-offline --archive`, start it once so that it migrates, then upgrade.
+  empty store. The host-loss procedure for such an archive after R3: install R2 (the floor refuses the archive in R3),
+  put the archive's off-host `.encryption_key` and gap-fill `config.yaml` into the state directory and beside the
+  database, restore the archive with `storage restore-offline --archive`, start it once so that it migrates, then
+  upgrade (R6). Without the off-host `.encryption_key`, M2 refuses to start, because R3 deleted the host's copy.
 - `LegacyCap` is the highest HEAD-style books step when R1's storage move lands (66 at the evidence commit). Every later
   books step is a versioned `Migration` or `DataMigration` numbered from `LegacyCap+1`, and `TestNoNewLegacyMigrations`
   pins the legacy track until R3 deletes it.
@@ -213,6 +242,17 @@ decoded, so a killed boot resumes from the step's cursor and no record exists in
 Books' own domain families, about 240 of them, stay in place under books' claims (05-storage §5S.9.1): renaming them
 buys nothing.
 
+**The cutover preflight (D13).** Before it takes the checkpoint, an R2 boot of a pre-R2 store reads, without writing:
+every user, API key, OAuth identity and invite allow-list row, which M3 must convert, and every `usermerge:journal:`
+record. It refuses the boot, writing nothing, when an identity row cannot be converted or a merge journal is
+`applying` or `undoing`; its report and the log name each row or merge. Because nothing was written, `make rollback`
+to `.prev` is still a binary swap. The owner then finishes or undoes the merge on the pre-freeze release, and fixes
+or deletes each named row with R2's offline command `storage cutover-blockers` (list, fix, delete; or on the
+pre-freeze release), and starts R2 again. Identity rows are never quarantined-and-continued. The dry run (below)
+reports the same rows and merges before the deploy. Finished merges become permanent: their journals stay books'
+records, and no merge is undone after R2 (the release note says so). 05-authn §11 and 05-storage §5S.3.13 own the
+checks.
+
 **Order.** In the kernel's migration phase (06 §6.5.1 P4), after the checkpoint and `secrets.Open` (which creates
 the keyring), every R2 boot of a pre-R2 store runs:
 
@@ -220,15 +260,17 @@ the keyring), every R2 boot of a pre-R2 store runs:
 |---|---|---|---|
 | 1 | **M1** | Books' legacy steps 1..66. They run only on older stores, and they already exist. | 05-storage §5S.3.5 |
 | 2 | **M7** | Level step: `books` and `core` raised (sidecar first) and the projection set to `LegacyMaxFormat + 1`, in one batch, **before M2's first chunk**. HEAD, R0 and R1 refuse the store from this batch on (§9.2.2). | 05-storage §5S.3.7 |
-| 3 | **M2** | Config and secrets: `setting:config_blob` into `c/config/` under canonical keys (the rename table, §9.2.5); the plaintext blob secrets and HEAD's four encrypted rows re-encrypted into `c/secrets/` under the keyring; the gap-fill `config.yaml` keys imported once, the file copied into the checkpoint first and then stripped of its fifteen managed keys (M2b). The blob's integration-instance fields stay for M6. A missing `.encryption_key` fails the boot before M2 writes anything (HEAD's guard); `.encryption_key` stays until R3. | 05-config §1.12.2 |
-| 4 | **M3** | Identity: users, OAuth identities, the invite allow-list, API keys and roles into `c/auth/` and `c/rbac/`, every ID kept; `abk_` keys keep their SHA-256 hashes; atoms mapped to native scopes by books' table, with the ambient rule (§9.2.6); web sessions, invites and the bootstrap hash deleted. Only the auth sub-prefixes of `idx:` move; `abs_sess:` and the other ABS families stay books'. | 05-authn §11; 05-rbac §6 |
-| 5 | **M4** | Tasks: every run (open, paused and finished) with its checkpoint, the schedule clocks, the pause and stand-down markers and the `Requires` stamps into `c/tasks/`; stored kinds renamed by the kind-rename map, in books' v1 rows that name a kind too. Only the run keys of `setting:` move. | 05-tasks §5T.8 |
+| 3 | **M2** | Config and secrets: the fields of `setting:config_blob` into `c/config/` under canonical keys (the rename table, §9.2.5); the plaintext blob secrets and HEAD's four encrypted rows re-encrypted into `c/secrets/` under the keyring; M2 moves only the blob's fields and rewrites the residual blob, which stays an active books claim until M6 retires it (R7); the gap-fill `config.yaml` keys imported once, then the file stripped of its fifteen managed keys and deleted if empty (M2b; the checkpoint already holds a copy, 05-storage §5S.3.12). The blob's integration-instance fields stay for M6. A missing `.encryption_key` fails the boot before M2 writes anything (HEAD's guard); `.encryption_key` stays until R3. | 05-config §1.12.2 |
+| 4 | **M3** | Identity: users, OAuth identities, the invite allow-list, API keys and roles into `c/auth/` and `c/rbac/`, every ID kept; `abk_` keys keep their SHA-256 hashes; atoms mapped to native scopes by books' table, with the ambient rule (§9.2.6); statuses normalised as HEAD's predicates read them (trimmed, lower-cased, an empty user status active; SEC-11); web sessions, invites and the bootstrap hash deleted. Only the auth sub-prefixes of `idx:` move; `abs_sess:` and the other ABS families stay books'. The preflight above has already refused a store with an unconvertible identity row or an unfinished merge (D13). | 05-authn §11; 05-rbac §6 |
+| 5 | **M4** | Tasks: every run (open, paused and finished) with its checkpoint and HEAD's repairs rows (`opv2:row:`, `opv3:rowmark:`, imported with their run; R9), the schedule clocks, the pause and stand-down markers and the `Requires` stamps into `c/tasks/`; stored kinds renamed by the kind-rename map, in the books families 05-storage §5S.9.1 lists as rewritten in place too (R10). Only the run keys of `setting:` move. | 05-tasks §5T.8 |
 | 6 | **M5** | The `syslog:` rows into `c/log/`, converted. | 05-logging §5 |
 | 7 | **M6** | Integrations: the blob's instance fields with their secret refs into `c/integrations/instances/`, then the config blob deleted; `aijob*` rows into `c/ai/`; HEAD's webhook settings into native notify instances and their rule, the HMAC secret by value; import roots into `core.library.roots` entries, IDs kept; HEAD's search dirty-set rows deleted, because the full-text index is rebuilt at its new path; throttle and quota rows deleted. | 05-metadata M1.10; 05-ai §10; 05-notify §10; 05-library §5L.10; 05-storage §5S.3.8 |
-| 8 | **M8** | Forced compaction of the rewritten ranges, so no file of the live DB directory holds a HEAD row. | 05-storage §5S.3.13 |
+| 8 | **M8** | The store rewritten into a fresh directory (full compaction, flush, then a Pebble checkpoint or copy) and swapped in through the journaled swap, the old directory deleted, so no file of the live DB directory, WAL, recycled log and MANIFEST included, holds a HEAD row or a raw token (R21). | 05-storage §5S.3.13 |
 
 M7 and M8 land with F3 and run in every build from then on; each later flip that adds a step raises M7's target in the
-same PR, so a `main` refuses a store that a newer `main` migrated (03 §3.8). M7 runs before M2 because a store that
+same PR, so a `main` refuses a store that a newer `main` migrated, and registers a new M8, whose step ID names the last
+step it compacts after (03 §3.8; IMPL-13). The runner they use, `storage/datamigrate` and `internal/storagemigrate`
+over `tasks.ForEach`, lands at F2 (§9.4 R2). M7 runs before M2 because a store that
 stops between M2 and a later level step would hold deleted config and identity rows at level 0, which HEAD's
 `make rollback` guard and the R1 binary would both accept (03 §3.8).
 
@@ -245,11 +287,14 @@ stops between M2 and a later level step would hold deleted config and identity r
 
 **IDs and references.** Every user, role, key, import-root, instance and run ID is kept, because books' rows
 reference them; a referential-integrity check over the migrated corpus proves that no reference dangles (§9.4 R2). The
-kind IDs that books' v1 rows carry are renamed by the same map as the runs.
+referential `Verify` excludes quarantined IDs and reports each dangling reference in health instead of failing boot
+(R8); identity rows never reach it unconverted, because the preflight stops the upgrade first. The kind IDs that books'
+rows carry are renamed by the same map as the runs, in exactly the families 05-storage §5S.9.1 lists (R10).
 
 **Shared families.** `idx:` and `setting:` hold both core-service and books rows (§9.1). Only listed sub-prefixes
 move. The lists are generated from `keyfamilies.go` and the census, and each step checks that every range outside its
-list is byte-identical before and after.
+list is byte-identical before and after; `TestCutoverLeavesOtherFamiliesByteIdentical` excludes exactly the books
+families and keys that the kind rename and M3's and M6's extra writes touch, which 05-storage §5S.9.1 names (R10).
 
 **The checkpoint and its 7 days (D12 (d)).** A boot takes the pre-migration checkpoint only when a step will
 actually run (a legacy or versioned step, a cutover step, a level step, or the install marker on a non-empty store); it
@@ -258,21 +303,27 @@ checkpoint, the rewritten ranges and the compaction together, or boot halts with
 checkpoint is reused only by a crash loop of the **same** upgrade attempt on the **same** store identity, and
 `storage restore-offline --checkpoint` restores only the latest attempt's checkpoint (05-storage §5S.3.12). The
 checkpoint is a full pre-R2 copy of the store and its state files beside the DB, holding plaintext third-party
-secrets and raw session tokens, so it is **deleted automatically 7 days after its upgrade attempt completed**, by a
-sweeper that runs at every boot and hourly while serving; `storage prune-checkpoints` deletes it earlier, and the R2
-release note says both. After that, only the off-host archive goes back.
+secrets and raw session tokens, in a directory of mode 0700 with files of mode 0600 (SEC-9), so it is **deleted
+automatically 7 days after it stops being needed** (round 13 R4), by a sweeper that runs at every boot and hourly
+while serving: a completed checkpoint 7 days after its attempt completed; an open checkpoint is kept while the live
+store is still at its pre-migration levels, because it is the rollback, and its 7-day clock starts once the store has
+completed a migration or been restored by any path (the checkpoint, an archive, a failed restore's `failed/` copy,
+`restore_left`); health raises `storage_checkpoint_open` meanwhile. `storage prune-checkpoints` deletes one earlier.
+The sweeper and the command exist from R1, whose first boot on a non-empty store takes a checkpoint, and the R1 and
+R2 release notes say so. After that, only the off-host archive goes back.
 
 **Quarantine.** A row that a step cannot decode, or that an importer rejects, is **quarantined**: its raw bytes are
 copied under `c/storage/quarantine/`, its family and key are counted in the step's report, health reports it, and boot
 continues, so one bad row never crash-loops the unit and nothing is dropped in silence. 05-storage §5S.3.13 owns the
-format and how an admin clears an entry. A key or identity whose user was quarantined is quarantined with it
-(05-authn §11). A secret row the key does not decrypt is quarantined too, and its secret reads "re-enter" in health; a quarantined
+format and how an admin clears an entry. **Identity rows are the exception (D13):** a user, or one of its keys or
+identities, that cannot be converted is never quarantined; the preflight above stops the upgrade instead. A secret
+row the key does not decrypt is quarantined, and its secret reads "re-enter" in health; a quarantined
 row of a secret-bearing family is sealed with the keyring, never stored raw (05-storage §5S.3.13);
 a missing `.encryption_key` is not quarantined but fails the boot before M2 writes anything (05-config §1.12.2).
 
-**Dry run.** Every step runs under `audiobook-organizer storage migrate --dry-run [--from-archive <file>]`, the real
-runner on a throw-away copy, which reports per-step counts, quarantined rows, bytes written and duration and writes
-nothing to the live directory (05-storage §5S.3.5; `TestDryRunMatchesLiveRun`).
+**Dry run.** The preflight and every step run under `audiobook-organizer storage migrate --dry-run [--from-archive <file>]`,
+the real runner on a throw-away copy, which reports the preflight's blocking rows and unfinished merges, per-step
+counts, quarantined rows, bytes written and duration and writes nothing to the live directory (05-storage §5S.3.5; `TestDryRunMatchesLiveRun`).
 
 **A long first boot.** The first R2 boot reports each step to systemd (`EXTEND_TIMEOUT` per step, as HEAD already
 does per startup step), so `TimeoutStartSec` does not kill it, and every step resumes after a kill. The R2 release note
@@ -339,11 +390,15 @@ The mechanism is 05-rbac (§6 the migration, §6.1 the table) and 05-http-api §
   seed roles, and their IDs (`admin`, `editor`, `viewer`, `fp-worker`) are kept, so `User.Roles` and invite role
   references need no rewrite. An atom outside the table maps to nothing, and its role converts and is reported (P2).
 - **The reach oracle.** Allow and deny for every gin route (the ABS routes included), every seed and custom role,
-  scoped keys and auth-off, computed by the R0 binary on its fixture corpus and by R2 on the migrated corpus, are equal
-  except the recorded changes below. It runs on F4's PR and stays as the table's regression test (05-rbac §12).
+  scoped keys and auth-off, computed by the R0 binary on its fixture corpus (with its hand-built overlay, §9.3) and by R2
+  on the migrated corpus, are equal except the recorded changes below. The baseline is R0, that is HEAD plus the six
+  early fixes, never HEAD itself (SEC-13); the auth-disabled principal is also checked against every core route, not
+  only the HEAD router dump. It runs on F4's PR and stays as the table's regression test (05-rbac §12).
 - **Recorded changes (release notes).** With auth off, every `Guards.Interactive` route (credential, key,
-  temp-login and restore routes) refuses the auth-disabled principal, and the backup routes answer 401: "With
-  authentication off, credential and backup routes now refuse requests; turn authentication on to use them." ABO's
+  temp-login and restore routes) refuses the auth-disabled principal, so do the API-key, session-list and audit routes
+  (SEC-3), and the backup routes answer 401: "With authentication off, credential, API-key, session, audit and backup
+  routes now refuse requests; turn authentication on to use them." Playlist writes stay open to every signed-in user,
+  as at HEAD: `books:playlists.create` is not enforced on them (SEC-4). ABO's
   `core.auth.disabled_allow_remote` defaults to `true`, with health Degraded `auth_disabled_remote` (05-rbac
   §4.10–§4.11).
 
@@ -351,8 +406,11 @@ The mechanism is 05-rbac (§6 the migration, §6.1 the table) and 05-http-api §
 
 - Core takes its namespace as `app.Options.MetricNamespace`, which ABO sets to `audiobook_organizer`; new core series
   are `<namespace>_<subsystem>_*` (03 §3.6).
-- A moved emitter may take core's name: Pebble's series from R1, the task series at F5, and at F7 HEAD's AI families,
-  which core's AI families replace (05-metrics §13 lists each; 05-ai §8). Books' two process gauges stay books' series,
+- A moved emitter may take core's name. Renames land only in R1 (the HTTP series), F5 (the ops families: HEAD's
+  `operations_*`, `operation_*` and `op_*` deleted and the `ops_*` label changes) and F7 (HEAD's AI families, which
+  core's AI families replace); F8 only moves the kernel `/metrics` mount (05-metrics §13 lists each; 05-ai §8; round 13
+  R14). Pebble's collector moves in R1 under the same names. Core's executor lands dark at F2 and creates no `ops`
+  instrument before F5. Books' two process gauges stay books' series,
   unchanged. A rename and its edits to `deploy/grafana/dashboards/*.json` and
   `deploy/prometheus/{alert-rules,recording-rules,alert-rules.test}.yml` are one PR. The dashboard-reference test (every
   series those files name is served; 05-metrics §12) and `promtool test rules` gate it, and no series is renamed for
@@ -392,7 +450,7 @@ canonical names.
 ### 9.2.10 Feature work beside the extraction (A-11; ADV-7)
 
 ABO keeps shipping features while the extraction runs (parallel sessions; a production minor every 10 RCs outside the
-R2 freeze, §9.1). Three rules keep the two from colliding; 14 K24 cites them.
+R1 and R2 freezes, §9.1, §9.2.1). Three rules keep the two from colliding; 14 K24 cites them.
 
 - **Announced move windows.** A PR series that moves or re-homes packages (R1's leaf moves and its `internal/database`
   re-home, about 850 direct engine call sites at the evidence commit; R2's handler groups and integrations) runs inside
@@ -419,13 +477,14 @@ R2 freeze, §9.1). Three rules keep the two from colliding; 14 K24 cites them.
 | Release | Ships | Migrations | Rollback | Owner |
 |---|---|---|---|---|
 | **R0** | the hotfixes | none | `make rollback` | P14; deploy; smoke (optional) |
-| **R1** | the core runtime, no user-data change | core's `c/storage/` bookkeeping only | `make rollback` to R0, nothing lost | 14 Q-H and Q-I; deploy; smoke (optional) |
-| **R2** | every core-service family, its UI, the shell if ready | M1, M7, M2–M6, M8 (§9.2.3) | `make rollback-restore`, losing every write since the upgrade | off-host archive; deploy and its external steps; dry run and smoke (optional); keep or roll back |
-| **R3** | cleanup and the floor | none | `make rollback` to R2 | deploy; smoke (optional) |
+| **R1** | the core runtime, no user-data change | core's `c/storage/` bookkeeping only, behind the first checkpoint | `make rollback` to R0, nothing lost | 14 Q-I; deploy; smoke (optional) |
+| **R2** | the foundation PRs F2, then every core-service family, its UI, the shell if ready | M1, M7, M2–M6, M8 (§9.2.3) | `make rollback-restore` to the pre-freeze release, losing every write since the upgrade | finished merges and a clean preflight (D13); off-host archive; deploy and its external steps; dry run and smoke (optional); keep or roll back |
+| **R3** | cleanup and the floor | none; one boot step deletes `.encryption_key` and `library.bleve` | `make rollback` to R2 | keep the off-host `.encryption_key` with any pre-R2 archive; deploy; smoke (optional) |
 
 **Order.** R0 → R1 → R2 → R3 are strictly ordered. R2's content lands dark on `main` while R1 is deployed. R2's flips
 are serialized in the order of §9.4 R2, because they share `main.go`, the kernel wiring and `internal/server`, and the
-release freeze covers them (§9.2.1). The shell (F9) ships in R2 if it is ready, otherwise in R3.
+release freeze covers them (§9.2.1); F2's foundation PRs land dark before them. R1's own PR series is covered by the R1
+freeze (§9.2.1). The shell (F9) ships in R2 if it is ready, otherwise in R3.
 
 **Every release's done-check includes** `make ci`, the e2e suite and the required checks of §9.2.1 on every PR; the
 release tables repeat only release-specific checks. **Counts in done-checks are generated** (ADV-11): every literal
@@ -445,13 +504,18 @@ gives (default 300 s, counted from when the unit leaves `activating`).
 replaces them:
 
 1. **In CI (agents), on every R2 PR.** The fixture corpus is written **by the R0 binary itself**: a committed script
-   drives the R0 release binary through its API over a seeded store, and the store is committed as testdata together
-   with the answers R0 gives (effective config, reach, schedules, search results, ABS responses). It is regenerated
-   only if R0 is re-cut. Every R2 PR migrates it and checks the per-family counts, every ID and every reference, the
-   quarantine report (empty for the corpus), the oracles and the ABS suite (§9.4 R2). A **production-shaped store**,
+   drives the R0 release binary through its API over a seeded store. A second, separate and labelled stage then adds a
+   **hand-built overlay** for the cases R0's API cannot write, each case listed in the corpus' manifest: a program
+   built at the R0 tag against HEAD's own `internal/database` writes corrupt rows, a blob field no rename-table row
+   names, custom roles, keys outside their owner's roles, user and key status edge values, an identity row M3 cannot
+   convert and an unfinished merge journal (the last two in their own corpus, which the preflight must refuse;
+   round 13 R13, IMPL-8). The answers are still recorded by the R0 binary booted on the result (effective config,
+   reach, schedules, search results, ABS responses), and the store and answers are committed as testdata. It is
+   regenerated only if R0 is re-cut. Every R2 PR migrates it and checks the per-family counts, every ID and every reference, the
+   quarantine report (exactly the overlay's quarantine cases), the oracles and the ABS suite (§9.4 R2). A **production-shaped store**,
    generated at the P1 counts and sizes, runs the same steps on `unit-lifecycle`'s triggers and nightly, for the
    per-family checks and the boot-time measurement. The **restore drill** restores the checkpoint of a migrated
-   corpus offline and boots the R1 release binary on it, which must give the corpus' pre-migration answers.
+   corpus offline and boots the pre-freeze release's binary on it, which must give the corpus' pre-migration answers.
 2. **Optional, owner, before the R2 deploy.** With the R2 binary,
    `audiobook-organizer storage migrate --dry-run --from-archive <archive>` on the fresh off-host archive, on the
    production host or any linux/amd64 machine: it migrates a throw-away copy, reports per-step counts, quarantined rows and durations, and writes nothing to the live
@@ -471,7 +535,7 @@ the deploy and the optional 1-day smoke run. 04 §8 keys the package moves of ea
 |---|---|
 | Content | (1) **The six early fixes of 05-authn §11.1** (the single list; §9.1 names the defects): among them every `apikey:` writer takes `apiKeyMu` (early fix 6), and the Basic gate refuses an empty stored password while `BASIC_AUTH_PASSWORD` applies in memory, logged, so setting it and restarting recovers (OPS9-7). (2) **The toolchain bump** (13 §13.2.2) as R0's first PR, moving every pinned copy together; later commands use `make -C core <target>` or `$(make -s -C core print-toolchain)`, never a literal (MOD2-13). (3) **The updater hotfix** (05-updater): a restart after an update exits **75**, so `Restart=on-failure` restarts it; the previous binary is kept as `<exe>.prev`, the slot `make rollback` uses; versions compare with `golang.org/x/mod/semver`, and a release that is not newer is refused; a current version with a `git describe` suffix counts as a local build, reported "local build, not compared", and a manual apply refuses unless the operator names the version; both unattended apply paths (the scheduled apply and the maintenance-window step) become check-only: they notify, health is Degraded `auto_update_paused` and Settings shows a banner. Release note: "Automatic updates now only check for a new release and notify you; apply updates from Settings. A locally built binary is not compared with releases." and "Security fixes: a revoked API key can no longer be re-activated; the session list no longer shows session tokens; a limited API key can no longer create an unlimited one; admin-only routes honour API-key limits; Basic authentication with an empty saved password is refused; a revocation can no longer be undone by a request that was in flight. If Basic authentication is on without a saved password, save one before upgrading; if you are locked out, set `BASIC_AUTH_PASSWORD` and restart." |
 | Migrations | None. |
-| Verification | The fixes' own tests (05-authn §11.1; `TestRevokeRacesTouch_NeverUnrevokes` among them); the updater test (exit 75, a kept `.prev`, refusal of an older tag, "local build, not compared", no unattended apply); `make ci`; e2e. The R0 binary also writes R2's fixture corpus (§9.3), so its tag is kept. |
+| Verification | The fixes' own HEAD-code tests, one `TestLegacy…` test per fix as 05-authn §11.1 names them (`TestLegacyRevokeRacesTouch_NeverUnrevokes` among them; their ported core tests are R2's; CONFORM-13); the updater test (exit 75, a kept `.prev`, refusal of an older tag, "local build, not compared", no unattended apply); `make ci`; e2e. The R0 binary also writes R2's fixture corpus (§9.3), so its tag is kept. |
 | Rollback | `make rollback`: R0 changes no stored data and takes no checkpoint, so there is nothing to restore. |
 | Owner | Before the deploy, P14 (§9.7): a Basic gate that is on with no saved password gets one saved first. The deploy. The optional smoke run. |
 
@@ -480,16 +544,16 @@ the deploy and the optional 1-day smoke run. 04 §8 keys the package moves of ea
 | Aspect | Specification |
 |---|---|
 | Content: build and CI | 03 §3.2, 13 and 07 §7.3.2 (MOD-1, MOD-8, MOD-9). `core/` with its `go.mod` (the `exclude` of the monolithic genproto **only in `core/go.mod`**, `ignore ./web`, `ignore ./examples/hello/web`) and an **empty committed `core/go.sum`**; root `go.mod` `require` + `replace`; `GO_MODULE_DIRS := . core`; the L0 leaves `archtest`, `storage/keys` and `buildid` (`buildid.Binary`, `buildid.Commit`); `internal/arch/layering_test.go` redesigned per 03 §3.5.1 (MOD3-5). Both Dockerfiles copy `core/go.mod core/go.sum ./core/` beside `go.mod go.sum` before `go mod download && go mod verify`; `.dockerignore` adds `**/node_modules`, `core/web/packages/*/dist` and `core/examples/*/web/node_modules` and keeps `docs` excluded (R4-4). Every `//go:embed` input of either module lies inside the build context or is a listed in-image output (`scripts/ci/embed_build_outputs.txt`; `web/dist`, MOD6-3); `scripts/ci/check_embed_context.py` in root `make ci` is the check on every PR, and this row owns its done-check (MOD5-7). One POSIX `sh` script, `scripts/ci/build_web.sh`, builds `core/web` when present in an explicit workspace order and then runs `npm ci` in `web/`, behind `make web-deps`; every `npm ci` site of §9.1 calls it; path filters, the `changes` classifier and Dependabot gain `core/web` and `/core` (MOD2-6, MOD3-16); the three frontend jobs inside external reusable workflows set `run-frontend: false` and run their frontend half in ABO-local jobs (MOD4-10); before R1's first UI PR (07 §7.19 step 1), `reusable-release.yml` is read at `.github/ghcommon-ref.txt`'s SHA to settle what `frontend-enabled` does, and both `pre-build-script`s become `sh scripts/ci/build_web.sh deps && cd web && npm run build` (MOD6-5). The **`docker-image` PR job** builds the full image (and `Dockerfile.build-cgo` with `--output type=local`), runs it with a seeded volume, waits for `"ready":true` on `/health` and for `--print-storage-levels` inside the container, and asserts that `X-App-Build` equals the embedded `<meta name="mediacore-build">` (`TestBuildID_HeaderEqualsEmbeddedMeta`); a second run with `--db /config/x.pebble` on a named volume asserts that `.encryption_key` (from F3 also `secrets.keyring`) sits beside the database and survives a container recreate (OPS5-7, OPS6-10). The reserved families `c/` and `m/` are registered in `keyfamilies.go`. Every PR that moves a package updates `ci/gates.txt`, the shard weight files, `.mockery.yaml` and `tygo.yaml` (the classification table below). |
-| Content: endpoints and build identity | The `/api/*` redirect excludes `^/api/(core\|[a-z][a-z0-9]{1,15})/v[0-9]+(/\|$)` (`server_lifecycle.go:1798`). Every response carries `X-App-Build`, the UI build ID, which `npm run build` generates by 07 §7.6.3's one rule and writes only into the bundle's `<meta name="mediacore-build">`: no Go link step receives it, and the binary's own identity is `app.BinaryID`, a separate value (R5-7). ABO's reload banner `web/src/components/StaleBuildBanner.tsx` is fed by `apiFetch`'s build-ID rule, from R1's api-client step (07 §7.19 step 3) by `@mediacore/api-client`'s `onStaleBuild`. New fast exits: `--version-json` with exactly `{app, version, commit, ui_build_id, binary_id}` — `app` the app ID, `commit` the `vcs.revision` of `debug.ReadBuildInfo` with `+dirty` when `vcs.modified` or `""` when absent, `ui_build_id` the embedded bundle's UI build ID, `binary_id` the version plus the SHA-256 of the running executable (`buildid.Binary`) — the one field list, which 05-updater's step-3 self-test uses verbatim (FE6-4); `--print-storage-levels`; `--print-upgrade-floor`, empty until R3. `/health` gains a permanent `version` field, which the `deploy` template's post-check reads (OPS4-14). goreleaser's dead `-X main.commit`/`-X main.date` are deleted. |
-| Content: runtime | 04 §8.1's R1 rows (leaves with no data or API surface, `entity`, `coretest`); `internal/telemetry` construction moved to core, its global installs kept in the ABO façade until the composition root (05-metrics §13; MOD3-3); 05-config stage 0, the 8 bypassing `config.AppConfig` writes through `Mutate` (`TestNoDirectAppConfigWrites`). ABO's `main` becomes `app.New(ctx, opts, books.Module(store))`, with lifecycle, listeners and supervisor timeouts: the stop order of 06 §6.5.2 within one budget, `core.shutdown.budget` = 25 s (05-health §5H.4), below the unit's new stop timeouts and `KillMode=mixed` (OPS-13). `books` calls `httpapi.MountLegacy` with `Auth: LegacyAuthGin`, allowed until F4 through `app.Options.LegacyAuthGinUntil`; every manifest route registers as a mux pattern (05-http-api §4.8); the perimeter moves from gin into core's stages and leaves gin in the same PR, except the Basic gate, which moves at F3; `otelgin` leaves the mount (§9.2.7). 05-logging stages 1 and 2: `app.InstallProcessDefaults` with the meter, tracer and propagator installs, file output, and the second `slog.SetDefault` deleted (MOD4-5). |
-| Content: storage | Core `storage` opens the one Pebble store: `internal/database`'s storage files re-home into core `storage` and `internal/pebble`, `keyfamilies.go` stays ABO, and `database.Store` splits (04 §4.5). Books reaches its families only through declared claims, **strict** from the first release, with the full suite and e2e running under strict claims; `core.storage.claims.mode=shadow` stays as the emergency dial. A restore stages as a kind of the one journaled swap and takes effect at the next restart, which the service requests by exiting 75 (05-backup §5B.3.4). The factory and store resets are the swap's `KindReset`, staged in R1 **only offline** by `storage reset` with the service stopped and applied at the next start; HEAD's two gin reset routes are deleted, and the SPA hides its reset control until the core route lands in F4 (05-storage §5S.3.15). Every target is pre-validated at staging, the set-aside stays on the store's own filesystem, and the post-reset hook never fails boot. CLI write subcommands open through `app.OpenOffline`. `storage restore-offline` (`--checkpoint <name>`, `--archive <file>`, `--into <empty dir>`), core code that ABO's cobra tree reaches through `app.OfflineCommands`, restores with the service stopped, in place through the journaled swap or into an empty path for a rehearsal; it never boots the app (05-storage §5S.3.12). The crash-matrix kit `coretest/crashmatrix` lands with core's `TestBootCrashMatrix` and ABO's `TestBootCrashMatrix_ABO`. `LegacyCap` is fixed (§9.2.2). |
-| Content: UI (07 §7.19 steps 1–3) | 07 §7.19 steps 1–3 (FE-2, FE-12): react-router-dom 7 → react-router 8 with the declarative `<BrowserRouter>` unchanged, an import swap only (52 source and 70 test files); the `core/web` workspace with `@mediacore/api-client` (runtime and generator) only, generated from `core/openapi/core.json` (MOD3-4) and consumed through `file:`; `apiFetch` calls its `checkBuild`; `core/web/.gitignore`; the Docker frontend stage that builds `core/web` before `web/` (MOD3-13). |
+| Content: endpoints and build identity | The `/api/*` redirect excludes `^/api/(core\|[a-z][a-z0-9]{1,15})/v[0-9]+(/\|$)` (`server_lifecycle.go:1798`). Every response carries `X-App-Build`, the UI build ID, which `npm run build` generates by 07 §7.6.3's one rule and writes only into the bundle's `<meta name="mediacore-build">`: no Go link step receives it, and the binary's own identity is `app.BinaryID`, a separate value (R5-7). R1 creates ABO's reload banner `web/src/components/StaleBuildBanner.tsx`, fed by `apiFetch`'s build-ID rule and, from R1's api-client step (07 §7.19 step 2), by `@mediacore/api-client`'s `onStaleBuild` (IMPL-14, XFILE-6). New fast exits: `--version-json` with exactly `{app, version, commit, ui_build_id, binary_id}` — `app` the app ID, `commit` the `vcs.revision` of `debug.ReadBuildInfo` with `+dirty` when `vcs.modified` or `""` when absent, `ui_build_id` the embedded bundle's UI build ID, `binary_id` the version plus the SHA-256 of the running executable (`buildid.Binary`) — the one field list, which 05-updater's step-3 self-test uses verbatim (FE6-4); `--print-storage-levels`; `--print-upgrade-floor`, empty until R3. `/health` gains a permanent `version` field, which the `deploy` template's post-check reads (OPS4-14). goreleaser's dead `-X main.commit`/`-X main.date` are deleted. |
+| Content: runtime | 04 §8.1's R1 rows (leaves with no data or API surface, `entity`, `coretest`); `internal/telemetry` construction moved to core, its global installs kept in the ABO façade until the composition root (05-metrics §13; MOD3-3); 05-config stage 0, the 8 bypassing `config.AppConfig` writes through `Mutate` (`TestNoDirectAppConfigWrites`). ABO's `main` becomes `app.New(ctx, opts, books.Module())` (`books.Module(store)` only on the intermediate `main`s before the storage PR, 06 §6.11.1; XFILE-11), with lifecycle, listeners and supervisor timeouts: the stop order of 06 §6.5.2 within one budget, `core.shutdown.budget` = 25 s (05-health §5H.4), below the unit's new stop timeouts and `KillMode=mixed` (OPS-13). `books` calls `httpapi.MountLegacy` with `Auth: LegacyAuthGin`, allowed until F4 through `app.Options.LegacyAuthGinUntil`; every manifest route registers as a mux pattern (05-http-api §4.8); the perimeter moves from gin into core's stages and leaves gin in the same PR, except the Basic gate, which moves at F3; `otelgin` leaves the mount (§9.2.7). 05-logging stages 1 and 2: `app.InstallProcessDefaults` with the meter, tracer and propagator installs, file output, and the second `slog.SetDefault` deleted (MOD4-5). |
+| Content: storage | Core `storage` opens the one Pebble store: `internal/database`'s storage files re-home into core `storage` and `internal/pebble`, `keyfamilies.go` stays ABO, and `database.Store` splits (04 §4.5). Books reaches its families only through declared claims, **strict** from the first release, with the full suite and e2e running under strict claims; `core.storage.claims.mode=shadow` stays as the emergency dial. A restore stages as a kind of the one journaled swap and takes effect at the next restart, which the service requests by exiting 75 (05-backup §5B.3.4). The factory and store resets are the swap's `KindReset`, staged in R1 **only offline** by `storage reset` with the service stopped and applied at the next start; HEAD's two gin reset routes are deleted, and the SPA hides its reset control until the core route lands in F4 (05-storage §5S.3.15). Every target is pre-validated at staging, the set-aside stays on the store's own filesystem, and the post-reset hook never fails boot. CLI write subcommands open through `app.OpenOffline`. `storage restore-offline` (`--checkpoint <name>`, `--archive <file>`, `--into <empty dir>`), core code that ABO's cobra tree reaches through `app.OfflineCommands`, restores with the service stopped, in place through the journaled swap or into an empty path for a rehearsal; it never boots the app (05-storage §5S.3.12). The crash-matrix kit `coretest/crashmatrix` lands with core's `TestBootCrashMatrix` and ABO's `TestBootCrashMatrix_ABO`. The checkpoint sweeper and `storage prune-checkpoints` land here, because the first R1 boot on a non-empty store takes a checkpoint (§9.2.3; CONFORM-6). `LegacyCap` is fixed (§9.2.2). |
+| Content: UI (07 §7.19 steps 1–2) | 07 §7.19 steps 1–2 (FE-2, FE-12; IMPL-11, XFILE-6): react-router-dom 7 → react-router 8 with the declarative `<BrowserRouter>` unchanged, an import swap only (52 source and 70 test files); the `core/web` workspace with `@mediacore/api-client` (runtime and generator) only, generated from `core/openapi/core.json` (MOD3-4) and consumed through `file:`; `apiFetch` calls its `checkBuild`; `core/web/.gitignore`; the Docker frontend stage that builds `core/web` before `web/` (MOD3-13). |
 | Content: deploy tooling | `DEPLOY_READY_TIMEOUT` in `Makefile` (`rollback`) and `Makefile.local.example` (`deploy`), default 300 s, counted from when the unit leaves `activating`. `scripts/deploy-wait-ready.sh BASE_URL TIMEOUT [SSH_HOST UNIT]` polls the unit over ssh: `activating` counts as progress, `failed`, `inactive` or a rising `NRestarts` fails at once, and `ExecMainStatus=78` is reported by name; without `SSH_HOST` (Docker, launchd) it polls the URL with a documented larger timeout. The committed unit gains `RestartPreventExitStatus=78` and its stop settings. The `make rollback-restore` target of §9.2.1 lands here, so that it is tested before R2 needs it, and it and `make rollback` share one probe that refuses while a swap is in flight (`restore_inflight`), with no override. The README's compose notes gain the `/config` volume preparation. |
-| Content: release note | "A restore now takes effect at the next restart, which the service performs itself; a container started without a restart policy must be started again." — "In this release a factory reset or a database reset runs only from the command line, with the service stopped (`audiobook-organizer storage reset`); the reset button in Settings returns with the next release. Undoing a factory reset restores the database but not the library files or Open Library data it deleted. A reset now leaves `config.yaml` beside the database unchanged; delete it by hand for a full reset." — "After an upgrade, open browser tabs offer to reload." — "`/health` now reports the running version, and `--version-json`, `--print-storage-levels` and `--print-upgrade-floor` print machine-readable build and store facts." — "Paths of the form `/api/<name>/v<N>/…` are reserved for versioned APIs and are no longer redirected to `/api/v1/`." — "Every response carries an `X-App-Build` header naming the build." Plus the HTTP-metrics lines of §9.2.7, whose dashboard edits ship in the same PR, and 05-logging's log-file and level lines. |
+| Content: release note | "A restore now takes effect at the next restart, which the service performs itself; a container started without a restart policy must be started again." — "In this release a factory reset or a database reset runs only from the command line, with the service stopped (`audiobook-organizer storage reset`); the reset button in Settings returns with the next release. Undoing a factory reset restores the database but not the library files or Open Library data it deleted. A reset now leaves `config.yaml` beside the database unchanged; delete it by hand for a full reset." — "The first start after this upgrade keeps a full copy of the database, including saved passwords and sign-in tokens, beside it for 7 days; `audiobook-organizer storage prune-checkpoints` deletes it sooner." — "After an upgrade, open browser tabs offer to reload." — "`/health` now reports the running version, and `--version-json`, `--print-storage-levels` and `--print-upgrade-floor` print machine-readable build and store facts." — "Paths of the form `/api/<name>/v<N>/…` are reserved for versioned APIs and are no longer redirected to `/api/v1/`." — "Every response carries an `X-App-Build` header naming the build." Plus the HTTP-metrics lines of §9.2.7 (the `http_route` value change among them), whose dashboard edits ship in the same PR, and 05-logging's log-file and level lines. |
 | Migrations | None on user data. The first R1 boot writes core's `c/storage/` bookkeeping (the install marker before any other `c/` key, every owner's level stamp at 0), which HEAD and R0 ignore; on a non-empty store it takes the pre-migration checkpoint first (§9.2.3). |
-| Verification | `make ci` with every required check, under strict claims; e2e; the ABS conformance suite; the perimeter's own tests (05-http-api §12: per-owner CSP header goldens, compression and rate classes) and `TestLegacyManifest_RegistersAsMuxPatterns` on the real engine, ABS on and off; `TestNativePrefixesNotRedirected` and `TestCollidingNamespacesStillRedirect`; `TestVersionJSONFields`; the image job, both runs; the two `unit-lifecycle` cells; `TestBootCrashMatrix` and `TestBootCrashMatrix_ABO`; the restore and reset staging tests of 05-backup §5B.3.4 and 05-storage §5S.3.15; `TestR0OpensR1Store` (05-storage: the R0 binary opens a store the R1 binary wrote and reads every row; deleted in R3); every row of the classification table below, `genproto-exclude-root` running its workspace probe in a throwaway copy outside the repository, so nothing runs `go work init` in a checkout (CLAUDE.md); `scripts/tests/test_ci_classifier.py`; `scripts/tests/test_deploy_wait_ready.py` (exit 78 included) and `scripts/tests/test_make_rollback.py` on its fake-ssh harness (`make rollback`, and `make rollback-restore` with a checkpoint and with an archive); `check_embed_context.py` passes on HEAD and fails on a fixture that embeds a `docs/` path. The UI steps: `! grep -rq react-router-dom web/package.json web/src web/tests web/vite.config.ts`; vitest and Playwright green; the image job green with `core/web` present; a dry-run RC build through `prerelease.yml` green, with `git status --porcelain` empty after it. |
+| Verification | `make ci` with every required check, under strict claims; e2e; the ABS conformance suite; the perimeter's own tests (05-http-api §12: per-owner CSP header goldens, compression and rate classes) and `TestLegacyManifest_RegistersAsMuxPatterns` on the real engine, ABS on and off; `TestNativePrefixesNotRedirected` and `TestCollidingNamespacesStillRedirect`; `TestVersionJSONFields`; the image job, both runs; the two `unit-lifecycle` cells; `TestBootCrashMatrix` and `TestBootCrashMatrix_ABO`; the restore and reset staging tests of 05-backup §5B.3.4 and 05-storage §5S.3.15; `TestR0OpensR1Store` (05-storage: the R0 binary opens a store the R1 binary wrote and reads every row; deleted in R3); `TestCheckpointAutoDeletedAfterSevenDays` over R1's first-boot checkpoint; every row of the classification table below, `genproto-exclude-root` running its workspace probe in a throwaway copy outside the repository, so nothing runs `go work init` in a checkout (CLAUDE.md); `scripts/tests/test_ci_classifier.py`; `scripts/tests/test_deploy_wait_ready.py` (exit 78 included) and `scripts/tests/test_make_rollback.py` on its fake-ssh harness (`make rollback`, and `make rollback-restore` with a checkpoint and with an archive); `check_embed_context.py` passes on HEAD and fails on a fixture that embeds a `docs/` path. The UI steps: `! grep -rq react-router-dom web/package.json web/src web/tests web/vite.config.ts`; vitest and Playwright green; the image job green with `core/web` present; a dry-run RC build through `prerelease.yml` green, with `git status --porcelain` empty after it. |
 | Rollback | `make rollback` to R0, which loses nothing: R1 changes no user data, and R0 ignores core's `c/storage/` rows (`TestR0OpensR1Store`). It is refused while a swap is in flight (§9.2.1). An offline restore of the R1 checkpoint with R0 also works and discards the writes since. |
-| Owner | Decisions before R1's first core PR: the module name (14 Q-H) and how the required checks are enforced (14 Q-I). P12 before the deploy, because the first R1 boot takes a checkpoint. The deploy. The optional smoke run. |
+| Owner | Decisions before R1's first core PR: how the required checks are enforced (14 Q-I); the module name is decided (D13, `github.com/falkcorp/mediacore`); whether to keep the R1 freeze (§9.2.1), which the R1 series' first PR turns on and R1's release turns off. P12 before the deploy, because the first R1 boot takes a checkpoint. The deploy. The optional smoke run. |
 
 **R1's CI classification (MOD-8, MOD4-14).** Root `make ci` (`Makefile:785`) and the CI jobs from R1 on:
 
@@ -523,23 +587,25 @@ the deploy and the optional 1-day smoke run. 04 §8 keys the package moves of ea
 
 | Aspect | Specification |
 |---|---|
-| Content | Every core-service family, in the flip order below (03 §3.8), each flip with the UI calls its routes serve: config and secrets, with the operator precedence and the fail-closed rule (05-config §1.12.2); identity, with hashed sessions and one-time tokens, `mck_` keys and native scopes (05-authn §11, 05-rbac §6); tasks, with every definition native, the schedules and the log journal (05-tasks §5T.8, 05-logging §5); events, outbox and realtime, with `/api/events` deleted, the two operation streams having gone with the tasks flip (05-events, 05-realtime §11); integrations, AI jobs, provider gates, library roots, the rebuilt full-text index and notify (05-metadata M1.10, 05-ai §10, 05-library §5L.10, 05-storage §5S.3.8, 05-notify §10); backup in core's layout, the updater moved into `core/updater` with its R0 behaviour, health, and the kernel `/metrics` with its renames, dashboards and rules (05-backup B1, 05-updater, 05-health, 05-metrics §13); the generated clients, the identity UI and the remaining `api.ts` sections (07 §7.19 steps 3 and 6); the shell (07 §7.19 steps 4–5) if it is ready; the six early fixes' tests ported as property tests onto core auth (05-authn §11.1); the operator runbook (deploy, rollback, smoke run). Release note: assembled by §9.2.9 from §9.6 and the owners' texts; its identity text is 05-authn §11's. |
+| Content | The foundation PRs F2, dark (below); then every core-service family, in the flip order below (03 §3.8), each flip with the UI calls its routes serve: config and secrets, with the operator precedence and the fail-closed rule (05-config §1.12.2); identity, with hashed sessions and one-time tokens, `mck_` keys and native scopes (05-authn §11, 05-rbac §6); tasks, with every definition native, the schedules and the log journal (05-tasks §5T.8, 05-logging §5); events, outbox and realtime, with `/api/events` deleted, the two operation streams having gone with the tasks flip (05-events, 05-realtime §11); integrations, AI jobs, provider gates, library roots, the rebuilt full-text index and notify (05-metadata M1.10, 05-ai §10, 05-library §5L.10, 05-storage §5S.3.8, 05-notify §10); backup in core's layout, the updater moved into `core/updater` with its R0 behaviour, health, and the kernel `/metrics` mount (05-backup B1, 05-updater, 05-health, 05-metrics §6); the metric renames land at R1 (HTTP), F5 (tasks) and F7 (AI), each with its dashboards and rules (05-metrics §13); the generated clients, the identity UI and the `api.ts` sections switched flip by flip (07 §7.19 step 3); the shell (07 §7.19 steps 4–5) if it is ready; the six early fixes' tests ported as property tests onto core auth (05-authn §11.1); the operator runbook (deploy, rollback, smoke run). Release note: assembled by §9.2.9 from §9.6 and the owners' texts; its identity text is 05-authn §11's. |
 | Migrations | One ordered `BootBlocking` list behind the checkpoint: M1, M7, M2–M6, M8 (§9.2.3). |
-| Verification | **Automated, on every R2 PR through `extraction-gates` (§9.2.1):** the fixture corpus written by the R0 binary and its answers (§9.3); the production-shaped store at the P1 counts; the per-family count, ID and reference checks and the byte-identity check outside the moved sub-prefixes; the config oracle (the effective config before = after, env, YAML and stored values included), the reach oracle (`TestIdentityCutover_ReachOracle`, 05-rbac §12), the schedule oracle (`TestScheduleParity_AllDefinitions` and a first-boot "no catch-up storm" test, 05-tasks §5T.9) and the search oracle; 05-tasks' resume, cancel and shutdown parity suites; the ABS conformance suite on the migrated corpus (`TestIdentityCutover_ABSSurvives`) and 05-authn §10's other `TestIdentityCutover_*` rows; the ported early-fix property tests; the webhook delivery test (05-notify §9); the crash matrix over every step and every chunk boundary; the canaries `TestCutover_NoRawTokenOnDisk` (05-authn) and `TestConfigCutover_NoPlaintextSecretOnDisk` (05-config) over the live DB directory after M8, the retained checkpoint excepted until its 7 days pass; `TestCutoverRefusedByOlderBuilds` on a migrated store and on one stopped in the middle of M3; `TestDryRunMatchesLiveRun` (05-storage); the restore drill (§9.3; `TestRollbackRestoreBootsPreviousBuild`, 05-storage); the deploy-files test (§9.2.5); the Basic gate's `TestBasicGate_ExemptSetEqualsHEAD`, `TestBasicGate_EmptyPasswordRefuses` and `TestComposeEnvKeepsUIBasicGate`; the dashboard-reference test; e2e. **Optional, owner:** the dry run and the container boot of §9.3; the smoke run below. |
-| Rollback | `make rollback-restore` (§9.2.1): the checkpoint within its 7 days, or the off-host archive with its state files, offline, plus R1. Everything written after the upgrade is lost, so fixing forward is the default. |
-| Owner | **Decisions:** D12 answered (a)–(d); what is left is whether to run the optional dry run and smoke run and, within the smoke day, whether to keep R2 or roll back. **The deploy**, by the runbook: (1) take an archive, verify it and copy it off the host together with `.encryption_key` and `<db parent>/config.yaml`; (2) optionally, the dry run on that archive (§9.3); (3) rename the env names that the host's own unit drop-ins, compose `.env` and plist set, per the rename table (P4; a set retired protected or secret name refuses boot and names its successor); (4) deploy R2, with `DEPLOY_READY_TIMEOUT` at the measured first-boot time; (5) switch each webhook receiver to core's format (§9.6 row 5; the OIDC redirect URI is unchanged, row 4); (6) reload the Prometheus rules and Grafana dashboards that R2 ships; (7) after the first boot, `secrets export-keyring` to the off-host location (health warns `secrets_keyring_not_exported` until then); (8) re-send open invites (P5). **The optional smoke run:** sign in to the web app; an ABS phone app keeps its session and syncs progress (P7); a library scan and a scheduled task run once, with no catch-up storm; a webhook reaches its receiver; the Prometheus scrape answers and the alerts evaluate; health shows no quarantined row. |
+| Verification | **Automated, on every R2 PR through `extraction-gates` (§9.2.1):** the fixture corpus written by the R0 binary and its answers (§9.3); the production-shaped store at the P1 counts; the per-family count, ID and reference checks and the byte-identity check outside the moved sub-prefixes; the config oracle (the effective config before = after, env, YAML and stored values included), the reach oracle (`TestIdentityCutover_ReachOracle`, 05-rbac §12), the schedule oracle (`TestScheduleParity_AllDefinitions` and a first-boot "no catch-up storm" test, 05-tasks §5T.9) and the search oracle; 05-tasks' resume, cancel and shutdown parity suites; the ABS conformance suite on the migrated corpus (`TestIdentityCutover_ABSSurvives`) and 05-authn §10's other `TestIdentityCutover_*` rows; the ported early-fix property tests; the webhook delivery test (05-notify §9); the crash matrix over every step and every chunk boundary; the canaries `TestCutover_NoRawTokenOnDisk` (05-authn) and `TestConfigCutover_NoPlaintextSecretOnDisk` (05-config) over every file of the live DB directory after M8, WAL, MANIFEST and OPTIONS files included, the retained checkpoint excepted until its 7 days pass; `TestCutoverRefusedByOlderBuilds`, with the pre-freeze release's binary, on a migrated store and on one stopped in the middle of M3; `TestDryRunMatchesLiveRun` (05-storage); the restore drill with the pre-freeze release's binary (§9.3; `TestRollbackRestoreBootsPreviousBuild`, 05-storage); the cutover preflight's refusal of the blocking-row and unfinished-merge corpus (D13); the deploy-files test (§9.2.5); the Basic gate's `TestBasicGate_ExemptSetGolden`, `TestBasicGate_EmptyPasswordRefuses` and `TestBasicGate_MoreRestrictiveWins` (the compose cell of `TestPerimeterHonoursBlobOnlyValues`; XFILE-8, CONFORM-7); the dashboard-reference test; e2e. **Optional, owner:** the dry run and the container boot of §9.3; the smoke run below. |
+| Rollback | `make rollback-restore` (§9.2.1): the checkpoint, or the off-host archive with its state files, offline, plus the pre-freeze release, which the recipe checks against the checkpoint's `from_vector`. Everything written after the upgrade is lost, every revocation made on R2 included (repeat them after the rollback), so fixing forward is the default. |
+| Owner | **Decisions:** D12 answered (a)–(d); what is left is whether to run the optional dry run and smoke run and, within the smoke day, whether to keep R2 or roll back. **The deploy**, by the runbook: (0) finish or undo every account merge in progress on the pre-freeze release, and fix or delete each identity row the dry run reports as blocking (D13); (1) take an archive, verify it and copy it off the host together with `.encryption_key` and `<db parent>/config.yaml`; (2) optionally, the dry run on that archive (§9.3); (3) rename the env names that the host's own unit drop-ins, compose `.env` and plist set, per the rename table (P4; a set retired protected or secret name refuses boot and names its successor); (4) deploy R2, with `DEPLOY_READY_TIMEOUT` at the measured first-boot time; (5) switch each webhook receiver to core's format (§9.6 row 5; the OIDC redirect URI is unchanged, row 4); (6) reload the Prometheus rules and Grafana dashboards that R2 ships; (7) after the first boot, `secrets export-keyring` to the off-host location (health warns `secrets_keyring_not_exported` until then); (8) re-send open invites (P5). **The optional smoke run:** sign in to the web app; an ABS phone app keeps its session and syncs progress (P7); a library scan and a scheduled task run once, with no catch-up storm; a webhook reaches its receiver; the Prometheus scrape answers and the alerts evaluate; health shows no quarantined row. |
 
-**R2's flips (03 §3.8).** Serialized, each flip PR green on every required check, so every intermediate `main` boots
-and passes e2e; the release freeze starts before F3 merges (§9.2.1):
+**R2's flips (03 §3.8).** R2 opens with F2, the foundation PRs, landed dark before F3 so that each later flip only
+switches ownership (round 13 R1). The flips are serialized, each flip PR green on every required check, so every
+intermediate `main` boots and passes e2e; the release freeze starts before F3 merges (§9.2.1):
 
 | Flip | Subsystem | Step | Also in the flip PR |
 |---|---|---|---|
+| **F2** | the foundation PRs, dark: `storage/datamigrate` and `internal/storagemigrate`; `tasks` with its executor and `ForEach`, no books kind registered and no `ops` instrument created before F5; the `audit` store and the normative action table (`core.storage.*`, `core.settings.update`); the full `core:*` scope catalog; every core config section registered (backup, auth, tasks, updater and the rest); the health registry and its route, so F3's tokens surface; the minimal owner registrations of `core.integrations.release-holds`, `core.diagnostics.export` and `core.ai.batch-poll` | — | nothing switches: no route, schedule or stored row changes (IMPL-1–IMPL-5, IMPL-12, XFILE-4) |
 | **F3** | config and secrets; the Basic gate into the core perimeter (05-http-api §8.1) | M2, with M7 and M8 | the rename table; deploy files with canonical names; `basicauth.go` deleted from gin |
-| **F4** | identity: `auth`, `rbac`, `audit`; the gin auth chain replaced by `legacyauth`; the core reset route | M3 | the native auth, user, key, role and audit routes, and the gin routes they replace deleted (the OAuth/OIDC callback keeps HEAD's path, now served by core); the SPA's auth, user and key calls and its permission constants; `server-bootstrap` and `scripts/` on the new routes; the SPA's reset control back, on the core reset route |
-| **F5** | tasks and the log journal | M4, M5 | every definition native and HEAD's engine deleted; HEAD's task routes, `/api/v3/ops/*` and the two operation streams deleted; the Activity page on core's task routes, polling `GET /runs` until F6 (05-tasks §5T.8, 05-realtime §11) |
-| **F6** | events, outbox and realtime | — | the SPA's realtime client on `/api/core/v1/events`, which the Activity page uses instead of polling; `/api/events` and the SPA's `eventSourceManager` deleted |
-| **F7** | integrations, AI jobs, provider gates, library roots, notify | M6 | `internal/plugin` deleted; webhook and mail instances native, deliveries in core's webhook format; the AI series renamed with their dashboards and alerts |
-| **F8** | backup, the updater move, health, metrics | — | the kernel's `/metrics` mount; the metric renames with their dashboards and rules; HEAD's `/api/health` and `/api/v1/health` deleted, every caller of them switched to `/health`, which becomes Basic-exempt in their place (`TestBasicGate_ExemptSetGolden`, 05-http-api §12; 05-health) |
+| **F4** | identity: `auth`, `rbac`, `audit` serving; the gin auth chain replaced by `legacyauth`; the core reset route; the `events` bus (IMPL-10) | M3 | the native auth, user, key, role and audit routes, and the gin routes they replace deleted (the OAuth/OIDC callback keeps HEAD's path, now served by core, with HEAD's native-app hand-off; HEAD's start path `/api/v1/auth/oauth/{provider}/start` deleted with no alias, an R2 release-note line; 05-http-api §8.1); ABS logins through books' `auth.Compat` handle (05-authn); the native settings routes (`/api/core/v1/settings`, `/settings/schema`) with the gin settings handlers of the `k` and `s` keys deleted and the SPA settings page switched (05-config §1.3.4; XFILE-7); the SPA's auth, user and key calls and its permission constants; `server-bootstrap` and `scripts/` on the new routes; the SPA's reset control back, on the core reset route |
+| **F5** | tasks and the log journal | M4, M5 | every definition native and HEAD's engine deleted; the three late-owner core kinds registered from F2's minimal owner registrations (`core.integrations.release-holds`, `core.diagnostics.export`, `core.ai.batch-poll`; IMPL-5); HEAD's task routes, `/api/v3/ops/*` and the two operation streams deleted; the Activity page on core's task routes, polling `GET /runs` until F6, and no longer reading `ops.ts` (R15); HEAD's `operations_*`, `operation_*` and `op_*` families deleted and the `ops_*` label changes made, with their dashboards, rules and rule tests (05-metrics §13; XFILE-1) (05-tasks §5T.8, 05-realtime §11) |
+| **F6** | outbox and realtime (the bus is live from F4) | — | the SPA's `eventSourceManager` rewritten onto `/api/core/v1/events` (05-realtime §4.8 items 1–6, per-tab mode, with the `useTopic`/`useResync` signature; `@mediacore/shell`'s client replaces it at F9 or R3; R12), which the Activity page uses instead of polling; `/api/events` deleted |
+| **F7** | integrations, AI jobs, provider gates, library roots, notify | M6 | `internal/plugin` deleted; webhook and mail instances native, deliveries in core's webhook format; the AI series renamed with their dashboards and alerts; `integrations/providerhttp` and `integrations/ai` extend the registrations of `core.integrations.release-holds` and `core.ai.batch-poll` |
+| **F8** | backup, the updater move, health, the kernel `/metrics` mount | — | the kernel `/metrics` mount replacing the gin route, with no metric rename (R14); `health/diagnostics` extends the registration of `core.diagnostics.export`; HEAD's `/api/health` and `/api/v1/health` deleted, every caller of them switched to `/health`, which becomes Basic-exempt in their place (`TestBasicGate_ExemptSetGolden`, 05-http-api §12; 05-health) |
 | **F9** | the shell, if ready (otherwise R3) | — | 07 §7.19 steps 4–5 in one release; gin's SPA serving deleted |
 | — | the last PR of R2 | — | the runbook and the release note; the freeze ends with the release |
 
@@ -547,11 +613,11 @@ and passes e2e; the release freeze starts before F3 merges (§9.2.1):
 
 | Aspect | Specification |
 |---|---|
-| Content | The shell flip F9 if it was not in R2. Deleted: `internal/serviceregistry`, `pkg/plugin/sdk`, the no-op `--db-type` and SQLite flags (`cmd/root.go:489,508`), books' legacy steps 1..66 and the code only they call, the HEAD-format readers, `internal/books/cutover`, `.encryption_key` (M2 left it for a rollback-restore), HEAD's `library.bleve` directory (left for the same reason) and `TestR0OpensR1Store`. `UpgradeFloor{InstallFirst: R2}` (§9.2.2). Not deleted: the gin mount, the `/api/*` → `/api/v1/*` redirect, the ABS routes, `/health`, `/metrics`, and the `config.AppConfig` and logger façades (optional ratchets, SIMP-3; 11 §11.5 checklist). Release note: "This release needs a database that ran <R2 release>. An older database stops the service at start with the message `install <R2 release> first`: install that release, start it once, then upgrade." with the macOS and Docker notes of §9.2.2. |
-| Migrations | None; the floor is a boot-time check. |
-| Verification | `make ci`; e2e; a pre-R2 store is refused at boot, before any write, with exit 78 and `install <R2 release> first`; restore staging refuses a pre-R2 archive (`TestRestoreBelowUpgradeFloorRefusedAtStaging`); a fresh install and a factory-reset store pass the floor on two boots (`TestFreshInstallPostFloorBootsTwice`). |
-| Rollback | `make rollback` to R2: R3 changes no stored data, so there is nothing to restore. |
-| Owner | The deploy. The optional smoke run. |
+| Content | The shell flip F9 if it was not in R2. Deleted: `internal/serviceregistry`, `pkg/plugin/sdk`, the no-op `--db-type` and SQLite flags (`cmd/root.go:489,508`), books' legacy steps 1..66 and the code only they call, the HEAD-format readers, `internal/books/cutover`, `TestR0OpensR1Store`, and together `tools/cmd/opsgen`, `web/src/generated/ops.ts` and `internal/operations/state` (R15; XFILE-2). Books' boot step `legacy-file-cleanup` deletes `.encryption_key` (M2 left it for a rollback-restore) and HEAD's `library.bleve` directory (left for the same reason), each deletion a labelled row of 06 §6.5.1's boot-writer table; it refuses to delete while `secrets_keyring_not_exported` is raised and logs that the off-host `.encryption_key` is now the only copy (round 13 R6; CONFORM-4, DATA-16). `UpgradeFloor{InstallFirst: R2}` (§9.2.2). Not deleted: the gin mount, the `/api/*` → `/api/v1/*` redirect, the ABS routes, `/health`, `/metrics`, and the `config.AppConfig` and logger façades (optional ratchets, SIMP-3; 11 §11.5 checklist). Release note: "This release needs a database that ran <R2 release>. An older database stops the service at start with the message `install <R2 release> first`: install that release, start it once, then upgrade." — "The first start of this release deletes the old settings key file `.encryption_key` and the old search index directory. Keep your off-host copy of `.encryption_key` with any backup taken before <R2 release>: restoring such a backup needs it, and needs <R2 release> installed first." — with the macOS and Docker notes of §9.2.2. |
+| Migrations | No migration step; the floor is a boot-time check, and `legacy-file-cleanup` deletes the two files once. |
+| Verification | `make ci`; e2e; the crash matrix over `legacy-file-cleanup`'s rows; a pre-R2 store is refused at boot, before any write, with exit 78 and `install <R2 release> first`; restore staging refuses a pre-R2 archive (`TestRestoreBelowUpgradeFloorRefusedAtStaging`); a fresh install and a factory-reset store pass the floor on two boots (`TestFreshInstallPostFloorBootsTwice`). |
+| Rollback | `make rollback` to R2: R3 changes no data in the store, and R2 reads neither deleted file on a migrated store, so there is nothing to restore. |
+| Owner | Before the deploy: the keyring exported and an off-host `.encryption_key` kept with every pre-R2 archive. The deploy. The optional smoke run. |
 
 ### 9.4.1 Sub-spec batch → release map (OPS-12)
 
@@ -565,14 +631,16 @@ and passes e2e; the release freeze starts before F3 merges (§9.2.1):
 | Composition root, lifecycle, listeners, the shutdown budget (05-health) | R1 | yes (stop order) | `unit-lifecycle` |
 | 05-http-api: `MountLegacy`, the perimeter in core, `otelgin` removed; 05-logging stages 1–2 | R1 | yes (perimeter owner, HTTP metrics, log file) | the perimeter tests; the ABS suite |
 | 05-storage: core opens the store, strict claims, the one swap, offline opens, the crash matrix; the `database.Store` split (04 §4.5) | R1 | yes (a restore or reset applies at the next restart) | the crash matrices; the staging tests |
-| 07 §7.19 steps 1–3; the Docker frontend stage | R1 | no | the UI checks of §9.4 R1 |
+| 07 §7.19 steps 1–2; the Docker frontend stage | R1 | no | the UI checks of §9.4 R1 |
+| The foundation PRs F2: `storage/datamigrate`, `internal/storagemigrate`, `tasks` and its executor, the `audit` store and action table, the `core:*` scope catalog, the core config sections, the health registry route | R2, F2 (dark) | no | builds and boots with nothing switched; `TestRenameTable_EveryKeyRegistered` from F3 against the build under test |
 | 05-config §1.12.2 (M2), precedence, the rename table; the Basic gate to core | R2, F3 | yes | the config oracle |
 | 05-authn, 05-rbac: identity (M3), native routes, `legacyauth`, the atom table; the identity UI | R2, F4 | yes | the reach oracle; `TestIdentityCutover_*` |
 | 05-tasks: native definitions, schedules, the kind-rename map (M4), the Activity page on core's task routes; 05-logging's journal (M5) | R2, F5 | yes | the schedule oracle; the parity suites |
 | 05-events, 05-realtime: hub, outbox, native SSE; the SPA's realtime client | R2, F6 | yes | the stream tests |
 | 05-metadata M1, the 05-download and 05-ai adapters, library roots, AI jobs, gates, the index rebuild, 05-notify (M6) | R2, F7 | yes | the search oracle; the webhook delivery test |
-| 05-backup (core layout), the updater move, 05-health, the kernel `/metrics` with renames | R2, F8 | yes | the dashboard-reference test |
-| 07 §7.19 steps 4–5 (the shell); step 6 (the remaining `api.ts` sections, with each flip) | R2 (F9) or R3; R2 | yes; no | the shell's checks; the generated client covers the route |
+| 05-backup (core layout), the updater move, 05-health, the kernel `/metrics` mount | R2, F8 | yes | the dashboard-reference test |
+| 07 §7.19 step 3 (the `api.ts` sections, switched with each flip) | R2 | no | the generated client covers the route |
+| 07 §7.19 steps 4–5 (the shell); step 6 | R2 (F9) or R3; after R2 | yes; no | the shell's checks |
 | The R3 deletions and the floor | R3 | yes (the floor) | the exit-78 boot test |
 | Optional ratchets (05-config accessor, 05-logging injection); mock conversion (`internal/database/mocks`, 04 §4.6) | none; R1–R2 as the owner decides | no | ceilings only go down; 04 open item 1 |
 
@@ -586,7 +654,7 @@ steps (§9.4 R2).
 | 1 | Core API routes: auth, users, keys, roles, audit, config, system, backup, update, tasks and definitions, the generic integration routes | `/api/v1/...`; `/api/v3/ops/*` | `/api/core/v1/...`; each old path deleted by the flip that replaces it | 05-http-api §8.1 | a caller outside the repo must move (P5) |
 | 2 | Event streams | `/api/events`, `/api/v1/operations/events`, `/api/v3/ops/events` | `/api/core/v1/events`; the two operation streams deleted at F5, `/api/events` at F6 | 05-realtime | — |
 | 3 | Extra health paths | `/api/health`, `/api/v1/health` | deleted; `/health` and `/api/core/v1/health` serve (F8) | 05-health | a monitor on one of them moves to `/health` |
-| 4 | OIDC callback | `/api/v1/auth/oauth/:provider/callback`, served by gin | the same path, served by core (F4) | 05-authn §4.13 | — (no provider re-registration) |
+| 4 | OIDC callback and start | `/api/v1/auth/oauth/:provider/callback` and `/api/v1/auth/oauth/:provider/start`, served by gin | the same callback path, served by core with HEAD's native-app hand-off (F4); the start path deleted with no alias, replaced by `/api/core/v1/auth/oidc/{provider}/start` | 05-authn §4.13; 05-http-api §8.1 | — for the callback (no provider re-registration); a native client on the old start path moves to the core one (release-note line) |
 | 5 | Webhook format | `X-Audiobook-Event`, `X-Audiobook-Signature-256` (an HMAC of the body only), HEAD's payload | core's format, `X-Mediacore-Delivery` and the timestamped `X-Mediacore-Signature`; the HMAC secret migrated by value (M6) | 05-notify §3, §10 | switch each receiver to the new headers and signing string (deploy step 5) |
 | 6 | Stored config and secrets | `setting:config_blob` with plaintext secrets; 4 rows encrypted with `.encryption_key` | `c/config/` under canonical keys; every secret encrypted in `c/secrets/` under the keyring; the gap-fill file's managed keys stripped (M2) | 05-config §1.12.2 | export the keyring after the first boot (deploy step 7) |
 | 7 | Config keys and env names | ~251 flat keys; the `BindEnv` and `AutomaticEnv` names; `ABK_*` | canonical keys and env names by the rename table; ecosystem names unchanged | 05-config §1.12.3–§1.12.4 | rename what the host's own files set (P4; deploy step 3) |
@@ -599,13 +667,15 @@ steps (§9.4 R2).
 | 14 | System log | `syslog:` rows | `c/log/`, converted (M5) | 05-logging §5 | — |
 | 15 | Integrations, AI jobs, library roots, the webhook rule | blob fields, `aijob*`, `import_path:` | `c/integrations/instances/`, `c/ai/`, `core.library.roots` entries (IDs kept), native notify instances and their rule (M6) | 05-metadata M1.10; 05-ai §10; 05-library §5L.10; 05-notify §10 | — |
 | 16 | Throttle and quota holds; the full-text index; derived indexes; caches | HEAD's rows; `library.bleve` | reset or rebuilt; a provider's daily budget restarts at zero; the index is rebuilt at its new path, and `library.bleve` is deleted in R3 | 05-metadata M2; 05-storage §5S.3.8 | — |
-| 17 | Metric names | HEAD's `audiobook_organizer_*` names | moved emitters may take core's names, with the shipped dashboards and rules changed in the same PR (F8) | 05-metrics §13 | reload the shipped rules and dashboards (deploy step 6) |
+| 17 | Metric names | HEAD's `audiobook_organizer_*` names | moved emitters may take core's names, with the shipped dashboards and rules changed in the same PR: R1 (HTTP, in R1's note), F5 (tasks), F7 (AI); F8 only moves the kernel `/metrics` mount (CONFORM-11, XFILE-1) | 05-metrics §13 | reload the shipped rules and dashboards (deploy step 6) |
 | 18 | `/metrics` reach | any authenticated credential | `core:metrics.read`, stored on every principal that is not `Confined()`, so the scrape key keeps working | 05-metrics §6; 05-rbac §6 | — |
 | 19 | Backup archives | ABO's layout (`legacy-abo/0`) | core's layout (F8); an old archive still restores, and the next boot migrates it | 05-backup B1, B7 | take a new off-host archive after R2 |
 | 20 | Factory and store reset | HEAD's two gin routes; in R1 the offline `storage reset` only | the core route `POST /api/core/v1/system/factory-reset` (F4) and the offline command | 05-storage §5S.3.15 | the R1 release note says the reset is offline-only in R1 |
-| 21 | SPA paths and link forms | HEAD's paths, `/invite/:token`, `/auth/temp-login?token=` | the shell's paths (F9), with optional static client redirects; link forms change with the SPA | 07 §7.19 | update bookmarks |
-| 22 | The pre-migration checkpoint | — | a full pre-R2 copy beside the DB, holding plaintext third-party secrets and raw session tokens, deleted after 7 days | 05-storage §5S.3.12 | guard the host's disk as the server is guarded; `storage prune-checkpoints` deletes it earlier |
-| 23 | Pre-R2 backups | — | they still hold plaintext secrets and sign-in tokens; restoring one migrates it again and clears its sign-ins | 05-authn §11 | keep them as safe as the server, or delete them |
+| 21 | SPA paths and link forms | HEAD's paths, `/invite/:token`, `/auth/temp-login?token=` | the shell's paths (F9), with no old-URL redirect (D13): a former bookmark lands on the not-found page, and the release note lists the new paths; link forms change with the SPA | 07 §7.19 | update bookmarks |
+| 22 | The pre-migration checkpoint | — (R1's first boot already took one, with its own release-note line) | a full pre-R2 copy beside the DB (directory 0700, files 0600), holding plaintext third-party secrets and raw session tokens, deleted 7 days after it stops being needed (§9.2.3) | 05-storage §5S.3.12 | guard the host's disk as the server is guarded; `storage prune-checkpoints` deletes it earlier |
+| 23 | Pre-R2 backups | — | they still hold plaintext secrets and sign-in tokens; restoring one migrates it again and clears its sign-ins; after R3 it needs R2 installed first and its off-host `.encryption_key` | 05-authn §11; §9.2.2 | keep them as safe as the server, with their `.encryption_key`, or delete them |
+| 24 | Account merges | a finished merge could be undone from its journal | permanent: no merge is undone after R2, and a merge in progress refuses the upgrade until it is finished (D13) | 05-authn §11 | finish or undo every merge before the deploy (deploy step 0) |
+| 25 | Rollback and revocations | — | a `make rollback-restore` brings back every credential revoked, user disabled or password changed on R2 | 05-storage §5S.3.12 | repeat those revocations after a rollback (SEC-10) |
 
 **The kept contract (D12 (c)).** The **only** frozen external contract is the ABS-compatible API that the phone apps
 use (03 §3.8): the unprefixed root routes `/ping`, `/status`, `/login`, `/logout`, `/auth/refresh`, `/auth/openid*`,
@@ -615,13 +685,14 @@ HEAD); the value of its JWT signing secret, whose env name may change, a set ret
 semantics (HS256 JWTs, refresh sessions in `abs_sess:`, logins by password and by API key). It is pinned by the **ABS
 conformance suite**, the tests of `internal/server/handlers/abs/` and `internal/server/absauth/` (05-authn §4.10),
 which runs in every `make ci` and, from R2, on the migrated corpus too, because ABS logins then resolve users through
-core auth (`TestIdentityCutover_ABSSurvives`). The ABS families stay books' and are not migrated. Webhooks are not
+core auth through books' `auth.Compat` handle (`TestIdentityCutover_ABSSurvives`; 05-authn). The ABS families stay books' and are not migrated. Webhooks are not
 part of it.
 
 **Unchanged because that is cheaper** (not contracts; each keeps only its tests):
 
-- the OAuth/OIDC callback path `/api/v1/auth/oauth/:provider/callback`, served by core from F4, so no identity provider
-  needs re-registering (row 4);
+- the OAuth/OIDC callback path `/api/v1/auth/oauth/:provider/callback`, served by core from F4 with HEAD's native-app
+  hand-off (deep-link start parameters, books' hook that mints the app authorization code, the exact-match redirect
+  allowlist, S256-only PKCE; R19), so no identity provider needs re-registering (row 4);
 - books' routes on `/api/v1/...` (the permanent gin mount) and HEAD's `/api/*` → `/api/v1/*` 301;
 - the remote fingerprint-worker API (`/api/v1/fingerprint/worker/*`, a books route) and its `abk_` key, so the worker
   on its other host needs no upgrade (`TestIdentityCutover_WorkerKeyStaysConfined`);
@@ -657,7 +728,8 @@ stopped. Never print `sess:` or secret values, which hold credentials; count key
 | Store below the upgrade floor (R3 on a pre-R2 store) | **fail-closed**: `ErrUpgradeFloor{InstallFirst}`, exit 78, last stderr line `install <R2 release> first` | the cutover steps are gone |
 | Restore staging of an archive below the build's floor | **closed**: refused before extracting | a fresh host must not end with an empty store (DATA3-9) |
 | Migration or cutover step error | **fail-closed**: boot halts, and the checkpoint stays for the offline restore; the next boot of the same build resumes from the step's cursor | G2 |
-| A row a cutover step cannot decode, or an importer rejects | quarantined under `c/storage/quarantine/`, counted and reported in health and the step's report; boot continues (**open**) | one bad row must not crash-loop the unit, and nothing is dropped in silence |
+| A row a cutover step cannot decode, or an importer rejects | quarantined under `c/storage/quarantine/`, counted and reported in health and the step's report; boot continues (**open**); a reference to a quarantined ID is reported in health, not a `Verify` failure (R8) | one bad row must not crash-loop the unit, and nothing is dropped in silence |
+| A user, key or identity row M3 cannot convert; an account merge `applying` or `undoing` | **fail-closed** at the cutover preflight, before the checkpoint and any write: boot refuses, the report names each row or merge; `storage cutover-blockers` fixes or deletes the row, the pre-freeze release finishes the merge (D13) | identity is never quarantined-and-continued, and a half-done merge cannot be imported |
 | `.encryption_key` missing while HEAD's encrypted rows are non-empty; a row the key does not decrypt | the first **fails closed** before M2 writes anything, naming the file and the override; the second is quarantined, its secret "re-enter" in health, and boot continues (**open**) | a missing key is usually a wrong mount; one bad row must not stop the server (05-config §1.12.2) |
 | Checkpoint without disk headroom | **fail-closed** before any write, with the numbers | a full pool is an outage |
 | A retired env name is set | for a `ProtectAdmin`+ or secret-class key **fail-closed**: refuse to start, naming the canonical variable; for a database-path name with no store at the resolved path, storage refuses to create one; for any other name one WARN, and `config check` lists it (**open**) | an ignored `DATABASE_PATH` opens or creates the wrong store (14 K15); an ignored secret disables a feature; env carries unrelated names (`HOST`, `PORT`) |
@@ -668,6 +740,7 @@ stopped. Never print `sess:` or secret values, which hold credentials; count key
 | `make rollback` onto a migrated store | **refused** by HEAD's storage-format guard (the projection is raised) | rollback across R2 is a restore |
 | `make rollback` or `make rollback-restore` while a swap is in flight | **refused** (`restore_inflight`), with no override: boot the current build once to finish the swap; a `failed` checkpoint restore is escaped by the previous binary's `storage restore-offline --checkpoint` (§9.2.1) | an older build must not open a half-moved store |
 | `storage restore-offline --checkpoint` of a checkpoint that is not the latest attempt's, or after its 7-day deletion | **refused**, naming the latest checkpoint or the off-host archive | it would also discard a later upgrade's work |
+| `make rollback-restore` whose `.prev` levels differ from the checkpoint's `from_vector` | **refused** before anything is touched, naming the binary to install (the pre-freeze release) | a rollback must never re-migrate (R11) |
 | A swap intent (restore or reset) that expired or was staged by another build; a second staging while the slot is taken | **rejected** (closed), store untouched; `storage.ErrSwapPending` for the second | one rejection rule for every kind (R7-2, R8-1) |
 | A reset: staging with a dangerous `RootDir`; a set-aside rename that fails; a post-reset hook that cannot delete an entry | refused (400), nothing staged; the rename moves back what it moved, journals `rejected` and boots the untouched store `degraded` (`factory_reset_failed`); the entry is logged, audited and reported (`factory_reset_cleanup_incomplete`), and the hook still records `hook_done` (**open**) | a reset never leaves a half-moved store, and a hook that never finishes would block every swap (COR8-3, DATA8-1, OPS8-5) |
 | An archive without a manifest (`legacy-abo/0`) | restored (**open**); the next boot migrates it | old archives stay restorable |
@@ -696,7 +769,7 @@ into the build. Core series carry the app's metric namespace (§9.2.7; `audioboo
 | Metric | Type | Labels |
 |---|---|---|
 | `<namespace>_storage_level` (05-storage §5S.8; the only level metric) | gauge | `owner`, `kind` (supported, store) |
-| `<namespace>_storage_checkpoint_bytes` (05-storage §5S.3.12) | gauge | — |
+| `<namespace>_storage_checkpoint_bytes` (05-storage §5S.3.12) | gauge | `state` (open, completed), as 05-storage §5S.8 defines them |
 | `<namespace>_build_info` | gauge | `version` |
 | `<namespace>_kernel_boot_phase_seconds` (06 §6.9) | gauge, per boot | `phase` and `step` exactly as 06 §6.9 defines them |
 
@@ -708,11 +781,12 @@ rollback and cutover properties this file sets:
 | `TestR0OpensR1Store` (05-storage) | R1, until R3 | R1's rollback to R0 loses nothing |
 | `TestBootCrashMatrix` (core, over hello), `TestBootCrashMatrix_ABO` (books' full boot), on `coretest/crashmatrix`, extended by every boot writer | R1, then every R2 step | a kill or an error at any durable write, rename or fsync of a boot leaves a store the current build boots, and every cutover step resumes with no row lost or written twice |
 | `scripts/tests/test_unit_lifecycle.py`, `test_deploy_wait_ready.py`, `test_make_rollback.py`, `test_ci_classifier.py`; `scripts/ci/check_commits_build.py` | R1 | the two unit cells; exit 78 reported by name; `make rollback` and `make rollback-restore` on the fake-ssh harness; the docs-glob classifier; every commit of a move PR builds |
-| the cutover suite: the R0-written corpus; the per-family, ID, reference and byte-identity checks; the config, reach, schedule and search oracles; the restore drill | R2 | every family converts without loss and with the same meaning, and the checkpoint restores offline for R1 |
+| the cutover suite: the R0-written corpus; the per-family, ID, reference and byte-identity checks; the config, reach, schedule and search oracles; the restore drill | R2 | every family converts without loss and with the same meaning, and the checkpoint restores offline for the pre-freeze release |
 | `TestCutover_NoRawTokenOnDisk` (05-authn), `TestConfigCutover_NoPlaintextSecretOnDisk` (05-config) | R2 | after M8 no file under the live DB directory holds a raw token or a plaintext secret; the checkpoint is the stated exception until its deletion |
 | `TestCutoverRefusedByOlderBuilds` | R2 | HEAD, R0 and R1 refuse a migrated store and a store stopped in the middle of M3, at open and in `make rollback` |
 | the deploy-files test | R2 (F3) | the shipped deploy files use canonical names only |
-| the exit-78 boot test, `TestRestoreBelowUpgradeFloorRefusedAtStaging`, `TestFreshInstallPostFloorBootsTwice` | R3 | the floor at boot and at restore staging; fresh installs pass it |
+| the exit-78 boot test, `TestRestoreBelowUpgradeFloorRefusedAtStaging`, `TestFreshInstallPostFloorBootsTwice` | R3 | the floor at boot and at restore staging; fresh installs and factory resets pass it, M2–M6 recorded as satisfied |
+| the cutover preflight's corpus (D13) | R2 | an unconvertible identity row or an unfinished merge refuses the boot before any write, and the report names it |
 
 ## 9.11 Risk table
 
@@ -727,13 +801,13 @@ rollback and cutover properties this file sets:
 | 7 | A renamed env name is ignored and an empty store opens at the default path (14 K15) | the boot refusal | refusal on a set retired protected or secret name; no store created while a retired DB-path name is set; `config check` |
 | 8 | The first R2 boot is killed partway (start timeout, container health check) | the `unit-lifecycle` cell | `EXTEND_TIMEOUT` per step; resumable steps; the measured `DEPLOY_READY_TIMEOUT`; the Docker `start_period` note |
 | 9 | The disk runs out (checkpoint, rewritten ranges and compaction together) | the headroom check | it fails closed before any write; P12 |
-| 10 | A rollback by restore discards every write since the upgrade | — | decide within the smoke day; fix forward by default; the runbook says so |
-| 11 | The checkpoint and pre-R2 backups hold plaintext secrets and raw tokens | the canaries over the live DB directory | the 7-day deletion; `storage prune-checkpoints`; the release note |
+| 10 | A rollback by restore discards every write since the upgrade and revives every credential revoked since | — | decide within the smoke day; fix forward by default; the runbook says so and lists the revocations to repeat |
+| 11 | The checkpoint and pre-R2 backups hold plaintext secrets and raw tokens | the canaries over every file of the live DB directory | the 7-day deletion of every checkpoint once it stops being needed, from R1; `storage prune-checkpoints`; mode 0700/0600; M8's rewrite into a fresh directory; the release notes |
 | 12 | ABS phone apps break: logins resolve through migrated users; the secret's env name changes | the ABS suite on the migrated corpus | `abs_sess:` untouched; the secret's value kept; the boot refusal on its retired name; the smoke run's live check |
 | 13 | Another external party breaks: identity providers, webhook receivers, the remote worker, the scrape key | the smoke run | the one changed item, the webhook format, is a deploy step (§9.6 row 5); the OIDC callback path, the worker API and the scrape key's reach do not change |
 | 14 | Dashboards and alerts go silent on a renamed series | the dashboard-reference test; `promtool test rules` | the shipped files change in the renaming PR and are reloaded at the deploy; no rename for nothing |
 | 15 | R2's blast radius; flips colliding with feature work | rebase failures; CI time | R1 carries the runtime half; serialized flips; move windows and the 35-minute budget (§9.2.10) |
-| 16 | A half-flipped `main` reaches production, or a defect appears during the freeze | — | the freeze (§9.2.1); unattended updates check-only; the checkpoint; a hotfix release from the R1 tag by default, which the owner may override per defect |
+| 16 | A half-flipped `main` or part of R1 reaches production, or a defect appears during a freeze | — | the R1 and R2 freezes (§9.2.1); unattended updates check-only; the checkpoint; a hotfix release from the pre-freeze release by default (never from the R1 tag, which may not open the production store), which the owner may override per defect |
 | 17 | Schedules stampede at the first boot | the "no catch-up storm" test | the clocks migrate (M4); `TestScheduleParity_AllDefinitions` |
 | 18 | The early fixes regress in core auth; no previous-build oracle remains | the ported property tests; the oracles | the six fixes' tests on core auth; oracles computed by the R0 binary |
 | 19 | An R1 runtime change regresses: strict claims refuse a live writer, the perimeter changes CSP, compression or rate classes, a shutdown kills runner children | the full suite and e2e under strict claims; the perimeter tests; `unit-lifecycle` | the `shadow` dial; per-route data from HEAD's chain and per-owner CSP goldens; stop timeouts and `KillMode=mixed` |
@@ -747,7 +821,7 @@ rollback and cutover properties this file sets:
 | O8 | Pilot cost before any books route group is rewritten to native `httpapi` (SIMP-2 item 4): measure one group (for example playlists, 10 routes) | owner, when a group is first rewritten |
 | O10 | How the required checks are enforced (R3-2) | owner (14 Q-I) |
 | O11 | The per-PR CI-time budget (35 min) and the target move-window length (two working days) of §9.2.10 | owner |
-| O12 | The module name, which blocks R1's first core PR | owner (14 Q-H) |
+| O12 | The module name, which blocked R1's first core PR | resolved by D13: `github.com/falkcorp/mediacore` (14 Q-H) |
 
 ## Objections to 03
 
@@ -1244,3 +1318,5 @@ Plan-phase consistency:
 - PC-20 — S4 Moves: the bridge is `internal/server/legacyauth` (03 §3.5.1).
 
 - D10–D12 revision (2026-11-04): retitled "ABO on core: releases and the cutover" (file name kept); the S0–S10 stage sequence, UI-0 as its own release and H1–H3 replaced by the releases R0–R3 of 03 §3.8. Deleted outright: the compatibility window, the rollback cost table, soaks, the soak ledger, `ci/stage.txt`, the `Stage-Release:` trailer and the bot table (old §9.2.1); the served ledger, foreign-open record, open stamp, boot lineage, applied-steps sidecar, stepping-stone release and pre-swap floor checks (old §9.2.2); books' legacy stores and HEAD's locks across core's commit (old §9.2.3, §9.9); aliases, permanent env names, legacy env decoding, legacy atoms on input, `LegacyAmbientScopes`, `otelgin` co-recording and the HEAD metric goldens (old §9.2.4–§9.2.7); the compat ledger and `compat.Ledger` (old §9.2.9); the S0–S10 stage tables; surface contracts C3–C9 (§9.5); P8, P10, P11, P13 and P15 (§9.7); the staging scrub, staging marker, `binary_id` coupling, per-stage boot A/B and R-test (old §9.3, §9.10); the deferred per-family and hardening cutovers (§9.13). Rewritten: §9.0; §9.1 trimmed; §9.2 as the R2 cutover model (§9.2.1 release safety, keeping the named required checks, adding the release freeze of D12 F1 and rollback by restore; §9.2.2 the level stamps and the R3 floor; §9.2.3 the one-way migration with M1–M8, the checkpoint's 7-day deletion and quarantine; §9.2.4–§9.2.9 the per-surface rules and the release note; §9.2.10 kept, re-keyed); §9.3 the release overview and the reduced rehearsal; §9.4 the release tables R0–R3, with R1's CI classification and R2's flips F3–F9; §9.4.1 re-keyed; §9.6 "changed in R2" and the one kept contract (the ABS API, pinned by its conformance suite); §9.8–§9.12 cut to the native design, with a new risk table. The webhook format and the OIDC callback path are listed as changed, following 05-notify and 05-authn. M7 runs before M2 (Objections to 03, item 1, as 05-storage §5S.3.13 also requires); items 2–5 record the other differences from 03 §3.8, F5 deleting HEAD's task routes among them (with 05-tasks and 05-realtime). Restore commands, checkpoint retention and the gap-fill rule follow 05-storage §5S.3.12 and 05-config §1.12.2. Consistency pass: the five Objections to 03 are settled in 03 §3.8 (the section now records none open), so the OIDC callback path is kept (§9.6 row 4, no re-registration step), D12's answers are cited as D12 (a)–(d), the R1 reset is offline-only, the dirty set is replaced by the index rebuild, the AI series rename at F7, and the renamed tests and 05-config's rename-table section are cited. Final consistency sweep: F8 makes `/health` Basic-exempt (`TestBasicGate_ExemptSetGolden`), §9.2.7 keeps books' process gauges unchanged and has core's AI families replace HEAD's at F7, the undefined compose test is replaced by 05-config's `TestFailClosed_MoreRestrictiveWins`, the checkpoint's keyring is stated per L9, and the runbook escapes a `failed` checkpoint restore with the previous binary's `storage restore-offline --checkpoint`.
+
+Round 13 (2026-11-04): R1 (IMPL-1, IMPL-2, IMPL-3, IMPL-4, IMPL-5, IMPL-12, XFILE-4: the F2 foundation PRs in §9.2.1, §9.2.3, §9.3, R2 content, the flip table and §9.4.1; the three late-owner kinds at F5, extended at F7 and F8; the executor creates no `ops` instrument before F5), R2 (CONFORM-1: the pre-freeze release in §9.2, §9.2.1, §9.3, R2, §9.11 row 16), R3 (IMPL-9: the R1 freeze, owner-overridable), R4 (CONFORM-2, CONFORM-6, DATA-8: checkpoint retention, the R1 sweeper, prune command and release-note line), R5 (XFILE-3), R6 (CONFORM-4, DATA-16, IMPL-7: `legacy-file-cleanup`, the host-loss recipe after R3, the fresh-install batch), R7 (DATA-1), R8 (DATA-2), R9 (DATA-3), R10 (DATA-5), R11 (DATA-7, DATA-9), R12 (IMPL-6), R13 (IMPL-8), R14 (XFILE-1, CONFORM-11), R15 (XFILE-2), R17 (IMPL-11, XFILE-6, XFILE-7, XFILE-11), R19 (SEC-2, and the deleted OAuth start path with its release-note line), R20 (SEC-3, SEC-4), R21 (SEC-5), SEC-1 (ABS logins through `auth.Compat`), SEC-9, SEC-10, SEC-11, SEC-13, IMPL-10, IMPL-13, IMPL-14, XFILE-8, XFILE-13, CONFORM-7, CONFORM-13, DATA-11, DATA-13, D13 (the read-only cutover preflight, `storage cutover-blockers`, permanent merges, no old-URL redirects, module name decided).
