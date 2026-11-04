@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/10-tv-movies-proof.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: e9ed438b-6097-4a4d-8b51-d2eacaca8221 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -152,10 +152,10 @@ predicate that depends on the clock or on hot-reloadable config.
 | Capability | Core package (spec) | How `tv` uses it |
 |---|---|---|
 | Storage keyspace | `storage` ([05-storage](05-storage.md)) | `Deps.Storage` hands the module `Keyspace("m/tv/")`; writes outside it are refused (R8). Scans are `codec.Typed[Series].All` (`iter.Seq2[Series, error]`). Integer IDs from `Keyspace.Sequence("series").Next` (§10.4 G10). |
-| Tasks | `tasks` ([05-tasks](05-tasks.md)) | Module task kinds: `tv.metadata.refresh` (every 12 h like Sonarr, `raw/16 §1.1` notes; `tasks.Fixed(4, "metadata provider rate limits")`), `tv.search.missing`, `tv.search.series`, `tv.search.episodes`, `tv.disk.rescan` (`tasks.CPU()`; per-series partition), `tv.recent.search` (aired in last 14 days or 1 day ahead, `raw/16 §1.3`). RSS sync is a **core** `acquire` task and download polling a **core** `integrations/download` task (§10.5.4); neither is the module's. The import of a completed download **is** the module's: kind `tv.acquire.import`, built by `acquire.ImportTask` and registered by `tv` (§10.5.4, COR2-11), so its writes run under `tv`'s own `Effects`. Every `RunItems` declares parallelism (R7). |
+| Tasks | `tasks` ([05-tasks](05-tasks.md)) | Module task kinds: `tv.metadata.refresh` (every 12 h like Sonarr, `raw/16 §1.1` notes, on `tasks.ScheduleFromConfig("modules.tv.metadata.schedules.refresh")`, default `{enabled: true, every: 12h}`, §10.5.7; `tasks.Fixed(4, "metadata provider rate limits")`), `tv.search.missing`, `tv.search.series`, `tv.search.episodes`, `tv.disk.rescan` (`tasks.CPU()`; per-series partition), `tv.recent.search` (aired in last 14 days or 1 day ahead, `raw/16 §1.3`). RSS sync is a **core** `acquire` task and download polling a **core** `integrations/download` task (§10.5.4); neither is the module's. The import of a completed download **is** the module's: kind `tv.acquire.import`, built by `acquire.ImportTask` and registered by `tv` (§10.5.4, COR2-11), so its writes run under `tv`'s own `Effects`. Every `RunItems` declares parallelism (R7). Any cadence a `tv.*` or `movies.*` kind gets is a declared module schedule key of this shape (R2-7); in this proof only `tv.metadata.refresh` has one (SIMP3-9). |
 | RSS sync & search | `acquire` + `integrations/indexer` | The module registers an `acquire.MediaType[tv.Target]` (§10.5.3), reaching the service as `module.Deps.Acquire` (06, COR-1): Newznab categories (TV 5000 family + anime 5070, `raw/16 §4.2`) and RSS type `TypeTV`, a release parser, a mapper release → series/episodes, its search-criteria builder (`t=tvsearch` + `tvdbid/tmdbid/imdbid`, `season`/`ep`; daily `season=<yyyy>&ep=<MM>/<dd>`; anime `q=<title>+<abs>`, `raw/16 §1.2, §4.2`), and its own specs (§10.5.3 table). |
 | Library roots, path mapping, import | `library` ([05-library](05-library.md)) | Root folders = `library.Manager.Roots(filter)`; free space from `Root.Usage`; "unmapped folders" from a `RootFS.Walk`; remote-path mapping of download-client paths (`raw/16 §4.6` last bullet) = `library.PathMapper` over `library.Mapping` rows (already applied in `download.Item.LocalPath`); hardlink-or-copy for torrents, move for usenet (`raw/16 §4.7`) = `d.Library.TransferIn(tx.Batch(), …)` on the module's `library.Scope` (06) with `TransferOptions` mode `library.Auto` or `Move`. The module supplies naming (Standard/Daily/Anime episode formats, series/season folder formats, `raw/16 §1.4`). |
-| Download clients | `integrations/download` ([05-download](05-download.md)) | Never called directly by the module: `acquire` grabs with a media-neutral `download.GrabRequest{Owner: "core.acquire", Refs}` and consumes download's grab and item events; it never polls (§10.4 G2, G5; COR-3). |
+| Download clients | `integrations/download` ([05-download](05-download.md)) | Never called directly by the module: `acquire` grabs with a media-neutral `download.GrabRequest{Owner: "core.acquire", Refs}` and consumes download's one durable event topic `core.download.event.v1`; it never polls (§10.4 G2, G5; COR-3). |
 | Indexers | `integrations/indexer` ([05-indexer](05-indexer.md)) | Newznab/Torznab transport, caps, paging, attribute parsing are core; the module supplies only the query mapping above. |
 | Metadata | `integrations/metadata` ([05-metadata](05-metadata.md)) | Two instances of the generic contract: `metadata.Provider[tv.SeriesQuery, tv.SeriesRecord]` and `metadata.Provider[tv.EpisodeListQuery, []tv.EpisodeRecord]`, adapters TMDB and TVmaze (§10.3), each behind its own `providerhttp` instance (throttle, daily quota, breaker). |
 | Notify | `integrations/notify` ([05-notify](05-notify.md)) | Module event topics `tv.episode.grabbed.v1`, `tv.episode.imported.v1`, `tv.episode.upgraded.v1`, `tv.download.failed.v1`, `tv.series.added.v1`, `tv.series.deleted.v1` (03 §3.6 topic convention) are declared once in the events catalog with notify metadata and so are offered to notification rules (SIMP-5); payloads are module DTOs. The module produces each notification with `module.Deps.Notify.Publish(ctx, b, n)` in the batch of the change it reports (05-notify §1, COR2-3); the catalog metadata alone sends nothing. |
@@ -579,6 +579,11 @@ type Importer[T Target] interface {
 // MediaType whose module registered none.
 func ImportTask[T Target](e *Engine[T], effects tasks.Effects) tasks.Definition
 
+// ImportParams is the JSON body of an import run's StartRequest.Params.
+type ImportParams struct {
+	TD string // TrackedDownload.ID
+}
+
 // ImportTx carries ONE batch: the import run's fenced write (rc.Writer().Do),
 // with c/acquire/ Bound to it by acquire as a core participant. acquire adds the
 // history rows and StateImported to it and commits once; the module never commits it.
@@ -608,7 +613,7 @@ type TrackedDownload struct {
 	Module     string
 	Refs       []entity.Ref
 	Grab       download.GrabID
-	Item       download.ItemRef // zero until grab.added
+	Item       download.ItemRef // zero until the grab_added event
 	Release    ReleaseSnapshot  // title, indexer (integrations.Ref), protocol, size, published, Facts, Grade
 	State      State
 	Messages   []string
@@ -704,20 +709,25 @@ unavailable monitored movie in the pending store on every sync until `core.acqui
    |---|---|---|---|
    | `core.acquire.rss-sync` | `tasks.ScheduleFromConfig("core.acquire.schedules.rss_sync")` | fetch: `tasks.Fixed(4, "indexer rate limits; providerhttp throttles per indexer")`; decide: `tasks.CPU()` passed to `Decide` | `indexer.Pool.RSS` with one `Feed` per registered media type (its `RSSType`, `Categories`, own cursor; COR-25), route by category, append that module's pending releases, `Decide`, `Engine.Grab(ctx, rc, …)` approved decisions in comparer order, park temporary rejections. Pages back to the last processed release after downtime (`raw/16 §4.3`). |
    | `<module>.acquire.import` (a **module** kind, `ImportTask`) | none: staged by acquire's consumer in the transition batch (below), or by `core.acquire.import-retry` | one run per TD; `Subjects` = `TD.Refs`, so overlapping imports serialise and disjoint ones run in parallel (dispatch conflict rule); file transfers inside a pack: `tasks.Fixed(2, "disk-bound moves/hardlinks")` | call the module `Importer` with an `ImportTx`, commit, then `download.Pool.MarkImported`. |
-   | `core.acquire.import-retry` | `tasks.ScheduleFromConfig("core.acquire.schedules.import_retry")` | `tasks.Sequential("one key-range scan of ix/import-retry/; stages runs only")` | stage the module import run of every TD in `ImportPending` whose backoff has passed (the `Executor.StartIn` handle the kernel gives the service in P5; `ModeLive`, the owning module's system actor); it never calls module code. |
+   | `core.acquire.import-retry` | `tasks.ScheduleFromConfig("core.acquire.schedules.import_retry")` | `tasks.Sequential("one key-range scan of ix/import-retry/; stages runs only")` | stage the module import run of every TD in `ImportPending` whose backoff has passed (through `tasks.Stager.StartIn`, the stage-only handle the kernel gives the service in P5; `ModeLive`; the kernel stamps the owning module's system actor; COR3-8); it never calls module code. |
    | `core.acquire.housekeeping` | `tasks.ScheduleFromConfig("core.acquire.schedules.housekeeping")` | `tasks.Sequential("single pass over small keyspace; prunes pending/history by retention")` | prune expired pending releases and history/blocklist past retention. |
 
    There is **no** acquire poller (COR-3). acquire has **one** outbox consumer of download's events,
-   `core.acquire.download-events` (COR2-10): `ConsumeTx` with the filter `outbox.Where(Owner == "core.acquire")`
-   over `core.download.grab.{added,failed}.v1` and `core.download.item.{completed,failed,removed}.v1`; messages of
-   other owners are acked without effect. It applies the tracked-download transition in the relay batch and,
+   `core.acquire.download-events` (COR2-10): `ConsumeTx` over the **one** durable topic `core.download.event.v1`
+   with the filter `outbox.Where(Owner == "core.acquire")`; messages of other owners are acked without effect.
+   Every event of a grab carries the message key `GrabID`, so this consumer reads a download's whole lifecycle
+   through one cursor in staging order, and download guarantees that `grab_added` is staged before any item event
+   of that grab (05-download §4.3; COR3-4). It applies the tracked-download transition in the relay batch and,
    when the transition is `Downloading → ImportPending` (with `OutputPath` set), stages the module's import run
-   **in that same batch** (`tx.StartRun(kind, StartRequest{Mode: ModeLive, Params: TD.ID})`, backed by
-   `Executor.StartIn`). An import therefore never starts before its transition has committed, and a completion
-   cannot be consumed without its import being queued. The consumer is in the kernel's static core-consumer list
-   (05-events), so retention keeps each message until it has acked. Module search tasks (`tv.search.*`,
-   `movies.search.*`) call `Engine.Decide` with `SourceSearch`/`SourceUserSearch` and their run's parallelism,
-   and `Engine.Grab` with their `rc`.
+   **in that same batch** (`tx.StartRun(kind, tasks.StartRequest{Mode: tasks.ModeLive, Params: mustJSON(ImportParams{TD: td.ID})})`,
+   which the relay backs with its own `Executor.StartIn`; COR3-13). An import therefore never starts before its
+   transition has committed, and a completion cannot be consumed without its import being queued. A transition
+   the table below does not allow from the TD's current state (a replay, a user action or import meanwhile) is
+   **acked**, logged and counted in `mediacore_acquire_transition_refused_total`; the handler never returns an
+   error for it, so it cannot head-of-line-block the partition or dead-letter a later valid event (COR3-4). The
+   consumer is in the kernel's static core-consumer list (05-events), so retention keeps each message until it
+   has acked. Module search tasks (`tv.search.*`, `movies.search.*`) call `Engine.Decide` with
+   `SourceSearch`/`SourceUserSearch` and their run's parallelism, and `Engine.Grab` with their `rc`.
 5. **Grab** (`Engine.Grab`, COR-3 + COR-7): take the per-entity grab lock on the decision's refs through the
    caller's `RefLocker` (§10.5.6) →
    re-run the StageDatabase specs against `ix/tracked-by-ref`, history and blocklist under the lock (a better or
@@ -732,12 +742,13 @@ unavailable monitored movie in the pending store on every sync until `core.acqui
    client side) or wrote nothing; an import is an idempotent module run, resumed per its declared `Resume`
    policy or re-staged by `core.acquire.import-retry`.
 
-Tracked-download transitions (complete table; `→` legal; the event names are download's topics):
+Tracked-download transitions (complete table; `→` legal; the event names are the `Kind`s of download's
+`core.download.event.v1`):
 
 | From \ To | Downloading | ImportBlocked | ImportPending | Importing | Imported | FailedPending | Failed | Ignored |
 |---|---|---|---|---|---|---|---|---|
-| Grabbing | `grab.added` | — | — | — | — | — | `grab.failed` (release re-parked as pending `core.client_unavailable` when the class is retryable; blocklisted when `ClassInvalid`) | user |
-| Downloading | — | `item.completed`, `LocalPath` unmapped | `item.completed`, mapped | — | — | `item.failed` | — | `item.removed`, user |
+| Grabbing | `grab_added` | — | — | — | — | — | `grab_failed` (release re-parked as pending `core.client_unavailable` when the class is retryable; blocklisted when `ClassInvalid`) | user |
+| Downloading | — | `completed`, `LocalPath` unmapped | `completed`, mapped | — | — | `failed` | — | `removed`, user |
 | ImportBlocked | — | — | user resolved / rescan | — | — | — | — | user |
 | ImportPending | — | — | — | import run started (the run's first fenced write) | — | — | — | user |
 | Importing | — | importer Blocked | importer Pending | — | importer done (same batch as the module's rows) | — | — | — |
@@ -756,15 +767,16 @@ Tracked-download transitions (complete table; `→` legal; the event names are d
 | Blocklist/history/queue read error (StageDatabase, incl. the re-check under the grab lock) | reject `core.storage_unavailable`, Temporary | **fail-closed but retryable**: a missed blocklist hit re-grabs a known-bad release. |
 | Re-check under the grab lock finds a better or equal live download | reject `core.already_grabbed`; nothing written | Concurrent rss-sync and search tasks must not double-grab (COR-7). |
 | Free-space check errors | Temporary reject `core.free_space_unknown` | **fail-closed**: filling the disk breaks every app on the host. |
-| `Pool.Grab` fails on every instance | `grab.failed` → TD `Failed`; release re-parked as pending `core.client_unavailable` | **fail-open to pending**: the decision stands, delivery is retried. |
+| `Pool.Grab` fails on every instance | `grab_failed` → TD `Failed`; release re-parked as pending `core.client_unavailable` | **fail-open to pending**: the decision stands, delivery is retried. |
 | Crash during a grab | handled by download's single recovery (05-download §4.3); the TD was written in the grab-record batch, so there is nothing for acquire to reconcile | One owner for intent and recovery (COR-3). |
 | Client unreachable | download freezes its snapshots and emits nothing; the queue shows the instance's health | **fail-open**: never mark Failed (and blocklist) because a client was briefly down. |
-| Client reports failed / encrypted / dangerous extension | `item.failed` → `FailedPending` → `Failed`, blocklist, optional remove and `Research` (`raw/16 §4.8`) | Matches Failed Download Handling semantics. |
+| Client reports failed / encrypted / dangerous extension | `failed` event → `FailedPending` → `Failed`, blocklist, optional remove and `Research` (`raw/16 §4.8`) | Matches Failed Download Handling semantics. |
 | Importer returns error or `Pending` | the import run's `ImportTx` batch is discarded; a separate fenced write records `ImportPending`, attempts++ and the next attempt time in `ix/import-retry/`; `core.acquire.import-retry` re-stages the run when it is due; after `core.acquire.import.max_attempts` → `ImportBlocked` with message | Never delete from client on import failure (data safety); retries do not depend on a redelivery the outbox will not make (05-tasks §5T.3.12). |
 | Import run started for a TD that is not `ImportPending` (replay, user action meanwhile) | the run ends without effect | Idempotent by TD state; the transition table stays authoritative. |
 | Importer reports Blocked | `ImportBlocked` | User action required. |
 | `Research` callback errors | history event + log; no automatic retry | Avoid search storms against indexers. |
-| Illegal state transition | `ErrIllegalTransition`, transition refused, error logged | Bug signal; state stays consistent. |
+| Illegal or stale state transition from a download event | transition refused (`ErrIllegalTransition` internally), message **acked**, logged at warn and counted in `mediacore_acquire_transition_refused_total`; never returned as a handler error | State stays consistent, and one refused event must not block the partition or dead-letter later valid ones (COR3-4). |
+| Illegal state transition from a user action or the import run | `ErrIllegalTransition` to the caller, nothing written | Bug or race signal; the caller re-reads. |
 | History write for an import | in the **same storage batch** as the module's file rows and the journaled transfer (`ImportTx`, a multi-keyspace `storage.Batch`, 05-storage §5S.3.2) | Correctness-critical (02 §2.4 G4; COR-4). |
 
 ### 10.5.6 Concurrency contract
@@ -788,8 +800,11 @@ Tracked-download transitions (complete table; `→` legal; the event names are d
   **plus `rc.LockRefs` in the importer** for any further entity it learns while running (COR2-11): two tracked
   downloads that share any ref (a pack and an episode it contains, or two downloads for one movie) import
   serially; disjoint ones in parallel, each as its own module run.
-- Tracked-download transitions from download events are applied by one outbox consumer in the relay batch;
-  user actions (remove, ignore) use a per-ID keyed mutex plus storage compare-and-set on the row.
+- Tracked-download transitions from download events are applied by one outbox consumer in the relay batch.
+  `c/acquire/tracked/` is a `Serialized` sub-prefix (05-storage §5S.3.2), and **every** TD writer — that consumer,
+  the import run's `ImportTx`, `core.acquire.import-retry` and user actions (remove, ignore) — reads the row with
+  `Batch.GetForUpdate`, so two writers can never both commit a transition from the same state; the loser fails
+  its commit and re-reads (COR3-4). A per-ID keyed mutex on the user-action path is only for fairness.
 - Cancellation: every task honours `ctx`; persistence of a terminal state after cancellation uses
   `context.WithoutCancel` with a short timeout so a cancelled task cannot leave a half-written batch.
 - No goroutine outlives `App.Run`: the service's workers are started with `wg.Go` and joined on shutdown.
@@ -823,6 +838,12 @@ Protection classes per 05-config §1.3.7 (SEC2-8). Schedule keys are `tasks.Sche
 
 Client polling cadence is the schedule key `core.download.schedules.poll` (05-download), not an acquire key.
 
+Module keys (declared by the module, R2-7; SIMP3-9):
+
+| Key | Type | Default | Hot-reload? | Protection |
+|---|---|---|---|---|
+| `modules.tv.metadata.schedules.refresh` | `tasks.ScheduleConfig` for `tv.metadata.refresh` (Sonarr refreshes series every 12 h and cannot disable it, `raw/16 §1.1` notes; here it can be disabled) | `{enabled: true, every: 12h}` | yes (re-read every scheduler poll) | none |
+
 ### 10.5.8 Metrics
 
 Per-App registry (R5). Label values are bounded enums or configured names.
@@ -839,6 +860,7 @@ Per-App registry (R5). Label values are bounded enums or configured names.
 | `mediacore_acquire_rss_sync_duration_seconds` | histogram | — |
 | `mediacore_acquire_decide_duration_seconds` | histogram | `module`, `source` |
 | `mediacore_acquire_spec_failures_total` | counter | `module`, `spec` |
+| `mediacore_acquire_transition_refused_total` | counter | `module`, `from`, `kind` (the `download.EventKind`) |
 
 ### 10.5.9 Tests (core must ship)
 
@@ -854,7 +876,10 @@ Per-App registry (R5). Label values are bounded enums or configured names.
 | `TestAcceptableSizeUsesRuntimeHook` / `TestUnknownRuntimeRejects` | per-runtime bounds incl. profile override |
 | `TestDefaultComparatorOrder` | invariant 6; deterministic tie-break |
 | `TestTrackedTransitionsExhaustive` | every State×State pair against the table |
-| `TestDownloadEventsDriveTransitions` | each download topic, filtered by `outbox.Where(Owner == "core.acquire")`, applied in the relay batch by the one consumer; other owners' messages acked with no write and no run |
+| `TestDownloadEventsDriveTransitions` | each `core.download.event.v1` kind, filtered by `outbox.Where(Owner == "core.acquire")`, applied in the relay batch by the one consumer; other owners' messages acked with no write and no run |
+| `TestCompletedBeforeGrabAddedStillImports` | a cached torrent complete on its first poll: `grab_added` and `completed` share key `GrabID` and arrive in that order; the TD reaches `ImportPending` and its import is staged (COR3-4) |
+| `TestRefusedTransitionDoesNotBlockPartition` | a stale event (TD already `Ignored`) is acked and counted; the next event in the same partition is applied at once, nothing dead-letters (COR3-4) |
+| `TestTrackedWritersSerialised` | `-race`: the consumer and a user `ignore` on one TD from the same state → exactly one commits (Serialized `tracked/`, `GetForUpdate`) |
 | `TestImportNeverRunsBeforeTransition` | the import run is staged in the batch that commits `ImportPending`; under injected crashes no import run exists without that transition, and no `ImportPending` TD lacks a queued run or a retry entry (COR2-10) |
 | `TestImportRunsAsModuleKind` | the import kind is `<module>.acquire.import`; an importer write outside the module's `Effects` fails with `ErrOutsideEffects`; an import and `tv.disk.rescan` over an overlapping series never run at once (COR2-11) |
 | `TestGrabWritesTDInGrabRecordBatch` | TD exists iff download's grab record exists, under injected crashes (COR-3) |
@@ -981,7 +1006,7 @@ Round 2 (`docs/plans/platform-core/reviews/spec-round-2-dispositions.md`):
   `enabled: false`); `core.download.schedules.poll` named.
 - COR2-10 — one acquire consumer `core.acquire.download-events` (`ConsumeTx`, `outbox.Where(Owner ==
   "core.acquire")`) applies the transition and stages the import run in the same batch;
-  `TestImportNeverRunsBeforeTransition`.
+  `TestImportNeverRunsBeforeTransition`. (Its five input topics superseded in round 3 by one, COR3-4.)
 - COR2-11 — the import is a module kind `<module>.acquire.import` (`acquire.ImportTask`, `Subjects` = `TD.Refs`)
   registered by the module; `ImportTx` is the run's fenced write; union-find for imports replaced by
   `SubjectsFunc` plus `rc.LockRefs`; retries via the new stage-only core kind `core.acquire.import-retry` (key
@@ -993,3 +1018,15 @@ Round 2 (`docs/plans/platform-core/reviews/spec-round-2-dispositions.md`):
 - COR2-3 — TV/Movies notifications are produced through `module.Deps.Notify.Publish`; metadata alone sends nothing.
 - SIMP2-6 — G9's feed token and the facade's query key marked deferred-build members of `auth`.
 - SEC2-8 — §10.5.7 gains a Protection column.
+
+Round 3 (`docs/plans/platform-core/reviews/spec-round-3-dispositions.md`):
+
+- COR3-4 — acquire's consumer reads the one topic `core.download.event.v1` (key `GrabID`) instead of five
+  independently cursored topics; refused or stale transitions are acked, logged and counted
+  (`mediacore_acquire_transition_refused_total`), never errors; `c/acquire/tracked/` Serialized with
+  `GetForUpdate` for every TD writer; transition table, §10.5.5 rows, §10.5.6, three tests (matches 05-events and
+  05-download).
+- COR3-8 — `core.acquire.import-retry` stages through `tasks.Stager.StartIn`; only the relay uses `Executor.StartIn`.
+- COR3-13 — `StartRequest.Params` is `mustJSON(ImportParams{TD: td.ID})`; `ImportParams` declared.
+- SIMP3-9 — `tv.metadata.refresh` gets the schedule key `modules.tv.metadata.schedules.refresh` (§10.1.2 row and a
+  §10.5.7 module-key table); other `tv.*`/`movies.*` cadences follow the same rule.
