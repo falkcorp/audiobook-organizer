@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-events.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.12.1 -->
 <!-- guid: 6dbdef8e-e3f3-4088-bdb9-ba37a706165d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -586,6 +586,9 @@ at each step:
 | `core.outbox.unordered_parallelism` | int | 4 | yes |
 | `core.outbox.orphan_retention` | duration | 7d | yes |
 
+Both sections are registered dark from F2, the foundation PRs ([09](09-abo-on-core.md) §9.4), as every core
+section is; `core.events.*` takes effect when the bus goes live at F4 and `core.outbox.*` at F6 (5E.13).
+
 ## 5E.10 Metrics
 
 Names are shown under the default namespace `mediacore`; an app's `app.Options.MetricNamespace`
@@ -681,10 +684,12 @@ names included), so cardinality is bounded.
 | direct `EnqueueOp` from handlers after a state change | case by case: `outbox.ConsumeIntoTask` where the follow-up is correctness-critical (inventory in [09-abo-on-core](09-abo-on-core.md)) |
 
 Order (09 §9.4 owns the releases; all of it is R2, wired in that release's flip order): (1) the bus `events`
-lands in core with identity's flip (F4, where `auth` and `rbac` first publish; 04 §8.1); (2) the executor
+lands in core and is **live from identity's flip (F4)**, where `auth` and `rbac` first publish (`core.rbac.changed.v1`;
+04 §8.1), with `Deps.Events`, `Registrar.Topics` and `Registrar.Subscribe` wired in that PR (06 §6.4.10 states F4,
+IMPL-10); (2) the executor
 publishes `core.task.*` from the tasks flip (F5), which deletes HEAD's run-stream publishers with HEAD's engine
 (the SPA's Activity page polls the native REST routes from that PR); (3) `outbox` and the realtime hub land
-with the events and realtime flip (F6), which moves the SPA to the realtime client and deletes hub A; (4) the plugin `EventBus` is **not** bridged onto `events.Bus`: it keeps feeding the
+with the outbox and realtime flip (F6; the bus is already live from F4), which moves the SPA to the realtime client and deletes hub A; (4) the plugin `EventBus` is **not** bridged onto `events.Bus`: it keeps feeding the
 webhook plugin, unmoved, until the integrations flip (F7), whose PR moves its publishers to books' topics
 (`events.Publish`, and `notify.Publish` for the 12 notifications) and deletes `internal/plugin` with the
 webhook plugin ([05-notify](05-notify.md) §10; SIMP3-10). Because the flips are serialized and each passes
@@ -808,3 +813,6 @@ D10–D12 revision (2026-11-04):
   bridge's subscriber and the books re-recording of HEAD's five `operations_*` families are deleted; the
   activity mirror stays a books subscriber. The Order paragraph is re-keyed from stages S4–S7 to the R2 flips
   F4–F7; between F5 and F6 the SPA's Activity page polls the native REST routes.
+
+Round 13 (2026-11-04): IMPL-10. 5E.13 Order: the bus is live from F4 with `Deps.Events`, `Topics` and `Subscribe`,
+and F6 lands only the outbox and the realtime hub; 5E.9: both config sections are registered dark from F2.
