@@ -1,7 +1,7 @@
 // file: web/tests/e2e/batch-operations.spec.ts
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5d6e7f80-9a0b-1c2d-3e4f-5a6b7c8d9e0f
-// last-edited: 2026-10-21
+// last-edited: 2026-11-04
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import {
@@ -107,9 +107,15 @@ test.describe('Batch Operations', () => {
     const firstLabel = await getFirstBookLabel(page);
     await selectFirstBooks(page, 1);
 
-    // Act
+    // Act. Wait for each page to render before leaving it: clicking "1"
+    // while page 2's request is still in flight aborts that request and races
+    // the re-render, and on a loaded CI runner page 1's rows were not back
+    // within the assertion's 5 s (2026-11-04, #4365: "element(s) not found").
     await page.getByRole('button', { name: '2' }).click();
+    await expect(page.getByLabel(firstLabel, { exact: true })).toHaveCount(0);
+    await expect(getBookCheckboxes(page).first()).toBeVisible();
     await page.getByRole('button', { name: '1' }).click();
+    await expect(getBookCheckboxes(page).first()).toBeVisible();
 
     // Assert
     await expect(page.getByLabel(firstLabel, { exact: true })).toBeChecked();
