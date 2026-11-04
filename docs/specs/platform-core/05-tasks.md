@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.13.0 -->
+<!-- version: 1.13.1 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -626,7 +626,7 @@ type Approval struct {
 | list/get defs and runs | `Perms.View` per def; rows/results of runs the caller may not view are omitted (current per-viewer filter, `internal/diagnostics/service.go:138-150`, `sysinfo` `OperationReadCheck`) | closed |
 | start | `Perms.Start`, plus the route floor `rbac.AnyAuthenticated` as 05-rbac defines it (a non-`Confining` scope; a confined credential reaches a definition only when `Perms.Start` names its scope explicitly, SEC-3). `Perms.Start` may not be satisfiable by a view-class scope unless the definition sets `StartableByViewers` (SEC-9: today's `scan.trigger` floor exists because a viewer could otherwise start a `library.view`-only def, `opsv3/handler.go:236-246`; `bulk-apply-preview` is one, 4 h timeout, `internal/server/bulk_apply_preview.go:269,278`). A converted ABO kind's `Perms.Start` is the native scope requirement that 05-rbac's atom table (§6) maps HEAD's def permission to, so the identity cutover's reach oracle (allow and deny before = after, 05-rbac §12) covers op starts too; the auth-disabled principal is decided by 05-rbac §4.11. A HEAD def that declares only `library.view` converts to `rbac.AllOf(books:scan, books:view)`, which keeps the scan floor | closed |
 | cancel | the run's actor, or `Perms.Cancel`, or `core:tasks.manage` | closed |
-| approve / decide (`awaiting_decision`) | `Perms.Approve` (decide on a run interrupted under ResumeAsk: `Perms.Approve` if set, else `Perms.Start`) **and** a verified method, the same rule as 05-rbac §4.10 (SEC-24): an interactive session, a sign-in through an app-level authenticator extension whose `MethodSpec.Interactive` is true (only `app.Options.Authenticators` may set it, 06 §6.4.5, SEC2-16; ABO's Cloudflare Access is one; a module's `Registrar.AuthMethod` never is), or an API key whose scopes **name** the required scope explicitly (not via `core:admin` or another implying scope). Refused: a delegated session (`MethodSessionDelegated`) and a forwarded header, which is never identity (current rule, `opsv3/runs.go:395-410`) | closed |
+| approve / decide (`awaiting_decision`) | `Perms.Approve` (decide on a run interrupted under ResumeAsk: `Perms.Approve` if set, else `Perms.Start`) **and** a verified method, the same rule as 05-rbac §4.10 (SEC-24): an interactive session, a sign-in through an app-level authenticator extension whose `MethodSpec.Interactive` is true (only `app.Options.Authenticators` may set it, 06 §6.4.5, SEC2-16; ABO's Cloudflare Access is one; a module's `Registrar.AuthMethod` never is), or an API key whose scopes **name** the required scope explicitly (not via `core:admin` or another implying scope; the identity cutover gives a migrated all-atom or admin key each such scope explicitly, so its HEAD approval reach is kept, 05-rbac §6). Refused: a delegated session (`MethodSessionDelegated`) and a forwarded header, which is never identity (current rule, `opsv3/runs.go:395-410`) | closed |
 | pause/resume executor, edit schedules | `core:tasks.manage` | closed |
 
 Every approve, decide, cancel-by-other and schedule edit writes an `audit` record, named per [05-rbac](05-rbac.md)
@@ -638,8 +638,8 @@ actor); a schedule edit is a write of its config key and is recorded as `core.se
 1. The start request carries mode in the **envelope**, not in params: `"mode": "preview" | "live"`.
    There is no `dry_run`/`dryRun` spelling (D10): a start body that carries either key at the top level
    or inside `params` is refused with `400 tasks.mode_field_unsupported`, so a stale caller fails
-   loudly instead of running in a mode it did not ask for. The first-party callers switch in the
-   release that deletes HEAD's routes (5T.3.10).
+   loudly instead of running in a mode it did not ask for. The first-party callers switch in the PR
+   that deletes HEAD's routes, the tasks flip F5 (5T.3.10).
 2. Omitted mode → **Preview** for writers, Live for `ReadOnly` defs (owner rule 2026-09-25,
    `dryrun.go:6-10`). Maintenance jobs' per-job default (`ResolveDryRunDefault`, `dryrun.go:60-66`)
    is expressed as `ReadOnly` for the read-only jobs, so the special case disappears.
@@ -680,7 +680,7 @@ type Schedule struct{ /* unexported */ }
 // by that owner with type ScheduleConfig, and no other kind may use it.
 // Anything else fails registration. Examples: "core.ai.schedules.batch_poll",
 // "core.acquire.schedules.rss_sync", "core.updater.schedules.check",
-// "modules.books.scan.schedules.full_sweep".
+// "modules.books.scheduler.schedules.library_scan_full".
 func ScheduleFromConfig(key string) *Schedule
 
 // ScheduleConfig is the value type of every schedule key. Exactly one of
@@ -737,9 +737,12 @@ its form, its **type** (`tasks.ScheduleConfig`, not `duration` or a cron string)
 through `ScheduleFromConfig`. There are no schedule-key aliases (D10). A former interval or cron key
 (`core.backup.schedule`, `core.ai.batch_poll_interval`, …) is converted **once** by the config cutover (M2,
 05-config's rename table) into the new key's value: a duration `d` → `{enabled: d > 0, every: d}`, so
-"0 disables" becomes `enabled: false`. HEAD's 38 `scheduled.<task>` entries are converted the same way into
-the key of the kind each one fires (5T.8.2's map: `modules.books.<subsystem>.schedules.<name>` for a books
-kind, the core owner's key for a core kind). Non-timing tuning keys stay where they are. Spec CI carries a doc-lint: every `ScheduleFromConfig("…")` literal in
+"0 disables" becomes `enabled: false`. HEAD's 16 `scheduled.<entry>` entries (`config.go:991-1046`) are
+converted the same way, each by HEAD's own reading of the entry, into `modules.books.scheduler.schedules.<entry>`,
+which books declares for the kind the entry fires (05-config's rename table; 5T.8.2's map names the kind). The
+one entry whose op becomes a core kind, `db_optimize`, also seeds that owner's key `core.storage.schedules.compact`,
+and its books key drives the books half `books.maintenance.aux-store-compact` (5T.8.2). Non-timing tuning keys
+are not schedule keys; the rename table moves them like any other key. Spec CI carries a doc-lint: every `ScheduleFromConfig("…")` literal in
 `docs/specs/platform-core/*.md` must match this form and name a key that the same file's config table
 declares with type `tasks.ScheduleConfig`, so a schedule key that would fail registration fails
 review first (SIMP2-1).
@@ -1070,7 +1073,7 @@ type Executor interface {
 moves the SPA's Activity page, `useOperationsStore` and MaintenanceTab to the native routes ([07](07-ui-shell.md);
 the Activity page polls `GET /runs` until the events and realtime flip F6 gives it the realtime client,
 [05-realtime](05-realtime.md) §11), and the first-party scripts and agent skills that call them
-([09](09-abo-on-core.md) §9.4, R2). No alias, `Deprecation` header or wire-shape golden exists. The other routes under
+([09](09-abo-on-core.md) §9.4, R2). No alias or `Deprecation` header exists. The other routes under
 `/api/v1/operations` (`stale`, `clear-stale`, `optimize-database`, `sweep-tombstones`, `set-internal-flag`,
 `audit-files`, `:id/activity`, `:id/result`, `:id/results`, `:id/class-lists/:class`, `:id/changes`, `:id/undo/preflight`,
 `:id/revert`, `reconcile/*`, the version-group maintenance routes; `wire_operations_routes.go:101-112`,
@@ -1419,9 +1422,9 @@ phases and steps. Nothing in `tasks` writes before 06's pre-migration checkpoint
 
 0. **Boot phases P0–P4: the cutover writes, `tasks` does not.** `tasks` registers no migration step of
    its own. On a pre-R2 store, books' BootBlocking steps run in P4 behind the pre-migration checkpoint, in
-   the R2 order ([09](09-abo-on-core.md) §9.4): books' legacy steps 1..66 (M1, kept until the R3 floor, among them 59–66,
+   the R2 order M1, M7, M2–M6, M8 (03 §3.8): books' legacy steps 1..66 (M1, kept until the R3 floor, among them 59–66,
    which write the ops families, `internal/database/migrations.go:479-506,1238-1250,1340-1352,1412-1424`),
-   then books' tasks cutover step (M4, 5T.8.3), which writes `c/tasks/` through the `Importer` and
+   the level step (M7), the config and identity steps (M2, M3), then books' tasks cutover step (M4, 5T.8.3), which writes `c/tasks/` through the `Importer` and
    deletes HEAD's ops rows. The executor first calls the stores at step 2, so these steps always run
    first and no `After` edge is needed. The stores are built at P4c (5T.3.13). BootBlocking data
    migrations of 05-storage run in-process through `tasks.ForEach` with persisted shard cursors in the
@@ -1487,7 +1490,7 @@ extends the matrix in the same PR.
 | Params do not decode | closed: run `failed` with decode error (not enqueued if validated at start) | — |
 | Undecodable stored run record | open: hidden from census/totals, WARN, counted metric | `raw/08` §7 `opsv3-undecodable-census-total` |
 | A HEAD ops row the tasks cutover cannot decode (M4, 5T.8.3) | open for the boot, never silent: its raw bytes are copied under `c/storage/quarantine/`, the source row is deleted with the copy in one batch, health reports the count, the step continues | data is migrated forward, never dropped (D10; 05-storage §5S.3.13 owns the quarantine) |
-| A HEAD def ID that is neither in the kind-rename map nor a well-formed ID | the run is quarantined as above; a well-formed unmapped ID maps to `books.retired.<id>` (5T.8.2) | history is kept (D12 F2) |
+| A HEAD def ID that is neither in the kind-rename map nor a well-formed ID | the run is quarantined as above; a well-formed unmapped ID maps to `books.retired.<id>` (5T.8.2) | history is kept (D12 (b)) |
 | Write outside declared effects | closed: `ErrOutsideEffects`, item/run fails | G8 |
 | Write after fence revoked | closed: `ErrFenced` | prevents zombie writes |
 | Checkpoint write error | closed for `ResumeContinue` (run fails: resume would be unsound), open (WARN) otherwise | today `CheckpointFn` errors are ignored (`run_items.go:318-320`) |
@@ -1511,8 +1514,8 @@ extends the matrix in the same PR.
 ## 5T.6 Persistence: the native store (R4-1)
 
 **One stored format, core's.** The executor and the scheduler persist only through `tasks.Stores`
-(5T.3.13), which is always `NativeStores` over `c/tasks/` (D10): there is no legacy implementation, no
-`backends` record, no storage grant, no mirror, no every-boot repair and no tasks Teach build. HEAD's ops
+(5T.3.13), which is always `NativeStores` over `c/tasks/` (D10), with no other implementation and no storage
+grant. HEAD's ops
 families reach `c/tasks/` once, through books' tasks cutover step (5T.8.3), and the R2 level step (M7,
 05-storage) makes every older build refuse the migrated store. Two `c/tasks/` families describe core state
 rather than runs:
@@ -1626,8 +1629,8 @@ refuses inside one (05-storage §5S.3.4, DATA7-1). `TestNativeStores_RoundTrip` 
 
 Every ABO definition is converted to a native core definition **before** the tasks flip, and the flip
 (F5 of the R2 release, [09](09-abo-on-core.md) §9.4) registers all of them at once, adds books' tasks cutover step and deletes
-HEAD's engine in the same PR (D10, D11). There is no adapter (no opsbridge), no alias field, no op-ID
-ledger gate and no separate floor release for the tasks code: the flip is the one point where ABO's runs
+HEAD's engine in the same PR (D10, D11). There is no adapter, no alias field and no separate floor release
+for the tasks code: the flip is the one point where ABO's runs
 move from HEAD's engine to core's, and the R2 cutover is the one point where its run data moves.
 
 ### 5T.8.1 What existing code becomes
@@ -1709,8 +1712,7 @@ replaced by T3's per-fixer kinds. Core kinds with no HEAD definition (`core.outb
 `core.updater.check`/`apply`, the auth, audit, diagnostics and library prune kinds) are declared by their
 owners' files and need no map entry, except that `core.ai.batch-poll` takes `batch_poller`'s clock.
 
-**The kind-rename map (one map, applied once by M4; replaces `FormerKinds`, `LegacyDefID` and
-`LegacyTaskAliases`).** Books code, generated at the flip commit from HEAD's op-ID ledger
+**The kind-rename map (one map, applied once by M4).** Books code, generated at the flip commit from HEAD's op-ID ledger
 (`internal/server/testdata/op_ids.golden`, every canonical ID and `FormerIDs` alias HEAD ever registered),
 `opscatalog.Tombstones` and `taskV2DefIDs` (`internal/scheduler/maintenance.go:154-175`); core holds none
 of it (03 R1(c)). Its rules, first match wins:
@@ -1728,14 +1730,15 @@ A scheduler task name maps to the kind it fires through `taskV2DefIDs`, then rul
 `core.ai.batch-poll`; `transcode` fires nothing and its clock is dropped). M4 applies the map to every
 stored reference to a def ID: runs, clocks, debounce buckets, `Requires` stamps, and the books rows that
 store a def ID (an inventory the step generates and `TestCutover_KindReferencesRewritten` checks); rows that
-store a run ID need nothing, because run IDs are kept. The 38 schedule keys follow the same map in M2
-(5T.3.8). After R2 a rename is an owner's data migration through `Importer.RenameKind` (5T.3.13).
+store a run ID need nothing, because run IDs are kept. HEAD's 16 `scheduled.<entry>` keys reach the keys of
+the kinds they fire through M2 (5T.3.8). After R2 a rename is an owner's data migration through `Importer.RenameKind` (5T.3.13).
 
 ### 5T.8.3 The tasks cutover (M4)
 
 Books' BootBlocking cutover step for the ops families (books code in `internal/books/cutover`, 03 §3.5.1), step M4
-of the R2 migration list (03 §3.8; [09](09-abo-on-core.md) §9.4), carried by the tasks flip F5, after the config
-(M2) and identity (M3) steps and before the level step (M7). It runs behind the
+of the R2 migration list (03 §3.8; [09](09-abo-on-core.md) §9.4), carried by the tasks flip F5, after the level step (M7),
+the config step (M2) and the identity step (M3), and before M5, M6 and the compaction M8 (M7 runs before any
+family row is deleted). It runs behind the
 mandatory pre-migration checkpoint (05-storage §5S.3.12), in P4, before the executor starts (5T.4 step
 0); it receives `tasks.Importer` in `module.Importers` (06 §6.4.2); the step type, its dry-run mode
 (per-family counts and quarantined rows, nothing written) and the quarantine are 05-storage §5S.3.13's. Order:
@@ -1747,7 +1750,7 @@ mandatory pre-migration checkpoint (05-storage §5S.3.12), in P4, before the exe
    - **runs:** v3 records, falling back to the v2 row for a run without a projection (open item 5), with
      their trails, intents, items, log, checkpoints, chunk ledgers, item-key snapshots, rows and row marks,
      and HEAD's v1 history (`operation:` with its `operationlog:` lines, results, summaries and statuses)
-     as terminal runs with their log pages (D12 F2: task-run and log history are kept). Every run keeps
+     as terminal runs with their log pages (D12 (b): task-run and log history are kept). Every run keeps
      its HEAD op ID; its kind goes through the map; `Priority` 0/1/2 → Low/Normal/High
      (`internal/operations/registry/types.go:329-331`). A v1 checkpoint (`operations.SaveCheckpoint`'s
      family, DATA-15) of an open run becomes that run's checkpoint named `v1`, read once by the converted
@@ -1816,7 +1819,7 @@ core's. Every row is part of `make ci`; there is no previous-build test and no `
 | `TestApprove_RequiresVerifiedMethodAndPermission` (table: session, app-level interactive extension (CF Access), module method (refused), key naming the scope, key implying it via `core:admin` (refused), delegated session, forwarded header), `TestFixer_PlanRefAgeAndRowsOnly` | approval (SEC-24) |
 | `TestStart_ViewOnlyDefRefusedAtRegister`, `TestStart_ConvertedViewDefKeepsScanFloor` | SEC-9 |
 | `TestSchedule_EnqueueAndClockOneBatch` (crash injection between), `TestSchedule_NoBootStampede`, `TestSchedule_CoalesceMissed`, `TestSchedule_DSTSpringForwardFallBack` (synctest, fake zone) | schedules |
-| `TestScheduleFromConfig_UndeclaredKeyRefused`, `TestScheduleFromConfig_ForeignNamespaceRefused` (a core kind on `modules.x.…`, a module kind on another module's or a `core.` key, a key without the `.schedules.` segment, a hyphenated segment, a `duration`-typed key, one key on two kinds), `TestScheduleFromConfig_OwnerKeyAccepted` (`core.backup.schedules.create`, `modules.books.scan.schedules.full_sweep`), `TestScheduleFromConfig_HotReload`, `TestEvery_RefusedExceptRelay` | SIMP-6, R2-7 |
+| `TestScheduleFromConfig_UndeclaredKeyRefused`, `TestScheduleFromConfig_ForeignNamespaceRefused` (a core kind on `modules.x.…`, a module kind on another module's or a `core.` key, a key without the `.schedules.` segment, a hyphenated segment, a `duration`-typed key, one key on two kinds), `TestScheduleFromConfig_OwnerKeyAccepted` (`core.backup.schedules.create`, `modules.books.scheduler.schedules.library_scan_full`), `TestScheduleFromConfig_HotReload`, `TestEvery_RefusedExceptRelay` | SIMP-6, R2-7 |
 | `TestShutdown_DrainBoundedAndStampsInterrupted`, `TestShutdown_UninterruptibleExtendsOnceOnlyUnderNotify` | shutdown |
 | `TestHeld_DisabledModuleRunsUntouchedAndBootSucceeds`, `TestHeld_KindsKnownWhileDisabled`, `TestHeld_MutationsRefused409` | COR-13 |
 | `TestOutboxTriggered_StartInSameBatchAsCursor` (crash between), `TestOutboxTriggered_ModeFromConsumerOption` (no `Live()`/`Preview()` → registration fails; unset `Tx.StartRun` mode refused) | COR-9 hand-off, COR2-5 |
@@ -1927,7 +1930,7 @@ The two histograms default to HEAD's bucket lists (`0.1 … 86400`, `views.go:42
 `ref_lock_wait` takes 05-metrics' default for a core histogram.
 
 **One owner per family.** The executor owns the run families and core's scheduler both schedule
-families. HEAD's other emitters of ops series are deleted by the flip, with no hand-over window:
+families. HEAD's other emitters of ops series are deleted by the flip:
 
 - `internal/opsmetrics` (5T.8.1). Its one family core does not emit, `ops_abandoned_calls` with its two
   `source` values, becomes a books observable in the flip PR.
@@ -1953,7 +1956,7 @@ gin's included; no tasks route changes that.
    transcode for TV/Movies).
 5. UNKNOWN: whether v2 rows written before the v3 projection existed were back-projected; the tasks
    cutover's v2-row fallback (5T.8.3) covers both cases, but its run time on a production-shaped store
-   depends on the answer (measured on the R2 rehearsal store, 09 §9.4).
+   depends on the answer (measured on the production-shaped store of 09 §9.3).
 6. (Closed: 06 has `Registrar.ChangeSink`, `Manifest.TaskLedger`, `Manifest.TaskStarts` checked at P7,
    and `Deps.Tasks` typed `tasks.Client`.)
 7. (Closed by 05-rbac v1.4 §6.1 and its Tasks row: `core:tasks.manage` exists, may cancel any run and
@@ -1967,14 +1970,9 @@ gin's included; no tasks route changes that.
 
 ## Objections to 03
 
-1. **Open (D10–D12 revision): which flip deletes HEAD's task routes.** 03 §3.8's flip table puts "the Activity
-   page on core's task routes; the books task routes and `/api/v3/ops/*` deleted" in F6. This file deletes them,
-   and moves the Activity page to core's task routes, in F5, the tasks flip (5T.3.10, 5T.8.2), because F5 deletes
-   HEAD's engine: keeping HEAD's routes and its three run streams alive until F6 would need their handlers and
-   stream feeds re-implemented over core's executor for one flip, which is opsbridge's HTTP half. Between F5 and
-   F6 the Activity page polls `GET /runs`; F6 moves it to the realtime client. Proposed: 03's F5 row gains "HEAD's
-   task routes deleted, the Activity page on core's task routes (polling until F6)", and F6 keeps the realtime
-   client.
+None open. HEAD's task routes, `/api/v3/ops/*` and HEAD's run streams are deleted, and the Activity page
+moves to core's task routes, in the tasks flip F5 (03 §3.8; 5T.3.10, 5T.8.2), because F5 deletes HEAD's engine;
+the page polls `GET /runs` until the events and realtime flip F6 gives it the realtime client.
 
 Earlier items: none open. 03 v1.4.0 adopted both v1.1.0 items: R7's wording (pass-through, `ForEach`, one
 return shape, COR-23) and the `[a-z][a-z0-9-]*` task-kind segment grammar (COR-26).
@@ -2221,7 +2219,7 @@ Final verification:
 - FIN12-4 — 5T.3.10: `/maintenance-window/*` dropped from the schedules row's "Replaces"; the three routes are kept as books' gin routes on `Deps.Tasks`.
 
 D10–D12 revision (2026-11-04): owner decisions D10 (no backward compatibility), D11 (no soaks, one flip per
-subsystem) and D12 applied (the D10 impact analysis: mechanisms A13, A57, A59, A72–A74, A86, A112; risks E1–E3, E16):
+subsystem) and D12 applied:
 
 - Deleted: books' legacy task store (former 5T.6.2, with its lock discipline, run-state and clock-encoding
   tables, G5 rollback rules, one-writer and one-scheduler rules, v1 carve-outs and the floor and
@@ -2243,4 +2241,7 @@ subsystem) and D12 applied (the D10 impact analysis: mechanisms A13, A57, A59, A
   `def_id` values become kinds, `plugin` → `module`, HEAD's duplicate client_golang families deleted with
   dashboards repointed in the flip PR).
 - HEAD op catalog read at `ebe365245` (`internal/opscatalog`, the plugin `OperationDefs()` lists, the op-ID
-  ledger): unchanged since `748fd787a`.
+  ledger): unchanged since `748fd787a`. Consistency pass: the R2 step order M1, M7, M2–M6, M8 stated in 5T.4 and 5T.8.3, HEAD's 16
+  `scheduled.<entry>` keys mapped to `modules.books.scheduler.schedules.<entry>` (`db_optimize` also to
+  `core.storage.schedules.compact`), D12's answers cited as D12 (a)–(d), the route-deletion objection settled for F5,
+  the approval reach of migrated all-atom keys kept (05-rbac §6), and leftover removed names dropped.
