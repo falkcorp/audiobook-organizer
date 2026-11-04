@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.13.0 -->
+<!-- version: 1.13.1 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -24,7 +24,7 @@ file names are retired in the same release (§1.3.6, §1.12.4): there is no alia
 |---|---|---|
 | C1 | One `config.Store` per `App`; no package-level config value anywhere in **core** (R5). ABO keeps `config.AppConfig` as a books-module façade over core handles (§1.12.1). | `var AppConfig Config` (`internal/config/config.go:1939`) cannot host two apps and is read racily by design (`config.go:1930-1938`). R5 governs core only (03 §3.5), so ABO's façade is allowed. |
 | C2 | **Config owns the mechanism, never a section's type.** Each section struct lives in the package that consumes it and is registered through the manifest as `config.Section[T]`. | This is what breaks all upward imports (§1.9): config imports `aidispatch`, `dedup/unified`, `backup`, `auth`, `database` today only because it owns their types. |
-| C3 | Merge order defaults → file → env → flags → DB overrides, with **operator lock**: a key supplied by file, env or flag cannot be overridden from the DB layer and `Apply` refuses it with the lock reason. **One fail-closed exception (§1.3.5):** for a key its owner declares `FailClosed` (`core.auth.mode`, `core.http.basic_gate.enabled`) the more restrictive of the operator value and the stored value wins, and a stored value that beats a weaker operator value is reported. Only canonical names and ecosystem bindings are read, and values decode strictly. An env variable set to `""` is unset. | Generalizes ABO's per-key `envLockedSettings`/`flagLockedSettings` (`config.go:2241,2353`) to every key; today a DB blob silently beats env for all other keys (`persistence.go:915` then `config.go:2435`). Operator values now lock, so a stale disabling value in a unit, or a deploy file that always sets the Basic gate's switch off (`docker-compose.yml:20`), must not open what an admin closed (E5). |
+| C3 | Merge order defaults → file → env → flags → DB overrides, with **operator lock**: a key supplied by file, env or flag cannot be overridden from the DB layer and `Apply` refuses it with the lock reason. **One fail-closed exception (§1.3.5):** for a key its owner declares `FailClosed` (`core.auth.mode`, `core.http.basic_gate.enabled`) the more restrictive of the operator value and the stored value wins, and a stored value that beats a weaker operator value is reported. Only canonical names and ecosystem bindings are read, and values decode strictly. An env variable set to `""` is unset. | Generalizes ABO's per-key `envLockedSettings`/`flagLockedSettings` (`config.go:2241,2353`) to every key; today a DB blob silently beats env for all other keys (`persistence.go:915` then `config.go:2435`). Operator values now lock, so a stale disabling value in a unit, or a deploy file that always sets the Basic gate's switch off (`docker-compose.yml:20`), must not open what an admin closed (14 E5). |
 | C4 | **The DB layer is a store interface, `config.OverrideStore` (R4-1), with one implementation:** core's native store over its keyspace `c/config/` (one row per explicitly set key), used by every app. ABO's settings are migrated into it once, through `config.Importer` (§1.12.2). No app supplies a store, and core holds no app key name, row format or storage grant. A value equal to the key's default is never stored. | One stored format per family, written by one owner (R3-1). HEAD's whole-config blob froze every default at save time (`persistence.go:1180-1188` measured 33 keys inheriting stale defaults). |
 | C5 | Every key declares `Reload` (live / restart / boot) and `Protection` (none / interactive / admin / owner / operator); both appear in the generated JSON Schema. | ABO has exactly one boot-only key handled ad hoc (`persistence.go:2111`) and a 92-entry protection map (`protected_fields.go`) separate from the schema. Roles-as-data can hand `core:settings.manage` to non-admins, so sign-in, proxy and updater keys need an admin level (§1.3.7). |
 | C6 | Drop **viper** from core and, in R2, from ABO's boot path. Stdlib + `go.yaml.in/yaml/v3` + `github.com/google/jsonschema-go` only. | §1.10. |
@@ -374,13 +374,13 @@ type OverrideStore interface {
 
 // Importer is config's write side for a one-way cutover step (03 §3.3 "importers"; §1.12.2). An app's
 // migration step decodes its own pre-core rows and hands canonical values here, into the step's batch; the
-// importer reads no app row and names no app key (03 R1). The kernel hands it to the app's steps with their
-// other migration dependencies (06 §6.5.1); it is valid after Load, when every enabled section is registered.
+// importer reads no app row and names no app key (03 rule R1). The kernel hands it to the app's steps as
+// module.Importers.Config (06 §6.4.2); it is valid after Load, when every enabled section is registered.
 type Importer interface {
 	// Stage validates v against p's registered schema and stages p's c/config/ row into b, binding c/config/ to
 	// b (participant binding, 05-storage D-S10). A value equal to p's default stages nothing (C4). It refuses with
 	// ErrUnknownKey a path that is not registered or is a passthrough path, with ErrInvalid a secrets.Ref key
-	// (secrets go through secrets.(*Store).Stage) and a ProtectOperator key (operator layers only), and returns
+	// (secrets go through secrets.Importer, §2.3) and a ProtectOperator key (operator layers only), and returns
 	// *FieldError for an invalid value, which the step quarantines (§1.12.2). Cross-field Validators run at
 	// Attach, as for every stored row (§1.4 step 6).
 	Stage(b *storage.Batch, p Path, v json.RawMessage, by string) error
@@ -498,9 +498,11 @@ type RetiredNameError struct{ Uses []RetiredUse } // every refused use, so one b
 | `GET /api/core/v1/settings` | per section read | `{path: KeyState}` for readable keys. Secrets appear as `Secret` meta only. |
 | `PATCH /api/core/v1/settings` | per section write + protection | Body `{"set": {path: value}, "unset": [path]}` → `Store.Apply`. 400 unknown key, 409 locked (`locked_by` in body), 403 forbidden/protected (`need` names the protection level), 422 invalid (field errors), 500 storage. 200 with `restart_pending` and `post_commit_error` when present. |
 
-The routes are mounted from R2, when config and `rbac` move. ABO's `GET`/`PUT /api/v1/config` are deleted in the
-same flip, with their mask round trip (C9), and the SPA's settings page and the first-party scripts switch to
-these routes in that PR (09's caller row).
+The routes are mounted in F4, the identity flip, because core routes authenticate natively only from there
+(05-http-api §8.1); the SPA's settings page and the first-party scripts switch to them in that PR. From F3 to F4
+ABO's gin `GET`/`PUT /api/v1/config` serve the settings over core config, write-only for secrets from F3 (C9;
+§1.12.1 "Between the config flip and the identity flip"); F4 deletes them for every `k` and `s` key, and F7 deletes
+what is left of them (the class-`i` fields).
 
 Default section permissions: `core.*` → read and write `core:settings.manage`; `modules.<id>.*` → read and
 write `<id>:settings.manage` (registered by the module in its permission list; [05-rbac](05-rbac.md)). A module
@@ -532,9 +534,12 @@ value is effective again), and refuses a weaker value with `*LockedError`, becau
 The declared keys are `core.auth.mode` ([05-authn](05-authn.md)) and `core.http.basic_gate.enabled`
 ([05-http-api](05-http-api.md)). So a stale `ABO_CORE_AUTH_MODE=disabled` left in a unit, or a deploy file's
 `ABO_CORE_HTTP_BASIC_GATE_ENABLED=false`, never opens a gate an admin closed in Settings, while an operator can
-always close one (E5). With authentication off the auth-disabled principal holds no `core:admin`, so it cannot
+always close one (14 E5). With authentication off the auth-disabled principal holds no `core:admin`, so it cannot
 store `core.auth.mode` at all (§1.3.7): auth is turned on by an operator value and a restart.
-`TestFailClosed_MoreRestrictiveWins` covers both keys and both directions.
+`TestFailClosed_MoreRestrictiveWins` covers both keys and both directions. The Basic gate's password is not
+FailClosed: an operator value locks `core.http.basic_gate.password` like any key, so
+`ABO_CORE_HTTP_BASIC_GATE_PASSWORD` wins over any stored password, an empty one included, which is core's form of
+early fix 5's recovery from a lock-out (05-authn §11.1 item 5, 05-http-api §10).
 
 **Empty env values.** An env variable set to the empty string is **unset**, as viper treats it at HEAD (ABO never
 calls `AllowEmptyEnv`). An operator who means an empty value uses the file or `<NAME>_FILE`.
@@ -545,7 +550,7 @@ ecosystem binding (`EnvBinding`, §1.3.6). If both are set with different values
 - key at `ProtectAdmin` or higher: **boot fails** with an error that names both variables (OPS2-12;
   `internal/config/config.go:2519-2544` records the hazard of a drop-in that overrides one name while the base unit
   sets the other);
-- any other key: the canonical wins, with a warning and health token `config_alias_conflict` (§1.5).
+- any other key: the canonical wins, with a warning and health token `config_binding_conflict` (§1.5).
 
 **Boot record.** `ReloadBoot` keys are needed before storage opens (module enablement decides which module
 sections are registered and which keyspaces are claimed, 06 §6.5.1). Their UI-made values are persisted in
@@ -599,8 +604,8 @@ passthrough keys, both before storage opens (§1.4 steps 2–3):
 | any other key, or a dropped key (`Canonical` empty) | the value is **ignored**; one warning per boot names the retired name and the canonical name (or the drop message); health raises `config_retired_name_ignored` (warn, 05-health) while one is set |
 
 A retired file key whose subtree spans several keys (`itunes:` holding a library path and plain settings) is
-judged by its most protected key. `RetiredSet()` lists every use, and `<app> config check` (an offline command,
-06 §6.4.5) prints it with the canonical names, so an operator converts a unit or compose file before deploying.
+judged by its most protected key. `RetiredSet()` lists every use, and `<app> config check` (an offline command that
+opens no store and reads only the operator layers, an entry of `app.OfflineCommands` from F3, 06 §6.4.5) prints it with the canonical names, so an operator converts a unit or compose file before deploying.
 **Storage additionally refuses to create a store** at the resolved path while a retired database-path name is set
 ([05-storage](05-storage.md)), so even a misclassified list never opens an empty store in place of the real one.
 
@@ -626,8 +631,13 @@ declares keys; each key table in the 05 files carries a **Protection** column.
 
 HEAD's file-only keys (`json:"-"`: the peer allow-list, the tunnel connector addresses, the login-saturation bucket,
 `public_base_url`, the Cloudflare guest and invite keys, `bootstrap_key_ttl*`, the ABS JWT secret;
-`internal/config/config.go:1636-1759`) become ordinary keys with their declared class in R2: an admin may store the
-peer allow-list and the trusted proxies through Settings (`ProtectAdmin`), which HEAD did not allow. R2's release
+`internal/config/config.go:1636-1759`) become ordinary keys with their declared class in R2. In particular the peer
+allow-list `core.http.peer_allowlist` and the trusted proxies `core.http.trusted_proxies` (HEAD's
+`ALLOWED_PEER_CIDRS` and `TUNNEL_CONNECTOR_ADDRS`, class `o` in §1.12.3) are **storable admin keys**: `ProtectAdmin`,
+hot-reloadable and not `ProtectOperator` (05-http-api §10), so an admin may store them through Settings, which HEAD
+did not allow. M2 imports nothing for them (HEAD never stored them); they are storable from F3 and editable through
+the settings routes from F4. An operator value still locks them (§1.3.5), which is also the way back from a stored
+allow-list that shuts the admin out, besides loopback, which stage 0 always admits (05-http-api §4.2). R2's release
 note says so.
 
 `core.integrations.egress.lan_allow` — `[]string` of CIDRs or host names, default `[]`, restart-free, owned and
@@ -696,13 +706,13 @@ services and before any listener opens.
    passthrough key fails boot here, still before storage opens.
 4. The kernel builds logging and metrics from `core.log` / `core.metrics`. Storage opens at `core.storage.path`
    (`ProtectOperator`), checks disk headroom and takes its pre-migration checkpoint (05-storage §5S.3.12).
-5. `secrets.Open` (§2.4) loads or creates the keyring and writes `c/secrets/meta` on a new store (its only store
-   write); then `Store.SetSecrets` binds `Ref`s. There is no app-supplied config store to open: HEAD's settings
+5. `secrets.Open` (§2.4; 05-storage §5S.4 step 8, after the checkpoint and before the migration DAG) loads or
+   creates the keyring and writes `c/secrets/meta` on a new store (its only store write); then `Store.SetSecrets` binds `Ref`s. There is no app-supplied config store to open: HEAD's settings
    load, encryption init and key guard, which ran in ABO's `serve` before the server (`cmd/root.go:280,345-369`),
    are replaced by `Load`, `Attach` and M2 (C17).
 5b. The migration list runs (05-storage §5S.3.13; 06 §6.5.1). On the first R2 boot it includes M2 (§1.12.2): the
-   kernel hands books' steps `Store.Importer()` and the secrets store's `Stage` with their other migration
-   dependencies.
+   kernel hands books' steps `module.Importers` (06 §6.4.2), whose `Config` is `Store.Importer()` and whose
+   `Secrets` is `secrets.(*Store).Importer()` (§2.3).
 6. `Store.Attach` with core's native store and the kernel's committer (`core/internal/configstore`):
    `OverrideStore.Load` reads, nothing is written. Rows are decoded per section; if a section fails decode or
    `Validate` with its overrides but passes without them, **all of that section's overrides are quarantined**
@@ -725,7 +735,8 @@ services and before any listener opens.
 Restart-required and boot keys: `Apply` commits them and returns them in `RestartPending`; `Get` keeps the boot
 value; `Pending` shows the stored value; `KeyState.Pending` drives a "restart required" badge in the shell.
 
-**Factory reset.** A reset is 05-storage's staged, restart-bound swap (`KindReset`, §5S.3.15; native route only).
+**Factory reset.** A reset is 05-storage's staged, restart-bound swap (`KindReset`, §5S.3.15), staged by the offline
+`storage reset` in release R1 and also by the core route from F4.
 For config and secrets it means: the boot record `<state_dir>/config.boot.json` is set aside with the database
 (so module enablement returns to its defaults); the fresh store has no `c/config/` row, so every key is at its
 default or its operator value; the keyring is **kept** (14 Q-J's recommendation (a); the owner may override it), and
@@ -742,7 +753,7 @@ removed HEAD's keys from it).
 | Retired name set, key `ProtectAdmin` or higher, or a secret key | fail-closed (boot, before storage opens); `*RetiredNameError` names every such name and its canonical env name and file path | a silent fallback opens a wrong database, disables sign-in or starves a consumer of its credential (OPS-5, OPS2-7) |
 | Retired name set, other key or dropped key | fail-open: ignored, one warning per boot naming the canonical name, health `config_retired_name_ignored` | harmless leftovers must not stop startup |
 | Canonical name and ecosystem binding both set, different, key `ProtectAdmin` or higher | fail-closed (boot), message names both | a drop-in overriding one name would open an empty store (OPS2-12) |
-| Canonical name and ecosystem binding both set, different, other key | fail-open, canonical wins, warn, health `config_alias_conflict` | an obvious mistake, but not worth an outage |
+| Canonical name and ecosystem binding both set, different, other key | fail-open, canonical wins, warn, health `config_binding_conflict` | an obvious mistake, but not worth an outage |
 | Operator value fails strict decode or `Validate` | fail-closed, message names the variable or file key | operator must fix input; HEAD's lenient spellings are not read (§1.3.6) |
 | FailClosed key: stored value more restrictive than the operator value | fail-open toward the stricter value: stored value effective, warn, health `config_fail_closed_override` | a stale operator value must not weaken a security switch (§1.3.5) |
 | `<NAME>_FILE` unreadable | fail-closed | a missing credential file is a deployment error |
@@ -755,7 +766,7 @@ removed HEAD's keys from it).
 | Override row for unknown key | fail-open: retained, ignored, reported | a module this binary lacks may own it |
 | `Importer.Stage` refuses a value (unknown, operator-only, secret, invalid) | the cutover step quarantines the value and goes on; the key keeps its default (§1.12.2) | data is never dropped silently, and one bad field must not block the cutover |
 | M2 finds encrypted rows and no HEAD key file, no override | fail-closed (boot, nothing written), message names the file, the directories searched and `ABO_CORE_SECRETS_ALLOW_KEY_REGEN` | HEAD's guard (`cmd/root.go:726-783`): a missing key is usually a wrong mount, not a lost key |
-| M2 cannot decrypt a row (override set, or wrong or corrupt key or row) | fail-open per secret: ciphertext quarantined, unreadable marker written, "must be re-entered", health `secrets_undecryptable` | the app keeps working; the secret is never dropped silently (E4) |
+| M2 cannot decrypt a row (override set, or wrong or corrupt key or row) | fail-open per secret: ciphertext quarantined, unreadable marker written, "must be re-entered", health `secrets_undecryptable` | the app keeps working; the secret is never dropped silently (14 E4) |
 | `Apply` unknown key (incl. a passthrough path) | refuse `ErrUnknownKey`, nothing persisted | typos must not silently no-op; instances are written through 05-metadata |
 | `Apply` locked key | refuse `*LockedError` | the value would be discarded at next boot (`config.go:2224-2229` rationale) |
 | `Apply` missing permission / protection | refuse `ErrForbidden` / `*ProtectedError` | fail-closed security |
@@ -835,7 +846,7 @@ the database path and its state-directory value as plain options; from R2 they a
 `core.paths.state_dir`), so the boot record, a restore intent, HEAD's `.encryption_key` and the keyring are always
 looked for in one directory. Because step 3 also reads the operator file, a database path given only in the file
 with an uncreatable default falls back to its directory exactly as at HEAD. `TestStateDir_OneResolverYAMLDBPath`
-(the one name in this file and in 06) checks it, in the image as well as as a unit test.
+checks it, in the image as well as as a unit test.
 
 On Docker and launchd installs step 3 is where `.encryption_key` lives today (the image runs as an
 unprivileged user whose only persistent path is the data volume, `Dockerfile:93-96,104`; neither compose nor
@@ -878,7 +889,7 @@ Names are shown under the default namespace; 05-metrics owns the naming rule.
 
 | Import today | What it is used for | Where it goes |
 |---|---|---|
-| `internal/database` (`SettingsStore`, `Setting`, `DecryptValue`, `MaskSecret`, `IsEchoedMask`, `LooksLikeMask`) | blob/row persistence, secret decrypt, masks (`persistence.go:883-1260`, `update_service.go:91-373`) | persistence → core's native `OverrideStore`; HEAD's blob codec and row cipher → a frozen copy inside books' cutover step M2 (§1.12.2), deleted in R3; secrets → `secrets`; masks → deleted with `/api/v1/config` (write-only, C9) |
+| `internal/database` (`SettingsStore`, `Setting`, `DecryptValue`, `MaskSecret`, `IsEchoedMask`, `LooksLikeMask`) | blob/row persistence, secret decrypt, masks (`persistence.go:883-1260`, `update_service.go:91-373`) | persistence → core's native `OverrideStore`; HEAD's blob codec and row cipher → a frozen copy inside books' cutover step M2 (§1.12.2), deleted in R3; secrets → `secrets`; masks → deleted at F3, when `/api/v1/config` becomes write-only for secrets (C9, §1.12.1) |
 | `internal/auth` (`MethodFromContext().MayChangeCredentials`, `AccessEmailFromContext`) | protected-field and owner checks (`update_service.go:781,822`) | `config.Actor` filled by the HTTP layer; protection is per-key metadata |
 | `internal/backup` (`LevelDefault`, `ResolveMaxTotalBytes`) | backup defaults documented in config (`config.go:1086-1107`) | `core/backup` (L4) defines and registers `core.backup` itself (imports config at L3 — legal) |
 | `internal/aidispatch` (`Endpoint`, `Protocol`, `ParseCapability`) | AI endpoint conversion/validation (`ai_endpoints.go:94-179`) | endpoints become `ai/<id>` integration instances validated by their descriptor schema ([05-ai](05-ai.md), C11); global AI tuning is `core.ai.*` owned by `core/integrations/ai` |
@@ -966,10 +977,10 @@ the dependency as adopted.
 | Test | Asserts |
 |---|---|
 | `TestPrecedence_Matrix` | table over every (default, file, env, flag, boot record, override) combination: effective value, `Source`, `LockedBy` |
-| `TestFailClosed_MoreRestrictiveWins` | for `core.auth.mode` and `core.http.basic_gate.enabled`: stored stricter + operator weaker → stored effective, `AttachReport.FailClosed`, one warning, health `config_fail_closed_override`; operator stricter → operator effective and locked; `Apply` of a value at least as strict as the operator's succeeds and is effective, a weaker one → `*LockedError`; `FailClosed` on a string key or with a missing value fails `Register` (E5) |
-| `TestEnv_EmptyValueIsUnset` | `ABO_X=""` supplies nothing: no lock, no value (HEAD parity with viper) |
+| `TestFailClosed_MoreRestrictiveWins` | for `core.auth.mode` and `core.http.basic_gate.enabled`: stored stricter + operator weaker → stored effective, `AttachReport.FailClosed`, one warning, health `config_fail_closed_override`; operator stricter → operator effective and locked; `Apply` of a value at least as strict as the operator's succeeds and is effective, a weaker one → `*LockedError`; `FailClosed` on a string key or with a missing value fails `Register` (14 E5) |
+| `TestEnv_EmptyValueIsUnset` | `ABO_X=""` supplies nothing: no lock, no value (as viper treats it at HEAD) |
 | `TestEnv_StrictDecode` | `ABO_CORE_AUTH_MODE=yes`, a bare integer for a duration, a space-separated list for an array → boot error naming the variable; the same through the file key |
-| `TestEnvBinding_EcosystemNames` | `OTEL_EXPORTER_OTLP_ENDPOINT` sets `core.tracing.otlp.endpoint`; with the canonical name also set and different: canonical wins on a `ProtectNone` key with `config_alias_conflict`, boot fails on a `ProtectAdmin` key naming both; a binding equal to a canonical name fails `Register` |
+| `TestEnvBinding_EcosystemNames` | `OTEL_EXPORTER_OTLP_ENDPOINT` sets `core.tracing.otlp.endpoint`; with the canonical name also set and different: canonical wins on a `ProtectNone` key with `config_binding_conflict`, boot fails on a `ProtectAdmin` key naming both; a binding equal to a canonical name fails `Register` |
 | `TestRetiredName_ProtectedOrSecretRefusesBoot` | a fixture retired list: a set retired env name or file key of a `ProtectAdmin`, `ProtectOwner`, `ProtectOperator` or secret key → `*RetiredNameError` listing every such use with its canonical env name and file path, before storage opens (a recording fake storage sees no open); a file key whose subtree holds one protected key refuses too |
 | `TestRetiredName_OtherWarns` | a set retired name of a `ProtectNone` key or of a dropped key → ignored, one warning naming the canonical name or the drop message, `RetiredSet()` lists it, health `config_retired_name_ignored`, gauge 1 |
 | `TestOverride_IgnoredWhenOperatorLocked` | DB row kept, not applied, reported in `AttachReport.Ignored` and logged once |
@@ -988,10 +999,10 @@ the dependency as adopted.
 | `TestAfterCommit_ErrorReportedNotRolledBack` | `Result.PostCommit` non-nil, value committed |
 | `TestEnvName_Derivation` / `TestEnvName_CollisionRejected` | naming rule (`.` and `-` → `_`, `MODULES_` dropped); `ErrDuplicate` |
 | `TestEnvFileSuffix` | `_FILE` read once, newline trimmed, unreadable = boot error |
-| `TestAliasConflictOnProtectedKeyRefusesBoot` | `ABO_CORE_TRACING_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_ENDPOINT` set to different values → boot error naming both (the key is `ProtectAdmin`); the same on a `ProtectNone` key with a binding → canonical wins, `config_alias_conflict` |
+| `TestEnvBindingConflictOnProtectedKeyRefusesBoot` | `ABO_CORE_TRACING_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_ENDPOINT` set to different values → boot error naming both (the key is `ProtectAdmin`); the same on a `ProtectNone` key with a binding → canonical wins, `config_binding_conflict` |
 | `TestBoot_ResolvesPathsWithoutStorage` | `BootView` yields `core.paths.state_dir` from env and flags (a file value fails boot) and `core.storage.path` from file, env and flags; `BootRecordRoot` receives the resolved state dir; no storage handle exists |
 | `TestStateDirFallbackMatchesHEAD` | table over (explicit set or not, default creatable or not, DB path absolute / relative / empty): explicit never falls back; uncreatable default → `Dir(core.storage.path)` with the warning; relative or empty DB path → boot error; a fallback whose DB path the config file later moves → boot error naming both remedies; P0a and `Boot` receive the same directory (OPS3-1) |
-| `TestStateDir_OneResolverYAMLDBPath` | a database path given only in the YAML file plus an uncreatable default: the kernel resolves the boot record, a restore intent, HEAD's key file and the keyring to that path's directory, as HEAD does; the updater marker is not an input (OPS4-8, OPS5-13; the one name 06 also uses) |
+| `TestStateDir_OneResolverYAMLDBPath` | a database path given only in the YAML file plus an uncreatable default: the kernel resolves the boot record, a restore intent, HEAD's key file and the keyring to that path's directory, as HEAD does; the updater marker is not an input (OPS4-8, OPS5-13) |
 | `TestNoStoreWriteBeforeCheckpoint` | a recording fake store sees no write before the checkpoint marker, none at all from `Attach`, and from `secrets.Open` only `c/secrets/meta` on a new store; `secrets.Open` runs before the first migration step (C13) |
 | `TestNativeOverrideStore_RoundTrip` | the native store over `c/config/`: set, unset and reload of scalar, map and boot-adjacent keys; one row per explicitly set key; passes `configtest.OverrideStoreSuite` |
 | `configtest.OverrideStoreSuite` (exported contract) | `Load` is read-only; `Stage` changes exactly the staged keys (others byte-equal after a JSON round trip); an unset removes the row; two concurrent `Stage`s on one row both survive through the `Committer`'s retry; an unparsable row quarantines its section and is never overwritten |
@@ -1020,7 +1031,7 @@ an optional ratchet, not an extraction step.
 1. **Stage 0 (required; R1, in ABO, no core needed):** convert the 8 bypassing writes (§1.2) to `Mutate`, and add
    `TestNoDirectAppConfigWrites` (AST: no assignment to `config.AppConfig` outside `internal/config`). Without
    this, the façade's projection would silently drop those writes.
-2. **Stage 1 (required; the R2 config flip) — façade.** ABO's `internal/config` keeps its exported surface and
+2. **Stage 1 (required; the R2 config flip, F3) — façade.** ABO's `internal/config` keeps its exported surface and
    becomes a façade. The books module constructs one **`Facade` value** per App (the type lives in ABO's
    `internal/config` itself, so it adds no package path; MOD6-11) from the handles it registered and the core
    handles it reads (`core.storage`, `core.auth`, …), and installs it as the target of ABO's package-level
@@ -1045,16 +1056,82 @@ an optional ratchet, not an extraction step.
    a prerequisite only for sharing a binary with other modules. **Trade:** until then ABO tests mutate a façade
    global and cannot use `t.Parallel()` on config.
 
+**Release R1: how ABO's stored listener and perimeter values reach `app.New` (normative).** In release R1 the kernel
+owns the one Pebble open (06 §6.5.1 P2) and core config has no DB layer (06 P3), so ABO's `main` cannot read HEAD's
+settings blob before `app.New`, and core config cannot supply a value the blob holds. HEAD's listener values are not
+stored: `--host`, `--port`, `--tls-cert` and `--tls-key` are flags (`cmd/root.go:424-445,526-532`), and the peer
+allow-list and the trusted proxies are env or file only (`ALLOWED_PEER_CIDRS`, `TUNNEL_CONNECTOR_ADDRS`, `json:"-"`,
+`internal/config/config.go:1701-1711`). The DB-stored perimeter values are the rate limit (`enable_rate_limit`,
+`api_rate_limit_per_minute`; stage 10) and the body limits (`json_body_limit_mb`, `upload_body_limit_mb`; stage 11),
+which HEAD's blob beats env for. They reach the kernel through **one R1-only `app.Options` field** (06 owns the
+field; name coined here), a func of the kind `UIOptions` already uses for values that exist only after boot (06
+§6.4.5):
+
+```go
+// R1Values: release R1 only. F3's PR deletes the field and the type; an archtest fails if either is still
+// present after that PR, as for LegacyAuthGinUntil. nil = every key at core's default (hello).
+R1Values func() app.R1Values
+
+type R1Values struct {
+	Listen                      string        // HEAD's --host and --port → core.http.listen
+	TLSCertFile, TLSKeyFile     string        // HEAD's --tls-cert, --tls-key
+	PeerAllowlist               []string      // ALLOWED_PEER_CIDRS → core.http.peer_allowlist
+	TrustedProxies              []string      // TUNNEL_CONNECTOR_ADDRS → core.http.trusted_proxies
+	RateLimitEnabled            bool          // enable_rate_limit → core.http.rate_limit.enabled
+	RateLimitPerMinute          int           // api_rate_limit_per_minute → core.http.rate_limit.per_minute
+	JSONMaxBytes, UploadMaxBytes int64        // json_body_limit_mb, upload_body_limit_mb (MiB → bytes)
+	ShutdownBudget              time.Duration // ABO_CORE_SHUTDOWN_BUDGET; 0 = core's default (05-health §5H.4)
+}
+```
+
+The kernel calls it **once per boot**, at 06 §6.5.2 start step (7), after the module start hooks of step (2) and
+before the first listener opens. Books' start hook has by then run HEAD's settings load over the kernel's store
+handle (06 §6.5.1 "Releases", R1), which fails boot where HEAD's step is Fatal, so the func never sees defaults in
+place of a stored value; ABO's func reads `config.AppConfig`, i.e. HEAD's own effective values under HEAD's own
+precedence (a UI-saved blob value beats most env names), plus the flags. Stages 0, 10 and 11, built at P8, read the
+returned values through one pointer the kernel sets before step (7); nothing is served before it. Release R1 therefore
+changes no effective listener or perimeter value (`TestPerimeterHonoursBlobOnlyValues`, 05-http-api §12), and in R1
+the kernel reads these keys from nowhere else, so no canonical `ABO_CORE_HTTP_*` name is consulted beside HEAD's. An
+edit through `PUT /api/v1/config` takes effect at the next restart, an R1 release-note line (05-http-api §8.1). The
+Basic gate is not among them: it stays in gin, reading HEAD's settings itself, until F3. From F3 these keys are core
+keys read through core config, hot-reloadable as 05-http-api §10 declares, their stored values moved by M2 and their
+operator values under canonical names (§1.12.4); `core.shutdown.budget` is read by core config from F3 too.
+
+**Between the config flip and the identity flip: `/api/v1/config` (normative).** From F3 core config holds every
+`k` and `s` key, but the native settings routes mount only at F4 (§1.3.4), because before F4 no core route
+authenticates natively and the gin auth chain still decides every request (05-http-api §8.1). So from F3 to F4 the
+SPA's settings page keeps calling ABO's gin `GET`/`PUT /api/v1/config`, behind the gin chain with HEAD's permission
+(`settings.manage`), and F3's PR rewrites the two handlers onto core config, deleting `UpdateService`:
+
+- **Read.** `GET` renders HEAD's flat response keys from the façade's projection (item 2 above), which maps every
+  rename-table row field by field, with each key's lock from `KeyState.LockedBy`. A secret key is write-only from
+  F3 (C9): the response carries its `secrets.Meta` (`set`, `source`, `updated_at`, `fingerprint`), never a value or a
+  mask, and F3's PR switches the settings page to that form and deletes the masks and the echo detection.
+- **Write.** `PUT` turns the body into one `Store.Apply` through the rename table, so a key's protection, lock,
+  validation and audit are core's from F3. The handler fills `config.Actor` from the gin context: `Subject` is
+  HEAD's user ID, `Interactive` is `auth.Method.MayChangeCredentials()`, `Owner` is HEAD's owner proof
+  (`internal/cfaccess`), and `Can(perm)` asks whether the principal's HEAD atoms map to `perm` under books' atom
+  table (05-rbac §6.1), the table M3 applies at F4, so F4 changes nobody's reach over a key. With auth off the
+  auth-disabled principal holds no `core:admin` (§1.3.7), so HEAD's `!prior.EnableAuth` exemption ends at F3; R2's
+  release note already says so.
+- **Class-`i` fields.** M2 leaves them in the blob for M6 (§1.12.2), and HEAD's integration code reads them through
+  the façade until F7. Until F7 the handlers read and write them in that remaining blob row with books' frozen codec
+  (`configv0`), and a write needs `ProtectAdmin` when §1.3.7's shape rule classes the row's canonical path (a URL,
+  path or credential field), else the section permission. F4 deletes the handlers for every `k` and `s` key, as the
+  native routes replace them; for the class-`i` fields they stay until F7, whose instance routes (05-metadata M1)
+  replace them, and F7's PR deletes them with M6.
+
 #### 1.12.2 The config and secrets cutover (R2, migration step M2)
 
 ABO's stored settings and secrets move into core **once, one-way**, at the first R2 boot. This section is the one
 statement of that step: PC-21-03 builds it, the R2 config flip (PC-09-06) ships it, and 09's R2 migration table
 lists it as M2. The step is **books code**, because core holds no ABO key name or row format (03 R1); it reads
 HEAD's rows itself and writes only through core's importers (`config.Importer`, §1.3.3, and
-`secrets.(*Store).Stage`, §2.3). It follows 05-storage's contract for the R2 migration list (§5S.3.13): BootBlocking,
+`secrets.Importer`, §2.3). It follows 05-storage's contract for the R2 migration list (§5S.3.13): BootBlocking,
 behind the disk headroom check and the pre-migration checkpoint, resumable, covered by the crash matrix, and any
-input it cannot decode is quarantined and reported, never dropped. It runs after books' HEAD-format steps M1 and before the
-identity step M3; the level step M7 later makes every older build refuse the store.
+input it cannot decode is quarantined and reported, never dropped. It runs after books' HEAD-format steps M1 and the level step M7 and
+before the identity step M3 (execution order M1, M7, M2–M6, M8): M7 commits before M2's first chunk, so every older
+build already refuses the store before any HEAD row is deleted (05-storage §5S.3.13).
 
 **Inputs (all HEAD's).**
 
@@ -1074,7 +1151,7 @@ with the other HEAD-format readers.
 | Row class | Effect |
 |---|---|
 | `k` key | the value through the row's `Convert`, staged with `Importer.Stage` under the canonical path; a value equal to the R2 default stages nothing, so the key follows later defaults (C4); a `ProtectOperator` key (`core.storage.path`) stages nothing, because the operator layers already chose it |
-| `s` secret | a non-empty value, through `secrets.(*Store).Stage` under the canonical name, encrypted with the keyring's active data key (key ID, AAD); an empty value (an empty encrypted `basic_auth_password` row included) leaves the secret unset |
+| `s` secret | a non-empty value, through `secrets.Importer` under the canonical name, encrypted with the keyring's active data key (key ID, AAD); an empty value (an empty encrypted `basic_auth_password` row included) leaves the secret unset |
 | `i` integrations or library input | left in the blob for the integrations step M6 ([05-metadata](05-metadata.md) M1.10, [05-library](05-library.md) §5L.10), which converts it and deletes the blob row |
 | `o` operator-only at HEAD | nothing: HEAD never stored it |
 | `x` dropped | nothing; one log line names a field that holds a non-default value |
@@ -1083,8 +1160,11 @@ In the **same batch**: every blob field M2 consumed is removed from the blob, so
 fields, and the secrets of class-`i` families (the Deluge passwords, the metadata-source credentials, the webhook
 secret) are moved out of them; the four encrypted rows are deleted; a blob field that no row names (a key HEAD
 never had or already removed, `internal/config/removed_keys.go`) and a value that `Importer.Stage` refuses are
-moved into a quarantine record with their raw JSON (05-storage's quarantine, reported in health), the key keeping
-its default. No plaintext credential lands in quarantine: an undecryptable secret keeps its ciphertext there, and a
+moved into a quarantine record (05-storage's quarantine, reported in health), the key keeping its default. M2's
+sources are all `Sensitive` (the settings blob and the secret rows), so every M2 quarantine record is **sealed with
+the keyring**, never kept raw: its bytes are an encrypted secret record and the quarantine record holds none
+(05-storage §5S.3.13 "Quarantine"). No plaintext credential lands in quarantine: an undecryptable secret's HEAD
+ciphertext is sealed the same way, and a
 value that may hold a credential but has no key (userinfo in a stored URL, a retired plugin's free-form settings) is
 kept as an encrypted `c/secrets/` record with no key and reported with the quarantine records (§2.2). One batch
 means a crash leaves either HEAD's rows or the finished result.
@@ -1103,7 +1183,7 @@ directories searched and the override `ABO_CORE_SECRETS_ALLOW_KEY_REGEN` (§2.7)
 the override, and for any row the key does not decrypt (a regenerated key, a corrupt row), the ciphertext is
 quarantined and M2 writes an *unreadable* marker under the secret's name (§2.3), so `Meta.Err` is
 `ErrKeyUnavailable` or `ErrCorrupt`, Settings shows "must be re-entered" and health raises `secrets_undecryptable`
-until the secret is set again (E4). M2 leaves the key file untouched: the rollback restore reads it, and R3's cleanup
+until the secret is set again (14 E4). M2 leaves the key file untouched: the rollback restore reads it, and R3's cleanup
 deletes it.
 
 **Operator values at the cutover.** M2 migrates stored values only. A retired HEAD name of a protected or secret key
@@ -1118,12 +1198,14 @@ closed.
 default is not stored, so such keys follow later defaults; a key whose HEAD default differs from R2's keeps HEAD's
 value, because that value is stored (for example `core.backup.compression` stays `gzip`, 05-backup).
 
-**Rollback.** Rollback is the offline restore of the pre-migration checkpoint, or of the off-host archive and
-keyring export taken before the deploy, with the R1 binary (05-storage, 09). It restores the blob, the four rows and
+**Rollback.** Rollback is the offline restore of the pre-migration checkpoint, or of the off-host archive taken
+before the deploy together with `.encryption_key` and the gap-fill file, with the R1 binary (05-storage, 09). The
+keyring export is taken **after** R2's first boot, because the keyring exists only from then (`secrets.Open`, §2.4);
+a rollback to R1 does not need it, since R1 reads HEAD's rows with `.encryption_key`. It restores the blob, the four rows and
 the gap-fill file, and loses every setting changed since the upgrade. An R1 or older binary refuses a store M7 has
 raised.
 
-**Oracle and tests (PC-09-02, E1, E18).** The fixture corpus is written by the **R0 binary itself** (a script drives
+**Oracle and tests (PC-09-02, 14 E1, 14 E18).** The fixture corpus is written by the **R0 binary itself** (a script drives
 R0's own settings API and loader), never by hand. It covers a default install; every key set to a non-default; gap
 fill for empty fields; the four encrypted rows; plaintext secrets of every class; an empty Basic password row; a
 missing key file with and without the override; a corrupt row; a blob field no row names; and a production-shaped
@@ -1133,12 +1215,12 @@ store sized from the P1 counts.
 |---|---|
 | `TestConfigCutover_EffectiveConfigUnchanged` | for every rename-table row, R2's effective value with empty operator layers equals the row's `Convert` of R0's effective stored value (R0's own `GET /api/v1/config` of the same store, env cleared); with canonical operator values set, they win, except that a FailClosed key keeps the stricter value |
 | `TestConfigCutover_SecretsReadable` | every secret the fixture set reads back through `secrets.(*Store).Get` under its canonical name with `SourceStored` and the active key ID; no `c/config/` row holds a secret |
-| `TestConfigCutover_RowsGone` | after M2a the four rows are gone and the blob holds only class-`i` fields; after M6 no `setting:config_blob` remains; every key range outside the listed keys is byte-identical before and after (E3) |
+| `TestConfigCutover_RowsGone` | after M2a the four rows are gone and the blob holds only class-`i` fields; after M6 no `setting:config_blob` remains; every key range outside the listed keys is byte-identical before and after (14 E3) |
 | `TestConfigCutover_KeyGuard` | rows present and no key file: boot fails naming the file and the override, nothing written; with the override the rows are quarantined and read "must be re-entered" |
-| `TestConfigCutover_QuarantineNotDrop` | the unknown blob field and an invalid value are quarantined with their raw values and reported; a secret's record holds ciphertext only |
+| `TestConfigCutover_QuarantineNotDrop` | the unknown blob field and an invalid value are quarantined and reported; every M2 quarantine record is sealed with the keyring, and no quarantine record holds a plaintext or raw value |
 | `TestConfigCutover_GapFillStripped` | after M2b the file holds no managed key and keeps every other key; the checkpoint's copy holds the original; a crash between M2a and M2b strips it at the next boot |
 | `TestConfigCutover_Idempotent` | a second boot over a finished store runs nothing; the crash matrix over M2a and M2b leaves HEAD's rows or the finished result |
-| `TestConfigCutover_NoPlaintextSecretOnDisk` | a canary secret planted in every HEAD form before the upgrade appears in no file under the live DB directory, the state directory or the gap-fill file after M2, M6 and the forced compaction M8; the retained checkpoint is the one exception, until it is pruned (F4) |
+| `TestConfigCutover_NoPlaintextSecretOnDisk` | a canary secret planted in every HEAD form before the upgrade appears in no file under the live DB directory, the state directory or the gap-fill file after M2, M6 and the forced compaction M8; the retained checkpoint is the one exception, until it is deleted after 7 days or pruned (D12 (d)) |
 | `TestConfigCutover_RestoreDrill` | restoring the checkpoint offline and booting the R1 binary reads the original blob, rows and gap-fill file |
 
 **Release note (R2, config and secrets).** "Settings and secrets move into a new store at the first start of this
@@ -1148,8 +1230,8 @@ names the new one; other old names are ignored with a warning, and `<app> config
 given in the environment or the configuration file now overrides the value saved in Settings, except that the
 stricter value of the sign-in switch and of the Basic gate always wins. With authentication off, Settings can no
 longer turn it on: set `ABO_CORE_AUTH_MODE=required` and restart. Secrets are now encrypted on disk, and the
-`config.yaml` beside the database no longer holds copies of the OpenAI, Google Books and Hardcover keys. Export the
-keyring (`<app> secrets export-keyring`) and keep it with your backups. Backups made before this release still hold
+`config.yaml` beside the database no longer holds copies of the OpenAI, Google Books and Hardcover keys. After the
+first start, export the keyring (`<app> secrets export-keyring`) and keep it with your backups. Backups made before this release still hold
 those secrets in plain text: delete them once you no longer need them, and rotate the secrets if one may have been
 exposed."
 
@@ -1231,7 +1313,8 @@ Two further books sections come from explicit rows: `identity` and `scheduler` (
 **The table** (generated; HEAD's source order). *Stored*: where HEAD keeps the value (`blob` = the settings blob,
 `row` = an encrypted row, `env/file` = never stored). *Class*: `k` key and `s` secret (migrated by M2), `i` input
 of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow §1.3.6), `x` dropped. A path ending
-`.*` holds the struct's sub-keys under their `json` names. Counts: 134 `k`, 11 `s`, 9 `i`, 16 `o`, 3 `x` (173).
+`.*` holds the struct's sub-keys under their `json` names. Counts: 134 `k`, 11 `s`, 9 `i`, 16 `o`, 3 `x` (173 top-level rows; two of them, `oauth_allowed_emails` and the
+`scheduled.db_optimize` sub-key, have two targets).
 
 | HEAD name | Stored | Canonical path or name | Class | Note |
 |---|---|---|---|---|
@@ -1311,7 +1394,7 @@ of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow �
 | `google_books_background_daily_limit` | blob | `modules.books.metadata.google_books_background_daily_limit` | k | |
 | `google_books_fallback_daily_limit` | blob | `modules.books.metadata.google_books_fallback_daily_limit` | k | |
 | `coalesce_shattered_siblings` | blob | `modules.books.scan.coalesce_shattered_siblings` | k | |
-| `operation_timeout_minutes` | blob | `core.tasks.default_timeout` | k | minutes → duration |
+| `operation_timeout_minutes` | blob | `modules.books.operations.stale_threshold_minutes` | k | read at HEAD only as the staleness threshold of books' `GET /api/v1/operations/stale` |
 | `db_census_exact_read_mb_per_sec` | blob | `modules.books.db_census.exact_read_mb_per_sec` | k | |
 | `db_census_exact_cooldown_hours` | blob | `modules.books.db_census.exact_cooldown_hours` | k | |
 | `min_book_size_bytes` | blob | `modules.books.scan.min_book_size_bytes` | k | |
@@ -1323,7 +1406,7 @@ of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow �
 | `activity_log_compaction_days` | blob | `modules.books.activity.log_compaction_days` | k | |
 | `activity_log_nightly_compaction_enabled` | blob | `modules.books.activity.log_nightly_compaction_enabled` | k | |
 | `activity_log_full_detail_days` | blob | `modules.books.activity.log_full_detail_days` | k | |
-| `ai_journal_retention_days` | blob | `core.ai.journal_retention` | k | days → duration |
+| `ai_journal_retention_days` | blob | `core.ai.journal_retention` (coined) | k | days → duration |
 | `embedding` | blob | `modules.books.embedding.*` | k | |
 | `dedup` | blob | `modules.books.dedup.*` | k | |
 | `dedup_boilerplate` | blob | `modules.books.dedup.boilerplate.*` | k | |
@@ -1343,18 +1426,18 @@ of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow �
 | `basic_auth_password` | row | `core.http.basic_gate.password` | s | encrypted row; empty = unset |
 | `oauth_enabled` | blob | `core.auth.oidc.providers` | k | fold (05-authn) |
 | `oauth_github_client_id` | blob | `core.auth.oidc.providers` entry `github` | k | fold (05-authn) |
-| `oauth_github_client_secret` | blob | `core.auth.oidc.github.client_secret` | s | plaintext in the blob |
+| `oauth_github_client_secret` | blob | `core.auth.oidc.github.client_secret` (coined), the secret the `github` entry's `client_secret` ref names | s | plaintext in the blob |
 | `oauth_google_client_id` | blob | `core.auth.oidc.providers` entry `google` | k | fold (05-authn) |
-| `oauth_google_client_secret` | blob | `core.auth.oidc.google.client_secret` | s | plaintext in the blob |
+| `oauth_google_client_secret` | blob | `core.auth.oidc.google.client_secret` (coined), the secret the `google` entry's `client_secret` ref names | s | plaintext in the blob |
 | `oauth_redirect_base_url` | blob | `core.auth.oidc.redirect_base_url` | k | |
-| `oauth_allowed_emails` | blob | `core.auth.oidc.providers[].allowed_emails` | k | fold (05-authn) |
+| `oauth_allowed_emails` | blob | `core.auth.oidc.providers[].allowed_emails` and `modules.books.cfaccess.allowed_emails` | k | fold (05-authn); M2 also writes the value to the books key, because HEAD's `internal/cfaccess` reads it as the Cloudflare Access allow-list |
 | `oauth_default_role` | blob | `core.auth.oidc.providers[].default_role` | k | fold (05-authn) |
 | `cf_access_team_domain` | blob | `modules.books.identity.cf_access_team_domain` | k | |
 | `cf_access_aud` | blob | `modules.books.identity.cf_access_aud` | k | |
 | `owner_email` | blob | `modules.books.identity.owner_email` | k | |
 | `abs_api_enabled` | blob | `modules.books.abs.api_enabled` | k | |
 | `abs_auth_modes` | blob | `modules.books.abs.auth_modes` | k | |
-| `abs_jwt_secret` | env/file | `modules.books.abs.jwt_secret` | s | value kept (F3) |
+| `abs_jwt_secret` | env/file | `modules.books.abs.jwt_secret` | s | value kept (D12 (c)) |
 | `abs_access_token_ttl` | blob | `modules.books.abs.access_token_ttl` | k | |
 | `abs_refresh_token_ttl` | blob | `modules.books.abs.refresh_token_ttl` | k | |
 | `abs_session_max_ttl` | blob | `modules.books.abs.session_max_ttl` | k | |
@@ -1366,17 +1449,17 @@ of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow �
 | `smtp_username` | env/file | `integrations.notify.email.username` | o | |
 | `smtp_password` | env/file | `integrations.notify.email.password` | s | |
 | `smtp_from` | env/file | `integrations.notify.email.from` | o | |
-| `public_base_url` | env/file | `core.http.public_base_url` | o | |
+| `public_base_url` | env/file | `core.http.public_base_url` (coined) | o | |
 | `cf_account_id` | env/file | `modules.books.cfguests.account_id` | o | |
 | `cf_guests_policy_id` | env/file | `modules.books.cfguests.guests_policy_id` | o | |
 | `cf_policy_api_token` | env/file | `modules.books.cfguests.policy_api_token` | s | |
 | `cf_guest_service_tokens` | env/file | `modules.books.cfguests.guest_service_tokens` | o | |
 | `cf_service_auth_policy_id` | env/file | `modules.books.cfguests.service_auth_policy_id` | o | |
 | `invite_email_service_token` | env/file | `modules.books.cfguests.invite_email_service_token` | o | |
-| `tunnel_connector_addrs` | env/file | `core.http.trusted_proxies` | o | comma list → list |
-| `allowed_peer_cidrs` | env/file | `core.http.peer_allowlist` | o | comma list → list |
-| `login_saturated_rate` | env/file | `core.auth.login.saturated_rate` | o | |
-| `login_saturated_burst` | env/file | `core.auth.login.saturated_burst` | o | |
+| `tunnel_connector_addrs` | env/file | `core.http.trusted_proxies` | o | comma list → list; a storable admin key from F3 (§1.3.7) |
+| `allowed_peer_cidrs` | env/file | `core.http.peer_allowlist` | o | comma list → list; a storable admin key from F3 (§1.3.7) |
+| `login_saturated_rate` | env/file | `core.auth.login.saturated_rate` (coined) | o | |
+| `login_saturated_burst` | env/file | `core.auth.login.saturated_burst` (coined) | o | |
 | `cache_invalidate_on_book_update` | blob | `modules.books.cache.invalidate_on_book_update` | k | |
 | `metadata_fetch_cache_ttl_days` | blob | `modules.books.metadata.fetch_cache_ttl_days` | k | |
 | `metadata_fetch` | blob | `modules.books.metadata.fetch.*` | k | |
@@ -1421,6 +1504,7 @@ of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow �
 | `auto_update.check_minutes` | blob | `core.updater.schedules.check` | k | `{enabled: true, every: <minutes>}` |
 | `auto_update.window_start`, `auto_update.window_end` | blob | — | x | read and ignored since HEAD's updater hotfix (05-updater) |
 | `scheduled.<entry>` (16 entries, `config.go:991-1046`) | blob | `modules.books.scheduler.schedules.<entry>` | k | a `tasks.ScheduleConfig` by HEAD's own reading of the entry (an interval-only entry is enabled iff its interval is above 0); `TestScheduleParity_AllDefinitions` (05-tasks) |
+| `scheduled.db_optimize` | blob | `modules.books.scheduler.schedules.db_optimize` and `core.storage.schedules.compact` | k | the row above plus a second target: the same `ScheduleConfig` also seeds the core kind `core.storage.compact`'s key, while the books key keeps driving `books.maintenance.aux-store-compact` (05-tasks §5T.3.8) |
 | `download_client.torrent.type`, `download_client.torrent.deluge.{host, port, username}` | blob | `download/deluge` instance fields | i | 05-download §10 |
 | `download_client.torrent.deluge.password` | blob | `integrations.download.deluge.daemon_password` (coined) | s | plaintext in the blob |
 | `metadata_sources[].credentials.<k>` | blob | `integrations.metadata.<source id>.credentials.<k>` | s | plaintext in the blob |
@@ -1443,25 +1527,26 @@ Counts come from the rename table's golden, not from hand maintenance.
   file keys and `ABK_*`), handled by §1.3.6: a protected or secret key's name refuses boot naming the canonical name,
   any other one warns. Examples of each: `DATABASE_PATH` (→ `ABO_CORE_STORAGE_PATH`, `ProtectOperator`),
   `ENABLE_AUTH` (→ `ABO_CORE_AUTH_MODE`, `ProtectOwner`), `ABS_JWT_SECRET` (→ `ABO_BOOKS_ABS_JWT_SECRET`, a secret,
-  whose **value** the operator keeps, because the ABS phone apps' tokens are signed with it, F3),
+  whose **value** the operator keeps, because the ABS phone apps' tokens are signed with it, D12 (c)),
   `BASIC_AUTH_PASSWORD` (→ `ABO_CORE_HTTP_BASIC_GATE_PASSWORD`, a secret), `ABK_STATE_DIR`
   (→ `ABO_CORE_PATHS_STATE_DIR`, `ProtectOperator`) refuse; `FP_PARALLEL_WORKERS`
   (→ `ABO_BOOKS_FINGERPRINT_FP_PARALLEL_WORKERS`) and `LOGIN_SATURATED_RATE` warn. 05-storage additionally refuses
   to **create** a store while a retired database-path name is set.
-- **Deploy files use canonical names only.** R2 rewrites `deploy/audiobook-organizer.service`,
+- **Deploy files use canonical names only.** F3's PR rewrites `deploy/audiobook-organizer.service`,
   `deploy/com.audiobook-organizer.plist`, `deploy/local.conf.example` (its commented-out lines included),
   `docker-compose.yml` and the `Dockerfile`s to canonical names (PC-09-07). Compose passes the Basic gate's
   variables **only when they are set** (bare-name entries that pass a host variable through only when it is set, or
 an `env_file`), so a default compose install sets no
-  `ABO_CORE_HTTP_BASIC_GATE_ENABLED=false` (E5). The names a shipped file sets that HEAD never read
+  `ABO_CORE_HTTP_BASIC_GATE_ENABLED=false` (14 E5). The names a shipped file sets that HEAD never read
   (`AUDIOBOOK_ROOT_DIR`, unit `:97`, plist `:38`; `AO_DIR`, `AO_DB`, `docker-compose.yml:18-19`;
   `OLLAMA_BASE_URL`, `deploy/local.conf.example:40`) are removed from those files (out-of-scope defect 5).
   `TestDeployFilesUseCanonicalNamesOnly` scans those files: every variable found is a canonical name, an
   ecosystem binding, or on the runtime list (`HOME`, `GOMEMLIMIT`, `GOGC`, `TZ`, `NOTIFY_SOCKET`, read by the Go
   runtime, the systemd notify helper or the OS, never by config); a retired name or anything else fails. The
-  repo's agent skills and first-party scripts that set env names are updated in the same PR (09's caller row).
+  repo's agent skills and first-party scripts that set env names are updated in the same PR, F3's, never in a later
+  one (09 §9.2.5).
 - **Not config at all:** env names read by `os.Getenv` outside `internal/config` (for example `WHISPER_PATH_MAP`,
-  `internal/transcribe/path.go:28-40`) are listed by the generator and either become a key in the R2 config flip or
+  `internal/transcribe/path.go:28-40`) are listed by the generator and either become a key in the config flip F3 or
   stay their reader's own documented variable; `TestRenameTable_Golden` fails on an unlisted literal.
 
 **Flags** are kept (T9, zero cost): ABO's cobra adapter maps `--dir`, `--db`, `--playlists`, `--log-level`,
@@ -1492,7 +1577,7 @@ type that cannot be printed, `Ref` for config fields and `Scope` for module hand
 **verifiers** — passwords, API keys, session ids, bootstrap/temp-login tokens — which `auth` stores as hashes
 and never needs to recover ([05-authn](05-authn.md); session ids stored raw today,
 `internal/database/pebble_store_auth.go:1656-1663`: core's stores hash them, and the identity step M3 migrates
-ABO's, 05-authn). 09's R2 tables and 14 Q-E reference this keyring instead of describing their own.
+ABO's, 05-authn). 09's R2 tables reference this keyring instead of describing their own.
 
 ### 2.2 Current state at HEAD
 
@@ -1527,7 +1612,7 @@ renames it; from R2 the secret may also be stored, encrypted, under its canonica
 | `metadata_sources[].credentials` (map) | `config.go:154` | plaintext `config_blob` | `integrations.metadata.<source id>.credentials.<k>` (one secret per entry) | the same, per entry |
 | `plugins.webhook` `secret` (HMAC signing key) | `internal/plugins/webhook/plugin.go:58` | plaintext `config_blob` | `integrations.notify.webhook-<n>.secret` (the one family-level value, written under every instance's name, 05-notify §10) | the same, one record per instance |
 | other `plugins[].settings` (free-form map) | `config.go:244-247` | plaintext `config_blob`; may hold credentials (unknowable) | `modules.books.plugins.<id>.settings` (one record, no key) | encrypted as one record and reported; `internal/plugin` is retired (02 N4) |
-| `abs_jwt_secret` | `config.go:1636` (`json:"-"`) | env / viper file only | `modules.books.abs.jwt_secret` | — (its value must stay the same: it signs the ABS apps' tokens, F3) |
+| `abs_jwt_secret` | `config.go:1636` (`json:"-"`) | env / viper file only | `modules.books.abs.jwt_secret` | — (its value must stay the same: it signs the ABS apps' tokens, D12 (c)) |
 | `smtp_password` | `config.go:1678` (`json:"-"`) | env / viper file only | `integrations.notify.email.password` | — |
 | `cf_policy_api_token` | `config.go:1688` (`json:"-"`) | env / viper file only | `modules.books.cfguests.policy_api_token` | — |
 | userinfo in URLs (`openai_base_url`, `whisper_remote_url`, `ai_endpoints[].url`, `embedding.base_url`) | `config.go:1222,1319`, `ai_endpoints.go:40` | plaintext if an operator embeds `user:pass@` | `schema:"format=uri"` validation **rejects** userinfo; credentials go in a sibling `secrets.Ref` | M2 stages the URL without its userinfo and keeps the userinfo as one encrypted record `<key path>.userinfo` (no key), reported with the quarantine records, so the operator moves it into the instance's credential field; no plaintext credential stays in a URL or in quarantine |
@@ -1646,12 +1731,25 @@ func (s *Store) Get(ctx context.Context, n Name) (Value, Meta, error)
 func (s *Store) Meta(ctx context.Context, n Name) (Meta, error)
 func (s *Store) Put(ctx context.Context, n Name, v Value, by string) (Meta, error)
 func (s *Store) Delete(ctx context.Context, n Name, by string) error
-// Stage is the same-batch write used by core/internal/configstore, integrations and the app's cutover steps (the
-// secrets importer, 03 §3.3; §1.12.2). COR2-12: a pointer, so Bind and the writes land on the caller's batch.
+// Stage is the same-batch write used by core/internal/configstore, integrations and, through Importer, the app's
+// cutover steps. COR2-12: a pointer, so Bind and the writes land on the caller's batch.
 func (s *Store) Stage(b *storage.Batch, w Write) error
 // StageUnreadable stages the unreadable marker for n (a pre-core secret the cutover could not decrypt, §1.12.2):
 // Meta.Err is ErrKeyUnavailable (reason "key") or ErrCorrupt (reason "corrupt") until n is set again.
 func (s *Store) StageUnreadable(b *storage.Batch, n Name, reason string, by string) error
+
+// Importer is secrets' write side for a one-way cutover step (03 §3.3 "Store interfaces and importers"; §1.12.2),
+// handed to the app's steps as module.Importers.Secrets (06 §6.4.2) and to storage's quarantine sealing (05-storage
+// §5S.3.13). It follows 05-storage's importer rules: it seals every value with the keyring's active data key (key
+// ID, AAD) and stages it into the CALLER's batch, never commits, and is create-only (an existing record with other
+// bytes fails with storage.ErrImportConflict). It is a thin layer over Stage and StageUnreadable.
+type Importer interface {
+	ImportSecret(ctx context.Context, b *storage.Batch, w Write) error
+	ImportUnreadable(ctx context.Context, b *storage.Batch, n Name, reason, by string) error
+}
+
+// Importer returns the store's importer; valid after Open, which runs before the migration list (§2.4).
+func (s *Store) Importer() Importer
 func (s *Store) Ephemeral(n Name, v Value, src Source)            // operator-supplied value; locks the key
 func (s *Store) All(ctx context.Context) iter.Seq2[Meta, error]   // never values
 // KeyIDsReferenced scans the records readable through r (the live store, or a staged restore) and reports
@@ -1787,13 +1885,15 @@ so a lost key file loses the secrets. Rules:
   store lock; `set-install-id` reads the install marker read-only (SEC10-9; 05-storage's `OfflineCommands` list
   names all three, cross-cluster). `app.OfflineCommands(opts, mods...)` (06 §6.4.5) returns them, with core's
   other offline commands, as `app.Command` values, and ABO wraps each in its cobra tree, as it does
-  `storage restore-checkpoint` and `users reset-password` (`TestCLIExposesCoreOfflineCommands`, ABO); 06 §6.4.5's
+  `storage restore-offline` and `users reset-password` (`TestCLIExposesCoreOfflineCommands`, ABO); 06 §6.4.5's
   list names all three secrets commands, each from R2.
-- **Host-loss restore** ([05-backup](05-backup.md) §5B.3.3 procedure): the operator copies the exported file
-  into the new state directory as `<state_dir>/secrets.keyring` (mode 0600) before the first start; there is
-  no import command, and the next `Open` loads it as the keyring-present case above, then
-  `<app> restore --archive <file>`. A pre-R2 archive (format `legacy-abo/0`) restores, and the next boot migrates
-  it with M2, which needs that install's `.encryption_key` beside it for HEAD's four encrypted rows (05-backup).
+- **Host-loss restore** ([05-backup](05-backup.md) §5B.3.3 "Host-loss restore"): before the first start the
+  operator runs `<app> storage restore-offline --archive <file> --keyring <export>`, which puts the exported keyring
+  back as `<state_dir>/secrets.keyring` (mode 0600) with the store; there is no separate import command, and the
+  next `Open` loads it as the keyring-present case above. A pre-R2 archive (format `legacy-abo/0`) restores, and the
+  next boot migrates it with M2, which decrypts HEAD's four encrypted rows with that install's `.encryption_key`,
+  copied into the state directory beside the archive (09's R2 checklist takes it off-host with the archive); the
+  keyring holds no HEAD key.
   An archive encrypted only to the install identity needs the keyring to be
   decrypted at all; `--identity` remains only for operator-recipient identities. For an unencrypted archive, or
   one also encrypted to an operator recipient, copying the keyring back is **optional**: without it the restore
@@ -1881,12 +1981,13 @@ gap-fill copies stripped) is specified once, in §1.12.2. Code replacement:
    path in the R2 config flip; a frozen copy of the decrypt half and of the guard lives on inside the cutover step
    M2 only, with HEAD's key search order (state dir, then `<root_dir>/.appdata/`, `settings.go:110-140`), and R3
    deletes it with the other HEAD-format readers.
-2. `MaskSecret/IsEchoedMask/LooksLikeMask` (`settings.go:271,285,293`) are deleted with ABO's `/api/v1/config`
-   routes in the same flip: the core settings API is write-only (C9) and returns `Meta`, never a mask.
+2. `MaskSecret/IsEchoedMask/LooksLikeMask` (`settings.go:271,285,293`) are deleted in the config flip F3, when
+   ABO's `/api/v1/config` becomes write-only for secrets (§1.12.1); the core settings API is write-only (C9) and
+   returns `Meta`, never a mask.
 3. HEAD's file-only secrets (ABS JWT secret, Cloudflare policy token, SMTP password) were never stored, so nothing
    migrates. Their HEAD env names are retired secret names, so a unit that still sets one refuses to boot naming
    the canonical name (§1.3.6, §1.12.4); the operator moves the **same value** to it. For the ABS JWT secret the
-   value must not change, because it signs the tokens the ABS phone apps hold (F3). From R2 each may also be stored,
+   value must not change, because it signs the tokens the ABS phone apps hold (D12 (c)). From R2 each may also be stored,
    encrypted, through Settings.
 
 ### 2.11 Open items
@@ -1912,7 +2013,7 @@ gap-fill copies stripped) is specified once, in §1.12.2. Code replacement:
 ## Objections to 03
 
 None open. 03 §3.3's store-interface rows for `config` and `secrets` name their importers (`config.Importer`,
-`secrets.(*Store).Stage`, §1.3.3, §2.3). The round-0 items (an internal order inside the old shared
+`secrets.Importer`, §1.3.3, §2.3). The round-0 items (an internal order inside the old shared
 layer; the §3.3 `config` row not saying that operator-set keys are locked) are resolved by 03's R4 L1/L2/L3 and its
 §3.3 `config` row; 03 R5 also states that ABO's façades are allowed.
 
@@ -2215,4 +2316,9 @@ Plan-phase consistency:
   §1.12.4 "Env, file and flag names after the cutover", §1.13; Part 2 §2.1, §2.2 (the M2 column), §2.3
   (`StageUnreadable` and the unreadable marker; read order operator > record), §2.4–§2.11, objections and
   out-of-scope defects 2–6 (fixed by the cutover).
-
+  Consistency pass: added §1.12.1's release R1 delivery of the listener and perimeter values (`app.Options.R1Values`,
+  called once at start step 7) and the F3-to-F4 serving of `/api/v1/config` over core config (class-`i` fields until
+  F7), confirmed the peer allow-list and trusted proxies as storable admin keys, declared `secrets.Importer`, applied
+  the M1, M7, M2–M6, M8 order, sealed M2's quarantine, moved the keyring export after the first boot, remapped
+  `operation_timeout_minutes` and the second targets of `oauth_allowed_emails` and `scheduled.db_optimize`, renamed
+  `config_alias_conflict` to `config_binding_conflict`, and re-pointed 14, D12, 06 and 05-storage citations.
