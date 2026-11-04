@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-library.md -->
-<!-- version: 1.11.1 -->
+<!-- version: 1.11.2 -->
 <!-- guid: dafe380b-f703-41cb-99d0-2b2ba32f70e5 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -669,7 +669,7 @@ and ABO passes its own (05-metrics).
 | `TestTransferInCommitsWithCallerBatch` | `TransferIn` + caller rows land in one commit; `CrashClone` before the commit leaves a `done` row reported by `PendingTransfers`, never undone |
 | `TestScopeCannotActAsAnotherOwner` | a module's `Scope` cannot write another owner's root or quarantine its files |
 | `TestConfigEntryRoots_RoundTrip` | every root, mapping and protected path round-trips through `core.library.roots`/`mappings`/`protected_paths`, and a change made through `config.Store.Apply` reaches the registry without a restart (SIMP4-3, SIMP7-8: the roots are config entries, not a store) |
-| `TestRootsCutover_FromHEADFixture` (ABO, on the R0-written fixture corpus of 05-config §1.12.2) | after M6: the books root and every import root are `core.library.roots` entries with the IDs of §5L.10 (`books-library`, `import-<n>` for HEAD ID `n`), paths, names, roles and `Watch` as the table says; `path_aliases`, `itunes.path_mappings` and `protected_paths` are the matching entries; books' per-root record holds `Enabled`, `CreatedAt`, `LastScan` and `BookCount` byte-for-byte; no `import_path:` row, path index row or `counter:import_path` remains; an iTunes mapping whose local prefix is under no root and a nested import root are reported, the first quarantined; re-running the step changes nothing; a crash at each point of the crash matrix leaves either the HEAD rows or the finished entries (E1, E2) |
+| `TestRootsCutover_FromHEADFixture` (ABO, on the R0-written fixture corpus of 05-config §1.12.2) | after M6: the books root and every import root are `core.library.roots` entries with the IDs of §5L.10 (`books-library`, `import-<n>` for HEAD ID `n`), paths, names, roles and `Watch` as the table says; `path_aliases`, `itunes.path_mappings` and `protected_paths` are the matching entries; books' per-root record holds `Enabled`, `CreatedAt`, `LastScan` and `BookCount` byte-for-byte; no `import_path:` row, path index row or `counter:import_path` remains; an iTunes mapping whose local prefix is under no root and a nested import root are reported, the first quarantined; re-running the step changes nothing; a crash at each point of the crash matrix leaves either the HEAD rows or the finished entries (14 E1, E2) |
 | `TestLibraryErrorsPassKeyNameGate` (ABO, a case of `TestCoreHoldsNoAppKeyNames`) | the `"library: …"` sentinels pass the key-name gate; a `"library:" + id` literal fails it (MOD5-3) |
 
 ## 5L.10 Migration from ABO
@@ -855,4 +855,4 @@ Round 9 (`docs/plans/platform-core/reviews/spec-round-9-*.md`, dispositions bind
   display-only books keys, 05-config §1.12.3). Added `TestRootsCutover_FromHEADFixture`; renamed
   `TestSentinelBootstrapLegacyRoot` to `TestSentinelBootstrapMigratedRoot`.
   Consistency pass: 03's rules cited as "03 rule R1", the one-module claim re-pointed to 03 §3.4, the risk ID as 14 E2,
-  and the roots cutover and `ImportPathStore` deletion keyed to the integrations flip F7.
+  and the roots cutover and `ImportPathStore` deletion keyed to the integrations flip F7. Final consistency sweep: the cutover test's hazard citation reads 14 E1, E2.
