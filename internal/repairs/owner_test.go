@@ -1,5 +1,5 @@
 // file: internal/repairs/owner_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9d4e2b71-6c38-4a05-8f1e-3b7a5c0d2e96
 // last-edited: 2026-11-03
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +25,9 @@ import (
 // Apply of "own" writes only under an owner approval naming the row.
 type ownerFixer struct {
 	s *memStore
+	// mu guards marked: RunApply replans and applies rows on parallel
+	// RunItems workers, so note runs concurrently.
+	mu sync.Mutex
 	// marked records, per row, whether Replan or Apply saw the owner-apply
 	// marker on ctx for that row (OwnerApplyFor).
 	marked map[string]bool
@@ -55,6 +59,8 @@ func (f *ownerFixer) Replan(ctx context.Context, _ json.RawMessage, planned Row,
 }
 
 func (f *ownerFixer) note(ctx context.Context, row, stage string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.marked == nil {
 		f.marked = map[string]bool{}
 	}
