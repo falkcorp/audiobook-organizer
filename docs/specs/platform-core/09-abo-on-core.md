@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/09-abo-on-core.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: 3c82c917-2fc4-4385-b085-73d143a2374f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -735,8 +735,9 @@ the same PR (05-metrics §13 item 4). **The normative series check is the seeded
 passes) and scrapes the served `Provider.Handler()`, never `promhttp.Handler()` (`TestContractScrapesServedHandler`),
 the S2 r3 PR adds `mediacore_` to its in-scope prefixes, core-owned emitters are seeded through public SDK
 paths, and at S8 its registry becomes the private one in the same PR. Its golden's seeding table gains each
-renamed family's alias rows in the renaming PR, so its diff is the done-check of every stage — empty at S1; only the
-renamed families and their aliases at S2b, S5 and S7; at S8 as 05-metrics §6 states. A live scrape lists only
+renamed family's alias rows in the renaming PR, so its diff is the done-check of every stage — empty at S1; at S2 r3 the newly in-scope `mediacore_*`
+families (05-metrics §6); at S2b the kernel's new storage families plus the renamed families and their aliases; only the
+renamed families and their aliases at S5 and S7; at S8 as 05-metrics §6 states. A live scrape lists only
 families that recorded a sample since boot (integration-bound families never do on staging), so it is a
 **smoke check** only: one credentialed scrape — `curl -sS -H "Authorization: Bearer <redacted-token>"
 <abo-url>/metrics | grep -v '^#' | sed -E 's/[{ ].*//' | sort -u` — answers 200, is non-empty and contains
@@ -1277,7 +1278,7 @@ within 14 days, the contract build reports Degraded `legacy_surface_removed_in_u
 | 14 | Config in DB (`config_blob`) and legacy secret rows | 1 blob + 4 rows | read and written in place by books' legacy config store (05-config §1.12.2) | stored format until the config cutover (§9.13); a secret's first write leaves sentinels | none in the extraction | `persistence.go:359-884,1996-2008` |
 | 15 | Env vars, window | `BindEnv` names + implicit `AutomaticEnv` names + `ABK_*` (counts: 05-config §1.12.4) | 05-config §1.3.6 | W after S3 | not read; `ProtectAdmin`+ and secret-class keys refuse to start (§9.2.5) | `cmd/root.go:625` |
 | 16 | Env vars, permanent and runtime | the single list of 05-config §1.12.4 (permanent aliases, including every read name a shipped deploy file sets; runtime/ecosystem names config does not read) | unchanged | **permanent** (OPS-5) | none | 05-config §1.12.4; §9.2.5 |
-| 17 | CLI commands | `serve scan playlist tag organize inspect-metadata seed diagnostics{cleanup-invalid,reserved-prefs,query} fp-worker dedup-bench` (bench tag) | unchanged; added: `staging-restore` and `staging-scrub` (S0, §9.3; R8-3) and core's `secrets set-install-id` (S2b, the manual reset undo; R8-1) | **permanent** | none | `cmd/*.go` `Use:` |
+| 17 | CLI commands | `serve scan playlist tag organize inspect-metadata seed diagnostics{cleanup-invalid,reserved-prefs,query} fp-worker dedup-bench` (bench tag) | unchanged; added: `staging-restore` and `staging-scrub` (S0, §9.3; R8-3) and core's `secrets set-install-id` (S3, when the keyring lands — a reset undone before S3 has no keyring header to restore; the manual reset undo, R8-1) | **permanent** | none | `cmd/*.go` `Use:` |
 | 18 | CLI flags in shipped artifacts | `--host --port --db --config --dir --log-level --playlists --tls-cert --tls-key --http3-port --external-url --workers --read-timeout --write-timeout --idle-timeout` | same flags feed canonical keys | until next **major** (1.0) | release note at the major; not usage-gated | `cmd/root.go:486-535`; `Dockerfile:104` |
 | 19 | Removed/no-op flags | `--db-type`, SQLite flag | — | W after S2 | deleted S10 | `cmd/root.go:489,508` |
 | 20 | Fast-exit protocol | `--print-storage-format`, `--print-capabilities`, new `--print-storage-levels`, `--version-json` (`{app, version, commit, ui_build_id, binary_id}`, FE6-4) and `--print-upgrade-floor` (all three from S0) | unchanged | **permanent** | none (rollback and stepping-stone protocol) | `main.go:40,52`; `Makefile:892` |
@@ -1859,3 +1860,4 @@ Round 8 (dispositions in `docs/plans/platform-core/reviews/spec-round-8-disposit
 - SIMP8-4 — `legacy.Maintenance` keeps only `StageFactoryReset` and is deleted in the S4 r2 PR; `UpgradeFloors()` deleted (S2b, S4, S8).
 - SEC8-7 — S4's done-check adds `TestUserMerge_ScopedAdminKeyRefused`.
 - COR8-7 (consistency) — §9.9: the caller that builds the batch retries build-and-commit (05-tasks 5T.7).
+- Integration pass (round 8, lead) — row 17: `secrets set-install-id` lands at S3 with the keyring; §9.2.7: the golden diff names S2 r3's `mediacore_*` families and S2b's kernel families.
