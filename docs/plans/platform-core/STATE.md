@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.13.0 -->
+<!-- version: 1.14.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -22,7 +22,7 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 |---|---|---|
 | 1 | Raw data gathering | done (17 raw files incl. raw/00-baseline-build.md) |
 | 2 | Design spec | done (draft v1): 34 files under docs/specs/platform-core/ |
-| 3 | Spec review loop | distinct BLOCKERs per round: R1 20, R2 10, R3 9, R4 6, R5 5, R6 2 (80 findings) — round 6 dispositioned (R6-1…R6-7); 8 revisers applying; round 7 next |
+| 3 | Spec review loop | distinct BLOCKERs per round: R1 20, R2 10, R3 9, R4 6, R5 5, R6 2 — rounds 1–6 dispositioned and applied (+ integration passes); round 7 in progress |
 | 4 | Spec advisor review | pending |
 | 5 | Spec confidentiality gate + PR + merge | pending |
 | 6 | Implementation plan | pending |
@@ -42,7 +42,7 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 
 ## Next action
 
-Round 6 revision (8 revisers; `reviews/spec-round-6-dispositions.md`). Then integration pass, then round 7 review. Exit at zero BLOCKERs; then Phase 4 advisor.
+Round 7 review running (`reviews/spec-round-7-<lens>.md`). If zero BLOCKERs: disposition MAJORs, apply, then Phase 4 advisor review (single fresh reviewer, max effort). Otherwise revise and run round 8.
 
 ## Incidents
 
