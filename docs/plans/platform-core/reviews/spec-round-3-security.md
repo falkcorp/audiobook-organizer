@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/reviews/spec-round-3-security.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 8f9ae8a1-05af-47cf-a9d8-51488db4da76 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -180,7 +180,7 @@ replaces an echoed mask (and, for nested secrets, an empty value) with the store
 `restoreRoundTripSecrets` (`internal/config/update_service.go:333-356`) **before** the protected-field check
 (`:710` versus `:779-795`). Implemented at the natural place, every URL change "re-supplies" the secret and
 the Deluge or AI password follows the URL to the new host: SEC-15 reopened on rollback. (2) "New host is
-loopback, private or CGNAT" read on the host string lets any LAN name (`nas.lan`, a single-label name, a name
+loopback, private or CGNAT" read on the host string lets any LAN name (`<host-a>`, a single-label name, a name
 the actor's DNS resolves to `127.0.0.1`) through; the legacy clients dial without an egress guard.
 
 **Fix:** item 3 says: "re-supplied" means a value present in the request payload that is neither empty nor
@@ -189,7 +189,7 @@ before** `restoreRoundTripSecrets`; and the private-target rule applies when the
 those ranges **or is not an IP literal** (any name), so a non-admin may set only public IP literals or
 names on `core.integrations.egress.lan_allow`'s legacy equivalent — simplest: a non-admin may not change the
 host of an integration URL on the Teach build at all. Extend `TestTeachBuild_IntegrationURLBound` with
-"URL change + echoed mask → secret cleared" and "host `nas.lan` by non-admin → 403".
+"URL change + echoed mask → secret cleared" and "host `<host-a>` by non-admin → 403".
 
 ## SEC3-5 — MAJOR — Import and per-boot re-import set `Local=true`, turning a rollback-era edit into admin-level LAN trust
 
