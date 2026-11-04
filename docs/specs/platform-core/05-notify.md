@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-notify.md -->
-<!-- version: 1.12.1 -->
+<!-- version: 1.13.0 -->
 <!-- guid: 785812fd-5ddd-4540-be24-d061c0127788 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -21,11 +21,11 @@ topic catalog of its own.
 **v1 (SIMP-10, cross-cutting resolution 1)** is exactly what ABO uses or needs to fix today's defects
 (no retry, publisher ctx, replayable HMAC, §2):
 
-| In v1 (built in [09](09-abo-on-core.md) S7, with the instance store and `providerhttp` it needs; SIMP2-4) | Deferred: design sketch (non-normative; the SDK freezes none of it, A-15); built when a second app or the owner asks |
+| In v1 (built for R2, in [09](09-abo-on-core.md)'s integrations flip, with the instance store and `providerhttp` it needs; SIMP2-4) | Deferred: design sketch (non-normative; the SDK freezes none of it, A-15); built when a second app or the owner asks |
 |---|---|
 | `Notification`, `Notifier`, `Publisher` (`Service.Publish`, and `module.Deps.Notify` for modules) | in-app **inbox** (`core.inbox`) and the UI bell (07) |
 | `core.email` channel to a fixed address list (from `internal/mail`) | **per-user subscriptions** and per-user email to a verified address |
-| `core.webhook` channel, preset `json` + the legacy ABO headers | **personal channels** (user-owned instances); when they ship, `personal_channels` defaults to **false** |
+| `core.webhook` channel, preset `json` (the one wire format, §3.1) | **personal channels** (user-owned instances); when they ship, `personal_channels` defaults to **false** |
 | global admin `Rule`s resolved at publish; per-target delivery through the outbox with retries | **templating** (per-instance/per-topic templates); ntfy, Gotify, Apprise presets and `custom` bodies; a dispatch stage (returns with digests or per-user delivery, §11) |
 
 **How a module notifies (COR2-3).** A module reaches notify only through `module.Deps.Notify`, a
@@ -43,7 +43,7 @@ Out of scope: transactional mail that is not a notification (invites, password r
 > **Design sketch (non-normative; A-15).** The SDK freezes none of these members; their contracts are settled when
 > they are built.
 
-The right-hand column of the v1 table. None is in the 09 S7 build. The first column holds package-qualified Go
+The right-hand column of the v1 table. None is in the R2 build. The first column holds package-qualified Go
 identifiers; adapter IDs, routes and keys are in the second column (SIMP5-6). The PR that builds a member deletes
 its row (SIMP4-1):
 
@@ -181,48 +181,12 @@ func (s *Service) DeleteRule(ctx context.Context, id string) error
 func (s *Service) Rules(ctx context.Context) iter.Seq2[Rule, error]
 
 // RuleStore persists Rules (R4-1). SDK surface, frozen by the API-stability
-// gate, holding only the native contract (SIMP5-4). Core ships
-// NativeRuleStore over c/notify/rules/<id> (codec.JSON[notify.Rule](1); lands
-// with notify at 09 S7, SIMP4-3); an app whose routing predates core passes a
-// legacy implementation in the NotifyRules field of legacy.Stores, set on
-// Manifest.LegacyStores (06; R6-3). Store model: ROUTED per record
-// (05-metadata M1.1, SIMP5-1): both stores serve at once, and the Service
-// sends a rule to the legacy store when that store covers the rule's ID, else
-// to the native store. Coverage is the optional legacy.Covering capability
-// (Covers(id) with id = Rule.ID; 05-storage §5S.3.11 "Legacy capabilities"),
-// a member of package legacy, outside the API-stability gate (R6-3). The
-// Service detects it once, by type assertion on the legacy store it is
-// handed at P4c (the kernel asserts only the capabilities 03 §3.3 lists,
-// SIMP7-5, SIMP8-3),
-// and names it only through an unexported interface with the identical
-// method set, which the mirror test (03 §3.3) checks against legacy.Covering
-// in both directions: notify's export_test.go only exports a test alias of
-// the mirror, and legacy_mirror_test.go in package notify_test asserts it, so
-// notify never imports legacy (R7-7); the legacy store asserts it at
-// compile time. Only the legacy half implements it: a legacy store without
-// it covers every rule and the backends ledger records legacy, and the
-// native store is never asked (SIMP6-5). legacy.Covering is deleted from
-// package legacy at the integrations cutover, which is not a breaking change.
-// A legacy store refuses a rule its format cannot express with
-// ErrRuleNotExpressible (422). PutRule and DeleteRule commit their batch
-// through storage.CommitLocked(ctx, b, d, stage, locks...) (05-storage;
-// R9-1), passing the Service's SettingsLocks []storage.Lock: the kernel calls
-// the legacy store's legacy.WriteLock at P4c with legacy.LockConfigSettings
-// and hands the Service the result (empty when the store offers none); notify
-// never calls WriteLocks and never names a lock string, since it cannot
-// import legacy (COR10-5). Books' store writes the legacy webhook event list
-// into the config blob, so its WriteLocks returns HEAD's configBlobSaveMu,
-// the same storage.Lock value books' config and instance stores return
-// (05-metadata M1.4 step 2a "Write"), at its rank in 05-storage's one total
-// lock order (R10-4), so CommitLocked takes it once and the mutex spans the
-// commit and the store's post-commit step (the config.yaml gap-fill write,
-// which CommitLocked runs before the release; R10-5, DATA10-2). The store
-// refuses a write staged into a batch that carries no hold of that lock
-// (storage.LocksHeld(b, l); R10-4), nothing staged. The mutex that
-// serialises the Service's swap of its in-memory rule set is taken before
-// CommitLocked and never inside its stage function, and the
-// stage calls no books method that takes a HEAD mutex (DATA10-3). The
-// kernel builds one instance of it per App (TestLegacyStoresAreSingletons).
+// gate. Core ships NativeRuleStore over c/notify/rules/<id>
+// (codec.JSON[notify.Rule](1); lands with notify in R2, SIMP4-3); it is the
+// only implementation (no app supplies its own). PutRule and DeleteRule
+// commit their own batch under storage.RetryOnConflict; the mutex that
+// serialises the Service's swap of its in-memory rule set is taken before the
+// commit and never inside it.
 type RuleStore interface {
 	Load(ctx context.Context) ([]Rule, error)
 	Put(ctx context.Context, b *storage.Batch, r Rule) error
@@ -231,7 +195,18 @@ type RuleStore interface {
 
 func NativeRuleStore(ks storage.Keyspace) RuleStore
 
-var ErrRuleNotExpressible = errors.New("notify: the rule's store cannot hold this rule")
+// Importer is what an app's cutover step calls to write its pre-core routing
+// as native rules (R2 step M6; §10). The kernel builds it over
+// c/notify/rules/ and hands it to the step in module.Importers (06 §6.4.2).
+// ImportRule validates r
+// as PutRule does, except the author's topic permissions (the step runs as
+// the app's system actor), and stages the row into b, so the rule commits with
+// the step's deletion of the rows it came from.
+type Importer interface {
+	ImportRule(ctx context.Context, b *storage.Batch, r Rule) error
+}
+
+func NativeImporter(ks storage.Keyspace) Importer
 func (s *Service) SendTest(ctx context.Context, inst integrations.Ref) error // core:integrations.manage; result is class + status only (05-metadata M1.3)
 ```
 
@@ -246,15 +221,21 @@ the topic's `Permission` and its notify metadata (display name, default severity
 | Adapter | Target | Settings (secret fields in *italics*) | Egress |
 |---|---|---|---|
 | `core.email` | fixed address list | `host`, `port`, `username`, *`password`*, `from`, `to` (list, required) | SMTP through `env.Gate`; private hosts need `Local` (05-metadata M1.3); `host` and `port` are its destination fields (origin `smtp://host:port`), to which an operator-sourced *password* is bound by origin plus provenance (05-metadata M1.4 step 2, SEC7-3, R8-5); a change to `host` or `port` clears the stored *password* unless the write re-supplies it, exactly like a URL change (05-metadata M1.3 `Put`; lead decision, round 7) |
-| `core.webhook` | one URL | `url`, `method` (POST/PUT), `headers`, *`secret`* (HMAC), *`token`* (bearer), `legacy_headers` (bool; on, and only, for legacy-backed instances, §10) | `EgressConfigured`: a LAN receiver needs `Local`, which only an interactive `core:admin` holder sets (SEC2-7), or a `lan_allow` entry; a legacy-backed webhook stores no `Local` and keeps HEAD's reach for its configured URL, which only an admin changes (§10, A-2); a URL change clears *secret* and *token* (SEC-15) |
+| `core.webhook` | one URL | `url`, `method` (POST/PUT), `headers`, *`secret`* (HMAC), *`token`* (bearer) | `EgressConfigured`: a LAN receiver needs `Local`, which only an interactive `core:admin` holder sets (SEC2-7), or a `lan_allow` entry; a webhook migrated from ABO carries the `Local` that 05-metadata M1.10 gives every migrated instance; a URL change clears *secret* and *token* (SEC-15) |
 
 The webhook body is fixed (the `json` preset): `POST url`, body
 `{"schema":"mediacore.notification.v1","id","topic","severity","title","body","links","entity","fields","at","app"}`.
 Every webhook request carries `X-Mediacore-Delivery: <notification ID>.<instance>` (receiver-side dedupe for
 at-least-once delivery) and, when a secret is set, `X-Mediacore-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret,
-"<t>.<body>")>` so receivers can reject replays older than their tolerance. Legacy-backed webhook instances
-(the ABO webhook plugin's URLs, §10) have `legacy_headers` on and also send `X-Audiobook-Event`/`X-Audiobook-Signature-256`
-for the compatibility window (09). Email renders a fixed plain-text layout (title, body, links, fields).
+"<t>.<body>")>` so receivers can reject replays older than their tolerance. Email renders a fixed plain-text
+layout (title, body, links, fields).
+
+**Format (D10).** This is the only webhook format; HEAD's `X-Audiobook-Event` and `X-Audiobook-Signature-256`
+headers and its payload are not kept, and there is no `legacy_headers` setting. Changing the format is the cheaper
+choice: keeping HEAD's would put app-named headers in a core adapter (03 R1) and keep HEAD's replayable body-only
+signature (§2) as a second signing path. The cost is one owner step at the R2 deploy, reconfiguring each receiver
+(the R2 release note lists the header and payload change); the HMAC secret migrates by value (§10), so a receiver
+changes its header names and signing string, not its secret.
 
 ## 4. Lifecycle
 
@@ -273,8 +254,8 @@ for the compatibility window (09). Email renders a fixed plain-text layout (titl
    fixed body → `Gate.Acquire` (instance providerhttp limits) → `Send` with `core.notify.send_timeout` →
    classify → ack, or return a retryable error so the outbox retries with its backoff; permanent failures are
    dead-lettered and counted in instance health. An entry older than `core.notify.max_age` is dead-lettered
-   and counted instead of sent (OPS2-20): deliveries left in `c/outbox/` by a rollback to a build without
-   notify are delivered once on roll-forward if still fresh, never days late.
+   and counted instead of sent (OPS2-20): a delivery held back by a long outage or a stopped service is sent
+   once if still fresh, never days late.
 4. **Shutdown**: nothing in memory to flush — undelivered work is in the outbox by construction.
 
 A rule change applies to notifications published after it commits, not to deliveries already staged.
@@ -293,10 +274,10 @@ filtering at delivery time arrives with per-user subscriptions (deferred).
 | No rule matches | open (`Publish` stages nothing; counted `no_rule`) | Nobody asked to hear it. |
 | Module `Publisher` given another module's (or a core) topic | closed (`ErrForeignTopic`) | A module may notify only about what it owns (COR2-3). |
 | `PutRule` names a topic whose `Permission` the caller lacks | closed (403) | A rule must not route entities its author cannot see to a shared channel. |
-| `core.integrations.disabled` true (a staging copy, R6-7; 05-metadata M1.4) | closed for sending: `Lease` gives `ErrDisabled`, nothing is sent; the entry is returned retryable, not counted against `core.notify.max_attempts`, and still dead-lettered by `core.notify.max_age`. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances. At every stage, `staging-scrub` (09 §9.3, A-12) also clears every legacy integration URL, webhooks included, so an older build booted on the copy, which ignores the switch, has no receiver to call (R7-6); native channels are not cleared, because only S7+ binaries read them and every such staging boot carries the switch (R8-3) | A copy of a production store must never deliver to production receivers (OPS6-4, SEC7-6); re-enabling on a real install delivers what is still fresh. |
+| `core.integrations.disabled` true (a restored copy, R6-7; 05-metadata M1.4) | closed for sending: `Lease` gives `ErrDisabled`, nothing is sent; the entry is returned retryable, not counted against `core.notify.max_attempts`, and still dead-lettered by `core.notify.max_age`. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances. The optional owner rehearsal on a restored archive sets the switch and runs with `--network none` (09) | A copy of a production store must never deliver to production receivers (OPS6-4, SEC7-6); re-enabling on a real install delivers what is still fresh. |
 | `ClassTransient`, `ClassRateLimited` from a channel | retry via outbox backoff (honour `RetryAfter`), up to `core.notify.max_attempts` | Receivers go down and come back. |
 | `ClassAuth`, `ClassInvalid` (4xx other than 408/429), SMTP 5xx permanent reply, `mail.ErrInvalidHeader` | dead-letter after 1 attempt; instance `HealthAuthFailed`/`Degraded` (its `core.integration.health.changed.v1` reaches **other** channels through their rules) | Retrying cannot fix it; avoid a loop on the broken channel. |
-| Attempts exhausted, or older than `core.notify.max_age` (including entries left pending across a rollback, OPS2-20) | dead-letter, counted; visible in UI with "retry" action | No silent loss, and no stale delivery days later. |
+| Attempts exhausted, or older than `core.notify.max_age` (including entries held back by a long outage, OPS2-20) | dead-letter, counted; visible in UI with "retry" action | No silent loss, and no stale delivery days later. |
 | Egress guard refuses a webhook URL | closed (`ClassRefusedLocal`, dead-letter) | Private and loopback targets are refused unless an interactive `core:admin` holder marked the instance `Local` or the host is in `lan_allow`; link-local always (05-metadata M1.3, SEC-15, SEC2-7). |
 | SMTP to a non-loopback host without TLS | closed (refused before MAIL FROM) | Kept from `internal/mail/mail.go:16-20`. |
 
@@ -310,11 +291,10 @@ delays another. Each `Send` runs under its own timeout derived from a detached, 
 
 ## 7. Config keys
 
-Channel instances are records in the one instance registry (05-metadata M1, SIMP-4), not config keys: native
-rows, or legacy-backed webhooks served by the app's legacy instance store, routed per record (§10, R4-1, SIMP5-1); secrets are
-`integrations.notify.<id>.<field>` (05-config §2.3 grammar). Rules are data in a `RuleStore` (§3): native rules in
-`c/notify/rules/<id>`; for ABO, the one legacy-backed rule `legacy-webhooks` is served by books' legacy rule store
-from the legacy webhook event list (§10).
+Channel instances are records in the one instance registry (05-metadata M1, SIMP-4): native rows only (ABO's
+webhooks are migrated into them in R2, §10); secrets are `integrations.notify.<id>.<field>` (05-config §2.3
+grammar). Rules are data in the `RuleStore` (§3), native rules in `c/notify/rules/<id>`; for ABO the migrated
+webhook routing is the rule `webhooks` (§10).
 
 Protection classes per 05-config §1.3.7 (SEC2-8). Channel URLs, credentials and `Local` follow the instance rules
 of 05-metadata M1.3; rules need `core:integrations.manage` plus each named topic's `Permission` (§4).
@@ -323,7 +303,7 @@ of 05-metadata M1.3; rules need `core:integrations.manage` plus each named topic
 |---|---|---|---|---|
 | `core.notify.send_timeout` | duration | `15s` (email: `mail.DefaultTimeout`) | yes | none |
 | `core.notify.max_attempts` | int | `10` | yes | none |
-| `core.notify.max_age` | duration | `24h` (older undelivered, including entries pending across a rollback → dead-letter, counted; OPS2-20) | yes | none |
+| `core.notify.max_age` | duration | `24h` (older undelivered entries → dead-letter, counted; OPS2-20) | yes | none |
 
 ## 8. Metrics
 
@@ -348,23 +328,19 @@ All are new with core.
 `TestPutRule_RequiresTopicPermission`, `TestDeliver_TransientRetriedPermanentDeadLettered`,
 `TestDeliver_RetryAfterHonoured` (synctest), `TestDeliver_BrokenChannelAlertsOtherChannels`,
 `TestDeliver_PublisherCtxCancelDoesNotCancelDelivery`, `TestWebhook_SignatureWithTimestamp`,
-`TestWebhook_DeliveryHeaderStable`, `TestWebhook_JSONBodyGolden`, `TestWebhook_LegacyHeaders`,
-`TestWebhook_PrivateURLNeedsLocal`, `TestEmail_ReusesMailTLSRules` (the `internal/mail` tests move with it),
-`TestDeliver_EntryOlderThanMaxAgeDeadLettered` (synctest; the rollback case of OPS2-20),
-`TestNativeRuleStore_RoundTrip` (SIMP4-3), `TestRules_LegacyCoveredIDGoesToLegacyStore` (with a fake legacy
-`RuleStore` implementing `legacy.Covering`: a covered ID goes only to it, every other rule only to
-`c/notify/rules/`; R4-1, SIMP5-1), `TestRules_LegacyWithoutCoveringCoversAll` (a legacy store without
-`legacy.Covering` is sent every rule and the native store is never asked; SIMP5-4, SIMP6-5),
-`TestRulesLegacyMirrorsMatch` (the mirror test, 03 §3.3: in `legacy_mirror_test.go`, `package notify_test`, the
-Service's unexported mirror, exported as a test alias by `export_test.go`, and `legacy.Covering` are mutually
-assignable; R6-3, R7-7), `TestDeliver_IntegrationsDisabledKeepsEntryPending` (`core.integrations.disabled`: no `Send`, the
-entry is retried without using up `core.notify.max_attempts`, and `core.notify.max_age` still dead-letters it; R6-7), `TestPutRule_NotExpressibleRefused` (422). Store conformance: `notifytest.RuleStoreSuite(t,
-factory)` (public test-support package `integrations/notify/notifytest`, 03 §3.3, MOD5-6) runs against
-`NativeRuleStore`, and an app runs it against its legacy store together with `legacytest.NotifyRuleStoreSuite` (the
-one legacy suite of this interface, in `legacy/legacytest`: the `Covers` case; 03 §3.3, SIMP6-6, R6-3); books'
-own tests of its stores, with HEAD fixtures, cover the legacy webhook format: a Delete blanks its list entry so
-later IDs are unchanged and HEAD's parser sees the remaining URLs, and the `legacy-webhooks` rule reads and writes
-the legacy event list and refuses a topic outside the twelve-name mapping (§10).
+`TestWebhook_DeliveryHeaderStable`, `TestWebhook_JSONBodyGolden` (the one format, §3.1; it is the webhook golden
+of the R2 verification list, 09), `TestWebhook_PrivateURLNeedsLocal`, `TestEmail_ReusesMailTLSRules` (the
+`internal/mail` tests move with it), `TestDeliver_EntryOlderThanMaxAgeDeadLettered` (synctest; OPS2-20),
+`TestNativeRuleStore_RoundTrip` (SIMP4-3), `TestImportRule_ValidatesAndStagesInCallerBatch`,
+`TestDeliver_IntegrationsDisabledKeepsEntryPending` (`core.integrations.disabled`: no `Send`, the entry is retried
+without using up `core.notify.max_attempts`, and `core.notify.max_age` still dead-letters it; R6-7). Store
+conformance: `notifytest.RuleStoreSuite(t, factory)` (public test-support package `integrations/notify/notifytest`,
+03 §3.3, MOD5-6) runs against `NativeRuleStore`.
+Migration (books, R2 step M6, over HEAD-written fixtures): `TestWebhookMigration_InstancesAndRule` (each non-empty
+`urls` entry becomes `notify/webhook-<n>` with HEAD's enabled flag; `events` becomes the rule `webhooks` with the
+mapped topics, `all` and empty giving HEAD's default list; an unknown event name is reported and dropped; the
+`plugins.webhook` rows are gone after the step), `TestWebhookMigration_SecretByValue` (a receiver verifying with
+HEAD's secret verifies the first native delivery's `X-Mediacore-Signature` with the same secret value).
 Fakes: `coretest.FakeNotifier` (records `Send` calls; scriptable classes) and `coretest.WebhookReceiver(t)`
 (`httptest.Server` that verifies signatures and records deliveries); `mailtest.Recorder` moves to
 `coretest` as `coretest.MailRecorder`.
@@ -374,23 +350,10 @@ Fakes: `coretest.FakeNotifier` (records `Send` calls; scriptable classes) and `c
 | ABO | Becomes |
 |---|---|
 | `internal/mail` (`Sender`, `SMTPSender`, `Message`) | `core/integrations/notify/mail` (public `mail.Sender` stays the primitive for transactional mail); `core.email` channel wraps it |
-| `smtp_*` keys | no stored form at HEAD and none here: HEAD's `json:"-"` fields, read from the environment and the operator file only (`internal/config/invite_config.go:28-29` @748fd787a; 05-config §1.3.7, §2.2, 05-metadata M1.10), so no config write stores them in the blob or in `c/config/`, as at HEAD: operator-set `smtp_*` values are the in-memory overlay that yields the effective `notify/email` instance (`Stored=false`) while set, never persisted (05-metadata M1.4 step 2, SIMP2-5). HEAD never lays a stored value over them, so they are not `BelowStored` names (05-config §1.12.4): under the one precedence rule of 05-metadata M1.4 step 2 (SEC6-5) they overlay and lock the matching fields of a stored `notify/email` row while set, and private-network trust follows the effective value's source. An operator-set `smtp_password` is bound to the
-destination `smtp://host:port` by origin plus provenance (05-metadata M1.4 step 2; SEC7-3, R8-5): it is served while
-the effective host and port equal the operator-set `smtp_host`/`smtp_port` (or the adapter default for one the
-operator does not set), or equal the native row's `OperatorSecretOrigin` (`notify/email` has no legacy row, so its stored instance is native on ABO too), which a ProtectAdmin `Put` records, so an env password beside an admin-set host works (`TestOperatorSecret_AdminStoredHostServed`, SEC8-2);
-beside a host or port that only a non-admin `core:integrations.manage` holder chose, the password is withheld (no
-`AUTH` is sent, nothing is delivered through that instance, health `operator_secret_withheld`). HEAD stores no SMTP
-settings, so the first S7 boot records no origin, and a stored `notify/email` is a native row, under the native
-binding (05-metadata M1.4 step 2); a `notify/email` saved through the API is a native row (password in `secrets` as `integrations.notify.email.password`) that older builds never read — they keep reading the environment. Like every native instance and native rule, it does nothing after a rollback, and events during the rollback are never delivered to it; only deliveries already pending in `c/outbox/` are sent on roll-forward, if fresher than `core.notify.max_age` (§4 step 3; 05-metadata M1.4 native store; OPS5-12). Invites keep their own `mail.Sender` (05-authn): before S7 it is built from the legacy SMTP settings as today; from S7 the kernel builds it from the effective `notify/email` settings, so SMTP is configured once (an S7-or-later change that 05-authn records; SIMP2-4) |
-| `internal/plugins/webhook` + `config.Plugins["webhook"]` | at 09 S7 (with the instance registry; SIMP2-4) the webhook plugin is replaced by **legacy-backed** `notify/webhook-<n>` instances, served in place from `plugins.webhook` by books' legacy instance store (ABO code; no core adapter and no grant) until the integrations cutover (05-metadata M1.4 step 2a, M1.10; R4-1). `n` is the 1-based position in the comma-separated `urls` list, empty entries counted: books' store blanks the entry on a Delete and appends on a create, so under this build positions — and with them instance IDs and rule references — never shift, and HEAD's parser, which skips empty entries (`internal/plugins/webhook/plugin.go:48-53` @748fd787a), sees exactly the remaining URLs. `legacy_headers` is on for every legacy-backed webhook. The legacy `secret`, `plugins.webhook.enabled` and `events` are family-level (`Shared`). The secret stays plaintext in the blob, where HEAD keeps it: `secrets` reads and writes it in place under each instance's name through books' `legacy.SecretsStore` (05-config §2.2, 05-metadata M1.4 step 2a; A-2), so an older build signs with the current secret after a rollback; encrypting it is the post-S10 secrets cutover. `events` is the stored form of the one legacy-backed global `Rule` `legacy-webhooks`, served by **books' legacy `RuleStore`** (the `NotifyRules` field of `legacy.Stores` on `Manifest.LegacyStores`, R6-3), which targets every legacy-backed webhook and whose topics are the books topics of the mapping row below (`all` or empty = HEAD's default list, `plugin.go:146-159`); a `PutRule` on it accepts only those twelve topics and `MinSeverity` info (422 `ErrRuleNotExpressible` otherwise; other routing uses native rules). A legacy-backed webhook stores no `Local`: its configured URL keeps HEAD's reach, so a LAN receiver keeps working with no upgrade step, and the URL keeps HEAD's writers (ProtectAdmin; 05-metadata M1.4 step 2a, M1.10). Creating a legacy-backed webhook
-(appending to `urls`) and changing the family-level `secret` need the same ProtectAdmin check, else 403 with nothing
-written, because a new one reads `Local=true` (05-metadata M1.3 `Put`, M1.4 step 2a "New instances"; R9-4, SEC9-6;
-`TestPut_LegacyBackedCreateNeedsProtectAdmin`); a `Test` whose body changes a webhook's URL or secret needs it too
-(05-metadata M1.3 `Test`; R10-10). With authentication off, webhooks stay editable in Settings as at HEAD, where
-every write passed with auth off: on a legacy-backed webhook the auth-disabled principal passes the check (HEAD's
-auth-off rule, 05-metadata M1.3 `Put`; R10-10, SEC10-3; `TestAuthOff_LegacyBackedIntegrationWritableAsHEAD`). If an older build reorders or edits the list after a rollback, this build reads the list as it now is |
+| `smtp_*` keys | nothing to migrate: HEAD's `json:"-"` fields are read from the environment and the operator file only and never stored (`internal/config/invite_config.go:28-29` @748fd787a; 05-config §1.3.7, §2.2, 05-metadata M1.10). Operator-set `smtp_*` values are the in-memory overlay that yields the effective `notify/email` instance (`Stored=false`) while set, never persisted (05-metadata M1.4 step 2, SIMP2-5); they overlay and lock the matching fields of a stored `notify/email` row, under config's one operator lock (05-config §1.3.5). An operator-set `smtp_password` is bound to the destination `smtp://host:port` by origin plus provenance (05-metadata M1.4 step 2; SEC7-3, R8-5): it is served while the effective host and port equal the operator-set `smtp_host`/`smtp_port` (or the adapter default for one the operator does not set), or equal the row's `OperatorSecretOrigin`, which a ProtectAdmin `Put` records, so an env password beside an admin-set host works (`TestOperatorSecret_AdminStoredHostServed`, SEC8-2); beside a host or port that only a non-admin `core:integrations.manage` holder chose, the password is withheld (no `AUTH` is sent, nothing is delivered through that instance, health `operator_secret_withheld`). A `notify/email` saved through the API is a native row (password in `secrets` as `integrations.notify.email.password`). Invites keep their own `mail.Sender` (05-authn): R0 and R1 build it from the environment as HEAD does; from R2 the kernel builds it from the effective `notify/email` settings, so SMTP is configured once (a change 05-authn records; SIMP2-4) |
+| `internal/plugins/webhook` + `config.Plugins["webhook"]` | replaced in R2, in the integrations flip (09), by native `notify/webhook-<n>` instances and one native rule. Books' cutover step M6 (05-metadata M1.10) decodes `plugins.webhook` once and writes through the importers (05-metadata M1.3 `Importer`, §3 `Importer`): one `notify/webhook-<n>` instance per non-empty entry of the comma-separated `urls` list (`n` = its 1-based position among the entries HEAD's parser keeps, `internal/plugins/webhook/plugin.go:48-53` @748fd787a), adapter `core.webhook`, method `POST`, `Enabled` = `plugins.webhook.enabled`; the family-level HMAC `secret` **by value** into each instance's `integrations.notify.webhook-<n>.secret` (encrypted under the keyring with the other blob secrets by the M2 secrets step, 05-config), so every receiver keeps its secret; and one native rule `webhooks` (`c/notify/rules/webhooks`) whose `Instances` are those instances, whose `Topics` are the books topics the mapping row below gives for the names in `events` (`all` or empty = HEAD's default list, `plugin.go:146-159`) and whose `MinSeverity` is info. An event name outside the twelve is listed in the step's report and left out of the rule (it never produced a delivery at HEAD either). The rows the step read are deleted in the same batch. From then on these are ordinary native instances and an ordinary rule: per-instance secrets, origin binding and the URL-change clearing of 05-metadata M1.3 apply, and nothing is family-level. Deliveries use §3.1's format (receivers are reconfigured at the R2 deploy, §3.1 "Format") |
 | plugin event types (`internal/plugin/events.go:18-31`) | books event topics declared notifiable in the events catalog: `book.imported`→`books.book.imported.v1`, `book.deleted`→`books.book.deleted.v1`, `metadata.applied`→`books.metadata.applied.v1`, `tags.written`→`books.tags.written.v1`, `file.organized`→`books.file.organized.v1`, `dedup.detected`→`books.dedup.detected.v1`, `dedup.merged`→`books.dedup.merged.v1`, `cover.changed`→`books.cover.changed.v1`, `read_status.changed`→`books.read-status.changed.v1`, `scan.completed`→`books.scan.completed.v1`, `book.quarantined`→`books.book.quarantined.v1`, `book.unquarantined`→`books.book.unquarantined.v1` (the last two exist at HEAD but are not in the webhook's default list, `internal/plugins/webhook/plugin.go:146-159`); books publishes through `Deps.Notify.Publish` in the same batch as the change (COR2-3) |
-| `plugin.Notifier`, plugin `EventBus` (for notifications) | `plugin.Notifier` deleted (N4). The plugin `EventBus` keeps feeding the webhook plugin until S7 (S6 moves only the operations bus, SIMP3-10); at S7 the webhook plugin and its subscriptions go, and books publishes its 12 event types through `Deps.Notify` instead. `internal/plugin` itself is deleted at **S7**, in the same stage, once its last importer is rewired (20 non-test files in 10 packages import it at the evidence commit, two of them the generated mocks in `internal/server/handlers/mocks`, which the deleting PR regenerates or deletes; `git grep -l '/internal/plugin"' 748fd787a -- '*.go' | grep -v _test.go`; informative, ADV-11; 09 S7 and 04 §8.3 give the same count); the deleting PR does not build while any importer remains (04 §8.3 is the informative map; 09 S7). The notify-only bus role is `core/events` (05-events) |
+| `plugin.Notifier`, plugin `EventBus` (for notifications) | `plugin.Notifier` deleted (N4). The plugin `EventBus` keeps feeding the webhook plugin until R2's integrations flip (the events flip moves only the operations bus, SIMP3-10); in that flip the webhook plugin and its subscriptions go, and books publishes its 12 event types through `Deps.Notify` instead. `internal/plugin` itself is deleted in **the same flip**, once its last importer is rewired (20 non-test files in 10 packages import it at the evidence commit, two of them the generated mocks in `internal/server/handlers/mocks`, which the deleting PR regenerates or deletes; `git grep -l '/internal/plugin"' 748fd787a -- '*.go' | grep -v _test.go`; informative, ADV-11; 09 and 04 §8.3 give the same count); the deleting PR does not build while any importer remains (04 §8.3 is the informative map; 09). The notify-only bus role is `core/events` (05-events) |
 | `mailSenderOverride` test seam (`internal/server/server.go:424`) | `coretest.MailRecorder` injected as the email instance |
 
 ## 11. Open items
@@ -401,7 +364,7 @@ auth-off rule, 05-metadata M1.3 `Put`; R10-10, SEC10-3; `TestAuthOff_LegacyBacke
    between `Publish` and delivery (one durable entry per notification, resolved and coalesced by a consumer);
    v1 has none (SIMP2-11).
 2. Deferred features (§1 table) are listed for the owner as a design sketch (non-normative, A-15); none has a
-   consumer in S0–S10 (09 §9.3). When per-user
+   consumer in R0–R3 (09). When per-user
    delivery ships it reintroduces delivery-time RBAC filtering of each recipient against the topic's
    `Permission` for `Entity`, and personal instances are forced to `EgressPublicOnly`.
 
@@ -549,3 +512,13 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
 Plan-phase consistency:
 
 - PC-2 — §10: `internal/plugin` importers counted as 09 S7 and 04 §8.3 count them: 20 non-test files in 10 packages, two of them generated mocks.
+
+- D10–D12 revision (2026-11-04): webhook format changed, not kept: §3.1's `json` preset with `X-Mediacore-Delivery`
+  and the timestamped `X-Mediacore-Signature` is the only format; `legacy_headers` and HEAD's
+  `X-Audiobook-*` headers removed (cheaper: no app-named headers in core, no second replayable signing path; one
+  owner reconfiguration at the R2 deploy). The legacy `RuleStore` (routed model, `legacy.Covering`, mirror test,
+  `CommitLocked` and its lock, `ErrRuleNotExpressible`, `legacytest`) deleted; `notify.Importer` added. §10: books'
+  R2 cutover step migrates the webhook URLs to native `notify/webhook-<n>` instances, the HMAC secret by value
+  into each, and the event list to one native rule `webhooks`; SMTP row without stage or rollback text. Stage
+  references S0–S10/S7 re-keyed to R0–R3/R2; rollback and `staging-scrub` text removed from §4, §5, §7; tests
+  reduced to the native suite plus two migration tests.

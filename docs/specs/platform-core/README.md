@@ -1,79 +1,49 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.11.3 -->
+<!-- version: 1.12.0 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
 <!-- last-edited: 2026-11-04 -->
 
 # mediacore — platform-core design spec
 
-**Status:** draft under antagonistic review (see `docs/plans/platform-core/reviews/`). Round 1's 192
-findings, round 2's 162, round 3's 130, round 4's 117, round 5's 115, round 6's 80, round 7's 96 and round 8's 80 are
-dispositioned (`spec-round-{1,2,3,4,5,6,7,8}-dispositions.md`) and applied to the files, and so is the independent
-advisor review (phase 4: 1 BLOCKER, 6 MAJOR, 5 MINOR, 9 simplification candidates, all accepted;
-`spec-advisor-dispositions.md`). The round resolutions R2-n…R8-n stay binding except where the advisor's
-resolutions **A-1…A-17** supersede them (notably R6-6, R7-1, R7-3, R7-6, R7-8, R8-4, R8-5 and R8-6). Round 9, the
-confirmation review after the advisor pass (71 findings: 4 BLOCKER, 3 of them distinct, 27 MAJOR, 40 MINOR, all
-accepted; `spec-round-9-dispositions.md`), is applied too; its resolutions **R9-1…R9-11** restore HEAD parity where
-core now drives HEAD's code — the commit point, route ownership and metric ownership — and re-add none of the
-deleted machinery. Round 10, the final confirmation review (52 findings: 2 BLOCKER, 27 MAJOR, 23 MINOR, all accepted;
-`spec-round-10-dispositions.md`), is applied too; its resolutions **R10-1…R10-11** fix each defect by removing a
-mechanism rather than adding one (R10-1 supersedes R9-2's route move; R10-3 supersedes R9-3's single HTTP emitter).
-Round 11, a narrow verification of the round-10 fixes (`spec-round-11-verification.md` and
-`spec-round-11-blocker-sweep.md`: 1 BLOCKER, 3 MAJOR, all accepted with their notes; `spec-round-11-dispositions.md`),
-is applied too; its resolutions **R11-1…R11-5** amend R10-3 (one HTTP instrument set), R10-7 (bot commits, soak
-naming for UI-0 and H1–H3) and complete R10-1 (no operations alias). The round-12 final verification
-(`spec-round-12-final-verification.md`: 0 BLOCKER, 3 MAJOR, 7 MINOR, all accepted; `spec-round-12-dispositions.md`)
-confirms R11-1 by experiment and closes the review loop; its fixes **FIN12-1…FIN12-10** are applied in one pass.
-The design they fix, in brief:
+**Status:** draft. Twelve review rounds, the advisor review and a plan-phase consistency pass are dispositioned and
+applied (`docs/plans/platform-core/reviews/`, `spec-*-dispositions.md`). The owner decisions **D10–D12**
+(2026-11-04; 02 §2.6) then removed backward compatibility and soaks: they override every earlier resolution that
+kept a compatibility window, an alias, HEAD's stored representation, binary-swap rollback past a migration, or a
+soak gate, and the files were revised to match. The resolutions that do not depend on compatibility (R2-n…R11-n,
+A-1…A-17, FIN12-n) stay binding.
 
-- **One stored format per family during the extraction** (R3-1): core reaches ABO's data through SDK **store
-  interfaces** whose legacy implementation the `books` module supplies, so core holds no audiobook key name and no
-  storage grant (R4-1); legacy-only identifiers live in one package, `legacy`, outside the API promise (R6-3).
-- **The extraction is representation-neutral** (A-2): ABO's sessions, one-time tokens, `abk_` keys, role atoms,
-  plaintext blob secrets and auth-enable precedence stay exactly as at HEAD through S10, so a rollback costs no
-  re-login or secret re-entry; the hardening becomes the post-S10 **identity, secrets and auth-precedence
-  cutovers** on 02 N15's one-way machinery. Native stores (hello, TV, Movies) keep the hardened design.
-- **Legacy rows keep HEAD's lock discipline** (A-3): storage-enforced write checks cover native keyspaces and
-  core-written rows only; claims roll out shadow → strict. A legacy store's HEAD mutex spans core's commit
-  (`legacy.WriteLock` through `storage.CommitLocked`), and each legacy store family has exactly one instance per
-  process (R9-1); the hold is a mark on the batch (`storage.LocksHeld(b, l)`), every lock has a rank in one total
-  order, and the gap-fill file write runs inside the hold (R10-4, R10-5).
-- **One owner per route-conflict set and per metric series** (R10-1, R11-3, R9-3, R10-3, R11-1): every
-  `/api/v1/operations*` route stays books' at every stage, none is a core alias, and core's run route is a different
-  path; ABO's `opsmetrics` stops emitting what the executor records, checked against a HEAD golden with label values;
-  the legacy gin mount keeps `otelgin` as HEAD's recorder for every request that reaches gin (its wrapper clears
-  `r.Pattern`, so `NoRoute` keeps no route), core records only its own and module routes, both into one shared
-  instrument set so no duplicate series can fail a scrape, and HEAD's bucket layouts arrive through
-  `app.Options.MetricViews`. Scoped API keys keep HEAD's authenticated-only reach
-  (R9-4), and ambient scopes never reach a worker-confined key, in H1 included (R10-2); the Basic gate and HEAD's file-only keys keep
-  HEAD's storage, and H3 moves only auth-enable precedence (R9-5).
+The design, in brief:
+
+- **Four releases** (03 §3.8): **R0** hotfixes (the six early security fixes, the toolchain bump, the updater
+  hotfix); **R1** the core runtime with no user-data change (nested module, composition root, perimeter, logging,
+  core storage with strict claims, the one journaled swap, UI-0); **R2** the one-way cutover of every core-service
+  family plus the UI work; **R3** cleanup and the one upgrade floor. Code lands dark on `main`, each subsystem is
+  wired in one flip PR, and every merge passes `make ci` and e2e; there are no soaks, and auto-promotion pauses
+  from the first R2 flip until R2 ships (D11, D12 F1).
+- **Core services own their state natively** (03 §3.3 "Store interfaces and importers"): each persists in its own
+  `c/<subsystem>/` keyspace. In R2 books' migration steps decode ABO's HEAD rows and hand them to each subsystem's
+  importer, so core still holds no audiobook key name; books' own domain families stay in place.
+- **One-way, checkpointed migration** (03 §3.7, §3.8): the boot takes the pre-migration checkpoint after a disk
+  headroom check, runs M1–M8, quarantines rows it cannot decode, and raises the levels so older binaries refuse the
+  store. Rollback is an offline restore of the checkpoint or an off-host archive (keyring and state files included)
+  plus the previous binary; the checkpoint is deleted after 7 days (D12 F4).
+- **What survives R2** (D12 F2): API keys and the Audiobookshelf phone apps' sessions; task-run and log history,
+  converted. Web sessions and one-time tokens are reset; throttle holds, indexes and caches are rebuilt.
+- **The hardened design lands directly in R2:** hashed sessions and one-time tokens, `mck_` keys, native scopes,
+  encrypted secrets, and operator-locked config with one fail-closed rule for the auth and Basic-gate keys.
+- **One frozen external contract** (D12 F3): the Audiobookshelf-compatible API of the phone apps, pinned by its
+  conformance suite on the migrated fixture. Config keys, env names, metric names and HTTP paths may change; the
+  dashboards, rules, scripts and skills change in the same PR, and a set retired security or DB-path env name
+  refuses boot.
+- **One owner per route-conflict set and per metric series** (R9-2, R9-3, R10-1): core's perimeter records every
+  HTTP request, and a test checks that every series the shipped dashboards and rules name is served.
 - **No predictive stage machinery** (A-4): Go's `internal/` rule, the layering and SDK guards and
-  `TestCoreHoldsNoAppKeyNames` stay; 04 is an informative map, and the split's history uses git rename detection.
-- **ABO keeps its metric names** (A-5); **S8 moves the updater** rather than rebuilding it (A-6). Every
-  (GOOS, tag set) that ships is vetted on every PR, and the split's history keeps each moved file's pre-move
-  commits, asserted with `git log --follow` on a real rewrite for a fixed sample (R9-10, R10-9); the vet and guard
-  jobs run on any tree, built frontend or not (R10-9).
-- **Boot and operations safety:** HEAD's routes register with a same-owner collision rule (A-1); legacy env names
-  decode with HEAD's semantics (A-7); one crash matrix covers the whole boot (A-8), as the public kit
-  `coretest/crashmatrix` that ABO also runs over its own boot (R9-7); 14-day soaks are owner checkpoints in
-  `ci/soak.txt`, one row per landing of a release, bound to the soaked binary, which must be built at or after
-  that landing commit, so a re-landed release soaks afresh; every commit of a PR that touches a non-doc file
-  carries a `Stage-Release:` trailer — `<stage> <n|flip>` when it ships stage behaviour, with stages S0–S10,
-  UI-0 and the cutovers H1–H3 (R11-4), required on any PR that touches a not-yet-flipped stage's packages, and
-  `none` otherwise (feature work included); a dependency or workflow bot's commit counts as `none` when its PR
-  touches only the paths admitted for the five Dependabot ecosystems HEAD configures (gomod, npm, docker,
-  github-actions, gitsubmodule), and a merge commit has no exemption because merges are rebase-only (R11-2,
-  FIN12-1, FIN12-9) — and the gate admits a stage trailer, and every flip, only after the predecessor release's
-  14-day soak row, which passes only with every owner at the levels the release ships, checked against the build and
-  the store and written into the row by the owner command, never by a PR; an H flip can be reverted only before it
-  ships, and `UI0` soaks beside the next stage release, not before it (09 §9.2.1; A-9, R9-8, R10-7, R11-4, FIN12-2,
-  FIN12-5; OPS10-11);
-  every done-check names its environment (R9-9); `staging-scrub` needs a staging marker (A-10); concurrent feature
-  work has move windows (A-11).
-- A factory reset only stages, as a kind of the one journaled swap (R7-2, R8-1); the native factory-reset route
-  deletes library files only when asked, under one confirmation contract, `storage.ResetRequest`, while the legacy
-  alias keeps HEAD's wipe (A-17, R9-6).
-- The post-S10 hardening cutovers state their real reach: H1 and H2 purge the old files from the store, and
-  archives taken before them keep the old representation (R9-11).
+  `TestCoreHoldsNoAppKeyNames` stay; 04 is an informative map. Every (GOOS, tag set) that ships is vetted on every
+  PR (R9-10, R10-9).
+- **Boot and operations safety:** HEAD's gin routes register with a same-owner collision rule (A-1); one crash
+  matrix covers the whole boot and every migration step (A-8, R9-7); a factory reset only stages, as a kind of the
+  one journaled swap, under one confirmation contract, `storage.ResetRequest` (R7-2, R8-1, R9-6); concurrent
+  feature work has move windows (A-11).
 - Deferred-build contracts are **non-normative design sketches** (A-15).
 
 **Evidence commit:** `748fd787a`. **Raw data:** [`docs/plans/platform-core/raw/`](../../plans/platform-core/raw/00-index.md).
@@ -86,7 +56,7 @@ logging, metrics, HTTP API framework, realtime, authN, namespaced RBAC/audit, li
 AI/download/metadata/notification contracts and adapters, backup, updater, health and a React UI shell —
 is extracted into **mediacore** (`github.com/falkcorp/mediacore`), a nested Go module at `core/` plus an
 npm workspace, which a Sonarr-like TV app and a Radarr-like Movies app can share. ABO becomes
-app = core + module `books`, migrated as a strangler fig that ships at every stage; its gin router stays
+app = core + module `books`, in four releases R0–R3 with one data cutover (R2); its gin router stays
 mounted behind core's HTTP perimeter permanently. Core moves to its own repository when the measurable
 split criteria SC1–SC10 in §12 hold. Composition is explicit (`app.New(opts, modules...)`), with no `init()`
 registration and no process globals in core, so several apps can share one binary later (lowest
@@ -97,7 +67,7 @@ priority). Details: [01-summary.md](01-summary.md).
 Core builds only what ABO consumes during the extraction or what core itself needs
 ([03 §3.4](03-architecture.md)). These parts are described as **non-normative design sketches** and marked
 **deferred-build** — the SDK freezes none of them and the extraction plan builds none of them; they are
-designed and built when the first TV/Movies app starts (A-15), except the cutover rows, which follow S10:
+designed and built when the first TV/Movies app starts (A-15):
 
 | Deferred | Design sketch (non-normative) in |
 |---|---|
@@ -107,47 +77,38 @@ designed and built when the first TV/Movies app starts (A-15), except the cutove
 | Download grab/monitor/pending-recovery pipeline and the adapters other than Deluge | [05-download](05-download.md) |
 | AI usage ledger and monthly cap; notify inbox, per-user subscriptions, personal channels, templating | [05-ai](05-ai.md), [05-notify](05-notify.md) |
 | Facade-only members of built packages: key and route machinery in `auth`/`httpapi` (`PurposeFacade`, query-key extraction, `FacadeGroup`) and the auth feed token | [05-authn](05-authn.md) §3.5, [05-http-api](05-http-api.md) §3.6 |
-| Per-family cutover of the ABO families core services use (03 §3.7 names them; the store interfaces are 03 §3.3's one list) to native core keyspaces | [02](02-decision-record.md) N15, [05-storage](05-storage.md) |
-| Members of built packages that only that cutover can use: storage grants (`Grant`, `GrantMode`) and the served-run preconditions; backup encryption; the seed-role merge diff | [05-storage](05-storage.md) §5S.3.13, [05-backup](05-backup.md) B3, [05-rbac](05-rbac.md) §4.8 |
-| `Online` data migrations (read adapters, the kernel-synthesised `<ID>.datamigrate.<name>` kind): no S0–S10 consumer; extraction data migrations are `BootBlocking` | [05-storage](05-storage.md) §5S.3.14, [03 §3.3](03-architecture.md) `storage/datamigrate` |
-| The config basis mechanism (`config.Basis`): no key of S0–S10 declares a basis | [05-config](05-config.md) §1.12.5, [03 §3.4](03-architecture.md) |
-| Root read shares (`library.RootSpec.ReadShares`): no S0–S10 app has two modules that share a root, and ABO has one module (SIMP8-5) | [05-library](05-library.md) `Deferred-build members`, [03 §3.4](03-architecture.md) |
-| The post-S10 hardening cutovers of ABO's identity, secrets and auth precedence (A-2) | [02](02-decision-record.md) N15, [12](12-repo-split.md) §12.4.4, [14](14-risks-open-questions.md) K25 |
-| Updater hardening beyond the moved S0 updater: signed manifests, the boot-attempt counter, automatic rollback, the unit's binary-layout migration (A-6) | [05-updater](05-updater.md) |
+| Backup encryption (deferred for scope); the seed-role merge diff | [05-backup](05-backup.md) B3, [05-rbac](05-rbac.md) §4.8 |
+| `Online` data migrations (read adapters, the kernel-synthesised `<ID>.datamigrate.<name>` kind): no consumer in R0–R3, whose data migrations, the R2 cutover steps included, are `BootBlocking` | [05-storage](05-storage.md) §5S.3.14, [03 §3.3](03-architecture.md) `storage/datamigrate` |
+| Root read shares (`library.RootSpec.ReadShares`): no app of R0–R3 has two modules that share a root, and ABO has one module (SIMP8-5) | [05-library](05-library.md) `Deferred-build members`, [03 §3.4](03-architecture.md) |
+| Updater hardening beyond the moved R0 updater: signed manifests, the boot-attempt counter, automatic rollback, the unit's binary-layout migration (A-6) | [05-updater](05-updater.md) |
 
-The Build column of 03 §3.3 is the authoritative list of deferred packages and is re-checked at every
-stage gate. Deferral also applies to members of built packages (03 §3.4): each file lists them,
+The Build column of 03 §3.3 is the authoritative list of deferred packages and is re-checked for every
+release. Deferral also applies to members of built packages (03 §3.4): each file lists them,
 informatively, under a `Deferred-build members` heading; no generated list or absence test checks them (A-4).
 
 ## Decisions
 
 The superseding decision record is [02-decision-record.md](02-decision-record.md) (replaces
 `docs/architecture/2026-09-18-pluggable-media-platform-decision-record.md`): all 13 old decisions marked
-kept / changed / dropped (decision 13 extended in round 3: one stored format per family during the
-extraction; amended in round 4: store interfaces with books-supplied legacy implementations; amended in
-round 5: HEAD's legacy-key precedence holds until cutover; amended in round 6: legacy-only identifiers in the
-`legacy` package outside the API promise; amended by the advisor, A-2 and A-3: the extraction is
-representation-neutral and legacy rows keep HEAD's lock discipline, superseding the round-4 to round-8
-extension, sentinel and narrowing amendments), 15 new
-decisions (N1–N15; N13, the round-2 Teach-build rollback floor, is superseded; N14 names the **floor
-release** that deletes books' legacy migration code and the **stepping-stone release** a store must run
-first, checked on the store; N15 defers per-family cutover, the storage grants and the three hardening
-cutovers with it), the eight
-inherited acceptance gates, and the five old open questions. User decisions D1–D9 are fixed inputs.
-Owner questions still open (including Q-I, how the one release-gating requirement — every PR passes the
-named required checks, `make ci`'s CI jobs, `extraction-gates`, the image job and `core-ci`, before merge —
-is enforced), and those decided as adopted recommendations, are in
-[14-risks-open-questions.md](14-risks-open-questions.md) §14.3.
+kept / changed / dropped (decision 13: books' domain families stay in place, and the core-service families move
+once, one-way, into native keyspaces in R2), the new decisions N1–N15 with N13 deleted (N14: one upgrade floor, in R3; N15: the
+cutover happens inside the extraction, in R2, with no storage grants), the eight inherited acceptance gates (G5
+replaced by G5′: the store is migrated forward without loss, older builds refuse it, and rollback restores the
+pre-migration copy), the five old open questions, and the owner decisions D10–D12 (no backward compatibility; no
+soaks; the cutover scope). User decisions D1–D9 are fixed inputs. Owner questions still open (including Q-I, how
+the one release-gating requirement — every PR passes the named required checks, `make ci`'s CI jobs,
+`extraction-gates`, the image job, e2e and `core-ci`, before merge — is enforced, and Q-H, the module name), and
+those decided as adopted recommendations, are in [14-risks-open-questions.md](14-risks-open-questions.md) §14.3.
 
 ## Reading order
 
-0. For a stage's rules without review provenance, read its normative digest under
+0. For a release's rules without review provenance, read its normative digest under
    `docs/plans/platform-core/digests/` (produced as the first artefact of Phase 6; ADV-12); it cites these files
    for detail.
 1. [01-summary](01-summary.md) → [02-decision-record](02-decision-record.md) → [03-architecture](03-architecture.md) (**normative** names, package tree, rules R1–R8)
 2. [06-app-sdk](06-app-sdk.md) (what an app implements) and [04-package-mapping](04-package-mapping.md) (where every current package goes)
 3. The capability contracts you need (§5 table below)
-4. [09-abo-on-core](09-abo-on-core.md) (the extraction stages and compatibility windows)
+4. [09-abo-on-core](09-abo-on-core.md) (the releases R0–R3 and the R2 cutover; the release keys are defined in 03 §3.8)
 5. [10](10-tv-movies-proof.md), [11](11-multi-app.md), [12](12-repo-split.md), [13](13-toolchain.md), [14](14-risks-open-questions.md), [15](15-evidence-appendix.md)
 
 ## Section → file map
@@ -275,3 +236,7 @@ Round 11:
 Final verification:
 
 - FIN12-1…FIN12-10 — status line: round 12 final verification dispositioned and applied; soak bullet: five-ecosystem bot rule, no merge-commit exemption (FIN12-1, FIN12-9), levels written into the soak row and H-flip revert window (FIN12-2), `UI0` soaks in parallel (FIN12-5).
+
+Owner decisions D10–D12:
+
+- D10–D12 revision (2026-11-04): status line and design summary rewritten around the releases R0–R3, native ownership with importers, the one-way checkpointed R2 cutover, what survives it (D12 F2), the hardened design in R2 and the one frozen contract (D12 F3); the representation-neutral, lock-parity, otelgin, soak-gate and trailer bullets deleted. Build scope: the per-family cutover row, the cutover-only members row (grants, served-run preconditions) and the post-S10 hardening row deleted; backup encryption and the seed-role merge diff keep a row; the config basis row deleted (05-config no longer defines it). Decisions paragraph: decision 13, N14, N15, G5′ and D10–D12. Reading order item 4 cites 03 §3.8.

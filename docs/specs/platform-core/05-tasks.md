@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.12.3 -->
+<!-- version: 1.13.0 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -45,16 +45,16 @@ the preview-by-default rule (`internal/operations/opmode/dryrun.go:1-25`).
 `core/tasks` is the **only** durable background-work system in every app: definition, enqueue,
 dispatch, execution, progress, checkpoint/resume, cancel, approval, schedule, history. It owns the
 `/api/core/v1/tasks` API and the persistence **interfaces** `tasks.RunStore`, `tasks.ClockStore`,
-`tasks.PauseStore` and `tasks.StandDownStore` (5T.3.13, R4-1), with a **native** implementation over core's own `c/tasks/`
-keyspace, the one new apps, `examples/hello` and `coretest` use (5T.6.1). An app with pre-core run data
-passes its own **legacy** implementation of the same interfaces through `legacy.Stores.Tasks`
-([06](06-app-sdk.md) §6.4.11; core's legacy package, outside the API promise, R6-3): ABO's is books code over ABO's existing ops families in their existing format,
-so during the extraction the previous build reads every run the new build wrote (5T.6.2). Core holds no
-ABO key name or row format and no storage grant over those families (R4-1). It does **not** own:
+`tasks.PauseStore` and `tasks.StandDownStore` (5T.3.13, R4-1), with one implementation, the **native** one over core's own `c/tasks/` keyspace
+(5T.6.1), which every app, `examples/hello` and `coretest` use. An app with pre-core run data moves it into
+the native store **once**, in its own cutover step, through `tasks.Importer` (5T.3.13): ABO's is books' tasks
+cutover step M4 of the R2 release (5T.8.3), which decodes HEAD's ops families, imports them and deletes them.
+Core holds no ABO key name or row format and no storage grant over those families (R4-1, 03 R1(c)). It does
+**not** own:
 domain writers (modules),
 the outbox (`core/outbox`, [05-events](05-events.md), which *uses* tasks for its relay and whose
 module-side consumers are task runs, 5T.3.12), SSE transport ([05-realtime](05-realtime.md)),
-permission model ([05-rbac](05-rbac.md)), legacy-family ownership ([05-storage](05-storage.md) §5S.9.1).
+permission model ([05-rbac](05-rbac.md)), books' family ownership ([05-storage](05-storage.md) §5S.9.1).
 
 In scope: everything in `raw/06` §0's four generations (v1 rows, v2 `registry`, v2.5
 `maintenance.MaintenanceJob`, v3 `pkg/ops`), the scheduler (`internal/scheduler`), `internal/repairs`
@@ -147,28 +147,16 @@ type Common struct {
 	ProgressTimeout time.Duration  // watchdog gap; 0 = derived (5T.3.6)
 	Schedule        *Schedule      // the ONE timer declaration (5T.3.8); modules use ScheduleFromConfig
 	Approval        *Approval      // required for ShapeFixer
-	Ready           []ReadySignal  // readiness to wait for before dispatch; nil = {SignalStorage}; ReadySignal = health.ComponentID (lands at S5, 5T.4)
+	Ready           []ReadySignal  // readiness to wait for before dispatch; nil = {SignalStorage}; ReadySignal = health.ComponentID (5T.4)
 	Lanes           []LaneID       // lanes items may be handed to (5T.3.9)
 	Subjects        SubjectsFunc   // optional per-run write set (5T.3.4)
 	Dedupe          DedupePolicy   // queued-run dedupe/merge (v2 DedupeQueuedRuns/MergeQueuedParams)
 	Debounce        *Debounce      // v2 Batchable/BatchWindow/BatchMaxWait
 	Yields          bool           // may be quiesced by a stand-down (requires ResumeContinue), 5T.3.7
 	Notify          Notify
-	FormerKinds     []Kind // renames and legacy IDs (v2 aliases.go / FormerIDs); resolved on every read
-	// LegacyDefID is the def ID older builds register for this kind. When the
-	// app supplies legacy stores (5T.6.2), runs, clocks and Requires stamps of
-	// the kind are STORED under it (its StoredKind, 5T.3.13), so an older build
-	// resumes and shows them; with the native stores it is only an alias. It is
-	// implicitly a FormerKinds entry. Required for every adapted v2 def and every
-	// native successor of one (T2-T7); "" for a kind no older build has (its runs
-	// are stored under Kind itself, 5T.6 rule 3).
-	LegacyDefID     Kind
-	// LegacyPlugin is the plugin ID an older build labels this kind's run
-	// series with (the `plugin` label of 5T.11). The app supplies it beside
-	// LegacyDefID (ABO's opsbridge copies the v2 def's plugin ID), so no app
-	// name is spelled in core and the series keep HEAD's label values (R9-3,
-	// MOD9-2). "" = the owning module ID.
-	LegacyPlugin    string
+	// There is no alias field (D10): a Kind is the one name its runs, clocks
+	// and Requires stamps are stored and labelled under. A rename is a data
+	// migration of the owner's that rewrites the stored kind (5T.8.3).
 }
 
 // DedupePolicy decides whether a start folds into an existing run of the same
@@ -240,10 +228,9 @@ func Fixer[P, C any](kind Kind, s FixerSpec[P, C]) Definition
 ```
 
 **Dedupe at start.** `Client.Start`, `Stager.StartIn` and `Executor.StartIn` decide a fold from a read of
-the kind's unfinished runs inside `WriteRuns` (5T.7): on books' store under the run lock, so two starts
-never both miss; on the native store two concurrent starts can both miss and both queue, which the kind's
-`ConcurrencyKey` or write set then serialises, so a kind deduped by `Key` must be idempotent (05-ai's
-apply is). A scheduled start folds as 5T.3.8 says.
+the kind's unfinished runs inside `WriteRuns` (5T.7). Two concurrent starts can both miss and both queue,
+which the kind's `ConcurrencyKey` or write set then serialises, so a kind deduped by `Key` must be idempotent
+(05-ai's apply is). A scheduled start folds as 5T.3.8 says.
 
 `Source[T]`, `SourceOrder` (`Snapshot`/`AppendOnly`/`Unordered`), `DirtySet`, `Row`, `Guard`,
 `Summary`, `Total` keep their v3 meaning (`pkg/ops/batch.go:197-259`, `pkg/ops/fixer.go:20-80`),
@@ -261,8 +248,7 @@ Registration is only through `module.Registrar` ([06-app-sdk](06-app-sdk.md) §6
 ```
 
 The kernel rejects (boot fails before listeners open, `startup` class Fatal): a kind whose module
-prefix is not the registering module; duplicate kinds or `FormerKinds` colliding with any live kind;
-any constructor problem; `Perms.Start` outside `<module>:` or `core:`; a `Perms.Start` satisfiable by
+prefix is not the registering module; duplicate kinds; any constructor problem; `Perms.Start` outside `<module>:` or `core:`; a `Perms.Start` satisfiable by
 a view-class scope without `Perms.StartableByViewers` (5T.3.7, SEC-9); `Effects.Writes` naming
 another module's resource; an undeclared resource kind; `Resume == ResumeContinue` on an `Unordered`
 Batch source; a zero `Parallelism` on Batch/Fixer; both `PartitionBy` and `ExclusiveRefs` on one
@@ -270,8 +256,7 @@ Batch; a Fixer without `Approval`; a scheduled writer whose schedule says neithe
 `Preview()` (v3 rule D8, `pkg/ops/schedule.go:96-118`); a `ScheduleFromConfig` key that the
 registering owner has not declared with type `tasks.ScheduleConfig` in its own config namespace, or
 that another kind already uses (5T.3.8, R2-7); an `Every` schedule on any kind but
-`core.outbox.relay`; a `LegacyDefID` that is not in the op-ID ledger (5T.8.2) or that two kinds
-declare; a `TaskStarts` entry (5T.3.10) naming a kind that no manifest in the build declares. That
+`core.outbox.relay`; a `TaskStarts` entry (5T.3.10) naming a kind that no manifest in the build declares. That
 last check runs at **P7** (06 §6.5.1), against the registered kinds **plus every manifest's
 `TaskLedger`**, disabled modules' manifests included, so disabling module B never fails the boot of a
 module A that lists one of B's kinds (G1, COR3-10); a start of such a kind while B is disabled is
@@ -427,7 +412,7 @@ whose every assignment in the analysed packages is (a); (c) a field of an option
 ### 5T.3.3 Run context
 
 ```go
-type RunID string // opaque; assigned by RunStore.NewID (5T.3.13); books' legacy store keeps HEAD's op ID, so a run keeps its ID across builds
+type RunID string // opaque; assigned by RunStore.NewID (5T.3.13); an imported run keeps HEAD's op ID (5T.8.3), so app rows that name it still resolve
 
 type Mode uint8
 
@@ -606,7 +591,7 @@ func Uninterruptible(reason string, budget time.Duration) CancelContract // list
 
 | Topic | Rule |
 |---|---|
-| Checkpoint | `rc.Checkpoint(v)` JSON-encodes into the run's checkpoint record (`RunStore.SaveCheckpoint`, 5T.3.13); throttled by `core.tasks.min_checkpoint_interval`; written in the same storage batch as the progress record. Batch/Fixer checkpoint through the store's chunk ledger and item-key snapshot (`SaveChunk`). A batch (T2–T7) that changes a kind's checkpoint shape keeps decoding the previous shape, or the kind resumes from zero once after a rollback, a consequence listed in 09 §9.2.1's rollback table (OPS4-11). |
+| Checkpoint | `rc.Checkpoint(v)` JSON-encodes into the run's checkpoint record (`RunStore.SaveCheckpoint`, 5T.3.13); throttled by `core.tasks.min_checkpoint_interval`; written in the same storage batch as the progress record. Batch/Fixer checkpoint through the store's chunk ledger and item-key snapshot (`SaveChunk`). An imported run (5T.8.3) carries HEAD's checkpoint bytes: the converted kind's `Restore` decodes HEAD's shape, or its cutover converter rewrites it, and a run whose checkpoint neither can read resumes from zero once (counted, WARN). |
 | `ResumeContinue` requires a checkpoint | (a) static: `archtest.ResumeContinueCheckpoints(t, pkgs...)` — successor of `internal/arch/resume_restart_guard_test.go` — requires every Task-shape def with `ResumeContinue` to reach `.Checkpoint(` or a `RunItems`/`RunSeq` with `Watermark` from its `Run`; Batch/Fixer pass by construction; the 21-entry allowlist is carried over and may only shrink. (b) runtime: an attempt of a `ResumeContinue` Task that ran longer than `min_checkpoint_interval` × 3 without a checkpoint records an `uncheckpointed` watchdog strike (existing strike kind, `raw/06` §5). |
 | Resume at boot | v2 `resumeAfterStartup` (`resume.go:35`) per policy; infinite-restart guard (`worker.go:1412`) kept; a yield is not an attempt for that guard but `core.tasks.max_yields` caps consecutive yields per run (default 1000) as a backstop. |
 | Yield | `rc.ShouldYield()` is true when `Deadline − now < max(10% of Timeout, 1 min)`; the author checkpoints and returns `ErrContinueInPlace` (5T.3.3). Replaces `internal/walkresume` (`walkresume.go:5-17`, `ErrYield`). |
@@ -639,9 +624,9 @@ type Approval struct {
 | Action | Who | Fail mode |
 |---|---|---|
 | list/get defs and runs | `Perms.View` per def; rows/results of runs the caller may not view are omitted (current per-viewer filter, `internal/diagnostics/service.go:138-150`, `sysinfo` `OperationReadCheck`) | closed |
-| start | `Perms.Start`, plus the route floor `rbac.AnyAuthenticated` as 05-rbac defines it (a non-`Confining` scope; a confined credential reaches a definition only when `Perms.Start` names its scope explicitly, SEC-3). `Perms.Start` may not be satisfiable by a view-class scope unless the definition sets `StartableByViewers` (SEC-9: today's `scan.trigger` floor exists because a viewer could otherwise start a `library.view`-only def, `opsv3/handler.go:236-246`; `bulk-apply-preview` is one, 4 h timeout, `internal/server/bulk_apply_preview.go:269,278`). An adapted legacy def's `Perms.Start` is the one legacy-atom requirement value `rbac.LegacyAtom(atom)` (05-rbac §6.3; the same value a legacy route's `s.perm` check uses, COR5-4), which each checker decides as HEAD does, because on a legacy-backed install roles hold legacy atoms only and `abk_` keys keep their stored atoms (A-2): **(a)** a role principal passes iff its role's atoms grant the atom, as at HEAD; **(b)** an `abk_` key passes iff HEAD's `intersect(role atoms, key atoms)` (`internal/server/middleware/auth.go:364-365`) contains it, so a key scoped `["settings.manage"]` keeps starting the ops it starts at HEAD (SEC5-7); **(c)** the auth-disabled principal through the atom's expansion (05-rbac §4.11), because HEAD's op start checks pass every request with auth off (`internal/server/wire_ops_v3_routes.go:96-98`; an `auth_off: pass` site, SEC5-9), so with auth off such a def starts as it does at HEAD and no auth-off tightening is recorded for op starts (SEC5-8). An in-handler `auth.Can(ctx, atom)` site inside a legacy handler or an adapted def's code is not a `Perms.Start`: it becomes `rbac.LegacyCheck(atom, readSide)` with its entry from the reach snapshot's in-handler list (05-rbac §3.1, §6.3; 05-http-api §8.3), which the auth-disabled principal never satisfies, because HEAD's `auth.Can` returns false with auth off (SEC5-9, SEC5-14). Adapted legacy defs declaring only `library.view` translate to `rbac.AllOf(books:scan, books:view)`, which keeps the floor | closed |
+| start | `Perms.Start`, plus the route floor `rbac.AnyAuthenticated` as 05-rbac defines it (a non-`Confining` scope; a confined credential reaches a definition only when `Perms.Start` names its scope explicitly, SEC-3). `Perms.Start` may not be satisfiable by a view-class scope unless the definition sets `StartableByViewers` (SEC-9: today's `scan.trigger` floor exists because a viewer could otherwise start a `library.view`-only def, `opsv3/handler.go:236-246`; `bulk-apply-preview` is one, 4 h timeout, `internal/server/bulk_apply_preview.go:269,278`). A converted ABO kind's `Perms.Start` is the native scope requirement that 05-rbac's atom table (§6) maps HEAD's def permission to, so the identity cutover's reach oracle (allow and deny before = after, 05-rbac §12) covers op starts too; the auth-disabled principal is decided by 05-rbac §4.11. A HEAD def that declares only `library.view` converts to `rbac.AllOf(books:scan, books:view)`, which keeps the scan floor | closed |
 | cancel | the run's actor, or `Perms.Cancel`, or `core:tasks.manage` | closed |
-| approve / decide (`awaiting_decision`) | `Perms.Approve` (decide on a run interrupted under ResumeAsk: `Perms.Approve` if set, else `Perms.Start`) **and** a verified method, the same rule as 05-rbac §4.10 (SEC-24): an interactive session, a sign-in through an app-level authenticator extension whose `MethodSpec.Interactive` is true (only `app.Options.Authenticators` may set it, 06 §6.4.5, SEC2-16; ABO's Cloudflare Access is one; a module's compat `Registrar.AuthMethod` never is), or an API key whose scopes **name** the required scope explicitly (not via `core:admin` or another implying scope). Refused: a legacy full-scope key (`LegacyFullScope`), a delegated session (`MethodSessionDelegated`), and a forwarded header, which is never identity (current rule, `opsv3/runs.go:395-410`) | closed |
+| approve / decide (`awaiting_decision`) | `Perms.Approve` (decide on a run interrupted under ResumeAsk: `Perms.Approve` if set, else `Perms.Start`) **and** a verified method, the same rule as 05-rbac §4.10 (SEC-24): an interactive session, a sign-in through an app-level authenticator extension whose `MethodSpec.Interactive` is true (only `app.Options.Authenticators` may set it, 06 §6.4.5, SEC2-16; ABO's Cloudflare Access is one; a module's `Registrar.AuthMethod` never is), or an API key whose scopes **name** the required scope explicitly (not via `core:admin` or another implying scope). Refused: a delegated session (`MethodSessionDelegated`) and a forwarded header, which is never identity (current rule, `opsv3/runs.go:395-410`) | closed |
 | pause/resume executor, edit schedules | `core:tasks.manage` | closed |
 
 Every approve, decide, cancel-by-other and schedule edit writes an `audit` record, named per [05-rbac](05-rbac.md)
@@ -651,15 +636,16 @@ actor); a schedule edit is a write of its config key and is recorded as `core.se
 **Mode / dry-run contract** (moves `internal/operations/opmode` into the core start path):
 
 1. The start request carries mode in the **envelope**, not in params: `"mode": "preview" | "live"`.
-   For compatibility, `"dry_run"`/`"dryRun"` booleans are accepted at the top level and, for legacy
-   kinds, inside `params` (lifted out before decode). Disagreeing spellings → `400 tasks.mode_conflict`
-   (current rule, `dryrun.go:41-58`).
+   There is no `dry_run`/`dryRun` spelling (D10): a start body that carries either key at the top level
+   or inside `params` is refused with `400 tasks.mode_field_unsupported`, so a stale caller fails
+   loudly instead of running in a mode it did not ask for. The first-party callers switch in the
+   release that deletes HEAD's routes (5T.3.10).
 2. Omitted mode → **Preview** for writers, Live for `ReadOnly` defs (owner rule 2026-09-25,
    `dryrun.go:6-10`). Maintenance jobs' per-job default (`ResolveDryRunDefault`, `dryrun.go:60-66`)
    is expressed as `ReadOnly` for the read-only jobs, so the special case disappears.
 3. A Preview run gets an intent-recording Writer; its result is `{result, intents[]}`; a Fixer
-   Preview is the plan (rows). Params structs no longer carry `DryRun` fields; adapted legacy defs
-   receive the mode re-injected into their params (5T.8).
+   Preview is the plan (rows). Params structs carry no `DryRun` field; a converted def reads
+   `rc.Mode()` (5T.8.2).
 4. A scheduled writer runs in the mode its `Schedule` declares (`Live()`/`Preview()`).
 5. A run started from an outbox message runs in the mode its consumer declares: `ConsumeIntoTask[Raw]`
    requires exactly one of `outbox.Live()`/`outbox.Preview()` at registration (the outbox form of
@@ -748,12 +734,12 @@ withdrawn): the key sits inside the owner's own subsystem section (`core.backup.
 `core.log.schedules.journal_prune`, declared by the L4 `internal/logjournal` package that owns the
 journal-prune kind, since L0 `log` cannot import `tasks`). A key is a schedule key by
 its form, its **type** (`tasks.ScheduleConfig`, not `duration` or a cron string) and its registration
-through `ScheduleFromConfig`. A former interval or cron key (`core.backup.schedule`,
-`core.ai.batch_poll_interval`, …) becomes an alias of the new key with a `Convert` (05-config §1.3.6)
-from the old value: a duration `d` → `{enabled: d > 0, every: d}`, so "0 disables" becomes
-`enabled: false`. The 38 `scheduled.<task>` entries become `modules.books.<subsystem>.schedules.<name>`
-keys with aliases for the compatibility window ([09](09-abo-on-core.md) §9.2.1). Non-timing tuning
-keys stay where they are. Spec CI carries a doc-lint: every `ScheduleFromConfig("…")` literal in
+through `ScheduleFromConfig`. There are no schedule-key aliases (D10). A former interval or cron key
+(`core.backup.schedule`, `core.ai.batch_poll_interval`, …) is converted **once** by the config cutover (M2,
+05-config's rename table) into the new key's value: a duration `d` → `{enabled: d > 0, every: d}`, so
+"0 disables" becomes `enabled: false`. HEAD's 38 `scheduled.<task>` entries are converted the same way into
+the key of the kind each one fires (5T.8.2's map: `modules.books.<subsystem>.schedules.<name>` for a books
+kind, the core owner's key for a core kind). Non-timing tuning keys stay where they are. Spec CI carries a doc-lint: every `ScheduleFromConfig("…")` literal in
 `docs/specs/platform-core/*.md` must match this form and name a key that the same file's config table
 declares with type `tasks.ScheduleConfig`, so a schedule key that would fail registration fails
 review first (SIMP2-1).
@@ -774,22 +760,22 @@ heartbeat it is (COR2-5).
 
 **What replaces v2 cron strings.** They are dead metadata (5T.2). Core has no string-cron field on a
 definition; a cron string exists only as an operator-set `ScheduleConfig.Cron`, which is evaluated.
-Migration (5T.8 batch T7) converts each of the 15 declared crons into **no schedule** and records it
-in the migration ledger, because none of them ever ran unattended: turning any on is a behaviour
+Conversion (5T.8.2 group T7) turns each of the 15 declared crons into **no schedule** and lists it
+in the R2 release note, because none of them ever ran unattended: turning any on is a behaviour
 change the owner decides per def (open item 1). The 38 `TaskDefinition`s become
 `ScheduleFromConfig` on their target def, with today's interval and enable flag as the key's
 default; `RunOnStart` → `.OnStart()`; `IsEnabled` → the key's `enabled` (or `.When` for gates that
 are not schedule settings); window membership (`maintenanceOrder`, `internal/scheduler/scheduler.go:197-246`)
-→ `Window: "nightly", Order: idx`. `transcode` (enqueues nothing) is deleted; `batch_poller` becomes a
-schedule on an AI-owned task ([05-ai](05-ai.md)).
+→ `Window: "nightly", Order: idx`. `transcode` (enqueues nothing) is deleted; `batch_poller` becomes the
+schedule of the core kind `core.ai.batch-poll` ([05-ai](05-ai.md)). The definitions' bodies and these
+declarations land dark and are registered by the tasks flip (F5, 5T.8.2), which deletes ABO's scheduler in
+the same PR, so no kind ever has two schedulers.
 
 **Durable clock.** One clock per scheduled kind, `tasks.Clock{LastDue, LastFire, LastRun, Missed,
-GateClosedAt, ScheduleHash}`, persisted only through `ClockStore` (5T.3.13) under the kind's
-`StoredKind`. The native store keeps it in `c/tasks/sched/<kind>` (5T.6.1). Books' legacy store keeps a
-kind's clock where HEAD keeps it, in HEAD's encoding; a `Clock` field that encoding lacks reads as its zero
-value and is not stored (5T.6.2). An empty `ScheduleHash` means the store keeps none: the scheduler then
-derives each poll's next instant from `LastDue` and the current `ScheduleConfig`, HEAD's interval-clock rule
-(`interval_clock.go:36-63`), so a clock an older build advanced while rolled back is simply continued.
+GateClosedAt, ScheduleHash}`, persisted only through `ClockStore` (5T.3.13) under the kind, in
+`c/tasks/sched/<kind>` (5T.6.1). An empty `ScheduleHash` (every clock the cutover imports, 5T.8.3) makes the
+scheduler derive each poll's next instant from `LastDue` and the current `ScheduleConfig`, HEAD's
+interval-clock rule (`interval_clock.go:36-63`), so an imported clock is continued, not re-seeded.
 One scheduler goroutine
 polls every `core.tasks.schedule_poll` (1 m, current `intervalPollInterval`,
 `internal/scheduler/interval_clock.go:52-56`). A due fire is **one storage batch**:
@@ -807,13 +793,12 @@ and `Cron` compute the next instant in the zone; a skipped wall time fires at th
 after, a repeated one fires once. A held kind's clock (5T.3.11) is not polled; on re-enable its
 `Missed` policy applies.
 
-**Rollback (OPS-7, DATA-6).** With books' legacy store the clock a build advances is the clock its
-predecessor reads, so a rollback neither fires every due schedule at once on stale clocks nor
-double-runs one after the roll-forward, with no mirror and no boot-time adoption: each build continues
-from the last `LastDue` the other committed. Pebble admits one process at a time, so two builds never
-advance a clock concurrently. Until T7 the 38 `TaskDefinition`s are still ticked by ABO's scheduler,
-never by core's; from T0+T1 to T7 nothing else schedules them, so that ticker must keep running
-through the whole interval (5T.6.2, `TestOneSchedulerPerKind`, DATA5-8).
+**First boot after the cutover (OPS-7, DATA-6).** The tasks cutover imports every HEAD clock
+(the v3 schedule state, the scheduler's settings clocks, the full-sweep clock and the maintenance window's
+date) as the clock of the kind it fires (5T.8.3), so the first R2 boot neither fires every due schedule at
+once (full scans, paid AI calls) nor skips one that was due: each kind continues from the last `LastDue`
+HEAD committed. A clock HEAD never wrote is seeded by the first-sight rule above. `TestCutover_NoCatchUpStorm`
+and `TestScheduleParity_AllDefinitions` (5T.9) prove both halves.
 
 ### 5T.3.9 Lanes
 
@@ -852,32 +837,28 @@ type Client interface {
 	// ctx, as Start does (below), and apply the native route's permission rule to
 	// that actor (the table below: Cancel = the run's actor or Perms.Cancel;
 	// Decide = Approve/Start + verified method; Pause/Unpause =
-	// core:tasks.manage). Books' legacy /api/v1/operations handlers call them
-	// from T0+T1, because no route under that prefix is a core alias (R11-3).
+	// core:tasks.manage).
 	Cancel(ctx context.Context, id RunID) error
 	Decide(ctx context.Context, id RunID, d Decision) error // Resume | Finish | Drop
 	Pause(ctx context.Context, reason string) error
 	Unpause(ctx context.Context) error
 	// PauseState reads the operator pause marker (any authenticated caller;
-	// HEAD's GET /api/v1/operations/pause keeps its library.view gate on the
-	// gin route). paused is false when no marker is set.
-		PauseState(ctx context.Context) (p Pause, paused bool, err error)
-	// Timeline, Log and Discard serve books' legacy GET /operations/timeline,
-	// GET /operations/v2/:id/logs/download and DELETE /operations/v2/:id/record
-	// from T0+T1 (FIN12-3); native GET /timeline and GET /runs/{id}/log run the
-	// same code. Timeline needs core:tasks.view and filters by each def's View.
+	// GET /pause). paused is false when no marker is set.
+	PauseState(ctx context.Context) (p Pause, paused bool, err error)
+	// Timeline, Log and Discard are the code of GET /timeline,
+	// GET /runs/{id}/log and DELETE /runs/{id} (FIN12-3), callable by a module
+	// too. Timeline needs core:tasks.view and filters by each def's View.
 	Timeline(ctx context.Context, q TimelineQuery) ([]RunView, error)
 	// Log reads one run's log page, gated by the def's View, each line redacted
-	// by RedactRunView's rule. Books keeps mayReadLogsOf, readableLogs and the
-	// gzip rendering of its download route.
+	// by RedactRunView's rule.
 	Log(ctx context.Context, id RunID, q PageQuery) iter.Seq2[LogLine, error]
 	// Discard deletes one run and every record it owns, with Cancel's
 	// permission rule (HEAD's "same permission as cancel"). ErrRunNotFound
 	// (404); ErrRunActive (409) while the run is queued, running, waiting or
-	// held by a live worker, which only the executor knows from T0+T1
-	// (operations_v2.go:665-679). The executor stages RunStore.Delete inside
-	// WriteRuns, so the delete shares the run lock (books: HEAD's opsMu) and
-	// the resume sweep never sees a half-deleted run.
+	// held by a live worker, which only the executor knows (HEAD's rule,
+	// operations_v2.go:665-679). The executor stages RunStore.Delete inside
+	// WriteRuns, so the delete is checked against the run it read and the
+	// resume sweep never sees a half-deleted run.
 	Discard(ctx context.Context, id RunID) error
 }
 
@@ -886,7 +867,7 @@ type Client interface {
 // runs (the store rule quoted at operations_v2.go:298), which RunFilter's
 // Created bound cannot express.
 type TimelineQuery struct {
-	Kinds  []Kind     // registered or former kinds, resolved by the executor; empty = every kind the caller may view
+	Kinds  []Kind     // registered kinds; empty = every kind the caller may view
 	States []RunState // empty = every state
 	From   time.Time  // Finished >= From, unfinished runs included; zero = no bound
 	To     time.Time  // Finished < To, unfinished runs included; zero = no bound
@@ -903,20 +884,11 @@ type RunFilter struct {
 	Limit  int        // 0 = 100; values above 1000 are clamped to 1000
 }
 
-// RunQuery is Client.Runs' query (and GET /runs'): Kinds are registered
-// Kinds, former kinds accepted and resolved by the executor; empty = every
-// kind the caller may view.
+// RunQuery is Client.Runs' query, GET /runs' and RunStore.List's: Kinds are
+// registered Kinds (there are no aliases to resolve, D10); empty = every kind
+// the caller may view.
 type RunQuery struct {
 	Kinds []Kind
-	RunFilter
-}
-
-// ListQuery is RunStore.List's query: the executor rewrites a RunQuery's
-// Kinds to the StoredKinds they are stored under (every alias and former
-// kind included), so an implementation never resolves aliases (StoredKind,
-// 5T.3.13; SIMP6-7).
-type ListQuery struct {
-	Kinds []StoredKind
 	RunFilter
 }
 
@@ -966,10 +938,9 @@ type RunView struct {
 // users.manage to core:users.manage, which implies core:users.view, and
 // core:users.view is the scope that already gates reading user identities
 // (05-authn GET /users). tasks sets it as the Redact function of the
-// core.task.run-changed.v1 catalog entry (05-events 5E.3.1), so every realtime
-// surface (native stream and legacy projections) applies it, and the
-// GET /runs[/{id}] serialiser calls the same function. No module redactor exists.
-// A nil who blanks unconditionally (the S5 legacy-stream bridge, 5T.4 step 3).
+// core.task.run-changed.v1 catalog entry (05-events 5E.3.1), so the realtime
+// stream applies it, and the GET /runs[/{id}] serialiser calls the same
+// function. No module redactor exists. A nil who blanks unconditionally.
 func RedactRunView(who rbac.Checker, v RunView) RunView
 
 // RunViewRedactor adapts RedactRunView to events.RedactFunc (decode the
@@ -980,10 +951,8 @@ func RunViewRedactor() events.RedactFunc
 
 // RunState is the state of a run as the executor and the API see it.
 // Terminal: succeeded, failed, timed_out, canceled, interrupted_dropped.
-// "held" is not a state (5T.3.11). NativeStores stores these values; books'
-// legacy store keeps HEAD's stored vocabulary (internal/operations/state,
-// which stays in ABO) and maps each RunState to it (5T.6.2 "Run states";
-// R6-2), so a RunState value is never assumed to be a stored string.
+// "held" is not a state (5T.3.11). NativeStores stores these values; the
+// tasks cutover maps HEAD's stored vocabulary to them once (5T.8.3).
 type RunState string
 
 const (
@@ -1029,28 +998,20 @@ func (s RunState) Terminal() bool
 // the system actor of the module that owns kind (SEC2-15 permission set), never
 // a core or caller identity; req.Mode must be set (ErrModeUnset). Core services
 // hold a Stager, never the Executor. The service builds b inside WriteRuns,
-// which commits it (5T.7, A-3, R9-1).
+// which commits it (5T.7, R9-1).
 type Stager interface {
 	StartIn(ctx context.Context, b *storage.Batch, kind Kind, req StartRequest) (RunRef, error)
 	// WriteRuns is the one commit path of a batch that carries a RunStore,
-	// ClockStore, PauseStore or StandDownStore write, and a use of
-	// storage.CommitLocked (05-storage §5S.3.2 owns it; R9-1). Each attempt
-	// opens a fresh batch with open (the caller's own handle, so the caller
-	// stays the initiating owner) and calls
-	//   storage.CommitLocked(ctx, open(), storage.Sync, stage, runLocks...)
-	// under storage.RetryOnConflict: stage performs every read the batch's
+	// ClockStore, PauseStore or StandDownStore write. Each attempt opens a
+	// fresh batch with open (the caller's own handle, so the caller stays the
+	// initiating owner), calls stage, which performs every read the batch's
 	// writes derive from and stages the caller's rows and its run writes (here
-	// StartIn), and never commits. runLocks are the executor's RunLocks: the
-	// locks the kernel resolved at P4c by calling the run store's
-	// legacy.WriteLock with legacy.LockRuns (books: HEAD's opsMu, 5T.3.13),
-	// none on the native store; the executor never names a lock or calls
-	// WriteLocks (COR10-5). The lock is held from before stage's first store
-	// read until the commit returns, re-taken on every attempt, and
-	// CommitLocked marks the attempt's batch with the hold, which the run
-	// store's staging methods check with storage.LocksHeld(b, l) (R10-4).
+	// StartIn) and never commits, and then commits the batch with
+	// storage.Sync, all under storage.RetryOnConflict (05-storage §5S.3.2), so
+	// a conflict re-stages every participant from fresh reads (5T.7). The
+	// checks are the stores' commit-time preconditions; there is no lock.
 	// WriteRuns is not re-entrant: called from inside another WriteRuns'
-	// stage it returns ErrWriteRunsNested and runs nothing. A nested
-	// CommitLocked would join the held lock (05-storage), but its separate
+	// stage it returns ErrWriteRunsNested and runs nothing, because a nested
 	// commit would repeat on every retry of the outer build.
 	WriteRuns(ctx context.Context, open func() *storage.Batch, stage func(ctx context.Context, b *storage.Batch) error) error
 }
@@ -1087,84 +1048,54 @@ type Executor interface {
 }
 ```
 
-`/api/core/v1/tasks` (`httpapi`, [05-http-api](05-http-api.md)); every route has a permission (R6):
+`/api/core/v1/tasks` (`httpapi`, [05-http-api](05-http-api.md)); every route has a permission (R6). The
+"Replaces" column names the HEAD routes the tasks flip deletes (F5, 5T.8.2); none survives as an alias (D10):
 
 | Route | Replaces | Permission |
 |---|---|---|
-| `GET /definitions`, `GET /definitions/{kind}` | `GET /api/v3/ops/defs[/:id]`, `/api/v1/op-defs` | `AnyAuthenticated` + per-def `View` filter |
-| `POST /definitions/{kind}/runs` | `POST /api/v3/ops/defs/:id/runs`, `POST /api/v3/ops/runs` | per-def `Start`. An `Idempotency-Key` header is copied into `StartRequest.IdempotencyKey`; a duplicate within `core.tasks.idempotency_ttl` returns `200` with the existing `RunView` and `Idempotent-Replayed: true` (the only idempotency store on this route; httpapi keeps none, SIMP2-8) |
-| `GET /runs`, `GET /runs/{id}`, `/runs/{id}/rows`, `/runs/{id}/items`, `/runs/{id}/log` | v3 `runs` | per-def `View`; each `RunView` passes `RedactRunView` |
-| `POST /runs/{id}/cancel` | v3 cancel | actor or `Cancel` |
+| `GET /definitions`, `GET /definitions/{kind}` | `GET /api/v3/ops/defs[/:id]`, `/api/v1/op-defs[/:id]` | `AnyAuthenticated` + per-def `View` filter |
+| `POST /definitions/{kind}/runs` | `POST /api/v3/ops/defs/:id/runs`, `POST /api/v3/ops/runs`, `POST /api/v1/operations/v2`, `POST /api/v1/tasks/:name/run`, `POST /api/v1/maintenance-window/run` (a start of `core.window.nightly`) | per-def `Start`. An `Idempotency-Key` header is copied into `StartRequest.IdempotencyKey`; a duplicate within `core.tasks.idempotency_ttl` returns `200` with the existing `RunView` and `Idempotent-Replayed: true` (the only idempotency store on this route; httpapi keeps none, SIMP2-8) |
+| `GET /runs`, `GET /runs/{id}`, `/runs/{id}/rows`, `/runs/{id}/items`, `/runs/{id}/log` | v3 `runs`; `GET /api/v1/operations/v2/:id`, `…/v2/:id/logs/download` | per-def `View`; each `RunView` passes `RedactRunView` |
+| `POST /runs/{id}/cancel` | v3 cancel; `DELETE /api/v1/operations/v2/:id` | actor or `Cancel` |
+| `DELETE /runs/{id}` (`Client.Discard`) | `DELETE /api/v1/operations/v2/:id/record` | actor or `Cancel`; 409 while active |
 | `POST /runs/{id}/approve` | v3 approve | `Approve` + verified method |
-| `POST /runs/{id}/decide` `{resume\|finish\|drop}` | none (the v1 retry and finish routes stay books', below; `raw/08` §7 finish-without-resuming) | `Approve`/`Start` + verified method |
-| `GET /counts`, `GET /timeline` | v3 counts/timeline | `core:tasks.view` |
-| `GET /schedules`, `PATCH /schedules/{kind}` | `/api/v1/tasks`, `PUT /tasks/:name` | view / `core:tasks.manage`; PATCH writes the kind's `ScheduleConfig` key through `config` (DB override layer; a key locked by an operator-set layer is refused with 409) |
-| `POST /pause`, `POST /unpause` | none (`/api/v1/operations/pause\|resume` stay books', below) | `core:tasks.manage` |
-| (no tasks route: events) | `GET /api/v3/ops/events` (`/api/v1/operations/events` stays a books gin route, 05-http-api §8.1 S6 row) | not routes of `/api/core/v1/tasks` (FE2-18): the bus topics `core.task.run-changed.v1` and `core.task.log-appended.v1` are bridged one-to-one to realtime streams ([05-events](05-events.md) 5E.3.2, [05-realtime](05-realtime.md)), which serve the legacy paths; topic permission `AnyAuthenticated`, per-envelope visibility = the definition's `View` (COR-20), payload through `RedactRunView` |
+| `POST /runs/{id}/decide` `{resume\|finish\|drop}` | `POST /api/v1/operations/v2/:id/retry` and `…/finish` (`raw/08` §7 finish-without-resuming) | `Approve`/`Start` + verified method |
+| `GET /counts`, `GET /timeline` | v3 counts/timeline; `GET /api/v1/operations/timeline` | `core:tasks.view` |
+| `GET /schedules`, `PATCH /schedules/{kind}` | `/api/v1/tasks`, `PUT /tasks/:name`; `GET /api/v1/maintenance-window/status` (the `core.window.nightly` row) | view / `core:tasks.manage`; PATCH writes the kind's `ScheduleConfig` key through `config` (DB override layer; a key locked by an operator-set layer is refused with 409). The window's hours are the `core.tasks.windows.nightly.*` keys, written through 05-config's settings routes (they replace `PUT /api/v1/maintenance-window/config`) |
+| `GET /pause`, `POST /pause`, `POST /unpause` | `GET\|POST /api/v1/operations/pause`, `POST /api/v1/operations/resume` | `core:tasks.view` (GET) / `core:tasks.manage` |
+| (no tasks route: events) | `GET /api/v3/ops/events`, `GET /api/v1/operations/events` | not routes of `/api/core/v1/tasks` (FE2-18): the bus topics `core.task.run-changed.v1` and `core.task.log-appended.v1` are streamed by the one realtime endpoint `/api/core/v1/events` ([05-events](05-events.md) 5E.3.2, [05-realtime](05-realtime.md)); topic permission `AnyAuthenticated`, per-envelope visibility = the definition's `View` (COR-20), payload through `RedactRunView` |
 
-Compat: `/api/v3/ops/*`, `/api/v1/op-defs` and `/api/v1/tasks` are aliases onto the table's native routes with a `Deprecation` header and log line
-for the compatibility window, defined once in [09](09-abo-on-core.md) §9.2.1 and implemented by `compat` (SIMP-7).
-**`/api/v1/maintenance-window/*` is kept, not aliased (FIN12-4):** HEAD's `POST …/run`, `GET …/status` and
-`PUT …/config` (`wire_operations_routes.go:121-123` @748fd787a, `settings.manage`) stay books' gin routes, as R11-3's
-rule keeps the operations prefix, with HEAD's bodies, and from T0+T1 their handlers reach the maintenance-window kind
-through `Deps.Tasks` (`run` calls `Client.Start`); the legacy SPA's MaintenanceTab calls them until S9 (07). Alias handlers
-translate legacy def IDs through `FormerKinds`/`LegacyDefID`, and render the legacy response body through
-05-http-api's `LegacyPath.Shape` (there is no `WithLegacyShape`; FE3-6). An alias request never reaches the
-legacy gin mount, so core's stage 2 records it, with the `http_route` value 05-http-api §4.2 states for an
-alias; every request that reaches gin, every `/api/v1/operations` route below included, is recorded by the
-mount's `otelgin` as at HEAD, never by both (R10-3); both write into one instrument set (R11-1, 05-http-api §4.2).
-
-**No `/api/v1/operations*` route is a core alias (R11-3, VER11-3; completes R10-1).** All 38 routes HEAD registers
-under `/api/v1/operations` (`grep 'protected.*("/operations' internal/server/*.go` @748fd787a; a count the test
-generates at the stage's base commit) stay books' gin manifest routes at every stage, with HEAD's handlers' shapes and
-HEAD's `s.perm` atoms; the five operations-component routes below are among them. The routes this table once
-listed as replaced call core's tasks client, `Deps.Tasks`, from T0+T1 and render HEAD's response body themselves:
-`POST …/v2` calls `Client.Start`, `DELETE …/v2/:id` calls `Client.Cancel`, `POST …/v2/:id/retry` and `…/finish`
-call `Client.Decide` (`Resume`, `Finish`), and `POST …/pause` and `…/resume` call `Client.Pause`/`Unpause`, while
-`GET …/pause` reads `Client.PauseState` (`wire_operations_routes.go:28-46` @748fd787a). `GET …/timeline` calls `Client.Timeline`, `GET …/v2/:id/logs/download` calls `Client.Log` and `DELETE
-…/v2/:id/record` calls `Client.Discard` (`wire_operations_routes.go:24,26,37`, handlers `operations_v2.go:237,494,680`
-@748fd787a; FIN12-3); `TestS5_OperationsTimelineLogDiscardParity` checks HEAD's timeline window and log body, a 409
-for the discard of a running run, and that the discard of a terminal run removes every key and the resume sweep does
-not bring it back. Books' handlers with no core target (`stale`, `clear-stale`, `optimize-database`, `sweep-tombstones`, `set-internal-flag`, `audit-files`,
-`:id/class-lists/:class`, `:id/undo/preflight`, `:id/revert`, `reconcile/*`, the version-group maintenance routes;
-`wire_operations_routes.go:101-112`, `server_lifecycle.go:1953-1965`) are books' domain code and stay as they are,
-and the rest of the prefix keeps the treatment 09 S5 gives it. `/api/v1/operations/events` stays a gin manifest route over the realtime
-bridge (05-http-api §8.1 S6 row). `TestS5_OperationsComponentStaysBooks` asserts that the gin engine holds exactly
-the generated count of routes under the prefix and that no alias or core route is registered under it.
-
-**The five operations routes stay books' (R10-1, COR10-1).** `GET /api/v1/operations/v2/{id}` and
-`GET /api/v1/operations/{id}/{activity,changes,result,results}` (`internal/server/wire_operations_routes.go:27,103,110`,
-`internal/server/wire_library_routes.go:48`, `internal/server/server_lifecycle.go:1952`) are not aliases of
-this group and never move to core. They stay books' legacy gin routes at every stage, with HEAD's handlers
-and HEAD's `library.view` (`s.perm(auth.PermLibraryView)` on all five), so the conflict component they form
-in `ServeMux` (05-http-api §4.8 appendix A) has one owner, books, and folds as at S2–S4: the four `…/{id}/…`
-members into one generalised pattern behind the legacy mount, `…/v2/{id}` kept as its own pattern. From
-T0+T1 their handlers read runs through core's tasks client, `Deps.Tasks` (`Client.Get` and `Client.Runs`,
-above), never through opsbridge or a v2 row: the v2 handler renders HEAD's v2 shape itself from the
-`RunView`, and the activity, changes, result and results handlers resolve the run through the same client
-and read books' own families as at HEAD. Core's run route is the native `GET /runs/{id}` of this group,
-`/api/core/v1/tasks/runs/{id}`, a different path that is not an alias of any of them, so no conflict set
-ever spans two owners and 05-http-api §4.8 rule 1 holds unchanged. No core route or alias is registered in
-the component (`TestS5_OperationsComponentStaysBooks`, 05-http-api §12). No core alias could serve them
-anyway: an alias targets a native core route of its group, and four of the five have none.
+**The flip deletes HEAD's run routes and moves their callers in the same PR (D10).** The F5 flip PR
+(5T.8.2) deletes every HEAD route the table names, together with the engine behind them, and in that PR
+moves the SPA's Activity page, `useOperationsStore` and MaintenanceTab to the native routes ([07](07-ui-shell.md);
+the Activity page polls `GET /runs` until the events and realtime flip F6 gives it the realtime client,
+[05-realtime](05-realtime.md) §11), and the first-party scripts and agent skills that call them
+([09](09-abo-on-core.md) §9.4, R2). No alias, `Deprecation` header or wire-shape golden exists. The other routes under
+`/api/v1/operations` (`stale`, `clear-stale`, `optimize-database`, `sweep-tombstones`, `set-internal-flag`,
+`audit-files`, `:id/activity`, `:id/result`, `:id/results`, `:id/class-lists/:class`, `:id/changes`, `:id/undo/preflight`,
+`:id/revert`, `reconcile/*`, the version-group maintenance routes; `wire_operations_routes.go:101-112`,
+`wire_library_routes.go:48`, `server_lifecycle.go:1952-1965`) are books' domain code and stay books' gin routes; a handler among them
+that reads a run reaches it through `Deps.Tasks` (`Client.Get`, `Client.Runs`), never through a HEAD ops row,
+and resolves run IDs unchanged, because the cutover keeps every run ID (5T.8.3). Core's run route
+`/api/core/v1/tasks/runs/{id}` shares no path with them, so 05-http-api §4.8's collision rule holds with no
+special case.
 
 ### 5T.3.11 Held runs (disabled modules)
 
-A disabled module registers no kinds ([06](06-app-sdk.md) §6.5.3), but its runs, clocks and ledger
-lines persist. **`held` is a computed classification, never a stored state** (COR-13): a run is held
-when `Kind.Module()` names a module whose manifest is in the build but disabled, or when its stored def
-ID is a `FormerKinds` or `LegacyDefID` entry of such a module — known from the module's last definition snapshots
-(`c/tasks/def/<kind>`) or from the task-ID ledger its manifest carries (06 `Manifest.TaskLedger`).
+A disabled module registers no kinds ([06](06-app-sdk.md) §6.5.3), but its runs and clocks persist.
+**`held` is a computed classification, never a stored state** (COR-13): a run is held when `Kind.Module()`
+names a module whose manifest is in the build but disabled; its kinds are known from the module's last
+definition snapshots (`c/tasks/def/<kind>`) or from the kind list its manifest carries
+(06 `Manifest.TaskLedger`).
 
 | Where | Behaviour |
 |---|---|
 | Dispatcher | never claims a held run; the run keeps its queue position |
 | Resume sweep | skips held runs; their stored state (`queued`, `interrupted_*`, `awaiting_decision`) is untouched |
 | Scheduler | does not poll a held kind's clock; on re-enable the kind's `Missed` policy applies (at most one coalesced fire) |
-| Op-ID ledger gate (5T.4 step 1) | a ledger line or stored kind that resolves to a disabled module is **resolved** (held), never fatal |
 | API | `GET /runs` shows `state: "held"` with the stored state alongside; cancel, approve and decide are refused with `409 tasks.held` (read-only) |
 | Re-enable | the next boot registers the kinds; queued runs dispatch and interrupted runs follow their `ResumePolicy`, exactly as after a restart |
-| Module removed from the build (no manifest) | not held: its kinds are unknown (hidden from census, counted, WARN; 5T.5), and the release that removes a module must tombstone its ledger lines |
+| Module removed from the build (no manifest) | not held: its kinds are unknown (5T.5's unknown-kind row) |
 
 `coretest.AssertModuleInert` (06) includes a disabled module with queued, interrupted and
 `awaiting_decision` runs and a scheduled kind, and asserts boot succeeds and none of them moves.
@@ -1204,10 +1135,9 @@ in the relay batch (05-events 5E.4), or from a core service through the kernel-p
 dispatch conflict rule, ref locks and fence then apply as for any module run, without exception in
 the extraction builds (the attribution-only exemption below is deferred).
 
-**Kernel-registered data-migration kinds (COR4-5, COR4-6) — deferred build (SIMP5-7).** No stage
-S0–S10 declares an `Online` data migration: R3-1 removed the adopt and fold copies it was designed for,
-and the named later consumers (books' storage-efficiency release B, a per-family cutover) raise a
-level and so are `BootBlocking`. The `Online` mode therefore lands with its **first consumer**, listed
+**Kernel-registered data-migration kinds (COR4-5, COR4-6) — deferred build (SIMP5-7).** No release
+R0–R3 declares an `Online` data migration: R3-1 removed the adopt and fold copies it was designed for,
+and the R2 cutover's steps (M1–M8) raise a level and so are `BootBlocking`. The `Online` mode therefore lands with its **first consumer**, listed
 in 05-storage §5S.3.14's "Deferred-build members" together with everything this paragraph and the
 next specify: the kernel-registered `<module>.datamigrate.<name>` and `core.storage.migrate` kinds, the
 synthesised definition below, the dispatch write-set exemption (an unexported kernel flag) and the two tests named below. No extraction build registers these
@@ -1246,9 +1176,8 @@ the same subject is not blocked; two migrations of one owner never overlap) and
 
 ```go
 // Stores is everything the executor and the scheduler persist. The kernel
-// builds it once at P4c (06 §6.5.1): from legacy.Stores.Tasks when a module
-// supplies it (ABO: books code, 5T.6.2; the constructor is described below),
-// else NativeStores over c/tasks/ (5T.6.1). Core code
+// builds it once at P4c (06 §6.5.1) as NativeStores over c/tasks/ (5T.6.1);
+// there is no other implementation and no app-supplied store (D10). Core code
 // reaches runs, clocks, the pause marker and stand-down markers only through
 // these interfaces and never names a stored key.
 type Stores struct {
@@ -1261,18 +1190,10 @@ type Stores struct {
 // NativeStores is core's implementation over the c/tasks/ keyspace (5T.6.1).
 func NativeStores(ks storage.Keyspace) Stores
 
-// StoredKind is the def ID a run, clock or stamp is stored under: the kind's
-// LegacyDefID when the stores are legacy and it is set, else the Kind. The
-// executor resolves it; implementations never resolve aliases.
-type StoredKind string
-
 // RunRecord is the stored form of a run: RunView plus what only the executor
-// reads. The native store persists every field. A legacy store persists what
-// its app's records hold; a field they have no place for is not stored and
-// reads as its zero value, which names no access and starts no work (5T.6.2).
+// reads. The native store persists every field.
 type RunRecord struct {
 	RunView
-	StoredKind StoredKind
 	Priority   Priority
 	Params     json.RawMessage
 	Result     json.RawMessage
@@ -1297,49 +1218,38 @@ type Expect struct {
 // (participant binding, 05-storage §5S.3.2), so one commit carries a run row
 // together with a clock advance, an outbox cursor (05-events 5E.4), an
 // idempotency record or a notification (OnTerminal, 5T.4). The exceptions
-// are Prune, ReplaceRows (and the optional legacy.TasksRecoverer below):
-// maintenance-class methods that commit their own chunked batches and never
-// join a multi-owner commit (COR5-12, DATA9-7). Every caller that builds such
-// a batch builds it inside Executor.WriteRuns or Stager.WriteRuns, which
-// commits it (5T.7, R9-1).
+// are Prune and ReplaceRows: maintenance-class methods that commit their own
+// chunked batches and never join a multi-owner commit (COR5-12, DATA9-7).
+// Every caller that builds such a batch builds it inside Executor.WriteRuns or
+// Stager.WriteRuns, which commits it (5T.7, R9-1).
 //
 // No write may land on a run that changed since it was read: a progress tick
 // cannot revert a cancel, and a chunk-ledger commit cannot land on a run that
-// went terminal (HEAD's closed-ledger rule). An implementation guarantees it
-// in one of two ways (A-3):
-//   - the native store, at commit (R6-1, DATA6-1, R7-3): Insert stages
-//     Expect(absent) on the run's guard key c/tasks/run/<id>; every other
-//     method that stages a write derived from a run it read — Transition,
-//     Progress, SaveCheckpoint, SaveChunk, MarkRow, Strike,
-//     AppendEvent, AppendIntent, PutItem, AppendLog — stages GetForUpdate on
-//     it, and Debounce on its bucket; the run's other keys carry no Expect of
-//     their own and are written only in a batch that carries the guard Expect
-//     (5T.6.1). Insert and Transition return ErrRunConflict at staging when
-//     their read no longer matches want; they never commit, so they never
-//     retry: WriteRuns re-runs build-and-commit under RetryOnConflict, which
-//     re-stages every participant (COR8-7), and every other write follows
-//     5T.7's drop rule;
-//   - a legacy store, by its own lock, as at HEAD: Stores.Runs implements
-//     legacy.WriteLock (below), and WriteRuns holds that lock from the first
-//     store read through the commit (storage.CommitLocked, R9-1), so each
-//     method reads, compares (the same want, the same closed-ledger rule) and
-//     stages with no other run writer between its read and the commit
-//     (books: HEAD's opsMu, 5T.6.2).
+// went terminal (HEAD's closed-ledger rule). The store guarantees it at commit
+// (R6-1, DATA6-1, R7-3): Insert stages Expect(absent) on the run's guard key
+// c/tasks/run/<id>; every other method that stages a write derived from a run
+// it read — Transition, Progress, SaveCheckpoint, SaveChunk, MarkRow, Strike,
+// AppendEvent, AppendIntent, PutItem, AppendLog, Delete — stages GetForUpdate
+// on it, and Debounce on its bucket; the run's other keys carry no Expect of
+// their own and are written only in a batch that carries the guard Expect
+// (5T.6.1). Insert and Transition return ErrRunConflict at staging when their
+// read no longer matches want; they never commit, so they never retry:
+// WriteRuns re-runs build-and-commit under RetryOnConflict, which re-stages
+// every participant (COR8-7), and every other write follows 5T.7's drop rule.
 type RunStore interface {
 	// Runs, queue, census, history.
 	NewID(ctx context.Context) (RunID, error)
-	Insert(ctx context.Context, b *storage.Batch, r RunRecord) error // record + queue entry + indexes (+ books' census row)
+	Insert(ctx context.Context, b *storage.Batch, r RunRecord) error // record + queue entry + indexes
 	Get(ctx context.Context, id RunID) (RunRecord, error)            // ErrRunNotFound
 	// Transition: ErrRunConflict at staging when its read no longer matches
-	// want. On the native store a commit conflict while want still matches is
-	// retried by WriteRuns, which re-stages the whole batch (5T.7, R7-3,
-	// COR8-7).
+	// want. A commit conflict while want still matches is retried by
+	// WriteRuns, which re-stages the whole batch (5T.7, R7-3, COR8-7).
 	Transition(ctx context.Context, b *storage.Batch, id RunID, want Expect, next RunRecord) error
 	Progress(ctx context.Context, b *storage.Batch, id RunID, done, total int, current string) error
 	Queued(ctx context.Context) iter.Seq2[RunRecord, error]     // dispatch order: priority, then enqueue time
 	Unfinished(ctx context.Context) iter.Seq2[RunRecord, error] // the resume sweep's input
-	List(ctx context.Context, q ListQuery) iter.Seq2[RunRecord, error] // includes terminal history, in ListQuery order
-	Counts(ctx context.Context) (map[RunState]int64, error) // native: derived from the state index (5T.6.1)
+	List(ctx context.Context, q RunQuery) iter.Seq2[RunRecord, error] // includes terminal history, in RunFilter order
+	Counts(ctx context.Context) (map[RunState]int64, error)    // derived from the state index (5T.6.1)
 
 	// Per-run pages: transition trail, Preview intents, item outcomes, log.
 	AppendEvent(ctx context.Context, b *storage.Batch, id RunID, seq uint64, e RunEvent) error
@@ -1361,9 +1271,8 @@ type RunStore interface {
 	// ReplaceOpRowsPrefix contract, DATA9-7). An empty prefix is refused; n == 0
 	// only clears. It is not atomic across batches: a caller that fails clears
 	// its prefix again, and a reader checks the row count its summary
-	// recorded. Native store: each batch carries the run's guard GetForUpdate
-	// and HEAD's closed-ledger rule (refused once the run is terminal). Books'
-	// store: HEAD's lock-free path (5T.6.2 states the lock rule). Never called
+	// recorded. Each batch carries the run's guard GetForUpdate and HEAD's
+	// closed-ledger rule (refused once the run is terminal). Never called
 	// inside WriteRuns.
 	ReplaceRows(ctx context.Context, id RunID, prefix string, n int, at func(i int) (Row, error)) error
 	Rows(ctx context.Context, id RunID) iter.Seq2[Row, error]
@@ -1374,20 +1283,19 @@ type RunStore interface {
 	DebounceBuckets(ctx context.Context) iter.Seq2[DebounceBucket, error]
 	Strike(ctx context.Context, b *storage.Batch, id RunID, s Strike) error
 
-		// Delete stages the removal of one run and every record it owns (row,
+	// Delete stages the removal of one run and every record it owns (row,
 	// queue entry, indexes, pages, checkpoints, chunks, rows, errors); only
 	// Client.Discard calls it, inside WriteRuns, after the executor has
-	// refused an active run (books: HEAD's registry discard key set, under
-	// opsMu; FIN12-3). ErrRunNotFound; ErrRunActive when the run is not terminal.
+	// refused an active run (FIN12-3). ErrRunNotFound; ErrRunActive when the
+	// run is not terminal.
 	Delete(ctx context.Context, b *storage.Batch, id RunID) error
 
 	// Requires stamps: when a kind last completed for a subject.
-	Stamp(ctx context.Context, b *storage.Batch, subject entity.Ref, k StoredKind, at time.Time) error
-	Stamped(ctx context.Context, subject entity.Ref, k StoredKind) (time.Time, bool, error)
+	Stamp(ctx context.Context, b *storage.Batch, subject entity.Ref, k Kind, at time.Time) error
+	Stamped(ctx context.Context, subject entity.Ref, k Kind) (time.Time, bool, error)
 
 	// Maintenance: commits its own batches (above); a row is deleted only as
-	// read, terminal (the native store: an Expect on the row; a legacy store:
-	// under its lock).
+	// read, terminal (an Expect on the row). Called by core.tasks.prune (5T.10).
 	Prune(ctx context.Context, before time.Time, limit int) (deleted int, err error) // terminal runs only, chunked
 }
 
@@ -1400,10 +1308,10 @@ type Clock struct {
 }
 
 type ClockStore interface {
-	Get(ctx context.Context, k StoredKind) (Clock, bool, error)
+	Get(ctx context.Context, k Kind) (Clock, bool, error)
 	// Advance stages next if the stored clock still equals prev (absent when
 	// had is false), checked at commit; otherwise ErrClockConflict.
-	Advance(ctx context.Context, b *storage.Batch, k StoredKind, prev Clock, had bool, next Clock) error
+	Advance(ctx context.Context, b *storage.Batch, k Kind, prev Clock, had bool, next Clock) error
 }
 
 // Pause is the executor's operator pause marker (Executor.PauseAs/UnpauseAs, Client.Pause/Unpause).
@@ -1435,166 +1343,73 @@ type StandDownStore interface {
 	Set(ctx context.Context, b *storage.Batch, key Key, s *StandDown) error // nil clears
 }
 
+// Importer writes an app's pre-core task state into the native stores, once,
+// from inside that app's own cutover step (ABO: books' M4, 5T.8.3). The kernel
+// builds it over c/tasks/ and hands it to the step in module.Importers (06
+// §6.4.2; 03 §3.3 "Store interfaces"); the app decodes its own rows, so core
+// holds no app key name or row format (03 R1(c)). Every method stages into the
+// caller's batch b, which also carries the step's deletes of the source rows,
+// so each row moves exactly once and a crash leaves the chunk either wholly
+// moved or wholly unmoved (5T.4 "Boot writers"). Nothing is checked against
+// executor state: no executor runs before P4 ends.
+type Importer interface {
+	// Run stages one run with its own ID (HEAD's op ID), its renamed Kind,
+	// any RunState (terminal included) and its Seq counters, under
+	// Expect(absent) on its guard key, so a resumed step never imports a run
+	// twice (ErrRunConflict). A run that was running or stopping when HEAD
+	// stopped is imported as StateInterrupted, so its ResumePolicy decides at
+	// the first boot's resume sweep (5T.4 step 2).
+	Run(ctx context.Context, b *storage.Batch, r RunRecord) error
+	// RunData stages records of a run imported in this batch or an earlier
+	// one: pages in their seq order, checkpoints, chunks, rows and marks. A
+	// run's data may be split over several calls and batches.
+	RunData(ctx context.Context, b *storage.Batch, id RunID, d RunData) error
+	Clock(ctx context.Context, b *storage.Batch, k Kind, c Clock) error // ScheduleHash empty (5T.3.8)
+	Pause(ctx context.Context, b *storage.Batch, p Pause) error
+	StandDown(ctx context.Context, b *storage.Batch, s StandDown) error
+	Debounce(ctx context.Context, b *storage.Batch, d DebounceBucket) error // pending debounced starts
+	Stamp(ctx context.Context, b *storage.Batch, subject entity.Ref, k Kind, at time.Time) error
+	// RenameKind stages into b the rewrite of up to limit stored references
+	// to from (runs and their kind index, clock, definition snapshot, stamps)
+	// as to, continuing after cursor; next is "" when none remain. It is how
+	// an owner renames a kind after R2: a BootBlocking data migration of the
+	// owner's calls it chunk by chunk (05-storage §5S.3.6); there is no alias
+	// (D10).
+	RenameKind(ctx context.Context, b *storage.Batch, from, to Kind, cursor string, limit int) (next string, err error)
+}
+
+type RunData struct {
+	Pages       []PageEntry       // events, intents, item outcomes and log lines
+	Checkpoints map[string][]byte // name -> HEAD's checkpoint bytes (5T.3.6)
+	Chunks      []Chunk
+	Rows        []Row
+	Marks       []string // applied row IDs
+}
+
 var (
 	ErrRunNotFound   = errors.New("tasks: run not found")
 	ErrRunConflict   = errors.New("tasks: run changed since read")
-		ErrClockConflict = errors.New("tasks: schedule clock changed since read")
+	ErrClockConflict = errors.New("tasks: schedule clock changed since read")
 	// ErrRunActive: Discard of a run that is not terminal or that a live
 	// worker holds (409; FIN12-3).
 	ErrRunActive = errors.New("tasks: run is active")
-	// ErrStoreUnsupported: a legacy store has no place in its app's format for
-	// this record (5T.6.2); the native store never returns it.
-	ErrStoreUnsupported = errors.New("tasks: the run store cannot hold this record")
 )
 ```
 
 `RunEvent`, `ItemOutcome`, `LogLine`, `PageQuery`/`PageEntry`, `Chunk`, `DebounceBucket` and `Strike`
 are plain data structs with the fields of HEAD's v3 records they replace
 (`internal/database/iface_ops_v3.go`), minus ABO types; `Row` is 5T.3.1's. The interfaces are SDK and
-frozen by the API-stability gate (03 §3.4), the trade R4-1 names. The invariants live **above** them,
-in the executor, so every implementation gets them: one row per run, transitions only by `Transition`'s
-compare-and-set, per-run sequence numbers advanced by the fenced owner in the row's batch, retention
-never touching a non-terminal run. `taskstest.StoresSuite(t, func(*testing.T) tasks.Stores)` (the
-05-storage §5S.3.11 naming rule `<pkg>test.<Interface>Suite`, SIMP5-9) asserts them and the
-commit-time preconditions; core runs it over `NativeStores`, and ABO runs it over its legacy store with
-HEAD fixtures (5T.9). The suite covers only the frozen contract, including the write check on every
-write, whichever way the store makes it (`TestLegacyProgressVsCancelKeepsState`,
-`TestLedgerCommitAfterTerminalRefused`; R6-1), concurrent transitions and a cancel under progress ticks
-all committing (`TestConcurrentTransitionsOfDistinctRunsAllCommit`, `TestCancelCommitsUnderProgressTicks`)
-and the closed-ledger drop rule (`TestFixerMarksLandDuringQuiesce`; R7-3).
-`tasks.Stores` carries no legacy-only member: every method above has a meaning for the native store
-(SIMP5-4).
-
-**Legacy-only identifiers live in package `legacy` (R6-3, SIMP6-2, SIMP6-6).** What exists only to
-serve an app's pre-core run store is not in `tasks`: it is in core's one legacy package (06 §6.4.11),
-which the API-stability gate excludes as it excludes `kernel` (12 §12.4.2), so deleting it at the tasks
-cutover is not a breaking change. The constructor is the field `legacy.Stores.Tasks`, of type
-`func(legacy.Handles) (tasks.Stores, error)` (06 §6.4.11 owns it): the kernel calls it once at P4c with
-the supplying module's OWN handles (`legacy.Handles`: its legacy range over its own claims), as for every
-other legacy constructor, with no grant (R4-1); it is called also while
-that module is disabled, so held runs stay readable (5T.3.11); the returned stores read and write only
-inside those handles. The optional capabilities that are this file's are `TasksRecoverer` and
-`TasksScheduleTicks` (5T.11); the run store's write lock is the cross-owner `legacy.WriteLock` (below):
-
-```go
-package legacy // github.com/falkcorp/mediacore/legacy: outside the API promise (R6-3)
-
-// TasksRecoverer is an OPTIONAL capability of a legacy tasks.RunStore (it
-// was tasks.Recoverer; former names: 05-storage §5S.3.11; SIMP7-8 names it after its
-// owner package in Go initialism form): a store whose previous binaries can
-// leave records inconsistent implements it, and Recover runs once per boot
-// inside Executor.Run before the resume sweep (5T.4 step 2) and commits its
-// own chunked batches under the store's own write discipline (books: HEAD's
-// reconcile, taking the store lock per chunk; A-3). It is
-// detected once, by its owner: the executor, which cannot import this
-// package (legacy imports tasks), asserts the store it is handed against an
-// unexported interface with the identical method set (the kernel asserts
-// only the capabilities 03 §3.3 lists; SIMP7-5, SIMP8-3). The mirror test (03 §3.3, R7-7) checks
-// that the two are mutually assignable: internal/executor's export_test.go
-// exports a test-only alias of the mirror, and legacy_mirror_test.go in
-// package executor_test, which may import legacy, asserts both directions
-// (COR7-2, SIMP7-1). The native store does not implement it. Because a
-// failed assertion is silent, a store that needs it asserts it at compile
-// time (books: var _ legacy.TasksRecoverer, 5T.6.2).
-type TasksRecoverer interface {
-	Recover(ctx context.Context) error
-}
-
-// TasksScheduleTicks is an OPTIONAL capability of the tasks.Client the
-// kernel hands (Deps.Tasks) to the module that supplies legacy.Stores.Tasks
-// (R9-3, MOD9-1). It exists only so that an app's pre-core scheduler that
-// still ticks some kinds (ABO's v3 loop, until T7) reports each tick into
-// core's scheduler's ops.schedule_lag and ops.schedule_missed instruments
-// instead of owning a second copy of those families: dueAt is when the tick
-// was due (zero: no due time, no lag recorded), folded how many due times it
-// skipped (0: nothing recorded). kind must be a kind of the calling module
-// that declares no core Schedule (ErrScheduleTickRefused otherwise); the
-// def_id label is its StoredKind. The caller asserts it on Deps.Tasks; it is
-// deleted with its last caller (T7).
-type TasksScheduleTicks interface {
-	ReportScheduleTick(ctx context.Context, kind tasks.Kind, dueAt time.Time, folded int) error
-}
-
-var ErrScheduleTickRefused = errors.New("legacy: schedule tick for a kind the caller does not tick")
-
-// ErrRunsNotLocked: a run-store write staged into a batch that no
-// CommitLocked hold of the run store's lock has marked
-// (storage.LocksHeld(b, l) false; R10-4), a programming error the
-// conformance suite catches (R9-1; 5T.3.13 below). It wraps
-// storage.ErrNotLocked, as every owner's not-locked refusal does (05-storage
-// §5S.3.2 item 5).
-var ErrRunsNotLocked = fmt.Errorf("legacy: run write staged outside the run lock: %w", storage.ErrNotLocked)
-
-// LockRuns is the run store's one lock name of legacy.WriteLock (R9-1;
-// WriteLock itself, WriteLocks(names []string) []storage.Lock, is declared
-// once in 05-storage §5S.3.11, beside LockConfigSettings; the identity names
-// are 05-authn §3.4's). It names what a write touches, the run families and
-// the clock, pause and stand-down rows the same store serves, never an app
-// mutex or key (03 R1): books' run store returns HEAD's opsMu for it. Only
-// the kernel passes it, at P4c; the executor (L4), which cannot import
-// legacy (L5), receives the resolved locks as RunLocks (COR10-5). S5.
-const LockRuns = "tasks.runs"
-```
-
-**The run store's write lock: a use of `legacy.WriteLock` (R9-1, COR9-8).** There is no tasks-specific
-lock capability: round 8's run-store-only lock capability is gone, generalised into the one cross-owner
-capability `legacy.WriteLock` (`WriteLocks(names []string) []storage.Lock`) that every legacy store whose
-HEAD code relies on an in-process mutex implements (identity: `userWriteMu`, `sessionWriteMu`, `apiKeyMu`,
-`inviteMu`, `bootstrapMu` and `userMergeApplyMu` behind 05-authn §3.4's lock names; tasks: `opsMu`;
-config, integration instances and notify rules: `configBlobSaveMu` behind `legacy.LockConfigSettings`;
-05-storage §5S.3.2 lists them; books' ID counter `counterMu` is not among them, because HEAD's `nextID`
-takes it around its own commit), and whose locks `storage.CommitLocked(ctx, b, d, stage, locks...)` takes,
-each distinct lock once in ascending `LockRank`, from staging through commit. 05-storage §5S.3.2 and §5S.3.11 own
-both identifiers, their signatures, the one total lock order (its rank table, in which `legacy.LockRuns`,
-`opsMu`, ranks 170, after `configBlobSaveMu` and so last among the `CommitLocked` locks; `TestLockRanksTotalOrder`;
-DATA10-3, R10-4) and
-`storage.LocksHeld(b, l)`; this file states only how the run store uses them:
-
-- **Asserted on `Stores.Runs`, resolved by the kernel.** A struct value cannot carry a method, so the kernel
-  asserts `legacy.WriteLock` on the built `Stores.Runs` value at P4c (03 §3.3, 06 §6.4.10), calls
-  `WriteLocks([]string{legacy.LockRuns})` itself, and hands the result to the executor with the stores as
-  its `RunLocks []storage.Lock`, a value that names no lock string; the executor never imports `legacy`,
-  names a lock or calls `WriteLocks` (COR10-5). Books asserts the capability at compile time
-  (`var _ legacy.WriteLock = (*taskstore.RunStore)(nil)`).
-- **One lock name, one lock.** The run store's one lock name is `legacy.LockRuns` (`"tasks.runs"`, above),
-  and it returns one lock for it, HEAD's `opsMu`. No store method takes it itself; each one reads, compares and stages under the caller's
-  hold.
-- **One hold for the four stores.** `Clocks`, `Pause` and `StandDown` are served by the same taskstore
-  instance as `Runs` and are guarded by the same lock: a `ClockStore.Advance`, a `PauseStore.Set`
-  (`Executor.PauseAs`, `UnpauseAs`, which `Client.Pause`/`Unpause` call) and a `StandDownStore.Set` are staged and committed inside `WriteRuns` like a
-  run write.
-- **A write outside a hold is refused, checked on the batch (R10-4, COR10-2, DATA10-1).** `CommitLocked`
-  marks the batch it commits with the locks it holds, from before `stage` until `Commit` returns, so the
-  hold is a property of the batch, never of the `ctx`. Every staging method checks
-  `storage.LocksHeld(b, opsMu)` on the batch it was handed and refuses with `legacy.ErrRunsNotLocked` when
-  it is false. So a write staged inside a hold into a **different** batch, which would commit after the
-  hold is released, is refused too. The maintenance-class methods are the
-  exceptions: `Prune` and `Recover` commit their own chunks, each through `storage.CommitLocked` with the
-  same lock, and `ReplaceRows` takes no lock (the rule is stated once, in 5T.6.2).
-- **Not re-entrant.** `WriteRuns` inside a `WriteRuns` stage returns `ErrWriteRunsNested` (5T.3.10). No
-  `stage` calls a books method that takes `opsMu` itself (HEAD's own `TransitionRunV3`, `UpdateOpProgressV2`,
-  `CommitLedgerV3`, …), which would deadlock on the held lock where `ErrLockOrder` cannot see it: taskstore's
-  staging methods take no mutex, and opsbridge and the books ticker reach the ops families only through
-  them (DATA10-3).
-- **Core-side mutexes order before the hold (DATA10-3).** The executor's in-process locks — the per-run
-  writer (5T.7), the progress lock (5T.3.2) and the dispatcher's and ref-lock tables — are taken before
-  `WriteRuns` or after it returns, never inside a `stage`: they are "outer" locks in 05-storage §5S.3.2's
-  rank table — the dispatcher mutex rank 50, the ref-lock table 60, the per-run writer 70, the progress
-  lock 80 — below every `CommitLocked` lock (100 and up), so no hold waits on one.
-- **One instance per App.** A lock serialises nothing if two instances each hold their own mutex. The
-  kernel calls `legacy.Stores.Tasks` once at P4c, and every other ABO user of the ops families uses that
-  same instance (5T.6.2 "One store instance per App"; COR10-10; `TestLegacyStoresAreSingletons`).
-
-Its conformance case follows the one-legacy-suite-per-store-interface pattern (03 §3.3, SIMP6-6):
-`legacytest.TasksRunStoreSuite(t, newStores, plantStale)` runs a case per capability the
-implementation has; for `TasksRecoverer`, a record `plantStale` makes inconsistent is repaired by
-`Recover` before `Unfinished` yields it, and a second `Recover` writes nothing; for `WriteLock`, a
-second `WriteRuns` blocks from the first one's first read until its commit returns, a clock advance, a
-pause write and a stand-down write block the same way, a write staged without a hold fails with
-`legacy.ErrRunsNotLocked`, and so does a write staged inside a hold into a second batch (R10-4), a nested `WriteRuns` fails with `ErrWriteRunsNested` instead of deadlocking, and
-`ReplaceRows` completes while another `WriteRuns` holds the lock. ABO runs it over books'
-store with HEAD fixtures beside `taskstest.StoresSuite` (`TestLegacyRunStoreRecovers` is that case's ABO
-instance).
+frozen by the API-stability gate (03 §3.4): `coretest`'s in-memory storage and any later implementation
+run the same suite. The invariants live **above** them, in the executor, so every implementation gets
+them: one row per run, transitions only by `Transition`'s compare-and-set, per-run sequence numbers
+advanced by the fenced owner in the row's batch, retention never touching a non-terminal run.
+`taskstest.StoresSuite(t, func(*testing.T) tasks.Stores)` (the naming rule `<pkg>test.<Interface>Suite`,
+SIMP5-9) asserts them and the commit-time preconditions over `NativeStores`, including the write check on
+every write (`TestProgressVsCancelKeepsState`, `TestLedgerCommitAfterTerminalRefused`; R6-1), concurrent
+transitions and a cancel under progress ticks all committing
+(`TestConcurrentTransitionsOfDistinctRunsAllCommit`, `TestCancelCommitsUnderProgressTicks`) and the
+closed-ledger drop rule (`TestFixerMarksLandDuringQuiesce`; R7-3). Its importer cases assert the
+`Importer`'s exactly-once and crash rules (5T.9), so one suite covers the interface and its importer (03 §3.3).
 
 ## 5T.4 Lifecycle
 
@@ -1602,40 +1417,34 @@ The boot phases are defined once, in [06-app-sdk](06-app-sdk.md) §6.5.1 (R2-8),
 start and stop order once, in 06 §6.5.2 (COR-8); this section only says what `tasks` does at its
 phases and steps. Nothing in `tasks` writes before 06's pre-migration checkpoint.
 
-0. **Boot phases P0–P4: no tasks writes.** `tasks` has no migration step, no adopt step and no
-   post-DAG reconciler (the legacy store keeps HEAD's format, 5T.6.2). Books legacy steps 59–66, which
-   write the ops families (`internal/database/migrations.go:479-506,1238-1250,1340-1352,1412-1424`),
-   run in P4b with books' own handle on its own claims (05-storage §5S.3.4; no grant, R4-1); the
-   executor first calls the stores at step 2, so those steps always run first and no `After` edge is
-   needed. The stores are built at P4c (5T.3.13). BootBlocking data migrations of 05-storage run
-   in-process through `tasks.ForEach` with persisted shard cursors in the P4 DAG (05-storage §5S.3.6
-   owns `DataMigration`). `Online` data migrations, which would run as executor runs after step 2
-   under the kernel-registered attribution-only kinds of 5T.3.12, are a deferred build (SIMP5-7): no
-   extraction build has one.
-1. **Register** (inside `app.New`, 06 P6–P7): kernel collects module definitions, validates (5T.3.1), upserts
-   def snapshots `c/tasks/def/<kind>` (with `FormerKinds`, a core kind's including the aliases the app supplies through `app.Options.LegacyTaskAliases`, 5T.8.2), and runs the op-ID ledger gate (current
-   `opCatalogGate`, `internal/startup/steps.go:110-111`): a ledger line that resolves to no def,
-   alias, tombstone **or held module** (5T.3.11) fails boot.
+0. **Boot phases P0–P4: the cutover writes, `tasks` does not.** `tasks` registers no migration step of
+   its own. On a pre-R2 store, books' BootBlocking steps run in P4 behind the pre-migration checkpoint, in
+   the R2 order ([09](09-abo-on-core.md) §9.4): books' legacy steps 1..66 (M1, kept until the R3 floor, among them 59–66,
+   which write the ops families, `internal/database/migrations.go:479-506,1238-1250,1340-1352,1412-1424`),
+   then books' tasks cutover step (M4, 5T.8.3), which writes `c/tasks/` through the `Importer` and
+   deletes HEAD's ops rows. The executor first calls the stores at step 2, so these steps always run
+   first and no `After` edge is needed. The stores are built at P4c (5T.3.13). BootBlocking data
+   migrations of 05-storage run in-process through `tasks.ForEach` with persisted shard cursors in the
+   P4 DAG (05-storage §5S.3.6 owns `DataMigration`). `Online` data migrations, which would run as
+   executor runs after step 2 under the kernel-registered attribution-only kinds of 5T.3.12, are a
+   deferred build (SIMP5-7).
+1. **Register** (inside `app.New`, 06 P6–P7): kernel collects module definitions, validates (5T.3.1) and
+   upserts def snapshots `c/tasks/def/<kind>`.
 2. **Start** (`Executor.Run`, the executor step of 06 §6.5.2: after module hooks and workers and after
    `Bus.Open`, so events from the resume sweep reach subscribers): `PauseStore.Get` →
-   `Recover`, when `Stores.Runs` implements the optional `legacy.TasksRecoverer` (books' legacy store runs
-   HEAD's every-boot `ReconcileOpsV3WithV2` there, `internal/database/store.go:1860-1870`, ABO code
-   unchanged, writing only its own families before the resume sweep acts on them; the native store
-   does not implement it). From S2b until this executor lands (S5) the same repair has another home:
-   books' start hook runs `ReconcileOpsV3WithV2` before it builds HEAD's ops registry (05-storage
-   §5S.9.3, COR5-7), and it moves to `Recover` in the T0+T1 PR → `StandDownStore.List`: a marker
-   that survived the restart means a holder died mid-work, so the runs it names stay
-   `interrupted_quiesced` for this boot, the marker is cleared and a WARN names the holder (HEAD's boot
-   consult, `internal/operations/registry/resume.go:45-60`; a later marker-free boot resumes them;
-   MOD6-4) → resume sweep over `RunStore.Unfinished` (5T.3.6; held runs skipped) → debounce reload → dispatcher (100 ms tick +
-   wake), watchdog (30 s), N workers (`core.tasks.workers`, default 8). The scheduler goroutine starts
-   in the next 06 step, and the outbox relay starts there from its schedule's `OnStart`. Dispatch waits
-   for each def's `Ready` signals through `health.Registry.Wait`, the readiness core of
-   [05-health](05-health.md) that lands **with `tasks` at S5** (COR4-8): storage reports
+   `StandDownStore.List`: a marker that survived the restart means a holder died mid-work, so the runs
+   it names stay `interrupted_quiesced` for this boot, the marker is cleared and a WARN names the holder
+   (HEAD's boot consult, `internal/operations/registry/resume.go:45-60`; a later marker-free boot
+   resumes them; MOD6-4) → resume sweep over `RunStore.Unfinished` (5T.3.6; held runs skipped; the
+   runs the cutover imported as `interrupted` are decided here by their `ResumePolicy`) → debounce
+   reload → dispatcher (100 ms tick + wake), watchdog (30 s), N workers (`core.tasks.workers`, default
+   8). The scheduler goroutine starts in the next 06 step, and the outbox relay starts there from its
+   schedule's `OnStart`. Dispatch waits for each def's `Ready` signals through `health.Registry.Wait`,
+   the readiness core of [05-health](05-health.md), which lands with `tasks` (COR4-8): storage reports
    `core.storage`, and books' warm-up reports `books.memdb` through `Registrar.Health` and
-   `Deps.Health`, so from the first core-executor release a book-reading run is not dispatched before
-   the memdb is warm (D44, `TestDispatch_WaitsForReadySignal`). Waiting runs hold no worker, key or
-   clock (current warm-up rule, `pkg/ops/effects.go:44-57`).
+   `Deps.Health`, so a book-reading run is never dispatched before the memdb is warm (D44,
+   `TestDispatch_WaitsForReadySignal`). Waiting runs hold no worker, key or clock (current warm-up rule,
+   `pkg/ops/effects.go:44-57`).
 3. **Run**: claim (CAS queued→running, fence epoch+1) → build `RC` → shape runner → terminal CAS.
    After each commit the executor publishes `core.task.run-changed.v1` (state or progress change,
    coalescable per run) and `core.task.log-appended.v1`; once per terminal transition it publishes
@@ -1643,18 +1452,9 @@ phases and steps. Nothing in `tasks` writes before 06's pre-migration checkpoint
    §4: the only entry point is `Publish`, COR2-3): the executor calls a kernel-wired
    `Options.OnTerminal(ctx, b *storage.Batch, v RunView) error` inside the terminal CAS batch, and the
    kernel binds it to 05-notify's outbox-backed `Publish` for `core.task.finished.v1` (`tasks` does not
-   import `notify`, which imports `outbox`, which imports `tasks`). **Legacy-stream bridge (FE2-3,
-   COR3-9, FE3-12, SEC3-9):** the executor publishes nothing but core topics; core never calls ABO
-   (R1). From T0+T1 until the realtime legacy projections land (09 S6), **books** registers a bus
-   subscriber on `core.task.run-changed.v1` and `core.task.log-appended.v1` (`Registrar.Subscribe`,
-   [05-realtime](05-realtime.md) §4.9) that feeds all three legacy streams: hub A's `Send*`
-   (`operation.*`), `registry.EventHub` (stream B, `op.*` names) and the v3 broker's `run` events
-   (stream C). It forwards **only** runs whose kind has a `LegacyDefID`, translated back to that def ID,
-   so HEAD's per-event filters (stream B's `opEventFilter`, `internal/server/handlers/operations_v2.go:1084-1104`;
-   stream C's re-check, `internal/server/handlers/opsv3/events.go:569-618`) see exactly what they see
-   today; a kind without one (every new `core.*` kind, e.g. auth's prune tasks) is never forwarded.
-   Before stream A it applies `RedactRunView(nil, v)`. S6 removes the bridge when 05-realtime's
-   projections take over.
+   import `notify`, which imports `outbox`, which imports `tasks`). The executor publishes nothing but
+   core topics and calls no app code (R1); the SPA reads them on the one realtime stream
+   ([05-realtime](05-realtime.md)).
 4. **Shutdown** (06 §6.5.2 order: scheduler stop, then executor drain; the slice comes from the one
    budget in [05-health](05-health.md) 5H.4): flip `shuttingDown` → release claimed-not-started →
    cancel every run with `ErrShutdown` (the relay run included: it acks nothing further) → wait up to
@@ -1667,12 +1467,13 @@ phases and steps. Nothing in `tasks` writes before 06's pre-migration checkpoint
    the budget; that extension is the only way past `core.shutdown.budget`. Docker and launchd offer
    no extension, so there the run is stamped and fenced when its slice ends. It never waits unbounded.
 
-**Boot writers (A-8).** Each `tasks` write before dispatch starts is named for 05-storage's crash
-matrix: books' legacy steps 59–66 in P4b (books', step 0); the definition-snapshot upsert of
-`c/tasks/def/<kind>` at registration (step 1); and, in `Executor.Run` (step 2), the optional `Recover`,
-the stand-down marker clear and the resume sweep's transitions (`interrupted`, `interrupted_dropped`,
-re-queue). A PR that adds a tasks write before dispatch, or changes one of these, extends the matrix in
-the same PR.
+**Boot writers (A-8).** Each write into the task families before dispatch starts is named for
+05-storage's crash matrix: books' legacy steps 59–66 and books' tasks cutover step M4 in P4 (step 0,
+books'; M4 commits each chunk's imports and source deletes in one batch, and resumes from its persisted
+cursor); the definition-snapshot upsert of `c/tasks/def/<kind>` at registration (step 1); and, in
+`Executor.Run` (step 2), the stand-down marker clear and the resume sweep's transitions (`interrupted`,
+`interrupted_dropped`, re-queue). A PR that adds a tasks write before dispatch, or changes one of these,
+extends the matrix in the same PR.
 
 ## 5T.5 Error semantics
 
@@ -1680,11 +1481,13 @@ the same PR.
 |---|---|---|
 | Invalid definition (any 5T.3.1 rule) | closed: `app.New` fails | a hole in the catalog makes runs vanish silently (current `opRegistrationGate` reason) |
 | `Parallelism` zero in `RunItems`/`RunSeq`/`ForEach` | closed: returns `*ItemsError{First: ErrNoParallelism, FirstIndex: -1}` before any item | N8, R7 |
-| Start of unknown kind (after alias resolution) | closed: 404 `tasks.unknown_kind` | — |
+| Start of unknown kind | closed: 404 `tasks.unknown_kind` | there are no aliases (D10) |
 | Start without permission / unverified approver | closed: 403 | RBAC |
-| Mode conflict | closed: 400, nothing enqueued | `dryrun.go:41-58` |
+| `dry_run`/`dryRun` in a start body | closed: 400 `tasks.mode_field_unsupported`, nothing enqueued | a stale caller must not run in a mode it did not ask for (5T.3.7 rule 1) |
 | Params do not decode | closed: run `failed` with decode error (not enqueued if validated at start) | — |
 | Undecodable stored run record | open: hidden from census/totals, WARN, counted metric | `raw/08` §7 `opsv3-undecodable-census-total` |
+| A HEAD ops row the tasks cutover cannot decode (M4, 5T.8.3) | open for the boot, never silent: its raw bytes are copied under `c/storage/quarantine/`, the source row is deleted with the copy in one batch, health reports the count, the step continues | data is migrated forward, never dropped (D10; 05-storage §5S.3.13 owns the quarantine) |
+| A HEAD def ID that is neither in the kind-rename map nor a well-formed ID | the run is quarantined as above; a well-formed unmapped ID maps to `books.retired.<id>` (5T.8.2) | history is kept (D12 F2) |
 | Write outside declared effects | closed: `ErrOutsideEffects`, item/run fails | G8 |
 | Write after fence revoked | closed: `ErrFenced` | prevents zombie writes |
 | Checkpoint write error | closed for `ResumeContinue` (run fails: resume would be unsound), open (WARN) otherwise | today `CheckpointFn` errors are ignored (`run_items.go:318-320`) |
@@ -1694,43 +1497,37 @@ the same PR.
 | Schedule CAS conflict (`ErrClockConflict`) | open: another poll won; no fire | exactly-once |
 | Event publish failure after commit | open: run state is durable; UI may lag | bus is notify-only (05-events) |
 | Shutdown drain timeout | open: remaining runs stamped interrupted; fences revoked | bounded stop |
-| The store's recorded backend for `core/tasks` differs from this build's choice (a build without the app's legacy store on a legacy store, or the reverse) | closed: boot fails with `ErrLegacyStoreMissing` naming `core/tasks` (05-storage §5S.3.11) | an empty native keyspace must never stand in for the legacy runs (R4-1) |
-| Native store: a `Transition` or `Insert` batch fails with `storage.ErrConflict` (a progress tick, another actor, a participant's key) | open: rebuilt and recommitted by `WriteRuns` under `storage.RetryOnConflict` while a fresh read still matches `want`; `ErrRunConflict` only when it no longer does (the dispatcher's claim simply loses; of an executor completion and an HTTP cancel of one run, exactly one commits); attempts exhausted with `want` matching → `storage.ErrConflict`, transient (5T.7); on books' store the run lock serialises these writers, so only a real `want` mismatch fails a transition | CAS transitions; unrelated writes must not fail a transition (R7-3, DATA7-2) |
-| Any other `RunStore` write finds the run changed since it was read (a cancel, decide, watchdog stop or shutdown landed first: on the native store its precondition fails at commit, on books' store its read under the lock shows the change) | open: never re-staged over the old read; on the fresh read a bare progress tick is dropped on any state change, and a chunk-ledger commit, checkpoint, Fixer row or mark, page append, item outcome or strike is re-staged while the run is non-terminal under the same attempt and fence (`stopping` included) and otherwise refused, its chunk redone on resume (5T.7) | a tick must never revert a cancel and nothing may land on a closed ledger, while a quiescing run keeps its marks (R6-1, R7-3, DATA6-1, DATA7-3; HEAD's closed-ledger rule, `pebble_store_ops_v3.go:1655-1666`, `pebble_store_ops_v3_rowmarks.go:54-56`) |
+| A `Transition` or `Insert` batch fails with `storage.ErrConflict` (a progress tick, another actor, a participant's key) | open: rebuilt and recommitted by `WriteRuns` under `storage.RetryOnConflict` while a fresh read still matches `want`; `ErrRunConflict` only when it no longer does (the dispatcher's claim simply loses; of an executor completion and an HTTP cancel of one run, exactly one commits); attempts exhausted with `want` matching → `storage.ErrConflict`, transient (5T.7) | CAS transitions; unrelated writes must not fail a transition (R7-3, DATA7-2) |
+| Any other `RunStore` write finds the run changed since it was read (a cancel, decide, watchdog stop or shutdown landed first: its precondition fails at commit) | open: never re-staged over the old read; on the fresh read a bare progress tick is dropped on any state change, and a chunk-ledger commit, checkpoint, Fixer row or mark, page append, item outcome or strike is re-staged while the run is non-terminal under the same attempt and fence (`stopping` included) and otherwise refused, its chunk redone on resume (5T.7) | a tick must never revert a cancel and nothing may land on a closed ledger, while a quiescing run keeps its marks (R6-1, R7-3, DATA6-1, DATA7-3; HEAD's closed-ledger rule, `pebble_store_ops_v3.go:1655-1666`, `pebble_store_ops_v3_rowmarks.go:54-56`) |
 | Stand-down marker present at boot | open: the runs it names stay `interrupted_quiesced` this boot, the marker is cleared, WARN | the holder's work is half-applied; HEAD's boot consult (`resume.go:45-60`; MOD6-4) |
-| A run store with `legacy.WriteLock` asked to stage a write into a batch no `WriteRuns` hold has marked (outside any hold, or inside one into another batch; `storage.LocksHeld(b, l)`, R10-4) | closed: `legacy.ErrRunsNotLocked`; `legacytest.TasksRunStoreSuite` fails in CI | a write outside the lock could land between another writer's read and its commit (A-3) |
-| `WriteRuns` called inside another `WriteRuns` stage | closed: `ErrWriteRunsNested`, nothing run | a nested commit would repeat on every retry of the outer build, and HEAD's `opsMu` is not re-entrant (COR9-8) |
+| `WriteRuns` called inside another `WriteRuns` stage | closed: `ErrWriteRunsNested`, nothing run | a nested commit would repeat on every retry of the outer build (COR9-8) |
 | `ReplaceRows` fails part-way | open for the caller: the rows already written stay; the caller clears its prefix again (`n == 0`) and reports the failure, and a reader checks the row count its summary recorded | HEAD's `ReplaceOpRowsPrefix` contract (`internal/database/iface_op_rows.go:40-61`); not atomic across batches by design (DATA9-7) |
-| A legacy store asked for a record its app's format cannot hold (5T.6.2) | closed: `ErrStoreUnsupported`; the write fails, nothing is stored elsewhere | A-2: no extension family |
 | Cancel/approve/decide on a held run | closed: `409 tasks.held` | read-only while its module is disabled (5T.3.11) |
 | `Client.Discard` of a run that is queued, running, waiting or held by a live worker | closed: `ErrRunActive`, 409, nothing deleted | HEAD's discard refused the same states (`operations_v2.go:665-679`); deleting an active run would race the executor (FIN12-3) |
-| Ledger line resolving to nothing (not held) | closed: boot fails | a rename without an alias strands stored rows (current `opCatalogGate`) |
-| Stored run whose def ID resolves to no kind, alias, ledger line or held module (a newer build's kind after a rollback; a removed module) | open: the resume sweep sets a non-terminal one `interrupted_dropped` (reason `unknown_kind`), as HEAD does (`resume.go:86-96`); terminal ones are hidden from census, counted, WARN once | a rollback between core builds must not fail boot (5T.6 rule 3) |
+| Stored run whose kind is neither registered nor held (a removed module, a `books.retired.*` history kind) | open: the resume sweep sets a non-terminal one `interrupted_dropped` (reason `unknown_kind`), as HEAD does (`resume.go:86-96`); terminal ones stay listed as history under their kind, counted, WARN once | boot must not fail on history; `TestKindRenameMapCoversLedger` fails CI before a HEAD def is left unmapped |
 | `ForEach` with `Watermark` | closed: `*ItemsError{First: ErrNoRunContext}` before any item | checkpointing needs a run |
 | Lane capacity 0 with `NoLocalFallback` | waits (cancellable); never runs in-process | LaneMac rule |
 
-## 5T.6 Persistence: one interface, two implementations (R4-1)
+## 5T.6 Persistence: the native store (R4-1)
 
-**One stored format per family, and no core code over ABO's.** The executor and the scheduler persist
-only through `tasks.Stores` (5T.3.13). Which implementation serves an install is fixed per store: the
-kernel records the choice for `core/tasks` in the claim ledger's `backends` entry, and a build whose
-choice differs fails boot with `ErrLegacyStoreMissing` (05-storage §5S.3.11), because a build that lost
-the legacy store would otherwise serve an empty native keyspace. The only legitimate change is a
-cutover (below). There is no storage grant, no copy between implementations, no mirror, no P4d
-reconcile (the one every-boot repair is HEAD's own, run by the legacy store's `Recover` at Run, 5T.4
-step 2) and no tasks Teach build. Two `c/tasks/` families are core's whichever implementation serves
-runs, because they describe core state rather than runs, and no older build reads them:
+**One stored format, core's.** The executor and the scheduler persist only through `tasks.Stores`
+(5T.3.13), which is always `NativeStores` over `c/tasks/` (D10): there is no legacy implementation, no
+`backends` record, no storage grant, no mirror, no every-boot repair and no tasks Teach build. HEAD's ops
+families reach `c/tasks/` once, through books' tasks cutover step (5T.8.3), and the R2 level step (M7,
+05-storage) makes every older build refuse the migrated store. Two `c/tasks/` families describe core state
+rather than runs:
 
 | Key | Content |
 |---|---|
-| `c/tasks/def/<kind>` | definition snapshots (with `FormerKinds`, `LegacyDefID`), for held runs (5T.3.11) |
+| `c/tasks/def/<kind>` | definition snapshots, for held runs (5T.3.11) |
 | `c/tasks/idem/<kind>/<key>` | HTTP start idempotency records (TTL `core.tasks.idempotency_ttl`; SIMP2-8), **Serialized**: `Client.Start` stages the record in the batch of the run's `Insert` under `Expect(absent)`, so of two concurrent starts with one key exactly one commits, and the other's 5T.7 retry re-reads the record and replays the existing run (`200`, `Idempotent-Replayed: true`); expiry deletes a record with an `Expect` on the value it read (DATA8-9) |
 
-### 5T.6.1 Native store (`c/tasks/`): apps without legacy runs
+### 5T.6.1 Native store (`c/tasks/`)
 
-`tasks.NativeStores` is what new apps, `examples/hello` and `coretest` use (SIMP4-3). It lands with
-`tasks` at S5: under 03 §3.4 rule (b) `hello` and `coretest` are core consumers, and `hello.count` runs
-from S5 (06). Values are `codec.JSON[T](1)` of the core type.
+`tasks.NativeStores` is what every app, `examples/hello` and `coretest` use (SIMP4-3). It lands with
+`tasks`, dark in ABO until the tasks flip (5T.8.2): under 03 §3.4 rule (b) `hello` and `coretest` are core
+consumers, and `hello.count` runs on it from the PR that lands it (06). Values are `codec.JSON[T](1)` of the
+core type.
 
 | Key | Content |
 |---|---|
@@ -1755,257 +1552,11 @@ family is `Serialized`: the queue, indexes, pages, resume state, strikes and sta
 their own and are written only in the batch that carries their run's guard `Expect` (R7-3). There is no
 census row (DATA7-2): `Counts` counts the keys under each `c/tasks/ix/state/<state>/` prefix, which the
 transition batch already rewrites and history retention bounds, so two runs' transitions never share a
-key. `NewID` returns a ULID; the native run store does not implement `legacy.TasksRecoverer`. `Prune`
+key. `NewID` returns a ULID; an imported run keeps HEAD's op ID, and the guard key's `Expect(absent)` refuses any collision. `Prune`
 deletes a terminal run with all its rows in one batch: the guard key by a point `Delete` under its
 `Expect`, the run's other families by `DeleteRange`, which storage allows outside a checked range and
 refuses inside one (05-storage §5S.3.4, DATA7-1). `TestNativeStores_RoundTrip` and
 `taskstest.StoresSuite` cover it.
-
-### 5T.6.2 Books' legacy store (ABO code, not core)
-
-The books module supplies `legacy.Stores.Tasks` (06 §6.4.11, §6.11.6), implemented by an ABO package below the books
-composition root (`internal/books/taskstore`, name open; 04, R4-5). It implements `tasks.Stores` with
-HEAD's own ops storage code over books' own claims — the families 05-storage §5S.9.1 rows 9, 11, 12, 13
-and 13a list — in HEAD's format. Nothing moves into core and nothing is re-implemented there, so no
-second copy of the ops-format code exists at any stage (SIMP4-2), and HEAD's format invariants hold by
-construction because it is HEAD's code: every run write commits the v3 record **and** its paired v2 row
-in one batch (`internal/database/pebble_store_ops_v3.go:28-45`, owner decision D25), which is what every
-older build reads. This subsection specifies ABO code; no key name it touches appears in core.
-
-**Lock discipline: HEAD's `opsMu`, kept (A-3, ADV-S2).** HEAD serialises **every** run write —
-transitions, progress, checkpoint, ledger, result and resume-count writes — with one store mutex held
-from before the first read of a record it stages until after the commit (`opsMu`; the rule is stated at
-`internal/database/pebble_store_ops_v3.go:227-229`; `TransitionRunV3`, `:1029-1041`; `UpdateOpProgressV2`,
-`pebble_store_ops_v2.go:718-751`; `CommitLedgerV3`, which also refuses a terminal run,
-`pebble_store_ops_v3.go:1655-1666`). Books' store keeps that discipline: no ops family is `CheckedWrites`
-and no store method stages an `Expect` on a legacy row, so 05-storage's commit-time checks do not apply
-to these families. Behind the interface each method stages into the caller's batch, so the lock must span
-a commit the store does not make: the store implements `legacy.WriteLock` over `opsMu` (5T.3.13), and
-`WriteRuns` commits through `storage.CommitLocked`, which holds `opsMu` from the store's first read
-through the commit of the batch the write joins (5T.7; R9-1). Inside the hold each method does what HEAD's does: `Transition` compares state, attempt and fence
-with `want` and HEAD's machine (`state.Next`) and returns `ErrRunConflict` when they differ; a ledger,
-checkpoint or mark write applies HEAD's closed-ledger rule; every state change rewrites HEAD's census row
-`opv3:meta:counts` (`pebble_store_ops_v3.go:100,243-248`) from a read no other writer can overtake, so the
-census stays exact; and a progress tick reads the `opv2:op:` row under the lock, so it can never write
-`Status=running` back over a cancel (the row `ReconcileOpsV3WithV2` rebuilds the v3 record from; DATA6-1).
-`Debounce` and `Advance` compare the bucket and clock they read (`op:batch:`,
-`internal/database/pebble_store_ops_v2.go:1554-1567`; `opv3:sched:`, `keyfamilies.go:303`; the settings
-clocks) inside the same hold and return `ErrClockConflict` on a stale clock. The clocks, the pause marker
-and the stand-down marker share the hold (COR9-8): HEAD writes them without `opsMu` (the maintenance-window
-date through `store.SetSetting`, `internal/scheduler/maintenance.go:71`; the pause marker under the gate's
-own `g.mu`, `internal/operations/registry/pause_gate.go:93-121`), and core stages them inside `WriteRuns`
-under `opsMu` instead. That is a stricter hold than HEAD's on rows no other writer touches, never a
-looser one, and it keeps one rule for every staged write of the four stores. The books ticker, which
-advances the 38 definitions' clocks until T7 (below), is ABO code outside the executor: it commits each
-clock batch through `storage.CommitLocked` with the same instance's `WriteLock` locks, which marks each
-clock batch with the hold, so its writes are not refused with `legacy.ErrRunsNotLocked` (R10-4). `Prune` and `Recover` commit their own chunked batches, taking
-`opsMu` per chunk as HEAD's chunked reconcile does (`pebble_store_ops_v2_timeline.go:80`), so neither
-stalls live writers.
-
-**`ReplaceOpRowsPrefix`'s lock rule (stated once, here; 05-storage §5S.9.1 rows 11 and 13 cite it;
-DATA9-7, R9-1).** A run's row sets (a Fixer plan's rows, a result's class lists) are written by
-`RunStore.ReplaceRows`, which books implements as HEAD's `ReplaceOpRowsPrefix` unchanged: it takes **no**
-`opsMu`, clears its prefix of `opv2:row:` and `opv2:rowix:` with `DeleteRange` and commits the rows itself
-in chunks of at most `opRowBatchRows` rows and `opRowBatchBytes` bytes
-(`internal/database/pebble_store_op_rows.go:32-35,102-166`). HEAD's reason holds unchanged: the rows are
-keyed by the operation ID, nothing else reads them while the writing run is still running, and holding the
-lock for tens of megabytes of writes would stall every other operation write (`:107-114`). So
-`ReplaceRows` is never called inside `WriteRuns`, never joins a caller's batch, is exempt from
-`legacy.ErrRunsNotLocked`, and takes no commit stripe (the row families are plain ownership claims). No other
-books run-store write is lock-free. `TestLegacyReplaceRowsTakesNoRunLock` proves it.
-
-**One store instance per App (R9-1, DATA9-2, COR10-10).** HEAD's `opsMu` is a field of `*PebbleStore`
-(`internal/database/pebble_store.go:226-244`), so it serialises only the writers of one instance; two
-instances would each hold their own and serialise nothing. The kernel calls `legacy.Stores.Tasks` exactly
-once per App (two apps in one binary are two kernels), at P4c, and books' constructor memoises: it returns the same taskstore instance, with
-its one `opsMu` and its per-instance state (`opsV2TimelineTrusted` included), to every caller, and books
-wires every other ABO user of the ops families to that instance: opsbridge, `childop` and the books
-ticker with its `ClockStore` writes. Books' legacy steps run in P4b, single-threaded and before any other
-run writer exists, so they share no lock with anything. 06 §6.4.11 states the same rule for every legacy
-store family (R9-1). `TestLegacyStoresAreSingletons` **(ABO)** asserts that the P4c `Stores.Tasks`
-result, the store books' `Register` receives at P6, and each ABO user listed here share one lock owner. The bodies of books' legacy steps 62, 65 and 66 move into taskstore at T0+T1 as HEAD
-code, unchanged. The cost is HEAD's: a lost update on a legacy row that HEAD's lock misses is not detected
-at runtime, and Pebble has one writer process (ADV-S2). `TestLegacyRunTransitionVsCancelOneWins`
-(`synctest`, books' store: an executor completion and an HTTP cancel of one run race; exactly one commits,
-the other's read under the lock no longer matches its `want` and it gets `ErrRunConflict`),
-`TestLegacyRunLockSpansCommit`, `TestLegacyProgressVsCancelKeepsState`,
-`TestLedgerCommitAfterTerminalRefused`, `TestConcurrentTransitionsOfDistinctRunsAllCommit` and
-`TestCancelCommitsUnderProgressTicks` (5T.9) prove the result.
-
-**Package direction (R5-2, MOD5-1, R6-2).** Imports run `internal/books/taskstore` → the remaining store
-package, never the reverse (an ABO guard assertion), so the split is no import cycle. Taskstore also
-imports `internal/operations/state` (HEAD's run-state vocabulary and transition machine, used from six
-of its files), which **stays in ABO** next to it (5T.8.1; MOD6-1, MOD6-9). In the T0+T1 PR
-taskstore takes, besides HEAD's ops storage files: the bodies of books' legacy steps 62 and 65, step
-66's body (`pebble_store_plan_legacy.go`, which writes ops rows and so belongs to the one writer of
-those families), and the ops part of `InitializeStore` (it becomes `Recover`). The remaining store
-exports what taskstore uses: `RecoverPebbleClosed`, `PrefixEnd`, `PrefixUpperBound`, `OpChangeKey` and
-the version-source adapter (04 §8.6 gate E's name table, MOD7-8); HEAD's `errStoreClosing` is declared in
-`pebble_gate.go`, which goes to core `storage` at S2b, so taskstore matches `storage`'s exported closed
-error (`storage.ErrClosed`, 05-storage §5S.3.1) instead of reaching into the residue (04 §8.6); the
-residue keeps HEAD's pure ops-family key predicate (`rejectOpv2OpRawKey`), which its own raw-write path
-needs and which taskstore may call (04 §8.6 gate E, MOD7-8); `opsV2TimelineTrusted`
-moves onto the taskstore type. Books' legacy step list keeps its order by calling steps 62, 65 and 66
-through funcs `internal/books` wires from taskstore. Every capability assertion on a moved method
-(`store.(hollowOpsSweeper)`, `store.(opsV3Reconciler)`, `internal/database/migrations.go:1238-1244`,
-`store.go:1867`) becomes a direct call, because once the methods leave `*PebbleStore` an assertion fails
-silently: step 62 and 66 would log "nothing to do" and be recorded as applied without running, and the
-every-boot reconcile would be skipped. `TestLegacyStepPreconditionsResolve` **(ABO)** asserts that
-every legacy step reaches its body for the production store type (no "nothing to do" path; an
-external test in `internal/books`, which imports both the residue's step list and taskstore, so it
-compiles once the split lands, MOD6-2), and `var _ legacy.TasksRecoverer = (*taskstore.RunStore)(nil)`
-plus `TestLegacyRunStoreRecovers` (a stale v3 record beside its v2 row is rebuilt on the next boot)
-pin the optional capability.
-
-**Run states (R6-2, MOD6-1).** Books' store keeps HEAD's stored vocabulary: it writes and reads
-`state.V3` values in the `opv3:run:` record and the v2 status in the `opv2:op:` row through HEAD's
-`state.FromV2`/`ToV2` (`internal/operations/state/v3.go:289,344`), and keeps HEAD's in-store legality
-check (`state.InferEvent`/`state.Next`, `v3.go:187,261`), so a core transition HEAD's machine refuses fails
-the write instead of storing a state an older build cannot follow; `taskstest.StoresSuite`'s transition
-matrix runs every executor edge over books' store, so a disagreement fails CI. Every stored form reads
-as exactly one `RunState`, and a write uses the first form its row lists
-(`internal/operations/state/v3.go:23-50`):
-
-| `tasks.RunState` | Stored by books' store (`state.V3` and its sub-field) |
-|---|---|
-| `queued` | `queued`, `WaitReason` `""`, `ready` or `pause` |
-| `waiting_deps` | `queued`, `WaitReason` `deps` |
-| `running` | `running` |
-| `stopping` | `stopping` with `StopReason` `user` ↔ Reason `cancel`, `quiesce` ↔ `quiesce`, `shutdown` ↔ `shutdown`; a row an older build stopped with `timeout` or `watchdog` reads as `stopping` with that token as `Reason` |
-| `interrupted` | `interrupted`, `InterruptedWhy` `crash` or `legacy` |
-| `interrupted_quiesced` | `interrupted`, `InterruptedWhy` `quiesced` |
-| `awaiting_decision` | `awaiting_decision` |
-| `succeeded`, `failed`, `timed_out`, `canceled` | the same strings |
-| `interrupted_dropped` | `dropped` |
-
-| Interface | Books' implementation (HEAD code, HEAD format) |
-|---|---|
-| `RunStore` records, queue, indexes, census, trails, intents, items, log | HEAD's native v3 run path with the paired v2 rows (`internal/database/iface_ops_v3.go:110` `RunRecord`, `internal/database/iface_ops_v2.go:39` `OperationV2Row`); `RunState` ↔ `state.V3` by the table above and the v2 status through HEAD's `state.FromV2`/`ToV2`; `Priority` Low/Normal/High ↔ 0/1/2 (`internal/operations/registry/types.go:329-331`), `PrioritySystem` ↔ 3, which sorts first in HEAD's `999-priority` queue key (`internal/database/pebble_store_ops_v2.go:63`); `NewID` is HEAD's op-ID generator |
-| checkpoints, chunk ledger, item-key snapshot, Fixer rows and marks, debounce, strikes | HEAD's v3 checkpoint, ledger, snapshot, row and row-mark methods and the v2 batch-bucket and strike methods; per-run pages are written where HEAD reads them |
-| `Stamp`/`Stamped` | for `books/books` and `books/book_files` subjects: HEAD's completion and dependency-revision stamps (`pebble_store_ops_v2.go:1188`), library-scale and never copied; any other subject: refused with `tasks.ErrStoreUnsupported`, because HEAD keeps stamps only for the subjects its ops stamp and no ABO kind of the extraction stamps another |
-| `List` (history) | v3 rows, falling back to the v2 row for a run without a projection (open item 5), merged with the v1 history HEAD's v1 reader returns, as ordinary terminal `RunRecord`s with no marker (HEAD's v1 reader carries none, and `RunRecord` has no legacy field; SIMP6-7): the results, summaries and statuses written by `CreateOperationResult`, `SaveOperationSummaryLog` and `UpdateOperationStatus`, and the v1 log. The v1 checkpoint family that `operations.SaveCheckpoint` writes is not history: the store neither reads nor writes it (SIMP4-7) |
-| `Prune` | HEAD's terminal-run retention, plus the v1 log; never a non-terminal row |
-| `Recover` (the optional `legacy.TasksRecoverer`, 5T.3.13) | HEAD's every-boot `ReconcileOpsV3WithV2` (`internal/database/store.go:1860-1870`), unchanged, under HEAD's lock discipline (above). It rebuilds v3 records a previous binary left stale against their v2 rows and writes only those families; a failure is logged and the next boot retries, as at HEAD (`store.go:1864-1866`) |
-| `ClockStore` | HEAD's v3 schedule state (`SchedState`, `iface_ops_v3.go:281-290`) for v3 kinds; for the 38 `TaskDefinition`s, the scheduler's settings clocks (an RFC3339 last-due time per task under the setting prefix `intervalLastTickPrefix`, `internal/scheduler/interval_clock.go:50-60`, plus the full-sweep clock `library_scan_full_last_run`, RFC3339, `internal/scheduler/full_sweep.go:81,117`), task name ↔ def ID by `taskV2DefIDs` (`internal/scheduler/maintenance.go:154-175`); and, as the clock of the maintenance-window kind, HEAD's `maintenance_window_last_run` setting (`maintenance.go:53,71`) with HEAD's **date codec**: a `YYYY-MM-DD` local calendar date (`time.Parse("2006-01-02")` on read, `time.Now().Format("2006-01-02")` on write), which `Get` reads as `LastDue` = `LastRun` = **local** midnight of that date (`time.ParseInLocation("2006-01-02", v, time.Local)`) and `Advance` writes as `next.LastRun.In(time.Local).Format("2006-01-02")`, HEAD's local date (`maintenance.go:70`). HEAD itself parses the value in UTC and compares only its formatted date with the local `today` (`maintenance.go:127-128`), so a UTC-midnight `Get` compared in local time would read a run on D as D−1 west of UTC and run the window twice on D; with both halves in local time any zone-consistent comparison is right, and a pre-T7 build reads the marker it expects and does not run the window a second time that day after a rollback (MOD7-3, MOD8-9; `taskstest.StoresSuite` covers the codec over books' store, including a case run with `TZ` west of UTC: `Advance` at 23:30 local, `Get`, due check the same day → not due). Source (MOD5-4): the key prefixes and keys, the RFC3339 and date encode/decode are cut out of `interval_clock.go`, `full_sweep.go` and `maintenance.go` into taskstore, and `taskV2DefIDs` into books as data passed to taskstore and to the books ticker; the tick logic stays with the books ticker (deleted at T7) and is **re-implemented**, not moved, in `core/internal/scheduler` (5T.8.1), so no ABO setting key or op ID travels into core |
-| `PauseStore` | HEAD's operator pause marker: the setting key `pauseSettingKey` and the `pauseMarker` struct (`internal/operations/registry/pause_gate.go:52-60`) are cut out into taskstore; the gate logic goes to the executor without them (MOD5-4) |
-| `StandDownStore` | HEAD's persisted scan stand-down marker (MOD6-4): the setting key `registry.scan_standdown` and the `scanStandDownMarker` JSON codec (`{holder_op_id, scan_op_id, lease_expiry_unix_nano}`, a blank value meaning cleared; `internal/operations/registry/scan_standdown.go:27,106-110,557-605`) are cut out into taskstore and serve the library-scan stand-down key with one quiesced run, exactly HEAD's singleton; a marker for any other key, or with more than one quiesced run, is refused with `tasks.ErrStoreUnsupported`, so on books' store `rc.StandDown` serves HEAD's one stand-down (`dispatcher.go:155-161`), the only one an ABO kind takes during the extraction. The gate logic goes to the executor without them |
-
-**Fields HEAD's formats lack (A-2).** Books' store persists only what HEAD's records hold, in HEAD's
-representation: there is no extension family, and nothing is written additively into a legacy row (HEAD
-decodes rows into typed structs with no catch-all field and drops unknown members on its next rewrite,
-`pebble_store_ops_v2.go:336-380`). A `RunRecord` or `Clock` field with no place in HEAD's record is not
-stored and reads as its zero value, which names no access and starts no work: `Yields` (so the
-`max_yields` backstop restarts its count after a restart); `ScheduleHash` (5T.3.8: the next instant is
-derived from `LastDue`); and, for the settings clocks, every field but `LastDue` (and `LastRun` for the
-window's date clock), while the v3 clock keeps HEAD's `LastFire`, `Missed` and `GateClosedAt`
-(`iface_ops_v3.go:281-290`). Per-run numbering is HEAD's own (the record's `evt_seq`, `iface_ops_v3.go:151`;
-log keys carry a timestamp, `pebble_store_ops_v3.go:168`). A record HEAD has no place for at all is
-refused (`tasks.ErrStoreUnsupported`, table above). No rule of this file depends on any of these surviving
-a restart or a rollback, so nothing can go stale.
-
-**One writer per family; one scheduler per kind (DATA4-5).** From T0+T1 every runtime write of these
-families goes through books' store — HEAD's per-family staging functions — enforced by an ABO archtest,
-`TestOpsFamiliesWrittenOnlyByTaskstore`, the ops instance of 09's umbrella ratchet
-`TestLegacyFamiliesWrittenOnlyByLegacyStores` (09 §9.2.1, §9.2.3 rule 4; successor of `TestOpsV2RowWritesGoThroughStageOpRow`,
-`raw/08` §7): the only other writers are books' legacy steps in P4b and the v1 carve-outs below. This
-replaces round 3's storage-enforced `Exclusive` grant with a package-structure rule checked in ABO CI
-(SIMP4-2 cost (b)). ABO's `internal/scheduler` keeps ticking the 38 `TaskDefinition`s from T0+T1 to T7,
-enqueuing through `Deps.Tasks` and advancing their settings clocks through the books store's
-`ClockStore`; core's scheduler polls only kinds that declare a `Schedule`, and no adapted kind declares
-one until T7 converts its `TaskDefinition` and deletes the books ticker entry in the same PR, so no kind
-ever has two schedulers and no clock write is ever refused (`TestOneSchedulerPerKind`). The converse
-holds too and is the reason the ticker is never stopped early: from T0+T1 to T7 the books ticker is the
-**only** scheduler of the 38 definitions (library scans, the maintenance window, retention), so any
-statement that books' scheduler stops at T0+T1 would leave them unscheduled — the silent-stop class
-`internal/scheduler/interval_clock.go:116-140` documents (DATA5-8). 05-storage §5S.9.1 row 9 states the
-same rule. The T0+T1 done-check proves it with two checks (5T.8.2; OPS8-4), not with "every one of the
-38 definitions fires on staging", which cannot pass at HEAD parity: transcode and series-normalize are
-manual-only by construction (`IsEnabled` false, interval 0, `internal/scheduler/tasks.go:553-554,708-709`),
-the ticker runs only enabled definitions (`internal/scheduler/scheduler.go:335`), some definitions are
-switched off by config, and a weekly interval makes the wait a week:
-
-- **Normative: `TestScheduleParity_AllDefinitions`** (root CI, fake clock). For each of the 38 definitions,
-  with its config enabled and disabled, `cur` (T0+T1: core scheduler plus the books ticker) and HEAD
-  produce the same sequence: enqueue or no enqueue, start-run, maintenance-window reachability and clock
-  advance, from the definition's `IsEnabled`, interval and `RunOnStart`. A manual-only definition never
-  starts itself.
-- **Smoke: the staging boot.** It logs the scheduler's table (name, enabled, interval, next due). Every
-  enabled definition with an interval of 24 h or less fires within one interval on the scrubbed,
-  egress-denied staging copy (09 §9.3, R7-6); the rest are listed with their next due time.
-
-**Rules that make a rollback a binary swap (G5).**
-
-1. **One row per run.** A run is never in two stores, so no build can double-execute it. After a
-   rollback the previous build resumes, retries or shows every run in the format it wrote; HEAD's Retry
-   re-queues the same row (`internal/operations/registry/retry.go:24-50`), which is correct rather than
-   a hazard (DATA3-4). Runs of a kind with a `LegacyDefID` are stored under that def ID.
-2. **Nothing native-only is stored beside a legacy row** (above): a field HEAD's record lacks reads as
-   its zero value on every build, so no rule depends on one surviving a rollback.
-3. **Kinds no older build knows.** Their runs are stored under `Kind` itself. An older build skips them
-   in dispatch (`dispatcher.go:113-120`) and marks a resumable one `interrupted_dropped` at boot with
-   reason "unknown def at startup" (`resume.go:86-96`); an older **core** build does the same (5T.5).
-   After roll-forward that run shows as dropped and is restarted by its schedule or by hand, a
-   consequence listed in 09 §9.2.1's rollback table (row 5) for the stage that adds such kinds (OPS4-11).
-4. **Core-owned `c/tasks/` families are invisible to an older build.** Definition snapshots are
-   rewritten at the next boot's registration and idempotency records only expire; neither depends on a
-   legacy row, so neither can go stale against one (DATA4-8).
-5. **No concurrent writers across builds.** Pebble admits one process at a time; within the process the
-   one-writer rule above holds.
-
-**Sequence numbers (DATA-19, consumer side).** The per-run counters that number a run's events,
-intents and log lines live in the run record (`RunRecord.Seq`) and advance in the batch that writes the
-row they number, by the run's fenced owner; a crash loses only uncommitted rows and never reissues a
-committed number. Nothing in `tasks` uses a shared `storage.Sequence`.
-
-**History.** Terminal runs are the same rows: `GET /runs` reads them through `RunStore.List`. They are
-never rewritten and are deleted only by `RunStore.Prune` under `core.tasks.history_retention` (an older
-build's own retention deletes the same terminal rows; neither deletes a non-terminal row).
-
-**v1 families with live books writers** (05-storage §5S.9.1 rows 12 and 13 state the owner; this table
-repeats what this file needs). They stay books' own read-write families, written by books code outside
-the store until each writer goes native:
-
-| Family | Handling |
-|---|---|
-| v1 results, summaries and statuses — **live books writers** at `748fd787a`: `CreateOperationResult` (`internal/database/pebble_store_operations.go:438-445`; 15 sites in 9 files, e.g. `internal/server/metadata_ops.go:391,440,1056,1105`), `SaveOperationSummaryLog` (`internal/maintenance/jobs/backfill_book_files.go:197`, `recompute_book_aggregates.go:265`, `backfill_file_hashes.go:1440`), `UpdateOperationStatus` (`internal/operations/registry/legacy_op_status.go:244`, `legacy_backfill.go:218`) | books carve-outs, read-write (DATA2-12); read by the books store's `List` as terminal history. Each result and summary writer moves to the run's result or summary in the batch that makes its job native (T2, T5, T7). The two `UpdateOperationStatus` sites stay ABO code in opsbridge (5T.8.1, MOD7-2): they only mirror a terminal status onto a v1 row whose creator stamped `legacy_op_id`, so they write nothing once every creator is native, and they are deleted with opsbridge at T8; `TestLegacyOpsWriters` ratchets the 20 sites down to zero, after which `Prune` clears the rest |
-| v1 log | read by `List`; deleted by `Prune`; never written |
-| v1 checkpoints — checkpoints and cursors of **live** books jobs: `operations.SaveCheckpoint` (`internal/operations/state.go:60`, which goes to `internal/books/contract` at S5, not to `tasks`; 5T.8.1, MOD7-2) from `internal/itunes/service/importer.go:626,636,725,732`, `internal/dedup/drain_stale.go:324`, `internal/maintenance/jobs/recompute_book_aggregates.go:230`, `internal/maintenance/jobs/backfill_file_hashes.go:1315`, `internal/server/metadata_ops.go:1326`; the hash-backfill chunk journal (`backfill_file_hashes.go:722-775`); the metadata-upgrade cursor (`internal/metabatch/upgrade.go:162,199`); deletes in `retention_and_hygiene.go:339-374` | **books carve-out, read-write** (DATA-15); neither read nor written by the store (SIMP4-7). Each writer moves to `rc.Checkpoint` or a books-keyspace cursor in the batch that makes its job native (T2, T5, T7); `TestLegacyOpsWriters` ratchets the write sites down to zero |
-| v2 and v3 definition rows | left to older builds; the store reads neither (core's snapshots are `c/tasks/def/`) |
-| the operation-change journal | books' `ChangeSink`; not tasks |
-
-**No level step during the extraction; the floor release (OPS4-5, DATA4-18, DATA4-19).** The extraction
-changes no stored format of these families, so `core/tasks` registers no migration step, no adopt step
-and no `RaisesLevel` step, and T0–T8 leave the store's level where it is (the level guard serves books'
-own format changes and later cutovers, 05-storage). The only store-side bound is books' legacy track,
-named with two distinct terms:
-
-- the **floor release** is the first release that ships T8: it deletes the ABO code only books' legacy
-  steps 62, 65 and 66 call (`MigrateOpsV2ToV3`, `SweepHollowOperationsV2` and the store methods behind
-  them) and declares books' `UpgradeFloor{Version: LegacyCap, InstallFirst: <stepping-stone release>}`
-  (05-storage §5S.3.5; `LegacyCap` is the highest HEAD-style books step at the S2b flip, 66 at the
-  evidence commit). Every release before it keeps that code;
-- the **stepping-stone release** (`InstallFirst`, the `release` a floor-release binary's
-  `--print-upgrade-floor` names, [05-updater](05-updater.md) 5U.3) is the newest production tag that exists when
-  the T8 PR merges. It carries every books step up to `LegacyCap` and the code they call, and contains
-  no T8 deletion; root CI's `TestStepSteppingStoneValid` asserts that the tag exists, predates the T8
-  commit, registers books `LegacyCap` and prints an empty `--print-upgrade-floor`.
-
-A store below `LegacyCap` is refused by the floor release at boot with `ErrUpgradeFloor{InstallFirst}`
-(exit 78). The guard that keeps the floor release off such a store is the binary's own floor: the 09 S0 updater hotfix
-runs `<exe>.new --print-upgrade-floor` and compares it with the store's `<db>.storage-applied` before the
-swap, refusing with `stepping_stone_required` and naming the release the new binary prints, and the
-`deploy` recipe runs the same pair before it copies the binary (09 S0); the S8 updater, which moves the
-hotfix, makes the same check (05-updater 5U.4 step 3; OPS6-1, OPS3-7). A pre-S0 updater swaps any newer binary
-unchecked (`internal/updater/updater.go:214-280`), so the floor release's note and the Docker last-line
-message name the stepping stone.
-
-**Deferred: cutover.** Moving runs from books' legacy store to the native store and deleting the legacy
-families is **out of the extraction**. It is a later, per-family, one-way, checkpointed step behind the
-single per-owner level guard, decided on measured data (02 decision 13); it is the first point at which
-core reads books' rows, so it re-introduces a read-delete grant for `core/tasks` (05-storage §5S.3.13,
-deferred-build members), records `native` in `backends`, and is its own floor release. How it treats
-library-scale families (the `Requires` stamps, per-run pages, history) is decided then; nothing in
-T0–T8 prepares for it.
 
 ## 5T.7 Concurrency contract
 
@@ -2017,49 +1568,40 @@ T0–T8 prepares for it.
   all-or-wait acquisition (no lock-order deadlock). No unbounded goroutine fan-out anywhere in `tasks`.
 - One scheduler goroutine for all schedules (current `runV3Loop`, `v3_schedule.go:622`).
 - State transitions are CAS on `(state, attempt, fence_epoch)` through `RunStore.Transition` (current
-  `TransitionRunV3`, `internal/database/iface_ops_v3.go:400-405`): on the native store a commit-time
-  precondition on the run's `Serialized` guard key, on books' store HEAD's compare under `opsMu`
-  (5T.6.2, A-3).
-- **One build-and-commit path (A-3, R9-1).** Every caller that builds a batch carrying a `RunStore`,
+  `TransitionRunV3`, `internal/database/iface_ops_v3.go:400-405`): a commit-time precondition on the
+  run's `Serialized` guard key.
+- **One build-and-commit path (R9-1).** Every caller that builds a batch carrying a `RunStore`,
   `ClockStore`, `PauseStore` or `StandDownStore` write — the executor's claim and terminal transitions, a
   cancel or decide, the watchdog's stop, the shutdown quiesce, the per-run writer's ticks and ledger
   writes, `Client.Start`, the scheduler's enqueue, `Executor.PauseAs`/`UnpauseAs`, a stand-down's marker
   writes, the outbox relay (05-events 5E.4) and a core service's `Stager.StartIn` — builds it inside
-  `WriteRuns`, which commits it through `storage.CommitLocked` under `storage.RetryOnConflict` (bounded,
-  jittered) and, when `Stores.Runs` implements `legacy.WriteLock`, holds the kernel-resolved `RunLocks`
-  from the first store read through the commit and marks the batch with the hold (5T.3.10, 5T.3.13;
-  R10-4). The one ABO writer outside the executor, the books ticker
-  until T7, commits through `storage.CommitLocked` directly with the same lock (5T.6.2). A store's own
-  maintenance (`Prune`, `Recover`, `ReplaceRows`) is the one exception: it commits its own batches.
-- **A conflict is not a lost precondition (native store; R7-3, DATA7-2).** On the native store a batch
-  that stages `Insert` or `Transition` can fail with `storage.ErrConflict` while its `want` still holds: a
-  progress tick rewrites the run key a cancel of the same run reads, and a participant's own key (clock,
-  cursor, idempotency record) can change under it. `WriteRuns` then re-reads the run (`Get`; for
-  `Insert`, its absence), and while `want` (state, attempt, fence) still matches it re-stages the
-  **whole** batch, every participant included (clock advance, outbox cursor, idempotency record,
-  `OnTerminal` notification), and commits again; when the fresh read no longer matches `want` it returns
-  `ErrRunConflict` and stops. It never re-commits bytes built from the stale read. Attempts exhausted while
-  `want` still matches surface `storage.ErrConflict`, a transient error: the executor retries its own
-  transition on the run's next writer turn, and a requested one (cancel, decide) answers its caller with a
-  retryable error. On books' store the lock serialises those writers, so a transition fails only on a real
-  `want` mismatch. So N runs completing at once all commit with exact counts
-  (`TestConcurrentTransitionsOfDistinctRunsAllCommit`), and a cancel commits under a stream of progress
-  ticks (`TestCancelCommitsUnderProgressTicks`; both `synctest`, cases of `taskstest.StoresSuite` over both
-  stores).
-- **Every other run write is checked too (R6-1, DATA6-1).** HEAD serialises progress,
-  checkpoint, ledger, result and resume-count writes on the same `opsMu`
-  (`internal/database/pebble_store_ops_v2.go:718-751`; `pebble_store_ops_v3.go:1655-1666`), so each
-  `RunStore` write is checked against the run it read in both implementations: at commit on the native
-  store (`GetForUpdate` on its guard key, 5T.3.13), under the lock on books' store. The one unchecked
-  write is books' `ReplaceRows`, HEAD's lock-free `ReplaceOpRowsPrefix` (5T.6.2); on the native store its
-  batches carry the guard check. **One per-run writer:** the executor funnels a run's own writes (ticks, ledger,
-  checkpoints, rows, marks, pages, items, log) through one writer per run, an in-process lock that
-  05-storage §5S.3.2 allows for fairness while correctness stays with the store's check (progress is
-  already delivered under one lock, 5T.3.2), so a run's page appends never race its own ticks and a lost
-  precondition means another actor changed the run: a cancel, a decide, the watchdog's stop, shutdown.
-  On such a conflict the write is never re-staged over the old read; it re-reads the run under
-  `storage.RetryOnConflict` (books' store: its read under the lock) and applies **HEAD's closed-ledger
-  rule** to the fresh read
+  `WriteRuns`, which commits it under `storage.RetryOnConflict` (bounded, jittered; 5T.3.10). A store's
+  own maintenance (`Prune`, `ReplaceRows`) is the exception: it commits its own batches. The cutover
+  step's imports (`Importer`) are staged into the step's own batches, which commit before the executor
+  starts (5T.4 step 0).
+- **A conflict is not a lost precondition (R7-3, DATA7-2).** A batch that stages `Insert` or
+  `Transition` can fail with `storage.ErrConflict` while its `want` still holds: a progress tick rewrites
+  the run key a cancel of the same run reads, and a participant's own key (clock, cursor, idempotency
+  record) can change under it. `WriteRuns` then re-reads the run (`Get`; for `Insert`, its absence), and
+  while `want` (state, attempt, fence) still matches it re-stages the **whole** batch, every participant
+  included (clock advance, outbox cursor, idempotency record, `OnTerminal` notification), and commits
+  again; when the fresh read no longer matches `want` it returns `ErrRunConflict` and stops. It never
+  re-commits bytes built from the stale read. Attempts exhausted while `want` still matches surface
+  `storage.ErrConflict`, a transient error: the executor retries its own transition on the run's next
+  writer turn, and a requested one (cancel, decide) answers its caller with a retryable error. So N runs
+  completing at once all commit with exact counts (`TestConcurrentTransitionsOfDistinctRunsAllCommit`),
+  and a cancel commits under a stream of progress ticks (`TestCancelCommitsUnderProgressTicks`; both
+  `synctest`, cases of `taskstest.StoresSuite`).
+- **Every other run write is checked too (R6-1, DATA6-1).** Each `RunStore` write is checked against the
+  run it read, at commit (`GetForUpdate` on its guard key, 5T.3.13), as HEAD's single ops mutex checked it
+  (`internal/database/pebble_store_ops_v2.go:718-751`; `pebble_store_ops_v3.go:1655-1666`); `ReplaceRows`'
+  batches carry the guard check too. **One per-run writer:** the executor funnels a run's own writes
+  (ticks, ledger, checkpoints, rows, marks, pages, items, log) through one writer per run, an in-process
+  lock that 05-storage §5S.3.2 allows for fairness while correctness stays with the store's check
+  (progress is already delivered under one lock, 5T.3.2), so a run's page appends never race its own ticks
+  and a lost precondition means another actor changed the run: a cancel, a decide, the watchdog's stop,
+  shutdown. On such a conflict the write is never re-staged over the old read; it re-reads the run under
+  `storage.RetryOnConflict` and applies **HEAD's closed-ledger rule** to the fresh read
   (`pebble_store_ops_v3.go:1664-1666`: a ledger commit is refused only on a terminal run;
   `pebble_store_ops_v3_rowmarks.go:54-56`: a row mark only on a missing or terminal run). A **bare
   progress tick** is dropped when the fresh read shows any state change (the next tick carries current
@@ -2071,8 +1613,9 @@ T0–T8 prepares for it.
   of the rows its Fixer already applied, and those rows are skipped on resume rather than applied twice
   (marks are resume evidence written as each row's apply returns; `TestFixerMarksLandDuringQuiesce`,
   DATA7-3). A **debounce** merge re-reads its bucket and retries. So a tick never reverts a cancel or
-  terminal transition, nothing lands on a closed ledger, and an older build after a rollback never finds
-  a cancelled run back at `running`.
+  terminal transition, and nothing lands on a closed ledger.
+- The executor's in-process locks (the dispatcher's, the ref-lock table, the per-run writer, the
+  progress lock) are taken before `WriteRuns` or after it returns, never inside a `stage`.
 - Cancellation propagates by context cause to every worker within one item boundary (5T.3.2).
 - No package-level mutable state (R5): pause gate, CPU budget, ref-lock table, metrics, def registry
   are fields of the executor instance; two `App`s in one process do not share them.
@@ -2081,68 +1624,176 @@ T0–T8 prepares for it.
 
 ## 5T.8 Migration from ABO
 
+Every ABO definition is converted to a native core definition **before** the tasks flip, and the flip
+(F5 of the R2 release, [09](09-abo-on-core.md) §9.4) registers all of them at once, adds books' tasks cutover step and deletes
+HEAD's engine in the same PR (D10, D11). There is no adapter (no opsbridge), no alias field, no op-ID
+ledger gate and no separate floor release for the tasks code: the flip is the one point where ABO's runs
+move from HEAD's engine to core's, and the R2 cutover is the one point where its run data moves.
+
 ### 5T.8.1 What existing code becomes
 
 | ABO today | Becomes |
 |---|---|
-| `internal/operations/registry` (dispatcher, worker, watchdog, resume, shutdown, batch runner, chunk ledger, fence, deps, debounce, pause, stand-down, warm-up) | `mediacore/internal/executor` is a **re-implementation** (an 04 §8.6 row with a generated count; R7-8, MOD7-1), written fresh against `tasks.RunStore` and `tasks.RunState`: the engine's files use HEAD's run vocabulary from `internal/operations/state` (`state.StopQuiesce`, `InterruptedQuiesced`, `TimeoutPrefix`, `state.ToV2` on a `database.OperationV2Row`, `resume.go:554-555`) and HEAD's v2 row types (`OperationV2Row`, `OpsV2Store`, `TransitionRequest`), which R6-2 keeps in ABO, so no import-path change compiles and no file moves. The figures are the generated ones of 04 §8.6's registry row (MOD8-7): the engine has 30 non-test files, 14 of them use HEAD's v2/v3 run-row types, and 5 of them hold 39 code references (comments excluded) to `internal/operations/state`. The **ABO files stay at their path** as the v2 adapter `opsbridge` until T8 (5T.8.2). The pause gate's logic is re-implemented while its setting key and marker struct (`pause_gate.go:52-60`) go to taskstore's `PauseStore` (MOD5-4), and the stand-down's logic likewise while its setting key `registry.scan_standdown` and marker codec (`scan_standdown.go:27,106-110,557-605`) go to taskstore's `StandDownStore` (MOD6-4). ABO legacy formats in these files stay ABO (MOD7-2): `legacy_op_status.go` (the v1 status bridge, `propagateLegacyOpStatus`) and `legacy_backfill.go` (`BackfillLegacyOpStatus`) **stay in opsbridge**; from T0+T1 the bridge is driven by a books bus subscriber on `core.task.finished.v1` (forwarding only kinds with a `LegacyDefID`, as the legacy-stream bridge of 5T.4 step 3 does; [05-events](05-events.md) 5E.13) and the backfill by its server op (`internal/server/legacy_backfill_op.go:81`), both calling books' store's v1 methods directly, so HEAD's type-asserted optional capabilities (`legacyOpStore`, `legacy_op_status.go:21-28`; `legacyBackfillStore`) are gone (R5-2); both are post-commit and best-effort, as HEAD's `publishOpTerminal` path is, and are deleted with opsbridge at T8. The activity mirror (`activity_mirror.go`, `reporter_db.go:37,866`, which writes books' `database.ActivityEntry`) becomes a **books** subscriber on `core.task.log-appended.v1`, keeping HEAD's bounded queue and counted drops; it is permanent books behaviour, so the T0+T1 PR moves it (with the mirror part of `reporter_db.go`) out of opsbridge into `internal/activity`, which already owns `ActivityEntry` writing and outlives T8 ([05-events](05-events.md) 5E.13; MOD8-8) |
-| `internal/operations/state` | **stays in ABO** as books' legacy run-state package, next to `internal/books/taskstore` (it may be renamed under `internal/books/`, never moved to core; R6-2, MOD6-1): the v2 status table, the V3 constants, the transition machine, `Classify*` and `FromV2`/`ToV2`, which taskstore uses to keep HEAD's stored values (5T.6.2 "Run states"). Core's executor state machine over `tasks.RunState` (files of `mediacore/internal/executor`, MOD7-13) is part of the executor's **re-implementation** (an 04 §8.6 entry), not a move. `tools/cmd/opsgen` keeps reading this package, so `web/src/generated/ops.ts` (`OperationV2Status`, `STATUS_PROPS`, `RUN_STATE_PROPS`) stays byte-identical because its input does not change; opsgen is **not** repointed at `mediacore/tasks`, whose `RunState` values are not HEAD's stored strings (e.g. `interrupted_dropped` vs `dropped`) and which holds no v2 table |
-| `internal/operations` (`progress.go`, `trigger_source.go`, `state.go`, `selection.go`, `types.go`) | only `progress.go` and `trigger_source.go` → `tasks`; `state.go`'s v1 checkpoint helpers (`OperationState`, `SaveCheckpoint`, `LoadCheckpoint`, `ClearState`, `state.go:14-100`, 11 books call sites) → `internal/books/contract` until their T2/T5/T7 writers are gone, and `BulkMetadataFetchParams` (`state.go:27-30`) → `internal/server`, its only user (`metadata_ops.go:196,796,885`), so no legacy-only identifier enters the frozen `tasks` API (R6-3, R7-8, MOD7-2); `selection.go`, `types.go` → `internal/books/contract` (04 §3) |
-| `pkg/ops` (Task/Batch/Fixer, Effects, Schedule, contracts, RC, Approval, opstest; `Pipeline` dropped, A7) | `core/tasks`, `core/tasks/taskstest` (from `pkg/ops/opstest`), with A1–A7; the whole of `pkg/ops/opstest` is a **re-implementation** in `taskstest` over `tasks.RunState` and core's in-memory storage, because `conformance.go` and `run.go` read HEAD's V3 states and `faults.go`, `store.go` and `world.go` build HEAD's v2/v3 rows, so no file of it moves by an import-path change; its Book-typed fakes are re-implemented in `internal/books/store/storetest` (04 §8.6 rows; MOD7-1) |
-| `pkg/ops/writer.go` typed methods + `internal/operations/opswriter` | run fencing (`opswriter/fence.go`: `ErrFenced`, `WithFence`, `FenceFromContext`) → public `tasks` (04 §3 `opswriter` *Split*); the generic gated write of 5T.3.5 is core code in files of `mediacore/internal/executor` (MOD7-13); typed `ModifyBook*` over `tasks.Writer`: the contract interface → `internal/books/contract`, the implementation (`writer.go`, `evidence.go`, `history.go`, `intent.go`, `evidence_journal.go`) → `internal/books/writer` (the `opswriter` rename; 04 §2.4, §8.6; MOD6-12) |
-| `internal/operations/opmode` | core start path (5T.3.7) |
-| `internal/operations/childop` | `rc.Await` in `tasks`, written fresh, a **re-implementation** (an 04 §8.6 row; `childop/follow.go` reads HEAD's `state` vocabulary; MOD7-1). The ABO package **stays at its path**, as opsbridge-side code over taskstore's `OperationV2Row`, until its last ABO user is gone (R8-6, MOD8-2): v2 `OperationDef` bodies that receive a `Reporter`, not an `*RC`, and stay v2 until their batch — `plugins/dedup/run_all.go:532` and `label_refinement.go:153` (T5), `plugins/maintenance/optimize.go:73` through `WaitForOp` (`internal/server/server_maintenance_deps.go:1185-1198`; T6, T7) — and opsbridge's own `v3_adapter.go:480`, so it is deleted with opsbridge at T8. No v2 body is rewritten onto `rc.Await` before its batch |
+| `internal/operations/registry` (dispatcher, worker, watchdog, resume, shutdown, batch runner, chunk ledger, fence, deps, debounce, pause, stand-down, warm-up) | `mediacore/internal/executor`, a **re-implementation** (an 04 §8.6 row with a generated count; R7-8, MOD7-1) written fresh against `tasks.RunStore` and `tasks.RunState`, because the engine's files use HEAD's run vocabulary (`internal/operations/state`) and v2 row types, so no file moves. The figures are the generated ones of 04 §8.6's registry row (MOD8-7): 30 non-test files, 14 of them on HEAD's v2/v3 row types, 5 of them holding 39 code references to `internal/operations/state`. The ABO package is **deleted by the flip**, with its v1 status bridge (`legacy_op_status.go`) and backfill (`legacy_backfill.go`, `internal/server/legacy_backfill_op.go`), which have nothing left to bridge once no v1 writer exists. The activity mirror (`activity_mirror.go`, `reporter_db.go:37,866`, which writes books' `database.ActivityEntry`) becomes a **books** subscriber on `core.task.log-appended.v1` in `internal/activity`, keeping HEAD's bounded queue and counted drops ([05-events](05-events.md) 5E.13; MOD8-8) |
+| `internal/operations/state` | read only by books' tasks cutover step (5T.8.3), which decodes HEAD's stored vocabulary with it (the v2 status table, the V3 constants, `FromV2`); it moves under `internal/books/cutover` and is deleted with the HEAD-format readers in R3 (09 §9.4, PC-14-01). Core's state machine over `tasks.RunState` is part of the executor's re-implementation. `tools/cmd/opsgen` and `web/src/generated/ops.ts` are deleted by the flip: the SPA's Activity page reads the generated tasks client and `RunState` values ([07](07-ui-shell.md)) |
+| `internal/operations` (`progress.go`, `trigger_source.go`, `state.go`, `selection.go`, `types.go`) | `progress.go` and `trigger_source.go` → `tasks`; `state.go`'s v1 checkpoint helpers (`OperationState`, `SaveCheckpoint`, `LoadCheckpoint`, `ClearState`, `state.go:14-100`, 11 books call sites) are replaced by `rc.Checkpoint` in each caller's conversion PR and deleted by the flip; `BulkMetadataFetchParams` (`state.go:27-30`) → `internal/server`, its only user (`metadata_ops.go:196,796,885`); `selection.go`, `types.go` → `internal/books/contract` (04 §3) |
+| `pkg/ops` (Task/Batch/Fixer, Effects, Schedule, contracts, RC, Approval, opstest; `Pipeline` dropped, A7) | `core/tasks`, `core/tasks/taskstest` (from `pkg/ops/opstest`), with A1–A7; `pkg/ops/opstest` is a **re-implementation** in `taskstest` over `tasks.RunState` and core's in-memory storage, because its files read HEAD's V3 states and build HEAD's v2/v3 rows; its Book-typed fakes are re-implemented in `internal/books/store/storetest` (04 §8.6 rows; MOD7-1) |
+| `pkg/ops/writer.go` typed methods + `internal/operations/opswriter` | run fencing (`opswriter/fence.go`: `ErrFenced`, `WithFence`, `FenceFromContext`) → public `tasks` (04 §3 `opswriter` *Split*); the generic gated write of 5T.3.5 is core code in `mediacore/internal/executor` (MOD7-13); typed `ModifyBook*` over `tasks.Writer`: the contract interface → `internal/books/contract`, the implementation (`writer.go`, `evidence.go`, `history.go`, `intent.go`, `evidence_journal.go`) → `internal/books/writer` (the `opswriter` rename; 04 §2.4, §8.6; MOD6-12) |
+| `internal/operations/opmode` | core start path (5T.3.7); deleted by the flip |
+| `internal/operations/childop` | `rc.Await` in `tasks`, a **re-implementation** (an 04 §8.6 row; `childop/follow.go` reads HEAD's `state` vocabulary; MOD7-1). Its v2 callers (`plugins/dedup/run_all.go:532`, `label_refinement.go:153`, `plugins/maintenance/optimize.go:73` through `WaitForOp`, `internal/server/server_maintenance_deps.go:1185-1198`) move to `rc.Await` in their conversion PRs; the ABO package is deleted by the flip |
 | `internal/walkresume` | `rc.ShouldYield` + `ErrContinueInPlace` + `RunItems` `Watermark` |
-| `internal/scheduler` (interval/daily/cron/window/full sweep/v3 loop) | `core/internal/scheduler` is a **re-implementation** (a 04 §8.6 entry, not a move or a copy; MOD5-4): no file of `internal/scheduler` moves into core, because its clock encoding (`intervalLastTickPrefix`, RFC3339) and `taskV2DefIDs` are ABO key names and op IDs. At T0+T1 those two parts are cut out into taskstore's `ClockStore` and books (5T.6.2); the rest of the ABO path keeps ticking the 38 definitions through `Deps.Tasks` and that `ClockStore` until T7, when their bodies become `Schedule` declarations in `books` and the ABO path is deleted |
-| `internal/repairs` (Fixer framework) | `tasks.Fixer`; the 24 fixers → `books` Fixer defs |
-| `internal/maintenance` (`MaintenanceJob`, registry) | deleted after T2; jobs → `books` Task defs |
-| `internal/opscatalog`, `pkg/plugin/sdk`, `addOpRegistrar`, `serviceregistry` op wiring | `module.Registrar.Tasks` |
-| `internal/opsmetrics` | executor metrics (5T.11), a **re-implementation** in `mediacore/internal/executor`, its one core destination; nothing of it is public `tasks` (an 04 §8.6 row; `opsmetrics.go` reads HEAD's `state` vocabulary; MOD7-1, MOD8-2). The ABO package **stays at its path**, as opsbridge-side code, until its last ABO user is gone (R8-6): opsbridge's registry files (T8), the ABO scheduler's v3 loop (`internal/scheduler/v3_schedule.go:444,447`, T7) and the `RegisterAbandoned` callers `internal/repairs/guards.go:209` and `internal/plugins/maintenance/retired_versions_fixer.go:240`; it is deleted with opsbridge at T8. The T0+T1 PR makes the executor record HEAD's run instruments under their HEAD names and label values, deletes the v2 engine's calls, and **shrinks the surviving `opsmetrics` to the one family core does not emit**, `ops.abandoned_calls`: its `New`/`Default()` no longer creates or observes `ops.runs`, `ops.run.duration`, `ops.items`, `ops.inflight`, `ops.progress_age`, `ops.progress_timeout` or `ops.zombies`, nor `ops.schedule_lag` or `ops.schedule_missed`, whose v3-loop calls (until T7) become a `ReportScheduleTick` call on the tasks client into core's scheduler's instruments (5T.11 "One owner per family"), so every family has exactly one owner and no scrape sees two samples of one series (R9-3, MOD9-1). **`ops_abandoned_calls` changes owner in exactly one PR (R10-3, MOD10-7):** the shrunk `opsmetrics` owns it for both of its sources, `source="repairs_resolver"` (HEAD's `SourceRepairsResolver`, `internal/repairs/guards.go:209`) and `source="retired_versions_stat"` (`SourceRetiredVersionsStat`, `internal/plugins/maintenance/retired_versions_fixer.go:240`; `internal/opsmetrics/opsmetrics.go:370-371`), until the T6 sub-batch PR that converts `retired_versions_fixer.go`, the later of the two callers. The repairs source, converted at T3, keeps calling `opsmetrics.RegisterAbandoned` until then. That one T6 PR creates books' observable on a books scope through the public `metrics` API (05-metrics) as the single owner of both sources with HEAD's two `source` values, repoints both callers and deletes `opsmetrics`' instrument, so no build ever holds two instruments for the family and `ErrFamilyTaken` never fires; no core `RegisterAbandoned` with ABO names exists |
+| `internal/scheduler` (interval/daily/cron/window/full sweep/v3 loop) | `core/internal/scheduler`, a **re-implementation** (a 04 §8.6 entry; MOD5-4), because its clock encoding (`intervalLastTickPrefix`, RFC3339) and `taskV2DefIDs` are ABO key names and op IDs. The 38 `TaskDefinition`s become `Schedule` declarations on their books or core kinds (group T7); the clock encoding and `taskV2DefIDs` are read once by the cutover (5T.8.3); the ABO package is deleted by the flip |
+| `internal/repairs` (Fixer framework) | `tasks.Fixer`; the 24 fixers → books Fixer kinds `books.repairs.<fixer-id>` |
+| `internal/maintenance` (`MaintenanceJob`, registry) | jobs → books Task kinds (group T2); the package is deleted by the flip |
+| `internal/opscatalog`, `addOpRegistrar`, `serviceregistry` op wiring, `pkg/plugin/sdk` | `module.Registrar.Tasks`; `internal/opscatalog` (with `Tombstones`, which the kind-rename map consumes) is deleted by the flip; `pkg/plugin/sdk` and `internal/serviceregistry` have no caller after it and are deleted in R3 (PC-20-01) |
+| `internal/opsmetrics` | executor metrics (5T.11), a **re-implementation** in `mediacore/internal/executor` (an 04 §8.6 row; `opsmetrics.go` reads HEAD's `state` vocabulary; MOD7-1). The ABO package is deleted by the flip. Its one family core does not emit, `ops.abandoned_calls` (sources `repairs_resolver`, `internal/repairs/guards.go:209`, and `retired_versions_stat`, `internal/plugins/maintenance/retired_versions_fixer.go:240`; `internal/opsmetrics/opsmetrics.go:370-371`), becomes a books observable on a books scope in the flip PR, which repoints both converted callers, so one build never holds two owners of it |
 | `internal/lifecycle` | `core/lifecycle` (03 §3.3, L0) |
-| `internal/server/handlers/opsv3`, v1 operations handlers | `mediacore/internal/taskhttp` (05-http-api §5), a **re-implementation** (an 04 §8.6 row; `opsv3/*` read HEAD's `state` vocabulary; MOD7-1), except every `/api/v1/operations` handler (38 routes at the evidence commit, the five operations-component routes among them), which **stays books'** at its HEAD path and from T0+T1 reaches runs through `Deps.Tasks` (R10-1, R11-3; 5T.3.10) |
-| `internal/database` ops storage (`pebble_store_ops_v2.go`, `pebble_store_ops_v3*.go`, `ReconcileOpsV3WithV2`) and HEAD's v1 history reader | **stays in ABO** as books' legacy `tasks.Stores` (`internal/books/taskstore`, 5T.6.2; `ReconcileOpsV3WithV2`, the ops part of `InitializeStore`, is its `Recover`, the v1 reader feeds its `List`), with the bodies of legacy steps 62, 65 and 66 (`pebble_store_plan_legacy.go` included) moved in the same T0+T1 PR; imports run taskstore → the remaining store, never the reverse (R5-2, MOD5-1); nothing moves into core and core has no copy (R4-1, SIMP4-2). The code only books' legacy steps 62, 65 and 66 call is deleted by the floor release (T8) |
+| `internal/server/handlers/opsv3`, the v2 operations handlers and `internal/server/handlers/scheduler` | `mediacore/internal/taskhttp` (05-http-api §5), a **re-implementation** (an 04 §8.6 row; `opsv3/*` read HEAD's `state` vocabulary; MOD7-1). The HEAD routes 5T.3.10's table names are deleted by the flip; books' domain routes under `/api/v1/operations` stay (5T.3.10) |
+| `internal/database` ops storage (`pebble_store_ops_v2.go`, `pebble_store_ops_v3*.go`, `ReconcileOpsV3WithV2`) and HEAD's v1 history reader | the HEAD-format reader of books' tasks cutover step (5T.8.3), in `internal/books/cutover` (03 §3.5.1): it runs `ReconcileOpsV3WithV2` once and decodes the ops families; it is deleted with the other HEAD-format readers in R3 (PC-14-01). The bodies of books' legacy steps 62, 65 and 66 (`pebble_store_plan_legacy.go` included), which only older stores need, stay with books' legacy steps until that same R3 floor (`UpgradeFloor{InstallFirst: R2}`, 05-storage §5S.3.5). Nothing moves into core (R4-1) |
 
-### 5T.8.2 Batches
+### 5T.8.2 Conversion groups, the flip, and the kind-rename map
 
-Every batch is one or more PRs, each green on `make ci` in both module dirs; each keeps every kind
-working (adapter first, native later). Def IDs map to kinds by prefixing the owning module:
-`dedup.full-scan` → `books.dedup.full-scan` with `FormerKinds: ["dedup.full-scan"]`; core-owned
-generic ops get `core.*` kinds. **A core-owned kind never spells an ABO op ID in core code (MOD6-6):**
-core declares `core.diagnostics.export` with no `FormerKinds`, and the app supplies each core kind's
-legacy aliases from its own op-ID ledger through `app.Options.LegacyTaskAliases`
-(`map[tasks.Kind][]tasks.Kind`, 06 owns the field; books passes
-`{"core.diagnostics.export": ["diagnostics.export"]}` and one entry per T4 kind). The kernel adds them
-to the named core kind's former kinds at P7, before the op-ledger gate; a key that is not a registered
-`core.*` kind, or a value a module registers or lists in its `TaskLedger`, fails boot
-(`ProblemLegacyTaskAlias`, 06). The field is needed from the T4 batch (an S5 release), whose `core.*`
-kinds are the first with ABO former IDs, not only from `core.diagnostics.export` at S8; R1(c)'s
-`TestCoreHoldsNoAppKeyNames` and 04 §2.1 (h) fail a `FormerKinds` entry outside `core.` in a non-test `core/` file (a core kind renamed within `core.` keeps its own `FormerKinds`). The op-ID ledger (`internal/server/op_id_aliases_test.go`) is the
-check that no stored row strands. The last column is this file's input to 09's batch → stage map
-(OPS-12); 09 assigns the stage. Counts in this table and in 5T.6.2 (233 defs, 38 `TaskDefinition`s, 34,
-24, 54, 104, 15 crons) are informative figures from `748fd787a`; each batch's done-check uses the count
-generated at its own base commit (A-16, ADV-11).
+Each group is one or more PRs that land **dark**: the converted definitions compile, are registered by
+`coretest` and `taskstest.Conformance`, and run in the parity suites against HEAD's behaviour, while the
+production build still runs HEAD's engine. Groups T2–T7 are mechanically similar and suit
+`/parallel-sweep`, partitioned by package so parallel PRs never touch the same file (CLAUDE.md "Parallel
+Subagent Coordination"). A conversion maps HEAD's `Concurrency` 1:1 (`Fixed(n, "<reason>")` from a
+non-zero value, `Sequential("<reason>")` from zero); any change of a definition's parallelism is a separate
+PR under CLAUDE.md's concurrency rules. A converted body reads `rc.Mode()` instead of a `dry_run` param,
+writes `rc.Checkpoint` instead of a v1 checkpoint, and returns its result instead of writing a v1 result or
+summary row. The groups are disjoint by definition and sum to HEAD's 233 (34 + 2 + 6 + 48 + 98 + 45). Counts are informative figures from `748fd787a`; HEAD (`ebe365245`) registers the same set
+(its op-ID ledger `internal/server/testdata/op_ids.golden` and every definition literal are unchanged since
+`748fd787a`). Each group's done-check uses the count generated at its own base commit (A-16, ADV-11).
 
-| Batch | Content | Count | Gate to finish | Behaviour change / rollback |
-|---|---|---|---|---|
-| T0 + T1 (one release) | `core/tasks` + executor + scheduler land; ABO adapter `opsbridge` (the `internal/operations/registry` path re-implemented in place as the v2 adapter, not a new package; MOD5-11) wraps every v2 `OperationDef` as a core Task with `LegacyDefID` = its def ID (`Run(ctx, params, Reporter)` called with a `Reporter` implemented over `RC`; legacy `registry.RunItems` re-implemented over `tasks.RunItems` with `Fixed(n, "legacy Concurrency")` from its non-zero `Concurrency`, or `Sequential("legacy zero Concurrency")`, a 1:1 mapping; any change of a def's parallelism is a separate PR under CLAUDE.md's concurrency rules, never part of T0+T1, G1); `/api/v3/ops` aliases; books' legacy `tasks.Stores` (`internal/books/taskstore`: HEAD's ops store code and v1 history reader behind the interfaces, 5T.6.2) supplied as `legacy.Stores.Tasks`, with every runtime write of the ops families routed through it; ABO's scheduler keeps ticking the 38 `TaskDefinition`s through `Deps.Tasks` and the store's `ClockStore` until T7; the readiness core of `health` with `books.memdb` (5T.4 step 2); the books-side legacy-stream bridge (5T.4 step 3); the activity mirror moved into `internal/activity` (MOD8-8); the calls of the five `operations_*` client_golang vectors of `internal/metrics` (`metrics.go:20-47`; helpers `IncOperation{Started,Completed,Failed,Canceled}` and `ObserveOperationDuration`, `:351-358`) moved from the registry worker (`worker.go:611,1204,1293-1297`) into a books bus subscriber, the families keeping their HEAD names, and HEAD's run instruments recorded by the executor under their HEAD names and label values, with ABO's `internal/opsmetrics` shrunk to `ops.abandoned_calls` in the same PR and the v3 loop reporting its ticks through `ReportScheduleTick` until T7 (5T.11; A-5, R9-3); the five `GET /api/v1/operations/…` routes kept as books' gin routes, their handlers reading runs through `Deps.Tasks` (5T.3.10; R10-1); one taskstore instance per process (5T.6.2; R9-1) | every registered def runs on core (233 at `748fd787a`, informative) | op-ID ledger green; HEAD's resume, cancel and shutdown suites ported to run against both engines and green on both (G1); `taskstest.StoresSuite` green on both implementations; `TestOpsFamiliesWrittenOnlyByTaskstore`, `TestOneSchedulerPerKind`, `TestDispatch_WaitsForReadySignal`, `TestLegacyRunTransitionVsCancelOneWins`, `TestLegacyRunLockSpansCommit`, `TestLegacyReplaceRowsTakesNoRunLock`, `TestLegacyStoresAreSingletons`, `TestLegacyProgressVsCancelKeepsState`, `TestLedgerCommitAfterTerminalRefused`, `TestConcurrentTransitionsOfDistinctRunsAllCommit`, `TestCancelCommitsUnderProgressTicks`, `TestFixerMarksLandDuringQuiesce`, `TestStandDown_MarkerAtBootDefersQuiescedRun`, `TestLegacyStepPreconditionsResolve`, `TestLegacyRunStoreRecovers`; `TestScheduleParity_AllDefinitions` (normative), and the staging smoke: every enabled definition with an interval of 24 h or less fires within one interval, the rest listed with their next due time (DATA5-8, OPS8-4; 5T.6.2 "One writer per family"; 09 §9.3, R7-6); 05-metrics' seeded series contract test with no HEAD ops family changed in name, type, label keys or label values (5T.11; A-5); `TestABOMetricsGatherNoDuplicateOrMissing` (5T.11; R9-3); `TestS5_OperationsComponentStaysBooks` (the five routes on the gin engine, no core route or alias in their component, and the gin engine holding exactly the generated count of `/api/v1/operations` routes, 38 at the evidence commit, with no alias under the prefix; 05-http-api; R10-1, R11-3); `TestHistogramBucketsPinned` with `histogram_buckets.golden` unchanged for `ops_run_duration_seconds` and `ops_schedule_lag_seconds` (5T.11; MOD10-6); G5 rollback test (5T.9) | yes: executor swap (CPU budget, cancellation fix) over the **same** stored format; no level step, no Teach build; rollback = binary swap under the G5 rules of 5T.6 |
-| T2 | 34 `MaintenanceJob`s → native `books.maintenance.*` Tasks (mechanical: `Run(ctx, JobStore, ProgressReporter, dryRun)` `internal/maintenance/job.go:498` → `TaskSpec.Run(rc, p)`; `Policy()` → `Common`); their v1 checkpoint writers move to `rc.Checkpoint` and their v1 result and summary writers to the run's result (`TestLegacyOpsWriters` ratchet) | 34 | `internal/maintenance` deleted | no, when kind, params and effects are unchanged (binary swap); a v1-checkpoint → `rc.Checkpoint` move resumes from zero once after a rollback, listed per job in 09 §9.2.1's rollback table (OPS4-11) |
-| T3 | 24 repairs fixers → `tasks.Fixer`; `repairs.plan/apply` removed | 24 (+2 defs) | Fixer conformance suite | no (binary swap) |
-| T4 | Generic ops → `core.*` (activity-log cleanup/compaction family, backups prune, db optimize/census, temp/trash/reports cleanup, throttle reset, tombstone cleanup, retention-and-hygiene, metrics TTL sweep): the `generic` class rows of `raw/06` §6, each re-checked in [04-package-mapping](04-package-mapping.md) (some, e.g. `opchange-book-index-rebuild`, are book-bound despite the class) | ≤ 24 | owner per kind recorded in 04 | no; kind renames ride `FormerKinds`, a core kind's ABO ID through `app.Options.LegacyTaskAliases` (5T.8.2, MOD6-6) (binary swap) |
-| T5 | Plugin defs native, per plugin: acoustid 8, dedup 32, metafetch 3, iTunes 7 (with the 4 `importer.go` v1 checkpoint writers), Deluge 4 (→ 05-download adapter tasks) | 54 | `pkg/plugin/sdk` unused | no (binary swap) |
-| T6 | Maintenance plugin's 104 defs, in sub-batches of ≤ 15 by file group | 104 | — | no (binary swap) |
-| T7 | Server-package ops (`internal/server/*_op*.go`, incl. `metadata_ops.go`'s v1 checkpoint writer) and `scheduler.metadata-upgrade` (its v1 cursor) → `books`; 38 TaskDefinitions → `ScheduleFromConfig`, each conversion deleting its books ticker entry in the same PR (`TestOneSchedulerPerKind`); 15 v2 crons → none (ledger) | ~49 + 38 | `internal/scheduler` deleted from ABO | yes: schedule keys move (aliases for the window); crons deleted (none ever ran) |
-| T8 (the **floor release**, 5T.6.2) | Delete `OperationDef` and `opsbridge` (the `internal/operations/registry` path: its v2 engine files, which the re-implemented executor replaced at T0+T1, and the v1 status bridge and backfill it kept; MOD7-1, MOD7-2; the activity mirror already left for `internal/activity` at T0+T1, MOD8-8), the ABO `internal/operations/childop` and `internal/opsmetrics`, whose last ABO user opsbridge was (5T.8.1, MOD8-2), v2 RunItems; delete `runitems_concurrency_lint_test.go` (replaced by `archtest.RunItemsDeclareParallelism`); delete the ABO code only books' legacy steps 62, 65 and 66 call (`MigrateOpsV2ToV3`, `SweepHollowOperationsV2` and their store methods) and declare books' `UpgradeFloor{Version: LegacyCap, InstallFirst: <stepping-stone release>}` (05-storage §5S.3.5; DATA2-2). The first release that contains T8 **is** the floor release; the stepping-stone release is the newest production tag when the T8 PR merges and contains none of it (OPS4-5) | — | grep: no `registry.` import in ABO; `TestUpgradeFloor_RefusedBelowLegacyCap`; `TestStepSteppingStoneValid` (root CI) | no format change (binary swap); a boundary only for stores below `LegacyCap`: boot refuses them with `ErrUpgradeFloor{InstallFirst}` (exit 78); the S0 updater hotfix and the `deploy` recipe refuse to swap it in by comparing its `--print-upgrade-floor` with `<db>.storage-applied`, and the S8 updater makes the same check (05-updater 5U.4 step 3; OPS6-1, OPS3-7); a pre-S0 updater swaps it unchecked, so the release note and the Docker last-line message name the stepping stone (DATA4-18) |
+| Group | Content | Count | Gate |
+|---|---|---|---|
+| Core (PC-12-01…06) | `core/tasks`, the executor, the scheduler, `NativeStores`, `Importer`, `taskhttp`, `taskstest`; `hello` and `coretest` run on them | — | `taskstest.StoresSuite` with its importer cases, the core rows of 5T.9 |
+| T2 | the 34 `MaintenanceJob`s (`internal/maintenance/jobs`) → books Task kinds (`Run(ctx, JobStore, ProgressReporter, dryRun)` `internal/maintenance/job.go:498` → `TaskSpec.Run(rc, p)`; `Policy()` → `Common`) | 34 | `taskstest.Conformance` per kind |
+| T3 | 24 repairs fixers → `tasks.Fixer` kinds `books.repairs.<fixer-id>`; the 2 defs `repairs.plan`/`repairs.apply` removed | 24 fixers, 2 defs | Fixer conformance suite |
+| T4 | the ops that become **core kinds** (table below), each in its owner's package: 4 maintenance-plugin defs and 2 server defs | 6 defs → 6 core kinds, plus the new `core.tasks.prune` | the owner file's tests |
+| T5 | service-registry plugin defs, per plugin: acoustid 8, dedup 32, metafetch 3, itunes 1, Deluge 4 (through 05-download's client adapter) | 48 | `pkg/plugin/sdk` unused by them |
+| T6 | the maintenance plugin's defs not in T3 or T4, in sub-batches of ≤ 15 by file group | 98 | — |
+| T7 | the server-package defs not in T4 (`internal/server/*_op*.go`) and `scheduler.metadata-upgrade`; the 38 `TaskDefinition`s → `ScheduleFromConfig` declarations on their kinds (5T.3.8); the 15 v2 crons → none (listed in the release note) | 45 + 38 | `TestScheduleParity_AllDefinitions` |
+| **F5 flip** (PC-12-08, with the schedule conversion PC-13-14) | registers every converted definition on core's executor and core's scheduler; adds books' tasks cutover step M4 with the kind-rename map (5T.8.3); deletes HEAD's engine (5T.8.1: `registry`, `opscatalog`, `maintenance`, `scheduler`, `childop`, `opmode`, `opsmetrics`, the v1 checkpoint helpers, the handlers and HEAD routes of 5T.3.10, `opsgen`); moves the SPA's Activity page and the first-party callers to the native routes; updates the dashboards and rules whose `def_id` values or series change (5T.11) | every definition | `make ci` and e2e; the parity suites (resume, cancel, shutdown, schedules); the cutover rows of 5T.9; `TestKindRenameMapCoversLedger`; 05-metrics' dashboard-reference test |
 
-Batches T2–T7 are mechanically similar and suit `/parallel-sweep`, partitioned by package so
-parallel PRs never touch the same file (CLAUDE.md "Parallel Subagent Coordination").
+**HEAD's generic ops: which become core kinds (resolves the T4 gap; SI-21).** `raw/06` §6 classes 24 of
+HEAD's 233 definitions `generic`. One rule decides each: a definition becomes a **core** kind only if
+everything it reads and writes after R2 is core-owned state, because a core kind may not reach a module
+writer (5T.3.12, `TestCoreRun_NeverCallsModuleWriter`, 03 R1); an op over a books family stays a books kind,
+whatever its class. Two definitions outside the class are core by the same rule. Checked against HEAD's
+definitions (`internal/plugins/maintenance`, `internal/maintenance/jobs`, `internal/server`) and their
+targets in 05-storage, 05-logging, 05-metadata, 05-health and 05-ai:
+
+| HEAD def ID | Core kind | Owner (package; spec) | What it covers |
+|---|---|---|---|
+| `maintenance.db-optimize` | `core.storage.compact` | `core/storage` ([05-storage](05-storage.md)) | full compaction of the main store (`db.go:65-80`, `db.Compact(nil, 0xff)`), `ConcurrencyKey` `core.storage.exclusive` (5T.3.4); schedule `core.storage.schedules.compact` (HEAD's `db_optimize` task, nightly window). HEAD's same op also compacts books' separate AI-scan and OpenLibrary stores: that half becomes the new books kind `books.maintenance.aux-store-compact`, a nightly-window member with no imported runs |
+| `maintenance.db-census-exact` | `core.storage.census` | `core/storage`, `storage.Admin.Census` (05-storage §5S.9.1) | exact per-family count by claims and keyspaces into `c/storage/census/`; HEAD's `book_ver:` special case stays books code behind the census hook |
+| `maintenance.purge-old-logs` | `core.log.journal.prune` | `core/internal/logjournal` ([05-logging](05-logging.md) §5) | the system-log journal by `core.log.journal.retention_days`; HEAD's other half, `operationlog:` rows, is run-log history that M4 imports, so `core.tasks.prune` covers it |
+| `maintenance.throttle-reset` | `core.integrations.release-holds` | `integrations/providerhttp` ([05-metadata](05-metadata.md) M2) | lists, and in Live releases, the quota, auth and rate-limit holds of every instance (`Registry.ReleaseHold`); `DELETE …/instances/{id}/hold` is its one-instance route |
+| `diagnostics.export` | `core.diagnostics.export` | `health/diagnostics` ([05-health](05-health.md)) | already declared there; `diagnostics.ai-analyze` stays books (05-health) |
+| `maintenance.window` | `core.window.nightly` | `core/internal/scheduler` (5T.3.8) | the window run; its members are kinds with `ScheduleConfig.Window = "nightly"` |
+| (the operation-record half of `maintenance.retention-and-hygiene`) | `core.tasks.prune` | `core/tasks`, the executor (5T.6.1, 5T.10) | terminal-run retention by `core.tasks.history_retention` through `RunStore.Prune`; the job's other half, the one-off `book:series:`/`book:author:` dead-prefix sweep, stays the books kind `books.maintenance.retention-and-hygiene`, under which its stored runs are imported |
+
+The other 19 `generic`-class definitions stay **books** kinds (`books.<HEAD ID>` by rule 4 below), because
+each one reads or writes a books family: the activity feed, which is books' (05-logging §5:
+`maintenance.activity-filter-index-backfill`, `cleanup-activity-log`, `compact-activity-log`,
+`nightly-compact-activity-log`, `recompact-activity-digests`); books' operation-change journal
+(`opchange-book-index-rebuild`); books' `aijournal:` claim (`prune-ai-journal`; 05-ai, 05-storage
+§5S.9.1); books' `met:` claim (`sweep-pebble-metrics-ttl`); library files and folders
+(`cleanup-old-backups`, which deletes fileops' `.bak-<unix>` files under the library root, not core backup
+archives; `temp-file-cleanup`, `transcode-temp-cleanup`, `reports-prune`, `cleanup-empty-folders`,
+`fix-file-modes`); books' entities (`purge-deleted`, `trash-cleanup`, `tombstone-cleanup`); and the
+dead-prefix half of `retention-and-hygiene`. `repairs.plan` and `repairs.apply` (also `generic`) are
+replaced by T3's per-fixer kinds. Core kinds with no HEAD definition (`core.outbox.relay`,
+`core.ai.batch-poll` from HEAD's inline `batch_poller` task, `core.backup.create`/`prune`/`verify`,
+`core.updater.check`/`apply`, the auth, audit, diagnostics and library prune kinds) are declared by their
+owners' files and need no map entry, except that `core.ai.batch-poll` takes `batch_poller`'s clock.
+
+**The kind-rename map (one map, applied once by M4; replaces `FormerKinds`, `LegacyDefID` and
+`LegacyTaskAliases`).** Books code, generated at the flip commit from HEAD's op-ID ledger
+(`internal/server/testdata/op_ids.golden`, every canonical ID and `FormerIDs` alias HEAD ever registered),
+`opscatalog.Tombstones` and `taskV2DefIDs` (`internal/scheduler/maintenance.go:154-175`); core holds none
+of it (03 R1(c)). Its rules, first match wins:
+
+1. a HEAD def ID in the table above → that core kind;
+2. `repairs.plan` / `repairs.apply` → `books.repairs.<fixer_id>` from the run's `fixer_id` param, a plan
+   run as `ModePreview`, an apply run as `ModeLive` with `PlanRef` = the plan run HEAD's params name;
+3. a HEAD `FormerIDs` alias → where its canonical ID maps;
+4. every other registered HEAD def ID `<id>` → `books.<id>` (the wrapped `maintenance.<job>` IDs included);
+5. a tombstoned ID, `operations.backfill-legacy-status` (deleted by the flip) and any other well-formed ID
+   found in a store → `books.retired.<id>`: history only, never registered (5T.5's unknown-kind row);
+6. an ID that fails the kind grammar (5T.3.1) → its run is quarantined (5T.5).
+
+A scheduler task name maps to the kind it fires through `taskV2DefIDs`, then rule 1 or 4 (`batch_poller` →
+`core.ai.batch-poll`; `transcode` fires nothing and its clock is dropped). M4 applies the map to every
+stored reference to a def ID: runs, clocks, debounce buckets, `Requires` stamps, and the books rows that
+store a def ID (an inventory the step generates and `TestCutover_KindReferencesRewritten` checks); rows that
+store a run ID need nothing, because run IDs are kept. The 38 schedule keys follow the same map in M2
+(5T.3.8). After R2 a rename is an owner's data migration through `Importer.RenameKind` (5T.3.13).
+
+### 5T.8.3 The tasks cutover (M4)
+
+Books' BootBlocking cutover step for the ops families (books code in `internal/books/cutover`, 03 §3.5.1), step M4
+of the R2 migration list (03 §3.8; [09](09-abo-on-core.md) §9.4), carried by the tasks flip F5, after the config
+(M2) and identity (M3) steps and before the level step (M7). It runs behind the
+mandatory pre-migration checkpoint (05-storage §5S.3.12), in P4, before the executor starts (5T.4 step
+0); it receives `tasks.Importer` in `module.Importers` (06 §6.4.2); the step type, its dry-run mode
+(per-family counts and quarantined rows, nothing written) and the quarantine are 05-storage §5S.3.13's. Order:
+
+1. HEAD's every-boot repair `ReconcileOpsV3WithV2` (`internal/database/store.go:1860-1870`) runs once,
+   so every v3 record agrees with its v2 row before anything is decoded.
+2. In chunks, each chunk one batch holding the `Importer` calls and the deletes of exactly the source rows
+   it imported, with a persisted cursor per family (resumable; 05-storage's crash matrix):
+   - **runs:** v3 records, falling back to the v2 row for a run without a projection (open item 5), with
+     their trails, intents, items, log, checkpoints, chunk ledgers, item-key snapshots, rows and row marks,
+     and HEAD's v1 history (`operation:` with its `operationlog:` lines, results, summaries and statuses)
+     as terminal runs with their log pages (D12 F2: task-run and log history are kept). Every run keeps
+     its HEAD op ID; its kind goes through the map; `Priority` 0/1/2 → Low/Normal/High
+     (`internal/operations/registry/types.go:329-331`). A v1 checkpoint (`operations.SaveCheckpoint`'s
+     family, DATA-15) of an open run becomes that run's checkpoint named `v1`, read once by the converted
+     kind's `Restore`; one with no open run is deleted;
+   - **states**, HEAD's stored vocabulary → `RunState`:
+
+     | HEAD (`state.V3`; the v2 status through `state.FromV2`) | Imported as |
+     |---|---|
+     | `queued` (`WaitReason` `""`, `ready`, `pause`) / `queued` with `WaitReason` `deps` | `queued` / `waiting_deps` |
+     | `running`; `stopping` with `StopReason` `shutdown` | `interrupted` (HEAD stopped mid-run; the resume policy decides, 5T.4 step 2) |
+     | `stopping` with `StopReason` `user` / `quiesce` / `timeout` / `watchdog` | `canceled` / `interrupted_quiesced` / `timed_out` / `failed` (reason `watchdog`) |
+     | `interrupted` (`InterruptedWhy` `crash`, `legacy`) / with `quiesced` | `interrupted` / `interrupted_quiesced` |
+     | `awaiting_decision`, `succeeded`, `failed`, `timed_out`, `canceled` | the same |
+     | `dropped` | `interrupted_dropped` |
+     | a v1 status | its terminal state; a non-terminal v1 row → `interrupted_dropped` (reason `v1_unfinished`), because no v1 runner exists |
+
+   - **clocks:** HEAD's v3 schedule state (`SchedState`, `iface_ops_v3.go:281-290`: `LastDue`, `LastFire`,
+     `Missed`, `GateClosedAt`); the scheduler's settings clocks (an RFC3339 last-due time per task under
+     `intervalLastTickPrefix`, `internal/scheduler/interval_clock.go:50-60`) and the full-sweep clock
+     (`library_scan_full_last_run`, `internal/scheduler/full_sweep.go:81,117`) as `LastDue`; and
+     `maintenance_window_last_run`, a local `YYYY-MM-DD` date (`maintenance.go:53,70-71`), as `LastDue` =
+     `LastRun` = **local** midnight of that date (`time.ParseInLocation`, `time.Local`), so a window that ran
+     on day D is not run again on D west of UTC (MOD7-3, MOD8-9). `ScheduleHash` is empty (5T.3.8);
+   - **markers and buckets:** the operator pause marker (`pauseSettingKey`, `pauseMarker`,
+     `internal/operations/registry/pause_gate.go:52-60`) → `Pause`; the scan stand-down marker
+     (`registry.scan_standdown`, `scan_standdown.go:27,106-110,557-605`) → one `StandDown` for the converted
+     scan kind's key; the v2 debounce buckets → `Debounce` (each holds a pending start);
+   - **stamps:** HEAD's completion and dependency-revision stamps for books and book-file subjects
+     (`pebble_store_ops_v2.go:1188`), library-scale, → `Stamp` with the subject `books/books` or
+     `books/book_files` and the renamed kind.
+3. Not imported, deleted: watchdog strikes, the census row `opv3:meta:counts` (native `Counts` is derived),
+   the v2 and v3 definition rows (registration rebuilds `c/tasks/def/`). Of the shared `setting:` family
+   only the run keys above move; HEAD's other setting rows are byte-identical before and after.
+4. Books' claims over the ops families end with the flip, so a stray writer the conversion missed is
+   refused by strict claims at runtime (05-storage §5S.3.4).
+
+A row the step cannot decode is quarantined and reported, never dropped (5T.5). Every run, clock and stamp
+it imports is counted and checked against the source (5T.9). Rollback is the offline restore of the
+pre-migration checkpoint (or the owner's off-host archive) plus the R1 binary (05-storage, 09): runs started
+after the upgrade are lost with every other post-upgrade write.
 
 ## 5T.9 Tests (core must ship)
 
-Rows marked **(ABO)** run in the root module against books' legacy store (5T.6.2); the rest are core's.
-The prev-binary one-format rows (`TestLegacyFormat_*`, `TestUnknownKindRun_*`, `TestClock_InPlace_*`,
-`TestReqStamps_InPlace_HonouredOnPrev`) are part of the root `make ci` requirement, with `prev` built
-from `PREV_REF` and cached by tag (09 §9.2.1, OPS4-6), so every Go PR runs them rather than only the
-nightly rehearsal.
+Rows marked **(ABO)** run in the root module: the cutover rows over a fixture corpus written by the R0
+binary itself, never by hand, and the parity rows against HEAD's behaviour; the rest are
+core's. Every row is part of `make ci`; there is no previous-build test and no `PREV_REF`.
 
 | Test | Proves |
 |---|---|
@@ -2161,54 +1812,45 @@ nightly rehearsal.
 | `TestContinueInPlace_RequiresProgressAndCheckpoint`, `TestContinueInPlace_SameRunIDFreshTimeout` | yield |
 | `TestCancel_GraceThenFenceRevoked`, `TestZombieCapBlocksModule` | cancel |
 | `TestWriteSet_ResourceOverlapMatrix` (multi-ref sets), `TestConcurrencyKey_NamespaceEnforced` | G8 |
-| `TestMode_OmittedIsPreviewForWriters`, `TestMode_ConflictingSpellings400`, `TestPreview_WriterRecordsIntentOnly` | dry-run |
-| `TestApprove_RequiresVerifiedMethodAndPermission` (table: session, app-level interactive extension (CF Access), module compat method (refused), key naming the scope, key implying it via `core:admin`, legacy full-scope key, delegated session, forwarded header), `TestFixer_PlanRefAgeAndRowsOnly` | approval (SEC-24) |
-| `TestStart_ViewOnlyDefRefusedAtRegister`, `TestStart_LegacyViewDefKeepsScanFloor` | SEC-9 |
+| `TestMode_OmittedIsPreviewForWriters`, `TestStart_DryRunFieldRefused400`, `TestPreview_WriterRecordsIntentOnly` | dry-run |
+| `TestApprove_RequiresVerifiedMethodAndPermission` (table: session, app-level interactive extension (CF Access), module method (refused), key naming the scope, key implying it via `core:admin` (refused), delegated session, forwarded header), `TestFixer_PlanRefAgeAndRowsOnly` | approval (SEC-24) |
+| `TestStart_ViewOnlyDefRefusedAtRegister`, `TestStart_ConvertedViewDefKeepsScanFloor` | SEC-9 |
 | `TestSchedule_EnqueueAndClockOneBatch` (crash injection between), `TestSchedule_NoBootStampede`, `TestSchedule_CoalesceMissed`, `TestSchedule_DSTSpringForwardFallBack` (synctest, fake zone) | schedules |
 | `TestScheduleFromConfig_UndeclaredKeyRefused`, `TestScheduleFromConfig_ForeignNamespaceRefused` (a core kind on `modules.x.…`, a module kind on another module's or a `core.` key, a key without the `.schedules.` segment, a hyphenated segment, a `duration`-typed key, one key on two kinds), `TestScheduleFromConfig_OwnerKeyAccepted` (`core.backup.schedules.create`, `modules.books.scan.schedules.full_sweep`), `TestScheduleFromConfig_HotReload`, `TestEvery_RefusedExceptRelay` | SIMP-6, R2-7 |
 | `TestShutdown_DrainBoundedAndStampsInterrupted`, `TestShutdown_UninterruptibleExtendsOnceOnlyUnderNotify` | shutdown |
-| `TestHeld_DisabledModuleRunsUntouchedAndBootSucceeds`, `TestHeld_LedgerGateResolves`, `TestHeld_MutationsRefused409` | COR-13 |
+| `TestHeld_DisabledModuleRunsUntouchedAndBootSucceeds`, `TestHeld_KindsKnownWhileDisabled`, `TestHeld_MutationsRefused409` | COR-13 |
 | `TestOutboxTriggered_StartInSameBatchAsCursor` (crash between), `TestOutboxTriggered_ModeFromConsumerOption` (no `Live()`/`Preview()` → registration fails; unset `Tx.StartRun` mode refused) | COR-9 hand-off, COR2-5 |
 | `TestCoreRun_NeverCallsModuleWriter` (archtest: a `core.` kind's body reaches no module-registered write callback; module writes only under module kinds) | COR2-11 |
 | `TestLockRefs_CtxFromRCJoinsTable`, `TestLockRefs_PlainCtxRefused` | COR2-16 |
 | `TestModuleSystemActor_CannotStartUndeclaredKind` (foreign kind not in `TaskStarts` → 403; listed kind needing `core:system.manage` → 403), `TestTaskStarts_DisabledTargetModuleBootsAndRefusesAtRuntime` | SEC2-15, COR3-10 |
-| `TestRunView_CurrentRedactedWithoutUsersView` (same `RunView` over `GET /runs`, the native stream and projection C, through `RunViewRedactor`) | COR2-2, COR3-13 |
+| `TestRunView_CurrentRedactedWithoutUsersView` (same `RunView` over `GET /runs` and the native stream, through `RunViewRedactor`) | COR2-2, COR3-13 |
 | `TestStart_IdempotencyKeyHeaderReplays` (second POST → `200`, same run, `Idempotent-Replayed: true`), `TestOutboxTriggered_WritesNoIdemRecord` | SIMP2-8, SIMP3-8 |
 | `TestOnTerminal_NotificationStagedInTerminalBatch` (crash between → neither or both) | COR2-3 |
-| `TestS5Bridge_LegacyStreamsShowCoreRuns` (S5 build: streams A, B and C show live progress for a run of a kind with a `LegacyDefID`, executed by the core executor; FE4-10), `TestS5Bridge_RepairsRunHiddenFromViewer` (a Repairs run reaches no `library.view` subscriber of B; a kind with no `LegacyDefID` reaches no stream; stream A's `Current` blank) | FE2-3, COR3-9, FE3-12, SEC3-9 |
-| `taskstest.StoresSuite` over `NativeStores` (core) and over books' legacy store with HEAD fixtures **(ABO)**: CAS transitions (every executor edge, so books' in-store legality check agrees, 5T.6.2), the write check on every write (a commit-time precondition on the native store, the run lock on books'), one row per run, per-run sequences, terminal-only `Prune`, every write staged into the caller's batch (a discarded batch leaves nothing; `Prune` excepted, it commits its own); suite name per 05-storage §5S.3.11 (SIMP5-9) | R4-1, SIMP4-2, R6-1, R6-2 |
-| `TestLegacyProgressVsCancelKeepsState` and `TestLedgerCommitAfterTerminalRefused`, cases of `taskstest.StoresSuite`, so they run over both implementations (`synctest`: a progress tick races an HTTP cancel and the run stays `stopping` whatever the order — on the native store a tick read before the cancel's commit fails with `ErrRunConflict`, on books' store it reads the cancel under the lock — and on books' store the `opv2:op:` row still says so after `Recover`; a `SaveChunk` racing a terminal transition writes no ledger, checkpoint or mark once the run is terminal) | R6-1, DATA6-1 |
-| `TestConcurrentTransitionsOfDistinctRunsAllCommit` (N runs complete at once; every terminal transition commits, books' census row and native `Counts` exact) and `TestCancelCommitsUnderProgressTicks` (`synctest`: an HTTP cancel races a stream of progress ticks of the same run and commits; no tick reverts it), cases of `taskstest.StoresSuite` over both implementations | R7-3, DATA7-2 |
-| `TestPruneUnderConcurrentCompletions` (`synctest`, a case of `taskstest.StoresSuite`: `Prune` deletes terminal runs while N other runs complete; every chunk commits (native: under `RetryOnConflict`; books: under `opsMu` per chunk), books' census row stays exact, and a row that is no longer terminal on the re-read is skipped) | DATA8-8 |
+| `taskstest.StoresSuite` over `NativeStores`: CAS transitions (every executor edge), the commit-time write check on every write, one row per run, per-run sequences, terminal-only `Prune`, every write staged into the caller's batch (a discarded batch leaves nothing; `Prune` and `ReplaceRows` excepted, they commit their own); suite name per the `<pkg>test.<Interface>Suite` rule (SIMP5-9) | R4-1, R6-1 |
+| `TestProgressVsCancelKeepsState` and `TestLedgerCommitAfterTerminalRefused`, cases of `taskstest.StoresSuite` (`synctest`: a progress tick races an HTTP cancel and the run stays `stopping` whatever the order, because a tick read before the cancel's commit fails with `ErrRunConflict`; a `SaveChunk` racing a terminal transition writes no ledger, checkpoint or mark once the run is terminal) | R6-1, DATA6-1 |
+| `TestConcurrentTransitionsOfDistinctRunsAllCommit` (N runs complete at once; every terminal transition commits and `Counts` is exact) and `TestCancelCommitsUnderProgressTicks` (`synctest`: an HTTP cancel races a stream of progress ticks of the same run and commits; no tick reverts it), cases of `taskstest.StoresSuite` | R7-3, DATA7-2 |
+| `TestPruneUnderConcurrentCompletions` (`synctest`, a case of `taskstest.StoresSuite`: `Prune` deletes terminal runs while N other runs complete; every chunk commits under `RetryOnConflict`, `Counts` stays exact, and a row that is no longer terminal on the re-read is skipped) | DATA8-8 |
+| `TestTransitionVsCancelOneWins` (`synctest`: an executor completion and an HTTP `runs/{id}/cancel` race on one run; exactly one commits, the other gets `ErrRunConflict`; the same for two `ClockStore.Advance` calls on one clock) | R5-4, DATA5-1 |
 | `TestStart_ConcurrentSameIdempotencyKeyOneRun` (two concurrent HTTP starts with one `Idempotency-Key`: one run is inserted, the other replays it with `Idempotent-Replayed: true`) | DATA8-9 |
-| `TestScheduleParity_AllDefinitions` **(ABO, root CI, fake clock)** (for each of the 38 `TaskDefinition`s, config enabled and disabled: `cur`'s core scheduler plus books ticker and HEAD produce the same enqueue, start-run, maintenance-window reachability and clock-advance sequence; transcode and series-normalize never start themselves) | OPS8-4, DATA5-8 |
+| `TestScheduleParity_AllDefinitions` **(ABO, fake clock)** (for each of HEAD's 38 `TaskDefinition`s, config enabled and disabled: core's scheduler over the converted declarations and HEAD's scheduler produce the same enqueue, start-run, maintenance-window reachability and clock-advance sequence; transcode and series-normalize never start themselves) | OPS8-4, DATA5-8 |
 | `TestFixerMarksLandDuringQuiesce` (`synctest`, a case of `taskstest.StoresSuite`: a Fixer row applies while a stand-down quiesces the run to `stopping`; its mark commits, and on resume that row is skipped) | R7-3, DATA7-3 |
-| `legacytest.TasksRunStoreSuite` **(ABO, over books' store)**: the `legacy.TasksRecoverer` and `legacy.WriteLock` cases (5T.3.13), beside `taskstest.StoresSuite` | R6-3, SIMP6-6, A-3, R9-1 |
-| `TestLegacyRunLockSpansCommit` **(ABO)** (`synctest`, books' store: a second `WriteRuns` blocks from the first one's first read until its `storage.CommitLocked` commit returns, also with a native participant (an outbox cursor) in the batch; a clock advance, an `Executor.Pause` and a stand-down marker write block the same way; a write staged without a hold → `legacy.ErrRunsNotLocked`, and a write staged inside a hold into a second batch → `legacy.ErrRunsNotLocked` (R10-4); a nested `WriteRuns` → `ErrWriteRunsNested`, no deadlock; `Prune` takes the lock per chunk) | A-3, R9-1, COR9-8 |
-| `TestLegacyReplaceRowsTakesNoRunLock` **(ABO)** (`synctest`, books' store: a `ReplaceRows` of more rows than one `opRowBatchRows` chunk runs while another `WriteRuns` holds `opsMu`; it completes without waiting for that hold, a transition started during it commits before it returns, and it is not refused with `legacy.ErrRunsNotLocked`) | DATA9-7 |
-| `TestS5_OperationsTimelineLogDiscardParity` **(ABO)** (from T0+T1: books' `GET /api/v1/operations/timeline` returns HEAD's rows for a finished-at window with in-flight runs included; `…/v2/:id/logs/download` returns HEAD's body; `DELETE …/v2/:id/record` answers 409 for a running run and, for a terminal run, removes every key of HEAD's discard set, and the next resume sweep does not resurrect it) | FIN12-3 |
-| `TestLegacyStoresAreSingletons` **(ABO)** (the P4c `legacy.Stores.Tasks` result, the store books' `Register` receives at P6, and the stores opsbridge, `childop` and the books ticker use are one instance with one `opsMu`; the umbrella over every legacy family is 06's) | R9-1, DATA9-2 |
-| `TestABOMetricsGatherNoDuplicateOrMissing` **(ABO, from S5)** (builds the stage's kernel `Provider` together with ABO's real recorders: `opsmetrics.Default()`, the books run-event recorder and `internal/metrics`; runs one adapted executor task of a v2 def with a plugin ID, one core-scheduler tick and one v3-loop tick reported through `ReportScheduleTick`, one of them folded; `Gather()` returns no error, and the full family, label-key and series (label-value) set equals the HEAD golden plus the stage's declared additions: no family missing, none duplicated, `plugin` and `def_id` values as HEAD's) | R9-3, MOD9-1, MOD9-2 |
-| `TestStandDown_MarkerAtBootDefersQuiescedRun` (a hold's marker survives a crash; the next boot leaves the quiesced run `interrupted_quiesced`, clears the marker and warns; the boot after resumes it) and its **(ABO)** twin over HEAD's `registry.scan_standdown` row with a HEAD-written fixture | MOD6-4 |
-| `TestLegacyTaskAliases` (06 owns it: a run HEAD stored as `diagnostics.export` resolves to `core.diagnostics.export` through `app.Options.LegacyTaskAliases`; a key that is not a registered `core.*` kind, or a value a module registers or lists in its `TaskLedger`, fails boot with `ProblemLegacyTaskAlias`), extended to one T4 kind | MOD6-6 |
-| `TestLegacyRunTransitionVsCancelOneWins` **(ABO)** (`synctest`, books' store: an executor completion and an HTTP `runs/{id}/cancel` race on one run; exactly one commits, the other gets `ErrRunConflict`; the same for two `ClockStore.Advance` calls on one clock) | R5-4, DATA5-1 |
-| `TestLegacyStepPreconditionsResolve` **(ABO)** (every books legacy step, 62, 65 and 66 included, reaches its body for the production store type; none can log "nothing to do" and be recorded as applied), `TestLegacyRunStoreRecovers` **(ABO)** (a stale v3 record beside its v2 row is rebuilt by `Recover` before the resume sweep; the run store asserts `legacy.TasksRecoverer` at compile time) | R5-2, MOD5-1, SIMP5-4, R6-3 |
+| `TestTimelineLogDiscard` (`GET /timeline` returns HEAD's rows for a finished-at window with in-flight runs included; `GET /runs/{id}/log` returns the run's lines; `DELETE /runs/{id}` answers 409 for a running run and, for a terminal run, removes every key of the run, and the next resume sweep does not resurrect it) and its **(ABO)** parity case against HEAD's timeline handler on the R0 fixture | FIN12-3 |
+| `TestStandDown_MarkerAtBootDefersQuiescedRun` (a hold's marker survives a crash; the next boot leaves the quiesced run `interrupted_quiesced`, clears the marker and warns; the boot after resumes it) | MOD6-4 |
 | `TestNativeStores_RoundTrip` (every `RunStore`, `ClockStore`, `PauseStore` and `StandDownStore` method over `c/tasks/`; `hello.count` on a zero-module `coretest`) | SIMP4-3 |
-| `TestLegacyStoreMissingFailsBoot` (a store recorded as legacy booted without `LegacyStores.Tasks`, and the reverse → `ErrLegacyStoreMissing`) | R4-1 |
-| `TestOpsFamiliesWrittenOnlyByTaskstore` **(ABO)**, the ops instance of the umbrella `TestLegacyFamiliesWrittenOnlyByLegacyStores` (09 §9.2.1) (AST: every runtime write of the ops, clock, pause and stand-down families is inside books' store; legacy steps and the v1 carve-outs excepted) | R4-1, DATA4-5 |
-| `TestOneSchedulerPerKind` **(ABO)** (no kind has both a core `Schedule` and an ABO scheduler entry; the ABO scheduler's clock writes go through `ClockStore`) | DATA4-5 |
-| `TestDispatch_WaitsForReadySignal` (S5 build: a `books.*` run that reads books is not dispatched before `books.memdb` reports Up) | COR4-8 |
-| `TestLegacyFormat_RoundTripWithHEAD` **(ABO)** (fixture store from HEAD: a HEAD-written run is resumed by core; a core-written run, checkpoint, clock and stamp are resumed and honoured by HEAD's reader; then core again over the same store) | G5, R4-1 |
-| `TestLegacyStoreRefusesNonHEADRecords` **(ABO)** (a stamp of a non-book subject and a stand-down marker for a non-scan key → `ErrStoreUnsupported`, nothing written; `Yields` and `ScheduleHash` read back zero) | A-2 |
-| `TestLegacyFormat_RetryOnPrevRunsOnce` **(ABO)** (a core run interrupted, Retry on HEAD, roll forward: one row, one execution) | 5T.6 rule 1, DATA3-4 |
-| `TestUnknownKindRun_DroppedByPrevVisibleAfterRollForward` **(ABO)** | 5T.6 rule 3 |
-| `TestClock_InPlace_RollbackNoStampedeNoDoubleFire` **(ABO)** (new → old → new over one fixture store) | OPS-7, DATA-6 |
-| `TestReqStamps_InPlace_HonouredOnPrev` **(ABO)** (a stamp written on cur is honoured on prev; R-test row) | OPS2-9 |
-| `TestLegacySteps59to66_RunBeforeExecutorStart` (store at books v63, a pre-floor build), `TestUpgradeFloor_RefusedBelowLegacyCap` (floor-release build; a store below books' `LegacyCap`, whatever step number that is at the S2b flip, is refused; OPS9-16) | DATA2-2, DATA4-19 |
+| `TestParity_ResumeCancelShutdown` **(ABO)** (HEAD's resume, cancel and shutdown suites, ported as behaviour oracles: each case's HEAD outcome is the expected outcome of the converted definition on core's executor) | G1, PC-12-03 |
+| `TestUnknownKindRun_DroppedAtResume` (a non-terminal run of an unregistered, unheld kind → `interrupted_dropped`, reason `unknown_kind`; a terminal one stays listed; boot succeeds) | 5T.5 |
+| the importer cases of `taskstest.StoresSuite` (over `NativeStores`: an imported run keeps its ID, kind, state and `Seq`; a second import of one ID fails with `ErrRunConflict`; `RunData` lands only on an imported run; `CrashClone` at every point of an import batch leaves the chunk wholly imported or wholly not; `RenameKind` rewrites runs, clock, snapshot and stamps and is idempotent) | 5T.3.13 |
+| `TestKindRenameMapCoversLedger` **(ABO)** (every line of HEAD's `op_ids.golden` and every `opscatalog.Tombstones` key maps to exactly one kind by 5T.8.2's rules; every target is a registered kind of the flip build or a `books.retired.*` kind; no two HEAD canonical IDs map to one registered kind; the core targets are exactly 5T.8.2's table) | 5T.8.2, SI-21 |
+| `TestCutover_TasksFixtureFromR0` **(ABO)** (a store written by the R0 binary, with queued, waiting, running, stopping (each reason), interrupted, quiesced, awaiting-decision and terminal runs of every shape, v1 history, checkpoints, ledgers, rows, marks, pages, clocks, the pause and stand-down markers, debounce buckets and stamps: after M4 every source row is gone or quarantined, every run is present with HEAD's ID, the renamed kind and 5T.8.3's state, every count and cross-reference matches the source, and the first boot's resume sweep acts per policy) | 5T.8.3 |
+| `TestCutover_CheckpointsResume` **(ABO)** (every converted `ResumeContinue` kind resumes from a HEAD-written checkpoint, `v1` checkpoints included, or is listed as resuming from zero once) | 5T.3.6 |
+| `TestCutover_NoCatchUpStorm` **(ABO, fake clock)** (first boot after M4: no kind fires before its next due instant from HEAD's clock; the window clock, imported with `TZ` west of UTC after a run at 23:30 local, is not due again that day) | OPS-7, MOD7-3 |
+| `TestCutover_KindReferencesRewritten` **(ABO)** (every books row of the step's inventory that stored a HEAD def ID names the renamed kind afterwards; `Requires` stamps are honoured for the renamed kind) | 5T.8.2 |
+| `TestCutover_SharedSettingFamilyOnlyRunKeysMove` **(ABO)** (every `setting:` row other than the moved run keys is byte-identical before and after) | 5T.8.3 |
+| `TestCutover_UndecodableRowQuarantined` **(ABO)** (a corrupt ops row is copied under `c/storage/quarantine/`, deleted at its source in the same batch, counted in health; the step completes) | 5T.5 |
+| `TestCutover_ResumableCrashMatrix` **(ABO)** (`CrashClone` at every chunk boundary and inside a chunk: the resumed step imports each row exactly once) | A-8, 05-storage crash matrix |
+| `TestDispatch_WaitsForReadySignal` (a `books.*` run that reads books is not dispatched before `books.memdb` reports Up) | COR4-8 |
 | (deferred with the `Online` mode, SIMP5-7) 05-storage's `TestModuleOnlineMigrationRunsAsModuleKind` and `TestOnlineMigrationYieldsPastTimeout`, over a test module fixture (5T.3.12); one name each, the owner's (COR5-17) | COR4-5, COR4-6 |
-| `TestLegacyHistory_ReadInPlaceUndecodableHidden` | history |
 | `TestPerRunSeq_NoReissueAfterCrash` (`CrashClone` between row write and commit) | DATA-19 |
-| `TestLegacyOpsWriters` **(ABO)** (successor of `TestOpStateWriters`; ratchet: the count of v1 checkpoint, result, summary and status write sites only shrinks, each with its target batch T2/T5/T7) | DATA-15, DATA2-12 |
 | `TestNoGlobals_Tasks` (R5 AST), `archtest.ResumeContinueCheckpoints`, `archtest.RunItemsDeclareParallelism` self-tests | guards |
 | `taskstest.Conformance(t, defs...)` — modules run it over their own defs (re-implemented from `pkg/ops/opstest/conformance.go`, 04 §8.6) | per-module |
 
@@ -2236,42 +1878,39 @@ URLs; a schedule key's protection is declared by its owner with the key.
 | `core.tasks.windows.<name>.enabled` | bool | true | yes | — |
 | `core.tasks.idempotency_ttl` | duration | 7d (HTTP start route only) | yes | — |
 | `core.tasks.history_retention` | duration | 90d | yes | — |
+| `core.tasks.schedules.prune` | `tasks.ScheduleConfig` (declared by `core/tasks` for `core.tasks.prune`, R2-7) | `{"enabled": true, "every": "24h"}` | yes (re-read every poll) | — |
 | `core.<subsystem>.schedules.<name>` / `modules.<id>.<subsystem>.schedules.<name>` (declared by each kind's owner; 5T.3.8, R2-7) | `tasks.ScheduleConfig` | declared per kind by its owner | yes (re-read every poll) | declared by the owner (e.g. 05-updater's apply schedule is `ProtectAdmin`) |
 | `modules.<id>.tasks.max_concurrent` | int | 0 = unlimited | yes | — |
 
-There is no `core.tasks.legacy_history_window`: history is the run store's terminal rows (books' legacy
-store: the ops families' own), aged out by `history_retention` through `RunStore.Prune` (SIMP2-12).
+There is no separate history window: history is the run store's terminal rows (the runs the cutover
+imported included), aged out by `history_retention` through `RunStore.Prune`, which the core kind
+`core.tasks.prune` calls on its schedule (SIMP2-12). HEAD's `scheduled.*` and `maintenance.*` values reach
+these keys and the schedule keys once, through the config cutover (M2, 05-config's rename table).
 
 ## 5T.11 Metrics
 
 Per-`App` meter ([05-metrics](05-metrics.md)), named under the app's metric namespace `<ns>`
-(`app.Options.MetricNamespace`, 06; default `mediacore`; 05-metrics owns the naming rule).
-
-**ABO keeps its series (A-5, ADV-S4, R9-3).** The executor's instruments are HEAD's run instruments
-(`internal/opsmetrics/opsmetrics.go:11-19,216-250`) with HEAD's names, units, label keys, label values
-and outcome values, on the core scope `<ns>.ops` (05-metrics §13 item 1; the exporter is built
-`WithoutScopeInfo`, so the scope is not part of a series). ABO, which passes `audiobook_organizer`,
-therefore keeps every ops series with its HEAD identity — name and label values — with no rename, no alias
-and no dashboard change; a new app gets the same names under its own namespace (`<ns>_ops_runs_total`, so
-a native app's are `mediacore_ops_*`; MOD9-8). `def_id` is a closed label set (registered kinds only,
-current `opsmetrics.RegisterDefID`, `internal/opsmetrics/defids.go:24`) whose value is the run's
-`StoredKind`: an adapted kind's HEAD def ID, else its kind. `plugin` is the kind's `Common.LegacyPlugin`
-when the app sets it (opsbridge sets HEAD's plugin ID on every adapted v2 def, and a native successor of
-one keeps it), else its owning module ID; so ABO's values stay HEAD's (`plugin="scanner"`, as
-`deploy/prometheus/alert-rules.test.yml:25-32` uses), and the stall alert that joins `progress_age` with
-`progress_timeout` on it keeps matching (MOD9-2).
+(`app.Options.MetricNamespace`, 06; default `mediacore`; 05-metrics owns the naming rule). Names may change
+(D10); this file keeps HEAD's instrument names (`internal/opsmetrics/opsmetrics.go:11-19,216-250`) on the
+core scope `<ns>.ops`, because renaming them buys nothing, so ABO, which passes `audiobook_organizer`,
+keeps its series names. Label **values** change with the kinds: `def_id` is the run's kind, a closed set
+(registered kinds only), and HEAD's `plugin` label is replaced by `module`, the kind's owning module. The
+tasks flip PR (5T.8.2) updates every dashboard panel and rule that reads them (`deploy/grafana/dashboards/*.json`,
+`deploy/prometheus/{alert-rules,recording-rules,alert-rules.test}.yml`; the stall alert joins
+`progress_age` with `progress_timeout` on `def_id` and `module`), and 05-metrics' dashboard-reference test
+(every series those files name is served) is in that PR's gate (05-metrics).
 
 | Instrument | Type | Labels | At HEAD |
 |---|---|---|---|
-| `<ns>.ops.runs` | counter | `def_id`, `outcome` (`started`, `completed`, `failed`, `canceled`, `timed_out`, `dropped`) | same name and labels |
-| `<ns>.ops.run.duration` | histogram (s); default boundaries HEAD's (`internal/telemetry/views.go:42`) | `def_id`, `outcome` | same, `le` included |
-| `<ns>.ops.items` | counter | `def_id`, `outcome` | same |
-| `<ns>.ops.inflight` | gauge | `def_id`, `plugin` | same |
-| `<ns>.ops.progress_age` | gauge (s) | `def_id`, `plugin` | same |
-| `<ns>.ops.progress_timeout` | gauge (s) | `def_id`, `plugin` | same |
+| `<ns>.ops.runs` | counter | `def_id`, `outcome` (`started`, `completed`, `failed`, `canceled`, `timed_out`, `dropped`) | same name; `def_id` values are kinds |
+| `<ns>.ops.run.duration` | histogram (s); default boundaries HEAD's (`internal/telemetry/views.go:42`) | `def_id`, `outcome` | same name |
+| `<ns>.ops.items` | counter | `def_id`, `outcome` | same name |
+| `<ns>.ops.inflight` | gauge | `def_id`, `module` | `plugin` label → `module` |
+| `<ns>.ops.progress_age` | gauge (s) | `def_id`, `module` | `plugin` label → `module` |
+| `<ns>.ops.progress_timeout` | gauge (s) | `def_id`, `module` | `plugin` label → `module` |
 | `<ns>.ops.zombies` | gauge | — | same |
-| `<ns>.ops.schedule_lag` | histogram (s); default boundaries HEAD's (`views.go:58`) | `def_id` | same, `le` included |
-| `<ns>.ops.schedule_missed` | counter | `def_id` | same |
+| `<ns>.ops.schedule_lag` | histogram (s); default boundaries HEAD's (`views.go:58`) | `def_id` | same name |
+| `<ns>.ops.schedule_missed` | counter | `def_id` | same name |
 | `<ns>.ops.queue_depth` | gauge | `module`, `priority` | new |
 | `<ns>.ops.dispatch_deferred` | counter | `reason` (key, writeset, ready, module_cap, zombie_cap, standdown, paused, held) | new |
 | `<ns>.ops.cpu_slots_in_use` | gauge | — | new |
@@ -2280,78 +1919,28 @@ one keeps it), else its owning module ID; so ABO's values stay HEAD's (`plugin="
 | `<ns>.ops.held_runs` | gauge | `module` | new |
 | `<ns>.ops.yields` | counter | `def_id` | new |
 | `<ns>.ops.schedule_errors` | counter | `def_id` | new |
-| `<ns>.ops.undecodable_records` | counter | `family` (a closed set each store implementation declares) | new |
+| `<ns>.ops.undecodable_records` | counter | `family` (a closed set the native store declares) | new |
 
-Prometheus series follow 05-metrics' rule (`<ns>_ops_runs_total`, `<ns>_ops_run_duration_seconds`, …, as
-HEAD's exporter renders them).
+Prometheus series follow 05-metrics' rule (`<ns>_ops_runs_total`, `<ns>_ops_run_duration_seconds`, …).
+The two histograms default to HEAD's bucket lists (`0.1 … 86400`, `views.go:42`; `1 … 86400`,
+`views.go:58`), declared as plain numbers through `Scope.View`, so `le` values do not change;
+`ref_lock_wait` takes 05-metrics' default for a core histogram.
 
-**Histogram boundaries (MOD10-6).** `le` is a label value, so the two histograms HEAD pins keep HEAD's
-bucket lists: the executor declares them as the default boundaries of `ops.run.duration`
-(`0.1 … 86400`, `views.go:42`) and `ops.schedule_lag` (`1 … 86400`, `views.go:58`) through `Scope.View`, as
-plain numbers, so no ABO name enters core. An app's `app.Options.MetricViews` entry for the same
-instrument (`metrics.Options.MetricViews`), installed when `metrics.New` builds the `MeterProvider` (05-metrics §3), overrides them; ABO
-passes `telemetry.HistogramBuckets()`, whose two entries equal them. `TestHistogramBucketsPinned` and
-`histogram_buckets.golden` (05-metrics §6) are part of the T0+T1 done-check, so `le` changes for neither
-family at S5. `ref_lock_wait`, a new family, takes 05-metrics' default for a core histogram.
+**One owner per family.** The executor owns the run families and core's scheduler both schedule
+families. HEAD's other emitters of ops series are deleted by the flip, with no hand-over window:
 
-**One owner per family (R9-3, MOD9-1).** HEAD's `opsmetrics.Default()` builds its whole recorder on the
-global provider, which from S2 r3 is the App's (05-metrics §6), in its own scope
-(`telemetry.Meter("operations")`), and its `ops.zombies` callback observes an attribute-less value on every
-collection. Left as it is, from S5 one scrape would carry two samples of `audiobook_organizer_ops_zombies{}`
-(the executor's and opsmetrics'), client_golang's `Gather` would reject the second, and `/metrics` would
-answer 500 for the whole scrape. So the T0+T1 PR, at S5, does two things in one change (05-metrics §13
-item 1 is the owner text):
+- `internal/opsmetrics` (5T.8.1). Its one family core does not emit, `ops_abandoned_calls` with its two
+  `source` values, becomes a books observable in the flip PR.
+- HEAD's client_golang run families in `internal/metrics` (`metrics.go:18-47,260-284,428-442`:
+  `operations_{started,completed,failed,canceled}_total`, `operation_duration_seconds`,
+  `op_items_processed`, `op_items_total`, recorded from the registry worker, `worker.go:611,1204,1293-1297`).
+  They duplicate the executor's families and their `type` label held HEAD def IDs, which no longer exist.
+  The flip PR repoints their dashboard panels and rules at the executor's series
+  (`operation_duration_seconds` → `ops_run_duration_seconds` by `def_id`; the `op_items_processed` stall
+  rule → the `ops_progress_age_seconds` / `ops_progress_timeout_seconds` stall alert).
 
-1. It **shrinks ABO's `opsmetrics` to `ops.abandoned_calls` only**: `New`/`Default()` no longer create or
-   observe `ops.runs`, `ops.run.duration`, `ops.items`, `ops.inflight`, `ops.progress_age`,
-   `ops.progress_timeout`, `ops.zombies`, `ops.schedule_lag` or `ops.schedule_missed`, and the v2 engine's
-   calls go (5T.8.1). The executor owns the run families and core's scheduler owns both schedule families,
-   with the names and labels above, from T0+T1. `ops.abandoned_calls`, which core does not emit, stays
-   ABO's, and moves to books' own observable in one PR, the T6 sub-batch PR that converts the second of
-   its two sources (5T.8.1; R10-3, MOD10-7).
-2. Until T7, ABO's v3 loop (`internal/scheduler/v3_schedule.go:444,447`) still measures lag and folded
-   fires for the definitions it ticks. It **reports them through the tasks client**, never through an
-   instrument of its own: `fireV3`'s `ScheduleLag`/`ScheduleMissed` calls become one
-   `ReportScheduleTick(ctx, kind, dueAt, folded)` call on `Deps.Tasks` (the optional
-   `legacy.TasksScheduleTicks`, 5T.3.13), made for every tick exactly where HEAD records, whether the tick
-   then starts a run or coalesces into an active one. Core's scheduler records `ops.schedule_lag` (now −
-   `dueAt`, when `dueAt` is set) and `ops.schedule_missed` (`folded`, when above zero) on its own
-   instruments, labelled with the kind's `StoredKind`, so `def_id` keeps HEAD's value with no ABO
-   `RegisterDefID` call. Core's scheduler and the v3 loop never tick one kind
-   (`TestOneSchedulerPerKind`), so no series is fed twice. The T7 PR deletes the v3 loop's calls, and the
-   capability goes with the last of them.
-
-**One owner at every stage (R10-3).** Each ops family has exactly one emitter in every build:
-
-| Family (ABO names) | Before T0+T1 | T0+T1 (S5) to T6 | From the T6 PR named above | From T7 / T8 |
-|---|---|---|---|---|
-| `ops_runs_total`, `ops_run_duration_seconds`, `ops_items_total`, `ops_inflight`, `ops_progress_age_seconds`, `ops_progress_timeout_seconds`, `ops_zombies` | HEAD's `opsmetrics` | the executor | the executor | the executor |
-| `ops_schedule_lag_seconds`, `ops_schedule_missed_total` | HEAD's `opsmetrics` (v3 loop) | core's scheduler; the v3 loop reports through `ReportScheduleTick` | the same | core's scheduler alone (T7 deletes the v3 loop's calls) |
-| `ops_abandoned_calls` (both `source` values) | HEAD's `opsmetrics` | the shrunk `opsmetrics` | books' observable | books' observable (T8 deletes `opsmetrics`) |
-| `operations_{started,completed,failed,canceled}_total`, `operation_duration_seconds`, `op_items_processed`, `op_items_total` | HEAD's `internal/metrics` collectors, called from the registry worker | the same collectors, called from books' bus subscriber | the same | the same |
-
-The HTTP families `http_server_*` are 05-http-api's and 05-metrics': the legacy mount's `otelgin` records
-every request that reaches gin and core's stage 2 only the rest (R10-3); no tasks route changes that.
-
-`TestABOMetricsGatherNoDuplicateOrMissing` (5T.9) builds ABO's real recorders with the kernel's Provider,
-gathers, and compares the full family, label and series set with the HEAD golden, so a duplicate, a
-missing family or a changed label value fails CI rather than a scrape.
-
-**Books' run-event recorder.** HEAD's client_golang run families are books', not the executor's, and keep
-their names, help strings and labels. From T0+T1 one books bus subscriber on `core.task.run-changed.v1` and
-`core.task.finished.v1` records them for kinds with a `LegacyDefID`, under that ID, as the legacy-stream
-bridge forwards them (5T.4 step 3; the bus serves metrics, 05-events 5E.1, and its drops are counted); the
-executor records none of them:
-
-| Family (ABO) | Type | Labels | Recorded from | At HEAD |
-|---|---|---|---|---|
-| `audiobook_organizer_operations_started_total`, `_completed_total`, `_failed_total`, `_canceled_total` | counter | `type` (the `LegacyDefID`) | the run's transition to running, succeeded, failed, canceled | `internal/metrics/metrics.go:18-37` |
-| `audiobook_organizer_operation_duration_seconds` | histogram | `type` | each finished run attempt | `metrics.go:38-47` |
-| `audiobook_organizer_op_items_processed`, `audiobook_organizer_op_items_total` | gauge | `op_id`, `op_type` (one series per in-flight run, deleted when the run reaches a terminal state, as at HEAD) | progress events (current, total) | `metrics.go:260-284,428-442` |
-
-05-metrics' seeded series contract test checks that no HEAD ops family changes name, type, label keys or
-label values at S5. Its golden diff at S5 is additions only, the nine rows marked "new" in the executor
-table above, not empty (MOD9-8).
+The HTTP families `http_server_*` are 05-http-api's and 05-metrics': core's stage 2 records every request,
+gin's included; no tasks route changes that.
 
 ## 5T.12 Open items
 
@@ -2362,20 +1951,32 @@ table above, not empty (MOD9-8).
 3. `aijobs` (2 durable OpenAI batch types): task shape or separate durable type? Owned by 05-ai.
 4. Remote lane protocol promotion to core when a second app needs remote workers (e.g. remote
    transcode for TV/Movies).
-5. UNKNOWN: whether v2 rows written before the v3 projection existed were back-projected; books'
-   legacy store's v2-row fallback in `List` covers both cases, but its cost depends on the answer.
+5. UNKNOWN: whether v2 rows written before the v3 projection existed were back-projected; the tasks
+   cutover's v2-row fallback (5T.8.3) covers both cases, but its run time on a production-shaped store
+   depends on the answer (measured on the R2 rehearsal store, 09 §9.4).
 6. (Closed: 06 has `Registrar.ChangeSink`, `Manifest.TaskLedger`, `Manifest.TaskStarts` checked at P7,
    and `Deps.Tasks` typed `tasks.Client`.)
 7. (Closed by 05-rbac v1.4 §6.1 and its Tasks row: `core:tasks.manage` exists, may cancel any run and
    edit schedules, and the approval-method rule of 5T.3.7 (SEC-24) is stated there; SEC-9 and SEC-3 use
    its `PermissionSpec.Class` and `Confining`.)
-8. (Closed by R4-1: rows 9, 11, 12, 13a and 13 of 05-storage §5S.9.1 stay books' with **no**
-   `core/tasks` grant; books serves them through its legacy `tasks.Stores` (5T.6.2). The post-DAG
-   reconcilers have no tasks step.)
+8. (Closed by D10: rows 9, 11, 12, 13a and 13 of 05-storage §5S.9.1 are moved into `c/tasks/` by books'
+   tasks cutover step and deleted (5T.8.3); `core/tasks` still has no grant over them, because books
+   decodes its own rows. The post-DAG reconcilers have no tasks step.)
+9. (Closed: which HEAD ops become core kinds, their `core.*` names and owners is 5T.8.2's table, checked
+   by `TestKindRenameMapCoversLedger`; SI-21.)
 
 ## Objections to 03
 
-None open. 03 v1.4.0 adopted both v1.1.0 items: R7's wording (pass-through, `ForEach`, one
+1. **Open (D10–D12 revision): which flip deletes HEAD's task routes.** 03 §3.8's flip table puts "the Activity
+   page on core's task routes; the books task routes and `/api/v3/ops/*` deleted" in F6. This file deletes them,
+   and moves the Activity page to core's task routes, in F5, the tasks flip (5T.3.10, 5T.8.2), because F5 deletes
+   HEAD's engine: keeping HEAD's routes and its three run streams alive until F6 would need their handlers and
+   stream feeds re-implemented over core's executor for one flip, which is opsbridge's HTTP half. Between F5 and
+   F6 the Activity page polls `GET /runs`; F6 moves it to the realtime client. Proposed: 03's F5 row gains "HEAD's
+   task routes deleted, the Activity page on core's task routes (polling until F6)", and F6 keeps the realtime
+   client.
+
+Earlier items: none open. 03 v1.4.0 adopted both v1.1.0 items: R7's wording (pass-through, `ForEach`, one
 return shape, COR-23) and the `[a-z][a-z0-9-]*` task-kind segment grammar (COR-26).
 
 ## Out-of-scope defects found
@@ -2618,3 +2219,28 @@ Final verification:
 
 - FIN12-3 — 5T.3.10 `Client` gains `Timeline` (new `TimelineQuery`, finished-at window with unfinished runs), `Log` and `Discard` (new `ErrRunActive`, 409); `RunStore.Delete` staged inside `WriteRuns`; the R11-3 paragraph names the three routes; error row and `TestS5_OperationsTimelineLogDiscardParity` added.
 - FIN12-4 — 5T.3.10: `/maintenance-window/*` dropped from the schedules row's "Replaces"; the three routes are kept as books' gin routes on `Deps.Tasks`.
+
+D10–D12 revision (2026-11-04): owner decisions D10 (no backward compatibility), D11 (no soaks, one flip per
+subsystem) and D12 applied (the D10 impact analysis: mechanisms A13, A57, A59, A72–A74, A86, A112; risks E1–E3, E16):
+
+- Deleted: books' legacy task store (former 5T.6.2, with its lock discipline, run-state and clock-encoding
+  tables, G5 rollback rules, one-writer and one-scheduler rules, v1 carve-outs and the floor and
+  stepping-stone release); the `legacy` members `TasksRecoverer`, `TasksScheduleTicks`, `LockRuns`,
+  `ErrRunsNotLocked`, the run store's `legacy.WriteLock`, `RunLocks` and `CommitLocked` use; `StoredKind`,
+  `ListQuery`, `ErrStoreUnsupported`; `Common.FormerKinds`, `LegacyDefID`, `LegacyPlugin`;
+  `app.Options.LegacyTaskAliases` and `ProblemLegacyTaskAlias`; the op-ID ledger gate; opsbridge and the
+  T0+T1 adapter release; the books-side legacy-stream bridge; the `/api/v3/ops`, `/api/v1/op-defs`,
+  `/api/v1/tasks` aliases and the R11-3 "operations routes stay books'" rules; the T8 floor release; the
+  metric hand-over choreography, HEAD-golden and gather-parity tests; every previous-build and legacy-store
+  test; the `dry_run` compatibility spelling.
+- Rewritten: 5T.1 and 5T.3.13 (native store only, plus the new `tasks.Importer`); 5T.3.8 (schedule keys
+  converted once by M2; first boot after the cutover instead of rollback); 5T.3.10 (WriteRuns without a
+  lock; native `DELETE /runs/{id}` and `GET /pause`; HEAD's run routes deleted by the flip, callers moved in
+  the same PR); 5T.4, 5T.5, 5T.6, 5T.7 (native store only); 5T.8 (every definition converted dark, one
+  flip F5; disjoint conversion groups summing to HEAD's 233; the resolved T4 list of core kinds with names
+  and owners; the one kind-rename map; new 5T.8.3, the tasks cutover M4); 5T.9 (cutover and parity rows
+  over an R0-written fixture); 5T.10 (`core.tasks.schedules.prune`); 5T.11 (HEAD's instrument names kept,
+  `def_id` values become kinds, `plugin` → `module`, HEAD's duplicate client_golang families deleted with
+  dashboards repointed in the flip PR).
+- HEAD op catalog read at `ebe365245` (`internal/opscatalog`, the plugin `OperationDefs()` lists, the op-ID
+  ledger): unchanged since `748fd787a`.

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/10-tv-movies-proof.md -->
-<!-- version: 1.7.1 -->
+<!-- version: 1.8.0 -->
 <!-- guid: e9ed438b-6097-4a4d-8b51-d2eacaca8221 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -157,7 +157,7 @@ predicate that depends on the clock or on hot-reloadable config.
 
 | Capability | Core package (spec) | How `tv` uses it |
 |---|---|---|
-| Persisted core state | `auth`, `rbac`, `tasks`, `integrations`, `providerhttp` (and `ai`, unused) | No module of the TV app sets `Manifest.LegacyStores` (06 §6.4.2), and the app imports nothing from core's `legacy` package, which holds every legacy-only identifier outside the API promise (03 §3.3, R6-3): it has no pre-core data, so every core service of 03 §3.3's "Store interfaces" table uses its **native store** under `c/<subsystem>/`, alone — for an exclusive store because no legacy one replaces it, and for a routed store (instances, gates, rules; 05-metadata M1.1, SIMP5-1) because no legacy store covers any record, so the native store serves every one and no legacy capability (`legacy.Covering`, 05-storage §5S.3.11) is ever consulted: users, keys and identities ([05-authn](05-authn.md)), roles ([05-rbac](05-rbac.md)), runs, queues, clocks and stamps ([05-tasks](05-tasks.md)), integration instances (download clients, indexers, notification channels: `NativeInstanceStore`, [05-metadata](05-metadata.md) M1.4), provider holds and daily quotas (`NativeGateStore`, M2.4), notification rules (`NativeRuleStore`, [05-notify](05-notify.md) §3) and AI batch jobs (`NativeJobStore`, [05-ai](05-ai.md) §4; TV/Movies consume no AI). No legacy key name, row format or storage grant exists in this app, so every instance has the full native design: `Local`, origin binding of operator secrets, encrypted `secrets` records (R4-1, SIMP4-3, A-2). |
+| Persisted core state | `auth`, `rbac`, `tasks`, `integrations`, `providerhttp` (and `ai`, unused) | Every core service of 03 §3.3's "Store interfaces" table uses its **native store** under `c/<subsystem>/`, the only implementation core ships, and the app calls no importer, because it has no pre-core data. ABO gets the same native design: its pre-core rows are migrated into these stores once, in R2 (09), so no app runs core over another format: users, keys and identities ([05-authn](05-authn.md)), roles ([05-rbac](05-rbac.md)), runs, queues, clocks and stamps ([05-tasks](05-tasks.md)), integration instances (download clients, indexers, notification channels: `NativeInstanceStore`, [05-metadata](05-metadata.md) M1.4), provider holds and daily quotas (`NativeGateStore`, M2.4), notification rules (`NativeRuleStore`, [05-notify](05-notify.md) §3) and AI batch jobs (`NativeJobStore`, [05-ai](05-ai.md) §4; TV/Movies consume no AI). Every instance has the full native design: `Local`, origin binding of operator secrets, encrypted `secrets` records (R4-1, SIMP4-3). |
 | Storage keyspace | `storage` ([05-storage](05-storage.md)) | `Deps.Storage` hands the module `Keyspace("m/tv/")`; writes outside it are refused (R8). Scans are `codec.Typed[Series].All` (`iter.Seq2[Series, error]`). Integer IDs from `Keyspace.Sequence("series").Next` (§10.4 G10). |
 | Tasks | `tasks` ([05-tasks](05-tasks.md)) | Module task kinds: `tv.metadata.refresh` (every 12 h like Sonarr, `raw/16 §1.1` notes, on `tasks.ScheduleFromConfig("modules.tv.metadata.schedules.refresh")`, default `{enabled: true, every: 12h}`, §10.5.7; `tasks.Fixed(4, "metadata provider rate limits")`), `tv.search.missing`, `tv.search.series`, `tv.search.episodes`, `tv.disk.rescan` (`tasks.CPU()`; per-series partition), `tv.recent.search` (aired in last 14 days or 1 day ahead, `raw/16 §1.3`). RSS sync is a **core** `acquire` task and download polling a **core** `integrations/download` task (§10.5.4); neither is the module's. The import of a completed download **is** the module's: kind `tv.acquire.import`, built by `acquire.ImportTask` and registered by `tv` (§10.5.4, COR2-11), so its writes run under `tv`'s own `Effects`. Every `RunItems` declares parallelism (R7). Any cadence a `tv.*` or `movies.*` kind gets is a declared module schedule key of this shape (R2-7); in this proof only `tv.metadata.refresh` has one (SIMP3-9). |
 | RSS sync & search | `acquire` + `integrations/indexer` | The module registers an `acquire.MediaType[tv.Target]` (§10.5.3), reaching the service as `module.Deps.Acquire` (06, COR-1): Newznab categories (TV 5000 family + anime 5070, `raw/16 §4.2`) and RSS type `TypeTV`, a release parser, a mapper release → series/episodes, its search-criteria builder (`t=tvsearch` + `tvdbid/tmdbid/imdbid`, `season`/`ep`; daily `season=<yyyy>&ep=<MM>/<dd>`; anime `q=<title>+<abs>`, `raw/16 §1.2, §4.2`), and its own specs (§10.5.3 table). |
@@ -841,7 +841,7 @@ restrictions) are **data** in `c/acquire/`, not config.
 
 Protection classes per 05-config §1.3.7 (SEC2-8). Schedule keys are `tasks.ScheduleConfig` values declared by
 `acquire` under its own namespace and registered through `tasks.ScheduleFromConfig` (R2-7); they are new with
-`acquire`, so none has a legacy alias.
+`acquire`.
 
 | Key | Type | Default | Hot-reload? | Protection |
 |---|---|---|---|---|
@@ -1092,3 +1092,9 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
 - A-2 / ADV-S1 — §10.1.2 "Persisted core state": `legacy.ExtConfirmer` and the extension family removed; native apps keep the full native design.
 - A-5 / ADV-S4 — §10.5.8: names under `app.Options.MetricNamespace`.
 - integration pass (advisor): import-retry and the relay's import staging commit inside `Stager.WriteRuns` / `Executor.WriteRuns` (05-tasks 5T.7).
+
+- D10–D12 revision (2026-11-04): §10.1.2's persisted-state row says ABO gets the same native design (its
+  pre-core rows are migrated into the native stores in R2); the `Manifest.LegacyStores`, `legacy` package,
+  exclusive/routed store and `legacy.Covering` wording removed; "so none has a legacy alias" dropped from the
+  `acquire` keys. The design sketch is otherwise unchanged.
+

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-events.md -->
-<!-- version: 1.11.2 -->
+<!-- version: 1.12.0 -->
 <!-- guid: 6dbdef8e-e3f3-4088-bdb9-ba37a706165d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -95,9 +95,8 @@ type VisibleFunc func(ctx context.Context, who rbac.Checker, e RawEnvelope) bool
 
 // RedactFunc reduces a payload for one subscriber, e.g. blanks user-identifying
 // text the subscriber may not read. Only the topic's owner sets it, in the
-// catalog entry, so the one declaration carries it (SIMP-5): every realtime
-// surface (native streams and legacy projections, 05-realtime) applies it after
-// Visible, and an owner's HTTP read model of the same data calls the same
+// catalog entry, so the one declaration carries it (SIMP-5): the realtime
+// stream (05-realtime) applies it after Visible, and an owner's HTTP read model of the same data calls the same
 // function (05-tasks RedactRunView; its catalog value is the adapter
 // tasks.RunViewRedactor(), COR3-13). 05-realtime's RedactFunc is this type.
 type RedactFunc func(who rbac.Checker, payload json.RawMessage) json.RawMessage
@@ -305,8 +304,8 @@ type RawMessage struct {
 // are "<moduleID>.<name>" and are also listed in the module manifest
 // (Manifest.OutboxConsumers) so they are known while the module is disabled.
 // Core consumer names are "core.<name>" and are listed in the kernel's static
-// core consumer list (kernel/catalog: core.notify.deliver from 09 S7, with
-// notify (SIMP3-5), and, in the deferred acquire build,
+// core consumer list (kernel/catalog: core.notify.deliver from the R2
+// integrations flip, with notify (SIMP3-5), and, in the deferred acquire build,
 // core.acquire.download-events); a core consumer whose name is not on that list
 // fails boot (COR2-4). acquire's import is not a core consumer: it is a module
 // kind <module>.acquire.import that core.acquire.download-events stages with
@@ -357,22 +356,16 @@ func (tx *Tx) Batch() *storage.Batch
 // for core to start, such as <module>.acquire.import (05-tasks 5T.3.12, COR2-11)
 // -- in the relay batch through Executor.StartIn (the relay's own starter;
 // core services use tasks.Stager, COR3-8), with Trigger Outbox. The run's rows
-// are staged by whichever tasks.RunStore serves the install, bound to the same
-// batch by participant binding (05-tasks 5T.3.13, R4-1). The relay builds
-// every batch that calls StartRun inside Executor.WriteRuns: its open func
-// opens the relay batch on the outbox's own handle, its stage func runs the
-// handler and stages the cursor advance, and WriteRuns commits the batch
-// through storage.CommitLocked, a fresh batch per retry (05-tasks 5T.3.10,
-// 5T.7; R9-1). On the native store Insert's uniqueness
-// precondition is an Expect(absent) on the run's guard row, checked when the
-// relay batch commits, and a conflict fails the whole batch, cursor advance
-// included, so nothing is half-applied, and is rebuilt and recommitted while
-// the run is still absent; on books' legacy store CommitLocked holds the run
-// locks the kernel resolved for the run store at P4c (HEAD's opsMu; the
-// relay never names a lock, 05-tasks 5T.3.13) from the store's first read
-// through the commit, as HEAD's own run writes do, and marks the relay batch
-// with that hold, which the run store's staging methods check with
-// storage.LocksHeld(b, l) (05-tasks 5T.6.2, A-3; R10-4).
+// are staged by the native tasks.RunStore, bound to the same batch by
+// participant binding (05-tasks 5T.3.13, R4-1). The relay builds every batch
+// that calls StartRun inside Executor.WriteRuns: its open func opens the relay
+// batch on the outbox's own handle, its stage func runs the handler and stages
+// the cursor advance, and WriteRuns commits the batch under
+// storage.RetryOnConflict, a fresh batch per retry (05-tasks 5T.3.10, 5T.7;
+// R9-1). Insert's uniqueness precondition is an Expect(absent) on the run's
+// guard row, checked when the relay batch commits, and a conflict fails the
+// whole batch, cursor advance included, so nothing is half-applied, and is
+// rebuilt and recommitted while the run is still absent.
 // The handler never calls WriteRuns itself (ErrWriteRunsNested). Only if
 // WriteRuns gives up is the message redelivered. A module kind's
 // run is stamped with that module's system actor, as Stager does (SEC2-15).
@@ -447,7 +440,7 @@ both the horizon and the hook, so 05-storage need not add `OnResolve` for this f
 | Publish timing | Publish **after** the storage commit that made the change, never inside a batch callback; a crash between commit and publish loses only a notification, by design | — |
 | Coalescing | `Coalesce(window)` keeps the latest event per `Key` within the window (deleted supersedes updated, created stays created — current `BookChangeCoalescer` rule, `book_changes.go:25-31`, generalised by an optional `Merge` hook) | `BookChangeCoalescer` |
 | Disabled modules | Subscribing (raw) to a topic of a disabled module is allowed and receives nothing; WARN at boot (G1: a disabled module contributes no events) | — |
-| Versioning | An incompatible payload change is a **new topic** (`.v2`); the publisher dual-publishes `.v1` and `.v2` for the compatibility window defined in [09](09-abo-on-core.md) §9.2.1 (SIMP-7) | — |
+| Versioning | An incompatible payload change is a **new topic** (`.v2`). Every publisher and subscriber of a topic is compiled into the one binary, and the SPA reads it through the realtime client of the same release, so the PR that adds `.v2` moves every consumer and deletes `.v1`; there is no dual-publish window (D10). A durable topic's retained `.v1` messages are drained by their consumers before the PR's release removes the topic, or converted by a migration step of the topic's owner | — |
 | Delivery start | No handler runs before `Bus.Open`, which 06 §6.5.2 calls after module hooks and workers have started; `Bus.Close` runs after the executor drain and before workers and hooks stop (COR-8) | handlers ran outside their module's hook window |
 
 ### 5E.5.2 Outbox delivery
@@ -597,7 +590,7 @@ at each step:
 
 Names are shown under the default namespace `mediacore`; an app's `app.Options.MetricNamespace`
 replaces it (06; 05-metrics owns the naming rule; A-5). HEAD's buses and outbox emit no series, so no
-ABO series is renamed or aliased.
+ABO series changes.
 
 | Name | Type | Labels |
 |---|---|---|
@@ -638,7 +631,7 @@ names included), so cardinality is bounded.
 | `TestTopicName_Grammar`, `TestCatalog_RejectsDuplicateZeroPermissionForeignScope` | naming, one catalog |
 | `TestCatalog_NotifyAndRealtimeReadNoSecondDeclaration` | SIMP-5 |
 | `TestCatalog_RejectsRealtimeOnDurable` | COR2-17 |
-| `TestCatalog_RedactAppliedOnEverySurface` (`core.task.run-changed.v1`: native stream, projection, `GET /runs` blank `Current` without `core:users.view`) | COR2-2 |
+| `TestCatalog_RedactAppliedOnEverySurface` (`core.task.run-changed.v1`: the realtime stream and `GET /runs` blank `Current` without `core:users.view`) | COR2-2 |
 | `TestNotifyMetaAloneProducesNoNotification` (a `Notify` topic published on the bus only → nothing staged for `core.notify.deliver`) | COR2-3 |
 | `TestBus_SlowSubscriberDropsAndCounts`, `TestBus_DropOldestKeepsNewest` | bounded queue, drop metric |
 | `TestBus_PanicIsolated_SubscriptionSurvives` | panic isolation |
@@ -677,27 +670,25 @@ names included), so cardinality is bounded.
 
 | ABO today | Becomes |
 |---|---|
-| `internal/plugin.EventBus` + 12 `EventType`s (`internal/plugin/events.go:18-31`) | at 09 S7 (Order below), `events.Bus` + `books` topics: `books.book.imported.v1`, `books.book.deleted.v1`, `books.metadata.applied.v1`, `books.tags.written.v1`, `books.file.organized.v1`, `books.dedup.detected.v1`, `books.dedup.merged.v1`, `books.cover.changed.v1`, `books.read-status.changed.v1`, `books.scan.completed.v1`, `books.book.quarantined.v1`, `books.book.unquarantined.v1`, each with a typed payload struct replacing `BookID`/`Data map[string]any` and one catalog entry carrying its permission |
+| `internal/plugin.EventBus` + 12 `EventType`s (`internal/plugin/events.go:18-31`) | in R2 (Order below), `events.Bus` + `books` topics: `books.book.imported.v1`, `books.book.deleted.v1`, `books.metadata.applied.v1`, `books.tags.written.v1`, `books.file.organized.v1`, `books.dedup.detected.v1`, `books.dedup.merged.v1`, `books.cover.changed.v1`, `books.read-status.changed.v1`, `books.scan.completed.v1`, `books.book.quarantined.v1`, `books.book.unquarantined.v1`, each with a typed payload struct replacing `BookID`/`Data map[string]any` and one catalog entry carrying its permission |
 | `plugin.EventPublisher` (11 publisher files) | `events.Publish(d.Events, ctx, books.TopicX, id, payload)` through the module's `Deps.Events` |
 | `internal/dedup/lifecycle.go:94` subscriber | `events.On` declared in `books`' `Register` |
-| webhook plugin (`internal/plugins/webhook/plugin.go:79`) | a [05-notify](05-notify.md) webhook channel adapter. `books` emits each of the 12 legacy event types as a notification through `Deps.Notify` (`notify.Publish`, staged in the batch of the state change; its topics carry `Notify` metadata), and the kernel's core consumer `core.notify.deliver` delivers it to the webhook instance; no bus subscriber is involved (COR2-3) |
-| `internal/operations/registry.EventHub` + `op.*` names | core topics `core.task.run-changed.v1` (merges `op.created`, `op.updated`, `op.current_item`, `op.terminal`), `core.task.log-appended.v1` (`op.log`) and `core.task.finished.v1`; published by the executor after each commit; realtime bridges the first two one-to-one, and its legacy projections map them back to the old frame names ([05-realtime](05-realtime.md)). Between the executor's move (09 S5) and the projections (09 S6) a **books** bus subscriber on the two task topics feeds the legacy streams A, B (`registry.EventHub`, `op.*`) and C (the v3 broker), forwarding only kinds with a legacy def ID, under that ID; the executor publishes nothing outside core (05-tasks 5T.4 step 3; FE2-3, COR3-9, FE3-12, SEC3-9) |
-| `internal/operations/registry` side effects of the terminal and log paths: the v1 status bridge (`propagateLegacyOpStatus`, `legacy_op_status.go`, called from `publishOpTerminal`) and the activity mirror (`activity_mirror.go`, `reporter_db.go:37,866`, writing books' `database.ActivityEntry`) | **books** bus subscribers, not executor code (R7-8, MOD7-2): from T0+T1 a books subscriber on `core.task.finished.v1` (only kinds with a legacy def ID, under that ID) drives the v1 status bridge, which stays ABO code in opsbridge until T8 ([05-tasks](05-tasks.md) 5T.8.1); a books subscriber on `core.task.log-appended.v1` writes books' activity feed; and a books subscriber on `core.task.run-changed.v1` and `core.task.finished.v1` records HEAD's five `operations_*` client_golang families under their HEAD names, label `type` = the legacy def ID, which the T0+T1 PR moves out of the registry worker (05-tasks 5T.11; A-5). The mirror is permanent
-books behaviour (the activity feed is books', 03 §3.3 `log`), so the T0+T1 PR moves `activity_mirror.go`
-and the mirror part of `reporter_db.go` out of opsbridge into `internal/activity`, which already owns
-`ActivityEntry` writing and outlives T8's deletion of the registry path (MOD8-8). Both are post-commit and lossy under 5E.5.1's drop policy, as HEAD's post-commit `publishOpTerminal` path and the mirror's bounded queue are; the executor publishes nothing outside core and calls no ABO code (R1) |
+| webhook plugin (`internal/plugins/webhook/plugin.go:79`) | a [05-notify](05-notify.md) webhook channel adapter. `books` emits each of HEAD's 12 event types as a notification through `Deps.Notify` (`notify.Publish`, staged in the batch of the state change; its topics carry `Notify` metadata), and the kernel's core consumer `core.notify.deliver` delivers it to the webhook instance; no bus subscriber is involved (COR2-3) |
+| `internal/operations/registry.EventHub` + `op.*` names | core topics `core.task.run-changed.v1` (merges `op.created`, `op.updated`, `op.current_item`, `op.terminal`), `core.task.log-appended.v1` (`op.log`) and `core.task.finished.v1`; published by the executor after each commit and streamed by the one realtime endpoint ([05-realtime](05-realtime.md)). `registry.EventHub` (stream B), the v3 broker (stream C) and hub A's `operation.*` sends are deleted with HEAD's engine by the tasks flip (F5, 05-tasks 5T.8.2), whose PR moves the SPA's Activity page and `useOperationsStore` to the native REST routes, polled until the events and realtime flip (F6) moves the whole SPA to the realtime client ([05-realtime](05-realtime.md) §11); there is no bridge and no legacy frame (D10) |
+| `internal/operations/registry` side effects of the terminal and log paths: the v1 status bridge (`propagateLegacyOpStatus`, `legacy_op_status.go`, called from `publishOpTerminal`) and the activity mirror (`activity_mirror.go`, `reporter_db.go:37,866`, writing books' `database.ActivityEntry`) | the v1 status bridge is deleted by the tasks flip: no v1 writer is left to mirror a status onto ([05-tasks](05-tasks.md) 5T.8.1). The activity mirror is permanent books behaviour (the activity feed is books', 03 §3.3 `log`): a **books** bus subscriber on `core.task.log-appended.v1` in `internal/activity`, which already owns `ActivityEntry` writing, keeping HEAD's bounded queue and counted drops (MOD8-8). It is post-commit and lossy under 5E.5.1's drop policy, as HEAD's mirror's bounded queue is; the executor publishes nothing outside core and calls no ABO code (R1). HEAD's five `operations_*` client_golang families are not re-recorded: the executor's series replace them (05-tasks 5T.11) |
 | `realtime.EventHub` `Send*` helpers (3 call sites outside the package) and `BookChangeCoalescer` | publishes of typed topics; the SSE hub ([05-realtime](05-realtime.md)) is a core subscriber; book-change coalescing becomes a `Coalesce` subscription or `RealtimeMeta.Coalesce` inside `books` |
 | `OperationDef.Triggers` (1 dead declaration) | `outbox.ConsumeIntoTask`: `books` stages the durable topic `books.book.relocated.v1` in the same batch that moves a book, and a books consumer starts `books.deluge.path-update` (or the 05-download successor) with the book ID — this makes the relocation follow-up durable for the first time |
 | direct `EnqueueOp` from handlers after a state change | case by case: `outbox.ConsumeIntoTask` where the follow-up is correctness-critical (inventory in [09-abo-on-core](09-abo-on-core.md)) |
 
-Order (09 owns the stages): (1) land the bus `events` in core (09 S4, where `auth` and `rbac` first
-publish; 04 §8.1) and `outbox` at 09 S6; (2) the executor publishes `core.task.*` from 09 S5 and, until
-the projections land, books' bridge subscriber feeds streams A, B and C; (3) the realtime hub subscribes,
-and the bridge and `registry.EventHub` are removed once the legacy projections serve the legacy streams
-(09 S6); (4) the plugin `EventBus` is **not** bridged onto `events.Bus`: it keeps
-feeding the webhook plugin, unmoved, through S6, and at 09 S7 its publishers move to books' topics
-(`events.Publish`, and `notify.Publish` for the 12 legacy notifications) in the PR that deletes
-`internal/plugin` with the webhook plugin (09 S6 Moves, S7; [05-notify](05-notify.md) §10; SIMP3-10).
+Order (09 §9.4 owns the releases; all of it is R2, wired in that release's flip order): (1) the bus `events`
+lands in core with identity's flip (F4, where `auth` and `rbac` first publish; 04 §8.1); (2) the executor
+publishes `core.task.*` from the tasks flip (F5), which deletes HEAD's run-stream publishers with HEAD's engine
+(the SPA's Activity page polls the native REST routes from that PR); (3) `outbox` and the realtime hub land
+with the events and realtime flip (F6), which moves the SPA to the realtime client and deletes hub A; (4) the plugin `EventBus` is **not** bridged onto `events.Bus`: it keeps feeding the
+webhook plugin, unmoved, until the integrations flip (F7), whose PR moves its publishers to books' topics
+(`events.Publish`, and `notify.Publish` for the 12 notifications) and deletes `internal/plugin` with the
+webhook plugin ([05-notify](05-notify.md) §10; SIMP3-10). Because the flips are serialized and each passes
+`make ci` and e2e, every intermediate `main` boots with one publisher per event.
 
 ## 5E.14 Open items
 
@@ -803,3 +794,17 @@ Round 10:
 Plan-phase consistency:
 
 - PC-1 — 5E.13 Order and first row: the plugin `EventBus` is not bridged onto `events.Bus`; it keeps feeding the webhook plugin through S6 and its publishers move at 09 S7 with `internal/plugin`'s deletion (09 S6, S7; 05-notify §10; SIMP3-10); stages named per step.
+
+D10–D12 revision (2026-11-04):
+
+- Owner decisions D10 (no backward compatibility) and D11 (one flip per subsystem, no soaks) applied.
+  `RedactFunc` comment and `TestCatalog_RedactAppliedOnEverySurface`: no legacy projections, only the realtime
+  stream and the owner's REST read model. `Tx.StartRun`: the run rows are the native store's and `WriteRuns`
+  commits under `storage.RetryOnConflict`; the books legacy store, `CommitLocked`, the resolved run locks and
+  `storage.LocksHeld` are deleted from the text.
+- 5E.5.1 Versioning: no dual-publish compatibility window; the PR that adds `.v2` moves every consumer and
+  deletes `.v1`.
+- 5E.13: the books legacy-stream bridge (streams A, B, C), the forwarding by legacy def ID, the v1 status
+  bridge's subscriber and the books re-recording of HEAD's five `operations_*` families are deleted; the
+  activity mirror stays a books subscriber. The Order paragraph is re-keyed from stages S4–S7 to the R2 flips
+  F4–F7; between F5 and F6 the SPA's Activity page polls the native REST routes.

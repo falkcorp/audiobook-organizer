@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.12.2 -->
+<!-- version: 1.13.0 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -20,23 +20,23 @@ Self-update of an app binary installed on a host (a container image is updated b
 and restart gracefully. Each app decides whether it ships an updater at all; when it does, the updater
 is **off by default**.
 
-**S8 moves the updater; it does not rebuild it (A-6, ADV-S5).** The core updater is the HEAD updater
-as 09 S0 hotfixes it, moved into `core/updater` and parameterised by release source. It keeps HEAD's
-pipeline — download the raw per-platform binary asset straight into `<exe>.new` and swap it in
-(`internal/updater/updater.go:214-265,318-326`) — and the hotfix's behaviour: restart with exit 75, the `.prev` slot shared with `make rollback`, semver
-comparison with the local-build rule, the level and floor checks of the new binary against the store
-before the swap, and **check-only unattended mode** — a scheduled run only checks and notifies; a swap
-happens only when an admin applies a named release, and a rollback only when an admin (or
-`make rollback`) asks for it. Signed release manifests, the boot-attempt counter, automatic rollback,
-the committed unit's binary-layout migration, the real-RC staging check, the archive download with
-checksum verification, the pre-update backup, the container refusal and the exec-mode restart are
-**deferred-build** (5U.3 "Deferred-build members"; R10-8): HEAD's updater has none of them, the hotfix
-adds none of them, and nothing at S8 needs them, so S8 changes no updater behaviour that HEAD and the
-hotfix define.
+**R2 moves the updater; it does not rebuild it (A-6, ADV-S5).** The core updater is the HEAD updater
+as R0 hotfixes it ([09](09-abo-on-core.md)), moved into `core/updater` and parameterised by release source. It
+keeps HEAD's pipeline — download the raw per-platform binary asset straight into `<exe>.new` and swap it in
+(`internal/updater/updater.go:214-265,318-326`) — and the hotfix's behaviour: restart with exit 75, the `.prev` slot
+shared with `make rollback`, semver comparison with the local-build rule, and **check-only unattended mode** — a
+scheduled run only checks and notifies; a swap happens only when an admin applies a named release, and a rollback
+only when an admin (or `make rollback`) asks for it. The updater makes no level, format or upgrade-floor check of
+a new binary before the swap: a binary that cannot serve the store refuses it at boot, before any write (exit 78,
+last line `install <release> first`; 05-storage). Signed release manifests, the boot-attempt counter, automatic
+rollback, the committed unit's binary-layout migration, the real-RC check, the archive download with checksum
+verification, the pre-update backup, the container refusal and the exec-mode restart are **deferred-build** (5U.3
+"Deferred-build members"; R10-8): HEAD's updater has none of them, the hotfix adds none of them, and nothing in R2
+needs them, so R2 changes no updater behaviour that HEAD and the hotfix define.
 
 Out of scope: container image updates (the orchestrator's job; as at HEAD, the built updater does not
-detect a container, and the refusal is deferred-build, 5U.3), database rollback (covered by backups and the G5 compatibility windows, not by the
-updater), release-pipeline implementation (the spec states what the pipeline must publish).
+detect a container, and the refusal is deferred-build, 5U.3), database rollback (the pre-migration checkpoint
+or an archive, restored offline with the previous binary, 05-backup; not the updater), release-pipeline implementation (the spec states what the pipeline must publish).
 
 ## 5U.2 Current state at HEAD
 
@@ -72,17 +72,6 @@ type Options struct {
 	Source      Source // the release source: the one parameter A-6 adds to the HEAD updater
 	AssetName   func(r Release, goos, goarch string) string // default: RawBinary(BinaryName)
 	DefaultMode Mode   // the app's default (ModeOff unless the app says otherwise)
-}
-
-// UpgradeRequirement is a binary's declared upgrade floors, as
-// `<exe> --print-upgrade-floor` prints them (05-storage §5S.3.7). Two releases
-// are involved and never share a name (OPS4-5): the FLOOR release is the one
-// that declares the requirement (it deleted code an older store needs); the
-// STEPPING-STONE release, named in Release, still carries that code and
-// contains no deletion.
-type UpgradeRequirement struct {
-	Release string            `json:"release"`          // the stepping-stone release to install and run first; named in messages and the banner
-	Owners  map[string]uint64 `json:"owners,omitempty"` // owner -> minimum applied version, e.g. {"books": LegacyCap}
 }
 
 type Mode uint8
@@ -143,11 +132,6 @@ type Status struct {
 	// AutoApplyPaused: the operator had asked for unattended apply (ABO's
 	// auto_update.enabled=true, 5U.8), which this updater does not do (A-6).
 	AutoApplyPaused bool
-	// SteppingStone names the stepping-stone release to install and run first
-	// when the store does not meet the floor the newest release's binary
-	// declares (OPS2-11, OPS3-7); apply refuses until the store's recorded
-	// state meets it.
-	SteppingStone string
 }
 
 type Updater struct{ /* unexported; one per App */ }
@@ -169,76 +153,37 @@ type Deps struct {
 	Events      *events.Bus
 	Notify      *notify.Service      // stages core.update.found.v1 notifications (outbox-backed, COR2-3)
 	Store       storage.Keyspace     // c/updater/ (one key, 5U.4 Check)
-	ReaderCheck ReaderCheck          // kernel-bound to the single compat/format guard (05-storage)
-	StoreState  StoreState           // kernel-bound to 05-storage's applied-steps sidecar beside the DB
+	ReaderCheck ReaderCheck          // kernel-bound to 05-storage's guard (levels and the swap slot)
 	Log         *slog.Logger
 }
 
 // ReaderCheck asks whether the binary at exe may open the store at dbPath as
-// it is now: the decision scripts/storage_format_guard.py makes for
-// `make rollback`, implemented once by 05-storage's guard (SIMP-18) over the
-// sidecar files, so it needs no open store. The kernel binds it to
-// core/internal/pebble.CheckReader (05-storage §5S.3.7) with the resolved state
-// directory; dbPath is core.storage.path. nil = allowed; otherwise an error
-// carrying one of CheckReader's fixed reason tokens (05-storage §5S.3.7):
-// "level_newer", "format_newer" (pre-guard binary), "upgrade_floor" (the store
-// has not applied what exe's declared floor requires; a DB path with no
-// directory, or an empty one, and no sidecars passes, the exemption boot gives
-// an empty store, DATA8-11), "restore_pending" (restore/pending.json exists: a
-// staged swap of any kind, a restore or a factory reset, KindReset; R8-1,
-// SIMP8-1), "restore_inflight" (a swap journal restore/<id>/ holds
-// inflight.json, which every kind creates BEFORE its first rename: a
-// restore renames pending.json to it after journaling rechecked and before
-// previous_moved, a KindReset swap at set_aside_started; it stays until the
-// journal's terminal step, applied, or hook_done for a KindReset swap; or,
-// for a checkpoint restore, inflight-checkpoint.json; DATA3-6, R7-2, R9-7,
-// DATA9-3), "sidecar_unreadable",
-// "cannot_determine" (a probe could not answer; refuses). The error message
-// names the swap's kind. There is no reset-only token: a factory reset is a
-// kind of the one swap (R8-1). One journal passes: a KindCheckpoint journal at
-// swapped or failed (its restore/<id>/inflight-checkpoint.json; the offline
-// restore-checkpoint path) does not refuse a candidate exe whose levels and
-// floors admit the restored store AND which implements the journaled swap,
-// detected by the S2b fast exit `--print-restore-journal`; a candidate without
-// it (a pre-S2b build) is restore_inflight (R7-4, DATA7-12, DATA8-6). The
-// scripts' one override, ROLLBACK_IGNORE_RESTORE=1, belongs to
-// scripts/storage_format_guard.py (make rollback, deploy) and overrides
-// restore_pending only, never restore_inflight (OPS8-7). Because
-// inflight.json exists before anything is renamed, restore_pending always
-// means nothing has moved yet, so the override can discard a staged swap but
-// can never land an older build on a half-swapped directory (R9-7, DATA9-3);
-// the updater has no override and refuses.
+// it is now: the decision `make rollback` makes, implemented once by
+// 05-storage's guard over the level sidecar and the restore slot, so it
+// needs no open store. The kernel binds it to core/internal/pebble.CheckReader
+// (05-storage §5S.3.7) with the resolved state directory; dbPath is
+// core.storage.path. nil = allowed; otherwise an error carrying one of its
+// fixed reason tokens: "level_newer" (exe supports a lower level than the
+// store holds: a pre-R2 binary on a migrated store), "format_newer",
+// "restore_pending" (restore/pending.json exists: a staged swap of any kind,
+// a restore or a factory reset, KindReset; R8-1, SIMP8-1), "restore_inflight"
+// (a swap journal restore/<id>/ holds inflight.json, which every kind creates
+// BEFORE its first rename and keeps until its terminal step; or, for a
+// checkpoint restore, inflight-checkpoint.json; DATA3-6, R7-2, R9-7),
+// "sidecar_unreadable", "cannot_determine" (a probe could not answer;
+// refuses). The error message names the swap's kind. One journal passes: a
+// KindCheckpoint journal at swapped or failed (the offline
+// restore-checkpoint path) does not refuse a candidate exe whose levels admit
+// the restored store and which implements the journaled swap (it answers
+// --print-restore-journal, R1 and later; R7-4, DATA7-12, DATA8-6). There is
+// no override. Apply consults it on <exe> for the swap slot only; Rollback
+// consults it on <exe>.prev.
 type ReaderCheck func(ctx context.Context, dbPath, exe string) error
-
-// StoreState reports the store's recorded migration state — the applied
-// version per owner — by reading the applied-steps sidecar that 05-storage
-// defines and every guard-aware boot rewrites beside the DB (a file, like the
-// level sidecar ReaderCheck reads, so the same answer is available to tools
-// outside the process and needs no open store). Never the binary version
-// (OPS3-7). A missing or unreadable sidecar is an error (fail-closed). It is
-// consulted only against a NON-EMPTY floor: an empty --print-upgrade-floor
-// passes without reading the sidecar, so a HEAD store, which has none until an
-// S0+ boot writes it, never blocks an update whose binary declares no floor; a
-// non-empty floor with a missing sidecar refuses with "boot any release >= S0
-// once" (OPS7-10). The one exception is an empty store: no directory at
-// dbPath, or an empty one, and no sidecars. StoreState then returns
-// StoreApplied{Empty: true}, which meets every requirement, the exemption boot
-// gives an empty store (05-storage §5S.4 step 3; DATA8-11).
-type StoreState func(ctx context.Context, dbPath string) (StoreApplied, error)
-
-type StoreApplied struct {
-	Empty  bool // no DB directory (or an empty one) and no sidecars; Meets is true
-	Owners map[string]uint64
-}
-
-// Meets reports whether s satisfies r: every listed owner at or above its
-// version. A nil r, and any r on an Empty store, is always met.
-func (s StoreApplied) Meets(r *UpgradeRequirement) bool
 
 type Restarter interface {
 	// Restart runs the full shutdown sequence within the stop budget
 	// (05-health 5H.4) and then exits with core.lifecycle.restart_exit_code
-	// (default 75, the S0 hotfix's code). The kernel binds it to
+	// (default 75, the R0 hotfix's code). The kernel binds it to
 	// Lifecycle.RequestRestart(reason) (06 §6.5.2), the one restart path the
 	// staged restore and the staged factory reset also call (OPS8-12). The
 	// updater never asks for an exec restart: exec mode is deferred-build
@@ -265,23 +210,22 @@ core names a repository.
 
 ### Deferred-build members
 
-Design sketches (non-normative, A-15): no extraction stage builds them, and the SDK freezes none of
+Design sketches (non-normative, A-15): no extraction release builds them, and the SDK freezes none of
 them. Each lands in its own later release, with its own tests, as an additive change to the built
 updater above. The round-8 design of each is preserved in git history at the commit before A-6, and
 each is re-reviewed when it is built, against the code as it is then.
 
-| Member | What it adds | Built when, and why not at S8 |
+| Member | What it adds | Built when, and why not in R2 |
 |---|---|---|
-| **Signed release manifests** | `ReleaseManifest{app, version, channel, assets, min_upgrade_from}`, `TrustedKey`, `Options.Manifest`/`Signature`/`TrustedKeys`/`RevokedKeyIDs`, ed25519 verification over the manifest bytes (SEC-27), the signed `min_upgrade_from` copy of the binary's floor, `Options.LastUnsignedVersion` with the legacy unsigned path and `core.updater.allow_unsigned_legacy` (OPS-23, SEC2-23), the `no_trusted_keys`/`unsigned_updates` reasons, the pipeline's signing step and key rotation | when the reusable release workflow can sign (its asset contract is UNKNOWN from this repo, 5U.2); the S8 updater's trust level is HEAD's: HTTPS from the configured release source |
-| **Boot-attempt counter** | `Boot(stateDir, exe, self, check)` as 06 §6.5.1 phase P−1, `Self{Version, BinaryID}`, `BootResult`, `Pending`, the pending marker `updates/pending.json`, `updates/history.jsonl` (`superseded`, `rolled_back`), `core.updater.max_boot_attempts`, `core.updater.confirm_after`, `ReaderCheckOptions.IgnoreRestoreStagedBy` (OPS2-3, OPS4-8, OPS4-9, R5-7), the restart exit code a boot refusal uses while a marker names the running binary (OPS5-15), and `BootResult.Pending` handed to storage open for `RequiresSelfServed` (OPS2-2) | with automatic rollback, which is its only consumer; its marker write, history append and renames are boot writers, so its PR extends the crash matrix (05-storage, A-8). Its tests land with it, among them `TestUpdaterRollbackRejectsFailingBuildsIntent` (moved here from 05-backup, COR9-7: P−1 rolls back with a pending intent the failing build staged, and `.prev` rejects it at 05-backup §5B.3.4 step a); no S0–S10 build has P−1, so no extraction stage can run it |
-| **Automatic rollback** | `Boot`'s rollback to `<exe>.prev` after the attempt budget, in-place exec (OPS2-18), `rollback_blocked` when `ReaderCheck` refuses `.prev` (OPS-6), `Status.SkippedAfterRollback` (OPS2-6), the rollback alert rule, and **unattended apply**: `ModeApply`, `core.updater.schedules.apply` (window member 0) | with the counter: an unattended swap without an automatic way back is what the S0 hotfix stopped (09 S0) |
+| **Signed release manifests** | `ReleaseManifest{app, version, channel, assets, min_upgrade_from}`, `TrustedKey`, `Options.Manifest`/`Signature`/`TrustedKeys`/`RevokedKeyIDs`, ed25519 verification over the manifest bytes (SEC-27), the signed `min_upgrade_from` copy of the binary's floor, `Options.LastUnsignedVersion` with the legacy unsigned path and `core.updater.allow_unsigned_legacy` (OPS-23, SEC2-23), the `no_trusted_keys`/`unsigned_updates` reasons, the pipeline's signing step and key rotation | when the reusable release workflow can sign (its asset contract is UNKNOWN from this repo, 5U.2); the R2 updater's trust level is HEAD's: HTTPS from the configured release source |
+| **Boot-attempt counter** | `Boot(stateDir, exe, self, check)` as 06 §6.5.1 phase P−1, `Self{Version, BinaryID}`, `BootResult`, `Pending`, the pending marker `updates/pending.json`, `updates/history.jsonl` (`superseded`, `rolled_back`), `core.updater.max_boot_attempts`, `core.updater.confirm_after`, `ReaderCheckOptions.IgnoreRestoreStagedBy` (OPS2-3, OPS4-8, OPS4-9, R5-7), the restart exit code a boot refusal uses while a marker names the running binary (OPS5-15), and `BootResult.Pending` handed to storage open for `RequiresSelfServed` (OPS2-2) | with automatic rollback, which is its only consumer; its marker write, history append and renames are boot writers, so its PR extends the crash matrix (05-storage, A-8). Its tests land with it, among them `TestUpdaterRollbackRejectsFailingBuildsIntent` (moved here from 05-backup, COR9-7: P−1 rolls back with a pending intent the failing build staged, and `.prev` rejects it at 05-backup §5B.3.4 step a); no R0–R3 build has P−1, so no extraction release can run it |
+| **Automatic rollback** | `Boot`'s rollback to `<exe>.prev` after the attempt budget, in-place exec (OPS2-18), `rollback_blocked` when `ReaderCheck` refuses `.prev` (OPS-6), `Status.SkippedAfterRollback` (OPS2-6), the rollback alert rule, and **unattended apply**: `ModeApply`, `core.updater.schedules.apply` (window member 0) | with the counter: an unattended swap without an automatic way back is what the R0 hotfix stopped (09) |
 | **Binary-layout migration** | the committed unit moved to layout (a) of 5U.5 (unit default, drop-in `ExecStart`, the sudoers template's `cp` lines, `DEPLOY_BIN`, `deploy-match-unit-type.sh`, the launchd plist's binary path, binary **and** `.prev` copied, a dry-run `make rollback` as the deploy user; OPS3-15, OPS4-4) | when unattended apply is built; until then the committed layout reports `binary_not_writable`, as HEAD's updater already fails there (5U.5) |
 | **Real-RC `--updater-check`** | the staging done-check between two real signed prereleases (RC *n* applies RC *n+1*), `scripts/staging/provision.sh --updater-check` opening egress to the release hosts (R7-6, OPS8-3, SIMP8-10) | with signed manifests, which it exercises |
-| **Archive download and checksums** | `GoreleaserArchive(project)` (goreleaser's `<project>_<version>_<Title(os)>_<arch>.tar.gz`, amd64 as x86_64, `.goreleaser.yml:42-49`) as the asset namer; download of the archive and `checksums.txt` into an `os.Root` on `<state-dir>/updates/<version>/` (`Deps.StateDir`); the archive's SHA-256 checked against its `checksums.txt` line (`checksum_failed`); extraction of only the `BinaryName` member (regular file, no path components, size-capped); `TestGoreleaserArchive_MatchesTemplate`, `TestApply_ChecksumMismatchAborts`, `TestApply_NoChecksumsFileProceeds`, `TestApply_ArchiveMemberTraversalRejected` | when the reusable release workflow is confirmed to publish archives and not HEAD's raw assets (open item 3); HEAD's updater downloads the raw `audiobook-organizer-<GOOS>-<GOARCH>` asset with no checksum (`updater.go:214-265,318-326`), so an archive step at S8 would fail `TestABOUpdaterSourceMatchesHEAD` or S0's updater test (R10-8, OPS10-6) |
-| **Pre-update backup** | `Deps.Backup backup.Runner` (05-backup), a full archive before the swap in the format the previous build can restore, `core.updater.require_backup` (`ProtectAdmin`), the `backup_failed` outcome and error row, `TestApply_BackupFailureAborts` | by owner decision, with its own S-row and release note: on the reference host a manual apply would first write a full archive (about 15 GB) and could let retention prune older ones, behaviour HEAD's updater never had (R10-8, OPS10-6) |
+| **Archive download and checksums** | `GoreleaserArchive(project)` (goreleaser's `<project>_<version>_<Title(os)>_<arch>.tar.gz`, amd64 as x86_64, `.goreleaser.yml:42-49`) as the asset namer; download of the archive and `checksums.txt` into an `os.Root` on `<state-dir>/updates/<version>/` (`Deps.StateDir`); the archive's SHA-256 checked against its `checksums.txt` line (`checksum_failed`); extraction of only the `BinaryName` member (regular file, no path components, size-capped); `TestGoreleaserArchive_MatchesTemplate`, `TestApply_ChecksumMismatchAborts`, `TestApply_NoChecksumsFileProceeds`, `TestApply_ArchiveMemberTraversalRejected` | when the reusable release workflow is confirmed to publish archives and not HEAD's raw assets (open item 3); HEAD's updater downloads the raw `audiobook-organizer-<GOOS>-<GOARCH>` asset with no checksum (`updater.go:214-265,318-326`), so an archive step in R2 would fail `TestABOUpdaterSourceMatchesHEAD` or R0's updater test (R10-8, OPS10-6) |
+| **Pre-update backup** | `Deps.Backup backup.Runner` (05-backup), a full archive before the swap, `core.updater.require_backup` (`ProtectAdmin`), the `backup_failed` outcome and error row, `TestApply_BackupFailureAborts` | by owner decision, with its own release entry and release note: on the reference host a manual apply would first write a full archive (about 15 GB) and could let retention prune older ones, behaviour HEAD's updater never had (R10-8, OPS10-6) |
 | **Container refusal** | `DisabledReason: "container"` and `ModeOff` forced from `sysinfo.Info.Container` ([05-health](05-health.md)), apply refused in a container, `TestPolicy_ContainerForcesOff` | with a 09 "User-visible changes" line and a release note ("in a container, update checks report `container` and apply is refused"); HEAD's updater runs wherever it is enabled (R10-8, OPS10-6) |
 | **Exec-mode restart** | `core.updater.restart_mode` (`exit`/`exec`, `ProtectAdmin`), exec of `<exe>` in place after the drain (Unix only) | with automatic rollback, whose in-place exec (OPS2-18) is its first user; HEAD restarts by exiting, and the hotfix by exiting 75 (R10-8, OPS10-6) |
-| `UpgradeRequirement.Steps`, `StoreApplied.StepsDone` | storage `StepRef`s (a cutover's data migration) that must be done before a release may run, read from the sidecar's `<owner> done <id>` lines; `Meets` then also checks them | with the first per-family cutover (05-storage §5S.3.13; SIMP4-4) |
 
 ## 5U.4 Lifecycle
 
@@ -302,35 +246,35 @@ of offering an older release as newer (OPS4-17) — probes that the executable's
 `core.update.found.v1` notification with `notify.Service.Publish`, so each new version notifies exactly
 once across restarts; it also publishes the topic on the bus for UI refresh (declared in the one topic
 catalog with `Notify`, [05-events](05-events.md) 5E.3.1; the bus publish alone notifies nobody, COR2-3).
-A check never applies anything: that is the hotfix's check-only unattended mode (09 S0), kept (A-6).
+A check never applies anything: that is the hotfix's check-only unattended mode (R0, 09), kept (A-6).
 
 **Apply** — task `core.updater.apply`: Shape Task, `Effects: Writes(tasks.Res("core","binary"))`,
 `Resume: ResumeDrop`, `ConcurrencyKey: core.updater`, `Cancel: Cooperative(30s)` until step 4,
 `Perms.Start: core:admin`, `Priority: PrioritySystem`, **no `Schedule`**: it runs only when an admin
 starts it through `POST /api/core/v1/updater/apply` `{version}` (5U.10), behind the credential guard as
 at HEAD. The maintenance-window step 1 and the separate ticker are deleted. The steps are **HEAD's
-pipeline as 09 S0 hotfixes it** (R10-8, OPS10-6): HEAD's raw-asset download and rename swap
-(`internal/updater/updater.go:214-280`), with the hotfix's semver rule, `.prev` slot, level and floor
-checks and exit 75. There is no archive, no checksum file, no pre-update backup and no container step,
-because neither HEAD nor the hotfix has one; each is a deferred-build member (5U.3), as is the exec-mode restart.
-The moved pipeline makes **exactly two additions** to HEAD's (lead decision, 09 S8): the `core.updater.max_download`
+pipeline as R0 hotfixes it** (R10-8, OPS10-6): HEAD's raw-asset download and rename swap
+(`internal/updater/updater.go:214-280`), with the hotfix's semver rule, `.prev` slot and exit 75. There is no
+archive, no checksum file, no pre-update backup, no container step and no store check of the new binary, because
+neither HEAD nor the hotfix has one; the first four are deferred-build members (5U.3), as is the exec-mode restart.
+The moved pipeline makes **exactly two additions** to HEAD's (lead decision, 09): the `core.updater.max_download`
 cap on the download (step 2) and the `--version-json` self-test of the new binary (step 3); everything else is as
-HEAD, with the hotfix's checks. Steps, each a `rc.Phase`:
+HEAD, with the hotfix's rules. Steps, each a `rc.Phase`:
 
 1. Preconditions: current build is versioned; target newer than current, except
    that on a local build (`LocalBuild`) apply runs only for the version the operator names explicitly;
    no swap staged and none in flight, of either kind (`restore_pending`, `restore_inflight`;
    05-backup §5B.3.4's one slot and journal, in which a factory reset is the kind `KindReset`, 05-storage
-   §5S.3.15; R8-1): a swap would make a staged restore be rejected as foreign (09 S1/S8), turn the admin's
-   audited reset into a rejected intent, or leave a half-done set-aside to a binary that cannot finish it
-   (R7-2, OPS7-11). It is read through `ReaderCheck(core.storage.path, <exe>)` with no override (a
-   `KindCheckpoint` journal at `swapped` or `failed` passes for a candidate that admits the restored store
-   and implements the journaled swap, R7-4, DATA8-6). And the **executable's directory is writable by the
-   process**, checked by creating and removing a probe file through an `os.Root` opened on that directory
-   (OPS2-4). An unwritable directory sets `DisabledReason: "binary_not_writable"`, refuses apply and
-   rollback, and keeps component `core.updater` Degraded `binary_not_writable` while mode ≥ check, so the
-   operator learns that updates cannot be installed instead of the update silently failing at step 2
-   (5U.5 lists the supported layouts).
+   §5S.3.15; R8-1): a swap would make a staged restore be rejected (its `staged_by_build` is another binary,
+   05-backup §5B.3.4 step a), turn the admin's audited reset into a rejected intent, or leave a half-done
+   set-aside to a binary that cannot finish it (R7-2, OPS7-11). It is read through
+   `ReaderCheck(core.storage.path, <exe>)` with no override (a `KindCheckpoint` journal at `swapped` or `failed`
+   passes for a candidate that admits the restored store and implements the journaled swap, R7-4, DATA8-6). And
+   the **executable's directory is writable by the process**, checked by creating and removing a probe file
+   through an `os.Root` opened on that directory (OPS2-4). An unwritable directory sets
+   `DisabledReason: "binary_not_writable"`, refuses apply and rollback, and keeps component `core.updater`
+   Degraded `binary_not_writable` while mode ≥ check, so the operator learns that updates cannot be installed
+   instead of the update silently failing at step 2 (5U.5 lists the supported layouts).
 2. Download HEAD's raw asset: the release asset `AssetName` names (ABO: the default `RawBinary`,
    `audiobook-organizer-<GOOS>-<GOARCH>`, HEAD's name, `updater.go:318-326`; a release without it is
    `no_asset`), fetched through `providerhttp` with user agent `<BinaryName>/<version>` (ABO: HEAD's
@@ -340,23 +284,12 @@ HEAD, with the hotfix's checks. Steps, each a `rc.Phase`:
    failed transfer deletes `<exe>.new` and aborts, `download_failed`); file and directory are fsynced.
    The trust level is HEAD's: HTTPS from the configured release source; checksums and signed manifests
    are deferred-build (5U.3).
-3. Self-test and the store checks — the hotfix's checks, in the same order (09 S0). Run
-   `<exe>.new --version-json` (10 s timeout, empty environment except `PATH`); it prints one JSON object
-   with exactly the fields `{app, version, commit, ui_build_id, binary_id}`, the list 09 S0 and §9.6 row
-   20 pin (FE6-4), and the self-test requires `app == AppID` and `version == target`. The same object
-   is read outside the updater: `soak_record.py` binds a soak row to the `binary_id` of the binary running
-   on the reference host (09 §9.2.1, R9-8), and `staging-restore` refuses a binary whose `binary_id`
-   differs from the archive manifest's (R9-9), so `TestSelfTest_VersionJSONFieldList` pins the list for
-   all three readers. Then
-   `ReaderCheck(core.storage.path, <exe>.new)`: the new binary's levels, format and floor against the
-   store's sidecars, the decision `make rollback` and `deploy` make (SIMP-18); a refusal aborts with its
-   reason, `upgrade_floor` as `stepping_stone_required`. To name the stepping stone it runs
-   `<exe>.new --print-upgrade-floor`: an empty output passes without reading the sidecar (OPS7-10);
-   otherwise `StoreState` must `Meet` it, and when it does not, apply aborts with
-   `stepping_stone_required`, sets `Status.SteppingStone` to the printed `release` and a UI banner
-   ("install <release> and run it until the store has applied what this release needs"); a `StoreState`
-   error refuses the same way (fail-closed; OPS6-1, DATA8-11). Nothing is swapped, and `<exe>.new` is
-   deleted.
+3. Self-test. Run `<exe>.new --version-json` (10 s timeout, empty environment except `PATH`); it prints one JSON
+   object with exactly the fields `{app, version, commit, ui_build_id, binary_id}`, the list R0 pins (FE6-4; 09),
+   and the self-test requires `app == AppID` and `version == target` (`TestSelfTest_VersionJSONFieldList` pins the
+   list). A failed self-test deletes `<exe>.new` and swaps nothing. There is no level, format or floor check of the
+   new binary (5U.1): an upgrade whose store the new binary cannot serve is refused by that binary at boot, before
+   any write (exit 78; 05-storage), and the unit's `RestartPreventExitStatus=78` stops a restart loop.
 4. Swap: rename `<exe>` → `<exe>.prev`, `<exe>.new` → `<exe>`; fsync directory. HEAD renames to
    `<exe>.old` and deletes it (`updater.go:267-280`); the hotfix keeps it as `.prev`, the same slot
    `make rollback` uses (`Makefile:892-913`), so mixed use of the two mechanisms never diverges
@@ -369,13 +302,15 @@ HEAD, with the hotfix's checks. Steps, each a `rc.Phase`:
    needs `Restart=always`). HEAD exits 0 (`updater.go:329-334`).
 
 **After the restart.** No marker is written and no boot is counted: the new binary boots like any
-deployed binary, and a store refusal at boot (`ErrUpgradeFloor`, exit 78) is what step 3 exists to
-prevent. If the release misbehaves, the admin rolls back by hand: task `core.updater.rollback`
-(`POST .../rollback`, `core:admin`, credential guard, `ConcurrencyKey: core.updater`) runs
-`ReaderCheck(core.storage.path, <exe>.prev)` first and refuses with its reason (a `.prev` older than a
-level the store reached cannot serve it), and otherwise renames `<exe>` → `<exe>.rolled-back` (the name
-`make rollback` gives the binary it replaces, `Makefile:912`), `<exe>.prev` → `<exe>`, fsyncs and
-restarts through `Restarter`; `make rollback` makes the same decision from the
+deployed binary, and a store refusal at boot (exit 78) needs the operator. A binary whose release carries
+migrations takes the mandatory pre-migration checkpoint at its first boot (05-storage), so an update applied
+through this updater, which takes no backup of its own, still has the checkpoint to fall back to. If the release
+misbehaves, the admin rolls back by hand: task `core.updater.rollback` (`POST .../rollback`, `core:admin`,
+credential guard, `ConcurrencyKey: core.updater`) runs `ReaderCheck(core.storage.path, <exe>.prev)` first and
+refuses with its reason (a `.prev` older than a level the store reached cannot serve it: from R2 on, the R1
+`.prev` refuses every migrated store, and the message names `make rollback-restore`, 05-backup), and otherwise
+renames `<exe>` → `<exe>.rolled-back` (the name `make rollback` gives the binary it replaces, `Makefile:912`),
+`<exe>.prev` → `<exe>`, fsyncs and restarts through `Restarter`; `make rollback` makes the same decision from the
 operator's machine. `<exe>.prev` is kept until the next apply or deploy replaces it.
 
 **Boot writers (A-8).** The built updater writes nothing during boot: its only durable key is
@@ -383,13 +318,13 @@ operator's machine. `<exe>.prev` is kept until the next apply or deploy replaces
 `.rolled-back`) are written inside the apply and rollback runs. So it adds no entry to 05-storage's crash
 matrix. The deferred `Boot` is a boot writer and extends the matrix in the PR that builds it.
 
-Database caveat: a rollback restores the **binary**, not the data. The previous release must read
-the database the new release left — that is gate G5 and the compatibility window
-([09-abo-on-core](09-abo-on-core.md) §9.2.1), checked by `ReaderCheck`; the app's scheduled backups
-(05-backup) are the last resort, restored by an operator, never automatically (automatic restore would
-discard writes made after the update). The built updater takes no backup of its own, as HEAD's does not
-(the pre-update backup is deferred-build, 5U.3). Persistence: one key, `c/updater/seen` (the last
-notified version); every updater file is beside the executable.
+Database caveat: a rollback restores the **binary**, not the data. A binary swap is a rollback only while the
+previous binary still reads the store, which `ReaderCheck` decides: within R0 and R1, and from R3 back to R2. Across
+the R2 cutover the way back is `make rollback-restore`: stop, restore the pre-migration checkpoint or an archive
+offline (with the keyring and state files), reinstall `.prev`, start (05-backup). Everything written after the
+upgrade is then lost, so nothing restores automatically. The built updater takes no backup of its own, as HEAD's
+does not (the pre-update backup is deferred-build, 5U.3). Persistence: one key, `c/updater/seen` (the last notified
+version); every updater file is beside the executable.
 
 ## 5U.5 Policy
 
@@ -397,12 +332,11 @@ notified version); every updater file is beside the executable.
 |---|---|---|
 | App ships an updater | per app (`app.Options.Updater` nil or not) | a TV/Movies app distributed only as a container image needs none |
 | Mode | `ModeOff` for every app unless its `DefaultMode` says otherwise **and** the operator sets `core.updater.mode` | no unsolicited network calls; current default disabled (`config.go:2991`) |
-| Unattended apply | never: a scheduled run only checks and notifies; an operator who asked for automatic apply (`auto_update.enabled=true`) gets `mode=check`, `Status.AutoApplyPaused`, component Degraded `auto_update_paused` and a Settings banner | the S0 hotfix's check-only rule, kept (A-6): the updater has no boot-attempt counter, so an unattended swap would have no automatic way back |
-| Containers | not detected, as at HEAD: the updater behaves as on a host (off unless the operator enables it). The refusal (`DisabledReason: container`) is deferred-build (5U.3) and lands with its own release note | replacing a binary inside an image is wrong, but refusing it is a behaviour change HEAD never made, so it is not part of the S8 move (R10-8) |
+| Unattended apply | never: a scheduled run only checks and notifies; an operator who asked for automatic apply (`auto_update.enabled=true`) gets `mode=check`, `Status.AutoApplyPaused`, component Degraded `auto_update_paused` and a Settings banner | the R0 hotfix's check-only rule, kept (A-6): the updater has no boot-attempt counter, so an unattended swap would have no automatic way back |
+| Containers | not detected, as at HEAD: the updater behaves as on a host (off unless the operator enables it). The refusal (`DisabledReason: container`) is deferred-build (5U.3) and lands with its own release note | replacing a binary inside an image is wrong, but refusing it is a behaviour change HEAD never made, so it is not part of the R2 move (R10-8) |
 | Downgrades | never offered; only `Rollback` to the kept previous binary, and only when `ReaderCheck` allows it; a describe-suffixed local build is never compared, so it is never offered an older release as newer | string-inequality defect (`updater.go:153`); OPS-6; semver orders `v0.223.0-5-gabc1234` below `v0.223.0` (OPS4-17) |
 | Who | check: `core:system.manage`; apply/rollback: `core:admin` (audited as `core.update.apply` / `core.update.rollback`, 05-rbac §7.1; credential-guarded route as today) | RBAC (05-rbac); SEC-6 |
 | Binary directory | the process must be able to create files in the executable's directory; otherwise `binary_not_writable` (apply and rollback refused, Degraded while mode ≥ check) | the swap writes `<exe>.new` and renames twice in that directory (steps 2 and 4); OPS2-4 |
-| Stepping stones | a release whose upgrade floor the store's **recorded state** does not meet is never applied; `stepping_stone_required` names the stepping-stone release to install and run first. The check is the new binary's own floor (`<exe>.new --print-upgrade-floor` against `<db>.storage-applied`, before the swap), which the 09 S0 hotfix makes from S0 and this updater keeps (step 3), so it covers the floor release, which ships at S5; the `deploy` recipe runs the same pair before it copies a binary (09 S0; OPS6-1). This protection exists only where the running updater is this one or the 09 S0 hotfix; a pre-S0 updater swaps any newer binary unchecked (`internal/updater/updater.go:214-280`), so such an auto-updating install that takes the floor release exits 78 at boot with `ErrUpgradeFloor`, and the floor release's note and the Docker last-line message name the stepping stone (DATA4-18) | R2-4, OPS4-5: books legacy migration code is kept in every release before the **floor release** (the first T8 release, which deletes it and declares books' floor, 05-tasks 5T.6.2), so a store below books' `LegacyCap` needs the **stepping-stone release** (which still carries that code) to have **run**, which only the store can prove (OPS3-7); a later cutover floor uses the same check; OPS2-11 |
 
 **Supported install layouts (OPS2-4, OPS4-4).** The updater replaces the binary in place, so it works
 only where the service user owns the executable's directory: (a) a dedicated service-owned binary
@@ -435,13 +369,11 @@ archives, `checksums.txt` and signing are read only by deferred-build members (5
 | Release has no matching asset | open for check (reported `no_asset`); closed for apply | — |
 | Download fails, or the body exceeds `core.updater.max_download` | closed: abort, delete `<exe>.new`, metric `apply_total{outcome="download_failed"}`, WARN | never run a truncated binary; HEAD also deletes `.new` on a failed write (`updater.go:260-264`) |
 | Self-test fails | closed: delete `<exe>.new`, abort | catches wrong arch, corrupt build, wrong app |
-| `ReaderCheck(<exe>.new)` refuses (`level_newer`, `format_newer`, `upgrade_floor`, `sidecar_unreadable`) | closed: apply refused with the reason (`upgrade_floor` as `stepping_stone_required`), `<exe>.new` deleted, nothing swapped | the hotfix's reader check of the new binary (09 S0) |
 | Rename fails | closed: restore `<exe>` from `<exe>.prev` if the first rename happened; abort | atomic swap or nothing |
 | Executable directory not writable | closed for apply/rollback (`binary_not_writable`); open for check (Degraded, banner) | OPS2-4: say so instead of failing at the swap |
-| Store's recorded state does not meet the new binary's own non-empty `--print-upgrade-floor` (step 3), or `StoreState` fails against a non-empty floor (a missing sidecar: "boot any release ≥ S0 once"); an empty floor passes without reading the sidecar, and so does an empty store (no DB directory, or an empty one, and no sidecars) | closed: apply refused (`stepping_stone_required`), `<exe>.new` deleted, nothing swapped | R2-4, OPS3-7, OPS6-1, OPS7-10, DATA8-11 |
-| A swap staged (`restore/pending.json`: a restore, or a factory reset, `KindReset`) or in flight (a `restore/<id>/inflight.json`, which every kind creates before its first rename and keeps until its terminal step, `hook_done` for a `KindReset` swap; R9-7), except a `KindCheckpoint` journal at `swapped` or `failed` whose restored store the candidate admits and whose journaled swap it implements (`--print-restore-journal`) | closed: apply and rollback refused (`restore_pending`, `restore_inflight`, the message naming the kind); no updater override (the scripts' one override, `ROLLBACK_IGNORE_RESTORE=1`, covers `restore_pending` only, OPS8-7) | 09 S1/S8; a swap would discard the restore (DATA3-6), reject the audited reset or leave a half-done set-aside to a binary that cannot finish it (R7-2, R8-1); the checkpoint exception lets the documented failed-migration recovery reach `.prev` (R7-4, DATA7-12, DATA8-6) |
-| `ReaderCheck` cannot determine the answer (`cannot_determine`) | closed: apply and rollback refused | fail-closed, as `make rollback` (09 §9.2.2) |
-| Manual rollback: `ReaderCheck(<exe>.prev)` refuses | closed: rollback refused with the reason; the running binary stays | a `.prev` that refuses the store would leave the unit failed (OPS-6) |
+| A swap staged (`restore/pending.json`: a restore, or a factory reset, `KindReset`) or in flight (a `restore/<id>/inflight.json`, which every kind creates before its first rename and keeps until its terminal step; R9-7), except a `KindCheckpoint` journal at `swapped` or `failed` whose restored store the candidate admits and whose journaled swap it implements (`--print-restore-journal`) | closed: apply and rollback refused (`restore_pending`, `restore_inflight`, the message naming the kind); no override | a swap would discard the restore (DATA3-6), reject the audited reset or leave a half-done set-aside to a binary that cannot finish it (R7-2, R8-1); the checkpoint exception lets the documented failed-migration recovery reach `.prev` (R7-4, DATA7-12, DATA8-6) |
+| `ReaderCheck` cannot determine the answer (`cannot_determine`) | closed: apply and rollback refused | fail-closed, as `make rollback` (09) |
+| Manual rollback: `ReaderCheck(<exe>.prev)` refuses | closed: rollback refused with the reason, naming `make rollback-restore` for `level_newer`; the running binary stays | a `.prev` that refuses the store would leave the unit failed (OPS-6); across R2 only a restore goes back (05-backup) |
 | Restart fails after swap | closed: the process keeps running the old code in memory; the next manual or supervisor restart boots the new binary | — |
 | Current version is a local (describe-suffixed) build | open for check (`LocalBuild`, not compared); apply only of an explicitly named version | semver cannot order it against its base tag (OPS4-17) |
 | Dev build | closed: apply refused with reason | policy |
@@ -468,29 +400,26 @@ swap phase.
 There is no `core.updater.check_interval`: the interval is the schedule key (SIMP-6). There is no
 `core.updater.restart_exit_code` either: the restart exit code is 06's `core.lifecycle.restart_exit_code`
 (default 75, `ProtectAdmin`), which `Lifecycle.RequestRestart` uses for the updater, the staged restore and
-the staged factory reset alike (06 §6.5.2, OPS8-12). The old name never shipped (the updater lands at
-S8), so it needs no alias. The keys of the deferred members (`allow_unsigned_legacy`,
+the staged factory reset alike (06 §6.5.2, OPS8-12). The keys of the deferred members (`allow_unsigned_legacy`,
 `max_boot_attempts`, `confirm_after`, `schedules.apply`, `require_backup`, `restart_mode`) are registered
 by the release that builds them (R10-8).
 
-ABO compatibility: `auto_update.enabled=true` maps to `mode=check` with `Status.AutoApplyPaused` (5U.5),
-the S0 hotfix's behaviour; `auto_update.channel` maps to `channel` (`develop` → `prerelease` with a WARN);
-`auto_update.check_minutes` maps to `core.updater.schedules.check.every`; `auto_update.window_start/end`
-are read and ignored with one WARN, because only the deferred unattended apply uses a window. Aliases live
-for the compatibility window ([09](09-abo-on-core.md) §9.2.1; [05-config](05-config.md) owns the alias
-mechanism).
+ABO's keys are renamed once, by the R2 config cutover through 05-config's rename table, and no alias remains:
+`auto_update.enabled=true` becomes `mode=check` with `Status.AutoApplyPaused` (5U.5), the R0 hotfix's behaviour;
+`auto_update.channel` becomes `channel` (`develop` → `prerelease`, reported); `auto_update.check_minutes` becomes
+`core.updater.schedules.check.every`; `auto_update.window_start/end` are dropped and reported, because only the
+deferred unattended apply uses a window.
 
 ## 5U.9 Metrics
 
 Names are shown under the default namespace `mediacore`; an app's `app.Options.MetricNamespace`
-replaces it (06; 05-metrics owns the naming rule; A-5). HEAD's updater emits no series, so no ABO series
-is renamed or aliased.
+replaces it (06; 05-metrics owns the naming rule). HEAD's updater emits no series.
 
 | Name | Type | Labels |
 |---|---|---|
 | `mediacore_updater_checks_total` | counter | `outcome` (`ok`, `failed`, `no_asset`) |
 | `mediacore_updater_update_available` | gauge (0/1) | — |
-| `mediacore_updater_apply_total` | counter | `outcome` (`applied`, `download_failed`, `selftest_failed`, `reader_refused`, `swap_failed`, `refused`, `stepping_stone_required`, `binary_not_writable`) |
+| `mediacore_updater_apply_total` | counter | `outcome` (`applied`, `download_failed`, `selftest_failed`, `swap_failed`, `refused`, `binary_not_writable`) |
 | `mediacore_updater_rollbacks_total` | counter | `outcome` (`done`, `refused`) |
 | `mediacore_updater_download_bytes_total` | counter | — |
 
@@ -503,7 +432,7 @@ is renamed or aliased.
 | `POST /api/core/v1/updater/apply` `{version}` → starts `core.updater.apply` | `core:admin`, credential guard | `POST /api/v1/update/apply` |
 | `POST /api/core/v1/updater/rollback` → starts `core.updater.rollback` | `core:admin`, credential guard | new |
 
-The `/api/v1/update/*` paths are aliases for the compatibility window (09 §9.2.1).
+The `/api/v1/update/*` paths are deleted in R2; the SPA switches to these routes in the same release (09).
 
 ## 5U.11 Tests
 
@@ -517,13 +446,10 @@ The `/api/v1/update/*` paths are aliases for the compatibility window (09 §9.2.
 | `TestApply_OversizeAborts`, `TestApply_FailedDownloadDeletesNew` | the size cap; HEAD's delete of `.new` on a failed write |
 | `TestApply_SelfTestFailsKeepsOldBinary` (fake binary in a temp dir) | self-test |
 | `TestSelfTest_VersionJSONFieldList` (the new binary must print exactly `{app, version, commit, ui_build_id, binary_id}`; a missing `app` fails the self-test; `commit` may be `""`) | FE6-4 |
-| `TestApply_ReaderRefusesNewBinary` (a fake `<exe>.new` reporting a format the store's sidecar refuses → refused with the reason, nothing swapped) | hotfix reader check |
-| `TestApply_SteppingStoneRequired` (store at books 63 and a new binary whose floor is books `LegacyCap` → refused at step 3 naming the release it prints; store at `LegacyCap` → allowed), `TestApply_StoreStateErrorRefuses` | OPS2-11, OPS3-7, OPS6-1 |
-| `TestApply_EmptyFloorSkipsSidecar` (no `.storage-applied`, new binary prints an empty floor → allowed; a non-empty floor with no sidecar → `stepping_stone_required` naming "boot any release ≥ S0 once"; a non-empty floor with no DB directory, or an empty one, and no sidecars → allowed, as boot exempts an empty store) | OPS7-10, DATA8-11 |
 | `TestApply_SwapAtomicAndPrevKept` (slot name `.prev`), `TestApply_RestartExits75` (fake `Restarter`: exit mode uses `core.lifecycle.restart_exit_code`) | swap, restart |
-| `TestRollback_ReaderRefusesPrev` (fake `.prev` reporting a lower level → refused, running binary kept), `TestRollback_SwapsPrevBack` (the replaced binary is kept as `<exe>.rolled-back`, `make rollback`'s name) | manual rollback (OPS-6) |
+| `TestRollback_ReaderRefusesPrev` (fake `.prev` reporting a lower level → refused with `level_newer` naming `make rollback-restore`, running binary kept), `TestRollback_SwapsPrevBack` (the replaced binary is kept as `<exe>.rolled-back`, `make rollback`'s name) | manual rollback (OPS-6) |
 | `TestApply_BinaryDirNotWritableRefusedAndDegraded` (read-only temp directory) | OPS2-4 |
-| `TestApply_RefusedWhileResetPending` (a staged `restore/pending.json` of kind `reset`: refused with `restore_pending`, the message naming the kind; then its journal at `set_aside_started` before any target has moved, at `set_aside`, and again at `applied` without `hook_done`, each with its `restore/<id>/inflight.json`: refused with `restore_inflight`; a restore journal at `rechecked` whose `pending.json` was just renamed to `inflight.json`, before `previous_moved`: refused with `restore_inflight`, never `restore_pending` (R9-7, DATA9-3); apply and manual rollback refused, nothing downloaded or swapped; no `reset_*` token exists), `TestApply_CheckpointJournalAdmitsCandidate` (a `KindCheckpoint` journal at `swapped`, and again at `failed`: a candidate whose levels and floors admit the restored store and which answers `--print-restore-journal` passes `ReaderCheck`; one that does not admit the store, or a pre-S2b candidate without the flag, refuses with `restore_inflight`) | R7-2, R7-4, R8-1, OPS7-11, DATA7-12, DATA8-6, R9-7 |
+| `TestApply_RefusedWhileResetPending` (a staged `restore/pending.json` of kind `reset`: refused with `restore_pending`, the message naming the kind; then its journal at `set_aside_started` before any target has moved, at `set_aside`, and again at `applied` without `hook_done`, each with its `restore/<id>/inflight.json`: refused with `restore_inflight`; a restore journal at `rechecked` whose `pending.json` was just renamed to `inflight.json`, before `previous_moved`: refused with `restore_inflight`, never `restore_pending` (R9-7, DATA9-3); apply and manual rollback refused, nothing downloaded or swapped; no `reset_*` token exists), `TestApply_CheckpointJournalAdmitsCandidate` (a `KindCheckpoint` journal at `swapped`, and again at `failed`: a candidate whose levels and floors admit the restored store and which answers `--print-restore-journal` passes `ReaderCheck`; one that does not admit the store, or a candidate without the flag, refuses with `restore_inflight`) | R7-2, R7-4, R8-1, OPS7-11, DATA7-12, DATA8-6, R9-7 |
 | `TestCheck_NotifiesOncePerVersionAcrossRestart` | COR2-3 |
 | `TestPolicy_NilOptionsNoRoutesNoTasks` | absence |
 | `TestConfig_ModeIsProtectAdmin` | SEC-6 |
@@ -534,50 +460,47 @@ The `/api/v1/update/*` paths are aliases for the compatibility window (09 §9.2.
 
 | ABO today | Becomes |
 |---|---|
-| `internal/updater.Updater` (`updater.go`), as 09 S0 hotfixes it | `core/updater` + `core/updater/github`, **moved** (A-6), with HEAD's raw-asset download and no archive, checksum, backup or container step (R10-8): ABO's `main` passes its slug and binary name and keeps the default `RawBinary` asset namer |
+| `internal/updater.Updater` (`updater.go`), as R0 hotfixes it | `core/updater` + `core/updater/github`, **moved** in R2 (A-6), with HEAD's raw-asset download and no archive, checksum, backup or container step (R10-8): ABO's `main` passes its slug and binary name and keeps the default `RawBinary` asset namer |
 | `internal/updater.Scheduler` + `SchedulerStarterAdapter` + `updatescheduler` service (`scheduler.go`) and the `init()` registration (`register.go:59-90`) | deleted, not moved: only `updater.go` moves (MOD9-9); `core.updater.check` task with its schedule key; no scheduled apply; the kernel wires the updater from `app.Options.Updater` |
-| maintenance-window step 1 (`scheduler_maintenance_window_op.go:73-92`) and setting `maintenance_window_update_completed` | deleted (the hotfix made it check-only at S0) |
-| `RestartSelf` (`os.Exit(0)`, `updater.go:329-334`) | `Restarter.Restart` (graceful, exit 75; no exec mode). Until then, 09 S0 owns the HEAD updater hotfix (exit 75, `.prev` kept, semver comparison that treats a describe-suffixed current version as a local build and offers nothing (OPS4-17), a reader check of `<exe>.new` against the store before the swap (the same **decision** as the scripts, run in process: as the service user it reads the sidecars and stats `restore/pending.json`, `restore/*/inflight.json` and `restore/*/inflight-checkpoint.json` under the state directory directly, never through `sudo`, which cannot run under the unit's `NoNewPrivileges=yes` (`deploy/audiobook-organizer.service:122`), and from S2b it calls core `storage`'s `CheckReader` through the kernel binding, so a staged factory reset (`KindReset`) refuses it too (`restore_pending`, `restore_inflight`; `TestHotfixUpdater_RefusesWhileResetPending` in 09 S2b's done-check; OPS8-8, R8-1); a **floor check** — `<exe>.new --print-upgrade-floor`, a fast exit that ships at S0, compared with `<db>.storage-applied`, refusing with `stepping_stone_required` and naming the release the new binary prints, so the S5 floor release is never swapped onto a store below books' `LegacyCap` (OPS6-1) — and **both** auto-apply paths of 5U.2 check-only; OPS3-12). S8 moves exactly this behaviour into core |
-| `<exe>.old`, deleted after the swap (`updater.go:267-280`) | `<exe>.prev`, kept; shared with `make rollback` (from the S0 hotfix) |
-| `/api/v1/update/*` handlers (`update_handlers.go`) | core routes + aliases |
-| `auto_update.*` config | `core.updater.*` and `core.updater.schedules.check` with aliases (5U.8) |
-| release pipeline (reusable workflow, UNKNOWN details) | unchanged at S8; ABO's asset namer must match what the pipeline publishes — verify before an admin applies through the core updater (open item 3) |
+| maintenance-window step 1 (`scheduler_maintenance_window_op.go:73-92`) and setting `maintenance_window_update_completed` | deleted (the hotfix made it check-only in R0) |
+| `RestartSelf` (`os.Exit(0)`, `updater.go:329-334`) | `Restarter.Restart` (graceful, exit 75; no exec mode). Until R2, the R0 hotfix of HEAD's updater (09) does this: exit 75, `.prev` kept, semver comparison that treats a describe-suffixed current version as a local build and offers nothing (OPS4-17), and **both** auto-apply paths of 5U.2 check-only (OPS3-12); it makes no store check of the new binary. From R1, when the journaled swap lands, it also refuses while the swap slot is taken (`restore_pending`, `restore_inflight`, read in process through core `storage`'s `CheckReader` binding, never through `sudo`, which cannot run under the unit's `NoNewPrivileges=yes`, `deploy/audiobook-organizer.service:122`; OPS8-8, R8-1). R2 moves exactly this behaviour into core |
+| `<exe>.old`, deleted after the swap (`updater.go:267-280`) | `<exe>.prev`, kept; shared with `make rollback` (from the R0 hotfix) |
+| `/api/v1/update/*` handlers (`update_handlers.go`) | core routes; the old paths are deleted in R2 |
+| `auto_update.*` config | `core.updater.*` and `core.updater.schedules.check`, renamed once by the R2 config cutover (5U.8) |
+| release pipeline (reusable workflow, UNKNOWN details) | unchanged in R2; ABO's asset namer must match what the pipeline publishes — verify before an admin applies through the core updater (open item 3) |
 
-**S8 done-check.** The move is checked against the hotfix it moves: 09 S0's updater tests, re-pointed
+**R2 done-check.** The move is checked against the hotfix it moves: R0's updater tests, re-pointed
 at `core/updater`, pass with unchanged expectations (exit 75, `.prev` kept, the semver and local-build
-rule, the reader and floor refusals of the new binary, check-only scheduled runs). Their one fixture change: the
-fake asset they download answers `--version-json` with `app == AppID` and `version ==` the target, because the
-self-test of step 3 is new in the moved pipeline and the S0 hotfix runs none (VER11 note, R11-5). 5U.11 is green,
-`TestApply_RawAssetNoBackup` included: an apply fetches HEAD's raw asset and takes no backup (R10-8,
-OPS10-6).
+rule, check-only scheduled runs). Their one fixture change: the fake asset they download answers `--version-json`
+with `app == AppID` and `version ==` the target, because the self-test of step 3 is new in the moved pipeline and
+the R0 hotfix runs none (VER11 note, R11-5). 5U.11 is green, `TestApply_RawAssetNoBackup` included: an apply
+fetches HEAD's raw asset and takes no backup (R10-8, OPS10-6).
 Those tests inject a test source, so they do not check ABO's own wiring, and a wrong slug or asset namer
 would make every check report nothing and every manual apply fail. `TestABOUpdaterSourceMatchesHEAD`
 **(ABO, root CI)** therefore builds the `updater.Options` ABO's `main` passes and asserts that they
 produce HEAD's API path for the repository (`internal/updater/updater.go:36,71`), HEAD's raw asset name
 for each GOOS/GOARCH of goreleaser's build matrix (open item 3; `updater.go:318-326`,
-`.goreleaser.yml:42-49`) and HEAD's user agent (`updater.go:115`), and it runs S0's
-fake-server test through those options with only the base URL injected (OPS9-17). The real-RC staging
-check is deferred-build with signed manifests (5U.3).
+`.goreleaser.yml:42-49`) and HEAD's user agent (`updater.go:115`), and it runs R0's
+fake-server test through those options with only the base URL injected (OPS9-17). The real-RC check is
+deferred-build with signed manifests (5U.3).
 
-**State S8 adds.** S8 writes two things no earlier build writes: the core key `c/updater/seen` (5U.4
-Check), which no older build reads, and the durable clock of the `core.updater.check` kind, which
-`tasks.Stores.Clocks` holds (05-tasks 5T.3.8; on ABO books' legacy `ClockStore`, 05-tasks 5T.6.2). 09
-lists both among S8's state (OPS9-17).
+**State R2 adds.** R2's updater writes two things no earlier build writes: the core key `c/updater/seen` (5U.4
+Check) and the durable clock of the `core.updater.check` kind, which `tasks.Stores.Clocks` holds (05-tasks 5T.3.8).
+09 lists both among R2's state (OPS9-17).
 
 ## 5U.13 Open items
 
 1. (Moved to the deferred signed manifests: the signing scheme — plain ed25519 over the release
    manifest vs. minisign vs. Sigstore/cosign — is decided when that member is built.)
-2. (Closed, OPS2-11/R2-4/OPS3-7/OPS6-1: upgrade-path constraints are the new binary's own
-   `--print-upgrade-floor`, from the S0 hotfix on, checked against the store's recorded state, 5U.4
-   step 3. A binary reached without the updater still refuses the store at boot with `ErrUpgradeFloor`.)
+2. (Closed, OPS2-11/R2-4/OPS3-7/OPS6-1, revised by D10: an upgrade-path constraint is a boot refusal only. A
+   binary whose store it cannot serve exits 78 before any write, naming the release to install first; the
+   updater checks nothing before the swap.)
 3. Confirm the asset naming the reusable release workflow actually publishes (UNKNOWN in this repo).
 4. Windows support for the swap (a running `.exe` cannot be renamed over on some setups): not a
    current deployment target; the deferred exec-mode restart is Unix-only.
 5. (Closed: 06 `app.Options` has `Updater *updater.Options`.)
-6. (Closed by 05-storage v1.4 §5S.3.7: the applied-steps sidecar `<db>.storage-applied` the kernel binds
-   `StoreState` to, rewritten by every guard-aware boot, and the `--print-upgrade-floor` fast exit that
-   prints a build's declared upgrade floors as an `UpgradeRequirement` (OPS3-7, DATA3-10).)
+6. (Closed by D10: there is no applied-steps sidecar check and no `StoreState`; `--print-upgrade-floor`
+   stays as a fast exit of the binary (05-storage).)
 
 ## Out-of-scope defects found
 
@@ -712,3 +635,13 @@ Round 10:
 Round 11:
 
 - R11-5 (VER11 note) — 5U.12 "S8 done-check": S0's re-pointed updater tests keep their expectations, and their fake asset answers `--version-json`, the step-3 self-test being new in the moved pipeline.
+
+- D10–D12 revision (2026-11-04): the pre-swap store checks of a new binary deleted (level, format and floor
+  `ReaderCheck` of `<exe>.new`, `--print-upgrade-floor` against the applied-steps sidecar, `StoreState`,
+  `StoreApplied`, `UpgradeRequirement`, `Status.SteppingStone`, `stepping_stone_required`, their error rows,
+  outcomes and tests): an upgrade constraint is a boot refusal only (exit 78). `ReaderCheck` kept narrowed to
+  levels and the swap slot, used for the slot precondition and for the manual rollback, whose refusal across R2
+  names `make rollback-restore`. Database caveat rewritten (binary swap within R0/R1 and R3→R2; restore across
+  R2). `auto_update.*` renamed once by the R2 config cutover, no aliases; `/api/v1/update/*` deleted in R2.
+  Stage references re-keyed (S0 hotfix → R0, S8 move → R2, S2b swap → R1).
+

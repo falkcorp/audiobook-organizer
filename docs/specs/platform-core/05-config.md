@@ -1,21 +1,22 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.12.2 -->
+<!-- version: 1.13.0 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
 # 05 — Config and secrets (`core/config`, `core/secrets`)
 
-Evidence commit `748fd787a` (all `path:line` anchors). Raw inputs:
+Evidence commit `748fd787a` (all `path:line` anchors; `internal/config` and `cmd/root.go` are unchanged at HEAD of
+the plan worktree, so the anchors hold there too). Raw inputs:
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md) §2, §9;
 [`raw/10-auth-rbac.md`](../../plans/platform-core/raw/10-auth-rbac.md) §7, G12;
 [`raw/02-import-graph-hotspots.md`](../../plans/platform-core/raw/02-import-graph-hotspots.md) finding 3;
 [`raw/03-layering-guard.md`](../../plans/platform-core/raw/03-layering-guard.md) `allowed` rows 1–5;
 [`raw/15-dependencies.md`](../../plans/platform-core/raw/15-dependencies.md). Normative names come from
-[03-architecture](03-architecture.md) v1.14.0: R4 layers **L1** `storage` → **L2** `secrets` → **L3** `config`
-(`metrics` and `log` are L0; `compat` and `integrations` are L4, above config); R5 (no globals) binds **core**
-only; §3.6 `core.*` / `modules.<id>.*`. The compatibility window is defined **once**, in
-[09-abo-on-core](09-abo-on-core.md) §9.2.1, and implemented once in `compat`; config aliases reference it and
-carry no window logic of their own.
+[03-architecture](03-architecture.md): R4 layers **L1** `storage` → **L2** `secrets` → **L3** `config`
+(`metrics` and `log` are L0; `integrations` is L4, above config); R5 (no globals) binds **core**
+only; §3.6 `core.*` / `modules.<id>.*`. ABO's settings blob, its plaintext and encrypted secrets and its gap-fill
+file move into core's native keyspaces and the keyring **once**, in the R2 cutover step M2 (§1.12.2). HEAD's env and
+file names are retired in the same release (§1.3.6, §1.12.4): there is no alias, no window and no legacy store.
 
 ## Decisions at a glance
 
@@ -23,19 +24,19 @@ carry no window logic of their own.
 |---|---|---|
 | C1 | One `config.Store` per `App`; no package-level config value anywhere in **core** (R5). ABO keeps `config.AppConfig` as a books-module façade over core handles (§1.12.1). | `var AppConfig Config` (`internal/config/config.go:1939`) cannot host two apps and is read racily by design (`config.go:1930-1938`). R5 governs core only (03 §3.5), so ABO's façade is allowed. |
 | C2 | **Config owns the mechanism, never a section's type.** Each section struct lives in the package that consumes it and is registered through the manifest as `config.Section[T]`. | This is what breaks all upward imports (§1.9): config imports `aidispatch`, `dedup/unified`, `backup`, `auth`, `database` today only because it owns their types. |
-| C3 | Merge order defaults → file → env → flags → DB overrides, with **operator lock**: a key supplied by file, env or flag cannot be overridden from the DB layer and `Apply` refuses it with the lock reason. **One exception, HEAD precedence for legacy names (R5-1(a)):** a legacy env name or legacy file key whose value HEAD lays the stored blob over (`Alias.BelowStored`, generated from HEAD's lists, §1.3.5) feeds the **default** layer, below the DB layer, and locks nothing. The auth-precedence cutover H3 (§1.12.5) changes only an *enabling* `enable_auth` value; every other `BelowStored` name keeps HEAD's precedence until a separate, owner-decided cutover, and a name a shipped deploy file sets unconditionally (compose's `BASIC_AUTH_*`) never locks (SEC9-2); canonical `<APP>_*` names always lock. The auth switch is no exception: a stored `enable_auth` beats `ENABLE_AUTH` in both directions, as at HEAD (A-2). A stored value beats a `BelowStored` value even when it equals the default (SEC7-2). Legacy names decode with HEAD's per-type semantics and canonical names strictly (§1.3.6, A-7). An env variable set to `""` is unset (HEAD parity). | Generalizes ABO's per-key `envLockedSettings`/`flagLockedSettings` (`config.go:2241,2353`) to every key; today a DB blob silently beats env for all other keys (`persistence.go:915` then `config.go:2435`). Keeping that for legacy names means a shipped compose file that always sets `BASIC_AUTH_ENABLED=false` (`docker-compose.yml:20`) cannot switch off a gate turned on in the UI (OPS5-1), and every older build reads the same effective auth switch after a rollback (A-2). |
-| C4 | **The DB layer is a store interface, `config.OverrideStore` (R4-1).** Core ships the **native** store over its own keyspace `c/config/` (one row per explicitly set key), which `hello` and every app without legacy settings use. An app with legacy settings supplies its **own** implementation through its module's `Manifest.LegacyStores.Config` (§1.3.3; 06), written in the app's code over the app's keys and row formats; for ABO that is the books legacy config store, which reads and writes keys that have a legacy blob name **in place** in ABO's settings blob, in the legacy JSON shape, and only those. **One storage rule (A-2, R9-5):** a key that has a legacy blob field (`Alias.LegacyBlob`) is stored only in HEAD's legacy row and format; a key HEAD never stores (`Alias.FileOnly()`: HEAD's `json:"-"` fields, the peer allow-list among them) keeps HEAD's storage, the operator file and env only, and is never stored while the app's legacy config store is attached; a key with no legacy name is stored natively in core's `c/config/` keyspace, which older builds never read, so it costs nothing on a rollback (the kernel routes each key, §1.3.3; §1.12.2). Core holds no app key name or row format and no storage grant for config. Nothing is copied, mirrored or adopted, and no level step exists for config. **Cutover** to the native store is deferred and out of the extraction (§1.12.2). | Core-resident legacy adapters put ABO's on-disk formats into `mediacore` (SIMP4-2, against 03 R1); one interface with an app-supplied implementation keeps them in the app. One stored format per family (R3-1) still holds: every round's dual-format fix produced new cross-stage defects. A stored value equal to the shipped default reads as default while no operator or `BelowStored` value is set for the key, so the blob's frozen defaults (`persistence.go:1180-1188` measured 33 keys inheriting stale defaults) stop pinning future defaults; against a `BelowStored` value it is still the stored value, as at HEAD (SEC7-2). |
+| C3 | Merge order defaults → file → env → flags → DB overrides, with **operator lock**: a key supplied by file, env or flag cannot be overridden from the DB layer and `Apply` refuses it with the lock reason. **One fail-closed exception (§1.3.5):** for a key its owner declares `FailClosed` (`core.auth.mode`, `core.http.basic_gate.enabled`) the more restrictive of the operator value and the stored value wins, and a stored value that beats a weaker operator value is reported. Only canonical names and ecosystem bindings are read, and values decode strictly. An env variable set to `""` is unset. | Generalizes ABO's per-key `envLockedSettings`/`flagLockedSettings` (`config.go:2241,2353`) to every key; today a DB blob silently beats env for all other keys (`persistence.go:915` then `config.go:2435`). Operator values now lock, so a stale disabling value in a unit, or a deploy file that always sets the Basic gate's switch off (`docker-compose.yml:20`), must not open what an admin closed (E5). |
+| C4 | **The DB layer is a store interface, `config.OverrideStore` (R4-1), with one implementation:** core's native store over its keyspace `c/config/` (one row per explicitly set key), used by every app. ABO's settings are migrated into it once, through `config.Importer` (§1.12.2). No app supplies a store, and core holds no app key name, row format or storage grant. A value equal to the key's default is never stored. | One stored format per family, written by one owner (R3-1). HEAD's whole-config blob froze every default at save time (`persistence.go:1180-1188` measured 33 keys inheriting stale defaults). |
 | C5 | Every key declares `Reload` (live / restart / boot) and `Protection` (none / interactive / admin / owner / operator); both appear in the generated JSON Schema. | ABO has exactly one boot-only key handled ad hoc (`persistence.go:2111`) and a 92-entry protection map (`protected_fields.go`) separate from the schema. Roles-as-data can hand `core:settings.manage` to non-admins, so sign-in, proxy and updater keys need an admin level (§1.3.7). |
-| C6 | Drop **viper** from core and, by the end of migration, from ABO. Stdlib + `go.yaml.in/yaml/v3` + `github.com/google/jsonschema-go` only. | §1.10. |
-| C7 | Env names are `<APP>_<PATH>`; no `MEDIACORE_` prefix. ABO's existing names are aliases; each alias names its 09 §9.2.9 ledger row, which alone says whether it is a window, permanent or retired name. **Permanent** rows: ecosystem names (`OTEL_*`, `OPENAI_*`) and every name ABO reads today that a shipped deploy file sets (e.g. `DATABASE_PATH`). | §1.3.6, §1.12.4. Dropping `DATABASE_PATH` after the window would open a new, empty database (OPS-5). |
-| C8 | Every recoverable secret a core build writes **as native data** is encrypted at rest by `core/secrets` with **one keyring design**; a secret HEAD already stores keeps HEAD's representation until the secrets cutover (the four HEAD encrypts in their legacy rows in ABO's cipher, the plaintext ones in their blob fields: C16, A-2) (AES-256-GCM, key IDs in every record, AAD = app + name, a separate derivation key); config fields are `secrets.Ref`, never strings. The keyring is the install's **only** key artifact: backup's archive identity is derived from it, so one export recovers both (§2.4). Data-key rotation and prune tooling are **deferred**; the format already carries key IDs so it never changes. The derive key has an offline rotation command in v1 (§2.3). Verifiers (passwords, API keys, session ids) are hashed by `auth`, never stored in `secrets`. | `raw/10` G12: 4 of at least 10 secret-bearing fields are encrypted, and 3 of those 4 are also written in plaintext to a mirror YAML file (`persistence.go:168-178`). Rotation does not exist today (`raw/10` §7). A second key file would need a second export (SIMP2-2). |
+| C6 | Drop **viper** from core and, in R2, from ABO's boot path. Stdlib + `go.yaml.in/yaml/v3` + `github.com/google/jsonschema-go` only. | §1.10. |
+| C7 | Env names are `<APP>_<PATH>`; no `MEDIACORE_` prefix. The only other names are **ecosystem bindings** an owner declares (`OTEL_*`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`). Every other env name and flat file key HEAD reads is **retired** in R2: a retired name of a key at `ProtectAdmin` or higher, or of a secret key, **refuses boot** naming its canonical name; any other retired name is ignored with a warning (§1.3.6). ABO's deploy files switch to canonical names in the same release (§1.12.4). | An ignored `DATABASE_PATH` would open a new, empty store at the default path (OPS-5, 14 K15); an ignored `ABS_JWT_SECRET` stops absauth (`internal/server/absauth/config.go:20-22`). |
+| C8 | Every recoverable secret is encrypted at rest by `core/secrets` with **one keyring design** (AES-256-GCM, key IDs in every record, AAD = app + name, a separate derivation key); config fields are `secrets.Ref`, never strings. The keyring is the install's **only** key artifact: backup's archive identity is derived from it, so one export recovers both (§2.4). Data-key rotation and prune tooling are **deferred**; the format already carries key IDs so it never changes. The derive key has an offline rotation command in v1 (§2.3). Verifiers (passwords, API keys, session ids) are hashed by `auth`, never stored in `secrets`. | `raw/10` G12: 4 of at least 10 secret-bearing fields are encrypted, and 3 of those 4 are also written in plaintext to a mirror YAML file (`persistence.go:168-178`). Rotation does not exist today (`raw/10` §7). A second key file would need a second export (SIMP2-2). |
 | C9 | Secrets are **write-only** over the API: the UI receives `{set, source, updated_at, fingerprint}`, never a mask. | Masks reveal the last 2 characters (`internal/database/settings.go:250-277`) and force echo-detection logic (`update_service.go:353-373`). |
 | C10 | **One JSON-Schema reflector**: `github.com/google/jsonschema-go`, held at v0.4.3 (Dependabot `ignore` entry plus `check_module_skew.py --pin`, 13), wrapped by the L0 leaf `core/internal/jsonschemax`, which owns the tag pass and an extensible override table. Each package contributes the entries for its own types: config adds `config.Duration` and `secrets.Ref`; [05-http-api](05-http-api.md) adds `rbac.Permission` for OpenAPI. | §1.10.2; verified 2026-11-04. A config-owned table could not name an L4 type (SIMP2-3). |
-| C11 | **Config holds no integration instances.** Instance records (kind, instance, settings, `secrets.Ref`s) live in the `integrations` registry ([05-metadata](05-metadata.md) M1; native instances in `c/integrations/instances/`); ABO's legacy singletons that today live in the blob stay there until cutover, and integrations reaches their blob fields through its own legacy instance store, which books implements beside its config store and which shares that store's blob render (§1.6, §1.12.2), never through config keys. Config only reads the operator-layer values (file, env, flag) of the legacy integration-bound keys raw, at their `integrations.<kind>.<instance>.<field>` paths, and hands them over (§1.3.3 `Passthrough`). integrations applies them as an **in-memory overlay** on the instance's stored row, never persisted (05-metadata M1.4), under **one precedence rule (SEC6-5)**. A value given under a `BelowStored` legacy name fills only a field with **no stored value** and locks nothing, as at HEAD; every integration-bound name HEAD lays the blob over is `BelowStored`, `OPENAI_BASE_URL` among them (§1.12.4). Only a value under a canonical spelling overlays a stored field and locks it. Private-network trust attaches only when the **effective** field's `Source` is an operator layer, never merely because an operator value exists for the path (`OperatorValue.BelowStored`, §1.3.3). Removing the operator value reverts to the stored row, as HEAD does (`persistence.go:1959-1971`). There is no `core.integrations.<kind>.instances.<id>` config form. Every integration secret HEAD stores (the OpenAI, Google Books and Hardcover keys in their encrypted rows, the plaintext ones in their blob fields) stays where HEAD keeps it during the extraction, whichever route writes it (C16, A-2). | One store for one fact (SIMP-4): the Deluge password had four destinations across the specs. One lock model, config's operator-layer lock, for config keys and instance fields alike (SIMP2-5). |
-| C12 | This file owns `config.OverrideStore`, the native store, the **contract** the books legacy config store must meet (§1.12.2, tested by `configtest.OverrideStoreSuite`), the secrets legacy-copy rule (C16) and the deferred cutover; 09 S2–S3 sequence them and reference them. | Specified twice with contradictory semantics before (SIMP-15, OPS-9). |
-| C13 | Config and secrets write nothing to the store at boot except `c/secrets/meta` on a new store, and that only after the boot's pre-migration checkpoint and the storage DAG; attaching the DB layer is read-only. One boot write is not config's: the factory defaults a factory reset's fresh install starts with, which storage's fresh-install batch writes from the reset intent (§1.12.2, SEC8-5). Its boot step is placed by the one boot-phase table, [06](06-app-sdk.md) §6.5.1 (R2-8). | A write before the checkpoint puts post-upgrade rows into the restore point (COR2-7). |
-| C16 | **Secrets HEAD stores keep HEAD's representation (A-2).** Every secret with a legacy copy is read and written **in place** by the books store, in HEAD's form, until the secrets cutover (§1.12.5): the four HEAD encrypts (OpenAI key, Google Books key, Hardcover token, Basic password, `persistence.go:1955-1958,1989-2006`) in their encrypted rows in ABO's cipher, with HEAD's gap-fill file copies of three of them; the plaintext ones in their blob fields. `secrets` encrypts only native data: secrets with no legacy name (new names) in `c/secrets/`. HEAD's file-only secrets (§2.2 "—" rows) keep HEAD's storage, operator layers only, never stored (R9-5). There is no sentinel and no re-import. | Every build reads the current value of every secret, so a rollback strands, opens or resurrects nothing: HEAD's Basic gate compares the presented password with the stored one (`internal/server/middleware/basicauth.go:81-87`), so a password an older build could not read would lock it out or open it (SEC4-1, DATA4-1, OPS4-1, OPS5-2). Encrypting the plaintext ones is a one-way, floored cutover (N15), not a step of the extraction. |
-| C17 | **ABO's settings load, encryption init and key-regeneration guard run inside the books legacy config store (R4-6)**, in its `Open` (the optional capability `legacy.ConfigOpener`, §1.3.3; R6-3), which the kernel calls over books' own handles at 06 P4d step 1 from S2b, before any module code runs and before `secrets.Open` (COR5-2): never a second Pebble open, never defaults written over the stored blob (§1.12.2). | From S2b `serve` no longer opens the store, so HEAD's pre-server steps had no home (COR4-1); running them in ABO's code over ABO's keys keeps them out of core (R4-1). |
+| C11 | **Config holds no integration instances.** Instance records (kind, instance, settings, `secrets.Ref`s) live in the `integrations` registry ([05-metadata](05-metadata.md) M1; `c/integrations/instances/`); ABO's blob singletons become native instances in the R2 integrations step M6, and M2 leaves their non-secret blob fields in place for it (§1.12.2). Config only reads the operator-layer values (file, env, ecosystem bindings) at their `integrations.<kind>.<instance>.<field>` paths raw and hands them over (§1.3.3 `Passthrough`); integrations applies them as an **in-memory overlay** on the instance's stored row under config's one lock rule: an operator value overlays its field and locks it. Private-network trust attaches only when the **effective** field's `Source` is an operator layer. Removing the operator value reverts to the stored row (`persistence.go:1959-1971`). There is no `core.integrations.<kind>.instances.<id>` config form. | One store for one fact (SIMP-4): the Deluge password had four destinations across the specs. One lock model, config's operator-layer lock, for config keys and instance fields alike (SIMP2-5). |
+| C12 | This file owns `config.OverrideStore`, the native store, `config.Importer`, the key grammar and ABO's rename table (§1.12.3), the retired-name rule (§1.3.6) and the config-and-secrets cutover step M2 (§1.12.2); 09's R2 tables sequence them and reference them. | Specified twice with contradictory semantics before (SIMP-15, OPS-9). |
+| C13 | Config and secrets write nothing to the store before the boot's pre-migration checkpoint. After it, `secrets.Open` writes `c/secrets/meta` on a new store, and M2 writes `c/config/` and `c/secrets/` through the importers inside the migration list; attaching the DB layer is read-only. Their boot steps are placed by the one boot-phase table, [06](06-app-sdk.md) §6.5.1 (R2-8). | A write before the checkpoint puts post-upgrade rows into the restore point (COR2-7). |
+| C16 | **HEAD's secrets migrate once.** M2 re-encrypts the four rows HEAD encrypts (OpenAI key, Google Books key, Hardcover token, Basic password, `persistence.go:1955-1958,1989-2006`) and every plaintext blob secret into `c/secrets/` under their canonical names, deletes the rows and blanks the blob fields in the same batch, and strips HEAD's three plaintext copies from the gap-fill file (§1.12.2). HEAD's file-only secrets (§2.2 "—" rows) were never stored, so nothing of them migrates; their retired env names refuse boot. An undecryptable row is quarantined and its name reads "must be re-entered". | No older build opens a migrated store (05-storage's level step M7), so keeping HEAD's representation buys nothing, and the plaintext copies were defects (`raw/10` G12; out-of-scope defect 2). |
+| C17 | **No app boot step runs inside config.** HEAD's settings load, encryption init and key-regeneration guard (`cmd/root.go:345-369`) are replaced: the load by core `Load` and `Attach`, the init and the guard by M2, which is the only reader of HEAD's key file and refuses, as HEAD does, to run when encrypted rows exist and the key file does not (§1.12.2). | HEAD's pre-server steps exist to read HEAD's rows; after M2 there are none. |
 | C15 | **The state directory keeps HEAD's fallback (R3-4).** Explicit env or flag; else the compiled default when it can be created; else the database's directory, with a warning. An explicit value never falls back (§1.7). | Docker and launchd installs keep `.encryption_key` beside the database today because the compiled default is not creatable there (`internal/config/state_dir.go:118-155`); without the fallback they fail to boot or put the keyring in the container layer (OPS3-1). |
 | C14 | **One schedule-key rule (R2-7).** A schedule key is `<owner>.<subsystem>.schedules.<name>` (`core.<subsystem>.schedules.<name>` or `modules.<id>.<subsystem>.schedules.<name>`), a field of type `tasks.ScheduleConfig` declared by its owner with a default and bound with `tasks.ScheduleFromConfig(key)` (§1.6). | Eight files declared keys under a form 05-tasks refused (SIMP2-1). |
 
@@ -50,8 +51,8 @@ UI-made changes, tells subscribers what changed, and describes every key (type, 
 protection, secret-ness, lock state) for the settings UI. It does not parse command lines, does not
 open storage, and does not know any section's fields. Out of scope: secrets storage (Part 2), integration
 instance records ([05-metadata](05-metadata.md) M1), the HTTP routes (specified as semantics in §1.3.4,
-mounted by [05-http-api](05-http-api.md)), the permission check itself ([05-rbac](05-rbac.md)), the
-compatibility ledger and its counter ([09](09-abo-on-core.md) §9.2.9, package `compat`).
+mounted by [05-http-api](05-http-api.md)), the permission check itself ([05-rbac](05-rbac.md)), and ABO's own
+migration code (the cutover step M2 is books code; this file fixes its contract, §1.12.2).
 
 ### 1.2 Current state at HEAD
 
@@ -80,8 +81,8 @@ compatibility ledger and its counter ([09](09-abo-on-core.md) §9.2.9, package `
 Package `github.com/falkcorp/mediacore/config` (L3). Imports: stdlib, `go.yaml.in/yaml/v3`,
 `github.com/google/jsonschema-go/jsonschema`, `core/internal/jsonschemax` (L0 leaf: the shared reflector
 wrapper, §1.10.2), `github.com/falkcorp/mediacore/secrets` (L2; `secrets.Ref` and `secrets.Resolver` only), `github.com/falkcorp/mediacore/storage` (L1; only for `*storage.Batch` in
-`OverrideStore.Stage`; config opens nothing and runs no storage call itself) and `github.com/falkcorp/mediacore/metrics` (L0; its own
-`*metrics.Scope`). It does **not** import `log`, `auth`, `rbac`, `audit`, `tasks`, `compat`, `integrations` or any
+`OverrideStore.Stage` and `Importer.Stage`; config opens nothing and runs no storage call itself) and `github.com/falkcorp/mediacore/metrics` (L0; its own
+`*metrics.Scope`). It does **not** import `log`, `auth`, `rbac`, `audit`, `tasks`, `integrations` or any
 module (§1.9).
 
 #### 1.3.1 Declaring a section (module side)
@@ -89,7 +90,7 @@ module (§1.9).
 ```go
 package config
 
-// Path is a dotted key path: "core.log.level", "modules.books.scan.interval".
+// Path is a dotted key path: "core.log.level", "modules.books.scan.on_startup".
 // Grammar: seg = [a-z][a-z0-9_]{0,47}; path = seg ("." seg)*; first seg is "core" or "modules".
 // The keys of a map-typed value are data, not path segments: they follow the map's own key type (a task
 // kind such as "books.dedup.full-scan" inside a map key "core.tasks.kinds"), and env, file and patches set
@@ -155,83 +156,19 @@ type SectionOption func(*sectionSpec)
 
 func Permissions(read, write string) SectionOption               // rbac strings; default derived from path (§1.3.4)
 func Docs(d map[Path]string) SectionOption                       // key -> description for schema/UI
-func Aliases(a ...Alias) SectionOption                           // legacy names (§1.3.6); registered with compat by the kernel
-func Deprecated(p Path, replacement Path) SectionOption          // schema deprecated:true; removal is a contract PR (09 §9.2.9)
 func ProtectionWaivers(w map[Path]string) SectionOption          // key -> reason it needs no class despite its shape (§1.3.7)
 
-// Alias is one legacy spelling of a canonical key. 09 §9.2.5 refers to this type. It carries nothing
-// about its lifetime: window, permanent or retired, and every date, come from its ledger row (SIMP2-12).
-// Aliases of a module's own keys are passed with config.Aliases; aliases that give an app's legacy names
-// to core keys come from the app (Legacy.Aliases, §1.3.3), because core holds no app's key names (R1).
-// Convert and Revert are also what an app's legacy config store uses to map its stored fields onto canonical
-// paths and back (§1.12.2), so there is one alias table.
-type Alias struct {
-	// LegacyYAML is the flat key in the operator YAML file (an operator surface, governed by the ledger row like the
-	// env names), e.g. "root_dir"; "" if HEAD reads the key from env only. LegacyBlob is the field in the app's stored
-	// settings (ABO: config_blob), e.g. "root_dir" (the storage format, kept until the family's cutover whatever the
-	// row's state); "" when HEAD never stores the key. They are two fields because they differ: HEAD's json:"-"
-	// keys have a YAML key and no blob field (internal/config/config.go:1636-1759 @748fd787a; DATA9-6, R9-5).
-	// Routing follows LegacyBlob only (§1.3.3).
-	LegacyYAML string
-	LegacyBlob string
-	LegacyEnv  []string             // env names read today (AutomaticEnv upper-case key + BindEnv names)
-	Canonical  Path
-	Convert    func(json.RawMessage) (json.RawMessage, error) // optional legacy → canonical unit/shape change
-	Revert     func(json.RawMessage) (json.RawMessage, error) // canonical → legacy; required when Convert is set and
-	                                                          // LegacyBlob is non-empty (the legacy config store writes it, §1.12.2)
-	// HEADAuthOffWritable keeps HEAD's auth-off write rule for this key (§1.3.7; SEC9-1, SEC9-13): with auth off the
-	// auth-disabled principal may store it after the owner-trust-root check, as HEAD's !prior.EnableAuth allows
-	// (update_service.go:770-786 @748fd787a). ABO generates it for enable_auth, the three basic_auth_* keys and every
-	// integration-bound blob field of §1.12.3 (the rows marked integrations: AI endpoint rows and the openai_* pair,
-	// metadata sources, webhooks, Deluge and download_client, list rows and singletons alike; all FieldUnprotected
-	// at HEAD, protected_fields.go:137-165; R10-10, SEC10-3).
-	// One predicate decides it (SEC10-5): it is honoured while the app supplies a legacy config store AND the key's
-	// value lives in a legacy row, either its LegacyBlob field (for an integration-bound field, through the legacy
-	// instance store that shares the blob, 05-metadata M1.4 step 2a) or a legacy.SecretsStore row (the encrypted
-	// basic_auth_password and the three kept integration keys). A native app, which has no legacy store, never
-	// inherits it. The keys of one group lose it together, at the earlier of the secrets cutover H2 (which moves the
-	// group's secrets into c/secrets/) and the group's own cutover: the three Basic gate keys at the settings cutover,
-	// which precedes or ships with H3; an integration instance's fields at its family's integrations cutover
-	// (05-metadata M1.10); one release note per group. H3 clears it on enable_auth only (§1.12.5, R9-5, SEC10-6).
-	HEADAuthOffWritable bool
-	Ledger     string              // ledger row ID: the app's ledger (app.Options.CompatLedger) or core's own fragment
-	                               // (09 §9.2.9, SIMP3-3); TestCompatLedgerMatchesCode joins them from S2b, when
-	                               // the ledger lands (COR4-20)
-	// BelowStored keeps HEAD's precedence for this alias's operator spellings (R5-1(a), §1.3.5; OPS5-1 called it
-	// EnvIsDefault): a value given under LegacyEnv or the LegacyYAML file key feeds the default layer, below the DB
-	// layer, and locks nothing. The app generates it from its own lists of the keys it re-applies over its stored
-	// settings; it is ignored for a ProtectOperator key (no DB layer, FileOnly keys included). It has no exemption:
-	// the auth switch keeps it too (A-2). The auth-precedence cutover H3 lifts it only for an enabling enable_auth
-	// value; every other flag stays until a separate, owner-decided cutover (§1.12.5, R9-5).
-	BelowStored bool
-	// Decode is the HEAD type a value given under LegacyEnv or the LegacyYAML file key is decoded as, before Convert
-	// (A-7, §1.3.6). The app generates it from the getter HEAD's loader uses for that key (ABO: configFromViper's
-	// viper.Get<Type> call); zero means the canonical key's own type, decoded as HEAD's cast rules decode it.
-	Decode LegacyDecode
-}
+// EnvBinding gives key p one more env name, for an ecosystem name only (OTEL_EXPORTER_OTLP_ENDPOINT and its
+// siblings, 05-metrics §10). The canonical name keeps working; the two in one layer follow §1.3.5's conflict
+// rule. A name bound twice, or equal to any key's canonical name, fails Register with ErrDuplicate.
+func EnvBinding(p Path, name string) SectionOption
 
-// FileOnly reports a key HEAD never stores: an alias with a LegacyYAML key and no LegacyBlob field (ABO: a json:"-"
-// field, never in GET /config or the blob, internal/config/config.go:1668-1670; the env-only refusal,
-// update_service.go:632-635,720-726 @748fd787a). It is derived, not declared, so it cannot drift from the two names.
-// While a built legacy config store is attached, config treats such a key as ProtectOperator whatever its declared
-// class: no DB-layer value is read or staged for it and Apply refuses it, so it keeps HEAD's storage, the operator
-// file and env only, and a rollback loses no stored value (R9-5, DATA9-6; §1.3.7;
-// TestFileOnlyLegacyKeysNeverDBStored). A native app has no legacy store, so its declared class applies; the
-// family's settings cutover ends the rule.
-func (a Alias) FileOnly() bool // a.LegacyYAML != "" && a.LegacyBlob == ""
-
-// LegacyDecode names one of HEAD's per-type decoders for legacy spellings (A-7, §1.3.6). Canonical names never use it.
-type LegacyDecode uint8
-
-const (
-	DecodeCanonical   LegacyDecode = iota // the canonical key's type, with the rule of that type below
-	DecodeBool                            // strconv.ParseBool spellings; any other spelling is HEAD's silent false
-	DecodeInt                             // cast's integer rule: strconv.ParseInt(s, 0, 0) after trimming a decimal part; an error is 0
-	DecodeFloat                           // strconv.ParseFloat; an error is 0
-	DecodeDuration                        // a Go duration; a bare number is nanoseconds (cast appends "ns"); an error is 0
-	DecodeStringSlice                     // a string split on whitespace (strings.Fields)
-	DecodeString                          // the raw string
-)
+// FailClosed marks a bool or enum key whose more restrictive value wins between the operator layers and the DB
+// layer (§1.3.5). order lists every allowed value as JSON, most restrictive first; Register fails with ErrInvalid
+// when the key is not a bool or enum, when a value is missing from order, or for a secret key. 05-authn declares it
+// for core.auth.mode (["\"required\"","\"disabled\""]) and 05-http-api for core.http.basic_gate.enabled
+// (["true","false"]).
+func FailClosed(p Path, order ...json.RawMessage) SectionOption
 
 // Schema is a JSON Schema 2020-12 document plus mediacore vendor keywords, produced by the
 // shared reflector (§1.10.2). integrations descriptors use it for instance settings (05-metadata M1).
@@ -247,6 +184,10 @@ func (s Schema) JSON() json.RawMessage
 func (s Schema) Validate(v json.RawMessage) error                // errors.Join of *FieldError
 ```
 
+There is no alias type and no deprecation option. A key is renamed in the PR that renames it, together with every
+caller, deploy file and dashboard (D10); a stored value under the old path is moved by a migration step of the
+key's owner, exactly as M2 moves ABO's (§1.12.2), and the old path is unknown from then on.
+
 Field metadata is struct tags on `T` (reflected once at `Register`):
 
 | Tag | Meaning | Example |
@@ -258,24 +199,25 @@ Field metadata is struct tags on `T` (reflected once at `Register`):
 | `sensitive:"true"` | not a secret, but redacted in diagnostics bundles and logs (emails, allow-lists) | owner e-mail |
 | field type `secrets.Ref` | secret; schema `writeOnly: true`; value lives in `secrets` (Part 2); never `reload:"boot"` (the boot record holds no secret; `Register` refuses the combination) | `APIKey secrets.Ref \`json:"api_key"\`` |
 
-Example (books module, ABO repo):
+Example (books module, ABO repo; the paths are the rename table's, §1.12.3):
 
 ```go
 type ScanSettings struct {
-	Interval    config.Duration `json:"interval" schema:"format=duration"`
-	Concurrency int             `json:"concurrency" schema:"minimum=1,maximum=64"`
-	OnStartup   bool            `json:"on_startup"`
-	SortIndexes []string        `json:"sort_indexes" reload:"restart"`
-	AcoustIDKey secrets.Ref     `json:"acoustid_api_key" protect:"interactive"`
+	OnStartup        bool     `json:"on_startup"`
+	ConcurrentScans  int      `json:"concurrent_scans" schema:"minimum=1,maximum=64"`
+	ProgressEvery    int      `json:"progress_every" schema:"minimum=1"`
+	ExcludePatterns  []string `json:"exclude_patterns"`
 }
 
 func (s ScanSettings) Validate() error { /* cross-field checks */ return nil }
 
-var Scan = config.Define("modules.books.scan", ScanSettings{Interval: config.Duration(6 * time.Hour), Concurrency: 2},
-	config.Aliases(config.Alias{
-		LegacyYAML: "concurrent_scans", LegacyBlob: "concurrent_scans", LegacyEnv: []string{"CONCURRENT_SCANS"},
-		Canonical: "modules.books.scan.concurrency", Ledger: "config/concurrent_scans",
-	}))
+var Scan = config.Define("modules.books.scan", ScanSettings{ /* HEAD's defaults, registerConfigDefaults */ })
+
+type AcoustIDSettings struct {
+	APIKey secrets.Ref `json:"api_key" protect:"interactive"`
+}
+
+var AcoustID = config.Define("modules.books.acoustid", AcoustIDSettings{})
 ```
 
 #### 1.3.2 Binding and reading (module side)
@@ -326,66 +268,79 @@ type Options struct {
 	// compiled default, HEAD's fallback; never the file or the record it locates, §1.7); the kernel opens
 	// and returns the os.Root that holds config.boot.json (§1.3.5).
 	BootRecordRoot func(stateDir string) (*os.Root, error)
-	Passthrough func(Path) bool   // operator-layer paths config reads raw and does not own (v1: the legacy
-	                              // integration-bound keys of §1.12.3, at the integrations.<kind>.<instance>.<field>
-	                              // paths of 05-metadata M1.10's import table; their env aliases, e.g. OPENAI_*, are permanent)
-	// Retired reports whether an alias's ledger row is in state Retired (09 §9.2.9). The kernel wires it
-	// to compat; nil means no alias is retired. It is config's only lifetime input (§1.3.6).
-	Retired     func(ledger string) bool
-	// OnLegacyUse reports one use of an alias. The kernel buffers reports made before compat is built and hands
-	// them over once it is (06 §6.5.1); compat counts them in its process-local counter and warns once for a
-	// window row. Nothing is persisted (A-14; §1.3.6, OPS2-7).
-	OnLegacyUse func(a Alias, s Surface)
-	// Legacy is the app's legacy names of core keys (app.Options.LegacyConfig; nil for an app without one),
-	// registered with the core sections they name. Needed at P0, before any manifest is read (06 P1).
-	Legacy      *Legacy
+	// Passthrough reports the operator-layer paths config reads raw and does not own: the
+	// integrations.<kind>.<instance>.<field> paths of 05-metadata M1 (C11).
+	Passthrough func(Path) bool
+	// EnvBindings are the app's ecosystem env names for passthrough paths (ABO: OPENAI_API_KEY and
+	// OPENAI_BASE_URL onto integrations.ai.openai.{api_key, base_url}), from app.Options.ConfigEnvBindings. Core
+	// and module keys declare theirs with EnvBinding (§1.3.1).
+	EnvBindings []EnvName
+	// Retired is the app's list of retired env names and file keys (ABO: generated from its rename table,
+	// §1.12.3), from app.Options.RetiredConfigNames; core holds no app name (03 R1). Boot and Load act on it
+	// (§1.3.6).
+	Retired     []RetiredName
 	Logger      *slog.Logger
 	Metrics     *metrics.Scope    // core scope "mediacore.config" (05-metrics)
 	Secrets     secrets.Resolver  // may be nil until secrets opens; Refs resolve after SetSecrets
 	Now         func() time.Time
 }
 
+type EnvName struct {
+	Name string
+	Path Path
+}
+
+// RetiredName is one env name or top-level operator-file key an app read before core (§1.3.6).
+type RetiredName struct {
+	Name      string // the env name, or the flat top-level file key (its nested keys included)
+	File      bool   // true: an operator-file key; false: an env name
+	Canonical Path   // the key it became; "" when the key was dropped (its use only warns)
+	// Refuse is read only when Canonical is a passthrough path: config cannot see an instance field's class, so
+	// the app states it (ABO's generator sets it for secret and destination fields, 05-metadata M1.3).
+	Refuse    bool
+	Message   string // optional reason (ABO: HEAD's removed-key messages, internal/config/removed_keys.go)
+}
+
 func NewStore(o Options) (*Store, error)
 
 // ResolveStateDir is the one pre-boot rule for core.paths.state_dir (§1.7, C15, OPS3-1). The kernel runs it
-// once per process, before 06 P0a, and hands the result to P0a, Boot and every consumer (and, once the deferred
-// P−1 is built, to P−1 first; A-6, COR9-7), so all agree
+// once per process, before 06 P0a, and hands the result to P0a, Boot and every consumer, so all agree
 // (HEAD memoises for the same reason, internal/config/state_dir.go:57-79). explicit is the env or flag value
 // ("" if unset); def is app.Options.StateDir; dbPath is core.storage.path from the pre-boot layers (compiled
 // default, the operator file Options.FilePath, env, flags, as HEAD's fallback reads AppConfig.DatabasePath with
-// its YAML file, OPS5-13; registered as a kernel pre-boot key from S2, §1.7); mkdir is the kernel's
-// MkdirAll(dir, 0o700). It is a pure function of those inputs, so an app that must know the directory before
-// app.New (ABO's serve at S2, §1.7) calls it with the same inputs and gets the same answer.
+// its YAML file, OPS5-13); mkdir is the kernel's MkdirAll(dir, 0o700). It is a pure function of those inputs.
 func ResolveStateDir(explicit, def, dbPath string, mkdir func(string) error) (dir string, fellBack bool, err error)
 
 func (s *Store) Registry() Registry
 func (s *Store) Boot(ctx context.Context) (BootView, error)              // core sections only; operator layers + boot record
 func (s *Store) Load(ctx context.Context) error                          // seals Registry; defaults+file+env+flags+boot record
+func (s *Store) Importer() Importer                                      // for the app's cutover steps (§1.12.2); after Load
 func (s *Store) SetSecrets(r secrets.Resolver)
 func (s *Store) Attach(ctx context.Context, o OverrideStore, c Committer) (AttachReport, error) // read-only; once per boot
 func (s *Store) Apply(ctx context.Context, p Patch, a Actor) (Result, error)
 func (s *Store) Lookup(p Path) (KeyState, bool)
 func (s *Store) Keys() iter.Seq2[Path, KeyState]                         // sorted; secret values never included
-func (s *Store) Aliases() iter.Seq[Alias]                                // for compat ledger registration (09 §9.2.9)
+func (s *Store) RetiredSet() []RetiredUse                                // retired names set at this boot (config check, §1.3.6)
 func (s *Store) PassthroughValues() iter.Seq2[Path, OperatorValue]       // raw; handed to integrations by the kernel
 func (s *Store) Schema(include func(section Path) bool) (json.RawMessage, error)
 func (s *Store) Generation() uint64
 func (s *Store) Close(ctx context.Context) error
 
-// ConfigFileHasSecrets reports whether the operator file supplies a value for any secret key (a
-// secrets.Ref field, or a legacy file key aliased to one) or for any Passthrough path (integration-bound
-// values may be credentials, so they count). 05-backup then archives the file as class Secret (DATA2-17).
+// ConfigFileHasSecrets reports whether the operator file supplies a value for any secret key or for any
+// Passthrough path (integration-bound values may be credentials, so they count). 05-backup then archives the
+// file as class Secret (DATA2-17).
 func (s *Store) ConfigFileHasSecrets() bool
 // RedactedConfigFile renders the operator file as YAML without those values, for unencrypted archives.
 func (s *Store) RedactedConfigFile() ([]byte, error)
 
-// Surface is the compat surface an alias use is recorded on (09 §9.2.9).
-type Surface uint8
-
-const (
-	SurfaceEnv    Surface = iota + 1 // env var or operator-file key: read once per boot, reported once per boot
-	SurfaceConfig                    // legacy API path (ABO's /api/v1/config compat handler): reported per use
-)
+// RetiredUse is one retired name found set (§1.3.6).
+type RetiredUse struct {
+	Name         string
+	File         bool
+	Canonical    Path   // "" for a dropped key
+	CanonicalEnv string // the canonical env name, "" for a dropped key
+	Refused      bool   // a protected or secret key: this boot was refused
+}
 
 // BootView exposes the resolved ReloadBoot and ProtectOperator keys of core sections (module enablement,
 // core.paths.*, core.storage.path) before module sections exist and before storage opens.
@@ -398,10 +353,7 @@ type BootView interface {
 type OperatorValue struct {
 	Value json.RawMessage
 	Src   Source // SourceFile, SourceEnv or SourceFlag
-	By    string // "file <name>", "env ABO_…"
-	// BelowStored: the value came under a BelowStored legacy name (§1.3.5), so it fills the field only while the
-	// instance stores no value there and locks nothing (C11, SEC6-5); false for a canonical spelling, which locks.
-	BelowStored bool
+	By    string // "file <name>", "env ABO_…", "env OPENAI_API_KEY"
 }
 
 // FromFlagSet converts a stdlib FlagSet to Options.Flags using Visit (explicitly-set flags only).
@@ -409,50 +361,37 @@ type OperatorValue struct {
 func FromFlagSet(fs *flag.FlagSet, bind map[string]Path) map[Path]string
 
 // OverrideStore is the store interface of the DB layer (R4-1). It is SDK and frozen by the API-stability
-// gate, and it holds only the native contract (SIMP5-4): every legacy-only capability is an optional interface
-// of package legacy (below; R6-3), which the native store does not implement. The kernel asserts only the
-// capabilities 03 §3.3 lists (SIMP8-3); config and its committer detect the others through their mirrors
-// (SIMP7-5). Core ships the native implementation (core's
-// core/internal/configstore, keyspace c/config/; not ABO's internal/books/configstore, §1.12.2); an app with legacy settings supplies its own on its module's Manifest.LegacyStores.Config (06:
-// func(legacy.Handles) (config.OverrideStore, error), built at 06 P4c from that module's own handles),
-// written in the app's code over the app's keys (§1.12.2); it serves only keys that have a legacy blob name. For an
-// app that supplies one, the kernel attaches a routing store (core/internal/configstore): a key with a legacy blob
-// field (Alias.LegacyBlob) goes to the app's store, a FileOnly key to neither (it has no DB layer while the app's
-// store is attached, R9-5), every other key to the native store over c/config/, and both stores stage into the one
-// commit batch (A-2, the one storage rule of C4). At S2 only, before kernel storage exists, ABO's
-// main passes the same implementation over the store its serve opened as app.Options.LegacyConfigStore (06),
-// deleted in the S2b PR: the sole exception to 03 §3.3's "never through app.Options" (SIMP5-10). Paths and
-// values are canonical: an implementation that stores legacy names maps them with the alias table
-// (Alias.Convert on read, Alias.Revert on write). configtest.OverrideStoreSuite is the contract every
-// implementation runs, and legacytest.ConfigOverrideStoreSuite the contract of the legacy capabilities (§1.11).
-// Landing (COR5-14): the interface with Load lands at S2 (no storage or secrets type in it); the native
-// implementation and LegacyStores.Config at S2b; Stage at S3, when core config first writes (v0, 12 §12.4.1).
+// gate. Core ships its one implementation, core/internal/configstore over keyspace c/config/; no app supplies
+// one (an app's pre-core settings are migrated into it once, through Importer, §1.12.2). Paths and values are
+// canonical. configtest.OverrideStoreSuite is its contract (§1.11).
 type OverrideStore interface {
 	// Load returns every stored DB-layer value. Read-only: it never writes, renders or repairs.
 	Load(ctx context.Context) iter.Seq2[Override, error]
-	// Stage joins b with the writes for set and unset: only those keys change, nothing else is rendered or
-	// absorbed (no defaults, no operator-layer values). A read-modify-write reads with GetForUpdate on b, so a
-	// concurrent writer fails the commit with storage.ErrConflict and the Committer retries.
+	// Stage joins b with the writes for set and unset: only those keys change. A read-modify-write reads with
+	// GetForUpdate on b, so a concurrent writer fails the commit with storage.ErrConflict and the Committer retries.
 	Stage(ctx context.Context, b *storage.Batch, set []Override, unset []Path) error
 }
 
-// Legacy-only capabilities (SIMP5-4) live in package legacy, never in config (R6-3; listed after this block).
+// Importer is config's write side for a one-way cutover step (03 §3.3 "importers"; §1.12.2). An app's
+// migration step decodes its own pre-core rows and hands canonical values here, into the step's batch; the
+// importer reads no app row and names no app key (03 R1). The kernel hands it to the app's steps with their
+// other migration dependencies (06 §6.5.1); it is valid after Load, when every enabled section is registered.
+type Importer interface {
+	// Stage validates v against p's registered schema and stages p's c/config/ row into b, binding c/config/ to
+	// b (participant binding, 05-storage D-S10). A value equal to p's default stages nothing (C4). It refuses with
+	// ErrUnknownKey a path that is not registered or is a passthrough path, with ErrInvalid a secrets.Ref key
+	// (secrets go through secrets.(*Store).Stage) and a ProtectOperator key (operator layers only), and returns
+	// *FieldError for an invalid value, which the step quarantines (§1.12.2). Cross-field Validators run at
+	// Attach, as for every stored row (§1.4 step 6).
+	Stage(b *storage.Batch, p Path, v json.RawMessage, by string) error
+	// Default returns p's registered default, so a step can report what a quarantined key falls back to.
+	Default(p Path) (json.RawMessage, error)
+}
 
 // Committer is implemented by the kernel (core's core/internal/configstore). Commit opens ONE storage batch and
-// stages into it: OverrideStore.Stage for c.Set and c.Unset, secrets.(*Store).Stage for each of c.Secrets (a
-// secret with a legacy copy is written in place, a native one to c/secrets/, §2.3), and, from 09 S4, when audit
-// lands, the audit record core.settings.update (05-rbac §7.1: section and changed key names, never secret values;
-// actor = Override.By). At S3 there is no audit package yet: the committer logs the same fields (section, changed
-// key names, actor; never a value) at INFO after the commit and stages no audit record.
-// When the store (or any store that staged into the batch) has legacy.WriteLock, it builds and commits the batch
-// inside storage.CommitLocked(ctx, b, d, stage, locks...) with its SettingsLocks: the []storage.Lock the kernel
-// resolved at 06 P4c by calling WriteLocks with legacy.LockConfigSettings and handed it with the store. The
-// Committer never calls WriteLocks and names no lock string (it cannot import legacy, L5; COR10-5). CommitLocked
-// marks b with the hold (storage.LocksHeld(b, l), R10-4) and holds the locks from the first staged read through the
-// commit and through every post-commit step a store registered on b while staging (the books store's gap-fill
-// file write, §1.12.2), so the file step is inside the lock as HEAD's SaveConfigToDatabase had it (R9-1, R10-5,
-// §1.6); it retries with storage.RetryOnConflict, each attempt a fresh batch and a fresh hold. config never
-// imports audit (L4).
+// stages into it: OverrideStore.Stage for c.Set and c.Unset, secrets.(*Store).Stage for each of c.Secrets, and the
+// audit record core.settings.update (05-rbac §7.1: section and changed key names, never secret values; actor =
+// Override.By). It retries with storage.RetryOnConflict, each attempt a fresh batch. config never imports audit (L4).
 type Committer interface {
 	Commit(ctx context.Context, c Commit) error
 }
@@ -470,15 +409,6 @@ type Commit struct {
 	Unset   []Path
 	Secrets []secrets.Write // staged into the same batch via secrets.(*Store).Stage
 	Gen     uint64
-}
-
-// Legacy is what config needs from an app's main before any manifest is read: the app's legacy names of CORE
-// keys (module sections carry their own, §1.3.1), supplied once as app.Options.LegacyConfig. It stays until
-// the settings cutover (COR4-3). The app's override store is not here: it travels with the other
-// R4-1 legacy stores on the owning module's Manifest.LegacyStores.Config (06). Core holds none of the app's
-// names or formats (R1).
-type Legacy struct {
-	Aliases []Alias
 }
 
 // Patch is the API write unit. Set values are JSON; for a secret key the JSON string is the
@@ -523,219 +453,22 @@ type KeyState struct {
 	LockedBy    string // "env ABO_CORE_LOG_LEVEL", "flag --db", "file <name>", "" when free
 	Reload      Reload
 	Protection  Protection
+	FailClosed  bool          // the key is FailClosed (§1.3.5)
 	Pending     bool          // a restart-required change is stored but not effective
 	Quarantined error         // stored override ignored at boot (§1.4)
 	Secret      *secrets.Meta // non-nil for secret keys
-	Alias       []string      // legacy names that address this key
 }
 
 type AttachReport struct {
 	Applied     int
-	Unknown     []Path                // retained rows for keys this binary does not declare (downgrade-safe)
+	Unknown     []Path                // retained rows for keys this binary does not declare
 	Quarantined map[Path]error        // rows ignored because their section failed to decode/validate with them
 	Ignored     map[Path]string       // rows shadowed by an operator lock -> lock reason
-	// Shadowed: keys at ProtectAdmin or higher whose BelowStored legacy name is set to a value that differs from the
-	// stored effective value -> the legacy name; health config_legacy_name_shadowed (§1.3.5, SEC6-1)
-	Shadowed    map[Path]string
-	// DeployDefaults: the same condition for a name on §1.12.5's list of names a shipped deploy file sets
-	// unconditionally, whose value equals that file's default (compose's BASIC_AUTH_ENABLED=false,
-	// BASIC_AUTH_USERNAME=admin) -> the legacy name; logged once at info, never a health token (SEC10-11)
-	DeployDefaults map[Path]string
+	// FailClosed: FailClosed keys whose stored value is more restrictive than their operator value and therefore
+	// effective -> the operator source; one warning per boot and health config_fail_closed_override (§1.3.5)
+	FailClosed  map[Path]string
 }
 ```
-
-**The legacy capabilities of the config store (R6-3, SIMP5-4).** They live in package
-`github.com/falkcorp/mediacore/legacy` (03 §3.3), the one core package that holds every identifier existing only
-to serve an app's pre-core stores. Like `kernel/` it is outside the API-stability gate (12 §12.4), so removing
-a capability at its family's cutover is not a breaking change (SIMP6-2). `legacy` (L5) imports `config`,
-`secrets` and `storage`, which never import it. The kernel asserts only the capabilities 03 §3.3 lists (SIMP8-3).
-Of this store's, those are the two whose signatures name a `legacy` type, which it asserts on the store it built
-at 06 P4c and drives: it calls `ConfigOpener.Open` at P4d step 1 and passes `ConfigSecrets.Secrets()` to
-`secrets.Open` (COR7-3, SIMP7-5); and `ConfigResetArgs`, which the kernel's staging function asserts and calls
-when a reset of either kind is staged, with the one `storage.ResetRequest` (COR8-2, R9-6, §1.12.2). Every other capability is detected once,
-by its consumer, through an **unexported mirror interface** with the same method set: config detects
-`ConfigExternalWriter` itself (`externalWriter`) when it attaches the store, at P3 through
-`app.Options.LegacyConfigStore` at S2 and at P4d step 1 at S2b; and `secrets` asserts its `SecretsStore` mirror on
-the value it is handed (§2.3). The former `ConfigCommitObserver` is gone (R10-5): its `Committed` ran after the
-lock was released and only on the config `Committer`'s path, so the gap-fill write is now a post-commit step the
-store registers on the batch it stages into, which `storage.CommitLocked` runs inside the hold on every writer's
-path (§1.12.2). Each consumer's mirror is checked by **the mirror test (03 §3.3)**: the consumer's `export_test.go`
-only exports a test alias of the mirror, and `legacy_mirror_test.go` in the consumer's external test package
-(`package <consumer>_test`, which may import `legacy`) asserts mutual assignability in both directions (R7-7,
-SIMP7-1, COR7-2). Names follow 03's rule
-(`config.LegacyOpener` → `legacy.ConfigOpener`, `secrets.LegacyStore` → `legacy.SecretsStore`). 05-storage
-§5S.3.11 "Legacy capabilities" lists them with the other owners' capabilities. The settings cutover removes them
-(§1.12.2).
-
-```go
-package legacy
-
-// ConfigOpener: Open runs once per boot, from S2b (COR6-8), when the kernel attaches the store at 06 P4d step 1,
-// before OverrideStore.Load and before secrets.Open. It is where an app's legacy store runs the app's own boot
-// steps over its one handle (R4-6, §1.12.2), including loading the app's legacy key, so ConfigSecrets'
-// KeyMaterial is set when secrets.Open captures it (COR5-2). It never writes the store; an error fails boot.
-// At S2 the kernel does not call it: ABO's serve still runs those steps before app.New.
-type ConfigOpener interface {
-	Open(ctx context.Context, env ConfigOpenEnv) error
-}
-
-// ConfigOpenEnv is what the kernel hands ConfigOpener.Open. It carries no extraction-stage value: a legacy
-// store takes its stage behaviour from its own build (SIMP5-5).
-type ConfigOpenEnv struct {
-	StateDir *os.Root // core.paths.state_dir as config.ResolveStateDir resolved it (05-config §1.7)
-	// KeyringLegacy returns the legacy key material recorded in the keyring (secrets.ReadLegacyKey, 05-config
-	// §2.4), so a keyring copied back after host loss also restores the app's legacy decryption; nil before S3.
-	KeyringLegacy func() ([]byte, bool, error)
-	// Reset is the applied ResetFactory swap (a KindReset swap of restoreswap, 05-storage §5S.3.15; R8-1) whose
-	// post-reset hook has not yet recorded hook_done, and nil otherwise. The kernel hands it on the reset boot
-	// (the swap journal reads set_aside at Open and applied once P4d step 1 has run) and on every later boot whose
-	// journal reads applied without hook_done. While it is non-nil the store serves no copy from a file the reset
-	// has not yet rewritten (ABO: the gap-fill file), so no secret of the old install is effective; a separate flag
-	// would always equal Reset != nil (SIMP8-7). The app's start hook runs its post-reset hook with Reset.Args at
-	// Run step 2, after applied, and calls Reset.Done, which journals hook_done; until then every boot hands it
-	// again, so the hook is idempotent (R7-2, DATA7-17). The hook never fails boot: a per-entry error is logged,
-	// audited and reported as factory_reset_cleanup_incomplete, and the hook still calls Done, so only a crash
-	// reruns it (COR8-4, OPS8-5). The kernel hands no Reset, and journals hook_done itself right after applied,
-	// for a ResetStore swap (no file effects) and whenever the built store does not implement both ConfigOpener
-	// and ConfigResetArgs (no app hook: hello, a native app, ABO after its settings cutover), so such a reset
-	// never leaves restore_inflight behind (COR8-4).
-	Reset  *ConfigResetRun
-	// Files is the labelled state filesystem (06 §6.4.8, R9-7, COR9-5; R-G request): every write, rename, fsync and
-	// removal the app's legacy store makes outside Pebble goes through it, with the label of its row in 06 §6.5.1's
-	// boot-writer table: ABO's legacy key file .encryption_key (InitEncryption in Open), the gap-fill file
-	// <db parent>/config.yaml (the store's post-commit step, §1.12.2, and the post-reset hook) and the post-reset
-	// hook's deletions (the delete entries, the Open Library dump files and, only with DeleteLibraryFiles, RootDir's
-	// entries). The store keeps it for its later writers. In production it is the plain OS calls;
-	// coretest/crashmatrix injects faults through it, so ABO's TestBootCrashMatrix_ABO breaks books' boot at every
-	// such write.
-	Files  StateFiles
-	Logger *slog.Logger
-}
-
-// StateFiles is the labelled filesystem of ConfigOpenEnv.Files. Paths are absolute; label names the writer-table
-// row. Its confinement is defined once, in 05-storage §5S.3.15 (COR10-4): the state directory, <db parent>, the
-// reset intent's Delete entries and its HookPaths (the directories ConfigResetPlan.Paths named at staging: the
-// Open Library dump directory and, only with DeleteLibraryFiles, the confirmed library root), so the post-reset
-// hook reaches exactly HEAD's wipe targets without the kernel parsing hook_args; and StateFiles itself refuses the
-// kept paths of 05-storage's rule (4), so a library root that holds the store cannot reach it. S2b.
-type StateFiles interface {
-	WriteFile(label, path string, data []byte, perm fs.FileMode) error // temp file, fsync, rename, directory fsync
-	Rename(label, from, to string) error
-	Remove(label, path string) error
-	RemoveAll(label, path string) error
-}
-
-// ConfigResetArgs (05-storage §5S.3.15 owns it) is implemented by books' legacy config store. When a reset of
-// either kind (ResetStore or ResetFactory) is staged, the kernel's one staging function (kernel.stageReset, behind
-// legacy.Maintenance.StageFactoryReset and internal/storagehttp's Stager and its Aliases) asserts it on the built
-// config store and calls ResetArgs with the request, before anything is staged, so no L1 code names legacy and
-// every path records the same arguments (COR8-2, COR8-5). The request is the one struct storage.ResetRequest
-// (05-storage owns it; R9-6): the reset kind, the confirm token, delete_library_files and the echoed library_root
-// and library_file_count of 05-rbac §6.2, the one confirmation contract; the HEAD-shaped legacy paths mark it as
-// such (05-rbac's library_confirm=legacy). ResetArgs:
-//   - for ResetFactory with delete_library_files set, runs the preflight first: it resolves RootDir and counts the
-//     top-level entries the hook would remove, as HEAD removes each with everything under it
-//     (internal/server/handlers/system/handler.go:571-577 @748fd787a), without the hook's kept paths, so the count is
-//     one directory read, exact, and a live import changes it only when it creates a new top-level entry; it returns
-//     them as ConfigResetPlan.LibraryRoot and LibraryFiles. A RootDir that HEAD's IsDangerousRoot refuses is an error
-//     wrapping storage.ErrResetRefused (400, nothing staged; handler.go:563-568). ResetArgs compares nothing:
-//     kernel.stageReset compares the preflight's values with req and, unless req.LegacyConfirm is set (HEAD's wipe
-//     with no count check), answers a library_root or library_file_count that differs with 05-storage's
-//     *storage.LibraryConfirmError carrying the current root and count (422 library_files_confirm_required, the
-//     values in the problem body), and nothing is staged (05-storage §5S.3.15; SEC9-4, COR9-4);
-//   - with delete_library_files unset (the native route's default), records no library root, counts nothing,
-//     runs no dangerous-root check, and the hook touches no file under RootDir (A-17);
-//   - for ResetFactory, returns the hook arguments: the Open Library dump directory, the gap-fill file's path and,
-//     only when delete_library_files is set, the confirmed library root, so the post-reset hook acts on the
-//     recorded paths, never on what the fresh settings say (COR8-4); and, separately in Paths, the directories the
-//     hook deletes under (the dump directory and, only with delete_library_files, the library root), which the
-//     intent records as hook_paths so the kernel bounds StateFiles without reading hook_args (COR10-4);
-//   - for both kinds, returns the settings rows the fresh install starts with (books: HEAD's factory-default blob,
-//     §1.12.2 "The reset boot stages HEAD's factory defaults"), which storage's fresh-install batch writes at the
-//     reset boot (SEC8-5).
-// The rows are rendered by the staging binary, and a build that resumes the reset writes them as given. They are
-// factory defaults, so a key they lack takes the resuming build's default (DATA10-9 (b), as 05-storage states). S2b.
-type ConfigResetArgs interface {
-	ResetArgs(ctx context.Context, req storage.ResetRequest) (ConfigResetPlan, error)
-}
-
-// ConfigResetPlan and ConfigResetRun mirror 05-storage §5S.3.15, which wins on spelling (06 declares the same).
-// The plan is recorded in the intent: Hook as hook_args (ResetFactory only, nil for ResetStore), Rows as fresh_rows,
-// which the reset boot's fresh-install batch writes inside the declaring module's claims (books: HEAD's
-// factory-default blob, the same for both kinds, §1.12.2), and LibraryRoot/LibraryFiles, the root and count
-// the preflight found, which kernel.stageReset compares with the request (only with delete_library_files; "" and
-// 0 otherwise), which the route's 200 answer and its
-// audit record name; and Paths as hook_paths (restorejournal.Intent.HookPaths, COR10-4), the only input from
-// which the kernel extends StateFiles beyond the state directory and <db parent>. The run is the applied ResetFactory swap handed as ConfigOpenEnv.Reset: Args is the plan's
-// Hook, Delete the Recreatable auxiliary DBs outside the DB's filesystem that the hook removes,
-// DeleteLibraryFiles the intent's delete_library_files (the hook wipes the recorded root only when it is set),
-// and Done journals hook_done with the entries the hook could not remove; the hook calls it once every action has
-// been attempted, whatever failed, so only a crash reruns the hook (COR8-4).
-type ConfigResetPlan struct {
-	Hook         []byte
-	Rows         []storage.KV
-	LibraryRoot  string
-	LibraryFiles int
-	Paths        []string // hook_paths: the dump directory and, only with DeleteLibraryFiles, LibraryRoot (COR10-4)
-}
-type ConfigResetRun struct {
-	ID                 string
-	Args               []byte
-	Delete             []string
-	DeleteLibraryFiles bool
-	Done               func(ctx context.Context, failed []string) error
-}
-
-// LockConfigSettings is the config lock name of legacy.WriteLock (R9-1; WriteLock itself, WriteLocks(names
-// []string) []storage.Lock, is declared once in 05-storage §5S.3.11). It names what a write touches, the app's
-// stored settings and its legacy secret copies, never an app mutex or key (03 R1): books' config, instance and
-// notify-rule stores return HEAD's configBlobSaveMu for it, at its one place in 05-storage §5S.3.2's total rank
-// table (R10-4). Only the kernel names it: at 06 P4c it calls WriteLocks([]string{LockConfigSettings}) on the
-// built store and hands the result as SettingsLocks to the config Committer, the integrations Registry, notify's
-// rule store and secrets (§2.3), none of which can import legacy (L2–L4) or ever calls WriteLocks (COR10-5).
-// Each of books' three stores refuses a write staged into a batch that does not carry a CommitLocked hold of this
-// lock (storage.LocksHeld(b, l) false; R10-4): OverrideStore.Stage, the instance and rule stores' writes and
-// SecretsStore.Write alike. S3.
-const LockConfigSettings = "config.settings"
-
-// ConfigExternalWriter: Changed fires when a writer other than config.Store changed stored values (the app's own
-// legacy config path, 05-config §1.12.2); config then re-runs OverrideStore.Load (05-config §1.4 step 8). A stage
-// bridge (SIMP5-5): it exists from S2 and is deleted in the S3 PR, when the façade makes Store.Apply the only
-// writer. config detects it through an unexported mirror.
-type ConfigExternalWriter interface {
-	Changed() <-chan struct{}
-}
-
-// ConfigSecrets: Secrets returns the app's legacy secret copies, which the kernel passes to secrets.Open as
-// secrets.Options.LegacyStore (05-config §2.3). It is not a separate store-interface row: SecretsStore is reached
-// only through it, under 03 §3.3's config row (SIMP5-8). From S3.
-type ConfigSecrets interface {
-	Secrets() SecretsStore
-}
-
-// SecretsStore (formerly secrets.LegacyStore) is the app's storage of secrets written before core existed.
-// Its contract is secrets' unexported mirror legacyStore (05-config §2.3), which has the same method set. The
-// kernel hands it to secrets as secrets.Options.LegacyStore, a field typed any, so no SDK type names this method
-// set and it may change in a minor like every legacy identifier (R7-7, SIMP7-4).
-type SecretsStore interface {
-	Read(ctx context.Context, n secrets.Name) (secrets.LegacyCopies, error)
-	Kept(n secrets.Name) bool
-	Write(b *storage.Batch, n secrets.Name, v secrets.Value, clear bool) error
-	KeyMaterial() []byte
-	Check(ctx context.Context, r storage.Reader, key []byte) (secrets.LegacyCheck, error)
-}
-
-// There is no ConfigCommitObserver (R10-5, DATA10-2). A side effect outside the store that HEAD ran under
-// configBlobSaveMu (books: the gap-fill file write) is a post-commit step the store registers on the batch it stages
-// into, through 05-storage's batch hook (storage.OnCommitted(b, step)); storage.CommitLocked runs every registered
-// step after Commit succeeded and before it releases the locks, so every writer of the blob and the four rows gets
-// it inside the hold without calling anything (§1.12.2).
-```
-
-The value types `SecretsStore`'s methods carry (`secrets.LegacyCopies`, `secrets.LegacyCheck`), and
-`secrets.ReadLegacyKey`, stay in `secrets`: mutual assignability needs result types that both `secrets` and
-`legacy` can name, and `secrets` cannot name a `legacy` type. They stay in v1 until a major, inert for an app
-without legacy secrets (03 §3.3 "Legacy-only identifiers").
 
 Config's sentinel and typed errors:
 
@@ -748,125 +481,70 @@ var (
 	ErrInvalid       = errors.New("config: invalid value")                    // errors.Join of *FieldError
 	ErrSealed        = errors.New("config: registry sealed after Load")
 	ErrDuplicate     = errors.New("config: duplicate path or env name")
-	ErrRetiredAlias  = errors.New("config: a retired legacy name is set")     // wrapped in *RetiredAliasError
+	ErrRetiredName   = errors.New("config: a retired name is set")           // wrapped in *RetiredNameError
 )
 
 type LockedError struct{ Path Path; By string }
 type ProtectedError struct{ Path Path; Need Protection }
 type PostCommitError struct{ Section Path; Err error }
-type RetiredAliasError struct{ Name string; Canonical Path; CanonicalEnv string }
+type RetiredNameError struct{ Uses []RetiredUse } // every refused use, so one boot names them all
 ```
 
 #### 1.3.4 Settings API semantics (routes owned by 05-http-api)
 
 | Route | Permission | Semantics |
 |---|---|---|
-| `GET /api/core/v1/settings/schema` | any section read permission | JSON Schema 2020-12 document, one property per section the caller may read. Vendor keywords: `x-mediacore-reload` (`live`\|`restart`\|`boot`), `x-mediacore-protect`, `x-mediacore-secret`, `x-mediacore-aliases`; standard `writeOnly: true` on secrets, `deprecated: true` on deprecated paths. |
+| `GET /api/core/v1/settings/schema` | any section read permission | JSON Schema 2020-12 document, one property per section the caller may read. Vendor keywords: `x-mediacore-reload` (`live`\|`restart`\|`boot`), `x-mediacore-protect`, `x-mediacore-secret`, `x-mediacore-fail-closed`; standard `writeOnly: true` on secrets. |
 | `GET /api/core/v1/settings` | per section read | `{path: KeyState}` for readable keys. Secrets appear as `Secret` meta only. |
 | `PATCH /api/core/v1/settings` | per section write + protection | Body `{"set": {path: value}, "unset": [path]}` → `Store.Apply`. 400 unknown key, 409 locked (`locked_by` in body), 403 forbidden/protected (`need` names the protection level), 422 invalid (field errors), 500 storage. 200 with `restart_pending` and `post_commit_error` when present. |
 
-The routes are mounted from 09 S4, when `rbac` exists to enforce section permissions (FE3-11); before S4,
-settings are read and written only through ABO's `GET`/`PUT /api/v1/config`, which writes through
-`Store.Apply` from the S3 façade on (§1.12.1).
+The routes are mounted from R2, when config and `rbac` move. ABO's `GET`/`PUT /api/v1/config` are deleted in the
+same flip, with their mask round trip (C9), and the SPA's settings page and the first-party scripts switch to
+these routes in that PR (09's caller row).
 
 Default section permissions: `core.*` → read and write `core:settings.manage`; `modules.<id>.*` → read and
 write `<id>:settings.manage` (registered by the module in its permission list; [05-rbac](05-rbac.md)). A module
 that declares a section must therefore declare `<id>:settings.manage` or pass `config.Permissions(read, write)`
 naming permissions it does declare; otherwise the kernel fails boot on the undeclared permission (06 §6.6,
-COR2-14).
-ABO's `settings.manage` atom maps to both during the compat window ([09](09-abo-on-core.md) §9.2.6).
-A section permission never suffices for a key with `ProtectAdmin` or higher: holding `core:settings.manage`
-cannot be turned into `core:admin` through configuration (§1.3.7).
+COR2-14). ABO's `settings.manage` permission becomes both through the identity migration's atom-to-scope table
+(M3, [05-rbac](05-rbac.md) §6). A section permission never suffices for a key with `ProtectAdmin` or higher:
+holding `core:settings.manage` cannot be turned into `core:admin` through configuration (§1.3.7).
 
 #### 1.3.5 Precedence, locks and the boot record (normative)
 
 Merge order, lowest to highest: **defaults → file → env → flags → DB overrides** (for `ReloadBoot` keys the
 last layer is the **boot record** instead of DB overrides). One rule constrains the last layer: if any
 operator layer (file, env, flag) supplies a key, that key is **locked**: its stored value is ignored at load
-(listed in `AttachReport.Ignored`, kept, not deleted) and `Apply` refuses it with `*LockedError{By}`. Keys with
-`ProtectOperator` are never read from or written to the DB layer or the boot record at all. Consequently the
-stored layers only ever override defaults, which is what an operator expects: what they put in the file,
-environment or command line is what runs, and the UI says so.
+(listed in `AttachReport.Ignored`, kept, not deleted, and logged once per boot naming the key and the operator
+source) and `Apply` refuses it with `*LockedError{By}`. Keys with `ProtectOperator` are never read from or written
+to the DB layer or the boot record at all. Consequently the stored layers only ever override defaults, which is
+what an operator expects: what they put in the file, environment or command line is what runs, and the UI says so.
+This replaces HEAD's rule, under which the stored blob beat most env names (`internal/config/persistence.go:1131-1170`
+over `cmd/root.go:625`); R2's release note says so.
 
-**HEAD precedence for legacy names (R5-1(a), normative until each family's cutover).** At HEAD most env names
-and file keys are only a base that the stored blob overrides: viper's prefix-less `AutomaticEnv` and `BindEnv`
-feed the base config (`cmd/root.go:625`), `LoadConfigFromDatabase` lays every field the blob holds over it
-(`internal/config/persistence.go:1131-1170`) and the encrypted secret rows over that (`:1186-1199`), and only the
-keys in `envLockedSettings`, `absEnvOnlySettings`, `applyEnvAuthoritativeConfig` (`config.go:2241-2254,2270-2279,
-2435-2576`), the config-file Deluge locks (`configFileLockedSettings`, `config.go:2315`) and `SyncConfigFromEnv`'s six (`persistence.go:2023-2057`) are
-re-applied over it. An alias marked `BelowStored` (§1.3.1) keeps that: a value set under its `LegacyEnv` names
-or its `LegacyYAML` file key enters the **default** layer (`Source` reports `SourceEnv`/`SourceFile` while no stored
-value overrides it), a stored value beats it, it locks nothing, and `Apply` writes the key. **A stored value equal to
-the default still beats it (SEC7-2):** every HEAD blob holds every field (whole-config save,
-`persistence.go:1932-1977`), and HEAD's stored `enable_auth: true` beats `ENABLE_AUTH=false`, so §1.12.2's
-"reported as `SourceDefault`" applies only when no operator or `BelowStored` value is set for the key
-(`TestBelowStored_StoredDefaultStillWins`). Its canonical
-`<APP>_*` name keeps C3's lock. The flag is generated from HEAD's lists by the app (ABO:
-`TestAliasBelowStoredMatchesHEAD`), so it cannot drift, and it never applies to a `ProtectOperator` key (a
-`FileOnly` key on ABO included: HEAD stores no value for it, so its legacy names are plain operator values that
-lock, as at HEAD). The auth-precedence cutover H3 lifts it only for an enabling `enable_auth` value (§1.12.5,
-release-noted then); every other flag keeps HEAD's precedence until a separate, owner-decided cutover (R9-5). ABO's legacy flags keep C3: HEAD's
-`--playlists` and `--log-level` lose to a stored value (`cmd/root.go:648-651` writes the flag before the blob is
-laid over it), and from the S3 façade a typed flag wins; this is recorded in 09 §9.2.6. Example: compose's always-set
-`BASIC_AUTH_ENABLED=false` (`docker-compose.yml:20-22`) is a default, so a Basic gate turned on in the UI stays
-on (`TestComposeEnvKeepsUIBasicGate`, OPS5-1). **Where it applies (OPS6-7):** `BelowStored` takes effect wherever
-core config attaches the app's legacy config store, that is from S2 (P3, through `app.Options.LegacyConfigStore`)
-and from S2b at P4d step 1, for legacy env names and legacy file keys only, never for flags.
+**Fail-closed keys (normative).** A key declared `FailClosed` (§1.3.1) is the one exception to the lock.
+Its effective value is the **more restrictive** of its operator value and its stored value, by the declared order;
+with only one of them set, that one. When the stored value wins over a weaker operator value, `AttachReport.FailClosed`
+names the key and the operator source, boot logs one warning, and health raises `config_fail_closed_override` (warn,
+on `core.config`, 05-health) until one of the two changes. `Apply` on such a key while an operator value is set
+accepts a value at least as restrictive as the operator value (it is then effective) and an unset (the operator
+value is effective again), and refuses a weaker value with `*LockedError`, because it could never take effect.
+The declared keys are `core.auth.mode` ([05-authn](05-authn.md)) and `core.http.basic_gate.enabled`
+([05-http-api](05-http-api.md)). So a stale `ABO_CORE_AUTH_MODE=disabled` left in a unit, or a deploy file's
+`ABO_CORE_HTTP_BASIC_GATE_ENABLED=false`, never opens a gate an admin closed in Settings, while an operator can
+always close one (E5). With authentication off the auth-disabled principal holds no `core:admin`, so it cannot
+store `core.auth.mode` at all (§1.3.7): auth is turned on by an operator value and a restart.
+`TestFailClosed_MoreRestrictiveWins` covers both keys and both directions.
 
-**The auth switch keeps HEAD's precedence (A-2).** `ENABLE_AUTH` and the file key `enable_auth` are `BelowStored`
-like every name HEAD lays the blob over (`enable_auth` is in none of HEAD's re-applied lists,
-`internal/config/config.go:2241-2254,2435-2576`, `persistence.go:2023-2057`): a stored `enable_auth` beats them in
-both directions, as at HEAD, and the shadow report below names the canonical variable when they differ. The
-canonical `<APP>_CORE_AUTH_MODE` locks in both directions, as every canonical name does, so an operator can always
-turn auth on. No boot writes a legacy field to carry an operator value across a rollback. The hardening that would
-(an enabling legacy value beating a stored one, kept across a rollback) is the post-S10 auth-precedence cutover H3
-(§1.12.5), which moves nothing else.
+**Empty env values.** An env variable set to the empty string is **unset**, as viper treats it at HEAD (ABO never
+calls `AllowEmptyEnv`). An operator who means an empty value uses the file or `<NAME>_FILE`.
 
-**Rollback consequence: canonical-only values (A-2).** A canonical `<APP>_*` name exists only from the stage that
-registers its key, and every older build reads only the legacy names. A value given only under a canonical name is
-therefore not read on a rollback below that stage: for example `<APP>_CORE_AUTH_MODE=required` over a stored
-`enable_auth: false`, or a canonical-only peer allow-list (env-only at HEAD, where empty admits every peer,
-`internal/config/config.go:1709-1719` @748fd787a). 09 §9.2.1 row 3 carries the cost and the release note: while you may
-roll back below that stage, keep the stored setting (or, for a key HEAD re-applies from env, its legacy name) at the
-same value. Nothing records the names, and no file or health token lists them.
+Within operator layers flags beat env beat file. Within the env layer, for one key, the canonical name beats an
+ecosystem binding (`EnvBinding`, §1.3.6). If both are set with different values:
 
-**An empty stored Basic password never shadows `BASIC_AUTH_PASSWORD` (OPS9-7, R-D request).** A UI save with no
-password writes an **empty** encrypted `basic_auth_password` row when none exists, and HEAD applies every decrypted
-row, the empty one included (`internal/config/persistence.go:1193-1205,1996-2003` @748fd787a), so under the
-stored-beats-env rule an install with the gate on and an empty saved password would be locked out by S0's early
-fix 5 with no setting or variable to reach Settings. So for `core.http.basic_gate.password` alone, an empty stored
-value counts as **no stored value**: a non-empty `BASIC_AUTH_PASSWORD` (its `BelowStored` legacy name) is then
-effective, in memory only, never written to the row, and one warning per boot names the variable; with neither, the
-gate stays fail-closed (§1.12.2). A non-empty stored password still beats the variable, as at HEAD.
-`TestBasicGate_EmptyStoredPasswordDoesNotShadowEnv` covers both. 09's S0 release note gives the recovery: "If you
-are locked out, set `BASIC_AUTH_PASSWORD` and restart" (cross-cluster).
-
-**Shadowed legacy names (SEC6-1).** At attach, a `BelowStored` legacy name of a key at `ProtectAdmin` or higher that
-is set and differs from the stored value (a stored value equal to the default included, SEC7-2) is listed in
-`AttachReport.Shadowed`. Boot logs one warning naming the key and its canonical variable, and health raises
-`config_legacy_name_shadowed` (warn); until 05-health's component snapshot lands at S8, HEAD's degraded token list
-carries the token, as it carries `basic_gate_no_password` (05-health, SEC7-12). Secret values are compared in
-constant time and never logged. An operator who expected the legacy name to win, for example rotating
-the Basic password through `BASIC_AUTH_PASSWORD` with auth off from S4 r2, is told which name does.
-**Deploy-file defaults are not shadows (SEC10-11).** A name on §1.12.5's list of names a shipped deploy file sets
-unconditionally (compose's `BASIC_AUTH_*`, `docker-compose.yml:20-22` @748fd787a) whose value equals that file's
-default (`BASIC_AUTH_ENABLED=false`, `BASIC_AUTH_USERNAME=admin`) is listed in `AttachReport.DeployDefaults`
-instead and logged once at info; it raises no token. Every default compose install sets them and HEAD's
-whole-config save stores `basic_auth_username: ""` (`persistence.go:1932-1977`), so reporting them would raise
-`config_legacy_name_shadowed` on every such install for ever and hide a real stale override. A value that differs
-from the file's default is still a shadow.
-
-**Empty env values.** An env variable set to the empty string is **unset**, for canonical and legacy names
-alike, as viper treats it at HEAD (ABO never calls `AllowEmptyEnv`): compose's `BASIC_AUTH_PASSWORD=` supplies
-nothing and cannot lock a password to empty. An operator who means an empty value uses the file or `<NAME>_FILE`.
-
-Within operator layers flags beat env beat file. Within one layer, for one key, the canonical name beats an
-alias. If two names for one key are set in one layer with different values:
-
-- key at `ProtectAdmin` or higher (database path, sign-in, server paths): **boot fails** with an error that
-  names both variables (or file keys). A drop-in that overrides the legacy name while the base unit sets the
-  canonical one would otherwise open or create an empty store at the base unit's path (OPS2-12;
-  `internal/config/config.go:2519-2544` records the same hazard);
+- key at `ProtectAdmin` or higher: **boot fails** with an error that names both variables (OPS2-12;
+  `internal/config/config.go:2519-2544` records the hazard of a drop-in that overrides one name while the base unit
+  sets the other);
 - any other key: the canonical wins, with a warning and health token `config_alias_conflict` (§1.5).
 
 **Boot record.** `ReloadBoot` keys are needed before storage opens (module enablement decides which module
@@ -876,91 +554,61 @@ sections are registered and which keyspaces are claimed, 06 §6.5.1). Their UI-m
 `{"format":"mediacore-boot/1","gen":N,"values":{path: value}}`.
 `Boot` and `Load` read it; `Apply` writes it. Unknown paths in it (a module this binary lacks) are retained
 and reported like unknown override rows. No other component writes the file. [05-backup](05-backup.md)
-archives it with the config file.
+archives it with the config file. HEAD has no boot-record key, so M2 writes none.
 
-#### 1.3.6 Environment naming and aliases
+#### 1.3.6 Key grammar, env names and retired names (normative)
 
-Canonical name = `<EnvPrefix>_` + upper(path) with `.` → `_`, with the leading `MODULES_` dropped for
-module paths (unambiguous because `core` is a reserved module ID, 03 §3.6):
-`core.log.level` → `ABO_CORE_LOG_LEVEL`; `modules.books.scan.interval` → `ABO_BOOKS_SCAN_INTERVAL`.
+**Canonical env name** = `<EnvPrefix>_` + upper(path) with `.` and `-` → `_`, with the leading `MODULES_` dropped
+for module paths (unambiguous because `core` is a reserved module ID, 03 §3.6):
+`core.log.level` → `ABO_CORE_LOG_LEVEL`; `modules.books.scan.on_startup` → `ABO_BOOKS_SCAN_ON_STARTUP`;
+`integrations.metadata.google-books.api_key` → `ABO_INTEGRATIONS_METADATA_GOOGLE_BOOKS_API_KEY`.
 Any key may instead be given as `<NAME>_FILE=<path>` (contents read once at `Load`, one trailing newline
 trimmed) — the supported way to hand secrets in from systemd `LoadCredential=` or container secrets.
 Object and array keys take JSON (`ABO_CORE_LOG_LEVELS='{"books":"debug"}'`). `Load` fails with
-`ErrDuplicate` if two paths map to the same canonical name or alias. Unknown `<EnvPrefix>_*` variables
-produce one warning each (fail-open, ABO's rule that a stale key must not stop startup, `config.go:2587-2590`).
+`ErrDuplicate` if two paths map to the same env name. Unknown `<EnvPrefix>_*` variables produce one warning each
+(fail-open, ABO's rule that a stale key must not stop startup, `config.go:2587-2590`). **Env names are
+case-sensitive**: only the exact name is read.
+
+**Canonical file form.** The operator YAML file is a mapping whose nesting follows the path segments
+(`core: {log: {level: debug}}`, `modules: {books: {scan: {on_startup: true}}}`); its top-level keys are `core`,
+`modules` and `integrations`. A top-level key that is a retired name is handled below; any other unknown key warns.
+
+**Decoding is strict**, for env, file and flags alike: JSON for objects and arrays, a Go duration, `true`/`false`
+for bools, the key's own type otherwise. A value that does not decode fails boot, naming the variable or file key
+(§1.5). There is no per-type legacy decoder: HEAD's spellings (`yes`, a bare number of nanoseconds, a
+space-separated list) are not read (R2's release note says so).
 
 No `MEDIACORE_` variable exists: the operator of an app should not need to know the library's name, and
-per-app prefixes keep two apps' variables apart on one host or — lowest priority — in one process.
+per-app prefixes keep two apps' variables apart on one host or, at lowest priority, in one process.
 
-**Legacy decoding (A-7, normative).** Canonical names keep the strict decoder (JSON for objects and arrays, a Go
-duration, `true`/`false`). A **legacy** env name or legacy file key decodes with HEAD's per-type semantics, so a
-value an operator set for HEAD reads the same after S3, when viper leaves the boot path (§1.12.1). At HEAD every
-legacy name goes through viper's typed getters (`internal/config/config.go:3346,3355,3358` `GetBool` for
-`enable_auth`, `enable_rate_limit` and `basic_auth_enabled`; `:3226,3229,3276,3298` `GetStringSlice`); env lookup
-is prefix-less, by the upper-cased key (`cmd/root.go:625`, `viper.AutomaticEnv`), plus the explicit `BindEnv`
-names, and **env variable names are case-sensitive** (ADV-2): `AutomaticEnv` looks up only the upper-cased name, so
-`ENABLE_AUTH` is read and `enable_auth` set in the environment is not, and core matches env names exactly too; and the getters convert through `spf13/cast` v1.10.0 (`go.mod`, indirect). The decoder named by
-`Alias.Decode` (§1.3.1, generated from HEAD's getter for the key) applies before `Convert`:
+**Ecosystem bindings.** A key may carry extra env names that other software already defines, and only those:
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, `OTEL_METRIC_EXPORT_INTERVAL` (a bare
+integer is milliseconds, the OTel convention, which the binding's decoder keeps) and
+`OTEL_EXPORTER_OTLP_METRICS_INSECURE`, declared by [05-metrics](05-metrics.md) §10 with `EnvBinding`; and the app's
+`OPENAI_API_KEY` and `OPENAI_BASE_URL` onto `integrations.ai.openai.{api_key, base_url}`, passed by ABO in
+`Options.EnvBindings`. A binding is a second canonical name, not an alias of an older one; it never warns.
 
-| `Decode` | HEAD rule | Anchor (`<gomodcache>/github.com/spf13/cast@v1.10.0`) |
-|---|---|---|
-| `DecodeBool` | `strconv.ParseBool`: `1`, `t`, `T`, `TRUE`, `true`, `True` and `0`, `f`, `F`, `FALSE`, `false`, `False`; a parse error reads as `false` | `basic.go:51-52`, `zz_generated.go:8-10`; HEAD warns for locked keys only, `internal/config/config.go:2425-2433` |
-| `DecodeInt`, `DecodeFloat` | `strconv.ParseInt(s, 0, 0)` after trimming a decimal part (so `0x10`, `1_000`, `8.0`), or `strconv.ParseFloat`; an error reads as `0` | `number.go:407-413,527-546` |
-| `DecodeDuration` | a Go duration; a value with no unit letter is nanoseconds; an error reads as `0` | `time.go:86-91` |
-| `DecodeStringSlice` | the string split on whitespace (`strings.Fields`), so `".m4b .mp3"` is two elements | `slice.go:94-95` |
-| `DecodeString` | the raw string | — |
+**Retired names (normative).** The app hands config the list of every env name and top-level file key it read
+before core (`Options.Retired`; ABO generates it from its rename table, §1.12.3). A retired name is never read. When
+one is set, config decides from the key it became, after `Boot` for core keys and after `Load` for module and
+passthrough keys, both before storage opens (§1.4 steps 2–3):
 
-A legacy file key is matched case-insensitively and its YAML value, once decoded, goes through the same rule.
-**One exception, fail-closed (A-7):** a legacy bool that `strconv.ParseBool` rejects (for example `ENABLE_AUTH=yes`,
-which HEAD silently reads as `false`, turning auth off) is a **boot error** when its canonical key is under
-`core.auth.` or has `ProtectAdmin` or higher; the error names the variable, the spelling and the canonical name, and
-the S3 release note says so (§1.12.2). On any other key it reads as `false`, as at HEAD, with one warning per boot.
-`TestLegacyEnvDecodeMatchesHEAD` (§1.11) checks the rule against HEAD itself.
+| Retired name set for… | Effect |
+|---|---|
+| a key at `ProtectAdmin` or higher (`ProtectOwner` and `ProtectOperator` included), a secret key (`secrets.Ref`), a passthrough path the app marks `Refuse` (a secret or destination field of an instance), or a file key whose subtree holds one of these | **boot fails** with `*RetiredNameError` listing every such name with its canonical env name and file path, so one boot names them all; nothing has opened or been written |
+| any other key, or a dropped key (`Canonical` empty) | the value is **ignored**; one warning per boot names the retired name and the canonical name (or the drop message); health raises `config_retired_name_ignored` (warn, 05-health) while one is set |
 
-**Aliases.** Every legacy name is an `Alias` naming its ledger row. Config itself holds no window and no
-alias class: the kernel registers `Store.Aliases()` with `compat` (L4, which may import config; config may not
-import compat), and the row's gate (window or permanent), its dates and its `Retired` state live in the ledger
-(09 §9.2.9, SIMP2-12). Config's only lifetime input is `Options.Retired`. Every use calls
-`Options.OnLegacyUse` with its surface (OPS2-7):
+A retired file key whose subtree spans several keys (`itunes:` holding a library path and plain settings) is
+judged by its most protected key. `RetiredSet()` lists every use, and `<app> config check` (an offline command,
+06 §6.4.5) prints it with the canonical names, so an operator converts a unit or compose file before deploying.
+**Storage additionally refuses to create a store** at the resolved path while a retired database-path name is set
+([05-storage](05-storage.md)), so even a misclassified list never opens an empty store in place of the real one.
 
-- **`SurfaceEnv`**: an env var or operator-file key that is set. Config reports it once per boot (at `Boot`
-  or `Load`, before compat exists); the kernel buffers the report and hands it to compat once compat is built.
-- **`SurfaceConfig`**: a legacy API path written through the ABO compat handler. Reported per use. Reading
-  or writing the blob is **not** a legacy use: until cutover the blob is the storage format (§1.12.2).
-
-**Blob names outlive the window.** An alias's `LegacyYAML` key is an operator-file key (a user surface, governed
-by the ledger like env names); its `LegacyBlob` field is the storage format. They are separate fields (R9-5,
-DATA9-6) because they differ: HEAD's `json:"-"` keys have a file key and no blob field. Retiring the row stops the
-operator-file and env spellings; the app's legacy config store keeps reading and writing the blob field until that
-family's cutover, whatever the row's state.
-
-**Where the rows come from (SIMP3-3, SIMP4-10).** The ledger the kernel hands to `compat` is the app's
-(`app.Options.CompatLedger`; ABO embeds a generated copy of `docs/compat-surfaces.md` kept under the books
-module, with a CI freshness check, because `.dockerignore` excludes `docs`; R4-4, MOD4-1) merged with core's
-own fragment, embedded by `compat`. Core's fragment holds **only names every app shares**: the permanent
-`OTEL_*` ecosystem env aliases of [05-metrics](05-metrics.md) §10 (C7). Every window alias, and every alias that
-carries an app's name, is a row of the app's ledger (R1). A row ID in both is a boot error (09 §9.2.9);
-`TestCoreLedgerFragmentPermanentOnly` asserts that every core-fragment row has gate `permanent`. From **S2b**,
-when the ledger lands, a config alias whose row is in neither fails registration (`ErrNoLedgerRow`); at S2 there
-is no ledger and no kernel storage, so aliases register unchecked and their uses are logged, not recorded
-(COR4-20).
-
-compat emits the one-time deprecation warning for window rows and feeds
-`<namespace>_compat_legacy_use_total`. When a window alias may be removed is decided by 09 §9.2.1 (W's dates,
-release notes and the owner's check of the process-local counter on the reference host, A-14) and done by a contract PR checked by `TestNoContractBeforeSunset`; nothing is removed or refused
-by a clock, and no runtime switch turns aliases off.
-
-| Ledger row | Read? | On use | Removed |
-|---|---|---|---|
-| window gate | yes | applied; `OnLegacyUse` (compat warns once) | contract PR after W (09) |
-| permanent gate | yes | applied; `OnLegacyUse` (no warning) | never (or at the next major, 09 §9.6 row 18) |
-| `Retired` state | no | key has `ProtectAdmin` or higher (incl. `ProtectOperator`), **or is a secret key**: **boot fails** with `*RetiredAliasError` naming the canonical variable; other keys: one warning per boot | retired rows of protected and secret keys are kept until the next major; others are deleted one minor after contract (09) |
-
-The retired rule exists because silently ignoring a legacy database-path or sign-in name after the window
-points the app at a new, empty database or turns basic auth off (OPS-5; ABO recorded the same hazard,
-`config.go:2519-2544`). Secret keys are included because an ignored legacy secret name makes its consumer
-refuse to start without saying why (`ABS_JWT_SECRET`, a `BindEnv` window name at
+The refusal exists because silently ignoring a renamed database-path, sign-in, proxy or path name would point the
+app at a new, empty database or open a gate (OPS-5; ABO recorded the same hazard, `config.go:2519-2544`), and an
+ignored secret name makes its consumer refuse to start without saying why (`ABS_JWT_SECRET`, bound at
 `internal/config/abs_config.go:45-47`; absauth refuses to boot without it, `internal/server/absauth/config.go:20-22`).
+Every other name only warns, because a stale tuning value must not stop startup.
 
 #### 1.3.7 Protection classes (normative)
 
@@ -970,11 +618,17 @@ declares keys; each key table in the 05 files carries a **Protection** column.
 | ABO class today | Protection | Keys (core examples; owning spec tables each key) |
 |---|---|---|
 | `FieldSignIn` | `ProtectAdmin` | everything else that decides who signs in and how: `core.auth.*` sign-in keys (OAuth/OIDC providers, client ids and secrets, redirect base, default role) ([05-authn](05-authn.md)); the Basic gate's `core.http.basic_gate.*` (row below); the books ABS token sign-in switch |
-| — (new, SEC-6) | `ProtectAdmin` | `core.http.{trusted_proxies, client_ip_header, peer_allowlist, cors.allowed_origins, basic_gate.*}` ([05-http-api](05-http-api.md); on a legacy-backed install `peer_allowlist` and `trusted_proxies` are HEAD file-only keys and therefore operator-only, below); `core.updater.{mode, channel, restart_*}` ([05-updater](05-updater.md)); OTLP endpoints and `core.metrics.{path, listen}` ([05-metrics](05-metrics.md)); `core.integrations.egress.lan_allow` (SEC-15; see below) |
+| — (new, SEC-6) | `ProtectAdmin` | `core.http.{trusted_proxies, client_ip_header, peer_allowlist, cors.allowed_origins, basic_gate.*}` ([05-http-api](05-http-api.md)); `core.updater.{mode, channel, restart_*}` ([05-updater](05-updater.md)); OTLP endpoints and `core.metrics.{path, listen}` ([05-metrics](05-metrics.md)); `core.integrations.egress.lan_allow` (SEC-15; see below) |
 | `FieldExecutable` | `ProtectAdmin` | a program the server runs, or the managed-copy-vs-path switch |
 | `FieldServerPath` | `ProtectAdmin` | a path the server reads, writes, scans or serves (`core.log.file.path`, library and tool paths) |
 | owner trust root (`ownerTrustRootFields`, `internal/config/protected_fields.go:209-227`; `update_service.go:770-800`) | `ProtectOwner` | the successors of all five HEAD owner-only fields, plus the switch that would turn the owner gate off (SEC3-6): books' `modules.books.identity.{owner_email, cf_access_team_domain, cf_access_aud}` (the identity ABO's `internal/cfaccess` proves; core ships no owner verifier, 05-authn §4.8), `core.auth.mode` (HEAD `enable_auth`), the `allowed_emails` and `allowed_domains` of every sign-in provider (HEAD `oauth_allowed_emails`) and `core.auth.owner.required` ([05-authn](05-authn.md) §8). HEAD's threat holds unchanged: a second admin, or a stolen admin session, must not repoint Access or the admitted set and mint the owner's identity |
 | `FieldDatabase` | `ProtectOperator` | `core.storage.path`, `core.paths.*` |
+
+HEAD's file-only keys (`json:"-"`: the peer allow-list, the tunnel connector addresses, the login-saturation bucket,
+`public_base_url`, the Cloudflare guest and invite keys, `bootstrap_key_ttl*`, the ABS JWT secret;
+`internal/config/config.go:1636-1759`) become ordinary keys with their declared class in R2: an admin may store the
+peer allow-list and the trusted proxies through Settings (`ProtectAdmin`), which HEAD did not allow. R2's release
+note says so.
 
 `core.integrations.egress.lan_allow` — `[]string` of CIDRs or host names, default `[]`, restart-free, owned and
 enforced by `integrations` ([05-metadata](05-metadata.md) M1/M2): the LAN targets that **every instance without
@@ -984,95 +638,26 @@ enforced by `integrations` ([05-metadata](05-metadata.md) M1/M2): the LAN target
 `ProtectAdmin` is checked as `Actor.Can("core:admin") && Actor.Interactive`. `ProtectOwner` adds `Actor.Owner`
 once an owner identity is set and an owner verifier is configured, whatever the caller's sign-in method, as
 HEAD does "once `owner_email` is set" (`protected_fields.go:209-227`); before that it is checked as
-`ProtectAdmin`. The auth-off principal never holds
-`core:admin` ([05-rbac](05-rbac.md)). HEAD's rule for every protected field is
-`!prior.EnableAuth || auth.MethodFromContext(ctx).MayChangeCredentials()` (`internal/config/update_service.go:781`
-@748fd787a), applied after the owner-trust-root check, which is not skipped with auth off (`:772-779`). With auth
-off:
+`ProtectAdmin`. **With authentication off** the auth-disabled principal never holds `core:admin`
+([05-rbac](05-rbac.md)), so it changes no key at `ProtectAdmin` or higher through `Apply` (SEC4-8), for every app,
+ABO included: `core.auth.mode`, the Basic gate's keys, server paths, executables, perimeter, updater and
+sign-in keys, and the protected fields of integration instances. An auth-off operator sets them through their
+canonical operator names (`ABO_CORE_AUTH_MODE=required`, `ABO_CORE_HTTP_BASIC_GATE_*`) and restarts. This replaces
+HEAD's `!prior.EnableAuth` exemption (`internal/config/update_service.go:781`), under which any request could change
+a protected field while auth was off; R2's release note says "With authentication off, Settings can no longer turn
+it on: set `ABO_CORE_AUTH_MODE=required` and restart." The owner-trust-root check is never skipped
+(`update_service.go:772-779`).
 
-- **The keys whose alias is `HEADAuthOffWritable` keep HEAD's rule exactly on a legacy-backed install** (A-2, lead
-  decision; R9-5, SEC9-1): `core.auth.mode` (HEAD `enable_auth`) and the Basic gate's
-  `core.http.basic_gate.{enabled, username, password}` (HEAD `basic_auth_*`, all four `FieldSignIn` at HEAD,
-  `internal/config/protected_fields.go:55-58` @748fd787a). The auth-disabled principal may store them through the
-  settings page or the `/api/v1/config` alias, after the owner-trust-root check; each is written into HEAD's own
-  field in place (`enable_auth`, `basic_auth_enabled`, `basic_auth_username`, and the password into HEAD's encrypted
-  `basic_auth_password` row), so every build reads it after a rollback (05-authn §4.11, `TestAuthEnable_MatchesHEAD`,
-  `TestRollback_AuthOffBasicGateStaysOnPrev`). **What selects HEAD's rule (SEC9-13):** the generated per-key
-  `Alias.HEADAuthOffWritable` flag (§1.3.1), honoured under §1.3.1's one predicate (the app supplies a legacy
-  config store and the key's value lives in a legacy row: its `LegacyBlob` field or a `legacy.SecretsStore` row;
-  SEC10-5), so a native app never inherits it (`TestAuthOff_NativeAppRefusesAuthModeWrite`). H3 clears it on
-  `enable_auth` only; the three Basic gate keys keep it together until the earlier of H2 and the settings cutover,
-  which precedes or ships with H3, with one release note (§1.12.5, SEC9-7, R9-5, SEC10-6). The canonical
-  `<APP>_CORE_AUTH_MODE=required` is an additional operator name that locks the key (C3) and that no build before
-  S4 r1 reads (S4 r1's gin auth follows the effective key; 05-authn §4.11, 09 §9.2.1 row 3; SEC9-11); ABO's legacy
-  `ENABLE_AUTH=true` / `enable_auth: true` keeps HEAD's precedence and does not beat a stored `false` (§1.3.5) until
-  the auth-precedence cutover H3 (§1.12.5). The Basic gate's legacy names keep HEAD's precedence through H3 and
-  after it (§1.12.5).
-- **Integration-bound fields keep HEAD's rule too on a legacy-backed install (R10-10, SEC10-3; lead ruling).** Every
-  integration-bound blob field of §1.12.3 (AI endpoint rows and the `openai_*` pair, metadata sources, webhooks,
-  Deluge and `download_client`; URLs, hosts, credentials, headers, `auth_ref`, and the creation of a list row) is
-  `FieldUnprotected` at HEAD (`internal/config/protected_fields.go:137-165` @748fd787a), so with auth off every
-  write passes there (`update_service.go:781`). Their aliases are `HEADAuthOffWritable` (§1.3.1): with auth off
-  the auth-disabled principal passes their `ProtectAdmin` check after the owner-trust-root check, on the S3
-  façade, on the `/api/v1/config` alias and, from S7, through `integrations.Registry.Put` and `Test`, which apply
-  the same rule (05-metadata M1.3). So an auth-off ABO operator keeps creating and editing AI endpoints, metadata
-  sources, webhooks and the legacy singletons in Settings, as at HEAD, and every value is written in place in
-  HEAD's row, which every older build reads. A list-family row has no operator layer at all, and no spec
-  promises an `ABO_CORE_*` name for these fields. The flag ends for an instance's fields together, at the earlier
-  of H2 and its family's integrations cutover (05-metadata M1.10).
-- **Every other `ProtectAdmin`/`ProtectOwner` key on ABO** (server paths, executables, perimeter, updater and
-  sign-in keys other than the four above) is refused through `Apply` with auth off (403, the auth-off half of
-  09's `TestLegacyRoleReachUnchanged`), a tightening recorded in 09 §9.2.6 (SEC4-8). An auth-off operator changes
-  such a key through its **canonical** name where the key has one, which locks: its legacy names stay
-  `BelowStored`, and `config_legacy_name_shadowed` says so. A value given only under a canonical name is not read by an older build, so
-  while a rollback below that release is possible the operator keeps the stored setting (or, for a key HEAD
-  re-applies from env, its legacy name) at the same value (§1.3.5; 09 §9.2.1 row 3). With authentication off, the
-  Basic gate is set in Settings, not only through `<APP>_CORE_HTTP_BASIC_GATE_*`, so that it stays on after a
-  rollback (the bullet above; 09 §9.2.1 row 3's release note, cross-cluster).
-- **`FileOnly` keys on a legacy-backed install** (HEAD's `json:"-"` fields: the peer allow-list
-  `core.http.peer_allowlist`, the tunnel connector addresses `core.http.trusted_proxies`, the login-saturation
-  bucket, `public_base_url`, the Cloudflare guest and invite keys, `bootstrap_key_ttl*`, the ABS JWT secret;
-  `internal/config/config.go:1636-1759` @748fd787a; the `json:"-"` SMTP fields are integration-bound passthrough
-  values, file and env only and never stored, as at HEAD: they are `notify/email`'s in-memory overlay, 05-notify §10) are `ProtectOperator` whatever their declared class, with auth
-  on or off: no caller stores them, as at HEAD, so nothing an older build would not read is ever stored for them and
-  a rollback never empties a perimeter list (R9-5, DATA9-6; `TestFileOnlyLegacyKeysNeverDBStored`). A native app
-  keeps each key's declared class (05-http-api tables `peer_allowlist` and `trusted_proxies` as `admin`).
-- **Native apps (hello, TV, Movies) keep SEC4-8 for every protected key, `core.auth.mode` included:** the
-  auth-disabled principal changes none through `Apply`, and auth is turned on by setting `core.auth.mode=required`
-  through its canonical env name or the operator file's canonical path and restarting. Integration instances follow one rule, stated identically in 05-metadata M1.3 (SEC2-7): any
-`core:integrations.manage` holder writes instance URL and credential fields; setting an instance's `Local` flag
-(which admits every loopback, private and CGNAT address), or keeping it across a URL change, needs the `ProtectAdmin`
-check, and so does `Registry.Test` with `Local=true`; every instance without `Local` reaches public addresses plus
-`lan_allow` only. On a **native** instance a secret field whose effective value is operator-sourced (a canonical
-overlay or a `BelowStored` fill) is bound to its origin, as 05-metadata M1.4 step 2 states (SEC7-3). On a
-**legacy-backed** instance (ABO's singletons until the integrations cutover) that binding reduces to HEAD's
-behaviour, which is no regression: the secret goes to the instance's effective destination, as at HEAD (A-2). What
-keeps a non-admin from repointing a stored or operator credential there is the `ProtectAdmin` class of the
-integration-bound destination and secret fields on the façade from S3 to S7 (below, SEC4-7) and, from S7, 05-metadata M1.3's rules on every route.
-On a legacy-backed instance, **creating** an instance (an `ai_endpoints` row, a webhook, a metadata source) and
-changing any field that selects which secret is sent (an `ai_endpoints` row's `auth_ref`, a metadata source's
-credential keys, the family-level webhook secret) count as a destination and secret change and need the
-`ProtectAdmin` check, else 403 with nothing written (R9-4, SEC9-6; 05-metadata M1.3 states the same). With auth
-off on a legacy-backed install the auth-disabled principal passes that check (the integration-bound bullet above,
-R10-10).
-
-**Integration-bound blob fields before S7 (SEC4-7).** Until 09 S7 hands ABO's legacy singletons to
-`integrations.Registry.Put`, their blob fields (URL, host, credentials, headers of the rows marked
-*integrations* in §1.12.3) are written through the S3 façade and, from S4, through the `/api/v1/config` alias, where
-a custom role holding `core:settings.manage` could otherwise point a URL at a host it controls and have the stored
-credential follow it. From S3 every such field is therefore `ProtectAdmin` on the façade (a new row of a list family
-and an `ai_endpoints` row's `auth_ref` included, SEC9-6), and a change of a URL's
-origin before S7 clears that instance's stored secret (in place: the blob field or the encrypted row is cleared, and a kept
-secret's gap-fill file copy removed) unless the same request re-supplies it, judged on the raw payload (05-metadata M1.3's rule), so
-the hosts a legacy-backed instance reaches with `Local=true` were all written by an admin (SEC9-11).
-`TestPreS7Facade_IntegrationURLIsProtectAdmin` covers both. **This is a tightening, not parity (SEC9-10):** at HEAD
-these fields are `FieldUnprotected` (`internal/config/protected_fields.go:137-161` @748fd787a), so an admin's
-`settings.manage` API key could change them through `PUT /api/v1/config`; from S3 `ProtectAdmin` needs an interactive
-admin session. 09 §9.2.6 records it under "Recorded changes" with the release note "API keys can no longer change
-integration URLs or credentials in Settings; use an interactive admin session" (cross-cluster), and
-`TestLegacyRoleReachUnchanged` carries the cell. The tightening applies with authentication on only: with auth off
-these fields keep HEAD's rule (`HEADAuthOffWritable`, above; R10-10), so 09 records no auth-off loss for them and
-its auth-off release note promises no `ABO_CORE_*` path for them (cross-cluster).
+**Integration instances** follow one rule, stated identically in 05-metadata M1.3 (SEC2-7): any
+`core:integrations.manage` holder writes instance URL and credential fields; creating an instance, changing a
+field that selects which secret is sent (an AI endpoint's `auth_ref`, a metadata source's credential keys), setting
+an instance's `Local` flag (which admits every loopback, private and CGNAT address), or keeping it across a URL
+change, needs the `ProtectAdmin` check, and so does `Registry.Test` with `Local=true`; every instance without
+`Local` reaches public addresses plus `lan_allow` only. A secret field whose effective value is operator-sourced is
+bound to its origin, as 05-metadata M1.4 step 2 states (SEC7-3). From R2 this holds for ABO's migrated instances
+too: M6 writes them as native instances, so a non-admin `core:settings.manage` key can no longer repoint a URL and
+have the stored credential follow it, which HEAD allowed (`internal/config/protected_fields.go:137-165`). R2's
+release note: "API keys can no longer change integration URLs or credentials; use an interactive admin session."
 
 `TestEveryURLPathOrSignInKeyClassified` (port of `protected_fields_test.go`) fails when a registered key whose
 name or format looks like a URL (`format=uri`, `*_url`, `*endpoint*`), a path (`format=path`, `*_dir`, `*_path`,
@@ -1080,23 +665,21 @@ name or format looks like a URL (`format=uri`, `*_url`, `*endpoint*`), a path (`
 `*origins*`, `*allowlist*`, `*client_ip*`), key material or encryption policy (`*recipient*`, `*encryption*`,
 `*keyring*`, or a non-secret field named `*_key` / `*_key_file`; SEC2-8: `core.backup.recipients` and
 `core.backup.encryption` have none of the other shapes) or a sign-in setting (`core.auth.*`) has a Protection
-below `ProtectAdmin` and no `ProtectionWaivers` entry with a reason.
+below `ProtectAdmin` and no `ProtectionWaivers` entry with a reason. It runs over every row of ABO's rename table
+too, so a books key HEAD classed `FieldSignIn`, `FieldExecutable` or `FieldServerPath` keeps that class.
 
 ### 1.4 Lifecycle
 
 Inside `app.New` (03 §3.7). The phase names and the order of every boot step, config's included, are owned
 by the one boot-phase table, [06](06-app-sdk.md) §6.5.1 (R2-8); this list gives config's and secrets' part of
-it and the constraints it must keep. Normative constraint (C13): **nothing in steps 0–4b writes the store, and
-steps 5–6 run strictly after the boot's pre-migration checkpoint and after the storage DAG**, as the **first**
-every-boot reconcilers of 06 P4d (step 1), before the revocation-journal re-apply (which needs the keyring and the
-effective `core.backup.dir`, declared from S4 by `backup/journal`, 05-backup; COR3-2, DATA3-5, COR4-10), before
-handles are issued to services and before any listener opens. Config's boot writes nothing apart from
-`c/secrets/meta` on a new store.
+it and the constraints it must keep. Normative constraint (C13): **nothing in steps 0–4 writes the store before
+the pre-migration checkpoint**; step 5 runs after the checkpoint and **before** the migration list (step 5b),
+because the cutover step M2 encrypts through it; step 6 runs after the migration list, before handles are issued to
+services and before any listener opens.
 
 0. Before 06 P0a the kernel runs `config.ResolveStateDir` once (§1.7, C15) and passes the result to P0a,
-   `Options.BootRecordRoot` and every later consumer; once the deferred P−1 is built (A-6), it runs before P−1 and
-   hands P−1 the same result (COR9-7).
-1. `config.NewStore(opts)`; the kernel registers **core** sections, with the app's `Legacy.Aliases`.
+   `Options.BootRecordRoot` and every later consumer.
+1. `config.NewStore(opts)`; the kernel registers **core** sections.
 2. `Store.Boot` (06 P0; it reads no storage): takes the state directory from step 0 (a config file that sets
    `core.paths.state_dir` fails boot, §1.7), calls `Options.BootRecordRoot`, then reads the file (parse error =
    boot error), env, flags and the boot record for core sections and validates operator values. The returned
@@ -1104,67 +687,51 @@ handles are issued to services and before any listener opens. Config's boot writ
    operator-only paths `core.paths.state_dir` and `core.storage.path`, which 06's storage-open step (P2) reads
    from it (COR2-8). Step 0 already read `core.storage.path` from every operator layer, the file included
    (OPS5-13), so `Boot` only asserts that the effective path is the one step 0 used (a mismatch is a kernel
-   bug and fails boot), and the keyring never lands beside a database that is not the one opened. A retired protected or secret alias set in env or file
-   fails boot here (§1.3.6), as does a conflict on a protected key (§1.3.5).
+   bug and fails boot), and the keyring never lands beside a database that is not the one opened. A retired name
+   of a protected or secret **core** key fails boot here (§1.3.6), as does a conflict on a protected key (§1.3.5).
 3. The kernel registers the sections of every **enabled** module (from manifests), then `Store.Load` (06 P3)
    seals the registry and builds every section from defaults, operator layers and the boot record.
    Registration after `Load` → `ErrSealed`, boot fails. A section whose operator values fail decode or
-   `Validate` fails boot (the operator must fix their input). From S2b the DB layer is attached at step 6.
-   **At S2**, before core storage exists, the kernel attaches `app.Options.LegacyConfigStore` here instead (ABO's
-   legacy store over the store that `serve` opened before `app.New`, HEAD's order), read-only: a read before any
-   write, so C13 holds (COR3-1). The kernel calls no `Open` at S2 (`legacy.ConfigOpener` lands at S2b, COR6-8):
-   `serve` already ran ABO's boot steps. The bridge field is deleted in the S2b PR.
-4. The kernel builds logging and metrics from `core.log` / `core.metrics` (operator layers and defaults).
-   Storage opens at `core.storage.path` (`ProtectOperator`: needed before the DB layer exists), takes its
-   pre-migration checkpoint and runs the DAG (05-storage §5S.4).
-4b. **Store construction (from S2b; R4-1).** At 06 P4c the kernel builds the DB layer's store: the
-   native store over `c/config/` and, when the books manifest supplies `LegacyStores.Config(legacy.Handles{…})`,
-   that store over books' own handles, joined by the routing store (§1.3.3, C4). A constructor error fails boot.
-5. At 06 P4d step 1, in this order, which 06 §6.5.1's one boot table states identically (COR5-2): (a) the
-   kernel calls the store's `Open` when it has `legacy.ConfigOpener` (for ABO, its key-regeneration guard, its encryption init, which loads ABO's
-   legacy key, and, from S2b until the S3 façade, its settings load, R4-6, §1.12.2: over the one handle, never a
-   second Pebble open, never a write; this is before books' `Register` at 06 P6, the first module code that reads
-   `AppConfig`); then (b) `secrets.Open` (from S3) with the store's `legacy.ConfigSecrets` `Secrets()` as its
-   `legacy.SecretsStore` (§2.3):
-   the keyring and the `k0-legacy` capture of the key (a) loaded; its only store write is `c/secrets/meta` on a
-   new store; it retires no derive key
-   (that is P5); then (c) `Store.SetSecrets`; then step 6. Run the other way round, `KeyMaterial()` would be nil,
-   `k0-legacy` never recorded and every encrypted legacy row unreadable
-   (`TestP4dStep1_LegacyOpenBeforeSecrets`). The order is therefore books store `Open` → `secrets.Open` → `SetSecrets` → `Attach`, as 06 v1.6 §6.5.1 states.
-6. `Store.Attach` with the store and the kernel's committer (core's `core/internal/configstore`, §1.12.2):
-   `OverrideStore.Load` reads,
-   nothing is written. Rows are decoded per section; if a section fails
-   decode or `Validate` with its overrides but passes without them, **all of that section's overrides are
-   quarantined** (kept, ignored, reported, health token `config_overrides_quarantined`) and boot continues.
-   Shadowed legacy names are reported in `AttachReport.Shadowed` with health token `config_legacy_name_shadowed`
-   (§1.3.5).
-   Rationale: an operator cannot repair the DB without booting; ABO's equivalent path is fatal
-   (`cmd/root.go:385-391`). Services built after this step (06 P5) see the DB layer; nothing built before it
-   reads a DB-layer value.
+   `Validate` fails boot (the operator must fix their input). A retired name of a protected or secret module or
+   passthrough key fails boot here, still before storage opens.
+4. The kernel builds logging and metrics from `core.log` / `core.metrics`. Storage opens at `core.storage.path`
+   (`ProtectOperator`), checks disk headroom and takes its pre-migration checkpoint (05-storage §5S.3.12).
+5. `secrets.Open` (§2.4) loads or creates the keyring and writes `c/secrets/meta` on a new store (its only store
+   write); then `Store.SetSecrets` binds `Ref`s. There is no app-supplied config store to open: HEAD's settings
+   load, encryption init and key guard, which ran in ABO's `serve` before the server (`cmd/root.go:280,345-369`),
+   are replaced by `Load`, `Attach` and M2 (C17).
+5b. The migration list runs (05-storage §5S.3.13; 06 §6.5.1). On the first R2 boot it includes M2 (§1.12.2): the
+   kernel hands books' steps `Store.Importer()` and the secrets store's `Stage` with their other migration
+   dependencies.
+6. `Store.Attach` with core's native store and the kernel's committer (`core/internal/configstore`):
+   `OverrideStore.Load` reads, nothing is written. Rows are decoded per section; if a section fails decode or
+   `Validate` with its overrides but passes without them, **all of that section's overrides are quarantined**
+   (kept, ignored, reported, health token `config_overrides_quarantined`) and boot continues. FailClosed keys whose
+   stored value wins are reported in `AttachReport.FailClosed` with health token `config_fail_closed_override`
+   (§1.3.5). Rationale: an operator cannot repair the DB without booting; ABO's equivalent path is fatal
+   (`cmd/root.go:385-391`). Services built after this step (06 P5) see the DB layer; nothing built before it reads
+   a DB-layer value.
 7. The kernel hands `Store.PassthroughValues()` to the integrations registry, which overlays them in memory
    (05-metadata M1.4; C11). In 06 P5, once the effective config is known, the kernel calls
-   `secrets.(*Store).RetireUnused` with the backup service's in-use check (§2.3; COR3-2); before S8 there is no
-   backup service, the call is skipped and `verify` derive keys stay usable (fail-safe).
-8. The store's `legacy.ConfigExternalWriter.Changed` fires when a writer other than the Store changed stored
-   values: from S2 until the S3 PR deletes the capability, ABO's legacy config path after every blob write
-   (§1.12.2). Config, which detects the capability at `Attach` through its unexported mirror, re-runs
-   `OverrideStore.Load`,
-   republishes changed live keys of core sections and marks restart keys pending, so a UI edit of a perimeter
-   key reaches the running perimeter without a restart at S2 **and** S2b, as at HEAD (COR3-1, COR4-2).
-9. Runtime (from S3): `Apply` = authorize (permission, then protection) → decode candidate per touched section →
+   `secrets.(*Store).RetireUnused` with the backup service's in-use check (§2.3; COR3-2).
+8. Runtime: `Apply` = authorize (permission, then protection) → decode candidate per touched section →
    `Validate` → write the boot record if boot keys changed → `Committer.Commit` (one batch: `OverrideStore.Stage`,
-   staged secrets (legacy copies in place, native ones in `c/secrets/`), audit from S4 (at S3 a log line, §1.3.3); for a legacy store, inside its
-   `CommitLocked` hold with the store's post-commit step, §1.3.3) → publish snapshots for live keys (atomic swap) → bump
-   generation → `AfterCommit` hooks → wake `OnChange` subscribers. If `Commit` fails after the boot record was
-   written, the previous boot record is restored before `Apply` returns (boot keys are restart-class, so nothing
-   was published). A value equal to this binary's default is staged as an unset (C4). For a key with a legacy blob
-field an unset **writes the default value explicitly and never removes the field** (SEC7-2): an older build lays
-only the fields the blob holds over its env (`persistence.go:1131-1170`), so a removed `enable_auth` would let a
-left-over `ENABLE_AUTH=false` win there (`TestLegacyUnsetWritesDefault`).
-10. `Close` cancels subscriber contexts and waits up to the drain timeout.
+   staged secrets, the audit record) → publish snapshots for live keys (atomic swap) → bump generation →
+   `AfterCommit` hooks → wake `OnChange` subscribers. If `Commit` fails after the boot record was written, the
+   previous boot record is restored before `Apply` returns (boot keys are restart-class, so nothing was
+   published). A value equal to this binary's default is staged as an unset (C4).
+9. `Close` cancels subscriber contexts and waits up to the drain timeout.
 
 Restart-required and boot keys: `Apply` commits them and returns them in `RestartPending`; `Get` keeps the boot
 value; `Pending` shows the stored value; `KeyState.Pending` drives a "restart required" badge in the shell.
+
+**Factory reset.** A reset is 05-storage's staged, restart-bound swap (`KindReset`, §5S.3.15; native route only).
+For config and secrets it means: the boot record `<state_dir>/config.boot.json` is set aside with the database
+(so module enablement returns to its defaults); the fresh store has no `c/config/` row, so every key is at its
+default or its operator value; the keyring is **kept** (14 Q-J's recommendation (a); the owner may override it), and
+only the reset boot rewrites the keyring header's `install_id` to the fresh install's (`secrets.Options.ResetBoot`,
+§2.4). No settings are written with defaults in the request, and there is no gap-fill file left to rewrite (M2b
+removed HEAD's keys from it).
 
 ### 1.5 Error semantics
 
@@ -1172,35 +739,32 @@ value; `Pending` shows the stored value; `KeyState.Pending` drives a "restart re
 |---|---|---|
 | Config file exists but unreadable or unparsable | fail-closed (boot error) | operator intent unknown; ABO ignores viper read errors (`cmd/root.go:627`) — behaviour change, release-noted |
 | Unknown key in file / unknown prefixed env var | fail-open, warn once | stale keys must not stop startup (`config.go:2587-2590`) |
-| Window or permanent alias used | fail-open, applied, counter (+ deprecation warning once for window aliases) | compat window (09 §9.2.1) |
-| Retired alias set, key `ProtectAdmin` or higher, or a secret key | fail-closed (boot), message names the canonical variable | silent fallback opens a wrong database, disables sign-in or starves a consumer of its credential (OPS-5, OPS2-7) |
-| Retired alias set, other key | fail-open, warn once per boot | harmless leftovers |
-| Canonical and alias both set in one layer, different, key `ProtectAdmin` or higher | fail-closed (boot), message names both names | a drop-in overriding only the legacy name would open an empty store (OPS2-12) |
-| Canonical and alias both set in one layer, different, other key | fail-open, canonical wins, warn, health `config_alias_conflict` | an obvious mistake, but not worth an outage |
-| Operator value fails decode or `Validate` | fail-closed | operator must fix input |
-| Legacy bool that `strconv.ParseBool` rejects (HEAD reads it as `false`) on a `core.auth.*` key or a key at `ProtectAdmin` or higher | fail-closed (boot), message names the variable, the spelling and the canonical name; release-noted | HEAD would silently turn the switch off, which can open a gate (A-7) |
-| Same, on any other key | fail-open: `false`, as at HEAD; one warning per boot | decode parity (A-7) |
+| Retired name set, key `ProtectAdmin` or higher, or a secret key | fail-closed (boot, before storage opens); `*RetiredNameError` names every such name and its canonical env name and file path | a silent fallback opens a wrong database, disables sign-in or starves a consumer of its credential (OPS-5, OPS2-7) |
+| Retired name set, other key or dropped key | fail-open: ignored, one warning per boot naming the canonical name, health `config_retired_name_ignored` | harmless leftovers must not stop startup |
+| Canonical name and ecosystem binding both set, different, key `ProtectAdmin` or higher | fail-closed (boot), message names both | a drop-in overriding one name would open an empty store (OPS2-12) |
+| Canonical name and ecosystem binding both set, different, other key | fail-open, canonical wins, warn, health `config_alias_conflict` | an obvious mistake, but not worth an outage |
+| Operator value fails strict decode or `Validate` | fail-closed, message names the variable or file key | operator must fix input; HEAD's lenient spellings are not read (§1.3.6) |
+| FailClosed key: stored value more restrictive than the operator value | fail-open toward the stricter value: stored value effective, warn, health `config_fail_closed_override` | a stale operator value must not weaken a security switch (§1.3.5) |
 | `<NAME>_FILE` unreadable | fail-closed | a missing credential file is a deployment error |
 | Boot record unreadable (I/O) | fail-closed | never boot with a module silently re-enabled or disabled |
 | Boot record unparsable | fail-open: file renamed `config.boot.json.bad`, ignored, health `config_boot_record_quarantined` | the operator can repair a file, but the app must boot to show why |
-| Override rows or the blob unreadable (I/O) | fail-closed | running on defaults would let the next save overwrite stored config (`cmd/root.go:360-364`, comment at `:361`) |
-| Stored legacy row unparsable (the books store cannot decode the blob) | fail-open: the store's `Load` yields an error for every key it stores there, so they are quarantined (health `config_overrides_quarantined`), and its `Stage` refuses them with a storage error until the row is repaired; the bytes are never overwritten | a render from bytes the store could not read would destroy them; the operator must be able to boot to see why |
-| Store constructor or the store's `Open` (`legacy.ConfigOpener`) fails (incl. ABO's key-regeneration guard, encryption init or, before S3, its settings load, §1.12.2) | fail-closed (boot) | HEAD's class for those steps is Fatal (`cmd/root.go:345-369`): running on defaults would let the next save overwrite stored config |
-| `BelowStored` legacy name of a `ProtectAdmin`+ key set and different from the stored value (one equal to the default included, SEC7-2) | fail-open: the stored value stays effective; warn naming the canonical variable, `AttachReport.Shadowed`, health `config_legacy_name_shadowed` | HEAD precedence holds, but an operator who expected the legacy name to win must learn the name that does (SEC6-1) |
+| Override rows unreadable (I/O) | fail-closed | running on defaults would let the next save overwrite stored config (`cmd/root.go:360-364`) |
 | State directory: default not creatable, no explicit value, database path relative or empty | fail-closed (boot), message names `<APP>_CORE_PATHS_STATE_DIR` | HEAD's fallback needs an absolute database path (`state_dir.go:144-147`) |
 | State directory: explicit value not usable | fail-closed (boot); never falls back | the operator named it (`state_dir.go:140-142`) |
 | Override row fails decode/validate | fail-open per section: quarantine (§1.4 step 6) | DB cannot be fixed without booting |
-| Override row for unknown key | fail-open: retained, ignored, reported | downgrade safety (gate G5, 02 §2.4) |
+| Override row for unknown key | fail-open: retained, ignored, reported | a module this binary lacks may own it |
+| `Importer.Stage` refuses a value (unknown, operator-only, secret, invalid) | the cutover step quarantines the value and goes on; the key keeps its default (§1.12.2) | data is never dropped silently, and one bad field must not block the cutover |
+| M2 finds encrypted rows and no HEAD key file, no override | fail-closed (boot, nothing written), message names the file, the directories searched and `ABO_CORE_SECRETS_ALLOW_KEY_REGEN` | HEAD's guard (`cmd/root.go:726-783`): a missing key is usually a wrong mount, not a lost key |
+| M2 cannot decrypt a row (override set, or wrong or corrupt key or row) | fail-open per secret: ciphertext quarantined, unreadable marker written, "must be re-entered", health `secrets_undecryptable` | the app keeps working; the secret is never dropped silently (E4) |
 | `Apply` unknown key (incl. a passthrough path) | refuse `ErrUnknownKey`, nothing persisted | typos must not silently no-op; instances are written through 05-metadata |
 | `Apply` locked key | refuse `*LockedError` | the value would be discarded at next boot (`config.go:2224-2229` rationale) |
 | `Apply` missing permission / protection | refuse `ErrForbidden` / `*ProtectedError` | fail-closed security |
 | `Apply` validation failure | refuse `ErrInvalid` with `*FieldError`s | nothing partially applied |
-| `Committer.Commit` fails (incl. a render conflict after `storage.RetryOnConflict`'s attempts) | fail-closed: nothing published, generation unchanged, boot record restored | durable-before-visible; the blob is never half-written |
-| A books legacy store write (`OverrideStore.Stage`, `SecretsStore.Write`, an instance or rule write) staged into a batch that carries no `CommitLocked` hold of `LockConfigSettings` (`storage.LocksHeld(b, l)` false) | fail-closed: refused with an error wrapping `storage.ErrNotLocked`, nothing staged | a commit outside `configBlobSaveMu` is the race R9-1 closed; the check is on the batch, so a write staged into another batch inside a hold is refused too (R10-4) |
+| `Committer.Commit` fails (incl. a conflict after `storage.RetryOnConflict`'s attempts) | fail-closed: nothing published, generation unchanged, boot record restored | durable-before-visible |
 | `AfterCommit` hook error | committed; `Result.PostCommit` set | hooks cannot veto; caller must know (ABO contract `update_service.go:30-48`) |
 | `OnChange` fn panics | fail-open: recovered, logged, metric; others continue | one subscriber must not break config |
 | `Ref.Resolve` on unset secret | `secrets.ErrNotSet` to the consumer | consumer decides (e.g. provider disabled) |
-| Duplicate path / env-name collision / invalid path | fail-closed at registration | programming error |
+| Duplicate path / env-name collision / invalid path / bad `FailClosed` order | fail-closed at registration | programming error |
 | `ReloadBoot` key in a module section read before that module is registered | fail-closed at registration | only core sections are visible to `Boot` |
 
 ### 1.6 Concurrency contract
@@ -1208,39 +772,11 @@ value; `Pending` shows the stored value; `KeyState.Pending` drives a "restart re
 - `Handle.Get`, `Generation`, `Lookup`, `Keys` are lock-free (one `atomic.Pointer` load per section; `Keys`
   iterates an immutable published index).
 - `Apply` calls are serialized by core config's own store mutex, held from candidate build through publish; it
-  replaces ABO's in-memory `mu` (the `AppConfig` lock), never ABO's save mutex. The boot-record write and `Commit`
-  happen under it; publish happens after `Commit` returns.
-- **Two locks, both kept (DATA9-15, R9-1).** A store may have several writers inside one process. For the books
-  legacy config store the blob is written by config's `Apply`, by integrations' legacy instance store and by the
-  notify-rule store, which books implements beside it and which share its render (C11). HEAD's process-wide save
-  mutex `configBlobSaveMu` (`persistence.go:1890-1897`) **stays**: the three books stores expose it through the
-  one capability `legacy.WriteLock` (`WriteLocks(names []string) []storage.Lock`, declared once in 05-storage
-  §5S.3.11; this file's lock name is `legacy.LockConfigSettings`, the blob and the four secret rows, for which each
-  of the three stores returns the one `configBlobSaveMu` lock at its one rank in 05-storage §5S.3.2's total lock
-  order, R10-4). The kernel resolves it at 06 P4c and hands it as `SettingsLocks` to every writer; no writer calls
-  `WriteLocks` (COR10-5). **Every writer path HEAD covered goes through `storage.CommitLocked` with it (R10-5,
-  DATA10-2):** the config `Committer` (`Apply`), `integrations.Registry.Put`/`Delete` (05-metadata M1.4 step 2a),
-  notify's rule store (05-notify) and `secrets.(*Store).Put`/`Delete` of a kept name (§2.3), which before R10-5
-  committed outside it. `CommitLocked` takes the lock once and holds it from staging through the commit **and
-  through the store's post-commit step**, the gap-fill file write (§1.12.2), so HEAD's serialisation of a save
-  from its snapshot through its file step (`persistence.go:1940-1944` @748fd787a) spans core's commit as it spanned
-  HEAD's direct one. The hold is marked on the batch, and each books store refuses a write staged into a batch
-  without it (`storage.LocksHeld(b, l)`, R10-4; `OverrideStore.Stage` and `SecretsStore.Write` are checked), so a
-  path that forgets `CommitLocked`, or stages into a batch captured from outside the hold, fails its test.
-  **Core-side mutexes (R10-4, DATA10-3):** core config's `Apply` mutex, like the integrations Registry's writer
-  mutex and the rule store's, is taken **before** `CommitLocked`, never inside a `stage` function, so none of them
-  inverts with `configBlobSaveMu`; secrets' per-name keyed mutex (§2.6) is the one exception, taken only inside a
-  `stage`, after the config lock. A `stage` function never calls a books method that takes a HEAD mutex of a family
-  the hold covers (`configBlobSaveMu` is not re-entrant). The legacy `PUT /api/v1/config` alias **splits** each
-  request into `Registry.Put` and `Store.Apply` (§1.12.2), each committing its own batch in its own hold, so no
-  batch carries both and neither takes the other's core-side mutex inside a hold. The store also reads the stored
-  bytes with `GetForUpdate`, so a conflicting render (none can be staged outside the lock from S3, by the
-  exclusive-writer rule of §1.12.2 and the batch check above) fails the later commit with `storage.ErrConflict` and
-  the writer re-reads and retries (`storage.RetryOnConflict`, 3 attempts, each a fresh hold). That read check is
-  books' own code: the blob carries no storage-enforced `CheckedWrites` during the extraction (A-3). The store
-  keeps one pending render per batch, so a key change and a plaintext secret's in-place write in one batch are one
-  blob write. `TestLegacyStoresAreSingletons` (R9-1) covers the one store instance per App; `configBlobSaveMu` is a
-  package variable at HEAD, so it is one mutex per process anyway (COR10-10).
+  replaces ABO's in-memory `mu` (the `AppConfig` lock) and HEAD's save mutex `configBlobSaveMu`
+  (`persistence.go:1890-1897`), which has nothing left to guard once the blob is gone. The boot-record write and
+  `Commit` happen under it; publish happens after `Commit` returns. The native store is the only writer of
+  `c/config/` (the importer writes only inside the migration list, before any `Apply`), and `Stage` reads with
+  `GetForUpdate`, so a conflicting commit fails with `storage.ErrConflict` and is retried.
 - `OnChange`: one goroutine per subscription with a one-slot coalescing mailbox; never blocks `Apply`.
   Subscription count is bounded by code (registered at init). `stop()` is idempotent and waits for an
   in-flight call.
@@ -1259,9 +795,9 @@ of type `tasks.ScheduleConfig` with a default, in a `….schedules` section of i
 ordinary live object key: it is overridden, locked, validated and listed like any other key, and config needs
 no knowledge of the type (config cannot import `tasks`; the section type lives in the owner's package). `tasks`
 refuses at registration a key that is undeclared, not of type `tasks.ScheduleConfig`, not of that form, or
-outside the registering owner's namespace (05-tasks §5T.3.8). A legacy
-interval or enable key becomes an `Alias` whose `Convert` maps it onto `ScheduleConfig` (`{"enabled":true,
-"every":<duration>}`; a legacy `0` that meant "off" maps to `{"enabled":false}`).
+outside the registering owner's namespace (05-tasks §5T.3.8). A HEAD interval or enable key is converted
+onto `ScheduleConfig` once, by its rename-table row's `Convert` in M2 (`{"enabled":true,"every":<duration>}`; a
+HEAD `0` that meant "off" becomes `{"enabled":false}`; §1.12.3).
 
 ### 1.7 Config keys (core-owned sections)
 
@@ -1290,43 +826,35 @@ keys at all (C11).
    The updater marker's `db_path` is not an input: the marker lives inside the directory being resolved, and
    its `db_path` is only `ReaderCheck`'s DB path (05-updater; OPS4-8).
 
-**`core.storage.path` is a kernel pre-boot key from S2 (COR4-20).** Step 3 reads it, but its owning section
-(`core.storage`, 05-storage) lands at S2b. From S2 the kernel therefore registers `core.storage.path` itself as a
-pre-boot core key (`ProtectOperator`, the `--db` flag and the app's aliases such as `DATABASE_PATH`); `storage`
-adopts the declaration at S2b without a change of name, alias or default. Without it a Docker or launchd install
-that sets no state-directory variable would fail boot at S2.
-
-**One resolver from S2 (OPS4-8, OPS5-13).** HEAD's `EnsureSecureStateDir` (`cmd/root.go:336`) resolves from
-`AppConfig.DatabasePath`, which at that point holds viper's defaults, YAML file, env and flags
-(`internal/config/state_dir.go:143-153`), and `ABK_STATE_DIR`. From S2 ABO's `serve`, which still opens the store
-before `app.New`, calls `app.ResolveStateDir(opts)` (06 §6.4.5), which runs `config.ResolveStateDir` over the same
-inputs the kernel uses, instead of `EnsureSecureStateDir`, so the boot record, a restore intent and
-`.encryption_key` are always looked for in one directory. Because step 3 also reads the operator file, a database
-path given only in the YAML file with an uncreatable default falls back to its directory exactly as at HEAD (ABO
-passes HEAD's viper file, `--config` or `<home>/.audiobook-organizer.yaml`, as `Options.FilePath`), so S2 records
-no behaviour change here. One test, one name in this file and in 06: `TestStateDir_OneResolverYAMLDBPath`, an S2
-done-check (09), run in the image as well as as a unit test. The resolver changes at S2, so the image job's
-second run checks the key location from S0 on (below; OPS5-7).
+**`core.storage.path` is a kernel pre-boot key (COR4-20).** Step 3 reads it before storage opens; 05-storage's
+`storage` section declares it without changing its name or default. **One resolver (OPS4-8, OPS5-13).** HEAD's
+`EnsureSecureStateDir` (`cmd/root.go:336`) resolves from `AppConfig.DatabasePath`, which at that point holds viper's
+defaults, YAML file, env and flags (`internal/config/state_dir.go:143-153`), and `ABK_STATE_DIR`. From R1, when the
+kernel opens the store, the kernel's `ResolveStateDir` is the only resolver, over the same inputs (in R1 ABO passes
+the database path and its state-directory value as plain options; from R2 they are `core.storage.path` and
+`core.paths.state_dir`), so the boot record, a restore intent, HEAD's `.encryption_key` and the keyring are always
+looked for in one directory. Because step 3 also reads the operator file, a database path given only in the file
+with an uncreatable default falls back to its directory exactly as at HEAD. `TestStateDir_OneResolverYAMLDBPath`
+(the one name in this file and in 06) checks it, in the image as well as as a unit test.
 
 On Docker and launchd installs step 3 is where `.encryption_key` lives today (the image runs as an
 unprivileged user whose only persistent path is the data volume, `Dockerfile:93-96,104`; neither compose nor
-the plist sets a state directory), so the legacy key is found there and the keyring lands on the volume. The
+the plist sets a state directory), so HEAD's key is found there and the keyring lands on the volume. The
 shipped Dockerfile and plist set **no** state-directory variable: the fallback already yields the database's
 directory, while an explicit value never falls back (step 1), so an image `ENV` would move the keyring of a
 container whose `--db` is on another volume into an anonymous volume that a recreate discards, after which boot
 fails with `ErrKeyMissing` (OPS4-2). If an explicit value is wanted for discoverability, only
-`docker-compose.yml` sets it, next to the named volume and a `command:` that names the same directory. The S0
-image job's second run checks it (09 S0; OPS5-7): it prepares the second named volume as a user must (the image
+`docker-compose.yml` sets it, next to the named volume and a `command:` that names the same directory. The image
+job's second run checks it (09, R1; OPS5-7): it prepares the second named volume as a user must (the image
 creates and chowns only `/data` and runs as uid 1000, `Dockerfile:93-96`, so a fresh volume is chowned to that
-uid first), runs `serve --db` on it, and asserts **from S0 on** that `.encryption_key` sits beside the database on
-that volume and that a secret set through `PUT /api/v1/config` still decrypts after the container is recreated;
-**from S3** it also asserts `secrets.keyring` there.
+uid first), runs `serve --db` on it, and asserts that `.encryption_key` sits beside the database on that volume
+in R1 and that, from R2, `secrets.keyring` sits there and a secret set through the settings route still decrypts
+after the container is recreated.
 
 There is no `core.paths.data_dir`: no component read it, and the database location is `core.storage.path`
 alone (05-storage), so a second data-path key was one of three sources for one fact (COR2-8). The state
-directory holds the boot record, the keyring and the log file. There is no `core.config.legacy_aliases` switch:
-aliases are governed by 09's ledger (§1.3.6). No key in this
-file changes persisted state shape; such switches are release-bound, not keys (09 §9.2.8). Keys that only tune
+directory holds the boot record, the keyring and the log file. No key in this file changes persisted state shape;
+such changes are release-bound migration steps, not keys. Keys that only tune
 behaviour (levels, endpoints, limits) are operational dials and are allowed (OPS-17).
 
 ### 1.8 Metrics
@@ -1341,16 +869,16 @@ All on scope `mediacore.config` (`*metrics.Scope` from `Options.Metrics`).
 | `mediacore_config_quarantined_overrides` | gauge | — |
 | `mediacore_config_post_commit_failures_total` | counter | `section` (closed set: registered sections) |
 | `mediacore_config_subscriber_panics_total` | counter | `section` |
-| `mediacore_config_legacy_plaintext_secrets` | gauge | — (secret keys whose value is read from a plaintext legacy copy, `secrets.Meta.LegacyForm == LegacyPlain`; they stay plaintext until the secrets cutover, §1.12.5) |
+| `mediacore_config_retired_names_set` | gauge | — (warn-class retired names set at this boot, §1.3.6; refused ones never reach a running process) |
+| `mediacore_config_fail_closed_overrides` | gauge | — (FailClosed keys whose stored value beats the operator value, §1.3.5) |
 
-Legacy-name use is counted once, by `compat` (`<namespace>_compat_legacy_use_total{surface="config"}`), not by a
-second config counter.
+Names are shown under the default namespace; 05-metrics owns the naming rule.
 
 ### 1.9 Breaking config's upward imports
 
 | Import today | What it is used for | Where it goes |
 |---|---|---|
-| `internal/database` (`SettingsStore`, `Setting`, `DecryptValue`, `MaskSecret`, `IsEchoedMask`, `LooksLikeMask`) | blob/row persistence, secret decrypt, masks (`persistence.go:883-1260`, `update_service.go:91-373`) | persistence → the `OverrideStore` interface: core's native store, or books' legacy config store (ABO code over ABO's keys, §1.12.2); decrypt of legacy rows stays ABO's cipher inside that store, new secrets → `secrets`; masks → deleted (write-only, C9); the ABO compat handler keeps mask echo logic while its ledger row is live (§2.10) |
+| `internal/database` (`SettingsStore`, `Setting`, `DecryptValue`, `MaskSecret`, `IsEchoedMask`, `LooksLikeMask`) | blob/row persistence, secret decrypt, masks (`persistence.go:883-1260`, `update_service.go:91-373`) | persistence → core's native `OverrideStore`; HEAD's blob codec and row cipher → a frozen copy inside books' cutover step M2 (§1.12.2), deleted in R3; secrets → `secrets`; masks → deleted with `/api/v1/config` (write-only, C9) |
 | `internal/auth` (`MethodFromContext().MayChangeCredentials`, `AccessEmailFromContext`) | protected-field and owner checks (`update_service.go:781,822`) | `config.Actor` filled by the HTTP layer; protection is per-key metadata |
 | `internal/backup` (`LevelDefault`, `ResolveMaxTotalBytes`) | backup defaults documented in config (`config.go:1086-1107`) | `core/backup` (L4) defines and registers `core.backup` itself (imports config at L3 — legal) |
 | `internal/aidispatch` (`Endpoint`, `Protocol`, `ParseCapability`) | AI endpoint conversion/validation (`ai_endpoints.go:94-179`) | endpoints become `ai/<id>` integration instances validated by their descriptor schema ([05-ai](05-ai.md), C11); global AI tuning is `core.ai.*` owned by `core/integrations/ai` |
@@ -1438,50 +966,39 @@ the dependency as adopted.
 | Test | Asserts |
 |---|---|
 | `TestPrecedence_Matrix` | table over every (default, file, env, flag, boot record, override) combination: effective value, `Source`, `LockedBy` |
-| `TestAlias_BelowStoredFeedsDefaultLayer` | a `BelowStored` alias set in env or file: a stored value beats it, it is effective while nothing is stored, `LockedBy` is empty and `Apply` succeeds; the canonical name of the same key still locks; ignored on a `ProtectOperator` key (R5-1(a), OPS5-1) |
-| `TestBelowStored_StoredDefaultStillWins` | a fixture key whose `BelowStored` alias is set to a non-default value while the stored value equals the default → the stored value is effective with `Source` `SourceOverride`, and the shadow token is raised; with nothing set under any operator or `BelowStored` name the same stored value reports `SourceDefault`. ABO's instances: blob `enable_auth: true`, env `ENABLE_AUTH=false` → auth `required`; blob `enable_auth: false`, env `ENABLE_AUTH=true` → auth off, as at HEAD; both raise `config_legacy_name_shadowed` (SEC7-2, A-2) |
-| `TestAttach_LegacyNameShadowedReported` | a `BelowStored` alias of a `ProtectAdmin` key (and of a secret key) set to a value that differs from the stored one → `AttachReport.Shadowed` names it, one warning naming the canonical variable, health `config_legacy_name_shadowed`; no secret value in the log; a `ProtectNone` key is not reported (SEC6-1). Compose cell: compose's default environment (`BASIC_AUTH_ENABLED=false`, `BASIC_AUTH_USERNAME=admin`) over HEAD's stored blob with no UI change → `AttachReport.DeployDefaults` lists them, one info line, no health token; `BASIC_AUTH_USERNAME=bob` is still a shadow (SEC10-11) |
-| `TestBasicGate_EmptyStoredPasswordDoesNotShadowEnv` | gate enabled, an empty stored `basic_auth_password` row and `BASIC_AUTH_PASSWORD=p`: the effective password is `p` with `Source` `SourceEnv`, nothing is written to the row, one warning names the variable; with a non-empty stored row the stored value wins; with neither, every non-exempt request gets 401 (OPS9-7) |
-| `TestAuthOff_NativeAppRefusesAuthModeWrite` | hello (no legacy config store) with auth off: the auth-disabled principal's `Apply` of `core.auth.mode=required` and of `core.http.basic_gate.enabled` → 403, nothing stored; the same writes on a fixture with a legacy store whose aliases are `HEADAuthOffWritable` succeed after the owner-trust-root check and land in the legacy fields, the Basic password included (its `legacy.SecretsStore` row, SEC10-5); an integration-bound URL field of the fixture lands in its blob field (R10-10); a fixture whose password lives in `c/secrets/` (after H2) refuses the password write (SEC9-13, SEC9-1) |
-| `TestAuthOff_IntegrationFieldsWritableAsHEAD` | (ABO, from S4 r2) auth off: `PUT /api/v1/config` adding an `ai_endpoints` row with a URL and `auth_ref`, adding a metadata source, editing the webhook URL and the Deluge host → 200, each written in place in HEAD's blob field, and a HEAD-built `prev` reads them; the same requests with auth on from a non-admin `core:settings.manage` key → 403 (R10-10, SEC10-3) |
-| `TestFileOnlyKey_OperatorWhileLegacyStoreAttached` | a `FileOnly` alias's key declared `ProtectAdmin`: with a legacy store attached, `KeyState.Protection` is operator, `Apply` → `*ProtectedError{Need: ProtectOperator}`, a planted `c/config/` row is ignored and reported; without one (native app) the declared class applies; `FileOnly()` is true exactly for a `LegacyYAML` key with no `LegacyBlob` (R9-5) |
-| `TestPassthroughValues_ReportBelowStored` | a passthrough value given under a `BelowStored` legacy name carries `OperatorValue.BelowStored=true`; under a canonical spelling, `false` (C11, SEC6-5) |
-| `TestEnv_EmptyValueIsUnset` | `ABO_X=""` and a legacy name set to `""` supply nothing: no lock, no value (HEAD parity with viper) |
-| `TestOverride_IgnoredWhenOperatorLocked` | DB row kept, not applied, reported in `AttachReport.Ignored` |
+| `TestFailClosed_MoreRestrictiveWins` | for `core.auth.mode` and `core.http.basic_gate.enabled`: stored stricter + operator weaker → stored effective, `AttachReport.FailClosed`, one warning, health `config_fail_closed_override`; operator stricter → operator effective and locked; `Apply` of a value at least as strict as the operator's succeeds and is effective, a weaker one → `*LockedError`; `FailClosed` on a string key or with a missing value fails `Register` (E5) |
+| `TestEnv_EmptyValueIsUnset` | `ABO_X=""` supplies nothing: no lock, no value (HEAD parity with viper) |
+| `TestEnv_StrictDecode` | `ABO_CORE_AUTH_MODE=yes`, a bare integer for a duration, a space-separated list for an array → boot error naming the variable; the same through the file key |
+| `TestEnvBinding_EcosystemNames` | `OTEL_EXPORTER_OTLP_ENDPOINT` sets `core.tracing.otlp.endpoint`; with the canonical name also set and different: canonical wins on a `ProtectNone` key with `config_alias_conflict`, boot fails on a `ProtectAdmin` key naming both; a binding equal to a canonical name fails `Register` |
+| `TestRetiredName_ProtectedOrSecretRefusesBoot` | a fixture retired list: a set retired env name or file key of a `ProtectAdmin`, `ProtectOwner`, `ProtectOperator` or secret key → `*RetiredNameError` listing every such use with its canonical env name and file path, before storage opens (a recording fake storage sees no open); a file key whose subtree holds one protected key refuses too |
+| `TestRetiredName_OtherWarns` | a set retired name of a `ProtectNone` key or of a dropped key → ignored, one warning naming the canonical name or the drop message, `RetiredSet()` lists it, health `config_retired_name_ignored`, gauge 1 |
+| `TestOverride_IgnoredWhenOperatorLocked` | DB row kept, not applied, reported in `AttachReport.Ignored` and logged once |
 | `TestApply_RefusesLocked` / `_Protected` / `_Forbidden` / `_UnknownKey` / `_Invalid` | error type, nothing persisted, generation unchanged |
 | `TestApply_SettingsManageCannotChangeAdminKeys` | actor with `core:settings.manage`, interactive, no `core:admin` → `*ProtectedError{Need: ProtectAdmin}` on a sign-in, proxy and updater key |
-| `TestEveryURLPathOrSignInKeyClassified` | §1.3.7 shape rule over every registered core and fixture key |
+| `TestAuthOff_ProtectedKeysRefused` | auth off: the auth-disabled principal's `Apply` of `core.auth.mode=required`, of `core.http.basic_gate.enabled` and of an integration URL → 403, nothing stored, on hello and on an ABO fixture alike (SEC4-8) |
+| `TestEveryURLPathOrSignInKeyClassified` | §1.3.7 shape rule over every registered core and fixture key, and over every row of ABO's rename table |
 | `TestApply_RestartKeyNotPublished` | `Get` unchanged, `Pending` changed, `RestartPending` returned |
 | `TestApply_CommitFailureNothingPublished` | fake `Committer` error; boot record restored |
-| `TestApply_SecretAndOverrideOneBatch` | `Commit.Secrets` and `Commit.Set` arrive together |
+| `TestApply_SecretAndOverrideOneBatch` | `Commit.Secrets` and `Commit.Set` arrive together, with the audit record |
 | `TestOwnerTrustRootKeysAreOwnerProtected` | port of HEAD's owner-field test: the §1.3.7 owner row's keys are `ProtectOwner`; with an owner set, an interactive `core:admin` actor without owner proof gets `*ProtectedError{Need: ProtectOwner}`; with no owner set the same actor succeeds (SEC3-6) |
 | `TestBoot_ModuleEnablementFromBootRecord` | a UI-written disable is honoured by `Boot` at the next start; operator env beats it |
 | `TestBootRecord_AtomicAndQuarantine` | crash between temp write and rename keeps the old file; garbage → `.bad`, boot continues |
 | `TestAttach_QuarantineInvalidSection` | boot continues, section on operator view, health token set |
 | `TestOnChange_CoalescesUnderSynctest` | `testing/synctest`: 100 applies, slow subscriber sees ≤2 calls, last = latest |
 | `TestAfterCommit_ErrorReportedNotRolledBack` | `Result.PostCommit` non-nil, value committed |
-| `TestEnvName_Derivation` / `TestEnvName_CollisionRejected` | naming rule; `ErrDuplicate` |
+| `TestEnvName_Derivation` / `TestEnvName_CollisionRejected` | naming rule (`.` and `-` → `_`, `MODULES_` dropped); `ErrDuplicate` |
 | `TestEnvFileSuffix` | `_FILE` read once, newline trimmed, unreadable = boot error |
-| `TestAlias_UseCallsOnLegacyUse` / `TestAlias_RetiredProtectedFailsBoot` | env and file aliases reported once per boot on `SurfaceEnv`, blob and API uses per use on `SurfaceConfig`; an alias whose ledger row is `Retired` on a protected or secret key → `*RetiredAliasError` |
-| `TestAliasConflictOnProtectedKeyRefusesBoot` | `ABO_CORE_STORAGE_PATH` and `DATABASE_PATH` set to different values → boot error naming both; same conflict on a `ProtectNone` key → canonical wins, `config_alias_conflict` |
+| `TestAliasConflictOnProtectedKeyRefusesBoot` | `ABO_CORE_TRACING_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_ENDPOINT` set to different values → boot error naming both (the key is `ProtectAdmin`); the same on a `ProtectNone` key with a binding → canonical wins, `config_alias_conflict` |
 | `TestBoot_ResolvesPathsWithoutStorage` | `BootView` yields `core.paths.state_dir` from env and flags (a file value fails boot) and `core.storage.path` from file, env and flags; `BootRecordRoot` receives the resolved state dir; no storage handle exists |
-| `TestStateDirFallbackMatchesHEAD` | table over (explicit set or not, default creatable or not, DB path absolute / relative / empty): explicit never falls back; uncreatable default → `Dir(core.storage.path)` with the warning; relative or empty DB path → boot error; a fallback whose DB path the config file later moves → boot error naming both remedies; P0a and `Boot` (and the deferred P−1 once built, A-6) receive the same directory (OPS3-1) |
-| `TestStateDir_OneResolverYAMLDBPath` | a database path given only in the YAML file plus an uncreatable default: the kernel and ABO's `serve` resolve the boot record, a restore intent and the legacy key file to that path's directory, as HEAD does; the updater marker is not an input (OPS4-8, OPS5-13; the one name 06 also uses) |
-| `TestStoragePathPreBootFromS2` | an S2 kernel (no `storage` section) resolves `core.storage.path` from `--db` and the app alias, and falls back to its directory (COR4-20) |
-| `TestP4dStep1_LegacyOpenBeforeSecrets` | first S3 boot with ABO's legacy key file: the store's `legacy.ConfigOpener` `Open` runs before `secrets.Open`, `KeyMaterial()` is non-nil there, `k0-legacy` is recorded and the encrypted legacy rows read (COR5-2) |
-| `TestNoStoreWriteBeforeCheckpoint` | a recording fake store sees no write from the store constructor, its `Open` (`legacy.ConfigOpener`), `secrets.Open` or `Attach` before the checkpoint marker, none at all from `Attach`, and from `secrets.Open` only `c/secrets/meta` on a new store (C13) |
-| `TestRoutedStore_OneStorageRule` | with a fake legacy store: a key with a legacy blob name is loaded from and staged into the legacy store only, a key with none into `c/config/` only; one `Commit` touching both stages one batch; an older-build fixture over the same store reads the blob unchanged and never sees the `c/config/` rows (A-2, C4) |
-| `TestLegacyEnvDecodeMatchesHEAD` | (ABO, in `extraction-gates` from S3) a generated corpus of every alias × representative spellings of its `Decode` type (bools: every `strconv.ParseBool` spelling plus `yes`, `on`, ` true`, garbage; slices: one, two and comma-separated words; ints: `08`, `0x10`, `1.0`, `abc`; durations: `90`, `90s`, `1h`, `abc`), through env and through the legacy file key, decoded by HEAD's `InitConfig` and by core `Load`, with every effective value diffed; the cases the fail-closed rule refuses are listed and must fail boot. HEAD's side is built from `PREV_REF` (09 §9.2.1) while `PREV_REF` predates S3; the S3 PR commits its output as `testdata/legacy_decode.golden`, which later stages compare against, because no later `PREV_REF` has HEAD's viper loader (A-7, ADV-2) |
-| `TestLegacyBool_SilentFalseOnAuthKeyFailsBoot` | `ENABLE_AUTH=yes`, `BASIC_AUTH_ENABLED=on` and the same spellings as legacy file keys → boot error naming the variable, the spelling and the canonical name; the same spelling on a `ProtectNone` bool → `false` with one warning (A-7) |
-| `TestNativeOverrideStore_RoundTrip` | the native store over `c/config/`: set, unset and reload of scalar, map and boot-adjacent keys; one row per explicitly set key; passes `configtest.OverrideStoreSuite`; implements none of package `legacy`'s config capabilities (SIMP4-3, SIMP5-4, R6-3) |
-| `configtest.OverrideStoreSuite` (exported contract) | run by every implementation, ABO's with HEAD fixtures: `Load` is read-only; `Stage` changes exactly the staged keys (others byte-equal after a JSON round trip); an unset writes the default, and for a key with a legacy field writes it explicitly and never removes the field (`TestLegacyUnsetWritesDefault`, SEC7-2); `Alias.Revert` applies to converted keys; two concurrent `Stage`s on one row both survive through the `Committer`'s retry; an unparsable row quarantines its keys and is never overwritten (R4-1) |
-| `legacytest.ConfigOverrideStoreSuite` (exported contract, in package `legacy`'s test package, outside the API-stability gate with it, R6-3) | the one legacy suite of `config.OverrideStore` (SIMP6-6: one legacy suite per store interface, running a case for each capability the implementation has, SIMP5-4): `ConfigOpener.Open` writes nothing; `ConfigExternalWriter.Changed` after an outside write republishes a live key without a restart; `ConfigSecrets.Secrets` returns a `legacy.SecretsStore` that passes the secrets read-order cases; a write staged into a batch without a `CommitLocked` hold of the store's lock is refused, also when the write is staged inside a hold into a second batch (R10-4); the post-commit step a write registers runs once per committed batch, inside the hold (a probe lock-holder blocked on the lock does not run until the step returned), and not at all for a batch that failed to commit (R10-5) |
-| `TestOverrideStore_ChangedRepublishesAtS2AndS2b` | a fake legacy config store at the S2 shape (attached at P3 through `app.Options.LegacyConfigStore`) and the S2b shape (built at P4c, attached at P4d step 1): a core key set only in the stored row (the rate-limiter switch, the CORS origins) is effective after attach; an outside write signalled on `legacy.ConfigExternalWriter.Changed` reaches the live key without a restart (COR3-1, COR4-2) |
-| `TestPreS7Facade_IntegrationURLIsProtectAdmin` | from S3 to S7, a `core:settings.manage` actor without `core:admin` gets `*ProtectedError` on an integration-bound URL, host, credential or header field; an admin's URL-origin change without the credential clears the stored secret in place (the blob field or the encrypted row, and a kept one's file copy) (SEC4-7). An **S3 variant** fills the actor by §1.12.1's S3 rule (seed `admin` role or auth off holds `core:admin`); an **S4 variant** uses the native rule from S4 r2 (SEC5-15) |
-| `TestCoreLedgerFragmentPermanentOnly` | every row of core's ledger fragment has gate `permanent` and names no app key (SIMP4-10) |
+| `TestStateDirFallbackMatchesHEAD` | table over (explicit set or not, default creatable or not, DB path absolute / relative / empty): explicit never falls back; uncreatable default → `Dir(core.storage.path)` with the warning; relative or empty DB path → boot error; a fallback whose DB path the config file later moves → boot error naming both remedies; P0a and `Boot` receive the same directory (OPS3-1) |
+| `TestStateDir_OneResolverYAMLDBPath` | a database path given only in the YAML file plus an uncreatable default: the kernel resolves the boot record, a restore intent, HEAD's key file and the keyring to that path's directory, as HEAD does; the updater marker is not an input (OPS4-8, OPS5-13; the one name 06 also uses) |
+| `TestNoStoreWriteBeforeCheckpoint` | a recording fake store sees no write before the checkpoint marker, none at all from `Attach`, and from `secrets.Open` only `c/secrets/meta` on a new store; `secrets.Open` runs before the first migration step (C13) |
+| `TestNativeOverrideStore_RoundTrip` | the native store over `c/config/`: set, unset and reload of scalar, map and boot-adjacent keys; one row per explicitly set key; passes `configtest.OverrideStoreSuite` |
+| `configtest.OverrideStoreSuite` (exported contract) | `Load` is read-only; `Stage` changes exactly the staged keys (others byte-equal after a JSON round trip); an unset removes the row; two concurrent `Stage`s on one row both survive through the `Committer`'s retry; an unparsable row quarantines its section and is never overwritten |
+| `TestImporter_StagesOnlyValidNonDefault` | `Importer.Stage` writes a `c/config/` row into the caller's batch for a valid non-default value, nothing for a default value, `ErrUnknownKey` for an unregistered or passthrough path, `ErrInvalid` for a secret or `ProtectOperator` key, `*FieldError` for a bad value; nothing commits until the caller commits |
 | `TestSectionPath_NestedNoOverlap` | `core.log` + `core.log.journal` + `core.log.schedules` register; a parent field named `journal` → `ErrDuplicate` |
 | `TestConfigFileHasSecrets_Redacted` | a file with a secret key or a passthrough value → `true`; `RedactedConfigFile` contains neither |
-| `TestPassthrough_NotOwnedNotWritable` | passthrough values returned raw with origin; `Apply` on them → `ErrUnknownKey` |
+| `TestPassthrough_NotOwnedNotWritable` | passthrough values returned raw with origin, an ecosystem binding (`OPENAI_API_KEY`) included; `Apply` on them → `ErrUnknownKey` |
 | `TestSchema_Golden` | schema of a fixture section equals `testdata/schema.golden.json` (guards the jsonschema-go pin) |
 | `TestSchema_SameOverridesAsOpenAPI` | `config.Duration`, `secrets.Ref` render identically in the settings schema and an `httpapi` fixture built from `jsonschemax.Base().With(config.Overrides())` without a config store |
 | `TestSchema_OverrideSetsDisjoint` | `Base().With(config.Overrides()).With(<httpapi's set>)` does not panic; `time.Time` is in `Base()` only (SIMP3-1) |
@@ -1491,567 +1008,474 @@ the dependency as adopted.
 | `TestConfigImportsOnlyAllowed` | `go list -deps` allow-list for `core/config`: stdlib, yaml, jsonschema-go, `internal/jsonschemax`, `secrets`, `storage`, `metrics` (and their own allowed imports); `jsonschemax` imports only jsonschema-go |
 | `FuzzEnvDecode`, `FuzzPatchDecode` | no panic, typed errors only |
 
+ABO's cutover and rename-table tests are in §1.12.2–§1.12.4.
+
 ### 1.12 Migration from ABO
 
 #### 1.12.1 Code: façade required, call-site migration optional
 
 R5 binds core only (SIMP-3). ABO's globals survive as books-module façades over core handles; removing them is
-an optional ratchet, not an extraction stage.
+an optional ratchet, not an extraction step.
 
-1. **Stage 0 (required; in ABO, no core needed):** convert the 8 bypassing writes (§1.2) to `Mutate`, and add
+1. **Stage 0 (required; R1, in ABO, no core needed):** convert the 8 bypassing writes (§1.2) to `Mutate`, and add
    `TestNoDirectAppConfigWrites` (AST: no assignment to `config.AppConfig` outside `internal/config`). Without
    this, the façade's projection would silently drop those writes.
-2. **Stage 1 (required; 09 S3) — façade.** Its done-check is that the effective config of the production env,
-   YAML file and blob equals HEAD's (not the previous stage's, COR3-1); it brings no
-   stored-data change: everything it writes is in HEAD's representation (§1.12.2, A-2). ABO's `internal/config` keeps its exported surface and becomes a
-   façade. The books module constructs one **`Facade` value** per App (the type lives in ABO's `internal/config` itself, so
-   it adds no package path; MOD6-11) from the handles it registered
-   and the core handles it reads (`core.storage`, `core.auth`, …), and installs it as the target of ABO's
-   package-level `AppConfig`, `Snapshot`, `Mutate`, `Generation`, `SettingLocks`, `EnvLockedSettings`. `AppConfig`
-   is a **projection** rebuilt under the façade's lock on every core generation change (one `OnChange` per
-   section); secret fields in the projection are resolved from `secrets` in memory only. `Mutate(fn)` diffs the
-   before/after `Config` and turns it into one `Store.Apply` through the alias table. All 215 files and 341 test
-   files compile unchanged; tests use a `coretest` store behind the façade. viper is removed from the boot path
-   here (`configFromViper` is replaced by core `Load` + aliases, whose legacy names decode with HEAD's semantics,
-   §1.3.6, checked by `TestLegacyEnvDecodeMatchesHEAD`), and ABO's settings load leaves the books
-   store's `Open` (§1.12.2). Multi-app is not ruled out: the façade is a per-App value; only ABO's
-   delegation from package-level names is process-wide.
-   **The S3 actor (SEC5-15).** At S3 `rbac` and `auth` do not exist yet and `PUT /api/v1/config` still runs gin's
-   `RequireAuth`, so the façade fills `config.Actor` from gin's request context with HEAD's rule
-   (`internal/config/update_service.go:781`): `Can("core:admin")` holds iff the request's permission set came
-   from the seed `admin` role, or auth is off; `Interactive` is `auth.Method.MayChangeCredentials()`, or auth
-   is off; `Owner` is HEAD's owner proof. From S4 r2 the auth-off principal never holds `core:admin`, and §1.3.7's
-   auth-off rule applies: on ABO `core.auth.mode`, the Basic gate's three keys and every integration-bound field
-   keep HEAD's `!prior.EnableAuth` rule (`HEADAuthOffWritable`, R9-5, R10-10): `core.auth.mode` until H3, the gate
-   keys until the earlier of H2 and the settings cutover, the integration-bound fields until the earlier of H2 and
-   their family's integrations cutover (§1.3.1; SEC10-6). Every other protected key is refused with auth off, the
-   tightening 09 §9.2.6 records for SEC4-8; never earlier.
-   `TestPreS7Facade_IntegrationURLIsProtectAdmin` has an S3 and an S4 variant.
+2. **Stage 1 (required; the R2 config flip) — façade.** ABO's `internal/config` keeps its exported surface and
+   becomes a façade. The books module constructs one **`Facade` value** per App (the type lives in ABO's
+   `internal/config` itself, so it adds no package path; MOD6-11) from the handles it registered and the core
+   handles it reads (`core.storage`, `core.auth`, …), and installs it as the target of ABO's package-level
+   `AppConfig`, `Snapshot`, `Mutate`, `Generation`, `SettingLocks`, `EnvLockedSettings`. `AppConfig` is a
+   **projection** rebuilt under the façade's lock on every core generation change (one `OnChange` per section),
+   mapped field by field through the rename table (§1.12.3); secret fields in the projection are resolved from
+   `secrets` in memory only. `Mutate(fn)` diffs the before/after `Config` and turns it into one `Store.Apply`
+   through the same table. All 215 files and 341 test files compile unchanged; tests use a `coretest` store behind
+   the façade. viper, `configFromViper`, `LoadConfigFromDatabase`, `SaveConfigToDatabase`, `SaveConfigToFile`,
+   `UpdateService` and the masks leave ABO's boot and write paths in the same flip: core `Load`, `Attach` and
+   `Apply` replace them, and M2 replaces their stored data (§1.12.2). The façade's done-check is the cutover oracle
+   `TestConfigCutover_EffectiveConfigUnchanged` (§1.12.2). Multi-app is not ruled out: the façade is a per-App
+   value; only ABO's delegation from package-level names is process-wide.
 3. **Optional ratchet — accessor.** `TestAppConfigRatchet` is added with stage 1: a per-package ceiling of
    `config.AppConfig`/`Snapshot`/`Mutate` uses that may only go down, like
    `internal/logger/slog_guard_ratchet_test.go`. Packages move to an injected `booksettings.Accessor` (ABO repo,
    `internal/books/settings`) when they are touched anyway; largest first if anyone works it deliberately
    (`internal/server` 71 files, `internal/plugins` 33, `internal/metafetch` 15, `internal/maintenance` 11,
    `internal/scanner` 9, `cmd` 9, `internal/audiobooks` 8, then 28 packages with ≤6 files). When the ratchet
-   reaches zero, the façade, `AppConfig`, `Mutate`, `Snapshot` and viper are deleted. This work is listed in the
+   reaches zero, the façade, `AppConfig`, `Mutate` and `Snapshot` are deleted. This work is listed in the
    11 §11.5 checklist ("books: remove `config.AppConfig` façade and package-level loggers", size L) because it is
    a prerequisite only for sharing a binary with other modules. **Trade:** until then ABO tests mutate a façade
    global and cannot use `t.Parallel()` on config.
 
-#### 1.12.2 Data: the books legacy config store (single mechanism; cutover deferred)
+#### 1.12.2 The config and secrets cutover (R2, migration step M2)
 
-This is the only specification of how core config and secrets use ABO's stored settings during the extraction
-(R3-1 as refined by R4-1; 02 decision 13). 09 S2–S3 schedule it, the R-test (09 §9.10) exercises its rollback
-rows, and it defers 14 Q-E to the secrets cutover (§1.12.5, A-2). There is no import, no re-import, no mirror, no Teach build, no adopt step, no
-level step and no contract for config or secrets: **one stored format per family**, read and written in place.
+ABO's stored settings and secrets move into core **once, one-way**, at the first R2 boot. This section is the one
+statement of that step: PC-21-03 builds it, the R2 config flip (PC-09-06) ships it, and 09's R2 migration table
+lists it as M2. The step is **books code**, because core holds no ABO key name or row format (03 R1); it reads
+HEAD's rows itself and writes only through core's importers (`config.Importer`, §1.3.3, and
+`secrets.(*Store).Stage`, §2.3). It follows 05-storage's contract for the R2 migration list (§5S.3.13): BootBlocking,
+behind the disk headroom check and the pre-migration checkpoint, resumable, covered by the crash matrix, and any
+input it cannot decode is quarantined and reported, never dropped. It runs after books' HEAD-format steps M1 and before the
+identity step M3; the level step M7 later makes every older build refuse the store.
 
-**Who implements what (R4-1).** Core defines `config.OverrideStore` and `legacy.SecretsStore` and ships the native
-store. The books module supplies the **books legacy config store** through `Manifest.LegacyStores.Config`
-(06; beside the other R4-1 legacy stores): ABO code, in the ABO repo, over ABO's existing keys and
-row formats, which keeps HEAD's blob codec (the ten `migrate*Blob` read transforms, `persistence.go:359-824`),
-its secret-row cipher and its gap-fill file. Core holds none of those names or formats (R1) and no storage grant
-for them; books' runtime handle over its own claims is the one handle involved.
+**Inputs (all HEAD's).**
 
-**Package (MOD5-2, R5-2).** The store needs `internal/config` (the load, the codec, `AppConfig`), and
-`internal/config` imports the residue `internal/database` from four files (`ai_endpoints.go`,
-`persistence.go:915`, `register.go`, `update_service.go`), so it cannot live in the residue or in
-`internal/books/store` without closing a cycle. It lives in **`internal/books/configstore`** (a new ABO path,
-layer 2 in ABO's `layerOf`; 04 §2.4 owns the name. It shares only its last element with core's
-`core/internal/configstore`, the native store and the kernel's committer, so this file always writes both paths in
-full, MOD6-11), with the legacy `integrations.InstanceStore` and the books-root half of
-`legacy.LibraryRootSource` (SIMP7-8) that render the same blob (C11): it imports `internal/config`, the residue and core
-`config`, `secrets`, `integrations`, `library` and `legacy`, and is imported only by `internal/books` (the
-`Manifest.LegacyStores` constructors) and, at S2 only, ABO's `main` (`app.Options.LegacyConfigStore`). Nothing
-imports it back. Only the row cipher (`internal/database/settings.go:110-235`) stays in the residue. 04 §2.4
-lists the path and 03 §3.5.1 counts it. The rest of this section is the
-**contract** that implementation must meet; `configtest.OverrideStoreSuite` and the ABO tests listed below check it.
-
-**Where each value lives (ABO).**
-
-| Value | Stored | Read by |
+| Input | Where | Read as |
 |---|---|---|
-| a key that has a legacy blob field (`Alias.LegacyBlob`) | ABO's settings blob, in the legacy JSON shape, written in place | every build |
-| a key HEAD never stores (`Alias.FileOnly()`: HEAD's `json:"-"` fields, the peer allow-list and the ABS JWT secret among them) | nowhere: the operator file and env only, as at HEAD; `ProtectOperator` while the books store is attached (§1.3.7; R9-5, DATA9-6) | every build, from the same file and env |
-| a key with no legacy name (new core and module keys) | core's native store, `c/config/` (one row per explicitly set key), through the routing store (§1.3.3); older builds never read it | builds that declare the key |
-| a secret HEAD keeps in **plaintext** in the blob | its blob field, in place, plaintext, as HEAD writes it, until the secrets cutover (§1.12.5) | every build |
-| a secret HEAD keeps **encrypted** (the four of §2.2) | its encrypted legacy row in ABO's cipher, written in place, plus HEAD's gap-fill file copy `<db parent>/config.yaml` for three of them; never in `c/secrets/` before the cutover | every build |
-| a secret with no legacy name (new names) | `c/secrets/v/<name>` (§2.3), encrypted | core builds |
-| `ReloadBoot` keys (module enablement) | boot record `<state_dir>/config.boot.json` (§1.3.5) | core builds |
+| the settings blob | `setting:config_blob` | HEAD's codec: `LoadConfigFromDatabase`'s decode with the ten `migrate*Blob` read transforms, and the three marker-guarded one-shots applied where their markers are absent (`internal/config/persistence.go:359-824,1088-1129`); env and file are not inputs |
+| the four encrypted rows | `setting:openai_api_key`, `setting:google_books_api_key`, `setting:hardcover_api_token`, `setting:basic_auth_password` (`persistence.go:1955-1958`) | HEAD's cipher (`internal/database/settings.go:189-235`) with HEAD's key |
+| HEAD's key | `.encryption_key` in the state directory (§1.7, C15's fallback), else HEAD's fallback `<root_dir>/.appdata/` (`settings.go:110-140`) | 32 raw bytes |
+| the gap-fill file | `<db parent>/config.yaml` (`persistence.go:29-38`) | HEAD's gap fill: a file value applies only where the stored value is empty, for the twelve settings and three secrets HEAD's `SaveConfigToFile` manages (`persistence.go:42-104,150-178`) |
 
-**The one storage rule (A-2, R9-5).** A key that has a legacy blob field is stored only in HEAD's legacy row and
-format; a `FileOnly` key is stored nowhere, as at HEAD; a key with no legacy name is stored natively under
-`c/config/`, which older builds never read, so it costs nothing on a rollback. Routing is fixed per key: a key never moves between the two before its family's cutover. Native-only values are never stored as additional members of
-a legacy row (R4-1; an extra member is what an older build would misread or drop, SEC4-3).
+HEAD's `Config` struct, codec and cipher are **frozen** into the step's package (`internal/books/cutover/configv0`,
+name coined here; 04 places it), so later changes to ABO's façade cannot change what the step reads. R3 deletes it
+with the other HEAD-format readers.
 
-**ABO's boot steps in `Open` (R4-6, C17, COR4-1).** HEAD runs `guardAgainstKeyRegeneration`,
-`initEncryption` and `loadConfigFromDB` (then `syncConfigFromEnv` and `config.Validate`) after opening the store
-and before constructing the server (`cmd/root.go:280,345-352,364-369`), and `loadConfigFromDB` is Fatal because a
-server on defaults would write them over the stored blob on its first save (`cmd/root.go:360-363`). From S2b these
-steps run **inside the books legacy config store's `Open`** (`legacy.ConfigOpener`, which lands at S2b, COR6-8),
-which the kernel calls at 06 P4d step 1 (§1.4 step 5: after storage opened, after books' P4b migrations and after
-the store was built at P4c, before core `secrets.Open`, so the legacy key is loaded when secrets captures
-`k0-legacy`, COR5-2, and before books' `Register` at P6 constructs `*server.Server`), over books' own handles the
-store was built from — never a second Pebble open:
+**M2a — one batch.** From HEAD's effective stored value of each rename-table row (§1.12.3: blob value, gap-filled):
 
-- the key-regeneration guard and ABO's settings-encryption init (file reads of the legacy key under the
-  resolved state directory; when the file is absent but `legacy.ConfigOpenEnv.KeyringLegacy` returns the material,
-  `Open` uses it and may restore the file for older builds, so a keyring copied back after host loss also
-  recovers the legacy rows);
-- **from S2b until the S3 façade only**, ABO's settings load into `config.AppConfig` from the blob (with
-  `syncConfigFromEnv` and `config.Validate`), because until the façade ABO's code reads `AppConfig` directly;
-- a failure of any of them fails `Open` and so the boot, exactly where HEAD's step class is Fatal.
+| Row class | Effect |
+|---|---|
+| `k` key | the value through the row's `Convert`, staged with `Importer.Stage` under the canonical path; a value equal to the R2 default stages nothing, so the key follows later defaults (C4); a `ProtectOperator` key (`core.storage.path`) stages nothing, because the operator layers already chose it |
+| `s` secret | a non-empty value, through `secrets.(*Store).Stage` under the canonical name, encrypted with the keyring's active data key (key ID, AAD); an empty value (an empty encrypted `basic_auth_password` row included) leaves the secret unset |
+| `i` integrations or library input | left in the blob for the integrations step M6 ([05-metadata](05-metadata.md) M1.10, [05-library](05-library.md) §5L.10), which converts it and deletes the blob row |
+| `o` operator-only at HEAD | nothing: HEAD never stored it |
+| `x` dropped | nothing; one log line names a field that holds a non-default value |
 
-**`Open` writes nothing (COR6-5, DATA5-11, DATA6-11).** This is the one statement of the rule. HEAD's load writes
-in three ways, and each has a home outside `Open`:
+In the **same batch**: every blob field M2 consumed is removed from the blob, so the blob keeps only class-`i`
+fields, and the secrets of class-`i` families (the Deluge passwords, the metadata-source credentials, the webhook
+secret) are moved out of them; the four encrypted rows are deleted; a blob field that no row names (a key HEAD
+never had or already removed, `internal/config/removed_keys.go`) and a value that `Importer.Stage` refuses are
+moved into a quarantine record with their raw JSON (05-storage's quarantine, reported in health), the key keeping
+its default. No plaintext credential lands in quarantine: an undecryptable secret keeps its ciphertext there, and a
+value that may hold a credential but has no key (userinfo in a stored URL, a retired plugin's free-form settings) is
+kept as an encrypted `c/secrets/` record with no key and reported with the quarantine records (§2.2). One batch
+means a crash leaves either HEAD's rows or the finished result.
 
-1. **Reshaping blob migrations.** HEAD persists each `migrate*Blob` reshape it applies with `saveRawBlob`
-   (`internal/config/persistence.go:1043-1058` @748fd787a). These functions are idempotent, so in `Open`, as in
-   `OverrideStore.Load`, they are **pure read transforms**: the stored bytes keep their old shape until the next
-   core write re-renders the fields it changes, and every read in between reshapes them the same way.
-2. **Marker-guarded one-shots.** `log_retention_zero_migrated`, `embed_cover_art_default_on_migrated` and
-   `maintenance_window_migrated` (`persistence.go:1088-1129`, `:649`, `:1274`, `:1314-1338` @748fd787a) guard
-   rewrites that must run **once**: dropping a stored `log_retention_days=0`, dropping a stale
-   `embed_cover_art=false` (`migrateEmbedCoverArtBlob`, `:659-674`), and moving the auto-update window. Run on
-   every read instead, they would undo an operator's later choice on every boot: an `embed_cover_art=false` set
-   on purpose would come back on, and the organizer would write cover art into audio files again. Each becomes a
-   **books versioned `Migration`** (`Seed: true`, `Additive`, P4b, over books' `LegacyRange`, 05-storage §5S.3.4;
-   numbered from `LegacyCap+1`, R7-2) that performs HEAD's rewrite and writes HEAD's marker in the same batch, so an
-   older build also skips it. Because the steps are `Seed`, they also **run on a fresh install**, where the blob
-   holds no stale value and they only write the three markers (DATA7-13): recorded applied without running, a fresh
-   S2b+ store would lack HEAD's markers, and after a rollback HEAD's load would drop a stored
-   `embed_cover_art=false` and rewrite `log_retention_days=0` (`persistence.go:1088-1129` @748fd787a), a loss that
-   outlives the roll-forward (`TestFreshInstallWritesHEADMarkers`). The read transform of each applies only while
-   neither HEAD's marker nor that step's applied record exists, so it never runs on a store the step has passed.
-3. **The corrupt-secret repair.** HEAD's load re-encrypts what the gap-fill file holds for a secret row it cannot
-   decrypt and deletes the rest (`persistence.go:1233-1262`). `Open` runs the load **without that repair**: an
-   undecryptable row is kept and reported (§2.5, DATA3-12), the gap-fill file still fills the in-memory value as
-   HEAD's `LoadConfigFromFile` does, and the next save re-encrypts it through HEAD's ordinary path. The repair can
-   only arise after the guard was overridden (`ABK_ALLOW_ENCRYPTION_KEY_REGEN`), and its deletions are
-   out-of-scope defect 4. The repair is therefore not a blind writer that a later stage converts: it does not run
-   on a core build at all.
+**M2b — the gap-fill file.** Before M2a, the step copies the gap-fill file into the pre-migration checkpoint's
+state-file set (05-storage §5S.3.12), so the rollback restore puts it back. After M2a committed, an idempotent step
+removes the fifteen managed keys from the file (HEAD's merge: read, drop the keys, temp file, fsync, rename, mode
+0600) and keeps every other key, because the file may also be the operator's `--config` (`persistence.go:110-112`);
+a file left empty is deleted. M2b reruns at every boot until the file holds none of the fifteen keys. Core never
+reads or writes the file otherwise, and core writes no gap-fill file.
 
-A value `Open` could not read is never replaced by a default. ABO's test
-`TestFreshInstall_EmbedCoverArtFalseSurvivesRestart` (§2.9) covers item 2, and `TestLegacyOpen_NoCorruptSecretRepair`
-covers item 3; `legacytest.ConfigOverrideStoreSuite`'s "`Open` writes nothing" case covers all three.
+**HEAD's key.** M2 is the only reader of `.encryption_key`. It keeps HEAD's guard: when any of the four rows is
+non-empty and no key file is found, the boot fails **before M2a**, with nothing written, naming the file, the
+directories searched and the override `ABO_CORE_SECRETS_ALLOW_KEY_REGEN` (§2.7), exactly where HEAD's
+`guardAgainstKeyRegeneration` refuses (`cmd/root.go:726-783`), because a missing key is usually a wrong mount. With
+the override, and for any row the key does not decrypt (a regenerated key, a corrupt row), the ciphertext is
+quarantined and M2 writes an *unreadable* marker under the secret's name (§2.3), so `Meta.Err` is
+`ErrKeyUnavailable` or `ErrCorrupt`, Settings shows "must be re-entered" and health raises `secrets_undecryptable`
+until the secret is set again (E4). M2 leaves the key file untouched: the rollback restore reads it, and R3's cleanup
+deletes it.
 
-At S2 `serve` still runs these steps before `app.New` (HEAD's order, HEAD's writes included, before any claim
-exists) and the kernel does not call `Open` (COR6-8). At S3 the façade replaces the settings load (§1.12.1); the
-guard and the encryption init stay in `Open` until cutover, because the legacy rows stay in ABO's cipher. ABO's
-test `TestS2bAppConfigFromBlob` (a value set only in the blob is effective in `AppConfig` after an S2b boot, and a
-`PUT /api/v1/config` that changes one field leaves every other non-default blob field byte-identical) is an S2b
-done-check (09); it passes at S2b because the config rows refuse unchecked writes only from S3 (R5-3, below).
+**Operator values at the cutover.** M2 migrates stored values only. A retired HEAD name of a protected or secret key
+has already refused the boot at step 2 or 3 of §1.4, before storage opened, so M2 never runs under a unit that
+still sets `DATABASE_PATH` or `ENABLE_AUTH`. Once the operator has renamed them, canonical values lock as C3 says,
+which changes one HEAD behaviour: a variable now beats a setting saved in the UI (the next boot logs each such key,
+§1.3.5). For the sign-in switch and the Basic gate the fail-closed rule keeps the stricter value (§1.3.5), and
+compose passes the Basic variables only when they are set (§1.12.4), so no stale value opens what a stored setting
+closed.
 
-**Reading (`OverrideStore.Load`, every boot; read-only).** The DB layer is the union of:
+**Defaults.** HEAD's blob holds every field (whole-config save, `persistence.go:1932-1977`). A value equal to R2's
+default is not stored, so such keys follow later defaults; a key whose HEAD default differs from R2's keeps HEAD's
+value, because that value is stored (for example `core.backup.compression` stays `gzip`, 05-backup).
 
-- the blob, decoded with ABO's read-time transforms, as HEAD's loader does, and mapped onto canonical paths
-  through the aliases (`Convert`). A stored value equal to **this binary's** shipped default is reported as
-  `SourceDefault`, not as an override, **only when no operator or `BelowStored` value is set for the key**: the
-  effective value is the same today, and a later default change reaches keys that hold the old default
-  (release-noted: a value a user set equal to the default follows it too; HEAD froze every default at save time,
-  `persistence.go:1180-1188`). When a `BelowStored` value is set, the stored value, default-equal or not, beats it,
-  as at HEAD (SEC7-2, §1.3.5). `ProtectOperator` keys in the blob are ignored;
-- for the keys the gap-fill file fills when their blob value is empty, the gap-fill file, as HEAD does
-  (`persistence.go:42-104`); it holds plaintext copies of three kept secrets, so it is never archived and the
-  boot log names it (out-of-scope defect 2);
-- through the routing store, the native store's `c/config/` rows for keys with no legacy name.
+**Rollback.** Rollback is the offline restore of the pre-migration checkpoint, or of the off-host archive and
+keyring export taken before the deploy, with the R1 binary (05-storage, 09). It restores the blob, the four rows and
+the gap-fill file, and loses every setting changed since the upgrade. An R1 or older binary refuses a store M7 has
+raised.
 
-The operator lock (C3) then applies as for any DB-layer value, and a `BelowStored` legacy name sits below it
-(§1.3.5), as at HEAD. Before S3 there is no `secrets` store, so
-secret fields are not part of the layer (a core stage that needs a legacy secret before S3 stays in ABO, 09
-S2). The store is attached at P3 at S2 (through `app.Options.LegacyConfigStore`) and at P4d step 1 from S2b (§1.4).
+**Oracle and tests (PC-09-02, E1, E18).** The fixture corpus is written by the **R0 binary itself** (a script drives
+R0's own settings API and loader), never by hand. It covers a default install; every key set to a non-default; gap
+fill for empty fields; the four encrypted rows; plaintext secrets of every class; an empty Basic password row; a
+missing key file with and without the override; a corrupt row; a blob field no row names; and a production-shaped
+store sized from the P1 counts.
 
-**Edits made outside core config (S2 until the S3 façade; COR4-2).** ABO's legacy config path
-(`PUT /api/v1/config`, viper's loader) still writes the blob itself. It does so through the books store, whose
-`legacy.ConfigExternalWriter.Changed()` fires after every such write at S2 **and** S2b (the capability is deleted in
-the S3 PR); config re-runs `Load` and republishes changed live
-keys of core sections (§1.4 step 8), so a UI edit of a perimeter key (the rate limiter, CORS origins, the log
-level) takes effect without a restart, as at HEAD (COR3-1). The peer allow-list and the tunnel connector list are
-not UI-editable at HEAD (`json:"-"`) and stay so (`FileOnly`, §1.3.7; DATA9-6). From the façade on, every write
-goes through `Store.Apply`.
+| Test | Asserts |
+|---|---|
+| `TestConfigCutover_EffectiveConfigUnchanged` | for every rename-table row, R2's effective value with empty operator layers equals the row's `Convert` of R0's effective stored value (R0's own `GET /api/v1/config` of the same store, env cleared); with canonical operator values set, they win, except that a FailClosed key keeps the stricter value |
+| `TestConfigCutover_SecretsReadable` | every secret the fixture set reads back through `secrets.(*Store).Get` under its canonical name with `SourceStored` and the active key ID; no `c/config/` row holds a secret |
+| `TestConfigCutover_RowsGone` | after M2a the four rows are gone and the blob holds only class-`i` fields; after M6 no `setting:config_blob` remains; every key range outside the listed keys is byte-identical before and after (E3) |
+| `TestConfigCutover_KeyGuard` | rows present and no key file: boot fails naming the file and the override, nothing written; with the override the rows are quarantined and read "must be re-entered" |
+| `TestConfigCutover_QuarantineNotDrop` | the unknown blob field and an invalid value are quarantined with their raw values and reported; a secret's record holds ciphertext only |
+| `TestConfigCutover_GapFillStripped` | after M2b the file holds no managed key and keeps every other key; the checkpoint's copy holds the original; a crash between M2a and M2b strips it at the next boot |
+| `TestConfigCutover_Idempotent` | a second boot over a finished store runs nothing; the crash matrix over M2a and M2b leaves HEAD's rows or the finished result |
+| `TestConfigCutover_NoPlaintextSecretOnDisk` | a canary secret planted in every HEAD form before the upgrade appears in no file under the live DB directory, the state directory or the gap-fill file after M2, M6 and the forced compaction M8; the retained checkpoint is the one exception, until it is pruned (F4) |
+| `TestConfigCutover_RestoreDrill` | restoring the checkpoint offline and booting the R1 binary reads the original blob, rows and gap-fill file |
 
-**Writing (`Apply` → `Committer.Commit` → `OverrideStore.Stage`, from S3).** One batch holds: (1) the blob re-rendered
-from the bytes read with `GetForUpdate`, replacing only the blob fields this commit changes (an unset writes this
-binary's default explicitly and never removes the field, SEC7-2; converted keys pass through `Revert`), so the blob
-never absorbs default or operator-layer values it did not hold; (2) the native store's `c/config/` sets and deletes
-for keys without a legacy name (routing store); (3) the staged secret writes: every secret with a legacy copy in
-place (a plaintext one as its blob field, in the same render, an encrypted one as its row), a native one as its
-`c/secrets/` record (below); (4) from 09 S4 the `core.settings.update` audit record (at S3, before `audit` lands, the
-committer logs the change instead and stages no record, §1.3.3). The
-books store binds its own claim to the batch (participant binding, 05-storage D-S10). Concurrent renders retry
-on conflict (§1.6).
+**Release note (R2, config and secrets).** "Settings and secrets move into a new store at the first start of this
+release, which takes longer. Old environment-variable and configuration-file names are no longer read: a start
+that finds an old name for the database path, a sign-in, proxy, path or updater setting, or a secret stops and
+names the new one; other old names are ignored with a warning, and `<app> config check` lists them all. A setting
+given in the environment or the configuration file now overrides the value saved in Settings, except that the
+stricter value of the sign-in switch and of the Basic gate always wins. With authentication off, Settings can no
+longer turn it on: set `ABO_CORE_AUTH_MODE=required` and restart. Secrets are now encrypted on disk, and the
+`config.yaml` beside the database no longer holds copies of the OpenAI, Google Books and Hardcover keys. Export the
+keyring (`<app> secrets export-keyring`) and keep it with your backups. Backups made before this release still hold
+those secrets in plain text: delete them once you no longer need them, and rotate the secrets if one may have been
+exposed."
 
-**Exclusive writer from S3 (DATA4-4).** From S3 the books legacy config store is the **only** writer of the blob and the
-four legacy secret rows. With no core grant, this is enforced by package structure (the
-trade R4-1 accepts): ABO's archtest `TestOnlyLegacyConfigStoreWritesSettingsRows`, the config instance of 09's
-umbrella ratchet `TestLegacyFamiliesWrittenOnlyByLegacyStores` (09 §9.2.1), fails when any other ABO package
-writes those keys, and ABO's `POST /operations/set-internal-flag` (which writes any settings-family key from
-the request body, `internal/server/handlers/operations/handler.go:378-397`) refuses every key of 05-storage
-§5S.9.1 row 7 (the blob and the four legacy secret rows) and every other key a
-store interface serves (09 §9.8) (`TestSetInternalFlagRefusesConfigRows`), because an AST check cannot see a
-dynamic key. No storage-enforced `CheckedWrites` applies to these rows during
-the extraction (A-3): HEAD's save mutex and this single-writer ratchet protect them, as at HEAD.
+#### 1.12.3 Key grammar and ABO's rename table (normative)
 
-**Secrets: every legacy copy is written in place (A-2, C16).** Where HEAD keeps a secret is fixed per name (§2.2),
-and the books store reports it (`SecretsStore.Kept`, §2.3): every name with a legacy copy stays in that copy until
-the secrets cutover (§1.12.5).
+**Grammar.** A canonical key is a `Path` (§1.3.1): `seg ("." seg)*` with `seg = [a-z][a-z0-9_]{0,47}`, first segment
+`core` or `modules`. An integration passthrough path is `integrations.<kind>.<instance>.<field>` (05-metadata M1;
+`<instance>` follows `InstanceID` and may hold `-`). A key's env name is §1.3.6's derivation, its operator-file form
+the nested YAML mapping of its segments, and a secret's name is its path (`secrets.Name`, §2.3). A map-typed key's
+map keys are data. Nothing else names a key.
 
-- **Plaintext in the blob** (AcoustID key, the OAuth client secrets, the Deluge and download-client passwords, the
-  metadata-source credentials, the webhook signing secret; §2.2): core builds read the blob field and write it in
-  place through `SecretsStore.Write`, plaintext, in the blob render of the same batch, exactly as HEAD's
-  `SaveConfigToDatabase` does. None of these has a gap-fill file copy (HEAD's `SaveConfigToFile` writes only the
-  three encrypted keys below, `persistence.go:168-178`), and no core build gives one any.
-- **Encrypted** (`openai_api_key`, `google_books_api_key`, `hardcover_api_token`, `basic_auth_password`;
-  `persistence.go:1955-1958,1989-2006`): core builds read them from HEAD's encrypted rows, in ABO's cipher, and write
-  them **in place** exactly as HEAD's `SaveConfigToDatabase` does: a set rewrites the encrypted row in the batch and
-  HEAD's gap-fill file copy (`<db parent>/config.yaml`, the three that have one) is rewritten by the store's
-  post-commit step, inside the same `configBlobSaveMu` hold (below; R10-5); a clear deletes the row in the batch and
-  removes the file key during staging, inside the hold and **before** the batch commits, so a failed file rewrite
-  fails the write instead of leaving a value HEAD's gap fill would bring back (`persistence.go:42-92`). Until the cutover they keep
-  HEAD's cipher (no key ID, no AAD, out-of-scope defect 3) and the file keeps HEAD's plaintext copies (out-of-scope
-  defect 2); `k0-legacy` in the keyring still recovers the rows (§2.4).
+**The rename table** is ABO data and lives in ABO (`internal/books/cutover`, name coined here; core holds no ABO
+name, 03 R1). It has one row per HEAD key and drives four things: M2 (§1.12.2), the retired-name list ABO hands
+config (`app.Options.RetiredConfigNames`, §1.3.6), the deploy-file check (§1.12.4) and the R2 release note's rename
+list (09). It is **generated** from HEAD's code, never maintained by hand:
 
-There is no record in `c/secrets/`, no sentinel and no roll-forward compare for any of them: the legacy copy is the
-one stored value on every build, so an older build after a rollback reads the current value, a rotated key cannot
-come back (DATA4-3), and nothing has to be re-entered. Plaintext copies are counted by
-`mediacore_config_legacy_plaintext_secrets` and shown with `Source: legacy` in the settings UI. A secret with no
-legacy name is native data: its encrypted record in `c/secrets/` is its only stored copy, and no older build knows
-the name. A HEAD file-only secret (the "—" rows of §2.2) is never stored while the books store is attached, so an
-older build, which reads it from env or file only, reads the same value as the current one (`FileOnly`, R9-5). An undecryptable encrypted row
-(ABO's key missing) reads as "must be re-entered" (`Meta.Err = ErrKeyUnavailable`), the boot continues and the row
-is kept (DATA3-12).
+1. **Source.** Every field of HEAD's `Config` struct (`internal/config/config.go:1048-1912`: 173 top-level fields;
+   the step's frozen copy), in source order, and recursively the fields of each struct-typed field. A field's
+   **HEAD name** is its `json` tag, or its `mapstructure` tag where the `json` tag is `-` (the 19 "env/file" rows:
+   HEAD never stores them). Its **retired names** are the HEAD name as a top-level key of the operator file (its
+   nested keys included), the upper-cased HEAD name (viper's prefix-less `AutomaticEnv`, `cmd/root.go:625`), every
+   name HEAD binds to it with `BindEnv` (142 calls: `config.go` 132, `abs_config.go` 9, `invite_config.go` 1),
+   and the two `ABK_*` names (`ABK_STATE_DIR`, `state_dir.go:25`, → `core.paths.state_dir`;
+   `ABK_ALLOW_ENCRYPTION_KEY_REGEN`, `cmd/root.go:733`, → `core.secrets.allow_key_regen`). HEAD's removed keys
+   (`internal/config/removed_keys.go`) join as dropped rows that carry HEAD's message.
+2. **Explicit rows** win: every HEAD key of a platform family (a core key, an integration instance field or
+   secret, a library root or mapping, a task window or schedule) and the few books keys with a fixed name (the
+   Cloudflare identity and guest keys). The owning spec of each target names the key; a target this file names
+   first is marked "(coined)" in the golden until its owner's key table lists it.
+3. **Books rows** — every other field — go to `modules.books.<section>.<leaf>`. `<section>` comes from the section
+   table below: an exact name (`=name`) first, then an exact key, then the longest matching prefix; two matches of
+   one rank are a generator error. `<leaf>` is the HEAD name minus the section's strip prefix when the name starts
+   with it, else the HEAD name. A struct-typed field the section takes as a whole (`=name`) puts its sub-keys
+   directly under the section; any other struct-typed field puts them under its own path (`dedup_boilerplate` →
+   `modules.books.dedup.boilerplate.*`). Sub-keys keep their `json` names.
+4. **Checks.** A field no rule assigns, a path that breaks the grammar, two rows with one path, a section path that
+   overlaps a field of its parent (§1.3.1), or a retired name claimed by two rows fails the generator.
+   `TestRenameTable_Golden` compares the generator's output (per row: HEAD name, retired names, canonical path,
+   canonical env name, blob field, class, `Convert`, and the refuse-or-warn verdict of each retired name under
+   §1.3.6) with `internal/books/cutover/testdata/rename_table.golden`; `TestRenameTable_EveryKeyRegistered` asserts
+   that every canonical path of class `k` or `s` is a registered key of R2's binary.
 
-**The gap-fill write is a post-commit step inside the lock (R10-5, DATA10-2).** HEAD's `SaveConfigToDatabase` holds
-`configBlobSaveMu` from before its snapshot until its `config.yaml` step is done (`persistence.go:1940-1944`
-@748fd787a), so the file always carries the latest save. Core keeps that: whenever a books store stages a write of
-the blob or of a kept secret into a batch (`OverrideStore.Stage`, the legacy instance and rule stores,
-`SecretsStore.Write`), it registers its post-commit step on that batch (`storage.OnCommitted`, 05-storage), and
-`storage.CommitLocked` runs the step after the commit succeeded and before it releases `configBlobSaveMu`. So
-**every** writer path HEAD covered gets it, whichever owner commits: the config `Committer`, `integrations.Registry`,
-notify's rule store and `secrets.(*Store).Put`/`Delete` of a kept name (§1.6). The step renders HEAD's managed keys
-from the rows and blob it reads **inside the hold**, never from the commit's own values, so a late set can never put
-back a key that a clear on another route removed after it, and a `Registry.Put` set rewrites the file copy as an
-`Apply` set does (`TestGapFillClearNotUndoneByLateSet`, `TestRegistryPutRewritesGapFillCopy`). A batch that failed to
-commit runs no step. A failed step is fail-open (§2.5): the row holds the value, so HEAD's gap fill never consults the
-file while it is set, and the next commit's step repairs it.
+**Section table** (books rows):
 
-**The gap-fill file holds only what HEAD manages (ADV-8).** The step writes the file by HEAD's merge
-(`SaveConfigToFile`: read, merge, temp file, fsync, rename) under the books store's file mutex, a leaf lock taken only
-inside the step and inside the post-reset hook and never held while another lock is taken, re-reading the file under
-it, so the hook and a commit can never leave one secret's stale copy behind (DATA5-20); between commits
-`configBlobSaveMu` already serialises it. The merge writes only the keys HEAD's `SaveConfigToFile` manages (twelve settings and the three
-encrypted secrets, `persistence.go:150-178`) and keeps every other key as it found it, because the same file may be
-the operator's `--config` (`:110-112`); no core build writes any other key into it
-(`TestCoreWritesOnlyHEADGapFillKeys`).
-
-Effects on older builds after a rollback: none for secrets. The Basic gate compares with the password last saved on
-any build, so it is never stranded or opened (OPS5-2; SEC4-1, DATA4-1, OPS4-1); provider keys and the webhook
-signing secret keep working. A gate that reads enabled with no usable password on a core build (unset, empty with no
-non-empty `BASIC_AUTH_PASSWORD`, §1.3.5, unreadable, or removed on an older build, e.g. by HEAD's key-regeneration path, `persistence.go:1233-1262`) refuses
-every non-exempt request: core's stage 8 is fail-closed ([05-http-api](05-http-api.md) §4.2; R5-1(c), SEC5-4,
-DATA5-12).
-
-**Integration-bound keys (C11).** ABO's legacy singletons (Deluge web, `download_client`, AI endpoints and the
-`openai_*` pair, `metadata_sources`, the Google Books and Hardcover keys, SMTP, webhooks; §1.12.3 rows marked
-*integrations*) stay in the blob. Config does not own or interpret them. integrations reaches their blob fields
-through its own legacy instance store ([05-metadata](05-metadata.md) M1), which books implements in the same
-package as this store (`internal/books/configstore`, `Manifest.LegacyStores.Integrations`, 06), joins the
-caller's `*storage.Batch` and shares this store's pending render (§1.6).
-Their secrets follow the secret rule above by name: each is written in place, in HEAD's form, whichever route writes
-it (the façade from S3, `Registry.Put` from S7, or the clear that a URL-origin change causes, §1.3.7). From 09 S7, when `integrations` lands, the legacy
-`PUT /api/v1/config` path splits each request: the integration-bound fields go to `integrations.Registry.Put` (so
-M1.3's trust rules, the `Local` reset on a URL change and the change-URL audit apply once, whichever route wrote
-them) and the rest to `Store.Apply` (05-metadata M1.4 step 2a); from S3 to S7 the façade writes them through
-`Store.Apply` as `ProtectAdmin` blob fields (§1.3.7, SEC4-7), which with auth off keep HEAD's rule on every route
-(`HEADAuthOffWritable`, §1.3.7; R10-10). The blob is owned by books, written from S3 only by
-the books store, and outlives every stage of the extraction (DATA3-3).
-
-**Rollback matrix** (inputs to 09's R-test and to 09 §9.2.1's one table of rollback costs and consequences):
-
-| Move | Config the target reads | Secrets the target reads |
+| Section (`modules.books.…`) | Takes | Strips |
 |---|---|---|
-| S3+ → S0–S2b or HEAD | the blob, current (written in place); keys with no legacy name (`c/config/` rows) do not exist there | every secret with a legacy copy: its current value, written in place. Native secrets (no legacy copy) do not exist there; the older build reads those names from env or file, as before |
-| S0–S2b or HEAD → S3+ again | the blob read in place: every change made on the older build is effective at the next boot; the `c/config/` rows are effective again unchanged | the legacy copies as the older build left them; native records unchanged |
-| S2b → S2, S2 → HEAD | the blob (core config never writes it before S3) | unchanged |
-| S3+ → S3+ | the blob and the `c/config/` rows | the legacy copies and `c/secrets/` |
+| `abs` | `abs_*` | `abs_` |
+| `activity` | `activity_*` | `activity_` |
+| `ai` | `enable_ai_parsing`, `filename_parse_model`, `cover_art_model` | — |
+| `cache` | `list_warmer_heap_delta_mb`, `list_warmer_trickle_interval_ms`, `library_counts_cache_min_interval_seconds`, `cache_*` | `cache_` |
+| `catalog` | `=catalog` | — |
+| `cfguests` | `cf_*` (the explicit `cf_access_*` rows excepted) | `cf_` |
+| `chapters` | `chapter_consolidation_threshold_min`, `repair_chapter_max_min`, `fragment_window_containment_min` | — |
+| `db_census` | `db_census_*` | `db_census_` |
+| `dedup` | `=dedup`, `dedup_*` | `dedup_` |
+| `download` | `deluge_*` (the explicit `deluge_web_*` rows excepted) | `deluge_` |
+| `embedding` | `=embedding` | — |
+| `fingerprint` | `fingerprint_*`, `fp_parallel_workers` | `fingerprint_` |
+| `itunes` | `=itunes` (`path_mappings` is an explicit row) | — |
+| `master_list` | `master_list_*` | `master_list_` |
+| `metadata` | `metadata_*` (the explicit `metadata_sources` row excepted), `google_books_*` limits, `authority_evidence_enabled`, `identification_advance_enabled` | `metadata_` |
+| `openlibrary` | `openlibrary_*` | `openlibrary_` |
+| `organize` | `organization_strategy`, `auto_organize`, `folder_naming_pattern`, `file_naming_pattern`, `auto_rename_on_apply` | — |
+| `playlist` | `playlist_*` | `playlist_` |
+| `purge` | `purge_*` | `purge_` |
+| `quota` | `enable_disk_quota`, `disk_quota_percent`, `enable_user_quotas` (display-only at HEAD, `internal/server/handlers/system/handler.go:389-391`) | — |
+| `review` | `review_apply_enabled`, `bulk_apply_max_items` | — |
+| `scan` | `scan_*`, `auto_scan_enabled`, `auto_scan_debounce_seconds`, `concurrent_scans`, `min_book_size_bytes`, `min_rescan_age_hours`, `supported_extensions`, `exclude_patterns`, `coalesce_shattered_siblings` | `scan_` |
+| `search` | `=search`, `bleve_description_max_chars`, `disable_per_user_search_filters`, `enabled_sort_indexes` | — |
+| `setup` | `setup_*` | `setup_` |
+| `tags` | `write_back_metadata`, `embed_cover_art`, `auto_write_tags_on_apply`, `verify_after_write`, `create_backups` (HEAD's switch for a `.bak-*` copy before a tag write, not a database backup) | — |
+| `tools` | `=tools` | — |
+| `versions` | `retire_versions_apply_enabled`, `kept_sweep_apply_enabled` | — |
+| `whisper` | `whisper_*` | `whisper_` |
 
-**Stated consequences for 09 §9.2.1's table (OPS4-11):** (a) no secret needs re-entry after a rollback, and a value
-given only under a canonical name is not read below the stage that registers it (§1.3.5); (b) an older build's
-**settings** reset does not touch values that live only in core records — `c/config/` rows and `c/secrets/` records
-of names with no legacy copy — so they are effective again after roll-forward, but its **factory** reset
-(`PebbleStore.Reset`, `internal/database/pebble_store.go:6310-6331`, behind `POST /system/factory-reset` and
-`POST /system/reset`, `internal/server/handlers/system/handler.go:538-560,463-491`) deletes every key, core records
-included, so nothing written on S3+ survives it.
+Two further books sections come from explicit rows: `identity` and `scheduler` (below), and `maintenance` from
+`maintenance`'s sub-key rows.
 
-**A core build's factory reset (DATA6-6, R7-2, R8-1).** From S2b HEAD's `Reset` cannot run: strict claims refuse its
-whole-keyspace `DeleteRange`, and in the shadow release it would wipe `c/` under a live kernel. HEAD has two callers
-of it, `POST /system/factory-reset` (`internal/server/handlers/system/handler.go:538-589` @748fd787a) and
-`POST /system/reset` (`ResetSystem`, `:463-491`, which wipes the store and resets settings but deletes no file). A
-core build's reset is therefore a kind of the one staged, restart-bound swap, `KindReset` of `restoreswap`
-(05-storage §5S.3.15 owns it; SIMP8-1), and the next boot is a fresh install. It has two kinds: **`ResetStore`**,
-for HEAD's `POST /system/reset` (store and settings only, no file effects), and **`ResetFactory`**, which adds the
-post-reset hook (COR8-1). **The request only stages; nothing destructive runs before the restart** (R7-2; COR7-1,
-SEC7-4, SEC7-5, DATA7-6):
+**The table** (generated; HEAD's source order). *Stored*: where HEAD keeps the value (`blob` = the settings blob,
+`row` = an encrypted row, `env/file` = never stored). *Class*: `k` key and `s` secret (migrated by M2), `i` input
+of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow §1.3.6), `x` dropped. A path ending
+`.*` holds the struct's sub-keys under their `json` names. Counts: 134 `k`, 11 `s`, 9 `i`, 16 `o`, 3 `x` (173).
 
-- **Who stages.** From S2b until S4 r2, books' gin handlers for both legacy routes, behind HEAD's chain unchanged
-  (`credRoute`, the always-authenticated admin group and the owner gate,
-  `internal/server/wire_system_routes.go:45-48` @748fd787a), call `legacy.Maintenance.StageFactoryReset` with the
-  kind, the narrow kernel-built handle that the module declaring legacy claims receives as
-  `module.StorageHandles.Maintenance` (06, 05-storage). There is no core route before S4 r2. At S4 r2
-  `POST /api/core/v1/system/factory-reset` lands in `internal/storagehttp` with its guards and audit, and both legacy
-  paths become its `Alias`es. Every path reaches the kernel's one staging function, which calls
-  `legacy.ConfigResetArgs.ResetArgs` on the built config store and passes the result into the intent (§1.3.3,
-  COR8-2), so the core route and its aliases record the same arguments as the S2b handlers. They all pass the one
-  request struct `storage.ResetRequest` (05-storage; R9-6), whose confirmation contract is 05-rbac §6.2's: with
-  `delete_library_files` `kernel.stageReset` compares the root and count with the preflight's before anything is staged (422
-  `library_files_confirm_required` on a mismatch, §1.3.3), and the HEAD-shaped legacy paths keep HEAD's wipe with no
-  count. Every target is pre-validated at staging; a dangerous `RootDir` answers 400 and nothing is staged only
-  when the reset will wipe the library (COR8-4, SEC9-4).
-- **The live settings are never written with defaults.** Neither the handlers nor the route calls
-  `config.ResetToDefaults` or `SaveConfigToDatabase` in the request (HEAD's `handler.go:485,584-589` do). An intent
-  that the next boot rejects (one rule for every swap kind: `expires_at` passed, another binary, the live store's
-  open stamp moved) therefore leaves the store and every setting, the Basic gate's `basic_auth_enabled` among them,
-  exactly as they were (`TestFactoryResetRejectedLeavesStoreAndSettings`, 05-storage). While the swap's intent
-  (`restore/pending.json` with `kind: "reset"`) or its in-flight file exists, from the set-aside until `hook_done`,
-  `CheckReader` refuses with `restore_pending` or `restore_inflight`, whose message names the kind, so
-  `make rollback`, `deploy` and the updater refuse (05-storage `CheckReader`). A failed set-aside moves back what it
-  moved, journals `rejected` and boots the untouched store `degraded` (COR8-3, DATA8-1).
-- **The reset boot stages HEAD's factory defaults (SEC8-5).** HEAD's factory reset stores `factoryDefaultConfig()`,
-  built from the shipped defaults alone and never from the process environment (`internal/config/config.go:4111-4155`
-  @748fd787a), with `root_dir` empty and `setup_complete` false (`handler.go:584-589`), so its stored
-  `enable_auth: true` and `enable_rate_limit: true` beat a stale `ENABLE_AUTH=false` or `ENABLE_RATE_LIMIT=false` at
-  the next boot. A fresh store with no blob would let those `BelowStored` names win (§1.3.5): auth would come back
-  **off**, with no users and remote access allowed. So books' `ResetArgs` renders that blob (HEAD's codec, the
-  shipped defaults only, `root_dir` empty, `setup_complete` false) as the settings rows the fresh install starts
-  with, the intent records them, and **the reset boot's fresh-install batch writes them** (05-storage §5S.3.15
-  "Next boot"), before P4d step 1 opens the store, so `Open`'s settings load at S2b, the S3 façade and every later
-  boot read it as the stored blob. It is a write to the fresh store after the restart, so "the live settings are
-  never written with defaults" holds, and books' code renders every byte of it, so the exclusive-writer rule above
-  stands. The same blob is written for both kinds: HEAD's `ResetSystem` leaves `factoryDefaultConfig` in memory and
-  never persists it (`handler.go:485`), so after a restart HEAD itself has no stored `root_dir` either, and writing
-  the defaults closes the same stale-env hole for it (`TestFactoryReset_StaleEnableAuthFalseKeepsAuthOn`);
-- the boot record `<state_dir>/config.boot.json` is set aside with the database, beside itself in the state
-  directory (each target is set aside on its own filesystem; 05-storage §5S.3.15 names the destination, COR8-3), so
-  module enablement returns to its defaults, as every other stored setting does;
-- the keyring (data, derive and `k0-legacy` keys) and ABO's legacy key file are **kept** unchanged, and the
-  keyring export stays valid. Keeping them is the lead's decision (round 6), 14 Q-J's recommendation (a); the
-  owner may override it (DATA6-6). Moving `previous/` back, with the other steps of 05-storage §5S.3.15's manual
-  undo (the keyring header's `install_id` set back with `<app> secrets set-install-id`, §2.4), restores the store,
-  its secrets and its settings; files deleted by the post-reset hook (below) are not restored. The reset boot, and only it, rewrites the keyring
-  header's `install_id` to the fresh install's: the kernel sets `secrets.Options.ResetBoot` on the boot whose
-  `KindReset` journal reads `set_aside`, `secrets.Open` rewrites the header at P4d step 1, and only then does the
-  kernel mark the journal `applied` (DATA7-17, 05-storage). An ordinary `Open` never rewrites it, because a
-  host-loss restore depends on that field (§2.4);
-- **HEAD's side effects run in books' post-reset hook** (`ResetFactory` only), which runs only after the swap
-  journal reads `applied` and is stated as not undoable (05-storage §5S.3.15 owns its phase and its completion
-  record). For config it rewrites HEAD's gap-fill file `<db parent>/config.yaml` as HEAD's reset leaves it, without
-  the three kept secrets' plaintext copies (`persistence.go:168-178`). That file sits beside the DB directory, so
-  the set-aside does not move it, and the fresh blob's empty kept-secret fields would otherwise gap-fill the old
-  install's keys. Until the hook has completed, the kernel hands the run as `legacy.ConfigOpenEnv.Reset`, and while
-  it is non-nil the books store serves no gap-fill copy, so no old key is effective on the reset boot or after a
-  crash before the hook (`TestFactoryResetClearsGapFillSecrets`). The same hook carries HEAD's Open Library data
-  deletion and, only when the intent's `delete_library_files` is set (`ConfigResetRun.DeleteLibraryFiles`), HEAD's
-  library `RootDir` wipe of the confirmed root (`handler.go:556-583`; A-17): the legacy paths set it, as HEAD always
-  wiped, and the native route only on the confirmed opt-in (05-rbac §6.2). The hook never fails
-  boot: an entry it cannot delete is logged, audited and reported as `factory_reset_cleanup_incomplete`, and it
-  still records `hook_done` (COR8-4, OPS8-5). A `ResetStore` swap has no hook: the kernel records `hook_done`
-  itself, and the gap-fill file stays as HEAD's `ResetSystem` leaves it (out-of-scope defect 6).
+| HEAD name | Stored | Canonical path or name | Class | Note |
+|---|---|---|---|---|
+| `root_dir` | blob | `core.library.roots` entry `books-library` (`Path`) | i | 05-library §5L.10 |
+| `path_aliases` | blob | `core.library.roots` entry `books-library` (`Aliases`) | i | 05-library §5L.10 |
+| `database_path` | blob | `core.storage.path` | k | `ProtectOperator`: never stored |
+| `database_type` | blob | — | x | Pebble only |
+| `activity_backend` | blob | `modules.books.activity.backend` | k | |
+| `playlist_dir` | blob | `modules.books.playlist.dir` | k | |
+| `setup_complete` | blob | `modules.books.setup.complete` | k | |
+| `organization_strategy` | blob | `modules.books.organize.organization_strategy` | k | |
+| `scan_on_startup` | blob | `modules.books.scan.on_startup` | k | |
+| `auto_organize` | blob | `modules.books.organize.auto_organize` | k | |
+| `auto_scan_enabled` | blob | `modules.books.scan.auto_scan_enabled` | k | |
+| `auto_scan_debounce_seconds` | blob | `modules.books.scan.auto_scan_debounce_seconds` | k | |
+| `folder_naming_pattern` | blob | `modules.books.organize.folder_naming_pattern` | k | |
+| `file_naming_pattern` | blob | `modules.books.organize.file_naming_pattern` | k | |
+| `create_backups` | blob | `modules.books.tags.create_backups` | k | |
+| `backup_dir` | blob | `core.backup.dir` | k | |
+| `backup_max_total_bytes` | blob | `core.backup.retention.max_total_bytes` | k | |
+| `backup_compression` | blob | `core.backup.compression` | k | |
+| `backup_compression_level` | blob | `core.backup.compression_level` | k | |
+| `enable_disk_quota` | blob | `modules.books.quota.enable_disk_quota` | k | |
+| `disk_quota_percent` | blob | `modules.books.quota.disk_quota_percent` | k | |
+| `enable_user_quotas` | blob | `modules.books.quota.enable_user_quotas` | k | |
+| `write_back_metadata` | blob | `modules.books.tags.write_back_metadata` | k | |
+| `embed_cover_art` | blob | `modules.books.tags.embed_cover_art` | k | |
+| `metadata_sources` | blob | `metadata/<source id>` instances | i | credentials: `s` rows below |
+| `openlibrary_dump_enabled` | blob | `modules.books.openlibrary.dump_enabled` | k | |
+| `openlibrary_dump_dir` | blob | `modules.books.openlibrary.dump_dir` | k | |
+| `hardcover_api_token` | row | `integrations.metadata.hardcover.api_token` | s | encrypted row |
+| `google_books_api_key` | row | `integrations.metadata.google-books.api_key` | s | encrypted row |
+| `enable_ai_parsing` | blob | `modules.books.ai.enable_ai_parsing` | k | |
+| `openai_api_key` | row | `integrations.ai.openai.api_key` | s | encrypted row |
+| `acoustid_api_key` | blob | `modules.books.acoustid.api_key` | s | plaintext in the blob |
+| `fp_parallel_workers` | blob | `modules.books.fingerprint.fp_parallel_workers` | k | |
+| `fingerprint_remote_workers_enabled` | blob | `modules.books.fingerprint.remote_workers_enabled` | k | |
+| `fingerprint_worker_tool_versions` | blob | `modules.books.fingerprint.worker_tool_versions` | k | |
+| `fingerprint_window_reference_tools` | blob | `modules.books.fingerprint.window_reference_tools` | k | |
+| `fingerprint_length_sec` | blob | `modules.books.fingerprint.length_sec` | k | |
+| `whisper_clip_cache_dir` | blob | `modules.books.whisper.clip_cache_dir` | k | |
+| `whisper_batch_sleep_ms` | blob | `modules.books.whisper.batch_sleep_ms` | k | |
+| `whisper_batch_size` | blob | `modules.books.whisper.batch_size` | k | |
+| `whisper_max_in_flight` | blob | `modules.books.whisper.max_in_flight` | k | |
+| `openai_base_url` | blob | `integrations.ai.openai.base_url` | i | |
+| `abs_auth_probe_enabled` | blob | `modules.books.abs.auth_probe_enabled` | k | |
+| `authority_evidence_enabled` | blob | `modules.books.metadata.authority_evidence_enabled` | k | |
+| `retire_versions_apply_enabled` | blob | `modules.books.versions.retire_versions_apply_enabled` | k | |
+| `kept_sweep_apply_enabled` | blob | `modules.books.versions.kept_sweep_apply_enabled` | k | |
+| `abs_itunes_position_backfill_user_id` | blob | `modules.books.abs.itunes_position_backfill_user_id` | k | |
+| `otel_exporter_otlp_endpoint` | blob | `core.tracing.otlp.endpoint` | k | |
+| `otel_metrics_otlp_endpoint` | blob | `core.metrics.otlp.endpoint` | k | |
+| `otel_metrics_otlp_interval` | blob | `core.metrics.otlp.interval` | k | bare integer = ms |
+| `otel_metrics_otlp_insecure` | blob | `core.metrics.otlp.insecure` | k | |
+| `telemetry_environment` | blob | `core.metrics.environment` | k | |
+| `list_warmer_heap_delta_mb` | blob | `modules.books.cache.list_warmer_heap_delta_mb` | k | |
+| `list_warmer_trickle_interval_ms` | blob | `modules.books.cache.list_warmer_trickle_interval_ms` | k | |
+| `library_counts_cache_min_interval_seconds` | blob | `modules.books.cache.library_counts_cache_min_interval_seconds` | k | |
+| `bleve_description_max_chars` | blob | `modules.books.search.bleve_description_max_chars` | k | |
+| `metadata_review_model` | blob | `modules.books.metadata.review_model` | k | |
+| `filename_parse_model` | blob | `modules.books.ai.filename_parse_model` | k | |
+| `cover_art_model` | blob | `modules.books.ai.cover_art_model` | k | |
+| `whisper_remote_url` | blob | `modules.books.whisper.remote_url` | k | |
+| `whisper_endpoints` | blob | `modules.books.whisper.endpoints` | k | |
+| `whisper_requires` | blob | `modules.books.whisper.requires` | k | |
+| `ai_endpoints` | blob | `ai/<row id>` instances | i | 05-ai §10 |
+| `ai_endpoints_routing` | blob | — | x | not a router input (05-ai §10) |
+| `concurrent_scans` | blob | `modules.books.scan.concurrent_scans` | k | |
+| `scan_progress_every` | blob | `modules.books.scan.progress_every` | k | |
+| `scan_standdown_grace_seconds` | blob | `modules.books.scan.standdown_grace_seconds` | k | |
+| `chapter_consolidation_threshold_min` | blob | `modules.books.chapters.chapter_consolidation_threshold_min` | k | |
+| `repair_chapter_max_min` | blob | `modules.books.chapters.repair_chapter_max_min` | k | |
+| `fragment_window_containment_min` | blob | `modules.books.chapters.fragment_window_containment_min` | k | |
+| `metadata_candidate_fetch_workers` | blob | `modules.books.metadata.candidate_fetch_workers` | k | |
+| `identification_advance_enabled` | blob | `modules.books.metadata.identification_advance_enabled` | k | |
+| `google_books_daily_limit` | blob | `modules.books.metadata.google_books_daily_limit` | k | |
+| `google_books_background_daily_limit` | blob | `modules.books.metadata.google_books_background_daily_limit` | k | |
+| `google_books_fallback_daily_limit` | blob | `modules.books.metadata.google_books_fallback_daily_limit` | k | |
+| `coalesce_shattered_siblings` | blob | `modules.books.scan.coalesce_shattered_siblings` | k | |
+| `operation_timeout_minutes` | blob | `core.tasks.default_timeout` | k | minutes → duration |
+| `db_census_exact_read_mb_per_sec` | blob | `modules.books.db_census.exact_read_mb_per_sec` | k | |
+| `db_census_exact_cooldown_hours` | blob | `modules.books.db_census.exact_cooldown_hours` | k | |
+| `min_book_size_bytes` | blob | `modules.books.scan.min_book_size_bytes` | k | |
+| `min_rescan_age_hours` | blob | `modules.books.scan.min_rescan_age_hours` | k | |
+| `log_retention_days` | blob | `core.log.journal.retention_days` | k | `0` → 90, negative → 0 (keep) |
+| `operation_log_retention_days` | blob | `core.tasks.history_retention` | k | days → duration |
+| `activity_log_retention_change_days` | blob | `modules.books.activity.log_retention_change_days` | k | |
+| `activity_log_retention_debug_days` | blob | `modules.books.activity.log_retention_debug_days` | k | |
+| `activity_log_compaction_days` | blob | `modules.books.activity.log_compaction_days` | k | |
+| `activity_log_nightly_compaction_enabled` | blob | `modules.books.activity.log_nightly_compaction_enabled` | k | |
+| `activity_log_full_detail_days` | blob | `modules.books.activity.log_full_detail_days` | k | |
+| `ai_journal_retention_days` | blob | `core.ai.journal_retention` | k | days → duration |
+| `embedding` | blob | `modules.books.embedding.*` | k | |
+| `dedup` | blob | `modules.books.dedup.*` | k | |
+| `dedup_boilerplate` | blob | `modules.books.dedup.boilerplate.*` | k | |
+| `metadata_scoring` | blob | `modules.books.metadata.scoring.*` | k | |
+| `catalog` | blob | `modules.books.catalog.*` | k | |
+| `ai_backend` | blob | — | x | its scalars are already folded into `ai_endpoints` by HEAD's codec (05-ai §10) |
+| `api_rate_limit_per_minute` | blob | `core.http.rate_limit.per_minute` | k | |
+| `json_body_limit_mb` | blob | `core.http.body.json_max_bytes` | k | MiB → bytes |
+| `upload_body_limit_mb` | blob | `core.http.body.upload_max_bytes` | k | MiB → bytes |
+| `master_list_retention` | blob | `modules.books.master_list.retention` | k | |
+| `enable_auth` | blob | `core.auth.mode` | k | `true` → `required`, `false` → `disabled`; fail-closed key |
+| `enable_rate_limit` | blob | `core.http.rate_limit.enabled` | k | |
+| `review_apply_enabled` | blob | `modules.books.review.review_apply_enabled` | k | |
+| `bulk_apply_max_items` | blob | `modules.books.review.bulk_apply_max_items` | k | |
+| `basic_auth_enabled` | blob | `core.http.basic_gate.enabled` | k | fail-closed key |
+| `basic_auth_username` | blob | `core.http.basic_gate.username` | k | |
+| `basic_auth_password` | row | `core.http.basic_gate.password` | s | encrypted row; empty = unset |
+| `oauth_enabled` | blob | `core.auth.oidc.providers` | k | fold (05-authn) |
+| `oauth_github_client_id` | blob | `core.auth.oidc.providers` entry `github` | k | fold (05-authn) |
+| `oauth_github_client_secret` | blob | `core.auth.oidc.github.client_secret` | s | plaintext in the blob |
+| `oauth_google_client_id` | blob | `core.auth.oidc.providers` entry `google` | k | fold (05-authn) |
+| `oauth_google_client_secret` | blob | `core.auth.oidc.google.client_secret` | s | plaintext in the blob |
+| `oauth_redirect_base_url` | blob | `core.auth.oidc.redirect_base_url` | k | |
+| `oauth_allowed_emails` | blob | `core.auth.oidc.providers[].allowed_emails` | k | fold (05-authn) |
+| `oauth_default_role` | blob | `core.auth.oidc.providers[].default_role` | k | fold (05-authn) |
+| `cf_access_team_domain` | blob | `modules.books.identity.cf_access_team_domain` | k | |
+| `cf_access_aud` | blob | `modules.books.identity.cf_access_aud` | k | |
+| `owner_email` | blob | `modules.books.identity.owner_email` | k | |
+| `abs_api_enabled` | blob | `modules.books.abs.api_enabled` | k | |
+| `abs_auth_modes` | blob | `modules.books.abs.auth_modes` | k | |
+| `abs_jwt_secret` | env/file | `modules.books.abs.jwt_secret` | s | value kept (F3) |
+| `abs_access_token_ttl` | blob | `modules.books.abs.access_token_ttl` | k | |
+| `abs_refresh_token_ttl` | blob | `modules.books.abs.refresh_token_ttl` | k | |
+| `abs_session_max_ttl` | blob | `modules.books.abs.session_max_ttl` | k | |
+| `abs_refresh_grace` | blob | `modules.books.abs.refresh_grace` | k | |
+| `abs_server_version` | blob | `modules.books.abs.server_version` | k | |
+| `abs_default_library_id` | blob | `modules.books.abs.default_library_id` | k | |
+| `smtp_host` | env/file | `integrations.notify.email.host` | o | |
+| `smtp_port` | env/file | `integrations.notify.email.port` | o | |
+| `smtp_username` | env/file | `integrations.notify.email.username` | o | |
+| `smtp_password` | env/file | `integrations.notify.email.password` | s | |
+| `smtp_from` | env/file | `integrations.notify.email.from` | o | |
+| `public_base_url` | env/file | `core.http.public_base_url` | o | |
+| `cf_account_id` | env/file | `modules.books.cfguests.account_id` | o | |
+| `cf_guests_policy_id` | env/file | `modules.books.cfguests.guests_policy_id` | o | |
+| `cf_policy_api_token` | env/file | `modules.books.cfguests.policy_api_token` | s | |
+| `cf_guest_service_tokens` | env/file | `modules.books.cfguests.guest_service_tokens` | o | |
+| `cf_service_auth_policy_id` | env/file | `modules.books.cfguests.service_auth_policy_id` | o | |
+| `invite_email_service_token` | env/file | `modules.books.cfguests.invite_email_service_token` | o | |
+| `tunnel_connector_addrs` | env/file | `core.http.trusted_proxies` | o | comma list → list |
+| `allowed_peer_cidrs` | env/file | `core.http.peer_allowlist` | o | comma list → list |
+| `login_saturated_rate` | env/file | `core.auth.login.saturated_rate` | o | |
+| `login_saturated_burst` | env/file | `core.auth.login.saturated_burst` | o | |
+| `cache_invalidate_on_book_update` | blob | `modules.books.cache.invalidate_on_book_update` | k | |
+| `metadata_fetch_cache_ttl_days` | blob | `modules.books.metadata.fetch_cache_ttl_days` | k | |
+| `metadata_fetch` | blob | `modules.books.metadata.fetch.*` | k | |
+| `bootstrap_key_ttl` | env/file | `core.auth.bootstrap.key_ttl` | o | |
+| `bootstrap_key_ttl_days` | env/file | `core.auth.bootstrap.key_ttl` | o | days → duration |
+| `purge_soft_deleted_after_days` | blob | `modules.books.purge.soft_deleted_after_days` | k | |
+| `purge_soft_deleted_delete_files` | blob | `modules.books.purge.soft_deleted_delete_files` | k | |
+| `backup_retention_days` | blob | `core.backup.retention.max_age` | k | days → duration |
+| `log_level` | blob | `core.log.level` | k | |
+| `itunes` | blob | `modules.books.itunes.*` | k | |
+| `deluge_web_url` | blob | `integrations.download.deluge.url` | i | |
+| `deluge_web_password` | blob | `integrations.download.deluge.password` | s | plaintext in the blob |
+| `deluge_discovery_label` | blob | `modules.books.download.discovery_label` | k | |
+| `deluge_discovery_enabled` | blob | `modules.books.download.discovery_enabled` | k | |
+| `deluge_move_enabled` | blob | `modules.books.download.move_enabled` | k | |
+| `protected_paths` | blob | `core.library.protected_paths` | i | 05-library §5L.10 |
+| `auto_update` | blob | `core.updater.*` | k | sub-key rows below |
+| `maintenance` | blob | `core.tasks.windows.nightly.*`, `modules.books.maintenance.*` | k | sub-key rows below |
+| `download_client` | blob | `download/deluge` instance | i | sub-key rows below |
+| `auto_rename_on_apply` | blob | `modules.books.organize.auto_rename_on_apply` | k | |
+| `auto_write_tags_on_apply` | blob | `modules.books.tags.auto_write_tags_on_apply` | k | |
+| `verify_after_write` | blob | `modules.books.tags.verify_after_write` | k | |
+| `scheduled` | blob | `modules.books.scheduler.schedules.<entry>` | k | sub-key rows below |
+| `plugins` | blob | `notify/webhook-<n>` instances | i | sub-key rows below |
+| `supported_extensions` | blob | `modules.books.scan.supported_extensions` | k | |
+| `exclude_patterns` | blob | `modules.books.scan.exclude_patterns` | k | |
+| `tools` | blob | `modules.books.tools.*` | k | |
+| `write_startup_readonly_key` | blob | `core.auth.bootstrap.readonly_key.enabled` | k | |
+| `disable_per_user_search_filters` | blob | `modules.books.search.disable_per_user_search_filters` | k | |
+| `search` | blob | `modules.books.search.*` | k | |
+| `enabled_sort_indexes` | blob | `modules.books.search.enabled_sort_indexes` | k | boot-only at HEAD, stripped from the blob (`persistence.go:2126-2139`), so usually absent |
 
-R-test cells: "save the Basic password on cur, roll back: the saved password gets 200 and `<username>:` with an
-empty password gets 401 on prev; change it on prev, roll forward: the changed value is effective"
-(`TestRollback_BasicGateNeverOpenOnPrev`); "remove the Basic password row on prev with the gate still enabled,
-roll forward: `<username>:` gets 401 on cur" (`TestRollback_BasicGateClearedStaysClosed`, SEC5-4); "with
-compose's environment at its defaults and the gate enabled in the UI, boot cur: the gate is on" (S3,
-`TestComposeEnvKeepsUIBasicGate`, OPS5-1); "rotate a gap-fill key on cur, roll back, save an unrelated setting on
-prev, roll forward: cur uses the rotated key" (`TestRollback_RotatedKeyNotResurrected`); "clear a plaintext secret on
-prev that cur had written, roll forward: it is cleared on cur"; "save the AcoustID key on cur, roll back: prev
-uses it" (`TestRollback_PlaintextSecretSavedOnCurWorksOnPrev`, A-2); "edit a perimeter key through
-`PUT /api/v1/config` at S2 and at S2b, it takes effect without a restart"; "edit a Deluge URL on prev, roll
-forward, the instance uses it"; "with the blob holding `enable_auth: false`, boot cur with `ENABLE_AUTH=true`:
-auth stays off, as at HEAD, and `config_legacy_name_shadowed` names `ABO_CORE_AUTH_MODE`"
-(`TestLegacyAuthEnablePrecedenceMatchesHEAD`, A-2); "with `ENABLE_AUTH=false` left in the unit after auth was
-turned on in the UI, factory-reset on cur: after the restart auth is required and the stored blob holds HEAD's
-factory defaults" (`TestFactoryReset_StaleEnableAuthFalseKeepsAuthOn`, SEC8-5); "auth off on S4 r2, the Basic gate enabled through
-the settings page with a username and password, roll back to S2b: the gate is on, `<username>:<password>` gets 200
-and no credential gets 401" (`TestRollback_AuthOffBasicGateStaysOnPrev`, SEC9-1); "set the peer allow-list in the
-operator file, try to save another through `PUT /api/v1/config` and the core settings route: both refused, nothing
-stored, and prev after a rollback reads the file's list" (`TestFileOnlyLegacyKeysNeverDBStored`, DATA9-6). These run in root `make ci` against a `prev` binary built from `PREV_REF`
-(09 §9.2.1 owns the mechanism; OPS4-6).
+**Sub-key rows** (the struct-typed fields above whose sub-keys do not simply follow their parent):
 
-**Release note (S3):** "Every setting and every secret is still stored where earlier releases store it, so a
-rollback needs no re-entry. A setting given only under an `ABO_CORE_*` name is not read by a release older than the
-one that introduced that name: while you may roll back below it, keep the stored setting (or, for a setting the old
-release takes from its environment, the old variable) at the same value. `ENABLE_AUTH` still loses to a sign-in
-setting saved in the UI, as before; use `ABO_CORE_AUTH_MODE` to override it. A legacy true/false variable for
-sign-in, the Basic gate or another admin-protected setting must now be spelled `1`, `t`, `T`, `TRUE`, `true`, `True`,
-`0`, `f`, `F`, `FALSE`, `false` or `False`: any other spelling stops startup instead of being read as off. Settings
-that earlier releases take only from the environment or the configuration file (the allowed peer networks, the
-tunnel connector addresses) can still be set only there." 09 §9.2.1 carries the canonical-name rollback row.
+| HEAD name | Stored | Canonical path or name | Class | Note |
+|---|---|---|---|---|
+| `itunes.path_mappings` | blob | `core.library.mappings` entries, `Source: "itunes"` | i | 05-library §5L.10 |
+| `maintenance.enabled`, `maintenance.window_start`, `maintenance.window_end` | blob | `core.tasks.windows.nightly.{enabled, start, end}` | k | 05-tasks |
+| every other `maintenance.<field>` (15: the window's job switches and `acoustid_nightly_limit`) | blob | `modules.books.maintenance.<field>` | k | |
+| `auto_update.enabled` | blob | `core.updater.mode` | k | `true` → `check` (unattended apply stays check-only, 05-updater), `false` → `off` |
+| `auto_update.channel` | blob | `core.updater.channel` | k | `develop` → `prerelease` |
+| `auto_update.check_minutes` | blob | `core.updater.schedules.check` | k | `{enabled: true, every: <minutes>}` |
+| `auto_update.window_start`, `auto_update.window_end` | blob | — | x | read and ignored since HEAD's updater hotfix (05-updater) |
+| `scheduled.<entry>` (16 entries, `config.go:991-1046`) | blob | `modules.books.scheduler.schedules.<entry>` | k | a `tasks.ScheduleConfig` by HEAD's own reading of the entry (an interval-only entry is enabled iff its interval is above 0); `TestScheduleParity_AllDefinitions` (05-tasks) |
+| `download_client.torrent.type`, `download_client.torrent.deluge.{host, port, username}` | blob | `download/deluge` instance fields | i | 05-download §10 |
+| `download_client.torrent.deluge.password` | blob | `integrations.download.deluge.daemon_password` (coined) | s | plaintext in the blob |
+| `metadata_sources[].credentials.<k>` | blob | `integrations.metadata.<source id>.credentials.<k>` | s | plaintext in the blob |
+| `plugins.webhook` (`enabled`, `settings.urls`, `settings.events`) | blob | `notify/webhook-<n>` instances | i | 05-notify §10 |
+| `plugins.webhook.settings.secret` | blob | `integrations.notify.webhook-<n>.secret` | s | plaintext; one record per instance `n`, the same value |
+| any other `plugins.<id>` | blob | `modules.books.plugins.<id>.settings` (a secret record, no key) | s | `internal/plugin` is retired (02 N4); the free-form map may hold credentials, so M2 keeps it as one encrypted record and reports it with the quarantine records instead of dropping it or quarantining it in plain text |
+| `ai_endpoints[]` rows | blob | `ai/<row id>` instances | i | no secret of their own (05-metadata M1.10) |
 
-**Cutover (deferred; out of the extraction).** Moving the blob's keys into the native store's `c/config/`, removing
-the store's capabilities from package `legacy` (R6-3; not a breaking change, and `secrets.Options.LegacyStore`,
-typed `any`, stays in v1 and is left nil, so it needs no SDK change either: R7-7, SIMP7-4) and deleting the blob
-and the four rows is a later, per-family, one-way, checkpointed step behind the single per-owner level guard
-(05-storage §5S.3.7), decided on measured data; it is the only step that needs core to read books' rows, so it
-reintroduces a read-delete grant (05-storage §5S.3.13); its floor is the cutover release itself. Its secrets and
-precedence parts are §1.12.5. The post-reset hook reaches books only through `legacy.ConfigOpenEnv.Reset`
-(SIMP8-7), and only its gap-fill rewrite is a config concern: the settings cutover must give the Open Library and
-`RootDir` wipes another carrier, or end them, and its release note says which. Until then the blob and the four
-rows are the storage format, the books store serves them, and nothing in this file deletes them.
+#### 1.12.4 Env, file and flag names after the cutover
 
-#### 1.12.3 Key map (family level)
+This section is the **single list** of env-name classes for ABO; 09's "changed in R2" list points to it (OPS2-21).
+Counts come from the rename table's golden, not from hand maintenance.
 
-The per-key golden `core/config/testdata/abo_keys.golden` is generated by walking ABO's `Config` and is owned by
-[09-abo-on-core](09-abo-on-core.md). Of the 173 top-level keys (nested sub-keys move with their parent), 64
-match platform families and 109 are audiobook; 9 of the 64 stay app-side per `raw/10` G11: 6 Cloudflare guest
-provisioning keys and the 3 Cloudflare Access identity keys (`cf_access_team_domain`, `cf_access_aud`,
-`owner_email`, `config.go:1603-1613`, read by ABO's `internal/cfaccess`, 04 §2.4). Of the remaining 55, **9 become
-integration instances** (rows marked *integrations*), leaving **46 → `core.*`**. Books families that become integration instances (Deluge web `deluge_*`, `metadata_sources`,
-the Google Books and Hardcover keys) are identified per key in the golden and in 05-metadata M1's import table,
-so **≤118 → `modules.books.*`**.
+- **Canonical names:** `ABO_<PATH>` for every key (§1.3.6), the only names R2 reads besides the bindings below.
+- **Ecosystem bindings (kept, not retired):** `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`,
+  `OTEL_METRIC_EXPORT_INTERVAL` and `OTEL_EXPORTER_OTLP_METRICS_INSECURE` (`config.go:2746-2749`; targets in
+  [05-metrics](05-metrics.md) §10), and `OPENAI_API_KEY`, `OPENAI_BASE_URL` onto the `ai/openai` instance's
+  passthrough paths (C11). Other software defines them, so renaming them would buy nothing.
+- **Retired names:** every other name the rename table lists (the `AutomaticEnv` and `BindEnv` names, the flat
+  file keys and `ABK_*`), handled by §1.3.6: a protected or secret key's name refuses boot naming the canonical name,
+  any other one warns. Examples of each: `DATABASE_PATH` (→ `ABO_CORE_STORAGE_PATH`, `ProtectOperator`),
+  `ENABLE_AUTH` (→ `ABO_CORE_AUTH_MODE`, `ProtectOwner`), `ABS_JWT_SECRET` (→ `ABO_BOOKS_ABS_JWT_SECRET`, a secret,
+  whose **value** the operator keeps, because the ABS phone apps' tokens are signed with it, F3),
+  `BASIC_AUTH_PASSWORD` (→ `ABO_CORE_HTTP_BASIC_GATE_PASSWORD`, a secret), `ABK_STATE_DIR`
+  (→ `ABO_CORE_PATHS_STATE_DIR`, `ProtectOperator`) refuse; `FP_PARALLEL_WORKERS`
+  (→ `ABO_BOOKS_FINGERPRINT_FP_PARALLEL_WORKERS`) and `LOGIN_SATURATED_RATE` warn. 05-storage additionally refuses
+  to **create** a store while a retired database-path name is set.
+- **Deploy files use canonical names only.** R2 rewrites `deploy/audiobook-organizer.service`,
+  `deploy/com.audiobook-organizer.plist`, `deploy/local.conf.example` (its commented-out lines included),
+  `docker-compose.yml` and the `Dockerfile`s to canonical names (PC-09-07). Compose passes the Basic gate's
+  variables **only when they are set** (bare-name entries that pass a host variable through only when it is set, or
+an `env_file`), so a default compose install sets no
+  `ABO_CORE_HTTP_BASIC_GATE_ENABLED=false` (E5). The names a shipped file sets that HEAD never read
+  (`AUDIOBOOK_ROOT_DIR`, unit `:97`, plist `:38`; `AO_DIR`, `AO_DB`, `docker-compose.yml:18-19`;
+  `OLLAMA_BASE_URL`, `deploy/local.conf.example:40`) are removed from those files (out-of-scope defect 5).
+  `TestDeployFilesUseCanonicalNamesOnly` scans those files: every variable found is a canonical name, an
+  ecosystem binding, or on the runtime list (`HOME`, `GOMEMLIMIT`, `GOGC`, `TZ`, `NOTIFY_SOCKET`, read by the Go
+  runtime, the systemd notify helper or the OS, never by config); a retired name or anything else fails. The
+  repo's agent skills and first-party scripts that set env names are updated in the same PR (09's caller row).
+- **Not config at all:** env names read by `os.Getenv` outside `internal/config` (for example `WHISPER_PATH_MAP`,
+  `internal/transcribe/path.go:28-40`) are listed by the generator and either become a key in the R2 config flip or
+  stay their reader's own documented variable; `TestRenameTable_Golden` fails on an unlisted literal.
 
-| ABO flat key family | Count | New home | Owner spec |
-|---|---|---|---|
-| `database_path`, `database_type` | 2 | `core.storage.path`, (`database_type` retired: Pebble only, `config.go:1053`, `config.go:3837`) | 05-storage |
-| `api_rate_limit_per_minute`, `json_body_limit_mb`, `upload_body_limit_mb`, `enable_rate_limit`, `public_base_url`, `tunnel_connector_addrs`, `allowed_peer_cidrs`, `login_saturated_*` | 9 | `core.http.*` | 05-http-api |
-| `log_level`, `log_retention_days` | 2 | `core.log.level`, `core.log.journal.retention_days` | 05-logging |
-| `otel_*` (4), `telemetry_environment` | 5 | `core.metrics.*`, `core.tracing.*` | 05-metrics |
-| `basic_auth_enabled`, `basic_auth_username`, `basic_auth_password` | 3 | `core.http.basic_gate.{enabled, username, password}` (the stage-8 owner; one name, SEC4-10); the file keys and `BASIC_AUTH_*` env names are `BelowStored` aliases (§1.12.4), `basic_auth_username`/`BASIC_AUTH_USERNAME` included: the username's default `""` keeps HEAD's empty-username behaviour (`internal/config/config.go:2806` @748fd787a; 05-http-api §10, SEC6-9) | 05-http-api |
-| `enable_auth`, `oauth_*`, `bootstrap_key_ttl*`, `write_startup_readonly_key` | 12 | `core.auth.*` | 05-authn |
-| `cf_access_team_domain`, `cf_access_aud`, `owner_email` | 3 | `modules.books.identity.*` | app-side (G11; 09 S4) |
-| `cf_account_id`, `cf_guests_policy_id`, `cf_policy_api_token`, `cf_guest_service_tokens`, `cf_service_auth_policy_id`, `invite_email_service_token` | 6 | `modules.books.cfguests.*` | app-side (G11) |
-| `smtp_*` | 5 | *integrations*: a `notify/<id>` mail instance | 05-notify, 05-metadata M1 |
-| `backup_dir`, `backup_max_total_bytes`, `backup_compression[_level]`, `backup_retention_days` | 5 | `core.backup.*` | 05-backup |
-| `auto_update` | 1 | `core.updater.*` | 05-updater |
-| `operation_timeout_minutes`, `operation_log_retention_days`, `maintenance`, `scheduled` | 4 | `core.tasks.*`; each `scheduled.<task>` entry becomes the `tasks.ScheduleConfig` key its task kind's **owner** declares (§1.6, R2-7): books kinds at `modules.books.<subsystem>.schedules.<name>`, core kinds at `core.<subsystem>.schedules.<name>`. The family is counted here once; the golden places each entry | 05-tasks |
-| `openai_api_key`, `openai_base_url`, `ai_endpoints` | 3 | *integrations*: `ai/<id>` instances | 05-ai, 05-metadata M1 |
-| `ai_endpoints_routing`, `ai_backend`, `ai_journal_retention_days` | 3 | `core.ai.*` (global tuning, not instances) | 05-ai |
-| `download_client` | 1 | *integrations*: `download/<id>` instance | 05-download, 05-metadata M1 |
-| everything else (scan, organize, naming, metadata, dedup, whisper, fingerprint, iTunes, ABS, activity log, catalog, search, embedding, tools, plugins, …) | 109 | `modules.books.<family>.*`, except the integration-bound books families named above | 09 |
-
-#### 1.12.4 Env and flag compatibility
-
-Every env name ABO reads today is registered as an `Alias` of its new path. This section is the **single
-list** of env-name classes; 09 §9.6 row 16 points to it (OPS2-21). Counts are generated from the alias table
-into `abo_keys.golden`, not maintained by hand.
-
-- **Window ledger rows:** the 142 non-test `BindEnv` names at `748fd787a` (`internal/config/config.go` 132,
-  `abs_config.go` 9, `invite_config.go` 1; e.g. `ACOUSTID_API_KEY`, `ABS_AUTH_PROBE`, `config.go:2702-2747`),
-  except those listed as permanent below, the bare upper-case form of every flat key that viper's prefix-less
-  `AutomaticEnv` made settable (`cmd/root.go:625`), and the `ABK_*` operational names (`ABK_STATE_DIR`
-  `state_dir.go:25`, `ABK_ALLOW_ENCRYPTION_KEY_REGEN` `cmd/root.go:733`).
-- **Permanent ledger rows:** (a) ecosystem names: `OTEL_EXPORTER_OTLP_ENDPOINT`,
-  `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, `OTEL_METRIC_EXPORT_INTERVAL` (a bare integer is milliseconds, the OTel
-  convention ABO already honours; the alias `Convert` keeps that) and `OTEL_EXPORTER_OTLP_METRICS_INSECURE`
-  (`config.go:2746-2749`; targets in [05-metrics](05-metrics.md) §10), `OPENAI_API_KEY`, `OPENAI_BASE_URL` (the
-  `OPENAI_*` pair addresses passthrough paths of the AI instance, C11); (b) every name ABO reads today that a
-  shipped deploy artifact sets (OPS-5): `DATABASE_PATH` (`deploy/audiobook-organizer.service:98`,
-  `deploy/com.audiobook-organizer.plist:40`), `FP_PARALLEL_WORKERS` (unit `:108`, read at `config.go:2735`),
-  `BASIC_AUTH_ENABLED`, `BASIC_AUTH_USERNAME`, `BASIC_AUTH_PASSWORD` (`docker-compose.yml:20-22`, read through
-  `AutomaticEnv`; all three `BelowStored`, because HEAD lays the blob and the encrypted password row over them,
-  so compose's always-set defaults never override a gate configured in the UI, OPS5-1), `WHISPER_REMOTE_URL`, `ALLOWED_PEER_CIDRS`, `TUNNEL_CONNECTOR_ADDRS`, `LOGIN_SATURATED_RATE`,
-  `LOGIN_SATURATED_BURST` (`deploy/local.conf.example:39-61`, read at `config.go:2838` and `invite_config.go`).
-- **Not aliases — shipped but unread by ABO:** names a shipped file sets that ABO does **not** read today stay
-  unread, because honouring them would change behaviour: `AUDIOBOOK_ROOT_DIR` (unit `:97`, plist `:38`;
-  deliberately unread because the unit's generic value does not exist on the production host,
-  `config.go:2569-2575`), `AO_DIR`, `AO_DB` (`docker-compose.yml:18-19`) and `OLLAMA_BASE_URL`
-  (`deploy/local.conf.example:40`), none of which has a reader.
-- **Not aliases — runtime and ecosystem names config never reads:** `HOME`, `GOMEMLIMIT`, `GOGC`
-  (`deploy/audiobook-organizer.service:96,101,104`), `TZ` and `NOTIFY_SOCKET` (read by the Go runtime, the
-  systemd notify helper or the OS, never by config).
-- **Precedence (R5-1(a)):** independently of its ledger gate, every alias is `BelowStored` exactly when HEAD lays
-  the stored blob over that name: every `AutomaticEnv`/`BindEnv` name and legacy file key of a key with a blob
-  field, except the keys of `envLockedSettings`, `absEnvOnlySettings`, `applyEnvAuthoritativeConfig`,
-  `configFileLockedSettings` and `SyncConfigFromEnv` (§1.3.5). A `FileOnly` key has no blob field, so its names
-  are never `BelowStored`: they lock, as at HEAD, where they are the only source (R9-5). ABO generates the flag from those lists into the
-  alias table and `abo_keys.golden`; `TestAliasBelowStoredMatchesHEAD` fails when a list and the table disagree.
-  `DATABASE_PATH` (env-authoritative at HEAD) and `FP_PARALLEL_WORKERS` (a blob key HEAD does not re-apply, so
-  `BelowStored`) are examples of each side. The rule covers **Passthrough** names too (SEC6-5): `OPENAI_BASE_URL`
-  (`config.go:1222,2741`, re-applied by no HEAD list) is `BelowStored`, so it fills the AI instance's URL only
-  while none is stored (C11), and `TestAliasBelowStoredMatchesHEAD` includes every Passthrough alias. An
-  operator-sourced secret such as `OPENAI_API_KEY` goes to the legacy-backed instance's effective destination, as
-  at HEAD (A-2, §1.3.7). `ENABLE_AUTH` and the file key `enable_auth` are `BelowStored` with no exemption: a stored
-  value beats them, as at HEAD (§1.3.5).
-- `TestShippedDeployEnvNamesArePermanent` scans `deploy/*.service`, `deploy/*.plist`, `deploy/local.conf.example`,
-  `docker-compose.yml` and `Dockerfile*`, **including commented-out `Environment=` lines** (an operator uncomments
-  them, e.g. `local.conf.example:50-61`): every name found is a permanent row or on one of the two not-alias
-  lists above; anything else fails.
-- After contract, window rows of keys with `ProtectAdmin` or higher, and of secret keys, move to state `Retired`
-  and boot refuses to start if one is set (§1.3.6). [05-storage](05-storage.md) additionally refuses to
-  **create** a store at the resolved path when none exists there and a retired database-path name is set.
-
-Flags: ABO's cobra adapter maps `--dir`, `--db`, `--db-type`, `--playlists`, `--log-level` (and the other flags of
-09 §9.6 row 18, kept until the next major) to paths.
-
-#### 1.12.5 Hardening cutovers H2 and H3 (post-S10)
-
-A-2 keeps HEAD's representation and precedence for ABO through S10. The hardening the extraction does not do is
-named here as post-S10 cutovers on N15's one-way, floored machinery (02 N15; 12 and 14 list them). Each is its own
-release, its floor is that release, and its release note names what an older build loses. **The owners each one
-raises (DATA9-8, R9-11):** H2 raises `books` (it rewrites books' legacy blob fields and secret rows) and `core` (it
-writes `c/secrets/`); H3 raises `books` (it changes how books' stored `enable_auth` is read against the legacy
-names). The first cutover that raises `core` (H2, or H1 when it moves the identity families) lifts books' `{core,
-0}` legacy restore bound, because 05-backup §5B.3.9 rule 3 passes the bound only when the store's `core` level
-exceeds 0; H3 raises `books` only and lifts nothing (DATA10-7). Every release from S0 up to the one
-before the cutover declares both owners, so every older build refuses a store a cutover stamped, through boot and
-`CheckReader` (`TestHardeningCutoverRefusedByEveryOlderRelease`, 09 §9.13).
-
-**Release notes (SEC10-7).** 09 §9.13 owns one release-note text per cutover; this file quotes them verbatim.
-
-- H1 (identity, 05-authn §11.2, listed here for completeness): "Backups made before this release still contain sign-in tokens. They no longer work against this server, but restoring such a backup brings them back until they expire; delete those backups or take new ones."
-- H2: "Backups made before this release still contain plaintext third-party secrets. Delete them or take new ones; if the backup directory may have been exposed, rotate those secrets."
-- H3: "With authentication off, Settings can no longer turn it on; set `ENABLE_AUTH=true` or `ABO_CORE_AUTH_MODE=required` and restart."
-
-- **H2 — secrets cutover** (09 §9.13). This file decides the four encrypted rows (DATA9-8): the books store's
-  plaintext blob secrets **and** the four encrypted rows move into `c/secrets/`, encrypted with the keyring (key IDs,
-  AAD), and their legacy copies and gap-fill file keys are removed; the `legacy.SecretsStore` capability goes with
-  it, and with it every remaining `HEADAuthOffWritable` flag on a secret it moves (the Basic password and the
-  kept integration secrets, so each group's flag ends together, §1.3.1; SEC10-5). An older build then has no copy
-  to read, which the floor refuses. 14 Q-E is deferred to it. **What it can and cannot clean (SEC9-3, R9-11,
-  R10-11):** the cutover boot rewrites the live store, then deletes **every** pre-cutover checkpoint of this store
-  (its own attempt's and every retained or open one under `<db parent>/.mediacore-checkpoints/`, with their records)
-  and forces a compaction of the rewritten key ranges with a WAL rotation, so no obsolete SST, WAL segment or
-  checkpoint keeps a plaintext copy; the gap-fill file's three keys are removed in the same boot. A swap set-aside
-  inside `core.storage.swap.keep_previous` (a restore's `.mediacore-restore/<id>/previous/` and `failed/`, a reset's
-  `<state_dir>/restore/<id>/previous/` and its beside-itself destinations) is a full pre-H2 store outside the DB
-  directory, so while one exists H2 is deferred, as 05-storage §5S.3.13 item 3 owns (health `storage_step_pending`
-  naming the paths, `ErrCutoverResidue` in the log, never a boot failure), until the kernel's sweep after
-  `keep_previous` removes them or the operator sets `core.storage.cutover.sweep_set_asides`, with which the cutover
-  boot deletes them first (DATA10-6). Recovery from a failed
-  H2 is then the pre-cutover archive, the floor's restore point. Archives taken before H2 still hold every
-  plaintext secret and the encrypted rows in ABO's cipher, and H2 cannot reach them. Its done-check says so plainly
-  and is a test, not a live-key read: `TestH2_NoPlaintextSecretOnDisk` plants a canary secret **before** a fixture
-  upgrade, a restore and a reset, so retained checkpoints and set-asides hold it, runs the cutover and scans the DB
-  directory, `.mediacore-checkpoints/`, `.mediacore-restore/` beside the DB and every recorded beside-itself
-  destination, `<state_dir>/restore/` and the gap-fill file. Its release note is 09 §9.13's H2 text, quoted
-  verbatim above (SEC10-7).
-- **H3 — auth-precedence cutover** (09 §9.13). One H3, stated the same in 05-authn §11.2 and 09 §9.13 (SEC9-7,
-  cross-cluster): H3 moves **only auth-enable precedence**, and only in the enabling direction. An operator value
-  that enables auth (`ENABLE_AUTH=true`, `enable_auth: true` in the operator file) beats a stored `false`; a value
-  that disables auth keeps HEAD's precedence (a stored `true` beats it). H3 also clears `HEADAuthOffWritable` on
-  `enable_auth` (R9-5): from H3 the auth-disabled principal can no longer store `core.auth.mode` through `Apply`, and
-  auth is turned on by an operator value or by an admin once auth is on, as SEC4-8 states for native apps. The Basic
-  gate keys keep the flag, and HEAD's auth-off write rule, until the earlier of H2 and the settings cutover, which
-  precedes or ships with H3, so after H3 none of them has it; the cutover that ends it carries their one release
-  note (§1.3.1; SEC10-5, SEC10-6). H3's release note: "With authentication off, Settings can no longer turn it on; set `ENABLE_AUTH=true`
-  or `ABO_CORE_AUTH_MODE=required` and restart." **Every other `BelowStored` flag keeps HEAD's precedence** after H3,
-  until a separate cutover the owner decides per key (R9-5, SEC9-2). That later cutover is bound by two rules, so an
-  always-set deploy value can never override a UI setting: a name a shipped deploy file sets unconditionally
-  (compose's `BASIC_AUTH_ENABLED`, `BASIC_AUTH_USERNAME` and `BASIC_AUTH_PASSWORD`, `docker-compose.yml:20-22`
-  @748fd787a) stays `BelowStored` permanently, and a legacy value that weakens a security control
-  (`basic_auth_enabled=false`, `enable_rate_limit=false`) never locks. So compose's `BASIC_AUTH_ENABLED=false` never
-  turns off a gate enabled in the UI, at H3 or after it; H3's done-check includes `TestComposeEnvKeepsUIBasicGate`
-  and `TestLegacyAuthEnablePrecedenceMatchesHEAD`'s disabling half. H3 ships with or after the settings cutover, so
-  no older build has to be kept in step by a write into a legacy field (09 §9.13 copies the dependency).
-
-Neither builds anything during S0–S10, and no stage of 09 depends on either.
+**Flags** are kept (T9, zero cost): ABO's cobra adapter maps `--dir`, `--db`, `--playlists`, `--log-level`,
+`--config` and the other shipped flags of `serve` and `fp-worker` (09's kept-contracts list) onto canonical paths
+with `FromFlagSet`'s rule. The no-op `--db-type` and the SQLite flags are deleted in R3.
 
 ### 1.13 Open items
 
 1. Whether `encoding/json/v2` is GA in go1.27.3; if so, decode sections with it (strict unknown-field
-   handling and `omitzero` are better fits). Decide at 09 S0 with the toolchain spec ([13-toolchain](13-toolchain.md)).
+   handling and `omitzero` are better fits). Decide in R1 with the toolchain spec ([13-toolchain](13-toolchain.md)).
 2. Exact per-key reload class for ABO keys: default every books key to `ReloadLive` only where the consumer
    reads the handle per use; keys captured at construction (e.g. worker counts) are `ReloadRestart` until the
-   consumer subscribes. The per-key audit is a 09 task.
+   consumer subscribes. The per-key audit is a column of the rename table's golden (§1.12.3), filled in the R2 config
+   flip.
 3. Whether the shell needs `x-mediacore-ui` hints (grouping, ordering, widgets) in the schema or a separate
    UI contribution ([07-ui-shell](07-ui-shell.md) owns the renderer).
 
@@ -2067,9 +1491,8 @@ of the platform (key IDs, a derivation key, loss handling; rotation and prune to
 type that cannot be printed, `Ref` for config fields and `Scope` for module handles. Not in scope:
 **verifiers** — passwords, API keys, session ids, bootstrap/temp-login tokens — which `auth` stores as hashes
 and never needs to recover ([05-authn](05-authn.md); session ids stored raw today,
-`internal/database/pebble_store_auth.go:1656-1663`: native stores hash them, and ABO's stay as at HEAD until the
-identity cutover, A-2). 09 S3 and 14 Q-E reference this keyring
-instead of describing their own.
+`internal/database/pebble_store_auth.go:1656-1663`: core's stores hash them, and the identity step M3 migrates
+ABO's, 05-authn). 09's R2 tables and 14 Q-E reference this keyring instead of describing their own.
 
 ### 2.2 Current state at HEAD
 
@@ -2085,51 +1508,33 @@ instead of describing their own.
 | Log redaction | query-string token masking in access log/recovery; invite path redaction; `cfservicetoken.Created.LogValue` | `internal/server/server.go:695-704`, `internal/logging/redact_path.go:107`, `internal/cfservicetoken/client.go:191` |
 
 **Secret-bearing fields** (verified: the blob builder zeroes only the 4 above, `persistence.go:1955-1958`, and
-`marshalConfigBlob` strips only boot-only keys, `persistence.go:2126-2139`). The *legacy copies* column lists
-where the previous build keeps the value. That knowledge is ABO's: the books legacy config store serves it through
-`legacy.SecretsStore` (§2.3) and reads and writes every copy **in place**, in HEAD's form, until the secrets
-cutover: a plaintext copy as its blob field, the four encrypted rows in ABO's cipher with their gap-fill file
-copies (C16, A-2, §1.12.2). "—" means the previous build reads the field only from env or file (a `json:"-"`
-field): such a secret keeps HEAD's storage on a legacy-backed install, the operator layers only, and is never
-stored, because a stored value would vanish on a rollback and its consumer would then refuse to start (absauth
-without `ABS_JWT_SECRET`) (`FileOnly`, R9-5, DATA9-6); it becomes native data in `c/secrets/` only at its family's
-settings cutover, and on a native app, which has no legacy names. Core code never names a legacy row; the only legacy-row writes
-of the extraction are the books store's in-place writes.
+`marshalConfigBlob` strips only boot-only keys, `persistence.go:2126-2139`). The last column says what the R2
+cutover step M2 does with each (§1.12.2). "—" means HEAD reads the field only from env or file (a `json:"-"`
+field): nothing is stored, so nothing migrates, and its retired env name refuses boot (§1.3.6) until the operator
+renames it; from R2 the secret may also be stored, encrypted, under its canonical name.
 
-| Field (JSON key) | Anchor | At rest today | New name (secret) | Legacy copies |
+| Field (JSON key) | Anchor | At rest today | Canonical name (secret) | M2 |
 |---|---|---|---|---|
-| `openai_api_key` | `persistence.go:1955` | encrypted row | `integrations.ai.<instance>.api_key` | **kept**: row `setting:openai_api_key`; gap-fill file key |
-| `google_books_api_key` | `persistence.go:1956` | encrypted row | `integrations.metadata.<instance>.api_key` | **kept**: row `setting:google_books_api_key`; gap-fill file key |
-| `hardcover_api_token` | `persistence.go:1957` | encrypted row | `integrations.metadata.<instance>.api_token` | **kept**: row `setting:hardcover_api_token`; gap-fill file key |
-| `basic_auth_password` | `persistence.go:1958` | encrypted row | `core.http.basic_gate.password` (SEC4-10) | **kept**: row `setting:basic_auth_password` |
-| `acoustid_api_key` | `config.go:1141` | plaintext `config_blob` (masked in API, `update_service.go:94`) | `modules.books.acoustid.api_key` | blob field (in place) |
-| `oauth_github_client_secret` | `config.go:1588` | plaintext `config_blob` (value re-applied from env each boot, still written) | `core.auth.oauth.github.client_secret` | blob field (in place) |
-| `oauth_google_client_secret` | `config.go:1590` | plaintext `config_blob` | `core.auth.oauth.google.client_secret` | blob field (in place) |
-| `deluge_web_password` | `config.go:1777` | plaintext `config_blob` (carried forward when env-locked, `persistence.go:1965-1971`) | `integrations.download.<instance>.password` | blob field (in place) |
-| `download_client.torrent.deluge.password` | `config.go:240` | plaintext `config_blob` | `integrations.download.<instance>.password` | blob field (in place) |
-| `metadata_sources[].credentials` (map) | `config.go:154` | plaintext `config_blob` | `integrations.metadata.<instance>.credentials.<k>` (one secret per entry) | blob field (per entry, in place) |
-| `plugins.webhook` `secret` (HMAC signing key) | `internal/plugins/webhook/plugin.go:58` | plaintext `config_blob` | `integrations.notify.webhook-<n>.secret` (one family-level legacy value staged under every instance's name, 05-notify §10) | blob field (in place) |
-| other `plugins[].settings` (free-form map) | `config.go:244-247` | plaintext `config_blob`; may hold credentials (unknowable) | retired with `internal/plugin` (02 N4); any surviving entry declared per adapter | — |
-| `abs_jwt_secret` | `config.go:1636` (`json:"-"`) | env / viper file only | `modules.books.abs.jwt_secret` | — |
-| `smtp_password` | `config.go:1678` (`json:"-"`) | env / viper file only | `integrations.notify.<instance>.password` | — |
+| `openai_api_key` | `persistence.go:1955` | encrypted row | `integrations.ai.openai.api_key` | row decrypted, re-encrypted into `c/secrets/`, row deleted; gap-fill copy stripped (M2b) |
+| `google_books_api_key` | `persistence.go:1956` | encrypted row | `integrations.metadata.google-books.api_key` | the same |
+| `hardcover_api_token` | `persistence.go:1957` | encrypted row | `integrations.metadata.hardcover.api_token` | the same |
+| `basic_auth_password` | `persistence.go:1958` | encrypted row | `core.http.basic_gate.password` (SEC4-10) | the same; an empty row leaves it unset (no gap-fill copy) |
+| `acoustid_api_key` | `config.go:1141` | plaintext `config_blob` (masked in API, `update_service.go:94`) | `modules.books.acoustid.api_key` | encrypted into `c/secrets/`, blob field removed |
+| `oauth_github_client_secret` | `config.go:1588` | plaintext `config_blob` (value re-applied from env each boot, still written) | `core.auth.oidc.github.client_secret` | the same |
+| `oauth_google_client_secret` | `config.go:1590` | plaintext `config_blob` | `core.auth.oidc.google.client_secret` | the same |
+| `deluge_web_password` | `config.go:1777` | plaintext `config_blob` (carried forward when env-locked, `persistence.go:1965-1971`) | `integrations.download.deluge.password` | the same |
+| `download_client.torrent.deluge.password` | `config.go:240` | plaintext `config_blob` | `integrations.download.deluge.daemon_password` (coined; 05-download names it) | the same |
+| `metadata_sources[].credentials` (map) | `config.go:154` | plaintext `config_blob` | `integrations.metadata.<source id>.credentials.<k>` (one secret per entry) | the same, per entry |
+| `plugins.webhook` `secret` (HMAC signing key) | `internal/plugins/webhook/plugin.go:58` | plaintext `config_blob` | `integrations.notify.webhook-<n>.secret` (the one family-level value, written under every instance's name, 05-notify §10) | the same, one record per instance |
+| other `plugins[].settings` (free-form map) | `config.go:244-247` | plaintext `config_blob`; may hold credentials (unknowable) | `modules.books.plugins.<id>.settings` (one record, no key) | encrypted as one record and reported; `internal/plugin` is retired (02 N4) |
+| `abs_jwt_secret` | `config.go:1636` (`json:"-"`) | env / viper file only | `modules.books.abs.jwt_secret` | — (its value must stay the same: it signs the ABS apps' tokens, F3) |
+| `smtp_password` | `config.go:1678` (`json:"-"`) | env / viper file only | `integrations.notify.email.password` | — |
 | `cf_policy_api_token` | `config.go:1688` (`json:"-"`) | env / viper file only | `modules.books.cfguests.policy_api_token` | — |
-| userinfo in URLs (`openai_base_url`, `whisper_remote_url`, `ai_endpoints[].url`, `embedding.base_url`) | `config.go:1222,1319`, `ai_endpoints.go:40` | plaintext if an operator embeds `user:pass@` | `schema:"format=uri"` validation **rejects** userinfo; credentials go in a sibling `secrets.Ref` | — |
+| userinfo in URLs (`openai_base_url`, `whisper_remote_url`, `ai_endpoints[].url`, `embedding.base_url`) | `config.go:1222,1319`, `ai_endpoints.go:40` | plaintext if an operator embeds `user:pass@` | `schema:"format=uri"` validation **rejects** userinfo; credentials go in a sibling `secrets.Ref` | M2 stages the URL without its userinfo and keeps the userinfo as one encrypted record `<key path>.userinfo` (no key), reported with the quarantine records, so the operator moves it into the instance's credential field; no plaintext credential stays in a URL or in quarantine |
 
-**One generated secret-class list (OPS6-4, R6-7).** ABO generates the secret class of every field in this table
-(each row, the "—" rows and the free-form `plugins[].settings` included) into `abo_keys.golden` (09), from its
-alias table and the `secrets.Ref` fields; `TestSecretClassListMatchesLegacyStore` fails when that list and the
-names for which the books store's `SecretsStore.Kept` is true, plus the "—" rows, disagree. 09 §9.3, the one staging procedure,
-blanks every secret field of a restored copy before its first boot with ABO's offline subcommand `staging-scrub`
-(R7-6), which also clears every legacy integration URL, runs with the binary of the release that wrote the
-archive (R8-3), and refuses any store without 09 §9.3's staging marker (A-10). Its field list exists before the generated one does: **S0 commits `scripts/staging/secret_fields.txt`**,
-written by hand from this table (every row, the "—" rows and `plugins[].settings` included), because staging is
-needed from S0 while the books `SecretsStore` lands only at S3. **From S3**, `TestSecretClassListMatchesLegacyStore`
-also asserts that `secret_fields.txt` equals the generated list, so the scrub cannot drift from what the store
-treats as secret (OPS7-4, SEC7-10).
-
-`<instance>` for each legacy singleton is fixed by the integrations import table ([05-metadata](05-metadata.md)
-M1 migration, with [05-download](05-download.md), [05-ai](05-ai.md), [05-notify](05-notify.md)) before S3 ships,
-so each secret has one final name from its first core write on.
+The `<instance>` of each migrated singleton is fixed by the integrations table ([05-metadata](05-metadata.md)
+M1.10, with [05-download](05-download.md), [05-ai](05-ai.md), [05-notify](05-notify.md)), so each secret has one
+final name from its first core write on.
 
 ### 2.3 Go API
 
@@ -2197,19 +1602,8 @@ type Source uint8
 
 const (
 	SourceStored Source = iota + 1 // encrypted in storage
-	SourceEnv                      // operator env (incl. <NAME>_FILE); in memory only, never persisted
+	SourceEnv                      // operator env (incl. <NAME>_FILE and an ecosystem binding); in memory only, never persisted
 	SourceFile                     // operator config file; in memory only
-	SourceLegacy                   // still where the previous build put it (blob plaintext, legacy row, gap-fill file)
-)
-
-// LegacyForm says where a SourceLegacy value was read (diagnostics and the plaintext gauge, 05-config §1.8).
-type LegacyForm uint8
-
-const (
-	LegacyNoForm      LegacyForm = iota
-	LegacyPlain                  // a plaintext primary copy (a blob field)
-	LegacyEncrypted              // an encrypted primary copy in the app's own cipher (a legacy row)
-	LegacySecondary              // the secondary copy (ABO: the gap-fill file)
 )
 
 type Meta struct {
@@ -2220,8 +1614,8 @@ type Meta struct {
 	UpdatedAt   time.Time
 	UpdatedBy   string
 	Fingerprint string    // first 8 hex of HMAC-SHA256(fingerprint subkey, value); stable per value, not reversible
-	LegacyForm  LegacyForm // set when Source == SourceLegacy
-	Err         error     // ErrKeyUnavailable / ErrCorrupt when the row cannot be decrypted
+	Err         error     // ErrKeyUnavailable / ErrCorrupt when the record cannot be decrypted, or carries an
+	                      // unreadable marker from the cutover (§1.12.2)
 }
 
 type Write struct { // staged by config.Store.Apply into Committer.Commit
@@ -2236,19 +1630,7 @@ type Options struct {
 	KeyFile       string            // relative to StateDir; default "secrets.keyring"
 	Keyspace      storage.Keyspace  // c/secrets/
 	AppID         string            // app.Options.AppID: a compiled constant of the app's main, bound into AAD
-	AllowKeyRegen bool              // core.secrets.allow_key_regen (operator only)
-	// LegacyStore is the app's legacy copies: a legacy.SecretsStore (the store's legacy.ConfigSecrets Secrets()),
-	// set by the kernel (05-config §1.3.3); nil = none. It is typed any, never by the mirror, so no SDK type freezes
-	// legacy.SecretsStore's method set (R7-7, SIMP7-4). Open asserts legacyStore on it and fails with
-	// storage.ErrLegacyStoreType (boot fails) when the value does not implement it: never a silent skip. After the
-	// settings cutover the field stays, inert and nil.
-	LegacyStore   any
-	// SettingsLocks are the locks the kernel resolved at 06 P4c for legacy.LockConfigSettings on the store that
-	// supplies LegacyStore (nil without one; COR10-5). Put and Delete of a kept name build their batch inside
-	// storage.CommitLocked(ctx, b, d, stage, SettingsLocks...), so the in-place write and the store's post-commit
-	// gap-fill step run under configBlobSaveMu as every other writer's do (R10-5, DATA10-2); Stage is called by a
-	// caller that already holds them. secrets never calls WriteLocks.
-	SettingsLocks []storage.Lock
+	AllowKeyRegen bool              // core.secrets.allow_key_regen (operator only); M2 reads it for HEAD's key guard too
 	// ResetBoot is set by the kernel only on the reset boot of a core build's factory reset (the KindReset swap
 	// journal reads set_aside, 05-storage §5S.3.15): Open then rewrites the keyring header's install_id to the fresh
 	// store's (§2.4, DATA7-17). Every other Open leaves that field alone.
@@ -2258,68 +1640,22 @@ type Options struct {
 	Now           func() time.Time
 }
 
-// legacyStore is secrets' unexported mirror of legacy.SecretsStore (R6-3, 03 §3.3 "Legacy-only identifiers"):
-// the app's storage of secrets written before core existed (R4-1), implemented in the app's code over the app's
-// keys (ABO: the books legacy config store, 05-config §1.12.2). secrets (L2) cannot import legacy (L5), so it names
-// the capability only through this interface, asserted on Options.LegacyStore in Open. The mirror test (03 §3.3)
-// checks it: export_test.go exports the test alias LegacyStoreMirror, and legacy_mirror_test.go in package
-// secrets_test asserts that it and legacy.SecretsStore are mutually assignable, so a renamed or retyped member
-// fails secrets' tests (R7-7, SIMP7-1). Core never names a legacy row or
-// knows the legacy cipher. The method semantics below are the contract of legacy.SecretsStore.
-type legacyStore interface {
-	// Read returns n's legacy copies as the app reads them: Primary from the blob field or the legacy row
-	// (decrypted with the app's own cipher), Secondary from the gap-fill copy. A zero Value means empty or absent.
-	Read(ctx context.Context, n Name) (LegacyCopies, error)
-	// Kept reports whether n has a legacy copy, which stays its one stored copy until the secrets cutover (A-2:
-	// ABO's four rows HEAD already encrypts and its plaintext blob fields). A kept name has no c/secrets/ record:
-	// Put, Stage and Delete call Write instead, and reads return its legacy copies (read order below). Names in the
-	// "—" rows of 05-config §2.2 return false (they are FileOnly, never stored on a legacy-backed install, R9-5).
-	Kept(n Name) bool
-	// Write joins b with an in-place write of a kept name in the app's own form: a plaintext copy as its blob field,
-	// an encrypted one in the app's own cipher (clear = empty the field or delete the row). It refuses, staging
-	// nothing, when b carries no CommitLocked hold of the store's LockConfigSettings lock (storage.LocksHeld(b, l);
-	// R10-4, COR10-2), with an error wrapping storage.ErrNotLocked. Secondary copies are rewritten by the post-commit step Write registers on b, which
-	// CommitLocked runs inside the hold, rendered from the rows (R10-5); a clear also removes its secondary copy
-	// before Write returns, so a failed removal fails the write (05-config §1.12.2).
-	Write(b *storage.Batch, n Name, v Value, clear bool) error
-	// KeyMaterial returns the key the app's legacy cipher uses (nil when it has none), recorded opaque in the
-	// keyring as k0-legacy so the one keyring export also recovers the legacy rows (C8, §2.4).
-	KeyMaterial() []byte
-	// Check inspects the legacy copies readable through r (the live store or a staged restore): Encrypted counts
-	// non-empty encrypted copies; when key is non-nil, one copy per name is trial-decrypted with it and the names
-	// that fail are returned (05-backup restore staging, DATA4-22).
-	Check(ctx context.Context, r storage.Reader, key []byte) (LegacyCheck, error)
-}
-
-type LegacyCopies struct {
-	Primary       Value
-	PrimaryForm   LegacyForm // LegacyPlain or LegacyEncrypted
-	PrimaryErr    error      // ErrKeyUnavailable / ErrCorrupt when the app's cipher cannot decrypt the row
-	Secondary     Value
-}
-
-type LegacyCheck struct {
-	Encrypted  int
-	Unreadable []Name
-}
-
-// ReadLegacyKey reads k0-legacy's material from the keyring file without opening the store (file read only),
-// for legacy.ConfigOpenEnv.KeyringLegacy (05-config §1.3.3); ok is false when the keyring or the key is absent.
-func ReadLegacyKey(stateDir *os.Root, keyFile string) (material []byte, ok bool, err error)
-
 func Open(ctx context.Context, o Options) (*Store, error)
 
 func (s *Store) Get(ctx context.Context, n Name) (Value, Meta, error)
 func (s *Store) Meta(ctx context.Context, n Name) (Meta, error)
 func (s *Store) Put(ctx context.Context, n Name, v Value, by string) (Meta, error)
 func (s *Store) Delete(ctx context.Context, n Name, by string) error
-func (s *Store) Stage(b *storage.Batch, w Write) error           // same-batch write used by core/internal/configstore and integrations (COR2-12: a pointer, so Bind and the writes land on the caller's batch); for a name with a legacy copy it calls SecretsStore.Write in b instead of writing c/secrets/
+// Stage is the same-batch write used by core/internal/configstore, integrations and the app's cutover steps (the
+// secrets importer, 03 §3.3; §1.12.2). COR2-12: a pointer, so Bind and the writes land on the caller's batch.
+func (s *Store) Stage(b *storage.Batch, w Write) error
+// StageUnreadable stages the unreadable marker for n (a pre-core secret the cutover could not decrypt, §1.12.2):
+// Meta.Err is ErrKeyUnavailable (reason "key") or ErrCorrupt (reason "corrupt") until n is set again.
+func (s *Store) StageUnreadable(b *storage.Batch, n Name, reason string, by string) error
 func (s *Store) Ephemeral(n Name, v Value, src Source)            // operator-supplied value; locks the key
-func (s *Store) EphemeralDefault(n Name, v Value, src Source)     // a BelowStored legacy name's value (05-config §1.3.5): used only when nothing is stored; locks nothing; never persisted
 func (s *Store) All(ctx context.Context) iter.Seq2[Meta, error]   // never values
 // KeyIDsReferenced scans the records readable through r (the live store, or a staged restore) and reports
-// every key ID they need, including "k0-legacy" when SecretsStore.Check reports an encrypted legacy copy
-// (DATA3-12). Restore reports and key pruning use it.
+// every key ID they need (DATA3-12). Restore reports and key pruning use it.
 func (s *Store) KeyIDsReferenced(ctx context.Context, r storage.Reader) ([]string, error)
 func (s *Store) DeriveKey(info string) ([]byte, error)           // from the active derive key; stable across data-key rotation
 func (s *Store) ActiveDeriveID() string                          // e.g. "d1"; producers record it next to what they MAC or encrypt
@@ -2343,9 +1679,6 @@ var (
 	ErrKeyMissing      = errors.New("secrets: no keyring and encrypted values exist")
 	ErrOutOfScope      = errors.New("secrets: name outside this handle's scope")
 	ErrAppIDMismatch   = errors.New("secrets: store belongs to a different app ID")
-	// A non-nil Options.LegacyStore that does not implement legacyStore fails Open with
-	// storage.ErrLegacyStoreType, the one sentinel for every owner's any-typed legacy input (05-storage
-	// §5S.3.11; R7-7); secrets defines no sentinel of its own for it.
 )
 ```
 
@@ -2353,11 +1686,9 @@ var (
 
 - Keyring file `<state_dir>/secrets.keyring`, 0600, directory 0700, written atomically via `os.Root`
   (temp + fsync + rename):
-  `{"format":"mediacore-keyring/1","keys":[{"id":"k1","use":"data","created":"…","status":"active","material":"<base64 32 bytes>"},{"id":"d1","use":"derive",…},{"id":"k0-legacy","use":"legacy","status":"retired",…}]}`.
-  Exactly one `active` key per `use` (`data`, `derive`). `use: "data"` keys encrypt records. `use: "legacy"`
-  holds the app's legacy key material (`SecretsStore.KeyMaterial`) opaque: core never encrypts or decrypts with
-  it; it is there so the export recovers the legacy rows and so `legacy.ConfigOpenEnv.KeyringLegacy` can hand it back
-  (§2.4). The active `use: "derive"` key feeds
+  `{"format":"mediacore-keyring/1","keys":[{"id":"k1","use":"data","created":"…","status":"active","material":"<base64 32 bytes>"},{"id":"d1","use":"derive",…}]}`.
+  Exactly one `active` key per `use` (`data`, `derive`). `use: "data"` keys encrypt records. The active
+  `use: "derive"` key feeds
   `DeriveKey` and the fingerprint subkey and is **never** replaced by data-key rotation, so OAuth state codecs,
   refresh derivations, the backup provenance MAC and the backup archive identity (§2.4) survive a data-key
   rotation (SEC-28).
@@ -2384,19 +1715,12 @@ var (
   `DeriveKey` / `Scope.DeriveKey` instead of storing separate secrets.
 - Stored record at key `c/secrets/v/<name>`: JSON `{"v":1,"kid":"k1","nonce":"…","ct":"…","at":"…","by":"…"}`;
   AAD = `"mediacore/secrets/v1\x00" + AppID + "\x00" + name`, so a ciphertext moved to another name or app fails with
-  `ErrCorrupt`. Only native names have records: a kept name (`SecretsStore.Kept`) never has one before the secrets
-  cutover (A-2).
+  `ErrCorrupt`.
 - Cleared marker at the same key, `{"v":1,"cleared":true,"at":"…","by":"…"}`: written by `Delete` and by a clearing
-  `Stage` of a native name.
-- **Read order (`Get`, `Meta`; R5-1, A-2).** (1) an operator value (`Ephemeral`; locks the key); (2) a kept name:
-  the non-empty legacy primary copy (`SourceLegacy`, `LegacyPlain` or `LegacyEncrypted`); (3) a native name's record
-  (`SourceStored`, or `ErrNotSet` for a cleared marker); (4) an `EphemeralDefault` value (a `BelowStored` legacy name,
-  HEAD's base layer); (5) a non-empty secondary copy (`SourceLegacy`, `LegacySecondary`: HEAD's gap fill, which
-  applies only when the field is still empty, `persistence.go:42-92`); (6) `ErrNotSet`. Every `Put`, `Stage` and
-  `Delete` of a kept name calls `SecretsStore.Write` in the same batch and never writes `c/secrets/`; of a native
-  name it writes the record (05-config §1.12.2). `Put` and `Delete` of a kept name commit through
-  `storage.CommitLocked` with `Options.SettingsLocks`, taking the per-name keyed mutex inside the `stage` function,
-  after the config lock and never before it, so they never invert with `Apply` → `Stage` (§2.6; R10-4, R10-5).
+  `Stage`. Unreadable marker, `{"v":1,"unreadable":"key"|"corrupt","at":"…","by":"…"}`: written only by
+  `StageUnreadable` (the cutover, §1.12.2); a later `Put` replaces it.
+- **Read order (`Get`, `Meta`).** (1) an operator value (`Ephemeral`; locks the key); (2) the record
+  (`SourceStored`; `ErrNotSet` for a cleared marker; `Meta.Err` for an unreadable marker); (3) `ErrNotSet`.
 - Store metadata at `c/secrets/meta`: `{"app_id":"abo","keyring_format":"mediacore-keyring/1","created":"…"}`.
   `Open` compares it with `Options.AppID`; a mismatch is `ErrAppIDMismatch` (boot error naming both IDs), so an
   accidental AppID change fails loudly instead of turning every secret into `ErrCorrupt` (SEC-28). AppID is a
@@ -2404,29 +1728,21 @@ var (
 
 ### 2.4 Lifecycle
 
-1. After storage opens and after the pre-migration checkpoint and DAG, as the first P4d reconciler (§1.4
-   step 5, C13), after the books store's `Open` (`legacy.ConfigOpener`) ran ABO's own key guard and loaded ABO's
-   legacy key (§1.12.2; the order 06 §6.5.1 states, COR5-2): `Open` first asserts its `legacyStore` mirror on a
-   non-nil `Options.LegacyStore` (`storage.ErrLegacyStoreType` otherwise, R7-7), then checks
-   `c/secrets/meta` (written on first open) and resolves the keyring:
+1. After storage opens and after the pre-migration checkpoint, **before** the migration list (§1.4 step 5, C13; the
+   order 06 §6.5.1 states): `Open` checks `c/secrets/meta` (written on first open) and resolves the keyring:
    - keyring present → load; mode looser than 0600 → try `chmod 0600`; if that fails → `ErrKeyfileInsecure`
      (fail-closed);
-   - keyring absent, no stored records → generate `k1` (data) and `d1` (derive), write keyring (first run);
+   - keyring absent, no stored records → generate `k1` (data) and `d1` (derive), write keyring (first run; on the
+     first R2 boot this is the keyring M2 encrypts with);
    - keyring absent, stored records exist → `ErrKeyMissing` (boot refused, message names the file, the exported
      copy (§2.4 Backups) and the override). With `core.secrets.allow_key_regen=true` new keys are generated **and
      existing records are kept** under their old key id (`Meta.Err = ErrKeyUnavailable`); putting the old keyring
      back later recovers them. Nothing is ever deleted automatically (contrast `persistence.go:1232-1260`).
-     Legacy rows without their key are the app's guard's case (HEAD's `guardAgainstKeyRegeneration`,
-     `cmd/root.go:726-783`), which runs in the books store's `Open` before this step (R4-6);
+     HEAD's own key file is M2's concern, not `Open`'s (§1.12.2);
    - `Options.ResetBoot` → the keyring header's `install_id` is rewritten to the fresh store's
-     `c/storage/install` marker (the reset boot of a factory reset, §1.12.2; the kernel marks the `KindReset` journal
-     `applied` only after this, DATA7-17); otherwise the header's `install_id` is only written when absent (below);
-   - `SecretsStore.KeyMaterial()` non-nil → recorded in the keyring as `k0-legacy` (`use: legacy`, opaque) when
-     absent; when it differs from the recorded material, the recorded one is replaced and
-     `secrets_keyring_not_exported` is raised, so the export always covers the key that decrypts the rows. The
-     app's own key file is left untouched: older builds keep using it (09 S3 "same key file" means this);
-2. `config.Load` registered `Ephemeral` values for secret keys supplied by env/file under a locking name, and
-   `EphemeralDefault` values for those supplied under a `BelowStored` legacy name (05-config §1.3.5).
+     `c/storage/install` marker (the reset boot of a factory reset, §1.4; the kernel marks the `KindReset` journal
+     `applied` only after this, DATA7-17); otherwise the header's `install_id` is only written when absent (below).
+2. `config.Load` registered `Ephemeral` values for secret keys supplied by env or file.
 3. Runtime: `Get` decrypts on demand (no plaintext cache beyond the call; callers hold `Value` briefly).
    `Put`/`Stage`/`Delete` encrypt with the active data key. No background goroutine and no timer.
 
@@ -2442,16 +1758,16 @@ so a lost key file loses the secrets. Rules:
   holds the keyring can decrypt the archives, which adds only the non-secret data to what that holder could
   already decrypt; an operator who wants the two separated adds an operator recipient (05-backup).
 - The keyring is **never** stored only inside an archive it protects. Unencrypted archives never contain key
-  material, so their secrets stay as the store holds them: ciphertext for native secrets and for HEAD's four
-  encrypted rows, plaintext for ABO's plaintext blob secrets until H2 (05-backup §5B; 14 K25; SEC10-8). No archive
-  carries a copy of the keyring as its recovery path.
+  material, so their secrets stay ciphertext (05-backup §5B; SEC10-8). Archives taken before R2 still hold HEAD's
+  plaintext secrets and its gap-fill file's copies; R2's release note says to delete them once no longer needed
+  (§1.12.2). No archive carries a copy of the keyring as its recovery path.
 - Recovery is an explicit operator action: `<app> secrets export-keyring --out <file>` (CLI, filesystem access
   required, refuses to write a file looser than 0600). **It opens no store (SEC10-9):** it reads the keyring file
   and the `install_id` in the keyring header from the state dir only, takes no store lock and is not a foreign
   open, so it works while the server runs. The exported file carries, next to the keys, the install's `install_id` (the `c/storage/install`
   marker's, 05-storage §5S.3.4 rule 4; `Open` writes it into the keyring file's header when it creates the
   keyring or finds the field absent, so the export, which reads only the state dir, has it), so a host-loss
-  restore of a marker-less (pre-S0) archive keeps the install's lineage when no revocation journal header is
+  restore of a marker-less (pre-R1) archive keeps the install's lineage when no revocation journal header is
   available (05-backup §5B.3.4 step 8, DATA3-12). It records the exported key IDs and time in
   `<state_dir>/secrets.keyring.exported` (no key material). Health warning `secrets_keyring_not_exported` stays raised while any key in the keyring is missing
   from that record.
@@ -2462,8 +1778,9 @@ so a lost key file loses the secrets. Rules:
   restores the old install's lineage once the `previous/` directories are moved back: `<id>` is the one the swap
   journal's `set_aside` record names. It refuses an `<id>` that differs from the `c/storage/install` marker of the
   store at the resolved `core.storage.path` (read offline), so the header can only be set to the lineage of the store
-  beside it, and refuses with no keyring file. ABO ships it from S3, when the keyring lands (09 S3), as an entry of `app.OfflineCommands` (06 §6.4.5); before S3 the
-  state directory has no keyring, so the command has nothing to set and the undo has no such step.
+  beside it, and refuses with no keyring file. ABO ships it from R2, when the keyring lands, as an entry of
+  `app.OfflineCommands` (06 §6.4.5); before R2 the state directory has no keyring, so the command has nothing to
+  set and the undo has no such step.
 - **How an app's CLI reaches these commands (COR9-6, R9-9).** `secrets export-keyring`, `secrets rotate-derive` and
   `secrets set-install-id` are core commands an app cannot build itself. `export-keyring` opens no store (above).
   `rotate-derive` and `set-install-id` go through `kernel.OpenOffline`, which refuses while the server holds the
@@ -2471,12 +1788,13 @@ so a lost key file loses the secrets. Rules:
   names all three, cross-cluster). `app.OfflineCommands(opts, mods...)` (06 §6.4.5) returns them, with core's
   other offline commands, as `app.Command` values, and ABO wraps each in its cobra tree, as it does
   `storage restore-checkpoint` and `users reset-password` (`TestCLIExposesCoreOfflineCommands`, ABO); 06 §6.4.5's
-  list names all three secrets commands, each from S3.
+  list names all three secrets commands, each from R2.
 - **Host-loss restore** ([05-backup](05-backup.md) §5B.3.3 procedure): the operator copies the exported file
   into the new state directory as `<state_dir>/secrets.keyring` (mode 0600) before the first start; there is
   no import command, and the next `Open` loads it as the keyring-present case above, then
-  `<app> restore --archive <file>`. Its `k0-legacy` reaches the app's backend through `legacy.ConfigOpenEnv.KeyringLegacy`,
-  so the legacy rows decrypt without the app's own key file (§1.12.2). An archive encrypted only to the install identity needs the keyring to be
+  `<app> restore --archive <file>`. A pre-R2 archive (format `legacy-abo/0`) restores, and the next boot migrates
+  it with M2, which needs that install's `.encryption_key` beside it for HEAD's four encrypted rows (05-backup).
+  An archive encrypted only to the install identity needs the keyring to be
   decrypted at all; `--identity` remains only for operator-recipient identities. For an unencrypted archive, or
   one also encrypted to an operator recipient, copying the keyring back is **optional**: without it the restore
   still runs (05-backup `AcceptUnreadableSecrets`), the data restores, and the secrets it cannot decrypt show
@@ -2484,10 +1802,8 @@ so a lost key file loses the secrets. Rules:
 - Losing the state directory without an exported keyring means re-entering secrets (each affected secret shows
   "must be re-entered"); the data restores. Restore reports key IDs referenced by restored records
   (`KeyIDsReferenced`, computed by scanning, not from a manifest) that the current keyring lacks, before it
-  starts. A matching `k0-legacy` ID proves nothing for a foreign archive (the legacy cipher carries no key ID),
-  so restore staging also calls `SecretsStore.Check` with this keyring's `k0-legacy` material; names whose
-  trial decryption fails are reported as `ErrUnreadableSecrets`, which needs `AcceptUnreadableSecrets`
-  (05-backup §5B.3.4 step 5; DATA4-22).
+  starts; names whose trial decryption fails are reported as `ErrUnreadableSecrets`, which needs
+  `AcceptUnreadableSecrets` (05-backup §5B.3.4 step 5; DATA4-22).
 
 ### 2.5 Error semantics
 
@@ -2497,25 +1813,19 @@ so a lost key file loses the secrets. Rules:
 | Keyring too permissive and not fixable | fail-closed | secret material exposure |
 | No keyring, encrypted records exist | fail-closed unless `allow_key_regen`; with override, records kept, not deleted | recovery must stay possible |
 | `c/secrets/meta` app ID ≠ `Options.AppID` | fail-closed (`ErrAppIDMismatch`) | a rename would otherwise make every secret `ErrCorrupt` |
-| `Options.LegacyStore` set but not implementing the mirror | fail-closed (boot, `storage.ErrLegacyStoreType`) | a silently skipped legacy store would read every kept secret as unset (R7-7) |
 | Record under unknown key id | fail-open per secret: `ErrKeyUnavailable`, health `secrets_undecryptable`, UI "re-enter" | the app keeps working; the integration using it reports itself unconfigured |
 | AAD/auth failure | fail-open per secret: `ErrCorrupt`, same reporting | tampering or swap; never "repaired" automatically |
 | `Put` storage error | fail-closed: error to caller, nothing changed | |
 | `Scope` name outside prefix | `ErrOutOfScope` | handle scoping (06 A3) |
-| Legacy row undecryptable by the app's cipher (key missing or bad ciphertext), no record | fail-open per secret: `Meta.Err = ErrKeyUnavailable` or `ErrCorrupt`, "must be re-entered", health `secrets_undecryptable`, legacy row kept, boot continues | same as ABO's guard, without the deletion (DATA3-12) |
-| `SecretsStore.Write` fails inside a write of a kept name (incl. the secondary-copy removal of a clear, and a batch with no `CommitLocked` hold, R10-4) | fail-closed: the batch is not committed, nothing changed | a cleared row with its file copy left would be refilled by HEAD's gap fill |
-| Secondary-copy rewrite fails in the store's post-commit step, after a kept name's set committed, still inside the hold (R10-5) | fail-open: logged; the next commit's step, rendered from the rows, repairs it | the row holds the value, so HEAD's gap fill never consults the file while it is set |
+| Unreadable marker from the cutover (HEAD's row could not be decrypted, §1.12.2) | fail-open per secret: `Meta.Err = ErrKeyUnavailable` or `ErrCorrupt`, "must be re-entered", health `secrets_undecryptable`, the ciphertext in quarantine, boot continues | HEAD's guard without HEAD's deletion (`persistence.go:1253-1260`; DATA3-12) |
 | `Ref.Resolve` with no value | `ErrNotSet` | consumer decides |
 | `Value` JSON/text marshal | error `ErrNotSerializable` | accidental exposure fails the response instead of leaking |
 
 ### 2.6 Concurrency contract
 
 `Store` is safe for concurrent use. Reads take a read lock on the in-memory keyring only; storage reads are
-lock-free snapshots. `Put`/`Delete`/`Stage` serialize per name via a keyed mutex, which for a kept name is taken
-only inside a `CommitLocked` `stage` function, after the config lock (the one core-side mutex taken inside a hold,
-§1.6; R10-4, DATA10-3). The keyed mutex comes from the core-internal copy
-`core/internal/keyedmutex` (04 §9, added at S3; ABO keeps its own `internal/keyedmutex`, which core cannot
-import, COR2-16). The keyring changes only at `Open`. The store starts
+lock-free snapshots. `Put`/`Delete`/`Stage` serialize per name via a keyed mutex from the core-internal copy
+`core/internal/keyedmutex` (04 §9; ABO keeps its own `internal/keyedmutex`, which core cannot import, COR2-16). The keyring changes only at `Open`. The store starts
 no goroutine.
 
 ### 2.7 Config keys
@@ -2523,7 +1833,7 @@ no goroutine.
 | Key | Type | Default | Hot reload? | Protection |
 |---|---|---|---|---|
 | `core.secrets.key_file` | path (relative to state dir) | `secrets.keyring` | no | operator |
-| `core.secrets.allow_key_regen` | bool | `false` (ABO alias `ABK_ALLOW_ENCRYPTION_KEY_REGEN`, window ledger row) | no | operator |
+| `core.secrets.allow_key_regen` | bool | `false` (HEAD's `ABK_ALLOW_ENCRYPTION_KEY_REGEN` is a retired name and refuses boot, §1.3.6); also M2's override of HEAD's key guard (§1.12.2) | no | operator |
 
 ### 2.8 Metrics
 
@@ -2533,8 +1843,7 @@ All on scope `mediacore.secrets`.
 |---|---|---|
 | `mediacore_secrets_operations_total` | counter | `op` ∈ get, put, delete; `outcome` ∈ ok, not_set, key_unavailable, corrupt, out_of_scope, error |
 | `mediacore_secrets_undecryptable` | gauge | — |
-| `mediacore_secrets_keyring_keys` | gauge | `use` ∈ data, derive, legacy; `status` ∈ active, verify, retired |
-| `mediacore_secrets_legacy_reads_total` | counter | `where` ∈ primary, secondary (values still read from the previous build's copies) |
+| `mediacore_secrets_keyring_keys` | gauge | `use` ∈ data, derive; `status` ∈ active, verify, retired |
 
 ### 2.9 Tests
 
@@ -2547,85 +1856,47 @@ All on scope `mediacore.secrets`.
 | `TestOpen_KeyringPermissions` | 0644 fixed to 0600 or refused |
 | `TestDeriveKey_IndependentOfDataKey` | replacing the active data key in a fixture keyring leaves `DeriveKey` output and fingerprints unchanged |
 | `TestScope_RefusesOutsidePrefix` | `modules.books.` scope cannot read `core.*` or `integrations.*` names |
-| `TestLegacyKeyMaterial_RecordedOpaque` | a fake `legacy.SecretsStore` with key material → `k0-legacy` (`use: legacy`) in the keyring, never used to encrypt or decrypt; changed material replaces it and raises the export warning; `ReadLegacyKey` returns it without opening the store |
-| `TestGet_ReadOrder` | operator > kept name's legacy primary (plaintext or encrypted) > native record (cleared marker = `ErrNotSet`) > `EphemeralDefault` > secondary > `ErrNotSet` (R5-1, A-2) |
-| `TestStage_KeptNameWritesInPlace` | `Stage`, `Put` and `Delete` of a kept name, an encrypted one and a plaintext one, call `SecretsStore.Write` in the batch and never write `c/secrets/`; `Put` and `Delete` commit inside `CommitLocked` with `SettingsLocks` and the keyed mutex is taken inside the `stage`; a `Stage` into a batch with no hold is refused; a clear whose secondary removal fails commits nothing; an older-build fixture reading the row or blob field after the commit sees the new value (R5-1(b), OPS5-2, A-2, R10-4, R10-5) |
+| `TestGet_ReadOrder` | operator > record (cleared marker = `ErrNotSet`, unreadable marker = `Meta.Err`) > `ErrNotSet` |
+| `TestStageUnreadable_ReadsReenter` | a staged unreadable marker reads `ErrKeyUnavailable` or `ErrCorrupt` with health `secrets_undecryptable`; a `Put` replaces it and clears the token |
 | `TestExportKeyring_OpensNoStore` | with the server holding the store lock, `secrets export-keyring` succeeds, reads only the state dir and the keyring header's `install_id`, and the next boot sees no foreign open; `rotate-derive` and `set-install-id` are refused while the lock is held (SEC10-9) |
-| `TestKeyIDsReferenced_ReportsLegacyRows` | a staged pre-S3 store whose `SecretsStore.Check` reports encrypted copies and that has no `c/secrets/` reports `k0-legacy` (DATA3-12) |
-| `TestLegacyCheck_TrialDecryptForeignArchive` | `Check` with this keyring's `k0-legacy` over a staged archive from another install returns its legacy names as unreadable (DATA4-22) |
 | `TestEphemeral_NeverPersisted` | env secret never reaches storage |
 | `TestFingerprint_StableNotReversible` | same value same fingerprint; differs per keyring |
 | `TestExportKeyring_ClearsHealthWarning` | export record covering every key ID clears `secrets_keyring_not_exported` |
 | `TestRotateDerive_VerifyThenRetire` | after `rotate-derive`: `DeriveKey` uses `d2`; `DeriveKeyFor("d1", …)` works until `retire_after`, then `ErrKeyUnavailable`; data records still decrypt; refused while the store is locked; export warning raised |
 | `TestRotateDerive_NotRetiredWhileArchiveUsesIt` | a `verify` key past `retire_after` stays `verify` while the in-use check reports a retained archive under it (health `derive_key_retire_blocked`); after the rewrap it retires |
 | `TestRotateDerive_JournalStaysVerifiable` | after `rotate-derive` and the rewrap, `d1` stays `verify` while a retained revocation-journal line (or the header) names it; `Open` retires nothing; `RetireUnused` in P5 sees the overridden `core.backup.dir` (DATA3-13, SEC3-10, COR3-2) |
-| `TestOpen_LegacyStoreTypeMismatchFails` | `Options.LegacyStore` set to a value lacking one `legacyStore` method → `Open` returns `storage.ErrLegacyStoreType` and writes nothing; nil → no legacy copies; a `legacytest` fake → accepted (R7-7) |
 | `TestOpen_ResetBootRewritesInstallID` | with `ResetBoot` the header's `install_id` becomes the fresh store's; without it an existing header field is never changed (DATA7-17) |
 | `TestSetInstallID_RestoresLineageOffline` | after a reset and a manual undo, `secrets set-install-id` with the `set_aside` record's ID rewrites only the header's `install_id` (keys and export record unchanged); it refuses while the server holds the lock, an ID that differs from the store's marker, and a missing keyring (DATA8-12) |
 | `TestStage_TakesBatchPointer` | `Stage` writes and its in-place `Write` commit with the caller's batch and are refused outside its bound keyspaces (COR2-12) |
 
-**ABO-side tests of the books legacy config store** (ABO repo; they run `configtest.OverrideStoreSuite` with HEAD fixtures
-and the §1.12.2 rollback matrix, in root `make ci` against a `prev` binary built from `PREV_REF`, OPS4-6):
-`TestRollback_BasicGateNeverOpenOnPrev`, `TestRollback_BasicGateClearedStaysClosed` (SEC5-4),
-`TestRollback_RotatedKeyNotResurrected`, `TestRollback_ClearedOnPrevClearedOnCur`,
-`TestRollback_BlobEditOnPrevEffectiveOnCur`, `TestS2bAppConfigFromBlob` (COR4-1),
-`TestComposeEnvKeepsUIBasicGate` (compose's three `BASIC_AUTH_*` at their defaults, the blob holding
-`basic_auth_enabled: true` and a stored password: on S3 stage 8 is on, `<username>:` gets 401 and the stored
-password 200; OPS5-1), `TestAliasBelowStoredMatchesHEAD` (R5-1(a)), `TestOnlyLegacyConfigStoreWritesSettingsRows`,
-`TestSetInternalFlagRefusesConfigRows` (DATA4-4), `TestLegacyGuard_RowsWithoutKeyRefuses` (HEAD's
-key-regeneration guard inside the store's `Open`, R4-6), `TestLegacyOpen_NoCorruptSecretRepair` (an
-undecryptable row is kept, nothing is written, DATA5-11), `TestGapFillFileRewriteSerialised` (two concurrent
-commits leave both values in the file, DATA5-20), `TestGapFillClearNotUndoneByLateSet` (a set of a kept name through
-the `/api/v1/config` alias and a clear of it through the integrations route, raced: neither the row nor the file key
-survives the clear, because the step renders from the rows inside the hold; R10-5, DATA10-2),
-`TestGapFillStepOnEveryWriterPath` (a kept-name write through `Apply`, `Registry.Put`, the notify rule store and
-`secrets.Put`/`Delete` each leaves `config.yaml` equal to the rows before `configBlobSaveMu` is released; R10-5), `TestIntegrationStoreSharesBlobRender`,
-`TestFreshInstall_EmbedCoverArtFalseSurvivesRestart` (a fresh S2b+ install, and a store upgraded from a pre-marker
-build, keep an operator's `embed_cover_art=false`, `log_retention_days` and 0–0 maintenance window across restarts;
-the three one-shots ran once as books migrations, which wrote HEAD's markers; `Open` wrote nothing; COR6-5),
-`TestLegacyAuthEnablePrecedenceMatchesHEAD` (blob `enable_auth=false`, env `ENABLE_AUTH=true` → auth off, as at HEAD, and `config_legacy_name_shadowed` raised; blob `true`, env `ENABLE_AUTH=false` → auth stays on; `ABO_CORE_AUTH_MODE=required` → on and locked; A-2), `TestRollback_PlaintextSecretSavedOnCurWorksOnPrev` (a plaintext secret saved on cur is the value prev reads, A-2), `TestCoreWritesOnlyHEADGapFillKeys` (after every kind of core write, set, clear, factory-reset hook, the gap-fill file holds no key outside HEAD's `SaveConfigToFile` set, and an operator key already in it survives unchanged; ADV-8), `TestLegacyEnvDecodeMatchesHEAD` (§1.11), `TestFreshInstallWritesHEADMarkers` (a fresh S2b+ store holds the three HEAD markers after
-its first boot; DATA7-13), `TestFactoryResetClearsGapFillSecrets` (the staging request writes no setting; after the
-restart the fresh store gap-fills no kept secret, also before and across a crash ahead of the post-reset hook, the
-hook leaves the gap-fill file without the three kept keys, and `config.boot.json` is set aside; DATA6-6, R7-2),
-`TestFactoryReset_StaleEnableAuthFalseKeepsAuthOn` (blob `enable_auth: true` set in the UI, `ENABLE_AUTH=false` and
-`ENABLE_RATE_LIMIT=false` in the environment: after a `ResetFactory` and after a `ResetStore` swap the reset boot's
-fresh store holds HEAD's factory-default blob with `root_dir` empty and `setup_complete` false, auth is `required`
-and the rate limiter on, and `config_legacy_name_shadowed` is raised; SEC8-5, R8-1),
-`TestRollback_AuthOffBasicGateStaysOnPrev` (SEC9-1, §1.3.7), `TestFileOnlyLegacyKeysNeverDBStored` (no
-`FileOnly` key is staged by `Apply`, the façade or the `/api/v1/config` alias, a `c/config/` row for one is ignored,
-and the operator file's value is effective; DATA9-6) and
-`TestSecretClassListMatchesLegacyStore` (the generated list equals the names `SecretsStore.Kept` reports plus the "—" rows and,
-from S3, `scripts/staging/secret_fields.txt`; OPS6-4, R7-6).
+ABO's cutover tests are in §1.12.2.
 
 ### 2.10 Migration from ABO
 
-The data half (every legacy copy read and written in place by the books store, native secrets in `c/secrets/`,
-the deferred secrets cutover) is specified once, in §1.12.2 and §1.12.5. Code replacement:
+The data half (HEAD's four encrypted rows and every plaintext blob secret re-encrypted into `c/secrets/`, the
+gap-fill copies stripped) is specified once, in §1.12.2. Code replacement:
 
-1. New secrets use `secrets` (`Put`/`Stage`). ABO's `database.EncryptValue/DecryptValue/InitEncryption` and
-   `guardAgainstKeyRegeneration` (`settings.go:110,189,214`, `cmd/root.go:735`) stay **ABO code inside the books
-   legacy config store** until cutover, because the four kept rows stay in that cipher and are written in it
-   (R4-1, R4-6, R5-1(b)); the legacy key
-   search order (state dir, then legacy dir) stays that of `database.InitEncryption` (`settings.go:110-140`).
-   `MaskSecret/IsEchoedMask/LooksLikeMask` (`settings.go:271,285,293`) serve only the compat handler (item 2).
-2. ABO's `/api/v1/config` compat handler returns masks for as long as its ledger row is live, by composing `Meta`
-   (`set`) with the old mask shape; the core settings API never does. On the way in, an empty, echoed or
-   mask-shaped secret value (`IsEchoedMask`/`LooksLikeMask`, evaluated on the raw request payload) means
-   "unchanged" and is never staged, so a round-tripped mask neither overwrites nor moves a secret.
-3. ABS JWT secret, Cloudflare policy token, SMTP password: HEAD's file-only (`json:"-"`) secrets keep HEAD's
-   storage through the extraction: env and the operator file only (aliases), never stored, and the settings UI shows
-   them read-only with their lock reason (`FileOnly`, §1.3.7; R9-5). They are stored encrypted in `c/secrets/` only
-   from their family's settings cutover.
+1. Every secret uses `secrets` (`Put`/`Stage`, `Ref` fields). ABO's `database.EncryptValue/DecryptValue/
+   InitEncryption` and `guardAgainstKeyRegeneration` (`settings.go:110,189,214`, `cmd/root.go:735`) leave ABO's boot
+   path in the R2 config flip; a frozen copy of the decrypt half and of the guard lives on inside the cutover step
+   M2 only, with HEAD's key search order (state dir, then `<root_dir>/.appdata/`, `settings.go:110-140`), and R3
+   deletes it with the other HEAD-format readers.
+2. `MaskSecret/IsEchoedMask/LooksLikeMask` (`settings.go:271,285,293`) are deleted with ABO's `/api/v1/config`
+   routes in the same flip: the core settings API is write-only (C9) and returns `Meta`, never a mask.
+3. HEAD's file-only secrets (ABS JWT secret, Cloudflare policy token, SMTP password) were never stored, so nothing
+   migrates. Their HEAD env names are retired secret names, so a unit that still sets one refuses to boot naming
+   the canonical name (§1.3.6, §1.12.4); the operator moves the **same value** to it. For the ABS JWT secret the
+   value must not change, because it signs the tokens the ABS phone apps hold (F3). From R2 each may also be stored,
+   encrypted, through Settings.
 
 ### 2.11 Open items
 
 1. **Rotation and prune (deferred, SIMP-19).** Not built in v1: after a suspected key leak the operator re-enters
    secrets. Constraints already fixed for when it is built: records name their `kid`, so rotation is "new active
    data key + re-encrypt"; the derive key is rotated by its own command, which ships in v1 (`rotate-derive`,
-   §2.3), because rotating it invalidates derived artifacts; pruning a retired key, `k0-legacy` included, is safe
-   only when `KeyIDsReferenced` no longer lists it (the four kept rows keep `k0-legacy` listed until the family's
-   cutover) and the export record covers the current keyring
-   (no coupling to backup manifests).
+   §2.3), because rotating it invalidates derived artifacts; pruning a retired key is safe only when
+   `KeyIDsReferenced` no longer lists it and the export record covers the current keyring (no coupling to backup
+   manifests).
 2. **UI recovery kit.** A shell action that downloads the keyring would put master key material in an HTTP
    response; if wanted, it needs `ProtectOwner`-level checks, a fresh credential proof and an audit record, and
    it would clear `secrets_keyring_not_exported` the same way as the CLI. Owner decides; the CLI ships in v1.
@@ -2640,39 +1911,31 @@ the deferred secrets cutover) is specified once, in §1.12.2 and §1.12.5. Code 
 
 ## Objections to 03
 
-None open. The round-6 objection (the legacy-only value types `secrets.LegacyCopies` and `secrets.LegacyCheck`
-and the format reader `secrets.ReadLegacyKey` cannot move to `legacy`, R6-3) is resolved: 03 v1.9 lists them among
-the identifiers that cannot move (03 §3.3 "Legacy-only identifiers", 14 K23).
-
-The round-0 items (an internal order inside the old shared layer; the §3.3 `config` row not saying
-that operator-set keys are locked) are resolved by 03 v1.2.0+ (R4 L1/L2/L3; §3.3 `config` row); 03 v1.3.0 R5 also states that ABO's façades are allowed. Note for readers:
-`compat` (L4) sits above `config` (L3), so config aliases are registered with `compat` by the kernel and use is
-reported through `Options.OnLegacyUse` (§1.3.6); no R4 change is needed.
+None open. 03 §3.3's store-interface rows for `config` and `secrets` name their importers (`config.Importer`,
+`secrets.(*Store).Stage`, §1.3.3, §2.3). The round-0 items (an internal order inside the old shared
+layer; the §3.3 `config` row not saying that operator-set keys are locked) are resolved by 03's R4 L1/L2/L3 and its
+§3.3 `config` row; 03 R5 also states that ABO's façades are allowed.
 
 ## Out-of-scope defects found
 
 1. Eight writes to `config.AppConfig` bypass `Mutate` (§1.2 anchors): unsynchronized, and invisible to
-   `config.Generation()` consumers (`internal/ai/ai_metrics.go:169`). Fixed in migration stage 0 because the
+   `config.Generation()` consumers (`internal/ai/ai_metrics.go:169`). Fixed in migration stage 0 (R1) because the
    façade depends on it.
 2. Three encrypted secrets are also persisted in plaintext to `<db parent>/config.yaml` on every settings save
-   (`persistence.go:168-178`), which defeats their encryption. Core never writes the file. These three are kept
-   secrets (R5-1(b)), so until cutover the books store keeps HEAD's behaviour exactly: it reads the file as HEAD's
-   gap fill and rewrites their copies with their rows (§1.12.2), because an older build after a rollback still
-   gap-fills from it. While it holds a secret key, the boot log names the file as holding plaintext copies; it is
-   never archived by [05-backup](05-backup.md). The cutover moves the three into `c/secrets/` and removes their
-   file keys.
-3. Secret ciphertext has no associated data (`settings.go:189-208`): rows are swappable between keys.
-4. `LoadConfigFromDatabase` deletes secret rows it cannot decrypt or recover (`persistence.go:1253-1260`, `DeleteSetting` at `:1258`),
-   turning a temporarily missing key file into permanent loss when the guard is overridden.
+   (`persistence.go:168-178`), which defeats their encryption. Fixed by the cutover: M2b strips the copies and
+   core never writes the file (§1.12.2).
+3. Secret ciphertext has no associated data (`settings.go:189-208`): rows are swappable between keys. Fixed by
+   the cutover: every secret is re-encrypted with an AAD of app and name.
+4. `LoadConfigFromDatabase` deletes secret rows it cannot decrypt or recover (`persistence.go:1253-1260`,
+   `DeleteSetting` at `:1258`), turning a temporarily missing key file into permanent loss when the guard is
+   overridden. M2 quarantines such a row instead (§1.12.2).
 5. The shipped `docker-compose.yml` sets `AO_DIR` and `AO_DB` (`:18-19`) and `deploy/local.conf.example` sets
    `OLLAMA_BASE_URL` (`:40`), but no Go code reads any of them at `748fd787a`: a compose user's database is not
-   where the file says. The fix (rename them in the shipped files to names ABO reads) belongs to 09 S3's
-   deploy-file update; this spec keeps them unread (§1.12.4).
+   where the file says. R2's deploy-file rewrite removes them and uses canonical names (§1.12.4).
 6. HEAD's `POST /system/reset` (`ResetSystem`, `internal/server/handlers/system/handler.go:463-491`) wipes the store
    but leaves the gap-fill file `<db parent>/config.yaml`, so after the next restart HEAD's gap fill brings the old
-   install's OpenAI, Google Books and Hardcover keys back (`persistence.go:42-104`). A core `ResetStore` swap keeps
-   that behaviour (no file effects, R8-1, §1.12.2). If the owner wants the old keys gone after it too, the
-   `ResetStore` kind would also need a hook that rewrites the gap-fill file; that is the owner's call.
+   install's OpenAI, Google Books and Hardcover keys back (`persistence.go:42-104`). After R2 there is no gap-fill
+   reader and no such copy (M2b), so a core reset cannot bring them back.
 
 ## Review history
 
@@ -2924,3 +2187,32 @@ Plan-phase consistency:
 
 - PC-4 — §1.12.5 H2: a swap set-aside defers H2 (05-storage §5S.3.13 item 3) instead of "refuses to start".
 - PC-17 — §1.3.3 `Committer`, §1.4 step 9 and §1.12.2 "Writing": at S3 the committer logs the change (section, key names, actor) and stages no audit record; from S4, when `audit` lands, it stages `core.settings.update`.
+- D10–D12 revision (2026-11-04): no backward compatibility, no soaks; ABO's settings and secrets move once, in R2.
+  **Deleted:** the books legacy config store and the old §1.12.2 (blob in place, plaintext blob secrets, HEAD's
+  four rows in place, `configBlobSaveMu`, the gap-fill write inside the hold, `Changed`, the rollback matrix and its
+  R-test cells, the HEAD factory-default blob on reset); §1.12.5 (H2/H3 as post-S10 cutovers; their designs land in
+  R2); `Alias` with `LegacyYAML`/`LegacyBlob`/`BelowStored`/`HEADAuthOffWritable`/`Decode`/`Ledger`, `FileOnly`,
+  `LegacyDecode` and the A-7 decode table, `config.Aliases`, `config.Deprecated`, `Options.Retired func`,
+  `OnLegacyUse`, `Legacy`, `Surface`, `Store.Aliases`, `OperatorValue.BelowStored`, `KeyState.Alias`,
+  `AttachReport.Shadowed`/`DeployDefaults`, every `legacy.*` config and secrets capability (`ConfigOpener`,
+  `ConfigOpenEnv`, `StateFiles`, `ConfigResetArgs`/`Plan`/`Run`, `LockConfigSettings`, `ConfigExternalWriter`,
+  `ConfigSecrets`, `SecretsStore`), `app.Options.LegacyConfigStore`/`LegacyConfig`, the compat-ledger and window
+  text, HEAD precedence for legacy names, the shadow and deploy-default reports, the canonical-only rollback
+  consequence, `secrets.Options.LegacyStore`/`SettingsLocks`, the `legacyStore` mirror, `LegacyCopies`,
+  `LegacyCheck`, `ReadLegacyKey`, `k0-legacy`, `SourceLegacy`, `LegacyForm`, `EphemeralDefault`, the
+  plaintext-secret and legacy-read metrics, the staging secret-class list, and every test of those.
+  **Rewritten:** the intro; C3 (operator lock plus the fail-closed rule for auth and Basic-gate keys), C4 (native
+  store only, `config.Importer`), C6, C7 (canonical names and ecosystem bindings; retired names refuse or warn),
+  C8, C11, C12, C13, C16 (HEAD's secrets migrate once), C17 (no app boot step in config); §1.3.1 (new
+  `EnvBinding`, `FailClosed`; no alias or deprecation option), §1.3.3 (new `EnvName`, `RetiredName`, `RetiredUse`,
+  `Importer`, `RetiredSet`; `ErrRetiredName`/`RetiredNameError` replace `ErrRetiredAlias`/`RetiredAliasError`),
+  §1.3.4, §1.3.5, §1.3.6 (key grammar, strict decoding, ecosystem bindings, the retired-name rule), §1.3.7 (one
+  native auth-off rule; HEAD's file-only keys become ordinary keys; integration instances native for ABO too),
+  §1.4 (`secrets.Open` after the checkpoint and before the migration list; step numbers 0–7 kept; the reset
+  paragraph), §1.5, §1.6, §1.7, §1.8, §1.9, §1.11, §1.12.1 (stage 0 in R1, the façade in the R2 flip), new §1.12.2
+  "The config and secrets cutover (R2, migration step M2)", §1.12.3 "Key grammar and ABO's rename table" (the
+  generator rule from HEAD's `Config` struct, the section table and the full 173-row table with sub-key rows),
+  §1.12.4 "Env, file and flag names after the cutover", §1.13; Part 2 §2.1, §2.2 (the M2 column), §2.3
+  (`StageUnreadable` and the unreadable marker; read order operator > record), §2.4–§2.11, objections and
+  out-of-scope defects 2–6 (fixed by the cutover).
+

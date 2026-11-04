@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/12-repo-split.md -->
-<!-- version: 1.11.2 -->
+<!-- version: 1.12.0 -->
 <!-- guid: eb47baa1-640b-4c96-96cc-f6b2bdeaa57e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -23,7 +23,7 @@ the release process, how app repos pin core, cross-repo CI, history preservation
 and how to undo it.
 
 Out of scope: what is in core (03 §3.3, [04-package-mapping](04-package-mapping.md)); the in-repo build
-wiring (`GO_MODULE_DIRS := . core` and the per-target classification, 03 §3.2 item 4 — owned by 09 S0).
+wiring (`GO_MODULE_DIRS := . core` and the per-target classification, 03 §3.2 item 4 — owned by 09's R1 build work).
 
 ## 12.2 Current state at HEAD
 
@@ -43,12 +43,12 @@ wiring (`GO_MODULE_DIRS := . core` and the per-target classification, 03 §3.2 i
 ## 12.3 Split trigger and readiness criteria
 
 The split happens when **every readiness criterion SC1–SC10 holds** *and* the **trigger** T holds.
-The criteria are named `SC` ("split criterion") so that they never collide with the 09 stages S0–S10
-(S2b, UI-0) or with any other `S`-numbered list in the spec.
+The criteria are named `SC` ("split criterion") so that they never collide with the R-numbered releases
+(R0–R3) or the architecture rules R1–R8 of 03, or with any other `S`-numbered list in the spec.
 
 **T — there is a reason to split.** A second app repository (TV or Movies, D5) is being created, or
 the owner asks for it. Splitting with a single consumer adds a release step to every core change and
-buys nothing; the criteria below are tracked from S0 regardless, so readiness is known when T fires.
+buys nothing; the criteria below are tracked from R1 regardless, so readiness is known when T fires.
 T also starts the deferred builds (`acquire`, `arrfacade`, `integrations/indexer`, 03 §3.4); they are
 not readiness criteria, because the split must not wait on code written for the new app.
 
@@ -74,16 +74,14 @@ a `go1.x.y` literal; the pin has exactly the guarded copies listed in 13 §13.2.
 ### SC1 — Public API stable across 3 consecutive core checkpoints
 
 *Definition.* Zero incompatible changes in SDK packages (03 §3.1: every core package outside
-`internal/`, `kernel/` and `legacy/`; `examples/` is also excluded) between checkpoint *n−1* and *n*, for
-the last three checkpoints, spanning at least 6 weeks. The SDK includes the **store interfaces** of 03 §3.3
-(R4-1), through which core services persist their state and an app supplies its legacy implementation, so
-a change to one counts like any other SDK change. The identifiers that exist only to serve an app's legacy
-stores (optional capabilities, `legacy.Stores`, `legacy.LibraryRootSource`, `legacy.Maintenance`, their
-suites) live in `legacy/` instead and are **not** measured, like `kernel/`, so the release after a family's
-cutover that stops setting its member deletes them without a breaking change (03 §3.3 "Legacy-only
-identifiers"; R6-3, SIMP6-2, COR7-5). Because ABO's implementations stay in ABO, no ABO key
-name or row format is in core at the split; the split ships only the interfaces and core's native
-implementations.
+`internal/` and `kernel/`; `examples/` is also excluded) between checkpoint *n−1* and *n*, for
+the last three checkpoints, spanning at least 6 weeks. The first checkpoint that counts is R2's: R2 is the
+release in which every core-service family becomes truth, so earlier checkpoints are reported but start no
+count. The SDK includes the **store interfaces** of 03 §3.3 and their **importers**, through which core
+services persist their state and books' R2 cutover steps hand HEAD's rows over, so a change to one counts
+like any other SDK change. Core ships native implementations only; the code that decodes ABO's key names and
+row formats lives in books' migration steps (03 R1(c)), so no ABO key name or row format is in core at the
+split.
 
 *Why not `gorelease` yet.* `gorelease -base=vX` fetches the base version through the module proxy.
 Before the split, `github.com/falkcorp/mediacore` has no fetchable versions (the repo does not exist
@@ -102,7 +100,7 @@ forbid an allowed change from the first core PR. It runs in `make -C core readin
 *Output format the filter relies on (X7).* In module mode apidiff prints `- ./<rel>.<Obj>: <msg>` for a
 changed object and `- package <full path>: removed` for a removed package; `-incompatible` prints no
 header; `internal/` packages are already filtered by apidiff itself. The filter below therefore drops
-lines for `kernel/`, `legacy/` and `examples/` in both forms.
+lines for `kernel/` and `examples/` in both forms.
 
 *Command (pre-split)*, wrapped by `core/scripts/ci/core_api_gate.py`:
 
@@ -116,7 +114,7 @@ pair() {   # $1 = older checkpoint ref, $2 = newer checkpoint ref
   (cd "$TMP/a/core" && apidiff -m -w "$TMP/a.api" github.com/falkcorp/mediacore)
   (cd "$TMP/b/core" && apidiff -m -w "$TMP/b.api" github.com/falkcorp/mediacore)
   apidiff -m -incompatible "$TMP/a.api" "$TMP/b.api" \
-    | grep -v -E '^- (\./(kernel|legacy|examples)(/[^.: ]+)*\.|package github\.com/falkcorp/mediacore/(kernel|legacy|examples)(/|:))' \
+    | grep -v -E '^- (\./(kernel|examples)(/[^.: ]+)*\.|package github\.com/falkcorp/mediacore/(kernel|examples)(/|:))' \
     > "$TMP/incompatible.txt" || true          # grep -v exits 1 when nothing is left: the passing case
   git worktree remove --force "$TMP/a"
   git worktree remove --force "$TMP/b"
@@ -126,17 +124,17 @@ refs=$(git for-each-ref --sort=-v:refname --format='%(refname)' refs/core-checkp
 # pair(n-1, n), pair(n-2, n-1), pair(n-3, n-2), then the date span with git log -1 --format=%cs <ref>
 ```
 
-`core_api_gate.py` carries a fixture test: a known `kernel/` break and a known `legacy/` break must be
+`core_api_gate.py` carries a fixture test: a known `kernel/` break and a known `examples/` break must be
 filtered and a known SDK break must be reported, so a change in x/exp's output format fails loudly instead of silently passing
 or failing every run.
 
 *Command (post-split, in the core repo):* the same `pair` function with the previous tag as the older ref,
 from the same pinned tools module, then `gorelease -base=$(git describe --tags --abbrev=0)` for its
-module-level checks. `gorelease` cannot exclude packages, so a `kernel/` or `legacy/` removal makes it
+module-level checks. `gorelease` cannot exclude packages, so a `kernel/` or `examples/` removal makes it
 suggest a major; `core_api_gate.py` overrides that suggestion only when every incompatible line it reports
-lies under `kernel/` or `legacy/` (R6-3).
+lies under `kernel/` or `examples/`.
 
-### SC2 — R1 guard green and core requires no app module
+### SC2 — 03 rule R1 guard green and core requires no app module
 
 ```sh
 (cd core && go test ./archtest/ -run 'TestNoAppRequire|TestCoreImportsOnlyCore|TestNoGlobals' -count=1)
@@ -151,8 +149,8 @@ cannot import app code unseen (03 R1; R9-10, MOD9-3).
 
 ### SC3 — Second consumer builds against core with nothing but a dependency on it
 
-Two consumers, measured from S2, the stage in which `examples/hello` lands as a skeleton (04 §8.1;
-it grows with the stages and never pulls a package forward, 03 §3.4):
+Two consumers, measured from R1, the release whose content includes the `examples/hello` skeleton (04 §8.1;
+it grows with each subsystem that lands and never pulls a package forward, 03 §3.4):
 
 1. **`core/examples/hello`** — the dummy second module of 02 §2.4 G6. It is a **package in the core
    module** (03 §3.3), not a separate module: a nested module would need a second `require`+`replace`
@@ -180,14 +178,14 @@ published; it is the first verification step of the cutover (§12.8.2 step 8).
 
 (a) Core's **whole merge gate** runs from an export containing **only** `core/` — not just
 `go build/vet/test`, so a target that calls a script outside `core/` fails here. Once `core/web` exists
-(UI-0, 04 §8.1), `npm ci` runs first, so the run also proves that `core/go.mod`'s `ignore ./web` keeps
+(UI-0, part of R1; 04 §8.1), `npm ci` runs first, so the run also proves that `core/go.mod`'s `ignore ./web` keeps
 npm-shipped `.go` files out of `./...` (03 §3.2); before UI-0 there is no `core/web/package.json` and
 the step is skipped. Core's own build outputs are ignored by files inside `core/`, so they travel with the export
 and into the split repo, and the run leaves the tree clean without the root `.gitignore` (FE7-1, FE8-4):
-`core/.gitignore`, created by the S0 PR that creates `core/`, lists `/.ci/readiness/` (the `readiness` report,
+`core/.gitignore`, created by the R1 PR that creates `core/`, lists `/.ci/readiness/` (the `readiness` report,
 §12.3.11), `/hello` (the hello binary; or the hello target writes it under an ignored directory with `-o`),
 `**/playwright-report/` and `**/blob-report/`; `core/web/.gitignore` (`node_modules/`, `dist/`, `*.tsbuildinfo`,
-`coverage/`, `test-results/`, `playwright-report/`, `blob-report/`; created by the UI-0 PR, 07 §7.3 and 09 UI-0)
+`coverage/`, `test-results/`, `playwright-report/`, `blob-report/`; created by the UI-0 PR, 07 §7.3 and 09 R1)
 covers the workspace. A `git archive` extract is not a git work tree, so the check makes the export one
 before the run (a fresh repository holding only `core/`, which keeps the "only `core/`" property) and then
 asserts that `git status --porcelain` is empty:
@@ -218,7 +216,7 @@ gh run list --workflow core-ci.yml --branch main --limit 20 --json conclusion \
 
 (c) No dependency skew between the binary and core CI (03 §3.2 item 6). The same script also asserts
 that the empty `core/go.sum` exists and that the `--pin` pins hold, so it is not only reported: it is a
-blocking root-side check in root `make ci` from S0 (09 S0 classification table), and SC4(c) reads its
+blocking root-side check in root `make ci` from R1 (09's R1 classification table), and SC4(c) reads its
 result:
 
 ```sh
@@ -230,14 +228,14 @@ python3 scripts/ci/check_module_skew.py   # compares (cd core && go list -m all)
 Total ≥ 70 % and every SDK package ≥ 60 % under `-short` (the root module's floor is 30 %,
 `.ci/coverage-floor.txt`, `raw/14-build-ci.md` §2 step 12; a library others build on needs more).
 These thresholds are a **readiness report** (`make -C core readiness`), not a merge gate: a 70 % gate
-from S2b would block moving ABO code whose coverage is lower. The merge gate carries a coverage
+from R1 would block moving ABO code whose coverage is lower. The merge gate carries a coverage
 **ratchet floor** instead (`core/.ci/coverage-floor.txt`, raised by `ratchet-lower.yml`'s core entry,
 never lowered by a PR), the same mechanism as the root's.
 
 ```sh
 (cd core && go test -short -coverprofile="$TMP/core.out" ./... \
   && go tool cover -func="$TMP/core.out" | tail -1)                    # total
-python3 core/scripts/ci/core_coverage_by_package.py "$TMP/core.out" --min 60 --exclude 'kernel/|internal/|examples/|legacy/'
+python3 core/scripts/ci/core_coverage_by_package.py "$TMP/core.out" --min 60 --exclude 'kernel/|internal/|examples/'
 ```
 
 ### SC6 — Every core contribution point is documented
@@ -297,7 +295,7 @@ go -C core/tools/govulncheck install tool
 root `Makefile` pin, `scripts/check_toolchain_versions.py:44-46,329-351`; see
 [13-toolchain](13-toolchain.md) §13.2.2). There is no `core/examples/hello/go.mod` to check (SC3).
 
-Every criterion is also a **reported** CI job from the stage that introduces it, so readiness is
+Every criterion is also a **reported** CI job from the PR that introduces it, so readiness is
 continuously visible rather than measured once. Only the criteria that must hold at every merged PR head —
 SC2, SC7 and SC10 — are also part of the merge gate (`make -C core ci`; SC2's root-side
 `TestCoreHoldsNoAppKeyNames` runs in root `make ci`, because it reads books' generated claim list through `KeyFamilies()`, ABO's setting keys and op IDs, 03 R1(c)); SC1, SC5, SC6 and SC9 are
@@ -317,7 +315,7 @@ split, the core repo has nothing else. It is specified now so that it does not g
 |---|---|
 | Toolchain pin | `export GOTOOLCHAIN := go1.27.x`, equal to the root `Makefile` pin. This is one more pinned copy; the toolchain guard checks it (SC10, 13 §13.2.2), so it cannot drift silently. A `print-toolchain` target prints it, so commands and scripts never repeat the literal. |
 | Tools | `tools` target: `go -C tools/apidiff install tool`, `go -C tools/govulncheck install tool`, and a core copy of the staticcheck tools module, `tools/staticcheck`, pinned to the same version as the root's `tools/staticcheck` (`check_module_skew.py`, SC4(c), also compares the two tools modules' requirements). |
-| `ci` target (merge gate) | `build vet vet-darwin vet-integration test-short fmt-check fix-check tidy-check staticcheck archtest exclude-check coverage-floor replace-check toolchain-check version-check errcheck-ratchet interface-width mocks-check pprof-check web-test embed-check` — i.e. Go build/vet/short tests with `-race`, `go vet` for `GOOS=darwin CGO_ENABLED=0` (goreleaser's darwin target, vetted **without** `embed_frontend`, because `go vet` has no `-e` and hello's `examples/hello/web/dist` is unbuilt in `ci`; the embed-only files carry no GOOS constraint, and the tag-union guards still read the darwin `embed_frontend` set through `go list -e`; 03 §3.5.1 item 4, R10-9, MOD10-8) and with `-tags integration`, so every (GOOS, tag set) of 03 §3.5.1 item 4 that core files can carry is compiled on every PR (root `make ci` runs the same two vets over the root; R9-10, MOD9-3), `gofmt -l` excluding `web/` and `examples/*/web/`, `go fix -diff ./...` empty (13 §13.3), `go mod tidy -diff`, staticcheck, archtest (R1, R2, R5 and the R4 layer guard: SC2), the genproto exclude check in **core mode only** plus the present/misplaced scan of `core/` (03 §3.2 item 1; the root mode and the tree-wide scan are the root job `genproto-exclude-root`), the coverage ratchet floor (SC5), the `replace`/`exclude` check (SC7), core's own toolchain copies (SC10), `check_core_version.py`'s core-only checks (§12.4.3), and the gates that ran for core only through root `make ci` before (MOD5-15): the errcheck and interface-width ratchets over `core/.errcheck-baseline` and `core/.interface-width-baseline`, `mocks-check` over core's mockery config, `pprof-check`, and the `core/web` workspace tests (`npm ci` then vitest, from UI-0; "not applicable" before); `embed-check` (`core/scripts/ci/check_embed_outputs.py`) runs `go list -e -json` over core for 03 §3.5.1 item 4's tag sets and fails on a "no matching files" embed error for any path not on core's own list `core/scripts/ci/embed_build_outputs.txt` (hello's `examples/hello/web/dist` from S9; no Dockerfile cross-check, core builds no image; 03 §3.2 item 4, MOD7-6). Their scripts are core copies under `core/scripts/ci/`, so SC4(a)'s export and the post-split repo run them, and cutover step 6 drops none of them. Every check here holds at every **merged PR head** (the repo merges rebase/fast-forward only; MOD4-14), so a red `ci` always means a defect. Intermediate commits are built only for **move PRs**: for any PR whose diff renames a file into `core/`, `scripts/ci/check_commits_build.py` in `extraction-gates` builds every commit of the PR (`go build ./... && go -C core build ./...`) and reports each moved file whose first-commit similarity falls below §12.8.1's threshold, because the history split needs the move in a buildable first commit (MOD9-5). SC4 is the workflow running this target. |
+| `ci` target (merge gate) | `build vet vet-darwin vet-integration test-short fmt-check fix-check tidy-check staticcheck archtest exclude-check coverage-floor replace-check toolchain-check version-check errcheck-ratchet interface-width mocks-check pprof-check web-test embed-check` — i.e. Go build/vet/short tests with `-race`, `go vet` for `GOOS=darwin CGO_ENABLED=0` (goreleaser's darwin target, vetted **without** `embed_frontend`, because `go vet` has no `-e` and hello's `examples/hello/web/dist` is unbuilt in `ci`; the embed-only files carry no GOOS constraint, and the tag-union guards still read the darwin `embed_frontend` set through `go list -e`; 03 §3.5.1 item 4, R10-9, MOD10-8) and with `-tags integration`, so every (GOOS, tag set) of 03 §3.5.1 item 4 that core files can carry is compiled on every PR (root `make ci` runs the same two vets over the root; R9-10, MOD9-3), `gofmt -l` excluding `web/` and `examples/*/web/`, `go fix -diff ./...` empty (13 §13.3), `go mod tidy -diff`, staticcheck, archtest (R1, R2, R5 and the R4 layer guard: SC2), the genproto exclude check in **core mode only** plus the present/misplaced scan of `core/` (03 §3.2 item 1; the root mode and the tree-wide scan are the root job `genproto-exclude-root`), the coverage ratchet floor (SC5), the `replace`/`exclude` check (SC7), core's own toolchain copies (SC10), `check_core_version.py`'s core-only checks (§12.4.3), and the gates that ran for core only through root `make ci` before (MOD5-15): the errcheck and interface-width ratchets over `core/.errcheck-baseline` and `core/.interface-width-baseline`, `mocks-check` over core's mockery config, `pprof-check`, and the `core/web` workspace tests (`npm ci` then vitest, from UI-0; "not applicable" before); `embed-check` (`core/scripts/ci/check_embed_outputs.py`) runs `go list -e -json` over core for 03 §3.5.1 item 4's tag sets and fails on a "no matching files" embed error for any path not on core's own list `core/scripts/ci/embed_build_outputs.txt` (hello's `examples/hello/web/dist` from the shell's landing, 07 §7.19 step 4; no Dockerfile cross-check, core builds no image; 03 §3.2 item 4, MOD7-6). Their scripts are core copies under `core/scripts/ci/`, so SC4(a)'s export and the post-split repo run them, and cutover step 6 drops none of them. Every check here holds at every **merged PR head** (the repo merges rebase/fast-forward only; MOD4-14), so a red `ci` always means a defect. Intermediate commits are built only for **move PRs**: for any PR whose diff renames a file into `core/`, `scripts/ci/check_commits_build.py` in `extraction-gates` builds every commit of the PR (`go build ./... && go -C core build ./...`) and reports each moved file whose first-commit similarity falls below §12.8.1's threshold, because the history split needs the move in a buildable first commit (MOD9-5). SC4 is the workflow running this target. |
 | `readiness` target (report-only) | `apidiff-gate coverage coredoc-check vulncheck` — SC1, SC5's thresholds, SC6 and SC9. It never fails a merge and never writes outside `core/`: it writes a JSON and Markdown report, with date and commit, to `$(READINESS_OUT)` (default `core/.ci/readiness/`, ignored by `core/.gitignore`, SC4(a)), which CI uploads as an artifact. Pre-split, a root-side nightly job folds the artifact into `docs/plans/platform-core/split-readiness.md` through a PR; that job is dropped at cutover step 6. SC3 and SC8 run in the root (pre-split) because they need ABO's `web/` or a temp module; the history rewrite on a throwaway clone, with its fixed-sample `--follow` assertion, and the missing-origin list (§12.8.1) are also reported here. |
 | `release` target | post-split only: `make release VERSION=vX.Y.Z` runs §12.5 steps 1–5. |
 
@@ -357,8 +355,7 @@ split, the core repo has nothing else. It is specified now so that it does not g
   checkpoint minor, (b) carry a changelog fragment in category `Removed` or `Changed` whose first line
   starts with `BREAKING:`, and (c) reset the SC1 counter. Additive changes bump the minor; fixes bump
   the patch.
-- `kernel/`, `internal/`, `legacy/` and `examples/` are outside every promise in every phase (03 §3.3; `legacy/`
-  by R6-3).
+- `kernel/`, `internal/` and `examples/` are outside every promise in every phase (03 §3.3).
 
 ### 12.4.2 At and after the split
 
@@ -374,15 +371,9 @@ split, the core repo has nothing else. It is specified now so that it does not g
 - **Deprecation of SDK identifiers.** A deprecated Go identifier gets a
   `// Deprecated: use X; removed in vN+1.0.0` doc line (picked up by `staticcheck` SA1019 in app CI) and
   stays for **at least two minor releases and 90 days**. Removal therefore only happens in a major.
-  `legacy/` is outside this policy (R6-3, SIMP6-2): a family's legacy-only identifiers are deleted in the
-  first release after the family's cutover that no longer sets its `legacy.Stores` member (the cutover
-  build still reads the legacy data through it; behind the cutover's `UpgradeFloor`, 05-storage
-  §5S.3.13), a minor (COR7-5), with a changelog fragment that names them; an app
-  that still refers to one fails to compile, which is the intended signal, and an app with no pre-core
-  data never imports `legacy`.
-  This is core's library deprecation policy for its Go API. It is **not** ABO's compatibility window
-  for wire, config, permission and storage surfaces, which is defined once in
-  [09](09-abo-on-core.md) §9.2.1 and implemented in `compat`.
+  This is core's library deprecation policy for its Go API. ABO's own wire, config, permission and storage
+  surfaces have no compatibility window (D10): they change in R2, and R2's release note lists them
+  ([09](09-abo-on-core.md)).
 - **Bad releases** are withdrawn with a `retract` directive in the next release's `core/go.mod`, never by
   deleting the tag (the module proxy and checksum database keep it forever).
 - **npm lockstep.** `@mediacore/*` packages are versioned in lockstep with the Go module (same `X.Y.Z`),
@@ -395,7 +386,7 @@ split, the core repo has nothing else. It is specified now so that it does not g
   `"X.Y.Z"`. It is never derived from `debug.ReadBuildInfo`: under the in-repo `replace` that reports
   `v0.0.0-00010101000000-000000000000`, which is below every `MinCoreVersion` and would fail every boot
   fail-closed.
-- **Initial value.** S1 lands `const Version = "0.1.0"` (03 §3.3), so the S2 `hello` skeleton
+- **Initial value.** R1 lands `const Version = "0.1.0"` (03 §3.3), so the R1 `hello` skeleton
   (`MinCoreVersion: "0.1.0"`, 06 §6.12) passes P1 before any checkpoint exists.
 - **Kept honest by CI.** `version.Version` is kept **≥** the newest checkpoint (03 §3.3): the one
   "core version" PR raises it above the newest checkpoint before the release that records the next one,
@@ -407,7 +398,7 @@ split, the core repo has nothing else. It is specified now so that it does not g
   `core/web/packages/*/package.json` `version` equals `version.Version` (the in-repo `file:` dependencies
   make the lockstep check of §12.6 a no-op, so this is what keeps the shell's reported version, 07 §7.5.2,
   equal to the Go constant). Books' `MinCoreVersion` ≤ `version.Version` is a **root-side** test in
-  `internal/books` (listed in 09 S0's classification table), because a core-owned script cannot read an
+  `internal/books` (listed in 09's R1 classification table), because a core-owned script cannot read an
   app's manifest from the `core/` export or after the split (MOD4-13). The `core-checkpoint`
   job (§12.4.1) refuses to record `refs/core-checkpoints/v0.Y.Z` on a commit whose constant is not
   `0.Y.Z`. Post-split, step 1 of
@@ -423,44 +414,6 @@ split, the core repo has nothing else. It is specified now so that it does not g
   modified) because it records each module's floor where operators and the shell can read it
   (`/api/core/v1/modules`, backup manifests), not as a second dependency resolver.
 
-### 12.4.4 Hardening cutovers (post-S10)
-
-The extraction is representation-neutral (03 introduction; 02 decision 13, A-2), so the hardening of ABO's stored
-representations is not an extraction stage. It is three named **hardening cutovers**, H1–H3 as 09 §9.13 names and stages them, each a one-way, floored
-cutover on 02 N15's machinery (mandatory pre-migration checkpoint, per-owner level guard, the cutover release as
-its rollback floor):
-
-| Cutover | What it changes for ABO | Until it runs (as at HEAD) |
-|---|---|---|
-| **H1 — identity cutover** | sessions and one-time tokens stored hashed; existing sessions, invites and other one-time tokens are **deleted**, not rehashed, so raw tokens in older archives are dead against the live store (05-authn §11.2 owns this; SEC10-7); `mck_` keys; roles and keys hold native scopes. The scopes a principal held only through `LegacyAmbientScopes` (`core:self`, `core:metrics.read`, `books:reading`) are written into a role iff the role is not `Confined()`, and into a key iff the key's **effective** S4–S10 set before Ambient (the owner's role atoms ∩ the key's atoms) is not `Confined()`, never from its owner, so a worker-scoped key stays confined and every principal's answers are unchanged across H1 (05-rbac §6.3 owns the rule; R10-2, SEC10-1) | raw `sess:` rows and HEAD's one-time tokens; `abk_` keys and roles holding legacy atoms, with namespaced scopes as an API-level mapping (`rbac.LegacyAtom`) |
-| **H2 — secrets cutover** | the plaintext blob secrets are encrypted into `c/secrets/` and their blob fields removed; HEAD's four encrypted secret rows move there too (05-config §1.12.5 decides this, 09 §9.13 cites it; DATA9-8) | plaintext blob secret fields; the four secrets HEAD already encrypts stay as they are |
-| **H3 — auth-precedence cutover** | an operator value that enables auth takes effect over a stored `false`; a disabling value keeps HEAD's precedence; the auth-disabled principal can no longer store `enable_auth` (05-config clears `HEADAuthOffWritable` on that key only; the Basic gate keys keep HEAD's auth-off write rule until the settings cutover, which precedes or ships with H3, and the three gate keys lose it together, 05-config §1.3.1; SEC10-5, SEC10-6); nothing else moves: every other `BelowStored` legacy flag (the Basic gate's among them, which compose always sets) keeps HEAD's precedence until a separate, owner-decided cutover (R9-5, SEC9-2, SEC9-7) | HEAD's precedence: the stored value wins |
-
-**Their real reach (R9-11; SEC9-3, DATA9-8).**
-
-- **Level.** Each cutover raises the level of **every** owner whose rows it rewrites: `books` for every rewrite of
-  a books legacy family (H1's identity rows, H2's blob fields, H3's flags), plus `core` when it changes `c/` rows. The
-  guard therefore refuses the store on every older build, the pre-guard builds through the legacy projection. The
-  first cutover **that raises `core`** also lifts books' `{core, 0}` legacy restore bound (09 §9.13); one that raises
-  only `books` does not (DATA10-7). The guard models each owner it raises.
-- **What is deleted.** H1 and H2 rewrite the live store, then delete **every** pre-cutover checkpoint of the store
-  and every old Pebble file, not only their own attempt's, through a forced compaction in the cutover boot, so no raw
-  token (H1 stores some in **keys**, `sess:<raw>`) and no plaintext secret survives in an SST, a WAL segment or any
-  checkpoint (R10-11, DATA10-6; 05-storage §5S.3.13 owns the list of what a cutover clears).
-- **What is not.** Archives taken before the cutover still hold the old representation. The done-checks say so
-  plainly. API keys are stored as SHA-256 hashes at HEAD, so an old archive exposes no usable key; the release note,
-  whose one text per cutover 09 §9.13 owns and every other file quotes, says what an old archive still holds
-  (SEC10-7). Quoted verbatim from 09 §9.13:
-  - **H1:** "Backups made before this release still contain sign-in tokens. They no longer work against this server, but restoring such a backup brings them back until they expire; delete those backups or take new ones."
-  - **H2:** "Backups made before this release still contain plaintext third-party secrets. Delete them or take new ones; if the backup directory may have been exposed, rotate those secrets."
-  - **H3:** "With authentication off, Settings can no longer turn it on; set `ENABLE_AUTH=true` or `ABO_CORE_AUTH_MODE=required` and restart."
-
-They are not split criteria: neither T nor SC1–SC10 waits on them, and each may run before or after the split.
-A cutover that runs after the split is an ABO change to its legacy store implementations plus native
-behaviour core already ships, released through ABO's own release; the `legacy` identifiers it stops using are
-deleted under §12.4.2's `legacy/` rule. Their order, measured inputs and release notes are planned when they
-are scheduled; 14 K25 states the residual risk until each has run.
-
 ## 12.5 Release process (core repo, after the split)
 
 No goreleaser: core ships no binary. Steps (a `make release VERSION=vX.Y.Z` target in the core repo,
@@ -468,8 +421,8 @@ No goreleaser: core ships no binary. Steps (a `make release VERSION=vX.Y.Z` targ
 
 1. Assert `version.Version == "X.Y.Z"` (§12.4.3); then `core_api_gate.py --base <previous tag>` and
    `gorelease -base=<previous tag> -version=vX.Y.Z` from the pinned tools module — fails if the requested
-   version understates the API change of the SDK; a suggested major caused only by `kernel/` or `legacy/`
-   lines is overridden (post-split form of SC1, R6-3).
+   version understates the API change of the SDK; a suggested major caused only by `kernel/` or `examples/`
+   lines is overridden (post-split form of SC1).
 2. `scriv collect --version X.Y.Z` with the same `scriv.ini` shape as this repo
    (`changelog.d/scriv.ini:8-21`: Markdown, Keep-a-Changelog categories) → `CHANGELOG.md`; PR; merge.
 3. `git tag -a vX.Y.Z -m "mediacore vX.Y.Z"` on the merge commit (signed if the owner's key is configured);
@@ -723,7 +676,7 @@ and after (03 §3.2 item 2), so a rollback is a `replace` line plus a directory,
    GitHub Release tarballs with URL specifiers (§12.5 step 6), and the Actions-minutes note in §12.7. Free
    either way (D9), but only the public repo keeps npm installs token-free. 14 Q-B.
 3. Thresholds in SC1 (3 checkpoints, 6 weeks) and SC5 (70 %/60 %) are proposals; the owner may tune them
-   before S0 wires the readiness report, not after. 14 Q-G.
+   before R1 wires the readiness report, not after. 14 Q-G.
 
 (Round 1 closed the former item 4: `examples/hello` is a package in the core module, not a third
 `go.mod`; §12.3 SC3.)
@@ -862,3 +815,5 @@ Plan-phase consistency:
 
 - PC-5 — history line R9-11: the "re-issue keys" clause marked as dropped by SEC10-7; no key re-issue is asked.
 - PC-10 — §12.6 and §12.8.2 step 10: a local `go.work` is allowed only after step 10 rewrites CLAUDE.md's `go.work` guidance; until then CLAUDE.md forbids `go work init` in a checkout.
+
+- D10–D12 revision (2026-11-04): §12.4.4 (hardening cutovers H1–H3) deleted; the hardened design lands directly in R2. `legacy/` removed from SC1's definition, the apidiff filter, its fixture test, the post-split override, SC5's coverage exclusion, §12.4.1 and release step 1; §12.4.2's legacy-member lifetime and the pointer to ABO's compatibility window deleted (no window, D10). SC1 counts checkpoints from R2's and names the store interfaces with their importers. Stage references re-keyed to the releases R0–R3 (S0, S1, S2, S2b → R1; S9's hello web build → the shell's landing, 07 §7.19 step 4).
