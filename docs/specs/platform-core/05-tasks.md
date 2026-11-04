@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.5.1 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -489,7 +489,8 @@ ref in one write set overlaps some ref in the other, where `{M,K,""}` overlaps e
 preview/audit), not gated — the same as today (`dispatcher.go:163-178`); an open item asks whether
 readers of consistency-sensitive reports should gate. A run whose `ConcurrencyKey` is held stays
 queued (Gate 3, `dispatcher.go:143-153`); zombies keep their key until their goroutine exits
-(current D6).
+(current D6). The kernel-registered data-migration kinds (5T.3.12) are outside this rule: their
+`Effects` are attribution-only and they serialise only on their `ConcurrencyKey` (COR4-5).
 
 **Ref locks (COR-7).** The dispatch gate sees only write sets known at enqueue. Work that learns its
 subjects while running (an RSS sync deciding what to grab, a search task, an import of one download
@@ -605,7 +606,7 @@ type Approval struct {
 | Action | Who | Fail mode |
 |---|---|---|
 | list/get defs and runs | `Perms.View` per def; rows/results of runs the caller may not view are omitted (current per-viewer filter, `internal/diagnostics/service.go:138-150`, `sysinfo` `OperationReadCheck`) | closed |
-| start | `Perms.Start`, plus the route floor `rbac.AnyAuthenticated` as 05-rbac defines it (a non-`Confining` scope; a confined credential reaches a definition only when `Perms.Start` names its scope explicitly, SEC-3). `Perms.Start` may not be satisfiable by a view-class scope unless the definition sets `StartableByViewers` (SEC-9: today's `scan.trigger` floor exists because a viewer could otherwise start a `library.view`-only def, `opsv3/handler.go:236-246`; `bulk-apply-preview` is one, 4 h timeout, `internal/server/bulk_apply_preview.go:269,278`). Adapted legacy defs declaring only `library.view` translate to `rbac.AllOf(books:scan, books:view)`, which keeps the floor | closed |
+| start | `Perms.Start`, plus the route floor `rbac.AnyAuthenticated` as 05-rbac defines it (a non-`Confining` scope; a confined credential reaches a definition only when `Perms.Start` names its scope explicitly, SEC-3). `Perms.Start` may not be satisfiable by a view-class scope unless the definition sets `StartableByViewers` (SEC-9: today's `scan.trigger` floor exists because a viewer could otherwise start a `library.view`-only def, `opsv3/handler.go:236-246`; `bulk-apply-preview` is one, 4 h timeout, `internal/server/bulk_apply_preview.go:269,278`). An adapted legacy def's declared atom translates through `Catalog.LegacyReach(atom)` (05-rbac §6.3, R4-3), not the atom's expansion, so a def declaring `settings.manage` (the old op-def default) requires `core:admin`; adapted legacy defs declaring only `library.view` translate to `rbac.AllOf(books:scan, books:view)`, which keeps the floor | closed |
 | cancel | the run's actor, or `Perms.Cancel`, or `core:tasks.manage` | closed |
 | approve / decide (`awaiting_decision`) | `Perms.Approve` (decide on a run interrupted under ResumeAsk: `Perms.Approve` if set, else `Perms.Start`) **and** a verified method, the same rule as 05-rbac §4.10 (SEC-24): an interactive session, a sign-in through an app-level authenticator extension whose `MethodSpec.Interactive` is true (only `app.Options.Authenticators` may set it, 06 §6.4.5, SEC2-16; ABO's Cloudflare Access is one; a module's compat `Registrar.AuthMethod` never is), or an API key whose scopes **name** the required scope explicitly (not via `core:admin` or another implying scope). Refused: a legacy full-scope key (`LegacyFullScope`), a delegated session (`MethodSessionDelegated`), and a forwarded header, which is never identity (current rule, `opsv3/runs.go:395-410`) | closed |
 | pause/resume executor, edit schedules | `core:tasks.manage` | closed |
@@ -1044,8 +1045,8 @@ overwritten by the rewrite, and the rewrite blocks no module task for its durati
 
 ```go
 // Stores is everything the executor and the scheduler persist. The kernel
-// builds it once at P4c (06 §6.5.1): from app.Options.LegacyStores.Tasks when
-// the app supplies one (ABO: books code, 5T.6.2), else NativeStores over
+// builds it once at P4c (06 §6.5.1): from module.Manifest.LegacyStores.Tasks
+// when a module supplies one (ABO: books code, 5T.6.2), else NativeStores over
 // c/tasks/ (5T.6.1). Core code reaches runs, clocks and the pause marker only
 // through these interfaces and never names a stored key.
 type Stores struct {
@@ -1054,12 +1055,14 @@ type Stores struct {
 	Pause  PauseStore
 }
 
-// LegacyStoresFunc is the type of app.Options.LegacyStores.Tasks (06). The
-// kernel calls it once at P4c with the declaring owner's OWN LegacyRange over
-// its own claims: no grant is involved (R4-1). It is called also while that
-// module is disabled, so held runs stay readable (5T.3.11). The returned
-// stores read and write only inside r.
-type LegacyStoresFunc func(r storage.LegacyRange) (Stores, error)
+// LegacyStoresFunc is the type of module.Manifest.LegacyStores.Tasks (06
+// §6.4.2). The kernel calls it once at P4c with the declaring module's OWN
+// handles (storage.LegacyHandles: its Legacy range over its own claims and its
+// extension family), as for every other LegacyStores constructor: no grant is
+// involved (R4-1). It is called also while that module is disabled, so held
+// runs stay readable (5T.3.11). The returned stores read and write only inside
+// h.
+type LegacyStoresFunc func(h storage.LegacyHandles) (Stores, error)
 
 // NativeStores is core's implementation over the c/tasks/ keyspace (5T.6.1).
 func NativeStores(ks storage.Keyspace) Stores
@@ -1324,7 +1327,7 @@ batch. `TestNativeStores_RoundTrip` and `taskstest.StoreSuite` cover it.
 
 ### 5T.6.2 Books' legacy store (ABO code, not core)
 
-ABO passes `app.Options.LegacyStores.Tasks` (06), implemented by an ABO package below the books
+The books module passes `module.Manifest.LegacyStores.Tasks` (06 §6.4.2, §6.11.6), implemented by an ABO package below the books
 composition root (`internal/books/taskstore`, name open; 04, R4-5). It implements `tasks.Stores` with
 HEAD's own ops storage code over books' own claims — the families 05-storage §5S.9.1 rows 9, 11, 12, 13
 and 13a list — in HEAD's format. Nothing moves into core and nothing is re-implemented there, so no
@@ -1366,7 +1369,8 @@ row, carrying `legacy_fp` = SHA-256 of the row's bytes as written. On read:
 
 **One writer per family; one scheduler per kind (DATA4-5).** From T0+T1 every runtime write of these
 families goes through books' store — HEAD's per-family staging functions — enforced by an ABO archtest,
-`TestOpsFamiliesWrittenOnlyByTaskstore` (successor of `TestOpsV2RowWritesGoThroughStageOpRow`,
+`TestOpsFamiliesWrittenOnlyByTaskstore`, the ops instance of 09's umbrella ratchet
+`TestLegacyFamiliesWrittenOnlyByLegacyStores` (09 §9.2.1, §9.2.3 rule 4; successor of `TestOpsV2RowWritesGoThroughStageOpRow`,
 `raw/08` §7): the only other writers are books' legacy steps in P4b and the v1 carve-outs below. This
 replaces round 3's storage-enforced `Exclusive` grant with a package-structure rule checked in ABO CI
 (SIMP4-2 cost (b)). ABO's `internal/scheduler` keeps ticking the 38 `TaskDefinition`s from T0+T1 to T7,
@@ -1497,7 +1501,7 @@ check that no stored row strands. The last column is this file's input to 09's b
 
 | Batch | Content | Count | Gate to finish | Behaviour change / rollback |
 |---|---|---|---|---|
-| T0 + T1 (one release) | `core/tasks` + executor + scheduler land; ABO adapter `internal/opsbridge` wraps every v2 `OperationDef` as a core Task with `LegacyDefID` = its def ID (`Run(ctx, params, Reporter)` called with a `Reporter` implemented over `RC`; legacy `registry.RunItems` re-implemented over `tasks.RunItems` with `Fixed(n, "legacy Concurrency")` from its non-zero `Concurrency`, or `Sequential("legacy zero Concurrency")`); `/api/v3/ops` aliases; books' legacy `tasks.Stores` (`internal/books/taskstore`: HEAD's ops store code and v1 history reader behind the interfaces, 5T.6.2) passed as `app.Options.LegacyStores.Tasks`, with every runtime write of the ops families routed through it; ABO's scheduler keeps ticking the 38 `TaskDefinition`s through `Deps.Tasks` and the store's `ClockStore` until T7; the readiness core of `health` with `books.memdb` (5T.4 step 2); the books-side legacy-stream bridge (5T.4 step 3) | all 233 defs run on core | op-ID ledger green; resume/cancel/shutdown suites green on core; `taskstest.StoreSuite` green on both implementations; `TestOpsFamiliesWrittenOnlyByTaskstore`, `TestOneSchedulerPerKind`, `TestDispatch_WaitsForReadySignal`; G5 rollback test (5T.9) | yes: executor swap (CPU budget, cancellation fix) over the **same** stored format; no level step, no Teach build; rollback = binary swap under the G5 rules of 5T.6 |
+| T0 + T1 (one release) | `core/tasks` + executor + scheduler land; ABO adapter `internal/opsbridge` wraps every v2 `OperationDef` as a core Task with `LegacyDefID` = its def ID (`Run(ctx, params, Reporter)` called with a `Reporter` implemented over `RC`; legacy `registry.RunItems` re-implemented over `tasks.RunItems` with `Fixed(n, "legacy Concurrency")` from its non-zero `Concurrency`, or `Sequential("legacy zero Concurrency")`); `/api/v3/ops` aliases; books' legacy `tasks.Stores` (`internal/books/taskstore`: HEAD's ops store code and v1 history reader behind the interfaces, 5T.6.2) passed as `module.Manifest.LegacyStores.Tasks`, with every runtime write of the ops families routed through it; ABO's scheduler keeps ticking the 38 `TaskDefinition`s through `Deps.Tasks` and the store's `ClockStore` until T7; the readiness core of `health` with `books.memdb` (5T.4 step 2); the books-side legacy-stream bridge (5T.4 step 3) | all 233 defs run on core | op-ID ledger green; resume/cancel/shutdown suites green on core; `taskstest.StoreSuite` green on both implementations; `TestOpsFamiliesWrittenOnlyByTaskstore`, `TestOneSchedulerPerKind`, `TestDispatch_WaitsForReadySignal`; G5 rollback test (5T.9) | yes: executor swap (CPU budget, cancellation fix) over the **same** stored format; no level step, no Teach build; rollback = binary swap under the G5 rules of 5T.6 |
 | T2 | 34 `MaintenanceJob`s → native `books.maintenance.*` Tasks (mechanical: `Run(ctx, JobStore, ProgressReporter, dryRun)` `internal/maintenance/job.go:498` → `TaskSpec.Run(rc, p)`; `Policy()` → `Common`); their v1 checkpoint writers move to `rc.Checkpoint` and their v1 result and summary writers to the run's result (`TestLegacyOpsWriters` ratchet) | 34 | `internal/maintenance` deleted | no, when kind, params and effects are unchanged (binary swap); a v1-checkpoint → `rc.Checkpoint` move resumes from zero once after a rollback, listed per job in 09 §9.2.1's rollback table (OPS4-11) |
 | T3 | 24 repairs fixers → `tasks.Fixer`; `repairs.plan/apply` removed | 24 (+2 defs) | Fixer conformance suite | no (binary swap) |
 | T4 | Generic ops → `core.*` (activity-log cleanup/compaction family, backups prune, db optimize/census, temp/trash/reports cleanup, throttle reset, tombstone cleanup, retention-and-hygiene, metrics TTL sweep): the `generic` class rows of `raw/06` §6, each re-checked in [04-package-mapping](04-package-mapping.md) (some, e.g. `opchange-book-index-rebuild`, are book-bound despite the class) | ≤ 24 | owner per kind recorded in 04 | no; kind renames ride `FormerKinds` (binary swap) |
@@ -1552,7 +1556,7 @@ nightly rehearsal.
 | `taskstest.StoreSuite` over `NativeStores` (core) and over books' legacy store with HEAD fixtures **(ABO)**: CAS transitions, commit-time preconditions, one row per run, per-run sequences, terminal-only `Prune`, every write staged into the caller's batch (a discarded batch leaves nothing) | R4-1, SIMP4-2 |
 | `TestNativeStores_RoundTrip` (every `RunStore`, `ClockStore` and `PauseStore` method over `c/tasks/`; `hello.count` on a zero-module `coretest`) | SIMP4-3 |
 | `TestLegacyStoreMissingFailsBoot` (a store recorded as legacy booted without `LegacyStores.Tasks`, and the reverse → `ErrLegacyStoreMissing`) | R4-1 |
-| `TestOpsFamiliesWrittenOnlyByTaskstore` **(ABO)** (AST: every runtime write of the ops, clock and pause families is inside books' store; legacy steps and the v1 carve-outs excepted) | R4-1, DATA4-5 |
+| `TestOpsFamiliesWrittenOnlyByTaskstore` **(ABO)**, the ops instance of the umbrella `TestLegacyFamiliesWrittenOnlyByLegacyStores` (09 §9.2.1) (AST: every runtime write of the ops, clock and pause families is inside books' store; legacy steps and the v1 carve-outs excepted) | R4-1, DATA4-5 |
 | `TestOneSchedulerPerKind` **(ABO)** (no kind has both a core `Schedule` and an ABO scheduler entry; the ABO scheduler's clock writes go through `ClockStore`) | DATA4-5 |
 | `TestDispatch_WaitsForReadySignal` (S5 build: a `books.*` run that reads books is not dispatched before `books.memdb` reports Up) | COR4-8 |
 | `TestLegacyFormat_RoundTripWithHEAD` **(ABO)** (fixture store from HEAD: a HEAD-written run is resumed by core; a core-written run, checkpoint, clock and stamp are resumed and honoured by HEAD's reader; then core again over the same store) | G5, R4-1 |
@@ -1773,3 +1777,7 @@ Round 4:
 - FE4-10 — bridge test is `TestS5Bridge_LegacyStreamsShowCoreRuns`, worded for a `LegacyDefID` kind.
 - OPS4-6 — prev-binary one-format tests are in the root `make ci` requirement.
 - OPS4-11 — checkpoint-shape and unknown-kind rollback consequences point to 09 §9.2.1's table.
+
+Integration pass (round 4):
+
+- integration pass (round 4): §5T.3.13 and 5T.6.2/T0+T1: `module.Manifest.LegacyStores.Tasks` (never `app.Options`), `LegacyStoresFunc` takes `storage.LegacyHandles` like every other constructor; dispatch conflict rule excludes the kernel-registered data-migration kinds; adapted op defs translate their atom through `Catalog.LegacyReach` (`settings.manage` → `core:admin`); `TestOpsFamiliesWrittenOnlyByTaskstore` is an instance of 09's umbrella ratchet.

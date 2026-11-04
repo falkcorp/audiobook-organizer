@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -46,7 +46,7 @@ app starts:
 | AI usage ledger and monthly cap; notify inbox, per-user subscriptions, personal channels, templating | [05-ai](05-ai.md), [05-notify](05-notify.md) |
 | Facade-only members of built packages: key and route machinery in `auth`/`httpapi` (`PurposeFacade`, query-key extraction, `FacadeGroup`) and the auth feed token | [05-authn](05-authn.md) §3.5, [05-http-api](05-http-api.md) §3.6 |
 | Per-family cutover of the ABO families core services use (users, sessions, API keys, roles, ops history and runs, the clock and pause keys, the config blob and secret rows, system log rows, import roots, AI batch jobs, provider throttle rows) to native core keyspaces | [02](02-decision-record.md) N15, [05-storage](05-storage.md) |
-| Members of built packages that only that cutover can use: storage grants (`Grant`, `GrantMode`, `Exclusive`) and the served-run preconditions; backup encryption; the seed-role merge diff | [05-storage](05-storage.md) §5S.3.13, [05-backup](05-backup.md) B3, [05-rbac](05-rbac.md) §4.8 |
+| Members of built packages that only that cutover can use: storage grants (`Grant`, `GrantMode`) and the served-run preconditions; backup encryption; the seed-role merge diff | [05-storage](05-storage.md) §5S.3.13, [05-backup](05-backup.md) B3, [05-rbac](05-rbac.md) §4.8 |
 
 The Build column of 03 §3.3 is the authoritative list of deferred packages and is re-checked at every
 stage gate. Deferral also applies to members of built packages (03 §3.4): each file lists them under a
@@ -147,3 +147,7 @@ Round 4 (dispositions in `docs/plans/platform-core/reviews/spec-round-4-disposit
 - SIMP4-1 — "Build scope": deferred members listed under `Deferred-build members` headings; the check's list is generated from every heading.
 - OPS4-5 — decisions paragraph: N14's floor release and stepping-stone release named distinctly.
 - OPS4-7, MOD4-8 — decisions paragraph: Q-I's requirement is a set of named required checks.
+
+Integration pass (round 4):
+
+- integration pass (round 4): "Build scope": deferred cutover members are `Grant` and `GrantMode` (`Exclusive` deleted).

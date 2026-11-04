@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/01-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: d2956830-373c-4b12-9504-ccace49f7f6d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -103,7 +103,7 @@ moves platform machinery, not every route.
 | **capability contract** | A narrow Go interface in `core/integrations/*` (AI, download, indexer, metadata, notify). |
 | **keyspace** | A prefix of the shared Pebble database handed to one owner: `c/<subsystem>/` for core, `m/<module>/` for modules. |
 | **legacy claim** | A module's declaration that it owns pre-existing un-namespaced key families (ABO's 258), so they stay in place. |
-| **store interface** | The SDK interface through which a core service persists its state (identity, roles, runs, config overrides, the log journal, import roots, AI jobs, provider holds; 03 §3.3 "Store interfaces"). Core ships a **native implementation** over its own `c/<subsystem>/` keyspace, used by new apps and `hello`; an app with pre-core data supplies a **legacy implementation** over its existing keys (for ABO, books code), so core holds no app key name and no storage grant during the extraction (02 decision 13, R4-1). |
+| **store interface** | The SDK interface through which a core service persists its state (identity, roles, runs, config overrides, the log journal, import roots, the full-text dirty set, AI jobs, provider holds, integration instances, notification rules; 03 §3.3 "Store interfaces"). Core ships a **native implementation** over its own `c/<subsystem>/` keyspace, used by new apps and `hello`; an app with pre-core data supplies a **legacy implementation** over its existing keys on `module.Manifest.LegacyStores` (for ABO, books code), so core holds no app key name and no storage grant during the extraction (02 decision 13, R4-1). |
 | **extension family** | The books-owned family, never read by an older build, in which ABO's legacy store implementations keep native-only data (namespaced scopes, hashed sessions, native one-time tokens) instead of adding it to legacy rows. Each record carries a hash of the legacy row it extends and is suspended until an admin re-confirms it when an older build changed that row (02 decision 13). |
 | **cutover** | The later, per-family, one-way step that moves a family to a native core keyspace and deletes the legacy rows; outside the extraction, checkpointed, behind the per-owner level guard; the only step in which core reads an app's rows, so storage grants land with it; its rollback floor is the cutover release itself (02 N15). |
 | **task** | A durable unit of background work in `core/tasks` (formerly "operation"/"op"/"job"); kind `<module>.<name>`. |
@@ -152,3 +152,7 @@ Round 4 (dispositions in `docs/plans/platform-core/reviews/spec-round-4-disposit
 - OPS4-11 — goal 3 refers to the one cost-and-consequence table of 09 §9.2.1 instead of restating two costs.
 - OPS4-5, DATA4-18 — glossary: "minimum-upgrade-from release" replaced by "floor release" and "stepping-stone release", defined by what the store has applied; goal 3 uses both.
 - DATA4-20 — non-goals list the families core services use (config blob and secret rows, clock and pause keys, system log rows), not "settings" and "activity".
+
+Integration pass (round 4):
+
+- integration pass (round 4): glossary "store interface" lists every interface of 03 §3.3 (dirty set, integration instances, notification rules) and names `module.Manifest.LegacyStores`.

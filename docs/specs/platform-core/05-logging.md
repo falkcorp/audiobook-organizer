@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -325,7 +325,8 @@ forward the SDK's raw values — the reason the sink exists. `logr` remains in t
 
 ## 5. Where the activity log lives (decision)
 
-ABO's "activity log" is four things sharing one store and one page; the platform splits them by consumer:
+ABO's "activity log" is four things sharing one store and one page; the platform splits them by consumer
+(ABO-migration table: the key families named here are books', 05-storage §5S.9.1):
 
 | Today | Evidence | Goes to | Why |
 |---|---|---|---|
@@ -383,7 +384,7 @@ type Schedules struct { // section core.log.schedules
   at 09 S5 (`logjournal` imports `tasks`).
 - **ABO's store (R4-1).** Core holds no ABO row shape and no storage grant for the journal. The books module
   supplies its own `JournalStore` through `Manifest.LegacyStores.Logs` (06), ABO code in the ABO repo over ABO's system
-  log family (`syslog:<RFC3339Nano>:<source>`, `internal/database/pebble_store_activity.go:20-37`), passed in at
+  log family (05-storage §5S.9.1; `internal/database/pebble_store_activity.go:20-37`), passed in at
   S5 when `logjournal` lands. Its contract:
   - `Append` writes each record as a row of exactly HEAD's shape (source, level, message, time), which every
     older build reads as its own system log. The record's remainder that HEAD's shape cannot hold (module,
@@ -403,7 +404,7 @@ type Schedules struct { // section core.log.schedules
   has one writer and one pruner. **Rollback:** an older build reads every journal record written by S5 or later
   as its own system-log row and prunes it itself; rows it writes during a rollback are served after
   roll-forward. Logging adds no rollback cost and no stated consequence.
-- User data in system log lines: HEAD serves the system activity log (`syslog:` rows) to `settings.manage` but
+- User data in system log lines: HEAD serves the system activity log to `settings.manage` but
   drops lines that name another user's data, and blanks their user ID, unless the caller also holds
   `users.manage` (`activity.NamesOthersUserLog`, `internal/server/handlers/system/handler.go:444-458`). The query
   route and the live tail keep that rule for legacy and native records alike: a record the books-registered
@@ -613,3 +614,7 @@ Round 4:
 - MOD4-5 — §11 stage 1 split: S2 r3 does the process defaults and file output only (the activity `Writer` fed by a books tap); line parsing, `StandardLogger`'s system-log writes and HEAD's pruner are removed in the S5 release that starts the journal; the "journal shows ABO records" done-check moves to S5.
 - MOD4-6 — §11 stage 1: `internal/logger/retention.go` stays in ABO's façade until the S5 release, then is deleted.
 - MOD4-12 — §11 item 5: `internal/logger/logtest` stays in ABO; `coretest` has its own injected capture handler.
+
+Integration pass (round 4):
+
+- integration pass (round 4): §5: ABO key names (`syslog:`) removed from the store contract and user-data bullet; the HEAD→core table labelled as an ABO-migration table.

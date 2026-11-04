@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.5.1 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -265,6 +265,27 @@ type Deps struct {
 	StateDir *os.Root       // bootstrap token file (os.Root-confined)
 }
 
+// Options is the app's compile-time auth configuration, passed as
+// app.Options.Auth (06 §6.4.5, landing at S4). The zero value is what new
+// apps and hello get.
+type Options struct {
+	LegacyKeyPrefixes []string       // old API-key prefixes the key authenticator recognises (§4.1; ABO ["abk_"])
+	InviteLinkForm    InviteLinkForm // InviteLinkFragment (zero value) or InviteLinkPath (§4.13; ABO InviteLinkPath from S4 to S9)
+	// Defaults of the app's own auth config keys (§8); operator layers and
+	// overrides still win.
+	DefaultCookieName          string // core.auth.session.cookie_name; "" = "<AppID>_session" (ABO "session_id")
+	DefaultCookieNoHostPrefix  bool   // true sets core.auth.session.cookie_host_prefix's default to false (ABO true)
+	DefaultDisabledAllowRemote bool   // core.auth.disabled_allow_remote's default (§4.11; ABO true, SEC4-8)
+}
+
+// InviteLinkForm is the shape of invite links auth mints (§4.13, FE4-2).
+type InviteLinkForm uint8
+
+const (
+	InviteLinkFragment InviteLinkForm = iota // "/invite#token=…" (default)
+	InviteLinkPath                           // "/invite/<token>", the pre-shell SPA's form
+)
+
 // Users. Every method that acts on another user takes the actor and enforces
 // 05-rbac §4.7 rule 5 (dominance) inside the service (SEC-4).
 func (s *Service) CreateUser(ctx context.Context, actor *Principal, in NewUser) (*User, error)
@@ -374,7 +395,7 @@ type RestoreDeps struct {
 // after the post-restore step (06 write rule, DATA3-18), from 09 S4 r2:
 // seed the _system user; mint the bootstrap token and, when enabled, the
 // start-up read-only key (§4.6, COR4-13); on the boot that follows a boot
-// without the journal duty or a foreign open, revoke every session and
+// without the auth duty or a foreign open, revoke every session and
 // native one-time token issued before that interval (§4.3, DATA4-14,
 // SEC4-9); and run Store.Reconcile, the store's own open-time maintenance
 // (ABO: HEAD's verified-email reconcile and one-shot key expiry stamp, §11;
@@ -678,8 +699,8 @@ no permission; for `OwnAuth` routes, which stage 13 skips, `CheckCredentialFor` 
 - **Re-login both ways (DATA4-14, SEC4-9).** Native sessions issued before a rollback are invisible to
   the older build, which can neither list nor revoke them (`internal/server/handlers/auth.go:540-570`),
   so a session the user ended there (a lost device, a "log out") would come back on roll-forward. The
-  first boot that follows a boot without the `journal` duty or a foreign open (05-storage §5S.3.7; the
-  boot on which 05-backup appends a `gap` line) therefore revokes, in `BootWrites`, every session and
+  first boot that follows a boot without the `auth` duty or a foreign open (05-storage §5S.3.7 served
+  ledger; 09 §9.2.1 row 2) therefore revokes, in `BootWrites`, every session and
   native one-time token created before that interval (`Store.RevokeSignInsBefore`, one batch,
   journaled `session.revoked` and audited `core.session.revoke_after_rollback`). A rollback then costs
   one sign-in on the way back as well.
@@ -791,7 +812,7 @@ Core owns it; nothing refers to an app, a module or `users.manage`.
   today's behaviour for that known trust set (`internal/oauth/resolve.go:97`) under the
   admin/password guard. The verified-email displacement rule (`resolve.go:177-205`) is kept under
   the same guard and audited (`core.identity.displace`).
-- Admission: provider allowlist of emails/domains, plus invite grants (`inviteallow:` today) via the
+- Admission: provider allowlist of emails/domains, plus invite grants (ABO's invite allow-list rows today, §11) via the
   `ExtraAllowed` hook (`internal/oauth/oauth.go:63-68`); new users get the provider's
   `default_role` (must exist and be assignable without escalation: it may not contain
   `core:admin`, and the key is `ProtectAdmin`).
@@ -890,7 +911,7 @@ The *arr facade's key purpose and `X-Api-Key`/`apikey` extraction are deferred-b
 - `disabled` refuses to start when a listener is bound to a non-loopback address **or** any trusted
   proxy or tunnel connector is configured (a local proxy makes remote callers look local, SEC-30),
   unless `core.auth.disabled_allow_remote=true` (today: a warning only, `server_lifecycle.go:1847`).
-  An app sets that key's default through `auth.Options`, as it does the cookie name: new apps keep
+  An app sets that key's default through `auth.Options.DefaultDisabledAllowRemote` (`app.Options.Auth`, 06 §6.4.5), as it does the cookie name: new apps keep
   `false`; **ABO's default is `true`** (SEC4-8), because a Docker container always listens on a
   non-loopback address and every ABO install running `enable_auth=false` (Basic-only behind the compose
   `BASIC_AUTH_*`, or LAN-only) would otherwise crash-loop at S4 r2. While `disabled` runs
@@ -1231,7 +1252,7 @@ ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `oauth
 |---|---|
 | `TestSession_TokenNeverStored` | after `IssueSession`, no storage value or key contains the token bytes |
 | `TestSessions_ListNeverReturnsToken` | JSON of `GET /me/sessions` has no field equal to any live token (regression for `handlers/auth.go:513-537`) |
-| `TestSession_LegacyRawULIDCookieUpgradesOnUse` | a legacy `sess:` cookie created before the cut-off (epoch, status, revoked, expiry checked) yields a hashed `mcs_` session, a new cookie, and the legacy row deleted (SEC-19) |
+| `TestSession_LegacyRawULIDCookieUpgradesOnUse` | a legacy session cookie (raw ULID, a legacy session row) created before the cut-off (epoch, status, revoked, expiry checked) yields a hashed `mcs_` session, a new cookie, and the legacy row deleted (SEC-19) |
 | `TestCookie_SiblingAppCookieDoesNotBlockLogin` | two apps on one host: distinct default cookie names; a foreign or stale cookie on a Public route → anonymous + cleared (SEC-11, FE-6) |
 | `TestStage12_InvalidKeyPlusValidSessionIs401` | stop rule (SEC-12) |
 | `TestCredentialFormat_ChecksumAndPrefix` (+ `FuzzParseCredential`) | prefix, length, CRC; malformed → `ErrNoCredential` vs `ErrInvalidCredentials` correctly |
@@ -1242,7 +1263,7 @@ ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `oauth
 | `TestOneFormat_LegacyRowsReadByPrevBuild` | (ABO, in `make ci` with `prev` built from `PREV_REF` and cached by tag, OPS4-6) rollback cells against the previous release's real binary on a store written by this build: a native key's legacy row holds only admitted legacy atoms (no namespaced string) or status `inactive`, and grants at most those atoms there; a disabled, revoked and `needs_confirmation` key is refused there (`inactive` / `revoked`); a user disabled or epoch-bumped here is refused there; roll forward: nothing was widened, and an extension whose row prev changed is suspended |
 | `TestAPIKey_StoredScopesNeverEmpty` | property test over ABO's legacy store: every legacy key row written for a new key has a non-empty `scopes` list of admitted legacy atoms only, or status `inactive`; never a namespaced string (SEC-1, R4-1, SEC4-3) |
 | `TestSession_NativeOnlyRecord` | no session issued by this build appears in the app's legacy session rows; a legacy session created after the store's cut-off is refused by the upgrade-on-use fallback (§11) |
-| `TestPostRestoreSurvivesRestart` | restore, restart: the re-revoked key, a restored legacy `sess:` cookie and a restored legacy invite are refused, and their legacy rows are gone (SEC2-3, DATA2-4) |
+| `TestPostRestoreSurvivesRestart` | restore, restart: the re-revoked key, a restored legacy session cookie and a restored legacy invite are refused, and their legacy rows are gone (SEC2-3, DATA2-4) |
 | `TestReplacedStore_RunsPostRestoreHook` / `TestReplacedStore_TruncatedJournalKeysNeedConfirmation` | store file-copied back to an older generation (no staged restore): the next boot re-applies the verified tail and runs the hook with `rc.Revocations == nil` — every active or disabled key `needs_confirmation`, every epoch bumped — also when the journal was truncated after the archive and verifies cleanly; same generation with the head behind (a crash after `Append`) re-applies the tail only, no hook (DATA3-8, SEC3-10, DATA4-7, SEC4-6) |
 | `TestLegacyInviteAcceptRechecksCanAssign` | a legacy invite whose creator cannot `CanAssign` its `RoleID`, or whose creator is deleted, is refused on accept (SEC3-2) |
 | `TestOwnerTrustRootKeysAreOwnerProtected` | port of HEAD's owner-trust-root test: with an owner set, a non-owner admin session cannot change `core.auth.mode`, a provider's `allowed_emails`/`allowed_domains`, `core.auth.owner.required` or the three `modules.books.identity.*` keys (SEC3-6) |
@@ -1280,7 +1301,7 @@ ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `oauth
 | `TestDarkReleaseWritesNoIdentityRow` / `TestDarkReleaseRecordsJournalGap` | S4 r1: the census reads every record through books' store and writes none; r1 lists no `journal` duty, so the first r2 boot appends a `gap` line (COR4-4) |
 | `TestRollbackR2ToR1Boots` | a store served by S4 r2 boots on S4 r1: books supplies the same store, no missing-grant or backend error (DATA4-2) |
 | `TestLegacyInviteDoubleAcceptOneWins` / `TestUserMergeWithLegacyInvite` | `synctest`: two concurrent accepts of one legacy invite, exactly one account; a merge whose source has an open legacy invite succeeds and deletes it (DATA4-9) |
-| `TestNativeSessionsRevokedAfterRollback` | a session issued on cur, a rollback boot on prev, roll forward: the session is refused, audited `core.session.revoke_after_rollback` (DATA4-14, SEC4-9) |
+| `TestNativeSessionsRevokedAfterRollback` | a session issued on cur, a rollback boot on prev (no `auth` duty in its served record), roll forward: the session is refused, audited `core.session.revoke_after_rollback` (DATA4-14, SEC4-9) |
 | `TestS4_AuthOffDockerBoots` | (image job) ABO with `enable_auth=false` in a container boots at S4 r2 and reports `auth_disabled_remote` (SEC4-8) |
 | `TestOwnerGate_AccessWithoutOwnerFallsBack` | Access configured, no owner identity: restore, factory reset and user merge fall back to Interactive + `core:admin`; owner keys are `ProtectAdmin` (SEC4-14) |
 | `TestRestrictedLastAdmin_SSORefused` | a last admin kept by a restore cannot sign in by password, key, OIDC or an identity extension until a reset clears `SignInRestricted` (SEC4-12) |
@@ -1592,3 +1613,7 @@ Round 4 (2026-11-04), findings applied to this file:
 - SEC4-12 — `User.SignInRestricted` for a restricted last admin; identity links deleted; Access residual stated (§3.1, §4.14, §6, §10).
 - SEC4-14 — owner gate default and `ProtectOwner` both derive from "verifier configured and owner set" (`Extension.OwnerSet`) (§3.3, §4.8, §8, §10).
 - FE4-2 — invite links keep the `/invite/<token>` path form until S9 (`auth.Options.InviteLinkForm`, ABO `InviteLinkPath` from S4 to S9); the `/invite/{token}` 302 and `SPAShared` `invite` start at S9; `TestLegacyInviteLink_EndToEnd` (§4.13, §10).
+
+Integration pass (round 4):
+
+- integration pass (round 4): `auth.Options` and `InviteLinkForm` defined (§3.2), passed as `app.Options.Auth`; ABO's `disabled_allow_remote=true` default set through `DefaultDisabledAllowRemote`; revoke-after-rollback keyed on the served ledger's `auth` duty (09 §9.2.1 row 2); ABO key names (`sess:`, `inviteallow:`) removed from §4.7 and §10.

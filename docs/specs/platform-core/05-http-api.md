@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-http-api.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.5.1 -->
 <!-- guid: fcd387ab-7a8e-49e2-a4b4-a6901aaee1e3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -947,12 +947,12 @@ no in-house Go TypeScript emitter in this design.
   indefinitely; a type moves to OpenAPI when its route goes native. `opsgen` (`tools/cmd/opsgen` →
   `web/src/services/ops.ts`) follows one rule (FE4-7, shared with 07 §7.8 and 04): at S5, when its
   input `internal/operations/state` moves to `mediacore/tasks`, it is repointed to `tasks`' `State`
-  constants and its freshness gate proves `ops.ts` byte-identical; it retires **at S9**, whose PR
-  rewires both importers of `ops.ts` — `web/src/services/api.ts`' operation types and
-  `web/src/utils/operationPolling.ts` — onto the generated native task types, which covers
-  `operationPolling`'s direct importers (`components/layout/OperationsIndicator.tsx`,
-  `components/settings/ITunesImport.tsx`, `pages/ActivityLog.tsx`, `pages/Library.tsx`,
-  `stores/useOperationsStore.ts`) and every page reaching `ops.ts` through them. The golden contract test
+  constants and its freshness gate proves `ops.ts` byte-identical; it retires with the PR that makes the
+  **last** `ops.ts` importer native (end of 07 §7.19 step 6; 04 maps it at S10), not at a fixed stage.
+  `ops.ts` is imported by `web/src/services/api.ts` and by `web/src/utils/operationPolling.ts`, whose
+  importers include books pages that keep legacy calls after S9 (`Library.tsx`, the review lanes,
+  `ITunesImport.tsx`, `stagedMetadataApply.ts`, `MaintenanceTab.tsx`, `ThrottlePanel.tsx`); the S9 PR
+  moves only the Activity page and `useOperationsStore` off it (07 §7.8). The golden contract test
   (`internal/wirecontract/contract_test.go`) is generalized for native routes:
   `coretest.ContractGoldens(t, router)` marshals each route's declared examples and **validates them
   against the generated schema** (jsonschema-go `Resolve`+`Validate`), and the TS side assigns the
@@ -1099,7 +1099,7 @@ gin route that ever disagreed with its mux pattern would still be checked (SEC2-
 | `internal/httputil/respond.go`, `types.go`, `parse.go` | `httpapi.Problem`, `Page[T]` for native routes; legacy shape kept for aliases and gin |
 | `internal/httputil/rangeserve.go` | stays app-side helper used via `HandleRaw` (already `net/http`) |
 | `internal/plugin/router.go`, `internal/server/plugins_init.go:42` | deleted at 09 S7 with `internal/plugin` (N4; 04 §8.3); replaced by the module `Group` |
-| `tygo.yaml`, `tools/cmd/opsgen`, `internal/wirecontract` | kept for legacy-mount types (`opsgen` repointed to `mediacore/tasks` at S5 and retired at S9, §7); native routes use OpenAPI + `coretest.ContractGoldens` (§7) |
+| `tygo.yaml`, `tools/cmd/opsgen`, `internal/wirecontract` | kept for legacy-mount types (`opsgen` repointed to `mediacore/tasks` at S5 and retired with the last native `ops.ts` importer, §7); native routes use OpenAPI + `coretest.ContractGoldens` (§7) |
 | `web/src/services/api.ts` (8,747 lines), `web/src/utils/apiFetch.ts` | calls to native routes use `@mediacore/api-client` / the generated `web/src/modules/books/api/` directory; calls to legacy routes keep `apiFetch`, which calls the runtime's `checkBuild` from UI-0 (§7, FE4-9) |
 
 ## 9. Concurrency contract
@@ -1376,3 +1376,7 @@ Round 4 (2026-11-04), findings applied to this file:
 - COR4-19 / SIMP4-1 — heading renamed `Deferred-build members`; list generated from every such heading, package-qualified matching, per-member lifetime (§3.6).
 - COR4-21 — `time.Time` removed from httpapi's reflector overrides (in `jsonschemax.Base()`) (§7).
 - R4-4 — ABO's ledger embed is a generated copy under the books module (§3.1).
+
+Integration pass (round 4):
+
+- integration pass (round 4): §7 and §8.4: `opsgen` retires with the last native `ops.ts` importer (04's row, 07 §7.8), not at S9 (the S9 PR moves only the Activity page); checkBuild, Basic password and LegacyStores items checked, already applied.

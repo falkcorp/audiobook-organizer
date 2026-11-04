@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.5.1 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -852,8 +852,8 @@ that sets no state-directory variable would fail boot at S2.
 
 **One resolver from S2 (OPS4-8).** HEAD's `EnsureSecureStateDir` (`cmd/root.go:336`) resolves from
 `AppConfig.DatabasePath` (YAML included) and `ABK_STATE_DIR`, while the kernel uses env and flags only. From S2
-ABO's `serve`, which still opens the store before `app.New`, calls `config.ResolveStateDir` with the same
-inputs the kernel uses (through the `app` accessor 06 names) instead of `EnsureSecureStateDir`, so the boot
+ABO's `serve`, which still opens the store before `app.New`, calls `app.ResolveStateDir(opts)` (06 §6.4.5),
+which runs `config.ResolveStateDir` over the same inputs the kernel uses, instead of `EnsureSecureStateDir`, so the boot
 record, a restore intent and `.encryption_key` are always looked for in one directory. A database path given
 only in the YAML file with an uncreatable default therefore gets the boot error of §1.4 step 2, not a second
 directory (`TestStateDir_OneResolverYAMLDBPath`).
@@ -1157,10 +1157,13 @@ on conflict (§1.6).
 
 **Exclusive writer from S3 (DATA4-4).** From S3 the books legacy config store is the **only** writer of the blob, the
 extension family and the four legacy secret rows. With no core grant, this is enforced by package structure (the
-trade R4-1 accepts): ABO's archtest `TestOnlyLegacyConfigStoreWritesSettingsRows` fails when any other ABO
-package writes those keys, and ABO's `POST /operations/set-internal-flag` (which writes any `setting:` key from
-the request body, `internal/server/handlers/operations/handler.go:378-397`) refuses them
-(`TestSetInternalFlagRefusesConfigRows`), because an AST check cannot see a dynamic key.
+trade R4-1 accepts): ABO's archtest `TestOnlyLegacyConfigStoreWritesSettingsRows`, the config instance of 09's
+umbrella ratchet `TestLegacyFamiliesWrittenOnlyByLegacyStores` (09 §9.2.1), fails when any other ABO package
+writes those keys, and ABO's `POST /operations/set-internal-flag` (which writes any settings-family key from
+the request body, `internal/server/handlers/operations/handler.go:378-397`) refuses every key of 05-storage
+§5S.9.1 row 7 (the blob and the four legacy secret rows), books' extension family, and every other key a
+store interface serves (09 §9.8) (`TestSetInternalFlagRefusesConfigRows`), because an AST check cannot see a
+dynamic key.
 
 **Secrets: moved on first write, never blanked (R4-2, C16).** A secret moves to `c/secrets/` when a core build
 **first writes it** (set or clear), never at boot and never because an unrelated key was saved. `secrets.Stage`
@@ -1967,3 +1970,7 @@ Round 4:
 - SIMP4-10 — §1.3.6: core's ledger fragment holds only permanent `OTEL_*` rows; `TestCoreLedgerFragmentPermanentOnly`.
 - MOD4-1 — §1.3.6: ABO embeds a generated, CI-checked copy of its ledger kept under the books module (R4-4).
 - SIMP4-12 — C11: integrations is the registry; ABO's instances are legacy-backed through books' own instance store sharing this store's render (03's row is another cluster's).
+
+Integration pass (round 4):
+
+- integration pass (round 4): §1.7 names `app.ResolveStateDir(opts)` (06 §6.4.5) for ABO's S2 serve; §1.12.2: `set-internal-flag` refuses every 05-storage row-7 key, the extension family and every store-interface key; `TestOnlyLegacyConfigStoreWritesSettingsRows` is an instance of 09's `TestLegacyFamiliesWrittenOnlyByLegacyStores`.

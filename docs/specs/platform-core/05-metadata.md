@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.5.1 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -595,7 +595,9 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
      (05-config §1.12.2), so the trust rules of M1.3 apply once. The legacy store writes the fields in the shape
      the app's older builds read, in the caller's batch together with the instance's secrets and its extension
      record. ABO's implementation writes the settings blob through books' legacy config store (05-config §1.3.3,
-     R4-6), so the blob keeps one writer.
+     R4-6), so the blob keeps one writer: it lives in the same books package as that store, joins the caller's
+     `*storage.Batch` and shares that store's pending blob render (05-config §1.6, C11), so a config write and an
+     instance write in one batch render and commit the blob once.
    - **Native-only fields** — `Local` with the URL origin it was granted for, the URL origin the `secrets` copies
      were written for, `Limits`, and any field the legacy format has no place for — are kept by the legacy store
      in an **app-owned extension family that older builds never read**, never additively in the legacy rows
@@ -1295,14 +1297,9 @@ and `coretest.ProviderHTTP(t)` (Registry over `httptest.Server`, fake clock, in-
 
 ## Objections to 03
 
-1. 03 §3.3's `integrations` row still calls the package "the one store for integration instances". Under R4-1
-   it is the one **registry** of integration instances behind the `InstanceStore` interface: native ones in
-   `c/integrations/instances/`, and during the extraction ABO's existing instances are served by books' legacy
-   store from their blob fields (M1.1, M1.4 step 2a). Proposed wording per SIMP4-12: "the one registry for
-   integration instances (native ones in `c/integrations/instances/`; during the extraction ABO's existing
-   instances are legacy-backed through the app's legacy store, 05-metadata M1)".
-
-The two objections of v1.0.0 are resolved in 03 v1.2.0: the root package `integrations` is in §3.3 and R4 (L4),
+None open. The round-4 objection on 03 §3.3's `integrations` row (SIMP4-12) is resolved: 03 calls the
+package "the one registry for integration instances", native vs legacy-backed, and its store-interface table
+lists `integrations.InstanceStore`. The two objections of v1.0.0 are resolved in 03 v1.2.0: the root package `integrations` is in §3.3 and R4 (L4),
 and `Registrar.Adapter(integrations.Descriptor)` is the shape 06 adopted. Notification topics are event topics
 (05-notify §3), so no `NotificationTopic` registrar method is needed.
 
@@ -1411,3 +1408,7 @@ Round 4 (`docs/plans/platform-core/reviews/spec-round-4-dispositions.md`):
   secret-clearing rule, 05-config).
 - SEC4-15 — `Policy.Private` bound to the instance's configured hosts; cross-host redirects re-checked public-only
   (M1.3 `Local`, M2.3, M2.4, M2.5); two tests.
+
+Integration pass (round 4):
+
+- integration pass (round 4): M1.4 step 2a: books' legacy instance store shares the books config store's pending blob render (05-config §1.6, C11); objection 1 (SIMP4-12) removed, settled by 03.

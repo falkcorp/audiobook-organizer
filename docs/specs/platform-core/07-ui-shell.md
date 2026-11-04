@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/07-ui-shell.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.5.1 -->
 <!-- guid: 651865f1-0fad-4e15-8169-ceaf4a573f13 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -426,7 +426,8 @@ it), not `/system/tasks` (FE-16).
   `/invite/:token` (its public branch tests `pathname.startsWith('/invite/')`; `web/src/App.tsx:201-206`
   @748fd787a); `/invite#token=` would land a signed-out invitee on `/login` with the fragment dropped
   (`App.tsx:249-250`) and a signed-in one on `NotFound`. So from S4, when invite creation moves to core,
-  core mints `/invite/<token>` (the link form is the app's choice, 05-authn §4.13 owns the option) and
+  core mints `/invite/<token>` (the link form is the app's choice: `auth.Options.InviteLinkForm`, passed as
+  `app.Options.Auth`, 05-authn §4.13 owns the option; ABO sets `InviteLinkPath` from S4 to S9) and
   the legacy `AcceptInvite` sends the path token in the body of the same core calls. As at HEAD, that
   token reaches the server in the request path, where the `DefaultPathRules` invite shape redacts it
   from logs and spans. The fragment form starts with the shell build (S9).
@@ -806,6 +807,14 @@ changes after construction (§7.14).
 |---|---|---|---|
 | Before ABO adopts the shell build (09 S2 up to S9) | zero `Bundle` | the books `LegacyMount` with `ServesSPA: true`; gin keeps `NoRoute` SPA serving and CF recovery | from S2 the CSP and `Reporting-Endpoints` headers are written by `httpapi` stage 5 from the mount's per-request `DefaultCSP` (today's computed policy, §7.6.2), not by gin's removed middleware (FE2-1); `httpapi` registers no `/` pattern while a legacy mount owns it, and its `ServesSPA` fallback consults `Router.NonSPA()` before handing a request to gin, so one predicate serves both owners and the S8 probes `/livez/`, `/READYZ` never answer HTML (FE3-13, 05-http-api §4.10); `ui.Handler` is not mounted; `ui_build_id` is `""`; the stale-build rule (§7.5.2) runs in ABO's `apiFetch`, fed by the same build ID (below) |
 | From shell adoption (09 S9) | `UIBundle()`, ABO's adoption of the hello pattern (below) | `ui.Handler`, mounted by the kernel with `Router.SPA` (05-http-api §4.10) | in the same PR: books drops `ServesSPA`; gin's `NoRoute` SPA serving, `setupStaticFiles` and the `static_embed.go` SPA code are deleted (the latter moves to `ui`); ABO passes `app.Options.UIOptions` (`PageMiddleware`: CF recovery from `internal/cfaccess`; `ConnectSrcFrom`: its Access team host; both read pointers books fills in its Start hook; FE3-4, FE4-5), which the kernel merges into `ui.Options`, adding its own `ui_route` recorder over books' `LegacyRedirects` from the URL-move release (§7.19 step 5); its compat segments reach `NonSPA` through its mount's `TopSegments` (not `SPAShared`); the stale-build rule keeps running, now in `@mediacore/api-client`'s runtime, and the shell banner renders it (FE3-3) |
+
+**Basic-gate asset exemption follows the `/` owner (COR4-9).** HEAD's optional Basic gate exempts the
+SPA's static assets (`internal/server/middleware/basicauth.go:40-46`: the `/assets/` prefix,
+`/favicon.ico` and the `.js`, `.css`, `.png`, `.svg`, `.woff2` suffixes). From S3, when the gate moves
+into the core perimeter, the books mount supplies that rule as `LegacyMount.BasicExemptAssets`
+(05-http-api §8.2) while it owns `/`; from S9 `ui.Handler` supplies the same predicate for its own asset
+paths when the kernel mounts it with `Router.SPA`, so stage 8's exempt set (05-http-api §4.2) is
+unchanged across the switch (`TestBasicGate_ExemptSetEqualsHEAD`, repeated in the S9 PR).
 
 **ABO adopts the hello pattern at S9 (FE2-10).** `web_embed.go` (`//go:build embed_frontend`)
 defines `func UIBundle() ui.Bundle { return ui.MustFromFS(WebFS, "web/dist") }`, `web_nonembed.go`
@@ -1410,3 +1419,7 @@ Round 4 (2026-11-04), findings applied to this file:
 - MOD4-8 — the PR image job's triggers cover every image input (`core/**`, both modules' `go.mod`/`go.sum`, Dockerfiles, `.dockerignore`, `web/**`, every `//go:embed` input).
 - MOD4-10 — `ci.yml:127`, `frontend-ci.yml:64` and `nightly.yml:31` named; UI-0 precondition: reusable callers drop their frontend half (`run-frontend: false`) and ABO-local jobs run after `make web-deps`, or a github-common pre-install input.
 - R4-1 — checked: no store or grant machinery in this file; nothing to change.
+
+Integration pass (round 4):
+
+- integration pass (round 4): §7.6.3: the Basic-gate asset exemption moves from `LegacyMount.BasicExemptAssets` to `ui.Handler` at S9 (COR4-9); §7.4.3: invite form set through `app.Options.Auth`; `opsgen` lifetime unchanged (matches 04).

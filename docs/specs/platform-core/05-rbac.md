@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.5.1 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -873,7 +873,7 @@ User role assignments live in auth's user records (05-authn §3.4). `TestNativeB
 (rbac) runs `rbactest.StoreSuite` over it.
 
 **ABO's legacy store (books-supplied).** The `books` module passes `module.Manifest.LegacyStores.Roles`
-(06 §6.4.5): ABO code, over ABO's existing role rows and their name index in their legacy format
+(06 §6.4.2, §6.11.6): ABO code, over ABO's existing role rows and their name index in their legacy format
 (`Role{ID, Name, Description, Permissions []string, IsSeed, Version}`,
 `internal/database/store.go:966-977`), reached through books' own claims. User role assignments stay
 in the legacy user rows' role list (05-authn §11). Write exclusivity on those families is an ABO
@@ -911,14 +911,20 @@ are part of the deferred cutover (05-storage). It runs `rbactest.StoreSuite` wit
 - **Row rule (never widen on rollback; SEC3-1, SEC4-4).** A legacy atom is written into a role row
   only if the role's native checker satisfies `Catalog.LegacyReach(atom)` — `AllOf` the native scope
   set equivalent to **every** legacy route and in-handler check that atom gates on the **snapshot
-  release**. The input is a frozen reach snapshot of the last pre-S4 release,
-  `core/rbac/testdata/legacy_reach_v<release>.json`, produced once by the real-router dump of
-  `raw/09` §0 plus a reviewed list of in-handler atom and role-name checks with file:line
-  (`auth.Can`, `slices.Contains(…, "admin")`), committed in the S4 r1 PR and never regenerated from
-  later builds, whose own manifests shrink as routes leave the mount while the rollback target keeps
-  them (SEC4-4). `LegacyAlias.Reach` (§3.2) is the snapshot's legacy-atom → native `AllOf` table,
-  frozen with it at S4: R4-3's legacy-route enforcement, the row rule and 14 K21 all cite this one
-  table, and `TestRowRuleDominatesLegacyReach` fails if the compiled `Reach` and the snapshot differ.
+  release**. The input is a frozen reach snapshot of the last pre-S4 release, produced once by the
+  real-router dump of `raw/09` §0 plus a reviewed list of in-handler atom and role-name checks with
+  file:line (`auth.Can`, `slices.Contains(…, "admin")`), committed in the S4 r1 PR and never
+  regenerated from later builds, whose own manifests shrink as routes leave the mount while the
+  rollback target keeps them (SEC4-4). **The snapshot is app data, supplied by the app** (lead
+  decision, round 4): it names the app's legacy atoms and routes, so for ABO it lives in the books
+  module (`internal/books/rbacreach/legacy_reach_v<release>.json`, name open; ABO), never under
+  `core/`. Core `rbac` holds only the mechanism and the types: `LegacyAlias.Reach`,
+  `Catalog.LegacyReach`, the snapshot type `rbactest.ReachSnapshot` and the property-test helper
+  `rbactest.RowRuleSuite(t, *Catalog, ReachSnapshot)`, which core runs over a synthetic fixture
+  (`core/rbac/testdata/legacy_reach_synthetic.json`, invented atoms) and ABO runs over books'
+  snapshot. `LegacyAlias.Reach` (§3.2) is the snapshot's legacy-atom → native `AllOf` table, frozen
+  with it at S4: R4-3's legacy-route enforcement, the row rule and 14 K21 all cite this one table, and
+  ABO's `TestRowRuleDominatesLegacyReach` fails if the compiled `Reach` and books' snapshot differ.
   Reach on releases older than the snapshot is K21's territory (the runbooks name the
   oldest supported rollback target). §6.1's fourth column states the outcome; for `users.manage` and
   `settings.manage`, whose reach includes acting on any account and admin-minting sign-in fields, only
@@ -1201,7 +1207,7 @@ option governed by the compat ledger (§6.3, SIMP-7).
 | `TestAudit_CopyForwardThenWriteNoOverwrite` | after a restore with copied records, the next N records get fresh `seq`s and no copied record or index row changes (SEC2-12, DATA2-16) |
 | `TestSeedRole_EditRefused` | `PATCH /roles/editor` and `DELETE /roles/editor` → 409 `seed_role_locked`; `accept-seed` → 200; custom roles editable (DATA2-20, SIMP4-6) |
 | `TestSeed_NoNonConfiningScopeOnConfinedRole` | no seed merge gives a role holding a `Confining` scope a non-`Confining` one; `fp-worker` stays `Confined()`; `editor`/`viewer` hold `core:metrics.read` (SEC3-13) |
-| `TestRowRuleDominatesLegacyReach` | property test of §6.3's row rule over the frozen reach snapshot `core/rbac/testdata/legacy_reach_v<release>.json`: for random native roles, every legacy route the snapshot release admits from the row's atoms is admitted natively on its successor; `users.manage`/`settings.manage` only with `core:admin`; every other atom's `Reach` equals its expansion (SEC3-1, SEC4-4) |
+| `TestRowRuleDominatesLegacyReach` **(ABO)**, over core's `rbactest.RowRuleSuite` (core runs the suite over its synthetic fixture `core/rbac/testdata/legacy_reach_synthetic.json`) | property test of §6.3's row rule over the frozen reach snapshot books supplies (`internal/books/rbacreach/legacy_reach_v<release>.json`, name open): for random native roles, every legacy route the snapshot release admits from the row's atoms is admitted natively on its successor; `users.manage`/`settings.manage` only with `core:admin`; every other atom's `Reach` equals its expansion (SEC3-1, SEC4-4) |
 | `TestRoleRow_PrevBuildSeesAdmittedAtomsOnly` | a custom role written by this build holds only admitted atoms in its row, never a namespaced string; read by the previous release's real binary it grants exactly those atoms; a narrowing here is narrower there at once (R4-1, SEC4-3) |
 | `TestRowRule_ConfinedRoleStaysWorkerOnlyOnPrev` | a custom role `{books:fingerprint.worker}` is written as `["fingerprint.worker"]`; HEAD's `workerOnly` over the row is true; the S4 R-test cell "a custom confining role created on cur is confined on prev" (SEC4-3) |
 | `TestRoleExtension_SuspendedAfterPrevWrite` | a custom role's row changed by the previous release → on roll-forward `Suspended`, grants only the row's translated atoms, health `rbac_role_suspended`, `reconfirm` restores or discards; a seed role's extension is re-derived at `Freeze` (R4-1) |
@@ -1408,3 +1414,7 @@ Round 4 (2026-11-04), findings applied to this file:
 - COR4-13 — `core.audit.prune` registers from S5, when `tasks` lands (§5).
 - COR4-19 / SIMP4-1 — new `Deferred-build members` heading (§3.6), read by the generated archtest list.
 - §14 item 7 resolved by R4-3; item 4 updated (§14).
+
+Integration pass (round 4):
+
+- integration pass (round 4): §6.3, §12: the frozen legacy-reach snapshot is app data supplied by books (`internal/books/rbacreach/…`, ABO), not `core/rbac/testdata`; core holds `rbactest.ReachSnapshot` and `rbactest.RowRuleSuite` with a synthetic fixture; `TestRowRuleDominatesLegacyReach` is an ABO test (lead decision); §6.3 cites 06 §6.4.2 for `LegacyStores.Roles`.
