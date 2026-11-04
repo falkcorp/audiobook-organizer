@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.20.0
+// version: 2.21.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-11-04
 
@@ -529,6 +529,10 @@ type fbLib struct {
 	titlesAny map[string][]string
 	// dead maps a path to the soft-deleted books holding it.
 	dead map[string][]string
+	// deadRows maps a path to the rows the soft-deleted books hold there: a
+	// trashed book's row at the same path and size is the same file, so its
+	// measured duration is as good as a live book's (rowSecs).
+	deadRows map[string][]database.BookFileCore
 	// byPath maps a live book's file_path to the book, rows or none: a book
 	// at a group's folder is that work's book even when it holds no row
 	// there (the book_file-gap shape).
@@ -538,7 +542,7 @@ type fbLib struct {
 func newFBLib() *fbLib {
 	return &fbLib{books: map[string]database.BookCore{}, files: map[string][]database.BookFileCore{},
 		holders: map[string][]string{}, sets: map[string]map[string]bool{}, byVG: map[string][]string{},
-		authors: map[int]string{}, authorNorm: map[string]bool{}, dead: map[string][]string{},
+		authors: map[int]string{}, authorNorm: map[string]bool{}, dead: map[string][]string{}, deadRows: map[string][]database.BookFileCore{},
 		byPath: map[string][]string{}}
 }
 
@@ -552,6 +556,9 @@ func (lib *fbLib) add(b database.BookCore, rows []database.BookFileCore) {
 			if r.FilePath != "" && !seen[r.FilePath] {
 				seen[r.FilePath] = true
 				lib.dead[r.FilePath] = append(lib.dead[r.FilePath], b.ID)
+			}
+			if r.FilePath != "" {
+				lib.deadRows[r.FilePath] = append(lib.deadRows[r.FilePath], r)
 			}
 		}
 		if len(seen) == 0 && b.FilePath != "" {
@@ -610,6 +617,19 @@ func (lib *fbLib) drop(ids map[string]bool) {
 	}
 	strip(lib.holders)
 	strip(lib.dead)
+	for p, rs := range lib.deadRows {
+		kept := rs[:0]
+		for _, r := range rs {
+			if !ids[r.BookID] {
+				kept = append(kept, r)
+			}
+		}
+		if len(kept) == 0 {
+			delete(lib.deadRows, p)
+		} else {
+			lib.deadRows[p] = kept
+		}
+	}
 	strip(lib.byVG)
 	strip(lib.byPath)
 	strip(lib.titles) // nil on a partial read: ranging a nil map is a no-op
@@ -619,6 +639,33 @@ func (lib *fbLib) drop(ids map[string]bool) {
 		delete(lib.files, id)
 		delete(lib.sets, id)
 	}
+}
+
+// rowSecs is r's duration in seconds. A row with no measured duration (0)
+// borrows the known duration of another row at the SAME path with the same
+// size (and the same hash when both have one): a live holder's present row or
+// a soft-deleted book's, since the same file is the same file whatever state
+// its book is in. A row of a different size, or one marked Missing, never
+// lends. Read-only: it changes the seconds the fixer computes, never the
+// stored row.
+func (lib *fbLib) rowSecs(r database.BookFileCore) int {
+	if r.Duration > 0 {
+		return r.Duration
+	}
+	var cands []database.BookFileCore
+	for _, h := range lib.holders[r.FilePath] {
+		for _, o := range lib.files[h] {
+			if o.FilePath == r.FilePath && o.ID != r.ID {
+				cands = append(cands, o)
+			}
+		}
+	}
+	for _, o := range lib.deadRows[r.FilePath] {
+		if o.ID != r.ID {
+			cands = append(cands, o)
+		}
+	}
+	return database.KnownDurationAtPath(cands, r.FileSize, r.FileHash)
 }
 
 func (lib *fbLib) finish() {
@@ -1004,7 +1051,7 @@ func (lib *fbLib) classify(id string, b database.BookCore, rows []database.BookF
 	var secs int64
 	for _, r := range rows {
 		paths = append(paths, r.FilePath)
-		secs += int64(r.Duration)
+		secs += int64(lib.rowSecs(r))
 	}
 	ev.Hours = float64(secs) / 3600
 	ev.Root = commonDir(paths)
@@ -1073,7 +1120,7 @@ func (lib *fbLib) classify(id string, b database.BookCore, rows []database.BookF
 	longStems := map[string]bool{}
 	longFiles := 0
 	for _, r := range rows {
-		if r.Duration < fbProperMinSec {
+		if lib.rowSecs(r) < fbProperMinSec {
 			continue
 		}
 		_, label, dir := fbGroupKey(r.FilePath, ev.Root)
@@ -1925,7 +1972,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		}
 		g := &plan.Groups[i]
 		g.Files = append(g.Files, fbNewFile{SrcBook: o.row.BookID, SrcRow: o.row.ID, Path: o.row.FilePath, Track: o.row.TrackNumber})
-		g.Secs += o.row.Duration
+		g.Secs += lib.rowSecs(o.row)
 	}
 	var fragmentary, split, outside, unclear []string
 	// outsideHard counts the outside groups no owner click may create: any

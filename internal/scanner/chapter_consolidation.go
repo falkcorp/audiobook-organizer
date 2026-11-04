@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_consolidation.go
-// version: 2.4.2
+// version: 2.4.3
 // guid: f9a0b1c2-d3e4-5f60-a7b8-c9d0e1f2a3b4
-// last-edited: 2026-10-11
+// last-edited: 2026-11-04
 
 package scanner
 
@@ -86,14 +86,14 @@ func storedBookFileDurationSec(path string) int {
 	if err != nil {
 		return 0
 	}
-	for _, r := range rows {
-		// A legacy row whose "seconds" are really milliseconds would read as a
-		// 1000x-long chapter and push the group into the long/shelf branch.
-		if !r.Missing && r.Duration > 0 && r.FileSize == fi.Size() && !database.DurationLooksLikeMillis(r.FileSize, r.Duration) {
-			return r.Duration
-		}
+	cores := make([]database.BookFileCore, len(rows))
+	for i := range rows {
+		cores[i] = rows[i].Core()
 	}
-	return 0
+	// The shared rule: a present row, same size, whose "seconds" are not
+	// really milliseconds (that would read as a 1000x-long chapter and push
+	// the group into the long/shelf branch).
+	return database.KnownDurationAtPath(cores, fi.Size(), "")
 }
 
 // consolidateMode selects how consolidateChapterGroups treats a same-key group
