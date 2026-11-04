@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.13.1 -->
+<!-- version: 1.13.2 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -303,11 +303,13 @@ HEAD, with the hotfix's rules. Steps, each a `rc.Phase`:
 **After the restart.** No marker is written and no boot is counted: the new binary boots like any
 deployed binary, and a store refusal at boot (exit 78) needs the operator. A binary whose release carries
 migrations takes the mandatory pre-migration checkpoint at its first boot (05-storage), so an update applied
-through this updater, which takes no backup of its own, still has the checkpoint to fall back to. If the release
+through this updater, which takes no backup of its own, still has the checkpoint to fall back to. That checkpoint
+is kept while the store is still at its pre-migration levels and deleted 7 days after the store completes a
+migration or is restored (D12 (d), 05-storage §5S.3.12; CONFORM-2, DATA-8), so the fallback is bounded too. If the release
 misbehaves, the admin rolls back by hand: task `core.updater.rollback` (`POST .../rollback`, `core:admin`,
 credential guard, `ConcurrencyKey: core.updater`) runs `ReaderCheck(core.storage.path, <exe>.prev)` first and
-refuses with its reason (a `.prev` older than a level the store reached cannot serve it: from R2 on, the R1
-`.prev` refuses every migrated store, and the message names `make rollback-restore`, 05-backup), and otherwise
+refuses with its reason (a `.prev` older than a level the store reached cannot serve it: from R2 on, the pre-R2
+`.prev` (the pre-freeze release) refuses every migrated store, and the message names `make rollback-restore`, 05-backup), and otherwise
 renames `<exe>` → `<exe>.rolled-back` (the name `make rollback` gives the binary it replaces, `Makefile:912`),
 `<exe>.prev` → `<exe>`, fsyncs and restarts through `Restarter`; `make rollback` makes the same decision from the
 operator's machine. `<exe>.prev` is kept until the next apply or deploy replaces it.
@@ -320,8 +322,12 @@ matrix. The deferred `Boot` is a boot writer and extends the matrix in the PR th
 Database caveat: a rollback restores the **binary**, not the data. A binary swap is a rollback only while the
 previous binary still reads the store, which `ReaderCheck` decides: within R0 and R1, and from R3 back to R2. Across
 the R2 cutover the way back is `make rollback-restore`: stop, restore the pre-migration checkpoint or an archive
-offline (with the keyring and state files), reinstall `.prev`, start (05-backup). Everything written after the
-upgrade is then lost, so nothing restores automatically. The built updater takes no backup of its own, as HEAD's
+offline (with the state files the source holds), reinstall `.prev`, start (05-backup). Before it touches anything
+the recipe compares the checkpoint record's `from_vector` with `.prev --print-storage-levels` and refuses when
+they differ, naming the binary to install, the pre-freeze release: after an R2 hotfix `.prev` is an R2 build, and
+restoring under it would only migrate the store again (DATA-9). Everything written after the upgrade is then
+lost, and every credential R2 revoked (a key, a disabled user, a changed password) is live again on the pre-R2
+binary until R2 is redeployed; the runbook warns of both (SEC-10), so nothing restores automatically. The built updater takes no backup of its own, as HEAD's
 does not (the pre-update backup is deferred-build, 5U.3). Persistence: one key, `c/updater/seen` (the last notified
 version); every updater file is beside the executable.
 
@@ -644,3 +650,4 @@ Round 11:
   R2). `auto_update.*` renamed once by the R2 config cutover, no aliases; `/api/v1/update/*` deleted in R2.
   Stage references re-keyed (S0 hotfix → R0, S8 move → R2, S2b swap → R1). Consistency pass: `ReaderCheck` is bound to 05-storage §5S.3.7's guard decision (level sidecar against `--print-storage-levels`, the swap-slot probe) instead of the deleted `CheckReader`, and the `KindCheckpoint` exception with `--print-restore-journal` and `inflight-checkpoint.json` is gone (the rollback across R2 is `make rollback-restore`), with `TestApply_CheckpointJournalAdmitsCandidate` replaced by `TestApply_RefusedWhileOfflineRestoreInFlight`.
 
+Round 13 (2026-11-04): CONFORM-1 (pre-freeze release as the pre-R2 `.prev`), CONFORM-2, DATA-8, DATA-9, SEC-10 (Database caveat and "After the restart").
