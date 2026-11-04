@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.8.1 -->
+<!-- version: 1.8.2 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -412,7 +412,8 @@ type Schedules struct { // section core.log.schedules
   `SourceID` the row's key. It then deletes the chunk's source rows; a crash in between re-imports the same
   keys (idempotent, §3). A row that does not decode is quarantined and reported, never dropped (05-storage
   §5S.3.13). M5 runs behind the pre-migration checkpoint; rollback is the offline restore of that checkpoint
-  plus the R1 binary. In the same release ABO's own writers and pruner of those rows are deleted (§11), so the
+  plus the pre-freeze release's binary (the last production release before F3 merged, `.prev` after R2
+  deploys; 09). In the same release ABO's own writers and pruner of those rows are deleted (§11), so the
   journal has one writer and one pruner, and the activity `Writer`'s line parsing goes too: from R2 no
   `system` entries are added to the books activity feed; the journal serves them.
 - User data in system log lines: HEAD serves the system activity log to `settings.manage` but
@@ -470,7 +471,11 @@ swapped atomically when `redact_keys` changes). `Close` cancels and drains with 
 The `core.log.*` rows except `core.log.journal.*` and `core.log.schedules.*` belong to the `core.log` section
 (`log.Settings`); the `core.log.journal.*` rows to `logjournal.Settings` and `core.log.schedules.journal_prune`
 to `logjournal.Schedules` (§5). All are operational
-dials (09 §9.2.8): none changes persisted state shape.
+dials (09 §9.2.8): none changes persisted state shape. `logjournal.Settings` and `logjournal.Schedules` are
+registered dark from F2, the foundation PRs ([09](09-abo-on-core.md) §9.4), as every core section is: F2 lands
+those two settings types in `core/internal/logjournal` and the kernel registers them, so the config cutover M2
+(F3) converts `log_retention_days` into a registered `core.log.journal.retention_days` (IMPL-1); the journal, its
+store and `core.log.journal.prune` serve from F5.
 
 ## 9. Metrics
 
@@ -506,7 +511,7 @@ These are recorded by a kernel-side bridge (`log` cannot import `metrics`, R4): 
 | `TestInstallProcessDefaults_RestoreAndExclusive` | after install, `otel.GetMeterProvider()`, `otel.GetTracerProvider()` and `otel.GetTextMapPropagator()` return the App's, an instrument created through the global appears in the App's scrape, and `slog.Default()` logs through the pipeline; restore puts all seven back; second install errors; OTel sink drops values |
 | `TestJournal_BatchAndRetention` | batching bounds; the prune task calls `JournalStore.Prune` until `more` is false, by `retention_days`; no `core/log` migration step or level stamp exists |
 | `logtest.JournalStoreSuite` (exported contract) | run over the native store: `Append` then `Query` round-trips level, module, subsystem, message, time and attributes; filters and cursors; `Prune` bounded and oldest first; its importer cases: importing the same `ImportedRecord`s twice leaves one record each, and imported records sort by their own `Time` among native ones (one suite per interface and its importer, 03 §3.3) |
-| `TestCutover_SyslogImported` (ABO) | over a store written by the R0 binary, M5 leaves no `syslog:` row, imports one journal record per row with time, level, source as `Subsystem`, message and `user_id`, quarantines a corrupt row, and resumes after a crash at any chunk point without duplicates |
+| `TestCutover_SyslogImported` (ABO) | over a store written by the R0 binary (the corrupt row from 09 §9.3's labelled hand-built overlay, which R0's API cannot write), M5 leaves no `syslog:` row, imports one journal record per row with time, level, source as `Subsystem`, message and `user_id`, quarantines the corrupt row, and resumes after a crash at any chunk point without duplicates |
 | `TestNativeJournalStore_RoundTrip` | the native store over `c/log/journal/` passes the suite (SIMP4-3) |
 | `TestJournal_OtherUsersLinesNeedUsersView` | a `core:system.manage` principal without `core:users.view` gets neither imported nor new records the books predicate flags, and sees `user_id` blank; with `core:users.view` it gets both (imported records from the R0 fixture) |
 | `TestJournal_PruneScheduleKeyDeclared` | `core.log.schedules.journal_prune` is declared with type `tasks.ScheduleConfig` in `logjournal.Schedules` and accepted by `ScheduleFromConfig` at registration |
@@ -679,3 +684,7 @@ D10–D12 revision (2026-11-04):
   `log_retention_days` alias replaced by the one-time conversion. L3 and §3: `PromRegisterer` mention removed;
   the invite path rule's S4–S9 window removed. Consistency pass: the `log.Importer` objection settled (03 §3.3
   states the idempotent-importer exception) and D12's answers cited as D12 (a)–(d).
+
+Round 13 (2026-11-04): IMPL-1, IMPL-8, CONFORM-1. §8: `logjournal`'s two sections are registered dark from F2 so
+M2 at F3 writes a registered key; §10: the corrupt `syslog:` row comes from the fixture's hand-built overlay; §5:
+rollback names the pre-freeze release's binary.

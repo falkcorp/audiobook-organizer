@@ -689,7 +689,7 @@ lands in core and is **live from identity's flip (F4)**, where `auth` and `rbac`
 IMPL-10); (2) the executor
 publishes `core.task.*` from the tasks flip (F5), which deletes HEAD's run-stream publishers with HEAD's engine
 (the SPA's Activity page polls the native REST routes from that PR); (3) `outbox` and the realtime hub land
-with the outbox and realtime flip (F6; the bus is already live from F4), which moves the SPA to the realtime client and deletes hub A; (4) the plugin `EventBus` is **not** bridged onto `events.Bus`: it keeps feeding the
+with the events and realtime flip (F6; the bus is already live from F4), which moves the SPA to the realtime client and deletes hub A; (4) the plugin `EventBus` is **not** bridged onto `events.Bus`: it keeps feeding the
 webhook plugin, unmoved, until the integrations flip (F7), whose PR moves its publishers to books' topics
 (`events.Publish`, and `notify.Publish` for the 12 notifications) and deletes `internal/plugin` with the
 webhook plugin ([05-notify](05-notify.md) §10; SIMP3-10). Because the flips are serialized and each passes
