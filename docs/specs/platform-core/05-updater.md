@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -202,9 +202,12 @@ type Deps struct {
 // sidecar files, so it needs no open store. The kernel binds it to
 // core/internal/pebble.CheckReader (05-storage §5S.3.7) with the resolved state
 // directory; dbPath is the marker's db_path. nil error = allowed;
-// otherwise an error carrying one of CheckReader's fixed reason tokens:
-// "level_newer", "format_newer" (pre-guard binary), "restore_pending",
-// "sidecar_unreadable".
+// otherwise an error carrying one of CheckReader's fixed reason tokens
+// (05-storage §5S.3.7): "level_newer", "format_newer" (pre-guard binary),
+// "upgrade_floor" (the store has not applied what exe's declared floor
+// requires), "restore_pending", "restore_inflight" (a restore journal holds
+// inflight.json, DATA3-6), "sidecar_unreadable", "cannot_determine" (a probe
+// could not answer; refuses).
 type ReaderCheck func(ctx context.Context, dbPath, exe string, opt ReaderCheckOptions) error
 
 // StoreState reports the store's recorded migration state — the applied
@@ -473,7 +476,8 @@ the compiled-in revoked list in the next release.
 | Store's recorded state does not meet the signed `min_upgrade_from`, or `StoreState` fails | closed: apply refused (`stepping_stone_required`), nothing downloaded beyond the manifest is kept | R2-4, OPS3-7 |
 | Unsigned release newer than `LastUnsignedVersion` | closed: `verify_failed` | SEC2-23 |
 | Scheduled apply of a version that rolled back here | open: skipped, `SkippedAfterRollback` set, no download | OPS2-6 |
-| Staged restore pending | closed: apply and rollback refused (`restore_pending`) | 09 S1/S8; the swap would discard the restore |
+| Staged restore pending, or a restore in flight | closed: apply and rollback refused (`restore_pending`, `restore_inflight`) | 09 S1/S8; the swap would discard the restore (DATA3-6) |
+| `ReaderCheck` cannot determine the answer (`cannot_determine`) | closed: apply and rollback refused | fail-closed, as `make rollback` (09 §9.2.2) |
 | `exec` of the restored binary fails in `Boot` | open: `RolledBack: true`; `main` exits with the restart code | fallback to the supervisor restart |
 | Restart fails after swap | closed: the process keeps running the old code in memory; marker says pending; next manual or supervisor restart boots the new binary under the boot counter | — |
 | New binary fails to become ready within `max_boot_attempts` boots, `.prev` allowed by `ReaderCheck` | closed: automatic binary rollback in `Boot` | the purpose of the marker |
@@ -598,11 +602,10 @@ The `/api/v1/update/*` paths are aliases for the compatibility window (09 §9.2.
    current deployment target; `exec` mode is Unix-only.
 4. Confirm the asset naming the reusable release workflow actually publishes (UNKNOWN in this repo).
 5. (Closed: 06 `app.Options` has `Updater *updater.Options`.)
-6. 05-storage must define the applied-steps sidecar the kernel binds `StoreState` to (versions per
-   owner, done data-migration steps, rewritten by every guard-aware boot) and the
-   `--print-upgrade-floor` fast exit that prints a build's declared upgrade floors as an
-   `UpgradeRequirement` (OPS3-7, DATA3-10). (`ReaderCheck` with `IgnoreRestoreStagedBy` and `BootResult.Pending` at
-   open are in 05-storage §5S.3.7 and §5S.3.5.)
+6. (Closed by 05-storage v1.4 §5S.3.7: the applied-steps sidecar `<db>.storage-applied` the kernel binds
+   `StoreState` to, rewritten by every guard-aware boot, and the `--print-upgrade-floor` fast exit that
+   prints a build's declared upgrade floors as an `UpgradeRequirement` (OPS3-7, DATA3-10); `ReaderCheck`
+   with `IgnoreRestoreStagedBy` and `BootResult.Pending` at open are in §5S.3.7 and §5S.3.5.)
 7. (Closed: 06 §6.5.1 lists `updater.Boot` as P−1 before P0a; `Deps.Notify` needs `notify` (09 S7)
    before the updater (S8).)
 
@@ -658,3 +661,7 @@ Round 3:
 - R3-1 — Teach-build and C3 examples removed; "no contract while unconfirmed" restated as "no level raise while unconfirmed" (books format changes, later cutovers; none in the extraction).
 - R3-2 — verified: this file specifies no release-promotion gating; release-pipeline requirements are publication only.
 - Open items 5 and 7 closed (06 has `Updater *updater.Options` and P−1).
+
+Integration pass (round 3, 2026-11-04):
+
+- integration pass (round 3): `ReaderCheck` lists all of `CheckReader`'s tokens (`upgrade_floor`, `restore_inflight`, `cannot_determine` added) with error rows; open item 6 closed (05-storage defines the applied-steps sidecar and `--print-upgrade-floor`).

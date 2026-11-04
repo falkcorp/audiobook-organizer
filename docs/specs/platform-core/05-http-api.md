@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-http-api.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: fcd387ab-7a8e-49e2-a4b4-a6901aaee1e3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -83,11 +83,11 @@ the L0 leaf `core/internal/jsonschemax`, defined by 05-config §1.10.2 (it impor
 `x-mediacore-*` keywords and an **extensible** override table, `type Overrides
 map[reflect.Type]*jsonschema.Schema` with `func For[T any](o Overrides) (*jsonschema.Schema, error)`
 (backed by `ForOptions.TypeSchemas`). Each package contributes the entries for its own types at its
-own layer: `jsonschemax.Base` holds `time.Time`; `config` adds `config.Duration` and `secrets.Ref`
-(`config.Overrides`); `httpapi` adds `rbac.Permission` (which it already imports) and its page types,
-and reflects with `jsonschemax.Base.With(config.Overrides).With(its own)` — one composition, so a
+own layer: `jsonschemax.Base()` holds `time.Time`; `config` adds `config.Duration` and `secrets.Ref`
+(`config.Overrides()`; both are functions, because R5 forbids exported package-level maps); `httpapi` adds `rbac.Permission` (which it already imports) and its page types,
+and reflects with `jsonschemax.Base().With(config.Overrides()).With(its own)` — one composition, so a
 `config.Duration` field renders as `string/duration` in OpenAPI exactly as in the settings schema
-(SIMP3-1). `httpapi` therefore imports the static `config.Overrides` value but needs no live config
+(SIMP3-1). `httpapi` therefore imports `config` for the static `config.Overrides()` value but needs no live config
 store, so a `coretest` router or the `examples/hello` route test builds without one; there is still
 exactly one reflector. Verified on 2026-11-04 against the Go
 module proxy and the module zip: v0.4.3 is the latest tag (published 2026-04-17, older than the
@@ -133,7 +133,7 @@ stages (same contrib release train as the current `otelgin v0.72.0`, `go.mod:31`
 ## 3. Go API
 
 Package `github.com/falkcorp/mediacore/httpapi` (layer L6; may import `auth`, `rbac`, `audit`,
-`compat`, `config` (for the static `config.Overrides` value only; never a `*config.Store`, SIMP2-3,
+`compat`, `config` (for the static `config.Overrides()` value only; never a `*config.Store`, SIMP2-3,
 SIMP3-1), `log`, `metrics`, `core/internal/jsonschemax`; not `storage`: with the idempotency store
 deleted (§4.5) `httpapi` keeps no records). Implementation details in `core/internal/openapi` and
 `core/internal/httpmw`. The import direction is `httpapi` → `internal/openapi`, never the reverse:
@@ -149,7 +149,7 @@ deleted (§4.5) `httpapi` keeps no records). Implementation details in `core/int
 - the `auth` leaf types `Principal`, `Method` and `MethodSpec` (05-authn §3.1, §3.3), which land at
   S2 next to rbac's so `In.Principal` and `RouteInfo.AuthMethod` compile and `Registrar.AuthMethod`
   can record compat methods (06 §6.4.10; SEC3-14);
-- `config.Overrides`, `log` and `metrics`.
+- `config.Overrides()`, `log` and `metrics`.
 
 `Deps.Compat` is an S2b addition (no alias exists before S4, so nothing at S2 renders a ledger row or
 counts a legacy use), and `Deps.Auth`, `Deps.RBAC` and `Deps.Audit` are S4 additions; struct fields
@@ -420,6 +420,7 @@ var (
 	ErrLegacyAuthGin      = errors.New("httpapi: LegacyAuthGin mount not named by app.Options.LegacyAuthGinUntil")
 	ErrOwnAuthMethod      = errors.New("httpapi: OwnAuth route names no compat method registered by its module")
 	ErrNoAuthService      = errors.New("httpapi: non-Public native route registered before auth/rbac exist")
+	ErrPublicNotAllowed   = errors.New("httpapi: module native route uses rbac.Public but is not in its Manifest.PublicRoutes")
 	ErrAliasOutsideClaim  = errors.New("httpapi: alias or legacy route pattern outside its owner's claims")
 	ErrShadow             = errors.New("httpapi: a route of one owner is strictly more specific than a route of another owner over the same paths")
 )
@@ -837,10 +838,11 @@ and an *arr-v3 facade, whose clients call `<base>/api/v3/…` (`raw/16` §5.1). 
    manifest against the gin engine, `LegacyAuthGin` and `OwnAuth` admission of §8.2, alias targets and
    claims, cross-owner shadowing), validates prefix claims and the `/` owner,
    registers into a fresh `ServeMux`, assembles the chain, and returns `errors.Join` of every
-   problem. Any error aborts boot **before listeners open** (03 §3.7). Public routes have no
-   declaration API: the set of every `Public` route (native, alias, legacy) is a reviewed golden,
-   `TestPublicRoutesGolden`, like `TestOwnAuthRoutesGolden` (COR3-3; v1.3's `ErrPublicNotAllowed`
-   had no list to check against and is deleted). The shell-segment check runs at P8 in the kernel
+   problem. Any error aborts boot **before listeners open** (03 §3.7). A module's native
+   route may use `rbac.Public` only when the module's `Manifest.PublicRoutes` names it (06 §6.4.2;
+   hello's S2 `getGreeting`), else `ErrPublicNotAllowed`; the set of every `Public` route (core and
+   module native, alias, legacy) is also a reviewed golden, `TestPublicRoutesGolden`, like
+   `TestOwnAuthRoutesGolden` (COR3-3). The shell-segment check runs at P8 in the kernel
    (§4.10).
 4. `App.Run` serves the handler on configured listeners. Shutdown: `http.Server.Shutdown(ctx)` with
    the app's drain deadline; SSE handlers end on `Server.RegisterOnShutdown` + `Hub.Close`
@@ -949,17 +951,19 @@ stage, 09 S4 (OPS-11). There is no gin-retirement stage.
 
 | 09 stage | What changes in HTTP | Who authenticates / authorizes the legacy mount | Rollback |
 |---|---|---|---|
-| S2 (H0) | `core/httpapi` exists; ABO's `main` builds `app.New(opts, books.Module())` with `app.Options.LegacyAuthGinUntil: "books"`; `books` calls `MountLegacy(Auth: LegacyAuthGin)` with the whole gin engine; **every manifest route is its own mux pattern**; the perimeter moves to core stages 0–11 and is removed from gin in the same PR (logger, recovery, security headers with `DefaultCSP` = today's per-response `contentSecurityPolicy()` and `Reporting-Endpoints` (FE2-1), CORS, Basic auth with per-route exemption, gzip, tracing, the `/api` rate limiter with per-route `RateClass`); stage 5 emits `X-App-Build` on every response (FE2-5, OPS2-13). **Perimeter settings keep their UI-saved values (COR3-1, R3-1):** the perimeter keys (`core.http.basic_gate.*` = `basic_auth_enabled`, `core.http.rate_limit.*` = `enable_rate_limit`/`api_rate_limit_per_minute`, CORS origins, peer allow-list) are read through config's legacy-format adapter over `config_blob` from S2 (05-config), so a value saved only in the UI and a live edit through `PUT /api/v1/config` reach stages 0, 6, 8 and 10 as they do today (`basicauth.go:26` reads it live); done-check `TestPerimeterHonoursBlobOnlyValues`; cross-origin protection (stage 7) is new, and its refusals go to the access log as `security_event` until `audit` exists at S4 (SEC2-20); the 36 permission-less routes are annotated `AnyAuthenticated` in the manifest (R6 must hold at S2). **Client address (SEC2-19):** stage 0 resolves it and publishes it (`ClientAddrFrom`); ABO's `client_trust.go` stays in ABO until S4, and from S2 its `trustedClientIP` (used by the bootstrap, invite and ABS limiters, `bootstrap_rate_limit.go:207`, `invite_rate_limit.go:405`, `client_trust.go:600`) starts from that value and keeps only its "local peer + verified Access assertion" branch on top; at S4 that branch moves into ABO's `internal/cfaccess` authenticator | gin only (CF binder, `RequireAuth`, `s.perm`, `RequireAdmin`, `credGuard`, `RequireOwner` unchanged); core stages 12–13 off for the mount | revert to the old `main`; storage untouched |
-| S4 | `LegacyAuth` switches to `LegacyAuthCore`, and the same PR removes `LegacyAuthGinUntil` from `app.Options` (an archtest fails if it is still present after S4, SEC2-17): stage 12 binds the core principal and stage 13 enforces each manifest route's `Perm`/`Guards`; inside gin the auth middleware becomes the bridge of §8.3 (it never authenticates; its authorization adapters still enforce through `rbac.Require`); core auth/users/roles/keys/sessions routes go native under `/api/core/v1` and their legacy paths become `Alias`es with targets and selectors (§4.6; more specific than the gin patterns they replace, which are deleted in the same PR), except paths that cannot be mapped (`PUT /api/v1/auth/me/password` with `user_id` stays a gin route calling `auth.Service`, SEC2-5); stage 7 and stage 13 refusals are audited from here | core; gin bridge | binary swap. Identity data has one stored format (R3-1; 05-authn §11, 05-rbac §6.3): an older build reads the same `u:`, `role:` and `apikey:` rows, ignores the namespaced scopes, refuses every key and user restricted here, and its browser users sign in once (sessions are core-only). There is no rollback floor for S4 and no identity level step |
+| S2 (H0) | `core/httpapi` exists; ABO's `main` builds `app.New(opts, books.Module())` with `app.Options.LegacyAuthGinUntil: "books"`; `books` calls `MountLegacy(Auth: LegacyAuthGin)` with the whole gin engine; **every manifest route is its own mux pattern**; at **S2 r2** the perimeter moves to core stages 0–11 and is removed from gin in the same PR (logger, recovery, security headers with `DefaultCSP` = today's per-response `contentSecurityPolicy()` and `Reporting-Endpoints` (FE2-1), CORS, gzip with HEAD's per-path exclusions, tracing, the `/api` rate limiter with per-route `RateClass`), **except the Basic gate (stage 8), which stays in gin until S3** because its password is a legacy secret that core cannot hold before `secrets` exists (09 S2); stage 5 emits `X-App-Build` on every response (FE2-5, OPS2-13). **Perimeter settings keep their UI-saved values (COR3-1, R3-1):** the perimeter keys (`core.http.rate_limit.*` = `enable_rate_limit`/`api_rate_limit_per_minute`, CORS origins, peer allow-list; from S3 also `core.http.basic_gate.*` = `basic_auth_enabled`) are read through config's legacy-format adapter over `config_blob` from S2 (05-config), so a value saved only in the UI and a live edit through `PUT /api/v1/config` reach stages 0, 6 and 10 as they do today (and stage 8 from S3; until then gin's `basicauth.go:26` reads it live); done-check `TestPerimeterHonoursBlobOnlyValues`; cross-origin protection (stage 7) is new, and its refusals go to the access log as `security_event` until `audit` exists at S4 (SEC2-20); the 36 permission-less routes are annotated `AnyAuthenticated` in the manifest (R6 must hold at S2). **Client address (SEC2-19):** stage 0 resolves it and publishes it (`ClientAddrFrom`); ABO's `client_trust.go` stays in ABO until S4, and from S2 its `trustedClientIP` (used by the bootstrap, invite and ABS limiters, `bootstrap_rate_limit.go:207`, `invite_rate_limit.go:405`, `client_trust.go:600`) starts from that value and keeps only its "local peer + verified Access assertion" branch on top; at S4 that branch moves into ABO's `internal/cfaccess` authenticator | gin only (CF binder, `RequireAuth`, `s.perm`, `RequireAdmin`, `credGuard`, `RequireOwner` unchanged); core stages 12–13 off for the mount | revert to the old `main`; storage untouched |
+| S3 | The Basic gate (stage 8) moves from gin into the core perimeter with HEAD's per-route exemption (`OwnAuth`, SEC-14); its password becomes a `secrets.Ref` (§8.1 `core.http.basic_gate.password`); `basicauth.go` is deleted from gin in the same PR (04 §7) | gin only, as S2 | binary swap; a Basic password first written on S3+ is re-entered on the older build (05-config §1.12.2) |
+| S4 | `LegacyAuth` switches to `LegacyAuthCore`, and the same PR removes `LegacyAuthGinUntil` from `app.Options` (an archtest fails if it is still present after S4, SEC2-17): stage 12 binds the core principal and stage 13 enforces each manifest route's `Perm`/`Guards`; inside gin the auth middleware becomes the bridge of §8.3 (it never authenticates; its authorization adapters still enforce through `rbac.Require`); core auth/users/roles/keys/sessions routes and the settings routes (`/api/core/v1/settings`, `/settings/schema`, 05-config §1.3.4; FE3-11; until S4 settings go through ABO's `/api/v1/config`) go native under `/api/core/v1` and the legacy identity paths become `Alias`es with targets and selectors (§4.6; more specific than the gin patterns they replace, which are deleted in the same PR), except paths that cannot be mapped (`PUT /api/v1/auth/me/password` with `user_id` stays a gin route calling `auth.Service`, SEC2-5); stage 7 and stage 13 refusals are audited from here | core; gin bridge | binary swap. Identity data has one stored format (R3-1; 05-authn §11, 05-rbac §6.3): an older build reads the same `u:`, `role:` and `apikey:` rows, ignores the namespaced scopes, refuses every key and user restricted here, and its browser users sign in once (sessions are core-only). There is no rollback floor for S4 and no identity level step |
 | S5, S6, … | each core subsystem's routes go native in the stage that moves it (tasks S5, events S6, …), legacy paths aliased; at S6 the three legacy event streams stay gin manifest routes (`Perm` `AnyAuthenticated`, `OwnAuth` false) whose handler is the realtime projection obtained through `Registrar.Realtime().Projection` (05-realtime §4.9, COR2-1) | core | per stage |
 | any later | a books route group moves to `/api/books/v1` **only when rewritten for its own reasons** (SIMP-2); its old paths become aliases | core | per group |
 
-The S2 done-check in 09 must therefore cover the perimeter move (cross-cluster request): the Basic
-gate's exempt set equals HEAD's (`TestBasicGate_ExemptSetEqualsHEAD`), CSP header goldens per owner
+The S2 done-check in 09 covers the perimeter move: CSP header goldens per owner
 (the legacy SPA response carries the inline-script hash and the configured Access team host, and
 `Reporting-Endpoints`), `X-App-Build` on every response class in the perimeter goldens, the
 rate-limit class golden, the cross-origin test, the bootstrap, invite and ABS limiter tests unchanged
-(SEC2-19), ABS conformance fixtures and the live smoke.
+(SEC2-19), ABS conformance fixtures and the live smoke. The S3 done-check covers the Basic gate's move:
+its exempt set equals HEAD's (`TestBasicGate_ExemptSetEqualsHEAD`) and the gate enabled only in the
+blob turns stage 8 on (the Basic-gate half of `TestPerimeterHonoursBlobOnlyValues`).
 `TestLegacyRoleReachUnchanged` (572 routes × 4 roles, plus scoped keys and auth-off) belongs to S4,
 where the engine moves, and stays a permanent CI test because the mount is permanent.
 
@@ -1066,11 +1070,11 @@ gin route that ever disagreed with its mux pattern would still be checked (SEC2-
 | `internal/server/csp_report.go` | `core/internal/uihttp` (`/api/core/v1/ui/csp-report`) at S4; gin's `/api/v1/csp-report` stays the legacy mount's `CSPReport` until S9, then its handler is deleted |
 | `internal/server/static_embed.go` | `core/ui` at S9 |
 | `internal/server/middleware/ratelimit.go`, `request_size.go` | stages 10–11 |
-| `internal/server/middleware/basicauth.go` | stage 8 with per-route exemption |
+| `internal/server/middleware/basicauth.go` | stage 8 with per-route exemption, at 09 S3 (it stays in gin at S2) |
 | `internal/server/gone.go` | `httpapi.Gone` (native) — legacy stubs stay in gin |
 | `internal/httputil/respond.go`, `types.go`, `parse.go` | `httpapi.Problem`, `Page[T]` for native routes; legacy shape kept for aliases and gin |
 | `internal/httputil/rangeserve.go` | stays app-side helper used via `HandleRaw` (already `net/http`) |
-| `internal/plugin/router.go`, `internal/server/plugins_init.go:42` | deleted (N4); replaced by the module `Group` |
+| `internal/plugin/router.go`, `internal/server/plugins_init.go:42` | deleted at 09 S7 with `internal/plugin` (N4; 04 §8.3); replaced by the module `Group` |
 | `tygo.yaml`, `tools/cmd/opsgen`, `internal/wirecontract` | kept for legacy-mount types; native routes use OpenAPI + `coretest.ContractGoldens` (§7) |
 | `web/src/services/api.ts` (8,747 lines), `web/src/utils/apiFetch.ts` | calls to native routes use `@mediacore/api-client` / the generated `web/src/modules/books/api/` directory; calls to legacy routes keep `apiFetch` |
 
@@ -1111,7 +1115,7 @@ interactive method). Keys that decide who reaches the server or which client add
 | `core.http.rate_limit.burst` | int | `max(per_minute/5, 10)` | yes | none |
 | `core.http.rate_limit.max_clients` | int | 10000 | no | none |
 | `core.http.basic_gate.enabled` | bool | false | yes | admin |
-| `core.http.basic_gate.password` | secret: at S2 the legacy plaintext value (env, file or `config_blob`, read through config's legacy adapter); from S3 a `secrets.Ref`, moved to the encrypted store when this build first writes it (R3-1, 05-config) | — | yes | admin |
+| `core.http.basic_gate.password` | secret; core reads it from S3, when the gate moves (until then gin reads the legacy plaintext value itself): a `secrets.Ref`, moved to the encrypted store when this build first writes it (R3-1, 05-config) | — | yes | admin |
 | `core.http.openapi.public` | bool | false | yes | admin |
 | `core.http.read_header_timeout` / `idle_timeout` | duration | 15s / 120s | no | none |
 
@@ -1179,9 +1183,9 @@ route table.
 | `TestTaskStart_IdempotencyKeyReplaysRunView` | a repeated `Idempotency-Key` on task start → 200, the existing `RunView`, `Idempotent-Replayed: true` (SIMP2-8; store in 05-tasks) |
 | `TestAlias_DeprecationHeadersAndCompatCounter` | headers rendered from the ledger row of `app.Options.CompatLedger` (or core's fragment); `mediacore_compat_legacy_use_total{surface="http"}` increments (SIMP3-3) |
 | `TestAlias_OutsideClaimRefused` / `TestBuild_CrossOwnerShadowRefused` | a module alias at `GET /api/core/v1/auth/oidc/google/callback`, and a legacy route outside its mount's `LegacyPrefixes`, → `ErrAliasOutsideClaim`; one owner's pattern strictly more specific than another's → `ErrShadow`; 09 S4's ledger-listed core aliases pass (SEC3-8) |
-| `TestPublicRoutesGolden` | the reviewed set of every `Public` route, native, alias and legacy (COR3-3) |
+| `TestPublicRoutesGolden` / `TestBuild_PublicNotInManifestRefused` | the reviewed set of every `Public` route, native, alias and legacy; a module native route with `rbac.Public` absent from `Manifest.PublicRoutes` → `ErrPublicNotAllowed` (COR3-3) |
 | `TestCompressionExclusionsEqualHEAD` | golden from HEAD's `compressionMiddleware` lists: the four legacy exclusions carry `NoCompress`; `text/event-stream` responses are never gzipped; the log download is gzipped once (COR3-6) |
-| `TestPerimeterHonoursBlobOnlyValues` | S2: Basic gate enabled only in `config_blob` → stage 8 on; rate limit disabled only there → stage 10 off; a runtime edit through `PUT /api/v1/config` applies without restart (COR3-1) |
+| `TestPerimeterHonoursBlobOnlyValues` | S2: rate limit disabled only in `config_blob` → stage 10 off; a runtime edit through `PUT /api/v1/config` applies without restart (COR3-1); S3: Basic gate enabled only in `config_blob` → stage 8 on |
 | `TestBuildID_HeaderEqualsEmbeddedMeta` | for a `make build` and a Docker build, `X-App-Build` equals the embedded `index.html` meta value (FE3-2) |
 | `TestOpenAPI_UsesConfigOverrides` | a `config.Duration` field renders as `string/duration`, the same schema as in the settings schema (SIMP3-1) |
 | `TestLegacyInviteRedirect_SPASharedSegment` | `GET /invite` serves the page; `GET /invite/<t>` → 302 `/invite#token=<t>` with `Referrer-Policy: no-referrer`; at S4 and after S9 (SEC3-16, FE3-5) |
@@ -1322,3 +1326,7 @@ Round 3 (2026-11-04), findings applied to this file:
 - SIMP3-1 — `httpapi` imports the static `config.Overrides`; `time.Time` is in `jsonschemax.Base`; `TestOpenAPI_UsesConfigOverrides` (§1.1, §3, §7, §12).
 - SIMP3-2 — deferred facade members checked by `archtest.DeferredMembersAbsent` from S2 (§3.6).
 - SIMP3-3 — ledger dates from `app.Options.CompatLedger` merged with core's fragment (§3.1, §3.5, §12).
+
+Integration pass (round 3, 2026-11-04):
+
+- integration pass (round 3): S2 r2 perimeter move excludes the Basic gate; new S3 row (gate moves with HEAD's exemption, `TestBasicGate_ExemptSetEqualsHEAD` and the gate half of `TestPerimeterHonoursBlobOnlyValues` at S3); `basic_gate.password` read by core from S3; settings routes go native at S4 (FE3-11); `ErrPublicNotAllowed` checks 06's `Manifest.PublicRoutes` (plus the golden); `jsonschemax.Base()`/`config.Overrides()` as functions; plugin router deleted at S7.

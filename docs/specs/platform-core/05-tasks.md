@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -999,8 +999,9 @@ writes would either be refused (`ErrOutsideEffects`) or bypass G8. Where core lo
 module writes (acquire's import of a completed download, an AI batch result, a derived-index build, a
 module's `Online` data migration), the module side is a **module** kind built by a core helper that
 carries the module's own `Effects` and `Subjects`: `acquire.ImportTask`, `ai.BatchApplyTask`
-(`<module>.ai.batch-apply.<name>`), `storage.DerivedBuildTask` (`<module>.derived.<name>.build`, with
-`Name` module-relative, a `Title`, `Effects`, `Perms.Start`, a `Timeout` defaulting to 24 h and the
+(`<module>.ai.batch-apply.<name>`), `datamigrate.DerivedBuildTask` (package `storage/datamigrate`, L4, because `storage` (L1) cannot name a
+`tasks` type; `<module>.derived.<name>.build`, handed to `Registrar.DerivedIndex(name, hooks, build)` —
+`storage.DerivedHooks` carries only `Snapshot` and `Load`, no build; with `Name` module-relative, a `Title`, `Effects`, `Perms.Start`, a `Timeout` defaulting to 24 h and the
 rebuild's `Parallelism`; [05-storage](05-storage.md) §5S.3.9, COR3-7), and the kernel-registered
 `<module>.datamigrate.<name>` whose `Effects` are the migration's declared `Writes` (05-storage
 §5S.3.6, COR3-5). Core starts it: from a core outbox consumer with `outbox.Tx.StartRun`
@@ -1230,7 +1231,7 @@ then; nothing in T0–T8 prepares for it.
 | `internal/opscatalog`, `pkg/plugin/sdk`, `addOpRegistrar`, `serviceregistry` op wiring | `module.Registrar.Tasks` |
 | `internal/opsmetrics` | executor metrics (5T.10) |
 | `internal/lifecycle` | `core/lifecycle` (03 §3.3, L0) |
-| `internal/server/handlers/opsv3`, v1 operations handlers | `core/internal/tasksapi` |
+| `internal/server/handlers/opsv3`, v1 operations handlers | `core/internal/taskhttp` (05-http-api §5) |
 | `internal/database` ops storage (`pebble_store_ops_v2.go`, `pebble_store_ops_v3*.go`, `ReconcileOpsV3WithV2`) | `core/internal/executor/legacystore`, the legacy-format adapter (5T.6); books keeps only the store methods its legacy steps 62/65/66 call, until T8's minimum-upgrade-from release |
 
 ### 5T.8.2 Batches
@@ -1376,14 +1377,13 @@ for the compatibility window (09 §9.2.1) for dashboard continuity, then removed
    adapter's `opv2:op:` fallback covers both cases, but its cost depends on the answer.
 6. (Closed: 06 has `Registrar.ChangeSink`, `Manifest.TaskLedger`, `Manifest.TaskStarts` checked at P7,
    and `Deps.Tasks` typed `tasks.Client`.)
-7. [05-rbac](05-rbac.md) must add `core:tasks.manage` (pause, cancel others' runs, edit schedules) and
-   state the same approval-method rule as 5T.3.7 (SEC-24); SEC-9 relies on its `PermissionSpec.Class`
-   and SEC-3 on `Confining`.
-8. [05-storage](05-storage.md) §5S.9.1 must keep rows 9, 11, 13a and 13 with books (no `core/tasks#1`
-   hand-over) and declare the one `core/tasks` legacy-format grant of 5T.6 (read-write: run families,
-   settings clocks and pause marker, `opv3:sched:`, `op:completion:`/`op:deprev:`; read and
-   retention delete: terminal history), logged at boot and counted; row 12 stays books read-write; and
-   §5S.4's post-DAG reconcilers step drops the tasks reconcile (item (d)).
+7. (Closed by 05-rbac v1.4 §6.1 and its Tasks row: `core:tasks.manage` exists, may cancel any run and
+   edit schedules, and the approval-method rule of 5T.3.7 (SEC-24) is stated there; SEC-9 and SEC-3 use
+   its `PermissionSpec.Class` and `Confining`.)
+8. (Closed by 05-storage v1.4 §5S.9.1 and §5S.4: rows 9, 11, 13a and 13 stay books', with the one
+   logged `core/tasks` legacy-format grant of 5T.6 (read-write, `Exclusive`, on the run families, clocks,
+   pause marker and `Requires` stamps; read-delete on `operationlog:`); row 12 stays books read-write; the
+   post-DAG reconcilers have no tasks step.)
 
 ## Objections to 03
 
@@ -1490,3 +1490,7 @@ Round 3:
 - FE3-6 — aliases render legacy bodies through 05-http-api `LegacyPath.Shape`; no `WithLegacyShape`.
 - SIMP3-8 — the outbox relay sets no `IdempotencyKey` and writes no `c/tasks/idem/` record; "second guard" removed.
 - SIMP3-9 — "What is not a task" scoped to durable work; library-internal timers (OTel reader, batch span processor) excluded.
+
+Integration pass (round 3, 2026-11-04):
+
+- integration pass (round 3): handlers move to `core/internal/taskhttp` (was `tasksapi`); the derived build helper is `datamigrate.DerivedBuildTask` (L4), `storage.DerivedHooks` has no build; open items 7 and 8 closed (satisfied by 05-rbac and 05-storage v1.4).

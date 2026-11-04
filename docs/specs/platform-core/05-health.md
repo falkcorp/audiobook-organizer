@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -234,9 +234,14 @@ and launchd have no equivalent):
    timer**, so a step that hangs is still killed when its own budget runs out. Lower layers do not import
    `health`: the kernel hands storage and the search-index opener `ExtendStart` as a plain
    `func(step string)`, and hands the same func to modules as `module.Deps.ExtendStart` (06 §6.4.4,
-   from S2), through which the database and search code that stays in ABO during 09 S2–S7
-   (`internal/database/startup_notify.go`, `internal/search/register.go:55`) keeps extending the start
-   deadline after `internal/sdnotify` moves to core (04 §8.3).
+   from S2), through which ABO's search code that stays in ABO during 09 S2–S7
+   (`internal/search/register.go:55`) keeps extending the start deadline after `internal/sdnotify`
+   moves to core (04 §8.3). Code that runs **before** `app.New` and so has no `Deps` — at S2, ABO's
+   `serve` opens the store and runs books' migrations first (`internal/database/startup_notify.go`) —
+   calls the stateless `app.ExtendStart(step)` (06 §6.4.5): the same `EXTEND_TIMEOUT_USEC` write with
+   the same per-step budget, reading `NOTIFY_SOCKET` per call (no package state, R5), never from a
+   timer, a no-op without the socket and a failed write logged, never returned. From S2b core storage
+   opens the store and calls the kernel's func itself.
 2. **Stop** — the tasks executor's one bounded extension for an in-flight `Uninterruptible` run
    ([05-tasks](05-tasks.md) 5T.4), at most `core.tasks.shutdown_extend_max` beyond the stop budget.
 
@@ -595,3 +600,7 @@ Round 3:
 - OPS3-9 — deploy-wait note: the script runs on the operator's machine; 09 S0's `BASE_URL TIMEOUT [SSH_HOST UNIT]` signature polls the unit over ssh (`activating` = progress, `failed`/`inactive`/rising `NRestarts` = immediate failure, `active` starts `DEPLOY_READY_TIMEOUT`); URL-only without `SSH_HOST`.
 - FE3-13 — probe-path rule stated to hold during S8 too: gin's SPA fallback refuses `livez`/`readyz` from the probes' first release.
 - R3-2 — verified: this file specifies no release-promotion gating.
+
+Integration pass (round 3, 2026-11-04):
+
+- integration pass (round 3): §5H.3.4: code that runs before `app.New` (ABO's S2 `serve`: store open and books' migrations) uses the stateless `app.ExtendStart` (06 §6.4.5); search keeps `module.Deps.ExtendStart`.

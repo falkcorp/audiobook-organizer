@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-backup.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 604febb0-a09e-4cf9-99ee-5f3722534da6 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -513,8 +513,9 @@ the server and which an operator adds to separate archive decryption from secret
    inactive. Books declares `{Owner: core, Level: 0}`: no step of the extraction raises the `core`
    level (R3-1, 05-storage §5S.3.7), so every earlier ABO release, HEAD included, can open the store —
    upgraded and fresh alike, because a fresh ABO store keeps its families in the legacy format too — and
-   ABO archives stay plaintext until a level step past the bound exists (the first cutover, 05-storage
-   §5S.3.13, or a dedicated level step 09 may define, §5B.11 item 4). Apps without a pre-core history
+   ABO archives stay plaintext for the whole extraction and until the first level step past the bound,
+   which is the first per-family cutover (05-storage §5S.3.13; 09 §9.13), since no extraction step may
+   raise a level (§5B.11 item 4). Apps without a pre-core history
    declare none; their fresh stores are stamped at the build's level (05-storage §5S.4 step 5) and
    encryption is active as soon as rule 2 holds.
 
@@ -978,11 +979,12 @@ this package; nothing in the extraction deletes data a restore would need (R3-1:
 3. Multi-app in one binary: one archive per install (one DB); `Manifest.App` becomes a list then. A
    merge of two installs' stores is not an archive operation (05-storage open item 6, DATA-30). Not
    built until that mode exists (lowest priority).
-4. Encrypted archives for ABO during the extraction: books' legacy restore bound `{core, 0}` keeps them
-   off until a level step locks out every release without the encrypted-restore code (B3 rule 3). 09
-   decides whether a dedicated, operator-confirmed level step for this should exist before the first
-   cutover; until then the stated cost is plaintext archives (whose secrets are ciphertext in the DB and
-   whose config file is redacted).
+4. (Closed by 09 v1.3 §9.2.1, §9.13.) Encrypted archives for ABO: books' legacy restore bound `{core, 0}`
+   keeps them off for the whole extraction, because no extraction step raises a level (R3-1) and so every
+   earlier release, which has only the plaintext restore code, can still open the store. There is no
+   dedicated level step for encryption; the first per-family cutover is the level step past the bound that
+   lets encryption activate. Until then the stated cost is plaintext archives (whose secrets are
+   ciphertext in the DB and whose config file is redacted).
 
 ## 5B.12 Objections to 03
 
@@ -1063,3 +1065,7 @@ Round 3:
 - SEC3-12 — `POST /backups/{id}/verify` requires `core:system.manage` (§5B.3.8).
 - OPS3-1 — P0a resolves the state directory by 05-config's pre-boot rule with HEAD's fallback next to the database (R3-4) (§5B.3.4).
 - OPS3-13 — step 9 names the ssh probes of both restore files; a probe that cannot run refuses (§5B.3.4).
+
+Integration pass (round 3, 2026-11-04):
+
+- integration pass (round 3): B3 rule 3 and open item 4 (closed): ABO archives stay unencrypted for the whole extraction; there is no dedicated encryption level step, the first cutover passes the bound (09 §9.13).

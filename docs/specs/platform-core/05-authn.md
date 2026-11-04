@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -925,7 +925,7 @@ the legacy SMTP settings, as today; from S7 it is built from the `notify/email` 
 
 `PostRestore` is auth's `journal.RestoreHook`. The kernel runs it in P4d's post-restore step (06
 §6.5.1), only on a boot that applied a restore or found a replaced store (below), in the order of
-COR3-2: **after** `secrets.Open`, the config import and `AttachOverrides` (so journal lines are
+COR3-2: **after** `secrets.Open` and `AttachOverrides` (so journal lines are
 verified with the keyring and the journal is read from the effective `core.backup.dir`) and after the
 journal tail was re-applied; before any service is built and before listeners open; it fails boot on
 error. It writes the rows' one stored format directly (R3-1): there is no mirror to stage through and
@@ -967,13 +967,14 @@ legacy code.
 
 ## 5. Lifecycle
 
-1. **P4d, post-DAG reconcilers** (06 §6.5.1; order per COR3-2): `secrets.Open`, the config import
-   and `AttachOverrides` first; then 05-backup's revocation-journal re-apply, whose auth kinds write
-   the legacy-format rows through auth's Store; then, on a boot that applied a restore or found a
-   replaced store, `auth.PostRestore` (§4.14); then `auth.BootWrites` — seed `_system` and stamp
-   legacy keys lacking an expiry (today's `stampNeverExpiringAPIKeys`,
-   `internal/server/apikey_expiry_stamp.go`), moved out of P5 so P5 writes nothing (DATA3-18). There
-   is no identity rebuild: the identity families have one stored format (R3-1).
+1. **P4d, post-DAG reconcilers** (06 §6.5.1 is the order; COR3-2): `secrets.Open` (the keyring
+   only) and then config's `AttachOverrides` over its legacy-format adapter (there is no config import,
+   R3-1); then 05-backup's revocation-journal re-apply, whose auth kinds write the legacy-format rows
+   through auth's Store; then, on a boot that applied a restore or found a replaced store,
+   `auth.PostRestore` (§4.14); then `auth.BootWrites` — seed `_system` and stamp legacy keys lacking
+   an expiry (today's `stampNeverExpiringAPIKeys`, `internal/server/apikey_expiry_stamp.go`), moved out
+   of P5 so P5 writes nothing (DATA3-18); last, the compat usage records buffered in P0. There is no
+   tasks step and no identity rebuild: the identity families have one stored format (R3-1).
 2. **P5**: `rbac.Service` first (catalog frozen after module registration), then `auth.New` (loads
    `HasUsers`; writes nothing), then extensions from `app.Options.Authenticators` and module compat
    methods (§3.3).
@@ -1245,11 +1246,8 @@ The revocation journal is not on this list: its lines are MAC'd with a key from 
 
 ## Objections to 03
 
-1. **03 §3.7 "Rollback floor" (open until 03 applies R3-1).** It still says that once an adopt step
-   has run, the level guard refuses every build older than the sequence's Teach build, and the boot
-   sketch says "rollback floor = Teach build". Under R3-1 identity has no adopt step, no Teach build
-   and no floor (§11); the floor sentence should name only real format changes (books' own
-   migrations and future cutovers).
+None open. 03 §3.7 (v1.6.0) states one stored format per family and raises a level only for a real
+format change (books' own migrations and future cutovers), which is what §11 relies on.
 
 (03 §3.3 places middleware in `auth`; it is a plain `func(http.Handler) http.Handler`, so `auth` (L4)
 does not import `httpapi` (L6), consistent with R4.)
@@ -1372,3 +1370,7 @@ Round 3 (2026-11-04), findings applied to this file:
 - COR3-12 — `PUT /api/v1/auth/me/password` is one gin route for both cases, no alias (§4.13).
 - FE3-18 — legacy-link windows named as 09 §9.6 rows (§4.13).
 - SIMP3-2 — deferral checked by the deferred-members archtest from S2, not an S7 grep (§3.5).
+
+Integration pass (round 3, 2026-11-04):
+
+- integration pass (round 3): objection on 03 §3.7 closed (03 v1.6.0 applies R3-1); §5 and §4.14 follow 06 v1.4's P4d order (`secrets.Open` → `AttachOverrides` → journal re-apply → post-restore hooks → `auth.BootWrites` → compat records; no config import, no tasks step).

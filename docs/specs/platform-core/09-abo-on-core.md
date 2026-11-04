@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/09-abo-on-core.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 3c82c917-2fc4-4385-b085-73d143a2374f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -292,10 +292,10 @@ grant comes into force is this file's:
 | Stage | Grants that come into force (grantee: families, mode) |
 |---|---|
 | S2 | none: the kernel has no storage; config reads the blob through `app.Options.LegacyConfig`, ABO's legacy source over the store that `serve` opened before `app.New` (06 §6.4.5, COR3-1) |
-| S2b | `core/config`: `setting:config_blob`, read only until S3 (ABO's legacy config path still writes it); `core/log`: `syslog:`, read-delete |
+| S2b | `core/config`: `setting:config_blob`, read only until S3 (ABO's legacy config path still writes it) |
 | S3 | `core/config`: `setting:config_blob` read-write (`Serialized`), the four legacy secret rows read-delete |
 | S4 | `core/auth`: `u:`, `apikey:`, `inviteallow:`, `oauthid:` and their `idx:` sub-prefixes read-write `Exclusive`; `sess:`, `invite:` and theirs read-delete `Exclusive`; `core/rbac`: `role:`, `idx:role:name:` read-write `Exclusive` |
-| S5 | `core/tasks`: the ops run families, the other `op:`/`opv2:`/`opv3:` families, the clock and pause keys and the `Requires` stamps read-write `Exclusive`; `operationlog:` read-delete |
+| S5 | `core/tasks`: the ops run families, the other `op:`/`opv2:`/`opv3:` families, the clock and pause keys and the `Requires` stamps read-write `Exclusive`; `operationlog:` read-delete; `core/log`: `syslog:`, read-delete (its only reader, `logjournal`, imports `tasks` and lands here) |
 | S7 | `core/index`: `idx:sidx:dirty:` read-write `Exclusive`; `integrations` reaches its blob fields through configstore's blob participant (no grant of its own); `library`'s grants per 05-storage §5S.9.1 |
 
 Rules that apply to every row:
@@ -630,7 +630,7 @@ used here, in §9.10 and in P7.
 | Goal | Core `storage` opens the one Pebble store; books reaches its families only through declared claims (R8); the guard, census, checkpoint and compat bookkeeping are core's (OPS-12 item 1). |
 | Moves | 04 §8.1 row S2b: `internal/database` storage files → `mediacore/storage` + `internal/pebble` (`keyfamilies.go` stays ABO as the claim generator's input); `internal/compactprogress` → `storage`; Pebble collector → `internal/pebble` (gate S2b: ABO's Open Library store opens through `storage.OpenAuxiliary`); `internal/database/dbtest` `newstore.go` → `coretest`; `compat` gains usage persistence and the ledger (`app.Options.CompatLedger`, §9.2.9). The residue becomes `internal/books/store` on `storage.LegacyRange`. Storage opens at `core.storage.path` resolved per 05-storage §5S.4 step 1 from flags/env/file (Docker's `--db`, the unit's `DATABASE_PATH`), not under a state-directory root (COR2-8, DATA2-19). ABO's staged-restore swap runs in P0a through `app.Options.PreBootRestore` (S1 row). `examples/hello` gains its keyspace and one migration. |
 | Releases | **Release 1 — shadow** (05-storage §5S.9.4): claims enforced in log-only mode, `core.storage.claims.mode=shadow`; every violation is fixed by registering or correcting the writer. **Release 2 — strict**, after release 1 served production with zero violations for 14 days. The flip from shadow to strict is the stage's flip PR. |
-| Data/keys | No family moves, nothing is copied, no claim changes owner or mode: books holds every family (§9.2.3). The S2b grants come into force (`core/config` read on the blob, replacing `LegacyConfig.Load`, 06 §6.4.5; `core/log` read-delete on `syslog:`). New core keys only under `c/storage/` (level stamps, served ledger, core migration bookkeeping `c/storage/ks/<owner>/`) and `c/compat/` (usage records). Books migrations 1..66 keep `db_version`/`migration_<n>` through 05-storage's version-source adapter and run before claims are enforced (§9.2.2). |
+| Data/keys | No family moves, nothing is copied, no claim changes owner or mode: books holds every family (§9.2.3). The S2b grants come into force (`core/config` read on the blob, replacing `LegacyConfig.Load`, 06 §6.4.5; the `core/log` grant on `syslog:` comes into force at S5 with `logjournal`). New core keys only under `c/storage/` (level stamps, served ledger, core migration bookkeeping `c/storage/ks/<owner>/`) and `c/compat/` (usage records). Books migrations 1..66 keep `db_version`/`migration_<n>` through 05-storage's version-source adapter and run before claims are enforced (§9.2.2). |
 | Rollback | Binary swap (no data shape change; `c/` keys ignored). The dial `core.storage.claims.mode=shadow` undoes strict mode without a rollback. |
 | Done when | The persisted claim-violation record of 05-storage lists no writer for ≥ 14 days of production on release 1 (not a process-local counter, OPS-16); `TestBooksClaimsGenerated` (books' claim list = 05-storage §5S.9.1; fixture with books writing every family, DATA2-1); `TestS2bOpensStoreWrittenByS0`; the S2b grants appear in the boot log; free-space check before checkpoints and the checkpoint metric present (OPS-25); staged-restore rehearsal on core storage: ABO's swap runs in P0a and the boot reports a restore boot (DATA3-7). |
 
@@ -1152,3 +1152,4 @@ Round 3 (dispositions in `docs/plans/platform-core/reviews/spec-round-3-disposit
 - SIMP3-7 — `core.notify.max_age`.
 - SIMP3-10 — `internal/plugin` deleted at S7 (one stage, checked by 04's deletion gate); S6 does not move its bus.
 - SIMP3-12 — superseded history lines marked.
+- integration pass (round 3, lead): `syslog:` grant moved from S2b to S5 (its reader `logjournal` lands at S5).

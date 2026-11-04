@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -631,11 +631,11 @@ archtest `IntegrationsDescriptorCallers` (only kind packages call `NewDescriptor
 |---|---|
 | `config.MetadataSources[]` (`internal/config/config.go:147-163`) | legacy-backed `metadata/<id>` instances, adapters `books.<id>`, read and written in place in `metadata_sources` (M1.4 step 2a); `Credentials` values move into `secrets` under `integrations.metadata.<id>.credentials.<k>` on this build's first write of them |
 | `DelugeWebURL/Password`, `DownloadClient.Torrent.Deluge` (`config.go:225-240,1776-1780`) | the legacy-backed `download/deluge` instance (05-download §10) |
-| (egress trust) | `Local` is native-only (extension record, M1.4 step 2a). The versioned step `core/integrations#1` (`Additive`; it writes only `c/integrations/ext/`, which older builds never read, so it needs no `Floor`) runs once per store, at the first S7 boot, and grants `Local=true` to a legacy-backed instance only when its URL host is an **IP literal** in the loopback or private ranges (today these instances have no egress guard at all), bound to that URL origin; the grants are recorded in the migration ledger. No later boot grants again, and a host change by any writer resets `Local` (M1.3 `Put`; for an older build's change, M1.4 step 2a, health `integration_local_reset`). A private host given by **name** gets no grant (a name can resolve anywhere at dial time): it is `HealthMisconfigured` with reason "private host needs Local or lan_allow" until an admin sets `Local` or lists it in `lan_allow` (SEC3-5) |
+| (egress trust) | `Local` is native-only (extension record, M1.4 step 2a). The versioned step `core/integrations#1` (`Additive`; it writes only `c/integrations/ext/`, which older builds never read, so it raises no level) runs once per store, at the first S7 boot, and grants `Local=true` to a legacy-backed instance only when its URL host is an **IP literal** in the loopback or private ranges (today these instances have no egress guard at all), bound to that URL origin; the grants are recorded in the migration ledger. No later boot grants again, and a host change by any writer resets `Local` (M1.3 `Put`; for an older build's change, M1.4 step 2a, health `integration_local_reset`). A private host given by **name** gets no grant (a name can resolve anywhere at dial time): it is `HealthMisconfigured` with reason "private host needs Local or lan_allow" until an admin sets `Local` or lists it in `lan_allow` (SEC3-5) |
 | `ai_endpoints` rows (`internal/config/ai_endpoints.go:36-68`) | legacy-backed `ai/<id>` instances, read and written in place in `ai_endpoints` (05-ai §10) |
 | `config.Plugins["webhook"].Settings` | legacy-backed `notify/webhook-<n>` instances, read and written in place in `plugins.webhook` (05-notify §10) |
 | `handleDelugeTestConnection`, `/ai/test-connection` | `POST /api/core/v1/integrations/{kind}/test` |
-| `internal/plugin` (`Plugin`, `Registry`, `DownloadClient`, `Notifier`, `MediaPlayer`) | deleted (N4); `MediaPlayer` has no successor until a media-server kind is specified |
+| `internal/plugin` (`Plugin`, `Registry`, `DownloadClient`, `Notifier`, `MediaPlayer`) | deleted at 09 S7 (N4; 04 §8.3); `MediaPlayer` has no successor until a media-server kind is specified |
 
 **Legacy-backed instance table** (normative). It fixes the instance ID of every legacy singleton before the
 09 S3 build ships, because S3 is the first build that can write one of these secrets and it stages each secret
@@ -1217,3 +1217,7 @@ Round 3 (`docs/plans/platform-core/reviews/spec-round-3-dispositions.md`):
   restoration, since the legacy config alias now writes through `Put`; `TestPut_EchoedMaskIsNotResupply`.
 - SIMP3-11 — `InstanceConfig.Tags` moved to the deferred-build members.
 - SIMP3-12 — the round-2 `Origin`/DATA2-10 lines and the round-2 integration-pass `Floor` line marked superseded.
+
+Integration pass (round 3, 2026-11-04):
+
+- integration pass (round 3): M1.10 `core/integrations#1` "raises no level" (no `Floor` wording); `internal/plugin` deleted at 09 S7.

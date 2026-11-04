@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/06-app-sdk.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: d581911c-8f90-48bb-a307-5cd6288a9695 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -539,7 +539,8 @@ func (r *Registrar) Backup(a ...backup.Artifact)
 // is in Manifest.Storage (COR2-15). name is module-relative ("hnsw", not
 // "books.hnsw"). h carries Snapshot and Load only (storage.DerivedHooks;
 // storage, L1, cannot name a tasks type). build is the rebuild task, an
-// ordinary tasks.Definition built with tasks.Task: its kind must be
+// ordinary tasks.Definition built with datamigrate.DerivedBuildTask (package
+// storage/datamigrate, L4; 05-storage §5S.3.6) or with tasks.Task: its kind must be
 // "<ID>.derived.<name>.build" and, like every definition, it sets Title,
 // Effects (ReadOnly over the named module resources it reads), Perms.Start,
 // Resume, Parallelism and a Timeout sized for a library-scale rebuild (24 h
@@ -1376,7 +1377,7 @@ Core (`core/kernel/...`, `core/app`, `core/coretest`):
 | `TestEnablementFromBootRecord` | COR-14: a disable written through `config.Apply` lands in the boot record and takes effect at the next boot (read in P1); an operator env value beats it |
 | `TestMigrationFailureHaltsBoot` | G2 with a failing hello migration: no later step ran, earlier steps stay committed, the checkpoint exists and is unconsumed, no automatic restore happened, and the offline `storage restore-checkpoint` brings back the pre-boot state (DATA2-19) |
 | `TestBootPhaseOrder_NoWriteBeforeCheckpoint` | R2-8: an instrumented store records the first write of a boot with auth's boot writes, a revocation re-apply, a post-restore hook and buffered alias uses pending; it follows the checkpoint, and the reconcilers run in the P4d order (keyring and overrides before the journal, COR3-2) |
-| `TestJournalReapplyVerifiesWithKeyring`, `TestJournalReapplyUsesOverriddenBackupDir` | COR3-2, DATA3-5: with `core.backup.dir` set only in the settings blob, P4d step 3 reads the journal from that directory and verifies every line with the keyring opened in step 1 |
+| `TestJournalReapplyVerifiesWithKeyring`, `TestJournalReapplyUsesOverriddenBackupDir` | COR3-2, DATA3-5: with `core.backup.dir` set only in the settings blob, P4d step 2 reads the journal from that directory and verifies every line with the keyring opened in step 1 |
 | `TestStorageGrants` | R3-1: a grant to a module, to an absent owner, or on an unclaimed family fails P2 with `ProblemGrant`; each valid grant is logged once per boot; a grantee's write outside its granted families or above its granted access is refused; a disabled books keeps its grants in force; the boot performs no copy, mirror or rebuild of a granted family |
 | `TestLegacyConfigHonoured` | COR3-1: at S2 a value set only in the settings blob (Basic gate on, rate limit off) is effective after P3 through config's DB layer over `Options.LegacyConfig.Rows`, and a write by ABO's legacy config path republishes it through `Rows.Changed` without a restart; from S2b the same value arrives through config's adapter at P4d step 1 |
 | `TestBuildID_HeaderEqualsEmbeddedMeta` | FE3-2: for a `make build` binary and a Docker image built with one `BUILD_ID`, `X-App-Build` equals the embedded meta tag; a mismatching pair fails P8 with `ProblemBuildID`; `dev` disables the check |
@@ -1477,7 +1478,7 @@ itunes 1, domain 8, plugins 5 = **43**.
 
 | Today | Becomes |
 |---|---|
-| `internal/plugin.Plugin`, `Registry`, `Global()`, `Register` (`plugin.go:25`, `registry.go:19,33`) | deleted. The only implementor, webhook (`internal/plugins/webhook/plugin.go:33`), becomes the core `integrations/notify/webhook` adapter enabled in `Options.Adapters`, subscribing through `events` |
+| `internal/plugin.Plugin`, `Registry`, `Global()`, `Register` (`plugin.go:25`, `registry.go:19,33`) | deleted at S7 (04 §8.3). The only implementor, webhook (`internal/plugins/webhook/plugin.go:33`), becomes the core `integrations/notify/webhook` adapter enabled in `Options.Adapters`, subscribing through `events` |
 | `plugin.EventBus` (`internal/plugin/events.go:85`, goroutine per handler with the publisher's ctx) | core `events` (05-events: bounded dispatch, bus-lifetime ctx, as design Q1 decided) |
 | `plugin.PluginRouter`, `/api/v1/plugins/{id}` (`plugins_init.go:42`) | deleted; module routes go through `Registrar.HTTP()` inside the core chain. The 6 `/api/v1/plugins` routes (raw/09 §1.1) become `/api/core/v1/integrations/...` (configured adapter instances, health; 05-metadata M1.3) |
 | `plugin.Capability`, vestigial `DownloadClient`/`MediaPlayer`/`Notifier` (`plugin.go:17-21,52-57`) | deleted; capabilities are `integrations.Kind` + the `integrations/*` contracts |
@@ -1531,24 +1532,28 @@ uses it:
 
 ```go
 // internal/books/manifest_storage.go (ABO), S2b onward. A grant is added in
-// the PR of the stage that lands its grantee (config S3, auth/rbac S4,
-// tasks S5, log with its first journal-only build); before that the family
-// is books' alone, exactly as at HEAD.
+// the PR of the stage that lands its grantee (config: read at S2b, read-write
+// at S3; auth/rbac S4; tasks and log S5; index S7; 09 §9.2.3); before that
+// the family is books' alone, exactly as at HEAD.
 Storage: storage.Spec{
 	Keyspace: true,            // m/books/
 	Claims:   booksClaims,     // generated: the 258 families, books ReadWrite, permanent
 	Legacy:   booksLegacySteps, // versions 1..66, under books' own claims
-	Grants: []storage.Grant{  // generated from 05-storage §5S.9.1
-		{To: "core/config", Families: configFamilies, Access: storage.GrantReadWrite,
-			Why: "settings blob and secret rows, legacy format in place"},
-		{To: "core/auth", Families: identityFamilies, Access: storage.GrantReadWrite,
-			Why: "users, API keys, invites, OAuth links, legacy format in place"},
-		{To: "core/rbac", Families: roleFamilies, Access: storage.GrantReadWrite,
-			Why: "roles; native scopes added as namespaced strings"},
-		{To: "core/tasks", Families: opsHistoryFamilies, Access: storage.GrantReadWrite,
-			Why: "ops history and run families, legacy format in place"},
-		{To: "core/log", Families: activityFamilies, Access: storage.GrantRead,
-			Why: "activity history read in place"},
+	Grants: []storage.Grant{  // generated from 05-storage §5S.9.1 (field names per §5S.3.11)
+		{To: "core/config", Keys: []string{"setting:config_blob"}, Mode: storage.GrantReadWrite,
+			Reason: "settings blob, legacy format in place"},
+		{To: "core/config", Keys: legacySecretRows, Mode: storage.GrantReadDelete,
+			Reason: "legacy secret rows: read, blanked when the new build first writes the secret"},
+		{To: "core/auth", Prefixes: identityPrefixes, Mode: storage.GrantReadWrite, Exclusive: true,
+			Reason: "users, API keys, invite allow-list, OAuth links, legacy format in place"},
+		{To: "core/auth", Prefixes: sessionInvitePrefixes, Mode: storage.GrantReadDelete, Exclusive: true,
+			Reason: "legacy sessions and invites: read, deleted on use, expiry or restore"},
+		{To: "core/rbac", Prefixes: rolePrefixes, Mode: storage.GrantReadWrite, Exclusive: true,
+			Reason: "roles; native scopes added as namespaced strings"},
+		{To: "core/tasks", Prefixes: opsPrefixes, Mode: storage.GrantReadWrite, Exclusive: true,
+			Reason: "ops run families, clocks and Requires stamps, legacy format in place"},
+		{To: "core/log", Prefixes: []string{"syslog:"}, Mode: storage.GrantReadDelete,
+			Reason: "system activity rows read in place, retention-deleted"},
 	},
 },
 ```
@@ -2174,3 +2179,6 @@ Round 3 (2026-11-04), findings applied to this file:
 - SIMP3-5 — `Deps.Notify` lands at S7.
 - Coordinator (R-C) — no tasks reconcile in P4d; executor lifecycle `Executor.Run`; starter handle `tasks.Stager`.
 
+Integration pass (round 3, 2026-11-04):
+
+- integration pass (round 3): §6.11.6 grant example uses 05-storage's `Grant{To, Prefixes, Keys, Mode, Exclusive, Reason}` and the stage list config S2b/S3, auth/rbac S4, tasks and log S5, index S7; `Registrar.DerivedIndex` build may come from `datamigrate.DerivedBuildTask` (L4); `TestJournalReapply…` cites P4d step 2; `internal/plugin` deleted at S7.

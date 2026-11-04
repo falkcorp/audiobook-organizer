@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -173,6 +173,15 @@ type Record struct {
 	SpanID    string
 }
 
+// OtherUserPredicate reports whether a journal record (a legacy syslog row
+// decoded by the books ReadAdapter, or a native record) names another user's
+// data; viewer is the principal's user ID. A module registers at most one
+// through Registrar.LogOtherUserData (06); the journal query and the live tail
+// return a flagged record only to a principal that also holds core:users.view
+// and blank its user_id otherwise (§5). It must be pure and fast (called per
+// record) and fail closed: true when unsure.
+type OtherUserPredicate func(rec Record, viewer string) bool
+
 // Context-carried attributes (replace internal/logging.OpContext). The handler appends them to every
 // record logged with that ctx; tasks, httpapi and realtime set run_id / request_id / route / user_id.
 func WithAttrs(ctx context.Context, attrs ...slog.Attr) context.Context
@@ -335,9 +344,11 @@ type Schedules struct { // section core.log.schedules
   `TestLegacyRoleReachUnchanged` (SEC2-21).
 - Legacy rows (R3-1): ABO's `syslog:` family (`syslog:<RFC3339Nano>:<source>`,
   `internal/database/pebble_store_activity.go:20-37`) stays a **books** family and is **read in place**; there is
-  no copy, no adopt step (`core/log#1` is deleted), no claim hand-over and no level step, so no `Floor` and no
-  rollback floor come from logging (DATA3-14). `logjournal` reaches it through one explicit, logged storage
-  grant ([05-storage](05-storage.md) §5S.9.1 row 14): read, plus `Delete` for retention, never `Set`. A
+  no copy, no `core/log` migration step and no level step, so logging adds no rollback cost (DATA3-14, resolved
+  by R3-1). `logjournal` reaches it through one explicit, logged storage
+  grant ([05-storage](05-storage.md) §5S.9.1 row 14): read, plus `Delete` for retention, never `Set`. The grant
+  comes into force with `logjournal` at 09 S5 (`logjournal` imports `tasks`), not earlier: no core code reads
+  `syslog:` before then, and a grant whose grantee has no legacy-format adapter in the build fails boot (06 P2). A
   books-supplied `ReadAdapter` decodes the rows into `Record`s for the query route, so core holds no ABO row
   shape (R1). New records go only to `c/log/journal/` (a core-only family). Retention: the prune task also
   deletes aged `syslog:` rows through the grant, by `core.log.journal.retention_days`, in bounded chunks as HEAD
@@ -349,7 +360,7 @@ type Schedules struct { // section core.log.schedules
   drops lines that name another user's data, and blanks their user ID, unless the caller also holds
   `users.manage` (`activity.NamesOthersUserLog`, `internal/server/handlers/system/handler.go:444-458`). The query
   route and the live tail keep that rule for legacy and native records alike: a record the books-registered
-  predicate classifies as naming another user's data (registered next to its `PathRule`s, [06](06-app-sdk.md))
+  predicate (`log.OtherUserPredicate`, §3) classifies as naming another user's data (registered next to its `PathRule`s, [06](06-app-sdk.md))
   is returned only to principals that also hold `core:users.view`, the read-side successor of that gate
   ([05-rbac](05-rbac.md) §6.1); otherwise it is omitted and `user_id` is blanked.
 
@@ -433,7 +444,7 @@ These are recorded by a kernel-side bridge (`log` cannot import `metrics`, R4): 
 | `TestTwoAppsIsolated` | two `Logging` instances, distinct outputs and levels |
 | `TestLevelTraceRendering` | `TRACE` label; trace gated below debug |
 | `TestInstallProcessDefaults_RestoreAndExclusive` | restore works; second install errors; OTel sink drops values |
-| `TestJournal_BatchAndRetention` / `TestJournal_ReadsLegacySyslog` | batching bounds; prune of journal records and of aged `syslog:` rows through the grant (no `Set` possible); legacy rows returned by query; no `core/log` adopt step or level stamp exists |
+| `TestJournal_BatchAndRetention` / `TestJournal_ReadsLegacySyslog` | batching bounds; prune of journal records and of aged `syslog:` rows through the grant (no `Set` possible); legacy rows returned by query; no `core/log` migration step or level stamp exists |
 | `TestJournal_OtherUsersLinesNeedUsersView` | a `core:system.manage` principal without `core:users.view` gets neither legacy nor native records the books predicate flags, and sees `user_id` blank; with `core:users.view` it gets both (HEAD fixture) |
 | `TestJournal_PruneScheduleKeyDeclared` | `core.log.schedules.journal_prune` is declared with type `tasks.ScheduleConfig` in `logjournal.Schedules` and accepted by `ScheduleFromConfig` at registration |
 | `TestJournal_RequiresSystemManage` | `core:system.view`-only principal gets 403 on the query route and no `core.log.recorded.v1` events |
@@ -528,3 +539,7 @@ Round 3:
 - R3-1 / DATA3-14 — §5 "Legacy rows": `syslog:` stays a books family read in place through a logged grant (read and retention delete); `core/log#1` adopt step deleted, so logging contributes no level step or rollback floor; legacy prune moves to the journal prune task; rollback visibility stated; §11 step 1; test.
 - R3-1 (activity read in place) — §5: HEAD's other-user-data filter on system log lines kept for legacy and native records (`core:users.view`); test.
 - MOD3-3 — §11 steps 4–5: SDK logger and error handler stay in ABO's telemetry façade until S2; `logtest` becomes an injected capture handler in `coretest`, never `slog.SetDefault`.
+
+Integration pass (round 3, 2026-11-04):
+
+- integration pass (round 3): §5: the `syslog:` grant comes into force with `logjournal` at S5; `core/log#1`/`Floor` remnants removed from §5 and the test table; §3 defines `log.OtherUserPredicate`, the type 06's `Registrar.LogOtherUserData` takes.

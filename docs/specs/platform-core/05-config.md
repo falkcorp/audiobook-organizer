@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1045,7 +1045,11 @@ encrypts it.
 *integrations*) stay in the blob. Config does not own or interpret them. integrations reads and writes their
 blob fields in place through **configstore's blob participant**, which joins the caller's `*storage.Batch`
 (the same pattern as `secrets.Stage`) and shares the render of §1.6 ([05-metadata](05-metadata.md) M1). Their
-secrets follow the secret rule above. The blob is owned by books as a row, written by core only through
+secrets follow the secret rule above. From 09 S7, when `integrations` lands, the legacy `PUT /api/v1/config`
+path splits each request: the integration-bound fields go to `integrations.Registry.Put` (so M1.3's trust rules,
+the `Local` reset on a URL change and the change-URL audit apply once, whichever route wrote them) and the rest
+to `Store.Apply` (05-metadata M1.4 step 2a); before S7 the façade writes them through `Store.Apply` as plain
+blob fields, as HEAD does. The blob is owned by books as a row, written by core only through
 configstore, and outlives every extraction stage (DATA3-3).
 
 **Rollback matrix** (inputs to 09's R-test):
@@ -1456,8 +1460,12 @@ so a lost key file loses the secrets. Rules:
   path.
 - Recovery is an explicit operator action: `<app> secrets export-keyring --out <file>` (CLI, filesystem access
   required, refuses to write a file looser than 0600, works while the server runs because it reads only the
-  state dir). It records the exported key IDs and time in `<state_dir>/secrets.keyring.exported` (no key
-  material). Health warning `secrets_keyring_not_exported` stays raised while any key in the keyring is missing
+  state dir). The exported file carries, next to the keys, the install's `install_id` (the `c/storage/install`
+  marker's, 05-storage §5S.3.4 rule 4; `Open` writes it into the keyring file's header when it creates the
+  keyring or finds the field absent, so the export, which reads only the state dir, has it), so a host-loss
+  restore of a marker-less (pre-S0) archive keeps the install's lineage when no revocation journal header is
+  available (05-backup §5B.3.4 step 8, DATA3-12). It records the exported key IDs and time in
+  `<state_dir>/secrets.keyring.exported` (no key material). Health warning `secrets_keyring_not_exported` stays raised while any key in the keyring is missing
   from that record.
 - **Host-loss restore** ([05-backup](05-backup.md) §5B.3.3 procedure): the operator copies the exported file
   into the new state directory as `<state_dir>/secrets.keyring` (mode 0600) before the first start; there is
@@ -1690,3 +1698,7 @@ Round 3:
 - FE3-11 — §1.3.4: settings routes mounted from S4; before that through ABO's `/api/v1/config`.
 - COR3-11 — §1.3.1: map keys are data, not path segments (`core.tasks.kinds`).
 - SIMP3-12 (convention) — superseded history lines above are marked.
+
+Integration pass (round 3, 2026-11-04):
+
+- integration pass (round 3): §1.12.2: from S7 the legacy `PUT /api/v1/config` hands integration-bound fields to `integrations.Registry.Put`; §2.4: the keyring file and its export carry `install_id` (DATA3-12).

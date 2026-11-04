@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-download.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: 513fb395-c640-4bb6-b76c-d9fe80b3224e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -627,7 +627,7 @@ client with a scriptable clock-driven state machine (`Advance(id, State)`), capa
 | `deluge.path-update` (triggered by `book.relocated`), `deluge.centralize`, `deluge.link-backfill`, `deluge.protected-paths-sync`, `maintenance.bulk-deluge-import` | books tasks `books.download.*` calling `Pool`; `protected-paths-sync` gets a real schedule (fixes raw/06 note (d)) |
 | `ProtectedPathCache`, discovery, import, mark-in-place (`internal/deluge/*.go` minus client) | stay in ABO (audiobook behaviour) using `Pool.Items` (discovery: `ItemFilter{Categories: [<discovery label>]}`) and `Pool.Files` across **all** download instances; no `Watch`, monitor or grab is needed (phase 1 only) |
 | `/api/v1/deluge/*` routes (`internal/server/deluge_integration.go:139`) | books behaviour routes stay on the books legacy mount (cross-cutting 2; no reason of their own to rewrite them); generic client routes (test connection, status) become core instance routes with aliases (09 S7; SIMP2-17) |
-| `internal/plugin` `DownloadClient`, `TorrentInfo` | deleted (N4) |
+| `internal/plugin` `DownloadClient`, `TorrentInfo` | deleted at 09 S7 with `internal/plugin` (N4; 04 §8.3) |
 
 ## 11. Open items
 
@@ -713,3 +713,7 @@ Round 3 (`docs/plans/platform-core/reviews/spec-round-3-dispositions.md`):
   records, CAS, poll after `added`); acquire acks refused transitions; §3 topic table, §4.3, §4.5, two tests.
 - SIMP3-11 — `Selection.Tags` and `GrabRequest.Tags` confirmed phase-2 only (with the grab types).
 - SIMP3-12 — COR2-10, COR2-17/SIMP2-10 and DATA2-10 history lines marked superseded.
+
+Integration pass (round 3, 2026-11-04):
+
+- integration pass (round 3): `internal/plugin` `DownloadClient` deleted at 09 S7.

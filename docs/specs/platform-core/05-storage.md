@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-storage.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: 940ce8be-6f86-4450-b43a-77bf78827b12 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -619,7 +619,7 @@ family it holds no grant on. The census and backup use `storage.Admin` (kernel-o
 
 ```go
 // StepRef names one migration step of any owner, for cross-owner ordering.
-// Its one printed spelling is "<owner>#<version>" ("core/config#1", "books#66")
+// Its one printed spelling is "<owner>#<version>" ("core/integrations#1", "books#66")
 // or "<owner>#<data-migration-id>"; bookkeeping is keyed by the same owner ID
 // (c/storage/ks/core/auth/...), never by "core" alone (DATA2-29).
 type StepRef struct {
@@ -1500,7 +1500,7 @@ they need their own mode or `Serialized` flag; there are no cross-owner carve-ou
 | 12 | v1 `opstate:`, `op_result:`, `opsummary:`, `operation:` | 4 | books RW: live books writers — `opstate:` (`internal/operations/state.go:59-74`), `op_result:` (`CreateOperationResult`, `internal/database/pebble_store_operations.go:438`, 15 call sites, e.g. `internal/server/metadata_ops.go:391`), `opsummary:` (`SaveOperationSummaryLog`, `:256`, e.g. `internal/maintenance/jobs/backfill_book_files.go:197`), `operation:` (`UpdateOperationStatus`, `:138`, `internal/operations/registry/legacy_op_status.go:244`) | `core/tasks` Read (S5) | read by the v1 history reader and merged into `GET /runs`; AgingOut once 05-tasks' `TestLegacyOpsWriters` ratchet reaches zero writers (DATA-15, DATA2-12) |
 | 13a | `op:completion:`, `op:deprev:` (`Requires` stamps) | 2 | books RW | `core/tasks` ReadWrite, Excl. (S5) | read and written in place (library-scale, never copied); stamps of subjects with no legacy type in `c/tasks/req/` (05-tasks §5T.6; OPS2-9) |
 | 13 | all other ops families: v1 `operationlog:`; `op:`; `opv2:` and its other 10 children; `opv3:` and its other 15 children | 29 | books RW | `core/tasks`: ReadWrite, Excl. on the `op:`, `opv2:`, `opv3:` families (queues, indexes, trails, pages, Fixer rows); ReadDelete on `operationlog:` (S5) | written in place by the same adapter as row 11; terminal history deleted only by retention (05-tasks §5T.6) |
-| 14 | `syslog:` | 1 | books RW (HEAD's `StandardLogger` writes it until the journal is the only writer, 05-logging) | `core/log` ReadDelete (S2b) | read in place by the journal query adapter, retention-deleted in chunks; new log records in the core-only `c/log/journal/`; no `core/log` step and no level stamp (05-logging; DATA3-14 is resolved by R3-1) |
+| 14 | `syslog:` | 1 | books RW (HEAD's `StandardLogger` writes it until the journal is the only writer, 05-logging) | `core/log` ReadDelete (S5: its only reader, the journal adapter in `core/internal/logjournal`, imports `tasks` and lands at S5, and P2's `ProblemGrant` refuses a grant whose grantee has no legacy-format adapter in the build) | read in place by the journal query adapter, retention-deleted in chunks; new log records in the core-only `c/log/journal/`; no `core/log` step and no level stamp (05-logging; DATA3-14 is resolved by R3-1) |
 | 15 | `act:` (+12 children) | 13 | books RW: books' activity feed (05-logging) | none | core audit writes only new rows in the core-only `c/audit/` |
 | 16 | `setting:` (+`repairs_last_apply_op:`, `repairs_last_plan_op:`), `preference:`, `pref:` (+`pref:_system:` and its 6 children) | 12 | books RW: runtime markers, per-book and per-user state, migration bookkeeping (`preference:db_version`, `preference:migration_<n>`; resolution 7) | only the exact keys and sub-prefix of rows 7 and 9 | core config overrides with no legacy name are rows in `c/config/` (DATA-1) |
 | 17 | `guestcftoken:` | 1 | books RW: guest tokens stay in ABO (09 S4) | none | — |
@@ -1716,9 +1716,8 @@ credentials.
 
 ## 5S.12 Objections to 03
 
-1. 03 R8 still lists the claim modes `migrating` and `read-share`. This file has neither: claims are
-   read-write, read-only, aging-out or retired (§5S.3.4), and another owner's range is reached only
-   through a storage grant (read, read-delete, read-write; optionally exclusive, §5S.3.11).
+None open. 03 R8 (v1.6.1) lists exactly this file's claim modes (read-write, read-only, aging-out,
+retired) and reaches another owner's range only through a `storage.Grant` (§5S.3.11).
 
 ## 5S.13 Out-of-scope defects found
 
@@ -1849,3 +1848,7 @@ Round 3:
 - SEC3-11 — superseded by R3-1: no `Restriction`, decoy hash or `MirrorDisabled` in this file.
 - MOD3-9 — `storage/keys` and `storage/codec` are L0 leaves; `Typed` moved into `storage` so `codec` imports nothing from core (§5S.3.3).
 - (Rollback-safety follow-on of R3-1) derived-index artifacts are accepted only when every boot since maintained generations (served-ledger `duties`, §5S.3.9); the books full-text dirty set stays in its legacy family (§5S.3.8).
+
+Integration pass (round 3, 2026-11-04):
+
+- integration pass (round 3): objection 1 closed (03 R8 now lists this file's claim modes and grants); `StepRef` example names `core/integrations#1`, not the removed `core/config#1`; §5S.9.1 row 14: the `core/log` `syslog:` grant comes into force at S5 with `logjournal` (it imports `tasks`; no S2b reader exists and P2 would refuse an adapter-less grant).
