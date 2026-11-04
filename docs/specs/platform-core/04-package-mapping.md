@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/04-package-mapping.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a52b0af6-8e36-41c8-a78d-94859f6cac27 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -11,8 +11,8 @@ promotion rule of [03-architecture](03-architecture.md) §3.4 and uses its names
 and rules R1–R8. Decisions are fixed by [02-decision-record](02-decision-record.md) (D1–D9,
 N1–N12).
 
-Evidence commit: `748fd787a` (the spec branch adds documentation only; `git diff 748fd787a HEAD`
-outside `docs/` is empty). Raw inputs: [raw/01](../../plans/platform-core/raw/01-package-inventory.md)
+Evidence commit: `748fd787a` (the spec branch changes no code: `git diff 748fd787a HEAD` touches only
+`docs/` and one `todo.d/` fragment). Raw inputs: [raw/01](../../plans/platform-core/raw/01-package-inventory.md)
 (authoritative package list), [raw/02](../../plans/platform-core/raw/02-import-graph-hotspots.md),
 [raw/03](../../plans/platform-core/raw/03-layering-guard.md),
 [raw/04](../../plans/platform-core/raw/04-database-store.md),
@@ -28,31 +28,34 @@ outside `docs/` is empty). Raw inputs: [raw/01](../../plans/platform-core/raw/01
 
 | bucket | packages | non-test LOC | test LOC |
 |---|---|---|---|
-| Core public (SDK) path | 12 | 14931 | 14405 |
-| Core internal path | 5 | 23291 | 33662 |
+| Core public (SDK) path | 14 | 15793 | 15105 |
+| Core internal path | 4 | 22464 | 32993 |
 | Core `shared/` path | 0 | 0 | 0 |
-| Merge into another package | 31 | 12011 | 16479 |
-| ABO app path (stays in the root module) | 154 | 619737 | 725068 |
+| Merge into another package | 26 | 10842 | 12937 |
+| ABO app path (stays in the root module) | 158 | 620871 | 728579 |
 | Delete | 11 | 34861 | 3115 |
 | **total** | **213** | **704831** | **792729** |
 
-Of the 31 merge rows, 30 merge into a core package and 1 into an ABO package. Estimated non-test LOC that ends up in core (whole core-bucket and core-merge packages minus the files their split lists keep in ABO or delete, plus the files ABO packages' split lists send to core): **92745** of 704831 (13.2%). File-level detail for every split is in the row's *Split* cell.
+Of the 26 merge rows, 25 merge into a core package and 1 into an ABO package. Estimated non-test LOC that ends up in core (whole core-bucket and core-merge packages minus the files their split lists keep in ABO or delete, plus the files ABO packages' split lists send to core): **73981** of 704831 (10.5%). File-level detail for every split is in the row's *Split* cell.
 
 | bucket | generic | mixed | audiobook |
 |---|---|---|---|
-| Core public (SDK) path | 9 | 3 | 0 |
-| Core internal path | 2 | 3 | 0 |
+| Core public (SDK) path | 11 | 3 | 0 |
+| Core internal path | 1 | 3 | 0 |
 | Core `shared/` path | 0 | 0 | 0 |
-| Merge into another package | 27 | 4 | 0 |
-| ABO app path (stays in the root module) | 18 | 34 | 102 |
+| Merge into another package | 24 | 2 | 0 |
+| ABO app path (stays in the root module) | 20 | 36 | 102 |
 | Delete | 3 | 6 | 2 |
 
 Headline decisions:
 
-1. **`internal/database` is split, not moved.** Of `database.Store`'s 445 methods, **112** become
-   core storage-backed services (tasks 39, auth 33, storage 11, AI jobs 10, rbac 6, library 6,
-   config/secrets 4, log 3) and **333** stay with the books module (310 domain + 23 legacy
-   ops-v1). The residue is renamed `internal/books/store` (§4).
+1. **`internal/database` is split, not moved.** Of `database.Store`'s 445 methods, **108** sit
+   behind core service contracts (tasks 39, auth 33, storage 11, AI jobs 10, rbac 6, library 6,
+   log 3) and **337** stay with the books module (314 domain + 23 legacy ops-v1). The 39 task-run
+   methods keep their implementation in the residue as ABO's legacy run-row writers until
+   05-tasks T8 deletes them (core reads those families in place and writes only `c/tasks/`); the
+   4 `SettingsStore` methods stay with books because `setting:` is books' runtime-marker store
+   (cross-cutting resolution 7). The residue is renamed `internal/books/store` (§4).
 2. **No package qualifies for `mediacore/shared/` yet.** The promotion rule's second door (two real
    consumers) is closed until a second app exists; §9 lists the candidates and their triggers.
 3. **`pkg/` stops exposing `database.Book`.** `pkg/ops` becomes the public `mediacore/tasks` with
@@ -63,8 +66,18 @@ Headline decisions:
    `internal/maintenance`'s job registry, `internal/opscatalog`) in favour of explicit
    `module.Registrar` composition (N4, R5).
 6. **Gin-based packages are re-implemented, not moved** (`internal/httputil`, `internal/realtime`,
-   `internal/server/middleware`, `internal/server/handlers/opsv3`): core is `net/http` (N7), and the
-   gin forms stay in ABO only until their route groups retire.
+   `internal/server/middleware`, `internal/server/handlers/opsv3`): core is `net/http` (N7). ABO's
+   gin engine is mounted **permanently** through `httpapi.MountLegacy` (cross-cutting resolution 2),
+   so the gin helpers the legacy mount needs (`internal/httputil`'s `parse.go`/`respond.go`,
+   `internal/server`'s `gone.go`) stay in ABO for good; gin copies of concerns core takes over are
+   deleted at the stage that takes them over (perimeter S2, auth S4, task API S5, SPA S9).
+8. **No ABO import is ever rewired onto `mediacore/internal/...` or `mediacore/kernel`** (03 §3.4
+   visibility rule, R2; MOD-2). The internal/public column is derived from the import graph: a
+   package that ABO code still uses goes to a public path (`compactprogress` → `storage`, `oauth` →
+   `auth/oidc`, `lifecycle` → `lifecycle`) or stays in ABO until a named stage rewires its last ABO user to
+   a public surface (§8.3 lists every such gate; the generator fails on an ungated one).
+9. **Moves are keyed by [09](09-abo-on-core.md)'s stages**, not by a separate wave numbering (§8;
+   MOD-6). 09 references these rows for its per-stage move lists instead of restating them.
 7. **Three packages are dead code** with zero importers in test and non-test code
    (`internal/bookfiles`, `internal/writeback`, and `internal/operations/freshness`); the first two
    are deleted, the third merges into `tasks` because a consumer is already documented.
@@ -80,9 +93,12 @@ Headline decisions:
   `go list -json` at the same commit: every value matches.
 - A helper script kept outside the repository builds the tables from one mapping file and
   **fails** unless (a) the mapping covers exactly the 213 packages `go list ./...` returns, (b)
-  every file named in a *Split* cell is a non-test file of that package, and (c) no file is named
-  twice within a package. The tables below are its output. Tooling can re-check completeness
-  against the alphabetical index in §11.
+  every file named in a *Split* cell is a non-test file of that package, (c) no file is named
+  twice within a package, and (d) every destination under `mediacore/internal/` or
+  `mediacore/kernel` that ABO code still uses at the evidence commit (whole-package importers, or
+  references to exported identifiers declared in moved files, test files included) carries a gate
+  naming the stage and the public surface (§8.3). The tables below are its output. Tooling can
+  re-check completeness against the alphabetical index in §11.
 
 ### 2.2 Buckets
 
@@ -105,19 +121,27 @@ mixed-ness is a dependency on books types (`database.Book*` etc.), and those typ
 
 ### 2.3 Promotion rule, as applied
 
-A package (or part) goes to core only if one of these holds:
+03 §3.4's rule is non-circular: a package is **built** in core only if ABO consumes it during 09's
+stages or a built core package needs it. A package (or part) of the root module therefore goes to
+core only if one of these holds:
 
 | test | source | used for |
 |---|---|---|
-| P1 — it implements a platform concern listed in 03 §3.3 | 03 §3.4 | storage, tasks, events, log, metrics, config, secrets, httpapi, realtime, auth, rbac, audit, library, integrations, backup, updater, health, ui, kernel, archtest, coretest |
+| P1 — it implements a built core package of 03 §3.3 (Build column "ABO" or "core") | 03 §3.4 (a) | storage, tasks, events, log, metrics, config, secrets, httpapi, realtime, auth, rbac, audit, library, integrations (ai, metadata, download/deluge, notify mail+webhook, providerhttp), backup, updater, health, ui, kernel, archtest, coretest |
 | P2 — it has two real consumers across apps | 03 §3.4 | none today (one app) |
-| P3 — a core contract needs it | 03 §3.4 ("needed by core itself") | e.g. email normalization (`internal/util/email.go`) is needed by core auth; Range serving is needed by core httpapi |
+| P3 — a built core package needs it | 03 §3.4 (b) | e.g. email normalization (`internal/util/email.go`) is needed by core auth; Range serving is needed by core httpapi |
+
+No row maps to a **deferred-build** package (`acquire`, `arrfacade`, `integrations/indexer`, the
+download grab/monitor pipeline, non-Deluge download adapters): ABO has no code for them, so they
+appear in no wave or stage here.
 
 Packages that are domain-free but fail all three stay in ABO: `internal/cache`, `internal/flight`,
 `internal/keyedmutex`, `internal/errhandling`, `internal/tools`, `internal/querygrammar`,
 `internal/mtls`, `internal/cfaccesspolicy`, `internal/cfservicetoken`, `internal/wirecontract`,
 `internal/applycap`. (`internal/keyedmutex` was moved into core only by build experiment E2 in 03
-§3.2.1, which tests the module mechanism; it is not a placement decision.)
+§3.2.1, which tests the module mechanism; 03 §3.2.1 records that it is not a placement decision.)
+`internal/appdirs` and `internal/telemetry/contract` stay for a different reason: they import or walk
+ABO code (MOD-21, MOD-6).
 
 Where raw/01's class was wrong for this decision, the row says so: `internal/server/absauth` is
 classed audiobook-specific but holds the web login's password hashing, throttle and auth audit
@@ -131,6 +155,7 @@ is classed generic but is the in-process *audio* decoding switch.
 | `internal/books` | the module (`books.Module()`), its task `Resource` declarations and subject resolvers (from `internal/operations/registry/deps.go`, `types.go`), schedule declarations (from `internal/scheduler/tasks.go`), selection helpers (from `internal/operations/selection.go`), `PageBooks` (from `pkg/plugin/sdk/iterate.go`), task-kind aliases (from `internal/opscatalog/tombstones.go`), the books typed `Writer` contract (from `pkg/ops/writer.go`) |
 | `internal/books/store` (+`storetest`, `aggtest`) | rename of the `internal/database` residue (§4) |
 | `internal/books/writer` | rename of the `internal/operations/opswriter` residue |
+| `internal/telemetrypolicy` | rename of the test-only `internal/telemetry/contract` suite, plus `internal/telemetry/ratchet_test.go` (both walk or import ABO code; MOD-6) |
 | `internal/cfaccess` | the Cloudflare Access identity adapter and owner proof, consolidated from `internal/oauth/cfaccess.go`, `internal/server/middleware/{cfaccess,cfbounce,owner_guard}.go`, `internal/auth/owner.go`, `internal/server/{cf_recovery,guest_service_tokens,invite_guest_access,owner_routes}.go` (G11: deployment-specific, behind core auth's authenticator extension point) |
 
 ## 3. Mapping tables
@@ -140,31 +165,32 @@ Columns: current package (anchor target of §11), `layerOf` layer, non-test LOC,
 for rows without hand-written text is computed from the import graph (audiobook-class imports
 first, then importers).
 
-### 3.1 Core public (SDK) path (12 packages, 14931 non-test LOC)
+### 3.1 Core public (SDK) path (14 packages, 15793 non-test LOC)
 
 | package | layer | LOC | class | in/out | target | reason | evidence (import graph, file:line) |
 |---|---|---|---|---|---|---|---|
 | <a id="p-internal-aidispatch"></a>`internal/aidispatch` | 3 | 1802 | mixed | 4/2 | mediacore/integrations/ai (routing, endpoint health, inflight, attribution) | Generic capability->endpoint router with cooldowns; capability IDs become per-module registrations. | in 4, out 2. imports `logger`, `telemetry`; `Call[T]` `dispatch.go:347`; process-global `defaultHealth` `health.go:46` (R5); 10 audiobook capability IDs registered at import `capabilities.go:67-95,176,185`.<br>**Split:** **mediacore/integrations/ai** ← `attribution.go`, `classify.go`, `dispatch.go`, `errors.go`, `health.go`, `inflight.go`, `locality.go`, `metrics.go` (1498 LOC); **internal/ai (ABO capability IDs; registration mechanism -> core)** ← `capabilities.go` (304 LOC) |
 | <a id="p-internal-auth"></a>`internal/auth` | 3 | 610 | generic | 17/1 | mediacore/auth (identity context, credential methods); permissions + seed roles -> mediacore/rbac | Small, dependency-light identity core (raw/10 'positive building blocks'). The closed permission list and seed roles become `rbac` registrations (G1-G3). Owner proof is Cloudflare-Access-specific (G11) and stays in ABO. | in 17, out 1. imports `internal/database` only for `User`/`Role` and two seed-store interfaces (`seed.go:20-30`); closed list `permissions.go:91-129`; 13 atoms `permissions.go:24-85`; seed overwrite `seed.go:86-129`; owner proof `owner.go`; 17 importers.<br>**Split:** **mediacore/auth** ← `context.go`, `user_active.go` (202 LOC); **mediacore/rbac** ← `permissions.go`, `seed.go` (300 LOC); **internal/cfaccess (ABO, owner proof)** ← `owner.go` (108 LOC) |
 | <a id="p-internal-backup"></a>`internal/backup` | 3 | 1582 | generic | 4/3 | mediacore/backup | Consistent checkpoint-based archive of the DB directory with codecs, retention and verification; no book logic. Must grow to every core store and module-declared artifacts (03 §3.3). | in 4, out 3. imports `diskstats`, `logger`, `safepath`; `Checkpointable` `backup.go:28-33`; dead SQLite branches `backup.go:959,1028,1103` (delete); restore does not reopen the live store `internal/server/handlers/system/handler.go:823-905` (raw/05 §5). |
+| <a id="p-internal-lifecycle"></a>`internal/lifecycle` | 0 | 35 | generic | 3/0 | mediacore/lifecycle (`ErrShutdown` cancellation cause) | Shutdown-vs-cancel sentinel consumed by the executor and scheduler. 03 §3.3 defines the public L0 package `lifecycle` (shutdown types used by kernel and tasks), and `internal/aiscan` stays in ABO, so the target is public (MOD-6, MOD-2). | in 3, out 0. `ErrShutdown`/`IsShutdown` `shutdown.go:33`; importers `aiscan`, `registry`, `scheduler`. |
 | <a id="p-internal-logging"></a>`internal/logging` | 0 | 529 | generic | 13/0 | mediacore/log | slog-native context helpers, op context, sanitizers and path redaction: the shape 03 §3.3 prescribes for `log`. | in 13, out 0. no in-module imports (raw/02 a3: zero closure); `structured.go:47-68`, `opcontext.go:15`, `sanitize.go:28,38`, `redact_path.go:107` (invite-token redaction; invites are core auth). |
 | <a id="p-internal-mail"></a>`internal/mail` | 0 | 364 | generic | 3/0 | mediacore/integrations/notify/mail | SMTP `Sender`; fully generic (raw/11 §6). | in 3, out 0. no in-module imports; `Sender` `mail.go:60-62`; `SMTPSender` `mail.go:85`. |
 | <a id="p-internal-metadata-providerhttp"></a>`internal/metadata/providerhttp` | 3 | 417 | generic | 3/1 | mediacore/integrations/providerhttp | Per-provider throttled HTTP clients; must become instance-scoped (03 §3.3). | in 3, out 1. imports `logger`; package-global limits/clients `providerhttp.go:40,60-81` (raw/12 §9). |
+| <a id="p-internal-oauth"></a>`internal/oauth` | 3 | 827 | generic | 4/3 | mediacore/auth/oidc (OIDC/OAuth providers, public API; 05-authn §11) | GitHub OAuth2, Google OIDC, signed PKCE state and user linking are generic SSO (03 §3.3 `auth`: OIDC/OAuth). ABO's ABS OpenID flow (`internal/server/handlers/abs/openid.go`, `internal/server/absauth`) stays in ABO and uses `Config`, `New`, `IdentityClaims` and `ParseAllowedEmails`, so the providers go to the public `auth` package, not `internal/` (MOD-2). The Cloudflare Access JWT verifier is deployment-specific (G11). | in 4, out 3. `Provider` `providers.go:23-27` (2 impls `:37,:119`); `resolve.go:32,65`; `state.go:55-132`; CF verifier `cfaccess.go:68-97`; imports `database`, `logger`, `util` (email normalization).<br>**Split:** **internal/cfaccess (ABO)** ← `cfaccess.go` (132 LOC) |
 | <a id="p-internal-plugins-webhook"></a>`internal/plugins/webhook` | 4 | 162 | generic | 1/1 | mediacore/integrations/notify/webhook | Generic HMAC webhook notifier; becomes a notify adapter subscribed to core events. | in 1, out 1. imports only `internal/plugin` (`plugin.go:33`); brand header names `X-Audiobook-Event`/`-Signature-256` `plugin.go:124,126` -> app-supplied prefix. |
-| <a id="p-internal-realtime"></a>`internal/realtime` | 5 | 426 | generic | 2/0 | mediacore/realtime (+ mediacore/internal/sse) | SSE hub with client subscriptions; core makes it resumable and permission-filtered (03 §3.3), off gin. The books-changed coalescer generalizes to an entity-change coalescer keyed by `EntityRef`. | in 2, out 0. no in-module imports; gin `HandleSSE` (raw/12 §5); `EventBooksChanged` `book_changes.go:18`; importers `itunes/service`, `server`.<br>**Split:** **mediacore/realtime** ← `events.go`, `book_changes.go` (426 LOC) |
-| <a id="p-internal-telemetry"></a>`internal/telemetry` | 0 | 1363 | generic | 6/0 | mediacore/metrics | OTel tracer/meter/log providers, views, attribute allow-list, endpoint validation: platform metrics (03 §3.3). Must become per-`App` instances (R5). | in 6, out 0. no in-module imports; `otel.SetTracerProvider`/`SetMeterProvider` `telemetry.go:287,461` and `instanceID` `resource.go:31` are process globals (raw/12 §9); scope prefix brand `meter.go:17`. |
+| <a id="p-internal-realtime"></a>`internal/realtime` | 5 | 426 | generic | 2/0 | mediacore/realtime (+ mediacore/internal/sse) | SSE hub with client subscriptions; core makes it resumable and permission-filtered (03 §3.3), off gin. The books-changed coalescer generalizes to an entity-change coalescer keyed by `entity.Ref` (03 §3.3). | in 2, out 0. no in-module imports; gin `HandleSSE` (raw/12 §5); `EventBooksChanged` `book_changes.go:18`; importers `itunes/service`, `server`.<br>**Split:** **mediacore/realtime** ← `events.go`, `book_changes.go` (426 LOC) |
+| <a id="p-internal-telemetry"></a>`internal/telemetry` | 0 | 1363 | generic | 6/0 | mediacore/metrics | OTel tracer/meter/log providers, views, attribute allow-list, endpoint validation: platform metrics (03 §3.3). Must become per-`App` instances (R5). Its repo-walking test `ratchet_test.go` (`TestRatchet_ScansRealTree`, `ratchet_test.go:310`) stays in ABO, in `internal/telemetrypolicy` (MOD-6). | in 6, out 0. no in-module imports; `otel.SetTracerProvider`/`SetMeterProvider` `telemetry.go:287,461` and `instanceID` `resource.go:31` are process globals (raw/12 §9); scope prefix brand `meter.go:17`. |
 | <a id="p-internal-updater"></a>`internal/updater` | 3 | 547 | generic | 1/2 | mediacore/updater | Self-update mechanism; the release source must be a parameter. | in 1, out 2. repo slug hard-coded `updater.go:36,68-76`; imports `config`, `serviceregistry` (`register.go:60,76` -> delete).<br>**Split:** **mediacore/updater** ← `updater.go`, `scheduler.go` (453 LOC); **delete (serviceregistry)** ← `register.go` (94 LOC) |
 | <a id="p-pkg-ops"></a>`pkg/ops` | 3 | 3073 | mixed | 7/2 | mediacore/tasks | The v3 authoring model (Task/Batch/Fixer/Pipeline, Schedule, Effects, CancelContract, RC) is domain-neutral and becomes the public `tasks` API (N9). Its Book-typed `Writer` is the only audiobook edge and leaves. | in 7, out 2. imports `internal/auth` (`approval.go:11`, `definition.go:20,93`) and `internal/database` (`writer.go:11`; `Writer` methods `ModifyBook`/`ModifyBookFile`/`RepointBookFile`/`ModifyBookAuthors` `writer.go:46-90`); `SubjectType` book/book_file `writer.go:112-121`; `LaneMac` `lanes.go:15`; omitted `Concurrency` defaults to `CPU()` `batch.go:123` (R7 tightens this to no zero value).<br>**Split:** **internal/books (typed books Writer contract; `tasks.Writer` becomes generic over `Resource`)** ← `writer.go` (148 LOC) |
 | <a id="p-pkg-ops-opstest"></a>`pkg/ops/opstest` | 4 | 4056 | mixed | 0/6 | mediacore/tasks/taskstest | Conformance suite, fault injection and fake world for task definitions; every app needs it. | in 0, out 6. imports `opswriter`, `registry`, `state`, `pkg/ops`, `database`, `logger`; Book fakes `fakes.go:74,83,93` (raw/02); 1 test importer (`tools/cmd/oplint/analyzer_test.go:35`).<br>**Split:** **internal/books/store/storetest (Book-typed fakes)** ← `fakes.go` (613 LOC) |
 
-### 3.2 Core internal path (5 packages, 23291 non-test LOC)
+### 3.2 Core internal path (4 packages, 22464 non-test LOC)
 
 | package | layer | LOC | class | in/out | target | reason | evidence (import graph, file:line) |
 |---|---|---|---|---|---|---|---|
-| <a id="p-internal-oauth"></a>`internal/oauth` | 3 | 827 | generic | 4/3 | mediacore/internal/oauth (configured through mediacore/auth) | GitHub OAuth2, Google OIDC, signed PKCE state and user linking are generic SSO (03 §3.3 `auth`: OIDC/OAuth). The Cloudflare Access JWT verifier is deployment-specific (G11). | in 4, out 3. `Provider` `providers.go:23-27` (2 impls `:37,:119`); `resolve.go:32,65`; `state.go:55-132`; CF verifier `cfaccess.go:68-97`; imports `database`, `logger`, `util` (email normalization).<br>**Split:** **internal/cfaccess (ABO)** ← `cfaccess.go` (132 LOC) |
-| <a id="p-internal-operations-registry"></a>`internal/operations/registry` | 4 | 15137 | mixed | 38/14 | mediacore/internal/executor (public surface via mediacore/tasks) | The production v2 executor (dispatcher gates, workers, watchdog, resume, cancel, pause gate, RunItems) becomes core's executor; v2 `OperationDef` is adapted onto `tasks.Definition` (`FromV2`). Audiobook residue: book-field `Requires` predicates, the `Resource` constant list, `GetBookByID` dep adapter. | in 38, out 14. imports `auth`, `database`, `logger`, `metrics`, `opsmetrics`, `sdnotify`, `serviceregistry`, `pkg/ops`; `database.Book` predicates `deps.go:53,78,84-125`; `Resource` consts `books/book_files/authors/series/catalog/...` `types.go:384-398`; v1 subject `book` `types.go:417-420`; `New(store, slog.Default(), 8, hub)` `register.go:98`; 38 importers; RunItems `Concurrency` clamp `run_items.go:155-157`.<br>**Split:** **internal/books (subject resolvers, Resource declarations, dep adapter)** ← `deps.go` (311 LOC); **delete (serviceregistry wrapper)** ← `register.go` (131 LOC) |
-| <a id="p-internal-scheduler"></a>`internal/scheduler` | 4 | 4249 | mixed | 5/16 | mediacore/internal/scheduler (public `tasks.Schedule`) | One schedule mechanism for core (durable interval clock, daily-at, cron, maintenance window, v3 schedule loop). The 38 ABO `TaskDefinition`s and the metadata-upgrade extra op are books declarations; `OperationDef.Schedule` cron strings become live `tasks.Schedule` values (raw/06 §7.5). | in 5, out 16. imports `dedup` (`tasks.go:21`), `scanner` (`tasks.go:24`), `metabatch`/`metafetch` (`extra_ops.go:25-26`) -> 80 transitive deps, 39 audiobook (raw/02 finding 6); durable clock `interval_clock.go:60,146`; v3 loop `v3_schedule.go:193,622`.<br>**Split:** **mediacore/internal/scheduler** ← `cron.go`, `daily_at.go`, `interval_clock.go`, `maintenance.go`, `scheduler.go`, `v3_schedule.go` (2268 LOC); **internal/books (schedule declarations)** ← `tasks.go`, `extra_ops.go`, `full_sweep.go` (1981 LOC) |
-| <a id="p-internal-sdnotify"></a>`internal/sdnotify` | 0 | 149 | generic | 5/0 | mediacore/internal/sdnotify | systemd notify protocol used by the kernel lifecycle and long migrations. | in 5, out 0. stdlib only (`sdnotify.go`); importers `.`, `database`, `registry`, `search`, `server`. |
+| <a id="p-internal-operations-registry"></a>`internal/operations/registry` | 4 | 15137 | mixed | 38/14 | mediacore/internal/executor (engine; public surface mediacore/tasks) | The production v2 executor (dispatcher gates, workers, watchdog, resume, cancel, pause gate, RunItems) becomes core's executor. 31 root packages call its API (`RunItems`, `Reporter`, `OperationDef`, `EnqueueOption`, `Registry`), so the **engine** moves at S5 (05-tasks T0) while this path stays in ABO as the v2 adapter re-implemented over public `tasks` (05-tasks `opsbridge`), and is deleted when 05-tasks T8 removes its last ABO importer (MOD-2 gate). Audiobook residue: book-field `Requires` predicates, the `Resource` constant list, `GetBookByID` dep adapter. | in 38, out 14. imports `auth`, `database`, `logger`, `metrics`, `opsmetrics`, `sdnotify`, `serviceregistry`, `pkg/ops`; `database.Book` predicates `deps.go:53,78,84-125`; `Resource` consts `books/book_files/authors/series/catalog/...` `types.go:384-398`; v1 subject `book` `types.go:417-420`; `New(store, slog.Default(), 8, hub)` `register.go:98`; 38 importers; RunItems `Concurrency` clamp `run_items.go:155-157`.<br>**Split:** **internal/books (subject resolvers, Resource declarations, dep adapter)** ← `deps.go` (311 LOC); **delete (serviceregistry wrapper)** ← `register.go` (131 LOC) |
+| <a id="p-internal-scheduler"></a>`internal/scheduler` | 4 | 4249 | mixed | 5/16 | mediacore/internal/scheduler (public `tasks.Schedule`; moves when 05-tasks T7 rewires its last ABO importer) | One schedule mechanism for core (durable interval clock, daily-at, cron, maintenance window, v3 schedule loop). The 38 ABO `TaskDefinition`s and the metadata-upgrade extra op are books declarations; `OperationDef.Schedule` cron strings become live `tasks.Schedule` values (raw/06 §7.5). | in 5, out 16. imports `dedup` (`tasks.go:21`), `scanner` (`tasks.go:24`), `metabatch`/`metafetch` (`extra_ops.go:25-26`) -> 80 transitive deps, 39 audiobook (raw/02 finding 6); durable clock `interval_clock.go:60,146`; v3 loop `v3_schedule.go:193,622`.<br>**Split:** **mediacore/internal/scheduler** ← `cron.go`, `daily_at.go`, `interval_clock.go`, `maintenance.go`, `scheduler.go`, `v3_schedule.go` (2268 LOC); **internal/books (schedule declarations)** ← `tasks.go`, `extra_ops.go`, `full_sweep.go` (1981 LOC) |
+| <a id="p-internal-sdnotify"></a>`internal/sdnotify` | 0 | 149 | generic | 5/0 | mediacore/internal/sdnotify (behind `lifecycle` readiness and start-timeout hooks) | systemd notify protocol used by the kernel lifecycle and long migrations. Its ABO importers (`.` for the `--print-capabilities` fast exit, `internal/server` for READY/STOPPING, `internal/search` for start-timeout extension) are rewired at S2, when `main` calls `app.New` and the kernel owns readiness; it moves then, not in S1 (MOD-2 gate). | in 5, out 0. stdlib only (`sdnotify.go`); importers `.`, `database`, `registry`, `search`, `server`. |
 | <a id="p-internal-server-handlers-opsv3"></a>`internal/server/handlers/opsv3` | 5 | 2929 | mixed | 1/9 | mediacore/internal/taskhttp (native `/api/core/v1/tasks`; `/api/v3/ops` alias in ABO) | The cleanest existing API (own package, injected authz, resumable SSE): becomes core's task API (raw/09 §8.4). The repairs-specific access rule becomes a books authz hook. | in 1, out 9. imports `repairs` (`access.go:15`), `database.WorkerProgress` (`view.go:32,69,102`), gin; SSE resume `events.go:490-640`; 12 routes (raw/09 §2.3). |
 
 ### 3.3 Core `shared/` path (0 packages, 0 non-test LOC)
@@ -172,21 +198,17 @@ first, then importers).
 | package | layer | LOC | class | in/out | target | reason | evidence (import graph, file:line) |
 |---|---|---|---|---|---|---|---|
 
-### 3.4 Merge into another package (31 packages, 12011 non-test LOC)
+### 3.4 Merge into another package (26 packages, 10842 non-test LOC)
 
 | package | layer | LOC | class | in/out | target | reason | evidence (import graph, file:line) |
 |---|---|---|---|---|---|---|---|
 | <a id="p-internal-ai-aijobs"></a>`internal/ai/aijobs` | 3 | 575 | generic | 3/2 | mediacore/integrations/ai (durable provider batch jobs) | Provider batch-API job lifecycle is a generic AI capability; its callback registry becomes module registration (R5). | in 3, out 2. imports `database` (AIJobsStore), `logger`; `Register` `aijobs.go:89`; `BatchClient` `aijobs.go:31-36`. |
 | <a id="p-internal-ai-resultjournal"></a>`internal/ai/resultjournal` | 3 | 263 | generic | 4/2 | mediacore/integrations/ai (content-keyed result journal) | Durable cache of finished AI results; generic; stores through a keyspace. | in 4, out 2. imports `database` (RawKV), `logger`; `KVStore` `journal.go:81`; family `aijournal:` (raw/05 §3). |
-| <a id="p-internal-appdirs"></a>`internal/appdirs` | 3 | 88 | generic | 8/3 | mediacore/library (app-owned directory exclusions; modules add their own) | The set of app-owned dirs sweeps must skip; core owns DB/backup/cert dirs, modules declare more. | in 8, out 3. imports `backup`, `config`, `pathutil` (`appdirs.go:55-66`); 8 importers. |
 | <a id="p-internal-boundedcall"></a>`internal/boundedcall` | 0 | 120 | generic | 2/0 | mediacore/library (time-bounded uninterruptible calls on stuck mounts) | Guarding blocking syscalls on stuck mounts is part of safe filesystem access. | in 2, out 0. stdlib; `boundedcall.go:120`; importers `plugins/maintenance`, `repairs`. |
-| <a id="p-internal-compactprogress"></a>`internal/compactprogress` | 3 | 359 | generic | 3/2 | mediacore/internal/pebble (compaction progress reporting) | Reports Pebble compaction progress; engine-level. | in 3, out 2. imports `database` (`stats.go:22`, CompactionStats) + `logger`; importers `metafetch`, `plugins/maintenance`, `server`. |
+| <a id="p-internal-compactprogress"></a>`internal/compactprogress` | 3 | 359 | generic | 3/2 | mediacore/storage (compaction progress reporting; public `storage.Admin` statistics) | Reports Pebble compaction progress. `internal/metafetch`, `internal/plugins/maintenance` and `internal/server` stay in ABO and use `Stats`, `Step` and `RunStep`, so it goes to the public `storage` package, not `internal/pebble` (MOD-2). | in 3, out 2. imports `database` (`stats.go:22`, CompactionStats) + `logger`; importers `metafetch`, `plugins/maintenance`, `server`. |
 | <a id="p-internal-diag-flight"></a>`internal/diag/flight` | 3 | 659 | generic | 2/1 | mediacore/health (flight recorder in the diagnostics bundle) | Runtime trace flight recorder written on incidents: health diagnostics. | in 2, out 1. imports `logger` only; `flight.go:659`; importers `server`, `handlers`. |
 | <a id="p-internal-diskstats"></a>`internal/diskstats` | 0 | 24 | generic | 2/0 | mediacore/library (free-space checks) | Free-space check; used by core backup and library. | in 2, out 0. stdlib; `diskstats_unix.go`; importers `backup`, `server`. |
-| <a id="p-internal-httputil"></a>`internal/httputil` | 0 | 604 | mixed | 19/2 | mediacore/httpapi (error envelope, parsing, Range serving on net/http); ABO keeps the gin form until gin is retired (N7) | Response envelope and request parsing are the core HTTP framework; the gin types cannot move (core is `net/http`, N7), so this is a re-implementation and the gin package is deleted when the last gin route group retires. | in 19, out 2. imports `gin` (third-party), `applycap`, `logging`; `.m4b/.m4a` content-type switch `rangeserve.go:34`; `RespondWithError` envelope (raw/09 §5); 19 importers, 18 in server.<br>**Split:** **mediacore/httpapi** ← `parse.go`, `respond.go`, `types.go` (382 LOC); **mediacore/httpapi (Range serving; media types come from module registration)** ← `rangeserve.go` (222 LOC) |
 | <a id="p-internal-libroot"></a>`internal/libroot` | 3 | 215 | generic | 2/1 | mediacore/library | Library-root trust checks (mounted, owned) every library-wide op makes: `library` Root semantics. | in 2, out 1. `libroot.go:189`, `owner_unix.go:26`; imports `util`; importers `maintenance/jobs`, `plugins/maintenance`. |
-| <a id="p-internal-lifecycle"></a>`internal/lifecycle` | 0 | 35 | generic | 3/0 | mediacore/tasks (`ErrShutdown` cancellation cause) | Shutdown-vs-cancel sentinel consumed by the executor and scheduler; core tasks owns it and the kernel sets it as the cancel cause. | in 3, out 0. `ErrShutdown`/`IsShutdown` `shutdown.go:33`; importers `aiscan`, `registry`, `scheduler`. |
-| <a id="p-internal-logger"></a>`internal/logger` | 0 | 442 | mixed | 73/0 | mediacore/log (printf `Logger` retired; ABO keeps a deprecated shim until its 73 importers move to slog) | The printf `Logger` interface bundles progress, change recording and cancellation (task concerns) and leaks `BookID`; core exposes `log/slog` only. Correct fix is to migrate callers, not to promote the interface. | in 73, out 0. `BookID` field `internal/logger/logger.go:45`; interface `logger.go:54-98`; writes through `slog.Default()` (`standard.go`); 73 importers, 342 files import it (raw/12 §3).<br>**Split:** **mediacore/log (sanitize, attrs, retention policy)** ← `sanitize.go`, `attrs.go`, `retention.go` (223 LOC); **ABO shim, deleted after migration** ← `logger.go`, `standard.go` (219 LOC) |
 | <a id="p-internal-logger-logtest"></a>`internal/logger/logtest` | 0 | 135 | generic | 0/0 | mediacore/coretest (slog capture) | Captures slog output; a core test-kit concern. | in 0, out 0. 24 test importer files; no in-module imports. |
 | <a id="p-internal-mail-mailtest"></a>`internal/mail/mailtest` | 3 | 48 | generic | 0/1 | mediacore/coretest (recording notifier) | Recording fake sender for tests. | in 0, out 1. imports `mail`; 2 test importer files. |
 | <a id="p-internal-metadata-dailyquota"></a>`internal/metadata/dailyquota` | 0 | 348 | generic | 4/0 | mediacore/integrations/providerhttp (daily quota) | Per-provider daily budget; part of the outbound resilience stack. | in 4, out 0. no in-module imports; `For(provider)` global `dailyquota.go:333`; `Install` from `init()` in `internal/metadata/google_quota.go:61`. |
@@ -196,23 +218,22 @@ first, then importers).
 | <a id="p-internal-operations-freshness"></a>`internal/operations/freshness` | 0 | 50 | generic | 0/0 | mediacore/tasks (per-item freshness stamps) | Domain-free per-item stamp primitive. Zero importers today, but a consumer is documented (`internal/plugins/maintenance/chapters_backfill.go:40-52`: wire freshness before scheduling that op); belongs with tasks rather than being deleted and re-invented. | in 0, out 0. no importer, no in-module import; `freshness.go:31`. |
 | <a id="p-internal-operations-opmode"></a>`internal/operations/opmode` | 0 | 97 | generic | 8/0 | mediacore/tasks (preview/live mode resolution) | Every writer defaults to preview: a tasks contract. | in 8, out 0. no in-module imports; `dryrun.go:8-36,66`; 8 importers. |
 | <a id="p-internal-operations-state"></a>`internal/operations/state` | 0 | 578 | generic | 10/0 | mediacore/tasks (public `State`, v3 ten-state machine) | Run-status vocabulary and transition table; public because handlers, UI generators and apps classify runs. | in 10, out 0. no in-module imports; `state.go:29,150-183`, `v3.go:20-31,187,289,344`; 10 importers incl. `tools/cmd/opsgen`. |
-| <a id="p-internal-opsmetrics"></a>`internal/opsmetrics` | 3 | 525 | generic | 4/2 | mediacore/tasks (task-run instruments `mediacore_tasks_*`) | OTel instruments for task runs with a closed def-id label set: a tasks concern. | in 4, out 2. imports `operations/state`, `telemetry`; instrument names `audiobook_organizer.ops.*` `opsmetrics.go:12-15,114`; `RegisterDefID` `defids.go:24`. |
+| <a id="p-internal-opsmetrics"></a>`internal/opsmetrics` | 3 | 525 | generic | 4/2 | mediacore/tasks (task-run instruments; ABO's existing instrument names are kept through its metric prefix, SIMP-13) | OTel instruments for task runs with a closed def-id label set: a tasks concern. Core names new apps' instruments `mediacore_tasks_*`; ABO's `audiobook_organizer.ops.*` names do not change (03 §3.6 metric row). | in 4, out 2. imports `operations/state`, `telemetry`; instrument names `audiobook_organizer.ops.*` `opsmetrics.go:12-15,114`; `RegisterDefID` `defids.go:24`. |
 | <a id="p-internal-security-pathvalidation"></a>`internal/security/pathvalidation` | 0 | 255 | generic | 7/0 | mediacore/library (path confinement; superseded by os.Root where possible) | Path traversal validation is library confinement. | in 7, out 0. stdlib; `pathvalidation.go:255`; 7 importers. |
 | <a id="p-internal-security-safehttp"></a>`internal/security/safehttp` | 0 | 267 | generic | 2/0 | mediacore/integrations/providerhttp (SSRF-safe client for provider-supplied URLs) | Outbound-HTTP safety for third-party URLs belongs to the adapter HTTP layer. | in 2, out 0. stdlib; `safehttp.go:267`; importers `covers`, `metadata`. |
 | <a id="p-internal-security-safepath"></a>`internal/security/safepath` | 0 | 51 | generic | 6/0 | mediacore/library | Path-confinement helper used by backup and file ops. | in 6, out 0. stdlib; `safepath.go:51`; 6 importers incl. `backup`. |
-| <a id="p-internal-server-middleware"></a>`internal/server/middleware` | 5 | 3247 | mixed | 9/11 | mediacore/auth + mediacore/httpapi (generic middleware); ABS files -> internal/server/absauth; Cloudflare files -> internal/cfaccess | `RequireAuth`, permission checks, credential/owner guards, rate limiting, body limits and log/trace redaction are the core request chain (raw/09 §8.2). ABS and Cloudflare Access binders are app/deployment specific. | in 9, out 11. imports `server/absauth` (`absauth.go:19`), `fingerprint/workerapi` (`request_size.go:13`); `RequireAuth` `auth.go:152-262`; role-name admin check `auth.go:522-537` (G4); worker confinement `auth.go:271-306`; 9 importers.<br>**Split:** **mediacore/auth (authn/authz middleware)** ← `auth.go`, `credential_guard.go`, `actor.go`, `basicauth.go` (803 LOC); **mediacore/httpapi** ← `ratelimit.go`, `request_size.go`, `log_redact.go`, `recovery_redact.go`, `trace_redact.go` (873 LOC); **internal/server/absauth (ABO)** ← `absauth.go`, `absauthprobe.go` (948 LOC); **internal/cfaccess (ABO)** ← `cfaccess.go`, `cfbounce.go`, `owner_guard.go` (623 LOC) |
-| <a id="p-internal-startup"></a>`internal/startup` | 0 | 211 | generic | 2/0 | mediacore/kernel (startup step classes) + mediacore/health (degraded tokens) | The reviewed Fatal/Degraded step table is the kernel supervisor's contract; modules declare their own steps. | in 2, out 0. stdlib-only leaf; `steps.go:35-118`; importers `cmd`, `internal/server`. |
-| <a id="p-internal-telemetry-contract"></a>`internal/telemetry/contract` | 0 | 0 | generic | 0/0 | mediacore/metrics (tests) | Test-only contract suite for telemetry. | in 0, out 0. 0 non-test LOC, 1531 test LOC (raw/01). |
+| <a id="p-internal-server-middleware"></a>`internal/server/middleware` | 5 | 3247 | mixed | 9/11 | mediacore/auth + mediacore/httpapi (generic middleware); ABS files -> internal/server/absauth; Cloudflare files -> internal/cfaccess | `RequireAuth`, permission checks, credential/owner guards, rate limiting, body limits and log/trace redaction are the core request chain (raw/09 §8.2), re-implemented on net/http. The gin copies of the perimeter concerns are deleted at S2, when core's perimeter middleware wraps the legacy mount; the gin auth chain is deleted at S4, when the `legacyauth` bridge (new ABO code in `internal/server`) reads the core principal inside gin (cross-cutting resolution 2). ABS and Cloudflare Access binders are app/deployment specific. | in 9, out 11. imports `server/absauth` (`absauth.go:19`), `fingerprint/workerapi` (`request_size.go:13`); `RequireAuth` `auth.go:152-262`; role-name admin check `auth.go:522-537` (G4); worker confinement `auth.go:271-306`; 9 importers.<br>**Split:** **mediacore/auth (authn/authz middleware)** ← `auth.go`, `credential_guard.go`, `actor.go`, `basicauth.go` (803 LOC); **mediacore/httpapi** ← `ratelimit.go`, `request_size.go`, `log_redact.go`, `recovery_redact.go`, `trace_redact.go` (873 LOC); **internal/server/absauth (ABO)** ← `absauth.go`, `absauthprobe.go` (948 LOC); **internal/cfaccess (ABO)** ← `cfaccess.go`, `cfbounce.go`, `owner_guard.go` (623 LOC) |
+| <a id="p-internal-startup"></a>`internal/startup` | 0 | 211 | generic | 2/0 | mediacore/kernel (startup step classes) + mediacore/health (degraded tokens) | The reviewed Fatal/Degraded step table is the kernel supervisor's contract; modules declare their own steps through `module.Registrar`. `internal/server` builds the table today, so the move happens at S2, when the server lifecycle moves into the kernel (MOD-2 gate). | in 2, out 0. stdlib-only leaf; `steps.go:35-118`; importers `cmd`, `internal/server`. |
 | <a id="p-internal-walkresume"></a>`internal/walkresume` | 0 | 242 | generic | 4/0 | mediacore/tasks (yield/resume helpers) | Exists only because layer-3 packages could not import the registry (`walkresume.go:5-17`); with tasks below every ABO layer the seam is unnecessary and its `ErrYield`/checkpoint cadence become tasks helpers. | in 4, out 0. no in-module imports; importers `itunes`, `plugins/maintenance`, `remux`, `server`; `CheckpointEvery = 10` (raw/06 §1.7). |
 | <a id="p-internal-watcher"></a>`internal/watcher` | 3 | 457 | generic | 1/3 | mediacore/library (root watching) | fsnotify supervision of media roots is a library concern; the extension filter becomes a module-supplied predicate. | in 1, out 3. imports `appdirs`, `config`, `pathutil`; `config.SupportedExtensionSet()` `watcher.go:243` (raw/02 a2); `fsnotify` dependency. |
 | <a id="p-tools-cmd-oplint"></a>`tools/cmd/oplint` | 6 | 998 | generic | 0/0 | mediacore/archtest/tasklint | Lints task bundles (unbundled-def, writer-bypass, store-in-deps, missing-help, sequential-empty-reason, deletes-owner-review); these rules govern every app's `tasks` definitions, so they are a `tasks` platform concern delivered through `archtest` (apps run it from their own tests). | in 0, out 0. analyzer `tools/cmd/oplint/analyzer.go`; hard-codes `modulePath` (`analyzer.go:45`) and ~12 fixtures under `tools/cmd/oplint/testdata/src/github.com/falkcorp/audiobook-organizer/...` (raw/02 §e) -> becomes a parameter; test imports `pkg/ops/opstest` (`analyzer_test.go:35`). |
 | <a id="p-tools-cmd-opsgen"></a>`tools/cmd/opsgen` | 6 | 244 | generic | 0/1 | mediacore/internal/openapi | Generates TS status enums from `operations/state`; in core the task states are OpenAPI enums and `@mediacore/api-client` is generated from the core OpenAPI document (03 §3.3), so the generator is subsumed. | in 0, out 1. writes `web/src/generated/ops.ts` from `internal/operations/state/{state,v3}.go` (`tools/cmd/opsgen/main.go:6,28`, raw/09 §5). |
 
-### 3.5 ABO app path (stays in the root module) (154 packages, 619737 non-test LOC)
+### 3.5 ABO app path (stays in the root module) (158 packages, 620871 non-test LOC)
 
 | package | layer | LOC | class | in/out | target | reason | evidence (import graph, file:line) |
 |---|---|---|---|---|---|---|---|
-| <a id="p-root"></a>`.` | 6 | 86 | mixed | 0/6 | . (unchanged) | The ABO `main`; becomes the composition root that calls `app.New(ctx, opts, books.Module())` (03 §3.7). | in 0, out 6. imports `internal/database` (`main.go:13`), `internal/server` (`main.go:16`), registry, sdnotify, telemetry. Stays the root-module positive-control edge `. -> internal/server` (03 §3.5.1). |
+| <a id="p-root"></a>`.` | 6 | 86 | mixed | 0/6 | . (unchanged) | The ABO `main`; becomes the composition root that calls `app.New(ctx, opts, books.Module())` (03 §3.7). | in 0, out 6. imports `internal/database` (`main.go:13`), `internal/server` (`main.go:16`), registry, sdnotify, telemetry. Its edge `. -> cmd` (`main.go:12`) is the root-module in-module positive control (03 §3.5.1). |
 | <a id="p-cmd"></a>`cmd` | 6 | 1876 | mixed | 1/14 | cmd (unchanged) | Cobra CLI of ABO (serve, fp-worker, diagnostics, seed); flag wiring moves onto `app.Options`. | in 1, out 14. imports `internal/fingerprint` (`cmd/fp_worker.go:24`), uses `database.BookCore/Author/Series` (`cmd/diagnostics.go:116`); `cmd/root.go:280` opens the store, `:718` calls `slog.SetDefault` (R5: moves into `app`).<br>**Split:** **mediacore/app (Options/flags, replaces cmd/root.go store+OTel+slog bootstrap)** ← `root.go` (792 LOC); **cmd (ABO)** ← `child_mode.go`, `diagnostics.go`, `fp_worker.go`, `seed.go`, `umask_unix.go` (1084 LOC) |
 | <a id="p-cmd-itl-audit-encoding"></a>`cmd/itl-audit-encoding` | 6 | 90 | audiobook | 0/1 | cmd/itl-audit-encoding (unchanged) | iTunes maintenance CLI; audiobook-only. | in 0, out 1. imports `internal/itunes` only (raw/01). |
 | <a id="p-cmd-itl-check"></a>`cmd/itl-check` | 6 | 89 | audiobook | 0/1 | cmd/itl-check (unchanged) | iTunes maintenance CLI; audiobook-only. | in 0, out 1. imports `internal/itunes` only (raw/01). |
@@ -222,10 +243,11 @@ first, then importers).
 | <a id="p-cmd-pid-census"></a>`cmd/pid-census` | 6 | 226 | mixed | 0/2 | cmd/pid-census (unchanged) | iTunes maintenance CLI; audiobook-only. | in 0, out 2. imports `internal/itunes` only (raw/01). |
 | <a id="p-cmd-verify-suite"></a>`cmd/verify-suite` | 6 | 57 | generic | 0/1 | cmd/verify-suite (unchanged) | ABO dev tool; one consumer; not a platform concern. | in 0, out 1. no importer; one in-module import (raw/01). |
 | <a id="p-internal-acoustid"></a>`internal/acoustid` | 0 | 224 | audiobook | 2/0 | internal/acoustid (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "is a thin client for the acoustid.org /v2/lookup API. We only need the smallest slice of the response —". | in 2, out 0; importers: `internal/plugins/acoustid`, `internal/reconcile` |
-| <a id="p-internal-activity"></a>`internal/activity` | 3 | 2526 | mixed | 11/5 | internal/activity (unchanged path; book changelog + per-user audit entries) | The activity journal (tiers, batching, writer, query service) is the persisted log the shell's logs page reads, so it moves to core `log` (audit tier to `audit`); the changelog over `MetadataChangeRecord`/`BookPathChange` and the book user-data entries stay. | in 11, out 5. imports `undo` (`changelog.go:17`), uses `database.MetadataChangeRecord/BookPathChange` (`changelog.go:27-28`); serviceregistry registrations `register.go:37-120`; 11 importers.<br>**Split:** **mediacore/log (activity journal service)** ← `api.go`, `batcher.go`, `service.go`, `writer.go` (1710 LOC); **delete (serviceregistry)** ← `register.go` (129 LOC); **internal/activity (ABO)** ← `changelog.go`, `user_data.go` (687 LOC) |
+| <a id="p-internal-activity"></a>`internal/activity` | 3 | 2526 | mixed | 11/5 | internal/activity (unchanged path; book changelog + per-user audit entries) | The books activity feed (tiers, batching, digests, changelog) stays in the books module (03 §3.3 `log` row; 05-logging §5): core `log` gets a new system-log journal and core `audit` gets new rows only. The slog line parsing in `writer.go:149-215` is deleted by 05-logging stage 1. | in 11, out 5. imports `undo` (`changelog.go:17`), uses `database.MetadataChangeRecord/BookPathChange` (`changelog.go:27-28`); serviceregistry registrations `register.go:37-120`; 11 importers.<br>**Split:** **delete (serviceregistry)** ← `register.go` (129 LOC); **internal/activity (ABO)** ← `api.go`, `batcher.go`, `service.go`, `writer.go`, `changelog.go`, `user_data.go` (2397 LOC) |
 | <a id="p-internal-ai"></a>`internal/ai` | 3 | 6108 | mixed | 8/9 | internal/ai (unchanged path; audiobook AI features) | The OpenAI-compatible chat/batch/embedding clients, retry, pool routing and AI metrics are a provider adapter (`integrations/ai/openai`); prompts and features (dedup review, author dedup, cover text, metadata scoring) are books. | in 8, out 9. imports `covertext` (`cover_text.go:20`), uses `database.DedupCandidate` (`dedup_review.go:80`); concrete `*OpenAIParser` `openai_parser.go:261,358`; `aijobs.Register` from `init()` `author_dedup_job.go:132`, `dedup_review.go:242`; 8 importers.<br>**Split:** **mediacore/integrations/ai/openai (adapter)** ← `embedding_batch.go`, `embedding_client.go`, `openai_batch.go`, `openai_batch_find.go`, `retry.go`, `pool_routing.go`, `ai_metrics.go`, `ai_metrics_models.go`, `telemetry.go`, `aijobs_adapter.go` (3002 LOC); **delete (serviceregistry)** ← `register.go` (174 LOC); **internal/ai (ABO; openai_parser.go splits: client -> adapter, Parse* methods -> ABO)** ← `openai_parser.go`, `author_dedup_job.go`, `cover_text.go`, `dedup_review.go`, `embedding_scorer.go`, `llm_scorer.go`, `metadata_llm_review.go`, `metadata_scorer.go` (2932 LOC) |
 | <a id="p-internal-ai-mocks"></a>`internal/ai/mocks` | 3 | 166 | generic | 0/1 | internal/ai/mocks (unchanged) | Mock of `MetadataCandidateScorer`, which stays in ABO. | in 0, out 1. `mock_metadata_candidate_scorer.go`; 3 test importer files. |
 | <a id="p-internal-aiscan"></a>`internal/aiscan` | 3 | 2915 | mixed | 1/5 | internal/aiscan (unchanged) | AI author-scan pipeline over books and dedup; book metadata cross-validation. | in 1, out 5; imports audiobook pkgs: `internal/dedup`; importers: `internal/server` |
+| <a id="p-internal-appdirs"></a>`internal/appdirs` | 3 | 88 | generic | 8/3 | internal/appdirs (unchanged path; adapter from ABO config to `library.AppDirs`) | Core `library` takes an `AppDirs` value (the type moves with `internal/pathutil/hidden.go`); `FromConfig` takes `*config.Config` and `Current` reads the global `config.AppConfig` (`appdirs.go:48-73`), which R1 and R5 keep out of core, so the package stays in ABO as the adapter (MOD-21). | in 8, out 3. imports `backup`, `config`, `pathutil` (`appdirs.go:55-66`); 8 importers. |
 | <a id="p-internal-applycap"></a>`internal/applycap` | 0 | 401 | generic | 9/0 | internal/applycap (unchanged) | Ceiling on how many BOOKS one bulk apply may touch; the concept is ABO's bulk metadata apply. | in 9, out 0. stdlib; `applycap.go:401`; 9 ABO importers. |
 | <a id="p-internal-applygate"></a>`internal/applygate` | 3 | 2970 | audiobook | 10/8 | internal/applygate (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "is the certainty gate every BULK metadata apply consults before it writes a candidate onto a book: the cached". | in 10, out 8; imports audiobook pkgs: `internal/authorjunk`, `internal/authorname`, `internal/franchise`, `internal/metadata` (+2); importers: `internal/catalog`, `internal/itunes/service`, `internal/maintenance/jobs` (+7) |
 | <a id="p-internal-arch"></a>`internal/arch` | 0 | 0 | generic | 0/0 | internal/arch (unchanged path; ABO layering guard) | 03 §3.5.1: the classification engine moves to `archtest` as a library; the ABO guard keeps its rule with the ratio floor, the `. -> internal/server` control edge and layer -1 for core imports. | in 0, out 0. 0 non-test LOC; `const minModulePackages = 150` `layering_test.go:38`; control edge `:40`; `layerOf` 213 keys `:59-286`; sibling guards hard-code `internal/...` (raw/03 §4.7).<br>**Split:** **mediacore/archtest (engine, from layering_test.go)** |
@@ -247,10 +269,10 @@ first, then importers).
 | <a id="p-internal-cfaccesspolicy"></a>`internal/cfaccesspolicy` | 0 | 622 | generic | 1/0 | internal/cfaccesspolicy (unchanged) | Edits a Cloudflare Access policy to admit invited guests: deployment-specific edge auth (G11), one consumer. | in 1, out 0. `client.go:83-325`; 1 importer. |
 | <a id="p-internal-cfservicetoken"></a>`internal/cfservicetoken` | 0 | 437 | generic | 1/0 | internal/cfservicetoken (unchanged) | Mints per-guest Cloudflare service tokens; deployment-specific (G11). | in 1, out 0. `client.go:53,170-191`; name prefix `aorg-guest-`; 1 importer. |
 | <a id="p-internal-chaptershape"></a>`internal/chaptershape` | 0 | 97 | audiobook | 4/0 | internal/chaptershape (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "recognises the "one chapter per folder" layout: <Book>/<Book> - 1/file <Book>/<Book> - 2/file ... The scanner". | in 4, out 0; importers: `internal/database`, `internal/organizer`, `internal/plugins/maintenance` (+1) |
-| <a id="p-internal-config"></a>`internal/config` | 1 | 10506 | mixed | 49/10 | internal/config (unchanged path; becomes the books typed config section `modules.books.*` + legacy-key compat) | Generic loader machinery (layering, `Mutate`/`Snapshot`/`Generation`, viper decode, unknown/removed-key detection, protected fields, secure state dir, secret-row persistence) goes to core `config`/`secrets`; the 864-line struct's audiobook keys, blob migrations and ABO sub-configs stay. Its five wrong-way edges disappear because core `config` imports nothing above storage (R4). | in 49, out 10. imports `audioext` (`config.go:23`), `dedup/unified` (`dedup_score_config.go:11`, `update_service.go:22`), `database`, `auth`, `backup`, `aidispatch` (allowed wrong-way edges 1-5, `internal/arch/layering_test.go:291-295`); global `var AppConfig` (`config.go:1939`), viper (`config.go:2590`) violate R5; 49 importers.<br>**Split:** **mediacore/config (loader, layering, generation, decode, key audits)** ← `config_deepcopy.go`, `viper_decode.go`, `unknown_keys.go`, `removed_keys.go`, `protected_fields.go`, `blob_default_audit.go`, `state_dir.go`, `persistence_owner_unix.go` (1562 LOC); **mediacore/integrations/ai (endpoint config section)** ← `ai_endpoints.go` (554 LOC); **mediacore/auth (bootstrap-key TTL, invite + SMTP sections)** ← `bootstrap_key_ttl.go`, `invite_config.go` (324 LOC); **mediacore/log (retention section)** ← `log_retention.go` (104 LOC); **delete (serviceregistry accessor)** ← `register.go` (51 LOC); **internal/config (ABO; config.go/persistence.go/update_service.go are split by function: loader+secret rows -> core, struct+blob migrations -> ABO)** ← `abs_config.go`, `chapter_consolidation.go`, `dedup_score_config.go`, `itunes_libraries.go`, `naming_patterns.go`, `config.go`, `persistence.go`, `update_service.go` (7911 LOC) |
+| <a id="p-internal-config"></a>`internal/config` | 1 | 10506 | mixed | 49/10 | internal/config (unchanged path; books typed config section `modules.books.*`, legacy-key compat, and the `config.AppConfig` façade over core handles, kept: SIMP-3) | Generic loader machinery (layering, `Mutate`/`Snapshot`/`Generation`, viper decode, unknown/removed-key detection, protected fields, secure state dir, secret-row persistence) goes to core `config`/`secrets`; the 864-line struct's audiobook keys, blob migrations and ABO sub-configs stay. Its five wrong-way edges disappear because core `config` imports nothing above storage (R4). | in 49, out 10. imports `audioext` (`config.go:23`), `dedup/unified` (`dedup_score_config.go:11`, `update_service.go:22`), `database`, `auth`, `backup`, `aidispatch` (allowed wrong-way edges 1-5, `internal/arch/layering_test.go:291-295`); global `var AppConfig` (`config.go:1939`), viper (`config.go:2590`) violate R5; 49 importers.<br>**Split:** **mediacore/config (loader, layering, generation, decode, key audits)** ← `config_deepcopy.go`, `viper_decode.go`, `unknown_keys.go`, `removed_keys.go`, `protected_fields.go`, `blob_default_audit.go`, `state_dir.go`, `persistence_owner_unix.go` (1562 LOC); **mediacore/integrations/ai (endpoint config section)** ← `ai_endpoints.go` (554 LOC); **mediacore/auth (bootstrap-key TTL, invite + SMTP sections)** ← `bootstrap_key_ttl.go`, `invite_config.go` (324 LOC); **mediacore/log (retention section)** ← `log_retention.go` (104 LOC); **delete (serviceregistry accessor)** ← `register.go` (51 LOC); **internal/config (ABO; config.go/persistence.go/update_service.go are split by function: loader+secret rows -> core, struct+blob migrations -> ABO)** ← `abs_config.go`, `chapter_consolidation.go`, `dedup_score_config.go`, `itunes_libraries.go`, `naming_patterns.go`, `config.go`, `persistence.go`, `update_service.go` (7911 LOC) |
 | <a id="p-internal-covers"></a>`internal/covers` | 3 | 166 | audiobook | 3/2 | internal/covers (unchanged) | Audiobook domain; app bucket (03 §3.4). | in 3, out 2; imports: `internal/security/safehttp`, `internal/security/safepath`; importers: `internal/plugins/maintenance`, `internal/server`, `internal/server/handlers/abs` |
 | <a id="p-internal-covertext"></a>`internal/covertext` | 0 | 226 | audiobook | 3/0 | internal/covertext (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "stores the text a vision model read off a cover image". | in 3, out 0; importers: `internal/ai`, `internal/plugins/maintenance`, `internal/server` |
-| <a id="p-internal-database"></a>`internal/database` | 2 | 103432 | mixed | 104/16 | internal/books/store (renamed; residue = books module store) | Keystone split. The 445-method `Store` dissolves: 112 methods become core storage-backed services, 333 stay as the books module's store (310 domain + 23 legacy ops-v1). The residue is renamed because, once core owns `storage`, a root-module package named `database` would read as the platform DB. See §4. | in 104, out 16. 104 importers (61 audiobook, 37 mixed, 6 generic importers, raw/02 finding 1); `type Book struct` `internal/database/store.go:202`; `Store` composes six composites `store.go:48-55`; imports 7 audiobook packages (`pebble_store.go:31,33,35`, `pebble_store_authors.go:21`, `metadata_field_locks.go:15`, `book_own_folder.go:15`, `pebble_store_bookmarks.go:39`) and `models` (`embedding_store.go:22`).<br>**Split:** **mediacore/storage + mediacore/internal/pebble** ← `census.go`, `census_exact.go`, `census_families.go`, `compaction_stats.go`, `database.go`, `interface.go`, `keyfamilies.go`, `migration_bookkeeping.go`, `partial_read.go`, `pebble_gate.go`, `pebble_metrics_export.go`, `raw_batch.go`, `raw_snapshot.go`, `startup_notify.go`, `storage_format.go`, `storage_format_repair.go`, `store_from_store.go` (4516 LOC); **mediacore/storage/index (dirty set, change observer)** ← `change_observer.go`, `dirty_set.go`, `pebble_store_search_dirty.go` (401 LOC); **mediacore/internal/taskstore (ops v2/v3 run state)** ← `iface_op_rows.go`, `iface_ops_v2.go`, `iface_ops_v3.go`, `op_class_lists.go`, `ops_v2_recent.go`, `pebble_store_op_rows.go`, `pebble_store_ops_v2.go`, `pebble_store_ops_v2_status_lookup.go`, `pebble_store_ops_v2_timeline.go`, `pebble_store_ops_v2_wait.go`, `pebble_store_ops_v3.go`, `pebble_store_ops_v3_lastrun.go`, `pebble_store_ops_v3_migrate.go`, `pebble_store_ops_v3_reconcile.go`, `pebble_store_ops_v3_rowmarks.go` (7592 LOC); **mediacore/internal/authstore (users, sessions, keys, invites, OAuth ids, roles)** ← `apikey_token.go`, `iface_auth.go`, `iface_oauth.go`, `invite_id.go`, `oauth_identity.go`, `pebble_store_auth.go`, `pebble_store_invite_delivery.go`, `pebble_store_verified_email_backfill.go` (3190 LOC); **mediacore/internal/activitystore (behind mediacore/log activity journal; audit tier -> mediacore/audit)** ← `activity_compact_progress.go`, `activity_partial_query.go`, `activity_storer.go`, `activity_tiers.go`, `activity_types.go`, `legacy_migration.go`, `pebble_activity_filter_index.go`, `pebble_activity_store.go`, `pebble_store_activity.go` (6459 LOC); **mediacore/integrations/ai (batch-job store)** ← `ai_jobs_types.go`, `pebble_store_aijobs.go` (292 LOC); **mediacore/integrations/providerhttp (persisted throttle holds)** ← `provider_throttle.go` (74 LOC); **mediacore/library (root folders store)** ← `pebble_store_importpaths.go` (261 LOC); **mediacore/secrets + mediacore/config (encrypted setting rows, key file)** ← `settings.go` (466 LOC); **delete (decorator/SQLite leftovers)** ← `audiobooks.go`, `diagnostics_types.go`, `store_capability.go`, `storecap.go`, `web.go` (249 LOC) |
+| <a id="p-internal-database"></a>`internal/database` | 2 | 103432 | mixed | 104/16 | internal/books/store (renamed; residue = books module store) | Keystone split. The 445-method `Store` dissolves: 108 methods sit behind core service contracts (69 move into core; the 39 `OpsV2Store` methods stay in the residue as ABO's legacy run-row writers until 05-tasks T8 deletes them), 337 stay as the books module's store (314 domain + 23 legacy ops-v1). The residue is renamed because, once core owns `storage`, a root-module package named `database` would read as the platform DB. See §4. | in 104, out 16. 104 importers (61 audiobook, 37 mixed, 6 generic importers, raw/02 finding 1); `type Book struct` `internal/database/store.go:202`; `Store` composes six composites `store.go:48-55`; imports 7 audiobook packages (`pebble_store.go:31,33,35`, `pebble_store_authors.go:21`, `metadata_field_locks.go:15`, `book_own_folder.go:15`, `pebble_store_bookmarks.go:39`) and `models` (`embedding_store.go:22`).<br>**Split:** **mediacore/storage + mediacore/internal/pebble** ← `census.go`, `census_exact.go`, `census_families.go`, `compaction_stats.go`, `database.go`, `interface.go`, `migration_bookkeeping.go`, `partial_read.go`, `pebble_gate.go`, `pebble_metrics_export.go`, `raw_batch.go`, `raw_snapshot.go`, `startup_notify.go`, `storage_format.go`, `storage_format_repair.go`, `store_from_store.go` (4108 LOC); **mediacore/storage/index (dirty set, change observer)** ← `change_observer.go`, `dirty_set.go`, `pebble_store_search_dirty.go` (401 LOC); **delete at 05-tasks T8 (ABO's v2/v3 run-row store; until then in the books residue, its writers unused after T0: core claims the ops families, reads them in place through `internal/executor/legacyhist` and writes only `c/tasks/`, books keeps `opstate:`; 05-storage §5S.9.1, 05-tasks §5T.6)** ← `iface_op_rows.go`, `iface_ops_v2.go`, `iface_ops_v3.go`, `op_class_lists.go`, `ops_v2_recent.go`, `pebble_store_op_rows.go`, `pebble_store_ops_v2.go`, `pebble_store_ops_v2_status_lookup.go`, `pebble_store_ops_v2_timeline.go`, `pebble_store_ops_v2_wait.go`, `pebble_store_ops_v3.go`, `pebble_store_ops_v3_lastrun.go`, `pebble_store_ops_v3_migrate.go`, `pebble_store_ops_v3_reconcile.go`, `pebble_store_ops_v3_rowmarks.go` (7592 LOC); **mediacore/auth (token helpers and store capability interfaces ABO packages name)** ← `apikey_token.go`, `iface_auth.go`, `iface_oauth.go` (137 LOC); **mediacore/internal/authstore (users, sessions, keys, invites, OAuth ids; exported types, capability interfaces and errors in these files are cut out to mediacore/auth)** ← `invite_id.go`, `oauth_identity.go`, `pebble_store_auth.go`, `pebble_store_invite_delivery.go`, `pebble_store_verified_email_backfill.go` (3053 LOC); **mediacore/integrations/ai (batch-job store)** ← `ai_jobs_types.go`, `pebble_store_aijobs.go` (292 LOC); **mediacore/integrations/providerhttp (persisted throttle holds)** ← `provider_throttle.go` (74 LOC); **mediacore/library (root folders store)** ← `pebble_store_importpaths.go` (261 LOC); **mediacore/secrets (encryption and key file; file divided: the `setting:` row methods stay in the residue, cross-cutting resolution 7)** ← `settings.go` (466 LOC); **delete (decorator/SQLite leftovers)** ← `audiobooks.go`, `diagnostics_types.go`, `store_capability.go`, `storecap.go`, `web.go` (249 LOC) |
 | <a id="p-internal-database-aggtest"></a>`internal/database/aggtest` | 0 | 146 | generic | 0/0 | internal/books/store/aggtest (renamed) | Counts `RecomputeBookAggregates` runs for tests; books-only. | in 0, out 0. test-only helper; 9 test importer files; `RecomputeBookAggregates` is books (`BookAggregateWriter`, raw/04 §8). |
 | <a id="p-internal-database-dbtest"></a>`internal/database/dbtest` | 3 | 449 | mixed | 0/1 | internal/books/store/storetest (renamed) | Books store test fixtures and invariants. The in-memory engine it relies on becomes core `coretest.NewStorage(t)` (vfs.NewMem), which this package then wraps. | in 0, out 1. uses `database.Book` (`internal/database/dbtest/invariants.go:84`); in-memory store `NewPebbleStoreInMemory` (`internal/database/pebble_store.go:578`); 31 test importer files.<br>**Split:** **mediacore/coretest (in-memory storage engine)** ← `newstore.go` (99 LOC) |
 | <a id="p-internal-decisions"></a>`internal/decisions` | 3 | 2751 | mixed | 3/3 | internal/decisions (unchanged) | Retired-version decisions over `Book`/`BookVersion`/`BookFile`. | in 3, out 3; imports: `internal/database`, `internal/keyedmutex`, `internal/logger`; importers: `internal/audiobooks`, `internal/plugins/maintenance`, `internal/server` |
@@ -270,6 +292,7 @@ first, then importers).
 | <a id="p-internal-foldercover"></a>`internal/foldercover` | 3 | 345 | audiobook | 2/3 | internal/foldercover (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "decides whether a book should take its cover from an image in its own folder, and applies that decision". | in 2, out 3; imports audiobook pkgs: `internal/audioext`, `internal/metadata`; importers: `internal/plugins/maintenance`, `internal/scanner` |
 | <a id="p-internal-foldernames"></a>`internal/foldernames` | 3 | 344 | audiobook | 3/4 | internal/foldernames (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "builds the person and series evidence the folder parse (metadata.ExtractMetadataFromFolderWith) decides an". | in 3, out 4; imports audiobook pkgs: `internal/authority`, `internal/metadata`, `internal/personname`; importers: `internal/metafetch`, `internal/plugins/maintenance`, `internal/scanner` |
 | <a id="p-internal-franchise"></a>`internal/franchise` | 0 | 812 | audiobook | 4/0 | internal/franchise (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "is the one matcher for the libraries the owner curates by hand: Doctor Who, Big Finish and Torchwood". | in 4, out 0; importers: `internal/applygate`, `internal/metadata`, `internal/plugins/maintenance` (+1) |
+| <a id="p-internal-httputil"></a>`internal/httputil` | 0 | 604 | mixed | 19/2 | internal/httputil (unchanged path; gin helpers of the permanent legacy mount); envelope types and Range serving -> mediacore/httpapi | Response envelope and request parsing are the core HTTP framework, but the gin helpers cannot move (core is `net/http`, N7) and ABO's gin engine is mounted permanently (`httpapi.MountLegacy`, cross-cutting resolution 2), so `parse.go` and `respond.go` stay; core re-implements them on net/http. `RespondWithApplyCapExceeded` uses ABO's `internal/applycap` (`respond.go:16,78`) and stays with them (MOD-21). The gin-free envelope types and Range serving move. | in 19, out 2. imports `gin` (third-party), `applycap`, `logging`; `.m4b/.m4a` content-type switch `rangeserve.go:34`; `RespondWithError` envelope (raw/09 §5); 19 importers, 18 in server.<br>**Split:** **mediacore/httpapi (envelope types)** ← `types.go` (106 LOC); **mediacore/httpapi (Range serving; media types come from module registration)** ← `rangeserve.go` (222 LOC); **internal/httputil (ABO, gin helpers)** ← `parse.go`, `respond.go` (276 LOC) |
 | <a id="p-internal-identification"></a>`internal/identification` | 3 | 347 | audiobook | 1/1 | internal/identification (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "is the body of the identification.advance driver (spec 02 section 3.2 "The driver", section 4 PR 14): it". | in 1, out 1; imports: `internal/database`; importers: `internal/server` |
 | <a id="p-internal-importer"></a>`internal/importer` | 4 | 789 | audiobook | 3/15 | internal/importer (unchanged) | Audiobook domain; app bucket (03 §3.4). | in 3, out 15; imports audiobook pkgs: `internal/authorcredit`, `internal/bookfileaudio`, `internal/dedup`, `internal/filehash` (+4); importers: `internal/server`, `internal/server/handlers`, `internal/server/handlers/mocks` |
 | <a id="p-internal-itunes"></a>`internal/itunes` | 3 | 8822 | audiobook | 12/6 | internal/itunes (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "provides functionality for importing audiobooks from iTunes Library.xml files". | in 12, out 6; imports: `internal/config`, `internal/database`, `internal/logger`, `internal/models` (+2); importers: `cmd/itl-audit-encoding`, `cmd/itl-check`, `cmd/itl-diff` (+9) |
@@ -277,6 +300,7 @@ first, then importers).
 | <a id="p-internal-itunesguard"></a>`internal/itunesguard` | 3 | 136 | audiobook | 3/3 | internal/itunesguard (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "is the one iTunes-ownership predicate for writes to a book's version-group primary flag". | in 3, out 3; imports audiobook pkgs: `internal/repairs`, `internal/versionprimary`; importers: `internal/audiobooks`, `internal/plugins/maintenance`, `internal/server/handlers/dedup` |
 | <a id="p-internal-keyedmutex"></a>`internal/keyedmutex` | 0 | 55 | generic | 3/0 | internal/keyedmutex (unchanged) | Per-key mutex; consumers are ABO only (moved into core only in build experiment E2, which is not a placement decision). | in 3, out 0. stdlib; importers `decisions`, `deluge` (`import.go:24,67`), `versions`. |
 | <a id="p-internal-linkintegrity"></a>`internal/linkintegrity` | 0 | 489 | audiobook | 1/0 | internal/linkintegrity (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "holds the shared vocabulary for the "First Aid" library validation + repair pass: the shapes a broken". | in 1, out 0; importers: `internal/plugins/maintenance` |
+| <a id="p-internal-logger"></a>`internal/logger` | 0 | 442 | mixed | 73/0 | internal/logger (unchanged path; books façade over mediacore/log, kept; deleting it is an optional ratchet, SIMP-3) | The printf `Logger` interface bundles progress, change recording and cancellation (task concerns) and leaks `BookID`; core exposes `log/slog` only, so the interface is not promoted. R5 binds core only (SIMP-3): the façade survives as books code over core handles, and the 342-file migration to slog is an optional ratchet, not an extraction stage. | in 73, out 0. `BookID` field `internal/logger/logger.go:45`; interface `logger.go:54-98`; writes through `slog.Default()` (`standard.go`); 73 importers, 342 files import it (raw/12 §3).<br>**Split:** **mediacore/log (sanitize, attrs, retention policy)** ← `sanitize.go`, `attrs.go`, `retention.go` (223 LOC); **internal/logger (ABO façade over mediacore/log)** ← `logger.go`, `standard.go` (219 LOC) |
 | <a id="p-internal-maintenance-jobs"></a>`internal/maintenance/jobs` | 4 | 12366 | audiobook | 1/25 | internal/maintenance/jobs (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "registers all built-in maintenance jobs with the maintenance registry". | in 1, out 25; imports audiobook pkgs: `internal/applygate`, `internal/authorcredit`, `internal/authorname`, `internal/bookfileaudio` (+10); importers: `internal/server` |
 | <a id="p-internal-masterlist"></a>`internal/masterlist` | 0 | 1309 | audiobook | 2/0 | internal/masterlist (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "is the input side of the master-list import: the canonical row an uploaded list is stored as, the validation". | in 2, out 0; importers: `internal/plugins/maintenance`, `internal/server` |
 | <a id="p-internal-matcher"></a>`internal/matcher` | 0 | 545 | audiobook | 4/1 | internal/matcher (unchanged) | Audiobook domain; app bucket (03 §3.4). | in 4, out 1; imports audiobook pkgs: `internal/personname`; importers: `internal/database`, `internal/dedup`, `internal/plugins/maintenance` (+1) |
@@ -287,7 +311,7 @@ first, then importers).
 | <a id="p-internal-metadata-mocks"></a>`internal/metadata/mocks` | 3 | 456 | audiobook | 0/1 | internal/metadata/mocks (unchanged) | Audiobook domain; app bucket (03 §3.4). | in 0, out 1; imports audiobook pkgs: `internal/metadata` |
 | <a id="p-internal-metafetch"></a>`internal/metafetch` | 3 | 21306 | audiobook | 16/31 | internal/metafetch (unchanged) | Audiobook domain; app bucket (03 §3.4). | in 16, out 31; imports audiobook pkgs: `internal/authorcredit`, `internal/authority`, `internal/authorjunk`, `internal/authorname` (+12); importers: `internal/applygate`, `internal/audiobooks`, `internal/itunes/service` (+13) |
 | <a id="p-internal-metastate"></a>`internal/metastate` | 0 | 73 | audiobook | 5/0 | internal/metastate (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "owns the on-disk representation of per-book metadata state: the user-preference KEY a book's state is stored". | in 5, out 0; importers: `internal/audiobooks`, `internal/database`, `internal/merge` (+2) |
-| <a id="p-internal-metrics"></a>`internal/metrics` | 0 | 840 | mixed | 13/1 | internal/metrics (unchanged path; books metrics only, registered on the App registry as `<app>_books_*`) | Generic collectors (operations, Go runtime, Pebble) move to core; book/search/catalog/ABS series stay. Package-level collectors on the default registry violate R5. | in 13, out 1. namespace `audiobook_organizer` `metrics.go:19`; `books_total` `metrics.go:51-53`; `prometheus.MustRegister` default registry `metrics.go:300` (raw/12 §4); 13 importers.<br>**Split:** **mediacore/internal/pebble (Pebble collector)** ← `pebble_collector.go` (251 LOC); **internal/metrics (ABO; metrics.go split: operations_* series -> mediacore/tasks)** ← `metrics.go`, `pipeline_metrics.go` (589 LOC) |
+| <a id="p-internal-metrics"></a>`internal/metrics` | 0 | 840 | mixed | 13/1 | internal/metrics (unchanged path; books metrics on the App registry; names unchanged, `audiobook_organizer_*`, SIMP-13) | Generic collectors (operations, Go runtime, Pebble) move to core; book/search/catalog/ABS series stay. Package-level collectors on the default registry violate R5. | in 13, out 1. namespace `audiobook_organizer` `metrics.go:19`; `books_total` `metrics.go:51-53`; `prometheus.MustRegister` default registry `metrics.go:300` (raw/12 §4); 13 importers.<br>**Split:** **mediacore/internal/pebble (Pebble collector; ABO's Open Library store reaches it through `storage.OpenAuxiliary`)** ← `pebble_collector.go` (251 LOC); **internal/metrics (ABO; metrics.go split: operations_* series -> mediacore/tasks)** ← `metrics.go`, `pipeline_metrics.go` (589 LOC) |
 | <a id="p-internal-mtls"></a>`internal/mtls` | 0 | 693 | generic | 1/0 | internal/mtls (unchanged) | CA/PSK + client-cert TLS for the MCP bridge tool; not part of HTTP auth. | in 1, out 0. only importer `cmd/mtls-bridge` (`internal/mtls/transport.go:14`, raw/10 §2.1). |
 | <a id="p-internal-openlibrary"></a>`internal/openlibrary` | 2 | 843 | audiobook | 3/2 | internal/openlibrary (unchanged) | Audiobook domain; app bucket (03 §3.4). | in 3, out 2; imports: `internal/database`, `internal/metrics`; importers: `internal/metadata`, `internal/metafetch`, `internal/server` |
 | <a id="p-internal-operations-opswriter"></a>`internal/operations/opswriter` | 3 | 1930 | mixed | 4/3 | internal/books/writer (renamed; implements the books typed Writer) | Write-ahead intents, fencing and the evidence journal are executor mechanisms (core); the Writer implementation, history and evidence records are Book-typed (books). | in 4, out 3. uses `database.MetadataChangeRecord/BookAuthor/BookFile/Book` (36 lines, `evidence.go:58,337,356`, raw/02 a1); imports `pkg/ops`; 4 importers (`registry`, `plugins/dedup`, `repairs`, `opstest`).<br>**Split:** **mediacore/internal/executor (fence, intents, evidence journal)** ← `fence.go`, `intent.go`, `evidence_journal.go` (459 LOC); **internal/books/writer** ← `writer.go`, `evidence.go`, `history.go` (1471 LOC) |
@@ -310,12 +334,12 @@ first, then importers).
 | <a id="p-internal-repairs"></a>`internal/repairs` | 3 | 5148 | audiobook | 8/14 | internal/repairs (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "is the shared framework behind the Repairs lane of /review: one contract every library fixer implements, and". | in 8, out 14; imports audiobook pkgs: `internal/applygate`, `internal/franchise`, `internal/merge`, `internal/undo`; importers: `internal/itunesguard`, `internal/plugins/maintenance`, `internal/plugins/metafetch` (+5) |
 | <a id="p-internal-scanlock"></a>`internal/scanlock` | 0 | 359 | audiobook | 5/0 | internal/scanlock (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "is the per-BOOK lock that lets a library scan and a metadata apply run at the same time without either one". | in 5, out 0; importers: `internal/organizer`, `internal/scanner`, `internal/server` (+2) |
 | <a id="p-internal-scanner"></a>`internal/scanner` | 3 | 14775 | audiobook | 11/27 | internal/scanner (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "provides file scanning and processing utilities for the audiobook organizer". | in 11, out 27; imports audiobook pkgs: `internal/audioutil`, `internal/authorcredit`, `internal/authorname`, `internal/bookfileaudio` (+12); importers: `cmd`, `internal/audiobooks`, `internal/importer` (+8) |
-| <a id="p-internal-search"></a>`internal/search` | 2 | 4425 | mixed | 6/6 | internal/search (unchanged path; books index documents, field routing, per-user terms) | `storage/index` is a platform contract (03 §3.3), so the bleve engine lifecycle (open, mapping-version rebuild, markers, degraded open) and a query AST + translator go to core; the book document mapping, field routing and per-user terms stay. | in 6, out 6. uses `database.UserBookState/Author/Series/Book` (`index_builder.go:28-29,84`, 29 lines); `bleve_index.go` has 92 book/author/series mentions; degraded open `register.go:46-60`; mapping rebuild `bleve_index.go:186-215`; `database.SetCollectionPerViewerClassifier` init hook `field_routing.go:159`.<br>**Split:** **mediacore/internal/bleveindex (engine lifecycle extracted from bleve_index.go; translator)** ← `bleve_translator.go` (648 LOC); **mediacore/storage/index (query AST, regex terms)** ← `query_ast.go`, `regex_terms.go` (316 LOC); **delete (serviceregistry)** ← `register.go` (115 LOC); **internal/search (ABO)** ← `bleve_index.go`, `document.go`, `field_routing.go`, `field_term.go`, `index_builder.go`, `per_user_match.go`, `per_user_mixed.go`, `per_user_shape.go`, `per_user_values.go`, `query_parser.go`, `relative_date.go`, `tag_terms.go` (3346 LOC) |
+| <a id="p-internal-search"></a>`internal/search` | 2 | 4425 | mixed | 6/6 | internal/search (unchanged path; books index documents, field routing, per-user terms) | `storage/index` is a platform contract (03 §3.3), so the bleve engine lifecycle (open, mapping-version rebuild, markers, degraded open) and a query AST + translator go to core; the book document mapping, field routing and per-user terms stay. | in 6, out 6. uses `database.UserBookState/Author/Series/Book` (`index_builder.go:28-29,84`, 29 lines); `bleve_index.go` has 92 book/author/series mentions; degraded open `register.go:46-60`; mapping rebuild `bleve_index.go:186-215`; `database.SetCollectionPerViewerClassifier` init hook `field_routing.go:159`.<br>**Split:** **mediacore/internal/bleveindex (engine lifecycle cut out of bleve_index.go)**; **mediacore/storage/index (query AST, regex terms)** ← `query_ast.go`, `regex_terms.go` (316 LOC); **delete (serviceregistry)** ← `register.go` (115 LOC); **internal/search (ABO; `bleve_translator.go` translates the books grammar and declares `PerUserFilter`/`TranslateAt`, used by `internal/audiobooks` and `internal/playlist`, so it stays)** ← `bleve_translator.go`, `bleve_index.go`, `document.go`, `field_routing.go`, `field_term.go`, `index_builder.go`, `per_user_match.go`, `per_user_mixed.go`, `per_user_shape.go`, `per_user_values.go`, `query_parser.go`, `relative_date.go`, `tag_terms.go` (3994 LOC) |
 | <a id="p-internal-searchcache"></a>`internal/searchcache` | 3 | 1157 | audiobook | 4/2 | internal/searchcache (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "holds the shared search result cache: the full ranked list of matching book IDs per (query, filter set)". | in 4, out 2; imports: `internal/logger`, `internal/metrics`; importers: `internal/audiobooks`, `internal/server`, `internal/server/handlers/abs` (+1) |
 | <a id="p-internal-seqnum"></a>`internal/seqnum` | 0 | 270 | audiobook | 3/0 | internal/seqnum (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "extracts a volume / sequence number ("Big Cats 3", "Vol". | in 3, out 0; importers: `internal/applygate`, `internal/catalog`, `internal/metafetch` |
-| <a id="p-internal-server"></a>`internal/server` | 5 | 46789 | mixed | 2/122 | internal/server (unchanged path; books HTTP adapter, mounted as an http.Handler under the books module, N7) | The gin composition layer of ABO. It contains several core concerns, which are re-implemented in core on net/http and deleted here as route groups retire. | in 2, out 122. out 122, imports 56 audiobook packages (raw/02 d); 10 `serviceregistry.Register` from `init()` `registry_wire.go:97-343`; ~48 `addOpRegistrar` inits; `NewServer` ~612 lines `server.go:653`; plugin mount `plugins_init.go:42`.<br>**Split:** **mediacore/auth (bootstrap, temp login, invite accept, reset, login/invite/bootstrap rate limits, credential/admin route helpers, API-key expiry)** ← `bootstrap.go`, `bootstrap_rate_limit.go`, `auth_temp_login.go`, `auth_accept_invite.go`, `auth_reset_password.go`, `login_ceiling.go`, `invite_rate_limit.go`, `credential_routes.go`, `wire_admin_role.go`, `toplevel_auth_chain.go`, `apikey_expiry_stamp.go`, `apikey_expiry_sweep.go`, `wire_auth_routes.go`, `wire_oauth.go` (3316 LOC); **mediacore/ui + mediacore/httpapi (peer allow-list, CSP, security headers/CORS, SPA fallback, static, 410 stubs)** ← `peer_allowlist.go`, `csp.go`, `csp_report.go`, `server_middleware.go`, `spa_fallback.go`, `static_nonembed.go`, `gone.go` (1352 LOC); **mediacore/health (flight recorder wiring)** ← `flight_recorder.go` (55 LOC); **mediacore/updater (HTTP)** ← `update_handlers.go` (64 LOC); **mediacore/integrations/providerhttp (throttle store wiring)** ← `provider_throttle_wire.go` (65 LOC); **mediacore/storage/index (dirty-set reconciler, change observer)** ← `search_reconciler.go`, `search_observer.go`, `index_queue.go` (997 LOC); **delete (init registrars, plugin mount)** ← `op_registrars.go`, `plugins_init.go` (77 LOC); **internal/cfaccess (ABO)** ← `cf_recovery.go`, `guest_service_tokens.go`, `invite_guest_access.go`, `owner_routes.go` (1332 LOC) |
+| <a id="p-internal-server"></a>`internal/server` | 5 | 46789 | mixed | 2/122 | internal/server (unchanged path; books HTTP adapter, mounted permanently through `httpapi.MountLegacy`, N7) | The gin composition layer of ABO, mounted permanently behind core's perimeter (cross-cutting resolution 2). The core concerns inside it are re-implemented in core on net/http and leave at the stage that makes them native: perimeter at S2, auth at S4, task admin at S5, SPA serving at S9; books route groups stay unless rewritten for their own reasons. | in 2, out 122. out 122, imports 56 audiobook packages (raw/02 d); 10 `serviceregistry.Register` from `init()` `registry_wire.go:97-343`; ~48 `addOpRegistrar` inits; `NewServer` ~612 lines `server.go:653`; plugin mount `plugins_init.go:42`.<br>**Split:** **mediacore/auth (bootstrap, temp login, invite accept, reset, login/invite/bootstrap rate limits, credential/admin route helpers, API-key expiry)** ← `bootstrap.go`, `bootstrap_rate_limit.go`, `auth_temp_login.go`, `auth_accept_invite.go`, `auth_reset_password.go`, `login_ceiling.go`, `invite_rate_limit.go`, `credential_routes.go`, `wire_admin_role.go`, `toplevel_auth_chain.go`, `apikey_expiry_stamp.go`, `apikey_expiry_sweep.go`, `wire_auth_routes.go`, `wire_oauth.go` (3316 LOC); **mediacore/httpapi (perimeter: peer allow-list, CSP, security headers/CORS)** ← `peer_allowlist.go`, `csp.go`, `csp_report.go`, `server_middleware.go` (1072 LOC); **mediacore/ui (SPA fallback, static; at S9, FE-1)** ← `spa_fallback.go`, `static_nonembed.go` (244 LOC); **mediacore/health (flight recorder wiring)** ← `flight_recorder.go` (55 LOC); **mediacore/updater (HTTP)** ← `update_handlers.go` (64 LOC); **mediacore/integrations/providerhttp (throttle store wiring)** ← `provider_throttle_wire.go` (65 LOC); **mediacore/storage/index (dirty-set reconciler, change observer)** ← `search_reconciler.go`, `search_observer.go`, `index_queue.go` (997 LOC); **delete (init registrars, plugin mount)** ← `op_registrars.go`, `plugins_init.go` (77 LOC); **internal/cfaccess (ABO)** ← `cf_recovery.go`, `guest_service_tokens.go`, `invite_guest_access.go`, `owner_routes.go` (1332 LOC); **internal/server (ABO; gin 410 stubs of the permanent legacy mount, core `httpapi.Gone` is a port)** ← `gone.go` (36 LOC) |
 | <a id="p-internal-server-absauth"></a>`internal/server/absauth` | 5 | 1536 | audiobook | 4/1 | internal/server/absauth (unchanged path; ABS JWT/refresh only) | Not purely ABS: web login uses its argon2id hashing, failed-login throttle and saturation limiter, and its audit event type. Those move to core; the ABS token surface stays. | in 4, out 1. `absauth.HashPassword` used by `internal/server/handlers/user.go`, `auth.go`, `internal/server/bootstrap.go`, `auth_accept_invite.go`, `login_ceiling.go` (grep at 748fd787a); `absauth.Audit` 46 uses; argon2id `password.go:131-190` (raw/10 §7).<br>**Split:** **mediacore/auth (password hashing, login throttle, saturation, LRU)** ← `password.go`, `throttle.go`, `saturation.go`, `lru.go` (853 LOC); **mediacore/audit (auth audit events)** ← `audit.go` (137 LOC); **internal/server/absauth (ABO)** ← `config.go`, `token.go`, `refresh.go` (546 LOC) |
-| <a id="p-internal-server-handlers"></a>`internal/server/handlers` | 5 | 20579 | mixed | 2/47 | internal/server/handlers (unchanged path; books handlers) | Books HTTP handlers; the auth/user/API-key/invite handlers are core `auth` routes; activity and scheduler admin are core log/tasks routes; plugin handlers die with `internal/plugin`. | in 2, out 47. uses `database.Book/Collection/BookFile` (`ai.go:44`; 249 lines, raw/02 a1); imports `plugins/maintenance` (`activity_compact.go:22`), `server/absauth`; 47 module imports.<br>**Split:** **mediacore/internal/authhttp** ← `auth.go`, `apikeys.go`, `oauth_login.go`, `user.go`, `user_credentials.go`, `web_session_revoke.go`, `invite_delivery.go` (2535 LOC); **mediacore/log (activity routes)** ← `activity.go`, `activity_compact.go`, `activity_digest_aggregates.go` (1547 LOC); **mediacore/internal/taskhttp (scheduler admin)** ← `scheduler_admin.go` (543 LOC); **mediacore/health (trace download)** ← `diagnostics_traces.go` (89 LOC); **delete (legacy plugin handlers)** ← `plugins.go` (188 LOC) |
+| <a id="p-internal-server-handlers"></a>`internal/server/handlers` | 5 | 20579 | mixed | 2/47 | internal/server/handlers (unchanged path; books handlers) | Books HTTP handlers; the auth/user/API-key/invite handlers become core `auth` routes at S4 and scheduler admin a core `tasks` route at S5 (their only ABO caller, `internal/server`'s wiring, is deleted in the same PR; MOD-2 gate); the activity routes serve the books feed and stay; plugin handlers die with `internal/plugin`. | in 2, out 47. uses `database.Book/Collection/BookFile` (`ai.go:44`; 249 lines, raw/02 a1); imports `plugins/maintenance` (`activity_compact.go:22`), `server/absauth`; 47 module imports.<br>**Split:** **mediacore/internal/authhttp** ← `auth.go`, `apikeys.go`, `oauth_login.go`, `user.go`, `user_credentials.go`, `web_session_revoke.go`, `invite_delivery.go` (2535 LOC); **mediacore/internal/taskhttp (scheduler admin)** ← `scheduler_admin.go` (543 LOC); **mediacore/health (trace download)** ← `diagnostics_traces.go` (89 LOC); **delete (legacy plugin handlers)** ← `plugins.go` (188 LOC) |
 | <a id="p-internal-server-handlers-abs"></a>`internal/server/handlers/abs` | 5 | 16070 | audiobook | 2/15 | internal/server/handlers/abs (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "implements the Audiobookshelf-compatible auth surface (design spec Phase 1): GET /ping, GET /status, POST". | in 2, out 15; imports audiobook pkgs: `internal/audioutil`, `internal/covers`, `internal/metadata`, `internal/searchcache` (+2); importers: `internal/server`, `internal/server/handlers` |
 | <a id="p-internal-server-handlers-admindebug"></a>`internal/server/handlers/admindebug` | 5 | 1030 | mixed | 1/5 | internal/server/handlers/admindebug (unchanged) | Debug-edit of Book/BookFile rows with undo images (`admin_debug_edit:`). | in 1, out 5; imports audiobook pkgs: `internal/merge`; importers: `internal/server` |
 | <a id="p-internal-server-handlers-aibackends"></a>`internal/server/handlers/aibackends` | 5 | 420 | generic | 1/4 | internal/server/handlers/aibackends (unchanged) | Toggles ABO's local-Ollama vs remote backend mode (managed tool lifecycle); one consumer. | in 1, out 4. imports `aidispatch`, `config`, `httputil`, `tools`; `aibackends.go:420`. |
@@ -345,6 +369,7 @@ first, then importers).
 | <a id="p-internal-syncapi-progress"></a>`internal/syncapi/progress` | 0 | 405 | audiobook | 4/0 | internal/syncapi/progress (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "implements the ABS-sync progress conflict-resolution policy from docs/specs/2026-07-29-abs-sync-api-design.md". | in 4, out 0; importers: `internal/database`, `internal/maintenance/jobs`, `internal/merge` (+1) |
 | <a id="p-internal-sysinfo"></a>`internal/sysinfo` | 3 | 694 | mixed | 3/3 | internal/sysinfo (unchanged path; library dashboard) | Host memory/uptime and service status are health diagnostics; dashboard counts (books, playlists) are books. | in 3, out 3. uses `database.Playlist` (`dashboard_service.go:23`), `Books` count `:38,68`; imports `config`, `database`, `serviceregistry`.<br>**Split:** **mediacore/health (host stats, service status)** ← `memory.go`, `memory_linux.go`, `uptime.go`, `uptime_linux.go`, `service.go` (540 LOC); **delete (serviceregistry)** ← `register.go` (21 LOC); **internal/sysinfo (ABO)** ← `dashboard_service.go` (133 LOC) |
 | <a id="p-internal-tagger"></a>`internal/tagger` | 3 | 744 | audiobook | 12/4 | internal/tagger (unchanged) | Audiobook domain; app bucket (03 §3.4). | in 12, out 4; imports: `internal/config`, `internal/database`, `internal/fileops`, `internal/logger`; importers: `cmd`, `internal/audiobooks`, `internal/deluge` (+9) |
+| <a id="p-internal-telemetry-contract"></a>`internal/telemetry/contract` | 0 | 0 | generic | 0/0 | internal/telemetrypolicy (renamed; stays in the root module) | Test-only suite that pins ABO's series names and walks the ABO tree; moving it into core reproduces the E2 hazard (core `go mod tidy` pulls the app module, 03 §3.2.1), so it stays in ABO (MOD-6). | in 0, out 0. 0 non-test LOC, 1531 test LOC (raw/01); `series_contract_test.go:51-56` imports `internal/ai`, `aidispatch`, `database`, `metrics`, `opsmetrics`; `declared_families_test.go` walks `internal/`, `pkg/` and `cmd/`. |
 | <a id="p-internal-testutil"></a>`internal/testutil` | 4 | 415 | mixed | 0/6 | internal/testutil (unchanged) | Integration fixtures importing metadata, scanner, itunes. | in 0, out 6; imports audiobook pkgs: `internal/itunes`, `internal/metadata`, `internal/scanner` |
 | <a id="p-internal-testutil-rapidgen"></a>`internal/testutil/rapidgen` | 3 | 243 | mixed | 0/1 | internal/testutil/rapidgen (unchanged) | Property-test generators for Book/Author/BookVersion. | in 0, out 1; imports: `internal/database` |
 | <a id="p-internal-titleutil"></a>`internal/titleutil` | 0 | 172 | audiobook | 4/0 | internal/titleutil (unchanged) | Audiobook domain; app bucket (03 §3.4). raw/01: "provides shared helpers for normalising book titles". | in 4, out 0; importers: `internal/database`, `internal/itunes/service`, `internal/metadata` (+1) |
@@ -409,13 +434,13 @@ None of those edges survives into core: every file that needs them stays in the 
 | `mediaStore` (75) | 0 | 75 | `BookFileStore` 44, `BookSegmentStore` 6, `ChapterReader` 1, `PlaylistStore` 5, `UserPlaylistStore` 9, `PathHistoryStore` 2, `PlaybackStore` 8 → books |
 | `accountStore` (44) | 39 | 5 | `UserReader`+`UserWriter` 7, `SessionStore` 6, `OAuthIdentityStore` 3, `APIKeyStore` 9, `InviteStore` 5, per-user preferences 3 (`SetUserPreferenceForUser`, `GetUserPreferenceForUser`, `GetAllPreferencesForUser`) → `auth`; `RoleStore` 6 → `rbac`; `DeleteExpiredABSSessions` 1 and the 4 global preference methods (`Get/Set/Delete/GetAllUserPreferences`, which also hold per-book metadata state, `internal/metastate`) → books |
 | `enrichmentStore` (60) | 0 | 60 | `MetadataStore` 7, `MetadataCacheStore` 4, `RejectedMetadataStore` 3, `ExternalIDStore` 11, `TagStore` 26, `UserTagStore` 4, `HashBlocklistStore` 5 → books |
-| `operationsStore` (92) | 54 | 38 | `OpsV2Store` 39 → `tasks` (`internal/taskstore`); `SystemActivityStore` 3 → `log`; `AIJobsStore` 10 → `integrations/ai`; `Optimize`+`CompactionStats` 2 → `storage`; `OperationStore` v1 23 → books *legacy* (deleted when its last caller moves; core starts with v2/v3 run state only, N9); `OperationChangeStore` 4 (undo journal keyed by `BookID`, `store.go:634-656`) → books; `MaintenanceStore` scan-cache/dirty-folder 6, `ReviewStore` 5 → books |
-| `platformStore` (42) | 19 | 23 | `LifecycleStore` 2, `RawKVStore` 7 → `storage` (keyspace-scoped); `ImportPathStore` minus `CountBooksByPathPrefix` 6 → `library`; `SettingsStore` 4 → `config`/`secrets`; `CountBooksByPathPrefix` 1, `ITunesStateStore` 6, `StatsStore` 8, `UserPositionStore` 8 → books |
-| **total 445** | **112** | **333** | |
+| `operationsStore` (92) | 54 | 38 | `OpsV2Store` 39 → behind the `tasks` contract: ABO callers re-point to `tasks`, the implementation stays in the residue until 05-tasks T8 deletes it but is not called for writes after T0: core claims the ops families (books keeps `opstate:`, 05-storage §5S.9.1), reads them in place (`internal/executor/legacyhist`) and writes only `c/tasks/` (05-tasks §5T.6); `SystemActivityStore` 3 → `log` (the `syslog:` rows, read in place by the journal adapter, 05-logging §5); `AIJobsStore` 10 → `integrations/ai`; `Optimize`+`CompactionStats` 2 → `storage`; `OperationStore` v1 23 → books *legacy* (deleted when its last caller moves; core starts with v2/v3 run state only, N9); `OperationChangeStore` 4 (undo journal keyed by `BookID`, `store.go:634-656`) → books; `MaintenanceStore` scan-cache/dirty-folder 6, `ReviewStore` 5 → books |
+| `platformStore` (42) | 15 | 27 | `LifecycleStore` 2, `RawKVStore` 7 → `storage` (keyspace-scoped); `ImportPathStore` minus `CountBooksByPathPrefix` 6 → `library`; `SettingsStore` 4 → books (`setting:` is books' runtime-marker store with 56 non-test `SetSetting` call sites; core `config`/`secrets` read `config_blob` and the 4 secret rows through a books-provided legacy source, cross-cutting resolution 7, 09 S3); `CountBooksByPathPrefix` 1, `ITunesStateStore` 6, `StatsStore` 8, `UserPositionStore` 8 → books |
+| **total 445** | **108** | **337** | |
 
 Core gets **no** wide composite in return: each core service exposes its own small Go API
 (05-storage, 05-tasks, 05-authn, 05-rbac, 05-library, 05-config, 05-ai, 05-logging), and the books
-residue does not re-create a 333-method `Store` either (§4.6).
+residue does not re-create a 337-method `Store` either (§4.6).
 
 ### 4.3 How the narrowed consumer interfaces guide the cut
 
@@ -423,35 +448,35 @@ raw/04 §4 counted 591 interfaces outside `internal/database` whose method set i
 `Store`. Re-running the scan at the evidence commit with each method tagged by the target in §4.2
 (go/ast walk, embedded `database.*` interfaces resolved; helper outside the repository) finds 587
 (the 4-interface difference comes from how unresolvable embeds are skipped) with median width 3.
-Classified by target:
+Re-run for v1.1.0 with `SettingsStore` tagged books. Classified by target:
 
 | class | interfaces | what it means for the cut |
 |---|---|---|
-| books-only | 458 | already the right shape; they re-point from `database` to `internal/books/store` by import rewrite only |
-| core-only | 55 | consumers of identity, roles, settings, run state; they re-point to the core service API (e.g. `AuthStore` `internal/server/handlers/auth.go:82`, `UserStore` `internal/server/handlers/user.go:42`, `UserStore` `internal/oauth/resolve.go:32`, `APIKeyHandlerStore` `internal/server/handlers/apikeys.go:114`, `authSessionStore` `internal/server/middleware/auth.go:38`) |
+| books-only | 465 | already the right shape; they re-point from `database` to `internal/books/store` by import rewrite only |
+| core-only | 46 | consumers of identity, roles, run state; they re-point to the core service API (e.g. `AuthStore` `internal/server/handlers/auth.go:82`, `UserStore` `internal/server/handlers/user.go:42`, `UserStore` `internal/oauth/resolve.go:32`, `APIKeyHandlerStore` `internal/server/handlers/apikeys.go:114`, `authSessionStore` `internal/server/middleware/auth.go:38`) |
 | raw-KV-only | 29 | books code using `SetRaw/GetRaw/ScanPrefix` over its own key families (e.g. 9 in `internal/merge`); they become methods of the books module's `storage.Keyspace` handle (R8), not a dependency on a core service |
-| straddling | 45 | need **two** dependencies after the split (a books store interface plus a core service handle in `module.Deps`); these are the real rewiring work |
+| straddling | 47 | need **two** dependencies after the split (a books store interface plus a core service handle in `module.Deps`); these are the real rewiring work |
 
 The straddling set is where the cut is visible. The widest:
 
 | interface | declared at | methods | targets |
 |---|---|---|---|
-| `ServerOpsStore` | `internal/server/server_ops_store.go:42` | 102 | books 69, books-legacy 11, core:auth 10, core:tasks 5, core:library 3, core:config 2, core:storage 2 |
+| `ServerOpsStore` | `internal/server/server_ops_store.go:42` | 102 | books 71, books-legacy 11, core:auth 10, core:tasks 5, core:library 3, core:storage 2 |
 | `OpsStore` | `internal/plugins/maintenance/deps.go:403` | 91 | books 79, core:storage 9, core:auth 2, core:library 1 |
-| `JobStore` | `internal/maintenance/job.go:442` | 70 | books 50, books-legacy 9, core:storage 7, core:config 2, core:auth 1, core:tasks 1 |
+| `JobStore` | `internal/maintenance/job.go:442` | 70 | books 52, books-legacy 9, core:storage 7, core:auth 1, core:tasks 1 |
 | `opRegistryStore` | `internal/operations/registry/register.go:51` | 40 | core:tasks 39, books 1 |
 | `opsHousekeeping` | `internal/plugins/maintenance/deps.go:304` | 22 | books 11, core:storage 9, core:auth 2 |
-| `OperationsStore` | `internal/server/handlers/operations/interfaces.go:74` | 21 | books 12, core:config 4, books-legacy 3, core:tasks 2 |
-| `SystemStore` | `internal/server/handlers/system/interfaces.go:108` | 21 | books 14, core:config 4, core:log 1, core:storage 1, core:tasks 1 |
+| `OperationsStore` | `internal/server/handlers/operations/interfaces.go:74` | 21 | books 16, books-legacy 3, core:tasks 2 |
+| `SystemStore` | `internal/server/handlers/system/interfaces.go:108` | 21 | books 18, core:log 1, core:storage 1, core:tasks 1 |
 | `serverOperationStore` | `internal/server/server_ops_store.go:77` | 17 | books-legacy 11, core:tasks 5, books 1 |
 | `IngestStore` | `internal/versions/store.go:96` | 15 | books 9, core:library 6 |
 | `Store` | `internal/diagnostics/store.go:41` | 12 | books 10, core:log 1, core:tasks 1 |
-| `serverAuthStore` | `internal/server/server_ops_store.go:84` | 12 | core:auth 10, books 2 |
-| `serverConfigStore` | `internal/server/server_ops_store.go:90` | 12 | books 5, core:library 3, core:config 2, core:storage 2 |
+| `jobOperationStore` | `internal/maintenance/job.go:417` | 12 | books-legacy 9, books 2, core:tasks 1 |
+| `UserStateRepairStore` | `internal/merge/repair_user_state.go:32` | 12 | books 8, core:storage 3, core:auth 1 |
 
 Three conclusions drive the plan:
 
-1. **The cut line is real, not invented.** 458 + 55 + 29 = 542 of 587 consumer interfaces fall
+1. **The cut line is real, not invented.** 465 + 46 + 29 = 540 of 587 consumer interfaces fall
    wholly on one side. The cut follows the composites' existing seams except inside
    `accountStore` (ABS sessions, global preferences), `operationsStore` (v1, undo journal,
    scan cache, review) and `platformStore` (stats, iTunes, positions).
@@ -465,16 +490,19 @@ Three conclusions drive the plan:
 
 ### 4.4 Capability interfaces off `Store` (raw/04 §6)
 
-To core: `OpsV3Store` and its parts (`iface_ops_v3.go:397-488`), `OpRowStore`,
-`OperationsV2SinceLister` → `internal/taskstore`; `ActivityStorer`/`ActivityReader`/`ActivityWriter`/
-`ActivityCounter`/`ActivityLifecycle`/`ActivityRetention`/`ActivityPartialQuerier`/
-`ActivityFilterIndexBackfiller` → `internal/activitystore`; `RawSnapshot`, `RawSnapshotter`,
+`OpsV3Store` and its parts (`iface_ops_v3.go:397-488`), `OpRowStore`, `OperationsV2SinceLister`
+stay in the residue with ABO's legacy run-row writers until 05-tasks T8 deletes them (their row
+types are named by about 30 root packages today; core's own run store writes `c/tasks/`, 05-tasks
+§5T.6). `ActivityStorer`/`ActivityReader`/`ActivityWriter`/`ActivityCounter`/`ActivityLifecycle`/
+`ActivityRetention`/`ActivityPartialQuerier`/`ActivityFilterIndexBackfiller` stay with books: the
+activity feed is the books module's (03 §3.3 `log` row, 05-logging §5). To core: `RawSnapshot`, `RawSnapshotter`,
 `RawBatchApplier`, `PrefixPageScanner`, `PebbleMetricsSampler`, `DBCensusProvider`,
 `DBCensusExactRunner` → `storage`; `SearchIndexDirtyStore`, `ChangeObserver`, `ChangeObservable` →
 `storage/index`; `InviteDeliveryStore`, `InviteEmailGrantStore`, `InviteAcceptChecker`,
 `InviteIDLookup`, `UserCredentialWriter`, `UserPasswordRehasher`, `StrictUserLister`,
 `AdminEmailSetter`, `UnverifiedEmailDisplacer`, `VerifiedEmailMarker`, `VerifiedEmailIdentityLinker`
-→ `internal/authstore`. `StoreUnwrapper` and `AsCapability` are deleted: with no decorators and no
+→ declared in public `auth`, implemented in `internal/authstore` (ABO's `internal/usermerge`,
+`internal/merge`, `internal/server/handlers` and `internal/cfaccess` keep using them; MOD-2). `StoreUnwrapper` and `AsCapability` are deleted: with no decorators and no
 wide interface, capability-by-assertion has nothing left to discover (`store_capability.go:60-100`;
 raw/04 §5 "Decorators: none at HEAD"). `GuestServiceTokenStore` stays in the books residue (it is ABO deployment state) and is consumed by `internal/cfaccess`; every
 other capability interface (Book*, Author*, Series*, Retired*, Sync*, Bookmark*, Review*, Narrator*,
@@ -484,41 +512,36 @@ Collection*, FileProvenance*, VectorANN*, …) stays with books.
 
 | destination | files | non-test LOC |
 |---|---|---|
-| `mediacore/storage` + `mediacore/internal/pebble` | 17 | 4,516 |
+| `mediacore/storage` + `mediacore/internal/pebble` | 16 | 4,108 |
 | `mediacore/storage/index` | 3 | 401 |
-| `mediacore/internal/taskstore` | 15 | 7,592 |
-| `mediacore/internal/authstore` | 8 | 3,190 |
-| `mediacore/internal/activitystore` | 9 | 6,459 |
+| `mediacore/auth` (token helpers, capability interfaces) | 3 | 137 |
+| `mediacore/internal/authstore` | 5 | 3,053 |
 | `mediacore/integrations/ai` | 2 | 292 |
 | `mediacore/integrations/providerhttp` | 1 | 74 |
 | `mediacore/library` | 1 | 261 |
-| `mediacore/secrets` + `mediacore/config` | 1 | 466 |
+| `mediacore/secrets` (file divided) | 1 | 466 |
 | delete (decorator and SQLite leftovers) | 5 | 249 |
-| `internal/books/store` (residue) | 210 | 79,932 |
+| delete at 05-tasks T8 (legacy run-row writers; residue until then) | 15 | 7,592 |
+| `internal/books/store` (residue, incl. the books activity store and `keyfamilies.go`) | 220 | 86,799 |
 
-The exact file lists are in the `internal/database` row's *Split* cell. Four large files must be
-divided internally:
+The exact file lists are in the `internal/database` row's *Split* cell. Four files must be
+divided internally, and `keyfamilies.go` is kept whole:
 
 | file | cut |
 |---|---|
 | `pebble_store.go` (6,767) | engine open/format check/close/checkpoint/ID counters/ULIDs (`:548-1060`: `NewPebbleStore`, `NewPebbleStoreInMemory`, `openPebbleChecked`, `initPebbleStore`, `Close`, `Checkpoint`, `DB`, `nextID`, `newULID`) → `internal/pebble`; the `PebbleStore` struct keeps only books fields and embeds a `storage.Keyspace`; `migrateImportPathKeys` (`:1060`) becomes a books legacy migration step |
-| `store.go` (1,897) | `User`, `Session`, `Role`, `APIKey`, `Invite` types → `auth`/`rbac`; `Setting` → `config`; v2 op row types → `tasks`; `InitializeStore` (`:1835`) → kernel's storage open; `globalStore`/`GetGlobalStore` (`:1809-1813`, zero non-test callers per raw/07 §7.3) → deleted; `Book` (`:202`), `OperationChange` (`:634`) and the composites → books |
+| `store.go` (1,897) | `User`, `Session`, `Role`, `APIKey`, `Invite` types → `auth`/`rbac`; `Setting` stays (books' `setting:` store, cross-cutting resolution 7); v2 op row types stay with ABO's legacy run-row writers until 05-tasks T8; `InitializeStore` (`:1835`) → kernel's storage open; `globalStore`/`GetGlobalStore` (`:1809-1813`, zero non-test callers per raw/07 §7.3) → deleted; `Book` (`:202`), `OperationChange` (`:634`) and the composites → books |
 | `migrations.go` (1,425) | the `Migration` types (`:88-111`) and the runner with its version bookkeeping (`RunMigrations` `:512`, `getCurrentVersion`/`setVersion` `:579-610`) → `storage` migrations; the hand-ordered list (`:112-509`) and the 66 bodies (`:611` onward) → the books module's legacy migration step list, gated by the existing `db_version` row so none re-runs |
-| `keyfamilies.go` (408) | the registry mechanism and census → `storage`; the family *list* is split by owner (below) |
+| `keyfamilies.go` (408) | stays in the residue: the family list holds ABO key names and is the input of the books claim generator (05-storage §5S.9.1); the census mechanism goes to `storage` with `census*.go` |
+| `settings.go` (466) | `EncryptionKeyPath`/`FindEncryptionKey`/`InitEncryption`/`EncryptValue`/`DecryptValue`/mask helpers (`settings.go:51-293`) → `secrets` (legacy key imported as the keyring's legacy entry, 05-config); `GetSetting`/`SetSetting`/`GetAllSettings`/`DeleteSetting` and `UnreadableSettingsError` (`:298-466`) stay in the residue (cross-cutting resolution 7) |
 
-Key families (`keyfamilies.go:37-345`, 258 registered), classified by the owner file the registry
-names: **152** owned by files of the books residue and **37** by other ABO packages (189 in all;
-they stay as the books module's legacy claims, R8 — one of them, `pref:_system:outbox:writeback:`,
-belongs to the dead `internal/writeback` and is retired with it); **69** move to core: 38 task-run families (`op:`, `op:batch:`,
-`op:completion:`, `op:deprev:`, `opv2:*`, `opv3:*`) → `internal/taskstore`; 14 activity families
-(`act:*`, `syslog:`) → `internal/activitystore`; 8 identity families (`apikey:`, `idx:`, `invite:`,
-`inviteallow:`, `oauthid:`, `role:`, `sess:`, `u:`) → `internal/authstore`; `aijob:`,
-`aijob_batch:`, `aijob_payload:`, `aijournal:` → `integrations/ai`; `provider_daily_budget:`,
-`provider_throttle:` → `providerhttp`; `import_path:` → `library`; `setting:` → `secrets`;
-`system:census:` → `storage`. Two families are shared and need a sub-key split, specified in
-05-storage: `idx:` (auth indexes **and** playback/playlist/collection indexes; its owner is
-`pebble_store_auth.go`) and `pref:`/`preference:` (per-user preferences, the reserved
-`storage_format`/`db_version`/`migration_<n>` rows, and per-book metadata state).
+Key families (`keyfamilies.go:37-345`, 258 registered): ownership and claim mode of every family
+and sub-prefix are stated once, in [05-storage](05-storage.md) §5S.9.1 (DATA-2); this file does not
+restate them. What follows for the file cut: `setting:`, `preference:` and `pref:` stay books
+families, with core claiming only exact keys or narrow carve-outs (cross-cutting resolution 7);
+the `act:` activity families stay books; the ops families are claimed by core and read in place
+(books keeps `opstate:`), and ABO's run-row store is unused for writes after 05-tasks T0 and deleted at T8; the identity families are adopted by core under 09's adoption model
+(09 §9.2.3). The two shared families that need a sub-key split are `idx:` and `pref:`/`preference:`.
 
 ### 4.6 What replaces `Store` in the books module
 
@@ -579,34 +602,67 @@ core module path. After this, no exported core identifier mentions a books type,
 
 ## 7. Other splits that shape the plan
 
-- **`internal/config`** keeps its path as the books typed config section. Core `config` takes the
+- **`internal/config`** keeps its path as the books typed config section, and its
+  `config.AppConfig` façade survives over core handles (SIMP-3: R5 binds core only; moving the
+  634 call sites is an optional ratchet, not a stage). Core `config` takes the
   loader (layer order flags → env → file → DB overrides, `Mutate`/`Snapshot`/`Generation`,
   `viper_decode.go`, unknown/removed-key audits, protected fields, secure state dir) and core
-  `secrets` the encrypted setting rows (`internal/database/settings.go:42-52,110-125,189-235`) and the
-  secret-row persistence in `persistence.go:1959-2008`. `config.go` is cut by function: the
+  `secrets` the encryption of the setting rows (`internal/database/settings.go:42-52,110-125,189-235`)
+  and the secret-row persistence in `persistence.go:1959-2008`; the migration mechanism and the
+  keyring are 05-config's, the compatibility window 09 S3's. `config.go` is cut by function: the
   `Config` struct's platform fields (database path, backup, OAuth, otel, auto-update) become core
   sections, audiobook fields and the ten `migrate*Blob` functions (`persistence.go:359-824`) stay.
   This removes all five wrong-way `allowed` edges from config (`layering_test.go:291-295`) because
   core `config` sits below everything that used to reach up (R4).
-- **`internal/operations/registry` → `mediacore/internal/executor`.** Residue: `deps.go` (book-field
-  predicates) and the `Resource` constant list (`types.go:384-398`) move to `internal/books`;
-  `register.go` (serviceregistry wrapper) is deleted. The registry's v3 adapter (`v3_adapter.go`)
+- **`internal/operations/registry` → `mediacore/internal/executor`.** The engine moves at S5
+  (05-tasks T0); 31 root packages still call the v2 API, so the path stays in ABO as the
+  `opsbridge` adapter over public `tasks` until 05-tasks T8 removes the last import, then it is
+  deleted (MOD-2). Residue: `deps.go` (book-field predicates) and the `Resource` constant list
+  (`types.go:384-398`) move to `internal/books`; `register.go` (serviceregistry wrapper) is deleted. The registry's v3 adapter (`v3_adapter.go`)
   becomes the internal bridge that runs `tasks.Definition`s on the executor.
 - **`internal/scheduler` → `mediacore/internal/scheduler`.** `tasks.go` (1,682 LOC, 38
   `TaskDefinition`s), `extra_ops.go` and `full_sweep.go` are books declarations; in the end state
   each becomes the `Schedule` of a books `tasks.Definition`, so the three files dissolve into
   their definitions.
-- **`internal/server`** stays the books HTTP adapter (mounted as an `http.Handler`, N7). Its core
-  concerns (bootstrap, temp login, invite accept, reset, login/invite/bootstrap rate limits, API-key
-  expiry, peer allow-list, CSP, security headers, SPA fallback, 410 stubs, search reconciler) are
-  re-implemented in core and deleted here route group by route group.
+- **`internal/server`** stays the books HTTP adapter, mounted permanently through
+  `httpapi.MountLegacy` (cross-cutting resolution 2; N7). Its core concerns are re-implemented in
+  core and deleted here at the stage that makes them native: peer allow-list, CSP and security
+  headers at S2 (core perimeter); bootstrap, temp login, invite accept, reset, login/invite/bootstrap
+  rate limits and API-key expiry at S4; the search reconciler at S7; SPA fallback and static
+  serving at S9 (FE-1). The gin 410 stubs (`gone.go`) stay with the legacy mount. Books route
+  groups stay on gin unless rewritten for their own reasons.
 
 ## 8. Move order
 
-Waves follow R4's layer order (`log`, `metrics` → `config`, `secrets`, `storage` → `events`, `outbox`,
-`tasks`, `library`, `auth`, `rbac`, `audit`, `integrations/*`, `backup`, `updater`, `health` →
-`httpapi`, `realtime`, `arrfacade`, `ui` → `module` → `kernel` → `app`): a core package can land
-only after every core package it imports.
+Moves are keyed by [09](09-abo-on-core.md)'s stages (S0, S1, S2, S2b, UI-0, S3–S9). R4's layers
+(L0 `entity`, `lifecycle`, `version`, `log`, `metrics` → L1 `storage`, `storage/index` → L2 `secrets`
+→ L3 `config` → L4 `events`, `outbox`, `tasks`, `library`, `auth`, `rbac`, `audit`, `compat`,
+`integrations/*`, `backup`, `updater`, `health` → L6 `httpapi`, `realtime`, `ui`,
+`internal/<capability>http` → L7 `module` → L8 `kernel` → L9 `app`) constrain **imports**, not
+landing order: a core package lands in the first stage that needs it, and may land before a
+lower-layer package as long as everything it imports already exists (S2 lands `kernel` and
+`httpapi` before `storage`, because at S2 the books module still opens the store itself). A package
+grows across stages; the table gives its first stage and, per source, the stage the source moves in
+if later. Deferred-build packages (L5 `acquire`, `arrfacade`, `integrations/indexer`) land in no stage.
+
+### 8.1 Stages and the core packages they create
+
+| stage (09) | core packages that first exist | depends on |
+|---|---|---|
+| S0 | `core/go.mod`, `archtest` (engine from `internal/arch`), `GO_MODULE_DIRS := . core` | — |
+| S1 | `log`, `metrics`, `lifecycle`, `entity`, `version`, `coretest` (log capture first; it grows each stage), `library` (path-safety leaves), `health` (flight recorder) | S0 |
+| S2 | `module`, `kernel`, `app`, `httpapi` (listeners, perimeter, `MountLegacy`), `config` (loader over a books-provided legacy source), `internal/sdnotify` | S1 |
+| S2b | `storage`, `internal/pebble`, `compat` (counters and ledger; the store guard is `storage`'s) | S2 |
+| UI-0 | `internal/openapi`; npm `@mediacore/api-client` runtime and generator | S2 |
+| S3 | `secrets` (keyring), `config` persistence (`c/config/`) | S2b |
+| S4 | `rbac`, `auth` (+`internal/authstore`), `audit`, `internal/authhttp` and the other `internal/<capability>http` packages S4 needs | S3 |
+| S5 | `events` (bus; `tasks` publishes on it), `tasks` (+`internal/executor`, `internal/scheduler`, `tasks/taskstest`, `archtest/tasklint`), `internal/taskhttp` | S4 (`tasks.Definition` carries an `rbac.Permission`, `pkg/ops/definition.go:93`) |
+| S6 | `outbox`, `realtime` (+`internal/sse`), `integrations/notify` + `notify/webhook` | S5 |
+| S7 | `integrations` root, `integrations/providerhttp`, `integrations/ai` (+`openai`), `integrations/metadata`, `integrations/download` + `download/deluge`, `integrations/notify/mail`, `storage/index` + `internal/bleveindex`; the rest of `library` | S6 |
+| S8 | `backup`, `updater`; the rest of `health`; per-App metrics registry | S7 |
+| S9 | `ui`; npm `@mediacore/shell` | S8, UI-0 |
+
+### 8.2 Root-module packages rewired onto each core package
 
 | wave | core packages that must exist | depends on |
 |---|---|---|
@@ -622,78 +678,105 @@ current importers of a source package whose path leaves the root module; for sou
 ABO after a split, the callers of the moved files; for the `internal/database` parts, the packages
 that declare consumer interfaces over the moved methods, §4.3):
 
-| wave | core package | sources at HEAD | root-module packages that must be rewired onto it (current importers of a source that stay in ABO) |
+| first stage | core package | sources at HEAD (stage each moves in, if later) | root-module packages that must be rewired onto it (current importers of a source that stay in ABO) |
 |---|---|---|---|
-| 0 | `mediacore/archtest` | `internal/arch` | -; plus callers of the moved files of `internal/arch` (those paths stay in ABO) |
-| 1 | `mediacore/coretest` | `internal/database/dbtest`, `internal/logger/logtest`, `internal/mail/mailtest` | 0; plus callers of the moved files of `internal/database/dbtest` (those paths stay in ABO) |
-| 1 | `mediacore/internal/sdnotify` | `internal/sdnotify` | 4: `.`, `internal/database`, `internal/search`, `internal/server` |
-| 1 | `mediacore/log` | `internal/activity`, `internal/config`, `internal/logger`, `internal/logging`, `internal/server/handlers` | 56: `cmd`, `internal/ai`, `internal/aiscan`, `internal/audiobooks`, `internal/authorcredit`, `internal/batch`, `internal/bookfileaudio`, `internal/catalog`, `internal/database`, `internal/decisions`, `internal/dedup`, `internal/deluge` (+44); plus callers of the moved files of `internal/activity`, `internal/config`, `internal/server/handlers` (those paths stay in ABO) |
-| 1 | `mediacore/metrics` | `internal/telemetry`, `internal/telemetry/contract` | 4: `.`, `cmd`, `internal/ai`, `internal/database` |
-| 2 | `mediacore/config` | `internal/config` | -; plus callers of the moved files of `internal/config` (those paths stay in ABO) |
-| 2 | `mediacore/internal/bleveindex` | `internal/search` | -; plus callers of the moved files of `internal/search` (those paths stay in ABO) |
-| 2 | `mediacore/internal/pebble` | `internal/compactprogress`, `internal/metrics` | 3: `internal/metafetch`, `internal/plugins/maintenance`, `internal/server`; plus callers of the moved files of `internal/metrics` (those paths stay in ABO) |
-| 2 | `mediacore/secrets` | `internal/database` | -; via `internal/database` (core:config): 6 packages declare consumer interfaces over these methods: `internal/maintenance/jobs`, `internal/remux`, `internal/server`, `internal/server/handlers/operations`, `internal/server/handlers/repairs`, `internal/server/handlers/system` |
-| 2 | `mediacore/storage` | `internal/database` | -; via `internal/database` (core:storage): 17 packages declare consumer interfaces over these methods: `internal/audiobooks`, `internal/authority`, `internal/covertext`, `internal/decisions`, `internal/maintenance/jobs`, `internal/merge`, `internal/metafetch`, `internal/plugins/maintenance`, `internal/plugins/metafetch`, `internal/repairs`, `internal/scanner`, `internal/server`, `internal/server/handlers`, `internal/server/handlers/admindebug`, `internal/server/handlers/system`, `internal/undo`, `internal/usermerge` |
-| 2 | `mediacore/storage/index` | `internal/database`, `internal/search`, `internal/server` | -; plus callers of the moved files of `internal/search`, `internal/server` (those paths stay in ABO); via `internal/database`: no consumer interface (reached through the composition root) |
-| 3 | `mediacore/archtest/tasklint` | `tools/cmd/oplint` | 0 |
-| 3 | `mediacore/audit` | `internal/server/absauth` | -; plus callers of the moved files of `internal/server/absauth` (those paths stay in ABO) |
-| 3 | `mediacore/auth` | `internal/auth`, `internal/config`, `internal/server`, `internal/server/absauth`, `internal/server/middleware`, `internal/util` | 12: `internal/plugins/dedup`, `internal/plugins/deluge`, `internal/plugins/maintenance`, `internal/repairs`, `internal/server/handlers`, `internal/server/handlers/abs`, `internal/server/handlers/admindebug`, `internal/server/handlers/audiobooks`, `internal/server/handlers/opaccess`, `internal/server/handlers/operations`, `internal/server/handlers/repairs`, `internal/server/handlers/system`; plus callers of the moved files of `internal/config`, `internal/server`, `internal/server/absauth`, `internal/util` (those paths stay in ABO) |
-| 3 | `mediacore/backup` | `internal/backup` | 3: `internal/config`, `internal/organizer`, `internal/server/handlers/system` |
-| 3 | `mediacore/health` | `internal/diag/flight`, `internal/server`, `internal/server/handlers`, `internal/sysinfo` | 0; plus callers of the moved files of `internal/server`, `internal/server/handlers`, `internal/sysinfo` (those paths stay in ABO) |
-| 3 | `mediacore/integrations/ai` | `internal/ai/aijobs`, `internal/ai/resultjournal`, `internal/aidispatch`, `internal/config`, `internal/database` | 8: `internal/ai`, `internal/dedup`, `internal/plugins/maintenance`, `internal/reconcile`, `internal/scanner`, `internal/server`, `internal/server/handlers/aibackends`, `internal/transcribe`; plus callers of the moved files of `internal/config` (those paths stay in ABO); via `internal/database`: no consumer interface (reached through the composition root) |
-| 3 | `mediacore/integrations/ai/openai` | `internal/ai` | -; plus callers of the moved files of `internal/ai` (those paths stay in ABO) |
-| 3 | `mediacore/integrations/download/deluge` | `internal/deluge` | -; plus callers of the moved files of `internal/deluge` (those paths stay in ABO) |
-| 3 | `mediacore/integrations/notify/mail` | `internal/mail` | 2: `internal/server`, `internal/server/handlers` |
-| 3 | `mediacore/integrations/notify/webhook` | `internal/plugins/webhook` | 1: `internal/server` |
-| 3 | `mediacore/integrations/providerhttp` | `internal/database`, `internal/metadata`, `internal/metadata/dailyquota`, `internal/metadata/providerhttp`, `internal/security/safehttp`, `internal/server` | 2: `internal/covers`, `internal/metafetch`; plus callers of the moved files of `internal/metadata`, `internal/server` (those paths stay in ABO); via `internal/database`: no consumer interface (reached through the composition root) |
-| 3 | `mediacore/internal/activitystore` | `internal/database` | -; via `internal/database` (core:log): 2 packages declare consumer interfaces over these methods: `internal/diagnostics`, `internal/server/handlers/system` |
-| 3 | `mediacore/internal/authstore` | `internal/database` | -; via `internal/database` (core:auth): 7 packages declare consumer interfaces over these methods: `internal/maintenance/jobs`, `internal/merge`, `internal/organizer`, `internal/plugins/maintenance`, `internal/server`, `internal/server/handlers`, `internal/usermerge` |
-| 3 | `mediacore/internal/executor` | `internal/operations/opswriter`, `internal/operations/registry` | 31: `.`, `cmd`, `internal/catalog`, `internal/dedup`, `internal/itunes/service`, `internal/maintenance/jobs`, `internal/metabatch`, `internal/metadata`, `internal/plugins/acoustid`, `internal/plugins/dedup`, `internal/plugins/deluge`, `internal/plugins/itunes` (+19); plus callers of the moved files of `internal/operations/opswriter` (those paths stay in ABO) |
-| 3 | `mediacore/internal/oauth` | `internal/oauth` | 3: `internal/server`, `internal/server/handlers`, `internal/server/handlers/abs` |
-| 3 | `mediacore/internal/scheduler` | `internal/scheduler` | 5: `internal/server`, `internal/server/handlers`, `internal/server/handlers/mocks`, `internal/server/handlers/operations`, `internal/server/handlers/operations/mocks` |
-| 3 | `mediacore/internal/taskstore` | `internal/database` | -; via `internal/database` (core:tasks): 14 packages declare consumer interfaces over these methods: `internal/diagnostics`, `internal/maintenance/jobs`, `internal/metabatch`, `internal/plugins/maintenance`, `internal/plugins/metafetch`, `internal/repairs`, `internal/server`, `internal/server/handlers`, `internal/server/handlers/opaccess`, `internal/server/handlers/operations`, `internal/server/handlers/repairs`, `internal/server/handlers/system`, `internal/sysinfo`, `internal/usermerge` |
-| 3 | `mediacore/library` | `internal/appdirs`, `internal/boundedcall`, `internal/database`, `internal/diskstats`, `internal/fileops`, `internal/libroot`, `internal/pathutil`, `internal/security/pathvalidation`, `internal/security/safepath`, `internal/util`, `internal/watcher` | 14: `internal/audiobooks`, `internal/covers`, `internal/deluge`, `internal/maintenance/jobs`, `internal/organizer`, `internal/plugins/maintenance`, `internal/reconcile`, `internal/remux`, `internal/repairs`, `internal/scanner`, `internal/server`, `internal/server/handlers` (+2); plus callers of the moved files of `internal/fileops`, `internal/pathutil`, `internal/util` (those paths stay in ABO); via `internal/database` (core:library): 10 packages declare consumer interfaces over these methods: `internal/audiobooks`, `internal/metabatch`, `internal/metafetch`, `internal/plugins/maintenance`, `internal/reconcile`, `internal/scanner`, `internal/server`, `internal/server/handlers`, `internal/sysinfo`, `internal/versions` |
-| 3 | `mediacore/rbac` | `internal/auth` | 12: `internal/config`, `internal/plugins/dedup`, `internal/plugins/deluge`, `internal/plugins/maintenance`, `internal/repairs`, `internal/server`, `internal/server/handlers`, `internal/server/handlers/abs`, `internal/server/handlers/audiobooks`, `internal/server/handlers/opaccess`, `internal/server/handlers/operations`, `internal/server/handlers/repairs` |
-| 3 | `mediacore/tasks` | `internal/lifecycle`, `internal/operations`, `internal/operations/childop`, `internal/operations/freshness`, `internal/operations/opmode`, `internal/operations/state`, `internal/opsmetrics`, `internal/walkresume`, `pkg/ops`, `pkg/plugin/sdk` | 24: `internal/aiscan`, `internal/database`, `internal/dedup`, `internal/importer`, `internal/itunes`, `internal/itunes/service`, `internal/maintenance/jobs`, `internal/metabatch`, `internal/metafetch`, `internal/operations/opswriter`, `internal/organizer`, `internal/plugins/acoustid` (+12) |
-| 3 | `mediacore/tasks/taskstest` | `pkg/ops/opstest` | 0 |
-| 3 | `mediacore/updater` | `internal/server`, `internal/updater` | 0; plus callers of the moved files of `internal/server` (those paths stay in ABO) |
-| 4 | `mediacore/httpapi` | `internal/httputil`, `internal/server/middleware` | 17: `internal/itunes/service`, `internal/server`, `internal/server/handlers`, `internal/server/handlers/abs`, `internal/server/handlers/admindebug`, `internal/server/handlers/aibackends`, `internal/server/handlers/audiobooks`, `internal/server/handlers/dedup`, `internal/server/handlers/duplicates`, `internal/server/handlers/entities`, `internal/server/handlers/fpworker`, `internal/server/handlers/metadata` (+5) |
-| 4 | `mediacore/internal/authhttp` | `internal/server/handlers` | -; plus callers of the moved files of `internal/server/handlers` (those paths stay in ABO) |
-| 4 | `mediacore/internal/openapi` | `tools/cmd/opsgen` | 0 |
-| 4 | `mediacore/internal/taskhttp` | `internal/server/handlers`, `internal/server/handlers/operations`, `internal/server/handlers/opsv3` | 1: `internal/server`; plus callers of the moved files of `internal/server/handlers`, `internal/server/handlers/operations` (those paths stay in ABO) |
-| 4 | `mediacore/realtime` | `internal/realtime` | 2: `internal/itunes/service`, `internal/server` |
-| 4 | `mediacore/ui` | `internal/server` | -; plus callers of the moved files of `internal/server` (those paths stay in ABO) |
-| 5 | `mediacore/app` | `cmd` | -; plus callers of the moved files of `cmd` (those paths stay in ABO) |
-| 5 | `mediacore/kernel` | `internal/startup` | 2: `cmd`, `internal/server` |
+| S0 | `mediacore/archtest` | `internal/arch` | -; plus callers of the moved files of `internal/arch` (those paths stay in ABO) |
+| S1 | `mediacore/coretest` | `internal/database/dbtest` (S2b), `internal/logger/logtest`, `internal/mail/mailtest` (S7) | 0; plus callers of the moved files of `internal/database/dbtest` (those paths stay in ABO) |
+| S1 | `mediacore/health` | `internal/diag/flight`, `internal/server` (S8), `internal/server/handlers` (S8), `internal/sysinfo` (S8) | 0; plus callers of the moved files of `internal/server`, `internal/server/handlers`, `internal/sysinfo` (those paths stay in ABO) |
+| S1 | `mediacore/library` | `internal/boundedcall`, `internal/database` (S7), `internal/diskstats`, `internal/fileops` (S7), `internal/libroot`, `internal/pathutil` (S7), `internal/security/pathvalidation`, `internal/security/safepath`, `internal/util`, `internal/watcher` (S7) | 12: `internal/audiobooks`, `internal/covers`, `internal/deluge`, `internal/maintenance/jobs`, `internal/organizer`, `internal/plugins/maintenance`, `internal/reconcile`, `internal/repairs`, `internal/server`, `internal/server/handlers`, `internal/server/handlers/audiobooks`, `internal/server/handlers/system`; plus callers of the moved files of `internal/fileops`, `internal/pathutil`, `internal/util` (those paths stay in ABO); via `internal/database` (core:library): 10 packages declare consumer interfaces over these methods: `internal/audiobooks`, `internal/metabatch`, `internal/metafetch`, `internal/plugins/maintenance`, `internal/reconcile`, `internal/scanner`, `internal/server`, `internal/server/handlers`, `internal/sysinfo`, `internal/versions` |
+| S1 | `mediacore/lifecycle` | `internal/lifecycle` | 1: `internal/aiscan` |
+| S1 | `mediacore/log` | `internal/config` (S2), `internal/logger`, `internal/logging` | 12: `internal/dedup`, `internal/httputil`, `internal/importer`, `internal/metabatch`, `internal/metafetch`, `internal/plugins/dedup`, `internal/plugins/maintenance`, `internal/scanner`, `internal/server`, `internal/server/handlers`, `internal/server/handlers/dedup`, `internal/server/handlers/operations`; plus callers of the moved files of `internal/config`, `internal/logger` (those paths stay in ABO) |
+| S1 | `mediacore/metrics` | `internal/telemetry` | 4: `.`, `cmd`, `internal/ai`, `internal/database` |
+| S2 | `mediacore/app` | `cmd` | -; plus callers of the moved files of `cmd` (those paths stay in ABO) |
+| S2 | `mediacore/config` | `internal/config` | -; plus callers of the moved files of `internal/config` (those paths stay in ABO) |
+| S2 | `mediacore/httpapi` | `internal/httputil`, `internal/server`, `internal/server/middleware` | 7: `internal/server/handlers`, `internal/server/handlers/abs`, `internal/server/handlers/admindebug`, `internal/server/handlers/audiobooks`, `internal/server/handlers/opaccess`, `internal/server/handlers/repairs`, `internal/server/handlers/system`; plus callers of the moved files of `internal/httputil`, `internal/server` (those paths stay in ABO) |
+| S2 | `mediacore/internal/sdnotify` | `internal/sdnotify` | 4: `.`, `internal/database`, `internal/search`, `internal/server` |
+| S2 | `mediacore/kernel` | `internal/startup` | 2: `cmd`, `internal/server` |
+| S2b | `mediacore/internal/pebble` | `internal/metrics` | -; plus callers of the moved files of `internal/metrics` (those paths stay in ABO) |
+| S2b | `mediacore/storage` | `internal/compactprogress`, `internal/database` | 3: `internal/metafetch`, `internal/plugins/maintenance`, `internal/server`; via `internal/database` (core:storage): 17 packages declare consumer interfaces over these methods: `internal/audiobooks`, `internal/authority`, `internal/covertext`, `internal/decisions`, `internal/maintenance/jobs`, `internal/merge`, `internal/metafetch`, `internal/plugins/maintenance`, `internal/plugins/metafetch`, `internal/repairs`, `internal/scanner`, `internal/server`, `internal/server/handlers`, `internal/server/handlers/admindebug`, `internal/server/handlers/system`, `internal/undo`, `internal/usermerge` |
+| UI-0 | `mediacore/internal/openapi` | `tools/cmd/opsgen` (S5) | 0 |
+| S3 | `mediacore/secrets` | `internal/database` | -; via `internal/database`: no consumer interface (reached through the composition root) |
+| S4 | `mediacore/audit` | `internal/server/absauth` | -; plus callers of the moved files of `internal/server/absauth` (those paths stay in ABO) |
+| S4 | `mediacore/auth` | `internal/auth`, `internal/config`, `internal/database`, `internal/server`, `internal/server/absauth`, `internal/server/middleware`, `internal/util` | 12: `internal/plugins/dedup`, `internal/plugins/deluge`, `internal/plugins/maintenance`, `internal/repairs`, `internal/server/handlers`, `internal/server/handlers/abs`, `internal/server/handlers/admindebug`, `internal/server/handlers/audiobooks`, `internal/server/handlers/opaccess`, `internal/server/handlers/operations`, `internal/server/handlers/repairs`, `internal/server/handlers/system`; plus callers of the moved files of `internal/config`, `internal/server`, `internal/server/absauth`, `internal/util` (those paths stay in ABO); via `internal/database`: no consumer interface (reached through the composition root) |
+| S4 | `mediacore/auth/oidc` | `internal/oauth` | 3: `internal/server`, `internal/server/handlers`, `internal/server/handlers/abs` |
+| S4 | `mediacore/internal/authhttp` | `internal/server/handlers` | -; plus callers of the moved files of `internal/server/handlers` (those paths stay in ABO) |
+| S4 | `mediacore/internal/authstore` | `internal/database` | -; via `internal/database` (core:auth): 7 packages declare consumer interfaces over these methods: `internal/maintenance/jobs`, `internal/merge`, `internal/organizer`, `internal/plugins/maintenance`, `internal/server`, `internal/server/handlers`, `internal/usermerge` |
+| S4 | `mediacore/rbac` | `internal/auth` | 12: `internal/config`, `internal/plugins/dedup`, `internal/plugins/deluge`, `internal/plugins/maintenance`, `internal/repairs`, `internal/server`, `internal/server/handlers`, `internal/server/handlers/abs`, `internal/server/handlers/audiobooks`, `internal/server/handlers/opaccess`, `internal/server/handlers/operations`, `internal/server/handlers/repairs` |
+| S5 | `mediacore/archtest/tasklint` | `tools/cmd/oplint` | 0 |
+| S5 | `mediacore/internal/executor` | `internal/operations/opswriter`, `internal/operations/registry` | 31: `.`, `cmd`, `internal/catalog`, `internal/dedup`, `internal/itunes/service`, `internal/maintenance/jobs`, `internal/metabatch`, `internal/metadata`, `internal/plugins/acoustid`, `internal/plugins/dedup`, `internal/plugins/deluge`, `internal/plugins/itunes` (+19); plus callers of the moved files of `internal/operations/opswriter` (those paths stay in ABO) |
+| S5 | `mediacore/internal/scheduler` | `internal/scheduler` | 5: `internal/server`, `internal/server/handlers`, `internal/server/handlers/mocks`, `internal/server/handlers/operations`, `internal/server/handlers/operations/mocks` |
+| S5 | `mediacore/internal/taskhttp` | `internal/server/handlers`, `internal/server/handlers/operations`, `internal/server/handlers/opsv3` | 1: `internal/server`; plus callers of the moved files of `internal/server/handlers`, `internal/server/handlers/operations` (those paths stay in ABO) |
+| S5 | `mediacore/tasks` | `internal/operations`, `internal/operations/childop`, `internal/operations/freshness`, `internal/operations/opmode`, `internal/operations/state`, `internal/opsmetrics`, `internal/walkresume`, `pkg/ops`, `pkg/plugin/sdk` | 23: `internal/database`, `internal/dedup`, `internal/importer`, `internal/itunes`, `internal/itunes/service`, `internal/maintenance/jobs`, `internal/metabatch`, `internal/metafetch`, `internal/operations/opswriter`, `internal/organizer`, `internal/plugins/acoustid`, `internal/plugins/dedup` (+11) |
+| S5 | `mediacore/tasks/taskstest` | `pkg/ops/opstest` | 0 |
+| S6 | `mediacore/integrations/notify/webhook` | `internal/plugins/webhook` | 1: `internal/server` |
+| S6 | `mediacore/realtime` | `internal/realtime` | 2: `internal/itunes/service`, `internal/server` |
+| S7 | `mediacore/integrations/ai` | `internal/ai/aijobs`, `internal/ai/resultjournal`, `internal/aidispatch`, `internal/config`, `internal/database` | 8: `internal/ai`, `internal/dedup`, `internal/plugins/maintenance`, `internal/reconcile`, `internal/scanner`, `internal/server`, `internal/server/handlers/aibackends`, `internal/transcribe`; plus callers of the moved files of `internal/config` (those paths stay in ABO); via `internal/database`: no consumer interface (reached through the composition root) |
+| S7 | `mediacore/integrations/ai/openai` | `internal/ai` | -; plus callers of the moved files of `internal/ai` (those paths stay in ABO) |
+| S7 | `mediacore/integrations/download/deluge` | `internal/deluge` | -; plus callers of the moved files of `internal/deluge` (those paths stay in ABO) |
+| S7 | `mediacore/integrations/notify/mail` | `internal/mail` | 2: `internal/server`, `internal/server/handlers` |
+| S7 | `mediacore/integrations/providerhttp` | `internal/database`, `internal/metadata`, `internal/metadata/dailyquota`, `internal/metadata/providerhttp`, `internal/security/safehttp`, `internal/server` | 2: `internal/covers`, `internal/metafetch`; plus callers of the moved files of `internal/metadata`, `internal/server` (those paths stay in ABO); via `internal/database`: no consumer interface (reached through the composition root) |
+| S7 | `mediacore/internal/bleveindex` | `internal/search` | -; plus callers of the moved files of `internal/search` (those paths stay in ABO) |
+| S7 | `mediacore/storage/index` | `internal/database`, `internal/search`, `internal/server` | -; plus callers of the moved files of `internal/search`, `internal/server` (those paths stay in ABO); via `internal/database`: no consumer interface (reached through the composition root) |
+| S8 | `mediacore/backup` | `internal/backup` | 4: `internal/appdirs`, `internal/config`, `internal/organizer`, `internal/server/handlers/system` |
+| S8 | `mediacore/updater` | `internal/server`, `internal/updater` | 0; plus callers of the moved files of `internal/server` (those paths stay in ABO) |
+| S9 | `mediacore/ui` | `internal/server` | -; plus callers of the moved files of `internal/server` (those paths stay in ABO) |
 
-Earliest wave after which each package that stays in ABO can be fully rewired (max wave of the core packages that replace what it imports today): wave 0: 53 packages, wave 1: 2 packages, wave 2: 2 packages, wave 3: 79 packages, wave 4: 16 packages, wave 5: 3 packages (total 155).
+Earliest stage after which each package that stays in ABO can be fully rewired (latest stage in which something it imports today moves to core): S0: 55 packages, S1: 3 packages, S2: 1 packages, S2b: 2 packages, S4: 2 packages, S7: 87 packages, S8: 7 packages, S9: 2 packages (total 159).
 
-Ordering notes for the implementation plan:
+### 8.3 Non-importable destinations and their gates (MOD-2)
 
-1. **`internal/database` cannot be split before `storage` (wave 2) and the four storage-backed core
-   services (wave 3) exist.** The books residue is created in wave 2 as `internal/books/store` on a
-   `storage.Keyspace` with the 189 legacy family claims; the 69 core-adopted families move with their
-   services in wave 3 (05-storage specifies the atomic, backed-up adoption migration and the
-   `idx:`/`pref:` sub-key split).
-2. **`tasks` is the long pole of wave 3.** 38 packages import the registry today (31 of them stay in
-   ABO and must be rewired) and ~170 `RunItems`
-   call sites must state `tasks.Parallelism` (R7); `internal/plugins`'s lint stays until the last
-   call site moves, then is deleted.
-3. **Five of the twelve wrong-way `allowed` edges disappear in wave 3** (`dedup`, `metadata`,
-   `reconcile`, `repairs` → registry; `reconcile` → sdk) because core is layer −1 for the ABO guard
-   (03 §3.5.1); the two `plugins/* → itunes/service` edges disappear in wave 4 once `realtime` is in
-   core (`itunes/service` computes to layer 5 only because it imports `internal/realtime`,
-   `layering_test.go:298-299`); the five `config` edges disappear in wave 2.
-4. **The logger shim** (`internal/logger` over `mediacore/log`) lets wave 1 land without touching
-   342 files; deleting the shim is a separate mechanical sweep (`/parallel-sweep` shape) that can run
-   any time after wave 1.
-5. **Gin retirement** (deleting `internal/httputil`'s gin form and the gin halves of
-   `internal/server/middleware`) is not on the critical path; it follows wave 4 per route group (N7).
-6. Package-count effect on the ABO layering guard: 59 packages leave the root module (154 stay;
-   the four renames in §2.4 keep their count) and 2 new paths appear (`internal/books`,
-   `internal/cfaccess`), so 156 packages remain and the literal floor of 150
-   (`layering_test.go:38`) would still pass with a margin of 6 — too thin to rely on; the ratio
-   floor of 03 §3.5.1 is still required.
+Every destination under `mediacore/internal/` or `mediacore/kernel` that 04 maps something to,
+with the ABO code that uses it at the evidence commit (non-test and test files whose own
+destination stays in ABO; for split files, references to exported identifiers declared in the
+moved files). Such a destination is legal only because the source moves **at** the named stage,
+when the last listed user has been rewired to the named public surface; until then the source
+stays where it is. The generator fails on a row with users and no gate.
+
+| source | non-importable destination | ABO users at HEAD (packages) | public surface they are rewired to | moves at |
+|---|---|---|---|---|
+| `internal/database` | `mediacore/internal/authstore` | 5: `internal/merge`, `internal/server`, `internal/server/handlers`, `internal/server/handlers/abs`, `internal/usermerge` | `auth` types, capability interfaces and errors (cut out of the implementation files) | S4 |
+| `internal/metrics` | `mediacore/internal/pebble` | 4: `internal/metafetch`, `internal/openlibrary`, `internal/server`, `internal/telemetry/contract` | `storage` metrics for the main and auxiliary stores (`storage.OpenAuxiliary`) | S2b |
+| `internal/operations/opswriter` | `mediacore/internal/executor` | 3: `internal/plugins/dedup`, `internal/plugins/maintenance`, `internal/repairs` | `tasks` (`ErrFenced` and the fence accessor on the run context) | S5 (05-tasks T0) |
+| `internal/operations/registry` | `mediacore/internal/executor` | 33: `.`, `cmd`, `internal/catalog`, `internal/dedup`, `internal/itunes/service`, `internal/maintenance/jobs` (+27) | `tasks` (`RunItems`, `Definition`, starter options, run context) through the `opsbridge` adapter | S5 (engine, 05-tasks T0); path deleted at T8 |
+| `internal/scheduler` | `mediacore/internal/scheduler` | 5: `internal/server`, `internal/server/handlers`, `internal/server/handlers/mocks`, `internal/server/handlers/operations`, `internal/server/handlers/operations/mocks` | `tasks.Schedule` / `ScheduleFromConfig` and the core task API | S5 (05-tasks T7) |
+| `internal/sdnotify` | `mediacore/internal/sdnotify` | 2: `.`, `internal/server` | `lifecycle` readiness and start-timeout hooks; the fast-exit capability flag is handled by `app` | S2 |
+| `internal/search` | `mediacore/internal/bleveindex` | 0 | - | S7 |
+| `internal/server/handlers` | `mediacore/internal/authhttp` | 1: `internal/server` | core-mounted `/api/core/v1/auth/*`; `auth` invite delivery API for `internal/cfaccess` | S4 |
+| `internal/server/handlers` | `mediacore/internal/taskhttp` | 1: `internal/server` | core-mounted `/api/core/v1/tasks/*` | S5 |
+| `internal/server/handlers/operations` | `mediacore/internal/taskhttp` | 0 | - | S5 |
+| `internal/server/handlers/opsv3` | `mediacore/internal/taskhttp` | 1: `internal/server` | core-mounted `/api/core/v1/tasks/*`; `/api/v3/ops` served as a core alias | S5 |
+| `internal/startup` | `mediacore/kernel` | 3: `cmd`, `internal/server`, `internal/server/handlers/system` | `module.Registrar` startup steps; `health` degraded tokens | S2 |
+| `tools/cmd/opsgen` | `mediacore/internal/openapi` | 0 | - | S5 |
+
+### 8.4 Ordering notes for the implementation plan
+
+1. **`internal/database` cannot be split before `storage` (S2b) exists.** The books residue is
+   created at S2b as `internal/books/store` on `storage.LegacyRange` with books' generated claim
+   list (05-storage §5S.9.1; shadow mode for one release, then strict); the identity families are
+   adopted at S4 and the task families copied/read in place at S5 under 09's compatibility rules
+   (09 §9.2.3, 05-tasks §5T.6).
+2. **`tasks` is the long pole of S5.** 38 packages import the registry today (31 of them stay in
+   ABO and are rewired through the 05-tasks batches T0–T8) and ~170 `RunItems` call sites must
+   state `tasks.Parallelism` (R7); `internal/plugins`'s lint stays until the last call site moves,
+   then is deleted.
+3. **Five of the twelve wrong-way `allowed` edges disappear at S5** (`dedup`, `metadata`,
+   `reconcile`, `repairs` → registry; `reconcile` → sdk) once those imports point at core, which is
+   layer −1 for the ABO guard (03 §3.5.1); the two `plugins/* → itunes/service` edges disappear at
+   S6 once `realtime` is in core (`itunes/service` computes to layer 5 only because it imports
+   `internal/realtime`, `layering_test.go:298-299`); the five `config` edges disappear at S2/S3 as
+   the loader and persistence move.
+4. **The logger façade** (`internal/logger` over `mediacore/log`) lets S1 land without touching
+   342 files. It is kept: removing it is an optional ratchet (SIMP-3), as is the
+   `config.AppConfig` façade's 634-site migration; neither is an extraction stage.
+5. **No gin retirement.** ABO's gin engine stays under `httpapi.MountLegacy` permanently
+   (cross-cutting resolution 2); the gin helpers it needs stay in ABO (§1 decision 6).
+6. Package-count effect on the ABO layering guard: 55 package paths leave the root module (158
+   stay; the renames in §2.4 keep their count) and 2 new paths appear (`internal/books`,
+   `internal/cfaccess`), so **160** packages remain and the literal floor of 150
+   (`layering_test.go:38`) would still pass with a margin of 10 — still too thin to rely on; the
+   ratio floor of 03 §3.5.1 is required. (v1.0.0 counted 59 leaving and 156 remaining; the
+   difference is `internal/httputil`, `internal/logger`, `internal/appdirs` and
+   `internal/telemetry/contract`, which now stay.)
 
 ## 9. `shared/` candidates (none promoted now)
 
@@ -715,17 +798,16 @@ are counted on the ABO side, so the core figure in §1 is a lower bound.
 
 | package (current) | LOC to core |
 |---|---|
-| `internal/database` | 23251 |
 | `internal/operations/registry` | 14695 |
-| `internal/server` | 5849 |
-| `internal/server/handlers` | 4714 |
+| `internal/database` | 8792 |
+| `internal/server` | 5813 |
 | `pkg/ops/opstest` | 3443 |
+| `internal/server/handlers` | 3167 |
 | `internal/ai` | 3002 |
 | `internal/server/handlers/opsv3` | 2929 |
 | `pkg/ops` | 2925 |
 | `internal/config` | 2544 |
 | `internal/scheduler` | 2268 |
-| `internal/activity` | 1710 |
 | `internal/server/middleware` | 1676 |
 | `internal/backup` | 1582 |
 | `internal/aidispatch` | 1498 |
@@ -734,17 +816,18 @@ are counted on the ABO side, so the core figure in §1 is a lower bound.
 | `tools/cmd/oplint` | 998 |
 | `internal/metadata` | 997 |
 | `internal/server/absauth` | 990 |
-| `internal/search` | 964 |
 | `cmd` | 792 |
 | `internal/oauth` | 695 |
 | `internal/diag/flight` | 659 |
-| `internal/httputil` | 604 |
 | `internal/operations/state` | 578 |
 | `internal/ai/aijobs` | 575 |
 | `internal/sysinfo` | 540 |
 | `internal/logging` | 529 |
 | `internal/opsmetrics` | 525 |
 | `internal/pathutil` | 514 |
+| `internal/deluge` | 506 |
+| `internal/auth` | 502 |
+| `internal/operations/opswriter` | 459 |
 
 ## 11. Alphabetical index
 
@@ -769,7 +852,7 @@ Every package of `go list ./...` exactly once, linking to its row in §3.
 | [`internal/ai/resultjournal`](#p-internal-ai-resultjournal) | merge | mediacore/integrations/ai |
 | [`internal/aidispatch`](#p-internal-aidispatch) | core-public | mediacore/integrations/ai |
 | [`internal/aiscan`](#p-internal-aiscan) | abo | internal/aiscan |
-| [`internal/appdirs`](#p-internal-appdirs) | merge | mediacore/library |
+| [`internal/appdirs`](#p-internal-appdirs) | abo | internal/appdirs |
 | [`internal/applycap`](#p-internal-applycap) | abo | internal/applycap |
 | [`internal/applygate`](#p-internal-applygate) | abo | internal/applygate |
 | [`internal/arch`](#p-internal-arch) | abo | internal/arch |
@@ -795,7 +878,7 @@ Every package of `go list ./...` exactly once, linking to its row in §3.
 | [`internal/cfaccesspolicy`](#p-internal-cfaccesspolicy) | abo | internal/cfaccesspolicy |
 | [`internal/cfservicetoken`](#p-internal-cfservicetoken) | abo | internal/cfservicetoken |
 | [`internal/chaptershape`](#p-internal-chaptershape) | abo | internal/chaptershape |
-| [`internal/compactprogress`](#p-internal-compactprogress) | merge | mediacore/internal/pebble |
+| [`internal/compactprogress`](#p-internal-compactprogress) | merge | mediacore/storage |
 | [`internal/config`](#p-internal-config) | abo | internal/config |
 | [`internal/covers`](#p-internal-covers) | abo | internal/covers |
 | [`internal/covertext`](#p-internal-covertext) | abo | internal/covertext |
@@ -822,7 +905,7 @@ Every package of `go list ./...` exactly once, linking to its row in §3.
 | [`internal/foldercover`](#p-internal-foldercover) | abo | internal/foldercover |
 | [`internal/foldernames`](#p-internal-foldernames) | abo | internal/foldernames |
 | [`internal/franchise`](#p-internal-franchise) | abo | internal/franchise |
-| [`internal/httputil`](#p-internal-httputil) | merge | mediacore/httpapi |
+| [`internal/httputil`](#p-internal-httputil) | abo | internal/httputil |
 | [`internal/identification`](#p-internal-identification) | abo | internal/identification |
 | [`internal/importer`](#p-internal-importer) | abo | internal/importer |
 | [`internal/itunes`](#p-internal-itunes) | abo | internal/itunes |
@@ -830,9 +913,9 @@ Every package of `go list ./...` exactly once, linking to its row in §3.
 | [`internal/itunesguard`](#p-internal-itunesguard) | abo | internal/itunesguard |
 | [`internal/keyedmutex`](#p-internal-keyedmutex) | abo | internal/keyedmutex |
 | [`internal/libroot`](#p-internal-libroot) | merge | mediacore/library |
-| [`internal/lifecycle`](#p-internal-lifecycle) | merge | mediacore/tasks |
+| [`internal/lifecycle`](#p-internal-lifecycle) | core-public | mediacore/lifecycle |
 | [`internal/linkintegrity`](#p-internal-linkintegrity) | abo | internal/linkintegrity |
-| [`internal/logger`](#p-internal-logger) | merge | mediacore/log |
+| [`internal/logger`](#p-internal-logger) | abo | internal/logger |
 | [`internal/logger/logtest`](#p-internal-logger-logtest) | merge | mediacore/coretest |
 | [`internal/logger/mocks`](#p-internal-logger-mocks) | delete | - |
 | [`internal/logging`](#p-internal-logging) | core-public | mediacore/log |
@@ -854,7 +937,7 @@ Every package of `go list ./...` exactly once, linking to its row in §3.
 | [`internal/metrics`](#p-internal-metrics) | abo | internal/metrics |
 | [`internal/models`](#p-internal-models) | merge | internal/dedup/unified |
 | [`internal/mtls`](#p-internal-mtls) | abo | internal/mtls |
-| [`internal/oauth`](#p-internal-oauth) | core-internal | mediacore/internal/oauth |
+| [`internal/oauth`](#p-internal-oauth) | core-public | mediacore/auth/oidc |
 | [`internal/openlibrary`](#p-internal-openlibrary) | abo | internal/openlibrary |
 | [`internal/operations`](#p-internal-operations) | merge | mediacore/tasks |
 | [`internal/operations/childop`](#p-internal-operations-childop) | merge | mediacore/tasks |
@@ -933,7 +1016,7 @@ Every package of `go list ./...` exactly once, linking to its row in §3.
 | [`internal/sysinfo`](#p-internal-sysinfo) | abo | internal/sysinfo |
 | [`internal/tagger`](#p-internal-tagger) | abo | internal/tagger |
 | [`internal/telemetry`](#p-internal-telemetry) | core-public | mediacore/metrics |
-| [`internal/telemetry/contract`](#p-internal-telemetry-contract) | merge | mediacore/metrics |
+| [`internal/telemetry/contract`](#p-internal-telemetry-contract) | abo | internal/telemetrypolicy |
 | [`internal/testutil`](#p-internal-testutil) | abo | internal/testutil |
 | [`internal/testutil/rapidgen`](#p-internal-testutil-rapidgen) | abo | internal/testutil/rapidgen |
 | [`internal/titleutil`](#p-internal-titleutil) | abo | internal/titleutil |
@@ -968,22 +1051,15 @@ Every package of `go list ./...` exactly once, linking to its row in §3.
 
 ## Objections to 03
 
-1. **03 §3.5.1's figure "it fails once 64 packages leave the root module"** is a property of the
-   old floor, not of this mapping: here 59 leave and 156 remain (154 plus 2 new), so the literal floor would survive
-   with a thin margin. The redesign to a ratio floor is still right (thin margins and future waves);
-   only the stated premise should read "can fail".
-2. **03 §3.3 has no home for a persisted activity journal.** This mapping puts the activity store
-   and service under `log` (implementation `internal/activitystore`) with the audit tier under
-   `audit`, because the shell's logs page (`@mediacore/shell`) needs a queryable persisted log.
-   If 05-logging places it elsewhere, only the target column of `internal/activity`,
-   `internal/server/handlers` (activity routes) and the activity files of `internal/database`
-   change.
-3. **Sub-packages not listed in the 03 §3.3 tree** are used where a contract needs a test kit or
+1. **03 §3.5.1 counts 59 packages leaving and 156 remaining** (citing §8 note 6 of 04 v1.0.0). With
+   v1.1.0's mapping 55 leave and **160** remain (§8.4 note 6); the conclusion (ratio floor
+   required) is unchanged, only the figures.
+2. **Sub-packages not listed in the 03 §3.3 tree** are used where a contract needs a test kit or
    an analyzer: `tasks/taskstest`, `archtest/tasklint`, `integrations/ai/openai`,
    `integrations/download/deluge` (named in 03), `integrations/notify/{mail,webhook}` (named in 03),
-   and internal packages `internal/taskstore`, `internal/authstore`, `internal/activitystore`,
-   `internal/taskhttp`, `internal/authhttp`, `internal/oauth`. 03 §3.3 lists `internal/...` as
-   open-ended; no rule is contradicted.
+   and internal packages `internal/authstore`, `internal/taskhttp`, `internal/authhttp` (03's
+   `internal/<capability>http` row covers the last two). 03 §3.3 lists `internal/...` as open-ended;
+   no rule is contradicted.
 
 ## Out-of-scope defects found
 
@@ -998,14 +1074,31 @@ Every package of `go list ./...` exactly once, linking to its row in §3.
 ## Open items
 
 1. **Mock conversion cost** (§4.6): 114 test files on `internal/database/mocks` plus ~22 on the
-   hand-written `MockStore`. Owner decides whether conversion happens inside the books wave or is
+   hand-written `MockStore`. Owner decides whether conversion happens inside the books stage or is
    deferred behind the interim `storetest` composite.
-2. **`idx:` and `pref:` sub-key ownership** (§4.5): 05-storage must define sub-prefix claims or a
-   one-time adoption migration for keys of one family that belong to different owners.
-3. **Activity journal placement** (Objection 2): confirm with 05-logging.
-4. **`internal/cfaccess` consolidation** (§2.4) assumes core `auth` exposes an authenticator
+2. **`idx:` and `pref:` sub-key ownership** (§4.5): owned by 05-storage §5S.9.1 (DATA-2); this
+   file's file cut follows whatever that table states.
+3. **`internal/cfaccess` consolidation** (§2.4) assumes core `auth` exposes an authenticator
    extension point for header-asserted identity (05-authn).
-5. **`tasks.Writer` generics** (§6): 05-tasks must specify how a module registers typed writers
+4. **`tasks.Writer` generics** (§6): 05-tasks must specify how a module registers typed writers
    (the books `ModifyBook` family) without core naming books types.
-6. **Logger shim lifetime** (§8 note 4): the 342-file migration to slog is scheduled by the plan,
-   not by this mapping.
+5. **Divided files** (§4.5 `settings.go`, `pebble_auth`-family interfaces cut out to `auth`): each
+   needs a mechanical "cut" PR before its move PR so that the move is a pure file move.
+
+## Review history
+
+Round 1 (dispositions in `docs/plans/platform-core/reviews/spec-round-1-dispositions.md`):
+
+- MOD-2 — internal/public column re-derived from the import graph; `compactprogress` → `storage`, `oauth` → `auth/oidc`, `lifecycle` → public `lifecycle`; `sdnotify`, `startup`, `scheduler`, executor engine, `opswriter` fence files, `taskhttp`/`authhttp`, `authstore` and the Pebble collector moved only at a named gate stage; auth type files → public `auth`; §8.3 gate table and generator check (d).
+- MOD-6 — moves keyed by 09 stages (§8.1); `internal/telemetry/contract` stays in ABO as `internal/telemetrypolicy` with `ratchet_test.go`; one telemetry target `mediacore/metrics`; `lifecycle` resolved to 03's public L0 package.
+- MOD-21 — `internal/httputil` `respond.go` (`RespondWithApplyCapExceeded`, ABO `applycap`) stays; `internal/appdirs` stays as the config → `library.AppDirs` adapter.
+- Cross-cutting 2 / SIMP-2 — no gin retirement; gin helpers of the permanent legacy mount stay (`httputil`, `gone.go`); per-stage removal of gin copies.
+- Cross-cutting 1 / SIMP-1 — promotion rule as non-circular build rule; no deferred-build package in any stage.
+- Cross-cutting 7 / DATA-1 — `SettingsStore` and `setting:` stay books; `settings.go` divided; method cut 108/337.
+- DATA-2 — family ownership referenced to 05-storage §5S.9.1 instead of restated; `keyfamilies.go` stays ABO; activity store stays books (03 §3.3 `log` row, 05-logging §5).
+- OPS-7 (consequence) — task-run store files stay as ABO legacy writers until 05-tasks T8; no `internal/taskstore`.
+- SIMP-3 — `internal/logger` and `config.AppConfig` façades kept; removal is an optional ratchet.
+- SIMP-13 — books metric names unchanged in the `internal/metrics` and `internal/opsmetrics` rows.
+- COR-17 — `entity.Ref` in the `realtime` and `pkg/ops` rows.
+- COR-19 — §8 layer list matches 03 R4 v1.3.0.
+- MOD-14 (consequence) — root row names the `. -> cmd` positive control.
