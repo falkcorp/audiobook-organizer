@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-download.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 513fb395-c640-4bb6-b76c-d9fe80b3224e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -67,7 +67,7 @@ pipeline the 09 S7 done-check wants absent.
 | `download.Caps.Add`, `download.Caps.ClientFetchesURL`, `download.Caps.CreateCategory`, `download.Caps.Tags`, `download.Caps.Pause`, `download.Caps.SeedGoals`, `download.Caps.RemoveWithData`, `download.Caps.PostImportCategory`, `download.Caps.Priority`, `download.SeedGoalCaps` | — | `acquire` | §3 `Caps` comment (appended fields, SIMP3-4) |
 | `download.GrabRequest`, `download.ResolvedGrab`, `download.GrabID`, `download.AddResult`, `download.Source`, `download.Priority`, `download.SeedGoal`, `download.RemoveOptions`, `download.Selection`, `download.RecordFunc`, `download.ImportOutcome` | — | `acquire` | §3 grab types, §4.3 |
 | `download.Pool.Grab`, `download.Pool.Remove`, `download.Pool.MarkImported`, `download.Pool.Refresh`, `download.Pool.Tracked`, `download.Tracked`, `download.TrackedFilter` | — | `acquire` | §3, §4.3, §4.5 |
-| `download.Watch`, `module.Registrar.DownloadWatch` | — | `acquire` | §3 `Watch` |
+| `download.Watch` | — (its registrar method `module.Registrar.DownloadWatch` is listed once, in 06 §6.4.9, SIMP6-8) | `acquire` | §3 `Watch` |
 | `download.Event`, `download.EventKind` | topic `core.download.item.transitioned.v1`; task kind `core.download.poll`; keys `core.download.schedules.poll`, `core.download.removed_after`, `core.download.warning_to_failed`, `core.download.pending_recovery`, `core.download.snapshot_retention` | `acquire` | §3 topic table, §4.5, §7 |
 
 Out of scope: release selection and the decision engine (10), indexers ([05-indexer](05-indexer.md)), file
@@ -493,6 +493,13 @@ land in one partition and each consumer reads them through one cursor in staging
 events (`completed`, `failed`, `removed`) only for grabs whose `added` record has committed, so `grab_added`
 always precedes them, also for a cached torrent or usenet job that is complete on its first poll. A recovery
 pass that finds the item already complete stages `grab_added` and then `completed` in that order in one batch.
+**Every write to `c/download/grabs/` is checked at commit (R6-1).** Not only the `pending → added | failed` step:
+the new `pending` record and its `by-key/<key>` row (expected absent), and every later change of a grab record
+(`MarkImported`'s and `Remove`'s outcome, retention pruning) stage `Batch.GetForUpdate` on the record the writer
+derived its change from, and the sub-prefix is `CheckedWrites` from the release that builds the grab pipeline, so
+storage refuses a blind write (`ErrBlindWrite`). A writer whose commit fails with `storage.ErrConflict` is dropped:
+nothing of its batch applies, it re-reads and decides again from the record's new state, and never re-stages what
+it derived from the stale read, so no later write can revert a `failed` or a recovery's `added`.
 Both intake rows of that batch commit together, so their relative order is their key order: it holds because
 `Stage` takes message IDs from one monotonic generator per `Outbox`, so intake keys preserve `Stage` call order
 within a process (05-events §5E.4, §5E.5.2, `TestStageOrderWithinBatch`; COR4-14). As defence in depth, acquire applies a
@@ -566,6 +573,7 @@ in-flight batches first.
 | Unknown client state value | `StateWarning`, counted | Never guess `Completed`. |
 | Optional capability absent (`FileLister`, `Relocator`; phase 2: `Adder`, `Remover`, …) | `ClassUnsupported` | Caller decides (e.g. ABO skips move_storage, as today when disabled; `Pool.Grab` tries the next instance). |
 | Snapshot/outbox batch write fails | closed: transition retried next poll | Same-batch rule: no event without state, no state without event. |
+| `core.integrations.disabled` true (a staging copy, R6-7; 05-metadata M1.4) | closed: `Lease` gives `ErrDisabled`, so `Items`, `Files` and `Relocate` fail and the poll leaves every snapshot untouched (as for an outage); phase 2: `Pool.Grab` stores nothing | A copy of a production store must never move, add or remove items in a production client (OPS6-4). |
 | Relocate after organize fails (ABO "follow the book") | open for the organize (already succeeded), error recorded on the item and surfaced in health | Today it is a log line only (`integration.go:131-135`); the design keeps "best effort" but makes it visible. |
 
 ## 6. Concurrency contract
@@ -621,6 +629,8 @@ Phase 2 metrics are marked; phase 1 ships only the unmarked ones.
 
 Core, phase 1: `TestPool_ItemsFillsLocalPath`, `TestPool_RelocateGroupsByInstance`,
 `TestPaths_UnmappedRelocateRefused`, `TestPaths_WindowsRemote`, `TestDeluge_PrivateHostNeedsLocal`,
+`TestPool_IntegrationsDisabledNoClientCall` (`core.integrations.disabled`: a fake client sees no request and no
+snapshot changes; R6-7),
 `TestDelugeInstance_LegacyBackedReadInPlace` (05-metadata M1.4 step 2a, with a fake legacy instance store covering
 `download/deluge`: it is read from and written through that store; no `c/integrations/instances/download/deluge`
 row is written; R4-1).
@@ -633,7 +643,9 @@ Core, phase 2 (with `acquire`): `TestGrab_IdempotencyKeyDedupes`, `TestGrab_Ambi
 owners' messages without a run or a write; COR2-10), `TestMonitor_GrabEventsShareKey` (every event of one grab
 carries key `GrabID`; a cached item complete on its first poll is staged `grab_added` then `completed`; COR3-4),
 `TestGrab_RecoveryAndAddNeverBothStage` (`-race`: a late `Add` success and a recovery pass on one pending
-record → exactly one `grab_added`), `TestPool_RefreshDoesNotStackRuns`, `TestMarkImported_RemovesOnlyWhenSeedGoalMet`.
+record → exactly one `grab_added`), `TestGrab_EveryRecordWriteChecked` (`-race`: `MarkImported` against a
+concurrent recovery or failure on one grab record → exactly one commits and the loser re-reads; a blind `Set` on
+`c/download/grabs/` fails with `ErrBlindWrite`; R6-1), `TestPool_RefreshDoesNotStackRuns`, `TestMarkImported_RemovesOnlyWhenSeedGoalMet`.
 Adapters: `coretest.DownloadConformance(t, factory, fixtures)` — one suite every adapter passes, covering what
 is built: phase 1 items/state mapping golden table, status, files, relocate, auth failure and re-login, unknown
 state; phase 2 adds add (magnet, file, URL), duplicate add, category and remove ± data for adapters implementing
@@ -647,7 +659,7 @@ client with a scriptable clock-driven state machine (`Advance(id, State)`), capa
 |---|---|
 | `internal/deluge/client.go` | `core/integrations/download/deluge` adapter (`core.deluge`); RPC/auth code reused; every method gains ctx; `http.Client` from `env.HTTP` (5-minute timeout becomes per-op limits) |
 | `deluge.GetClient()` global, `ResetGlobalClientForTest`, `SetGlobalClientForTest` | deleted; `Pool.Lease` |
-| `DelugeWebURL/Password`, `download_client.torrent.deluge` | the **legacy-backed** instance `download/deluge` (05-metadata M1.4 step 2a, M1.10; R4-1): its URL and settings stay in the config blob, served in place by books' legacy instance store (ABO code; no core adapter and no grant) until the integrations cutover, which is outside the extraction; nothing is copied into `c/integrations/instances/`, so the current build and any older build read the same values. The password moves to `secrets` as `integrations.download.deluge.password` the first time this build writes it, and in that batch books' store replaces the blob value, and every other plaintext copy, with the never-matching sentinel (05-config §2.2, R4-2) — not a blank, which an older build would replace with Deluge's factory-default password (`internal/deluge/integration.go:27-67` @748fd787a). After a rollback the older build's Deluge login therefore fails until the operator re-enters the password there (stated in the release note); a value re-entered that way is re-imported on roll-forward. `Local` is native-only: books' store keeps it in its extension family. The S7 upgrade grants none: when the host is an IP-literal loopback or private address, the S7 books migration records it as a pending candidate bound to that URL origin, and the instance cannot reach it until an admin accepts it (`Registry.Confirm`, audited; release note); an older build's change of the instance suspends a granted `Local` until an admin confirms it again (05-metadata M1.10 egress trust, M1.4 step 2a; SEC3-5, DATA5-9). The Deluge password is plaintext in the blob at HEAD, so it moves as described above; it is not one of the secrets HEAD already encrypts, which stay in place (R5-1(b), 05-metadata M1.4 step 2a). Env-authoritative behaviour is preserved as an **in-memory operator overlay** on the effective instance while an operator value is set — never written to the blob, the extension record or `c/secrets/`, so removing the env value restores the stored password as HEAD does (env names permanent, 05-metadata M1.4 step 2, SIMP2-5) |
+| `DelugeWebURL/Password`, `download_client.torrent.deluge` | the **legacy-backed** instance `download/deluge` (05-metadata M1.4 step 2a, M1.10; R4-1): its URL and settings stay in the config blob, served in place by books' legacy instance store (ABO code; no core adapter and no grant) until the integrations cutover, which is outside the extraction; nothing is copied into `c/integrations/instances/`, so the current build and any older build read the same values. The password moves to `secrets` as `integrations.download.deluge.password` the first time this build writes it, and in that batch books' store replaces the blob value, and every other plaintext copy, with the never-matching sentinel (05-config §2.2, R4-2) — not a blank, which an older build would replace with Deluge's factory-default password (`internal/deluge/integration.go:27-67` @748fd787a). After a rollback the older build's Deluge login therefore fails until the operator re-enters the password there (stated in the release note); a value re-entered that way is re-imported on roll-forward. `Local` is native-only: books' store keeps it in its extension family. The S7 upgrade grants none: when the host is an IP-literal loopback or private address, the S7 books migration records it as a pending candidate bound to that URL origin, and the instance cannot reach it until an admin accepts it (`Registry.Confirm`, audited; release note); an older build's change of the instance suspends a granted `Local` until an admin confirms it again (05-metadata M1.10 egress trust, M1.4 step 2a; SEC3-5, DATA5-9). The Deluge password is plaintext in the blob at HEAD, so it moves as described above; it is not one of the secrets HEAD already encrypts, which stay in place (R5-1(b), 05-metadata M1.4 step 2a). Env-authoritative behaviour is preserved as an **in-memory operator overlay** on the effective instance while an operator value is set — never written to the blob, the extension record or `c/secrets/`, so removing the env value restores the stored password as HEAD does (env names permanent, 05-metadata M1.4 step 2, SIMP2-5). Which Deluge env names overlay and lock, and which only fill an unstored field, follows HEAD per name under the one precedence rule (05-config §1.12.4 `BelowStored`, 05-metadata M1.4 step 2; SEC6-5), and an env-given URL is trusted for private networks only while it is the effective value |
 | `deluge_move_enabled`, `deluge_discovery_label`, `deluge_discovery_enabled` | `modules.books.download.*` settings (they are ABO behaviour, not client config) |
 | `BookVersion.TorrentHash`, `BookFile.DelugeHash` | **phase 1: unchanged** — no books row rewrite; books builds `download.ItemRef{Instance: download/deluge, ID: ItemID(hash)}` at the call site. Storing `ItemRef` is the phase-2 books migration (§1 table), with its own stage entry when it ships (SIMP2-7) |
 | `NotifyDelugeAfterOrganize/AfterVersionSwap/MoveStorage(ToDir)` | books code calling `Pool.Relocate` (reached as `module.Deps.Downloads`, COR-1) for every `ItemRef` of the book's active versions, behind `Caps.Relocate` |
@@ -763,3 +775,14 @@ Round 5 (`docs/plans/platform-core/reviews/spec-round-5-dispositions.md`):
 - DATA5-9 — §10 Deluge row: the upgrade grants no `Local`; a pending candidate an admin accepts.
 - R5-1(b) — §10 Deluge row: the plaintext Deluge password still moves; the HEAD-encrypted secrets stay in place.
 - OPS5-12 — §4.1: a natively stored download client does nothing after a rollback.
+
+Round 6 (`docs/plans/platform-core/reviews/spec-round-6-dispositions.md`):
+
+- R6-1 — §4.3: every write to `c/download/grabs/` (new record, step, `MarkImported`/`Remove` outcome, pruning)
+  stages `GetForUpdate`; the sub-prefix is `CheckedWrites`; a failed write is dropped and re-read;
+  `TestGrab_EveryRecordWriteChecked`.
+- R6-7 / OPS6-4 — §5 row, §9 `TestPool_IntegrationsDisabledNoClientCall`: with `core.integrations.disabled`
+  (05-metadata M1.4) no client call is made and snapshots stay untouched.
+- SEC6-5 — §10 Deluge row: env precedence per name under the one rule; private-network trust only for the
+  effective value.
+- SIMP6-8 — §1 deferred table: `module.Registrar.DownloadWatch` removed from the first column; 06 §6.4.9 lists it.

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/10-tv-movies-proof.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: e9ed438b-6097-4a4d-8b51-d2eacaca8221 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -151,7 +151,7 @@ predicate that depends on the clock or on hot-reloadable config.
 
 | Capability | Core package (spec) | How `tv` uses it |
 |---|---|---|
-| Persisted core state | `auth`, `rbac`, `tasks`, `integrations`, `providerhttp` (and `ai`, unused) | No module of the TV app sets `Manifest.LegacyStores` (06 §6.4.2): it has no pre-core data, so every core service of 03 §3.3's "Store interfaces" table uses its **native store** under `c/<subsystem>/`, alone — for an exclusive store because no legacy one replaces it, and for a routed store (instances, gates, rules; 05-metadata M1.1, SIMP5-1) because no legacy store covers any record, so the native store serves every one and no legacy capability (`storage.Covering`, `storage.ExtConfirmer`, 05-storage §5S.3.11) is ever consulted: users, keys and identities ([05-authn](05-authn.md)), roles ([05-rbac](05-rbac.md)), runs, queues, clocks and stamps ([05-tasks](05-tasks.md)), integration instances (download clients, indexers, notification channels: `NativeInstanceStore`, [05-metadata](05-metadata.md) M1.4), provider holds and daily quotas (`NativeGateStore`, M2.4), notification rules (`NativeRuleStore`, [05-notify](05-notify.md) §3) and AI batch jobs (`NativeJobStore`, [05-ai](05-ai.md) §4; TV/Movies consume no AI). No legacy key name, row format, extension family or storage grant exists in this app (R4-1, SIMP4-3). |
+| Persisted core state | `auth`, `rbac`, `tasks`, `integrations`, `providerhttp` (and `ai`, unused) | No module of the TV app sets `Manifest.LegacyStores` (06 §6.4.2), and the app imports nothing from core's `legacy` package, which holds every legacy-only identifier outside the API promise (03 §3.3, R6-3): it has no pre-core data, so every core service of 03 §3.3's "Store interfaces" table uses its **native store** under `c/<subsystem>/`, alone — for an exclusive store because no legacy one replaces it, and for a routed store (instances, gates, rules; 05-metadata M1.1, SIMP5-1) because no legacy store covers any record, so the native store serves every one and no legacy capability (`legacy.Covering`, `legacy.ExtConfirmer`, 05-storage §5S.3.11) is ever consulted: users, keys and identities ([05-authn](05-authn.md)), roles ([05-rbac](05-rbac.md)), runs, queues, clocks and stamps ([05-tasks](05-tasks.md)), integration instances (download clients, indexers, notification channels: `NativeInstanceStore`, [05-metadata](05-metadata.md) M1.4), provider holds and daily quotas (`NativeGateStore`, M2.4), notification rules (`NativeRuleStore`, [05-notify](05-notify.md) §3) and AI batch jobs (`NativeJobStore`, [05-ai](05-ai.md) §4; TV/Movies consume no AI). No legacy key name, row format, extension family or storage grant exists in this app (R4-1, SIMP4-3). |
 | Storage keyspace | `storage` ([05-storage](05-storage.md)) | `Deps.Storage` hands the module `Keyspace("m/tv/")`; writes outside it are refused (R8). Scans are `codec.Typed[Series].All` (`iter.Seq2[Series, error]`). Integer IDs from `Keyspace.Sequence("series").Next` (§10.4 G10). |
 | Tasks | `tasks` ([05-tasks](05-tasks.md)) | Module task kinds: `tv.metadata.refresh` (every 12 h like Sonarr, `raw/16 §1.1` notes, on `tasks.ScheduleFromConfig("modules.tv.metadata.schedules.refresh")`, default `{enabled: true, every: 12h}`, §10.5.7; `tasks.Fixed(4, "metadata provider rate limits")`), `tv.search.missing`, `tv.search.series`, `tv.search.episodes`, `tv.disk.rescan` (`tasks.CPU()`; per-series partition), `tv.recent.search` (aired in last 14 days or 1 day ahead, `raw/16 §1.3`). RSS sync is a **core** `acquire` task and download polling a **core** `integrations/download` task (§10.5.4); neither is the module's. The import of a completed download **is** the module's: kind `tv.acquire.import`, built by `acquire.ImportTask` and registered by `tv` (§10.5.4, COR2-11), so its writes run under `tv`'s own `Effects`. Every `RunItems` declares parallelism (R7). Any cadence a `tv.*` or `movies.*` kind gets is a declared module schedule key of this shape (R2-7); in this proof only `tv.metadata.refresh` has one (SIMP3-9). |
 | RSS sync & search | `acquire` + `integrations/indexer` | The module registers an `acquire.MediaType[tv.Target]` (§10.5.3), reaching the service as `module.Deps.Acquire` (06, COR-1): Newznab categories (TV 5000 family + anime 5070, `raw/16 §4.2`) and RSS type `TypeTV`, a release parser, a mapper release → series/episodes, its search-criteria builder (`t=tvsearch` + `tvdbid/tmdbid/imdbid`, `season`/`ep`; daily `season=<yyyy>&ep=<MM>/<dd>`; anime `q=<title>+<abs>`, `raw/16 §1.2, §4.2`), and its own specs (§10.5.3 table). |
@@ -819,10 +819,15 @@ Tracked-download transitions (complete table; `→` legal; the event names are t
   downloads that share any ref (a pack and an episode it contains, or two downloads for one movie) import
   serially; disjoint ones in parallel, each as its own module run.
 - Tracked-download transitions from download events are applied by one outbox consumer in the relay batch.
-  `c/acquire/tracked/` is a `Serialized` sub-prefix (05-storage §5S.3.2), and **every** TD writer — that consumer,
-  the import run's `ImportTx`, `core.acquire.import-retry` and user actions (remove, ignore) — reads the row with
-  `Batch.GetForUpdate`, so two writers can never both commit a transition from the same state; the loser fails
-  its commit and re-reads (COR3-4). A per-ID keyed mutex on the user-action path is only for fairness.
+  `c/acquire/tracked/` is a `Serialized` and `CheckedWrites` sub-prefix (05-storage §5S.3.2, §5S.3.4), and
+  **every** TD write — that consumer, the import run's `ImportTx`, `core.acquire.import-retry`'s fenced
+  `ImportPending` record (attempts++, next attempt time), user actions (remove, ignore), and writes that keep the
+  state (`Messages`, `Attempts`, `Updated`) — stages `Batch.GetForUpdate` on the row it derived its change from,
+  together with the index rows it touches (`ix/tracked-by-grab/`, `ix/tracked-by-ref/`, `ix/import-retry/`), so
+  storage refuses a blind write and two writers can never both commit from the same read; a message or attempt
+  update can therefore never revert an `Ignored` or a user's remove (R6-1, COR3-4). The loser is **dropped**: its
+  batch applies nothing, it re-reads and decides again from the new state, and never re-stages the row it derived
+  from the stale read. A per-ID keyed mutex on the user-action path is only for fairness.
 - Cancellation: every task honours `ctx`; persistence of a terminal state after cancellation uses
   `context.WithoutCancel` with a short timeout so a cancelled task cannot leave a half-written batch.
 - No goroutine outlives `App.Run`: the service's workers are started with `wg.Go` and joined on shutdown.
@@ -899,6 +904,7 @@ Per-App registry (R5). Label values are bounded enums or configured names.
 | `TestCompletedOnGrabbingAppliesInOneTransition` | a `completed` delivered to a TD in `Grabbing` (forced reorder) moves it to `ImportPending` in one transition and stages the import; the late `grab_added` is acked and counted as refused (COR4-14) |
 | `TestRefusedTransitionDoesNotBlockPartition` | a stale event (TD already `Ignored`) is acked and counted; the next event in the same partition is applied at once, nothing dead-letters (COR3-4) |
 | `TestTrackedWritersSerialised` | `-race`: the consumer and a user `ignore` on one TD from the same state → exactly one commits (Serialized `tracked/`, `GetForUpdate`) |
+| `TestTrackedStateKeepingWriteNeverRevertsIgnore` | `-race`: an import-retry attempts++/`Messages` write and a concurrent user `ignore` on one TD → exactly one commits, the TD is never back in `ImportPending` after the `ignore` commits, and a blind `Set` on `tracked/` fails with `ErrBlindWrite` (R6-1) |
 | `TestImportNeverRunsBeforeTransition` | the import run is staged in the batch that commits `ImportPending`; under injected crashes no import run exists without that transition, and no `ImportPending` TD lacks a queued run or a retry entry (COR2-10) |
 | `TestImportRunsAsModuleKind` | the import kind is `<module>.acquire.import`; an importer write outside the module's `Effects` fails with `ErrOutsideEffects`; an import and `tv.disk.rescan` over an overlapping series never run at once (COR2-11) |
 | `TestGrabWritesTDInGrabRecordBatch` | TD exists iff download's grab record exists, under injected crashes (COR-3) |
@@ -1068,3 +1074,11 @@ Round 5 (`docs/plans/platform-core/reviews/spec-round-5-dispositions.md`):
   `Migration{Seed: true}` step; `TestFreshInstallSeedsDefaultProfiles`.
 - SIMP5-1 / SIMP5-4 / SIMP5-8 — §10.1.2 "Persisted core state": cites 03 §3.3's one store list; routed stores serve
   every record natively for an app without legacy stores, and no legacy capability is consulted.
+
+Round 6 (`docs/plans/platform-core/reviews/spec-round-6-dispositions.md`):
+
+- R6-1 — §10.5.6: every tracked-download write, state-keeping ones (`Messages`, `Attempts`, `Updated`) included,
+  stages `GetForUpdate` with its index rows; `tracked/` is `CheckedWrites`; a failed write is dropped and re-read;
+  `TestTrackedStateKeepingWriteNeverRevertsIgnore`.
+- R6-3 — §10.1.2 "Persisted core state": the TV app imports nothing from package `legacy`; the capabilities are
+  `legacy.Covering`/`legacy.ExtConfirmer`.

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-indexer.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 5e2d5cda-5f98-4db2-87b1-b4c8d6519ec7 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -352,6 +352,7 @@ fixtures when built:
 | HTTP 429 / rate vocabulary | `ClassRateLimited` | hold ≥15m (Retry-After honoured, clamped) | M2 rule. |
 | Malformed XML / not RSS | `ClassBadOutput` | closed for that indexer; does not count against breaker | Likely a proxy/login page; surfaced in health. |
 | `Plan` finds no usable param | `ClassUnsupported` | skip that indexer, outcome recorded | Sonarr skips such searches (raw/16 §4.2). |
+| `core.integrations.disabled` true (a staging copy, R6-7; 05-metadata M1.4) | `ClassRefusedLocal` (`ErrDisabled` from `Lease`) | closed for every indexer: no search, RSS page or fetch is sent, no RSS cursor moves | A copy of a production store must never query or download from production indexers (OPS6-4). |
 | Every eligible indexer failed | closed: `ErrNoIndexerAnswered` (joined) | — | "No results" must be distinguishable from "nobody answered". |
 | Caps refresh fails with cached caps present | open (stale caps used) | — | A transient caps failure must not stop searching. |
 | Fetched file exceeds size cap / not a torrent or NZB | `ClassBadOutput` | closed | Never hand garbage to a download client. |
@@ -401,7 +402,9 @@ Protection classes per 05-config §1.3.7 (SEC2-8); egress trust is the instance'
 `TestSearchAll_PartialResultsAndOutcomes`, `TestSearchAll_AllFailedIsError`, `TestSearchAll_FanOutBounded`,
 `TestRSS_PagesBackToCursor`, `TestRSS_AckAdvancesCursorOnly`, `TestRSS_GapReported`,
 `TestRSS_FeedPerModuleOwnCursor`, `TestFetch_GrabCounterAndSizeCap`, `TestFetch_SameHostOrPublicEgress`,
-`TestFetch_FacadeIndexerSameHostStillGuarded`, `TestRedaction_ApikeyNeverLogged`.
+`TestFetch_FacadeIndexerSameHostStillGuarded`, `TestRedaction_ApikeyNeverLogged`,
+`TestSearchAll_IntegrationsDisabledSendsNothing` (`core.integrations.disabled`: the fake server sees no request and
+no cursor advances; R6-7).
 Fakes: `coretest.NewznabServer(t, fixtures)` — an `httptest.Server` serving caps/search/RSS/error XML from
 fixtures with request assertions; `coretest.FakeIndexer` for app-level tests. Facade-side Prowlarr
 round-trip tests live with 08.
@@ -461,3 +464,8 @@ Round 4 (`docs/plans/platform-core/reviews/spec-round-4-dispositions.md`):
 
 - R4-1 / SIMP4-3 — §3: indexer instances and their named quota counters live in core's native stores
   (`NativeInstanceStore`, `NativeGateStore`); no legacy store covers them.
+
+Round 6 (`docs/plans/platform-core/reviews/spec-round-6-dispositions.md`):
+
+- R6-7 / OPS6-4 — §5 row and §9 `TestSearchAll_IntegrationsDisabledSendsNothing`: with
+  `core.integrations.disabled` (05-metadata M1.4) no indexer request is sent and no RSS cursor moves.
