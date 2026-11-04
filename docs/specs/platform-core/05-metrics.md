@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metrics.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 5cdf765d-aec1-4ed7-981a-e2e698afde61 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -8,10 +8,10 @@
 Evidence commit `748fd787a` (all `path:line` anchors). Raw inputs:
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md) §4, §9;
 [`raw/15-dependencies.md`](../../plans/platform-core/raw/15-dependencies.md) (OTel v1.47.0, exporter
-v0.69.0, client_golang v1.25.0). Normative: [03-architecture](03-architecture.md) v1.3.0 R4 (`metrics` is in
+v0.69.0, client_golang v1.25.0). Normative: [03-architecture](03-architecture.md) v1.4.0 R4 (`metrics` is in
 **L0** with `entity`, `lifecycle`, `version`, `log`), R5 (no `prometheus.DefaultRegisterer`, no `otel.Set*Provider`; R5
-binds core only), §3.6 (`mediacore_<subsystem>_*`; module series `<MetricPrefix>_*` for a single-module app and
-`<MetricPrefix>_<moduleID>_*` otherwise, `MetricPrefix` = `app.Options.MetricPrefix`; semantic-convention names
+binds core only), §3.6 (`mediacore_<subsystem>_*`; module series `<MetricPrefix>_*` for an app that ships one module
+and `<MetricPrefix>_<moduleID>_*` otherwise (decided by the modules compiled in, not by enablement, §4), `MetricPrefix` = `app.Options.MetricPrefix`; semantic-convention names
 unchanged). The compatibility window is defined once, in
 [09-abo-on-core](09-abo-on-core.md) §9.2.1; metric aliases reference it.
 
@@ -21,9 +21,9 @@ unchanged). The compatibility window is defined once, in
 |---|---|
 | M1 | One `metrics.Provider` per `App` owns a private `*prometheus.Registry`, an OTel `MeterProvider`, a `TracerProvider` and a propagator. All are **injected**; nothing in core touches `prometheus.DefaultRegisterer`/`DefaultGatherer` or `otel.Set*`/`otel.Get*`. Components receive a `*metrics.Scope`; only the kernel holds the `*Provider`. There is no `metrics.Registry` type. |
 | M2 | The authoring API is the **OTel metric API** (`metric.Meter`), continuing ABO's in-flight migration (client_golang family ceiling 64 and falling, `internal/telemetry/testdata/client_golang_baseline.txt`). Prometheus is an exporter bound to the App's registry. client_golang is used directly only inside `core/metrics` (registry, Go/process collectors, promhttp) and through one escape hatch, `Provider.Registerer()`, for third-party and legacy collectors. |
-| M3 | Names: core instruments `mediacore.<subsystem>.<what>` → `mediacore_<subsystem>_<what>[_unit][_total]`. Module instruments use the app's **metric prefix** `app.Options.MetricPrefix` (ABO: `audiobook_organizer`): `<prefix>.<what>` when the app hosts one module, `<prefix>.<module>.<what>` when it hosts two or more. ABO's books series therefore keep their exact names. The Prometheus translation strategy is **pinned** (`UnderscoreEscapingWithSuffixes`), not left to the exporter's process-global default. OTel semantic-convention instruments (`http.server.*`) keep their standard names. |
+| M3 | Names: core instruments `mediacore.<subsystem>.<what>` → `mediacore_<subsystem>_<what>[_unit][_total]`. Module instruments use the app's **metric prefix** `app.Options.MetricPrefix` (ABO: `audiobook_organizer`): `<prefix>.<what>` when the app **ships** one module, `<prefix>.<module>.<what>` when it ships two or more. "Ships" means the module list passed to `app.New`, which never changes at run time, so enabling or disabling a module never renames another module's series (SIMP2-13). ABO's books series therefore keep their exact names. The Prometheus translation strategy is **pinned** (`UnderscoreEscapingWithSuffixes`), not left to the exporter's process-global default. OTel semantic-convention instruments (`http.server.*`) keep their standard names. |
 | M4 | Cardinality is a contract: closed attribute-key allow-list per scope, bounded value sets only, no identifiers; SDK per-instrument limit 2000; a series golden per scope. |
-| M5 | `/metrics` is a core route mounted by the kernel, permission `core:metrics.read`, outside response compression. |
+| M5 | `/metrics` is a core route mounted by the kernel through `Router.Infra` with permission `core:metrics.read`, which the chain **enforces** (stages 10–13 run for an `Infra` route whose permission is not Public, SEC2-14), outside response compression. |
 | M6 | **Books metric names are unchanged: no rename and no alias layer for them.** Only series that move into core subsystems (tasks, storage, AI) are renamed to `mediacore_*`; for those, the old names keep working through **gather-time aliases** (no double instrumentation) registered in 09's compat ledger and removed only by a contract PR, plus shipped recording rules for operators who need longer. |
 | M7 | Spans are redacted before export with the logging pipeline's `*log.Redactor` (credential query values, invite paths, userinfo), so `apikey`/`token` values never reach a trace backend (SEC-22). |
 
@@ -72,7 +72,8 @@ package metrics
 type Options struct {
 	AppID            string   // app.Options.AppID, e.g. "abo"; service.name default
 	MetricPrefix     string   // app.Options.MetricPrefix, [a-z][a-z0-9_]*; default AppID; ABO: "audiobook_organizer"
-	Modules          []string // enabled module IDs; one module => module scopes use MetricPrefix alone (M3)
+	Modules          []string // IDs of the modules compiled into the app (the app.New module list), enabled or not;
+	                          // one module => module scopes use MetricPrefix alone (M3). Never the enabled set.
 	ServiceVersion   string
 	InstanceID       string // per-process random ULID, never a hostname
 	Environment      string // deployment.environment
@@ -110,7 +111,7 @@ func (p *Provider) Handler() http.Handler                       // /metrics: pro
 func (p *Provider) Shutdown(ctx context.Context) error           // flush OTLP, stop readers; idempotent
 
 // Scopes enforce naming. Core subsystems get "mediacore.<subsystem>"; modules get MetricPrefix
-// (single-module app) or "<MetricPrefix>.<module>" (two or more modules).
+// (the app ships one module) or "<MetricPrefix>.<module>" (it ships two or more).
 func (p *Provider) Core(subsystem string, allowed ...attribute.Key) (*Scope, error)
 func (p *Provider) Module(id string, allowed ...attribute.Key) (*Scope, error)
 
@@ -126,7 +127,8 @@ func (s *Scope) View(instrument string, buckets ...float64) sdkmetric.View // hi
 
 // Legacy aliases for series that moved into a core subsystem. Applied at gather time by Handler: matching
 // families are copied under the old name with label renames, value maps and an optional label filter.
-// No instrument is recorded twice. Never used for module (books) series (M6).
+// No instrument is recorded twice. Never used for module (books) series (M6). An Alias carries no class
+// and no dates: its gate and removal dates come from its ledger row (09 §9.2.9, SIMP2-12).
 type Alias struct {
 	New         string                           // Prometheus family name as exported now
 	Old         string                           // legacy family name
@@ -180,8 +182,8 @@ and nothing to redact.
 | Kind | OTel instrument name | Prometheus family | Example |
 |---|---|---|---|
 | Core subsystem | `mediacore.<subsystem>.<what>` | `mediacore_<subsystem>_<what>[_<unit>][_total]` | `mediacore.tasks.runs` → `mediacore_tasks_runs_total` |
-| Module, single-module app | `<prefix>.<what>` | `<prefix>_<what>…` | `audiobook_organizer.books` → `audiobook_organizer_books_total` (today's name, unchanged) |
-| Module, multi-module app | `<prefix>.<module>.<what>` | `<prefix>_<module>_<what>…` | `suite.tv.scan.files` → `suite_tv_scan_files_total` |
+| Module, app ships one module | `<prefix>.<what>` | `<prefix>_<what>…` | `audiobook_organizer.books` → `audiobook_organizer_books_total` (today's name, unchanged) |
+| Module, app ships two or more | `<prefix>.<module>.<what>` | `<prefix>_<module>_<what>…` | `suite.tv.scan.files` → `suite_tv_scan_files_total` |
 | Semconv | spec name | translated | `http.server.request.duration` → `http_server_request_duration_seconds` |
 | Resource | — | `target_info{service_name,service_version,service_instance_id,deployment_environment}` | — |
 
@@ -190,8 +192,10 @@ Core metric names are identical across ABO, TV and Movies, so one set of core da
 inserting `books_` disambiguates nothing in an app whose prefix is already app-specific, while it would cost
 aliases, recording rules and dashboard edits for 74 series (SIMP-13). **Trade:** if ABO's books module ever shares
 a binary with other modules, its series must be renamed then; that is a row of the 11 §11.5 checklist.
-`Provider.Module` computes the prefix from `Options.Modules`, so the rule is mechanical, and the module-count
-change is release-bound (enablement is restart-bound, 03 §3.7).
+`Provider.Module` computes the prefix from `Options.Modules`, the modules compiled into the app, so the rule is
+mechanical and the segment changes only when a release changes the module list. Keying it on the *enabled*
+modules would rename every series of the remaining module when an operator disables one at the next restart,
+breaking dashboards (SIMP2-13).
 
 ## 5. Cardinality rules (normative)
 
@@ -212,8 +216,13 @@ change is release-bound (enablement is restart-bound, 03 §3.7).
 
 ## 6. `/metrics` ownership
 
-The kernel mounts `Provider.Handler()` at `core.metrics.path` (default `/metrics`, outside `/api`) through
-`httpapi` with permission **`core:metrics.read`** (R6: explicit), **excluded from compression middleware**
+The kernel mounts `Provider.Handler()` at `core.metrics.path` (default `/metrics`, outside `/api`) with
+`Router.Infra(path, "core:metrics.read", h)` ([05-http-api](05-http-api.md) §3.5) — permission
+**`core:metrics.read`** (R6: explicit). `Infra` routes are inside the chain's authenticated scope: for an `Infra`
+route whose permission is not Public, stages 10–13 (authentication through permission) run exactly as for a
+native route, so the permission is enforced, not merely recorded; only the probes `/livez` and `/readyz` stay
+Public (SEC2-14; HEAD requires an authenticated credential, `internal/server/server_lifecycle.go:1735-1747`,
+and `TestInfra_MetricsRequiresScope` in 05-http-api asserts the same after the move). It is **excluded from compression middleware**
 (promhttp negotiates gzip itself; double gzip broke production scrapes, `server.go:708-716`). Optional
 dedicated listener `core.metrics.listen` (e.g. a loopback address) serving only `/metrics`; it requires the
 same credential unless the operator sets `core.metrics.listen_public=true` (`ProtectOperator`, logged at
@@ -223,7 +232,8 @@ registries are never merged. `/metrics` itself is a permanent path (09 §9.6 row
 ## 7. Lifecycle
 
 1. `app.New`, right after logging: `metrics.New` with options from `core.metrics` / `core.tracing` (operator
-   layers and defaults), `Options.Redactor = Logging.Redactor()` and `Options.Modules` = the enabled module IDs.
+   layers and defaults), `Options.Redactor = Logging.Redactor()` and `Options.Modules` = the IDs of every module
+   passed to `app.New`, enabled or not (§4).
    OTLP exporters are built non-blocking; a bad OTLP endpoint is **degraded, not fatal** (ABO learned this the
    hard way, `telemetry.go:52-58`): health token `metrics_otlp_disabled` / `tracing_disabled`.
 2. Every component receives a `*Scope` (`module.Deps.Metrics` for modules, [06-app-sdk](06-app-sdk.md); core
@@ -266,8 +276,8 @@ SDK's periodic reader and batch span processor, both stopped by `Shutdown`.
 | `core.metrics.listen` | string (host:port) | `""` (main listener) | no | admin |
 | `core.metrics.listen_public` | bool | `false` | no | operator |
 | `core.metrics.otlp.endpoint` | string | `""` (aliases: `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, permanent; ABO `otel_metrics_otlp_endpoint`, window) | no | admin |
-| `core.metrics.otlp.interval` | duration | `60s` | no | none |
-| `core.metrics.otlp.insecure` | bool | `false` | no | admin |
+| `core.metrics.otlp.interval` | duration | `60s` (aliases: `OTEL_METRIC_EXPORT_INTERVAL`, permanent, a bare integer is milliseconds as in ABO's `telemetry.ParseMetricsInterval`; ABO `otel_metrics_otlp_interval`, window) | no | none |
+| `core.metrics.otlp.insecure` | bool | `false` (aliases: `OTEL_EXPORTER_OTLP_METRICS_INSECURE`, permanent; ABO `otel_metrics_otlp_insecure`, window) | no | admin |
 | `core.metrics.environment` | string | `prod` (ABO `telemetry_environment`, `resource.go:25`) | no | none |
 | `core.metrics.cardinality_limit` | int | `2000` | no | none |
 | `core.tracing.otlp.endpoint` | string | `""` (aliases: `OTEL_EXPORTER_OTLP_ENDPOINT`, permanent; ABO `otel_exporter_otlp_endpoint`, window) | no | admin |
@@ -298,7 +308,8 @@ would require swapping providers under running instruments, which the OTel SDK d
 | `TestNoGlobals` (archtest, R5) | no `prometheus.DefaultRegisterer/DefaultGatherer/MustRegister/Register`, `promhttp.Handler()`, `otel.Set*`/`otel.Get*Provider`/`otel.Tracer`/`otel.Meter` in core |
 | `TestTwoProvidersIsolated` | two Providers register identical instruments without panic; scrapes are disjoint |
 | `TestScope_RejectsBadNames` | prefix, `_total` suffix, missing unit/view → `ErrInstrumentName` |
-| `TestModulePrefix_SingleAndMulti` | one enabled module → scope prefix `MetricPrefix`; two → `<MetricPrefix>.<module>` |
+| `TestModulePrefix_SingleAndMulti` | one compiled-in module → scope prefix `MetricPrefix`; two → `<MetricPrefix>.<module>` |
+| `TestModulePrefix_StableUnderEnablement` | two compiled-in modules, one disabled: the other's prefix is still `<MetricPrefix>.<module>`; series names identical before and after the toggle |
 | `TestTranslationStrategyPinned` | names identical with the global validation scheme set to legacy and to utf8 |
 | `TestGoAndProcessCollectorsPresent` | `go_goroutines`, `process_resident_memory_bytes` in the scrape |
 | `TestAliases_GatherTimeCopy` | old family present with filter, renamed labels and mapped values; no double recording; collision rejected; non-core source rejected |
@@ -360,9 +371,12 @@ its 74 `audiobook_organizer_*` lines change only where §13 retires or moves a s
 
 ## Objections to 03
 
-None open. 03 v1.3.0 §3.6 adopts the module metric rule of this file (`app.Options.MetricPrefix`, default
-`AppID`, ABO `audiobook_organizer`, single-module `<MetricPrefix>_*`) and keeps semantic-convention names; the
-app ID field is `app.Options.AppID` (COR-26).
+1. **03 §3.6 Metric row (open, SIMP2-13).** 03 v1.4.0 says module series are `<MetricPrefix>_*` "while the app
+   hosts one module". That must read "while the app **ships** one module" (the `app.New` module list), so that
+   enabling or disabling a module never renames another module's series. Cross-cluster request to the 03 owner.
+
+Otherwise none: 03 adopts the module metric rule of this file (`app.Options.MetricPrefix`, default `AppID`, ABO
+`audiobook_organizer`) and keeps semantic-convention names; the app ID field is `app.Options.AppID` (COR-26).
 
 ## Out-of-scope defects found
 
@@ -378,3 +392,11 @@ None beyond those listed in [05-logging](05-logging.md) and [05-config](05-confi
 - COR-26 — §3 `Options.AppID` = `app.Options.AppID`, `MetricPrefix` = `app.Options.MetricPrefix` (03 v1.3.0 §3.6); objection closed.
 - COR-19 — header: R4 v1.3.0 L0; `log` import is same-layer.
 - OPS-17 — §10: no runtime alias switch; keys are operational dials.
+
+Round 2:
+
+- SIMP2-13 — header, M3, §3 `Options.Modules`, §4, §7: the module segment is decided by the modules compiled into the app, never the enabled set; tests; new objection to 03 §3.6 wording.
+- SEC2-14 — M5, §6: `/metrics` mounted with `Router.Infra(path, "core:metrics.read", h)`, inside the chain's authenticated scope (stages 10–13 enforce it); probes stay Public.
+- SIMP2-12 — §3 `Alias`: no class or dates; gate and dates come from the ledger row (already `Ledger`-only; comment made explicit).
+- OPS2-21 (alignment with 05-config §1.12.4) — §10: `OTEL_METRIC_EXPORT_INTERVAL` and `OTEL_EXPORTER_OTLP_METRICS_INSECURE` listed as permanent aliases, ABO keys as window aliases.
+- Header — 03 v1.4.0.

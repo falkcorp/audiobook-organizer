@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -9,7 +9,7 @@ Evidence commit `748fd787a` (all `path:line` anchors). Raw inputs:
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md) §3, §8, §9;
 [`raw/10-auth-rbac.md`](../../plans/platform-core/raw/10-auth-rbac.md) §6–7;
 [`raw/15-dependencies.md`](../../plans/platform-core/raw/15-dependencies.md) (`go-logr/logr` v1.4.4).
-Normative: [03-architecture](03-architecture.md) v1.3.0 R4 (`log` is in **L0** with `entity`, `lifecycle`,
+Normative: [03-architecture](03-architecture.md) v1.4.0 R4 (`log` is in **L0** with `entity`, `lifecycle`,
 `version`, `metrics`; the journal implementation `core/internal/logjournal` imports `storage` and `tasks`, so by
 R4's bridge rule it sits at **L4** and only the kernel imports it), R5 (no `slog.SetDefault` in core; R5 binds
 core only, and ABO's logger shim is an allowed books-module value), §3.6 naming. Config
@@ -105,7 +105,10 @@ const (
 )
 
 // Settings is the core.log section type. Declared here (plain struct, tags are strings) and
-// registered by the kernel, because log cannot import config (R4).
+// registered by the kernel, because log cannot import config (R4). It has no "journal" or "schedules"
+// field: the journal's keys are the separate sections core.log.journal and core.log.schedules, owned by
+// core/internal/logjournal (§5), because the schedule key is a tasks.ScheduleConfig and log (L0) cannot
+// import tasks (L4).
 type Settings struct {
 	Level      string            `json:"level" schema:"enum=trace|debug|info|warn|error"`
 	Levels     map[string]string `json:"levels"` // "books" or "books.scanner" -> level
@@ -114,7 +117,6 @@ type Settings struct {
 	File       FileSettings      `json:"file" reload:"restart"`
 	AddSource  bool              `json:"add_source"`
 	RedactKeys []string          `json:"redact_keys"`
-	Journal    JournalSettings   `json:"journal"`
 }
 
 type FileSettings struct {
@@ -122,14 +124,6 @@ type FileSettings struct {
 	MaxSizeMB int    `json:"max_size_mb" schema:"minimum=1"`
 	MaxFiles  int    `json:"max_files" schema:"minimum=1"`
 	TeeStderr bool   `json:"tee_stderr"`
-}
-
-type JournalSettings struct {
-	Enabled       bool   `json:"enabled"`
-	MinLevel      string `json:"min_level" schema:"enum=debug|info|warn|error"`
-	RetentionDays int    `json:"retention_days" schema:"minimum=0"`
-	PruneEvery    string `json:"prune_every" schema:"format=duration"` // bound by tasks.ScheduleFromConfig
-	QueueSize     int    `json:"queue_size" reload:"restart" schema:"minimum=64"`
 }
 
 func DefaultSettings() Settings
@@ -202,7 +196,9 @@ type PathRule struct {
 // DefaultPathRules covers core's own token-bearing routes: any "invite"/"invites" segment followed by
 // another segment, at any position, after percent-decoding and dot-walk checks — ABO's RedactInvitePath
 // algorithm (internal/logging/redact_path.go:99-120) moved into core. It covers the core route
-// /api/core/v1/auth/invites/{token} (05-authn) and the books legacy invite routes alike.
+// /api/core/v1/auth/invites/{token} (05-authn), the books legacy invite routes, and the legacy shell link
+// /invite/{token} that is answered by a redirect to /invite#token= during the window (SEC2-6, 07).
+// Fragment-form links (/invite#token=, /login/temp#token=) never reach the server.
 var DefaultPathRules = []PathRule{ /* invite */ }
 
 var DefaultRedactKeys = []string{ // matched case-insensitively after stripping '-', '_', '.'
@@ -210,9 +206,14 @@ var DefaultRedactKeys = []string{ // matched case-insensitively after stripping 
 	"privatekey", "clientsecret", "credential", "credentials", "accesstoken", "refreshtoken", "sessionid",
 }
 
-// Query parameters whose values are always replaced (also /auth/temp-login?token=, 05-authn).
+// Query parameters whose values are always replaced, matched case-insensitively after one round of
+// percent-decoding of the name (also /auth/temp-login?token=, 05-authn). A superset of HEAD's
+// credentialQueryKeys (internal/server/middleware/log_redact.go:26-37), so OAuth authorization codes,
+// PKCE verifiers and refresh tokens in a callback URL never reach the log or a span (SEC2-18). This is
+// the one list: 05-http-api's stages reference it instead of restating it.
 var DefaultRedactQuery = []string{
-	"token", "access_token", "api_key", "apikey", "key", "sig", "signature", "password",
+	"token", "access_token", "refresh_token", "api_key", "apikey", "key", "password", "secret",
+	"code", "code_verifier", "sig", "signature",
 }
 
 // URL-keyed attributes: string values under these keys always get URL and path handling,
@@ -273,9 +274,10 @@ forward the SDK's raw values — the reason the sink exists. `logr` remains in t
    ([05-metrics](05-metrics.md) §7).
 2. Before storage opens, logs go only to the primary output. After storage and tasks are up, the kernel starts
    the journal tap (`core/internal/logjournal`, §5) — records logged before that are not journaled.
-3. The kernel subscribes to the `core.log` handle (`OnChange`): `level`, `levels`, `add_source`,
-   `redact_keys`, `journal.min_level`, `journal.retention_days`, `journal.prune_every` apply live;
-   format/output/file need a restart.
+3. The kernel subscribes to the `core.log` handle (`OnChange`): `level`, `levels`, `add_source` and
+   `redact_keys` apply live; format/output/file need a restart. `logjournal` subscribes to its own
+   `core.log.journal` handle: `min_level` and `retention_days` apply live, and `tasks` re-reads the schedule key
+   `core.log.schedules.journal_prune` every poll (05-tasks §5T.3.8).
 4. `App.Run` shutdown: `Logging.Close(ctx)` runs **last**, after every other component, draining taps
    within the shutdown budget.
 
@@ -293,8 +295,26 @@ ABO's "activity log" is four things sharing one store and one page; the platform
 The shell's Activity page ([07-ui-shell](07-ui-shell.md)) composes core panes (tasks; the system log for holders
 of `core:system.manage`; audit for holders of `core:audit.view`) with module-contributed panes (the books feed).
 
-**Journal contract.** `logjournal` is a `Tap` at `journal.min_level` (default info) writing
-`c/log/journal/<ULID>` records in batches (≤256 records or 1 s, whichever first).
+**Journal contract.** `logjournal` is a `Tap` at `core.log.journal.min_level` (default info) writing
+`c/log/journal/<ULID>` records in batches (≤256 records or 1 s, whichever first). Its settings are two sections
+declared by `logjournal` (L4) and registered by the kernel next to `core.log` (05-config §1.3.1 allows the
+nested section paths because `log.Settings` declares neither field): `core.log.journal` and the schedule section
+`core.log.schedules` (R2-7 key form `<owner>.<subsystem>.schedules.<name>`, 05-config §1.6):
+
+```go
+package logjournal // core/internal/logjournal
+
+type Settings struct { // section core.log.journal
+	Enabled       bool   `json:"enabled"`
+	MinLevel      string `json:"min_level" schema:"enum=debug|info|warn|error"`
+	RetentionDays int    `json:"retention_days" schema:"minimum=0"`
+	QueueSize     int    `json:"queue_size" reload:"restart" schema:"minimum=64"`
+}
+
+type Schedules struct { // section core.log.schedules
+	JournalPrune tasks.ScheduleConfig `json:"journal_prune"` // tasks.ScheduleFromConfig("core.log.schedules.journal_prune")
+}
+```
 
 - Query: `GET /api/core/v1/system/logs?level=&module=&since=&until=&q=&cursor=`, permission
   **`core:system.manage`** — the journal holds file paths, user names and provider error text, and today's
@@ -303,8 +323,16 @@ of `core:system.manage`; audit for holders of `core:audit.view`) with module-con
 - Live tail: realtime topic `core.log.recorded.v1`, permission `core:system.manage`, delivered by
   [05-realtime](05-realtime.md)'s permission filter.
 - Retention: task `core.log.journal.prune`, `tasks.Parallelism` sequential with reason "single range-delete per
-  day bucket", scheduled by `tasks.Schedule` bound to `core.log.journal.prune_every` through
-  `tasks.ScheduleFromConfig` ([05-tasks](05-tasks.md)); there is no bespoke timer.
+  day bucket", scheduled by `tasks.ScheduleFromConfig("core.log.schedules.journal_prune")`. The key is
+  owner-declared with type `tasks.ScheduleConfig` and default `{"enabled":true,"every":"24h"}`
+  (R2-7; 05-config §1.6; [05-tasks](05-tasks.md)); there is no bespoke timer and no duration-typed interval key.
+- Auth-off reach: `core:system.manage` is `AuthRequired` ([05-rbac](05-rbac.md)), so with auth off the query
+  route, the live tail and the legacy `/api/v1/system/logs` alias answer 401. Today they are open with auth off,
+  because `s.perm` passes everything in that mode (`internal/server/wire_admin_role.go:18-22`,
+  `wire_system_routes.go:31`). This is a **deliberate tightening**: the journal holds file paths, user names and
+  provider error text, and with auth off any peer that reaches the port would read them. It is recorded in
+  09 §9.2.6 as an exception to the auth-off reach invariant, and the alias is excluded from the auth-off half of
+  `TestLegacyRoleReachUnchanged` (SEC2-21).
 - Legacy rows: ABO's `syslog:` family is **read in place** by the query adapter and ages out under the same
   retention (90 days by ABO default); no copy migration. Its owner and claim mode (read plus retention deletes,
   while the previous build may still write it) are recorded once in [05-storage](05-storage.md) §5S.9.1; this
@@ -350,11 +378,14 @@ swapped atomically when `redact_keys` changes). `Close` cancels and drains with 
 | `core.log.redact_keys` | []string (added to defaults; defaults cannot be removed) | `[]` | yes | none |
 | `core.log.journal.enabled` | bool | `true` | no | none |
 | `core.log.journal.min_level` | enum | `info` | yes | none |
-| `core.log.journal.retention_days` | int (0 = keep) | `90` | yes | none |
-| `core.log.journal.prune_every` | duration | `24h` | yes | none |
+| `core.log.journal.retention_days` | int (0 = keep) | `90` (ABO `log_retention_days`, window alias with a `Convert`: legacy `0` means the default 90 and a negative value means keep, `internal/config/config.go:1479-1488`, so they map to `90` and `0`) | yes | none |
+| `core.log.schedules.journal_prune` | `tasks.ScheduleConfig` | `{"enabled":true,"every":"24h"}` | yes (re-read every poll) | none |
 | `core.log.journal.queue_size` | int | `4096` | no | none |
 
-All are operational dials (09 §9.2.8): none changes persisted state shape.
+The `core.log.*` rows except `core.log.journal.*` and `core.log.schedules.*` belong to the `core.log` section
+(`log.Settings`); the `core.log.journal.*` rows to `logjournal.Settings` and `core.log.schedules.journal_prune`
+to `logjournal.Schedules` (§5). All are operational
+dials (09 §9.2.8): none changes persisted state shape.
 
 ## 9. Metrics
 
@@ -376,7 +407,8 @@ These are recorded by a kernel-side bridge (`log` cannot import `metrics`, R4): 
 | `TestNoGlobals` (archtest, R5) | no `slog.SetDefault`, `log.SetOutput`, `otel.SetLogger`, `otel.SetErrorHandler` in core outside `app.InstallProcessDefaults` |
 | `TestModuleLevels_Live` | `SetLevels` changes `Enabled` for `books` and `books.scanner` without new loggers |
 | `TestRedact_DefaultKeys` / `_NestedGroups` / `_URLUserinfoAndQuery` / `_SecretsValue` | values replaced; `secrets.Value` prints `[REDACTED]` in text and JSON |
-| `TestRedact_CoreInvitePath` | `/api/core/v1/auth/invites/<token>` under `path`, `url.path`, inside a full URL and percent-encoded → token absent in text, JSON, journal record and realtime tail record |
+| `TestRedact_CoreInvitePath` | `/api/core/v1/auth/invites/<token>` and the legacy shell link `/invite/<token>` under `path`, `url.path`, inside a full URL and percent-encoded → token absent in text, JSON, journal record and realtime tail record |
+| `TestRedactQuery_SupersetOfHEAD` | every key of HEAD's `credentialQueryKeys` (fixture copy) is in `DefaultRedactQuery`; `?code=…&code_verifier=…&refresh_token=…&SECRET=…` → all values redacted |
 | `TestRedact_TempLoginTokenQuery` | `/api/core/v1/auth/temp-login?token=<t>` → `token=[REDACTED]` |
 | `TestRedact_PathRuleFailsClosed` | over-long / over-escaped / dot-walked invite paths → `/[REDACTED]` (ABO fixtures ported) |
 | `TestRedactor_SpanAttributes` | `Redactor.String` on `url.full`, `url.query`, `http.target` with `apikey=` / `token=` → redacted (consumed by 05-metrics' span exporter test) |
@@ -387,6 +419,7 @@ These are recorded by a kernel-side bridge (`log` cannot import `metrics`, R4): 
 | `TestLevelTraceRendering` | `TRACE` label; trace gated below debug |
 | `TestInstallProcessDefaults_RestoreAndExclusive` | restore works; second install errors; OTel sink drops values |
 | `TestJournal_BatchAndRetention` / `TestJournal_ReadsLegacySyslog` | batching bounds; prune; legacy rows returned by query |
+| `TestJournal_PruneScheduleKeyDeclared` | `core.log.schedules.journal_prune` is declared with type `tasks.ScheduleConfig` in `logjournal.Schedules` and accepted by `ScheduleFromConfig` at registration |
 | `TestJournal_RequiresSystemManage` | `core:system.view`-only principal gets 403 on the query route and no `core.log.recorded.v1` events |
 | `TestRotatingFile_RotatesAndCaps` | size rotation, `max_files` respected, `os.Root` confinement |
 
@@ -417,7 +450,8 @@ call sites to injected loggers is an optional ratchet, not an extraction stage.
 4. `internal/telemetry/sdklog.go` and `errorhandler.go` move into `app` (process-defaults helper);
    `InitOTEL`'s automatic install (`telemetry.go:49`) is deleted.
 5. `log_level` / `--log-level` map to `core.log.level`, which now actually sets the handler level (today it
-   does not, §2). `log_retention_days` maps to `core.log.journal.retention_days` (alias, 05-config §1.12.3).
+   does not, §2). `log_retention_days` maps to `core.log.journal.retention_days` (alias, 05-config §1.12.3) with
+   the `Convert` of §8, because ABO's `0` means "default" and the core key's `0` means "keep".
 
 ## 12. Open items
 
@@ -444,7 +478,7 @@ None open. Both earlier items are resolved by 03 v1.3.0: §3.3's `log` row names
 ## Review history
 
 - SIMP-3 — §11: stage 3 became an optional ratchet; ABO logger survives as a books-module shim; L1 updated.
-- SIMP-6 — §5, §8: journal prune scheduled by `tasks.ScheduleFromConfig("core.log.journal.prune_every")`; no bespoke timer.
+- SIMP-6 — §5, §8: journal prune scheduled by `tasks.ScheduleFromConfig("core.log.journal.prune_every")`; no bespoke timer (key renamed in round 2, below).
 - SEC-21 — L4, §3 `DefaultPathRules` (invite rule moved into core, covers `/api/core/v1/auth/invites/*`), `URLKeys`, temp-login `token` query; journal and tail need `core:system.manage`; tests.
 - SEC-22 — L4, §3 `Logging.Redactor()`, `Redactor.URL/String` exposed for span-attribute redaction in 05-metrics.
 - SEC-8 (journal side, with SEC-21) — §5: query route and realtime topic moved from `core:system.view` to `core:system.manage`.
@@ -453,3 +487,11 @@ None open. Both earlier items are resolved by 03 v1.3.0: §3.3's `log` row names
 - COR-20 — §9: metrics bridge holds a core `*metrics.Scope`; `Counters()` replaces `Dropped()`.
 - DATA-2 — §5: `syslog:` ownership and claim mode referenced from 05-storage §5S.9.1, not restated; `act:` stays books.
 - OPS-17 — §8: keys classified as operational dials.
+
+Round 2:
+
+- R2-7 / SIMP2-1 / COR2-6 — §3, §4, §5, §8: journal keys moved to sections `core.log.journal` and `core.log.schedules` owned by `logjournal` (log cannot import tasks); `prune_every` (duration) replaced by `core.log.schedules.journal_prune` of type `tasks.ScheduleConfig` (binding form `<owner>.<subsystem>.schedules.<name>`), default every 24h; test.
+- SEC2-18 — §3 `DefaultRedactQuery` ⊇ HEAD's `credentialQueryKeys` (adds `refresh_token`, `secret`, `code`, `code_verifier`); the one list 05-http-api references; `TestRedactQuery_SupersetOfHEAD`.
+- SEC2-21 — §5: auth-off unreachability of the journal recorded as a deliberate tightening (09 §9.2.6 exception).
+- SEC2-6 — §3 `DefaultPathRules` comment and `TestRedact_CoreInvitePath` cover the legacy shell link `/invite/{token}`.
+- Header — 03 v1.4.0. Also corrected the `log_retention_days` alias: ABO's `0` means default 90 (`config.go:1479-1488`), so it needs a `Convert` (§8, §11).
