@@ -1,7 +1,7 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
-<!-- last-edited: 2026-11-03 -->
+<!-- last-edited: 2026-11-04 -->
 
 # Platform-core planning operation — state
 
@@ -20,8 +20,8 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 
 | # | Phase | Status |
 |---|---|---|
-| 1 | Raw data gathering | in progress |
-| 2 | Design spec | pending |
+| 1 | Raw data gathering | done (16 raw files; module experiments being finalized into raw/00-baseline-build.md) |
+| 2 | Design spec | in progress: 02, 03 drafted by lead; 9 Opus writers drafting 04–13 |
 | 3 | Spec review loop | pending |
 | 4 | Spec advisor review | pending |
 | 5 | Spec confidentiality gate + PR + merge | pending |
@@ -32,7 +32,8 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 
 ## Artifacts
 
-(none yet)
+- `docs/plans/platform-core/raw/00-index.md` … `16-arr-domain-research.md`
+- `docs/specs/platform-core/02-decision-record.md`, `03-architecture.md` (normative)
 
 ## Blockers
 
@@ -40,12 +41,12 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 
 ## Next action
 
-Phase 1: run the read-only scouts; save scrubbed output under `docs/plans/platform-core/raw/`; record the baseline build/vet result in `raw/00-baseline-build.md`.
+Phase 2: collect writer drafts for 04–13 (one file set per writer, see `docs/specs/platform-core/03-architecture.md` file map), write `raw/00-baseline-build.md` from the experiment logs, then write README, 01, 14, 15 and fill 03 §3.2.1. If resuming cold: any 05-*/06–13 file missing under `docs/specs/platform-core/` must be (re)drafted by a fresh Opus/high writer given 03 + 02 + the raw files.
 
 ## Fallbacks in use
 
 - Subagents use `general-purpose` / `Explore` with explicit model and effort.
 
-COMPLETED: 0 —
-REMAINING: 9 — phases 1–9
+COMPLETED: 1 — phase 1 (raw data)
+REMAINING: 8 — phases 2–9
 BLOCKED: 0 —
