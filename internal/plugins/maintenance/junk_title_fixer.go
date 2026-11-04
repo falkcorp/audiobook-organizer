@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.23.0
+// version: 1.23.1
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
-// last-edited: 2026-10-25
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -2081,7 +2081,8 @@ func bookRuntimeSec(b database.BookCore, files []database.BookFile) (secs int, k
 	}
 	sum := 0
 	for i := range files {
-		d := database.NormalizeDurationSec(files[i].FileSize, files[i].Duration)
+		sec, _ := files[i].DurationSec() // unknown is 0, so d <= 0 below
+		d := database.NormalizeDurationSec(files[i].FileSize, sec)
 		if d <= 0 {
 			return 0, false
 		}

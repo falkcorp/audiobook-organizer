@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.52.5
+// version: 1.52.6
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-10-31
+// last-edited: 2026-11-04
 
 package database
 
@@ -960,6 +960,7 @@ func (s *PebbleStore) updateBookFileOver(old *BookFile, raw []byte, file *BookFi
 	s.UpsertBookFileToMemDB(file)
 	// Recompute book-level Duration/FileSize aggregates now that a file was updated.
 	// Best-effort: the file write already committed; don't fail on aggregate errors.
+	// direct: change detection compares the raw stored values.
 	return recomputeAggregates || old.Duration != file.Duration || old.FileSize != file.FileSize || old.BookID != file.BookID, durErr
 }
 

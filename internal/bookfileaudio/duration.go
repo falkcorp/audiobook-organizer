@@ -1,7 +1,7 @@
 // file: internal/bookfileaudio/duration.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 81298124-2825-49f4-b115-ae8aa117cd68
-// last-edited: 2026-09-25
+// last-edited: 2026-11-04
 
 // Package bookfileaudio fills a book_file row's audio facts (duration, codec)
 // at the moment the row is created, so no writer stores a readable file with
@@ -127,19 +127,24 @@ func EnsureDuration(bf *database.BookFile, known Known, log logger.LevelLogger) 
 	if log == nil {
 		log = defaultLog
 	}
-	if bf.Duration > 0 {
+	if _, known := bf.DurationSec(); known {
 		return SourceAlreadySet
 	}
 	if known.Info != nil {
 		fillCodec(bf, known.Info)
 		if d := realDuration(known.Info); d > 0 {
-			bf.Duration = d
-			return SourceCaller
+			if err := bf.SetMeasuredDuration(d); err == nil {
+				return SourceCaller
+			}
 		}
 		return SourceNone
 	}
 	if known.SingleFileBook && known.BookDurationSec > 0 {
-		bf.Duration = database.NormalizeDurationSec(bf.FileSize, known.BookDurationSec)
+		if err := bf.SetMeasuredDuration(database.NormalizeDurationSec(bf.FileSize, known.BookDurationSec)); err != nil {
+			// Normalization rounded a tiny millisecond-looking value to 0:
+			// the row stays unprobed, exactly as the old direct store of 0 did.
+			bf.ResetDuration()
+		}
 		return SourceBook
 	}
 	if bf.FilePath == "" {
@@ -153,8 +158,9 @@ func EnsureDuration(bf *database.BookFile, known Known, log logger.LevelLogger) 
 	}
 	fillCodec(bf, info)
 	if d := realDuration(info); d > 0 {
-		bf.Duration = d
-		return SourceProbe
+		if err := bf.SetMeasuredDuration(d); err == nil {
+			return SourceProbe
+		}
 	}
 	log.Warn("book file %s: probe gave no real duration (estimated=%v; is ffprobe installed?), row keeps duration 0",
 		logger.SanitizeLogValue(bf.FilePath), info.DurationEstimated)

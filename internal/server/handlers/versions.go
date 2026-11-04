@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions.go
-// version: 1.13.2
+// version: 1.13.3
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package handlers
 
@@ -1133,7 +1133,8 @@ func (h *VersionsHandler) SplitSegmentsToBooks(c *gin.Context) {
 		// milliseconds (iTunes importer). Normalize per row on the file's implied
 		// bitrate instead of dividing unconditionally, which was turning correct
 		// values into near-zero.
-		durationSec := database.NormalizeDurationSec(f.FileSize, f.Duration)
+		fileSec, _ := f.DurationSec() // unknown is 0, as before
+		durationSec := database.NormalizeDurationSec(f.FileSize, fileSec)
 		newBook := &database.Book{
 			Title:     title,
 			AuthorID:  sourceBook.AuthorID,

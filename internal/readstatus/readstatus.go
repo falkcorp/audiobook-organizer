@@ -1,7 +1,7 @@
 // file: internal/readstatus/readstatus.go
-// version: 3.0.0
+// version: 3.0.1
 // guid: 6e2f8a1d-4c5b-4f70-a9c7-2d8e0f1b9a57
-// last-edited: 2026-10-18
+// last-edited: 2026-11-04
 //
 // RecomputeUserBookStateLocked derives a UserBookState from the current
 // UserPosition rows for a given (user, book), honoring the
@@ -143,8 +143,9 @@ func deriveState(store Store, userID, bookID string, existing *database.UserBook
 	var totalDuration float64
 	for _, f := range files {
 		// BookFile.Duration is stored in seconds (per scanner convention).
-		segDuration[f.ID] = float64(f.Duration)
-		totalDuration += float64(f.Duration)
+		sec, _ := f.DurationSec() // unknown contributes 0, as before
+		segDuration[f.ID] = float64(sec)
+		totalDuration += float64(sec)
 	}
 
 	var listened float64

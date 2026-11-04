@@ -1,7 +1,7 @@
 // file: internal/database/duration_sanity.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8b1f4d2c-5e69-4a30-9c71-2f8a6b0d4e95
-// last-edited: 2026-07-11
+// last-edited: 2026-11-04
 
 package database
 
@@ -71,6 +71,8 @@ func NormalizeDurationSec(fileSizeBytes int64, durationSec int) int {
 // durations and indeterminate cases (no FileSize) pass through untouched. Returns
 // true if it changed the value. The fix is one factor of 1000 (the only known
 // bug); it never loops.
+// direct: this is the write chokepoint that repairs the raw stored value
+// (it may legitimately rewrite a known duration), so it reads the field itself.
 func normalizeBookFileDuration(file *BookFile) bool {
 	if file == nil {
 		return false

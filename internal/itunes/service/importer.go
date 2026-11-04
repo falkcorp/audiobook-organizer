@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.42.0
+// version: 1.42.1
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package itunesservice
 
@@ -332,9 +332,13 @@ func (imp *Importer) createTrackBookFiles(ctx context.Context, bookID, bookTitle
 			ITunesPersistentID: r.track.PersistentID,
 			Format:             r.format,
 			FileSize:           r.track.Size,
-			Duration:           trackDurationSeconds(r.track),
 			TrackNumber:        r.track.TrackNumber,
 			TrackCount:         totalTracks,
+		}
+		// iTunes TotalTime is a trusted source: a positive value is stored as
+		// measured; a zero (or absent) TotalTime leaves the row unprobed.
+		if sec := trackDurationSeconds(r.track); sec > 0 {
+			_ = bf.SetMeasuredDuration(sec) // cannot fail: sec > 0
 		}
 		if r.hashErr != nil {
 			// Counted, not swallowed. Every other per-track drop in

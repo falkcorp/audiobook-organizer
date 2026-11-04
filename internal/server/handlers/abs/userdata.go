@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/userdata.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 63289143-7fae-47b5-9ed9-888ac3c2034a
-// last-edited: 2026-10-11
+// last-edited: 2026-11-04
 
 package abs
 
@@ -808,7 +808,9 @@ func (p *userDataProvider) durationFor(bookID string) (float64, error) {
 	if len(files) > 0 {
 		total := 0.0
 		for i := range files {
-			total += float64(files[i].Duration)
+			if sec, ok := files[i].DurationSec(); ok {
+				total += float64(sec)
+			}
 		}
 		return total, nil
 	}

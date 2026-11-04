@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_files.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 82f8d1f7-46d5-4ead-b5c1-ba796fd785f9
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 // File / segment endpoints for the audiobooks domain: segment listing,
 // book-file listing + patch, track-info extraction, relocate, and segment
@@ -306,6 +306,7 @@ func (h *Handler) ListAudiobookSegments(c *gin.Context) {
 	disk := statFilePaths(c.Request.Context(), bookFilePaths(files))
 	result := make([]gin.H, 0, len(files))
 	for i, f := range files {
+		durSec, _ := f.DurationSec() // wire: unknown is reported as 0, as before
 		result = append(result, gin.H{
 			"id":         f.ID,
 			"book_id":    int(crc32.ChecksumIEEE([]byte(f.BookID))),
@@ -314,7 +315,7 @@ func (h *Handler) ListAudiobookSegments(c *gin.Context) {
 			"size_bytes": f.FileSize,
 			// Seconds by convention; normalize only genuine ms rows. See
 			// database.NormalizeDurationSec.
-			"duration_seconds": database.NormalizeDurationSec(f.FileSize, f.Duration),
+			"duration_seconds": database.NormalizeDurationSec(f.FileSize, durSec),
 			"track_number":     f.TrackNumber,
 			"total_tracks":     f.TrackCount,
 			"segment_title":    f.Title,
@@ -389,6 +390,7 @@ func (h *Handler) ListBookFiles(c *gin.Context) {
 	}
 	results := make([]gin.H, 0, len(files))
 	for i, f := range files {
+		durSec, _ := f.DurationSec() // wire: unknown is reported as 0, as before
 		results = append(results, gin.H{
 			"id":                   f.ID,
 			"book_id":              f.BookID,
@@ -403,7 +405,7 @@ func (h *Handler) ListBookFiles(c *gin.Context) {
 			"title":                f.Title,
 			"format":               f.Format,
 			"codec":                f.Codec,
-			"duration":             f.Duration,
+			"duration":             durSec,
 			"file_size":            f.FileSize,
 			"bitrate_kbps":         f.BitrateKbps,
 			"sample_rate_hz":       f.SampleRateHz,
@@ -934,12 +936,13 @@ func (h *Handler) GetSegmentTags(c *gin.Context) {
 		}
 	}
 
+	foundSec, _ := found.DurationSec() // wire: unknown is reported as 0, as before
 	resp := gin.H{
 		"segment_id":             found.ID,
 		"file_path":              found.FilePath,
 		"format":                 found.Format,
 		"size_bytes":             found.FileSize,
-		"duration_sec":           database.NormalizeDurationSec(found.FileSize, found.Duration),
+		"duration_sec":           database.NormalizeDurationSec(found.FileSize, foundSec),
 		"track_number":           found.TrackNumber,
 		"total_tracks":           found.TrackCount,
 		"tags":                   tags,

@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.22.2
+// version: 1.22.3
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
-// last-edited: 2026-10-21
+// last-edited: 2026-11-04
 
 // Split-book cluster merge — portable across SQLite and Pebble.
 //
@@ -698,12 +698,14 @@ func splitPlayOrder(keepID string, ownFiles []database.BookFile, plans []splitSr
 	var byBooks []string
 	for _, f := range sorted(ownFiles) {
 		byBooks = append(byBooks, f.ID)
-		dur[f.ID], owner[f.ID] = float64(f.Duration), keepID
+		sec, _ := f.DurationSec() // unknown counts as 0 evidence, as before
+		dur[f.ID], owner[f.ID] = float64(sec), keepID
 	}
 	for _, p := range plans {
 		for _, f := range sorted(p.files) {
 			byBooks = append(byBooks, f.ID)
-			dur[f.ID], owner[f.ID] = float64(f.Duration), p.entry.BookID
+			sec, _ := f.DurationSec() // unknown counts as 0 evidence, as before
+			dur[f.ID], owner[f.ID] = float64(sec), p.entry.BookID
 		}
 	}
 	order := byBooks

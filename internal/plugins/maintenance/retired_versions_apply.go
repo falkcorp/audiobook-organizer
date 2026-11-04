@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_apply.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 5e8a2c71-3b94-4d06-a1f7-92c06d3e8b15
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -617,7 +617,9 @@ func (d *retiredDetail) provenance() retiredProvenance {
 			p.RowsMissing++
 		}
 		p.TotalSizeBytes += d.files[i].FileSize
-		p.TotalDurationSec += d.files[i].Duration
+		if sec, ok := d.files[i].DurationSec(); ok {
+			p.TotalDurationSec += sec
+		}
 	}
 	return p
 }

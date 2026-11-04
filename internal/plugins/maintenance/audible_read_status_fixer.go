@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/audible_read_status_fixer.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 36d6036c-05ce-48d1-9997-a65d6a8b67ce
-// last-edited: 2026-10-25
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -532,7 +532,9 @@ func arsLocalDuration(store OpsStore, bookID string, bookDuration *int) (float64
 	}
 	total := 0.0
 	for i := range files {
-		total += float64(files[i].Duration)
+		if sec, ok := files[i].DurationSec(); ok {
+			total += float64(sec)
+		}
 	}
 	if total > 0 {
 		return total, nil

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_audit.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 4e1c7a92-3b58-4d06-9f21-8c5a0e7b3d64
-// last-edited: 2026-09-13
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -191,7 +191,7 @@ func (s *missingFileSignals) tally(f database.BookFileCore) {
 	if decisive {
 		s.AnyDecisive++
 	}
-	if f.Duration > 0 {
+	if _, known := f.DurationSec(); known {
 		s.Duration++
 	}
 	if f.FileSize > 0 {

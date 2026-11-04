@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.135.3
+// version: 1.135.4
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 package scanner
 
@@ -2896,7 +2896,7 @@ func createBookFilesForBookWithAudio(bookFilePath string, segmentFiles []string,
 		//   - the stored row at this path holds the SAME bytes and a duration,
 		//     because the merge keeps that stored duration anyway;
 		//   - the file could not be stat'ed (nothing to read).
-		sameStoredWithDuration := stored != nil && stored.Duration > 0 &&
+		sameStoredWithDuration := stored != nil && stored.DurationState() == database.DurationKnown &&
 			bf.FileHash != "" && stored.FileHash == bf.FileHash
 		if statErr == nil && !probedReplaced && !sameStoredWithDuration {
 			known := bookfileaudio.Known{

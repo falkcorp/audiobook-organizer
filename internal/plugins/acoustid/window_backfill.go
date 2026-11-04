@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package acoustid
 
@@ -860,7 +860,8 @@ func (p *Plugin) planOne(ctx context.Context, f database.BookFileCore, versions 
 	if !fpcalcDecodableExtensions[ext] {
 		return windowPlanRow{present: true, excluded: "non_audio_ext"}, nil
 	}
-	dur := float64(database.NormalizeDurationSec(fi.Size(), f.Duration))
+	fileDur, _ := f.DurationSec() // unknown passes 0, as before
+	dur := float64(database.NormalizeDurationSec(fi.Size(), fileDur))
 	// A file with no duration used to be declined outright: remoteEligible
 	// answers "unknown_duration" because PlanWindows cannot place a window
 	// without one, and its comment notes a worker cannot ffprobe for the

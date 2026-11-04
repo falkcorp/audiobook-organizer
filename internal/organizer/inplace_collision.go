@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_collision.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: df0b8ccd-c8b3-4b73-b9ab-89836b0d4c37
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 // Destination-conflict resolution for ReOrganizeInPlace.
 //
@@ -282,8 +282,8 @@ func fileDurationSec(bf *database.BookFile, b *database.Book, size int64) float6
 	if bf.AcoustIDFingerprintDurationSec > 0 {
 		return bf.AcoustIDFingerprintDurationSec
 	}
-	if bf.Duration > 0 {
-		return float64(database.NormalizeDurationSec(size, bf.Duration))
+	if sec, ok := bf.DurationSec(); ok {
+		return float64(database.NormalizeDurationSec(size, sec))
 	}
 	if b != nil && b.Duration != nil && *b.Duration > 0 {
 		return float64(database.NormalizeDurationSec(size, *b.Duration))

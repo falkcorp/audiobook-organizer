@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.10.6
+// version: 2.10.7
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -398,7 +398,8 @@ func processBookForReextractMode(
 				res.itunes = true
 				return res
 			}
-			hasZero = hasZero || counted[i].Duration <= 0
+			_, countedKnown := counted[i].DurationSec()
+			hasZero = hasZero || !countedKnown
 		}
 		if !hasZero {
 			return res // nothing counted is stored as 0: out of scope
@@ -440,15 +441,16 @@ func processBookForReextractMode(
 				continue
 			}
 			var segDur int
+			fSec, fKnown := f.DurationSec()
 			switch {
 			case f.AcoustIDFingerprintDurationSec > 0:
 				segDur = int(math.Round(f.AcoustIDFingerprintDurationSec))
-			case f.ITunesPersistentID == "" && book.ITunesPersistentID == nil && f.Duration > 0:
+			case f.ITunesPersistentID == "" && book.ITunesPersistentID == nil && fKnown:
 				// Stored-duration fast path: non-iTunes segment with a known Duration.
 				// The iTunes-ms bug (durations stored as milliseconds instead of seconds)
 				// only affects iTunes-imported segments; organized-library files have
 				// durations measured by the scanner and can be trusted without ffprobe.
-				segDur = f.Duration
+				segDur = fSec
 				res.usedStoredDur = true
 			default:
 				usedFfprobe = true
@@ -488,10 +490,13 @@ func processBookForReextractMode(
 				continue
 			}
 			newDur += segDur
-			if durationDiffMeaningful(f.Duration, segDur) && (!zeroRows || f.Duration <= 0) {
+			if durationDiffMeaningful(fSec, segDur) && (!zeroRows || !fKnown) {
 				nf := f
-				nf.Duration = segDur
-				changedBFs = append(changedBFs, nf)
+				// segDur > 0 here (the guard above continues otherwise), so the
+				// measured-duration setter cannot reject it.
+				if err := nf.SetMeasuredDuration(segDur); err == nil {
+					changedBFs = append(changedBFs, nf)
+				}
 			}
 		}
 	} else {

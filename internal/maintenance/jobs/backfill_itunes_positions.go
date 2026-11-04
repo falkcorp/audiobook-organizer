@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_itunes_positions.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 19a97553-68fc-4ef6-a326-cc9e694d8698
-// last-edited: 2026-10-18
+// last-edited: 2026-11-04
 
 package jobs
 
@@ -594,8 +594,8 @@ func (j *backfillITunesPositionsJob) authoritativeDurationSec(store bookFileRead
 	} else {
 		var sum int
 		for _, f := range files {
-			if f.Duration > 0 {
-				sum += f.Duration
+			if sec, ok := f.DurationSec(); ok {
+				sum += sec
 			}
 		}
 		if sum > 0 {

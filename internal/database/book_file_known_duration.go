@@ -1,5 +1,5 @@
 // file: internal/database/book_file_known_duration.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c7e2a91-3d4b-4f68-a1e0-9b2c6d8f4a37
 // last-edited: 2026-11-04
 
@@ -29,16 +29,17 @@ func KnownDurationAtPath(rows []BookFileCore, size int64, hash string) int {
 		return 0
 	}
 	for _, r := range rows {
-		if r.Missing || r.Duration <= 0 || r.FileSize != size {
+		sec, known := r.DurationSec()
+		if r.Missing || !known || r.FileSize != size {
 			continue
 		}
 		if hash != "" && r.FileHash != "" && r.FileHash != hash {
 			continue
 		}
-		if DurationLooksLikeMillis(r.FileSize, r.Duration) {
+		if DurationLooksLikeMillis(r.FileSize, sec) {
 			continue
 		}
-		return r.Duration
+		return sec
 	}
 	return 0
 }

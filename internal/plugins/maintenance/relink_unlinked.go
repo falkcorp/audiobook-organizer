@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_unlinked.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: c17b493a-8d02-4f65-b9e1-604a8f2371cd
-// last-edited: 2026-10-18
+// last-edited: 2026-11-04
 
 // Package maintenance — op maintenance.relink-unlinked-books.
 //
@@ -413,9 +413,11 @@ func buildBookFileFor(b *database.Book, path string, durationSec, track int) *da
 		FilePath:         path,
 		OriginalFilename: filepath.Base(path),
 		TrackNumber:      track,
-		Duration:         database.NormalizeDurationSec(size, durationSec),
 		FileSize:         size,
 		Format:           strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), "."),
+	}
+	if d := database.NormalizeDurationSec(size, durationSec); d > 0 {
+		_ = bf.SetMeasuredDuration(d) // cannot fail: d > 0
 	}
 	// No caller-supplied duration (the multi-track batch passes 0): read this
 	// file's header rather than write a readable file with Duration 0, which

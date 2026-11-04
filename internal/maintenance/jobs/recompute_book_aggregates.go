@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/recompute_book_aggregates.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 9b0c1d2e-3f4a-5b6c-7d8e-9f0a1b2c3d4e
-// last-edited: 2026-10-13
+// last-edited: 2026-11-04
 
 // Maintenance job: recompute-book-aggregates
 //
@@ -198,8 +198,8 @@ func (j *recomputeBookAggregatesJob) Run(
 			var sumDur int
 			var sumSize int64
 			for _, f := range files {
-				if f.Duration > 0 {
-					sumDur += f.Duration
+				if sec, ok := f.DurationSec(); ok {
+					sumDur += sec
 				}
 				if f.FileSize > 0 {
 					sumSize += f.FileSize

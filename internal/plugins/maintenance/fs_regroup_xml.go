@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.22.1
+// version: 2.22.2
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -1199,8 +1199,10 @@ func (a *fsApplier) applyFragments(ctx context.Context, g fsRepairGroup) {
 			BookID:      b.ID,
 			FilePath:    b.FilePath,
 			Format:      strings.TrimPrefix(strings.ToLower(filepath.Ext(b.FilePath)), "."),
-			Duration:    memberOf[b.ID].DurationSec,
 			TrackNumber: n,
+		}
+		if sec := memberOf[b.ID].DurationSec; sec > 0 {
+			_ = bf.SetMeasuredDuration(sec) // cannot fail: sec > 0
 		}
 		// The member was a single-file book, so its DurationSec is this
 		// file's. When it had none, read the header rather than write a 0 the

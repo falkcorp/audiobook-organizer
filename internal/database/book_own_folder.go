@@ -1,7 +1,7 @@
 // file: internal/database/book_own_folder.go
-// version: 3.5.0
+// version: 3.5.1
 // guid: 83d7e159-50f7-47e5-8303-8d8212c3bd8e
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 package database
 
@@ -304,7 +304,9 @@ func keeperLess(files []BookFile, inside, frozen []bool, a, b int) bool {
 	if frozen[a] != frozen[b] {
 		return !frozen[a]
 	}
-	if ka, kb := fa.Duration > 0, fb.Duration > 0; ka != kb {
+	_, ka := fa.DurationSec()
+	_, kb := fb.DurationSec()
+	if ka != kb {
 		return ka
 	}
 	if ca, cb := hasCopySuffix(fa.FilePath), hasCopySuffix(fb.FilePath); ca != cb {
@@ -360,7 +362,9 @@ func IsBookFileCopy(a, b BookFile) bool {
 	if knownDurationsConflict(a, b) {
 		return false
 	}
-	if (a.Duration > 0) != (b.Duration > 0) && !sameDir {
+	_, aKnown := a.DurationSec()
+	_, bKnown := b.DurationSec()
+	if aKnown != bKnown && !sameDir {
 		return false
 	}
 	if !sameDir && chapterFolderSiblings(a.FilePath, b.FilePath) {
@@ -383,10 +387,12 @@ func knownSizesConflict(a, b BookFile) bool {
 // knownDurationsConflict reports whether both rows carry a known duration
 // (> 0) more than 1 s apart.
 func knownDurationsConflict(a, b BookFile) bool {
-	if a.Duration <= 0 || b.Duration <= 0 {
+	aSec, aKnown := a.DurationSec()
+	bSec, bKnown := b.DurationSec()
+	if !aKnown || !bKnown {
 		return false
 	}
-	d := a.Duration - b.Duration
+	d := aSec - bSec
 	return d > 1 || d < -1
 }
 
