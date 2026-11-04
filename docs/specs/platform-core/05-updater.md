@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.7.1 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -282,11 +282,11 @@ func Boot(stateDir, exe string, self Self, check ReaderCheck) (BootResult, error
 // Self identifies the running binary: its version and its BINARY ID, the
 // values its own --version-json prints as version and binary_id (R5-7, FE5-3).
 // The binary ID is computed once per process from the version and the SHA-256
-// of the running executable (os.Executable, read once) by one function: a
-// dependency-free leaf that lands at S0, so ABO's S0 guard and --version-json
-// record and print the same value before the kernel exists, and that
-// app.BinaryID delegates to when the kernel computes it before P−1 (06
-// §6.5.1; 06 and 04 name the leaf; FE6-3). It needs no ldflags and no .git, so every
+// of the running executable (os.Executable, read once) by one function,
+// buildid.Binary in the dependency-free L0 leaf core/buildid (03 §3.3), which
+// lands at S0, so ABO's S0 guard and --version-json record and print the same
+// value before the kernel exists, and that app.BinaryID delegates to when the
+// kernel computes it before P−1 (06 §6.4.5, §6.5.1; FE6-3). It needs no ldflags and no .git, so every
 // build path yields one, and two binaries differ in it whenever their bytes
 // differ. It is opaque and compared only for equality. It is NEVER the UI
 // bundle's build ID (07 §7.6.3; X-App-Build, ui_build_id), which is "dev" for
@@ -802,3 +802,4 @@ Round 6:
 - FE6-3 — `Self`: the binary ID comes from one dependency-free S0 leaf that `app.BinaryID` delegates to, so S0–S2 values equal the kernel's.
 - OPS6-5 — floor-refusal paragraph: launchd relaunches a 78 exit; `Boot` counts boots there regardless.
 - SIMP6-8 — deferred-members intro names the `Also deferred (not checked)` column by heading, not position.
+- integration pass (round 6): `Self` comment names `buildid.Binary` in the L0 leaf `core/buildid` (03 §3.3). Already applied: step 5's five-field `--version-json` list (FE6-4).

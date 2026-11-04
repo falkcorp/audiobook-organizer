@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.7.1 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -411,7 +411,7 @@ type InstanceStore interface {
 //     records legacy (SIMP6-5); the native store is never asked.
 //   - legacy.ExtConfirmer: Confirm(ctx, b, id) with id = ref.String() is the
 //     admin re-confirmation of a suspended extension record, or of a pending
-//     Local candidate (storage.Extension.Confirm, 05-storage §5S.3.11;
+//     Local candidate (legacy.Extension.Confirm, 05-storage §5S.3.11;
 //     Registry.Confirm). An instance whose store lacks it has nothing to
 //     confirm.
 
@@ -432,24 +432,14 @@ type StoredInstance struct {
 }
 
 // StoredInstanceLegacyState holds what only a legacy-backed instance has.
+// It carries no secret state: the Registry reads and writes every secret
+// field of every instance through secrets (Get, Stage), and secrets alone
+// reaches the app's legacy copies, through the one legacy-secret mechanism,
+// 05-config's legacy.SecretsStore (kept names written in place in the app's
+// cipher, moved names sentinelled, re-entered values re-imported; 05-config
+// §2.2-§2.4, M1.4 step 2a; lead decision, round 6). The instance store never
+// reads or writes a secret field.
 type StoredInstanceLegacyState struct {
-	// InPlace names the secret fields whose legacy copy the app already keeps
-	// encrypted (for ABO: the OpenAI key, Google Books key and Hardcover token,
-	// HEAD's encrypted setting rows). They are never moved during the
-	// extraction: Load returns their value in Secrets, and on Put the Registry
-	// passes the new value in Secrets and stages nothing in core secrets; the
-	// store writes it in place in the app's own cipher (R5-1(b)).
-	InPlace []string
-	// Moved names the plaintext secret fields whose value is in core secrets.
-	// On Put a legacy store writes the never-matching sentinel into each such
-	// legacy field and into every other plaintext copy its format keeps
-	// (05-config §2.2, R4-2). On Load it reports a field as moved while it
-	// still holds the sentinel.
-	Moved []string
-	// Secrets holds, per secret field NOT in Moved, the value the legacy
-	// format holds: an InPlace field always; a plaintext field not yet moved,
-	// or re-entered on an older build after a rollback (M1.4 step 2a).
-	Secrets map[string]secrets.Value
 	// Ext is the state of the extension record (05-storage §5S.3.11):
 	// ExtCurrent, ExtStale (an older build changed the instance's legacy
 	// fields, R4-1) or ExtOrphan. Suspended means the Widening field
@@ -732,7 +722,7 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
      store's next write of that key; and carrying a hash of the legacy fields they extend (the guarded projection
      below), so a rewrite that changes nothing does not count as a change.
    - **Field classes and suspension (R4-1, DATA4-8, SEC3-5; replaces the round-3 URL-origin reset).** The records
-     use `storage.Extension` (05-storage §5S.3.11). Guarded projection: the instance's own legacy fields, decoded
+     use `legacy.Extension` (05-storage §5S.3.11). Guarded projection: the instance's own legacy fields, decoded
      and canonically encoded (for a blob-embedded family, that instance's entry, not the whole blob); no field is
      volatile. When an older build changed them, the record reads `ExtStale` and its fields are treated by class:
 
@@ -748,29 +738,35 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
      in 05-storage's `storage_extension_suspended`); one whose `secrets` copy is withheld reports
      `integration_secret_origin_changed`. An `ExtOrphan` record is ignored and deleted by the store's next write.
      Nothing widens silently on roll-forward.
-   - **Secrets the app already encrypts stay in place (R5-1(b)).** A secret field whose legacy copy the app keeps
-     encrypted in its own secret row (`StoredInstance.Legacy.InPlace`; for ABO the OpenAI key, Google Books key and Hardcover
-     token, HEAD's encrypted setting rows, `internal/config/persistence.go:1955-1957`, `:1989-2003` @748fd787a) is
-     **not moved** during the extraction. The legacy store reads it from that row (decrypting with the app's own
-     cipher) and returns it in `Legacy.Secrets`; a `Put` that changes it hands the value to the legacy store,
-     which writes it back into the same row, encrypted with the app's cipher, in the caller's batch; nothing is
-     staged in `secrets` and no sentinel is written. An older build therefore reads the current value after a
-     rollback, and roll-forward has nothing to reconcile. The value moves into `secrets`, under its M1.10 name, at
-     the family's cutover. A row the app's cipher cannot decrypt (its key missing) reads as "must be re-entered"
-     (`HealthMisconfigured`, reason `integration_secret_unreadable`) and is kept, as 05-config does for the same
-     rows (DATA3-12).
-   - **Plaintext secrets move (05-config §2.2, R4-2).** Every other secret field this build writes is staged in
-     `secrets` under its M1.10 name, and in the same batch the legacy store replaces the legacy field — and every
-     other plaintext copy its format keeps — with the unguessable, never-matching sentinel (`Legacy.Moved`),
-     never an empty value. Until this build first writes such a secret, its legacy plaintext is read in place
-     (`Legacy.Secrets` with no `secrets` copy). A legacy value other than the sentinel next to an existing
-     `secrets` copy means an operator re-entered it on an older build after a rollback: the Registry re-imports it at
-     its load (staged in `secrets`, legacy field re-sentinelled, one batch) and that value wins. After a rollback the
-     older build therefore sends the sentinel and fails authentication against the remote until the operator
-     re-enters the secret there (fail-closed; for Deluge, a blank password would instead fall back to the
-     factory-default password, `internal/deluge/integration.go:27-67` @748fd787a). An auth hold the older build sets
-     that way lives in the shared hold rows (M2.10); it expires after `HoldPolicy` (6h for `ClassAuth`) or is
-     released with `DELETE .../hold` or by a `Put` that re-supplies the secret. The release note states both.
+   - **Secrets: one mechanism, `secrets` over 05-config's `legacy.SecretsStore` (lead decision, round 6).** The
+     Registry stages and reads **every** secret field of a legacy-backed instance through `secrets` under its M1.10
+     name, exactly as for a native instance (`secrets.Stage` in the `Put`'s batch, `Get` through `Env.Secrets`); the
+     legacy instance store never reads or writes a secret field. What happens to the app's legacy copy is
+     05-config's single mechanism (§2.2–§2.4), which `secrets` drives through the books store's
+     `legacy.SecretsStore`:
+     - **kept names (R5-1(b)).** A secret whose legacy copy the app keeps encrypted in its own secret row (for ABO
+       the OpenAI key, Google Books key and Hardcover token, HEAD's encrypted setting rows,
+       `internal/config/persistence.go:1955-1957`, `:1989-2003` @748fd787a) is **not moved** during the extraction:
+       `secrets.Get` returns the row's value (`SourceLegacy`, `LegacyEncrypted`), and `secrets.Stage` calls
+       `SecretsStore.Write`, which writes it back into the same row in the app's cipher, in the caller's batch; no
+       `c/secrets/` record and no sentinel exist. An older build therefore reads the current value after a
+       rollback, and roll-forward has nothing to reconcile. A row the app's cipher cannot decrypt reads as "must be
+       re-entered" (`Meta.Err` `ErrKeyUnavailable`; instance `HealthMisconfigured`, reason
+       `integration_secret_unreadable`) and is kept (DATA3-12). The value moves into `secrets` at the family's
+       cutover.
+     - **moved names (R4-2).** Every other secret (the Deluge password, metadata credentials, the webhook secret) is
+       read in place until this build first writes it (`SourceLegacy`, `LegacyPlain`); that write stages a
+       `c/secrets/` record and, in the same batch, `SecretsStore.Supersede` replaces the legacy field — and every
+       other plaintext copy its format keeps — with the unguessable, never-matching sentinel, never an empty value.
+       A legacy value other than the sentinel beside a `secrets` record means an operator re-entered it on an
+       older build after a rollback: `Get` serves it at once and `secrets.Open`'s roll-forward reconcile at 06 P4d
+       step 1(ii) re-imports and re-sentinels it (05-config §2.4), so that value wins; the Registry has no
+       re-import of its own. After a rollback the older build therefore sends the sentinel and fails
+       authentication against the remote until the operator re-enters the secret there (fail-closed; for Deluge,
+       a blank password would instead fall back to the factory-default password,
+       `internal/deluge/integration.go:27-67` @748fd787a). An auth hold the older build sets that way lives in
+       the shared hold rows (M2.10); it expires after `HoldPolicy` (6h for `ClassAuth`) or is released with
+       `DELETE .../hold` or by a `Put` that re-supplies the secret. The release note states both.
    - **Family-level fields.** Where the legacy format stores one value for a whole family (ABO's legacy webhooks:
      enabled flag, secret and event list, 05-notify §10), the store lists the field in `InstanceConfig.Legacy.Shared`, and a `Put` that
      changes it changes it for every legacy-backed instance of that family.
@@ -893,12 +889,13 @@ no `c/secrets/` write; SIMP2-5), `TestRegistry_OverlayRemovedRevertsToStoredRow`
 echoed mask clears the secret; SEC3-4), `TestNativeInstanceStore_RoundTrip` (SIMP4-3),
 `TestLegacyBacked_NoNativeCopy` (with a fake legacy store: no `c/integrations/instances/` row for a covered
 instance; a value the store returns is what the next boot reads; R4-1), `TestLegacyBacked_ConfigAliasGoesThroughPut`,
-`TestLegacyBacked_SecretMovedAndSentinelled` (a plaintext field: the `Put` lists it in `Moved`; never an empty
-value; R4-2), `TestLegacyBacked_EncryptedSecretKeptInPlace` (an `InPlace` field: a `Put` writes the new value into
-the legacy encrypted row, nothing under `c/secrets/`, no sentinel, and an older build's reader decrypts the new
-value; R5-1(b)),
-`TestLegacyBacked_ReenteredLegacySecretReimported` (a non-sentinel legacy value beside a `secrets` copy is
-re-imported and wins; R4-2), `TestLegacyBacked_StaleExtSuspendsLocal` (`Local` false, health
+`TestLegacyBacked_SecretMovedAndSentinelled` (a moved name: the `Put` stages it through `secrets.Stage`, whose
+`SecretsStore.Supersede` sentinels every legacy copy in the same batch; never an empty value; the instance store
+writes no secret field; R4-2), `TestLegacyBacked_EncryptedSecretKeptInPlace` (a kept name: the `Put`'s
+`secrets.Stage` calls `SecretsStore.Write`, which writes the new value into the legacy encrypted row; nothing under
+`c/secrets/`, no sentinel, and an older build's reader decrypts the new value; R5-1(b)),
+`TestLegacyBacked_ReenteredLegacySecretReimported` (a non-sentinel legacy value beside a `secrets` record is served
+by `Get` and re-imported by `secrets.Open`'s reconcile, never by the Registry; R4-2), `TestLegacyBacked_StaleExtSuspendsLocal` (`Local` false, health
 `integration_local_suspended`; R4-1), `TestLegacyBacked_RoutinePutKeepsSuspension`, `TestLegacyBacked_ConfirmNeedsAdmin`
 (ProtectAdmin, audited), `TestLegacyBacked_StaleSecretUsedOnlyForSameOrigin` (SEC3-5),
 `TestLegacyBacked_StoreLoadFailureServesNone`, `TestPut_SecretChangeReleasesAuthHold`,
@@ -929,7 +926,8 @@ fixtures (ABO: books' store with HEAD fixtures, which replaces the round-3 core 
 round trip; and the app runs the one legacy suite of this interface, `legacytest.IntegrationsInstanceStoreSuite`
 (`legacy/legacytest`, outside the API-stability gate with `legacy`; 03 §3.3, SIMP6-6, R6-3), against its legacy
 store, with a case for each capability the store has and for its record state: `Covers` (`legacy.Covering`),
-`InPlace` round trip in the app's cipher, `Moved`/sentinel, `Legacy.Secrets`, `ExtStale` after an out-of-band change
+no secret field read or written by the instance store (secrets are 05-config's `legacytest.ConfigOverrideStoreSuite`
+cases), `ExtStale` after an out-of-band change
 of the legacy fields and not after a no-op rewrite, `Confirm` (`legacy.ExtConfirmer`), orphan extension deleted on
 the next write.
 
@@ -942,7 +940,7 @@ that names an ABO key describes that books code, not core.
 
 | ABO today | Becomes |
 |---|---|
-| `config.MetadataSources[]` (`internal/config/config.go:147-163`) | legacy-backed `metadata/<id>` instances, adapters `books.<id>`, served in place from `metadata_sources` by books' store (M1.4 step 2a); `Credentials` values (plaintext in the blob) move into `secrets` under `integrations.metadata.<id>.credentials.<k>` on this build's first write of them, the legacy values sentinelled (R4-2); the Google Books key and the Hardcover token, which HEAD keeps encrypted in their own rows, stay there (`InPlace`, R5-1(b); table below) |
+| `config.MetadataSources[]` (`internal/config/config.go:147-163`) | legacy-backed `metadata/<id>` instances, adapters `books.<id>`, served in place from `metadata_sources` by books' store (M1.4 step 2a); `Credentials` values (plaintext in the blob) move into `secrets` under `integrations.metadata.<id>.credentials.<k>` on this build's first write of them, the legacy values sentinelled (R4-2); the Google Books key and the Hardcover token, which HEAD keeps encrypted in their own rows, stay there (kept names of 05-config §2.2, R5-1(b); table below) |
 | `DelugeWebURL/Password`, `DownloadClient.Torrent.Deluge` (`config.go:225-240,1776-1780`) | the legacy-backed `download/deluge` instance (05-download §10) |
 | (egress trust) | `Local` is native-only (books' extension family, M1.4 step 2a). Today these instances have no egress guard at all; from S7 a private host needs `Local` or `lan_allow`. **The upgrade grants no `Local` (DATA5-9).** At S7 books ships one versioned `Migration` (05-storage §5S.3.5; `Additive`, P4b, raises no level; never a `LegacyMigration`, which `TestNoNewLegacyMigrations` forbids after S2b; SIMP5-11, DATA5-17) that writes only books' extension family `m/books/ext/integrations/` and nothing older builds read: for each legacy-backed instance whose URL core's `legacy.LocalCandidate` accepts — the host is an **IP literal** in the loopback or private ranges — it records that URL origin as `PendingLocal`, with the legacy-field hash of M1.4 step 2a. A candidate grants nothing: the instance reads `Local=false`, reports `HealthDegraded` with reason `integration_local_pending`, and is listed on the Integrations page until an admin accepts it with `Registry.Confirm` (ProtectAdmin, audited `core.integration.confirm`), which grants `Local` bound to that origin only while it still equals the instance's URL origin. This holds whatever wrote the URL: values HEAD's `PUT /api/v1/config` wrote before S3 (a HEAD custom role holding `settings.manage` could write them), a HEAD store that skips S3–S6 and boots S7+ directly, and a pre-S7 archive restored on S7+ — whose store lacks the migration's applied record, so the migration runs again on the archive's URLs and again only records candidates. A private host given by **name** is never a candidate (a name can resolve anywhere at dial time): it is `HealthMisconfigured` with reason "private host needs Local or lan_allow" until an admin sets `Local` or lists it in `lan_allow` (SEC3-5). A host change by any writer resets `Local` and drops a candidate (M1.3 `Put`; for an older build's change, the suspension of M1.4 step 2a). From S3 every integration-bound blob field (URL, host, credentials, headers) is also `ProtectAdmin` on the config façade until S7 hands it to `Registry.Put`, and a URL-origin change through the façade before S7 clears that instance's stored secret unless the same request re-supplies it (05-config §1.3.7, §1.12.2; `TestPreS7Facade_IntegrationURLIsProtectAdmin`; SEC4-7). Release note (S7): "Integrations that reach a LAN address by IP need one confirmation by an admin on the Integrations page after this upgrade; until then they cannot connect." |
 | `ai_endpoints` rows (`internal/config/ai_endpoints.go:36-68`) | legacy-backed `ai/<id>` instances, served in place from `ai_endpoints` by books' store (05-ai §10) |
@@ -952,18 +950,18 @@ that names an ABO key describes that books code, not core.
 
 **Legacy-backed instance table** (normative for books' store). It fixes the instance ID of every legacy singleton before the
 09 S3 build ships, because S3 is the first build that can write one of the plaintext secrets and it stages each
-once under its final name (05-config §2.2). The secrets HEAD already keeps encrypted (`InPlace`) are not moved
+once under its final name (05-config §2.2). The secrets HEAD already keeps encrypted (05-config §2.2's **kept** names) are not moved
 during the extraction (R5-1(b)); their final name is the one the family's cutover uses. Instance IDs follow `InstanceID`'s grammar; IDs that exist in ABO today
 are kept verbatim. The *Passthrough path* column is the operator-layer path 05-config hands over (M1.4 step 2, an
 in-memory overlay); env aliases onto it are permanent.
 
-| ABO source = stored form until cutover | Instance | Secret names (plaintext fields: in `secrets` from this build's first write; `InPlace`: in the legacy encrypted row until cutover) | Passthrough paths (operator layers) |
+| ABO source = stored form until cutover | Instance | Secret names (moved: in `secrets` from this build's first write; kept: in the legacy encrypted row until cutover, 05-config §2.2) | Passthrough paths (operator layers) |
 |---|---|---|---|
 | `deluge_web_url`, `deluge_web_password`, `download_client.torrent.deluge.*` (`config.go:225-240,1776-1780`) | `download/deluge` | `integrations.download.deluge.password` | `integrations.download.deluge.{url, password}` |
-| `openai_api_key`, `openai_base_url` (the row ABO itself synthesises with ID `openai`, `internal/config/ai_endpoints.go:74,403-440`) | `ai/openai` | `integrations.ai.openai.api_key` (`InPlace`: HEAD's encrypted row `persistence.go:1955`) | `integrations.ai.openai.{api_key, base_url}` (`OPENAI_API_KEY`, `OPENAI_BASE_URL`) |
+| `openai_api_key`, `openai_base_url` (the row ABO itself synthesises with ID `openai`, `internal/config/ai_endpoints.go:74,403-440`) | `ai/openai` | `integrations.ai.openai.api_key` (kept: HEAD's encrypted row `persistence.go:1955`) | `integrations.ai.openai.{api_key, base_url}` (`OPENAI_API_KEY`, `OPENAI_BASE_URL`) |
 | other `ai_endpoints[]` rows (`local-llm`, `local-uv`, user rows; `ai_endpoints.go:73-75`) | `ai/<row id>` | `integrations.ai.<row id>.api_key` where `auth_ref` is set | — (DB only today) |
-| `google_books_api_key` (`persistence.go:1956`) | `metadata/google-books` (the source ID, `config.go:3769`) | `integrations.metadata.google-books.api_key` (`InPlace`) | `integrations.metadata.google-books.api_key` |
-| `hardcover_api_token` (`persistence.go:1957`) | `metadata/hardcover` (`config.go:3779`) | `integrations.metadata.hardcover.api_token` (`InPlace`) | `integrations.metadata.hardcover.api_token` |
+| `google_books_api_key` (`persistence.go:1956`) | `metadata/google-books` (the source ID, `config.go:3769`) | `integrations.metadata.google-books.api_key` (kept) | `integrations.metadata.google-books.api_key` |
+| `hardcover_api_token` (`persistence.go:1957`) | `metadata/hardcover` (`config.go:3779`) | `integrations.metadata.hardcover.api_token` (kept) | `integrations.metadata.hardcover.api_token` |
 | other `metadata_sources[]` entries | `metadata/<source id>` | `integrations.metadata.<source id>.credentials.<k>` | — |
 | `config.Plugins["webhook"]` (`urls`, `secret`, `events`; `internal/plugins/webhook/plugin.go:43-71`) | `notify/webhook-<n>` (n = 1… = position in `urls`, empty entries counted, 05-notify §10) | `integrations.notify.webhook-<n>.secret` (one family-level legacy `secret`, staged under every instance's name; `Shared`) | — |
 
@@ -981,8 +979,8 @@ stored form.
 part of the extraction (09 S0–S10). It is a later step per family — one-way, checkpointed, behind the single
 per-owner level guard (05-storage), decided on measured data (02 decision 13) — and its rollback floor is the
 cutover release itself. It is the first step in which core reads books' rows, so the read-delete storage grant it
-needs belongs to it (05-storage §5S.3.13; R4-1). It is also the step that moves the `InPlace` secrets into
-`secrets` (R5-1(b)). After it this file's members of package `legacy` (M1.3 "Legacy members", and the
+needs belongs to it (05-storage §5S.3.13; R4-1). It is also the step that moves the kept secrets into
+`secrets` (R5-1(b); 05-config §1.12.2). After it this file's members of package `legacy` (M1.3 "Legacy members", and the
 capabilities' use here) have no implementation left and are deleted, which is not a breaking change (R6-3);
 `InstanceConfig.Legacy` and `StoredInstance.Legacy` stay, always nil, and `Registry.Confirm` answers 409, until a
 major (03 §3.3, 14 K23). Until then every build reads the same keys and no integration step
@@ -1532,19 +1530,6 @@ and `Registrar.Adapter(integrations.Descriptor)` is the shape 06 adopted. Notifi
 None outside this file's area. (The four providerhttp/breaker defects in M2.2 are in scope and are
 removed by the design.)
 
-**Spec defect, not fixed here (round 6; no round-6 finding names it).** Two mechanisms keep a legacy-backed
-instance's secrets. This file's `StoredInstance.Legacy.InPlace`/`Moved`/`Secrets` (M1.3, M1.4 step 2a) has the
-Registry hand an in-place secret's new value to the instance store and "stage nothing in core `secrets`", and has
-the Registry re-import a re-entered plaintext value at its own load (06 P4d step 1b). 05-config §2.2–§2.3 already
-does both for the same names (`integrations.ai.<instance>.api_key` and the Google Books and Hardcover keys are
-**kept** names written in place through `legacy.SecretsStore.Write`; the Deluge, metadata-credential and webhook
-secrets are **moved** names whose sentinel `secrets.Stage` writes through `Supersede`, and whose re-entry the
-`secrets.Open` reconcile and every `Get` re-import), and 05-config C11 says the encrypted ones stay in place
-"whichever route writes them". The proper fix is to drop the three secret fields from
-`StoredInstanceLegacyState`, have the Registry stage and read every secret field through `secrets` only, and delete
-06 P4d step 1b; it shrinks the legacy surface further and removes a second writer of the same rows. Left for the
-lead to schedule because it changes 05-config's, 06's and 09's text as well.
-
 ## Review history
 
 Round 1 (`docs/plans/platform-core/reviews/spec-round-1-dispositions.md`):
@@ -1699,3 +1684,4 @@ Round 6 (`docs/plans/platform-core/reviews/spec-round-6-dispositions.md`):
 - SIMP6-7 — M1.3: `InstanceConfig.Legacy bool` + `Shared` → one pointer `Legacy *InstanceConfigLegacyState`;
   `LegacyRecord` → `StoredInstanceLegacyState` (the `Legacy *<Type>LegacyState` rule of 03 §3.3).
 - COR6-7 / SIMP6-10 — M2.3: the gate store's own-batch writes cite 05-storage's one list of three exceptions.
+- integration pass (round 6, lead decision: one legacy-secret mechanism): `StoredInstanceLegacyState` drops `InPlace`, `Moved` and `Secrets`; M1.4 step 2a reads and stages every secret field through `secrets`, which alone reaches 05-config's `legacy.SecretsStore` (kept names written in place, moved names sentinelled, re-entry re-imported by `secrets.Open` at 06 P4d step 1(ii)); tests, the legacy suite cases and the legacy-backed table use 05-config's kept/moved terms; the out-of-scope "spec defect" note is removed; `legacy.Extension` replaces `storage.Extension`. Already applied: M1.4 step 2's `BelowStored` passthrough names (SEC6-5).

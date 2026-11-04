@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.5.1 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -394,7 +394,7 @@ type Schedules struct { // section core.log.schedules
   - `Append` writes each record as a row of exactly HEAD's shape (source, level, message, time), which every
     older build reads as its own system log. The record's remainder that HEAD's shape cannot hold (module,
     subsystem, attributes, trace and span IDs) goes to a **books-owned extension record** keyed by the row key
-    (books' `m/books/ext/logs/`, `storage.Extension`, 05-storage §5S.3.11), which older builds never read and
+    (books' `m/books/ext/logs/`, `legacy.Extension`, 05-storage §5S.3.11), which older builds never read and
     which carries the fingerprint `legacy_ref.fp` of the row it extends; never extra members in the legacy row
     (R4-1). Every field of it is Derived in 05-storage's terms and it declares no Widening field, so under
     05-storage's rule a stale extension is never marked `Suspended` and never counts toward a suspension health
@@ -639,3 +639,7 @@ Round 5:
 - DATA5-4 — §5 ABO's store: the journal extension declares no Widening field, so it is never `Suspended`; fingerprint named `legacy_ref.fp` (DATA5-16).
 - OPS5-12 — §5 rollback: the S5 removal of the activity `Writer`'s line parsing leaves the older build's activity feed without `system` entries for the S5+ period (09 §9.2.1); the journal itself adds no cost.
 - OPS5-14 — L3, §11 item 4: ABO calls `app.InstallProcessDefaults` at S2 r3, the release that deletes the façade's installs and sets `PromRegisterer`.
+
+Round 6:
+
+- integration pass (round 6): §5 names `legacy.Extension` (was `storage.Extension`; R6-3, 05-storage's one list).

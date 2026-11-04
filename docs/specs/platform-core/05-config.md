@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.7.1 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -370,7 +370,7 @@ func FromFlagSet(fs *flag.FlagSet, bind map[string]Path) map[Path]string
 // of package legacy (below; R6-3), which the kernel detects by type assertion when the store is built (06 P4c)
 // and which the native store does not implement. Core ships the native implementation (core's
 // core/internal/configstore, keyspace c/config/; not ABO's internal/books/configstore, §1.12.2); an app with legacy settings supplies its own on its module's Manifest.LegacyStores.Config (06:
-// func(storage.LegacyHandles) (config.OverrideStore, error), built at 06 P4c from that module's own handles),
+// func(legacy.Handles) (config.OverrideStore, error), built at 06 P4c from that module's own handles),
 // written in the app's code over the app's keys (§1.12.2). At S2 only, before kernel storage exists, ABO's
 // main passes the same implementation over the store its serve opened as app.Options.LegacyConfigStore (06),
 // deleted in the S2b PR: the sole exception to 03 §3.3's "never through app.Options" (SIMP5-10). Paths and
@@ -558,7 +558,7 @@ type ConfigCommitObserver interface {
 The value types `SecretsStore`'s methods carry (`secrets.LegacyCopies`, `secrets.LegacyCheck`), and
 `secrets.ReadLegacyKey`, stay in `secrets`: mutual assignability needs result types that both `secrets` and
 `legacy` can name, and `secrets` cannot name a `legacy` type. They stay in v1 until a major, inert for an app
-without legacy secrets (see "Objections to 03").
+without legacy secrets (03 §3.3 "Legacy-only identifiers").
 
 Config's sentinel and typed errors:
 
@@ -819,7 +819,7 @@ handles are issued to services and before any listener opens. Config's boot writ
    Storage opens at `core.storage.path` (`ProtectOperator`: needed before the DB layer exists), takes its
    pre-migration checkpoint and runs the DAG (05-storage §5S.4).
 4b. **Store construction (from S2b; R4-1).** At 06 P4c the kernel builds the DB layer's store: the books
-   manifest's `LegacyStores.Config(storage.LegacyHandles{…})` over books' own handles, or, for an app without
+   manifest's `LegacyStores.Config(legacy.Handles{…})` over books' own handles, or, for an app without
    one, the native store over `c/config/`. A constructor error fails boot.
 5. At 06 P4d step 1, in this order, which 06 §6.5.1's one boot table states identically (COR5-2): (a) the
    kernel calls the store's `Open` when it has `legacy.ConfigOpener` (for ABO, its key-regeneration guard, its encryption init, which loads ABO's
@@ -1218,8 +1218,8 @@ for them; books' runtime handle over its own claims is the one handle involved.
 layer 2 in ABO's `layerOf`; 04 §2.4 owns the name. It shares only its last element with core's
 `core/internal/configstore`, the native store and the kernel's committer, so this file always writes both paths in
 full, MOD6-11), with the legacy `integrations.InstanceStore` and the books-root half of
-`library.RootSource` that render the same blob (C11): it imports `internal/config`, the residue and core
-`config`, `secrets`, `integrations` and `library`, and is imported only by `internal/books` (the
+`legacy.RootSource` that render the same blob (C11): it imports `internal/config`, the residue and core
+`config`, `secrets`, `integrations`, `library` and `legacy`, and is imported only by `internal/books` (the
 `Manifest.LegacyStores` constructors) and, at S2 only, ABO's `main` (`app.Options.LegacyConfigStore`). Nothing
 imports it back. Only the row cipher (`internal/database/settings.go:110-235`) stays in the residue. 04 §2.4
 lists the path and 03 §3.5.1 counts it. The rest of this section is the
@@ -1241,7 +1241,7 @@ moves between the two before its family's cutover. Native-only values are never 
 a legacy row (R4-1; an extra member is what an older build would misread or drop, SEC4-3).
 
 **Native-only keys in books' extension family (R4-1, 05-storage §5S.3.11).** The family is books'
-`m/books/ext/config/` (`storage.LegacyHandles.Ext`), which no older build reads. Every native-only key is a
+`m/books/ext/config/` (`legacy.Handles.Ext`), which no older build reads. Every native-only key is a
 **standalone record** there (one per explicitly set key, no copy of any blob field): an older build never sees
 it, and it is effective again after roll-forward. No key of S0–S10 declares a basis on blob fields, so no config
 value is ever an extension record of the blob and none is ever suspended; the basis mechanism is a deferred-build
@@ -1459,8 +1459,8 @@ boot is a fresh install. Books' handler calls it from the S2b PR on. Config's an
 - the boot record `<state_dir>/config.boot.json` is set aside with the database (to `reset/<id>/previous/`), so
   module enablement returns to its defaults, as every other stored setting does;
 - the keyring (data, derive and `k0-legacy` keys) and ABO's legacy key file are **kept** unchanged, so moving
-  `previous/` back undoes the reset with every secret readable, and the keyring export stays valid. Whether a
-  reset should also rotate or discard them is an owner decision recorded in 14 (DATA6-6). The reset boot, and only
+  `previous/` back undoes the reset with every secret readable, and the keyring export stays valid. Keeping them is
+  the lead's decision (round 6), 14 Q-J's recommendation (a); the owner may override it (DATA6-6). The reset boot, and only
   it, rewrites the keyring header's `install_id` to the fresh install's; an ordinary `Open` never does, because a
   host-loss restore depends on that field (§2.4);
 - books' handler rewrites HEAD's gap-fill file `<db dir>/config.yaml` as HEAD's reset does (`config.ResetToDefaults`
@@ -1512,7 +1512,7 @@ so **≤118 → `modules.books.*`**.
 | `api_rate_limit_per_minute`, `json_body_limit_mb`, `upload_body_limit_mb`, `enable_rate_limit`, `public_base_url`, `tunnel_connector_addrs`, `allowed_peer_cidrs`, `login_saturated_*` | 9 | `core.http.*` | 05-http-api |
 | `log_level`, `log_retention_days` | 2 | `core.log.level`, `core.log.journal.retention_days` | 05-logging |
 | `otel_*` (4), `telemetry_environment` | 5 | `core.metrics.*`, `core.tracing.*` | 05-metrics |
-| `basic_auth_enabled`, `basic_auth_username`, `basic_auth_password` | 3 | `core.http.basic_gate.{enabled, username, password}` (the stage-8 owner; one name, SEC4-10) | 05-http-api |
+| `basic_auth_enabled`, `basic_auth_username`, `basic_auth_password` | 3 | `core.http.basic_gate.{enabled, username, password}` (the stage-8 owner; one name, SEC4-10); the file keys and `BASIC_AUTH_*` env names are `BelowStored` aliases (§1.12.4), `basic_auth_username`/`BASIC_AUTH_USERNAME` included: the username's default `""` keeps HEAD's empty-username behaviour (`internal/config/config.go:2806` @748fd787a; 05-http-api §10, SEC6-9) | 05-http-api |
 | `enable_auth`, `oauth_*`, `bootstrap_key_ttl*`, `write_startup_readonly_key` | 12 | `core.auth.*` | 05-authn |
 | `cf_access_team_domain`, `cf_access_aud`, `owner_email` | 3 | `modules.books.identity.*` | app-side (G11; 09 S4) |
 | `cf_account_id`, `cf_guests_policy_id`, `cf_policy_api_token`, `cf_guest_service_tokens`, `cf_service_auth_policy_id`, `invite_email_service_token` | 6 | `modules.books.cfguests.*` | app-side (G11) |
@@ -1566,7 +1566,7 @@ into `abo_keys.golden`, not maintained by hand.
   while none is stored (C11), and `TestAliasBelowStoredMatchesHEAD` includes every Passthrough alias. One value is
   exempt (R6-6, §1.3.5): `ENABLE_AUTH` and the file key `enable_auth` stay `BelowStored`, but a value of theirs that
   enables auth is applied as an operator-layer value through `core.auth.mode`'s `SafeLegacyValue`
-  (`TestAuthOn_LegacyEnableAuthBeatsStoredOff`, §2.9).
+  (`TestAuthOn_LegacyAliasEnablesOverStoredOff`, §2.9).
 - `TestShippedDeployEnvNamesArePermanent` scans `deploy/*.service`, `deploy/*.plist`, `deploy/local.conf.example`,
   `docker-compose.yml` and `Dockerfile*`, **including commented-out `Environment=` lines** (an operator uncomments
   them, e.g. `local.conf.example:50-61`): every name found is a permanent row or on one of the two not-alias
@@ -1586,12 +1586,12 @@ changed those fields. No key of S0–S10, and no proof-depth app, declares a bas
 (10). Under 03 §3.4 a built package carries no member without a consumer, so nothing below is built. It lands with
 the first config key whose meaning depends on a legacy blob field, additively (an option, a method and a
 capability: v0 before the split, a minor after it). When built, confirmation goes through the one confirm
-capability, `storage.ExtConfirmer` (`Confirm(ctx, b, string(path))`), and `legacy.ConfigSuspender` keeps only
+capability, `legacy.ExtConfirmer` (`Confirm(ctx, b, string(path))`), and `legacy.ConfigSuspender` keeps only
 `Suspended()` (SIMP6-4).
 
 | Member | Waits for | Purpose | Also deferred (not checked) |
 |---|---|---|---|
-| `config.Basis` | the first key whose meaning depends on a legacy blob field | section option declaring a key's legacy basis fields and class | the per-entry extension records of the settings blob (a key's record keyed by blob key plus path, whose `legacy_ref.fp` covers only its basis fields, `storage.Extension` per-entry form) |
+| `config.Basis` | the first key whose meaning depends on a legacy blob field | section option declaring a key's legacy basis fields and class | the per-entry extension records of the settings blob (a key's record keyed by blob key plus path, whose `legacy_ref.fp` covers only its basis fields, `legacy.Extension` per-entry form) |
 | `config.BasisClass` | same | class of a basis | the audit action `core.settings.confirm` |
 | `config.BasisDerived` | same | stale value reads as the default until rewritten | the health token `config_extension_suspended` (fail-open: the value is withheld, boot continues) |
 | `config.BasisWidening` | same | stale value suspended until confirmed | the gauge `mediacore_config_suspended_overrides` |
@@ -2113,7 +2113,7 @@ commits leave both values in the file, DATA5-20), `TestIntegrationStoreSharesBlo
 `TestFreshInstall_EmbedCoverArtFalseSurvivesRestart` (a fresh S2b+ install, and a store upgraded from a pre-marker
 build, keep an operator's `embed_cover_art=false`, `log_retention_days` and 0–0 maintenance window across restarts;
 the three one-shots ran once as books migrations, which wrote HEAD's markers; `Open` wrote nothing; COR6-5),
-`TestAuthOn_LegacyEnableAuthBeatsStoredOff` (blob `enable_auth=false`, env `ENABLE_AUTH=true` → auth on and the key
+`TestAuthOn_LegacyAliasEnablesOverStoredOff` (05-authn §10 owns the name, 09 cites it; blob `enable_auth=false`, env `ENABLE_AUTH=true` → auth on and the key
 locked; blob `true`, env `ENABLE_AUTH=false` → auth stays on and `config_legacy_name_shadowed` is raised;
 `ABO_CORE_AUTH_MODE=required` → on; R6-6, SEC6-1), `TestFactoryResetClearsGapFillSecrets` (after a staged factory
 reset and restart, the fresh store gap-fills no kept secret and `config.boot.json` is set aside; DATA6-6) and
@@ -2161,13 +2161,9 @@ in-place writes of the four kept secrets, the roll-forward reconcile, deferred c
 
 ## Objections to 03
 
-1. **Two legacy-only value types cannot move to `legacy` (open; R6-3).** This file follows 03 §3.3's "Legacy-only
-   identifiers" paragraph: `legacy.SecretsStore` replaces `secrets.LegacyStore`, and `secrets` consumes it
-   through an unexported mirror. Mutual assignability, however, needs method signatures that both packages can
-   name, so the value types those methods carry (`secrets.LegacyCopies`, `secrets.LegacyCheck`) stay in
-   `secrets`. So does `secrets.ReadLegacyKey`, which reads the keyring's file format, which only `secrets` knows.
-   03's list of things that "cannot move" names only record-type legacy state and
-   `module.Manifest.LegacyStores`; it should add these three (inert in v1 until a major, 14 K23).
+None open. The round-6 objection (the legacy-only value types `secrets.LegacyCopies` and `secrets.LegacyCheck`
+and the format reader `secrets.ReadLegacyKey` cannot move to `legacy`, R6-3) is resolved: 03 v1.9 lists them among
+the identifiers that cannot move (03 §3.3 "Legacy-only identifiers", 14 K23).
 
 The round-0 items (an internal order inside the old shared layer; the §3.3 `config` row not saying
 that operator-set keys are locked) are resolved by 03 v1.2.0+ (R4 L1/L2/L3; §3.3 `config` row); 03 v1.3.0 R5 also states that ABO's façades are allowed. Note for readers:
@@ -2348,3 +2344,4 @@ Round 6:
 - MOD6-11 — §1.3.3, §1.4 step 6, §1.12.1, §1.12.2, §2.3: core's `core/internal/configstore` and ABO's `internal/books/configstore` always written in full; the façade is a `Facade` type in ABO's `internal/config` (no `legacyconfig` package).
 - OPS6-4 / R6-7 — §2.2: one generated secret-class list in `abo_keys.golden` for 09's staging scrub; `TestSecretClassListMatchesLegacyStore`.
 - OPS6-7 — §1.3.5: `BelowStored` applies wherever core config attaches the legacy store (S2 on), to env names and file keys, never flags.
+- integration pass (round 6): key-map row: `basic_auth_username`/`BASIC_AUTH_USERNAME` are `BelowStored` aliases and the empty-username default keeps HEAD's behaviour (SEC6-9, accepted deviation); factory reset: keeping the keyring is the lead's adoption of 14 Q-J (a); `legacy.Handles`, `legacy.ExtConfirmer`, `legacy.Extension` and `legacy.RootSource` replace stale `storage.*`/`library.*` spellings, and books' configstore imports `legacy`; the auth-on test is `TestAuthOn_LegacyAliasEnablesOverStoredOff` (05-authn owns it); Objection 1 resolved by 03 v1.9. Already applied: `maintenance_window_migrated` among the marker one-shots that become books migrations (COR6-5).

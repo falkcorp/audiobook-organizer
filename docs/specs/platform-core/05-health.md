@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.7.1 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -140,7 +140,8 @@ from the first core-executor release. What lands when is in 5H.10.
 Core registers: `core.storage` (open + a cheap engine ping, replacing `CountAuthors`),
 `core.config`, `core.secrets`, `core.tasks` (executor running; Degraded when paused or a zombie cap
 is hit), `core.scheduler`, `core.outbox` (Degraded while any dead letter exists), `core.events`
-(Degraded while drops exceed a rate), `core.metrics`, `core.updater` (only when enabled), and one
+(Degraded while drops exceed a rate), `core.metrics`, `core.updater` (only when enabled), `core.backup`
+(from S8; the revocation-journal and archive tokens of [05-backup](05-backup.md)), and one
 component per configured integration adapter instance (`core.integrations.<capability>.<instance>`,
 reported by `providerhttp` breakers and adapter checks; [05-metadata](05-metadata.md),
 [05-download](05-download.md), [05-ai](05-ai.md)). The fixed degraded token `basic_gate_no_password` belongs to the
@@ -149,7 +150,17 @@ the gate answers 401 on every non-exempt route and health reports `degraded` wit
 S3 core's stage 8 ([05-http-api](05-http-api.md) §4.2, resolution R5-1(c), SEC5-4), before S3 ABO's
 hotfixed gate (05-authn §11.1 early fix 5) through HEAD's `degraded` token list
 (`internal/server/handlers/system/handler.go:222-275`), which keeps serving until this file's
-readiness core lands (5H.10).
+readiness core lands (5H.10). An enabled gate with an empty **username** raises no token: it keeps HEAD's
+behaviour (05-http-api §10, SEC6-9), so there is no `basic_gate_no_username`.
+
+**Advisory tokens owned by other files.** Health has three statuses, so a token another file calls `warn` is a
+`Reason` on a `StatusDegraded` result (readiness unaffected: Degraded passes it), and one it calls `info` is a
+`Reason` on a `StatusUp` result (no probe or readiness effect; shown on the authenticated endpoints and the
+token-only route). Two such tokens: `config_legacy_name_shadowed` on `core.config` (warn: a `BelowStored` legacy
+name of a `ProtectAdmin`+ key is set and differs from the stored value, which stays effective; 05-config §1.3.5
+"Shadowed legacy names", SEC6-1), and `revocation_journal_colocated` on `core.backup` (info: the revocation
+journal shares the store's filesystem device, so a whole-volume snapshot rollback would revert both; 05-backup
+§5B.3.6 "Where", SEC6-10).
 
 ### 5H.3.2 Startup steps
 
@@ -668,3 +679,4 @@ Round 6:
 - OPS6-5 — 5H.3.4: the wait script reads `ExecMainStatus` and reports exit 78 (upgrade-floor refusal) by name, covered by `test_deploy_wait_ready.py`; launchd relaunches a 78 exit.
 - COR6-9 — header: `health/diagnostics` takes `health`'s layer (L4) under 03 R4.
 - OPS6-6 — verified: this file already uses `basic_gate_no_password` (5H.3.1); no change.
+- integration pass (round 6): §5H.3.1 registers `core.backup` (S8) and states the advisory tokens owned by other files: `config_legacy_name_shadowed` on `core.config` (warn = `StatusDegraded`, SEC6-1) and `revocation_journal_colocated` on `core.backup` (info = `StatusUp` with a reason, SEC6-10); no `basic_gate_no_username`, because 05-http-api keeps the empty Basic username at HEAD parity (SEC6-9).

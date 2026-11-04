@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-library.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.6.1 -->
 <!-- guid: dafe380b-f703-41cb-99d0-2b2ba32f70e5 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -18,8 +18,10 @@ they always serve. An app with pre-core roots adds them through **`legacy.RootSo
 own rows, so ABO's root data stays where and how HEAD stores it and core holds none of its key names or row
 formats (§5L.10, R4-1). The root source has no native implementation, so it is **legacy-only as a whole**:
 it lives in package `legacy`, outside the API promise (03 §3.3, 05-storage §5S.3.11; R6-3, SIMP6-3 option
-(b)), and the public `library` package names no legacy identifier. A later native root store would add a
-`library` interface additively. Modules reach roots only through the module-scoped handle `library.Scope`
+(b)), and the public `library` package names no legacy identifier. A native implementation of the interface
+over the config entries was rejected: it would be a second write path for the `core.library.roots` setting beside
+`config.Store`, bypassing the setting's protection, audit and change notification. A later native root store
+would add a `library` interface additively. Modules reach roots only through the module-scoped handle `library.Scope`
 (`module.Deps.Library`, [06](06-app-sdk.md)), which carries the module's owner.
 
 ## 5L.0 Decisions in one table
@@ -847,3 +849,4 @@ Round 6:
 - SIMP6-5 — the record-ID helper is `legacy.LibraryCoverID` (was `library.RouteKey`), one helper name per package.
 - SIMP6-6 — conformance is `legacytest.RootSourceSuite` (was `librarytest.RootSourceSuite`), run by core against a fixture source and by ABO with HEAD fixtures.
 - SIMP6-7 — `library.SourcedRoot` deleted; a source-served root's legacy state is `RootSpec.Legacy *RootLegacyState` (nil for config-entry roots, never persisted).
+- integration pass (round 6): header states why a native config-entry implementation of the root source was rejected (a second write path for `core.library.roots` beside `config.Store`, SIMP6-3). Already applied: `legacy.LibraryCoverID`.

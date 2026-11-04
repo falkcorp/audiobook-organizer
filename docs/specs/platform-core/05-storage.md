@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-storage.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.7.1 -->
 <!-- guid: 940ce8be-6f86-4450-b43a-77bf78827b12 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1344,11 +1344,11 @@ is its owner spec's, and the former names are listed so that older text resolves
 | `legacy.ExtConfirmer` | `storage.ExtConfirmer`; it also replaces `auth.KeyConfirmer` and `rbac.Reconfirmer` (SIMP6-4) | this file (below); record IDs in the owner specs | S4 |
 | `legacy.Covering` | `storage.Covering` | this file (below) | S7 |
 | `legacy.IntegrationsCoverID`, `legacy.ProviderHTTPCoverID`, `legacy.LocalCandidate` | `integrations.CoverID`, `providerhttp.CoverID`, and the predicate of 05-metadata's S7 `Local` step for legacy-backed instances | [05-metadata](05-metadata.md) | S7 |
-| `legacy.ConfigOpener`; `legacy.ConfigExternalWriter` (deleted in the S3 PR, SIMP5-5) | `config.LegacyOpener`; `config.ExternalWriter` | [05-config](05-config.md) | S2 |
+| `legacy.ConfigOpener` with its argument type `legacy.ConfigOpenEnv` (S2b, COR6-8); `legacy.ConfigExternalWriter` (deleted in the S3 PR, SIMP5-5) | `config.LegacyOpener` and `config.OpenEnv`; `config.ExternalWriter` | [05-config](05-config.md) §1.3.3 | S2 (`ConfigExternalWriter`); S2b (`ConfigOpener`, `ConfigOpenEnv`) |
 | `legacy.ConfigSecrets`, `legacy.ConfigCommitObserver`, `legacy.SecretsStore` | `config.LegacySecrets`, `config.CommitObserver`, `secrets.LegacyStore` | [05-config](05-config.md) | S3 |
 | `legacy.AuthSignIns`, `legacy.AuthReconciler` | `auth.LegacySignIns`, `auth.Reconciler` | [05-authn](05-authn.md) §3.4 | S4 |
 | `legacy.AtomWriter` | `rbac.LegacyAtomWriter` | [05-rbac](05-rbac.md) §3.4 | S4 |
-| `legacy.TaskStoresFunc`, `legacy.TaskRecoverer` | `tasks.LegacyStoresFunc`, `tasks.Recoverer` | [05-tasks](05-tasks.md) §5T.3.13 | S5 |
+| `legacy.TaskRecoverer` (the constructor is the plain field `legacy.Stores.Tasks`, `func(legacy.Handles) (tasks.Stores, error)`; no named function type) | `tasks.Recoverer`; `tasks.LegacyStoresFunc` | [05-tasks](05-tasks.md) §5T.3.13 | S5 |
 | `legacy.RootSource`, `legacy.LibraryCoverID` | `library.RootSource`, `library.RouteKey` (`library.SourcedRoot` is gone: a root's legacy state is `library.RootSpec.Legacy`) | [05-library](05-library.md) §5L.3.1 | S7 |
 | `legacytest.ConfigOverrideStoreSuite`, `legacytest.AuthStoreSuite`, `legacytest.RBACStoreSuite`, `legacytest.TasksRunStoreSuite`, `legacytest.RootSourceSuite`, `legacytest.IntegrationsInstanceStoreSuite`, `legacytest.ProviderHTTPGateStoreSuite`, `legacytest.NotifyRuleStoreSuite`; `legacytest.CoveringCases`, `legacytest.ExtConfirmerCases`, `legacytest.ExtensionSuite` | `configtest.LegacyOverrideStoreSuite`, `authtest.LegacySignInsSuite`, rbac's optional cases in `rbactest.StoreSuite`, `librarytest.RootSourceSuite`, `integrationstest.LegacyInstanceStoreSuite`, and the implementor-only `Recoverer` test | owner specs | with each interface |
 
@@ -1570,11 +1570,11 @@ S2b, in `core/internal/restoreswap` beside 05-backup's journaled swap.
 
 | Step | Specification |
 |---|---|
-| Stage | `storage.Admin.StageFactoryReset(ctx, requestedBy string) (string, error)` writes `<state_dir>/reset/pending.json` = `{id, db_path, targets, staged_by_build, expires_at, requested_by}`, every path absolute (temp file + fsync + rename + directory fsync), and requests a graceful restart. It is exposed as `POST /api/core/v1/system/factory-reset` (`core:system.manage`, interactive owner proof, audited `core.system.factory_reset`, 05-rbac); from S2b ABO's legacy route is mapped onto it, and `PebbleStore.Reset` is deleted (§5S.9.3). |
+| Stage | `storage.Admin.StageFactoryReset(ctx, requestedBy string) (string, error)` writes `<state_dir>/reset/pending.json` = `{id, db_path, targets, staged_by_build, expires_at, requested_by}`, every path absolute (temp file + fsync + rename + directory fsync), and requests a graceful restart. It is exposed as `POST /api/core/v1/system/factory-reset` (`core:admin` + `Guards.Interactive` + `Guards.Owner` with 05-authn §4.8's fallback, audited `core.system.factory_reset`; 05-rbac §4.10 owns the guards); from S2b ABO's legacy route is mapped onto it, and `PebbleStore.Reset` is deleted (§5S.9.3). |
 | Set aside (06 P0a) | An intent whose `expires_at` passed or whose `staged_by_build` is not this binary is rejected exactly like a stale restore intent (05-backup §5B.3.4 step a), so a rollback and roll-forward never reset by surprise. Otherwise restoreswap moves, by idempotent renames journaled in `<state_dir>/reset/<id>/journal.json`, into `<db parent>/.mediacore-reset/<id>/previous/`: the DB directory, its sidecars (`.storage-levels`, `.storage-applied`, `.storage-format`, `.migration-checkpoint`), the derived and index directories, the checkpoints of this store, and the config boot record `<state_dir>/config.boot.json` (05-config §1.3.5). The operator config file stays. |
 | Next boot | The store path is empty, so §5S.4 steps 5–6 make a **fresh install**: a new `install_id`, the one fresh-install batch with every owner at the build's level (books included, so no floor refuses it) and the Seed steps in P4b; no checkpoint. |
 | Journal and lineage | At P4d step 2 the revocation journal's header names the old install, so 05-backup sets it aside and starts a new journal, re-applying nothing (§5B.3.6 step (0), DATA4-15). `storage.boot.json` names another `install_id`, so its verdict is **none** and it is rewritten at Run (3b); 05-backup rewrites `backup.location.json`. Every archive of the old install verifies as foreign (05-backup §5B.3.7). |
-| Keyring | Whether a reset also sets the secrets keyring aside is an owner decision recorded in 14 (§5S.11 item 9). Until it is decided the keyring stays in place. |
+| Keyring | **Kept** (lead decision, round 6: 14 Q-J's recommendation (a), owner may override): the keyring stays in place, so moving `previous/` back undoes the reset with every secret readable and the keyring export stays valid; only the reset boot rewrites its header's `install_id` (05-config §1.12.2). |
 | Undo | None through the API: `previous/` is kept for `core.backup.restore.keep_previous` for manual recovery and then swept. A crash during the renames resumes from the reset journal at the next boot. |
 | Tests | `TestFactoryResetUnderClaims` (shadow and strict: no `ErrOutsideKeyspace`, no claim-violation record for a range, the next boot is a fresh install with a new `install_id`), `TestFactoryResetPostFloorBoots` (a build with books' floor boots the reset store), `TestFactoryResetIntentRejectedAfterRollback`. |
 
@@ -2150,10 +2150,8 @@ credentials.
    narrow rows (fail-closed, but they can hit rows whose IDs the reset re-allocated). 05-backup's install
    check and an app-supplied discriminator are the candidates; until decided, this residual is stated here
    and in 14 (05-backup §5B.5 states the same residual row).
-9. **Factory reset and the keyring (DATA6-6).** Whether a core factory reset also sets the secrets keyring
-   aside (so no old archive's secret ciphertext stays decryptable) or keeps it (so the operator's keyring
-   export stays valid) is an owner decision to record in 14; until then the keyring stays in place
-   (§5S.3.15).
+9. **Factory reset and the keyring (DATA6-6).** (Closed in the integration pass, round 6: the lead adopted
+   14 Q-J's recommendation (a), the keyring is kept; §5S.3.15 row "Keyring".)
 
 ## 5S.12 Objections to 03
 
@@ -2396,3 +2394,4 @@ Round 6:
 - MOD6-4 — row 9 adds `setting:registry.scan_standdown` (the run stores' stand-down marker).
 - MOD6-7 — `TestCoreHoldsNoAppKeyNames` cites 03 R1(c)'s one name set and match rule.
 - FE6-3 — the binary ID is computed before the store opens by ABO's guard at S0–S2 and by the kernel from S2b.
+- integration pass (round 6): the one list of legacy identifiers adds `legacy.ConfigOpenEnv` (05-config §1.3.3) and drops `legacy.TaskStoresFunc` (`legacy.Stores.Tasks` is a plain `func(legacy.Handles) (tasks.Stores, error)`, as 05-tasks and 06 state); §5S.3.15: factory-reset route guards `core:admin` + interactive + owner (05-rbac owns them), keyring kept (lead decision, 14 Q-J (a)); open item 9 closed.

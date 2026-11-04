@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.7.1 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1115,7 +1115,7 @@ The *arr facade's key purpose and `X-Api-Key`/`apikey` extraction are deferred-b
   `ProtectAdmin` or higher is set and differs from the effective value (for `core.auth.mode`, only a
   disabling value can), the boot logs at warn and raises the health token `config_legacy_name_shadowed`
   naming the key and its canonical variable (05-config owns the check). The release note names the
-  canonical variables, 09 §9.2.6 records the exemption, `TestAuthOn_LegacyAliasOverridesStoredOff`
+  canonical variables, 09 §9.2.6 records the exemption, `TestAuthOn_LegacyAliasEnablesOverStoredOff`
   asserts both directions, and the auth-off half of `TestLegacyRoleReachUnchanged` asserts the 403 for
   protected keys through the `/api/v1/config` alias.
 - Audit records in disabled mode carry `method=auth_disabled` and the client address.
@@ -1523,7 +1523,7 @@ ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `oauth
 | `TestLegacyKeyExtension_NeverHoldsCanonicalScopes` | (ABO) no path writes canonical scopes into a `scopes_source: legacy` record; only native creation writes `scopes_source: canonical` (SEC6-2) |
 | `TestRevokeRacesLastUse_NeverUnrevokes` | (ABO, `synctest`) a revoke committed between a `TouchAPIKey` read and its commit: the touch conflicts and is dropped, the key stays `revoked`, with and without an extension record (SEC6-3, R6-5) |
 | `TestKeyLastUseNeverRevertsRevoke` / `TestLastSeenFlushNeverResurrectsRevokedSession` | (`authtest.StoreSuite`, `synctest`) a coalesced key touch after a revoke leaves the key revoked; a `LastSeen` flush after a logout or an admin revoke re-creates no session (DATA6-8) |
-| `TestAuthOn_LegacyAliasOverridesStoredOff` | blob `enable_auth=false`, env `ENABLE_AUTH=true` (and `<APP>_CORE_AUTH_MODE=required`, and the operator file): auth enabled after restart; blob `required`, env `ENABLE_AUTH=false`: auth stays enabled and health `config_legacy_name_shadowed` names `core.auth.mode` (resolution R6-6, SEC6-1) |
+| `TestAuthOn_LegacyAliasEnablesOverStoredOff` | blob `enable_auth=false`, env `ENABLE_AUTH=true` (and `<APP>_CORE_AUTH_MODE=required`, and the operator file): auth enabled after restart; blob `required`, env `ENABLE_AUTH=false`: auth stays enabled and health `config_legacy_name_shadowed` names `core.auth.mode` (resolution R6-6, SEC6-1) |
 | `TestForeignOpen_SidecarWriteFailedDetected` | (R-test cell) a pre-S0 `prev` whose sidecar path is read-only opens the store; roll forward: the Pebble open stamp reports a foreign open, the `auth` duty is owed and pre-rollback native sessions are revoked (SEC6-4) |
 | `TestLegacyScopedKey_KeepsLegacyRouteReach` | an admin's `abk_` key scoped `["settings.manage"]` (no extension) passes every `settings.manage` legacy route and starts a `settings.manage` adapted op; the same key of a custom-role owner without `core:admin` does not; on native routes it holds the expansion only (SEC5-7; cell of `TestLegacyRoleReachUnchanged`) |
 | `TestLegacySPA_InviteFragmentReader` (the fragment cell of `TestLegacyInviteLink_EndToEnd`; the name 09 S4's done-check uses, FE6-5) | S4 r2: the legacy SPA opens `/invite#token=<t>` signed out and signed in, removes the fragment with `history.replaceState`, and accepts; the S9 R-test row: an invite minted on S9 opens after a rollback to S8 (FE5-4) |
@@ -1971,3 +1971,4 @@ Round 6 (2026-11-04), findings applied to this file:
 - SIMP6-4 — `auth.KeyConfirmer` deleted; confirmation through the shared `ExtConfirmer` (`"apikey/"+id`) (§3.2, §3.4, §10).
 - SIMP6-6 — one `legacytest.AuthStoreSuite` with a case per capability replaces `authtest.LegacySignInsSuite` (§3.4, §10).
 - R6-3 / SIMP6-2 — `auth.LegacySignIns` → `legacy.AuthSignIns`, `auth.Reconciler` → `legacy.AuthReconciler`, in the `legacy` package outside the API promise; the kernel detects them at P4c and `auth` names them through unexported twins checked by `export_test.go`; legacy sessions/invites returned as `SessionRecord`/`OneTimeToken`; cutover removal is not a v1 break; config capability references renamed `legacy.ConfigOpener`/`legacy.ConfigSecrets` (§3, §3.4, §4.14, §5, §11).
+- integration pass (round 6): one name for the auth-on test, `TestAuthOn_LegacyAliasEnablesOverStoredOff` (was `TestAuthOn_LegacyAliasOverridesStoredOff`), as 09 S4 and 05-config cite it. Already applied: `TestLegacySPA_InviteFragmentReader`, `TestRestoredLegacyKey_ReenabledKeepsLegacySemantics`, `TestRevokeRacesLastUse_NeverUnrevokes`; the owed-`auth` consumer's `DeleteLegacySignIns`; `TouchSession`/`TouchAPIKey`; `RestoreDeps.Duties`.
