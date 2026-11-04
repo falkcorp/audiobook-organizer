@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.19.0
+// version: 2.19.1
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-11-03
 
@@ -1933,10 +1933,9 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	outsideHard := 0
 	seenTitle := map[string]bool{}
 	dup := []string{}
-	dupSingle := false
 	var links []fbLink
 	if carried != nil {
-		dup, dupSingle, links = append(dup, carried.DupTitles...), carried.DupSingle, carried.Links
+		dup, links = append(dup, carried.DupTitles...), carried.Links
 	}
 	dupHard := false // a duplicate no single link target can resolve
 	for i := range plan.Groups {
@@ -2067,6 +2066,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		}
 		kept = append(kept, l)
 	}
+	var dupSingle bool
 	if carried == nil {
 		dupSingle = len(dup) > 0 && !dupHard
 	} else {
