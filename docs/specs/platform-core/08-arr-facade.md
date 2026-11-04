@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/08-arr-facade.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 6d9b089a-fb08-4087-9ccd-43b9aa4ec555 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -34,8 +34,13 @@ creates `arrfacade`:
 | `Router.FacadeGroup`, `RouteKind Facade`, the stage-13 facade refusal clause | 05-http-api §3, §4.2, §4.9 | the `/api/v3/` reservation itself is built |
 | `TestAPIKey_FacadePurposeBoundToModule`, `TestConfining_FacadeKeyRefusedOnNative` | 05-authn, 05-rbac | `Confining` itself is built (the fingerprint worker needs it, SEC-3) |
 
-The S7 deferred-build done-check (09) also runs `! grep -rn 'PurposeFacade\|FacadeGroup' core --include=*.go`,
-because `test ! -e core/arrfacade` cannot see a feature inside a built package.
+Absence is checked by one test, not a prose grep: the deferred-members archtest
+`archtest.DeferredMembersAbsent` runs in the root module's `make ci` from S2 (06 §6.4.9, 09 S2) and fails
+when any listed identifier (`ArrFacade`, `PurposeFacade`, `FacadeGroup`, `RouteKindFacade`,
+`ProblemFacadeIncomplete`, `ProblemFacadeURLBaseCollision`, …) appears in non-test code under `core/`,
+because `test ! -e core/arrfacade` cannot see a feature inside a built package. The two facade problem
+kinds are appended to the end of 06's `ProblemKind` block when this package lands, so adding them
+renumbers nothing (SIMP3-2, SIMP3-11). The PR that adds `arrfacade` deletes the test.
 
 ## 8.1 Purpose & scope
 
@@ -613,7 +618,7 @@ Round 1 (2026-11-04), findings applied to this file:
 - SEC-5 — facade keys are `PurposeFacade` + `Module` (05-authn), scopes `Confining` (05-rbac); refusal on non-facade routes owned by the chain; indexer writes only through `integrations.FacadeWriter`; O9 closed.
 - SEC-23 — `rbac.PermissionSpec` with `Warn` replaces `PermissionDef`/`Dangerous`; no `DefaultGrants` on the `Confining` facade scopes; facade scopes never `Sensitive`, with the reason.
 - SIMP-24 — Go wire DTOs replaced by a field table; fixtures (§8.14) are the contract.
-- SIMP-1 / cross-cutting 1 — file marked deferred-build; only the `/api/v3/` reservation and the conformance-engine move happen during the extraction.
+- SIMP-1 / cross-cutting 1 — file marked deferred-build; only the `/api/v3/` reservation and the conformance-engine move happen during the extraction. (Superseded in round 2 by SIMP2-9: the conformance engine stays in ABO until `arrfacade` is built.)
 - SIMP-4 — pushed indexers live in the one integration-instance store; the facade keeps only the id map.
 - COR-17 — `IDMap` over `entity.Ref`.
 - COR-27 — `LibraryRootFolders(library.Scope, library.RootFilter)`, `CoreIndexers(*indexer.Pool, *integrations.FacadeWriter, *IDMap)`, `CommandSpec.Kind tasks.Kind`.
@@ -627,5 +632,13 @@ Integration pass (cross-cluster requests, 2026-11-04):
 
 Round 2 (2026-11-04), findings applied to this file:
 
-- SIMP2-6 — facade-only key machinery (`KeySpec.Purpose`/`Module`, `PurposeFacade`, query-key extraction, `FacadeGroup`, `RouteKind Facade`, the stage-13 facade clause, the two facade tests) listed in §8.0 as deferred-build members of `auth`/`rbac`/`httpapi` that land with `arrfacade`; F5, §8.4, §8.5 and O9 point at that table; S7 grep done-check.
+- SIMP2-6 — facade-only key machinery (`KeySpec.Purpose`/`Module`, `PurposeFacade`, query-key extraction, `FacadeGroup`, `RouteKind Facade`, the stage-13 facade clause, the two facade tests) listed in §8.0 as deferred-build members of `auth`/`rbac`/`httpapi` that land with `arrfacade`; F5, §8.4, §8.5 and O9 point at that table; S7 grep done-check. (Superseded in round 3 by SIMP3-2: the deferred-members archtest from S2.)
 - SIMP2-9 — the conformance engine stays `internal/syncapi/conformance` in ABO until `arrfacade` is built (§8.0, §8.14, §8.15); the extraction-time list is the `/api/v3/` reservation only.
+
+Round 3 (2026-11-04), findings applied to this file:
+
+- SIMP3-2 — §8.0: the S7 prose grep replaced by the deferred-members archtest (`archtest.DeferredMembersAbsent`, root `make ci` from S2, 06 §6.4.9).
+- SIMP3-11 — §8.0: the facade problem kinds are appended at the end of 06's `ProblemKind` block when `arrfacade` lands, and are in the archtest list.
+- SIMP3-12 — round-1 SIMP-1 history line marked superseded by SIMP2-9.
+- R3-1 — checked: no dual-format machinery here; facade keys keep explicit, non-empty `Confining` scopes, consistent with R3-1's never-empty-scope rule.
+

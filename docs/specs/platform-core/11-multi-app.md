@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/11-multi-app.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 74ed9015-8ae0-4b4b-8049-4c09cfbba343 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -23,7 +23,7 @@ nothing in core is process-global) nor multi-tenancy (D7: no tenant IDs).
 | Constraint | Where it is specified | What it guarantees for a suite binary |
 |---|---|---|
 | Module IDs unique, validated before storage opens | 06 §6.5.1 P1, 03 §3.6 | `books`, `tv`, `movies` cannot collide silently |
-| Namespaced storage: `m/<id>/` per module, `c/<subsystem>/` for core, legacy claims checked for overlap | 03 R8, 05-storage, 06 `Manifest.Storage storage.Spec` | ABO's 258 legacy families are claimed by `books`; new modules never touch them |
+| Namespaced storage: `m/<id>/` per module, `c/<subsystem>/` for core, legacy claims checked for overlap; core reaches legacy rows only through explicit, logged storage grants to core subsystems, never to modules | 03 R8, 05-storage, 06 `Manifest.Storage storage.Spec`, 06 §6.11.6 | ABO's 258 legacy families are claimed by `books`; new modules never touch them. In a suite that ships `books`, books' grants keep `auth`, `rbac` and `config` on ABO's existing user, role and settings rows, so `tv` and `movies` share that one user database without a copy (R3-1) |
 | Route prefixes `/api/<id>/v1`, core at `/api/core/v1`; legacy subtree claims may not overlap | 03 §3.6, 06 `Registrar.HTTP`, 05-http-api §4.9 | no path overlap between modules by construction |
 | Permission namespaces `<id>:<action>`, admin is `core:admin` | 03 §3.6, 06 `Manifest.Permissions []rbac.PermissionSpec`, 05-rbac | one role editor shows `books:*`, `tv:*`, `movies:*`; API keys can be scoped per module |
 | Task kinds `<id>.<name>`, resources as `entity.Ref{Module, Kind, ID}` | 03 §3.3, §3.6, G8, 05-tasks | one executor, no write-set identity collisions |
@@ -70,7 +70,7 @@ nothing in core is process-global) nor multi-tenancy (D7: no tenant IDs).
 | 1 | A suite repo or `cmd/suite` with `main` calling `app.New` with all modules; suite `app.Options` identity | S |
 | 2 | Suite web workspace: `createShell({ modules: [booksModule, tvModule, moviesModule] })`; each app's module UI must be publishable as its own package (today ABO keeps `modules/books/` as a directory, 07 §7.11 — promote it) | M |
 | 3 | Embed the suite SPA with `embed_frontend` like any app (07 §7.6) | S |
-| 4 | Merging existing single-app installs into one store is **not** "copy keyspaces" (DATA-30): each install holds its own `c/auth/`, `c/rbac/`, `c/tasks/`, `c/config/`, `c/secrets/` (different keyrings), `c/storage/install`, per-keyspace versions, per-owner reader levels, and `Sequence` high-water marks, which collide. It needs a **core storage export/import capability**: per keyspace, with version checks and ID-remap hooks for core subsystems (users by username, roles by ID, keyring merge, sequence rebase); module keyspaces (`m/<id>/`, books' legacy claims) copy as-is. This is a new core contract, recorded in 14. An install-wide level would also couple every app's rollback in a suite, which is why levels are per owner (05-storage per-owner reader levels, DATA-20) | L |
+| 4 | Merging existing single-app installs into one store is **not** "copy keyspaces" (DATA-30): each install holds its own core data, users, roles, API keys, config and run history, either in its native `c/<subsystem>/` keyspaces (an app with no legacy data) or, for ABO until each family's later cutover, in books' legacy families served to core through storage grants (R3-1, 06 §6.11.6), plus its own `c/secrets/` (different keyrings), `c/storage/install`, per-keyspace versions, per-owner reader levels, and `Sequence` high-water marks, which collide. It needs a **core storage export/import capability**: per keyspace **and per granted family**, with version checks and ID-remap hooks for core subsystems (users by username, roles by ID, keyring merge, sequence rebase) that read and write granted families through the same legacy-format adapters core uses; module keyspaces (`m/<id>/`) and books' ungranted legacy claims copy as-is. This is a new core contract, recorded in 14. An install-wide level would also couple every app's rollback in a suite, which is why levels are per owner (05-storage per-owner reader levels, DATA-20) | L |
 | 5 | Merge user databases of existing installs (users, roles, API keys) or start fresh — owner decision | M |
 | 6 | Build the deferred `arrfacade` (08) if not already built; configure facade URL bases (`modules.tv.arrfacade.url_base=/tv`, `modules.movies.arrfacade.url_base=/movies`); two facades with one base fail boot (05-http-api §4.9) | S |
 | 7 | Per-module executor quotas (05-tasks extension) if measurements show starvation | M |
@@ -105,3 +105,8 @@ Round 2 (2026-11-04), findings applied to this file:
 - SIMP2-13 — metric segment decided by the modules the app ships, not the enabled set (§11.2 row, §11.3 hazard).
 - MOD2-21 — "wave 0" → S0.
 - FE2-11 / COR2-8 (consistency with 06) — legacy prefixes' first segments are reserved IDs; `EnvPrefix`/`StateDir` listed in the single app identity.
+
+Round 3 (2026-11-04), findings applied to this file:
+
+- R3-1 — §11.2 storage row: core reaches legacy rows only through storage grants to core subsystems; a suite with `books` shares ABO's user, role and settings rows through them. §11.5 row 4: core data of an ABO install lives in books' granted legacy families until each family's cutover, so export/import works per granted family through the legacy-format adapters, and only ungranted legacy claims copy as-is.
+

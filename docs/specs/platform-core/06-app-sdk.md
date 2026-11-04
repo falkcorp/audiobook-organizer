@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/06-app-sdk.md -->
-<!-- version: 1.3.1 -->
+<!-- version: 1.4.0 -->
 <!-- guid: d581911c-8f90-48bb-a307-5cd6288a9695 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -64,7 +64,7 @@ tests and `node_modules`), classified in raw/07 §5.1 and mapped to their replac
 
 | # | Decision | Rationale and cost |
 |---|---|---|
-| A1 | A module is `Manifest()` (pure data, validated before storage opens) **plus** `Register(*Registrar)` (runs after migrations and config load, receives typed `Deps`). **Rule: anything the kernel needs before services exist, or while the module is disabled, lives in the `Manifest`; anything that needs a service lives in `Register`.** So permissions/roles, storage spec (keyspace, legacy claims, migrations, the declarative part of derived indexes), library roles, settings sections, its outbox consumer names, its task-ID ledger, the foreign task kinds its system actor may start, legacy HTTP prefixes and UI descriptor IDs are manifest fields. Routes, tasks, resources, topics (the one catalog, SIMP-5), subscriptions, outbox handlers, change sinks, adapters, health/diagnostics, backup artifacts, derived-index hooks, compat auth methods, hooks and workers are registrar calls: each closes over a service built in `Register` (COR2-15). | 03 §3.7 requires validation before listeners, migrations before services, and 05-config requires sections to be registered before the config store loads, while route handlers need migrated storage and loaded config. One `Register` cannot satisfy both. Outbox consumer names and the task-ID ledger are manifest data so that a disabled module's messages are retained (COR-12) and its persisted runs resolve as held (COR-13). Cost: two places to look; mitigated by the rule being mechanical. |
+| A1 | A module is `Manifest()` (pure data, validated before storage opens) **plus** `Register(*Registrar)` (runs after migrations and config load, receives typed `Deps`). **Rule: anything the kernel needs before services exist, or while the module is disabled, lives in the `Manifest`; anything that needs a service lives in `Register`.** So permissions/roles, storage spec (keyspace, legacy claims, the legacy-format grants to core subsystems, migrations, the declarative part of derived indexes), library roles, settings sections, its outbox consumer names, its task-ID ledger, the foreign task kinds its system actor may start, legacy HTTP prefixes and UI descriptor IDs are manifest fields. Routes, tasks, resources, topics (the one catalog, SIMP-5), subscriptions, outbox handlers, change sinks, adapters, health/diagnostics, backup artifacts, derived-index hooks, compat auth methods, hooks and workers are registrar calls: each closes over a service built in `Register` (COR2-15). | 03 §3.7 requires validation before listeners, migrations before services, and 05-config requires sections to be registered before the config store loads, while route handlers need migrated storage and loaded config. One `Register` cannot satisfy both. Outbox consumer names and the task-ID ledger are manifest data so that a disabled module's messages are retained (COR-12) and its persisted runs resolve as held (COR-13). Cost: two places to look; mitigated by the rule being mechanical. |
 | A2 | **No generic DI container in core.** Core's own ~30 services are built by hand-written, typed code in `kernel/services` (a struct with one field per service, constructed in a fixed order). A module builds its internal services with plain Go constructors inside `Register`. | Evaluated below (§6.3.1). |
 | A3 | `Deps` is a **struct of typed, module-scoped handles**, never `any`, never nil. Each handle's **type** carries the module identity, so scoping is enforced by the owning package and cannot be spoofed by the caller: `events.Scope` publishes only the module's declared topics, `library.Scope` carries the module's owner, `tasks.Client` stamps the actor from ctx, `secrets.Scope` reads only `modules.<id>.` names, `*metrics.Scope` prefixes the module's metric names (03 §3.6 `MetricPrefix`, §6.4.4). A shared pointer to a whole service never appears in `Deps`. | Replaces 113 `Get[T]` string lookups with compile-time types; a scope type is the only place R3/R8 can be enforced for a handle (COR-21). |
 | A4 | Registrar methods **record problems instead of returning errors** (like `testing.T`); the kernel joins every problem of every module into one `*ValidationError`. | An operator sees all misconfigurations at once, not one per restart. |
@@ -118,6 +118,7 @@ import (
 	"github.com/falkcorp/mediacore/integrations/download"
 	"github.com/falkcorp/mediacore/integrations/providerhttp"
 	"github.com/falkcorp/mediacore/library"
+	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/integrations/notify"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/outbox"
@@ -142,17 +143,28 @@ type ID string
 func (id ID) Valid() bool
 
 // ReservedIDs returns the union of httpapi.ReservedSegments (server paths),
-// ui.ReservedSegments (shell routes, 07 §7.4.3) and rbac.ReservedNamespaces
-// ("core", "custom") (03 §3.6). It is static, so P1 can evaluate it. Two
-// app-specific inputs are added by the kernel in P1, both known before any
-// MountLegacy call (COR2-19, FE2-11):
-//   - the first path segment of every manifest's LegacyPrefixes: the compat
-//     top-level segments (ABO: auth, socket.io, ping, status, logout,
-//     public). They are also NonSPA segments; a LegacyMount's
-//     TopSegments (05-http-api §8.2) must be a subset of them (checked in P7);
+// ui.ReservedSegments (shell routes, 07 §7.4.3; a dependency-free leaf of
+// package ui that lands at S2 with module, FE3-8) and rbac.ReservedNamespaces
+// ("core", "custom") (03 §3.6). It is static, so P1 can evaluate it, and a
+// test asserts the union equals 03's row from S2 on. Two app-specific inputs
+// are added by the kernel in P1, both known before any MountLegacy call
+// (COR2-19, FE2-11):
+//   - the first path segment of every manifest's LegacyPrefixes (ABO: auth,
+//     socket.io, ping, status, logout, public, login, invite): RESERVED IDs
+//     ONLY. Whether a segment is also NonSPA is decided by the mount, not by
+//     the prefix (FE3-1, R3-5): NonSPA = LegacyMount.TopSegments minus
+//     LegacyMount.SPAShared (03 §3.6, 05-http-api §3.5, §8.2) (ABO SPAShared:
+//     login, whose ABS route is POST /login while GET /login is the SPA page;
+//     invite, whose legacy GET /invite/{token} 302 shares the segment with
+//     the SPA page, SEC3-16). The P1/P7 split of 03 §3.6: P1 validates
+//     module IDs against the static union, ReservedAPINamespaces and these
+//     LegacyPrefixes first segments (all manifest data); P7, once mounts are
+//     recorded, re-checks module IDs against every mount's TopSegments and
+//     SPAShared and checks that each such entry is a first segment of a
+//     declared LegacyPrefixes entry, still before listeners open;
 //   - app.Options.ReservedAPINamespaces: second segments under /api (ABO: the
 //     ABS unversioned /api/<seg> names); reserved IDs only, never NonSPA.
-// A fresh slice per call (R5); a test asserts the static union equals 03's row.
+// A fresh slice per call (R5).
 func ReservedIDs() []string
 
 // Module is what an app hands to app.New. Implementations are plain values
@@ -194,7 +206,11 @@ type Manifest struct {
 	// never derived from debug.ReadBuildInfo: under the in-repo replace the
 	// module reports v0.0.0-00010101000000-000000000000 and would always fail.
 	// A CI check keeps version.Version equal to the newest core checkpoint
-	// (pre-split) or to the tag being released (post-split). Empty = no check.
+	// (pre-split) or to the tag being released (post-split). version.Version
+	// starts at "0.1.0" when the package lands (S1), so hello's S2 skeleton
+	// ("0.1.0") passes P1, and check_core_version.py also asserts that every
+	// in-tree MinCoreVersion (hello, books) is <= version.Version (MOD3-19).
+	// Empty = no check.
 	MinCoreVersion string
 
 	// DefaultEnabled is the value of core.modules.<id>.enabled when unset.
@@ -226,9 +242,12 @@ type Manifest struct {
 	// from a Worker, Hook or subscriber (SEC2-15). The system actor holds
 	// exactly the union of Perms.Start of the module's own kinds plus the
 	// Perms.Start of these kinds; core:admin and AuthRequired scopes are never
-	// included (05-tasks 5T.3.10). P7 refuses a kind that no enabled module or
-	// core registers (ProblemTaskStartUnknown); a kind of a disabled module is
-	// refused at Start with tasks' "unknown kind" (O3).
+	// included (05-tasks 5T.3.10). P7 refuses a kind that is neither registered
+	// (core or an enabled module) nor in ANY manifest's TaskLedger, disabled
+	// modules included (ProblemTaskStartUnknown; 05-tasks 5T.3.1's rule), so
+	// disabling module B never fails the boot of a module A that lists one of
+	// B's kinds (G1, COR3-10). Starting a disabled module's kind is refused at
+	// Start with tasks' "unknown kind" (O3).
 	TaskStarts []tasks.Kind
 
 	// OutboxConsumers names every outbox consumer the module may register
@@ -238,18 +257,28 @@ type Manifest struct {
 	OutboxConsumers []string
 
 	// Storage is the module's storage declaration (05-storage §5S.3): its
-	// m/<ID>/ keyspace, legacy claims (books: ABO's 258 families), versioned
-	// migrations (run before Register, under the boot's single pre-migration
-	// checkpoint, G2), read adapters, and the DECLARATIVE part of each derived
-	// index (name, version, Blocking), so the claim ledger and readiness gating
-	// know the index while the module is disabled. The Build/Snapshot/Load
-	// closures are registrar data (Registrar.DerivedIndex), because they close
-	// over services built in Register (COR2-15).
+	// m/<ID>/ keyspace, legacy claims (books: ABO's 258 families, held by
+	// books in place for the whole extraction), the legacy-format GRANTS that
+	// let named core subsystems reach some of those families in their legacy
+	// format (books: users, roles, API keys, the settings blob and secret rows,
+	// ops history, activity; R3-1, §6.11.6), versioned migrations (run before
+	// Register, under the boot's single pre-migration checkpoint, G2), read
+	// adapters, and the DECLARATIVE part of each derived index (name, version,
+	// Blocking), so the claim ledger and readiness gating know the index while
+	// the module is disabled. The Snapshot/Load closures and the rebuild task
+	// are registrar data (Registrar.DerivedIndex), because they close over
+	// services built in Register (COR2-15).
 	Storage storage.Spec
 
 	// DataMigrations are the module's large, resumable rewrites
 	// (05-storage §5S.3.6). They live outside storage.Spec because
-	// storage/datamigrate (L4) imports tasks and storage (L1) cannot.
+	// storage/datamigrate (L4) imports tasks and storage (L1) cannot. An
+	// Online one runs as the MODULE kind "<ID>.datamigrate.<name>", which the
+	// kernel registers on the module's behalf with the DataMigration's
+	// declared Writes []entity.Ref as its Effects (plus Subjects per shard),
+	// so dispatch serialises it against the module's own writers; the core
+	// kind core.storage.migrate is for core owners only (COR3-5, 05-tasks
+	// 5T.3.12: a core run never invokes a module callback that writes).
 	DataMigrations []datamigrate.DataMigration
 
 	// Library declares the library-root roles the module needs (05-library).
@@ -266,15 +295,26 @@ type Manifest struct {
 	UI UIDescriptor
 
 	// LegacyPrefixes are un-namespaced HTTP subtrees ("/api/v1/", "/public/")
-	// or exact paths ("/ping") the module occupies (09); each becomes a claim,
-	// and its first segment is a reserved module ID and a NonSPA segment known
-	// in P1 (§6.4.1, FE2-11). httpapi.Router.Build refuses any two
-	// owners whose subtree claims overlap, which also covers facade vs legacy
-	// (05-http-api §4.9, narrowed by SIMP-22: no claim kinds, no YieldsTo).
-	// Only paths listed here may be passed to MountLegacy. "/" is not a
-	// subtree claim: it is the SPA fallback, owned either by ui.Handler or by
-	// exactly one LegacyMount with ServesSPA (§6.4.3, FE-1).
+	// or exact paths ("/ping", "/login") the module occupies (09); each becomes
+	// a claim, and its first segment is a reserved module ID known in P1
+	// (§6.4.1, FE2-11). A prefix does NOT make its segment NonSPA: that comes
+	// only from the mount's LegacyMount.TopSegments, and a segment the mount
+	// shares with an SPA page is listed in LegacyMount.SPAShared instead
+	// (FE3-1, R3-5). httpapi.Router.Build refuses any two owners whose subtree
+	// claims overlap, which also covers facade vs legacy (05-http-api §4.9,
+	// narrowed by SIMP-22: no claim kinds, no YieldsTo). Only paths listed
+	// here may be passed to MountLegacy. "/" is not a subtree claim: it is the
+	// SPA fallback, owned either by ui.Handler or by exactly one LegacyMount
+	// with ServesSPA (§6.4.3, FE-1).
 	LegacyPrefixes []string
+
+	// PublicRoutes names the native routes of this module (httpapi.Route.Name)
+	// that may use Perm: rbac.Public; httpapi.Router.Build refuses rbac.Public
+	// on any other native route (ErrPublicNotAllowed, 05-http-api §3), so the
+	// public set is a reviewed manifest list, not a per-route say-so (COR3-3).
+	// hello's S2 skeleton lists "getGreeting" until S4 gives the route
+	// rbac.Need(PermRead).
+	PublicRoutes []string
 
 	// Acquire (deferred-build, §6.4.9) declares that the module contributes
 	// a media type to the acquire engine. In P5 the kernel builds the one
@@ -303,7 +343,18 @@ type UIDescriptor struct {
 	UserPage       []string // tab and row-action IDs on the shell Users page
 	ActivityPanes  []string // panes on the shell Activity page (05-logging §5)
 	SetupSteps     []string // first-run wizard steps (with the module's isRequired predicate)
+
+	// LegacyRedirects are the module's legacy page URLs and their shell paths
+	// (books: ABS_REDIRECTS plus the absorbed pages, 07 §7.11). It is the ONE
+	// list: manifest.gen.ts exports it, the shell's client redirects are built
+	// from it, and the app's PageMiddleware reads the Go value to record the
+	// ui_route compat surface (FE3-17). Lands with package ui at S9.
+	LegacyRedirects []UIRedirect
 }
+
+// UIRedirect maps one legacy page path (a ServeMux-style pattern, e.g.
+// "/library/{id}") to its shell path ("/books/library/{id}").
+type UIRedirect struct{ From, To string }
 
 // SettingsSection wraps a config.Section[T] so a Manifest can list sections
 // of different T. The kernel registers each before config loads.
@@ -360,14 +411,22 @@ func (r *Registrar) HTTP() *httpapi.Group
 //     ProblemLegacyAuth;
 //   - a route with OwnAuth = true is accepted only when it names a compat
 //     method registered with AuthMethod; the kernel records every OwnAuth
-//     route in a golden (TestOwnAuthRoutesGolden, 05-http-api §8.2).
+//     route in a golden (TestOwnAuthRoutesGolden, 05-http-api §8.2). Both
+//     MountLegacy and AuthMethod exist from S2, so this admission holds from
+//     S2 for ABO's ABS routes (SEC3-14).
+// m.BuildID (05-http-api §8.2) is the build ID embedded in the mount's own
+// SPA (ABO: the <meta name="mediacore-build"> of its embedded web/dist
+// index.html); P8 checks it against app.Options.BuildID (§6.4.5, FE3-2).
 func (r *Registrar) MountLegacy(m httpapi.LegacyMount)
 
 // AuthMethod registers a compat authentication method of this module, named
 // "<ID>.<name>" (books: books.abs, 05-authn §3.3 AddMethod). The kernel
 // refuses (ProblemAuthMethod) any spec that is Interactive, sets
 // MayChangeCredentials, or whose authenticator implements OwnerVerifier: only
-// app.Options.Authenticators may carry those (SEC2-16). Consumed in P7.
+// app.Options.Authenticators may carry those (SEC2-16). From S2 to S3 it only
+// RECORDS the declaration (auth.MethodSpec is a leaf type that lands at S2
+// beside rbac's), so P7's OwnAuth admission works before the auth service
+// exists; from S4 P7 also hands it to auth (SEC3-14, COR3-3).
 func (r *Registrar) AuthMethod(spec auth.MethodSpec)
 
 // Tasks registers task definitions; kinds must be "<ID>.<name>". Schedules are
@@ -440,11 +499,33 @@ func (r *Registrar) Adapter(d integrations.Descriptor)
 // AI declarations, signatures owned by 05-ai.
 func (r *Registrar) AICapability(spec ai.CapabilitySpec) ai.Capability // zero handle on error
 // There is no AIBatchHandler: a module applies AI batch results in its own
-// task kind, built with ai.BatchApplyTask(cap, h, effects) and registered with
-// Tasks; core.ai.batch-poll starts it through Client.Start instead of calling
-// module code inline, so the writes run under the module's Effects (COR2-11).
+// task kind "<ID>.ai.batch-apply.<name>" (05-ai's spelling), built with
+// ai.BatchApplyTask(cap, h, effects) and registered with Tasks;
+// core.ai.batch-poll starts it through the tasks.Stager the kernel gives core
+// services (Stager.StartIn, 05-tasks; never the Executor) instead of calling
+// module code inline, so the writes run under the module's Effects (COR2-11,
+// COR3-8).
 
-// Health, startup steps and diagnostics (05-health).
+// Logging contributions (05-logging §3, §5). LogPathRules adds the module's
+// token-bearing path shapes to the kernel's Redactor, built before any
+// listener (the invite shape is a core default and needs no rule).
+// LogOtherUserData registers the predicate that classifies a system-journal
+// record, legacy syslog row or native record alike, as naming another user's
+// data; the journal query and the live tail return such a record only to a
+// principal that also holds core:users.view and blank its user_id otherwise
+// (HEAD's activity.NamesOthersUserLog gate). At most one predicate per module;
+// type owned by 05-logging. Both only record; consumed in P7.
+func (r *Registrar) LogPathRules(p ...log.PathRule)
+func (r *Registrar) LogOtherUserData(pred log.OtherUserPredicate)
+
+// Health, startup steps and diagnostics (05-health); all three land at S8
+// with the rest of health (§6.4.10). Until StartupSteps exists, ABO's
+// internal/startup stays in ABO (it does not move to kernel at S2): its serve
+// command keeps running its books steps (initializeStore,
+// guardAgainstKeyRegeneration, initEncryption, loadConfigFromDB, ...) through
+// startup.Steps before app.New, as HEAD does (cmd/root.go:274), and the S2
+// kernel supervisor runs its own fixed core step list. At S8 those steps
+// become books' StartupSteps (MOD3-1, R3-3; 04 §8.3, 09 S2/S8).
 func (r *Registrar) Health(c ...health.Check)
 func (r *Registrar) StartupSteps(s ...health.StartupStep)
 func (r *Registrar) Diagnostics(c health.Contributor)
@@ -454,15 +535,22 @@ func (r *Registrar) Diagnostics(c health.Contributor)
 // close over services built in Register.
 func (r *Registrar) Backup(a ...backup.Artifact)
 
-// DerivedIndex supplies the hooks (Build, Snapshot, Load) of a derived index
-// whose declarative part is in Manifest.Storage (COR2-15). The kernel runs the
-// version/generation check and Load at the end of P7, after every module has
-// registered; Build runs as the MODULE task kind "<ID>.derived.<name>.build",
-// which this call registers on the module's behalf with the module's own
-// Effects, so a rebuild never runs module code under a core kind (COR2-11).
-// A declared index without hooks, or hooks for an undeclared index, records
-// ProblemDerivedIndex.
-func (r *Registrar) DerivedIndex(name string, h storage.DerivedHooks)
+// DerivedIndex supplies the hooks of a derived index whose declarative part
+// is in Manifest.Storage (COR2-15). name is module-relative ("hnsw", not
+// "books.hnsw"). h carries Snapshot and Load only (storage.DerivedHooks;
+// storage, L1, cannot name a tasks type). build is the rebuild task, an
+// ordinary tasks.Definition built with tasks.Task: its kind must be
+// "<ID>.derived.<name>.build" and, like every definition, it sets Title,
+// Effects (ReadOnly over the named module resources it reads), Perms.Start,
+// Resume, Parallelism and a Timeout sized for a library-scale rebuild (24 h
+// recommended, as for Batch); P7 refuses a wrong kind name or a missing field
+// like any other definition (COR3-7). The version/generation check, Load and
+// the c/storage/derived/<name> record run at Run start step (3a), after the
+// module's hooks have started and before Bus.Open, never inside app.New, so
+// Describe never calls them and Load can use objects a start hook builds
+// (§6.5.2). A declared index without hooks, or hooks for an undeclared index,
+// records ProblemDerivedIndex.
+func (r *Registrar) DerivedIndex(name string, h storage.DerivedHooks, build tasks.Definition)
 
 // Hook registers a Start/Stop pair. Hooks of one module run in registration
 // order on start and reverse order on stop.
@@ -520,10 +608,12 @@ type Deps struct {
 	// ExtendStart is health.Supervisor.ExtendStart as a plain func: call it right
 	// before a startup step that makes real progress (a store open, a migration
 	// step, a search-index open); never from a timer; a no-op without
-	// NOTIFY_SOCKET (05-health §5H.3.4). Books' database and search code that
-	// stays in ABO through S2–S7 (internal/database/startup_notify.go,
-	// internal/search/register.go) calls it; from S2b core storage extends the
-	// start timeout itself for the steps it runs.
+	// NOTIFY_SOCKET (05-health §5H.3.4). Books' search code that stays in ABO
+	// through S2–S7 (internal/search/register.go) calls it. At S2 ABO's serve
+	// opens the store and runs books' migrations BEFORE app.New (HEAD's order,
+	// §6.5.1 "Stages"), where no Deps exists yet; that code calls
+	// app.ExtendStart, the same stateless notify write (§6.4.5). From S2b core
+	// storage extends the start timeout itself for the steps it runs.
 	ExtendStart func(step string)
 
 	Storage StorageHandles // Keyspace m/<ID>/, Legacy claims, Indexes, Aux opener, Derived generations (05-storage)
@@ -557,7 +647,11 @@ type Deps struct {
 
 // StorageHandles is what Deps.Storage carries. It lives in module (L7), not
 // in storage, because it names storage/index, which imports storage (05-storage
-// §5S.3.4, COR-2). Core subsystems receive the same values from the kernel.
+// §5S.3.4, COR-2). Core subsystems receive the same values from the kernel;
+// a core subsystem named by a manifest's grant additionally receives, at P4c,
+// a LegacyRange restricted to exactly the granted families and access
+// (§6.11.6). A module never receives another owner's rows: a grant to a
+// module is refused at P2 (R3).
 type StorageHandles struct {
 	Keyspace storage.Keyspace           // m/<ID>/
 	Legacy   storage.LegacyRange        // zero value unless the manifest declared claims
@@ -583,7 +677,7 @@ reviser's cross-cluster list; the owning file wins on detail:
 | `Log` | `*slog.Logger` | 05-logging | attr `module=<ID>` |
 | `ExtendStart` | `func(step string)` | 05-health §5H.3.4 (`Supervisor.ExtendStart`) | extends the start deadline per step only; cannot signal READY, STOPPING or the watchdog |
 | `Metrics` | `*metrics.Scope` | 05-metrics §7 (defined) | module series named `<MetricPrefix>_*` while the app **ships** one module (the module list passed to `app.New`), `<MetricPrefix>_<ID>_*` with two or more; enablement never changes a series name, so disabling one module of two does not rename the other's (SIMP2-13); `MetricPrefix` is `app.Options.MetricPrefix` (03 §3.6) |
-| `Storage` | `module.StorageHandles` | this file (above); field types 05-storage §5S.3.4, §5S.3.8–§5S.3.10 (defined) | reads and writes outside `m/<ID>/` and the module's claims refused (R8) |
+| `Storage` | `module.StorageHandles` | this file (above); field types 05-storage §5S.3.4, §5S.3.8–§5S.3.10 (defined) | reads and writes outside `m/<ID>/` and the module's claims refused (R8); a module's grants widen nothing for the module itself, they only let named core subsystems reach those rows (§6.11.6) |
 | `Tasks` | `tasks.Client` | 05-tasks 5T.3.10 (defined, with `RunView`) | the kernel overwrites `StartRequest.Actor` with the ctx principal, or with the module's system actor outside a request, so a module cannot start a run as another actor (05-tasks 5T.3.10, defined). The system actor's permission set is exactly the `Perms.Start` of the module's own kinds plus those of `Manifest.TaskStarts`, never `core:admin` or an `AuthRequired` scope (SEC2-15) |
 | `Events` | `events.Scope` | 05-events §5E.3.2 (defined: `Bus.Scope(moduleID)`, kernel-only) | `Publish` refuses topics outside this module's catalog entries |
 | `Outbox` | `outbox.Writer` | 05-events §5E.4 (defined) | stages only into topics this module declared `Durable` |
@@ -624,17 +718,44 @@ type Options struct {
 	DisplayName string // e.g. "Audiobook Organizer"
 	Version     string // the app's release version (updater, /api/core/v1/modules)
 
+	// BuildID is the one per-build identifier (FE3-2, MOD3-14). It is
+	// generated ONCE per release (once per make build locally) as BUILD_ID,
+	// before anything is bundled or linked, and the same value is passed to
+	// Vite (define and the <meta name="mediacore-build"> tag, 07 §7.6.3) and
+	// to the Go link step (-ldflags -X main.buildID=$BUILD_ID), in the
+	// Makefile, in both Dockerfile stages (ARG BUILD_ID) and in goreleaser
+	// (the release workflow exports BUILD_ID before goreleaser's
+	// pre-build-script runs build_web.sh; the four targets share it). The
+	// app's main passes it here; httpapi stage 5 writes it as X-App-Build on
+	// every response (05-http-api §4.2). P8 fails boot (ProblemBuildID) when
+	// the "/" owner embeds a build ID (S9: UI.BuildID(); before S9: the
+	// ServesSPA mount's LegacyMount.BuildID) that differs from this value,
+	// both being non-empty and not "dev": that is a broken build pipeline,
+	// and it would show every tab a reload prompt that reloading never clears.
+	// "" or "dev" (make build-api, tests) disables the check.
+	BuildID string
+
 	// EnvPrefix is the prefix of every env name (05-config §1.3,
 	// [A-Z][A-Z0-9]{1,15}); default strings.ToUpper(AppID) (ABO: "ABO") (COR2-8).
 	EnvPrefix string
 	// StateDir is the compiled default of core.paths.state_dir (05-config).
 	// core.paths.state_dir is a PRE-BOOT key (there is no core.paths.data_dir,
-	// 05-config §1.7): P−1 and P0a resolve it from flags, env and this default
-	// only, never from the
-	// config file or the DB, so a config that P0 refuses cannot hide a staged
-	// update or restore (§6.5.1, OPS2-3). The state directory holds state
-	// files only (boot record, keyring, updates/, restore journal); the store
-	// opens at core.storage.path, which may be elsewhere (DATA2-19).
+	// 05-config §1.7), resolved ONCE per process, before P−1, by
+	// config.ResolveStateDir (05-config §1.4 step 0), whose result P−1, P0a,
+	// P0 and every consumer share. It keeps HEAD's rule
+	// (internal/config/state_dir.go:118-155 @748fd787a; R3-4, OPS3-1):
+	// an explicit flag or env value, which never falls back; else this
+	// default when it exists or can be created; else
+	// filepath.Dir(core.storage.path) as resolved from flags and env (P−1:
+	// the db_path recorded in the update marker), with HEAD's WARN. Docker
+	// and launchd installs, which set no state directory and cannot create
+	// the default, therefore keep the keyring, the revocation journal and the
+	// restore journal on the database's persistent volume, where HEAD already
+	// keeps .encryption_key. It is never read from the config file or the DB,
+	// so a config that P0 refuses cannot hide a staged update or restore
+	// (§6.5.1, OPS2-3). The state directory holds state files only (boot
+	// record, keyring, updates/, restore journal); the store opens at
+	// core.storage.path, which may be elsewhere (DATA2-19).
 	StateDir string
 	// ConfigFile is optional; layered under env/flags/DB overrides (05-config).
 	ConfigFile string
@@ -649,6 +770,19 @@ type Options struct {
 	// ServesSPA mount is a boot error.
 	UI ui.Bundle
 
+	// UIOptions carries the app's own contributions into the ui.Handler the
+	// kernel builds in P8 (FE3-4): page-load middleware, extra connect-src
+	// hosts and extra CSP directives (ui.AppOptions, 07 §7.6.1). It is a
+	// compile-time value like Authenticators: its funcs close over whatever
+	// the app's main can reach. The kernel merges it into the ui.Options it
+	// builds (NonSPA, Config and Metrics stay the kernel's). ABO (S9):
+	// Cloudflare service-token recovery from internal/cfaccess plus ui_route
+	// recording from books' UIDescriptor.LegacyRedirects as PageMiddleware,
+	// and as ConnectSrcFrom its Access team host, re-read per response from
+	// its config façade's atomic pointer as csp.go:129-137 does today. The
+	// zero value adds nothing. S9, with ui.
+	UIOptions ui.AppOptions
+
 	// Authenticators are the app's identity extensions (05-authn §3.3;
 	// ABO: internal/cfaccess), wired by the kernel with
 	// auth.Registrar.AddAuthenticator. This compile-time list is the ONLY
@@ -656,6 +790,43 @@ type Options struct {
 	// the only place an OwnerVerifier may come from; modules register compat
 	// methods with Registrar.AuthMethod, which refuses all three (SEC2-16).
 	Authenticators []auth.Extension // {Authenticator, Spec auth.MethodSpec, Order}
+
+	// LegacyConfig is the app's legacy settings format (config.Legacy,
+	// 05-config): the blob row and codec, the legacy secret rows, the gap-fill
+	// file, the legacy aliases of core keys, and Rows, raw read access plus a
+	// Changed signal for a build with no core storage yet. It is what config's
+	// legacy-format adapter needs to read and write the settings blob in place
+	// (R3-1), so a UI-saved value (the perimeter Basic gate, the rate limiter,
+	// CORS origins, the log level) is honoured at boot and at runtime exactly
+	// as HEAD honours it (COR3-1). S2: Rows reads the store ABO's serve opened
+	// before app.New, and config's DB layer attaches over it at P3; every
+	// receive on Rows.Changed (a write by ABO's legacy config path) re-reads it
+	// and republishes live keys. From S2b Rows is unused: the kernel reads the
+	// blob through books' storage grant and the DB layer attaches at P4d
+	// step 1. nil = an app with no legacy settings.
+	LegacyConfig *config.Legacy
+
+	// PreBootRestore runs ABO's own staged-restore swap
+	// (internal/backup) in P0a from S2b, while the kernel opens the store but
+	// core backup has not landed: it swaps the directories before P2 opens
+	// them and reports whether it applied a restore, so P4d runs the
+	// post-restore hooks (from S4) on that boot (DATA3-7). Removed at S8, when
+	// 05-backup's own P0a step exists. nil = no pre-boot restore.
+	PreBootRestore func(stateDir string) (applied bool, err error)
+
+	// MetricAliases are the app's legacy metric names for series that moved
+	// into a core subsystem (metrics.Alias, 05-metrics §3, §13): core holds no
+	// app's legacy names (R1), and each alias needs a row in CompatLedger.
+	// Never used for module series. S2b, with compat.
+	MetricAliases []metrics.Alias
+
+	// CompatLedger is the app's compat ledger (09 §9.2.9; ABO: //go:embed of
+	// docs/compat-surfaces.md in the root main package). compat merges it
+	// with core's own ledger fragment (core/compat/core-ledger.md, embedded
+	// by compat) and fails boot on a row ID present in both; any alias or
+	// deprecated surface without a row fails with ErrNoLedgerRow. An app with
+	// no legacy surfaces passes nil (SIMP3-3). S2b, with compat.
+	CompatLedger []byte
 
 	// LegacyAuthGinUntil names the one module whose LegacyMount may use
 	// httpapi.LegacyAuthGin (ABO: "books" from S2; the S4 PR clears it and an
@@ -700,6 +871,15 @@ func (a *App) Run(ctx context.Context) error
 // another server). Valid after New.
 func (a *App) Handler() http.Handler
 
+// ExtendStart asks the service manager for more start time before a startup
+// step that makes real progress, for app code that runs BEFORE New (ABO's S2
+// serve: store open and books' migrations, §6.5.1 "Stages"). It is the same
+// write as 05-health's Supervisor.ExtendStart (EXTEND_TIMEOUT_USEC with the
+// per-step budget), stateless (it reads NOTIFY_SOCKET per call; no package
+// state, R5), never called from a timer, a no-op without NOTIFY_SOCKET, and a
+// failed write is logged, never returned.
+func ExtendStart(step string)
+
 // Modules reports each module's resolved state (enabled, disabled, reason).
 func (a *App) Modules() []ModuleState
 
@@ -729,12 +909,18 @@ type Description struct {
 
 Signal handling stays in `main` (`signal.NotifyContext`), so `Run` is testable and a host that embeds
 the app controls its own lifecycle. ABO keeps its cobra command tree: no file of `cmd/` moves into
-`app` (MOD2-4). Its `serve` command replaces its store, OTel and slog bootstrap with calls to `app.New`,
-`app.InstallProcessDefaults` (05-logging) and `Run`, and its flags map onto `app.Options` (§6.11).
+`app` (MOD2-4). Its `serve` command replaces its OTel and slog bootstrap with calls to `app.New`,
+`app.InstallProcessDefaults` (05-logging) and `Run`, and its flags map onto `app.Options` (§6.11). At
+S2 it still opens the store, runs books' migrations and loads the settings blob before `app.New`, in
+HEAD's order and through ABO's own `internal/startup` (§6.4.3, MOD3-1); from S2b the kernel opens the
+store at P2 and those steps leave `serve` (§6.5.1 "Stages").
 `core.json` has a single producer so that apps cannot emit diverging copies: hello's `openapi`
-subcommand writes `Description.Core` to `core/web/packages/api-client/openapi/core.json`,
-freshness-gated in core CI. It is producible from S2, when the hello skeleton lands (§6.11.1), and a
-PR that adds a core route regenerates it in the same PR (MOD2-10, FE2-9). An app's subcommand writes
+subcommand writes `Description.Core` to `core/openapi/core.json`, freshness-gated in core CI. It is
+producible from S2, when the hello skeleton lands (§6.11.1), and a PR that adds a core route
+regenerates it in the same PR (MOD2-10, FE2-9). The file lives outside `core/web` because the npm
+workspace that consumes it is first created at UI-0, after S2; UI-0's api-client generator reads it
+from there (MOD3-4, 07 §7.8). `Describe(...).Core` needs `httpapi`'s OpenAPI builder
+(`core/internal/openapi`, imported by `httpapi`, never the reverse) at S2 (04 §8.1). An app's subcommand writes
 only its modules' documents (07 §7.8). Books meets `Register`'s side-effect rule only once its server
 construction (`server.NewServer`, which loads the HNSW snapshot) has moved into start hooks
 (§6.11.1 step 4); until then ABO's `openapi` subcommand does not call `Describe` over books and emits
@@ -745,7 +931,7 @@ no books document. A books route group becomes native only when rewritten for it
 
 | Package | Responsibility |
 |---|---|
-| `kernel/catalog` | manifest validation, enablement resolution (P1, from `config.Store.Boot`), collision checks across modules and core (IDs against `module.ReservedIDs()`, `Options.ReservedAPINamespaces` and the first segments of every `LegacyPrefixes` entry; permission namespaces, legacy atoms, keyspace and legacy claims, config sections, task kinds, topic names, outbox consumer names, legacy path prefixes, UI IDs; facade URL bases when `arrfacade` is built), `MinCoreVersion` against `version.Version` |
+| `kernel/catalog` | manifest validation, enablement resolution (P1, from `config.Store.Boot`), collision checks across modules and core (IDs against `module.ReservedIDs()`, `Options.ReservedAPINamespaces` and the first segments of every `LegacyPrefixes` entry; permission namespaces, legacy atoms, keyspace and legacy claims, the shape of legacy-format grants (grantee is a core subsystem, families are the grantor's own claims; checked against the store in P2), config sections, task kinds, topic names, outbox consumer names, legacy path prefixes, UI IDs; facade URL bases when `arrfacade` is built), `MinCoreVersion` against `version.Version` |
 | `kernel/services` | `type Services struct{ Storage *storage.DB; Tasks tasks.Executor; … }` built by `func Build(ctx, opts, cfg) (*Services, error)` in a fixed, hand-written order; `Close` in reverse |
 | `kernel/supervisor` | start/stop ordering of §6.5.2, hook start/stop, worker supervision (`sync.WaitGroup.Go`), panic recovery, timeouts, shutdown budget |
 | `kernel` | `Kernel` = catalog + services + supervisor; `Registrar`/`Deps` construction per module (the scope types of §6.4.4); hands registrations to services in P7; mounts core capability routes |
@@ -754,11 +940,14 @@ Core capability routes (`/api/core/v1/tasks`, `/roles`, `/audit`, `/events`, `/o
 the per-capability route packages `internal/<capability>http` of 03 §3.3 (e.g. `internal/taskhttp`,
 `internal/rbachttp`, `internal/audithttp`) at R4 L6. Each imports its capability and `httpapi`, and
 is wired onto `Router.CoreGroup()` only by the kernel (COR-18). The module catalog's own
-route, `GET /api/core/v1/modules` (07 §7.5.1), is one of them (`kernel/catalog` supplies the data,
-the route package renders it). `POST /api/core/v1/ui/diagnostics` and `POST /api/core/v1/ui/csp-report`
+route, `GET /api/core/v1/modules` (07 §7.5.1), is one of them: package `internal/modulehttp` (L6,
+FE3-16). It imports nothing above L6: the kernel passes it a read-only `modulehttp.ModulesView`
+interface (the catalog snapshot, `restart_required`, the `ui_build_id` source and `version.Version`),
+implemented by `kernel/catalog`, so the L6 → L8 import never exists (03 §3.3 and 05-http-api §5 list
+the package). `POST /api/core/v1/ui/diagnostics` and `POST /api/core/v1/ui/csp-report`
 live in `internal/uihttp`, a capability route package like the others, so the `CoreGroup` owner rule
 ("used only by `internal/<capability>http`", 05-http-api §3) holds without an exception for `ui`, and
-the `ui` package (S9) registers no route (COR2-19). The module catalog route and `internal/uihttp`
+the `ui` package (S9) registers no route (COR2-19). `internal/modulehttp` and `internal/uihttp`
 ship at S4, beside `GET /api/core/v1/permissions`, so a shell build is never served by a binary that
 lacks them (FE2-25).
 
@@ -806,18 +995,24 @@ const (
 	ProblemSPAOwner               // two ServesSPA mounts, or a ServesSPA mount with a non-zero app.Options.UI
 	ProblemUIDescriptor
 	ProblemCapabilityMissing
-	ProblemFacadeIncomplete       // deferred-build (08)
-	ProblemFacadeURLBaseCollision // deferred-build (08)
 	ProblemUnknownModuleInConfig
 	ProblemRegistrarClosed
 	ProblemWorkerPolicy
 	ProblemAdapter
 	ProblemChangeSinkDuplicate
-	ProblemTaskStartUnknown       // Manifest.TaskStarts names a kind no enabled module or core registers (SEC2-15)
+	ProblemTaskStartUnknown       // Manifest.TaskStarts names a kind that is neither registered nor in any manifest's TaskLedger (SEC2-15, COR3-10)
 	ProblemAuthMethod             // AuthMethod spec interactive, credential-changing, owner-verifying, or not "<ID>.<name>" (SEC2-16)
 	ProblemLegacyAuth             // LegacyAuthGin by a module other than Options.LegacyAuthGinUntil, or OwnAuth without a registered compat method (SEC2-17)
 	ProblemDerivedIndex           // derived index declared without hooks, or hooks for an undeclared index (COR2-15)
-	ProblemSPASegmentCollision    // a ui.ReservedSegments() entry is also a NonSPA segment (P8, FE2-7)
+	ProblemSPASegmentCollision    // a ui.ReservedSegments() entry is also a NonSPA segment (P8, FE2-7); the ONE name for this check (FE3-9)
+	ProblemGrant                  // a legacy-format grant to a module, to an owner absent from the build, on a family the grantor does not claim, or for families the grantee has no legacy-format adapter for (P2, R3-1)
+	ProblemBuildID                // the "/" owner's embedded build ID differs from app.Options.BuildID (P8, FE3-2)
+
+	// deferred-build (08): appended when arrfacade lands, so adding them never
+	// renumbers a built kind (SIMP3-11); listed in the deferred-members
+	// archtest (§6.4.9):
+	//   ProblemFacadeIncomplete
+	//   ProblemFacadeURLBaseCollision
 )
 
 // Sentinels for errors.Is(err, module.ErrCoreTooOld) etc.
@@ -920,6 +1115,14 @@ Facade-only members of other built packages are deferred the same way: `auth.Key
 `PurposeFacade`, query-string key extraction, `httpapi.Router.FacadeGroup`, `RouteKind Facade` and the
 stage-13 facade clause land with `arrfacade` (08 §8.0, SIMP2-6), so S2 and S4 do not build them.
 
+**One check (SIMP3-2).** `archtest.DeferredMembersAbsent(t, list)` runs in the root module's `make ci`
+from S2 (09 S2) and fails when any identifier of the list appears in a non-test `.go` file under
+`core/`. Its list is generated from the "Deferred-build" headings of 06, 05-authn, 05-http-api,
+05-rbac and 05-metadata and includes at least `ArrFacade`, `DownloadWatch`, `AcquireDecl`,
+`PurposeFacade`, `FacadeGroup`, `RouteKindFacade`, `ProblemFacadeIncomplete` and
+`ProblemFacadeURLBaseCollision`. The PR that adds `arrfacade` deletes the test. The deferred-build files
+(05-authn §3.5, 05-http-api §3.6, 08 §8.0) cite this test instead of a prose grep.
+
 ### 6.4.10 Landing stage of each SDK member (COR2-9, MOD2-10)
 
 A member exists from the 09 stage that lands the package it names (04 §8.1); before that it is
@@ -929,19 +1132,23 @@ added additively. `rbac`'s leaf types (`Permission`, `Requirement`, `Need`, `Any
 
 | Stage | `module.Manifest` | `module.Registrar` | `module.Deps` | `app` |
 |---|---|---|---|---|
-| S2 | `ID`, `Version`, `DisplayName`, `MinCoreVersion`, `DefaultEnabled`, `Settings`, `UI` (IDs only), `LegacyPrefixes` | `Context`, `Deps`, `HTTP`, `MountLegacy`, `Hook`, `Worker`, `Err` | `Module`, `Log`, `Metrics`, `ExtendStart` | `Options` (all but `UI`, `Authenticators`), `New`, `Run`, `Handler`, `Modules`, `Describe` (`Core`, `OpenAPI`) |
-| S2b | `Storage` | — | `Storage` (`Keyspace`, `Legacy`, `Aux`) | — |
+| S2 | `ID`, `Version`, `DisplayName`, `MinCoreVersion`, `DefaultEnabled`, `Settings`, `UI` (IDs only), `LegacyPrefixes`, `PublicRoutes` | `Context`, `Deps`, `HTTP`, `MountLegacy`, `AuthMethod` (recording only; the `auth` leaf types, `auth.MethodSpec` among them, land at S2, SEC3-14), `LogPathRules`, `LogOtherUserData` (recorded from S2, consumed when the journal query lands, 05-logging), `Hook`, `Worker`, `Err` | `Module`, `Log`, `Metrics`, `ExtendStart` | `Options` fields `AppID`, `MetricPrefix`, `ReservedAPINamespaces`, `DisplayName`, `Version`, `BuildID`, `EnvPrefix`, `StateDir`, `ConfigFile`, `Args`, `Env`, `LegacyConfig`, `LegacyAuthGinUntil`, `Logger`; `New`, `Run`, `Handler`, `Modules`, `ExtendStart`, `Describe` (`Core`, `OpenAPI`) (COR3-3) |
+| S2b | `Storage` (incl. books' grants for the families whose core subsystem has landed, §6.11.6) | — | `Storage` (`Keyspace`, `Legacy`, `Aux`) | `Options.CompatLedger`, `Options.MetricAliases`, `Options.PreBootRestore`; `LegacyConfig.Rows` unused |
 | S3 | — | — | `Secrets` | — |
-| S4 | `Permissions`, `Roles`, `LegacyAliases` | `AuthMethod` | `Auth`, `AuthAdmin`, `Audit` | `Options.Authenticators`; `LegacyAuthGinUntil` cleared |
+| S4 | `Permissions`, `Roles`, `LegacyAliases`; `PublicRoutes` emptied for hello | `AuthMethod` also handed to `auth` | `Auth`, `AuthAdmin`, `Audit` | `Options.Authenticators`; `LegacyAuthGinUntil` cleared |
 | S5 | `TaskLedger`, `TaskStarts`, `DataMigrations` | `Tasks`, `Resources`, `Lanes`, `ChangeSink`, `Topics`, `Subscribe` | `Tasks`, `Events` | — |
-| S6 | `OutboxConsumers` | `OutboxHandler`, `Realtime` | `Outbox`, `Notify` | — |
-| S7 | `Requires`, `Library` | `Adapter`, `AICapability`, `DerivedIndex` | `Storage.Indexes`, `Storage.Derived`, `Library`, `HTTP`, `Integrations`, `Downloads`, `AI` | `Options.Adapters` |
-| S8 | — | `Health`, `StartupSteps`, `Diagnostics`, `Backup` | `Health`, `Backup` | `Options.Updater` |
-| S9 | — | — | — | `Options.UI`, `Description.UIManifests` |
+| S6 | `OutboxConsumers` | `OutboxHandler`, `Realtime` | `Outbox` | — |
+| S7 | `Requires`, `Library` | `Adapter`, `AICapability`, `DerivedIndex` | `Storage.Indexes`, `Storage.Derived`, `Library`, `HTTP`, `Integrations`, `Downloads`, `AI`, `Notify` (with `integrations/notify`, SIMP3-5) | `Options.Adapters` |
+| S8 | — | `Health`, `StartupSteps`, `Diagnostics`, `Backup` | `Health`, `Backup` | `Options.Updater`; `Options.PreBootRestore` removed |
+| S9 | `UI.LegacyRedirects` | — | — | `Options.UI`, `Options.UIOptions`, `Description.UIManifests` |
+
+Package `ui` exists from S2 with one dependency-free file holding `ReservedSegments()` only, so
+`module.ReservedIDs()` and 03's equality test hold from S2; the rest of `ui` lands at S9 (FE3-8, COR3-3;
+04 §8.1).
 
 `examples/hello` grows with the same stages (MOD2-10): S2 skeleton (module, `app`, a greeting route
-without the stored count and with `Perm: rbac.Public` until core authentication exists, and the
-`openapi` subcommand emitting `core.json`), storage and migration 1 at S2b, its permissions and the
+without the stored count and with `Perm: rbac.Public` until core authentication exists, declared in
+`Manifest.PublicRoutes` as `getGreeting`, and the `openapi` subcommand emitting `core/openapi/core.json`), storage and migration 1 at S2b, its permissions and the
 route's `rbac.Need(PermRead)` at S4, `hello.count` at S5, and `ui_embed.go`/`ui_nonembed.go` with its web package at S9. §6.12 shows the S9 state. G6
 and G7 are proven from S5, the first stage at which every import of the full example exists
 (§6.10).
@@ -957,33 +1164,64 @@ step does and reference the phase named here; where one of them lists an order, 
 **Write rule.** Nothing is written to the store before the pre-migration checkpoint (P4a). Before it,
 the only writes are files outside the store that a pre-boot step owns (the updater's attempt counter,
 the restore journal and its renames, the quarantine of an unparsable boot record) and in-memory
-buffers. Every every-boot writer (mirror rebuilds, revocation re-apply, config import, tasks
-reconcile, post-restore hooks, compat usage records, seeded grants) runs after the checkpoint and the
-migration DAG, in the order of P4d, and before any listener (DATA2-24).
+buffers. Every every-boot writer of P4d (revocation-journal re-apply, post-restore hooks, `auth.BootWrites`,
+compat usage records) runs after the checkpoint and the migration DAG, in the
+order of P4d, and before any listener (DATA2-24); the one later every-boot writer is the executor's
+start-time rebuild of stale `opv3:` records inside `Executor.Run` (Run step 5, still before listeners;
+05-tasks). The registration-time writes (default permission
+grants, task definition snapshots) are P7's and are listed in its row; the derived-index records are
+Run start step (3a)'s (§6.5.2) (COR3-15).
+
+**One stored format per family (R3-1).** No boot phase copies, mirrors, adopts or rebuilds a family.
+The generic families ABO already has (users, roles, API keys, the settings blob and secret rows, ops
+history, activity) stay books' legacy claims for the whole extraction, and the core subsystems that
+serve them (`auth`, `rbac`, `config`, `tasks`, `log`) read and write them **in their legacy format, in
+place**, through legacy-format adapters reached by the explicit, logged storage grants of books'
+manifest (§6.11.6). Data with no legacy form goes additively into the legacy row where the legacy
+format tolerates it (a namespaced scope string such as `core:metrics.read` in a role or key list:
+HEAD matches permissions by exact string, `internal/server/middleware/auth.go:430-455` @748fd787a, so
+an older build ignores it and grants nothing) or into a core-only family no older build reads (hashed
+sessions: a rollback costs one re-login). New API keys always carry explicit, non-empty scopes, so no
+row an older build reads can widen (HEAD reads empty scopes as "all role permissions",
+`auth.go:405-408`). Moving a family to a native core keyspace and deleting the legacy one is the
+**cutover**, which is out of the extraction: a later, per-family, one-way step, checkpointed by P4a and
+guarded by the owner's level like any format change (05-storage).
 
 | Phase | Step | Store writes | On failure |
 |---|---|---|---|
-| P−1 | `updater.Boot` (05-updater §5U.3), only when `Options.Updater` is set. Resolves the state directory from flags, env and `Options.StateDir` (pre-boot keys, never the config file or the DB, so a config that P0 refuses cannot stop it) and reads `<state_dir>/updates/pending.json`. The DB path `ReaderCheck` needs is the absolute path recorded in that marker by the build that applied the update. It counts this start as a boot attempt and decides rollback **before** any restore swap: when it restores `.prev`, a restore intent staged by the failing build is then rejected as foreign by 05-backup step a (`ReaderCheck` ignores `restore_pending` for such an intent, 05-updater). Every later failure in this table, P0 refusals included, counts as a failed boot (OPS2-3) | none (`updates/pending.json` only) | per 05-updater: roll back to `.prev`, or keep the binary with `rollback_blocked` |
-| P0a | Pre-boot restore swap (05-backup §5B.3.4): if `<state_dir>/restore/pending.json` exists, swap using the **absolute targets recorded in it**, with the state directory resolved as in P−1 (DATA2-25). P2 verifies that storage opens at the recorded DB path; if not, the swap is undone | none (journal and renames only) | per 05-backup: swap back; boot degraded (`restore_failed`, `restore_rejected`) |
+| P−1 | `updater.Boot` (05-updater §5U.3), only when `Options.Updater` is set. Uses the state directory `config.ResolveStateDir` resolved once before this phase from flags, env and `Options.StateDir` with HEAD's fallback (§6.4.5 `StateDir`; P−1's DB input is the absolute `db_path` recorded in the marker; R3-4) — pre-boot keys, never the config file or the DB, so a config that P0 refuses cannot stop it — and reads `<state_dir>/updates/pending.json`. The DB path `ReaderCheck` needs is that recorded path. It counts this start as a boot attempt and decides rollback **before** any restore swap: when it restores `.prev`, a restore intent staged by the failing build is then rejected as foreign by 05-backup step a (`ReaderCheck` ignores `restore_pending` for such an intent, 05-updater). Every later failure in this table, P0 refusals included, counts as a failed boot (OPS2-3) | none (`updates/pending.json` only) | per 05-updater: roll back to `.prev`, or keep the binary with `rollback_blocked` |
+| P0a | Pre-boot restore swap (05-backup §5B.3.4), with the state directory resolved as in P−1: if `<state_dir>/restore/pending.json` exists, swap using the **absolute targets recorded in it** (DATA2-25). At step g the intent is renamed to `restore/<id>/inflight.json`, not deleted, and is removed only when the restore journal reaches `applied` or `swapped_back`; P0a also resumes any journal whose state lies between `previous_moved` and `applied`. The kernel decides "this is a restore boot" from that journal, never from `pending.json` alone, so a crash between the swap and P4d's hooks re-runs the (idempotent) hooks at the next boot, and `CheckReader`, `make rollback` and `deploy` refuse while such a journal exists (DATA3-6). P2 verifies that storage opens at the recorded DB path; if not, the swap is undone | none (journal and renames only) | per 05-backup: swap back; boot degraded (`restore_failed`, `restore_rejected`) |
 | P0 | `config.NewStore` with `EnvPrefix = Options.EnvPrefix`; register core sections; `Store.Boot` resolves core sections from file → env → flags and the boot record `<state_dir>/config.boot.json` (05-config §1.3.5, §1.4). A config file that sets the pre-boot key `core.paths.state_dir` is refused (05-config §1.7). Alias uses seen here (config and env window aliases, 05-config `OnLegacyUse`) are buffered in memory and recorded at P4d (OPS2-7) | none (an unparsable boot record is renamed `.bad`, fail-open, per 05-config) | fail-closed |
-| P1 | `Manifest()` of **every** module, enabled or not; `kernel/catalog` validates IDs against `module.ReservedIDs()`, `Options.ReservedAPINamespaces` and the first segment of every manifest's `LegacyPrefixes`; `MinCoreVersion` against `version.Version`; the namespaces of permissions, settings, task kinds, outbox consumer names and the task-ID ledger; cross-module and core collisions (a disabled module's names and claims stay reserved, so every manifest is checked). Static checks only: no rbac call, because `rbac` has no store yet (COR2-7). Resolve enablement from the `BootView`: `core.modules.<id>.enabled`, default `DefaultEnabled` (§6.5.3) | none | all problems joined → `*ValidationError` |
-| P2 | Open storage at `core.storage.path` resolved from the `BootView` (05-storage §5S.4 step 1: absolute; `os.OpenRoot` on the DB's parent directory, which need not be under the state directory, DATA2-19, COR2-8). Store guard: per-owner reader levels and the fast-exit flag (05-storage §5S.3.7). Spec validation: keyspace and legacy claims against the persisted claim records `c/storage/claims/<owner>` (DATA-28); a claim on disk but absent from the build stays orphaned until a declared claim sets `Claim.TakesOver` (05-storage rule 5), never silently re-owned (DATA2-29). P0a's recorded-path check | none (read only) | fail-closed |
-| P3 | Register the settings sections of every **enabled** module, then `Store.Load` from the operator layers and the boot record **only**; the DB override layer is not read yet (it is attached at P4d). `Load` seals the registry. A disabled module's sections are not registered: its stored values are retained, unvalidated, until it is re-enabled | none | fail-closed (an invalid operator-layer value) |
-| P4 | In this order. **(a)** One pre-migration checkpoint for the boot (05-storage §5S.3.12); if it cannot be taken, boot halts before anything is written. An **empty** store is instead stamped as a fresh install per 05-storage §5S.4 step 5: install marker, every owner at the build's level, adopt and contract steps recorded as applied, so mirrors are never active (DATA2-28). **(b)** The cross-keyspace migration DAG (05-storage): every pending core and **enabled-module** step in DAG order (steps may declare `After` other owners' versions, e.g. `core/auth#1` after `books#66`, DATA-9). Books legacy migrations run first, under 05-storage's explicit, logged legacy-migration grant, before any claim-mode level step enforces core claims (R2-4); claim-mode changes are stamped level steps of the one guard (R2-3); a step whose preconditions do not hold is deferred (05-storage §5S.3.5). `BootBlocking` data migrations run in process through `tasks.ForEach` with persisted shard cursors, not as executor runs; only `Online` ones are `core.storage.migrate` runs, started after Run step 5 (COR2-7). **(c)** Storage issues the core subsystems' keyspace handles. **(d)** The every-boot reconcilers, each a function of its owning package over the handle from (c), with no service built yet, in this fixed order: 1. mirror rebuilds of adopted identity families, run by the kernel (05-storage §5S.3.11, 05-authn §5); 2. revocation-journal tail re-apply (05-backup), whose revocations write the legacy row in the same batch as the native one (R2-2); 3. `secrets.Open`, then the configstore import or re-import (05-config §1.12.2), then `AttachOverrides`: DB overrides become visible and an enabled module's settings are validated against them; 4. tasks reconcile and clock adoption (05-tasks); 5. post-restore hooks (05-backup `RestoreHook`), only on a boot that applied a restore, in the order auth, rbac, audit, followed by the identity verification rebuild (05-authn §4.14; 05-storage §5S.3.11 "Verification after restrictions"), which fails boot when it differs from what the hooks wrote; 6. the alias uses buffered in P0 are recorded in the compat usage ledger (09 §9.2.9) | yes, from (a) on | fail-closed. A failed migration step leaves earlier steps committed and the checkpoint **unconsumed** for the offline `storage restore-checkpoint`; there is no automatic restore (DATA2-19, 05-storage §5S.3.5). A failing reconciler or settings validation fails per its owning file |
-| P5 | `kernel/services.Build`: every core service in fixed order (A8), including the services behind every `Deps` handle and the realtime hub; `rbac.New` (store `c/rbac/`) and then `Declarer` per manifest, disabled ones included so their permissions stay known (§6.5.3, COR2-7); `auth` with `Options.Authenticators`; `notify` before `updater`, whose update notifications go through it; adapters from `Options.Adapters` (module adapters arrive in P6 and are instantiated lazily on first lookup) | none | fail-closed |
+| P1 | `Manifest()` of **every** module, enabled or not; `kernel/catalog` validates IDs against `module.ReservedIDs()`, `Options.ReservedAPINamespaces` and the first segment of every manifest's `LegacyPrefixes` (reserved IDs only, FE3-1); `MinCoreVersion` against `version.Version`; the namespaces of permissions, settings, task kinds, outbox consumer names and the task-ID ledger; cross-module and core collisions (a disabled module's names, claims and grants stay reserved, so every manifest is checked); the static shape of every storage grant. Static checks only: no rbac call, because `rbac` has no store yet (COR2-7). Resolve enablement from the `BootView`: `core.modules.<id>.enabled`, default `DefaultEnabled` (§6.5.3) | none | all problems joined → `*ValidationError` |
+| P2 | Open storage at `core.storage.path` resolved from the `BootView` (05-storage §5S.4 step 1: absolute; `os.OpenRoot` on the DB's parent directory, which need not be under the state directory, DATA2-19, COR2-8). Store guard: the single per-owner reader-level guard and the fast-exit flag (05-storage §5S.3.7). Spec validation: keyspace and legacy claims against the persisted claim records `c/storage/claims/<owner>` (DATA-28); a claim on disk whose owner is absent from the build (a removed module) stays orphaned until a declared claim sets `Claim.TakesOver` (05-storage rule 5), never silently re-owned (DATA2-29). There are no claim hand-overs during the extraction, so no other orphan case exists (DATA3-2 is resolved by R3-1). **Storage grants:** each grant of every manifest, enabled or not, is checked (`ProblemGrant`: grantee is a core subsystem present in the build with a legacy-format adapter for those families, never a module; every family is the grantor's own claim) and logged once at INFO with grantor, grantee, families and access; it is recorded with the grantor's claim record after the checkpoint. P0a's recorded-path check | none (read only) | fail-closed |
+| P3 | Register the settings sections of every **enabled** module, then `Store.Load` from the operator layers and the boot record; at S2 only (no kernel storage), config's DB layer also attaches here over the app-supplied rows (`Options.LegacyConfig.Rows`), with DB-override precedence, unlocked keys only (COR3-1). From S2b the DB layer is config's legacy-format adapter over the settings blob through books' grant, attached at P4d step 1. `Load` seals the registry. A disabled module's sections are not registered: its stored values are retained, unvalidated, until it is re-enabled | none | fail-closed (an invalid operator-layer value) |
+| P4 | In this order. **(a)** One pre-migration checkpoint for the boot (05-storage §5S.3.12); if it cannot be taken, boot halts before anything is written. A checkpoint is reused only when the same uncompleted upgrade attempt took it for the same store identity (install marker plus store generation); a completed checkpoint, or one left by a swapped-back restore, is never reused, and `storage restore-checkpoint` refuses a checkpoint older than the current upgrade attempt (DATA3-1). An **empty** store is instead stamped as a fresh install per 05-storage §5S.4 step 5, in **one batch**: install marker, every owner at the build's level, every registered versioned step recorded as applied (DATA2-28, DATA3-21). **(b)** The cross-keyspace migration DAG (05-storage): every pending core and **enabled-module** step in DAG order. Books' legacy migrations (versions 1..66) run under books' own claims, which books holds in place for the whole extraction, so no step needs another owner's rows; a core step that reads a granted family declares `After` the highest books step the build registers (DATA-9). A step that changes an owner's stored format raises that owner's level through the one per-owner guard (05-storage §5S.3.7): books' own format changes during the extraction, and each later per-family cutover. A step whose preconditions do not hold is deferred (05-storage §5S.3.5). `BootBlocking` data migrations run in process through `tasks.ForEach` with persisted shard cursors, not as executor runs; `Online` ones are runs of the module kind `<ID>.datamigrate.<name>` (core owners: `core.storage.migrate`), started after Run step 5 (COR2-7, COR3-5). **(c)** Storage issues the core subsystems' keyspace handles and, per storage grant, a `LegacyRange` restricted to the granted families and access. **(d)** The every-boot reconcilers, each a function of its owning package over the handles from (c), with no service built yet, in this fixed order (COR3-2, DATA3-5): 1. `secrets.Open` (the keyring only: no import, and no derive-key retirement, which P5 decides), then `AttachOverrides` with config's legacy-format adapter over the settings blob (05-config §1.4; there is no config import step, R3-1): DB overrides become visible and an enabled module's settings are validated against them; 2. revocation-journal tail re-apply (05-backup), with the journal located from the **effective** `core.backup.dir` (overrides attached in step 1; when the directory changed since the journal's last line, 05-backup first moves the journal: copy, verify the chain, rename) and every line verified with the keyring opened in step 1; each revocation is written in the one stored format, the legacy row, through the grantee's adapter; 3. post-restore hooks (05-backup `RestoreHook`, e.g. `auth.PostRestore`), on a restore boot as P0a decides it or a boot that finds a replaced store (the store's journal head below the journal's end, 05-backup), in the order auth, rbac, audit; 4. `auth.BootWrites` (05-authn §5: seed `_system`, and stamp legacy API keys that lack an expiry), written in the legacy rows through auth's grant, so P5 writes nothing (DATA3-18); 5. the alias uses buffered in P0 are recorded in the compat usage ledger (09 §9.2.9). There is no tasks step: `tasks` has no post-DAG reconciler (05-tasks step 0, R3-1); its start-time rebuild of stale `opv3:` records runs inside `Executor.Run` at Run step 5, before listeners. There is no identity rebuild step | yes, from (a) on | fail-closed. A failed migration step leaves earlier steps committed and the checkpoint **unconsumed** for the offline `storage restore-checkpoint`; there is no automatic restore (DATA2-19, 05-storage §5S.3.5). A failing reconciler or settings validation fails per its owning file |
+| P5 | `kernel/services.Build`: every core service in fixed order (A8), including the services behind every `Deps` handle and the realtime hub; each core subsystem named by a storage grant is built over its legacy-format adapter on the P4c range; `rbac.New` and then `Declarer` per manifest, disabled ones included so their permissions stay known (§6.5.3, COR2-7); `auth` with `Options.Authenticators`; the backup service decides derive-key retirement (`secrets.RetireUnused`) now that the effective backup directory is known, never from inside `secrets.Open` (COR3-2); `notify` before `updater`, whose update notifications go through it; adapters from `Options.Adapters` (module adapters arrive in P6 and are instantiated lazily on first lookup) | none | fail-closed |
 | P6 | For each enabled module in ID order: build its `Registrar` and `Deps`, call `Register(r)`, collect `r.Err()`, close the registrar. Registrations are only recorded; `Register` writes nothing outside its handles (§6.4.1) | none | all problems joined |
-| P7 | Consume registrations (A8): task definitions to the executor (R7 checks, schedule keys declared under the owner's namespace, R2-7; kinds in `TaskLedger`; `TaskStarts` kinds exist), topics to the catalog (05-events validation), subscriptions to the bus, outbox handlers to the relay (topics declared `Durable`, consumer names declared), legacy projections to the realtime hub (redaction is each catalog entry's `TopicSpec.Redact`, so nothing is registered for it), change sinks to the task writer, adapters to the integrations registry, compat auth methods to `auth` (non-interactive only), `LegacyAuthGin` and `OwnAuth` checks (SEC2-17), checks to health. Seed default grants for permissions new to this boot. Then the derived-index version/generation check and `Load` (COR2-15). Post-checks: R6 over the built router, required capabilities configured, every `LegacyMount.TopSegments` entry is a first segment of a declared `LegacyPrefixes` entry | seeded grants; derived generation records | joined |
-| P8 | Build the root `http.Handler`: core capability routes, module routes, legacy mounts, the `/` owner (either `ui.Handler` or the `ServesSPA` legacy mount, FE-1). Check that no `ui.ReservedSegments()` entry is also a `Router.NonSPA()` segment (`ProblemSPASegmentCollision`, FE2-7) | none | fail-closed |
+| P7 | Consume registrations (A8): task definitions to the executor (R7 checks, schedule keys declared under the owner's namespace, R2-7; kinds in `TaskLedger`; each `TaskStarts` kind registered or in any manifest's `TaskLedger`, COR3-10; derived rebuild kinds named `<ID>.derived.<name>.build`, COR3-7), topics to the catalog (05-events validation), subscriptions to the bus, outbox handlers to the relay (topics declared `Durable`, consumer names declared), legacy projections to the realtime hub (redaction is each catalog entry's `TopicSpec.Redact`, so nothing is registered for it), change sinks to the task writer, adapters to the integrations registry, compat auth methods to `auth` (non-interactive only; from S4), `LegacyAuthGin` and `OwnAuth` checks (SEC2-17), checks to health. Seed default permission grants for permissions new to this boot (05-rbac; into the legacy role rows as namespaced scope strings, R3-1). Post-checks: R6 over the built router, required capabilities configured, module IDs re-checked against every recorded mount's `TopSegments` and `SPAShared`, each of which must be a first segment of a declared `LegacyPrefixes` entry (03 §3.6 P1/P7 split) | default permission grants; task definition snapshots `c/tasks/def/<kind>` (05-tasks 5T.4 step 1) | joined |
+| P8 | Build the root `http.Handler`: core capability routes, module routes, legacy mounts, the `/` owner (either `ui.Handler`, built with `Options.UIOptions` merged into its `ui.Options`, or the `ServesSPA` legacy mount, FE-1, FE3-4). Check that no `ui.ReservedSegments()` entry is in `Router.NonSPASegments()` (`TopSegments` minus `SPAShared`, 03 §3.6; `ProblemSPASegmentCollision`, FE2-7, FE3-1, FE3-9). Check the `/` owner's embedded build ID against `Options.BuildID` (`ProblemBuildID`, FE3-2) | none | fail-closed |
 
 `New` stops core services' goroutines and closes storage and everything opened so far, in reverse
 order, on any failure.
 
-**Stages (COR2-9).** A row whose package has not landed (§6.4.10) is absent, not stubbed. Until S2b
-the kernel runs with `storage` absent: P2 and P4 are skipped, `Deps.Storage` does not exist, and books
-opens its store and runs its own migrations in a start hook exactly as HEAD does, so there is never a
-second Pebble open. Until S3 r2 (05-config phase X; S3 r1 is a façade release with no data change, 09 S3),
-P4d step 3 does not exist and `config` loads over the books-provided legacy source (04 §8.1); until S4, P5 has no `rbac` and P7 seeds no grants; until S8, P−1 is the
-hotfixed HEAD updater's own check (09 S0).
+**Stages (COR2-9).** A row whose package has not landed (§6.4.10) is absent, not stubbed.
+
+- **S2.** The kernel runs with `storage` absent: P2 and P4 are skipped and `Deps.Storage` does not
+  exist. ABO's `serve` opens the store, runs books' migrations and loads the settings blob **before**
+  `app.New`, in HEAD's order and through its own `internal/startup` (`cmd/root.go:274,364-365`
+  @748fd787a; MOD3-1), hands the open store to `books.New(store)`, and passes `Options.LegacyConfig`
+  over it (`Options.LegacyConfig.Rows`), over which config's DB layer attaches at P3 (COR3-1). There is never a second Pebble open, and the start-timeout
+  extensions of that pre-`app.New` code use `app.ExtendStart`.
+- **From S2b** the kernel opens the store at P2, and config's legacy-format adapter reads the settings
+  blob through books' grant at P4d step 1, so a UI-saved value is honoured at every stage (COR3-1 is
+  resolved by R3-1); `Options.LegacyConfig.Rows` is unused from then on.
+  `secrets.Open` in P4d step 1 exists from S3.
+- **P0a.** From S2b to S7 it is ABO's own swap through `Options.PreBootRestore`; from S8 it is
+  05-backup's step. P4d step 3 runs the hooks from S4, when `auth`, `rbac` and `audit` exist, whenever
+  either reports a restore boot (DATA3-7). P4d step 2 exists from S4, with `backup/journal`.
+- **Until S4**, P5 has no `rbac`, P7 seeds no default permission grants, and P4d step 4 does not exist.
+- **Until S8**, P−1 is absent: the hotfixed HEAD updater has no boot check, unless the owner picks
+  09 §9.12 O9's boot-counter alternative (OPS3-17).
 
 ### 6.5.2 Run and shutdown
 
@@ -992,10 +1230,13 @@ instead of restating it (COR-8).
 
 Start order: (1) core background services (metrics, realtime hub); (2) module hooks, modules in ID
 order, hooks of one module in registration order; (3) module workers; (3a) the core components that
-invoke module callbacks: the storage index reconciler and derived-index builder (05-storage
-§5S.3.8–§5S.3.9), the health runner of module checks, and `OnChange` delivery for module settings
-sections (COR2-15); (4) `Bus.Open`: bus delivery to the subscriptions frozen in P6 begins; (5) task
-executor (resume sweep); `Online` data migrations start here; (6) scheduler, whose `OnStart`
+invoke module callbacks: first the derived-index version/generation check, each index's `Load` and its
+`c/storage/derived/<name>` record (moved out of P7 so that `Load` runs after the module's start hooks
+have built what it needs, and so `Describe`, which stops after P7, never calls it; COR3-7), then the
+storage index reconciler and derived-index builder (05-storage §5S.3.8–§5S.3.9), the health runner of
+module checks, and `OnChange` delivery for module settings sections (COR2-15); (4) `Bus.Open`: bus
+delivery to the subscriptions frozen in P6 begins; (5) task executor, `Executor.Run` (the resume sweep runs inside it; 05-tasks has no boot-time reconcile step in P4d); `Online` data
+migrations start here, a module's as its `<ID>.datamigrate.<name>` kind (COR3-5); (6) scheduler, whose `OnStart`
 schedules start the outbox relay task `core.outbox.relay`, so outbox delivery begins here;
 (7) listeners; (8) readiness true. No bus handler, outbox consumer or other module callback can run
 before its module's hooks have started, and the resume sweep's `core.task.*` events are delivered.
@@ -1025,7 +1266,9 @@ WAL makes that safe for committed batches).
   `GET /api/core/v1/modules` marks `restart_required: true`, and nothing else changes until restart.
 * Disabled module: manifest still read (its keyspace/legacy claims, permissions, settings section
   names, outbox consumer names and task-ID ledger stay known so nothing else can take them, and its
-  data is retained); migrations, `Register`, hooks, workers **not invoked**; no route, task kind,
+  data is retained); its storage grants stay in force, because they serve core, not the module (a
+  disabled books still leaves `auth`, `rbac` and `config` on ABO's user, role and settings rows);
+  migrations, `Register`, hooks, workers **not invoked**; no route, task kind,
   topic, schedule, subscription, outbox handler, adapter, health check, facade or nav entry exists.
 * **Held runs (COR-13).** A persisted run whose `Kind.Module()` names a disabled manifest is
   **held**. Held is a classification computed at boot, not a stored state: the run's record is not
@@ -1055,10 +1298,12 @@ WAL makes that safe for committed batches).
 | Keyspace or legacy-prefix overlap | fail-closed | R8; overlapping writes corrupt data |
 | Two `ServesSPA` mounts, or a `ServesSPA` mount with a non-zero `Options.UI` | fail-closed (`ProblemSPAOwner`) | exactly one owner of `/` (FE-1) |
 | Settings section outside `modules.<ID>` | fail-closed | config namespace collision |
-| `Manifest.TaskStarts` names an unregistered kind | fail-closed (`ProblemTaskStartUnknown`) | the system actor's permission set must be reviewable (SEC2-15) |
+| `Manifest.TaskStarts` names a kind that is neither registered nor in any manifest's `TaskLedger` (a disabled module's kind is accepted and refused at `Start` with "unknown kind") | fail-closed at P7 (`ProblemTaskStartUnknown`) | the system actor's permission set must be reviewable (SEC2-15), and disabling a module never fails another's boot (G1, COR3-10) |
+| Storage grant to a module, to an absent owner, on a family the grantor does not claim, or for families the grantee has no legacy-format adapter for | fail-closed at P2 (`ProblemGrant`) | grants are the only path from core to legacy rows and must be reviewable (R3-1) |
+| The `/` owner's embedded build ID differs from `Options.BuildID` (both non-empty, not `dev`) | fail-closed at P8 (`ProblemBuildID`) | a broken build pipeline would show every tab a reload prompt that reloading never clears (FE3-2) |
 | `AuthMethod` interactive, credential-changing or owner-verifying; `LegacyAuthGin` by a module other than `Options.LegacyAuthGinUntil`; `OwnAuth` route without a registered compat method | fail-closed (`ProblemAuthMethod`, `ProblemLegacyAuth`) | a module must not decide its own authentication strength (SEC2-16, SEC2-17) |
 | Derived index declared without hooks, or hooks without a declaration | fail-closed (`ProblemDerivedIndex`) | readiness gating would wait forever, or an index would be unknown while disabled (COR2-15) |
-| A shell route segment is also a `NonSPA` segment | fail-closed at P8 (`ProblemSPASegmentCollision`) | a full page load of that shell page would get a 404 problem+json (FE2-7) |
+| A shell route segment is also a `NonSPA` segment (a mount's `TopSegments`; `SPAShared` segments are not `NonSPA`) | fail-closed at P8 (`ProblemSPASegmentCollision`) | a full page load of that shell page would get a 404 problem+json (FE2-7, FE3-1) |
 | Settings value invalid for an **enabled** module | fail-closed | module would run with undefined config |
 | Stored settings of a **disabled** module | not validated (section not registered, 05-config §1.4 step 3); retained | the module does not run; validated when it is re-enabled |
 | Migration error | fail-closed; earlier steps stay committed and the checkpoint stays unconsumed for the offline `storage restore-checkpoint`; no automatic restore (DATA2-19) | G2; an automatic restore would fight the crash-loop reuse rule and non-atomic legacy steps (05-storage §5S.3.5) |
@@ -1108,7 +1353,7 @@ WAL makes that safe for committed batches).
 | Name | Type | Labels |
 |---|---|---|
 | `mediacore_kernel_module_info` | gauge (1) | `module`, `version`, `state` (`enabled`/`disabled`) |
-| `mediacore_kernel_boot_phase_seconds` | gauge, set once per boot | `phase` (`P-1`, `P0a`, `P0`…`P8`: the §6.5.1 phases in ASCII), `step` (the bounded set of migration, mirror, adoption and reconciler step names inside P4, e.g. `core.tasks.adopt-active`; `""` for the phase total) (OPS2-24) |
+| `mediacore_kernel_boot_phase_seconds` | gauge, set once per boot | `phase`: exactly `P-1`, `P0a`, `P0`, `P1`, `P2`, `P3`, `P4a`, `P4b`, `P4c`, `P4d`, `P5`, `P6`, `P7`, `P8` (ASCII hyphen-minus; the one label set, which 09 and every done-check use verbatim, OPS3-16); `step` (the bounded set of migration and reconciler step names inside a phase, e.g. `books#66` in `P4b`, `revocation-reapply` in `P4d`; `""` for the phase total) (OPS2-24) |
 | `mediacore_kernel_module_migration_seconds` | histogram | `module` |
 | `mediacore_kernel_hook_seconds` | histogram | `module`, `hook`, `op` (`start`/`stop`) |
 | `mediacore_kernel_hook_failures_total` | counter | `module`, `hook`, `op`, `reason` (`error`/`timeout`/`panic`) |
@@ -1130,23 +1375,29 @@ Core (`core/kernel/...`, `core/app`, `core/coretest`):
 | `TestUnknownModuleInConfig_OperatorFails`, `TestUnknownModuleInConfig_BootRecordWarns` | COR-14 split by layer |
 | `TestEnablementFromBootRecord` | COR-14: a disable written through `config.Apply` lands in the boot record and takes effect at the next boot (read in P1); an operator env value beats it |
 | `TestMigrationFailureHaltsBoot` | G2 with a failing hello migration: no later step ran, earlier steps stay committed, the checkpoint exists and is unconsumed, no automatic restore happened, and the offline `storage restore-checkpoint` brings back the pre-boot state (DATA2-19) |
-| `TestBootPhaseOrder_NoWriteBeforeCheckpoint` | R2-8: an instrumented store records the first write of a boot with a configstore re-import, a mirror rebuild, a revocation re-apply and buffered alias uses pending; it follows the checkpoint, and the reconcilers run in the P4d order |
+| `TestBootPhaseOrder_NoWriteBeforeCheckpoint` | R2-8: an instrumented store records the first write of a boot with auth's boot writes, a revocation re-apply, a post-restore hook and buffered alias uses pending; it follows the checkpoint, and the reconcilers run in the P4d order (keyring and overrides before the journal, COR3-2) |
+| `TestJournalReapplyVerifiesWithKeyring`, `TestJournalReapplyUsesOverriddenBackupDir` | COR3-2, DATA3-5: with `core.backup.dir` set only in the settings blob, P4d step 3 reads the journal from that directory and verifies every line with the keyring opened in step 1 |
+| `TestStorageGrants` | R3-1: a grant to a module, to an absent owner, or on an unclaimed family fails P2 with `ProblemGrant`; each valid grant is logged once per boot; a grantee's write outside its granted families or above its granted access is refused; a disabled books keeps its grants in force; the boot performs no copy, mirror or rebuild of a granted family |
+| `TestLegacyConfigHonoured` | COR3-1: at S2 a value set only in the settings blob (Basic gate on, rate limit off) is effective after P3 through config's DB layer over `Options.LegacyConfig.Rows`, and a write by ABO's legacy config path republishes it through `Rows.Changed` without a restart; from S2b the same value arrives through config's adapter at P4d step 1 |
+| `TestBuildID_HeaderEqualsEmbeddedMeta` | FE3-2: for a `make build` binary and a Docker image built with one `BUILD_ID`, `X-App-Build` equals the embedded meta tag; a mismatching pair fails P8 with `ProblemBuildID`; `dev` disables the check |
+| `TestStateDirFallbackMatchesHEAD` | OPS3-1: with no explicit state directory and an uncreatable default, P−1, P0a and P0 resolve the directory of `core.storage.path`, as HEAD does; an explicit value never falls back |
 | `TestBootRefusalCountsAsFailedBoot` | OPS2-3: with an update pending, a config refused in P0 increments the updater's attempt counter, and the budget's last attempt restores `.prev` before any restore swap |
 | `TestPreBootKeyInConfigFileRefused` | `core.paths.state_dir` in the config file fails P0; the same value by env boots |
-| `TestDescribeInMemoryNoIO` | COR2-13: `Describe` over hello runs P0–P7 on `vfs.NewMem` with a temp state directory, touches no other path, and returns the same OpenAPI document as a live boot |
+| `TestDescribeInMemoryNoIO` | COR2-13: `Describe` over hello runs P0–P7 on `vfs.NewMem` with a temp state directory, touches no other path, never calls a derived-index `Load` (COR3-7), and returns the same OpenAPI document as a live boot |
 | `TestStartOrder`, `TestStopOrder` | COR-8: a bus handler and an outbox consumer of hello never observe the module before its Start hook or after its Stop hook (instrumented hooks, `synctest`) |
 | `TestStartRollbackReverseOrder`, `TestStopTimeoutAbandons` | hook ordering; uses `synctest` for timeouts |
 | `TestWorkerPolicies` | `DegradeOnExit` vs `StopAppOnExit`, panic recovery |
 | `TestRegistrarClosedAfterRegister`, `TestRegistrarContextCancelled` | late calls recorded; `r.Context()` cancelled with `app.New`'s ctx (COR-24) |
 | `TestNewCleansUpCoreGoroutines` | `goleak`-style check: a boot failing in P7 leaves no core goroutine running (COR-24) |
 | `TestDepsScoping` | write outside `m/hello/` refused; publish or notify to a topic outside hello's catalog entries refused; secret outside `modules.hello.` refused; `StartRequest.Actor` overwritten by the kernel; `library.Scope` writes attributed to hello; metric names under `MetricPrefix` |
-| `TestModuleSystemActor_CannotStartUndeclaredKind` | SEC2-15: from a hello worker, starting a `core:system.manage` kind not in `TaskStarts` is refused; a declared one is allowed; `TaskStarts` naming an unknown kind fails P7 |
+| `TestModuleSystemActor_CannotStartUndeclaredKind` | SEC2-15, COR3-10: from a hello worker, starting a `core:system.manage` kind not in `TaskStarts` is refused; a declared one is allowed; `TaskStarts` naming a kind in no registration and no `TaskLedger` fails P7; naming a disabled module's ledger kind boots, and the start is refused with "unknown kind" |
 | `TestModuleAuthMethod_CannotBeInteractive` | SEC2-16: `AuthMethod` with `Interactive`, `MayChangeCredentials` or an `OwnerVerifier` fails boot; `Options.Authenticators` may carry them |
 | `TestLegacyAuthGinOnlyNamedModule` | SEC2-17: `LegacyAuthGin` from a module other than `Options.LegacyAuthGinUntil`, and an `OwnAuth` route without a compat method, fail boot |
 | `TestRealtimeProjectionLazy` | COR2-1: a projection handler obtained in P6 answers 503 before the hub starts and streams catalog events after it |
-| `TestDerivedIndexHooksAfterRegister` | COR2-15: `Load` runs after every `Register`; `Build` runs as `<ID>.derived.<name>.build` with the module's Effects; a declaration without hooks fails boot |
+| `TestDerivedIndexHooksAfterRegister` | COR2-15, COR3-7: `Load` runs at Run start step (3a), after the module's start hooks and before `Bus.Open`; the rebuild runs as the module's `<ID>.derived.<name>.build` definition with its own Effects, Timeout and Parallelism; a wrong kind name or a declaration without hooks fails boot |
+| `TestOnlineDataMigrationIsModuleKind` | COR3-5: hello's `Online` data migration runs as `hello.datamigrate.<name>` with the declared `Writes` as Effects, and a concurrent `hello.*` writer of the same resource is serialised by dispatch |
 | `TestReservedIDsIncludeLegacyTopSegments` | FE2-11: a module ID equal to the first segment of another manifest's `LegacyPrefixes`, or to an `Options.ReservedAPINamespaces` entry, fails P1 |
-| `TestReservedSegmentsDisjointFromNonSPA` | FE2-7: a legacy prefix whose first segment is a shell route segment fails P8 |
+| `TestReservedSegmentsDisjointFromNonSPA` | FE2-7, FE3-1, FE3-9 (the one test of the P8 check): a `LegacyMount.TopSegments` entry that is a shell segment fails P8 with `ProblemSPASegmentCollision`; a `SPAShared` segment that is a shell segment (`login`, `invite`) boots, and `GET /login` serves the SPA while `POST /login` reaches the mount |
 | `TestSPAOwner` | FE-1: a `ServesSPA` legacy mount owns `/` and `ui.Handler` is absent; two owners fail boot |
 | `TestHelloEndToEnd` | §6.12 example: route permission, task under `-race` with `CPU()` workers, migration once, settings default/override, `/api/core/v1/modules` lists nav entry |
 | `TestSpecGoBlocksCompile` | COR-16: every Go block in this file marked as part of the hello example is extracted, compiled against core in CI, and **booted** with `coretest.New`, so a manifest-level refusal (an undeclared permission, a bad schedule key) fails the test, not only a compile error (COR2-14) |
@@ -1159,6 +1410,7 @@ ABO (root module `internal/arch` or `cmd` tests):
 |---|---|
 | `TestSecondModuleNoAudiobookEdit` | G6, from S5 (§6.4.10): `coretest.New(t, WithModules(books.New(…), hello.New()))` boots; the test file is the only change needed — enforced by building it in CI with a `git diff --name-only` check that the hello wiring PR touched no `internal/` audiobook package (plan acceptance test) |
 | `TestBooksDisabledInert` | G1 for the real module |
+| `TestABOManifestBootsAtS9` | FE3-1: the kernel boots ABO's real S9 manifest (books with its `TopSegments`, `SPAShared` `login`/`invite`, and the shell bundle) with no P8 problem |
 | `archtest.NoKernelImports` | R2 |
 
 ## 6.11 Migration from ABO
@@ -1170,12 +1422,15 @@ Named by 09 stage (MOD2-21); the old wave labels K0–K3 are retired.
 1. **S2 — SDK and skeleton.** Land `module`, `kernel`, `app`, `coretest` and the hello skeleton
    (§6.4.10); core boots with zero modules. Each later stage adds its SDK members and grows hello;
    G6/G7 are proven at core level from S5.
-2. **S2 — books wraps the server.** ABO's `serve` command calls `app.New(ctx, opts, books.New(legacy))`.
+2. **S2 — books wraps the server.** ABO's `serve` command first runs HEAD's pre-server steps through its
+   own `internal/startup` (store open, books' migrations, encryption, `loadConfigFromDB`; MOD3-1), then
+   calls `app.New(ctx, opts, books.New(store))` with `Options.LegacyConfig` over that store (COR3-1).
    `books.Register` builds today's `*server.Server` (the one recorded exception to `Register`'s
    side-effect rule until step 4, §6.4.5) and mounts its gin engine with
    `Registrar.MountLegacy` under the declared legacy prefixes (N7), permanently (cross-cutting
-   resolution 2), with `ServesSPA: true` until ABO adopts the shell build (07 §7.19, FE-1). Until S2b
-   books also opens the store in a start hook (§6.5.1 "Stages"). `serviceregistry` keeps working
+   resolution 2), with `ServesSPA: true` until ABO adopts the shell build (07 §7.19, FE-1). From S2b
+   the kernel opens the store and those pre-server steps leave `serve`; the books steps that remain
+   become `StartupSteps` at S8 (§6.5.1 "Stages"). `serviceregistry` keeps working
    **inside** books (it is app code; R5 binds core only).
 3. **Books-internal, first PR after S2 — remove the global factory map:** each of the 24 registering
    files replaces `func init(){ serviceregistry.Register(def) }` with
@@ -1262,9 +1517,69 @@ permanent, cross-cutting resolution 2; COR2-19); `gob.Register` and the compile-
 | Today | Becomes |
 |---|---|
 | `server.NewServer` (`server.go:653`) and `Server.Start` (`server_lifecycle.go:245`) | books `Register` (S2: wraps them; §6.11.1 step 4: dissolves them into constructors and start hooks) + kernel phases P−1 to P8 |
-| `startup.Table` Fatal/Degraded steps (`internal/startup/steps.go`) | kernel phase table; Degraded steps become health checks registered by the owning service |
+| `startup.Table` Fatal/Degraded steps (`internal/startup/steps.go`) | stays in ABO until S8 (MOD3-1): ABO's `serve` keeps running its books steps through it (`cmd/root.go:274`, a non-test user); at S8 they become books `Registrar.StartupSteps` and the package moves with the rest of `health`. Core's own steps are the kernel phase table from S2; Degraded steps become health checks registered by the owning service |
 | `opRegistrationGate`, `opCatalogGate` (`server_lifecycle.go:66,88`) | P6/P7 validation |
 | `scanner.SetStore(store)` (`server.go:805`) and similar setters | constructor parameters in books wiring |
+
+### 6.11.6 Books' legacy-format grants (R3-1)
+
+During the extraction books keeps every one of ABO's 258 families as its own claim, held in place,
+and core subsystems reach the generic ones only through grants that books' manifest declares. The
+`Grant` type, the restricted `LegacyRange` and the adapter contract are 05-storage's (§5S.3.4); the
+family lists are generated from 05-storage §5S.9.1, the one ownership table. Shape, as books' manifest
+uses it:
+
+```go
+// internal/books/manifest_storage.go (ABO), S2b onward. A grant is added in
+// the PR of the stage that lands its grantee (config S3, auth/rbac S4,
+// tasks S5, log with its first journal-only build); before that the family
+// is books' alone, exactly as at HEAD.
+Storage: storage.Spec{
+	Keyspace: true,            // m/books/
+	Claims:   booksClaims,     // generated: the 258 families, books ReadWrite, permanent
+	Legacy:   booksLegacySteps, // versions 1..66, under books' own claims
+	Grants: []storage.Grant{  // generated from 05-storage §5S.9.1
+		{To: "core/config", Families: configFamilies, Access: storage.GrantReadWrite,
+			Why: "settings blob and secret rows, legacy format in place"},
+		{To: "core/auth", Families: identityFamilies, Access: storage.GrantReadWrite,
+			Why: "users, API keys, invites, OAuth links, legacy format in place"},
+		{To: "core/rbac", Families: roleFamilies, Access: storage.GrantReadWrite,
+			Why: "roles; native scopes added as namespaced strings"},
+		{To: "core/tasks", Families: opsHistoryFamilies, Access: storage.GrantReadWrite,
+			Why: "ops history and run families, legacy format in place"},
+		{To: "core/log", Families: activityFamilies, Access: storage.GrantRead,
+			Why: "activity history read in place"},
+	},
+},
+```
+
+What this guarantees, and what each piece replaces:
+
+- **One stored format, so any build reads the store.** A grant changes nothing on disk. Every
+  build of the extraction, the hotfixed HEAD included, reads the same rows; a rollback needs no floor
+  build, no claim hand-over and no rebuild (they do not exist), and the only per-owner level steps are
+  real format changes (books' own migrations; later, each cutover).
+- **Native-only data never reaches an older build as a widening.** It goes additively into the legacy
+  row only where the old reader ignores it (namespaced scope strings in role and key lists, matched by
+  exact string at HEAD), or into a core-only family (`c/auth/` hashed sessions: a rollback costs one
+  re-login). New API keys always carry explicit, non-empty scopes.
+- **Secrets.** A plaintext secret in the blob moves to the encrypted store when the new build first
+  writes it and is blanked in the blob (05-config); a rollback past that point requires re-entering
+  those secrets, which the release note states.
+- **Grants are visible and bounded.** P2 validates them (`ProblemGrant`) and logs each once per boot;
+  the restricted range refuses any key outside the granted families and any write under a `GrantRead`
+  grant; the census lists them with books' claim record.
+- **Cutover is deferred.** Moving a family to `c/<sub>/` and deleting the legacy rows is a later,
+  per-family, one-way step, decided on measured data, checkpointed by P4a and behind the grantee's
+  level guard; its rollback floor is the cutover release itself. It removes the family's grant in the
+  same PR. Nothing in this file schedules one.
+- **The live security hotfixes** (revoked-key re-activation, unscoped child keys, the `RequireAdmin`
+  scope check, session-token exposure; `todo.d/2026-11-04_platform_core_followups.md`) ship in ABO
+  independently and early. They are ordinary HEAD fixes, not a compatibility build.
+
+An app with no legacy data (hello, a TV app) declares no grants, and the same core subsystems use their
+native `c/<sub>/` keyspaces; which of the two a subsystem uses is fixed by the build's manifests, so it
+never changes between boots of one store during the extraction.
 
 ## 6.12 Worked example: the `hello` module
 
@@ -1698,33 +2013,33 @@ owning symbol. Where an owning file still describes a superseded path, the row s
 
 | Contract | What 06 uses (owning symbol) | Reconciliation |
 |---|---|---|
-| 05-http-api §3, §4.9–§4.10, §8.2 | `Registrar.HTTP() *httpapi.Group`, `httpapi.Handle`, `httpapi.Route`, `httpapi.Invalid(httpapi.Field(...))`, `MountLegacy(httpapi.LegacyMount)` with `ServesSPA`, `Auth`, `TopSegments`, `DefaultCSP`, `Router.SPA`, `Router.NonSPA`, `httpapi.ReservedSegments()`, subtree claims | `Manifest.LegacyPrefixes` feeds subtree claims, reserved IDs and `NonSPA` segments (FE2-11); `LegacyAuthGin` only for `Options.LegacyAuthGinUntil`, `OwnAuth` only with a compat method (SEC2-17); the `CoreGroup` rule needs no `ui` exception (`internal/uihttp`, COR2-19); facade members deferred (SIMP2-6) |
-| 05-storage §5S.3–§5S.4 | `Manifest.Storage storage.Spec` (derived indexes declarative only); `Registrar.DerivedIndex(name, storage.DerivedHooks)`; `Manifest.DataMigrations []datamigrate.DataMigration`; `Deps.Storage module.StorageHandles{Keyspace, Legacy, Indexes, Aux, Derived}`; `c/storage/claims/<owner>`, `Claim.TakesOver`; cross-keyspace migration DAG with one checkpoint per boot | §6.5.1 is the one boot order; 05-storage §5S.4 references P2 and P4 (a)–(d) and keeps the mechanics (R2-8, COR2-7, DATA2-24); store at `core.storage.path`; no automatic checkpoint restore (DATA2-19); `DerivedIndex` hooks move out of `storage.Spec` (COR2-15) |
-| 05-tasks | `Registrar.Tasks`, `Resources`, `Lanes`, `ChangeSink(tasks.ChangeSink)`; `Manifest.TaskLedger` (5T.3.11 held runs); `Manifest.TaskStarts`; `tasks.Common.Schedule` (+ `tasks.ScheduleFromConfig`, one schedule-key rule, R2-7); `Deps.Tasks tasks.Client`; `tasks.CPU()`, `RunItems(rc, par, items, fn, opts...)`, `tasks.ForEach` | closes 05-tasks open item 6 and the `Registrar.Schedule` question (it does not exist). Held runs and the ledger-gate rule of §6.5.3 are 05-tasks mechanics (COR-13); the system actor's permission set (SEC2-15) and the tasks reconcile in P4d are 05-tasks' to state |
+| 05-http-api §3, §4.9–§4.10, §8.2 | `Registrar.HTTP() *httpapi.Group`, `httpapi.Handle`, `httpapi.Route`, `httpapi.Invalid(httpapi.Field(...))`, `MountLegacy(httpapi.LegacyMount)` with `ServesSPA`, `Auth`, `TopSegments`, `DefaultCSP`, `Router.SPA`, `Router.NonSPA`, `Router.NonSPASegments()`, `TopSegments`, `SPAShared`, `LegacyMount.BuildID`, `ErrPublicNotAllowed`, `httpapi.ReservedSegments()`, subtree claims | `Manifest.LegacyPrefixes` feeds subtree claims and reserved IDs only; `NonSPA` = `TopSegments` minus `SPAShared` (FE3-1, R3-5); `Manifest.PublicRoutes` is the reviewed public list (COR3-3); stage 5 writes `X-App-Build` from `app.Options.BuildID` (FE3-2); the P8 shell-segment check is the kernel's `ProblemSPASegmentCollision`, `httpapi` only supplies `NonSPASegments()` (FE3-9); `LegacyAuthGin` only for `Options.LegacyAuthGinUntil`, `OwnAuth` only with a compat method (SEC2-17); the `CoreGroup` rule needs no `ui` exception (`internal/uihttp`, COR2-19); facade members deferred (SIMP2-6) |
+| 05-storage §5S.3–§5S.4 | `Manifest.Storage storage.Spec` (derived indexes declarative only); `Registrar.DerivedIndex(name, storage.DerivedHooks, tasks.Definition)`; `Manifest.DataMigrations []datamigrate.DataMigration`; `Deps.Storage module.StorageHandles{Keyspace, Legacy, Indexes, Aux, Derived}`; `Spec.Grants []storage.Grant` and the restricted grant `LegacyRange` (R3-1); `c/storage/claims/<owner>`, `Claim.TakesOver`; cross-keyspace migration DAG with one checkpoint per boot; `DataMigration.Writes` | §6.5.1 is the one boot order; 05-storage §5S.4 references P2 and P4 (a)–(d) and keeps the mechanics (R2-8, COR2-7, DATA2-24); store at `core.storage.path`; no automatic checkpoint restore (DATA2-19); checkpoint reuse only within one uncompleted attempt (DATA3-1); `DerivedIndex` hooks move out of `storage.Spec` (COR2-15) and `DerivedHooks` keeps `Snapshot`/`Load` only, the rebuild being a `tasks.Definition` passed to `Registrar.DerivedIndex` (COR3-7); no claim hand-over, mirror or rebuild step (R3-1) |
+| 05-tasks | `Registrar.Tasks`, `Resources`, `Lanes`, `ChangeSink(tasks.ChangeSink)`; `Manifest.TaskLedger` (5T.3.11 held runs); `Manifest.TaskStarts`; `tasks.Common.Schedule` (+ `tasks.ScheduleFromConfig`, one schedule-key rule, R2-7); `Deps.Tasks tasks.Client`; `tasks.CPU()`, `RunItems(rc, par, items, fn, opts...)`, `tasks.ForEach` | closes 05-tasks open item 6 and the `Registrar.Schedule` question (it does not exist). Held runs and the ledger-gate rule of §6.5.3 are 05-tasks mechanics (COR-13); the system actor's permission set (SEC2-15) is 05-tasks' to state; core services start runs through `tasks.Stager` (never the `Executor`), whose lifecycle method is `Executor.Run` (§6.5.2); there is no tasks reconcile in P4d |
 | 05-events | `Registrar.Topics(...events.TopicSpec)` (one catalog incl. `Durable`, `Notify`, `Realtime`, `Permission`, `Visible`), `Registrar.Subscribe(...events.Subscription)` built with `events.On`/`OnRaw`, `Registrar.OutboxHandler(...outbox.Handler)` incl. `ConsumeRaw`/`ConsumeIntoTaskRaw`, `Manifest.OutboxConsumers`; `Deps.Outbox outbox.Writer`; `Bus.Open`/`Bus.Close` in §6.5.2 | adopted as 05-events states it, including `Deps.Events events.Scope` (COR-21) |
 | 05-realtime | catalog topics with `TopicSpec.Realtime` are streamed with no registrar call; redaction is the catalog's `TopicSpec.Redact`; `Registrar.Realtime() realtime.Registrar` with the one method `Projection(realtime.LegacyProjection) (http.Handler, error)` | hub built in P5, redactors and projections recorded in P6 and attached in P7; projections are books gin manifest routes, not aliases (COR2-1, SEC2-25); core-topic redaction is the topic's own (COR2-2) |
 | 05-notify | notify metadata on the catalog entry (`TopicSpec.Notify`); `Deps.Notify notify.Publisher` | `Registrar.NotificationTopic` deleted (SIMP-5); `Publish` is the only entry point, and `Notify` metadata alone produces nothing (COR2-3) |
 | 05-rbac §3.1–§3.5 | `rbac.Permission`, `PermissionSpec{Name, Title, DefaultGrants, Sensitive, …}`, `RoleSeed`, `RoleName` (`"<ns>.<name>"`), `LegacyAlias`, `Requirement`, `Need`, `CoreAdmin`, `audit.Logger` | manifest lists are fed to `Service.Declarer(moduleID)` by the kernel in P5, after `rbac.New` (COR2-7); leaf types land at S2 (COR2-9); no `Grant`, `Scope` or `PermissionDef` type exists (COR-16) |
-| 05-config §1.3–§1.4, §2.3 | `config.Define`, `Section[T]`, `Handle[T]`, `config.Register`; `Store.Boot` + boot record for `core.modules.<id>.enabled` (P0/P1); `Store.Load` without DB (P3); `secrets.Open`, configstore import and `AttachOverrides` (P4d); `config.Options.EnvPrefix` from `app.Options.EnvPrefix`; the pre-boot key `core.paths.state_dir` (no `data_dir`); `secrets.Scope` (`modules.<id>.`) | 05-config hands modules `Registrar.Config()` with "registration legal only before Store.Load"; since `Register` needs loaded config, sections are listed in `Manifest.Settings` and registered by the kernel before load; `module.Setting(r, s)` returns the bound handle |
+| 05-config §1.3–§1.4, §2.3 | `config.Define`, `Section[T]`, `Handle[T]`, `config.Register`; `Store.Boot` + boot record for `core.modules.<id>.enabled` (P0/P1); `Store.Load` without DB (P3), plus, at S2, config's DB layer over `app.Options.LegacyConfig.Rows` (`*config.Legacy`, COR3-1); `secrets.Open` and `AttachOverrides` over config's legacy-format adapter (P4d step 1; no import, R3-1); `secrets.RetireUnused` in P5 (COR3-2); `config.Options.EnvPrefix` from `app.Options.EnvPrefix`; the pre-boot key `core.paths.state_dir` (no `data_dir`), resolved once by `config.ResolveStateDir` with HEAD's fallback (R3-4); `secrets.Scope` (`modules.<id>.`) | 05-config hands modules `Registrar.Config()` with "registration legal only before Store.Load"; since `Register` needs loaded config, sections are listed in `Manifest.Settings` and registered by the kernel before load; `module.Setting(r, s)` returns the bound handle |
 | 05-metadata M1–M2 | `Registrar.Adapter(integrations.Descriptor)`, `app.Options.Adapters`, `Deps.Integrations *integrations.Registry` (the one instance store, SIMP-4), `Deps.HTTP *providerhttp.Registry` | adopted as proposed |
 | 05-ai | `Registrar.AICapability(ai.CapabilitySpec) ai.Capability`, `ai.BatchApplyTask(cap, h, effects)` registered with `Registrar.Tasks`, `Deps.AI *ai.Router` | signatures as in 05-ai; `Registrar.AIBatchHandler` removed (COR2-11) |
 | 05-download | `Deps.Downloads *download.Pool`; `DownloadWatch` deferred-build | grab/monitor are the deferred acquire build (SIMP-12, COR-3) |
-| 05-health | `Health(...health.Check)`, `StartupSteps(...health.StartupStep)`, `Diagnostics(health.Contributor)`; `Deps.Health health.Reporters`; `core.shutdown.budget` and its phase slices (§5H.4) | `core.lifecycle.stop_timeout`/`shutdown_budget` removed from 06 (OPS-13) |
+| 05-health | `Health(...health.Check)`, `StartupSteps(...health.StartupStep)`, `Diagnostics(health.Contributor)` (S8); `Deps.Health health.Reporters`; `Deps.ExtendStart` and the stateless `app.ExtendStart`; `core.shutdown.budget` and its phase slices (§5H.4) | `core.lifecycle.stop_timeout`/`shutdown_budget` removed from 06 (OPS-13); `internal/startup` stays in ABO until S8 (MOD3-1) |
 | 05-updater | `app.Options.Updater *updater.Options`; `updater.Boot` as phase P−1 | replaces 1.0.0's `Release updater.Source`; `Boot` resolves paths from flags, env and its own marker, decides rollback before P0a, and counts P0 refusals (OPS2-3) |
 | 05-download, 05-indexer, 10 (v1.1.0) | `Deps.Downloads *download.Pool`; deferred `Deps.Indexers *indexer.Pool`, `Deps.Acquire *acquire.Service`, `Manifest.Acquire *AcquireDecl` (§6.4.9) | names as those files state them |
 | 05-library | `Manifest.Library []library.RoleRequirement`; `Deps.Library library.Scope` | — |
-| 05-authn §3.3, §5 | `app.Options.Authenticators []auth.Extension`; `Registrar.AuthMethod(auth.MethodSpec)`; `Deps.Auth`, `Deps.AuthAdmin` | `auth.Extension{Authenticator, Spec, Order}` requested from 05-authn; the identity mirror rebuild is the kernel's P4d step 1 (DATA2-24) |
-| 05-backup | `Registrar.Backup(...backup.Artifact)`; `Deps.Backup backup.Ensurer`; pre-boot restore phase P0a; revocation re-apply and post-restore hooks in P4d | 05-backup's "module.Manifest.Backup" comment changes to `Registrar.Backup` (hooks close over services); P0a runs after P−1 and before P0 (DATA-23, OPS2-3) and trusts the absolute targets in `pending.json` (DATA2-25) |
-| 05-logging, 05-metrics | `Deps.Log *slog.Logger`, `Deps.Metrics *metrics.Scope` | — |
-| 07 §7.4–§7.6 | `UIDescriptor` (all shell slots), `app.Options.UI ui.Bundle` (S9), `ui.ReservedSegments` | `/modules` and `internal/uihttp` routes ship at S4 (FE2-25); P8 checks shell segments against `NonSPA` (FE2-7) |
+| 05-authn §3.3, §5 | `app.Options.Authenticators []auth.Extension`; `Registrar.AuthMethod(auth.MethodSpec)`; `Deps.Auth`, `Deps.AuthAdmin` | `auth.Extension{Authenticator, Spec, Order}` requested from 05-authn; `auth.MethodSpec` is an S2 leaf (SEC3-14); `auth.BootWrites` is P4d step 4 (DATA3-18); identity families are served through books' grant in their legacy format (R3-1) |
+| 05-backup | `Registrar.Backup(...backup.Artifact)`; `Deps.Backup backup.Ensurer`; pre-boot restore phase P0a (ABO's `Options.PreBootRestore` from S2b to S7, DATA3-7); revocation re-apply (step 2) and post-restore hooks (step 3, also on a replaced-store boot) in P4d | 05-backup's "module.Manifest.Backup" comment changes to `Registrar.Backup` (hooks close over services); P0a runs after P−1 and before P0 (DATA-23, OPS2-3), trusts the absolute targets in `pending.json` (DATA2-25) and keeps `inflight.json` until `applied` (DATA3-6); the journal is read after the keyring and overrides (COR3-2, DATA3-5) |
+| 05-logging, 05-metrics | `Deps.Log *slog.Logger`, `Deps.Metrics *metrics.Scope`; `Registrar.LogPathRules(...log.PathRule)`, `Registrar.LogOtherUserData(log.OtherUserPredicate)`; `app.Options.MetricAliases []metrics.Alias` | the module path-rule and other-user-data registrations 05-logging §3, §5 point at; metric aliases supplied by the app with ledger rows (SIMP3-3) |
+| 07 §7.4–§7.6 | `UIDescriptor` (all shell slots, `LegacyRedirects`), `app.Options.UI ui.Bundle` and `UIOptions ui.AppOptions` (S9), `ui.ReservedSegments` (S2 leaf) | `/modules` (`internal/modulehttp`) and `internal/uihttp` routes ship at S4 (FE2-25, FE3-16); P8 checks shell segments against `NonSPA` (FE2-7, FE3-1) and the build ID (FE3-2) |
 | 08, 10, 05-indexer | §6.4.9 deferred-build members | — |
 
 ## Objections to 03
 
-None open. The FE2-11 mismatch is resolved by 03 v1.5.0 §3.6: every reserved name has one owner
-list (`admin`, `tasks` dropped, `logout` left the shell list, `healthz` → `livez`), and the two compat
-inputs are split as in §6.4.1. 06 keeps `module.ReservedIDs()` static (the owner lists, evaluable in
-P1, COR2-19); the kernel adds both compat inputs to the reserved set in P1.
+None open. 03 v1.6.0 §3.6 states the compat inputs as 06 §6.4.1 does (FE3-1, R3-5): `LegacyPrefixes`
+first segments are reserved IDs only, `NonSPA` is `TopSegments` minus `SPAShared`, module IDs are
+validated at P1 and re-checked at P7 against the recorded mounts, and `ui.ReservedSegments` exists
+from S2. 06 keeps `module.ReservedIDs()` static (the owner lists, evaluable in P1, COR2-19).
 03 v1.4.0's §3.7 diagram points at §6.5.2 for the start/stop order (COR-8). Resolved earlier: the "service container" wording (SIMP-26), the Role-ID grammar (COR-16), the public L0
 `version` package (MOD-12), `examples/hello` in the tree (MOD-7), and `module`'s layer (L7).
 
@@ -1796,7 +2111,7 @@ Round 2 (2026-11-04), findings applied to this file:
 - DATA2-25 — P0a trusts the absolute targets in `pending.json` and P2 verifies the opened path.
 - DATA2-28 — an empty store is stamped as a fresh install in P4a.
 - DATA2-29 — orphaned claims are taken over only by `Claim.TakesOver`; step name `core/auth#1`.
-- OPS2-7 — P0 alias uses buffered and recorded after the checkpoint (P4d step 6).
+- OPS2-7 — P0 alias uses buffered and recorded after the checkpoint (P4d step 6; step 5 since round 3).
 - OPS2-23 — `core.shutdown.budget` restart-bound in both files (06 already said no).
 - OPS2-24 — boot metric is a per-boot gauge with `phase` (P-1, P0a, P0…P8) and `step`.
 - SEC2-15 — `Manifest.TaskStarts`; system actor permission set; `ProblemTaskStartUnknown`; test.
@@ -1812,11 +2127,50 @@ Round 2 (2026-11-04), findings applied to this file:
 - FE2-7 — P8 check that shell route segments are not `NonSPA` segments (`ProblemSPASegmentCollision`).
 - FE2-11 — reserved-ID inputs split: `LegacyPrefixes` first segments (top level, also `NonSPA`; `TopSegments` must be a subset) vs `ReservedAPINamespaces` (under `/api`); aligned with 03 v1.5.0 §3.6.
 - FE2-25 — `/api/core/v1/modules` and `internal/uihttp` ship at S4.
-- R2-2, R2-3, R2-4, R2-7 — referenced in P4 (revocations write legacy rows; claim modes as level steps; legacy migrations before claims) and in `Registrar.Tasks` (one schedule-key rule).
+- R2-2, R2-3, R2-4, R2-7 — referenced in P4 (revocations write legacy rows; claim modes as level steps; legacy migrations before claims) and in `Registrar.Tasks` (one schedule-key rule). (R2-2/R2-3/R2-4 parts superseded in round 3 by R3-1: one stored format, no claim-mode steps.)
 
 Integration pass (round 2, 2026-11-04):
 
 - integration pass (round 2): P0a reads `<state_dir>/restore/pending.json`; no `core.paths.data_dir` (pre-boot key is `state_dir` only); aux DBs under `<db parent>/aux/`.
-- integration pass (round 2): P4d step 5: hooks auth → rbac → audit, then the identity verification rebuild; Stages: P4d step 3 from S3 r2 (S3 r1 is a façade release).
+- integration pass (round 2): P4d step 5: hooks auth → rbac → audit, then the identity verification rebuild; Stages: P4d step 3 from S3 r2 (S3 r1 is a façade release). (Superseded in round 3 by R3-1: no verification rebuild; hooks are step 3.)
 - integration pass (round 2): `Registrar.Realtime()`: one method `Projection(...) (http.Handler, error)`; `Redact` dropped (redaction is `TopicSpec.Redact`); P7 wording.
 - integration pass (round 2): `Deps.ExtendStart func(step string)` (S2) for books' database/search code; owners-table row and §6.4.10 entry.
+
+Round 3 (2026-11-04), findings applied to this file:
+
+- R3-1 — dual-format machinery removed from the boot table (no mirror rebuild, adoption, claim hand-over, claim-mode level steps, identity verification rebuild or configstore import; fresh-install stamp no longer records adopt/contract steps); "one stored format per family" paragraph; storage grants in `Manifest.Storage` validated and logged at P2, restricted ranges at P4c, adapters built at P5; new §6.11.6 with books' grant declaration, additive native data, secrets rule, deferred cutover and the independent live hotfixes; checkpoint-before-write kept.
+- R3-4 / OPS3-1 — `Options.StateDir` and P−1/P0a resolve with HEAD's fallback to the DB's directory; `TestStateDirFallbackMatchesHEAD`.
+- R3-5 / FE3-1 — `LegacyPrefixes` first segments are reserved IDs only; `NonSPA` = `TopSegments` minus `SPAShared` (ABO: `login`, `invite`); P1/P7 split aligned with 03 v1.6.0; test rewritten; `TestABOManifestBootsAtS9`.
+- COR3-1 — `Options.LegacyConfig` applied at P3 at S2 (ABO's serve opens the store first, HEAD's order); from S2b config's adapter reads the blob through books' grant; `TestLegacyConfigHonoured`.
+- COR3-2 / DATA3-5 — P4d order: keyring and overrides, journal re-apply from the effective backup dir, post-restore hooks (restore or replaced store), `auth.BootWrites`, compat records (aligned with 05-authn/05-config v1.4.0); derive-key retirement (`secrets.RetireUnused`) in P5; tests.
+- COR3-3 — §6.4.10 S2 `Options` listed field by field (no `Adapters`/`Updater`); `AuthMethod` and `ui.ReservedSegments` at S2; `Manifest.PublicRoutes` for hello's S2 public route.
+- COR3-5 — module `Online` data migrations run as `<ID>.datamigrate.<name>` with `Writes` as Effects; test.
+- COR3-7 — derived `Load`/check/record moved to Run step (3a); `DerivedIndex(name, hooks, build tasks.Definition)` with a module-relative name (rebuild task in `module`, not `storage`, for layering).
+- COR3-8 — `tasks.Stager.StartIn` and `<ID>.ai.batch-apply.<name>` in the AI comment.
+- COR3-10 — `TaskStarts` validated at P7 against registered kinds plus every `TaskLedger`; comment, §6.6 row, test.
+- COR3-15 — write rule lists P7's writes (default permission grants, definition snapshots) and Run (3a)'s derived records.
+- DATA3-1 — P4a checkpoint reuse restricted to the same uncompleted attempt and store identity.
+- DATA3-2 — superseded by R3-1 (no hand-overs); P2 orphan rule kept for removed modules only.
+- DATA3-6 — P0a keeps `inflight.json` until `applied` and decides "restore boot" from the journal.
+- DATA3-7 — `Options.PreBootRestore` from S2b to S7; hooks from S4 on its report.
+- DATA3-18 — `auth.BootWrites` is P4d step 4.
+- DATA3-21 — fresh-install stamp in one batch.
+- MOD3-1 / R3-3 — `internal/startup` stays in ABO until `StartupSteps` (S8); S2 kernel uses its own core step list; §6.11.1, §6.11.5.
+- MOD3-4 — `core.json` at `core/openapi/core.json`; `httpapi` → `internal/openapi` at S2.
+- MOD3-19 — `version.Version` starts at 0.1.0; MinCoreVersion assertion.
+- FE3-2 / MOD3-14 — `Options.BuildID` generated once per release, shared by Vite, Makefile, both Docker stages and goreleaser; P8 `ProblemBuildID`; `LegacyMount.BuildID`; test.
+- FE3-4 — `Options.UIOptions ui.AppOptions` merged into `ui.Options` in P8.
+- FE3-8 — `ui.ReservedSegments` leaf lands at S2.
+- FE3-9 — one name (`ProblemSPASegmentCollision`) and one test for the P8 check; `Router.NonSPASegments()` supplies data.
+- FE3-16 — module catalog route package `internal/modulehttp` (L6) over a `ModulesView` interface.
+- FE3-17 — `UIDescriptor.LegacyRedirects` is the one legacy-redirect list.
+- OPS3-16 — one ASCII `phase` label set including `P4a`–`P4d`.
+- OPS3-17 — until S8 P−1 is absent (no HEAD boot check unless O9).
+- SEC3-14 — `AuthMethod` (recording only) at S2.
+- SIMP3-2 / SIMP3-11 — `archtest.DeferredMembersAbsent` from S2; facade problem kinds moved out of the built `iota` block.
+- SIMP3-3 — `Options.CompatLedger` and `Options.MetricAliases` at S2b.
+- Coordinator (R-E, 05-config/05-logging v1.4.0) — `Options.LegacyConfig *config.Legacy` (S2 DB layer at P3 over `Rows`, from S2b at P4d); `config.ResolveStateDir` once before P−1; `Registrar.LogPathRules`/`LogOtherUserData` for the other-user-data journal predicate.
+- Coordinator (R-D, 05-authn v1.4.0) — P4d hooks also on a replaced-store boot, `auth.BootWrites` after the hooks; `auth` leaf types at S2.
+- SIMP3-5 — `Deps.Notify` lands at S7.
+- Coordinator (R-C) — no tasks reconcile in P4d; executor lifecycle `Executor.Run`; starter handle `tasks.Stager`.
+
