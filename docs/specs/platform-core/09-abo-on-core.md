@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/09-abo-on-core.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.9.1 -->
 <!-- guid: 3c82c917-2fc4-4385-b085-73d143a2374f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -436,8 +436,9 @@ families, the stage at which core starts calling books' store, and rollback, key
 **Ownership and write checks (R3-1, DATA3-2, A-3).** Books holds every legacy family at every stage of S0–S10,
 in the mode 05-storage §5S.9.1 states, the same at every stage. The claims (key ownership) roll out shadow →
 strict at S2b, and that is the only storage-level rule on a legacy family: **legacy families get no
-storage-enforced write checks during the extraction** — no `CheckedWrites`, no `Serialized` mode and no
-blind-write record — and keep HEAD's lock discipline: HEAD's keyed mutexes (the run families' `opsMu` through
+storage-enforced write checks during the extraction** — no `CheckedWrites` and no
+blind-write record; a legacy writer may still stage a voluntary `Expect` inside a `Serialized` claim as a
+compare-and-set (05-storage), which storage does not enforce — and keep HEAD's lock discipline: HEAD's keyed mutexes (the run families' `opsMu` through
 `legacy.TasksWriteLock`), `apiKeyMu` with early fix 6, and the single-writer AST ratchet of §9.2.1. `Expect`
 preconditions and `Serialized` families apply to native keyspaces and to the rows core newly writes under `c/`
 (05-storage). There is no claim hand-over and no grant. A store interface lands with its subsystem; until then
@@ -1459,7 +1460,7 @@ Q-D and Q-E are deferred to H1 and H2.
 |---|---|---|---|---|
 | **H1 — identity cutover** | sessions and one-time tokens stored hashed; `mck_` keys with canonical scopes; roles and keys holding native scopes, so an ABO role can hold a core-only permission (`core:metrics.read` for `/metrics`); the identity families move to `c/auth/`/`c/rbac/` or are rewritten in place, as 05-authn and 05-rbac decide; 14 Q-D | books' identity owner level (05-storage §5S.3.7) | the H1 release | every older build refuses the store; the release note states one re-login; `TestLegacyRoleReachUnchanged` stays green on the legacy routes; no raw session token is left in the store |
 | **H2 — secrets cutover** | every plaintext secret of the blob is encrypted into `c/secrets/` and its blob field removed (whether the four HEAD-encrypted rows move too is 05-config's decision); 14 Q-E | the config owner's level | the H2 release | no plaintext secret is left in the store or in `<db parent>/config.yaml`; every older build refuses the store |
-| **H3 — auth-precedence cutover** | an operator value that enables auth (`ENABLE_AUTH=true`, `enable_auth: true` in the operator file) wins over a stored `false`; a value that disables auth keeps HEAD's precedence | the config owner's level | the H3 release | auth enabled through the environment stays on across restarts; every older build refuses the store, so no rollback can turn it off |
+| **H3 — auth-precedence cutover** | an operator value that enables auth (`ENABLE_AUTH=true`, `enable_auth: true` in the operator file) wins over a stored `false`; a value that disables auth keeps HEAD's precedence; every other `BelowStored` legacy flag is cleared in the same cutover, so the canonical precedence applies (05-config §1.12.5) | the config owner's level | the H3 release | auth enabled through the environment stays on across restarts; every older build refuses the store, so no rollback can turn it off |
 
 The integrations cutover (05-metadata M1.10) is a per-family cutover of the first paragraph: it brings `Local` with
 an admin's confirmation, per-instance limits and origin binding to the instances ABO has today.
@@ -1863,3 +1864,4 @@ Advisor (dispositions in `docs/plans/platform-core/reviews/spec-advisor-disposit
 - A-16 / ADV-8 — no `config.yaml` sentinel clause; `TestCoreWritesOnlyHEADGapFillKeys` at S3. ADV-10 — S0 "User-visible changes" row with seven release-note lines. ADV-11 — §9.3 "Counts in done-checks are generated"; literals in S2, S4, S5, S7 and S8 marked as evidence-commit values.
 - A-17 — Q-K decided: the legacy factory-reset alias keeps HEAD's `RootDir` wipe; the native route needs `delete_library_files: true` and names `RootDir` and the file count (§9.2.1 row 1, §9.2.6, S2b, S4).
 - Cross-cluster (lead-approved) — R-C: health token `auto_update_paused`; R-E: auth enable is HEAD's exactly, `ABO_CORE_AUTH_MODE` an additional canonical name, row 3's release note; R-F: legacy-backed instances read `Local=true`, `ProtectAdmin` on destination and secret changes, 422 `ErrFieldNotStorable`; R-G: P−1 deferred-build (O9).
+- Integration pass (advisor, lead) — §9.2.3: legacy writers may stage a voluntary `Expect` in a `Serialized` claim (A-3 ruling); §9.13 H3 also clears the other `BelowStored` flags (matches 05-config §1.12.5).
