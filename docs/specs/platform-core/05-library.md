@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-library.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: dafe380b-f703-41cb-99d0-2b2ba32f70e5 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -307,11 +307,18 @@ type LibraryRootSource interface {
 	Covers(id string) bool
 	// Create allocates the legacy ID, writes the legacy row and its index rows
 	// in b, and returns the root's ID; a spec whose fixed fields differ from the
-	// source's values is refused with library.ErrRootFieldFixed.
+	// source's values is refused with library.ErrRootFieldFixed. Books
+	// allocates the ID as HEAD does, through nextID under counterMu with its
+	// own Sync commit, on the one books store instance its CreateImportPath
+	// callers also use (05-storage §5S.3.11 "One instance per family"), so two
+	// roots never receive one ID (R9-1, DATA9-2).
 	Create(ctx context.Context, b *storage.Batch, spec library.RootSpec) (library.RootID, error)
 	// Update rewrites only library's fields of the row, with an Expect on the
 	// bytes it read (a voluntary compare-and-set in the row's Serialized claim;
-	// storage enforces none, A-3); a change to a fixed field is refused with
+	// storage enforces none, A-3). The source offers no legacy.WriteLock: HEAD
+	// guards these rows with no mutex, and from S7 every writer of the row
+	// compare-and-sets (§5L.10), which is what makes the Expect sound
+	// (05-storage §5S.3.2, R9-1). A change to a fixed field is refused with
 	// library.ErrRootFieldFixed, nothing staged.
 	Update(ctx context.Context, b *storage.Batch, spec library.RootSpec) error
 	// Delete deletes the row and its index rows.
@@ -751,7 +758,7 @@ and ABO passes its own (A-5, 05-metrics), so no ABO series is renamed.
 | `TestDisabledModuleRootsInert` | G1 |
 | `TestTransferInCommitsWithCallerBatch` | `TransferIn` + caller rows land in one commit; `CrashClone` before the commit leaves a `done` row reported by `PendingTransfers`, never undone |
 | `TestScopeCannotActAsAnotherOwner` | a module's `Scope` cannot write another owner's root or quarantine its files |
-| `TestImportRootsStayLegacyFormat` (ABO, books' `legacy.LibraryRootSource` under `legacytest.LibraryRootSourceSuite`) | an import root added, renamed or disabled on this build is an `import_path:` row (with its path index row and an ID from `counter:import_path`) that the previous release's store code lists unchanged; `LastScan`/`BookCount` written by a concurrent scan survive a library edit **and** a library edit survives a concurrent scan's statistics write (both stage `Expect` voluntarily, DATA4-4, A-3); books' in-memory root table shows the edit without a restart; a change to a fixed field is refused with `ErrRootFieldFixed`, and nothing is written outside books' claims (A-2) |
+| `TestImportRootsStayLegacyFormat` (ABO, books' `legacy.LibraryRootSource` under `legacytest.LibraryRootSourceSuite`) | an import root added, renamed or disabled on this build is an `import_path:` row (with its path index row and an ID from `counter:import_path`) that the previous release's store code lists unchanged; a root created through the source and one created concurrently through books' `CreateImportPath` get distinct IDs (one shared store instance, R9-1, DATA9-2); `LastScan`/`BookCount` written by a concurrent scan survive a library edit **and** a library edit survives a concurrent scan's statistics write (both stage `Expect` voluntarily, DATA4-4, A-3); books' in-memory root table shows the edit without a restart; a change to a fixed field is refused with `ErrRootFieldFixed`, and nothing is written outside books' claims (A-2) |
 | `TestLegacyRootSentinelBootstrap` | a legacy-served root: the heuristic passes and the sentinel is created; a later mount whose sentinel names another root or install refuses destructive ops; a root whose path the previous release changed is decided by the heuristic until its new volume gets a sentinel; nothing is stored beside the `import_path:` row (A-2) |
 | `TestLibraryNewRejectsWrongLegacySource` | `library.New` with an `Options.LegacySource` that does not satisfy library's mirror returns `storage.ErrLegacyStoreType`; nil means no source (R7-7, SIMP7-4) |
 | `TestConfigEntryRoots_RoundTrip` | without a root source, every root and mapping round-trips through `core.library.roots`/`mappings` (SIMP4-3, SIMP7-8: the native roots are config entries, not a store) |
@@ -774,7 +781,7 @@ and ABO passes its own (A-5, 05-metrics), so no ABO series is renamed.
 | `internal/diskstats` | `Root.Usage` (moved into core as an internal package) |
 | `deluge.ProtectedPathCache` | a `ProtectionOracle` implemented by the Deluge adapter (05-download); static `protected_paths` → `RoleExternal` roots |
 | `itunes.path_mappings`, `WHISPER_PATH_MAP`, fingerprint worker wire format | `PathMapper` sources `itunes`, `worker:whisper`, `worker:fingerprint` |
-| `ImportPathStore` methods minus `CountBooksByPathPrefix` (`internal/database/pebble_store_importpaths.go`; 04's `database.Store` split table: `ImportPathStore` → `library`) | **stay in ABO** as books' legacy implementation of `legacy.LibraryRootSource` (R4-1, SIMP4-2, SIMP6-3), over books' own `import_path:<id>` + `import_path:path:<path>` rows and the ID counter `counter:import_path` (`pebble_store_importpaths.go:138-185` allocates through `nextID("import_path")`; 05-storage §5S.9.1 row 19: the rows and the counter `Serialized`, no blind-write check, A-3). It writes HEAD's `ImportPath` JSON (`internal/database/store.go:596-604`) with `codec.LegacyJSON` through books' repository layer, so books' in-memory `import_paths` table (`pebble_store_importpaths.go:21-26`, `memdb_schema.go:19`) stays current; it writes only library's fields, with an `Expect` on the bytes it read, and the path index row in the same batch. Books' own writers of the same row — the scanner (`internal/scanner/service.go:677`), autoscan (`internal/server/folder_autoscan_op.go:147`) and the filesystem handlers (`internal/server/handlers/filesystem.go:247,319`), which today write back the whole struct read earlier (`pebble_store_importpaths.go:187-231`) — become a field-merge `GetForUpdate` + `RetryOnConflict` that updates only `LastScan`/`BookCount` (DATA4-4). `Enabled` stays books' scan switch, which library shows as a registered root with watching off |
+| `ImportPathStore` methods minus `CountBooksByPathPrefix` (`internal/database/pebble_store_importpaths.go`; 04's `database.Store` split table: `ImportPathStore` → `library`) | **stay in ABO** as books' legacy implementation of `legacy.LibraryRootSource` (R4-1, SIMP4-2, SIMP6-3), over books' own `import_path:<id>` + `import_path:path:<path>` rows and the ID counter `counter:import_path` (`pebble_store_importpaths.go:138-185` allocates through `nextID("import_path")`, under HEAD's `counterMu` around its own commit, on the one books store instance that every allocator shares, 05-storage §5S.3.11 and §5S.9.3; 05-storage §5S.9.1 row 19: the rows and the counter `Serialized`, no blind-write check, A-3, R9-1). It writes HEAD's `ImportPath` JSON (`internal/database/store.go:596-604`) with `codec.LegacyJSON` through books' repository layer, so books' in-memory `import_paths` table (`pebble_store_importpaths.go:21-26`, `memdb_schema.go:19`) stays current; it writes only library's fields, with an `Expect` on the bytes it read, and the path index row in the same batch. Books' own writers of the same row — the scanner (`internal/scanner/service.go:677`), autoscan (`internal/server/folder_autoscan_op.go:147`) and the filesystem handlers (`internal/server/handlers/filesystem.go:247,319`), which today write back the whole struct read earlier (`pebble_store_importpaths.go:187-231`) — become a field-merge `GetForUpdate` + `RetryOnConflict` that updates only `LastScan`/`BookCount` (DATA4-4). `Enabled` stays books' scan switch, which library shows as a registered root with watching off |
 | `pending_file_op:` (`file_io_pool.go:31`) | stays a books family with its books writer: it is books' per-book file I/O job pool (tag and metadata writes), not a transfer journal, so nothing is drained or moved. Core transfers journal only in the core-only `c/library/transfer/`, which no older build reads: a rollback right after a crash mid-transfer leaves that one transfer's recovery to the next boot of this build (R3-1) |
 | `filehash.BookFileHash` | stays books (identity algorithm), reads through `RootFS` |
 
@@ -912,3 +919,8 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`, 2026-1
 - A-3 / ADV-S2 — the source's and books' writers' `Expect` on `import_path:` is a voluntary compare-and-set; no `CheckedWrites`.
 - A-4 / ADV-S3 — §5L.13 no longer cites `archtest.DeferredMembersAbsent`.
 - A-5 / ADV-S4 — §5L.8 namespace note.
+
+Round 9 (`docs/plans/platform-core/reviews/spec-round-9-*.md`, dispositions binding):
+
+- DATA9-2 (R9-1) — `LibraryRootSource.Create` and §5L.10: the `counter:import_path` ID comes from HEAD's `nextID` under `counterMu` on the one shared books store instance, so the source and books' `CreateImportPath` callers never issue one ID twice; `TestImportRootsStayLegacyFormat` gains the concurrent-create case.
+- R9-1 — `Update`'s comment: the source offers no `legacy.WriteLock`; its voluntary `Expect` is sound because HEAD guards the row with no mutex and every writer compare-and-sets from S7.
