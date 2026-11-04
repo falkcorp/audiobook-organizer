@@ -51,3 +51,6 @@
         (`internal/database/pebble_store_auth.go:1284-1302`), but `SetAPIKeyStatus` writes the row
         without taking that lock (`:1226-1247`), so an in-flight touch can write back the pre-revocation
         row. Take `apiKeyMu` in every `apikey:` writer (or write `last_used` to a separate key).
+  - [ ] **SECURITY (hotfix):** an enabled Basic gate with an empty stored password accepts the configured
+        username with an empty password (`internal/server/middleware/basicauth.go:81-87` compares `""` to
+        `""`). Refuse all Basic credentials while the gate is enabled and no password is set (fail closed).
