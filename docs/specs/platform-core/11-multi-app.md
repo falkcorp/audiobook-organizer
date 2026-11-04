@@ -1,0 +1,80 @@
+<!-- file: docs/specs/platform-core/11-multi-app.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 74ed9015-8ae0-4b4b-8049-4c09cfbba343 -->
+<!-- last-edited: 2026-11-04 -->
+
+# 11 — Several apps in one binary (lowest priority)
+
+Evidence commit: `748fd787a`. The owner's priority order puts "ABO + TV + Movies modules in one
+binary" last: **never ruled out, never over-invested** (02 §2.1). This file records which design
+constraints keep the door open, what is deliberately not done, and what a later "suite" binary would
+need. It is not a capability contract and adds no core API.
+
+## 11.1 What "multi-app" means here
+
+One `main` calling `app.New(ctx, opts, books.New(…), tv.New(…), movies.New(…))`: one process, one
+data directory, one Pebble store, one user database, one HTTP listener, one SPA. It does **not** mean
+several `App` values in one process sharing nothing (that is already possible once R5 holds, because
+nothing in core is process-global) nor multi-tenancy (D7: no tenant IDs).
+
+## 11.2 Constraints already honoured by the design
+
+| Constraint | Where it is specified | What it guarantees for a suite binary |
+|---|---|---|
+| Module IDs unique, validated before storage opens | 06 §6.5.1 P1, 03 §3.6 | `books`, `tv`, `movies` cannot collide silently |
+| Namespaced storage: `m/<id>/` per module, `c/<subsystem>/` for core, legacy claims checked for overlap | 03 R8, 05-storage, 06 `KeyspaceSpec` | ABO's 258 legacy families are claimed by `books`; new modules never touch them |
+| Route prefixes `/api/<id>/v1`, core at `/api/core/v1` | 03 §3.6, 06 `Registrar.Route` | no path overlap between modules by construction |
+| Permission namespaces `<id>:<action>`, admin is `core:admin` | 03 §3.6, 06 `PermissionSpec`, 05-rbac | one role editor shows `books:*`, `tv:*`, `movies:*`; API keys can be scoped per module |
+| Task kinds `<id>.<name>`, resources `{Module, Kind, ID}` | 03 §3.6, G8, 05-tasks | one executor, no write-set identity collisions |
+| Event topics `<id>.<noun>.<verb>.v<n>`; outbox handler names namespaced | 05-events | cross-module reactions without import edges (R3) |
+| Config sections `modules.<id>.*` | 03 §3.6, 06 `Settings` | one config file, no key collisions |
+| Metrics `<app>_<id>_*` on a per-`App` registry | 05-metrics, 06 `Deps.Metrics` | no duplicate-registration panic (today's default-registry hazard, raw/12 §9) |
+| No process-global mutable state in core (R5, `TestNoGlobals`) | 03 R5 | the raw/12 §9 hazards (`config.AppConfig`, viper, `slog.SetDefault`, Prometheus default registry, OTel globals, `database.globalStore`, `plugin.Global()`, `serviceregistry.registered`, `aijobs`, throttle/quota maps) are absent from core |
+| One shell with merged navigation from every enabled module | 07 §7.4–§7.5 | nav, settings panels and widgets of all modules render in one SPA; intersection per module |
+| One task executor and scheduler | 05-tasks | a single queue with per-kind permissions and resources |
+| Distinct *arr facades by URL base, collisions refused at boot | 08 §8.4 | `/tv/api/v3` and `/movies/api/v3` side by side |
+| Restart-bound enablement per module, dependencies validated | 06 §6.5.3 | a suite can ship all three and enable a subset |
+| Module isolation guard wired from wave 0 | 03 R3 `archtest.ModulesIsolated` | a second module cannot import the first |
+
+## 11.3 Hazards found that a suite would trip over
+
+| Hazard | Anchor | Required handling (owner) |
+|---|---|---|
+| ABO's catch-all `/api/*` → `/api/v1/*` 301 redirect is a gin global middleware with an exclusion list | `internal/server/server_lifecycle.go:1789-1816` | 05-http-api §4.9 re-implements it as the least-specific `/api/` handler of the `books` legacy mount, so every claimed prefix (`/api/core/`, `/api/<module>/`, facades) wins by `ServeMux` specificity. For an **unknown** path under another module (`/api/tv/v1/nope`) not to fall through to it, each module and core group must register a subtree 404 catch-all (open item for 05-http-api) |
+| Un-namespaced ABO names during the compatibility window (`/api/v1/...`, 13 permission atoms, flat config keys, `/api/v3/ops`) | 03 §3.6 last paragraph | all are declared by `books` (`Manifest.LegacyPrefixes`, `Manifest.LegacyAliases`, config `LegacyKeys`), so the kernel checks them against other modules; window closes per 09 |
+| ABO-side globals (`config.AppConfig`, `database.globalStore`, viper, `slog.SetDefault` in `cmd/root.go:718`) | raw/12 §9 | harmless while only `books` uses them, but the suite `main` must own logging/metrics setup through core, so `books` must stop calling `slog.SetDefault`/`otel.Set*` (09 wave that moves logging to core) |
+
+## 11.4 Deliberately left undone
+
+* **No suite `main` and no combined SPA build.** Each app ships its own `main` and its own web
+  workspace; nothing builds one bundle containing several apps' module UI packages.
+* **One app identity per process.** `app.Options` has a single `ID`/`DisplayName`/`Version`/`Release`;
+  a suite would need its own identity, theme and update channel.
+* **No per-module fairness in the task executor.** One module's CPU-bound library-scale task can use
+  every worker; per-module concurrency quotas are not designed (05-tasks has global and per-kind
+  limits only).
+* **No per-module backup/restore granularity** beyond what 05-backup gives every module.
+* **No combined OpenAPI client** for a suite; each module's generated client works, but there is no
+  aggregate package.
+* **Shared failure domain accepted.** A panic or memory blow-up in one module takes down all of them
+  (adversarial review residual risk, raw/08 §2).
+* **No cross-app UX** (unified search across books/series/movies, shared "requests" page).
+
+## 11.5 Checklist for a future suite binary
+
+| # | Item | Size |
+|---|---|---|
+| 1 | A suite repo or `cmd/suite` with `main` calling `app.New` with all modules; suite `app.Options` identity | S |
+| 2 | Suite web workspace: `createShell({ modules: [booksModule, tvModule, moviesModule] })`; each app's module UI must be publishable as its own package (today ABO keeps `modules/books/` as a directory, 07 §7.11 — promote it) | M |
+| 3 | Embed the suite SPA with `embed_frontend` like any app (07 §7.6) | S |
+| 4 | Decide data-directory layout when migrating existing single-app installs into one store (copy keyspaces; legacy claims stay with `books`) and write the import tool | L |
+| 5 | Merge user databases of existing installs (users, roles, API keys) or start fresh — owner decision | M |
+| 6 | Configure facade URL bases (`modules.tv.arrfacade.url_base=/tv`, `modules.movies.arrfacade.url_base=/movies`); 05-http-api §4.9 makes a non-empty base mandatory for every facade in a multi-app binary | S |
+| 7 | Per-module executor quotas (05-tasks extension) if measurements show starvation | M |
+| 8 | Suite e2e suite: boot with all modules, G1 for each disabled subset, nav merge, facade isolation | M |
+| 9 | Release pipeline and updater source for the suite artifact | S |
+| 10 | Re-run `archtest.ModulesIsolated` with all three modules and `TestNoGlobals` over every module package | S |
+
+Nothing in this list requires changing a core contract; that is the test of whether the door is
+still open. If a later spec change would make any row require a core API change, it must say so
+in 14-risks-open-questions.

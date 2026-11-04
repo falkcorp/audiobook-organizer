@@ -56,7 +56,7 @@ tests and `node_modules`), classified in raw/07 §5.1 and mapped to their replac
 
 | # | Decision | Rationale and cost |
 |---|---|---|
-| A1 | A module is `Manifest()` (pure data, validated before storage opens) **plus** `Register(*Registrar)` (runs after migrations, receives typed `Deps`). **Rule: anything the kernel needs before constructing services lives in the `Manifest`; anything that needs a service lives in `Register`.** So permissions, keyspace and legacy claims, migrations, settings sections, UI descriptor IDs, dependencies and required capabilities are manifest fields; routes, tasks, schedules, topics, outbox handlers, adapters, health checks, hooks, workers and the *arr provider are registrar calls. | 03 §3.7 requires validation before listeners *and* migrations before services. A single `Register` cannot do both because its handlers need migrated storage. Cost: two places to look; mitigated by the rule being mechanical. |
+| A1 | A module is `Manifest()` (pure data, validated before storage opens) **plus** `Register(*Registrar)` (runs after migrations and config load, receives typed `Deps`). **Rule: anything the kernel needs before services exist lives in the `Manifest`; anything that needs a service lives in `Register`.** So dependencies, permissions/roles/grants, storage spec (keyspace, legacy claims, migrations), library roles, settings sections, legacy HTTP prefixes and UI descriptor IDs are manifest fields; routes, tasks, resources, topics, subscriptions, adapters, health/diagnostics, hooks, workers and the *arr provider are registrar calls. | 03 §3.7 requires validation before listeners, migrations before services, and 05-config requires sections to be registered before the config store loads, while route handlers need migrated storage and loaded config. One `Register` cannot satisfy both. Cost: two places to look; mitigated by the rule being mechanical. |
 | A2 | **No generic DI container in core.** Core's own ~30 services are built by hand-written, typed code in `kernel/services` (a struct with one field per service, constructed in a fixed order). A module builds its internal services with plain Go constructors inside `Register`. | Evaluated below (§6.3.1). |
 | A3 | `Deps` is a **struct of typed, module-scoped handles**, never `any`, never nil. Scoping is applied by the kernel (keyspace `m/<id>/`, topic prefix `<id>.`, secret names `<id>/…`, metric prefix, logger attribute). | Replaces 113 `Get[T]` string lookups with compile-time types; scoping enforces R3/R8 at the handle rather than by review. |
 | A4 | Registrar methods **record problems instead of returning errors** (like `testing.T`); the kernel joins every problem of every module into one `*ValidationError`. | An operator sees all misconfigurations at once, not one per restart. |
@@ -74,7 +74,7 @@ tests and `node_modules`), classified in raw/07 §5.1 and mapped to their replac
 | Optional services | typed-nil returns that every consumer must nil-check (raw/07 §6.10; e.g. `metricsstore` returns `(*database.PebbleMetricsStore)(nil)`, `internal/server/registry_wire.go:283-291`) | `if cfg.AI.Enabled { … }` at the one construction site; consumers receive a non-nil value or a documented no-op |
 | Cycles | `PostInit` cross-wiring after `Build` (6 implementors, e.g. `internal/dedup/lifecycle.go:76`) | explicit setter after both are built, or replace the edge by an event subscription (most of today's `PostInit`s subscribe to the event bus) |
 | `IncludeGroup` | string groups `core`/`ai`/`scheduler`/`plugins`/`activity`; `activity` gated on `DatabasePath` (`server.go:824-826`) | plain `if` in `books` `Register`; the group concept disappears |
-| Test seam | `Override(name, instance)` | `coretest` options replace whole core services (`coretest.WithStorage`, `WithAdapter`) and a module's own constructors take interfaces |
+| Test seam | `Override(name, instance)` | `coretest` options replace whole core services (`coretest.WithConfig`, `WithAdapters`, fakes) and a module's own constructors take interfaces |
 
 A container earns its keep when the composition set is open-ended and assembled from discovered
 registrants. That is exactly what this design removes (N4). With ≤ 30 core services in a fixed
@@ -96,19 +96,18 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net/http"
 
 	"github.com/falkcorp/mediacore/arrfacade"
 	"github.com/falkcorp/mediacore/audit"
+	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/backup"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/events"
 	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/ai"
 	"github.com/falkcorp/mediacore/integrations/download"
-	"github.com/falkcorp/mediacore/integrations/indexer"
-	"github.com/falkcorp/mediacore/integrations/metadata"
 	"github.com/falkcorp/mediacore/integrations/notify"
 	"github.com/falkcorp/mediacore/integrations/providerhttp"
 	"github.com/falkcorp/mediacore/library"
@@ -118,7 +117,6 @@ import (
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks"
-	"github.com/falkcorp/mediacore/auth"
 )
 
 // ID is a module identifier: ^[a-z][a-z0-9]{1,15}$ (03 §3.6). "core" is reserved.
@@ -137,10 +135,10 @@ type Module interface {
 	Manifest() Manifest
 
 	// Register is called exactly once, after core and this module's migrations
-	// have run and after every module this one DependsOn has registered.
-	// It constructs the module's services from r.Deps() and records routes,
-	// tasks, schedules, topics, handlers, adapters, health checks, hooks and
-	// workers. A returned error aborts boot (fail-closed).
+	// have run, config is loaded, and every module this one DependsOn has
+	// registered. It constructs the module's services from r.Deps() and records
+	// routes, tasks, topics, adapters, health checks, hooks and workers.
+	// A returned error aborts boot (fail-closed).
 	Register(r *Registrar) error
 }
 ```
@@ -162,153 +160,132 @@ type Manifest struct {
 	DefaultEnabled bool
 
 	// DependsOn lists modules that must be present AND enabled. Order of
-	// Register/Start follows this graph (topological, ties by ID).
+	// migrations, Register and Start follows this graph (topological, ties by ID).
 	DependsOn []ID
 
-	// Requires lists integration capabilities the module needs at runtime.
+	// Requires lists integration kinds the module needs at runtime.
 	// Required=false entries only drive the settings UI and health text.
 	Requires []CapabilityRequirement
 
-	// Permissions this module defines. Every name must be "<ID>:<action>[.<sub>]".
-	// Routes, tasks and facade endpoints may only use declared permissions
-	// (plus core's rbac.Public / rbac.AnyAuthenticated / core:* atoms).
-	Permissions []rbac.PermissionSpec
+	// RBAC declarations (05-rbac §3.2): permissions in this module's namespace,
+	// default roles, grants of own scopes to core seed roles, and legacy
+	// permission-string aliases. Fed by the kernel to rbac's Declarer.
+	Permissions   []rbac.PermissionDef
+	Roles         []rbac.RoleSeed
+	Grants        []rbac.Grant
+	LegacyAliases []rbac.LegacyAlias
 
-	// Keyspace configures storage ownership: the module always owns m/<ID>/;
-	// Legacy lists pre-existing key prefixes it adopts in place (books uses
-	// this for ABO's 258 families, 05-storage). Overlap between any two claims
-	// across modules or with core keyspaces fails boot (R8).
-	Keyspace KeyspaceSpec
+	// Storage is the module's storage declaration (05-storage §5S.3): its
+	// m/<ID>/ keyspace, legacy claims (books: ABO's 258 families), versioned
+	// migrations (run before Register, inside a checkpoint — G2), data
+	// migrations, derived indexes and compat adapters.
+	Storage storage.Spec
 
-	// Migrations are forward-only, versioned per module (05-storage). They
-	// run before Register, inside a checkpoint (G2).
-	Migrations []storage.Migration
+	// Library declares the library-root roles the module needs (05-library).
+	Library []library.RoleRequirement
 
-	// Settings are the typed config sections the module owns. Each section
-	// name must be "modules.<ID>" or start with "modules.<ID>.".
-	Settings []config.AnySection
+	// Settings are the typed config sections the module owns, wrapped with
+	// Settings(section). Paths must be "modules.<ID>" or below. They are
+	// registered with config before the config store loads (05-config §1.3.2).
+	Settings []SettingsSection
 
 	// UI lists the descriptor IDs the module's client bundle may contribute.
 	// The server reports them in /api/core/v1/modules; the shell refuses
-	// client entries whose IDs are not listed (G3, 07 §7.4).
+	// client entries whose IDs are not listed (G3, 07 §7.5).
 	UI UIDescriptor
 
-	// Legacy declares un-namespaced surfaces kept for a compatibility window
-	// (09): HTTP path prefixes outside /api/<ID>/, legacy permission atoms
-	// mapped to namespaced ones, legacy task kinds. Validated for collisions.
-	Legacy LegacySurfaces
+	// LegacyPrefixes are un-namespaced HTTP subtrees the module occupies for a
+	// compatibility window (09); each becomes an httpapi.PrefixClaim of kind
+	// Legacy, validated against core, other modules and facades
+	// (05-http-api §4.9). Only paths listed here may be passed to MountLegacy.
+	LegacyPrefixes []string
 }
 
-// CapabilityRequirement names an integration capability the module uses.
+// CapabilityRequirement names an integration kind the module uses.
 type CapabilityRequirement struct {
-	Capability Capability // CapDownload, CapIndexer, CapMetadata, CapAI, CapNotify
-	Required   bool       // true: boot fails when no adapter instance is configured
-	Why        string     // shown in settings and in the boot error
+	Kind     integrations.Kind // "download", "indexer", "metadata", "ai", "notify" (05-metadata M1)
+	Required bool              // true: boot fails when no instance of this kind is configured
+	Why      string            // shown in settings and in the boot error
 }
 
-type Capability string
-
-const (
-	CapDownload Capability = "download"
-	CapIndexer  Capability = "indexer"
-	CapMetadata Capability = "metadata"
-	CapAI       Capability = "ai"
-	CapNotify   Capability = "notify"
-)
-
-// KeyspaceSpec — the m/<ID>/ prefix is implicit and cannot be configured.
-type KeyspaceSpec struct {
-	Legacy []storage.LegacyClaim // e.g. {Prefix: "book:", Why: "ABO book rows"}
-}
-
-// UIDescriptor lists the IDs of client-side contributions (07 §7.3).
+// UIDescriptor lists the IDs of client-side contributions (07 §7.4).
 type UIDescriptor struct {
 	Pages          []string // route IDs, e.g. "library", "book"
 	Nav            []string // nav entry IDs
 	SettingsPanels []string // settings panel IDs
-	Widgets        []string // optional dashboard widgets
+	Widgets        []string // optional home/system/diagnostics widgets
 }
 
-// LegacySurfaces is the compatibility ledger for an extracted app (09).
-type LegacySurfaces struct {
-	PathPrefixes []string                        // e.g. "/api/v1/", "/api/v3/ops/"
-	Permissions  map[string]rbac.Permission      // "library.view" -> "books:read"
-	TaskKinds    map[string]string               // old def ID -> new kind
-	RemoveAfter  string                          // module version at which the window closes
-}
+// SettingsSection wraps a config.Section[T] so a Manifest can list sections
+// of different T. The kernel registers each before config loads.
+type SettingsSection struct{ /* unexported: path + register func(config.Registry) (any, error) */ }
+
+// Settings wraps a declared section for Manifest.Settings.
+func Settings[T any](s config.Section[T]) SettingsSection
+
+// Setting returns the live handle of a section this module declared in its
+// Manifest. Calling it for an undeclared section records ProblemSettingsUndeclared
+// and returns a handle holding the section defaults (never nil).
+func Setting[T any](r *Registrar, s config.Section[T]) *config.Handle[T]
 ```
 
-`rbac.PermissionSpec` (owned by [05-rbac](05-rbac.md)) carries default grants:
-
-```go
-package rbac
-
-type Permission string // "<ns>:<action>[.<sub>]"
-
-type RoleName string
-
-const (
-	RoleAdmin  RoleName = "admin"  // holds core:admin, which implies every permission
-	RoleEditor RoleName = "editor"
-	RoleViewer RoleName = "viewer"
-)
-
-type PermissionSpec struct {
-	Name          Permission
-	Title         string     // shown on the Users/Roles page
-	Description   string
-	DefaultGrants []RoleName // seeded on first boot of the module only; admin edits win afterwards
-	// Sensitive permissions are never granted by an API key scope preset and
-	// require an interactive session method (replaces today's credGuard list).
-	Sensitive bool
-}
-```
+Default grants are expressed the 05-rbac way: a module grants its own scopes to core seed roles
+(`rbac.Grant{Role: "core.viewer", Scopes: []rbac.Scope{"hello:read"}}`) and may seed its own roles
+(`books.editor`); it can never grant `core:*` (05-rbac §4.9).
 
 ### 6.4.3 `module.Registrar`
 
 ```go
 // Registrar is handed to Module.Register. It is not goroutine-safe and is
-// closed when Register returns; calls after that record ErrRegistrarClosed.
+// closed when Register returns; calls after that record ProblemRegistrarClosed.
+// Methods record problems rather than return errors (A4); Err reports them.
 type Registrar struct{ /* unexported */ }
 
-// Deps returns the module-scoped dependency handles. Always non-nil fields.
+// Deps returns the module-scoped dependency handles. Every field is non-nil.
 func (r *Registrar) Deps() Deps
 
-// Route registers native routes. Paths are relative to /api/<ID>/v1; a
-// route whose resolved path is outside that prefix (or a declared
-// Legacy.PathPrefixes entry) is a problem. Every route must declare a
-// permission (R6); httpapi refuses the zero value.
-func (r *Registrar) Route(routes ...httpapi.Route)
+// HTTP returns the module's route group rooted at /api/<ID>/v1, with the full
+// core chain applied (05-http-api §3.1). Register routes with
+// httpapi.Handle(r.HTTP(), httpapi.Route{...}, fn). Every route needs Perm (R6).
+func (r *Registrar) HTTP() *httpapi.Group
 
-// LegacyHandler mounts an http.Handler under a declared legacy prefix
-// (used by books to mount ABO's gin engine during migration, N7). The
-// handler is wrapped in the same core middleware chain as native routes,
-// and each legacy prefix must name the permission check policy explicitly.
-func (r *Registrar) LegacyHandler(prefix string, policy httpapi.LegacyPolicy, h http.Handler)
+// MountLegacy mounts an http.Handler (books: the gin engine during migration,
+// N7) on prefixes declared in Manifest.LegacyPrefixes (05-http-api §8.2).
+// m.Owner is set by the registrar.
+func (r *Registrar) MountLegacy(m httpapi.LegacyMount)
 
-// Task registers task definitions; kinds must be "<ID>.<name>". Each
-// definition carries its tasks.Parallelism (R7) — tasks rejects the zero value.
-func (r *Registrar) Task(defs ...tasks.Definition)
+// Tasks registers task definitions; kinds must be "<ID>.<name>". Schedules are
+// part of each definition (tasks.Common.Schedule, 05-tasks 5T.3.8).
+func (r *Registrar) Tasks(defs ...tasks.Definition)
 
-// Schedule registers recurring triggers for this module's own kinds.
-func (r *Registrar) Schedule(s ...tasks.Schedule)
+// Resources declares the resource kinds this module owns (G8, 05-tasks 5T.3.4).
+func (r *Registrar) Resources(kinds ...string)
 
-// Topic declares event topics this module publishes ("<ID>.<noun>.<verb>.v<n>").
-// Subscribing to other modules' topics needs no declaration.
-func (r *Registrar) Topic(t ...events.TopicSpec)
+// Lanes declares remote work lanes (05-tasks 5T.3.9).
+func (r *Registrar) Lanes(l ...tasks.Lane)
 
-// OutboxHandler registers a durable consumer (05-events). Handler names are
-// "<ID>.<name>"; a handler for a topic of a module not in DependsOn is allowed
-// (outbox is the cross-module correctness channel, R3).
-func (r *Registrar) OutboxHandler(h ...outbox.Handler)
+// Topics declares bus topics this module publishes; OutboxTopics declares
+// durable topics (05-events). Subscriptions and outbox consumers are made in
+// Register itself with events.Subscribe(d.Events, …) / outbox.Consume(d.Outbox, …);
+// the kernel freezes both when Register returns.
+func (r *Registrar) Topics(t ...events.TopicSpec)
+func (r *Registrar) OutboxTopics(t ...events.TopicSpec)
 
-// Adapter registers an implementation of a core capability contract that
-// this module ships (e.g. a TV metadata provider). Kind is "<ID>.<name>".
-// Core adapters (deluge, newznab, ...) are enabled in app.Options instead.
-func (r *Registrar) Adapter(a ...Adapter)
+// Adapter registers an integration adapter the module ships (05-metadata M1.3);
+// its ID prefix must equal the module ID. Core adapters are enabled in
+// app.Options.Adapters instead.
+func (r *Registrar) Adapter(d integrations.Descriptor)
 
-// Health registers component health checks ("<ID>.<component>").
+// Kind-specific integration declarations, owned by their contracts.
+func (r *Registrar) AICapability(s ai.CapabilitySpec)        // 05-ai
+func (r *Registrar) AIBatchHandler(h ai.BatchHandler)        // 05-ai
+func (r *Registrar) NotificationTopic(s notify.TopicSpec)    // 05-notify
+func (r *Registrar) DownloadWatch(w download.Watch)          // 05-download
+
+// Health, startup steps and diagnostics (05-health).
 func (r *Registrar) Health(c ...health.Check)
+func (r *Registrar) StartupSteps(s ...health.StartupStep)
+func (r *Registrar) Diagnostics(c health.Contributor)
 
 // Backup declares module-owned artifacts outside storage (05-backup).
 func (r *Registrar) Backup(a ...backup.Artifact)
@@ -320,12 +297,11 @@ func (r *Registrar) ArrFacade(p arrfacade.Provider)
 // order on start and reverse order on stop.
 func (r *Registrar) Hook(h Hook)
 
-// Worker registers a supervised long-running goroutine started after all
+// Worker registers a supervised long-running goroutine, started after all
 // hooks have started and stopped (ctx cancelled) before any hook stops.
 func (r *Registrar) Worker(w Worker)
 
-// Err returns the problems recorded so far, joined; nil if none. Modules may
-// call it to bail out early, the kernel always checks it after Register.
+// Err returns the problems recorded so far, joined; nil if none.
 func (r *Registrar) Err() error
 
 type Hook struct {
@@ -338,81 +314,63 @@ type WorkerPolicy int
 
 const (
 	// DegradeOnExit: an early return or panic marks health "<ID>.<worker>"
-	// unhealthy and is logged; the app keeps serving. Default.
+	// unhealthy and is logged; the app keeps serving.
 	DegradeOnExit WorkerPolicy = iota + 1
 	// StopAppOnExit: an early return or panic begins a graceful shutdown and
-	// App.Run returns the worker's error. For workers the module cannot run
-	// without (e.g. a library watcher whose loss would silently stop imports
-	// is NOT one of these — it degrades; a data-integrity relay is).
+	// App.Run returns the worker's error. Only for workers whose loss would
+	// make continued operation unsafe for data.
 	StopAppOnExit
 )
 
 type Worker struct {
 	Name   string
 	Run    func(ctx context.Context) error // must return promptly after ctx is done
-	Policy WorkerPolicy                    // zero value refused: say which
-}
-
-// Adapter is a capability implementation a module ships.
-type Adapter struct {
-	Capability Capability
-	Kind       string // "<ID>.<name>"
-	// Factory receives the adapter instance's config section (decoded by the
-	// capability package) and a provider-scoped HTTP client; see 05-download etc.
-	Factory any // a typed factory from the capability package, e.g. metadata.Factory[Q, R]
+	Policy WorkerPolicy                    // zero value refused: the module must say which
 }
 ```
-
-`Adapter.Factory` is `any` only at this boundary because each capability has its own generic
-factory type; the capability package provides the typed constructor (`metadata.AdapterOf[Q, R](kind, f)`
-returns a `module.Adapter`) and the kernel hands the value back to the same package, which type-asserts
-once at registration (fail-closed, reported as a problem).
 
 ### 6.4.4 `module.Deps`
 
 ```go
-// Deps are the handles a module may use. Every handle is scoped to the
-// module by the kernel and safe for concurrent use. None is ever nil; a
-// capability with no configured adapter returns ErrNotConfigured from its
-// lookup methods instead.
+// Deps are the handles a module may use. Every handle is scoped to the module
+// by the kernel and safe for concurrent use. None is ever nil; a capability
+// with no configured instance returns integrations.ErrNotConfigured (or the
+// kind package's equivalent) from its lookups instead.
 type Deps struct {
 	Module ID
 
 	Log     *slog.Logger  // child of the app logger with attr module=<ID> (05-logging)
 	Metrics metrics.Scope // registers <app>_<ID>_* on the App's registry, never the global one (05-metrics)
 
-	Storage storage.Keyspace           // m/<ID>/; writes outside are refused (R8)
-	Legacy  storage.LegacyKeyspaces    // the claimed legacy prefixes, by claim name
-	Index   storage.IndexFactory       // full-text indexes owned by this module (storage/index)
+	Storage storage.Handles // Keyspace m/<ID>/, Legacy claims, Indexes (05-storage)
 
-	Tasks  tasks.Client   // enqueue/query runs of any kind (permission-checked as the caller)
-	Events events.Bus     // publish only declared <ID>.* topics; subscribe to any topic
-	Outbox outbox.Writer  // same-batch durable messages (05-events)
+	Tasks  tasks.Starter  // start/observe runs of any kind, permission-checked as the caller (05-tasks 5T.3.10)
+	Events *events.Bus    // publish only declared <ID>.* topics; subscribe to any (05-events)
+	Outbox *outbox.Outbox // same-batch durable messages and consumers (05-events)
 
-	Config  config.Reader   // this module's sections + the read-only public core sections
-	Secrets secrets.Scope   // names under "<ID>/"; values never logged (05-config)
+	Secrets secrets.Scope    // names under "<ID>/"; values never logged (05-config part 2)
+	Library *library.Manager // os.Root-confined media roots (05-library)
 
-	Library library.Roots   // os.Root-confined media roots (05-library)
-	Auth    auth.Identities // user lookup, current principal from ctx (05-authn)
-	RBAC    rbac.Checker    // Can(ctx, perm) / Require(ctx, perm) (05-rbac)
-	Audit   audit.Recorder  // append-only, actor taken from ctx (05-rbac)
-	Health  health.Reporter // push-style status for this module's components (05-health)
+	Auth  auth.Identities // principal from ctx, user lookup (05-authn)
+	RBAC  rbac.Checker    // Can/Require against the request principal (05-rbac)
+	Audit audit.Recorder  // append-only, actor from ctx (05-rbac)
 
-	HTTP     providerhttp.Factory // instance-scoped outbound clients (05-metadata)
-	Download download.Clients     // configured download-client instances (05-download)
-	Indexers indexer.Set          // configured indexers (05-indexer)
-	Metadata metadata.Registry    // typed lookup: metadata.Lookup[Q, R](d.Metadata, kind) (05-metadata)
-	AI       ai.Router            // provider-neutral AI (05-ai)
-	Notify   notify.Dispatcher    // notification fan-out (05-notify)
+	Health *health.Registry // push-style component status (05-health)
+
+	HTTP         providerhttp.Factory   // instance-scoped outbound clients (05-metadata M2)
+	Integrations *integrations.Registry // configured instances of every kind; typed access via
+	                                    // integrations.Lease[T] and the kind packages (05-metadata M1)
 }
 
-// ErrNotConfigured is returned by a capability lookup with no configured instance.
-var ErrNotConfigured = errors.New("module: capability not configured")
+// ErrStopped is returned by any handle used after the app stopped.
+var ErrStopped = errors.New("module: app stopped")
 ```
 
-`var ErrNotConfigured` is an exported package-level variable of interface type `error`; R5 forbids
-exported map/slice/func/pointer variables, not sentinel errors (sentinels are immutable by
-convention and are what `errors.Is` needs). `TestNoGlobals` allowlists `var Err… = errors.New(…)`.
+`var ErrStopped` is an exported package-level variable of interface type `error`; R5 forbids exported
+map/slice/func/pointer variables, not sentinel errors, and `TestNoGlobals` allowlists
+`var Err… = errors.New(…)`. Settings are not in `Deps`: a module reads its own sections through
+`module.Setting(r, section)` handles obtained in `Register`, and core's public settings through the
+core service handles that need them.
 
 ### 6.4.5 `app`
 
@@ -437,9 +395,9 @@ type Options struct {
 	// UI is the app's embedded SPA (07 §7.6). The zero Bundle serves the API-only placeholder.
 	UI ui.Bundle
 
-	// Adapters enables core adapters by kind (e.g. deluge.Adapter(), newznab.Adapter()).
-	// Only enabled kinds may be configured; instances come from config.
-	Adapters []module.Adapter
+	// Adapters enables core adapters (e.g. deluge.Descriptor(), webhook.Descriptor());
+	// only enabled adapters may be configured; instances come from config (05-metadata M1.3).
+	Adapters []integrations.Descriptor
 
 	// Logger overrides the default slog handler construction (tests); nil = from config.
 	Logger *slog.Logger
@@ -451,9 +409,9 @@ type Options struct {
 type App struct{ /* unexported: kernel.Kernel */ }
 
 // New validates every manifest, opens storage, runs core then module
-// migrations, builds core services, calls Register on each enabled module in
-// dependency order, and builds the HTTP handler. It does not start goroutines
-// or listeners. On error nothing is left open.
+// migrations, loads config, builds core services, calls Register on each
+// enabled module in dependency order, and builds the HTTP handler. It does not
+// start goroutines or listeners. On error nothing is left open.
 func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 
 // Run starts hooks, workers, the task executor, scheduler, outbox relay,
@@ -475,6 +433,17 @@ type ModuleState struct {
 	Version  string
 	Enabled  bool
 	Disabled string // reason when !Enabled: "config", "dependency <id> disabled"
+}
+
+// Describe runs phases P1 and P6 against in-memory storage (no DataDir, no
+// listeners, every module treated as enabled) and returns the app's OpenAPI
+// 3.1 documents and each module's UI manifest. Used by an app's "openapi"
+// subcommand (05-http-api §7, 07 §7.8) and by contract tests.
+func Describe(ctx context.Context, opts Options, mods ...module.Module) (Description, error)
+
+type Description struct {
+	OpenAPI     map[string][]byte // per owner ("core", module IDs), JSON (05-http-api Router.OpenAPI)
+	UIManifests []UIManifest      // per module: ID, Version, DisplayName, UI IDs, permission scopes
 }
 ```
 
@@ -525,6 +494,7 @@ const (
 	ProblemKeyspaceOverlap
 	ProblemMigrationOrder
 	ProblemSettingsNamespace
+	ProblemSettingsUndeclared
 	ProblemTaskKindNamespace
 	ProblemDuplicateTaskKind
 	ProblemTopicNamespace
@@ -568,8 +538,8 @@ type Option func(*settings)
 func WithModules(mods ...module.Module) Option
 func WithDisabled(ids ...module.ID) Option      // sets core.modules.<id>.enabled=false
 func WithConfig(kv map[string]any) Option       // config overrides layer
-func WithAdapters(a ...module.Adapter) Option   // e.g. fakes from coretest/fakes
-func WithUser(name string, perms ...rbac.Permission) Option // pre-seeded principal
+func WithAdapters(d ...integrations.Descriptor) Option // e.g. fakes from coretest/fakes
+func WithUser(name string, scopes ...rbac.Scope) Option // pre-seeded principal
 
 // Boot is New without failing the test: it returns the boot error, for
 // validation tests that expect a *module.ValidationError.
@@ -589,7 +559,7 @@ func (c *Client) GetJSON(t testing.TB, path string, out any) int // returns stat
 
 // AssertPermission checks that path answers 403 for a user lacking perm and
 // does not answer 401/403 for a user holding exactly perm (R6 per route).
-func AssertPermission(t testing.TB, h *Harness, method, path string, perm rbac.Permission)
+func AssertPermission(t testing.TB, h *Harness, method, path string, perm rbac.Scope)
 
 // AssertRoutesHavePermissions walks the built router (R6, archtest twin).
 func AssertRoutesHavePermissions(t testing.TB, h *Harness)
@@ -617,7 +587,7 @@ timers outside the bubble.
 | P1 | `Manifest()` of every module; `kernel/catalog` validates IDs, `MinCoreVersion` against `mediacore.Version`, `DependsOn` graph, namespaces, cross-module and core collisions, enablement (`core.modules.<id>.enabled`, default `DefaultEnabled`), and that a disabled module has no enabled dependent | all problems joined → `*ValidationError` |
 | P2 | Open storage under `DataDir` (`os.OpenRoot`); verify keyspace and legacy claims against the on-disk claim ledger (05-storage) | fail-closed |
 | P3 | Core migrations; load DB config overrides; validate every settings section (core + **all** modules, enabled or not, so a disabled module's bad settings are reported but do not block — see error table) | fail-closed except as noted |
-| P4 | For each **enabled** module in topological order: checkpoint, run its pending `Migrations` (G2) | fail-closed; nothing of later modules runs |
+| P4 | For each **enabled** module in topological order: checkpoint, run its pending `Storage.Migrations` (G2) | fail-closed; nothing of later modules runs |
 | P5 | `kernel/services.Build`: core services in fixed order; adapters from `Options.Adapters` + module adapters (registered in P6, instantiated lazily on first lookup) | fail-closed |
 | P6 | For each enabled module in topological order: `Register(r)`; then `r.Err()`; registrar closed. Seed default grants for permissions new to this boot | all problems joined |
 | P7 | Post-registration checks: R6 over the built router, R7 via `tasks` registration, facade completeness (08), task kinds referenced by schedules exist, outbox handlers' topics are declared by some module | joined |
@@ -676,7 +646,7 @@ it, and storage is closed last regardless (Pebble's WAL makes that safe for comm
 | `Register` returns error or panics | fail-closed; panic converted to error with stack in the log | partial registration leaves dangling routes/tasks |
 | Registrar misuse (route outside prefix, missing permission, missing `Parallelism`, duplicate kind, call after close) | recorded, fail-closed after P6/P7 | collected so the operator sees all at once |
 | Required capability with zero configured instances | fail-closed (`ProblemCapabilityMissing`) with `Why` | a TV app with no indexer cannot do its job; optional ones only degrade |
-| Adapter factory type mismatch | fail-closed (`ProblemAdapter`) | the only `any` boundary must not fail at first use |
+| Adapter descriptor invalid (ID outside module prefix, duplicate, secret field not marked) | fail-closed (`ProblemAdapter`, 05-metadata M1.4) | a bad adapter must not fail at first use |
 | Hook `Start` error/timeout | fail-closed: reverse-stop started hooks, `Run` returns error | a half-started module may accept work it cannot finish |
 | Hook `Stop` error/timeout | fail-open: logged, joined into `Run`'s return, shutdown continues | shutdown must reach storage close |
 | Worker early return/panic, `DegradeOnExit` | fail-open: health unhealthy, ERROR log, no restart | restarting a crashing loop hides the bug; readiness reflects it |
@@ -758,7 +728,7 @@ ABO (root module `internal/arch` or `cmd` tests):
 1. **Wave K0** — land `module`, `kernel`, `app`, `coretest`, `examples/hello`; core boots with zero
    modules and with hello (G6/G7 at core level).
 2. **Wave K1** — ABO's `serve` command calls `app.New(ctx, opts, books.New(legacy))`. `books.Register`
-   builds today's `*server.Server` and mounts its gin engine with `Registrar.LegacyHandler` under the
+   builds today's `*server.Server` and mounts its gin engine with `Registrar.MountLegacy` under the
    declared legacy prefixes (N7). `serviceregistry` keeps working **inside** books (it is app code; R5
    binds core only).
 3. **Wave K2** — remove the global factory map: each of the 24 registering files replaces
@@ -786,14 +756,14 @@ builds; "books" means a plain constructor in the books module; final package pla
 | `filesystem` (`internal/fileops/register.go:13`) | core | core `library` via `Deps.Library` |
 | `system`, `dashboard` (`internal/server/registry_wire.go:97`, `internal/sysinfo/register.go:12`) | core | core `health` diagnostics + a books dashboard widget for library counts |
 | `metricsstore` (`registry_wire.go:276`) | core | core `metrics` persistence if kept (05-metrics decides); else deleted |
-| `searchindex` (`internal/search/register.go:106`) | scheduler | books, on core `storage/index` via `Deps.Index` |
+| `searchindex` (`internal/search/register.go:106`) | scheduler | books, on core `storage/index` via `Deps.Storage.Indexes` |
 | `pebble-activitystore`, `activitystore`, `activity`, `activitywriter` (`internal/activity/register.go:37,75,105,120`) | activity | core (task history + `audit`; 04 decides the split); `DatabasePath` gate disappears because core always has storage |
-| `embeddingstore`, `chromemstore`, `aijobsstore`, `aiscanstore`, `pipelinemanager`, `dedup`, `embedclient`, `llmparser`, `metadatascorer`, `metadatallmscorer` (`registry_wire.go:109,133,165,298,319,179`; `internal/ai/register.go:33,105,136,158`) | ai | books (`wire_ai.go`), on core `Deps.AI` for provider access; one `if cfg.AI.Enabled` replaces per-`Build` gating |
+| `embeddingstore`, `chromemstore`, `aijobsstore`, `aiscanstore`, `pipelinemanager`, `dedup`, `embedclient`, `llmparser`, `metadatascorer`, `metadatallmscorer` (`registry_wire.go:109,133,165,298,319,179`; `internal/ai/register.go:33,105,136,158`) | ai | books (`wire_ai.go`), on core AI instances via `Deps.Integrations` (05-ai); one `if cfg.AI.Enabled` replaces per-`Build` gating |
 | `batchpoller` (`internal/server/batch_poller_register.go:18`) | none (never built) | books, constructed explicitly when AI batch is enabled — **fixes** the latent defect |
-| `metadatastate`, `metafetch`, `olservice` (`internal/metafetch/register.go:12,22,35`) | core | books, on core `Deps.Metadata`/`Deps.HTTP` |
+| `metadatastate`, `metafetch`, `olservice` (`internal/metafetch/register.go:12,22,35`) | core | books, on core metadata adapters via `Deps.Integrations` and `Deps.HTTP` |
 | `itunes` (`registry_wire.go:343`) | core | books |
 | `work`, `audiobook`, `organize`, `quarantine`, `scan`, `merge`, `importpath`, `batch` (`internal/work/register.go:13`, `internal/audiobooks/register.go:12,21`, `internal/quarantine/register.go:14`, `internal/scanner/register.go:13`, `internal/merge/register.go:12`, `internal/importer/register.go:12`, `internal/batch/register.go:13`) | core | books |
-| `metafetchplugin`, `itunesplugin`, `delugeplugin`, `dedupplugin`, `acoustidplugin` (`internal/plugins/*/register.go`) | plugins | books task definitions (`r.Task(...)`); deluge's client moves to core `integrations/download/deluge` (05-download) |
+| `metafetchplugin`, `itunesplugin`, `delugeplugin`, `dedupplugin`, `acoustidplugin` (`internal/plugins/*/register.go`) | plugins | books task definitions (`r.Tasks(...)`); deluge's client moves to core `integrations/download/deluge` (05-download) |
 
 Count check by service name: eventbus 1, ophub/opregistry 2, updater 2, configupdate 1, filesystem 1,
 system/dashboard 2, metricsstore 1, searchindex 1, activity 4, ai 10, batchpoller 1, metafetch 3,
@@ -805,8 +775,8 @@ itunes 1, domain 8, plugins 5 = **43**.
 |---|---|
 | `internal/plugin.Plugin`, `Registry`, `Global()`, `Register` (`plugin.go:25`, `registry.go:19,33`) | deleted. The only implementor, webhook (`internal/plugins/webhook/plugin.go:33`), becomes the core `integrations/notify/webhook` adapter enabled in `Options.Adapters`, subscribing through `events` |
 | `plugin.EventBus` (`internal/plugin/events.go:85`, goroutine per handler with the publisher's ctx) | core `events` (05-events: bounded dispatch, bus-lifetime ctx, as design Q1 decided) |
-| `plugin.PluginRouter`, `/api/v1/plugins/{id}` (`plugins_init.go:42`) | deleted; module routes go through `Registrar.Route` inside the protected chain. The 6 `/api/v1/plugins` routes (raw/09 §1.1) become `/api/core/v1/adapters` (configured adapter instances, health) |
-| `plugin.Capability`, vestigial `DownloadClient`/`MediaPlayer`/`Notifier` (`plugin.go:17-21,52-57`) | deleted; capabilities are `module.Capability` + the `integrations/*` contracts |
+| `plugin.PluginRouter`, `/api/v1/plugins/{id}` (`plugins_init.go:42`) | deleted; module routes go through `Registrar.HTTP()` inside the core chain. The 6 `/api/v1/plugins` routes (raw/09 §1.1) become `/api/core/v1/integrations/...` (configured adapter instances, health; 05-metadata M1.3) |
+| `plugin.Capability`, vestigial `DownloadClient`/`MediaPlayer`/`Notifier` (`plugin.go:17-21,52-57`) | deleted; capabilities are `integrations.Kind` + the `integrations/*` contracts |
 | `config.AppConfig.Plugins` enable flags | `core.modules.<id>.enabled` (modules) and adapter instance `enabled` (adapters); migration of the stored value in 09 |
 | `pkg/plugin/sdk.Plugin`/`Registry` (`plugin.go:19`, `registration.go:12`) and its aliases | deleted after the six bundles become `tasks.Definition` lists in books; `PageBooks` (`iterate.go:41`) becomes a books helper over `tasks.RunItems`; `tools/cmd/sdkguard` replaced by `archtest` R2 |
 | `pkg/ops` | promoted into core `tasks` (05-tasks, N9) with audiobook types removed |
@@ -882,23 +852,27 @@ import (
 const ID module.ID = "hello"
 
 const (
-	PermRead  rbac.Permission = "hello:read"
-	PermAdmin rbac.Permission = "hello:admin"
+	PermRead  rbac.Scope = "hello:read"
+	PermAdmin rbac.Scope = "hello:admin"
 )
 
-// Settings is section modules.hello.
+// Settings is section modules.hello (05-config §1.3).
 type Settings struct {
-	Greeting   string `config:"greeting"     doc:"Prefix of every greeting"`
-	MaxNameLen int    `config:"max_name_len" doc:"Longest accepted name" min:"1" max:"256"`
+	Greeting   string `json:"greeting"`
+	MaxNameLen int    `json:"max_name_len" schema:"minimum=1,maximum=256"`
 }
 
 type Module struct {
-	settings *config.Section[Settings]
+	settings config.Section[Settings]
 }
 
 func New() *Module {
 	return &Module{
-		settings: config.NewSection("modules.hello", Settings{Greeting: "Hello", MaxNameLen: 64}),
+		settings: config.Define("modules.hello", Settings{Greeting: "Hello", MaxNameLen: 64},
+			config.Docs(map[config.Path]string{
+				"modules.hello.greeting":     "Prefix of every greeting",
+				"modules.hello.max_name_len": "Longest accepted name",
+			})),
 	}
 }
 
@@ -909,15 +883,19 @@ func (m *Module) Manifest() module.Manifest {
 		DisplayName:    "Hello",
 		MinCoreVersion: "0.1.0",
 		DefaultEnabled: true,
-		Permissions: []rbac.PermissionSpec{
-			{Name: PermRead, Title: "Read greetings",
-				DefaultGrants: []rbac.RoleName{rbac.RoleViewer, rbac.RoleEditor}},
-			{Name: PermAdmin, Title: "Run hello maintenance"}, // admin only (core:admin)
+		Permissions: []rbac.PermissionDef{
+			{Scope: PermRead, Title: "Read greetings"},
+			{Scope: PermAdmin, Title: "Run hello maintenance"},
 		},
-		Migrations: []storage.Migration{
-			{Version: 1, Name: "seed-names", Apply: seedNames},
+		// Default grant: viewers may read; hello:admin stays with core:admin holders.
+		Grants: []rbac.Grant{{Role: "core.viewer", Scopes: []rbac.Scope{PermRead}}},
+		Storage: storage.Spec{
+			Keyspace: true, // m/hello/
+			Migrations: []storage.Migration{
+				{Version: 1, Name: "seed-names", Compat: storage.Additive, Up: seedNames},
+			},
 		},
-		Settings: []config.AnySection{m.settings},
+		Settings: []module.SettingsSection{module.Settings(m.settings)},
 		UI: module.UIDescriptor{
 			Pages:          []string{"greeting"},
 			Nav:            []string{"hello"},
@@ -929,28 +907,30 @@ func (m *Module) Manifest() module.Manifest {
 func (m *Module) Register(r *module.Registrar) error {
 	d := r.Deps()
 	svc := &service{
-		names:    d.Storage.Sub("name/"), // m/hello/name/<name> -> count
-		settings: m.settings.Bind(d.Config),
+		names:    d.Storage.Keyspace.Sub("name"), // m/hello/name/<name> -> decimal count
+		settings: module.Setting(r, m.settings),
 		log:      d.Log,
 	}
-	r.Route(greetingRoute(svc))
-	r.Task(countTask(svc))
+	r.Resources("name")
+	registerGreeting(r.HTTP(), svc)
+	r.Tasks(countTask(svc))
 	return r.Err()
 }
 
 // core/examples/hello/migrations.go
 // seedNames writes the first name so the count task has something to count.
-func seedNames(ctx context.Context, m storage.MigrationTx) error {
-	if err := m.Set([]byte("name/world"), []byte("0")); err != nil {
+func seedNames(ctx context.Context, tx *storage.MigrationTx) error {
+	if err := tx.Set([]byte("name/world"), []byte("1")); err != nil {
 		return fmt.Errorf("hello: seed: %w", err)
 	}
 	return nil
 }
 ```
 
-`config.NewSection` returns `*config.Section[Settings]`; `Bind(config.Reader)` returns a
-`config.Value[Settings]` whose `Get()` is lock-free and reflects hot-reloaded fields (05-config).
-`storage.MigrationTx` is the batch-scoped writer of 05-storage, already confined to `m/hello/`.
+`config.Define` declares the section; the kernel registers it before the config store loads
+(05-config §1.3.2) and `module.Setting` returns the live `*config.Handle[Settings]` whose `Get()` is
+one atomic load and reflects hot-reloaded fields. `storage.MigrationTx` is the batch-scoped writer of
+05-storage §5S.3.5, already confined to the module's keyspace.
 
 ### 6.12.2 Route `GET /api/hello/v1/greeting`
 
@@ -960,7 +940,7 @@ package hello
 
 type service struct {
 	names    storage.Keyspace
-	settings config.Value[Settings]
+	settings *config.Handle[Settings]
 	log      *slog.Logger
 }
 
@@ -970,30 +950,43 @@ type GreetingQuery struct {
 
 type Greeting struct {
 	Message string `json:"message"`
-	Seen    int64  `json:"seen"`
+	Seen    int64  `json:"seen"` // how often the name was recorded; 0 if unknown
 }
 
-func greetingRoute(s *service) httpapi.Route {
-	return httpapi.Get("/greeting", PermRead, s.greet,
-		httpapi.Summary("Greet a name and count how often it was greeted"))
+func registerGreeting(g *httpapi.Group, s *service) {
+	httpapi.Handle(g, httpapi.Route{
+		Method:  http.MethodGet,
+		Path:    "/greeting",
+		Name:    "getGreeting",
+		Perm:    rbac.Need(PermRead),
+		Summary: "Greet a name and report how often it was recorded",
+	}, s.greet)
 }
 
-func (s *service) greet(ctx context.Context, q GreetingQuery) (Greeting, error) {
+func (s *service) greet(ctx context.Context, in *httpapi.In[GreetingQuery]) (Greeting, error) {
 	cfg := s.settings.Get()
-	if q.Name == "" || utf8.RuneCountInString(q.Name) > cfg.MaxNameLen {
-		return Greeting{}, httpapi.BadRequest("name", "must be 1..%d characters", cfg.MaxNameLen)
+	name := in.Req.Name
+	if name == "" || utf8.RuneCountInString(name) > cfg.MaxNameLen {
+		return Greeting{}, httpapi.Invalid("name", fmt.Sprintf("must be 1..%d characters", cfg.MaxNameLen))
 	}
-	n, err := storage.Increment(ctx, s.names, []byte("name/"+q.Name), 1)
-	if err != nil {
-		return Greeting{}, fmt.Errorf("hello: count %q: %w", q.Name, err)
+	var seen int64
+	switch v, err := s.names.Get(ctx, []byte(name)); {
+	case errors.Is(err, storage.ErrNotFound):
+	case err != nil:
+		return Greeting{}, fmt.Errorf("hello: read %q: %w", name, err)
+	default:
+		if seen, err = strconv.ParseInt(string(v), 10, 64); err != nil {
+			return Greeting{}, fmt.Errorf("hello: bad count for %q: %w", name, err)
+		}
 	}
-	return Greeting{Message: cfg.Greeting + ", " + q.Name, Seen: n}, nil
+	return Greeting{Message: cfg.Greeting + ", " + name, Seen: seen}, nil
 }
 ```
 
-`httpapi.Get[Q, R any](path string, perm rbac.Permission, h func(context.Context, Q) (R, error), opts ...httpapi.RouteOption) httpapi.Route`
-(05-http-api) decodes `Q`, encodes `R`, maps errors to the core envelope, and contributes the
-operation to the OpenAPI document. The route resolves to `/api/hello/v1/greeting`.
+`httpapi.Handle` (05-http-api §3.1) decodes the query into `In.Req`, encodes the result, maps errors to
+the core problem envelope, enforces `Perm` (R6) and contributes `hello_getGreeting` to the OpenAPI
+document. The route resolves to `/api/hello/v1/greeting`. `httpapi.Invalid` stands for the
+field-validation error constructor of 05-http-api.
 
 ### 6.12.3 Task `hello.count`
 
@@ -1001,47 +994,54 @@ operation to the OpenAPI document. The route resolves to `/api/hello/v1/greeting
 // core/examples/hello/count.go
 package hello
 
-type CountParams struct {
-	Prefix string `json:"prefix"`
-}
+type CountParams struct{}
 
 type CountResult struct {
-	Names      int64 `json:"names"`
-	Greetings  int64 `json:"greetings"`
+	Names     int64 `json:"names"`
+	Greetings int64 `json:"greetings"`
 }
 
 func countTask(s *service) tasks.Definition {
 	return tasks.Task("hello.count", tasks.TaskSpec[CountParams, CountResult]{
-		Title:      "Count greeted names",
-		Permission: PermAdmin,
-		Effects:    tasks.ReadOnly(tasks.Resource{Module: string(ID), Kind: "name"}),
-		Run: func(rc *tasks.RC, p CountParams) (CountResult, error) {
-			var names, greetings atomic.Int64
-			items := s.names.Scan(rc.Context(), storage.Prefix("name/"+p.Prefix)) // iter.Seq2[storage.KV, error]
-			err := tasks.RunItems(rc, tasks.CPU(), items,
-				func(ctx context.Context, kv storage.KV) error {
+		Common: tasks.Common{
+			Title:   "Count recorded names",
+			Help:    "Sums the per-name counters. Read-only.",
+			Effects: tasks.ReadOnly(tasks.Res(string(ID), "name")),
+			Perms:   tasks.Permissions{Start: PermAdmin},
+			Resume:  tasks.ResumeFromZero,
+		},
+		Run: func(rc *tasks.RC, _ CountParams) (CountResult, error) {
+			var kvs []storage.KV
+			for kv, err := range s.names.Scan(rc.Context(), storage.ScanOptions{}) {
+				if err != nil {
+					return CountResult{}, fmt.Errorf("hello: scan: %w", err)
+				}
+				kvs = append(kvs, kv.Clone())
+			}
+			res, err := tasks.RunItems(rc, tasks.CPU(), kvs,
+				func(ic *tasks.ItemRC, kv storage.KV) error {
 					n, err := strconv.ParseInt(string(kv.Value), 10, 64)
 					if err != nil {
 						return fmt.Errorf("hello: bad count at %q: %w", kv.Key, err)
 					}
-					names.Add(1)
-					greetings.Add(n)
+					ic.Count("names", 1) // atomic, folded into res.Counters
+					ic.Count("greetings", n)
 					return nil
 				},
-				tasks.Label(func(i, total int) string { // Label runs in worker goroutines:
-					return fmt.Sprintf("%d names", names.Load()) // read only atomics (CLAUDE.md)
-				}),
-			)
-			return CountResult{Names: names.Load(), Greetings: greetings.Load()}, err
+				tasks.ItemsOptions[storage.KV]{
+					Label: func(kv storage.KV) string { return string(kv.Key) }, // pure: item only
+				})
+			return CountResult{Names: res.Counters["names"], Greetings: res.Counters["greetings"]}, err
 		},
 	})
 }
 ```
 
-`tasks.CPU()` is a `tasks.Parallelism` of `runtime.NumCPU()` workers; there is no zero-value
-`Parallelism`, so omitting it does not compile into a sequential loop (R7, N8). The scan is an
-`iter.Seq2`, so the task does not materialise the keyspace. Exact `RunItems` option names are owned by
-[05-tasks](05-tasks.md).
+`tasks.CPU()` is a `tasks.Parallelism` of `runtime.NumCPU()` workers sharing the executor CPU budget;
+the zero `Parallelism` is invalid, so a forgotten value fails registration instead of silently running
+one worker (R7, N8 — the exact failure CLAUDE.md records for `RunItemsOptions.Concurrency`). Counters go
+through `ItemRC.Count` and `Label` receives only the item, so there is no shared mutable state in worker
+goroutines. (A library-scale source would use `tasks.RunSeq` over the scan instead of collecting it.)
 
 ### 6.12.4 Nav entry and settings panel (client side)
 
@@ -1141,7 +1141,7 @@ func TestHello(t *testing.T) {
 		h := coretest.New(t,
 			coretest.WithModules(hello.New()),
 			coretest.WithUser("v", hello.PermRead),
-			coretest.WithUser("a", rbac.CoreAdmin))
+			coretest.WithUser("a", rbac.Scope("core:admin")))
 		coretest.AssertPermission(t, h, http.MethodGet, "/api/hello/v1/greeting?name=x", hello.PermRead)
 
 		var g hello.Greeting
@@ -1166,6 +1166,25 @@ func TestHello(t *testing.T) {
 | O4 | `metricsstore` and activity-log destinations | 04, 05-metrics, 05-rbac |
 | O5 | The `go`-statement warning list in `archtest` may be noisy for books during K1–K3; ratchet rather than fail | 06 / plan |
 | O6 | Module-level settings that need a restart vs hot reload: per field in `config.Section` tags (`reload:"restart"`) | 05-config |
+
+## 6.14 Alignment with the parallel contract files
+
+This file owns `module.Manifest`, `module.Registrar`, `module.Deps` and `app`. The `05-*` files were
+written in parallel; where they name a registration path, this file adopts it unless it conflicts with
+boot ordering:
+
+| Contract | What 06 adopts | Reconciliation |
+|---|---|---|
+| 05-http-api §3.1, §4.9, §8.2 | `Registrar.HTTP() *httpapi.Group`, `httpapi.Handle`, `MountLegacy(httpapi.LegacyMount)`, prefix claims, `Router.FacadeGroup` for 08 | `Manifest.LegacyPrefixes` feeds `PrefixClaim`s so collisions are found in P1, before storage opens |
+| 05-storage §5S.3 | `Manifest.Storage storage.Spec`; `Deps.Storage storage.Handles` | — |
+| 05-tasks 5T.3 | `Registrar.Tasks`, `Resources`, `Lanes`; schedules inside `tasks.Common`; `Deps.Tasks tasks.Starter`; `tasks.CPU()`, `RunItems(rc, par, items, fn, opts)` | — |
+| 05-events | `Registrar.Topics`, `OutboxTopics`; subscriptions/consumers made in `Register` via `Deps.Events`/`Deps.Outbox` | 05-events mentions `Registrar.Consumers`; calling `outbox.Consume(d.Outbox, …)` during `Register` is equivalent (registration happens at app construction and is frozen when `Register` returns) and avoids a closure-taking registrar method |
+| 05-rbac §3.2 | `PermissionDef`, `RoleSeed`, `Grant`, `LegacyAlias`, `Scope`, `Requirement` | 05-rbac describes a `Declarer` reached via `Registrar.Permissions()`; 06 puts the same four lists in the **Manifest** (05-rbac's own text says `PermissionDef` "is declared in a module manifest") so namespace and grant rules are checked in P1; the kernel feeds them to the `Declarer` |
+| 05-config §1.3 | `config.Define`, `Section[T]`, `Handle[T]`, `config.Register` | 05-config hands modules `Registrar.Config()` with "registration legal only before Store.Load"; since `Register` needs loaded config, sections are listed in `Manifest.Settings` and registered by the kernel in P3 before load; `module.Setting(r, s)` returns the bound handle |
+| 05-metadata M1.3 (objection 2) | `Registrar.Adapter(integrations.Descriptor)`, `app.Options.Adapters []integrations.Descriptor`, `Deps.Integrations` | adopted as proposed |
+| 05-ai, 05-notify, 05-download | `AICapability`, `AIBatchHandler`, `NotificationTopic`, `DownloadWatch` | signatures owned by those files |
+| 05-health | `Health`, `StartupSteps`, `Diagnostics`; `Deps.Health *health.Registry` | — |
+| 05-library | `Manifest.Library []library.RoleRequirement`; `Deps.Library *library.Manager` | — |
 
 ## Objections to 03
 
