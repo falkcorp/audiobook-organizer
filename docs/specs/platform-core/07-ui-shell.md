@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/07-ui-shell.md -->
-<!-- version: 1.13.1 -->
+<!-- version: 1.13.2 -->
 <!-- guid: 651865f1-0fad-4e15-8169-ceaf4a573f13 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -275,12 +275,10 @@ export const manifest = {
   activityPanes: [],
   setupSteps: [],
   permissions: ['hello:read', 'hello:admin'],
-  legacyRedirects: [],
 } as const;
 ```
 
-The keys mirror `module.UIDescriptor` (06 §6.4.2), including `legacyRedirects`, the one Go-declared
-list of legacy page URLs (FE3-17). A freshness check in CI regenerates and diffs it,
+The keys mirror `module.UIDescriptor` (06 §6.4.2), which declares no former page URLs (D13). A freshness check in CI regenerates and diffs it,
 so a client contribution can never name an ID the server does not declare without failing typecheck
 (§7.4.2 types are keyed by these literals).
 
@@ -306,7 +304,6 @@ export interface ModuleManifest {
   readonly activityPanes: readonly string[];
   readonly setupSteps: readonly string[];
   readonly permissions: readonly Permission[];
-  readonly legacyRedirects: readonly { readonly from: string; readonly to: string }[];
 }
 
 type Lazy = () => Promise<{ default: ComponentType }>;
@@ -423,9 +420,8 @@ export interface ModuleUIInput<M extends ModuleManifest> {
   setup?: SetupContribution<M>;
   themeExtend?: ThemeOptions;                                         // merged by the shell, per module (§7.7)
   taskKinds?: Readonly<Record<`${M['id']}.${string}`, TaskKindPresentation>>;
-  // No redirects field: the shell builds the optional static client redirects
-  // from manifest.legacyRedirects, generated from the Go
-  // UIDescriptor.LegacyRedirects, so the list has one source (FE3-17).
+  // No redirects field: the shell redirects no former page path (D13, D10);
+  // a former bookmark lands on NotFound (§7.19 step 5).
   providers?: readonly ComponentType<{ children: ReactNode }>[];     // module-wide contexts
 }
 
@@ -437,16 +433,6 @@ export interface ModuleUI<M extends ModuleManifest = ModuleManifest> extends Mod
 
 export function defineModule<const M extends ModuleManifest>(manifest: M, ui: ModuleUIInput<M>): ModuleUI<M>;
 
-// The shell's own names for its pre-shell preferences. A new shell preference
-// that has a pre-shell key adds a member, so a misspelt or renamed name on
-// either side fails to compile instead of silently resetting that preference
-// at adoption (FE6-6). The theme-mode key is not a member: its one source is
-// the preset option themeStorageKey (§7.7, §7.10, FE6-2).
-export type LegacyShellKey =
-  | 'activitySourcePrefs' | 'activityOpsPinned' | 'tableConfigPrefix'
-  | 'dismissedAnnouncements' | 'welcomeWizardCompleted'
-  | 'opsIndicatorCollapse' | 'showAdvanced';
-
 export interface ShellConfig {
   // app.id must equal the preset's <meta name="mediacore-app"> (the one
   // app-ID source, §7.10); createShell refuses to mount on a difference
@@ -457,18 +443,11 @@ export interface ShellConfig {
   // preset's <meta name="mediacore-theme"> (§7.7), the one source the boot
   // script also reads (FE6-2).
   theme?: Omit<import('@mediacore/ui-kit').MediaThemeInput, 'defaultMode'>;
-  // Literal localStorage keys (or key prefixes) of shell and ui-kit
-  // preferences that exist before the shell, by the shell's own name for
-  // each, read and written in place so no preference resets at adoption
-  // (keeping the keys costs less than migrating them); storageKey() names
-  // only keys that do not exist today (FE4-4, §7.7). ABO passes all seven it has (FE5-5):
-  // activitySourcePrefs, activityOpsPinned, tableConfigPrefix 'table_config',
-  // dismissedAnnouncements, welcomeWizardCompleted, opsIndicatorCollapse
-  // 'ops-indicator-collapse-v1' and showAdvanced 'settings.showAdvanced'; its
-  // eighth, 'app-theme-mode', goes to the preset (§7.10). ui-kit holds no key
-  // name: ConfigurableTable takes its full key, prefix included, from its
-  // caller.
-  legacyStorageKeys?: Readonly<Partial<Record<LegacyShellKey, string>>>;
+  // No pre-shell storage-key option (D13): every shell preference is a
+  // storageKey() name (§7.7), and no localStorage key that predates the shell
+  // is read. ui-kit holds no key name: ConfigurableTable takes its full key
+  // from its caller. The theme-mode key is the preset's themeStorageKey
+  // (§7.10, FE6-2), not a createShell option.
 }
 
 export interface Shell {
@@ -762,8 +741,7 @@ CI, and the core-version row stops it at runtime.
 `@mediacore/*` versions resolved in `web/package-lock.json` differ from the
 `github.com/falkcorp/mediacore` version in `go.mod`. In-repo both are the workspace version
 (`file:` specifiers and the zero pseudo-version under `replace` both count as "workspace"); after the
-split both must be the same `X.Y.Z`, read from the exact registry version or, for the private-repository
-fallback of §7.17, parsed out of the tarball URL specifier. A half-bumped state (Go at X+1, shell at X) therefore fails CI
+split both must be the same `X.Y.Z`, read from the exact registry version (§7.17). A half-bumped state (Go at X+1, shell at X) therefore fails CI
 (FE-15). Because "workspace" checks nothing in-repo, 12's `check_core_version.py` also asserts that
 every `core/web/packages/*/package.json` `version` equals `version.Version`, so the `C.core` that the
 preset embeds cannot drift from the Go constant (FE2-13).
@@ -857,9 +835,8 @@ type Options struct {
 
 	Config  *config.Handle[Settings] // core.ui.* (§7.15); hot keys swap the policy atomically
 	Metrics *metrics.Scope
-	// There is no redirect recorder: a module's LegacyRedirects are static
-	// client redirects only, served as index.html like any other SPA path
-	// (FE3-17).
+	// There is no redirect recorder and no redirect list (D13): a former
+	// page path is served index.html like any other SPA path.
 }
 
 // Handler serves the SPA:
@@ -896,7 +873,7 @@ func BasicExemptAssets(path string) bool
 // ReservedSegments lists the first segment of every shell route (§7.4.3);
 // module.ReservedIDs() includes them. Returns a fresh slice on every call
 // (R5: no exported slice variable). It and the plain types ModuleManifest,
-// UIIDs and Redirect below form the dependency-free leaf of package ui that
+// UIIDs below form the dependency-free leaf of package ui that
 // lands in R1, so internal/modulehttp (L6, R2's identity flip) has a type for
 // modules[].ui; the rest of the package lands with the shell work (FE3-8,
 // FE4-6).
@@ -918,12 +895,7 @@ type ModuleManifest struct {
 type UIIDs struct {
 	Pages, Nav, SettingsPanels, Widgets, Banners, TopBarItems,
 	UserPage, ActivityPanes, SetupSteps []string
-	LegacyRedirects []Redirect // module.UIDescriptor.LegacyRedirects (FE3-17)
 }
-
-// Redirect is one former page path and its shell path (an optional static
-// client redirect).
-type Redirect struct{ From, To string }
 
 // WriteManifestTS prints a module's UI manifest as manifest.gen.ts (§7.4.1).
 func WriteManifestTS(w io.Writer, m ModuleManifest) error
@@ -1109,11 +1081,12 @@ export function themeBootScript(storageKey: string, defaultMode: 'light' | 'dark
   `themeStorageKey: 'app-theme-mode', defaultMode: 'dark'`, HEAD's hard-coded pair
   (`web/index.html:13-30`, `main.tsx:30-33` @748fd787a), so a user who chose light sees no dark flash
   at shell adoption.
-* The other seven shell and ui-kit keys of §7.4.2 (table layouts, dismissed announcements, the wizard
-  flag, the operations-indicator collapse, the advanced settings switch, the two activity keys) are
-  passed in `createShell({ legacyStorageKeys })` with the literal values of today, so saved preferences
-  carry over (the same trick `main.tsx:28-34` already uses; FE5-5). ABO's `localStorage` keys are read in place, never moved, renamed or copied:
-  keeping them costs nothing, and moving them would reset preferences for no gain (FE3-18, FE4-4).
+* The other seven shell and ui-kit preferences ABO has (table layouts, dismissed announcements, the
+  wizard flag, the operations-indicator collapse, the advanced settings switch, the two activity keys)
+  are not carried over (D13, D10): once their files move into the shell or ui-kit they use
+  `storageKey()` names under the app ID, no pre-shell key is read, so each resets once at shell
+  adoption, and that release's note says so. Books' own keys keep their literal values in
+  `web/src/modules/books/storageKeys.ts` (§7.11).
 * Module tokens stay in the module: each module's `themeExtend` (§7.4.2) is merged by the shell after
   the app's `extend`, in module ID order (FE-16). ABO's dedup signal palette (`theme.ts:24-40`) moves
   to `web/src/modules/books/theme.ts` and is passed as books' `themeExtend`.
@@ -1165,13 +1138,15 @@ The OpenAPI 3.1 documents and the TypeScript client pipeline are owned by
   are imported by `services/api.ts` (`:14-15,590`) and `utils/operationPolling.ts:7`, which has 5
   non-test importers (`OperationsIndicator`, `ITunesImport`, `ActivityLog`, `Library`,
   `useOperationsStore`; @748fd787a); every other user reaches `ops.ts` through `services/api` (FE8-6).
-  `opsgen` retires when both are gone. So `opsgen` and its freshness gate stay
-  until the last `ops.ts` importer is native, which is the end of §7.19 step 6, not shell adoption;
-  05-http-api §7 and 04's `opsgen` row state the same rule. Its input, `internal/operations/state`
-  (HEAD's v2 table, v3 constants and transition machine), stays in ABO while `opsgen` needs it (R6-2):
-  core's executor state machine is a re-implementation over `tasks.RunState`, whose values are not
-  HEAD's. So `opsgen` keeps its HEAD input and is **not** repointed at `mediacore/tasks` in the tasks
-  flip, and its freshness gate stays byte-identical trivially (FE3-6, FE4-7, MOD6-1).
+  The Activity page stops reading `ops.ts` in R2's tasks flip (F5). `tools/cmd/opsgen`,
+  `web/src/generated/ops.ts` and opsgen's input `internal/operations/state` (HEAD's v2 table, v3
+  constants and transition machine) are **deleted together in R3**, in one PR that first moves
+  `operationPolling` and its remaining books importers onto the generated `TaskRunView` states, as the
+  shell's Activity page did at F5 (FE5-6), and drops `ops.ts` from `services/api`. Until then opsgen keeps
+  its HEAD input and is **not** repointed at `mediacore/tasks` (core's executor state machine is a
+  re-implementation over `tasks.RunState`, whose values are not HEAD's), so its freshness gate stays
+  byte-identical trivially (R6-2, FE3-6, FE4-7, MOD6-1). 03 §3.8, 05-http-api §7 and 05-tasks state the
+  same R3 deletion.
 
 ## 7.9 Auth, session and realtime
 
@@ -1262,10 +1237,16 @@ The shell side:
   and the two operation streams (`/api/v1/operations/events`, `/api/v3/ops/events`) are deleted in that
   PR (06 §6.4.4); between the two flips the page reads no stream, so one store never mixes native runs
   with legacy `op.*` frames (FE3-6). In R2's events flip the legacy SPA's realtime code
-  (`eventSourceManager`) is rewritten onto `/api/core/v1/events` and the native topics, the Activity page
-  takes its live updates from it instead of polling, and the flip deletes `/api/events`; there is no
-  bridge, no projection and no legacy framing. With shell adoption the shell's realtime client of this section
-  replaces that code. `opsgen`'s `ops.ts` stays only while a books importer of its enums remains (§7.8). The
+  (`web/src/services/eventSourceManager.ts`) is rewritten onto `/api/core/v1/events` and the native
+  topics, the Activity page takes its live updates from it instead of polling, and the flip deletes
+  `/api/events`; there is no bridge, no projection and no legacy framing. The rewrite is not deleted at
+  F6, and it is not the shell's client (`@mediacore/shell` does not exist before shell adoption): it is
+  a fetch-based reader that implements 05-realtime §4.8 items 1–6 in per-tab mode (item 7's last
+  resort: one stream per visible tab, no election), that is, resume with `Last-Event-ID`, a 401 routed
+  through ABO's auth handling, SSO-bounce detection with `redirect: "manual"`, waiting `Retry-After`,
+  and resync on `core.stream.reset.v1`. It exposes the same `useTopic`/`useResync` signature, so at
+  shell adoption (F9, or R3) the shell's realtime client of this section replaces it without changing a
+  caller. `ops.ts` is deleted in R3 (§7.8). The
   hooks are `useTopic<T>(topic, onEvent, {key})` and `useResync` everywhere (05-realtime §11 uses the
   same signature).
 * **Resync and shutdown.** On `core.stream.reset.v1` (any reason: `restart`, `gap`, `overflow`) and
@@ -1363,7 +1344,7 @@ first, and the core-web import rule (§7.3.1) proves the cut (FE-16).
 | `pages/Login.tsx`, `AcceptInvite.tsx`, `Setup.tsx`, `NotFound.tsx` | shell | |
 | `pages/Users.tsx` | shell `/users` | permissions and titles from `/api/core/v1/permissions` (§7.9.1); `GuestPhoneKeys` (CF guest tokens, stays in ABO per 09) and `UserMergeDialog` (`Users.tsx:8,12-13`) become books `userPageExtensions` |
 | `pages/UserMerge.tsx` | books `userPageExtensions` row action | account merge stays in ABO (`internal/usermerge`; auth exposes only the `StageUserMerge` participant, 05-authn §3.1), so it is books UI (FE3-18; O3 closed) |
-| `utils/operationPolling.ts` | books, `modules/books/legacy/operationPolling.ts`, unchanged, still on `ops.ts` | it imports `../services/api` and `../generated/ops` (`operationPolling.ts:6-7` @748fd787a), both ABO-only, so it cannot enter `core/web`; its books importers keep legacy calls after shell adoption (`Library.tsx:55`, `ITunesImport.tsx:56`). The shell's Activity page, `OperationsIndicator` and `TaskTrackerProvider` stop importing it and get their own state helpers over the generated `TaskRunView` states (FE5-6) |
+| `utils/operationPolling.ts` | books, `modules/books/legacy/operationPolling.ts`, on `ops.ts` until R3, which moves it onto the generated `TaskRunView` states when it deletes `ops.ts` (§7.8) | it imports `../services/api` and `../generated/ops` (`operationPolling.ts:6-7` @748fd787a), both ABO-only, so it cannot enter `core/web`; its books importers (`Library.tsx:55`, `ITunesImport.tsx:56`) keep it after shell adoption. The shell's Activity page, `OperationsIndicator` and `TaskTrackerProvider` stop importing it and get their own state helpers over the generated `TaskRunView` states (FE5-6) |
 | `utils/followOperation.ts`, `utils/trackedOperations.ts` | books, beside `operationPolling` | their callers are books: `followOperation` is called by `services/api.ts:13,1838` (the legacy remainder, `modules/books/legacyApi.ts`) and `OperationTrackerProvider.tsx:24-26,328`'s merge/combine/purge path, `trackedOperations` (its `TrackedKind` is `merge`/`combine`/`purge`) only by that provider (`OperationTrackerProvider.tsx:45`), which is the books provider of the row below (FE5-6) |
 | `pages/ActivityLog.tsx` (3,320 LOC) + `stores/useOperationsStore.ts`, `operationGrouping.ts`, `components/layout/OperationsIndicator.tsx` | shell `/activity` (tasks pane over `/api/core/v1/tasks`) | audiobook op labels/colours become books `taskKinds`; the book feed, the `versionApi` undo preflight and `PendingFileOpsBanner` (`ActivityLog.tsx:7,60`) become a books `activityPanes` entry; in R2's tasks flip `useOperationsStore`'s `* as api` import (`useOperationsStore.ts:7`) is rewired to the generated core client against native routes, polling them, and in the events flip it takes live updates from the native stream (§7.9.2, FE2-3, FE3-6); at shell adoption the page moves into the shell |
 | `pages/System.tsx` (+ `components/system` Storage, Quota, SystemInfo) | shell `/system` | `ChapterConsolidationCard`, `ManualFixesCard` → books `widgets` (placement `system`); calls the native routes of R2's backup-health-metrics flip (`/system`, `/backup`, `/update`, `/health`, FE2-25) |
@@ -1375,7 +1356,7 @@ first, and the core-web import rule (§7.3.1) proves the cut (FE-16).
 | `pages/FileBrowser.tsx` | books page `/books/files` | uses ui-kit `ServerFileBrowser`, passing the generated core browse call (`core:library.browse`, 05-library) as its `browse` prop and books' scan include/exclude calls as `include`/`exclude` |
 | `components/wizard/WelcomeWizard.tsx` (989 LOC) | shell first-run frame + books `setup` | the wizard gate `config.root_dir \|\| config.setup_complete` (`App.tsx:87-89`) becomes books' `setup.isRequired` |
 | `contexts/AuthContext.tsx`, `components/toast/ToastProvider.tsx`, `stores/useAppStore.ts` | shell | `AuthContext`'s `* as api` import (`AuthContext.tsx:16`) is rewired to the generated core client before the move |
-| `lib/storageKeys.ts` (19 keys, 13 of them audiobook-specific, `storageKeys.ts:7-29` @748fd787a) | split (FE4-4, FE5-5) | the books keys (`itunes_import_settings`, the `library*`, `metadata-review-*` and `dedup-*` keys) move to `web/src/modules/books/storageKeys.ts` with their literal values; the six keys of shell- and ui-kit-bound files (`app-theme-mode`, `activity-source-prefs`, `activity-ops-pinned`, the `table_config` prefix of `ConfigurableTable.tsx:104,129`, `dismissed_announcements` of `AnnouncementBanner.tsx:23,33`, `welcome_wizard_completed` of `WelcomeWizard.tsx:295` and `App.tsx:93,97`) and the two literal keys of shell-bound files (`ops-indicator-collapse-v1`, `OperationsIndicator.tsx:105`; `settings.showAdvanced`, `useAdvancedSettings.ts:28`) stay ABO literals, `app-theme-mode` passed to the preset as `themeStorageKey` and the other seven through `createShell({ legacyStorageKeys })` (§7.4.2, §7.7, §7.10, FE6-2), so no audiobook key name enters `core/web` (R1) and no preference resets at shell adoption |
+| `lib/storageKeys.ts` (19 keys, 13 of them audiobook-specific, `storageKeys.ts:7-29` @748fd787a) | split (FE4-4, FE5-5) | the books keys (`itunes_import_settings`, the `library*`, `metadata-review-*` and `dedup-*` keys) move to `web/src/modules/books/storageKeys.ts` with their literal values; the six keys of shell- and ui-kit-bound files (`app-theme-mode`, `activity-source-prefs`, `activity-ops-pinned`, the `table_config` prefix of `ConfigurableTable.tsx:104,129`, `dismissed_announcements` of `AnnouncementBanner.tsx:23,33`, `welcome_wizard_completed` of `WelcomeWizard.tsx:295` and `App.tsx:93,97`) and the two literal keys of shell-bound files (`ops-indicator-collapse-v1`, `OperationsIndicator.tsx:105`; `settings.showAdvanced`, `useAdvancedSettings.ts:28`) move with their files: `app-theme-mode` is passed to the preset as `themeStorageKey` (§7.7, §7.10, FE6-2), and the other seven become `storageKey()` names in the shell and ui-kit, so those seven preferences reset once at shell adoption, listed in that release's note (D13). No audiobook key name enters `core/web` (R1) |
 | `components/operations/OperationTrackerProvider.tsx` | shell `TaskTrackerProvider` (follow a run app-wide) + books provider for merge/combine/purge locks | |
 | `components/layout/{MainLayout,TopBar,UserMenu,sidebarSelection}.tsx`, `Sidebar.tsx` minus its arrays | shell | `ReviewBanner` and `usePendingFileOps` (`MainLayout.tsx:9-10,25`) become books `banners`; `librarySubItems`/`menuItems` (`Sidebar.tsx:53-100`) become books `nav` (with children) plus shell entries; the Review badge becomes `useBadge: useReviewCount` where `const useReviewCount = () => useReviewStore(s => s.count)` (FE-22) |
 | `components/common/*` (ConfigurableTable, ServerFileBrowser, BulkConfirmDialog, FilterTagBar), `ErrorBoundary`, `KeyboardShortcutsDialog`, `AnnouncementBanner` | ui-kit (presentational) / shell (stateful) | `ServerFileBrowser` is not presentational at HEAD and is cut before it moves (FE7-12, FE8-5): it calls `api.browseFilesystem`, `api.includeFilesystemPath` and `api.excludeFilesystemPath` (`ServerFileBrowser.tsx:37,97,176,182` @748fd787a) and types its state with `api.FileSystemItem`/`api.FilesystemBrowseResult` (`:74,77`); it takes `{ browse, include?, exclude? }` props instead (without `include`/`exclude` the context menu hides), and ui-kit declares its own `BrowseEntry`/`BrowseResult` types, structurally assignable from the generated core types, because even a type import from `@mediacore/api-client` would break the rule. ui-kit then imports neither `@mediacore/api-client` nor `@mediacore/shell` (the ESLint rule of §7.3.1) |
@@ -1386,8 +1367,8 @@ first, and the core-web import rule (§7.3.1) proves the cut (FE-16).
 | `services/api.ts` (8,747 LOC) | split: auth/users/operations/system/settings → generated core client (the client lands with R1's `core/web` PR; each R2 flip switches its calls); books routes → generated books client in `modules/books/api/`; hand-written calls to books' `/api/v1` gin routes remain in `modules/books/legacyApi.ts` and shrink route-group by route-group as books rewrites them | |
 | `services/activityApi.ts` (256), `collectionApi.ts` (193), `fileOpsApi.ts` (29), `playlistApi.ts` (126), `readingApi.ts` (63), `versionApi.ts` (212) | books: generated books client where the route is native, else `modules/books/legacyApi.ts` (FE-28) | none is shell code |
 | `theme.ts` | ui-kit `createMediaTheme` + books `themeExtend` (signal palette) | |
-| `generated/ops.ts`, `types/generated/*` | replaced by OpenAPI-generated types | `ops.ts` and `opsgen` stay until the last `ops.ts` importer is native (end of §7.19 step 6; the Activity page stops importing it in R2's tasks flip, books pages through `operationPolling` later; FE3-6, FE4-7) |
-| all other pages/components (Library, BookDetail, Authors, Series, Works, Collections, Playlists, TrashedVersions, review workspace, …) | `modules/books/` | URLs move to `/books/...`; old paths and `ABS_REDIRECTS` (`web/src/utils/absRedirects.ts:17-25`) may become books' optional static client redirects, the Go `UIDescriptor.LegacyRedirects` (exported through `manifest.gen.ts`, FE3-17; no counter and nothing on the server), filled in the step-5 release if books keeps them, including the pages the shell absorbs: `/dashboard → /` (today's home, `App.tsx:256-258`), `/files → /books/files`, `/diagnostics → /system/diagnostics`, `/operations → /activity`, `/maintenance → /system` (FE2-16) |
+| `generated/ops.ts`, `types/generated/*` | replaced by OpenAPI-generated types | the Activity page stops importing `ops.ts` in R2's tasks flip (F5); `ops.ts`, `tools/cmd/opsgen` and `internal/operations/state` are deleted together in R3, books' `operationPolling` moving to `TaskRunView` states in that PR (§7.8; FE3-6, FE4-7) |
+| all other pages/components (Library, BookDetail, Authors, Series, Works, Collections, Playlists, TrashedVersions, review workspace, …) | `modules/books/` | URLs move to `/books/...`, and no former path is redirected (D13): a former bookmark lands on `NotFound`, and the step-5 release note lists the new paths, including the pages the shell absorbs: `/dashboard → /` (today's home, `App.tsx:256-258`), `/files → /books/files`, `/diagnostics → /system/diagnostics`, `/operations → /activity`, `/maintenance → /system` (FE2-16). HEAD's `ABS_REDIRECTS` (`web/src/utils/absRedirects.ts:17-25`), which maps Audiobookshelf web-client URLs rather than ABO's own former paths, stays books code with its targets updated to the new paths; it is no SDK field |
 
 ## 7.12 Lifecycle
 
@@ -1476,8 +1457,8 @@ One mechanism, to be stated identically in [12](12-repo-split.md) (FE-14):
 
 | Option | Cost | Install auth | Verdict |
 |---|---|---|---|
-| **npm registry**, public packages `@mediacore/*`, published by the same release job and tag `vX.Y.Z` as the Go module; apps pin **exact** versions (`"@mediacore/shell": "X.Y.Z"`) | free for public packages (14 Q-B recommends a public repo) | none | **chosen**: works with Dependabot's npm ecosystem and `npm ci` lockfiles |
-| GitHub Release tarballs (`npm pack` attached to the tag), apps depend on the tarball URL | free | a private repository's release assets need an authenticated download: an `.npmrc` with a fine-grained read token on every machine, the same cost that rejects GitHub Packages (FE5-16) | fallback only if the repository stays private, accepting that cost: specifiers become tarball URLs (an exact `"X.Y.Z"` cannot name a tarball), which Dependabot's npm updater does not track, so the bump is manual, and `check_mediacore_lockstep.py` parses `X.Y.Z` out of the URL (§7.5.3). For a public repository the npm registry row applies |
+| **npm registry**, public packages `@mediacore/*`, published by the same release job and tag `vX.Y.Z` as the Go module; apps pin **exact** versions (`"@mediacore/shell": "X.Y.Z"`) | free for public packages (the core repo is public, D13) | none | **chosen**: works with Dependabot's npm ecosystem and `npm ci` lockfiles |
+| GitHub Release tarballs (`npm pack` attached to the tag), apps depend on the tarball URL | free | a private repository's release assets need an authenticated download: an `.npmrc` with a fine-grained read token on every machine, the same cost that rejects GitHub Packages (FE5-16) | rejected: the core repo is public (D13), so the npm registry row applies; tarball URL specifiers would also escape Dependabot's npm updater |
 | GitHub Packages npm registry | free for public packages | a token with `read:packages` even for public packages | rejected: token on every machine |
 | npm git dependency on a tag | free | none | rejected: npm cannot install a package from a subdirectory of a git repository |
 
@@ -1524,11 +1505,11 @@ two are merged together. In-repo, apps use `file:` dependencies; there is no roo
 | API-only boot | ABO shell-adoption done-check | `make build-api && ./audiobook-organizer serve` answers `/` with the placeholder (FE2-10) |
 | `TestHandler_OutsideRouteChain` | `core/ui` + `httpapi` | no rate limit or permission stage on SPA responses; listed in the infra set (FE-25) |
 | `TestBasicExemptAssets_EqualsHEAD` | `core/ui` | `ui.BasicExemptAssets` accepts exactly HEAD's `basicauth.go:40-46` set; with the kernel's P8 wiring, `TestBasicGate_ExemptSetGolden` passes in the shell-adoption PR (FE5-10) |
-| `legacyStorageKeys.test.tsx` | ABO web | every one of the eight literal keys (seven through `legacyStorageKeys`, typed by `LegacyShellKey`, so a misspelt name is a compile error, FE6-6; `app-theme-mode` through the preset's theme meta, FE6-2) is read and written in place by the shell or ui-kit (a table layout and a dismissed banner saved before shell adoption are kept after it) (FE5-5) |
+| `shellStorageKeys.test.tsx` | shell | every key the shell and ui-kit read or write is a `storageKey()` name under the app ID, and no pre-shell key (for example `table_config`, `dismissed_announcements`) is read (D13); ABO's `app-theme-mode` is read and written only through the preset's theme meta (FE6-2) |
 | e2e `shell.spec.ts` | `core/web/e2e`, Playwright (chromium, webkit) against `examples/hello` built with `-tags embed_frontend` | login, merged nav, version-mismatch hiding, core-version mismatch page, disabled module absent after restart (G1 UI half), stale-build banner |
 | e2e `tabs.spec.ts` | same, served over plain HTTP/1.1 on a **non-loopback** address (the runner's LAN interface, or a hostname resolving to it), so `isSecureContext` is false | six tabs all load and receive realtime over one stream, through the heartbeat election (FE-9, FE2-2) |
 | e2e `two-apps.spec.ts` | two example binaries on one host, different ports | signing in to one does not log out the other (FE-6) |
-| ABO e2e (existing 39 specs) | `web/tests/e2e` | regression across every step of §7.19; route URLs updated with redirects tested |
+| ABO e2e (existing 39 specs) | `web/tests/e2e` | regression across every step of §7.19; route URLs updated to the new paths, a former page path lands on `NotFound` (D13), and each `ABS_REDIRECTS` row reaches its new target |
 
 ## 7.19 Migration from ABO
 
@@ -1554,7 +1535,7 @@ route or a client call changes in the PR that changes its server side.
    client is generated from the `core.json` that the hello skeleton emits into
    `core/openapi/core.json` (§7.8). Each R2 flip PR switches the `api.ts` sections whose routes it
    replaces straight to generated operations and deletes the replaced gin routes in the same PR: the
-   config flip the settings calls; the identity flip the auth, users, keys and roles calls, ABO's five
+   identity flip the settings calls (the native settings routes land at F4, 05-config §1.3.4) and the auth, users, keys and roles calls, ABO's five
    legacy permission constants, the factory-reset dialog (native route, two-step count confirmation;
    hidden in release R1) and the fragment-form `/invite` and `/login/temp` routes (§7.4.3, §7.9.1,
    FE4-2); the tasks flip the Activity page's REST calls, polling until the events flip, which switches
@@ -1568,8 +1549,8 @@ route or a client call changes in the PR that changes its server side.
    router; **then** rewrite `renderWithProviders` onto `renderInShell`, which needs the providers to have
    moved (FE-17, FE2-4); delete `useUnsavedChangesBlocker`; the shell realtime client replaces the
    R2-rewritten realtime code, and the Activity page moves into the shell on the generated core client
-   (it no longer imports `ops.ts` or `operationPolling`, which stays books', §7.11; `opsgen` stays for
-   books' `operationPolling` users, §7.8); the preset writes the UI build-ID meta tag, the
+   (it no longer imports `ops.ts` or `operationPolling`, which stays books', §7.11; `opsgen` and `ops.ts`
+   are deleted in R3, §7.8); the preset writes the UI build-ID meta tag, the
    `mediacore-app` meta, and the theme meta and boot script from ABO's `themeStorageKey`/`defaultMode`
    (FE6-2, FE7-8), and ABO's hand-written inline theme script in `web/index.html` (`:13-30`
    @748fd787a) is deleted in the same PR, so exactly one boot script runs and is CSP-hashed (FE7-9);
@@ -1584,11 +1565,10 @@ route or a client call changes in the PR that changes its server side.
    pages call (§7.5.1, FE2-25). Done when, among the e2e checks, `make build-api &&
    ./audiobook-organizer serve` answers `/` with the placeholder (FE2-10).
 5. **Server manifest and intersection on** (§7.5); ABO URLs move to `/books/...` (§7.11). Steps 4 and
-   5 **ship in one release**: `createShell` (step 4) already mounts books' routes under `/books/`. Static
-   client redirects from the former paths (`UIDescriptor.LegacyRedirects`) are **optional**: books may
-   fill them in this release so bookmarks keep working, at no cost beyond the list, with no counter,
-   no server-side entry and no window; without them a former bookmark lands on `NotFound` and the
-   release note lists the new paths (FE5-13).
+   5 **ship in one release**: `createShell` (step 4) already mounts books' routes under `/books/`. No
+   former page path is redirected (D13, D10): a former bookmark lands on `NotFound`, and the release note
+   lists the new paths so owners update their bookmarks (FE5-13). HEAD's `ABS_REDIRECTS` stays books
+   code (§7.11).
 6. Replace the remaining `api.ts` and sibling service sections by generated clients as books' routes
    become native (09).
 
@@ -1820,3 +1800,5 @@ Round 11:
 - R11-5 note (R10-9 justification) — §7.6.3 `embed_frontend` paragraph: ABO's `static_embed.go` and its recovery test import more than `embed`; no GOOS constraint, as stated.
 
 - D10–D12 revision (2026-11-04): no `ui_route` and no C9: `ui.Options.Redirects`/`OnRedirectUse`, the kernel's redirect recorder and `TestHandler_RecordsLegacyRedirectUse` deleted; `UIDescriptor.LegacyRedirects` are optional static client redirects only (§7.11, §7.19 step 5). §7.19 rewritten by release (steps 1–2 in R1, step 3 with each R2 flip, steps 4–5 in R2 or R3). §7.4.3 and §7.9.1: link forms switch in R2's identity flip together with the legacy SPA (fragment readers in the same PR); HEAD's one-time tokens are deleted by the identity step (D12 F2), so the `/invite/{token}` and `/auth/temp-login` 302s, `InviteLinkPath`, the reader-ahead rule and `invite` in `SPAShared` are gone; the `/api/v1/auth/me` alias, `no_legacy_atom` and the `/api/v1/csp-report` alias deleted. §7.9.2: the legacy SPA moves to `/api/core/v1/events` and the native task routes in R2's events flip; legacy streams, projections and the books bus bridge deleted. Rollback-motivated rules restated for restore-based rollback; R-test rows replaced by an e2e; link-form tests renamed (`TestOldLinkFormsNotServed`, `TestInviteLink_FragmentEndToEnd`, `TestTempLoginLink_FragmentEndToEnd`); `StaleReason` `pre-s0-server` renamed `pre-r1-server`; every stage reference re-keyed to R1, an R2 flip or shell adoption. Consistency pass: the Activity page and task routes move in F5 (tasks flip), polling until F6's stream; release R1 hides the reset control (offline `storage reset` only); UI-0 re-keyed to release R1's `core/web` PR; `TestBasicGate_ExemptSetGolden`, 05-realtime §5 item 6 and D12 (a)–(d) citations.
+
+Round 13 (2026-11-04): CONFORM-5, CONFORM-10, D13, R12 (IMPL-6), R15 (XFILE-2), R17 (XFILE-6, XFILE-7, IMPL-11). No old-URL redirects: `legacyRedirects` removed from the manifest, `ModuleManifest`, `ui.UIIDs` (with `ui.Redirect`), §7.11 and §7.19 step 5; a former bookmark lands on `NotFound`, `ABS_REDIRECTS` stays books code. `LegacyShellKey` and `ShellConfig.legacyStorageKeys` deleted: the seven shell and ui-kit preferences use `storageKey()` names and reset once at shell adoption (release note); `legacyStorageKeys.test.tsx` replaced by `shellStorageKeys.test.tsx`. §7.9.2 specifies the F6 rewrite of `eventSourceManager` (05-realtime §4.8 items 1–6, per-tab, `useTopic`/`useResync`), replaced by the shell client at F9 or R3. §7.8, §7.9.2, §7.11, §7.19 step 4: `opsgen`, `ops.ts` and `internal/operations/state` deleted together in R3. §7.19 step 3: settings calls switch in the identity flip (F4). §7.5.3, §7.17: the private-repository tarball fallback removed (core repo public, D13).
