@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/01-summary.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: d2956830-373c-4b12-9504-ccace49f7f6d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -25,8 +25,9 @@ notifications, backup, updates, health and a React UI shell. Apps compose it exp
 
 Core **builds** only what ABO consumes during the extraction or what core itself needs (03 §3.4). The
 indexer contract, the *arr-v3 facade extension point, the acquisition engine and the download
-grab/monitor pipeline are specified as contracts at proof depth but are **deferred-build**: nothing in
-the extraction plan builds them; they are built when the first TV/Movies app starts.
+grab/monitor pipeline are **deferred-build**: they are described as non-normative design sketches at proof
+depth, which the SDK does not freeze, nothing in the extraction plan builds them, and they are designed and
+built when the first TV/Movies app starts (A-15).
 
 The extraction is a strangler fig: core is born as a nested module inside this repo (proven to build
 and vet, `raw/00-baseline-build.md`), ABO is rewired onto it stage by stage while it keeps shipping,
@@ -48,11 +49,10 @@ moves platform machinery, not every route.
    and ABO deployable, with a rollback that opens the same database (gate G5). During the extraction
    every key family keeps one stored format, written only by ABO code: core reaches ABO's data through
    store interfaces whose implementation the `books` module supplies, so the previous release reads
-   every row the new build wrote (02 decision 13). A rollback's costs and consequences are listed once,
-   in the table of 09 §9.2.1, and every narrowing they cause is fail-closed (a moved plaintext secret leaves
-   a never-matching sentinel, so the older build fails closed on it until it is re-entered; the secrets HEAD
-   already stores encrypted, the Basic password among them, are not moved, so a rollback never strands the
-   Basic gate, R5-1). An install
+   every row the new build wrote (02 decision 13). The extraction is **representation-neutral**: sessions,
+   one-time tokens, API keys, role scopes and secrets keep HEAD's stored form, so a rollback costs no
+   re-login and no secret re-entry (A-2). A rollback's costs and consequences are listed once, in the table
+   of 09 §9.2.1. An install
    whose store has not applied the books migrations that the floor release requires installs the
    stepping-stone release first (02 N14).
 4. **Correct by construction.** The boundaries are enforced mechanically (rules R1–R8 in §03): core
@@ -60,7 +60,8 @@ moves platform machinery, not every route.
    cannot be written without declaring parallelism, modules cannot write outside their keyspace.
 5. **Current toolchain.** Latest stable Go (go1.27.3) and frontend tooling, modern idioms, stdlib
    over third-party where equivalent (D8, §13).
-6. **Free and open.** No paid service, tier or licence is required anywhere (D9).
+6. **Nothing paid.** No paid service, tier or licence fee is required anywhere (D9; the repo's PolyForm
+   Noncommercial licence costs nothing, and relicensing core is an optional reuse decision, 14 Q-A).
 7. **Don't rule out one binary with several apps** (lowest priority, §11): no process globals in
    core (R5 binds core only; ABO's remaining globals become per-App façades), namespaced everything,
    one shell with merged navigation.
@@ -77,6 +78,9 @@ moves platform machinery, not every route.
   decision 13): core services use the generic ones (03 §3.7 names them) in place through the store
   interfaces of 03 §3.3, whose implementation over those keys is books code. Moving a family to a native keyspace is a later, one-way **cutover** (02 N15), not
   an extraction stage.
+- Hardening ABO's stored representations during the extraction (hashed sessions, `mck_` keys and native
+  scopes in ABO's stores, encrypted plaintext secrets, operator precedence for the auth switch): these are
+  the post-S10 **hardening cutovers** of 02 N15 (A-2).
 - Retiring ABO's gin router or renaming its `/api/v1/...` routes: the router stays mounted through
   `httpapi.MountLegacy` (02 N7); a route group moves to native `httpapi` only when rewritten for its
   own reasons.
@@ -95,7 +99,7 @@ moves platform machinery, not every route.
 | **SDK** | Core's public, versioned packages — everything outside `core/internal/`, `core/kernel/` and `core/legacy/`. Measured by the API-stability gate (§12). |
 | **legacy package** | `core/legacy` (with `legacy/legacytest`): the one core package holding every identifier that exists only to serve an app's legacy stores — the optional legacy-only capabilities, `legacy.Stores`, the legacy-only `legacy.LibraryRootSource`, the pre-core maintenance handle `legacy.Maintenance` (R7-2) and their conformance suites. Public, so ABO imports it, but outside the API promise like `kernel`, so the first release after a family's cutover that no longer sets its member deletes its identifiers without a breaking change (03 §3.3; R6-3, COR7-5). Owners never import it; each checks its unexported mirror of a capability in the mirror test of 03 §3.3 (R7-7). |
 | **kernel** | Core's composition machinery (`core/kernel/...`): module catalog, manifest validation, lifecycle supervisor and the typed services struct (no DI container). Imported only by `core/app`. |
-| **deferred-build** | A core package whose contract is specified at proof depth but which the extraction plan does not build (03 §3.4): `acquire`, `arrfacade`, `integrations/indexer`, the download grab/monitor pipeline. Built when the first TV/Movies app starts. |
+| **deferred-build** | A core package described by a non-normative design sketch at proof depth, which the SDK does not freeze and the extraction plan does not build (03 §3.4; A-15): `acquire`, `arrfacade`, `integrations/indexer`, the download grab/monitor pipeline. Designed and built when the first TV/Movies app starts. |
 | **legacy mount** | ABO's gin router mounted through `httpapi.MountLegacy` behind core's perimeter middleware; permanent (02 N7). |
 | **entity.Ref** | The one polymorphic reference `{Module, Kind, ID}` to a module-owned entity (03 §3.3); `tasks.Resource` is this type. |
 | **app** | A shipped binary: one `main` that calls `app.New` with its modules. ABO is an app. |
@@ -105,8 +109,8 @@ moves platform machinery, not every route.
 | **keyspace** | A prefix of the shared Pebble database handed to one owner: `c/<subsystem>/` for core, `m/<module>/` for modules. |
 | **legacy claim** | A module's declaration that it owns pre-existing un-namespaced key families (ABO's 258), so they stay in place. |
 | **store interface** | The SDK interface through which a core service persists state an app may already hold; the one list is 03 §3.3 "Store interfaces" (SIMP5-8). Core ships a **native implementation** over its own keyspace, used by new apps and `hello`; an app with pre-core data supplies a **legacy implementation** over its existing keys on `module.Manifest.LegacyStores` (a `legacy.Stores` value; for ABO, books code; S2's `app.Options.LegacyConfigStore` bridge is the one exception, DATA5-16), so core holds no app key name and no storage grant during the extraction (02 decision 13, R4-1). |
-| **extension family** | The books-owned family, never read by an older build, in which ABO's legacy store implementations keep native-only data (namespaced scopes, hashed sessions, native one-time tokens) instead of adding it to legacy rows. Each record carries a fingerprint (`legacy_ref.fp`) of the security-relevant fields of the legacy row it extends. When an older build changed those fields, a record holding a Widening field is suspended until an admin re-confirms it, and a record without one has its Derived fields reset until its next write; a revocation the older build made stays revoked (02 decision 13; R5-6, DATA5-4). |
 | **cutover** | The later, per-family, one-way step that moves a family to a native core keyspace and deletes the legacy rows; outside the extraction, checkpointed, behind the per-owner level guard; the only step in which core reads an app's rows, so storage grants land with it; its rollback floor is the cutover release itself (02 N15). |
+| **hardening cutover** | One of the three named post-S10 cutovers on 02 N15's machinery that harden what the representation-neutral extraction keeps as at HEAD: **identity** (hashed sessions and one-time tokens, `mck_` keys, native scopes), **secrets** (encrypt the plaintext blob secrets) and **auth precedence** (A-2; 12 §12.4.4). |
 | **task** | A durable unit of background work in `core/tasks` (formerly "operation"/"op"/"job"); kind `<module>.<name>`. |
 | **Parallelism** | The required declaration of how a library-scale loop runs (`tasks.CPU()`, `tasks.Fixed(n, reason)`, `tasks.Sequential(reason)`; §05-tasks). |
 | **outbox** | A durable queue written in the same Pebble batch as the state change it announces; relayed at least once. |
@@ -172,3 +176,9 @@ Round 6 (dispositions in `docs/plans/platform-core/reviews/spec-round-6-disposit
 Round 7 (dispositions in `docs/plans/platform-core/reviews/spec-round-7-dispositions.md`; resolutions R7-1…R7-8):
 
 - R7-2, SIMP7-8, COR7-5, R7-7 — glossary "legacy package": names `legacy.LibraryRootSource` and `legacy.Maintenance`, deletion in the first release after the cutover that no longer sets the member, and the mirror test of 03 §3.3.
+
+Advisor (dispositions in `docs/plans/platform-core/reviews/spec-advisor-dispositions.md`; resolutions A-1…A-17):
+
+- A-2 (ADV-3, ADV-S1) — goal 3: the extraction is representation-neutral, so a rollback costs no re-login and no secret re-entry; non-goals: hardening ABO's representations is the post-S10 hardening cutovers; glossary: "extension family" removed, "hardening cutover" added.
+- A-15 (ADV-S9) — summary and glossary "deferred-build": deferred packages are non-normative design sketches the SDK does not freeze.
+- ADV-9 — goal 6: D9 is "nothing paid"; the PolyForm Noncommercial licence meets it.

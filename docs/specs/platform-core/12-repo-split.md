@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/12-repo-split.md -->
-<!-- version: 1.8.1 -->
+<!-- version: 1.9.0 -->
 <!-- guid: eb47baa1-640b-4c96-96cc-f6b2bdeaa57e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -421,6 +421,25 @@ split, the core repo has nothing else. It is specified now so that it does not g
   modified) because it records each module's floor where operators and the shell can read it
   (`/api/core/v1/modules`, backup manifests), not as a second dependency resolver.
 
+### 12.4.4 Hardening cutovers (post-S10)
+
+The extraction is representation-neutral (03 introduction; 02 decision 13, A-2), so the hardening of ABO's stored
+representations is not an extraction stage. It is three named **hardening cutovers**, each a one-way, floored
+cutover on 02 N15's machinery (mandatory pre-migration checkpoint, per-owner level guard, the cutover release as
+its rollback floor):
+
+| Cutover | What it changes for ABO | Until it runs (as at HEAD) |
+|---|---|---|
+| **Identity** | sessions and one-time tokens stored hashed; `mck_` keys; roles and keys hold native scopes | raw `sess:` rows and HEAD's one-time tokens; `abk_` keys and roles holding legacy atoms, with namespaced scopes as an API-level mapping (`rbac.LegacyAtom`) |
+| **Secrets** | the plaintext blob secrets are encrypted into `secrets` | plaintext blob secret fields; the four secrets HEAD already encrypts stay as they are |
+| **Auth precedence** | an operator value that enables auth takes effect over a stored `false` | HEAD's precedence: the stored value wins |
+
+They are not split criteria: neither T nor SC1–SC10 waits on them, and each may run before or after the split.
+A cutover that runs after the split is an ABO change to its legacy store implementations plus native
+behaviour core already ships, released through ABO's own release; the `legacy` identifiers it stops using are
+deleted under §12.4.2's `legacy/` rule. Their order, measured inputs and release notes are planned when they
+are scheduled; 14 K25 states the residual risk until each has run.
+
 ## 12.5 Release process (core repo, after the split)
 
 No goreleaser: core ships no binary. Steps (a `make release VERSION=vX.Y.Z` target in the core repo,
@@ -516,57 +535,42 @@ working repo. `--subdirectory-filter core` alone would keep only commits made af
 `core/`; code that moved there from `internal/...` would lose its earlier history. So the filter uses a
 path file with filter-repo's `==>` rename syntax, followed by the subdirectory step.
 
-The path file is generated from **real history at the freeze commit `F`**, not from 04's Split cells.
-04's cells cannot express a source file divided between destinations (e.g. `internal/metrics/metrics.go`,
-whose `operations_*` series go to `tasks`), give no destination file names (`internal/operations/progress.go` and
-`internal/operations/trigger_source.go` both land in `mediacore/tasks`, while `state.go` stays in ABO as
-`internal/books/contract`'s v1 checkpoint helpers; R7-8, MOD7-11), and cannot express a coexistence
-window (core's scheduler is a re-implementation, 04 §8.6, written at T0, while ABO's
-`internal/scheduler` lives on until T7 deletes it, MOD5-4; core's executor is a re-implementation
-written against `tasks.RunStore` at S5, while ABO's `internal/operations/registry` files stay at their
-path as opsbridge until T8, and `childop` and `opsmetrics` until their last ABO user is native, R7-8, MOD7-1, MOD8-2). Mapping two coexisting, diverging files to one path either aborts filter-repo with
-`File renaming caused colliding pathnames!` when one commit touches both (round-2 X13), or splices the
-ABO copy's later edits into core history. Rule:
+The path file is generated from **real history at the freeze commit `F` by git's rename detection**, not from
+04's cells and not from a curated list (A-4). 04's cells cannot express a source file divided between
+destinations (e.g. `internal/metrics/metrics.go`, whose `operations_*` series go to `tasks`), give no
+destination file names, and cannot express a coexistence window (core's scheduler and executor are written
+fresh while ABO's `internal/scheduler` and `internal/operations/registry` files live on, 04 §8.6). Mapping two
+coexisting, diverging files to one path either aborts filter-repo with `File renaming caused colliding
+pathnames!` when one commit touches both (round-2 X13), or splices the ABO copy's later edits into core
+history. Rule:
 
-- an origin path is mapped **only** for a file whose arrival in `core/` was a **move**: its line in
-  `core/scripts/split/origins.txt` (below), written by the PR that deleted the source; a pure rename
-  (source deleted in the same commit, `git log --follow` similarity ≥ 90 %) without such a line is reported,
-  so the line can be added;
-- a copied, split or re-implemented file keeps only its post-arrival history and gets no `origins.txt`
-  line (e.g. `internal/telemetry/telemetry.go`, whose provider construction core re-implements in
-  `metrics` while the file keeps its install code until S2, 04 §8.6; MOD5-14; and the registry engine,
-  `childop`, `opsmetrics`, `opsv3` and the whole `pkg/ops/opstest` package, which core re-implements in
-  `internal/executor` (`opsmetrics`' one successor among them), `tasks`, `internal/taskhttp` and `taskstest`, 04 §8.6; MOD7-1, MOD8-2); the core repo's first commit message
-  records its origin path and the ABO commit it was copied from (e.g. the `core/internal/keyedmutex`
-  copy, 03 §3.2.1, whose origin stays in ABO);
+- an origin path is mapped **only** where `git log -M90% --diff-filter=R --name-status F` (no pathspec: a
+  pathspec would hide the source side and turn every move into an add) reports a rename into `core/` — the source path deleted in the same commit that adds the `core/` path — so a copy,
+  whose source still exists, is never mapped and two coexisting files never map to one path (X13);
+- every other `core/` file keeps only its post-arrival history: a re-implemented file, a split file, a copy
+  (e.g. the `core/internal/keyedmutex` copy, 03 §3.2.1, whose origin stays in ABO; the core repo's first
+  commit message records such origins and the ABO commit they were copied from), and a moved file whose move
+  commit changed it too much for detection;
 - files that never arrived in `core/` are not listed, so no ABO-only code (`internal/keyedmutex`, the
   `internal/telemetry/contract/` suite, `internal/telemetry/ratchet_test.go`, `cmd/`) enters core's
   history; core-owned scripts were born under `core/scripts/ci/`, so the `core/` line carries them.
 
 ```text
-# core-history-paths.txt (generated by core/scripts/split/history_paths.py at F from core/scripts/split/origins.txt,
-# cross-checked against `git log -M90% --diff-filter=R`)
+# core-history-paths.txt (generated by core/scripts/split/history_paths.py at F from
+# `git log -M90% --diff-filter=R --name-status F`, keeping renames whose destination is under core/)
 core/
 internal/logging/sanitize.go==>core/log/sanitize.go
 internal/logging/structured.go==>core/log/structured.go
 ...
 ```
 
-**Move PRs record their origins.** A move PR routinely carries rewrites besides import paths
-(`go fix` modernizers required by core's `fix-check`, 13 §13.3; and, for an ABO import, one of the mechanical
-rewrites 04 §2.2 enumerates, its one list of six cuts, which leave a file a move by 03 R1(c)'s rule, R8-6), so a small file can fall under 90 % similarity and lose its detected rename. Every such
-file, all 21 rows of 04 §8.5 among them, gets its `origins.txt` line (MOD8-1); a file whose ABO import needs
-any other rewrite is a re-implementation and gets none. A rename-only
-first commit would not help: the repo merges rebase/fast-forward only, so that commit would land on
-`main` unbuildable (ABO users still import the old path, moved files still import ABO), `git bisect` would
-hit it, and `auto-revert.yml` refuses spans over its `max_span` of 3 commits (MOD4-14). Instead every
-move PR appends one `old-path ==> new-path` line (this exact separator, with one space on each side, in
-04 §2.2, 09 S0 and here; MOD5-14) per moved file to the committed `core/scripts/split/origins.txt`, and only for a file whose source path the same PR deletes (a move, never
-a copy, so two coexisting files never map to one path, X13). `history_paths.py` takes those lines as the
-**authoritative** origins (and writes them in filter-repo's spaceless `old==>new` form, as above) and uses pure-rename detection only as a cross-check; every commit of a move PR
-builds. Its readiness report lists every `core/` file whose content is older than its arrival commit but
-that has neither an `origins.txt` line nor a detected rename, so a lost history is visible before
-cutover.
+**Keeping moves detectable.** Detection works per commit, so a move PR puts the move and the edits every
+commit needs to build (import paths, the mechanical rewrites 04 §2.2 lists) in its first commit, and `go fix`
+modernizers and any other rewrite in later commits (13 §13.3). Every commit builds, because the repo merges
+rebase/fast-forward only and `git bisect` and `auto-revert.yml` see each one. A small file whose move commit
+still falls under 90 % similarity loses its earlier history; that is the accepted cost of not keeping a
+curated origins list (A-4). `history_paths.py`'s readiness report lists every `core/` path whose first commit
+is not a detected rename, so the owner sees which files start their history in `core/` before cutover.
 
 A dry run (`git filter-repo --dry-run --paths-from-file …` on a fresh clone of `main`) is part of the
 readiness report (§12.3.11), so a collision surfaces long before cutover step 3.
@@ -646,10 +650,11 @@ and after (03 §3.2 item 2), so a rollback is a `replace` line plus a directory,
 
 ## 12.10 Open items
 
-1. **Licence of the core repo.** History carries PolyForm Noncommercial 1.0.0 (`LICENSE`). That licence is
-   source-available, not OSI open source; whether core keeps it or is relicensed (e.g. Apache-2.0/MIT) is
-   an owner decision needed before step 4, and relicensing requires the copyright holder's consent for all
-   contributions in the rewritten history. Flagged for [14-risks-open-questions](14-risks-open-questions.md) Q-A.
+1. **Licence of the core repo.** History carries PolyForm Noncommercial 1.0.0 (`LICENSE`), which costs
+   nothing and so meets D9 ("nothing paid"; ADV-9). Whether core keeps it or is relicensed (e.g. Apache-2.0)
+   is an optional reuse decision, wanted only if third parties should reuse core; it is needed before step 4,
+   and relicensing requires the copyright holder's consent for all contributions in the rewritten history,
+   confirmed over the full, not the shallow, history. [14-risks-open-questions](14-risks-open-questions.md) Q-A.
 2. **Public or private core repo.** Decides proxy vs `GOPRIVATE`, npm registry vs token-authenticated
    GitHub Release tarballs with URL specifiers (§12.5 step 6), and the Actions-minutes note in §12.7. Free
    either way (D9), but only the public repo keeps npm installs token-free. 14 Q-B.
@@ -759,3 +764,9 @@ Round 8 (dispositions in `docs/plans/platform-core/reviews/spec-round-8-disposit
 - R8-6 (MOD8-2) — §12.8.1: `childop` and `opsmetrics` stay as opsbridge until their last ABO user is native; `opsmetrics`' successor is in `internal/executor`.
 - FE8-4 — SC4(a): `core/.gitignore` (S0) ignores `/.ci/readiness/`, `/hello`, `**/playwright-report/`, `**/blob-report/`; `core/web/.gitignore` adds the two Playwright entries; the export becomes a fresh repository before the run and the check asserts `git status --porcelain` is empty; §12.3.11 `readiness` names the ignoring file.
 - integration pass (round 8): §12.8.1 cites 04 §2.2 as the one list of the six mechanical rewrites instead of naming two as if they were the rule (R-H request, consistency with 03 R1(c)); SC4's git work tree and `core/.gitignore` (FE8-4) and the 21 §8.5 rows' `origins.txt` lines were already applied.
+
+Advisor (dispositions in `docs/plans/platform-core/reviews/spec-advisor-dispositions.md`; resolutions A-1…A-17):
+
+- A-2 (ADV-3, ADV-S1) — new §12.4.4: the post-S10 identity, secrets and auth-precedence hardening cutovers, what each changes, what holds until it runs, and that none is a split criterion.
+- A-4 (ADV-S3) — §12.8.1: the history path file comes from git's rename detection at `F` (no pathspec); `core/scripts/split/origins.txt` and the move/re-implementation rule deleted; move PRs keep the move in a first, building commit; undetected moves keep post-arrival history only, listed in the readiness report.
+- ADV-9 — open item 1: PolyForm Noncommercial meets D9; relicensing is an optional reuse decision, confirmed over the full history.

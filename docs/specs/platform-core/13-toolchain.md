@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/13-toolchain.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.9.0 -->
 <!-- guid: a1e1b657-1c87-4a3e-8407-43269415455f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -157,7 +157,7 @@ rewritten to.
 | `net/http` ServeMux patterns (1.22) + `http.CrossOriginProtection` (1.25) + `MaxHeaderValueCount` (1.27) | Core HTTP is stdlib (02 N7); method+wildcard patterns; CSRF via `CrossOriginProtection` as its own stage of the fixed middleware chain ([05-http-api](05-http-api.md) §4.2, which owns the stage); every `http.Server` sets the timeout trio and `MaxHeaderValueCount` (`go.md:331-333`) | `httpapi`, `realtime`, `ui` | 13 files `http.NewServeMux`; 446 files import gin; 0 `CrossOriginProtection` |
 | stdlib `uuid` (1.27) | New random identifiers (`uuid.NewV7()`/`NewV4()`); ULIDs (`oklog/ulid`) stay where time-sortability matters (`go.md:325-327`) | request/correlation IDs, API-key IDs | 0 files (`github.com/google/uuid` only indirect, `go.mod:108`) |
 | `new(expr)` (1.26), `min`/`max`, `range n`, `slices`/`maps` | `go.md:300-317` | everywhere | — |
-| `go vet` (with `stdversion` in `go test`) and `go fix` modernizers | Core CI runs `go vet ./...` and **`go fix -diff ./...` must be empty** (`-diff` exits non-zero on any pending fix; verified in `go help fix` on go1.27.3). The 26 analyzers on go1.27.3 (`go tool fix help`): `any atomictypes buildtag embedlit errorsastype forvar hostport inline mapsloop minmax newexpr omitzero plusbuild rangeint reflecttypefor slicesbackward slicescontains slicessort stditerators stringsbuilder stringscut stringscutprefix stringsseq testingcontext unsafefuncs waitgroupgo` — identical to `go.md:263-268`. When ABO code moves into core, the per-class review rules of `go.md:275-287` apply to the resulting hunks, and the move PR applies `go fix` to the files it moves; their history does not depend on rename detection, because the PR records each move in `core/scripts/split/origins.txt` (12 §12.8.1), so every commit of the PR builds and no rename-only commit lands on `main`. | `core-ci.yml` | ABO does not gate on `go fix`, and gains no such gate (03 §3.2 item 4): at HEAD `go fix -diff ./...` in the root exits 1 with pending fixes in 245 files (round-3 X20), so a root gate would be red from S0 |
+| `go vet` (with `stdversion` in `go test`) and `go fix` modernizers | Core CI runs `go vet ./...` and **`go fix -diff ./...` must be empty** (`-diff` exits non-zero on any pending fix; verified in `go help fix` on go1.27.3). The 26 analyzers on go1.27.3 (`go tool fix help`): `any atomictypes buildtag embedlit errorsastype forvar hostport inline mapsloop minmax newexpr omitzero plusbuild rangeint reflecttypefor slicesbackward slicescontains slicessort stditerators stringsbuilder stringscut stringscutprefix stringsseq testingcontext unsafefuncs waitgroupgo` — identical to `go.md:263-268`. When ABO code moves into core, the per-class review rules of `go.md:275-287` apply to the resulting hunks, and the move PR applies `go fix` to the files it moves in a commit after its move commit, so the move commit changes only what it needs to build and git's rename detection still pairs each moved file with its source, which is where the split's history comes from (12 §12.8.1, A-4); every commit of the PR builds and no rename-only commit lands on `main`. | `core-ci.yml` | ABO does not gate on `go fix`, and gains no such gate (03 §3.2 item 4): at HEAD `go fix -diff ./...` in the root exits 1 with pending fixes in 245 files (round-3 X20), so a root gate would be red from S0 |
 
 ## 13.4 Frontend versions (`core/web` workspace and ABO `web/`)
 
@@ -371,3 +371,7 @@ Round 7 (dispositions in `docs/plans/platform-core/reviews/spec-round-7-disposit
 Round 8 (dispositions in `docs/plans/platform-core/reviews/spec-round-8-dispositions.md`; resolutions R8-1…R8-6):
 
 - MOD8-12 — §13.2.2: the two Dockerfile comments naming `golang:1.27.2-alpine` (`Dockerfile:25`, `Dockerfile.build-cgo:21`) join the prose row (9 prose copies, updated with the digest); the guard's history and docstring lines (`scripts/check_toolchain_versions.py:39`, `scripts/tests/test_check_toolchain_versions.py:31`) join "Not a pin".
+
+Advisor (dispositions in `docs/plans/platform-core/reviews/spec-advisor-dispositions.md`; resolutions A-1…A-17):
+
+- A-4 (ADV-S3) — §13.3 `go fix` row: a move PR applies `go fix` in a commit after its move commit, so rename detection keeps the moved files' history; `origins.txt` no longer exists.
