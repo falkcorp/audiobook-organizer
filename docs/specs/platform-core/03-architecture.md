@@ -358,7 +358,8 @@ library's root source, which has no native implementation and so is legacy-only 
 implementation would add a `library` interface additively); and their conformance suites. Naming: an
 identifier drops any `Legacy` prefix and takes its former package's name where it would otherwise be
 ambiguous (`auth.LegacySignIns` → `legacy.AuthSignIns`, `tasks.Recoverer` → `legacy.TasksRecoverer`,
-`storage.Covering` → `legacy.Covering`, `secrets.LegacyStore` → `legacy.SecretsStore`,
+`storage.Covering` → `legacy.Covering`, `config.LegacyOpener` → `legacy.ConfigOpener` (the config
+capabilities are `legacy.Config*`, 05-config §1.3), `secrets.LegacyStore` → `legacy.SecretsStore`,
 `module.LegacyStores` → `legacy.Stores`); 05-storage §5S.3.11 "Legacy capabilities" owns the full list
 and the owner files own the members. Deleting a family's identifiers from `legacy` at its cutover is
 therefore **not** a breaking change of the SDK, needs no deprecation period and no major (12 §12.4.2).
@@ -372,10 +373,15 @@ capability (auth's upgrade-on-use, the router of a routed store, `secrets.Open`)
 implementations implement none of them and carry no stubs. Conformance follows one pattern (SIMP6-6):
 `<pkg>/<pkg>test` tests the native contract, and **one legacy suite per store interface**,
 `legacytest.<Pkg><Interface>Suite` (e.g. `legacytest.AuthStoreSuite`), runs a case for each capability the
-implementation has. Two things cannot move, because an owner package cannot name a type from a higher
-one: legacy-only **state on a record type**, which is one pointer field per type, `Legacy *<Type>LegacyState`,
-nil from a native store (SIMP6-7), and the permanent `module.Manifest.LegacyStores` field itself, which an
-app without pre-core data leaves zero. Both stay in v1 until a major, inert for native apps (14 K23).
+implementation has. Three kinds of legacy-only identifier cannot move, because an owner package cannot
+name a type from a higher one: legacy-only **state on a record type**, which is one pointer field per type,
+`Legacy *<Type>LegacyState`, nil from a native store (SIMP6-7); the **value types a capability's methods
+carry and the owner helpers that read the owner's own formats**, because the owner's unexported mirror must
+name the same result types and only the owner knows its file format — `secrets.LegacyCopies` and
+`secrets.LegacyCheck` (results of `legacy.SecretsStore`'s methods) and `secrets.ReadLegacyKey` (reads
+`k0-legacy` from the keyring file; 05-config §2.3); and the permanent `module.Manifest.LegacyStores` field
+itself, which an app without pre-core data leaves zero. All stay in v1 until a major, inert for native apps
+(14 K23).
 
 **Extension records.** Native-only data that an older build must never see (namespaced scopes, hashed
 sessions, native one-time tokens, native-only clock or job fields) is stored by the legacy implementation
@@ -919,6 +925,7 @@ Round 6 (dispositions in `docs/plans/platform-core/reviews/spec-round-6-disposit
 - SIMP6-5 — selection models: only a routed store's legacy half implements `Covers`; without it the legacy half covers everything and the ledger records `legacy`.
 - SIMP6-6 — one conformance pattern: `<pkg>/<pkg>test` for the native contract, one `legacytest.<Pkg><Interface>Suite` per store interface with a case per capability.
 - SIMP6-7 — legacy-only state on a record type is one `Legacy *<Type>LegacyState` pointer field, nil from native stores.
+- integration request (R-E, 05-config v1.7) — "Legacy-only identifiers": the config capabilities are `legacy.Config*`; the identifiers that cannot move gain `secrets.LegacyCopies`, `secrets.LegacyCheck` (result types of `legacy.SecretsStore`) and `secrets.ReadLegacyKey` (reads the keyring file format); §3.4's deferred list already names the config basis mechanism (SIMP6-1).
 - SIMP6-8 — §3.4 grammar: `Also deferred (not checked)` in any position; `—` for a row with nothing to check; one heading per identifier; self-test fails on duplicates.
 - MOD6-3 — §3.2 item 4: an embed input is in the context or a listed in-image output (`scripts/ci/embed_build_outputs.txt`, checked against the Dockerfiles' `COPY --from` lines); "no matching files" ignored only for listed outputs.
 - MOD6-6 — R1(c): core-owned kinds never spell an app op ID; the app supplies former IDs (`app.Options.LegacyTaskAliases`); a core `FormerKinds` literal fails.
