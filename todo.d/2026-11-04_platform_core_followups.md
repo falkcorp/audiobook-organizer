@@ -54,3 +54,7 @@
   - [ ] **SECURITY (hotfix):** an enabled Basic gate with an empty stored password accepts the configured
         username with an empty password (`internal/server/middleware/basicauth.go:81-87` compares `""` to
         `""`). Refuse all Basic credentials while the gate is enabled and no password is set (fail closed).
+  - [ ] **Security (low):** a scope-restricted API key whose owner has the admin role can read
+        `GET /users/:id/footprint` and `GET /users/merges` (`internal/server/handlers/user_merge.go:97-99,190-192`):
+        the handlers check the owner's role name, not the key's scopes. The merge POSTs are already refused to API
+        keys (credential routes). Check `Can(core:admin)` on the request principal (or the key's scopes) instead.
