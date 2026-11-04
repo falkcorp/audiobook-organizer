@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-http-api.md -->
-<!-- version: 1.8.1 -->
+<!-- version: 1.9.0 -->
 <!-- guid: fcd387ab-7a8e-49e2-a4b4-a6901aaee1e3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -257,9 +257,13 @@ type LegacyPath struct {
 	Targets     []string // Route.Name of each native route this path may reach; one entry = fixed target
 	// Request picks the target for one request from a body or query selector
 	// field (SEC2-5), e.g. user_id present -> "createUserAPIKey", absent ->
-	// "createOwnAPIKey". Required iff len(Targets) > 1. It reads a buffered copy
+	// "createOwnAPIKey". Required when len(Targets) > 1. It reads a buffered copy
 	// of the body, may set path values for the chosen target (r.SetPathValue),
-	// and returns an *Error (400) for a selector it cannot map.
+	// and returns an *Error (400) for a selector it cannot map. A one-target
+	// alias may set Request only to fix a path value that its target reads and
+	// whose pattern has no wildcard of that name, so no native request can carry
+	// it: POST /api/v1/system/reset sets reset_kind=store on the factory-reset
+	// route (05-rbac §6.2, COR8-1).
 	Request     func(r *http.Request) (target string, err error)
 	Selector    []string        // body/query fields Request consumes; removed before the target decodes strictly
 	LegacyError bool            // render httputil-style {error,code,status} instead of problem+json
@@ -843,8 +847,12 @@ and an *arr-v3 facade, whose clients call `<base>/api/v3/…` (`raw/16` §5.1). 
 2. Core's capability routes are registered on `CoreGroup()` by one package per capability,
    `core/internal/<capability>http` (`authhttp`, `rbachttp`, `audithttp`, `taskhttp`, `eventhttp`,
    `confighttp`, `backuphttp`, `updaterhttp`, `healthhttp`, `libraryhttp`, `storagehttp` (from S4 r2:
-   `POST /api/core/v1/system/factory-reset`, whose legacy path becomes its alias; 05-rbac §6.2, resolution
-   R7-2), `modulehttp` for
+   `POST /api/core/v1/system/factory-reset`, request `{"confirm": "RESET"}`, 422 `confirm_required`
+   otherwise; it receives the kernel's staging function as a storagehttp-local `Stager`, never
+   `*storage.Admin`, COR8-2. HEAD's `POST /api/v1/system/factory-reset` (`ResetFactory`) and
+   `POST /api/v1/system/reset` (`ResetStore`) both become its aliases with `LegacyError` and a `Shape`
+   keeping HEAD's `{"data": {"message": …}}`; the reset alias picks its kind with the path value of §3.1's
+   `Request`; 05-rbac §6.2, resolutions R7-2, R8-1, COR8-1), `modulehttp` for
    `GET /api/core/v1/modules` (the kernel passes it a read-only `ModulesView` — catalog snapshot,
    `restart_required`, the `ui_build_id` source: the served **shell** bundle's ID,
    `ui.Bundle.BuildID()`, and `""` while a legacy mount owns `/`, whose ID only `X-App-Build` carries
@@ -948,12 +956,18 @@ exact `"0.17.0"`, no range), and the wrapper below isolates apps from its API so
 package. `openapi-typescript` under the repo's TypeScript pin is settled in 07 (O4 closed); there is
 no in-house Go TypeScript emitter in this design.
 
-- `@mediacore/api-client` = generated `paths` for core + `createCoreClient()` built on
+- `@mediacore/api-client` = generated `paths` for core + `createCoreClient({ buildId, shell })` built on
   `openapi-fetch` with middleware ported from `apiFetch`: `credentials: 'include'`, timeout
   (`ApiTimeoutError`), SSO bounce detection (`ApiAuthRedirectError`), `X-Request-ID` surfacing,
-  the stale-build rule of 07 §7.5.2 (the runtime exports `checkBuild(response, opts): StaleReason |
-  null` and `onStaleBuild(listener): Unsubscribe` from UI-0, and ABO's `apiFetch` calls `checkBuild`, so
-  legacy and native calls run one implementation; FE4-9, FE7-5).
+  the stale-build rule of 07 §7.5.2. From UI-0 the runtime exports `checkBuild(response, opts):
+  StaleReason | null`, `checkModules(body, response, opts): StaleReason | null`,
+  `onStaleBuild(listener): Unsubscribe` and `getStaleReasons(): readonly StaleReason[]`, and ABO's
+  `apiFetch` calls `checkBuild`, so legacy and native calls run one implementation (FE4-9, FE7-5).
+  **The check is split by what it reads (FE8-2, option (b)).** `checkBuild` is synchronous and reads
+  only headers, so it decides the header cases 1 and 3 and never consumes a body. Case 2 needs
+  `app.ui_build_id` from the `/api/core/v1/modules` JSON body, so the shell's `/modules` fetch calls
+  `checkModules` after it has parsed the body it reads anyway; `checkBuild` does not special-case
+  `/modules`. Both notify `onStaleBuild`. No response header is added for case 2.
   **Both inputs are runtime values the caller passes, never defines baked into the library (FE6-1,
   FE6-8):** `@mediacore/api-client` is built to `dist/` by Vite library mode before, and separately
   from, the app, so an `import.meta.env.MEDIACORE_BUILD_ID` read inside it would carry the library
@@ -967,11 +981,17 @@ no in-house Go TypeScript emitter in this design.
   readPageBuildId(), shell: false })`; ABO's pre-shell client for generated operations (S4–S8) is one
   `createCoreClient({ buildId: readPageBuildId(), shell: false })` in `web/src/api/core.ts` from UI-0;
   `createShell` passes `{ buildId: readPageBuildId(), shell: true }`; and module clients come from
-  `createModuleClient<Paths>(coreClient)`, which inherits both values. `checkBuild` returns the stale
-  reason or `null`, and `onStaleBuild` fires once per page load per reason, so ABO's pre-shell banner
-  (S0–S8) and the shell banner (S9+) subscribe to one signal that native and legacy calls both raise
-  (07 §7.5.2 owns the banners; `buildId.test.ts` asserts that a stale response on a native call and one
-  on a legacy call notify the same listener). No `core/web` package reads `import.meta.env.MEDIACORE_*` except
+  `createModuleClient<Paths>(coreClient)`, which inherits both values. `checkBuild` and `checkModules`
+  return the stale reason or `null`. **Detections replay on subscribe (FE8-3).** The runtime keeps the
+  reasons already detected on this page load (`getStaleReasons()`), and `onStaleBuild` calls a new
+  listener at once for each of them; "once" is per listener per reason. A banner that mounts after the
+  page's first stale response (the auth probe, `/auth/status`, `/me`) is still notified. So ABO's
+  reload banner (from UI-0) and the shell banner (S9+) subscribe to one signal that native and legacy
+  calls both raise. 07 §7.5.2 owns the banners and 09 S0 assigns ABO's banner component, which before
+  UI-0 is fed by `apiFetch`'s own rule. `buildId.test.ts` asserts that a stale response on a native call
+  and one on a legacy call notify the same listener, that a listener subscribed after a stale response
+  is notified once, and that the case-2 path detects `legacy-spa` without consuming the body its caller
+  reads. No `core/web` package reads `import.meta.env.MEDIACORE_*` except
   `MEDIACORE_CORE_VERSION`, the shell package's own version (07 §7.10). An e2e cell runs a production
   `dist/` build (not vitest) against a server whose `X-App-Build` equals the page's meta (no reload
   offered) and one where it differs (reload offered), in the PR image job (07 owns the test). The
@@ -983,16 +1003,15 @@ no in-house Go TypeScript emitter in this design.
   `types-check`.
 - tygo (`tygo.yaml`) stays for the types of routes that remain on the legacy mount, which may be
   indefinitely; a type moves to OpenAPI when its route goes native. `opsgen` (`tools/cmd/opsgen` →
-  `web/src/services/ops.ts`) follows one rule (FE4-7, shared with 07 §7.8 and 04): its input
+  `web/src/generated/ops.ts`, `tools/cmd/opsgen/main.go:6,28` @748fd787a) follows one rule (FE4-7, shared with 07 §7.8 and 04): its input
   `internal/operations/state` **stays in ABO** as books' legacy run-state package (resolution R6-2,
   MOD6-1: the v2 table and HEAD's V3 vocabulary that `ops.ts` emits exist in no core package, and core's
   `tasks.RunState` maps to them in books' taskstore), so `opsgen` keeps its HEAD input and its
   freshness gate stays byte-identical with no repointing at S5; it retires with the PR that makes the
   **last** `ops.ts` importer native (end of 07 §7.19 step 6; 04 maps it at S10), not at a fixed stage.
-  `ops.ts` is imported by `web/src/services/api.ts` and by `web/src/utils/operationPolling.ts`, whose
-  importers include books pages that keep legacy calls after S9 (`Library.tsx`, the review lanes,
-  `ITunesImport.tsx`, `stagedMetadataApply.ts`, `MaintenanceTab.tsx`, `ThrottlePanel.tsx`); the S9 PR
-  moves only the Activity page and `useOperationsStore` off it (07 §7.8). The golden contract test
+  `ops.ts` is imported by `web/src/services/api.ts` and `web/src/utils/operationPolling.ts`
+  (`operationPolling.ts` has 5 non-test importers @748fd787a); `opsgen` retires when both are gone
+  (07 §7.8, FE8-6). The golden contract test
   (`internal/wirecontract/contract_test.go`) is generalized for native routes:
   `coretest.ContractGoldens(t, router)` marshals each route's declared examples and **validates them
   against the generated schema** (jsonschema-go `Resolve`+`Validate`), and the TS side assigns the
@@ -1178,11 +1197,11 @@ interactive method). Keys that decide who reaches the server or which client add
 | `core.http.cors.allowed_origins` | []string | `[]` (same-origin only); also stage 7's trusted origins | yes | admin |
 | `core.http.body.json_max_bytes` | int | 1 MiB | yes | none |
 | `core.http.body.upload_max_bytes` | int | 10 MiB | yes | none |
-| `core.http.rate_limit.enabled` | bool | true | yes | admin |
+| `core.http.rate_limit.enabled` | bool; 05-config's `BelowStored` alias `enable_rate_limit` / `ENABLE_RATE_LIMIT` maps to it. **An operator's tightening survives a rollback (resolution R8-4, SEC8-6):** the http section declares, **from S3**, `config.NarrowStored("core.http.rate_limit.enabled", narrow = value == true, when = nil)` (05-config §1.3.1), so an effective `true` from an operator layer (`ABO_CORE_HTTP_RATE_LIMIT_ENABLED`, the operator file) over a stored `enable_rate_limit: false` writes `enable_rate_limit: true` at P4d step 1 (audited `core.config.legacy_narrowed`), and an older build after a rollback keeps stage 10 on. A blob without the field already reads HEAD's default `true` | true | yes | admin |
 | `core.http.rate_limit.per_minute` | int | 100 | yes | none |
 | `core.http.rate_limit.burst` | int | `max(per_minute/5, 10)` | yes | none |
 | `core.http.rate_limit.max_clients` | int | 10000 | no | none |
-| `core.http.basic_gate.enabled` | bool; 05-config's `BelowStored` alias `basic_auth_enabled` / `BASIC_AUTH_ENABLED` maps to it. **An operator's tightening survives a rollback (resolution R7-1, SEC7-1):** the http section declares, **from S3**, `config.NarrowStored("core.http.basic_gate.enabled", narrow = value == true, when = core.http.basic_gate.password has a stored value (`Secret.Set` with `SourceStored` or `SourceLegacy`))` (05-config §1.3.1); from S3, when stage 8 reads the key through config, an effective `true` from an operator layer (`ABO_CORE_HTTP_BASIC_GATE_ENABLED`, the operator file) over a stored `basic_auth_enabled: false` makes the legacy config store write `basic_auth_enabled: true` at P4d step 1 (audited `core.config.legacy_narrowed`, 05-config §1.3.5; 05-authn §4.11 applies the same rule to `enable_auth`), **only when a stored password exists**, so an older build after a rollback keeps the gate on with the same password; with no stored password nothing is written, and stage 8 here and early fix 5 on a hotfixed older build keep the gate closed (`TestRollback_OperatorEnabledAuthStaysOn`'s Basic-gate cell) | false | yes | admin |
+| `core.http.basic_gate.enabled` | bool; 05-config's `BelowStored` alias `basic_auth_enabled` / `BASIC_AUTH_ENABLED` maps to it. **An operator's tightening survives a rollback (resolutions R7-1, R8-4; SEC7-1, SEC8-1):** the http section declares, **from S3**, `config.NarrowStored("core.http.basic_gate.enabled", narrow = value == true, when = nil)` (05-config §1.3.1; an explicit predicate, as `core.auth.mode` uses its `SafeLegacyValue` one, SIMP8-6). From S3, when stage 8 reads the key through config, an effective `true` from an operator layer (`ABO_CORE_HTTP_BASIC_GATE_ENABLED`, the operator file) over a stored `basic_auth_enabled: false`, or over a blob without that field (an absent field counts as HEAD's default `false`, SEC8-12), makes the legacy config store write `basic_auth_enabled: true` at P4d step 1 (audited `core.config.legacy_narrowed`, 05-config §1.3.5; 05-authn §4.11 applies the same rule to `enable_auth`). It narrows whenever the effective value is `true`, whatever the password's source. Writing `true` is never wider than not writing it: without a password the older build can read (its encrypted row or its legacy `BASIC_AUTH_PASSWORD`), a hotfixed older build refuses every request (early fix 5, 05-authn §11.1), which is fail-closed, never open; a build older than early fix 5 admits `<username>:`, no wider than the disabled gate it would otherwise run. **Release note (09 §9.2.1 row 19):** "If the Basic password is set only through `ABO_CORE_HTTP_BASIC_GATE_PASSWORD`, also set `BASIC_AUTH_PASSWORD` before rolling back below S3, or the older release refuses every request." `TestRollback_OperatorEnabledAuthStaysOn`'s Basic-gate cells cover a stored password, a canonical-only password and an env-only `BASIC_AUTH_PASSWORD`, and each asserts the gate is enabled on `prev` (05-authn §10) | false | yes | admin |
 | `core.http.basic_gate.username` | string; 05-config's `BelowStored` alias `basic_auth_username` / `BASIC_AUTH_USERNAME` maps to it (SEC6-9). Stage 8 compares it in constant time. An enabled gate with an empty username keeps HEAD's behaviour (HEAD's default is `""`, `internal/config/config.go:2806`, and its gate then admits `:<password>`): the password is the secret, and refusing an empty username would lock out every deployment that set only a password, with no security gain; an empty **password** is what stage 8 refuses | `""` | yes | admin |
 | `core.http.basic_gate.password` | secret (one canonical name; 05-config's alias `basic_auth_password` maps to it, SEC4-10); core reads it from S3, when the gate moves (until then gin reads it itself). It is **not moved** during the extraction: for ABO, books' legacy config store reads and writes HEAD's own **encrypted** row in place, with no sentinel, so a rollback leaves the older gate as configured (resolution R5-1(b); 05-config). Enabled with this unset, empty or unreadable → stage 8 refuses (R5-1(c)) | — | yes | admin |
 | `core.http.openapi.public` | bool | false | yes | admin |
@@ -1196,6 +1215,19 @@ ABO's flat keys (`json_body_limit_mb`, `upload_body_limit_mb`, `enable_rate_limi
 still beats a `BelowStored` legacy name (05-config §1.3.5, SEC7-2): a blob's `enable_rate_limit: true`
 (HEAD's default, `internal/config/config.go:2802`, saved by HEAD's whole-config save) keeps stage 10 on
 when the legacy env name is set to false, as at HEAD.
+
+**Canonical-only operator values across a rollback (resolution R8-4, SEC8-6).** A canonical `ABO_CORE_HTTP_*`
+name exists only from the stage that registers its key, and every older build reads only the legacy name.
+The two `NarrowStored` declarations above carry an operator's tightening of a switch that has a legacy blob
+field. A value that has no blob field cannot be carried that way: `core.http.peer_allowlist` is env-only
+at HEAD (`allowed_peer_cidrs`, `json:"-"`, `internal/config/config.go:1709-1719`, where empty admits every
+peer), and the same holds for a canonical-only Basic password or rate-limit value. Such a value is lost on a
+rollback below the stage that introduced the name. From S3 every boot writes
+`<state_dir>/operator-names.json`, which lists names only, never values: the set canonical names whose key
+has a legacy name that is unset. `CheckReader` reports it as the advisory token
+`canonical_only_operator_values`, which `make rollback` and the updater print before they swap (05-storage,
+05-updater). 09 §9.2.1 carries the release-note row: keep the legacy name set to the same value while you may
+roll back below the release that introduced the canonical one.
 
 ## 11. Metrics
 
@@ -1464,3 +1496,15 @@ Round 7 (2026-11-04), findings applied to this file:
 - FE7-5 — `checkBuild` returns `StaleReason | null` with `onStaleBuild`; `readPageBuildId()` is the one meta reader; `createCoreClient`'s options are required; ABO's pre-shell client and `createModuleClient` named; `apiFetch` wording corrected; listener test (§7, §8.4).
 - FE7-13 — `/modules`' `ui_build_id` contrasted with `--version-json`'s (§5).
 - integration pass (round 7): §10 `core.http.basic_gate.enabled` declares `config.NarrowStored` from S3 (R-E request, R7-1); §12 stop-rule test is 05-authn's `TestStage12_InvalidKeyPlusValidSessionIs401`.
+
+Round 8 (2026-11-04), findings applied to this file:
+
+- SEC8-1 (R8-4) — §10: `NarrowStored("core.http.basic_gate.enabled", narrow = value == true, when = nil)`; the false "keeps the gate closed" rationale replaced by the fail-closed sentence; release note about `BASIC_AUTH_PASSWORD` before rolling back below S3; R-test cells for canonical-only and env-only passwords.
+- SEC8-6 (R8-4) — §10: `NarrowStored` on `core.http.rate_limit.enabled` (narrow = `true`); paragraph on canonical-only operator values (`peer_allowlist`), `operator-names.json` and the advisory token `canonical_only_operator_values`.
+- SEC8-12 — §10: an absent `basic_auth_enabled` counts as HEAD's default `false` for the narrowing.
+- SIMP8-6 — §10: the Basic gate keeps its explicit predicate, `core.auth.mode` uses its `SafeLegacyValue` one.
+- COR8-1 / COR8-2 (R8-1) — §5: the storagehttp route's request (`{"confirm": "RESET"}`, 422 otherwise) and its `Stager`; both legacy resets are its aliases with HEAD's `{data: {message}}`; §3.1: a one-target alias may set `Request` only to fix a path value no native request carries (the store-reset alias's `reset_kind`).
+- FE8-2 — §7: option (b): `checkBuild` stays synchronous and header-only (cases 1 and 3); `checkModules(body, response, opts)` decides case 2 after the shell's `/modules` fetch parses the body.
+- FE8-3 — §7: `onStaleBuild` replays detected reasons to a new listener (`getStaleReasons()`); test cases added.
+- FE8-6 — §7: "`ops.ts` is imported by `services/api.ts` and `utils/operationPolling.ts` (5 non-test importers)"; page list dropped.
+- FE8-10 — §7: `opsgen` writes `web/src/generated/ops.ts`; `createCoreClient({ buildId, shell })`.

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.8.1 -->
+<!-- version: 1.9.0 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -427,7 +427,9 @@ type RestoreDeps struct {
 // foreign open, or a state it cannot rule either out of), revoke every session
 // and native one-time token created before Owed.Detected, and delete every
 // legacy session and legacy invite only when the store's session cut-off
-// record exists and predates Owed.Since, staging StageDone(b, "auth") in that
+// record exists and either predates a non-zero Owed.Since or Owed reports an
+// unreadable previous record (a zero Since from an absent record never
+// deletes, DATA8-10), staging StageDone(b, "auth") in that
 // same batch (§4.3, DATA4-14, SEC4-9, SEC5-5, COR6-2, DATA6-4, DATA6-14,
 // DATA7-9); write the session cut-off record when it is absent (the first r2
 // boot, which therefore deletes no legacy sign-in, resolution R7-5); and,
@@ -661,8 +663,8 @@ type AuthReconciler interface {
 ```
 
 `legacy` (L5) imports `auth` for the types it names (and for `legacy.Stores.Auth`'s `auth.Store`), so
-`auth` never imports it (03 §3.3). The kernel asserts only the capabilities it drives
-(`legacy.ConfigOpener`, `legacy.ConfigSecrets`, 05-config §1.3.3) and hands the store to `auth` as an
+`auth` never imports it (03 §3.3). The kernel asserts only the capabilities 03 §3.3 lists, none of
+them this section's (SIMP8-3), and hands the store to `auth` as an
 `auth.Store`; every capability of this section is detected only by `auth` itself, through its mirrors
 (SIMP7-5).
 The service and the package functions `PostRestore` and `BootWrites` name a capability only through an
@@ -810,13 +812,18 @@ no permission; for `OwnAuth` routes, which stage 13 skips, `CheckCredentialFor` 
   the served ledger owes the `auth` duty — a boot without it, or a foreign open, since the last boot
   that had it (05-storage §5S.3.7; 09 §9.2.1 row 2) — `BootWrites` therefore revokes every session and
   native one-time token created before **`Owed.Detected`**, the time the owed entry was first recorded
-  (the same value on a retry; read through `RestoreDeps.Duties`, COR6-2, DATA6-14), and deletes every
-  legacy session and legacy invite the store holds (`DeleteLegacySignIns`, DATA6-4: so an in-place
-  restore that detection cannot see never honours pre-cut-off legacy sessions either), in one batch with
-  `Duties.StageDone(b, "auth")`. **`DeleteLegacySignIns` runs only when the store's session cut-off
-  record exists and predates `Owed.Since`** (resolution R7-5, DATA7-9), that is, after an interval that
-  followed the first r2 boot; a zero `Since` (no previous core record, an unbounded interval) with a
-  cut-off present counts as predating, so the rule fails closed. Every build before S4 r2 omits `auth`
+  (the same value on a retry; read through `RestoreDeps.Duties`, COR6-2, DATA6-14), in one batch with
+  `Duties.StageDone(b, "auth")`. The same batch deletes every legacy session and legacy invite the store
+  holds (`DeleteLegacySignIns`), **but only under R7-5's condition** (resolution R7-5, DATA7-9, DATA8-13):
+  the store's session cut-off record exists, and either it predates a non-zero `Owed.Since` (an interval
+  that followed the first r2 boot) or the previous core record is **unreadable** (fail-closed). A zero
+  `Since` from an **absent** previous record (no core record yet, the first core boot of a HEAD store)
+  never deletes, even with a cut-off present (DATA8-10): a retried first boot of a pre-S0 store, whose
+  failed attempt wrote the cut-off and cleared `auth` before (3b), owes `auth` again with `Since` zero, and
+  must not delete every HEAD sign-in. Storage tells the two zero cases apart (`Owed` reports an unreadable
+  record, 05-storage §5S.3.7). Under that condition an in-place restore that detection cannot see never
+  honours pre-cut-off legacy sessions (DATA6-4). On a **replaced** store it is `PostRestore` step 2
+  (§4.14), not this consumer, that deletes every legacy sign-in. Every build before S4 r2 omits `auth`
   from its served record, so the first r2 boot always owes `auth`; that boot finds no cut-off, deletes
   nothing, and writes the cut-off in the same batch (staged with `Expect` absent), so every HEAD-issued
   session and open invite survives the upgrade and is upgraded on use (§11). From then on the cut-off
@@ -833,7 +840,12 @@ no permission; for `OwnAuth` routes, which stage 13 skips, `CheckCredentialFor` 
   number that differs from both the recorded one and its `pending` means another binary opened the
   store, SEC6-4, DATA7-18). Core's own offline commands open the store through `kernel.OpenOffline`,
   which promotes its own open stamp and sidecar identity at a clean close, so they are not foreign opens
-  (§4.14, resolution R7-4, DATA7-11). Together they see two
+  (§4.14, resolution R7-4, DATA7-11). **An offline open never launders a foreign open (resolution R8-2,
+  SEC8-4, DATA8-3):** `OpenOffline` computes the boot verdicts first, and when it finds a foreign open, a
+  missing or unreadable record or a behind lineage, its close batch stages the owed entries a serve boot
+  would stage, `auth` among them, before it promotes. So an offline command run after a rollback to a
+  pre-S0 build and before the first serve boot leaves the evidence, and that serve boot still revokes
+  here (`TestOfflineOpenAfterForeignOpenKeepsEvidence`, 05-storage). Together they see two
   opens by a pre-guard build that end on a reused inode and a pre-guard boot whose sidecar write
   failed. The boot lineage (`c/storage/boot` against `storage.boot.json`) is a content signal for
   restores, not an open detector. When 05-storage cannot rule a foreign open out (an unreadable DB
@@ -1027,7 +1039,7 @@ Core owns it; nothing refers to an app, a module or `users.manage`.
 - `RequireOwner` (`internal/auth/owner.go:44-108`) becomes the route guard `Guards.Owner`: the
   principal must carry `AssuranceOwner`, which only an `OwnerVerifier` authenticator can set.
   core ships none; ABO's `internal/cfaccess` is the one in use; deployments without one have no owner assurance, so
-  owner-guarded routes (user merge, factory reset, restore while an owner is set — 9 routes today,
+  owner-guarded routes (user merge, factory reset and HEAD's store reset `POST /system/reset`, restore while an owner is set — 9 routes today,
   `raw/10` §2.4) fall back to `Guards.Interactive` + `core:admin` **only if**
   `core.auth.owner.required=false`. Its default is true exactly when an OwnerVerifier is configured
   **and** an owner identity is set (`Extension.OwnerSet`), else false — HEAD gates on "owner set"
@@ -1163,11 +1175,13 @@ The *arr facade's key purpose and `X-Api-Key`/`apikey` extraction are deferred-b
   from the network. Therefore, when the effective `core.auth.mode` is `required` and the legacy store's
   row stores `enable_auth: false`, the legacy config store writes `enable_auth: true` at P4d step 1, as
   an audited core write (`core.config.legacy_narrowed`; 05-config §1.3.5 owns the mechanism, and auth's
-  section declares it from S4 r1 as `config.NarrowStored("core.auth.mode", narrow, nil)` with `narrow`
-  true exactly for `"required"`, §8). It is the
+  section declares it from S4 r1 as `config.NarrowStored("core.auth.mode", nil, nil)`, whose nil `narrow`
+  reuses the `SafeLegacyValue` predicate above, true exactly for `"required"`, §8, SIMP8-6). It is the
   one exception to "stored values of locked keys are kept", and it only ever narrows an older build. The
-  Basic gate gets the same rule **from S3** (when core's stage 8 and the façade first own it),
-  `basic_auth_enabled: true` written only when a stored password exists (05-http-api §10); auth's own
+  Basic gate gets the same rule **from S3** (when core's stage 8 and the façade first own it):
+  `basic_auth_enabled: true` is written whenever the effective value is `true`, whatever the password's
+  source, because without a password the older build can read a hotfixed older build refuses every
+  request (early fix 5), which is fail-closed (05-http-api §10, resolution R8-4, SEC8-1); auth's own
   narrowing write runs from S4 r1. **S4 r1 follows the effective value:** from the S3 façade `config.AppConfig` is a
   projection of core's effective config through the alias table (05-config §1.12.1), and `enable_auth`'s
   alias of `core.auth.mode` and auth's config section land with `auth` in r1 (09 S4), so gin's auth at
@@ -1205,6 +1219,14 @@ The *arr facade's key purpose and `X-Api-Key`/`apikey` extraction are deferred-b
   fails, the revocation still commits and `Revocations.Gap(b, at)` is staged into the same batch
   (05-backup §5B.3.6), so a restore over that interval treats the journal as incomplete. (`Object`
   and `Detail` are 05-backup's SEC2-10 additions; role kinds are 05-rbac §7.1's.)
+- **Hook lines name their restore (DATA8-7).** A line the post-restore hook (§4.14) appends carries the
+  seq of its restore's `restore` line as a `Detail` element, `restore_seq=<seq>`, after any kind-specific
+  elements. The
+  hooks commit in several batches (auth, rbac, audit), so a later hook's failure that swaps back leaves
+  auth's committed lines between the `restore` line and its `restore_aborted` line. 05-backup's boot
+  re-apply verifies such lines but never re-applies them, and the exact span comes from `restore_seq`.
+  So the original store's next boot bumps no epoch and sets no key `needs_confirmation`
+  (`TestRestoreFailureSwapsBack`, 05-backup).
 - **One stored copy (R4-1).** A revocation — interactive, by task, by journal re-application or by
   the post-restore hook (§4.14) — goes through the `Store` in the revoking batch. In ABO's legacy store
   it writes the legacy row itself (`status`, `revoked_at`, `credential_epoch`, `password_hash`, the role
@@ -1354,11 +1376,18 @@ OIDC and identity extensions included, refuses it until an owner-verified reset 
 older build admitting it through Cloudflare Access, which resolves users by allow-listed e-mail — is
 named in the restore report. **The offline command is not a foreign open (resolution R7-4, DATA7-11).**
 `<app> users reset-password` opens the store through `kernel.OpenOffline` (05-storage §5S.4 "Offline
-open"): P−1–P3's read-only checks, the guard, the floor and the claims, with P4 migrations refused; it
-writes the user row through `auth.Store`, and at a clean close it promotes its own Pebble open stamp and
-sidecar identity, keeps `last` and the lineage unchanged, and records an owed `journal` duty only if it
-committed a revoking write without journaling it. The next serve boot therefore reads no foreign open:
-no session is revoked and no `gap` line is appended for it.
+open"): the read-only checks of P2 and P3 (storage's steps 1–4: the guard, the floor and the claims),
+refusing on `CheckReader`'s swap tokens and on pending P4 migrations; it writes the user row through
+`auth.Store`. It computes the boot verdicts as a serve boot does (resolution R8-2, SEC8-4, DATA8-3). At a
+clean close, its batch first stages the owed entries a serve boot would stage when those verdicts found a
+foreign open, a missing or unreadable record, or a behind lineage (`auth`, `journal`, `gen`, `usage`;
+`since` = the core record's `at`, zero when there is none; `detected` = now; an entry already present
+keeps its own). Only then does it promote its own Pebble open stamp and sidecar identity; it keeps `last`
+and the lineage unchanged, and records an owed `journal` duty if it committed a revoking write without
+journaling it. So the command's **own** open is never read as foreign: when the store was clean before
+it, the next serve boot revokes no session and appends no `gap` line for it. An earlier foreign open,
+though, is never erased by it: the next serve boot still finds `auth` owed and revokes the sessions
+issued before it (§4.3).
 
 **Replaced store, and restores by an older build (DATA3-8, SEC3-3, SEC3-10, DATA4-7, SEC4-6).** An
 older build (after a rollback) restores with its own code, which neither journals nor runs hooks.
@@ -1405,8 +1434,8 @@ it in the legacy code.
    supplies its store in every S4 release, a rollback from S4 r2 to r1 never meets a missing grant
    (DATA4-2). A store constructor writes nothing (DATA4-10). Its capabilities (`legacy.AuthSignIns`,
    `legacy.AuthReconciler`, `legacy.ExtConfirmer`, §3.4) are detected only by `auth`, through its
-   unexported mirrors over the store built here; the kernel asserts only the capabilities it drives
-   (SIMP7-5, §3.4).
+   unexported mirrors over the store built here; the kernel asserts only the capabilities 03 §3.3 lists
+   (SIMP7-5, SIMP8-3, §3.4).
 2. **P4d, post-DAG reconcilers** (06 §6.5.1 is the order; COR3-2), from 09 S4 r2: step 1 is
    the config store's legacy `Open` (`legacy.ConfigOpener`: ABO's key guard and encryption init), then
    `secrets.Open(…, Secrets())` (`legacy.ConfigSecrets`) (keyring, `k0-legacy` capture, the roll-forward re-import
@@ -1503,9 +1532,10 @@ it in the legacy code.
   point read (session or key), one user read (cached by `(id, version)` in a bounded LRU, 4,096
   entries, invalidated by user writes and `core.principal.invalidated.v1`), one compiled
   permission lookup (05-rbac §9). No per-request goroutines.
-- `HasUsers` is an `atomic.Bool` set by the first `CreateUser` commit; cleared only by factory reset,
-  which from S2b is core's staged, restart-bound reset (05-storage/05-backup, DATA6-6): the next boot
-  is a fresh install, so `auth.New` loads `HasUsers` false.
+- `HasUsers` is an `atomic.Bool` set by the first `CreateUser` commit; cleared only by a reset of the
+  store, which from S2b is core's staged, restart-bound reset of either kind (`ResetStore` behind HEAD's
+  `POST /system/reset`, `ResetFactory` behind the factory reset; 05-storage §5S.3.15, DATA6-6, resolution
+  R8-1): the next boot is a fresh install, so `auth.New` loads `HasUsers` false.
 - Every `Take*` (one-time tokens, legacy sessions, legacy invites) stages `Expect(key, seen)` plus
   `Delete` in the caller's batch over a `Serialized` family — the native store declares
   `c/auth/onetime/` and `c/auth/session/` `Spec.Serialized`; ABO's legacy store declares its legacy
@@ -1530,7 +1560,7 @@ interactive method). Every key that decides who may sign in, with which role, or
 
 | Key | Type | Default | Hot-reload | Protection |
 |---|---|---|---|---|
-| `core.auth.mode` | enum `required`/`disabled`; declares `config.SafeLegacyValue` accepting `required`, so an enabling legacy value always takes effect (§4.11, R6-6), and, **from S4 r1**, `config.NarrowStored("core.auth.mode", narrow = value == "required", when = nil)`, so an operator-enabled auth over a stored `enable_auth: false` is written back as `enable_auth: true` at P4d step 1 (§4.11, R7-1; 05-config §1.3.5) | `required` | no | owner (SEC3-6, §4.8) |
+| `core.auth.mode` | enum `required`/`disabled`; declares `config.SafeLegacyValue` accepting `required`, so an enabling legacy value always takes effect (§4.11, R6-6), and, **from S4 r1**, `config.NarrowStored("core.auth.mode", nil, nil)` (a nil `narrow` uses the key's `SafeLegacyValue` predicate, so the predicate is declared once, SIMP8-6), so an operator-enabled auth over a stored `enable_auth: false` is written back as `enable_auth: true` at P4d step 1 (§4.11, R7-1; 05-config §1.3.5) | `required` | no | owner (SEC3-6, §4.8) |
 | `core.auth.disabled_allow_remote` | bool | false (ABO: true, §4.11) | no | admin |
 | `core.auth.session.ttl` | duration | 24h | yes (new sessions) | none |
 | `core.auth.session.remember_ttl` | duration | 168h | yes | none |
@@ -1602,14 +1632,14 @@ ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `oauth
 | `TestRevokeRacesLastUse_NeverUnrevokes` | (ABO, `synctest`) a revoke committed between a `TouchAPIKey` read and its commit: the touch conflicts and is dropped, the key stays `revoked`, with and without an extension record (SEC6-3, R6-5) |
 | `TestKeyLastUseNeverRevertsRevoke` / `TestLastSeenFlushNeverResurrectsRevokedSession` | (`authtest.StoreSuite`, `synctest`) a coalesced key touch after a revoke leaves the key revoked; a `LastSeen` flush after a logout or an admin revoke re-creates no session (DATA6-8) |
 | `TestAuthOn_LegacyAliasEnablesOverStoredOff` | blob `enable_auth=false`, env `ENABLE_AUTH=true` (and `<APP>_CORE_AUTH_MODE=required`, and the operator file): auth enabled after restart; blob `required`, env `ENABLE_AUTH=false`: auth stays enabled and health `config_legacy_name_shadowed` names `core.auth.mode`; the same with the blob's `enable_auth: true` equal to the default (resolution R6-6, R7-1, SEC6-1, SEC7-2) |
-| `TestRollback_OperatorEnabledAuthStaysOn` | (R-test cell) blob `enable_auth: false`, `ENABLE_AUTH=true` on cur: the boot writes `enable_auth: true` (audited `core.config.legacy_narrowed`); roll back to S3 and to S4 r1 without the variable: auth required on both; on S4 r1 `AppConfig.EnableAuth` follows the effective `core.auth.mode`; a Basic gate enabled through `ABO_CORE_HTTP_BASIC_GATE_ENABLED` with a stored password stays on after the rollback (resolution R7-1, SEC7-1) |
+| `TestRollback_OperatorEnabledAuthStaysOn` | (R-test cell) blob `enable_auth: false`, `ENABLE_AUTH=true` on cur: the boot writes `enable_auth: true` (audited `core.config.legacy_narrowed`); roll back to S3 and to S4 r1 without the variable: auth required on both; on S4 r1 `AppConfig.EnableAuth` follows the effective `core.auth.mode`; a Basic gate enabled through `ABO_CORE_HTTP_BASIC_GATE_ENABLED` over a stored `basic_auth_enabled: false` is enabled on `prev` in three cases: a stored password (requests with it pass), a password set only through `ABO_CORE_HTTP_BASIC_GATE_PASSWORD`, and one set only through `BASIC_AUTH_PASSWORD` in the env (an older build without a readable password refuses every request, early fix 5); a blob without `basic_auth_enabled` is narrowed the same way (resolutions R7-1, R8-4, SEC7-1, SEC8-1, SEC8-12) |
 | `TestLegacyRecordStale_ReactivatedRowStaysRestricted` | (ABO, R-test cell) a pre-core `abk_` key set `needs_confirmation` by a nil-coverage restore (`scopes_source: legacy`); a pre-early-fix-3 `prev` sets its row `"active"`; roll forward: the key is refused, its status is derived from the row first and `revoked_at` refuses it, legacy scopes kept, and only `ConfirmAPIKey` re-enables it (SEC7-7) |
 | `TestForeignOpen_SidecarWriteFailedDetected` | (R-test cell) a pre-S0 `prev` whose sidecar path is read-only opens the store; roll forward: the Pebble open stamp reports a foreign open, the `auth` duty is owed and pre-rollback native sessions are revoked (SEC6-4) |
 | `TestLegacyScopedKey_KeepsLegacyRouteReach` | an admin's `abk_` key scoped `["settings.manage"]` (no extension) passes every `settings.manage` legacy route and starts a `settings.manage` adapted op; the same key of a custom-role owner without `core:admin` does not; on native routes it holds the expansion only (SEC5-7; cell of `TestLegacyRoleReachUnchanged`) |
 | `TestLegacySPA_InviteFragmentReader` (the fragment cell of `TestLegacyInviteLink_EndToEnd`; the name 09 S4's done-check uses, FE6-5) | S4 r2: the legacy SPA opens `/invite#token=<t>` signed out and signed in, removes the fragment with `history.replaceState`, and accepts; the S9 R-test row: an invite minted on S9 opens after a rollback to S8 (FE5-4) |
 | `TestRestore_PreSwapRevocationsWin` | staged restore with nil coverage, and with complete coverage over an interval detection missed: a key revoked and a user disabled after the archive, unjournaled, stay revoked and disabled; a key `disabled` or `needs_confirmation` in the pre-swap store and `active` in the archive keeps the pre-swap status; a changed password blanks the restored hash (SEC5-10, SEC6-4, SEC7-8) |
 | `TestStagedRestoreKeepsCoverage` | (with 05-backup) a staged restore after a clean run: no `gap` line for its own swap, `rc.Revocations` non-nil, only keys revoked after the archive are revoked, no key is set `needs_confirmation` (resolution R6-4, DATA6-2) |
-| `TestFirstR2BootKeepsLegacySessions` | a HEAD-seeded store with legacy sessions and open legacy invites, first S4 r2 boot (`auth` owed, no cut-off): nothing legacy deleted, the cut-off written in the `BootWrites` batch, a HEAD session cookie upgraded on use and a HEAD invite accepted; after a later rollback interval (`Owed.Since` after the cut-off) the roll-forward deletes legacy sign-ins; a crash between P4d steps 2 and 4 of the first r2 boot is not a replaced store on the next boot (resolution R7-5, R7-4, DATA7-9, DATA7-10) |
+| `TestFirstR2BootKeepsLegacySessions` | a HEAD-seeded store with legacy sessions and open legacy invites, first S4 r2 boot (`auth` owed, no cut-off): nothing legacy deleted, the cut-off written in the `BootWrites` batch, a HEAD session cookie upgraded on use and a HEAD invite accepted; after a later rollback interval (`Owed.Since` after the cut-off) the roll-forward deletes legacy sign-ins; a crash between P4d steps 2 and 4 of the first r2 boot is not a replaced store on the next boot; a first boot of a pre-S0 store that fails after P4d step 4 (cut-off written, `auth` cleared) and is retried deletes no legacy sign-in (zero `Since` from an absent record), while an unreadable previous core record with a cut-off present deletes them (resolution R7-5, R7-4, DATA7-9, DATA7-10, DATA8-10) |
 | `TestSession_NativeOnlyRecord` | no session issued by this build appears in the app's legacy session rows; a legacy session created after the store's cut-off is refused by the upgrade-on-use fallback (§11) |
 | `TestPostRestoreSurvivesRestart` | restore, restart: the re-revoked key, a restored legacy session cookie and a restored legacy invite are refused, and their legacy rows are gone (SEC2-3, DATA2-4) |
 | `TestReplacedStore_RunsPostRestoreHook` / `TestReplacedStore_TruncatedJournalKeysNeedConfirmation` | store file-copied back to an older generation (no staged restore): the next boot re-applies the verified tail and runs the hook with `rc.Revocations == nil` — every active or disabled key `needs_confirmation`, every epoch bumped — also when the journal was truncated after the archive and verifies cleanly; same generation with the head behind (a crash after `Append`) re-applies the tail only, no hook (DATA3-8, SEC3-10, DATA4-7, SEC4-6) |
@@ -1650,7 +1680,7 @@ ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `oauth
 | `TestDarkRelease_HEADSeedWritersKeepRunning` | S4 r1 done-check: a fresh store booted on r1 has the four seed roles and `_system`; every r1 restart writes a new bootstrap token file whose token redeems; the expiry stamp keeps HEAD's one-shot flag; at r2 the books start-hook call is gone and P7/`BootWrites` produce the same rows (COR6-3) |
 | `TestRollbackR2ToR1Boots` | a store served by S4 r2 boots on S4 r1: books supplies the same store, no missing-grant or backend error (DATA4-2) |
 | `TestLegacyInviteDoubleAcceptOneWins` / `TestUserMergeWithLegacyInvite` | `synctest`: two concurrent accepts of one legacy invite, exactly one account; a merge whose source has an open legacy invite succeeds and deletes it (DATA4-9) |
-| `TestNativeSessionsRevokedAfterRollback` | a session issued on cur, a rollback boot on prev (no `auth` duty in its served record), roll forward: the session is refused, legacy sessions are deleted (the cut-off written by the first r2 boot predates `Owed.Since`, R7-5), the owed `auth` duty is gone after the revoking batch, audited `core.session.revoke_after_rollback` (DATA4-14, SEC4-9, COR6-2, DATA6-4); also when prev is a pre-guard build opened twice so the sidecar ends on its recorded inode (R-test cell, SEC5-5), and when the roll-forward boot fails after P4b and is retried (`TestCrashAfterStep9RevokesSessions`, COR5-3, DATA5-6) |
+| `TestNativeSessionsRevokedAfterRollback` | a session issued on cur, a rollback boot on prev (no `auth` duty in its served record), roll forward: the session is refused, legacy sessions are deleted (the cut-off written by the first r2 boot predates `Owed.Since`, R7-5), the owed `auth` duty is gone after the revoking batch, audited `core.session.revoke_after_rollback` (DATA4-14, SEC4-9, COR6-2, DATA6-4); also when prev is a pre-guard build opened twice so the sidecar ends on its recorded inode (R-test cell, SEC5-5), and when the roll-forward boot fails after P4b and is retried (`TestCrashAfterStep9RevokesSessions`, COR5-3, DATA5-6); and when, between a pre-S0 open and the first serve boot, the offline `users reset-password` runs: the session is still refused, because the offline close batch staged the owed `auth` entry before it promoted its own open (resolution R8-2, SEC8-4, DATA8-3) |
 | `TestS4_AuthOffDockerBoots` | (image job) ABO with `enable_auth=false` in a container boots at S4 r2 and reports `auth_disabled_remote` (SEC4-8) |
 | `TestOwnerGate_AccessWithoutOwnerFallsBack` | Access configured, no owner identity: restore, factory reset and user merge fall back to Interactive + `core:admin`; owner keys are `ProtectAdmin` (SEC4-14) |
 | `TestRestrictedLastAdmin_SSORefused` | a last admin kept by a restore cannot sign in by password, key, OIDC or an identity extension until a reset clears `SignInRestricted` (SEC4-12) |
@@ -1811,9 +1841,14 @@ the release notes name.
    path (`internal/server/middleware/absauth.go` `ResolveAPIKey`, its own `switch key.Status`) (defect
    3, SEC4-11).
 4. **`RequireAdmin` and the role-name checks ignore API-key scopes** — refuse an `api_key` method whose
-   non-empty scopes do not include every atom, in `RequireAdmin`, `adminRole` and the two in-handler
-   checks `handlers/user.go:285,453`; requiring `auth.Can(users.manage)` instead is not enough (05-rbac
-   "Out-of-scope defects" item 1, SEC4-11).
+   non-empty scopes do not include every atom, in `RequireAdmin`, `adminRole` and the three in-handler
+   checks `handlers/user.go:285,453` and the user-merge actor check `mergeActor`
+   (`internal/server/handlers/user_merge.go:62-75`, its `adminRole` test at `:67`, SEC8-7); requiring
+   `auth.Can(users.manage)` instead is not enough: a key an admin scoped to `users.manage` passes
+   `mergeActor` on the two merge reads that are not credential routes, `GET /users/:id/footprint` and
+   `GET /users/merges` (the merge POSTs are credential routes and refuse it; 05-rbac "Out-of-scope
+   defects" item 1, SEC4-11). From S4 the ABO merge handler checks `Can(core:admin)` with key scoping (05-rbac §4.6;
+   `TestUserMerge_ScopedAdminKeyRefused`, legacy then core).
 5. **The Basic gate accepts an empty password** — when `basic_auth_enabled` is true and the expected
    password is empty, HEAD's gate compares two empty strings and admits `<username>:`
    (`internal/server/middleware/basicauth.go:81-87`). Hotfix: every non-exempt route answers 401, health
@@ -2088,3 +2123,15 @@ Round 7 (2026-11-04), findings applied to this file:
 - SEC7-13 — "a command-line flag aliasing either" removed: env or operator file only (§4.11).
 - DATA7-18 — the open stamp signal reads "differs from both the recorded number and its `pending`", as 05-storage (§4.3).
 - integration pass (round 7): §8 `core.auth.mode` row and §4.11 declare `config.NarrowStored` (from S4 r1), and §4.11 states the Basic-gate narrowing from S3 (R-E request, R7-1); §11 "ABO's legacy store": the `Expect`/`GetForUpdate` each extension-family writer stages, per 05-storage §5S.3.11's table (R-B request, R7-3).
+
+Round 8 (2026-11-04), findings applied to this file:
+
+- R8-2 / SEC8-4 / DATA8-3 — §4.3, §4.14: `OpenOffline` computes the boot verdicts and, after a foreign open, a missing or unreadable record or a behind lineage, stages the owed entries before promoting; the offline `users reset-password` therefore never erases a foreign open; its checks are P2–P3's (storage steps 1–4) plus the swap tokens; `TestNativeSessionsRevokedAfterRollback` gains the offline case (§10).
+- DATA8-10 — §3.2, §4.3: a zero `Since` from an absent previous record never deletes legacy sign-ins; only an unreadable record or a cut-off older than a non-zero `Since` does; `TestFirstR2BootKeepsLegacySessions` gains the retried-first-boot case.
+- DATA8-13 — §4.3: `DeleteLegacySignIns` is introduced under R7-5's condition; on a replaced store `PostRestore` step 2 deletes legacy sign-ins.
+- DATA8-7 — §4.12: hook-appended revocation lines carry `restore_seq=<seq>` in `Detail`, so a swapped-back restore's lines are never re-applied.
+- SEC8-1 (R8-4) — §4.11: the Basic-gate narrowing writes `true` whenever effective `true` (fail-closed); `TestRollback_OperatorEnabledAuthStaysOn` covers stored, canonical-only and env-only passwords and an absent field (SEC8-12).
+- SIMP8-6 — §4.11, §8: `core.auth.mode` declares `NarrowStored("core.auth.mode", nil, nil)`, reusing its `SafeLegacyValue` predicate.
+- SEC8-7 — §11.1 item 4: `mergeActor` (`user_merge.go:62-75`) added to early fix 4; from S4 the merge handler checks `Can(core:admin)` with key scoping.
+- SIMP8-3 — §3.4, §5: "the capabilities it drives" replaced by "the capabilities 03 §3.3 lists".
+- R8-1 — §4.8, §7: HEAD's `POST /system/reset` named among the owner-guarded routes; `HasUsers` is cleared by either reset kind.

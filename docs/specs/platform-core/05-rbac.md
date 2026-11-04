@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.8.1 -->
+<!-- version: 1.9.0 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -468,8 +468,7 @@ type RBACAtomWriter interface {
 ```
 
 `legacy` (L5) imports `rbac` for the types it names, so `rbac` never imports it (03 §3.3). The kernel
-asserts only the capabilities it drives (`legacy.ConfigOpener`, `legacy.ConfigSecrets`, 05-config
-§1.3.3) and hands the store to `rbac` as an `rbac.Store`; the capabilities of this section are detected
+asserts only the capabilities 03 §3.3 lists, none of them this section's (SIMP8-3), and hands the store to `rbac` as an `rbac.Store`; the capabilities of this section are detected
 only by `rbac` itself (its service and its restore hook, §5, §7.1), through its mirrors (SIMP7-5). `rbac` names a capability only through an
 **unexported** interface of its own with the identical method set. The mirror test is 03 §3.3's
 (resolution R7-7, COR7-2, SIMP7-1): rbac's `export_test.go` (`package rbac`) only exports a test alias of
@@ -680,8 +679,16 @@ cached by (sorted role IDs, sorted scopes, interactive, `Generation()`).
 - `core:admin` is a permission held by the locked seed role `admin`. It satisfies every requirement
   except a `Sensitive` scope for a non-interactive principal (§4.4). It is `AuthRequired`, so the
   auth-disabled principal never holds it (§4.11, SEC-2). Every role-name check is removed:
-  `RequireAdmin` → the permission of §6.2; `handlers/user.go:285,453` → `Can(core:admin)`. Holding
-  the role *named* `admin` confers nothing by itself; holding `core:admin` (through any role) does.
+  `RequireAdmin` → the permission of §6.2; `handlers/user.go:285,453` → `Can(core:admin)`; the user-merge
+  actor check `mergeActor` (`internal/server/handlers/user_merge.go:62-75` @748fd787a, the `adminRole`
+  test at `:67`) → `Can(core:admin)` (SEC8-7). From S4 the ABO-owned merge handler that 04 carries the
+  merge methods onto checks `rbac.Can(ctx, core:admin)` with key scoping, never `adminRole`. At HEAD the
+  four merge POSTs are credential routes (`internal/server/wire_library_routes.go:177-181` @748fd787a),
+  which refuse every API key, and they keep that guard (`Guards.Interactive`); the two reads that call
+  `mergeActor` without it, `GET /users/:id/footprint` and `GET /users/merges`
+  (`user_merge.go:97-99,190-192`), are what an admin's key scoped to `users.manage` reaches today, and
+  the check closes them (`TestUserMerge_ScopedAdminKeyRefused`, §12). Holding the role *named* `admin` confers nothing by itself; holding `core:admin`
+  (through any role) does.
 - Because it is a permission, **key scoping applies to it**: an admin's key scoped `books:view` no
   longer passes admin routes (closes the `RequireAdmin` key-scope bypass in §2).
 - Per-module administration is a module seed role holding `<ns>:*` (e.g. `tv.admin` seeded by the TV
@@ -839,7 +846,7 @@ admitted through `Manifest.LegacyRoleIDs []rbac.RoleName` (06 §6.4.2), which re
 | Tasks (05-tasks §5T.3.7) | definition declares `Permissions{Start, Cancel, Approve, View}`; `Start` **required** (registration fails like R6) and **not satisfiable by a `ClassView` scope** unless the definition sets `StartableByViewers` with a reviewed reason (SEC-9; the legacy translation of an op def declaring only `library.view` becomes `AllOf(books:scan, books:view)`, which keeps today's floor, `opsv3/handler.go:236-246`); `Cancel` zero = `Start`, the run's own actor may always cancel, `core:tasks.manage` may cancel any; `Approve` required iff the definition needs approval; `View` zero = `core:tasks.view`. **Approval** (SEC-24, today's rule kept, `opsv3/runs.go:395-410`): by a `session`, an API key, or a verified identity extension (CF Access); an API key must name the `Approve` scope **explicitly** in its scopes (not through implication or `core:admin`); `LegacyFullScope` keys and `session_delegated` are refused | closed |
 | Realtime topics (05-realtime) | the topic's permission from the one events topic catalog (05-events, SIMP-5) checked per subscriber per event; principal revalidated on heartbeat and invalidation | closed |
 | Settings sections (05-config) | each section declares `ReadPerm`, `WritePerm` (default write `<ns>:settings.manage`, core sections `core:settings.manage`); keys carry a `Protection` level (05-config), and keys whose change could mint admins, spoof client addresses or apply updates are `ProtectAdmin` (needs `core:admin` + an interactive method, SEC-6; the per-key column is in 05-authn §8 and 05-http-api §10); secret fields are write-only regardless | closed |
-| Storage/backup/updater admin ops | core routes; backups per 05-backup's route table (SEC2-8): list `core:system.view`; verify and create `core:system.manage` (verify opens a checkpoint and hashes the archive, so it is not a view-class start, SEC3-12); delete and import `core:system.manage` + `Guards.Interactive` (import audited); **download `core:admin` + `Guards.Interactive` + `Guards.Owner`** (with 05-authn §4.8's fallback; audited) — an archive holds every credential verifier, so it is credential-equivalent and never behind a grantable non-admin scope (SEC3-7); restore `core:backup.restore` (§6.1, SEC-16); **factory reset** `POST /api/core/v1/system/factory-reset` (from S4 r2, in `internal/storagehttp`; it only stages, `storage.Admin.StageFactoryReset`, 05-storage §5S.3.15): `core:admin` + `Guards.Interactive` + `Guards.Owner` (with 05-authn §4.8's fallback; audited `core.system.factory_reset`) — it sets aside every credential, role and secret record of the install, so like the archive download it is never behind a grantable non-admin scope (DATA6-6); before S4 r2 no core route exists and the legacy route keeps HEAD's chain (§6.2, resolution R7-2); other storage and updater admin `core:system.manage` | closed |
+| Storage/backup/updater admin ops | core routes; backups per 05-backup's route table (SEC2-8): list `core:system.view`; verify and create `core:system.manage` (verify opens a checkpoint and hashes the archive, so it is not a view-class start, SEC3-12); delete and import `core:system.manage` + `Guards.Interactive` (import audited); **download `core:admin` + `Guards.Interactive` + `Guards.Owner`** (with 05-authn §4.8's fallback; audited) — an archive holds every credential verifier, so it is credential-equivalent and never behind a grantable non-admin scope (SEC3-7); restore `core:backup.restore` (§6.1, SEC-16); **factory reset** `POST /api/core/v1/system/factory-reset` (from S4 r2, in `internal/storagehttp`; it only stages, through the kernel's staging function handed as `storagehttp.Stager`, never `*storage.Admin`, 05-storage §5S.3.15, COR8-2; request `{"confirm": "RESET"}`, 422 `confirm_required` otherwise): `core:admin` + `Guards.Interactive` + `Guards.Owner` (with 05-authn §4.8's fallback; audited `core.system.factory_reset`) — it sets aside every credential, role and secret record of the install, so like the archive download it is never behind a grantable non-admin scope (DATA6-6); the legacy `POST /api/v1/system/factory-reset` (`ResetFactory`) and `POST /api/v1/system/reset` (`ResetStore`) are its aliases with the same guards; before S4 r2 no core route exists and both legacy routes keep HEAD's chain (§6.2, resolutions R7-2, R8-1); other storage and updater admin `core:system.manage` | closed |
 | UI hints | `/api/core/v1/me` returns `permissions` (concrete, expanded) and `patterns`; `@mediacore/shell` `can(scope)` implements §4.4 in TS. **Advisory only**: the server is authoritative. Matching vectors shared in `core/rbac/testdata/match_vectors.json`, run by Go and vitest | n/a |
 
 ### 4.11 Interplay with auth modes
@@ -989,35 +996,70 @@ stay identical:
 | read-only (`adminRole`) | the four `GET /admin/debug/*` | `books:admin.view` | open |
 | read-only (`adminRole`) + `users.manage` | master-list routes | `AllOf(core:users.manage, books:admin.view)` | open |
 | always-authenticated | `PATCH /admin/debug/books/:id`, `PATCH /admin/debug/book-files/:id`, `POST /admin/debug/edits/:edit_id/undo` | `books:admin.debug` | 401 |
-| always-authenticated | `POST /system/reset` | `core:system.manage` | 401 |
-| always-authenticated (and owner-guarded at HEAD, 05-authn §4.8) | `POST /system/factory-reset` (stages core's factory reset instead of HEAD's in-place `Reset`, 05-storage §5S.3.15, DATA6-6; stages below the table) | from S4 r2 `core:admin` + `Guards.Interactive` + `Guards.Owner` (the core route's guards; only `admin` holds `core:admin`, so the reach equals HEAD's `RequireAdmin`); S2b to S4 r1 HEAD's chain unchanged | 401 |
+| always-authenticated (and owner-guarded at HEAD, 05-authn §4.8) | `POST /system/reset` (HEAD's `ResetSystem`, `internal/server/handlers/system/handler.go:463-491` @748fd787a: store and settings only, no file deleted; stages core's `ResetStore` reset, 05-storage §5S.3.15, COR8-1; stages below the table) | the factory-reset guards, because it wipes the same data: from S4 r2 `core:admin` + `Guards.Interactive` + `Guards.Owner` as an `Alias` of the core route; S2b to S4 r1 HEAD's chain unchanged | 401 |
+| always-authenticated (and owner-guarded at HEAD, 05-authn §4.8) | `POST /system/factory-reset` (stages core's `ResetFactory` reset instead of HEAD's in-place `Reset`, 05-storage §5S.3.15, DATA6-6; stages below the table) | from S4 r2 `core:admin` + `Guards.Interactive` + `Guards.Owner` (the core route's guards; only `admin` holds `core:admin`, so the reach equals HEAD's `RequireAdmin`); S2b to S4 r1 HEAD's chain unchanged | 401 |
 | always-authenticated | retired 410 stubs `/maintenance/wipe`, `/cache/invalidate`, `/admin/recompact-digests` | `core:admin` (stub keeps auth-first ordering) | 401 |
 | always-authenticated | guest service tokens list, plan, revoke | `core:admin` | 401 |
 
-**Factory reset by stage (resolution R7-2; COR7-1, SEC7-4, SEC7-5, DATA7-6).** Nothing destructive runs
-before the restart, and there is no core route before core auth exists:
+v1.8.1 mapped `POST /system/reset` to `core:system.manage`, a grantable non-admin scope without the interactive
+and owner guards. HEAD wires it with the same `credRoute` + always-authenticated admin group +
+`ownerGateWhenOwnerSet` chain as the factory reset (`internal/server/wire_system_routes.go:45-48` @748fd787a),
+so that mapping widened a whole-store wipe (COR8-1).
 
-- **S2b until S4 r2.** Books' gin handler for the legacy path, behind HEAD's chain unchanged (`credRoute`
-  + `adminGroup(adminRouteAlwaysAuthenticated)` + `ownerGateWhenOwnerSet`,
-  `internal/server/wire_system_routes.go:47-48` @748fd787a), calls `legacy.Maintenance.StageFactoryReset`.
-  That is a narrow handle the kernel hands to the module that declares legacy claims, as
-  `module.StorageHandles.Maintenance` (06 §6.4.4; 05-storage), because `storage.Admin` is kernel-only. Gin
-  decides who may call it, as at HEAD; `rbac`, the guards and `audit` do not exist yet (no `rbac` in P5
-  before S4, 06 §6.5.1), and an alias would bypass gin's chain. The handler only stages: it writes no
-  default into the live config blob and deletes no file.
+**Store reset and factory reset by stage (resolutions R7-2, R8-1; COR7-1, COR8-1, COR8-2, SEC7-4, SEC7-5,
+DATA7-6).** Both of HEAD's whole-store wipes become kinds of core's one staged swap (`KindReset` of
+`restoreswap`, 05-storage §5S.3.15): `ResetStore` for `POST /system/reset` (store and settings only, no file
+effect, as HEAD's `ResetSystem`) and `ResetFactory` for `POST /system/factory-reset` (adds books' post-reset
+hook). Nothing destructive runs before the restart, and there is no core route before core auth exists:
+
+- **S2b until S4 r2.** Books' gin handlers for both legacy paths stay behind HEAD's chain unchanged
+  (`credRoute` + `adminGroup(adminRouteAlwaysAuthenticated)` + `ownerGateWhenOwnerSet`,
+  `internal/server/wire_system_routes.go:45-48` @748fd787a). Each checks HEAD's `{"confirm": "RESET"}` (400
+  otherwise, `handler.go:472-475,542-545`) and calls `legacy.Maintenance.StageFactoryReset` with its kind.
+  That handle is the kernel's one staging function (`kernel.stageReset`, 05-storage §5S.3.15), handed to the
+  module that declares legacy claims as `module.StorageHandles.Maintenance` (06 §6.4.4), because
+  `storage.Admin` is kernel-only. Gin decides who may call it, as at HEAD; `rbac`, the guards and `audit` do
+  not exist yet (no `rbac` in P5 before S4, 06 §6.5.1), and an alias would bypass gin's chain. The handlers
+  only stage: they write no default into the live config blob and delete no file.
 - **From S4 r2.** The core route `POST /api/core/v1/system/factory-reset` lands in a new
-  `internal/storagehttp` (L6, imported only by `kernel`, 03 §3.3), with the guards and audit event of the
-  row above, and the legacy path becomes its `Alias` (05-http-api §4.6), in the r2 PR with the other
-  native admin routes.
-- **HEAD's side effects** (the gap-fill config file reset, the Open Library data and the library
-  `RootDir` wipe, `internal/server/handlers/system/handler.go:538-589` @748fd787a) run in a books
-  post-reset hook only after the reset journal reads `applied`, at the reset boot, and are stated as not
-  undoable; whether to keep the `RootDir` wipe is owner question Q-K in 14 (recommended: HEAD parity, with
-  a release-note line). Staging records the live Pebble open stamp and is rejected when it moved; a staged
-  reset and a staged restore exclude each other, and `reset_pending` makes `make rollback`, `deploy` and
-  the updater refuse (05-storage §5S.3.15 owns these rules).
-- `TestLegacyRoleReachUnchanged` asserts HEAD's reach for the legacy path at S2b and S3 (the four seed
-  roles, scoped keys, auth off: 401), and from S4 r2 the alias's reach as in the row above.
+  `internal/storagehttp` (L6, imported only by `kernel`, 03 §3.3), with the guards of the rows above and the
+  audit event `core.system.factory_reset` (detail `kind`). `storagehttp` receives the kernel's staging
+  function as a storagehttp-local `Stager` interface, never `*storage.Admin`, the way `modulehttp` receives
+  `ModulesView` (COR8-2). So an intent staged through the core route or an alias carries the hook arguments
+  exactly as one staged through the legacy handler.
+  - **Request and response.** The request is `{"confirm": "RESET"}`; any other body answers 422
+    `confirm_required` and stages nothing. Success answers 200 `{"reset_id", "message"}`; the restart
+    follows (05-storage §5S.3.15).
+  - **Aliases.** Both legacy paths become the route's `Alias`es (05-http-api §4.6), in the r2 PR with the
+    other native admin routes, and books' two gin handlers are deleted with them. The `/system/factory-reset`
+    alias stages `ResetFactory`. The `/system/reset` alias selects `ResetStore` through its
+    `LegacyPath.Request`, which sets the path value `reset_kind=store` (05-http-api §3.1). No native request
+    can carry that value, because the route's pattern has no such wildcard, so neither path can retarget the
+    other's action (SEC2-5).
+  - **Legacy wire shape.** Both aliases set `LegacyError` and a `Shape` that returns HEAD's
+    `{"data": {"message": …}}` with HEAD's message text (`handler.go:491,596`). `factoryReset` in
+    `web/src/services/api.ts:3260-3271` @748fd787a reads `body.data`. The one wire difference is the
+    confirm refusal: the alias answers 422 where HEAD answered 400, and that caller treats every non-2xx
+    alike (`buildApiError`).
+- **HEAD's side effects.** For `ResetFactory` only, the gap-fill config file reset, the Open Library data
+  and the library `RootDir` wipe (`internal/server/handlers/system/handler.go:538-589` @748fd787a) run in
+  books' post-reset hook at the reset boot. They are stated as not undoable; whether to keep the `RootDir`
+  wipe is owner question Q-K in 14 (recommended: HEAD parity, with a release-note line). A dangerous
+  `RootDir` is refused at staging with 400 and nothing is staged, as HEAD refuses it
+  (`handler.go:565-570`). The hook never fails boot: per-entry errors are logged, audited and reported as
+  `factory_reset_cleanup_incomplete`, and `hook_done` is always recorded. `ResetStore` has no hook effect,
+  as HEAD's `ResetSystem` deletes no file.
+- **Exclusion and rollback.** One intent slot, `restore/pending.json` with its `kind`, serves restores and
+  both reset kinds, so a staged reset and a staged restore exclude each other (`storage.ErrSwapPending`).
+  Staging records the live Pebble open stamp and is rejected when it moved, and `restore_pending` /
+  `restore_inflight` make `make rollback`, `deploy` and the updater refuse. 05-storage §5S.3.15 owns these
+  rules.
+- **Tests.** `TestLegacyRoleReachUnchanged` asserts HEAD's reach for both legacy paths at S2b and S3 (the
+  four seed roles, scoped keys, auth off: 401), and from S4 r2 the aliases' reach as in the rows above.
+  `TestFactoryResetCoreRouteRecordsHookArgs` (S4 r2: the intent staged through the core route and through
+  the factory-reset alias carries `hook_args`) and `TestFactoryResetAliasKeepsConfirmAndShape` (both aliases:
+  a missing or wrong `confirm` stages nothing; success keeps HEAD's `{data: {message}}`; the
+  `/system/reset` alias stages `ResetStore` and cannot be steered to `ResetFactory`) are in §12.
 
 v1.0.0 mapped the read-only debug and master-list routes to `books:admin.debug`, which is
 `AuthRequired` and would have closed them with auth off, contrary to today's pass-through. Only
@@ -1437,6 +1479,9 @@ option governed by the compat ledger (§6.3, SIMP-7).
 | `TestSensitive_EvaluatedBeforeAdmin` | bootstrap-style `["core:admin"]` API key: `Has(core:roles.manage)` false; interactive admin session: true (SEC-23) |
 | `TestAuthDisabled_CheckerHasNoAdmin` | `authz.AuthDisabled` holds no `AuthRequired`/`Sensitive` scope, `admin=false`, `Has(core:system.manage)` false (SEC-2) |
 | `TestAuthOff_AdminRouteKindsUnchanged` | the §6.2 table: read-only kinds open, always-authenticated kinds 401 with auth off |
+| `TestUserMerge_ScopedAdminKeyRefused` | legacy (early fix 4, ABO's current code) then core (S4 on): an admin's API key scoped `["users.manage"]` passes the route guard of `GET /users/:id/footprint` and `GET /users/merges` and is refused by the merge actor check (403); it is refused on every merge POST (credential route); the admin's session reads and merges (§4.6, SEC8-7) |
+| `TestFactoryResetCoreRouteRecordsHookArgs` | S4 r2: the intent staged through `POST /api/core/v1/system/factory-reset` and through the `/api/v1/system/factory-reset` alias carries `kind: factory` and `hook_args`, written through the kernel's `Stager` (§6.2, COR8-2) |
+| `TestFactoryResetAliasKeepsConfirmAndShape` | S4 r2, both legacy aliases: a missing or wrong `confirm` answers 422 and stages nothing; success returns HEAD's `{"data": {"message": …}}`; the `/api/v1/system/reset` alias stages `kind: store`, and no body field steers it to `factory` (§6.2, COR8-1, COR8-2) |
 | `TestConfining_WorkerKeyRefusedOnPlaylists` | `books:fingerprint.worker` key → 403 on the playlist routes and every `AnyAuthenticated` route (regression for `middleware/auth.go:289`), 200 on the worker routes |
 | `TestConfining_FacadeKeyRefusedOnNative` (deferred-build: lands with `arrfacade`, SIMP2-6) | `tv:arr.read` key → 403 on every non-facade route (SEC-5) |
 | `TestRestore_DemotedAdminStaysDemoted` | archive taken before an admin's demotion; restore, restart, roll back to the previous release: the account is not admin anywhere; a re-application that would remove the last admin keeps the role, blanks the password, sets the keys `needs_confirmation` and reports health `degraded` (SEC2-10, SEC3-15) |
@@ -1470,7 +1515,7 @@ option governed by the compat ledger (§6.3, SIMP-7).
 | `TestLegacyAtomMapping_Golden` | the 13 rows of §6.1 |
 | `TestLegacyRows_ReadInPlace` | (ABO, through books' legacy stores) fixture DB from ABO's role, user and key families → expected roles, checkers and keys, with no row written by the read (R4-1) |
 | `TestLegacyRevocationHonoured` | key revoked or user deactivated on the previous release → refused here at the next request, with no rebuild (R3-1) |
-| `TestLegacyRoleReachUnchanged` (09) | extended to scoped API keys (HEAD's role ∩ key reach on legacy routes and op starts, SEC5-7), auth-off mode (200 on a `settings.manage` route and a started `settings.manage` op; in-handler `deny` sites with response-content cells; the recorded tightenings of §4.11 asserted refused, COR5-4, SEC5-8, SEC5-9) and random custom roles (stage 13 admits a legacy route only if its successor admits, SEC4-2), not only the 4 seed roles; runs on a HEAD-seeded store, not only a fresh one (DATA4-11); S2b and S3 cells assert HEAD's reach for the legacy `POST /api/v1/system/factory-reset` under HEAD's chain (no core route exists; the handler stages through `legacy.Maintenance`), and from S4 r2 the alias's reach (§6.2, resolution R7-2, SEC7-4) |
+| `TestLegacyRoleReachUnchanged` (09) | extended to scoped API keys (HEAD's role ∩ key reach on legacy routes and op starts, SEC5-7), auth-off mode (200 on a `settings.manage` route and a started `settings.manage` op; in-handler `deny` sites with response-content cells; the recorded tightenings of §4.11 asserted refused, COR5-4, SEC5-8, SEC5-9) and random custom roles (stage 13 admits a legacy route only if its successor admits, SEC4-2), not only the 4 seed roles; runs on a HEAD-seeded store, not only a fresh one (DATA4-11); S2b and S3 cells assert HEAD's reach for the legacy `POST /api/v1/system/factory-reset` and `POST /api/v1/system/reset` under HEAD's chain (no core route exists; the handlers stage through `legacy.Maintenance`), and from S4 r2 the aliases' reach, `core:admin` + Interactive + Owner for both (§6.2, resolutions R7-2, R8-1, SEC7-4, COR8-1) |
 | `TestAudit_SyncInSameBatch` | failing batch → neither change nor record |
 | `TestAudit_SeqUniqueAcrossCrash` | `Sequence` reservation: after a simulated crash, no `seq` is reissued; gaps allowed |
 | `TestAudit_DenialCoalescing` | `synctest` clock |
@@ -1557,10 +1602,16 @@ defines the `legacy` package this file's capabilities live in (R6-3).
    `user.Roles`; `handleAPIKeyAuth` binds the full user at `:384-386`): a key an admin scoped to
    `library.view` passes every admin-gated route not also behind `credGuard` (7 `admin/debug`
    routes including `PATCH …/books/:id` and `…/edits/:edit_id/undo`, `raw/09` §3.1 rows 241-247).
-   The in-handler role-name checks (`internal/server/handlers/user.go:285,453`,
-   `slices.Contains(actor.Roles, "admin")`) ignore key scopes the same way. Hotfix in ABO (05-authn
-   §11.1 item 4): refuse an `api_key` method whose non-empty scopes do not include every atom, in
-   `RequireAdmin`, in `adminRole` and in the two handler checks. Requiring `auth.Can(users.manage)` in
+   The three in-handler role-name checks (`internal/server/handlers/user.go:285,453`,
+   `slices.Contains(actor.Roles, "admin")`, and the user-merge actor check `mergeActor`,
+   `internal/server/handlers/user_merge.go:67`, SEC8-7) ignore key scopes the same way: a key an admin
+   scoped to `users.manage` passes `s.perm(users.manage)` and `mergeActor` on the two merge reads that are
+   not credential routes (`GET /users/:id/footprint`, masked sign-ins; `GET /users/merges`, every merge
+   journal; `user_merge.go:97-99,190-192`), although the handler's own comment says `users.manage` is not
+   enough. The merge POSTs are credential routes (`wire_library_routes.go:177-181`), so the key cannot
+   run a merge. Hotfix in ABO (05-authn §11.1 item 4):
+   refuse an `api_key` method whose non-empty scopes do not include every atom, in `RequireAdmin`, in
+   `adminRole` and in the three handler checks. Requiring `auth.Can(users.manage)` in
    addition is **not** enough — an admin's key scoped to `users.manage` passes it and keeps the
    debug-edit bypass (SEC4-11). Fixed by design in §4.6.
 2. **Invite role not bounded by the creator's permissions** (`internal/server/handlers/user.go:155-190`):
@@ -1716,3 +1767,12 @@ Round 7 (2026-11-04), findings applied to this file:
 - SIMP7-5 — the kernel asserts only the capabilities it drives; rbac's service and restore hook detect the role-store capabilities through their mirrors (§3.4, §5).
 - SIMP7-8 — `legacy.AtomWriter` renamed `legacy.RBACAtomWriter` (owner-specific identifiers take the former package's name) (§3.4, §5, §6.3).
 - integration pass (round 7): SIMP7-8 sweep: `RBACAtomWriter` comment cites 05-storage for former names; `legacytest.RBACStoreSuite` row names `RBACAtomWriter`.
+
+Round 8 (2026-11-04), findings applied to this file:
+
+- COR8-1 (R8-1) — §6.2: `POST /system/reset` mapped to the factory-reset guards (`core:admin` + Interactive + Owner) instead of `core:system.manage`; it stages core's `ResetStore` reset from S2b through `legacy.Maintenance` behind HEAD's chain and is an `Alias` of the storagehttp route from S4 r2; the factory reset is `ResetFactory`; `TestLegacyRoleReachUnchanged` covers both paths (§4.10, §6.2, §12).
+- COR8-2 (R8-1) — §4.10, §6.2: storagehttp receives the kernel's staging function as `storagehttp.Stager`, never `*storage.Admin`; request `{"confirm": "RESET"}` (422 otherwise); both aliases keep HEAD's `{data: {message}}` through `LegacyError` + `Shape`; the reset alias picks `ResetStore` through a path value no native request carries; `TestFactoryResetCoreRouteRecordsHookArgs`, `TestFactoryResetAliasKeepsConfirmAndShape` (§12).
+- COR8-4 / DATA8-1 / OPS8-5 / SEC8-5 (R8-1) — §6.2: the dangerous-`RootDir` refusal is at staging (400), the post-reset hook never fails boot and always records `hook_done`; one intent slot, `storage.ErrSwapPending`, `restore_pending`/`restore_inflight` (05-storage owns the rules).
+- SIMP8-4 — §6.2: books' two gin handlers are deleted with the aliases in the S4 r2 PR.
+- SEC8-7 — §4.6, "Out-of-scope defects" item 1: `mergeActor` (`user_merge.go:67`) is the third in-handler role-name check; from S4 the merge handler checks `Can(core:admin)` with key scoping; the reachable bypass is the two merge reads, since the merge POSTs are credential routes at HEAD; `TestUserMerge_ScopedAdminKeyRefused` (§12).
+- SIMP8-3 — §3.4: "the capabilities it drives" replaced by "the capabilities 03 §3.3 lists".
