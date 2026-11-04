@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.13.1 -->
+<!-- version: 1.13.2 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -706,14 +706,16 @@ services and before any listener opens.
    passthrough key fails boot here, still before storage opens.
 4. The kernel builds logging and metrics from `core.log` / `core.metrics`. Storage opens at `core.storage.path`
    (`ProtectOperator`), checks disk headroom and takes its pre-migration checkpoint (05-storage §5S.3.12).
-5. `secrets.Open` (§2.4; 05-storage §5S.4 step 8, after the checkpoint and before the migration DAG) loads or
-   creates the keyring and writes `c/secrets/meta` on a new store (its only store write); then `Store.SetSecrets` binds `Ref`s. There is no app-supplied config store to open: HEAD's settings
+5. `secrets.Open` (§2.4; at the start of 06 P4b, 05-storage §5S.4 step 8, after the checkpoint and before the
+   migration DAG) loads or creates the keyring and writes `c/secrets/meta` on a new store (its only store write);
+   it binds no `Ref` yet (`Store.SetSecrets` is step 6's first call). There is no app-supplied config store to open: HEAD's settings
    load, encryption init and key guard, which ran in ABO's `serve` before the server (`cmd/root.go:280,345-369`),
    are replaced by `Load`, `Attach` and M2 (C17).
 5b. The migration list runs (05-storage §5S.3.13; 06 §6.5.1). On the first R2 boot it includes M2 (§1.12.2): the
    kernel hands books' steps `module.Importers` (06 §6.4.2), whose `Config` is `Store.Importer()` and whose
    `Secrets` is `secrets.(*Store).Importer()` (§2.3).
-6. `Store.Attach` with core's native store and the kernel's committer (`core/internal/configstore`):
+6. At 06 P4d step 1 (05-storage §5S.4 step 11 (a)): `Store.SetSecrets` binds `Ref`s over the keyring step 5
+   opened, then `Store.Attach` with core's native store and the kernel's committer (`core/internal/configstore`):
    `OverrideStore.Load` reads, nothing is written. Rows are decoded per section; if a section fails decode or
    `Validate` with its overrides but passes without them, **all of that section's overrides are quarantined**
    (kept, ignored, reported, health token `config_overrides_quarantined`) and boot continues. FailClosed keys whose
@@ -1856,7 +1858,7 @@ so a lost key file loses the secrets. Rules:
   holds the keyring can decrypt the archives, which adds only the non-secret data to what that holder could
   already decrypt; an operator who wants the two separated adds an operator recipient (05-backup).
 - The keyring is **never** stored only inside an archive it protects. Unencrypted archives never contain key
-  material, so their secrets stay ciphertext (05-backup §5B; SEC10-8). Archives taken before R2 still hold HEAD's
+  material, so their secrets stay ciphertext (05-backup §5B.3.1; SEC10-8). Archives taken before R2 still hold HEAD's
   plaintext secrets and its gap-fill file's copies; R2's release note says to delete them once no longer needed
   (§1.12.2). No archive carries a copy of the keyring as its recovery path.
 - Recovery is an explicit operator action: `<app> secrets export-keyring --out <file>` (CLI, filesystem access
@@ -2321,4 +2323,4 @@ Plan-phase consistency:
   F7), confirmed the peer allow-list and trusted proxies as storable admin keys, declared `secrets.Importer`, applied
   the M1, M7, M2–M6, M8 order, sealed M2's quarantine, moved the keyring export after the first boot, remapped
   `operation_timeout_minutes` and the second targets of `oauth_allowed_emails` and `scheduled.db_optimize`, renamed
-  `config_alias_conflict` to `config_binding_conflict`, and re-pointed 14, D12, 06 and 05-storage citations.
+  `config_alias_conflict` to `config_binding_conflict`, and re-pointed 14, D12, 06 and 05-storage citations. Final consistency sweep: `Store.SetSecrets` moved from step 5 to step 6 (P4d step 1, before `Attach`), `secrets.Open` placed at the start of P4b, and the archive-contents citation pointed at 05-backup §5B.3.1.
