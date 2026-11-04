@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.13.3 -->
+<!-- version: 1.13.4 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -392,6 +392,8 @@ type Importer interface {
 // stages into it: OverrideStore.Stage for c.Set and c.Unset, secrets.(*Store).Stage for each of c.Secrets, and the
 // audit record core.settings.update (05-rbac §7.1: section and changed key names, never secret values; actor =
 // Override.By). It retries with storage.RetryOnConflict, each attempt a fresh batch. config never imports audit (L4).
+// audit.Store and the action table (core.settings.update among its rows) land dark in F2, the foundation PRs, so
+// the record has its store from the config flip F3 on (IMPL-3).
 type Committer interface {
 	Commit(ctx context.Context, c Commit) error
 }
@@ -631,7 +633,14 @@ declares keys; each key table in the 05 files carries a **Protection** column.
 
 HEAD's file-only keys (`json:"-"`: the peer allow-list, the tunnel connector addresses, the login-saturation bucket,
 `public_base_url`, the Cloudflare guest and invite keys, `bootstrap_key_ttl*`, the ABS JWT secret;
-`internal/config/config.go:1636-1759`) become ordinary keys with their declared class in R2. In particular the peer
+`internal/config/config.go:1636-1759`) become ordinary keys with their declared class in R2, with two exceptions
+that stay operator-only (SEC-6): the ABS JWT signing secret `modules.books.abs.jwt_secret` and the Cloudflare
+policy token `modules.books.cfguests.policy_api_token` are `ProtectOperator` secrets, class `o` in §1.12.3. They
+are read only from the operator layers (`SourceEnv`, `SourceFile`), never stored: `Apply` refuses them, and
+`secrets.Importer` and a module's `secrets.Scope.Put` refuse their names. This keeps HEAD's property that a database
+copy alone never yields a usable phone-app credential (`internal/database/pebble_store_abssession.go:43-46`), and
+no `books:settings.manage` holder can re-sign every ABS token or edit the Access policy behind owner assurance.
+In particular the peer
 allow-list `core.http.peer_allowlist` and the trusted proxies `core.http.trusted_proxies` (HEAD's
 `ALLOWED_PEER_CIDRS` and `TUNNEL_CONNECTOR_ADDRS`, class `o` in §1.12.3) are **storable admin keys**: `ProtectAdmin`,
 hot-reloadable and not `ProtectOperator` (05-http-api §10), so an admin may store them through Settings, which HEAD
@@ -674,8 +683,10 @@ name or format looks like a URL (`format=uri`, `*_url`, `*endpoint*`), a path (`
 `*_file`), an executable (`*_bin`, `*_command`, `*_exe`), a network trust list (`format=cidr`, `*proxies*`,
 `*origins*`, `*allowlist*`, `*client_ip*`), key material or encryption policy (`*recipient*`, `*encryption*`,
 `*keyring*`, or a non-secret field named `*_key` / `*_key_file`; SEC2-8: `core.backup.recipients` and
-`core.backup.encryption` have none of the other shapes) or a sign-in setting (`core.auth.*`) has a Protection
-below `ProtectAdmin` and no `ProtectionWaivers` entry with a reason. It runs over every row of ABO's rename table
+`core.backup.encryption` have none of the other shapes), a signing key or credential token (`*jwt*`, `*signing*`,
+`*_secret`, `*_token`; SEC-6) or a sign-in setting (`core.auth.*`) has a Protection below
+`ProtectAdmin` and no `ProtectionWaivers` entry with a reason. Its cases include the two operator-only secrets
+above, which must read `ProtectOperator`. It runs over every row of ABO's rename table
 too, so a books key HEAD classed `FieldSignIn`, `FieldExecutable` or `FieldServerPath` keeps that class.
 
 ### 1.4 Lifecycle
@@ -1058,6 +1069,16 @@ an optional ratchet, not an extraction step.
    a prerequisite only for sharing a binary with other modules. **Trade:** until then ABO tests mutate a façade
    global and cannot use `t.Parallel()` on config.
 
+**Every core section exists from F2 (normative, IMPL-1).** M2 stages HEAD's values under core keys whose owners are
+wired by later flips (`core.backup.dir`, `core.updater.*`, `core.tasks.history_retention`,
+`core.tasks.windows.nightly.*`, `core.auth.mode`), and `Importer.Stage` refuses an unregistered path. So F2, the
+foundation PRs that open R2 dark before F3 (03 §3.8), puts on the kernel's core-section list **every** core section
+that a rename-table row targets (http, auth, tasks, backup, updater, ai, integrations, library, notify, health,
+metrics and the rest), each with the key table its owner spec states, whether or not that
+subsystem is wired yet. Registering a section changes no behaviour: a key is read only by its owner, and an owner
+that is still HEAD's code reads it through the façade (item 2). `TestRenameTable_EveryKeyRegistered` (§1.12.3) runs
+from F3 against the build under test, so F3's M2 never quarantines a value for want of a section.
+
 **Release R1: how ABO's stored listener and perimeter values reach `app.New` (normative).** In release R1 the kernel
 owns the one Pebble open (06 §6.5.1 P2) and core config has no DB layer (06 P3), so ABO's `main` cannot read HEAD's
 settings blob before `app.New`, and core config cannot supply a value the blob holds. HEAD's listener values are not
@@ -1158,10 +1179,14 @@ with the other HEAD-format readers.
 | `o` operator-only at HEAD | nothing: HEAD never stored it |
 | `x` dropped | nothing; one log line names a field that holds a non-default value |
 
-In the **same batch**: every blob field M2 consumed is removed from the blob, so the blob keeps only class-`i`
-fields, and the secrets of class-`i` families (the Deluge passwords, the metadata-source credentials, the webhook
-secret) are moved out of them; the four encrypted rows are deleted; a blob field that no row names (a key HEAD
-never had or already removed, `internal/config/removed_keys.go`) and a value that `Importer.Stage` refuses are
+In the **same batch**: every blob field M2 consumed is removed from the blob, which M2 rewrites in place, so the
+blob keeps only class-`i` fields, and the secrets of class-`i` families (the Deluge passwords, the metadata-source
+credentials, the webhook secret) are moved out of them, sealed under their canonical names, which M6 resolves by
+name; the four encrypted rows are deleted. `setting:config_blob` therefore stays an **active** books claim through
+M2 (books may read and rewrite it) and is retired only by M6, which reads the residual blob, converts it and deletes
+the row (05-storage §5S.9.1 row 7; DATA-1). M2's `Source` is the four encrypted rows, and M2's `Verify` checks that
+those rows and every field M2 moved are absent from the blob, not that the blob's range is empty. Also in that
+batch, a blob field that no row names (a key HEAD never had or already removed, `internal/config/removed_keys.go`) and a value that `Importer.Stage` refuses are
 moved into a quarantine record (05-storage's quarantine, reported in health), the key keeping its default. M2's
 sources are all `Sensitive` (the settings blob and the secret rows), so every M2 quarantine record is **sealed with
 the keyring**, never kept raw: its bytes are an encrypted secret record and the quarantine record holds none
@@ -1171,8 +1196,9 @@ value that may hold a credential but has no key (userinfo in a stored URL, a ret
 kept as an encrypted `c/secrets/` record with no key and reported with the quarantine records (§2.2). One batch
 means a crash leaves either HEAD's rows or the finished result.
 
-**M2b — the gap-fill file.** Before M2a, the step copies the gap-fill file into the pre-migration checkpoint's
-state-file set (05-storage §5S.3.12), so the rollback restore puts it back. After M2a committed, an idempotent step
+**M2b — the gap-fill file.** M2b copies nothing: the pre-migration checkpoint already holds the file, one of the
+state files it copies and hashes before any step runs (05-storage §5S.3.12; §2.4's state-file table), so the
+rollback restore puts it back (DATA-13). After M2a committed, an idempotent step
 removes the fifteen managed keys from the file (HEAD's merge: read, drop the keys, temp file, fsync, rename, mode
 0600) and keeps every other key, because the file may also be the operator's `--config` (`persistence.go:110-112`);
 a file left empty is deleted. M2b reruns at every boot until the file holds none of the fifteen keys. Core never
@@ -1185,8 +1211,9 @@ directories searched and the override `ABO_CORE_SECRETS_ALLOW_KEY_REGEN` (§2.7)
 the override, and for any row the key does not decrypt (a regenerated key, a corrupt row), the ciphertext is
 quarantined and M2 writes an *unreadable* marker under the secret's name (§2.3), so `Meta.Err` is
 `ErrKeyUnavailable` or `ErrCorrupt`, Settings shows "must be re-entered" and health raises `secrets_undecryptable`
-until the secret is set again (14 E4). M2 leaves the key file untouched: the rollback restore reads it, and R3's cleanup
-deletes it.
+until the secret is set again (14 E4). M2 leaves the key file untouched: the rollback restore reads it. R3 deletes it,
+at the path §2.4's state-file table resolves, through books' crash-labelled boot step `legacy-state-cleanup`
+(coined here; 06 §6.5.1's writer table labels it), never as an untracked write.
 
 **Operator values at the cutover.** M2 migrates stored values only. A retired HEAD name of a protected or secret key
 has already refused the boot at step 2 or 3 of §1.4, before storage opened, so M2 never runs under a unit that
@@ -1201,29 +1228,45 @@ default is not stored, so such keys follow later defaults; a key whose HEAD defa
 value, because that value is stored (for example `core.backup.compression` stays `gzip`, 05-backup).
 
 **Rollback.** Rollback is the offline restore of the pre-migration checkpoint, or of the off-host archive taken
-before the deploy together with `.encryption_key` and the gap-fill file, with the R1 binary (05-storage, 09). The
-keyring export is taken **after** R2's first boot, because the keyring exists only from then (`secrets.Open`, §2.4);
-a rollback to R1 does not need it, since R1 reads HEAD's rows with `.encryption_key`. It restores the blob, the four rows and
-the gap-fill file, and loses every setting changed since the upgrade. An R1 or older binary refuses a store M7 has
-raised.
+before the deploy together with `.encryption_key` and the gap-fill file, with **the pre-freeze release**'s binary: the
+last production release before F3 merged, which is also `.prev` after R2 deploys (05-storage, 09 §9.2.1;
+CONFORM-1). The keyring export is taken **after** R2's first boot, because the keyring exists only from then
+(`secrets.Open`, §2.4); a rollback to the pre-freeze release does not need it, since that release reads HEAD's rows
+with `.encryption_key`. It restores the blob, the four rows and the gap-fill file, and loses every setting changed
+since the upgrade. The pre-freeze release, or any older binary, refuses a store M7 has raised.
 
-**Oracle and tests (PC-09-02, 14 E1, 14 E18).** The fixture corpus is written by the **R0 binary itself** (a script drives
-R0's own settings API and loader), never by hand. It covers a default install; every key set to a non-default; gap
-fill for empty fields; the four encrypted rows; plaintext secrets of every class; an empty Basic password row; a
-missing key file with and without the override; a corrupt row; a blob field no row names; and a production-shaped
-store sized from the P1 counts.
+**A pre-R2 archive migrated later (DATA-15).** M2 gap-fills from the `config.yaml` beside the database, which M2b
+has already stripped on a host that once ran R2. So staging or offline restore of a `legacy-abo/0` archive
+(05-backup B7) takes `--gap-fill <file>`, the gap-fill file kept off-host with the archive, and installs it at
+`<db parent>/config.yaml` (mode 0600) before the migrating boot; without the flag the restore warns that a field
+HEAD filled from that file migrates as empty, names the fifteen managed keys, and goes on. The archive's off-host
+`.encryption_key` is installed the same way as for any pre-R2 archive (§2.4 "Host-loss restore").
+`TestLegacyArchiveRestoreThenMigrate` (05-backup) carries a gap-filled field and asserts its value after M2, and the
+warning without the flag.
+
+**Oracle and tests (PC-09-02, 14 E1, 14 E18).** The fixture corpus has two committed stages (09 §9.3 item 1;
+IMPL-8). **Stage 1** is written by the **R0 binary itself** (a script drives R0's own settings API and loader). It
+covers a default install; every key set to a non-default; gap fill for empty fields; the four encrypted rows;
+plaintext secrets of every class; an empty Basic password row; a missing key file with and without the override;
+and a production-shaped store sized from the P1 counts. **Stage 2** is a separate, labelled, hand-built overlay
+for the cases R0's API cannot write, applied to a copy of the stage-1 store by a program built at the R0 tag
+against HEAD's own `internal/database`. Its config cases are exactly: a corrupt encrypted secret row (ciphertext the
+key does not decrypt); a blob field no row names; and a blob value that R0's own validation refuses, which
+`Importer.Stage` must refuse too. Each overlay
+case carries its label in the corpus manifest, and the expected answers are still those of the R0 binary booted on
+the result.
 
 | Test | Asserts |
 |---|---|
 | `TestConfigCutover_EffectiveConfigUnchanged` | for every rename-table row, R2's effective value with empty operator layers equals the row's `Convert` of R0's effective stored value (R0's own `GET /api/v1/config` of the same store, env cleared); with canonical operator values set, they win, except that a FailClosed key keeps the stricter value |
 | `TestConfigCutover_SecretsReadable` | every secret the fixture set reads back through `secrets.(*Store).Get` under its canonical name with `SourceStored` and the active key ID; no `c/config/` row holds a secret |
-| `TestConfigCutover_RowsGone` | after M2a the four rows are gone and the blob holds only class-`i` fields; after M6 no `setting:config_blob` remains; every key range outside the listed keys is byte-identical before and after (14 E3) |
+| `TestConfigCutover_RowsGone` | after M2a the four rows are gone and the blob row, still an active books claim, holds only class-`i` fields, with no moved field and no class-`i` secret left in it; after M6 no `setting:config_blob` remains; every key range outside the listed keys is byte-identical before and after (14 E3) |
 | `TestConfigCutover_KeyGuard` | rows present and no key file: boot fails naming the file and the override, nothing written; with the override the rows are quarantined and read "must be re-entered" |
 | `TestConfigCutover_QuarantineNotDrop` | the unknown blob field and an invalid value are quarantined and reported; every M2 quarantine record is sealed with the keyring, and no quarantine record holds a plaintext or raw value |
 | `TestConfigCutover_GapFillStripped` | after M2b the file holds no managed key and keeps every other key; the checkpoint's copy holds the original; a crash between M2a and M2b strips it at the next boot |
 | `TestConfigCutover_Idempotent` | a second boot over a finished store runs nothing; the crash matrix over M2a and M2b leaves HEAD's rows or the finished result |
-| `TestConfigCutover_NoPlaintextSecretOnDisk` | a canary secret planted in every HEAD form before the upgrade appears in no file under the live DB directory, the state directory or the gap-fill file after M2, M6 and the forced compaction M8; the retained checkpoint is the one exception, until it is deleted after 7 days or pruned (D12 (d)) |
-| `TestConfigCutover_RestoreDrill` | restoring the checkpoint offline and booting the R1 binary reads the original blob, rows and gap-fill file |
+| `TestConfigCutover_NoPlaintextSecretOnDisk` | a canary secret planted in every HEAD form before the upgrade appears in no file under the live DB directory, the state directory or the gap-fill file after M2, M6 and the forced compaction M8; the retained checkpoint is the one exception, until the sweeper deletes it 7 days after it stops being needed (05-storage §5S.3.12) or it is pruned (D12 (d)) |
+| `TestConfigCutover_RestoreDrill` | restoring the checkpoint offline and booting the pre-freeze release's binary reads the original blob, rows and gap-fill file, each back at the path the checkpoint record names |
 
 **Release note (R2, config and secrets).** "Settings and secrets move into a new store at the first start of this
 release, which takes longer. Old environment-variable and configuration-file names are no longer read: a start
@@ -1274,7 +1317,8 @@ list (09). It is **generated** from HEAD's code, never maintained by hand:
    `TestRenameTable_Golden` compares the generator's output (per row: HEAD name, retired names, canonical path,
    canonical env name, blob field, class, `Convert`, and the refuse-or-warn verdict of each retired name under
    §1.3.6) with `internal/books/cutover/testdata/rename_table.golden`; `TestRenameTable_EveryKeyRegistered` asserts
-   that every canonical path of class `k` or `s` is a registered key of R2's binary.
+   that every canonical path of class `k` or `s` is a registered key of the build under test, on every PR from F3
+   (every core section is registered from F2, §1.12.1; IMPL-1).
 
 **Section table** (books rows):
 
@@ -1439,7 +1483,7 @@ of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow �
 | `owner_email` | blob | `modules.books.identity.owner_email` | k | |
 | `abs_api_enabled` | blob | `modules.books.abs.api_enabled` | k | |
 | `abs_auth_modes` | blob | `modules.books.abs.auth_modes` | k | |
-| `abs_jwt_secret` | env/file | `modules.books.abs.jwt_secret` | s | value kept (D12 (c)) |
+| `abs_jwt_secret` | env/file | `modules.books.abs.jwt_secret` | o | `ProtectOperator` secret, never stored (SEC-6, §1.3.7); value kept (D12 (c)) |
 | `abs_access_token_ttl` | blob | `modules.books.abs.access_token_ttl` | k | |
 | `abs_refresh_token_ttl` | blob | `modules.books.abs.refresh_token_ttl` | k | |
 | `abs_session_max_ttl` | blob | `modules.books.abs.session_max_ttl` | k | |
@@ -1454,7 +1498,7 @@ of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow �
 | `public_base_url` | env/file | `core.http.public_base_url` (coined) | o | |
 | `cf_account_id` | env/file | `modules.books.cfguests.account_id` | o | |
 | `cf_guests_policy_id` | env/file | `modules.books.cfguests.guests_policy_id` | o | |
-| `cf_policy_api_token` | env/file | `modules.books.cfguests.policy_api_token` | s | |
+| `cf_policy_api_token` | env/file | `modules.books.cfguests.policy_api_token` | o | `ProtectOperator` secret, never stored (SEC-6, §1.3.7) |
 | `cf_guest_service_tokens` | env/file | `modules.books.cfguests.guest_service_tokens` | o | |
 | `cf_service_auth_policy_id` | env/file | `modules.books.cfguests.service_auth_policy_id` | o | |
 | `invite_email_service_token` | env/file | `modules.books.cfguests.invite_email_service_token` | o | |
@@ -1528,7 +1572,7 @@ Counts come from the rename table's golden, not from hand maintenance.
 - **Retired names:** every other name the rename table lists (the `AutomaticEnv` and `BindEnv` names, the flat
   file keys and `ABK_*`), handled by §1.3.6: a protected or secret key's name refuses boot naming the canonical name,
   any other one warns. Examples of each: `DATABASE_PATH` (→ `ABO_CORE_STORAGE_PATH`, `ProtectOperator`),
-  `ENABLE_AUTH` (→ `ABO_CORE_AUTH_MODE`, `ProtectOwner`), `ABS_JWT_SECRET` (→ `ABO_BOOKS_ABS_JWT_SECRET`, a secret,
+  `ENABLE_AUTH` (→ `ABO_CORE_AUTH_MODE`, `ProtectOwner`), `ABS_JWT_SECRET` (→ `ABO_BOOKS_ABS_JWT_SECRET`, a `ProtectOperator` secret,
   whose **value** the operator keeps, because the ABS phone apps' tokens are signed with it, D12 (c)),
   `BASIC_AUTH_PASSWORD` (→ `ABO_CORE_HTTP_BASIC_GATE_PASSWORD`, a secret), `ABK_STATE_DIR`
   (→ `ABO_CORE_PATHS_STATE_DIR`, `ProtectOperator`) refuse; `FP_PARALLEL_WORKERS`
@@ -1598,7 +1642,8 @@ ABO's, 05-authn). 09's R2 tables reference this keyring instead of describing th
 `marshalConfigBlob` strips only boot-only keys, `persistence.go:2126-2139`). The last column says what the R2
 cutover step M2 does with each (§1.12.2). "—" means HEAD reads the field only from env or file (a `json:"-"`
 field): nothing is stored, so nothing migrates, and its retired env name refuses boot (§1.3.6) until the operator
-renames it; from R2 the secret may also be stored, encrypted, under its canonical name.
+renames it. From R2 the SMTP password may also be stored, encrypted, under its canonical name; the ABS JWT secret
+and the Cloudflare policy token may not: they are `ProtectOperator` and stay operator-only (§1.3.7; SEC-6).
 
 | Field (JSON key) | Anchor | At rest today | Canonical name (secret) | M2 |
 |---|---|---|---|---|
@@ -1614,9 +1659,9 @@ renames it; from R2 the secret may also be stored, encrypted, under its canonica
 | `metadata_sources[].credentials` (map) | `config.go:154` | plaintext `config_blob` | `integrations.metadata.<source id>.credentials.<k>` (one secret per entry) | the same, per entry |
 | `plugins.webhook` `secret` (HMAC signing key) | `internal/plugins/webhook/plugin.go:58` | plaintext `config_blob` | `integrations.notify.webhook-<n>.secret` (the one family-level value, written under every instance's name, 05-notify §10) | the same, one record per instance |
 | other `plugins[].settings` (free-form map) | `config.go:244-247` | plaintext `config_blob`; may hold credentials (unknowable) | `modules.books.plugins.<id>.settings` (one record, no key) | encrypted as one record and reported; `internal/plugin` is retired (02 N4) |
-| `abs_jwt_secret` | `config.go:1636` (`json:"-"`) | env / viper file only | `modules.books.abs.jwt_secret` | — (its value must stay the same: it signs the ABS apps' tokens, D12 (c)) |
+| `abs_jwt_secret` | `config.go:1636` (`json:"-"`) | env / viper file only | `modules.books.abs.jwt_secret` | — (its value must stay the same: it signs the ABS apps' tokens, D12 (c)); `ProtectOperator`, never stored (SEC-6) |
 | `smtp_password` | `config.go:1678` (`json:"-"`) | env / viper file only | `integrations.notify.email.password` | — |
-| `cf_policy_api_token` | `config.go:1688` (`json:"-"`) | env / viper file only | `modules.books.cfguests.policy_api_token` | — |
+| `cf_policy_api_token` | `config.go:1688` (`json:"-"`) | env / viper file only | `modules.books.cfguests.policy_api_token` | —; `ProtectOperator`, never stored (SEC-6) |
 | userinfo in URLs (`openai_base_url`, `whisper_remote_url`, `ai_endpoints[].url`, `embedding.base_url`) | `config.go:1222,1319`, `ai_endpoints.go:40` | plaintext if an operator embeds `user:pass@` | `schema:"format=uri"` validation **rejects** userinfo; credentials go in a sibling `secrets.Ref` | M2 stages the URL without its userinfo and keeps the userinfo as one encrypted record `<key path>.userinfo` (no key), reported with the quarantine records, so the operator moves it into the instance's credential field; no plaintext credential stays in a URL or in quarantine |
 
 The `<instance>` of each migrated singleton is fixed by the integrations table ([05-metadata](05-metadata.md)
@@ -1846,6 +1891,18 @@ var (
 3. Runtime: `Get` decrypts on demand (no plaintext cache beyond the call; callers hold `Value` briefly).
    `Put`/`Stage`/`Delete` encrypt with the active data key. No background goroutine and no timer.
 
+**The state-file table (normative; DATA-10).** These are the state files 05-storage §5S.3.12's pre-migration
+checkpoint copies. The checkpoint copies each one that exists from its **resolved** path and records its label,
+that path and its SHA-256 in the record's `state_files`. An offline restore of the checkpoint puts each file back
+at the recorded path, and it never removes a state file the checkpoint lacks (the keyring a later boot created
+stays).
+
+| Label | Resolved path | Read or written by | Releases |
+|---|---|---|---|
+| `encryption_key` | HEAD's `.encryption_key`, searched in HEAD's order: the state directory (§1.7, C15's fallback included), else HEAD's fallback `<root_dir>/.appdata/.encryption_key` (`settings.go:110-140`); books resolves the path (it reads `root_dir` from HEAD's blob with the frozen codec) and declares it to the checkpoint | read by HEAD's code (R0, R1) and by M2 only; never written by core | R0–R2; R3 deletes it at its resolved path through `legacy-state-cleanup` (§1.12.2) |
+| `keyring` | `<state_dir>/secrets.keyring` (`Options.KeyFile`) | created and read by `secrets.Open` (step 1) | from R2; the first R2 boot creates it after its checkpoint, so that checkpoint holds none |
+| `gap_fill` | `<db parent>/config.yaml` (`persistence.go:29-38`) | read by M2, stripped by M2b (§1.12.2) | R0–R2; after M2b only an operator `--config` remainder, if any |
+
 **Backups and loss (SIMP-9, SIMP2-2).** The keyring lives in the state dir (beside the database only when the
 state directory fell back there, C15). Today no backup carries the
 key (`internal/backup` archives the DB directory, `raw/12` §6; `grep` finds no key handling in `internal/backup`),
@@ -1894,8 +1951,11 @@ so a lost key file loses the secrets. Rules:
   back as `<state_dir>/secrets.keyring` (mode 0600) with the store; there is no separate import command, and the
   next `Open` loads it as the keyring-present case above. A pre-R2 archive (format `legacy-abo/0`) restores, and the
   next boot migrates it with M2, which decrypts HEAD's four encrypted rows with that install's `.encryption_key`,
-  copied into the state directory beside the archive (09's R2 checklist takes it off-host with the archive); the
-  keyring holds no HEAD key.
+  copied into the state directory beside the archive (09's R2 checklist takes it off-host with the archive), and with
+  the gap-fill values of the archive's off-host `config.yaml`, which the restore installs from `--gap-fill <file>`
+  (§1.12.2, DATA-15); the keyring holds no HEAD key. After R3 the R3 floor refuses such a store, so the owner
+  installs R2 first, restores the archive with its off-host `.encryption_key` and gap-fill file, lets R2 migrate it
+  once, then installs R3 again (09 §9.2.2).
   An archive encrypted only to the install identity needs the keyring to be
   decrypted at all; `--identity` remains only for operator-recipient identities. For an unencrypted archive, or
   one also encrypted to an operator recipient, copying the keyring back is **optional**: without it the restore
@@ -1989,8 +2049,9 @@ gap-fill copies stripped) is specified once, in §1.12.2. Code replacement:
 3. HEAD's file-only secrets (ABS JWT secret, Cloudflare policy token, SMTP password) were never stored, so nothing
    migrates. Their HEAD env names are retired secret names, so a unit that still sets one refuses to boot naming
    the canonical name (§1.3.6, §1.12.4); the operator moves the **same value** to it. For the ABS JWT secret the
-   value must not change, because it signs the tokens the ABS phone apps hold (D12 (c)). From R2 each may also be stored,
-   encrypted, through Settings.
+   value must not change, because it signs the tokens the ABS phone apps hold (D12 (c)). From R2 the SMTP password
+   may also be stored, encrypted, through Settings. The ABS JWT secret and the Cloudflare policy token may not: they
+   are `ProtectOperator` and are set only through their canonical operator names, as at HEAD (§1.3.7; SEC-6).
 
 ### 2.11 Open items
 
@@ -2324,3 +2385,14 @@ Plan-phase consistency:
   the M1, M7, M2–M6, M8 order, sealed M2's quarantine, moved the keyring export after the first boot, remapped
   `operation_timeout_minutes` and the second targets of `oauth_allowed_emails` and `scheduled.db_optimize`, renamed
   `config_alias_conflict` to `config_binding_conflict`, and re-pointed 14, D12, 06 and 05-storage citations. Final consistency sweep: `Store.SetSecrets` moved from step 5 to step 6 (P4d step 1, before `Attach`), `secrets.Open` placed at the start of P4b, and the archive-contents citation pointed at 05-backup §5B.3.1.
+
+Round 13 (2026-11-04): IMPL-1, IMPL-3, IMPL-8, DATA-1, DATA-10, DATA-13, DATA-15, SEC-6, CONFORM-1, CONFORM-3 and
+XFILE-3 (M2b kept as the owner text), CONFORM-4 and DATA-16 (as ruled), CONFORM-2 and DATA-8 (as ruled). Every core section registered from F2
+and `TestRenameTable_EveryKeyRegistered` run from F3 (§1.12.1, §1.12.3); the audit store landing at F2 (§1.3.3);
+the blob kept an active books claim until M6, M2's `Verify` checking moved fields absent (§1.12.2); M2b's
+checkpoint copy deleted (the checkpoint already holds the file); the state-file table with the fallback key path
+(§2.4); `--gap-fill` for a migrated pre-R2 archive; the ABS JWT secret and the Cloudflare policy token made
+`ProtectOperator`, class `o`, never stored, with the classifier's signing-key and token patterns; the fixture
+corpus's labelled hand-built overlay; the pre-freeze release as the rollback binary; R3's deletion of
+`.encryption_key` through the crash-labelled `legacy-state-cleanup` step; the checkpoint's deletion 7 days after
+it stops being needed.
