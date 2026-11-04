@@ -362,11 +362,14 @@ of restating it (SIMP5-8).
 | `tasks` | `tasks.Stores` (`RunStore`, `ClockStore`, `PauseStore`; [05-tasks](05-tasks.md) §5T.3.13) | exclusive | `Tasks` | runs, queues, checkpoints, schedule clocks, the pause marker | `c/tasks/` | ABO's ops-history and run families (HEAD's ops store code, in `internal/books/taskstore`) and the clock-key and pause-marker formats, divided out of HEAD's scheduler clock and pause-gate files whose tick logic and gate go to core (04; MOD5-4) | S5 |
 | `log` | `log.JournalStore` ([05-logging](05-logging.md) §3) | exclusive | `Logs` | the system log journal | `c/log/` | ABO's system log rows | S5 |
 | `library` | `library.RootSource` ([05-library](05-library.md) §5L.3.1) | routed | `Roots` | import roots (for ABO also the books root, listed read-only: its path changes only through config) | the `core.library.roots` and `core.library.mappings` config entries (no `c/library/` root records; SIMP5-1) | ABO's import-root rows and their counter, and the books root from the config blob | S7 |
-| `storage/index` | `index.DirtySet` ([05-storage](05-storage.md) §5S.3.8) | exclusive, per index | — (per index through `index.Spec.Dirty`; SIMP5-2) | full-text dirty marks | `c/index/` | ABO's dirty set, drained by both builds | S7 |
 | `integrations/ai` | `ai.JobStore` ([05-ai](05-ai.md)) | exclusive | `AIJobs` | AI batch jobs | `c/ai/` | ABO's AI job rows (books' AI result journal is plain books code over its own family, not a store interface; SIMP5-3) | S7 |
 | `integrations/providerhttp` | `providerhttp.GateStore` ([05-metadata](05-metadata.md) M2) | routed | `Gates` | throttle holds, daily quotas | `c/providerhttp/` | ABO's provider throttle and budget rows | S7 |
 | `integrations` | `integrations.InstanceStore` ([05-metadata](05-metadata.md) M1.3) | routed | `Integrations` | integration instance records | `c/integrations/` | ABO's legacy-backed instances (plugin and provider settings), rendered from the config blob by the same code as books' legacy config store (SIMP4-12) | S7 |
 | `integrations/notify` | `notify.RuleStore` ([05-notify](05-notify.md)) | routed | `NotifyRules` | global notification rules | `c/notify/` | the one legacy-backed rule over ABO's webhook settings | S7 |
+
+The full-text dirty set has no row and no `LegacyStores` field: `index.DirtySet` (05-storage §5S.3.8) is
+supplied **per index** through `index.Spec.Dirty` (nil = the native set over `c/index/`); ABO passes its
+dirty set, drained by both builds, for its index from S7, and it is exclusive per index (SIMP5-2).
 
 npm workspace `core/web/` (D6):
 
@@ -833,7 +836,7 @@ Round 5 (dispositions in `docs/plans/platform-core/reviews/spec-round-5-disposit
 - DATA5-10 — `secrets` row: the sentinel carries a fixed prefix, so an orphaned one reads as unset.
 - DATA5-16 — R1(c) keeps the one test name `TestCoreHoldsNoAppKeyNames`; `legacy_ref.fp` naming; the S2 `app.Options.LegacyConfigStore` exception.
 - SIMP5-1 — store paragraph: exclusive vs routed models, one `Covers(id string) bool` predicate; table "Model" column; `library` native half is its config entries, no `c/library/` records.
-- SIMP5-2 — store table: the dirty set is supplied per index through `index.Spec.Dirty`; no `LegacyStores.Dirty` field.
+- SIMP5-2 — store table: the `storage/index` row is removed; a note below the table says the dirty set is supplied per index through `index.Spec.Dirty`, with no `LegacyStores.Dirty` field.
 - SIMP5-4 — store paragraph: SDK interfaces carry only the native contract; legacy-only members are optional interfaces detected at P4c and deprecated with each family's cutover.
 - SIMP5-7 — §3.3 `storage/datamigrate` row and §3.4: the `Online` mode is a deferred-build member; extraction data migrations are `BootBlocking`.
 - SIMP5-8 — the §3.3 table is the one list; `secrets.LegacyStore` named in the `config` row.
