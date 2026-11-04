@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -178,6 +178,10 @@ type Pending struct {
 	From, To  string
 	AppliedAt time.Time
 	Boots     int
+	// RestartExitCode is the marker's copy of core.updater.restart_exit_code
+	// at apply; while Pending is non-nil the kernel exits a boot refusal with
+	// it instead of the floor release's 78 (5U.4, OPS5-15).
+	RestartExitCode int
 }
 
 type Updater struct{ /* unexported; one per App */ }
@@ -241,9 +245,11 @@ func (s StoreApplied) Meets(r *UpgradeRequirement) bool
 
 type ReaderCheckOptions struct {
 	// IgnoreRestoreStagedBy: a staged restore whose staged_by_build (05-backup
-	// §5B.3.4) equals this build ID does not count as restore_pending. Boot sets
-	// it to the failing build, so a restore that build staged cannot block the
-	// rollback away from it (OPS2-3); .prev then rejects that intent as foreign.
+	// §5B.3.4) equals this binary ID (Self.BinaryID, never the UI bundle's build
+	// ID; R5-7) does not count as restore_pending. Boot sets it to the failing
+	// binary's ID (the marker's to_build), so a restore that binary staged cannot
+	// block the rollback away from it (OPS2-3); .prev then rejects that intent as
+	// foreign.
 	IgnoreRestoreStagedBy string
 }
 
@@ -273,10 +279,19 @@ type Restarter interface {
 // without exec.
 func Boot(stateDir, exe string, self Self, check ReaderCheck) (BootResult, error)
 
-// Self identifies the running binary: the version and build ID its own
-// --version-json prints (the build ID is the embedded bundle's, 05-http-api
-// §4.2; "dev" when nothing is embedded).
-type Self struct{ Version, Build string }
+// Self identifies the running binary: its version and its BINARY ID, the
+// values its own --version-json prints as version and binary_id (R5-7, FE5-3).
+// The binary ID is computed once by the kernel before P−1 (06 §6.5.1) from
+// app.Options.Version and the SHA-256 of the running executable
+// (os.Executable, read once); it needs no ldflags and no .git, so every
+// build path yields one, and two binaries differ in it whenever their bytes
+// differ. It is opaque and compared only for equality. It is NEVER the UI
+// bundle's build ID (07 §7.6.3; X-App-Build, ui_build_id), which is "dev" for
+// every API-only build and every app without an embedded shell bundle, so it
+// cannot tell two such binaries apart. The same value is the binary identity
+// storage and backup record (05-storage's served ledger build and self-served
+// record, 05-backup's StagedByBuild).
+type Self struct{ Version, BinaryID string }
 
 type BootResult struct {
 	RolledBack      bool   // true only when exec was impossible: the previous binary was restored; the caller exits with the restart code
@@ -307,12 +322,14 @@ key. Nothing in core names a repository.
 ### Deferred-build members
 
 Built only with the first per-family cutover (05-storage §5S.3.13), the only step whose floor needs
-them; no extraction stage builds, stamps or reads them (SIMP4-4):
+them; no extraction stage builds, stamps or reads them (SIMP4-4). The first column holds only
+package-qualified Go identifiers that must not exist in non-test files under `core/`, as 03 §3.4's
+generator reads it (SIMP5-6, COR5-16); everything else deferred with them is in the last column.
 
-| Member | What it adds |
-|---|---|
-| `UpgradeRequirement.Steps` (`json:"steps"`) | storage `StepRef`s (a cutover's data migration) that must be done before the release may run |
-| `StoreApplied.StepsDone` and the `Steps` half of `Meets` | the finished data migrations, read from the applied-steps sidecar's `<owner> done <id>` lines (05-storage, deferred with them) |
+| Identifier | What it adds | Also deferred (not checked) |
+|---|---|---|
+| `updater.UpgradeRequirement.Steps` | storage `StepRef`s (a cutover's data migration) that must be done before the release may run | its manifest field `json:"steps"` in `min_upgrade_from` |
+| `updater.StoreApplied.StepsDone` | the finished data migrations, read from the applied-steps sidecar | the sidecar's `<owner> done <id>` lines (05-storage, deferred with them); `StoreApplied.Meets` (built from S8) then also checks `Steps` against `StepsDone`: a behaviour of a built method, not an identifier, so it is listed here only |
 
 ## 5U.4 Lifecycle
 
@@ -374,12 +391,13 @@ with an interactive method can turn automatic apply on. Steps, each a `rc.Phase`
    `<exe>.new` in the executable's directory (same filesystem, so the rename is atomic); fsync
    file and directory.
 5. Self-test (second check, kept): run `<exe>.new --version-json` (10 s timeout, empty environment
-   except `PATH`); it must print `{app: AppID, version: target}`, and its `build` is what step 7
-   records as `to_build`.
+   except `PATH`); it must print `{app: AppID, version: target}`, and its `binary_id` (the binary ID it
+   computes over its own bytes, which the step-8 rename does not change; never its `ui_build_id`,
+   R5-7) is what step 7 records as `to_build`.
 6. Pre-update backup through `backup.Runner` ([05-backup](05-backup.md), in the format the previous
    build can restore during the window); failure aborts unless `core.updater.require_backup=false`.
 7. Write the pending marker file `<state-dir>/updates/pending.json`
-   `{from, to, to_build, db_path, applied_at, boots: 0, max_boot_attempts}` (a file, not storage: `Boot` reads
+   `{from, to, to_build, db_path, applied_at, boots: 0, max_boot_attempts, restart_exit_code}` (a file, not storage: `Boot` reads
    it before storage opens; `db_path` is the absolute `core.storage.path` this build serves, so `Boot`
    needs no config to locate the sidecars). `max_boot_attempts` is the key's value at apply time, capped at 3 when
    `NOTIFY_SOCKET` is set (OPS2-18, 5U.5).
@@ -396,8 +414,8 @@ works in the state directory the kernel resolved once before P−1 (05-config §
 itself; the marker's `db_path` (the absolute `core.storage.path` the applying build recorded) is used
 only as `ReaderCheck`'s DB path, never to locate a directory (06 §6.5.1 P−1; OPS4-8). It first checks
 that the marker is this binary's: when the marker's `to`/`to_build` differ from the running binary's
-version and build ID (a `make deploy` or `make rollback` inside the confirmation window, or a rollback
-to a pre-S8 build, which never deletes the marker), it appends the marker to `updates/history.jsonl` as
+version and binary ID (`Self`, R5-7; the case of a `make deploy` or `make rollback` inside the
+confirmation window, or of a rollback to a pre-S8 build, which never deletes the marker), it appends the marker to `updates/history.jsonl` as
 `superseded`, deletes it and counts nothing, so a different binary is never rolled back against an old
 update (OPS4-9). Otherwise it
 increments `boots` in the marker **first**, so every boot that ends before confirmation counts as a
@@ -423,6 +441,25 @@ exits with the restart code. Otherwise boot continues; once `/readyz` has been r
 `updates/history.jsonl`) and reports the update confirmed. `<exe>.prev` is kept until the next update
 or deploy replaces it, so an admin can roll back manually (`POST .../rollback`, which runs the same
 `ReaderCheck` first and refuses with its reason).
+
+**Failed boots keep the rollback evidence (R5-5).** The boots `Boot` counts as failed are exactly the
+boots that end after storage opened and before the build was ready. None of them erases what the
+store records about the previous binary: 05-storage's served ledger keeps the previous boot's record
+and replaces it only after every boot step that reads it has committed (§5S.3.7), so a new binary
+that fails at P4d and is rolled back by `Boot` leaves the duty and foreign-open evidence for the next
+boot intact, and a roll-forward after it still appends the journal `gap` line and revokes the
+pre-rollback sessions (05-backup, 05-authn). Both records name the binary by its binary ID (`Self.BinaryID`).
+
+**Floor refusals under a restart-preventing unit (OPS5-15).** `Boot`'s count relies on the supervisor
+restarting a refused boot. A unit that stops on the floor release's distinct exit code
+(`RestartPreventExitStatus=78`, 09 §9.2.2) would leave an updater-applied release that refuses the
+store with `ErrUpgradeFloor` stopped instead of rolled back. So while `pending.json` names the running
+binary (`to`/`to_build` = `Self`, so `BootResult.Pending` is non-nil), the kernel exits a boot refusal
+with the marker's `restart_exit_code` (`Pending.RestartExitCode`, default 75; the apply-time copy, as for
+`max_boot_attempts`) instead of 78, and `Boot` reaches `max_boot_attempts` and rolls
+back as for any other refusal; without a marker naming it, 78 stands (`TestBoot_FloorRefusalUnderPendingRestarts`).
+Step 3's stepping-stone check makes this path rare; it is the backstop when `StoreState` and the boot
+disagree.
 
 **No level raise while an update is unconfirmed (OPS2-2).** A `RaisesLevel` step (a books format
 change, or a later per-family cutover; the extraction itself has none, R3-1) may already have its
@@ -564,7 +601,7 @@ whole-archive buffering) and honour `rc.Context()` until the swap phase.
 | `core.updater.confirm_after` | duration | 2m | yes | — |
 | `core.updater.max_boot_attempts` | int | 3 (≤ `StartLimitBurst` − 2; capped at 3 when `NOTIFY_SOCKET` is set) | yes (copied into the marker at apply; `Boot` reads the copy) | — |
 | `core.updater.restart_mode` | `exit`/`exec` | `exit` | yes | `ProtectAdmin` |
-| `core.updater.restart_exit_code` | int | 75 | yes | `ProtectAdmin` |
+| `core.updater.restart_exit_code` | int | 75 | yes (copied into the marker at apply; a boot refusal under a pending marker exits with the copy, 5U.4) | `ProtectAdmin` |
 | `core.updater.schedules.check` | `tasks.ScheduleConfig` | `{enabled: true, every: 1h}` (current 60 min) | yes | — |
 | `core.updater.schedules.apply` | `tasks.ScheduleConfig` | `{enabled: true, window: "nightly", order: 0}` | yes | `ProtectAdmin` |
 
@@ -620,6 +657,8 @@ The `/api/v1/update/*` paths are aliases for the compatibility window (09 §9.2.
 | `TestBoot_RollbackBlockedWhenPrevRefusesStore` (fake `.prev` reporting a lower format/level) | OPS-6 |
 | `TestBoot_CorruptMarker` | marker safety |
 | `TestBoot_IgnoresMarkerOfAnotherBuild` (marker `to_build` ≠ the running build: appended to `history.jsonl` as `superseded`, deleted, no boot counted, no rollback) | OPS4-9 |
+| `TestSelf_BinaryIDDistinguishesAPIOnlyBuilds` (two `make build-api` binaries of one version with different code: equal UI build ID `dev`, different binary IDs; a marker from the first is `superseded` on the second; a self-test's `to_build` is its `binary_id`, never its `ui_build_id`) | R5-7, FE5-3 |
+| `TestBoot_FloorRefusalUnderPendingRestarts` (fake supervisor that does not restart exit 78: an applied release refusing with `ErrUpgradeFloor` exits 75 while the marker names it and `Boot` rolls back after the attempts; without a marker it exits 78) | OPS5-15 |
 | `TestBoot_UsesKernelStateDirMarkerOnlyForDBPath` (a marker naming another `db_path` never changes the state directory; `ReaderCheck` receives that path) | OPS4-8 |
 | `TestBoot_ConfigRefusalCountsAsFailedBoot` (P0 `*RetiredAliasError` on every boot → rollback after the attempts), `TestBoot_RunsBeforeRestoreSwap_IgnoresOwnStagedRestore` | OPS2-3 |
 | `TestBoot_NoLevelRaiseWhilePending` (level-raising release, first boot fails readiness → `Boot` rollback allowed; R-test cell d') | OPS2-2 |
@@ -733,3 +772,10 @@ Round 4:
 - OPS4-17 — describe-suffixed current versions are local builds: not compared, no scheduled apply, manual apply only of a named version; `Status.LocalBuild`; error row and test.
 - DATA4-18 — the stepping-stone refusal is scoped to S0+ updaters; what a pre-S0 auto-updating install sees on the floor release is stated.
 - SIMP4-4 — `UpgradeRequirement.Steps`, `StoreApplied.StepsDone` and the step half of `Meets` moved under "Deferred-build members"; manifest `min_upgrade_from` = `{release, owners}`.
+
+Round 5:
+
+- R5-7 / FE5-3 — `Self.Build` renamed `Self.BinaryID`, the binary ID (version + SHA-256 of the executable, computed by the kernel before P−1), never the UI bundle's build ID; used for the marker's `to_build`, the self-test (`binary_id` from `--version-json`), `IgnoreRestoreStagedBy`, and named as the identity storage and backup record; `TestSelf_BinaryIDDistinguishesAPIOnlyBuilds`.
+- R5-5 / COR5-3 / DATA5-6 (reference) — "Failed boots keep the rollback evidence": boots `Boot` counts as failed do not erase the served ledger's previous record, which 05-storage replaces only after every reading step committed.
+- SIMP5-6 / COR5-16 — "Deferred-build members" table: first column only package-qualified identifiers (`updater.UpgradeRequirement.Steps`, `updater.StoreApplied.StepsDone`); the built `Meets` and non-identifier items moved to an "Also deferred (not checked)" column.
+- OPS5-15 (consequence) — while the marker names the running binary a boot refusal exits 75, not 78, so a `RestartPreventExitStatus=78` unit still lets `Boot` roll back; `TestBoot_FloorRefusalUnderPendingRestarts`.

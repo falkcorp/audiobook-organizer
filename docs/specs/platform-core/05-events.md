@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-events.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 6dbdef8e-e3f3-4088-bdb9-ba37a706165d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -357,7 +357,11 @@ func (tx *Tx) Batch() *storage.Batch
 // -- in the relay batch through Executor.StartIn (the relay's own starter;
 // core services use tasks.Stager, COR3-8), with Trigger Outbox. The run's rows
 // are staged by whichever tasks.RunStore serves the install, bound to the same
-// batch by participant binding (05-tasks 5T.3.13, R4-1). A module kind's
+// batch by participant binding (05-tasks 5T.3.13, R4-1). Insert's uniqueness
+// precondition is an Expect over that store's Serialized run families (R5-4),
+// checked when the relay batch commits: a lost precondition fails the whole
+// batch, cursor advance included, so the message is redelivered and nothing
+// is half-applied. A module kind's
 // run is stamped with that module's system actor, as Stager does (SEC2-15).
 // req.Mode must be ModeLive or ModePreview (unset: tasks.ErrModeUnset, a
 // programming error that dead-letters). The run carries its own kind's
@@ -738,3 +742,7 @@ Round 4:
 - COR4-14 — `Stage` takes intake ULIDs from one monotonic generator per `Outbox`, so intake order is `Stage` call order within a process and same-batch messages of one key are delivered in that order; `TestStageOrderWithinBatch`.
 - COR4-15 — deferred download topic renamed `core.download.item.transitioned.v1`; the notify delivery topic is `core.notify.delivery.requested.v1` (test row); both now follow 03's `<noun>[.<qualifier>].<verb-past>` grammar.
 - R4-1 (consistency) — `Tx.StartRun`'s run rows are staged by whichever `tasks.RunStore` serves the install, bound to the relay batch; the outbox itself is unaffected (`c/outbox/` is core's own keyspace).
+
+Round 5:
+
+- R5-4 / DATA5-1 (consistency) — `Tx.StartRun`: the run store's `Insert` precondition is an `Expect` over its `Serialized` run families, checked at the relay batch's commit; a lost precondition fails the batch and the message is redelivered.

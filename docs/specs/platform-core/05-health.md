@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -187,15 +187,22 @@ component `core.startup.<token>` with `StatusDegraded`.
 
 **Status topic.** From **S8** (with the probes and routes, 5H.10), `health` declares
 `core.system.status-changed.v1` in the one catalog ([05-events](05-events.md)); no earlier build
-declares it, so before S8 05-realtime's legacy projection A must not subscribe to it and carries
-HEAD's 5-second `system.status` frame from a books topic instead (05-realtime §4.9, COR4-7). Bus only, `Realtime{Coalesce: 1s}`, `Permission` `core:system.status`
+declares it. Bus only, `Realtime{Coalesce: 1s}`, `Permission` `core:system.status`
 ([05-rbac](05-rbac.md) §4.8 seeds it to `editor` and `viewer`). Its payload is exactly the
 `GET /api/core/v1/system/status` body, `{ready, not_ready[]}` with fixed `<component>:<reason>`
 tokens — never `Detail`, durations, versions or counts. It is published when `Ready()` or the set of
-not-ready tokens changes, and once with `ready:false` when shutdown starts; the shell's status banner
-and, from S8, the legacy stream A `system.status` projection read it ([05-realtime](05-realtime.md)
-§4.7); the frame's payload then changes from HEAD's counters to `{ready, not_ready}`, a change the
-compat ledger records (COR4-7).
+not-ready tokens changes, and once with `ready:false` when shutdown starts.
+
+**Stream A's `system.status` frame (COR4-7, COR5-9; this paragraph is the authoritative statement).**
+The status topic is a **native-stream topic only**: its readers are the shell's status banner and
+any native-stream subscriber holding `core:system.status` ([05-realtime](05-realtime.md) §4.7). It is
+**never** added to 05-realtime's legacy projection A, at S8 or later. Stream A's `system.status`
+frame keeps HEAD's 5-second payload (`{books, folders, memory_alloc, goroutines, timestamp}`,
+`internal/server/server_lifecycle.go:404-441`) for the whole compatibility window, fed from S6 by books' catalog topic
+`books.system.status-ticked.v1` (a books worker that takes over HEAD's ticker, 05-realtime §4.9) and
+before S6 by HEAD's own hub; so the frame's contents never change at any stage, no compat-ledger row
+exists for it, and a legacy client that reads stream A sees no S8 change.
+`TestProjectionTopicsExistAtStage` (05-realtime) asserts it with the S6 and the S8 catalogs.
 
 **Probe paths are exact (FE2-6).** The liveness path is `/livez` everywhere (05-http-api uses the same
 name). `/livez` and `/readyz` are `Router.Infra` exact patterns, and their first segments, with
@@ -636,3 +643,7 @@ Round 4:
 - COR4-7 — the status topic is declared from S8 only; before S8 projection A carries books' status frame; the S8 payload change is recorded in the compat ledger.
 - MOD4-18 — ABO's search and store-open code receive `ExtendStart` as an injected `func(step string)` (`IndexService`, `serve`), never by importing `module` or `app` below layer 6.
 - MOD4-3 — open item 3: `/metrics` ownership per stage is 05-metrics'; `health` serves none; the `core.metrics` bundle section exists from S8.
+
+Round 5:
+
+- COR5-9 (COR4-7 residue) — 5H.3.3 "Stream A's `system.status` frame" is the authoritative statement: the status topic is native-stream only and never added to projection A; stream A's frame keeps HEAD's payload at every stage (books' `books.system.status-ticked.v1` from S6); no compat-ledger row; the "from S8 the frame's payload changes" sentence deleted (supersedes the round-4 COR4-7 line's compat-ledger clause).
