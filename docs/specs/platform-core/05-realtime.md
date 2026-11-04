@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-realtime.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 9f4f16ae-e4d9-4fd1-a6df-e409e07602ad -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -70,23 +70,32 @@ import (
 
 // There is no realtime.Topic and no realtime permission. A topic is streamed
 // when its events.TopicSpec has Realtime != nil; its permission is
-// TopicSpec.Permission and its row filter TopicSpec.Visible (05-events).
+// TopicSpec.Permission, its row filter TopicSpec.Visible and its redactor
+// TopicSpec.Redact (05-events). Redaction is a property of the topic,
+// declared by the topic's owner in its catalog entry, core topics included
+// (COR2-2): there is no separate redactor registration, so no module can
+// attach a redactor to a topic it does not own and no owner can forget one.
+//
+// events.RedactFunc (declared in 05-events so events imports nothing of
+// realtime) reduces a payload for a subscriber lacking a scope (today's
+// withUserText, internal/server/handlers/opsv3/events.go:609-616):
+//   type RedactFunc func(who rbac.Checker, payload json.RawMessage) json.RawMessage
+// It is called on the subscriber's goroutine; it must be fast and must not block.
 
-// RedactFunc optionally reduces a payload for a subscriber lacking a scope
-// (today's withUserText, internal/server/handlers/opsv3/events.go:609-616).
-// Called on the subscriber's goroutine; must be fast and must not block.
-type RedactFunc func(who rbac.Checker, payload json.RawMessage) json.RawMessage
-
-// Registrar is the module-scoped handle a module receives (06 Registrar
-// "realtime exposure"); only the kernel builds it.
+// Registrar is the module-scoped handle a module receives as
+// module.Registrar.Realtime() (06); only the kernel builds it.
 type Registrar interface {
-	// Redact attaches a redactor to one of the caller's OWN Realtime topics.
-	// Errors (unknown topic, foreign namespace, topic without Realtime, duplicate)
+	// Projection records a legacy framing of the hub owned by the calling module
+	// (COR2-1) and returns its handler at once, during P6. The handler is lazy:
+	// it is bound to the hub, whose catalog subscriptions are attached in P7,
+	// and answers 503 + Retry-After until the router is built (P8). The module
+	// serves it from its own route table (books: three gin manifest routes,
+	// §4.9). Errors (duplicate Name, unknown topic, topic without Realtime)
 	// abort boot.
-	Redact(topic string, fn RedactFunc) error
+	Projection(p LegacyProjection) (http.Handler, error)
 }
 
-// Hub is created by the kernel, one per App (R5).
+// Hub is created by the kernel in P5, one per App (R5).
 type Hub struct{ /* unexported */ }
 
 func NewHub(opts Options, deps Deps) *Hub
@@ -116,9 +125,8 @@ type Deps struct {
 // CoreGroup with Perm rbac.AnyAuthenticated and HandleRaw).
 func (h *Hub) Handler() http.Handler
 
-// Projection serves a legacy framing of the same hub (§4.9); used only by the
-// books module's legacy aliases during the compatibility window.
-func (h *Hub) Projection(p LegacyProjection) http.Handler
+// Registrar returns the module-scoped handle for moduleID (kernel only, P6).
+func (h *Hub) Registrar(moduleID string) Registrar
 
 type LegacyProjection struct {
 	Name      string                                 // "a", "b", "c" (metrics, compat ledger)
@@ -157,11 +165,12 @@ var (
 
 ### 4.1 Subscription
 
-`GET /api/core/v1/events?topic=<pattern>[&topic=…][&key=<entity key>][&last_event_id=<id>]`
+`GET /api/core/v1/events?topic=<pattern>[&topic=…][&exclude=<pattern>…][&key=<entity key>][&last_event_id=<id>]`
 
 - `topic` patterns: exact (`core.task.run-changed.v1`), module wildcard (`books.*`), or all (`*`,
   the default). Wildcards expand to the catalog's Realtime topics the principal may see **now**;
-  topics are fixed at boot.
+  topics are fixed at boot. `exclude` removes topics from the expansion (same pattern grammar); the
+  shell's leader stream uses `topic=*&exclude=core.task.log-appended.v1` (§4.8 item 7, FE2-21).
 - An explicitly named topic the principal lacks permission for → 403 `topic_not_permitted`
   (fail closed, visible). Wildcard expansion silently omits topics the principal cannot see.
 - `key` narrows to one entity (replaces stream A's `?operation=<id>` and lets the UI follow one
@@ -213,7 +222,7 @@ For each queued entry the subscriber goroutine checks, in order: the topic's cat
 against the principal's checker (`Checker.Satisfies`, so confinement and `Sensitive` apply, 05-rbac
 §4.4 — already guaranteed at subscribe time for explicit topics, rechecked when
 `core.rbac.changed.v1` bumps the generation); the catalog `Visible(ctx, checker, envelope)`; then
-the topic owner's `RedactFunc`. Filtering happens at **send** time, not publish time, so a single
+the catalog's `TopicSpec.Redact`, declared by the topic's owner. Filtering happens at **send** time, not publish time, so a single
 published event is evaluated once per subscriber with that subscriber's current rights, and
 replayed ring entries are filtered exactly like live ones (stream C's rule, `opsv3/events.go:569-574`).
 
@@ -224,7 +233,10 @@ required `core:tasks.view`.
 ### 4.5 Backpressure and caps
 
 - Publish path: the hub holds one raw bus subscription per Realtime topic; the payload is the bus's
-  JSON (encoded once per publish, 05-events). Under a mutex it appends to the ring, then for each
+  JSON (encoded once per publish, 05-events). A Realtime topic is therefore always a bus topic: the
+  hub never sees a `Durable` (outbox) topic, and 05-events rejects `Realtime` on a `Durable` entry at
+  registration ("declare a companion bus topic"), so no topic boots that silently streams nothing
+  (COR2-17). Under a mutex it appends to the ring, then for each
   subscriber appends to its queue and non-blocking-signals its wake channel (capacity 1). No
   goroutine per publish, no blocking send, no per-publish allocation per subscriber beyond a slice
   append.
@@ -244,9 +256,14 @@ required `core:tasks.view`.
   separate `MaxLegacy` bucket (default 16), both 429 + `Retry-After`. Today each tab opens two
   legacy streams (`App.tsx:120,137`), and the same user's phone and desktop share a bucket; with a
   cap of 4 the third tab had dead realtime. The shell opens **one native stream per browser per
-  app** (tab leader election, 07 §7.9), which keeps HTTP/1.1 deployments clear of the browser's six
-  connections per host; the caps assume it but do not depend on it. Auth-disabled principals share
-  one bucket bounded only by `MaxClients`.
+  app** (tab leader election, §4.8 item 7, 07 §7.9), which keeps HTTP/1.1 deployments clear of the
+  browser's six connections per host. The election must work where that limit actually bites:
+  HTTPS listeners negotiate HTTP/2 (`server_lifecycle.go:903-1078`), so the six-connection limit is
+  a **plain-HTTP** LAN problem, and `navigator.locks` (Web Locks) exists only in secure contexts
+  (HTTPS or loopback). The caps therefore assume the election but do not depend on it: in the
+  last-resort per-tab mode (§4.8 item 7) a browser holds at most one stream per visible tab plus one
+  keyed log stream, well inside `MaxPerBucket` (16). Auth-disabled principals share one bucket
+  bounded only by `MaxClients`.
 
 ### 4.6 Credential lifetime
 
@@ -269,8 +286,15 @@ legacy projections consume them.
 
 | Topic | Owner | Permission (catalog) | Payload | Replaces |
 |---|---|---|---|---|
-| `core.task.run-changed.v1` | 05-tasks | `AnyAuthenticated` + `Visible` = definition `View` | run view with progress, workers, current item; books' redactor hides user-identifying text without `core:users.view` | stream C `run`, stream B `op.created/updated/current_item/terminal`, stream A `operation.progress/status` |
+| `core.task.run-changed.v1` | 05-tasks | `AnyAuthenticated` + `Visible` = definition `View` | run view with progress, workers, current item; the topic's own `TopicSpec.Redact` = `tasks.RedactRunView`, declared by `tasks`, blanks `RunView.Current` (every worker's current-item label) and any run error text unless the subscriber holds `core:users.view` — the same function runs in the `GET /api/core/v1/tasks/runs[/{id}]` serializer, so REST and stream agree (COR2-2) | stream C `run`, stream B `op.created/updated/current_item/terminal`, stream A `operation.progress/status` |
 | `core.task.log-appended.v1` | 05-tasks | as above | log line | stream A `operation.log`, B `op.log` |
+
+**Successor scope of HEAD's gate (COR2-2).** HEAD withholds run error text and current-item labels
+from callers without `users.manage`, because a label can name a user (`opsv3/events.go:609-616`,
+`view.go:59-64`). The canonical successor is `core:users.view`: 05-rbac §6.1 maps `users.manage` to
+`core:users.manage`, which implies `core:users.view`, and by default only `admin` and holders of
+the `users.manage` expansion hold it. A custom role holding only `core:users.view` already sees the
+user list, so seeing a username inside a label discloses nothing more.
 | `core.system.status-changed.v1` | 05-health | `core:system.status` (seeded to `editor`/`viewer`, 05-rbac §4.8) | readiness and maintenance tokens only | stream A `system.status` |
 | `books.book.changed.v1` | books | `books:view` | `{kind: created|updated|deleted, id}`, `Key` = book ID, `Coalesce: 250ms` | stream A `books.changed` (`book_changes.go:18-32`) |
 
@@ -295,20 +319,48 @@ cross-origin SSO redirect it fails with no status. The server guarantees, and th
 3. **Backoff.** The client reconnects with 3 s doubling to 60 s and jitter, and never sooner than a
    `Retry-After`; there is no "give up after 5" (today's manager, `eventSourceManager.ts:163`):
    realtime is a hint, so the client keeps trying and shows a status chip.
-4. **SSO redirect.** The request uses `redirect: "manual"`; an opaque-redirect response is treated
-   like the API client's `ApiAuthRedirectError` (05-http-api §7).
+4. **SSO redirect (normative, FE2-20).** The request uses `redirect: "manual"`. Any response with
+   `type === "opaqueredirect"` (status 0) is an SSO bounce and is raised as the API client's
+   `ApiAuthRedirectError` (05-http-api §7). `response.redirected` is never consulted: with
+   `redirect: "manual"` it is never true, and with the default `follow` a cross-origin SSO redirect
+   fails CORS as a `TypeError` before any flag can be read. 07 §7.9.2 refers to this item.
 5. **No named events.** All frames arrive as unnamed messages (§4.2), so the same parser serves a
    plain `EventSource` fallback.
 6. **Reset handling.** On `core.stream.reset.v1` the client invalidates the affected stores and
    refetches over REST; on `core.stream.closed.v1` it reconnects with backoff (shutdown: shows the
    backdrop first).
+7. **One stream per browser, also over plain HTTP (FE2-2, FE2-21).** Tabs elect one leader per app
+   that holds the stream and fans frames out to the other tabs over a `BroadcastChannel`:
+   - **Election.** Web Locks (`navigator.locks.request`) when `navigator.locks` exists (secure
+     contexts); otherwise a `BroadcastChannel` heartbeat election, which works in insecure contexts:
+     the leader announces every 2 s, followers take over after 3 missed beats, ties are broken by the
+     lowest tab ID. A leader releases leadership on `pagehide` and on `freeze` (a frozen page would
+     otherwise keep its lock or its claim and starve the followers), and a background leader's
+     throttled timers are covered by the 3-beat takeover.
+   - **Last resort.** If neither API exists, each tab opens its own stream only while it is visible
+     and closes it on `visibilitychange` to hidden (refetching over REST when it becomes visible
+     again), so a plain-HTTP browser never holds more than one stream per visible tab.
+   - **Subscription set.** The leader subscribes `topic=*&exclude=core.task.log-appended.v1`.
+     `useTopic` keys filter on the client. Log lines are not on the shared stream (with `*` every
+     visible run's log would reach every tab and evict the resumable window, §12 item 2): the tab
+     that shows a run's log opens its own keyed stream
+     (`topic=core.task.log-appended.v1&key=<run id>`, counted in the same bucket) or reads
+     `GET /api/core/v1/tasks/runs/{id}/log` over REST.
+   - **Test.** 07's `tabs.spec.ts` runs against a non-loopback address (the server bound to the
+     runner's LAN interface), where `isSecureContext` is false, and asserts the `BroadcastChannel`
+     election and a single open stream.
 
 ### 4.9 Legacy projections and migration timing (compatibility window)
 
-The three legacy URLs become projections of the one hub, registered by the `books` module as
-aliases (05-http-api §4.6) and recorded in the compat ledger as surface `sse` (09 §9.2.1). Their
-use is counted in `mediacore_compat_legacy_use_total{surface="sse",name=<projection>}`; a contract
-PR removes them once the window and the zero-use gate allow. No clock removes them.
+The three legacy URLs become projections of the one hub. They are **not** `httpapi.Alias`es (an
+alias re-exposes a native route of the caller's own group with the same handler; a projection has
+its own handler and the native stream lives on `CoreGroup`, COR2-1, SEC2-25). The `books` module
+obtains each handler from `Registrar.Realtime().Projection(p)` during P6 and serves it from the
+**gin legacy manifest** at the three legacy paths (`Perm: rbac.AnyAuthenticated`, as for the native
+stream; `OwnAuth: false`; per-topic permissions are applied per event inside the hub, §4.4). They are
+recorded in the compat ledger as surface `sse` (09 §9.2.1), their use is counted in
+`mediacore_compat_legacy_use_total{surface="sse",name=<projection>}`, and a contract PR removes them
+once the window and the zero-use gate allow. No clock removes them.
 
 | Legacy URL | Projection |
 |---|---|
@@ -327,15 +379,29 @@ with the client of §4.8. Projections are then removed by a contract PR under th
 Changing only the URL earlier would break every consumer, because native frames are envelopes with
 new topic names.
 
+**What feeds the legacy streams, per stage (FE2-3).** The task executor moves at S5 but the hub and
+its projections arrive at S6, so one stage needs an explicit feed:
+
+| Stages | Source of run events | Legacy streams A, B, C | UI (Activity page, `useOperationsStore`) |
+|---|---|---|---|
+| S0–S4 | ABO's operations registry and v3 runner | HEAD's three implementations, unchanged | unchanged |
+| S5 | `core/tasks` publishes `core.task.run-changed.v1` / `core.task.log-appended.v1` on the bus | still HEAD's implementations, fed by a **books-side bridge**: a bus subscriber registered by `books` at S5 translates each core task event into today's `registry.EventHub` publish (stream B), hub A's `Send*` (`operation.*`) and the v3 broker's `run` events (stream C); core never imports ABO, so the bridge lives in `books` | stays on the task **aliases** (legacy REST shape) and the legacy streams, so REST and stream use one vocabulary; S5 done-check: "Activity page shows live progress on S5" |
+| S6 | the same bus topics | the hub's three projections replace HEAD's implementations; the S5 bridge, `registry.EventHub`, hub A and the v3 broker are deleted in the S6 PR | unchanged (legacy URLs, `MaxLegacy` bucket) |
+| S9 | the same | projections kept for external consumers until their contract PR | native REST and the native stream move **together** (FE-10) |
+
 ## 5. Lifecycle
 
-1. Kernel creates the `Hub` after `auth`/`rbac`/`events` and after the events catalog is frozen;
-   modules attach redactors during registration; errors abort boot.
-2. `kernel` mounts `Handler()` through `internal/eventhttp` (`HandleRaw`, `RateDefault`, body 0) and
-   the books module mounts its projections as legacy aliases.
-3. `App.Run` starts `Hub.Run` (`wg.Go`): raw bus subscriptions, coalescer timers, invalidation
+1. **P5** (06 §6.5.1): the kernel creates the `Hub` after `auth`/`rbac`/`events` (COR2-1).
+2. **P6**: each module's `Registrar.Realtime().Projection` records its projections and returns lazy
+   handlers; books puts them in its gin manifest (§4.9). Redaction needs no registration: it is in
+   the catalog entries the modules declare (§3).
+3. **P7**: after the events catalog is frozen, the hub subscribes to every Realtime topic and binds
+   the recorded projections; errors (unknown topic, duplicate projection) abort boot.
+4. **P8**: `kernel` mounts `Handler()` through `internal/eventhttp` (`HandleRaw`, `RateDefault`, body
+   0); the projection handlers stop answering 503.
+5. `App.Run` starts `Hub.Run` (`wg.Go`): raw bus subscriptions, coalescer timers, invalidation
    listener.
-4. Shutdown: the kernel calls `Hub.Close` from `http.Server.RegisterOnShutdown` — every stream
+6. Shutdown: the kernel calls `Hub.Close` from `http.Server.RegisterOnShutdown` — every stream
    receives `core.stream.closed.v1 {"reason":"shutdown"}` (projection A: `system.shutdown`) and
    ends, so `Shutdown` is not held open by long-lived streams; `Run` returns when its context ends.
 
@@ -343,9 +409,10 @@ new topic names.
 
 | Path | Behaviour | Fail | Why |
 |---|---|---|---|
-| Redactor registration invalid (unknown or foreign topic, no `Realtime`, duplicate) | boot error | closed | owner-only |
+| Projection invalid (unknown topic, topic without `Realtime`, duplicate name) | boot error | closed | |
+| Projection handler called before P8 | 503 + `Retry-After` | closed | the hub is not yet serving (COR2-1) |
 | Anonymous request or failed credential | 401 problem with the stage-13 code (route is `AnyAuthenticated`) | closed | visible to the fetch client (§4.8) |
-| Confined principal (worker, facade key) | 403 (fails `AnyAuthenticated`, 05-rbac §4.10) | closed | |
+| Confined principal (worker key; facade keys once `arrfacade` lands) | 403 (fails `AnyAuthenticated`, 05-rbac §4.10) | closed | |
 | Explicit topic not permitted | 403 `topic_not_permitted` | closed | |
 | Unknown topic | 400 `unknown_topic` | closed | typo visibility |
 | Over caps | 503 / 429 problem + `Retry-After` | closed | resource bound |
@@ -420,7 +487,11 @@ Legacy projection use is counted by `compat` (`mediacore_compat_legacy_use_total
 | `TestHub_WriteDeadlineDisconnects` | |
 | `TestHub_FilterPanicIsContained` | |
 | `TestHub_ShutdownClosesStreams` | `Server.Shutdown` returns within drain deadline with open streams; every subscriber, any permission, gets `closed{shutdown}` (FE-10) |
-| `TestRedact_RejectsForeignOrNonRealtimeTopic` | |
+| `TestRunRedaction_SameOnStreamAndREST` | a subscriber without `core:users.view` receives `core.task.run-changed.v1` with `Current` blanked, and `GET /tasks/runs/{id}` returns the same blanked view; with `core:users.view` both carry it (COR2-2) |
+| `TestProjection_LazyHandler503UntilServing` | a projection handler obtained in P6 answers 503 before P8 and streams after (COR2-1) |
+| `TestProjection_RejectsUnknownOrNonRealtimeTopic` | |
+| `TestHub_ExcludePattern` | `topic=*&exclude=core.task.log-appended.v1` carries no log lines; a keyed log stream carries one run's lines (FE2-21) |
+| `TestS5Bridge_LegacyStreamsShowCoreRuns` (books, S5 only) | a run started on the core executor at S5 appears on streams A, B and C in today's framing (FE2-3) |
 | `TestLegacyProjection_FramesGolden` (A, B, C) | byte-for-byte legacy framing from one publish, including A's `system.shutdown` |
 | `TestNoGlobals` (archtest) | hub is per-App (R5) |
 
@@ -432,8 +503,8 @@ Legacy projection use is counted by `compat` (`mediacore_compat_legacy_use_total
 | `internal/operations/registry/bus.go` + `handlers/operations_v2.go:1063-1110` | `core.task.run-changed.v1` / `core.task.log-appended.v1` published by `core/tasks` + legacy projection B |
 | `internal/server/handlers/opsv3/events.go` broker | its algorithm becomes `core/internal/sse`; route becomes projection C |
 | `opaccess.Repairs.ForStream`/`StreamOpen` | the catalog `Visible` of the repairs topics (books) + `auth.Service.Revalidate` |
-| `withUserText` (`opsv3/events.go:609-616`) | books' `RedactFunc` on the task topics it exposes |
-| `web/src/services/eventSourceManager.ts`, `openOperationsSSE` (`api.ts:733-740`), `useOperationsStore` SSE | unchanged until the shell stage; then `@mediacore/shell`'s `useTopic(topics, {key})` and `useResync(handler)` (07 §7.9) over the fetch-based reader of §4.8, one stream per browser per app |
+| `withUserText` (`opsv3/events.go:609-616`) | `tasks.RedactRunView` as the `TopicSpec.Redact` of `core.task.run-changed.v1` and the same function in the REST run serializer (§4.7) |
+| `web/src/services/eventSourceManager.ts`, `openOperationsSSE` (`api.ts:733-740`), `useOperationsStore` SSE | unchanged until the shell stage (fed by the S5 bridge, then the S6 projections, §4.9); then `@mediacore/shell`'s `useTopic<T>(topic, onEvent, {key})` and `useResync(handler)` (07 §7.4.2, §7.9; one signature, FE2-20) over the fetch-based reader of §4.8, one stream per browser per app |
 
 ## 12. Open items
 
@@ -470,3 +541,15 @@ Round 1 (2026-11-04), findings applied to this file:
 - COR-18 / cross-cluster (R-A) — route registered by `internal/eventhttp` (§3, §5).
 - COR-19 — layer L6 per 03 v1.2.0 (§3).
 - Cross-cluster (R-E) — Protection column (§8).
+
+Round 2 (2026-11-04), findings applied to this file:
+
+- COR2-1 — `realtime.Registrar.Projection` returns a lazy handler (503 until P8); hub built in P5, projections recorded in P6 and bound in P7; books serves them as gin manifest routes, not aliases (§3, §4.9, §5, §6, §10).
+- COR2-2 — "books' redactor" deleted; redaction is the topic's catalog `TopicSpec.Redact` (`tasks.RedactRunView`), set by `tasks` on `core.task.run-changed.v1` and reused by the REST serializer; successor scope `core:users.view` stated; `Registrar.Redact` removed (§3, §4.4, §4.7, §10, §11).
+- COR2-17 — Realtime topics are bus topics; Durable+Realtime rejected by 05-events (§4.5).
+- SEC2-25 — projections described as gin manifest routes wrapping the hub, not aliases (§4.9).
+- FE2-2 — election: Web Locks, else `BroadcastChannel` heartbeat election, else per-visible-tab streams; release on `pagehide`/`freeze`; caps sized for plain HTTP; non-loopback e2e (§4.5, §4.8).
+- FE2-3 — per-stage feed table: S5 books-side bridge into the legacy hubs, deleted at S6; UI stays on aliases until S9 (§4.9, §10).
+- FE2-20 — normative manual-redirect detection; one `useTopic<T>(topic, onEvent, {key})` signature (§4.8, §11).
+- FE2-21 — leader subscribes `*` minus `core.task.log-appended.v1` via `exclude=`; per-run keyed log stream or REST (§4.1, §4.8, §10).
+- SIMP2-6 — facade keys referred to as deferred (§6).

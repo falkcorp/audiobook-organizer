@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -65,7 +65,10 @@ its own credential hashes (that is `secrets`), and does not own app protocols (A
 ## 3. Go API
 
 Package `github.com/falkcorp/mediacore/auth` (layer L4 with `rbac`, `audit`, `tasks`; imports `rbac`,
-`audit`, `entity`, `storage`, `config`, `secrets`, `log`, `metrics`, `events`, `backup` for the restore hook and revocation journal types). Subpackages:
+`audit`, `entity`, `storage`, `config`, `secrets`, `log`, `metrics`, `events`, and the leaf
+`backup/journal` (L4; imports `entity`, `storage`) for the `RestoreHook`, `RestoreContext`,
+`Revocation` and `RevocationJournal` types — not `backup` itself, which lands at 09 S8, while `auth`
+lands at S4; `events` and `backup/journal` therefore land at S4 too, COR2-9). Subpackages:
 `auth/password`, `auth/oidc`. Cloudflare Access is not a core package (§3.3: ABO's `internal/cfaccess`
 behind the authenticator extension point). Storage keyspace `c/auth/`
 (05-storage). The `_system` principal constructor lives in `core/internal/authsys` (not SDK, §3.1).
@@ -106,6 +109,10 @@ type User struct {
 	Roles           []rbac.RoleName
 	Status          UserStatus
 	CredentialEpoch int64 // bumped on password change/reset, disable, enable, factory credential reset, restore
+	// PasswordResetRequired: the stored hash may be one the user replaced after
+	// an archive was taken (§4.14 step 1, SEC2-11). Password sign-in is refused
+	// with 401 password_reset_required; the user signs in through a reset link.
+	PasswordResetRequired bool
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	Version         int64
@@ -146,7 +153,7 @@ type Principal struct {
 	User         *User        // nil only for MethodAuthDisabled
 	Method       Method
 	CredentialID string       // session public id or API key id; never a secret
-	Perms        rbac.Checker // rbac.Service.Compile(roles, key scopes, interactive) (05-rbac §4.4)
+	Perms        rbac.Checker // always built by core: rbac.Service.Compile(roles, key scopes, interactive) (05-rbac §4.4); never supplied by an authenticator (§3.3)
 	Assurance    Assurance
 	AuthTime     time.Time    // when the credential was issued / sign-in happened
 	ClientAddr   netip.Addr
@@ -228,7 +235,8 @@ type Deps struct {
 	Audit    audit.Logger
 	Secrets  secrets.Store  // OIDC client secrets, derived keys (05-config)
 	Events   *events.Bus    // publishes core.principal.invalidated.v1
-	Revocations backup.RevocationJournal // §4.12: Append before every revocation commits (05-backup §5B.3.6)
+	Revocations journal.RevocationJournal // §4.12: Append before every revocation commits (05-backup §5B.3.6)
+	Mirror   storage.Mirror // identity mirrors during the compatibility window (§11); every revocation and post-restore write is staged through it (R2-2)
 	Clock    func() time.Time
 	Log      *slog.Logger
 	Metrics  *metrics.Scope // "mediacore.auth" (05-metrics)
@@ -282,25 +290,17 @@ func (s *Service) RevokeAPIKey(ctx context.Context, actor *Principal, id string)
 type KeySpec struct {
 	Owner     UserID
 	Name      string
-	Purpose   KeyPurpose        // PurposeGeneral (zero) or PurposeFacade (§4.4, SEC-5)
-	Module    string            // required iff Purpose == PurposeFacade: the facade's module ID
 	Scopes    []rbac.Permission // REQUIRED non-empty, no wildcards (05-rbac §4.5)
 	ExpiresIn time.Duration     // 0 = default; > max = error
+	// Purpose and Module are deferred-build members (§3.5).
 }
-
-type KeyPurpose uint8
-
-const (
-	PurposeGeneral KeyPurpose = iota
-	PurposeFacade             // every scope is <Module>:arr.*; accepted only on that module's facade group
-)
 
 type KeyStatus string
 
 const (
 	KeyActive            KeyStatus = "active"
 	KeyDisabled          KeyStatus = "disabled"
-	KeyNeedsConfirmation KeyStatus = "needs_confirmation" // set by the post-restore hook (§4.14); refused until an admin re-enables
+	KeyNeedsConfirmation KeyStatus = "needs_confirmation" // set by the post-restore hook (§4.14); refused until an admin re-enables; legacy projection = the revoked form (§11)
 	KeyRevoked           KeyStatus = "revoked"
 )
 
@@ -309,8 +309,15 @@ func (s *Service) RedeemBootstrap(ctx context.Context, token string, client Clie
 
 // Compatibility surfaces and extensions build principals through this; it
 // applies status, epoch, role resolution and scope intersection exactly like
-// core credentials (G15).
+// core credentials (G15). m must be a registered method (§3.3).
 func (s *Service) PrincipalFor(ctx context.Context, u *User, m Method, scopes []rbac.Permission, epoch int64) (*Principal, error)
+
+// CheckCredentialFor applies, for a surface that authenticates itself (an
+// OwnAuth route, which stages 12-13 skip), the rules stage 12/13 would have
+// applied to p on a route requiring perm: key status and expiry, and
+// confinement — a Confined() principal is refused unless perm names one of its
+// scopes (SEC2-4; 05-http-api §8.3). Returns ErrConfined or nil.
+func (s *Service) CheckCredentialFor(p *Principal, perm rbac.Requirement) error
 
 // Middleware returns http-api stage 12 (05-http-api §4.2). It runs the
 // authenticators in order and STOPS at the first one that returns anything
@@ -324,42 +331,71 @@ func (s *Service) Middleware() func(http.Handler) http.Handler
 // from an in-memory generation table invalidated by events.
 func (s *Service) Revalidate(ctx context.Context, p *Principal) error
 
-// PostRestore implements backup.RestoreHook (05-backup §5B.3.2); the kernel
-// calls it after a restore swap, before listeners open (§4.14, SEC-16).
-// rc.Manifest.CreatedAt is the archive time; rc.Revocations yields the typed
-// backup.Revocation entries recorded after it, or is nil when the journal
-// does not cover the interval.
-func (s *Service) PostRestore(ctx context.Context, rc backup.RestoreContext) error
+// PostRestore is auth's journal.RestoreHook (05-backup §5B.3.2). It is a
+// package function, not a Service method: the kernel runs it at P4d step 5
+// (06 §6.5.1), after the identity rebuild and the journal re-apply and before
+// any service is built, over auth's keyspace handle and the identity mirror
+// (§4.14, SEC-16). rc.Revocations yields the typed journal.Revocation entries
+// after the journal offset the archive's manifest recorded before its
+// checkpoint (clock-free, DATA2-7), or is nil when the journal does not cover
+// that interval. It returns per-family counts, which audit's own hook records.
+func PostRestore(ctx context.Context, d RestoreDeps, rc journal.RestoreContext) (RestoreCounts, error)
+
+type RestoreDeps struct {
+	Store  Store          // over c/auth/ (the P4c handle)
+	Mirror storage.Mirror // identity mirrors (R2-2)
+	Clock  func() time.Time
+}
+
+type RestoreCounts map[string]int // family -> rows revoked, deleted or restricted
 ```
 
 ### 3.3 Authenticators (extension point, G11/G15)
 
 ```go
-// Authenticator inspects a request and returns a Principal, or ErrNoCredential
+// Authenticator inspects a request and returns an Assertion, or ErrNoCredential
 // to let the next one try, or another error. Any result other than
 // ErrNoCredential ends authentication for the request (a presented-but-invalid
 // credential never falls through to a weaker one); the middleware records it
 // as auth.Failure and stage 13 refuses non-Public routes with 401.
+// An authenticator never returns a Principal or a Checker (SEC2-16): stage 12
+// builds the Principal from the Assertion through PrincipalFor — status,
+// epoch, role resolution and rbac.Compile({User.Roles, Scopes, Interactive})
+// are core's — so no extension decides what the caller may do.
 type Authenticator interface {
 	Name() string
-	Authenticate(r *http.Request) (*Principal, error)
+	Authenticate(r *http.Request) (*Assertion, error)
 }
 
-// OwnerVerifier is implemented by an authenticator that can prove the
-// deployment owner (sets AssuranceOwner).
-type OwnerVerifier interface{ VerifiesOwner() bool }
+type Assertion struct {
+	User         UserID
+	Scopes       []rbac.Permission // nil = the user's role permissions
+	CredentialID string            // never a secret
+	AuthTime     time.Time
+	Owner        bool              // honoured only for an extension registered with OwnerVerifier=true (below)
+}
 
 type MethodSpec struct {
 	Method               Method // "ext:cfaccess", "books.abs"
 	Interactive          bool
-	MayChangeCredentials bool   // only extensions proving a person's own sign-in may set this
+	MayChangeCredentials bool
+	OwnerVerifier        bool   // the extension may assert AssuranceOwner
 }
 
-// Registered by app options (extensions) or module registrars (compat methods).
-type Registrar interface {
-	AddAuthenticator(a Authenticator, spec MethodSpec, order Order) error
-	AddMethod(spec MethodSpec) error // compat surfaces that authenticate themselves
+// Extension is an identity extension, registered app-level and at compile time
+// through app.Options.Authenticators (06 §6.4.5). It is the ONLY place where
+// Interactive, MayChangeCredentials or OwnerVerifier may be true.
+type Extension struct {
+	Authenticator Authenticator
+	Spec          MethodSpec // Method "ext:<name>"
+	Order         Order
 }
+
+// A module registers a compat method (a surface that authenticates itself,
+// e.g. ABS) through module.Registrar.AuthMethod(spec) (06 §6.4.3). The kernel
+// refuses it unless Method is "<moduleID>.<name>", Interactive,
+// MayChangeCredentials and OwnerVerifier are all false. The method's name is
+// what an OwnAuth legacy route names (05-http-api §8.2).
 
 type Order int // relative position; core's API-key and session authenticators are fixed at 100 and 200
 
@@ -378,17 +414,22 @@ var (
 	ErrEmailInUse         = errors.New("auth: email belongs to an account this provider may not link")
 	ErrStoreUnavailable   = errors.New("auth: credential store unavailable")
 	ErrMergeConflict      = errors.New("auth: an identity row changed since the merge preview")
+	ErrConfined           = errors.New("auth: confined credential outside its scopes")
+	ErrResetRequired      = errors.New("auth: password reset required before password sign-in")
+	ErrMethodSpec         = errors.New("auth: compat method must be <moduleID>.<name>, non-interactive, without credential or owner rights")
 )
 ```
 
 Core ships **no** identity extension. The one ABO uses, Cloudflare Access, stays in ABO as
 `internal/cfaccess` ([04](04-package-mapping.md) §2.4; G11: deployment-specific): it verifies
 `Cf-Access-Jwt-Assertion` / `CF_Authorization` (issuer, AUD, expiry, JWKS via go-oidc), resolves an
-allowlisted e-mail to a user through `auth.Service.PrincipalFor`, implements `OwnerVerifier` (sets
-`AssuranceOwner` when the owner e-mail matches), and may mark the CDN client-IP header believable for
-verified requests. ABO registers it with `Registrar.AddAuthenticator(a, MethodSpec{Method:
-"ext:cfaccess", Interactive: true}, order)`; its settings are books keys under
-`modules.books.identity.*` ([09](09-abo-on-core.md) S4).
+allowlisted e-mail to a user (its `Assertion.User`), asserts `Owner` when the owner e-mail matches,
+and may mark the CDN client-IP header believable for verified requests (from S4 it also carries the
+"local peer + verified Access assertion" branch of ABO's `client_trust.go`, 05-http-api §8.1).
+ABO registers it in `app.Options.Authenticators` as `auth.Extension{Spec: MethodSpec{Method:
+"ext:cfaccess", Interactive: true, OwnerVerifier: true}, …}`; its settings are books keys under
+`modules.books.identity.*` ([09](09-abo-on-core.md) S4). The ABS method is registered by the books
+module with `Registrar.AuthMethod(MethodSpec{Method: "books.abs"})`.
 
 v1.0.0 also specified an `auth/clientcert` mTLS authenticator. It is dropped (SIMP-23): it has no
 consumer, and the `Authenticator` extension point leaves room for it. ABO's mTLS MCP bridge stays in
@@ -398,32 +439,34 @@ ABO (§4.8).
 
 ```go
 // Store is implemented by core/internal/authstore over storage keyspace c/auth/.
+// Every write takes the caller's *storage.Batch, never a copy, so the keyspace
+// binding and the staged writes land on the batch that commits (COR2-12).
 type Store interface {
 	// users: c/auth/user/<id>, c/auth/idx/username/<fold>, c/auth/idx/email/<fold>
-	PutUser(b storage.Batch, u *User) error
+	PutUser(b *storage.Batch, u *User) error
 	GetUser(ctx context.Context, id UserID) (*User, error)
 	UserByUsername(ctx context.Context, fold string) (*User, error)
 	ScanUsers(ctx context.Context) iter.Seq2[*User, error]
 
 	// sessions: c/auth/session/h/<sha256(token)> -> record; c/auth/session/id/<publicID> -> hash; c/auth/session/u/<user>/<publicID>
-	PutSession(b storage.Batch, s *SessionRecord) error
+	PutSession(b *storage.Batch, s *SessionRecord) error
 	SessionByHash(ctx context.Context, h [32]byte) (*SessionRecord, error)
 	SessionByPublicID(ctx context.Context, id string) (*SessionRecord, error)
 	ScanUserSessions(ctx context.Context, u UserID) iter.Seq2[*SessionRecord, error]
-	DeleteSession(b storage.Batch, s *SessionRecord) error
+	DeleteSession(b *storage.Batch, s *SessionRecord) error
 
 	// api keys: c/auth/apikey/<id>, c/auth/apikey/h/<sha256(raw)> -> id, c/auth/apikey/u/<user>/<id>
-	PutAPIKey(b storage.Batch, k *APIKey) error
+	PutAPIKey(b *storage.Batch, k *APIKey) error
 	APIKeyByHash(ctx context.Context, h [32]byte) (*APIKey, error)
 
 	// invites, temp-login, bootstrap, oauth identities: all keyed by token hash
-	PutOneTime(b storage.Batch, t *OneTimeToken) error
+	PutOneTime(b *storage.Batch, t *OneTimeToken) error
 	TakeOneTime(ctx context.Context, kind OneTimeKind, h [32]byte) (*OneTimeToken, error) // atomic get+delete
-	PutIdentity(b storage.Batch, id *ExternalIdentity) error
+	PutIdentity(b *storage.Batch, id *ExternalIdentity) error
 	IdentityBySubject(ctx context.Context, provider, subject string) (*ExternalIdentity, error)
 
 	// compatibility window only (§11): native-only data keyed by legacy ID
-	PutSide(b storage.Batch, family, legacyID string, v []byte) error
+	PutSide(b *storage.Batch, family, legacyID string, v []byte) error
 }
 
 type SessionRecord struct {
@@ -438,6 +481,23 @@ type SessionRecord struct {
 	Version         int64
 }
 ```
+
+### 3.5 Deferred-build members (land with their consumer)
+
+Deferral applies to features inside built packages as well as to packages (SIMP2-6, 03 §3.4). These
+members of `auth` are specified so 08 and 10 can rely on them, and are **not built** at 09 S4:
+
+| Member | Lands with | Contract |
+|---|---|---|
+| `KeySpec.Purpose KeyPurpose` (`PurposeGeneral` zero, `PurposeFacade`) and `KeySpec.Module` | `arrfacade` (08) | a `PurposeFacade` key names a `Module`; every scope is one of that module's `<m>:arr.*` scopes (all `Confining`, 05-rbac §4.10); it is accepted only on that module's facade group (stage 12), and a general key holding `<m>:arr.*` plus anything else is refused there (08 §8.5's "every scope is arr" rule as a second check); the stored key record gains a `purpose` field that defaults to general; display adds purpose |
+| `X-Api-Key` header and `apikey` query-key extraction | `arrfacade` (08) | enabled **only** on facade groups (§4.2 step 2); httpapi's 05-logging redaction already covers `apikey` |
+| Feed token | the first TV/Movies app ([10](10-tv-movies-proof.md) G9) | a per-route opt-in credential in the query string for clients that cannot send headers (iCal, OPDS): scoped, read-only, revocable, stored hashed like a key, accepted only on routes that opt in |
+| `TestAPIKey_FacadePurposeBoundToModule`, `TestFacadeKey_RefusedOnABS` | `arrfacade` | SEC-5 |
+
+Until they land, SEC-5 holds trivially (no facade key can be minted) and HEAD's extraction rule is
+kept exactly: Bearer and the session cookie only (`APIKeyFromRequest`,
+`internal/server/middleware/auth.go:83-98`). The additions are additive and pass the API-stability
+gate; the S7 done-check (09) includes `! grep -rn 'PurposeFacade' core --include=*.go`.
 
 ## 4. Behaviour
 
@@ -471,10 +531,10 @@ one, `internal/server/middleware/auth.go:76-99`). One-time tokens never travel i
 1. If `HasUsers()` is false: bind nothing (anonymous); http-api stage 13 then allows only routes
    marked `rbac.Public` plus the setup/bootstrap routes (§4.6). **The API is no longer open while
    there are zero users** (today: everything reachable, `middleware/auth.go:165-169`).
-2. An API key presented anywhere a credential is accepted (Bearer, session cookie value, and —
-   only on facade groups — `X-Api-Key` / `apikey` query) wins, replacing anything else. Kept from
-   `middleware/auth.go:173-176`.
-3. Registered extension authenticators in `Order` (e.g. `cfaccess`). `ErrNoCredential` → next. A
+2. An API key presented anywhere a credential is accepted (Bearer or session cookie value; the
+   facade's `X-Api-Key` / `apikey` query extraction is a deferred-build member, §3.5) wins,
+   replacing anything else. Kept from `middleware/auth.go:173-176`.
+3. Extension authenticators from `app.Options.Authenticators` in `Order` (e.g. `cfaccess`). `ErrNoCredential` → next. A
    *presented* invalid assertion does not fall through — unlike today's fail-open CF binder; the
    fail-open behaviour existed only because CF was optional, and is kept by returning
    `ErrNoCredential` when no assertion is present.
@@ -489,14 +549,19 @@ cookie rule of §4.3 on Public routes. So "key plus a valid session" with an inv
 today's key-wins rule requires (`middleware/auth.go:76-99`), and never silently a session request.
 
 On success: user `Status` must be active; epoch must match (sessions, temp-login, invites); key
-must be `active` and unexpired; a `PurposeFacade` key is accepted only on its module's facade group;
-the checker is `rbac.Service.Compile({Roles, Scopes, Interactive: method.Interactive()})`.
+must be `active` and unexpired; the principal is built by core from the credential or the
+extension's `Assertion` (§3.3) — the checker is always
+`rbac.Service.Compile({User.Roles, Scopes, Interactive: method.Interactive()})`, whatever
+authenticator ran (SEC2-16); `AssuranceOwner` is set only when an extension registered with
+`OwnerVerifier: true` asserts `Owner`.
 
-**Worker and facade confinement (SEC-3, SEC-5).** Confinement is not path-based and not a
-namespace heuristic: `books:fingerprint.worker` and every `<m>:arr.*` scope are `Confining`
+**Worker confinement (SEC-3).** Confinement is not path-based and not a namespace heuristic:
+`books:fingerprint.worker` (and, when the facade lands, every `<m>:arr.*` scope) is `Confining`
 (05-rbac §3.2), and a principal holding only confining scopes satisfies only requirements that name
 one of them — never `AnyAuthenticated` (05-rbac §4.10). This reproduces today's worker path
-confinement (`middleware/auth.go:265-298`) for every route, including the 36 that had no permission.
+confinement (`middleware/auth.go:265-298`) for every route stage 13 runs on, including the 36 that had
+no permission; for `OwnAuth` routes, which stage 13 skips, `CheckCredentialFor` applies the same rule
+(§4.10, SEC2-4).
 
 ### 4.3 Sessions (hashed at rest)
 
@@ -511,8 +576,12 @@ confinement (`middleware/auth.go:265-298`) for every route, including the 36 tha
   root only; core has no base-path support, as ABO has none today (FE-19, 05-http-api §4.1). Bearer
   accepted for non-browser clients.
 - `SameSite=Strict` is **site**-scoped, so it does not protect against a sibling app or a
-  sibling subdomain on the same site. Cookie-authenticated unsafe requests are therefore also
-  checked by httpapi's cross-origin stage (05-http-api §4.2 stage 7, SEC-10).
+  sibling subdomain on the same site. Unsafe requests are therefore also checked by httpapi's
+  cross-origin stage (05-http-api §4.2 stage 7, SEC-10), which exempts **no credential type**:
+  non-browser clients pass because they send no `Sec-Fetch-Site`/`Origin`, and Basic credentials,
+  which browsers attach cross-site like cookies, are not a bypass (FE2-23). 07 refers to this
+  section and to §6 instead of restating them (an unknown cookie is the cookie failure rule below,
+  never "treated as absent").
 - **Cookie failure rule (SEC-11, FE-6).** When the only credential presented is the session cookie
   and it is unknown, expired, revoked or epoch-stale, the failure is recorded with `Cookie=true`.
   On a `Public` route the request proceeds anonymous and the response clears the cookie, so a stale
@@ -524,8 +593,9 @@ confinement (`middleware/auth.go:265-298`) for every route, including the 36 tha
   `GET /api/v1/auth/sessions` (§2).
 - `LastSeen` is updated at most once per minute per session (in-memory coalescing, written with
   `NoSync`), so authentication stays a read on the hot path.
-- Expiry sweep: core task `core.auth.sessions.prune` (hourly, `tasks.Schedule`; deletes
-  expired/revoked records).
+- Expiry sweep: core task `core.auth.sessions.prune` on
+  `tasks.ScheduleFromConfig("core.auth.sessions.prune_schedule")` (a declared `tasks.ScheduleConfig`
+  key in auth's own namespace, default every 1 h; resolution R2-7); deletes expired/revoked records.
 
 ### 4.4 API keys
 
@@ -536,14 +606,17 @@ confinement (`middleware/auth.go:265-298`) for every route, including the 36 tha
 - Creating a key for another user requires `core:users.manage`, an interactive method (guard),
   scopes ⊆ the **target's** role permissions and ⊆ the actor's, and that the actor dominates the
   target (05-rbac §4.7 rule 5).
-- **Purpose (SEC-5, 08 O9 made normative).** `PurposeFacade` keys name a `Module`; every scope must
-  be one of that module's `<m>:arr.*` scopes (all `Confining`), and the key is accepted only on that
-  module's facade group. A general key holding `<m>:arr.*` scopes plus anything else is refused on
-  the facade (08 §8.5's "every scope is arr" rule stays as a second check).
+- **Purpose (SEC-5, 08 O9)** is a deferred-build member (§3.5): no facade key exists before
+  `arrfacade` lands.
 - Last-use tracking stays synchronous in the request goroutine (reason recorded at
   `middleware/auth.go:366-382`), coalesced per key per minute.
-- Display: `id`, name, purpose, first 8 chars of the hash as identifier (today, `raw/10` §7),
-  scopes, expiry, last used, status; the raw value is shown once.
+- Display: `id`, name, first 8 chars of the hash as identifier (today, `raw/10` §7), scopes,
+  expiry, last used, status; the raw value is shown once.
+- **Status transitions are monotone toward revoked.** `revoked` is terminal: `SetAPIKeyStatus`
+  refuses any transition out of it (409 `key_revoked`), and `needs_confirmation` can only go to
+  `active` (admin re-enable, interactive, audited) or `revoked`. The same rule ships in the legacy
+  build as the Teach-build guard (§11.1), so no build that can open the store re-activates a revoked
+  key.
 
 ### 4.5 Passwords
 
@@ -568,7 +641,7 @@ Core owns it; nothing refers to an app, a module or `users.manage`.
    `admin` and a generated password returned once. Returns an API key scoped `["core:admin"]`,
    TTL `core.auth.bootstrap.key_ttl` (8 h default, 24 h max — today's values). The key is
    non-interactive, so `Sensitive` scopes stay out of its reach (05-rbac §4.4). Audit:
-   `core.auth.bootstrap.redeemed`.
+   `core.bootstrap.redeem` (05-rbac §7.1).
 3. `POST /api/core/v1/auth/setup` (first admin with chosen password) is reachable only while
    `HasUsers()` is false **and** the request presents the bootstrap token, unless
    `core.auth.setup_requires_token=false` *and* the request is **local** (below). The shell's setup
@@ -606,7 +679,7 @@ Core owns it; nothing refers to an app, a module or `users.manage`.
   ABO's two migrated providers (Google, GitHub) get `link_existing_by_email: true`, which keeps
   today's behaviour for that known trust set (`internal/oauth/resolve.go:97`) under the
   admin/password guard. The verified-email displacement rule (`resolve.go:177-205`) is kept under
-  the same guard and audited (`core.auth.email_displaced`).
+  the same guard and audited (`core.identity.displace`).
 - Admission: provider allowlist of emails/domains, plus invite grants (`inviteallow:` today) via the
   `ExtraAllowed` hook (`internal/oauth/oauth.go:63-68`); new users get the provider's
   `default_role` (must exist and be assignable without escalation: it may not contain
@@ -660,13 +733,19 @@ App protocol auth stays in the app. ABO's ABS surface keeps its HS256 JWTs, refr
 `auth.Service.PrincipalFor(ctx, user, "books.abs", scopes, epoch)`, so status, credential epoch,
 role resolution and scope intersection are core's — replacing the duplicate role walk
 `absEffectivePermissions` (`middleware/absauth.go:778-800`). ABS's use of `abk_` keys calls the core
-API-key authenticator directly. Method `books.abs` is registered as non-interactive,
-`MayChangeCredentials=false` (today's `MethodABS` semantics).
+API-key authenticator directly, and that direct path applies **every** stage 12 rule — key status
+(`revoked`, `disabled`, `needs_confirmation` refused), expiry, and (once it exists) purpose — not a
+subset (SEC2-4). Method `books.abs` is registered by the books module with
+`Registrar.AuthMethod` as non-interactive, `MayChangeCredentials=false` (today's `MethodABS`
+semantics; the kernel refuses anything else, §3.3).
 
-The *arr facade (08) uses core `PurposeFacade` API keys presented as `X-Api-Key`, `apikey` query or
-Bearer; key extraction from the query string is enabled **only** on facade groups, and httpapi's
-access-log and span redaction covers `apikey` and `token` query values (05-http-api §4.2 stages 2
-and 4).
+**Confinement on the ABS surface (SEC2-4).** Today the ABS group refuses a worker-only credential
+explicitly (`middleware/absauth.go:629-632`). Stage 13 never runs on `OwnAuth` routes, so after
+`PrincipalFor` the ABS adapter calls `CheckCredentialFor(p, route.Perm)`, which refuses (ABS JSON
+403) a `Confined()` principal unless the route's manifest `Perm` names one of its scopes
+(05-http-api §8.3). An `fp-worker` key or a worker user's ABS login therefore reaches no ABS route.
+
+The *arr facade's key purpose and `X-Api-Key`/`apikey` extraction are deferred-build members (§3.5).
 
 ### 4.11 Auth-off mode
 
@@ -700,12 +779,21 @@ and 4).
   generation counter (05-rbac §9), so changes apply on the next request.
 - Every revocation publishes `core.principal.invalidated.v1{user_id, credential_id?, reason}` on
   `events`; `realtime` closes affected streams (05-realtime §4.6), `Revalidate` uses it.
-- Every key revocation, user disable, credential-epoch bump and session revocation is first recorded
-  with `Deps.Revocations.Append(ctx, backup.Revocation{At, Kind, Subject, Epoch})` — `Kind` one of
-  `apikey.revoked`, `user.disabled`, `credential_epoch.bumped`, `session.revoked`; `Subject` an
-  `entity.Ref{core, user|apikey|session, <id>}` — **before** the revocation's batch commits. If
-  `Append` fails, the revocation still commits and `Revocations.Gap(b, at)` is staged into the same
-  batch (05-backup §5B.3.6), so a restore over that interval treats the journal as incomplete.
+- Every restriction is first recorded with `Deps.Revocations.Append(ctx, journal.Revocation{At, Kind,
+  Subject, Object, Detail, Epoch})` **before** its batch commits. Auth's kinds: `apikey.revoked`,
+  `apikey.disabled` (any status change away from `active`, `needs_confirmation` included),
+  `user.disabled`, `user.deleted`, `credential_epoch.bumped`, `session.revoked`, `password.changed`
+  (password change or reset; SEC2-11, DATA2-7's `credential.changed`) and `identity.unlinked`
+  (`Detail` = provider); `Subject` is `entity.Ref{core, user|apikey|session, <id>}`. If `Append`
+  fails, the revocation still commits and `Revocations.Gap(b, at)` is staged into the same batch
+  (05-backup §5B.3.6), so a restore over that interval treats the journal as incomplete. (`Object`
+  and `Detail` are 05-backup's SEC2-10 additions; role kinds are 05-rbac §7.1's.)
+- **Every revocation reaches the authoritative copy (R2-2).** During the compatibility window the
+  legacy rows are authoritative and rebuilt into the native copy at every boot (§11), so every
+  revocation — interactive, by task, by the post-restore hook (§4.14) or by journal re-application —
+  is staged through `Deps.Mirror` (legacy primary and index rows + native row + side record in **one
+  batch**). A revocation written only natively would be undone by the next boot's rebuild and would
+  be invisible to a rollback build.
 
 ### 4.13 Core auth routes (all under `/api/core/v1`)
 
@@ -735,37 +823,73 @@ to a server (SEC-21).
 | `POST /auth/temp-login/consume` `{token}` (sets cookie) | Public | `RateAuth` |
 
 The legacy `PUT /api/v1/auth/me/password` with a `user_id` body (sets another user's password,
-`auth_reset_password.go:48-50`) is served during the window by the legacy mount, which from 09 S4
-calls the dominance-checked service; the core API has no "set another user's password" route — an
-admin uses the reset link. Legacy `GET /auth/temp-login?token=` and `/invite/:token` links stay
-valid as aliases for the window (09 S4), and httpapi redacts the `token` query value and the legacy
-invite path (05-http-api §4.2).
+`auth_reset_password.go:48-50`) stays a gin route of the legacy mount for the window — it is not
+aliased to the self-only `PUT /me/password`, whose strict alias would refuse `user_id` (05-http-api
+§4.6, SEC2-5) — and from 09 S4 it calls the dominance-checked service; the core API has no "set
+another user's password" route — an admin uses the reset link.
+
+**Legacy links (SEC2-6, FE2-8).** Links issued before the change stay valid for the window, but the
+server never renders a page with a token in its path: legacy `GET /invite/{token}` is answered by a
+server-side `302` to `/invite#token=<token>` and legacy `GET /auth/temp-login?token=` by a `302` to
+`/login/temp#token=<token>`, both with `Referrer-Policy: no-referrer`; `/invite/{token}` is in
+05-logging's `DefaultPathRules` and `token` in `DefaultRedactQuery`, so the one hop that does carry
+the token reaches no log or span (05-http-api §4.2). Between 09 S4 and S9 ABO's pre-shell SPA serves
+the UI: the same S4 build that switches invite creation to core makes `AcceptInvite` read `#token=`
+as well as the path parameter, and adds a `/login/temp` page that reads the fragment; 09 S4's R-test
+gains the cell "invite created on cur opens in cur UI and in prev UI".
+
+**Invite delivery (SIMP2-4, R-F).** Invite e-mail uses a `mail.Sender`. Until 09 S7 it is built from
+the legacy SMTP settings, as today; from S7 it is built from the `notify/email` integration instance
+(05-notify, 05-metadata), so auth never depends on `notify` before notify exists.
 
 ### 4.14 Post-restore hook (SEC-16)
 
-`PostRestore` is auth's `backup.RestoreHook`: the kernel runs it after a restore swap and before
-listeners open, in one storage batch per family, failing boot on error:
+`PostRestore` is auth's `journal.RestoreHook`. The kernel runs it after a restore swap at P4d step 5
+(06 §6.5.1): **after** the identity copies were rebuilt from the restored legacy rows (step 1) and the
+journal tail was re-applied (step 2), before any service is built and before listeners open; it
+fails boot on error. During the compatibility window
+**every write it makes goes through `Deps.Mirror`** — legacy primary and index rows, native row and
+side record in one batch (R2-2, SEC2-3, DATA2-4) — so the next boot's rebuild keeps it and a
+rollback build sees it; after the hook the kernel runs the identity rebuild once more and boot
+fails if it differs from what the hook wrote:
 
-1. Re-apply every `backup.Revocation` in `rc.Revocations` (key revocations, user disables, epoch
-   bumps, session revocations; role removals are 05-rbac's hook) from 05-backup's out-of-DB
-   revocation journal (cross-cutting resolution 8), so a key revoked after the backup stays revoked.
-2. Revoke every session and every one-time token (invite, temp-login, bootstrap); bump every user's
-   `CredentialEpoch`. Everyone signs in again once.
-3. When `rc.Revocations` is nil (the journal is unavailable or does not cover the whole interval: a
-   foreign or host-loss restore), set every API key to `needs_confirmation`: refused until an admin re-enables
-   it from the keys page. Otherwise keys stay active.
-4. Audit `core.auth.restore_revoked` with counts per family.
+1. **Re-apply** every `journal.Revocation` in `rc.Revocations` — the entries after the journal
+   offset the archive's manifest recorded before its checkpoint (clock-free, DATA2-7): key
+   revocations and disables, user disables and deletes, epoch bumps, session revocations (role kinds
+   are 05-rbac's hook). For each `password.changed` user, set `PasswordResetRequired` and invalidate
+   the restored hash (it may be the pre-compromise password, SEC2-11); for each `identity.unlinked`
+   entry, delete the re-appeared `(provider, subject)` link.
+2. **Invalidate restored sign-ins.** Revoke every native session and every one-time token (invite,
+   temp-login, bootstrap), and **delete every legacy `sess:`/`idx:sess:user:` and
+   `invite:`/`idx:invite:username:` row** (both families are deletable under auth's claims; otherwise
+   the upgrade-on-use session fallback and the in-place invite lookup of §11 would honour them, and
+   so would a rollback build). Bump every user's `CredentialEpoch`. Everyone signs in again once.
+3. When `rc.Revocations` is nil (the journal is unavailable, broken or does not cover the interval:
+   a foreign or host-loss restore), set every API key to `needs_confirmation`: refused until an admin
+   re-enables it from the keys page. Its legacy projection is the **revoked form** of §11 with
+   `mirror_reason: "needs_confirmation"`, and the side record carries `Restriction:
+   needs_confirmation`, so neither the rebuild nor a rollback build can turn it back on.
+4. Return the counts per family; audit's restore hook records them as `core.restore.revoke`
+   (05-rbac §7.1 action names).
 
 ## 5. Lifecycle
 
-1. `app.New`: `rbac.Service` first (catalog frozen after module registration), then `auth.New`
-   (loads `HasUsers`, seeds `_system`, stamps legacy keys lacking expiry — today's
-   `stampNeverExpiringAPIKeys`, `internal/server/apikey_expiry_stamp.go` — and, during the
-   compatibility window, rebuilds the core copies from legacy rows, §11), then extensions.
-2. Mint bootstrap token (§4.6) before listeners open.
-3. `kernel` registers the core auth routes through `internal/authhttp` on `CoreGroup`; register `core.auth.sessions.prune`,
-   `core.auth.onetime.prune` tasks (hourly, `tasks.Schedule`).
-4. Run: middleware serves; throttle sweeper and `LastSeen` flusher goroutines (one each) run until
+1. **P4d, post-DAG reconcilers** (06 §6.5.1, 05-storage §5S.4: one ordered step after the
+   checkpoint and the DAG, DATA2-24): during the compatibility window **the kernel** runs auth's
+   identity rebuild (step 1, §11), then the revocation-journal tail re-application through the mirror
+   (step 2, 05-backup), then — after a restore — `auth.PostRestore` (step 5, §4.14) and the
+   confirming rebuild. `auth.New` rebuilds nothing.
+2. **P5**: `rbac.Service` first (catalog frozen after module registration), then `auth.New` (loads
+   `HasUsers`, seeds `_system`, stamps legacy keys lacking expiry through the mirror — today's
+   `stampNeverExpiringAPIKeys`, `internal/server/apikey_expiry_stamp.go`), then extensions from
+   `app.Options.Authenticators` and module compat methods (§3.3).
+3. Mint bootstrap token (§4.6) before listeners open.
+4. `kernel` registers the core auth routes through `internal/authhttp` on `CoreGroup`; register
+   `core.auth.sessions.prune` and `core.auth.onetime.prune` on
+   `tasks.ScheduleFromConfig("core.auth.sessions.prune_schedule")` and
+   `("core.auth.onetime.prune_schedule")` (declared `tasks.ScheduleConfig` keys, default every 1 h;
+   resolution R2-7).
+5. Run: middleware serves; throttle sweeper and `LastSeen` flusher goroutines (one each) run until
    the app context ends; the flusher drains pending `LastSeen` writes on shutdown (bounded 2 s).
 
 ## 6. Error semantics
@@ -782,11 +906,16 @@ listeners open, in one storage batch per family, failing boot on error:
 | Throttle tripped | 429 `throttled` + `Retry-After` | closed | |
 | Password hash semaphore saturated (> 2 s wait) | 503 `busy` + `Retry-After` | closed | memory protection |
 | Login with wrong password (Public route) | 401 `invalid_credentials` | closed | a Public auth flow's 401 is shown in place, not a session reset (FE-7, 05-http-api §4.3) |
+| Password login for a user with `PasswordResetRequired` | 401 `password_reset_required` (shown in place) | closed | the restored hash may be a replaced password (SEC2-11) |
+| Status change on a revoked key (any build that can open the store) | 409 `key_revoked` | closed | revocation is monotone (R2-1) |
+| Compat method that is interactive, may change credentials, verifies owners or is outside `<moduleID>.` | boot error `ErrMethodSpec` | closed | only app-level extensions carry those rights (SEC2-16) |
+| Confined principal on an `OwnAuth` route not naming its scope | ABS 403 (`ErrConfined`) | closed | SEC2-4 |
+| Post-restore write cannot be staged through the mirror, or the confirming rebuild differs | boot error | closed | a revocation that only the native copy holds is undone at the next boot (R2-2) |
 | Bootstrap token wrong/expired/spent | 401 `bootstrap_invalid`, uniform message | closed | |
 | Bootstrap file write fails at start | log error, bootstrap unavailable this run; setup still requires token → operator restarts after fixing perms | closed | |
 | Key create with escalation | 403 `scope_escalation` | closed | |
 | Action on a user the actor does not dominate | 403 `dominance_required` | closed | SEC-4 |
-| Facade key off its facade group, or general key on a facade group | 403 `permission_denied` | closed | SEC-5 |
+| Facade key off its facade group, or general key on a facade group (deferred-build, §3.5) | 403 `permission_denied` | closed | SEC-5 |
 | OIDC subject whose email matches an unlinkable account | 409 `email_in_use` | closed | SEC-7 |
 | Remove last `core:admin` holder | 409 `last_admin` | closed | lockout protection |
 | Audit write fails for a sync auth event (login success, key create) | the operation fails 503 (same storage batch) | closed | credential changes must be attributable |
@@ -839,6 +968,7 @@ interactive method). Every key that decides who may sign in, with which role, or
 | `core.auth.login.soft_threshold` / `.soft_step` / `.soft_max` | int / duration / duration | 5 / 200ms / 2s | yes | admin |
 | `core.auth.invite.ttl` | duration | 72h | yes | none |
 | `core.auth.temp_login.ttl` | duration | 15m | yes | admin |
+| `core.auth.sessions.prune_schedule` / `core.auth.onetime.prune_schedule` | `tasks.ScheduleConfig` | `{enabled: true, every: 1h}` | yes (re-read every poll) | none |
 | `core.auth.oidc.redirect_base_url` | URL | — | yes | admin |
 | `core.auth.oidc.providers[]` | list `{id, kind (oidc/github), issuer, client_id, client_secret (secret ref), scopes, allowed_emails, allowed_domains, default_role, link_existing_by_email}` | `[]` | yes (provider set rebuilt) | admin |
 | `core.auth.owner.required` | bool | derived (§4.8) | no | admin |
@@ -854,7 +984,7 @@ ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `oauth
 |---|---|---|
 | `mediacore_auth_attempts_total` | counter | `method`, `outcome` (`success`,`invalid`,`expired`,`revoked`,`inactive`,`throttled`) |
 | `mediacore_auth_sessions_active` | gauge | — |
-| `mediacore_auth_api_keys_active` | gauge | `legacy` (`true`/`false`), `purpose` |
+| `mediacore_auth_api_keys_active` | gauge | `legacy` (`true`/`false`) (`purpose` is added with the deferred facade key, §3.5) |
 | `mediacore_auth_throttled_total` | counter | `surface` (`login`,`bootstrap`,`setup`,`invite`,`temp_login`,`oidc`) |
 | `mediacore_auth_password_hash_seconds` | histogram | `op` (`hash`,`verify`) |
 | `mediacore_auth_password_queue_wait_seconds` | histogram | — |
@@ -875,7 +1005,16 @@ ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `oauth
 | `TestCredentialFormat_ChecksumAndPrefix` (+ `FuzzParseCredential`) | prefix, length, CRC; malformed → `ErrNoCredential` vs `ErrInvalidCredentials` correctly |
 | `TestAPIKey_PresentedKeyWins` | key + session + CF assertion → method `api_key` |
 | `TestAPIKey_CreateRequiresScopes` / `TestAPIKey_KeyCannotWiden` | empty scopes 400; key with `[books:view]` cannot mint `[books:edit]` or empty (regression for `handlers/apikeys.go:199-226`) |
-| `TestAPIKey_FacadePurposeBoundToModule` | facade key refused off its facade group; general key with extra scopes refused on it (SEC-5) |
+| `TestAPIKey_FacadePurposeBoundToModule` (deferred-build, §3.5) | facade key refused off its facade group; general key with extra scopes refused on it (SEC-5) |
+| `TestAPIKey_RevokedIsTerminal` | `SetAPIKeyStatus(active)` on a revoked key → 409; `needs_confirmation` → only `active` (admin, interactive) or `revoked` (R2-1) |
+| `TestMirrorDisabled_PrevBuildReactivateStillRefused` | drive the real Teach-build legacy handler against a mirrored store: PATCH `{"status":"active"}` on a mirror-disabled, a natively revoked and a `needs_confirmation` key → 409; the real token is refused on the Teach build; roll forward: the native key keeps its restriction and is never re-adopted as `LegacyFullScope` (SEC2-1, DATA2-3) |
+| `TestTeachBuild_UsersManageDominance` / `TestTeachBuild_SettingsManageProtectedFields` | on the Teach build, a custom role holding `users.manage` cannot temp-login, reset, set the password of, re-role or mint a key for a user it does not dominate, nor hand out a role it does not hold; one holding `settings.manage` cannot change a protected field (`oauth_default_role`, …) unless it holds every legacy atom (SEC2-2) |
+| `TestTeachBuild_JournalsRevocations` | key revoke/deactivate, user deactivate/delete, password change and session revoke on the Teach build append to the revocation journal before commit; a restore it performs appends a `restore` record (R2-1, DATA2-5) |
+| `TestPostRestoreSurvivesRestartAndRollback` | restore inside the window, restart: the re-revoked key, a restored legacy `sess:` cookie and a restored legacy invite are refused; roll back to the Teach build: it refuses all three (R2-2, SEC2-3, DATA2-4) |
+| `TestRestore_PostArchivePasswordChangeNotReverted` / `TestRevocationCommittedAfterCheckpointReapplied` | a password changed after the archive → `password_reset_required`, old password refused; a revocation journaled before and committed after the checkpoint is re-applied (SEC2-11, DATA2-7) |
+| `TestStage12_ExtensionPermsIgnored` / `TestModuleAuthMethod_CannotBeInteractive` | an authenticator's assertion cannot raise its checker; a module compat method declared interactive or with credential/owner rights → `ErrMethodSpec` (SEC2-16) |
+| `TestConfining_WorkerKeyRefusedOnABS` | `CheckCredentialFor` refuses an `fp-worker` key and a worker ABS login on ABS routes not naming the worker scope (SEC2-4) |
+| `TestLegacyInviteLink_RedirectsToFragment` | `GET /invite/<token>` → 302 to `/invite#token=…` with `Referrer-Policy: no-referrer`; token absent from access log and spans (SEC2-6) |
 | `TestAPIKey_LegacyAbkAcceptedUntilExpiry` | |
 | `TestFirstRun_OnlyPublicAndSetupReachable` | zero users: every non-Public route 401 |
 | `TestSetup_RequiresBootstrapToken` / `TestSetup_LoopbackExceptionRefusesForwarded` | loopback peer with a forwarding header, or a trusted-proxy peer, is not local (SEC-30) |
@@ -895,7 +1034,7 @@ ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `oauth
 | `TestOwnerGuard_RequiresOwnerAssurance` | |
 | `TestPrincipalFor_CompatAppliesEpochAndScopes` | the ABS path (G15) |
 | `TestLastAdmin_CannotBeDisabledOrDemoted` | |
-| `TestPostRestore_RevokedKeyStaysRevoked` / `TestPostRestore_NoJournalKeysNeedConfirmation` | SEC-16 |
+| `TestPostRestore_RevokedKeyStaysRevoked` / `TestPostRestore_NoJournalKeysNeedConfirmation` | SEC-16; both through the mirror (R2-2) |
 | `TestAccessLog_NoInviteToken` | (in 05-http-api) no one-time token in access log, journal or span attributes (SEC-21) |
 | `TestNoGlobals` (archtest) | temp-login state and throttles are instance state (R5) |
 
@@ -906,7 +1045,7 @@ ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `oauth
 | `internal/auth/context.go`, `user_active.go` | `core/auth` (`Principal`, `Method`, assurance) |
 | `internal/auth/owner.go` | ABO `internal/cfaccess` (owner proof, G11; 04 §2.4) |
 | `internal/server/middleware/auth.go` (`RequireAuth`, key auth, `EffectivePermissionsFor`) | `auth.Service.Middleware` + `rbac.Service.Compile`; `RequirePermission`/`RequireAdmin` → httpapi stage 13; inside the legacy mount from 09 S4, `RequireAuth` becomes the read-only bridge of 05-http-api §8.3 |
-| `internal/server/middleware/{cfaccess,cfbounce,owner_guard}.go`, `internal/oauth/cfaccess.go` | ABO `internal/cfaccess` (04 §2.4), registered through §3.3's `Registrar.AddAuthenticator`; not core |
+| `internal/server/middleware/{cfaccess,cfbounce,owner_guard}.go`, `internal/oauth/cfaccess.go` | ABO `internal/cfaccess` (04 §2.4), registered in `app.Options.Authenticators` as an `auth.Extension` (§3.3); not core |
 | `internal/oauth/{oauth,providers,resolve,state}.go` | `core/auth/oidc` |
 | `internal/server/absauth/password.go` | `core/auth/password` |
 | `internal/server/absauth/throttle.go`, `internal/server/login_ceiling.go`, `bootstrap_rate_limit.go`, `invite_rate_limit.go` | `core/auth` throttle (instance) |
@@ -928,17 +1067,85 @@ legacy row is gone or was revoked/disabled by the previous build — **except** 
 wrote disabled (`SideRecord.MirrorDisabled`) that is still `Fresh` (05-storage §5S.3.11): that is a
 native-only key and stays active natively; once the previous build rewrites the row, legacy wins.
 Without that exception every narrow native API key would be revoked on the next boot. Contract C4
-(09) stops the mirror and deletes the legacy rows.
+(09) stops the mirror and deletes the legacy rows. The rebuild is run by the kernel as a post-DAG
+reconciler, not by `auth.New` (§5, DATA2-24).
+
+**API-key projection and rebuild (SEC2-1, DATA2-3; resolution R2-1).** "Disabled" must say exactly
+what the legacy row holds, because an empty legacy scope list means "every permission of the owner's
+roles" (`middleware/auth.go:405-408`):
+
+- **The revoked form.** A key that is mirror-disabled (no exact legacy scope set), natively revoked,
+  or `needs_confirmation` is projected as legacy `status: "revoked"`, `revoked_at` = mirror time,
+  `mirror_reason` = `"no_exact_legacy_scopes"` / `"revoked"` / `"needs_confirmation"` (a field the
+  Teach build adds to its `APIKey` struct and preserves on rewrite, §11.1), and `scopes:
+  ["mirror.disabled"]` — a non-empty sentinel atom absent from the legacy catalog, so the legacy
+  `intersectPermissions` yields the empty set, never "all". The real scopes (and `Purpose` once it
+  exists) live in the side record.
+- **No re-activation.** Every build that can open the store after S4 is the Teach build or newer
+  (§11.1), and each refuses any status change on a row with `revoked_at` or `mirror_reason`
+  (409), and its auth path refuses such rows whatever their `status`.
+- **Rebuild is monotone.** The side record carries `Restriction ∈ {none, disabled, revoked,
+  needs_confirmation}`; the rebuilt native status is the **most restrictive** of the legacy row's and
+  the side record's (revocation is monotone). `LegacyFullScope` is adopted only for a legacy row with
+  empty scopes, no `mirror_reason` and no side record — never for a row the mirror ever wrote.
+- `TestMirror_NarrowKeyNeverBecomesEmptyScope` (05-rbac §6.3) is extended: after any legacy rewrite
+  reachable through the Teach build's API, re-adoption is never `LegacyFullScope` and never active
+  when the native key was restricted.
 
 | Legacy family | New | Transform |
 |---|---|---|
 | `u:` + `idx:user:username:` (and the other `idx:` user sub-prefixes) | `c/auth/user/…`, `c/auth/idx/…` | user IDs and role IDs unchanged (`admin`, `editor`, `viewer`, `fp-worker`; 05-rbac §6.2); mirrored both ways as above |
 | `apikey:` + `idx:apikey:` | `c/auth/apikey/…` | hash reused as-is (already SHA-256 of raw); scopes translated (05-rbac §6.1); empty scopes → `LegacyFullScope=true`; native keys mirrored with legacy atoms only on exact re-expansion, otherwise the legacy row is written **disabled** (`LegacyProjection.Disabled`, side record `MirrorDisabled`) with canonical scopes and `Purpose` in the side record (05-rbac §6.3) |
 | `sess:<raw>` + `idx:sess:user:` | `c/auth/session/h/<sha256>` + new `PublicID` | **no raw mirror** (SEC-19): new sessions are hashed only. A presented legacy raw-ULID cookie is looked up in `sess:` with epoch, status, revoked and expiry checks; on a hit the service issues a hashed `mcs_` session, sets the cookie and deletes the legacy row in one batch (upgrade on use). Legacy sessions live at most 7 d (`handlers/auth.go:90-96`), so the fallback matches nothing after that; its code is removed by the first contract PR after S4 + 7 days, independent of C4. Cost: a rollback signs users out once; API keys, which automation uses, keep working |
-| `invite:<raw>` | `c/auth/onetime/invite/<sha256>` | legacy invites stay readable in place by presented token until they expire (72 h); native invites are hash-only and not mirrored (a rollback within an invite's TTL voids invites issued by the new build; resend) |
+| `invite:<raw>` + `idx:invite:username:` | `c/auth/onetime/invite/<sha256>` | auth claims these legacy families `AgingOut`, **not** mirrored (DATA2-8): legacy invites stay readable in place by presented token until they expire (72 h) and are deleted on accept, on expiry, and by the post-restore hook (§4.14); the raw token is never copied (SEC-19's reasoning). Native invites are hash-only and live outside every mirror's `Native` range, so the per-boot rebuild never touches them (a rollback within an invite's TTL voids invites issued by the new build; resend) |
 | `oauthid:`, `inviteallow:` | `c/auth/ident/…`, `c/auth/inviteallow/…` | mirrored both ways as above |
-| bootstrap hash in settings | `c/auth/bootstrap` | regenerated at first start anyway |
+| bootstrap hash in settings | `c/auth/bootstrap` (native, the only form read) | regenerated at every start anyway; the legacy settings hash is `AgingOut` — never read, never mirrored, removed by contract C4 (DATA2-29; 05-storage row 8 follows) |
 | temp-login map | — | in-memory today; nothing to migrate |
+
+### 11.1 The identity Teach build (rollback floor; resolution R2-1)
+
+A rollback may land on a build that predates the adoption logic and still has legacy behaviour that
+widens access. Resolution R2-1 removes that class structurally: the first build of the identity
+adopt/expand sequence (09 S4) is a **Teach build**, and it is the **minimum rollback target** — once
+S4 has run, the per-owner level guard refuses to open the store with any older build (09 §9.2.2).
+09 places it; because its journal lines carry 05-backup's integrity fields (SEC2-9), it is a build
+that already has the S3 keyring. Items 1–3 are also live defects at HEAD and ship as hotfixes as
+early as S0 (`todo.d/2026-11-04_platform_core_followups.md`; "Out-of-scope defects" below); the
+Teach build is where they become a guarantee. In legacy terms ("effective atoms" = the union of the
+caller's role atoms, intersected with a key's non-empty scopes; `admin` = every atom):
+
+1. **API-key status guard (SEC2-1, DATA2-3).** `PATCH /api/v1/auth/api-keys/:id`
+   (`handlers/apikeys.go:336-372`) answers 409 for a key with `status == "revoked"`, a non-nil
+   `revoked_at` or a non-empty `mirror_reason`; `SetAPIKeyStatus`
+   (`pebble_store_auth.go:1226-1247`) refuses any transition to `active` for such a row, so no other
+   caller can bypass the handler; the key-auth path (`middleware/auth.go:335-344`) refuses a row with
+   `revoked_at` or `mirror_reason` whatever its `status`. The legacy `APIKey` struct gains a
+   `MirrorReason` field (JSON `mirror_reason`, omitted when empty) so rewrites preserve it.
+2. **`users.manage` dominance bound (SEC2-2).** Every legacy handler that acts on another user
+   requires that the actor's effective atoms ⊇ the target's: temp-login mint
+   (`auth_temp_login.go:225-227`), reset link and `PUT /api/v1/auth/me/password` with `user_id`
+   (`auth_reset_password.go:18-60`, `handlers/auth.go:581-616`), user status change and delete,
+   key creation for another user (`credential_routes.go:93`; scopes ⊆ the target's atoms as well) and
+   revoking another user's keys or sessions. Assigning or removing roles (user update, invite
+   `RoleID`, `handlers/user.go:155-190`) requires the actor's atoms ⊇ the atoms of every role added
+   **or removed**. Refusal 403 `dominance_required`; the last-admin rule is kept. A native custom
+   role holding `core:users.manage` (mirrored as `users.manage`) therefore stays bounded after a
+   rollback.
+3. **`settings.manage` bound (SEC2-2).** Changing any field `ChangedProtectedFields` reports
+   (`internal/config/update_service.go:779-783`; e.g. `oauth_default_role`, "admin would mint
+   admins", `protected_fields.go`) additionally requires the actor's effective atoms ⊇ every legacy
+   atom (legacy-admin-equivalent), on top of today's interactive-session rule. The owner trust-root
+   rule is unchanged.
+4. **Revocation and restore journal (DATA2-5).** Before committing, the Teach build appends to the
+   out-of-DB revocation journal (05-backup §5B.3.6 format, integrity fields included) every
+   restriction it performs: key revoke and deactivate, user deactivate and delete, password change or
+   reset (with its epoch bump), session revocation, role removal from a user, OAuth identity unlink —
+   the kinds of §4.12 and 05-rbac §7.1 — and on append failure records the gap as 05-backup
+   specifies. Every restore the Teach build performs appends a `restore` record, so the next
+   new-build boot re-applies the journal tail through the mirror (05-backup; §5 step 1).
+5. **No other change.** The Teach build reads and preserves the fields the mirror writes and adds
+   nothing else; its seed handling is unchanged (seed-role edits are refused natively during the
+   window instead, 05-rbac §4.8).
 
 ## 12. Open items
 
@@ -981,6 +1188,15 @@ extraction; each is a small hotfix in the current code:
    skips the subset check (`internal/server/handlers/apikeys.go:199-210`) and an empty scope list
    means "all role permissions" (`internal/server/middleware/auth.go:405-408`). Hotfix: when the
    caller is an API key, require non-empty scopes ⊆ the key's effective set.
+3. **A revoked API key can be re-activated** (verified by the round-2 lead,
+   `todo.d/2026-11-04_platform_core_followups.md`): `PATCH /api/v1/auth/api-keys/:id
+   {"status":"active"}` (`internal/server/wire_auth_routes.go:73`, credential-guarded, so any
+   interactive session of the key owner) reaches `handlers/apikeys.go:336-372`, which never looks at
+   the current status, and `SetAPIKeyStatus` (`internal/database/pebble_store_auth.go:1226-1247`)
+   sets `Status = "active"` from any state while the auth path checks only `Status`
+   (`middleware/auth.go:335-344`; `RevokedAt` is never consulted). Hotfix = §11.1 item 1. The
+   `users.manage` / `settings.manage` reach is latent at HEAD (only `admin` holds those atoms,
+   05-rbac "Out-of-scope defects") and is bounded by §11.1 items 2–3.
 
 ## Review history
 
@@ -1023,3 +1239,28 @@ Integration pass (cross-cluster requests, 2026-11-04):
 - integration pass: R-B request (SEC-16) — `PostRestore` implements `backup.RestoreHook` over `backup.RestoreContext`; revocations recorded with `RevocationJournal.Append` as typed `backup.Revocation` before commit, `Gap` on failure (§3.2, §4.12, §4.14); `RestoreInfo` removed.
 - integration pass: R-H request (SEC-1, DATA-3) — §11: mirror-disabled keys that are still `Fresh` keep their side record and stay active natively; "revoked" → "disabled" to match 05-storage.
 - integration pass: R-H request (G11) — Cloudflare Access is ABO's `internal/cfaccess` (04 §2.4), not `core/auth/cfaccess`; its keys are `modules.books.identity.*` (09 S4); `owner.go` row corrected.
+
+Round 2 (2026-11-04), findings applied to this file:
+
+- R2-1 — §11.1 identity Teach build: key status guard, `users.manage` dominance and `settings.manage` bound in legacy handlers, journal of revocations and restores, rollback floor; key status monotone natively (§4.4, §11.1, §6, §10, out-of-scope defect 3).
+- R2-2 — every revocation and post-restore write staged through the mirror; restored legacy sessions/invites deleted; confirming rebuild (§3.2, §4.12, §4.14, §6, §10).
+- SEC2-1 / DATA2-3 — revoked projection form (`status: revoked`, `mirror_reason`, sentinel scope), side `Restriction`, most-restrictive rebuild, `LegacyFullScope` only for never-mirrored rows (§11, §10).
+- SEC2-3 / DATA2-4 — post-restore hook writes legacy rows in the same batch, deletes legacy `sess:`/`invite:` rows, `needs_confirmation` as the revoked form (§4.14).
+- DATA2-5 — Teach build journals its revocations and restores (§11.1).
+- SEC2-11 / DATA2-7 — `password.changed` and `identity.unlinked` journaled; `PasswordResetRequired`; re-application from the manifest's journal offset (§3.1, §4.12, §4.14, §6).
+- SEC2-10 — `journal.Revocation` with `Object`/`Detail` used (§4.12).
+- SEC2-4 — `CheckCredentialFor`; the direct ABS key path applies every stage 12 rule; ABS confinement (§3.2, §4.2, §4.10, §10).
+- SEC2-5 — legacy `me/password` with `user_id` stays a gin route, not aliased (§4.13).
+- SEC2-6 / FE2-8 — legacy invite and temp-login links 302 to fragment form with `no-referrer`; S4 SPA reads `#token=`; R-test cell (§4.13, §10).
+- SEC2-16 — authenticators return an `Assertion`; core compiles `Perms`; extensions only via `app.Options.Authenticators`; compat methods via `Registrar.AuthMethod`, non-interactive (§3.1, §3.3, §4.2, §6, §10).
+- SEC2-19 — the Access-assertion client-trust branch moves into `internal/cfaccess` at S4 (§3.3).
+- SIMP2-6 / R-F — key purpose, query-key extraction, feed token and facade tests are deferred-build members (§3.2, §3.5, §4.2, §4.4, §4.10, §9).
+- SIMP2-4 / R-F — invite `mail.Sender` from legacy SMTP until S7, then from the `notify/email` instance (§4.13).
+- SIMP2-1 — prune tasks on declared `core.auth.*.prune_schedule` keys (§4.3, §5, §8).
+- DATA2-8 — `invite:` + `idx:invite:username:` `AgingOut`, not mirrored; native invites outside mirror ranges (§11).
+- DATA2-24 — the identity rebuild is a kernel post-DAG reconciler (§5, §11).
+- DATA2-29 — bootstrap: native `c/auth/bootstrap` only, legacy hash `AgingOut` (§11).
+- COR2-9 — journal types from the leaf `backup/journal`; `events` lands with `auth` at S4 (§3).
+- COR2-12 — `Store` writes take `*storage.Batch` (§3.4).
+- FE2-23 — stage 7 exempts no credential type; 07 refers here for cookie rules (§4.3).
+- COR2-19 — audit action names follow 05-rbac §7.1's present-tense grammar (§4.14).
