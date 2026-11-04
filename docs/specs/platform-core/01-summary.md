@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/01-summary.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.9.1 -->
 <!-- guid: d2956830-373c-4b12-9504-ccace49f7f6d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -76,7 +76,7 @@ moves platform machinery, not every route.
   books' legacy claims, because renaming them buys nothing. Only the core-service families (03 §3.7 names them)
   migrate, once, in R2 (02 decision 13, N15).
 - Backward compatibility (D10): no alias, compatibility window, legacy store or previous-build parity is built.
-  The one frozen external contract is the Audiobookshelf-compatible API of the phone apps (D12 F3).
+  The one frozen external contract is the Audiobookshelf-compatible API of the phone apps (D12 (c)).
 - Soaks (D11): releases are verified by tests, the checkpoint and restore; a 1-day smoke run is optional.
 - Retiring ABO's gin router: it stays mounted through `httpapi.MountLegacy` (02 N7). Its routes may change; a
   route group moves to native `httpapi` when it is rewritten, or when an R2 flip replaces the core subsystem's HEAD
@@ -114,9 +114,9 @@ moves platform machinery, not every route.
 | ***arr facade** | An optional, per-app HTTP adapter exposing an *arr-v3-compatible subset for ecosystem clients (Overseerr/Jellyseerr, Prowlarr, Bazarr) through `core/arrfacade` (deferred-build). |
 | **ABO** | audiobook-organizer, this repository. |
 | **release R0–R3** | The four releases of the extraction (03 §3.8): R0 hotfixes, R1 core runtime, R2 the cutover, R3 cleanup and floor. "Stage" and "wave" are not release keys. |
-| **flip** | The one PR that wires a subsystem in, after its code landed dark on `main` (03 §3.8: F3–F9 inside R2). |
-| **importer** | `<pkg>.Importer`: the SDK interface through which an app hands a core subsystem its pre-core records, staged into the caller's batch with every ID kept (03 §3.3). |
-| **pre-migration checkpoint** | The copy of the store a boot takes before its first shape-changing write; the rollback path, deleted automatically after 7 days (D12 F4; 05-storage). |
+| **flip** | The one PR that wires a subsystem in, after its code landed dark on `main` (03 §3.8: F3–F9 inside R2). D12's owner answers are cited as D12 (a)–(d), never with F labels. |
+| **importer** | `<pkg>.Importer`: the SDK interface through which an app hands a core subsystem its pre-core records, staged into the caller's batch with every ID kept, or, for an L0 package such as `log`, committed idempotently instead (03 §3.3). |
+| **pre-migration checkpoint** | The copy of the store a boot takes before its first shape-changing write; the rollback path, deleted automatically after 7 days (D12 (d); 05-storage). |
 | **quarantine** | Where a migration step copies a row it cannot decode (`c/storage/quarantine/`), reported in health and never dropped (03 §3.3 `storage`). |
 | **upgrade floor** | The one floor, set in R3: `UpgradeFloor{InstallFirst: R2}`. Boot refuses a store that has not run R2's level step, before any write, with exit 78 and a last log line naming R2 (02 N14). |
 | **split criteria SC1–SC10** | The measurable readiness criteria for moving core to its own repository (§12.3); named `SC` so they never collide with other labels. |
@@ -183,4 +183,4 @@ Advisor (dispositions in `docs/plans/platform-core/reviews/spec-advisor-disposit
 
 Owner decisions D10–D12:
 
-- D10–D12 revision (2026-11-04): summary names the releases R0–R3; goal 3 rewritten (data migrated forward one-way in R2, quarantine instead of loss, G5′, rollback by offline restore, the R3 floor); non-goals: the family non-goal narrowed to books' domain families, the "hardening during the extraction" non-goal deleted, non-goals for backward compatibility (D10) and soaks (D11) added, the gin non-goal lets routes change; glossary: "legacy package", "hardening cutover", "strangler stage", "floor release" and "stepping-stone release" deleted; "SDK", "legacy claim", "store interface" and "cutover" rewritten; "release R0–R3", "flip", "importer", "pre-migration checkpoint", "quarantine" and "upgrade floor" added.
+- D10–D12 revision (2026-11-04): summary names the releases R0–R3; goal 3 rewritten (data migrated forward one-way in R2, quarantine instead of loss, G5′, rollback by offline restore, the R3 floor); non-goals: the family non-goal narrowed to books' domain families, the "hardening during the extraction" non-goal deleted, non-goals for backward compatibility (D10) and soaks (D11) added, the gin non-goal lets routes change; glossary: "legacy package", "hardening cutover", "strangler stage", "floor release" and "stepping-stone release" deleted; "SDK", "legacy claim", "store interface" and "cutover" rewritten; "release R0–R3", "flip", "importer", "pre-migration checkpoint", "quarantine" and "upgrade floor" added. Consistency pass: D12's answers cited as D12 (a)–(d), and the importer entry names the idempotent L0 exception.
