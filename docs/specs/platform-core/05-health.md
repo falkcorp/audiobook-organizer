@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.13.2 -->
+<!-- version: 1.13.3 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -286,7 +286,10 @@ registry ([09-abo-on-core](09-abo-on-core.md)), so core carries no audiobook fie
 same handler, `/api/health` and `/api/v1/health` (`internal/server/server_lifecycle.go:1749-1755`), are **deleted**
 by F8's PR: the SPA (`/api/v1/health`) and the first-party scripts that call `/api/health` (`scripts/e2e_test.sh`,
 `scripts/test-api-endpoints.py`, `scripts/api_examples.sh`, the demo-recording scripts) switch to `/health` or
-`/readyz` in that same PR, never in a later one (09 §9.4 R2 flips, §9.6 row 3).
+`/readyz` in that same PR, never in a later one (09 §9.4 R2 flips, §9.6 row 3). HEAD's Basic gate exempts only those two
+paths (`internal/server/middleware/basicauth.go:34`), so from F8 stage 8's exemption moves with them to `/health`,
+the same handler (05-http-api §8.2 `BasicExempt`): a monitor that moves from an alias to `/health` keeps working
+behind an enabled gate (`TestBasicGate_ExemptSetGolden`, 05-http-api §12).
 
 ### 5H.3.4 Supervisor signals
 
@@ -792,4 +795,4 @@ Round 10:
   Consistency pass: R2 landings keyed to the flips (readiness core F5, the rest and the alias deletion with their callers F8,
   advisory tokens F3, origin binding F7), the swap token pair and the R1 budget path re-pointed to 05-storage §5S.3.15 and
   05-config §1.12.1, `unit-lifecycle` to 09 §9.2.1, and 05-rbac's restore tokens `restore_last_admin_kept` and
-  `restore_admins_review` listed on `core.backup`.
+  `restore_admins_review` listed on `core.backup`, and the Basic-gate exemption moved to `/health` at F8.
