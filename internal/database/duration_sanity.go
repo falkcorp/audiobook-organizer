@@ -1,5 +1,5 @@
 // file: internal/database/duration_sanity.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 8b1f4d2c-5e69-4a30-9c71-2f8a6b0d4e95
 // last-edited: 2026-11-04
 
@@ -73,10 +73,18 @@ func NormalizeDurationSec(fileSizeBytes int64, durationSec int) int {
 // bug); it never loops.
 // direct: this is the write chokepoint that repairs the raw stored value
 // (it may legitimately rewrite a known duration), so it reads the field itself.
-// A nil or non-positive Duration is not measured and is left alone.
+// A nil Duration is not measured and is left alone. A non-nil Duration <= 0
+// is turned into nil, so that "stored means > 0" holds at write time, not only
+// on decode. Without this, omitzero would persist a pointer to 0 as
+// "duration":0, which is the misleading not-scanned-looks-like-zero state this
+// type exists to remove.
 func normalizeBookFileDuration(file *BookFile) bool {
 	if file == nil || file.Duration == nil {
 		return false
+	}
+	if *file.Duration <= 0 {
+		file.Duration = nil
+		return true
 	}
 	if !DurationLooksLikeMillis(file.FileSize, *file.Duration) {
 		return false
