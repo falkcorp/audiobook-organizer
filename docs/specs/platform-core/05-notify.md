@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-notify.md -->
-<!-- version: 1.11.1 -->
+<!-- version: 1.12.0 -->
 <!-- guid: 785812fd-5ddd-4540-be24-d061c0127788 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -206,13 +206,23 @@ func (s *Service) Rules(ctx context.Context) iter.Seq2[Rule, error]
 // A legacy store refuses a rule its format cannot express with
 // ErrRuleNotExpressible (422). PutRule and DeleteRule commit their batch
 // through storage.CommitLocked(ctx, b, d, stage, locks...) (05-storage;
-// R9-1), passing the locks the legacy store's legacy.WriteLock returns when
-// it offers one: books' store writes the legacy webhook event list into the
-// config blob, so its WriteLocks returns HEAD's configBlobSaveMu for
-// legacy.LockConfigSettings, the same storage.Lock value books' config and
-// instance stores return (05-metadata M1.4 step 2a "Write"), so CommitLocked
-// takes it once and the mutex spans the commit. The
-// kernel builds one instance of it per process (TestLegacyStoresAreSingletons).
+// R9-1), passing the Service's SettingsLocks []storage.Lock: the kernel calls
+// the legacy store's legacy.WriteLock at P4c with legacy.LockConfigSettings
+// and hands the Service the result (empty when the store offers none); notify
+// never calls WriteLocks and never names a lock string, since it cannot
+// import legacy (COR10-5). Books' store writes the legacy webhook event list
+// into the config blob, so its WriteLocks returns HEAD's configBlobSaveMu,
+// the same storage.Lock value books' config and instance stores return
+// (05-metadata M1.4 step 2a "Write"), at its rank in 05-storage's one total
+// lock order (R10-4), so CommitLocked takes it once and the mutex spans the
+// commit and the store's post-commit step (the config.yaml gap-fill write,
+// which CommitLocked runs before the release; R10-5, DATA10-2). The store
+// refuses a write staged into a batch that carries no hold of that lock
+// (storage.LocksHeld(b, l); R10-4), nothing staged. The mutex that
+// serialises the Service's swap of its in-memory rule set is taken before
+// CommitLocked and never inside its stage function, and the
+// stage calls no books method that takes a HEAD mutex (DATA10-3). The
+// kernel builds one instance of it per App (TestLegacyStoresAreSingletons).
 type RuleStore interface {
 	Load(ctx context.Context) ([]Rule, error)
 	Put(ctx context.Context, b *storage.Batch, r Rule) error
@@ -375,7 +385,10 @@ binding (05-metadata M1.4 step 2); a `notify/email` saved through the API is a n
 | `internal/plugins/webhook` + `config.Plugins["webhook"]` | at 09 S7 (with the instance registry; SIMP2-4) the webhook plugin is replaced by **legacy-backed** `notify/webhook-<n>` instances, served in place from `plugins.webhook` by books' legacy instance store (ABO code; no core adapter and no grant) until the integrations cutover (05-metadata M1.4 step 2a, M1.10; R4-1). `n` is the 1-based position in the comma-separated `urls` list, empty entries counted: books' store blanks the entry on a Delete and appends on a create, so under this build positions — and with them instance IDs and rule references — never shift, and HEAD's parser, which skips empty entries (`internal/plugins/webhook/plugin.go:48-53` @748fd787a), sees exactly the remaining URLs. `legacy_headers` is on for every legacy-backed webhook. The legacy `secret`, `plugins.webhook.enabled` and `events` are family-level (`Shared`). The secret stays plaintext in the blob, where HEAD keeps it: `secrets` reads and writes it in place under each instance's name through books' `legacy.SecretsStore` (05-config §2.2, 05-metadata M1.4 step 2a; A-2), so an older build signs with the current secret after a rollback; encrypting it is the post-S10 secrets cutover. `events` is the stored form of the one legacy-backed global `Rule` `legacy-webhooks`, served by **books' legacy `RuleStore`** (the `NotifyRules` field of `legacy.Stores` on `Manifest.LegacyStores`, R6-3), which targets every legacy-backed webhook and whose topics are the books topics of the mapping row below (`all` or empty = HEAD's default list, `plugin.go:146-159`); a `PutRule` on it accepts only those twelve topics and `MinSeverity` info (422 `ErrRuleNotExpressible` otherwise; other routing uses native rules). A legacy-backed webhook stores no `Local`: its configured URL keeps HEAD's reach, so a LAN receiver keeps working with no upgrade step, and the URL keeps HEAD's writers (ProtectAdmin; 05-metadata M1.4 step 2a, M1.10). Creating a legacy-backed webhook
 (appending to `urls`) and changing the family-level `secret` need the same ProtectAdmin check, else 403 with nothing
 written, because a new one reads `Local=true` (05-metadata M1.3 `Put`, M1.4 step 2a "New instances"; R9-4, SEC9-6;
-`TestPut_LegacyBackedCreateNeedsProtectAdmin`). If an older build reorders or edits the list after a rollback, this build reads the list as it now is |
+`TestPut_LegacyBackedCreateNeedsProtectAdmin`); a `Test` whose body changes a webhook's URL or secret needs it too
+(05-metadata M1.3 `Test`; R10-10). With authentication off, webhooks stay editable in Settings as at HEAD, where
+every write passed with auth off: on a legacy-backed webhook the auth-disabled principal passes the check (HEAD's
+auth-off rule, 05-metadata M1.3 `Put`; R10-10, SEC10-3; `TestAuthOff_LegacyBackedIntegrationWritableAsHEAD`). If an older build reorders or edits the list after a rollback, this build reads the list as it now is |
 | plugin event types (`internal/plugin/events.go:18-31`) | books event topics declared notifiable in the events catalog: `book.imported`→`books.book.imported.v1`, `book.deleted`→`books.book.deleted.v1`, `metadata.applied`→`books.metadata.applied.v1`, `tags.written`→`books.tags.written.v1`, `file.organized`→`books.file.organized.v1`, `dedup.detected`→`books.dedup.detected.v1`, `dedup.merged`→`books.dedup.merged.v1`, `cover.changed`→`books.cover.changed.v1`, `read_status.changed`→`books.read-status.changed.v1`, `scan.completed`→`books.scan.completed.v1`, `book.quarantined`→`books.book.quarantined.v1`, `book.unquarantined`→`books.book.unquarantined.v1` (the last two exist at HEAD but are not in the webhook's default list, `internal/plugins/webhook/plugin.go:146-159`); books publishes through `Deps.Notify.Publish` in the same batch as the change (COR2-3) |
 | `plugin.Notifier`, plugin `EventBus` (for notifications) | `plugin.Notifier` deleted (N4). The plugin `EventBus` keeps feeding the webhook plugin until S7 (S6 moves only the operations bus, SIMP3-10); at S7 the webhook plugin and its subscriptions go, and books publishes its 12 event types through `Deps.Notify` instead. `internal/plugin` itself is deleted at **S7**, in the same stage, once its last importer is rewired (18 non-test, non-mock files import it at HEAD, `git grep -l '/internal/plugin"' -- '*.go'` @748fd787a; informative, ADV-11); the deleting PR does not build while any importer remains (04 §8.3 is the informative map; 09 S7). The notify-only bus role is `core/events` (05-events) |
 | `mailSenderOverride` test seam (`internal/server/server.go:424`) | `coretest.MailRecorder` injected as the email instance |
@@ -525,3 +538,10 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
   - R9-1 — §3 `RuleStore` comment: `PutRule`/`DeleteRule` commit through `storage.CommitLocked` with the legacy rule store's `legacy.WriteLock` (books: `configBlobSaveMu`); one instance per process.
   - R9-4 / SEC9-6 — §10 webhook row: creating a legacy-backed webhook or changing the family-level secret needs ProtectAdmin (05-metadata M1.3).
 - integration pass (round 9): §3 `RuleStore` comment: the rule store returns the `legacy.LockConfigSettings` lock (`configBlobSaveMu`), passed to `storage.CommitLocked(ctx, b, d, stage, locks...)`; §10 `smtp_*` row: HEAD's `json:"-"` SMTP fields are environment and operator-file only, never stored, as at HEAD.
+- Round 10:
+  - COR10-5 — §3 `RuleStore` comment: the kernel resolves `legacy.LockConfigSettings` at P4c and hands the Service `SettingsLocks`; notify never calls `WriteLocks`.
+  - R10-4 / COR10-2 — §3 `RuleStore` comment: the legacy rule store refuses a write staged into a batch without a hold (`storage.LocksHeld(b, l)`); `configBlobSaveMu` at its rank in 05-storage's total order.
+  - R10-5 / DATA10-2 — §3 `RuleStore` comment: the gap-fill file step runs inside the `CommitLocked` hold.
+  - DATA10-3 — §3 `RuleStore` comment: the rule-set mutex is taken before `CommitLocked`, never in a `stage`; the stage calls no books method that takes a HEAD mutex.
+  - R10-10 / SEC10-2 / SEC10-3 — §10 webhook row: `Test` follows `Put`'s ProtectAdmin rule; with auth off, legacy-backed webhooks stay editable as at HEAD.
+  - COR10-10 — §3 `RuleStore` comment: one instance per App.
