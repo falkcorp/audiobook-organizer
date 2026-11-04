@@ -1,7 +1,7 @@
 # file: .github/workflows/ratchet-lower.yml
-# version: 1.2.1
+# version: 1.3.0
 # guid: 2f6a9c13-8d47-4e0b-a5c2-91b7d3e4f068
-# last-edited: 2026-10-29
+# last-edited: 2026-11-04
 
 # Weekly: measure every file-backed ratchet baseline listed in ci/gates.txt and,
 # when a measured count is now LOWER, open a PR that lowers the file (07-G4,
@@ -51,6 +51,10 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
+
+      # Before the cache restore: scripts/ci/free_runner_disk.sh says why.
+      - name: Free runner disk
+        run: scripts/ci/free_runner_disk.sh
 
       - name: Restore Go cache (manual)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
