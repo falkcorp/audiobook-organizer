@@ -1,0 +1,926 @@
+<!-- file: docs/specs/platform-core/05-library.md -->
+<!-- version: 1.10.0 -->
+<!-- guid: dafe380b-f703-41cb-99d0-2b2ba32f70e5 -->
+<!-- last-edited: 2026-11-04 -->
+
+# 05 — Library roots and safe filesystem access (`library`)
+
+Evidence commit `748fd787a`; every `path:line` below is at that commit. Raw inputs:
+[`raw/05-storage.md`](../../plans/platform-core/raw/05-storage.md),
+[`raw/02-import-graph-hotspots.md`](../../plans/platform-core/raw/02-import-graph-hotspots.md),
+[`raw/08-prior-art.md`](../../plans/platform-core/raw/08-prior-art.md) §1 ("storage roots, path
+mapping, safe moves/copies, hashing, quarantine, disk checks, import observation") and §4 (Q4),
+[`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md). Names and rules are
+from [03-architecture](03-architecture.md) (`library` is **L4**, R4). Records this package owns (the
+transfer journal, quarantine records) use [05-storage](05-storage.md) keyspace `c/library/`. Library's
+native roots are the `core.library.roots`/`mappings` config entries, never records under `c/library/`, and
+they always serve. An app with pre-core roots adds them through **`legacy.LibraryRootSource`**, implemented over its
+own rows, so ABO's root data stays where and how HEAD stores it and core holds none of its key names or row
+formats (§5L.10, R4-1). The root source has no native implementation, so it is **legacy-only as a whole**:
+it lives in package `legacy`, outside the API promise (03 §3.3, 05-storage §5S.3.11; R6-3, SIMP6-3 option
+(b)), and the public `library` package names no legacy identifier. A native implementation of the interface
+over the config entries was rejected: it would be a second write path for the `core.library.roots` setting beside
+`config.Store`, bypassing the setting's protection, audit and change notification. A later native root store
+would add a `library` interface additively. Modules reach roots only through the module-scoped handle `library.Scope`
+(`module.Deps.Library`, [06](06-app-sdk.md)), which carries the module's owner.
+
+## 5L.0 Decisions in one table
+
+Decision IDs carry a `D-L` prefix so they never read as 03's layers L0–L9 (the rule COR2-19 applies to
+05-storage's decisions).
+
+| # | Decision |
+|---|---|
+| D-L1 | A **media root** (`library.Root`) is a core concept: an ID, a host path, a role (library, import, download, external), one owner (read shares for a second module are a deferred-build member, §5L.13). Modules address files as `library.Path{Root, Rel}`, never as bare absolute strings. |
+| D-L2 | All file access under a root goes through a `RootFS` backed by **`os.Root`** (Go 1.24+; Go 1.25 added `Rename`, `Link`, `Symlink`, `MkdirAll`, `RemoveAll`), so `..` and symlinks cannot escape. Operations `os.Root` cannot express (no-clobber rename, cross-root link/rename, reflink) use `*at` syscalls on directory descriptors opened *through* the root. |
+| D-L3 | **One** transfer engine (move / copy / hardlink / reflink / symlink / auto-fallback) that never clobbers, fsyncs file and directory, verifies, journals for crash recovery, checks free space first, and refuses to move or delete a file a download client is still seeding (fail-closed when that is unknown). It replaces three no-clobber renames, six byte copies and four reflinks ABO has had. |
+| D-L4 | **Path mapping** (download-client / remote-worker path ↔ `library.Path`) is a core service keyed by source, separator-boundary longest-prefix, byte-exact (no Unicode folding). |
+| D-L5 | A **sentinel file** proves a root is the right, mounted volume before any destructive action; the existing "has non-dot content" heuristic becomes the bootstrap for legacy roots only. |
+| D-L6 | Watchers (fsnotify) are core, per root, debounced, with **overflow → rescan** and **watch-limit exhaustion → polling** instead of silent loss. |
+| D-L7 | Quarantine is a core *primitive* (move into the root's quarantine area + record + release); the decision of what to quarantine stays in modules. |
+| D-L8 | Root paths of different owners never overlap; download roots are core-owned and shared read/move-out with every module that has the download capability; this is the multi-app rule. |
+| D-L9 | **Q4 answer**: one core `library.Root` abstraction; modules cannot bring their own storage driver now; `RootFS` is an interface so a remote driver can be added later without changing callers. |
+
+## 5L.1 Purpose & scope
+
+`library` owns where media lives and how bytes are moved: root registry, confined filesystem
+access, path mapping, transfers, hashing (content digest), quarantine, free-space and mount checks,
+change watching, and the app-owned directories under a root (reports, quarantine, temp).
+
+Out of scope: what a file *means* (scanners, parsers, naming patterns, identity hashes such as
+`filehash.BookFileHash` — module code); download-client protocols ([05-download](05-download.md),
+which supplies the seeding oracle and download roots); backup of media (media is not backed up by
+core — [05-backup](05-backup.md) §5B.1); permissions model ([05-rbac](05-rbac.md); this file names
+the permissions it needs).
+
+## 5L.2 Current state at HEAD
+
+| Concern | Today | Evidence |
+|---|---|---|
+| Roots | One configured `RootDir` (organized library) plus `import_path:` rows (`ID, Path, Name, Enabled, LastScan, BookCount`), CRUD on `database.Store`. `PathVars` names `libroot` and its parent `books` for abbreviation. | `internal/database/store.go:596-604`; `internal/database/iface_system.go:100-112`; `internal/pathutil/pathvars.go:18-45` |
+| Mount check | `libroot.Mounted`: root non-empty with at least one non-dot entry; the doc comment calls it "a coarse guard, not proof of a healthy mount" and lists false positives (`covers/`, `openlibrary-dumps`, config fallback dirs). | `internal/libroot/libroot.go:25-59` |
+| App dirs under a root | `.reports` created with symlink/ownership/world-write checks; app-dir exclusion list (backup dir, OL dumps, playlists, DB dir) for every walker. | `libroot.go:61-156`; `internal/appdirs/appdirs.go:43-62`; `internal/pathutil/hidden.go:73-228` |
+| Containment | `SplitRoot`/`JoinRoot`/`ValidateRel` (root-relative wire format of the remote fingerprint worker; byte-exact, no Unicode normalization; `JoinRoot` resolves symlinks and refuses escapes); separator-boundary `CutPathPrefix`/`IsWithin`; `UnderProtectedPath` fail-closed with a cached and an uncached variant for deletes. | `internal/pathutil/root.go:17-110`; `prefix.go:31,56`; `protected.go:330-357` |
+| `os.Root` | Used in exactly two places (cover replacement, flight recorder). Every other path operation is string-joined. | `internal/metadata/cover.go:123-126`; `internal/diag/flight/flight.go:595-601` |
+| Byte copies | One implementation now (`CopyFile`, `CopyFileExclusive`, `CopyFileIngestExclusive`, `CopyFileInto`) after six copies disagreed on clobber, mode, fsync and partial-file cleanup — two of which were live defects; ingest uses `LibraryFileMode` 0664, never the source's mode; file **and** parent-directory fsync behind test seams. | `internal/fileops/copy.go:18-75,88-117,129-190` |
+| Reflink | One implementation (FICLONE on Linux, clonefile on darwin, unsupported elsewhere) after four, one of which was a stub that silently byte-copied; refuses an existing destination; `ReflinkOrCopy` fallback keeps that. | `internal/fileops/reflink.go:6-80`; `reflink_linux.go:20-35` |
+| No-clobber rename | **Three** implementations: `organizer.safeRename` (Lstat + rename, TOCTOU window, post-verify), `versions.renameNoReplace` (`renameat2 RENAME_NOREPLACE` / `renamex_np`, checked fallback), `quarantine.moveNoClobber` (Lstat + rename). | `internal/organizer/saferename.go:14-48`; `internal/versions/rename_noreplace.go:12-40`; `internal/quarantine/service.go:850-870` |
+| Organize strategies | `auto` (reflink → hardlink → copy), `copy`, `hardlink`, `reflink`, `symlink`. | `internal/config/config.go:1069`; `internal/organizer/organizer.go:285-306` |
+| Hashing | Content digest `fileops.ComputeFileHashAndSize` (whole-file SHA-256 + size from one open handle). Row identity `filehash.BookFileHash` (chunked above 100 MB) kept deliberately in another package. | `internal/fileops/hash.go:15-60`; `internal/filehash/filehash.go:5-60` |
+| Quarantine | Book-level: moves a book into `<root>/.failed/<author>/<title-id>/`, resumable from path history, rollback on partial failure. | `internal/quarantine/service.go:123-278,584-850` |
+| Free space | `diskstats.Stats` (Bavail, not Bfree, deliberately) used by backup's space guard; `enable_disk_quota`/`disk_quota_percent` are only displayed. | `internal/diskstats/diskstats_unix.go:13-24`; `internal/backup/backup.go:198-268`; `internal/server/handlers/system/handler.go:389-390` |
+| Download-client paths | Deluge `save_path` joined directly (`AbsPath`), assuming the server sees the same mount; no mapping. Seeding protection: `ProtectedPathCache` (torrent save paths, 5-min refresh, plus static `protected_paths`), with `Loaded` = false meaning "unknown", which callers must treat as protected. | `internal/deluge/client.go:88-92`; `internal/deluge/protected_paths.go:15-45`; `internal/config/config.go:1781-1787` |
+| Other path maps | `itunes.path_mappings` (bidirectional prefix map, import healing); `PathAlias` (display only, deliberately separate); `WHISPER_PATH_MAP` (remote transcription worker mount); remote "lanes" for audio decode. | `config.go:35-60,107-150`; `internal/transcribe/path.go:28-40`; `pkg/ops/lanes.go:13-15` |
+| Watcher | fsnotify per enabled import path, recursive add skipping app dirs, debounce 5 s, audio-extension filter, supervisor re-reads paths on every reconcile (no restart needed). Watch-add failures are a warning; **errors from fsnotify (incl. queue overflow) are only logged**, so lost events never trigger a rescan. | `internal/watcher/watcher.go:24,82-105,141-205,166-185`; `internal/watcher/supervisor.go:73,116`; `internal/server/server_lifecycle.go:501-525` |
+| Pending file ops | `pending_file_op:<bookID>:<opType>` rows (`FileIOJob{BookID, OpType, CreatedAt}`) for crash recovery of books' per-book file I/O jobs (`apply_metadata`, `auto_fetch_file_work`); not a transfer journal. | `internal/server/file_io_pool.go:31-38,212,304,354-395,432` |
+| Browse API | `FilesystemService.BrowseDirectory` with an allow-list = import paths; registered via `init()`. | `internal/fileops/service.go:21-118`; `internal/fileops/register.go:12-21` |
+| Coupling | `fileops` imports `internal/database` and `internal/filehash` (`BookFile` types), so it cannot move to core as is; `pathutil` and `libroot` are leaves (`libroot` imports only `internal/util`). | `raw/02-import-graph-hotspots.md` (a1) rows `internal/fileops`, (a3) `internal/pathutil`; `libroot.go:6-23` |
+
+## 5L.3 Go API
+
+Package `github.com/falkcorp/mediacore/library`. Implementation of the local driver:
+`core/internal/libfs` (uses `os.Root` and `golang.org/x/sys/unix` *at calls; `x/sys` is already a
+direct dependency, `go.mod:46`).
+
+### 5L.3.1 Roots, paths, registry
+
+```go
+package library
+
+import (
+	"context"
+	"errors"
+	"io"
+	"io/fs"
+	"iter"
+	"log/slog"
+	"time"
+
+	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/metrics"
+	"github.com/falkcorp/mediacore/storage"
+)
+
+type RootID string // stable, [a-z0-9-]{1,40}; e.g. "books-library", "import-3", "dl-qbit-1"
+
+type Role uint8
+const (
+	RoleInvalid  Role = iota
+	RoleLibrary   // organized media; written by its owner module only
+	RoleImport    // watched source folders the owner ingests from
+	RoleDownload  // a download client's completed area; core-owned; modules may read and move OUT
+	RoleExternal  // someone else's tree (an iTunes library): read-only, never mutated
+)
+
+type RootSpec struct {
+	ID          RootID
+	Name        string
+	Path        string        // absolute host path; resolved once (EvalSymlinks) at registration
+	Role        Role
+	Owner       storage.Owner // module ID or "core"
+	Watch       WatchMode
+	Sentinel    SentinelMode
+	MinFree     int64         // bytes that a transfer into this root must leave free
+	Quarantine  string        // rel dir; default ".mediacore/quarantine"; books keeps ".failed"
+	AppDir      string        // rel dir for app state; default ".mediacore"
+	Aliases     []Alias       // display renderings for remote clients (ABO PathAlias); never used for I/O
+}
+
+type Alias struct{ Windows, UNC, SMBURL string }
+
+type WatchMode uint8
+const ( WatchInvalid WatchMode = iota; WatchAuto; WatchNotify; WatchPoll; WatchOff )
+
+type SentinelMode uint8
+const (
+	SentinelInvalid  SentinelMode = iota
+	SentinelRequired  // new roots: .mediacore/root.json must exist and name this install and root ID
+	SentinelBootstrap // legacy-served roots: created when the heuristic passes; a present sentinel must
+	                  // match, an absent one leaves the decision to the heuristic (§5L.10)
+)
+
+// Path is the only way modules name a file. JSON: {"root":"books-library","rel":"Author/Title/01.m4b"}.
+// Rel is POSIX-relative, clean, never "..", never absolute, NUL-free, byte-exact
+// (pathutil.ValidateRel semantics, root.go:51-72).
+type Path struct {
+	Root RootID `json:"root"`
+	Rel  string `json:"rel"`
+}
+func (p Path) Join(elem ...string) (Path, error)
+func (p Path) Dir() Path
+func (p Path) Base() string
+func (p Path) String() string // "root:rel", for logs
+
+// Manager is the core service. Core subsystems and the kernel hold it; a
+// module never does — it receives a Scope (below). Mutating calls name the
+// caller explicitly here; Scope supplies it implicitly.
+type Manager interface {
+	Root(id RootID) (*Root, error)
+	Roots(filter RootFilter) []*Root
+	// Resolve maps an absolute host path to the most specific root that contains
+	// it (separator boundary). ErrNotUnderRoot if none.
+	Resolve(abs string) (Path, error)
+	// Abs returns the resolved host path, for handing to external tools
+	// (ffmpeg, a tagger). The result is checked to be inside the root after
+	// symlink resolution (pathutil.JoinRoot semantics, root.go:79-110).
+	Abs(p Path) (string, error)
+
+	Transfer(ctx context.Context, caller storage.Owner, src, dst Path, opts TransferOptions) (TransferResult, error)
+	// TransferIn performs the same transfer, but the step that finishes its
+	// journal row (step 6 of the algorithm) is staged into the caller's batch b
+	// instead of committing on its own, so "file moved" and the caller's rows
+	// ("history written", "item imported") become durable in ONE commit
+	// (COR-4). library binds its own c/library/ keyspace to b (participant
+	// binding, 05-storage §5S.3.2); the caller commits b.
+	TransferIn(ctx context.Context, b *storage.Batch, caller storage.Owner, src, dst Path, opts TransferOptions) (TransferResult, error)
+	Hash(ctx context.Context, p Path) (Digest, error)
+	Quarantine(ctx context.Context, caller storage.Owner, p Path, reason string) (QuarantineID, error)
+	Release(ctx context.Context, caller storage.Owner, id QuarantineID, to *Path) (Path, error)
+	Watch(ctx context.Context, id RootID, opts WatchOptions) (iter.Seq[[]Event], error)
+	Mapper() PathMapper
+}
+
+// Scope is the module-scoped handle (module.Deps.Library, 06 §6.4.4, COR-21).
+// The kernel builds one per module with that module's owner bound in, so a
+// module cannot act as another owner and "a RoleLibrary root is written by
+// its owner only" has an enforcement point the caller cannot spoof.
+type Scope interface {
+	Owner() storage.Owner
+	Roots(filter RootFilter) []*Root // roots the module owns or may read
+	FS(id RootID) (RootFS, error)    // = Root.FS(Owner()): read-only unless the module may write the root
+	Resolve(abs string) (Path, error)
+	Abs(p Path) (string, error)
+	Transfer(ctx context.Context, src, dst Path, opts TransferOptions) (TransferResult, error)
+	TransferIn(ctx context.Context, b *storage.Batch, src, dst Path, opts TransferOptions) (TransferResult, error)
+	Hash(ctx context.Context, p Path) (Digest, error)
+	Quarantine(ctx context.Context, p Path, reason string) (QuarantineID, error)
+	Release(ctx context.Context, id QuarantineID, to *Path) (Path, error)
+	Watch(ctx context.Context, id RootID, opts WatchOptions) (iter.Seq[[]Event], error)
+	Mapper() PathMapper
+	// PendingTransfers lists this owner's TransferIn journal rows whose file
+	// operation finished but whose caller batch never committed (a crash
+	// between the two); the module reconciles each one idempotently.
+	PendingTransfers(ctx context.Context) ([]TransferRecord, error)
+}
+
+type TransferRecord struct {
+	ID       string
+	Src, Dst Path
+	Did      TransferMode
+	SHA256   string
+	At       time.Time
+}
+
+type RootFilter struct{ Owner storage.Owner; Role Role; Readable bool }
+
+type Root struct{ /* unexported */ }
+func (r *Root) ID() RootID
+func (r *Root) Spec() RootSpec
+// FS returns the confined filesystem for this caller. A caller without write
+// rights (not the owner, or a RoleExternal root) gets a read-only RootFS whose
+// mutating methods return ErrReadOnlyRoot.
+func (r *Root) FS(caller storage.Owner) (RootFS, error)
+func (r *Root) Usage(ctx context.Context) (Usage, error)
+// Mounted verifies the sentinel (and, for SentinelBootstrap roots before the
+// sentinel exists, the non-dot-content heuristic of libroot.Mounted).
+func (r *Root) Mounted(ctx context.Context) error
+// AppDir returns a confined directory under <root>/<AppDir>/<name>, created
+// owner-only-writable, refusing a symlink or a foreign-owned directory
+// (libroot.ensureReportsDir semantics, libroot.go:108-156).
+func (r *Root) AppDir(ctx context.Context, name string) (RootFS, error)
+
+type Usage struct{ Total, Avail uint64 } // Avail = Bavail (diskstats_unix.go:13-17)
+
+// Options is library's constructor input, built by the kernel at 06 P5
+// (R7-7, SIMP7-4).
+type Options struct {
+	Keyspace storage.Keyspace   // c/library/: the transfer journal and quarantine records
+	Config   *config.Store      // core.library.roots / mappings: read, and written through Apply like any setting (§5L.4)
+	Oracles  []ProtectionOracle // the download adapters' seeding oracles and the static protected-path list (05-download)
+	// LegacySource is the app's legacy root source: the value the kernel built
+	// from the legacy.Stores.Roots constructor (a legacy.LibraryRootSource),
+	// nil when no module supplies one. It is typed any because library may not
+	// name a legacy type and no SDK interface exists for it (03 §3.3, R7-7): New
+	// asserts it against library's unexported mirror and returns
+	// storage.ErrLegacyStoreType on a mismatch, which fails the boot, never a
+	// silent skip. Inert (nil) after the roots' cutover; it stays in v1.
+	LegacySource any
+	Logger       *slog.Logger
+	Metrics      *metrics.Scope // core scope "mediacore.library"
+}
+
+// New builds the Manager. It reads nothing from the store and starts no
+// goroutine; the kernel loads the roots after storage migrations (§5L.4).
+func New(opts Options) (Manager, error)
+
+var (
+	ErrNotUnderRoot    = errors.New("library: path is under no registered root")
+	ErrEscapesRoot     = errors.New("library: path escapes its root")
+	ErrBadRel          = errors.New("library: invalid root-relative path")
+	ErrReadOnlyRoot    = errors.New("library: caller may not write this root")
+	ErrNotMounted      = errors.New("library: root sentinel missing or mismatched (not mounted, or the wrong volume)")
+	ErrRootOverlap     = errors.New("library: root overlaps a root of another owner")
+	ErrUnknownRoot     = errors.New("library: unknown root")
+	// ErrRootFieldFixed: a change to a field the root's stored form has no
+	// place for (a legacy-served root's Watch, Sentinel, Quarantine, AppDir or
+	// MinFree, §5L.10); nothing is staged.
+	ErrRootFieldFixed  = errors.New("library: the root's stored form fixes this field")
+)
+```
+
+**The legacy root source (R6-3, SIMP6-3, SIMP6-5, R7-7).** An app's pre-core roots come in through
+`legacy.LibraryRootSource`, supplied as the `legacy.Stores.Roots` constructor on `module.Manifest.LegacyStores`
+and built at 06 P4c over that module's own handles (`legacy.Handles`). The kernel passes the built source
+to `library.New` as `Options.LegacySource any`; `library` names it only through an **unexported** interface
+of its own with the same method set, asserts it at construction and fails the boot with
+`storage.ErrLegacyStoreType` on a mismatch. The mirror test is 03 §3.3's (COR7-2, SIMP7-1): library's
+`export_test.go` (`package library`) only exports a test alias of the mirror and of its route-key helper,
+and `legacy_mirror_test.go` in `package library_test`, which may import `legacy`, asserts in both directions
+that the mirror and `legacy.LibraryRootSource` are mutually assignable and compares `legacy.LibraryCoverID`
+with library's own route key for every role on a table. Every write takes the caller's batch. Fields the
+app owns in the same row (books: scan statistics) are never written by these methods.
+
+**No root takes read shares during the extraction (SIMP7-2, SIMP8-5).** A share names a second module that
+may read a root, and no S0–S10 app has two modules: ABO ships one (03 R3), the TV and Movies proofs are
+single-module apps, and `examples/hello` reads no one else's roots. `RootSpec` therefore has no
+`ReadShares` field; it, its read clause and its refusal on a legacy-served root (whose row has no place for
+shares) land together with the first app that shares a root (§5L.13). A legacy-served root keeps nothing
+beside its legacy row (A-2).
+
+```go
+package legacy
+
+// LibraryRootSource adds an app's pre-core roots beside library's config-entry
+// roots (routed per root by Covers; 05-storage §5S.3.11). It has no native
+// implementation, so the whole interface is legacy-only (SIMP6-3); the name
+// carries its former package's name (03 §3.3 naming rule, SIMP7-8).
+type LibraryRootSource interface {
+	// List returns the source's roots; each field the legacy row has no place
+	// for carries the source's fixed value (§5L.10).
+	List(ctx context.Context) ([]library.RootSpec, error)
+	// Covers is the routing predicate (Covering's shape, a member here because
+	// the interface is legacy-only). id is LibraryCoverID(role, rootID): the
+	// source holds that root, or would hold a NEW root of that role (rootID
+	// "") — books covers every "import/…" ID and its books root — so the
+	// previous build keeps seeing every root it can store. Every other root is
+	// a config entry.
+	Covers(id string) bool
+	// Create allocates the legacy ID, writes the legacy row and its index rows
+	// in b, and returns the root's ID; a spec whose fixed fields differ from the
+	// source's values is refused with library.ErrRootFieldFixed. Books
+	// allocates the ID as HEAD does, through nextID under counterMu with its
+	// own Sync commit, on the one books store instance its CreateImportPath
+	// callers also use (05-storage §5S.3.11 "One instance per family"), so two
+	// roots never receive one ID (R9-1, DATA9-2).
+	Create(ctx context.Context, b *storage.Batch, spec library.RootSpec) (library.RootID, error)
+	// Update rewrites only library's fields of the row, with an Expect on the
+	// bytes it read (a voluntary compare-and-set in the row's Serialized claim;
+	// storage enforces none, A-3). The source offers no legacy.WriteLock: HEAD
+	// guards these rows with no mutex, and from S7 every writer of the row
+	// compare-and-sets (§5L.10), which is what makes the Expect sound
+	// (05-storage §5S.3.2, R9-1). A change to a fixed field is refused with
+	// library.ErrRootFieldFixed, nothing staged.
+	Update(ctx context.Context, b *storage.Batch, spec library.RootSpec) error
+	// Delete deletes the row and its index rows.
+	Delete(ctx context.Context, b *storage.Batch, id library.RootID) error
+}
+
+// LibraryCoverID is the record ID a LibraryRootSource's Covers receives:
+// "<role>/<root id>", the root ID empty for a root not yet created
+// ("import/"). Role names are the lower-case Role constant names; neither
+// part contains "/" (RootID grammar). One name per package for this helper:
+// IntegrationsCoverID, ProviderHTTPCoverID, LibraryCoverID (SIMP6-5).
+func LibraryCoverID(r library.Role, id library.RootID) string
+```
+
+Conformance:
+`legacytest.LibraryRootSourceSuite` (05-storage §5S.3.11; the suite name follows the
+`legacytest.<Pkg><Interface>Suite` rule, SIMP7-8), which runs the `Covers` cases;
+core runs it against a fixture source, ABO against books' source with HEAD fixtures.
+
+**Error strings and the key-name gate (MOD5-3).** Every sentinel of this package follows Go's
+`pkg: message` form, and `library:` is also an ABO key family (`internal/database/keyfamilies.go:126`,
+"legacy library paths"). The ABO-side `TestCoreHoldsNoAppKeyNames` (03 R1(c), 04 §2.1 (h), 05-storage
+§5S.9.1) matches a family prefix only when the character after it is not a space, so these strings pass,
+while a key literal such as `"library:" + id` would fail; its cases include one of these sentinels. Core
+never builds a `library:` key: ABO's root rows are reached only through books' `legacy.LibraryRootSource`.
+
+### 5L.3.2 `RootFS` — the confined filesystem (and the Q4 extension point)
+
+```go
+// RootFS is every file operation a module may perform under one root. The
+// local implementation wraps *os.Root; a future remote driver implements the
+// same interface (Q4). All names are root-relative and validated.
+type RootFS interface {
+	fs.FS
+	fs.StatFS
+	fs.ReadDirFS
+
+	Lstat(name string) (fs.FileInfo, error)
+	OpenFile(name string, flag int, perm fs.FileMode) (File, error)
+	// CreateExclusive is O_CREATE|O_EXCL: an existing name is fs.ErrExist.
+	CreateExclusive(name string, perm fs.FileMode) (File, error)
+	MkdirAll(name string, perm fs.FileMode) error
+	Remove(name string) error
+	// RenameNoReplace never replaces an existing destination (any type,
+	// dangling symlink included): fs.ErrExist and nothing changes.
+	RenameNoReplace(oldname, newname string) error
+	Link(oldname, newname string) error          // fs.ErrExist if newname exists
+	Reflink(oldname, newname string) error       // ErrReflinkUnsupported, fs.ErrExist
+	// Symlink's target must itself be a library.Path inside a root the caller
+	// can read; os.Root.Symlink does not validate targets, this does.
+	Symlink(target Path, newname string) error
+	SyncDir(name string) error                   // EINVAL/ENOTSUP treated as success (copy.go:88-108)
+	Walk(ctx context.Context, dir string, opts WalkOptions) iter.Seq2[Entry, error]
+}
+
+type File interface {
+	fs.File
+	io.Writer
+	io.WriterAt
+	io.Seeker
+	Sync() error
+	Stat() (fs.FileInfo, error) // on the descriptor, never the path (hash.go:22-31)
+}
+
+type WalkOptions struct {
+	SkipHidden  bool            // pathutil.ShouldSkipDir rule; AppDir and Quarantine are always skipped
+	Extensions  []string        // case-insensitive filter on files; nil = all
+	FollowLinks bool            // false: symlinks are reported, never followed
+}
+
+type Entry struct {
+	Path Path
+	Info fs.FileInfo
+}
+
+var ErrReflinkUnsupported = errors.New("library: reflink not supported on this filesystem")
+```
+
+Local driver rules: every name is checked by `ValidateRel` before reaching `os.Root`; operations
+that `os.Root` lacks open the **parent directory through the root** (`root.Open(dir)`) and call
+`unix.Renameat2(…, RENAME_NOREPLACE)` / `unix.Linkat` / `FICLONE` with a single-component final
+name, so confinement is preserved. On a filesystem without `RENAME_NOREPLACE` the fallback for
+regular files is `Linkat` + `Unlinkat` (atomic no-clobber, as `os.Link` already is), for directories
+the checked rename with its documented window (`versions/rename_noreplace.go:24-33`). Windows:
+`MoveFileEx` without `MOVEFILE_REPLACE_EXISTING`; reflink unsupported.
+
+### 5L.3.3 Transfers
+
+```go
+type TransferMode uint8
+const (
+	TransferInvalid TransferMode = iota
+	Move      // same device: no-clobber rename; cross-device: copy → verify → fsync → remove source
+	Copy
+	Hardlink  // same device only; else ErrCrossDevice
+	Reflink   // else ErrReflinkUnsupported
+	Symlink
+	Auto      // reflink → hardlink → copy (ABO "auto", organizer.go:285-293)
+)
+
+type PermPolicy uint8
+const (
+	PermInvalid    PermPolicy = iota // no default: see fileops/copy.go:58-75
+	PermFromSource                    // a sibling of the same file (backup, temp-and-rename)
+	PermLibrary                       // ingest: 0664 then umask (fileops.LibraryFileMode)
+)
+
+type VerifyLevel uint8
+const ( VerifyInvalid VerifyLevel = iota; VerifySize; VerifySHA256 )
+
+type TransferOptions struct {
+	Mode     TransferMode
+	Perm     PermPolicy
+	Verify   VerifyLevel
+	// Replace, when set, allows overwriting dst only if dst's current SHA-256
+	// equals Replace.ExpectSHA256 (compare-and-swap); the old file is kept as
+	// <dst>.mediacore-replaced-<unix> until the transfer is durable.
+	Replace  *ReplaceSpec
+	MkdirAll bool
+	Journal  bool // default true via NewTransferOptions; false only for temp files inside AppDir
+}
+
+type ReplaceSpec struct{ ExpectSHA256 string }
+
+func NewTransferOptions(mode TransferMode, perm PermPolicy, verify VerifyLevel) TransferOptions
+
+type TransferResult struct {
+	Did      TransferMode // what actually happened (Auto resolves to one of the others)
+	Bytes    int64
+	SHA256   string       // set when Verify == VerifySHA256 or the copy path hashed anyway
+	Duration time.Duration
+}
+
+var (
+	ErrCrossDevice       = errors.New("library: hardlink across filesystems")
+	ErrSourceProtected   = errors.New("library: source is protected (seeding, external root, or protection state unknown)")
+	ErrInsufficientSpace = errors.New("library: destination would drop below its root's free-space floor")
+	ErrVerifyFailed      = errors.New("library: destination does not match source after transfer")
+	ErrReplaceMismatch   = errors.New("library: destination changed; refusing to replace")
+)
+
+// ProtectionOracle is implemented by download adapters (05-download) and by the
+// static protected-path list. Loaded=false means "unknown" and is treated as
+// protected for Move and Remove (deluge/protected_paths.go:37-45).
+type ProtectionOracle interface {
+	Protected(ctx context.Context, p Path) (protected, loaded bool, err error)
+}
+```
+
+Transfer algorithm (each step journaled in `c/library/transfer/<id>`):
+
+| Step | Action |
+|---|---|
+| 0 | Validate both paths; caller may write `dst.Root` and read `src.Root`; `Move` also needs move-out rights on `src.Root` (owner, or any module with download capability on a `RoleDownload` root). `src.Root` is `RoleExternal` or the oracle says protected/unknown → `Move` refused (`ErrSourceProtected`); copy/link allowed. |
+| 1 | `dst.Root.Mounted`; `src.Root.Mounted` for `Move`. Free space: `Avail - size < MinFree` → `ErrInsufficientSpace` before any byte is written (link/rename modes on the same device skip the check). |
+| 2 | Same device + `Move` → `RenameNoReplace` → step 5. `Hardlink`/`Reflink`/`Auto` → link/clone directly to the final name (both refuse an existing name). |
+| 3 | Copy path: write to `<dst dir>/.mediacore-tmp-<id>` with `CreateExclusive`, `PermPolicy` mode, stream with hashing, `File.Sync`. |
+| 4 | Verify (size, or SHA-256 of the written bytes vs the source digest computed while reading). Publish with `Link(tmp, final)` (fs.ErrExist if someone created `final` meanwhile) then remove tmp; `SyncDir(dst dir)`. |
+| 5 | `Move` across devices: only now remove the source, `SyncDir(src dir)`. |
+| 6 | `Transfer`: the journal row is deleted in its own commit. `TransferIn`: the row is marked `done` (its own commit, after step 5), and its **delete is staged into the caller's batch** `b`, so the caller's rows and the end of the journal commit together. A crash after step 5 but before `b` commits leaves a `done` row and no caller rows: boot recovery never undoes it, and `Scope.PendingTransfers` reports it to the owning module, which re-runs its own write idempotently (an import keyed by its own ID and the destination digest finds the file already in place). A `b` that is discarded instead of committed has the same outcome. |
+
+Boot recovery (`core.library.transfer-recover`, a task triggered once at start through its `Schedule`'s `OnStart()`, 05-tasks):
+each unfinished journal row is completed or rolled back from its last durable step (temp removed; a
+verified destination whose source still exists after a cross-device move gets the source removed only
+if the source digest still matches). `done` rows of `TransferIn` are left for `PendingTransfers`.
+
+### 5L.3.4 Hashing
+
+```go
+type Digest struct {
+	SHA256 string
+	Size   int64
+}
+
+// Hash reads the file once through its root, hashing and sizing the same
+// descriptor (fileops/hash.go:22-31). It honours ctx between 1 MiB reads and
+// core.library.hash.max_bytes_per_sec. Identity hashes with module-specific
+// algorithms (filehash.BookFileHash) stay in the module and use RootFS.Open.
+```
+
+Library-scale hashing (backfills) runs as `tasks` work with a declared `tasks.Parallelism` (R7):
+`tasks.Fixed(min(4, NumCPU), "disk-bound: per root device")` per root device, so two roots on two
+disks hash in parallel and one disk is not thrashed.
+
+### 5L.3.5 Quarantine
+
+```go
+type QuarantineID string // ULID
+
+type QuarantineRecord struct {
+	ID       QuarantineID
+	Original Path
+	Held     Path      // <root>/<Quarantine>/<id>/<rel>
+	Owner    storage.Owner
+	Reason   string
+	At       time.Time
+}
+
+// Quarantine moves p (file or directory) to the same root's quarantine area
+// with RenameNoReplace (same root ⇒ same filesystem ⇒ atomic) and records it in
+// c/library/quarantine/<id> in the same logical step (journal first).
+// Release moves it back to Original (or *to), never clobbering.
+// Records are listed per owner; Purge is a separate, permissioned action.
+func (m *manager) Purge(ctx context.Context, id QuarantineID) error
+```
+
+The books module keeps its book-level policy (`internal/quarantine/service.go:123-278`: which files,
+path-history resumption, author/title folder naming) and calls the primitive per file set;
+`RootSpec.Quarantine = ".failed"` keeps today's on-disk location. The same primitive is the
+Sonarr/Radarr "recycle bin" for TV/Movies deletes (`raw/16-arr-domain-research.md` row 11), with
+`core.library.quarantine.retention` as its cleanup age, applied by task `core.library.quarantine-prune`
+(`Schedule: tasks.ScheduleFromConfig("core.library.schedules.quarantine_prune")`, a key declared in
+library's own namespace with type `tasks.ScheduleConfig`, SIMP-6, R2-7; no bespoke timer; a no-op while
+the retention is 0).
+
+### 5L.3.6 Path mapping
+
+```go
+// Mapping says how a remote system's view of a path corresponds to a root.
+type Mapping struct {
+	Source  string // "download:<client-instance-id>", "worker:fingerprint", "itunes", "worker:whisper"
+	Remote  string // prefix as the remote side writes it: "<dl-root>/complete", a Windows drive form "<drive>:\\<dir>", or a file URL of either
+	Local   Path   // root + rel prefix it corresponds to
+	Fold    bool   // case-insensitive match (Windows remotes only)
+}
+
+type PathMapper interface {
+	// ToLocal: longest Remote prefix of this Source on a separator boundary
+	// (pathutil.CutPathPrefix semantics, prefix.go:31); remote separators
+	// normalised to '/'; file:// URLs percent-decoded per segment
+	// (config.normalizeWindowsPrefix rationale, config.go:62-90). The result
+	// must pass ValidateRel. With no mapping, an absolute remote path that
+	// is itself under a root resolves identically (Deluge today, client.go:91).
+	ToLocal(source, remote string) (Path, error)
+	ToRemote(source string, p Path) (string, error)
+	Mappings(source string) []Mapping
+}
+
+var ErrUnmapped = errors.New("library: remote path matches no mapping and no root")
+```
+
+Mappings are DB-backed config (`core.library.mappings`, [05-config](05-config.md)), edited through
+`/api/core/v1/library/mappings` with `core:library.manage`. A download adapter (Sonarr's "remote path
+mappings") calls `ToLocal(src, item.SavePath)` before handing an item to an import module;
+`(Root, Rel)` is also the wire format for remote workers, generalising the fingerprint worker's
+`SplitRoot`/`JoinRoot` (`root.go:17-31,79-90`) so each side joins `Rel` onto its own mount.
+
+### 5L.3.7 Watchers
+
+```go
+type WatchOptions struct {
+	Debounce   time.Duration // default 5s (watcher.go:24)
+	Extensions []string      // nil = all files
+	Recursive  bool          // default true
+	OnError    func(error)   // also surfaced in health and the activity log
+}
+
+type EventKind uint8
+const (
+	EventInvalid EventKind = iota
+	EventChanged  // create, write, rename, remove of a matching file
+	EventRescan   // events were lost (queue overflow, watch-add failure, poll fallback tick): rescan the root
+)
+
+type Event struct {
+	Kind EventKind
+	Dir  Path // coalesced by directory; Root path for EventRescan
+}
+
+// Watch yields debounced batches until ctx is done. Implementation: one
+// fsnotify watcher per root, recursive adds that skip AppDir, Quarantine and
+// hidden dirs; a directory created later is added on its Create event
+// (watcher.go:186-191). fsnotify errors — notably the overflow error — yield
+// EventRescan instead of being dropped (watcher.go:178-183 only logs today).
+// If adding watches fails for lack of kernel watches, the root degrades to
+// polling every core.library.watch.poll_interval and health reports it.
+```
+
+`WatchAuto` picks notify for local filesystems and poll for network filesystems (statfs `f_type` of
+NFS/SMB/FUSE), because inotify does not observe changes made by other clients. The poll fallback is an
+in-process tick of the watcher component, not a task schedule, although it is slower than a minute: it
+runs only while the platform watcher is unavailable for that root, is per root, and holds no durable
+work (a missed tick loses nothing; the next one rescans). 05-tasks §5T.3.8 lists it, with that reason,
+as the one above-a-minute exception (SIMP2-1). The supervisor
+reconciles watched roots whenever the registry changes, without a restart (kept from
+`server_lifecycle.go:501-503`).
+
+### 5L.3.8 Ownership and sharing rules (multi-app)
+
+| Rule | Enforcement |
+|---|---|
+| Every root has exactly one owner (a module ID or `core`). | registration |
+| Roots of **different** owners may not overlap: neither resolved path may be inside the other, compared after `EvalSymlinks` *and* by device+inode of the root directory (catches bind mounts). Same-owner nesting is allowed only if the outer root lists the inner as excluded (its walkers skip it). | registration → `ErrRootOverlap`; boot re-check (a mount can change) → root disabled + health `critical` |
+| Write: owner only. Read: owner (read shares are deferred, §5L.13; SIMP8-5). `RoleExternal`: nobody writes. | `Scope.FS` / `Scope.Transfer` with the owner bound by the kernel (COR-21); `Root.FS(caller)` is reachable only by core holders of `Manager` |
+| `RoleDownload` roots are core-owned; every module with the download capability may read and move **out**, never write in. TV and Movies in one binary therefore share download roots but never library roots. | `Transfer` step 0 |
+| A disabled module's roots: retained, unwatched, no transfers or quarantine (G1). | kernel enablement |
+| The app's own directories (the DB's parent with its indexes, aux DBs and backups, and the state directory; there is no data-dir key, 05-config §1.7) may not be inside any root unless excluded via `AppDir`; registration warns and walkers skip it (successor of `appdirs`). | registration |
+
+Permissions declared by core (names per 03 §3.6): `core:library.manage` (roots, mappings,
+quarantine purge), `core:library.browse` (directory picker; replaces `BrowseDirectory`'s allow-list,
+`fileops/service.go:46-118`, with "inside a registered root or a path an admin is registering").
+
+## 5L.4 Lifecycle
+
+1. After storage migrations the kernel loads the roots and mappings from their stored forms (R4-1,
+   §5L.10): the roots of the app's `legacy.LibraryRootSource`, if one is supplied (for ABO, books' import roots and
+   its library root, each with the source's fixed values for the fields its row has no place for), and every
+   other root and mapping from `core.library.roots` / `core.library.mappings` (stored through config's
+   store). A new root goes to the source when its `Covers`
+   accepts `LibraryCoverID(role, "")`, else to `core.library.roots` (written through `config.Store`); an
+   existing root is updated or deleted where it lives (`Covers(LibraryCoverID(role, id))`), and the root
+   list merges both. The `backends` ledger records `legacy+native` while a source is supplied, else `native`
+   (05-storage §5S.3.11).
+2. Modules declare required roles in their manifest (`module.Manifest.Library: []RoleRequirement`);
+   the kernel reports unmet requirements as a setup task in the UI, not a boot failure (a fresh
+   install has no roots yet).
+3. Each root: resolve path, overlap check, sentinel check (`SentinelBootstrap` may create it),
+   `os.OpenRoot`. A root that fails is **disabled** (health `critical`, transfers refused), the
+   app still boots.
+4. The kernel builds one `library.Scope` per enabled module (owner bound in) for `module.Deps.Library`.
+5. Transfer recovery task runs; watchers (one per watched root, a `lifecycle.Component`; poll fallback
+   ticks are in-process, not task schedules, SIMP-6) start with the task executor.
+6. Shutdown: watchers stop (ctx), in-flight transfers finish their current step or roll back via
+   the journal at next boot; `os.Root` handles close last.
+
+## 5L.5 Error semantics
+
+| Error path | Fail-open / fail-closed | Why |
+|---|---|---|
+| Path escapes root (`..`, symlink out, absolute rel) | closed | Confinement is the point (D-L2). |
+| Sentinel missing/mismatched | closed for destructive ops (remove, move-out, quarantine, "not found ⇒ gone" decisions); open for reads | An unmounted share reads as an empty tree (`libroot.go:25-30`); reading is harmless, acting on absence is data loss. |
+| Root path unresolvable at boot | closed for that root (disabled), open for the app | One bad mount must not take down the other roots. |
+| Destination exists | closed (`fs.ErrExist`), unless `Replace` CAS matches | POSIX rename and `os.Create` silently clobber (`saferename.go:14-20`, `reflink.go:29-35`). |
+| Seeding state unknown (`loaded=false`) | closed for Move/Remove; open for copy/link | Same rule as `protected_paths.go:37-41`. |
+| Protected-path resolution error (link cycle, EACCES) | closed (protected) | Kept from `protected.go:330-341`. |
+| Free space below floor | closed before writing | Backup space incident rationale (`backup.go:85-100`) applies to every large write. |
+| Verify mismatch | closed: temp removed, source untouched, `ErrVerifyFailed` | A copy that does not match is not a copy. |
+| Reflink unsupported | open → fallback when mode is `Auto`; closed when mode is `Reflink` | The caller asked for a specific guarantee. |
+| Directory fsync EINVAL/ENOTSUP | open (success) | Not the durability mechanism on those filesystems (`copy.go:88-108`). |
+| Other fsync error | closed | Something is genuinely wrong with the directory. |
+| fsnotify overflow / error | open + `EventRescan` | Lost events must cause a rescan, never silence. |
+| Watch limit exhausted | open → polling, health `degraded` | Coverage over efficiency. |
+| Mapping not found | closed (`ErrUnmapped`) | Guessing a path is how imports land in the wrong place. |
+| Journal write fails | closed (no file operation starts) | Without the journal a crash cannot be recovered. |
+
+## 5L.6 Concurrency contract
+
+- `Manager`, `Root`, `RootFS` (local), `PathMapper` are goroutine-safe; `File` is not.
+- Transfers take a striped per-path lock on **both** `src` and `dst` (`core/internal/keyedmutex`, a
+  core-internal copy of ABO's package that 04 §8.1 adds at S3; ABO keeps its own `internal/keyedmutex`,
+  and core never imports it, R1, COR2-16), acquired in sorted order to avoid deadlock; two workers can
+  never race on one destination name (the stat-then-create race documented at `reflink.go:29-35`
+  cannot occur because creation is `O_EXCL`/`link` anyway, the lock removes wasted work).
+- Library-scale work (hash backfills, rescans) runs only as `tasks` with declared
+  `tasks.Parallelism` (R7); `library` itself starts no unbounded goroutines: one goroutine per
+  watched root plus one debounce timer each.
+- All long operations take `ctx` and stop at a 1 MiB boundary; a cancelled copy removes its temp.
+- Watcher callbacks are delivered on the consumer's goroutine (pull iterator), so a slow consumer
+  coalesces batches instead of growing an unbounded queue.
+- Tests drive debounce and poll timing with `testing/synctest`.
+
+## 5L.7 Config keys
+
+Protection levels are 05-config's (SEC-6, SEC2-8): a root is a path the server reads, writes, scans and
+moves files under (`FieldServerPath`), so the root list is `ProtectAdmin`; a mapping decides where an
+import lands, a free-space floor and a quarantine retention decide when files are refused or deleted, so
+they need an interactive session.
+
+| Key | Type | Default | Hot-reload? | Protection |
+|---|---|---|---|---|
+| `core.library.roots` | list of `RootSpec` (DB-backed) | empty | yes (supervisor reconcile) | admin |
+| `core.library.mappings` | list of `Mapping` (DB-backed) | empty | yes | interactive |
+| `core.library.transfer.workers` | int | 4 | yes | none |
+| `core.library.hash.max_bytes_per_sec` | int64 | 0 (unlimited) | yes | none |
+| `core.library.hash.workers_per_device` | int | `min(4, NumCPU)` | yes | none |
+| `core.library.watch.debounce` | duration | 5s | yes | none |
+| `core.library.watch.poll_interval` | duration | 15m | yes | none |
+| `core.library.free_space.warn_percent` | int | 10 | yes | none |
+| `core.library.free_space.default_min_bytes` | int64 | 5 GiB | yes | interactive |
+| `core.library.quarantine.retention` | duration | 0 (keep until purged) | yes | interactive |
+| `core.library.schedules.quarantine_prune` | `tasks.ScheduleConfig` | `{enabled: true, every: 24h}` | yes | none |
+
+ABO compatibility (09 owns aliases): `root_dir` → root `books-library`; `import_path:` rows →
+`import-<id>` roots; `protected_paths` → `RoleExternal` roots or oracle entries;
+`enable_disk_quota`/`disk_quota_percent` → `MinFree` of the books root;
+`itunes.path_mappings` → mappings with `Source: "itunes"`; `path_aliases` → `RootSpec.Aliases`. These
+keys and rows are **read and written in place**, in their legacy format, never copied, by books' own
+code — the config keys through books' legacy config store (05-config), the import-root rows through
+books' `legacy.LibraryRootSource` (R4-1, §5L.10): `core.library.roots` and `core.library.mappings` hold only entries
+with no legacy home, so the previous release still sees every library root, import root and mapping
+this build changed.
+
+## 5L.8 Metrics
+
+| Name | Type | Labels |
+|---|---|---|
+| `mediacore_library_transfers_total` | counter | `mode` (requested), `did`, `outcome` |
+| `mediacore_library_transfer_bytes_total` | counter | `did` |
+| `mediacore_library_transfer_duration_seconds` | histogram | `did` |
+| `mediacore_library_hash_bytes_total` | counter | `root` |
+| `mediacore_library_root_avail_bytes` | gauge | `root` |
+| `mediacore_library_root_state` | gauge | `root`, `state` (ok, unmounted, disabled, degraded) |
+| `mediacore_library_watch_events_total` | counter | `root`, `kind` |
+| `mediacore_library_watch_rescans_total` | counter | `root`, `reason` (overflow, add_failed, poll) |
+| `mediacore_library_quarantined` | gauge | `owner` |
+| `mediacore_library_refusals_total` | counter | `reason` (escape, exists, protected, space, unmounted) |
+
+`root` cardinality = number of configured roots (operator-bounded, tens).
+
+Names are shown with the default namespace `mediacore`; core takes the namespace as an `app.Options` value
+and ABO passes its own (A-5, 05-metrics), so no ABO series is renamed.
+
+## 5L.9 Tests
+
+| Test | Proves |
+|---|---|
+| `TestRootFSRefusesDotDotAndSymlinkEscape` | confinement via `os.Root`, incl. a symlink swapped in mid-walk |
+| `TestRenameNoReplaceNeverClobbers` | file, dir, dangling symlink destination; fallback path on a no-flag filesystem |
+| `TestTransferCopyPublishIsNoClobber` | concurrent creator of the final name wins, our temp is removed |
+| `TestTransferCrossDeviceMoveOrder` | source removed only after dest fsync + verify (fault-injected crash at each step) |
+| `TestTransferRecoveryFromJournal` | every journal state recovers to done or rolled back |
+| `TestTransferPermPolicyHasNoDefault` | zero `PermPolicy` rejected; ingest ignores a 0600 source |
+| `TestTransferAutoFallbackChain` | reflink → hardlink → copy, `Did` reports reality |
+| `TestMoveRefusedWhenSeedingUnknown` | oracle `loaded=false` blocks Move, allows copy |
+| `TestTransferChecksFreeSpaceFirst` | nothing written when below the floor |
+| `TestSentinelBlocksDestructiveOps` | unmounted (empty) root: reads ok, remove/move-out refused |
+| `TestSentinelBootstrapLegacyRoot` | heuristic pass creates sentinel; later empty mount refused |
+| `TestRootOverlapAcrossOwnersRefused` | path nesting, symlinked alias, bind mount (device+inode) |
+| `TestDownloadRootSharedMoveOutOnly` | two modules move out; neither writes in |
+| `TestPathMapperLongestPrefixBoundary` | `/dl` vs `/dl-old`, Windows remote, file URL, Fold |
+| `TestPathMapperNoUnicodeFolding` | NFC and NFD names stay distinct |
+| `TestWatchDebounceCoalesces` (`synctest`) | burst → one batch per directory |
+| `TestWatchOverflowYieldsRescan` | injected fsnotify overflow error |
+| `TestWatchFallsBackToPolling` | injected watch-add ENOSPC |
+| `TestQuarantineReleaseRoundTrip` | no clobber on release; record lifecycle |
+| `TestHashSameDescriptorSizeAndDigest` | size and digest describe the same bytes |
+| `TestDisabledModuleRootsInert` | G1 |
+| `TestTransferInCommitsWithCallerBatch` | `TransferIn` + caller rows land in one commit; `CrashClone` before the commit leaves a `done` row reported by `PendingTransfers`, never undone |
+| `TestScopeCannotActAsAnotherOwner` | a module's `Scope` cannot write another owner's root or quarantine its files |
+| `TestImportRootsStayLegacyFormat` (ABO, books' `legacy.LibraryRootSource` under `legacytest.LibraryRootSourceSuite`) | an import root added, renamed or disabled on this build is an `import_path:` row (with its path index row and an ID from `counter:import_path`) that the previous release's store code lists unchanged; a root created through the source and one created concurrently through books' `CreateImportPath` get distinct IDs (one shared store instance, R9-1, DATA9-2); `LastScan`/`BookCount` written by a concurrent scan survive a library edit **and** a library edit survives a concurrent scan's statistics write (both stage `Expect` voluntarily, DATA4-4, A-3); books' in-memory root table shows the edit without a restart; a change to a fixed field is refused with `ErrRootFieldFixed`, and nothing is written outside books' claims (A-2) |
+| `TestLegacyRootSentinelBootstrap` | a legacy-served root: the heuristic passes and the sentinel is created; a later mount whose sentinel names another root or install refuses destructive ops; a root whose path the previous release changed is decided by the heuristic until its new volume gets a sentinel; nothing is stored beside the `import_path:` row (A-2) |
+| `TestLibraryNewRejectsWrongLegacySource` | `library.New` with an `Options.LegacySource` that does not satisfy library's mirror returns `storage.ErrLegacyStoreType`; nil means no source (R7-7, SIMP7-4) |
+| `TestConfigEntryRoots_RoundTrip` | without a root source, every root and mapping round-trips through `core.library.roots`/`mappings` (SIMP4-3, SIMP7-8: the native roots are config entries, not a store) |
+| `TestRootRouting_CoversDecides` | with books' source: a new import root lands in the source (`Covers("import/")`), a new download root in `core.library.roots`; updates and deletes reach the half that holds the root; the root list merges both; books' source passes `legacytest.LibraryRootSourceSuite`; library's mirror test (`legacy_mirror_test.go` in `package library_test`: both-way assignability and the `LibraryCoverID` table) passes (SIMP5-1, SIMP5-4, SIMP6-3, SIMP6-5, SIMP7-1) |
+| `TestLibraryErrorsPassKeyNameGate` (ABO, a case of `TestCoreHoldsNoAppKeyNames`) | the `"library: …"` sentinels pass the key-name gate; a `"library:" + id` literal fails it (MOD5-3) |
+
+## 5L.10 Migration from ABO
+
+| ABO code | Becomes |
+|---|---|
+| `internal/libroot` (`Mounted`, `ReportPathNotify`, ownership checks) | `library.Root.Mounted` (bootstrap heuristic) and `Root.AppDir`; books keeps `.reports` as its app-dir name |
+| `internal/pathutil` (`ValidateRel`, `SplitRoot`, `JoinRoot`, `CutPathPrefix`, `IsWithin`, `UnderProtectedPath`, `ShouldSkipDir`) | core `library` internals (`Path` validation, `Resolve`, `Abs`, walk skip rules); `FrozenITunesSegment`, `VersionsDirName`, `PathVars` naming stay in books |
+| `internal/fileops` copy/reflink/hash/sync seams | `core/internal/libfs` + `Transfer`/`Hash`; `book_file_hash_recorder.go`, `write_tags_safe.go` (tag rewrite + provenance) stay in books on top of `RootFS` |
+| `internal/fileops/service.go` + `register.go` (browse, `init()` registration) | core browse route under `core:library.browse`; `init()` deleted (R5) |
+| `organizer.safeRename`, `versions.renameNoReplace`, `quarantine.moveNoClobber` | `RootFS.RenameNoReplace` (three implementations → one) |
+| organizer strategies (`organizer.go:285-306`) | `Transfer` with `Auto`/`Copy`/`Hardlink`/`Reflink`/`Symlink` |
+| `internal/quarantine` | books policy over `Manager.Quarantine`/`Release` with `Quarantine: ".failed"` |
+| `internal/watcher` + supervisor | `Manager.Watch`; books' audio-extension filter passed as `Extensions` |
+| `internal/appdirs` | root registration's app-dir exclusion + `WalkOptions` skip rules |
+| `internal/diskstats` | `Root.Usage` (moved into core as an internal package) |
+| `deluge.ProtectedPathCache` | a `ProtectionOracle` implemented by the Deluge adapter (05-download); static `protected_paths` → `RoleExternal` roots |
+| `itunes.path_mappings`, `WHISPER_PATH_MAP`, fingerprint worker wire format | `PathMapper` sources `itunes`, `worker:whisper`, `worker:fingerprint` |
+| `ImportPathStore` methods minus `CountBooksByPathPrefix` (`internal/database/pebble_store_importpaths.go`; 04's `database.Store` split table: `ImportPathStore` → `library`) | **stay in ABO** as books' legacy implementation of `legacy.LibraryRootSource` (R4-1, SIMP4-2, SIMP6-3), over books' own `import_path:<id>` + `import_path:path:<path>` rows and the ID counter `counter:import_path` (`pebble_store_importpaths.go:138-185` allocates through `nextID("import_path")`, under HEAD's `counterMu` around its own commit, on the one books store instance that every allocator shares, 05-storage §5S.3.11 and §5S.9.3; 05-storage §5S.9.1 row 19: the rows and the counter `Serialized`, no blind-write check, A-3, R9-1). It writes HEAD's `ImportPath` JSON (`internal/database/store.go:596-604`) with `codec.LegacyJSON` through books' repository layer, so books' in-memory `import_paths` table (`pebble_store_importpaths.go:21-26`, `memdb_schema.go:19`) stays current; it writes only library's fields, with an `Expect` on the bytes it read, and the path index row in the same batch. Books' own writers of the same row — the scanner (`internal/scanner/service.go:677`), autoscan (`internal/server/folder_autoscan_op.go:147`) and the filesystem handlers (`internal/server/handlers/filesystem.go:247,319`), which today write back the whole struct read earlier (`pebble_store_importpaths.go:187-231`) — become a field-merge `GetForUpdate` + `RetryOnConflict` that updates only `LastScan`/`BookCount` (DATA4-4). `Enabled` stays books' scan switch, which library shows as a registered root with watching off |
+| `pending_file_op:` (`file_io_pool.go:31`) | stays a books family with its books writer: it is books' per-book file I/O job pool (tag and metadata writes), not a transfer journal, so nothing is drained or moved. Core transfers journal only in the core-only `c/library/transfer/`, which no older build reads: a rollback right after a crash mid-transfer leaves that one transfer's recovery to the next boot of this build (R3-1) |
+| `filehash.BookFileHash` | stays books (identity algorithm), reads through `RootFS` |
+
+**Stored data (R3-1, R4-1).** During the extraction a root keeps one stored format, written by books'
+code. ABO's books root (`root_dir`, its quota keys and `path_aliases`) is a config value read and
+written in place by books' legacy config store (05-config C4); books' `legacy.LibraryRootSource` lists it beside the
+import roots (read-only there: its path changes only through config). A legacy-served root keeps exactly
+HEAD's fields and **nothing beside them** (A-2): there is no record that an older build could leave stale. A
+field `RootSpec` has that the legacy form has no place for is **fixed** by the source — books: `Watch`
+= `WatchAuto` while HEAD's `Enabled` is set and `WatchOff` otherwise, `Sentinel` = `SentinelBootstrap`,
+`Quarantine` = `.failed`, `AppDir` = `.mediacore`, `MinFree` = 0 (HEAD has no floor) — and a change to one is
+refused with `ErrRootFieldFixed`. The sentinel of a legacy-served root therefore stays in bootstrap mode: it
+is created when HEAD's heuristic passes, a present sentinel must name this install and root, and an absent
+one leaves the decision to the heuristic, which is HEAD's behaviour (`libroot.go:25-59`) and no regression;
+`SentinelRequired` for these roots, and editable values for the fixed fields, come with the roots' cutover.
+A root with no legacy home at all
+(download and external roots, another module's roots) is a `core.library.roots` entry. Moving ABO's
+roots to a native keyspace is a later cutover (05-storage §5S.3.13), not part of the extraction.
+
+Order: introduce `library` with books' `legacy.LibraryRootSource` supplied on books' manifest from the same release
+(no behaviour change; there is no grant, so a rollback between releases that both supply it never
+trips `ErrLegacyStoreMissing`, DATA4-2), move writers one subsystem at a time behind the same tests
+(organizer, versions, quarantine, deluge import, iTunes transfer), then delete `fileops` copy/reflink
+and the three renames.
+
+## 5L.11 Q4 — one storage-root abstraction or per-module drivers?
+
+**One core abstraction.** Evidence: every ABO file mutation is a local POSIX path operation; the
+only "remote" cases are workers that mount the same tree under another prefix (`pkg/ops/lanes.go:13-15`,
+`transcribe/path.go:28-40`, `pathutil/root.go:17-31`), which path mapping covers. TV and Movies need
+the same roots/import/download semantics (`raw/16-arr-domain-research.md` §1.4 root folders with
+free space, line 382 remote path mapping, row 11 "hardlink-or-copy, free-space check, recycle bin"). Per-module drivers would duplicate the safety rules this file centralises and make
+cross-module transfers (download root → TV library) impossible to verify. `RootFS` is an interface
+so a remote driver (SFTP, S3-compatible object storage) can implement it later; until a second
+driver exists, `library` ships only the local one and modules cannot register drivers.
+
+## 5L.12 Open items
+
+1. Whether any production import path lies inside `root_dir` (same owner nesting must then be
+   declared at migration). The migration reports overlaps instead of failing; owner decides.
+2. Symlink organize strategy: `os.Root.Symlink` does not validate targets; this spec restricts
+   targets to `library.Path`s. Confirm no production install relies on links pointing outside roots.
+3. Network-filesystem detection for `WatchAuto` uses statfs magic numbers on Linux; darwin and
+   Windows default to notify. Revisit if TV/Movies users commonly watch SMB shares from macOS.
+4. Reflink on Windows (ReFS block cloning) is out of scope until requested.
+
+## 5L.13 Deferred-build members
+
+Read shares have no S0–S10 consumer: a share names a second module and no S0–S10 app has two (SIMP7-2,
+SIMP8-5; 03 §3.4). They land with **the first app with two modules that shares a root**, additively,
+together with the refusal of shares on a legacy-served root (whose row has no place for them). The first
+column holds package-qualified Go identifiers and the second everything else; the table is planning
+information, which nothing checks in CI (A-4), and the PR that builds a member deletes its entry.
+
+| Member | Also deferred (not checked) |
+|---|---|
+| `library.RootSpec.ReadShares` | the read clause "owner + `ReadShares`" (§5L.3.8); the field in the `core.library.roots` entries; the sentinel and both refusals of shares on a legacy-served root (in library and in the source) with their test and `legacytest.LibraryRootSourceSuite` case |
+
+## 5L.14 Objections to 03
+
+None.
+
+## 5L.15 Out-of-scope defects found
+
+| Defect | Evidence |
+|---|---|
+| The watcher drops fsnotify errors (including queue overflow) after logging, so lost events never trigger a rescan; a failed `Add` on a subdirectory is only a warning, leaving it silently unwatched. | `internal/watcher/watcher.go:155-160,178-183` |
+| `quarantine.moveNoClobber` and `organizer.safeRename` use Lstat-then-rename with a TOCTOU window although `versions.renameNoReplace` already has the atomic kernel form. | `internal/quarantine/service.go:853-870`; `internal/organizer/saferename.go:34-48`; `internal/versions/rename_noreplace.go:16-22` |
+
+## Review history
+
+Round-1 findings applied to this file (`docs/plans/platform-core/reviews/spec-round-1-*.md`):
+
+- COR-4 — `TransferIn(b, …)` on `Manager` and `Scope`; step 6 stages the journal end into the caller's batch; `PendingTransfers` for the crash window (request from R-F).
+- COR-21 — `library.Scope`, the module-scoped handle with the owner bound by the kernel; `Manager` calls name the caller (request from R-G).
+- COR-19 — `library` is L4.
+- SIMP-6 — quarantine prune is a `tasks.ScheduleFromConfig` task; transfer recovery runs once at start; watcher polling is an in-process component.
+- R7 / SIMP-17 — hashing backfills declare `tasks.Fixed(n, reason)`.
+
+Round 2:
+
+- COR2-6 / SIMP2-1 (R2-7) — `core.library.quarantine.prune_schedule` typed `tasks.ScheduleConfig` in library's namespace; the 15-minute watcher fallback poll stays an in-process tick, with its reason, as 05-tasks §5T.3.8's listed exception.
+- COR2-16 — transfer locks use `core/internal/keyedmutex`, a core-internal copy added by 04 at S3; ABO keeps its own package.
+- COR2-19 — decision IDs renamed `D-L1`…`D-L9` so they no longer collide with layer names (same rule as 05-storage's `D-S`).
+- SEC2-8 — Protection column in §5L.7 (roots `ProtectAdmin`; mappings, free-space floor and quarantine retention `ProtectInteractive`).
+
+Integration pass (round 2, 2026-11-04):
+
+- integration pass (round 2): Schedule key `core.library.schedules.quarantine_prune` (R2-7 form); app-directories rule names no data-dir.
+
+Round 3:
+
+- R3-1 — one stored format for roots: ABO's books root stays in config (`root_dir`, quota keys, `path_aliases`) and its import roots in `import_path:` rows, read and written in place through config's adapter and a books grant to `core/library` (incl. `counter:import_path`); native-only root fields in the core-only `c/library/rootext/`; `core.library.roots`/`mappings` hold only entries with no legacy home; `pending_file_op:` corrected to a books family that is not drained into `c/library/transfer/` (header, §5L.2, §5L.4 step 1, §5L.7, §5L.9, §5L.10).
+
+Round 4:
+
+- R4-1 / SIMP4-2 — import roots persist through the store interface `library.RootSource` (§5L.3.1); books' import-path store code stays in ABO as its legacy implementation, declared on books' manifest and built over books' own handles; no grant, no core-held key name (header, §5L.4 step 1, §5L.7, §5L.10).
+- SIMP4-3 — native roots are `core.library.roots`/`mappings`; `TestNativeRootStore_RoundTrip`.
+- SIMP4-9 / DATA4-8 — `c/library/rootext/` replaced by extension records with the legacy-field hash and per-field classes (`ReadShares` Widening, sentinel Derived, the rest Independent); orphans swept; "current again on roll-forward" deleted; re-confirm route; `TestRootExtensionStaleAfterPrevWrite`.
+- DATA4-4 — both directions of the `import_path:` lost update closed (`CheckedWrites`; scanner, autoscan and filesystem writers merge fields with `Expect`); books' in-memory root table kept current by writing through books' repository layer.
+- DATA4-2 — the order paragraph: the source is supplied from the release that introduces `library`, so a rollback never switches backends.
+
+Round 5:
+
+- SIMP5-1 — `library.RootSource` stated as a routed store with no native implementation (native half = `core.library.roots`/`mappings` config entries, no `c/library/` root records); `Accepts(spec)` renamed `Covers(id string)` with `library.RouteKey`; routing rule in §5L.4; `TestRootRouting_CoversDecides`.
+- SIMP5-4 — `RootSource.Confirm` removed from the interface; re-confirmation is the optional `storage.ExtConfirmer` capability, asserted by books' source.
+- MOD5-3 — "Error strings and the key-name gate" paragraph: the `library: ` sentinels pass `TestCoreHoldsNoAppKeyNames` (key literals only), `TestLibraryErrorsPassKeyNameGate` case.
+
+Round 6:
+
+- R6-3 / SIMP6-3 — decided option (b): the root source is legacy-only as a whole and moves to package `legacy` as `legacy.RootSource` (header, §5L.3.1 "The legacy root source", §5L.4 step 1, §5L.7, §5L.9, §5L.10); a native config-entry implementation was rejected because it would be a second write path for the `core.library.roots` setting beside `config.Store` (protection, audit, change notification); library consumes the source through an unexported twin checked by `export_test.go`.
+- SIMP6-4 — re-confirmation through the shared `legacy.ExtConfirmer` (`id = string(RootID)`).
+- SIMP6-5 — the record-ID helper is `legacy.LibraryCoverID` (was `library.RouteKey`), one helper name per package.
+- SIMP6-6 — conformance is `legacytest.RootSourceSuite` (was `librarytest.RootSourceSuite`), run by core against a fixture source and by ABO with HEAD fixtures.
+- SIMP6-7 — `library.SourcedRoot` deleted; a source-served root's legacy state is `RootSpec.Legacy *RootLegacyState` (nil for config-entry roots, never persisted).
+- integration pass (round 6): header states why a native config-entry implementation of the root source was rejected (a second write path for `core.library.roots` beside `config.Store`, SIMP6-3). Already applied: `legacy.LibraryCoverID`.
+
+Round 7:
+
+- SIMP7-2 — a legacy-served root takes no `ReadShares` (`ErrLegacyRootShares`, refused by library and by the source); `RootSpecLegacyState` keeps only `Ext`; new §5L.13 "Deferred-build members" (`library.RootSpecLegacyState.Suspended`; the root `ExtConfirmer`, confirm route, health token, suite case and test half unchecked); §5L.4 suspension sentence deleted (the Derived sentinel reset kept); §5L.10 stored-data paragraph; `TestLegacyRootRefusesReadShares`.
+- R7-7 / SIMP7-4 — `library.Options` (with `LegacySource any`) and `library.New(opts Options)` specified; mismatch fails boot with `storage.ErrLegacyStoreType`; `TestLibraryNewRejectsWrongLegacySource`.
+- SIMP7-1 / COR7-2 — the mirror test is 03 §3.3's: `export_test.go` exports a test alias only, `legacy_mirror_test.go` in `package library_test` asserts both directions and the `LibraryCoverID` table; `TestRootRouting_CoversDecides` row updated.
+- SIMP7-8 — renames: `legacy.RootSource` → `legacy.LibraryRootSource`, `RootLegacyState` → `RootSpecLegacyState`, `legacytest.RootSourceSuite` → `legacytest.LibraryRootSourceSuite`, `TestNativeRootStore_RoundTrip` → `TestConfigEntryRoots_RoundTrip`.
+- SIMP7-6 — `library_root_extension_suspended` moved with the suspension into the deferred table (no producer).
+- R7-3 / DATA7-8 — `LibraryRootSource.Update`/`Delete` and the orphan sweep go through `legacy.Extension.Put` and the conditional `legacy.Extension.Delete`.
+- integration pass (round 7): §5L.9 `TestConfigEntryRoots_RoundTrip` row drops the former test name (SIMP7-8 sweep).
+
+Round 8:
+
+- SIMP8-5 — `RootSpec.ReadShares` moved to the §5L.13 deferred table with its read clause, the `core.library.roots` field, the legacy-root refusals, the sentinel `ErrLegacyRootShares`, `TestLegacyRootRefusesReadShares` and the suite case (all deleted from the body); D-L1, §5L.3.1, §5L.3.8, §5L.4, §5L.10 reworded.
+
+Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`, 2026-11-04):
+
+- A-2 / ADV-3 — `RootSpec.Legacy` and `RootSpecLegacyState` deleted with the root extension record; a legacy-served root keeps only HEAD's fields, the others fixed by the source (`ErrRootFieldFixed`); its sentinel stays in bootstrap mode; `LibraryRootSource` comments, §5L.4 step 1, §5L.10 stored-data paragraph, tests (`TestLegacyRootSentinelBootstrap`), and the root-suspension deferred row deleted.
+- A-3 / ADV-S2 — the source's and books' writers' `Expect` on `import_path:` is a voluntary compare-and-set; no `CheckedWrites`.
+- A-4 / ADV-S3 — §5L.13 no longer cites `archtest.DeferredMembersAbsent`.
+- A-5 / ADV-S4 — §5L.8 namespace note.
+
+Round 9 (`docs/plans/platform-core/reviews/spec-round-9-*.md`, dispositions binding):
+
+- DATA9-2 (R9-1) — `LibraryRootSource.Create` and §5L.10: the `counter:import_path` ID comes from HEAD's `nextID` under `counterMu` on the one shared books store instance, so the source and books' `CreateImportPath` callers never issue one ID twice; `TestImportRootsStayLegacyFormat` gains the concurrent-create case.
+- R9-1 — `Update`'s comment: the source offers no `legacy.WriteLock`; its voluntary `Expect` is sound because HEAD guards the row with no mutex and every writer compare-and-sets from S7.
