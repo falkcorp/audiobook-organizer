@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.10.1 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1101,7 +1101,7 @@ the writer (FE5-4):** the S4 build's legacy SPA already reads the fragment form 
 accepts `pathname === '/invite'` as well as `/invite/…`, and an `/invite` route prefers `#token=` and
 removes it with `history.replaceState` (07 §7.4.3) — so an invite minted on S9 (a HEAD invite row on
 ABO, valid on every build) opens after an S9 → S8 rollback; 09 §9.2.1's cost table
-carries the row, and `TestLegacyInviteLink_EndToEnd` and the R-test row assert it. A fragment never
+carries the row (row 4), and `TestLegacyInviteLink_EndToEnd` and the R-test row assert it. A fragment never
 reaches a server; a path-form invite link reaches it only as the page request, as at HEAD, redacted
 from the access log and spans by 05-logging's `log.DefaultPathRules()` (`/invite/{token}`), and the
 page posts the token in a body.
@@ -1645,7 +1645,7 @@ the release notes name.
 The revocation journal is not on this list: its lines are MAC'd with a key from the S3 keyring
 (05-backup §5B.3.6), so it ships with the build that has the keyring (DATA3-19).
 
-### 11.2 Identity hardening cutover (post-S10)
+### 11.2 Hardening cutovers H1–H3 (post-S10)
 
 The extraction leaves ABO's identity stores in HEAD's representation (resolution A-2). The hardening
 the native design gives hello, TV and Movies reaches ABO later, as named one-way cutovers on N15's
@@ -1653,11 +1653,11 @@ floored machinery (05-storage §5S.3.7's per-owner level guard, its own pre-migr
 at the cutover release, decided on measured data, 02 decision 13). 12 and 14 list them; each is the only
 step that needs core to read books' rows, so the storage grants for these families belong to it.
 
-| Cutover | What moves | What it removes |
+| Cutover (09 §9.13) | What moves | What it removes |
 |---|---|---|
-| Identity | sessions and one-time tokens hashed (`mcs_`, `mci_`, `mct_`, `mcb_`; §4.1), keys re-issued or re-stored as `mck_` with native scopes, roles with native scopes (core-only scopes, `SeedDigest`/`PendingSeed`, the seed-role operator diff and the lift of `ErrSeedRoleLocked`, 05-rbac §3.6, §4.8), `needs_confirmation` and `SignInRestricted` as stored fields, the native `LastSeen` | `legacy.Stores.Auth`/`Roles`, `legacy.AuthReconciler`, `legacy.AuthAtomWriter`, `legacy.RBACAtomWriter` and their `legacytest` suites (outside the API promise, so no v1 break, R6-3); `app.Options.LegacyAmbientScopes`; `LegacyFullScope` for any key still holding an empty list |
-| Secrets | plaintext blob secrets encrypted into `core/secrets` (05-config) | the plaintext fields |
-| Auth precedence | operator-layer precedence for the auth switch on ABO (the native rule of §4.11 and SEC4-8) | HEAD's stored-value-wins precedence and `!prior.EnableAuth` rule for `enable_auth` |
+| **H1 — identity cutover** | sessions and one-time tokens hashed (`mcs_`, `mci_`, `mct_`, `mcb_`; §4.1), keys re-issued or re-stored as `mck_` with native scopes, roles with native scopes (core-only scopes, `SeedDigest`/`PendingSeed`, the seed-role operator diff and the lift of `ErrSeedRoleLocked`, 05-rbac §3.6, §4.8), `needs_confirmation` and `SignInRestricted` as stored fields, the native `LastSeen` | `legacy.Stores.Auth`/`Roles`, `legacy.AuthReconciler`, `legacy.AuthAtomWriter`, `legacy.RBACAtomWriter` and their `legacytest` suites (outside the API promise, so no v1 break, R6-3); `app.Options.LegacyAmbientScopes`; `LegacyFullScope` for any key still holding an empty list |
+| **H2 — secrets cutover** | plaintext blob secrets encrypted into `core/secrets` (05-config) | the plaintext fields |
+| **H3 — auth-precedence cutover** | operator-layer precedence for the auth switch on ABO (the native rule of §4.11 and SEC4-8) | HEAD's stored-value-wins precedence and `!prior.EnableAuth` rule for `enable_auth` |
 
 Until then, raw session and invite tokens stay at rest exactly as at HEAD (no regression, no
 improvement), and ABO's roles and keys cannot hold core-only scopes (05-rbac §6.3).
@@ -1929,3 +1929,4 @@ Advisor (2026-11-04), resolutions and findings applied to this file:
 - A-4 (ADV-S3) — §3.5: no deferred-members archtest.
 - A-5 (ADV-S4) — §9: metric names under the app's namespace; the legacy-session fallback counter deleted.
 - A-14 (ADV-S8) — §5: the P4d compat usage-record step removed.
+- integration pass (advisor): §11.2 retitled; its rows named H1 — identity cutover, H2 — secrets cutover, H3 — auth-precedence cutover (09 §9.13); 09 §9.2.1 row 4 cited for invite links.

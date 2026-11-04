@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.10.1 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1228,7 +1228,7 @@ atoms waits for the identity hardening cutover (05-authn §11.2).
   ledger (09 §9.2.9) under surface `rbac_atom`; the legacy alias table **is** the compile-time
   `app.Options.LegacyPermissionAliases` (§4.9; no runtime flag, SIMP-7). During the window:
   - key-creation and role-write APIs also accept legacy atoms as input, store them through the write
-    mapping, count `mediacore_compat_legacy_use_total{surface="rbac_atom"}` (process-local), and answer
+    mapping, count `<namespace>_compat_legacy_use_total{surface="rbac_atom"}` (process-local), and answer
     with `Deprecation` and a `deprecated_permissions` field;
   - `/api/v1/auth/me` (legacy alias) keeps the legacy wire shape (FE3-7): `permissions` holds the
     legacy atoms whose `Catalog.LegacyReach` the principal's checker satisfies (the test the bridge's
@@ -1499,7 +1499,7 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestAuthOff_AdminRouteKindsUnchanged` | the §6.2 table: read-only kinds open, always-authenticated kinds 401 with auth off |
 | `TestUserMerge_ScopedAdminKeyRefused` | legacy (early fix 4, ABO's current code) then core (S4 on): an admin's API key scoped `["users.manage"]` passes the route guard of `GET /users/:id/footprint` and `GET /users/merges` and is refused by the merge actor check (403); it is refused on every merge POST (credential route); the admin's session reads and merges (§4.6, SEC8-7) |
 | `TestFactoryResetCoreRouteRecordsHookArgs` | S4 r2: the intent staged through `POST /api/core/v1/system/factory-reset` and through the `/api/v1/system/factory-reset` alias carries `kind: factory` and `hook_args`, written through the kernel's `Stager`; the alias's `hook_args` carry `delete_library_files: true` (§6.2, COR8-2, A-17) |
-| `TestFactoryReset_LibraryFilesNeedCountedConfirm` | S4 r2, native route: without `delete_library_files` the intent keeps every library file; with it but without, or with a stale, `library_root`/`library_file_count` → 422 `library_files_confirm_required` carrying the current root and count, nothing staged; with matching values 200 naming the root and count, and the hook deletes only under that root; `ResetStore` with the flag → 422; no native request can set `library_confirm` (resolution A-17, SEC2-5) |
+| `TestFactoryResetNativeRouteKeepsLibraryFilesByDefault` | S4 r2, native route: without `delete_library_files` the intent keeps every library file; with it but without, or with a stale, `library_root`/`library_file_count` → 422 `library_files_confirm_required` carrying the current root and count, nothing staged; with matching values 200 naming the root and count, and the hook deletes only under that root; `ResetStore` with the flag → 422; no native request can set `library_confirm` (resolution A-17, SEC2-5) |
 | `TestFactoryResetAliasKeepsConfirmAndShape` | S4 r2, both legacy aliases: a missing or wrong `confirm` answers 422 and stages nothing; success returns HEAD's `{"data": {"message": …}}`; the `/api/v1/system/reset` alias stages `kind: store`, and no body field steers it to `factory` (§6.2, COR8-1, COR8-2) |
 | `TestConfining_WorkerKeyRefusedOnPlaylists` | `books:fingerprint.worker` key → 403 on the playlist routes and every `AnyAuthenticated` route (regression for `middleware/auth.go:289`), 200 on the worker routes |
 | `TestConfining_FacadeKeyRefusedOnNative` (deferred-build: lands with `arrfacade`, SIMP2-6) | `tv:arr.read` key → 403 on every non-facade route (SEC-5) |
@@ -1810,3 +1810,4 @@ Advisor (2026-11-04), resolutions and findings applied to this file:
 - A-14 (ADV-S8) — §6.3: the atom-input contract waits for the ledger dates and the owner's check of the process-local counter.
 - A-4 (ADV-S3) — §3.6: no deferred-members archtest; the table is planning information.
 - ADV-11 — §12: the 572-route count in `TestLegacyRoleReachUnchanged` is informative and generated at the stage's base commit.
+- integration pass (advisor): the native factory-reset test is `TestFactoryResetNativeRouteKeepsLibraryFilesByDefault`, the name 09 S4 cites; compat counter under `<namespace>_`; no `needs_confirmation` stamp confirmed.

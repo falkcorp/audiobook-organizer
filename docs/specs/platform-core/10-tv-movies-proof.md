@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/10-tv-movies-proof.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.7.1 -->
 <!-- guid: e9ed438b-6097-4a4d-8b51-d2eacaca8221 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -728,7 +728,7 @@ unavailable monitored movie in the pending store on every sync until `core.acqui
    |---|---|---|---|
    | `core.acquire.rss-sync` | `tasks.ScheduleFromConfig("core.acquire.schedules.rss_sync")` | fetch: `tasks.Fixed(4, "indexer rate limits; providerhttp throttles per indexer")`; decide: `tasks.CPU()` passed to `Decide` | `indexer.Pool.RSS` with one `Feed` per registered media type (its `RSSType`, `Categories`, own cursor; COR-25), route by category, append that module's pending releases, `Decide`, `Engine.Grab(ctx, rc, …)` approved decisions in comparer order, park temporary rejections. Pages back to the last processed release after downtime (`raw/16 §4.3`). |
    | `<module>.acquire.import` (a **module** kind, `ImportTask`) | none: staged by acquire's consumer in the transition batch (below), or by `core.acquire.import-retry` | one run per TD; `Subjects` = `TD.Refs`, so overlapping imports serialise and disjoint ones run in parallel (dispatch conflict rule); file transfers inside a pack: `tasks.Fixed(2, "disk-bound moves/hardlinks")` | call the module `Importer` with an `ImportTx`, commit, then `download.Pool.MarkImported`. |
-   | `core.acquire.import-retry` | `tasks.ScheduleFromConfig("core.acquire.schedules.import_retry")` | `tasks.Sequential("one key-range scan of ix/import-retry/; stages runs only")` | stage the module import run of every TD in `ImportPending` whose backoff has passed (through `tasks.Stager.StartIn`, the stage-only handle the kernel gives the service in P5; `ModeLive`; the kernel stamps the owning module's system actor; COR3-8); it never calls module code. |
+   | `core.acquire.import-retry` | `tasks.ScheduleFromConfig("core.acquire.schedules.import_retry")` | `tasks.Sequential("one key-range scan of ix/import-retry/; stages runs only")` | stage the module import run of every TD in `ImportPending` whose backoff has passed (through `tasks.Stager.StartIn`, the stage-only handle the kernel gives the service in P5, each batch built and committed inside `Stager.WriteRuns`, 05-tasks 5T.7; `ModeLive`; the kernel stamps the owning module's system actor; COR3-8); it never calls module code. |
    | `core.acquire.housekeeping` | `tasks.ScheduleFromConfig("core.acquire.schedules.housekeeping")` | `tasks.Sequential("single pass over small keyspace; prunes pending/history by retention")` | prune expired pending releases and history/blocklist past retention. |
 
    There is **no** acquire poller (COR-3). acquire has **one** outbox consumer of download's events,
@@ -744,7 +744,7 @@ unavailable monitored movie in the pending store on every sync until `core.acqui
    acked and counted. It applies the tracked-download transition in the relay batch and,
    when the transition is `Downloading → ImportPending` (with `OutputPath` set), stages the module's import run
    **in that same batch** (`tx.StartRun(kind, tasks.StartRequest{Mode: tasks.ModeLive, Params: mustJSON(ImportParams{TD: td.ID})})`,
-   which the relay backs with its own `Executor.StartIn`; COR3-13). An import therefore never starts before its
+   which the relay backs with its own `Executor.StartIn` and commits inside `Executor.WriteRuns`, 05-tasks 5T.7, 05-events 5E.4; COR3-13). An import therefore never starts before its
    transition has committed, and a completion cannot be consumed without its import being queued. A transition
    the table below does not allow from the TD's current state (a replay, a user action or import meanwhile) is
    **acked**, logged and counted in `mediacore_acquire_transition_refused_total`; the handler never returns an
@@ -1091,3 +1091,4 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
 - A-15 / ADV-S9 — §10.0 and §10.5: the whole file is a design sketch (non-normative) the SDK does not freeze; §10.0 states how it still shows the frozen contracts fit TV and Movies (D5); §10.5.6 tracked-download write paragraph and the §10.5.9 test trimmed of the blind-write detail; §10.5.9 heading "when `acquire` is built".
 - A-2 / ADV-S1 — §10.1.2 "Persisted core state": `legacy.ExtConfirmer` and the extension family removed; native apps keep the full native design.
 - A-5 / ADV-S4 — §10.5.8: names under `app.Options.MetricNamespace`.
+- integration pass (advisor): import-retry and the relay's import staging commit inside `Stager.WriteRuns` / `Executor.WriteRuns` (05-tasks 5T.7).

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-notify.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.10.1 -->
 <!-- guid: 785812fd-5ddd-4540-be24-d061c0127788 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -359,7 +359,7 @@ Fakes: `coretest.FakeNotifier` (records `Send` calls; scriptable classes) and `c
 | `smtp_*` keys | no stored form at HEAD (environment only, 05-metadata M1.10): operator-set `smtp_*` values are the in-memory overlay that yields the effective `notify/email` instance (`Stored=false`) while set, never persisted (05-metadata M1.4 step 2, SIMP2-5). HEAD never lays a stored value over them, so they are not `BelowStored` names (05-config §1.12.4): under the one precedence rule of 05-metadata M1.4 step 2 (SEC6-5) they overlay and lock the matching fields of a stored `notify/email` row while set, and private-network trust follows the effective value's source. An operator-set `smtp_password` is bound to the
 destination `smtp://host:port` by origin plus provenance (05-metadata M1.4 step 2; SEC7-3, R8-5): it is served while
 the effective host and port equal the operator-set `smtp_host`/`smtp_port` (or the adapter default for one the
-operator does not set), or equal the row's `OperatorSecretOrigin`, which a ProtectAdmin `Put` records, so an env password beside an admin-set host works (`TestOperatorSecret_AdminStoredHostServed`, SEC8-2);
+operator does not set), or equal the native row's `OperatorSecretOrigin` (`notify/email` has no legacy row, so its stored instance is native on ABO too), which a ProtectAdmin `Put` records, so an env password beside an admin-set host works (`TestOperatorSecret_AdminStoredHostServed`, SEC8-2);
 beside a host or port that only a non-admin `core:integrations.manage` holder chose, the password is withheld (no
 `AUTH` is sent, nothing is delivered through that instance, health `operator_secret_withheld`). HEAD stores no SMTP
 settings, so the first S7 boot records no origin, and a stored `notify/email` is a native row, under the native
@@ -509,3 +509,4 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
 - A-12 / ADV-S6 — §5 `core.integrations.disabled` row: `staging-scrub` named.
 - A-15 / ADV-S9 — §1 table, "Deferred-build members" and §11 item 2: deferred features labelled design sketch (non-normative), not frozen by the SDK.
 - ADV-11 — §10 `internal/plugin` row: the importer count marked informative.
+- integration pass (advisor): `OperatorSecretOrigin` named as the native row's (`notify/email` has no legacy row).

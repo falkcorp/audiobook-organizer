@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.10.1 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -527,7 +527,7 @@ the write set is still `Effects`. `ExclusiveRefs` and Fixer `Row.Subjects` use t
 grab inside a search task and one inside rss-sync that cover an overlapping entity never interleave
 their check-then-write: 10's `Engine.Grab(ctx, l, d)` takes the caller's `RefLocker` `l` (an `*RC` or
 `*ItemRC`, so `l.LockRefs(refs...)` is this table) over its `Refs` (sorted by `FormatRef`) and holds them
-across the re-check and the CAS write ([10](10-tv-movies-proof.md), owned there; COR3-8), so a grab and a module's `ExclusiveRefs` items interlock on one table; there is no
+across the re-check and the CAS write ([10](10-tv-movies-proof.md), a design sketch (non-normative) that owns it; COR3-8), so a grab and a module's `ExclusiveRefs` items interlock on one table; there is no
 second grab mutex (COR2-16). A coarser option with no new code is a shared `ConcurrencyKey` such as
 `core.acquire.grab.<module>`, already legal under the key rule.
 
@@ -1705,7 +1705,7 @@ switched off by config, and a weekly interval makes the wait a week:
    in dispatch (`dispatcher.go:113-120`) and marks a resumable one `interrupted_dropped` at boot with
    reason "unknown def at startup" (`resume.go:86-96`); an older **core** build does the same (5T.5).
    After roll-forward that run shows as dropped and is restarted by its schedule or by hand, a
-   consequence listed in 09 §9.2.1's rollback table for the stage that adds such kinds (OPS4-11).
+   consequence listed in 09 §9.2.1's rollback table (row 5) for the stage that adds such kinds (OPS4-11).
 4. **Core-owned `c/tasks/` families are invisible to an older build.** Definition snapshots are
    rewritten at the next boot's registration and idempotency records only expire; neither depends on a
    legacy row, so neither can go stale against one (DATA4-8).
@@ -2037,13 +2037,22 @@ engine's calls (5T.8.1). `ops.schedule_lag` and `ops.schedule_missed` are record
 scheduler for the kinds it polls and, until T7, by ABO's v3 loop (`internal/scheduler/v3_schedule.go:444,447`)
 for the definitions it still ticks: disjoint `def_id` values through one instrument, because both create it
 on the App's meter with the same scope, name, kind, unit and description (05-metrics); the T7 PR deletes the
-v3 loop's calls. `ops.abandoned_calls` stays books' (5T.8.1). HEAD's five client_golang families
-`<ns>_operations_{started,completed,failed,canceled}_total` and `<ns>_operation_duration_seconds` (label
-`type`; `internal/metrics/metrics.go:20-47`) are books' and keep their names: from T0+T1 a books bus
-subscriber on `core.task.run-changed.v1` and `core.task.finished.v1` records them for kinds with a
-`LegacyDefID`, under that ID, as the legacy-stream bridge forwards them (5T.4 step 3; the bus serves
-metrics, 05-events 5E.1, and its drops are counted). 05-metrics' seeded series contract test, whose golden
-diff stays empty at S5, checks that no HEAD ops family changed name or label keys.
+v3 loop's calls. `ops.abandoned_calls` stays books' (5T.8.1).
+
+**Books' run-event recorder.** HEAD's client_golang run families are books', not the executor's, and keep
+their names, help strings and labels. From T0+T1 one books bus subscriber on `core.task.run-changed.v1` and
+`core.task.finished.v1` records them for kinds with a `LegacyDefID`, under that ID, as the legacy-stream
+bridge forwards them (5T.4 step 3; the bus serves metrics, 05-events 5E.1, and its drops are counted); the
+executor records none of them:
+
+| Family (ABO) | Type | Labels | Recorded from | At HEAD |
+|---|---|---|---|---|
+| `audiobook_organizer_operations_started_total`, `_completed_total`, `_failed_total`, `_canceled_total` | counter | `type` (the `LegacyDefID`) | the run's transition to running, succeeded, failed, canceled | `internal/metrics/metrics.go:18-37` |
+| `audiobook_organizer_operation_duration_seconds` | histogram | `type` | each finished run attempt | `metrics.go:38-47` |
+| `audiobook_organizer_op_items_processed`, `audiobook_organizer_op_items_total` | gauge | `op_id`, `op_type` (one series per in-flight run, deleted when the run reaches a terminal state, as at HEAD) | progress events (current, total) | `metrics.go:260-284,428-442` |
+
+05-metrics' seeded series contract test, whose golden diff stays empty at S5, checks that no HEAD ops family
+changed name or label keys.
 
 ## 5T.12 Open items
 
@@ -2272,3 +2281,4 @@ Advisor (2026-11-04):
 - ADV-11 — 5T.8.2: literal counts are informative, generated at each batch's base commit.
 - Cross-cluster (R-F, 05-ai) — `DedupePolicy` defined (HEAD's three v2 fields plus `Key`: fold into a queued run with an equal key, e.g. a job ID); "Dedupe at start" paragraph.
 - G1-7 — T0+T1: HEAD's resume, cancel and shutdown suites run against both engines; the 1:1 parallelism mapping is kept, and any parallelisation is a separate PR.
+- integration pass (advisor): 5T.11 tables books' run-event recorder (`operations_*`, `operation_duration_seconds`, `op_items_*`); 09 §9.2.1 row 5 cited; 10 cited as a design sketch.

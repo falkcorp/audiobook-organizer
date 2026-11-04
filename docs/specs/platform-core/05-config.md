@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.10.1 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -23,7 +23,7 @@ carry no window logic of their own.
 |---|---|---|
 | C1 | One `config.Store` per `App`; no package-level config value anywhere in **core** (R5). ABO keeps `config.AppConfig` as a books-module façade over core handles (§1.12.1). | `var AppConfig Config` (`internal/config/config.go:1939`) cannot host two apps and is read racily by design (`config.go:1930-1938`). R5 governs core only (03 §3.5), so ABO's façade is allowed. |
 | C2 | **Config owns the mechanism, never a section's type.** Each section struct lives in the package that consumes it and is registered through the manifest as `config.Section[T]`. | This is what breaks all upward imports (§1.9): config imports `aidispatch`, `dedup/unified`, `backup`, `auth`, `database` today only because it owns their types. |
-| C3 | Merge order defaults → file → env → flags → DB overrides, with **operator lock**: a key supplied by file, env or flag cannot be overridden from the DB layer and `Apply` refuses it with the lock reason. **One exception, HEAD precedence for legacy names (R5-1(a)):** a legacy env name or legacy file key whose value HEAD lays the stored blob over (`Alias.BelowStored`, generated from HEAD's lists, §1.3.5) feeds the **default** layer, below the DB layer, and locks nothing, until the precedence cutover (§1.12.5); canonical `<APP>_*` names always lock. The auth switch is no exception: a stored `enable_auth` beats `ENABLE_AUTH` in both directions, as at HEAD (A-2). A stored value beats a `BelowStored` value even when it equals the default (SEC7-2). Legacy names decode with HEAD's per-type semantics and canonical names strictly (§1.3.6, A-7). An env variable set to `""` is unset (HEAD parity). | Generalizes ABO's per-key `envLockedSettings`/`flagLockedSettings` (`config.go:2241,2353`) to every key; today a DB blob silently beats env for all other keys (`persistence.go:915` then `config.go:2435`). Keeping that for legacy names means a shipped compose file that always sets `BASIC_AUTH_ENABLED=false` (`docker-compose.yml:20`) cannot switch off a gate turned on in the UI (OPS5-1), and every older build reads the same effective auth switch after a rollback (A-2). |
+| C3 | Merge order defaults → file → env → flags → DB overrides, with **operator lock**: a key supplied by file, env or flag cannot be overridden from the DB layer and `Apply` refuses it with the lock reason. **One exception, HEAD precedence for legacy names (R5-1(a)):** a legacy env name or legacy file key whose value HEAD lays the stored blob over (`Alias.BelowStored`, generated from HEAD's lists, §1.3.5) feeds the **default** layer, below the DB layer, and locks nothing, until the auth-precedence cutover H3 (§1.12.5); canonical `<APP>_*` names always lock. The auth switch is no exception: a stored `enable_auth` beats `ENABLE_AUTH` in both directions, as at HEAD (A-2). A stored value beats a `BelowStored` value even when it equals the default (SEC7-2). Legacy names decode with HEAD's per-type semantics and canonical names strictly (§1.3.6, A-7). An env variable set to `""` is unset (HEAD parity). | Generalizes ABO's per-key `envLockedSettings`/`flagLockedSettings` (`config.go:2241,2353`) to every key; today a DB blob silently beats env for all other keys (`persistence.go:915` then `config.go:2435`). Keeping that for legacy names means a shipped compose file that always sets `BASIC_AUTH_ENABLED=false` (`docker-compose.yml:20`) cannot switch off a gate turned on in the UI (OPS5-1), and every older build reads the same effective auth switch after a rollback (A-2). |
 | C4 | **The DB layer is a store interface, `config.OverrideStore` (R4-1).** Core ships the **native** store over its own keyspace `c/config/` (one row per explicitly set key), which `hello` and every app without legacy settings use. An app with legacy settings supplies its **own** implementation through its module's `Manifest.LegacyStores.Config` (§1.3.3; 06), written in the app's code over the app's keys and row formats; for ABO that is the books legacy config store, which reads and writes keys that have a legacy blob name **in place** in ABO's settings blob, in the legacy JSON shape, and only those. **One storage rule (A-2):** a key that has a legacy name is stored only in HEAD's legacy row and format; a key with no legacy name is stored natively in core's `c/config/` keyspace, which older builds never read, so it costs nothing on a rollback (the kernel routes each key, §1.3.3; §1.12.2). Core holds no app key name or row format and no storage grant for config. Nothing is copied, mirrored or adopted, and no level step exists for config. **Cutover** to the native store is deferred and out of the extraction (§1.12.2). | Core-resident legacy adapters put ABO's on-disk formats into `mediacore` (SIMP4-2, against 03 R1); one interface with an app-supplied implementation keeps them in the app. One stored format per family (R3-1) still holds: every round's dual-format fix produced new cross-stage defects. A stored value equal to the shipped default reads as default while no operator or `BelowStored` value is set for the key, so the blob's frozen defaults (`persistence.go:1180-1188` measured 33 keys inheriting stale defaults) stop pinning future defaults; against a `BelowStored` value it is still the stored value, as at HEAD (SEC7-2). |
 | C5 | Every key declares `Reload` (live / restart / boot) and `Protection` (none / interactive / admin / owner / operator); both appear in the generated JSON Schema. | ABO has exactly one boot-only key handled ad hoc (`persistence.go:2111`) and a 92-entry protection map (`protected_fields.go`) separate from the schema. Roles-as-data can hand `core:settings.manage` to non-admins, so sign-in, proxy and updater keys need an admin level (§1.3.7). |
 | C6 | Drop **viper** from core and, by the end of migration, from ABO. Stdlib + `go.yaml.in/yaml/v3` + `github.com/google/jsonschema-go` only. | §1.10. |
@@ -178,7 +178,7 @@ type Alias struct {
 	// BelowStored keeps HEAD's precedence for this alias's operator spellings (R5-1(a), §1.3.5; OPS5-1 called it
 	// EnvIsDefault): a value given under LegacyEnv or the Legacy file key feeds the default layer, below the DB
 	// layer, and locks nothing. The app generates it from its own lists of the keys it re-applies over its stored
-	// settings; it is ignored for a ProtectOperator key (no DB layer) and cleared at the precedence cutover
+	// settings; it is ignored for a ProtectOperator key (no DB layer) and cleared at the auth-precedence cutover H3
 	// (§1.12.5). It has no exemption: the auth switch keeps it too (A-2).
 	BelowStored bool
 	// Decode is the HEAD type a value given under LegacyEnv or the Legacy file key is decoded as, before Convert
@@ -696,7 +696,7 @@ the default still beats it (SEC7-2):** every HEAD blob holds every field (whole-
 (`TestBelowStored_StoredDefaultStillWins`). Its canonical
 `<APP>_*` name keeps C3's lock. The flag is generated from HEAD's lists by the app (ABO:
 `TestAliasBelowStoredMatchesHEAD`), so it cannot drift, and it never applies to a `ProtectOperator` key. The
-precedence cutover clears the flag (§1.12.5, release-noted then). ABO's legacy flags keep C3: HEAD's
+auth-precedence cutover H3 clears the flag (§1.12.5, release-noted then). ABO's legacy flags keep C3: HEAD's
 `--playlists` and `--log-level` lose to a stored value (`cmd/root.go:648-651` writes the flag before the blob is
 laid over it), and from the S3 façade a typed flag wins; this is recorded in 09 §9.2.6. Example: compose's always-set
 `BASIC_AUTH_ENABLED=false` (`docker-compose.yml:20-22`) is a default, so a Basic gate turned on in the UI stays
@@ -710,13 +710,13 @@ like every name HEAD lays the blob over (`enable_auth` is in none of HEAD's re-a
 both directions, as at HEAD, and the shadow report below names the canonical variable when they differ. The
 canonical `<APP>_CORE_AUTH_MODE` locks in both directions, as every canonical name does, so an operator can always
 turn auth on. No boot writes a legacy field to carry an operator value across a rollback. The hardening that would
-(an enabling legacy value beating a stored one, kept across a rollback) is the post-S10 precedence cutover (§1.12.5).
+(an enabling legacy value beating a stored one, kept across a rollback) is the post-S10 auth-precedence cutover H3 (§1.12.5).
 
 **Rollback consequence: canonical-only values (A-2).** A canonical `<APP>_*` name exists only from the stage that
 registers its key, and every older build reads only the legacy names. A value given only under a canonical name is
 therefore not read on a rollback below that stage: for example `<APP>_CORE_AUTH_MODE=required` over a stored
 `enable_auth: false`, or a canonical-only peer allow-list (env-only at HEAD, where empty admits every peer,
-`internal/config/config.go:1709-1719` @748fd787a). 09 §9.2.1 carries the row and the release note: while you may
+`internal/config/config.go:1709-1719` @748fd787a). 09 §9.2.1 row 3 carries the cost and the release note: while you may
 roll back below that stage, keep the stored setting (or, for a key HEAD re-applies from env, its legacy name) at the
 same value. Nothing records the names, and no file or health token lists them.
 
@@ -770,7 +770,8 @@ value an operator set for HEAD reads the same after S3, when viper leaves the bo
 legacy name goes through viper's typed getters (`internal/config/config.go:3346,3355,3358` `GetBool` for
 `enable_auth`, `enable_rate_limit` and `basic_auth_enabled`; `:3226,3229,3276,3298` `GetStringSlice`); env lookup
 is prefix-less, by the upper-cased key (`cmd/root.go:625`, `viper.AutomaticEnv`), plus the explicit `BindEnv`
-names; and the getters convert through `spf13/cast` v1.10.0 (`go.mod`, indirect). The decoder named by
+names, and **env variable names are case-sensitive** (ADV-2): `AutomaticEnv` looks up only the upper-cased name, so
+`ENABLE_AUTH` is read and `enable_auth` set in the environment is not, and core matches env names exactly too; and the getters convert through `spf13/cast` v1.10.0 (`go.mod`, indirect). The decoder named by
 `Alias.Decode` (§1.3.1, generated from HEAD's getter for the key) applies before `Convert`:
 
 | `Decode` | HEAD rule | Anchor (`<gomodcache>/github.com/spf13/cast@v1.10.0`) |
@@ -816,7 +817,7 @@ is no ledger and no kernel storage, so aliases register unchecked and their uses
 (COR4-20).
 
 compat emits the one-time deprecation warning for window rows and feeds
-`mediacore_compat_legacy_use_total`. When a window alias may be removed is decided by 09 §9.2.1 (W's dates,
+`<namespace>_compat_legacy_use_total`. When a window alias may be removed is decided by 09 §9.2.1 (W's dates,
 release notes and the owner's check of the process-local counter on the reference host, A-14) and done by a contract PR checked by `TestNoContractBeforeSunset`; nothing is removed or refused
 by a clock, and no runtime switch turns aliases off.
 
@@ -855,16 +856,27 @@ enforced by `integrations` ([05-metadata](05-metadata.md) M1/M2): the LAN target
 once an owner identity is set and an owner verifier is configured, whatever the caller's sign-in method, as
 HEAD does "once `owner_email` is set" (`protected_fields.go:209-227`); before that it is checked as
 `ProtectAdmin`. The auth-off principal never holds
-`core:admin` ([05-rbac](05-rbac.md)), so these keys cannot be changed through `Apply` with auth off. HEAD allowed
-it (`internal/config/update_service.go:781`: `!prior.EnableAuth || …MayChangeCredentials()`); the change is
-recorded in 09 §9.2.6 (SEC4-8). With auth off the operator changes a protected key through an operator layer:
-in particular auth is turned on by setting `core.auth.mode=required` through its canonical env name
-(`<APP>_CORE_AUTH_MODE`) or the operator file's canonical path, and restarting, which 09's release note states; ABO's
-legacy `ENABLE_AUTH=true` / `enable_auth: true` keeps HEAD's precedence and does not beat a stored `false` (A-2,
-§1.3.5). Every other protected key an auth-off operator may need (the Basic gate's `core.http.basic_gate.*` among
-them) is changed through its **canonical** name: its legacy names stay `BelowStored`, and
-`config_legacy_name_shadowed` says so; a value given only under a canonical name is not read by an older build
-(§1.3.5). Integration instances follow one rule, stated identically in 05-metadata M1.3 (SEC2-7): any
+`core:admin` ([05-rbac](05-rbac.md)). HEAD's rule for every protected field is
+`!prior.EnableAuth || auth.MethodFromContext(ctx).MayChangeCredentials()` (`internal/config/update_service.go:781`
+@748fd787a), applied after the owner-trust-root check, which is not skipped with auth off (`:772-779`). With auth
+off:
+
+- **`core.auth.mode` on a legacy-backed install (ABO through S10) keeps HEAD's rule exactly** (A-2, lead decision):
+  the auth-disabled principal may store `enable_auth: true` (`core.auth.mode` = `required`) through the settings
+  page or the `/api/v1/config` alias, after the owner-trust-root check; it is written to the legacy `enable_auth`
+  field in place, so every build reads it after a rollback (05-authn §4.11, `TestAuthEnable_MatchesHEAD`). The
+  canonical `<APP>_CORE_AUTH_MODE=required` is an additional operator name that locks the key (C3) and that no build
+  before S4 reads (09 §9.2.1 row 3); ABO's legacy `ENABLE_AUTH=true` / `enable_auth: true` keeps HEAD's precedence and
+  does not beat a stored `false` (§1.3.5) until the auth-precedence cutover H3 (§1.12.5).
+- **Every other `ProtectAdmin`/`ProtectOwner` key on ABO** is refused through `Apply` with auth off (403, the
+  auth-off half of 09's `TestLegacyRoleReachUnchanged`), a tightening recorded in 09 §9.2.6 (SEC4-8). An auth-off
+  operator changes such a key (the Basic gate's `core.http.basic_gate.*` among them) through its **canonical** name,
+  which locks: its legacy names stay `BelowStored`, and `config_legacy_name_shadowed` says so; a value given only
+  under a canonical name is not read by an older build, so the legacy name is kept at the same value while a
+  rollback below that release is possible (§1.3.5; 09 §9.2.1 row 3).
+- **Native apps (hello, TV, Movies) keep SEC4-8 for every protected key, `core.auth.mode` included:** the
+  auth-disabled principal changes none through `Apply`, and auth is turned on by setting `core.auth.mode=required`
+  through its canonical env name or the operator file's canonical path and restarting. Integration instances follow one rule, stated identically in 05-metadata M1.3 (SEC2-7): any
 `core:integrations.manage` holder writes instance URL and credential fields; setting an instance's `Local` flag
 (which admits every loopback, private and CGNAT address), or keeping it across a URL change, needs the `ProtectAdmin`
 check, and so does `Registry.Test` with `Local=true`; every instance without `Local` reaches public addresses plus
@@ -1128,7 +1140,7 @@ All on scope `mediacore.config` (`*metrics.Scope` from `Options.Metrics`).
 | `mediacore_config_subscriber_panics_total` | counter | `section` |
 | `mediacore_config_legacy_plaintext_secrets` | gauge | — (secret keys whose value is read from a plaintext legacy copy, `secrets.Meta.LegacyForm == LegacyPlain`; they stay plaintext until the secrets cutover, §1.12.5) |
 
-Legacy-name use is counted once, by `compat` (`mediacore_compat_legacy_use_total{surface="config"}`), not by a
+Legacy-name use is counted once, by `compat` (`<namespace>_compat_legacy_use_total{surface="config"}`), not by a
 second config counter.
 
 ### 1.9 Breaking config's upward imports
@@ -1301,8 +1313,9 @@ an optional ratchet, not an extraction stage.
    `RequireAuth`, so the façade fills `config.Actor` from gin's request context with HEAD's rule
    (`internal/config/update_service.go:781`): `Can("core:admin")` holds iff the request's permission set came
    from the seed `admin` role, or auth is off; `Interactive` is `auth.Method.MayChangeCredentials()`, or auth
-   is off; `Owner` is HEAD's owner proof. The native rule (§1.3.7: the auth-off principal never holds
-   `core:admin`) applies from S4 r2, the stage 09 §9.2.6 records for SEC4-8's tightening, never earlier.
+   is off; `Owner` is HEAD's owner proof. From S4 r2 the auth-off principal never holds `core:admin`, and §1.3.7's
+   auth-off rule applies: on ABO `core.auth.mode` keeps HEAD's `!prior.EnableAuth` rule through S10 and every other
+   protected key is refused with auth off, the tightening 09 §9.2.6 records for SEC4-8; never earlier.
    `TestPreS7Facade_IntegrationURLIsProtectAdmin` has an S3 and an S4 variant.
 3. **Optional ratchet — accessor.** `TestAppConfigRatchet` is added with stage 1: a per-package ceiling of
    `config.AppConfig`/`Snapshot`/`Mutate` uses that may only go down, like
@@ -1498,7 +1511,7 @@ re-reading the file under the lock, so two concurrent commits can never leave on
 (DATA5-20). The merge writes only the keys HEAD's `SaveConfigToFile` manages (twelve settings and the three
 encrypted secrets, `persistence.go:150-178`) and keeps every other key as it found it, because the same file may be
 the operator's `--config` (`:110-112`); no core build writes any other key into it
-(`TestGapFillFileWritesOnlyHEADManagedKeys`).
+(`TestCoreWritesOnlyHEADGapFillKeys`).
 
 Effects on older builds after a rollback: none for secrets. The Basic gate compares with the password last saved on
 any build, so it is never stranded or opened (OPS5-2; SEC4-1, DATA4-1, OPS4-1); provider keys and the webhook
@@ -1727,18 +1740,20 @@ into `abo_keys.golden`, not maintained by hand.
 Flags: ABO's cobra adapter maps `--dir`, `--db`, `--db-type`, `--playlists`, `--log-level` (and the other flags of
 09 §9.6 row 18, kept until the next major) to paths.
 
-#### 1.12.5 Secrets and precedence cutover (post-S10)
+#### 1.12.5 Hardening cutovers H2 and H3 (post-S10)
 
 A-2 keeps HEAD's representation and precedence for ABO through S10. The hardening the extraction does not do is
 named here as post-S10 cutovers on N15's one-way, floored machinery (02 N15; 12 and 14 list them). Each is its own
 release, its floor is that release, and its release note names what an older build loses:
 
-- **Secrets cutover.** The books store's plaintext blob secrets and the four encrypted rows move into `c/secrets/`,
+- **H2 — secrets cutover** (09 §9.13). The books store's plaintext blob secrets and the four encrypted rows move into `c/secrets/`,
   encrypted with the keyring (key IDs, AAD), and their legacy copies and gap-fill file keys are removed; the
   `legacy.SecretsStore` capability goes with it. An older build then has no copy to read, which the floor refuses.
   14 Q-E is deferred to it.
-- **Precedence cutover.** The `BelowStored` flags are cleared, so every operator layer locks its key as C3 states
-  for canonical names, and an enabling legacy auth value beats a stored one. It ships with or after the settings
+- **H3 — auth-precedence cutover** (09 §9.13). An operator value that enables auth (`ENABLE_AUTH=true`,
+  `enable_auth: true` in the operator file) beats a stored `false`, and a value that disables auth keeps HEAD's
+  precedence; the `BelowStored` flags of the other legacy names are cleared in the same cutover, so every operator
+  layer locks its key as C3 states for canonical names. It ships with or after the settings
   cutover, so no older build has to be kept in step by a write into a legacy field.
 
 Neither builds anything during S0–S10, and no stage of 09 depends on either.
@@ -2251,7 +2266,7 @@ commits leave both values in the file, DATA5-20), `TestIntegrationStoreSharesBlo
 `TestFreshInstall_EmbedCoverArtFalseSurvivesRestart` (a fresh S2b+ install, and a store upgraded from a pre-marker
 build, keep an operator's `embed_cover_art=false`, `log_retention_days` and 0–0 maintenance window across restarts;
 the three one-shots ran once as books migrations, which wrote HEAD's markers; `Open` wrote nothing; COR6-5),
-`TestLegacyAuthEnablePrecedenceMatchesHEAD` (blob `enable_auth=false`, env `ENABLE_AUTH=true` → auth off, as at HEAD, and `config_legacy_name_shadowed` raised; blob `true`, env `ENABLE_AUTH=false` → auth stays on; `ABO_CORE_AUTH_MODE=required` → on and locked; A-2), `TestRollback_PlaintextSecretSavedOnCurWorksOnPrev` (a plaintext secret saved on cur is the value prev reads, A-2), `TestGapFillFileWritesOnlyHEADManagedKeys` (after every kind of core write, set, clear, factory-reset hook, the gap-fill file holds no key outside HEAD's `SaveConfigToFile` set, and an operator key already in it survives unchanged; ADV-8), `TestLegacyEnvDecodeMatchesHEAD` (§1.11), `TestFreshInstallWritesHEADMarkers` (a fresh S2b+ store holds the three HEAD markers after
+`TestLegacyAuthEnablePrecedenceMatchesHEAD` (blob `enable_auth=false`, env `ENABLE_AUTH=true` → auth off, as at HEAD, and `config_legacy_name_shadowed` raised; blob `true`, env `ENABLE_AUTH=false` → auth stays on; `ABO_CORE_AUTH_MODE=required` → on and locked; A-2), `TestRollback_PlaintextSecretSavedOnCurWorksOnPrev` (a plaintext secret saved on cur is the value prev reads, A-2), `TestCoreWritesOnlyHEADGapFillKeys` (after every kind of core write, set, clear, factory-reset hook, the gap-fill file holds no key outside HEAD's `SaveConfigToFile` set, and an operator key already in it survives unchanged; ADV-8), `TestLegacyEnvDecodeMatchesHEAD` (§1.11), `TestFreshInstallWritesHEADMarkers` (a fresh S2b+ store holds the three HEAD markers after
 its first boot; DATA7-13), `TestFactoryResetClearsGapFillSecrets` (the staging request writes no setting; after the
 restart the fresh store gap-fills no kept secret, also before and across a crash ahead of the post-reset hook, the
 hook leaves the gap-fill file without the three kept keys, and `config.boot.json` is set aside; DATA6-6, R7-2),
@@ -2538,3 +2553,4 @@ Advisor:
 - A-10 (ADV-6) — §2.2: `staging-scrub` refuses a store without 09 §9.3's staging marker.
 - ADV-8 (A-16) — §1.12.2, §2.9: no moved secret and no core-written key in `<db parent>/config.yaml`; the merge writes only HEAD's `SaveConfigToFile` keys; `TestGapFillFileWritesOnlyHEADManagedKeys`.
 - Header — 03 reference v1.11.1.
+- integration pass (advisor): §1.3.7 auth-off rule restated per the lead decision (ABO's `core.auth.mode` keeps HEAD's `!prior.EnableAuth` rule, `internal/config/update_service.go:781`; other protected keys refused with auth off; native apps keep SEC4-8) and §1.12.1's S3 actor note aligned; §1.3.6 states env names are case-sensitive (ADV-2); §1.12.5 names H2 and H3 as 09 §9.13 does and the precedence cutover is H3 throughout; `TestCoreWritesOnlyHEADGapFillKeys` is the gap-fill test's name (09's); 09 §9.2.1 row 3 cited; `TestLegacyEnvDecodeMatchesHEAD` confirmed.

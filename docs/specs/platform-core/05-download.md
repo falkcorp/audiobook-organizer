@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-download.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.10.1 -->
 <!-- guid: 513fb395-c640-4bb6-b76c-d9fe80b3224e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -31,7 +31,7 @@ both; the second is built on the first.
 
 **Single owner (COR-3).** This package alone talks to download clients for the acquisition flow: it owns
 client polling, the client-item snapshots, grab records and their crash recovery, and the durable
-completion events. `acquire` ([10](10-tv-movies-proof.md) §10.5, deferred-build) owns grab *decisions*,
+completion events. `acquire` ([10](10-tv-movies-proof.md) §10.5, a design sketch (non-normative), deferred-build) owns grab *decisions*,
 tracked-download records and the import hand-off; it calls `Pool.Grab`, consumes this package's events,
 and runs no poller and no recovery of its own.
 
@@ -808,3 +808,4 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
 - A-5 / ADV-S4 — §8: names under `app.Options.MetricNamespace`.
 - A-12 / ADV-S6 — §5 `core.integrations.disabled` row: `staging-scrub` named.
 - A-15 / ADV-S9 — §1, §1 "Deferred-build members", §3 phase-2 block, registrar/topic paragraph, §4.3, §4.5, §8, §9: phase 2 labelled design sketch (non-normative), not frozen by the SDK; §4.3's commit-check paragraph and the phase-2 `ErrBlindWrite` test clause trimmed.
+- integration pass (advisor): `acquire` cited as 10's design sketch (non-normative).

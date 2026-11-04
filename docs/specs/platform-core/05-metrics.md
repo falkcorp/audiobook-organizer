@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metrics.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.9.1 -->
 <!-- guid: 5cdf765d-aec1-4ed7-981a-e2e698afde61 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -477,7 +477,7 @@ asserts the kernel-emitted families in core as well (§6, OPS8-10).
 | `audiobook_organizer_pebble_*` (label `store`) | core `storage`'s Pebble collector, which moves with HEAD's family names, help strings, types and `store` label (`pebble_collector.go:119-146`) and registers `<namespace>_pebble_*` ([05-storage](05-storage.md) tables it) | S2b | (a) |
 | `audiobook_organizer_ops_runs_total`, `_ops_run_duration_seconds`, `_ops_items_total`, `_ops_inflight`, `_ops_progress_age_seconds`, `_ops_progress_timeout_seconds`, `_ops_zombies` (labels `def_id`, `outcome`, `plugin`) | the core executor, whose instruments keep HEAD's names in the scope `<namespace>.ops` that the app's namespace supplies (`opsmetrics.go:216-250` @748fd787a), so under ABO's namespace they are HEAD's families with HEAD's labels; [05-tasks](05-tasks.md) 5T.11 tables them | S5 (T0+T1) | (a) |
 | `audiobook_organizer_operations_{started,completed,failed,canceled}_total`, `_operation_duration_seconds` (label `type`) | books, through a subscriber of the run events on the bus that records them on books' side with HEAD's names and `type` values (05-tasks 5T.11) | S5 (T0+T1) | (b) |
-| `audiobook_organizer_op_items_processed`, `_op_items_total` (label `op_id`) | books' legacy collector, set from the same run events (05-tasks 5T.11) | S5 (T0+T1) | (b) |
+| `audiobook_organizer_op_items_processed`, `_op_items_total` (labels `op_id`, `op_type`) | books' legacy collector, set from the same run events (05-tasks 5T.11) | S5 (T0+T1) | (b) |
 | `audiobook_organizer_ops_schedule_lag_seconds`, `_ops_schedule_missed_total` (label `def_id`) | ABO's v3 ticker until T7 (`v3_schedule.go:444,447` @748fd787a), then the core scheduler's instruments in the same `<namespace>.ops` scope under HEAD's names (05-tasks 5T.11) | T7 | (a) |
 | `audiobook_organizer_ops_abandoned_calls` (label `source`) | books' own observable on its own scope (05-tasks 5T.8.1) | T3, T6 | (b) |
 | `ai_dispatch_*`, `ai_*` (unprefixed) | ABO's recorder around the AI calls books makes and over the core `ai` subsystem's public API; [05-ai](05-ai.md) names the recorder of each family. `MetricNamespace` does not touch them: the recorder creates the instruments `ai_dispatch.*` and `ai.*` under exactly HEAD's names (`internal/aidispatch/metrics.go:54-66`, `meter.go:20-37`) on the App's `MeterProvider`, outside any `Scope`, so the namespace is never prepended and the families stay byte-identical; the core `ai` subsystem's own families are `<namespace>_ai_*` beside them, and `ErrFamilyTaken` still guards every name | S7 | (b) |
@@ -593,3 +593,4 @@ Advisor:
 - A-4 (ADV-S3) — §13 item 1: 04 §8.2 and §8.6 cited as informative planning rows, not as gates.
 - ADV-11 — §2: the series-golden count marked informative at `748fd787a`.
 - Header — 03 reference v1.11.1; Objections updated (03 v1.11 §3.6 adopts the namespace rule).
+- integration pass (advisor): §13 op-items row labels are `op_id`, `op_type` (`internal/metrics/metrics.go:275-284`).

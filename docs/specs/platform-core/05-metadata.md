@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.10.1 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -857,7 +857,7 @@ no `LegacyStores.Integrations` (TV/Movies, `hello`, `coretest`) uses it for all 
 exist for an older build: after a rollback from S7 or later, a native instance (for ABO: a stored `notify/email`, a second download client, any
 instance the legacy store does not cover) does nothing, and events during the
 rollback are never delivered to it; only deliveries already pending in `c/outbox/` are sent on roll-forward
-(05-notify §4 step 3). This is one row of 09 §9.2.1's table of rollback consequences (OPS5-12).
+(05-notify §4 step 3). This is 09 §9.2.1 row 8 of the table of rollback consequences (OPS5-12; row 7 covers the pending deliveries).
 
 | Key | Value | Notes |
 |---|---|---|
@@ -1781,3 +1781,4 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
 - A-5 / ADV-S4 — M1.8, M2.3 `Options.Metrics`, M2.8, M3.8: names under `app.Options.MetricNamespace` (default `mediacore`); no renames.
 - A-12 / ADV-S6 — M1.4 "Staging", M1.5 and M1.7 rows: integrations disabled and schedules run on staging; `staging-scrub` clears legacy URLs; `--network none` replaces the firewall; `make rollback` dropped from the staging list.
 - A-15 / ADV-S9 — M1.3 "Deferred-build members": the `FacadeWriter` and `Tags` members are a design sketch (non-normative) that the SDK does not freeze.
+- integration pass (advisor): 09 §9.2.1 row 8 cited; `StoredInstanceLegacyState` and the confirm-suspended-`Local` route confirmed absent; `OperatorSecretOrigin` remains native-only.

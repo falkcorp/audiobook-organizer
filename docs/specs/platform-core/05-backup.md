@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-backup.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.9.1 -->
 <!-- guid: 604febb0-a09e-4cf9-99ee-5f3722534da6 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -39,8 +39,9 @@ when each step ships.
   upgrade floor for step 4 from books' own manifest (`Manifest.Storage.UpgradeFloor`, the floor books
   declares), so it needs no kernel handle (SIMP8-4). Until S8 every archive is ABO's
   (`legacy-abo/0`, B7), so every staged restore in S2b–S7 is a foreign restore with nil coverage: every API
-  key needs confirmation after it (step h: HEAD's `inactive` status for a legacy key), a cost 09 §9.2.1
-  lists (DATA7-16). So a boot that fails after the swap swaps back, a crash between swap and hooks resumes
+  key needs an admin to re-enable it after it (step h: HEAD's `inactive` status for a legacy key) and every
+  session is deleted (05-authn §4.14), a cost of the restore that the restore record states; it
+  is not a rollback cost, so 09 §9.2.1 has no row for it (DATA7-16). So a boot that fails after the swap swaps back, a crash between swap and hooks resumes
   them once, `inflight.json` is gone after the hooks, and a failed migration has its checkpoint
   restore, from the first release on core storage. ABO's former `app.Options.PreBootRestore` does not
   exist.
@@ -1355,3 +1356,4 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`, 2026-1
 - A-17 — the reset hook's arguments carry `RootDir` only when `delete_library_files` is set (R-G request).
 - A-4 / ADV-S3 — §5B.3.9 no longer cites `archtest.DeferredMembersAbsent`.
 - A-5 / ADV-S4 — §5B.8 namespace note.
+- integration pass (advisor): a staged restore of an ABO archive before S8 sets legacy keys `inactive` and deletes sessions (05-authn §4.14 choice (b)); stated as a restore cost, no longer as a 09 §9.2.1 row; `auth` and `usage` duties confirmed absent.

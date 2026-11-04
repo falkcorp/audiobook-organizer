@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.9.1 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -56,7 +56,7 @@ Core builds only what ABO consumes during the extraction or what core itself nee
 **deferred-build** — the SDK freezes none of them and the extraction plan builds none of them; they are
 designed and built when the first TV/Movies app starts (A-15), except the cutover rows, which follow S10:
 
-| Deferred | Specified in |
+| Deferred | Design sketch (non-normative) in |
 |---|---|
 | `acquire` (quality profiles, custom formats, decision engine, grab decisions, tracked downloads, import hand-off) | [10-tv-movies-proof](10-tv-movies-proof.md) |
 | `integrations/indexer` (Newznab/Torznab) | [05-indexer](05-indexer.md) |
@@ -124,7 +124,7 @@ is enforced), and those decided as adopted recommendations, are in
 | 5 | Config and secrets | [05-config.md](05-config.md) |
 | 5 | AI providers | [05-ai.md](05-ai.md) |
 | 5 | Download clients | [05-download.md](05-download.md) |
-| 5 | Indexers / search (deferred-build) | [05-indexer.md](05-indexer.md) |
+| 5 | Indexers / search (deferred-build; design sketch, non-normative) | [05-indexer.md](05-indexer.md) |
 | 5 | Metadata providers and outbound HTTP resilience | [05-metadata.md](05-metadata.md) |
 | 5 | Notifications | [05-notify.md](05-notify.md) |
 | 5 | HTTP API framework, versioning, generated TS client | [05-http-api.md](05-http-api.md) |
@@ -136,9 +136,9 @@ is enforced), and those decided as adopted recommendations, are in
 | 5 | Health and diagnostics | [05-health.md](05-health.md) |
 | 6 | App/module SDK and composition | [06-app-sdk.md](06-app-sdk.md) |
 | 7 | UI shell | [07-ui-shell.md](07-ui-shell.md) |
-| 8 | *arr facade (deferred-build) | [08-arr-facade.md](08-arr-facade.md) |
+| 8 | *arr facade (deferred-build; design sketch, non-normative) | [08-arr-facade.md](08-arr-facade.md) |
 | 9 | ABO on core | [09-abo-on-core.md](09-abo-on-core.md) |
-| 10 | TV and Movies proof sketches, `acquire` contract (deferred-build) (+ ebooks note) | [10-tv-movies-proof.md](10-tv-movies-proof.md) |
+| 10 | TV and Movies proof and the `acquire` contract: design sketch (non-normative), deferred-build (+ ebooks note) | [10-tv-movies-proof.md](10-tv-movies-proof.md) |
 | 11 | Multi-app in one binary | [11-multi-app.md](11-multi-app.md) |
 | 12 | Repo split | [12-repo-split.md](12-repo-split.md) |
 | 13 | Toolchain and versions | [13-toolchain.md](13-toolchain.md) |
@@ -213,3 +213,4 @@ Advisor (dispositions in `docs/plans/platform-core/reviews/spec-advisor-disposit
 - A-6 — Build scope: row for the deferred updater hardening.
 - A-15 (ADV-S9) — Build scope: deferred parts are non-normative design sketches.
 - ADV-12 — reading order: per-stage normative digests under `docs/plans/platform-core/digests/`.
+- integration pass (advisor): deferred table and file list cite 05-indexer, 08 and 10 as design sketches (non-normative).

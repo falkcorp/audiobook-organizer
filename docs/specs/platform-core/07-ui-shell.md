@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/07-ui-shell.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.10.1 -->
 <!-- guid: 651865f1-0fad-4e15-8169-ceaf4a573f13 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1225,8 +1225,9 @@ The OpenAPI 3.1 documents and the TypeScript client pipeline are owned by
   constant, or placed in the API-key scope list, unless it comes from `manifest.permissions` or the
   generated client. On a legacy-backed store (ABO through S10) roles and API keys hold legacy atoms
   only, and canonical names are an API-level mapping over them (A-2), so a role or key write that
-  names a permission with no legacy atom is refused by 05-rbac; the Roles and API-keys pages show that
-  refusal as a field error (05-rbac owns the code), and a native app's pages never see it.
+  names a permission with no legacy atom is refused with 422 `no_legacy_atom` (`rbac.ErrNoLegacyAtom`,
+  naming the permissions; 05-rbac §6.3); the Roles and API-keys pages show that refusal as a field error
+  on the named permissions, and a native app's pages never see it.
 * `/invite` and `/login/temp` render before auth gates and read their token from the fragment
   (§7.4.3); `/setup` and the first-run wizard (shell frame plus every enabled module's `setup` steps
   whose `isRequired()` is true) keep today's gate order (`App.tsx:200-251`). From 09 S4, when invite
@@ -1399,7 +1400,7 @@ first, and the core-web import rule (§7.3.1) proves the cut (FE-16).
 | `pages/System.tsx` (+ `components/system` Storage, Quota, SystemInfo) | shell `/system` | `ChapterConsolidationCard`, `ManualFixesCard` → books `widgets` (placement `system`); calls the S8 native routes (`/system`, `/backup`, `/update`, `/health`, FE2-25) |
 | `components/system/MaintenanceTab.tsx` | split (FE8-6) | the maintenance-window and registered-task controls → shell `/system`, over the native tasks routes; the hash, AcoustID, chapter and duplicate jobs (`getAcoustIDStats`, `backfillFileHashes`, `backfillMetadataHashes`, `findMetadataHashDuplicates`, `scanDuplicateFiles`, … through `import * as api`, `MaintenanceTab.tsx:36` @748fd787a) → a books `widgets` entry (placement `system`), which keeps its legacy calls after S9 |
 | `components/system/ThrottlePanel.tsx` | books `widgets` entry (placement `system`) (FE8-6) | provider throttles have no native core route; it calls `getProviderThrottles`/`startThrottleReset`, imports ABO's `useHasPermission` (`:21`) and its `THROTTLE_RESET_PERMISSION` constant (`:24`) is replaced by books' manifest permission (§7.9.1) |
-| `pages/Settings.tsx` | shell `/settings` frame | generic tabs (Security, API Keys, Plugins → Integrations, AI backends, Scheduled tasks, Performance, Temp Login, System Info) in shell; Library, iTunes Import, Metadata, Dedup, Paths, OpenLibraryDumps, BlockedHashes, Embedding → books `settingsPanels`; Deluge → generic adapter-instance form rendered by `<SchemaForm>` (§7.4.5); needs the S4 settings schema/`KeyState` API (`/api/core/v1/settings`, `/settings/schema`, FE3-11) and the S7 instance store (FE2-25) |
+| `pages/Settings.tsx` | shell `/settings` frame | the two-step factory-reset dialog (`Settings.tsx:223-225,992-1014` @748fd787a, calling `api.factoryReset`, `services/api.ts:3260-3261`) stays on the legacy `POST /api/v1/system/factory-reset` alias, which keeps HEAD's wipe, until the shell build (S9); the shell's dialog calls the native `POST /api/core/v1/system/factory-reset` (05-http-api §5), sends `delete_library_files` only when the operator ticks "also delete library files", and on 422 `library_files_confirm_required` shows the problem body's `library_root` and `library_file_count` and resends them only after the operator confirms that root and count (05-rbac §6.2, A-17); generic tabs (Security, API Keys, Plugins → Integrations, AI backends, Scheduled tasks, Performance, Temp Login, System Info) in shell; Library, iTunes Import, Metadata, Dedup, Paths, OpenLibraryDumps, BlockedHashes, Embedding → books `settingsPanels`; Deluge → generic adapter-instance form rendered by `<SchemaForm>` (§7.4.5); needs the S4 settings schema/`KeyState` API (`/api/core/v1/settings`, `/settings/schema`, FE3-11) and the S7 instance store (FE2-25) |
 | `pages/Dashboard.tsx` | shell `/` home | library counts and scan trigger → books widget (placement `home`) |
 | `pages/Diagnostics.tsx` | shell `/system/diagnostics` frame | AI-dedup diagnostics → books widget |
 | `pages/FileBrowser.tsx` | books page `/books/files` | uses ui-kit `ServerFileBrowser`, passing the generated core browse call (`core:library.browse`, 05-library) as its `browse` prop and books' scan include/exclude calls as `include`/`exclude` |
@@ -1825,3 +1826,4 @@ Advisor (2026-11-04), resolutions applied to this file:
 
 - A-2 / ADV-S1 — §7.9.1: on a legacy-backed store roles and keys hold legacy atoms only; the Roles and API-keys pages show 05-rbac's refusal of a permission without a legacy atom.
 - A-5 / ADV-S4 — §7.16: `ui` series use `app.Options.MetricNamespace` (default `mediacore`).
+- integration pass (advisor): §7.9.1 cites 422 `no_legacy_atom` (05-rbac §6.3); §7.11 `Settings.tsx` row: the factory-reset dialog handles 422 `library_files_confirm_required` (A-17).

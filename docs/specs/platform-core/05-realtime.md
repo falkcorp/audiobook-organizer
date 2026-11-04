@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-realtime.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.6.1 -->
 <!-- guid: 9f4f16ae-e4d9-4fd1-a6df-e409e07602ad -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -367,7 +367,7 @@ obtains each handler from `Registrar.Realtime().Projection(p)` during P6 and ser
 **gin legacy manifest** at the three legacy paths (`Perm: rbac.AnyAuthenticated`, as for the native
 stream; `OwnAuth: false`; per-topic permissions are applied per event inside the hub, §4.4). They are
 recorded in the compat ledger as surface `sse` (09 §9.2.1), their use is counted in
-`mediacore_compat_legacy_use_total{surface="sse",name=<projection>}` (a process-local counter, never
+`<namespace>_compat_legacy_use_total{surface="sse",name=<projection>}` (a process-local counter, never
 persisted), and a contract PR removes them once the ledger's dates allow and the owner has checked
 that counter on the reference host (09 §9.2.1; resolution A-14). No clock removes them.
 
@@ -485,7 +485,7 @@ its projections arrive at S6, so one stage needs an explicit feed:
 | `mediacore_realtime_streams_closed_total` | counter | `reason` (`client`,`shutdown`,`credential_revoked`,`permission_revoked`,`write_timeout`) |
 | `mediacore_realtime_ring_oldest_age_seconds` | gauge | — |
 
-Legacy projection use is counted by `compat` (`mediacore_compat_legacy_use_total{surface="sse"}`).
+Legacy projection use is counted by `compat` (`<namespace>_compat_legacy_use_total{surface="sse"}`).
 
 Names are shown under core's default metric namespace `mediacore`. An app passes its own namespace as an
 `app.Options` value, and ABO passes HEAD's `audiobook_organizer` (`internal/metrics/metrics.go:10-60`
@@ -603,3 +603,4 @@ Advisor (2026-11-04), resolutions applied to this file:
 
 - A-14 (ADV-S8) — §4.9: the legacy projections' removal waits for the ledger dates and the owner's check of the process-local `compat` counter on the reference host; the "zero-use gate" wording is gone.
 - A-5 (ADV-S4) — §9: metric names are under the app's namespace (`app.Options`); ABO passes HEAD's `audiobook_organizer`, so nothing is renamed.
+- integration pass (advisor): compat counter under `<namespace>_`.

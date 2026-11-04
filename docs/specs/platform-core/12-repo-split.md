@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/12-repo-split.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.9.1 -->
 <!-- guid: eb47baa1-640b-4c96-96cc-f6b2bdeaa57e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -424,15 +424,15 @@ split, the core repo has nothing else. It is specified now so that it does not g
 ### 12.4.4 Hardening cutovers (post-S10)
 
 The extraction is representation-neutral (03 introduction; 02 decision 13, A-2), so the hardening of ABO's stored
-representations is not an extraction stage. It is three named **hardening cutovers**, each a one-way, floored
+representations is not an extraction stage. It is three named **hardening cutovers**, H1–H3 as 09 §9.13 names and stages them, each a one-way, floored
 cutover on 02 N15's machinery (mandatory pre-migration checkpoint, per-owner level guard, the cutover release as
 its rollback floor):
 
 | Cutover | What it changes for ABO | Until it runs (as at HEAD) |
 |---|---|---|
-| **Identity** | sessions and one-time tokens stored hashed; `mck_` keys; roles and keys hold native scopes | raw `sess:` rows and HEAD's one-time tokens; `abk_` keys and roles holding legacy atoms, with namespaced scopes as an API-level mapping (`rbac.LegacyAtom`) |
-| **Secrets** | the plaintext blob secrets are encrypted into `secrets` | plaintext blob secret fields; the four secrets HEAD already encrypts stay as they are |
-| **Auth precedence** | an operator value that enables auth takes effect over a stored `false` | HEAD's precedence: the stored value wins |
+| **H1 — identity cutover** | sessions and one-time tokens stored hashed; `mck_` keys; roles and keys hold native scopes | raw `sess:` rows and HEAD's one-time tokens; `abk_` keys and roles holding legacy atoms, with namespaced scopes as an API-level mapping (`rbac.LegacyAtom`) |
+| **H2 — secrets cutover** | the plaintext blob secrets are encrypted into `secrets` | plaintext blob secret fields; the four secrets HEAD already encrypts stay as they are |
+| **H3 — auth-precedence cutover** | an operator value that enables auth takes effect over a stored `false` | HEAD's precedence: the stored value wins |
 
 They are not split criteria: neither T nor SC1–SC10 waits on them, and each may run before or after the split.
 A cutover that runs after the split is an ABO change to its legacy store implementations plus native
@@ -770,3 +770,4 @@ Advisor (dispositions in `docs/plans/platform-core/reviews/spec-advisor-disposit
 - A-2 (ADV-3, ADV-S1) — new §12.4.4: the post-S10 identity, secrets and auth-precedence hardening cutovers, what each changes, what holds until it runs, and that none is a split criterion.
 - A-4 (ADV-S3) — §12.8.1: the history path file comes from git's rename detection at `F` (no pathspec); `core/scripts/split/origins.txt` and the move/re-implementation rule deleted; move PRs keep the move in a first, building commit; undetected moves keep post-arrival history only, listed in the readiness report.
 - ADV-9 — open item 1: PolyForm Noncommercial meets D9; relicensing is an optional reuse decision, confirmed over the full history.
+- integration pass (advisor): §12.4.4 names H1–H3 as 09 §9.13 does.

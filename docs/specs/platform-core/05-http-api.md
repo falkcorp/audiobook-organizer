@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-http-api.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.10.1 -->
 <!-- guid: fcd387ab-7a8e-49e2-a4b4-a6901aaee1e3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -37,7 +37,7 @@ the wire. It owns:
 
 Out of scope: listener/TLS/HTTP-3 configuration beyond the handler (kept in `app` options,
 [06-app-sdk](06-app-sdk.md)); what the SPA handler serves (`core/ui`, [07-ui-shell](07-ui-shell.md));
-the *arr resource mapping ([08-arr-facade](08-arr-facade.md)); health/metrics endpoints' payloads
+the *arr resource mapping ([08-arr-facade](08-arr-facade.md), a design sketch (non-normative)); health/metrics endpoints' payloads
 ([05-health](05-health.md), [05-metrics](05-metrics.md)). Sub-path deployment: apps are served at the
 origin root only; there is no base-path option (FE-19 — ABO has none today: cookies use `Path=/`,
 `internal/server/handlers/auth.go:226-247`, and the web client calls absolute `/api/...` URLs,
@@ -493,7 +493,7 @@ type Deps struct {
 	Auth    *auth.Service  // S4 addition (§3, COR2-9, COR3-3)
 	RBAC    *rbac.Service  // S4 addition
 	Audit   audit.Logger   // S4 addition; before it, stage 7/13 refusals go to the access log (§4.2)
-	Compat  *compat.Ledger // S2b addition: alias registration, ledger dates from app.Options.CompatLedger, mediacore_compat_legacy_use_total (09 §9.2.9, SIMP3-3)
+	Compat  *compat.Ledger // S2b addition: alias registration, ledger dates from app.Options.CompatLedger, <namespace>_compat_legacy_use_total (09 §9.2.9, SIMP3-3)
 	Log     *slog.Logger
 	Metrics *metrics.Scope // "mediacore.http" (05-metrics)
 }
@@ -706,7 +706,7 @@ side-effect route that needs idempotency adds it then, in its owner.
   lifetimes are not typed into Go code (SIMP2-12). On every response the alias sends
   `Deprecation: @<unix time of the row's shipped date>`, `Sunset: <HTTP-date of the row's earliest
   removal>` (advisory), `Link: <target pattern>; rel="successor-version"`, counts
-  `mediacore_compat_legacy_use_total{surface="http",name=<legacy pattern>,entry="request"}` (09 §9.2.4;
+  `<namespace>_compat_legacy_use_total{surface="http",name=<legacy pattern>,entry="request"}`, under the app's metric namespace, so ABO's is `audiobook_organizer_compat_legacy_use_total` (09 §9.2.4;
   a process-local counter that the owner reads on the reference host before a contract PR; nothing is
   persisted, resolution A-14), and logs once per (alias, principal) per hour at `INFO`.
 - **Aliases never retarget an action (SEC2-5).** One legacy path may front several native routes when
@@ -1280,7 +1280,7 @@ the stage that registers its key, and every older build reads only the legacy na
 Nothing writes an operator value back into the stored blob, so a value given only under a canonical name
 (the Basic gate switch or password, the rate-limit switch, `core.http.peer_allowlist`, which is env-only at
 HEAD as `allowed_peer_cidrs`, `json:"-"`, `internal/config/config.go:1709-1719`) is not seen after a
-rollback below the stage that introduced the name. 09 §9.2.1 carries the release-note row: while you may
+rollback below the stage that introduced the name. 09 §9.2.1 row 3 carries the cost and its release note: while you may
 roll back below that release, keep the legacy name set to the same value or save the setting through the
 settings page.
 
@@ -1298,7 +1298,7 @@ settings page.
 | `mediacore_http_gone_requests_total` | counter | `owner`, `route` |
 | `mediacore_http_peer_refused_total` | counter | — |
 
-Alias use is counted by `compat`'s `mediacore_compat_legacy_use_total{surface="http",…}` (09
+Alias use is counted by `compat`'s `<namespace>_compat_legacy_use_total{surface="http",…}` (09
 §9.2.4), not by an httpapi-specific counter, so the owner's check before a contract PR reads the series
 that is actually incremented (OPS-10, A-14). Unmatched paths use `route="unmatched"` so cardinality stays
 bounded by the route table.
@@ -1350,7 +1350,7 @@ inventory of HEAD's series.
 | `TestAlias_CreateKeyForOtherUserKeepsTarget` | legacy `POST /api/v1/auth/api-keys {user_id}` reaches `createUserAPIKey` for that user, bounded by the target's roles and dominance; without `user_id`, `createOwnAPIKey` (SEC2-5) |
 | `TestPage_OffsetDefaultHasTotal` / `TestCursor_FilterMismatch` | SIMP-8 |
 | `TestTaskStart_IdempotencyKeyReplaysRunView` | a repeated `Idempotency-Key` on task start → 200, the existing `RunView`, `Idempotent-Replayed: true` (SIMP2-8; store in 05-tasks) |
-| `TestAlias_DeprecationHeadersAndCompatCounter` | headers rendered from the ledger row of `app.Options.CompatLedger` (or core's fragment); `mediacore_compat_legacy_use_total{surface="http"}` increments (SIMP3-3) |
+| `TestAlias_DeprecationHeadersAndCompatCounter` | headers rendered from the ledger row of `app.Options.CompatLedger` (or core's fragment); `<namespace>_compat_legacy_use_total{surface="http"}` increments (SIMP3-3) |
 | `TestAlias_OutsideClaimRefused` / `TestBuild_CrossOwnerShadowRefused` | a module alias at `GET /api/core/v1/auth/oidc/google/callback`, and a legacy route outside its mount's `LegacyPrefixes`, → `ErrAliasOutsideClaim`; one owner's pattern strictly more specific than another's → `ErrShadow`; 09 S4's ledger-listed core aliases pass (SEC3-8) |
 | `TestPublicRoutesGolden` / `TestBuild_PublicNotInManifestRefused` | the reviewed set of every `Public` route, native, alias and legacy; a module native route with `rbac.Public` absent from `Manifest.PublicRoutes` → `ErrPublicNotAllowed` (COR3-3) |
 | `TestCompressionExclusionsEqualHEAD` | golden from HEAD's `compressionMiddleware` lists: the four legacy exclusions carry `NoCompress`; `text/event-stream` responses are never gzipped; the log download is gzipped once (COR3-6) |
@@ -1582,3 +1582,4 @@ Advisor (2026-11-04), resolutions and findings applied to this file:
 - A-17 — §5 item 2, §8.1 S4 row: the native factory-reset route deletes library files only with `delete_library_files: true`, confirmed by `RootDir` and the file count; the legacy alias passes it.
 - A-4 (ADV-S3) — §3.6: the deferred-members archtest is gone; the table is planning information.
 - ADV-11 — §8.1, §12: the 572-route count is marked informative and generated at the stage's base commit.
+- integration pass (advisor): compat counter is `<namespace>_compat_legacy_use_total` (ABO `audiobook_organizer_compat_legacy_use_total`); 09 §9.2.1 row 3 cited; 08 cited as a design sketch.

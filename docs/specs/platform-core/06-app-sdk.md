@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/06-app-sdk.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.10.1 -->
 <!-- guid: d581911c-8f90-48bb-a307-5cd6288a9695 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -954,6 +954,21 @@ type Options struct {
 	// core/rbac/legacy_abo.go) (COR5-5). nil = none. S4.
 	LegacyPermissionAliases []rbac.LegacyAlias
 
+	// LegacyAmbientScopes are the core-namespaced scopes that every
+	// AnyAuthenticated principal holds on an instance whose role store is
+	// legacy-backed (05-rbac §6.3, A-2): HEAD gated their routes by
+	// authentication alone, and a legacy role or key row cannot hold a
+	// core-only scope, so this keeps HEAD's authenticated-only reach for ABO
+	// roles that hold atoms only. ABO: core:self, core:metrics.read,
+	// books:reading (own profile, sessions and keys; /metrics, which HEAD
+	// serves to any credential; own reading state). A Confined() principal
+	// never holds them. rbac's Freeze refuses the option on a native role
+	// store and refuses a listed scope that is Sensitive, AuthRequired,
+	// Confining or a *:settings.manage/*:integrations.manage scope
+	// (TestLegacyAmbientScopes). The identity hardening cutover H1 retires it
+	// (05-authn §11.2). nil = none (hello, TV, Movies). S4.
+	LegacyAmbientScopes []rbac.Permission
+
 	// LegacyTaskAliases are the app's former task kinds of CORE-owned kinds
 	// (ABO: {"core.diagnostics.export": ["diagnostics.export"]}, filled by
 	// ABO's main from books' op-ID ledger, internal/server/testdata/
@@ -1448,8 +1463,8 @@ serves those rows exactly as at HEAD.
 |---|---|---|---|---|
 | S2 | `ID`, `Version`, `DisplayName`, `MinCoreVersion`, `DefaultEnabled`, `Settings`, `UI` (IDs only), `LegacyPrefixes`, `PublicRoutes`; package `legacy` with `ConfigExternalWriter` only | `Context`, `Deps`, `HTTP`, `MountLegacy`, `AuthMethod` (recording only; the `auth` leaf types land at S2, SEC3-14), `LogPathRules`, `LogOtherUserData` (recorded from S2, consumed when the journal query lands, 05-logging), `Hook`, `Worker`, `Err` | `Module`, `Log`, `Metrics`, `ExtendStart` | `Options` fields `AppID`, `MetricPrefix`, `MetricNamespace` (A-5), `ReservedAPINamespaces`, `DisplayName`, `Version`, `EnvPrefix`, `StateDir`, `ConfigFile`, `Args`, `Env`, `LegacyConfig`, `LegacyConfigStore` (the `config.OverrideStore` interface lands here with its read members, naming no `storage` or `secrets` type; its `Changed` is the optional `legacy.ConfigExternalWriter`, S2 to the S3 PR; COR5-14, SIMP5-5), `PromRegisterer` (set from S2 r3, OPS5-14), `LegacyAuthGinUntil`, `Logger`; `New`, `Run`, `Handler`, `Modules`, `ResolveStateDir`, `ExtendStart`, `Describe` (`Core`, `OpenAPI`) (COR3-3) |
 | S2b | `Storage`; `LegacyStores` (type `legacy.Stores`, with `legacy.Handles`) with its member `Config` and the native `config.OverrideStore` (read only: `Load`, plus the legacy store's optional `legacy.ConfigOpener` (`Open`, P4d step 1; it lands here, and at S2 config calls no `Open`, COR6-8) and `legacy.ConfigExternalWriter` (`Changed`); config writes nothing to the store before S3; COR5-14, SIMP5-4); `legacy.Maintenance` (`StageFactoryReset` with `restorejournal.ResetKind`; R7-2, R8-1, SIMP8-4), `legacy.ConfigResetArgs` (`ResetArgs`), `legacy.ConfigResetPlan`, `legacy.ConfigResetRun` and the `legacy.ConfigOpenEnv.Reset` field (05-storage's one list; COR8-9, SIMP8-7) | — | `Storage` (`Keyspace`, `Legacy`, `Aux`, and `Maintenance` for the module that declares legacy claims, R7-2) | `OpenOffline`, `Offline` (R7-4); `Options.CompatLedger`; `BinaryID`, which delegates to `buildid.Binary` (the leaf lands at S0, FE6-3; its first kernel consumer is storage's self-served record, R5-7); `Options.LegacyConfigStore` deleted (SIMP4-11) |
-| S3 | `legacy.Stores.Config` also written by core config (the native write member `Stage`, and the legacy store's optional `legacy.ConfigSecrets` (`Secrets`, the legacy secrets for `secrets.Open`, in HEAD's representation, A-2) and `legacy.ConfigCommitObserver` (`Committed`); 05-config §1.3 owns the members and 05-storage §5S.3.11 "Legacy capabilities" the list; `legacy.ConfigSuspender` is deferred-build with the config basis, 05-config "Deferred-build members", SIMP6-1; `legacy.ConfigExternalWriter` deleted in the S3 PR, SIMP5-5; COR5-14) | — | `Secrets` | — (`LegacyConfig` stays: it carries names, not the codec, COR4-3) |
-| S4 | `Permissions`, `Roles`, `LegacyAliases` (own namespace), `LegacyRoleIDs`; `PublicRoutes` emptied for hello; `legacy.Stores.Auth`, `legacy.Stores.Roles` (the `rbac.LegacyAtom`/`LegacyCheck` values exist from S2, their evaluation lands here, COR6-1) | `AuthMethod` also handed to `auth` | `Auth`, `AuthAdmin`, `Audit` | `Options.Authenticators`, `Options.Auth`, `Options.LegacyPermissionAliases` (COR5-5); `LegacyAuthGinUntil` cleared by the release in which core auth decides requests (§6.5.1 "Stages"); the kernel declares the restart-bound `core.backup.dir` (alias `backup_dir`) in its own core-section list, so `backup/journal` imports no `config`, and registers `backup/journal`'s `storage.Spec` for the core keyspace `c/backup/` (owner `backup`; `Serialized: ["journal_head", "served_boot"]`, prefixes `journal_gap/` and `restore_hooked/`; `served_boot` is `Serialized` because the journaling boot writes it with `GetForUpdate`, 05-backup, COR6-6), so a revocation's journal head and gap line commit from S4 r2; `backup` adopts both at S8 (COR4-10, COR5-6); at S4 r2 the kernel mounts `internal/storagehttp`'s reset route, books' two legacy paths become its `Alias`es, and `legacy.Maintenance` and `Storage.Maintenance` are deleted in that PR with books' two gin handlers (§6.4.6, R7-2, R8-1, SIMP8-4) |
+| S3 | `legacy.Stores.Config` also written by core config (the native write member `Stage`, and the legacy store's optional `legacy.ConfigSecrets` (`Secrets`, the legacy secrets for `secrets.Open`, in HEAD's representation, A-2) and `legacy.ConfigCommitObserver` (`Committed`); 05-config §1.3 owns the members and 05-storage §5S.3.11 "Legacy capabilities" the list; `legacy.ConfigExternalWriter` deleted in the S3 PR, SIMP5-5; COR5-14) | — | `Secrets` | — (`LegacyConfig` stays: it carries names, not the codec, COR4-3) |
+| S4 | `Permissions`, `Roles`, `LegacyAliases` (own namespace), `LegacyRoleIDs`; `PublicRoutes` emptied for hello; `legacy.Stores.Auth`, `legacy.Stores.Roles` (the `rbac.LegacyAtom`/`LegacyCheck` values exist from S2, their evaluation lands here, COR6-1) | `AuthMethod` also handed to `auth` | `Auth`, `AuthAdmin`, `Audit` | `Options.Authenticators`, `Options.Auth`, `Options.LegacyPermissionAliases` (COR5-5), `Options.LegacyAmbientScopes` (05-rbac §6.3, A-2); `LegacyAuthGinUntil` cleared by the release in which core auth decides requests (§6.5.1 "Stages"); the kernel declares the restart-bound `core.backup.dir` (alias `backup_dir`) in its own core-section list, so `backup/journal` imports no `config`, and registers `backup/journal`'s `storage.Spec` for the core keyspace `c/backup/` (owner `backup`; `Serialized: ["journal_head", "served_boot"]`, prefixes `journal_gap/` and `restore_hooked/`; `served_boot` is `Serialized` because the journaling boot writes it with `GetForUpdate`, 05-backup, COR6-6), so a revocation's journal head and gap line commit from S4 r2; `backup` adopts both at S8 (COR4-10, COR5-6); at S4 r2 the kernel mounts `internal/storagehttp`'s reset route, books' two legacy paths become its `Alias`es, and `legacy.Maintenance` and `Storage.Maintenance` are deleted in that PR with books' two gin handlers (§6.4.6, R7-2, R8-1, SIMP8-4) |
 | S5 | `TaskLedger`, `TaskStarts`, `DataMigrations` (`BootBlocking` only; `Online` deferred, SIMP5-7); `LegacyStores.Tasks`, `LegacyStores.Logs` (`legacy.Stores` members), `legacy.TasksRecoverer` | `Tasks`, `Resources`, `Lanes`, `ChangeSink`, `Topics`, `Subscribe`, `Health` | `Tasks`, `Events`, `Health` (readiness reporters: the `health` readiness core, `ComponentID`, `Reporter` and the `Ready` view that dispatch waits on, lands with `tasks`, COR4-8) | `Options.LegacyTaskAliases` (by T4, the first `core.*` kinds with ABO former IDs, MOD6-6) |
 | S6 | `OutboxConsumers` | `OutboxHandler`, `Realtime` | `Outbox` | — |
 | S7 | `Requires`, `Library`; `legacy.Stores.Roots` (with `legacy.LibraryRootSource`), `.AIJobs`, `.Gates`, `.Integrations`, `.NotifyRules` (books' dirty set reaches `storage/index` per index through `index.Spec.Dirty`, not the manifest, SIMP5-2) | `Adapter`, `AICapability`, `DerivedIndex` | `Storage.Indexes`, `Storage.Derived`, `Library`, `HTTP`, `Integrations`, `Downloads`, `AI`, `Notify` (with `integrations/notify`, SIMP3-5) | `Options.Adapters` |
@@ -1488,7 +1503,9 @@ and G7 are proven from S5, the first stage at which every import of the full exa
 package legacy
 
 // Handles is what one constructor receives: the supplier's own claims,
-// nothing wider (R8). It is 05-storage's former storage.LegacyHandles. S2b.
+// nothing wider (R8). It is 05-storage's former storage.LegacyHandles. It
+// carries no extension family and no side keyspace: a legacy store reads and
+// writes only its own legacy claims (A-2). S2b.
 type Handles struct {
 	Owner  storage.Owner       // the supplying module ("books")
 	Legacy storage.LegacyRange // its claims, exactly as the module receives them
@@ -1528,7 +1545,8 @@ type Handles struct {
 // native stores until the identity and secrets cutovers; what an interface
 // member with no HEAD form does on a legacy store is its owner's
 // (05-storage §5S.3.11). A legacy implementation keeps HEAD's lock
-// discipline (keyed mutexes, apiKeyMu with early fix 6): storage-checked
+// discipline (keyed mutexes, apiKeyMu with early fix 6, opsMu through
+// legacy.TasksWriteLock): storage-checked
 // writes (Expect, Serialized) bind native keyspaces and rows core newly
 // writes only (A-3). The full-text dirty set is not a field: a module that keeps a pre-core dirty
 // set passes it per index as index.Spec.Dirty (05-storage §5S.3.8, SIMP5-2).
@@ -1551,8 +1569,8 @@ type Stores struct {
 // naming rule, SIMP7-8): library's legacy import-root store, which has no
 // native implementation (05-library §5L.3.1 owns the members and its
 // record-ID helper LibraryCoverID, the former library.RouteKey;
-// library.SourcedRoot is gone, a root's legacy state being
-// library.RootSpec.Legacy, SIMP6-7). A legacy-served root takes no
+// library.SourcedRoot is gone; a legacy-served root carries only HEAD's
+// fields, the others fixed by the source, library.ErrRootFieldFixed, A-2). A legacy-served root takes no
 // ReadShares (05-library, SIMP7-2). The kernel passes the built value to library as library.Options.LegacySource,
 // typed any (R7-7). S7.
 type LibraryRootSource interface{ /* members per 05-library §5L.3.1 */ }
@@ -1594,8 +1612,9 @@ type Maintenance interface {
 // root_dir empty, setup_complete false; the intent's fresh_rows, which the
 // reset boot's fresh-install batch writes, SEC8-5), and for ResetFactory
 // only the hook arguments (books: the Open Library dump directory, the
-// gap-fill file <db parent>/config.yaml and, only when deleteLibraryFiles is
-// set, the pre-reset RootDir, A-17; the intent's hook_args). An error refuses the reset with nothing staged.
+// gap-fill file <db parent>/config.yaml, and delete_library_files with, only
+// when it is set, the library_root and library_file_count the route
+// confirmed, 05-rbac §6.2, A-17; the intent's hook_args). An error refuses the reset with nothing staged.
 //
 // For a ResetFactory swap the kernel hands the applied swap back as
 // legacy.ConfigOpenEnv.Reset, non-nil at Open on the reset boot (journal at
@@ -1618,8 +1637,10 @@ type ConfigResetArgs interface {
 	ResetArgs(ctx context.Context, kind restorejournal.ResetKind, deleteLibraryFiles bool) (ConfigResetPlan, error)
 }
 type ConfigResetPlan struct {
-	Hook []byte       // the intent's hook_args; ResetFactory only, nil for ResetStore
-	Rows []storage.KV // the intent's fresh_rows, written by the reset boot's fresh-install batch inside the module's claims
+	Hook         []byte       // the intent's hook_args; ResetFactory only, nil for ResetStore
+	Rows         []storage.KV // the intent's fresh_rows, written by the reset boot's fresh-install batch inside the module's claims
+	LibraryRoot  string       // ResetFactory: the directory the hook would wipe, named by the core route's confirmation (A-17); "" if none
+	LibraryFiles int          // ResetFactory: the file count under LibraryRoot now (A-17); 0 if none
 }
 type ConfigResetRun struct {
 	ID     string
@@ -1634,14 +1655,13 @@ interface of package `legacy`, never of the subsystem's own package (SIMP5-4, R6
 them `legacy.ConfigOpener` (`Open`, S2b, P4d step 1(i)), `legacy.ConfigExternalWriter` (`Changed`, S2
 to the S3 PR, SIMP5-5), `legacy.ConfigSecrets` (`Secrets`, S3), `legacy.ConfigCommitObserver`
 (`Committed`, S3), `legacy.ConfigResetArgs` (`ResetArgs`, S2b, asserted and called by `kernel.stageReset`
-with the reset kind and `deleteLibraryFiles`; R7-2, COR8-2, A-17) and `legacy.TasksRecoverer` (`Recover`, S5, run inside `Executor.Run`); the auth,
+with the reset kind and `deleteLibraryFiles`; R7-2, COR8-2, A-17), `legacy.TasksRecoverer` (`Recover`, S5, run inside `Executor.Run`) and `legacy.TasksWriteLock` (S5: the run store's pre-core write lock, HEAD's `opsMu` for books, which `Executor.WriteRuns` and `Stager.WriteRuns` hold from a batch's first run-store read until its commit returns; 05-tasks 5T.3.13, A-3); the auth,
 rbac and `Covering` capabilities follow the same rule, and `secrets.LegacyStore` is `legacy.SecretsStore`. They were
 `config.LegacyOpener`, `config.ExternalWriter`, `config.LegacySecrets`, `config.CommitObserver` and
 `tasks.Recoverer`; the spellings follow 03 §3.3's naming rule (an owner-specific identifier takes its
 former package's name in Go initialism form, a cross-owner one none: `legacy.TasksRecoverer`,
 `legacy.RBACAtomWriter`, `legacy.LibraryRootSource`; SIMP7-8), and 05-storage §5S.3.11 "Legacy
-capabilities" owns the list and wins on names. `legacy.ConfigSuspender` is
-deferred-build with the config basis mechanism (05-config "Deferred-build members", SIMP6-1).
+capabilities" owns the list and wins on names.
 
 - **Detection (SIMP7-5, COR7-3).** An owner package (L1–L4) cannot import `legacy`, which imports it.
   Each capability is detected once, by the party that consumes it, and nothing records what was found.
@@ -1730,7 +1750,9 @@ grants), a native module's `m/<ID>/` and every row core newly writes. A boot wri
 legacy family (P4b's books migrations, P4d step 2's revocations and step 4's writes through books'
 legacy auth and role stores, P7's seed-role reconcile through books' role store, books' start-hook
 repairs and post-reset hook, the reset boot's `fresh_rows`) keeps HEAD's lock discipline: keyed
-mutexes, `apiKeyMu` with early fix 6, and the single-writer AST ratchet. Only the shadow → strict
+mutexes, `apiKeyMu` with early fix 6, and the single-writer AST ratchet; a legacy writer that stages into a
+caller's batch may stage an `Expect` or `GetForUpdate` on a key of a `Serialized` legacy claim it read, as a
+voluntary compare-and-set that storage honours but never requires (05-storage §5S.3.2). Only the shadow → strict
 rollout of claim (key-ownership) checks applies to legacy ranges.
 
 **One stored format per family; the app supplies its own legacy stores (R3-1, R4-1).** No boot phase
@@ -2787,7 +2809,7 @@ owning symbol. Where an owning file still describes a superseded path, the row s
 | 05-health | `Health(...health.Check)`, `StartupSteps(...health.StartupStep)`, `Diagnostics(health.Contributor)` (S8); `Registrar.Health` and `Deps.Health health.Reporters` from S5 with the readiness core (COR4-8); `Deps.ExtendStart` and the stateless `app.ExtendStart`; `core.shutdown.budget` and its phase slices (§5H.4) | `core.lifecycle.stop_timeout`/`shutdown_budget` removed from 06 (OPS-13); `internal/startup` stays in ABO, used by `cmd` until S2b (MOD3-1, MOD4-17) |
 | 05-updater | `app.Options.Updater *updater.Options`; `app.BinaryID` as `Self.BinaryID`; phase P−1 (`updater.Boot`) deferred-build | S8 moves the S0-hotfixed updater into `core/updater`, parameterised by release source (exit 75, `.prev`, semver comparison, level and floor checks, check-only unattended mode); `updater.Boot`, the boot-attempt counter, automatic rollback and signed manifests are deferred-build (A-6, ADV-S5); `--version-json` prints `{app, version, commit, ui_build_id, binary_id}`, the list step 5's self-test checks (FE6-4); the binary ID is `buildid.Binary` from S0 (FE6-3); replaces 1.0.0's `Release updater.Source`; identity is the binary ID, never the UI build ID (R5-7) |
 | 05-download, 05-indexer, 10 (v1.1.0) | `Deps.Downloads *download.Pool`; deferred `Deps.Indexers *indexer.Pool`, `Deps.Acquire *acquire.Service`, `Manifest.Acquire *AcquireDecl` (§6.4.9) | names as those files state them |
-| 05-library | `Manifest.Library []library.RoleRequirement`; `Deps.Library library.Scope`; `legacy.Stores.Roots` returning `legacy.LibraryRootSource`; `library.Options.LegacySource any` | `library.RootSource` and `RouteKey` move to package `legacy` as `legacy.LibraryRootSource` (SIMP7-8) and `legacy.LibraryCoverID`, and `librarytest.RootSourceSuite` to `legacytest.LibraryRootSourceSuite` (SIMP7-8), since library has no native root store (R6-3, SIMP6-3 (b)); `library.SourcedRoot` is deleted, a source-served root carrying `library.RootSpec.Legacy` (SIMP6-7); the kernel passes the built root source as `library.Options.LegacySource`, typed `any` and asserted by library at construction (`storage.ErrLegacyStoreType`, R7-7); a legacy-served root takes no `ReadShares` (SIMP7-2) |
+| 05-library | `Manifest.Library []library.RoleRequirement`; `Deps.Library library.Scope`; `legacy.Stores.Roots` returning `legacy.LibraryRootSource`; `library.Options.LegacySource any` | `library.RootSource` and `RouteKey` move to package `legacy` as `legacy.LibraryRootSource` (SIMP7-8) and `legacy.LibraryCoverID`, and `librarytest.RootSourceSuite` to `legacytest.LibraryRootSourceSuite` (SIMP7-8), since library has no native root store (R6-3, SIMP6-3 (b)); `library.SourcedRoot` is deleted, and a source-served root carries only HEAD's fields, the others fixed by the source (`library.ErrRootFieldFixed`, A-2); the kernel passes the built root source as `library.Options.LegacySource`, typed `any` and asserted by library at construction (`storage.ErrLegacyStoreType`, R7-7); a legacy-served root takes no `ReadShares` (SIMP7-2) |
 | 05-authn §3.3, §5 | `app.Options.Authenticators []auth.Extension`; `Registrar.AuthMethod(auth.MethodSpec)`; `Deps.Auth`, `Deps.AuthAdmin` | `auth.Extension{Authenticator, Spec, Order}` requested from 05-authn; `auth.MethodSpec` is an S2 leaf (SEC3-14); `auth.BootWrites` is P4d step 4 and also mints the bootstrap token and the optional start-up key, each in its store's representation (DATA3-18, COR4-13, A-2); `auth.Store` has a native implementation (`c/auth/`) and books' legacy one (`legacy.Stores.Auth`); compat methods reach `auth` at P7, not P5 (R4-1, COR4-13) |
 | 05-backup | `Registrar.Backup(...backup.Artifact)`; `Deps.Backup backup.Ensurer`; pre-boot restore phase P0a (the kernel's journaled swap from S2b, ABO staging only until S8, DATA4-6); revocation re-apply (step 2, `head_before` read before any append, SEC4-5) and post-restore hooks (step 3, also on a replaced-store boot) in P4d; `core.backup.dir` declared from S4 by the kernel's core-section list and `backup/journal`'s `c/backup/` spec registered from S4 (COR4-10, COR5-6); `StagedByBuild`/`Source` carry the binary ID (R5-7) | 05-backup's "module.Manifest.Backup" comment changes to `Registrar.Backup` (hooks close over services); P0a runs after P−1 and before P0 (DATA-23, OPS2-3), trusts the absolute targets in `pending.json` (DATA2-25) and keeps `inflight.json` until `applied` (DATA3-6); the journal is read after the keyring and overrides (COR3-2, DATA3-5); P4d step 2 classifies per 05-backup §5B.3.6 (2), never by its own rule (DATA6-5), and on a restore boot writes `served_boot` and `backup.location.json` only after the hooks commit (DATA6-3); a staged restore appends no gap line for its own swap (R6-4) |
 | 05-logging, 05-metrics | `Deps.Log *slog.Logger`, `Deps.Metrics *metrics.Scope`; `Registrar.LogPathRules(...log.PathRule)`, `Registrar.LogOtherUserData(log.OtherUserPredicate)`; `app.Options.MetricNamespace` (core series, A-5) beside `MetricPrefix` (module series); `app.Options.PromRegisterer` (S2 r3–S8, OPS5-14); `legacy.Stores.Logs` (`log.JournalStore`, which commits its own batches: the stated exception to the caller's-batch rule, MOD5-10) | the module path-rule and other-user-data registrations 05-logging §3, §5 point at; no metric aliases: an app that keeps its names passes its own `MetricNamespace` (A-5); the App exporter registers on the app's registerer until S8, then the kernel mounts `/metrics` (MOD4-3) |
@@ -3140,3 +3162,4 @@ Advisor (2026-11-04), resolutions applied to this file:
 - A-16 / ADV-11 — §6.2: literal counts informative, generated at each stage's base commit.
 - A-17 (Q-K) — §6.4.6, P0a, `legacy.Maintenance`, `ConfigResetArgs.ResetArgs(…, deleteLibraryFiles)`: the native reset route deletes library files only with `delete_library_files: true`, the legacy alias passes it; `TestFactoryResetLibraryFilesOptIn`.
 - Consistency — §6.14 05-storage row: `Maintenance` lives S2b to the S4 r2 PR (was "S8").
+- integration pass (advisor): §6.4.5 adds `app.Options.LegacyAmbientScopes` (05-rbac §6.3) and the S4 stage row lists it; §6.4.11 adds `legacy.TasksWriteLock` to the capability list, states `legacy.Handles` has no extension family, drops `legacy.ConfigSuspender` and `library.RootSpec.Legacy`, and `ConfigResetPlan` gains `LibraryRoot`/`LibraryFiles` with `hook_args` as 05-storage states; §6.5.1 states the lead's A-3 ruling (voluntary compare-and-set).

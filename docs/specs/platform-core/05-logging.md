@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.7.1 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -412,7 +412,7 @@ type Schedules struct { // section core.log.schedules
   roll-forward, so the journal adds no rollback cost. One consequence comes from the same S5 release removing the
   activity `Writer`'s line parsing (§11): from S5 no `system` entries are added to the books activity feed, so
   after a rollback the older build's Activity page shows none for the time spent on S5 or later, while its
-  system-log route still shows them. 09 §9.2.1 lists it (OPS5-12); after roll-forward the journal serves the
+  system-log route still shows them. 09 §9.2.1 row 6 lists it (OPS5-12); after roll-forward the journal serves the
   whole period.
 - User data in system log lines: HEAD serves the system activity log to `settings.manage` but
   drops lines that name another user's data, and blanks their user ID, unless the caller also holds
@@ -654,3 +654,4 @@ Advisor:
 - A-2 (ADV-S1) — L5, §5 ABO's store, §10 `logtest.JournalStoreSuite`: the books extension record for journal attributes (and its fingerprint, stale handling and conditional extension deletes) is deleted; ABO's store writes and reads HEAD's row shape only (`user_id`, source, level, message, time), drops what that shape cannot hold through S10, and classifies other-user records by source and message as HEAD does; native stores keep every field.
 - A-3 (ADV-S2) — §5 `Prune`: no storage-enforced write check on the legacy rows; HEAD's one-writer, one-pruner discipline (R7-3's conditional delete deleted with the extension).
 - Header — 03 reference v1.11.1.
+- integration pass (advisor): 09 §9.2.1 row 6 cited; journal rows on ABO confirmed HEAD-shaped with no extension family.
