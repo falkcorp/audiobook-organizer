@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/08-arr-facade.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 6d9b089a-fb08-4087-9ccd-43b9aa4ec555 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -25,8 +25,9 @@ kinds) are deferred-build members of 06 §6.4.9.
 packages as well as to packages (03 §3.4). Everything below exists only for this facade, has no ABO
 consumer, and is therefore **not** built in S2/S4; each owning file keeps its contract text under a
 heading whose text, after an optional section number, is exactly `Deferred-build members` (03 §3.4),
-with the package-qualified identifiers in its table's first column and every other item (query-key
-extraction, the facade clause, tests) in its `Also deferred (not checked)` column (COR5-16, SIMP5-6),
+with the package-qualified identifiers in its table's first column (exactly `—` for a row with nothing
+to check) and every other item (query-key extraction, the facade clause, tests) in its column headed
+exactly `Also deferred (not checked)`, in any position (COR5-16, SIMP5-6, SIMP6-8),
 and it lands additively in the build that creates `arrfacade`. The table below is a reader's index of
 those entries, not a source of the check:
 
@@ -659,3 +660,8 @@ Round 4 (2026-11-04), findings applied to this file:
 Round 5 (2026-11-04), findings applied to this file:
 
 - COR5-16 / SIMP5-6 — §8.0: the heading grammar (optional section number), first column package-qualified identifiers only, other items in `Also deferred (not checked)`; the reader's index qualifies `auth.` and `httpapi.` names.
+
+Round 6 (2026-11-04), findings applied to this file:
+
+- SIMP6-8 — §8.0: the heading grammar as 03 §3.4 and 06 §6.4.9 now state it (a first-column entry is a package-qualified identifier or exactly `—`; the unchecked column in any position).
+- R6-3 — checked: the facade supplies no legacy store and names no `legacy` identifier; nothing else to change.
