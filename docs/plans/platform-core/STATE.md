@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.15.0 -->
+<!-- version: 1.16.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -22,7 +22,7 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 |---|---|---|
 | 1 | Raw data gathering | done (17 raw files incl. raw/00-baseline-build.md) |
 | 2 | Design spec | done (draft v1): 34 files under docs/specs/platform-core/ |
-| 3 | Spec review loop | distinct BLOCKERs per round: R1 20, R2 10, R3 9, R4 6, R5 5, R6 2, R7 1 — rounds 1–6 dispositioned and applied (+ integration passes); round 7 (96 findings: 1 BLOCKER, 31 MAJOR, 64 MINOR) dispositioned, revisers running |
+| 3 | Spec review loop | distinct BLOCKERs per round: R1 20, R2 10, R3 9, R4 6, R5 5, R6 2, R7 1 — rounds 1–6 dispositioned and applied (+ integration passes); round 7 (96 findings: 1 BLOCKER, 31 MAJOR, 64 MINOR) dispositioned and applied (8 cluster revisers + integration pass; 04 regenerated, 213 rows, gates pass); round 8 (7 fresh reviewers) running |
 | 4 | Spec advisor review | pending |
 | 5 | Spec confidentiality gate + PR + merge | pending |
 | 6 | Implementation plan | pending |
@@ -42,7 +42,7 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 
 ## Next action
 
-Round 7 reviews and dispositions committed (`reviews/spec-round-7-dispositions.md`, resolutions R7-1..R7-8). Eight cluster revisers (R-A..R-H) are applying them; then an integration pass, then round 8 with fresh reviewers. Exit when a round has zero BLOCKERs and every MAJOR is dispositioned, then Phase 4.
+Round 8 review running (`reviews/spec-round-8-<lens>.md`, brief adds a convergence rule: regressions of round-7 fixes and contradictions introduced by the revision first, one finding per root cause). Exit when a round has zero BLOCKERs and every MAJOR is dispositioned, then Phase 4 (single fresh max-effort reviewer, since no advisor tool exists).
 
 ## Incidents
 
@@ -54,5 +54,5 @@ Round 7 reviews and dispositions committed (`reviews/spec-round-7-dispositions.m
 - Subagents use `general-purpose` / `Explore` with explicit model and effort.
 
 COMPLETED: 2 — phase 1 (raw data), phase 2 (spec draft v1)
-REMAINING: 7 — phases 3–9 (phase 3: round-7 revision in progress)
+REMAINING: 7 — phases 3–9 (phase 3: round 8 review running)
 BLOCKED: 0 —
