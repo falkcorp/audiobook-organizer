@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/mapper.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 7a2f58d1-0b64-4e93-8c1d-6f9047b5e2a3
-// last-edited: 2026-09-28
+// last-edited: 2026-11-04
 
 package abs
 
@@ -334,10 +334,11 @@ func countedBookFiles(lib absBookFileLoader, bookID string) (*database.Book, []d
 // MintOrGetSyncFileID, which is what put a global-mutex-plus-fsync on the
 // innermost loop of every item response.
 func (h *Handler) loadFileView(f database.BookFile, syncFileID string) (*fileView, error) {
+	durSec, _ := f.DurationSec() // unknown is reported as 0, as before
 	fv := &fileView{
 		File:        f,
 		SyncFileID:  syncFileID,
-		DurationSec: float64(f.Duration),
+		DurationSec: float64(durSec),
 		SizeBytes:   f.FileSize,
 		BirthtimeMs: msEpoch(f.CreatedAt),
 		MtimeMs:     msEpoch(f.UpdatedAt),

@@ -1,7 +1,7 @@
 // file: internal/dedup/dataset/highconf.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b9e1c70-8d42-4a16-9f53-7c2e6a8b1d04
-// last-edited: 2026-06-18
+// last-edited: 2026-11-04
 
 package dataset
 
@@ -115,7 +115,8 @@ func bothEqual(x, y *string) string {
 func sidePlausibleAudioRaw(files []database.BookFile) bool {
 	for i := range files {
 		f := &files[i]
-		if f.AcoustIDFingerprintDurationSec > 0 || f.Duration > 0 {
+		_, durKnown := f.DurationSec()
+		if f.AcoustIDFingerprintDurationSec > 0 || durKnown {
 			return true
 		}
 		if f.FileSize >= minPlausibleAudioBytes {

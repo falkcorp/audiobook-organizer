@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_merge.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 0f6bdcdf-d13a-46a8-90f7-5d62bbccd3a8
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package database
 
@@ -320,9 +320,11 @@ func judgeBookFileContent(incoming, stored *BookFile, presence scanPresence) boo
 		return v
 	}
 	v.bytesChanged = true
-	durationKnown := incoming.Duration > 0 && stored.Duration > 0
+	inSec, inKnown := incoming.DurationSec()
+	storedSec, storedKnown := stored.DurationSec()
+	durationKnown := inKnown && storedKnown
 	codecDiffers := incoming.Codec != "" && stored.Codec != "" && !strings.EqualFold(incoming.Codec, stored.Codec)
-	v.audioChanged = !durationKnown || absInt(incoming.Duration-stored.Duration) > 1 || codecDiffers
+	v.audioChanged = !durationKnown || absInt(inSec-storedSec) > 1 || codecDiffers
 	return v
 }
 

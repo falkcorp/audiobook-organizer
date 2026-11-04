@@ -1,7 +1,7 @@
 // file: internal/scanner/replaced_file_probe.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6b2e9f41-8c37-4d05-a9e1-3f7d2c5b8a64
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package scanner
 
@@ -40,8 +40,9 @@ func probeReplacedFileAudio(bf *database.BookFile, filePath string, scanLog logg
 		bf.Codec = mi.Codec
 	}
 	if mi.Duration > 0 && !mi.DurationEstimated {
-		bf.Duration = mi.Duration
-		return
+		if err := bf.SetMeasuredDuration(mi.Duration); err == nil {
+			return
+		}
 	}
 	warnSampled(&replacedProbeNoAudioCount, scanLog,
 		"replaced-file probe of %s gave no real duration (estimated=%v; is ffprobe installed?): its fingerprint and transcript are dropped",

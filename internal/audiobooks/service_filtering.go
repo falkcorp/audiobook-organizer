@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.23.0
+// version: 1.23.1
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-10-18
+// last-edited: 2026-11-04
 
 package audiobooks
 
@@ -1277,7 +1277,9 @@ func (svc *AudiobookService) aggregateFileMetadataWithFiles(books []database.Boo
 			// NormalizeDurationSec divides only when the file's implied bitrate
 			// proves the value is milliseconds, so a correct row passes through
 			// untouched and a genuine ms row is still repaired.
-			agg.totalDuration += database.NormalizeDurationSec(f.FileSize, f.Duration)
+			if sec, ok := f.DurationSec(); ok {
+				agg.totalDuration += database.NormalizeDurationSec(f.FileSize, sec)
+			}
 			agg.totalSize += f.FileSize
 		}
 		if idx, ok := bookIDMap[bookID]; ok {

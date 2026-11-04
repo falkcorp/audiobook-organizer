@@ -1,7 +1,7 @@
 // file: internal/audiobooks/runtime_index.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2b9f4c61-8e3a-4a7d-9c05-5d1e7f3a6b28
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package audiobooks
 
@@ -88,16 +88,18 @@ type runtimeRow struct {
 }
 
 func rowFromBookFile(f *database.BookFile) runtimeRow {
+	dur, _ := f.DurationSec() // unknown projects as 0, as before
 	return runtimeRow{
 		bookID: f.BookID, fileHash: f.FileHash, origHash: f.OriginalFileHash, origName: f.OriginalFilename,
-		size: f.FileSize, dur: f.Duration, acoustid: f.AcoustIDFingerprintDurationSec, missing: f.Missing,
+		size: f.FileSize, dur: dur, acoustid: f.AcoustIDFingerprintDurationSec, missing: f.Missing,
 	}
 }
 
 func rowFromCore(c *database.BookFileCore) runtimeRow {
+	dur, _ := c.DurationSec() // unknown projects as 0, as before
 	return runtimeRow{
 		bookID: c.BookID, fileHash: c.FileHash, origHash: c.OriginalFileHash, origName: c.OriginalFilename,
-		size: c.FileSize, dur: c.Duration, acoustid: c.AcoustIDFingerprintDurationSec, missing: c.Missing,
+		size: c.FileSize, dur: dur, acoustid: c.AcoustIDFingerprintDurationSec, missing: c.Missing,
 	}
 }
 
@@ -159,6 +161,7 @@ func buildRuntimeEntries(rows []runtimeRow) map[string]runtimeEntry {
 				buf = buf[:0]
 				for _, i := range byBook[id] {
 					r := &rows[i]
+					// direct: rebuilding a BookFile from the projected runtimeRow.
 					buf = append(buf, database.BookFile{
 						BookID: r.bookID, Duration: r.dur, FileSize: r.size, Missing: r.missing,
 						FileHash: r.fileHash, OriginalFileHash: r.origHash, OriginalFilename: r.origName,

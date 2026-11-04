@@ -1,7 +1,7 @@
 // file: internal/transcode/transcode.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: f8a1b2c3-d4e5-6789-abcd-ef0123456789
-// last-edited: 2026-10-15
+// last-edited: 2026-11-04
 
 package transcode
 
@@ -252,7 +252,9 @@ func Transcode(ctx context.Context, opts TranscodeOpts, store transcodeStore, pr
 	// Compute total duration (microseconds) for progress reporting
 	var totalDurationUs int64
 	for _, f := range bookFiles {
-		totalDurationUs += int64(f.Duration) * 1_000 // BookFile stores ms
+		if sec, ok := f.DurationSec(); ok {
+			totalDurationUs += int64(sec) * 1_000 // BookFile stores ms
+		}
 	}
 	if totalDurationUs == 0 && book.Duration != nil && *book.Duration > 0 {
 		totalDurationUs = int64(*book.Duration) * 1_000_000

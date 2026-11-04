@@ -1,7 +1,7 @@
 // file: internal/metabatch/part_rows.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 0e87a518-a04c-44d3-8d4d-3539bfc91b85
-// last-edited: 2026-10-05
+// last-edited: 2026-11-04
 //
 // Tells a book row that is one file of a set the scanner filed as separate
 // book rows ("06 Chapter 6", "Cobra 100 of 151", "The Sunrise Lands 1" beside
@@ -514,12 +514,14 @@ func (j *titleJudge) rowDurationSec() int {
 	if b := j.book; b != nil && b.FileSize != nil {
 		bookSize = *b.FileSize
 	}
-	if present := j.presentFiles(); len(present) == 1 && present[0].Duration > 0 {
-		size := present[0].FileSize
-		if size <= 0 {
-			size = bookSize
+	if present := j.presentFiles(); len(present) == 1 {
+		if sec, ok := present[0].DurationSec(); ok {
+			size := present[0].FileSize
+			if size <= 0 {
+				size = bookSize
+			}
+			return trustedDurationSec(sec, size)
 		}
-		return trustedDurationSec(present[0].Duration, size)
 	}
 	if b := j.book; b != nil && b.Duration != nil {
 		return trustedDurationSec(*b.Duration, bookSize)

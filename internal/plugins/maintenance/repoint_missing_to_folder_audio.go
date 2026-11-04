@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 5169412c-6469-4f70-9073-b544025dd08e
-// last-edited: 2026-10-23
+// last-edited: 2026-11-04
 
 // Package maintenance — maintenance.repoint-missing-to-folder-audio.
 //
@@ -838,6 +838,7 @@ func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 		})
 		keep := rows[0]
 		for _, f := range rows[1:] {
+			// direct: scratch copy of the row's raw duration to ask BookFileRuntimeSec.
 			bf := database.BookFile{Duration: f.Duration, FileSize: f.FileSize,
 				AcoustIDFingerprintDurationSec: f.AcoustIDFingerprintDurationSec}
 			if database.BookFileRuntimeSec(&bf) > 0 {
@@ -935,8 +936,9 @@ func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 		scratch := database.BookFile{FilePath: target}
 		src := bookfileaudio.EnsureDuration(&scratch, bookfileaudio.Known{}, nil)
 		sources[src.String()] = true
-		plan.Probes[target] = mediainfo.MediaInfo{Duration: scratch.Duration, Codec: scratch.Codec}
-		r.DurationSec += scratch.Duration
+		scratchSec, _ := scratch.DurationSec() // unknown is 0, as before
+		plan.Probes[target] = mediainfo.MediaInfo{Duration: scratchSec, Codec: scratch.Codec}
+		r.DurationSec += scratchSec
 	}
 	var srcs []string
 	for s := range sources {
@@ -1168,7 +1170,7 @@ func rfResetContent(f *database.BookFile, target string, size int64) {
 	f.FileSize = size
 	f.Format = strings.TrimPrefix(strings.ToLower(filepath.Ext(target)), ".")
 	f.OriginalFilename = filepath.Base(target)
-	f.Duration = 0
+	f.ResetDuration()
 	f.Codec = ""
 	f.BitrateKbps, f.SampleRateHz, f.Channels, f.BitDepth = 0, 0, 0, 0
 	f.FileHash, f.OriginalFileHash, f.OriginalFileHashKind, f.PostMetadataHash = "", "", "", ""

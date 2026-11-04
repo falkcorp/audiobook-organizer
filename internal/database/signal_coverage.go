@@ -1,7 +1,7 @@
 // file: internal/database/signal_coverage.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3933e507-6dbe-4a9c-be3f-fc3512d67d44
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package database
 
@@ -187,7 +187,8 @@ func (a *signalAcc) add(f *BookFile, exact bool) {
 	a.mark(sigFileHash, f.FileHash != "", fm)
 	a.mark(sigOrigHash, f.OriginalFileHash != "", fm)
 	a.mark(sigFPDuration, f.AcoustIDFingerprintDurationSec > 0, fm)
-	a.mark(sigDuration, f.Duration > 0, fm)
+	_, durKnown := f.DurationSec()
+	a.mark(sigDuration, durKnown, fm)
 	a.mark(sigRawTags, len(f.RawTags) > 0, fm)
 	if f.FingerprintFailedAt != nil {
 		a.failed++
@@ -343,7 +344,7 @@ func CountBookFileSignalsFromCores(ctx context.Context, cores []BookFileCore, wo
 			FileHash:                       c.FileHash,
 			OriginalFileHash:               c.OriginalFileHash,
 			AcoustIDFingerprintDurationSec: c.AcoustIDFingerprintDurationSec,
-			Duration:                       c.Duration,
+			Duration:                       c.Duration, // direct: field-for-field Core->BookFile projection
 			RawTags:                        c.RawTags,
 			Missing:                        c.Missing,
 			SkipScan:                       c.SkipScan,
@@ -555,7 +556,7 @@ func (r *bookFileSignalRow) asBookFile() *BookFile {
 	f := &BookFile{
 		FileHash:                       r.FileHash,
 		OriginalFileHash:               r.OriginalFileHash,
-		Duration:                       r.Duration,
+		Duration:                       r.Duration, // direct: constructing a row from a query result
 		AcoustIDFingerprintDurationSec: r.FPDuration,
 		AcoustIDFPVersion:              r.FPVersion,
 		AcoustIDSeg0:                   mark(r.Seg0),

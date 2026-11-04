@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_retired_versions.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6818f543-1756-455b-9346-0581d8885fb8
-// last-edited: 2026-10-23
+// last-edited: 2026-11-04
 
 // Retired-versions endpoints for the book detail page: the read that feeds the
 // "Retired versions" panel, and the per-version restore, which answers 501 until
@@ -67,6 +67,7 @@ type retiredVersionView struct {
 }
 
 func retiredFileView(f database.BookFile) retiredVersionFile {
+	durSec, _ := f.DurationSec() // wire: unknown is reported as 0, as before
 	return retiredVersionFile{
 		ID:               f.ID,
 		FilePath:         f.FilePath,
@@ -74,7 +75,7 @@ func retiredFileView(f database.BookFile) retiredVersionFile {
 		Format:           f.Format,
 		TrackNumber:      f.TrackNumber,
 		DiscNumber:       f.DiscNumber,
-		Duration:         f.Duration,
+		Duration:         durSec,
 		FileSize:         f.FileSize,
 		Missing:          f.Missing,
 	}
@@ -175,7 +176,9 @@ func (h *Handler) ListRetiredVersions(c *gin.Context) {
 		}
 		for _, f := range rows {
 			view.TotalSize += f.FileSize
-			view.TotalDuration += f.Duration
+			if sec, ok := f.DurationSec(); ok {
+				view.TotalDuration += sec
+			}
 			view.Files = append(view.Files, retiredFileView(f))
 		}
 		if v.RetiredFromBookID != "" {

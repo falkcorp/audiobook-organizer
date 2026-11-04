@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/progress.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 4f0a7d21-9c63-4b58-8e17-52d9a0b3fc84
-// last-edited: 2026-10-05
+// last-edited: 2026-11-04
 
 package abs
 
@@ -488,7 +488,9 @@ func (h *Handler) durationForBook(bookID string, clientDuration *float64) (float
 		if len(files) > 0 {
 			total := 0.0
 			for i := range files {
-				total += float64(files[i].Duration)
+				if sec, ok := files[i].DurationSec(); ok {
+					total += float64(sec)
+				}
 			}
 			if total > 0 {
 				return total, nil
@@ -520,13 +522,14 @@ func (h *Handler) durationBoundsForBook(bookID string, clientDuration *float64) 
 		if len(files) > 0 {
 			total := 0.0
 			for i := range files {
-				if files[i].Duration <= 0 {
+				sec, known := files[i].DurationSec()
+				if !known {
 					if clientDuration != nil && *clientDuration > 0 {
 						return *clientDuration, false, len(files), nil
 					}
 					return 0, false, len(files), nil
 				}
-				total += float64(files[i].Duration)
+				total += float64(sec)
 			}
 			return total, true, len(files), nil
 		}

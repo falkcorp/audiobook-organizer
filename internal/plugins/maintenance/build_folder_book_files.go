@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/build_folder_book_files.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 92622b6c-f340-42c4-b6b1-2fdba32b770f
-// last-edited: 2026-10-23
+// last-edited: 2026-11-04
 
 // Package maintenance — op maintenance.build-folder-book-files.
 //
@@ -530,9 +530,11 @@ func buildOneFolder(ctx context.Context, store folderBuildStore, c *fbCandidate,
 		// order, so "2.mp3" precedes "10.mp3".
 		bf := buildBookFileFor(c.book, path, 0, len(rows)+1)
 		rows = append(rows, bf)
-		probes = append(probes, linkintegrity.ProbedDuration{Name: name, Sec: bf.Duration, OK: bf.Duration > 0})
-		res.TotalDurationSec += bf.Duration
-		if bf.Duration <= 0 {
+		bfSec, bfKnown := bf.DurationSec()
+		probes = append(probes, linkintegrity.ProbedDuration{Name: name, Sec: bfSec, OK: bfKnown})
+		if bfKnown {
+			res.TotalDurationSec += bfSec
+		} else {
 			res.UnprobedFiles++
 		}
 	}

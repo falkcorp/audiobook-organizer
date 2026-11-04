@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 2.6.2
+// version: 2.6.3
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
-// last-edited: 2026-10-12
+// last-edited: 2026-11-04
 
 package acoustid
 
@@ -581,7 +581,8 @@ func doFingerprintFile(store pluginStore, f database.BookFile, force bool) finge
 		}
 	} else {
 		// Segment fallback (ffmpeg available, fpcalc not installed).
-		segs, serr := fileSegmentsFn(f.FilePath, f.Duration)
+		durSec, _ := f.DurationSec() // unknown passes 0, as before
+		segs, serr := fileSegmentsFn(f.FilePath, durSec)
 		if serr != nil {
 			slog.Warn("fingerprint segments", "path", f.FilePath, "err", serr)
 			markFingerprintFailure(store, f, "ffmpeg_error", serr.Error())
@@ -693,8 +694,9 @@ func synthesizeBookSignatureForBook(store pluginStore, bookID string) error {
 		// signature built from them is not comparable with anything.
 		if (len(src.AcoustIDFingerprint) == 0 && sf.Segments.Seg0 == "") || !src.HasCurrentPrint() {
 			inp.Missing = true
+			srcDur, _ := src.DurationSec() // unknown passes 0, as before
 			inp.EstimatedLen = fingerprint.EstimateSegmentCount(
-				src.Duration, int(src.FileSize), src.BitrateKbps, 0,
+				srcDur, int(src.FileSize), src.BitrateKbps, 0,
 			)
 		}
 		_ = i

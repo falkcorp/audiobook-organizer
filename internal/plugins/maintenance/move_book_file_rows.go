@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/move_book_file_rows.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 43feca72-a61b-4386-97c9-17d58ba2bf8c
-// last-edited: 2026-10-23
+// last-edited: 2026-11-04
 
 // Package maintenance — op maintenance.move-book-file-rows.
 //
@@ -467,7 +467,7 @@ func mbfPlanOne(env mbfEnv, mv mbfMove, owner string, seenRow map[string]bool, c
 		return refuse("row is a retired version (version " + row.VersionID + " of book " + owner + "); restore it instead of moving it")
 	}
 	r.OldTrack = row.TrackNumber
-	r.RowSeconds = row.Duration
+	r.RowSeconds, _ = row.DurationSec() // unknown is 0, as before
 	r.FileHash = row.FileHash
 	if owner == mv.ToBookID {
 		return refuse("row already belongs to the target book")

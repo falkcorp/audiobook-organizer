@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_refusal.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4b23c08d-8533-4d97-9ea7-f107b4c18796
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 //
 // A memory of the structural refusals metadata.batch-apply-cached has already
 // made, so a later run does not re-offer a book whose refusal cannot change.
@@ -115,7 +115,8 @@ func (in applyRefusalInputs) fingerprint() string {
 	}
 	files := make([]fileDoc, 0, len(in.Files))
 	for _, f := range in.Files {
-		files = append(files, fileDoc{Path: f.FilePath, Size: f.FileSize, Duration: f.Duration, Hash: f.FileHash, Missing: f.Missing})
+		sec, _ := f.DurationSec() // unknown hashes as 0, as before
+		files = append(files, fileDoc{Path: f.FilePath, Size: f.FileSize, Duration: sec, Hash: f.FileHash, Missing: f.Missing})
 	}
 	slices.SortFunc(files, func(a, b fileDoc) int {
 		return strings.Compare(fmt.Sprintf("%s\x00%s", a.Path, a.Hash), fmt.Sprintf("%s\x00%s", b.Path, b.Hash))

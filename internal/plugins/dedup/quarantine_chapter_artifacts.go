@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/quarantine_chapter_artifacts.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 1d7a4f92-3c60-4e85-9b21-6a5e8c0d3f47
-// last-edited: 2026-10-18
+// last-edited: 2026-11-04
 
 // Package dedup — op dedup.quarantine-chapter-artifacts.
 //
@@ -220,7 +220,9 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 		}
 		dur := files[0].AcoustIDFingerprintDurationSec
 		if dur <= 0 {
-			dur = float64(files[0].Duration)
+			if sec, ok := files[0].DurationSec(); ok {
+				dur = float64(sec)
+			}
 		}
 		switch {
 		case dur >= float64(params.MaxDurationSec):

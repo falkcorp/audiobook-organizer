@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.12.6
+// version: 1.12.7
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -202,7 +202,7 @@ func rankKeeper(files []database.BookFile, present map[string]bool) []database.B
 		if len(f.AcoustIDFingerprint) > 0 {
 			fp = 1
 		}
-		if f.Duration > 0 {
+		if _, known := f.DurationSec(); known {
 			dur = 1
 		}
 		if strings.TrimSpace(f.FileHash) != "" {
@@ -240,9 +240,10 @@ func mergeMissingFields(keeper database.BookFile, twins []database.BookFile) (da
 	changed := false
 	for i := range twins {
 		t := twins[i]
-		if keeper.Duration <= 0 && t.Duration > 0 {
-			keeper.Duration = t.Duration
-			changed = true
+		if _, keeperKnown := keeper.DurationSec(); !keeperKnown {
+			if sec, ok := t.DurationSec(); ok && keeper.SetMeasuredDuration(sec) == nil {
+				changed = true
+			}
 		}
 		// The print, its encoding version and its measured duration move as
 		// ONE unit: copying only the bytes would put the twin's (possibly

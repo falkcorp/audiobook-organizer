@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -427,8 +427,10 @@ func (s *leftoverSource) matchRow(ctx context.Context, leftover string, r databa
 			disagree++
 			continue
 		}
+		rDur, _ := r.DurationSec()
+		otherDur, _ := rows[i].DurationSec()
 		e := ev{row: &rows[i], hash: v == "agree", ch: leftoverSameChapter(r.FilePath, rows[i].FilePath),
-			dur: leftoverSameDuration(r.Duration, rows[i].Duration)}
+			dur: leftoverSameDuration(rDur, otherDur)}
 		if e.hash || e.ch || e.dur {
 			evs = append(evs, e)
 		}
@@ -542,10 +544,11 @@ func leftoverSlice(rows []database.BookFileCore, twin database.BookFileCore) mer
 		}
 		seen[r.TrackNumber] = true
 		if r.TrackNumber < twin.TrackNumber {
-			if r.Duration <= 0 {
+			sec, known := r.DurationSec()
+			if !known {
 				return merge.SliceMapping{}
 			}
-			off += float64(r.Duration)
+			off += float64(sec)
 		}
 	}
 	return merge.SliceMapping{OffsetSeconds: off, Mappable: true}

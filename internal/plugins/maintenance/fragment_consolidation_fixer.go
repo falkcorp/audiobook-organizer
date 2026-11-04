@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.54.0
+// version: 1.54.1
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
-// last-edited: 2026-10-21
+// last-edited: 2026-11-04
 
 // Repairs-lane fixer "fragment-consolidation": fold chapter and disc files
 // that an old scan imported as their own books ("fragments") back into the
@@ -583,14 +583,16 @@ type fragFile struct {
 }
 
 func fragFileOf(bookID string, r *database.BookFile) fragFile {
+	sec, _ := r.DurationSec() // unknown projects as 0, as before
 	return fragFile{ID: r.ID, BookID: bookID, Path: r.FilePath, OriginalFilename: r.OriginalFilename, Size: r.FileSize,
-		Hash: r.FileHash, OrigHash: r.OriginalFileHash, Duration: r.Duration, Track: r.TrackNumber, Missing: r.Missing,
+		Hash: r.FileHash, OrigHash: r.OriginalFileHash, Duration: sec, Track: r.TrackNumber, Missing: r.Missing,
 		ITunesPID: r.ITunesPersistentID, ITunesPath: r.ITunesPath, Album: fragAlbumTag(r.RawTags)}
 }
 
 func fragFileOfCore(r *database.BookFileCore) fragFile {
+	sec, _ := r.DurationSec() // unknown projects as 0, as before
 	return fragFile{ID: r.ID, BookID: r.BookID, Path: r.FilePath, OriginalFilename: r.OriginalFilename, Size: r.FileSize,
-		Hash: r.FileHash, OrigHash: r.OriginalFileHash, Duration: r.Duration, Track: r.TrackNumber, Missing: r.Missing,
+		Hash: r.FileHash, OrigHash: r.OriginalFileHash, Duration: sec, Track: r.TrackNumber, Missing: r.Missing,
 		ITunesPID: r.ITunesPersistentID, ITunesPath: r.ITunesPath, Album: fragAlbumTag(r.RawTags)}
 }
 
@@ -1770,6 +1772,7 @@ func (lib *fragLibrary) dcBookOf(id string) *dcBook {
 	asin := b.ASIN
 	d := &dcBook{Core: database.BookCore{ID: id, ASIN: &asin}, Title: dcTitleKey(b.Title), Author: dcAuthorKey(lib.authors, b.AuthorID)}
 	for _, r := range lib.files[id] {
+		// direct: building a Core from a fragFile's plain int projection.
 		d.Rows = append(d.Rows, database.BookFileCore{ID: r.ID, BookID: id, FilePath: r.Path, Duration: r.Duration,
 			FileHash: r.Hash, OriginalFileHash: r.OrigHash})
 	}
@@ -1796,6 +1799,7 @@ func (lib *fragLibrary) dcBookOf(id string) *dcBook {
 // note says why when the rule would have acted but could not read the
 // owner's verdicts; the fragment's ambiguous row carries it.
 func (f *fragmentFixer) disregardITunesParents(lib *fragLibrary, c *fragCandidate, ms []fragMatch) (kept []fragMatch, ignored []string, ok bool, note string) {
+	// direct: building a Core from a fragFile's plain int projection.
 	if !dcLinkRow(database.BookFileCore{ID: c.File.ID, FilePath: c.File.Path, Duration: c.File.Duration}) ||
 		boilerplate.IsBoilerplateTitle(c.Book.Title) {
 		return nil, nil, false, ""

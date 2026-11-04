@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/split_books_fixer.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b55e5de5-a785-4658-9cb0-ab1d3f20a781
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -481,8 +481,9 @@ func (f *splitBooksFixer) evaluate(ctx context.Context, rd sbReader, res *repair
 			noFiles++
 		}
 		for _, row := range m.rows {
-			switch d := row.Duration; {
-			case d <= 0:
+			d, durKnown := row.DurationSec()
+			switch {
+			case !durKnown:
 				unknown++
 			case d >= limit:
 				long++

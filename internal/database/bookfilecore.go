@@ -1,7 +1,7 @@
 // file: internal/database/bookfilecore.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 715f4b68-2d23-4f52-b1dd-1b3d0357a4f6
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package database
 
@@ -162,7 +162,7 @@ func (f *BookFile) Core() BookFileCore {
 		RawTags:                        f.RawTags,
 		Format:                         f.Format,
 		Codec:                          f.Codec,
-		Duration:                       f.Duration,
+		Duration:                       f.Duration, // direct: field-for-field BookFile->Core projection
 		FileSize:                       f.FileSize,
 		BitrateKbps:                    f.BitrateKbps,
 		SampleRateHz:                   f.SampleRateHz,
@@ -235,7 +235,7 @@ func (c *BookFileCore) AsBookFile() BookFile {
 		RawTags:                        c.RawTags,
 		Format:                         c.Format,
 		Codec:                          c.Codec,
-		Duration:                       c.Duration,
+		Duration:                       c.Duration, // direct: field-for-field Core->BookFile projection
 		FileSize:                       c.FileSize,
 		BitrateKbps:                    c.BitrateKbps,
 		SampleRateHz:                   c.SampleRateHz,

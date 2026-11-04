@@ -1,7 +1,7 @@
 // file: internal/database/book_runtime.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 64a8ba17-7539-4be1-a2f7-1ee0f0e0cc44
-// last-edited: 2026-10-15
+// last-edited: 2026-11-04
 
 package database
 
@@ -206,8 +206,8 @@ func BookFileRuntimeSec(f *BookFile) int {
 	if f == nil {
 		return 0
 	}
-	if f.Duration > 0 {
-		return NormalizeDurationSec(f.FileSize, f.Duration)
+	if sec, ok := f.DurationSec(); ok {
+		return NormalizeDurationSec(f.FileSize, sec)
 	}
 	if f.AcoustIDFingerprintDurationSec > 0 {
 		return int(math.Round(f.AcoustIDFingerprintDurationSec))

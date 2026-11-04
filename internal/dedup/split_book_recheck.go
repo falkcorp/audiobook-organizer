@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_recheck.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5e8c2a47-d1b9-4f63-a0e5-7b3c9d12f684
-// last-edited: 2026-10-21
+// last-edited: 2026-11-04
 
 // Merge-time recheck of a stored split-book candidate.
 //
@@ -98,8 +98,9 @@ func RecheckSplitBookMembers(r SplitBookRecheckReader, bookIDs []string, chapter
 		}
 		for _, f := range files {
 			rows++
-			switch d := f.Duration; {
-			case d <= 0:
+			d, durKnown := f.DurationSec()
+			switch {
+			case !durKnown:
 				unknown++
 			case chapterMaxSec > 0 && d >= chapterMaxSec:
 				long++

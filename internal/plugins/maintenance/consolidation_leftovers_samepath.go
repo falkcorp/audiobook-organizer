@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 7285fcc4-a331-4b0a-89c0-e606c9f5f7b3
-// last-edited: 2026-10-23
+// last-edited: 2026-11-04
 
 // The same-path-twin class of the consolidation-leftovers fixer (owner
 // decision 2026-10-06, plan op 01M48JSTKZV97BK42W675089GY): a leftover whose
@@ -228,8 +228,12 @@ func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, 
 	// The owner's length for the row: its file at the path when known, else
 	// the book's (seconds, as every book_file duration).
 	ownerDur := 0
-	if at != nil && at.Duration > 0 {
-		ownerDur = at.Duration
+	atSec, atKnown := 0, false
+	if at != nil {
+		atSec, atKnown = at.DurationSec()
+	}
+	if atKnown {
+		ownerDur = atSec
 	} else if ob.Duration != nil && *ob.Duration > 0 {
 		ownerDur = *ob.Duration
 	}
@@ -257,7 +261,7 @@ func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, 
 		return finish(leftoverClassHeld, leftoverSkipSamePathNoRow, fmt.Sprintf(
 			"%s names %s only as its book path, with no file row of its own there: the audio cannot be compared", oid, shared))
 	}
-	fmt.Fprintf(fp, "owner|%s|%s|%d|%s|%s|%d|%d|%d\n", at.ID, at.FilePath, at.FileSize, at.FileHash, at.OriginalFileHash, at.Duration, ownerDur, len(live))
+	fmt.Fprintf(fp, "owner|%s|%s|%d|%s|%s|%d|%d|%d\n", at.ID, at.FilePath, at.FileSize, at.FileHash, at.OriginalFileHash, atSec, ownerDur, len(live))
 	// Identity: a shared stale path is not enough to fold two different
 	// books together.
 	if held, why, err := s.samePathIdentity(core, ob, row, fp); err != nil {
@@ -273,10 +277,11 @@ func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, 
 	// are 0 min).
 	leftDur, leftSize := 0, int64(0) // the rows' totals; -1 while a row has none
 	for _, r := range rows {
-		if r.Duration <= 0 {
+		rSec, rKnown := r.DurationSec()
+		if !rKnown {
 			leftDur = -1
 		} else if leftDur >= 0 {
-			leftDur += r.Duration
+			leftDur += rSec
 		}
 		if r.FileSize <= 0 {
 			leftSize = -1
@@ -297,7 +302,7 @@ func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, 
 	if leftSize < 0 {
 		leftSize = 0
 	}
-	cmpDur := at.Duration
+	cmpDur := atSec
 	if cmpDur <= 0 && len(live) == 1 && ob.Duration != nil {
 		cmpDur = *ob.Duration
 	}
@@ -320,8 +325,8 @@ func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, 
 		evidence = fmt.Sprintf("size: the dead row(s) total %d bytes, the owner's file %d", leftSize, at.FileSize)
 	case leftoverSharesHash(rows, *at):
 		evidence = "hash: a dead row's hash is the owner file's"
-	case rowDur > 0 && at.Duration > 0 && leftoverSameDuration(rowDur, at.Duration):
-		evidence = fmt.Sprintf("duration: the dead row(s) and the owner's file are both %s", leftoverDurText(at.Duration))
+	case rowDur > 0 && atKnown && leftoverSameDuration(rowDur, atSec):
+		evidence = fmt.Sprintf("duration: the dead row(s) and the owner's file are both %s", leftoverDurText(atSec))
 	}
 	if evidence == "" {
 		row.Current["same_audio_evidence"] = "none: no size, hash or length agrees, so no position and no finished state is carried"

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
-// last-edited: 2026-10-18
+// last-edited: 2026-11-04
 
 // Package maintenance — op maintenance.regroup-shattered-ai (PR-B1).
 //
@@ -193,7 +193,9 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 		// the guard that depends on this.
 		durationSec := 0
 		for i := range files {
-			durationSec += database.NormalizeDurationSec(files[i].FileSize, files[i].Duration)
+			if sec, ok := files[i].DurationSec(); ok {
+				durationSec += database.NormalizeDurationSec(files[i].FileSize, sec)
+			}
 		}
 
 		v := itunesservice.ShatterBook{

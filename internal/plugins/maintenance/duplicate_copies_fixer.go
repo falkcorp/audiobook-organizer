@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
-// last-edited: 2026-10-23
+// last-edited: 2026-11-04
 
 // Repairs-lane fixer "duplicate-copies": merge whole copies of one book that
 // live as separate books, so a chapter fragment that matches every copy has a
@@ -265,7 +265,9 @@ func (b *dcBook) distinctRows() []database.BookFileCore {
 func (b *dcBook) dur() int {
 	n := 0
 	for _, r := range b.distinctRows() {
-		n += r.Duration
+		if sec, ok := r.DurationSec(); ok {
+			n += sec
+		}
 	}
 	return n
 }
@@ -284,7 +286,7 @@ func dcHashes(r database.BookFileCore) []string {
 }
 
 func dcLinkRow(r database.BookFileCore) bool {
-	if r.Duration < dcMinLinkSec {
+	if sec, _ := r.DurationSec(); sec < dcMinLinkSec {
 		return false
 	}
 	title := r.Title
@@ -302,7 +304,7 @@ func dcLinkRow(r database.BookFileCore) bool {
 func dcCoverageOf(a, b *dcBook) (cov float64, ok bool) {
 	for _, x := range [2]*dcBook{a, b} {
 		for _, r := range x.Rows {
-			if r.Duration <= 0 {
+			if _, known := r.DurationSec(); !known {
 				return 0, false
 			}
 		}
@@ -319,13 +321,14 @@ func dcCoverageOf(a, b *dcBook) (cov float64, ok bool) {
 	}
 	total, matched := 0, 0
 	for _, r := range small.distinctRows() {
-		total += r.Duration
+		sec, _ := r.DurationSec()
+		total += sec
 		if !dcLinkRow(r) {
 			continue
 		}
 		for _, h := range dcHashes(r) {
 			if have[h] {
-				matched += r.Duration
+				matched += sec
 				break
 			}
 		}
@@ -897,7 +900,7 @@ func (f *duplicateCopiesFixer) detail(store OpsStore, run *dcRun, b *dcBook) err
 			b.Present[r.ID] = true
 		}
 		files = append(files, database.BookFile{ID: r.ID, BookID: id, FilePath: r.FilePath, Missing: r.Missing,
-			Duration: r.Duration, BitrateKbps: r.BitrateKbps, FileSize: r.FileSize})
+			Duration: r.Duration, BitrateKbps: r.BitrateKbps, FileSize: r.FileSize}) // direct: Core->BookFile field-for-field copy
 	}
 	exts, err := store.GetExternalIDsForBook(id)
 	if err != nil {
@@ -1205,7 +1208,9 @@ func (b *dcBook) presentStats() (files, secs int) {
 		if b.present(r) && !seen[r.FilePath] {
 			seen[r.FilePath] = true
 			files++
-			secs += r.Duration
+			if sec, ok := r.DurationSec(); ok {
+				secs += sec
+			}
 		}
 	}
 	return files, secs
@@ -1413,7 +1418,9 @@ func (f *duplicateCopiesFixer) mergeRow(run *dcRun, edges map[[2]string]dcVerdic
 				for _, t := range twins {
 					if k := dcHashKey(t); !matchedAudio[k] {
 						matchedAudio[k] = true
-						matchedSecs += t.Duration
+						if sec, ok := t.DurationSec(); ok {
+							matchedSecs += sec
+						}
 					}
 				}
 				anyPresent := false
@@ -1437,12 +1444,13 @@ func (f *duplicateCopiesFixer) mergeRow(run *dcRun, edges map[[2]string]dcVerdic
 			case already:
 				kept++ // a fold from an earlier loser brings this file
 			default:
+				xDur, xDurKnown := x.DurationSec()
 				switch {
 				case !lb.present(x):
 					return fail(dcSkipTrackOrder, fmt.Sprintf("copy %s row %s (%s) has no twin on the survivor and is not on disk to fold", l, x.ID, filepath.Base(x.FilePath)))
 				case x.ITunesPersistentID != "" || x.ITunesPath != "":
 					return fail(dcSkipTrackOrder, fmt.Sprintf("copy %s row %s has no twin on the survivor and is an iTunes track", l, x.ID))
-				case x.Duration <= 0:
+				case !xDurKnown:
 					// Never folded: a row of unknown length cannot be
 					// weighed against the fold cap.
 					return fail(dcSkipFoldCap, fmt.Sprintf("copy %s row %s has no twin on the survivor and no known duration", l, x.ID))
@@ -1450,7 +1458,7 @@ func (f *duplicateCopiesFixer) mergeRow(run *dcRun, edges map[[2]string]dcVerdic
 				for _, h := range hs {
 					brought[h] = true
 				}
-				plan.Folds = append(plan.Folds, dcFold{Row: x.ID, From: l, Track: x.TrackNumber, Dur: x.Duration})
+				plan.Folds = append(plan.Folds, dcFold{Row: x.ID, From: l, Track: x.TrackNumber, Dur: xDur})
 				fp = append(fp, fmt.Sprintf("fold:%s|%s|%d", x.ID, l, x.TrackNumber))
 			}
 		}
@@ -1616,7 +1624,9 @@ func dcSameLayout(a, b *dcBook) bool {
 		for _, h := range dcHashes(x[i]) {
 			share = share || contains(dcHashes(y[i]), h)
 		}
-		if !share && (x[i].Duration <= 0 || x[i].Duration != y[i].Duration) {
+		xs, xKnown := x[i].DurationSec()
+		ys, _ := y[i].DurationSec()
+		if !share && (!xKnown || xs != ys) {
 			return false
 		}
 	}
