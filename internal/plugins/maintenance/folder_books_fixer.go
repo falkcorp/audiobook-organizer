@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.19.1
+// version: 2.20.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
-// last-edited: 2026-11-03
+// last-edited: 2026-11-04
 
 // Repairs-lane fixer "folder-books": retire book rows that are really whole
 // author, series or library folders, and give each file only such a row held a
@@ -2253,6 +2253,9 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	}
 	if len(blocks) > 0 {
 		row.Skipped, row.SkipReason = blocks[0].kind, blocks[0].why
+	}
+	for _, b := range blocks {
+		row.Holds = append(row.Holds, repairs.RowHold{Kind: b.kind, Why: b.why, OwnerOK: b.ownerOK})
 	}
 	resolvable := len(blocks) > 0 && fbAllOwnerOK(blocks)
 	switch {

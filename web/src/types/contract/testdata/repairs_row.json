@@ -32,6 +32,13 @@
   "fingerprint": "synthetic-Fingerprint",
   "skipped": "synthetic-Skipped",
   "skip_reason": "synthetic-SkipReason",
+  "holds": [
+    {
+      "kind": "synthetic-Kind",
+      "why": "synthetic-Why",
+      "owner_ok": true
+    }
+  ],
   "retry_later": true,
   "retry_fingerprint": "synthetic-RetryFingerprint",
   "owner_applicable": true,

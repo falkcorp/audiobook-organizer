@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_owner_apply_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c41e9b8-2d05-4f36-a8c1-5e3b9d0f6a24
-// last-edited: 2026-11-03
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -143,6 +143,11 @@ func TestFolderBooksOwner_MixedShelfRowIsOfferedToTheOwner(t *testing.T) {
 	require.Equal(t, "4", row.Proposed["new_books"])
 	require.Equal(t, row.BookIDs, row.OwnerWrites)
 	require.Contains(t, row.OwnerWrites, fb)
+	require.NotEmpty(t, row.Holds)
+	require.Equal(t, fbSkipMixedShelf, row.Holds[0].Kind, "the first hold is the row's Skipped")
+	for _, h := range row.Holds {
+		require.True(t, h.OwnerOK, "an owner row lists only holds the owner may resolve: %+v", h)
+	}
 	for _, want := range []string{"Arkham Asylum", "The Killing Joke", "Dark Victory", "Knightfall", "organized", "no file moves",
 		"reverts from the operation"} {
 		require.Contains(t, row.OwnerApplyReason, want)
@@ -307,6 +312,9 @@ func TestFolderBooksOwner_AHardHoldWithdrawsTheOwnerRow(t *testing.T) {
 		name  string
 		shelf ownerShelf
 		prep  func(t *testing.T, f *fragFixture)
+		// hard is the hold the owner may not resolve, which row.Holds must
+		// name even when it is not the row's first (Skipped) hold.
+		hard string
 	}{
 		{name: "iTunes id on the folder-book", shelf: ownerShelf{base: fbITunes, libWorks: []string{"Arkham Asylum"}},
 			prep: func(t *testing.T, f *fragFixture) {
@@ -316,16 +324,16 @@ func TestFolderBooksOwner_AHardHoldWithdrawsTheOwnerRow(t *testing.T) {
 					return nil
 				})
 				require.NoError(t, err)
-			}},
+			}, hard: fbSkipITunesID},
 		{name: "primary with no heir", shelf: ownerShelf{base: fbITunes, libWorks: []string{"Arkham Asylum"}},
 			prep: func(t *testing.T, f *fragFixture) {
 				f.setVG(t, f.ids["fb"], "vg-pennyworth", true)
 				f.setVG(t, f.ids["hush"], "vg-pennyworth", false) // never organized: cannot be crowned
-			}},
+			}, hard: fbSkipNoHeir},
 		{name: "second shelf over a fifth of the files",
-			shelf: ownerShelf{base: fbITunes, libWorks: []string{"Arkham Asylum", "The Killing Joke", "Gotham Central", "Hush Returns"}}},
+			shelf: ownerShelf{base: fbITunes, libWorks: []string{"Arkham Asylum", "The Killing Joke", "Gotham Central", "Hush Returns"}}, hard: fbSkipMixedShelf},
 		{name: "deep base tier", shelf: ownerShelf{base: fbITunes, folder: "Gotham Collection", title: "Gotham Collection Box",
-			libWorks: []string{"Arkham Asylum"}}},
+			libWorks: []string{"Arkham Asylum"}}, hard: fbSkipDeep},
 		{name: "library work of one file under an import path", shelf: ownerShelf{base: fbITunes},
 			prep: func(t *testing.T, f *fragFixture) {
 				ip := f.path("imports")
@@ -333,8 +341,8 @@ func TestFolderBooksOwner_AHardHoldWithdrawsTheOwnerRow(t *testing.T) {
 				require.NoError(t, err)
 				p := f.file(t, filepath.Join("imports", "Alfred Pennyworth", "Arkham Asylum", "01.mp3"), 10)
 				f.row(t, "fb-import", f.ids["fb"], p, "", 400, 3600, 30)
-			}},
-		{name: "a library work that repeats another group's title", shelf: ownerShelf{base: fbITunes, libWorks: []string{"Knightfall"}}},
+			}, hard: fbSkipNeedsNewBook},
+		{name: "a library work that repeats another group's title", shelf: ownerShelf{base: fbITunes, libWorks: []string{"Knightfall"}}, hard: fbSkipUnclearWork},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -349,6 +357,9 @@ func TestFolderBooksOwner_AHardHoldWithdrawsTheOwnerRow(t *testing.T) {
 			require.Equal(t, fbTierMixedShelf, row.Class, "%s", row.SkipReason)
 			require.NotEmpty(t, row.Skipped)
 			require.False(t, row.OwnerApplicable, "owner-applicable despite a hard hold; reason %q", row.OwnerApplyReason)
+			require.NotEmpty(t, row.Holds)
+			require.Equal(t, row.Skipped, row.Holds[0].Kind, "the first hold is the row's Skipped")
+			require.NotEmpty(t, fbHardHoldWhy(row.Holds, tc.hard), "the hard hold %s is listed and marked hard: %+v", tc.hard, row.Holds)
 			require.Zero(t, res.OwnerApplicable)
 			require.Empty(t, row.Flags, "a mixed-shelf row is not part of the single-shelf measurement")
 			out := f.fbOwnerApply(t, "op-plan", "op-owner", []string{row.RowID})
@@ -357,6 +368,17 @@ func TestFolderBooksOwner_AHardHoldWithdrawsTheOwnerRow(t *testing.T) {
 			require.True(t, f.live(t, "fb"))
 		})
 	}
+}
+
+// fbHardHoldWhy returns the reason of the first hold of kind the owner may
+// not resolve, "" when there is none.
+func fbHardHoldWhy(holds []repairs.RowHold, kind string) string {
+	for _, h := range holds {
+		if h.Kind == kind && !h.OwnerOK {
+			return h.Why
+		}
+	}
+	return ""
 }
 
 // Rows are classified by the base tier even when mixed-shelf overwrites Tier.

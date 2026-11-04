@@ -1,7 +1,7 @@
 // file: internal/repairs/wire.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 4c7d2e91-5b0a-4e38-8f16-a93d6b1c0e57
-// last-edited: 2026-10-27
+// last-edited: 2026-11-04
 
 package repairs
 
@@ -193,6 +193,13 @@ type Row struct {
 	// SkipReason says why in words.
 	Skipped    string `json:"skipped,omitempty"`
 	SkipReason string `json:"skip_reason,omitempty"`
+	// Holds optionally lists every reason the row is held back, in the order
+	// the fixer found them; the first is the row's Skipped. Skipped names
+	// only one, so a row held by several (a mixed-shelf hold the owner may
+	// resolve, and behind it one he may not) shows here which one keeps it
+	// from the owner. Display only: no apply path reads it, and it is not
+	// part of Fingerprint.
+	Holds []RowHold `json:"holds,omitempty"`
 	// RetryLater marks a skip (Skipped set) that is transient: a condition
 	// outside the row that clears on its own, such as an index not built yet,
 	// not anything about the row itself. A re-plan returning such a row is
@@ -243,6 +250,16 @@ type Row struct {
 	// apply run. It is never persisted: the stored plan holds only the
 	// fields above, and Apply always receives a row fresh from Replan.
 	Detail any `json:"-"`
+}
+
+// RowHold is one reason a Row is held back, for display (Row.Holds).
+type RowHold struct {
+	// Kind is a skip kind (the values Row.Skipped takes).
+	Kind string `json:"kind"`
+	Why  string `json:"why"`
+	// OwnerOK: the owner's own Apply on the row may resolve this hold. A row
+	// is owner-applicable only while every one of its holds is.
+	OwnerOK bool `json:"owner_ok"`
 }
 
 // RowMember is one book of a Row, for display.
