@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-indexer.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.9.1 -->
 <!-- guid: 5e2d5cda-5f98-4db2-87b1-b4c8d6519ec7 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -285,7 +285,7 @@ which translates onto core's instance API. The contract core must offer the faca
 
 | Prowlarr call (raw/16 §5.2) | Facade translation onto core |
 |---|---|
-| `GET /api/v3/indexer/schema` | `GET /api/core/v1/integrations/adapters?kind=indexer` → *arr `{implementation: "Newznab"\|"Torznab", configContract, fields[]}`; field names `baseUrl`, `apiPath`, `apiKey`, `categories`, `animeCategories` (→ `ExtraCategories["anime"]` for a TV app; omitted by Movies), `minimumSeeders`, `seedCriteria.seedRatio/seedTime/seasonPackSeedTime` are a **fixed alias table** in the facade, not core field names |
+| `GET /api/v3/indexer/schema` | `GET /api/core/v1/integrations/adapters?kind=indexer` → *arr `{implementation: "Newznab"\|"Torznab", configContract, fields[]}`; field names `baseUrl`, `apiPath`, `apiKey`, `categories`, `animeCategories` (→ `ExtraCategories["anime"]` for a TV app; omitted by Movies), `minimumSeeders`, `seedCriteria.seedRatio/seedTime/seasonPackSeedTime` are a **fixed mapping table** in the facade, not core field names |
 | `POST /api/v3/indexer` (`?forceSave=true` retry on 400) | `FacadeWriter.Put` (forces `Origin=arrfacade`, `Local=false`), tag `managed-by:prowlarr`; `forceSave` skips the connectivity test, never schema or URL validation |
 | `GET/PUT/DELETE /api/v3/indexer/{id}` | facade keeps a stable integer id ↔ `InstanceID` map in its own keyspace; PUT/DELETE map to `FacadeWriter.Put`/`Delete` (only `Origin=arrfacade` instances) |
 | `POST /api/v3/indexer/test` | `FacadeWriter.Test` (unsaved; class and status only, no body); response header `X-Application-Version` set by the facade |
@@ -492,5 +492,5 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
 
 - D10–D12 revision (2026-11-04): stage references (S2, S4, S7) re-keyed to R1/R2; the "no legacy store covers
   them" and `staging-scrub` wording removed (one native instance store; the optional rehearsal sets
-  `core.integrations.disabled`). The design sketch is otherwise unchanged.
+  `core.integrations.disabled`). The design sketch is otherwise unchanged. Consistency pass: the *arr field-name table is called a mapping table.
 
