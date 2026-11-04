@@ -24,7 +24,7 @@ carry no window logic of their own.
 | C1 | One `config.Store` per `App`; no package-level config value anywhere in **core** (R5). ABO keeps `config.AppConfig` as a books-module façade over core handles (§1.12.1). | `var AppConfig Config` (`internal/config/config.go:1939`) cannot host two apps and is read racily by design (`config.go:1930-1938`). R5 governs core only (03 §3.5), so ABO's façade is allowed. |
 | C2 | **Config owns the mechanism, never a section's type.** Each section struct lives in the package that consumes it and is registered through the manifest as `config.Section[T]`. | This is what breaks all upward imports (§1.9): config imports `aidispatch`, `dedup/unified`, `backup`, `auth`, `database` today only because it owns their types. |
 | C3 | Merge order defaults → file → env → flags → DB overrides, with **operator lock**: a key supplied by file, env or flag cannot be overridden from the DB layer and `Apply` refuses it with the lock reason. **One exception, HEAD precedence for legacy names (R5-1(a)):** a legacy env name or legacy file key whose value HEAD lays the stored blob over (`Alias.BelowStored`, generated from HEAD's lists, §1.3.5) feeds the **default** layer, below the DB layer, and locks nothing. The auth-precedence cutover H3 (§1.12.5) changes only an *enabling* `enable_auth` value; every other `BelowStored` name keeps HEAD's precedence until a separate, owner-decided cutover, and a name a shipped deploy file sets unconditionally (compose's `BASIC_AUTH_*`) never locks (SEC9-2); canonical `<APP>_*` names always lock. The auth switch is no exception: a stored `enable_auth` beats `ENABLE_AUTH` in both directions, as at HEAD (A-2). A stored value beats a `BelowStored` value even when it equals the default (SEC7-2). Legacy names decode with HEAD's per-type semantics and canonical names strictly (§1.3.6, A-7). An env variable set to `""` is unset (HEAD parity). | Generalizes ABO's per-key `envLockedSettings`/`flagLockedSettings` (`config.go:2241,2353`) to every key; today a DB blob silently beats env for all other keys (`persistence.go:915` then `config.go:2435`). Keeping that for legacy names means a shipped compose file that always sets `BASIC_AUTH_ENABLED=false` (`docker-compose.yml:20`) cannot switch off a gate turned on in the UI (OPS5-1), and every older build reads the same effective auth switch after a rollback (A-2). |
-| C4 | **The DB layer is a store interface, `config.OverrideStore` (R4-1).** Core ships the **native** store over its own keyspace `c/config/` (one row per explicitly set key), which `hello` and every app without legacy settings use. An app with legacy settings supplies its **own** implementation through its module's `Manifest.LegacyStores.Config` (§1.3.3; 06), written in the app's code over the app's keys and row formats; for ABO that is the books legacy config store, which reads and writes keys that have a legacy blob name **in place** in ABO's settings blob, in the legacy JSON shape, and only those. **One storage rule (A-2, R9-5):** a key that has a legacy blob field (`Alias.LegacyBlob`) is stored only in HEAD's legacy row and format; a key HEAD never stores (`Alias.FileOnly`: HEAD's `json:"-"` fields, the peer allow-list among them) keeps HEAD's storage, the operator file and env only, and is never stored while the app's legacy config store is attached; a key with no legacy name is stored natively in core's `c/config/` keyspace, which older builds never read, so it costs nothing on a rollback (the kernel routes each key, §1.3.3; §1.12.2). Core holds no app key name or row format and no storage grant for config. Nothing is copied, mirrored or adopted, and no level step exists for config. **Cutover** to the native store is deferred and out of the extraction (§1.12.2). | Core-resident legacy adapters put ABO's on-disk formats into `mediacore` (SIMP4-2, against 03 R1); one interface with an app-supplied implementation keeps them in the app. One stored format per family (R3-1) still holds: every round's dual-format fix produced new cross-stage defects. A stored value equal to the shipped default reads as default while no operator or `BelowStored` value is set for the key, so the blob's frozen defaults (`persistence.go:1180-1188` measured 33 keys inheriting stale defaults) stop pinning future defaults; against a `BelowStored` value it is still the stored value, as at HEAD (SEC7-2). |
+| C4 | **The DB layer is a store interface, `config.OverrideStore` (R4-1).** Core ships the **native** store over its own keyspace `c/config/` (one row per explicitly set key), which `hello` and every app without legacy settings use. An app with legacy settings supplies its **own** implementation through its module's `Manifest.LegacyStores.Config` (§1.3.3; 06), written in the app's code over the app's keys and row formats; for ABO that is the books legacy config store, which reads and writes keys that have a legacy blob name **in place** in ABO's settings blob, in the legacy JSON shape, and only those. **One storage rule (A-2, R9-5):** a key that has a legacy blob field (`Alias.LegacyBlob`) is stored only in HEAD's legacy row and format; a key HEAD never stores (`Alias.FileOnly()`: HEAD's `json:"-"` fields, the peer allow-list among them) keeps HEAD's storage, the operator file and env only, and is never stored while the app's legacy config store is attached; a key with no legacy name is stored natively in core's `c/config/` keyspace, which older builds never read, so it costs nothing on a rollback (the kernel routes each key, §1.3.3; §1.12.2). Core holds no app key name or row format and no storage grant for config. Nothing is copied, mirrored or adopted, and no level step exists for config. **Cutover** to the native store is deferred and out of the extraction (§1.12.2). | Core-resident legacy adapters put ABO's on-disk formats into `mediacore` (SIMP4-2, against 03 R1); one interface with an app-supplied implementation keeps them in the app. One stored format per family (R3-1) still holds: every round's dual-format fix produced new cross-stage defects. A stored value equal to the shipped default reads as default while no operator or `BelowStored` value is set for the key, so the blob's frozen defaults (`persistence.go:1180-1188` measured 33 keys inheriting stale defaults) stop pinning future defaults; against a `BelowStored` value it is still the stored value, as at HEAD (SEC7-2). |
 | C5 | Every key declares `Reload` (live / restart / boot) and `Protection` (none / interactive / admin / owner / operator); both appear in the generated JSON Schema. | ABO has exactly one boot-only key handled ad hoc (`persistence.go:2111`) and a 92-entry protection map (`protected_fields.go`) separate from the schema. Roles-as-data can hand `core:settings.manage` to non-admins, so sign-in, proxy and updater keys need an admin level (§1.3.7). |
 | C6 | Drop **viper** from core and, by the end of migration, from ABO. Stdlib + `go.yaml.in/yaml/v3` + `github.com/google/jsonschema-go` only. | §1.10. |
 | C7 | Env names are `<APP>_<PATH>`; no `MEDIACORE_` prefix. ABO's existing names are aliases; each alias names its 09 §9.2.9 ledger row, which alone says whether it is a window, permanent or retired name. **Permanent** rows: ecosystem names (`OTEL_*`, `OPENAI_*`) and every name ABO reads today that a shipped deploy file sets (e.g. `DATABASE_PATH`). | §1.3.6, §1.12.4. Dropping `DATABASE_PATH` after the window would open a new, empty database (OPS-5). |
@@ -179,22 +179,14 @@ type Alias struct {
 	Convert    func(json.RawMessage) (json.RawMessage, error) // optional legacy → canonical unit/shape change
 	Revert     func(json.RawMessage) (json.RawMessage, error) // canonical → legacy; required when Convert is set and
 	                                                          // LegacyBlob is non-empty (the legacy config store writes it, §1.12.2)
-	// FileOnly marks a key HEAD never stores: its value comes from the operator file or env only, and HEAD's settings
-	// API cannot set it (ABO: a json:"-" field, never in GET /config or the blob, config.go:1668-1670; the env-only
-	// refusal, update_service.go:632-635,720-726 @748fd787a). Register refuses
-	// it with a non-empty LegacyBlob. While the app's legacy config store is attached, config treats the key as
-	// ProtectOperator whatever its declared class: no DB-layer value is read or staged for it and Apply refuses it,
-	// so it keeps HEAD's storage and a rollback loses no stored value (R9-5, DATA9-6; §1.3.7). A native app has no
-	// legacy store, so its declared class applies. The app generates the flag from its own field tags (ABO:
-	// TestFileOnlyLegacyKeysNeverDBStored); the family's settings cutover ends it.
-	FileOnly bool
 	// HEADAuthOffWritable keeps HEAD's auth-off write rule for this key (§1.3.7; SEC9-1, SEC9-13): with auth off the
 	// auth-disabled principal may store it after the owner-trust-root check, as HEAD's !prior.EnableAuth allows
 	// (update_service.go:770-786 @748fd787a). ABO generates it for enable_auth and the three basic_auth_* keys only.
-	// It is honoured only while the key is routed to the app's legacy config store (its value lives in HEAD's row),
-	// so a native app, which has none, never inherits it; the family's settings cutover ends it, not H3.
+	// It is honoured only while the key is routed to a built legacy config store (its value lives in HEAD's row), so
+	// a native app, which has none, never inherits it. H3 clears it on enable_auth only; the Basic gate keys keep it
+	// until their family's settings cutover (§1.12.5, R9-5).
 	HEADAuthOffWritable bool
-	Ledger    string               // ledger row ID: the app's ledger (app.Options.CompatLedger) or core's own fragment
+	Ledger     string              // ledger row ID: the app's ledger (app.Options.CompatLedger) or core's own fragment
 	                               // (09 §9.2.9, SIMP3-3); TestCompatLedgerMatchesCode joins them from S2b, when
 	                               // the ledger lands (COR4-20)
 	// BelowStored keeps HEAD's precedence for this alias's operator spellings (R5-1(a), §1.3.5; OPS5-1 called it
@@ -209,6 +201,16 @@ type Alias struct {
 	// viper.Get<Type> call); zero means the canonical key's own type, decoded as HEAD's cast rules decode it.
 	Decode LegacyDecode
 }
+
+// FileOnly reports a key HEAD never stores: an alias with a LegacyYAML key and no LegacyBlob field (ABO: a json:"-"
+// field, never in GET /config or the blob, internal/config/config.go:1668-1670; the env-only refusal,
+// update_service.go:632-635,720-726 @748fd787a). It is derived, not declared, so it cannot drift from the two names.
+// While a built legacy config store is attached, config treats such a key as ProtectOperator whatever its declared
+// class: no DB-layer value is read or staged for it and Apply refuses it, so it keeps HEAD's storage, the operator
+// file and env only, and a rollback loses no stored value (R9-5, DATA9-6; §1.3.7;
+// TestFileOnlyLegacyKeysNeverDBStored). A native app has no legacy store, so its declared class applies; the
+// family's settings cutover ends the rule.
+func (a Alias) FileOnly() bool // a.LegacyYAML != "" && a.LegacyBlob == ""
 
 // LegacyDecode names one of HEAD's per-type decoders for legacy spellings (A-7, §1.3.6). Canonical names never use it.
 type LegacyDecode uint8
@@ -432,8 +434,9 @@ type OverrideStore interface {
 // stages into it: OverrideStore.Stage for c.Set and c.Unset, secrets.(*Store).Stage for each of c.Secrets (a
 // secret with a legacy copy is written in place, a native one to c/secrets/, §2.3), and the audit record
 // core.settings.update (05-rbac §7.1: section and changed key names, never secret values; actor = Override.By).
-// When the store (or any store that staged into the batch) has legacy.WriteLock, it commits through
-// storage.CommitLocked(ctx, b, locks...), holding those locks from staging through the commit (R9-1, §1.6); it
+// When the store (or any store that staged into the batch) has legacy.WriteLock, it builds and commits the batch
+// inside storage.CommitLocked(ctx, b, d, stage, locks...) with the locks WriteLocks returns for
+// legacy.LockConfigSettings, held from the first staged read through the commit (R9-1, §1.6); it
 // retries with storage.RetryOnConflict and then calls legacy.ConfigCommitObserver.Committed when the store has that
 // capability. It detects WriteLock through an unexported mirror like the other capabilities. config never imports
 // audit (L4).
@@ -653,6 +656,12 @@ type ConfigResetRun struct {
 	Done               func(ctx context.Context, failed []string) error
 }
 
+// LockConfigSettings is the config lock name of legacy.WriteLock (R9-1; WriteLock itself, WriteLocks(names
+// []string) []storage.Lock, is declared once in 05-storage §5S.3.11). It names what a write touches, the app's
+// stored settings and its legacy secret copies, never an app mutex or key (03 R1): books' config, instance and
+// notify-rule stores return HEAD's configBlobSaveMu for it. S3.
+const LockConfigSettings = "config.settings"
+
 // ConfigExternalWriter: Changed fires when a writer other than config.Store changed stored values (the app's own
 // legacy config path, 05-config §1.12.2); config then re-runs OverrideStore.Load (05-config §1.4 step 8). A stage
 // bridge (SIMP5-5): it exists from S2 and is deleted in the S3 PR, when the façade makes Store.Apply the only
@@ -786,6 +795,17 @@ therefore not read on a rollback below that stage: for example `<APP>_CORE_AUTH_
 `internal/config/config.go:1709-1719` @748fd787a). 09 §9.2.1 row 3 carries the cost and the release note: while you may
 roll back below that stage, keep the stored setting (or, for a key HEAD re-applies from env, its legacy name) at the
 same value. Nothing records the names, and no file or health token lists them.
+
+**An empty stored Basic password never shadows `BASIC_AUTH_PASSWORD` (OPS9-7, R-D request).** A UI save with no
+password writes an **empty** encrypted `basic_auth_password` row when none exists, and HEAD applies every decrypted
+row, the empty one included (`internal/config/persistence.go:1193-1205,1996-2003` @748fd787a), so under the
+stored-beats-env rule an install with the gate on and an empty saved password would be locked out by S0's early
+fix 5 with no setting or variable to reach Settings. So for `core.http.basic_gate.password` alone, an empty stored
+value counts as **no stored value**: a non-empty `BASIC_AUTH_PASSWORD` (its `BelowStored` legacy name) is then
+effective, in memory only, never written to the row, and one warning per boot names the variable; with neither, the
+gate stays fail-closed (§1.12.2). A non-empty stored password still beats the variable, as at HEAD.
+`TestBasicGate_EmptyStoredPasswordDoesNotShadowEnv` covers both. 09's S0 release note gives the recovery: "If you
+are locked out, set `BASIC_AUTH_PASSWORD` and restart" (cross-cluster).
 
 **Shadowed legacy names (SEC6-1).** At attach, a `BelowStored` legacy name of a key at `ProtectAdmin` or higher that
 is set and differs from the stored value (a stored value equal to the default included, SEC7-2) is listed in
@@ -938,8 +958,9 @@ off:
   `basic_auth_password` row), so every build reads it after a rollback (05-authn §4.11, `TestAuthEnable_MatchesHEAD`,
   `TestRollback_AuthOffBasicGateStaysOnPrev`). **What selects HEAD's rule (SEC9-13):** the generated per-key
   `Alias.HEADAuthOffWritable` flag (§1.3.1), honoured only while the key is routed to the app's legacy config
-  store, so a native app never inherits it (`TestAuthOff_NativeAppRefusesAuthModeWrite`). H3 does not change this
-  rule; it ends with each family's settings cutover, whose release note says so (§1.12.5, SEC9-7). The canonical
+  store, so a native app never inherits it (`TestAuthOff_NativeAppRefusesAuthModeWrite`). H3 clears it on
+  `enable_auth` only; the Basic gate keys keep it until their family's settings cutover, whose release note says so
+  (§1.12.5, SEC9-7, R9-5). The canonical
   `<APP>_CORE_AUTH_MODE=required` is an additional operator name that locks the key (C3) and that no build before
   S4 r1 reads (S4 r1's gin auth follows the effective key; 05-authn §4.11, 09 §9.2.1 row 3; SEC9-11); ABO's legacy
   `ENABLE_AUTH=true` / `enable_auth: true` keeps HEAD's precedence and does not beat a stored `false` (§1.3.5) until
@@ -1132,8 +1153,11 @@ value; `Pending` shows the stored value; `KeyState.Pending` drives a "restart re
   legacy config store the blob is written by config's `Apply`, by integrations' legacy instance store and by the
   notify-rule store, which books implements beside it and which share its render (C11). HEAD's process-wide save
   mutex `configBlobSaveMu` (`persistence.go:1890-1897`) **stays**: the three books stores expose it through the
-  one capability `legacy.WriteLock` (`Lock(keys) (unlock func())`, 05-storage), and the kernel's `Committer` commits
-  every batch one of them staged into with `storage.CommitLocked(ctx, b, locks...)`, which holds the lock from
+  one capability `legacy.WriteLock` (`WriteLocks(names []string) []storage.Lock`, declared once in 05-storage
+  §5S.3.11; this file's lock name is `legacy.LockConfigSettings`, the blob and the four secret rows, for which each
+  of the three stores returns the one `configBlobSaveMu` lock with one `LockRank`), and the kernel's `Committer`
+  builds and commits every batch one of them stages into inside `storage.CommitLocked(ctx, b, d, stage, locks...)`,
+  which takes that lock once and holds it from
   staging through the commit, so HEAD's serialisation of blob saves spans core's commit as it spanned HEAD's direct
   one. Core config's `Apply` mutex sits outside it (taken first, never inside a held `WriteLock`), so the two never
   invert. The store also reads the stored bytes with `GetForUpdate`, so a render staged by a writer outside the lock
@@ -1342,8 +1366,9 @@ the dependency as adopted.
 | `TestAlias_BelowStoredFeedsDefaultLayer` | a `BelowStored` alias set in env or file: a stored value beats it, it is effective while nothing is stored, `LockedBy` is empty and `Apply` succeeds; the canonical name of the same key still locks; ignored on a `ProtectOperator` key (R5-1(a), OPS5-1) |
 | `TestBelowStored_StoredDefaultStillWins` | a fixture key whose `BelowStored` alias is set to a non-default value while the stored value equals the default → the stored value is effective with `Source` `SourceOverride`, and the shadow token is raised; with nothing set under any operator or `BelowStored` name the same stored value reports `SourceDefault`. ABO's instances: blob `enable_auth: true`, env `ENABLE_AUTH=false` → auth `required`; blob `enable_auth: false`, env `ENABLE_AUTH=true` → auth off, as at HEAD; both raise `config_legacy_name_shadowed` (SEC7-2, A-2) |
 | `TestAttach_LegacyNameShadowedReported` | a `BelowStored` alias of a `ProtectAdmin` key (and of a secret key) set to a value that differs from the stored one → `AttachReport.Shadowed` names it, one warning naming the canonical variable, health `config_legacy_name_shadowed`; no secret value in the log; a `ProtectNone` key is not reported (SEC6-1) |
+| `TestBasicGate_EmptyStoredPasswordDoesNotShadowEnv` | gate enabled, an empty stored `basic_auth_password` row and `BASIC_AUTH_PASSWORD=p`: the effective password is `p` with `Source` `SourceEnv`, nothing is written to the row, one warning names the variable; with a non-empty stored row the stored value wins; with neither, every non-exempt request gets 401 (OPS9-7) |
 | `TestAuthOff_NativeAppRefusesAuthModeWrite` | hello (no legacy config store) with auth off: the auth-disabled principal's `Apply` of `core.auth.mode=required` and of `core.http.basic_gate.enabled` → 403, nothing stored; the same writes on a fixture with a legacy store whose aliases are `HEADAuthOffWritable` succeed after the owner-trust-root check and land in the legacy fields (SEC9-13, SEC9-1) |
-| `TestFileOnlyKey_OperatorWhileLegacyStoreAttached` | a `FileOnly` alias's key declared `ProtectAdmin`: with a legacy store attached, `KeyState.Protection` is operator, `Apply` → `*ProtectedError{Need: ProtectOperator}`, a planted `c/config/` row is ignored and reported; without one (native app) the declared class applies; `Register` refuses `FileOnly` with a `LegacyBlob` (R9-5) |
+| `TestFileOnlyKey_OperatorWhileLegacyStoreAttached` | a `FileOnly` alias's key declared `ProtectAdmin`: with a legacy store attached, `KeyState.Protection` is operator, `Apply` → `*ProtectedError{Need: ProtectOperator}`, a planted `c/config/` row is ignored and reported; without one (native app) the declared class applies; `FileOnly()` is true exactly for a `LegacyYAML` key with no `LegacyBlob` (R9-5) |
 | `TestPassthroughValues_ReportBelowStored` | a passthrough value given under a `BelowStored` legacy name carries `OperatorValue.BelowStored=true`; under a canonical spelling, `false` (C11, SEC6-5) |
 | `TestEnv_EmptyValueIsUnset` | `ABO_X=""` and a legacy name set to `""` supply nothing: no lock, no value (HEAD parity with viper) |
 | `TestOverride_IgnoredWhenOperatorLocked` | DB row kept, not applied, reported in `AttachReport.Ignored` |
@@ -1467,7 +1492,7 @@ lists the path and 03 §3.5.1 counts it. The rest of this section is the
 | Value | Stored | Read by |
 |---|---|---|
 | a key that has a legacy blob field (`Alias.LegacyBlob`) | ABO's settings blob, in the legacy JSON shape, written in place | every build |
-| a key HEAD never stores (`Alias.FileOnly`: HEAD's `json:"-"` fields, the peer allow-list and the ABS JWT secret among them) | nowhere: the operator file and env only, as at HEAD; `ProtectOperator` while the books store is attached (§1.3.7; R9-5, DATA9-6) | every build, from the same file and env |
+| a key HEAD never stores (`Alias.FileOnly()`: HEAD's `json:"-"` fields, the peer allow-list and the ABS JWT secret among them) | nowhere: the operator file and env only, as at HEAD; `ProtectOperator` while the books store is attached (§1.3.7; R9-5, DATA9-6) | every build, from the same file and env |
 | a key with no legacy name (new core and module keys) | core's native store, `c/config/` (one row per explicitly set key), through the routing store (§1.3.3); older builds never read it | builds that declare the key |
 | a secret HEAD keeps in **plaintext** in the blob | its blob field, in place, plaintext, as HEAD writes it, until the secrets cutover (§1.12.5) | every build |
 | a secret HEAD keeps **encrypted** (the four of §2.2) | its encrypted legacy row in ABO's cipher, written in place, plus HEAD's gap-fill file copy `<db parent>/config.yaml` for three of them; never in `c/secrets/` before the cutover | every build |
@@ -1624,8 +1649,8 @@ the operator's `--config` (`:110-112`); no core build writes any other key into 
 
 Effects on older builds after a rollback: none for secrets. The Basic gate compares with the password last saved on
 any build, so it is never stranded or opened (OPS5-2; SEC4-1, DATA4-1, OPS4-1); provider keys and the webhook
-signing secret keep working. A gate that reads enabled with no usable password on a core build (unset, empty,
-unreadable, or removed on an older build, e.g. by HEAD's key-regeneration path, `persistence.go:1233-1262`) refuses
+signing secret keep working. A gate that reads enabled with no usable password on a core build (unset, empty with no
+non-empty `BASIC_AUTH_PASSWORD`, §1.3.5, unreadable, or removed on an older build, e.g. by HEAD's key-regeneration path, `persistence.go:1233-1262`) refuses
 every non-exempt request: core's stage 8 is fail-closed ([05-http-api](05-http-api.md) §4.2; R5-1(c), SEC5-4,
 DATA5-12).
 
@@ -1888,9 +1913,12 @@ before the cutover declares both owners, so every older build refuses a store a 
 - **H3 — auth-precedence cutover** (09 §9.13). One H3, stated the same in 05-authn §11.2 and 09 §9.13 (SEC9-7,
   cross-cluster): H3 moves **only auth-enable precedence**, and only in the enabling direction. An operator value
   that enables auth (`ENABLE_AUTH=true`, `enable_auth: true` in the operator file) beats a stored `false`; a value
-  that disables auth keeps HEAD's precedence (a stored `true` beats it). The auth-off write rule of §1.3.7
-  (`HEADAuthOffWritable`, `enable_auth` and the Basic gate keys) is **not** changed by H3; it ends with each family's
-  settings cutover, whose release note says so. **Every other `BelowStored` flag keeps HEAD's precedence** after H3,
+  that disables auth keeps HEAD's precedence (a stored `true` beats it). H3 also clears `HEADAuthOffWritable` on
+  `enable_auth` (R9-5): from H3 the auth-disabled principal can no longer store `core.auth.mode` through `Apply`, and
+  auth is turned on by an operator value or by an admin once auth is on, as SEC4-8 states for native apps. The Basic
+  gate keys keep the flag, and HEAD's auth-off write rule, until their family's settings cutover, whose release note
+  says so. H3's release note: "With authentication off, Settings can no longer turn it on; set `ENABLE_AUTH=true`
+  or `ABO_CORE_AUTH_MODE=required` and restart." **Every other `BelowStored` flag keeps HEAD's precedence** after H3,
   until a separate cutover the owner decides per key (R9-5, SEC9-2). That later cutover is bound by two rules, so an
   always-set deploy value can never override a UI setting: a name a shipped deploy file sets unconditionally
   (compose's `BASIC_AUTH_ENABLED`, `BASIC_AUTH_USERNAME` and `BASIC_AUTH_PASSWORD`, `docker-compose.yml:20-22`
@@ -2717,11 +2745,11 @@ Round 9:
 
 - R9-5 / SEC9-1 — §1.3.1 `Alias.HEADAuthOffWritable`, §1.3.7, §1.12.1, §1.12.2 R-test cells, §2.9: on ABO the Basic gate keys keep HEAD's auth-off write rule like `enable_auth` (stored into HEAD's `basic_auth_*` fields and encrypted row); "keep the legacy name set" replaced by §1.3.5's wording; `TestRollback_AuthOffBasicGateStaysOnPrev`.
 - R9-5 / SEC9-2 — C3, §1.3.1 `BelowStored`, §1.3.5, §1.12.5: H3 moves only enabling `enable_auth` precedence; every other `BelowStored` flag keeps HEAD's precedence until a separate, owner-decided cutover, bound by "a name a shipped deploy file always sets stays `BelowStored`" and "a weakening legacy value never locks"; H3's done-check includes `TestComposeEnvKeepsUIBasicGate`.
-- R9-5 / DATA9-6 — C4, C16, §1.3.1 (`Alias.Legacy` split into `LegacyYAML` and `LegacyBlob`; new `FileOnly`), §1.3.3 routing, §1.3.5, §1.3.6, §1.3.7, §1.12.2 (value table, storage rule, perimeter-edit sentence, release note, R-test cell), §1.12.4, §1.11, §2.2, §2.9, §2.10 item 3: HEAD's `json:"-"` keys (peer allow-list, tunnel connectors, ABS JWT secret, …) keep HEAD's storage, file and env only, never stored, operator-only while the legacy store is attached; `TestFileOnlyLegacyKeysNeverDBStored`, `TestFileOnlyKey_OperatorWhileLegacyStoreAttached`; the peer allow-list removed from the UI-edit examples.
+- R9-5 / DATA9-6 — C4, C16, §1.3.1 (`Alias.Legacy` split into `LegacyYAML` and `LegacyBlob`; derived `FileOnly()`), §1.3.3 routing, §1.3.5, §1.3.6, §1.3.7, §1.12.2 (value table, storage rule, perimeter-edit sentence, release note, R-test cell), §1.12.4, §1.11, §2.2, §2.9, §2.10 item 3: HEAD's `json:"-"` keys (peer allow-list, tunnel connectors, ABS JWT secret, …) keep HEAD's storage, file and env only, never stored, operator-only while the legacy store is attached; `TestFileOnlyLegacyKeysNeverDBStored`, `TestFileOnlyKey_OperatorWhileLegacyStoreAttached`; the peer allow-list removed from the UI-edit examples.
 - R9-6 / SEC9-4 / COR9-4 — §1.3.3 `ConfigResetArgs.ResetArgs(ctx, storage.ResetRequest)`, `ConfigResetPlan.LibraryRoot/LibraryFiles`, `ConfigResetRun.DeleteLibraryFiles`; count of `RootDir`'s top-level entries, exact; mismatch → 422 `library_files_confirm_required` with nothing staged; dangerous-root check only with the wipe; legacy paths keep HEAD's wipe; §1.12.2 "Who stages" and the hook's wipe follow A-17; the Q-K sentence deleted.
 - R9-1 / DATA9-15 / R-F request — §1.3.3 `Committer`, §1.6: HEAD's `configBlobSaveMu` stays, exposed by the books config, instance and notify-rule stores through `legacy.WriteLock` and held across `storage.CommitLocked`; core config's `Apply` mutex is separate and taken first; `GetForUpdate` kept.
 - R9-11 / SEC9-3 / DATA9-8 — §1.12.5: H2 and H3 name the owners they raise (`books`, plus `core` for H2) and `TestHardeningCutoverRefusedByEveryOlderRelease`; this file decides that H2 moves the four encrypted rows into `c/secrets/`; H2 deletes its checkpoint and compacts, says archives keep the old copies, `TestH2_NoPlaintextSecretOnDisk`, release note on old backups and key rotation.
-- SEC9-7 — §1.3.7, §1.12.5: one H3 statement; the auth-off write rule is unchanged by H3 and ends with each family's settings cutover.
+- SEC9-7 — §1.3.7, §1.12.5: one H3 statement; H3 ends HEAD's auth-off write rule for `enable_auth` only (release-noted), and the Basic gate keys keep it until their settings cutover.
 - SEC9-13 — §1.3.1, §1.3.7, §1.11: the generated `HEADAuthOffWritable` flag selects HEAD's auth-off rule, honoured only while the key is routed to the app's legacy store; `TestAuthOff_NativeAppRefusesAuthModeWrite`.
 - SEC9-11 — §1.3.7: the deleted `Local` grant sentence replaced ("the hosts a legacy-backed instance reaches with `Local=true` were all written by an admin"); `ABO_CORE_AUTH_MODE` is first read at S4 r1.
 - SEC9-10 — §1.3.7: the façade's `ProtectAdmin` on integration-bound fields is recorded as a tightening against HEAD's `FieldUnprotected`, with the 09 release note and test cell.
@@ -2730,3 +2758,5 @@ Round 9:
 - COR9-7 — §1.3.3 `ResolveStateDir`, §1.4 step 0, §1.7, §1.11: P−1 marked deferred-build (A-6); the resolver runs before P0a.
 - Header — 03 reference v1.12.1.
 - R9-7 / COR9-5 (R-G request) — §1.3.3 `legacy.ConfigOpenEnv.Files` and `legacy.StateFiles`: the labelled state filesystem through which books' key-file, gap-fill and post-reset-hook writes go, so `coretest/crashmatrix` sees them.
+- R-D requests — §1.3.1: `FileOnly()` is derived (a `LegacyYAML` key with no `LegacyBlob`), not a declared flag; `HEADAuthOffWritable` comment, §1.3.7 and §1.12.5: H3 clears it on `enable_auth` only (release note), the Basic gate keys keep it to their settings cutover; §1.3.3 and §1.6: the lock is 05-storage's `WriteLocks(names []string) []storage.Lock` under the config lock name `legacy.LockConfigSettings`, committed inside `storage.CommitLocked(ctx, b, d, stage, locks...)`.
+- OPS9-7 (R-D request) — §1.3.5, §1.12.2, §1.11: an empty stored Basic password counts as no stored value, so `BASIC_AUTH_PASSWORD` is effective in memory only; `TestBasicGate_EmptyStoredPasswordDoesNotShadowEnv`.
