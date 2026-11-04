@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.3.1 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -191,7 +191,10 @@ and the legacy stream A `system.status` projection read it ([05-realtime](05-rea
 name). `/livez` and `/readyz` are `Router.Infra` exact patterns, and their first segments, with
 `health` and `metrics`, are in `Router.NonSPA()` ([05-http-api](05-http-api.md) §4.10), so a variant
 such as `/livez/`, `/READYZ` or `/health/` gets a 404, never `200 text/html` that a monitor would read
-as healthy (today's `nonSPASegments` rule, `internal/server/spa_fallback.go:74-83`).
+as healthy (today's `nonSPASegments` rule, `internal/server/spa_fallback.go:74-83`). Until the shell
+owns `/` (09 S9), gin's SPA fallback answers unmatched paths from that static list, which has no
+`livez` or `readyz`; the stage that adds the probes (09 S8) makes gin's fallback refuse the same
+segments in the same PR, so the rule holds from the probes' first release (FE3-13).
 
 **Auth-off reach (SEC2-21).** `GET /api/core/v1/health`, `/system/info` and the diagnostics routes need
 `core:system.manage`, which is `AuthRequired` (05-rbac §6.1), so with auth off they answer 401 where
@@ -224,8 +227,8 @@ and launchd have no equivalent):
    relies on (`deploy/audiobook-organizer.service:26-31`: `TimeoutStartSec=300` sits above the measured
    warm-up, and long steps push it out). Right before a startup step that makes real progress — store
    open (WAL replay), each migration step or chunk group of 05-storage §5S.3.5 ("Systemd budget"),
-   the pre-migration checkpoint, a mirror rebuild, and a search-index open (`storage/index`, 05-storage
-   §5S.3.8) — the step calls
+   the pre-migration checkpoint, and a search-index open (`storage/index`, 05-storage §5S.3.8) — the
+   step calls
    `Supervisor.ExtendStart(step)`, which extends the start deadline to at least
    `StartupStepBudget` (10 min, HEAD's value) from that moment. It is called per step, **never from a
    timer**, so a step that hangs is still killed when its own budget runs out. Lower layers do not import
@@ -237,9 +240,16 @@ and launchd have no equivalent):
 2. **Stop** — the tasks executor's one bounded extension for an in-flight `Uninterruptible` run
    ([05-tasks](05-tasks.md) 5T.4), at most `core.tasks.shutdown_extend_max` beyond the stop budget.
 
-A deploy or rollback script must therefore not treat a long, extending start as a failure: 09 S0
-makes `scripts/deploy-wait-ready.sh` keep polling while the unit is `activating` and bound only the
-time after `READY=1` with `DEPLOY_READY_TIMEOUT`.
+A deploy or rollback script must therefore not treat a long, extending start as a failure, and it can
+only see the unit where the unit runs: both recipes run `scripts/deploy-wait-ready.sh` on the
+operator's machine against a URL (`Makefile:916`; the script takes only `BASE_URL [TIMEOUT]`,
+`scripts/deploy-wait-ready.sh:8-13`), so a local `systemctl` would query the wrong host (OPS3-9). 09 S0
+therefore changes the signature to `deploy-wait-ready.sh BASE_URL TIMEOUT [SSH_HOST UNIT]` and, with
+`SSH_HOST`, polls `ssh $SSH_HOST systemctl show -p ActiveState,SubState,NRestarts $UNIT`: `activating`
+is progress (a startup that keeps sending `EXTEND_TIMEOUT_USEC` is not failing), `failed`/`inactive`
+or a rising `NRestarts` fails at once (a crash loop is reported in seconds), and `active` (`READY=1`)
+starts `DEPLOY_READY_TIMEOUT`, which bounds only the wait for `"ready":true`. Without `SSH_HOST`
+(Docker, launchd) it keeps URL-only polling with a documented larger timeout.
 
 ```go
 // Supervisor is the kernel's supervisor-signal handle (one per App, R5).
@@ -578,3 +588,10 @@ Integration pass (round 2, 2026-11-04):
 
 - integration pass (round 2): §5H.3.4: `ExtendStart` also reaches books' database and search code that stays in ABO during S2–S7 via `module.Deps.ExtendStart`; search-index open cites `storage/index`, not 05-indexer.
 - integration pass (round 2): `core.diagnostics.dir` defaults to `diagnostics` beside the DB (no data-dir key); diagnostics downloads audited as `core.diagnostics.download`.
+
+Round 3:
+
+- R3-1 — "a mirror rebuild" removed from the startup steps that call `ExtendStart` (no mirrors during the extraction).
+- OPS3-9 — deploy-wait note: the script runs on the operator's machine; 09 S0's `BASE_URL TIMEOUT [SSH_HOST UNIT]` signature polls the unit over ssh (`activating` = progress, `failed`/`inactive`/rising `NRestarts` = immediate failure, `active` starts `DEPLOY_READY_TIMEOUT`); URL-only without `SSH_HOST`.
+- FE3-13 — probe-path rule stated to hold during S8 too: gin's SPA fallback refuses `livez`/`readyz` from the probes' first release.
+- R3-2 — verified: this file specifies no release-promotion gating.
