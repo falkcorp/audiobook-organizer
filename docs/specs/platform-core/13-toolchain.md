@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/13-toolchain.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a1e1b657-1c87-4a3e-8407-43269415455f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -18,6 +18,11 @@ code is **required** to use and where each is used, (c) frontend versions for `c
 with every exception and its exit condition, (d) which third-party Go dependencies core drops in favour
 of the standard library and which it keeps, and (e) a release-age policy so "latest" never means
 "published yesterday". Risks found are collected in §13.7 for [14-risks-open-questions](14-risks-open-questions.md).
+
+This file is the **single owner** of the release-age rule (§13.6) and of version targets (§13.4 for the
+frontend, §13.5 for Go dependencies). Other files, including [07-ui-shell](07-ui-shell.md) §7.3.3, refer
+to these tables instead of restating versions, so a target cannot violate the rule in one file while
+obeying it in another.
 
 ## 13.2 Go toolchain
 
@@ -62,17 +67,22 @@ digests** that must be re-resolved. Counted with `git grep -n -E '1\.27\.2'` exc
 | Prose that names the pin | 7 | `CLAUDE.md:180`, `agents/go-specialist.md:15`, `skills/project-context/SKILL.md:52`, `Makefile.local.example:21`, `.github/codeql/README.md:127,142`, `.woodpecker/checks-build.yaml:21` (comment) | not checked — stale prose is how a wrong pin gets copied |
 | Not a pin (leave alone) | — | historical comments that record go1.27.2 *behaviour*: `Makefile:463,507`, `ci.yml:525`, `checks-lint.yaml:73`, `internal/diag/flight/flight.go:628`, `flight_test.go:494`, `internal/pathutil/protected.go:52`, `scripts/check-errcheck-ratchet.sh:121`, `scripts/check-interface-width.sh:128`, `scripts/setup-mockery.sh:11`; file-header versions `1.27.2` in `internal/audiobooks/audiobook_service_unit_test.go:2` and `internal/config/persistence_test.go:2` | — |
 
-Unchanged by a patch bump: `go.mod:3` and `tools/*/go.mod:8` (`go 1.27.0`, tier 3), and
-`.github/repository-config.yml:44` / `.github/workflow-config.yaml:11,44,52` (`'1.27'`, tier 2).
+Unchanged by a patch bump: `go.mod:3` (`go 1.27.0`, tier 3), `tools/*/go.mod:8` (`go 1.27.0`, **not
+guarded today**: the script reads only the root `go.mod`, `scripts/check_toolchain_versions.py:329-351`),
+and `.github/repository-config.yml:44` / `.github/workflow-config.yaml:11,44,52` (`'1.27'`, tier 2).
 
 **The guard.** `scripts/check_toolchain_versions.py` (476 lines, v1.3.1) enforces three tiers —
 exact patch for every build path, major.minor for `repository-config.yml`, minimum for `go.mod`
 (`scripts/check_toolchain_versions.py:14-46`) — and is run by `test-action-integration.yml`
 (`raw/14-build-ci.md` §5). Required changes for core:
 
-1. Tier 3 must also read `core/go.mod` (and `core/examples/hello/go.mod`, see
-   [12-repo-split](12-repo-split.md) S3/S10). Today it reads only the root `go.mod`.
-2. Core's own CI workflow (`core-ci.yml`) adds its `go-version` lines to tier 1 automatically (the
+1. Tier 3 must also read `core/go.mod`, `core/tools/*/go.mod` and the existing `tools/*/go.mod`
+   ([12-repo-split](12-repo-split.md) S10). Today it reads only the root `go.mod`. There is no
+   `core/examples/hello/go.mod`: `examples/hello` is a package in the core module (03 §3.3, 12 S3).
+2. Tier 1 must read the `export GOTOOLCHAIN :=` pin in `core/Makefile` (12 §12.3.11) and require it to
+   equal the root `Makefile:43` pin. That file is the 35th machine-checked copy; it exists because core
+   CI must run from an export of `core/` alone (12 S4) and the core repo has nothing else after the split.
+3. Core's own CI workflow (`core-ci.yml`) adds its `go-version` lines to tier 1 automatically (the
    script already scans every workflow).
 
 **Two stale Dependabot rules must be fixed in the same bump PR**, or Dependabot keeps refusing exactly the
@@ -129,14 +139,16 @@ rewritten to.
 | `encoding/json/v2` + `jsontext` (GA in 1.27, `go.md:206-237`) | New core wire types and stored values use v2 with `omitzero` for scalars; v1 `encoding/json` only where a legacy ABO wire shape must be byte-compatible (09 compatibility windows) | `httpapi` envelopes, `config` file decoding, `storage` value codecs for new `c/` keyspaces, `acquire.ConditionSpec.Params` (`jsontext.Value`) | 15 files v2, 1 384 files v1 |
 | `unique` | Interning of small, hot, repeated strings compared by identity | `rbac` permission scopes and `entity.Ref` module/kind strings on the authorization hot path | 0 files |
 | `weak` + `runtime.AddCleanup` (1.24) | Only for caches whose entries may be dropped under memory pressure; never for correctness; `runtime.SetFinalizer` banned | compiled custom-format regex cache in `acquire` (shared across profiles; entries collectable when no snapshot references them) | 0 files |
-| `net/http` ServeMux patterns (1.22) + `http.CrossOriginProtection` (1.25) + `MaxHeaderValueCount` (1.27) | Core HTTP is stdlib (02 N7); method+wildcard patterns; CSRF via `CrossOriginProtection`; every `http.Server` sets the timeout trio and `MaxHeaderValueCount` (`go.md:331-333`) | `httpapi`, `realtime`, `ui` | 13 files `http.NewServeMux`; 446 files import gin; 0 `CrossOriginProtection` |
+| `net/http` ServeMux patterns (1.22) + `http.CrossOriginProtection` (1.25) + `MaxHeaderValueCount` (1.27) | Core HTTP is stdlib (02 N7); method+wildcard patterns; CSRF via `CrossOriginProtection` as its own stage of the fixed middleware chain ([05-http-api](05-http-api.md) §4.2, which owns the stage); every `http.Server` sets the timeout trio and `MaxHeaderValueCount` (`go.md:331-333`) | `httpapi`, `realtime`, `ui` | 13 files `http.NewServeMux`; 446 files import gin; 0 `CrossOriginProtection` |
 | stdlib `uuid` (1.27) | New random identifiers (`uuid.NewV7()`/`NewV4()`); ULIDs (`oklog/ulid`) stay where time-sortability matters (`go.md:325-327`) | request/correlation IDs, API-key IDs | 0 files (`github.com/google/uuid` only indirect, `go.mod:108`) |
 | `new(expr)` (1.26), `min`/`max`, `range n`, `slices`/`maps` | `go.md:300-317` | everywhere | — |
 | `go vet` (with `stdversion` in `go test`) and `go fix` modernizers | Core CI runs `go vet ./...` and **`go fix -diff ./...` must be empty** (`-diff` exits non-zero on any pending fix; verified in `go help fix` on go1.27.3). The 26 analyzers on go1.27.3 (`go tool fix help`): `any atomictypes buildtag embedlit errorsastype forvar hostport inline mapsloop minmax newexpr omitzero plusbuild rangeint reflecttypefor slicesbackward slicescontains slicessort stditerators stringsbuilder stringscut stringscutprefix stringsseq testingcontext unsafefuncs waitgroupgo` — identical to `go.md:263-268`. When ABO code moves into core, the per-class review rules of `go.md:275-287` apply to the resulting hunks. | `core-ci.yml` | ABO does not gate on `go fix` |
 
 ## 13.4 Frontend versions (`core/web` workspace and ABO `web/`)
 
-Checked with `npm view <pkg> version` and `npm view <pkg> time` on **2026-11-04**.
+Checked with `npm view <pkg> version` and `npm view <pkg> time` on **2026-11-04**. This table is the
+single source of frontend version targets; 07 §7.3.3 points here (FE-21). A target in the "Core `core/web` target" column obeys §13.6 on the day it is adopted, not on the
+day it is written down.
 
 | Package | ABO installed (`raw/15`) | Latest | Published | Core `core/web` target | Note |
 |---|---|---|---|---|---|
@@ -171,10 +183,10 @@ releases). Core targets v8.
 
 | # | Exception | Reason (verified) | Exit condition |
 |---|---|---|---|
-| E1 | Two TypeScripts: TS 7.0.2 type-checks (`"@typescript/native": "npm:typescript@^7.0.2"`, `web/package.json:53`, scripts `:8-9`), while the `typescript` name resolves to TS 6 (`"npm:@typescript/typescript6@^6.0.2"`, `web/package.json:66`) | TS 7 ships no JS API, and `typescript-eslint` 8.72.1 peers `typescript >=4.8.4 <6.1.0` (`npm view`); rationale recorded in `CHANGELOG.md:2909-2924` | `typescript-eslint` (and knip, which also loads the TS API) declare TS 7 support → drop the alias, single `typescript@^7`. `core/web` copies the same two-alias layout until then. |
+| E1 | Two TypeScripts: TS 7.0.2 type-checks (`"@typescript/native": "npm:typescript@^7.0.2"`, `web/package.json:53`, scripts `:8-9`), while the `typescript` name resolves to TS 6 (`"npm:@typescript/typescript6@^6.0.2"`, `web/package.json:66`) | TS 7 ships no JS API, and `typescript-eslint` 8.72.1 peers `typescript >=4.8.4 <6.1.0` (`npm view`); rationale recorded in `CHANGELOG.md:2909-2924` | `typescript-eslint` declares TS 7 support → drop the alias, single `typescript@^7`. `core/web` copies the same two-alias layout until then. (knip is not a blocker: knip 6.44.1 depends on `oxc-parser`/`oxc-resolver` and declares no `typescript` dependency or peer, `npm view knip@6.44.1 dependencies`, checked 2026-11-04.) |
 | E2 | Stay on `@babel/core` 7.29.x | 8.1.0 is two days old (release-age rule); `babel-plugin-react-compiler` 1.0.0 depends on `@babel/types ^7.26.0` (`npm view`), so Babel 8 core would run a compiler plugin built against Babel 7 AST types; the compiler path is the only Babel use (`web/vite.config.ts:8-21`) | react-compiler publishes Babel 8 support **and** 8.x has passed the 14-day soak → bump, run the React Compiler memo tests (`CHANGELOG.md` records them, e.g. `DupesSpine.memo.test.tsx`). |
 | E3 | `jsdom` pinned at 30.0.1 | 30.1.0 broke MUI FocusTrap unmount ("5 failed / 7 passed" vs 12/12), `.github/dependabot.yml:90-104` | the 12/12 check in that comment passes on the newest 30.1.x (30.1.3 untested here). |
-| E4 | ABO stays on `react-router-dom` 7.18.5 until the shell-adoption wave | v8 removed `react-router-dom` (react-router 8.0.0 changelog: "Remove `react-router-dom` package", #15076; DOM bits from `react-router/dom`, everything else from `react-router`); ABO imports it in **121** files (`grep -rl "from 'react-router-dom'" web/src`); `@mediacore/shell` needs v8 as a peer, so ABO and the shell must move together | ABO's migration to `@mediacore/shell` ([07-ui-shell](07-ui-shell.md), [09-abo-on-core](09-abo-on-core.md)) includes the mechanical import swap; exit when `web/package.json` no longer lists `react-router-dom`. |
+| E4 | ABO stays on `react-router-dom` 7.18.5 until its own react-router 8 migration | v8 removed `react-router-dom` (react-router 8.0.0 changelog: "Remove `react-router-dom` package", #15076; DOM bits from `react-router/dom`, everything else from `react-router`); ABO imports it in **121** files, 53 of them outside `*.test.*` files (one of those is the test helper `web/src/test/renderWithProviders.tsx`), `git grep -l "from 'react-router-dom'" -- web/src`; `@mediacore/shell` needs v8 as a peer, so the migration must be **finished before** ABO adopts the shell | A separate ABO PR series migrates to `react-router@8` (imports, data-router APIs, test harness) and **precedes** the shell-adoption stage ([07-ui-shell](07-ui-shell.md) §7.19, [09-abo-on-core](09-abo-on-core.md)); exit when `web/package.json` no longer lists `react-router-dom`. |
 
 ## 13.5 Go dependencies: what core drops and keeps
 
@@ -185,9 +197,9 @@ except where noted).
 
 | Dependency (latest) | ABO use at HEAD | Core replacement | Why |
 |---|---|---|---|
-| `github.com/gin-gonic/gin` v1.12.0 | 446 files; router built at `internal/server/server.go:638` (`gin.New()`) | `net/http` ServeMux patterns in `httpapi` (02 N7) | Stdlib has method+wildcard routing since 1.22; one fewer framework in every app's API; gin's context type would leak into every handler signature of the SDK. ABO's gin router is mounted as an `http.Handler` and retired group by group (N7). |
-| `github.com/gin-contrib/gzip` v1.2.9 | `internal/server/server.go` | `compress/gzip` middleware in `httpapi` | Trivial with stdlib. |
-| `otelgin` v0.72.0 | 1 file | `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` **v0.72.0** (2026-10-02) | Follows the router change. |
+| `github.com/gin-gonic/gin` v1.12.0 | 446 files; router built at `internal/server/server.go:638` (`gin.New()`) | `net/http` ServeMux patterns in `httpapi` (02 N7) | Stdlib has method+wildcard routing since 1.22; one fewer framework in every app's API; gin's context type would leak into every handler signature of the SDK. ABO keeps gin: its router stays mounted through `httpapi.MountLegacy` **permanently** (02 N7); a books route group moves to native `httpapi` only when it is rewritten for its own reasons. Core never imports gin. |
+| `github.com/gin-contrib/gzip` v1.2.9 | `internal/server/server.go` | `compress/gzip` middleware in `httpapi` | Trivial with stdlib. ABO keeps it as long as it keeps gin. |
+| `otelgin` v0.72.0 | 1 file | `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` **v0.72.0** (2026-10-02) | Follows the router: core uses `otelhttp`; ABO's gin engine keeps `otelgin` while it exists. |
 | `github.com/spf13/viper` v1.21.0 (last release **2025-09-08**) | 31 files | `core/config` layered loader (defaults → file → env → flags → DB overrides, 03 §3.3) decoding into typed per-module sections | Viper's package-level default instance is a process-global mutable registry (R5); per-module typed sections and a UI schema are the core requirement, not key-string lookup. |
 | `github.com/go-viper/mapstructure/v2` v2.5.0 | `internal/config/viper_decode.go` | `encoding/json/v2` decode into typed sections | Goes with viper. |
 | `github.com/go-playground/validator/v10` v10.30.6 | 1 file (`internal/server/credential_routes.go`) | typed decode + explicit `Validate() error` methods; errors map to the `httpapi` envelope | Struct-tag validation is reflection-heavy and opaque for one call site. |
@@ -206,8 +218,9 @@ except where noted).
 | `github.com/prometheus/client_golang` / `client_model` | v1.25.0 / v0.6.3 | 2026-10-08 | `metrics` (per-App registry, R5) | |
 | `go.opentelemetry.io/otel`, `/sdk`, `/sdk/metric`, `/trace`, `/metric` | v1.47.0 | 2026-10-02 | `metrics` | |
 | `go.opentelemetry.io/otel/exporters/prometheus` | v0.69.0 | 2026-10-02 | `metrics` | v0: minor may break |
-| OTLP gRPC exporters (`otlpmetricgrpc`, `otlptracegrpc`) + `google.golang.org/grpc` v1.85.0 | v1.47.0 | 2026-10-02 | `metrics` (optional export) | pulls the split `genproto/googleapis/{api,rpc}` modules; the monolithic `genproto` is absent from the graph (`raw/15-dependencies.md` "Go module-level notes") — the condition 03 §3.2.1 E2 tests |
+| OTLP gRPC exporters (`otlpmetricgrpc`, `otlptracegrpc`) + `google.golang.org/grpc` v1.85.0 | v1.47.0 | 2026-10-02 | `metrics` (optional export) | pulls the split `genproto/googleapis/{api,rpc}` modules. The monolithic `genproto` is **present in the module graph** via `cockroachdb/errors@v1.14.0` (`raw/00-baseline-build.md` E7, `go mod graph`) and **pruned from the build list** in single-module mode, so it is absent from `go.mod`/`go.sum` (`raw/15-dependencies.md` "Go module-level notes"). Pebble plus these exporters in one core module is what makes a workspace inside `core/` fail without the exclude (03 §3.2.1 X2), which is why the exclude lives in `core/go.mod` |
 | `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` | v0.72.0 | 2026-10-02 | `httpapi` | new |
+| `github.com/google/jsonschema-go` | v0.4.3 | 2026-04-17 | `config` (the one JSON Schema reflector, reused by `httpapi`'s OpenAPI generation) | **only if** [05-config](05-config.md) §1.10 adopts it over the in-house fallback (SIMP-14 makes 05-config the owner of that choice). Checked 2026-11-04: MIT licence (module zip `LICENSE`), latest on the proxy, pre-1.0 → pin exactly. |
 | `github.com/go-logr/logr` | v1.4.4 | 2026-07-20 | `metrics` (OTel SDK logger bridge only) | `otel.SetLogger` takes a `logr.Logger` (`internal/telemetry/sdklog.go:17,30`); core bridges slog with `logr.FromSlogHandler` and imports logr nowhere else. See O1. |
 | `github.com/oklog/ulid/v2` | v2.1.2 | 2026-07-23 | IDs for tasks, history, audit | time-sortable keys |
 | `github.com/coreos/go-oidc/v3`, `golang.org/x/oauth2` | v3.21.0, v0.37.0 | 2026-09-01, 2026-08-25 | `auth` | |
@@ -236,6 +249,15 @@ Rule for core and for ABO's bump PRs:
   this file) and fails a PR that introduces a younger version without a `security` label.
 - Dependabot's `cooldown` option can enforce the same in the bot itself where available; the script is
   authoritative either way and costs nothing.
+- **Tools are dependencies too.** Every Go tool core or ABO CI runs comes from a pinned module with a
+  `tool` directive, installed with `go -C <dir> install tool` (the existing `tools/*` pattern, e.g.
+  `tools/staticcheck/go.mod`): core's are `core/tools/apidiff` (`golang.org/x/exp/cmd/{apidiff,gorelease}`
+  at `v0.0.0-20261014143641-f0251eb4aa3e`, 2026-10-14), `core/tools/govulncheck`
+  (`golang.org/x/vuln/cmd/govulncheck` from x/vuln v1.9.0, 2026-10-11) and `core/tools/staticcheck`
+  ([12-repo-split](12-repo-split.md) §12.3.11). `go run …@latest` and other unpinned forms are not
+  used in any Makefile target or workflow; tool versions obey the same 14-day rule.
+- This rule is owned here. A version target written anywhere else in the spec (07's frontend targets,
+  12's tool versions) is valid only if it satisfies this section on its adoption date.
 
 On 2026-11-04 this holds back: `@babel/core` 8.1.0, `vitest`/`@vitest/coverage-v8` 5.1.0,
 `@vitejs/plugin-react` 6.2.1 (all 2026-11-02), `globals` 17.14.0 (2026-11-01), `bleve/v2` v2.6.2 (2026-11-03).
@@ -250,22 +272,19 @@ go1.27.3 (2026-10-19) is 16 days old and adoptable.
 | vitest 5.1.0, plugin-react 6.2.1 (peer `oxc-transform-react >=0.152.0 <0.157.0`), globals 17.14.0 are days old | npm `time` | release-age rule |
 | jsdom 30.1.x has a known MUI FocusTrap regression | `.github/dependabot.yml:90-104` | E3 |
 | TS 7 has no JS API; lint tooling capped below TS 6.1 | `typescript-eslint` peer range | E1 |
-| react-router 8 removes `react-router-dom`; 121 ABO files | §13.4.1 E4 | migrate with the shell |
+| react-router 8 removes `react-router-dom`; 121 ABO files | §13.4.1 E4 | separate migration series that precedes shell adoption (E4) |
 | `otel/exporters/prometheus` is v0 (minor may break) | v0.69.0 | pin exact minor; bump deliberately |
 | Stale Dependabot ignores block golang 1.27.x and Vite 8 updates, including security updates | `.github/dependabot.yml:30-34`, `:80-89` | remove in the toolchain bump PR (§13.2.2) |
 | `go.dev/dl` stable flag unverifiable from sandbox | §13.2.1 | re-check on a networked machine before the bump |
 | Docker image digests for golang 1.27.3 not resolved | §13.2.2 | resolve at bump time; guard enforces digest equality |
+| The monolithic genproto returns through `cockroachdb/errors` whenever a workspace includes core without core's exclude | 03 §3.2.1 X2 | exclude in `core/go.mod`; `check_genproto_exclude.py` fails on missing **or** stale exclude; throwaway-workspace CI step (03 §3.2 item 1) |
+| Root and `core/go.mod` resolve different versions of shared dependencies (the binary ships versions core CI never tested) | 03 §3.2 item 6 | Dependabot gomod for `/` and `/core` in one group; `check_module_skew.py` (12 S4(c)) |
 
 ## Objections to 03
 
-**O1 — R5's list of forbidden process globals is incomplete for OTel.** R5 forbids
-`otel.SetMeterProvider`/`SetTracerProvider` in core but not `otel.SetLogger`, `otel.SetErrorHandler` or
-`otel.SetTextMapPropagator`, which are equally process-global. ABO calls `otel.SetLogger` today
-(`internal/telemetry/sdklog.go:30`, "process-wide and once"). Proposal: add those three to R5's list, and
-allow exactly one call site in `app` guarded by a process-level `sync.Once` documented as "first `App`
-wins; later `App`s in the same binary log a warning" — the multi-app-in-one-binary case (lowest priority,
-never ruled out) then degrades to shared OTel SDK diagnostics, which is harmless, instead of silently
-re-pointing another app's SDK logger.
+None open. (The former O1 — add `otel.SetLogger`, `otel.SetErrorHandler` and
+`otel.SetTextMapPropagator` to R5 and allow one opt-in call site in `app` — is resolved: 03 R5 v1.2.0+
+lists all three and names `app.InstallProcessDefaults` as the single exception.)
 
 ## Out-of-scope defects found
 
@@ -273,3 +292,18 @@ re-pointing another app's SDK logger.
    requires the full patch and treats a floating minor as an error since 2026-10-10
    (`scripts/check_toolchain_versions.py:37-40`, after runners drifted to 1.27.2 on 2026-10-08). The org
    standard and the repo disagree; the repo's rule is the safer one. Belongs to the standards repo.
+
+## Review history
+
+Round 1 (dispositions in `docs/plans/platform-core/reviews/spec-round-1-dispositions.md`):
+
+- FE-21 — 13 declared the single owner of the release-age rule and version targets (§13.1, §13.4, §13.6); knip dropped from E1's exit condition with the `npm view` evidence.
+- FE-5 — the `CrossOriginProtection` row points at the 05-http-api middleware stage that owns CSRF.
+- SIMP-2 — gin, gin-contrib/gzip and otelgin rows: ABO keeps gin under a permanent `MountLegacy`; core never imports it.
+- SIMP-14 — `google/jsonschema-go` recorded as a conditional kept dependency (licence, version, date checked); 05-config owns the choice.
+- SIMP-25 — E4: the react-router 8 migration is a separate series that precedes shell adoption; counts 121 / 53 corrected with method.
+- MOD-4 — §13.5.2 OTLP row corrected: monolithic genproto is in the module graph, pruned from the build list; exclude lives in `core/go.mod`.
+- MOD-7 — no `core/examples/hello/go.mod` for the guard to read.
+- MOD-11 — skew risk recorded in §13.7.
+- MOD-17 — guard extended to `core/Makefile`, `core/go.mod`, `core/tools/*/go.mod`, `tools/*/go.mod`; the "tools are tier 3" sentence corrected (they are not guarded today).
+- MOD-19 — pinned tools modules for apidiff/gorelease/govulncheck; no `@latest` (§13.6).

@@ -1,11 +1,12 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
 <!-- last-edited: 2026-11-04 -->
 
 # mediacore — platform-core design spec
 
-**Status:** draft under antagonistic review (see `docs/plans/platform-core/reviews/`).
+**Status:** draft under antagonistic review (see `docs/plans/platform-core/reviews/`). Round 1's 192
+findings are dispositioned (`spec-round-1-dispositions.md`) and applied to the files; round 2 follows.
 **Evidence commit:** `748fd787a`. **Raw data:** [`docs/plans/platform-core/raw/`](../../plans/platform-core/raw/00-index.md).
 **Plan:** `docs/plans/platform-core/implementation-plan.md` (written after this spec merges).
 
@@ -13,20 +14,39 @@
 
 audiobook-organizer's generic machinery — storage, durable tasks, events/outbox, config/secrets,
 logging, metrics, HTTP API framework, realtime, authN, namespaced RBAC/audit, library roots,
-AI/download/indexer/metadata/notification contracts, backup, updater, health, a React UI shell and an
-*arr-facade extension point — is extracted into **mediacore** (`github.com/falkcorp/mediacore`), a nested
-Go module at `core/` plus an npm workspace, which a Sonarr-like TV app and a Radarr-like Movies app can
-share. ABO becomes app = core + module `books`, migrated as a strangler fig that ships at every stage;
-core moves to its own repository when the measurable criteria in §12 hold. Composition is explicit
-(`app.New(opts, modules...)`), with no `init()` registration and no process globals, so several apps can
-share one binary later (lowest priority). Details: [01-summary.md](01-summary.md).
+AI/download/metadata/notification contracts and adapters, backup, updater, health and a React UI shell —
+is extracted into **mediacore** (`github.com/falkcorp/mediacore`), a nested Go module at `core/` plus an
+npm workspace, which a Sonarr-like TV app and a Radarr-like Movies app can share. ABO becomes
+app = core + module `books`, migrated as a strangler fig that ships at every stage; its gin router stays
+mounted behind core's HTTP perimeter permanently. Core moves to its own repository when the measurable
+criteria in §12 hold. Composition is explicit (`app.New(opts, modules...)`), with no `init()`
+registration and no process globals in core, so several apps can share one binary later (lowest
+priority). Details: [01-summary.md](01-summary.md).
+
+## Build scope
+
+Core builds only what ABO consumes during the extraction or what core itself needs
+([03 §3.4](03-architecture.md)). These parts are specified as **contracts only** and marked
+**deferred-build** — the extraction plan builds none of them; they are built when the first TV/Movies
+app starts:
+
+| Deferred | Specified in |
+|---|---|
+| `acquire` (quality profiles, custom formats, decision engine, grab decisions, tracked downloads, import hand-off) | [10-tv-movies-proof](10-tv-movies-proof.md) |
+| `integrations/indexer` (Newznab/Torznab) | [05-indexer](05-indexer.md) |
+| `arrfacade` (*arr-v3-compatible API; only the `/api/v3/` path reservation exists meanwhile) | [08-arr-facade](08-arr-facade.md) |
+| Download grab/monitor/pending-recovery pipeline and the adapters other than Deluge | [05-download](05-download.md) |
+| AI usage ledger and monthly cap; notify inbox, per-user subscriptions, personal channels, templating | [05-ai](05-ai.md), [05-notify](05-notify.md) |
+
+The Build column of 03 §3.3 is the authoritative list and is re-checked at every stage gate.
 
 ## Decisions
 
 The superseding decision record is [02-decision-record.md](02-decision-record.md) (replaces
 `docs/architecture/2026-09-18-pluggable-media-platform-decision-record.md`): all 13 old decisions marked
 kept / changed / dropped, 12 new decisions (N1–N12), the eight inherited acceptance gates, and the five old
-open questions. User decisions D1–D9 are fixed inputs.
+open questions. User decisions D1–D9 are fixed inputs. Owner questions still open, and those round 1
+decided as adopted recommendations, are in [14-risks-open-questions.md](14-risks-open-questions.md) §14.3.
 
 ## Reading order
 
@@ -53,7 +73,7 @@ open questions. User decisions D1–D9 are fixed inputs.
 | 5 | Config and secrets | [05-config.md](05-config.md) |
 | 5 | AI providers | [05-ai.md](05-ai.md) |
 | 5 | Download clients | [05-download.md](05-download.md) |
-| 5 | Indexers / search | [05-indexer.md](05-indexer.md) |
+| 5 | Indexers / search (deferred-build) | [05-indexer.md](05-indexer.md) |
 | 5 | Metadata providers and outbound HTTP resilience | [05-metadata.md](05-metadata.md) |
 | 5 | Notifications | [05-notify.md](05-notify.md) |
 | 5 | HTTP API framework, versioning, generated TS client | [05-http-api.md](05-http-api.md) |
@@ -65,11 +85,20 @@ open questions. User decisions D1–D9 are fixed inputs.
 | 5 | Health and diagnostics | [05-health.md](05-health.md) |
 | 6 | App/module SDK and composition | [06-app-sdk.md](06-app-sdk.md) |
 | 7 | UI shell | [07-ui-shell.md](07-ui-shell.md) |
-| 8 | *arr facade | [08-arr-facade.md](08-arr-facade.md) |
+| 8 | *arr facade (deferred-build) | [08-arr-facade.md](08-arr-facade.md) |
 | 9 | ABO on core | [09-abo-on-core.md](09-abo-on-core.md) |
-| 10 | TV and Movies proof sketches (+ ebooks note) | [10-tv-movies-proof.md](10-tv-movies-proof.md) |
+| 10 | TV and Movies proof sketches, `acquire` contract (deferred-build) (+ ebooks note) | [10-tv-movies-proof.md](10-tv-movies-proof.md) |
 | 11 | Multi-app in one binary | [11-multi-app.md](11-multi-app.md) |
 | 12 | Repo split | [12-repo-split.md](12-repo-split.md) |
 | 13 | Toolchain and versions | [13-toolchain.md](13-toolchain.md) |
 | 14 | Risks and open questions | [14-risks-open-questions.md](14-risks-open-questions.md) |
 | 15 | Evidence appendix | [15-evidence-appendix.md](15-evidence-appendix.md) |
+
+## Review history
+
+Round 1 (dispositions in `docs/plans/platform-core/reviews/spec-round-1-dispositions.md`):
+
+- SIMP-1 — "Build scope" section lists the deferred-build parts; section map marks them.
+- SIMP-2 — summary: gin stays mounted permanently behind core's perimeter.
+- SIMP-3 — summary: no process globals **in core**.
+- SEC-19, SEC-20 — decisions paragraph points at 14 §14.3 for open and decided owner questions.
