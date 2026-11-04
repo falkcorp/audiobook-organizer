@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.13.2 -->
+<!-- version: 1.13.3 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1118,7 +1118,7 @@ SPA's settings page keeps calling ABO's gin `GET`/`PUT /api/v1/config`, behind t
   release note already says so.
 - **Class-`i` fields.** M2 leaves them in the blob for M6 (§1.12.2), and HEAD's integration code reads them through
   the façade until F7. Until F7 the handlers read and write them in that remaining blob row with books' frozen codec
-  (`configv0`), and a write needs `ProtectAdmin` when §1.3.7's shape rule classes the row's canonical path (a URL,
+  (the frozen codec), and a write needs `ProtectAdmin` when §1.3.7's shape rule classes the row's canonical path (a URL,
   path or credential field), else the section permission. F4 deletes the handlers for every `k` and `s` key, as the
   native routes replace them; for the class-`i` fields they stay until F7, whose instance routes (05-metadata M1)
   replace them, and F7's PR deletes them with M6.
@@ -1144,8 +1144,8 @@ build already refuses the store before any HEAD row is deleted (05-storage §5S.
 | HEAD's key | `.encryption_key` in the state directory (§1.7, C15's fallback), else HEAD's fallback `<root_dir>/.appdata/` (`settings.go:110-140`) | 32 raw bytes |
 | the gap-fill file | `<db parent>/config.yaml` (`persistence.go:29-38`) | HEAD's gap fill: a file value applies only where the stored value is empty, for the twelve settings and three secrets HEAD's `SaveConfigToFile` manages (`persistence.go:42-104,150-178`) |
 
-HEAD's `Config` struct, codec and cipher are **frozen** into the step's package (`internal/books/cutover/configv0`,
-name coined here; 04 places it), so later changes to ABO's façade cannot change what the step reads. R3 deletes it
+HEAD's `Config` struct, codec and cipher are **frozen** into the step's package (files of `internal/books/cutover`,
+not a sub-package, so 03 §3.5.1's five new paths hold; 04 §8.1), so later changes to ABO's façade cannot change what the step reads. R3 deletes it
 with the other HEAD-format readers.
 
 **M2a — one batch.** From HEAD's effective stored value of each rename-table row (§1.12.3: blob value, gap-filled):
