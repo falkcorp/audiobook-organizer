@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -9,18 +9,21 @@ Evidence commit `748fd787a` (all `path:line` anchors). Raw inputs:
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md) §3, §8, §9;
 [`raw/10-auth-rbac.md`](../../plans/platform-core/raw/10-auth-rbac.md) §6–7;
 [`raw/15-dependencies.md`](../../plans/platform-core/raw/15-dependencies.md) (`go-logr/logr` v1.4.4).
-Normative: [03-architecture](03-architecture.md) R4 (`log` is in the lowest layer), R5 (no `slog.SetDefault`
-in core), §3.6 naming. Config mechanics: [05-config](05-config.md).
+Normative: [03-architecture](03-architecture.md) v1.3.0 R4 (`log` is in **L0** with `entity`, `lifecycle`,
+`version`, `metrics`; the journal implementation `core/internal/logjournal` imports `storage` and `tasks`, so by
+R4's bridge rule it sits at **L4** and only the kernel imports it), R5 (no `slog.SetDefault` in core; R5 binds
+core only, and ABO's logger shim is an allowed books-module value), §3.6 naming. Config
+mechanics: [05-config](05-config.md).
 
 ## Decisions at a glance
 
 | # | Decision |
 |---|---|
-| L1 | `log/slog` is the only logging API. Core hands out `*slog.Logger` values; there is no core `Logger` interface. ABO's printf-style `logger.Logger` (with progress, change recording and cancellation folded in) is not carried into core. |
+| L1 | `log/slog` is the only logging API in core. Core hands out `*slog.Logger` values; there is no core `Logger` interface. ABO's printf-style `logger.Logger` (with progress, change recording and cancellation folded in) is not carried into core; it survives in ABO as a books-module shim over core handles (§11). |
 | L2 | One handler pipeline per `App`; per-module child loggers carry `module=<id>` (and optionally `subsystem=<name>`); levels are settable per module (and per module.subsystem) at runtime. |
 | L3 | Core never calls `slog.SetDefault`, `log.SetOutput`, `otel.SetLogger` or `otel.SetErrorHandler`. `app.InstallProcessDefaults` is the single opt-in helper that does all four for an app that wants it (ABO does). |
-| L4 | Redaction is in the pipeline, once, before fan-out: type-based (`secrets.Value`, `LogValuer`), key-based (deny-list), URL-based (userinfo and credential query params). |
-| L5 | The **system log journal** (persisted operational records ≥ info, queryable, retained N days) is core. The **domain activity feed** stays in the app module. Security events go to core `audit`; task run logs to core `tasks`. |
+| L4 | Redaction is in the pipeline, once, before fan-out: type-based (`secrets.Value`, `LogValuer`), key-based (deny-list), URL-based (userinfo and credential query params) and **path-based** (one-time tokens in URL paths, including core's own invite route). The same `*log.Redactor` redacts trace span attributes ([05-metrics](05-metrics.md) §3, SEC-22). |
+| L5 | The **system log journal** (persisted operational records ≥ info, queryable, retained N days) is core and is readable only with `core:system.manage`. The **domain activity feed** stays in the app module. Security events go to core `audit`; task run logs to core `tasks`. |
 | L6 | The `go-logr/logr` adapter stays, but only as the value-dropping OTel SDK sink inside `app.InstallProcessDefaults`; `logr` is never imported by other core packages. |
 
 ## 1. Purpose & scope
@@ -29,7 +32,8 @@ Construct and own each `App`'s `slog` pipeline: output format and destination, l
 per module.subsystem, changeable live), context-carried attributes, trace correlation, redaction, and
 asynchronous taps that feed the system journal and the realtime log tail. Out of scope: audit records
 ([05-rbac](05-rbac.md)), task run logs and progress ([05-tasks](05-tasks.md)), metrics ([05-metrics](05-metrics.md)),
-the domain activity feed (app module).
+the domain activity feed (app module), the HTTP access-log middleware ([05-http-api](05-http-api.md), which logs
+through this pipeline and so inherits its redaction).
 
 ## 2. Current state at HEAD
 
@@ -40,7 +44,8 @@ the domain activity feed (app module).
 | `StandardLogger` | formats with `fmt.Sprintf`, sanitizes, prefixes `"<subsystem>: "` into the **message** (no attribute), writes via `slog.Default()`; Trace → Debug; progress/changes/cancel are no-ops; optional `ActivityLogWriter` copies info+ lines into the system activity log | `logger/logger.go:105-127`, `logger/standard.go:13-66` |
 | Context helpers | `logging.Info/Warn/Error/Debug(ctx, …)` add `OpContext` attrs and call package-level `slog.*` | `internal/logging/structured.go:47-72`, `opcontext.go:15-28` |
 | Two sanitizers | `logger.sanitizeLogLine` escapes every C0 control and DEL; `logging.Sanitize` escapes only CR and LF | `logger/sanitize.go:40-77`, `logging/sanitize.go:28-43` |
-| App-specific redaction | invite-token path redaction | `logging/redact_path.go:107,165` |
+| Path redaction | `RedactInvitePath`: any `invite`/`invites` segment followed by another segment, at any position, after bounded percent-decoding rounds and dot-walk checks; fails closed to `/[REDACTED]` | `logging/redact_path.go:99-120,165` |
+| Query redaction | gin access-log formatter and recovery mask `?token=` / `?api_key=` (ABS clients put bearer credentials in the URL) | `internal/server/server.go:695-704` |
 | Usage | `logger.New(` 322 calls in 238 non-test files, 210 of them package-level vars (`raw/12` counts 207); `slog.Info/Warn/Error/Debug(` 1,460 calls in 261 files; `slog.Default()` 33 in 15 files; `logging.Info/…(` 231 in 37 files | this writer's grep; `raw/12` §3 |
 | Ratchet | `TestGuard_NoDirectSlogCalls` ceiling per file, may only go down | `internal/logger/slog_guard_ratchet_test.go` |
 | Process globals | `slog.SetDefault` at `cmd/root.go:718` (text handler, **Debug**, stdout + file) and again at `internal/server/server.go:1154` (text handler, **Info**, into the activity writer); stdlib `log.SetOutput(aw)` | `cmd/root.go:698-723`, `internal/server/server.go:1134-1155` |
@@ -48,6 +53,7 @@ the domain activity feed (app module).
 | `log_level` config | not wired to any handler level; only gates gin debug mode and one iTunes branch; the `--log-level` flag writes `AppConfig.LogLevel` directly | `internal/server/server.go:97-99`, `internal/itunes/import.go:269`, `cmd/root.go:649-651` |
 | Activity coupling | the activity `Writer` is an `io.Writer` that tees to stdout and **parses every slog text line** back into `ActivityEntry{Type:"system"}` rows; tier derived from level | `internal/activity/writer.go:92-105,149-215` |
 | System log rows | `syslog:<RFC3339Nano>:<source>` JSON rows; pruned by `log_retention_days` (default 90) together with `operationlog:` rows | `internal/database/pebble_store_activity.go:20-37,434`, `internal/logger/retention.go:28-31,49`, `internal/config/log_retention.go:18` |
+| System log access | `GET /api/v1/system/logs` requires `settings.manage` (admin only by default) | `internal/server/wire_system_routes.go:28,31` |
 | OTel SDK logger | process-wide logr sink that **drops values** (the SDK logs raw env input such as malformed OTLP headers) and rate-limits; installed by `InitOTEL` | `internal/telemetry/sdklog.go:1-110`, `telemetry.go:46-49` |
 | logr | direct dependency only for that sink | `go.mod:14`, `internal/telemetry/sdklog.go:17` |
 
@@ -58,9 +64,9 @@ out-of-scope defects; the design below makes it impossible (one pipeline, sinks 
 
 ## 3. Go API
 
-Package `github.com/falkcorp/mediacore/log`. Imports: stdlib and `go.opentelemetry.io/otel/trace` (span
-context only). Does **not** import `config`, `secrets`, `storage` or `metrics` (R4: `log` is the lowest layer;
-`secrets.Value` redacts itself through `slog.LogValuer`, so `log` needs no import of it).
+Package `github.com/falkcorp/mediacore/log` (L0). Imports: stdlib and `go.opentelemetry.io/otel/trace` (span
+context only). Does **not** import `config`, `secrets`, `storage` or `metrics` (`secrets.Value` redacts itself
+through `slog.LogValuer`, so `log` needs no import of it).
 
 ```go
 package log
@@ -83,7 +89,8 @@ const (
 	KeyTaskKind  = "task_kind" // "books.scan"
 	KeyRunID     = "run_id"
 	KeyRequestID = "request_id"
-	KeyRoute     = "route"
+	KeyRoute     = "route"     // route template, never the raw path
+	KeyPath      = "path"      // raw request path; always passes the path rules
 	KeyUserID    = "user_id"
 	KeyTraceID   = "trace_id"
 	KeySpanID    = "span_id"
@@ -111,7 +118,7 @@ type Settings struct {
 }
 
 type FileSettings struct {
-	Path      string `json:"path" schema:"format=path"`
+	Path      string `json:"path" schema:"format=path" protect:"admin"`
 	MaxSizeMB int    `json:"max_size_mb" schema:"minimum=1"`
 	MaxFiles  int    `json:"max_files" schema:"minimum=1"`
 	TeeStderr bool   `json:"tee_stderr"`
@@ -121,6 +128,7 @@ type JournalSettings struct {
 	Enabled       bool   `json:"enabled"`
 	MinLevel      string `json:"min_level" schema:"enum=debug|info|warn|error"`
 	RetentionDays int    `json:"retention_days" schema:"minimum=0"`
+	PruneEvery    string `json:"prune_every" schema:"format=duration"` // bound by tasks.ScheduleFromConfig
 	QueueSize     int    `json:"queue_size" reload:"restart" schema:"minimum=64"`
 }
 
@@ -145,6 +153,7 @@ func (l *Logging) Root() *slog.Logger                          // module="core"
 func (l *Logging) Module(id string) *slog.Logger               // module=id; panics never: invalid id -> error at kernel validation
 func (l *Logging) Scope(module, subsystem string) *slog.Logger // module + subsystem, own level gate
 func (l *Logging) Handler() slog.Handler                       // for adapters (gin bridge, logr sink)
+func (l *Logging) Redactor() *Redactor                         // the pipeline's redactor, for span redaction (05-metrics)
 func (l *Logging) SetLevels(root slog.Level, per map[string]slog.Level) (unknown []string)
 func (l *Logging) Level(scope string) slog.Level
 
@@ -152,8 +161,9 @@ func (l *Logging) Level(scope string) slog.Level
 // The caller never blocks: when the bounded queue is full the record is dropped and counted.
 func (l *Logging) Tap(name string, min slog.Level, queue int, fn func(ctx context.Context, r Record)) (stop func())
 
-// Dropped reports per-tap drop counts (read by the metrics bridge in the kernel).
-func (l *Logging) Dropped() iter.Seq2[string, uint64]
+// Counters reports per-tap drop counts, records per level/module and redactions per kind
+// (read by the kernel's metrics bridge; log cannot import metrics).
+func (l *Logging) Counters() Counters
 
 func (l *Logging) Close(ctx context.Context) error // drains taps until ctx expires
 
@@ -177,12 +187,38 @@ func AttrsFrom(ctx context.Context) []slog.Attr
 // Redaction.
 type Redactor struct{ /* immutable */ }
 
-func NewRedactor(extraKeys ...string) *Redactor // always includes DefaultRedactKeys
+func NewRedactor(extraKeys []string, extraPaths ...PathRule) *Redactor // always includes the defaults below
 func (r *Redactor) Attr(a slog.Attr) slog.Attr
+func (r *Redactor) URL(raw string) string           // userinfo removed, credential query params replaced, path rules applied
+func (r *Redactor) Path(p string) string            // path rules only
+func (r *Redactor) String(key, value string) string // key deny-list, then URL/path handling for URL-keyed or URL-shaped values
+
+// PathRule redacts a token-bearing path segment. Rules are pure functions of the path (no route table).
+type PathRule struct {
+	Name string                   // "invite", or a module-registered name
+	Fn   func(path string) string // must fail closed (return a redacted path) when unsure
+}
+
+// DefaultPathRules covers core's own token-bearing routes: any "invite"/"invites" segment followed by
+// another segment, at any position, after percent-decoding and dot-walk checks — ABO's RedactInvitePath
+// algorithm (internal/logging/redact_path.go:99-120) moved into core. It covers the core route
+// /api/core/v1/auth/invites/{token} (05-authn) and the books legacy invite routes alike.
+var DefaultPathRules = []PathRule{ /* invite */ }
 
 var DefaultRedactKeys = []string{ // matched case-insensitively after stripping '-', '_', '.'
 	"password", "passwd", "secret", "token", "apikey", "authorization", "cookie", "setcookie",
 	"privatekey", "clientsecret", "credential", "credentials", "accesstoken", "refreshtoken", "sessionid",
+}
+
+// Query parameters whose values are always replaced (also /auth/temp-login?token=, 05-authn).
+var DefaultRedactQuery = []string{
+	"token", "access_token", "api_key", "apikey", "key", "sig", "signature", "password",
+}
+
+// URL-keyed attributes: string values under these keys always get URL and path handling,
+// whatever they look like (a bare path "/api/core/v1/auth/invites/…" is not URL-shaped).
+var URLKeys = []string{
+	"path", "url", "uri", "request_uri", "referer", "url.full", "url.path", "url.query", "http.target", "http.url",
 }
 
 // RotatingFile is the built-in size-based rotator for Output="file" (no third-party dependency).
@@ -194,16 +230,21 @@ func (f *RotatingFile) Close() error
 ```
 
 **Pipeline (normative order):** level gate (per scope, atomic) → append ctx attrs and trace/span ids from
-`trace.SpanContextFromContext(ctx)` → redact (resolve `LogValuer`, deny-listed keys → `"[REDACTED]"`,
-`*url.URL` and URL-shaped string values: userinfo removed, query params named
-`token|access_token|api_key|apikey|key|sig|signature|password` replaced) → fan-out to the primary
-`slog.TextHandler`/`slog.JSONHandler` and to taps. The text and JSON handlers already quote control
-characters in messages and values, so core adds **no** message sanitizer (locked by
-`TestHandler_EscapesControlChars`); ABO's two sanitizers retire.
+`trace.SpanContextFromContext(ctx)` → redact (resolve `LogValuer`; deny-listed keys → `"[REDACTED]"`; for
+`*url.URL` values, values under `URLKeys` and other URL-shaped string values: userinfo removed, query params in
+`DefaultRedactQuery` replaced, path rules applied) → fan-out to the primary `slog.TextHandler`/`slog.JSONHandler`
+and to taps. Because taps receive redacted records, nothing the journal or the realtime tail stores holds a
+token the redactor recognises. The text and JSON handlers already quote control characters in messages and
+values, so core adds **no** message sanitizer (locked by `TestHandler_EscapesControlChars`); ABO's two
+sanitizers retire.
 
 **Levels.** Resolution for a record from scope `m.s`: `Levels["m.s"]` → `Levels["m"]` → root. Each scope's
 gate is a `*slog.LevelVar`; `SetLevels` updates them atomically, so `Enabled` stays one atomic load.
 `LevelTrace` renders as `TRACE` via `ReplaceAttr`.
+
+**Module path rules.** A module whose routes carry tokens in other path shapes registers a `PathRule` through
+`module.Registrar` ([06-app-sdk](06-app-sdk.md)); the kernel builds the `Redactor` with them before any listener
+opens. The invite shape needs no module rule: it is a default (SEC-21).
 
 **Process defaults (in package `app`, not `log`):**
 
@@ -224,14 +265,17 @@ forward the SDK's raw values — the reason the sink exists. `logr` remains in t
 
 ## 4. Lifecycle
 
-1. `app.New`: after `config.Load` (operator layers only), the kernel builds `log.Options` from `core.log`,
-   opens the output (file via `os.Root` on `core.paths.state_dir` when `output=file`; open failure is a boot
-   error), constructs `Logging`. Every later component receives `Root()`, `Scope("core", …)` or
-   `Module(id)` through its constructor or `module.Deps.Log` ([06-app-sdk](06-app-sdk.md)).
-2. Before storage opens, logs go only to the primary output. After storage opens, the kernel starts the
-   journal tap (`core/internal/logjournal`, §5) — records logged before that are not journaled.
+1. `app.New`: after `config.Load` (05-config §1.4 step 3), the kernel builds `log.Options` from `core.log`,
+   builds the `Redactor` (defaults + `core.log.redact_keys` + module path rules), opens the output (file via
+   `os.Root` on `core.paths.state_dir` when `output=file`; open failure is a boot error), constructs `Logging`.
+   Every later component receives `Root()`, `Scope("core", …)` or `Module(id)` through its constructor or
+   `module.Deps.Log` ([06-app-sdk](06-app-sdk.md)). The metrics provider receives `Logging.Redactor()`
+   ([05-metrics](05-metrics.md) §7).
+2. Before storage opens, logs go only to the primary output. After storage and tasks are up, the kernel starts
+   the journal tap (`core/internal/logjournal`, §5) — records logged before that are not journaled.
 3. The kernel subscribes to the `core.log` handle (`OnChange`): `level`, `levels`, `add_source`,
-   `redact_keys`, `journal.min_level`, `journal.retention_days` apply live; format/output/file need a restart.
+   `redact_keys`, `journal.min_level`, `journal.retention_days`, `journal.prune_every` apply live;
+   format/output/file need a restart.
 4. `App.Run` shutdown: `Logging.Close(ctx)` runs **last**, after every other component, draining taps
    within the shutdown budget.
 
@@ -242,20 +286,29 @@ ABO's "activity log" is four things sharing one store and one page; the platform
 | Today | Evidence | Goes to | Why |
 |---|---|---|---|
 | "system" rows derived by parsing slog text lines; `syslog:` rows from `StandardLogger` | `internal/activity/writer.go:149-215`; `pebble_store_activity.go:20-37` | **core `log` journal** (`core/internal/logjournal`, keyspace `c/log/journal/`) | Operational, app-neutral, and needed by every app (Sonarr/Radarr ship the same thing as System → Events). Structured `Record`s replace text parsing. |
-| "audit"-typed rows (guest tokens, email displaced, user merge, admin edits) | `raw/10` §6, `internal/activity/user_data.go:38-52` | **core `audit`** | Security trail; 05-rbac. |
+| "audit"-typed rows (guest tokens, email displaced, user merge, admin edits) | `raw/10` §6, `internal/activity/user_data.go:38-52` | **core `audit`** (new rows only; existing `act:` rows stay books, 05-storage §5S.9.1) | Security trail; 05-rbac. |
 | Operation logs (`operationlog:`) | `logger/retention.go:28-31` | **core `tasks`** run log | Belongs to the run; 05-tasks. |
 | Book-scoped change history, tiers, daily digests, compaction, undo links (`act:` families, 2.5k LOC non-test) | `raw/12` §8, `raw/05-storage.md` rows 55–63 | **books module** (ABO) | Domain feed. The TV/Movies analogue is entity history inside `acquire` (`raw/16` "Implications" row 12) — a different shape — so the §3.4 promotion rule (two real consumers of one shape) is not met. |
 
-The shell's Activity page ([07-ui-shell](07-ui-shell.md)) composes core panes (tasks, system log, audit for
-holders of `core:audit.view`) with module-contributed panes (the books feed).
+The shell's Activity page ([07-ui-shell](07-ui-shell.md)) composes core panes (tasks; the system log for holders
+of `core:system.manage`; audit for holders of `core:audit.view`) with module-contributed panes (the books feed).
 
 **Journal contract.** `logjournal` is a `Tap` at `journal.min_level` (default info) writing
-`c/log/journal/<ULID>` records in batches (≤256 records or 1 s, whichever first). Query:
-`GET /api/core/v1/system/logs?level=&module=&since=&until=&q=&cursor=` (permission `core:system.view`, as for the other system pages in [05-health](05-health.md));
-live tail: realtime topic `core.log.recorded.v1`, permission-filtered ([05-realtime](05-realtime.md)).
-Retention: task `core.log.journal.prune` (daily, `tasks.Parallelism` sequential with reason "single
-range-delete per day bucket"). ABO's existing `syslog:` family is **read in place** by the query adapter as
-a legacy claim and ages out under the same retention (90 days by ABO default); no copy migration.
+`c/log/journal/<ULID>` records in batches (≤256 records or 1 s, whichever first).
+
+- Query: `GET /api/core/v1/system/logs?level=&module=&since=&until=&q=&cursor=`, permission
+  **`core:system.manage`** — the journal holds file paths, user names and provider error text, and today's
+  equivalent route needs `settings.manage`, which only admin holds (`wire_system_routes.go:28,31`). The seed
+  roles `editor` and `viewer` do not reach it ([05-rbac](05-rbac.md), SEC-8).
+- Live tail: realtime topic `core.log.recorded.v1`, permission `core:system.manage`, delivered by
+  [05-realtime](05-realtime.md)'s permission filter.
+- Retention: task `core.log.journal.prune`, `tasks.Parallelism` sequential with reason "single range-delete per
+  day bucket", scheduled by `tasks.Schedule` bound to `core.log.journal.prune_every` through
+  `tasks.ScheduleFromConfig` ([05-tasks](05-tasks.md)); there is no bespoke timer.
+- Legacy rows: ABO's `syslog:` family is **read in place** by the query adapter and ages out under the same
+  retention (90 days by ABO default); no copy migration. Its owner and claim mode (read plus retention deletes,
+  while the previous build may still write it) are recorded once in [05-storage](05-storage.md) §5S.9.1; this
+  file does not restate them.
 
 ## 6. Error semantics
 
@@ -269,6 +322,7 @@ a legacy claim and ages out under the same retention (90 days by ABO default); n
 | Unknown module in `levels` | fail-open: warn, ignored | modules may be disabled (restart-bound enablement, 03 §3.7) |
 | Invalid level string | fail-closed via config validation (`ErrInvalid`) | typo must not silently mean "info" |
 | Redactor panics on a value (`LogValue` panic) | fail-open: attr replaced with `"[REDACTED:panic]"` | never leak, never crash |
+| Path rule cannot decide (over-long or over-escaped path) | fail-closed: path logged as `/[REDACTED]` | ABO's rule (`redact_path.go:99-106`) |
 | `InstallProcessDefaults` twice | `ErrProcessDefaultsTaken` | one owner of process globals |
 
 ## 7. Concurrency contract
@@ -276,27 +330,31 @@ a legacy claim and ages out under the same retention (90 days by ABO default); n
 `Logging` and every `*slog.Logger` it returns are safe for concurrent use. Level gates are `slog.LevelVar`
 (atomic). Each tap owns one goroutine and one bounded channel (`queue` records; default 4096 for the journal);
 `stop()` is idempotent and joins the goroutine. The primary handler writes under the stdlib handler's own
-mutex; `RotatingFile` serializes `Write` and rotation with one mutex. `Close` cancels and drains with the
-caller's deadline. Two `App`s in one process have fully separate pipelines (`TestTwoAppsIsolated`).
+mutex; `RotatingFile` serializes `Write` and rotation with one mutex. `Redactor` is immutable (rebuilt and
+swapped atomically when `redact_keys` changes). `Close` cancels and drains with the caller's deadline. Two
+`App`s in one process have fully separate pipelines (`TestTwoAppsIsolated`).
 
 ## 8. Config keys
 
-| Key | Type | Default | Hot reload? |
-|---|---|---|---|
-| `core.log.level` | enum | `info` | yes |
-| `core.log.levels` | map module[.subsystem] → enum | `{}` | yes |
-| `core.log.format` | enum `text\|json` | `text` | no |
-| `core.log.output` | enum `stderr\|stdout\|file` | `stderr` | no |
-| `core.log.file.path` | path (relative to state dir) | `logs/<app-id>.log` | no |
-| `core.log.file.max_size_mb` | int | `100` | no |
-| `core.log.file.max_files` | int | `7` | no |
-| `core.log.file.tee_stderr` | bool | `true` | no |
-| `core.log.add_source` | bool | `false` | yes |
-| `core.log.redact_keys` | []string (added to defaults; defaults cannot be removed) | `[]` | yes |
-| `core.log.journal.enabled` | bool | `true` | no |
-| `core.log.journal.min_level` | enum | `info` | yes |
-| `core.log.journal.retention_days` | int (0 = keep) | `90` | yes |
-| `core.log.journal.queue_size` | int | `4096` | no |
+| Key | Type | Default | Hot reload? | Protection |
+|---|---|---|---|---|
+| `core.log.level` | enum | `info` | yes | none |
+| `core.log.levels` | map module[.subsystem] → enum | `{}` | yes | none |
+| `core.log.format` | enum `text\|json` | `text` | no | none |
+| `core.log.output` | enum `stderr\|stdout\|file` | `stderr` | no | none |
+| `core.log.file.path` | path (relative to state dir) | `logs/<app-id>.log` | no | admin |
+| `core.log.file.max_size_mb` | int | `100` | no | none |
+| `core.log.file.max_files` | int | `7` | no | none |
+| `core.log.file.tee_stderr` | bool | `true` | no | none |
+| `core.log.add_source` | bool | `false` | yes | none |
+| `core.log.redact_keys` | []string (added to defaults; defaults cannot be removed) | `[]` | yes | none |
+| `core.log.journal.enabled` | bool | `true` | no | none |
+| `core.log.journal.min_level` | enum | `info` | yes | none |
+| `core.log.journal.retention_days` | int (0 = keep) | `90` | yes | none |
+| `core.log.journal.prune_every` | duration | `24h` | yes | none |
+| `core.log.journal.queue_size` | int | `4096` | no | none |
+
+All are operational dials (09 §9.2.8): none changes persisted state shape.
 
 ## 9. Metrics
 
@@ -306,10 +364,10 @@ caller's deadline. Two `App`s in one process have fully separate pipelines (`Tes
 | `mediacore_log_dropped_total` | counter | `sink` ∈ primary, journal, realtime, (registered tap names) |
 | `mediacore_log_journal_write_errors_total` | counter | — |
 | `mediacore_log_journal_lag_seconds` | gauge | — |
-| `mediacore_log_redactions_total` | counter | `kind` ∈ key, url, valuer |
+| `mediacore_log_redactions_total` | counter | `kind` ∈ key, url, path, valuer |
 
-These are recorded by a kernel-side bridge (`log` cannot import `metrics`, R4): the bridge registers
-observable instruments reading `Logging` counters.
+These are recorded by a kernel-side bridge (`log` cannot import `metrics`, R4): the bridge holds the core
+`*metrics.Scope` `mediacore.log` and registers observable instruments that read `Logging.Counters()`.
 
 ## 10. Tests (core must have)
 
@@ -318,6 +376,10 @@ observable instruments reading `Logging` counters.
 | `TestNoGlobals` (archtest, R5) | no `slog.SetDefault`, `log.SetOutput`, `otel.SetLogger`, `otel.SetErrorHandler` in core outside `app.InstallProcessDefaults` |
 | `TestModuleLevels_Live` | `SetLevels` changes `Enabled` for `books` and `books.scanner` without new loggers |
 | `TestRedact_DefaultKeys` / `_NestedGroups` / `_URLUserinfoAndQuery` / `_SecretsValue` | values replaced; `secrets.Value` prints `[REDACTED]` in text and JSON |
+| `TestRedact_CoreInvitePath` | `/api/core/v1/auth/invites/<token>` under `path`, `url.path`, inside a full URL and percent-encoded → token absent in text, JSON, journal record and realtime tail record |
+| `TestRedact_TempLoginTokenQuery` | `/api/core/v1/auth/temp-login?token=<t>` → `token=[REDACTED]` |
+| `TestRedact_PathRuleFailsClosed` | over-long / over-escaped / dot-walked invite paths → `/[REDACTED]` (ABO fixtures ported) |
+| `TestRedactor_SpanAttributes` | `Redactor.String` on `url.full`, `url.query`, `http.target` with `apikey=` / `token=` → redacted (consumed by 05-metrics' span exporter test) |
 | `TestHandler_EscapesControlChars` | CR, LF, ESC in message and attrs cannot forge a line (text and JSON) |
 | `TestTap_NeverBlocks` | `testing/synctest`: stalled tap, 10k logs complete; drops counted |
 | `TestContextAttrs_AndTraceIDs` | `WithAttrs` and active span ids appear on records |
@@ -325,31 +387,37 @@ observable instruments reading `Logging` counters.
 | `TestLevelTraceRendering` | `TRACE` label; trace gated below debug |
 | `TestInstallProcessDefaults_RestoreAndExclusive` | restore works; second install errors; OTel sink drops values |
 | `TestJournal_BatchAndRetention` / `TestJournal_ReadsLegacySyslog` | batching bounds; prune; legacy rows returned by query |
+| `TestJournal_RequiresSystemManage` | `core:system.view`-only principal gets 403 on the query route and no `core.log.recorded.v1` events |
 | `TestRotatingFile_RotatesAndCaps` | size rotation, `max_files` respected, `os.Root` confinement |
 
 ## 11. Migration from ABO
 
-1. **Stage 1 (no call-site churn):** ABO's `main` calls `app.InstallProcessDefaults`. All 1,460 direct
+R5 binds core only (SIMP-3). ABO's logger keeps working as a books-module shim over core handles; moving ABO's
+call sites to injected loggers is an optional ratchet, not an extraction stage.
+
+1. **Stage 1 (required; no call-site churn):** ABO's `main` calls `app.InstallProcessDefaults`. All 1,460 direct
    `slog.*` calls, 33 `slog.Default()` uses, and the 210 package-level `logger.New` vars (which log through
-   `slog.Default()`, `logger.go:107`) now reach the App pipeline. Delete `setupFileLogging`
-   (`cmd/root.go:698-723`), the second `slog.SetDefault` and `log.SetOutput(aw)` (`server.go:1134-1155`), and the
-   activity `Writer`'s line parsing (`internal/activity/writer.go:149-215`) — replaced by the journal. ABO's
-   compat file output: `core.log.output=file`, `core.log.file.path` set by the books module's defaults to
-   keep a file under the state dir (path change release-noted; the old cwd-relative path is not reproduced).
-2. **Stage 2:** `internal/logger` shrinks to a books-side adapter `logger.FromSlog(*slog.Logger) Logger`
-   (printf methods format then log with `subsystem` as an **attribute**; progress/changes/cancel delegate to
-   the `tasks` run handle where one exists). `internal/logging` context helpers become
-   `log.WithAttrs`; `OpContext` becomes task-run attrs set by `tasks`; `Sanitize`/`SanitizeErr` are deleted
-   (handler escaping); `RedactInvitePath` stays app-side, registered as a books redaction hook through
-   `module.Registrar` (route-shape knowledge is the app's).
-3. **Stage 3:** packages receive `*slog.Logger` by injection (`module.Deps.Log`, constructor params). The
-   existing ratchet is re-pointed: it counts `slog.Default()`, package-level `slog.Info/Warn/Error/Debug`
-   and `logger.New(` per file, ceilings only down; at zero, `InstallProcessDefaults` stays only for
-   third-party libraries that log via the default.
+   `slog.Default()`, `logger.go:107`) now reach the App pipeline, including its redaction. Delete
+   `setupFileLogging` (`cmd/root.go:698-723`), the second `slog.SetDefault` and `log.SetOutput(aw)`
+   (`server.go:1134-1155`), and the activity `Writer`'s line parsing (`internal/activity/writer.go:149-215`) —
+   replaced by the journal. ABO's compat file output: `core.log.output=file`, `core.log.file.path` set by the books
+   module's defaults to keep a file under the state dir (path change release-noted; the old cwd-relative path is
+   not reproduced).
+2. **Stage 2 (required; small) — shim.** `internal/logger` becomes the books-side shim
+   `logger.FromSlog(*slog.Logger) Logger` (printf methods format then log with `subsystem` as an **attribute**, so
+   per-subsystem levels work; progress/changes/cancel delegate to the `tasks` run handle where one exists, tied to
+   09 S5). `internal/logging` context helpers become `log.WithAttrs`; `OpContext` becomes task-run attrs set by
+   `tasks`; `Sanitize`/`SanitizeErr` are deleted (handler escaping); `RedactInvitePath` moves into core as the
+   default invite `PathRule` (§3), so no books hook is needed for it.
+3. **Optional ratchet — injection.** The existing ratchet is re-pointed and kept from stage 1: it counts
+   `slog.Default()`, package-level `slog.Info/Warn/Error/Debug` and `logger.New(` per file, ceilings only down.
+   Packages switch to injected `*slog.Logger` (`module.Deps.Log`, constructor params) when touched; at zero,
+   `InstallProcessDefaults` stays only for third-party libraries that log via the default. Listed in the 11 §11.5
+   checklist with the config façade removal (prerequisite only for multi-module binaries).
 4. `internal/telemetry/sdklog.go` and `errorhandler.go` move into `app` (process-defaults helper);
    `InitOTEL`'s automatic install (`telemetry.go:49`) is deleted.
 5. `log_level` / `--log-level` map to `core.log.level`, which now actually sets the handler level (today it
-   does not, §2).
+   does not, §2). `log_retention_days` maps to `core.log.journal.retention_days` (alias, 05-config §1.12.3).
 
 ## 12. Open items
 
@@ -360,11 +428,8 @@ observable instruments reading `Logging` counters.
 
 ## Objections to 03
 
-1. §3.3 describes `log` as "`log/slog` construction, per-module child loggers, redaction". This spec adds the
-   **journal** (persisted system log) as a core concern; its implementation lives in `core/internal/logjournal`
-   (it needs `storage`, which `log` cannot import), and only the `Record`/`Tap` types are in `log`. Not a
-   contradiction, but the §3.3 row should mention it so the package mapping (04) assigns ABO's `syslog:`
-   family and the activity writer's system rows to core rather than to the books module.
+None open. Both earlier items are resolved by 03 v1.3.0: §3.3's `log` row names the journal and
+`internal/logjournal`, and R4's bridge rule places `logjournal` at L4 (COR-19).
 
 ## Out-of-scope defects found
 
@@ -375,3 +440,16 @@ observable instruments reading `Logging` counters.
    are its only readers); `--log-level` writes `config.AppConfig.LogLevel` without `Mutate` (`cmd/root.go:650`).
 3. The update service logs the caller's Access e-mail on refusal (`internal/config/update_service.go:821-823`),
    which the redaction policy here would classify as `sensitive`.
+
+## Review history
+
+- SIMP-3 — §11: stage 3 became an optional ratchet; ABO logger survives as a books-module shim; L1 updated.
+- SIMP-6 — §5, §8: journal prune scheduled by `tasks.ScheduleFromConfig("core.log.journal.prune_every")`; no bespoke timer.
+- SEC-21 — L4, §3 `DefaultPathRules` (invite rule moved into core, covers `/api/core/v1/auth/invites/*`), `URLKeys`, temp-login `token` query; journal and tail need `core:system.manage`; tests.
+- SEC-22 — L4, §3 `Logging.Redactor()`, `Redactor.URL/String` exposed for span-attribute redaction in 05-metrics.
+- SEC-8 (journal side, with SEC-21) — §5: query route and realtime topic moved from `core:system.view` to `core:system.manage`.
+- SEC-6 — §8 Protection column; `core.log.file.path` is `ProtectAdmin`.
+- COR-19 — header and Objections: `log` at L0, `logjournal` at L4 under 03 v1.3.0's R4 bridge rule; objection closed.
+- COR-20 — §9: metrics bridge holds a core `*metrics.Scope`; `Counters()` replaces `Dropped()`.
+- DATA-2 — §5: `syslog:` ownership and claim mode referenced from 05-storage §5S.9.1, not restated; `act:` stays books.
+- OPS-17 — §8: keys classified as operational dials.
