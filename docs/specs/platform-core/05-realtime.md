@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-realtime.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 9f4f16ae-e4d9-4fd1-a6df-e409e07602ad -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -49,8 +49,9 @@ wholesale and generalized from "runs" to catalog topics.
 
 ## 3. Go API
 
-Package `github.com/falkcorp/mediacore/realtime` (layer L6; imports `auth`, `rbac`, `events`,
-`compat`, `log`, `metrics`); implementation `core/internal/sse`. The route
+Package `github.com/falkcorp/mediacore/realtime` (layer L6; imports `auth`, `events`,
+`compat`, `log`, `metrics`; `rbac` types appear only in comments here, so the import block omits
+it, COR4-21); implementation `core/internal/sse`. The route
 `GET /api/core/v1/events` is registered by `core/internal/eventhttp` (L6, imported only by
 `kernel`, 03 §3.3).
 
@@ -69,7 +70,6 @@ import (
 	"github.com/falkcorp/mediacore/compat"
 	"github.com/falkcorp/mediacore/events"
 	"github.com/falkcorp/mediacore/metrics"
-	"github.com/falkcorp/mediacore/rbac"
 )
 
 // There is no realtime.Topic and no realtime permission. A topic is streamed
@@ -295,8 +295,7 @@ legacy projections consume them.
 |---|---|---|---|---|
 | `core.task.run-changed.v1` | 05-tasks | `AnyAuthenticated` + `Visible` = definition `View` | run view with progress, workers, current item; the topic's own `TopicSpec.Redact` = `tasks.RedactRunView`, declared by `tasks`, blanks `RunView.Current` (every worker's current-item label) and any run error text unless the subscriber holds `core:users.view` — the same function runs in the `GET /api/core/v1/tasks/runs[/{id}]` serializer, so REST and stream agree (COR2-2) | stream C `run`, stream B `op.created/updated/current_item/terminal`, stream A `operation.progress/status` |
 | `core.task.log-appended.v1` | 05-tasks | as above | log line | stream A `operation.log`, B `op.log` |
-
-| `core.system.status-changed.v1` | 05-health | `core:system.status` (seeded to `editor`/`viewer`, 05-rbac §4.8) | readiness and maintenance tokens only | stream A `system.status` |
+| `core.system.status-changed.v1` | 05-health | `core:system.status` (seeded to `editor`/`viewer`, 05-rbac §4.8) | readiness and maintenance tokens only | the native successor of stream A's `system.status`; projection A keeps HEAD's frame from books' ticker topic for the whole window (§4.9, COR4-7) |
 | `books.book.changed.v1` | books | `books:view` | `{kind: created|updated|deleted, id}`, `Key` = book ID, `Coalesce: 250ms` | stream A `books.changed` (`book_changes.go:18-32`) |
 
 **Successor scope of HEAD's gate (COR2-2).** HEAD withholds run error text and current-item labels
@@ -372,9 +371,20 @@ once the window and the zero-use gate allow. No clock removes them.
 
 | Legacy URL | Projection |
 |---|---|
-| `GET /api/events` | `core.task.*`, `core.system.status-changed.v1`, `books.book.changed.v1`; frames `data: {"type":…,"id":…,"timestamp":…,"data":…}` with the old type names; `: ping`; no ids; `?operation=` → `key`; `OnClose("shutdown")` emits today's `system.shutdown` frame to every subscriber |
+| `GET /api/events` | `core.task.*`, `books.book.changed.v1` and `books.system.status-ticked.v1` (topics by stage below); frames `data: {"type":…,"id":…,"timestamp":…,"data":…}` with the old type names; `: ping`; no ids; `?operation=` → `key`; `OnClose("shutdown")` emits today's `system.shutdown` frame to every subscriber |
 | `GET /api/v1/operations/events` | the task topics mapped to `event: op.created|op.updated|op.terminal|op.log|op.current_item` |
 | `GET /api/v3/ops/events` | `core.task.run-changed.v1` as `event: run`, ids kept, `event: resync` for the reset control frame |
+
+**Projection A's topics exist at the stage that binds them (COR4-7).** The hub binds projections at
+P7 and an unknown topic aborts boot, so projection A names only topics declared in that build's
+catalog:
+
+| Stages | Projection A topics | `system.status` frame |
+|---|---|---|
+| S6–S7 | `core.task.*` (05-tasks, S5), `books.book.changed.v1` (books' `BookChangeCoalescer` rewritten to publish it, 09 S6), `books.system.status-ticked.v1` | from `books.system.status-ticked.v1`: a books catalog topic (`Realtime`, permission `books:view`) published every 5 s by a books worker that takes over HEAD's ticker, payload unchanged `{books, folders, memory_alloc, goroutines, timestamp}` (`internal/server/server_lifecycle.go:404-441`) |
+| S8 onward | the same | unchanged: `core.system.status-changed.v1` (05-health's component registry, S8) is **not** added to projection A, so stream A's `system.status` payload never changes; the topic is on the native stream only |
+
+`TestProjectionTopicsExistAtStage` runs P7 with the S6 catalog and with the S8 catalog.
 
 Permissions on projections are the native topic permissions (stricter than stream A's "any
 credential", which the 2026-09 pen-test gate MED-2 already narrowed to authenticated,
@@ -501,6 +511,7 @@ Legacy projection use is counted by `compat` (`mediacore_compat_legacy_use_total
 | `TestHub_ExcludePattern` | `topic=*&exclude=core.task.log-appended.v1` carries no log lines; a keyed log stream carries one run's lines (FE2-21) |
 | `TestS5Bridge_LegacyStreamsShowCoreRuns` (books, S5 only) | a run started on the core executor at S5 appears on streams A, B and C in today's framing, under its `LegacyDefID` (FE2-3, COR3-9) |
 | `TestS5Bridge_RepairsRunHiddenFromViewer` (books, S5 only) | a Repairs run is not shown on stream B to a `library.view` subscriber without `users.manage`, stream C re-checks it, a kind without `LegacyDefID` reaches no stream, and stream A carries the run with its labels blanked (SEC3-9) |
+| `TestProjectionTopicsExistAtStage` | P7 binds projection A with the S6 catalog (no `health` status topic) and with the S8 catalog; stream A's `system.status` frame keeps HEAD's payload at both (COR4-7) |
 | `TestLegacyProjection_FramesGolden` (A, B, C) | byte-for-byte legacy framing from one publish, including A's `system.shutdown` |
 | `TestNoGlobals` (archtest) | hub is per-App (R5) |
 
@@ -571,3 +582,8 @@ Round 3 (2026-11-04), findings applied to this file:
 - COR3-15 — the "Successor scope" paragraph moved below the §4.7 table (§4.7).
 - SEC3-9 — the S5 bridge forwards only kinds with a `LegacyDefID`, under that ID, so HEAD's per-event filters apply; never a kind without one; stream A gets `RedactRunView` with a nil checker; `TestS5Bridge_RepairsRunHiddenFromViewer` (§4.9, §10).
 - FE3-6 — the S5–S9 UI keeps its hand-written calls on the legacy paths (§4.9).
+
+Round 4 (2026-11-04), findings applied to this file:
+
+- COR4-7 — projection A's topics are stage-dependent: `books.system.status-ticked.v1` (books worker, HEAD's 5-second payload) feeds `system.status` from S6; `core.system.status-changed.v1` is never added to projection A; `TestProjectionTopicsExistAtStage` (§4.7, §4.9, §10).
+- COR4-21 — unused `rbac` import dropped from the code block and the package description; blank line inside the §4.7 table removed (§3, §4.7).
