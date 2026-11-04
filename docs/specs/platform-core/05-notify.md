@@ -232,7 +232,7 @@ instance's configured `url` exactly as stored, so receivers can reject replays o
 captured delivery replayed with a fresh delivery ID, or sent to another receiver that shares the secret (M6 copies
 the one family secret into every `webhook-<n>` instance, §10), fails verification (SEC-8). **Reserved headers:**
 `headers` can never set `X-Mediacore-*`, `Authorization` or `Content-Type` (compared case-insensitively); a
-`Put`, `Test` or `Importer` write naming one is refused (`ClassInvalid`, nothing written), so a configured header
+`Put`, `Test` or `Importer` write naming one fails settings schema validation (422, nothing written; 05-metadata M1.3), so a configured header
 can never shadow the delivery ID, the signature, the bearer *token* or the body type. Email renders a fixed plain-text
 layout (title, body, links, fields).
 
