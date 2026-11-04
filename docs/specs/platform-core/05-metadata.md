@@ -1019,6 +1019,13 @@ replaces the ordering-by-comment in `cmd/root.go:405-418`. Gate state per `Scope
 
 A `Put` that changes an instance's secret field releases that instance's `ClassAuth` hold (M1.3).
 
+**Task `core.integrations.release-holds`** (owner `providerhttp`; 05-tasks names it as the successor of HEAD's
+`maintenance.throttle-reset`). It lists every active hold of every scope (`Registry.Holds`, quota, auth and
+rate-limit holds alike) and, in a Live run, releases each through `Registry.ReleaseHold`; a Preview run lists
+them and releases nothing (05-tasks' writer rule). It needs `core:integrations.manage`, declares no schedule, and
+touches only `c/providerhttp/holds/`; quota counters and breaker state are left as they are. `DELETE
+.../instances/{id}/hold` (M1.3) is its one-instance form, calling the same `ReleaseHold`.
+
 **Native store (SIMP4-3).** `NativeGateStore` lands with `providerhttp` in R2 and holds every scope of every app:
 
 | Key | Value | Notes |
@@ -1105,6 +1112,7 @@ These series are new with core.
 
 `TestBucketSharedAcrossClientsOfScope`, `TestSetLimitsMutatesInPlace` (two clients, one bucket, after
 change), `TestHoldPersistsAcrossRegistryRestart`, `TestHoldClampedToMaxOnLoad`,
+`TestReleaseHoldsTask_PreviewListsLiveReleases` (Preview lists every hold and writes nothing; Live deletes them),
 `TestHold_EarlySuccessKeepsHold` (synctest), `TestBreaker_LeaseExpiryReopens`
 (synctest; regression for defect 2), `TestBreaker_IgnoresCanceled` (defect 3),
 `TestQuotaTiers` (background stops at Background, interactive continues to Total),
@@ -1132,6 +1140,7 @@ exactly N; R5-4). Store conformance: `providerhttptest.GateStoreSuite(t, factory
 | `internal/security/safehttp` | the dial guard for every `EgressPolicy` (private ranges refused unless `Policy.Private`); package stays for non-integration callers (`internal/covers`) until 04 moves it |
 | Pebble keys `provider_throttle:<id>` (`internal/database/provider_throttle.go:29`), `provider_daily_budget:<id>` (`dailyquota.go:85`) | **dropped** by books' R2 step M6 (M1.10): holds and quota counts are transient and are reset, not converted (D12 (b)), so the first R2 boot starts with no hold and a fresh day's count, and the step deletes HEAD's rows. A provider whose own daily limit is already spent answers with its quota error, and the gate sets the hold again (M2.4). From R2 every hold and counter is in `NativeGateStore` (`c/providerhttp/`, M2.4) |
 | `cmd/root.go:405-418` attach ordering | constructor ordering inside `app.New` |
+| HEAD's `maintenance.throttle-reset` op | the core kind `core.integrations.release-holds` (M2.4); the HEAD definition ID is renamed through books' kind-rename map (05-tasks) |
 | `/api/v1/metadata/providers/throttles` (`internal/server/handlers/metadata/provider_throttles.go:43`) | `GET .../instances/{id}/health` (`Hold`) and `DELETE .../hold`; the old path is deleted in R2, and the SPA and the first-party scripts switch in the same release (09) |
 
 ### M2.11 Open items
@@ -1581,5 +1590,5 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
   after M2, `Local` bound to the stored origin and `OperatorSecretOrigin` for the four operator-secret pairs,
   `auth_ref` rows get a key copy; the auth-off writability is not carried). M2.10: throttle and quota rows dropped
   (D12 F2); the throttles route is deleted, not aliased. M1.9 and M2.9 reduced to the native tests plus migration
-  tests. Stage references re-keyed to R2. Consistency pass: M1.4 cites 05-config §1.4 step 7; M1.10 states that M2 leaves the class-`i` blob fields and M6 deletes the blob (lead decision L10); the Deluge daemon password gets its own secret `integrations.download.deluge.daemon_password`; `pcache:` is a plain books family; D12's answers cited as D12 (a)–(d).
+  tests. Stage references re-keyed to R2. Consistency pass: M1.4 cites 05-config §1.4 step 7; M1.10 states that M2 leaves the class-`i` blob fields and M6 deletes the blob (lead decision L10); the Deluge daemon password gets its own secret `integrations.download.deluge.daemon_password`; `pcache:` is a plain books family; M2.4 declares the task `core.integrations.release-holds` (HEAD's `maintenance.throttle-reset`, 05-tasks) with its test and migration row; D12's answers cited as D12 (a)–(d).
 
