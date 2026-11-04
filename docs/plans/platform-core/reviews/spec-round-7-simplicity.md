@@ -18,7 +18,7 @@ R6-3 (one `legacy` package outside the API promise) and the round-6 lead decisio
 stays a v1 field typed `legacy.Stores`) are not attacked. The findings concern how they were written down.
 Nothing below asks for removed machinery back.
 
-Revision reviewed: 03 v1.9.1, 05-storage v1.7.1, and the other files as of commit `15c1d5f6b`. Line numbers
+Revision reviewed: 03 v1.9.1, 05-storage v1.7.1, and the other files as of commit `aa42a71cb`. Line numbers
 refer to that revision. Code anchors are at `748fd787a`.
 
 **Counts:** 0 BLOCKER, 3 MAJOR, 8 MINOR.

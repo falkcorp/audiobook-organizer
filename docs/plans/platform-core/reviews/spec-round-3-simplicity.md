@@ -15,7 +15,7 @@ Lens: over-engineering, YAGNI, duplicated mechanisms, scope creep. This round ha
 New complexity counts as a finding only when a simpler design meets every goal and constraint, and the
 finding names the trade.
 
-Spec line numbers are from the files at this review (03 v1.5.1, 09 as checked out at `108f3e462`). Code
+Spec line numbers are from the files at this review (03 v1.5.1, 09 as checked out at `d45e3ec88`). Code
 anchors are at `748fd787a`.
 
 **Counts:** 0 BLOCKER, 4 MAJOR, 8 MINOR.

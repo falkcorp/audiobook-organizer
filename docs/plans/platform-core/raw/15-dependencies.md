@@ -5,7 +5,7 @@
 
 # 15 - Dependencies: current vs latest stable
 
-Checked 2026-11-03. Repo HEAD in this checkout is `57fd77ffc` (the scout brief named `748fd787a`; the figures below come from this checkout's `go.mod` and `web/package.json`). Latest-version sources: Go module proxy (`proxy.golang.org`) for Go modules, npm registry for npm packages. `go.dev/dl` is blocked by the egress proxy (HTTP 403 on CONNECT), so the Go toolchain figure is taken from the module proxy's `golang.org/toolchain` index instead.
+Checked 2026-11-03. The figures below come from `go.mod` and `web/package.json` at `748fd787a`. Latest-version sources: Go module proxy (`proxy.golang.org`) for Go modules, npm registry for npm packages. `go.dev/dl` is blocked by the egress proxy (HTTP 403 on CONNECT), so the Go toolchain figure is taken from the module proxy's `golang.org/toolchain` index instead.
 
 ## Go toolchain
 

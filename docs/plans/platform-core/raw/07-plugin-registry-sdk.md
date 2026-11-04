@@ -5,7 +5,7 @@
 
 # 07 - Plugin / registry / SDK inventory
 
-Evidence commit: `748fd787a` (checked-out HEAD `57fd77ffc` only adds `docs/plans/platform-core/STATE.md`; code anchors identical). Anchors are `path:line`.
+Evidence commit: `748fd787a`. Anchors are `path:line`.
 
 ## 0. Summary
 

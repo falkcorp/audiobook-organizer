@@ -21,7 +21,7 @@ R7-1..R7-8 are binding. Where a finding touches one of them, it either shows the
 every property the resolution states and changes only how it is carried out. Nothing below asks for removed machinery
 back.
 
-Revision reviewed: commit `f33ec2ef0` (03, 05-storage, 05-backup, 05-config, 05-library, 06 and 09 as of the round-7
+Revision reviewed: commit `7fdf4dba9` (03, 05-storage, 05-backup, 05-config, 05-library, 06 and 09 as of the round-7
 integration pass). Line numbers refer to that revision. Code anchors are at `748fd787a`.
 
 **Counts:** 0 BLOCKER, 2 MAJOR, 8 MINOR.

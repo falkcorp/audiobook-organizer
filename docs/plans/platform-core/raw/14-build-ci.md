@@ -5,7 +5,7 @@
 
 # Raw findings 14: build, CI, release, tooling
 
-Anchors are repo-relative `path:LINE` at commit 748fd787a (checkout is 57fd77ffc, two docs-only commits ahead; build/CI files unchanged).
+Anchors are repo-relative `path:LINE` at commit 748fd787a.
 
 ## 1. Makefile (`Makefile`, 961 lines, v2.49.4)
 

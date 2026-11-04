@@ -5,7 +5,7 @@
 
 # 08 - Prior art digest (pluggable-media-platform docs, layering, decisions)
 
-Evidence commit: `748fd787a` (checked-out HEAD `57fd77ffc` only adds `docs/plans/platform-core/STATE.md`; code anchors identical). Doc anchors are `docs/...:line`; code anchors are `path:line`.
+Evidence commit: `748fd787a`. Doc anchors are `docs/...:line`; code anchors are `path:line`.
 
 Sources digested:
 

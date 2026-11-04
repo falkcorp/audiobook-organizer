@@ -6,9 +6,9 @@
 # Platform-core raw data — index
 
 **Evidence commit:** `748fd787a6d922c63dfb3bbb09da578a1418632e` (main on 2026-11-03).
-Some files cite `57fd77ffc`; that commit is `748fd787a` plus documentation-only commits on
-the spec branch (it adds `docs/plans/platform-core/STATE.md` only), so every code anchor is identical
-at both SHAs.
+Every code anchor is at this commit. Some scouts worked from a documentation-only descendant on the
+spec branch (it added only `docs/plans/platform-core/STATE.md`), so their anchors are identical; that
+descendant was later rebased away and its citations now read `748fd787a`.
 
 All files were produced by read-only scouts, normalized to repo-relative paths, and passed the
 per-commit confidentiality scrub before commit. Classifications marked "judgment" are the scout's,

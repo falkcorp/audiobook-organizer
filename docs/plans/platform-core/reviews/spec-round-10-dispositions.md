@@ -101,7 +101,7 @@ the resolutions below fix each one by removing a mechanism rather than adding on
 | SEC10-1 | BLOCKER | H1's ambient carry-over un-confines worker-scoped keys | Accepted (resolution R10-2) | See resolution. |
 | SEC10-2 | MAJOR | `Registry.Test` is outside SEC9-6 | Accepted (resolution R10-10) | See resolution. |
 | SEC10-3 | MAJOR | Auth-off ABO installs lose integration configuration from S4 r2, unrecorded | Accepted (resolution R10-10) | See resolution. |
-| SEC10-4 | MAJOR | SEC9-14 not fixed. The hotfix tracker under-specifies three early fixes | Accepted | Already fixed: the six `todo.d` entries now say "implement 05-authn §11.1 item N exactly" and restate nothing (commit 1ef14798d), as §11.1 requires. |
+| SEC10-4 | MAJOR | SEC9-14 not fixed. The hotfix tracker under-specifies three early fixes | Accepted | Already fixed: the six `todo.d` entries now say "implement 05-authn §11.1 item N exactly" and restate nothing (commit 6fc137b59), as §11.1 requires. |
 | SEC10-5 | MINOR | `HEADAuthOffWritable`'s predicate is ambiguous for the Basic password | Accepted | Reviewer's concrete fix applied as written, unless a round-10 resolution supersedes it. |
 | SEC10-6 | MINOR | When the Basic gate keys lose HEAD's auth-off rule is stated three ways | Accepted | Reviewer's concrete fix applied as written, unless a round-10 resolution supersedes it. |
 | SEC10-7 | MINOR | H1's residual and its release note | Accepted | Reviewer's concrete fix applied as written, unless a round-10 resolution supersedes it. |

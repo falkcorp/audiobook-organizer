@@ -5,7 +5,7 @@
 
 # 06 - Task / job system (ops) inventory
 
-Evidence commit: `748fd787a` (the checked-out HEAD `57fd77ffc` only adds `docs/plans/platform-core/STATE.md` on top, so every code anchor below is identical at both). Anchors are `path:line`.
+Evidence commit: `748fd787a`. Anchors are `path:line`.
 
 ## 0. Summary: there are four coexisting generations of "job"
 

@@ -5,7 +5,7 @@
 
 # 04 - `database.Store` interface (raw scout data)
 
-Anchor commit: HEAD `57fd77ffc` (code-identical to the briefed `748fd787a`; the two intervening commits only touch `docs/plans/platform-core/STATE.md`). All anchors are `path:line` at that commit. Counts were produced programmatically with a go/ast walk that resolves embedded interfaces recursively inside `internal/database` (non-test files); the ad-hoc tool lives outside the repo and is not committed.
+Anchor commit: `748fd787a` (the code the anchors were taken from; a docs-only commit at the time of writing was later rebased away). All anchors are `path:line` at that commit. Counts were produced programmatically with a go/ast walk that resolves embedded interfaces recursively inside `internal/database` (non-test files); the ad-hoc tool lives outside the repo and is not committed.
 
 ## 1. Headline numbers
 

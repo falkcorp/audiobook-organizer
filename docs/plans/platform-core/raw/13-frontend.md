@@ -5,7 +5,7 @@
 
 # Raw findings 13: frontend (web/)
 
-Anchors are repo-relative `path:LINE`, taken at commit 748fd787a (the checkout is 57fd77ffc, two docs-only commits ahead; `web/` is identical).
+Anchors are repo-relative `path:LINE`, taken at commit 748fd787a.
 All counts are from `find`/`wc -l` over `web/src` on that tree.
 
 ## 1. Stack and pinned versions (`web/package.json`)

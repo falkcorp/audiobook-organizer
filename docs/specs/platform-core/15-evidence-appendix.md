@@ -6,7 +6,7 @@
 # 15 — Evidence appendix
 
 **Evidence commit:** `748fd787a6d922c63dfb3bbb09da578a1418632e`. Every `path:line` anchor in this spec
-refers to that commit unless it says otherwise (a few cite `57fd77ffc`, which is the same code plus
+refers to that commit unless it says otherwise (a few originally cited a docs-only descendant, the same code plus
 documentation-only commits).
 
 **Raw data:** [`docs/plans/platform-core/raw/00-index.md`](../../plans/platform-core/raw/00-index.md) —

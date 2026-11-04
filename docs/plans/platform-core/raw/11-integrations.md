@@ -5,7 +5,7 @@
 
 # 11 - External integrations inventory
 
-Anchors are against the checked-out HEAD `57fd77ffc` (the brief said `748fd787a`; the working tree is at `57fd77ffc`, a docs-only commit later, so source anchors should be equivalent but re-verify if the SHA matters). LOC = non-test Go lines (`wc -l`), rounded.
+Anchors are against `748fd787a` (the anchors were taken from a docs-only descendant with identical code, later rebased away). LOC = non-test Go lines (`wc -l`), rounded.
 
 ## 1. Summary table
 

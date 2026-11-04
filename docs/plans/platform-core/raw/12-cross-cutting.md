@@ -5,7 +5,7 @@
 
 # 12 - Cross-cutting subsystems inventory
 
-Anchors are against the checked-out HEAD `57fd77ffc` (the brief said `748fd787a`; the tree is at `57fd77ffc`, a later docs-only commit). LOC = non-test Go lines.
+Anchors are against `748fd787a`. LOC = non-test Go lines.
 
 ## 1. Summary table
 

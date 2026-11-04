@@ -5,7 +5,7 @@
 
 # 05 - Storage engines, Pebble keyspaces, migrations, backup (raw scout data)
 
-Anchor commit: HEAD `57fd77ffc` (code-identical to the briefed `748fd787a`; the two newer commits only add `docs/plans/platform-core/STATE.md`). All anchors `path:line`. Paths are relative or default names only.
+Anchor commit: `748fd787a`. All anchors `path:line`. Paths are relative or default names only.
 
 ## 1. Storage engines actually in use
 
