@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-realtime.md -->
-<!-- version: 1.7.1 -->
+<!-- version: 1.7.2 -->
 <!-- guid: 9f4f16ae-e4d9-4fd1-a6df-e409e07602ad -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -289,7 +289,12 @@ backdrop from it (FE-10). v1.0.0's `core.notify.v1` is gone: the notify inbox is
 The shell's realtime transport (07 §7.9) is a `fetch()` + `ReadableStream` SSE reader, because
 native `EventSource` cannot do what the UI needs: it sends `Last-Event-ID` only on its own fixed
 `retry:` reconnect (so backoff and resume exclude each other), and on a non-200 response or a
-cross-origin SSO redirect it fails with no status. The server guarantees, and the client relies on:
+cross-origin SSO redirect it fails with no status. Two clients implement this contract in turn (§11):
+from the events and realtime flip F6, ABO's rewritten `web/src/services/eventSourceManager.ts` implements
+items 1–6 in **per-tab mode** (item 7's last resort: one stream per visible tab, closed when the tab is
+hidden) and exposes the `useTopic`/`useResync` signature below; from shell adoption (07 §7.19 step 4: F9,
+else R3) `@mediacore/shell`'s client replaces it and adds item 7's leader election. The server guarantees,
+and the client relies on:
 
 1. **Visible refusals.** Every refusal is an HTTP status with a problem+json body before the first
    byte of the stream (§4.1); 429 and 503 carry `Retry-After`. 401 codes are the session-gone codes
@@ -327,7 +332,7 @@ cross-origin SSO redirect it fails with no status. The server guarantees, and th
      that shows a run's log opens its own keyed stream
      (`topic=core.task.log-appended.v1&key=<run id>`, counted in the same bucket) or reads
      `GET /api/core/v1/tasks/runs/{id}/log` over REST.
-   - **Test.** 07's `tabs.spec.ts` runs against a non-loopback address (the server bound to the
+   - **Test.** 07's `tabs.spec.ts` (from shell adoption, which brings the election) runs against a non-loopback address (the server bound to the
      runner's LAN interface), where `isSecureContext` is false, and asserts the `BroadcastChannel`
      election and a single open stream.
 
@@ -436,7 +441,9 @@ HEAD's three stream URLs (`/api/events`, `/api/v1/operations/events`, `/api/v3/o
 successor URL and no projection: their only consumer is the embedded SPA, which leaves each stream in the PR
 that deletes it. The run streams B and C go with HEAD's engine in the tasks flip F5, whose PR switches the
 Activity page to polling `GET /api/core/v1/tasks/runs`; hub A goes in the events and realtime flip F6, whose PR
-moves the whole SPA, the Activity page included, to `/api/core/v1/events`.
+moves the whole SPA, the Activity page included, to `/api/core/v1/events` by **rewriting** the SPA's own
+client, `eventSourceManager`, onto it (IMPL-6; 07 §7.9.2 owns the UI side). `@mediacore/shell` does not
+exist before shell adoption (07 §7.19 step 4: F9, else R3), so F6 imports nothing from it.
 
 | ABO today | Becomes | Deleted by |
 |---|---|---|
@@ -446,7 +453,7 @@ moves the whole SPA, the Activity page included, to `/api/core/v1/events`.
 | `opaccess.Repairs.ForStream`/`StreamOpen` | the catalog `Visible` of the repairs topics (books) + `auth.Service.Revalidate` | F5 |
 | `withUserText` (`opsv3/events.go:609-616`) | `tasks.RedactRunView` as the `TopicSpec.Redact` of `core.task.run-changed.v1` and the same function in the REST run serializer (§4.7) | F5 |
 | `openOperationsSSE` (`api.ts:733-740`) and `useOperationsStore`'s SSE (stream B's client) | the Activity page polls `GET /api/core/v1/tasks/runs` (05-tasks 5T.3.10) until F6, because HEAD's run streams are gone and the hub is not yet wired | F5 |
-| `web/src/services/eventSourceManager.ts` (hub A's client) | `@mediacore/shell`'s `useTopic<T>(topic, onEvent, {key})` and `useResync(handler)` (07 §7.4.2, §7.9; one signature, FE2-20) over the fetch-based reader of §4.8, one stream per browser per app; the Activity page moves from polling to the stream in the same PR | F6 |
+| `web/src/services/eventSourceManager.ts` (hub A's client) | **F6: rewritten in place** onto `/api/core/v1/events` and the native topics: a fetch-based reader implementing §4.8 items 1–6 (visible refusals with problem+json and `Retry-After`, `Last-Event-ID` on every reconnect, 3 s → 60 s backoff with jitter and no give-up, `redirect: "manual"` with the `opaqueredirect` → `ApiAuthRedirectError` rule, unnamed frames, `core.stream.reset.v1` resync and `core.stream.closed.v1` reconnect) in per-tab mode (item 7's last resort), exposing `useTopic<T>(topic, onEvent, {key})` and `useResync(handler)` (07 §7.4.2, §7.9; one signature, FE2-20); the Activity page moves from polling to the stream in the same PR. **Shell adoption (07 §7.19 step 4: F9, else R3):** replaced by `@mediacore/shell`'s client with the same hook signature, which adds item 7's one stream per browser per app; the rewritten file is deleted in that PR | rewritten F6; deleted at shell adoption |
 
 ## 12. Open items
 
@@ -534,3 +541,7 @@ D10–D12 revision (2026-11-04):
   streams B and C by the tasks flip F5, hub A and the SPA's `eventSourceManager` by the events and realtime
   flip F6; between them the Activity page polls the native runs route). Consistency pass: §11 deletes each
   SPA stream client in the flip that deletes its stream (stream B's client in F5, `eventSourceManager` in F6).
+
+Round 13 (2026-11-04): IMPL-6. §4.8 and §11: F6 rewrites ABO's `eventSourceManager` onto `/api/core/v1/events`
+(items 1–6 in per-tab mode, the `useTopic`/`useResync` signature), and `@mediacore/shell`'s client replaces it at
+shell adoption (07 §7.19 step 4: F9, else R3), adding the per-browser leader election.
