@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.6.1 -->
+<!-- version: 1.7.0 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -68,7 +68,9 @@ HTTP routes (§4.7, §7.6) are registered by `core/internal/rbachttp` and `core/
 (L6, imported only by `kernel`, 03 §3.3). Roles are read and written through the SDK interface
 `rbac.Store` (§3.4, R4-1): the native implementation `core/internal/rbacstore` keeps them in the
 core keyspace `c/rbac/`; ABO's `books` module supplies a legacy implementation over its own role rows
-(§6.3), so no storage grant is involved during the extraction. The compiled checker and the two
+(§6.3), so no storage grant is involved during the extraction. What only such a legacy store can give
+meaning to — its optional capabilities and their conformance cases — is not in `rbac` at all but in
+`legacy` (resolution R6-3, §3.4), the one core package outside the API promise. The compiled checker and the two
 privileged checker constructors live in `core/internal/authz` (layer L4, the implementation of
 `rbac`), so apps cannot reach them (§3.4, SEC-26). `authz` imports `rbac`; `rbac` imports nothing
 from `authz`: the kernel injects `authz.Compile` as `rbac.Deps.Compile` (COR4-12). `rbac` also imports the leaf
@@ -76,14 +78,19 @@ from `authz`: the kernel injects `authz.Compile` as `rbac.Deps.Compile` (COR4-12
 at 09 S8 (COR2-9). Package `github.com/falkcorp/mediacore/audit` (layer L4; imports `entity`,
 `storage`, `log`, `metrics`; never `tasks` — the kernel registers its prune job).
 
-**Landing (COR2-9, COR4-11).** The leaf types `Permission`, `Requirement`, `Need`, `AllOf`, `AnyOf`,
-`Public`, `AnyAuthenticated`, `Delegated` (§3.1), `RoleName` (§3.3) and the `Checker` interface (§3.4;
-it names nothing beyond these leaf types) land at 09 S2 with `httpapi`, whose
-`Route.Perm`/`LegacyRoute.Perm` need them, whose S2 manifest annotates 36 routes `AnyAuthenticated`,
-and whose `auth` leaf (`Principal.Perms`, `User.Roles`) names `Checker` and `RoleName`; this list is
-the one 04 §8.1, 06 §6.4.10 and 05-http-api §3 repeat. The catalog, roles, `Store`, `Service`, the
-checker implementation, the legacy requirements `LegacyAtom`/`LegacyCheck` (§3.1; they need the
-catalog) and `audit` land at S4.
+**Landing (COR2-9, COR4-11, COR6-1).** The leaf types `Permission`, `Requirement`, `Need`, `AllOf`, `AnyOf`,
+`Public`, `AnyAuthenticated`, `Delegated`, `LegacyAtom`, `LegacyCheck` (§3.1), `RoleName` (§3.3) and the
+`Checker` interface (§3.4; it names nothing beyond these leaf types) land at 09 S2 with `httpapi`, whose
+`Route.Perm`/`LegacyRoute.Perm` need them, whose S2 manifest annotates 36 routes `AnyAuthenticated`
+and records `LegacyAtom(atom)` for every `s.perm(atom)` route (05-http-api §8.1), and whose `auth` leaf
+(`Principal.Perms`, `User.Roles`) names `Checker` and `RoleName`; this list is the one 04 §8.1, 06
+§6.4.10 and 05-http-api §3 repeat. `LegacyAtom` and `LegacyCheck` are S2 leaves because their
+constructors only **record** the atom (and the read-side permission); what needs the catalog is their
+**evaluation** (`Catalog.Legacy`, `Catalog.LegacyReach`), which only the S4 checker performs, and only
+for a mount whose stage 13 runs (`LegacyAuthCore`, S4 r2): at S2–S4 r1 `httpapi` accepts them only in a
+`MountLegacy` manifest under `LegacyAuthGin`, where stages 12–13 are off, and from S4 `Freeze` rejects a
+manifest atom the catalog's legacy aliases do not name. The catalog, roles, `Store`, `Service`, the
+checker implementation and `audit` land at S4.
 
 ### 3.1 Scopes and requirements
 
@@ -141,17 +148,19 @@ func Delegated(reason string) Requirement
 //   - the auth-disabled principal: iff it holds the atom's canonical
 //     expansion (Catalog.Legacy), because HEAD's s.perm and op checks pass
 //     every request with auth off;
-//   - a key read from a legacy row with no extension record (a pre-core
-//     key, CheckerInput.LegacyKey): iff the atom is in the key's stored atoms
-//     (or the list is empty, LegacyFullScope) AND the owner's roles satisfy
-//     Catalog.LegacyReach(atom) — HEAD's role ∩ key semantics
-//     (middleware/auth.go:364-365,405-421) with the row rule's dominance on
-//     the role side (SEC5-7);
+//   - a key whose scopes come from its legacy row (a pre-core abk_ key with
+//     no extension record, or one whose record holds no canonical scopes,
+//     CheckerInput.LegacyKey; 05-authn §4.4, SEC6-2): iff the atom is in the
+//     key's stored atoms (or the list is empty, LegacyFullScope) AND the
+//     owner's roles satisfy Catalog.LegacyReach(atom) — HEAD's role ∩ key
+//     semantics (middleware/auth.go:364-365,405-421) with the row rule's
+//     dominance on the role side (SEC5-7);
 //   - every other principal: iff it satisfies Catalog.LegacyReach(atom)
 //     (resolution R4-3).
-// Accepted only in MountLegacy manifests, by rbac.Require and by tasks'
-// adapted legacy definitions; Handle rejects it (an unknown atom is a boot
-// error at Freeze).
+// The constructor only records the atom and is an S2 leaf; the rules above
+// are the S4 checker's (COR6-1). Accepted only in MountLegacy manifests, by
+// rbac.Require and by tasks' adapted legacy definitions; Handle rejects it
+// (an atom no legacy alias names is a boot error at Freeze, from S4).
 func LegacyAtom(atom string) Requirement
 
 // LegacyCheck is the requirement of a legacy in-handler auth.Can(ctx, atom)
@@ -267,18 +276,29 @@ type Role struct {
 	PendingSeed     []Permission // restricted seed additions held for admin acceptance (§4.8, SEC-25)
 	Added           []Permission // custom roles: the role's whole set (patterns allowed); on seed roles the operator diff is deferred-build (§3.6)
 	Locked          bool         // "admin": immutable, undeletable, outside the seed merge (§4.8)
-	// Suspended: the store found the role's native-only data stale against its
-	// stored row (an older build changed the row, §6.3); while set, the role
-	// grants only what the stored row grants on an older build, until an admin
-	// re-confirms or discards it (ReconfirmRole). Reported by the Store.
-	Suspended       bool
+	// Legacy is the role's legacy-only state, nil from a native store (03 §3.3
+	// "Legacy-only identifiers", SIMP6-7). Its type stays in rbac because
+	// legacy imports rbac and rbac can never name a legacy type.
+	Legacy          *RoleLegacyState
 	CreatedAt, UpdatedAt time.Time
 	Version         int64
 	// Removed and Tombstone are deferred-build members (§3.6).
 }
 
+// RoleLegacyState is what only a legacy role store reports (§6.3).
+type RoleLegacyState struct {
+	// Suspended: the store found the role's native-only data stale against
+	// its stored row (an older build changed the row); while set, the role
+	// grants only what the stored row grants on an older build, until an admin
+	// re-confirms or discards it (ReconfirmRole).
+	Suspended bool
+}
+
+// Suspended reports r.Legacy != nil && r.Legacy.Suspended.
+func (r *Role) Suspended() bool
+
 // Permissions returns the role's effective patterns: SeedPermissions for a
-// seed role, Added for a custom role; for a Suspended role, the translation of
+// seed role, Added for a custom role; for a suspended role, the translation of
 // the stored legacy atoms (§6.3). PendingSeed is not effective until accepted.
 func (r *Role) Permissions() []Permission
 
@@ -325,7 +345,7 @@ func (s *Service) CreateRole(ctx context.Context, actor Checker, in RoleInput) (
 func (s *Service) UpdateRole(ctx context.Context, actor Checker, id RoleName, in RoleInput, ifVersion int64) (*Role, error)
 func (s *Service) DeleteRole(ctx context.Context, actor Checker, id RoleName, ifVersion int64) error
 func (s *Service) AcceptSeed(ctx context.Context, actor Checker, id RoleName, ifVersion int64) (*Role, error) // apply PendingSeed; allowed on seed roles (§4.8)
-func (s *Service) ReconfirmRole(ctx context.Context, actor Checker, id RoleName, accept bool, ifVersion int64) (*Role, error) // clear Suspended: re-apply (accept) or discard the stale native-only data (§6.3)
+func (s *Service) ReconfirmRole(ctx context.Context, actor Checker, id RoleName, accept bool, ifVersion int64) (*Role, error) // clear Suspended through the store's legacy.ExtConfirmer: accept re-applies the native-only data; discard also writes the translation of the row's atoms as the role's set, in the same batch (§6.3, SIMP6-4)
 // ResetRole is a deferred-build member (§3.6).
 
 // CanAssign reports whether actor may give or take away roles (actor must hold
@@ -348,11 +368,12 @@ type CheckerInput struct {
 	Roles       []RoleName
 	Scopes      []Permission // key scopes; nil = role permissions only (sessions, LegacyFullScope keys)
 	Interactive bool         // auth.Method.Interactive() of the credential (§4.4)
-	// LegacyKey: the key was read from a legacy row with no extension record
-	// (05-authn §4.4). LegacyAtoms is its stored atom list (empty =
-	// LegacyFullScope); Scopes then holds the atoms' canonical expansion,
-	// which native requirements read, while LegacyAtom/LegacyCheck read
-	// LegacyAtoms against the role-only set (SEC5-7).
+	// LegacyKey: the key's scopes come from its legacy row — no extension
+	// record, or a record holding no canonical scopes (scopes_source is not
+	// "canonical"; 05-authn §4.4, SEC6-2). LegacyAtoms is its stored atom
+	// list (empty = LegacyFullScope); Scopes then holds the atoms' canonical
+	// expansion, which native requirements read, while LegacyAtom/LegacyCheck
+	// read LegacyAtoms against the role-only set (SEC5-7).
 	LegacyKey   bool
 	LegacyAtoms []string
 }
@@ -408,30 +429,49 @@ var (
 // the conformance suite every implementation runs. Every write takes the
 // caller's *storage.Batch, never a copy (COR2-12), and stages an Expect on
 // the role's Version. The interface holds the native contract only; what
-// only a pre-core app's store can give meaning is an optional interface
-// below, detected by type assertion at P4c and removed with the role cutover
-// (SIMP5-4; 05-storage §5S.3.11 "Legacy capabilities").
+// only a pre-core app's store can give meaning is a capability declared in
+// legacy (below), outside the API promise, so the role cutover removes
+// it without a v1 break (SIMP5-4, resolution R6-3; 05-storage §5S.3.11
+// "Legacy capabilities").
 type Store interface {
 	GetRole(ctx context.Context, name RoleName) (*Role, error)
 	ScanRoles(ctx context.Context) iter.Seq2[*Role, error] // an undecodable stored role yields ErrUndecodableRole for that role only
 	PutRole(b *storage.Batch, r *Role) error
 	DeleteRole(b *storage.Batch, r *Role) error
 }
-
-// LegacyAtomWriter is implemented by a store whose rows an older build reads:
-// the service calls PutRoleAtoms instead of PutRole with the legacy atoms the
-// row rule admits (§6.3). Absent = PutRole.
-type LegacyAtomWriter interface {
-	PutRoleAtoms(b *storage.Batch, r *Role, legacyAtoms []string) error
-}
-
-// Reconfirmer is implemented by a store that keeps native-only role data in
-// extension records and can therefore report Role.Suspended; Reconfirm
-// clears it (re-apply or discard, ReconfirmRole). Absent = never suspended.
-type Reconfirmer interface {
-	Reconfirm(b *storage.Batch, r *Role, accept bool) error
-}
 ```
+
+**Legacy capabilities of the role store (`legacy`, resolution R6-3, SIMP6-2, SIMP6-4).** Every
+identifier that exists only to serve a pre-core app's role store lives in the core package `legacy`
+(with its test-support sub-package `legacy/legacytest`), which the API-stability gate excludes as it
+excludes `kernel/` (03 §3.3 "Legacy-only identifiers"; 12 SC1). Removing them at the role cutover is
+therefore not a breaking change, and nothing in `rbac`'s frozen surface names them:
+
+```go
+package legacy
+
+// AtomWriter (formerly rbac.LegacyAtomWriter) is implemented by a role store
+// whose rows an older build reads: rbac calls PutRoleAtoms instead of PutRole
+// with the legacy atoms the row rule admits (05-rbac §6.3). Absent = PutRole.
+type AtomWriter interface {
+	PutRoleAtoms(b *storage.Batch, r *rbac.Role, legacyAtoms []string) error
+}
+
+// Role re-confirmation uses the shared extension-confirm capability,
+// ExtConfirmer (05-storage §5S.3.11 defines it; formerly storage.ExtConfirmer):
+// Confirm(ctx, b, "role/"+string(name)) re-stamps the role's extension record
+// from its current row and clears the suspension. A store without it never
+// reports a suspended role. There is no role-specific confirm interface (the
+// round-5 rbac.Reconfirmer is deleted, SIMP6-4).
+```
+
+`legacy` (L5) imports `rbac` for the types it names, so `rbac` never imports it (03 §3.3). The kernel
+detects each capability by type assertion once at P4c and hands the store to `rbac`, which names a
+capability only through an **unexported** interface of its own with the identical method set; an
+`export_test.go` assertion checks, from rbac's external test package, that the unexported interface and
+the `legacy` one are mutually assignable, so a renamed or retyped member fails rbac's tests.
+`legacytest.RBACStoreSuite` (one suite for the store, a case per capability: the atom writer, confirm
+accept and discard; SIMP6-6) drives the service over an implementation.
 
 **Privileged checkers are not SDK (SEC-26).** The two checkers that bypass role resolution are
 constructed only in `core/internal/authz`: `authz.AuthDisabled(cat *rbac.Catalog) rbac.Checker`
@@ -610,17 +650,22 @@ cached by (sorted role IDs, sorted scopes, interactive, `Generation()`).
   explicit, not a wildcard, and §4.4 rule 1 still applies to it.
 - At creation every scope must be in the catalog and held by the actor (and by the key owner when
   creating for another user, 05-authn §4.4).
-- Legacy keys stored with empty scopes **and no extension record** are read as
-  `LegacyFullScope=true`: effective = role permissions (today's semantics), shown in the UI as
-  "legacy full-access key, expires <date>", never creatable; their rows keep the empty list as written
-  (05-authn §11). A key with an extension record — current, stale or suspended — is never
-  `LegacyFullScope`: it takes its scopes only from the record and grants nothing while suspended, and
-  this build never writes an empty list (a key with no legacy-equivalent scope holds the reserved
-  no-scope string, resolution R5-6, SEC5-1). All keys expire within 365 days (`raw/10` §2.3), so the
-  state ends by itself; no forced revocation.
-- A key without an extension record (a pre-core `abk_` key) keeps HEAD's role ∩ key reach on the
-  legacy mount: `LegacyAtom`/`LegacyCheck` (§3.1) admit it iff the atom is in its stored atoms and its
-  owner's roles satisfy the atom's `LegacyReach`; native requirements read its atoms' expansion (SEC5-7).
+- **One scope-source predicate (SEC6-2; the same sentence in 05-authn §4.4, §11, 05-storage row 3 and
+  09 rule 1).** A key's scopes come from its extension record **iff the record holds canonical scopes**
+  (`scopes_source: canonical`, written only when the key is created natively). Otherwise — no record,
+  or a record holding only Independent restriction fields (`scopes_source: legacy`, written by the
+  post-restore fallback or the stale-status stamp, 05-authn §4.14) — they come from the legacy row:
+  `LegacyFullScope=true` for an empty list (effective = role permissions, today's semantics, shown in
+  the UI as "legacy full-access key, expires <date>", never creatable; the row keeps the empty list as
+  written, 05-authn §11), and on legacy surfaces `LegacyAtom`/`LegacyCheck` (§3.1) admit it iff the
+  atom is in its stored atoms (or the list is empty) and its owner's roles satisfy the atom's
+  `LegacyReach`, while native requirements read its atoms' expansion (SEC5-7). A key whose record holds
+  canonical scopes is never `LegacyFullScope` and grants nothing while that record is suspended; this
+  build never writes an empty list (a key with no legacy-equivalent scope holds the reserved no-scope
+  string, resolution R5-6, SEC5-1). So a pre-core key that a restore restricted and an admin re-enabled
+  keeps exactly its pre-restore reach (`TestRestoredLegacyKey_ReenabledKeepsLegacySemantics`, 05-authn
+  §10). All keys expire within 365 days (`raw/10` §2.3), so the state ends by itself; no forced
+  revocation.
 - Per-key module binding is expressed by scopes plus the key's `Purpose` (05-authn §4.4); a facade
   key's scopes are all `<m>:arr.*`, which are `Confining`.
 
@@ -844,8 +889,13 @@ admitted through `Manifest.LegacyRoleIDs []rbac.RoleName` (06 §6.4.2), which re
    (§7.1) as package functions, after auth's, and after the keyring and config overrides (COR3-2).
    **At S4 r1 (dark)** the kernel only runs the read-only decode census of `Store.ScanRoles` at P4d
    step 1c (06 §6.5.1, COR5-15) — counted, logged, nothing written — and skips P4d's role writes and
-   P7's seed commit (COR4-4). The kernel detects the store's optional capabilities
-   (`LegacyAtomWriter`, `Reconfirmer`, §3.4) by type assertion at P4c.
+   P7's seed commit (COR4-4). **HEAD's per-boot role seeding keeps its home through r1 (COR6-3):** books'
+   start hook (Run step 2) keeps running HEAD's `auth.SeedRoles` over books' own code, as it does
+   `ReconcileVerifiedEmails` (05-authn §5), so a fresh store booted on r1 has the four seed roles and an
+   older build's re-seed semantics are unchanged; the r2 flip PR deletes that call in the same change
+   that turns on P7's seed commit (05-authn §5 lists the whole `seedRolesAndTokens` sequence). The
+   service detects the store's capabilities (`legacy.AtomWriter`, `legacy.ExtConfirmer`, §3.4) by
+   type assertion when it is built over the store P4c built.
 2. **P5**: the kernel creates `rbac.Service` (over the `Store` built in P4c, with `Deps.Compile =
    authz.Compile`) and `audit.Store` (R4: L4, same layer as `auth`) (COR2-7, COR4-12).
 3. Core declares its permissions and seeds, the kernel declares the app-level aliases of
@@ -932,7 +982,7 @@ stay identical:
 | read-only (`adminRole`) | the four `GET /admin/debug/*` | `books:admin.view` | open |
 | read-only (`adminRole`) + `users.manage` | master-list routes | `AllOf(core:users.manage, books:admin.view)` | open |
 | always-authenticated | `PATCH /admin/debug/books/:id`, `PATCH /admin/debug/book-files/:id`, `POST /admin/debug/edits/:edit_id/undo` | `books:admin.debug` | 401 |
-| always-authenticated | `POST /system/reset`, `POST /system/factory-reset` | `core:system.manage` | 401 |
+| always-authenticated | `POST /system/reset`, `POST /system/factory-reset` (from S2b the handler stages core's factory reset instead of HEAD's in-place `Reset`, 05-storage/05-backup, DATA6-6) | `core:system.manage` | 401 |
 | always-authenticated | retired 410 stubs `/maintenance/wipe`, `/cache/invalidate`, `/admin/recompact-digests` | `core:admin` (stub keeps auth-first ordering) | 401 |
 | always-authenticated | guest service tokens list, plan, revoke | `core:admin` | 401 |
 
@@ -968,7 +1018,7 @@ no claim hand-over and **no storage grant** during the extraction. `rbac` reache
 
 | Key | Value |
 |---|---|
-| `c/rbac/role/<name>` | `codec.JSON[Role](1)` (every field of §3.3, `Suspended` always false) |
+| `c/rbac/role/<name>` | `codec.JSON[Role](1)` (every field of §3.3; `Legacy` always nil) |
 
 User role assignments live in auth's user records (05-authn §3.4). `TestNativeStore_RoundTrip`
 (rbac) runs `rbactest.StoreSuite` over it.
@@ -979,10 +1029,11 @@ User role assignments live in auth's user records (05-authn §3.4). `TestNativeS
 `internal/database/store.go:966-977`), reached through books' own claims. User role assignments stay
 in the legacy user rows' role list (05-authn §11). Write exclusivity on those families is an ABO
 archtest (only the legacy-store package writes them), not a storage grant; grants for these families
-are part of the deferred cutover (05-storage). It runs `rbactest.StoreSuite` with HEAD fixtures.
+are part of the deferred cutover (05-storage). It runs `rbactest.StoreSuite` with HEAD fixtures, and
+`legacytest.RBACStoreSuite` for its capabilities (§3.4).
 
 - **Legacy row content: legacy atoms only (SEC4-3).** A role row this build writes holds, in its
-  `Permissions` list, **only** the legacy atoms the row rule admits (`LegacyAtomWriter.PutRoleAtoms`' `legacyAtoms`)
+  `Permissions` list, **only** the legacy atoms the row rule admits (`legacy.AtomWriter.PutRoleAtoms`' `legacyAtoms`)
   — never a namespaced string. HEAD's permission set is the union of the role rows' raw strings, and
   worker confinement is a "nothing else" test: `workerOnly` holds only if every string is
   `fingerprint.worker` (`internal/server/middleware/auth.go:271-297`), so one extra string in a
@@ -1005,10 +1056,13 @@ are part of the deferred cutover (05-storage). It runs `rbactest.StoreSuite` wit
   bookkeeping are Independent.
 - **Suspension on roll-forward.** When the row's hash differs from `legacy_ref` — an older build
   changed the row while rolled back, or the row was restored or edited by hand — the extension is
-  **suspended**: the store reports `Role.Suspended`, and the role grants only the translation of the
+  **suspended**: the store reports it in `Role.Legacy.Suspended`, and the role grants only the translation of the
   row's atoms through `LegacyAlias.New` (§6.1), which is never wider than what the older build
   granted (no silent widening). A custom role stays suspended until an admin re-confirms it
-  (`POST /roles/{name}/reconfirm`, accept or discard; audited `core.role.reconfirm`); health reports
+  (`POST /roles/{name}/reconfirm`, accept or discard; audited `core.role.reconfirm`). Both go through
+  the store's `legacy.ExtConfirmer` (`Confirm(ctx, b, "role/"+name)`, re-stamping the record from the
+  current row); discard also writes, in the same batch, the translation of the row's atoms as the
+  role's canonical set, so the role keeps exactly what the older build left it (SIMP6-4); health reports
   `degraded` (`rbac_role_suspended`) naming the roles. Seed roles and `admin` carry no operator data
   in their extension: on a mismatch the next `Freeze` re-derives it from the seed (§4.8), and a
   restricted addition an admin had accepted returns to `PendingSeed`. A missing row makes the
@@ -1041,8 +1095,9 @@ are part of the deferred cutover (05-storage). It runs `rbactest.StoreSuite` wit
   narrower, never wider. Property test `TestRowRuleDominatesLegacyReach` reads the snapshot (random
   native roles; for each legacy route, a request the older build would admit from the row's atoms is
   one the native role admits on the route's successor).
-- **Legacy routes require the full reach (R4-3, SEC4-2).** From 09 S4 r2 the legacy mount's
-  `s.perm(atom)` and its manifest `Perm` (05-http-api §8.2) carry `LegacyAtom(atom)`, an adapted
+- **Legacy routes require the full reach (R4-3, SEC4-2).** The legacy manifest's `Perm` of every
+  `s.perm(atom)` route records `LegacyAtom(atom)` from S2 (05-http-api §8.1, COR6-1); from 09 S4 r2
+  stage 13 enforces it, the mount's `s.perm(atom)` adapter carries the same value, an adapted
   legacy task definition's `Perms.Start` carries the same value (05-tasks), and each in-handler
   `auth.Can(ctx, atom)` site is replaced by the bridge's adapter over `LegacyCheck(atom, readSide)`
   from the snapshot's in-handler list (an ABO archtest finds no raw `auth.Can` left in the legacy
@@ -1080,7 +1135,8 @@ are part of the deferred cutover (05-storage). It runs `rbactest.StoreSuite` wit
 - **API keys never widen (SEC-1).** Keys keep their own scope lists; new keys never store an empty
   list and never a namespaced string in the legacy row (a key with no admitted atom holds the
   reserved no-scope string), legacy keys keep what they were created with, and an empty legacy list
-  on a row without an extension record is read as `LegacyFullScope` (§4.5; 05-authn §4.4, §11).
+  is read as `LegacyFullScope` exactly when the key's scopes come from its legacy row (no extension
+  record holding canonical scopes; §4.5's one predicate; 05-authn §4.4, §11, SEC6-2).
   `TestAPIKey_StoredScopesNeverEmpty` (05-authn §10).
 - **Compatibility window.** The window is the one defined in 09 §9.2.1 and recorded in the `compat`
   ledger (09 §9.2.9) under surface `rbac_atom`; the legacy alias table **is** the compile-time
@@ -1099,7 +1155,9 @@ are part of the deferred cutover (05-storage). It runs `rbactest.StoreSuite` wit
 - **Deferred: cutover.** Moving ABO's roles to the native store (and with it lifting
   `ErrSeedRoleLocked`, the operator diff of §3.6, and the storage grant the move needs) is not part of
   the extraction: a later, one-way, checkpointed step behind the per-owner level guard, decided on
-  measured data (02 decision 13), whose floor is the cutover release itself.
+  measured data (02 decision 13), whose floor is the cutover release itself. The cutover stops
+  supplying `legacy.Stores.Roles` and may delete `legacy.AtomWriter` and `RBACStoreSuite`: they live
+  in `legacy`, outside the API promise, so that is not a v1 break (resolution R6-3).
 
 ## 7. Audit log (`core/audit`, G13)
 
@@ -1163,16 +1221,21 @@ open; boot fails if either fails. They also run on a replaced-store boot (05-aut
   the owner verifier, or the offline `<app> users reset-password`), and the audit record says which
   entry was kept. A demoted admin therefore stays demoted after restoring an archive taken before the
   demotion (`TestRestore_DemotedAdminStaysDemoted`).
-  **Nil coverage (SEC5-10).** A demotion is in the journal only when an S4 r2+ build made it with a
-  working `Append`; one made by an older build during a rollback, or one whose `Append` failed, yields
-  a `gap` line, so `rc.Revocations` is nil. Re-applying nothing would hand the role back, and auth's
-  fallback keeps the password hash. So when `rc.Revocations` is nil and the kernel can open the
-  pre-swap store (a staged restore: a read-only `rbac.Store` over `rc.Previous`, built with the same
-  constructor, 05-backup §5B.3.6), rbac's hook takes the **most restrictive** of the restored and the
-  pre-swap state for every role row and every user's role list: an assignment absent in the pre-swap
-  store is removed, a role's permissions are the intersection, a role deleted there is deleted, and
-  the last-admin rule above still applies. 05-authn §4.14 step 3 applies the same rule to keys, user
-  status, password hashes and identity links. For a replaced store there is no pre-swap store, and
+  **Pre-swap restrictions win whenever there is a pre-swap store (SEC5-10, SEC6-4).** A demotion is in
+  the journal only when an S4 r2+ build made it with a working `Append`; one made by an older build
+  during a rollback, or one whose `Append` failed, yields a `gap` line, so `rc.Revocations` is nil —
+  and one made during an interval that foreign-open detection missed yields no `gap` line at all, so
+  coverage reads complete while the demotion is absent from it. Re-applying the journal alone would
+  hand the role back in either case. So whenever the kernel can open the pre-swap store (a staged
+  restore: a read-only `rbac.Store` over `rc.Previous`, built with the same constructor, 05-backup
+  §5B.3.6), whatever `rc.Revocations` holds, rbac's hook takes the **most restrictive** of the
+  restored and the pre-swap state for every role row and every user's role list: an assignment absent
+  in the pre-swap store is removed, a role's permissions are the intersection, a role deleted there is
+  deleted, and the last-admin rule above still applies. With full coverage this equals the journal
+  re-apply for journaled kinds, so it costs nothing on the common path. A staged restore's own swap
+  appends no `gap` line and keeps its coverage (05-backup, DATA6-2), so a restore made after a clean
+  run re-applies the journal **and** keeps every pre-swap restriction. 05-authn §4.14 step 3 applies
+  the same rule to keys, user status, password hashes and identity links. For a replaced store there is no pre-swap store, and
   the residual is the one 14 K22 states: a demotion made only on the older build and undone by that
   build's own restore can come back with the restored role rows until an admin re-checks the accounts
   holding `core:admin`. The restriction applied to them meanwhile is this file's: the hook lists every
@@ -1274,7 +1337,7 @@ account IDs only, as today, `internal/oauth/oauth.go:67-71`).
 | Audit query store error | 503 | closed | |
 | Restore audit copy-forward fails | boot error | closed | SEC-17 |
 | Restore role re-application would remove the last admin | role kept, account restricted (password reset required, keys `needs_confirmation`); health `degraded`; audited | open (that entry) | lockout protection (SEC2-10, SEC3-15) |
-| Staged restore without journal coverage | role rows and assignments: most restrictive of restored and pre-swap state | closed | an unjournaled demotion is not undone (SEC5-10) |
+| Staged restore (a pre-swap store exists), with or without journal coverage | role rows and assignments: most restrictive of restored and pre-swap state | closed | an unjournaled or undetected demotion is not undone (SEC5-10, SEC6-4) |
 | Seed-role edit or delete before the role cutover (`accept-seed` excepted) | 409 `seed_role_locked` | closed | an older build's per-boot re-seed would silently widen it after a rollback (DATA2-20) |
 | Prune fails | task fails, retried next run; growth alarm when > 1.5 × max_records | open | |
 
@@ -1350,9 +1413,10 @@ option governed by the compat ledger (§6.3, SIMP-7).
 | `TestRoleExtension_SuspendedAfterPrevWrite` | a custom role's row changed by the previous release → on roll-forward `Suspended`, grants only the row's translated atoms, health `rbac_role_suspended`, `reconfirm` restores or discards; a seed role's extension is re-derived at `Freeze` (R4-1) |
 | `TestReseedFromHEADRows_AdminKeepsCoreAdmin` | a store seeded by HEAD (rows without `SeedDigest`): after the first S4 r2 boot `admin` holds `core:admin`, `PendingSeed` is empty for every role whose stored atoms' reach implies the addition (DATA4-11) |
 | `TestUnknownAtom_RoleDegradedBootContinues` | a legacy-only row with an atom outside §6.1 → the atom grants nothing, health `degraded` names the role, boot continues (SEC4-13) |
-| `TestNativeStore_RoundTrip` / `rbactest.StoreSuite` | the native store and ABO's legacy store pass the same suite (ABO's with HEAD fixtures, plus the optional `LegacyAtomWriter`/`Reconfirmer` cases) (SIMP4-3, R4-1, SIMP5-4, SIMP5-9) |
+| `TestNativeStore_RoundTrip` / `rbactest.StoreSuite` / `legacytest.RBACStoreSuite` | the native store and ABO's legacy store pass the same `StoreSuite` (ABO's with HEAD fixtures); ABO's also passes `legacytest.RBACStoreSuite`, which drives the service with one case per capability (`AtomWriter`; `ExtConfirmer` accept and discard), so a method-set drift between `legacy` and rbac's unexported assertion fails it (SIMP4-3, R4-1, SIMP5-4, SIMP5-9, SIMP6-4, SIMP6-6, R6-3) |
+| `TestS2Manifest_SPermRoutesCarryLegacyAtom` | (in 05-http-api) from S2 every `s.perm(atom)` manifest entry's `Perm` is `LegacyAtom(atom)`, built from the S2 leaf constructor with no catalog; `Handle` refuses it; S4's `Freeze` refuses an atom no legacy alias names (COR6-1) |
 | `TestLegacyAtom_AuthOffLegacyKeyAndRole` | `LegacyAtom("settings.manage")`: the auth-disabled checker satisfies it, an admin's `abk_` key scoped `["settings.manage"]` without an extension satisfies it, the same key of a non-admin owner and a custom role holding the four expansion scopes do not; `LegacyCheck` is never satisfied by the auth-disabled checker, and a `read_side` site admits a `core:users.view` holder (COR5-4, SEC5-7, SEC5-9, SEC5-14) |
-| `TestRestore_UnjournaledDemotionHeldByPreSwapStore` | staged restore with nil coverage of an archive taken before an unjournaled demotion (older build's interval, failed `Append`): the role stays unassigned and narrowed, deleted roles stay deleted, the last-admin rule still holds (SEC5-10) |
+| `TestRestore_UnjournaledDemotionHeldByPreSwapStore` | staged restore of an archive taken before an unjournaled demotion (older build's interval, failed `Append`) with nil coverage, **and** with complete coverage over an interval detection missed: the role stays unassigned and narrowed, deleted roles stay deleted, the last-admin rule still holds (SEC5-10, SEC6-4) |
 | `TestAppLegacyAliases_MayTargetCore` | an app-level alias from `app.Options.LegacyPermissionAliases` targeting `core:*` passes `Freeze`; one whose `Reach` does not dominate `New` or names an unknown scope fails; the same alias in a module manifest → `ErrCoreGrant` (COR5-5) |
 | `TestLegacyRoute_SettingsAtomNeverWiderThanSuccessor` | (in 05-http-api) the two `{core:admin}`-reach atoms gate their routes with `core:admin`; a role holding the four `settings.manage` expansion scopes gets 403 on restore and the other admin-equivalent routes (R4-3, SEC4-2) |
 | `TestMeAlias_LegacyShape` | `/api/v1/auth/me` `permissions` holds legacy atoms, `canonical_permissions` the canonical set; a previous-release tab shows the delete button for a `library.delete` holder; `/api/core/v1/me` returns canonical names only (FE3-7) |
@@ -1448,7 +1512,8 @@ option governed by the compat ledger (§6.3, SIMP-7).
 ## Objections to 03
 
 None open. 03 v1.3.0+ R6 states that `AnyAuthenticated` never admits a confined credential (the
-v1.1.0 amendment), and §3.6 has the role-ID and audit-action rows.
+v1.1.0 amendment), §3.6 has the role-ID and audit-action rows, and §3.3 "Legacy-only identifiers"
+defines the `legacy` package this file's capabilities live in (R6-3).
 
 ## Out-of-scope defects found
 
@@ -1590,3 +1655,16 @@ Round 5 (2026-11-04), findings applied to this file:
 - COR5-15 — the S4 r1 census is P4d step 1c (§5).
 - DATA5-4 (via 05-authn) — audit action `core.apikey.confirm` added (§7.1).
 - integration pass (round 5): §14 item 8 marked resolved — the lead accepted the weaker rule (admin holders listed for review, `restore_admins_review`, after an older-build restore; residual in 14 K22); the stronger sign-in restriction kept as a recorded, untaken option.
+
+Round 6 (2026-11-04), findings applied to this file:
+
+- COR6-1 — `LegacyAtom`/`LegacyCheck` are S2 leaf constructors that only record the atom; evaluation is the S4 checker's; `Freeze` refuses an unaliased atom; S2 manifest carries them (Landing, §3.1, §6.3, §12).
+- COR6-3 — S4 r1: books' start hook keeps HEAD's `auth.SeedRoles`; the r2 flip PR deletes it as P7 seeding starts (§5).
+- SEC6-2 — one scope-source predicate (`scopes_source: canonical`); restore/stale-stamp records are `scopes_source: legacy` and keep legacy semantics; empty-list case added (§3.1, §3.4 `CheckerInput`, §4.5, §6.3).
+- SEC6-4 — rbac's restore hook applies "pre-swap restrictions win" whenever a pre-swap store exists, not only at nil coverage (§7.1, §8, §12).
+- DATA6-2 — a staged restore's own swap appends no `gap` and keeps coverage (§7.1).
+- DATA6-6 — factory-reset route: from S2b the handler stages core's factory reset (§6.2).
+- SIMP6-4 — `rbac.Reconfirmer` deleted; re-confirmation through the shared `ExtConfirmer` (`"role/"+name`), discard as a write of the row's translation in the same batch (§3.3, §3.4, §6.3).
+- SIMP6-6 — role-store capability cases move to one `legacytest.RBACStoreSuite` (§3.4, §6.3, §12).
+- SIMP6-7 — `Role.Suspended` becomes `Role.Legacy *RoleLegacyState{Suspended}` (nil from a native store) with a `Role.Suspended()` reader, per 03's one rule for legacy-only record state (§3.3, §6.3).
+- R6-3 / SIMP6-2 — role-store capabilities live in the `legacy` package outside the API promise (`rbac.LegacyAtomWriter` → `legacy.AtomWriter`); the kernel detects them at P4c and `rbac` names them through unexported twins checked by `export_test.go`; cutover removal is not a v1 break (§3, §3.4, §5, §6.3, Objections).
