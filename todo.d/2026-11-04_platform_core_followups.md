@@ -19,21 +19,12 @@
         offers "sqlite" (`raw/04-database-store.md` §1, `raw/05-storage.md` §4.2).
   - [ ] `RunItems` doc promises the first error under `ErrModeFail` but parallel mode returns
         `errors.Join` (`raw/06-tasks-ops.md` §2).
-  - [ ] **SECURITY (hotfix, early fix 1 in 05-authn §11.1; do not wait for the extraction):** `GET /api/v1/auth/sessions` returns
-        `database.Session` including `id`, which is the bearer session token
-        (`internal/server/handlers/auth.go:525-536`, `internal/database/store.go:1044-1045`); the route
-        has no permission or credential guard, so any API key of the user can read and replay the
-        user's session tokens and gain session-level credential rights. Return a view without `id`.
-  - [ ] **SECURITY (hotfix, early fix 2 in 05-authn §11.1):** a scoped API key can mint an unscoped key: `POST /api/v1/auth/api-keys`
-        with `"scopes": []` skips the subset check (`internal/server/handlers/apikeys.go:199-210`) and
-        empty scopes mean "all role permissions" (`internal/server/middleware/auth.go:405-408`).
-        Refuse empty scopes when the caller is an API key with non-empty scopes.
-        Also refuse when the caller's permission set is nil: the subset check is skipped entirely then
-        (`apikeys.go:205`, `if callerPermSet != nil`), so a key whose effective permissions are empty can mint a key
-        carrying its owner's full role. The fix must fail closed on a nil set for every API-key caller.
-  - [ ] **SECURITY (hotfix, early fix 4 in 05-authn §11.1):** `RequireAdmin` checks role names and ignores API-key scopes
-        (`internal/server/middleware/auth.go:522-537`), so a key scoped to `library.view` on an admin
-        account passes admin-gated routes not also behind `credGuard`.
+  - [ ] **SECURITY (hotfix, early fix 1):** session tokens exposed by `GET /api/v1/auth/sessions`. Implement 05-authn §11.1 item 1 exactly
+        (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
+  - [ ] **SECURITY (hotfix, early fix 2):** a scoped API key can mint an unscoped key (including the nil/empty caller set). Implement 05-authn §11.1 item 2 exactly
+        (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
+  - [ ] **SECURITY (hotfix, early fix 4):** `RequireAdmin` and the role-name checks ignore API-key scopes (including `adminRole`, `handlers/user.go` and `mergeActor`). Implement 05-authn §11.1 item 4 exactly
+        (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
   - [ ] **SECURITY:** 3 of the 4 encrypted config secrets are also written in plaintext to a second
         `config.yaml` (see `docs/specs/platform-core/05-config.md`, "Out-of-scope defects found").
   - [ ] Invite role not bounded by the creator's permissions (`internal/server/handlers/user.go:155-190`);
@@ -44,20 +35,9 @@
   - [ ] 8 writes to `config.AppConfig` bypass `Mutate`; in `serve` the log file stops receiving output
         after `NewServer`; `log_level` is never applied to the handler (`05-config.md`, `05-logging.md`).
   - [ ] The shipped systemd unit sets `AUDIOBOOK_ROOT_DIR`, which nothing reads (`09-abo-on-core.md`).
-  - [ ] **SECURITY (hotfix, early fix 3 in 05-authn §11.1):** a revoked API key can be re-activated: `PATCH /api/v1/auth/api-keys/:id`
-        with `{"status":"active"}` (`internal/server/handlers/apikeys.go:336-372`) calls
-        `SetAPIKeyStatus`, which overwrites `Status` to `active` without checking `RevokedAt`
-        (`internal/database/pebble_store_auth.go:1226-1247`). Refuse any status change on a revoked key
-        (and confirm the auth path also checks `RevokedAt`).
-  - [ ] **SECURITY (hotfix, early fix 6 in 05-authn §11.1):** a revocation can be silently undone by a concurrent request using the
-        key: `TouchAPIKeyLastUsed` reads and rewrites the whole `apikey:` row under `apiKeyMu`
-        (`internal/database/pebble_store_auth.go:1284-1302`), but `SetAPIKeyStatus` writes the row
-        without taking that lock (`:1226-1247`), so an in-flight touch can write back the pre-revocation
-        row. Take `apiKeyMu` in every `apikey:` writer (or write `last_used` to a separate key).
-  - [ ] **SECURITY (hotfix, early fix 5 in 05-authn §11.1):** an enabled Basic gate with an empty stored password accepts the configured
-        username with an empty password (`internal/server/middleware/basicauth.go:81-87` compares `""` to
-        `""`). Refuse all Basic credentials while the gate is enabled and no password is set (fail closed).
-  - [ ] **Security (low):** a scope-restricted API key whose owner has the admin role can read
-        `GET /users/:id/footprint` and `GET /users/merges` (`internal/server/handlers/user_merge.go:97-99,190-192`):
-        the handlers check the owner's role name, not the key's scopes. The merge POSTs are already refused to API
-        keys (credential routes). Check `Can(core:admin)` on the request principal (or the key's scopes) instead.
+  - [ ] **SECURITY (hotfix, early fix 3):** a revoked API key can be re-activated (web and ABS key paths). Implement 05-authn §11.1 item 3 exactly
+        (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
+  - [ ] **SECURITY (hotfix, early fix 6):** a request with a key can undo that key's revocation (`apiKeyMu` on every `apikey:` writer). Implement 05-authn §11.1 item 6 exactly
+        (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
+  - [ ] **SECURITY (hotfix, early fix 5):** the Basic gate accepts an empty password (with the `BASIC_AUTH_PASSWORD` recovery). Implement 05-authn §11.1 item 5 exactly
+        (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
