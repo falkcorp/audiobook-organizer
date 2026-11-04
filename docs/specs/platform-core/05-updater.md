@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -281,9 +281,12 @@ func Boot(stateDir, exe string, self Self, check ReaderCheck) (BootResult, error
 
 // Self identifies the running binary: its version and its BINARY ID, the
 // values its own --version-json prints as version and binary_id (R5-7, FE5-3).
-// The binary ID is computed once by the kernel before P−1 (06 §6.5.1) from
-// app.Options.Version and the SHA-256 of the running executable
-// (os.Executable, read once); it needs no ldflags and no .git, so every
+// The binary ID is computed once per process from the version and the SHA-256
+// of the running executable (os.Executable, read once) by one function: a
+// dependency-free leaf that lands at S0, so ABO's S0 guard and --version-json
+// record and print the same value before the kernel exists, and that
+// app.BinaryID delegates to when the kernel computes it before P−1 (06
+// §6.5.1; 06 and 04 name the leaf; FE6-3). It needs no ldflags and no .git, so every
 // build path yields one, and two binaries differ in it whenever their bytes
 // differ. It is opaque and compared only for equality. It is NEVER the UI
 // bundle's build ID (07 §7.6.3; X-App-Build, ui_build_id), which is "dev" for
@@ -324,7 +327,8 @@ key. Nothing in core names a repository.
 Built only with the first per-family cutover (05-storage §5S.3.13), the only step whose floor needs
 them; no extraction stage builds, stamps or reads them (SIMP4-4). The first column holds only
 package-qualified Go identifiers that must not exist in non-test files under `core/`, as 03 §3.4's
-generator reads it (SIMP5-6, COR5-16); everything else deferred with them is in the last column.
+generator reads it (SIMP5-6, COR5-16); everything else deferred with them is in the column headed
+`Also deferred (not checked)`, which 03's grammar accepts in any position (SIMP6-8).
 
 | Identifier | What it adds | Also deferred (not checked) |
 |---|---|---|
@@ -391,9 +395,16 @@ with an interactive method can turn automatic apply on. Steps, each a `rc.Phase`
    `<exe>.new` in the executable's directory (same filesystem, so the rename is atomic); fsync
    file and directory.
 5. Self-test (second check, kept): run `<exe>.new --version-json` (10 s timeout, empty environment
-   except `PATH`); it must print `{app: AppID, version: target}`, and its `binary_id` (the binary ID it
-   computes over its own bytes, which the step-8 rename does not change; never its `ui_build_id`,
-   R5-7) is what step 7 records as `to_build`.
+   except `PATH`). It prints one JSON object with exactly the fields `{app, version, commit,
+   ui_build_id, binary_id}`, the list 09 S0 and §9.6 row 20 pin (FE6-4); `commit` is the build's
+   `vcs.revision` (suffixed `+dirty` when `vcs.modified`) or `""` when the build recorded none, and is
+   informational here. The self-test requires `app == AppID`, `version == target` and a non-empty
+   `binary_id`; that `binary_id` (the binary ID it computes over its own bytes, which the step-8 rename
+   does not change; never its `ui_build_id`, R5-7) is what step 7 records as `to_build`. It then runs
+   `<exe>.new --print-upgrade-floor` and refuses with `stepping_stone_required` unless `StoreState`
+   `Meets` the floor the binary itself enforces at boot — the check the 09 S0 hotfix makes (OPS6-1), kept
+   beside step 3's signed copy so a release whose manifest omits or understates the floor is still
+   never swapped in.
 6. Pre-update backup through `backup.Runner` ([05-backup](05-backup.md), in the format the previous
    build can restore during the window); failure aborts unless `core.updater.require_backup=false`.
 7. Write the pending marker file `<state-dir>/updates/pending.json`
@@ -458,8 +469,10 @@ binary (`to`/`to_build` = `Self`, so `BootResult.Pending` is non-nil), the kerne
 with the marker's `restart_exit_code` (`Pending.RestartExitCode`, default 75; the apply-time copy, as for
 `max_boot_attempts`) instead of 78, and `Boot` reaches `max_boot_attempts` and rolls
 back as for any other refusal; without a marker naming it, 78 stands (`TestBoot_FloorRefusalUnderPendingRestarts`).
-Step 3's stepping-stone check makes this path rare; it is the backstop when `StoreState` and the boot
-disagree.
+Steps 3 and 5's stepping-stone checks make this path rare; it is the backstop when `StoreState` and the
+boot disagree. Under launchd a 78 exit is relaunched like any unsuccessful exit (throttled; the plist has
+no per-exit-code setting), so there `Boot` counts the boots whatever the code, and without a marker the
+refusal repeats until the operator unloads the job, as 09 §9.2.2's release note says (OPS6-5).
 
 **No level raise while an update is unconfirmed (OPS2-2).** A `RaisesLevel` step (a books format
 change, or a later per-family cutover; the extraction itself has none, R3-1) may already have its
@@ -498,7 +511,7 @@ opens.
 | Window | apply only inside the window its schedule key names (`nightly` by default) when scheduled; manual apply any time | one window instead of two (5U.2) |
 | Who | check: `core:system.manage`; apply/rollback: `core:admin` (audited as `core.update.apply` / `core.update.rollback`, 05-rbac §7.1; credential-guarded route as today); turning on scheduled apply: `ProtectAdmin` on `core.updater.mode` | RBAC (05-rbac); SEC-6 |
 | Binary directory | the process must be able to create files in the executable's directory; otherwise `binary_not_writable` (apply and rollback refused, Degraded while mode ≥ check) | the swap is two renames in that directory (steps 4 and 8); OPS2-4 |
-| Stepping stones | a release whose signed `min_upgrade_from` the store's **recorded state** does not meet is never applied; `stepping_stone_required` names the stepping-stone release to install and run first. This protection exists only where the running updater is this one or the 09 S0 hotfix; a pre-S0 updater swaps any newer binary unchecked (`internal/updater/updater.go:214-280`), so such an auto-updating install that takes the floor release exits 78 at boot with `ErrUpgradeFloor` and no automatic way back, and the floor release's note and the Docker last-line message name the stepping stone (DATA4-18) | R2-4, OPS4-5: books legacy migration code is kept in every release before the **floor release** (the first T8 release, which deletes it and declares books' floor, 05-tasks 5T.6.2), so a store below books' `LegacyCap` needs the **stepping-stone release** (`min_upgrade_from.release`, which still carries that code) to have **run**, which only the store can prove (OPS3-7); a later cutover floor uses the same field; OPS2-11 |
+| Stepping stones | a release whose upgrade floor the store's **recorded state** does not meet is never applied; `stepping_stone_required` names the stepping-stone release to install and run first. The 09 S0 hotfix checks the new binary's own floor (`<exe>.new --print-upgrade-floor` against `<db>.storage-applied`, before the swap), which needs no signed manifest and so covers the floor release, which ships at S5, before any signed release exists; this updater checks that same floor (step 5) and also the signed `min_upgrade_from` (step 3); the `deploy` recipe runs the S0 pair before it copies a binary (09 S0; OPS6-1). This protection exists only where the running updater is this one or the 09 S0 hotfix; a pre-S0 updater swaps any newer binary unchecked (`internal/updater/updater.go:214-280`), so such an auto-updating install that takes the floor release exits 78 at boot with `ErrUpgradeFloor` and no automatic way back, and the floor release's note and the Docker last-line message name the stepping stone (DATA4-18) | R2-4, OPS4-5: books legacy migration code is kept in every release before the **floor release** (the first T8 release, which deletes it and declares books' floor, 05-tasks 5T.6.2), so a store below books' `LegacyCap` needs the **stepping-stone release** (`min_upgrade_from.release`, which still carries that code) to have **run**, which only the store can prove (OPS3-7); a later cutover floor uses the same field; OPS2-11 |
 | Boot attempts | `max_boot_attempts ≤ StartLimitBurst − 2` of the unit; capped at 3 when `NOTIFY_SOCKET` is set | the committed unit (`StartLimitBurst=5` in 60 s, `RestartSec=5`, `deploy/audiobook-organizer.service:81-82,112`) then has one spare start for a crash of the restored binary; the in-place exec spends none; OPS2-18 |
 
 **Supported install layouts (OPS2-4, OPS4-4).** The updater replaces the binary in place, so it works
@@ -564,7 +577,7 @@ the compiled-in revoked list in the next release.
 | Backup fails | closed (unless `require_backup=false`) | recovery path must exist before a swap |
 | Rename fails | closed: restore `<exe>` from `<exe>.prev` if the first rename happened; abort | atomic swap or nothing |
 | Executable directory not writable | closed for apply/rollback (`binary_not_writable`); open for check (Degraded, banner) | OPS2-4: say so instead of failing at the swap |
-| Store's recorded state does not meet the signed `min_upgrade_from`, or `StoreState` fails | closed: apply refused (`stepping_stone_required`), nothing downloaded beyond the manifest is kept | R2-4, OPS3-7 |
+| Store's recorded state does not meet the signed `min_upgrade_from` (step 3) or the new binary's own `--print-upgrade-floor` (step 5), or `StoreState` fails | closed: apply refused (`stepping_stone_required`), the download and `<exe>.new` deleted, nothing swapped | R2-4, OPS3-7, OPS6-1 |
 | Unsigned release newer than `LastUnsignedVersion` | closed: `verify_failed` | SEC2-23 |
 | Scheduled apply of a version that rolled back here | open: skipped, `SkippedAfterRollback` set, no download | OPS2-6 |
 | Staged restore pending, or a restore in flight | closed: apply and rollback refused (`restore_pending`, `restore_inflight`) | 09 S1/S8; the swap would discard the restore (DATA3-6) |
@@ -665,7 +678,8 @@ The `/api/v1/update/*` paths are aliases for the compatibility window (09 §9.2.
 | `TestBoot_RollbackExecsInPlace` (fake supervisor counts starts: ≤ `StartLimitBurst` − 2 + 1), `TestConfig_MaxBootAttemptsCappedUnderNotify` | OPS2-18 |
 | `TestApply_SkipsVersionThatRolledBack`, `TestApply_ManualApplyLiftsSkip` | OPS2-6 |
 | `TestApply_BinaryDirNotWritableRefusedAndDegraded` (read-only temp directory) | OPS2-4 |
-| `TestApply_SteppingStoneRequired` (store at books 63 with a running binary newer than the stepping-stone release → refused before any swap; store at books `LegacyCap` → allowed), `TestApply_StoreStateErrorRefuses` | OPS2-11, OPS3-7 |
+| `TestApply_SteppingStoneRequired` (store at books 63 with a running binary newer than the stepping-stone release → refused before any swap; store at books `LegacyCap` → allowed), `TestApply_StoreStateErrorRefuses`, `TestApply_NewBinaryFloorUnmetRefused` (a signed manifest with no `min_upgrade_from` and a fake new binary whose `--print-upgrade-floor` the sidecar does not meet → refused at step 5, nothing swapped) | OPS2-11, OPS3-7, OPS6-1 |
+| `TestSelfTest_VersionJSONFieldList` (the new binary must print exactly `{app, version, commit, ui_build_id, binary_id}`; a missing `app` or an empty `binary_id` fails the self-test; `commit` may be `""`) | FE6-4 |
 | `TestApply_UnsignedNewerThanLastUnsignedRefused` | SEC2-23 |
 | `TestCheck_NotifiesOncePerVersionAcrossRestart` | COR2-3 |
 | `TestPolicy_ContainerForcesOff`, `TestPolicy_NoKeysCheckOnlyAndDegraded`, `TestPolicy_NilOptionsNoRoutesNoTasks` | policy, absence |
@@ -680,7 +694,7 @@ The `/api/v1/update/*` paths are aliases for the compatibility window (09 §9.2.
 | `internal/updater.Updater` (`updater.go`) | `core/updater` + `core/updater/github`; ABO's `main` passes its slug, binary name, asset namer and its own public key |
 | `internal/updater.Scheduler` + `SchedulerStarterAdapter` + `updatescheduler` service | deleted; `core.updater.check`/`apply` tasks with schedule keys |
 | maintenance-window step 1 (`scheduler_maintenance_window_op.go:73-92`) and setting `maintenance_window_update_completed` | deleted; the window runs `core.updater.apply` as member 0 |
-| `RestartSelf` (`os.Exit(0)`, `updater.go:329-334`) | `Restarter.Restart` (graceful, exit 75). Until then, 09 S0 owns the HEAD updater hotfix (exit 75, `.prev` kept, semver comparison that treats a describe-suffixed current version as a local build and offers nothing (OPS4-17), a reader check of `<exe>.new` against the store before the swap, and **both** auto-apply paths of 5U.2 check-only; OPS3-12) and its scheduled-apply policy until S8 (OPS-6, OPS2-5); on the committed unit's layout the HEAD updater cannot write the binary at all (5U.5, OPS2-4) |
+| `RestartSelf` (`os.Exit(0)`, `updater.go:329-334`) | `Restarter.Restart` (graceful, exit 75). Until then, 09 S0 owns the HEAD updater hotfix (exit 75, `.prev` kept, semver comparison that treats a describe-suffixed current version as a local build and offers nothing (OPS4-17), a reader check of `<exe>.new` against the store before the swap, a **floor check** — `<exe>.new --print-upgrade-floor`, a fast exit that ships at S0, compared with `<db>.storage-applied`, refusing with `stepping_stone_required` and naming the release the new binary prints, so the S5 floor release is never swapped onto a store below books' `LegacyCap` although no signed manifest exists before S8 (OPS6-1; 09 S0's updater test gains "a fake new binary whose floor the sidecar does not meet → refused, nothing swapped") — and **both** auto-apply paths of 5U.2 check-only; OPS3-12) and its scheduled-apply policy until S8 (OPS-6, OPS2-5); on the committed unit's layout the HEAD updater cannot write the binary at all (5U.5, OPS2-4) |
 | `<exe>.old`, deleted after the swap (`updater.go:267-280`) | `<exe>.prev`, kept; shared with `make rollback` |
 | `/api/v1/update/*` handlers (`update_handlers.go`) | core routes + aliases |
 | `auto_update.*` config | `core.updater.*` and `core.updater.schedules.*` with aliases (5U.8) |
@@ -691,8 +705,9 @@ The `/api/v1/update/*` paths are aliases for the compatibility window (09 §9.2.
 1. Signing scheme: plain ed25519 over the release manifest (stdlib, chosen here) vs. minisign format
    vs. Sigstore/cosign keyless (free, but verification needs online transparency-log access and large
    dependencies). Revisit only if the release workflow already produces one of the others.
-2. (Closed, OPS2-11/R2-4/OPS3-7: upgrade-path constraints are the signed `min_upgrade_from`
-   requirement, checked against the store's recorded state, 5U.3–5U.4. A binary reached without the
+2. (Closed, OPS2-11/R2-4/OPS3-7/OPS6-1: upgrade-path constraints are the new binary's own
+   `--print-upgrade-floor` (from the S0 hotfix on) and, from S8, also the signed `min_upgrade_from`
+   requirement, both checked against the store's recorded state, 5U.3–5U.4. A binary reached without the
    updater still refuses the store at boot with `ErrUpgradeFloor`, and `Boot` rolls back when the
    update came through it.)
 3. Windows support for the swap (a running `.exe` cannot be renamed over on some setups): not a
@@ -779,3 +794,11 @@ Round 5:
 - R5-5 / COR5-3 / DATA5-6 (reference) — "Failed boots keep the rollback evidence": boots `Boot` counts as failed do not erase the served ledger's previous record, which 05-storage replaces only after every reading step committed.
 - SIMP5-6 / COR5-16 — "Deferred-build members" table: first column only package-qualified identifiers (`updater.UpgradeRequirement.Steps`, `updater.StoreApplied.StepsDone`); the built `Meets` and non-identifier items moved to an "Also deferred (not checked)" column.
 - OPS5-15 (consequence) — while the marker names the running binary a boot refusal exits 75, not 78, so a `RestartPreventExitStatus=78` unit still lets `Boot` roll back; `TestBoot_FloorRefusalUnderPendingRestarts`.
+
+Round 6:
+
+- OPS6-1 — the S0 hotfix (5U.12) compares `<exe>.new --print-upgrade-floor` with `<db>.storage-applied` before the swap (no signed manifest needed, so it covers the S5 floor release); step 5 of this updater makes the same check beside step 3's signed copy; 5U.5 stepping-stones row, error row, open item 2; `TestApply_NewBinaryFloorUnmetRefused`.
+- FE6-4 — step 5 pins `--version-json` to `{app, version, commit, ui_build_id, binary_id}` and defines `commit`; `TestSelfTest_VersionJSONFieldList`.
+- FE6-3 — `Self`: the binary ID comes from one dependency-free S0 leaf that `app.BinaryID` delegates to, so S0–S2 values equal the kernel's.
+- OPS6-5 — floor-refusal paragraph: launchd relaunches a 78 exit; `Boot` counts boots there regardless.
+- SIMP6-8 — deferred-members intro names the `Also deferred (not checked)` column by heading, not position.

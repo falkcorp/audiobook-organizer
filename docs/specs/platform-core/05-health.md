@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.6.1 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -8,8 +8,9 @@
 Evidence commit `748fd787a`. Raw inputs: [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md) §6, §7, §9;
 [`raw/09-http-api.md`](../../plans/platform-core/raw/09-http-api.md) (infra routes); [`raw/11-integrations.md`](../../plans/platform-core/raw/11-integrations.md) (aidispatch health).
 Layer **L4** (03 R4 v1.2.0). `health` (root package) imports only `log`, `metrics` (L0), `config`
-(L3) and `lifecycle` (L0); `health/diagnostics` imports `tasks` (the bundle is a task) — same layer,
-no cycle, because `tasks` imports only the `health` root (for readiness signals), never `health/diagnostics`.
+(L3) and `lifecycle` (L0); `health/diagnostics` takes `health`'s layer, L4, under 03 R4 (COR6-9) and
+imports `tasks` (the bundle is a task) — same layer, no cycle, because `tasks` imports only the `health`
+root (for readiness signals), never `health/diagnostics`.
 
 ## 5H.1 Purpose & scope
 
@@ -276,11 +277,17 @@ only see the unit where the unit runs: both recipes run `scripts/deploy-wait-rea
 operator's machine against a URL (`Makefile:916`; the script takes only `BASE_URL [TIMEOUT]`,
 `scripts/deploy-wait-ready.sh:8-13`), so a local `systemctl` would query the wrong host (OPS3-9). 09 S0
 therefore changes the signature to `deploy-wait-ready.sh BASE_URL TIMEOUT [SSH_HOST UNIT]` and, with
-`SSH_HOST`, polls `ssh $SSH_HOST systemctl show -p ActiveState,SubState,NRestarts $UNIT`: `activating`
-is progress (a startup that keeps sending `EXTEND_TIMEOUT_USEC` is not failing), `failed`/`inactive`
-or a rising `NRestarts` fails at once (a crash loop is reported in seconds), and `active` (`READY=1`)
-starts `DEPLOY_READY_TIMEOUT`, which bounds only the wait for `"ready":true`. Without `SSH_HOST`
-(Docker, launchd) it keeps URL-only polling with a documented larger timeout.
+`SSH_HOST`, polls `ssh $SSH_HOST systemctl show -p ActiveState,SubState,NRestarts,ExecMainStatus $UNIT`:
+`activating` is progress (a startup that keeps sending `EXTEND_TIMEOUT_USEC` is not failing),
+`failed`/`inactive` or a rising `NRestarts` fails at once (a crash loop is reported in seconds), and
+`active` (`READY=1`) starts `DEPLOY_READY_TIMEOUT`, which bounds only the wait for `"ready":true`. A
+failure whose `ExecMainStatus` is 78 is reported by name: the release refused the store as below its
+upgrade floor and names the stepping stone to install first (`ErrUpgradeFloor`, 05-tasks 5T.6.2), so
+the operator does not chase a crash; with `RestartPreventExitStatus=78` the unit only reads `failed`, so
+without the status the script could not tell the two apart (OPS6-5). `scripts/tests/test_deploy_wait_ready.py`
+covers it. Without `SSH_HOST` (Docker, launchd) it keeps URL-only polling with a documented larger
+timeout; launchd relaunches a 78 exit like any unsuccessful exit (throttled), so there the refusal shows
+only in the log (09 §9.2.2).
 
 ```go
 // Supervisor is the kernel's supervisor-signal handle (one per App, R5).
@@ -559,7 +566,7 @@ internally.
 | `internal/sysinfo` library parts, `DashboardService` | `books` dashboard; `GetHealthCheckResponse` deleted (no caller) |
 | `internal/diagnostics` zip/section machinery | `health/diagnostics` |
 | SlimBook/authors/series/version-groups/iTunes/missing-fields sections, `BuildBatchJSONL` | `books` `Contributor` sections; the AI batch builder goes with [05-ai](05-ai.md) |
-| op `diagnostics.export` | `core.diagnostics.export` (`FormerKinds: ["diagnostics.export"]`); `diagnostics.ai-analyze` stays `books` |
+| op `diagnostics.export` | `core.diagnostics.export`, declared in core with no ABO ID: books supplies the alias `diagnostics.export` from its op-ID ledger through `app.Options.LegacyTaskAliases`, so HEAD's stored runs resolve and no op ID lands in a `core/` file (05-tasks 5T.8.2, R1(c); MOD6-6); `diagnostics.ai-analyze` stays `books` |
 
 **Landing by stage** (09 assigns the stages; this is what `health` needs at each):
 
@@ -654,3 +661,10 @@ Round 5:
 
 - COR5-9 (COR4-7 residue) — 5H.3.3 "Stream A's `system.status` frame" is the authoritative statement: the status topic is native-stream only and never added to projection A; stream A's frame keeps HEAD's payload at every stage (books' `books.system.status-ticked.v1` from S6); no compat-ledger row; the "from S8 the frame's payload changes" sentence deleted (supersedes the round-4 COR4-7 line's compat-ledger clause).
 - integration pass (round 5): §5H.3.1 component registry — the perimeter's fixed degraded token `basic_gate_no_password` (from S3 core stage 8, before S3 ABO's hotfixed gate through HEAD's token list; R5-1(c), SEC5-4, 05-authn §11.1 early fix 5).
+
+Round 6:
+
+- MOD6-6 — 5H.10: `core.diagnostics.export` carries no ABO op ID in core; books supplies `diagnostics.export` through `app.Options.LegacyTaskAliases` (05-tasks 5T.8.2).
+- OPS6-5 — 5H.3.4: the wait script reads `ExecMainStatus` and reports exit 78 (upgrade-floor refusal) by name, covered by `test_deploy_wait_ready.py`; launchd relaunches a 78 exit.
+- COR6-9 — header: `health/diagnostics` takes `health`'s layer (L4) under 03 R4.
+- OPS6-6 — verified: this file already uses `basic_gate_no_password` (5H.3.1); no change.
