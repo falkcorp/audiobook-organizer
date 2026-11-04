@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-notify.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: 785812fd-5ddd-4540-be24-d061c0127788 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -21,7 +21,7 @@ topic catalog of its own.
 **v1 (SIMP-10, cross-cutting resolution 1)** is exactly what ABO uses or needs to fix today's defects
 (no retry, publisher ctx, replayable HMAC, §2):
 
-| In v1 (built in [09](09-abo-on-core.md) S7, with the instance store and `providerhttp` it needs; SIMP2-4) | Deferred (contract not frozen; built when a second app or the owner asks) |
+| In v1 (built in [09](09-abo-on-core.md) S7, with the instance store and `providerhttp` it needs; SIMP2-4) | Deferred: design sketch (non-normative; the SDK freezes none of it, A-15); built when a second app or the owner asks |
 |---|---|
 | `Notification`, `Notifier`, `Publisher` (`Service.Publish`, and `module.Deps.Notify` for modules) | in-app **inbox** (`core.inbox`) and the UI bell (07) |
 | `core.email` channel to a fixed address list (from `internal/mail`) | **per-user subscriptions** and per-user email to a verified address |
@@ -40,10 +40,12 @@ Out of scope: transactional mail that is not a notification (invites, password r
 
 ### Deferred-build members
 
-The right-hand column of the v1 table. None is in the 09 S7 build. The first column holds only package-qualified Go
-identifiers, each absent from non-test files under `core/` per `archtest.DeferredMembersAbsent` (03 §3.4); adapter
-IDs, routes and keys are in the second column and are not checked (03 §3.4 grammar, SIMP5-6). The PR that builds a
-member deletes its row (SIMP4-1):
+> **Design sketch (non-normative; A-15).** The SDK freezes none of these members; their contracts are settled when
+> they are built.
+
+The right-hand column of the v1 table. None is in the 09 S7 build. The first column holds package-qualified Go
+identifiers; adapter IDs, routes and keys are in the second column (SIMP5-6). The PR that builds a member deletes
+its row (SIMP4-1):
 
 | Member | Also deferred (not checked) | Lands with | Contract |
 |---|---|---|---|
@@ -226,7 +228,7 @@ the topic's `Permission` and its notify metadata (display name, default severity
 | Adapter | Target | Settings (secret fields in *italics*) | Egress |
 |---|---|---|---|
 | `core.email` | fixed address list | `host`, `port`, `username`, *`password`*, `from`, `to` (list, required) | SMTP through `env.Gate`; private hosts need `Local` (05-metadata M1.3); `host` and `port` are its destination fields (origin `smtp://host:port`), to which an operator-sourced *password* is bound by origin plus provenance (05-metadata M1.4 step 2, SEC7-3, R8-5); a change to `host` or `port` clears the stored *password* unless the write re-supplies it, exactly like a URL change (05-metadata M1.3 `Put`; lead decision, round 7) |
-| `core.webhook` | one URL | `url`, `method` (POST/PUT), `headers`, *`secret`* (HMAC), *`token`* (bearer), `legacy_headers` (bool; on, and only, for legacy-backed instances, §10) | `EgressConfigured`: a LAN receiver needs `Local`, which only an interactive `core:admin` holder sets (SEC2-7), or a `lan_allow` entry; a URL change clears *secret* and *token* (SEC-15) |
+| `core.webhook` | one URL | `url`, `method` (POST/PUT), `headers`, *`secret`* (HMAC), *`token`* (bearer), `legacy_headers` (bool; on, and only, for legacy-backed instances, §10) | `EgressConfigured`: a LAN receiver needs `Local`, which only an interactive `core:admin` holder sets (SEC2-7), or a `lan_allow` entry; a legacy-backed webhook stores no `Local` and keeps HEAD's reach for its configured URL, which only an admin changes (§10, A-2); a URL change clears *secret* and *token* (SEC-15) |
 
 The webhook body is fixed (the `json` preset): `POST url`, body
 `{"schema":"mediacore.notification.v1","id","topic","severity","title","body","links","entity","fields","at","app"}`.
@@ -273,7 +275,7 @@ filtering at delivery time arrives with per-user subscriptions (deferred).
 | No rule matches | open (`Publish` stages nothing; counted `no_rule`) | Nobody asked to hear it. |
 | Module `Publisher` given another module's (or a core) topic | closed (`ErrForeignTopic`) | A module may notify only about what it owns (COR2-3). |
 | `PutRule` names a topic whose `Permission` the caller lacks | closed (403) | A rule must not route entities its author cannot see to a shared channel. |
-| `core.integrations.disabled` true (a staging copy, R6-7; 05-metadata M1.4) | closed for sending: `Lease` gives `ErrDisabled`, nothing is sent; the entry is returned retryable, not counted against `core.notify.max_attempts`, and still dead-lettered by `core.notify.max_age`. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances. At every stage, staging (09 §9.3) also clears every legacy integration URL, webhooks included, so an older build booted on the copy, which ignores the switch, has no receiver to call (R7-6); native channels are not cleared, because only S7+ binaries read them and every such staging boot carries the switch (R8-3) | A copy of a production store must never deliver to production receivers (OPS6-4, SEC7-6); re-enabling on a real install delivers what is still fresh. |
+| `core.integrations.disabled` true (a staging copy, R6-7; 05-metadata M1.4) | closed for sending: `Lease` gives `ErrDisabled`, nothing is sent; the entry is returned retryable, not counted against `core.notify.max_attempts`, and still dead-lettered by `core.notify.max_age`. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances. At every stage, `staging-scrub` (09 §9.3, A-12) also clears every legacy integration URL, webhooks included, so an older build booted on the copy, which ignores the switch, has no receiver to call (R7-6); native channels are not cleared, because only S7+ binaries read them and every such staging boot carries the switch (R8-3) | A copy of a production store must never deliver to production receivers (OPS6-4, SEC7-6); re-enabling on a real install delivers what is still fresh. |
 | `ClassTransient`, `ClassRateLimited` from a channel | retry via outbox backoff (honour `RetryAfter`), up to `core.notify.max_attempts` | Receivers go down and come back. |
 | `ClassAuth`, `ClassInvalid` (4xx other than 408/429), SMTP 5xx permanent reply, `mail.ErrInvalidHeader` | dead-letter after 1 attempt; instance `HealthAuthFailed`/`Degraded` (its `core.integration.health.changed.v1` reaches **other** channels through their rules) | Retrying cannot fix it; avoid a loop on the broken channel. |
 | Attempts exhausted, or older than `core.notify.max_age` (including entries left pending across a rollback, OPS2-20) | dead-letter, counted; visible in UI with "retry" action | No silent loss, and no stale delivery days later. |
@@ -306,6 +308,9 @@ of 05-metadata M1.3; rules need `core:integrations.manage` plus each named topic
 | `core.notify.max_age` | duration | `24h` (older undelivered, including entries pending across a rollback → dead-letter, counted; OPS2-20) | yes | none |
 
 ## 8. Metrics
+
+Names use core's default namespace `mediacore`; an app's `app.Options.MetricNamespace` replaces it (03 §3.6, A-5).
+All are new with core.
 
 | Name | Type | Labels |
 |---|---|---|
@@ -354,15 +359,14 @@ Fakes: `coretest.FakeNotifier` (records `Send` calls; scriptable classes) and `c
 | `smtp_*` keys | no stored form at HEAD (environment only, 05-metadata M1.10): operator-set `smtp_*` values are the in-memory overlay that yields the effective `notify/email` instance (`Stored=false`) while set, never persisted (05-metadata M1.4 step 2, SIMP2-5). HEAD never lays a stored value over them, so they are not `BelowStored` names (05-config §1.12.4): under the one precedence rule of 05-metadata M1.4 step 2 (SEC6-5) they overlay and lock the matching fields of a stored `notify/email` row while set, and private-network trust follows the effective value's source. An operator-set `smtp_password` is bound to the
 destination `smtp://host:port` by origin plus provenance (05-metadata M1.4 step 2; SEC7-3, R8-5): it is served while
 the effective host and port equal the operator-set `smtp_host`/`smtp_port` (or the adapter default for one the
-operator does not set), or equal the row's `OperatorSecretOrigin`, which a ProtectAdmin `Put` records (a native row has
-nothing for `Registry.Confirm`), so an env password beside an admin-set host works (`TestOperatorSecret_AdminStoredHostServed`, SEC8-2);
+operator does not set), or equal the row's `OperatorSecretOrigin`, which a ProtectAdmin `Put` records, so an env password beside an admin-set host works (`TestOperatorSecret_AdminStoredHostServed`, SEC8-2);
 beside a host or port that only a non-admin `core:integrations.manage` holder chose, the password is withheld (no
 `AUTH` is sent, nothing is delivered through that instance, health `operator_secret_withheld`). HEAD stores no SMTP
-settings, so the first S7 boot records no origin, and a stored `notify/email` is a native row, so
-`ErrOperatorSecretBound` (legacy-backed instances only, SEC8-3) never applies to it; a `notify/email` saved through the API is a native row (password in `secrets` as `integrations.notify.email.password`) that older builds never read — they keep reading the environment. Like every native instance and native rule, it does nothing after a rollback, and events during the rollback are never delivered to it; only deliveries already pending in `c/outbox/` are sent on roll-forward, if fresher than `core.notify.max_age` (§4 step 3; 05-metadata M1.4 native store; OPS5-12). Invites keep their own `mail.Sender` (05-authn): before S7 it is built from the legacy SMTP settings as today; from S7 the kernel builds it from the effective `notify/email` settings, so SMTP is configured once (an S7-or-later change that 05-authn records; SIMP2-4) |
-| `internal/plugins/webhook` + `config.Plugins["webhook"]` | at 09 S7 (with the instance registry; SIMP2-4) the webhook plugin is replaced by **legacy-backed** `notify/webhook-<n>` instances, served in place from `plugins.webhook` by books' legacy instance store (ABO code; no core adapter and no grant) until the integrations cutover (05-metadata M1.4 step 2a, M1.10; R4-1). `n` is the 1-based position in the comma-separated `urls` list, empty entries counted: books' store blanks the entry on a Delete and appends on a create, so under this build positions — and with them instance IDs and rule references — never shift, and HEAD's parser, which skips empty entries (`internal/plugins/webhook/plugin.go:48-53` @748fd787a), sees exactly the remaining URLs. `legacy_headers` is on for every legacy-backed webhook. The legacy `secret`, `plugins.webhook.enabled` and `events` are family-level (`Shared`): the secret moves to `secrets` on this build's first write, staged through `secrets` under each instance's name, and in the same batch `secrets` has books' `legacy.SecretsStore` replace the blob value with the never-matching sentinel (`Supersede`; the one legacy-secret mechanism, 05-config §2.2–§2.3, 05-metadata M1.4 step 2a; R4-2), so after a rollback the older build signs with the sentinel and receivers reject its deliveries until the operator re-enters the secret there (stated in the release note); `events` is the stored form of the one legacy-backed global `Rule` `legacy-webhooks`, served by **books' legacy `RuleStore`** (the `NotifyRules` field of `legacy.Stores` on `Manifest.LegacyStores`, R6-3), which targets every legacy-backed webhook and whose topics are the books topics of the mapping row below (`all` or empty = HEAD's default list, `plugin.go:146-159`); a `PutRule` on it accepts only those twelve topics and `MinSeverity` info (422 `ErrRuleNotExpressible` otherwise; other routing uses native rules). `Local` follows 05-metadata M1.10: the S7 upgrade grants none; a webhook whose host is an IP-literal private address is offered once as a pending `Local` candidate bound to the URL's origin, kept in books' extension family, which an admin accepts with `Registry.Confirm` (DATA5-9). If an older build reorders or edits the list after a rollback, the legacy-field hash no longer matches: that position's `Local` is suspended until an admin confirms it (`Registry.Confirm`), and its `secrets` copy is used only while the URL origin equals the one it was written for (05-metadata M1.4 step 2a) |
+settings, so the first S7 boot records no origin, and a stored `notify/email` is a native row, under the native
+binding (05-metadata M1.4 step 2); a `notify/email` saved through the API is a native row (password in `secrets` as `integrations.notify.email.password`) that older builds never read — they keep reading the environment. Like every native instance and native rule, it does nothing after a rollback, and events during the rollback are never delivered to it; only deliveries already pending in `c/outbox/` are sent on roll-forward, if fresher than `core.notify.max_age` (§4 step 3; 05-metadata M1.4 native store; OPS5-12). Invites keep their own `mail.Sender` (05-authn): before S7 it is built from the legacy SMTP settings as today; from S7 the kernel builds it from the effective `notify/email` settings, so SMTP is configured once (an S7-or-later change that 05-authn records; SIMP2-4) |
+| `internal/plugins/webhook` + `config.Plugins["webhook"]` | at 09 S7 (with the instance registry; SIMP2-4) the webhook plugin is replaced by **legacy-backed** `notify/webhook-<n>` instances, served in place from `plugins.webhook` by books' legacy instance store (ABO code; no core adapter and no grant) until the integrations cutover (05-metadata M1.4 step 2a, M1.10; R4-1). `n` is the 1-based position in the comma-separated `urls` list, empty entries counted: books' store blanks the entry on a Delete and appends on a create, so under this build positions — and with them instance IDs and rule references — never shift, and HEAD's parser, which skips empty entries (`internal/plugins/webhook/plugin.go:48-53` @748fd787a), sees exactly the remaining URLs. `legacy_headers` is on for every legacy-backed webhook. The legacy `secret`, `plugins.webhook.enabled` and `events` are family-level (`Shared`). The secret stays plaintext in the blob, where HEAD keeps it: `secrets` reads and writes it in place under each instance's name through books' `legacy.SecretsStore` (05-config §2.2, 05-metadata M1.4 step 2a; A-2), so an older build signs with the current secret after a rollback; encrypting it is the post-S10 secrets cutover. `events` is the stored form of the one legacy-backed global `Rule` `legacy-webhooks`, served by **books' legacy `RuleStore`** (the `NotifyRules` field of `legacy.Stores` on `Manifest.LegacyStores`, R6-3), which targets every legacy-backed webhook and whose topics are the books topics of the mapping row below (`all` or empty = HEAD's default list, `plugin.go:146-159`); a `PutRule` on it accepts only those twelve topics and `MinSeverity` info (422 `ErrRuleNotExpressible` otherwise; other routing uses native rules). A legacy-backed webhook stores no `Local`: its configured URL keeps HEAD's reach, so a LAN receiver keeps working with no upgrade step, and the URL keeps HEAD's writers (ProtectAdmin; 05-metadata M1.4 step 2a, M1.10). If an older build reorders or edits the list after a rollback, this build reads the list as it now is |
 | plugin event types (`internal/plugin/events.go:18-31`) | books event topics declared notifiable in the events catalog: `book.imported`→`books.book.imported.v1`, `book.deleted`→`books.book.deleted.v1`, `metadata.applied`→`books.metadata.applied.v1`, `tags.written`→`books.tags.written.v1`, `file.organized`→`books.file.organized.v1`, `dedup.detected`→`books.dedup.detected.v1`, `dedup.merged`→`books.dedup.merged.v1`, `cover.changed`→`books.cover.changed.v1`, `read_status.changed`→`books.read-status.changed.v1`, `scan.completed`→`books.scan.completed.v1`, `book.quarantined`→`books.book.quarantined.v1`, `book.unquarantined`→`books.book.unquarantined.v1` (the last two exist at HEAD but are not in the webhook's default list, `internal/plugins/webhook/plugin.go:146-159`); books publishes through `Deps.Notify.Publish` in the same batch as the change (COR2-3) |
-| `plugin.Notifier`, plugin `EventBus` (for notifications) | `plugin.Notifier` deleted (N4). The plugin `EventBus` keeps feeding the webhook plugin until S7 (S6 moves only the operations bus, SIMP3-10); at S7 the webhook plugin and its subscriptions go, and books publishes its 12 event types through `Deps.Notify` instead. `internal/plugin` itself is deleted at **S7**, in the same stage, once its last importer is rewired (18 non-test, non-mock files import it at HEAD, `git grep -l '/internal/plugin"' -- '*.go'` @748fd787a), gated by 04's stage-visibility gate (04 §2.1, §8.3; 09 S7). The notify-only bus role is `core/events` (05-events) |
+| `plugin.Notifier`, plugin `EventBus` (for notifications) | `plugin.Notifier` deleted (N4). The plugin `EventBus` keeps feeding the webhook plugin until S7 (S6 moves only the operations bus, SIMP3-10); at S7 the webhook plugin and its subscriptions go, and books publishes its 12 event types through `Deps.Notify` instead. `internal/plugin` itself is deleted at **S7**, in the same stage, once its last importer is rewired (18 non-test, non-mock files import it at HEAD, `git grep -l '/internal/plugin"' -- '*.go'` @748fd787a; informative, ADV-11); the deleting PR does not build while any importer remains (04 §8.3 is the informative map; 09 S7). The notify-only bus role is `core/events` (05-events) |
 | `mailSenderOverride` test seam (`internal/server/server.go:424`) | `coretest.MailRecorder` injected as the email instance |
 
 ## 11. Open items
@@ -372,7 +376,8 @@ settings, so the first S7 boot records no origin, and a stored `notify/email` is
    high-volume topic is defined. A digest window, like per-user delivery (item 2), reintroduces a dispatch stage
    between `Publish` and delivery (one durable entry per notification, resolved and coalesced by a consumer);
    v1 has none (SIMP2-11).
-2. Deferred features (§1 table) are listed for the owner; none has a consumer in S0–S10 (09 §9.3). When per-user
+2. Deferred features (§1 table) are listed for the owner as a design sketch (non-normative, A-15); none has a
+   consumer in S0–S10 (09 §9.3). When per-user
    delivery ships it reintroduces delivery-time RBAC filtering of each recipient against the topic's
    `Permission` for `Entity`, and personal instances are forced to `EgressPublicOnly`.
 
@@ -495,3 +500,12 @@ Round 8 (`docs/plans/platform-core/reviews/spec-round-8-dispositions.md`):
 - R8-5 / SEC8-3 — §10 SMTP row: `notify/email` is native, so `ErrOperatorSecretBound` never applies to it.
 - R8-3 / SIMP8-2 — §5 `core.integrations.disabled` row: staging clears legacy URLs only; native channels are covered by the switch.
 - SIMP8-3 — §3 `RuleStore` comment: "the kernel asserts only the capabilities 03 §3.3 lists".
+
+Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
+
+- A-2 / ADV-S1 — §3.1, §10 webhook and SMTP rows: the webhook secret stays plaintext in the blob, read and written in place; no sentinel, extension record, pending `Local` candidate or `Registry.Confirm`; legacy-backed webhooks keep HEAD's reach and ProtectAdmin writers; `notify/email` keeps the native origin binding without `Registry.Confirm` or `ErrOperatorSecretBound`.
+- A-4 / ADV-S3 — §1 "Deferred-build members": `archtest.DeferredMembersAbsent` deleted; §10 `internal/plugin` row: the stage-visibility gate replaced by the deleting PR's build.
+- A-5 / ADV-S4 — §8: names under `app.Options.MetricNamespace`.
+- A-12 / ADV-S6 — §5 `core.integrations.disabled` row: `staging-scrub` named.
+- A-15 / ADV-S9 — §1 table, "Deferred-build members" and §11 item 2: deferred features labelled design sketch (non-normative), not frozen by the SDK.
+- ADV-11 — §10 `internal/plugin` row: the importer count marked informative.

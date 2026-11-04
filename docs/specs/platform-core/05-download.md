@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-download.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: 513fb395-c640-4bb6-b76c-d9fe80b3224e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -45,8 +45,9 @@ the ABO extraction plan ([09](09-abo-on-core.md) S7) builds:
 | The optional `Adder`, `Remover`, `Categorizer`, `Pauser`, `SeedLimiter` and their `Caps` fields; the grab types `GrabRequest`, `ResolvedGrab`, `GrabID`, `AddResult`, `Source`, `Priority`, `SeedGoal`, `RemoveOptions`; `Pool.Grab`, grab records and recovery (§4.3), monitor/poll task and the `core.download.item.transitioned.v1` topic (§4.5), `Watch`, `Tracked`, `Refresh`, `MarkImported`, `Pool.Remove`, seed goals, the `core.download.*` poll keys and the `core.download.schedules.poll` schedule key | **2 — deferred-build: not in the ABO extraction plan** | `acquire` (TV/Movies) |
 | books' `BookVersion.TorrentHash`/`BookFile.DelugeHash` → stored `download.ItemRef` (a library-scale books row rewrite) | **2** — when a second download instance can exist; ships as a books format change of its own: one-way, checkpointed, behind the per-owner level guard, with its own stage entry and done-check (R3-1; no mirror) | books (SIMP2-7) |
 
-Phase-2 contracts below are kept at proof depth so `acquire` can be checked against them; nothing in
-phase 2 is built until the first TV/Movies app starts. HEAD's Deluge client has no add method at all and its
+**Phase 2 is a design sketch (non-normative; A-15).** Its contracts below are kept at proof depth so `acquire`
+can be checked against them, and are labelled where they start; the SDK freezes none of them, and they are
+settled when the first TV/Movies app starts and builds them. HEAD's Deluge client has no add method at all and its
 `RemoveTorrent` has no caller (§2), so phase 1 puts neither on the required `Client`: a built package carries no
 member whose only consumer is deferred (03 §3.4), and the API-stability gate would otherwise freeze the grab types
 before `acquire`, their only consumer, exists to validate them. Phase 2 adds `Adder` and `Remover` beside
@@ -54,12 +55,11 @@ before `acquire`, their only consumer, exists to validate them. Phase 2 adds `Ad
 
 ### Deferred-build members
 
+> **Design sketch (non-normative; A-15).** The SDK freezes none of these members.
+
 The phase-2 members of this built package (the §1 table's phase-2 row). None is in the 09 S7 build. The first
-column holds only package-qualified Go identifiers (so that `audit.Event` or `events.Watch…` never match
-`download.Event` or `download.Watch`), each absent from non-test files under `core/` per
-`archtest.DeferredMembersAbsent` (03 §3.4); topics, task kinds and keys are in the second column and are not checked
-(03 §3.4 grammar, SIMP5-6). The PR that builds a member deletes its row (SIMP4-1, COR4-19). This covers the grab
-pipeline the 09 S7 done-check wants absent.
+column holds package-qualified Go identifiers; topics, task kinds and keys are in the second column (SIMP5-6). The
+PR that builds a member deletes its row (SIMP4-1, COR4-19).
 
 | Member | Also deferred (not checked) | Lands with | Contract |
 |---|---|---|---|
@@ -224,7 +224,8 @@ func (p *Pool) Files(ctx context.Context, item ItemRef) ([]File, error)
 func (p *Pool) Relocate(ctx context.Context, items []ItemRef, localDir library.Path) error // groups by instance; maps path
 
 // ---- phase 2: grabs and monitor (deferred-build, built with acquire) ---------
-// Nothing below is in the ABO extraction plan. Each optional interface is
+// DESIGN SKETCH (non-normative, A-15): the SDK freezes nothing below, and
+// nothing below is in the ABO extraction plan. Each optional interface is
 // additive to the phase-1 Client, so landing phase 2 passes the API-stability
 // gate (SIMP3-4).
 
@@ -386,7 +387,8 @@ type Event struct {
 }
 ```
 
-Registrar slice (06 owns the type; phase 2): `func (r *Registrar) DownloadWatch(w ...download.Watch)`.
+Registrar slice and topics (06 owns the type; phase 2, design sketch, non-normative):
+`func (r *Registrar) DownloadWatch(w ...download.Watch)`.
 Owners consume the durable topic below as ordinary outbox consumers ([05-events](05-events.md)), each selecting
 its own messages with the consumer filter `outbox.Where` (§4.5, COR2-10). The whole download lifecycle is **one**
 durable topic, so per-key order is the outbox's ordinary per-partition order and no consumer reads several
@@ -414,7 +416,8 @@ qBittorrent `username`, `password`; Transmission `username`, `password`; SABnzbd
 `username`, `password`. Every adapter declares `Meta.Egress = EgressConfigured`: a client on the LAN (the
 usual case) needs `Local=true`, which only an interactive `core:admin` holder can set (05-metadata M1.3,
 SEC2-7), or its host listed in `core.integrations.egress.lan_allow`; a URL change clears the stored password
-(SEC-15). Adapters log in lazily on first call and re-login once on an auth error with the
+(SEC-15). ABO's legacy-backed `download/deluge` stores no `Local`: its configured host keeps HEAD's reach, and its
+URL only an admin changes (05-metadata M1.4 step 2a, A-2). Adapters log in lazily on first call and re-login once on an auth error with the
 generation guard of `internal/deluge/client.go:198-221` (concurrent callers log in once).
 
 | Adapter | Wire (raw/16 §4.6) | Health probe | Phase |
@@ -472,6 +475,8 @@ Unknown client values map to `StateWarning` with the raw value in `Message` and 
 
 ### 4.3 Grab (phase 2, deferred-build)
 
+> **Design sketch (non-normative; A-15).** Not built in the extraction; the SDK freezes none of it.
+
 `Pool.Grab`: validate (exactly one `Source`; `IdempotencyKey` set; `Owner` is `"core.acquire"` or a
 registered module ID; `Refs` non-empty) → look up `c/download/grabs/by-key/<key>`; if present return it
 (`Duplicate`) → choose instance → write grab record `pending{Owner, Refs, key}` **plus the owner's
@@ -493,13 +498,8 @@ land in one partition and each consumer reads them through one cursor in staging
 events (`completed`, `failed`, `removed`) only for grabs whose `added` record has committed, so `grab_added`
 always precedes them, also for a cached torrent or usenet job that is complete on its first poll. A recovery
 pass that finds the item already complete stages `grab_added` and then `completed` in that order in one batch.
-**Every write to `c/download/grabs/` is checked at commit (R6-1).** Not only the `pending → added | failed` step:
-the new `pending` record and its `by-key/<key>` row (expected absent), and every later change of a grab record
-(`MarkImported`'s and `Remove`'s outcome, retention pruning) stage `Batch.GetForUpdate` on the record the writer
-derived its change from, and the sub-prefix is `CheckedWrites` from the release that builds the grab pipeline, so
-storage refuses a blind write (`ErrBlindWrite`). A writer whose commit fails with `storage.ErrConflict` is dropped:
-nothing of its batch applies, it re-reads and decides again from the record's new state, and never re-stages what
-it derived from the stale read, so no later write can revert a `failed` or a recovery's `added`.
+Every write to `c/download/grabs/` (a native keyspace) derives from a `GetForUpdate` read, and a writer whose commit
+conflicts re-reads and decides again, so no later write can revert a `failed` or a recovery's `added` (R6-1).
 Both intake rows of that batch commit together, so their relative order is their key order: it holds because
 `Stage` takes message IDs from one monotonic generator per `Outbox`, so intake keys preserve `Stage` call order
 within a process (05-events §5E.4, §5E.5.2, `TestStageOrderWithinBatch`; COR4-14). As defence in depth, acquire applies a
@@ -519,6 +519,8 @@ string-replace mid-segment; no mapping and not under a root → `library.ErrUnma
 through the library's `os.Root` and reports unmapped ones as `HealthDegraded`.
 
 ### 4.5 Monitor and handoff (phase 2, deferred-build)
+
+> **Design sketch (non-normative; A-15).** Not built in the extraction; the SDK freezes none of it.
 
 Task `core.download.poll` (05-tasks) is the only client poller in core. It is scheduled by
 `tasks.ScheduleFromConfig("core.download.schedules.poll")` (the one schedule-key rule, R2-7) and started on
@@ -573,7 +575,7 @@ in-flight batches first.
 | Unknown client state value | `StateWarning`, counted | Never guess `Completed`. |
 | Optional capability absent (`FileLister`, `Relocator`; phase 2: `Adder`, `Remover`, …) | `ClassUnsupported` | Caller decides (e.g. ABO skips move_storage, as today when disabled; `Pool.Grab` tries the next instance). |
 | Snapshot/outbox batch write fails | closed: transition retried next poll | Same-batch rule: no event without state, no state without event. |
-| `core.integrations.disabled` true (a staging copy, R6-7; 05-metadata M1.4) | closed: `Lease` gives `ErrDisabled`, so `Items`, `Files` and `Relocate` fail and the poll leaves every snapshot untouched (as for an outage); phase 2: `Pool.Grab` stores nothing. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances (the phase-2 `core.download.schedules.poll` run included). At every stage, staging (09 §9.3) also clears every legacy integration URL (the Deluge web URL included), so an older build booted on the copy, which ignores the switch, has no client to call (R7-6); native client rows are not cleared, because only S7+ binaries read them and every such staging boot carries the switch (R8-3) | A copy of a production store must never move, add or remove items in a production client (OPS6-4, SEC7-6); schedules must still fire there (DATA5-8). |
+| `core.integrations.disabled` true (a staging copy, R6-7; 05-metadata M1.4) | closed: `Lease` gives `ErrDisabled`, so `Items`, `Files` and `Relocate` fail and the poll leaves every snapshot untouched (as for an outage); phase 2: `Pool.Grab` stores nothing. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances (the phase-2 `core.download.schedules.poll` run included). At every stage, `staging-scrub` (09 §9.3, A-12) also clears every legacy integration URL (the Deluge web URL included), so an older build booted on the copy, which ignores the switch, has no client to call (R7-6); native client rows are not cleared, because only S7+ binaries read them and every such staging boot carries the switch (R8-3) | A copy of a production store must never move, add or remove items in a production client (OPS6-4, SEC7-6); schedules must still fire there (DATA5-8). |
 | Relocate after organize fails (ABO "follow the book") | open for the organize (already succeeded), error recorded on the item and surfaced in health | Today it is a log line only (`integration.go:131-135`); the design keeps "best effort" but makes it visible. |
 
 ## 6. Concurrency contract
@@ -613,7 +615,8 @@ Protection classes per 05-config §1.3.7 (SEC2-8). Instance fields follow the in
 
 ## 8. Metrics
 
-Phase 2 metrics are marked; phase 1 ships only the unmarked ones.
+Phase 2 metrics are marked (design sketch, A-15); phase 1 ships only the unmarked ones. Names use core's default
+namespace `mediacore`; an app's `app.Options.MetricNamespace` replaces it (03 §3.6, A-5). All are new with core.
 
 | Name | Type | Labels |
 |---|---|---|
@@ -632,9 +635,10 @@ Core, phase 1: `TestPool_ItemsFillsLocalPath`, `TestPool_RelocateGroupsByInstanc
 `TestPool_IntegrationsDisabledNoClientCall` (`core.integrations.disabled`: a fake client sees no request and no
 snapshot changes; R6-7),
 `TestDelugeInstance_LegacyBackedReadInPlace` (05-metadata M1.4 step 2a, with a fake legacy instance store covering
-`download/deluge`: it is read from and written through that store; no `c/integrations/instances/download/deluge`
-row is written; R4-1).
-Core, phase 2 (with `acquire`): `TestGrab_IdempotencyKeyDedupes`, `TestGrab_AmbiguousAddRecoveredByTag`,
+`download/deluge`: it is read from and written through that store, its password in place in the blob; no
+`c/integrations/instances/download/deluge` row and no `c/secrets/` record is written; its private configured host
+is dialled; R4-1, A-2).
+Core, phase 2 (with `acquire`; a sketch until then): `TestGrab_IdempotencyKeyDedupes`, `TestGrab_AmbiguousAddRecoveredByTag`,
 `TestGrab_FallbackOnTransportOnly`, `TestGrab_InvalidNoFallback`, `TestGrab_OwnerAcquireAccepted`,
 `TestGrab_RecordFuncInSameBatch`, `TestGrab_AddedEventStaged`, `TestPool_SelectionPriorityRoundRobin`,
 `TestPool_PinnedInstance`, `TestMonitor_TransitionWritesSnapshotAndOutboxInOneBatch`,
@@ -644,8 +648,7 @@ owners' messages without a run or a write; COR2-10), `TestMonitor_GrabEventsShar
 carries key `GrabID`; a cached item complete on its first poll is staged `grab_added` then `completed`; COR3-4),
 `TestGrab_RecoveryAndAddNeverBothStage` (`-race`: a late `Add` success and a recovery pass on one pending
 record → exactly one `grab_added`), `TestGrab_EveryRecordWriteChecked` (`-race`: `MarkImported` against a
-concurrent recovery or failure on one grab record → exactly one commits and the loser re-reads; a blind `Set` on
-`c/download/grabs/` fails with `ErrBlindWrite`; R6-1), `TestPool_RefreshDoesNotStackRuns`, `TestMarkImported_RemovesOnlyWhenSeedGoalMet`.
+concurrent recovery or failure on one grab record → exactly one commits and the loser re-reads; R6-1), `TestPool_RefreshDoesNotStackRuns`, `TestMarkImported_RemovesOnlyWhenSeedGoalMet`.
 Adapters: `coretest.DownloadConformance(t, factory, fixtures)` — one suite every adapter passes, covering what
 is built: phase 1 items/state mapping golden table, status, files, relocate, auth failure and re-login, unknown
 state; phase 2 adds add (magnet, file, URL), duplicate add, category and remove ± data for adapters implementing
@@ -659,7 +662,7 @@ client with a scriptable clock-driven state machine (`Advance(id, State)`), capa
 |---|---|
 | `internal/deluge/client.go` | `core/integrations/download/deluge` adapter (`core.deluge`); RPC/auth code reused; every method gains ctx; `http.Client` from `env.HTTP` (5-minute timeout becomes per-op limits) |
 | `deluge.GetClient()` global, `ResetGlobalClientForTest`, `SetGlobalClientForTest` | deleted; `Pool.Lease` |
-| `DelugeWebURL/Password`, `download_client.torrent.deluge` | the **legacy-backed** instance `download/deluge` (05-metadata M1.4 step 2a, M1.10; R4-1): its URL and settings stay in the config blob, served in place by books' legacy instance store (ABO code; no core adapter and no grant) until the integrations cutover, which is outside the extraction; nothing is copied into `c/integrations/instances/`, so the current build and any older build read the same values. The password moves to `secrets` as `integrations.download.deluge.password` the first time this build writes it, and in that batch books' store replaces the blob value, and every other plaintext copy, with the never-matching sentinel (05-config §2.2, R4-2) — not a blank, which an older build would replace with Deluge's factory-default password (`internal/deluge/integration.go:27-67` @748fd787a). After a rollback the older build's Deluge login therefore fails until the operator re-enters the password there (stated in the release note); a value re-entered that way is re-imported on roll-forward. `Local` is native-only: books' store keeps it in its extension family. The S7 upgrade grants none: when the host is an IP-literal loopback or private address, the S7 books migration records it as a pending candidate bound to that URL origin, and the instance cannot reach it until an admin accepts it (`Registry.Confirm`, audited; release note); an older build's change of the instance suspends a granted `Local` until an admin confirms it again (05-metadata M1.10 egress trust, M1.4 step 2a; SEC3-5, DATA5-9). The Deluge password is plaintext in the blob at HEAD, so it moves as described above; it is not one of the secrets HEAD already encrypts, which stay in place (R5-1(b), 05-metadata M1.4 step 2a). Env-authoritative behaviour is preserved as an **in-memory operator overlay** on the effective instance while an operator value is set — never written to the blob, the extension record or `c/secrets/`, so removing the env value restores the stored password as HEAD does (env names permanent, 05-metadata M1.4 step 2, SIMP2-5). Which Deluge env names overlay and lock, and which only fill an unstored field, follows HEAD per name under the one precedence rule (05-config §1.12.4 `BelowStored`, 05-metadata M1.4 step 2; SEC6-5), and an env-given URL is trusted for private networks only while it is the effective value. An env-given Deluge password is bound to the web URL by origin plus provenance (05-metadata M1.4 step 2; SEC7-3, R8-5): it is served while the effective URL's origin equals the env URL's (or, with none, the adapter default), or equals the instance's `OperatorSecretOrigin`, which the S7 books migration records from the stored web URL (an admin action at HEAD) and a ProtectAdmin `Put` or `Registry.Confirm` records afterwards, so an env password beside an admin-set URL keeps working at S7 (`TestOperatorSecret_AdminStoredHostServed`, SEC8-2). Otherwise the env password is withheld (no login is sent, health `HealthDegraded` `operator_secret_withheld`) until a stored password is re-supplied, the stored URL is removed, or an admin records the URL. Because an older build re-applies the env password beside whatever URL the blob holds (`internal/config/config.go:2249-2250` @748fd787a), a `Put` without the ProtectAdmin check that moves the web URL to another origin than the env URL's or the default, while the password is operator-sourced, is refused with 403 `ErrOperatorSecretBound` until the integrations cutover (SEC8-3; `TestPut_LegacyBackedNonAdminDestinationBound`) |
+| `DelugeWebURL/Password`, `download_client.torrent.deluge` | the **legacy-backed** instance `download/deluge` (05-metadata M1.4 step 2a, M1.10; R4-1): its URL, settings and password stay in the config blob, in HEAD's representation, served in place by books' legacy instance store (ABO code; no core adapter and no grant) until the integrations cutover, which is outside the extraction; nothing is copied into `c/integrations/instances/` or `c/secrets/`, so the current build and any older build read the same values. The password stays plaintext where HEAD keeps it and is read and written in place under the name `integrations.download.deluge.password` (A-2; 05-config §2.2); encrypting it is the post-S10 secrets cutover. Its web URL keeps HEAD's reach for a LAN client, with no upgrade step or confirmation, and keeps HEAD's writers: changing it needs the ProtectAdmin check (05-metadata M1.3 `Put`, M1.4 step 2a, M1.10). Env-authoritative behaviour is preserved as an **in-memory operator overlay** on the effective instance while an operator value is set — never written to the blob or `c/secrets/`, so removing the env value restores the stored password as HEAD does (env names permanent, 05-metadata M1.4 step 2, SIMP2-5). Which Deluge env names overlay and lock, and which only fill an unstored field, follows HEAD per name under the one precedence rule (05-config §1.12.4 `BelowStored`, 05-metadata M1.4 step 2; SEC6-5). An env-given Deluge password is served as at HEAD, beside whatever web URL the blob holds (`internal/config/config.go:2249-2250` @748fd787a), which only an admin can change (05-metadata M1.4 step 2 "Legacy-backed instances keep HEAD's behaviour"; A-2; `TestLegacyBacked_OperatorSecretServedAsHEAD`) |
 | `deluge_move_enabled`, `deluge_discovery_label`, `deluge_discovery_enabled` | `modules.books.download.*` settings (they are ABO behaviour, not client config) |
 | `BookVersion.TorrentHash`, `BookFile.DelugeHash` | **phase 1: unchanged** — no books row rewrite; books builds `download.ItemRef{Instance: download/deluge, ID: ItemID(hash)}` at the call site. Storing `ItemRef` is the phase-2 books migration (§1 table), with its own stage entry when it ships (SIMP2-7) |
 | `NotifyDelugeAfterOrganize/AfterVersionSwap/MoveStorage(ToDir)` | books code calling `Pool.Relocate` (reached as `module.Deps.Downloads`, COR-1) for every `ItemRef` of the book's active versions, behind `Caps.Relocate` |
@@ -797,3 +800,11 @@ Round 8 (`docs/plans/platform-core/reviews/spec-round-8-dispositions.md`):
 - R8-5 / SEC8-2 — §10 Deluge row: an env Deluge password is served while the effective web URL's origin equals the env URL's, the default, or the instance's `OperatorSecretOrigin` (recorded at the first S7 boot from the admin-set URL; 05-metadata M1.4 step 2).
 - R8-5 / SEC8-3 — §10 Deluge row: until the integrations cutover a non-ProtectAdmin `Put` that moves the web URL while the password is operator-sourced gets 403 `ErrOperatorSecretBound`.
 - R8-3 / SIMP8-2 — §5 `core.integrations.disabled` row: staging clears legacy URLs only; native client rows are covered by the switch.
+
+Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
+
+- A-2 / ADV-S1 — §4.1, §9, §10 Deluge row: password stays plaintext in the blob, read and written in place; no sentinel, re-import, extension record, pending `Local` candidate, `Registry.Confirm`, `OperatorSecretOrigin` or `ErrOperatorSecretBound`; the web URL keeps HEAD's reach and HEAD's (ProtectAdmin) writers; env password served as at HEAD.
+- A-4 / ADV-S3 — §1 "Deferred-build members": `archtest.DeferredMembersAbsent` and the S7 "absent" done-check reference deleted.
+- A-5 / ADV-S4 — §8: names under `app.Options.MetricNamespace`.
+- A-12 / ADV-S6 — §5 `core.integrations.disabled` row: `staging-scrub` named.
+- A-15 / ADV-S9 — §1, §1 "Deferred-build members", §3 phase-2 block, registrar/topic paragraph, §4.3, §4.5, §8, §9: phase 2 labelled design sketch (non-normative), not frozen by the SDK; §4.3's commit-check paragraph and the phase-2 `ErrBlindWrite` test clause trimmed.

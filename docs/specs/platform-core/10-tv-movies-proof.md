@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/10-tv-movies-proof.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: e9ed438b-6097-4a4d-8b51-d2eacaca8221 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -29,10 +29,16 @@ rows 7, 11, 17–20); any UI beyond the module contribution points of [07-ui-she
 **Where the code would live.** `tv` and `movies` are *modules* (03 §3.1) in their own future app
 repos (`falkcorp/tv-*`, `falkcorp/movies-*`). Nothing in this file is built in the ABO repo.
 
-> **Deferred-build: not in the ABO extraction plan** (cross-cutting resolution 1, SIMP-1, SIMP-24). `acquire`,
-> `integrations/indexer`, the `arrfacade` and phase 2 of `integrations/download` (grab, monitor, recovery) are
-> built when the first TV/Movies app starts (03 §3.3). Until then §10.5 is the design of record at **proof
-> depth**: interfaces, key types and invariants, not an implementation-ready API.
+> **Design sketch (non-normative; A-15).** This whole file is a design sketch. The SDK freezes none of it: the
+> `tv` and `movies` modules, `acquire` (§10.5), and what it relies on that is also deferred — `integrations/indexer`,
+> the `arrfacade` and phase 2 of `integrations/download` (grab, monitor, recovery) — are designed for real and built
+> when the first TV/Movies app starts (03 §3.3, §3.4; cross-cutting resolution 1, SIMP-1, SIMP-24). What the file
+> still proves (D5) is that the contracts the SDK **does** freeze fit TV and Movies: every row of §10.1.2 and
+> §10.2.2 that names a built package (`storage`, `tasks`, `library`, `integrations`, `providerhttp`,
+> `integrations/metadata`, `integrations/notify`, `events`, `outbox`, `rbac`, `httpapi`, `realtime`, the UI shell)
+> is filled from that package's frozen contract, and §10.4 closes each gap either in such a contract or in the
+> sketched `acquire`. §10.5 is kept at **proof depth**: interfaces, key types and invariants, not an
+> implementation-ready API.
 
 ## 10.1 TV module (`tv`) — Sonarr-like
 
@@ -151,7 +157,7 @@ predicate that depends on the clock or on hot-reloadable config.
 
 | Capability | Core package (spec) | How `tv` uses it |
 |---|---|---|
-| Persisted core state | `auth`, `rbac`, `tasks`, `integrations`, `providerhttp` (and `ai`, unused) | No module of the TV app sets `Manifest.LegacyStores` (06 §6.4.2), and the app imports nothing from core's `legacy` package, which holds every legacy-only identifier outside the API promise (03 §3.3, R6-3): it has no pre-core data, so every core service of 03 §3.3's "Store interfaces" table uses its **native store** under `c/<subsystem>/`, alone — for an exclusive store because no legacy one replaces it, and for a routed store (instances, gates, rules; 05-metadata M1.1, SIMP5-1) because no legacy store covers any record, so the native store serves every one and no legacy capability (`legacy.Covering`, `legacy.ExtConfirmer`, 05-storage §5S.3.11) is ever consulted: users, keys and identities ([05-authn](05-authn.md)), roles ([05-rbac](05-rbac.md)), runs, queues, clocks and stamps ([05-tasks](05-tasks.md)), integration instances (download clients, indexers, notification channels: `NativeInstanceStore`, [05-metadata](05-metadata.md) M1.4), provider holds and daily quotas (`NativeGateStore`, M2.4), notification rules (`NativeRuleStore`, [05-notify](05-notify.md) §3) and AI batch jobs (`NativeJobStore`, [05-ai](05-ai.md) §4; TV/Movies consume no AI). No legacy key name, row format, extension family or storage grant exists in this app (R4-1, SIMP4-3). |
+| Persisted core state | `auth`, `rbac`, `tasks`, `integrations`, `providerhttp` (and `ai`, unused) | No module of the TV app sets `Manifest.LegacyStores` (06 §6.4.2), and the app imports nothing from core's `legacy` package, which holds every legacy-only identifier outside the API promise (03 §3.3, R6-3): it has no pre-core data, so every core service of 03 §3.3's "Store interfaces" table uses its **native store** under `c/<subsystem>/`, alone — for an exclusive store because no legacy one replaces it, and for a routed store (instances, gates, rules; 05-metadata M1.1, SIMP5-1) because no legacy store covers any record, so the native store serves every one and no legacy capability (`legacy.Covering`, 05-storage §5S.3.11) is ever consulted: users, keys and identities ([05-authn](05-authn.md)), roles ([05-rbac](05-rbac.md)), runs, queues, clocks and stamps ([05-tasks](05-tasks.md)), integration instances (download clients, indexers, notification channels: `NativeInstanceStore`, [05-metadata](05-metadata.md) M1.4), provider holds and daily quotas (`NativeGateStore`, M2.4), notification rules (`NativeRuleStore`, [05-notify](05-notify.md) §3) and AI batch jobs (`NativeJobStore`, [05-ai](05-ai.md) §4; TV/Movies consume no AI). No legacy key name, row format or storage grant exists in this app, so every instance has the full native design: `Local`, origin binding of operator secrets, encrypted `secrets` records (R4-1, SIMP4-3, A-2). |
 | Storage keyspace | `storage` ([05-storage](05-storage.md)) | `Deps.Storage` hands the module `Keyspace("m/tv/")`; writes outside it are refused (R8). Scans are `codec.Typed[Series].All` (`iter.Seq2[Series, error]`). Integer IDs from `Keyspace.Sequence("series").Next` (§10.4 G10). |
 | Tasks | `tasks` ([05-tasks](05-tasks.md)) | Module task kinds: `tv.metadata.refresh` (every 12 h like Sonarr, `raw/16 §1.1` notes, on `tasks.ScheduleFromConfig("modules.tv.metadata.schedules.refresh")`, default `{enabled: true, every: 12h}`, §10.5.7; `tasks.Fixed(4, "metadata provider rate limits")`), `tv.search.missing`, `tv.search.series`, `tv.search.episodes`, `tv.disk.rescan` (`tasks.CPU()`; per-series partition), `tv.recent.search` (aired in last 14 days or 1 day ahead, `raw/16 §1.3`). RSS sync is a **core** `acquire` task and download polling a **core** `integrations/download` task (§10.5.4); neither is the module's. The import of a completed download **is** the module's: kind `tv.acquire.import`, built by `acquire.ImportTask` and registered by `tv` (§10.5.4, COR2-11), so its writes run under `tv`'s own `Effects`. Every `RunItems` declares parallelism (R7). Any cadence a `tv.*` or `movies.*` kind gets is a declared module schedule key of this shape (R2-7); in this proof only `tv.metadata.refresh` has one (SIMP3-9). |
 | RSS sync & search | `acquire` + `integrations/indexer` | The module registers an `acquire.MediaType[tv.Target]` (§10.5.3), reaching the service as `module.Deps.Acquire` (06, COR-1): Newznab categories (TV 5000 family + anime 5070, `raw/16 §4.2`) and RSS type `TypeTV`, a release parser, a mapper release → series/episodes, its search-criteria builder (`t=tvsearch` + `tvdbid/tmdbid/imdbid`, `season`/`ep`; daily `season=<yyyy>&ep=<MM>/<dd>`; anime `q=<title>+<abs>`, `raw/16 §1.2, §4.2`), and its own specs (§10.5.3 table). |
@@ -345,9 +351,9 @@ No gap requires a universal media row (02 §2.2 row 6 holds).
 
 ## 10.5 Capability contract: `acquire`
 
-> Deferred-build: not in the ABO extraction plan. Proof depth (SIMP-24): the Go block names the interfaces
-> and key types `acquire` must offer and the invariants that make the flows correct; exhaustive field lists
-> come from `raw/16` when the package is built.
+> **Design sketch (non-normative; A-15).** Deferred-build, not in the ABO extraction plan, and frozen by nothing.
+> Proof depth (SIMP-24): the Go block names the interfaces and key types `acquire` would offer and the invariants
+> that make the flows correct; exhaustive field lists come from `raw/16` when the package is built.
 
 ### 10.5.1 Purpose & scope
 
@@ -819,15 +825,11 @@ Tracked-download transitions (complete table; `→` legal; the event names are t
   downloads that share any ref (a pack and an episode it contains, or two downloads for one movie) import
   serially; disjoint ones in parallel, each as its own module run.
 - Tracked-download transitions from download events are applied by one outbox consumer in the relay batch.
-  `c/acquire/tracked/` is a `Serialized` and `CheckedWrites` sub-prefix (05-storage §5S.3.2, §5S.3.4), and
-  **every** TD write — that consumer, the import run's `ImportTx`, `core.acquire.import-retry`'s fenced
-  `ImportPending` record (attempts++, next attempt time), user actions (remove, ignore), and writes that keep the
-  state (`Messages`, `Attempts`, `Updated`) — stages `Batch.GetForUpdate` on the row it derived its change from,
-  together with the index rows it touches (`ix/tracked-by-grab/`, `ix/tracked-by-ref/`, `ix/import-retry/`), so
-  storage refuses a blind write and two writers can never both commit from the same read; a message or attempt
-  update can therefore never revert an `Ignored` or a user's remove (R6-1, COR3-4). The loser is **dropped**: its
-  batch applies nothing, it re-reads and decides again from the new state, and never re-stages the row it derived
-  from the stale read. A per-ID keyed mutex on the user-action path is only for fairness.
+  `c/acquire/tracked/` is a `Serialized` native sub-prefix (05-storage §5S.3.2, §5S.3.4), and **every** TD write —
+  that consumer, the import run, the import retry, user actions, and writes that keep the state — derives from a
+  `Batch.GetForUpdate` read of the row and its index rows, so two writers never both commit from the same read and a
+  message or attempt update can never revert an `Ignored` or a user's remove (R6-1, COR3-4). The loser re-reads and
+  decides again.
 - Cancellation: every task honours `ctx`; persistence of a terminal state after cancellation uses
   `context.WithoutCancel` with a short timeout so a cancelled task cannot leave a half-written batch.
 - No goroutine outlives `App.Run`: the service's workers are started with `wg.Go` and joined on shutdown.
@@ -869,7 +871,8 @@ Module keys (declared by the module, R2-7; SIMP3-9):
 
 ### 10.5.8 Metrics
 
-Per-App registry (R5). Label values are bounded enums or configured names.
+Per-App registry (R5). Label values are bounded enums or configured names. Names use core's default namespace
+`mediacore`; an app's `app.Options.MetricNamespace` replaces it (03 §3.6, A-5).
 
 | Name | Type | Labels |
 |---|---|---|
@@ -885,7 +888,7 @@ Per-App registry (R5). Label values are bounded enums or configured names.
 | `mediacore_acquire_spec_failures_total` | counter | `module`, `spec` |
 | `mediacore_acquire_transition_refused_total` | counter | `module`, `from`, `kind` (the `download.EventKind`) |
 
-### 10.5.9 Tests (core must ship)
+### 10.5.9 Tests (when `acquire` is built)
 
 | Test | Asserts |
 |---|---|
@@ -904,7 +907,7 @@ Per-App registry (R5). Label values are bounded enums or configured names.
 | `TestCompletedOnGrabbingAppliesInOneTransition` | a `completed` delivered to a TD in `Grabbing` (forced reorder) moves it to `ImportPending` in one transition and stages the import; the late `grab_added` is acked and counted as refused (COR4-14) |
 | `TestRefusedTransitionDoesNotBlockPartition` | a stale event (TD already `Ignored`) is acked and counted; the next event in the same partition is applied at once, nothing dead-letters (COR3-4) |
 | `TestTrackedWritersSerialised` | `-race`: the consumer and a user `ignore` on one TD from the same state → exactly one commits (Serialized `tracked/`, `GetForUpdate`) |
-| `TestTrackedStateKeepingWriteNeverRevertsIgnore` | `-race`: an import-retry attempts++/`Messages` write and a concurrent user `ignore` on one TD → exactly one commits, the TD is never back in `ImportPending` after the `ignore` commits, and a blind `Set` on `tracked/` fails with `ErrBlindWrite` (R6-1) |
+| `TestTrackedStateKeepingWriteNeverRevertsIgnore` | `-race`: an import-retry attempts++/`Messages` write and a concurrent user `ignore` on one TD → exactly one commits, the TD is never back in `ImportPending` after the `ignore` commits (R6-1) |
 | `TestImportNeverRunsBeforeTransition` | the import run is staged in the batch that commits `ImportPending`; under injected crashes no import run exists without that transition, and no `ImportPending` TD lacks a queued run or a retry entry (COR2-10) |
 | `TestImportRunsAsModuleKind` | the import kind is `<module>.acquire.import`; an importer write outside the module's `Effects` fails with `ErrOutsideEffects`; an import and `tv.disk.rescan` over an overlapping series never run at once (COR2-11) |
 | `TestGrabWritesTDInGrabRecordBatch` | TD exists iff download's grab record exists, under injected crashes (COR-3) |
@@ -1082,3 +1085,9 @@ Round 6 (`docs/plans/platform-core/reviews/spec-round-6-dispositions.md`):
   `TestTrackedStateKeepingWriteNeverRevertsIgnore`.
 - R6-3 — §10.1.2 "Persisted core state": the TV app imports nothing from package `legacy`; the capabilities are
   `legacy.Covering`/`legacy.ExtConfirmer`.
+
+Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
+
+- A-15 / ADV-S9 — §10.0 and §10.5: the whole file is a design sketch (non-normative) the SDK does not freeze; §10.0 states how it still shows the frozen contracts fit TV and Movies (D5); §10.5.6 tracked-download write paragraph and the §10.5.9 test trimmed of the blind-write detail; §10.5.9 heading "when `acquire` is built".
+- A-2 / ADV-S1 — §10.1.2 "Persisted core state": `legacy.ExtConfirmer` and the extension family removed; native apps keep the full native design.
+- A-5 / ADV-S4 — §10.5.8: names under `app.Options.MetricNamespace`.

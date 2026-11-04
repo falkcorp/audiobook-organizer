@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -50,7 +50,10 @@ instance has exactly one stored form:
   `books` code over ABO's existing keys and row formats (the M1.10 table). Core holds none of those key names or
   row formats (03 R1) and no storage grant over them: grants for these families belong to the deferred cutover
   (M1.10, "Deferred: cutover"). Nothing is copied into `c/integrations/instances/`, so this build and an older
-  one read the same values.
+  one read the same values. A legacy-backed instance keeps **HEAD's stored representation and nothing else**
+  (A-2): its settings in HEAD's format, each secret where HEAD keeps it, and no record beside them. Where the
+  native design needs state that HEAD's format cannot hold (private-network trust, origin binding of operator
+  secrets), a legacy-backed instance behaves as at HEAD (M1.4 step 2, step 2a).
 
 **Store model: routed per record (SIMP5-1).** Two of the store interfaces in this file serve an app through **both**
 implementations at once, and choose per record: `integrations.InstanceStore` (M1.3) and `providerhttp.GateStore`
@@ -68,7 +71,7 @@ therefore run in production during the extraction (a stored `notify/email`, a se
 non-metadata gate scope), and the claim ledger's `backends` value for both is `legacy+native` (05-storage §5S.3.11).
 
 **Legacy-only identifiers live in package `legacy` (R6-3).** The capabilities this file's routers consume
-(`legacy.Covering`, `legacy.ExtConfirmer`), the record-ID helpers, `legacy.IntegrationsLocalCandidate` and the legacy
+(`legacy.Covering`), the record-ID helpers and the legacy
 conformance suites (`legacy/legacytest`) are members of core's `legacy` package, which sits at L5, imports
 `integrations` and `providerhttp`, and is excluded from the API-stability gate (03 §3.3 "Legacy-only identifiers"),
 so deleting them at the integrations cutover is not a breaking change. `integrations` and `providerhttp` never
@@ -81,9 +84,7 @@ does: the package's `export_test.go` only exports test aliases of the mirror and
 `legacy_mirror_test.go` in its external test package (`package integrations_test`, `package providerhttp_test`),
 which may import `legacy`, asserts them (R7-7). A renamed or retyped member therefore fails that package's tests
 instead of silently disabling routing. What cannot move stays in v1, inert for native apps: the legacy-state pointer
-fields on the record types (`InstanceConfig.Legacy`, `StoredInstance.Legacy`, SIMP6-7), the `Registry.Confirm`
-service method (it answers 409 for a native instance), and the legacy half's constructor input
-`providerhttp.Options.Legacy`. These are this file's rows of 05-storage §5S.3.11's one table of legacy-serving
+field `InstanceConfig.Legacy` (SIMP6-7) and the legacy half's constructor input `providerhttp.Options.Legacy`. These are this file's rows of 05-storage §5S.3.11's one table of legacy-serving
 identifiers that stay in SDK packages, which gives each one's reason and its state after the cutover (SIMP7-3).
 
 Secret names follow 05-config §2.3's grammar:
@@ -196,18 +197,17 @@ type InstanceConfig struct {
 	// M2.4; SEC4-15). Setting it, or keeping it across a URL change, needs the
 	// ProtectAdmin check: core:admin AND an interactive principal (05-config
 	// §1.3.7; SEC-15, SEC2-7). Any other writer's instance reaches public
-	// addresses plus the hosts in core.integrations.egress.lan_allow only. For a
-	// legacy-backed instance it is a native-only field, kept by the legacy store
-	// in its extension record with the URL origin it was granted for, and it
-	// reads false while that record is suspended or holds only a pending
-	// candidate (M1.4 step 2a, M1.10; R4-1, DATA5-9).
+	// addresses plus the hosts in core.integrations.egress.lan_allow only. A
+	// legacy-backed instance stores no Local: it reads true, because its
+	// configured hosts keep HEAD's reach and only a ProtectAdmin writer can
+	// change them (M1.4 step 2a, A-2); a Put that sets it false is refused
+	// (ErrFieldNotStorable).
 	Local    bool
 	Settings map[string]any      // validated against Meta.Settings; secret fields hold secrets.Ref only
 	Limits   *Limits             // optional per-instance override of Meta.Limits (zero fields inherit)
 	// Version is the optimistic-concurrency token for PUT, reported by the
-	// instance's store. A legacy store derives it from the legacy fields plus
-	// its extension record (64-bit truncated hash), so a write by any build
-	// changes it.
+	// instance's store. A legacy store derives it from the instance's legacy
+	// fields (64-bit truncated hash), so a write by any build changes it.
 	Version  uint64
 	Updated  time.Time
 	// Legacy is non-nil exactly for an instance served by the app's legacy
@@ -260,8 +260,9 @@ type Env struct {
 
 // SecretReader resolves a declared secret at use time (not at build time), so
 // rotation takes effect on the next request without a rebuild. A withheld
-// operator-sourced secret returns ErrOperatorSecretWithheld (M1.4 step 2,
-// SEC7-3, R8-5); the adapter's call then fails before sending (ClassRefusedLocal).
+// operator-sourced secret of a native instance returns
+// ErrOperatorSecretWithheld (M1.4 step 2, SEC7-3, R8-5); the adapter's call
+// then fails before sending (ClassRefusedLocal).
 type SecretReader interface {
 	Secret(ctx context.Context, field string) (secrets.Value, error)
 }
@@ -405,79 +406,46 @@ type InstanceStore interface {
 // Legacy-only capabilities of an InstanceStore are OPTIONAL interfaces in
 // package legacy (R6-3, SIMP5-4; 05-storage §5S.3.11 "Legacy capabilities").
 // The Registry detects them once, by type assertion on the legacy store it is
-// handed at P4c, and names them only through unexported interfaces with the
-// identical method sets (M1.1; checked by the mirror test, 03 §3.3; the
-// kernel asserts neither, SIMP7-5). The native store
-// implements neither. A legacy store asserts them at compile time (books:
-// var _ legacy.Covering, var _ legacy.ExtConfirmer), because a failed
-// assertion is silent; legacytest.IntegrationsInstanceStoreSuite runs a case
-// for each (M1.9).
+// handed at P4c, and names it only through an unexported interface with the
+// identical method set (M1.1; checked by the mirror test, 03 §3.3). The
+// native store does not implement it. A legacy store asserts it at compile
+// time (books: var _ legacy.Covering), because a failed assertion is silent;
+// legacytest.IntegrationsInstanceStoreSuite runs its case (M1.9). There is one:
 //   - legacy.Covering: Covers(id) with id = legacy.IntegrationsCoverID(ref,
 //     adapter) reports whether the store holds ref, or would hold a NEW
 //     instance ref of that adapter (a legacy store covers its list families
 //     and only the fixed IDs of its singleton families, M1.4 step 2a). A
 //     legacy store without it covers every record and the backends ledger
 //     records legacy (SIMP6-5); the native store is never asked.
-//   - legacy.ExtConfirmer: Confirm(ctx, b, id) with id = ref.String() is the
-//     admin re-confirmation of a suspended extension record, or of a pending
-//     Local candidate (legacy.Extension.Confirm, 05-storage §5S.3.11;
-//     Registry.Confirm). An instance whose store lacks it has nothing to
-//     confirm.
 
 // StoredInstance is one persisted record: InstanceConfig without the
-// effective-view fields, plus the native-only trust fields.
+// effective-view fields, plus the trust fields of a native row. A legacy
+// store returns them zero: HEAD's format has no place for them, and a
+// legacy-backed instance behaves as at HEAD instead (M1.4 step 2a, A-2). The
+// instance store never reads or writes a secret field: the Registry reads and
+// stages every secret through secrets, which reaches a legacy-backed
+// instance's secret where HEAD keeps it through 05-config's
+// legacy.SecretsStore (M1.4 step 2a).
 type StoredInstance struct {
 	Config        InstanceConfig // Locked and Stored are ignored
-	LocalOrigin   string         // scheme://host:port Local was granted for; "" = none
-	SecretsOrigin string         // URL origin the core secrets copies were written for
-	// OperatorSecretOrigin maps each destination field (a URL-typed field, or
-	// "host" for a host-and-port adapter such as core.email, whose origin is
-	// smtp://host:port) to the origin an operator-sourced secret may be sent
-	// to although the operator did not set that field (M1.4 step 2, R8-5,
-	// SEC8-2). Written only from an admin's provenance: the first S7 boot from
-	// the stored destination (legacy-backed instances, M1.10), a Put that
-	// passes the ProtectAdmin check, and Registry.Confirm. A Put by anyone else
-	// that changes a field's origin deletes that field's entry. nil = none.
-	// For a legacy-backed instance it is a native-only field of the extension
-	// record (M1.4 step 2a); older builds never read it.
+	LocalOrigin   string         // native: scheme://host:port Local was granted for; "" = none
+	SecretsOrigin string         // native: URL origin the core secrets copies were written for
+	// OperatorSecretOrigin (native rows only) maps each destination field (a
+	// URL-typed field, or "host" for a host-and-port adapter such as
+	// core.email, whose origin is smtp://host:port) to the origin an
+	// operator-sourced secret may be sent to although the operator did not
+	// set that field (M1.4 step 2, R8-5, SEC8-2). Written only by a Put that
+	// passes the ProtectAdmin check; a Put by anyone else that changes a
+	// field's origin deletes that field's entry. nil = none.
 	OperatorSecretOrigin map[string]string
-	// Legacy is the legacy store's view of the record (M1.4 step 2a); nil for
-	// every native record and always nil after the integrations cutover. The
-	// one legacy-state pointer of this type; it stays in v1 because
-	// integrations cannot name a type of package legacy (03 §3.3, SIMP6-7).
-	Legacy *StoredInstanceLegacyState
 	// Malformed is non-empty when the stored value cannot be decoded; it names
 	// the field. The instance is HealthMisconfigured and nothing is rewritten.
 	Malformed string
 }
 
-// StoredInstanceLegacyState holds what only a legacy-backed instance has.
-// It carries no secret state: the Registry reads and writes every secret
-// field of every instance through secrets (Get, Stage), and secrets alone
-// reaches the app's legacy copies, through the one legacy-secret mechanism,
-// 05-config's legacy.SecretsStore (kept names written in place in the app's
-// cipher, moved names sentinelled, re-entered values re-imported; 05-config
-// §2.2-§2.4, M1.4 step 2a; lead decision, round 6). The instance store never
-// reads or writes a secret field.
-type StoredInstanceLegacyState struct {
-	// Ext is the state of the extension record (05-storage §5S.3.11):
-	// ExtCurrent, ExtStale (an older build changed the instance's legacy
-	// fields, R4-1) or ExtOrphan. Suspended means the Widening field
-	// Config.Local must not be applied until legacy.ExtConfirmer.Confirm (M1.4 step
-	// 2a classifies every field).
-	Ext       storage.ExtState
-	Suspended bool
-	// PendingLocal is the URL origin the S7 books migration offered as a Local
-	// candidate (M1.10, DATA5-9): it grants nothing until an admin confirms it
-	// with Registry.Confirm, and only while it equals the instance's current
-	// URL origin. "" = none.
-	PendingLocal string
-}
-
 // NativeInstanceStore is core's implementation over its own keyspace
 // c/integrations/ (M1.4 "Native store"). It implements no legacy capability:
-// the Registry never asks it Covers, and an instance it holds has nothing to
-// confirm.
+// the Registry never asks it Covers.
 func NativeInstanceStore(ks storage.Keyspace) InstanceStore
 
 // Registry is per-App. It owns descriptors, the stores, built instances and
@@ -488,8 +456,9 @@ func (r *Registry) Adapters(kind Kind) iter.Seq[Meta]
 func (r *Registry) Instances(kind Kind) iter.Seq[InstanceConfig] // effective views (stored row + overlay)
 func (r *Registry) Config(ref Ref) (InstanceConfig, bool)        // effective view
 // Put validates and persists one instance with its secrets (one batch, M1.4).
-// The principal in ctx sets Origin. URL-typed fields are written by any holder
-// of core:integrations.manage (interactive or API key; SEC2-7). Put refuses
+// The principal in ctx sets Origin. URL-typed fields of a native instance are
+// written by any holder of core:integrations.manage (interactive or API key;
+// SEC2-7; a legacy-backed instance's need ProtectAdmin, below). Put refuses
 // (403) a principal without the ProtectAdmin check (core:admin + interactive)
 // that sets Local, or keeps Local=true across a URL change. A Put that changes
 // a field in Locked is refused whole (409, ErrFieldLocked); one that omits the
@@ -499,8 +468,9 @@ func (r *Registry) Config(ref Ref) (InstanceConfig, bool)        // effective vi
 // a URL-typed settings field, or a host or port field of an adapter that
 // dials a host and port, such as core.email's host and port, 05-notify §3.1;
 // the destination fields of M1.4 step 2; lead decision, round 7), every
-// secret field is cleared unless secretsIn re-supplies it, Local is reset to
-// false unless the writer passes the ProtectAdmin check and sets it again, and
+// secret field is cleared unless secretsIn re-supplies it, Local (a native
+// row's) is reset to false unless the writer passes the ProtectAdmin check and
+// sets it again, and
 // the write is audited as core.integration.change_url with secrets_dropped=true
 // (05-rbac §7.1; SEC-15). A secret counts as re-supplied only when the raw
 // request carries a value that is neither empty nor an echoed or mask-shaped
@@ -509,29 +479,28 @@ func (r *Registry) Config(ref Ref) (InstanceConfig, bool)        // effective vi
 // internal/config/update_service.go:333-356 @748fd787a), so a URL change made
 // through the legacy UI cannot carry the stored secret to the new host (SEC3-4).
 // An operator-sourced secret (a canonical overlay or a BelowStored fill,
-// M1.4 step 2) is never stored, so this clearing cannot reach it; it is bound
-// to the destination by origin plus provenance instead: it is served only
-// while every destination field's effective origin equals that field's
-// operator origin (or the adapter default), or the instance's
+// M1.4 step 2) is never stored, so this clearing cannot reach it. On a native
+// instance it is bound to the destination by origin plus provenance instead:
+// it is served only while every destination field's effective origin equals
+// that field's operator origin (or the adapter default), or the instance's
 // OperatorSecretOrigin, and is withheld otherwise (M1.4 step 2 "Operator
 // secrets bind to origin plus provenance"; SEC7-3, R8-5). A Put that passes
 // the ProtectAdmin check records the destination origins it stores as
 // OperatorSecretOrigin, so an admin's URL carries the env-supplied key as at
 // HEAD; a Put by anyone else that changes a destination origin deletes that
-// field's entry, so the key never follows a non-admin's URL. Until the
-// integrations cutover, a Put on a legacy-backed instance that changes a
-// destination origin to one that is neither the field's operator origin nor
-// the adapter default, while any secret field of that instance is
-// operator-sourced, also needs the ProtectAdmin check, and is otherwise
-// refused whole (403, ErrOperatorSecretBound, naming the bound secret field
-// and its canonical variable, 05-config §1.3.6): an older build has no
-// OperatorSecretOrigin and re-applies the env secret beside whatever URL the
-// legacy fields hold after a rollback (SEC8-3).
+// field's entry, so the key never follows a non-admin's URL.
 // A Put on a legacy-backed instance goes to the legacy store, which writes the
-// legacy fields in their legacy format and its extension record into the batch
-// that also holds the secrets (M1.4 step 2a). A Put that changes a secret
-// field releases the instance's ClassAuth hold (M2.4): new credentials are the
-// human action that hold waits for.
+// legacy fields in their legacy format into the batch that also holds the
+// secrets (M1.4 step 2a). Its destination and secret fields keep HEAD's
+// writers: a Put that changes one needs the protection 05-config §1.3.7
+// gives the same field on the legacy config alias (ProtectAdmin: core:admin
+// AND an interactive principal; SEC4-7) and is otherwise refused whole (403),
+// so the two write paths agree and an operator-sourced secret beside it
+// follows only an admin's URL, as at HEAD (M1.4 step 2). A Put that sets a
+// field HEAD's format has no place for (Local=false, a Limits field the
+// format does not hold) is refused whole (422, ErrFieldNotStorable).
+// A Put that changes a secret field releases the instance's ClassAuth hold
+// (M2.4): new credentials are the human action that hold waits for.
 func (r *Registry) Put(ctx context.Context, inst InstanceConfig, secretsIn map[string]secrets.Value) (InstanceConfig, error)
 func (r *Registry) Delete(ctx context.Context, ref Ref) error
 // Test builds a throwaway instance from an UNSAVED config, runs Health and
@@ -549,25 +518,11 @@ func (r *Registry) Delete(ctx context.Context, ref Ref) error
 // secretsIn value that passes Put's re-supply check (neither empty nor
 // echoed nor mask-shaped), exactly as Put's destination-change clearing
 // would leave it, so Test never sends a stored secret to a host no Put has
-// stored (SEC8-10). An operator-sourced secret follows M1.4 step 2's binding
-// against the stored OperatorSecretOrigin; a Test never records provenance.
+// stored (SEC8-10). An operator-sourced secret of a native instance follows
+// M1.4 step 2's binding against the stored OperatorSecretOrigin; a Test never
+// records provenance.
 func (r *Registry) Test(ctx context.Context, inst InstanceConfig, secretsIn map[string]secrets.Value) (TestResult, error)
 func (r *Registry) Health(ctx context.Context, ref Ref) (Health, error)
-// Confirm re-confirms a legacy-backed instance whose extension record is
-// suspended, or accepts its pending Local candidate (M1.4 step 2a, M1.10):
-// ProtectAdmin check (core:admin + interactive), audited as
-// core.integration.confirm with the instance's current URL origins;
-// afterwards Local applies to the instance's current configured hosts. A
-// pending candidate whose origin no longer equals the current URL origin is
-// dropped instead of granted. Confirm also records the instance's current
-// destination origins as its OperatorSecretOrigin (M1.4 step 2, R8-5), so it
-// ends the withholding of an operator-sourced secret; an instance whose only
-// state is such a withholding is confirmable too. An instance with nothing to
-// confirm (native, or neither suspended, pending nor withholding an operator
-// secret) gets ErrNothingToConfirm (409); a native instance's admin re-saves
-// it through Put instead. A routine Put never clears a suspension and never
-// accepts a candidate.
-func (r *Registry) Confirm(ctx context.Context, ref Ref) error
 
 type TestResult struct {
 	OK     bool
@@ -641,16 +596,14 @@ var (
 	ErrDisabled      = errors.New("integrations: instance disabled")
 	ErrUnknownAdapter = errors.New("integrations: unknown adapter")
 	ErrFieldLocked   = errors.New("integrations: field is set by an operator value")
-	ErrNothingToConfirm = errors.New("integrations: the instance is neither suspended, pending a Local confirmation, nor withholding an operator secret")
-	// ErrOperatorSecretWithheld: an operator-sourced secret is not served to
-	// a destination that is neither the operator's (or the adapter default)
-	// nor the instance's OperatorSecretOrigin (M1.4 step 2, SEC7-3, R8-5).
+	// ErrFieldNotStorable (422): a Put on a legacy-backed instance sets a field
+	// HEAD's stored format has no place for (M1.3 Put, M1.4 step 2a, A-2).
+	ErrFieldNotStorable = errors.New("integrations: the instance's stored format has no place for this field until its family's cutover")
+	// ErrOperatorSecretWithheld: an operator-sourced secret of a native
+	// instance is not served to a destination that is neither the operator's
+	// (or the adapter default) nor the instance's OperatorSecretOrigin (M1.4
+	// step 2, SEC7-3, R8-5).
 	ErrOperatorSecretWithheld = errors.New("integrations: operator-supplied secret withheld from a destination that no operator or admin set")
-	// ErrOperatorSecretBound (403): until the integrations cutover, a Put
-	// without the ProtectAdmin check may not move a destination of a
-	// legacy-backed instance that has an operator-sourced secret (M1.3 Put,
-	// M1.4 step 2, R8-5, SEC8-3).
-	ErrOperatorSecretBound = errors.New("integrations: destination is bound to an operator-supplied secret; an admin must change it")
 )
 ```
 
@@ -659,7 +612,7 @@ var (
 These members exist only for an app whose instances and gate rows predate core. They are specified here, owned by
 this file, and live in core's `legacy` package (03 §3.3 "Legacy-only identifiers"; 05-storage §5S.3.11 lists them),
 outside the API-stability gate; they are deleted at the integrations cutover (M1.10), which is not a breaking change.
-`legacy.Covering` and `legacy.ExtConfirmer` themselves are defined by 05-storage §5S.3.11.
+`legacy.Covering` itself is defined by 05-storage §5S.3.11.
 
 ```go
 package legacy // github.com/falkcorp/mediacore/legacy (L5; imports integrations and providerhttp)
@@ -676,14 +629,6 @@ func IntegrationsCoverID(ref integrations.Ref, a integrations.AdapterID) string
 // are [a-z][a-z0-9_]* and contain no "|"). Mirrored and asserted the same way
 // in providerhttp (M2.3).
 func ProviderHTTPCoverID(scope, counter string) string
-
-// IntegrationsLocalCandidate is the egress-trust predicate for instances that predate
-// core (M1.10, SEC3-5, DATA5-9): ok only when rawURL's host is an IP literal
-// in the loopback or private ranges; origin is the URL's scheme://host:port.
-// It decides only whether an admin is OFFERED the origin to confirm; it
-// grants nothing. A legacy store's one-time migration calls it; core never
-// calls it at runtime.
-func IntegrationsLocalCandidate(rawURL string) (origin string, ok bool)
 ```
 
 The legacy conformance suites are `legacytest.IntegrationsInstanceStoreSuite` and
@@ -692,11 +637,11 @@ with a case per capability the implementation has, 03 §3.3, SIMP6-6; M1.9, M2.9
 
 #### Deferred-build members
 
-Deferral applies to members of this built package (SIMP2-6, 03 §3.4). The contract text above is kept, but the
-09 S7 build of `integrations` contains none of these. The first column holds only package-qualified Go identifiers,
-each absent from non-test files under `core/` per `archtest.DeferredMembersAbsent` (03 §3.4), whose list is
-generated from every `Deferred-build members` heading; values, rows and tests are in the second column and are not
-checked (03 §3.4 grammar, SIMP5-6, COR5-16). The PR that builds a member deletes that member's row (SIMP4-1):
+Deferral applies to members of this built package (SIMP2-6, 03 §3.4). The 09 S7 build of `integrations` contains
+none of these, and the SDK freezes none of them (A-15): the contract text above for them is a **design sketch
+(non-normative)**, settled when the member is built, together with 08 and 05-indexer, which are sketches too. The
+first column holds package-qualified Go identifiers; the PR that builds a member deletes that member's row
+(SIMP4-1):
 
 | Member | Also deferred (not checked) | Lands with | Contract |
 |---|---|---|---|
@@ -728,7 +673,6 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
 | `GET, PUT, DELETE /api/core/v1/integrations/{kind}/instances/{id}` | read / manage |
 | `POST /api/core/v1/integrations/{kind}/test` (unsaved body) and `.../instances/{id}/test` (unsaved body for that instance; a stored secret fills an omitted field only while no destination origin changes, M1.3 `Test`, SEC8-10) | manage |
 | `GET .../instances/{id}/health`; `DELETE .../instances/{id}/hold` (release a hold, as `ThrottleRegistry.ReleaseHold`, `internal/metadata/throttle_registry.go:338`) | read / manage |
-| `POST .../instances/{id}/confirm` (`Registry.Confirm`, M1.4 step 2a; also records `OperatorSecretOrigin`, step 2, R8-5) | `core:admin`, interactive (ProtectAdmin) |
 
 ### M1.4 Lifecycle
 
@@ -765,146 +709,102 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
    names ABO reads today are **permanent** aliases onto these paths (05-config C7/C11). This is config's
    operator-layer lock (05-config §1.3.5) applied to instance fields; there is no second lock model.
 
-   **Operator secrets bind to origin plus provenance (SEC7-3, R8-5).** A secret field whose **effective** value
-   comes from an operator layer (a canonical overlay, or a `BelowStored` value filling an unstored field) is bound to
-   the instance's destination fields: its URL-typed fields (for a metadata source, its `base_url`,
-   `internal/config/config.go:155-157` @748fd787a) or, for an adapter that dials a host and port rather than a URL
-   (`core.email`, [05-notify](05-notify.md) §3.1), that pair, whose origin is `smtp://host:port`. The binding is on
-   the **origin** (scheme, host, port) and on **who chose it**, never on the effective value's source:
+   **Operator secrets bind to origin plus provenance on native instances (SEC7-3, R8-5).** A secret field of a
+   **native** instance whose **effective** value comes from an operator layer (a canonical overlay, or a
+   `BelowStored` value filling an unstored field) is bound to the instance's destination fields: its URL-typed
+   fields or, for an adapter that dials a host and port rather than a URL (`core.email`, [05-notify](05-notify.md)
+   §3.1), that pair, whose origin is `smtp://host:port`. The binding is on the **origin** (scheme, host, port) and
+   on **who chose it**, never on the effective value's source:
    - **Served.** The secret is served when every destination field's effective origin equals either the origin of
      that field's operator value (or, when the operator sets no value for that field, the adapter's built-in
-     default), or the instance's `OperatorSecretOrigin` entry for that field. A stored value with the operator's
-     origin is therefore served: HEAD's whole-config save writes `openai_base_url` into every blob
-     (`internal/config/persistence.go:1932-1977`, `marshalConfigBlob` `:2126-2139` @748fd787a) while
-     `SyncConfigFromEnv` re-applies `OPENAI_API_KEY` over it (`:2030-2035`), so after any save the stored URL is the
-     operator's own, and S7 must not withhold the key beside it (SEC8-2).
-   - **`OperatorSecretOrigin`** is a native-only field (M1.3 `StoredInstance`): in books' extension record for a
-     legacy-backed instance (step 2a), in the native row otherwise. It is written only from an admin's provenance:
-     - at the **first S7 boot**, from the stored destination of each legacy-backed instance (the S7 books
-       migration, M1.10), because at HEAD only `settings.manage` holders (seed: `admin` only) could write those
-       fields (`internal/config/protected_fields.go:148` @748fd787a) and from S3 to S6 they are `ProtectAdmin` on the
-       config façade (05-config §1.3.7, SEC4-7). An env Deluge password beside an admin-set web URL, and an env key
-       beside an admin-set AI URL, therefore keep working at S7 (SEC8-2). Native rows do not exist before S7, and
-       HEAD stores no SMTP settings, so an env SMTP password beside an admin-set host is served from that admin's
-       `Put` (05-notify §10);
-     - on every `Put` by a principal that passes the ProtectAdmin check (core:admin + interactive), which records
-       the destination origins it stores;
-     - by `Registry.Confirm` (the confirm route), which records the instance's current destination origins.
-
-     A `Put` by anyone else that changes a destination field's origin deletes that field's entry, so the secret is
-     withheld; one that leaves the origins alone keeps them.
+     default), or the native row's `OperatorSecretOrigin` entry for that field (M1.3 `StoredInstance`), which only
+     a `Put` that passes the ProtectAdmin check (core:admin + interactive) writes, from the destination origins it
+     stores. A `Put` by anyone else that changes a destination field's origin deletes that field's entry, so the
+     secret is withheld; one that leaves the origins alone keeps them. Native rows do not exist before S7, so the
+     first S7 boot records nothing: an env SMTP password beside an admin-set host is served from that admin's
+     `Put` (05-notify §10).
    - **Withheld.** Otherwise every operator-sourced secret of the instance is withheld:
      - `Env.Secrets` returns `ErrOperatorSecretWithheld` for it, so a call that needs it fails before sending
        (`ClassRefusedLocal`: nothing dialled, no hold, breaker or quota write), and no request carries it;
      - the instance reports `HealthDegraded` with reason `operator_secret_withheld`, naming the withheld fields;
      - `Test` applies the same rule to the unsaved config against the stored `OperatorSecretOrigin`, so it cannot
        send the operator's secret to a new host either (a `Test` records nothing).
-   - **Bound across a rollback (SEC8-3).** `OperatorSecretOrigin` is S7-only state: an older build reads the legacy
-     fields alone and re-applies the env secret beside whatever URL they hold (`SyncConfigFromEnv`; the
-     env-authoritative Deluge password, `config.go:2249-2250` @748fd787a). So **until the integrations cutover**, a
-     `Put` on a **legacy-backed** instance that changes a destination field's origin to one that is neither the
-     field's operator origin nor the adapter default, while any secret field of that instance is operator-sourced,
-     needs the ProtectAdmin check; without it the `Put` is refused whole with 403 `ErrOperatorSecretBound`, naming
-     the bound secret field and its canonical variable (05-config §1.3.6), and nothing is written. This restores, for
-     this one case, the admin-only write HEAD had (`protected_fields.go:148`), so no build, before or after a
-     rollback, sends an env secret to a URL that a non-admin chose. Native instances are invisible to older builds
-     and need only the withholding.
 
    The instance stays withheld until a `Put` re-supplies the secret as a stored one, which M1.3's URL-change rule
    then governs (not possible for a canonical, `Locked` secret, which only the operator changes), the stored
    destination value is removed or set back to the operator's origin, the operator sets the destination field too,
-   or an admin `Put` or `Registry.Confirm` records the current destination as `OperatorSecretOrigin`. The Registry
-   evaluates the rule on the effective view at `Load`, at every hot swap and at every config hot swap, from the
-   per-field effective source it already records. It closes the case M1.3's clearing step cannot reach: an operator
-   secret is never stored, so a URL change has nothing to clear. It keeps SEC4-7's guarantee that a credential does
-   not follow a URL a non-admin chose, for operator credentials too, without restricting who may store a URL on a
-   native instance (`TestPut_NonAdminURLDoesNotCarryEnvSecret`, `TestOperatorSecret_StoredEqualOriginServed`,
-   `TestOperatorSecret_AdminStoredHostServed`, `TestPut_LegacyBackedNonAdminDestinationBound`,
-   `TestRollback_NonAdminURLNeverCarriesEnvSecretOnPrev`). The operator-secret pairs at HEAD are `ai/openai`
-   (`OPENAI_API_KEY` with `OPENAI_BASE_URL`, [05-ai](05-ai.md) §10), `download/deluge` (the Deluge env password with
-   its web URL, [05-download](05-download.md) §10), `notify/email` (`smtp_password` with `smtp_host`/`smtp_port`,
-   [05-notify](05-notify.md) §10; a native row, so `ErrOperatorSecretBound` never applies to it), and
-   `metadata/google-books` and `metadata/hardcover` (their operator keys with the source's `base_url`; M1.10 table).
-   Indexer instances have no operator values ([05-indexer](05-indexer.md) §10).
+   or an admin `Put` records the current destination as `OperatorSecretOrigin`. The Registry evaluates the rule on
+   the effective view at `Load`, at every hot swap and at every config hot swap, from the per-field effective source
+   it already records. It closes the case M1.3's clearing step cannot reach: an operator secret is never stored, so a
+   URL change has nothing to clear. It keeps SEC4-7's guarantee that a credential does not follow a URL a non-admin
+   chose, for operator credentials too, without restricting who may store a URL on a native instance
+   (`TestPut_NonAdminURLDoesNotCarryEnvSecret`, `TestOperatorSecret_AdminStoredHostServed`).
 
-   **2a. Legacy-backed instances (R4-1).** A legacy-backed instance is one the app's legacy `InstanceStore` covers
-   (`Covers(legacy.IntegrationsCoverID(ref, adapter))`, M1.3; per-record routing, M1.1).
+   **Legacy-backed instances keep HEAD's behaviour (A-2).** HEAD's format has no place for an origin record, so an
+   operator-sourced secret of a legacy-backed instance is served as at HEAD: beside whatever destination the
+   instance's legacy fields hold (`SyncConfigFromEnv` re-applies `OPENAI_API_KEY` over the stored blob,
+   `internal/config/persistence.go:2030-2035`; the env-authoritative Deluge password, `config.go:2249-2250`
+   @748fd787a), and no build withholds it. The protection SEC7-3 wants holds as it does at HEAD, because those
+   destination fields keep HEAD's writers: at HEAD only `settings.manage` holders could write them
+   (`internal/config/protected_fields.go:148` @748fd787a), from S3 to S6 they are `ProtectAdmin` on the config
+   façade (05-config §1.3.7, SEC4-7), and from S7 a `Put` that changes one needs the same check (M1.3 `Put`). So an
+   env secret follows only an admin's URL, in this build and in an older one after a rollback, with no state an
+   older build cannot see (`TestLegacyBacked_OperatorSecretServedAsHEAD`, `TestPut_LegacyBackedDestinationNeedsProtectAdmin`).
+   The operator-secret pairs at HEAD are `ai/openai` (`OPENAI_API_KEY` with `OPENAI_BASE_URL`, [05-ai](05-ai.md)
+   §10), `download/deluge` (the Deluge env password with its web URL, [05-download](05-download.md) §10) and
+   `metadata/google-books` and `metadata/hardcover` (their operator keys with the source's `base_url`; M1.10 table),
+   all legacy-backed, and `notify/email` (`smtp_password` with `smtp_host`/`smtp_port`, [05-notify](05-notify.md)
+   §10), a native row under the binding above. Indexer instances have no operator values
+   ([05-indexer](05-indexer.md) §10).
+
+   **2a. Legacy-backed instances (R4-1, A-2).** A legacy-backed instance is one the app's legacy `InstanceStore`
+   covers (`Covers(legacy.IntegrationsCoverID(ref, adapter))`, M1.3; per-record routing, M1.1).
    Its stored form is the app's pre-core format and there is no other copy: no import, no import hash, no
-   re-import, no mirror. Core calls only the interface; the store's code, key names and row formats are the
-   app's (for ABO, `books` code, M1.10), and no storage grant to `integrations` or `config` is involved.
+   re-import, no mirror, and no record beside it. Core calls only the interface; the store's code, key names and
+   row formats are the app's (for ABO, `books` code, M1.10), and no storage grant to `integrations` or `config` is
+   involved.
    - **Read.** At `Load` the Registry takes what the legacy store returns. An edit an older build made after a
-     rollback is simply what this build reads on its next boot, subject to the suspension rule below.
+     rollback is simply what this build reads on its next boot; nothing is compared with it.
    - **Write.** Every write of a legacy-backed field in this build goes through `Put`: the native routes and
      05-config's legacy `PUT /api/v1/config` alias alike, which hands its integration-bound fields to `Put`
      (05-config §1.12.2), so the trust rules of M1.3 apply once. The legacy store writes the fields in the shape
-     the app's older builds read, in the caller's batch together with the instance's secrets and its extension
-     record. ABO's implementation writes the settings blob through books' legacy config store (05-config §1.3.3,
-     R4-6), so the blob keeps one writer: it lives in the same books package as that store, joins the caller's
-     `*storage.Batch` and shares that store's pending blob render (05-config §1.6, C11), so a config write and an
-     instance write in one batch render and commit the blob once.
-   - **Native-only fields** — `Local` with the URL origin it was granted for, the URL origin the `secrets` copies
-     were written for, `OperatorSecretOrigin` (step 2, R8-5), `Limits`, and any field the legacy format has no place for — are kept by the legacy store
-     in an **app-owned extension family that older builds never read**, never additively in the legacy rows
-     (R4-1; an extra member in a legacy row is dropped or, worse, interpreted by an older build, SEC4-3). The
-     records follow 05-storage §5S.3.11's one extension-record rule (SIMP4-9): keyed by the legacy instance key;
-     never holding a field the legacy format holds; ignored while the legacy instance is absent and deleted by the
-     store's next write of that key; and carrying a hash of the legacy fields they extend (the guarded projection
-     below), so a rewrite that changes nothing does not count as a change.
-   - **Field classes and suspension (R4-1, DATA4-8, SEC3-5; replaces the round-3 URL-origin reset).** The records
-     use `legacy.Extension` (05-storage §5S.3.11). Guarded projection: the instance's own legacy fields, decoded
-     and canonically encoded (for a blob-embedded family, that instance's entry, not the whole blob); no field is
-     volatile. When an older build changed them, the record reads `ExtStale` and its fields are treated by class:
+     the app's older builds read, in the caller's batch together with the instance's secrets. ABO's implementation
+     writes the settings blob through books' legacy config store (05-config §1.3.3, R4-6), so the blob keeps one
+     writer: it lives in the same books package as that store, joins the caller's `*storage.Batch` and shares that
+     store's pending blob render (05-config §1.6, C11), so a config write and an instance write in one batch render
+     and commit the blob once. The store keeps HEAD's lock discipline for these rows (A-3).
+   - **No native-only state.** HEAD's format has no place for `Local`, `LocalOrigin`, `SecretsOrigin`,
+     `OperatorSecretOrigin` or any `Limits` field it does not already hold, and the store keeps none of them
+     anywhere else (A-2). In their place the instance behaves as at HEAD:
+     - **Private-network reach.** Its configured hosts keep HEAD's reach: `Local` reads true, so the dial guard
+       admits loopback and private addresses on the hosts of its own configured URL-typed fields (M2 `Policy.Private`).
+       Redirects to another private host and data-derived URLs stay refused (M2.4, SEC4-15). This is not a widening,
+       because those fields keep HEAD's writers: a `Put` that changes a destination field needs the ProtectAdmin check
+       (M1.3 `Put`), as the config façade does from S3 (05-config §1.3.7, SEC4-7), the same check that grants
+       `Local` on a native row (SEC2-7).
+     - **Operator secrets** are served as at HEAD (step 2, "Legacy-backed instances keep HEAD's behaviour").
+     - **Limits** are what HEAD's format holds (for a metadata source, its `limits.tier`, M2.7), else the adapter's
+       `Meta.Limits`.
 
-     | Field | Class | On `ExtStale` |
-     |---|---|---|
-     | `Local` | Widening | suspended: reads false, so the instance reaches only public hosts and `lan_allow`, until an admin calls `Registry.Confirm` (audited `core.integration.confirm`); a routine `Put` never clears it |
-     | `LocalOrigin` | Independent | kept; shown by the confirm form and the health detail |
-     | `SecretsOrigin` | Independent | kept; a `secrets` copy is used only while it equals the current legacy URL origin, so a secret never follows a URL an older build changed (SEC-15 across builds), and is deleted on the next write otherwise |
-     | `OperatorSecretOrigin` (R8-5) | Independent | kept; it serves an operator-sourced secret only to a destination whose current origin equals it, so a URL an older build changed carries that secret only when it is the operator's origin, the adapter default or the recorded one; otherwise the secret is withheld until an admin `Put` or `Registry.Confirm` records the current origin |
-     | `Limits` | Independent | kept |
-     | `PendingLocal` (M1.10) | Independent (grants nothing) | kept; accepted by `Registry.Confirm` only while it equals the current legacy URL origin, dropped otherwise |
+     A `Put` that sets a field the format has no place for is refused whole (422 `ErrFieldNotStorable`). The
+     native-only state arrives with the family's cutover (M1.10), when the instance becomes a native row.
+   - **Secrets stay where HEAD keeps them (A-2).** The Registry stages and reads **every** secret field of a
+     legacy-backed instance through `secrets` under its M1.10 name, exactly as for a native instance
+     (`secrets.Stage` in the `Put`'s batch, `Get` through `Env.Secrets`); the legacy instance store never reads or
+     writes a secret field. `secrets` reaches the app's legacy copy through the books store's
+     `legacy.SecretsStore` (05-config §2.2), which reads and writes the value **in place**, in the caller's batch:
+     - a secret HEAD keeps encrypted in its own row (for ABO the OpenAI key, Google Books key and Hardcover token,
+       HEAD's encrypted setting rows, `internal/config/persistence.go:1955-1957`, `:1989-2003` @748fd787a) is
+       written back into that row in the app's cipher (`SourceLegacy`, `LegacyEncrypted`). A row the app's cipher
+       cannot decrypt reads as "must be re-entered" (`Meta.Err` `ErrKeyUnavailable`; instance
+       `HealthMisconfigured`, reason `integration_secret_unreadable`) and is kept (DATA3-12);
+     - a secret HEAD keeps in plaintext (the Deluge password, metadata `Credentials`, the webhook secret) is
+       written back, in plaintext, into the same blob field (`SourceLegacy`, `LegacyPlain`).
 
-     A suspended instance reports `HealthDegraded` with reason `integration_local_suspended` naming it; one whose `secrets` copy is withheld reports
-     `integration_secret_origin_changed`. An `ExtOrphan` record is ignored and deleted by the store's next write.
-     Nothing widens silently on roll-forward.
-   - **Extension writers and their preconditions (R7-3, DATA7-8; 05-storage §5S.3.11 "Writers in the extension
-     family" is the table).** The extension family is `Serialized`, so every key the legacy store sets or deletes
-     in it carries an `Expect`, and none of its writers issues a `DeleteRange`. `Put` writes the record through
-     `legacy.Extension.Put` with an `Expect` on the record bytes the store's `Get` saw (`seen`), and the legacy
-     store adds its `Expect` on the legacy row it rewrites; the S7 `Local` step's `PendingLocal` and `OperatorSecretOrigin`
-     records are written the same way; `Registry.Confirm` uses `legacy.Extension.Confirm`, which reads the record and the
-     legacy row with `GetForUpdate`; `Delete`, and the next write that removes an `ExtOrphan` record, use
-     `legacy.Extension.Delete(ctx, b, legacyKey, entryID, seen)`, a conditional delete with an `Expect` on the
-     record bytes seen.
-   - **Secrets: one mechanism, `secrets` over 05-config's `legacy.SecretsStore` (lead decision, round 6).** The
-     Registry stages and reads **every** secret field of a legacy-backed instance through `secrets` under its M1.10
-     name, exactly as for a native instance (`secrets.Stage` in the `Put`'s batch, `Get` through `Env.Secrets`); the
-     legacy instance store never reads or writes a secret field. What happens to the app's legacy copy is
-     05-config's single mechanism (§2.2–§2.4), which `secrets` drives through the books store's
-     `legacy.SecretsStore`:
-     - **kept names (R5-1(b)).** A secret whose legacy copy the app keeps encrypted in its own secret row (for ABO
-       the OpenAI key, Google Books key and Hardcover token, HEAD's encrypted setting rows,
-       `internal/config/persistence.go:1955-1957`, `:1989-2003` @748fd787a) is **not moved** during the extraction:
-       `secrets.Get` returns the row's value (`SourceLegacy`, `LegacyEncrypted`), and `secrets.Stage` calls
-       `SecretsStore.Write`, which writes it back into the same row in the app's cipher, in the caller's batch; no
-       `c/secrets/` record and no sentinel exist. An older build therefore reads the current value after a
-       rollback, and roll-forward has nothing to reconcile. A row the app's cipher cannot decrypt reads as "must be
-       re-entered" (`Meta.Err` `ErrKeyUnavailable`; instance `HealthMisconfigured`, reason
-       `integration_secret_unreadable`) and is kept (DATA3-12). The value moves into `secrets` at the family's
-       cutover.
-     - **moved names (R4-2).** Every other secret (the Deluge password, metadata credentials, the webhook secret) is
-       read in place until this build first writes it (`SourceLegacy`, `LegacyPlain`); that write stages a
-       `c/secrets/` record and, in the same batch, `SecretsStore.Supersede` replaces the legacy field — and every
-       other plaintext copy its format keeps — with the unguessable, never-matching sentinel, never an empty value.
-       A legacy value other than the sentinel beside a `secrets` record means an operator re-entered it on an
-       older build after a rollback: `Get` serves it at once and `secrets.Open`'s roll-forward reconcile at 06 P4d
-       step 1(ii) re-imports and re-sentinels it (05-config §2.4), so that value wins; the Registry has no
-       re-import of its own. After a rollback the older build therefore sends the sentinel and fails
-       authentication against the remote until the operator re-enters the secret there (fail-closed; for Deluge,
-       a blank password would instead fall back to the factory-default password,
-       `internal/deluge/integration.go:27-67` @748fd787a). An auth hold the older build sets that way lives in
-       the shared hold rows (M2.10); it expires after `HoldPolicy` (6h for `ClassAuth`) or is released with
-       `DELETE .../hold` or by a `Put` that re-supplies the secret. The release note states both.
+     No `c/secrets/` record exists for a legacy-backed instance, so an older build reads the current value after a
+     rollback and roll-forward has nothing to reconcile. Encrypting the plaintext ones and moving every one into
+     `secrets` is the secrets cutover, a post-S10 hardening cutover on N15's one-way, floored machinery (A-2; 12,
+     14).
    - **Family-level fields.** Where the legacy format stores one value for a whole family (ABO's legacy webhooks:
      enabled flag, secret and event list, 05-notify §10), the store lists the field in `InstanceConfig.Legacy.Shared`, and a `Put` that
      changes it changes it for every legacy-backed instance of that family.
@@ -918,8 +818,9 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
    remote). Validation errors make the instance `HealthMisconfigured`, never fail boot.
 4. **Hot swap** on `Put`, and on a config hot swap that changes an overlaid value: validate → apply the trust
    rules (Origin from the principal; `Local` only with the ProtectAdmin check; URL change drops secrets and
-   `Local`, SEC-15; `OperatorSecretOrigin` recorded only from an admin's provenance, step 2, R8-5) → persist through the instance's store (native, or the legacy store with its extension
-   record, step 2a), with the secrets in one storage batch (an overlay change persists nothing) → build new → atomically
+   `Local`, SEC-15; on a native row `OperatorSecretOrigin` recorded only from an admin's provenance, step 2, R8-5;
+   on a legacy-backed instance a destination change only with the ProtectAdmin check, step 2a) → persist through
+   the instance's store (native, or the legacy store, step 2a), with the secrets in one storage batch (an overlay change persists nothing) → build new → atomically
    replace → old instance drains its leases → `Close`. providerhttp state (bucket, holds, breaker, quota) is
    keyed by `Ref` and **survives** the swap; the egress trust (`Local`, `lan_allow`) is re-read per dial.
 5. **Health task** `core.integrations.health` (05-tasks), scheduled by
@@ -940,16 +841,15 @@ written. Each kind file states what its callers do with `ErrDisabled` (05-ai, 05
 **Schedules keep running (R7-6, OPS7-3).** A schedule that fires against a disabled integration fails closed, but its
 run is enqueued and its clock advances like any other run (DATA5-8 needs every schedule to fire on staging): the
 health task's run probes nothing, and each kind's scheduled work (05-ai's batch poll, 05-download's poll, acquire's
-RSS sync over 05-indexer) does what its file's `core.integrations.disabled` row says. **Staging (R7-6).** 09 §9.3 is
-the one staging procedure. At **every** stage its offline scrub (`staging-scrub`) clears every **legacy**
-integration URL, webhooks included, and every boot of the staging copy is egress-limited (09 §9.3). It also sets
-this switch in the operator layer of every staging boot of an S7-or-later binary (an operator-set value locks it, so
-no stored override can turn integrations back on there): the switch is keyed on the booting binary, not on the
-copy's age. For an older build booted on the same copy (the boot-budget A/B, the R-test, `make rollback`), which
-ignores the switch, the cleared legacy URLs are what keeps it inert (SEC7-6, OPS7-7). Native rows under
-`c/integrations/instances/` are not scrubbed: only an S7-or-later binary reads them, every staging boot of such a
-binary carries the switch, and the firewall drops the copy's egress for the host's life, so no build that can read a
-native URL can call it (R8-3, SIMP8-2).
+RSS sync over 05-indexer) does what its file's `core.integrations.disabled` row says. **Staging (R7-6, A-12).** 09
+§9.3 is the one staging procedure. Every staging boot of an S7-or-later binary sets this switch in the operator
+layer (an operator-set value locks it, so no stored override can turn integrations back on there), and schedules run
+there as above; the switch is keyed on the booting binary, not on the copy's age. At **every** stage the offline
+`staging-scrub` clears every **legacy** integration URL, webhooks included, so an older build booted on the copy
+(the boot-budget A/B, the R-test), which ignores the switch, has no URL to call (SEC7-6, OPS7-7). Native rows under
+`c/integrations/instances/` are not scrubbed: only an S7-or-later binary reads them, and every staging boot of such a
+binary carries the switch. Every staging boot also runs in a container with `--network none` (09 §9.3), so no build
+reaches anything from the copy (R8-3, SIMP8-2).
 
 **Native store (apps without a legacy store; SIMP4-3).** `NativeInstanceStore` lands with `integrations` at
 09 S7. Every app uses it for every instance its legacy store does not cover (routed model, M1.1); an app that passes
@@ -961,7 +861,7 @@ rollback are never delivered to it; only deliveries already pending in `c/outbox
 
 | Key | Value | Notes |
 |---|---|---|
-| `c/integrations/instances/<kind>/<id>` | `codec.JSON[integrations.StoredInstance](1)` | secret fields hold `secrets.Ref` only; `Local`, `LocalOrigin`, `SecretsOrigin`, `OperatorSecretOrigin` (R8-5) and `Limits` are ordinary fields of the row (no extension record, no suspension); `Version` is the row's storage version; no index rows (a kind is one prefix scan) |
+| `c/integrations/instances/<kind>/<id>` | `codec.JSON[integrations.StoredInstance](1)` | secret fields hold `secrets.Ref` only; `Local`, `LocalOrigin`, `SecretsOrigin`, `OperatorSecretOrigin` (R8-5) and `Limits` are ordinary fields of the row; `Version` is the row's storage version; no index rows (a kind is one prefix scan) |
 
 ### M1.5 Error semantics
 
@@ -979,17 +879,14 @@ rollback are never delivered to it; only deliveries already pending in `c/outbox
 | A destination field changed (a URL field's host/scheme/port, or a host or port field such as `core.email`'s) without re-supplied secrets | open for the write; secrets cleared, `Local` reset, audited (`core.integration.change_url`) | A stored password or API key must never follow a URL to a new host (SEC-15). |
 | A principal without the ProtectAdmin check (core:admin + interactive) sets `Local`, keeps it across a URL change, or calls `Test` with `Local=true` | closed (403) | Private-network trust is admin-level network trust, like `lan_allow` (SEC-15, SEC2-7). |
 | Write to a field in `Locked` | closed (409 `ErrFieldLocked`); other fields of the same `Put` are not written either | The operator's environment owns that value; the API must not appear to change it. |
-| Store write fails (native or legacy store) | closed for that `Put` (nothing written: the record, its extension record and the secrets are one batch) | The store's form is the only stored copy (R4-1). |
+| Store write fails (native or legacy store) | closed for that `Put` (nothing written: the record and the secrets are one batch) | The store's form is the only stored copy (R4-1). |
 | Stored value undecodable at `Load` (`StoredInstance.Malformed`) | open for boot, closed for that instance: `HealthMisconfigured` naming the field; nothing is rewritten | It is the only copy; the operator repairs it through `Put`, as at HEAD. |
 | App supplies no legacy store, or its `Load` fails | no legacy store: every instance is native (open). `Load` error: closed for the legacy-backed instances (none served; health `integration_store_unavailable`), open for boot and for native instances | A store that cannot be read must not be mistaken for "no instances" and overwritten. |
-| Extension record stale (an older build changed the legacy fields) | open for boot; closed for trust: `Local` suspended until `Registry.Confirm`; a `secrets` copy used only while its origin equals the current URL origin; health `integration_local_suspended` / `integration_secret_origin_changed` | No silent widening on roll-forward; SEC-15 holds across builds (R4-1, SEC3-5). |
-| `Confirm` by a principal without the ProtectAdmin check | closed (403) | Re-granting private-network trust is the same act as setting `Local` (SEC2-7). |
-| `Confirm` of an instance that is neither suspended nor pending (native, or nothing changed) | closed (409 `ErrNothingToConfirm`) | Nothing to grant; a 200 would suggest trust changed. |
-| Pending `Local` candidate whose origin no longer equals the current URL origin | closed: `Confirm` drops the candidate and grants nothing | A candidate is bound to the URL the upgrade saw (DATA5-9). |
+| `Put` without the ProtectAdmin check that changes a destination or secret field of a legacy-backed instance (M1.3 `Put`) | closed (403); nothing written | Those fields keep HEAD's writers, so the legacy alias and `Put` agree, private-network reach stays admin-granted, and an operator secret follows only an admin's URL (A-2, SEC2-7, SEC4-7). |
+| `Put` on a legacy-backed instance that sets a field HEAD's format has no place for (`Local=false`, an unheld `Limits` field) | closed (422 `ErrFieldNotStorable`); nothing written | No record beside the legacy fields exists to hold it (A-2); it becomes settable at the family's cutover. |
 | In-place encrypted legacy secret undecryptable (the app's cipher key missing) | open for boot, closed for that secret: `HealthMisconfigured` (`integration_secret_unreadable`); the row is kept | It is the only copy; the operator re-enters it (R5-1(b), DATA3-12). |
-| `core.integrations.disabled` true (a staging copy, R6-7) | closed for every outbound call (`ErrDisabled`, `HealthDisabled` reason `integrations_disabled`); open for boot, reads and `Put`. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances (the health task probes nothing). Staging also clears every legacy integration URL, webhooks included, at every stage (09 §9.3, R7-6, R8-3); native rows are covered by the switch and the firewall | A copy of a production store must never act on production systems (OPS6-4); schedules must still fire there (DATA5-8), and an older build that ignores the switch must find no URL to call (SEC7-6); only S7+ binaries, which always carry the switch on staging, read native rows (R8-3). |
-| An operator-sourced secret beside a destination field whose effective origin equals neither that field's operator origin (or the adapter default) nor the instance's `OperatorSecretOrigin` (M1.4 step 2) | closed for that secret: withheld (`ErrOperatorSecretWithheld`, `ClassRefusedLocal`, nothing sent); open for the `Put` that stored the destination on a native instance; `HealthDegraded` reason `operator_secret_withheld` | An env-supplied credential must not follow a URL that a non-admin chose (SEC7-3); binding on origin plus provenance keeps HEAD's stored copy of the operator's URL and an admin-set host working (R8-5, SEC8-2). |
-| Until the integrations cutover, a `Put` without the ProtectAdmin check on a legacy-backed instance with an operator-sourced secret that moves a destination origin away from the operator's and the adapter default (M1.3 `Put`, M1.4 step 2) | closed (403 `ErrOperatorSecretBound`, naming the secret field and its canonical variable); nothing written | An older build has no `OperatorSecretOrigin` and re-applies the env secret beside the stored URL after a rollback, so only an admin may move it (R8-5, SEC8-3). |
+| `core.integrations.disabled` true (a staging copy, R6-7) | closed for every outbound call (`ErrDisabled`, `HealthDisabled` reason `integrations_disabled`); open for boot, reads and `Put`. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances (the health task probes nothing). `staging-scrub` also clears every legacy integration URL, webhooks included, at every stage (09 §9.3, R7-6, R8-3, A-12); native rows are covered by the switch | A copy of a production store must never act on production systems (OPS6-4); schedules must still fire there (DATA5-8), and an older build that ignores the switch must find no URL to call (SEC7-6); only S7+ binaries, which always carry the switch on staging, read native rows (R8-3). |
+| On a native instance, an operator-sourced secret beside a destination field whose effective origin equals neither that field's operator origin (or the adapter default) nor the row's `OperatorSecretOrigin` (M1.4 step 2) | closed for that secret: withheld (`ErrOperatorSecretWithheld`, `ClassRefusedLocal`, nothing sent); open for the `Put` that stored the destination; `HealthDegraded` reason `operator_secret_withheld` | An env-supplied credential must not follow a URL that a non-admin chose (SEC7-3); binding on origin plus provenance keeps an admin-set host working (R8-5, SEC8-2). A legacy-backed instance serves it as at HEAD, beside admin-written destinations only (A-2). |
 | Facade-pushed URL not http(s), or private and not in `lan_allow` (deferred-build member) | closed (422, nothing written) | One leaked facade key must not aim scheduled fetches at the LAN (SEC-15, SEC-5). |
 
 ### M1.6 Concurrency contract
@@ -1013,12 +910,15 @@ Protection classes per 05-config §1.3.7 (SEC2-8).
 | `core.integrations.probe_timeout` | duration | `10s` | yes | none |
 | `core.integrations.drain_timeout` | duration | `30s` | yes | none |
 | `core.integrations.max_instances_per_kind` | int | `32` | yes (bounds metric label cardinality) | none |
-| `core.integrations.disabled` | bool: build no instance and make no outbound call (M1.4 "Outbound integrations off"; R6-7) | `false` | yes (read per `Lease` and per `Acquire`) | admin; set from S7 by 09 §9.3's staging procedure in the operator layer of every staging boot, which locks it (beside the legacy URL clearing at every stage, R7-6, R8-3; it alone, with the firewall, covers native rows) |
+| `core.integrations.disabled` | bool: build no instance and make no outbound call (M1.4 "Outbound integrations off"; R6-7) | `false` | yes (read per `Lease` and per `Acquire`) | admin; set from S7 by 09 §9.3's staging procedure in the operator layer of every staging boot, which locks it (beside `staging-scrub`'s legacy URL clearing at every stage, R7-6, R8-3, A-12; it alone covers native rows) |
 
 The schedule key and `core.integrations.disabled` are new with core (HEAD has no integration health task and no
 such switch), so neither has a legacy alias.
 
 ### M1.8 Metrics
+
+Names are shown with core's default metric namespace `mediacore`; an app's `app.Options.MetricNamespace` replaces
+that prefix, and ABO passes its own (03 §3.6, A-5). These series are new with core, so no ABO series is renamed.
 
 | Name | Type | Labels |
 |---|---|---|
@@ -1040,24 +940,25 @@ no `c/secrets/` write; SIMP2-5), `TestRegistry_OverlayRemovedRevertsToStoredRow`
 echoed mask clears the secret; SEC3-4), `TestNativeInstanceStore_RoundTrip` (SIMP4-3),
 `TestLegacyBacked_NoNativeCopy` (with a fake legacy store: no `c/integrations/instances/` row for a covered
 instance; a value the store returns is what the next boot reads; R4-1), `TestLegacyBacked_ConfigAliasGoesThroughPut`,
-`TestLegacyBacked_SecretMovedAndSentinelled` (a moved name: the `Put` stages it through `secrets.Stage`, whose
-`SecretsStore.Supersede` sentinels every legacy copy in the same batch; never an empty value; the instance store
-writes no secret field; R4-2), `TestLegacyBacked_EncryptedSecretKeptInPlace` (a kept name: the `Put`'s
-`secrets.Stage` calls `SecretsStore.Write`, which writes the new value into the legacy encrypted row; nothing under
-`c/secrets/`, no sentinel, and an older build's reader decrypts the new value; R5-1(b)),
-`TestLegacyBacked_ReenteredLegacySecretReimported` (a non-sentinel legacy value beside a `secrets` record is served
-by `Get` and re-imported by `secrets.Open`'s reconcile, never by the Registry; R4-2), `TestLegacyBacked_StaleExtSuspendsLocal` (`Local` false, health
-`integration_local_suspended`; R4-1), `TestLegacyBacked_RoutinePutKeepsSuspension`, `TestLegacyBacked_ConfirmNeedsAdmin`
-(ProtectAdmin, audited), `TestLegacyBacked_StaleSecretUsedOnlyForSameOrigin` (SEC3-5),
-`TestLegacyBacked_StoreLoadFailureServesNone`, `TestPut_SecretChangeReleasesAuthHold`,
-`TestIntegrationsLocalCandidate_IPLiteralOnly` (package `legacy`; SEC3-5), `TestLocalStepGrantsNothing` (the S7 migration records
-`PendingLocal` only; `Local` reads false until `Registry.Confirm`; DATA5-9), `TestLocalStepSkippedStoreGrantsNothing`
-(a HEAD store booted directly on S7+), `TestLocalStepAfterOldArchiveRestore` (a pre-S7 archive restored on S7+:
-the migration re-runs and again only records candidates), `TestConfirmPendingLocal_OriginChangedDropsCandidate`,
+`TestLegacyBacked_PlaintextSecretWrittenInPlace` (a secret HEAD keeps in plaintext: the `Put`'s `secrets.Stage`
+calls `SecretsStore.Write`, which writes the new value into the same blob field; nothing under `c/secrets/`, the
+instance store writes no secret field, and HEAD's reader sees the new value; A-2),
+`TestLegacyBacked_EncryptedSecretKeptInPlace` (a secret HEAD keeps encrypted: the new value is written into the
+legacy encrypted row; nothing under `c/secrets/`, and an older build's reader decrypts the new value; R5-1(b)),
+`TestLegacyBacked_NoRecordBesideLegacyFields` (a `Put` on a legacy-backed instance writes only HEAD's keys, which a
+HEAD fixture reader reads back unchanged in shape; A-2), `TestLegacyBacked_ConfiguredHostKeepsHEADReach` (a
+legacy-backed instance whose stored URL is a private address is dialled; a redirect from it to another private host
+and a data-derived private URL are refused; A-2, SEC4-15), `TestPut_LegacyBackedDestinationNeedsProtectAdmin` (a
+non-admin holder of `core:integrations.manage`, and an API key holding `core:admin`, `Put` a new URL or secret on
+legacy-backed `ai/openai` and get 403 with nothing written; an interactive admin's `Put` succeeds; A-2, SEC4-7),
+`TestLegacyBacked_NativeOnlyFieldRefused` (`Local=false` or an unheld `Limits` field: 422 `ErrFieldNotStorable`),
+`TestLegacyBacked_OperatorSecretServedAsHEAD` (env `OPENAI_API_KEY` beside an admin-stored non-default URL, and an
+env Deluge password beside an admin-stored web URL: both are served and health is not `operator_secret_withheld`;
+A-2), `TestLegacyBacked_StoreLoadFailureServesNone`, `TestPut_SecretChangeReleasesAuthHold`,
 `TestRegistry_LegacyWithoutCoveringCoversAll` (a legacy store without `legacy.Covering` is routed every record and
 the native store is never asked; SIMP5-1, SIMP6-5), `TestLegacyMirrorsMatch` (the mirror test, 03 §3.3: in
 `legacy_mirror_test.go`, `package integrations_test`, over the aliases `export_test.go` exports, the Registry's
-unexported capability interfaces and `legacy.Covering`/`legacy.ExtConfirmer` are mutually assignable, and its
+unexported capability interface and `legacy.Covering` are mutually assignable, and its
 unexported record-ID helper equals `legacy.IntegrationsCoverID` on a table of refs; R6-3, R7-7),
 `TestRegistry_BelowStoredFillsOnlyUnstoredField` (a `BelowStored` passthrough value fills an empty field, is not in
 `Locked`, and a stored value beside it wins; SEC6-5), `TestPassthroughBelowStored_StoredURLNotLanTrusted` (env
@@ -1073,23 +974,9 @@ field's `OperatorSecretOrigin` entry, no request to it carries the key, `Test` o
 health reads `operator_secret_withheld`; a stored secret re-supplied by a `Put`, the stored URL removed, or an admin
 `Put` of the same URL ends the withholding; SEC7-3, R8-5), `TestOperatorSecret_AdapterDefaultURLServed`
 (env key, no URL set anywhere: the key goes to the adapter's built-in host; SEC7-3),
-`TestOperatorSecret_StoredEqualOriginServed` (env `OPENAI_API_KEY` and `OPENAI_BASE_URL`, a HEAD blob whose
-`openai_base_url` is the same URL, as HEAD's whole-config save writes it: on the first S7 boot the effective URL is
-the stored one and the key is served, health is not `operator_secret_withheld`; R8-5, SEC8-2),
-`TestOperatorSecret_AdminStoredHostServed` (HEAD fixtures with an env Deluge password beside a stored web URL, and
-an env `OPENAI_API_KEY` beside a stored non-default AI URL: the first S7 boot records each stored origin as
-`OperatorSecretOrigin` and both secrets are served; a ProtectAdmin `Put` of a new Deluge URL, and of a native
-`notify/email` host beside an env `smtp_password`, records the new origin and serves the secret; `Registry.Confirm`
-of an instance withheld after an older build's URL change records its current origin and serves it; R8-5, SEC8-2),
-`TestPut_LegacyBackedNonAdminDestinationBound` (legacy-backed `ai/openai` with env `OPENAI_API_KEY`: a non-admin
-holder of `core:integrations.manage`, and an API key holding `core:admin`, Put a new URL and get 403
-`ErrOperatorSecretBound` naming the key's canonical variable, with no legacy field, extension record or audit of a
-change written; the same `Put` setting the URL back to `OPENAI_BASE_URL`'s origin, or a `Put` on an instance with
-no operator-sourced secret, succeeds; an interactive admin's `Put` succeeds and records `OperatorSecretOrigin`;
-R8-5, SEC8-3), `TestRollback_NonAdminURLNeverCarriesEnvSecretOnPrev` (a case of 09's R-test: on S7 a non-admin's
-`Put` of a fake-server URL on `ai/openai` with an env key is refused; after `make rollback` to `prev` the fake
-server receives no request carrying the key, and the older build calls only the URL stored before; R8-5, SEC8-3),
-`TestRegistryTest_ChangedURLUsesNoStoredSecret` (instance-scoped `Test` whose body changes the URL origin and omits
+`TestOperatorSecret_AdminStoredHostServed` (a ProtectAdmin `Put` of a native `notify/email` host beside an env
+`smtp_password` records the new origin and serves the secret; a later non-admin `Put` of another host withholds it;
+R8-5, SEC8-2), `TestRegistryTest_ChangedURLUsesNoStoredSecret` (instance-scoped `Test` whose body changes the URL origin and omits
 the secret: the fake server sees no stored secret; with the origin unchanged the stored secret is used; with an
 echoed mask in `secretsIn` none is sent; SEC8-10),
 `TestLegacyWebhook_SharedFieldsFamilyWide`,
@@ -1104,9 +991,7 @@ round trip; and the app runs the one legacy suite of this interface, `legacytest
 (`legacy/legacytest`, outside the API-stability gate with `legacy`; 03 §3.3, SIMP6-6, R6-3), against its legacy
 store, with a case for each capability the store has and for its record state: `Covers` (`legacy.Covering`),
 no secret field read or written by the instance store (secrets are 05-config's `legacytest.ConfigOverrideStoreSuite`
-cases), `ExtStale` after an out-of-band change
-of the legacy fields and not after a no-op rewrite, `Confirm` (`legacy.ExtConfirmer`), orphan extension deleted on
-the next write.
+cases), and no key written outside the legacy format's own keys (A-2).
 
 ### M1.10 Migration from ABO
 
@@ -1117,34 +1002,30 @@ that names an ABO key describes that books code, not core.
 
 | ABO today | Becomes |
 |---|---|
-| `config.MetadataSources[]` (`internal/config/config.go:147-163`) | legacy-backed `metadata/<id>` instances, adapters `books.<id>`, served in place from `metadata_sources` by books' store (M1.4 step 2a); `Credentials` values (plaintext in the blob) move into `secrets` under `integrations.metadata.<id>.credentials.<k>` on this build's first write of them, the legacy values sentinelled (R4-2); the Google Books key and the Hardcover token, which HEAD keeps encrypted in their own rows, stay there (kept names of 05-config §2.2, R5-1(b); table below) |
+| `config.MetadataSources[]` (`internal/config/config.go:147-163`) | legacy-backed `metadata/<id>` instances, adapters `books.<id>`, served in place from `metadata_sources` by books' store (M1.4 step 2a); `Credentials` values stay plaintext in the blob and the Google Books key and the Hardcover token stay in HEAD's encrypted rows, each read and written in place under its secret name until the secrets cutover (A-2, R5-1(b); table below) |
 | `DelugeWebURL/Password`, `DownloadClient.Torrent.Deluge` (`config.go:225-240,1776-1780`) | the legacy-backed `download/deluge` instance (05-download §10) |
-| (egress trust) | `Local` is native-only (books' extension family, M1.4 step 2a). Today these instances have no egress guard at all; from S7 a private host needs `Local` or `lan_allow`. **The upgrade grants no `Local` (DATA5-9).** At S7 books ships one versioned `Migration` (05-storage §5S.3.5; `Additive`, P4b, raises no level; never a `LegacyMigration`, which `TestNoNewLegacyMigrations` forbids after S2b; SIMP5-11, DATA5-17) that writes only books' extension family `m/books/ext/integrations/` and nothing older builds read: for each legacy-backed instance whose URL core's `legacy.IntegrationsLocalCandidate` accepts — the host is an **IP literal** in the loopback or private ranges — it records that URL origin as `PendingLocal`, with the legacy-field hash of M1.4 step 2a. The same migration records,
-for each legacy-backed instance with a stored destination, that destination's origins as `OperatorSecretOrigin`
-(M1.4 step 2, R8-5, SEC8-2): those fields had admin provenance on every earlier build (`settings.manage` at HEAD,
-`ProtectAdmin` on the config façade from S3), so an operator-sourced secret beside them stays served at S7, and a
-re-run on a restored pre-S7 archive records that archive's origins the same way. A candidate grants nothing: the instance reads `Local=false`, reports `HealthDegraded` with reason `integration_local_pending`, and is listed on the Integrations page until an admin accepts it with `Registry.Confirm` (ProtectAdmin, audited `core.integration.confirm`), which grants `Local` bound to that origin only while it still equals the instance's URL origin. This holds whatever wrote the URL: values HEAD's `PUT /api/v1/config` wrote before S3 (a HEAD custom role holding `settings.manage` could write them), a HEAD store that skips S3–S6 and boots S7+ directly, and a pre-S7 archive restored on S7+ — whose store lacks the migration's applied record, so the migration runs again on the archive's URLs and again only records candidates. A private host given by **name** is never a candidate (a name can resolve anywhere at dial time): it is `HealthMisconfigured` with reason "private host needs Local or lan_allow" until an admin sets `Local` or lists it in `lan_allow` (SEC3-5). A host change by any writer resets `Local` and drops a candidate (M1.3 `Put`; for an older build's change, the suspension of M1.4 step 2a). From S3 every integration-bound blob field (URL, host, credentials, headers) is also `ProtectAdmin` on the config façade until S7 hands it to `Registry.Put`, and a URL-origin change through the façade before S7 clears that instance's stored secret unless the same request re-supplies it (05-config §1.3.7, §1.12.2; `TestPreS7Facade_IntegrationURLIsProtectAdmin`; SEC4-7). Release note (S7): "Integrations that reach a LAN address by IP need one confirmation by an admin on the Integrations page after this upgrade; until then they cannot connect." |
+| (egress trust) | Today these instances have no egress guard at all. From S7 the guard applies to every instance, and a legacy-backed instance keeps HEAD's reach for its **own configured hosts**: it stores no `Local` (books keeps no record beside the legacy fields, A-2) and reads `Local=true`, so a Deluge, AI endpoint or webhook on the LAN keeps working with no upgrade step and no confirmation; redirects to other private hosts and data-derived URLs are refused (M1.4 step 2a). Its destination fields keep HEAD's writers: `settings.manage` at HEAD (seed: `admin` only, `internal/config/protected_fields.go:148` @748fd787a), `ProtectAdmin` on the config façade from S3 (05-config §1.3.7, §1.12.2; `TestPreS7Facade_IntegrationURLIsProtectAdmin`; SEC4-7), and `ProtectAdmin` on `Registry.Put` from S7 (M1.3). A URL-origin change through the façade or `Put` clears that instance's stored secret unless the same request re-supplies it (SEC-15). No books migration runs for egress trust. |
 | `ai_endpoints` rows (`internal/config/ai_endpoints.go:36-68`) | legacy-backed `ai/<id>` instances, served in place from `ai_endpoints` by books' store (05-ai §10) |
 | `config.Plugins["webhook"].Settings` | legacy-backed `notify/webhook-<n>` instances, served in place from `plugins.webhook` by books' store (05-notify §10) |
 | `handleDelugeTestConnection`, `/ai/test-connection` | `POST /api/core/v1/integrations/{kind}/test` |
 | `internal/plugin` (`Plugin`, `Registry`, `DownloadClient`, `Notifier`, `MediaPlayer`) | deleted at 09 S7 (N4; 04 §8.3); `MediaPlayer` has no successor until a media-server kind is specified |
 
-**Legacy-backed instance table** (normative for books' store). It fixes the instance ID of every legacy singleton before the
-09 S3 build ships, because S3 is the first build that can write one of the plaintext secrets and it stages each
-once under its final name (05-config §2.2). The secrets HEAD already keeps encrypted (05-config §2.2's **kept** names) are not moved
-during the extraction (R5-1(b)); their final name is the one the family's cutover uses. Instance IDs follow `InstanceID`'s grammar; IDs that exist in ABO today
+**Legacy-backed instance table** (normative for books' store). It fixes the instance ID of every legacy singleton and
+the secret name `secrets` uses for each legacy secret. No secret is moved during the extraction: each stays where HEAD
+keeps it, plaintext or encrypted, and is read and written in place under its name (A-2, R5-1(b)); the secrets cutover
+moves it into `secrets` under the same name. Instance IDs follow `InstanceID`'s grammar; IDs that exist in ABO today
 are kept verbatim. The *Passthrough path* column is the operator-layer path 05-config hands over (M1.4 step 2, an
 in-memory overlay); env aliases onto it are permanent.
 
-| ABO source = stored form until cutover | Instance | Secret names (moved: in `secrets` from this build's first write; kept: in the legacy encrypted row until cutover, 05-config §2.2) | Passthrough paths (operator layers) |
+| ABO source = stored form until cutover | Instance | Secret names (the value stays in HEAD's place, plaintext or encrypted, until the secrets cutover; 05-config §2.2) | Passthrough paths (operator layers) |
 |---|---|---|---|
-| `deluge_web_url`, `deluge_web_password`, `download_client.torrent.deluge.*` (`config.go:225-240,1776-1780`) | `download/deluge` | `integrations.download.deluge.password` | `integrations.download.deluge.{url, password}` |
-| `openai_api_key`, `openai_base_url` (the row ABO itself synthesises with ID `openai`, `internal/config/ai_endpoints.go:74,403-440`) | `ai/openai` | `integrations.ai.openai.api_key` (kept: HEAD's encrypted row `persistence.go:1955`) | `integrations.ai.openai.{api_key, base_url}` (`OPENAI_API_KEY`, `OPENAI_BASE_URL`) |
+| `deluge_web_url`, `deluge_web_password`, `download_client.torrent.deluge.*` (`config.go:225-240,1776-1780`) | `download/deluge` | `integrations.download.deluge.password` (plaintext in the blob) | `integrations.download.deluge.{url, password}` |
+| `openai_api_key`, `openai_base_url` (the row ABO itself synthesises with ID `openai`, `internal/config/ai_endpoints.go:74,403-440`) | `ai/openai` | `integrations.ai.openai.api_key` (HEAD's encrypted row `persistence.go:1955`) | `integrations.ai.openai.{api_key, base_url}` (`OPENAI_API_KEY`, `OPENAI_BASE_URL`) |
 | other `ai_endpoints[]` rows (`local-llm`, `local-uv`, user rows; `ai_endpoints.go:73-75`) | `ai/<row id>` | `integrations.ai.<row id>.api_key` where `auth_ref` is set | — (DB only today) |
-| `google_books_api_key` (`persistence.go:1956`) | `metadata/google-books` (the source ID, `config.go:3769`) | `integrations.metadata.google-books.api_key` (kept) | `integrations.metadata.google-books.api_key` |
-| `hardcover_api_token` (`persistence.go:1957`) | `metadata/hardcover` (`config.go:3779`) | `integrations.metadata.hardcover.api_token` (kept) | `integrations.metadata.hardcover.api_token` |
-| other `metadata_sources[]` entries | `metadata/<source id>` | `integrations.metadata.<source id>.credentials.<k>` | — |
-| `config.Plugins["webhook"]` (`urls`, `secret`, `events`; `internal/plugins/webhook/plugin.go:43-71`) | `notify/webhook-<n>` (n = 1… = position in `urls`, empty entries counted, 05-notify §10) | `integrations.notify.webhook-<n>.secret` (one family-level legacy `secret`, staged under every instance's name; `Shared`) | — |
+| `google_books_api_key` (`persistence.go:1956`) | `metadata/google-books` (the source ID, `config.go:3769`) | `integrations.metadata.google-books.api_key` (encrypted row) | `integrations.metadata.google-books.api_key` |
+| `hardcover_api_token` (`persistence.go:1957`) | `metadata/hardcover` (`config.go:3779`) | `integrations.metadata.hardcover.api_token` (encrypted row) | `integrations.metadata.hardcover.api_token` |
+| other `metadata_sources[]` entries | `metadata/<source id>` | `integrations.metadata.<source id>.credentials.<k>` (plaintext in the blob) | — |
+| `config.Plugins["webhook"]` (`urls`, `secret`, `events`; `internal/plugins/webhook/plugin.go:43-71`) | `notify/webhook-<n>` (n = 1… = position in `urls`, empty entries counted, 05-notify §10) | `integrations.notify.webhook-<n>.secret` (one family-level plaintext legacy `secret`, read and written under every instance's name; `Shared`) | — |
 
 `notify/email` is **not** legacy-backed: HEAD stores no SMTP setting (`smtp_*` are environment-only and "the config
 blob never stores one", `internal/config/invite_config.go:28-29` @748fd787a). Its operator values are the overlay
@@ -1160,10 +1041,11 @@ stored form.
 part of the extraction (09 S0–S10). It is a later step per family — one-way, checkpointed, behind the single
 per-owner level guard (05-storage), decided on measured data (02 decision 13) — and its rollback floor is the
 cutover release itself. It is the first step in which core reads books' rows, so the read-delete storage grant it
-needs belongs to it (05-storage §5S.3.13; R4-1). It is also the step that moves the kept secrets into
-`secrets` (R5-1(b); 05-config §1.12.2). After it this file's members of package `legacy` (M1.3 "Legacy members", and the
-capabilities' use here) have no implementation left and are deleted, which is not a breaking change (R6-3);
-`InstanceConfig.Legacy` and `StoredInstance.Legacy` stay, always nil, and `Registry.Confirm` answers 409, until a
+needs belongs to it (05-storage §5S.3.13; R4-1). The instance's native-only state (`Local`, origin binding of
+operator secrets, `Limits`) starts there, and so does the family's use of `secrets` records, unless the secrets
+cutover (A-2: the post-S10 cutover that encrypts the plaintext secrets; 12, 14) moved them first. After the family's cutover this
+file's members of package `legacy` (M1.3 "Legacy members", and the capability's use here) have no implementation
+left and are deleted, which is not a breaking change (R6-3); `InstanceConfig.Legacy` stays, always nil, until a
 major (03 §3.3, 14 K23). Until then every build reads the same keys and no integration step
 raises a level; the import, re-import, legacy mirror, adopt step with a Teach `Floor`, contract C7's mirror stop and
 the core-side legacy-format adapter of the earlier designs do not exist (R3-1, R4-1).
@@ -1241,7 +1123,7 @@ type Options struct {
 	Legacy    GateStore
 	Base      http.RoundTripper      // default: a cloned http.DefaultTransport, never the global itself
 	UserAgent string                 // "<app>/<version> (+mediacore/<v>)"
-	Metrics   *metrics.Scope         // core scope "mediacore.providerhttp" (05-metrics)
+	Metrics   *metrics.Scope         // core scope "<ns>.providerhttp", <ns> = app.Options.MetricNamespace (03 §3.6, A-5)
 	Log       *slog.Logger
 	Now       func() time.Time
 }
@@ -1423,6 +1305,9 @@ the only writer of its families, and the Registry is its only caller.
 | per instance: `limits.rps`, `limits.burst`, `limits.max_retries`, `limits.timeout`, `limits.tier` (`low`=0.5×, `medium`=1×, `high`=2× the adapter default, `internal/config/config.go:165-190`), `limits.daily.total`, `limits.daily.background`, `limits.daily.zone` | per field | adapter default | yes (in place, M2.3 `SetLimits`) | instance rules (M1.3) |
 
 ### M2.8 Metrics
+
+Names use core's default namespace `mediacore`; an app's `app.Options.MetricNamespace` replaces it (03 §3.6, A-5).
+These series are new with core.
 
 | Name | Type | Labels |
 |---|---|---|
@@ -1658,6 +1543,9 @@ own declared parallelism; the provider bucket, not the worker count, bounds the 
 
 ### M3.8 Metrics
 
+Names use core's default namespace `mediacore`; an app's `app.Options.MetricNamespace` replaces it (03 §3.6, A-5).
+These series are new with core.
+
 | Name | Type | Labels |
 |---|---|---|
 | `mediacore_metadata_searches_total` | counter | `module`, `outcome` (`answered`, `no_answer`) |
@@ -1884,3 +1772,12 @@ Round 8 (`docs/plans/platform-core/reviews/spec-round-8-dispositions.md`):
 - R8-3 / SIMP8-2 — M1.4 "Staging", M1.5 and M1.7 rows: the native-URL scrub clause is deleted; the scrub clears legacy URLs, and native rows are covered by the operator switch and the firewall because only S7+ binaries read them and every such staging boot carries the switch.
 - SEC8-10 — M1.3 `Test`, route table, M1.5 row: the instance-scoped test takes an unsaved body and fills an omitted secret from the stored one only while no destination origin changes; `TestRegistryTest_ChangedURLUsesNoStoredSecret`.
 - SIMP8-3 — M1.1: "the kernel asserts only the capabilities 03 §3.3 lists" replaces the count of two.
+
+Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
+
+- A-2 / ADV-3 / ADV-S1 — M1.1, M1.3, M1.4 step 2 and 2a, M1.5, M1.9, M1.10: legacy-backed instances keep HEAD's representation; `OperatorSecretOrigin` is native-only, `ErrOperatorSecretBound`, `Registry.Confirm` and its route, `ErrNothingToConfirm`, `StoredInstance.Legacy`/`StoredInstanceLegacyState`, the extension records and field classes, `legacy.ExtConfirmer` use, `legacy.IntegrationsLocalCandidate`, the S7 `PendingLocal`/origin migration, moved-secret sentinels and re-import deleted; secrets stay in place; a legacy-backed instance keeps HEAD's reach for its configured hosts, its destination and secret fields need ProtectAdmin on `Put`, and unstorable fields get 422 `ErrFieldNotStorable`; tests replaced.
+- A-3 / ADV-S2 — M1.4 step 2a: the legacy instance store keeps HEAD's lock discipline; the extension-writer `Expect` rules deleted.
+- A-4 / ADV-S3 — M1.3 "Deferred-build members": `archtest.DeferredMembersAbsent` reference deleted.
+- A-5 / ADV-S4 — M1.8, M2.3 `Options.Metrics`, M2.8, M3.8: names under `app.Options.MetricNamespace` (default `mediacore`); no renames.
+- A-12 / ADV-S6 — M1.4 "Staging", M1.5 and M1.7 rows: integrations disabled and schedules run on staging; `staging-scrub` clears legacy URLs; `--network none` replaces the firewall; `make rollback` dropped from the staging list.
+- A-15 / ADV-S9 — M1.3 "Deferred-build members": the `FacadeWriter` and `Tags` members are a design sketch (non-normative) that the SDK does not freeze.

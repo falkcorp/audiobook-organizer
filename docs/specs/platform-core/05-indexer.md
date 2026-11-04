@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-indexer.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: 5e2d5cda-5f98-4db2-87b1-b4c8d6519ec7 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -9,10 +9,11 @@ Evidence commit `748fd787a`. Raw inputs: [`raw/16-arr-domain-research.md`](../..
 §4.1-§4.4, §5.2 (Prowlarr rows), §6, §7.1 rows 1, 6, 7, 15; [`raw/11-integrations.md`](../../plans/platform-core/raw/11-integrations.md) §1, §4.
 Builds on [05-metadata](05-metadata.md) §M1 (instances, health, egress trust, taxonomy) and §M2 (`providerhttp`).
 
-> **Deferred-build: not in the ABO extraction plan** (cross-cutting resolution 1, SIMP-1). ABO consumes no
-> indexer. This file is the contract of record at proof depth; `integrations/indexer` is built with `acquire`
-> when the first TV/Movies app starts ([10](10-tv-movies-proof.md)), and [09](09-abo-on-core.md) S7 does not
-> create the package.
+> **Design sketch (non-normative; A-15).** The whole file is deferred-build and not in the ABO extraction plan
+> (cross-cutting resolution 1, SIMP-1): ABO consumes no indexer, and [09](09-abo-on-core.md) S7 does not create the
+> package. The SDK freezes none of it: `integrations/indexer` is designed and settled with `acquire` when the first
+> TV/Movies app starts ([10](10-tv-movies-proof.md)). It is kept at proof depth to show that the frozen contracts it
+> stands on (05-metadata M1 instances, M2 `providerhttp`) fit an indexer.
 
 ## 1. Purpose & scope
 
@@ -352,7 +353,7 @@ fixtures when built:
 | HTTP 429 / rate vocabulary | `ClassRateLimited` | hold ≥15m (Retry-After honoured, clamped) | M2 rule. |
 | Malformed XML / not RSS | `ClassBadOutput` | closed for that indexer; does not count against breaker | Likely a proxy/login page; surfaced in health. |
 | `Plan` finds no usable param | `ClassUnsupported` | skip that indexer, outcome recorded | Sonarr skips such searches (raw/16 §4.2). |
-| `core.integrations.disabled` true (a staging copy, R6-7; 05-metadata M1.4) | `ClassRefusedLocal` (`ErrDisabled` from `Lease`) | closed for every indexer: no search, RSS page or fetch is sent, no RSS cursor moves. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances (acquire's `core.acquire.rss-sync` run included). Indexer instances are native rows (§3), which the staging scrub does not clear (09 §9.3, R8-3): only S7+ binaries read them, every such staging boot carries the switch, and the firewall drops the copy's egress (R7-6) | A copy of a production store must never query or download from production indexers (OPS6-4, SEC7-6); schedules must still fire there (DATA5-8). |
+| `core.integrations.disabled` true (a staging copy, R6-7; 05-metadata M1.4) | `ClassRefusedLocal` (`ErrDisabled` from `Lease`) | closed for every indexer: no search, RSS page or fetch is sent, no RSS cursor moves. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances (acquire's `core.acquire.rss-sync` run included). Indexer instances are native rows (§3), which `staging-scrub` does not clear (09 §9.3, R8-3): only S7+ binaries read them, and every such staging boot carries the switch and runs with `--network none` (R7-6, A-12) | A copy of a production store must never query or download from production indexers (OPS6-4, SEC7-6); schedules must still fire there (DATA5-8). |
 | Every eligible indexer failed | closed: `ErrNoIndexerAnswered` (joined) | — | "No results" must be distinguishable from "nobody answered". |
 | Caps refresh fails with cached caps present | open (stale caps used) | — | A transient caps failure must not stop searching. |
 | Fetched file exceeds size cap / not a torrent or NZB | `ClassBadOutput` | closed | Never hand garbage to a download client. |
@@ -383,6 +384,8 @@ Protection classes per 05-config §1.3.7 (SEC2-8); egress trust is the instance'
 | `core.indexer.max_attrs_per_item` | int | `64` | yes | none |
 
 ## 8. Metrics
+
+Names use core's default namespace `mediacore`; an app's `app.Options.MetricNamespace` replaces it (03 §3.6, A-5).
 
 | Name | Type | Labels |
 |---|---|---|
@@ -480,3 +483,9 @@ Round 7 (`docs/plans/platform-core/reviews/spec-round-7-dispositions.md`):
 Round 8 (`docs/plans/platform-core/reviews/spec-round-8-dispositions.md`):
 
 - R8-3 / SIMP8-2 — §5 `core.integrations.disabled` row: indexer instances are native rows, which the staging scrub no longer clears; the switch and the firewall cover them.
+
+Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
+
+- A-15 / ADV-S9 — header: the whole file is a design sketch (non-normative) the SDK does not freeze, kept to show the frozen M1/M2 contracts fit.
+- A-12 / ADV-S6 — §5 `core.integrations.disabled` row: `staging-scrub` and `--network none` replace the scrub/firewall wording.
+- A-5 / ADV-S4 — §8: names under `app.Options.MetricNamespace`.
