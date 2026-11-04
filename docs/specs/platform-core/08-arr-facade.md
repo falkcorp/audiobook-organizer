@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/08-arr-facade.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 6d9b089a-fb08-4087-9ccd-43b9aa4ec555 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -24,21 +24,25 @@ kinds) are deferred-build members of 06 §6.4.9.
 **Deferred-build members of built packages (SIMP2-6).** Deferral applies to features inside built
 packages as well as to packages (03 §3.4). Everything below exists only for this facade, has no ABO
 consumer, and is therefore **not** built in S2/S4; each owning file keeps its contract text under a
-heading named exactly `Deferred-build members` (03 §3.4), and it lands additively in the build that
-creates `arrfacade`. The table below is a reader's index of those entries, not a source of the check:
+heading whose text, after an optional section number, is exactly `Deferred-build members` (03 §3.4),
+with the package-qualified identifiers in its table's first column and every other item (query-key
+extraction, the facade clause, tests) in its `Also deferred (not checked)` column (COR5-16, SIMP5-6),
+and it lands additively in the build that creates `arrfacade`. The table below is a reader's index of
+those entries, not a source of the check:
 
 | Member | Owning file | Notes |
 |---|---|---|
-| `KeySpec.Purpose`, `KeySpec.Module`, `PurposeFacade`, and the stored key record's purpose field (defaults to general) | 05-authn §3.2, §4.4 | additive; until then no facade key can be minted, so SEC-5's guarantee holds trivially |
+| `auth.KeySpec.Purpose`, `auth.KeySpec.Module`, `auth.PurposeFacade`, and the stored key record's purpose field (defaults to general) | 05-authn §3.2, §4.4 | additive; until then no facade key can be minted, so SEC-5's guarantee holds trivially |
 | query-string key extraction (`apikey`, `X-Api-Key`), enabled only on facade groups | 05-authn §4.2 | HEAD reads neither (`internal/server/middleware/auth.go:83-98`) |
-| `Router.FacadeGroup`, `RouteKind Facade`, the stage-13 facade refusal clause | 05-http-api §3, §4.2, §4.9 | the `/api/v3/` reservation itself is built |
+| `httpapi.Router.FacadeGroup`, `httpapi.RouteKindFacade`, the stage-13 facade refusal clause | 05-http-api §3, §4.2, §4.9 | the `/api/v3/` reservation itself is built |
 | `TestAPIKey_FacadePurposeBoundToModule`, `TestConfining_FacadeKeyRefusedOnNative` | 05-authn, 05-rbac | `Confining` itself is built (the fingerprint worker needs it, SEC-3) |
 
 Absence is checked by one test, not a prose grep: the deferred-members archtest
 `archtest.DeferredMembersAbsent` runs in the root module's `make ci` from S2 (06 §6.4.9, 09 S2) and fails
 when any listed identifier appears in non-test code under `core/`, because `test ! -e core/arrfacade`
-cannot see a feature inside a built package. Its list is generated from every `Deferred-build members`
-heading under `docs/specs/platform-core/` (03 §3.4), with package-qualified entries
+cannot see a feature inside a built package. Its list is generated from the first column of every
+`Deferred-build members` heading under `docs/specs/platform-core/` (03 §3.4; a section number before
+the words is allowed), with package-qualified entries
 (`module.Registrar.ArrFacade`, `auth.PurposeFacade`, `httpapi.Router.FacadeGroup`,
 `httpapi.RouteKindFacade`, `module.ProblemFacadeIncomplete`, `module.ProblemFacadeURLBaseCollision`, …).
 The two facade problem kinds are appended to the end of 06's `ProblemKind` block when this package
@@ -651,3 +655,7 @@ Round 4 (2026-11-04), findings applied to this file:
 
 - SIMP4-1 — §8.0: owning files keep facade members under a `Deferred-build members` heading; the archtest list is generated from every such heading (03 §3.4) with package-qualified entries; the `arrfacade` PR deletes only the facade entries, and the test goes when the list is empty.
 - R4-1 — checked: the facade touches no legacy store or grant; nothing else to change.
+
+Round 5 (2026-11-04), findings applied to this file:
+
+- COR5-16 / SIMP5-6 — §8.0: the heading grammar (optional section number), first column package-qualified identifiers only, other items in `Also deferred (not checked)`; the reader's index qualifies `auth.` and `httpapi.` names.

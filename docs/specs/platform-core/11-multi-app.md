@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/11-multi-app.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 74ed9015-8ae0-4b4b-8049-4c09cfbba343 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -13,7 +13,7 @@ does need a new core capability; it is recorded as such in 14.
 
 ## 11.1 What "multi-app" means here
 
-One `main` calling `app.New(ctx, opts, books.New(…), tv.New(…), movies.New(…))`: one process, one
+One `main` calling `app.New(ctx, opts, books.Module(…), tv.New(…), movies.New(…))` (ABO's constructor name, 03 §3.7, MOD5-11): one process, one
 data directory, one Pebble store, one user database, one HTTP listener, one SPA. It does **not** mean
 several `App` values in one process sharing nothing (that is already possible once R5 holds, because
 nothing in core is process-global) nor multi-tenancy (D7: no tenant IDs).
@@ -23,7 +23,7 @@ nothing in core is process-global) nor multi-tenancy (D7: no tenant IDs).
 | Constraint | Where it is specified | What it guarantees for a suite binary |
 |---|---|---|
 | Module IDs unique, validated before storage opens | 06 §6.5.1 P1, 03 §3.6 | `books`, `tv`, `movies` cannot collide silently |
-| Namespaced storage: `m/<id>/` per module, `c/<subsystem>/` for core, legacy claims checked for overlap; no core subsystem and no module reads another owner's rows; a module may supply its own implementations of core store interfaces over its own claims, at most one module per interface | 03 R8, 05-storage, 06 `Manifest.Storage storage.Spec`, `Manifest.LegacyStores`, 06 §6.11.6 | ABO's 258 legacy families are claimed by `books`; new modules never touch them. In a suite that ships `books`, books' legacy stores keep `auth`, `rbac`, `config` and `tasks` on ABO's existing user, role, settings and run rows, so `tv` and `movies` share that one user database without a copy; a suite without `books` uses core's native stores (R4-1) |
+| Namespaced storage: `m/<id>/` per module, `c/<subsystem>/` for core, legacy claims checked for overlap; no core subsystem and no module reads another owner's rows; a module may supply its own implementations of core store interfaces over its own claims, at most one module per interface | 03 R8, 05-storage, 06 `Manifest.Storage storage.Spec`, `Manifest.LegacyStores`, 06 §6.11.6 | ABO's 258 legacy families are claimed by `books`; new modules never touch them. In a suite that ships `books`, books' legacy stores keep `auth`, `rbac`, `config` and `tasks` on ABO's existing user, role, settings and run rows, so `tv` and `movies` share that one user database without a copy. Those are exclusive stores; the routed ones (library roots, provider gates, integration instances, notify rules) serve books' legacy records through books' store and every other record, `tv`'s and `movies'` included, from core's native store (06 §6.4.2, SIMP5-1). A suite without `books` uses core's native stores (R4-1) |
 | Route prefixes `/api/<id>/v1`, core at `/api/core/v1`; legacy subtree claims may not overlap | 03 §3.6, 06 `Registrar.HTTP`, 05-http-api §4.9 | no path overlap between modules by construction |
 | Permission namespaces `<id>:<action>`, admin is `core:admin` | 03 §3.6, 06 `Manifest.Permissions []rbac.PermissionSpec`, 05-rbac | one role editor shows `books:*`, `tv:*`, `movies:*`; API keys can be scoped per module |
 | Task kinds `<id>.<name>`, resources as `entity.Ref{Module, Kind, ID}` | 03 §3.3, §3.6, G8, 05-tasks | one executor, no write-set identity collisions |
@@ -43,7 +43,7 @@ nothing in core is process-global) nor multi-tenancy (D7: no tenant IDs).
 | Hazard | Anchor | Required handling (owner) |
 |---|---|---|
 | ABO's catch-all `/api/*` → `/api/v1/*` 301 redirect is a gin global middleware with an exclusion list | `internal/server/server_lifecycle.go:1789-1816` | 05-http-api §4.9 re-implements it as the least-specific `/api/` handler of the `books` legacy mount, so every claimed prefix (`/api/core/`, `/api/<module>/`, facades) wins by `ServeMux` specificity. For an **unknown** path under another module (`/api/tv/v1/nope`) not to fall through to it, each module and core group must register a subtree 404 catch-all (open item for 05-http-api) |
-| Un-namespaced ABO names during the compatibility window (`/api/v1/...`, 13 permission atoms, flat config keys, `/api/v3/ops`) | 03 §3.6 last paragraph | all are declared by `books` (`Manifest.LegacyPrefixes`, whose first segments are also reserved module IDs; `Manifest.LegacyAliases`; config `Aliases`, 05-config), so the kernel checks them against other modules; window closes per 09 |
+| Un-namespaced ABO names during the compatibility window (`/api/v1/...`, 13 permission atoms, flat config keys, `/api/v3/ops`) | 03 §3.6 last paragraph | all are declared by ABO, so the kernel checks them against other modules: `books` declares `Manifest.LegacyPrefixes` (whose first segments are also reserved module IDs), its own-namespace `Manifest.LegacyAliases` and `Manifest.LegacyRoleIDs`, and config `Aliases` (05-config); the 13 atoms map to `core:*`, so ABO's `main` passes them as the app-level `app.Options.LegacyPermissionAliases`, which a suite `main` must carry over from ABO's (06 §6.4.5, COR5-5); window closes per 09 |
 | ABO-side globals (`config.AppConfig`, `database.globalStore`, viper, `slog.SetDefault` in `cmd/root.go:718`) | raw/12 §9 | R5 binds core only (cross-cutting resolution 3): ABO keeps `config.AppConfig` and its logger shim as books-module façades over core handles. They are harmless while one `App` runs `books`. A suite `main` must own logging/metrics setup through core, so `books` must not call `slog.SetDefault`/`otel.Set*` and its façades must be per-`App` values held by the module (§11.5 row 11) |
 | Module metric names change when a second module is compiled in | 03 §3.6 metric row | with one shipped module ABO's series are `audiobook_organizer_*`; a suite binary that ships two or more makes them `<MetricPrefix>_books_*`, so a suite needs 05-metrics aliases for every books family (§11.5 row 12). Enabling or disabling a module at run time never renames a series (SIMP2-13) |
 
@@ -113,3 +113,9 @@ Round 3 (2026-11-04), findings applied to this file:
 Round 4 (2026-11-04), findings applied to this file:
 
 - R4-1 — §11.2 storage row: no storage grants; books supplies its own legacy store implementations, at most one module per interface, and a suite without books runs on core's native stores. §11.5 row 4: export/import works per core store through the same interface (native or module-supplied), never by core reading a module's rows.
+
+Round 5 (2026-11-04), findings applied to this file:
+
+- MOD5-11 — §11.1: `books.Module(…)`, the one constructor name.
+- COR5-5 — §11.3: ABO's 13 core-targeting atoms are app-level `app.Options.LegacyPermissionAliases`; books declares only own-namespace aliases and `LegacyRoleIDs`.
+- SIMP5-1 — §11.2 storage row: exclusive vs routed stores; in a suite with `books`, routed stores serve `tv`/`movies` records natively.
