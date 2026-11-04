@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.13.0 -->
+<!-- version: 1.13.1 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -153,30 +153,28 @@ type Deps struct {
 	Events      *events.Bus
 	Notify      *notify.Service      // stages core.update.found.v1 notifications (outbox-backed, COR2-3)
 	Store       storage.Keyspace     // c/updater/ (one key, 5U.4 Check)
-	ReaderCheck ReaderCheck          // kernel-bound to 05-storage's guard (levels and the swap slot)
+	ReaderCheck ReaderCheck          // kernel-bound to 05-storage's guard decision (levels and the swap slot)
 	Log         *slog.Logger
 }
 
-// ReaderCheck asks whether the binary at exe may open the store at dbPath as
-// it is now: the decision `make rollback` makes, implemented once by
-// 05-storage's guard over the level sidecar and the restore slot, so it
-// needs no open store. The kernel binds it to core/internal/pebble.CheckReader
-// (05-storage §5S.3.7) with the resolved state directory; dbPath is
-// core.storage.path. nil = allowed; otherwise an error carrying one of its
-// fixed reason tokens: "level_newer" (exe supports a lower level than the
-// store holds: a pre-R2 binary on a migrated store), "format_newer",
+// ReaderCheck asks whether the binary at exe may serve the store at dbPath
+// as it is now. It makes the decision of `make rollback`'s guard (05-storage
+// §5S.3.7 "The binary-swap guard") in process, without opening the store:
+// the level sidecar <db path>.storage-levels against `exe
+// --print-storage-levels` (for an R0 exe, .storage-format against
+// --print-storage-format), and the swap slot under the resolved state
+// directory. dbPath is core.storage.path. nil = allowed; otherwise an error
+// carrying one of its fixed reason tokens: "level_newer" (exe supports a
+// lower level than the store holds: a pre-R2 binary on a migrated store),
 // "restore_pending" (restore/pending.json exists: a staged swap of any kind,
 // a restore or a factory reset, KindReset; R8-1, SIMP8-1), "restore_inflight"
 // (a swap journal restore/<id>/ holds inflight.json, which every kind creates
-// BEFORE its first rename and keeps until its terminal step; or, for a
-// checkpoint restore, inflight-checkpoint.json; DATA3-6, R7-2, R9-7),
+// BEFORE its first rename and keeps until its terminal step, the offline
+// restore's KindCheckpoint and KindArchive included; DATA3-6, R7-2, R9-7),
 // "sidecar_unreadable", "cannot_determine" (a probe could not answer;
-// refuses). The error message names the swap's kind. One journal passes: a
-// KindCheckpoint journal at swapped or failed (the offline
-// restore-checkpoint path) does not refuse a candidate exe whose levels admit
-// the restored store and which implements the journaled swap (it answers
-// --print-restore-journal, R1 and later; R7-4, DATA7-12, DATA8-6). There is
-// no override. Apply consults it on <exe> for the swap slot only; Rollback
+// refuses). The error message names the swap's kind. Unlike the guard
+// script, it also refuses a pending intent (5U.6). There is no override and
+// no exception. Apply consults it on <exe> for the swap slot only; Rollback
 // consults it on <exe>.prev.
 type ReaderCheck func(ctx context.Context, dbPath, exe string) error
 
@@ -268,8 +266,9 @@ HEAD, with the hotfix's rules. Steps, each a `rc.Phase`:
    §5S.3.15; R8-1): a swap would make a staged restore be rejected (its `staged_by_build` is another binary,
    05-backup §5B.3.4 step a), turn the admin's audited reset into a rejected intent, or leave a half-done
    set-aside to a binary that cannot finish it (R7-2, OPS7-11). It is read through
-   `ReaderCheck(core.storage.path, <exe>)` with no override (a `KindCheckpoint` journal at `swapped` or `failed`
-   passes for a candidate that admits the restored store and implements the journaled swap, R7-4, DATA8-6). And
+   `ReaderCheck(core.storage.path, <exe>)` with no override; a journal the offline restore left at `swapped`
+   is finished by the boot that starts the service again (05-storage §5S.3.12), so a serving process finds the
+   slot free. And
    the **executable's directory is writable by the process**, checked by creating and removing a probe file
    through an `os.Root` opened on that directory (OPS2-4). An unwritable directory sets
    `DisabledReason: "binary_not_writable"`, refuses apply and rollback, and keeps component `core.updater`
@@ -371,7 +370,7 @@ archives, `checksums.txt` and signing are read only by deferred-build members (5
 | Self-test fails | closed: delete `<exe>.new`, abort | catches wrong arch, corrupt build, wrong app |
 | Rename fails | closed: restore `<exe>` from `<exe>.prev` if the first rename happened; abort | atomic swap or nothing |
 | Executable directory not writable | closed for apply/rollback (`binary_not_writable`); open for check (Degraded, banner) | OPS2-4: say so instead of failing at the swap |
-| A swap staged (`restore/pending.json`: a restore, or a factory reset, `KindReset`) or in flight (a `restore/<id>/inflight.json`, which every kind creates before its first rename and keeps until its terminal step; R9-7), except a `KindCheckpoint` journal at `swapped` or `failed` whose restored store the candidate admits and whose journaled swap it implements (`--print-restore-journal`) | closed: apply and rollback refused (`restore_pending`, `restore_inflight`, the message naming the kind); no override | a swap would discard the restore (DATA3-6), reject the audited reset or leave a half-done set-aside to a binary that cannot finish it (R7-2, R8-1); the checkpoint exception lets the documented failed-migration recovery reach `.prev` (R7-4, DATA7-12, DATA8-6) |
+| A swap staged (`restore/pending.json`: a restore, or a factory reset, `KindReset`) or in flight (a `restore/<id>/inflight.json`, which every kind creates before its first rename and keeps until its terminal step, an offline restore's journal included; R9-7) | closed: apply and rollback refused (`restore_pending`, `restore_inflight`, the message naming the kind); no override and no exception | a swap would discard the restore (DATA3-6), reject the audited reset or leave a half-done set-aside to a binary that cannot finish it (R7-2, R8-1); the rollback across R2 is `make rollback-restore`, which reinstalls `.prev` itself and does not go through the updater (05-storage §5S.3.12) |
 | `ReaderCheck` cannot determine the answer (`cannot_determine`) | closed: apply and rollback refused | fail-closed, as `make rollback` (09) |
 | Manual rollback: `ReaderCheck(<exe>.prev)` refuses | closed: rollback refused with the reason, naming `make rollback-restore` for `level_newer`; the running binary stays | a `.prev` that refuses the store would leave the unit failed (OPS-6); across R2 only a restore goes back (05-backup) |
 | Restart fails after swap | closed: the process keeps running the old code in memory; the next manual or supervisor restart boots the new binary | — |
@@ -449,7 +448,7 @@ The `/api/v1/update/*` paths are deleted in R2; the SPA switches to these routes
 | `TestApply_SwapAtomicAndPrevKept` (slot name `.prev`), `TestApply_RestartExits75` (fake `Restarter`: exit mode uses `core.lifecycle.restart_exit_code`) | swap, restart |
 | `TestRollback_ReaderRefusesPrev` (fake `.prev` reporting a lower level → refused with `level_newer` naming `make rollback-restore`, running binary kept), `TestRollback_SwapsPrevBack` (the replaced binary is kept as `<exe>.rolled-back`, `make rollback`'s name) | manual rollback (OPS-6) |
 | `TestApply_BinaryDirNotWritableRefusedAndDegraded` (read-only temp directory) | OPS2-4 |
-| `TestApply_RefusedWhileResetPending` (a staged `restore/pending.json` of kind `reset`: refused with `restore_pending`, the message naming the kind; then its journal at `set_aside_started` before any target has moved, at `set_aside`, and again at `applied` without `hook_done`, each with its `restore/<id>/inflight.json`: refused with `restore_inflight`; a restore journal at `rechecked` whose `pending.json` was just renamed to `inflight.json`, before `previous_moved`: refused with `restore_inflight`, never `restore_pending` (R9-7, DATA9-3); apply and manual rollback refused, nothing downloaded or swapped; no `reset_*` token exists), `TestApply_CheckpointJournalAdmitsCandidate` (a `KindCheckpoint` journal at `swapped`, and again at `failed`: a candidate whose levels and floors admit the restored store and which answers `--print-restore-journal` passes `ReaderCheck`; one that does not admit the store, or a candidate without the flag, refuses with `restore_inflight`) | R7-2, R7-4, R8-1, OPS7-11, DATA7-12, DATA8-6, R9-7 |
+| `TestApply_RefusedWhileResetPending` (a staged `restore/pending.json` of kind `reset`: refused with `restore_pending`, the message naming the kind; then its journal at `set_aside_started` before any target has moved, at `set_aside`, and again at `applied` without `hook_done`, each with its `restore/<id>/inflight.json`: refused with `restore_inflight`; a restore journal at `rechecked` whose `pending.json` was just renamed to `inflight.json`, before `previous_moved`: refused with `restore_inflight`, never `restore_pending` (R9-7, DATA9-3); apply and manual rollback refused, nothing downloaded or swapped; no `reset_*` token exists), `TestApply_RefusedWhileOfflineRestoreInFlight` (a `KindCheckpoint` journal the offline restore left at `swapped`, with its `inflight.json`: apply and manual rollback refused with `restore_inflight`) | R7-2, R8-1, OPS7-11, R9-7 |
 | `TestCheck_NotifiesOncePerVersionAcrossRestart` | COR2-3 |
 | `TestPolicy_NilOptionsNoRoutesNoTasks` | absence |
 | `TestConfig_ModeIsProtectAdmin` | SEC-6 |
@@ -463,7 +462,7 @@ The `/api/v1/update/*` paths are deleted in R2; the SPA switches to these routes
 | `internal/updater.Updater` (`updater.go`), as R0 hotfixes it | `core/updater` + `core/updater/github`, **moved** in R2 (A-6), with HEAD's raw-asset download and no archive, checksum, backup or container step (R10-8): ABO's `main` passes its slug and binary name and keeps the default `RawBinary` asset namer |
 | `internal/updater.Scheduler` + `SchedulerStarterAdapter` + `updatescheduler` service (`scheduler.go`) and the `init()` registration (`register.go:59-90`) | deleted, not moved: only `updater.go` moves (MOD9-9); `core.updater.check` task with its schedule key; no scheduled apply; the kernel wires the updater from `app.Options.Updater` |
 | maintenance-window step 1 (`scheduler_maintenance_window_op.go:73-92`) and setting `maintenance_window_update_completed` | deleted (the hotfix made it check-only in R0) |
-| `RestartSelf` (`os.Exit(0)`, `updater.go:329-334`) | `Restarter.Restart` (graceful, exit 75; no exec mode). Until R2, the R0 hotfix of HEAD's updater (09) does this: exit 75, `.prev` kept, semver comparison that treats a describe-suffixed current version as a local build and offers nothing (OPS4-17), and **both** auto-apply paths of 5U.2 check-only (OPS3-12); it makes no store check of the new binary. From R1, when the journaled swap lands, it also refuses while the swap slot is taken (`restore_pending`, `restore_inflight`, read in process through core `storage`'s `CheckReader` binding, never through `sudo`, which cannot run under the unit's `NoNewPrivileges=yes`, `deploy/audiobook-organizer.service:122`; OPS8-8, R8-1). R2 moves exactly this behaviour into core |
+| `RestartSelf` (`os.Exit(0)`, `updater.go:329-334`) | `Restarter.Restart` (graceful, exit 75; no exec mode). Until R2, the R0 hotfix of HEAD's updater (09) does this: exit 75, `.prev` kept, semver comparison that treats a describe-suffixed current version as a local build and offers nothing (OPS4-17), and **both** auto-apply paths of 5U.2 check-only (OPS3-12); it makes no store check of the new binary. From R1, when the journaled swap lands, it also refuses while the swap slot is taken (`restore_pending`, `restore_inflight`, read in process from the state directory, the same probe as 05-storage §5S.3.7's guard, never through `sudo`, which cannot run under the unit's `NoNewPrivileges=yes`, `deploy/audiobook-organizer.service:122`; OPS8-8, R8-1). R2 moves exactly this behaviour into core |
 | `<exe>.old`, deleted after the swap (`updater.go:267-280`) | `<exe>.prev`, kept; shared with `make rollback` (from the R0 hotfix) |
 | `/api/v1/update/*` handlers (`update_handlers.go`) | core routes; the old paths are deleted in R2 |
 | `auto_update.*` config | `core.updater.*` and `core.updater.schedules.check`, renamed once by the R2 config cutover (5U.8) |
@@ -643,5 +642,5 @@ Round 11:
   levels and the swap slot, used for the slot precondition and for the manual rollback, whose refusal across R2
   names `make rollback-restore`. Database caveat rewritten (binary swap within R0/R1 and R3→R2; restore across
   R2). `auto_update.*` renamed once by the R2 config cutover, no aliases; `/api/v1/update/*` deleted in R2.
-  Stage references re-keyed (S0 hotfix → R0, S8 move → R2, S2b swap → R1).
+  Stage references re-keyed (S0 hotfix → R0, S8 move → R2, S2b swap → R1). Consistency pass: `ReaderCheck` is bound to 05-storage §5S.3.7's guard decision (level sidecar against `--print-storage-levels`, the swap-slot probe) instead of the deleted `CheckReader`, and the `KindCheckpoint` exception with `--print-restore-journal` and `inflight-checkpoint.json` is gone (the rollback across R2 is `make rollback-restore`), with `TestApply_CheckpointJournalAdmitsCandidate` replaced by `TestApply_RefusedWhileOfflineRestoreInFlight`.
 
