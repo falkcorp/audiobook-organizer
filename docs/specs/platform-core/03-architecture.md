@@ -297,8 +297,8 @@ builds none of it, and it is built when the first TV/Movies app starts.
 key families defines a **store interface** in its SDK package and ships a **native implementation** over
 its own `c/<subsystem>/` keyspace. The native implementation is the one `examples/hello`, `coretest` and
 every new app use, and it lands with its subsystem (rule (b) of §3.4). An app with pre-core data passes a
-**legacy implementation** of the same interface through its manifest or `app.Options` (06 names the
-field); for ABO that is code in the `books` module, over ABO's existing keys and row formats, and it
+**legacy implementation** of the same interface on `module.Manifest.LegacyStores` (06), never through
+`app.Options`; for ABO that is code in the `books` module, over ABO's existing keys and row formats, and it
 stays in ABO. So core holds no app key name or row format (R1(c)) and holds no storage grant during the
 extraction. Core enforces its invariants above the interface (never-empty API-key scopes, upgrade-on-use,
 staging rules) and ships one conformance suite per interface, which every implementation runs (ABO's with
@@ -715,7 +715,8 @@ Round 4 (dispositions in `docs/plans/platform-core/reviews/spec-round-4-disposit
 - SIMP4-1, COR4-19 — §3.4: `Deferred-build members` headings in every file, package-qualified identifiers, list generated from every heading, per-member deletion, test deleted only when the list is empty.
 - SIMP4-4, SIMP4-5, SIMP4-6 — §3.4 deferral list names the cutover-only members, backup encryption and the seed-merge diff.
 - SIMP4-10 — `compat` row: core's fragment holds only shared permanent names (`OTEL_*`); every window alias is the app's; gate test.
-- SIMP4-12 — `integrations` row: "the one registry for integration instances", native vs legacy-backed.
+- SIMP4-12 — `integrations` row: "the one registry for integration instances", native vs legacy-backed (resolves 05-metadata's objection to 03).
+- Lead decision (R4-1) — legacy store implementations are supplied on `module.Manifest.LegacyStores`, not `app.Options` ("Store interfaces" paragraph).
 - FE4-1, MOD4-9, COR4-18 — `internal/<capability>http` row: `ui_build_id` comes from the embedded bundle's meta tag only; no ldflags value, no boot comparison.
 - FE4-6 — `ui` row: `ui.ModuleManifest`, `UIIDs`, `Redirect` land as leaf types with `ReservedSegments` at S2.
 - FE4-2 (disposition note) — §3.6 UI-route row: fragment tokens from the shell stage; `/invite/<token>` until then.
