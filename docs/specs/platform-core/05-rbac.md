@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.10.1 -->
+<!-- version: 1.11.0 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -362,6 +362,12 @@ type CheckerInput struct {
 	// (SEC5-7).
 	LegacyKey   bool
 	LegacyAtoms []string
+	// Ambient: the app's LegacyAmbientScopes, filled by rbac itself from
+	// app.Options when the role store is legacy-backed (§6.3), never by a
+	// caller and never read from a role. Compile decides Confined() on the
+	// set before Ambient and, for a principal that is not confined, adds
+	// Ambient after the key intersection (§4.4; COR9-3, resolution R9-4).
+	Ambient []Permission
 }
 
 // Checker is a compiled, immutable permission set.
@@ -614,6 +620,14 @@ removing today's need to list both atoms. Cross-namespace implication is forbidd
 (implication closures precomputed into it), a set of namespace wildcards, a set of action
 wildcards, an `admin` flag, and the `interactive` bit. With key scopes, the checker is the
 intersection (a scope is held iff the roles hold it and the key names it, after implication).
+**Ambient scopes come last (resolution R9-4, COR9-3).** On a legacy-backed role store `Compile` then adds
+`CheckerInput.Ambient` (§6.3) to the result **after** the key intersection, unless the set before Ambient
+is `Confined()`: an ABO key's scopes are its atoms' expansion, which never names a core-only scope, so
+an intersection taken after the ambient scopes were added would remove them again and a key scoped
+`["library.view"]` would lose HEAD's authenticated-only reach (`/api/v1/auth/me`, `/metrics`, own keys,
+reading state). Ambient scopes are never grantable: role writes, key creation, `CanAssign` and
+`Dominates` compare against the set before Ambient, and a role's own permissions, as role editors show
+them, never include them.
 `Has(s)` is evaluated in this order:
 
 1. `s` is `Sensitive` and the principal is not interactive → **false**, even with `admin`
@@ -651,10 +665,28 @@ cached by (sorted role IDs, sorted scopes, interactive, `Generation()`).
 
 - `core:admin` is a permission held by the locked seed role `admin`. It satisfies every requirement
   except a `Sensitive` scope for a non-interactive principal (§4.4). It is `AuthRequired`, so the
-  auth-disabled principal never holds it (§4.11, SEC-2). Every role-name check is removed:
-  `RequireAdmin` → the permission of §6.2; `handlers/user.go:285,453` → `Can(core:admin)`; the user-merge
-  actor check `mergeActor` (`internal/server/handlers/user_merge.go:62-75` @748fd787a, the `adminRole`
-  test at `:67`) → `Can(core:admin)` (SEC8-7). From S4 the ABO-owned merge handler that 04 carries the
+  auth-disabled principal never holds it (§4.11, SEC-2). Every role-name check is removed; the
+  inventory, each with its replacement and why (SEC9-9):
+  - `RequireAdmin` and `adminRole` (`internal/server/middleware/auth.go:522-537`,
+    `wire_master_list_routes.go:41` @748fd787a) → the permissions of §6.2;
+  - `handlers/user.go:285,453` (the `adminRole` constant at `:441`) → `Can(core:admin)`: both ask
+    whether the requesting actor is an admin, so key scoping must apply;
+  - the user-merge actor check `mergeActor` (`internal/server/handlers/user_merge.go:62-75`, the
+    `adminRole` test at `:67`) → `Can(core:admin)` (SEC8-7);
+  - the repairs owner apply (`internal/server/handlers/repairs/handler.go:529`, "owner apply needs the
+    admin role") → `Can(core:admin)`: it asks about the requesting actor, after the Access owner proof,
+    so key scoping applies;
+  - the merge survivor check (`internal/usermerge/plan.go:342`, "the surviving account is not an
+    admin") → the survivor's roles compiled role-only (`Compile(CheckerInput{Roles: survivor.Roles})`)
+    hold `core:admin`: it asks about an account, not the request, so no key takes part;
+  - `ActorIsAdmin` (`internal/usermerge/plan.go:400`, called by the plan at `:328` and by the merge
+    task, `internal/plugins/maintenance/user_merge.go:161`) → the actor's roles compiled role-only hold
+    `core:admin`: the task runs after the request, and the request already passed `mergeActor`'s
+    key-scoped `Can(core:admin)`.
+
+  None of them is a key-scope bypass today (the owner apply needs the owner proof, the merge a grant),
+  but a holder of `core:admin` through a custom every-atom role would fail a name test, so each moves
+  with its handler (04) and checks the permission. An explicit `RoleName("admin")` test is never used. From S4 the ABO-owned merge handler that 04 carries the
   merge methods onto checks `rbac.Can(ctx, core:admin)` with key scoping, never `adminRole`. At HEAD the
   four merge POSTs are credential routes (`internal/server/wire_library_routes.go:177-181` @748fd787a),
   which refuse every API key, and they keep that guard (`Guards.Interactive`); the two reads that call
@@ -997,7 +1029,9 @@ hook). Nothing destructive runs before the restart, and there is no core route b
 - **S2b until S4 r2.** Books' gin handlers for both legacy paths stay behind HEAD's chain unchanged
   (`credRoute` + `adminGroup(adminRouteAlwaysAuthenticated)` + `ownerGateWhenOwnerSet`,
   `internal/server/wire_system_routes.go:45-48` @748fd787a). Each checks HEAD's `{"confirm": "RESET"}` (400
-  otherwise, `handler.go:472-475,542-545`) and calls `legacy.Maintenance.StageFactoryReset` with its kind.
+  otherwise, `handler.go:472-475,542-545`) and calls `legacy.Maintenance.StageFactoryReset` with a
+  `storage.ResetRequest` `{Kind, Confirm: "RESET", LegacyConfirm: true, DeleteLibraryFiles: Kind == ResetFactory}`
+  (05-storage §5S.3.15, R9-6).
   That handle is the kernel's one staging function (`kernel.stageReset`, 05-storage §5S.3.15), handed to the
   module that declares legacy claims as `module.StorageHandles.Maintenance` (06 §6.4.4), because
   `storage.Admin` is kernel-only. Gin decides who may call it, as at HEAD; `rbac`, the guards and `audit` do
@@ -1009,27 +1043,30 @@ hook). Nothing destructive runs before the restart, and there is no core route b
   function as a storagehttp-local `Stager` interface, never `*storage.Admin`, the way `modulehttp` receives
   `ModulesView` (COR8-2). So an intent staged through the core route or an alias carries the hook arguments
   exactly as one staged through the legacy handler.
-  - **Request and response.** The request is `{"confirm": "RESET"}`; any other body answers 422
-    `confirm_required` and stages nothing. Success answers 200 `{"reset_id", "message"}`; the restart
-    follows (05-storage §5S.3.15).
-  - **Library files only on request (resolution A-17).** The native route deletes the library files
-    under `RootDir` only when the body also carries `"delete_library_files": true`; without it the reset
-    keeps every library file. With it, the body must also carry `"library_root"` and
-    `"library_file_count"` equal to the configured `RootDir` and the file count the server finds under
-    it at staging; a missing or mismatched value answers 422 `library_files_confirm_required`, stages
-    nothing, and its problem body carries the current `library_root` and `library_file_count`, which the
-    UI's confirmation dialog shows ("delete <count> files under <RootDir>") before the second request.
-    Success answers 200 `{"reset_id", "message", "library_root", "library_file_count"}`, so the response
-    names what will be deleted. The staged intent records the flag, the root and the count in
-    `hook_args`, and the hook deletes only under that root. `ResetStore` refuses the flag (422), because it has no file effect.
+  - **One confirmation contract: `storage.ResetRequest` (resolution R9-6; COR9-4, SEC9-4).** 05-storage
+    owns the struct and its rules; this route states only its guards and wire shape. The request carries
+    `{kind, confirm: "RESET", delete_library_files?, library_root?, library_file_count?}`. A missing or
+    wrong `confirm` answers 422 `confirm_required` and stages nothing. The native route deletes the
+    library files under `RootDir` only when `delete_library_files` is true; without it the reset keeps
+    every library file (resolution A-17). With it, `library_root` and `library_file_count` must match the
+    configured `RootDir` and a fresh preflight count taken before anything is staged (05-storage defines
+    what is counted); otherwise the route answers 422 `library_files_confirm_required`, stages nothing,
+    and its problem body carries the current `library_root` and `library_file_count`, which the UI's
+    confirmation dialog shows ("delete <count> files under <RootDir>") before the second request.
+    Success answers 200 `{"reset_id", "message"}`, plus the confirmed `library_root` and
+    `library_file_count` when files will be deleted; the restart follows (05-storage §5S.3.15). The same
+    struct flows unchanged through `storagehttp`'s `Stager.StageReset`, `kernel.stageReset` and
+    `legacy.ConfigResetArgs.ResetArgs`, so the wipe the hook performs is bound to what the user
+    confirmed. `ResetStore` refuses the flag (422), because it has no file effect.
   - **Aliases.** Both legacy paths become the route's `Alias`es (05-http-api §4.6), in the r2 PR with the
     other native admin routes, and books' two gin handlers are deleted with them. The `/system/factory-reset`
-    alias stages `ResetFactory` and keeps HEAD's wipe: its `LegacyPath.Request` sets
-    `delete_library_files: true` and the path value `library_confirm=legacy`, under which the route
-    takes HEAD's `{"confirm": "RESET"}` as the whole confirmation, as HEAD did. The `/system/reset`
+    alias stages `ResetFactory` and keeps HEAD's wipe: its `LegacyPath.Request` sets the path values
+    `delete_library_files=true` and `library_confirm=legacy`, from which the route builds the
+    `storage.ResetRequest` with `LegacyConfirm` and `DeleteLibraryFiles` set, HEAD's wipe with no count check (HEAD counted nothing), taking HEAD's
+    `{"confirm": "RESET"}` as the whole confirmation, as HEAD did. The `/system/reset`
     alias selects `ResetStore` through its `LegacyPath.Request`, which sets the path value
-    `reset_kind=store` (05-http-api §3.1). No native request
-    can carry either path value, because the route's pattern has no such wildcard, so neither path can
+    `reset_kind=store` (05-http-api §3.1). Neither alias adds a body field. No native request
+    can carry any of these path values, because the route's pattern has no such wildcard, so neither path can
     retarget the other's action and no native request skips the `RootDir` confirmation (SEC2-5).
   - **Legacy wire shape.** Both aliases set `LegacyError` and a `Shape` that returns HEAD's
     `{"data": {"message": …}}` with HEAD's message text (`handler.go:491,596`). `factoryReset` in
@@ -1041,9 +1078,10 @@ hook). Nothing destructive runs before the restart, and there is no core route b
   (`internal/server/handlers/system/handler.go:538-589` @748fd787a), run in books' post-reset hook at the
   reset boot. They are stated as not undoable. Q-K in 14 is answered by A-17: the legacy alias keeps
   HEAD's wipe, and the native route wipes `RootDir` only on the explicit, count-confirmed request above,
-  with a release-note line. A dangerous
-  `RootDir` is refused at staging with 400 and nothing is staged, as HEAD refuses it
-  (`handler.go:565-570`). The hook never fails boot: per-entry errors are logged, audited and reported as
+  with a release-note line. When the request deletes library files (the legacy alias included), a
+  dangerous `RootDir` is refused at staging with 400 and nothing is staged, as HEAD refuses it
+  (`handler.go:565-570`); without `delete_library_files` no file under `RootDir` is recorded or touched,
+  so no dangerous-root check runs (SEC9-4). The hook never fails boot: per-entry errors are logged, audited and reported as
   `factory_reset_cleanup_incomplete`, and `hook_done` is always recorded. `ResetStore` has no hook effect,
   as HEAD's `ResetSystem` deletes no file.
 - **Exclusion and rollback.** One intent slot, `restore/pending.json` with its `kind`, serves restores and
@@ -1125,9 +1163,9 @@ atoms waits for the identity hardening cutover (05-authn §11.2).
     `{core:admin}`. HEAD's `admin` seed is `All()` (`internal/auth/seed.go:44-46` @748fd787a) and so is
     HEAD's bootstrap key (`internal/server/bootstrap.go:402` @748fd787a), and with early fix 4 a key
     holding every atom is HEAD's admin-equivalent credential (05-authn §11.1). The locked role `admin`
-    reads as `{core:admin}` by its ID. Each role read from the store also gets the app's ambient scopes
-    (below) when it is not `Confined()`;
-  - **write:** a requested set `S` (after the implication closure, minus the ambient scopes) is written
+    reads as `{core:admin}` by its ID. A role read from the store holds exactly that mapped set: the
+    ambient scopes (below) come from the principal, never from a role (COR9-3);
+  - **write:** a requested set `S` (after the implication closure) is written
     as `{core:admin}` → every atom, else as the atoms whose expansion lies inside `S`, which the row
     rule below must admit. The write is accepted only when the read mapping of those atoms gives `S`
     back; otherwise it is refused with 422 `no_legacy_atom` (`ErrNoLegacyAtom`), naming the
@@ -1137,11 +1175,14 @@ atoms waits for the identity hardening cutover (05-authn §11.2).
   no role or key of ABO's store holds it before the identity hardening cutover. Where HEAD gated such a
   scope's routes by authentication alone, the app lists it in the compile-time
   `app.Options.LegacyAmbientScopes []rbac.Permission` (06 §6.4.5; ABO: `core:self`, `core:metrics.read`,
-  `books:reading`). On an instance whose role store is legacy-backed, every principal that satisfies
-  `AnyAuthenticated` (§4.10) holds those scopes as well, so their routes keep HEAD's
-  authenticated-only reach: own profile, sessions and keys, `/metrics` (HEAD: any credential,
-  `internal/server/server_lifecycle.go:1736-1747`) and own reading state. A `Confined()` principal never
-  holds them. `Freeze` refuses the option on a native role store, and refuses a listed scope that is
+  `books:reading`). On an instance whose role store is legacy-backed, `rbac` puts the list in every
+  principal's `CheckerInput.Ambient`, and `Compile` adds it after the key intersection to every principal
+  that is not `Confined()` before it (§4.4; resolution R9-4, COR9-3). Every principal that satisfies
+  `AnyAuthenticated` (§4.10) — a session, a `LegacyFullScope` key, a key scoped `["library.view"]`, a key
+  whose effective set is empty — therefore holds those scopes, so their routes keep HEAD's
+  authenticated-only reach: own profile, sessions and keys, `/api/v1/auth/me`, `/metrics` (HEAD: any
+  credential, `internal/server/server_lifecycle.go:1736-1747`) and own reading state. A `Confined()`
+  principal never holds them, and no role or key row ever stores them (they have no atom). `Freeze` refuses the option on a native role store, and refuses a listed scope that is
   `Sensitive`, `AuthRequired`, `Confining` or a `*:settings.manage`/`*:integrations.manage` scope
   (`ErrRestrictedGrant`). Every other core-only scope (`core:system.manage`, `core:audit.view`,
   `core:backup.restore`, …) is reached on ABO only through `core:admin`, as its HEAD predecessor was
@@ -1153,7 +1194,8 @@ atoms waits for the identity hardening cutover (05-authn §11.2).
   set equivalent to **every** legacy route and in-handler check that atom gates on the **snapshot
   release**. The input is a frozen reach snapshot of the last pre-S4 release, produced once by the
   real-router dump of `raw/09` §0 plus a reviewed list of in-handler atom and role-name checks with
-  file:line (`auth.Can`, `slices.Contains(…, "admin")`), committed in the S4 r1 PR and never
+  file:line (`auth.Can`, `slices.Contains(…, "admin")`, every site of §4.6's inventory, the repairs
+  owner apply and both `internal/usermerge/plan.go` checks included, SEC9-9), committed in the S4 r1 PR and never
   regenerated from later builds, whose own manifests shrink as routes leave the mount while the
   rollback target keeps them (SEC4-4). **The snapshot is app data, supplied by the app** (lead
   decision, round 4): it names the app's legacy atoms and routes, so for ABO it lives in the books
@@ -1242,7 +1284,9 @@ atoms waits for the identity hardening cutover (05-authn §11.2).
 - **Deferred: cutover.** Moving ABO's roles to the native store is part of the identity hardening
   cutover (05-authn §11.2): a later, one-way, checkpointed step behind the per-owner level guard,
   decided on measured data (02 decision 13), whose floor is the cutover release itself. It brings native
-  scopes in role rows (core-only scopes included, so `app.Options.LegacyAmbientScopes` goes),
+  scopes in role rows (core-only scopes included, so `app.Options.LegacyAmbientScopes` goes, after the
+  cutover writes the ambient scopes into every non-`Confined()` role and every key whose owner is not
+  confined, so no reach is lost; 05-authn §11.2 H1, SEC9-8),
   `SeedDigest`/`PendingSeed` for ABO, the lift of `ErrSeedRoleLocked` with the operator diff of §3.6,
   and the storage grant the move needs. It stops supplying `legacy.Stores.Roles` and may delete
   `legacy.RBACAtomWriter` and `RBACStoreSuite`: they live in `legacy`, outside the API promise, so that
@@ -1498,8 +1542,8 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestAuthDisabled_CheckerHasNoAdmin` | `authz.AuthDisabled` holds no `AuthRequired`/`Sensitive` scope, `admin=false`, `Has(core:system.manage)` false (SEC-2) |
 | `TestAuthOff_AdminRouteKindsUnchanged` | the §6.2 table: read-only kinds open, always-authenticated kinds 401 with auth off |
 | `TestUserMerge_ScopedAdminKeyRefused` | legacy (early fix 4, ABO's current code) then core (S4 on): an admin's API key scoped `["users.manage"]` passes the route guard of `GET /users/:id/footprint` and `GET /users/merges` and is refused by the merge actor check (403); it is refused on every merge POST (credential route); the admin's session reads and merges (§4.6, SEC8-7) |
-| `TestFactoryResetCoreRouteRecordsHookArgs` | S4 r2: the intent staged through `POST /api/core/v1/system/factory-reset` and through the `/api/v1/system/factory-reset` alias carries `kind: factory` and `hook_args`, written through the kernel's `Stager`; the alias's `hook_args` carry `delete_library_files: true` (§6.2, COR8-2, A-17) |
-| `TestFactoryResetNativeRouteKeepsLibraryFilesByDefault` | S4 r2, native route: without `delete_library_files` the intent keeps every library file; with it but without, or with a stale, `library_root`/`library_file_count` → 422 `library_files_confirm_required` carrying the current root and count, nothing staged; with matching values 200 naming the root and count, and the hook deletes only under that root; `ResetStore` with the flag → 422; no native request can set `library_confirm` (resolution A-17, SEC2-5) |
+| `TestFactoryResetCoreRouteRecordsHookArgs` | S4 r2: the intent staged through `POST /api/core/v1/system/factory-reset` and through the `/api/v1/system/factory-reset` alias carries `kind: factory` and `hook_args`, written through the kernel's `Stager` from one `storage.ResetRequest`; the alias's request carries HEAD's wipe with no count check (§6.2, COR8-2, A-17, R9-6) |
+| `TestFactoryResetNativeRouteKeepsLibraryFilesByDefault` | S4 r2, native route: without `delete_library_files` the intent keeps every library file and a dangerous `RootDir` is not refused; with it but without, or with a stale, `library_root`/`library_file_count` → 422 `library_files_confirm_required` carrying the current root and count, and no intent is staged (no `restore/pending.json`); with matching values 200 naming the root and count, and the hook deletes only under that root; `ResetStore` with the flag → 422; no native request can set `library_confirm` or `delete_library_files` through a path value (resolutions A-17, R9-6; SEC2-5, SEC9-4) |
 | `TestFactoryResetAliasKeepsConfirmAndShape` | S4 r2, both legacy aliases: a missing or wrong `confirm` answers 422 and stages nothing; success returns HEAD's `{"data": {"message": …}}`; the `/api/v1/system/reset` alias stages `kind: store`, and no body field steers it to `factory` (§6.2, COR8-1, COR8-2) |
 | `TestConfining_WorkerKeyRefusedOnPlaylists` | `books:fingerprint.worker` key → 403 on the playlist routes and every `AnyAuthenticated` route (regression for `middleware/auth.go:289`), 200 on the worker routes |
 | `TestConfining_FacadeKeyRefusedOnNative` (deferred-build: lands with `arrfacade`, SIMP2-6) | `tv:arr.read` key → 403 on every non-facade route (SEC-5) |
@@ -1512,7 +1556,8 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestRowRule_ConfinedRoleStaysWorkerOnlyOnPrev` | a custom role `{books:fingerprint.worker}` is written as `["fingerprint.worker"]`; HEAD's `workerOnly` over the row is true; the S4 R-test cell "a custom confining role created on cur is confined on prev" (SEC4-3) |
 | `TestLegacyRoleRow_PrevWriteIsReadAsIs` | (ABO, R-test cell) a custom role's row changed by the previous release is read on roll-forward exactly as its atoms map, with no other state; a seed row is re-seeded with HEAD's atoms at the next boot (A-2) |
 | `TestLegacyRoleWrite_RefusesUnrepresentableSet` | (ABO) a role or key write naming `core:audit.view`, `books:view` without `core:tasks.view`, or `books:fingerprint.worker` plus `books:view` on a custom role → 422 `no_legacy_atom` naming the permissions, nothing written; `{core:admin}` is written as every atom and reads back as `{core:admin}`; a write of whole atom expansions round-trips (§4.7 rule 6, §6.3, A-2) |
-| `TestLegacyAmbientScopes` | (ABO) every `AnyAuthenticated` principal holds `core:self`, `core:metrics.read` and `books:reading`, a key scoped `["library.view"]` included; an `fp-worker` key holds none; the option on a native store, or listing a `Sensitive`, `AuthRequired` or `Confining` scope, fails `Freeze` (§6.3, A-2, A-5) |
+| `TestLegacyAmbientScopes` | (ABO) every `AnyAuthenticated` principal holds `core:self`, `core:metrics.read` and `books:reading`; a session, a `LegacyFullScope` key, a key scoped `["library.view"]` and a key with an empty effective set each get 200 on `/api/v1/auth/me`, `/api/v1/auth/me/api-keys` and `/metrics`; an `fp-worker` key holds none; no role read from the store and no role editor view lists them, and a role or key write naming one → 422 `no_legacy_atom`; the option on a native store, or listing a `Sensitive`, `AuthRequired` or `Confining` scope, fails `Freeze` (§4.4, §6.3, A-2, A-5, R9-4) |
+| `TestRoleNameChecksUseCoreAdmin` | (ABO) every site of §4.6's inventory: a holder of `core:admin` through a custom every-atom role passes it; an admin's key scoped `["users.manage"]` fails the actor checks (`user.go`, `mergeActor`, repairs owner apply); the survivor and task-actor checks read the account's roles, not the request's key (SEC9-9) |
 | `TestLegacyAtomEqualsHEADCheck` | (ABO) property test over random atom sets for roles and random key lists (empty included): `LegacyAtom(atom)` and `LegacyCheck(atom, "")` admit a principal of the legacy-backed store iff HEAD's `s.perm`/`auth.Can` over the same rows admits it (§6.3, A-2) |
 | `TestLegacySeedAtomsEqualHEAD` | (ABO) the atoms the P7 seed commit writes for `admin`, `editor`, `viewer` and `fp-worker` equal HEAD's `SeedRoles` output (`internal/auth/seed.go:44-80`); no `SeedDigest` or `PendingSeed` is stored (§4.8, A-2) |
 | `TestReseedFromHEADRows_AdminKeepsCoreAdmin` | a store seeded by HEAD: after the first S4 r2 boot `admin` reads as `{core:admin}` from its all-atom row and the HEAD bootstrap key reads as a `{core:admin}` key; the rows are byte-identical to HEAD's re-seed (DATA4-11, A-2) |
@@ -1811,3 +1856,10 @@ Advisor (2026-11-04), resolutions and findings applied to this file:
 - A-4 (ADV-S3) — §3.6: no deferred-members archtest; the table is planning information.
 - ADV-11 — §12: the 572-route count in `TestLegacyRoleReachUnchanged` is informative and generated at the stage's base commit.
 - integration pass (advisor): the native factory-reset test is `TestFactoryResetNativeRouteKeepsLibraryFilesByDefault`, the name 09 S4 cites; compat counter under `<namespace>_`; no `needs_confirmation` stamp confirmed.
+
+Round 9 (2026-11-04), findings applied to this file:
+
+- COR9-3 (R9-4) — §3.4 `CheckerInput.Ambient`; §4.4: `Compile` decides `Confined()` before the ambient scopes and adds them after the key intersection; §6.3: the role-read injection and the "minus the ambient scopes" write rule deleted, ambient scopes come only from the principal and are never grantable; `TestLegacyAmbientScopes` gains a `LegacyFullScope` key, a scoped key and an empty-set key on `/api/v1/auth/me`, `/me/api-keys` and `/metrics` (§12).
+- COR9-4 / SEC9-4 (R9-6) — §6.2: the factory reset uses 05-storage's one `storage.ResetRequest` (422 `library_files_confirm_required` against a fresh preflight count, nothing staged), carried unchanged through `Stager.StageReset`, `kernel.stageReset` and `ResetArgs`; the alias sets path values only; the dangerous-root check runs only when files will be deleted; tests restated (§12).
+- SEC9-9 — §4.6, §6.3: the role-name inventory adds `repairs/handler.go:529`, `usermerge/plan.go:342,400` and `adminRole`, each with its replacement and reason; the reach snapshot's in-handler list names them; `TestRoleNameChecksUseCoreAdmin`.
+- SEC9-8 — §6.3 deferred cutover: H1 writes the ambient scopes into every non-confined role and key before `LegacyAmbientScopes` goes.
