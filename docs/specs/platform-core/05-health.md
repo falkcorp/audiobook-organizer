@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.13.3 -->
+<!-- version: 1.13.4 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -146,12 +146,38 @@ perimeter: while the Basic gate is enabled and its password is unset, cleared, e
 the gate answers 401 on every non-exempt route and health reports `degraded` with that token. In R0 and release R1
 HEAD's hotfixed gate (05-authn §11.1 early fix 5) raises it; from F3, the config flip that moves the gate into
 core's stage 8 ([05-http-api](05-http-api.md) §4.2, SEC5-4), stage 8 does. Until `Snapshot` and the probes land
-(F8, 5H.10) every source reports it through HEAD's `degraded` token list
-(`internal/server/handlers/system/handler.go:222-275`), which keeps serving until then; so do the other tokens
-below that exist before F8. `auth_disabled_remote` (warn: auth mode `disabled` while remote-reachable,
+(F8, 5H.10) every source reports it through HEAD's fixed-token source, and because it is in the unauthenticated
+set below, HEAD's `/health` `degraded` list (`internal/server/handlers/system/handler.go:222-275`) shows it; the
+other tokens of this section that exist before F8 travel the authenticated route stated below. `auth_disabled_remote` (warn: auth mode `disabled` while remote-reachable,
 05-authn §4.11, SEC4-8) exists from F4, the identity flip. An enabled gate with an empty
 **username** raises no token: it keeps HEAD's behaviour (05-http-api §10, SEC6-9), so there is no
 `basic_gate_no_username`.
+
+**The unauthenticated token set, and the route before F8 (normative; SEC-7, IMPL-12).** `/health`'s `degraded`
+list is unauthenticated (the Basic gate exempts its paths, 5H.3.3), so in every release it carries only this fixed
+set, pinned by `TestHealth_UnauthenticatedTokenSetGolden` (5H.9):
+
+| Token | Why a caller without a credential may see it |
+|---|---|
+| `memdb_warming` (HEAD; from F8 the `books.memdb` not-ready token) | warm-up state, which `ready` already shows |
+| the `Token` of each failed `Degraded` startup step: HEAD's `metrics_disabled` and `search_index`; from F8 each `StartupStep.Token` of the reviewed startup table (5H.3.2) | HEAD shows them there today (`handler.go:258-264`) |
+| `basic_gate_no_password` | while it is raised the gate refuses every non-exempt route, so `/health` is the only place the operator can read it |
+| from F8, `/readyz`'s `<component>:<reason>` not-ready tokens | `/readyz` serves them publicly anyway |
+
+Every other token, which includes every auth, config, backup, restore, storage and secrets posture token in this
+section (`auth_disabled_remote`, `config_fail_closed_override`, `config_retired_name_ignored`,
+`revocation_journal_colocated`, the revocation-journal and archive tokens, `restore_last_admin_kept`,
+`restore_admins_review`, the factory-reset tokens and those listed next), appears **only on authenticated
+endpoints**. From F8 that is `GET /api/core/v1/health` (`core:system.manage`). Before F8 it is a `degraded` field
+that R1 adds to HEAD's authenticated `GET /api/v1/system/status` (`settings.manage`, `wire_system_routes.go:28`).
+R1 also splits HEAD's one fixed-token source (`getDegraded`) in two: the tokens of the set above feed `/health`,
+and every token feeds that authenticated field. F2, the foundation PRs that open R2 dark (03 §3.8), lands the
+registry's token route: the readiness core of 5H.10 and its bridge into that split source. So the tokens F3 starts
+raising surface from F3's first boot: `storage_quarantine` on `core.storage` (05-storage §5S.3.13; its
+authenticated `Detail` names each dangling reference a quarantined parent leaves, DATA-2), and
+`secrets_undecryptable` and `secrets_keyring_not_exported` on `core.secrets` (05-config §1.12.2, §2.4). Storage's
+checkpoint tokens `storage_checkpoint_open` and `storage_checkpoint_retained` (05-storage §5S.3.12) exist from R1,
+with the checkpoint sweeper, and travel the same authenticated route until F8.
 
 **Advisory tokens owned by other files.** Health has three statuses, so a token another file calls `warn` is a
 `Reason` on a `StatusDegraded` result (readiness unaffected: Degraded passes it), and one it calls `info` is a
@@ -188,14 +214,15 @@ non-crash outcomes:
   §5S.3.15).
 - `factory_reset_cleanup_incomplete` (warn, `StatusDegraded`): the post-reset hook recorded `hook_done`
   with per-entry failures (an entry it could not delete, as HEAD warns and continues). The hook never fails
-  boot (COR8-4, OPS8-5). The authenticated `Detail` names the count and the paths; the probes and the
-  token-only route show the token alone. It is reported while the newest `KindReset` journal's `hook_done`
+  boot (COR8-4, OPS8-5). The authenticated `Detail` names the count and the paths; the authenticated
+  token-only route shows the token alone, and the public probes never show it. It is reported while the newest `KindReset` journal's `hook_done`
   record lists failures.
 
 Both exist from release R1, where the staged reset ships (staged only offline, by `storage reset`, until the core
 reset route arrives at F4; 05-storage §5S.3.15), before this file's `Snapshot` and probes (F8, 5H.10). Until then they
-travel through HEAD's `degraded` token list, through the same fixed-token source it merges today (`getDegraded`,
-`handler.go:258-264`), so R1's release note's promise of a health token holds from R1.
+travel through HEAD's fixed-token source (`getDegraded`, `handler.go:258-264`) onto the authenticated `degraded`
+field of `GET /api/v1/system/status`, never onto `/health` (they are not in the unauthenticated set above), so R1's
+release note's promise of a health token holds from R1.
 
 **Restore tokens owned by 05-rbac.** rbac's post-restore hook (from F4, the identity flip; 05-rbac §7.1) raises two
 reasons on a `StatusDegraded` result of `core.backup`, the restore's component: `restore_last_admin_kept` (the
@@ -203,8 +230,9 @@ restore kept the last `core:admin` entry of a demoted account, whose sign-in sta
 `Detail` names the recovery path, an owner-verified reset link or the offline `<app> users reset-password`) and
 `restore_admins_review` (after a restore with no pre-swap store, every `core:admin` holder is listed for review; the
 `Detail` names them, and each clears when an interactive `core:admin` session acknowledges it, audited
-`core.role.review_admin`). The probes and the token-only route show the tokens alone. Until F8 they travel through
-HEAD's `degraded` token list, as the tokens above do.
+`core.role.review_admin`). The authenticated token-only route shows the tokens alone; the public probes never show
+them (they are not in the unauthenticated set). Until F8 they travel the authenticated route above, as the tokens
+above do.
 
 ### 5H.3.2 Startup steps
 
@@ -278,7 +306,8 @@ deliberate tightening — detail text, versions, host data and bundles stay behi
 probes keep their auth-off reach.
 
 Unauthenticated bodies follow today's rule (`handler.go:223-228`): booleans, fixed tokens,
-milliseconds — never error text, versions, counts or paths. ABO's `/health` shape (`status`,
+milliseconds — never error text, versions, counts or paths — and their only tokens are the unauthenticated set of
+5H.3.1; no auth, config, backup, restore, storage or secrets posture token reaches `/health` or `/readyz` (SEC-7). ABO's `/health` shape (`status`,
 `ready`, `memdb_ready`, `warmup_ms`, `degraded`, always 200) is **kept** (OPS-27): the Docker `HEALTHCHECK`, the
 deploy and rollback scripts (`scripts/deploy-wait-ready.sh` waits on its `"ready":true`) and operators' uptime
 monitors read it, and keeping it costs one route. It is served by the **books** module's layer reading this
@@ -287,8 +316,10 @@ same handler, `/api/health` and `/api/v1/health` (`internal/server/server_lifecy
 by F8's PR: the SPA (`/api/v1/health`) and the first-party scripts that call `/api/health` (`scripts/e2e_test.sh`,
 `scripts/test-api-endpoints.py`, `scripts/api_examples.sh`, the demo-recording scripts) switch to `/health` or
 `/readyz` in that same PR, never in a later one (09 §9.4 R2 flips, §9.6 row 3). HEAD's Basic gate exempts only those two
-paths (`internal/server/middleware/basicauth.go:34`), so from F8 stage 8's exemption moves with them to `/health`,
-the same handler (05-http-api §8.2 `BasicExempt`): a monitor that moves from an alias to `/health` keeps working
+paths (`internal/server/middleware/basicauth.go:34`), so from F8 stage 8's exemption moves with them to `/health`
+(05-http-api §8.2 `BasicExempt`). F8's `/health` is a new handler in the books layer, not HEAD's, so what the
+exemption exposes is fixed by its body, not by sameness: the unauthenticated token set of 5H.3.1, which
+`TestHealth_UnauthenticatedTokenSetGolden` pins (SEC-7). A monitor that moves from an alias to `/health` keeps working
 behind an enabled gate (`TestBasicGate_ExemptSetGolden`, 05-http-api §12).
 
 ### 5H.3.4 Supervisor signals
@@ -617,6 +648,7 @@ replaces it (06; 05-metrics owns the naming rule). HEAD emits none of these seri
 | `TestProbes_VariantsAreNotSPA` (`/livez/`, `/READYZ`, `/health/`, `/metrics/` → 404, never `text/html`) | FE2-6 |
 | `TestReadyz_FlipsBeforeHTTPDrain` | drain order |
 | `TestProbes_BodyHasOnlyTokens` (fuzz Reason/Detail with secrets and paths) | no leak |
+| `TestHealth_UnauthenticatedTokenSetGolden` (every token of 5H.3.1 raised at once; in R1 and F2–F7 against HEAD's `/health` and `GET /api/v1/system/status`, from F8 against books' `/health`, `/readyz` and `GET /api/core/v1/health`) | `/health`'s `degraded` and `/readyz`'s `not_ready` hold only the golden unauthenticated set; every other raised token appears on the authenticated endpoint and on no public one (SEC-7, IMPL-12) |
 | `TestCheck_PanicAndTimeoutBecomeDown` (synctest) | isolation |
 | `TestRegistry_Wait_UnblocksOnUp` (`books.memdb` pushed Up through `Deps.Health` releases a waiting `Wait`) | tasks readiness, COR4-8 |
 | `TestStartup_UnknownStepRefused`, `archtest.StartupSteps` self-test | table discipline |
@@ -646,15 +678,16 @@ replaces it (06; 05-metrics owns the naming rule). HEAD emits none of these seri
 | `internal/sysinfo` library parts, `DashboardService` | `books` dashboard; `GetHealthCheckResponse` deleted (no caller) |
 | `internal/diagnostics` zip/section machinery | `health/diagnostics` |
 | SlimBook/authors/series/version-groups/iTunes/missing-fields sections, `BuildBatchJSONL` | `books` `Contributor` sections; the AI batch builder goes with [05-ai](05-ai.md) |
-| op `diagnostics.export` | `core.diagnostics.export`, declared in core with no ABO ID: `diagnostics.export` → `core.diagnostics.export` is a row of books' kind-rename map, which the tasks migration M4 applies once to HEAD's stored runs, so no op ID lands in a `core/` file (05-tasks §5T.8.2; 03 rule R1(c); MOD6-6); `diagnostics.ai-analyze` stays `books` |
+| op `diagnostics.export` | `core.diagnostics.export`, declared in core with no ABO ID: `diagnostics.export` → `core.diagnostics.export` is a row of books' kind-rename map, which the tasks migration M4 applies once to HEAD's stored runs, so no op ID lands in a `core/` file (05-tasks §5T.8.2; 03 rule R1(c); MOD6-6); `diagnostics.ai-analyze` stays `books`. F2 creates the kind's minimal owner registration in `health/diagnostics`, F5 registers it on core's executor when HEAD's engine is deleted, so M4's renamed runs and new exports have a definition from F5, and F8's diagnostics flip extends that registration to 5H.3.5's bundle (IMPL-5) |
 
 **Landing by release** (09 assigns the releases; this is what `health` needs in each):
 
 | Release | What of `health` exists | Why then |
 |---|---|---|
-| R1 | the flight recorder, rewritten onto a `*slog.Logger` (04 §8.1); `Supervisor` (`ExtendStart` behind `Deps.ExtendStart` and the stateless `app.ExtendStart`; `READY=1`/`STATUS=`/`STOPPING=1` from the kernel) | the flight recorder is a leaf with no ABO import; `internal/sdnotify` moves with the kernel lifecycle and all five importers are rewired then (04) |
-| R2, tasks flip (F5) | the readiness core: `ComponentID`, `Result`, `Reporter`, `Reporters`, `Registry` (`Register`, `Ready`, `Wait`), `Registrar.Health` and `Deps.Health`, and the components `core.storage` and `books.memdb` | the tasks executor dispatches on `Ready` signals from its first release (05-tasks 5T.4 step 2, COR4-8; 06 §6.4.10) |
-| R2, backup-health-metrics flip (F8) | everything else: `Snapshot`, the other components, the probes and `/api/core/v1/health`, the `/system/*` routes, the status topic, `Startup` and `Registrar.StartupSteps`, the watchdog ping, diagnostics, sysinfo; `/api/health` and `/api/v1/health` deleted, their callers switched in the same PR | 06 §6.4.10 lands `StartupSteps` and `Diagnostics` there, and every core service family moves in R2 |
+| R1 | the flight recorder, rewritten onto a `*slog.Logger` (04 §8.1); `Supervisor` (`ExtendStart` behind `Deps.ExtendStart` and the stateless `app.ExtendStart`; `READY=1`/`STATUS=`/`STOPPING=1` from the kernel); the split of HEAD's fixed-token source and the authenticated `degraded` field of `GET /api/v1/system/status` (5H.3.1) | the flight recorder is a leaf with no ABO import; `internal/sdnotify` moves with the kernel lifecycle and all five importers are rewired then (04); R1's factory-reset and checkpoint tokens are posture tokens, which never reach `/health` (SEC-7) |
+| R2, foundation PRs (F2) | the readiness core, dark: `ComponentID`, `Result`, `Reporter`, `Reporters`, `Registry` (`Register`, `Ready`, `Wait`), with the registry's token route into HEAD's split token source (5H.3.1); the minimal owner registration of `core.diagnostics.export` | F3's cutover raises `storage_quarantine`, `secrets_undecryptable` and `secrets_keyring_not_exported` from its first boot (IMPL-12), and F2 lands the tasks executor dark, which waits on `Ready` signals (03 §3.8) |
+| R2, tasks flip (F5) | `Registrar.Health` and `Deps.Health`, the components `core.storage` and `books.memdb`, and `core.diagnostics.export` registered on core's executor | the tasks executor dispatches on `Ready` signals from its first live release (05-tasks 5T.4 step 2, COR4-8; 06 §6.4.10) |
+| R2, backup-health-metrics flip (F8) | everything else: `Snapshot`, the other components, the probes and `/api/core/v1/health`, the `/system/*` routes, the status topic, `Startup` and `Registrar.StartupSteps`, the watchdog ping, diagnostics (extending F2's registration of `core.diagnostics.export`), sysinfo; `/api/health` and `/api/v1/health` deleted, their callers switched in the same PR | 06 §6.4.10 lands `StartupSteps` and `Diagnostics` there, and every core service family moves in R2 |
 
 ## 5H.11 Open items
 
@@ -796,3 +829,12 @@ Round 10:
   advisory tokens F3, origin binding F7), the swap token pair and the R1 budget path re-pointed to 05-storage §5S.3.15 and
   05-config §1.12.1, `unit-lifecycle` to 09 §9.2.1, and 05-rbac's restore tokens `restore_last_admin_kept` and
   `restore_admins_review` listed on `core.backup`, and the Basic-gate exemption moved to `/health` at F8.
+
+Round 13 (2026-11-04): SEC-7, IMPL-12 (as ruled), IMPL-5 (as ruled), DATA-2 (as ruled), CONFORM-2 and CONFORM-6
+(as ruled). 5H.3.1 states the fixed unauthenticated token set (`memdb_warming`, the `Degraded` startup tokens,
+`basic_gate_no_password`, and from F8 `/readyz`'s not-ready tokens); every posture token appears only on
+authenticated endpoints, before F8 on a `degraded` field R1 adds to HEAD's `GET /api/v1/system/status`; F2 lands the
+readiness core and the registry's token route so F3's `storage_quarantine`, `secrets_undecryptable` and
+`secrets_keyring_not_exported` surface, and the R1 checkpoint tokens travel the same route; 5H.3.3 drops the
+"same handler" justification for the `/health` exemption; new `TestHealth_UnauthenticatedTokenSetGolden`;
+`core.diagnostics.export` gets F2's minimal owner registration, registered at F5 and extended at F8.
