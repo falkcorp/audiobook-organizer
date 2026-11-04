@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metrics.md -->
-<!-- version: 1.12.1 -->
+<!-- version: 1.12.2 -->
 <!-- guid: 5cdf765d-aec1-4ed7-981a-e2e698afde61 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -24,7 +24,7 @@ names may change, and the dashboards and rules in `deploy/` change in the same P
 | M2 | The authoring API is the **OTel metric API** (`metric.Meter`), continuing ABO's in-flight migration (client_golang family ceiling 64 and falling, `internal/telemetry/testdata/client_golang_baseline.txt`). Prometheus is an exporter bound to the App's registry. client_golang is used directly only inside `core/metrics` (registry, Go/process collectors, promhttp) and through one escape hatch, `Provider.Registerer()`, for third-party and legacy collectors. |
 | M3 | Names: core instruments `<namespace>.<subsystem>.<what>` → `<namespace>_<subsystem>_<what>[_unit][_total]`, where the namespace is the app's **metric namespace** `app.Options.MetricNamespace` (default `mediacore`, the name every table of this spec shows; ABO passes `audiobook_organizer`). Module instruments use the same namespace: `<namespace>.<what>` when the app **ships** one module, `<namespace>.<module>.<what>` when it ships two or more. "Ships" means the module list passed to `app.New`, which never changes at run time, so enabling or disabling a module never renames another module's series (SIMP2-13). The Prometheus translation strategy is **pinned** (`UnderscoreEscapingWithSuffixes`), not left to the exporter's process-global default. OTel semantic-convention instruments (`http.server.*`) keep their standard names. **Every Prometheus family has exactly one owner per App (R9-3):** one instrument identity or one collector produces it, whether it was created through a `Scope`, through the App's raw or process-global `MeterProvider`, or registered through `Registerer()` (`ErrFamilyTaken`, §3), so a module family and a core family that translate to one name cannot merge and two emitters can never serve one family. |
 | M4 | Cardinality is a contract: closed attribute-key allow-list per scope, bounded value sets only, no identifiers; SDK per-instrument limit 2000; a series golden per scope. |
-| M5 | `/metrics` is a core route mounted by the kernel through `Router.Infra(path, "core:metrics.read", h)` on **every** app, with the permission the chain **enforces** (stages 10–13 run for an `Infra` route whose permission is not Public, SEC2-14), outside response compression. For ABO the kernel mounts it in the metrics flip F8; from R1 until then ABO's gin route serves `Provider.Handler()`. ABO's identity migration stores `core:metrics.read` on every principal that is not `Confined()` and on none that is (05-rbac §6), so the scrape key keeps working (D12 (b) keeps API keys) and a worker-scoped key never scrapes (§6). |
+| M5 | `/metrics` is a core route mounted by the kernel through `Router.Infra(path, "core:metrics.read", h)` on **every** app, with the permission the chain **enforces** (stages 10–13 run for an `Infra` route whose permission is not Public, SEC2-14), outside response compression. For ABO the kernel mounts it in F8 (the flip of backup, the updater move, health and the `/metrics` mount, which renames no family, §13); from R1 until then ABO's gin route serves `Provider.Handler()`. ABO's identity migration stores `core:metrics.read` on every principal that is not `Confined()` and on none that is (05-rbac §6), so the scrape key keeps working (D12 (b) keeps API keys) and a worker-scoped key never scrapes (§6). |
 | M6 | **Names may change (D10), and the deploy files follow in the same PR.** A PR that renames a family, changes its labels or deletes it updates every reference in `deploy/grafana/dashboards/*.json` and `deploy/prometheus/*.yml` in the same PR, and `TestDeployReferencedSeriesServed` fails it otherwise (§6, §12). There is no alias, no HEAD golden and no compat recording rule. A family keeps its name where its emitter stays (ABO's books families) or where core's name already equals it under ABO's namespace; a rename that buys nothing is not made. §13 lists every HEAD family that changes. |
 | M7 | Spans are redacted before export with the logging pipeline's `*log.Redactor` (credential query values, invite paths, userinfo), so `apikey`/`token` values never reach a trace backend (SEC-22). |
 
@@ -279,7 +279,7 @@ scopes include `core:metrics.read`.
 |---|---|---|
 | R0 | HEAD's default registry | gin, `promhttp.Handler()`, HEAD's any-credential check |
 | R1 | the App's private registry. ABO's legacy client_golang families register through `Provider.Registerer()` and `app.InstallProcessDefaults` points the OTel globals at the App's providers, in the PR that wires `app.New`, so the six global-reading ABO packages keep their series; `cache.go:99` and `cache_snapshotter.go:24` take `Provider.Gatherer()` in the same PR | ABO's **legacy gin route** under `MountLegacy`, unchanged in path and compression exclusion, whose handler becomes `Provider.Handler()`; HEAD's any-credential check until the identity flip F4, then the manifest's `core:metrics.read` (05-http-api §8.1) |
-| R2, from the metrics flip F8 | the App's private registry | the kernel's `Router.Infra(core.metrics.path, "core:metrics.read", …)` mount; the legacy gin route is removed in the same PR |
+| R2, from F8 (the `/metrics` mount moves; no family is renamed) | the App's private registry | the kernel's `Router.Infra(core.metrics.path, "core:metrics.read", …)` mount; the legacy gin route is removed in the same PR |
 
 **Series checks (OPS5-6, OPS5-9, OPS6-3).** A live scrape lists only the families that have recorded a sample
 since boot: a client_golang `Vec` with no observed label set, an OTel instrument with no data point and the Pebble
@@ -493,7 +493,11 @@ own `TestKernelFamiliesGathered` asserts the kernel-emitted families in core as 
    lands the executor's `ops.*` instruments in ABO's App stops `opsmetrics` from creating the same names (HEAD's
    recorder observes an attribute-less `ops.zombies` 0 on every collection, `opsmetrics.go:214-273` @748fd787a;
    left beside the executor's, it would put two samples of `audiobook_organizer_ops_zombies{}` on every scrape and
-   client_golang's `Gather` would fail the whole `/metrics` answer). Books' own gauges register through books' own
+   client_golang's `Gather` would fail the whole `/metrics` answer). That PR is the tasks flip F5. F2 lands `tasks`
+   with its executor dark (03 §3.8), so from F2 until F5 ABO's App must not create the executor's `<namespace>.ops`
+   instruments: the dark executor is either not constructed in ABO's App or built with its instruments off until
+   the F5 PR wires it, and `opsmetrics` stays those families' one owner until then. `TestABOMetricsGatherNoDuplicate`
+   runs on every PR from F2 and decides (R1, R14). Books' own gauges register through books' own
    `metrics.Scope`, never through core instrumentation with ABO names.
 2. **client_golang families** in `internal/metrics` finish the move to OTel when convenient (the ratchet continues
    to zero). All of them, the five `operations_*` families and the two process gauges included, register through
@@ -502,7 +506,10 @@ own `TestKernelFamiliesGathered` asserts the kernel-emitted families in core as 
 3. **Names: every HEAD family that changes (D10).** ABO passes `audiobook_organizer` as its namespace, so books'
    families and the core families whose names already equal HEAD's keep their names. Where HEAD's shape carries
    vocabulary that the native code does not keep, the family takes core's name and labels, and the deploy files
-   follow in that PR (M6). 05-tasks 5T.11, 05-storage and 05-ai table the core families named here; the
+   follow in that PR (M6). **They land in three places and nowhere else (R14):** R1 for the HTTP families (the
+   perimeter move), F5 for the ops families (the tasks flip PR) and F7 for the AI families (the integrations flip
+   PR), each with its dashboards, rules and rule tests in the same PR; F8 only moves the `/metrics` mount (§6) and
+   renames nothing. 05-tasks 5T.11, 05-storage and 05-ai table the core families named here; the
    `operations_*` and `ai_*` rows are listed one by one after the table.
 
 | HEAD family | After the move | PR | Deploy files |
@@ -513,7 +520,7 @@ own `TestKernelFamiliesGathered` asserts the kernel-emitted families in core as 
 | `audiobook_organizer_ops_abandoned_calls` (label `source`) | books' own observable on its own scope for both `source` values (`repairs_resolver`, `retired_versions_stat`; `internal/opsmetrics/opsmetrics.go:370-371` @748fd787a), created in the tasks flip PR, which deletes `opsmetrics`' instrument (05-tasks 5T.11) | F5 | unchanged |
 | `ai_dispatch_*`, `ai_*` (unprefixed) | core `ai`'s families `<namespace>_ai_*` replace them, except books' `ai_parse_results_total` ([05-ai](05-ai.md) §8; the list below) | F7 (the integrations flip PR that moves the router and the client) | the list below |
 | `audiobook_organizer_process_memory_alloc_bytes`, `_process_goroutines` | books' status worker, as at HEAD (`internal/server/server_lifecycle.go:432-433`), registered through `Provider.Registerer()` (item 2) | R1 | unchanged |
-| `http_server_*` (semconv) | core's stage 2, for every request, with mux patterns as `http_route` (§3) | R1 (perimeter move) | none reference them |
+| `http_server_*` (semconv) | core's stage 2, for every request, with mux patterns as `http_route` (§3) | R1 (perimeter move) | none reference them; R1's release note names the `http_route` value change (gin templates → mux patterns) |
 | every other `audiobook_organizer_<x>` (books, search index, catalog, cache, ABS, review, fixer, metadata fetch, …) | books, unchanged | — | unchanged |
 
 **The `operations_*` and `ai_*` families, one by one (D10).** Each row lands in the flip PR named, and that PR
@@ -549,8 +556,10 @@ test's `inScopePrefixes` (§6).
 
 4. **Dashboards and rules** in `deploy/` change only in the PRs of the tables above, each with its seeding rows and
    golden lines; `TestDeployReferencedSeriesServed` fails any PR that leaves a reference to a series nobody serves.
-   The R2 release note lists every renamed or deleted family with its successor, and the owner reloads the rules
-   and dashboards at the R2 deploy (09). The core families an app adds appear in no shipped dashboard until one is
+   Each release note lists the families its own PRs renamed, relabelled or deleted, with the successor
+   (CONFORM-11): R1's note the `http_server_*` `http_route` value change; R2's note the F5 and F7 rows above, and
+   it names no F8 rename because there is none. The owner reloads the rules and dashboards at the deploy of the
+   release that changed them (09). The core families an app adds appear in no shipped dashboard until one is
    written for them.
 
 ## 14. Open items
@@ -688,3 +697,5 @@ Plan-phase consistency:
 - PC-13 — §6: `TestHistogramBucketsPinned` is part of every stage's series check in every release from S1 on, S2 r1–r3 included; the stage list names where it matters most.
 
 - D10–D12 revision (2026-11-04): M1, M3, M5, M6 rewritten: one namespace (`MetricNamespace`) for core and module series, `MetricPrefix` deleted; names may change, with the deploy files in the same PR (D10); HEAD goldens (`head_series.golden`, `head_series_identity.golden`, `TestHEADSeriesStillPresent`, `TestHistogramBucketsPinned`) and the per-stage golden-diff table deleted; `TestABOMetricsGatherNoDuplicateOrMissing` reduced to `TestABOMetricsGatherNoDuplicate`; new `TestDeployReferencedSeriesServed` (every series in `deploy/grafana` and `deploy/prometheus` is served) beside HEAD's promtool test (§6, §12); `MetricViews`, `PromRegisterer`, `Shared`, `ServedMeterProvider`, the `HTTPMetricsScope` instrument sharing and otelgin co-recording deleted: stage 2 is the only `http.server.*` recorder, out-of-scope instruments carry bucket advice (§3, §5, §7, §8, §12); §6 `/metrics`: the App's private registry served from R1 by the gin route, the kernel's `Infra` mount from the R2 metrics flip, `core:metrics.read` stored by the identity migration instead of `LegacyAmbientScopes`; §10 `OTEL_*` as canonical env bindings, ABO names in the rename table, no window aliases; §13 rewritten as the list of HEAD families that change (operations, op-items and `ai_*` families replaced by core's, `ops_abandoned_calls` hand-over choreography deleted); stage references re-keyed to R0–R2; objection to 03 §3.6 recorded. Consistency pass: flips labelled F3–F9 and D12's answers cited as D12 (a)–(d), §13 lists each `operations_*`, `op_*` and `ai_*` family with its successor, flip and the consumers changed in that same PR (the F5 move of the task routes and Activity page included), `ops_abandoned_calls` moves in the F5 PR, the rename table is 05-config §1.12.3, rule R1 is written "03 rule R1", and the objection to 03 §3.6 is closed.
+
+- Round 13 (2026-11-04): R14/XFILE-1 (renames land in R1, F5 and F7 only; M5, §6 table and §13 state F8 moves only the `/metrics` mount), CONFORM-11 (§13 item 4: each release note lists its own renames, R1's the `http_route` value change; table row), R1 (§13 item 1: the executor F2 lands dark creates no `ops` instruments in ABO's App before F5; `TestABOMetricsGatherNoDuplicate` from F2).
