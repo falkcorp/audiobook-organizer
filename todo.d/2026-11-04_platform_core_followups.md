@@ -28,6 +28,9 @@
         with `"scopes": []` skips the subset check (`internal/server/handlers/apikeys.go:199-210`) and
         empty scopes mean "all role permissions" (`internal/server/middleware/auth.go:405-408`).
         Refuse empty scopes when the caller is an API key with non-empty scopes.
+        Also refuse when the caller's permission set is nil: the subset check is skipped entirely then
+        (`apikeys.go:205`, `if callerPermSet != nil`), so a key whose effective permissions are empty can mint a key
+        carrying its owner's full role. The fix must fail closed on a nil set for every API-key caller.
   - [ ] **SECURITY (hotfix, early fix 4 in 05-authn §11.1):** `RequireAdmin` checks role names and ignores API-key scopes
         (`internal/server/middleware/auth.go:522-537`), so a key scoped to `library.view` on an admin
         account passes admin-gated routes not also behind `credGuard`.
