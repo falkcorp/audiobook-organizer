@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.11.0 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -181,10 +181,16 @@ legacy-backed instance (ABO) keeps HEAD's behaviour, has no `OperatorSecretOrigi
 reset-only token. Two reasons on `core.storage`, both owned by 05-storage §5S.3.15, report its two
 non-crash outcomes:
 
-- `factory_reset_failed` (`StatusDegraded`): a set-aside of the staged reset failed; the boot moved back
-  what it had moved, journaled `rejected` and serves the untouched store (COR8-3, DATA8-1). It is reported
-  while the newest swap journal is that rejected `KindReset` journal, so it clears when the next swap is
-  staged.
+- `factory_reset_failed` (`StatusDegraded`): a rename of the staged reset's set-aside failed; the boot
+  moved back what it had moved **before** it journaled `rejected`, and serves the untouched store (COR8-3,
+  DATA8-1, R9-6). It is reported while the newest swap journal is that rejected `KindReset` journal, so it
+  clears when the next swap is staged. The failure rule is its only source: a `KindReset` journal at
+  `set_aside_started` or later is never rejected for expiry or because another core build boots it; that
+  build resumes it forward to `set_aside` (05-storage §5S.3.16; DATA9-4), so a reset interrupted by a crash
+  loop or a recreated container never leaves an empty DB path served as a fresh install. Restore
+  `inflight.json` timing (it now exists from before the first rename of every kind, R9-7) raises no health
+  token: the swap reasons `restore_pending` and `restore_inflight` belong to the reader check (05-storage
+  §5S.3.7), not to a component.
 - `factory_reset_cleanup_incomplete` (warn, `StatusDegraded`): the post-reset hook recorded `hook_done`
   with per-entry failures (an entry it could not delete, as HEAD warns and continues). The hook never fails
   boot (COR8-4, OPS8-5). The authenticated `Detail` names the count and the paths; the probes and the
@@ -504,17 +510,26 @@ replaced by this key and the phase slices below (a hook's stop gets the hooks ph
 supervisor waits at least 30 s before SIGKILL. That is not true today for the committed artefacts
 (5H.2): the committed systemd unit sets no `TimeoutStopSec`, Docker's default grace is 10 s with no
 `stop_grace_period` in compose, and the launchd plist sets no `ExitTimeOut`. The stage that moves
-the lifecycle into the kernel (09 S2) therefore ships `TimeoutStopSec=30` in the committed unit,
-`stop_grace_period: 30s` in `docker-compose.yml` together with `ABO_CORE_SHUTDOWN_BUDGET=25s` (the
+the lifecycle into the kernel (09 S2) therefore ships `TimeoutStopSec=60` in the committed unit,
+`stop_grace_period: 60s` in `docker-compose.yml` together with `ABO_CORE_SHUTDOWN_BUDGET=25s` (the
 `<APP>_CORE_SHUTDOWN_BUDGET` variable, 05-config §1.3.6; without it a container keeps the 8 s default,
-because an image cannot carry a stop timeout and plain `docker run` grants 10 s), `ExitTimeOut` 30 in
-the plist, and a documented `docker run --stop-timeout 30`; an operator who cannot raise the
-supervisor's timeout lowers `core.shutdown.budget` below it. The same unit sets `KillMode=mixed`:
+because an image cannot carry a stop timeout and plain `docker run` grants 10 s), `ExitTimeOut` 60 in
+the plist, and a documented `docker run --stop-timeout 60`; an operator who cannot raise the
+supervisor's timeout lowers `core.shutdown.budget` below it. **The supervisor timeout is sized for the
+slowest build that may run under it, not for core's budget (OPS9-11).** After a rollback the same unit
+and compose file run an older build: HEAD's stop sleeps 0.5 s, drains HTTP for up to 30 s and only then
+closes its stores (`internal/server/server_lifecycle.go:572,582`), so a long download or stream holds the
+drain at its cap, and a 30 s timeout would SIGKILL a HEAD, S0 or S1 binary before its stores close and its
+operations are stamped. 60 s covers that drain plus the store close; HEAD's own unit sets no timeout, so
+systemd's 90 s default applies there. Core's own budget stays 25 s, well inside it. The same unit sets `KillMode=mixed`:
 under the default control-group mode systemd sends SIGTERM to every process of the unit at once, so
 subprocess-mode runs (own process group, `internal/operations/registry/subprocess.go:225,328`) would
 die at t = 0 instead of being stamped by the executor (OPS2-23). Done-check for that stage:
 `systemctl stop` during a running task — in-process and subprocess mode — stamps it `interrupted`
-within the budget, and the journal shows no SIGKILL. The only way past the **stop** budget is the tasks
+within the budget, and the journal shows no SIGKILL. It needs systemd running the committed unit, which
+neither Docker nor the `--network none` staging container provides by default, so it runs, with the S0
+"12-minute fake migration under the unit is not killed" check of 5H.9, in the systemd-enabled
+`--network none` CI container that 09 §9.3 defines for the four unit checks (R9-9, OPS9-6). The only way past the **stop** budget is the tasks
 executor's one bounded `ExtendStop` under systemd (5H.3.4 use 2); the startup extensions of use 1
 concern the start timeout only.
 
@@ -600,7 +615,7 @@ series is renamed or aliased.
 | `TestDiagnostics_PatternRedaction` (URLs with credentials, bearer headers, invite paths) | pattern redaction |
 | `TestDiagnostics_ViewerFiltersSections`, `TestDiagnostics_DownloadOtherActor404` | permission |
 | `TestDiagnostics_NarrowKeyOfActor403`, `TestDiagnostics_DemotedActor403` (role removed after start: affected sections omitted or 403) | SEC2-13 |
-| `TestStartup_ExtendPerStepNeverTimer` (fake notify socket: one `EXTEND_TIMEOUT_USEC` per progressing step, none while a step hangs) and the 09 S0 done-check "a 12-minute fake migration under the unit is not killed" | OPS2-17 |
+| `TestStartup_ExtendPerStepNeverTimer` (fake notify socket: one `EXTEND_TIMEOUT_USEC` per progressing step, none while a step hangs) and the 09 S0 done-check "a 12-minute fake migration under the unit is not killed" (in the systemd-enabled `--network none` CI container, 5H.4; R9-9) | OPS2-17, OPS9-6 |
 | `TestStopBudget_ContainerDefault8s` | OPS2-23 |
 | `TestDiagnostics_PathsConfinedToRoot` | `os.Root` |
 | `TestNoGlobals_Health` (R5 AST) | no globals |
@@ -743,3 +758,9 @@ Advisor (2026-11-04):
 - A-2 / A-14 — checked: no narrowing, canonical-only, extension-suspension or usage-gate token remains in the normative text.
 - A-5 / ADV-S4 — 5H.8: names under the default namespace, replaced by `app.Options.MetricNamespace`; no ABO series renamed.
 - A-8 / ADV-4 — 5H.4 "No boot writer": `health` writes nothing durable at boot, so it adds no crash-matrix entry.
+
+Round 9:
+
+- OPS9-11 — 5H.4: the S2 committed unit ships `TimeoutStopSec=60`, compose `stop_grace_period: 60s`, the plist `ExitTimeOut` 60 and `docker run --stop-timeout 60`, sized for the slowest build that may run under them after a rollback (HEAD's 30 s drain plus store close); core's budget stays 25 s.
+- R9-9 / OPS9-6 — 5H.4 and 5H.9: the S2 `systemctl stop` done-check and the S0 12-minute migration check run in the systemd-enabled `--network none` CI container 09 §9.3 defines.
+- R9-6 / R9-7 / DATA9-4 — 5H.3.1 `factory_reset_failed`: the move-back precedes `rejected`; a reset journal at `set_aside_started` or later is resumed forward, never rejected for expiry or by another build, so the failure rule is the token's only source; `inflight.json` timing raises no health token.

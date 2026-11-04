@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-events.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: 6dbdef8e-e3f3-4088-bdb9-ba37a706165d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -345,7 +345,8 @@ type HandlerFunc[T any] func(ctx context.Context, m Message[T]) error
 
 // Tx is a core TxHandlerFunc's view of the relay batch (COR2-10). The relay
 // opens the batch, the handler stages its writes and runs, and the relay
-// commits them together with the cursor advance: effectively once.
+// commits them together with the cursor advance: effectively once. The commit
+// is Executor.WriteRuns' (below), never the handler's.
 type Tx struct{ /* unexported */ }
 
 // Batch is the relay batch; the handler stages writes to its OWN core keyspace
@@ -358,15 +359,19 @@ func (tx *Tx) Batch() *storage.Batch
 // core services use tasks.Stager, COR3-8), with Trigger Outbox. The run's rows
 // are staged by whichever tasks.RunStore serves the install, bound to the same
 // batch by participant binding (05-tasks 5T.3.13, R4-1). The relay builds
-// and commits every batch that calls StartRun inside Executor.WriteRuns
-// (05-tasks 5T.3.10, 5T.7): on the native store Insert's uniqueness
+// every batch that calls StartRun inside Executor.WriteRuns: its open func
+// opens the relay batch on the outbox's own handle, its stage func runs the
+// handler and stages the cursor advance, and WriteRuns commits the batch
+// through storage.CommitLocked, a fresh batch per retry (05-tasks 5T.3.10,
+// 5T.7; R9-1). On the native store Insert's uniqueness
 // precondition is an Expect(absent) on the run's guard row, checked when the
 // relay batch commits, and a conflict fails the whole batch, cursor advance
 // included, so nothing is half-applied, and is rebuilt and recommitted while
-// the run is still absent; on books' legacy store WriteRuns holds HEAD's
-// opsMu from the store's first read through the commit, as HEAD's own run
-// writes do (05-tasks 5T.6.2, A-3). Only if WriteRuns gives up is the
-// message redelivered. A module kind's
+// the run is still absent; on books' legacy store CommitLocked holds the run
+// store's legacy.WriteLock (HEAD's opsMu) from the store's first read
+// through the commit, as HEAD's own run writes do (05-tasks 5T.6.2, A-3).
+// The handler never calls WriteRuns itself (ErrWriteRunsNested). Only if
+// WriteRuns gives up is the message redelivered. A module kind's
 // run is stamped with that module's system actor, as Stager does (SEC2-15).
 // req.Mode must be ModeLive or ModePreview (unset: tasks.ErrModeUnset, a
 // programming error that dead-letters). The run carries its own kind's
@@ -779,3 +784,7 @@ Advisor (2026-11-04):
 - A-3 / ADV-S2 — `Tx.StartRun`: the relay builds every batch that starts a run inside `Executor.WriteRuns`; the native store keeps the `Expect(absent)` precondition and its rebuild-and-recommit, books' legacy store holds HEAD's `opsMu` through the commit; the guard-row and census-row `Expect` wording for books deleted.
 - A-5 / ADV-S4 — 5E.10: names under the default namespace, replaced by `app.Options.MetricNamespace`; 5E.13: a books subscriber keeps HEAD's five `operations_*` families under their names.
 - A-8 / ADV-4 — 5E.6: boot writers named (`events` none; `outbox`'s writes all inside the relay run).
+
+Round 9:
+
+- R9-1 — `Tx` and `Tx.StartRun`: the relay's `WriteRuns` call opens the relay batch (`open`) and runs the handler and the cursor advance (`stage`), and `WriteRuns` commits it through `storage.CommitLocked`, holding the run store's `legacy.WriteLock` (was `legacy.TasksWriteLock`) on books' store; a handler never nests `WriteRuns` (`ErrWriteRunsNested`).
