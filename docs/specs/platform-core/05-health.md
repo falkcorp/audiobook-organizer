@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -177,7 +177,7 @@ component `core.startup.<token>` with `StatusDegraded`.
 | `GET /api/core/v1/system/info` | `core:system.manage` (SEC-8) | 200 | `sysinfo.Info` |
 | `GET /api/core/v1/system/status` | `core:system.status` (readiness tokens only; seeded to editor/viewer if the shell shows a status banner, 05-rbac) | 200 | `{ready, not_ready[]}` — the `/readyz` body, authenticated |
 | `POST /api/core/v1/diagnostics` | `core:system.manage` | 202 + run ref | starts `core.diagnostics.export` |
-| `GET /api/core/v1/diagnostics/{run}` | route `Perm` `core:system.manage` with `Guards.Interactive`; the handler **also** requires that the caller is the run's actor or holds `core:admin` (SEC2-13) | 200 zip / 403 / 404 / 410 expired | bundle, re-filtered at download time (5H.3.5) |
+| `GET /api/core/v1/diagnostics/{run}` | route `Perm` `core:system.manage` with `Guards.Interactive`; the handler **also** requires that the caller is the run's actor or holds `core:admin` (SEC2-13) | 200 zip / 403 / 404 / 410 expired | bundle, re-filtered at download time (5H.3.5); every download audited as `core.diagnostics.download` (05-rbac §7.1) |
 
 **Status topic.** `health` declares `core.system.status-changed.v1` in the one catalog
 ([05-events](05-events.md)): bus only, `Realtime{Coalesce: 1s}`, `Permission` `core:system.status`
@@ -224,11 +224,16 @@ and launchd have no equivalent):
    relies on (`deploy/audiobook-organizer.service:26-31`: `TimeoutStartSec=300` sits above the measured
    warm-up, and long steps push it out). Right before a startup step that makes real progress — store
    open (WAL replay), each migration step or chunk group of 05-storage §5S.3.5 ("Systemd budget"),
-   the pre-migration checkpoint, a mirror rebuild, and a search-index open (05-indexer) — the step calls
+   the pre-migration checkpoint, a mirror rebuild, and a search-index open (`storage/index`, 05-storage
+   §5S.3.8) — the step calls
    `Supervisor.ExtendStart(step)`, which extends the start deadline to at least
    `StartupStepBudget` (10 min, HEAD's value) from that moment. It is called per step, **never from a
    timer**, so a step that hangs is still killed when its own budget runs out. Lower layers do not import
-   `health`: the kernel hands storage and the indexer `ExtendStart` as a plain `func(step string)`.
+   `health`: the kernel hands storage and the search-index opener `ExtendStart` as a plain
+   `func(step string)`, and hands the same func to modules as `module.Deps.ExtendStart` (06 §6.4.4,
+   from S2), through which the database and search code that stays in ABO during 09 S2–S7
+   (`internal/database/startup_notify.go`, `internal/search/register.go:55`) keeps extending the start
+   deadline after `internal/sdnotify` moves to core (04 §8.3).
 2. **Stop** — the tasks executor's one bounded extension for an in-flight `Uninterruptible` run
    ([05-tasks](05-tasks.md) 5T.4), at most `core.tasks.shutdown_extend_max` beyond the stop budget.
 
@@ -455,7 +460,7 @@ internally.
 | `core.shutdown.budget` | duration | 25s; 8s in a container when unset (must stay below the supervisor's stop timeout, 5H.4) | **no** (restart-bound; the same value in 06, OPS2-23) | — |
 | `core.shutdown.http_drain` | duration | 10s | yes | — |
 | `core.diagnostics.schedules.prune` | `tasks.ScheduleConfig` | `{enabled: true, every: 1h}` | yes | — |
-| `core.diagnostics.dir` | path | `<data-dir>/diagnostics` | no | `ProtectAdmin` (a server path, 05-config `FieldServerPath`) |
+| `core.diagnostics.dir` | path | `diagnostics` beside the DB (relative values resolve against the DB's parent, as `core.backup.dir`; there is no data-dir key, 05-config §1.7) | no | `ProtectAdmin` (a server path, 05-config `FieldServerPath`) |
 | `core.diagnostics.retention` | duration | 24h | yes | — |
 | `core.diagnostics.log_lines` | int | 5000 | yes | — |
 | `core.diagnostics.task_runs` | int | 200 | yes | — |
@@ -568,3 +573,8 @@ Round 2:
 - SEC2-8 — Protection column in 5H.7 (`core.diagnostics.dir` is `ProtectAdmin`).
 - SEC2-13 — diagnostics download: `core:system.manage` + interactive, actor-or-admin, sections re-filtered at download time; tests.
 - SEC2-21 — auth-off tightening of health/info/diagnostics stated, recorded in 09 §9.2.6.
+
+Integration pass (round 2, 2026-11-04):
+
+- integration pass (round 2): §5H.3.4: `ExtendStart` also reaches books' database and search code that stays in ABO during S2–S7 via `module.Deps.ExtendStart`; search-index open cites `storage/index`, not 05-indexer.
+- integration pass (round 2): `core.diagnostics.dir` defaults to `diagnostics` beside the DB (no data-dir key); diagnostics downloads audited as `core.diagnostics.download`.

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -323,8 +323,8 @@ func (r *Registry) Config(ref Ref) (InstanceConfig, bool)        // effective vi
 // the scheme, host or port of any URL-typed settings field changes, every
 // secret field is cleared unless secretsIn re-supplies it, Local is reset to
 // false unless the writer passes the ProtectAdmin check and sets it again, and
-// the audit record core.integration.update carries secrets_dropped=true
-// (SEC-15). During the compatibility window, a Put on an instance imported
+// the write is audited as core.integration.change_url with secrets_dropped=true
+// (05-rbac §7.1; SEC-15). During the compatibility window, a Put on an instance imported
 // from a legacy key also re-renders that legacy key in the same batch (M1.4
 // step 2a).
 func (r *Registry) Put(ctx context.Context, inst InstanceConfig, secretsIn map[string]secrets.Value) (InstanceConfig, error)
@@ -510,7 +510,7 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
 | `Put` version conflict | closed (409) | Two admins editing one instance must not silently overwrite. |
 | Secrets backend unavailable on `Put` | closed (503, row not written) | Row and secret are one batch; never a row pointing at a secret that was not stored. |
 | `Test` with remote failure | n/a (returns `TestResult{OK:false, Class, Status}` with 200; no body, no remote text) | A failed test is a successful API call; echoing remote text would make `Test` an SSRF read oracle (SEC-15). |
-| URL field host/scheme/port changed without re-supplied secrets | open for the write; secrets cleared, `Local` reset, audited | A stored password or API key must never follow a URL to a new host (SEC-15). |
+| URL field host/scheme/port changed without re-supplied secrets | open for the write; secrets cleared, `Local` reset, audited (`core.integration.change_url`) | A stored password or API key must never follow a URL to a new host (SEC-15). |
 | A principal without the ProtectAdmin check (core:admin + interactive) sets `Local`, keeps it across a URL change, or calls `Test` with `Local=true` | closed (403) | Private-network trust is admin-level network trust, like `lan_allow` (SEC-15, SEC2-7). |
 | Write to a field in `Locked` | closed (409 `ErrFieldLocked`); other fields of the same `Put` are not written either | The operator's environment owns that value; the API must not appear to change it. |
 | Legacy re-import or mirror write fails (window only) | closed for that `Put` (nothing written); at boot the instance keeps its current row and the boot logs the key | The legacy copy and the instance row must not diverge silently (DATA2-10). |
@@ -595,8 +595,10 @@ permanent.
 | `config.Plugins["webhook"]` URLs | `notify/webhook-<n>` (n = 1… in list order) | `integrations.notify.webhook-<n>.<field>` | — |
 
 A legacy ID that does not match `InstanceID` (none at HEAD) is lower-cased with `_` → `-` by the same migration
-and the mapping is recorded in the migration ledger. Every row is imported at the first S7 boot and kept
-current in both directions until 09 C7 by M1.4 step 2a; the Passthrough paths feed the overlay of M1.4 step 2,
+and the mapping is recorded in the migration ledger. Every row is imported at the first S7 boot by the adopt
+step `core/integrations#1` (`Additive`), which stamps the integrations sequence's Teach floor as its
+`Migration.Floor` — `Floor` 5: any level-5 build (S5 or S6) reads the blob that step 2a keeps current
+(09 §9.2.2) — and kept current in both directions until 09 C7 by M1.4 step 2a; the Passthrough paths feed the overlay of M1.4 step 2,
 never the stored row.
 
 ### M1.11 Open items
@@ -1105,3 +1107,7 @@ Round 2 (`docs/plans/platform-core/reviews/spec-round-2-dispositions.md`):
 - SIMP2-16 — the slash-form secret-name history line marked superseded by the dotted form.
 - SEC2-8 — M1.7 gains a Protection column (M2.7 and M3.7 too, for the same rule).
 - M1.10's two migration rows that had been displaced below the import table moved back into their table.
+
+Integration pass (round 2, 2026-11-04):
+
+- integration pass (round 2): M1.10: the S7 import is adopt step `core/integrations#1` stamping `Floor` 5 (09 v1.2.0); URL changes audited as `core.integration.change_url` (05-rbac §7.1).

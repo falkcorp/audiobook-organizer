@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-library.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: dafe380b-f703-41cb-99d0-2b2ba32f70e5 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -415,7 +415,7 @@ path-history resumption, author/title folder naming) and calls the primitive per
 `RootSpec.Quarantine = ".failed"` keeps today's on-disk location. The same primitive is the
 Sonarr/Radarr "recycle bin" for TV/Movies deletes (`raw/16-arr-domain-research.md` row 11), with
 `core.library.quarantine.retention` as its cleanup age, applied by task `core.library.quarantine-prune`
-(`Schedule: tasks.ScheduleFromConfig("core.library.quarantine.prune_schedule")`, a key declared in
+(`Schedule: tasks.ScheduleFromConfig("core.library.schedules.quarantine_prune")`, a key declared in
 library's own namespace with type `tasks.ScheduleConfig`, SIMP-6, R2-7; no bespoke timer; a no-op while
 the retention is 0).
 
@@ -500,7 +500,7 @@ reconciles watched roots whenever the registry changes, without a restart (kept 
 | Write: owner only. Read: owner + `ReadShares`. `RoleExternal`: nobody writes. | `Scope.FS` / `Scope.Transfer` with the owner bound by the kernel (COR-21); `Root.FS(caller)` is reachable only by core holders of `Manager` |
 | `RoleDownload` roots are core-owned; every module with the download capability may read and move **out**, never write in. TV and Movies in one binary therefore share download roots but never library roots. | `Transfer` step 0 |
 | A disabled module's roots: retained, unwatched, no transfers or quarantine (G1). | kernel enablement |
-| The app's own data dir (DB, indexes, backups) may not be inside any root unless excluded via `AppDir`; registration warns and walkers skip it (successor of `appdirs`). | registration |
+| The app's own directories (the DB's parent with its indexes, aux DBs and backups, and the state directory; there is no data-dir key, 05-config §1.7) may not be inside any root unless excluded via `AppDir`; registration warns and walkers skip it (successor of `appdirs`). | registration |
 
 Permissions declared by core (names per 03 §3.6): `core:library.manage` (roots, mappings,
 quarantine purge), `core:library.browse` (directory picker; replaces `BrowseDirectory`'s allow-list,
@@ -576,7 +576,7 @@ they need an interactive session.
 | `core.library.free_space.warn_percent` | int | 10 | yes | none |
 | `core.library.free_space.default_min_bytes` | int64 | 5 GiB | yes | interactive |
 | `core.library.quarantine.retention` | duration | 0 (keep until purged) | yes | interactive |
-| `core.library.quarantine.prune_schedule` | `tasks.ScheduleConfig` | `{enabled: true, every: 24h}` | yes | none |
+| `core.library.schedules.quarantine_prune` | `tasks.ScheduleConfig` | `{enabled: true, every: 24h}` | yes | none |
 
 ABO compatibility (09 owns aliases): `root_dir` → root `books-library`; `import_path:` rows →
 `import-<id>` roots; `protected_paths` → `RoleExternal` roots or oracle entries;
@@ -699,3 +699,7 @@ Round 2:
 - COR2-16 — transfer locks use `core/internal/keyedmutex`, a core-internal copy added by 04 at S3; ABO keeps its own package.
 - COR2-19 — decision IDs renamed `D-L1`…`D-L9` so they no longer collide with layer names (same rule as 05-storage's `D-S`).
 - SEC2-8 — Protection column in §5L.7 (roots `ProtectAdmin`; mappings, free-space floor and quarantine retention `ProtectInteractive`).
+
+Integration pass (round 2, 2026-11-04):
+
+- integration pass (round 2): Schedule key `core.library.schedules.quarantine_prune` (R2-7 form); app-directories rule names no data-dir.

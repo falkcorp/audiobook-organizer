@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -181,15 +181,16 @@ type Deps struct {
 	Log         *slog.Logger
 }
 
-// ReaderCheck asks whether the binary at exe may open the data directory as
+// ReaderCheck asks whether the binary at exe may open the store at dbPath as
 // it is now: the decision scripts/storage_format_guard.py makes for
 // `make rollback`, implemented once by 05-storage's guard (SIMP-18) over the
 // sidecar files, so it needs no open store. The kernel binds it to
-// core/internal/pebble.CheckReader (05-storage §5S.3.7). nil error = allowed;
+// core/internal/pebble.CheckReader (05-storage §5S.3.7) with the resolved state
+// directory; dbPath is the marker's db_path. nil error = allowed;
 // otherwise an error carrying one of CheckReader's fixed reason tokens:
 // "level_newer", "format_newer" (pre-guard binary), "restore_pending",
 // "sidecar_unreadable".
-type ReaderCheck func(ctx context.Context, exe string, opt ReaderCheckOptions) error
+type ReaderCheck func(ctx context.Context, dbPath, exe string, opt ReaderCheckOptions) error
 
 type ReaderCheckOptions struct {
 	// IgnoreRestoreStagedBy: a staged restore whose staged_by_build (05-backup
@@ -208,9 +209,10 @@ type Restarter interface {
 // Boot is boot phase P−1 of 06 §6.5.1 (OPS2-3): it runs FIRST in app.New,
 // before P0a's restore swap, before the config file is read and before storage
 // opens, so that a config-stage refusal or a failing migration cannot prevent
-// rollback. Like P0a it resolves the state directory, data directory and DB
-// path from flags and environment only, never from the config file or the DB.
-// It reads the file marker, counts boots, and after the marker's
+// rollback. Like P0a it resolves the state directory from flags, environment
+// and app.Options.StateDir only, never from the config file or the DB, and it
+// takes the DB path ReaderCheck needs from its own marker (db_path, recorded
+// by the build that applied the update). It reads the file marker, counts boots, and after the marker's
 // max_boot_attempts failed boots rolls back to <exe>.prev only if check allows
 // it (OPS-6). On Unix a rollback execs the restored binary in place (same PID,
 // same argv/env), so no supervisor start is spent (OPS2-18); Boot returns only
@@ -298,8 +300,9 @@ with an interactive method can turn automatic apply on. Steps, each a `rc.Phase`
 6. Pre-update backup through `backup.Runner` ([05-backup](05-backup.md), in the format the previous
    build can restore during the window); failure aborts unless `core.updater.require_backup=false`.
 7. Write the pending marker file `<state-dir>/updates/pending.json`
-   `{from, to, to_build, applied_at, boots: 0, max_boot_attempts}` (a file, not storage: `Boot` reads
-   it before storage opens). `max_boot_attempts` is the key's value at apply time, capped at 3 when
+   `{from, to, to_build, db_path, applied_at, boots: 0, max_boot_attempts}` (a file, not storage: `Boot` reads
+   it before storage opens; `db_path` is the absolute `core.storage.path` this build serves, so `Boot`
+   needs no config to locate the sidecars). `max_boot_attempts` is the key's value at apply time, capped at 3 when
    `NOTIFY_SOCKET` is set (OPS2-18, 5U.5).
 8. Swap: rename `<exe>` → `<exe>.prev`, `<exe>.new` → `<exe>`; fsync directory. `.prev` is the same
    slot `make rollback` uses (`Makefile:892-913`), so mixed use of the two mechanisms never diverges
@@ -310,12 +313,14 @@ with an interactive method can turn automatic apply on. Steps, each a `rc.Phase`
 
 **Confirm / roll back** — `Boot` is boot phase **P−1** of [06](06-app-sdk.md) §6.5.1 (OPS2-3): in the
 new process, before P0a's restore swap, before the config file is read and before storage opens; it
-resolves the state directory, data directory and DB path from flags and environment only. It
+resolves the state directory from flags, environment and `app.Options.StateDir` only, and reads the DB
+path `ReaderCheck` needs from its own marker (`db_path`, the absolute `core.storage.path` the applying
+build recorded), never from the config file or the DB (06 §6.5.1 P−1). It
 increments `boots` in the marker **first**, so every boot that ends before confirmation counts as a
 failed boot, whatever stopped it: a P0 config refusal (`*RetiredAliasError`, C3's YAML legacy-key
 refusal, a validation error), a P2/P4 storage refusal (including `ErrUpgradeFloor`), or a crash during
 warm-up. If `boots > max_boot_attempts` (the marker's copy, default 3), it first runs
-`ReaderCheck(<exe>.prev, {IgnoreRestoreStagedBy: to_build})` (OPS-6): the same decision as the
+`ReaderCheck(db_path, <exe>.prev, {IgnoreRestoreStagedBy: to_build})` (OPS-6): the same decision as the
 `make rollback` guard, from the one compat/format guard (05-storage §5S.3.7, SIMP-18) plus the
 unit-type capability check; a staged restore that the failing build itself staged does not block it,
 and `.prev` then rejects that intent as foreign at its own P0a (05-backup §5B.3.4 step a). Rollback is
@@ -370,7 +375,7 @@ opens.
 | Legacy unsigned path (OPS-23) | `core.updater.allow_unsigned_legacy=false`; set to `true` only by the config migration of an install that had `auto_update.enabled=true` | existing auto-update users must not silently stop receiving updates at key introduction |
 | Downgrades | never automatic; only `Rollback` to the kept previous binary, and only when `ReaderCheck` allows it | string-inequality defect (`updater.go:153`); OPS-6 |
 | Window | apply only inside the window its schedule key names (`nightly` by default) when scheduled; manual apply any time | one window instead of two (5U.2) |
-| Who | check: `core:system.manage`; apply/rollback: `core:admin` (audited, credential-guarded route as today); turning on scheduled apply: `ProtectAdmin` on `core.updater.mode` | RBAC (05-rbac); SEC-6 |
+| Who | check: `core:system.manage`; apply/rollback: `core:admin` (audited as `core.update.apply` / `core.update.rollback`, 05-rbac §7.1; credential-guarded route as today); turning on scheduled apply: `ProtectAdmin` on `core.updater.mode` | RBAC (05-rbac); SEC-6 |
 | Binary directory | the process must be able to create files in the executable's directory; otherwise `binary_not_writable` (apply and rollback refused, Degraded while mode ≥ check) | the swap is two renames in that directory (steps 4 and 8); OPS2-4 |
 | Stepping stones | a release whose signed `min_upgrade_from` is newer than the running version is never applied; `stepping_stone_required` names the release to install first | R2-4: books legacy migration code is kept only until the declared minimum-upgrade-from release (09); adopt steps stay registered in every later build (05-storage), so no other stepping stone exists; OPS2-11 |
 | Boot attempts | `max_boot_attempts ≤ StartLimitBurst − 2` of the unit; capped at 3 when `NOTIFY_SOCKET` is set | the committed unit (`StartLimitBurst=5` in 60 s, `RestartSec=5`, `deploy/audiobook-organizer.service:81-82,112`) then has one spare start for a crash of the restored binary; the in-place exec spends none; OPS2-18 |
@@ -596,3 +601,8 @@ Round 2:
 - COR2-3 — `core.update.found.v1` notification staged through `notify.Publish` with `c/updater/seen` in one batch.
 - SEC2-23 — unsigned path only for versions ≤ compiled `LastUnsignedVersion`.
 - OPS2-26 (consistency) — apply/rollback refused while a staged restore is pending.
+
+Integration pass (round 2, 2026-11-04):
+
+- integration pass (round 2): `updater.Boot` takes the DB path from its own marker (`db_path`); `ReaderCheck(ctx, dbPath, exe, opt)`; no data directory. `IgnoreRestoreStagedBy`: already applied.
+- integration pass (round 2): Apply/rollback audited as `core.update.apply` / `core.update.rollback`.

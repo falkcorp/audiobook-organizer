@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -245,8 +245,8 @@ type Options struct {
 	Environ     []string          // os.Environ() captured once by app.New; config never calls os.Getenv
 	FilePath    string            // operator YAML file; "" = none. Read-only: core never writes it.
 	Flags       map[Path]string   // ONLY flags the operator explicitly set (FromFlagSet / app adapter)
-	// BootRecordRoot is called by Boot with core.paths.state_dir as resolved from defaults and operator
-	// layers (the key is ProtectOperator, so it never depends on the record it locates); the kernel opens
+	// BootRecordRoot is called by Boot with core.paths.state_dir as resolved from its pre-boot layers
+	// (compiled default, env, flags; never the file or the record it locates, §1.7); the kernel opens
 	// and returns the os.Root that holds config.boot.json (§1.3.5).
 	BootRecordRoot func(stateDir string) (*os.Root, error)
 	Passthrough func(Path) bool   // operator-layer paths config reads raw and does not own (v1: the legacy
@@ -317,8 +317,10 @@ func FromFlagSet(fs *flag.FlagSet, bind map[string]Path) map[Path]string
 // storage keyspace c/config/; config itself never imports storage (§1.9).
 type OverrideStore interface {
 	Load(ctx context.Context) iter.Seq2[Override, error]
-	// Commit writes set/unset rows, the staged secret writes and (during the migration window) the
-	// legacy mirror (§1.12.2) in ONE storage batch.
+	// Commit writes set/unset rows, the staged secret writes, (during the migration window) the
+	// legacy mirror (§1.12.2) and the audit record core.settings.update (05-rbac §7.1: section and
+	// changed key names, never secret values; audit.RecordIn, actor = Override.By) in ONE storage
+	// batch. configstore is kernel-side, so config (L3) never imports audit (L4).
 	Commit(ctx context.Context, c Commit) error
 }
 
@@ -558,20 +560,22 @@ config's and secrets' own versioned steps), at the "post-DAG reconcilers" step o
 
 1. `config.NewStore(opts)`; the kernel registers **core** sections.
 2. `Store.Boot` (06 P0; it reads no storage, so 06 may also call it before its pre-boot steps): resolves
-   `core.paths.state_dir` from defaults and operator layers, calls `Options.BootRecordRoot`, then reads the
+   `core.paths.state_dir` from its pre-boot layers (compiled default, env, flags; a config file that sets
+   it fails boot, §1.7), calls `Options.BootRecordRoot`, then reads the
    file (parse error = boot error), env, flags and the boot record for core sections and validates operator
    values. The returned `BootView` carries module enablement (`core.modules.<id>.enabled`, `ReloadBoot`; COR-14)
-   and the operator-only paths `core.paths.state_dir` and `core.storage.path`, which 06's pre-boot restore and
-   storage-open steps read from it rather than from flags and env alone (COR2-8). A retired protected or
+   and the operator-only paths `core.paths.state_dir` and `core.storage.path`, which 06's storage-open step (P2)
+   reads from it rather than from flags and env alone (COR2-8); the pre-boot steps P−1 and P0a resolve the state
+   directory from the same pre-boot layers themselves, before `Boot` runs. A retired protected or
    secret alias set in env or file fails boot here (§1.3.6), as does a conflict on a protected key (§1.3.5).
 3. The kernel registers the sections of every **enabled** module (from manifests), then `Store.Load` (06 P3)
    seals the registry and builds every section from defaults, operator layers and the boot record only — **no
-   DB layer**. Registration after `Load` → `ErrSealed`, boot fails. A section whose operator values fail decode
+   DB read**: the DB override layer is attached at step 7 (06 P4d step 3). Registration after `Load` → `ErrSealed`, boot fails. A section whose operator values fail decode
    or `Validate` fails boot (the operator must fix their input).
 4. The kernel builds logging and metrics from `core.log` / `core.metrics` (operator layers and defaults).
    Storage opens at `core.storage.path` (`ProtectOperator`: needed before the DB layer exists), takes its
    pre-migration checkpoint and runs the DAG (05-storage §5S.4).
-5. `secrets.Open` (its first write, `c/secrets/meta` on a new store, happens here), then `Store.SetSecrets`.
+5. (Steps 5–7 are 06 P4d step 3.) `secrets.Open` (its first write, `c/secrets/meta` on a new store, happens here), then `Store.SetSecrets`.
 6. The kernel's `configstore` receives its `c/config/` and `c/secrets/` handles and runs the migration step for
    this boot (§1.12.2: legacy import or re-import while the window is open), position (c) of 05-storage's
    reconciler order (after the mirror rebuilds and the revocation-journal re-apply, before the tasks
@@ -661,7 +665,7 @@ keys at all (C11).
 
 | Key | Type | Default | Hot reload? | Protection |
 |---|---|---|---|---|
-| `core.paths.state_dir` | path | the app's compiled default, passed through `app.Options` (06; ABO: `internal/config/state_dir.go:54`) | no | operator |
+| `core.paths.state_dir` | path | the app's compiled default, passed through `app.Options` (06; ABO: `internal/config/state_dir.go:54`) | no — **pre-boot**: read from the compiled default, env and flags only; a config file that sets it fails boot at P0, because 06 P−1 and P0a read it before any config file (06 §6.5.1) | operator |
 | `core.config.file` | path | `""` (also `--config`, `<APP>_CONFIG`) | no | operator |
 | `core.config.subscriber_drain_timeout` | duration | `5s` | no | none |
 
@@ -793,7 +797,7 @@ the dependency as adopted.
 | `TestEnvFileSuffix` | `_FILE` read once, newline trimmed, unreadable = boot error |
 | `TestAlias_UseCallsOnLegacyUse` / `TestAlias_RetiredProtectedFailsBoot` | env and file aliases reported once per boot on `SurfaceEnv`, blob and API uses per use on `SurfaceConfig`; an alias whose ledger row is `Retired` on a protected or secret key → `*RetiredAliasError` |
 | `TestAliasConflictOnProtectedKeyRefusesBoot` | `ABO_CORE_STORAGE_PATH` and `DATABASE_PATH` set to different values → boot error naming both; same conflict on a `ProtectNone` key → canonical wins, `config_alias_conflict` |
-| `TestBoot_ResolvesPathsWithoutStorage` | `BootView` yields `core.paths.state_dir` and `core.storage.path` from file, env and flags; `BootRecordRoot` receives the resolved state dir; no storage handle exists |
+| `TestBoot_ResolvesPathsWithoutStorage` | `BootView` yields `core.paths.state_dir` from env and flags (a file value fails boot) and `core.storage.path` from file, env and flags; `BootRecordRoot` receives the resolved state dir; no storage handle exists |
 | `TestNoStoreWriteBeforeCheckpoint` | a recording fake store sees no write from `secrets.Open`, `configstore` or `AttachOverrides` before the checkpoint marker (C13) |
 | `TestSectionPath_NestedNoOverlap` | `core.log` + `core.log.journal` + `core.log.schedules` register; a parent field named `journal` → `ErrDuplicate` |
 | `TestConfigFileHasSecrets_Redacted` | a file with a secret key or a passthrough value → `true`; `RedactedConfigFile` contains neither |
@@ -861,8 +865,8 @@ DAG (C13, §1.4 step 6).
 | Phase | Build | What happens |
 |---|---|---|
 | **T — Teach** | 09 S0, reader level `core` 1 (09 §9.2.2); under R2-1 the Teach build is also the store's minimum rollback target once X has run | ABO's legacy loader learns to overlay `IsSecret` rows named `setting:<legacy-name>` for **every** secret field in §2.2 that has a legacy row, not only the 4 it knows (`persistence.go:1429,1441,1443,1813`; others are rejected as `unknown setting key`, `:1884`). T also **writes** them (DATA2-11): when T saves such a secret field it writes the legacy-format row (encrypted with the `.encryption_key` material, as `internal/database/settings.go:189-208` does today) or, for an empty value, deletes the row, and it blanks the field in the blob. Without this, a stale X-written row would overlay T's own change, and a clear made on T would never take effect. |
-| **X — Expand** | first build at the S3 level, and every build until C | Every boot: keyring import (§2.4 step 1) and the **import / re-import** step below. Every config or secret write: the **mirror** below, in the same batch. `c/config/` and `c/secrets/` are truth from the first X boot. |
-| **C — Contract** | 09 C3 (≥ W after X; preconditions per 09: the served ledger shows X served this store for ≥ W) | Run import / re-import one last time (adopt-if-needed: a store that never ran X imports first and never deletes unimported data, OPS-2); stop the mirror; delete `setting:config_blob`, the legacy secret rows and `c/config/import/`. `k0-legacy` stays in the keyring as `retired`; `.encryption_key` is left in place and the boot log tells the operator it may be deleted. |
+| **X — Expand** | 09 S3 r2 (`core` level 2) and every build until C | The first X boot runs the adopt step `core/config#1` (`Additive`), which records its applied record and stamps the sequence's Teach floor as its `Migration.Floor`: `Floor` 1, the S0 level, so from then on no build older than S0 opens the store (09 §9.2.2, 05-storage §5S.3.7). Every boot: keyring import (§2.4 step 1) and the **import / re-import** step below. Every config or secret write: the **mirror** below, in the same batch. `c/config/` and `c/secrets/` are truth from the first X boot. |
+| **C — Contract** | 09 C3 (≥ W after X; a `Breaking` step with `Adopts: [core/config#1]` and `RaisesLevel` 2; preconditions per 09: the served ledger shows level 2 served this store for ≥ W) | Run import / re-import one last time (adopt-if-needed: a store that never ran X imports first and never deletes unimported data, OPS-2); stop the mirror; delete `setting:config_blob`, the legacy secret rows and `c/config/import/`. `k0-legacy` stays in the keyring as `retired`; `.encryption_key` is left in place and the boot log tells the operator it may be deleted. |
 
 **Import / re-import (every X boot).** Decode the blob with `LegacyBlob.Decode`, read the legacy secret rows
 (decrypted with `k0-legacy`) and, once, `<db dir>/config.yaml` (only keys the store lacks; that file is never
@@ -1027,7 +1031,7 @@ Flags: ABO's cobra adapter maps `--dir`, `--db`, `--db-type`, `--playlists`, `--
 ### 1.13 Open items
 
 1. Whether `encoding/json/v2` is GA in go1.27.3; if so, decode sections with it (strict unknown-field
-   handling and `omitzero` are better fits). Decide in wave 0 with the toolchain spec ([13-toolchain](13-toolchain.md)).
+   handling and `omitzero` are better fits). Decide at 09 S0 with the toolchain spec ([13-toolchain](13-toolchain.md)).
 2. Exact per-key reload class for ABO keys: default every books key to `ReloadLive` only where the consumer
    reads the handle per use; keys captured at construction (e.g. worker counts) are `ReloadRestart` until the
    consumer subscribes. The per-key audit is a 09 task.
@@ -1187,6 +1191,11 @@ type Options struct {
 	Logger        *slog.Logger
 	Metrics       *metrics.Scope    // core scope "mediacore.secrets"
 	Now           func() time.Time
+	// DeriveKeyInUse reports whether a retained archive, undo point or unconsumed checkpoint still records
+	// derive key kid (Provenance.KeyID or the archive identity's derivation). The kernel binds it to a
+	// manifest-only scan of the backup directory (05-backup catalogue; no backup service needed at
+	// P4d). nil = never in use.
+	DeriveKeyInUse func(ctx context.Context, kid string) (bool, error)
 }
 
 type LegacyKey struct {
@@ -1242,7 +1251,11 @@ var (
   `DeriveKeyFor(kid, …)`, to verify and decrypt what was produced under it (older archives' MACs, archives
   encrypted to the identity derived from it, outstanding refresh tokens); producers always use the active key and
   record `ActiveDeriveID()` beside what they produce (05-backup records it in the manifest). At `Open`, a
-  `verify` key past `retire_after` is treated as `retired`: never used again. The rotation changes every
+  `verify` key past `retire_after` is treated as `retired` (never used again) **only when
+  `Options.DeriveKeyInUse` reports that no retained archive, undo point or unconsumed checkpoint still uses it**;
+  otherwise it stays `verify` and health is `degraded` (`derive_key_retire_blocked`, naming the kid) until
+  05-backup's verify task has rewrapped those archives or retention has dropped them, so a key is never retired
+  under an archive that needs it (or an error from the scan keeps it, fail-safe). The rotation changes every
   fingerprint and the derived archive identity, and the export record no longer covers the keyring, so
   `secrets_keyring_not_exported` is raised until the operator exports again.
 - Subkeys via `crypto/hkdf` (SHA-256): data subkey from the active data key, info
@@ -1367,6 +1380,7 @@ All on scope `mediacore.secrets`.
 | `TestFingerprint_StableNotReversible` | same value same fingerprint; differs per keyring |
 | `TestExportKeyring_ClearsHealthWarning` | export record covering every key ID clears `secrets_keyring_not_exported` |
 | `TestRotateDerive_VerifyThenRetire` | after `rotate-derive`: `DeriveKey` uses `d2`; `DeriveKeyFor("d1", …)` works until `retire_after`, then `ErrKeyUnavailable`; data records still decrypt; refused while the store is locked; export warning raised |
+| `TestRotateDerive_NotRetiredWhileArchiveUsesIt` | a `verify` key past `retire_after` stays `verify` while `DeriveKeyInUse` reports a retained archive under it (health `derive_key_retire_blocked`); after the rewrap it retires |
 | `TestStage_TakesBatchPointer` | `Stage`/`StageLegacy`/`DeleteLegacy` writes commit with the caller's batch and are refused outside its bound keyspaces (COR2-12) |
 
 The migration tests (`TestMigration_ReimportAfterRollback`, `TestMigration_BlankOnlyAfterTeachServed`,
@@ -1492,3 +1506,11 @@ Round 2:
 - SEC2-7 — §1.3.7: `lan_allow` applies to every instance without `Local`; `Local` and `Test` with `Local` need `ProtectAdmin`; one URL-field rule shared with 05-metadata.
 - SEC2-8 — §1.3.7 classifier gains key-material/encryption shapes.
 - SEC2-24 — §2.3 `secrets rotate-derive` (offline), `verify` status with `retire_after`, `ActiveDeriveID`/`DeriveKeyFor`; §2.11 updated; test.
+
+Integration pass (round 2, 2026-11-04):
+
+- integration pass (round 2): `core.paths.state_dir` is pre-boot (default, env, flags; a file value fails boot at P0); no `data_dir`; `Store.Load` reads no DB (06 P3), steps 5–7 are 06 P4d step 3; `TestBoot_ResolvesPathsWithoutStorage` updated.
+- integration pass (round 2): §1.12.2: X runs adopt step `core/config#1` stamping `Floor` 1 (Teach build S0); C3 is `Breaking`, `Adopts: [core/config#1]`, `RaisesLevel` 2.
+- integration pass (round 2): `OverrideStore.Commit` carries the `core.settings.update` audit record (05-rbac §7.1).
+- integration pass (round 2): Derive-key rotation: a `verify` key is not retired while a retained archive uses it (`secrets.Options.DeriveKeyInUse`, health `derive_key_retire_blocked`, test). Key/recipient/encryption classifier shapes: already applied.
+- integration pass (round 2): "wave 0" → 09 S0 (MOD2-21).

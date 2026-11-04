@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -245,8 +245,9 @@ type Deps struct {
 	Store   storage.Keyspace // c/rbac/
 	Audit   audit.Logger
 	OnChange func(generation uint64) // kernel publishes core.rbac.changed.v1 on the bus; rbac never imports events
-	Revocations journal.RevocationJournal // Append(role.unassigned / role.narrowed / role.deleted) before the change commits (§7.1, 05-backup §5B.3.6)
+	Revocations journal.RevocationJournal // Append(ctx, b, r) of role.unassigned / role.narrowed / role.deleted into the change's batch b before it commits (§7.1, 05-backup §5B.3.6)
 	Mirror  storage.Mirror   // role mirror during the compatibility window (§6.3); every role write, revocations included, is staged through it (R2-2)
+	MirrorView storage.MirrorView // reads of mirror rbac.role: the native generation, or legacy row + side record while readThrough (05-storage §5S.3.11)
 	Log     *slog.Logger
 	Metrics *metrics.Scope   // "mediacore.rbac" (05-metrics)
 }
@@ -553,12 +554,12 @@ naming it ∪ (for module roles) the module's `RoleSeed.Permissions`. Each seed 
 | absent | create with `SeedPermissions = seed`, no diff |
 | `Tombstone` | leave deleted (operator deleted it on purpose) |
 | present, `SeedDigest` equal | nothing |
-| present, digest differs | set `SeedPermissions = new seed` minus any **restricted** addition (below); put restricted additions in `PendingSeed`; keep `Added`/`Removed`; drop entries of `Removed` that are no longer in the seed; log + audit `core.role.seed_updated` with the permissions the release added, held or withdrew |
+| present, digest differs | set `SeedPermissions = new seed` minus any **restricted** addition (below); put restricted additions in `PendingSeed`; keep `Added`/`Removed`; drop entries of `Removed` that are no longer in the seed; log + audit `core.role.update_seed` with the permissions the release added, held or withdrew |
 
 A *restricted* addition is a scope that is `Sensitive`, `AuthRequired` or `Confining`, or any
 `*:settings.manage` / `*:integrations.manage`, added to a role that already existed. It becomes
 effective only when an admin accepts it (`POST /roles/{name}/accept-seed`, audited
-`core.role.seed_accepted`); the Roles page shows the pending set (SEC-25). Roles created fresh
+`core.role.accept_seed`); the Roles page shows the pending set (SEC-25). Roles created fresh
 from the seed take the full seed.
 
 Effective = `(SeedPermissions ∪ Added) \ Removed`. Consequences: an unrestricted permission a new
@@ -665,7 +666,7 @@ aliases whose targets are all in the module's own namespace; the kernel enforces
 6. Runtime: role writes bump `Generation()` and call `Deps.OnChange`, through which the kernel
    publishes `core.rbac.changed.v1`; caches key on generation, so the next request sees the change.
 7. `audit` starts its async writer goroutine; the kernel registers `core.audit.prune` on
-   `tasks.ScheduleFromConfig("core.audit.prune_schedule")`, a declared `tasks.ScheduleConfig` key in
+   `tasks.ScheduleFromConfig("core.audit.schedules.prune")`, a declared `tasks.ScheduleConfig` key in
    audit's own namespace (resolution R2-7, SIMP2-1). On shutdown the async queue is drained (bounded
    5 s), remaining events counted as dropped.
 
@@ -703,6 +704,8 @@ only through `core:admin` and the `settings.manage` expansion), `core:system.man
 SEC-16), `core:integrations.read` (`ClassView`; list and read integration instances, never secret
 values; implied by `core:integrations.manage`, otherwise held by default only through `core:admin`),
 `core:tasks.view` (`ClassView`), `core:tasks.manage`, `core:metrics.read` (`ClassView`),
+`core:library.manage` and `core:library.browse` (declared by 05-library §5L.3; held by default only through
+`core:admin`; see §14 item 7),
 `books:reading` (own progress/state: the reading-state and position routes among the 36),
 `books:admin.view` (`ClassView`; read-only admin introspection), `books:admin.debug`
 (`AuthRequired`, `Sensitive`). `books:view` is `ClassView`.
@@ -775,14 +778,18 @@ Data movement follows cross-cutting resolution 5 of the round-1 dispositions and
   holds `users.manage`. The fix is in the rollback target, not the mirror: the **identity Teach
   build** (05-authn §11.1), below which no build can open the store after S4, bounds `users.manage`
   by dominance and `CanAssign` and `settings.manage`'s protected fields by legacy-admin equivalence
-  in its legacy handlers, so a rollback cannot turn a bounded custom role into admin power.
-  `TestTeachBuild_UsersManageDominance` / `TestTeachBuild_SettingsManageProtectedFields` (05-authn
-  §10) drive the real legacy handlers against a mirrored store.
+  in its legacy handlers, so a rollback cannot turn a bounded custom role into admin power. The same
+  build bounds the legacy write path of integration URLs and secrets (the `settings.manage` config
+  update; legacy `integrations.manage` routes write neither) by the native 05-metadata M1.3 rule:
+  secrets cleared on a host change, private targets admin-only (05-authn §11.1 item 3; §14 item 6).
+  `TestTeachBuild_UsersManageDominance` / `TestTeachBuild_SettingsManageProtectedFields` /
+  `TestTeachBuild_IntegrationURLBound` (05-authn §10) drive the real legacy handlers against a
+  mirrored store.
 - **Native-only data** (canonical scopes with no exact legacy form, a seed role's
   `Added`/`Removed`/`PendingSeed`, `Origin=custom`, tombstones) lives in core **side records**
   keyed by the legacy ID (`c/rbac/side/role/<id>`, `c/auth/side/apikey/<id>`) and is merged in at
   rebuild. A side record whose legacy row was deleted, or revoked/disabled by the previous build, is
-  dropped — **except** a row the mirror itself wrote disabled (`SideRecord.MirrorDisabled`) that is
+  dropped — **except** a row the mirror itself wrote restricted (`SideRecord.Restriction == RestrictionDisabled`) that is
   still `Fresh` (05-storage §5S.3.11): that is a native-only key and stays active natively, so a narrow
   native API key survives every boot of the new build; once the previous build rewrites the row,
   legacy wins and the side record is dropped.
@@ -794,8 +801,8 @@ Data movement follows cross-cutting resolution 5 of the round-1 dispositions and
 - **API keys never widen on rollback (SEC-1).** In the legacy binary an empty scope list means
   "every permission of the owner's roles" (`middleware/auth.go:405-408`). A native key is mirrored
   with legacy atoms **only when the atoms re-expand to exactly its canonical scopes**; otherwise the
-  legacy row is written **disabled** (`LegacyProjection{Disabled: true, Reason: "no exact legacy scope
-  set"}`, recorded as `SideRecord.MirrorDisabled`, 05-storage §5S.3.11) and the canonical scopes live
+  legacy row is written **disabled** (`LegacyProjection{Restrict: RestrictionDisabled, Reason: "no exact legacy
+  scope set"}`, recorded as `SideRecord.Restriction`, 05-storage §5S.3.11) and the canonical scopes live
   in the side record, so the old build can never read the key as unscoped, while the new build keeps
   serving it natively. The exact legacy form of that disabled row (`status: "revoked"`, `revoked_at`,
   `mirror_reason`, sentinel scope `mirror.disabled`), the Teach build's refusal to change its status,
@@ -841,7 +848,7 @@ is normative; other files use these names.
 | `core.oidc_provider.*` | sync (in batch) | `create`, `update`, `delete` (issuer, `link_existing_by_email`) |
 | `core.integration.*` | sync (in batch) | `create`, `update`, `change_url` (secrets cleared, SEC-15), `write_secret`, `delete`, `test` |
 | `core.secret.*` | sync | `rotate` |
-| `core.backup.*`, `core.restore.*`, `core.system.*`, `core.update.*`, `core.diagnostics.*` | sync | `backup.create`, `backup.download`, `backup.import`, `restore.stage`, `restore.apply`, `restore.revoke` (05-authn §4.14 counts), `system.factory_reset`, `update.apply`, `diagnostics.download` |
+| `core.backup.*`, `core.restore.*`, `core.system.*`, `core.update.*`, `core.diagnostics.*` | sync | `backup.create`, `backup.download`, `backup.import`, `restore.stage`, `restore.apply`, `restore.revoke` (05-authn §4.14 counts), `system.factory_reset`, `update.apply`, `update.rollback`, `diagnostics.download` |
 | `core.audit.*` | sync | `export`, `prune` |
 | `<module>.*` | module-defined, via `audit.Logger` | ABO: `books.user.merge`, `books.guest_token.mint`, `books.guest_token.revoke`, `books.admin_debug.edit`, `books.admin_debug.undo` |
 
@@ -872,11 +879,12 @@ the journal re-apply, and before listeners open; boot fails if either fails.
   (`TestRestore_DemotedAdminStaysDemoted`).
 - **audit's hook** opens `rc.Previous("core/audit")` — the read-only view of the pre-swap store
   limited to `c/audit/`. The boundary is clock-free (DATA2-7): the archive's manifest records the
-  audit `Sequence` high-water mark **before** its checkpoint, and every pre-swap record with a higher
-  `seq` is copied. **Before copying** (SEC2-12, DATA2-16) the hook raises the restored store's audit
-  `Sequence` to at least the highest copied `seq` (a durable refill to `max(hw, H_previous)` in the
-  same batch as the copies), then copies records and their index rows with their keys unchanged, so
-  the next allocation can never overwrite a copied record; a record already present with the same
+  audit `Sequence` high-water mark **before** its checkpoint (`rc.AuditHighWater`), and every pre-swap
+  record with a higher `seq` is copied. **Before copying** (SEC2-12, DATA2-16) the hook calls
+  `Sequence.AdvancePast(ctx, H)` on the restored store's audit sequence, `H` being the highest `seq` it
+  will copy (05-storage §5S.3.2): its **own** Sync commit of `hw = max(hw, H+1)`, made before the
+  copy batch, so a crash between the two can only skip IDs. It then copies records and their index
+  rows with their keys unchanged, so the next allocation can never overwrite a copied record; a record already present with the same
   `seq` (allocated between the high-water read and the checkpoint) is identical and rewritten
   idempotently. It then appends the staged and applied records of `rc.Journal`, the
   `core.restore.revoke` record with the counts auth's hook returned (05-authn §4.14), and
@@ -914,7 +922,7 @@ covered by backups. There is no `Verify`, no anchor key and no verify route.
 
 Delete when older than `core.audit.retention.max_age` (default 365 d) **or** beyond
 `core.audit.retention.max_records` (default 1,000,000), whichever trims more; task
-`core.audit.prune` (on `tasks.ScheduleFromConfig("core.audit.prune_schedule")`, default daily, §5),
+`core.audit.prune` (on `tasks.ScheduleFromConfig("core.audit.schedules.prune")`, default daily, §5),
 `tasks.Parallelism` sequential with reason "single
 ordered range delete on one keyspace". Pruning writes `core.audit.prune{from_seq,to_seq,count}` as
 a record.
@@ -924,7 +932,7 @@ a record.
 `GET /api/core/v1/audit?since=&until=&actor=&action=&outcome=&target=&cursor=&limit=`
 (`core:audit.view`; one of the opt-in cursor routes of 05-http-api §4.4, cursor over `seq`
 descending), `GET /api/core/v1/audit/export` (NDJSON stream, `core:audit.view`, `RateExpensive`,
-audited `core.audit.exported`). Records whose action is `core.auth.*` or `core.user.*` about
+audited `core.audit.export`). Records whose action is `core.auth.*` or `core.user.*` about
 **another** user are visible only to `core:users.manage` holders as well (today's activity-log rule,
 `internal/activity/user_data.go:78-90`).
 
@@ -985,7 +993,7 @@ interactive method, SEC-6).
 | `core.rbac.cache_size` | int | 4096 | no | none |
 | `core.audit.retention.max_age` | duration | 8760h | yes | admin |
 | `core.audit.retention.max_records` | int | 1000000 | yes | admin |
-| `core.audit.prune_schedule` | `tasks.ScheduleConfig` | `{enabled: true, every: 24h}` | yes (re-read every poll) | none |
+| `core.audit.schedules.prune` | `tasks.ScheduleConfig` | `{enabled: true, every: 24h}` | yes (re-read every poll) | none |
 | `core.audit.async_buffer` | int | 4096 | no | none |
 | `core.audit.coalesce_window` | duration | 1m | yes | none |
 | `core.audit.details_max_bytes` | int | 4096 | yes | none |
@@ -1088,12 +1096,22 @@ option governed by the compat ledger (§6.3, SIMP-7).
    `rbac.PermissionSpec` (with `DefaultGrants`, `Warn`) and `RoleName` from this file; there is no
    `rbac.Scope`, `rbac.PermissionDef`, `rbac.Grant` or `Dangerous` field. Core seed role IDs are
    `admin`/`editor`/`viewer` (not `core.viewer`).
-6. **`integrations.manage` on rollback (surfaced, not decided here).** SEC2-2's reviewer also named
-   `integrations.manage`, whose legacy form keeps stored secrets across an integration URL change
-   (the SEC-15 defect HEAD still has). Resolution R2-1 bounds only `users.manage` and
-   `settings.manage` in the Teach build, so a native custom role holding the integrations scopes gets
-   HEAD's weaker semantics during a rollback. Owner decision: accept, or add "clear secrets on URL
-   change" to the Teach build (05-authn §11.1).
+6. **Resolved (lead decision, round-2 integration pass): `integrations.manage` on rollback.**
+   SEC2-2's reviewer also named `integrations.manage`, whose legacy form keeps stored secrets across
+   an integration URL change (the SEC-15 defect HEAD still has). The R2-1 Teach-build bound is
+   extended to the legacy scope that path runs under on rollback: `core:integrations.manage`
+   reverse-maps to `integrations.manage` (§6.1), whose legacy routes write no URL or secret, and the
+   legacy URL and secret writes go through the `settings.manage` config update, so the identity Teach
+   build applies 05-metadata M1.3's native rule there (secrets cleared on a scheme, host or port
+   change unless re-supplied; loopback, private or CGNAT targets need legacy-admin-equivalent atoms
+   and an interactive session). Rollback is never weaker than the native bound (05-authn §11.1
+   item 3, `TestTeachBuild_IntegrationURLBound`).
+7. **`core:library.browse` reach (found in the round-2 integration pass; owner decision before S7).** HEAD
+   gates the directory picker `GET /api/v1/filesystem/browse` with `settings.manage`
+   (`internal/server/wire_library_routes.go:61`); its successor needs `core:library.browse` (05-library
+   §5L.3), which the §6.1 expansion of `settings.manage` does not contain, so `TestLegacyRoleReachUnchanged`
+   cannot hold for that route once it moves. Either add `core:library.browse` to the expansion (the reverse
+   rule then needs all five) or keep the route on the legacy mount under its legacy gate until C9.
 
 ## Objections to 03
 
@@ -1174,3 +1192,9 @@ Round 2 (2026-11-04), findings applied to this file:
 - COR2-19 — present-tense `<ns>.<noun>.<verb>` audit actions; normative table; grammar test (§3.5, §7.1, §7.5, §12).
 - SIMP2-1 — `core.audit.prune_schedule` (`tasks.ScheduleConfig`) replaces `prune_interval` (§5, §7.5, §10).
 - SIMP2-6 — facade confinement test marked deferred-build (§12).
+
+Integration pass (round 2, 2026-11-04):
+
+- integration pass (round 2): Open item 6 resolved by the lead decision (Teach-build integration-URL bound, 05-authn §11.1 item 3); §6.3 references it; open item 7 added (`core:library.browse` reach, `wire_library_routes.go:61`); `core:library.*` listed among new permissions.
+- integration pass (round 2): §7.1: `update.rollback` added; audit hook uses `Sequence.AdvancePast` as its own commit; action names `core.role.update_seed`/`accept_seed`, `core.audit.export` aligned with the table.
+- integration pass (round 2): `Deps.Revocations` Append(ctx, b, r); `Deps.MirrorView`; `Restriction` terms; schedule key `core.audit.schedules.prune`.

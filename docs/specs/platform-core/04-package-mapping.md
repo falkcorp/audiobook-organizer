@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/04-package-mapping.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: a52b0af6-8e36-41c8-a78d-94859f6cac27 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -680,7 +680,7 @@ store in a start hook; `Deps.Storage` is not offered; 06 §6.5.1). Deferred-buil
 | S2b | `storage`, `internal/pebble`, `compat` (counters and ledger; the store guard is `storage`'s); `examples/hello` + its keyspace and one migration | S2 | `Deps.Storage` offered from here |
 | UI-0 | `internal/openapi`; npm `@mediacore/api-client` (runtime and generator) **only**; `@mediacore/ui-kit` and `@mediacore/shell` are created at S9 (07 §7.19 step 2, FE2-4) | S2 (lands after S2 and before S4, in either order with S2b and S3) | generated client from `core.json`, which `hello` emits from S2 and every stage that adds core routes regenerates in the same PR |
 | S3 | `secrets` (keyring), `config` persistence (`c/config/`), `internal/keyedmutex` (a core-internal copy of ABO's `internal/keyedmutex` for `config`, `download` and `library`; ABO keeps its own, COR2-16) | S2b | — |
-| S4 | the rest of `rbac`, `auth` (+`internal/authstore`; the revocation-journal types `RevocationJournal`, `Revocation`, `RestoreHook` are declared in `auth`, and `backup` imports them at S8, COR2-9), `audit`, `events` (the bus; `auth`/`rbac` publish on it, COR2-9), `internal/authhttp` and the other `internal/<capability>http` packages S4 needs; `examples/hello` + its permission | S3, UI-0 | `events` without `outbox` (S6) |
+| S4 | the rest of `rbac`, `auth` (+`internal/authstore`; the revocation-journal types `RevocationJournal`, `Revocation`, `RestoreHook` live in core `backup/journal` (L4, lands at S4; `auth`, `rbac` and later `backup` import it — declaring them in `auth` would make `rbac` → `auth` → `rbac` a cycle), COR2-9), `audit`, `events` (the bus; `auth`/`rbac` publish on it, COR2-9), `internal/authhttp` and the other `internal/<capability>http` packages S4 needs; `examples/hello` + its permission | S3, UI-0 | `events` without `outbox` (S6) |
 | S5 | `tasks` (+`internal/executor`, `internal/scheduler`, `tasks/taskstest`, `archtest/tasklint`; run fencing from `opswriter/fence.go`), `internal/taskhttp`; `examples/hello` + `hello.count` (its `RunItems` task) — the first stage at which every import of 06 §6.12 exists, so G6/G7 (`TestSecondModuleNoAudiobookEdit`) are proven from S5 (COR2-9) | S4 (`tasks.Definition` carries an `rbac.Permission`, `pkg/ops/definition.go:93`) | — |
 | S6 | `outbox`, `realtime` (+`internal/sse`) | S5 | no `notify` yet (webhooks move at S7, SIMP2-4) |
 | S7 | `integrations` root (instance store), `integrations/providerhttp`, `integrations/ai` (+`openai`), `integrations/metadata`, `integrations/download` + `download/deluge`, `integrations/notify` + `notify/mail` + `notify/webhook`, `storage/index` + `internal/bleveindex`; the rest of `library` | S6 | — |
@@ -1291,3 +1291,4 @@ Round 2 (dispositions in `docs/plans/platform-core/reviews/spec-round-2-disposit
 - FE2-4 — `@mediacore/ui-kit` and `@mediacore/shell` created at S9 with shell adoption; UI-0 creates only `@mediacore/api-client` (same stage as 07 §7.19 steps 2 and 4).
 - SIMP2-4 — `notify` + `notify/webhook` land at S7.
 - DATA2-12, DATA2-29, SIMP2-9 — verified, no change: 04's v1 ops-store statement, census mechanism to `storage`, conformance engine stays in ABO.
+- integration pass (round 2, lead): journal types placed in `backup/journal` to avoid an rbac↔auth cycle.

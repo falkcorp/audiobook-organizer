@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -478,7 +478,7 @@ None open. Both earlier items are resolved by 03 v1.3.0: §3.3's `log` row names
 ## Review history
 
 - SIMP-3 — §11: stage 3 became an optional ratchet; ABO logger survives as a books-module shim; L1 updated.
-- SIMP-6 — §5, §8: journal prune scheduled by `tasks.ScheduleFromConfig("core.log.journal.prune_every")`; no bespoke timer (key renamed in round 2, below).
+- SIMP-6 — §5, §8: journal prune scheduled by `tasks.ScheduleFromConfig` over `core.log.journal.prune_every`; no bespoke timer (key renamed in round 2, below).
 - SEC-21 — L4, §3 `DefaultPathRules` (invite rule moved into core, covers `/api/core/v1/auth/invites/*`), `URLKeys`, temp-login `token` query; journal and tail need `core:system.manage`; tests.
 - SEC-22 — L4, §3 `Logging.Redactor()`, `Redactor.URL/String` exposed for span-attribute redaction in 05-metrics.
 - SEC-8 (journal side, with SEC-21) — §5: query route and realtime topic moved from `core:system.view` to `core:system.manage`.
@@ -495,3 +495,7 @@ Round 2:
 - SEC2-21 — §5: auth-off unreachability of the journal recorded as a deliberate tightening (09 §9.2.6 exception).
 - SEC2-6 — §3 `DefaultPathRules` comment and `TestRedact_CoreInvitePath` cover the legacy shell link `/invite/{token}`.
 - Header — 03 v1.4.0. Also corrected the `log_retention_days` alias: ABO's `0` means default 90 (`config.go:1479-1488`), so it needs a `Convert` (§8, §11).
+
+Integration pass (round 2, 2026-11-04):
+
+- integration pass (round 2): Round-1 history line no longer writes a non-conforming `ScheduleFromConfig("…")` literal (05-tasks doc-lint).

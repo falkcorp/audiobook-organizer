@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -587,7 +587,9 @@ type Approval struct {
 | approve / decide (`awaiting_decision`) | `Perms.Approve` (decide on a run interrupted under ResumeAsk: `Perms.Approve` if set, else `Perms.Start`) **and** a verified method, the same rule as 05-rbac §4.10 (SEC-24): an interactive session, a sign-in through an app-level authenticator extension whose `MethodSpec.Interactive` is true (only `app.Options.Authenticators` may set it, 06 §6.4.5, SEC2-16; ABO's Cloudflare Access is one; a module's compat `Registrar.AuthMethod` never is), or an API key whose scopes **name** the required scope explicitly (not via `core:admin` or another implying scope). Refused: a legacy full-scope key (`LegacyFullScope`), a delegated session (`MethodSessionDelegated`), and a forwarded header, which is never identity (current rule, `opsv3/runs.go:395-410`) | closed |
 | pause/resume executor, edit schedules | `core:tasks.manage` | closed |
 
-Every approve, decide, cancel-by-other and schedule edit writes an `audit` record ([05-rbac](05-rbac.md)).
+Every approve, decide, cancel-by-other and schedule edit writes an `audit` record, named per [05-rbac](05-rbac.md)
+§7.1: `core.task.approve` / `core.task.reject` (approve and decide), `core.task.cancel` (cancel by another
+actor); a schedule edit is a write of its config key and is recorded as `core.settings.update`.
 
 **Mode / dry-run contract** (moves `internal/operations/opmode` into the core start path):
 
@@ -964,7 +966,7 @@ The boot phases are defined once, in [06-app-sdk](06-app-sdk.md) §6.5.1 (R2-8),
 start and stop order once, in 06 §6.5.2 (COR-8); this section only says what `tasks` does at its
 phases and steps. Nothing in `tasks` writes before 06's pre-migration checkpoint.
 
-0. **Post-DAG reconcile** (06 §6.5.1 P4, after the checkpoint and the migration DAG; step (d) of
+0. **Post-DAG reconcile** (06 §6.5.1 P4d step 4, after the checkpoint and the migration DAG; step (d) of
    [05-storage](05-storage.md) §5S.4's ordered post-DAG reconcilers, DATA2-24): the kernel runs
    `core/internal/executor/legacy.Reconcile` with the `c/tasks/` handle storage issues for it — adopt
    legacy non-terminal runs lacking `migrated_to` (per-run copy-and-mark, 5T.6) and adopt legacy clocks
@@ -1100,16 +1102,17 @@ re-runs a prerequisite or a scheduled kind, which is idempotent by contract.
 **Compat level and contract (OPS-7).** The first boot that adopts makes `c/tasks/` the truth, and it
 records that in the **adopt-step-applied record** of its adopt step `core/tasks#1`
 (`c/storage/ks/core/tasks/applied/1`: bookkeeping keyed by owner `core/tasks`, one spelling with
-`core/auth#1`, [05-storage](05-storage.md) §5S.3.5; DATA2-29); the adopt step is `Additive` and raises
-no level. It declares `After: books#66`, because books legacy steps 62, 65 and 66 write the ops
+`core/auth#1`, [05-storage](05-storage.md) §5S.3.5; DATA2-29); the adopt step is `Additive` and stamps the sequence's
+**Teach floor** as its `Migration.Floor`: `Floor` 4, the level of the tasks Teach build S4 r3 (09 §9.2.2), so
+once it ran no build older than S4 r3 opens the store; it raises nothing beyond that floor. It declares `After: books#66`, because books legacy steps 62, 65 and 66 write the ops
 families this step claims (`internal/database/migrations.go:479-506,1238-1250,1340-1352,1412-1424`);
 those steps run in the legacy-migration phase before core claims are enforced (R2-4, DATA2-2), so a
 store that skipped releases is brought to books 66 first. The stamped level of the single
 compat/format guard (§5S.3.7, SIMP-18) is raised only by a `Breaking` step: here the contract C5
-([09](09-abo-on-core.md); it raises `core` to 4), which lists the adopt step and `core.tasks.req-migrate`
+([09](09-abo-on-core.md); it raises `core` to 5), which lists the adopt step and `core.tasks.req-migrate`
 in `Adopts`, so it runs only on a store whose applied records prove both ran (cross-cutting
 resolution 6). **C5 is self-sufficient (DATA2-13):** in its one `BootBlocking` step, **before** it
-raises `core` to 4, it runs the per-run copy-and-mark one last time over every legacy non-terminal run
+raises `core` to 5, it runs the per-run copy-and-mark one last time over every legacy non-terminal run
 lacking `migrated_to` (over-cap runs dropped with the existing notice), adopts newer legacy clocks and
 the pause marker once more, and deletes the legacy `Requires` stamps; only then does it raise the level
 and stop the reconcile and the mirrors. The store-side precondition is therefore C5's own final
@@ -1155,7 +1158,7 @@ so they can be finished or canceled on the previous release first.
 | `internal/scheduler` (interval/daily/cron/window/full sweep/v3 loop) | `core/internal/scheduler`; the 38 `TaskDefinition` bodies → `Schedule` declarations in `books` |
 | `internal/repairs` (Fixer framework) | `tasks.Fixer`; the 24 fixers → `books` Fixer defs |
 | `internal/maintenance` (`MaintenanceJob`, registry) | deleted after T2; jobs → `books` Task defs |
-| `internal/opscatalog`, `pkg/plugin/sdk`, `addOpRegistrar`, `serviceregistry` op wiring | `module.Registrar.Task` |
+| `internal/opscatalog`, `pkg/plugin/sdk`, `addOpRegistrar`, `serviceregistry` op wiring | `module.Registrar.Tasks` |
 | `internal/opsmetrics` | executor metrics (5T.10) |
 | `internal/lifecycle` | `core/lifecycle` (03 §3.3, L0) |
 | `internal/server/handlers/opsv3`, v1 operations handlers | `core/internal/tasksapi` |
@@ -1171,7 +1174,7 @@ check that no stored row strands. The last column is this file's input to 09's b
 
 | Batch | Content | Count | Gate to finish | Behaviour change / rollback |
 |---|---|---|---|---|
-| T0 + T1 (one release) | `core/tasks` + executor + scheduler land; ABO adapter `internal/opsbridge` wraps every v2 `OperationDef` as a core Task (`Run(ctx, params, Reporter)` called with a `Reporter` implemented over `RC`; legacy `registry.RunItems` re-implemented over `tasks.RunItems` with `Fixed(n, "legacy Concurrency")` from its non-zero `Concurrency`, or `Sequential("legacy zero Concurrency")`); `/api/v3/ops` aliases; `core.tasks.adopt-active` + boot reconcile + clock, pause and stamp mirrors + `core.tasks.req-migrate` (copy only) + `legacyhist` + the legacy `registry.EventHub` bridge (5T.4 step 3). The core executor writes only `c/tasks/`, so it cannot ship before adoption | all 233 defs run on core | op-ID ledger green; resume/cancel/shutdown suites green on core; G5 rollback test (5T.9) | yes: executor swap (CPU budget, cancellation fix) and new run store; records the adopt-step-applied record and declares reader level 4 (09 §9.2.2); raises **no** store level (C5 raises `core` to 4; SIMP2-14, OPS2-22, DATA2-29); rollback = binary swap under the G5 rules of 5T.6 |
+| T0 + T1 (one release) | `core/tasks` + executor + scheduler land; ABO adapter `internal/opsbridge` wraps every v2 `OperationDef` as a core Task (`Run(ctx, params, Reporter)` called with a `Reporter` implemented over `RC`; legacy `registry.RunItems` re-implemented over `tasks.RunItems` with `Fixed(n, "legacy Concurrency")` from its non-zero `Concurrency`, or `Sequential("legacy zero Concurrency")`); `/api/v3/ops` aliases; `core.tasks.adopt-active` + boot reconcile + clock, pause and stamp mirrors + `core.tasks.req-migrate` (copy only) + `legacyhist` + the legacy `registry.EventHub` bridge (5T.4 step 3). The core executor writes only `c/tasks/`, so it cannot ship before adoption | all 233 defs run on core | op-ID ledger green; resume/cancel/shutdown suites green on core; G5 rollback test (5T.9) | yes: executor swap (CPU budget, cancellation fix) and new run store; records the adopt-step-applied record and declares reader level 5 (09 §9.2.2); its adopt step stamps only the Teach floor `Floor` 4 (the S4 r3 build) and raises no store level beyond it (C5 raises `core` to 5; SIMP2-14, OPS2-22, DATA2-29); rollback = binary swap under the G5 rules of 5T.6 |
 | T2 | 34 `MaintenanceJob`s → native `books.maintenance.*` Tasks (mechanical: `Run(ctx, JobStore, ProgressReporter, dryRun)` `internal/maintenance/job.go:498` → `TaskSpec.Run(rc, p)`; `Policy()` → `Common`); their `opstate:` writers move to `rc.Checkpoint` and their `op_result:`/`opsummary:` writers to the run's result (`TestLegacyOpsWriters` ratchet) | 34 | `internal/maintenance` deleted | no, when kind, params and effects are unchanged (binary swap); an `opstate:` → checkpoint move resumes from zero once after a rollback (documented per job) |
 | T3 | 24 repairs fixers → `tasks.Fixer`; `repairs.plan/apply` removed | 24 (+2 defs) | Fixer conformance suite | no (binary swap) |
 | T4 | Generic ops → `core.*` (activity-log cleanup/compaction family, backups prune, db optimize/census, temp/trash/reports cleanup, throttle reset, tombstone cleanup, retention-and-hygiene, metrics TTL sweep): the `generic` class rows of `raw/06` §6, each re-checked in [04-package-mapping](04-package-mapping.md) (some, e.g. `opchange-book-index-rebuild`, are book-bound despite the class) | ≤ 24 | owner per kind recorded in 04 | no; kind renames ride `FormerKinds` (binary swap) |
@@ -1220,7 +1223,7 @@ parallel PRs never touch the same file (CLAUDE.md "Parallel Subagent Coordinatio
 | `TestAdoptActive_CopyAndMark_PreviousBinaryDoesNotResume` (fixture DB from HEAD; run the old reader over the migrated DB) | G5 |
 | `TestAdoptActive_PerRunBatch_OverCapDroppedNotFatal`, `TestAdoptActive_PagesReadThrough` | DATA-27 |
 | `TestReconcile_RollbackRunsAdoptedOnRollForward`, `TestClockMirror_RollbackNoStampedeNoDoubleFire` (new → old → new over one fixture DB), `TestReconcile_RunsAtPostDAGStepAfterCheckpoint` | DATA-6, OPS-7, DATA2-24 |
-| `TestContractC5_FinalReconcileBeforeLevelRaise` (rollback-era run enqueued, then the C5 build: run adopted, level 4 stamped after) | DATA2-13 |
+| `TestContractC5_FinalReconcileBeforeLevelRaise` (rollback-era run enqueued, then the C5 build: run adopted, level 5 stamped after) | DATA2-13 |
 | `TestTasksAdopt_AfterBooks66` (store at books v63; legacy steps 59–66 run before `core/tasks#1`), `TestUpgradeFloor_RefusedBelowBooks66` (T8+ build) | DATA2-2 |
 | `TestReqStamps_ReadThroughThenCopy`, `TestReqStamps_MirroredToLegacy_HonouredOnPrev` (a stamp written on cur is honoured on prev; R-test row), `TestReqStamps_LegacyDeletedOnlyByC5` | `Requires` stamps, OPS2-9 |
 | `TestLegacyHistory_ReadInPlaceUndecodableHidden` | history |
@@ -1387,10 +1390,15 @@ Round 2:
 - FE2-18 — route table states that tasks has no `events` route.
 - OPS2-2 — C5 subject to `RequiresSelfServed` (no contract on an auto-applied first boot).
 - OPS2-9 — `req-migrate` copies only; new stamps mirrored to legacy keys; legacy delete and fallback removal move to C5.
-- OPS2-22 / SIMP2-14 — T0+T1 row: adopt-step record, declares reader level 4, raises no store level.
+- OPS2-22 / SIMP2-14 — T0+T1 row: adopt-step record, declares reader level 5 (4 before the integration-pass renumbering), adopt step stamps only `Floor` 4.
 - SEC2-8 — Protection column in 5T.10.
 - SEC2-15 — module system actor: own kinds plus `Manifest.TaskStarts`, never `core:admin`/`AuthRequired`.
 - SEC2-16 — approval's verified method names app-level authenticator extensions only.
 - SIMP2-8 — the task-start route copies `Idempotency-Key`; replay returns the existing `RunView`.
 - SIMP2-12 — `core.tasks.legacy_history_window` removed.
 - SIMP2-15 — verified: 05-tasks already owns `parallelism_cap` (09's spelling is 09's fix).
+
+Integration pass (round 2, 2026-11-04):
+
+- integration pass (round 2): §5T.6 and T0+T1 row: `core/tasks#1` stamps `Floor` 4 (Teach build S4 r3); S5 declares reader level 5; C5 raises `core` to 5; test row updated (09 v1.2.0 renumbering).
+- integration pass (round 2): Audit names per 05-rbac §7.1; reconcile cites 06 P4d step 4; `module.Registrar.Tasks`.

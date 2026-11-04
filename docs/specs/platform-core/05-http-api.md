@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-http-api.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: fcd387ab-7a8e-49e2-a4b4-a6901aaee1e3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -243,8 +243,8 @@ type LegacyPath struct {
 // Only a contract PR replaces an Alias with Gone (§4.6).
 func Gone(g *Group, rt Route, successor string)
 
-// Sugar used by 06-app-sdk's examples and module.Registrar.Route: a deferred
-// registration built from method helpers. Exactly equivalent to Handle.
+// Sugar over module.Registrar.HTTP()'s *Group (06): a deferred registration
+// built from method helpers. Exactly equivalent to Handle.
 type Registration interface{ apply(g *Group) }
 type RouteOption func(*Route)
 
@@ -1111,10 +1111,10 @@ route table.
 
 1. Whether `encoding/json/v2` replaces `encoding/json` in `Handle` (only once it is non-experimental in the pinned toolchain; 13-toolchain).
 2. Whether `/metrics` moves under `/api/core/v1/metrics` or stays at `/metrics` (05-metrics decides; either way it carries `core:metrics.read`, 05-rbac §6).
-3. Coordination with 06-app-sdk: its `Registrar.Route(routes ...httpapi.Route)` and
-   `httpapi.Get[Q,R](path, perm, h, opts...)` correspond to `Register(g, Get(...))` above, its
-   `Registrar.LegacyHandler(prefix, policy, h)` to `Router.MountLegacy` (§8.2), and its hello
-   example uses `httpapi.Invalid(httpapi.Field(...))`; this file owns the final signatures (06 O2, COR-16).
+3. **Resolved** (coordination with 06-app-sdk, 06 O2, COR-16): 06 registers routes through
+   `Registrar.HTTP() *httpapi.Group` with `httpapi.Handle` (or `Register(g, Get(...))` above) and legacy
+   routers through `Registrar.MountLegacy(httpapi.LegacyMount)` (§8.2); there is no `Registrar.Route` or
+   `Registrar.LegacyHandler`. This file owns the final signatures.
 4. HTTP/3 `Alt-Svc`: becomes a listener option that sets the header in stage 5, fixing the
    registration-order miss noted in `raw/09` §2.2(c) — to be confirmed by a test once implemented.
 5. A per-principal rate limiter (deferred, SIMP-8): add only if `mediacore_http_rate_limited_total`
@@ -1204,3 +1204,7 @@ Round 2 (2026-11-04), findings applied to this file:
 - SEC2-20 — stage 7/13 refusals go to the access log (`security_event`) until audit exists at S4 (§3.5, §4.2, §6, §8.1).
 - SEC2-22 — legacy wrapper passes `r.Pattern` to gin and refuses a mismatched gin match (§4.8, §8.2, §8.3, §12).
 - SEC2-6 — legacy invite path redaction named as a 05-logging `DefaultPathRules` entry (§4.2).
+
+Integration pass (round 2, 2026-11-04):
+
+- integration pass (round 2): Open item 3 resolved: 06 uses `Registrar.HTTP()` and `MountLegacy`; no `Registrar.Route`/`LegacyHandler`.

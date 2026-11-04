@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/14-risks-open-questions.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: e270beb6-8eea-48b1-8397-4ef4ec709956 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -96,13 +96,14 @@ every alias kind; removal only by a contract PR, never by a clock; 02 §2.5).
 ## 14.5 Remaining open items by file
 
 These are design details each section resolves in review; none blocks the plan. Each file's "Open
-items" section is authoritative. Census re-taken during the round-2 revision (2026-11-04) from the
-working tree, with the round-1 method: an item is a numbered list entry or an ID'd table row
-(`O1`, `1`, …) under a heading containing "Open items"; entries the file itself marks "(Closed …)" are
-counted separately. Files without an "Open items" section (01, 02, 03, 11, 13, 15, README) are not
-listed. Files still being revised in round 2 when it was taken may move by a row; the round-2
-integration pass re-counts. **117** items remain open across 26 files (round 1: 118; 05-http-api
-closed its item 6, the `@mediacore/api-client` stage, now 09 UI-0).
+items" section is authoritative. Census re-taken in the round-2 integration pass (2026-11-04), once every
+file had settled, from the working tree with the round-1 method: an item is a numbered list entry or an
+ID'd table row (`O1`, `1`, …) under a heading containing "Open items"; entries the file itself marks closed
+or resolved ("(Closed …)", "(closed by …)", "**Resolved**") are counted separately. Files without an "Open
+items" section (01, 02, 03, 11, 13, 15, README) and this file are not listed. **115** items remain open
+across 26 files (round-2 revision snapshot: 117. Changes since: 09 settled at 6 open rows with 4 marked
+closed (was 8 open); 05-http-api item 3 resolved (06 uses `Registrar.HTTP()` and `MountLegacy`); 05-rbac
+item 6 resolved by the lead decision and item 7 opened (`core:library.browse` reach)).
 
 | File | Open | Closed in place |
 |---|---|---|
@@ -114,22 +115,22 @@ closed its item 6, the `@mediacore/api-client` stage, now 09 UI-0).
 | [05-download](05-download.md) | 3 | 0 |
 | [05-events](05-events.md) | 2 | 3 |
 | [05-health](05-health.md) | 3 | 2 |
-| [05-http-api](05-http-api.md) | 5 | 0 |
+| [05-http-api](05-http-api.md) | 4 | 1 |
 | [05-indexer](05-indexer.md) | 3 | 0 |
 | [05-library](05-library.md) | 4 | 0 |
 | [05-logging](05-logging.md) | 2 | 0 |
 | [05-metadata](05-metadata.md) | 6 | 0 |
 | [05-metrics](05-metrics.md) | 3 | 0 |
 | [05-notify](05-notify.md) | 2 | 0 |
-| [05-rbac](05-rbac.md) | 5 | 0 |
+| [05-rbac](05-rbac.md) | 6 | 1 |
 | [05-realtime](05-realtime.md) | 2 | 0 |
 | [05-storage](05-storage.md) | 6 | 0 |
 | [05-tasks](05-tasks.md) | 8 | 0 |
-| [05-updater](05-updater.md) | 6 | 0 |
+| [05-updater](05-updater.md) | 6 | 1 |
 | [06-app-sdk](06-app-sdk.md) | 6 | 1 |
 | [07-ui-shell](07-ui-shell.md) | 4 | 0 |
 | [08-arr-facade](08-arr-facade.md) | 8 | 0 |
-| [09-abo-on-core](09-abo-on-core.md) | 8 | 0 |
+| [09-abo-on-core](09-abo-on-core.md) | 6 | 4 |
 | [10-tv-movies-proof](10-tv-movies-proof.md) | 5 | 0 |
 | [12-repo-split](12-repo-split.md) | 3 | 0 |
 
@@ -173,3 +174,7 @@ Round 2 (dispositions in `docs/plans/platform-core/reviews/spec-round-2-disposit
 - MOD2-8, MOD2-21 — Q-G: SC1/SC5, readiness report not merge gate, "before S0"; K11 "first core stage".
 - FE2-19 — K4: 122 files (52 source, 70 test).
 - §14.5 re-counted with the round-1 method (117 open items in 26 files).
+
+Integration pass (round 2, 2026-11-04):
+
+- integration pass (round 2): §14.5 re-counted after the integration pass: 115 open items in 26 files.

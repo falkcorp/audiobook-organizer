@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-storage.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 940ce8be-6f86-4450-b43a-77bf78827b12 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -841,7 +841,8 @@ higher level before any store is raised to it.
 **Rollback floor = the Teach build (R2-1).** The first build of every adopt/expand sequence is that
 sequence's **Teach build** (09 names it and its level): it ships the legacy-side guards a rollback
 target needs — it refuses status changes on revoked or mirror-disabled API keys, bounds
-`users.manage`/`settings.manage` by dominance in the legacy handlers, and journals every revocation and
+`users.manage`/`settings.manage` by dominance in the legacy handlers (including 05-metadata's native
+integration-URL rule on the legacy `settings.manage` write path, 05-authn §11.1 item 3), and journals every revocation and
 restore it performs to the out-of-DB revocation journal (05-backup §5B.3.6). Every adopt step declares
 that build's level as its `Floor`, so the store's level reaches it in the adopt step's own batch. From
 then on the guard refuses every older build (a guard-aware one by its supported vector, a pre-guard one
@@ -1421,15 +1422,15 @@ Step names for `core/config#1` and `core/log#1` are this table's; 05-config and 
 
 | # | Families / carve-outs | Families | Before | Hand-over (stage) | After | Contract → |
 |---|---|---|---|---|---|---|
-| 1 | `u:` + `idx:user:` | 1 | books RW | `core/auth#1` (S4) | `core/auth` Migrating, Serialized; mirror `auth.user` (§5S.3.11) | C4 → Retired |
-| 2 | `role:` + `idx:role:name:` | 1 | books RW | `core/rbac#1` (S4) | `core/rbac` Migrating, Serialized; mirror `rbac.role` | C4 → Retired |
-| 3 | `apikey:` + `idx:apikey:` | 1 | books RW | `core/auth#1` (S4) | `core/auth` Migrating, Serialized; mirror `auth.apikey`; never widen (SEC-1) | C4 → Retired |
-| 4a | `invite:` + `idx:invite:username:` | 1 | books RW | `core/auth#1` (S4) | `core/auth` AgingOut: legacy invites read in place by presented token, deleted on accept or expiry; not mirrored, they hold raw tokens (`internal/database/store.go:1004-1012`, DATA2-8) | C4 → Retired |
-| 4b | `inviteallow:` | 1 | books RW | `core/auth#1` (S4) | `core/auth` Migrating, Serialized; mirror `auth.inviteallow` | C4 → Retired |
-| 5 | `oauthid:` + `idx:oauth:` | 1 | books RW | `core/auth#1` (S4) | `core/auth` Migrating, Serialized; mirror `auth.oauth` | C4 → Retired |
-| 6 | `sess:` + `idx:sess:user:` | 1 | books RW | `core/auth#1` (S4) | `core/auth` AgingOut: not mirrored; legacy-token fallback, delete on upgrade-on-use or expiry (05-authn, SEC-19) | C4 → Retired |
-| 7 | exact keys `setting:config_blob` and every legacy secret row `setting:<legacy-name>` listed in 05-config §2.2 (today's encrypted rows `openai_api_key`, `google_books_api_key`, `hardcover_api_token`, `basic_auth_password`, plus the rows the mirror writes for the other secret fields); sub-prefix `setting:metadata_sources.` for the data-dependent `metadata_sources.<id>.credentials.<k>` rows (DATA2-23; no books key starts with it — books' own row is `setting:metadata_sources`, no dot, `internal/config/persistence.go:1414`) | — | books RW (inside row 16) | `core/config#1` (S3, 05-config phase X) | `core/config` (the kernel's `configstore`; it also stages into `c/secrets/`) RW, Serialized: import / re-import every boot and same-batch mirror (05-config §1.12.2, DATA-6, SEC-20) | C3 → Retired |
-| 8 | exact keys `setting:bootstrap_token_hash`, `setting:bootstrap_token_expires_at` | — | books RW (inside row 16) | `core/auth#1` (S4) | `core/auth` AgingOut: the native form is `c/auth/bootstrap`, regenerated at every start (05-authn §4.1); the legacy rows are deleted at the first start (DATA2-29) | C4 → Retired |
+| 1 | `u:` + `idx:user:` | 1 | books RW | `core/auth#1` (S4 r2) | `core/auth` Migrating, Serialized; mirror `auth.user` (§5S.3.11) | C4 → Retired |
+| 2 | `role:` + `idx:role:name:` | 1 | books RW | `core/rbac#1` (S4 r2) | `core/rbac` Migrating, Serialized; mirror `rbac.role` | C4 → Retired |
+| 3 | `apikey:` + `idx:apikey:` | 1 | books RW | `core/auth#1` (S4 r2) | `core/auth` Migrating, Serialized; mirror `auth.apikey`; never widen (SEC-1) | C4 → Retired |
+| 4a | `invite:` + `idx:invite:username:` | 1 | books RW | `core/auth#1` (S4 r2) | `core/auth` AgingOut: legacy invites read in place by presented token, deleted on accept or expiry; not mirrored, they hold raw tokens (`internal/database/store.go:1004-1012`, DATA2-8) | C4 → Retired |
+| 4b | `inviteallow:` | 1 | books RW | `core/auth#1` (S4 r2) | `core/auth` Migrating, Serialized; mirror `auth.inviteallow` | C4 → Retired |
+| 5 | `oauthid:` + `idx:oauth:` | 1 | books RW | `core/auth#1` (S4 r2) | `core/auth` Migrating, Serialized; mirror `auth.oauth` | C4 → Retired |
+| 6 | `sess:` + `idx:sess:user:` | 1 | books RW | `core/auth#1` (S4 r2) | `core/auth` AgingOut: not mirrored; legacy-token fallback, delete on upgrade-on-use or expiry (05-authn, SEC-19) | C4 → Retired |
+| 7 | exact keys `setting:config_blob` and every legacy secret row `setting:<legacy-name>` listed in 05-config §2.2 (today's encrypted rows `openai_api_key`, `google_books_api_key`, `hardcover_api_token`, `basic_auth_password`, plus the rows the mirror writes for the other secret fields); sub-prefix `setting:metadata_sources.` for the data-dependent `metadata_sources.<id>.credentials.<k>` rows (DATA2-23; no books key starts with it — books' own row is `setting:metadata_sources`, no dot, `internal/config/persistence.go:1414`) | — | books RW (inside row 16) | `core/config#1` (S3 r2, 05-config phase X) | `core/config` (the kernel's `configstore`; it also stages into `c/secrets/`) RW, Serialized: import / re-import every boot and same-batch mirror (05-config §1.12.2, DATA-6, SEC-20) | C3 → Retired |
+| 8 | exact keys `setting:bootstrap_token_hash`, `setting:bootstrap_token_expires_at` | — | books RW (inside row 16) | `core/auth#1` (S4 r2) | `core/auth` AgingOut: the native form is `c/auth/bootstrap`, regenerated at every start (05-authn §4.1); the legacy rows are deleted at the first start (DATA2-29) | C4 → Retired |
 | 9 | sub-prefix `setting:scheduled_task_last_tick.`; exact keys `setting:library_scan_full_last_run`, `setting:maintenance_window_last_run`, `setting:registry.operations_paused` | — | books RW (inside row 16) | `core/tasks#1` (S5) | `core/tasks` RW: clock and pause mirror (05-tasks §5T.6) | C5 → Retired |
 | 10 | exact keys `preference:storage_format`, `preference:storage_migration` | — | books RW (inside row 16) | — | books RW, written only through `LegacyGuardProjection.Stage` (§5S.3.7, DATA2-22) | — |
 | 11 | ops run families: `opv2:act:`, `opv2:op:`, `opv2:state:`, `opv3:run:`, `opv3:prog:`, `opv3:ckpt:`, `op:batch:`, `opv3:sched:` | 8 | books RW | `core/tasks#1` (S5) | `core/tasks` RW: per-run copy-and-mark, boot reconcile, clock mirror (05-tasks §5T.6, DATA-27, DATA-6) | C5 → AgingOut |
@@ -1480,8 +1481,9 @@ Production counts are unknown to this spec. The design does not depend on them: 
 | activity `act:*` | tiered, retention-pruned, includes the debug tier | **books family** | books' domain feed (05-logging) |
 | `syslog:` | retention-pruned (`log_retention_days`) | **read in place** by core log; aging out | append-only; retention already deletes it |
 
-**Mirror procedure** (09 schedules the stages; identity in S4, Teach build before it): the adopt step
-hands the claims over and stamps the Teach floor; every boot rebuilds (reconciler (a)); every write and
+**Mirror procedure** (09 schedules the stages; identity: Teach build S4 r1 at `core` level 3, dark adoption
+S4 r2, flip S4 r3 at level 4, contract C4 raising the store to 4): the adopt step hands the claims over and
+stamps the Teach floor (`Floor` 3 for identity); every boot rebuilds (reconciler (a)); every write and
 every restriction is staged legacy + native + side; the contract (≥ 09's window, `RaisesLevel`,
 `Adopts`, `RequiresSelfServed`) rebuilds once more and folds side records in its `folded` batch,
 deletes the legacy rows in chunks and leaves the claims `Retired`.
@@ -1748,3 +1750,7 @@ Round 2:
 - COR2-12 — participant APIs take `*storage.Batch`; `Batch` has a `noCopy` marker; `archtest.NoBatchByValue`.
 - COR2-15 — `DerivedIndex` is declarative; hooks are `DerivedHooks` via `Registrar.DerivedIndex`, run after `Register`, `Build` as a module kind.
 - COR2-19 — decision IDs renamed `D-S1`…`D-S12`.
+
+Integration pass (round 2, 2026-11-04):
+
+- integration pass (round 2): Claims table: identity adopt steps at S4 r2, config at S3 r2; mirror procedure names S4 r1/r2/r3 levels 3/4 and `Floor` 3 (09 v1.2.0); Teach-build guard list includes the integration-URL bound.

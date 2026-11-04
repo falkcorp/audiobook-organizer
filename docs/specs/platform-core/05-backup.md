@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-backup.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: 604febb0-a09e-4cf9-99ee-5f3722534da6 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -486,7 +486,8 @@ the server and which an operator adds to separate archive decryption from secret
    (`secrets_keyring_not_exported` is not raised for it), **or** at least one operator recipient is
    configured.
 3. The **legacy restore bound** is passed: an app with a pre-core history declares
-   `backup.LegacyRestoreBound{Owner, Level}` (books: owner `core`, level from 09); while the store's level
+   `backup.LegacyRestoreBound{Owner, Level}` (books: `{Owner: core, Level: 5}`, 09 §9.2.2; contract C8
+   raises the store to `core` 6, past the bound); while the store's level
    for that owner is ≤ the bound, some build that can still serve the store has only ABO's plaintext
    restore code, so encryption stays inactive. Apps without such history declare none. A **fresh**
    store is stamped at the build's supported level on its first boot (05-storage §5S.4 step 5,
@@ -502,8 +503,10 @@ archives are never created during a window in which a rollback target could not 
 derivation key ID it was made under (`Provenance.KeyID`); its MAC verifies, and its install-identity
 encryption decrypts, with that key through `DeriveKeyFor(KeyID, …)` while the key is `active` or
 `verify`. The scheduled `core.backup.verify` task rewraps (`Service.Rewrap`) every Own archive whose
-key is in `verify` state, so no retained archive depends on a key once 05-config retires it; an archive
-whose key is already retired verifies as foreign and is restorable only as a foreign restore.
+key is in `verify` state, so no retained archive depends on a key once 05-config retires it; 05-config
+also keeps a `verify` key past `retire_after` while a retained archive, undo point or unconsumed checkpoint
+still records it (`secrets.Options.DeriveKeyInUse`, bound by the kernel to a manifest scan of this
+directory). An archive whose key is already retired (an imported one, or a key retired before this rule) verifies as foreign and is restorable only as a foreign restore.
 
 **Host-loss restore** (documented procedure, also in the operator runbook): copy to the new host the
 backup directory (archives, companions, sidecars and the revocation journal) and the keyring export
@@ -619,10 +622,10 @@ exclusive with stage-restore, prune and rewrap):
 Progress uses the existing phase model (checkpoint / archive / checksum / verify) with counters from
 real work (`backup.go:51-82`) mapped onto `tasks` progress.
 
-Verification task `core.backup.verify` (`Schedule: tasks.ScheduleFromConfig("core.backup.verify_schedule")`)
+Verification task `core.backup.verify` (`Schedule: tasks.ScheduleFromConfig("core.backup.schedules.verify")`)
 re-verifies the newest `core.backup.verify_keep` archives at `VerifyEntries` and the newest at
 `VerifyOpen`, and rewraps every Own archive whose `Provenance.KeyID` is a derivation key in `verify`
-state (§5B.3.3, SEC2-24). Create runs on `tasks.ScheduleFromConfig("core.backup.schedule")`. Both keys
+state (§5B.3.3, SEC2-24). Create runs on `tasks.ScheduleFromConfig("core.backup.schedules.create")`. Both keys
 are declared in backup's own namespace with type `tasks.ScheduleConfig` (R2-7, COR2-6, SIMP2-1). No
 bespoke timer.
 
@@ -782,7 +785,7 @@ whether they are protected at all, is `ProtectAdmin`; one that can delete archiv
 |---|---|---|---|---|
 | `core.backup.enabled` | bool | true | yes | admin |
 | `core.backup.dir` | path | `backups` beside the DB (relative values resolve against the DB's parent, `backup.ResolveDir` semantics, `backup.go:120-146`; ABO: `backup_dir`) | yes (next run) | admin |
-| `core.backup.schedule` | `tasks.ScheduleConfig` | `{enabled: true, every: 24h}` (the durable clock's first-sight seed spreads installs, 05-tasks §5T.3.8) | yes | none |
+| `core.backup.schedules.create` | `tasks.ScheduleConfig` | `{enabled: true, every: 24h}` (the durable clock's first-sight seed spreads installs, 05-tasks §5T.3.8) | yes | none |
 | `core.backup.compression` | enum `zstd`/`gzip`/`none` | `zstd` (ABO keeps `gzip` until changed) | yes | none |
 | `core.backup.compression_level` | int | 0 = codec default | yes | none |
 | `core.backup.encryption` | enum `age`/`none` | `none` on an upgraded install, `age` on a fresh one (active only per §5B.3.3) | yes | admin |
@@ -790,7 +793,7 @@ whether they are protected at all, is `ProtectAdmin`; one that can delete archiv
 | `core.backup.include_derived` | bool | false | yes | admin |
 | `core.backup.include_recreatable` | bool | false | yes | admin |
 | `core.backup.verify_after_create` | bool | true | yes | interactive |
-| `core.backup.verify_schedule` | `tasks.ScheduleConfig` | `{enabled: true, every: 168h}` | yes | none |
+| `core.backup.schedules.verify` | `tasks.ScheduleConfig` | `{enabled: true, every: 168h}` | yes | none |
 | `core.backup.verify_keep` | int | 3 | yes | none |
 | `core.backup.retention.max_count` | int ≥ 1 | 10 | yes | interactive |
 | `core.backup.retention.max_total_bytes` | int64 | 40 GiB | yes | interactive |
@@ -960,3 +963,9 @@ Round 2:
 - COR2-19 — audit actions use 05-rbac §7.1's present-tense names (`core.backup.create`, `core.restore.stage`, `core.restore.apply`, …).
 - OPS2-3 — P−1 runs before P0a; an intent staged by the failing build is rejected by `.prev`; a started swap is always resumed or swapped back.
 - OPS2-26 — the operator `deploy` recipe refuses while a restore is staged (09 S1).
+
+Integration pass (round 2, 2026-11-04):
+
+- integration pass (round 2): B3: books' legacy restore bound is `{Owner: core, Level: 5}`; C8 raises the store to 6 (09 v1.2.0).
+- integration pass (round 2): Schedule keys `core.backup.schedules.create` / `core.backup.schedules.verify` (R2-7 form).
+- integration pass (round 2): Rewrap paragraph: 05-config keeps a `verify` derive key while a retained archive records it (`DeriveKeyInUse`).

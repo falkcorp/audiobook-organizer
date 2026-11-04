@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metrics.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: 5cdf765d-aec1-4ed7-981a-e2e698afde61 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -371,11 +371,8 @@ its 74 `audiobook_organizer_*` lines change only where §13 retires or moves a s
 
 ## Objections to 03
 
-1. **03 §3.6 Metric row (open, SIMP2-13).** 03 v1.4.0 says module series are `<MetricPrefix>_*` "while the app
-   hosts one module". That must read "while the app **ships** one module" (the `app.New` module list), so that
-   enabling or disabling a module never renames another module's series. Cross-cluster request to the 03 owner.
-
-Otherwise none: 03 adopts the module metric rule of this file (`app.Options.MetricPrefix`, default `AppID`, ABO
+None open. SIMP2-13's objection to the 03 §3.6 Metric row is closed: 03 now says "while the app **ships** one
+module", counted over the `app.New` module list. 03 adopts the module metric rule of this file (`app.Options.MetricPrefix`, default `AppID`, ABO
 `audiobook_organizer`) and keeps semantic-convention names; the app ID field is `app.Options.AppID` (COR-26).
 
 ## Out-of-scope defects found
@@ -400,3 +397,7 @@ Round 2:
 - SIMP2-12 — §3 `Alias`: no class or dates; gate and dates come from the ledger row (already `Ledger`-only; comment made explicit).
 - OPS2-21 (alignment with 05-config §1.12.4) — §10: `OTEL_METRIC_EXPORT_INTERVAL` and `OTEL_EXPORTER_OTLP_METRICS_INSECURE` listed as permanent aliases, ABO keys as window aliases.
 - Header — 03 v1.4.0.
+
+Integration pass (round 2, 2026-11-04):
+
+- integration pass (round 2): SIMP2-13 objection to 03 §3.6 closed (03 says "ships").

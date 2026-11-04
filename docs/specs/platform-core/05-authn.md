@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -235,8 +235,9 @@ type Deps struct {
 	Audit    audit.Logger
 	Secrets  secrets.Store  // OIDC client secrets, derived keys (05-config)
 	Events   *events.Bus    // publishes core.principal.invalidated.v1
-	Revocations journal.RevocationJournal // §4.12: Append before every revocation commits (05-backup §5B.3.6)
+	Revocations journal.RevocationJournal // §4.12: Append(ctx, b, r) into the revoking batch b before it commits (05-backup §5B.3.6)
 	Mirror   storage.Mirror // identity mirrors during the compatibility window (§11); every revocation and post-restore write is staged through it (R2-2)
+	MirrorViews map[string]storage.MirrorView // reads of the mirrored families, by mirror name (auth.user, auth.apikey, auth.oauth, auth.inviteallow): the native generation, or legacy row + side record while readThrough (05-storage §5S.3.11)
 	Clock    func() time.Time
 	Log      *slog.Logger
 	Metrics  *metrics.Scope // "mediacore.auth" (05-metrics)
@@ -336,9 +337,9 @@ func (s *Service) Revalidate(ctx context.Context, p *Principal) error
 // (06 §6.5.1), after the identity rebuild and the journal re-apply and before
 // any service is built, over auth's keyspace handle and the identity mirror
 // (§4.14, SEC-16). rc.Revocations yields the typed journal.Revocation entries
-// after the journal offset the archive's manifest recorded before its
-// checkpoint (clock-free, DATA2-7), or is nil when the journal does not cover
-// that interval. It returns per-family counts, which audit's own hook records.
+// after rc.Boundary = min(the source's recorded journal seq, the swapped-in
+// store's journal_head.seq) (05-backup §5B.3.6; clock-free, DATA2-7), or is
+// nil when the journal does not cover that interval. It returns per-family counts, which audit's own hook records.
 func PostRestore(ctx context.Context, d RestoreDeps, rc journal.RestoreContext) (RestoreCounts, error)
 
 type RestoreDeps struct {
@@ -594,7 +595,7 @@ no permission; for `OwnAuth` routes, which stage 13 skips, `CheckCredentialFor` 
 - `LastSeen` is updated at most once per minute per session (in-memory coalescing, written with
   `NoSync`), so authentication stays a read on the hot path.
 - Expiry sweep: core task `core.auth.sessions.prune` on
-  `tasks.ScheduleFromConfig("core.auth.sessions.prune_schedule")` (a declared `tasks.ScheduleConfig`
+  `tasks.ScheduleFromConfig("core.auth.schedules.session_prune")` (a declared `tasks.ScheduleConfig`
   key in auth's own namespace, default every 1 h; resolution R2-7); deletes expired/revoked records.
 
 ### 4.4 API keys
@@ -779,8 +780,9 @@ The *arr facade's key purpose and `X-Api-Key`/`apikey` extraction are deferred-b
   generation counter (05-rbac §9), so changes apply on the next request.
 - Every revocation publishes `core.principal.invalidated.v1{user_id, credential_id?, reason}` on
   `events`; `realtime` closes affected streams (05-realtime §4.6), `Revalidate` uses it.
-- Every restriction is first recorded with `Deps.Revocations.Append(ctx, journal.Revocation{At, Kind,
-  Subject, Object, Detail, Epoch})` **before** its batch commits. Auth's kinds: `apikey.revoked`,
+- Every restriction is first recorded with `Deps.Revocations.Append(ctx, b, journal.Revocation{At, Kind,
+  Subject, Object, Detail, Epoch})` — `b` is the revoking batch, into which `Append` stages
+  `c/backup/journal_head` — **before** that batch commits. Auth's kinds: `apikey.revoked`,
   `apikey.disabled` (any status change away from `active`, `needs_confirmation` included),
   `user.disabled`, `user.deleted`, `credential_epoch.bumped`, `session.revoked`, `password.changed`
   (password change or reset; SEC2-11, DATA2-7's `credential.changed`) and `identity.unlinked`
@@ -853,8 +855,10 @@ side record in one batch (R2-2, SEC2-3, DATA2-4) — so the next boot's rebuild 
 rollback build sees it; after the hook the kernel runs the identity rebuild once more and boot
 fails if it differs from what the hook wrote:
 
-1. **Re-apply** every `journal.Revocation` in `rc.Revocations` — the entries after the journal
-   offset the archive's manifest recorded before its checkpoint (clock-free, DATA2-7): key
+1. **Re-apply** every `journal.Revocation` in `rc.Revocations` — the entries after `rc.Boundary`,
+   the **minimum** of the source's recorded journal seq (the manifest's `JournalSeq`, the reverted
+   restore's `staged` record or the checkpoint's `journal_seq`) and the swapped-in store's own
+   `journal_head.seq` (05-backup §5B.3.6 "Coverage at restore"; clock-free, DATA2-7): key
    revocations and disables, user disables and deletes, epoch bumps, session revocations (role kinds
    are 05-rbac's hook). For each `password.changed` user, set `PasswordResetRequired` and invalidate
    the restored hash (it may be the pre-compromise password, SEC2-11); for each `identity.unlinked`
@@ -886,8 +890,8 @@ fails if it differs from what the hook wrote:
 3. Mint bootstrap token (§4.6) before listeners open.
 4. `kernel` registers the core auth routes through `internal/authhttp` on `CoreGroup`; register
    `core.auth.sessions.prune` and `core.auth.onetime.prune` on
-   `tasks.ScheduleFromConfig("core.auth.sessions.prune_schedule")` and
-   `("core.auth.onetime.prune_schedule")` (declared `tasks.ScheduleConfig` keys, default every 1 h;
+   `tasks.ScheduleFromConfig("core.auth.schedules.session_prune")` and
+   `ScheduleFromConfig("core.auth.schedules.onetime_prune")` (declared `tasks.ScheduleConfig` keys, default every 1 h;
    resolution R2-7).
 5. Run: middleware serves; throttle sweeper and `LastSeen` flusher goroutines (one each) run until
    the app context ends; the flusher drains pending `LastSeen` writes on shutdown (bounded 2 s).
@@ -968,7 +972,7 @@ interactive method). Every key that decides who may sign in, with which role, or
 | `core.auth.login.soft_threshold` / `.soft_step` / `.soft_max` | int / duration / duration | 5 / 200ms / 2s | yes | admin |
 | `core.auth.invite.ttl` | duration | 72h | yes | none |
 | `core.auth.temp_login.ttl` | duration | 15m | yes | admin |
-| `core.auth.sessions.prune_schedule` / `core.auth.onetime.prune_schedule` | `tasks.ScheduleConfig` | `{enabled: true, every: 1h}` | yes (re-read every poll) | none |
+| `core.auth.schedules.session_prune` / `core.auth.schedules.onetime_prune` | `tasks.ScheduleConfig` | `{enabled: true, every: 1h}` | yes (re-read every poll) | none |
 | `core.auth.oidc.redirect_base_url` | URL | — | yes | admin |
 | `core.auth.oidc.providers[]` | list `{id, kind (oidc/github), issuer, client_id, client_secret (secret ref), scopes, allowed_emails, allowed_domains, default_role, link_existing_by_email}` | `[]` | yes (provider set rebuilt) | admin |
 | `core.auth.owner.required` | bool | derived (§4.8) | no | admin |
@@ -1009,6 +1013,7 @@ ABO aliases (05-config; window per 09 §9.2.1): `enable_auth`, `oauth_*`, `oauth
 | `TestAPIKey_RevokedIsTerminal` | `SetAPIKeyStatus(active)` on a revoked key → 409; `needs_confirmation` → only `active` (admin, interactive) or `revoked` (R2-1) |
 | `TestMirrorDisabled_PrevBuildReactivateStillRefused` | drive the real Teach-build legacy handler against a mirrored store: PATCH `{"status":"active"}` on a mirror-disabled, a natively revoked and a `needs_confirmation` key → 409; the real token is refused on the Teach build; roll forward: the native key keeps its restriction and is never re-adopted as `LegacyFullScope` (SEC2-1, DATA2-3) |
 | `TestTeachBuild_UsersManageDominance` / `TestTeachBuild_SettingsManageProtectedFields` | on the Teach build, a custom role holding `users.manage` cannot temp-login, reset, set the password of, re-role or mint a key for a user it does not dominate, nor hand out a role it does not hold; one holding `settings.manage` cannot change a protected field (`oauth_default_role`, …) unless it holds every legacy atom (SEC2-2) |
+| `TestTeachBuild_IntegrationURLBound` | on the Teach build, a `settings.manage` update that moves `deluge_web_url` (and each other M1.10 URL field) to a new host without re-supplying the password clears it; a move to a loopback or private host by a holder without every legacy atom or without an interactive session is refused 403 (lead decision on 05-rbac open item 6) |
 | `TestTeachBuild_JournalsRevocations` | key revoke/deactivate, user deactivate/delete, password change and session revoke on the Teach build append to the revocation journal before commit; a restore it performs appends a `restore` record (R2-1, DATA2-5) |
 | `TestPostRestoreSurvivesRestartAndRollback` | restore inside the window, restart: the re-revoked key, a restored legacy `sess:` cookie and a restored legacy invite are refused; roll back to the Teach build: it refuses all three (R2-2, SEC2-3, DATA2-4) |
 | `TestRestore_PostArchivePasswordChangeNotReverted` / `TestRevocationCommittedAfterCheckpointReapplied` | a password changed after the archive → `password_reset_required`, old password refused; a revocation journaled before and committed after the checkpoint is re-applied (SEC2-11, DATA2-7) |
@@ -1064,7 +1069,7 @@ from legacy at every boot, so a change made by an older build after a rollback (
 revoked key, a password reset that bumped the epoch) is always honoured. Native-only data lives in
 core side records keyed by the legacy ID and merged at rebuild. A side record is dropped when its
 legacy row is gone or was revoked/disabled by the previous build — **except** a row the mirror itself
-wrote disabled (`SideRecord.MirrorDisabled`) that is still `Fresh` (05-storage §5S.3.11): that is a
+wrote restricted (`SideRecord.Restriction == RestrictionDisabled`) that is still `Fresh` (05-storage §5S.3.11): that is a
 native-only key and stays active natively; once the previous build rewrites the row, legacy wins.
 Without that exception every narrow native API key would be revoked on the next boot. Contract C4
 (09) stops the mirror and deletes the legacy rows. The rebuild is run by the kernel as a post-DAG
@@ -1081,7 +1086,7 @@ roles" (`middleware/auth.go:405-408`):
   ["mirror.disabled"]` — a non-empty sentinel atom absent from the legacy catalog, so the legacy
   `intersectPermissions` yields the empty set, never "all". The real scopes (and `Purpose` once it
   exists) live in the side record.
-- **No re-activation.** Every build that can open the store after S4 is the Teach build or newer
+- **No re-activation.** Every build that can open the store after S4 r2's adoption is the Teach build (S4 r1) or newer
   (§11.1), and each refuses any status change on a row with `revoked_at` or `mirror_reason`
   (409), and its auth path refuses such rows whatever their `status`.
 - **Rebuild is monotone.** The side record carries `Restriction ∈ {none, disabled, revoked,
@@ -1094,11 +1099,11 @@ roles" (`middleware/auth.go:405-408`):
 
 | Legacy family | New | Transform |
 |---|---|---|
-| `u:` + `idx:user:username:` (and the other `idx:` user sub-prefixes) | `c/auth/user/…`, `c/auth/idx/…` | user IDs and role IDs unchanged (`admin`, `editor`, `viewer`, `fp-worker`; 05-rbac §6.2); mirrored both ways as above |
-| `apikey:` + `idx:apikey:` | `c/auth/apikey/…` | hash reused as-is (already SHA-256 of raw); scopes translated (05-rbac §6.1); empty scopes → `LegacyFullScope=true`; native keys mirrored with legacy atoms only on exact re-expansion, otherwise the legacy row is written **disabled** (`LegacyProjection.Disabled`, side record `MirrorDisabled`) with canonical scopes and `Purpose` in the side record (05-rbac §6.3) |
+| `u:` + `idx:user:username:` (and the other `idx:` user sub-prefixes) | `c/auth/user/…`, `c/auth/idx/…` | user IDs and role IDs unchanged (`admin`, `editor`, `viewer`, `fp-worker`; 05-rbac §6.2); mirrored both ways as above (mirror `auth.user`) |
+| `apikey:` + `idx:apikey:` | `c/auth/apikey/…` | mirror `auth.apikey`; hash reused as-is (already SHA-256 of raw); scopes translated (05-rbac §6.1); empty scopes → `LegacyFullScope=true`; native keys mirrored with legacy atoms only on exact re-expansion, otherwise the legacy row is written **disabled** (`LegacyProjection.Restrict = RestrictionDisabled`, side record `Restriction: disabled`; 05-storage §5S.3.11) with canonical scopes and `Purpose` in the side record (05-rbac §6.3) |
 | `sess:<raw>` + `idx:sess:user:` | `c/auth/session/h/<sha256>` + new `PublicID` | **no raw mirror** (SEC-19): new sessions are hashed only. A presented legacy raw-ULID cookie is looked up in `sess:` with epoch, status, revoked and expiry checks; on a hit the service issues a hashed `mcs_` session, sets the cookie and deletes the legacy row in one batch (upgrade on use). Legacy sessions live at most 7 d (`handlers/auth.go:90-96`), so the fallback matches nothing after that; its code is removed by the first contract PR after S4 + 7 days, independent of C4. Cost: a rollback signs users out once; API keys, which automation uses, keep working |
 | `invite:<raw>` + `idx:invite:username:` | `c/auth/onetime/invite/<sha256>` | auth claims these legacy families `AgingOut`, **not** mirrored (DATA2-8): legacy invites stay readable in place by presented token until they expire (72 h) and are deleted on accept, on expiry, and by the post-restore hook (§4.14); the raw token is never copied (SEC-19's reasoning). Native invites are hash-only and live outside every mirror's `Native` range, so the per-boot rebuild never touches them (a rollback within an invite's TTL voids invites issued by the new build; resend) |
-| `oauthid:`, `inviteallow:` | `c/auth/ident/…`, `c/auth/inviteallow/…` | mirrored both ways as above |
+| `oauthid:`, `inviteallow:` | `c/auth/ident/…`, `c/auth/inviteallow/…` | mirrored both ways as above (mirrors `auth.oauth` and `auth.inviteallow`, the invite allow-list; 05-storage §5S.9.1 rows 5, 4b) |
 | bootstrap hash in settings | `c/auth/bootstrap` (native, the only form read) | regenerated at every start anyway; the legacy settings hash is `AgingOut` — never read, never mirrored, removed by contract C4 (DATA2-29; 05-storage row 8 follows) |
 | temp-login map | — | in-memory today; nothing to migrate |
 
@@ -1106,10 +1111,12 @@ roles" (`middleware/auth.go:405-408`):
 
 A rollback may land on a build that predates the adoption logic and still has legacy behaviour that
 widens access. Resolution R2-1 removes that class structurally: the first build of the identity
-adopt/expand sequence (09 S4) is a **Teach build**, and it is the **minimum rollback target** — once
-S4 has run, the per-owner level guard refuses to open the store with any older build (09 §9.2.2).
-09 places it; because its journal lines carry 05-backup's integrity fields (SEC2-9), it is a build
-that already has the S3 keyring. Items 1–3 are also live defects at HEAD and ship as hotfixes as
+adopt/expand sequence is a **Teach build** — 09 **S4 r1**, the build that serves `core` level 3 — and
+it is the **minimum rollback target**: S4 r2's adopt steps `core/auth#1` and `core/rbac#1` stamp
+`Floor` 3 (their `Migration.Floor`, 05-storage §5S.3.7), so once they have run the per-owner level
+guard refuses to open the store with any older build (09 §9.2.2). The flip (S4 r3) serves level 4 and
+contract C4 raises the store to 4. Because its journal lines carry 05-backup's integrity fields
+(SEC2-9), S4 r1 is a build that already has the S3 keyring. Items 1–3 are also live defects at HEAD and ship as hotfixes as
 early as S0 (`todo.d/2026-11-04_platform_core_followups.md`; "Out-of-scope defects" below); the
 Teach build is where they become a guarantee. In legacy terms ("effective atoms" = the union of the
 caller's role atoms, intersected with a key's non-empty scopes; `admin` = every atom):
@@ -1136,6 +1143,20 @@ caller's role atoms, intersected with a key's non-empty scopes; `admin` = every 
    admins", `protected_fields.go`) additionally requires the actor's effective atoms ⊇ every legacy
    atom (legacy-admin-equivalent), on top of today's interactive-session rule. The owner trust-root
    rule is unchanged.
+   **Integration fields (lead decision on 05-rbac open item 6).** A native role holding
+   `core:integrations.manage` reverse-maps to legacy `integrations.manage` (05-rbac §6.1), whose
+   legacy routes write no URL or secret (`deluge_integration.go:141-146`,
+   `server_lifecycle.go:2088-2092`); in the legacy build integration URLs and credentials are written by
+   the `settings.manage` config update (`UpdateService.UpdateConfig`,
+   `internal/config/update_service.go:533`). So the Teach build bounds that write path with the native
+   rule of 05-metadata M1.3 (SEC-15, SEC2-7): an update that changes the scheme, host or port of an
+   integration URL field (every API-writable URL field of 05-metadata M1.10's import table:
+   `deluge_web_url`, `openai_base_url`, `ai_endpoints[]` and `metadata_sources[]` URLs, webhook URLs;
+   SMTP is env/file only) **clears that integration's secret
+   fields** unless the same update re-supplies them, and one whose new host is loopback, private or
+   CGNAT (the native `Local` trust) additionally needs the legacy-admin-equivalent atoms and an
+   interactive session. A rollback therefore never gives an integrations holder more than the native
+   bound does.
 4. **Revocation and restore journal (DATA2-5).** Before committing, the Teach build appends to the
    out-of-DB revocation journal (05-backup §5B.3.6 format, integrity fields included) every
    restriction it performs: key revoke and deactivate, user deactivate and delete, password change or
@@ -1144,7 +1165,7 @@ caller's role atoms, intersected with a key's non-empty scopes; `admin` = every 
    specifies. Every restore the Teach build performs appends a `restore` record, so the next
    new-build boot re-applies the journal tail through the mirror (05-backup; §5 step 1).
 5. **No other change.** The Teach build reads and preserves the fields the mirror writes and adds
-   nothing else; its seed handling is unchanged (seed-role edits are refused natively during the
+   nothing beyond items 1–4; its seed handling is unchanged (seed-role edits are refused natively during the
    window instead, 05-rbac §4.8).
 
 ## 12. Open items
@@ -1264,3 +1285,10 @@ Round 2 (2026-11-04), findings applied to this file:
 - COR2-12 — `Store` writes take `*storage.Batch` (§3.4).
 - FE2-23 — stage 7 exempts no credential type; 07 refers here for cookie rules (§4.3).
 - COR2-19 — audit action names follow 05-rbac §7.1's present-tense grammar (§4.14).
+
+Integration pass (round 2, 2026-11-04):
+
+- integration pass (round 2): §11.1: identity Teach build = S4 r1 at `core` level 3; S4 r2's adopt steps stamp `Floor` 3; flip S4 r3 at level 4 (09 v1.2.0 renumbering).
+- integration pass (round 2): §11.1 item 3 + test: lead decision — the R2-1 bound extends to the legacy write path that `core:integrations.manage` reaches on rollback (secrets cleared on a URL host change, private targets admin-only); `TestTeachBuild_IntegrationURLBound`.
+- integration pass (round 2): `RevocationJournal.Append(ctx, b, r)` with the revoking batch; `rc.Boundary` min rule in §3 and §4.14; `Deps.MirrorViews` (`storage.MirrorView`); mirror names `auth.user`/`auth.apikey`/`auth.oauth`/`auth.inviteallow`; `Restriction` terms replace `MirrorDisabled`/`LegacyProjection.Disabled`.
+- integration pass (round 2): Schedule keys `core.auth.schedules.session_prune` / `onetime_prune` (R2-7 form).
