@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/13-toolchain.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: a1e1b657-1c87-4a3e-8407-43269415455f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -77,13 +77,26 @@ exact patch for every build path, major.minor for `repository-config.yml`, minim
 (`raw/14-build-ci.md` §5). Required changes for core:
 
 1. Tier 3 must also read `core/go.mod`, `core/tools/*/go.mod` and the existing `tools/*/go.mod`
-   ([12-repo-split](12-repo-split.md) S10). Today it reads only the root `go.mod`. There is no
-   `core/examples/hello/go.mod`: `examples/hello` is a package in the core module (03 §3.3, 12 S3).
+   ([12-repo-split](12-repo-split.md) SC10). Today it reads only the root `go.mod`. There is no
+   `core/examples/hello/go.mod`: `examples/hello` is a package in the core module (03 §3.3, 12 SC3).
 2. Tier 1 must read the `export GOTOOLCHAIN :=` pin in `core/Makefile` (12 §12.3.11) and require it to
    equal the root `Makefile:43` pin. That file is the 35th machine-checked copy; it exists because core
-   CI must run from an export of `core/` alone (12 S4) and the core repo has nothing else after the split.
+   CI must run from an export of `core/` alone (12 SC4) and the core repo has nothing else after the split.
+   The parity rule (core pin = root pin) is a root-side check and is dropped at cutover step 6; inside
+   core, `core/scripts/ci/check_core_toolchain.py` checks only the copies core carries (12 §12.3.11).
 3. Core's own CI workflow (`core-ci.yml`) adds its `go-version` lines to tier 1 automatically (the
    script already scans every workflow).
+4. **No literals outside the guarded copies.** Commands and scripts never repeat the pin: 12's
+   measurement and release commands take it from `make -s -C core print-toolchain` (12 §12.3), and the
+   guard gains a check that fails on a `go1.N.N` literal in `scripts/**`, `core/scripts/**` and
+   workflow `run:` steps (comments that record past behaviour, listed under "Not a pin" below, are
+   allowlisted by path and line). Without it, every command copied from 12 into a script would be an
+   unguarded 36th copy.
+
+**Who performs the bump, and when.** The bump to go1.27.3 is one PR, `toolchain: go1.27.3`, which is the
+**first PR of 09 stage S0**, before `core/` exists: `core/Makefile` is then born with the bumped pin, and
+12's commands never meet two pins. It carries every change in this section (the 34 copies, the prose
+copies, the image digests, the two stale Dependabot rules) and runs the preconditions of §13.2.4.
 
 **Two stale Dependabot rules must be fixed in the same bump PR**, or Dependabot keeps refusing exactly the
 updates D8 asks for:
@@ -186,7 +199,7 @@ releases). Core targets v8.
 | E1 | Two TypeScripts: TS 7.0.2 type-checks (`"@typescript/native": "npm:typescript@^7.0.2"`, `web/package.json:53`, scripts `:8-9`), while the `typescript` name resolves to TS 6 (`"npm:@typescript/typescript6@^6.0.2"`, `web/package.json:66`) | TS 7 ships no JS API, and `typescript-eslint` 8.72.1 peers `typescript >=4.8.4 <6.1.0` (`npm view`); rationale recorded in `CHANGELOG.md:2909-2924` | `typescript-eslint` declares TS 7 support → drop the alias, single `typescript@^7`. `core/web` copies the same two-alias layout until then. (knip is not a blocker: knip 6.44.1 depends on `oxc-parser`/`oxc-resolver` and declares no `typescript` dependency or peer, `npm view knip@6.44.1 dependencies`, checked 2026-11-04.) |
 | E2 | Stay on `@babel/core` 7.29.x | 8.1.0 is two days old (release-age rule); `babel-plugin-react-compiler` 1.0.0 depends on `@babel/types ^7.26.0` (`npm view`), so Babel 8 core would run a compiler plugin built against Babel 7 AST types; the compiler path is the only Babel use (`web/vite.config.ts:8-21`) | react-compiler publishes Babel 8 support **and** 8.x has passed the 14-day soak → bump, run the React Compiler memo tests (`CHANGELOG.md` records them, e.g. `DupesSpine.memo.test.tsx`). |
 | E3 | `jsdom` pinned at 30.0.1 | 30.1.0 broke MUI FocusTrap unmount ("5 failed / 7 passed" vs 12/12), `.github/dependabot.yml:90-104` | the 12/12 check in that comment passes on the newest 30.1.x (30.1.3 untested here). |
-| E4 | ABO stays on `react-router-dom` 7.18.5 until its own react-router 8 migration | v8 removed `react-router-dom` (react-router 8.0.0 changelog: "Remove `react-router-dom` package", #15076; DOM bits from `react-router/dom`, everything else from `react-router`); ABO imports it in **121** files, 53 of them outside `*.test.*` files (one of those is the test helper `web/src/test/renderWithProviders.tsx`), `git grep -l "from 'react-router-dom'" -- web/src`; `@mediacore/shell` needs v8 as a peer, so the migration must be **finished before** ABO adopts the shell | A separate ABO PR series migrates to `react-router@8` (imports, data-router APIs, test harness): 09 stage **UI-0**, which ships before S4 and **precedes** shell adoption ([07-ui-shell](07-ui-shell.md) §7.19 step 1, [09-abo-on-core](09-abo-on-core.md) §9.3). Exit condition: `web/package.json` no longer lists `react-router-dom`, reached **before** ABO's first `createShell` call (07 §7.19 step 1). |
+| E4 | ABO stays on `react-router-dom` 7.18.5 until its own react-router 8 migration | v8 removed `react-router-dom` (react-router 8.0.0 changelog: "Remove `react-router-dom` package", #15076; DOM bits from `react-router/dom`, everything else from `react-router`); ABO imports a react-router package in **122** files, **52 source and 70 test** (the test count includes the helper `web/src/test/renderWithProviders.tsx`), counted with 07 §7.3.3's grep `git grep -lE "from ['\"]react-router(-dom)?['\"]" 748fd787a -- web` (it also covers `web/tests/` and `web/vite.config.ts`); `@mediacore/shell` needs v8 as a peer, so the migration must be **finished before** ABO adopts the shell | A separate ABO PR series migrates to `react-router@8`: 09 stage **UI-0** swaps the imports and the chunk regex (`web/vite.config.ts:81-82`) and keeps the declarative `<BrowserRouter>`; the data router and the test-harness rewrite follow at shell adoption (07 §7.19 steps 4–5). UI-0 ships before S4 and **precedes** shell adoption ([07-ui-shell](07-ui-shell.md) §7.19 step 1, [09-abo-on-core](09-abo-on-core.md) §9.3). Exit condition: `! grep -rq react-router-dom web/package.json web/src web/tests web/vite.config.ts`, reached **before** ABO's first `createShell` call (07 §7.19 step 1). |
 
 ## 13.5 Go dependencies: what core drops and keeps
 
@@ -217,10 +230,10 @@ except where noted).
 | `github.com/blevesearch/bleve/v2` | **v2.6.2** (ABO v2.6.1) | **2026-11-03** | `internal/bleveindex` behind `storage/index` | one day old: release-age rule applies (§13.6) |
 | `github.com/prometheus/client_golang` / `client_model` | v1.25.0 / v0.6.3 | 2026-10-08 | `metrics` (per-App registry, R5) | |
 | `go.opentelemetry.io/otel`, `/sdk`, `/sdk/metric`, `/trace`, `/metric` | v1.47.0 | 2026-10-02 | `metrics` | |
-| `go.opentelemetry.io/otel/exporters/prometheus` | v0.69.0 | 2026-10-02 | `metrics` | v0: minor may break |
+| `go.opentelemetry.io/otel/exporters/prometheus` | v0.69.0 | 2026-10-02 | `metrics` | v0: minor may break → **pinned** (mechanism below the table) |
 | OTLP gRPC exporters (`otlpmetricgrpc`, `otlptracegrpc`) + `google.golang.org/grpc` v1.85.0 | v1.47.0 | 2026-10-02 | `metrics` (optional export) | pulls the split `genproto/googleapis/{api,rpc}` modules. The monolithic `genproto` is **present in the module graph** via `cockroachdb/errors@v1.14.0` (`raw/00-baseline-build.md` E7, `go mod graph`) and **pruned from the build list** in single-module mode, so it is absent from `go.mod`/`go.sum` (`raw/15-dependencies.md` "Go module-level notes"). Pebble plus these exporters in one core module is what makes a workspace inside `core/` fail without the exclude (03 §3.2.1 X2), which is why the exclude lives in `core/go.mod` |
 | `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` | v0.72.0 | 2026-10-02 | `httpapi` | new |
-| `github.com/google/jsonschema-go` | v0.4.3 | 2026-04-17 | `config` (the one JSON Schema reflector, reused by `httpapi`'s OpenAPI generation) | **only if** [05-config](05-config.md) §1.10 adopts it over the in-house fallback (SIMP-14 makes 05-config the owner of that choice). Checked 2026-11-04: MIT licence (module zip `LICENSE`), latest on the proxy, pre-1.0 → pin exactly. |
+| `github.com/google/jsonschema-go` | v0.4.3 | 2026-04-17 | `internal/jsonschemax` (03 R4: the L0 leaf that owns the one JSON Schema reflector; `config` and `httpapi` contribute overrides for their own types) | **Adopted** by [05-config](05-config.md) §1.10.2 (SIMP-14 made 05-config the owner of that choice). Checked 2026-11-04: MIT licence (module zip `LICENSE`), latest on the proxy (`For[T]`, `ForOptions.TypeSchemas` present, round-2 X15), pre-1.0 → **pinned** (mechanism below the table). |
 | `github.com/go-logr/logr` | v1.4.4 | 2026-07-20 | `metrics` (OTel SDK logger bridge only) | `otel.SetLogger` takes a `logr.Logger` (`internal/telemetry/sdklog.go:17,30`); core bridges slog with `logr.FromSlogHandler` and imports logr nowhere else. See O1. |
 | `github.com/oklog/ulid/v2` | v2.1.2 | 2026-07-23 | IDs for tasks, history, audit | time-sortable keys |
 | `github.com/coreos/go-oidc/v3`, `golang.org/x/oauth2` | v3.21.0, v0.37.0 | 2026-09-01, 2026-08-25 | `auth` | |
@@ -232,6 +245,15 @@ except where noted).
 | `github.com/fsnotify/fsnotify` | v1.10.1 | 2026-05-04 | `library` watcher (if [05-library](05-library.md) keeps watching) | |
 | `github.com/stretchr/testify` | v1.12.1 | 2026-08-17 | tests only (`go.md:400`) | |
 | `github.com/openai/openai-go/v3` | v3.93.0 (ABO v3.91.0) | — | `integrations/ai` OpenAI-compatible adapter only ([05-ai](05-ai.md)) | not in the contract package |
+
+**How "pinned" works.** A Go `require` is a minimum: any module in either build list that requires a
+higher version wins silently, and Dependabot's `/core` entry would open bump PRs. A pinned dependency
+therefore gets (a) a Dependabot `ignore` entry for all update types in both the `/` and `/core` gomod
+entries, so it is bumped only by a deliberate PR, and (b) a `--pin module=version` argument to
+`scripts/ci/check_module_skew.py`, which asserts the resolved version in both `go list -m all`
+outputs and fails when a transitive requirement lifts it. Pinned today: `github.com/google/jsonschema-go`
+v0.4.3 (`TestSchema_Golden` would catch drift only after the fact) and
+`go.opentelemetry.io/otel/exporters/prometheus` v0.69.0.
 
 Not in core at all: `quic-go` (v0.64.1 → v0.65.0, v0 minor), `taglib`, `dhowden/tag`, `howett.net/plist`,
 `chromem-go`, `coder/hnsw`, `lithammer/fuzzysearch`, `x/image`, `pgregory.net/rapid` (test-only; core may
@@ -272,13 +294,13 @@ go1.27.3 (2026-10-19) is 16 days old and adoptable.
 | vitest 5.1.0, plugin-react 6.2.1 (peer `oxc-transform-react >=0.152.0 <0.157.0`), globals 17.14.0 are days old | npm `time` | release-age rule |
 | jsdom 30.1.x has a known MUI FocusTrap regression | `.github/dependabot.yml:90-104` | E3 |
 | TS 7 has no JS API; lint tooling capped below TS 6.1 | `typescript-eslint` peer range | E1 |
-| react-router 8 removes `react-router-dom`; 121 ABO files | §13.4.1 E4 | separate migration series (09 UI-0) that ends before `createShell` (E4) |
-| `otel/exporters/prometheus` is v0 (minor may break) | v0.69.0 | pin exact minor; bump deliberately |
+| react-router 8 removes `react-router-dom`; 122 ABO files (52 source, 70 test) | §13.4.1 E4 | separate migration series (09 UI-0) that ends before `createShell` (E4) |
+| `otel/exporters/prometheus` is v0 (minor may break) | v0.69.0 | pinned: Dependabot `ignore` plus `check_module_skew.py --pin` (§13.5.2); bump deliberately |
 | Stale Dependabot ignores block golang 1.27.x and Vite 8 updates, including security updates | `.github/dependabot.yml:30-34`, `:80-89` | remove in the toolchain bump PR (§13.2.2) |
 | `go.dev/dl` stable flag unverifiable from sandbox | §13.2.1 | re-check on a networked machine before the bump |
 | Docker image digests for golang 1.27.3 not resolved | §13.2.2 | resolve at bump time; guard enforces digest equality |
-| The monolithic genproto returns through `cockroachdb/errors` whenever a workspace includes core without core's exclude | 03 §3.2.1 X2 | exclude in `core/go.mod`; `check_genproto_exclude.py` fails on missing **or** stale exclude; throwaway-workspace CI step (03 §3.2 item 1) |
-| Root and `core/go.mod` resolve different versions of shared dependencies (the binary ships versions core CI never tested) | 03 §3.2 item 6 | Dependabot gomod for `/` and `/core` in one group; `check_module_skew.py` (12 S4(c)) |
+| The monolithic genproto returns through `cockroachdb/errors` whenever a workspace includes core without core's exclude | 03 §3.2.1 X2; round-2 X10, X16 | exclude in `core/go.mod` from S0; `core/scripts/ci/check_genproto_exclude.py` checks, in a temp copy, that the line is present, that the workspaces build with it, and that without it `go mod graph` still shows the requirer **and** the build fails with `ambiguous import` — otherwise the exclude is stale (03 §3.2 item 1). The live graph cannot be probed: an excluded version never appears in it (X10) |
+| Root and `core/go.mod` resolve different versions of shared dependencies (the binary ships versions core CI never tested) | 03 §3.2 item 6 | Dependabot gomod for `/` and `/core` in one group (verified to yield one PR); `check_module_skew.py` (12 SC4(c)), with `--pin` for pinned modules; per-module `tidy-check` and the tidy-coupling rule (03 §3.2 item 4) |
 
 ## Objections to 03
 
@@ -311,3 +333,14 @@ Round 1 (dispositions in `docs/plans/platform-core/reviews/spec-round-1-disposit
 Integration pass (cross-cluster requests, 2026-11-04):
 
 - integration pass: R-G request (FE-2, SIMP-25) — E4 exit condition: `react-router-dom` gone before ABO's first `createShell`; names 09 stage UI-0.
+
+Round 2 (dispositions in `docs/plans/platform-core/reviews/spec-round-2-dispositions.md`):
+
+- FE2-19 — E4 and §13.7: 122 files (52 source, 70 test) with 07's grep; UI-0 scope is imports and the chunk regex (data router and harness at 07 §7.19 steps 4–5); exit check covers `web/tests` and `vite.config.ts`.
+- SIMP2-3, SIMP2-16 — jsonschema-go row: adopted (no "only if"); lives in `internal/jsonschemax` (L0).
+- MOD2-20 — "pinned" given a mechanism: Dependabot `ignore` plus `check_module_skew.py --pin`, for jsonschema-go and `otel/exporters/prometheus`.
+- MOD2-5 — §13.7 genproto row: the redesigned exclude check (present; green with it; edge and `ambiguous import` without it).
+- MOD2-6 — §13.7 skew row: one-PR Dependabot verification, `tidy-check` and the tidy-coupling rule.
+- MOD2-13 — §13.2.2: no toolchain literals in scripts or workflow steps (guard check); the bump is the first PR of S0, before `core/` exists.
+- MOD2-9 — §13.2.2 item 2: root-pin parity is root-side; core checks only its own copies.
+- MOD2-21 — 12's criteria cited as SC3, SC4, SC4(c), SC10.

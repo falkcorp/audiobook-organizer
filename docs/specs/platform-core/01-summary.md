@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/01-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: d2956830-373c-4b12-9504-ccace49f7f6d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -45,7 +45,9 @@ moves platform machinery, not every route.
    permissions, settings schema, UI contribution and adapters; it never edits core or another module
    (inherited gate G6).
 3. **ABO ships at every step.** Every stage of the extraction leaves `main` green under `make ci`
-   and ABO deployable, with a rollback that opens the same database (gate G5).
+   and ABO deployable, with a rollback that opens the same database (gate G5). A rollback lands on
+   the sequence's Teach build or later, never on a build without the legacy-side guards (02 N13);
+   an install older than the declared minimum-upgrade-from release upgrades through it (02 N14).
 4. **Correct by construction.** The boundaries are enforced mechanically (rules R1–R8 in §03): core
    cannot import app code, routes cannot be registered without a permission, library-scale loops
    cannot be written without declaring parallelism, modules cannot write outside their keyspace.
@@ -98,10 +100,13 @@ moves platform machinery, not every route.
 | **Parallelism** | The required declaration of how a library-scale loop runs (`tasks.CPU()`, `tasks.Fixed(n, reason)`, `tasks.Sequential(reason)`; §05-tasks). |
 | **outbox** | A durable queue written in the same Pebble batch as the state change it announces; relayed at least once. |
 | **permission scope** | `<module>:<action>[.<sub>]`, e.g. `books:edit`, `tv:request`, `core:admin`. |
-| **shell** | The `@mediacore/shell` React package: auth, layout, navigation, settings frame, tasks, logs, users/roles, notifications, health. |
+| **shell** | The `@mediacore/shell` React package: auth, layout, navigation, settings frame, tasks, logs, users/roles, notification admin pages for the v1 scope (contract, mail and webhook channels, global routing) plus toasts (no inbox or personal channels), health. |
 | ***arr facade** | An optional, per-app HTTP adapter exposing an *arr-v3-compatible subset for ecosystem clients (Overseerr/Jellyseerr, Prowlarr, Bazarr) through `core/arrfacade` (deferred-build). |
 | **ABO** | audiobook-organizer, this repository. |
-| **strangler stage** | One step of the extraction in §09, after which ABO is still shippable. |
+| **strangler stage** | One step of the extraction in §09 (S0–S10, with S2b and UI-0), after which ABO is still shippable. "Wave" is not used. |
+| **Teach build** | The first build of every adopt/expand sequence: it ships the legacy-side guards (no status change on revoked or mirror-disabled keys, dominance bound on legacy `users.manage`/`settings.manage`, out-of-database revocation journal) and is the **rollback floor** — once adoption ran, the level guard refuses any older build (02 N13). |
+| **minimum-upgrade-from release** | The oldest release from which an install may upgrade directly to a given build; older installs must pass through it first (`min_upgrade_from` in the release manifest; boot refuses with a message naming it) (02 N14). |
+| **split criteria SC1–SC10** | The measurable readiness criteria for moving core to its own repository (§12.3); named `SC` so they never collide with the 09 stages S0–S10. |
 | **gate G1–G8** | The eight acceptance gates inherited from the 2026-09-18 adversarial review (`02-decision-record.md` §2.4). |
 | **R1–R8** | The mechanically enforced dependency/registration rules in `03-architecture.md` §3.5. |
 
@@ -116,3 +121,10 @@ Round 1 (dispositions in `docs/plans/platform-core/reviews/spec-round-1-disposit
 - COR-17 — `entity.Ref` glossary entry.
 - DATA-1, DATA-3 — non-goals and glossary: identity-family adoption model; settings families stay books legacy.
 - SIMP-26 — kernel glossary: typed services struct, no container.
+
+Round 2 (dispositions in `docs/plans/platform-core/reviews/spec-round-2-dispositions.md`):
+
+- R2-1 — goal 3 and glossary: Teach build is the rollback floor (02 N13).
+- R2-4 — goal 3 and glossary: minimum-upgrade-from release (02 N14).
+- MOD2-21 — glossary: strangler stages are S0–S10 (no "wave"); split criteria are SC1–SC10.
+- SIMP2-11 — shell glossary: notification admin pages and toasts; inbox/bell deferred.

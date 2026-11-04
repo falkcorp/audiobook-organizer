@@ -1,12 +1,13 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
 <!-- last-edited: 2026-11-04 -->
 
 # mediacore — platform-core design spec
 
 **Status:** draft under antagonistic review (see `docs/plans/platform-core/reviews/`). Round 1's 192
-findings are dispositioned (`spec-round-1-dispositions.md`) and applied to the files; round 2 follows.
+findings and round 2's 162 findings are dispositioned (`spec-round-1-dispositions.md`,
+`spec-round-2-dispositions.md`, whose eight resolutions R2-1…R2-8 are binding) and applied to the files.
 **Evidence commit:** `748fd787a`. **Raw data:** [`docs/plans/platform-core/raw/`](../../plans/platform-core/raw/00-index.md).
 **Plan:** `docs/plans/platform-core/implementation-plan.md` (written after this spec merges).
 
@@ -19,7 +20,7 @@ is extracted into **mediacore** (`github.com/falkcorp/mediacore`), a nested Go m
 npm workspace, which a Sonarr-like TV app and a Radarr-like Movies app can share. ABO becomes
 app = core + module `books`, migrated as a strangler fig that ships at every stage; its gin router stays
 mounted behind core's HTTP perimeter permanently. Core moves to its own repository when the measurable
-criteria in §12 hold. Composition is explicit (`app.New(opts, modules...)`), with no `init()`
+split criteria SC1–SC10 in §12 hold. Composition is explicit (`app.New(opts, modules...)`), with no `init()`
 registration and no process globals in core, so several apps can share one binary later (lowest
 priority). Details: [01-summary.md](01-summary.md).
 
@@ -44,9 +45,11 @@ The Build column of 03 §3.3 is the authoritative list and is re-checked at ever
 
 The superseding decision record is [02-decision-record.md](02-decision-record.md) (replaces
 `docs/architecture/2026-09-18-pluggable-media-platform-decision-record.md`): all 13 old decisions marked
-kept / changed / dropped, 12 new decisions (N1–N12), the eight inherited acceptance gates, and the five old
-open questions. User decisions D1–D9 are fixed inputs. Owner questions still open, and those round 1
-decided as adopted recommendations, are in [14-risks-open-questions.md](14-risks-open-questions.md) §14.3.
+kept / changed / dropped, 14 new decisions (N1–N14; N13 makes the Teach build the rollback floor, N14
+adds the minimum-upgrade-from release), the eight inherited acceptance gates, and the five old open
+questions. User decisions D1–D9 are fixed inputs. Owner questions still open (including Q-I, how the
+extraction's gates become required checks), and those round 1 decided as adopted recommendations, are
+in [14-risks-open-questions.md](14-risks-open-questions.md) §14.3.
 
 ## Reading order
 
@@ -102,3 +105,10 @@ Round 1 (dispositions in `docs/plans/platform-core/reviews/spec-round-1-disposit
 - SIMP-2 — summary: gin stays mounted permanently behind core's perimeter.
 - SIMP-3 — summary: no process globals **in core**.
 - SEC-19, SEC-20 — decisions paragraph points at 14 §14.3 for open and decided owner questions.
+
+Round 2 (dispositions in `docs/plans/platform-core/reviews/spec-round-2-dispositions.md`):
+
+- R2-1, R2-4 — decisions paragraph: 14 new decisions (N13 Teach-build rollback floor, N14 minimum-upgrade-from release).
+- R2-6 — decisions paragraph points at owner question Q-I (gates as required checks).
+- MOD2-21 — summary names the split criteria SC1–SC10.
+- Status line: round 2 dispositioned and applied.

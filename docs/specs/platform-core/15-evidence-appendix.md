@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/15-evidence-appendix.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 28e48d7f-7c8d-45af-90cd-14880b2b5988 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -15,8 +15,10 @@ and scrubbed before commit.
 
 **Review evidence:** round-1 reviews in [`docs/plans/platform-core/reviews/`](../../plans/platform-core/reviews/)
 carry their own anchors and, for the modules/build lens, experiments X1–X8 run in scratch directories
-(`spec-round-1-modules-build.md`, "Experiments run for this review"). Spec files cite those experiments
-by ID where a decision rests on them.
+(`spec-round-1-modules-build.md`, "Experiments run for this review"). Round-2 reviews
+(`spec-round-2-*.md`) add experiments X9–X15 (`spec-round-2-modules-build.md`); X16 was run in a scratch
+directory for the round-2 revision and is recorded in 03 §3.2.1. Spec files cite those experiments by ID
+where a decision rests on them.
 
 **Rule:** a claim about the current code without an anchor or a raw-file link is a review finding (see
 `docs/plans/platform-core/reviews/`). External claims (Sonarr/Radarr behaviour, package versions) cite
@@ -24,10 +26,12 @@ public URLs in `raw/16-arr-domain-research.md` and `raw/15-dependencies.md` with
 
 ## Anchor census per spec file
 
-Regenerated on 2026-11-04 at the end of the round-1 **integration pass**, from the working tree, after
-every file of round 1 had settled (09 and 04 at v1.1.0 included), so all rows are from one moment and
-replace the R-A snapshot. Method (exact, so the next run is comparable; a re-run of it reproduces the
-unchanged rows of the R-A snapshot, e.g. 01, 02 and 05-ai):
+Regenerated on 2026-11-04 during the **round-2 revision** (cluster R-A), from the working tree, with the
+round-1 method unchanged. Files that no round-2 reviser had touched at that moment reproduce their
+round-1 rows exactly (04, 05-authn, 05-backup, 05-library, 05-rbac, 05-storage, 08, 11), which confirms
+the method is stable; files other clusters were still revising are a snapshot, and the round-2
+integration pass re-runs the census once every file has settled. Method (exact, so the next run is
+comparable):
 
 - every backticked span in the file is tokenized into path-shaped tokens
   (`[A-Za-z0-9_.-]` segments joined by `/`, optionally followed by `:<line>[-<line>][,<line>…]`);
@@ -43,44 +47,50 @@ The v1.0.0 table used a looser, unrecorded method, so its numbers are not compar
 
 | Spec file | Lines | Anchors with line | Distinct repo paths | Raw files cited |
 |---|---|---|---|---|
-| [01-summary.md](01-summary.md) | 118 | 0 | 3 | 00-baseline-build, 01-package-inventory |
-| [02-decision-record.md](02-decision-record.md) | 101 | 0 | 6 | 00-baseline-build, 05-storage, 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 10-auth-rbac, 11-integrations, 12-cross-cutting, 16-arr-domain-research |
-| [03-architecture.md](03-architecture.md) | 410 | 6 | 24 | 00-baseline-build, 00-index, 03-layering-guard, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting, 14-build-ci |
+| [01-summary.md](01-summary.md) | 130 | 0 | 3 | 00-baseline-build, 01-package-inventory |
+| [02-decision-record.md](02-decision-record.md) | 110 | 0 | 6 | 00-baseline-build, 05-storage, 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 10-auth-rbac, 11-integrations, 12-cross-cutting, 16-arr-domain-research |
+| [03-architecture.md](03-architecture.md) | 544 | 8 | 26 | 00-baseline-build, 00-index, 03-layering-guard, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting, 14-build-ci |
 | [04-package-mapping.md](04-package-mapping.md) | 1104 | 53 | 271 | 01-package-inventory, 02-import-graph-hotspots, 03-layering-guard, 04-database-store, 05-storage, 06-tasks-ops, 07-plugin-registry-sdk, 09-http-api, 10-auth-rbac, 11-integrations, 12-cross-cutting |
-| [05-ai.md](05-ai.md) | 615 | 24 | 19 | 11-integrations, 12-cross-cutting |
+| [05-ai.md](05-ai.md) | 666 | 24 | 19 | 11-integrations, 12-cross-cutting |
 | [05-authn.md](05-authn.md) | 1025 | 54 | 48 | 09-http-api, 10-auth-rbac, 12-cross-cutting, 13-frontend |
 | [05-backup.md](05-backup.md) | 770 | 12 | 10 | 05-storage, 10-auth-rbac, 12-cross-cutting |
-| [05-config.md](05-config.md) | 1274 | 42 | 41 | 02-import-graph-hotspots, 03-layering-guard, 10-auth-rbac, 12-cross-cutting, 15-dependencies |
-| [05-download.md](05-download.md) | 617 | 15 | 14 | 06-tasks-ops, 11-integrations, 16-arr-domain-research |
-| [05-events.md](05-events.md) | 594 | 12 | 9 | 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting |
-| [05-health.md](05-health.md) | 476 | 15 | 21 | 09-http-api, 11-integrations, 12-cross-cutting |
-| [05-http-api.md](05-http-api.md) | 1041 | 73 | 37 | 09-http-api, 10-auth-rbac, 12-cross-cutting, 13-frontend |
-| [05-indexer.md](05-indexer.md) | 428 | 3 | 3 | 11-integrations, 16-arr-domain-research |
+| [05-config.md](05-config.md) | 1494 | 47 | 43 | 02-import-graph-hotspots, 03-layering-guard, 10-auth-rbac, 12-cross-cutting, 15-dependencies |
+| [05-download.md](05-download.md) | 663 | 15 | 14 | 06-tasks-ops, 11-integrations, 16-arr-domain-research |
+| [05-events.md](05-events.md) | 698 | 12 | 9 | 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting |
+| [05-health.md](05-health.md) | 570 | 21 | 25 | 09-http-api, 11-integrations, 12-cross-cutting |
+| [05-http-api.md](05-http-api.md) | 1206 | 74 | 38 | 09-http-api, 10-auth-rbac, 12-cross-cutting, 13-frontend |
+| [05-indexer.md](05-indexer.md) | 456 | 3 | 3 | 11-integrations, 16-arr-domain-research |
 | [05-library.md](05-library.md) | 680 | 40 | 42 | 02-import-graph-hotspots, 05-storage, 08-prior-art, 12-cross-cutting, 16-arr-domain-research |
-| [05-logging.md](05-logging.md) | 455 | 32 | 18 | 05-storage, 10-auth-rbac, 12-cross-cutting, 15-dependencies |
-| [05-metadata.md](05-metadata.md) | 1019 | 53 | 41 | 11-integrations, 12-cross-cutting, 16-arr-domain-research |
-| [05-metrics.md](05-metrics.md) | 380 | 17 | 24 | 12-cross-cutting, 15-dependencies |
-| [05-notify.md](05-notify.md) | 281 | 18 | 14 | 10-auth-rbac, 11-integrations, 12-cross-cutting, 16-arr-domain-research |
+| [05-logging.md](05-logging.md) | 497 | 34 | 20 | 05-storage, 10-auth-rbac, 12-cross-cutting, 15-dependencies |
+| [05-metadata.md](05-metadata.md) | 1107 | 54 | 42 | 11-integrations, 12-cross-cutting, 16-arr-domain-research |
+| [05-metrics.md](05-metrics.md) | 402 | 18 | 24 | 12-cross-cutting, 15-dependencies |
+| [05-notify.md](05-notify.md) | 347 | 18 | 14 | 10-auth-rbac, 11-integrations, 12-cross-cutting, 16-arr-domain-research |
 | [05-rbac.md](05-rbac.md) | 1039 | 38 | 24 | 09-http-api, 10-auth-rbac, 12-cross-cutting, 13-frontend |
-| [05-realtime.md](05-realtime.md) | 472 | 13 | 10 | 09-http-api, 12-cross-cutting, 13-frontend |
+| [05-realtime.md](05-realtime.md) | 555 | 13 | 10 | 09-http-api, 12-cross-cutting, 13-frontend |
 | [05-storage.md](05-storage.md) | 1419 | 38 | 36 | 02-import-graph-hotspots, 04-database-store, 05-storage, 08-prior-art, 12-cross-cutting |
-| [05-tasks.md](05-tasks.md) | 1224 | 63 | 78 | 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting |
-| [05-updater.md](05-updater.md) | 462 | 12 | 9 | 07-plugin-registry-sdk, 12-cross-cutting, 14-build-ci |
-| [06-app-sdk.md](06-app-sdk.md) | 1551 | 52 | 57 | 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting |
-| [07-ui-shell.md](07-ui-shell.md) | 1005 | 29 | 27 | 08-prior-art, 09-http-api, 13-frontend, 14-build-ci, 15-dependencies |
+| [05-tasks.md](05-tasks.md) | 1373 | 68 | 82 | 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting |
+| [05-updater.md](05-updater.md) | 495 | 12 | 9 | 07-plugin-registry-sdk, 12-cross-cutting, 14-build-ci |
+| [06-app-sdk.md](06-app-sdk.md) | 1806 | 52 | 57 | 06-tasks-ops, 07-plugin-registry-sdk, 08-prior-art, 12-cross-cutting |
+| [07-ui-shell.md](07-ui-shell.md) | 1091 | 29 | 28 | 08-prior-art, 09-http-api, 13-frontend, 14-build-ci, 15-dependencies |
 | [08-arr-facade.md](08-arr-facade.md) | 606 | 9 | 12 | 09-http-api, 10-auth-rbac, 16-arr-domain-research |
-| [09-abo-on-core.md](09-abo-on-core.md) | 816 | 49 | 101 | 00-index, 05-storage |
-| [10-tv-movies-proof.md](10-tv-movies-proof.md) | 922 | 8 | 7 | 08-prior-art, 11-integrations, 16-arr-domain-research |
+| [09-abo-on-core.md](09-abo-on-core.md) | 817 | 49 | 101 | 00-index, 05-storage |
+| [10-tv-movies-proof.md](10-tv-movies-proof.md) | 995 | 8 | 7 | 08-prior-art, 11-integrations, 16-arr-domain-research |
 | [11-multi-app.md](11-multi-app.md) | 99 | 2 | 2 | — |
-| [12-repo-split.md](12-repo-split.md) | 531 | 10 | 24 | 08-prior-art, 14-build-ci, 15-dependencies |
-| [13-toolchain.md](13-toolchain.md) | 313 | 47 | 42 | 00-baseline-build, 06-tasks-ops, 14-build-ci, 15-dependencies |
-| [14-risks-open-questions.md](14-risks-open-questions.md) | 151 | 3 | 6 | 00-baseline-build, 04-database-store, 08-prior-art |
-| **Total** | 21998 | 842 | — | — |
+| [12-repo-split.md](12-repo-split.md) | 618 | 10 | 30 | 08-prior-art, 14-build-ci, 15-dependencies |
+| [13-toolchain.md](13-toolchain.md) | 346 | 48 | 43 | 00-baseline-build, 06-tasks-ops, 14-build-ci, 15-dependencies |
+| [14-risks-open-questions.md](14-risks-open-questions.md) | 175 | 4 | 8 | 00-baseline-build, 04-database-store, 08-prior-art |
+| **Total** | 23903 | 867 | — | — |
 
 ## Key evidence by decision
 
 | Decision / claim | Evidence |
 |---|---|
+| An excluded module version never appears in `go mod graph`, so the genproto exclude check cannot probe the live graph | round-2 modules-build review X10; 03 §3.2 item 1 |
+| `go mod graph` works in workspace mode and shows the requirer edge once the exclude is dropped; a requirer edge alone does not make the build fail | X16 (round-2 revision, 03 §3.2.1) |
+| A core-only `go mod tidy` leaves the root red (`missing go.sum entry`): the tidy-coupling rule | round-2 modules-build review X11; 03 §3.2 item 4 |
+| `go mod tidy` writes no `go.sum` for a module without requirements; an empty committed one is kept | round-2 modules-build review X12; 03 §3.2 item 4 |
+| filter-repo aborts on colliding renamed paths: history paths come from real renames only | round-2 modules-build review X13; 12 §12.8.1 |
+| ABO imports react-router in 122 files (52 source, 70 test) | `git grep -lE "from ['\"]react-router(-dom)?['\"]" 748fd787a -- web`; 13 E4 |
 | `go.work` breaks the build; root cause; one-line `exclude` fixes it | `raw/00-baseline-build.md` E1, E7, E8–E10 |
 | The exclude belongs in `core/go.mod`, not the root (a root-only exclude fails for workspaces inside core once core holds Pebble + OTLP; a core-only exclude is green) | modules-build review X2, X3; 03 §3.2 item 1 |
 | `go install pkg@version` refuses a providing module with `replace` **or** `exclude` | modules-build review X4 (`cmd/go/internal/load/pkg.go:3313-3400` in the Go source) |
@@ -120,3 +130,9 @@ Round 1 (dispositions in `docs/plans/platform-core/reviews/spec-round-1-disposit
 Integration pass (cross-cluster requests, 2026-11-04):
 
 - integration pass: anchor census regenerated with the documented method once every file had settled (32 files, 21998 lines, 842 line anchors).
+
+Round 2 (dispositions in `docs/plans/platform-core/reviews/spec-round-2-dispositions.md`):
+
+- MOD2-5, MOD2-6, MOD2-15, MOD2-12 — key-evidence rows for X10, X16, X11, X12, X13 (exclude check, tidy coupling, empty `go.sum`, history paths).
+- FE2-19 — key-evidence row for the react-router count (122; 52 source, 70 test).
+- (all) — anchor census regenerated with the unchanged method during the round-2 revision (32 files, 23903 lines, 867 line anchors; snapshot for files still under revision).
