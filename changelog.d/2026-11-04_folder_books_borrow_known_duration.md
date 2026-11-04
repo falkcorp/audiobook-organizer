@@ -1,0 +1,3 @@
+### Fixed
+
+- The folder-books repair no longer holds a folder back as "fragmentary" just because some of its files have no measured length. When another entry for the same file (same place, same size, and the same fingerprint when both have one) already records a real length, the repair uses that length, including when the other entry belongs to a book that is in the trash. Entries marked missing or of a different size are never used. This only changes what the repair works out when it plans; it does not write anything to your library. The scanner shares the same rule for reading a stored length.
