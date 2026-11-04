@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-notify.md -->
-<!-- version: 1.13.0 -->
+<!-- version: 1.13.1 -->
 <!-- guid: 785812fd-5ddd-4540-be24-d061c0127788 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -221,13 +221,19 @@ the topic's `Permission` and its notify metadata (display name, default severity
 | Adapter | Target | Settings (secret fields in *italics*) | Egress |
 |---|---|---|---|
 | `core.email` | fixed address list | `host`, `port`, `username`, *`password`*, `from`, `to` (list, required) | SMTP through `env.Gate`; private hosts need `Local` (05-metadata M1.3); `host` and `port` are its destination fields (origin `smtp://host:port`), to which an operator-sourced *password* is bound by origin plus provenance (05-metadata M1.4 step 2, SEC7-3, R8-5); a change to `host` or `port` clears the stored *password* unless the write re-supplies it, exactly like a URL change (05-metadata M1.3 `Put`; lead decision, round 7) |
-| `core.webhook` | one URL | `url`, `method` (POST/PUT), `headers`, *`secret`* (HMAC), *`token`* (bearer) | `EgressConfigured`: a LAN receiver needs `Local`, which only an interactive `core:admin` holder sets (SEC2-7), or a `lan_allow` entry; a webhook migrated from ABO carries the `Local` that 05-metadata M1.10 gives every migrated instance; a URL change clears *secret* and *token* (SEC-15) |
+| `core.webhook` | one URL | `url`, `method` (POST/PUT), `headers` (never a reserved name, below), *`secret`* (HMAC), *`token`* (bearer) | `EgressConfigured`: a LAN receiver needs `Local`, which only an interactive `core:admin` holder sets (SEC2-7), or a `lan_allow` entry; a webhook migrated from ABO carries the `Local` that 05-metadata M1.10 gives every migrated instance; a URL change clears *secret* and *token* (SEC-15) |
 
 The webhook body is fixed (the `json` preset): `POST url`, body
 `{"schema":"mediacore.notification.v1","id","topic","severity","title","body","links","entity","fields","at","app"}`.
 Every webhook request carries `X-Mediacore-Delivery: <notification ID>.<instance>` (receiver-side dedupe for
 at-least-once delivery) and, when a secret is set, `X-Mediacore-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret,
-"<t>.<body>")>` so receivers can reject replays older than their tolerance. Email renders a fixed plain-text
+"<t>.<delivery>.<url>.<body>")>`, where `<delivery>` is the `X-Mediacore-Delivery` value and `<url>` the
+instance's configured `url` exactly as stored, so receivers can reject replays older than their tolerance, and a
+captured delivery replayed with a fresh delivery ID, or sent to another receiver that shares the secret (M6 copies
+the one family secret into every `webhook-<n>` instance, §10), fails verification (SEC-8). **Reserved headers:**
+`headers` can never set `X-Mediacore-*`, `Authorization` or `Content-Type` (compared case-insensitively); a
+`Put`, `Test` or `Importer` write naming one is refused (`ClassInvalid`, nothing written), so a configured header
+can never shadow the delivery ID, the signature, the bearer *token* or the body type. Email renders a fixed plain-text
 layout (title, body, links, fields).
 
 **Format (D10).** This is the only webhook format; HEAD's `X-Audiobook-Event` and `X-Audiobook-Signature-256`
@@ -327,7 +333,9 @@ All are new with core.
 `TestPublisher_ForeignTopicRefused` (module Publisher; COR2-3), `TestNotifyMeta_BusEventSendsNothing`,
 `TestPutRule_RequiresTopicPermission`, `TestDeliver_TransientRetriedPermanentDeadLettered`,
 `TestDeliver_RetryAfterHonoured` (synctest), `TestDeliver_BrokenChannelAlertsOtherChannels`,
-`TestDeliver_PublisherCtxCancelDoesNotCancelDelivery`, `TestWebhook_SignatureWithTimestamp`,
+`TestDeliver_PublisherCtxCancelDoesNotCancelDelivery`, `TestWebhook_SignatureWithTimestamp` (cells: an altered
+timestamp, delivery ID or destination URL each fails verification; SEC-8), `TestWebhook_ReservedHeadersRefused`
+(each reserved name, in any case, refused on `Put`, `Test` and `Importer`; SEC-8),
 `TestWebhook_DeliveryHeaderStable`, `TestWebhook_JSONBodyGolden` (the one format, §3.1; it is the webhook golden
 of the R2 verification list, 09), `TestWebhook_PrivateURLNeedsLocal`, `TestEmail_ReusesMailTLSRules` (the
 `internal/mail` tests move with it), `TestDeliver_EntryOlderThanMaxAgeDeadLettered` (synctest; OPS2-20),
@@ -522,3 +530,5 @@ Plan-phase consistency:
   into each, and the event list to one native rule `webhooks`; SMTP row without stage or rollback text. Stage
   references S0–S10/S7 re-keyed to R0–R3/R2; rollback and `staging-scrub` text removed from §4, §5, §7; tests
   reduced to the native suite plus two migration tests.
+
+Round 13 (2026-11-04): SEC-8 (§3.1: the signature covers the timestamp, the delivery ID and the destination URL; reserved headers refused on write; §9 test cells).
