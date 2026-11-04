@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.7.1 -->
+<!-- version: 1.8.0 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -73,12 +73,18 @@ conformance suites (`legacy/legacytest`) are members of core's `legacy` package,
 `integrations` and `providerhttp`, and is excluded from the API-stability gate (03 §3.3 "Legacy-only identifiers"),
 so deleting them at the integrations cutover is not a breaking change. `integrations` and `providerhttp` never
 import `legacy`: the Registry and the gate router name each capability through an **unexported** interface of their
-own with the identical method set, and an `export_test.go` assertion in each package checks, in both directions,
-that its interface and the `legacy` one are mutually assignable (and that its unexported record-ID helper returns
-what the exported one does), so a renamed or retyped member fails that package's tests instead of silently
-disabling routing. What cannot move stays in v1, inert for native apps (03 §3.3): the legacy-state pointer fields
-on the record types (`InstanceConfig.Legacy`, `StoredInstance.Legacy`, SIMP6-7), the `Registry.Confirm` service
-method (it answers 409 for a native instance), and the legacy half's constructor input `providerhttp.Options.Legacy`.
+own with the identical method set, and each detects the capability once, on the store it is handed, through that
+mirror (the kernel asserts only the two capabilities it drives, `legacy.ConfigOpener` and `legacy.ConfigSecrets`,
+05-config §1.3.3; SIMP7-5). The mirror test (03 §3.3) checks, in both directions, that each package's interface and
+the `legacy` one are mutually assignable, and that its unexported record-ID helper returns what the exported one
+does: the package's `export_test.go` only exports test aliases of the mirror and the helper, and
+`legacy_mirror_test.go` in its external test package (`package integrations_test`, `package providerhttp_test`),
+which may import `legacy`, asserts them (R7-7). A renamed or retyped member therefore fails that package's tests
+instead of silently disabling routing. What cannot move stays in v1, inert for native apps: the legacy-state pointer
+fields on the record types (`InstanceConfig.Legacy`, `StoredInstance.Legacy`, SIMP6-7), the `Registry.Confirm`
+service method (it answers 409 for a native instance), and the legacy half's constructor input
+`providerhttp.Options.Legacy`. These are this file's rows of 05-storage §5S.3.11's one table of legacy-serving
+identifiers that stay in SDK packages, which gives each one's reason and its state after the cutover (SIMP7-3).
 
 Secret names follow 05-config §2.3's grammar:
 `integrations.<kind>.<instance>.<field>` (e.g. `integrations.download.deluge.password`). Operator-layer
@@ -253,7 +259,9 @@ type Env struct {
 }
 
 // SecretReader resolves a declared secret at use time (not at build time), so
-// rotation takes effect on the next request without a rebuild.
+// rotation takes effect on the next request without a rebuild. A withheld
+// operator-sourced secret returns ErrOperatorSecretWithheld (M1.4 step 2,
+// SEC7-3); the adapter's call then fails before sending (ClassRefusedLocal).
 type SecretReader interface {
 	Secret(ctx context.Context, field string) (secrets.Value, error)
 }
@@ -396,9 +404,10 @@ type InstanceStore interface {
 
 // Legacy-only capabilities of an InstanceStore are OPTIONAL interfaces in
 // package legacy (R6-3, SIMP5-4; 05-storage §5S.3.11 "Legacy capabilities").
-// The kernel detects them by type assertion when it builds the Registry at
-// P4c; the Registry names them only through unexported interfaces with the
-// identical method sets (M1.1; checked by export_test.go). The native store
+// The Registry detects them once, by type assertion on the legacy store it is
+// handed at P4c, and names them only through unexported interfaces with the
+// identical method sets (M1.1; checked by the mirror test, 03 §3.3; the
+// kernel asserts neither, SIMP7-5). The native store
 // implements neither. A legacy store asserts them at compile time (books:
 // var _ legacy.Covering, var _ legacy.ExtConfirmer), because a failed
 // assertion is silent; legacytest.IntegrationsInstanceStoreSuite runs a case
@@ -485,6 +494,13 @@ func (r *Registry) Config(ref Ref) (InstanceConfig, bool)        // effective vi
 // (the legacy config alias's restoreRoundTripSecrets step,
 // internal/config/update_service.go:333-356 @748fd787a), so a URL change made
 // through the legacy UI cannot carry the stored secret to the new host (SEC3-4).
+// An operator-sourced secret (a canonical overlay or a BelowStored fill,
+// M1.4 step 2) is never stored, so this clearing cannot reach it; it is bound
+// to the operator-sourced values of the destination fields instead and is
+// withheld while any of them is not operator-sourced or has a different
+// origin (M1.4 step 2 "Operator secrets follow operator destinations";
+// SEC7-3). A Put that stores a URL therefore never makes an env-supplied key
+// follow it, whoever writes it.
 // A Put on a legacy-backed instance goes to the legacy store, which writes the
 // legacy fields in their legacy format and its extension record into the batch
 // that also holds the secrets (M1.4 step 2a). A Put that changes a secret
@@ -584,6 +600,9 @@ var (
 	ErrUnknownAdapter = errors.New("integrations: unknown adapter")
 	ErrFieldLocked   = errors.New("integrations: field is set by an operator value")
 	ErrNothingToConfirm = errors.New("integrations: the instance is neither suspended nor pending a Local confirmation")
+	// ErrOperatorSecretWithheld: an operator-sourced secret is not served to
+	// a destination the operator did not choose (M1.4 step 2, SEC7-3).
+	ErrOperatorSecretWithheld = errors.New("integrations: operator-supplied secret withheld from a destination that is not operator-set")
 )
 ```
 
@@ -600,7 +619,7 @@ package legacy // github.com/falkcorp/mediacore/legacy (L5; imports integrations
 // IntegrationsCoverID is the record ID a routed instance store's Covers
 // receives: "<adapter>|<kind>/<instance>" (adapter IDs and the Ref grammar
 // contain no "|", so it splits unambiguously). The Registry builds the same
-// string with an unexported helper; integrations' export_test.go asserts the
+// string with an unexported helper; the mirror test (03 §3.3) asserts the
 // two agree (M1.1).
 func IntegrationsCoverID(ref integrations.Ref, a integrations.AdapterID) string
 
@@ -698,6 +717,37 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
    names ABO reads today are **permanent** aliases onto these paths (05-config C7/C11). This is config's
    operator-layer lock (05-config §1.3.5) applied to instance fields; there is no second lock model.
 
+   **Operator secrets follow operator destinations (SEC7-3).** A secret field whose **effective** value comes from
+   an operator layer (a canonical overlay, or a `BelowStored` value filling an unstored field) is bound to the
+   operator-sourced values of the instance's destination fields: its URL-typed fields (for a metadata source, its
+   `base_url`, `internal/config/config.go:155-157` @748fd787a) or, for an adapter that dials a host and port rather
+   than a URL (`core.email`, [05-notify](05-notify.md) §3.1), that pair, whose origin is `smtp://host:port`. A
+   destination field counts as operator-sourced when its effective value comes from an operator layer, or when no
+   layer and no stored value sets it and the adapter's built-in default applies (no writer chose that host). When a
+   destination field's effective value is **not** operator-sourced (a stored value that a `core:integrations.manage`
+   holder wrote, whether it beats a `BelowStored` operator value under the precedence rule above or the operator set
+   no value for that field), or its origin (scheme, host, port) differs from the origin of that field's operator
+   value, every operator-sourced secret of the instance is **withheld**:
+   - `Env.Secrets` returns `ErrOperatorSecretWithheld` for it, so a call that needs it fails before sending
+     (`ClassRefusedLocal`: nothing dialled, no hold, breaker or quota write), and no request carries it;
+   - the instance reports `HealthDegraded` with reason `operator_secret_withheld`, naming the withheld fields;
+   - `Test` applies the same rule to the unsaved config, so it cannot send the operator's secret to a new host
+     either.
+
+   The instance stays withheld until a `Put` re-supplies the secret as a stored one, which M1.3's URL-change rule
+   then governs (not possible for a canonical, `Locked` secret, which only the operator changes), the stored
+   destination value is removed, or the operator sets the destination field too. The Registry evaluates the rule on the effective view at
+   `Load`, at every hot swap and at every config hot swap, from the per-field effective source it already records.
+   It closes the case M1.3's clearing step cannot reach: an operator secret is never stored, so a URL change has
+   nothing to clear. At HEAD only `settings.manage` (seed: `admin` only) could edit `openai_base_url`
+   (`internal/config/protected_fields.go:148` @748fd787a); this keeps SEC4-7's guarantee that a credential does not
+   follow a URL for operator credentials too, without restricting who may store a URL
+   (`TestPut_NonAdminURLDoesNotCarryEnvSecret`). The operator-secret pairs at HEAD are `ai/openai` (`OPENAI_API_KEY`
+   with `OPENAI_BASE_URL`, [05-ai](05-ai.md) §10), `download/deluge` (the Deluge env password with its web URL,
+   [05-download](05-download.md) §10), `notify/email` (`smtp_password` with `smtp_host`/`smtp_port`,
+   [05-notify](05-notify.md) §10), and `metadata/google-books` and `metadata/hardcover` (their operator keys with the
+   source's `base_url`; M1.10 table). Indexer instances have no operator values ([05-indexer](05-indexer.md) §10).
+
    **2a. Legacy-backed instances (R4-1).** A legacy-backed instance is one the app's legacy `InstanceStore` covers
    (`Covers(legacy.IntegrationsCoverID(ref, adapter))`, M1.3; per-record routing, M1.1).
    Its stored form is the app's pre-core format and there is no other copy: no import, no import hash, no
@@ -734,8 +784,7 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
      | `Limits` | Independent | kept |
      | `PendingLocal` (M1.10) | Independent (grants nothing) | kept; accepted by `Registry.Confirm` only while it equals the current legacy URL origin, dropped otherwise |
 
-     A suspended instance reports `HealthDegraded` with reason `integration_local_suspended` naming it (and counts
-     in 05-storage's `storage_extension_suspended`); one whose `secrets` copy is withheld reports
+     A suspended instance reports `HealthDegraded` with reason `integration_local_suspended` naming it; one whose `secrets` copy is withheld reports
      `integration_secret_origin_changed`. An `ExtOrphan` record is ignored and deleted by the store's next write.
      Nothing widens silently on roll-forward.
    - **Secrets: one mechanism, `secrets` over 05-config's `legacy.SecretsStore` (lead decision, round 6).** The
@@ -799,9 +848,17 @@ normally), but it builds no instance: `Lease` returns `ErrDisabled`, every insta
 reason `integrations_disabled`, the health task probes nothing, `Test` is refused (409, `ErrDisabled`), and
 providerhttp refuses every `Acquire` before dialling (`ClassRefusedLocal`), so no hold, breaker or quota state is
 written. Each kind file states what its callers do with `ErrDisabled` (05-ai, 05-download, 05-indexer, 05-notify).
-09 §9.3's staging procedure sets it in the staging copy's operator layer before that copy's first boot from S7 on (an
-operator-set value locks it, so no stored override can turn integrations back on there); a pre-S7 copy has no
-integrations package, and the procedure clears its legacy integration URLs instead (09).
+**Schedules keep running (R7-6, OPS7-3).** A schedule that fires against a disabled integration fails closed, but its
+run is enqueued and its clock advances like any other run (DATA5-8 needs every schedule to fire on staging): the
+health task's run probes nothing, and each kind's scheduled work (05-ai's batch poll, 05-download's poll, acquire's
+RSS sync over 05-indexer) does what its file's `core.integrations.disabled` row says. **Staging (R7-6).** 09 §9.3 is
+the one staging procedure. At **every** stage its offline scrub (`staging-scrub`) clears every legacy and every
+native integration URL, webhooks included (native rows under `c/integrations/instances/` too, so a later build
+without the operator layer stays inert), and every boot of the staging copy is egress-limited (09 §9.3). It also sets
+this switch in the operator layer of every staging boot of an S7-or-later binary (an operator-set value locks it, so
+no stored override can turn integrations back on there): the switch is keyed on the booting binary, not on the
+copy's age. It is defence in depth: an older build booted on the same copy (the boot-budget A/B, the R-test,
+`make rollback`) ignores it, so the cleared URLs are what keeps that build inert (SEC7-6, OPS7-7).
 
 **Native store (apps without a legacy store; SIMP4-3).** `NativeInstanceStore` lands with `integrations` at
 09 S7. Every app uses it for every instance its legacy store does not cover (routed model, M1.1); an app that passes
@@ -838,7 +895,8 @@ rollback are never delivered to it; only deliveries already pending in `c/outbox
 | `Confirm` of an instance that is neither suspended nor pending (native, or nothing changed) | closed (409 `ErrNothingToConfirm`) | Nothing to grant; a 200 would suggest trust changed. |
 | Pending `Local` candidate whose origin no longer equals the current URL origin | closed: `Confirm` drops the candidate and grants nothing | A candidate is bound to the URL the upgrade saw (DATA5-9). |
 | In-place encrypted legacy secret undecryptable (the app's cipher key missing) | open for boot, closed for that secret: `HealthMisconfigured` (`integration_secret_unreadable`); the row is kept | It is the only copy; the operator re-enters it (R5-1(b), DATA3-12). |
-| `core.integrations.disabled` true (a staging copy, R6-7) | closed for every outbound call (`ErrDisabled`, `HealthDisabled` reason `integrations_disabled`); open for boot, reads and `Put` | A copy of a production store must never act on production systems (OPS6-4). |
+| `core.integrations.disabled` true (a staging copy, R6-7) | closed for every outbound call (`ErrDisabled`, `HealthDisabled` reason `integrations_disabled`); open for boot, reads and `Put`. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances (the health task probes nothing). Staging also clears every legacy and native integration URL, webhooks included, at every stage (09 §9.3, R7-6) | A copy of a production store must never act on production systems (OPS6-4); schedules must still fire there (DATA5-8), and an older build that ignores the switch must find no URL to call (SEC7-6). |
+| An operator-sourced secret beside a destination field that is not operator-sourced, or whose origin differs from the operator value's (M1.4 step 2) | closed for that secret: withheld (`ErrOperatorSecretWithheld`, `ClassRefusedLocal`, nothing sent); open for the `Put` that stored the destination; `HealthDegraded` reason `operator_secret_withheld` | An env-supplied credential must not follow a URL that a non-admin stored (SEC7-3). |
 | Facade-pushed URL not http(s), or private and not in `lan_allow` (deferred-build member) | closed (422, nothing written) | One leaked facade key must not aim scheduled fetches at the LAN (SEC-15, SEC-5). |
 
 ### M1.6 Concurrency contract
@@ -862,7 +920,7 @@ Protection classes per 05-config §1.3.7 (SEC2-8).
 | `core.integrations.probe_timeout` | duration | `10s` | yes | none |
 | `core.integrations.drain_timeout` | duration | `30s` | yes | none |
 | `core.integrations.max_instances_per_kind` | int | `32` | yes (bounds metric label cardinality) | none |
-| `core.integrations.disabled` | bool: build no instance and make no outbound call (M1.4 "Outbound integrations off"; R6-7) | `false` | yes (read per `Lease` and per `Acquire`) | admin; set by 09 §9.3's staging procedure in the operator layer, which locks it |
+| `core.integrations.disabled` | bool: build no instance and make no outbound call (M1.4 "Outbound integrations off"; R6-7) | `false` | yes (read per `Lease` and per `Acquire`) | admin; set from S7 by 09 §9.3's staging procedure in the operator layer of every staging boot, which locks it (beside the URL clearing at every stage, R7-6) |
 
 The schedule key and `core.integrations.disabled` are new with core (HEAD has no integration health task and no
 such switch), so neither has a legacy alias.
@@ -904,9 +962,10 @@ by `Get` and re-imported by `secrets.Open`'s reconcile, never by the Registry; R
 (a HEAD store booted directly on S7+), `TestLocalStepAfterOldArchiveRestore` (a pre-S7 archive restored on S7+:
 the migration re-runs and again only records candidates), `TestConfirmPendingLocal_OriginChangedDropsCandidate`,
 `TestRegistry_LegacyWithoutCoveringCoversAll` (a legacy store without `legacy.Covering` is routed every record and
-the native store is never asked; SIMP5-1, SIMP6-5), `TestLegacyMirrorsMatch` (`export_test.go`: the Registry's
+the native store is never asked; SIMP5-1, SIMP6-5), `TestLegacyMirrorsMatch` (the mirror test, 03 §3.3: in
+`legacy_mirror_test.go`, `package integrations_test`, over the aliases `export_test.go` exports, the Registry's
 unexported capability interfaces and `legacy.Covering`/`legacy.ExtConfirmer` are mutually assignable, and its
-unexported record-ID helper equals `legacy.IntegrationsCoverID` on a table of refs; R6-3),
+unexported record-ID helper equals `legacy.IntegrationsCoverID` on a table of refs; R6-3, R7-7),
 `TestRegistry_BelowStoredFillsOnlyUnstoredField` (a `BelowStored` passthrough value fills an empty field, is not in
 `Locked`, and a stored value beside it wins; SEC6-5), `TestPassthroughBelowStored_StoredURLNotLanTrusted` (env
 `OPENAI_BASE_URL` set to a private address, the stored URL a second private address written by a non-admin holder of
@@ -914,7 +973,12 @@ unexported record-ID helper equals `legacy.IntegrationsCoverID` on a table of re
 `TestRegistry_CanonicalOverlayLocksAndTrusts` (a canonical operator value overlays a stored URL, is `Locked`, and is
 trusted for private networks; SEC6-5), `TestRegistry_DisabledMakesNoOutboundCall` (`core.integrations.disabled`:
 records listed, `Lease` and `Test` give `ErrDisabled`, the health task and a transport that fails the test on any
-request see nothing, no hold or quota row is written; R6-7),
+request see nothing, no hold or quota row is written, and a scheduled health run is still enqueued and advances its
+clock; R6-7, R7-6), `TestPut_NonAdminURLDoesNotCarryEnvSecret` (env `OPENAI_API_KEY`, nothing stored; a non-admin
+holder of `core:integrations.manage` Puts a new public URL: the `Put` succeeds, no request to it carries the key,
+`Test` of the same config sends no key, and health reads `operator_secret_withheld`; a stored secret re-supplied by
+a `Put`, or the stored URL removed, ends the withholding; SEC7-3), `TestOperatorSecret_AdapterDefaultURLServed`
+(env key, no URL set anywhere: the key goes to the adapter's built-in host; SEC7-3),
 `TestLegacyWebhook_SharedFieldsFamilyWide`,
 `TestFacadeIndexer_LANRefused` (FacadeWriter; with the deferred facade build),
 `TestRegistry_BuildDoesNoIO` (transport that fails the test on any request),
@@ -1055,7 +1119,7 @@ type Options struct {
 	// routed store's legacy-half input, 03 §3.3). Routed model (M1.1,
 	// SIMP5-1): a hold or counter goes to Legacy when Legacy covers its
 	// legacy.ProviderHTTPCoverID(scope, counter) (legacy.Covering, named here
-	// through an unexported mirror interface checked by export_test.go; a
+	// through an unexported mirror interface checked by the mirror test, 03 §3.3; a
 	// legacy store without it covers everything, SIMP6-5), else to Store.
 	Legacy    GateStore
 	Base      http.RoundTripper      // default: a cloned http.DefaultTransport, never the global itself
@@ -1203,7 +1267,7 @@ classify → breaker/hold/metrics update → retry if Class.Retryable() && attem
 |---|---|---|
 | Hold active | closed (`ClassRefusedLocal`, nothing sent) | A held provider is removed from the chain, not called and failed (`throttle.go:32-35`). |
 | Breaker open | closed | Ride out a blip without traffic. |
-| `core.integrations.disabled` true (R6-7) | closed (`ClassRefusedLocal`, nothing dialled, no hold, breaker or quota write) | A staging copy must never reach production systems (OPS6-4, M1.4). |
+| `core.integrations.disabled` true (R6-7) | closed (`ClassRefusedLocal`, nothing dialled, no hold, breaker or quota write); a scheduled run that reaches the gate fails closed, but the run is enqueued and its clock advances (M1.4, R7-6) | A staging copy must never reach production systems (OPS6-4, M1.4). |
 | Half-open probe lease expires without an outcome | **reopens** (counts as one failure) | Fixes defect 2: a probe can never strand the breaker. |
 | Outcome is `ClassCanceled`, `ClassRefusedLocal`, `ClassNotFound`, `ClassInvalid`, `ClassBadOutput` | not counted by breaker or hold | Fixes defect 3; these say nothing about the remote's health. |
 | Daily quota spent | closed for Background at `Background`, for Interactive at `Total` | Reserve quota for people (owner decision recorded at `dailyquota.go:6-11`). |
@@ -1272,8 +1336,8 @@ configured hosts is refused; SEC4-15), `TestLocalInstance_RedirectToOtherPrivate
 (SIMP4-3), `TestGate_LegacyCoveredScopesNeverNative` (with a fake legacy store: a covered scope's hold and count go
 only to it, others only to `c/providerhttp/`; R4-1), `TestGate_LegacyWithoutCoveringCoversAll` (a legacy store
 that does not implement `legacy.Covering` is routed every scope and counter; SIMP5-4, SIMP6-5),
-`TestGateLegacyMirrorsMatch` (`export_test.go`: the unexported mirror of `legacy.Covering` and the record-ID helper
-agree with `legacy`; R6-3), `TestGate_DisabledRefusesBeforeDial` (`core.integrations.disabled`: `Acquire` refuses
+`TestGateLegacyMirrorsMatch` (the mirror test, 03 §3.3: in `legacy_mirror_test.go`, `package providerhttp_test`,
+the unexported mirror of `legacy.Covering` and the record-ID helper agree with `legacy`; R6-3, R7-7), `TestGate_DisabledRefusesBeforeDial` (`core.integrations.disabled`: `Acquire` refuses
 with `ClassRefusedLocal`, no hold, breaker or quota write; R6-7), `TestQuota_ConcurrentReservationsNoLostCount` (`-race`: N goroutines reserving on one counter persist
 exactly N; R5-4). Store conformance: `providerhttptest.GateStoreSuite(t, factory)` (public test-support package
 `integrations/providerhttp/providerhttptest`, 03 §3.3, MOD5-6) runs against `NativeGateStore`, and an app runs it
@@ -1685,3 +1749,12 @@ Round 6 (`docs/plans/platform-core/reviews/spec-round-6-dispositions.md`):
   `LegacyRecord` → `StoredInstanceLegacyState` (the `Legacy *<Type>LegacyState` rule of 03 §3.3).
 - COR6-7 / SIMP6-10 — M2.3: the gate store's own-batch writes cite 05-storage's one list of three exceptions.
 - integration pass (round 6, lead decision: one legacy-secret mechanism): `StoredInstanceLegacyState` drops `InPlace`, `Moved` and `Secrets`; M1.4 step 2a reads and stages every secret field through `secrets`, which alone reaches 05-config's `legacy.SecretsStore` (kept names written in place, moved names sentinelled, re-entry re-imported by `secrets.Open` at 06 P4d step 1(ii)); tests, the legacy suite cases and the legacy-backed table use 05-config's kept/moved terms; the out-of-scope "spec defect" note is removed; `legacy.Extension` replaces `storage.Extension`. Already applied: M1.4 step 2's `BelowStored` passthrough names (SEC6-5).
+
+Round 7 (`docs/plans/platform-core/reviews/spec-round-7-dispositions.md`):
+
+- SEC7-3 — M1.4 step 2 "Operator secrets follow operator destinations": an operator-sourced secret is withheld while a destination field (URL-typed, or `core.email`'s host and port) is not operator-sourced or has a different origin; `ErrOperatorSecretWithheld`, `ClassRefusedLocal`, `HealthDegraded` `operator_secret_withheld`; `Test` follows it; M1.3 `Put` and `SecretReader` comments, M1.5 row; HEAD's pairs listed; `TestPut_NonAdminURLDoesNotCarryEnvSecret`, `TestOperatorSecret_AdapterDefaultURLServed`.
+- R7-6 / SEC7-6 / OPS7-3 / OPS7-7 — M1.4 "Outbound integrations off": schedules run (a run against a disabled integration fails closed, is enqueued and advances its clock); 09 §9.3 clears every legacy and native integration URL, webhooks included, at every stage, every staging boot is egress-limited, and the switch (from S7) is keyed on the booting binary; M1.5, M1.7 and M2.5 rows; `TestRegistry_DisabledMakesNoOutboundCall` asserts the enqueued health run.
+- R7-7 / SIMP7-1 / COR7-2 — M1.1, M1.3 comments, "Legacy members", M2.3: "export_test.go assertion" → the mirror test (03 §3.3); `TestLegacyMirrorsMatch` and `TestGateLegacyMirrorsMatch` live in `legacy_mirror_test.go` of `package integrations_test` / `package providerhttp_test`.
+- SIMP7-5 — M1.1, M1.3: the Registry and the gate router detect their capabilities once, through their mirrors; the kernel asserts only `legacy.ConfigOpener` and `legacy.ConfigSecrets`.
+- SIMP7-3 — M1.1: the "stays in v1" members are cited as this file's rows of 05-storage §5S.3.11's one table.
+- SIMP7-6 — M1.4 step 2a: the reference to `storage_extension_suspended` is deleted; `integration_local_suspended` is the owner's token.

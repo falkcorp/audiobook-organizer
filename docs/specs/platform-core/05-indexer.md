@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-indexer.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 5e2d5cda-5f98-4db2-87b1-b4c8d6519ec7 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -352,7 +352,7 @@ fixtures when built:
 | HTTP 429 / rate vocabulary | `ClassRateLimited` | hold ≥15m (Retry-After honoured, clamped) | M2 rule. |
 | Malformed XML / not RSS | `ClassBadOutput` | closed for that indexer; does not count against breaker | Likely a proxy/login page; surfaced in health. |
 | `Plan` finds no usable param | `ClassUnsupported` | skip that indexer, outcome recorded | Sonarr skips such searches (raw/16 §4.2). |
-| `core.integrations.disabled` true (a staging copy, R6-7; 05-metadata M1.4) | `ClassRefusedLocal` (`ErrDisabled` from `Lease`) | closed for every indexer: no search, RSS page or fetch is sent, no RSS cursor moves | A copy of a production store must never query or download from production indexers (OPS6-4). |
+| `core.integrations.disabled` true (a staging copy, R6-7; 05-metadata M1.4) | `ClassRefusedLocal` (`ErrDisabled` from `Lease`) | closed for every indexer: no search, RSS page or fetch is sent, no RSS cursor moves. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances (acquire's `core.acquire.rss-sync` run included). At every stage, staging (09 §9.3) also clears every legacy and native integration URL, indexer URLs included (R7-6) | A copy of a production store must never query or download from production indexers (OPS6-4, SEC7-6); schedules must still fire there (DATA5-8). |
 | Every eligible indexer failed | closed: `ErrNoIndexerAnswered` (joined) | — | "No results" must be distinguishable from "nobody answered". |
 | Caps refresh fails with cached caps present | open (stale caps used) | — | A transient caps failure must not stop searching. |
 | Fetched file exceeds size cap / not a torrent or NZB | `ClassBadOutput` | closed | Never hand garbage to a download client. |
@@ -411,7 +411,9 @@ round-trip tests live with 08.
 
 ## 10. Migration from ABO
 
-Nothing to migrate: ABO has no indexer code (§2). The package is new. ABO may later register an audiobook
+Nothing to migrate: ABO has no indexer code (§2). The package is new. No legacy integration-bound key exists for
+it, so no operator value reaches an indexer instance and 05-metadata M1.4 step 2's operator-secret rule (SEC7-3)
+has no case here; it applies unchanged to any operator value added later. ABO may later register an audiobook
 search criteria → `Query` mapping (`TypeBook` with `author`/`title`, categories `CatAudiobook`) when an
 acquisition feature is planned for it; that is a books-module decision, not part of the extraction.
 
@@ -469,3 +471,8 @@ Round 6 (`docs/plans/platform-core/reviews/spec-round-6-dispositions.md`):
 
 - R6-7 / OPS6-4 — §5 row and §9 `TestSearchAll_IntegrationsDisabledSendsNothing`: with
   `core.integrations.disabled` (05-metadata M1.4) no indexer request is sent and no RSS cursor moves.
+
+Round 7 (`docs/plans/platform-core/reviews/spec-round-7-dispositions.md`):
+
+- R7-6 / SEC7-6 / OPS7-3 — §5 `core.integrations.disabled` row: a schedule against a disabled integration fails closed but is enqueued and advances its clock; staging clears every legacy and native integration URL at every stage.
+- SEC7-3 — §10: no operator value reaches an indexer instance, so the operator-secret rule of 05-metadata M1.4 step 2 has no case here.
