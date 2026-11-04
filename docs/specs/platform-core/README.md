@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.12.1 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -16,22 +16,22 @@ The design, in brief:
 
 - **Four releases** (03 §3.8): **R0** hotfixes (the six early security fixes, the toolchain bump, the updater
   hotfix); **R1** the core runtime with no user-data change (nested module, composition root, perimeter, logging,
-  core storage with strict claims, the one journaled swap, UI-0); **R2** the one-way cutover of every core-service
+  core storage with strict claims, the one journaled swap, the first UI steps: react-router 8 and the api-client); **R2** the one-way cutover of every core-service
   family plus the UI work; **R3** cleanup and the one upgrade floor. Code lands dark on `main`, each subsystem is
   wired in one flip PR, and every merge passes `make ci` and e2e; there are no soaks, and auto-promotion pauses
-  from the first R2 flip until R2 ships (D11, D12 F1).
+  from the first R2 flip until R2 ships (D11, D12 (a); D12's answers are cited as (a)–(d)).
 - **Core services own their state natively** (03 §3.3 "Store interfaces and importers"): each persists in its own
   `c/<subsystem>/` keyspace. In R2 books' migration steps decode ABO's HEAD rows and hand them to each subsystem's
   importer, so core still holds no audiobook key name; books' own domain families stay in place.
 - **One-way, checkpointed migration** (03 §3.7, §3.8): the boot takes the pre-migration checkpoint after a disk
   headroom check, runs M1–M8, quarantines rows it cannot decode, and raises the levels so older binaries refuse the
   store. Rollback is an offline restore of the checkpoint or an off-host archive (keyring and state files included)
-  plus the previous binary; the checkpoint is deleted after 7 days (D12 F4).
-- **What survives R2** (D12 F2): API keys and the Audiobookshelf phone apps' sessions; task-run and log history,
+  plus the previous binary; the checkpoint is deleted after 7 days (D12 (d)).
+- **What survives R2** (D12 (b)): API keys and the Audiobookshelf phone apps' sessions; task-run and log history,
   converted. Web sessions and one-time tokens are reset; throttle holds, indexes and caches are rebuilt.
 - **The hardened design lands directly in R2:** hashed sessions and one-time tokens, `mck_` keys, native scopes,
   encrypted secrets, and operator-locked config with one fail-closed rule for the auth and Basic-gate keys.
-- **One frozen external contract** (D12 F3): the Audiobookshelf-compatible API of the phone apps, pinned by its
+- **One frozen external contract** (D12 (c)): the Audiobookshelf-compatible API of the phone apps, pinned by its
   conformance suite on the migrated fixture. Config keys, env names, metric names and HTTP paths may change; the
   dashboards, rules, scripts and skills change in the same PR, and a set retired security or DB-path env name
   refuses boot.
@@ -41,8 +41,8 @@ The design, in brief:
   `TestCoreHoldsNoAppKeyNames` stay; 04 is an informative map. Every (GOOS, tag set) that ships is vetted on every
   PR (R9-10, R10-9).
 - **Boot and operations safety:** HEAD's gin routes register with a same-owner collision rule (A-1); one crash
-  matrix covers the whole boot and every migration step (A-8, R9-7); a factory reset only stages, as a kind of the
-  one journaled swap, under one confirmation contract, `storage.ResetRequest` (R7-2, R8-1, R9-6); concurrent
+  matrix covers the whole boot and every migration step (A-8, R9-7); a factory reset only stages (offline only in R1), as a kind
+  of the one journaled swap, under one confirmation contract, `storage.ResetRequest` (R7-2, R8-1, R9-6); concurrent
   feature work has move windows (A-11).
 - Deferred-build contracts are **non-normative design sketches** (A-15).
 
@@ -239,4 +239,4 @@ Final verification:
 
 Owner decisions D10–D12:
 
-- D10–D12 revision (2026-11-04): status line and design summary rewritten around the releases R0–R3, native ownership with importers, the one-way checkpointed R2 cutover, what survives it (D12 F2), the hardened design in R2 and the one frozen contract (D12 F3); the representation-neutral, lock-parity, otelgin, soak-gate and trailer bullets deleted. Build scope: the per-family cutover row, the cutover-only members row (grants, served-run preconditions) and the post-S10 hardening row deleted; backup encryption and the seed-role merge diff keep a row; the config basis row deleted (05-config no longer defines it). Decisions paragraph: decision 13, N14, N15, G5′ and D10–D12. Reading order item 4 cites 03 §3.8.
+- D10–D12 revision (2026-11-04): status line and design summary rewritten around the releases R0–R3, native ownership with importers, the one-way checkpointed R2 cutover, what survives it (D12 F2), the hardened design in R2 and the one frozen contract (D12 F3); the representation-neutral, lock-parity, otelgin, soak-gate and trailer bullets deleted. Build scope: the per-family cutover row, the cutover-only members row (grants, served-run preconditions) and the post-S10 hardening row deleted; backup encryption and the seed-role merge diff keep a row; the config basis row deleted (05-config no longer defines it). Decisions paragraph: decision 13, N14, N15, G5′ and D10–D12. Reading order item 4 cites 03 §3.8. Consistency pass: D12's answers cited as D12 (a)–(d), UI-0 renamed to R1's first UI steps, and the R1 reset noted as offline-only.
