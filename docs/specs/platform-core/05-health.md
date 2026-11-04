@@ -465,7 +465,8 @@ layer redacted, so a reader knows the bundle is not raw.
 
 Generation is the core task `core.diagnostics.export`: Shape Task, `ReadOnly`, `Resume: ResumeDrop`,
 `Timeout: 30m`, progress per section (the watchdog lesson of `service.go:155-163`), `Perms.Start:
-core:system.manage`. The zip is written through an `os.Root` opened on
+core:system.manage`. That is the kind from F8; from F5 to F8 the same kind runs over the interim books backend
+`diagnostics.InterimExport` that ABO's `main` sets in `app.Options.InterimBackends` (5H.10), and F8 deletes both. The zip is written through an `os.Root` opened on
 `core.diagnostics.dir` (no path escapes), named `<run-id>.zip`, deleted after
 `core.diagnostics.retention` by the task `core.diagnostics.prune`
 (`Schedule: tasks.ScheduleFromConfig("core.diagnostics.schedules.prune")`, default every 1 h; the key
@@ -678,16 +679,16 @@ replaces it (06; 05-metrics owns the naming rule). HEAD emits none of these seri
 | `internal/sysinfo` library parts, `DashboardService` | `books` dashboard; `GetHealthCheckResponse` deleted (no caller) |
 | `internal/diagnostics` zip/section machinery | `health/diagnostics` |
 | SlimBook/authors/series/version-groups/iTunes/missing-fields sections, `BuildBatchJSONL` | `books` `Contributor` sections; the AI batch builder goes with [05-ai](05-ai.md) |
-| op `diagnostics.export` | `core.diagnostics.export`, declared in core with no ABO ID: `diagnostics.export` → `core.diagnostics.export` is a row of books' kind-rename map, which the tasks migration M4 applies once to HEAD's stored runs, so no op ID lands in a `core/` file (05-tasks §5T.8.2; 03 rule R1(c); MOD6-6); `diagnostics.ai-analyze` stays `books`. F2 creates the kind's minimal owner registration in `health/diagnostics`, F5 registers it on core's executor when HEAD's engine is deleted, so M4's renamed runs and new exports have a definition from F5, and F8's diagnostics flip extends that registration to 5H.3.5's bundle (IMPL-5) |
+| op `diagnostics.export` | `core.diagnostics.export`, declared in core with no ABO ID: `diagnostics.export` → `core.diagnostics.export` is a row of books' kind-rename map, which the tasks migration M4 applies once to HEAD's stored runs, so no op ID lands in a `core/` file (05-tasks §5T.8.2; 03 rule R1(c); MOD6-6); `diagnostics.ai-analyze` stays `books`. F2 creates the kind's minimal owner registration in `health/diagnostics`, and F5 registers it on core's executor when HEAD's engine is deleted, so M4's renamed runs and new exports have a definition from F5. From F5 until F8 the kind runs over an interim books backend: `diagnostics.InterimExport`, a one-method interface in the `diagnostics` package (05-tasks §5T.8.2), which ABO's `main` supplies through the field `app.Options.InterimBackends`. F8's diagnostics flip replaces the backend with 5H.3.5's bundle and deletes that field (IMPL-5) |
 
 **Landing by release** (09 assigns the releases; this is what `health` needs in each):
 
 | Release | What of `health` exists | Why then |
 |---|---|---|
 | R1 | the flight recorder, rewritten onto a `*slog.Logger` (04 §8.1); `Supervisor` (`ExtendStart` behind `Deps.ExtendStart` and the stateless `app.ExtendStart`; `READY=1`/`STATUS=`/`STOPPING=1` from the kernel); the split of HEAD's fixed-token source and the authenticated `degraded` field of `GET /api/v1/system/status` (5H.3.1) | the flight recorder is a leaf with no ABO import; `internal/sdnotify` moves with the kernel lifecycle and all five importers are rewired then (04); R1's factory-reset and checkpoint tokens are posture tokens, which never reach `/health` (SEC-7) |
-| R2, foundation PRs (F2) | the readiness core, dark: `ComponentID`, `Result`, `Reporter`, `Reporters`, `Registry` (`Register`, `Ready`, `Wait`), with the registry's token route into HEAD's split token source (5H.3.1); the minimal owner registration of `core.diagnostics.export` | F3's cutover raises `storage_quarantine`, `secrets_undecryptable` and `secrets_keyring_not_exported` from its first boot (IMPL-12), and F2 lands the tasks executor dark, which waits on `Ready` signals (03 §3.8) |
-| R2, tasks flip (F5) | `Registrar.Health` and `Deps.Health`, the components `core.storage` and `books.memdb`, and `core.diagnostics.export` registered on core's executor | the tasks executor dispatches on `Ready` signals from its first live release (05-tasks 5T.4 step 2, COR4-8; 06 §6.4.10) |
-| R2, backup-health-metrics flip (F8) | everything else: `Snapshot`, the other components, the probes and `/api/core/v1/health`, the `/system/*` routes, the status topic, `Startup` and `Registrar.StartupSteps`, the watchdog ping, diagnostics (extending F2's registration of `core.diagnostics.export`), sysinfo; `/api/health` and `/api/v1/health` deleted, their callers switched in the same PR | 06 §6.4.10 lands `StartupSteps` and `Diagnostics` there, and every core service family moves in R2 |
+| R2, foundation PRs (F2) | the readiness core, dark: `ComponentID`, `Result`, `Reporter`, `Reporters`, `Registry` (`Register`, `Ready`, `Wait`), with the registry's token route into HEAD's split token source (5H.3.1); the minimal owner registration of `core.diagnostics.export` and its interim backend interface `diagnostics.InterimExport` | F3's cutover raises `storage_quarantine`, `secrets_undecryptable` and `secrets_keyring_not_exported` from its first boot (IMPL-12), and F2 lands the tasks executor dark, which waits on `Ready` signals (03 §3.8) |
+| R2, tasks flip (F5) | `Registrar.Health` and `Deps.Health`, the components `core.storage` and `books.memdb`, and `core.diagnostics.export` registered on core's executor, running over the interim books backend that ABO's `main` sets in `app.Options.InterimBackends` | the tasks executor dispatches on `Ready` signals from its first live release (05-tasks 5T.4 step 2, COR4-8; 06 §6.4.10) |
+| R2, backup-health-metrics flip (F8) | everything else: `Snapshot`, the other components, the probes and `/api/core/v1/health`, the `/system/*` routes, the status topic, `Startup` and `Registrar.StartupSteps`, the watchdog ping, diagnostics (5H.3.5's bundle replaces the interim backend of `core.diagnostics.export`, and `app.Options.InterimBackends` is deleted), sysinfo; `/api/health` and `/api/v1/health` deleted, their callers switched in the same PR | 06 §6.4.10 lands `StartupSteps` and `Diagnostics` there, and every core service family moves in R2 |
 
 ## 5H.11 Open items
 
@@ -837,4 +838,6 @@ authenticated endpoints, before F8 on a `degraded` field R1 adds to HEAD's `GET 
 readiness core and the registry's token route so F3's `storage_quarantine`, `secrets_undecryptable` and
 `secrets_keyring_not_exported` surface, and the R1 checkpoint tokens travel the same route; 5H.3.3 drops the
 "same handler" justification for the `/health` exemption; new `TestHealth_UnauthenticatedTokenSetGolden`;
-`core.diagnostics.export` gets F2's minimal owner registration, registered at F5 and extended at F8.
+`core.diagnostics.export` gets F2's minimal owner registration and is registered at F5, running until F8 over the
+interim books backend `diagnostics.InterimExport` set through `app.Options.InterimBackends`, which F8 deletes
+(names from 05-tasks §5T.8.2).
