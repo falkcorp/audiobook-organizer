@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.33.0
+# version: 3.34.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-10-31
+# last-edited: 2026-11-04
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -211,6 +211,11 @@ jobs:
           go-version: '1.27.2'
           cache: false
 
+      # Before the cache restore, in every job that restores it:
+      # scripts/ci/free_runner_disk.sh says why.
+      - name: Free runner disk
+        run: scripts/ci/free_runner_disk.sh
+
       - name: Restore Go cache (manual)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -277,6 +282,11 @@ jobs:
           go-version: '1.27.2'
           cache: false
 
+      # Before the cache restore, in every job that restores it:
+      # scripts/ci/free_runner_disk.sh says why.
+      - name: Free runner disk
+        run: scripts/ci/free_runner_disk.sh
+
       - name: Restore Go cache (manual)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -327,6 +337,11 @@ jobs:
         with:
           go-version: '1.27.2'
           cache: false
+
+      # Before the cache restore, in every job that restores it:
+      # scripts/ci/free_runner_disk.sh says why.
+      - name: Free runner disk
+        run: scripts/ci/free_runner_disk.sh
 
       - name: Restore Go cache (manual)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -436,6 +451,11 @@ jobs:
           go-version: '1.27.2'
           cache: false
 
+      # Before the cache restore, in every job that restores it:
+      # scripts/ci/free_runner_disk.sh says why.
+      - name: Free runner disk
+        run: scripts/ci/free_runner_disk.sh
+
       - name: Restore Go cache (manual)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -530,6 +550,11 @@ jobs:
         with:
           go-version: '1.27.2'
           cache: false
+
+      # Before the cache restore, in every job that restores it:
+      # scripts/ci/free_runner_disk.sh says why.
+      - name: Free runner disk
+        run: scripts/ci/free_runner_disk.sh
 
       - name: Restore Go cache (manual)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -666,19 +691,6 @@ jobs:
     # could not have been fixed from this repo.
     timeout-minutes: 35
     steps:
-      # GitHub's ubuntu-latest image leaves about 14 GB free, and a -race
-      # build of the whole module plus one linked test binary per package
-      # (each several hundred MB with race instrumentation) can fill it:
-      # 2026-10-31, PRs #4330 and #4331 failed shard 2/4 with "no space left
-      # on device" from the linker, on code that does not touch the shard's
-      # packages. Removing the preinstalled .NET, Android, GHC and CodeQL
-      # toolchains, which no step here uses, frees about 25 GB.
-      - name: Free runner disk
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
-
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -713,6 +725,10 @@ jobs:
       # them landed within three hours of the first save on 2026-10-09) makes
       # a day-old entry mostly cold; measured, a shard went from 4.5 to 8.5
       # minutes against the same entry.
+      # Before the cache restore: scripts/ci/free_runner_disk.sh says why.
+      - name: Free runner disk
+        run: scripts/ci/free_runner_disk.sh
+
       - name: Slot stamp for the race build cache
         id: stamp
         run: echo "slot=$(date -u +%F)-$(( $(date -u +%-H) / 6 ))" >> "$GITHUB_OUTPUT"
@@ -790,6 +806,11 @@ jobs:
           go-version: '1.27.2'
           cache: false
 
+      # Before the cache restore, in every job that restores it:
+      # scripts/ci/free_runner_disk.sh says why.
+      - name: Free runner disk
+        run: scripts/ci/free_runner_disk.sh
+
       - name: Restore Go cache (manual)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -858,13 +879,6 @@ jobs:
     # setup, or the runner kills the job before Go prints the goroutine dump.
     timeout-minutes: 35
     steps:
-      # Same reason as the step in go-test-short-shards above.
-      - name: Free runner disk
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
-
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -875,6 +889,11 @@ jobs:
         with:
           go-version: '1.27.2'
           cache: false
+
+      # Before the cache restore, in every job that restores it:
+      # scripts/ci/free_runner_disk.sh says why.
+      - name: Free runner disk
+        run: scripts/ci/free_runner_disk.sh
 
       - name: Restore Go cache (manual)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
