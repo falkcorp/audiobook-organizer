@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/12-repo-split.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.12.1 -->
 <!-- guid: eb47baa1-640b-4c96-96cc-f6b2bdeaa57e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -88,7 +88,7 @@ Before the split, `github.com/falkcorp/mediacore` has no fetchable versions (the
 and the root module reaches core only via `replace`), so `gorelease` cannot run. `apidiff` works on
 locally written export data and does not need the proxy. Both tools exist at
 `golang.org/x/exp/cmd/{apidiff,gorelease}` (`x/exp` `v0.0.0-20261014143641-f0251eb4aa3e`, published
-2026-10-14, past the release-age soak of 13 §13.6). They are run from a pinned tools module,
+2026-10-14, past the 14-day release-age rule of 13 §13.6). They are run from a pinned tools module,
 `core/tools/apidiff/go.mod` (`tool golang.org/x/exp/cmd/apidiff` and `tool golang.org/x/exp/cmd/gorelease`),
 in the repo's existing pattern, never from an ad-hoc `@version`. The module lives under `core/` so that
 it moves with core at the split and core CI can run from an export of `core/` alone (SC4).
@@ -178,14 +178,14 @@ published; it is the first verification step of the cutover (§12.8.2 step 8).
 
 (a) Core's **whole merge gate** runs from an export containing **only** `core/` — not just
 `go build/vet/test`, so a target that calls a script outside `core/` fails here. Once `core/web` exists
-(UI-0, part of R1; 04 §8.1), `npm ci` runs first, so the run also proves that `core/go.mod`'s `ignore ./web` keeps
-npm-shipped `.go` files out of `./...` (03 §3.2); before UI-0 there is no `core/web/package.json` and
+(release R1's `core/web` PR, 07 §7.19 step 2; 04 §8.1), `npm ci` runs first, so the run also proves that `core/go.mod`'s `ignore ./web` keeps
+npm-shipped `.go` files out of `./...` (03 §3.2); before that PR there is no `core/web/package.json` and
 the step is skipped. Core's own build outputs are ignored by files inside `core/`, so they travel with the export
 and into the split repo, and the run leaves the tree clean without the root `.gitignore` (FE7-1, FE8-4):
 `core/.gitignore`, created by the R1 PR that creates `core/`, lists `/.ci/readiness/` (the `readiness` report,
 §12.3.11), `/hello` (the hello binary; or the hello target writes it under an ignored directory with `-o`),
 `**/playwright-report/` and `**/blob-report/`; `core/web/.gitignore` (`node_modules/`, `dist/`, `*.tsbuildinfo`,
-`coverage/`, `test-results/`, `playwright-report/`, `blob-report/`; created by the UI-0 PR, 07 §7.3 and 09 R1)
+`coverage/`, `test-results/`, `playwright-report/`, `blob-report/`; created by the `core/web` PR, 07 §7.3 and 09 R1)
 covers the workspace. A `git archive` extract is not a git work tree, so the check makes the export one
 before the run (a fresh repository holding only `core/`, which keeps the "only `core/`" property) and then
 asserts that `git status --porcelain` is empty:
@@ -278,7 +278,7 @@ python3 scripts/ci/web_build_against_tarballs.py --tarballs "$TMP/pkgs"   # copi
 
 `govulncheck` comes from a pinned tools module, `core/tools/govulncheck/go.mod`
 (`tool golang.org/x/vuln/cmd/govulncheck`; `golang.org/x/vuln` v1.9.0, published 2026-10-11, is the
-newest release on 2026-11-04 and past the 14-day soak), never `@latest`:
+newest release on 2026-11-04 and past 13 §13.6's 14-day release-age rule), never `@latest`:
 
 ```sh
 go -C core/tools/govulncheck install tool
@@ -519,7 +519,7 @@ pre-move commit of the file.
 The path file is generated from **real history at the freeze commit `F` by git's rename detection**, not from
 04's cells and not from a curated list (A-4). 04's cells cannot express a source file divided between
 destinations (e.g. `internal/telemetry/telemetry.go`, divided between core `metrics` and ABO's remaining façade), give no
-destination file names, and cannot express a coexistence window (core's scheduler and executor are written
+destination file names, and cannot express two coexisting files (core's scheduler and executor are written
 fresh while ABO's `internal/scheduler` and `internal/operations/registry` files live on, 04 §8.6). Mapping two
 coexisting, diverging files to one path either aborts filter-repo with `File renaming caused colliding
 pathnames!` when one commit touches both (round-2 X13), or splices the ABO copy's later edits into core
@@ -816,4 +816,4 @@ Plan-phase consistency:
 - PC-5 — history line R9-11: the "re-issue keys" clause marked as dropped by SEC10-7; no key re-issue is asked.
 - PC-10 — §12.6 and §12.8.2 step 10: a local `go.work` is allowed only after step 10 rewrites CLAUDE.md's `go.work` guidance; until then CLAUDE.md forbids `go work init` in a checkout.
 
-- D10–D12 revision (2026-11-04): §12.4.4 (hardening cutovers H1–H3) deleted; the hardened design lands directly in R2. `legacy/` removed from SC1's definition, the apidiff filter, its fixture test, the post-split override, SC5's coverage exclusion, §12.4.1 and release step 1; §12.4.2's legacy-member lifetime and the pointer to ABO's compatibility window deleted (no window, D10). SC1 counts checkpoints from R2's and names the store interfaces with their importers. Stage references re-keyed to the releases R0–R3 (S0, S1, S2, S2b → R1; S9's hello web build → the shell's landing, 07 §7.19 step 4).
+- D10–D12 revision (2026-11-04): §12.4.4 (hardening cutovers H1–H3) deleted; the hardened design lands directly in R2. `legacy/` removed from SC1's definition, the apidiff filter, its fixture test, the post-split override, SC5's coverage exclusion, §12.4.1 and release step 1; §12.4.2's legacy-member lifetime and the pointer to ABO's compatibility window deleted (no window, D10). SC1 counts checkpoints from R2's and names the store interfaces with their importers. Stage references re-keyed to the releases R0–R3 (S0, S1, S2, S2b → R1; S9's hello web build → the shell's landing, 07 §7.19 step 4). Consistency pass: UI-0 re-keyed to release R1's `core/web` PR (07 §7.19 step 2); the toolchain release-age rule named as 13 §13.6 states it.
