@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/03-architecture.md -->
-<!-- version: 1.5.1 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 8af6d935-7143-4d06-8562-b04a18504d81 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -20,7 +20,7 @@ X16 was run for the round-2 revision (§3.2.1). All were run in scratch director
 | Layer | What it is | Where it lives (in-repo phase) | Where it lives (after split) |
 |---|---|---|---|
 | **Core** | Platform services every app needs: storage, tasks, events, config, secrets, logging, metrics, HTTP framework, realtime, authN, RBAC, audit, library roots, integration contracts and adapters, backup, updater, health, UI shell. | Nested Go module at `core/`, module path **`github.com/falkcorp/mediacore`**, plus npm workspace `core/web/` | Its own repo `falkcorp/mediacore` |
-| **SDK** | The *public, versioned subset* of core that an app is allowed to import: `module`, the capability contracts, `tasks`, `storage`, `httpapi`, `rbac`, `config`, `events`, `log`, `metrics`, `coretest`, `archtest`, `entity`, `lifecycle`, `version`, `integrations/*`, `compat`, and the npm packages `@mediacore/shell`, `@mediacore/api-client` and `@mediacore/ui-kit`. The SDK is not a separate module; it is the set of core packages **outside** `core/internal/` and outside `core/kernel/`, and is what the API-stability gate (§12) measures. Packages marked **deferred** in §3.3 are SDK paths whose contract is specified but not yet built. | same module | same module |
+| **SDK** | The *public, versioned subset* of core that an app is allowed to import: `module`, the capability contracts, `tasks`, `storage` (with its leaves `storage/keys` and `storage/codec`), `httpapi`, `rbac`, `config`, `events`, `log`, `metrics`, `coretest`, `archtest`, `entity`, `lifecycle`, `version`, `integrations/*`, `compat`, and the npm packages `@mediacore/shell`, `@mediacore/api-client` and `@mediacore/ui-kit`. The SDK is not a separate module; it is the set of core packages **outside** `core/internal/` and outside `core/kernel/`, and is what the API-stability gate (§12) measures. Packages marked **deferred** in §3.3 are SDK paths whose contract is specified but not yet built. | same module | same module |
 | **App** | A deliverable product = one `main` + one or more **modules** (a module is a self-contained domain: manifest, routes, jobs, migrations, permissions, settings schema, UI contribution, adapters). ABO is the first app; its domain becomes module `books` (§3.6). | Root module `github.com/falkcorp/audiobook-organizer` (this repo) | This repo; future `falkcorp/tv-*`, `falkcorp/movies-*` repos |
 
 "Plugin" is **not** used as an architectural term in this spec (the 2026-09-18 evaluation's
@@ -84,17 +84,22 @@ Why this mechanism, and why this path:
      tree carries a genproto exclude (otherwise it reports *missing* or *misplaced*);
    - **green with it**: every probed workspace builds — root mode `go work init . ./core && go build
      ./... ./core/...`, and core mode `(cd core && go work init . && go build ./...)`;
-   - **load-bearing without it**: after `go mod edit -dropexclude` in the copy, every probed workspace's
-     `go mod graph` still lists an edge `<requirer> google.golang.org/genproto@v0.0.0-20230410155749-daa745c078e1`
-     (the script prints the requirer, today `github.com/cockroachdb/errors@v1.14.0`) **and** its
-     `go build` fails with `ambiguous import`. If no probe shows the edge, or every probe builds green,
-     the exclude is **stale** and the check fails, naming the requirer that disappeared.
+   - **load-bearing without it**: after `go mod edit -dropexclude` in the copy, **at least one**
+     applicable probe's `go mod graph` lists an edge `<requirer> google.golang.org/genproto@v0.0.0-20230410155749-daa745c078e1`
+     (the script prints the requirer, today `github.com/cockroachdb/errors@v1.14.0`) **and** that
+     probe's `go build` fails with `ambiguous import`. If no applicable probe does both, the exclude is
+     **stale** and the check fails, naming the requirer that disappeared. (A probe that is not
+     applicable, or that builds green without the exclude, is reported, not failed.)
 
-   Core mode applies once `(cd core && go mod graph)` in the copy without the exclude lists the
-   requirer (S2b); before that the script reports it as not applicable, which is correct, because at
-   S0–S2 only the root can pull genproto in. Root mode is a root-side job and is dropped at cutover
-   step 6 (12 §12.8.2); core mode moves with core. Both modes run from S0, so 09 S0's "Done when" holds
-   from the first core PR.
+   The check has two targets, because one of its modes needs the root. **Core mode** —
+   `make -C core exclude-check` — runs the core-mode probe and the *present/misplaced* scan of `core/`
+   only, so it runs in core's merge gate and from an export of `core/` alone (12 SC4(a)). It applies once
+   `(cd core && go mod graph)` in the copy without the exclude lists the requirer (S2b); before that it
+   reports "not applicable", which is correct, because at S0–S2 only the root can pull genproto in.
+   **Root mode** — the root `make ci` job `genproto-exclude-root` — runs the root-mode probe and the
+   tree-wide "no other `go.mod` carries a genproto exclude" scan; it is a root-side job, dropped at
+   cutover step 6 (12 §12.8.2). Both targets run from S0 (09 S0's classification table lists them as
+   two rows), so 09 S0's "Done when" holds from the first core PR.
 2. **The future path from day one.** Because every import already says `github.com/falkcorp/mediacore/...`,
    the repo split (§12) is a directory move plus deleting one `replace` line — no import rewrite in
    any app. The alternative (`github.com/falkcorp/audiobook-organizer/core`) would force a codemod
@@ -170,8 +175,13 @@ Why this mechanism, and why this path:
    `(cd core && go list -m all)` resolves to a different version in the root's `go list -m all`
    (12 SC4(c)). S0 verifies that the Dependabot group produces **one** PR spanning `/` and `/core`;
    if it does not, a workflow step runs the root `go mod tidy` on Dependabot `/core` PRs and pushes
-   the result (tidy coupling, item 4). Dependencies that must not float are pinned by a Dependabot
-   `ignore` plus `check_module_skew.py --pin` (13 §13.5.2).
+   the result (tidy coupling, item 4). The group sets `applies-to` for **both** version and security
+   updates, because a security update is not grouped by a version-update group otherwise and could
+   create skew on its own. Dependencies that must not float are pinned by a Dependabot `ignore` plus
+   `check_module_skew.py --pin` (13 §13.5.2). `check_module_skew.py` carries three guarantees (no skew,
+   the empty `core/go.sum` of item 4 exists, the `--pin` pins hold), so it is a **blocking** root-side
+   check: it runs in root `make ci` (and therefore in the merge requirement of 09 §9.2.1) from S0, not
+   only as the reported readiness criterion 12 SC4(c).
 
 ### 3.2.1 Experiment results (control and mechanism)
 
@@ -204,7 +214,7 @@ Round-2 experiments (modules-build review X10–X12, and X16 run for this revisi
 
 E2c's package choice tested the mechanism, not a placement: [04](04-package-mapping.md) is
 authoritative for where each package goes (it keeps `internal/keyedmutex` in ABO, and core gets its
-own `core/internal/keyedmutex` copy in the stage in which a core package first needs one, 04 §9; the
+own `core/internal/keyedmutex` copy in the stage in which a core package first needs one, 04 §8.1 (S3); the
 `internal/telemetry/contract` suite and `internal/telemetry/ratchet_test.go` stay in ABO because they
 import or walk ABO code).
 
@@ -233,8 +243,10 @@ builds none of it, and it is built when the first TV/Movies app starts.
 | `module` | public | ABO | `Module` interface, `Manifest`, `Registrar` (routes, tasks, migrations, permissions, settings, events, UI, adapters), `Deps` handed to a module; `module.ReservedIDs()` (§3.6). | [06-app-sdk](06-app-sdk.md) |
 | `entity` | public | core | Leaf package (L0): `entity.Ref{Module, Kind, ID string}` — **the one** polymorphic reference to any module-owned entity. Every file uses this type: tasks resources (`tasks.Resource` is `entity.Ref`), outbox/notify payloads, download grabs (multi-entity grabs carry `[]entity.Ref`), acquisition history/blocklist/queue, audit targets. No other `EntityRef`/`Resource{Module, Kind, ID}` struct exists; an `archtest` check fails any core identifier named `EntityRef` outside `entity`. Never a shared media row (decision 6). | [10](10-tv-movies-proof.md), [05-tasks](05-tasks.md) |
 | `lifecycle` | public | core | Leaf package (L0): `Component{Start, Stop}` ordering contract and shutdown budget types used by kernel, tasks, realtime, outbox relay; the public constant `lifecycle.NotifySocketEnv` (the systemd notify-socket variable name, read by apps that strip it from subprocess environments; 04 §8.3, from S2). | [05-tasks](05-tasks.md), [05-health](05-health.md) |
-| `version` | public | core | Leaf package (L0): `const Version = "0.Y.Z"`, the core version. **Never** derived from `debug.ReadBuildInfo` (under the `replace` that reports the zero pseudo-version, which is below every `MinCoreVersion`). Read by the kernel's `MinCoreVersion` check, `GET /api/core/v1/modules` and the backup manifest; CI keeps it equal to the newest checkpoint or release tag (12 §12.4.3). | [12](12-repo-split.md) |
-| `storage` | public | ABO | Pebble-backed ordered KV: `DB`, `Keyspace`, `Batch`, `Snapshot`, `iter.Seq2` scans, per-keyspace migrations, legacy-prefix claims. | [05-storage](05-storage.md) |
+| `version` | public | core | Leaf package (L0): `const Version = "0.Y.Z"`, the core version; S1 lands it as `"0.1.0"`, so the S2 `hello` skeleton's `MinCoreVersion: "0.1.0"` passes P1 before any checkpoint exists. **Never** derived from `debug.ReadBuildInfo` (under the `replace` that reports the zero pseudo-version, which is below every `MinCoreVersion`). Read by the kernel's `MinCoreVersion` check, `GET /api/core/v1/modules` and the backup manifest; CI keeps it equal to the newest checkpoint or release tag (12 §12.4.3). | [12](12-repo-split.md) |
+| `storage` | public | ABO | Pebble-backed ordered KV: `DB`, `Keyspace`, `Batch`, `Snapshot`, `iter.Seq2` scans, per-keyspace migrations, legacy-prefix claims, and the explicit, logged **storage grants** through which a core service's legacy-format adapter reads and writes a legacy family in its stored format during the extraction (02 decision 13). | [05-storage](05-storage.md) |
+| `storage/keys` | public | ABO | Leaf package (L0): pure tuple-key functions (the core key encoding). Lands at S0, so S0's guard writes its `c/storage/` records in core's encoding (04 §8.1). | [05-storage](05-storage.md) |
+| `storage/codec` | public | ABO | Leaf package (L0): generic value codecs for stored values. | [05-storage](05-storage.md) |
 | `storage/index` | public | ABO | Full-text search index contract (bleve implementation in `internal/bleveindex`). Depends on `storage`, never the reverse; index wiring lives in `kernel`. | [05-storage](05-storage.md) |
 | `storage/datamigrate` | public | ABO | Declarations of large, resumable data migrations (`DataMigration` with a required `tasks.Parallelism`, shard plan, dry run); imports `storage` and `tasks`, so it sits at L4, not with `storage`. Modules list them in `module.Manifest.DataMigrations`; the runner is `internal/storagemigrate`. | [05-storage](05-storage.md) §5S.3.6 |
 | `library` | public | ABO | Media roots, `os.Root`-confined filesystem access, path mapping, safe move/copy/hardlink, hashing, quarantine, free-space checks. | [05-library](05-library.md) |
@@ -243,14 +255,14 @@ builds none of it, and it is built when the first TV/Movies app starts.
 | `outbox` | public | ABO | Durable, at-least-once, same-batch outbox for correctness-critical cross-module work. | [05-events](05-events.md) |
 | `log` | public | ABO | `log/slog` construction, per-module child loggers, redaction, and the `Record`/`Tap` types of the **system log journal** (persisted, queryable operational log; implementation `internal/logjournal`; the books activity feed stays in the books module). | [05-logging](05-logging.md) |
 | `metrics` | public | ABO | Per-`App` Prometheus registry and OTel providers (never the process globals). | [05-metrics](05-metrics.md) |
-| `config` | public | ABO | Layered config: defaults → file → env → flags (operator-set values **lock** their key) → DB overrides (one row per key under `c/config/`, apply only to unlocked keys); per-module typed sections declared in the manifest; JSON Schema for the UI; change notification. Holds no integration instances (those are `integrations` records). | [05-config](05-config.md) |
-| `secrets` | public | ABO | Encrypted-at-rest secret store with one keyring; config fields reference secrets by name. | [05-config](05-config.md) |
+| `config` | public | ABO | Layered config: defaults → file → env → flags (operator-set values **lock** their key) → DB overrides (apply only to unlocked keys; during the extraction a key that ABO already stores is read and written in place in its legacy row — the config blob or a settings family — through config's legacy-format adapter, and a native-only key lives in the core-only family `c/config/`, 02 decision 13); per-module typed sections declared in the manifest; JSON Schema for the UI; change notification. Holds no integration instances (those are `integrations` records). | [05-config](05-config.md) |
+| `secrets` | public | ABO | Encrypted-at-rest secret store with one keyring; config fields reference secrets by name. A plaintext secret in ABO's config blob moves here the first time the new build writes it and is blanked in the blob (a rollback needs it re-entered; 02 decision 13). | [05-config](05-config.md) |
 | `httpapi` | public | ABO | `net/http` (Go 1.22+ `ServeMux` patterns) API framework: typed routes, mandatory permission per route, error envelope, pagination, versioning, OpenAPI 3.1 generation, core perimeter middleware, and `MountLegacy` — a **permanent, supported** way to mount an app's existing router (ABO's gin engine) behind core's perimeter; it never returns a chain-less group (R6). | [05-http-api](05-http-api.md) |
 | `realtime` | public | ABO | SSE hub with resumable, permission-filtered streams. | [05-realtime](05-realtime.md) |
-| `auth` | public | ABO | Identity: users, sessions, API keys, bootstrap, OIDC/OAuth, credential epochs; middleware. | [05-authn](05-authn.md) |
+| `auth` | public | ABO | Identity: users, sessions, API keys, bootstrap, OIDC/OAuth, credential epochs; middleware. During the extraction users and API keys stay in ABO's rows, used through legacy-format adapters; sessions are hashed in a core-only family no older build reads; a new API key always has explicit, non-empty scopes (02 decision 13). | [05-authn](05-authn.md) |
 | `rbac` | public | ABO | Permission scopes (`<ns>:<action>`), roles as data, module-declared permissions, enforcement helpers. | [05-rbac](05-rbac.md) |
 | `audit` | public | ABO | Append-only audit log (auth events, permission denials, admin actions, task approvals); targets are `entity.Ref`. | [05-rbac](05-rbac.md) |
-| `compat` | public | ABO | Compatibility primitives for strangler migrations: alias tables (paths, config keys, env vars, permission atoms, metric names) registered against one compatibility window (09 §9.2.1), Deprecation/Sunset headers, `mediacore_compat_legacy_use_total`; the store-level compatibility guard is the merged storage-format/compat-level mechanism owned by 05-storage, and its rollback floor is the Teach build (02 N13, §3.7). | [09-abo-on-core](09-abo-on-core.md) |
+| `compat` | public | ABO | Compatibility primitives for strangler migrations: alias tables (paths, config keys, env vars, permission atoms, metric names) registered against one compatibility window (09 §9.2.1), Deprecation/Sunset headers, `mediacore_compat_legacy_use_total`. Every alias needs a row in the compatibility ledger, which `compat.Ledger` merges from two sources: the **app's** ledger (`app.Options.CompatLedger []byte`; ABO embeds its root `docs/compat-surfaces.md` in the root `main` package, because a core `//go:embed` cannot reach outside `core/`) and a core-owned fragment `core/compat/core-ledger.md` (core metric and config aliases) embedded by `compat`; a row ID in both is a boot error. The store-level compatibility guard is the merged storage-format/compat-level mechanism owned by 05-storage (§3.7). | [09-abo-on-core](09-abo-on-core.md) |
 | `integrations` | public | ABO | Root of the integration contracts and **the one store for integration instances**: `integrations.Ref{Kind, Instance}`, instance records (kind, instance, settings, `secrets.Ref`s), the shared error taxonomy (retryable/permanent/auth/rate-limited), `Factory`/`Descriptor` types modules use to contribute adapters (`Registrar.Adapter`). Imports nothing in `module` (R4). | [05-metadata](05-metadata.md) |
 | `integrations/ai` | public | ABO | Provider-neutral AI contract (text/structured generation, embeddings, transcription) plus routing/health. v1 records usage metrics only; the usage ledger and monthly cap are deferred. | [05-ai](05-ai.md) |
 | `integrations/download` | public | ABO (contract, `download/deluge`, what ABO uses today); deferred (other adapters; grab/monitor/pending-recovery/`MarkImported`) | Download-client contract (`Client`, `GrabRequest`, `Item` status) + adapters `download/deluge`, `download/qbittorrent`, `download/transmission`, `download/sabnzbd`, `download/nzbget`. Owns client polling, item state and completion events; the grab pipeline belongs to `acquire`. | [05-download](05-download.md) |
@@ -264,13 +276,13 @@ builds none of it, and it is built when the first TV/Movies app starts.
 | `updater` | public | ABO | Self-update check/apply, parameterized by the app's release source. | [05-updater](05-updater.md) |
 | `health` | public | ABO | Liveness/readiness, component health, diagnostics bundle. | [05-health](05-health.md) |
 | `arrfacade` | public | **deferred** | Extension point for an *arr-v3-compatible API adapter (D2). During the extraction only the `/api/v3/` path reservation exists (05-http-api §4.1). | [08-arr-facade](08-arr-facade.md) |
-| `ui` | public | ABO (from the stage in which ABO adopts the shell build) | Go side of the UI shell: serves an app's embedded **shell** SPA build with the core's headers/CSP/caching; `ui.ReservedSegments` (§3.6). Until an app ships a shell build, `ui.Handler` is not mounted and the legacy mount owns `/`. | [07-ui-shell](07-ui-shell.md) |
+| `ui` | public | ABO (from the stage in which ABO adopts the shell build; `ui.ReservedSegments` from S2) | Go side of the UI shell: serves an app's embedded **shell** SPA build with the core's headers/CSP/caching; `ui.ReservedSegments` (§3.6). `ui.ReservedSegments()` is a static function with no dependencies that lands at **S2** together with `module`, so `module.ReservedIDs()` reserves the shell segments and its "equals §3.6's row" test passes from S2; the rest of `ui` lands at S9 (04 §8.1). Until an app ships a shell build, `ui.Handler` is not mounted and the legacy mount owns `/`. | [07-ui-shell](07-ui-shell.md) |
 | `coretest` | public | core | Test kit: in-memory `App` harness, fake clock, fake adapters, permission assertions. | [06-app-sdk](06-app-sdk.md) |
 | `archtest` | public | core | Reusable architecture guards an app runs in its own tests (§3.5). | §3.5 |
 | `shared/...` | public | none yet | Cross-app *domain* packages that are not platform concerns but are used by ≥2 apps (§3.4). Zero promoted (04 §9). | [04-package-mapping](04-package-mapping.md) |
 | `kernel/...` | public-but-unstable | core | Module catalog, manifest validation, lifecycle supervisor, and the **typed services struct** that builds core services in a fixed order with explicit constructors. There is **no generic DI container** (no `Get[T]`-of-`any`). Imported only by `app`. Excluded from the API-stability gate; apps that import it fail `archtest`. | [06-app-sdk](06-app-sdk.md) |
 | `examples/hello` | public (example) | core | The minimal "hello" app from 06 §hello: a **package in the core module** (not a separate module), built and tested in core CI and importable by ABO's G6 test; the in-tree second consumer for the split criteria (12 SC3) and the producer of the core OpenAPI document `core.json` (07 §7.8). It lands at S2 as a skeleton and grows with the stages, using only what each stage has built (04 §8.1; rule (b) of §3.4). | [06-app-sdk](06-app-sdk.md), [12](12-repo-split.md) |
-| `internal/<capability>http` | internal | ABO (`internal/acquirehttp`: deferred) | **Core capability HTTP routes** (`/api/core/v1/...`): one package per capability — e.g. `internal/taskhttp`, `internal/authhttp`, `internal/rbachttp`, `internal/audithttp`, `internal/confighttp`, `internal/libraryhttp`, `internal/backuphttp`, `internal/updaterhttp`, `internal/healthhttp`, `internal/eventhttp`. Each imports its capability package(s) and `httpapi` (and `realtime` for stream routes), sits at L6 (R4), registers on `httpapi`'s core group, and is imported **only by `kernel`**. | per capability |
+| `internal/<capability>http` | internal | ABO (`internal/acquirehttp`: deferred) | **Core capability HTTP routes** (`/api/core/v1/...`): one package per capability — e.g. `internal/taskhttp`, `internal/authhttp`, `internal/rbachttp`, `internal/audithttp`, `internal/confighttp`, `internal/libraryhttp`, `internal/backuphttp`, `internal/updaterhttp`, `internal/healthhttp`, `internal/eventhttp`, and `internal/modulehttp` (`GET /api/core/v1/modules`; the kernel hands it a read-only `ModulesView` interface — catalog snapshot, `restart_required`, the `ui_build_id` source — so it imports nothing above L6). Each imports its capability package(s) and `httpapi` (and `realtime` for stream routes), sits at L6 (R4), registers on `httpapi`'s core group, and is imported **only by `kernel`**. | per capability |
 | `internal/...` | internal | per contract | Implementations: `internal/pebble`, `internal/executor`, `internal/scheduler`, `internal/sse`, `internal/bleveindex`, `internal/openapi`, `internal/storagemigrate`, `internal/logjournal`, `internal/jsonschemax` (the one JSON Schema reflector, R4), … | per contract |
 
 npm workspace `core/web/` (D6):
@@ -300,8 +312,11 @@ download grab/monitor pipeline, the download adapters other than Deluge, and the
 no member whose only consumer is deferred — for example the facade-only key machinery
 (`KeySpec.Purpose`/`Module`, `PurposeFacade`, query-key extraction, `Router.FacadeGroup`, the facade
 route kind and its stage-13 clause) lands with `arrfacade`, not in `auth`, `rbac` or `httpapi` at S2/S4.
-Each 05 file lists its deferred members under a "Deferred-build" heading, and 09's deferred-build
-done-check greps for them, because the Build column alone cannot see inside a built package.
+Each 05 file lists its deferred members under a "Deferred-build" heading, and a permanent root-module
+test, `archtest.DeferredMembersAbsent(t, list)`, fails from **S2** (the first stage that builds a package
+with deferred members) if any listed identifier exists in `core/`; its list is taken from those headings,
+and the PR that builds the deferred package (e.g. `arrfacade`) deletes its entries (09 S2). One list and one
+test replace per-file grep claims, because the Build column alone cannot see inside a built package.
 Cross-app domain helpers enter `shared/` only when they have **two real consumers**; until a second
 app exists they stay in ABO unless a built core package needs them. The guard against the 2026-09-18
 adversarial review's residual risk "small core becoming a god package" (`raw/08-prior-art.md` §2) is
@@ -313,8 +328,11 @@ stays in ABO; it never moves to `internal/` or `kernel/`, which ABO cannot impor
 rule; R2). It may move to `internal/`/`kernel/` only in the stage in which its **last** ABO importer has
 been rewired to a public SDK surface (for example `sdnotify` behind `health`/`lifecycle` readiness
 hooks, `compactprogress` behind a `storage` statistics type, `oauth` behind the `auth` OIDC API,
-`scheduler`/`executor` behind `tasks`, startup steps only through `app`). 04 derives its
-internal/public column from the import graph under this rule.
+`scheduler`/`executor` behind `tasks`, startup steps only through `app`). A package whose replacement
+public surface lands in a later stage stays in ABO until that stage: e.g. `internal/startup` stays in ABO
+until `Registrar.StartupSteps` exists (06 §6.4.10), because `cmd/root.go:274` builds the `serve` step
+runner from it (R3-3, MOD3-1). 04 derives its internal/public column from the import graph under this
+rule, and the stage-visibility gate (§3.5.1 item 4) checks it on every PR.
 
 | Bucket | Rule | Examples (decided in 04) |
 |---|---|---|
@@ -329,10 +347,10 @@ internal/public column from the import graph under this rule.
 | # | Rule | Enforced by |
 |---|---|---|
 | R1 | Core never imports app code. | (a) `core/go.mod` must not `require` any app module — checked by `core/archtest.TestNoAppRequire` reading `core/go.mod`; (b) `core/archtest.TestCoreImportsOnlyCore`: `go list -deps -test` of every core package (test imports included, because the E2 hazard came from a test file; the synthetic `.test` and `[pkg.test]` packages are filtered) contains no path outside `github.com/falkcorp/mediacore/...`, stdlib, and the allowlisted third-party set; runs in core's own `go test ./...`. Note that Go *does* allow module dependency cycles, so (a) is required, not redundant. |
-| R2 | Apps import only core's public packages. No stage rewires an ABO import onto `internal/` or `kernel/` (visibility rule, §3.4). | Go's `internal/` rule for `core/internal/...`; `archtest.NoKernelImports(t, "github.com/falkcorp/audiobook-organizer/...")` for `kernel/...` (called from the root module's `internal/arch`); `archtest.SDKOnly(t, "github.com/falkcorp/mediacore/examples/...")` for the examples, which the path-based `internal/` rule does not cover (X5). |
+| R2 | Apps import only core's public packages. No stage rewires an ABO import onto `internal/` or `kernel/` (visibility rule, §3.4). | Go's `internal/` rule for `core/internal/...`; `archtest.NoKernelImports(t, "github.com/falkcorp/audiobook-organizer/...")` for `kernel/...` (called from the root module's `internal/arch`); `archtest.SDKOnly(t, "github.com/falkcorp/mediacore/examples/...")` for the examples, which the path-based `internal/` rule does not cover (X5); and, for moves before they happen, the stage-visibility gate (§3.5.1 item 4), which reads the **non-test imports of every root package, including `cmd/*` and the root `main`** (R3-3). |
 | R3 | A module never imports another module's packages; modules talk through core contracts (events, outbox, tasks, capability lookups). | `archtest.ModulesIsolated(t, map[moduleID]pkgPrefix)`; for ABO there is one module, so the rule is vacuous until a second exists, but the test is wired from S0 so the second module cannot land without it. |
-| R4 | Core layers (a package may import only its own or lower layers): **L0** `entity`, `lifecycle`, `version`, `log`, `metrics` → **L1** `storage`, `storage/index` → **L2** `secrets` → **L3** `config` → **L4** `events`, `outbox`, `tasks`, `storage/datamigrate`, `library`, `auth`, `rbac`, `audit`, `compat`, `integrations`, `integrations/*`, `backup`, `backup/journal`, `updater`, `health` → **L5** `acquire` → **L6** `httpapi`, `realtime`, `arrfacade`, `ui`, `internal/<capability>http` → **L7** `module` → **L8** `kernel` → **L9** `app`, `examples/*`. Deferred packages keep their layer so their contracts are checked when built. `coretest` and `archtest` are test-support packages (may import any core package; no core non-test package imports them). An `internal/*` package takes the layer of the public package it implements; an `internal/*` package that **bridges** capabilities (imports a package above the one it implements) takes the layer of its **highest import**, is never imported by a lower-layer package, and is wired by `kernel` — e.g. `internal/storagemigrate` (storage migrations run as tasks: L4), `internal/logjournal` (persisted journal over storage and tasks: L4), `internal/<capability>http` (L6). `internal/jsonschemax` is an **L0** leaf (it imports only `github.com/google/jsonschema-go`): it owns the one JSON Schema reflector wrapper, the tag pass and an extensible override table (`type Overrides map[reflect.Type]*jsonschema.Schema`, `For[T any](o Overrides)`); each package contributes the overrides for its own types at its own layer (`config`: `config.Duration`, `secrets.Ref`; `httpapi`: `rbac.Permission`), so `config` (L3) never names `rbac` (L4) and `httpapi` needs no config store to reflect types. | `core/internal/archtest_layers_test.go` — the redesigned successor of `internal/arch/layering_test.go` for core (§3.5.1). |
-| R5 | No process-global mutable state **in core**. No `func init()` in core except allowlisted pure ones (none at start); no exported package-level variables of map, slice, func or pointer type; core packages never call `prometheus.DefaultRegisterer`/`MustRegister` on the default registry, `otel.SetMeterProvider`, `otel.SetTracerProvider`, `otel.SetLogger`, `otel.SetTextMapPropagator`, `otel.SetErrorHandler`, `slog.SetDefault`, `log.SetOutput`, `http.DefaultServeMux`, `http.DefaultClient`/`http.DefaultTransport` mutation, or `signal.Notify`. The single exception is `app.InstallProcessDefaults`, an opt-in helper a `main` may call. R5 binds core only: an app may keep façades over core handles (ABO keeps `config.AppConfig` and its logger shim as books-module values); they are per-`App` values, so several apps in one binary stay possible, and removing them is an optional ratchet, not an extraction stage. | `core/archtest.TestNoGlobals` (AST scan). Rationale: several apps in one binary, and test isolation (`raw/07-plugin-registry-sdk.md` §6, `raw/12-cross-cutting.md` §9). |
+| R4 | Core layers (a package may import only its own or lower layers): **L0** `entity`, `lifecycle`, `version`, `log`, `metrics`, `storage/keys`, `storage/codec` → **L1** `storage`, `storage/index` → **L2** `secrets` → **L3** `config` → **L4** `events`, `outbox`, `tasks`, `storage/datamigrate`, `library`, `auth`, `rbac`, `audit`, `compat`, `integrations`, `integrations/*`, `backup`, `backup/journal`, `updater`, `health` → **L5** `acquire` → **L6** `httpapi`, `realtime`, `arrfacade`, `ui`, `internal/<capability>http` (including `internal/modulehttp`) → **L7** `module` → **L8** `kernel` → **L9** `app`, `examples/*`. Deferred packages keep their layer so their contracts are checked when built. `coretest` and `archtest` are test-support packages (may import any core package; no core non-test package imports them). An `internal/*` package takes the layer of the public package it implements; an `internal/*` package that **bridges** capabilities (imports a package above the one it implements) takes the layer of its **highest import**, is never imported by a lower-layer package, and is wired by `kernel` — e.g. `internal/storagemigrate` (storage migrations run as tasks: L4), `internal/logjournal` (persisted journal over storage and tasks: L4), `internal/<capability>http` (L6). `internal/jsonschemax` is an **L0** leaf (it imports only `github.com/google/jsonschema-go`): it owns the one JSON Schema reflector wrapper, the tag pass and an extensible override table (`type Overrides map[reflect.Type]*jsonschema.Schema`, `For[T any](o Overrides)`); each package contributes the overrides for its own types at its own layer (`jsonschemax.Base`: `time.Time`; `config`: `config.Duration`, `secrets.Ref`; `httpapi`: `rbac.Permission`), so `config` (L3) never names `rbac` (L4). There is one composition, `jsonschemax.Base.With(config.Overrides).With(<httpapi's own>)`, used by both the settings schema and OpenAPI: `httpapi` imports the static value `config.Overrides` (L6 may import L3), never a `*config.Store` (SIMP2-3, SIMP3-1). | `core/internal/archtest_layers_test.go` — the redesigned successor of `internal/arch/layering_test.go` for core (§3.5.1). |
+| R5 | No process-global mutable state **in core**. No `func init()` in core except allowlisted pure ones (none at start); no exported package-level variables of map, slice, func or pointer type; core packages never call `prometheus.DefaultRegisterer`/`MustRegister` on the default registry, `otel.SetMeterProvider`, `otel.SetTracerProvider`, `otel.SetLogger`, `otel.SetTextMapPropagator`, `otel.SetErrorHandler`, `slog.SetDefault`, `log.SetOutput`, `http.DefaultServeMux`, `http.DefaultClient`/`http.DefaultTransport` mutation, or `signal.Notify`. The single exception is `app.InstallProcessDefaults`, an opt-in helper a `main` may call; until it exists (S2), the process-global installs that ABO's metrics need stay in ABO (a thin `internal/telemetry` façade or `cmd/root.go`), and core `metrics` only returns providers (04). R5 covers the test-support packages `coretest` and `archtest` too: `coretest` captures logs through an injected handler (it hands the test a `*slog.Logger`) and never calls `slog.SetDefault`, so core tests stay parallel-safe; a helper that sets the process default for ABO code stays in ABO (MOD3-3). R5 binds core only: an app may keep façades over core handles (ABO keeps `config.AppConfig` and its logger shim as books-module values); they are per-`App` values, so several apps in one binary stay possible, and removing them is an optional ratchet, not an extraction stage. | `core/archtest.TestNoGlobals` (AST scan). Rationale: several apps in one binary, and test isolation (`raw/07-plugin-registry-sdk.md` §6, `raw/12-cross-cutting.md` §9). |
 | R6 | Every route declares a permission (or explicit `rbac.Public` / `rbac.AnyAuthenticated`; `AnyAuthenticated` never admits a confined credential, 05-rbac). Routes served through `httpapi.MountLegacy` (ABO's gin engine, mounted permanently behind core's perimeter middleware) are covered by a reviewed legacy route manifest in which every route names its permission. **No API returns a chain-less route group or mount** (the G8 failure mode was a missing chain, not a missing permission): a non-Public `Router.Infra` route runs the authenticated stages like any other route (05-http-api §4.2); `MountLegacy`'s `LegacyAuthGin` mode (gin's own auth chain instead of core's stages 12–13) is accepted only for the module named in the compile-time `app.Options.LegacyAuthGinUntil`, which ABO removes in its S4 PR; and a legacy route marked `OwnAuth` is accepted only when it names a compat method registered through `Registrar.AuthMethod` (non-interactive, never `MayChangeCredentials`). | Registration-time error in `httpapi` (fail-closed) **and** `archtest.RoutesHavePermissions` over the built router and the legacy manifest — a permanent test, not a migration test; `TestOwnAuthRoutesGolden` records every `OwnAuth` route; an archtest fails if `LegacyAuthGinUntil` is still set after S4 (05-http-api §8.2). |
 | R7 | Every library-scale loop declares parallelism. | `tasks.Parallelism` has no valid zero value. `Batch`/`Fixer` parallelism is a definition field validated at **registration** (a missing value fails it). `tasks.RunItems`, `tasks.RunSeq` and `tasks.ForEach` (the same loop for code that holds no `*RC`) take a required positional `tasks.Parallelism`; a zero value returns `*tasks.ItemsError` wrapping `tasks.ErrNoParallelism` before any item runs (fail-closed). `archtest.RunItemsDeclareParallelism` (AST) accepts, for that argument and for the `BatchSpec`/`FixerSpec` field: (a) a call to a `tasks` constructor (`CPU`, `Fixed(n, reason)`, `Sequential(reason)`); (b) a `tasks.Parallelism`-typed variable, parameter or field whose every assignment in the analysed packages is (a) — so passed-through values are legal; (c) a `//mediacore:required` options field whose owner calls `Parallelism.Validate` at construction. It flags zero literals and empty reasons (05-tasks §5T.3.2). Replaces `internal/plugins/runitems_concurrency_lint_test.go`. |
 | R8 | Every module storage key lives in the module's keyspace or a declared legacy claim. | `storage` refuses **reads and writes** outside the handed `Keyspace` and claims (`ErrOutsideKeyspace`; DATA-17); claim modes (read-write, read-only, aging-out, migrating, retired, read-share) and the same-owner nesting rule are 05-storage §5S.3.4's; claims are of three kinds — prefix, exact key, and prefix-with-exceptions (sub-prefixes or exact keys carved out for another owner, e.g. the shared `idx:`, `setting:` and `preference:` families, 05-storage §5S.9.1) — resolved by longest match; boot fails on any overlap between owners (§05-storage). |
@@ -372,8 +390,15 @@ The guard is **redesigned, not deleted**:
      checked against the importer's layer like one: an ABO domain package that imports
      `mediacore/realtime` is a wrong-way edge exactly as an import of today's `internal/realtime` is,
      so an `allowed` entry such as `plugins/* → itunes/service` is re-evaluated against the mapped
-     layer when its target moves to core, never dropped (04 §8.4 note 3). `archtest.NoKernelImports`
-     is unchanged. This needs a **loader change**: `loadGraph` (`layering_test.go:339-381`) drops
+     layer when its target moves to core, never dropped (04 §8.4 note 3). Mapped core imports also
+     **feed the computed layer**: the layer the classification rule computes for an ABO package is the
+     maximum of its in-module imports' layers **and** the mapped layers of its core imports (floored as
+     today), so `layerOf` follows a core import the same way it follows an in-module one. Consequence at
+     S2: `internal/httputil` (declared layer 0, `layering_test.go:82`) keeps `respond.go`, which builds
+     the envelope types that move to `mediacore/httpapi` (mapped layer 5), so its computed and declared
+     layer become **5**; that is legal, because all 19 of its importers are layer 5 (round-3 X17), and it
+     needs no new `allowed` entry. Packages with no R4 row are mapped explicitly: `coretest`, `archtest`,
+     `storage/*` → **−1**; `shared/...` → **3** (domain). `archtest.NoKernelImports` is unchanged. This needs a **loader change**: `loadGraph` (`layering_test.go:339-381`) drops
      every import outside the module today; it keeps imports with the `github.com/falkcorp/mediacore/`
      prefix and hands them to the classifier;
    - a **classifier positive control**, effective from S0, the first stage in which ABO imports core
@@ -386,26 +411,44 @@ The guard is **redesigned, not deleted**:
    dropped: callbacks are values, not import edges, so no import-graph check can see them, and
    R1(a)/(b) already stop core from naming any ABO type.
 2. **Core guard** (`core/internal/archtest_layers_test.go`) is a new instance of the same algorithm
-   with the R4 layer table, its own `layerOf`, its own ratio floor, and its own in-module positive
-   control (`app` imports `kernel`). It is registered in `ci/gates.txt` as a core gate (§3.2
-   item 4).
+   with the R4 layer table, its own `layerOf` and its own ratio floor. It is registered in
+   `ci/gates.txt` as a core gate (§3.2 item 4). Its in-module positive control is **staged**, because
+   core has no in-module import edge at S0 and `app`/`kernel` arrive only at S2:
+   - **S0:** the engine's own self-test on a synthetic graph in `archtest` (a known violation must be
+     reported, and an empty graph must fail); the core guard asserts only that the loader returned at
+     least the packages core holds;
+   - **from S1:** the S1 PR names a real edge it creates (e.g. `health` → `log` if the flight recorder
+     takes a `log` child logger, or `coretest` → `log`);
+   - **from S2:** `app` imports `kernel`.
+
+   A PR that removes the current control names its replacement in the same change (the ABO rule).
 3. **Shared engine**: the classification/compute code moves to `core/archtest` as a library
    (`archtest.Layering(t, archtest.LayerSpec{...})`) so both modules — and every future app repo —
    run the same algorithm. This is what "reusable guard" in R2/R3 means.
+4. **Stage-visibility gate (MOD-2, R2-5, R3-3).** The visibility rule (§3.4) is checked before a move,
+   not discovered by a compile failure after it. A committed generator, `scripts/ci/check_stage_visibility.py`
+   (with its mapping input committed next to it), reads `go list -deps -test -json` for the root module
+   and classifies every importer from its **non-test** imports — every package, **including `cmd/*` and
+   the root `main`** — and its test imports separately, so a non-test user can never be declared
+   test-only (MOD3-1: `cmd/root.go:274` is a non-test user of `internal/startup`). On HEAD it evaluates
+   the **next unshipped stage point** and fails on any user that 04 §8.2/§8.3 does not declare and
+   rewire; each stage PR regenerates those tables from HEAD and commits the diff. It runs in root
+   `make ci`, so every PR that touches a root `*.go` file is checked (the merge requirement of 09
+   §9.2.1), not only PRs that touch `core/`.
 
 ## 3.6 Naming conventions
 
 | Thing | Convention | Example |
 |---|---|---|
 | App ID | `[a-z][a-z0-9]{1,15}`, field `app.Options.AppID` | `abo` |
-| Module ID | lowercase `[a-z][a-z0-9]{1,15}`; **reserved** — the first path segment of every route or page core serves and every namespace core owns, each name assigned to the one package that serves it: `httpapi.ReservedSegments()` (server paths) = `api`, `v` followed by digits, `auth`, `events`, `health`, `livez`, `readyz`, `metrics`, `assets`, `static`, `ui`; `ui.ReservedSegments()` (shell routes) = `activity`, `invite`, `login`, `settings`, `setup`, `system`, `users`; `rbac.ReservedNamespaces()` = `core`, `custom`. Apps add two compatibility inputs with different meanings: `LegacyMount.TopSegments` (top-level server paths of a legacy mount, e.g. ABO's `ping`, `status`, `logout`, `socket.io`, `public`; they feed both the reserved IDs and `ui`'s non-SPA predicate) and `app.Options.ReservedAPINamespaces` (second segments under `/api/`, e.g. ABO's ABS-compatible unversioned `/api/<seg>` names; reserved IDs only, because a native module API lives at `/api/<moduleID>/v1`). `module.ReservedIDs()` is **static**: it returns the union of the three owner lists, and a test asserts that it equals this row exactly. The kernel validates module IDs in 06 P1 against that set **plus** both compatibility inputs, which it adds itself (the first segment of every manifest's `LegacyPrefixes`, which covers every `LegacyMount.TopSegments` entry by 06's P7 check, and `app.Options.ReservedAPINamespaces`), and a kernel boot check fails when a `ui.ReservedSegments()` name is also a non-SPA segment (a shell page that a full page load could never reach). | `books`, `tv`, `movies` |
+| Module ID | lowercase `[a-z][a-z0-9]{1,15}`; **reserved** — the first path segment of every route or page core serves and every namespace core owns, each name assigned to the one package that serves it: `httpapi.ReservedSegments()` (server paths) = `api`, `v` followed by digits, `auth`, `events`, `health`, `livez`, `readyz`, `metrics`, `assets`, `static`, `ui`; `ui.ReservedSegments()` (shell routes) = `activity`, `invite`, `login`, `settings`, `setup`, `system`, `users`; `rbac.ReservedNamespaces()` = `core`, `custom`. Apps add compatibility inputs with different meanings: `LegacyMount.TopSegments` (top-level server paths of a legacy mount, e.g. ABO's `ping`, `status`, `logout`, `socket.io`, `public`; they feed both the reserved IDs and `ui`'s non-SPA predicate), `LegacyMount.SPAShared` (top-level segments where the mount's routes share a path with a shell page, e.g. ABO's `login` — ABS `POST /login` while `GET /login` is the page — and `invite` — the legacy `GET /invite/{token}` 302 while `GET /invite` is the page; reserved IDs, but **never** non-SPA) and `app.Options.ReservedAPINamespaces` (second segments under `/api/`, e.g. ABO's ABS-compatible unversioned `/api/<seg>` names; reserved IDs only, because a native module API lives at `/api/<moduleID>/v1`). The first segment of a manifest's `LegacyPrefixes` is a reserved ID only; the non-SPA set is exactly `TopSegments` minus `SPAShared` (05-http-api §3.5, §8.2). `module.ReservedIDs()` is **static**: it returns the union of the three owner lists (all three exist from S2, §3.3 `ui`), and a test asserts that it equals this row exactly. The kernel validates module IDs at 06 P1 against that set plus `app.Options.ReservedAPINamespaces`, and re-checks them at P7 against every recorded mount's `TopSegments` and `SPAShared`, still before listeners open; a kernel boot check fails when a `ui.ReservedSegments()` name is a non-SPA segment (a shell page that a full page load could never reach), and passes for a `SPAShared` segment. | `books`, `tv`, `movies` |
 | Core namespace | the reserved module ID `core` | `core:admin` |
 | Permission | `<moduleID>:<action>[.<sub>]` | `books:edit`, `tv:request`, `core:users.manage` |
 | Task kind | `<moduleID>.<segment>(.<segment>)*`, every segment matching `[a-z][a-z0-9-]*` (dots allowed after the module ID; no `_` and never `:`, the storage separator — none of ABO's 269 op IDs has either, `internal/server/testdata/op_ids.golden`); `tasks.ParseKind` enforces exactly this (05-tasks §5T.3.1) | `books.scan`, `books.dedup.full-scan`, `core.backup` |
 | Event topic | `<moduleID>.<noun>[.<qualifier>].<verb-past>.v<N>`: segments `[a-z][a-z0-9-]*`, at most one qualifier segment on the noun, `N` ≥ 1 (05-events §5E.3.1) | `books.book.changed.v1`, `core.integration.health.changed.v1` |
 | Storage keyspace | `m/<moduleID>/` for modules, `c/<subsystem>/` for core | `m/tv/series/…`, `c/tasks/run/…`, `c/config/…` |
 | Native API path | `/api/core/v1/...`, `/api/<moduleID>/v1/...` | `/api/books/v1/books/{id}` |
-| Config section | `core.*`, `modules.<moduleID>.*` | `modules.books.scan.interval` |
+| Config section | `core.*`, `modules.<moduleID>.*` | `modules.books.scan.workers` |
 | Schedule key | `<owner>.<subsystem>.schedules.<name>`, where `<owner>` is the owner's config namespace (`core`, or `modules.<moduleID>` per the Config section row); `<subsystem>`, `schedules` and `<name>` segments match `[a-z][a-z0-9_]{0,47}`. Every schedule key is declared in its owner's config section and registered through `tasks.ScheduleFromConfig`, which accepts any declared key of the registering owner and refuses all others (R2-7; 05-tasks) | `core.backup.schedules.create`, `modules.books.scan.schedules.full_sweep` |
 | Role ID | core seed roles: bare names (`admin`, `editor`, `viewer`, kept from ABO); module seed roles: `<moduleID>.<name>`; custom roles: `custom.<slug>` | `admin`, `tv.admin`, `books.editor`, `custom.night-shift` |
 | Audit action | `<moduleID>.<noun>.<verb>`: exactly three segments `[a-z][a-z0-9_]*`, the verb in the present tense (an action, not an event; no version suffix, because records are stored, not consumed); core's actions are the normative table of 05-rbac §7.1 | `core.apikey.create`, `core.role.update`, `core.restore.stage`, `books.user.merge` |
@@ -431,26 +474,31 @@ worker, nav entry or filesystem mutation, and its data is retained.
 The order of boot phases is defined **once**, in 06 §6.5.1's boot-phase table; every other file
 references it. Three properties of that order are architectural and hold for every app:
 
-- **Rollback floor.** Opening the store runs the per-owner level guard (05-storage §5S.3.7): it
-  refuses a store stamped above the build's level, and, once any adopt step has run on the store, it
-  refuses every build older than that sequence's **Teach build** — the first build of every
-  adopt/expand sequence, which ships the legacy-side guards that keep a rollback from widening
-  access (02 N13). The adopt step stamps the Teach build's level as its `Migration.Floor`; only a
-  contract (`Breaking` with `RaisesLevel`) raises a level beyond it (09 §9.2.2). A rollback therefore lands on the Teach build or later, never on a build without
-  those guards.
+- **One stored format per family; the level guard only for real format changes.** During the
+  extraction a core service reaches an existing ABO family (users, roles, API keys, settings and the
+  config blob, ops history, activity) through a **legacy-format adapter** over the existing keys, by an
+  explicit storage grant that boot logs; native-only data is additive in the legacy row where the
+  format tolerates it, or in a core-only family no older build reads (02 decision 13). Nothing is
+  copied, mirrored, rebuilt at boot or handed over between owners, so a rollback lands on the previous
+  release with no floor build in between. Opening the store runs the single per-owner level guard
+  (05-storage §5S.3.7): it refuses a store stamped above the build's level. Only a real format change
+  raises a level — books' own migrations, and later a per-family **cutover** to a native keyspace, which
+  is outside the extraction, one-way and checkpointed, and whose floor is the cutover release itself
+  (02 N15).
 - **Checkpoint before any write.** The one pre-migration checkpoint of the boot is taken before the
   first write of that boot, by any subsystem (config overrides, storage bookkeeping, tasks); a boot
   that cannot take it halts before writing anything.
 - **Legacy migrations before claims.** Books' existing legacy migrations run in a phase before core
   claims are enforced, under an explicit, logged legacy-migration grant, and their code is kept until
-  the declared minimum-upgrade-from release; an install older than that release must pass through it,
-  and boot refuses with a message naming it (02 N14).
+  the declared minimum-upgrade-from release. The requirement is checked on the store's applied steps,
+  not on the binary being replaced: a store that has not applied what that release requires must have
+  it installed first, the updater refuses to skip it, and boot refuses with a message naming it (02 N14).
 
 ```
 main ──► app.New(opts, books.Module(), …)
            │  kernel: (phases P0a–P8 of 06 §6.5.1)
            │          pending-restore swap → config boot → validate manifests
-           │          → open storage (level guard; rollback floor = Teach build)
+           │          → open storage (per-owner level guard; storage grants logged)
            │          → pre-migration checkpoint (before any write)
            │          → books legacy migrations (before core claims are enforced)
            │          → core and module migrations (05-storage cross-keyspace DAG)
@@ -487,7 +535,7 @@ Round 1 (dispositions in `docs/plans/platform-core/reviews/spec-round-1-disposit
 - FE-1 — `ui.Handler` mounts only for shell builds; the legacy mount owns `/` until then (§3.3, §3.7).
 - FE-23 — reserved module IDs cover every shell route segment (`invite`, `activity`, `tasks`, …); one `module.ReservedIDs()` union.
 - SEC-3 — R6: `AnyAuthenticated` never admits a confined credential.
-- DATA-1 — config overrides live under `c/config/` (§3.3 `config`, §3.6 keyspace example).
+- DATA-1 — config overrides live under `c/config/` (§3.3 `config`, §3.6 keyspace example). (Narrowed in round 3 by R3-1: only native-only keys live there during the extraction.)
 - MOD-1 — Docker layers, `.dockerignore` and PR image job in §3.2 item 4.
 - MOD-2 — visibility rule (§3.4) and R2: ABO never imports moved `internal/`/`kernel/` packages.
 - MOD-3/MOD-4 — genproto exclude moved to `core/go.mod`; X2/X3 recorded; supported workspace command; exclude checks (§3.2 items 1 and 5, §3.2.1).
@@ -516,7 +564,7 @@ Integration pass (cross-cluster requests, 2026-11-04):
 
 Round 2 (dispositions in `docs/plans/platform-core/reviews/spec-round-2-dispositions.md`):
 
-- R2-1 — §3.7: rollback floor = the Teach build, enforced by the level guard at storage open; `compat` row points at it.
+- R2-1 — §3.7: rollback floor = the Teach build, enforced by the level guard at storage open; `compat` row points at it. (Superseded in round 3 by R3-1.)
 - R2-4 — §3.7: books legacy migrations run before core claims are enforced; minimum-upgrade-from release (02 N14).
 - R2-8 — §3.7: one boot-phase table (06 §6.5.1) referenced; checkpoint before any write; diagram follows the phases.
 - MOD2-5 — §3.2 item 1: exclude check redesigned (present; green with it; edge still in `go mod graph` and `ambiguous import` without it, in a temp copy); needed from S0; X10/X16 recorded in §3.2.1.
@@ -549,4 +597,28 @@ Integration pass (round 2, 2026-11-04):
 
 - integration pass (round 2): §3.3: `backup/journal` row (L4, lands at S4; COR2-9) and in R4's L4 list; `lifecycle` row adds `lifecycle.NotifySocketEnv` (MOD2-1).
 - integration pass (round 2): §3.6: `module.ReservedIDs()` is static; the kernel adds both compatibility inputs in 06 P1. Audit-action segments `[a-z][a-z0-9_]*` with 05-rbac §7.1 examples; schedule-key and topic examples are declared names.
-- integration pass (round 2): §3.7: adopt steps stamp `Migration.Floor`; only contracts raise a level beyond it.
+- integration pass (round 2): §3.7: adopt steps stamp `Migration.Floor`; only contracts raise a level beyond it. (Superseded in round 3 by R3-1.)
+
+Round 3 (dispositions in `docs/plans/platform-core/reviews/spec-round-3-dispositions.md`):
+
+- OPS3-7 — §3.7: the minimum-upgrade-from requirement is checked on the store's applied steps (02 N14).
+- R3-1 — §3.7: "rollback floor" property replaced by "one stored format per family; the level guard only for real format changes"; cutover deferred (02 N15); diagram no longer names a Teach build. §3.3: `storage` names storage grants, `config` stores existing keys in place through its adapter (native-only keys in `c/config/`), `secrets` takes plaintext blob secrets on first write, `auth` uses legacy rows and core-only hashed sessions; `compat` row drops the Teach-build floor.
+- R3-3 (MOD3-1) — §3.4 visibility rule: a package stays in ABO until its replacement surface exists (`internal/startup` until `Registrar.StartupSteps`); R2 and new §3.5.1 item 4: the stage-visibility gate reads non-test imports of every package, including `cmd/*` and the root `main`.
+- R3-5 (FE3-1) — §3.6 Module ID row: `LegacyMount.SPAShared`; non-SPA = `TopSegments` minus `SPAShared`; `LegacyPrefixes` first segments are reserved IDs only; P1/P7 split as 05-http-api states.
+- MOD3-2 — §3.5.1 item 4: the generator is committed, runs in root `make ci` on every PR touching root Go code, evaluates the next unshipped stage point; stage PRs regenerate 04's tables.
+- MOD3-3 — R5: process-global installs stay in ABO until `app.InstallProcessDefaults` (S2); `coretest` captures logs through an injected handler, never `slog.SetDefault`.
+- MOD3-5 — §3.5.1 item 1: mapped core layers feed the computed layer; `internal/httputil` becomes layer 5 at S2; `coretest`, `archtest`, `storage/*` → −1, `shared/...` → 3.
+- MOD3-8 — §3.5.1 item 2: core guard's positive control staged (S0 synthetic self-test, S1 a named real edge, S2 `app` → `kernel`).
+- MOD3-9 — §3.1, §3.3, R4: `storage/keys` and `storage/codec` added as public L0 leaves.
+- MOD3-12 — §3.2 item 1: pass rule "at least one applicable probe"; core mode in `make -C core exclude-check`, root mode in root job `genproto-exclude-root`.
+- MOD3-16 — §3.2 item 6: `check_module_skew.py` is blocking in root `make ci`; Dependabot group `applies-to` version and security updates.
+- MOD3-19 — §3.3 `version`: S1 lands `"0.1.0"`.
+- MOD3-20 — §3.2.1: keyedmutex copy cited as 04 §8.1 (S3).
+- COR3-3, FE3-8 — §3.3 `ui`: `ui.ReservedSegments()` is a static leaf landing at S2 with `module`; §3.6: the equality test holds from S2.
+- FE3-16 — §3.3 and R4: `internal/modulehttp` (L6) serves `/api/core/v1/modules` from a kernel-supplied `ModulesView`.
+- SEC3-16 — §3.6: ABO's `SPAShared` includes `invite` (legacy 302) as well as `login`.
+- SIMP3-1 — R4: one override composition `Base.With(config.Overrides).With(httpapi's)`; `httpapi` imports the static `config.Overrides`, never a store; `time.Time` belongs to `jsonschemax.Base`.
+- SIMP3-2 — §3.4: the deferral check is the permanent `archtest.DeferredMembersAbsent` from S2, not a per-file grep at S7.
+- SIMP3-3 — §3.3 `compat`: ledger supplied by the app (`app.Options.CompatLedger`) and merged with core's `core/compat/core-ledger.md`.
+- SIMP3-9 — §3.6 Config section example is a non-timing key (`modules.books.scan.workers`).
+

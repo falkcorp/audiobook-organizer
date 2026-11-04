@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/12-repo-split.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: eb47baa1-640b-4c96-96cc-f6b2bdeaa57e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -54,7 +54,8 @@ not readiness criteria, because the split must not wait on code written for the 
 
 Measurements are run from the repo root on a clean checkout of `main`. Scripts named here are plan
 deliverables (Python per `CLAUDE.md` "Critical Rules" 4); each prints `PASS`/`FAIL` and the measured
-value. Results are recorded in `docs/plans/platform-core/split-readiness.md` with date and commit.
+value. Results are recorded in `docs/plans/platform-core/split-readiness.md` with date and commit, by
+the root-side fold-in job of §12.3.11 (core's own targets never write outside `core/`).
 Every command block changes directory only inside `( … )` subshells, so the blocks can run in one
 shell under `set -e`.
 
@@ -164,13 +165,14 @@ published; it is the first verification step of the cutover (§12.8.2 step 8).
 ### SC4 — Core CI is standalone and green
 
 (a) Core's **whole merge gate** runs from an export containing **only** `core/` — not just
-`go build/vet/test`, so a target that calls a script outside `core/` fails here. `npm ci` runs first, so
-the run also proves that `core/go.mod`'s `ignore ./web` keeps npm-shipped `.go` files out of `./...`
-(03 §3.2):
+`go build/vet/test`, so a target that calls a script outside `core/` fails here. Once `core/web` exists
+(UI-0, 04 §8.1), `npm ci` runs first, so the run also proves that `core/go.mod`'s `ignore ./web` keeps
+npm-shipped `.go` files out of `./...` (03 §3.2); before UI-0 there is no `core/web/package.json` and
+the step is skipped:
 
 ```sh
 git archive HEAD core | tar -x -C "$TMP"
-(cd "$TMP/core/web" && npm ci)
+if [ -f "$TMP/core/web/package.json" ]; then (cd "$TMP/core/web" && npm ci); fi
 make -C "$TMP/core" ci
 ```
 
@@ -184,7 +186,10 @@ gh run list --workflow core-ci.yml --branch main --limit 20 --json conclusion \
   -q '[.[] | select(.conclusion != "success")] | length'      # must print 0
 ```
 
-(c) No dependency skew between the binary and core CI (03 §3.2 item 6):
+(c) No dependency skew between the binary and core CI (03 §3.2 item 6). The same script also asserts
+that the empty `core/go.sum` exists and that the `--pin` pins hold, so it is not only reported: it is a
+blocking root-side check in root `make ci` from S0 (09 S0 classification table), and SC4(c) reads its
+result:
 
 ```sh
 python3 scripts/ci/check_module_skew.py   # compares (cd core && go list -m all) with the root's go list -m all
@@ -264,7 +269,8 @@ root `Makefile` pin, `scripts/check_toolchain_versions.py:44-46,329-351`; see
 Every criterion is also a **reported** CI job from the stage that introduces it, so readiness is
 continuously visible rather than measured once. Only the criteria that must hold at every commit —
 SC2, SC7 and SC10 — are also part of the merge gate (`make -C core ci`); SC1, SC5, SC6 and SC9 are
-readiness reports (`make -C core readiness`), and SC3, SC4(b), SC4(c) and SC8 run in the root.
+readiness reports (`make -C core readiness`), and SC3, SC4(b), SC4(c) and SC8 run in the root
+(SC4(c)'s script is also a blocking root `make ci` check, above).
 SC10's parity half (core pin = root pin) is a root-side job (`scripts/check_toolchain_versions.py`, 13
 §13.2.2) dropped at cutover step 6; core's own `toolchain-check` (`check_core_toolchain.py`) checks only
 the copies core carries (`core/Makefile`, `core/tools/*/go.mod`, the core workflow's `go-version`), which
@@ -279,8 +285,8 @@ split, the core repo has nothing else. It is specified now so that it does not g
 |---|---|
 | Toolchain pin | `export GOTOOLCHAIN := go1.27.x`, equal to the root `Makefile` pin. This is one more pinned copy; the toolchain guard checks it (SC10, 13 §13.2.2), so it cannot drift silently. A `print-toolchain` target prints it, so commands and scripts never repeat the literal. |
 | Tools | `tools` target: `go -C tools/apidiff install tool`, `go -C tools/govulncheck install tool`, and a core copy of the staticcheck tools module, `tools/staticcheck`, pinned to the same version as the root's `tools/staticcheck` (`check_module_skew.py`, SC4(c), also compares the two tools modules' requirements). |
-| `ci` target (merge gate) | `build vet test-short fmt-check fix-check tidy-check staticcheck archtest exclude-check coverage-floor replace-check toolchain-check` — i.e. Go build/vet/short tests with `-race`, `gofmt -l` excluding `web/` and `examples/*/web/`, `go fix -diff ./...` empty (13 §13.3), `go mod tidy -diff`, staticcheck, archtest (R1, R2, R5 and the R4 layer guard: SC2), the genproto exclude check (03 §3.2 item 1), the coverage ratchet floor (SC5), the `replace`/`exclude` check (SC7) and core's own toolchain copies (SC10). Every check here holds at every commit, so a red `ci` always means a defect. SC4 is the workflow running this target. |
-| `readiness` target (report-only) | `apidiff-gate coverage coredoc-check vulncheck` — SC1, SC5's thresholds, SC6 and SC9. It never fails a merge; it appends its results, with date and commit, to `docs/plans/platform-core/split-readiness.md` (pre-split: a nightly job). SC3 and SC8 run in the root (pre-split) because they need ABO's `web/` or a temp module; the history dry run (§12.8.1) is also reported here. |
+| `ci` target (merge gate) | `build vet test-short fmt-check fix-check tidy-check staticcheck archtest exclude-check coverage-floor replace-check toolchain-check` — i.e. Go build/vet/short tests with `-race`, `gofmt -l` excluding `web/` and `examples/*/web/`, `go fix -diff ./...` empty (13 §13.3), `go mod tidy -diff`, staticcheck, archtest (R1, R2, R5 and the R4 layer guard: SC2), the genproto exclude check in **core mode only** plus the present/misplaced scan of `core/` (03 §3.2 item 1; the root mode and the tree-wide scan are the root job `genproto-exclude-root`), the coverage ratchet floor (SC5), the `replace`/`exclude` check (SC7) and core's own toolchain copies (SC10). Every check here holds at every commit, so a red `ci` always means a defect. SC4 is the workflow running this target. |
+| `readiness` target (report-only) | `apidiff-gate coverage coredoc-check vulncheck` — SC1, SC5's thresholds, SC6 and SC9. It never fails a merge and never writes outside `core/`: it writes a JSON and Markdown report, with date and commit, to `$(READINESS_OUT)` (default `core/.ci/readiness/`, gitignored), which CI uploads as an artifact. Pre-split, a root-side nightly job folds the artifact into `docs/plans/platform-core/split-readiness.md` through a PR; that job is dropped at cutover step 6. SC3 and SC8 run in the root (pre-split) because they need ABO's `web/` or a temp module; the history dry run and the missing-origin list (§12.8.1) are also reported here. |
 | `release` target | post-split only: `make release VERSION=vX.Y.Z` runs §12.5 steps 1–5. |
 
 ## 12.4 Versioning and semver policy
@@ -306,10 +312,15 @@ split, the core repo has nothing else. It is specified now so that it does not g
   result against the newest checkpoint: minor for incompatible or additive changes, patch otherwise.
   Recording is a job in the production release workflow, `.github/workflows/release-prod.yml` job
   `core-checkpoint` with `permissions: contents: write` (pushing a ref needs it; the job runs in the
-  caller workflow, not inside the reusable `falkcorp/github-common` workflow): if
-  `git diff <newest checkpoint>..HEAD -- core/` is non-empty it requires `version.Version` to be greater
-  than the newest checkpoint (the release fails otherwise), then runs `git update-ref` and pushes the ref
-  with the explicit refspec above. The job also runs when `prerelease.yml` auto-promotes an RC (09 §9.1).
+  caller workflow, not inside the reusable `falkcorp/github-common` workflow). The job is
+  **non-blocking**: no other job `needs` it and it runs with `continue-on-error`, so an ABO production
+  release — including a hotfix or a roll-forward — **never fails because of it**. If
+  `git diff <newest checkpoint>..HEAD -- core/` is non-empty and `version.Version` is greater than the
+  newest checkpoint, it runs `git update-ref` and pushes the ref with the explicit refspec above. If
+  `core/` changed and the constant was not bumped, it records nothing and opens or updates one issue
+  labelled `core-version-bump-needed`. The job also runs when `prerelease.yml` auto-promotes an RC
+  (09 §9.1). SC1 counts **recorded** checkpoints only, so a skipped record costs readiness time, never
+  a release.
 - **v0 rules.** Incompatible SDK changes are allowed (v0 makes no promise) but must (a) bump the
   checkpoint minor, (b) carry a changelog fragment in category `Removed` or `Changed` whose first line
   starts with `BREAKING:`, and (c) reset the SC1 counter. Additive changes bump the minor; fixes bump
@@ -345,8 +356,11 @@ split, the core repo has nothing else. It is specified now so that it does not g
   `"X.Y.Z"`. It is never derived from `debug.ReadBuildInfo`: under the in-repo `replace` that reports
   `v0.0.0-00010101000000-000000000000`, which is below every `MinCoreVersion` and would fail every boot
   fail-closed.
+- **Initial value.** S1 lands `const Version = "0.1.0"` (03 §3.3), so the S2 `hello` skeleton
+  (`MinCoreVersion: "0.1.0"`, 06 §6.12) passes P1 before any checkpoint exists.
 - **Kept honest by CI.** Pre-split, `core/scripts/ci/check_core_version.py` asserts that `version.Version`
-  is ≥ the newest checkpoint name, and that every `core/web/packages/*/package.json` `version` equals
+  is ≥ the newest checkpoint name, that every in-tree `Manifest.MinCoreVersion` (hello, books) is ≤
+  `version.Version`, and that every `core/web/packages/*/package.json` `version` equals
   `version.Version` (the in-repo `file:` dependencies make the lockstep check of §12.6 a no-op, so this is
   what keeps the shell's reported version, 07 §7.5.2, equal to the Go constant). The `core-checkpoint`
   job (§12.4.1) refuses to record `refs/core-checkpoints/v0.Y.Z` on a commit whose constant is not
@@ -479,6 +493,15 @@ internal/telemetry/resource.go==>core/metrics/resource.go
 ...
 ```
 
+**Move PRs keep the rename detectable.** A move PR routinely carries rewrites besides import paths
+(`go fix` modernizers required by core's `fix-check`, 13 §13.3; logger → `*slog.Logger` cuts; R1 and R5
+rewrites). If those land in the rename commit, a small file falls under 90 % similarity and loses its
+history silently. So every move PR's **first commit** contains only the `git mv` plus import-path
+rewrites, and later commits carry the `go fix`, R1 and R5 changes (04 §2.2, 09 per-stage checklist; the
+repo merges rebase/fast-forward only, so the commit structure survives the merge). `history_paths.py`'s
+readiness report lists every `core/` file whose content is older than its arrival commit but that has no
+detected origin, so a lost history is visible before cutover.
+
 A dry run (`git filter-repo --dry-run --paths-from-file …` on a fresh clone of `main`) is part of the
 readiness report (§12.3.11), so a collision surfaces long before cutover step 3.
 
@@ -521,7 +544,7 @@ Precondition: T and SC1–SC10 hold, recorded in `split-readiness.md`.
      (the root never carried the genproto exclude, so there is nothing else to drop);
    - `git rm -r core/`; `GO_MODULE_DIRS := .` in the Makefile; remove core jobs and core gates
      (`ci/gates.txt` `core-job` rows) from CI, and the root-side core jobs (`check_module_skew.py`, the
-     root-mode genproto probe of 03 §3.2 item 1, the readiness report); drop `core/go.mod`, `core/Makefile` and
+     root-mode genproto job `genproto-exclude-root` of 03 §3.2 item 1, the readiness fold-in job); drop `core/go.mod`, `core/Makefile` and
      `core/tools/*/go.mod` from the toolchain guard; remove `core/web/**`, `core/go.mod`, `core/go.sum`
      from path filters and `/core` and `/core/web` from Dependabot; `web/package.json` `file:` deps →
      exact `@mediacore/*` versions; `npm ci --prefix web` to refresh the lockfile; the Dockerfiles stop
@@ -616,3 +639,14 @@ lines above use the former criterion names S1–S10; they are now SC1–SC10.
 - FE2-13 — §12.4.3: `check_core_version.py` also asserts every `core/web/packages/*/package.json` version equals `version.Version`.
 - FE2-22 — §12.5, §12.6, §12.10: private repo → GitHub Release tarballs; GitHub Packages not used.
 - COR2-16 — §12.8.1: the `core/internal/keyedmutex` copy keeps only its post-arrival history; ABO's package stays out of core history.
+
+Round 3 (dispositions in `docs/plans/platform-core/reviews/spec-round-3-dispositions.md`):
+
+- MOD3-7 — §12.4.1: `core-checkpoint` is non-blocking (`continue-on-error`, nothing `needs` it); an unbumped constant records nothing and opens a `core-version-bump-needed` issue; SC1 counts recorded checkpoints only; the ABO release never fails because of it.
+- MOD3-12 — §12.3.11 `ci`: the exclude check runs in core mode only (plus the `core/` scan); root mode is the root job `genproto-exclude-root`; cutover step 6 names it.
+- MOD3-13 — SC4(a): `npm ci` in the export only when `core/web/package.json` exists (from UI-0).
+- MOD3-16 — SC4(c) and §12.3: `check_module_skew.py` is also a blocking root `make ci` check from S0.
+- MOD3-17 — §12.8.1: move PRs put `git mv` plus import rewrites in a first commit, other rewrites after; `history_paths.py` reports `core/` files with no detected origin.
+- MOD3-18 — §12.3 and §12.3.11: `readiness` writes to `$(READINESS_OUT)` (default `core/.ci/readiness/`, gitignored, uploaded as an artifact); a root nightly job folds it into `split-readiness.md` through a PR and is dropped at cutover step 6.
+- MOD3-19 — §12.4.3: initial `Version = "0.1.0"` at S1; `check_core_version.py` asserts every in-tree `MinCoreVersion` ≤ `version.Version`.
+

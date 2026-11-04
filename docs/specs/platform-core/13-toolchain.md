@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/13-toolchain.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: a1e1b657-1c87-4a3e-8407-43269415455f -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -155,7 +155,7 @@ rewritten to.
 | `net/http` ServeMux patterns (1.22) + `http.CrossOriginProtection` (1.25) + `MaxHeaderValueCount` (1.27) | Core HTTP is stdlib (02 N7); method+wildcard patterns; CSRF via `CrossOriginProtection` as its own stage of the fixed middleware chain ([05-http-api](05-http-api.md) §4.2, which owns the stage); every `http.Server` sets the timeout trio and `MaxHeaderValueCount` (`go.md:331-333`) | `httpapi`, `realtime`, `ui` | 13 files `http.NewServeMux`; 446 files import gin; 0 `CrossOriginProtection` |
 | stdlib `uuid` (1.27) | New random identifiers (`uuid.NewV7()`/`NewV4()`); ULIDs (`oklog/ulid`) stay where time-sortability matters (`go.md:325-327`) | request/correlation IDs, API-key IDs | 0 files (`github.com/google/uuid` only indirect, `go.mod:108`) |
 | `new(expr)` (1.26), `min`/`max`, `range n`, `slices`/`maps` | `go.md:300-317` | everywhere | — |
-| `go vet` (with `stdversion` in `go test`) and `go fix` modernizers | Core CI runs `go vet ./...` and **`go fix -diff ./...` must be empty** (`-diff` exits non-zero on any pending fix; verified in `go help fix` on go1.27.3). The 26 analyzers on go1.27.3 (`go tool fix help`): `any atomictypes buildtag embedlit errorsastype forvar hostport inline mapsloop minmax newexpr omitzero plusbuild rangeint reflecttypefor slicesbackward slicescontains slicessort stditerators stringsbuilder stringscut stringscutprefix stringsseq testingcontext unsafefuncs waitgroupgo` — identical to `go.md:263-268`. When ABO code moves into core, the per-class review rules of `go.md:275-287` apply to the resulting hunks. | `core-ci.yml` | ABO does not gate on `go fix` |
+| `go vet` (with `stdversion` in `go test`) and `go fix` modernizers | Core CI runs `go vet ./...` and **`go fix -diff ./...` must be empty** (`-diff` exits non-zero on any pending fix; verified in `go help fix` on go1.27.3). The 26 analyzers on go1.27.3 (`go tool fix help`): `any atomictypes buildtag embedlit errorsastype forvar hostport inline mapsloop minmax newexpr omitzero plusbuild rangeint reflecttypefor slicesbackward slicescontains slicessort stditerators stringsbuilder stringscut stringscutprefix stringsseq testingcontext unsafefuncs waitgroupgo` — identical to `go.md:263-268`. When ABO code moves into core, the per-class review rules of `go.md:275-287` apply to the resulting hunks, and the move PR applies `go fix` to the files it moves **in a separate commit after the rename commit**, so the rename stays detectable (12 §12.8.1). | `core-ci.yml` | ABO does not gate on `go fix`, and gains no such gate (03 §3.2 item 4): at HEAD `go fix -diff ./...` in the root exits 1 with pending fixes in 245 files (round-3 X20), so a root gate would be red from S0 |
 
 ## 13.4 Frontend versions (`core/web` workspace and ABO `web/`)
 
@@ -187,6 +187,8 @@ day it is written down.
 | babel-plugin-react-compiler | 1.0.0 | 1.0.0 (dep `@babel/types ^7.26.0`) | 2025-10-07 | same | E2 |
 | @rolldown/plugin-babel | 0.3.0 | 0.3.0 (peer `@babel/core ^7.29.0 \|\| ^8.0.0-rc.1`) | 2026-10-29 | same | |
 | esbuild | 0.28.2 (exact) | 0.28.2 | 2026-08-08 | same | |
+| openapi-typescript | — (not used) | 7.13.0 (peer `typescript ^5.x`) | 2026-02-11 | `7.13.0` exact, in every package that runs the generator ([05-http-api](05-http-api.md) §7) | runs on the TS 6 alias through an `overrides` entry (E1; [07-ui-shell](07-ui-shell.md) §7.3.3) |
+| openapi-fetch | — (not used) | 0.17.0 (no peers) | 2026-02-11 | `0.17.0` exact (pre-1.0, 05-http-api §7) | |
 | Node | 26 (`.github/repository-config.yml:19,45`) | — | — | 26 | react-router 8 needs ≥ 22.22.0; Babel 8 needs `^22.18.0 \|\| >=24.11.0` |
 
 The assignment brief named "react-router 7"; the registry shows v8 is the stable major (five months, eleven
@@ -196,7 +198,7 @@ releases). Core targets v8.
 
 | # | Exception | Reason (verified) | Exit condition |
 |---|---|---|---|
-| E1 | Two TypeScripts: TS 7.0.2 type-checks (`"@typescript/native": "npm:typescript@^7.0.2"`, `web/package.json:53`, scripts `:8-9`), while the `typescript` name resolves to TS 6 (`"npm:@typescript/typescript6@^6.0.2"`, `web/package.json:66`) | TS 7 ships no JS API, and `typescript-eslint` 8.72.1 peers `typescript >=4.8.4 <6.1.0` (`npm view`); rationale recorded in `CHANGELOG.md:2909-2924` | `typescript-eslint` declares TS 7 support → drop the alias, single `typescript@^7`. `core/web` copies the same two-alias layout until then. (knip is not a blocker: knip 6.44.1 depends on `oxc-parser`/`oxc-resolver` and declares no `typescript` dependency or peer, `npm view knip@6.44.1 dependencies`, checked 2026-11-04.) |
+| E1 | Two TypeScripts: TS 7.0.2 type-checks (`"@typescript/native": "npm:typescript@^7.0.2"`, `web/package.json:53`, scripts `:8-9`), while the `typescript` name resolves to TS 6 (`"npm:@typescript/typescript6@^6.0.2"`, `web/package.json:66`) | TS 7 ships no JS API, and `typescript-eslint` 8.72.1 peers `typescript >=4.8.4 <6.1.0` (`npm view`); rationale recorded in `CHANGELOG.md:2909-2924` | `typescript-eslint` declares TS 7 support → drop the alias, single `typescript@^7`. `core/web` copies the same two-alias layout until then. Every package that runs `openapi-typescript` (peer `typescript ^5.x`; it crashes on TS 7, which has no JS API) carries `"overrides": {"openapi-typescript": {"typescript": "$typescript"}}`, so the generator resolves the TS 6 alias (07 §7.3.3, FE-20). (knip is not a blocker: knip 6.44.1 depends on `oxc-parser`/`oxc-resolver` and declares no `typescript` dependency or peer, `npm view knip@6.44.1 dependencies`, checked 2026-11-04.) |
 | E2 | Stay on `@babel/core` 7.29.x | 8.1.0 is two days old (release-age rule); `babel-plugin-react-compiler` 1.0.0 depends on `@babel/types ^7.26.0` (`npm view`), so Babel 8 core would run a compiler plugin built against Babel 7 AST types; the compiler path is the only Babel use (`web/vite.config.ts:8-21`) | react-compiler publishes Babel 8 support **and** 8.x has passed the 14-day soak → bump, run the React Compiler memo tests (`CHANGELOG.md` records them, e.g. `DupesSpine.memo.test.tsx`). |
 | E3 | `jsdom` pinned at 30.0.1 | 30.1.0 broke MUI FocusTrap unmount ("5 failed / 7 passed" vs 12/12), `.github/dependabot.yml:90-104` | the 12/12 check in that comment passes on the newest 30.1.x (30.1.3 untested here). |
 | E4 | ABO stays on `react-router-dom` 7.18.5 until its own react-router 8 migration | v8 removed `react-router-dom` (react-router 8.0.0 changelog: "Remove `react-router-dom` package", #15076; DOM bits from `react-router/dom`, everything else from `react-router`); ABO imports a react-router package in **122** files, **52 source and 70 test** (the test count includes the helper `web/src/test/renderWithProviders.tsx`), counted with 07 §7.3.3's grep `git grep -lE "from ['\"]react-router(-dom)?['\"]" 748fd787a -- web` (it also covers `web/tests/` and `web/vite.config.ts`); `@mediacore/shell` needs v8 as a peer, so the migration must be **finished before** ABO adopts the shell | A separate ABO PR series migrates to `react-router@8`: 09 stage **UI-0** swaps the imports and the chunk regex (`web/vite.config.ts:81-82`) and keeps the declarative `<BrowserRouter>`; the data router and the test-harness rewrite follow at shell adoption (07 §7.19 steps 4–5). UI-0 ships before S4 and **precedes** shell adoption ([07-ui-shell](07-ui-shell.md) §7.19 step 1, [09-abo-on-core](09-abo-on-core.md) §9.3). Exit condition: `! grep -rq react-router-dom web/package.json web/src web/tests web/vite.config.ts`, reached **before** ABO's first `createShell` call (07 §7.19 step 1). |
@@ -344,3 +346,9 @@ Round 2 (dispositions in `docs/plans/platform-core/reviews/spec-round-2-disposit
 - MOD2-13 — §13.2.2: no toolchain literals in scripts or workflow steps (guard check); the bump is the first PR of S0, before `core/` exists.
 - MOD2-9 — §13.2.2 item 2: root-pin parity is root-side; core checks only its own copies.
 - MOD2-21 — 12's criteria cited as SC3, SC4, SC4(c), SC10.
+
+Round 3 (dispositions in `docs/plans/platform-core/reviews/spec-round-3-dispositions.md`):
+
+- FE3-20 — §13.4: rows for `openapi-typescript` 7.13.0 and `openapi-fetch` 0.17.0 (published 2026-02-11, checked with `npm view` on 2026-11-04); E1 carries the generator's `overrides` note; react-router stays `^8.5.1` here (07 uses this range).
+- MOD3-6 — §13.3 `go fix` row: a move PR applies `go fix` in a separate commit after the rename commit; the root gains no `go fix` gate (245 files pending at HEAD, X20).
+

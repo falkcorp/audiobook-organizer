@@ -1,13 +1,15 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
 <!-- last-edited: 2026-11-04 -->
 
 # mediacore — platform-core design spec
 
 **Status:** draft under antagonistic review (see `docs/plans/platform-core/reviews/`). Round 1's 192
-findings and round 2's 162 findings are dispositioned (`spec-round-1-dispositions.md`,
-`spec-round-2-dispositions.md`, whose eight resolutions R2-1…R2-8 are binding) and applied to the files.
+findings, round 2's 162 and round 3's 130 are dispositioned (`spec-round-{1,2,3}-dispositions.md`) and
+applied to the files. Round 3's resolutions R3-1…R3-5 are binding and supersede round-2 R2-1…R2-3: during
+the extraction every key family keeps one stored format (legacy-format adapters, no adoption copies or
+mirrors), and per-family cutover to native keyspaces is deferred (02 decision 13, N15).
 **Evidence commit:** `748fd787a`. **Raw data:** [`docs/plans/platform-core/raw/`](../../plans/platform-core/raw/00-index.md).
 **Plan:** `docs/plans/platform-core/implementation-plan.md` (written after this spec merges).
 
@@ -38,18 +40,24 @@ app starts:
 | `arrfacade` (*arr-v3-compatible API; only the `/api/v3/` path reservation exists meanwhile) | [08-arr-facade](08-arr-facade.md) |
 | Download grab/monitor/pending-recovery pipeline and the adapters other than Deluge | [05-download](05-download.md) |
 | AI usage ledger and monthly cap; notify inbox, per-user subscriptions, personal channels, templating | [05-ai](05-ai.md), [05-notify](05-notify.md) |
+| Facade-only members of built packages: key and route machinery in `auth`/`httpapi` (`PurposeFacade`, query-key extraction, `FacadeGroup`) and the auth feed token | [05-authn](05-authn.md) §3.5, [05-http-api](05-http-api.md) §3.6 |
+| Per-family cutover of ABO's generic families (users, roles, API keys, settings, ops history, activity) to native core keyspaces | [02](02-decision-record.md) N15, [05-storage](05-storage.md) |
 
-The Build column of 03 §3.3 is the authoritative list and is re-checked at every stage gate.
+The Build column of 03 §3.3 is the authoritative list of deferred packages and is re-checked at every
+stage gate. Deferral also applies to members of built packages (03 §3.4); `archtest.DeferredMembersAbsent`
+checks those from S2.
 
 ## Decisions
 
 The superseding decision record is [02-decision-record.md](02-decision-record.md) (replaces
 `docs/architecture/2026-09-18-pluggable-media-platform-decision-record.md`): all 13 old decisions marked
-kept / changed / dropped, 14 new decisions (N1–N14; N13 makes the Teach build the rollback floor, N14
-adds the minimum-upgrade-from release), the eight inherited acceptance gates, and the five old open
-questions. User decisions D1–D9 are fixed inputs. Owner questions still open (including Q-I, how the
-extraction's gates become required checks), and those round 1 decided as adopted recommendations, are
-in [14-risks-open-questions.md](14-risks-open-questions.md) §14.3.
+kept / changed / dropped (decision 13 extended in round 3: one stored format per family during the
+extraction), 15 new decisions (N1–N15; N13, the round-2 Teach-build rollback floor, is superseded; N14
+adds the minimum-upgrade-from release, checked on the store; N15 defers per-family cutover), the eight
+inherited acceptance gates, and the five old open questions. User decisions D1–D9 are fixed inputs.
+Owner questions still open (including Q-I, how the one release-gating requirement — every PR passes
+`make ci` with the extraction gates before merge — is enforced), and those decided as adopted
+recommendations, are in [14-risks-open-questions.md](14-risks-open-questions.md) §14.3.
 
 ## Reading order
 
@@ -108,7 +116,15 @@ Round 1 (dispositions in `docs/plans/platform-core/reviews/spec-round-1-disposit
 
 Round 2 (dispositions in `docs/plans/platform-core/reviews/spec-round-2-dispositions.md`):
 
-- R2-1, R2-4 — decisions paragraph: 14 new decisions (N13 Teach-build rollback floor, N14 minimum-upgrade-from release).
-- R2-6 — decisions paragraph points at owner question Q-I (gates as required checks).
+- R2-1, R2-4 — decisions paragraph: 14 new decisions (N13 Teach-build rollback floor, N14 minimum-upgrade-from release). (N13 superseded in round 3 by R3-1.)
+- R2-6 — decisions paragraph points at owner question Q-I (gates as required checks). (Restated in round 3 by R3-2.)
 - MOD2-21 — summary names the split criteria SC1–SC10.
 - Status line: round 2 dispositioned and applied.
+
+Round 3 (dispositions in `docs/plans/platform-core/reviews/spec-round-3-dispositions.md`):
+
+- R3-1 — status line and decisions paragraph: one stored format per family; N13 superseded; N15 cutover deferred (15 new decisions); "Build scope" lists the deferred cutover.
+- R3-2 — decisions paragraph: Q-I asks only how the single requirement (every PR passes `make ci` with the extraction gates) is enforced.
+- SIMP3-11 — "Build scope": row for the facade-only members of built packages (05-authn §3.5, 05-http-api §3.6); note that deferral covers members and is checked by `archtest.DeferredMembersAbsent`.
+- Status line: round 3 dispositioned and applied.
+
