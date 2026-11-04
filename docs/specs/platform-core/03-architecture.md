@@ -380,7 +380,9 @@ carry and the owner helpers that read the owner's own formats**, because the own
 name the same result types and only the owner knows its file format — `secrets.LegacyCopies` and
 `secrets.LegacyCheck` (results of `legacy.SecretsStore`'s methods) and `secrets.ReadLegacyKey` (reads
 `k0-legacy` from the keyring file; 05-config §2.3); and the permanent `module.Manifest.LegacyStores` field
-itself, which an app without pre-core data leaves zero. All stay in v1 until a major, inert for native apps
+itself, which an app without pre-core data leaves zero. **Lead decision (round 6):** `LegacyStores` remains a
+field of `module.Manifest`, and its type is `legacy.Stores`; only the struct's fields, in `legacy`, are deleted
+at a family's cutover, while the `Manifest` field stays. All stay in v1 until a major, inert for native apps
 (14 K23).
 
 **Extension records.** Native-only data that an older build must never see (namespaced scopes, hashed
@@ -925,6 +927,7 @@ Round 6 (dispositions in `docs/plans/platform-core/reviews/spec-round-6-disposit
 - SIMP6-5 — selection models: only a routed store's legacy half implements `Covers`; without it the legacy half covers everything and the ledger records `legacy`.
 - SIMP6-6 — one conformance pattern: `<pkg>/<pkg>test` for the native contract, one `legacytest.<Pkg><Interface>Suite` per store interface with a case per capability.
 - SIMP6-7 — legacy-only state on a record type is one `Legacy *<Type>LegacyState` pointer field, nil from native stores.
+- Lead decision (round 6) — "Legacy-only identifiers": `module.Manifest.LegacyStores` remains a `module.Manifest` field of type `legacy.Stores`; cutovers delete the struct's fields, never the `Manifest` field (consistent with 14 K23's residual). R4's sub-package rule lists `health/diagnostics` at L4 with `health` (COR6-9, confirmed).
 - integration request (R-E, 05-config v1.7) — "Legacy-only identifiers": the config capabilities are `legacy.Config*`; the identifiers that cannot move gain `secrets.LegacyCopies`, `secrets.LegacyCheck` (result types of `legacy.SecretsStore`) and `secrets.ReadLegacyKey` (reads the keyring file format); §3.4's deferred list already names the config basis mechanism (SIMP6-1).
 - SIMP6-8 — §3.4 grammar: `Also deferred (not checked)` in any position; `—` for a row with nothing to check; one heading per identifier; self-test fails on duplicates.
 - MOD6-3 — §3.2 item 4: an embed input is in the context or a listed in-image output (`scripts/ci/embed_build_outputs.txt`, checked against the Dockerfiles' `COPY --from` lines); "no matching files" ignored only for listed outputs.
