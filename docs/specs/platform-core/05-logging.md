@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -9,7 +9,7 @@ Evidence commit `748fd787a` (all `path:line` anchors). Raw inputs:
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md) §3, §8, §9;
 [`raw/10-auth-rbac.md`](../../plans/platform-core/raw/10-auth-rbac.md) §6–7;
 [`raw/15-dependencies.md`](../../plans/platform-core/raw/15-dependencies.md) (`go-logr/logr` v1.4.4).
-Normative: [03-architecture](03-architecture.md) v1.9.1 R4 (`log` is in **L0** with `entity`, `lifecycle`,
+Normative: [03-architecture](03-architecture.md) v1.11.1 R4 (`log` is in **L0** with `entity`, `lifecycle`,
 `version`, `metrics`; the journal service `core/internal/logjournal` imports `storage` and `tasks`, so by
 R4's bridge rule it sits at **L4** and only the kernel imports it), R5 (no `slog.SetDefault` in core except the
 opt-in `app.InstallProcessDefaults`; R5 binds core only, and ABO's logger shim is an allowed books-module value),
@@ -391,24 +391,19 @@ type Schedules struct { // section core.log.schedules
   supplies its own `JournalStore` through `Manifest.LegacyStores.Logs` (06), ABO code in the ABO repo over ABO's system
   log family (05-storage §5S.9.1; `internal/database/pebble_store_activity.go:20-37`), passed in at
   S5 when `logjournal` lands. Its contract:
-  - `Append` writes each record as a row of exactly HEAD's shape (source, level, message, time), which every
-    older build reads as its own system log. The record's remainder that HEAD's shape cannot hold (module,
-    subsystem, attributes, trace and span IDs) goes to a **books-owned extension record** keyed by the row key
-    (books' `m/books/ext/logs/`, the fixed segment `logs` that 05-storage §5S.3.11 assigns to
-    `legacy.Stores.Logs` (COR7-7); `legacy.Extension`, 05-storage §5S.3.11), which older builds never read and
-    which carries the fingerprint `legacy_ref.fp` of the row it extends; never extra members in the legacy row
-    (R4-1). Every field of it is Derived in 05-storage's terms and it declares no Widening field, so under
-    05-storage's rule a stale extension is never marked `Suspended` and never counts toward a suspension health
-    token (DATA5-4); log records are never rewritten, so `Query` simply ignores a stale one (below).
-  - `Query` returns rows as `Record`s and merges each extension whose row is present and whose hash matches.
-    An extension whose row is gone or whose fingerprint no longer matches is ignored (and deleted by the next prune): a log record grants
-    nothing, so ignoring it is enough. Without its extension a record has no `user_id`, so the other-user
-    predicate fails closed on it (below).
-  - `Prune` deletes aged rows and their extensions in bounded chunks, as HEAD does
-    (`pebble_store_activity.go:428-434`), by `core.log.journal.retention_days`. Each extension delete is a
-    `legacy.Extension.Delete(ctx, b, legacyKey, entryID, seen)` call with the record the chunk read, which stages
-    an `Expect` on those bytes plus the delete; books' `ext` sub-prefix is `Serialized`, so a blind delete there
-    would be refused as `ErrBlindWrite` (R7-3, DATA7-8). An orphaned extension (row gone) is deleted the same way.
+  - `Append` writes each record as a row of exactly HEAD's shape (`internal/database/store.go:675-682`: user ID,
+    source, level, message, time), which every older build reads as its own system log: `source` holds the
+    record's subsystem, or its module when it has none, as HEAD's writers name their source, and `user_id` holds
+    the record's `user_id` attribute. What HEAD's shape cannot hold (the other attributes, trace and span IDs) is
+    **not persisted** by ABO's store through S10: books' legacy stores keep HEAD's representation and there is no
+    books extension family (A-2). The live tail and the primary output still carry the whole record; only the
+    journal's ABO copy is HEAD-shaped, exactly as HEAD's own rows are, so nothing regresses. A native store keeps
+    every field.
+  - `Query` returns each row as a `Record` with HEAD's fields (`Module` holds the row's `source`; `Attrs` holds
+    `user_id` when the row has one); the `Module` filter matches `source`.
+  - `Prune` deletes aged rows in bounded chunks, as HEAD does (`pebble_store_activity.go:428-434`), by
+    `core.log.journal.retention_days`, under HEAD's single-writer discipline for the family (one writer and one
+    pruner, below); no storage-enforced write check applies to the legacy rows (A-3).
   - `logtest.JournalStoreSuite` with HEAD fixtures is its test (`TestJournal_ReadsLegacySyslog` moves there).
   There is no copy, no `core/log` migration step and no level step (DATA3-14, resolved by R3-1). In the S5
   release that starts the journal, ABO's own writers and pruner of those rows are removed (§11), so each row
@@ -423,7 +418,7 @@ type Schedules struct { // section core.log.schedules
   drops lines that name another user's data, and blanks their user ID, unless the caller also holds
   `users.manage` (`activity.NamesOthersUserLog`, `internal/server/handlers/system/handler.go:444-458`). The query
   route and the live tail keep that rule for legacy and native records alike: a record the books-registered
-  predicate (`log.OtherUserPredicate`, §3) classifies as naming another user's data (registered next to its `PathRule`s, [06](06-app-sdk.md))
+  predicate (`log.OtherUserPredicate`, §3) classifies as naming another user's data (registered next to its `PathRule`s, [06](06-app-sdk.md); for ABO's HEAD-shaped rows it classifies by source and message, as HEAD's `activity.NamesOthersUserLog(source, message)` does, `internal/activity/user_data.go:258-260`)
   is returned only to principals that also hold `core:users.view`, the read-side successor of that gate
   ([05-rbac](05-rbac.md) §6.1); otherwise it is omitted and `user_id` is blanked.
 
@@ -509,7 +504,7 @@ These are recorded by a kernel-side bridge (`log` cannot import `metrics`, R4): 
 | `TestLevelTraceRendering` | `TRACE` label; trace gated below debug |
 | `TestInstallProcessDefaults_RestoreAndExclusive` | after install, `otel.GetMeterProvider()`, `otel.GetTracerProvider()` and `otel.GetTextMapPropagator()` return the App's, an instrument created through the global appears in the App's scrape, and `slog.Default()` logs through the pipeline; restore puts all seven back; second install errors; OTel sink drops values |
 | `TestJournal_BatchAndRetention` | batching bounds; the prune task calls `JournalStore.Prune` until `more` is false, by `retention_days`; no `core/log` migration step or level stamp exists |
-| `logtest.JournalStoreSuite` (exported contract) | run by the native store and by every app store (ABO's with HEAD fixtures): `Append` then `Query` round-trips level, module, message, time and attributes; filters and cursors; `Prune` bounded and oldest first; for an app store, a record whose extension is gone still returns its legacy fields and no `user_id` (R4-1) |
+| `logtest.JournalStoreSuite` (exported contract) | run by the native store and by every app store (ABO's with HEAD fixtures): `Append` then `Query` round-trips level, module, message, time and attributes; filters and cursors; `Prune` bounded and oldest first; an app store declares which fields its row shape holds and round-trips exactly those (ABO's: time, level, source as `Module`, message, `user_id`; A-2) |
 | `TestNativeJournalStore_RoundTrip` | the native store over `c/log/journal/` passes the suite (SIMP4-3) |
 | `TestJournal_OtherUsersLinesNeedUsersView` | a `core:system.manage` principal without `core:users.view` gets neither legacy nor native records the books predicate flags, and sees `user_id` blank; with `core:users.view` it gets both (HEAD fixture) |
 | `TestJournal_PruneScheduleKeyDeclared` | `core.log.schedules.journal_prune` is declared with type `tasks.ScheduleConfig` in `logjournal.Schedules` and accepted by `ScheduleFromConfig` at registration |
@@ -623,7 +618,7 @@ Integration pass (round 3, 2026-11-04):
 
 Round 4:
 
-- R4-1 / SIMP4-2 — L5, §3 `log.JournalStore` (with `JournalQuery`, `JournalPage`) replaces the `syslog:` grant and the books `ReadAdapter`; §5 ABO's store contract (HEAD-shape rows, attributes in a books-owned extension record with the row hash, never extra members in the legacy row), rollback now costless; `logtest.JournalStoreSuite`.
+- R4-1 / SIMP4-2 — L5, §3 `log.JournalStore` (with `JournalQuery`, `JournalPage`) replaces the `syslog:` grant and the books `ReadAdapter`; §5 ABO's store contract (HEAD-shape rows, attributes in a books-owned extension record with the row hash, never extra members in the legacy row), rollback now costless; `logtest.JournalStoreSuite`. (Superseded by A-2.)
 - SIMP4-3 — §5 native store over `c/log/journal/` for apps without legacy rows, landing at S5; `TestNativeJournalStore_RoundTrip`.
 - SIMP4-8 — §5: the "grant without an adapter fails boot" sentence is gone with the grant (no absent-grantee rule remains in this file).
 - MOD4-3 — L3, §3 `InstallProcessDefaults` also sets the meter and tracer providers and the propagator, never the Prometheus registry (05-metrics §6 owns `/metrics`); `TestNoGlobals` exception list and `TestInstallProcessDefaults_RestoreAndExclusive` updated; §11 item 4.
@@ -640,16 +635,22 @@ Round 5:
 
 - MOD5-5 / SIMP5-14 — §3: `DefaultPathRules`, `DefaultRedactKeys`, `DefaultRedactQuery` and `URLKeys` are functions returning fresh copies (R5, `TestNoGlobals`); the invite comment says the legacy `/invite/{token}` page is served in path form S4–S9 (FE4-2); pipeline and test references updated; `TestDefaultLists_FreshCopies`.
 - COR5-12 / MOD5-10 — §3 `JournalStore`: stated as the exception to "every write method takes the caller's `*storage.Batch`" (append-only, own batch, never a multi-owner commit).
-- DATA5-4 — §5 ABO's store: the journal extension declares no Widening field, so it is never `Suspended`; fingerprint named `legacy_ref.fp` (DATA5-16).
+- DATA5-4 — §5 ABO's store: the journal extension declares no Widening field, so it is never `Suspended`; fingerprint named `legacy_ref.fp` (DATA5-16). (Superseded by A-2.)
 - OPS5-12 — §5 rollback: the S5 removal of the activity `Writer`'s line parsing leaves the older build's activity feed without `system` entries for the S5+ period (09 §9.2.1); the journal itself adds no cost.
 - OPS5-14 — L3, §11 item 4: ABO calls `app.InstallProcessDefaults` at S2 r3, the release that deletes the façade's installs and sets `PromRegisterer`.
 
 Round 6:
 
-- integration pass (round 6): §5 names `legacy.Extension` (was `storage.Extension`; R6-3, 05-storage's one list).
+- integration pass (round 6): §5 names `legacy.Extension` (was `storage.Extension`; R6-3, 05-storage's one list). (Superseded by A-2.)
 
 Round 7:
 
-- DATA7-8 / R7-3 — §5 ABO's store: `Prune` deletes extension records through `legacy.Extension.Delete` with the record it read (`ctx`, `seen`), a conditional delete, never a blind one in books' `Serialized` `ext` sub-prefix.
-- COR7-7 — §5: the extension segment `logs` is cited as 05-storage §5S.3.11's fixed segment for `legacy.Stores.Logs`.
+- DATA7-8 / R7-3 — §5 ABO's store: `Prune` deletes extension records through `legacy.Extension.Delete` with the record it read (`ctx`, `seen`), a conditional delete, never a blind one in books' `Serialized` `ext` sub-prefix. (Superseded by A-2.)
+- COR7-7 — §5: the extension segment `logs` is cited as 05-storage §5S.3.11's fixed segment for `legacy.Stores.Logs`. (Superseded by A-2.)
 - Header — 03 reference v1.9.1.
+
+Advisor:
+
+- A-2 (ADV-S1) — L5, §5 ABO's store, §10 `logtest.JournalStoreSuite`: the books extension record for journal attributes (and its fingerprint, stale handling and conditional extension deletes) is deleted; ABO's store writes and reads HEAD's row shape only (`user_id`, source, level, message, time), drops what that shape cannot hold through S10, and classifies other-user records by source and message as HEAD does; native stores keep every field.
+- A-3 (ADV-S2) — §5 `Prune`: no storage-enforced write check on the legacy rows; HEAD's one-writer, one-pruner discipline (R7-3's conditional delete deleted with the extension).
+- Header — 03 reference v1.11.1.
