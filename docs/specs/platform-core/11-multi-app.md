@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/11-multi-app.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 74ed9015-8ae0-4b4b-8049-4c09cfbba343 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -29,13 +29,13 @@ nothing in core is process-global) nor multi-tenancy (D7: no tenant IDs).
 | Task kinds `<id>.<name>`, resources as `entity.Ref{Module, Kind, ID}` | 03 §3.3, §3.6, G8, 05-tasks | one executor, no write-set identity collisions |
 | Event topics `<id>.<noun>.<verb-past>.v<n>` in one catalog; outbox consumer names namespaced and declared in the manifest | 05-events, 06 `Registrar.Topics`, `Manifest.OutboxConsumers` | cross-module reactions without import edges (R3, raw subscriptions/consumers) |
 | Config sections `modules.<id>.*` | 03 §3.6, 06 `Settings` | one config file, no key collisions |
-| Module metrics under `app.Options.MetricPrefix` on a per-`App` registry (`<MetricPrefix>_*` with one module, `<MetricPrefix>_<id>_*` with two or more) | 03 §3.6, 05-metrics, 06 `Deps.Metrics` | no duplicate-registration panic (today's default-registry hazard, raw/12 §9) |
+| Module metrics under `app.Options.MetricPrefix` on a per-`App` registry (`<MetricPrefix>_*` while the app ships one module, `<MetricPrefix>_<id>_*` when it ships two or more; decided by the modules compiled in, never by which are enabled) | 03 §3.6, 05-metrics, 06 `Deps.Metrics` | no duplicate-registration panic (today's default-registry hazard, raw/12 §9) |
 | No process-global mutable state in core (R5, `TestNoGlobals`) | 03 R5 | the raw/12 §9 hazards (`config.AppConfig`, viper, `slog.SetDefault`, Prometheus default registry, OTel globals, `database.globalStore`, `plugin.Global()`, `serviceregistry.registered`, `aijobs`, throttle/quota maps) are absent from core |
 | One shell with merged navigation from every enabled module | 07 §7.4–§7.5 | nav, settings panels and widgets of all modules render in one SPA; intersection per module |
 | One task executor and scheduler | 05-tasks | a single queue with per-kind permissions and resources |
 | Distinct *arr facades by URL base, collisions refused at boot (facade is deferred-build) | 08 §8.4 | `/tv/api/v3` and `/movies/api/v3` side by side |
 | Restart-bound enablement per module, read before registration; no inter-module dependencies (`DependsOn` dropped, SIMP-22) | 06 §6.5.3 | a suite can ship all three and enable any subset; a disabled module's runs are held and its outbox messages retained |
-| Module isolation guard wired from wave 0 | 03 R3 `archtest.ModulesIsolated` | a second module cannot import the first |
+| Module isolation guard wired from S0 | 03 R3 `archtest.ModulesIsolated` | a second module cannot import the first |
 | One integration-instance store | 05-metadata M1 (SIMP-4) | download/indexer/AI/notify instances are shared data, not per-module copies |
 
 ## 11.3 Hazards found that a suite would trip over
@@ -43,15 +43,15 @@ nothing in core is process-global) nor multi-tenancy (D7: no tenant IDs).
 | Hazard | Anchor | Required handling (owner) |
 |---|---|---|
 | ABO's catch-all `/api/*` → `/api/v1/*` 301 redirect is a gin global middleware with an exclusion list | `internal/server/server_lifecycle.go:1789-1816` | 05-http-api §4.9 re-implements it as the least-specific `/api/` handler of the `books` legacy mount, so every claimed prefix (`/api/core/`, `/api/<module>/`, facades) wins by `ServeMux` specificity. For an **unknown** path under another module (`/api/tv/v1/nope`) not to fall through to it, each module and core group must register a subtree 404 catch-all (open item for 05-http-api) |
-| Un-namespaced ABO names during the compatibility window (`/api/v1/...`, 13 permission atoms, flat config keys, `/api/v3/ops`) | 03 §3.6 last paragraph | all are declared by `books` (`Manifest.LegacyPrefixes`, `Manifest.LegacyAliases`, config `LegacyKeys`), so the kernel checks them against other modules; window closes per 09 |
+| Un-namespaced ABO names during the compatibility window (`/api/v1/...`, 13 permission atoms, flat config keys, `/api/v3/ops`) | 03 §3.6 last paragraph | all are declared by `books` (`Manifest.LegacyPrefixes`, whose first segments are also reserved module IDs; `Manifest.LegacyAliases`; config `Aliases`, 05-config), so the kernel checks them against other modules; window closes per 09 |
 | ABO-side globals (`config.AppConfig`, `database.globalStore`, viper, `slog.SetDefault` in `cmd/root.go:718`) | raw/12 §9 | R5 binds core only (cross-cutting resolution 3): ABO keeps `config.AppConfig` and its logger shim as books-module façades over core handles. They are harmless while one `App` runs `books`. A suite `main` must own logging/metrics setup through core, so `books` must not call `slog.SetDefault`/`otel.Set*` and its façades must be per-`App` values held by the module (§11.5 row 11) |
-| Module metric names change when a second module is added | 03 §3.6 metric row | with one module ABO's series are `audiobook_organizer_*`; in a suite they become `<MetricPrefix>_books_*`, so a suite needs 05-metrics aliases for every books family (§11.5 row 12) |
+| Module metric names change when a second module is compiled in | 03 §3.6 metric row | with one shipped module ABO's series are `audiobook_organizer_*`; a suite binary that ships two or more makes them `<MetricPrefix>_books_*`, so a suite needs 05-metrics aliases for every books family (§11.5 row 12). Enabling or disabling a module at run time never renames a series (SIMP2-13) |
 
 ## 11.4 Deliberately left undone
 
 * **No suite `main` and no combined SPA build.** Each app ships its own `main` and its own web
   workspace; nothing builds one bundle containing several apps' module UI packages.
-* **One app identity per process.** `app.Options` has a single `AppID`/`MetricPrefix`/`DisplayName`/`Version`/`Updater`;
+* **One app identity per process.** `app.Options` has a single `AppID`/`MetricPrefix`/`EnvPrefix`/`StateDir`/`DisplayName`/`Version`/`Updater`;
   a suite would need its own identity, theme and update channel.
 * **No per-module fairness in the task executor.** One module's CPU-bound library-scale task can use
   every worker; per-module concurrency quotas are not designed (05-tasks has global and per-kind
@@ -70,7 +70,7 @@ nothing in core is process-global) nor multi-tenancy (D7: no tenant IDs).
 | 1 | A suite repo or `cmd/suite` with `main` calling `app.New` with all modules; suite `app.Options` identity | S |
 | 2 | Suite web workspace: `createShell({ modules: [booksModule, tvModule, moviesModule] })`; each app's module UI must be publishable as its own package (today ABO keeps `modules/books/` as a directory, 07 §7.11 — promote it) | M |
 | 3 | Embed the suite SPA with `embed_frontend` like any app (07 §7.6) | S |
-| 4 | Merging existing single-app installs into one store is **not** "copy keyspaces" (DATA-30): each install holds its own `c/auth/`, `c/rbac/`, `c/tasks/`, `c/config/`, `c/secrets/` (different keyrings), `c/storage/install`, per-keyspace versions, compat level and storage format, and `Sequence` high-water marks, which collide. It needs a **core storage export/import capability**: per keyspace, with version checks and ID-remap hooks for core subsystems (users by username, roles by ID, keyring merge, sequence rebase); module keyspaces (`m/<id>/`, books' legacy claims) copy as-is. This is a new core contract, recorded in 14. An install-wide compat level or storage format would also couple every app's rollback in a suite (05-storage per-owner format, DATA-20) | L |
+| 4 | Merging existing single-app installs into one store is **not** "copy keyspaces" (DATA-30): each install holds its own `c/auth/`, `c/rbac/`, `c/tasks/`, `c/config/`, `c/secrets/` (different keyrings), `c/storage/install`, per-keyspace versions, per-owner reader levels, and `Sequence` high-water marks, which collide. It needs a **core storage export/import capability**: per keyspace, with version checks and ID-remap hooks for core subsystems (users by username, roles by ID, keyring merge, sequence rebase); module keyspaces (`m/<id>/`, books' legacy claims) copy as-is. This is a new core contract, recorded in 14. An install-wide level would also couple every app's rollback in a suite, which is why levels are per owner (05-storage per-owner reader levels, DATA-20) | L |
 | 5 | Merge user databases of existing installs (users, roles, API keys) or start fresh — owner decision | M |
 | 6 | Build the deferred `arrfacade` (08) if not already built; configure facade URL bases (`modules.tv.arrfacade.url_base=/tv`, `modules.movies.arrfacade.url_base=/movies`); two facades with one base fail boot (05-http-api §4.9) | S |
 | 7 | Per-module executor quotas (05-tasks extension) if measurements show starvation | M |
@@ -97,3 +97,11 @@ Round 1 (2026-11-04), findings applied to this file:
 - SIMP-5 / COR-12 / COR-13 — one topic catalog; declared consumers; held runs and retained messages for disabled modules.
 - COR-16 / COR-17 / COR-26 — 06 vocabulary (`Manifest.Storage`, `Registrar.HTTP`, `PermissionSpec`), `entity.Ref`, `AppID`/`MetricPrefix`/`Updater`; metric-name change in a suite (§11.3, §11.5 row 12).
 - Cross-cutting 1 — facade marked deferred-build.
+
+Round 2 (2026-11-04), findings applied to this file:
+
+- COR2-19 — §11.3: config `LegacyKeys` (no such field) → config `Aliases` (05-config).
+- DATA2-29 — §11.5 row 4: "compat level and storage format" / "per-owner format" → "per-owner reader levels".
+- SIMP2-13 — metric segment decided by the modules the app ships, not the enabled set (§11.2 row, §11.3 hazard).
+- MOD2-21 — "wave 0" → S0.
+- FE2-11 / COR2-8 (consistency with 06) — legacy prefixes' first segments are reserved IDs; `EnvPrefix`/`StateDir` listed in the single app identity.

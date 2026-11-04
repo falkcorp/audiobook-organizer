@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/08-arr-facade.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 6d9b089a-fb08-4087-9ccd-43b9aa4ec555 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -15,9 +15,27 @@ database, or to endpoints no named client uses (N3).
 
 **Build status: deferred-build** (03 §3.3, cross-cutting resolution 1, SIMP-1). This file is the
 contract at proof depth (D5). No S0–S10 stage (09 §9.3) builds `arrfacade`; it is built with the first TV/Movies
-app. During the extraction only two things exist: core's reservation of `/api/v3/` (05-http-api
-§4.1) and the move of ABO's conformance engine to core (§8.14). The `module` hooks it needs
-(`Registrar.ArrFacade`, the facade problem kinds) are deferred-build members of 06 §6.4.9.
+app. During the extraction only one thing exists: core's reservation of `/api/v3/` (05-http-api
+§4.1). ABO's conformance engine moves to core (`httpapi/conformance`) **when `arrfacade` is built**;
+until then it stays `internal/syncapi/conformance` in ABO, as 04 records, because during S0–S10 it has
+one consumer (SIMP2-9). The `module` hooks the facade needs (`Registrar.ArrFacade`, the facade problem
+kinds) are deferred-build members of 06 §6.4.9.
+
+**Deferred-build members of built packages (SIMP2-6).** Deferral applies to features inside built
+packages as well as to packages (03 §3.4). Everything below exists only for this facade, has no ABO
+consumer, and is therefore **not** built in S2/S4; each owning file keeps its contract text under a
+"Deferred-build (lands with `arrfacade`, 08)" heading, and it lands additively in the build that
+creates `arrfacade`:
+
+| Member | Owning file | Notes |
+|---|---|---|
+| `KeySpec.Purpose`, `KeySpec.Module`, `PurposeFacade`, and the stored key record's purpose field (defaults to general) | 05-authn §3.2, §4.4 | additive; until then no facade key can be minted, so SEC-5's guarantee holds trivially |
+| query-string key extraction (`apikey`, `X-Api-Key`), enabled only on facade groups | 05-authn §4.2 | HEAD reads neither (`internal/server/middleware/auth.go:83-98`) |
+| `Router.FacadeGroup`, `RouteKind Facade`, the stage-13 facade refusal clause | 05-http-api §3, §4.2, §4.9 | the `/api/v3/` reservation itself is built |
+| `TestAPIKey_FacadePurposeBoundToModule`, `TestConfining_FacadeKeyRefusedOnNative` | 05-authn, 05-rbac | `Confining` itself is built (the fingerprint worker needs it, SEC-3) |
+
+The S7 deferred-build done-check (09) also runs `! grep -rn 'PurposeFacade\|FacadeGroup' core --include=*.go`,
+because `test ! -e core/arrfacade` cannot see a feature inside a built package.
 
 ## 8.1 Purpose & scope
 
@@ -56,7 +74,7 @@ for the facade beyond key management (07), Sonarr/Radarr data import.
 | F2 | Core owns the **wire DTOs** (camelCase, the foreign API's convention), written from the conformance fixtures when the facade is built (§8.6.2). Apps map domain → DTO. | One place to fix a field name for every app; conformance tests run against core types. |
 | F3 | Core provides **default providers** for resources that are core data: system status, root folders (from `library`), indexers (instances in the one integration-instance store, written through `integrations.FacadeWriter`), commands (mapped to `tasks`). | Prowlarr push and most pickers then need zero app code. |
 | F4 | Integer IDs: core provides a persistent **ID map** from `entity.Ref{Module, Kind, ID}` (03 §3.3) to stable `int32` (keyspace `c/arrfacade/<module>/ids/`). | v3 clients require numeric ids and store them; app IDs are opaque strings. |
-| F5 | Auth is **API key only**, through the core API key store, with `PurposeFacade` keys bound to one module (05-authn §4.4) whose scopes are that module's `Confining` facade scopes (05-rbac). | Clients store one key forever; it must not be a general admin key. |
+| F5 | Auth is **API key only**, through the core API key store, with `PurposeFacade` keys bound to one module (05-authn §4.4, deferred-build member, §8.0) whose scopes are that module's `Confining` facade scopes (05-rbac). | Clients store one key forever; it must not be a general admin key. |
 | F6 | Mount at `<url_base>/api/v3` per module. Core **reserves** `/api/v3/` for facades; ABO's `/api/v3/ops` becomes a legacy alias of the core tasks API for the compatibility window and cannot coexist with a facade on the same base. | §8.4 |
 | F7 | **No SignalR.** `/signalr/*` is not served. | §8.8.4 |
 
@@ -78,7 +96,7 @@ for the facade beyond key management (07), Sonarr/Radarr data import.
 * Rejected: letting `/api/v3/ops` and a facade share the prefix because no *arr resource is named
   `ops`. Two APIs with different auth, error shapes and permission models under one prefix is a
   standing trap for routing, logging and rate limiting.
-* Middleware: the facade is mounted on `httpapi.Router.FacadeGroup(owner, base)` (05-http-api §4.9) with the **same core chain** as native
+* Middleware: the facade is mounted on `httpapi.Router.FacadeGroup(owner, base)` (05-http-api §4.9, deferred-build member, §8.0) with the **same core chain** as native
   routes (peer allow-list, recovery, security headers, rate limit, body limit, authenticate,
   authorize) but with facade key extraction (§8.5) instead of session cookies, and v3 error encoding.
 * Path matching: ASP.NET routing in the originals is case-insensitive and clients rely on it (Seerr
@@ -91,7 +109,7 @@ for the facade beyond key management (07), Sonarr/Radarr data import.
 * Key sources, in order: header `X-Api-Key`, query `apikey`, header `Authorization: Bearer <key>`
   (raw/16 §5.1: Seerr sends `apikey`, Prowlarr sends `X-Api-Key`, Bazarr sends `?apikey=`). Session
   cookies are ignored on facade paths. Query-string key extraction is enabled only on facade groups
-  (05-authn §4.2).
+  (05-authn §4.2); like the purpose fields below, it is built with this package (§8.0).
 * **Facade keys are purpose-bound (SEC-5).** The key must be a core API key with
   `Purpose = PurposeFacade` and `Module = m` (05-authn §4.4, `KeySpec.Purpose`/`Module`, normative
   there), and every scope it holds must be one of `m:arr.read`, `m:arr.request`, `m:arr.indexers`. The
@@ -540,9 +558,10 @@ core/arrfacade/conformance/
 Each fixture is `{ "request": {method, path, query, headers, body}, "expect": {status, headers, body} }`
 where `expect.body` is a representative JSON document containing **every field the client reads**
 (raw/16 §5.2 "Fields required" column) with type-correct values. The engine is ABO's
-`internal/syncapi/conformance` diff (`Compare`, `KindMissingField` fatal, `KindExtraField` ignored),
-**promoted to core** as `httpapi/conformance` — it then has two consumers (ABS compatibility in ABO and
-this facade), satisfying the 03 §3.4 promotion rule; 04 records the move.
+`internal/syncapi/conformance` diff (`Compare`, `KindMissingField` fatal, `KindExtraField` ignored).
+It is **promoted to core** as `httpapi/conformance` in the build that creates `arrfacade`, because only
+then does it have two consumers (ABS compatibility in ABO and this facade), as the 03 §3.4 promotion
+rule requires; until then it stays in ABO (04, SIMP2-9).
 
 | Test | Proves |
 |---|---|
@@ -565,7 +584,7 @@ Apps run the same scenarios against their real provider: `arrfacadetest.Conforma
 |---|---|
 | `/api/v3/ops/*` (12 routes, `internal/server/wire_ops_v3_routes.go`, `internal/server/handlers/opsv3/`) | core tasks API `/api/core/v1/tasks/...` (05-tasks); `/api/v3/ops/` stays as a declared `books` legacy prefix for the compatibility window (09), then 410, then removed |
 | `/api/*` redirect exclusion for `/api/v3/` (`server_lifecycle.go:1801-1803`) | removed with the legacy prefix; core reserves `/api/v3/` for facades |
-| `internal/syncapi/conformance` | core `httpapi/conformance` (shared by ABO's ABS surface and the facade) |
+| `internal/syncapi/conformance` | unchanged during S0–S10 (04); moves to core `httpapi/conformance` when `arrfacade` is built, then shared by ABO's ABS surface and the facade (SIMP2-9) |
 | query redaction list (`internal/server/server.go:695-704`) | core redaction (05-logging) with `apikey`, `access_token` added |
 | ABS compatibility surface | stays in ABO (an app's compatibility surface, raw/10 G15); its identity already resolves to core users — the same principle the facade follows |
 
@@ -583,8 +602,9 @@ Apps run the same scenarios against their real provider: `arrfacadetest.Conforma
 | O8 | Default `Tags` and `Queue` providers once core has a tag store / `acquire` tracked downloads (raw/16 §7.1 #10, #15) | 10-tv-movies-proof |
 
 Closed in 1.1.0: O9 (explicit facade purpose on keys): `KeySpec.Purpose = PurposeFacade` and
-`Module` are normative in 05-authn §4.4, and the refusal of facade keys off their group is owned by
-05-rbac §4.10 and 05-http-api §4.2 stage 12 (SEC-5).
+`Module` are normative in 05-authn §4.4, as deferred-build members that land with this package
+(§8.0, SIMP2-6), and the refusal of facade keys off their group is owned by 05-rbac §4.10 and
+05-http-api §4.2 stage 12 (SEC-5).
 
 ## Review history
 
@@ -604,3 +624,8 @@ Integration pass (cross-cluster requests, 2026-11-04):
 
 - integration pass: R-H request — stage range S0–S10.
 - integration pass: Verified already present (R-F/R-G request): `integrations.FacadeWriter`, `*indexer.Pool`, `IDMap` over `entity.Ref`.
+
+Round 2 (2026-11-04), findings applied to this file:
+
+- SIMP2-6 — facade-only key machinery (`KeySpec.Purpose`/`Module`, `PurposeFacade`, query-key extraction, `FacadeGroup`, `RouteKind Facade`, the stage-13 facade clause, the two facade tests) listed in §8.0 as deferred-build members of `auth`/`rbac`/`httpapi` that land with `arrfacade`; F5, §8.4, §8.5 and O9 point at that table; S7 grep done-check.
+- SIMP2-9 — the conformance engine stays `internal/syncapi/conformance` in ABO until `arrfacade` is built (§8.0, §8.14, §8.15); the extraction-time list is the `/api/v3/` reservation only.
