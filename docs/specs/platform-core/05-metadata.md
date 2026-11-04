@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.8.1 -->
+<!-- version: 1.9.0 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -74,8 +74,8 @@ conformance suites (`legacy/legacytest`) are members of core's `legacy` package,
 so deleting them at the integrations cutover is not a breaking change. `integrations` and `providerhttp` never
 import `legacy`: the Registry and the gate router name each capability through an **unexported** interface of their
 own with the identical method set, and each detects the capability once, on the store it is handed, through that
-mirror (the kernel asserts only the two capabilities it drives, `legacy.ConfigOpener` and `legacy.ConfigSecrets`,
-05-config §1.3.3; SIMP7-5). The mirror test (03 §3.3) checks, in both directions, that each package's interface and
+mirror (the kernel asserts only the capabilities 03 §3.3 lists, among them `legacy.Covering` on each routed
+store's legacy half for P4c's backend comparison; SIMP7-5, SIMP8-3). The mirror test (03 §3.3) checks, in both directions, that each package's interface and
 the `legacy` one are mutually assignable, and that its unexported record-ID helper returns what the exported one
 does: the package's `export_test.go` only exports test aliases of the mirror and the helper, and
 `legacy_mirror_test.go` in its external test package (`package integrations_test`, `package providerhttp_test`),
@@ -261,7 +261,7 @@ type Env struct {
 // SecretReader resolves a declared secret at use time (not at build time), so
 // rotation takes effect on the next request without a rebuild. A withheld
 // operator-sourced secret returns ErrOperatorSecretWithheld (M1.4 step 2,
-// SEC7-3); the adapter's call then fails before sending (ClassRefusedLocal).
+// SEC7-3, R8-5); the adapter's call then fails before sending (ClassRefusedLocal).
 type SecretReader interface {
 	Secret(ctx context.Context, field string) (secrets.Value, error)
 }
@@ -430,6 +430,17 @@ type StoredInstance struct {
 	Config        InstanceConfig // Locked and Stored are ignored
 	LocalOrigin   string         // scheme://host:port Local was granted for; "" = none
 	SecretsOrigin string         // URL origin the core secrets copies were written for
+	// OperatorSecretOrigin maps each destination field (a URL-typed field, or
+	// "host" for a host-and-port adapter such as core.email, whose origin is
+	// smtp://host:port) to the origin an operator-sourced secret may be sent
+	// to although the operator did not set that field (M1.4 step 2, R8-5,
+	// SEC8-2). Written only from an admin's provenance: the first S7 boot from
+	// the stored destination (legacy-backed instances, M1.10), a Put that
+	// passes the ProtectAdmin check, and Registry.Confirm. A Put by anyone else
+	// that changes a field's origin deletes that field's entry. nil = none.
+	// For a legacy-backed instance it is a native-only field of the extension
+	// record (M1.4 step 2a); older builds never read it.
+	OperatorSecretOrigin map[string]string
 	// Legacy is the legacy store's view of the record (M1.4 step 2a); nil for
 	// every native record and always nil after the integrations cutover. The
 	// one legacy-state pointer of this type; it stays in v1 because
@@ -499,11 +510,23 @@ func (r *Registry) Config(ref Ref) (InstanceConfig, bool)        // effective vi
 // through the legacy UI cannot carry the stored secret to the new host (SEC3-4).
 // An operator-sourced secret (a canonical overlay or a BelowStored fill,
 // M1.4 step 2) is never stored, so this clearing cannot reach it; it is bound
-// to the operator-sourced values of the destination fields instead and is
-// withheld while any of them is not operator-sourced or has a different
-// origin (M1.4 step 2 "Operator secrets follow operator destinations";
-// SEC7-3). A Put that stores a URL therefore never makes an env-supplied key
-// follow it, whoever writes it.
+// to the destination by origin plus provenance instead: it is served only
+// while every destination field's effective origin equals that field's
+// operator origin (or the adapter default), or the instance's
+// OperatorSecretOrigin, and is withheld otherwise (M1.4 step 2 "Operator
+// secrets bind to origin plus provenance"; SEC7-3, R8-5). A Put that passes
+// the ProtectAdmin check records the destination origins it stores as
+// OperatorSecretOrigin, so an admin's URL carries the env-supplied key as at
+// HEAD; a Put by anyone else that changes a destination origin deletes that
+// field's entry, so the key never follows a non-admin's URL. Until the
+// integrations cutover, a Put on a legacy-backed instance that changes a
+// destination origin to one that is neither the field's operator origin nor
+// the adapter default, while any secret field of that instance is
+// operator-sourced, also needs the ProtectAdmin check, and is otherwise
+// refused whole (403, ErrOperatorSecretBound, naming the bound secret field
+// and its canonical variable, 05-config §1.3.6): an older build has no
+// OperatorSecretOrigin and re-applies the env secret beside whatever URL the
+// legacy fields hold after a rollback (SEC8-3).
 // A Put on a legacy-backed instance goes to the legacy store, which writes the
 // legacy fields in their legacy format and its extension record into the batch
 // that also holds the secrets (M1.4 step 2a). A Put that changes a secret
@@ -517,6 +540,17 @@ func (r *Registry) Delete(ctx context.Context, ref Ref) error
 // Local=true needs the same ProtectAdmin check as Put (SEC2-7). TestResult
 // carries only OK, the Class and the HTTP/protocol status: never a response
 // body or remote error text (a test must not be a read oracle, SEC-15).
+// The unscoped route (POST .../{kind}/test) has no stored instance, so only
+// secretsIn is used. The instance-scoped route (.../instances/{id}/test) also
+// takes an unsaved body for that instance (the edit form's "Test" before a
+// save); a secret field the body omits is filled from the instance's stored
+// secret only while every destination field's origin equals the stored one.
+// When a destination origin differs, Test uses no stored secret: only a
+// secretsIn value that passes Put's re-supply check (neither empty nor
+// echoed nor mask-shaped), exactly as Put's destination-change clearing
+// would leave it, so Test never sends a stored secret to a host no Put has
+// stored (SEC8-10). An operator-sourced secret follows M1.4 step 2's binding
+// against the stored OperatorSecretOrigin; a Test never records provenance.
 func (r *Registry) Test(ctx context.Context, inst InstanceConfig, secretsIn map[string]secrets.Value) (TestResult, error)
 func (r *Registry) Health(ctx context.Context, ref Ref) (Health, error)
 // Confirm re-confirms a legacy-backed instance whose extension record is
@@ -525,9 +559,14 @@ func (r *Registry) Health(ctx context.Context, ref Ref) (Health, error)
 // core.integration.confirm with the instance's current URL origins;
 // afterwards Local applies to the instance's current configured hosts. A
 // pending candidate whose origin no longer equals the current URL origin is
-// dropped instead of granted. An instance with nothing to confirm (native, or
-// neither suspended nor pending) gets ErrNothingToConfirm (409). A routine
-// Put never clears a suspension and never accepts a candidate.
+// dropped instead of granted. Confirm also records the instance's current
+// destination origins as its OperatorSecretOrigin (M1.4 step 2, R8-5), so it
+// ends the withholding of an operator-sourced secret; an instance whose only
+// state is such a withholding is confirmable too. An instance with nothing to
+// confirm (native, or neither suspended, pending nor withholding an operator
+// secret) gets ErrNothingToConfirm (409); a native instance's admin re-saves
+// it through Put instead. A routine Put never clears a suspension and never
+// accepts a candidate.
 func (r *Registry) Confirm(ctx context.Context, ref Ref) error
 
 type TestResult struct {
@@ -602,10 +641,16 @@ var (
 	ErrDisabled      = errors.New("integrations: instance disabled")
 	ErrUnknownAdapter = errors.New("integrations: unknown adapter")
 	ErrFieldLocked   = errors.New("integrations: field is set by an operator value")
-	ErrNothingToConfirm = errors.New("integrations: the instance is neither suspended nor pending a Local confirmation")
+	ErrNothingToConfirm = errors.New("integrations: the instance is neither suspended, pending a Local confirmation, nor withholding an operator secret")
 	// ErrOperatorSecretWithheld: an operator-sourced secret is not served to
-	// a destination the operator did not choose (M1.4 step 2, SEC7-3).
-	ErrOperatorSecretWithheld = errors.New("integrations: operator-supplied secret withheld from a destination that is not operator-set")
+	// a destination that is neither the operator's (or the adapter default)
+	// nor the instance's OperatorSecretOrigin (M1.4 step 2, SEC7-3, R8-5).
+	ErrOperatorSecretWithheld = errors.New("integrations: operator-supplied secret withheld from a destination that no operator or admin set")
+	// ErrOperatorSecretBound (403): until the integrations cutover, a Put
+	// without the ProtectAdmin check may not move a destination of a
+	// legacy-backed instance that has an operator-sourced secret (M1.3 Put,
+	// M1.4 step 2, R8-5, SEC8-3).
+	ErrOperatorSecretBound = errors.New("integrations: destination is bound to an operator-supplied secret; an admin must change it")
 )
 ```
 
@@ -681,9 +726,9 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
 | `GET /api/core/v1/integrations/adapters?kind=` (Meta + settings schema) | `core:integrations.read` |
 | `GET, POST /api/core/v1/integrations/{kind}/instances` | read / `core:integrations.manage` |
 | `GET, PUT, DELETE /api/core/v1/integrations/{kind}/instances/{id}` | read / manage |
-| `POST /api/core/v1/integrations/{kind}/test` (unsaved body) and `.../instances/{id}/test` | manage |
+| `POST /api/core/v1/integrations/{kind}/test` (unsaved body) and `.../instances/{id}/test` (unsaved body for that instance; a stored secret fills an omitted field only while no destination origin changes, M1.3 `Test`, SEC8-10) | manage |
 | `GET .../instances/{id}/health`; `DELETE .../instances/{id}/hold` (release a hold, as `ThrottleRegistry.ReleaseHold`, `internal/metadata/throttle_registry.go:338`) | read / manage |
-| `POST .../instances/{id}/confirm` (`Registry.Confirm`, M1.4 step 2a) | `core:admin`, interactive (ProtectAdmin) |
+| `POST .../instances/{id}/confirm` (`Registry.Confirm`, M1.4 step 2a; also records `OperatorSecretOrigin`, step 2, R8-5) | `core:admin`, interactive (ProtectAdmin) |
 
 ### M1.4 Lifecycle
 
@@ -720,36 +765,67 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
    names ABO reads today are **permanent** aliases onto these paths (05-config C7/C11). This is config's
    operator-layer lock (05-config §1.3.5) applied to instance fields; there is no second lock model.
 
-   **Operator secrets follow operator destinations (SEC7-3).** A secret field whose **effective** value comes from
-   an operator layer (a canonical overlay, or a `BelowStored` value filling an unstored field) is bound to the
-   operator-sourced values of the instance's destination fields: its URL-typed fields (for a metadata source, its
-   `base_url`, `internal/config/config.go:155-157` @748fd787a) or, for an adapter that dials a host and port rather
-   than a URL (`core.email`, [05-notify](05-notify.md) §3.1), that pair, whose origin is `smtp://host:port`. A
-   destination field counts as operator-sourced when its effective value comes from an operator layer, or when no
-   layer and no stored value sets it and the adapter's built-in default applies (no writer chose that host). When a
-   destination field's effective value is **not** operator-sourced (a stored value that a `core:integrations.manage`
-   holder wrote, whether it beats a `BelowStored` operator value under the precedence rule above or the operator set
-   no value for that field), or its origin (scheme, host, port) differs from the origin of that field's operator
-   value, every operator-sourced secret of the instance is **withheld**:
-   - `Env.Secrets` returns `ErrOperatorSecretWithheld` for it, so a call that needs it fails before sending
-     (`ClassRefusedLocal`: nothing dialled, no hold, breaker or quota write), and no request carries it;
-   - the instance reports `HealthDegraded` with reason `operator_secret_withheld`, naming the withheld fields;
-   - `Test` applies the same rule to the unsaved config, so it cannot send the operator's secret to a new host
-     either.
+   **Operator secrets bind to origin plus provenance (SEC7-3, R8-5).** A secret field whose **effective** value
+   comes from an operator layer (a canonical overlay, or a `BelowStored` value filling an unstored field) is bound to
+   the instance's destination fields: its URL-typed fields (for a metadata source, its `base_url`,
+   `internal/config/config.go:155-157` @748fd787a) or, for an adapter that dials a host and port rather than a URL
+   (`core.email`, [05-notify](05-notify.md) §3.1), that pair, whose origin is `smtp://host:port`. The binding is on
+   the **origin** (scheme, host, port) and on **who chose it**, never on the effective value's source:
+   - **Served.** The secret is served when every destination field's effective origin equals either the origin of
+     that field's operator value (or, when the operator sets no value for that field, the adapter's built-in
+     default), or the instance's `OperatorSecretOrigin` entry for that field. A stored value with the operator's
+     origin is therefore served: HEAD's whole-config save writes `openai_base_url` into every blob
+     (`internal/config/persistence.go:1932-1977`, `marshalConfigBlob` `:2126-2139` @748fd787a) while
+     `SyncConfigFromEnv` re-applies `OPENAI_API_KEY` over it (`:2030-2035`), so after any save the stored URL is the
+     operator's own, and S7 must not withhold the key beside it (SEC8-2).
+   - **`OperatorSecretOrigin`** is a native-only field (M1.3 `StoredInstance`): in books' extension record for a
+     legacy-backed instance (step 2a), in the native row otherwise. It is written only from an admin's provenance:
+     - at the **first S7 boot**, from the stored destination of each legacy-backed instance (the S7 books
+       migration, M1.10), because at HEAD only `settings.manage` holders (seed: `admin` only) could write those
+       fields (`internal/config/protected_fields.go:148` @748fd787a) and from S3 to S6 they are `ProtectAdmin` on the
+       config façade (05-config §1.3.7, SEC4-7). An env Deluge password beside an admin-set web URL, and an env key
+       beside an admin-set AI URL, therefore keep working at S7 (SEC8-2). Native rows do not exist before S7, and
+       HEAD stores no SMTP settings, so an env SMTP password beside an admin-set host is served from that admin's
+       `Put` (05-notify §10);
+     - on every `Put` by a principal that passes the ProtectAdmin check (core:admin + interactive), which records
+       the destination origins it stores;
+     - by `Registry.Confirm` (the confirm route), which records the instance's current destination origins.
+
+     A `Put` by anyone else that changes a destination field's origin deletes that field's entry, so the secret is
+     withheld; one that leaves the origins alone keeps them.
+   - **Withheld.** Otherwise every operator-sourced secret of the instance is withheld:
+     - `Env.Secrets` returns `ErrOperatorSecretWithheld` for it, so a call that needs it fails before sending
+       (`ClassRefusedLocal`: nothing dialled, no hold, breaker or quota write), and no request carries it;
+     - the instance reports `HealthDegraded` with reason `operator_secret_withheld`, naming the withheld fields;
+     - `Test` applies the same rule to the unsaved config against the stored `OperatorSecretOrigin`, so it cannot
+       send the operator's secret to a new host either (a `Test` records nothing).
+   - **Bound across a rollback (SEC8-3).** `OperatorSecretOrigin` is S7-only state: an older build reads the legacy
+     fields alone and re-applies the env secret beside whatever URL they hold (`SyncConfigFromEnv`; the
+     env-authoritative Deluge password, `config.go:2249-2250` @748fd787a). So **until the integrations cutover**, a
+     `Put` on a **legacy-backed** instance that changes a destination field's origin to one that is neither the
+     field's operator origin nor the adapter default, while any secret field of that instance is operator-sourced,
+     needs the ProtectAdmin check; without it the `Put` is refused whole with 403 `ErrOperatorSecretBound`, naming
+     the bound secret field and its canonical variable (05-config §1.3.6), and nothing is written. This restores, for
+     this one case, the admin-only write HEAD had (`protected_fields.go:148`), so no build, before or after a
+     rollback, sends an env secret to a URL that a non-admin chose. Native instances are invisible to older builds
+     and need only the withholding.
 
    The instance stays withheld until a `Put` re-supplies the secret as a stored one, which M1.3's URL-change rule
    then governs (not possible for a canonical, `Locked` secret, which only the operator changes), the stored
-   destination value is removed, or the operator sets the destination field too. The Registry evaluates the rule on the effective view at
-   `Load`, at every hot swap and at every config hot swap, from the per-field effective source it already records.
-   It closes the case M1.3's clearing step cannot reach: an operator secret is never stored, so a URL change has
-   nothing to clear. At HEAD only `settings.manage` (seed: `admin` only) could edit `openai_base_url`
-   (`internal/config/protected_fields.go:148` @748fd787a); this keeps SEC4-7's guarantee that a credential does not
-   follow a URL for operator credentials too, without restricting who may store a URL
-   (`TestPut_NonAdminURLDoesNotCarryEnvSecret`). The operator-secret pairs at HEAD are `ai/openai` (`OPENAI_API_KEY`
-   with `OPENAI_BASE_URL`, [05-ai](05-ai.md) §10), `download/deluge` (the Deluge env password with its web URL,
-   [05-download](05-download.md) §10), `notify/email` (`smtp_password` with `smtp_host`/`smtp_port`,
-   [05-notify](05-notify.md) §10), and `metadata/google-books` and `metadata/hardcover` (their operator keys with the
-   source's `base_url`; M1.10 table). Indexer instances have no operator values ([05-indexer](05-indexer.md) §10).
+   destination value is removed or set back to the operator's origin, the operator sets the destination field too,
+   or an admin `Put` or `Registry.Confirm` records the current destination as `OperatorSecretOrigin`. The Registry
+   evaluates the rule on the effective view at `Load`, at every hot swap and at every config hot swap, from the
+   per-field effective source it already records. It closes the case M1.3's clearing step cannot reach: an operator
+   secret is never stored, so a URL change has nothing to clear. It keeps SEC4-7's guarantee that a credential does
+   not follow a URL a non-admin chose, for operator credentials too, without restricting who may store a URL on a
+   native instance (`TestPut_NonAdminURLDoesNotCarryEnvSecret`, `TestOperatorSecret_StoredEqualOriginServed`,
+   `TestOperatorSecret_AdminStoredHostServed`, `TestPut_LegacyBackedNonAdminDestinationBound`,
+   `TestRollback_NonAdminURLNeverCarriesEnvSecretOnPrev`). The operator-secret pairs at HEAD are `ai/openai`
+   (`OPENAI_API_KEY` with `OPENAI_BASE_URL`, [05-ai](05-ai.md) §10), `download/deluge` (the Deluge env password with
+   its web URL, [05-download](05-download.md) §10), `notify/email` (`smtp_password` with `smtp_host`/`smtp_port`,
+   [05-notify](05-notify.md) §10; a native row, so `ErrOperatorSecretBound` never applies to it), and
+   `metadata/google-books` and `metadata/hardcover` (their operator keys with the source's `base_url`; M1.10 table).
+   Indexer instances have no operator values ([05-indexer](05-indexer.md) §10).
 
    **2a. Legacy-backed instances (R4-1).** A legacy-backed instance is one the app's legacy `InstanceStore` covers
    (`Covers(legacy.IntegrationsCoverID(ref, adapter))`, M1.3; per-record routing, M1.1).
@@ -767,7 +843,7 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
      `*storage.Batch` and shares that store's pending blob render (05-config §1.6, C11), so a config write and an
      instance write in one batch render and commit the blob once.
    - **Native-only fields** — `Local` with the URL origin it was granted for, the URL origin the `secrets` copies
-     were written for, `Limits`, and any field the legacy format has no place for — are kept by the legacy store
+     were written for, `OperatorSecretOrigin` (step 2, R8-5), `Limits`, and any field the legacy format has no place for — are kept by the legacy store
      in an **app-owned extension family that older builds never read**, never additively in the legacy rows
      (R4-1; an extra member in a legacy row is dropped or, worse, interpreted by an older build, SEC4-3). The
      records follow 05-storage §5S.3.11's one extension-record rule (SIMP4-9): keyed by the legacy instance key;
@@ -784,6 +860,7 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
      | `Local` | Widening | suspended: reads false, so the instance reaches only public hosts and `lan_allow`, until an admin calls `Registry.Confirm` (audited `core.integration.confirm`); a routine `Put` never clears it |
      | `LocalOrigin` | Independent | kept; shown by the confirm form and the health detail |
      | `SecretsOrigin` | Independent | kept; a `secrets` copy is used only while it equals the current legacy URL origin, so a secret never follows a URL an older build changed (SEC-15 across builds), and is deleted on the next write otherwise |
+     | `OperatorSecretOrigin` (R8-5) | Independent | kept; it serves an operator-sourced secret only to a destination whose current origin equals it, so a URL an older build changed carries that secret only when it is the operator's origin, the adapter default or the recorded one; otherwise the secret is withheld until an admin `Put` or `Registry.Confirm` records the current origin |
      | `Limits` | Independent | kept |
      | `PendingLocal` (M1.10) | Independent (grants nothing) | kept; accepted by `Registry.Confirm` only while it equals the current legacy URL origin, dropped otherwise |
 
@@ -794,8 +871,8 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
      family" is the table).** The extension family is `Serialized`, so every key the legacy store sets or deletes
      in it carries an `Expect`, and none of its writers issues a `DeleteRange`. `Put` writes the record through
      `legacy.Extension.Put` with an `Expect` on the record bytes the store's `Get` saw (`seen`), and the legacy
-     store adds its `Expect` on the legacy row it rewrites; the S7 `Local` step's `PendingLocal` records are
-     written the same way; `Registry.Confirm` uses `legacy.Extension.Confirm`, which reads the record and the
+     store adds its `Expect` on the legacy row it rewrites; the S7 `Local` step's `PendingLocal` and `OperatorSecretOrigin`
+     records are written the same way; `Registry.Confirm` uses `legacy.Extension.Confirm`, which reads the record and the
      legacy row with `GetForUpdate`; `Delete`, and the next write that removes an `ExtOrphan` record, use
      `legacy.Extension.Delete(ctx, b, legacyKey, entryID, seen)`, a conditional delete with an `Expect` on the
      record bytes seen.
@@ -841,7 +918,7 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
    remote). Validation errors make the instance `HealthMisconfigured`, never fail boot.
 4. **Hot swap** on `Put`, and on a config hot swap that changes an overlaid value: validate → apply the trust
    rules (Origin from the principal; `Local` only with the ProtectAdmin check; URL change drops secrets and
-   `Local`, SEC-15) → persist through the instance's store (native, or the legacy store with its extension
+   `Local`, SEC-15; `OperatorSecretOrigin` recorded only from an admin's provenance, step 2, R8-5) → persist through the instance's store (native, or the legacy store with its extension
    record, step 2a), with the secrets in one storage batch (an overlay change persists nothing) → build new → atomically
    replace → old instance drains its leases → `Close`. providerhttp state (bucket, holds, breaker, quota) is
    keyed by `Ref` and **survives** the swap; the egress trust (`Local`, `lan_allow`) is re-read per dial.
@@ -864,13 +941,15 @@ written. Each kind file states what its callers do with `ErrDisabled` (05-ai, 05
 run is enqueued and its clock advances like any other run (DATA5-8 needs every schedule to fire on staging): the
 health task's run probes nothing, and each kind's scheduled work (05-ai's batch poll, 05-download's poll, acquire's
 RSS sync over 05-indexer) does what its file's `core.integrations.disabled` row says. **Staging (R7-6).** 09 §9.3 is
-the one staging procedure. At **every** stage its offline scrub (`staging-scrub`) clears every legacy and every
-native integration URL, webhooks included (native rows under `c/integrations/instances/` too, so a later build
-without the operator layer stays inert), and every boot of the staging copy is egress-limited (09 §9.3). It also sets
+the one staging procedure. At **every** stage its offline scrub (`staging-scrub`) clears every **legacy**
+integration URL, webhooks included, and every boot of the staging copy is egress-limited (09 §9.3). It also sets
 this switch in the operator layer of every staging boot of an S7-or-later binary (an operator-set value locks it, so
 no stored override can turn integrations back on there): the switch is keyed on the booting binary, not on the
-copy's age. It is defence in depth: an older build booted on the same copy (the boot-budget A/B, the R-test,
-`make rollback`) ignores it, so the cleared URLs are what keeps that build inert (SEC7-6, OPS7-7).
+copy's age. For an older build booted on the same copy (the boot-budget A/B, the R-test, `make rollback`), which
+ignores the switch, the cleared legacy URLs are what keeps it inert (SEC7-6, OPS7-7). Native rows under
+`c/integrations/instances/` are not scrubbed: only an S7-or-later binary reads them, every staging boot of such a
+binary carries the switch, and the firewall drops the copy's egress for the host's life, so no build that can read a
+native URL can call it (R8-3, SIMP8-2).
 
 **Native store (apps without a legacy store; SIMP4-3).** `NativeInstanceStore` lands with `integrations` at
 09 S7. Every app uses it for every instance its legacy store does not cover (routed model, M1.1); an app that passes
@@ -882,7 +961,7 @@ rollback are never delivered to it; only deliveries already pending in `c/outbox
 
 | Key | Value | Notes |
 |---|---|---|
-| `c/integrations/instances/<kind>/<id>` | `codec.JSON[integrations.StoredInstance](1)` | secret fields hold `secrets.Ref` only; `Local`, `LocalOrigin`, `SecretsOrigin` and `Limits` are ordinary fields of the row (no extension record, no suspension); `Version` is the row's storage version; no index rows (a kind is one prefix scan) |
+| `c/integrations/instances/<kind>/<id>` | `codec.JSON[integrations.StoredInstance](1)` | secret fields hold `secrets.Ref` only; `Local`, `LocalOrigin`, `SecretsOrigin`, `OperatorSecretOrigin` (R8-5) and `Limits` are ordinary fields of the row (no extension record, no suspension); `Version` is the row's storage version; no index rows (a kind is one prefix scan) |
 
 ### M1.5 Error semantics
 
@@ -895,6 +974,7 @@ rollback are never delivered to it; only deliveries already pending in `c/outbox
 | Health probe fails | open (instance stays usable; status Down) | A probe is advisory; calls carry their own classification. |
 | `Put` version conflict | closed (409) | Two admins editing one instance must not silently overwrite. |
 | Secrets backend unavailable on `Put` | closed (503, row not written) | Row and secret are one batch; never a row pointing at a secret that was not stored. |
+| Instance-scoped `Test` whose body changes a destination origin (M1.3 `Test`) | closed for stored secrets: none is used; only a re-supplied `secretsIn` value is sent | `Test` must not send a stored secret to a host without the clearing and audit of a `Put` (SEC8-10). |
 | `Test` with remote failure | n/a (returns `TestResult{OK:false, Class, Status}` with 200; no body, no remote text) | A failed test is a successful API call; echoing remote text would make `Test` an SSRF read oracle (SEC-15). |
 | A destination field changed (a URL field's host/scheme/port, or a host or port field such as `core.email`'s) without re-supplied secrets | open for the write; secrets cleared, `Local` reset, audited (`core.integration.change_url`) | A stored password or API key must never follow a URL to a new host (SEC-15). |
 | A principal without the ProtectAdmin check (core:admin + interactive) sets `Local`, keeps it across a URL change, or calls `Test` with `Local=true` | closed (403) | Private-network trust is admin-level network trust, like `lan_allow` (SEC-15, SEC2-7). |
@@ -907,8 +987,9 @@ rollback are never delivered to it; only deliveries already pending in `c/outbox
 | `Confirm` of an instance that is neither suspended nor pending (native, or nothing changed) | closed (409 `ErrNothingToConfirm`) | Nothing to grant; a 200 would suggest trust changed. |
 | Pending `Local` candidate whose origin no longer equals the current URL origin | closed: `Confirm` drops the candidate and grants nothing | A candidate is bound to the URL the upgrade saw (DATA5-9). |
 | In-place encrypted legacy secret undecryptable (the app's cipher key missing) | open for boot, closed for that secret: `HealthMisconfigured` (`integration_secret_unreadable`); the row is kept | It is the only copy; the operator re-enters it (R5-1(b), DATA3-12). |
-| `core.integrations.disabled` true (a staging copy, R6-7) | closed for every outbound call (`ErrDisabled`, `HealthDisabled` reason `integrations_disabled`); open for boot, reads and `Put`. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances (the health task probes nothing). Staging also clears every legacy and native integration URL, webhooks included, at every stage (09 §9.3, R7-6) | A copy of a production store must never act on production systems (OPS6-4); schedules must still fire there (DATA5-8), and an older build that ignores the switch must find no URL to call (SEC7-6). |
-| An operator-sourced secret beside a destination field that is not operator-sourced, or whose origin differs from the operator value's (M1.4 step 2) | closed for that secret: withheld (`ErrOperatorSecretWithheld`, `ClassRefusedLocal`, nothing sent); open for the `Put` that stored the destination; `HealthDegraded` reason `operator_secret_withheld` | An env-supplied credential must not follow a URL that a non-admin stored (SEC7-3). |
+| `core.integrations.disabled` true (a staging copy, R6-7) | closed for every outbound call (`ErrDisabled`, `HealthDisabled` reason `integrations_disabled`); open for boot, reads and `Put`. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances (the health task probes nothing). Staging also clears every legacy integration URL, webhooks included, at every stage (09 §9.3, R7-6, R8-3); native rows are covered by the switch and the firewall | A copy of a production store must never act on production systems (OPS6-4); schedules must still fire there (DATA5-8), and an older build that ignores the switch must find no URL to call (SEC7-6); only S7+ binaries, which always carry the switch on staging, read native rows (R8-3). |
+| An operator-sourced secret beside a destination field whose effective origin equals neither that field's operator origin (or the adapter default) nor the instance's `OperatorSecretOrigin` (M1.4 step 2) | closed for that secret: withheld (`ErrOperatorSecretWithheld`, `ClassRefusedLocal`, nothing sent); open for the `Put` that stored the destination on a native instance; `HealthDegraded` reason `operator_secret_withheld` | An env-supplied credential must not follow a URL that a non-admin chose (SEC7-3); binding on origin plus provenance keeps HEAD's stored copy of the operator's URL and an admin-set host working (R8-5, SEC8-2). |
+| Until the integrations cutover, a `Put` without the ProtectAdmin check on a legacy-backed instance with an operator-sourced secret that moves a destination origin away from the operator's and the adapter default (M1.3 `Put`, M1.4 step 2) | closed (403 `ErrOperatorSecretBound`, naming the secret field and its canonical variable); nothing written | An older build has no `OperatorSecretOrigin` and re-applies the env secret beside the stored URL after a rollback, so only an admin may move it (R8-5, SEC8-3). |
 | Facade-pushed URL not http(s), or private and not in `lan_allow` (deferred-build member) | closed (422, nothing written) | One leaked facade key must not aim scheduled fetches at the LAN (SEC-15, SEC-5). |
 
 ### M1.6 Concurrency contract
@@ -932,7 +1013,7 @@ Protection classes per 05-config §1.3.7 (SEC2-8).
 | `core.integrations.probe_timeout` | duration | `10s` | yes | none |
 | `core.integrations.drain_timeout` | duration | `30s` | yes | none |
 | `core.integrations.max_instances_per_kind` | int | `32` | yes (bounds metric label cardinality) | none |
-| `core.integrations.disabled` | bool: build no instance and make no outbound call (M1.4 "Outbound integrations off"; R6-7) | `false` | yes (read per `Lease` and per `Acquire`) | admin; set from S7 by 09 §9.3's staging procedure in the operator layer of every staging boot, which locks it (beside the URL clearing at every stage, R7-6) |
+| `core.integrations.disabled` | bool: build no instance and make no outbound call (M1.4 "Outbound integrations off"; R6-7) | `false` | yes (read per `Lease` and per `Acquire`) | admin; set from S7 by 09 §9.3's staging procedure in the operator layer of every staging boot, which locks it (beside the legacy URL clearing at every stage, R7-6, R8-3; it alone, with the firewall, covers native rows) |
 
 The schedule key and `core.integrations.disabled` are new with core (HEAD has no integration health task and no
 such switch), so neither has a legacy alias.
@@ -986,11 +1067,31 @@ unexported record-ID helper equals `legacy.IntegrationsCoverID` on a table of re
 trusted for private networks; SEC6-5), `TestRegistry_DisabledMakesNoOutboundCall` (`core.integrations.disabled`:
 records listed, `Lease` and `Test` give `ErrDisabled`, the health task and a transport that fails the test on any
 request see nothing, no hold or quota row is written, and a scheduled health run is still enqueued and advances its
-clock; R6-7, R7-6), `TestPut_NonAdminURLDoesNotCarryEnvSecret` (env `OPENAI_API_KEY`, nothing stored; a non-admin
-holder of `core:integrations.manage` Puts a new public URL: the `Put` succeeds, no request to it carries the key,
-`Test` of the same config sends no key, and health reads `operator_secret_withheld`; a stored secret re-supplied by
-a `Put`, or the stored URL removed, ends the withholding; SEC7-3), `TestOperatorSecret_AdapterDefaultURLServed`
+clock; R6-7, R7-6), `TestPut_NonAdminURLDoesNotCarryEnvSecret` (a native instance with an env key, nothing
+stored; a non-admin holder of `core:integrations.manage` Puts a new public URL: the `Put` succeeds, deletes the
+field's `OperatorSecretOrigin` entry, no request to it carries the key, `Test` of the same config sends no key, and
+health reads `operator_secret_withheld`; a stored secret re-supplied by a `Put`, the stored URL removed, or an admin
+`Put` of the same URL ends the withholding; SEC7-3, R8-5), `TestOperatorSecret_AdapterDefaultURLServed`
 (env key, no URL set anywhere: the key goes to the adapter's built-in host; SEC7-3),
+`TestOperatorSecret_StoredEqualOriginServed` (env `OPENAI_API_KEY` and `OPENAI_BASE_URL`, a HEAD blob whose
+`openai_base_url` is the same URL, as HEAD's whole-config save writes it: on the first S7 boot the effective URL is
+the stored one and the key is served, health is not `operator_secret_withheld`; R8-5, SEC8-2),
+`TestOperatorSecret_AdminStoredHostServed` (HEAD fixtures with an env Deluge password beside a stored web URL, and
+an env `OPENAI_API_KEY` beside a stored non-default AI URL: the first S7 boot records each stored origin as
+`OperatorSecretOrigin` and both secrets are served; a ProtectAdmin `Put` of a new Deluge URL, and of a native
+`notify/email` host beside an env `smtp_password`, records the new origin and serves the secret; `Registry.Confirm`
+of an instance withheld after an older build's URL change records its current origin and serves it; R8-5, SEC8-2),
+`TestPut_LegacyBackedNonAdminDestinationBound` (legacy-backed `ai/openai` with env `OPENAI_API_KEY`: a non-admin
+holder of `core:integrations.manage`, and an API key holding `core:admin`, Put a new URL and get 403
+`ErrOperatorSecretBound` naming the key's canonical variable, with no legacy field, extension record or audit of a
+change written; the same `Put` setting the URL back to `OPENAI_BASE_URL`'s origin, or a `Put` on an instance with
+no operator-sourced secret, succeeds; an interactive admin's `Put` succeeds and records `OperatorSecretOrigin`;
+R8-5, SEC8-3), `TestRollback_NonAdminURLNeverCarriesEnvSecretOnPrev` (a case of 09's R-test: on S7 a non-admin's
+`Put` of a fake-server URL on `ai/openai` with an env key is refused; after `make rollback` to `prev` the fake
+server receives no request carrying the key, and the older build calls only the URL stored before; R8-5, SEC8-3),
+`TestRegistryTest_ChangedURLUsesNoStoredSecret` (instance-scoped `Test` whose body changes the URL origin and omits
+the secret: the fake server sees no stored secret; with the origin unchanged the stored secret is used; with an
+echoed mask in `secretsIn` none is sent; SEC8-10),
 `TestLegacyWebhook_SharedFieldsFamilyWide`,
 `TestFacadeIndexer_LANRefused` (FacadeWriter; with the deferred facade build),
 `TestRegistry_BuildDoesNoIO` (transport that fails the test on any request),
@@ -1018,7 +1119,11 @@ that names an ABO key describes that books code, not core.
 |---|---|
 | `config.MetadataSources[]` (`internal/config/config.go:147-163`) | legacy-backed `metadata/<id>` instances, adapters `books.<id>`, served in place from `metadata_sources` by books' store (M1.4 step 2a); `Credentials` values (plaintext in the blob) move into `secrets` under `integrations.metadata.<id>.credentials.<k>` on this build's first write of them, the legacy values sentinelled (R4-2); the Google Books key and the Hardcover token, which HEAD keeps encrypted in their own rows, stay there (kept names of 05-config §2.2, R5-1(b); table below) |
 | `DelugeWebURL/Password`, `DownloadClient.Torrent.Deluge` (`config.go:225-240,1776-1780`) | the legacy-backed `download/deluge` instance (05-download §10) |
-| (egress trust) | `Local` is native-only (books' extension family, M1.4 step 2a). Today these instances have no egress guard at all; from S7 a private host needs `Local` or `lan_allow`. **The upgrade grants no `Local` (DATA5-9).** At S7 books ships one versioned `Migration` (05-storage §5S.3.5; `Additive`, P4b, raises no level; never a `LegacyMigration`, which `TestNoNewLegacyMigrations` forbids after S2b; SIMP5-11, DATA5-17) that writes only books' extension family `m/books/ext/integrations/` and nothing older builds read: for each legacy-backed instance whose URL core's `legacy.IntegrationsLocalCandidate` accepts — the host is an **IP literal** in the loopback or private ranges — it records that URL origin as `PendingLocal`, with the legacy-field hash of M1.4 step 2a. A candidate grants nothing: the instance reads `Local=false`, reports `HealthDegraded` with reason `integration_local_pending`, and is listed on the Integrations page until an admin accepts it with `Registry.Confirm` (ProtectAdmin, audited `core.integration.confirm`), which grants `Local` bound to that origin only while it still equals the instance's URL origin. This holds whatever wrote the URL: values HEAD's `PUT /api/v1/config` wrote before S3 (a HEAD custom role holding `settings.manage` could write them), a HEAD store that skips S3–S6 and boots S7+ directly, and a pre-S7 archive restored on S7+ — whose store lacks the migration's applied record, so the migration runs again on the archive's URLs and again only records candidates. A private host given by **name** is never a candidate (a name can resolve anywhere at dial time): it is `HealthMisconfigured` with reason "private host needs Local or lan_allow" until an admin sets `Local` or lists it in `lan_allow` (SEC3-5). A host change by any writer resets `Local` and drops a candidate (M1.3 `Put`; for an older build's change, the suspension of M1.4 step 2a). From S3 every integration-bound blob field (URL, host, credentials, headers) is also `ProtectAdmin` on the config façade until S7 hands it to `Registry.Put`, and a URL-origin change through the façade before S7 clears that instance's stored secret unless the same request re-supplies it (05-config §1.3.7, §1.12.2; `TestPreS7Facade_IntegrationURLIsProtectAdmin`; SEC4-7). Release note (S7): "Integrations that reach a LAN address by IP need one confirmation by an admin on the Integrations page after this upgrade; until then they cannot connect." |
+| (egress trust) | `Local` is native-only (books' extension family, M1.4 step 2a). Today these instances have no egress guard at all; from S7 a private host needs `Local` or `lan_allow`. **The upgrade grants no `Local` (DATA5-9).** At S7 books ships one versioned `Migration` (05-storage §5S.3.5; `Additive`, P4b, raises no level; never a `LegacyMigration`, which `TestNoNewLegacyMigrations` forbids after S2b; SIMP5-11, DATA5-17) that writes only books' extension family `m/books/ext/integrations/` and nothing older builds read: for each legacy-backed instance whose URL core's `legacy.IntegrationsLocalCandidate` accepts — the host is an **IP literal** in the loopback or private ranges — it records that URL origin as `PendingLocal`, with the legacy-field hash of M1.4 step 2a. The same migration records,
+for each legacy-backed instance with a stored destination, that destination's origins as `OperatorSecretOrigin`
+(M1.4 step 2, R8-5, SEC8-2): those fields had admin provenance on every earlier build (`settings.manage` at HEAD,
+`ProtectAdmin` on the config façade from S3), so an operator-sourced secret beside them stays served at S7, and a
+re-run on a restored pre-S7 archive records that archive's origins the same way. A candidate grants nothing: the instance reads `Local=false`, reports `HealthDegraded` with reason `integration_local_pending`, and is listed on the Integrations page until an admin accepts it with `Registry.Confirm` (ProtectAdmin, audited `core.integration.confirm`), which grants `Local` bound to that origin only while it still equals the instance's URL origin. This holds whatever wrote the URL: values HEAD's `PUT /api/v1/config` wrote before S3 (a HEAD custom role holding `settings.manage` could write them), a HEAD store that skips S3–S6 and boots S7+ directly, and a pre-S7 archive restored on S7+ — whose store lacks the migration's applied record, so the migration runs again on the archive's URLs and again only records candidates. A private host given by **name** is never a candidate (a name can resolve anywhere at dial time): it is `HealthMisconfigured` with reason "private host needs Local or lan_allow" until an admin sets `Local` or lists it in `lan_allow` (SEC3-5). A host change by any writer resets `Local` and drops a candidate (M1.3 `Put`; for an older build's change, the suspension of M1.4 step 2a). From S3 every integration-bound blob field (URL, host, credentials, headers) is also `ProtectAdmin` on the config façade until S7 hands it to `Registry.Put`, and a URL-origin change through the façade before S7 clears that instance's stored secret unless the same request re-supplies it (05-config §1.3.7, §1.12.2; `TestPreS7Facade_IntegrationURLIsProtectAdmin`; SEC4-7). Release note (S7): "Integrations that reach a LAN address by IP need one confirmation by an admin on the Integrations page after this upgrade; until then they cannot connect." |
 | `ai_endpoints` rows (`internal/config/ai_endpoints.go:36-68`) | legacy-backed `ai/<id>` instances, served in place from `ai_endpoints` by books' store (05-ai §10) |
 | `config.Plugins["webhook"].Settings` | legacy-backed `notify/webhook-<n>` instances, served in place from `plugins.webhook` by books' store (05-notify §10) |
 | `handleDelugeTestConnection`, `/ai/test-connection` | `POST /api/core/v1/integrations/{kind}/test` |
@@ -1771,3 +1876,11 @@ Round 7 (`docs/plans/platform-core/reviews/spec-round-7-dispositions.md`):
 - SIMP7-3 — M1.1: the "stays in v1" members are cited as this file's rows of 05-storage §5S.3.11's one table.
 - SIMP7-6 — M1.4 step 2a: the reference to `storage_extension_suspended` is deleted; `integration_local_suspended` is the owner's token.
 - integration pass (round 7): SIMP7-8 sweep: `legacy.LibraryRootSource`, `legacy.IntegrationsLocalCandidate` (M1.1, M1.3 Go block), `TestIntegrationsLocalCandidate_IPLiteralOnly`; M1.3 `Put` and the M1.5 row: a change to any destination field (URL host/scheme/port, or a host or port field such as `core.email`'s) clears stored secrets (lead decision, R-F item 6), `TestRegistry_DestinationChangeDropsSecrets`; M1.4 step 2a: the `Expect` each extension-family writer stages, per 05-storage §5S.3.11 (R-B request).
+
+Round 8 (`docs/plans/platform-core/reviews/spec-round-8-dispositions.md`):
+
+- R8-5 / SEC8-2 — M1.4 step 2 "Operator secrets bind to origin plus provenance": a secret is served when every destination field's effective origin equals its operator origin (or the adapter default) or the instance's `OperatorSecretOrigin`, a native-only field (M1.3 `StoredInstance`, the extension record, the native row) set at the first S7 boot from the stored destination (M1.10 S7 migration), by a ProtectAdmin `Put` and by `Registry.Confirm`; `ErrNothingToConfirm` and the class table updated; `TestOperatorSecret_StoredEqualOriginServed`, `TestOperatorSecret_AdminStoredHostServed`.
+- R8-5 / SEC8-3 — M1.3 `Put`, M1.4 step 2, M1.5 row: until the integrations cutover a non-ProtectAdmin `Put` that moves a legacy-backed instance's destination while it has an operator-sourced secret gets 403 `ErrOperatorSecretBound`; `TestPut_LegacyBackedNonAdminDestinationBound`, `TestRollback_NonAdminURLNeverCarriesEnvSecretOnPrev` (09 R-test case).
+- R8-3 / SIMP8-2 — M1.4 "Staging", M1.5 and M1.7 rows: the native-URL scrub clause is deleted; the scrub clears legacy URLs, and native rows are covered by the operator switch and the firewall because only S7+ binaries read them and every such staging boot carries the switch.
+- SEC8-10 — M1.3 `Test`, route table, M1.5 row: the instance-scoped test takes an unsaved body and fills an omitted secret from the stored one only while no destination origin changes; `TestRegistryTest_ChangedURLUsesNoStoredSecret`.
+- SIMP8-3 — M1.1: "the kernel asserts only the capabilities 03 §3.3 lists" replaces the count of two.

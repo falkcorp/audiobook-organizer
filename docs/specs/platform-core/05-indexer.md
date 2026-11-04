@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-indexer.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 5e2d5cda-5f98-4db2-87b1-b4c8d6519ec7 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -352,7 +352,7 @@ fixtures when built:
 | HTTP 429 / rate vocabulary | `ClassRateLimited` | hold ≥15m (Retry-After honoured, clamped) | M2 rule. |
 | Malformed XML / not RSS | `ClassBadOutput` | closed for that indexer; does not count against breaker | Likely a proxy/login page; surfaced in health. |
 | `Plan` finds no usable param | `ClassUnsupported` | skip that indexer, outcome recorded | Sonarr skips such searches (raw/16 §4.2). |
-| `core.integrations.disabled` true (a staging copy, R6-7; 05-metadata M1.4) | `ClassRefusedLocal` (`ErrDisabled` from `Lease`) | closed for every indexer: no search, RSS page or fetch is sent, no RSS cursor moves. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances (acquire's `core.acquire.rss-sync` run included). At every stage, staging (09 §9.3) also clears every legacy and native integration URL, indexer URLs included (R7-6) | A copy of a production store must never query or download from production indexers (OPS6-4, SEC7-6); schedules must still fire there (DATA5-8). |
+| `core.integrations.disabled` true (a staging copy, R6-7; 05-metadata M1.4) | `ClassRefusedLocal` (`ErrDisabled` from `Lease`) | closed for every indexer: no search, RSS page or fetch is sent, no RSS cursor moves. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances (acquire's `core.acquire.rss-sync` run included). Indexer instances are native rows (§3), which the staging scrub does not clear (09 §9.3, R8-3): only S7+ binaries read them, every such staging boot carries the switch, and the firewall drops the copy's egress (R7-6) | A copy of a production store must never query or download from production indexers (OPS6-4, SEC7-6); schedules must still fire there (DATA5-8). |
 | Every eligible indexer failed | closed: `ErrNoIndexerAnswered` (joined) | — | "No results" must be distinguishable from "nobody answered". |
 | Caps refresh fails with cached caps present | open (stale caps used) | — | A transient caps failure must not stop searching. |
 | Fetched file exceeds size cap / not a torrent or NZB | `ClassBadOutput` | closed | Never hand garbage to a download client. |
@@ -476,3 +476,7 @@ Round 7 (`docs/plans/platform-core/reviews/spec-round-7-dispositions.md`):
 
 - R7-6 / SEC7-6 / OPS7-3 — §5 `core.integrations.disabled` row: a schedule against a disabled integration fails closed but is enqueued and advances its clock; staging clears every legacy and native integration URL at every stage.
 - SEC7-3 — §10: no operator value reaches an indexer instance, so the operator-secret rule of 05-metadata M1.4 step 2 has no case here.
+
+Round 8 (`docs/plans/platform-core/reviews/spec-round-8-dispositions.md`):
+
+- R8-3 / SIMP8-2 — §5 `core.integrations.disabled` row: indexer instances are native rows, which the staging scrub no longer clears; the switch and the firewall cover them.
