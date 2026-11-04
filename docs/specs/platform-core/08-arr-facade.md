@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/08-arr-facade.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6d9b089a-fb08-4087-9ccd-43b9aa4ec555 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -12,6 +12,12 @@ Evidence commit: `748fd787a`. Raw data: [`raw/16-arr-domain-research.md`](../../
 Decision D2: core provides an **extension point and a contract** for an *arr-v3-compatible API;
 apps implement it per resource; there is **no** commitment to Sonarr/Radarr parity, to their
 database, or to endpoints no named client uses (N3).
+
+**Build status: deferred-build** (03 §3.3, cross-cutting resolution 1, SIMP-1). This file is the
+contract at proof depth (D5). No S0–S11 stage builds `arrfacade`; it is built with the first TV/Movies
+app. During the extraction only two things exist: core's reservation of `/api/v3/` (05-http-api
+§4.1) and the move of ABO's conformance engine to core (§8.14). The `module` hooks it needs
+(`Registrar.ArrFacade`, the facade problem kinds) are deferred-build members of 06 §6.4.9.
 
 ## 8.1 Purpose & scope
 
@@ -47,10 +53,10 @@ for the facade beyond key management (07), Sonarr/Radarr data import.
 | # | Decision | Why |
 |---|---|---|
 | F1 | The facade is a **per-module** HTTP surface served by core, backed by an app-implemented `Provider` whose resources are **optional interface fields**; a nil field means the endpoints are not served. Required fields are derived from the clients the provider declares, and checked at boot. | D2 "extension point, not parity": the contract grows only with real client needs; incomplete client support fails at boot, not in front of a user. |
-| F2 | Core owns the **wire DTOs** (camelCase, field sets from raw/16 §5.2). Apps map domain → DTO. | One place to fix a field name for every app; conformance tests run against core types. |
-| F3 | Core provides **default providers** for resources that are core data: system status, root folders (from `library`), indexers (from `integrations/indexer`), commands (mapped to `tasks`). | Prowlarr push and most pickers then need zero app code. |
-| F4 | Integer IDs: core provides a persistent **ID map** from `EntityRef{Module, Kind, ID}` to stable `int32` (keyspace `c/arrfacade/<module>/ids/`). | v3 clients require numeric ids and store them; app IDs are opaque strings. |
-| F5 | Auth is **API key only**, through the core API key store, with keys bound to one module by holding only that module's facade scopes. | Clients store one key forever; it must not be a general admin key. |
+| F2 | Core owns the **wire DTOs** (camelCase, the foreign API's convention), written from the conformance fixtures when the facade is built (§8.6.2). Apps map domain → DTO. | One place to fix a field name for every app; conformance tests run against core types. |
+| F3 | Core provides **default providers** for resources that are core data: system status, root folders (from `library`), indexers (instances in the one integration-instance store, written through `integrations.FacadeWriter`), commands (mapped to `tasks`). | Prowlarr push and most pickers then need zero app code. |
+| F4 | Integer IDs: core provides a persistent **ID map** from `entity.Ref{Module, Kind, ID}` (03 §3.3) to stable `int32` (keyspace `c/arrfacade/<module>/ids/`). | v3 clients require numeric ids and store them; app IDs are opaque strings. |
+| F5 | Auth is **API key only**, through the core API key store, with `PurposeFacade` keys bound to one module (05-authn §4.4) whose scopes are that module's `Confining` facade scopes (05-rbac). | Clients store one key forever; it must not be a general admin key. |
 | F6 | Mount at `<url_base>/api/v3` per module. Core **reserves** `/api/v3/` for facades; ABO's `/api/v3/ops` becomes a legacy alias of the core tasks API for the compatibility window and cannot coexist with a facade on the same base. | §8.4 |
 | F7 | **No SignalR.** `/signalr/*` is not served. | §8.8.4 |
 
@@ -60,7 +66,7 @@ for the facade beyond key management (07), Sonarr/Radarr data import.
   `modules.<module>.arrfacade.url_base` (default `""`, the key 05-http-api §4.9 uses). Sonarr and Radarr have the same "URL Base"
   setting and the named clients accept a base URL with a path, so a non-empty base is a normal
   client configuration.
-* The kernel (06 P1/P7) fails boot with `ProblemFacadeURLBaseCollision` when two enabled facades
+* The kernel (06 P7, after config has loaded) fails boot with `ProblemFacadeURLBaseCollision` when two enabled facades
   resolve to the same base, or when a facade prefix overlaps any module's declared legacy prefix or a
   core route. This is the multi-app rule too (11): `/tv/api/v3` and `/movies/api/v3`.
 * **ABO**: ABO registers no provider (Readarr, the only book-shaped *arr, is retired — raw/16 §6). Its
@@ -73,8 +79,8 @@ for the facade beyond key management (07), Sonarr/Radarr data import.
   `ops`. Two APIs with different auth, error shapes and permission models under one prefix is a
   standing trap for routing, logging and rate limiting.
 * Middleware: the facade is mounted on `httpapi.Router.FacadeGroup(owner, base)` (05-http-api §4.9) with the **same core chain** as native
-  routes (peer allow-list, recovery, security headers, rate limit, body limit) but with facade
-  authentication (§8.5) instead of session/key auth, and v3 error encoding.
+  routes (peer allow-list, recovery, security headers, rate limit, body limit, authenticate,
+  authorize) but with facade key extraction (§8.5) instead of session cookies, and v3 error encoding.
 * Path matching: ASP.NET routing in the originals is case-insensitive and clients rely on it (Seerr
   calls `/qualityProfile`, Bazarr `/episodefile`; raw/16 §5.2). Go's `ServeMux` is case-sensitive, so
   the facade router lower-cases the **resource segments** before matching (numeric ids untouched) and
@@ -84,33 +90,43 @@ for the facade beyond key management (07), Sonarr/Radarr data import.
 
 * Key sources, in order: header `X-Api-Key`, query `apikey`, header `Authorization: Bearer <key>`
   (raw/16 §5.1: Seerr sends `apikey`, Prowlarr sends `X-Api-Key`, Bazarr sends `?apikey=`). Session
-  cookies are ignored on facade paths.
-* The key must be a core API key (05-authn §4.2 already enables `X-Api-Key`/`apikey` extraction only
-  on facade groups) **bound to the facade of one module**. Binding rule: a key is a facade key for
-  module `m` iff **every** scope it holds is one of `m:arr.read`, `m:arr.request`, `m:arr.indexers`.
-  The facade refuses any other key — including a full-scope admin key — and `httpapi` refuses facade
-  keys on every non-facade group (including `rbac.AnyAuthenticated` routes, which a `tv:arr.*` scope
-  would otherwise satisfy, 05-rbac §4.10). This needs no new key field; if 05-authn adds an explicit
-  `KeySpec.Purpose`, the rule becomes "purpose = arrfacade and module = m" and the scope rule stays as
-  a second check (open item O9). One leaked Seerr key can therefore only do what the facade allows
-  for one module.
-* Permissions are declared by the module in its manifest with `arrfacade.Permissions(id)`:
+  cookies are ignored on facade paths. Query-string key extraction is enabled only on facade groups
+  (05-authn §4.2).
+* **Facade keys are purpose-bound (SEC-5).** The key must be a core API key with
+  `Purpose = PurposeFacade` and `Module = m` (05-authn §4.4, `KeySpec.Purpose`/`Module`, normative
+  there), and every scope it holds must be one of `m:arr.read`, `m:arr.request`, `m:arr.indexers`. The
+  facade refuses any other key, including a full-scope admin key and a general key that holds
+  `m:arr.*` scopes plus anything else (the scope rule is a second check).
+* **Confinement is enforced by the core chain, not by this file.** Every `<m>:arr.*` scope is
+  declared `Confining` (05-rbac §3.2, §4.10). A confined principal satisfies only requirements that
+  name one of its scopes literally, never `rbac.AnyAuthenticated`, so a facade key is refused on every
+  core and module route by 05-http-api §4.2 stage 12, and a `PurposeFacade` key is refused off its
+  module's facade group by 05-authn. One leaked Seerr key can therefore only do what the facade allows
+  for one module. Tests for the refusal live with the chain (`TestConfining_FacadeKeyRefusedOnNative`,
+  05-rbac; `TestAPIKey_FacadePurposeBoundToModule`, 05-authn); §8.14 keeps the facade-side cases.
+* Permissions are declared by the module in its manifest with `arrfacade.Permissions(id)`, which
+  returns `[]rbac.PermissionSpec` (05-rbac §3.2):
 
-| Permission | Grants | Default grants (06 `Manifest.Grants`) |
+| Permission | Grants | `PermissionSpec` fields |
 |---|---|---|
-| `<module>:arr.read` | every GET in §8.7 | none (admin only) |
-| `<module>:arr.request` | add/update/delete series or movies, tags, episode monitor, commands | none; `Dangerous: true` (05-rbac `PermissionDef`: UI warns on grant) |
-| `<module>:arr.indexers` | indexer create/update/delete/test | none |
+| `<module>:arr.read` | every GET in §8.7 | `Confining: true`; no `DefaultGrants` (05-rbac refuses them on a `Confining` scope, `ErrRestrictedGrant`) |
+| `<module>:arr.request` | add/update/delete series or movies, tags, episode monitor, commands | `Confining: true`; `Warn: true` (UI-only warning when granting, SEC-23); no `DefaultGrants` |
+| `<module>:arr.indexers` | indexer create/update/delete/test | `Confining: true`; no `DefaultGrants` |
 
+  None is `Sensitive`: a facade key is a non-interactive principal, and 05-rbac evaluates `Sensitive`
+  before the admin flag, so a `Sensitive` scope is never satisfied by any API key, `core:admin`
+  included (SEC-23). Marking a facade scope `Sensitive` would make the facade unusable.
 * Key creation presets in the settings UI: **Seerr** = read + request, **Prowlarr** = read + indexers,
-  **Bazarr** = read. A key's effective permission is `scopes ∩ owner's permissions` as today
-  (raw/10 G6); the creating user should be a dedicated service user, which the UI suggests.
+  **Bazarr** = read; each creates a `PurposeFacade` key for the chosen module. A key's effective
+  permission is `scopes ∩ owner's permissions` as today (raw/10 G6); the creating user should be a
+  dedicated service user, which the UI suggests. Because no role receives `<m>:arr.*` by default, the
+  service user's role must be given them explicitly (an admin edit or a module `RoleSeed`).
 * Expiry: facade keys follow the core maximum (365 d). Because clients fail silently when a key
   expires, core health component `arrfacade.<module>.keys` goes **degraded 30 days before** the
   earliest facade key expires and core notify (05-notify) sends one notification; rotation is a
   one-click "regenerate" that shows the new key once. Allowing non-expiring facade keys is open item O1.
 * Audit: every facade write is an audit event with actor = key owner, method `api_key:arrfacade`,
-  module, resource, outcome (05-rbac).
+  module, resource, outcome (05-rbac §3.5, `audit.Logger`).
 * Redaction: `apikey` and `access_token` are added to core's query redaction list (05-logging), so the
   key never reaches access logs or traces.
 
@@ -136,7 +152,8 @@ const (
 	ClientBazarr   Client = "bazarr"
 )
 
-// Provider is what a module registers with module.Registrar.ArrFacade.
+// Provider is what a module registers with module.Registrar.ArrFacade
+// (a deferred-build member, 06 §6.4.9).
 // Nil resource fields are not served (404 in v3 error shape). The kernel
 // checks that every resource required by each declared Client (table 8.7)
 // is non-nil, else boot fails with ProblemFacadeIncomplete.
@@ -161,7 +178,7 @@ type Provider struct {
 	Queue            QueueProvider
 	Commands         CommandProvider         // TaskCommands(...) usually
 	History          HistoryProvider
-	Indexers         IndexerProvider         // CoreIndexers(...) usually
+	Indexers         IndexerProvider         // CoreIndexers(pool, facadeWriter, ids) usually
 }
 
 type SystemProvider interface {
@@ -244,38 +261,45 @@ type CommandProvider interface {
 ### 8.6.1 Core-provided scaffolding
 
 ```go
-// Permissions returns the three facade permission specs for a module's manifest.
-func Permissions(module string) []rbac.PermissionDef
+// Permissions returns the three facade permission specs for a module's
+// manifest (§8.5): all Confining, arr.request with Warn, none Sensitive.
+func Permissions(module string) []rbac.PermissionSpec
 
 // DefaultSystem builds system/status from the App identity, CompatVersion,
 // url base and start time. Path-revealing fields are returned empty.
 func DefaultSystem(info AppInfo) SystemProvider
 
-// LibraryRootFolders exposes the module's library roots (05-library) with
-// free/total space; unmappedFolders is always empty.
-func LibraryRootFolders(roots library.Roots, filter func(library.Root) bool) RootFolderProvider
+// LibraryRootFolders exposes the module's library roots (05-library
+// Manager.Roots through the module's library.Scope) with free/total space;
+// unmappedFolders is always empty.
+func LibraryRootFolders(lib library.Scope, filter library.RootFilter) RootFolderProvider
 
 // CoreIndexers stores pushed indexers as core indexer instances (05-indexer,
-// Newznab/Torznab adapter), tagged source=arrfacade:<client>; Test runs a caps
-// request through the adapter; forceSave=false refuses to save a failing one.
-func CoreIndexers(set indexer.Set, ids *IDMap) IndexerProvider
+// Newznab/Torznab adapter) through w, the facade's only write path
+// (integrations.FacadeWriter: accepts <m>:arr.indexers, forces
+// Origin=arrfacade and the SEC-15 egress rules, 05-metadata M1, SEC-5). Test
+// runs w.Test (unsaved; class and status only); Caps reads go through pool;
+// forceSave=false refuses to save a failing one.
+func CoreIndexers(pool *indexer.Pool, w *integrations.FacadeWriter, ids *IDMap) IndexerProvider
 
-// TaskCommands maps command names to task kinds; the task is enqueued as the
-// key's principal (so task permissions apply) and the run id is mapped to a
-// command id. Unknown names answer 400 with a validation failure.
+// TaskCommands maps command names to task kinds; the task is started through
+// the module's tasks.Client, which stamps the key's principal as the actor
+// (06 §6.4.4), so task permissions apply; the run id is mapped to a command
+// id. Unknown names answer 400 with a validation failure.
 func TaskCommands(c tasks.Client, ids *IDMap, specs map[string]CommandSpec) CommandProvider
 
 type CommandSpec struct {
-	Kind   string                                 // e.g. "tv.search.series"
+	Kind   tasks.Kind                              // e.g. "tv.search.series"
 	Params func(body json.RawMessage) (any, error) // decode {seriesId} etc. into task params
 }
 
-// IDMap assigns stable int32 ids to opaque entity refs, persisted under
-// c/arrfacade/<module>/ids/. Assign is idempotent; ids are never reused.
+// IDMap assigns stable int32 ids to entity references (03 §3.3 entity.Ref),
+// persisted under c/arrfacade/<module>/ids/. Assign is idempotent; ids are
+// never reused.
 type IDMap struct{ /* unexported */ }
 
-func (m *IDMap) Assign(ctx context.Context, ref events.EntityRef) (int32, error)
-func (m *IDMap) Resolve(ctx context.Context, id int32) (events.EntityRef, error) // ErrNotFound if unknown
+func (m *IDMap) Assign(ctx context.Context, ref entity.Ref) (int32, error)
+func (m *IDMap) Resolve(ctx context.Context, id int32) (entity.Ref, error) // ErrNotFound if unknown
 
 // Errors a provider returns; the facade encodes them in v3 shapes (§8.8.2).
 var ErrNotFound = errors.New("arrfacade: not found")
@@ -303,225 +327,32 @@ type Page[T any] struct {
 }
 ```
 
-`IDMap` is the only state the facade itself owns. `EntityRef{Module, Kind, ID}` is core's polymorphic
-reference (02 §2.2 decision 6); its home package is fixed by 05-events/05-storage and is shown here as
-`events.EntityRef`. `AppInfo`
-carries `Name`, `InstanceName`, `URLBase`, `StartTime`.
+`IDMap` is the only state the facade itself owns. It maps `entity.Ref{Module, Kind, ID}`, the one
+polymorphic reference type of 03 §3.3 (COR-17), never a facade-specific struct. Indexer instances
+pushed by Prowlarr live in the one integration-instance store (`integrations`, SIMP-4); the facade
+keeps only their `int32` ↔ `integrations.Ref` mapping in `IDMap`. `AppInfo` carries `Name`,
+`InstanceName`, `URLBase`, `StartTime`.
 
-### 8.6.2 Wire DTOs (field sets from raw/16 §5.2; JSON names are the contract)
+### 8.6.2 Wire resources (proof depth)
 
-```go
-type SystemStatus struct {
-	AppName      string    `json:"appName"`
-	InstanceName string    `json:"instanceName"`
-	Version      string    `json:"version"` // = CompatVersion
-	URLBase      string    `json:"urlBase"`
-	StartTime    time.Time `json:"startTime"`
-	IsProduction bool      `json:"isProduction"`
-	Branch       string    `json:"branch"`
-	Authentication string  `json:"authentication"` // "external"
-}
+D5 limits TV/Movies to proof depth and the facade is deferred-build, so this file does not carry Go
+wire DTOs (SIMP-24). **The contract is the conformance fixtures of §8.14**, which hold every field
+each named client reads, transcribed with provenance; raw/16 §5.2 is the field-level source. Core
+still owns the DTOs when the facade is built (F2): they are written then, from the fixtures, in
+package `arrfacade`. The resources and the fields that matter for behaviour:
 
-type QualityProfile struct {
-	ID   int32  `json:"id"`
-	Name string `json:"name"`
-}
-
-type LanguageProfile struct {
-	ID   int32  `json:"id"`
-	Name string `json:"name"`
-}
-
-type RootFolder struct {
-	ID              int32    `json:"id"`
-	Path            string   `json:"path"`
-	Accessible      bool     `json:"accessible"`
-	FreeSpace       int64    `json:"freeSpace"`
-	TotalSpace      int64    `json:"totalSpace"`
-	UnmappedFolders []string `json:"unmappedFolders"`
-}
-
-type Tag struct {
-	ID    int32  `json:"id"`
-	Label string `json:"label"`
-}
-
-type Image struct {
-	CoverType string `json:"coverType"` // "poster", "banner", "fanart"
-	URL       string `json:"url"`
-	RemoteURL string `json:"remoteUrl,omitempty"`
-}
-
-type SeasonStatistics struct {
-	EpisodeFileCount  int `json:"episodeFileCount"`
-	TotalEpisodeCount int `json:"totalEpisodeCount"`
-}
-
-type Season struct {
-	SeasonNumber int               `json:"seasonNumber"`
-	Monitored    bool              `json:"monitored"`
-	Statistics   *SeasonStatistics `json:"statistics,omitempty"`
-}
-
-type Series struct {
-	ID                int32    `json:"id,omitempty"`
-	Title             string   `json:"title"`
-	SortTitle         string   `json:"sortTitle"`
-	Year              int      `json:"year"`
-	Path              string   `json:"path"`
-	TvdbID            int      `json:"tvdbId"`
-	ImdbID            string   `json:"imdbId,omitempty"`
-	Overview          string   `json:"overview,omitempty"`
-	SeriesType        string   `json:"seriesType"` // "standard" | "daily" | "anime"
-	QualityProfileID  int32    `json:"qualityProfileId"`
-	LanguageProfileID int32    `json:"languageProfileId,omitempty"`
-	Monitored         bool     `json:"monitored"`
-	MonitorNewItems   string   `json:"monitorNewItems,omitempty"`
-	SeasonFolder      bool     `json:"seasonFolder"`
-	Seasons           []Season `json:"seasons"`
-	Tags              []int32  `json:"tags"`
-	Images            []Image  `json:"images"`
-	RemotePoster      string   `json:"remotePoster,omitempty"`
-	AlternateTitles   []AlternateTitle `json:"alternateTitles,omitempty"`
-	Ended             bool     `json:"ended"`
-	LastAired         *time.Time `json:"lastAired,omitempty"`
-	OriginalLanguage  *Language `json:"originalLanguage,omitempty"`
-	RootFolderPath    string   `json:"rootFolderPath,omitempty"`
-}
-
-type AddSeries struct {
-	Series
-	AddOptions struct {
-		IgnoreEpisodesWithFiles  bool `json:"ignoreEpisodesWithFiles"`
-		SearchForMissingEpisodes bool `json:"searchForMissingEpisodes"`
-	} `json:"addOptions"`
-}
-
-type Episode struct {
-	ID                    int32        `json:"id"`
-	SeriesID              int32        `json:"seriesId"`
-	SeasonNumber          int          `json:"seasonNumber"`
-	EpisodeNumber         int          `json:"episodeNumber"`
-	AbsoluteEpisodeNumber *int         `json:"absoluteEpisodeNumber,omitempty"`
-	Title                 string       `json:"title"`
-	Monitored             bool         `json:"monitored"`
-	HasFile               bool         `json:"hasFile"`
-	EpisodeFileID         int32        `json:"episodeFileId"`
-	EpisodeFile           *EpisodeFile `json:"episodeFile,omitempty"` // includeEpisodeFile=true
-}
-
-type MediaFile struct { // shared by EpisodeFile and Movie.MovieFile
-	ID        int32      `json:"id"`
-	Path      string     `json:"path"`
-	Size      int64      `json:"size"`
-	Quality   QualityRef `json:"quality"`
-	MediaInfo MediaInfo  `json:"mediaInfo"`
-	SceneName string     `json:"sceneName,omitempty"`
-	Languages []Language `json:"languages"`
-}
-
-type EpisodeFile struct{ MediaFile }
-
-type Movie struct {
-	ID                 int32      `json:"id,omitempty"`
-	Title              string     `json:"title"`
-	SortTitle          string     `json:"sortTitle"`
-	TitleSlug          string     `json:"titleSlug"`
-	Year               int        `json:"year"`
-	Path               string     `json:"path"`
-	TmdbID             int        `json:"tmdbId"`
-	ImdbID             string     `json:"imdbId,omitempty"`
-	Overview           string     `json:"overview,omitempty"`
-	QualityProfileID   int32      `json:"qualityProfileId"`
-	MinimumAvailability string    `json:"minimumAvailability"` // "announced" | "inCinemas" | "released"
-	Monitored          bool       `json:"monitored"`
-	HasFile            bool       `json:"hasFile"`
-	MovieFile          *MediaFile `json:"movieFile,omitempty"`
-	Tags               []int32    `json:"tags"`
-	Images             []Image    `json:"images"`
-	AlternativeTitles  []AlternateTitle `json:"alternativeTitles,omitempty"`
-	OriginalLanguage   *Language  `json:"originalLanguage,omitempty"`
-	RootFolderPath     string     `json:"rootFolderPath,omitempty"`
-}
-
-type AddMovie struct {
-	Movie
-	ProfileID  int32 `json:"profileId,omitempty"` // legacy alias Seerr still sends
-	AddOptions struct {
-		SearchForMovie bool `json:"searchForMovie"`
-	} `json:"addOptions"`
-}
-
-type QueueItem struct {
-	ID                      int32      `json:"id"`
-	Title                   string     `json:"title"`
-	Size                    float64    `json:"size"`
-	Sizeleft                float64    `json:"sizeleft"`
-	Timeleft                string     `json:"timeleft,omitempty"` // "hh:mm:ss"
-	EstimatedCompletionTime *time.Time `json:"estimatedCompletionTime,omitempty"`
-	Status                  string     `json:"status"`
-	TrackedDownloadStatus   string     `json:"trackedDownloadStatus"`
-	TrackedDownloadState    string     `json:"trackedDownloadState"`
-	DownloadID              string     `json:"downloadId"`
-	Protocol                string     `json:"protocol"` // "torrent" | "usenet"
-	DownloadClient          string     `json:"downloadClient"`
-	Indexer                 string     `json:"indexer"`
-	EpisodeID               int32      `json:"episodeId,omitempty"`
-	Episode                 *Episode   `json:"episode,omitempty"` // includeEpisode=true
-	SeriesID                int32      `json:"seriesId,omitempty"`
-	MovieID                 int32      `json:"movieId,omitempty"`
-}
-
-type Command struct {
-	ID      int32     `json:"id"`
-	Name    string    `json:"name"`
-	Status  string    `json:"status"` // "queued" | "started" | "completed" | "failed" | "aborted"
-	Queued  time.Time `json:"queued"`
-	Started *time.Time `json:"started,omitempty"`
-	Ended   *time.Time `json:"ended,omitempty"`
-}
-
-type HistoryRecord struct {
-	ID          int32             `json:"id"`
-	EventType   string            `json:"eventType"` // "grabbed" | ...
-	SourceTitle string            `json:"sourceTitle"`
-	EpisodeID   int32             `json:"episodeId,omitempty"`
-	MovieID     int32             `json:"movieId,omitempty"`
-	Date        time.Time         `json:"date"`
-	Data        map[string]string `json:"data"`
-}
-
-// Indexer is the provider-style resource shared by every *arr provider type.
-type Indexer struct {
-	ID                      int32   `json:"id,omitempty"`
-	Name                    string  `json:"name"`
-	Implementation          string  `json:"implementation"`     // "Newznab" | "Torznab"
-	ImplementationName      string  `json:"implementationName"`
-	ConfigContract          string  `json:"configContract"`     // "NewznabSettings" | "TorznabSettings"
-	InfoLink                string  `json:"infoLink,omitempty"`
-	EnableRss               bool    `json:"enableRss"`
-	EnableAutomaticSearch   bool    `json:"enableAutomaticSearch"`
-	EnableInteractiveSearch bool    `json:"enableInteractiveSearch"`
-	Priority                int     `json:"priority"`
-	Protocol                string  `json:"protocol"`
-	Tags                    []int32 `json:"tags"`
-	Fields                  []Field `json:"fields"` // baseUrl, apiPath, apiKey, categories, animeCategories, minimumSeeders, seedCriteria.*
-}
-
-type Field struct {
-	Name  string `json:"name"`
-	Value any    `json:"value,omitempty"`
-	// Schema-only metadata (GET /indexer/schema): label, type, advanced, ...
-	Label    string `json:"label,omitempty"`
-	Type     string `json:"type,omitempty"`
-	Advanced bool   `json:"advanced,omitempty"`
-}
-```
-
-`QualityRef`, `MediaInfo` (audio/video codec, channels, resolution, run time, subtitles),
-`Language {id, name}` and `AlternateTitle {title, seasonNumber?}` complete the set. Secret fields
-(`apiKey` in `Fields`) are written to core `secrets` by `CoreIndexers` and read back masked
-(`"********"`), matching how the originals mask them.
+| Resource | Required fields (raw/16 §5.2 "Fields required") | Notes |
+|---|---|---|
+| `SystemStatus` | `appName`, `instanceName`, `version` (= `CompatVersion`), `urlBase`, `startTime`, `isProduction`, `branch`, `authentication` (`"external"`) | `X-Application-Version` header carries the same version |
+| `QualityProfile`, `LanguageProfile`, `Tag` | `id`, `name` / `label` | language profiles only for Sonarr major 3 |
+| `RootFolder` | `id`, `path`, `accessible`, `freeSpace`, `totalSpace`, `unmappedFolders` (always empty) | from `LibraryRootFolders` |
+| `Series` (+ `AddSeries.addOptions`) | `id`, `title`, `sortTitle`, `year`, `path`, `tvdbId`, `seriesType`, `qualityProfileId`, `monitored`, `seasonFolder`, `seasons[]` (number, monitored, statistics), `tags`, `images`, `ended`, `rootFolderPath` | Seerr PUTs back the whole object it read, so unknown fields must round-trip or be ignored |
+| `Episode`, `EpisodeFile` | episode: `id`, `seriesId`, `seasonNumber`, `episodeNumber`, `title`, `monitored`, `hasFile`, `episodeFileId`, optional embedded file; file: `id`, `path`, `size`, `quality`, `mediaInfo`, `languages` | Bazarr reads files and media info for subtitle search |
+| `Movie` (+ `AddMovie`, legacy `profileId`) | `id`, `title`, `sortTitle`, `titleSlug`, `year`, `path`, `tmdbId`, `qualityProfileId`, `minimumAvailability`, `monitored`, `hasFile`, `movieFile`, `tags`, `images`, `rootFolderPath` | |
+| `QueueItem` (in `Page`) | `id`, `title`, `size`, `sizeleft`, `status`, `trackedDownloadStatus`, `trackedDownloadState`, `downloadId`, `protocol`, `downloadClient`, `indexer`, `episodeId`/`seriesId`/`movieId` | backed by `acquire` tracked downloads when built (O8) |
+| `Command` | `id`, `name`, `status` (`queued`/`started`/`completed`/`failed`/`aborted`), `queued`, `started`, `ended` | from `TaskCommands` |
+| `HistoryRecord` | `id`, `eventType`, `sourceTitle`, `episodeId`/`movieId`, `date`, `data` | shape vs `Page` is O3 |
+| `Indexer` (+ `Field`) | `id`, `name`, `implementation`, `implementationName`, `configContract`, `enableRss`, `enableAutomaticSearch`, `enableInteractiveSearch`, `priority`, `protocol`, `tags`, `fields[]` (`baseUrl`, `apiPath`, `apiKey`, `categories`, `animeCategories`, `minimumSeeders`, `seedCriteria.*`; schema metadata on `/indexer/schema`) | secret fields are written to core `secrets` through `FacadeWriter` and read back masked (`"********"`), as the originals do |
 
 ## 8.7 Endpoint table
 
@@ -614,7 +445,7 @@ these names for the provider's flavour (checked at boot).
 | other provider error | 500 | `{"message":"<safe summary>","description":""}` — never a stack trace or a path |
 | facade disabled by config | 404 | `{"message":"NotFound"}` |
 
-The exact v3 error JSON is confirmed against the conformance fixtures (§8.12); if a fixture shows a
+The exact v3 error JSON is confirmed against the conformance fixtures (§8.14); if a fixture shows a
 different shape, the fixture wins and this table is amended.
 
 ### 8.8.3 Paging
@@ -633,7 +464,9 @@ from core `events` topics to SignalR messages inside `arrfacade`, not a core rea
 
 ## 8.9 Lifecycle
 
-1. Module manifest includes `arrfacade.Permissions(id)`; `Register` calls `r.ArrFacade(p)`.
+1. Module manifest includes `arrfacade.Permissions(id)` in `Manifest.Permissions`; `Register` calls
+   `r.ArrFacade(p)`, building `CoreIndexers` from `Deps.Indexers` and
+   `Deps.Integrations.FacadeWriter(id)`, and `TaskCommands` from `Deps.Tasks`.
 2. Kernel P7: validates `Flavor`, `CompatVersion` (semver-ish 3- or 4-part, ≥ 3.0.5), required
    resources per declared client, command specs for Seerr, URL-base collisions (06 problem kinds
    `ProblemFacadeIncomplete`, `ProblemFacadeURLBaseCollision`).
@@ -714,11 +547,11 @@ this facade), satisfying the 03 §3.4 promotion rule; 04 records the move.
 | Test | Proves |
 |---|---|
 | `TestSeerrAddSeriesFlow` / `TestSeerrAddMovieFlow` | status → profiles → root folders → tags → lookup → POST → queue (+`RefreshMonitoredDownloads`) → search command, against a fake provider |
-| `TestProwlarrIndexerSync` | status (+`X-Application-Version`) → schema → list → test → POST 400 warning → POST `forceSave=true` → PUT → DELETE, using `CoreIndexers` over `coretest/fakes` indexer set |
+| `TestProwlarrIndexerSync` | status (+`X-Application-Version`) → schema → list → test → POST 400 warning → POST `forceSave=true` → PUT → DELETE, using `CoreIndexers` over a `coretest/fakes` indexer pool and a real `FacadeWriter` (instance written with `Origin=arrfacade`; a LAN URL refused unless allowed) |
 | `TestBazarrFullSync` | status → (language profiles if major 3) → series → episodes with files → episode files → history |
 | `TestRequestDecoding_*` | Seerr's POST/PUT bodies decode into `AddSeries`/`Series`/`AddMovie` without dropping required fields; unknown fields ignored |
 | `TestCaseInsensitivePaths` | `/qualityProfile`, `/episodeFile`, trailing slash, `ApiKey` query name |
-| `TestAuth_*` | each key source; admin key refused; facade key refused on `/api/core/v1/*`; wrong module refused |
+| `TestAuth_*` | each key source; admin key refused; general key with extra scopes refused; wrong module refused (the refusal off the facade group is tested by the chain's owners, §8.5) |
 | `TestProviderValidation_*` | each missing-resource combination fails boot with `ProblemFacadeIncomplete` |
 | `TestURLBaseCollision` | with a legacy `/api/v3/ops` prefix and with two facades |
 | `TestIDMapStableConcurrent` | `synctest` + parallel `Assign` |
@@ -747,5 +580,22 @@ Apps run the same scenarios against their real provider: `arrfacadetest.Conforma
 | O5 | Radarr-side minimum `X-Application-Version` Prowlarr accepts (raw/16 cites the Sonarr proxy) | 08 |
 | O6 | Commit SHAs of the client sources: raw/16 records branch + date only; PROVENANCE.md must pin SHAs when fixtures are written | plan |
 | O7 | Licensing note: fixtures are authored by us from interface facts (field names, paths); no client source is copied into the repo | 08 |
-| O9 | Explicit facade purpose on API keys (`KeySpec.Purpose`, `Module`) vs the scope-derived binding of §8.5; plus the httpapi rule refusing facade keys on non-facade groups | 05-authn, 05-http-api |
 | O8 | Default `Tags` and `Queue` providers once core has a tag store / `acquire` tracked downloads (raw/16 §7.1 #10, #15) | 10-tv-movies-proof |
+
+Closed in 1.1.0: O9 (explicit facade purpose on keys): `KeySpec.Purpose = PurposeFacade` and
+`Module` are normative in 05-authn §4.4, and the refusal of facade keys off their group is owned by
+05-rbac §4.10 and 05-http-api §4.2 stage 12 (SEC-5).
+
+## Review history
+
+Round 1 (2026-11-04), findings applied to this file:
+
+- SEC-5 — facade keys are `PurposeFacade` + `Module` (05-authn), scopes `Confining` (05-rbac); refusal on non-facade routes owned by the chain; indexer writes only through `integrations.FacadeWriter`; O9 closed.
+- SEC-23 — `rbac.PermissionSpec` with `Warn` replaces `PermissionDef`/`Dangerous`; no `DefaultGrants` on the `Confining` facade scopes; facade scopes never `Sensitive`, with the reason.
+- SIMP-24 — Go wire DTOs replaced by a field table; fixtures (§8.14) are the contract.
+- SIMP-1 / cross-cutting 1 — file marked deferred-build; only the `/api/v3/` reservation and the conformance-engine move happen during the extraction.
+- SIMP-4 — pushed indexers live in the one integration-instance store; the facade keeps only the id map.
+- COR-17 — `IDMap` over `entity.Ref`.
+- COR-27 — `LibraryRootFolders(library.Scope, library.RootFilter)`, `CoreIndexers(*indexer.Pool, *integrations.FacadeWriter, *IDMap)`, `CommandSpec.Kind tasks.Kind`.
+- COR-14 — URL-base collision checked in P7, after config load.
+- COR-1 — `Registrar.ArrFacade`, `Deps.Indexers` referenced as 06 §6.4.9 deferred-build members.

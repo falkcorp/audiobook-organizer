@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/11-multi-app.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 74ed9015-8ae0-4b4b-8049-4c09cfbba343 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -8,7 +8,8 @@
 Evidence commit: `748fd787a`. The owner's priority order puts "ABO + TV + Movies modules in one
 binary" last: **never ruled out, never over-invested** (02 §2.1). This file records which design
 constraints keep the door open, what is deliberately not done, and what a later "suite" binary would
-need. It is not a capability contract and adds no core API.
+need. It is not a capability contract and adds no core API. One item in the checklist (§11.5 row 4)
+does need a new core capability; it is recorded as such in 14.
 
 ## 11.1 What "multi-app" means here
 
@@ -22,19 +23,20 @@ nothing in core is process-global) nor multi-tenancy (D7: no tenant IDs).
 | Constraint | Where it is specified | What it guarantees for a suite binary |
 |---|---|---|
 | Module IDs unique, validated before storage opens | 06 §6.5.1 P1, 03 §3.6 | `books`, `tv`, `movies` cannot collide silently |
-| Namespaced storage: `m/<id>/` per module, `c/<subsystem>/` for core, legacy claims checked for overlap | 03 R8, 05-storage, 06 `KeyspaceSpec` | ABO's 258 legacy families are claimed by `books`; new modules never touch them |
-| Route prefixes `/api/<id>/v1`, core at `/api/core/v1` | 03 §3.6, 06 `Registrar.Route` | no path overlap between modules by construction |
-| Permission namespaces `<id>:<action>`, admin is `core:admin` | 03 §3.6, 06 `PermissionSpec`, 05-rbac | one role editor shows `books:*`, `tv:*`, `movies:*`; API keys can be scoped per module |
-| Task kinds `<id>.<name>`, resources `{Module, Kind, ID}` | 03 §3.6, G8, 05-tasks | one executor, no write-set identity collisions |
-| Event topics `<id>.<noun>.<verb>.v<n>`; outbox handler names namespaced | 05-events | cross-module reactions without import edges (R3) |
+| Namespaced storage: `m/<id>/` per module, `c/<subsystem>/` for core, legacy claims checked for overlap | 03 R8, 05-storage, 06 `Manifest.Storage storage.Spec` | ABO's 258 legacy families are claimed by `books`; new modules never touch them |
+| Route prefixes `/api/<id>/v1`, core at `/api/core/v1`; legacy subtree claims may not overlap | 03 §3.6, 06 `Registrar.HTTP`, 05-http-api §4.9 | no path overlap between modules by construction |
+| Permission namespaces `<id>:<action>`, admin is `core:admin` | 03 §3.6, 06 `Manifest.Permissions []rbac.PermissionSpec`, 05-rbac | one role editor shows `books:*`, `tv:*`, `movies:*`; API keys can be scoped per module |
+| Task kinds `<id>.<name>`, resources as `entity.Ref{Module, Kind, ID}` | 03 §3.3, §3.6, G8, 05-tasks | one executor, no write-set identity collisions |
+| Event topics `<id>.<noun>.<verb-past>.v<n>` in one catalog; outbox consumer names namespaced and declared in the manifest | 05-events, 06 `Registrar.Topics`, `Manifest.OutboxConsumers` | cross-module reactions without import edges (R3, raw subscriptions/consumers) |
 | Config sections `modules.<id>.*` | 03 §3.6, 06 `Settings` | one config file, no key collisions |
-| Metrics `<app>_<id>_*` on a per-`App` registry | 05-metrics, 06 `Deps.Metrics` | no duplicate-registration panic (today's default-registry hazard, raw/12 §9) |
+| Module metrics under `app.Options.MetricPrefix` on a per-`App` registry (`<MetricPrefix>_*` with one module, `<MetricPrefix>_<id>_*` with two or more) | 03 §3.6, 05-metrics, 06 `Deps.Metrics` | no duplicate-registration panic (today's default-registry hazard, raw/12 §9) |
 | No process-global mutable state in core (R5, `TestNoGlobals`) | 03 R5 | the raw/12 §9 hazards (`config.AppConfig`, viper, `slog.SetDefault`, Prometheus default registry, OTel globals, `database.globalStore`, `plugin.Global()`, `serviceregistry.registered`, `aijobs`, throttle/quota maps) are absent from core |
 | One shell with merged navigation from every enabled module | 07 §7.4–§7.5 | nav, settings panels and widgets of all modules render in one SPA; intersection per module |
 | One task executor and scheduler | 05-tasks | a single queue with per-kind permissions and resources |
-| Distinct *arr facades by URL base, collisions refused at boot | 08 §8.4 | `/tv/api/v3` and `/movies/api/v3` side by side |
-| Restart-bound enablement per module, dependencies validated | 06 §6.5.3 | a suite can ship all three and enable a subset |
+| Distinct *arr facades by URL base, collisions refused at boot (facade is deferred-build) | 08 §8.4 | `/tv/api/v3` and `/movies/api/v3` side by side |
+| Restart-bound enablement per module, read before registration; no inter-module dependencies (`DependsOn` dropped, SIMP-22) | 06 §6.5.3 | a suite can ship all three and enable any subset; a disabled module's runs are held and its outbox messages retained |
 | Module isolation guard wired from wave 0 | 03 R3 `archtest.ModulesIsolated` | a second module cannot import the first |
+| One integration-instance store | 05-metadata M1 (SIMP-4) | download/indexer/AI/notify instances are shared data, not per-module copies |
 
 ## 11.3 Hazards found that a suite would trip over
 
@@ -42,13 +44,14 @@ nothing in core is process-global) nor multi-tenancy (D7: no tenant IDs).
 |---|---|---|
 | ABO's catch-all `/api/*` → `/api/v1/*` 301 redirect is a gin global middleware with an exclusion list | `internal/server/server_lifecycle.go:1789-1816` | 05-http-api §4.9 re-implements it as the least-specific `/api/` handler of the `books` legacy mount, so every claimed prefix (`/api/core/`, `/api/<module>/`, facades) wins by `ServeMux` specificity. For an **unknown** path under another module (`/api/tv/v1/nope`) not to fall through to it, each module and core group must register a subtree 404 catch-all (open item for 05-http-api) |
 | Un-namespaced ABO names during the compatibility window (`/api/v1/...`, 13 permission atoms, flat config keys, `/api/v3/ops`) | 03 §3.6 last paragraph | all are declared by `books` (`Manifest.LegacyPrefixes`, `Manifest.LegacyAliases`, config `LegacyKeys`), so the kernel checks them against other modules; window closes per 09 |
-| ABO-side globals (`config.AppConfig`, `database.globalStore`, viper, `slog.SetDefault` in `cmd/root.go:718`) | raw/12 §9 | harmless while only `books` uses them, but the suite `main` must own logging/metrics setup through core, so `books` must stop calling `slog.SetDefault`/`otel.Set*` (09 wave that moves logging to core) |
+| ABO-side globals (`config.AppConfig`, `database.globalStore`, viper, `slog.SetDefault` in `cmd/root.go:718`) | raw/12 §9 | R5 binds core only (cross-cutting resolution 3): ABO keeps `config.AppConfig` and its logger shim as books-module façades over core handles. They are harmless while one `App` runs `books`. A suite `main` must own logging/metrics setup through core, so `books` must not call `slog.SetDefault`/`otel.Set*` and its façades must be per-`App` values held by the module (§11.5 row 11) |
+| Module metric names change when a second module is added | 03 §3.6 metric row | with one module ABO's series are `audiobook_organizer_*`; in a suite they become `<MetricPrefix>_books_*`, so a suite needs 05-metrics aliases for every books family (§11.5 row 12) |
 
 ## 11.4 Deliberately left undone
 
 * **No suite `main` and no combined SPA build.** Each app ships its own `main` and its own web
   workspace; nothing builds one bundle containing several apps' module UI packages.
-* **One app identity per process.** `app.Options` has a single `ID`/`DisplayName`/`Version`/`Release`;
+* **One app identity per process.** `app.Options` has a single `AppID`/`MetricPrefix`/`DisplayName`/`Version`/`Updater`;
   a suite would need its own identity, theme and update channel.
 * **No per-module fairness in the task executor.** One module's CPU-bound library-scale task can use
   every worker; per-module concurrency quotas are not designed (05-tasks has global and per-kind
@@ -67,14 +70,30 @@ nothing in core is process-global) nor multi-tenancy (D7: no tenant IDs).
 | 1 | A suite repo or `cmd/suite` with `main` calling `app.New` with all modules; suite `app.Options` identity | S |
 | 2 | Suite web workspace: `createShell({ modules: [booksModule, tvModule, moviesModule] })`; each app's module UI must be publishable as its own package (today ABO keeps `modules/books/` as a directory, 07 §7.11 — promote it) | M |
 | 3 | Embed the suite SPA with `embed_frontend` like any app (07 §7.6) | S |
-| 4 | Decide data-directory layout when migrating existing single-app installs into one store (copy keyspaces; legacy claims stay with `books`) and write the import tool | L |
+| 4 | Merging existing single-app installs into one store is **not** "copy keyspaces" (DATA-30): each install holds its own `c/auth/`, `c/rbac/`, `c/tasks/`, `c/config/`, `c/secrets/` (different keyrings), `c/storage/install`, per-keyspace versions, compat level and storage format, and `Sequence` high-water marks, which collide. It needs a **core storage export/import capability**: per keyspace, with version checks and ID-remap hooks for core subsystems (users by username, roles by ID, keyring merge, sequence rebase); module keyspaces (`m/<id>/`, books' legacy claims) copy as-is. This is a new core contract, recorded in 14. An install-wide compat level or storage format would also couple every app's rollback in a suite (05-storage per-owner format, DATA-20) | L |
 | 5 | Merge user databases of existing installs (users, roles, API keys) or start fresh — owner decision | M |
-| 6 | Configure facade URL bases (`modules.tv.arrfacade.url_base=/tv`, `modules.movies.arrfacade.url_base=/movies`); 05-http-api §4.9 makes a non-empty base mandatory for every facade in a multi-app binary | S |
+| 6 | Build the deferred `arrfacade` (08) if not already built; configure facade URL bases (`modules.tv.arrfacade.url_base=/tv`, `modules.movies.arrfacade.url_base=/movies`); two facades with one base fail boot (05-http-api §4.9) | S |
 | 7 | Per-module executor quotas (05-tasks extension) if measurements show starvation | M |
 | 8 | Suite e2e suite: boot with all modules, G1 for each disabled subset, nav merge, facade isolation | M |
 | 9 | Release pipeline and updater source for the suite artifact | S |
 | 10 | Re-run `archtest.ModulesIsolated` with all three modules and `TestNoGlobals` over every module package | S |
+| 11 | Remove ABO's `config.AppConfig` and logger façades (or make them strictly per-`App` values with no package state), the optional 05-config/05-logging ratchets that the single-app plan does not need (SIMP-3) | M |
+| 12 | Metric aliases for every books family renamed by the `<MetricPrefix>_<moduleID>_*` rule (05-metrics compat aliases, one window) | S |
+| 13 | Re-introduce inter-module dependencies (`Manifest.DependsOn`, additive) only if a suite module really needs another enabled; `MinCoreVersion` already exists (`version.Version`); generalise legacy prefix claims beyond "no overlap" only if two modules need one subtree (SIMP-22) | S |
 
-Nothing in this list requires changing a core contract; that is the test of whether the door is
-still open. If a later spec change would make any row require a core API change, it must say so
-in 14-risks-open-questions.
+Only row 4 requires a new core contract (storage export/import with ID remapping); it is listed in
+[14](14-risks-open-questions.md). Every other row is additive or app-side; that is the test of whether
+the door is still open. If a later spec change makes another row require a core API change, it must
+say so in 14.
+
+## Review history
+
+Round 1 (2026-11-04), findings applied to this file:
+
+- DATA-30 — §11.5 row 4: store merge needs a core export/import capability with ID remapping; flagged as a core contract change (14).
+- SIMP-22 — `DependsOn` dropped from the enablement row; re-adding it, and generalising prefix claims, is §11.5 row 13.
+- SIMP-3 — ABO's config/logger façades survive as per-`App` books façades; their removal is §11.5 row 11.
+- SIMP-4 — one integration-instance store row.
+- SIMP-5 / COR-12 / COR-13 — one topic catalog; declared consumers; held runs and retained messages for disabled modules.
+- COR-16 / COR-17 / COR-26 — 06 vocabulary (`Manifest.Storage`, `Registrar.HTTP`, `PermissionSpec`), `entity.Ref`, `AppID`/`MetricPrefix`/`Updater`; metric-name change in a suite (§11.3, §11.5 row 12).
+- Cross-cutting 1 — facade marked deferred-build.
