@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-library.md -->
-<!-- version: 1.2.1 -->
+<!-- version: 1.3.0 -->
 <!-- guid: dafe380b-f703-41cb-99d0-2b2ba32f70e5 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -12,8 +12,10 @@ Evidence commit `748fd787a`; every `path:line` below is at that commit. Raw inpu
 mapping, safe moves/copies, hashing, quarantine, disk checks, import observation") and §4 (Q4),
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md). Names and rules are
 from [03-architecture](03-architecture.md) (`library` is **L4**, R4). Records this package persists
-use [05-storage](05-storage.md) keyspace `c/library/`. Modules reach it only through the module-scoped
-handle `library.Scope` (`module.Deps.Library`, [06](06-app-sdk.md)), which carries the module's owner.
+use [05-storage](05-storage.md) keyspace `c/library/` — except ABO's existing root data, which stays
+where and how HEAD stores it during the extraction and is reached through a legacy-format adapter and
+a storage grant (R3-1, §5L.10). Modules reach it only through the module-scoped handle `library.Scope`
+(`module.Deps.Library`, [06](06-app-sdk.md)), which carries the module's owner.
 
 ## 5L.0 Decisions in one table
 
@@ -63,7 +65,7 @@ the permissions it needs).
 | Download-client paths | Deluge `save_path` joined directly (`AbsPath`), assuming the server sees the same mount; no mapping. Seeding protection: `ProtectedPathCache` (torrent save paths, 5-min refresh, plus static `protected_paths`), with `Loaded` = false meaning "unknown", which callers must treat as protected. | `internal/deluge/client.go:88-92`; `internal/deluge/protected_paths.go:15-45`; `internal/config/config.go:1781-1787` |
 | Other path maps | `itunes.path_mappings` (bidirectional prefix map, import healing); `PathAlias` (display only, deliberately separate); `WHISPER_PATH_MAP` (remote transcription worker mount); remote "lanes" for audio decode. | `config.go:35-60,107-150`; `internal/transcribe/path.go:28-40`; `pkg/ops/lanes.go:13-15` |
 | Watcher | fsnotify per enabled import path, recursive add skipping app dirs, debounce 5 s, audio-extension filter, supervisor re-reads paths on every reconcile (no restart needed). Watch-add failures are a warning; **errors from fsnotify (incl. queue overflow) are only logged**, so lost events never trigger a rescan. | `internal/watcher/watcher.go:24,82-105,141-205,166-185`; `internal/watcher/supervisor.go:73,116`; `internal/server/server_lifecycle.go:501-525` |
-| Pending file ops | `pending_file_op:` rows for crash recovery of slow file I/O jobs. | `internal/server/file_io_pool.go:31-38` |
+| Pending file ops | `pending_file_op:<bookID>:<opType>` rows (`FileIOJob{BookID, OpType, CreatedAt}`) for crash recovery of books' per-book file I/O jobs (`apply_metadata`, `auto_fetch_file_work`); not a transfer journal. | `internal/server/file_io_pool.go:31-38,212,304,354-395,432` |
 | Browse API | `FilesystemService.BrowseDirectory` with an allow-list = import paths; registered via `init()`. | `internal/fileops/service.go:21-118`; `internal/fileops/register.go:12-21` |
 | Coupling | `fileops` imports `internal/database` and `internal/filehash` (`BookFile` types), so it cannot move to core as is; `pathutil` and `libroot` are leaves (`libroot` imports only `internal/util`). | `raw/02-import-graph-hotspots.md` (a1) rows `internal/fileops`, (a3) `internal/pathutil`; `libroot.go:6-23` |
 
@@ -508,7 +510,11 @@ quarantine purge), `core:library.browse` (directory picker; replaces `BrowseDire
 
 ## 5L.4 Lifecycle
 
-1. Kernel loads root specs and mappings from `c/library/` (after storage migrations).
+1. After storage migrations the kernel loads the roots and mappings from their stored forms (R3-1,
+   §5L.10): an app's legacy root sources through `library`'s legacy-format adapters (for ABO, the books
+   library root from `root_dir` through config's adapter, 05-config, and the import roots from
+   `import_path:` through books' grant), every other root and mapping from `core.library.roots` /
+   `core.library.mappings`, and each root's native-only fields from `c/library/rootext/<root-id>`.
 2. Modules declare required roles in their manifest (`module.Manifest.Library: []RoleRequirement`);
    the kernel reports unmet requirements as a setup task in the UI, not a boot failure (a fresh
    install has no roots yet).
@@ -581,7 +587,10 @@ they need an interactive session.
 ABO compatibility (09 owns aliases): `root_dir` → root `books-library`; `import_path:` rows →
 `import-<id>` roots; `protected_paths` → `RoleExternal` roots or oracle entries;
 `enable_disk_quota`/`disk_quota_percent` → `MinFree` of the books root;
-`itunes.path_mappings` → mappings with `Source: "itunes"`; `path_aliases` → `RootSpec.Aliases`.
+`itunes.path_mappings` → mappings with `Source: "itunes"`; `path_aliases` → `RootSpec.Aliases`. These
+keys and rows are **read and written in place**, in their legacy format, never copied (R3-1, §5L.10):
+`core.library.roots` and `core.library.mappings` hold only entries with no legacy home, so the previous
+release still sees every library root, import root and mapping this build changed.
 
 ## 5L.8 Metrics
 
@@ -627,6 +636,7 @@ ABO compatibility (09 owns aliases): `root_dir` → root `books-library`; `impor
 | `TestDisabledModuleRootsInert` | G1 |
 | `TestTransferInCommitsWithCallerBatch` | `TransferIn` + caller rows land in one commit; `CrashClone` before the commit leaves a `done` row reported by `PendingTransfers`, never undone |
 | `TestScopeCannotActAsAnotherOwner` | a module's `Scope` cannot write another owner's root or quarantine its files |
+| `TestImportRootsStayLegacyFormat` | an import root added, renamed or disabled on this build is an `import_path:` row (with its path index row and an ID from `counter:import_path`) that the previous release's store code lists unchanged; `LastScan`/`BookCount` written by books survive a library edit; native-only fields only in `c/library/rootext/` (R3-1) |
 
 ## 5L.10 Migration from ABO
 
@@ -644,12 +654,23 @@ ABO compatibility (09 owns aliases): `root_dir` → root `books-library`; `impor
 | `internal/diskstats` | `Root.Usage` (moved into core as an internal package) |
 | `deluge.ProtectedPathCache` | a `ProtectionOracle` implemented by the Deluge adapter (05-download); static `protected_paths` → `RoleExternal` roots |
 | `itunes.path_mappings`, `WHISPER_PATH_MAP`, fingerprint worker wire format | `PathMapper` sources `itunes`, `worker:whisper`, `worker:fingerprint` |
-| `pending_file_op:` journal (`file_io_pool.go:31`) | `c/library/transfer/` journal; legacy rows drained by a books migration at first boot |
+| `ImportPathStore` methods minus `CountBooksByPathPrefix` (`internal/database/pebble_store_importpaths.go`; 04's `database.Store` split table: `ImportPathStore` → `library`) | `library`'s legacy-format adapter over `import_path:<id>` + `import_path:path:<path>` and the ID counter `counter:import_path` (`pebble_store_importpaths.go:138-185` allocates through `nextID("import_path")`), reached through books' `GrantReadWrite` to `core/library` (05-storage §5S.9.1 row 19; `Serialized`, because books' scans still read-modify-write `LastScan` and `BookCount` in the same row). The adapter writes HEAD's `ImportPath` JSON (`internal/database/store.go:596-604`) with `codec.LegacyJSON`, keeps the fields it does not own (`LastScan`, `BookCount`) as read, and writes the path index row in the same batch; `Enabled` stays books' scan switch, which library shows as a registered root with watching off |
+| `pending_file_op:` (`file_io_pool.go:31`) | stays a books family with its books writer: it is books' per-book file I/O job pool (tag and metadata writes), not a transfer journal, so nothing is drained or moved. Core transfers journal only in the core-only `c/library/transfer/`, which no older build reads: a rollback right after a crash mid-transfer leaves that one transfer's recovery to the next boot of this build (R3-1) |
 | `filehash.BookFileHash` | stays books (identity algorithm), reads through `RootFS` |
 
-Order: introduce `library` with roots registered from ABO config (no behaviour change), move
-writers one subsystem at a time behind the same tests (organizer, versions, quarantine, deluge
-import, iTunes transfer), then delete `fileops` copy/reflink and the three renames.
+**Stored data (R3-1).** During the extraction a root keeps one stored format. ABO's books root
+(`root_dir`, its quota keys and `path_aliases`) is a config value read and written in place by config's
+legacy-format adapter (05-config C4); its import roots are the `import_path:` rows above. A field
+`RootSpec` has that the legacy form has no place for (`Watch`, `Sentinel`, `ReadShares`, `Quarantine`,
+`AppDir`, and `MinFree` of an import root) lives in the core-only record `c/library/rootext/<root-id>`,
+which never holds a field the legacy form holds, so the two cannot disagree; an older build ignores it
+and the field is current again on roll-forward. A root with no legacy home at all (download and
+external roots, another module's roots) is a `core.library.roots` entry. Moving ABO's roots to a native
+keyspace is a later cutover (05-storage §5S.3.13), not part of the extraction.
+
+Order: introduce `library` with roots read in place from ABO's config and `import_path:` rows (no
+behaviour change), move writers one subsystem at a time behind the same tests (organizer, versions,
+quarantine, deluge import, iTunes transfer), then delete `fileops` copy/reflink and the three renames.
 
 ## 5L.11 Q4 — one storage-root abstraction or per-module drivers?
 
@@ -703,3 +724,7 @@ Round 2:
 Integration pass (round 2, 2026-11-04):
 
 - integration pass (round 2): Schedule key `core.library.schedules.quarantine_prune` (R2-7 form); app-directories rule names no data-dir.
+
+Round 3:
+
+- R3-1 — one stored format for roots: ABO's books root stays in config (`root_dir`, quota keys, `path_aliases`) and its import roots in `import_path:` rows, read and written in place through config's adapter and a books grant to `core/library` (incl. `counter:import_path`); native-only root fields in the core-only `c/library/rootext/`; `core.library.roots`/`mappings` hold only entries with no legacy home; `pending_file_op:` corrected to a books family that is not drained into `c/library/transfer/` (header, §5L.2, §5L.4 step 1, §5L.7, §5L.9, §5L.10).

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-backup.md -->
-<!-- version: 1.2.1 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 604febb0-a09e-4cf9-99ee-5f3722534da6 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -9,27 +9,41 @@ Evidence commit `748fd787a`; every `path:line` below is at that commit. Raw inpu
 [`raw/05-storage.md`](../../plans/platform-core/raw/05-storage.md) §5 (backup and restore) and §1
 (engines), [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md) §6,
 [`raw/10-auth-rbac.md`](../../plans/platform-core/raw/10-auth-rbac.md) §7 (secret storage).
-Storage terms (`storage.Admin`, keyspaces, levels, checkpoints, mirrors, derived indexes, generations,
-auxiliary DBs) are defined in [05-storage](05-storage.md); the secrets keyring, its derivation key and
+Storage terms (`storage.Admin`, keyspaces, levels, sidecars, checkpoints, storage grants, the store
+generation, derived indexes and their generations, auxiliary DBs) are defined in [05-storage](05-storage.md); the secrets keyring, its derivation key and
 the boot record in [05-config](05-config.md); the post-restore credential hook in
 [05-authn](05-authn.md) §4.14; role re-application and audit copy-forward in [05-rbac](05-rbac.md) §7.1.
 `backup` is **L4** (R4) and lands at 09 S8. The revocation-journal and restore-hook types live in the
 leaf package `backup/journal` (L4; imports `entity` and `storage` only), which lands at S4 with `auth`
 and `rbac`, its first writers (COR2-9). Boot order is [06](06-app-sdk.md) §6.5.1's one phase table
-(R2-8): this file's pre-boot swap is P0a, its journal re-apply and restore hooks are P4d steps 2 and 5.
-This file owns the **one archive format** (cross-cutting resolution 8); [09](09-abo-on-core.md) S8
-references it and decides only when each step ships.
+(R2-8): this file's pre-boot swap is P0a, its journal re-apply and restore hooks are P4d steps 2 and 3,
+after step 1 has opened the keyring and attached the DB overrides (COR3-2). This file owns the **one
+archive format** (cross-cutting resolution 8); [09](09-abo-on-core.md) S8 references it and decides only
+when each step ships.
+
+**Stages (DATA3-7).** `backup` lands at S8. Before that, ABO's own `internal/backup` stages restores
+with the same journal and intent files (09 S1), and from S2b the kernel runs ABO's swap at P0a through
+`app.Options.PreBootRestore` (06), which reports whether it applied a restore. From S4, when `auth`,
+`rbac`, `audit` and `backup/journal` exist, P4d step 2 re-applies the journal and step 3 runs the hooks
+on every boot that applied a restore or finds a replaced store (§5B.3.6). From S8 the steps below are
+this package's.
+
+**One stored format (R3-1).** There are no mirrors, side records or floor builds: every family keeps the
+format HEAD writes (05-storage §5S.3.11), so a revocation, a hook write and a journal re-apply are each
+an ordinary write of the legacy row through the owner's adapter, which every build reads, and every
+earlier release stays a rollback target. This file's journal therefore assumes nothing about which
+builds served the store in between; it detects boots that did not journal and fails safe (§5B.3.6).
 
 ## 5B.0 Decisions in one table
 
 | # | Decision |
 |---|---|
-| B1 | **One archive format, `mediacore-backup/1`.** A **main archive** in ABO's legacy layout — the Pebble checkpoint rooted at the DB directory's basename, plus one root entry `mediacore-manifest.json` — that every ABO build, pre-core ones included, can list and restore; and a **companion archive** (`.extra`) for everything else (config file, boot record, module artifacts, optional derived and re-creatable stores), which older builds never list. **No archive ever contains the secrets keyring**, and an unencrypted archive never contains a secret: the operator config file goes in as class `Secret` when it holds one, and only a redacted copy goes into a plaintext archive (DATA2-17). |
+| B1 | **One archive format, `mediacore-backup/1`.** A **main archive** in ABO's legacy layout — the Pebble checkpoint rooted at the DB directory's basename, plus one root entry `mediacore-manifest.json` — that every ABO build, pre-core ones included, can list and restore; and a **companion archive** (`.extra`) for everything else (config file, boot record, module artifacts, optional derived and re-creatable stores), which older builds never list. **No archive ever contains the secrets keyring**, and an unencrypted archive never contains a secret: the operator config file goes in as class `Secret` when it holds one, and only a redacted copy goes into a plaintext archive (DATA2-17). A main archive is **credential-equivalent**: it holds every password hash, OIDC identity link, the invite allow-list, the audit trail and the secret ciphertexts, so downloading one is gated like a restore (§5B.3.8, SEC3-7). |
 | B2 | **Restore is staged and applied in the kernel pre-boot phase** (06 P0a), after the updater's own pre-boot check (P−1) and before config is read and storage opens. The API verifies, pre-validates every rename and extracts into a staging directory on the DB's filesystem; the kernel swaps by rename using the absolute targets recorded at staging and keeps the previous data as an undo point. **Any failure after the swap swaps back automatically.** No code path writes into a live store. |
-| B3 | **Encryption is opt-in on upgrade** (age). The install's archive identity is **derived from the one keyring** (05-config), so there is no second key artifact and no second export (SIMP2-2). Upgraded installs default to unencrypted; fresh installs default to encrypted. Encryption becomes **active** only once the keyring export covers the active derivation key (or an operator recipient is configured), and only when no build that can still serve the store lacks the code to restore an encrypted archive. Secrets inside the DB are ciphertext either way. |
+| B3 | **Encryption is opt-in on upgrade** (age). The install's archive identity is **derived from the one keyring** (05-config), so there is no second key artifact and no second export (SIMP2-2). Upgraded installs default to unencrypted; fresh installs default to encrypted. Encryption becomes **active** only once the keyring export covers the active derivation key (or an operator recipient is configured), and only when no build that can still open the store lacks the code to restore an encrypted archive — for ABO not during the extraction, in which every earlier release can still open the store (R3-1). Secrets inside the DB are ciphertext either way. |
 | B4 | Verification is part of creation (decrypt, per-entry SHA-256, open the checkpoint read-only, compare key counts) and runs again on a schedule. Retention never deletes the newest **verified** archive, and never deletes the newest verified **plaintext** archive until an encrypted archive is verified **and** the keyring export covers its derivation key. |
 | B5 | **Provenance.** The manifest carries an HMAC bound to the install (keyring-derived key named by its key ID, install ID in the MAC'd bytes). An archive without a valid MAC — imported, planted, from another install, or from before provenance existed — is **foreign**: restoring it needs an explicit `Foreign` request, `core:admin` and an interactive owner proof, and is audited. |
-| B6 | **What must outlive a restore lives outside the restored DB**: the archive catalogue is derived from sidecar files in the backup directory; the restore journal and the **revocation journal** are files. The revocation journal is hash-chained with a keyring-derived MAC and anchored by a head record inside the store (SEC2-9); every build that can open an adopted store — the Teach build included — journals its revocations and restores (R2-1); every boot re-applies the journal tail the store lacks, and every revocation reaches the legacy row in the same batch as the native one (R2-2). |
+| B6 | **What must outlive a restore lives outside the restored DB**: the archive catalogue is derived from sidecar files in the backup directory; the restore journal and the **revocation journal** are files. The revocation journal is hash-chained with a keyring-derived MAC and anchored by a head record inside the store (SEC2-9); every build from S4 journals its revocations, and a boot by a build that does not (a rollback target older than S4, a pre-guard build) is recorded as a coverage gap by the next journaling boot (R3-1); every boot re-applies the journal tail the store lacks, and a store replaced outside the staged restore gets the post-restore hooks too (DATA3-8). |
 | B7 | Old ABO archives (`audiobooks_<dbtype>_<ts>.tar[.gz|.zst]` + `.sha256`) stay listable, verifiable and restorable through the same staged path as format `legacy-abo/0` (pre-provenance, so restoring one is a foreign restore). |
 | B8 | Create/verify/prune/stage-restore are core **tasks** (`core.backup.*`) with progress from real work, cancellation, one exclusive `Resource`, and schedules declared under backup's own namespace with type `tasks.ScheduleConfig` and bound through `tasks.ScheduleFromConfig` (SIMP-6, R2-7). |
 
@@ -77,7 +91,7 @@ Package `github.com/falkcorp/mediacore/backup` (L4).
 |---|---|---|---|---|---|
 | Main Pebble DB | `SystemOfRecord` | always | main archive, `<db-basename>/…` | `storage.Admin.Checkpoint(dir, WithFlushedWAL)` on the DB's filesystem | staged dir renamed into place |
 | Manifest | metadata | always | main archive root `mediacore-manifest.json` + sidecar `<main>.manifest.json` | built after the hash pass | read first; drives verification and the swap |
-| Level stamps and legacy projection | metadata | always (as manifest values) | manifest | read from the checkpoint | sidecars `.storage-levels` and `.storage-format` rewritten from the staged stamps |
+| Level stamps, applied steps and legacy projection | metadata | always (as manifest values) | manifest | read from the checkpoint | sidecars `.storage-levels`, `.storage-applied` and `.storage-format` rewritten from the staged store |
 | Operator config file (05-config) | `Secret` when 05-config's `ConfigFileHasSecrets()` is true, else `SystemOfRecord` (DATA2-17) | always | companion `config/<file>` — the file itself in an encrypted archive; in a plaintext archive, 05-config's `RedactedConfigFile()` and manifest flag `config_redacted` | file copy | staged; swapped only when `ReplaceConfig` and the rename pre-check pass, else left in `restore/<id>/config.restored` for the operator; a redacted copy is never swapped in, and restore warns that its secret values must come from env or be re-entered |
 | Boot record `<state_dir>/config.boot.json` (05-config §1.3.5) | `SystemOfRecord` | always | companion `config/config.boot.json` | file copy | as the config file |
 | ABO's plaintext mirror `<db parent>/config.yaml` | — | **never** | — | — | — (it duplicates secrets in clear, `persistence.go:32`) |
@@ -87,7 +101,7 @@ Package `github.com/falkcorp/mediacore/backup` (L4).
 | Full-text indexes (`storage/index`) | `Derived` | off (`core.backup.include_derived`) | companion `index/…` | bleve online `CopyTo` (`bleve/v2 index.go:350-354`) | offered to the index only if its recorded generation matches the restored store's; else rebuilt |
 | Derived snapshots (hnsw) | `Cache` | off | companion `derived/<name>/…` | `DerivedIndex.Snapshot` | `DerivedIndex.Load` with the generation rule; else rebuilt |
 | Auxiliary DBs (Open Library mirror) | `Recreatable` | off (`core.backup.include_recreatable`) | companion `aux/…` | `Aux` checkpoint | staged |
-| Revocation journal, restore journal | — | never inside an archive | backup directory (`<prefix>revocations.journal`) / `<state_dir>/restore/` | — | read by the restore, never replaced by it |
+| Revocation journal, its location record, restore journal | — | never inside an archive | backup directory (`<prefix>revocations.journal`) / `<state_dir>/backup.location.json` / `<state_dir>/restore/` | — | read by the restore, never replaced by it |
 | Bootstrap token, `.backup-staging`, temp files | — | never | — | — | — |
 
 Consistency rule: the Pebble checkpoint is the point in time of the archive. Every other
@@ -351,8 +365,8 @@ const (
 	RoleUnassigned        Kind = "role.unassigned"         // Subject user, Object role
 	RoleNarrowed          Kind = "role.narrowed"           // Subject role, Detail = removed permissions
 	RoleDeleted           Kind = "role.deleted"            // Subject role
-	Restore               Kind = "restore"                 // a swap replaced the store; Detail = [kind, archive or source id, boundary seq]
-	Gap                   Kind = "gap"                     // closes an interval in which appends failed; Detail = [since]
+	Restore               Kind = "restore"                 // the store was replaced; Detail = [kind, archive or source id, boundary seq]
+	Gap                   Kind = "gap"                     // an interval with revocations the journal may lack; Detail = [since, reason: "append_failed" | "non_journaling_build"]
 )
 
 // Revocation is one line of the revocation journal (§5B.3.6). SEC2-10: one
@@ -391,23 +405,29 @@ const (
 	KindArchive    // an archive
 	KindRevert     // the undo point of the last restore
 	KindCheckpoint // a pre-migration checkpoint (05-storage §5S.3.12)
+	KindExternal   // replaced outside the staged restore (an older build's restore, a file copy), detected at boot (§5B.3.6)
 )
 
-// RestoreContext is what the kernel hands every restore hook at 06 P4d step 5.
+// RestoreContext is what the kernel hands every restore hook at 06 P4d step 3.
+// Hooks are idempotent: a crash before the journal reaches "applied" re-runs
+// them at the next boot with the same context (DATA3-6).
 type RestoreContext struct {
 	ArchiveID string // backup.ArchiveID (journal cannot import backup); "" for revert and checkpoint restores
 	Kind      RestoreKind
 	Foreign   bool
 	// Boundary is the journal seq the swapped-in store had seen (§5B.3.6):
 	// min(the source's recorded journal seq, the swapped-in store's
-	// journal_head). AuditHighWater is the manifest's (0 for revert/checkpoint).
+	// journal_head); for KindExternal, the store's journal_head. AuditHighWater
+	// is the manifest's (0 for revert, checkpoint and external).
 	Boundary       uint64
 	AuditHighWater uint64
 	// Previous opens a read-only view of the pre-swap store (restore/<id>/previous/),
-	// limited to the calling owner's keyspace and claims; nil when there was no live store.
+	// limited to the calling owner's keyspace and grants; nil when there was no
+	// live store and for KindExternal.
 	Previous func(owner storage.Owner) (storage.Reader, error)
 	// Revocations yields the verified journal lines after Boundary; nil when
-	// coverage fails (§5B.3.6): foreign, host-loss, broken chain, gap, other install.
+	// coverage fails (§5B.3.6): foreign, host-loss, external, broken chain,
+	// gap, other install.
 	Revocations iter.Seq[Revocation]
 	// Journal is the out-of-DB restore journal (staged, swapped, ... records).
 	Journal []JournalRecord
@@ -423,7 +443,7 @@ type RestoreHook func(ctx context.Context, rc RestoreContext) (counts map[string
 
 type JournalRecord struct {
 	At    time.Time
-	Step  string // "staged", "rechecked", "previous_moved", "staged_moved", "sidecars", "swapped", "opened", "hooks_done", "applied", "failed", "swapped_back", "rejected"
+	Step  string // "staged", "rechecked", "previous_moved", "staged_moved", "sidecars", "swapped", "opened", "restore_line", "hooks_done", "applied", "failed", "swapped_back", "rejected"
 	Seq   uint64 // staged: the outgoing store's journal head seq, the recorded boundary of a later revert (DATA2-25)
 	Actor string
 	Note  string
@@ -456,8 +476,9 @@ Encrypted variant (only while encryption is active, B3)
   target by name and lists only `audiobooks_` names with a `.tar.gz`/`.tar.zst`/`.tar` extension
   (`backup.go:777-870`, `codec.go:82-84,225-245`). The main archive therefore restores the DB exactly
   as today, the manifest lands as a harmless stray file, and the companion and sidecars match no
-  listing rule, so an older build neither restores nor prunes them. During every compatibility window
-  an operator who rolls back can restore any plaintext archive made since the upgrade.
+  listing rule, so an older build neither restores nor prunes them. Because every earlier release stays a
+  rollback target during the extraction (R3-1), an operator who rolls back can restore any plaintext
+  archive made since the upgrade.
 - **Names.** ABO (the books module registers it) keeps the legacy pattern
   `audiobooks_pebble_<YYYYMMDD_HHMMSS><ext>` (`backup.go:333`); other apps use `<AppID>_<YYYYMMDD_HHMMSS><ext>`.
   The archive ID lives in the manifest. A name collision within one second waits for the next second.
@@ -481,18 +502,21 @@ the server and which an operator adds to separate archive decryption from secret
 **active** only when all hold:
 
 1. `core.backup.encryption = age`. Default: `none` on an install whose store existed before its first
-   core boot (an upgrade), `age` on a fresh install.
+   core boot (an upgrade) and on every install of an app that declares a legacy restore bound which the
+   store has not passed (rule 3); `age` otherwise.
 2. 05-config's export record `<state_dir>/secrets.keyring.exported` covers the **active derivation key**
    (`secrets_keyring_not_exported` is not raised for it), **or** at least one operator recipient is
    configured.
 3. The **legacy restore bound** is passed: an app with a pre-core history declares
-   `backup.LegacyRestoreBound{Owner, Level}` (books: `{Owner: core, Level: 5}`, 09 §9.2.2; contract C8
-   raises the store to `core` 6, past the bound); while the store's level
-   for that owner is ≤ the bound, some build that can still serve the store has only ABO's plaintext
-   restore code, so encryption stays inactive. Apps without such history declare none. A **fresh**
-   store is stamped at the build's supported level on its first boot (05-storage §5S.4 step 5,
-   DATA2-28), so on a fresh install the bound is already passed and encryption is active as soon as
-   rule 2 holds.
+   `backup.LegacyRestoreBound{Owner, Level}`; while the store's level for that owner is ≤ the bound,
+   some build that can still open the store has only ABO's plaintext restore code, so encryption stays
+   inactive. Books declares `{Owner: core, Level: 0}`: no step of the extraction raises the `core`
+   level (R3-1, 05-storage §5S.3.7), so every earlier ABO release, HEAD included, can open the store —
+   upgraded and fresh alike, because a fresh ABO store keeps its families in the legacy format too — and
+   ABO archives stay plaintext until a level step past the bound exists (the first cutover, 05-storage
+   §5S.3.13, or a dedicated level step 09 may define, §5B.11 item 4). Apps without a pre-core history
+   declare none; their fresh stores are stamped at the build's level (05-storage §5S.4 step 5) and
+   encryption is active as soon as rule 2 holds.
 
 While `age` is configured but not active, archives are written unencrypted, secret-class items are
 omitted (the config file as its redacted copy), and health is `degraded` with token
@@ -504,20 +528,30 @@ derivation key ID it was made under (`Provenance.KeyID`); its MAC verifies, and 
 encryption decrypts, with that key through `DeriveKeyFor(KeyID, …)` while the key is `active` or
 `verify`. The scheduled `core.backup.verify` task rewraps (`Service.Rewrap`) every Own archive whose
 key is in `verify` state, so no retained archive depends on a key once 05-config retires it; 05-config
-also keeps a `verify` key past `retire_after` while a retained archive, undo point or unconsumed checkpoint
-still records it (`secrets.Options.DeriveKeyInUse`, bound by the kernel to a manifest scan of this
-directory). An archive whose key is already retired (an imported one, or a key retired before this rule) verifies as foreign and is restorable only as a foreign restore.
+keeps a `verify` key past `retire_after` while anything this file retains still needs it: a retained
+archive, undo point or unconsumed checkpoint that records it, **or a line of the retained revocation
+journal (or its header) written under it** (DATA3-13, SEC3-10), so retiring a key can never make the
+journal's chain unverifiable. Retirement is decided in 06 P5, not inside `secrets.Open` (which runs at
+P4d step 1, before the backup directory an admin set in Settings is known): the backup service calls
+05-config's `secrets.RetireUnused` with that in-use set, computed from the manifests and the journal of
+the **effective** `core.backup.dir` (COR3-2). An archive whose key is already retired (an imported one,
+or a key retired before this rule) verifies as foreign and is restorable only as a foreign restore.
 
 **Host-loss restore** (documented procedure, also in the operator runbook): copy to the new host the
 backup directory (archives, companions, sidecars and the revocation journal) and the keyring export
 (05-config); for an archive encrypted only to an operator recipient, also that operator identity. Put
 the exported keyring in the new state directory first (05-config §2.4 — it is the archive identity
 too), then run the offline restore `<app> restore --archive <file> [--identity <operator-identity>]
-[--foreign]` before the first start. With the keyring in place and no live store, the archive's MAC
-verifies and the restore is `Own`; otherwise it is foreign and needs `--foreign`. An operator identity
-file is read for that one command and never stored. With no pre-swap store, nothing anchors the end of
-the revocation journal, so the restore treats it as uncovered and every API key needs confirmation
-(§5B.3.6, SEC2-9).
+[--foreign]` before the first start, with a build at or above the archive's upgrade floor: an archive
+older than the build's `UpgradeFloor` is refused at staging (step 4) naming the release to install
+first — install that release, restore with it, run it until it has applied the steps the newer build
+requires, then upgrade (DATA3-9). With the keyring in place and no live store, the archive's MAC
+verifies and the restore is `Own`; otherwise it is foreign and needs `--foreign`. A pre-S0 archive has
+no install marker; the restore hands the restore boot the revocation journal header's `install_id`
+(else the keyring export's, 05-config) so the restored store keeps this install's lineage (05-storage
+§5S.3.4 rule 4, DATA3-12). An operator identity file is read for that one command and never stored.
+With no pre-swap store, nothing anchors the end of the revocation journal, so the restore treats it as
+uncovered and every API key needs confirmation (§5B.3.6, SEC2-9).
 
 ### 5B.3.4 Staged restore
 
@@ -539,11 +573,19 @@ interactive owner proof; §5B.3.8). The same steps run offline in `<app> restore
    with `{foreign}` (05-rbac §7.1 action names).
 4. Compatibility: `App` must match (`ErrWrongApp`); every owner level in the manifest ≤ the build's
    supported level (the guard's own comparison, 05-storage §5S.3.7); `PebbleFormat` ≤ the pin; every
-   owner's version known, or newer with only `Additive` steps; else `ErrBackupTooNew`. Modules present
-   in the archive but not in the build: restored, dormant, warning.
+   owner's version known, or newer with only `Additive` steps; else `ErrBackupTooNew`. Then every
+   `UpgradeFloor` of the build against the archive's applied versions and done steps (the manifest's
+   `Keyspaces`, or for a `legacy-abo/0` archive the versions read at `VerifyOpen`): an archive older
+   than a floor is refused **before extraction** with `ErrUpgradeFloor` naming the release to install
+   first, so it is never swapped in only to be refused at P2 (DATA3-9). Modules present in the archive
+   but not in the build: restored, dormant, warning.
 5. Secrets: open the staged checkpoint read-only and compute the key IDs its secret records reference
-   (05-config `KeyIDsReferenced`); any key missing from the keyring → `ErrUnreadableSecrets` unless
-   `AcceptUnreadableSecrets` (warning: those secrets must be re-entered).
+   with 05-config's `KeyIDsReferenced(ctx, r storage.Reader)` over that staged view — which also reports
+   `k0-legacy` for every legacy-format secret row it finds (a pre-S3 archive has no `c/secrets/` but
+   does have rows that need the legacy key, DATA3-12); any key missing from the keyring →
+   `ErrUnreadableSecrets` unless `AcceptUnreadableSecrets` (warning: those secrets must be re-entered;
+   05-config treats an undecryptable legacy row as "must be re-entered" at runtime rather than failing
+   boot).
 6. **Pre-validate every rename** the boot phase will do (DATA-23): staging and each target on the same
    filesystem, parent writable, target not a mount point and not a single-file bind mount (device of the
    file ≠ device of its directory). The DB directory and its sidecars must pass (`ErrRenameRefused`
@@ -554,24 +596,32 @@ interactive owner proof; §5B.3.8). The same steps run offline in `<app> restore
    `ensureSameDevice` does (`backup.go:577-598`), because the swap is a rename. Every file fsynced, then
    each directory.
 8. Write `<state_dir>/restore/pending.json` = `{archive_id, kind, staging, targets[{from,to}],
-   db_path, manifest_sha256, staged_by_build, expires_at, requested_by, requested_at}` — every path
-   **absolute**, resolved now from 05-config's `BootView` (`core.storage.path`, `core.paths.state_dir`;
-   COR2-8) — by temp file + rename + directory fsync, and the journal record `staged` to
-   `<state_dir>/restore/<id>/journal.json`. The `staged` record carries the live store's
-   `c/backup/journal_head` seq: the store it describes can only see more lines before the swap, so it is
-   a safe boundary for a later revert of this restore (DATA2-25).
+   db_path, install_id, manifest_sha256, staged_by_build, expires_at, requested_by, requested_at}` —
+   every path **absolute**, resolved now from 05-config's `BootView` (`core.storage.path`,
+   `core.paths.state_dir`; COR2-8); `install_id` is the live store's marker or, on a host with no store,
+   the revocation journal header's (else the keyring export's), which the restore boot writes into a
+   marker-less restored store (05-storage §5S.3.4 rule 4, DATA3-12) — by temp file + rename + directory
+   fsync, and the journal record `staged` to `<state_dir>/restore/<id>/journal.json`. The `staged`
+   record carries the live store's `c/backup/journal_head` seq: the store it describes can only see more
+   lines before the swap, so it is a safe boundary for a later revert of this restore (DATA2-25).
 9. Return `202` with `restart_required: true`; with `Restart`, request a graceful restart through the
-   lifecycle supervisor. While `pending.json` exists, `make rollback`, the updater (05-storage
-   `CheckReader` token `restore_pending`, OPS-14) and the operator `deploy` recipe (09 S1; override
-   `DEPLOY_DISCARD_RESTORE=1`, OPS2-26) refuse, so a deploy cannot silently discard the restore.
+   lifecycle supervisor. While `pending.json` exists, or a restore journal holds an `inflight.json`
+   (step g), `make rollback`, the updater (05-storage `CheckReader` tokens `restore_pending`,
+   `restore_inflight`, OPS-14) and the operator `deploy` recipe (09 S1; override
+   `DEPLOY_DISCARD_RESTORE=1`, OPS2-26) refuse, so a deploy cannot silently discard the restore. Over
+   ssh the recipes probe both files with literal sudoers commands under `DEPLOY_STATE_DIR`, and a probe
+   that cannot run refuses (05-storage §5S.3.7, OPS3-13).
 
 Boot phase — kernel **pre-boot** step P0a ([06](06-app-sdk.md) §6.5.1), before any config file or
 storage is read. The updater's pre-boot check P−1 runs first (OPS2-3): it decides a rollback to
 `.prev` before any swap, and `CheckReader` ignores a pending intent staged by the failing build as long
 as no swap step has started; the restored `.prev` then rejects that intent at step a. P0a resolves only
-the state directory (flags, env, compiled default — never the config file or the DB) and trusts the
-**absolute targets recorded in `pending.json`**; 06 P2 then verifies that storage opened at the
-recorded `db_path`, and a mismatch is a failure after the swap (step x) (DATA2-25):
+the state directory, by 05-config's pre-boot rule (flags, env, compiled default, and next to the
+database when that default cannot be created — HEAD's fallback, R3-4/OPS3-1; never the config file or
+the DB) and trusts the **absolute targets recorded in `pending.json`**; 06 P2 then verifies that storage
+opened at the recorded `db_path`, and a mismatch is a failure after the swap (step x) (DATA2-25). P0a
+also **resumes** any restore journal whose last step lies between `previous_moved` and `applied`, and
+the kernel decides "this is a restore boot" from that journal, never from `pending.json` alone (DATA3-6):
 
 | Step | Action (journaled in `restore/<id>/journal.json`; each step idempotent: rename only if source exists and destination does not) |
 |---|---|
@@ -581,15 +631,15 @@ recorded `db_path`, and a mismatch is a failure after the swap (step x) (DATA2-2
 | d | Rename staged items into place. |
 | e | Rewrite the sidecars from the staged stamps: `.storage-levels`, and for books `.storage-format` (removes the "older archive, newer sidecar" case; DATA-23d). |
 | f | Mark every derived index for rebuild; included `Derived`/`Cache` items are offered to `Load` under the generation rule. |
-| g | Journal `swapped`; append a `restore` line to the revocation journal (§5B.3.6, a file outside the store); remove `pending.json`. Boot continues: P0 reads the restored config (if replaced), storage opens at the recorded `db_path` (journal `opened`), the pre-migration checkpoint and the migration DAG bring an older archive forward (G2 rules). |
-| h | At 06 P4d (05-storage §5S.4 step 11), **after** the identity rebuild from the restored legacy rows (reconciler (a)) and the journal-tail re-apply (b), and before any listener: the kernel runs the restore hooks in the order auth, rbac, audit with a `journal.RestoreContext` (`Previous` = read-only view of `previous/`, `Revocations` per §5B.3.6 or nil, the restore journal, the counts of earlier hooks). 05-authn re-applies the later revocations, invalidates every native session and one-time token **and deletes every legacy `sess:`/`idx:sess:user:` and `invite:`/`idx:invite:username:` row**, bumps epochs, marks `password.changed` users reset-required, and sets keys `needs_confirmation` when `Revocations` is nil; 05-rbac re-applies role kinds; audit raises its `Sequence` past and copies forward the records above `AuditHighWater` from `previous/` and appends the restore records (`core.restore.revoke`, `core.restore.apply`). **During the compatibility window every hook write to a mirrored family goes through `Mirror.Stage`** — legacy and native rows in one batch (R2-2, SEC2-3, DATA2-4) — and a verification rebuild of each mirror the hooks wrote must match the native copy (05-storage §5S.3.11), so neither the next boot's rebuild nor a rollback build undoes them. Journal `applied`. |
-| x | **Automatic swap-back** (DATA-23): any failure after step c — a rename, storage opening at a path other than the recorded `db_path`, the guard refusing the restored levels, a failing migration, a failing hook or verification rebuild — closes storage, moves the restored items to `restore/<id>/failed/`, renames `previous/` back, rewrites the sidecars from the original stamps, journals `swapped_back`, and exits non-zero. The automatic restart boots the original data with health `degraded` (`restore_failed`) and the reason. If the swap-back itself fails, boot halts with the journal naming every path, and the offline `<app> restore --revert <id>` completes it. |
+| g | Journal `swapped`; **rename** `pending.json` to `restore/<id>/inflight.json` (not deleted: it is removed only when the journal reaches `applied` or `swapped_back`, so a crash anywhere between here and the hooks still resumes as a restore boot, and `CheckReader`, `make rollback` and `deploy` keep refusing, DATA3-6). The `restore` line of the revocation journal is **not** appended here — the keyring that MACs it is not open at P0a — but at P4d step 2 (§5B.3.6; journal `restore_line`). Boot continues: P0 reads the restored config (if replaced), storage opens at the recorded `db_path` (journal `opened`), a marker-less store gets `install_id` from the intent (DATA3-12), and the pre-migration checkpoint and the migration DAG bring an older archive forward (G2 rules). |
+| h | At 06 P4d step 3 (05-storage §5S.4 step 11 (c)) — **after** step 1 opened the keyring and attached the DB overrides and step 2 appended the `restore` line and re-applied the journal tail, before `auth.BootWrites` and any listener — the kernel runs the restore hooks in the order auth, rbac, audit with a `journal.RestoreContext` (`Previous` = read-only view of `previous/`, `Revocations` per §5B.3.6 or nil, the restore journal, the counts of earlier hooks). 05-authn re-applies the later revocations, invalidates every hashed session and one-time token in `c/auth/` **and deletes every legacy `sess:`/`idx:sess:user:` and `invite:`/`idx:invite:username:` row** (its read-delete grant), bumps epochs, marks `password.changed` users reset-required, and sets keys `needs_confirmation` when `Revocations` is nil; 05-rbac re-applies role kinds; audit raises its `Sequence` past and copies forward the records above `AuditHighWater` from `previous/` and appends the restore records (`core.restore.revoke`, `core.restore.apply`). Every hook write is an ordinary write of the legacy row through the owner's adapter — the one stored format (R3-1) — so the next boot and every rollback build read the result as it is; there is no second copy to reconcile. Hooks are idempotent; the last hook batch records `c/backup/restore_hooked/<seq>` for the `restore` line (journal `hooks_done`), then journal `applied` and `inflight.json` is deleted. |
+| x | **Automatic swap-back** (DATA-23): any failure after step c — a rename, storage opening at a path other than the recorded `db_path`, the guard refusing the restored levels, a failing migration, a failing hook — closes storage, moves the restored items to `restore/<id>/failed/` together with every pre-migration checkpoint the restore boot took (their records name the restored store; one that cannot be moved is marked `restore_left`, so it is never reused or restored, 05-storage §5S.3.12, DATA3-1), renames `previous/` back, rewrites the sidecars from the original stamps, journals `swapped_back`, deletes `inflight.json` and exits non-zero. The automatic restart boots the original data with health `degraded` (`restore_failed`) and the reason. On a host with **no** previous store, the journal records `no_previous` and storage refuses to create a fresh store at that path until the operator resolves it, so a failed host-loss restore never leaves an empty store behind (05-storage §5S.4 step 1, DATA3-9). If the swap-back itself fails, boot halts with the journal naming every path, and the offline `<app> restore --revert <id>` completes it. |
 
 Undo: `previous/` is kept for `core.backup.restore.keep_previous`. `RevertLastRestore` (API) and
 `<app> restore --revert` (offline, for an app that no longer boots) stage it through the same mechanism
 with kind `KindRevert`. 05-storage's offline `storage restore-checkpoint` uses the same swap with kind
-`KindCheckpoint`. A crash at any step resumes from the journal at the next boot: forward to `applied`,
-or into the swap-back.
+`KindCheckpoint`. A crash at any step resumes from the journal at the next boot: forward to `applied`
+(re-running the idempotent hooks, `TestCrashBetweenSwapAndHooksResumesHooks`), or into the swap-back.
 
 ### 5B.3.5 Creation, verification, retention, catalogue
 
@@ -669,15 +719,15 @@ replaces, and — because the backup directory is untrusted storage (a network s
 
 | Rule | Specification |
 |---|---|
-| Where (DATA2-27) | `<backup dir>/<prefix>revocations.journal` (0600; JSON lines), where `<prefix>` is the app's archive prefix (ABO: `audiobooks_pebble_revocations.journal`), so two apps sharing a backup directory never share a journal; an older ABO build neither lists nor prunes it (no archive extension). It sits beside the archives so an off-host copy of the backup directory carries it. |
+| Where (DATA2-27, DATA3-5) | `<backup dir>/<prefix>revocations.journal` (0600; JSON lines), where `<prefix>` is the app's archive prefix (ABO: `audiobooks_pebble_revocations.journal`), so two apps sharing a backup directory never share a journal; an older ABO build neither lists nor prunes it (no archive extension). It sits beside the archives so an off-host copy of the backup directory carries it. `core.backup.dir` is **restart-bound** (§5B.7), and `<state_dir>/backup.location.json` = `{backup_dir, journal}` (absolute) records where the journal is. At P4d step 2, when the effective directory (DB overrides attached at step 1) differs from the recorded one — an admin moved backups in Settings, or a restore brought back another override — the kernel first **moves** the journal: copy, verify the whole chain, fsync, rename, update the record; a move that fails verification keeps the old file and the boot reports `revocation_journal_broken`. So a live directory change can never split the journal. |
 | Format and integrity (SEC2-9) | Line 0 is the header `{seq: 0, install_id, app, started_at, kid, base_seq, base_mac, mac}`; every later line is a `journal.Revocation` plus `kid` and `mac`, with `seq` = previous + 1 and `mac = HMAC-SHA256(DeriveKeyFor(kid, "core.backup/revocations/v1"), prev_mac ‖ canonical line without mac)`, `kid` being the derivation key ID the line was written under (05-config; a derive-key rotation changes `kid` mid-journal without breaking the chain). Deleting, reordering, editing or forging a line breaks the chain. |
 | Head in the store (SEC2-9, DATA2-5) | Every revoking batch also writes `c/backup/journal_head` = `{seq, mac}` of its line (`RevocationJournal.Append` stages it by participant binding). The store — and so every archive and checkpoint made from it — knows the last line it committed; truncating the file below a store's head is detected. |
-| Writers (R2-1, DATA2-5) | Every build that can open an adopted store: `core/auth` (key revoke and disable, user disable and delete, credential-epoch bump, password change, identity unlink, session revocation), `core/rbac` (`role.unassigned`, `role.narrowed`, `role.deleted`) — the kinds of §5B.3.2 — and the **Teach build** (05-authn §11.1), whose legacy handlers journal the same restrictions they perform; builds older than the Teach build cannot open such a store (05-storage §5S.3.7). `Append` is called **before** the revocation's batch commits; each line is fsynced. A recorded revocation whose commit then fails is harmless: re-applying it revokes more, never less. Every swap that replaces the store — 06 P0a (step g of §5B.3.4) and every restore the Teach build performs — appends a `restore` line `{kind, source, boundary}`. |
-| What a legacy writer writes | The Teach build's legacy handlers (ABO's gin code, 05-authn §11.1) journal through the same public `backup/journal` writer when the build has it; a Teach build that predates the package writes exactly the same bytes with `storage/keys` (05-storage §5S.3.3). Either way: the line format above (the Teach build holds the S3 keyring, so it can MAC); `c/backup/journal_head` in its revoking batch; on append failure `c/backup/journal_gap/<since>` in that batch, and a `gap` line on the next successful append; after a restore it performs, a `restore` line. |
+| Writers (DATA2-5) | Every build from the one in which `backup/journal` lands with `auth` and `rbac` (09 S4); its served-ledger record lists the `journal` duty (05-storage §5S.3.7): `core/auth` (key revoke and disable, user disable and delete, credential-epoch bump, password change, identity unlink, session revocation) and `core/rbac` (`role.unassigned`, `role.narrowed`, `role.deleted`) — the kinds of §5B.3.2. `Append` is called **before** the revocation's batch commits; each line is fsynced. A recorded revocation whose commit then fails is harmless: re-applying it revokes more, never less. A restore boot (P0a swap, revert, checkpoint restore) and a boot that finds a replaced store append a `restore` line `{kind, source, boundary}` at P4d step 2, once the keyring is open. No earlier build writes the journal: lines need the S3 keyring's derive key, so the S0 hotfixes do not include it (DATA3-19). |
+| Boots without the journal duty (R3-1) | Every earlier release can open the store, so a rollback may run a build that does not journal: a release older than S4, a pre-guard build, or one whose own restore extracts an archive in place (HEAD, `internal/server/handlers/system/handler.go:824-862`). Its revocations are in the legacy rows — the one stored format — so nothing is lost while the store is not replaced. The next journaling boot detects the interval from the served ledger (the previous boot did not list the `journal` duty) or a foreign open (05-storage §5S.3.7) and, at P4d step 2 before anything else, appends a `gap` line `{since: <that boot's time>, reason: non_journaling_build}`, so every later restore whose boundary precedes it gets no coverage (keys need confirmation). |
 | Append failure | The revocation still commits — a disk problem never blocks a security action — and the same batch records `c/backup/journal_gap/<since>` through `Gap`; health is `degraded` (`revocation_journal_unwritable`) until the next successful append writes a `gap` line closing the interval. |
-| Boot re-apply (DATA2-5, R2-2) | At every boot, 06 P4d step 2 (05-storage §5S.4 reconciler (b)): when the store's `journal_head.seq` is below the journal's last verified line — the store was replaced by any means (a restore by any build, a checkpoint restore, a file copy) or a commit after an append failed — the kernel re-applies every verified line after the head through auth's and rbac's re-apply functions, each staged with `Mirror.Stage` (legacy and native rows in one batch) and writing the new head. A store with no head never committed a journaled revocation (it predates the journal, or is an older archive), so every verified line is re-applied. Re-application stops at a chain break (health `degraded`, `revocation_journal_broken`); the post-restore coverage rule below then fails safe. |
-| Coverage at restore | `RestoreContext.Boundary` = min(the source's recorded seq — the manifest's `JournalSeq`, the `staged` record of the restore being reverted, or the checkpoint record's `journal_seq` (05-storage §5S.3.12) — and the swapped-in store's own `journal_head.seq`). `Revocations` yields the lines after `Boundary` only when: the journal's `install_id` equals the archive's; the chain verifies from `Boundary` to the **pre-swap store's** `journal_head` (the journal is not truncated below what the live store had committed); and no gap — in the journal or in the pre-swap store — lies after `Boundary`. Otherwise it is nil and 05-authn sets every API key `needs_confirmation` (§4.14 step 3). Foreign restores and host-loss restores (no pre-swap store, so nothing anchors the journal's end) always get nil. |
-| Retention | Prune drops lines whose `seq` is at or below the smallest boundary any retained archive, undo point or unconsumed checkpoint records, by rewriting the journal (temp file + rename) with a new header whose `base_seq`/`base_mac` are the last dropped line's, so the chain continues. |
+| Boot re-apply (DATA2-5, COR3-2, DATA3-5, DATA3-8, SEC3-10) | At every boot, 06 P4d step 2 (05-storage §5S.4 step 11 (b)), after step 1 opened the keyring (every line's MAC needs `DeriveKeyFor`) and attached the DB overrides (so the journal is found under the effective `core.backup.dir`, moved first if needed, row "Where"): (1) the gap line of row "Boots without the journal duty", if due; (2) on a restore boot, the `restore` line, unless the journal already holds one for this restore; (3) when the store's `journal_head.seq` is below the journal's last verified line, every verified line after the head is re-applied through auth's and rbac's re-apply functions, each an ordinary legacy-row write through their grants (the one stored format) that also writes the new head. A store with no head never committed a journaled revocation (it predates the journal, or is an older archive), so every verified line is re-applied. **Replaced store (DATA3-8):** when the head is below the journal's end on a boot that is not a P0a restore boot, the store was replaced outside the staged restore (an older build's restore, a file copy, a hand-copied checkpoint) or a revoking commit failed after its append; the kernel appends a `restore` line `{kind: external, boundary: <head>}` and step 3 runs the hooks with `KindExternal` (`Previous` nil, so no audit copy-forward; `Revocations` nil, since nothing anchors the journal's end, so every key needs confirmation and the rare commit-failure case costs a re-confirmation). A `restore` line without its `c/backup/restore_hooked/<seq>` record is resumed by the next boot, never duplicated. **Chain break** (a missing, edited or unverifiable line): when the head is below the journal's end, re-application cannot know what it skipped, so the boot fails closed through auth's restore fallback — every API key `needs_confirmation`, every credential epoch bumped — and reports `revocation_journal_broken`; with the head at the end, only the health report (SEC3-10). |
+| Coverage at restore | `RestoreContext.Boundary` = min(the source's recorded seq — the manifest's `JournalSeq`, the `staged` record of the restore being reverted, or the checkpoint record's `journal_seq` (05-storage §5S.3.12) — and the swapped-in store's own `journal_head.seq`). `Revocations` yields the lines after `Boundary` only when: the journal's `install_id` equals the archive's (a restore boot inherits the install's ID, 05-storage §5S.3.4 rule 4, so an old archive of this install still matches, DATA3-12); the chain verifies from `Boundary` to the **pre-swap store's** `journal_head` (the journal is not truncated below what the live store had committed); and no gap — a `gap` line in the journal (an append failure or a non-journaling build) or an open `c/backup/journal_gap/` record in the pre-swap store — lies after `Boundary`. Otherwise it is nil and 05-authn sets every API key `needs_confirmation` (§4.14 step 3). Foreign, host-loss and external restores (no pre-swap store, so nothing anchors the journal's end) always get nil. |
+| Retention | Prune drops lines whose `seq` is at or below the smallest boundary any retained archive, undo point or unconsumed checkpoint records, by rewriting the journal (temp file + rename) with a new header whose `base_seq`/`base_mac` are the last dropped line's, so the chain continues. Every `kid` that a retained line or the header carries stays in the derive-key in-use set (§5B.3.3), so retirement never breaks verification (DATA3-13). |
 
 ### 5B.3.7 Provenance (SEC-16)
 
@@ -689,7 +739,8 @@ keys verify-only until retired, SEC2-24). The MAC'd bytes include `install_id`, 
 hash of both archives, the levels and the journal and audit boundaries, so neither archive can be
 swapped or edited. An archive is `Own` when the MAC verifies **and** `install_id` equals the live
 store's `c/storage/install` (or no live store exists, the host-loss case once the exported keyring is in
-place). Everything else — including every `legacy-abo/0` archive and every archive whose `key_id` is
+place). Restoring a pre-S0 archive does not change the install's ID (the restore boot writes the
+inherited one, DATA3-12), so this install's later `Own` archives stay `Own`. Everything else — including every `legacy-abo/0` archive and every archive whose `key_id` is
 retired — is restored only as a foreign restore (B5).
 
 ### 5B.3.8 Routes (SEC2-8)
@@ -700,11 +751,11 @@ are aliases for the 09 window (§5B.10).
 | Route | Permission and guards | Audited |
 |---|---|---|
 | `GET /backups`, `GET /backups/{id}` | `core:system.view` | no |
-| `POST /backups/{id}/verify` | `core:system.view` | no |
+| `POST /backups/{id}/verify` | `core:system.manage` (it starts `VerifyOpen` work: a checkpoint open and a full hash, which a view-class scope may not start, 05-rbac §4.10, SEC3-12) | no |
 | `POST /backups` (create) | `core:system.manage` | `core.backup.create` |
 | `DELETE /backups/{id}` | `core:system.manage` + `Guards.Interactive` | no (floors refuse protected archives) |
 | `POST /backups/import` | `core:system.manage` + `Guards.Interactive` | `core.backup.import` |
-| `GET /backups/{id}/download` | `core:system.manage` + `Guards.Interactive`; streams the archive as stored | `core.backup.download` |
+| `GET /backups/{id}/download` | `core:admin` + `Guards.Interactive` + `Guards.Owner` (with 05-authn §4.8's fallback): an archive is credential-equivalent (B1), so taking one offline is gated at least like a restore (SEC3-7); streams the archive as stored | `core.backup.download` |
 | `POST /backups/{id}/restore`, `POST /restore/revert`, `DELETE /restore/pending`, `GET /restore/pending` | `core:backup.restore` (`Sensitive`, `AuthRequired`) + `Guards.Interactive` + `Guards.Owner`; a foreign restore also `core:admin`; `GET` needs only `core:backup.restore` | `core.restore.stage` (`{foreign}`), then `core.restore.apply` at boot |
 | `POST /backups/{id}/rewrap` | `core:system.manage` + `Guards.Interactive` | no |
 
@@ -715,16 +766,21 @@ needs filesystem access, which no HTTP route grants.
 
 Phases are 06 §6.5.1's (R2-8).
 
-- Construction: `backup/journal` is opened by the kernel from S4 (its file under the backup directory,
-  the derive function from `secrets`) and handed to `auth` and `rbac`; `backup` itself is built in P5
-  after storage and secrets, before modules; module artifacts registered through `Registrar.Backup`
-  ([06](06-app-sdk.md)) are validated in P7 (unique names, required `Consistency`).
-- Boot: the pending-restore swap is P0a (§5B.3.4), after the updater's P−1; storage then opens at the
-  recorded DB path. At P4d step 2 the journal tail is re-applied (§5B.3.6) and, after a restore, the
-  restore hooks run at step 5. After services are built the catalogue is reconciled from the backup
-  directory (orphans removed), the revocation journal's header is checked against `c/storage/install`,
-  and interrupted `.partial` archives and staging dirs older than 24 h are swept (ABO
-  `sweepStaleCheckpoints`, `backup.go:600-640`).
+- Construction: `backup/journal` is opened by the kernel from S4 at P4d step 2 — after step 1 opened
+  the keyring (`secrets.Open`) and attached the DB overrides, so its file is resolved from the effective
+  `core.backup.dir` and every line verifies (COR3-2, DATA3-5) — and handed to `auth` and `rbac`;
+  `backup` itself is built in P5 after storage and secrets, before modules, and then decides derive-key
+  retirement by calling `secrets.RetireUnused` with the in-use set of §5B.3.3 (archives, undo points,
+  checkpoints and journal lines of the effective directory; COR3-2, DATA3-13). Module artifacts
+  registered through `Registrar.Backup` ([06](06-app-sdk.md)) are validated in P7 (unique names,
+  required `Consistency`).
+- Boot: the pending-restore swap, or the resumption of an in-flight one, is P0a (§5B.3.4), after the
+  updater's P−1; storage then opens at the recorded DB path. At P4d step 2 the journal is located (and
+  moved if needed), the gap and `restore` lines are appended, and the tail is re-applied (§5B.3.6); at
+  step 3 the restore hooks run on a restore boot or a replaced-store boot. After services are built the
+  catalogue is reconciled from the backup directory (orphans removed), the revocation journal's header
+  is checked against `c/storage/install`, and interrupted `.partial` archives and staging dirs older than
+  24 h are swept (ABO `sweepStaleCheckpoints`, `backup.go:600-640`).
 - Schedules: `core.backup.create` and `core.backup.verify` through `tasks.ScheduleFromConfig`.
 - Shutdown: a running create is cancelled at an entry boundary; its partial files are removed.
 
@@ -750,12 +806,16 @@ Phases are 06 §6.5.1's (R2-8).
 | Stale or foreign pending intent at boot (no swap started) | open for the app (boot on live data), closed for the restore (rejected) | OPS-14: no surprise restore after a rollback and roll-forward; after the updater's rollback, `.prev` rejects the failing build's intent (OPS2-3). |
 | Storage opens at a path other than the recorded `db_path` | closed for the restore: automatic swap-back | The swap must never be applied to one path and served from another (DATA2-25). |
 | Boot-time staging re-check fails | open for the app (boot on live data), closed for the restore (rejected) | Live data is untouched; refusing to boot would turn a bad archive into an outage. |
-| Any failure after the swap (guard, migration, hook, verification rebuild) | closed for the restore: automatic swap-back, exit, restart on the original data with health `degraded` | DATA-23b: never leave the app down with live data parked in `previous/`. |
+| Archive below the build's upgrade floor | closed at staging (`ErrUpgradeFloor`, names the release to install first), nothing extracted | It would be swapped in and refused at P2; on a fresh host it would leave an empty store (DATA3-9). |
+| Any failure after the swap (guard, migration, hook) | closed for the restore: automatic swap-back (checkpoints of the restore boot moved aside), exit, restart on the original data with health `degraded`; with no previous store, storage refuses to create one | DATA-23b: never leave the app down with live data parked in `previous/`; never reuse a checkpoint of the restored store (DATA3-1, DATA3-9). |
+| Crash between the swap and the hooks | resumed: `inflight.json` keeps it a restore boot, hooks re-run (idempotent); rollback tooling keeps refusing | Dropping the hooks would serve revoked credentials (DATA3-6). |
 | Swap-back fails | closed (boot halts; journal names every path; offline `restore --revert`) | Manual recovery with exact instructions beats guessing. |
 | Crash during the swap | resume from journal | Each step idempotent. |
 | Post-restore hook fails | handled by the swap-back row | Resurrecting revoked credentials is a security failure (05-authn §4.14). |
 | Revocation journal append fails | open (revocation commits; gap recorded; health `degraded`) | Never block a revocation; the gap makes a later restore fail safe (keys need confirmation). |
-| Revocation journal chain broken or truncated below the live store's head | open for the app (health `degraded`, `revocation_journal_broken`); closed for coverage (`Revocations` nil → keys need confirmation) | A tampered journal must never make a restore look covered (SEC2-9). |
+| Revocation journal chain broken or truncated below the live store's head | open for the app (health `degraded`, `revocation_journal_broken`); closed for coverage (`Revocations` nil → keys need confirmation); when the store's head is below the journal's end, closed for credentials too (every key `needs_confirmation`, every epoch bumped) | A tampered journal must never make a restore look covered, nor leave skipped revocations unapplied (SEC2-9, SEC3-10). |
+| A boot without the journal duty served the store (rollback, pre-guard open) | open (the next journaling boot appends a `gap` line) | Later restores across that interval fail safe (R3-1). |
+| Store replaced outside the staged restore (head below the journal's end, no P0a restore) | open: tail re-applied, hooks run with `KindExternal`, keys need confirmation | An older build's restore or a file copy must not keep revoked credentials or old sessions (DATA3-8). |
 | Archive's derivation key retired | closed for `Own` (verifies as foreign) | The verify task rewraps before retirement (SEC2-24); after it, only a deliberate foreign restore remains. |
 
 ## 5B.6 Concurrency contract
@@ -784,11 +844,11 @@ whether they are protected at all, is `ProtectAdmin`; one that can delete archiv
 | Key | Type | Default | Hot-reload? | Protection |
 |---|---|---|---|---|
 | `core.backup.enabled` | bool | true | yes | admin |
-| `core.backup.dir` | path | `backups` beside the DB (relative values resolve against the DB's parent, `backup.ResolveDir` semantics, `backup.go:120-146`; ABO: `backup_dir`) | yes (next run) | admin |
+| `core.backup.dir` | path | `backups` beside the DB (relative values resolve against the DB's parent, `backup.ResolveDir` semantics, `backup.go:120-146`; ABO: `backup_dir`) | no: restart-bound; the next boot moves the revocation journal (§5B.3.6, DATA3-5) | admin |
 | `core.backup.schedules.create` | `tasks.ScheduleConfig` | `{enabled: true, every: 24h}` (the durable clock's first-sight seed spreads installs, 05-tasks §5T.3.8) | yes | none |
 | `core.backup.compression` | enum `zstd`/`gzip`/`none` | `zstd` (ABO keeps `gzip` until changed) | yes | none |
 | `core.backup.compression_level` | int | 0 = codec default | yes | none |
-| `core.backup.encryption` | enum `age`/`none` | `none` on an upgraded install, `age` on a fresh one (active only per §5B.3.3) | yes | admin |
+| `core.backup.encryption` | enum `age`/`none` | `none` on an upgraded install and while the app's legacy restore bound holds (ABO during the extraction), `age` otherwise (active only per §5B.3.3) | yes | admin |
 | `core.backup.recipients` | list of age public keys | empty | yes | admin |
 | `core.backup.include_derived` | bool | false | yes | admin |
 | `core.backup.include_recreatable` | bool | false | yes | admin |
@@ -846,10 +906,19 @@ Health ([05-health](05-health.md)) turns `last_verified` older than 2 × the ver
 | `TestRestoreRefusesTooNewArchive` | level, Pebble format, Breaking step, wrong app |
 | `TestRestoreRewritesSidecarsFromStamps` | `.storage-levels` and `.storage-format` match the restored stamps |
 | `TestPostRestoreReappliesRevocations` | key revoked after the archive stays revoked; journal gap → keys need confirmation |
-| `TestRestoreHooksWriteThroughMirror` | hook writes run after the rebuild, through `Mirror.Stage`; after a restart and after a rollback to the Teach build the re-revoked key, a restored legacy session and a restored legacy invite stay refused; a native-only hook write fails the verification rebuild and swaps back (R2-2, SEC2-3, DATA2-4) |
+| `TestRestoreHooksWriteLegacyRows` | hook writes run after the journal re-apply as legacy-row writes through the grantees' adapters; after a restart and after a rollback to the previous release the re-revoked key, a restored legacy session and a restored legacy invite stay refused (R3-1, SEC2-3, DATA2-4) |
+| `TestCrashBetweenSwapAndHooksResumesHooks` | `CrashClone` at P2, P4a, P4b and each P4d step after step g: the next boot is still a restore boot (`inflight.json`), the hooks run once to completion, `CheckReader` refuses until `applied` (DATA3-6) |
+| `TestJournalReapplyVerifiesWithKeyring` / `TestJournalReapplyUsesOverriddenBackupDir` / `TestJournalReapplyWithUISetBackupDir` | with `core.backup.dir` set only in Settings, P4d step 2 reads (or first moves) the journal from that directory and verifies every line with the keyring opened at step 1 (COR3-2, DATA3-5) |
+| `TestRestoreBelowUpgradeFloorRefusedAtStaging` | an archive below the build's upgrade floor is refused before extraction; a failed host-loss restore leaves no fresh store (DATA3-9) |
+| `TestHostLossRestorePreS3Archive` | a pre-S0/pre-S3 archive on a fresh host keeps the install's `install_id`; `KeyIDsReferenced` reports `k0-legacy`; a keyring without it is refused unless accepted (DATA3-12) |
+| `TestRotateDeriveKeepsJournalVerifiable` | after `rotate-derive`, rewrap and `retire_after`, a key that signs a retained journal line is not retired and the chain still verifies (DATA3-13, SEC3-10) |
+| `TestBootReapply_ChainBreakFailsClosed` | a broken chain with the store's head below the journal's end sets every key `needs_confirmation` and bumps every epoch (SEC3-10) |
+| `TestNonJournalingBootRecordsGap` | a boot by a build without the `journal` duty, or a foreign open, makes the next journaling boot append a `gap` line; a later restore across it is uncovered (R3-1) |
+| `TestReplacedStoreRunsHooks` | an older archive copied into place (or restored in place by an older build) is detected at boot: tail re-applied, hooks run once with `KindExternal`, keys need confirmation (DATA3-8) |
+| `TestSwapBackMovesRestoreCheckpoints` | after a failed restore swaps back, no checkpoint the restored store took remains reusable (DATA3-1) |
 | `TestRevocationCommittedAfterCheckpointReapplied` | appended before, committed after the checkpoint: re-applied by seq, whatever the clocks say (DATA2-7) |
 | `TestRevocationJournal_TruncationDetected` | deleted, edited, reordered or truncated lines break coverage → keys need confirmation (SEC2-9) |
-| `TestJournalCoversRollbackRevocation` / `TestOlderBuildRestoreReappliedAtNextBoot` | a revocation on the Teach build after a rollback, and a restore the Teach build performed, are re-applied by the next new-build boot (R2-1, DATA2-5) |
+| `TestOlderBuildRestoreReappliedAtNextBoot` | a restore performed in place by the previous release after a rollback is detected by the next boot, which re-applies the journal tail (DATA2-5, DATA3-8) |
 | `TestRevertBoundaryFromStagedRecord` | a revert and a checkpoint restore re-apply the lines after their recorded boundary (DATA2-25) |
 | `TestRestore_DemotedAdminStaysDemoted` | `role.unassigned` / `role.narrowed` / `role.deleted` re-applied (with 05-rbac, SEC2-10) |
 | `TestRestore_PostArchivePasswordChangeNotReverted` | `password.changed` → reset required; `identity.unlinked` link removed (with 05-authn, SEC2-11) |
@@ -859,7 +928,7 @@ Health ([05-health](05-health.md)) turns `last_verified` older than 2 × the ver
 | `TestPreviousBuildRestoresMainArchive` | the HEAD build's restore code restores a `mediacore-backup/1` main archive and ignores companion and sidecars |
 | `TestPreviousBuildNeverListsCompanion` | HEAD listing and pruning skip `.extra`, `.manifest.json`, `.age` |
 | `TestUpgradeDoesNotSwitchToUnrecoverableArchives` | upgraded install stays plaintext; floor 2 keeps the newest verified plaintext archive |
-| `TestEncryptionInactiveUntilExportAndBound` | keyring export covering the active derivation key, operator recipient, legacy restore bound; a fresh install is past the bound (DATA2-28) |
+| `TestEncryptionInactiveUntilExportAndBound` | keyring export covering the active derivation key, operator recipient, legacy restore bound; a fresh install of an app without a bound is past it (DATA2-28), and an ABO store, fresh or upgraded, stays below `{core, 0}` during the extraction (R3-1) |
 | `TestEncryptedArchiveNeedsIdentity` | the keyring-derived identity and an operator recipient both decrypt; neither present → `ErrDecrypt`; no identity file exists (SIMP2-2) |
 | `TestRewrapBeforeDeriveKeyRetired` | after `rotate-derive`, the verify task rewraps archives under the `verify` key; a retired key's archive verifies as foreign (SEC2-24) |
 | `TestNoKeyMaterialInArchives` | keyring never written; certs only when encrypted |
@@ -867,7 +936,7 @@ Health ([05-health](05-health.md)) turns `last_verified` older than 2 × the ver
 | `TestUnreadableSecretsRefused` | keyring missing a referenced key → refused unless accepted |
 | `TestCatalogueSurvivesRestore` | archives newer than the restored one stay listed and protected |
 | `TestCatalogueDropsOrphans` / `TestJournalNamePerApp` | sidecars of a main archive an older build pruned are removed; two apps in one directory keep separate journals (DATA2-27) |
-| `TestBackupRoutesPermissions` | the §5B.3.8 table: permission, guards and audit per route (SEC2-8) |
+| `TestBackupRoutesPermissions` / `TestBackupDownload_SystemManageOnly403` | the §5B.3.8 table: permission, guards and audit per route; a `core:system.manage` holder without `core:admin` gets 403 on download, and a view-class scope 403 on verify (SEC2-8, SEC3-7, SEC3-12) |
 | `TestManifestMatchesEntries` | tampered entry → `ErrManifest` |
 | `TestVerifyOpenCountsKeys` | read-only open of the checkpoint matches manifest counts |
 | `TestCheckpointCrossDeviceRefused` | no silent copy |
@@ -897,8 +966,8 @@ First run on an upgraded ABO install: existing `audiobooks_*` archives appear as
 (unencrypted, pre-provenance); encryption stays `none` until the operator opts in; the first
 `core.backup.create` writes a `mediacore-backup/1` main archive under the legacy name pattern, which the
 previous build lists and restores; nothing is deleted except by retention, and floor 2 keeps the newest
-verified plaintext archive. When the staged restore ships relative to the first contract (OPS-15) is 09's
-decision; this file only requires that no contract precede it.
+verified plaintext archive. The staged restore ships with ABO's `internal/backup` at S1 (09), long before
+this package; nothing in the extraction deletes data a restore would need (R3-1: there are no contracts).
 
 ## 5B.11 Open items
 
@@ -909,6 +978,11 @@ decision; this file only requires that no contract precede it.
 3. Multi-app in one binary: one archive per install (one DB); `Manifest.App` becomes a list then. A
    merge of two installs' stores is not an archive operation (05-storage open item 6, DATA-30). Not
    built until that mode exists (lowest priority).
+4. Encrypted archives for ABO during the extraction: books' legacy restore bound `{core, 0}` keeps them
+   off until a level step locks out every release without the encrypted-restore code (B3 rule 3). 09
+   decides whether a dedicated, operator-confirmed level step for this should exist before the first
+   cutover; until then the stated cost is plaintext archives (whose secrets are ciphertext in the DB and
+   whose config file is redacted).
 
 ## 5B.12 Objections to 03
 
@@ -942,8 +1016,8 @@ Round-1 findings applied to this file (`docs/plans/platform-core/reviews/spec-ro
 
 Round 2:
 
-- R2-1 / DATA2-5 — the Teach build journals its revocations and restores (§5B.3.6 Writers, "What a pre-core writer writes"); every boot re-applies the journal tail the store lacks; builds older than the Teach build cannot open an adopted store.
-- R2-2 / DATA2-4 / SEC2-3 — restore hooks run at P4d step 5 after the rebuild and the journal re-apply, write mirrored families only through `Mirror.Stage`, delete legacy `sess:`/`invite:` rows, and are checked by a verification rebuild (§5B.3.4 step h, step x).
+- R2-1 / DATA2-5 — the Teach build journals its revocations and restores (§5B.3.6 Writers, "What a pre-core writer writes"); every boot re-applies the journal tail the store lacks; builds older than the Teach build cannot open an adopted store. (Teach-build part superseded in round 3 by R3-1: boots without the journal duty are recorded as gaps.)
+- R2-2 / DATA2-4 / SEC2-3 — restore hooks run at P4d step 5 after the rebuild and the journal re-apply, write mirrored families only through `Mirror.Stage`, delete legacy `sess:`/`invite:` rows, and are checked by a verification rebuild (§5B.3.4 step h, step x). (Mirror and verification-rebuild part superseded in round 3 by R3-1; hooks now run at P4d step 3.)
 - R2-8 — boot steps reference 06 §6.5.1 (P−1, P0a, P2, P4d); §5B.4 rewritten.
 - SIMP2-2 — the archive identity is derived from the keyring (`core.backup/age-identity/v1`); identity file, identity export and `identity_not_exported` removed; activation and floor 2 key on the keyring export; host-loss procedure (B3, B4, §5B.3.3, §5B.3.5).
 - DATA2-7 — manifest `JournalSeq` and `AuditHighWater` read before the checkpoint; `CreatedAt` informational only; `password.changed` kind (SEC2-11's name for DATA2-7's `credential.changed`).
@@ -966,6 +1040,26 @@ Round 2:
 
 Integration pass (round 2, 2026-11-04):
 
-- integration pass (round 2): B3: books' legacy restore bound is `{Owner: core, Level: 5}`; C8 raises the store to 6 (09 v1.2.0).
+- integration pass (round 2): B3: books' legacy restore bound is `{Owner: core, Level: 5}`; C8 raises the store to 6 (09 v1.2.0). (Superseded in round 3 by R3-1: bound `{core, 0}`.)
 - integration pass (round 2): Schedule keys `core.backup.schedules.create` / `core.backup.schedules.verify` (R2-7 form).
 - integration pass (round 2): Rewrap paragraph: 05-config keeps a `verify` derive key while a retained archive records it (`DeriveKeyInUse`).
+
+Round 3:
+
+- R3-1 — one stored format: hook writes and journal re-application are legacy-row writes through the grantees' adapters (no `Mirror.Stage`, no verification rebuild); no Teach-build writer; boots without the journal duty become `gap` lines; legacy restore bound `{core, 0}` (B3, B6, §5B.3.4 h/x, §5B.3.6, Stages paragraph).
+- COR3-2 — journal re-apply at P4d step 2 after the keyring and DB overrides (step 1); derive-key retirement moved to P5 through `secrets.RetireUnused` (§5B.3.3, §5B.3.6, §5B.4).
+- DATA3-1 — swap-back moves the restore boot's checkpoints into `restore/<id>/failed/` or marks them `restore_left` (§5B.3.4 step x).
+- DATA3-5 — `core.backup.dir` restart-bound; journal location record `<state_dir>/backup.location.json`; the journal is moved and verified before re-apply when the directory changes (§5B.3.6, §5B.7).
+- DATA3-6 — `pending.json` renamed to `restore/<id>/inflight.json` at step g and kept until `applied`/`swapped_back`; P0a resumes in-flight journals; hooks idempotent; rollback tooling refuses meanwhile (§5B.3.4).
+- DATA3-7 — Stages paragraph: ABO's swap through `app.Options.PreBootRestore` from S2b, hooks from S4, this package from S8.
+- DATA3-8 — replaced-store detection (head below the journal's end without a P0a restore) runs the hooks with `KindExternal`; unacknowledged `restore` lines resumed (§5B.3.6); the Teach-build part is superseded by R3-1.
+- DATA3-9 — staging step 4 checks every `UpgradeFloor`; host-loss procedure names the install-first route; a failed restore with no previous store leaves no fresh store (§5B.3.3, §5B.3.4).
+- DATA3-12 — `pending.json` carries `install_id` for a marker-less restored store (from the journal header or keyring export on a fresh host); `KeyIDsReferenced` takes the staged reader and reports `k0-legacy` (§5B.3.4 steps 5, 8; §5B.3.7).
+- DATA3-13 — derive keys referenced by retained journal lines stay in the in-use set (§5B.3.3, §5B.3.6 Retention).
+- DATA3-19 — the journal starts with the S4 build; no S0 hotfix writes it (§5B.3.6 Writers).
+- SEC3-3 — superseded by R3-1 (no Teach build or floor to restore past); its residual — an older build's in-place restore after a rollback — is covered by the replaced-store rule.
+- SEC3-7 — download requires `core:admin` + `Guards.Interactive` + `Guards.Owner`; B1 says an archive is credential-equivalent (§5B.3.8).
+- SEC3-10 — journal chain stays verifiable across key retirement; a chain break with the head below the journal's end fails closed (§5B.3.6).
+- SEC3-12 — `POST /backups/{id}/verify` requires `core:system.manage` (§5B.3.8).
+- OPS3-1 — P0a resolves the state directory by 05-config's pre-boot rule with HEAD's fallback next to the database (R3-4) (§5B.3.4).
+- OPS3-13 — step 9 names the ssh probes of both restore files; a probe that cannot run refuses (§5B.3.4).
