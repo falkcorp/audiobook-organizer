@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-realtime.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 9f4f16ae-e4d9-4fd1-a6df-e409e07602ad -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -297,6 +297,7 @@ legacy projections consume them.
 | `core.task.log-appended.v1` | 05-tasks | as above | log line | stream A `operation.log`, B `op.log` |
 | `core.system.status-changed.v1` | 05-health | `core:system.status` (seeded to `editor`/`viewer`, 05-rbac §4.8) | readiness and maintenance tokens only | the native successor of stream A's `system.status`; projection A keeps HEAD's frame from books' ticker topic for the whole window (§4.9, COR4-7) |
 | `books.book.changed.v1` | books | `books:view` | `{kind: created|updated|deleted, id}`, `Key` = book ID, `Coalesce: 250ms` | stream A `books.changed` (`book_changes.go:18-32`) |
+| `books.system.status-ticked.v1` | books (from 09 S6) | `books:view` | HEAD's 5-second payload unchanged, `{books, folders, memory_alloc, goroutines, timestamp}` (`internal/server/server_lifecycle.go:404-441`), published by a books worker that takes over HEAD's ticker | stream A `system.status`, for the whole window: projection A's only source of that frame (§4.9, COR4-7, COR5-9) |
 
 **Successor scope of HEAD's gate (COR2-2).** HEAD withholds run error text and current-item labels
 from callers without `users.manage`, because a label can name a user (`opsv3/events.go:609-616`,
@@ -382,7 +383,7 @@ catalog:
 | Stages | Projection A topics | `system.status` frame |
 |---|---|---|
 | S6–S7 | `core.task.*` (05-tasks, S5), `books.book.changed.v1` (books' `BookChangeCoalescer` rewritten to publish it, 09 S6), `books.system.status-ticked.v1` | from `books.system.status-ticked.v1`: a books catalog topic (`Realtime`, permission `books:view`) published every 5 s by a books worker that takes over HEAD's ticker, payload unchanged `{books, folders, memory_alloc, goroutines, timestamp}` (`internal/server/server_lifecycle.go:404-441`) |
-| S8 onward | the same | unchanged: `core.system.status-changed.v1` (05-health's component registry, S8) is **not** added to projection A, so stream A's `system.status` payload never changes; the topic is on the native stream only |
+| S8 onward | the same | unchanged: `core.system.status-changed.v1` (05-health's component registry, S8) is **not** added to projection A, so stream A's `system.status` payload never changes and S8 adds no legacy frame type and no compat-ledger row; the topic is on the native stream only. This file owns the rule; 05-health and 09 S6 state the same (COR5-9) |
 
 `TestProjectionTopicsExistAtStage` runs P7 with the S6 catalog and with the S8 catalog.
 
@@ -587,3 +588,7 @@ Round 4 (2026-11-04), findings applied to this file:
 
 - COR4-7 — projection A's topics are stage-dependent: `books.system.status-ticked.v1` (books worker, HEAD's 5-second payload) feeds `system.status` from S6; `core.system.status-changed.v1` is never added to projection A; `TestProjectionTopicsExistAtStage` (§4.7, §4.9, §10).
 - COR4-21 — unused `rbac` import dropped from the code block and the package description; blank line inside the §4.7 table removed (§3, §4.7).
+
+Round 5 (2026-11-04), findings applied to this file:
+
+- COR5-9 — COR4-7 residue: `books.system.status-ticked.v1` added to §4.7's table; the S8 row states no legacy frame type and no compat-ledger row is added, and that 05-health and 09 S6 follow this rule (§4.7, §4.9).
