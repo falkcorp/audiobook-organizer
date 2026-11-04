@@ -148,6 +148,19 @@ type Common struct {
 	FormerKinds     []Kind // renames and legacy IDs (v2 aliases.go / FormerIDs)
 }
 
+type Priority uint8
+
+const (
+	PriorityLow Priority = iota + 1
+	PriorityNormal
+	PriorityHigh
+	// PrioritySystem is core-only (kernel refuses it on module kinds). Such
+	// runs dispatch on core.tasks.system_workers reserved workers, so core
+	// plumbing (outbox relay, scheduler window runs, updater) is never starved
+	// by a saturated executor.
+	PrioritySystem
+)
+
 type TaskSpec[P, R any] struct {
 	Common
 	Run func(rc *RC, p P) (R, error)
@@ -197,10 +210,12 @@ func Pipeline[P any](kind Kind, s PipelineSpec[P]) Definition
 Registration is only through `module.Registrar` ([06-app-sdk](06-app-sdk.md)):
 
 ```go
-// in module.Registrar (06): r.Tasks(defs ...tasks.Definition)
+// in module.Registrar (06 §6.4.3): r.Task(defs ...tasks.Definition)
+// additions this spec needs in 06 (open item 7):
 //                           r.Resources(kinds ...string)   // resource kinds this module owns
 //                           r.Lanes(lanes ...tasks.Lane)
-//                           r.Windows(...)                  // core only (5T.3.8)
+//                           r.ChangeSink(s tasks.ChangeSink)
+// core-only (kernel): windows (5T.3.8)
 ```
 
 The kernel rejects (boot fails before listeners open, `startup` class Fatal): a kind whose module
@@ -492,11 +507,13 @@ func Uninterruptible(reason string, budget time.Duration) CancelContract // list
 ### 5T.3.7 Permissions, preview/dry-run, approval, stand-down
 
 ```go
+// Each field is an rbac.Requirement (05-rbac §3.1; zero value invalid there,
+// so "zero" below means "field omitted, default applied by tasks").
 type Permissions struct {
-	Start   rbac.Permission // required; namespace = def module or "core"
-	Cancel  rbac.Permission // zero = Start. The run's own actor may always cancel it.
-	Approve rbac.Permission // required iff Approval != nil (always for Fixer)
-	View    rbac.Permission // zero = "core:tasks.view"
+	Start   rbac.Requirement // required; own-namespace or core scopes only (05-rbac §4 R3 rule)
+	Cancel  rbac.Requirement // omitted = Start. The run's own actor may always cancel it.
+	Approve rbac.Requirement // required iff Approval != nil (always for Fixer)
+	View    rbac.Requirement // omitted = rbac.Need("core:tasks.view")
 }
 
 type Approval struct {
@@ -622,9 +639,9 @@ type LaneLease interface {
 ### 5T.3.10 Executor, starter and HTTP API
 
 ```go
-// Starter is what modules get in module.Deps to start and observe runs by Kind
+// Client is what modules get as module.Deps.Tasks (06 §6.4.4) to start and observe runs by Kind
 // (cross-module by Kind string, never by importing the other module, R3).
-type Starter interface {
+type Client interface {
 	Start(ctx context.Context, kind Kind, req StartRequest) (RunRef, error)
 	Get(ctx context.Context, id RunID) (RunView, error)
 	Runs(ctx context.Context, q RunQuery) iter.Seq2[RunView, error]
@@ -641,9 +658,9 @@ type StartRequest struct {
 	IdempotencyKey string // dedupe window core.tasks.idempotency_ttl; the outbox relay always sets it
 }
 
-// Executor is kernel-only (core/kernel holds it; apps see Starter).
+// Executor is kernel-only (core/kernel holds it; apps see Client).
 type Executor interface {
-	Starter
+	Client
 	Cancel(ctx context.Context, id RunID, by Actor) error
 	Approve(ctx context.Context, id RunID, a ApproveRequest) error
 	Decide(ctx context.Context, id RunID, d Decision, by Actor) error // Resume | Finish | Drop
@@ -678,8 +695,8 @@ Alias handlers translate legacy def IDs through `FormerKinds`.
 1. **Register** (inside `app.New`): kernel collects module definitions, validates (5T.3.1), upserts
    def snapshots `c/tasks/def/<kind>`, rejects an op-ID ledger entry that resolves to nothing
    (current `opCatalogGate`, `internal/startup/steps.go:110-111`).
-2. **Start** (`App.Run`): restore pause marker → adopt legacy rows on first boot of the new
-   release (5T.6) → resume sweep (5T.3.6) → debounce reload → dispatcher (100 ms tick + wake),
+2. **Start** (`App.Run`): restore pause marker → copy the non-terminal legacy set on first boot
+   of the new release (5T.6) → resume sweep (5T.3.6) → debounce reload → dispatcher (100 ms tick + wake),
    watchdog (30 s), N workers (`core.tasks.workers`, default 8), scheduler goroutine. Dispatch waits
    for each def's `Ready` signals from the health registry ([05-health](05-health.md)); waiting
    runs hold no worker, key or clock (current warm-up rule, `pkg/ops/effects.go:44-57`).
@@ -715,7 +732,7 @@ Alias handlers translate legacy def IDs through `FormerKinds`.
 | Schedule CAS conflict | open: another poll won; no fire | exactly-once |
 | Event publish failure after commit | open: run state is durable; UI may lag | bus is notify-only (05-events) |
 | Shutdown drain timeout | open: remaining runs stamped interrupted; fences revoked | bounded stop |
-| Legacy adoption failure on first boot | closed: boot halts before listeners; pre-adoption backup restorable | G2/G5 |
+| Active-set copy fails, or the set exceeds the atomic limits | closed: boot halts before listeners; pre-copy backup restorable | G2/G5; a split copy could run one run in two executors |
 | Lane capacity 0 with `NoLocalFallback` | waits (cancellable); never runs in-process | LaneMac rule |
 
 ## 5T.6 Persistence keyspace `c/tasks/`
@@ -740,28 +757,35 @@ All keys inside the core `tasks` keyspace ([05-storage](05-storage.md)); JSON va
 Writers: a single staging function per family with an AST ratchet, as today
 (`TestOpsV2RowWritesGoThroughStageOpRow`, `raw/08` §7) — `core/internal/executor/store_ratchet_test.go`.
 
-**Legacy records (coordinated with 05-storage's adoption rule: small generic sets are adopted by one
-atomic, backed-up migration; large families are read in place).**
+**Legacy records.** Coordinated with [05-storage](05-storage.md) S5 and §5S.9.1: the 42 ops
+families (`operation:`, `operationlog:`, `opstate:`, `opsummary:`, `op:`+3, `opv2:`+14, `opv3:`+19) are
+claimed by `core/tasks` and **read in place**; new rows go only to `c/tasks/`. This spec makes two
+bounded exceptions to "never by copy", each justified below: the non-terminal run set (resume must
+continue under one executor) and the `Requires` completion stamps (standing state that never ages
+out). Both fit 05-storage's mechanisms (atomic adoption within `core.storage.adopt.max_atomic_*`, and a
+resumable `DataMigration`, §5S.3.6).
 
 | Family | Size class | Handling |
 |---|---|---|
-| Non-terminal runs (opv2 active set `opv2:act:`, `interrupted_*`, `waiting_deps`, v3 `awaiting_decision`) with their `opv2:state:`/`opv3:ckpt:`/`ledger:`/`snap:`/`rowmark:`/`opv2:row:` | small (bounded by the active set) | **Adopted** by core migration `core.tasks.adopt-legacy` on first boot: copied into `c/tasks/` keeping the RunID and kind via `FormerKinds`; in the same batch the original v2 row is set to `interrupted_dropped` with field `migrated_to` (an unknown JSON field the previous binary ignores), so a rollback to the previous release never resumes a run the new release already owns (fail toward not double-applying). Pre-migration backup is mandatory ([05-backup](05-backup.md)). |
+| Non-terminal runs (opv2 active set `opv2:act:`, `interrupted_*`, `waiting_deps`, v3 `awaiting_decision`) with their `opv2:state:`/`opv3:ckpt:`/`ledger:`/`snap:`/`rowmark:`/`opv2:row:` | small: bounded by the active set (tens), well under the atomic-adoption limits | **Copied** (exception 1) by core migration `core.tasks.adopt-active` on first boot, in one batch: copied into `c/tasks/` keeping the RunID and kind via `FormerKinds`; in the same batch the original v2 row is set to `interrupted_dropped` with field `migrated_to` (an unknown JSON field the previous binary ignores), so a rollback to the previous release never resumes a run the new release already owns (fail toward not double-applying). If the set exceeds the atomic limits the migration fails boot rather than splitting (a split would let one run exist in two executors). Pre-migration backup is mandatory ([05-backup](05-backup.md)). |
 | Terminal history (`opv2:op/log/err/done/open`, `opv3:run/prog/evt/log/item/ix:*`) | large | **Read in place**, read-only, by `core/internal/executor/legacyhist` through the v3 projection (every v2 write since 05-PR4 staged it, `pebble_store_ops_v3.go:28-45`), falling back to `opv2:op:` for rows without a projection (UNKNOWN whether pre-05-PR4 rows were back-projected). Merged into `GET /runs` results with `legacy: true`. Never written. Pruned by `core.tasks.legacy-prune` after the compat window. |
 | `opv2:def:`, `opv3:def:`, `opv3:sched:` | small | adopted into `c/tasks/def/`, `c/tasks/sched/` (clock continuity: `last_due` carried over, as `seedFromLegacyClock` does today, `v3_schedule.go:329`) |
 | Interval clocks in settings (`scheduled_task_last_tick.*`, `interval_clock.go:46`), full-sweep stamp, maintenance-window last run | small | adopted into `c/tasks/sched/` by task name → kind map (`taskV2DefIDs`, `internal/scheduler/maintenance.go:154`) |
-| `op:batch:`, `op:completion:`, `op:deprev:` | medium | adopted (subjects `book`/`book_file` become `books/books`, `books/book_files`) |
+| `op:batch:` (debounce buckets) | small (pending subjects only) | copied with the active set (same batch, same justification) |
+| `op:completion:`, `op:deprev:` (`Requires` stamps, `pebble_store_ops_v2.go:1188`) | potentially library-scale (subjects × kinds) | **Exception 2**: read-through — a miss in `c/tasks/req/` falls back to the legacy key (subjects `book`/`book_file` read as `books/books`, `books/book_files`); new stamps go to `c/tasks/req/`; a resumable `DataMigration` `core.tasks.req-migrate` (05-storage §5S.3.6, `Shards` required) moves the rest and then the fallback is removed. Copy is justified because these stamps never age out, so read-in-place would be permanent. |
 | v1 `operation:`, `operationlog:`, `opsummary:`, `op_result:` | legacy | read in place by `legacyhist` (v1 reader) or dropped after the window; never written |
-| v1 `opstate:<op>:params` | live chunk journal of `backfill-file-hashes` (`raw/05` row `opstate:`) | claimed by `books` as a legacy prefix until that job is migrated (T2), then the job keeps its chunk journal as a checkpoint |
+| v1 `opstate:<op>:params` | live chunk journal of `backfill-file-hashes` (`raw/05` row `opstate:`) | claimed by `core/tasks` (05-storage §5S.9.1); until T2 migrates that job to a checkpoint, `core/tasks` exposes one narrow legacy helper (`legacy.OpStateParams(run)`) that the job's adapter uses, so the write stays inside the claim owner (R8) |
 | `opchange:` | books' change journal | claimed by `books` (not tasks) |
 
-The opv2↔opv3 dual-write mirror (owner decision D25, until "05-PR16") ends at adoption: after
-adoption, core writes only `c/tasks/`. Rollback compatibility (G5) is preserved by the
+The opv2↔opv3 dual-write mirror (owner decision D25, until "05-PR16") ends at the copy of the
+active set: from then on, core writes only `c/tasks/`. Rollback compatibility (G5) is preserved by the
 copy-and-mark rule above plus the read-only treatment of history; the previous release sees every
-run it knew, in a terminal or dropped state.
+run it knew, in a terminal or dropped state. `Requires` stamps and runs created after the upgrade are
+invisible to the previous release; at worst it re-runs a prerequisite, which is idempotent by contract.
 
 ## 5T.7 Concurrency contract
 
-- `Executor`, `Starter`, `RC`, `ItemRC`, `Writer` are goroutine-safe; `RC` may be shared with goroutines
+- `Executor`, `Client`, `RC`, `ItemRC`, `Writer` are goroutine-safe; `RC` may be shared with goroutines
   the run starts **only** if they end before the run returns (a goroutine left behind writes
   nothing: its writes are refused, `ErrItemReturned`/`ErrFenced`).
 - Bounded everything: N executor workers; per-module `max_concurrent`; per-run `Parallelism`;
@@ -789,7 +813,7 @@ run it knew, in a terminal or dropped state.
 | `internal/scheduler` (interval/daily/cron/window/full sweep/v3 loop) | `core/internal/scheduler`; the 38 `TaskDefinition` bodies → `Schedule` declarations in `books` |
 | `internal/repairs` (Fixer framework) | `tasks.Fixer`; the 24 fixers → `books` Fixer defs |
 | `internal/maintenance` (`MaintenanceJob`, registry) | deleted after T2; jobs → `books` Task defs |
-| `internal/opscatalog`, `pkg/plugin/sdk`, `addOpRegistrar`, `serviceregistry` op wiring | `module.Registrar.Tasks` |
+| `internal/opscatalog`, `pkg/plugin/sdk`, `addOpRegistrar`, `serviceregistry` op wiring | `module.Registrar.Task` |
 | `internal/opsmetrics` | executor metrics (5T.10) |
 | `internal/lifecycle` | `core/lifecycle` (Objections to 03) |
 | `internal/server/handlers/opsv3`, v1 operations handlers | `core/internal/tasksapi` |
@@ -805,7 +829,7 @@ check that no stored row strands.
 | Batch | Content | Count | Gate to finish |
 |---|---|---|---|
 | T0 | `core/tasks` + executor + scheduler land; ABO adapter `internal/opsbridge` wraps every v2 `OperationDef` as a core Task (`Run(ctx, params, Reporter)` called with a `Reporter` implemented over `RC`; legacy `registry.RunItems` re-implemented over `tasks.RunItems` with `Parallelism` derived from its non-zero `Concurrency`, or `Sequential(marker reason)`); `/api/v3/ops` aliases | all 233 defs run on core | op-ID ledger green; resume/cancel/shutdown suites green on core |
-| T1 | Adoption migration `core.tasks.adopt-legacy` + `legacyhist` | — | G5 rollback test (5T.9) |
+| T1 | `core.tasks.adopt-active` + `core.tasks.req-migrate` + `legacyhist` | — | G5 rollback test (5T.9) |
 | T2 | 34 `MaintenanceJob`s → native `books.maintenance.*` Tasks (mechanical: `Run(ctx, JobStore, ProgressReporter, dryRun)` `internal/maintenance/job.go:498` → `TaskSpec.Run(rc, p)`; `Policy()` → `Common`) | 34 | `internal/maintenance` deleted |
 | T3 | 24 repairs fixers → `tasks.Fixer`; `repairs.plan/apply` removed | 24 (+2 defs) | Fixer conformance suite |
 | T4 | Generic ops → `core.*` (activity-log cleanup/compaction family, backups prune, db optimize/census, temp/trash/reports cleanup, throttle reset, tombstone cleanup, retention-and-hygiene, metrics TTL sweep): the `generic` class rows of `raw/06` §6, each re-checked in [04-package-mapping](04-package-mapping.md) (some, e.g. `opchange-book-index-rebuild`, are book-bound despite the class) | ≤ 24 | owner per kind recorded in 04 |
@@ -836,7 +860,8 @@ parallel PRs never touch the same file (CLAUDE.md "Parallel Subagent Coordinatio
 | `TestApprove_RequiresVerifiedMethodAndPermission`, `TestFixer_PlanRefAgeAndRowsOnly` | approval |
 | `TestSchedule_EnqueueAndClockOneBatch` (crash injection between), `TestSchedule_NoBootStampede`, `TestSchedule_CoalesceMissed`, `TestSchedule_DSTSpringForwardFallBack` (synctest, fake zone) | schedules |
 | `TestShutdown_DrainBoundedAndStampsInterrupted`, `TestShutdown_UninterruptibleExtendsOnce` | shutdown |
-| `TestAdoptLegacy_CopyAndMark_PreviousBinaryDoesNotResume` (fixture DB from HEAD; run old reader over migrated DB) | G5 |
+| `TestAdoptActive_CopyAndMark_PreviousBinaryDoesNotResume` (fixture DB from HEAD; run the old reader over the migrated DB) | G5 |
+| `TestReqStamps_ReadThroughThenDataMigration` | exception 2 |
 | `TestLegacyHistory_ReadInPlaceUndecodableHidden` | history |
 | `TestNoGlobals_Tasks` (R5 AST), `archtest.ResumeContinueCheckpoints`, `archtest.RunItemsParallelism` self-tests | guards |
 | `taskstest.Conformance(t, defs...)` — modules run it over their own defs (from `pkg/ops/opstest/conformance.go`) | per-module |
@@ -846,6 +871,7 @@ parallel PRs never touch the same file (CLAUDE.md "Parallel Subagent Coordinatio
 | Key | Type | Default | Hot reload |
 |---|---|---|---|
 | `core.tasks.workers` | int | 8 | no (restart) |
+| `core.tasks.system_workers` | int | 2 (reserved for `PrioritySystem`) | no |
 | `core.tasks.cpu_slots` | int | `NumCPU` | yes (resizes semaphore for new acquisitions) |
 | `core.tasks.shutdown_drain` | duration | 10s | yes |
 | `core.tasks.shutdown_extend_max` | duration | 60s | yes |
@@ -902,6 +928,16 @@ for one minor release for dashboard continuity, then removed (09).
    `legacyhist` fallback covers both cases, but its cost depends on the answer.
 6. `Resource` vs the core `EntityRef{Module, Kind, ID}` (02 decision 6): if 06 places `EntityRef`
    in a layer ≤ 3, `tasks.Resource` becomes an alias of it.
+7. [06-app-sdk](06-app-sdk.md) §6.4.3 must add `Registrar.Resources`, `Registrar.Lanes` and
+   `Registrar.ChangeSink` (used by 5T.3.4, 5T.3.9, 5T.3.5).
+8. 06 §6.4.3 also lists `Registrar.Schedule(s ...tasks.Schedule)`, a second place to declare a timer.
+   This spec keeps `Common.Schedule` as the **only** timer declaration (v3's rule,
+   `pkg/ops/definition.go:94`, and the lesson of the dead v2 cron strings); `Registrar.Schedule`
+   should be dropped from 06, or defined as sugar that sets `Common.Schedule` on the module's own
+   definition and fails registration if the definition already has one.
+9. [05-rbac](05-rbac.md) §6.1 must add `core:tasks.manage` (pause, cancel others' runs, edit schedules);
+   every other scope used here (`core:tasks.view`, `core:system.view`, `core:system.manage`,
+   `core:admin`) is already in its catalog.
 
 ## Objections to 03
 
