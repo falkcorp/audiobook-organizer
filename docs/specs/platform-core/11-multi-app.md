@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/11-multi-app.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: 74ed9015-8ae0-4b4b-8049-4c09cfbba343 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -52,7 +52,8 @@ nothing in core is process-global) nor multi-tenancy (D7: no tenant IDs).
 
 * **No suite `main` and no combined SPA build.** Each app ships its own `main` and its own web
   workspace; nothing builds one bundle containing several apps' module UI packages.
-* **One app identity per process.** `app.Options` has a single `AppID`/`MetricPrefix`/`MetricNamespace`/`EnvPrefix`/`StateDir`/`DisplayName`/`Version`/`Updater`;
+* **One app identity per process.** `app.Options` has a single `AppID`/`MetricPrefix`/`MetricNamespace`/`ServiceName`/`EnvPrefix`/`StateDir`/`DisplayName`/`Version`/`Updater`
+  (`ServiceName` is the OTel resource's `service.name`, 06 §6.4.5, MOD10-11);
   a suite would need its own identity, theme and update channel.
 * **No per-module fairness in the task executor.** One module's CPU-bound library-scale task can use
   every worker; per-module concurrency quotas are not designed (05-tasks has global and per-kind
@@ -140,3 +141,7 @@ Advisor (2026-11-04), resolutions applied to this file:
 
 - A-2 / ADV-S1 — §11.2 storage and permission rows, §11.3 new hazard, §11.5 row 14: books' legacy stores keep HEAD's representation, so roles and keys hold legacy atoms only and a suite that ships `books` follows books' identity cutover.
 - A-5 / ADV-S4 — §11.2 metric row, §11.3 metric hazard, §11.4, §11.5 row 12: core series under `app.Options.MetricNamespace`; no metric aliases, a suite moves its dashboards once.
+
+Round 10 (2026-11-04), findings applied to this file:
+
+- MOD10-11 (consistency) — §11.4 "One app identity per process": `app.Options.ServiceName` (06 §6.4.5) is part of the one identity.
