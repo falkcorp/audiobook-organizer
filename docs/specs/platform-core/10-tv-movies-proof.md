@@ -1107,6 +1107,13 @@ that is not planned and needs no change to `acquire` (§10.6).
    here only so cross-module queue operations have one entry point.
 4. Release-profile v5 air-date fields are TV-only; confirm no movie equivalent is wanted.
 5. Metadata provider terms (§10.3) must be re-verified; flagged for 14.
+6. Identifiers borrowed from sibling contracts — `library.RootID`, `RelPath`, `Location`, `Entry`,
+   `MediaInfo`, `PathMap`, `Transfer`; `indexer.Release`, `Query`, `Caps`, `ID`; `download.Protocol`,
+   `ClientID`, `Item`, `GrabRequest`; `metadata.Provider[Q, R]` — were written in parallel with
+   [05-library](05-library.md), [05-indexer](05-indexer.md), [05-download](05-download.md) and
+   [05-metadata](05-metadata.md). Where those specs chose different names, theirs win and this file is
+   renamed to match; the *requirements* stated here (G2, G10, G12, G13 and the fields `acquire` reads)
+   are what must survive.
 
 ## 10.6 Why `acquire` is media-neutral (and not a TV engine)
 
@@ -1153,7 +1160,7 @@ any `shared/videoquality`-style package (vocabularies are inputs, not imports).
 
 **O1 — `entity.Ref` needs a home below every consumer.** 02 commits to a polymorphic
 `EntityRef{Module, Kind, ID}` (02 §2.2 row 6) and to module-namespaced resource identities (02 §2.4 G8,
-`tasks.Resource`), but 03 §3.3 names no package for it. It cannot live in `module` (layer 6 of R4 —
+`tasks.Resource`), but 03 §3.3 names no package for it. It cannot live in `module` (fifth of R4's seven layers —
 `acquire`, `tasks`, `audit` and `events` are lower and must use it) or in `acquire` (then `tasks` and
 `audit` would import the acquisition engine). Proposal: add a public leaf package **`entity`** in R4's
 lowest layer (with `log`, `metrics`):
