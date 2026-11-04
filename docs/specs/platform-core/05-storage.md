@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-storage.md -->
-<!-- version: 1.5.1 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 940ce8be-6f86-4450-b43a-77bf78827b12 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -35,8 +35,9 @@ implementation** of the same interface on the owning module's manifest, `module.
 (§5S.3.11). Native-only
 data the legacy format has no place for is stored by that legacy implementation in the app's
 **extension family** (`m/<module>/ext/…`), which no older build reads — never additively in a legacy
-row — and an extension record that annotates a legacy row carries that row's hash, so a change an older
-build made while rolled back suspends it instead of silently widening it on roll-forward (§5S.3.11).
+row — and an extension record that annotates a legacy row carries the hash of that row's guarded,
+security-relevant fields, so a change an older build made to them while rolled back suspends it instead of
+silently widening it on roll-forward, and a restriction the older build made stays in force (§5S.3.11, R5-6).
 No core subsystem holds a handle on a books family during the extraction: there are no storage grants,
 no adoption copy, no mirror, no rebuild at boot, no claim hand-over, no claim-mode level step and no
 floor build, so a rollback is a binary swap to the previous release; its stated costs (one re-login,
@@ -51,13 +52,13 @@ Decision IDs carry a `D-S` prefix so they never read as 09's stages S0–S10 (CO
 | # | Decision | Section |
 |---|---|---|
 | D-S1 | **One system-of-record Pebble DB per install**, opened only by the kernel at the absolute path `core.storage.path` (never under the state directory by construction). Holders get a `storage.Keyspace` (`m/<module>/`, `c/<subsystem>/`) and, for data written before core existed, a `LegacyRange` over their own claims. Holding the handle *is* the permission — for reads as well as writes. During the extraction no core subsystem holds a `LegacyRange`; only a deferred cutover introduces a grant (§5S.3.13). | §5S.3.1, §5S.3.4, §5S.3.11, §5S.4 |
-| D-S2 | Access outside the handle's keyspace or claims is **refused** (`ErrOutsideKeyspace`), never logged-and-allowed — except a one-release shadow mode for the books module's legacy ranges only. A claim marked `CheckedWrites` also refuses a blind `Set` (`ErrBlindWrite`): every writer of such a key, whichever package of the owner it is, commits with an `Expect` on it (DATA4-4). | §5S.3.4, §5S.9.4 |
-| D-S3 | ABO's 258 key families are **books' legacy claims for the whole extraction**, in one normative table (§5S.9.1) that is the same at every stage: no claim changes owner or mode on a store (R3-1). Claims are prefix or exact key; same-owner nesting is legal and the longest match selects the claim; cross-owner nesting needs an explicit `Except`; any other overlap fails boot. | §5S.3.4, §5S.9.1 |
-| D-S4 | **App-supplied legacy stores** (R4-1, SIMP4-2): each core service that persists state declares a store interface in its SDK package (frozen by the API-stability gate) and ships a native implementation over `c/<subsystem>/`; the module that owns an app's pre-core families passes a legacy implementation on `module.Manifest.LegacyStores`, which the kernel builds at 06 P4c from that module's own handles (`storage.LegacyHandles`). The claim ledger records per subsystem whether it is served `legacy` or `native`, and a build that would switch fails boot (`ErrLegacyStoreMissing`). There are no storage grants during the extraction. | §5S.3.11 |
-| D-S5 | **One stored format per family.** A legacy implementation writes correct legacy rows (`codec.LegacyJSON`) that every build able to open the store reads, and never a row that gives an older build more than the native value (an API key it writes always has explicit, non-empty legacy scopes, `internal/server/middleware/auth.go:405-408`). Native-only data is never additive in a legacy row (SEC4-3): it lives in the app's extension family, as standalone records (hashed sessions, native one-time tokens: a rollback costs one re-login) or as **extension records** keyed by a legacy row and carrying its hash, which are suspended or reset when an older build changed that row (`storage.Extension`, DATA4-8, SIMP4-9). | §5S.3.11, §5S.9.2 |
+| D-S2 | Access outside the handle's keyspace or claims is **refused** (`ErrOutsideKeyspace`), never logged-and-allowed — except a one-release shadow mode for the books module's legacy ranges only. A claim marked `CheckedWrites` also refuses a blind `Set` (`ErrBlindWrite`): every writer of such a key, whichever package of the owner it is, commits with an `Expect` on it (DATA4-4). A row sets `CheckedWrites` only from the stage that converts its last blind writer (R5-3, COR5-1). | §5S.3.4, §5S.9.4 |
+| D-S3 | ABO's 258 key families are **books' legacy claims for the whole extraction**, in one normative table (§5S.9.1) whose families, owners, modes and `Serialized` flags are the same at every stage: no claim changes owner or mode on a store (R3-1); only a row's `CheckedWrites` flag names a start stage (R5-3). Claims are prefix or exact key; same-owner nesting is legal and the longest match selects the claim; cross-owner nesting needs an explicit `Except`; any other overlap fails boot. | §5S.3.4, §5S.9.1 |
+| D-S4 | **App-supplied legacy stores** (R4-1, SIMP4-2): each core service that persists state declares a store interface in its SDK package (frozen by the API-stability gate) and ships a native implementation over `c/<subsystem>/`; the module that owns an app's pre-core families passes a legacy implementation on `module.Manifest.LegacyStores`, which the kernel builds at 06 P4c from that module's own handles (`storage.LegacyHandles`). The claim ledger records per subsystem whether it is served `legacy` or `native` (`legacy+native` for a routed store, whose native implementation always serves and whose legacy one additionally serves the records it covers, SIMP5-1), and a build that would switch fails boot (`ErrLegacyStoreMissing`). There are no storage grants during the extraction. | §5S.3.11 |
+| D-S5 | **One stored format per family.** A legacy implementation writes correct legacy rows (`codec.LegacyJSON`) that every build able to open the store reads, and never a row that gives an older build more than the native value (an API key it writes always has explicit, non-empty legacy scopes, `internal/server/middleware/auth.go:405-408`; a key with no legacy-equivalent scope gets one that grants nothing on an older build, never an empty list, R5-6). Native-only data is never additive in a legacy row (SEC4-3): it lives in the app's extension family, as standalone records (hashed sessions, native one-time tokens: a rollback costs one re-login) or as **extension records** keyed by a legacy row and carrying the hash of its guarded, security-relevant fields (never per-request usage fields), which are suspended or reset when an older build changed those fields (`storage.Extension`, DATA4-8, SIMP4-9, R5-6). | §5S.3.11, §5S.9.2 |
 | D-S6 | Nothing is copied. Ops runs, queues and pages, the `Requires` stamps, AI job rows, provider holds, the system log rows and the search dirty set are read and written (or read and retention-deleted) **in place** by books' legacy implementations of the core store interfaces; the activity feed and the live v1 ops families keep their books writers. | §5S.9.1–§5S.9.2 |
 | D-S7 | Versioned migrations are **per keyspace, forward-only, one atomic batch per step** — except books' HEAD-style legacy steps 1..`LegacyCap`, which keep their idempotent, non-atomic form and run **first**, on books' own claims (R2-4, DATA4-19). All pending steps of all owners run in **one DAG**. **One checkpoint per upgrade attempt**, taken before anything is written, reused only by later boots of the same uncompleted attempt on the same store (install marker + store generation; DATA3-1), beside the DB, restorable offline. Code a pending step needs may be deleted only behind a declared **upgrade floor** (`ErrUpgradeFloor`), which the store's **applied-steps sidecar** `<db>.storage-applied` lets the updater and `make rollback` check before a binary is applied (02 N14). | §5S.3.5, §5S.3.7, §5S.3.12, §5S.4 |
-| D-S8 | Anything too large for one batch is a **data migration** (`storage/datamigrate`): a `tasks.Parallelism`, a persisted shard plan (exact resume), a compatibility class, and a dry run that is the real runner on a read-only copy of the store. An `Online` migration rewrites only `Serialized` ranges with `SetIfUnchanged`/`SetIfAbsent`, so no writer's update is lost, task or not; a module's runs as the module task kind `<module>.datamigrate.<name>`, whose `Writes` are attribution, not a dispatch lock (COR4-5, COR4-6). | §5S.3.6 |
+| D-S8 | Anything too large for one batch is a **data migration** (`storage/datamigrate`): a `tasks.Parallelism`, a persisted shard plan (exact resume), a compatibility class, and a dry run that is the real runner on a read-only copy of the store. During the extraction every data migration is `BootBlocking` (in process, a node of the boot DAG). The `Online` mode — a background rewrite of `Serialized` ranges with precondition writes, run as the module kind `<module>.datamigrate.<name>` (COR4-5, COR4-6) — has no S0–S10 consumer, so it is a deferred-build member kept at proof depth (§5S.3.14, SIMP5-7). | §5S.3.6 |
 | D-S9 | **One store guard** (SIMP-18): a per-owner minimum-reader **level** — stamp, fsynced sidecar, fast-exit flag, one reader-check function used by `make rollback` and the updater — raised (always as `max`) only by level steps: a physical re-encoding of an owner's data (books' storage-efficiency release B) or a cutover (§5S.3.13). During the extraction nothing raises a core level, so the guard admits every earlier release. ABO's storage-format names are kept as a projection for builds older than the guard. A level step never runs on the first boot of an auto-applied release (`RequiresSelfServed`, OPS2-2). | §5S.3.5, §5S.3.7 |
 | D-S10 | Concurrency: **preconditions evaluated at commit** under commit-time stripe locks for `Serialized` ranges (legacy claims and core or module keyspaces alike); **multi-owner atomic batches** by participant binding (each owner binds only the handles it holds; participant APIs take `*storage.Batch`). Storage never holds a lock, lease or reservation for an uncommitted batch, so a leaked batch stalls nothing. | §5S.3.2, §5S.6 |
 | D-S11 | Full-text search is a core contract (`storage/index`, which imports `storage`, never the reverse) with a durable dirty set in the entity's batch. Derived indexes record a **storage generation** and are accepted only when it matches and every boot since maintained it; their hooks and rebuild task are registrar data, and the loader runs at Run start step (3a), never inside `app.New` (COR3-7). hnsw, chromem-go and go-memdb stay **app-level** (books). | §5S.3.8, §5S.3.9 |
@@ -477,7 +478,9 @@ type Claim struct {
 	// (ErrBlindWrite). For rows that several of the owner's writers
 	// read-modify-write, so no package of the owner can overwrite another's
 	// update blindly (DATA4-4); storage cannot tell two packages of one owner
-	// apart, so the check is on the write, not on the writer.
+	// apart, so the check is on the write, not on the writer. A build sets it
+	// on a row only from the stage that converts the row's last blind writer
+	// (§5S.9.1 names the stage; R5-3, COR5-1).
 	CheckedWrites bool
 	TakesOver     string    // optional "<former-owner>": explicit takeover of an orphaned claim (rule 5)
 	Description   string
@@ -520,9 +523,9 @@ const (
 	Breaking // a build that does not know the step must refuse the store: requires RaisesLevel (§5S.3.7)
 )
 
-// ReadAdapter decodes rows of one family written in an older shape into the
-// current encoding, for an Online data migration's transition and for
-// read-in-place legacy families (COR-22).
+// ReadAdapter (deferred-build member with the Online mode, §5S.3.14; SIMP5-7)
+// decodes rows of one family written in an older shape into the current
+// encoding during an Online data migration's transition (COR-22).
 type ReadAdapter struct {
 	Family string // legacy family prefix, or a relative sub-prefix of the owner's keyspace
 	Read   func(ctx context.Context, key, raw []byte) ([]byte, error)
@@ -540,7 +543,7 @@ type Spec struct {
 	Migrations        []Migration            // versioned, §5S.3.5
 	Legacy            []LegacyMigration      // books only, versions 1..LegacyCap, §5S.3.5
 	Derived           []DerivedIndex         // declarative part only; hooks and rebuild task via Registrar.DerivedIndex (§5S.3.9)
-	ReadAdapters      []ReadAdapter
+	ReadAdapters      []ReadAdapter          // deferred-build member with the Online mode (§5S.3.14)
 	LegacyGuard       *LegacyGuardProjection // books only, §5S.3.7
 	UpgradeFloor      *UpgradeFloor          // §5S.3.5 (R2-4)
 }
@@ -563,11 +566,13 @@ no claim-mode level step: a core service reaches a books family only through the
 legacy implementation books supplies (§5S.3.11), and a family moves to a native keyspace only by a
 cutover (§5S.3.13), outside the extraction. This supersedes round 2's per-store claim resolution (R2-3,
 DATA2-1) and the hand-over rule of the claim ledger that DATA3-2 attacked. `TestS2bBooksWritesEveryFamily`
-boots the S2b claim set with books writing every family in shadow and strict mode and expects zero
-violations. Which package of books writes a family is books' concern, not storage's: where a family must
+boots the S2b claim set (each row's flags as of S2b) with books writing every family — a settings save and
+a scan's import-root statistics write included (COR5-1) — in shadow and strict mode and expects zero
+violations; in shadow mode an `ErrBlindWrite` is a recorded violation, like an out-of-claim access. Which package of books writes a family is books' concern, not storage's: where a family must
 have one runtime writer (the ops families, 05-tasks §5T.6 rule 5), an ABO archtest pins that only books'
 legacy-store package writes it (`TestLegacyFamiliesWrittenOnlyByLegacyStores`, 09 §9.2.1, §5S.9.1), and where several books packages
-read-modify-write one row the claim is `CheckedWrites` (SIMP4-2 cost b, DATA4-4, DATA4-5).
+read-modify-write one row the claim is `CheckedWrites` from the stage that converts its last blind writer
+(SIMP4-2 cost b, DATA4-4, DATA4-5, R5-3).
 
 **Books' legacy steps (R2-4, DATA2-2, DATA4-19).** Books' HEAD-style steps 1..`LegacyCap` run on books'
 own claims through books' own `LegacyRange` (06 P4b). `LegacyCap` is the highest HEAD-style step at the
@@ -650,6 +655,12 @@ type Migration struct {
 	Compat         MigrationCompat // zero rejected at registration
 	RaisesLevel    int             // required when Compat == Breaking: the owner's new level (§5S.3.7)
 	After          []StepRef       // must run after these steps (DATA-9)
+	// Seed marks a step that creates an owner's initial rows (hello's names,
+	// a TV or Movies module's default profiles). Allowed only with Additive.
+	// A fresh install does not record it applied but runs it (§5S.4 step 6,
+	// COR5-8); on an upgraded store it runs like any step, so it must leave
+	// rows that already exist unchanged.
+	Seed           bool
 	Up             func(ctx context.Context, tx *MigrationTx) error
 }
 
@@ -713,6 +724,7 @@ Runner rules:
 | Order (DATA-9, R2-4, COR3-14) | One **DAG** over every pending step of every enabled owner: versioned steps, books legacy steps and `BootBlocking` data migrations (§5S.3.6). Edges: an owner's steps by `Version`; every `After`; data-migration `After`; and an implicit edge from every core owner's steps to the highest registered books `LegacyMigration`, so the legacy-migration phase completes first (§5S.3.4). Ties are broken by the kernel's fixed core subsystem order — `storage`, `secrets`, `config`, `compat`, `log`, `auth`, `rbac`, `audit`, `tasks`, `outbox`, `index`, `library`, `providerhttp`, `integrations`, `ai`, `download`, `indexer`, `notify`, `acquire`, `backup`, `updater`, `health`, `arrfacade` — then modules by ID, then version. A core owner that declares a step or a data migration and is absent from that list fails registration with `ErrMigrationCycle` ("unordered owner"), so boot order is always deterministic. A cycle, or a reference to an unknown step of a registered owner, is `ErrMigrationCycle` (boot error). An edge to a step that is already **applied** in this store's bookkeeping is satisfied even if its owner is disabled; an edge to an unapplied step of a disabled or absent owner defers the dependent step, and its owner is not started (rule "Barrier and serving" below). There is no "R4 layer order" rule: layer order is not an order inside L4. |
 | Bookkeeping (DATA-28, DATA2-29) | `c/storage/ks/<owner>/version` (uint64) and `c/storage/ks/<owner>/applied/<v>` = `{name, compat, raises_level, applied_at, build}` (notation §5S.3.3; the owner ID — `core/tasks`, `core/auth`, `books` — is one segment); data migrations in `c/storage/dm/<id>` (§5S.3.6). Books uses a **version-source adapter** (books code) over its own migration-version rows (ABO-migration table §5S.9.1) so every older ABO build keeps seeing the numbers it wrote; the adapter adds `compat` and `raises_level` fields to new per-step records (older builds ignore unknown JSON fields). An applied step this build does not know and whose record has **no** `compat` field is treated as `Breaking`. Every guard-aware boot writes the applied-steps sidecar from this bookkeeping (§5S.3.7). |
 | Atomicity | Versioned steps: step writes + version + record (+ level stamp) in one batch, so there is no replay window; idempotency remains a test, belt and braces. Books legacy steps 1..`LegacyCap`: **not atomic** — crash safety is ABO's idempotency test (`TestMigrationUpFunctionsAreIdempotent`) plus the kept DB-02 replay guard (`migrations.go:536-548`); bookkeeping goes through the version-source adapter after `Up` returns. HEAD-style steps are allowed until the S2b flip and forbidden after: `TestNoNewLegacyMigrations` pins the highest `LegacyMigration` version at `LegacyCap` (the highest HEAD-style step at the flip, 66 at `748fd787a`; DATA4-19), so every later books step is a `Migration` or a `DataMigration`. |
+| Seed steps (COR5-8) | A fresh install's one batch (§5S.4 step 6) records every registered versioned step as applied **except** `Seed` steps, which stay pending and run in P4b of the same boot as ordinary steps, each in its own batch with its bookkeeping, in DAG order. No checkpoint is taken for them: the store held nothing before this boot. The runner finds a pending step by its missing `applied/<v>` record, not by the owner's `version` counter alone, so a seed step below an applied non-seed step of the same owner still runs. `Seed` without `Additive` fails registration. `TestFreshInstallRunsSeedSteps` (a fresh hello install greets `world` with `Seen == 1`; the same step over a store that already holds the row changes nothing). |
 | Size cap | `MigrationTx` refuses past `core.storage.migration.max_batch_bytes` (default 64 MiB) or `max_batch_ops` (default 250 000) with `ErrMigrationTooLarge`; the author moves the work to a `DataMigration`. |
 | Checkpoint (R2-8) | One per upgrade attempt, before **anything** is written to the store — ratchet, step, install marker, ledgers, every-boot writers (§5S.3.12, 06 §6.5.1 P4a) — and only when a step will actually run: a deferred step does not count (OPS3-14). If it cannot be taken, boot halts before anything is written. |
 | Failure (DATA2-19) | A failed versioned `Up` discards its batch; a failed legacy step may leave idempotent partial writes. Either way `app.New` returns an error wrapping `ErrMigrationFailed`, the process exits non-zero, earlier steps stay committed, and the attempt's checkpoint stays **open**, named by `.migration-checkpoint`, for the offline `storage restore-checkpoint` (§5S.3.12). There is **no automatic restore**: it would fight the crash-loop reuse rule and the non-atomic legacy steps. No partial versioned step is ever visible. |
@@ -720,8 +732,8 @@ Runner rules:
 | Newer version on disk | Unknown applied steps all `Additive` → boot continues with a warning (G5: an older build reads a newer DB). An unknown applied `Breaking` step (or compat-less books record) whose recorded `raises_level` is above this build's supported level for the owner → `ErrKeyspaceTooNew`. Levels are reader capabilities, so an unknown `Breaking` step at or below the supported level is readable by definition. This is a consistency check on top of the guard, which refuses the same store first (§5S.3.7). |
 | Upgrade floor (R2-4, OPS2-11, OPS3-7, OPS4-5) | A build may delete code that a pending step of an older store would need — books' legacy steps 1..`LegacyCap` and the store methods they call — **only** by declaring an `UpgradeFloor` for that owner (a minimum applied `Version`). Two releases are named, and never confused: the **stepping-stone release** (`InstallFirst`, the manifest's `release`) still registers the steps and the code they call and contains no deletion; the **floor release** is the first release with the deletion and the floor. `InstallFirst` is the newest production tag that exists when the deleting PR merges (`TestStepSteppingStoneValid`, root CI: the tag exists, predates the deleting commit, registers books `LegacyCap` and prints an empty `--print-upgrade-floor`). A level cannot stand in for a floor: it proves a reader capability, not that a given step ran. A store that falls short is refused at lifecycle step 3, before the checkpoint, with `ErrUpgradeFloor` naming the stepping stone, so a skipped-release install passes through it instead of failing half-way. The same comparison runs **before** a binary is applied, from the store's applied-steps sidecar and the candidate's `--print-upgrade-floor` (§5S.3.7, `CheckReader` reason `upgrade_floor`; the updater's `StoreState`, 05-updater), so neither an S0+ updater nor `make rollback` installs a build that the next boot would refuse (`TestUpgradeFloorRefusesBeforeAnyWrite`, R-test cell "store at books v64 → cur"). A pre-S0 updater swaps any newer binary unchecked (`internal/updater/updater.go:214-280`), so the floor release's note says what such an install sees and how to recover (09, DATA4-18). |
 | Skipped releases (OPS-2) | Releases may be skipped as long as the build still registers every step the store has not applied; a build that no longer does declares an `UpgradeFloor` (above). The one built deferral is `RequiresSelfServed` (next row): the deferred step and every step that depends on it (`After`, and later versions of the same owner, which stay contiguous) are skipped for this boot, the owner serves at its last applied version (a deferred step does not count toward `MinVersionToServe`), the boot log and health detail name the step and the earliest time it can run, and every later boot re-checks it. Deferral never deletes, never fails boot, and never raises a level. Only `ErrUpgradeFloor` refuses to start. (`RequiresServed`, a served-run precondition, is a deferred-build member of the cutover, §5S.3.13, SIMP4-4.) |
-| `RequiresSelfServed` (OPS2-2) | Implicit on every step with `RaisesLevel` (books' physical re-encodings and cutovers). Such a step is deferred (row above) on a boot where the kernel reports an unconfirmed update (05-updater `BootResult.Pending`, i.e. `<state_dir>/updates/pending.json` exists), and until **this build** has been continuously ready for `max(core.updater.confirm_after, core.storage.self_served_min)` (default 1 h), recorded in its self-served record (§5S.3.7). A level step therefore never runs on the first boot of an auto-applied release, so the updater's `Boot` and `make rollback` can still undo a broken release; health reports `storage_step_pending` with the earliest run time (R-test cell d': "release with a level step fails readiness on first boot → `Boot` rollback allowed"). |
-| Barrier and serving | An owner starts only when its applied version ≥ `MinVersionToServe` (default: its latest registered version). When an `Online` data migration's `Barrier` or a deferred edge holds the owner below that, the owner is not started in this process, health is `degraded` with the reason, and when the blocking migration completes the kernel requests a graceful restart through the lifecycle supervisor. |
+| `RequiresSelfServed` (OPS2-2) | Implicit on every step with `RaisesLevel` (books' physical re-encodings and cutovers). Such a step is deferred (row above) on a boot where the kernel reports an unconfirmed update (05-updater `BootResult.Pending`, i.e. `<state_dir>/updates/pending.json` exists), and until **this binary** (its binary ID, §5S.3.7) has been continuously ready for `max(core.updater.confirm_after, core.storage.self_served_min)` (default 1 h), recorded in its self-served record (§5S.3.7). A level step therefore never runs on the first boot of an auto-applied release, so the updater's `Boot` and `make rollback` can still undo a broken release; health reports `storage_step_pending` with the earliest run time (R-test cell d': "release with a level step fails readiness on first boot → `Boot` rollback allowed"). |
+| Barrier and serving | An owner starts only when its applied version ≥ `MinVersionToServe` (default: its latest registered version). When a deferred edge (a deferred step, or an unapplied step of a disabled owner) holds the owner below that, the owner is not started in this process, health is `degraded` with the reason, and every later boot re-checks it. (An `Online` migration's `Barrier`, which would hold an owner while it runs and request a graceful restart when it completes, lands with that mode, §5S.3.14.) |
 | Systemd budget (OPS2-17) | The kernel passes storage `ExtendStart func(step string)` (05-health's `Supervisor.ExtendStart`; storage does not import `health`). It is called right before each step that makes real progress — store open (WAL replay), the pre-migration checkpoint, each migration step, each group of `BootBlocking` chunks, each cutover phase — and extends the start deadline by `StartupStepBudget` (10 min, HEAD's value, `internal/sdnotify/sdnotify.go:46-53`, called per step at `internal/database/startup_notify.go:15-27`). Never from a timer, so a hung step is still killed. Each step's duration is also reported to the kernel's boot metric with its step name (06, OPS2-24). |
 
 ### 5S.3.6 Data migrations (`storage/datamigrate`, large, resumable)
@@ -733,8 +745,15 @@ core subsystems hand them to the kernel with their `storage.Spec`. The runner is
 `core/internal/storagemigrate` (L4 by the R4 bridge rule). **`BootBlocking` data migrations run in
 process** inside the P4 DAG (06 §6.5.1 P4b), through `tasks.ForEach` over the persisted shard plan
 with the persisted shard cursors below — the tasks service and executor do not exist yet in P4, so they
-are not executor runs. **`Online`** data migrations are executor runs started at 06 §6.5.2 step 5
-(COR2-7): a **core** owner's is a run of the core kind `core.storage.migrate`; a **module**'s is a run
+are not executor runs. During the extraction `BootBlocking` is the only mode built.
+
+**Deferred: the `Online` mode (SIMP5-7).** No stage of 09 declares an `Online` migration: the round-2/3
+adopt and fold copies it was designed for were removed by R3-1, the storage-efficiency release B is a
+physical re-encoding that raises a level (`Breaking`, hence `BootBlocking`), and so is every cutover
+(§5S.3.13). The mode is therefore a deferred-build member (§5S.3.14) that lands additively with its first
+consumer; this paragraph, the synthesised definition below and every clause marked `Online` in this
+section are its contract at proof depth. An **`Online`** data migration would be an executor run started at
+06 §6.5.2 step 5 (COR2-7): a **core** owner's is a run of the core kind `core.storage.migrate`; a **module**'s is a run
 of the module kind `<module>.datamigrate.<name>`, which the kernel registers on the module's behalf so
 that no core run invokes a module callback that writes module entities (COR3-5). Exclusion against
 concurrent writers does **not** come from dispatch: a shard is a key range, not an entity, so no
@@ -765,7 +784,7 @@ type Mode uint8
 const (
 	ModeInvalid  Mode = iota
 	BootBlocking // a DAG node of the boot (§5S.3.5); a status listener reports progress (05-health)
-	Online       // a background task while serving; must be Additive and covered by read adapters
+	Online       // deferred-build member (§5S.3.14, SIMP5-7): a background task while serving; Additive, covered by read adapters
 )
 
 type DataMigration struct {
@@ -777,7 +796,7 @@ type DataMigration struct {
 	Mode            Mode                      // zero rejected
 	Compat          storage.MigrationCompat   // zero rejected; Breaking ⇒ BootBlocking and RaisesLevel > 0
 	RaisesLevel     int                       // stamped (sidecar first) before the first chunk writes (§5S.3.7); a cutover: in its raised phase (§5S.3.13)
-	Writes          []entity.Ref              // the resource kinds Step writes (Module and Kind set, ID empty); required for an Online module migration: attribution only (COR4-5)
+	Writes          []entity.Ref              // deferred-build member with Online (SIMP5-7): the resource kinds Step writes (Module and Kind set, ID empty); attribution only (COR4-5)
 	RewritesInPlace bool                      // Step writes keys inside Source
 	After           []storage.StepRef
 	Barrier         int                       // owner Version that may not run before this completes (0 = none)
@@ -790,7 +809,7 @@ type DataMigration struct {
 // (default 4 MiB) or chunk_items (default 2 000).
 type StepWriter struct{ /* unexported */ }
 // Set and Delete are refused (ErrNotSerialized) in an Online migration, whose
-// every write carries a precondition (COR4-5).
+// every write carries a precondition (COR4-5); deferred with that mode.
 func (w *StepWriter) Set(key, value []byte) error
 func (w *StepWriter) Delete(key []byte) error
 func (w *StepWriter) SetIfAbsent(key, value []byte) error             // Expect(key, nil) at chunk commit
@@ -824,7 +843,7 @@ func DerivedBuildTask(module, name string, s DerivedBuildSpec) tasks.Definition
 
 Execution contract (built on [05-tasks](05-tasks.md)):
 
-- **One run per data migration ID.** An `Online` run's task resource is, for a core owner,
+- **One run per data migration ID.** (`Online`, deferred.) An `Online` run's task resource is, for a core owner,
   `entity.Ref{Module: "core", Kind: "storage-range", ID: <migration ID>}` (G8); for a module, its
   declared `Writes` (attribution, no per-shard subject). State `c/storage/dm/<id>` ∈ {pending, running, verifying,
   done, failed, held}; a cutover adds its phases (§5S.3.13). An ID is never reused, so a `done` state is
@@ -841,14 +860,14 @@ Execution contract (built on [05-tasks](05-tasks.md)):
   migration declares `RewritesInPlace`; then the runner materialises each chunk's key list before
   stepping it and skips keys the migration wrote itself, so the mandatory 30 s iterator re-open
   (§5S.6) cannot see its own commits as new input.
-- **Concurrent owner writes** (DATA-13, COR4-5). An `Online` migration may rewrite only ranges its owner
+- **Concurrent owner writes** (DATA-13, COR4-5; `Online`, deferred). An `Online` migration may rewrite only ranges its owner
   declares `Serialized`; `Register` refuses one whose `Source` is not (`ErrNotSerialized`). Every `Step`
   write is `SetIfUnchanged` (against the bytes the step read), `SetIfAbsent` or `DeleteIfUnchanged`, in
   per-item chunks; a failed precondition re-reads that item and steps it again. So a write by any other
   writer — a task run, a gin handler, a hook or a worker — is never overwritten, and none of them is
   blocked for the length of the rewrite. A copy (a cutover's fold) never overwrites a destination row
   the owner wrote (owner writes win).
-- **Compatibility class** (DATA-12, DATA-7). `Online` ⇒ `Additive`, and the owner declares
+- **Compatibility class** (DATA-12, DATA-7). (Once built) `Online` ⇒ `Additive`, and the owner declares
   `ReadAdapters` covering every family the migration rewrites, so old and new rows are both readable
   throughout. `Breaking` ⇒ `BootBlocking` with `RaisesLevel`; the level stamp is committed (sidecar
   first) before the first chunk, so a half-converted store is already too new for older builds. A
@@ -859,12 +878,12 @@ Execution contract (built on [05-tasks](05-tasks.md)):
   kind to the live directory) and hard-links its SSTs and copies its WAL, MANIFEST and OPTIONS into a
   scratch directory beside the DB (same filesystem, free-space precheck, §5S.3.12), or extracts the
   archive there. WAL replay happens in the scratch copy, which is then opened as a full DB; the runner
-  runs **every** pending step in DAG order — versioned, legacy, `BootBlocking` and `Online` data
-  migrations including `Verify` — and reports per step: counts per outcome, held items, bytes written,
+  runs **every** pending step in DAG order — versioned, legacy and `BootBlocking` data migrations (and,
+  once built, `Online` ones), including `Verify` — and reports per step: counts per outcome, held items, bytes written,
   the first N keys per outcome, duration; then deletes the scratch. Cross-chunk state is faithful and
   stray writes outside `StepWriter` land in scratch. While a service holds the DB, use
-  `--from-archive` (the newest verified archive) or the preview of a pending `Online` migration (its
-  run's preview executes the same scratch procedure inside the process via `storage.Admin.Checkpoint`).
+  `--from-archive` (the newest verified archive) or, once the mode is built, the preview of a pending
+  `Online` migration (its run's preview executes the same scratch procedure inside the process via `storage.Admin.Checkpoint`).
   The old in-batch discard mode remains only as `--estimate` and is labelled an estimate in its output.
 - Cancellation stops at a chunk boundary. A failed `Verify` leaves state `failed` with the report;
   `Barrier` versions stay blocked, so later versioned steps cannot run on a half-converted keyspace.
@@ -903,8 +922,8 @@ job is the real format changes — books' own raises and, outside the extraction
 floor is the cutover release itself (§5S.3.13). What a rollback costs is stated by the owners of the
 extension records and the encrypted secrets (one re-login, 05-authn; re-entering secrets moved to the
 encrypted store, whose legacy copies hold a never-matching sentinel so the older build's gate fails
-closed, 05-config, R4-2; re-confirming extensions an older build's row change suspended, §5S.3.11). The live security hotfixes of `todo.d/2026-11-04_platform_core_followups.md` (revoked-key
-re-activation, unscoped child keys, the `RequireAdmin` scope check, session-token exposure) ship
+closed, 05-config, R4-2; re-confirming extensions an older build's row change suspended, §5S.3.11). The
+live security hotfixes — the early fixes of [05-authn](05-authn.md) §11.1, the single list (SEC5-11) — ship
 independently and early, so every rollback target from then on carries them; a rollback to a release
 older than those hotfixes reopens what they fix, which [14](14-risks-open-questions.md) records.
 
@@ -939,16 +958,26 @@ type LegacyGuardProjection struct {
 }
 ```
 
+**Binary ID (R5-7, FE5-3).** Every `build` field of this file — the install marker's `build`, a stamp's
+`by_build`, an applied record's `build`, the claim ledger's and the served ledger's `build`, the claim-violation
+records, the self-served record's key — holds the **binary ID** (`app.BinaryID`, 03 §3.6 "Build identity",
+06: `app.Options.Version` plus the SHA-256 of the running executable, computed once by the kernel before
+P−1; the updater's `Self.BinaryID`), never the UI bundle's build ID, which is `dev` for every API-only build
+and shared by dirty rebuilds of one commit, and never `version.Version`, the core constant. So two binaries
+never share a self-served record, and a `RaisesLevel` step on a new binary is deferred until that binary
+itself has been confirmed (`TestSelfServedKeyedByBinaryID`).
+
 | Item | Location | Notes |
 |---|---|---|
 | Install marker | `c/storage/install` = `{install_id, created, build}` (codec `JSON` v1) | the **first** `c/` key on every store (§5S.3.4 rule 4): 09 S0's guard writes it before its first served-ledger key, with `storage/keys` and this exact shape; a core build writes it at §5S.4 step 5 on a store that has none, inheriting the restored install's `install_id` on a restore boot (DATA2-6, DATA3-12) |
-| Store generation (DATA3-1) | `c/storage/epoch` = `{epoch, dir_dev, dir_ino, at}` | the store's identity across swaps (distinct from a derived index's storage generation, §5S.3.9). Every guard-aware boot stats the DB directory at §5S.4 step 2; when the record is absent or names another directory identity — the directory was swapped by a restore, revert or checkpoint restore, or copied or replaced by hand — this boot's generation is `epoch + 1`, written at step 9 with the new identity. A swap-back returns the original directory with its own record, so it is the same store again; a store restored **in place** by a pre-core build carries its archive's older record. Input to checkpoint reuse (§5S.3.12) |
+| Store generation (DATA3-1) | `c/storage/epoch` = `{epoch, dir_dev, dir_ino, at}` | the store's identity across swaps (distinct from a derived index's storage generation, §5S.3.9). Every guard-aware boot stats the DB directory at §5S.4 step 2; when the record is absent or names another directory identity — the directory was swapped by a restore, revert or checkpoint restore, or copied or replaced by hand — this boot's generation is `epoch + 1`, written at step 9 with the new identity. A swap-back returns the original directory with its own record, so it is the same store again. A store restored **in place** by a pre-core build keeps the directory's identity, and usually the current record too (HEAD extracts the archive into the live directory with `os.Create`, `internal/backup/backup.go:777-850`, and an archive made in this generation carries the same `epoch`), so the generation does not see such a restore; the boot lineage (next row) does (SEC5-6). Conversely, a new generation alone says only that the directory changed — a swap, a copy, or a relocation of the current store (`cmd/root.go:324-327` expects the DB to move while the state directory stays) — and 05-backup decides from it, the lineage and the journal whether the store was replaced (DATA5-7). Input to checkpoint reuse (§5S.3.12) |
+| Boot lineage (SEC5-5, SEC5-6, DATA5-13) | `c/storage/boot` = `{n, nonce, at}`, mirrored in `<state_dir>/storage.boot.json` = `{n, nonce, install_id, db_path}` | written by every core-storage boot (S2b on) in the served-ledger commit (§5S.4 step 14b, 06 Run step (3b)) with `n = max(store n, file n) + 1` and a fresh random `nonce`; the file is rewritten after that commit (temp file + fsync + rename + directory fsync). Read at step 2, before anything is written, and compared: **same** (equal pair); **behind** (the store's `n` is below the file's, the store has no record while the file has one, or the same `n` with another nonce: the store's content is older than the last core boot's — restored in place by an older build or copied over); **ahead** (the store's `n` is above the file's: the file write after the last commit was lost; benign, rewritten); **none** (no file: the first core boot, or a moved or lost state directory; the other rules decide alone). A **behind** verdict counts as a foreign open (next rows), and 05-backup classifies the store as replaced (§5B.3.6). A store whose content an older build archived **after** the last core boot and then restored in place carries the current pair: it is indistinguishable from that build's own state, and its effect is that of HEAD's own restore (the rollback itself is still a foreign open) |
 | Stamp | `c/storage/level/<owner>` = `{level, by_build, at}` | written only by a level step |
 | Level sidecar | `<db path>.storage-levels` | one line per owner, `<owner> <level>`, sorted; written temp file + fsync + rename + directory fsync; read by `make rollback` over ssh and by the updater without opening Pebble; every guard-aware boot rewrites it from the stamps, so after the first such boot it always exists |
 | Applied-steps sidecar (02 N14, OPS3-7) | `<db path>.storage-applied` | what the store has applied, readable **before open**: one line per owner `<owner> version <n>` (books from its version-source adapter), sorted, plus a header line `install <install_id> epoch <n>` (the per-migration `<owner> done <id>` lines are a deferred-build member of the cutover, §5S.3.13, SIMP4-4); written like the level sidecar by every guard-aware boot at §5S.4 step 9 (09 S0's guard included), after every step that adds to it — always **after** the commit that applied the step, so it can lag the bookkeeping but never lists a step that did not run (a lag only makes a pre-apply check refuse more) — and by a restore swap from the staged store (05-backup §5B.3.4 step e, DATA4-17). Read by `CheckReader` (reason `upgrade_floor`), by `make rollback`, and by the updater's `StoreState` (05-updater), which compares it with a release manifest's `min_upgrade_from` (copied from the candidate binary's `--print-upgrade-floor`); missing or unreadable → the reader fails closed with `sidecar_unreadable`, and the message tells the operator to boot any release ≥ S0 once, which rewrites it (a pre-S0 store has no sidecar until then, DATA4-18) |
-| Served ledger (DATA2-9, SIMP4-4) | `c/storage/served/<owner>/last` = `{build, supported, duties, at}` | updated once per boot per owner, after the checkpoint. `duties` lists the store-maintenance duties the build performs on every boot and write — `journal` (it journals every revocation, 05-backup §5B.3.6; listed only by builds in which every revocation path is core's), `auth` (core auth decides every request and reads native sessions and one-time tokens, so a sign-out on it is a revocation core sees; listed from 09 S4 r2, never by the dark S4 r1; its absence since a session was issued triggers 05-authn §4.3's revoke-after-rollback, 09 §9.2.1 row 2), `gen` (it touches derived-index generations, §5S.3.9) and `usage` (it records compat usage, 09 §9.2.9); an absent field means none. A consumer that needs a duty to have held since some point checks that every boot since listed it and no foreign open was detected, else falls back (05-backup records a coverage gap; the derived loader rebuilds; 09's recording-build rule W restarts its window). The per-level run records `c/storage/served/<owner>/<level>` that `RequiresServed` would read are a deferred-build member (§5S.3.13) |
-| Foreign-open record (DATA2-9, DATA3-20) | `c/storage/sidecar_identity` = `{device, inode, at}` of `<db>.storage-format` | every pre-guard open rewrites that sidecar by temp file + rename (`internal/database/pebble_store.go:776-786`, `storage_format.go:285-300`), so its inode changes. Each guard-aware boot — 09 S0's guard included — compares the recorded identity with the file's before rewriting it; a difference means another binary opened the store in between: the boot logs it, makes the previous boot's `duties` count as none, then rewrites the sidecar and records the new identity. Every level step records the identity of the `.storage-format` it just rewrote in its stamp batch (step 3 below), so a crash between the sidecar write and the end of the boot never reads as a foreign open |
-| Self-served record (OPS2-2) | `c/storage/selfserved/<build id>` = `{first_boot, first_ready, confirmed_at}` | `first_ready` ends the current upgrade attempt (§5S.3.12); `confirmed_at` is written once this build's process has been continuously ready for `max(core.updater.confirm_after, core.storage.self_served_min)`; input to `RequiresSelfServed` (§5S.3.5) |
+| Served ledger (DATA2-9, SIMP4-4, R5-5) | `c/storage/served/<owner>/last` = `{build, supported, duties, at}`; `c/storage/served/<owner>/owed` = `{<duty>: {since, detected}}` | `last` is the record of the **last boot whose dependent steps all committed**: a boot reads it at step 2 and leaves it unchanged until the served-ledger commit at 06 Run step (3b) (§5S.4 step 14b), which replaces it only after every boot step that reads it has committed; a boot that fails earlier — at P4c, at P4d step 1 (a Fatal settings validation), a power loss — leaves it as it was, so the next boot sees the same previous record (COR5-3, DATA5-6). `duties` lists the store-maintenance duties the build performs on every boot and write — `journal` (it journals every revocation, 05-backup §5B.3.6; listed only by builds in which every revocation path is core's), `auth` (core auth decides every request and reads native sessions and one-time tokens, so a sign-out on it is a revocation core sees; listed from 09 S4 r2, never by the dark S4 r1; its absence since a session was issued triggers 05-authn §4.3's revoke-after-rollback, 09 §9.2.1 row 2), `gen` (it touches derived-index generations, §5S.3.9) and `usage` (it records compat usage, 09 §9.2.9); an absent field means none. At step 9 the boot decides, per duty, whether a fallback is **owed** — the previous `last` lacks the duty, or a foreign open or a **behind** lineage was detected, or `last` is unreadable (fail-closed: its duties count as none) — and records each owed duty in `owed` with `since` = the previous `last.at` and `detected` = this boot's time; an entry already present keeps its earlier `since` and `detected`, so the signal survives a failed boot after step 9 and a foreign-open verdict whose evidence this boot has just rewritten. Each consumer reads `owed`, performs its fallback, and deletes its own entry **in the batch that performs it**; each is idempotent on re-detection: 05-backup appends a `gap` line unless one already covers `since`; 05-authn revokes the sign-ins created before `detected` (the same `t` on a retry); the derived loader rejects every artifact while `gen` is owed and clears the entry with the rebuild's enqueue; 09's recording-build rule W restarts its window at `since` (reading `owed.usage`, not `last`). An entry whose consumer is not in this build (an S2b build has no journal) stays until a build with the consumer clears it. The per-level run records `c/storage/served/<owner>/<level>` that `RequiresServed` would read are a deferred-build member (§5S.3.13) |
+| Foreign-open record (DATA2-9, DATA3-20, SEC5-5) | `c/storage/sidecar_identity` = `{device, inode, size, mtime_ns, ctime_ns, at, pending}` of `<db>.storage-format` | every pre-guard open rewrites that sidecar by temp file + rename (`internal/database/pebble_store.go:776-786`, `storage_format.go:285-300`). The inode alone is not proof: after two such opens a filesystem that hands a freed inode number out again (ext4, XFS) can leave the sidecar on the recorded inode, so the identity is the whole tuple, compared in full — a rename always moves the file's ctime. Each guard-aware boot — 09 S0's guard included — compares the recorded identity with the file's before rewriting it; a difference, or a missing or unreadable sidecar, means another binary opened the store in between (fail-closed): the boot logs it, records the owed duties (served-ledger row), then rewrites the sidecar. The new identity is staged at step 9 as `pending` and committed as the record only in the served-ledger commit (06 Run step (3b), R5-5); a later boot whose sidecar matches `pending` sees this build's own rewrite after a failed boot, not a foreign open, and the verdict itself is kept in `owed` until its consumers commit, so neither a failed boot nor the rewrite loses it. A record written before this rule (no `ctime_ns`) is compared on `{device, inode}` once and rewritten in full. A pre-guard open whose own sidecar rewrite failed (HEAD serves anyway, `pebble_store.go:779-785`) leaves no trace here or in the lineage; that residual is 14's. Every level step records the identity of the `.storage-format` it just rewrote in its stamp batch (step 3 below), so a crash between the sidecar write and the end of the boot never reads as a foreign open |
+| Self-served record (OPS2-2) | `c/storage/selfserved/<binary id>` = `{first_boot, first_ready, confirmed_at}` | `first_ready` ends the current upgrade attempt (§5S.3.12); `confirmed_at` is written once this build's process has been continuously ready for `max(core.updater.confirm_after, core.storage.self_served_min)`; input to `RequiresSelfServed` (§5S.3.5) |
 | Fast-exit flags | `--print-storage-levels`, `--print-upgrade-floor` | print, and exit before opening anything, the build's supported vector (`<owner> <level>` per line) and its declared upgrade floors as an `UpgradeRequirement` (`{release, owners: {<owner>: <version>}}`, 05-updater; its `steps` list is a deferred-build member, §5S.3.13); computed from manifests only. Both ship from **S0** (09 S0's guard): a build with no floor prints an empty requirement, so a guard-aware `.prev` never answers "unknown flag" (OPS4-16) |
 | Legacy projection (books) | books' format stamp and migration marker rows (ABO-migration table §5S.9.1 row 10), sidecar `<db>.storage-format`, flag `--print-storage-format` | value **1** while every owner's level is 0, **`LegacyMaxFormat + 1`** once any level is above 0 — during the extraction only after a books physical raise; later from a cutover's raise — which every pre-guard build refuses with `StorageFormatTooNewError` (`storage_format.go:44-49`); the marker is set while a books `Breaking` raise is in progress and cleared when it is done. Written only through `LegacyGuardProjection.Stage` (books owns the rows, §5S.9.1 row 10). A core build prints, for `--print-storage-format`, the projection of its own supported vector. The projection is derived and never decides anything for a guard-aware build, except that a legacy stamp above the value this build would write is treated as too new. A store converted by a pre-guard storage-efficiency release B (legacy stamp 2 at a time `LegacyMaxFormat` is 2) is mapped at its first guard-aware boot to books level ≥ 1 by books' first versioned step; 09 §9.0 orders release B behind this guard (OPS2-10) |
 | Checkpoint record | `<db path>.migration-checkpoint` | names the checkpoint of the latest upgrade attempt and whether it is open or completed (§5S.3.12); absent when there is none; read by the rollback script to print the restore steps |
@@ -1101,7 +1130,10 @@ The native dirty set lives at `c/index/<module>/<name>/dirty/<id>` (generalising
 instead: books supplies one over its own HEAD-format dirty family (§5S.9.1 row 18), so after a rollback
 the previous build drains the marks this build left in the shared index directory, and after the
 roll-forward this build drains the previous build's (R3-1, R4-1). Core holds no name or value format of
-that family. The reconciler is a `lifecycle.Component` (SIMP-6 rule: an
+that family. `Spec.Dirty` is the **only** door through which an app's dirty set reaches core: per index,
+set by the module in the `Spec` it opens with its own handles, so the binding to one named index is
+explicit; there is no `module.Manifest.LegacyStores.Dirty` field (SIMP5-2). The `backends` ledger does not
+cover it: a build that lost it degrades to a rebuildable index missing some marks, never to data loss. The reconciler is a `lifecycle.Component` (SIMP-6 rule: an
 in-process loop shorter than the task scheduler's one-minute poll is not a `tasks.Schedule`): it wakes
 every `core.index.reconcile.interval` and after any commit that carried a dirty mark, and drains with a
 bounded pool of `core.index.reconcile.workers`. A full rebuild is a `tasks` definition with a declared
@@ -1164,9 +1196,10 @@ records value X, any later committed touch leaves a value ≠ X (values are uniq
 committed before the snapshot), so an artifact can be falsely *rejected* (two touches committed out of
 order) but never falsely *accepted* — **provided every write to the source touched the key**. A build
 that predates the mechanism (any rollback target before the index's stage) changes the source without
-touching it, so the loader accepts an artifact only when every boot since the artifact's generation was
-recorded listed the `gen` duty in the served ledger and no foreign open was detected (§5S.3.7); after a
-rollback to such a build, the next boot rebuilds. Rejection means rebuild — the artifact is an
+touching it, so the loader rejects every artifact while the served ledger owes the `gen` duty (a boot without
+it, a foreign open or a behind lineage since the last boot that held it, §5S.3.7) and clears that entry
+in the batch that enqueues the rebuild; after a rollback to such a build, the next boot rebuilds, and a
+boot that fails before the rebuild is enqueued leaves the entry for the next one (DATA5-6). Rejection means rebuild — the artifact is an
 accelerator only.
 
 **When the hooks run (COR3-7).** At 06 P7 the kernel validates the declarations against the registered
@@ -1215,13 +1248,14 @@ the previous build wrote after a rollback, with nothing to reconcile.
 
 | Rule | Specification |
 |---|---|
-| Store interfaces | Each core service that persists state declares, in its own SDK package, the interface it persists through; every write takes the caller's `*storage.Batch`, so the service joins multi-owner commits by participant binding (§5S.3.2). The set is 03 §3.3's "Store interfaces" table: the identity store `auth.Store` ([05-authn](05-authn.md) §3.4), `rbac.Store` ([05-rbac](05-rbac.md) §3.4), `config.OverrideStore` ([05-config](05-config.md)), the run store `tasks.Stores` (runs, queues, pages, clocks, the pause marker, `Requires` stamps, the v1 history reader; [05-tasks](05-tasks.md) §5T.3.13, §5T.6), the journal store `log.JournalStore` ([05-logging](05-logging.md)), the import-root source `library.RootSource` ([05-library](05-library.md)), the AI batch-job store `ai.JobStore` ([05-ai](05-ai.md)), the provider gate store `providerhttp.GateStore` ([05-metadata](05-metadata.md) M2), the integration instance store `integrations.InstanceStore` ([05-metadata](05-metadata.md)), the notification rule store `notify.RuleStore` ([05-notify](05-notify.md)) and the dirty set `index.DirtySet` (§5S.3.8). The owner spec names the methods and the invariants core enforces above the interface (never-empty scopes, upgrade-on-use, staging rules). They are SDK and frozen by the API-stability gate: that is the cost of keeping app formats out of core. |
-| Native implementation | Core ships one per interface over `c/<subsystem>/` (`codec.JSON[T](1)` of the core type, plus index rows), specified by a "Native store" table in the owner spec; ranges consumed once (native sessions and one-time tokens, `c/auth/session/`, `c/auth/onetime/`) are declared `Serialized` and consumed with `Expect` + `Delete` (DATA4-9). It lands with its subsystem (auth and rbac at S4, tasks at S5, the rest with theirs; 03 §3.4 rule (b): `examples/hello` and `coretest` are its consumers) and is what every app without a pre-core history uses ([10](10-tv-movies-proof.md)). Each owner spec has `TestNativeStore_RoundTrip`. |
-| Legacy implementation | The module that owns an app's pre-core families declares a constructor per interface on `module.Manifest.LegacyStores` ([06](06-app-sdk.md)): `func(storage.LegacyHandles) (X, error)`. Manifest data, so it is read for a disabled module too (G1); the kernel calls it at lifecycle step 10 (06 P4c) with **that module's own** handles and hands the result to the subsystem; the module receives the same handles at P6. For ABO the implementations are books' existing store code (`internal/database` and the books store packages), which stays in ABO with its ratchets; nothing is moved into or re-implemented in core. Each owner spec ships a store test suite (`authtest.StoreSuite`, `taskstest.RunStoreSuite`, …) that books' implementations run against HEAD fixtures (`TestLegacyStoreGolden`: every fixture decodes and re-encodes byte-identically, `codec.LegacyJSON`, DATA-5). |
-| What a legacy implementation writes | Rows in the app's legacy format with `codec.LegacyJSON`, together with every legacy index row the previous build resolves through and the deletes of stale ones, in **one** batch with the primary row; IDs the legacy format allocates from a counter come from that counter. It never writes a row that would give an older build more access than the native value (an API key with an empty scope list, which older builds read as "all role permissions", `internal/server/middleware/auth.go:405-408`, 05-authn §4.4), and every restriction it makes (revoke, disable, epoch bump, role removal) is a field older builds read. Revocations, post-restore hook writes and journal re-application are such ordinary writes ([05-backup](05-backup.md) §5B.3.4, §5B.3.6). Rows that several of the app's writers read-modify-write are `CheckedWrites` claims (§5S.3.4), so its other writers cannot overwrite the store's update blindly (DATA4-4). |
+| Store interfaces | Each core service that persists state declares, in its own SDK package, the interface it persists through; every write takes the caller's `*storage.Batch`, so the service joins multi-owner commits by participant binding (§5S.3.2) — except where a method commits its own batch and never joins a multi-owner commit: `log.JournalStore` (append-only; it names only `log` types, so `log`, L0, imports nothing for it) the maintenance methods `Prune` and `Recover` (COR5-12, MOD5-10), and `providerhttp.GateStore`, which commits its own batch under the Registry's mutex with no commit-time check (05-metadata M2). The set is the one list of 03 §3.3's "Store interfaces" table (SIMP5-8; owner specs: [05-authn](05-authn.md) §3.4 `auth.Store`, [05-rbac](05-rbac.md) §3.4 `rbac.Store`, [05-config](05-config.md) `config.OverrideStore` with `secrets.LegacyStore` reached through its legacy `Secrets` capability, [05-tasks](05-tasks.md) §5T.3.13 `tasks.Stores`, [05-logging](05-logging.md) `log.JournalStore`, [05-library](05-library.md) `library.RootSource`, [05-ai](05-ai.md) `ai.JobStore`, [05-metadata](05-metadata.md) `providerhttp.GateStore` and `integrations.InstanceStore`, [05-notify](05-notify.md) `notify.RuleStore`, and `index.DirtySet` §5S.3.8, which reaches core per index through `index.Spec.Dirty`, never through `LegacyStores`, SIMP5-2). There is no `ai` result-journal store (SIMP5-3 (a)). The owner spec names the methods and the invariants core enforces above the interface (never-empty scopes, upgrade-on-use, staging rules). **Every legacy family that a store interface writes under a commit-time precondition (`Transition`, `Advance`, `Insert`'s uniqueness, `Extension.Put`'s row `Expect`) or annotates with an extension record is `Serialized` in §5S.9.1** (R5-4, DATA5-1): staging into the caller's batch moves the commit out of HEAD's in-store mutexes (`opsMu`, `aijobWriteMu`), so `Expect` is the only remaining check. They are SDK and frozen by the API-stability gate: that is the cost of keeping app formats out of core, and the legacy-only capabilities are kept out of the frozen interfaces (row "Legacy capabilities"). |
+| Native implementation | Core ships one per interface over `c/<subsystem>/` (`codec.JSON[T](1)` of the core type, plus index rows), specified by a "Native store" table in the owner spec; ranges consumed once (native sessions and one-time tokens, `c/auth/session/`, `c/auth/onetime/`) are declared `Serialized` and consumed with `Expect` + `Delete` (DATA4-9). It lands with its subsystem (auth and rbac at S4, tasks at S5, the rest with theirs; 03 §3.4 rule (b): `examples/hello` and `coretest` are its consumers) and is what every app without a pre-core history uses ([10](10-tv-movies-proof.md)). The one exception is `library.RootSource`, which has no native implementation: library's native roots are its `core.library.roots`/`mappings` config entries, and `c/library/` holds only its transfer journal and quarantine records (SIMP5-1). **Naming rule (SIMP5-9):** the conformance suite of interface `I` in package `p` is `ptest.ISuite` (`authtest.StoreSuite`, `taskstest.StoresSuite`, `librarytest.RootSourceSuite`), and the native round-trip test is `TestNative<I>_RoundTrip` (`TestNativeStore_RoundTrip` for `auth.Store` and `rbac.Store`, `TestNativeStores_RoundTrip` for `tasks.Stores`); library's config-entry round trip keeps its owner's name, `TestNativeRootStore_RoundTrip`. |
+| Legacy implementation | The module that owns an app's pre-core families declares a constructor per interface on `module.Manifest.LegacyStores` ([06](06-app-sdk.md)): `func(storage.LegacyHandles) (X, error)`. Manifest data, so it is read for a disabled module too (G1); the kernel calls it at lifecycle step 10 (06 P4c) with **that module's own** handles and hands the result to the subsystem; the module receives the same handles at P6. For ABO the implementations are books' existing store code (`internal/database` and the books store packages), which stays in ABO with its ratchets; nothing is moved into or re-implemented in core. Books' implementations run every owner suite against HEAD fixtures in the one ABO umbrella test `TestLegacyStoreSuites` (09 §9.2.3), which also asserts that every fixture decodes and re-encodes byte-identically (`codec.LegacyJSON`, DATA-5; SIMP5-9). |
+| What a legacy implementation writes | Rows in the app's legacy format with `codec.LegacyJSON`, together with every legacy index row the previous build resolves through and the deletes of stale ones, in **one** batch with the primary row; IDs the legacy format allocates from a counter come from that counter. It never writes a row that would give an older build more access than the native value: an API key never gets an empty scope list, which older builds read as "all role permissions" (`internal/server/middleware/auth.go:405-408`), and a key with no legacy-equivalent scope gets a non-empty scope that grants nothing on an older build (R5-6, SEC5-1; 05-authn §4.4 names it). Every restriction it makes (revoke, disable, epoch bump, role removal) is a field older builds read. Revocations, post-restore hook writes and journal re-application are such ordinary writes ([05-backup](05-backup.md) §5B.3.4, §5B.3.6). Rows that several of the app's writers read-modify-write are `CheckedWrites` claims (§5S.3.4) from the stage that converts the last blind writer, so its other writers cannot overwrite the store's update blindly (DATA4-4, R5-3). |
 | Native-only data | **Never additively in a legacy row** (SEC4-3: an older build's confinement test can be "nothing else in the list", so even a string it ignores can change its decision). The legacy implementation stores it in the app's **extension family**: the sub-keyspace `ext/<store>/` of the owning module's keyspace (`m/<module>/ext/<store>/`), which no older build reads; the module declares `ext` in its `Spec.Serialized` (books does), so extension writes carry preconditions. Two record kinds: **standalone records** with no legacy counterpart (hashed sessions, native one-time tokens and invites, the bootstrap hash, native-only config keys: a rollback voids or hides them, as the owner spec states), and **extension records** that annotate one legacy row (below). Data of services that have no legacy store — the secrets keyring and encrypted secrets (`c/secrets/`), the revocation-journal head and gap records (`c/backup/`), library's transfer journal and quarantine records (`c/library/`), the outbox, audit and storage bookkeeping — is core's own and lives in `c/<subsystem>/`. |
-| Extension records (R4-1, DATA4-8, SIMP4-9) | One rule for every store, through `storage.Extension[T]` (below). A record is keyed by its legacy row's key — or, where one legacy row holds many entries (a config blob holding integration instances or notification rules), by that key plus the entry's stable ID, the hash then covering that entry's guarded projection inside the row, so a change to one entry suspends only its own record; it never holds a copy of a field the legacy row holds; it is written in the **same batch** as that legacy row and carries `legacy_ref` = `{key, fp}`, the legacy key and `fp`, the SHA-256 of the row's **guarded projection** — the bytes of the row with only the fields the owner spec lists as volatile removed (usage timestamps an older build rewrites routinely), never a field a restriction or grant depends on; the default projection is the whole row. On read, `State` is `ExtCurrent` (hash matches), `ExtStale` (the row exists and its projection changed: an older build wrote it while rolled back, or another path wrote it without the store) or `ExtOrphan` (the row is gone). The owner spec classifies every field of its record: **Independent** (its meaning does not depend on the row: kept), **Derived** (computed from row fields: reset to its stated default on `ExtStale` and re-stamped by the store's next write) or **Widening** (grants or allows anything the legacy row alone does not — namespaced scopes and permissions, read shares: on `ExtStale` the record becomes **suspended**, its Widening fields are not applied, and only an explicit, audited re-confirmation by an admin through the owning service clears it — never a routine write). An `ExtOrphan` record (the row gone, or the entry gone from it) is ignored and deleted by the next write of its key or by the owner's sweep. So a rollback never silently widens anything on roll-forward, and "current again on roll-forward" holds only for an unchanged row. Health reports suspended records per store (`storage_extension_suspended`, with counts). |
-| Adapter selection and the `backends` ledger | A core subsystem uses the legacy implementation exactly when the build supplies one, else its native implementation. The claim ledger records the choice per subsystem and store interface (`backends`, §5S.3.4 rule 5); a build that contains the subsystem and whose choice differs from the store's record fails boot with `ErrLegacyStoreMissing` naming it — a build that lost its legacy store would otherwise serve an empty native keyspace. A subsystem absent from the build is not checked. Because the legacy store is supplied by the release in which its subsystem lands and by every later one, a rollback between releases of the extraction never switches (DATA4-2, COR4-4); the only legitimate change is a cutover (§5S.3.13), which records `native` in its `raised` batch. |
+| Extension records (R4-1, DATA4-8, SIMP4-9, R5-6) | One rule for every store, through `storage.Extension[T]` (below). A record is keyed by its legacy row's key — or, where one legacy row holds many entries (a config blob holding integration instances or notification rules), by that key plus the entry's stable ID, the hash then covering that entry's guarded projection inside the row, so a change to one entry suspends only its own record; it never holds a copy of a field the legacy row holds; it is written in the **same batch** as that legacy row and carries `legacy_ref` = `{key, fp}` (one spelling everywhere: `legacy_ref.fp`, DATA5-16), `fp` being the SHA-256 of the row's **guarded projection**: the **security-relevant** fields the owner spec lists — every field a grant or restriction depends on, plus the fields whose change makes the row another row (a re-created row) — and never a per-request field (`LastUsedAt`, `LastUsedIP`, `UseCount`, which HEAD rewrites on every authenticated request, `internal/database/pebble_store_auth.go:1284-1302`; a `last_seen`). There is no default projection: every `Extension` declares its `Hash` (DATA5-2, SEC5-12). **Every write path of a row that carries an extension record either goes through `Extension.Put` (which re-stamps `fp`) or changes only fields outside the guarded projection**, the current build's own coalesced usage writes included. On read, `State` is `ExtCurrent` (hash matches), `ExtStale` (the row exists and its projection changed: an older build wrote it while rolled back, or another path wrote it without the store) or `ExtOrphan` (the row is gone). The owner spec classifies every field of its record: **Independent** (its meaning does not depend on the row: kept), **Derived** (computed from row fields: reset to its stated default on `ExtStale` and re-stamped by the store's next write) or **Widening** (grants or allows anything the legacy row alone does not — namespaced scopes and permissions, read shares). **Only a record whose type has at least one Widening field is ever suspended** (`Extension.Widening`, DATA5-4): on `ExtStale` it becomes **suspended**, its Widening fields are not applied, and only an explicit, audited re-confirmation by an admin through the owning service (`Extension.Confirm`, the store's `storage.ExtConfirmer` capability) clears it — never a routine write. A record without a Widening field is re-stamped by its next routine `Put` and reads `ExtCurrent`, its Derived fields at their defaults until then. **Restrictions are monotone (R5-6):** the owner derives a stale record's state from the legacy row first, so a restriction an older build made (a revoked or disabled key, a removed role) is never undone, reopened or presented as re-enableable by a stale rule; and a row that has, or had, an extension record is never read with the legacy "empty means everything" default (DATA5-3, DATA5-5, SEC5-2). An `ExtOrphan` record (the row gone, or the entry gone from it) is ignored and deleted by the next write of its key or by the owner's sweep. So a rollback never silently widens anything on roll-forward, and "current again on roll-forward" holds only for an unchanged projection. Health reports suspended records per store (`storage_extension_suspended`, with counts). |
+| Adapter selection and the `backends` ledger (SIMP5-1) | Two models, fixed per interface by 03 §3.3's "Model" column. **Exclusive** stores (`auth`, `rbac`, `tasks`, `config`, `log`, `ai` jobs): the subsystem uses the legacy implementation exactly when the build supplies one, else its native implementation; the ledger records `legacy` or `native`. **Routed** stores (`integrations` instances, `providerhttp` gates, `notify` rules, `library` roots): the native half always serves, and the legacy one additionally serves the records it covers, decided by its `Covers(id)` (the `storage.Covering` capability; a legacy store without it covers every record; library's `RootSource` carries `Covers` on the interface, having no native implementation); the record ID is the owner spec's; the ledger records `legacy+native` or `native`. The claim ledger records the choice per subsystem and store interface (`backends`, §5S.3.4 rule 5); a build that contains the subsystem and whose choice differs from the store's record fails boot with `ErrLegacyStoreMissing` naming it — a build that lost its legacy store (or its legacy half) would otherwise serve an empty native keyspace. A subsystem absent from the build is not checked. Because the legacy store is supplied by the release in which its subsystem lands and by every later one, a rollback between releases of the extraction never switches (DATA4-2, COR4-4); the only legitimate change is a cutover (§5S.3.13), which records `native` in its `raised` batch. |
+| Legacy capabilities (SIMP5-4) | The frozen interfaces carry only the native contract. A member that only a pre-core app's implementation can give meaning to is an **optional interface** in the owner's package, which the legacy implementation asserts at compile time (`var _ tasks.Recoverer = …`) and the kernel detects by type assertion at P4c; a native implementation implements none, so it has no stubs, and each goes with that family's cutover (a v0/additive removal, never a v1 break of the store interface). The owner spec defines the members and the record ID; the list: `auth` — `auth.LegacySignIns` (`TakeLegacySession`, `TakeLegacyInvite`, `DeleteLegacySignIns`), `auth.Reconciler` (open-time maintenance) and `auth.KeyConfirmer` (05-authn §3.4); `rbac` — the legacy atoms `PutRole` takes and the role re-confirmation (`rbac.LegacyAtomWriter` and `storage.ExtConfirmer`; 05-rbac §3.4); `config` — `config.LegacyOpener` (`Open`), `config.LegacySecrets` (`Secrets`, giving `secrets.LegacyStore`), `config.ExternalWriter` (`Changed`, S2–S3 only, deleted in the S3 PR, SIMP5-5), `config.Suspender` and `config.CommitObserver` (05-config §1.3); `tasks` — `tasks.Recoverer` (`Recover`, HEAD's `ReconcileOpsV3WithV2`; 05-tasks §5T.3.13); `integrations`, `providerhttp`, `notify` — `storage.Covering` and, where they keep Widening records, `storage.ExtConfirmer` (05-metadata, 05-notify); `library` — `storage.ExtConfirmer` (05-library §5L.3.1). The kernel resolves them once at P4c (06). Conformance suites split the same way: `ptest.ISuite` for the interface, a separate suite per capability. |
 | Format changes of a legacy family | Only by a `Breaking` step of its owner with `RaisesLevel`, shipped with the legacy implementation updated in the same build. |
 | No copy, no rebuild | No subsystem copies a legacy family into its keyspace, mirrors its writes into a second format, keeps a copy of a legacy field in a side record, or rebuilds anything at boot. Round 2's mirror machinery and round 3's grants (`Grant`, `GrantMode`, `Exclusive`, the legacy-migration grant, `ErrGrant*`, the grant metric and golden) do not exist during the extraction; a read-and-delete `Grant` returns only with the first cutover (§5S.3.13). |
 
@@ -1245,15 +1279,20 @@ const (
 	ExtOrphan  // the legacy row is absent
 )
 
-// ExtRecord is an extension record as read.
+// ExtRecord is an extension record as read. Its unexported raw bytes are what
+// Put's Expect compares against (DATA5-14).
 type ExtRecord[T any] struct {
 	Value     T
 	State     ExtState
-	Suspended bool // Widening fields must not be applied (set by a Put after a stale read; cleared only by Confirm)
+	Suspended bool // Widening fields must not be applied (only when Extension.Widening; set by a Put after a stale read; cleared only by Confirm)
+	// raw []byte: the record bytes Get read; nil = no record
 }
 
 // Extension binds an extension family to the legacy rows it annotates.
-// Hash computes the guarded projection's digest; nil = SHA-256 of the row.
+// Hash computes the guarded projection's digest over the owner's listed
+// security-relevant fields; it is required (nil is refused: there is no
+// whole-row default, R5-6). Widening says whether T has a Widening field;
+// only then can a record be suspended (DATA5-4).
 // For per-entry records (one legacy row holding many entries) the record key
 // is keys.Join(legacyKey, entryID) and Hash receives the entry ID too, so it
 // digests that entry's projection only.
@@ -1261,7 +1300,8 @@ type Extension[T any] struct {
 	Ext    Keyspace
 	Legacy LegacyRange
 	C      codec.Codec[T]
-	Hash   func(row []byte, entryID string) [32]byte // entryID "" for a whole-row record
+	Hash     func(row []byte, entryID string) [32]byte // entryID "" for a whole-row record
+	Widening bool
 }
 
 // Get reads the legacy row and its record in one snapshot. ErrNotFound when
@@ -1269,11 +1309,14 @@ type Extension[T any] struct {
 func (e Extension[T]) Get(ctx context.Context, legacyKey []byte, entryID string) (row []byte, rec ExtRecord[T], err error)
 
 // Put stages, in b, the legacy row AND the record with legacy_ref.fp =
-// Hash(row), and an Expect on the record's previous bytes. The record keeps
-// Suspended if it was suspended or read stale (a routine write never clears
-// it); the caller adds the Expect on the legacy row it read (its claim is
-// Serialized).
-func (e Extension[T]) Put(ctx context.Context, b *Batch, legacyKey []byte, entryID string, row []byte, v T) error
+// Hash(row), and an Expect on exactly the record bytes the caller's Get saw
+// (seen; the zero ExtRecord = "no record"), so an extension-only
+// read-modify-write never loses a concurrent update (DATA5-14). With
+// Widening, the record keeps Suspended if it was suspended or read stale (a
+// routine write never clears it); without, Put re-stamps it current. The
+// caller adds the Expect on the legacy row it read (its claim is Serialized,
+// R5-4).
+func (e Extension[T]) Put(ctx context.Context, b *Batch, legacyKey []byte, entryID string, seen ExtRecord[T], row []byte, v T) error
 
 // Confirm is the admin re-confirmation: it re-stamps legacy_ref.fp from the
 // current row and clears Suspended. The owning service audits the call.
@@ -1282,6 +1325,23 @@ func (e Extension[T]) Confirm(ctx context.Context, b *Batch, legacyKey []byte, e
 // Delete stages the deletion of the record (with the legacy row's own delete,
 // or alone for an orphan).
 func (e Extension[T]) Delete(b *Batch, legacyKey []byte, entryID string) error
+
+// ExtConfirmer is the optional legacy capability (SIMP5-4) of a store whose
+// legacy implementation keeps Widening extension records: the audited admin
+// re-confirmation of one suspended record (Extension.Confirm underneath).
+// id is the record ID the owner spec defines (kind-qualified where one store
+// keeps several record kinds). A store without it has nothing to confirm.
+type ExtConfirmer interface {
+	Confirm(ctx context.Context, b *Batch, id string) error
+}
+
+// Covering is the optional legacy capability of a routed store's legacy half
+// (SIMP5-1): Covers reports whether the legacy store holds, or would hold
+// for a new record, the record with this owner-defined ID. A legacy store
+// without it covers every record; the native half is never asked.
+type Covering interface {
+	Covers(id string) bool
+}
 ```
 
 Cost surfaced: the store interfaces become frozen SDK surface (the API-stability gate measures
@@ -1359,21 +1419,26 @@ type Served struct {
 
 ### 5S.3.14 Deferred-build members
 
-Land with the first cutover (03 §3.4; SIMP4-1, SIMP4-2, SIMP4-4). `archtest.DeferredMembersAbsent`
-fails if any of these exists in `core/`; the PR that builds one deletes that entry.
+Land with their first consumer (03 §3.4; SIMP4-1, SIMP4-2, SIMP4-4, SIMP5-6, SIMP5-7): the cutover members
+with the first cutover, the `Online` members with the first `Online` data migration. Per 03 §3.4 the first
+column holds only package-qualified Go identifiers, which `archtest.DeferredMembersAbsent` checks are
+absent from non-test `core/` files; the PR that builds one deletes its entry. Everything else deferred is in
+the second column and is not checked (COR5-16).
 
-| Member | Why deferred |
+| Member | Also deferred (not checked) |
 |---|---|
-| `storage.Grant`, `storage.GrantMode`, `storage.Spec.Grants`, `storage.ErrGrantNotOwned`, the claim-ledger field `grants`, `mediacore_storage_grant_ops_total`, `storage_grants.golden`, 06 `ProblemGrant` (round 3's `Exclusive`, `GrantReadWrite`, the legacy-migration grant and `ErrGrantConflict`/`ErrGrantNotSerialized`/`ErrGrantMissing` are not deferred: they are deleted) | only a cutover's delete reaches another owner's range (R4-1) |
-| `storage.Served`, `storage.Migration.RequiresServed`, the per-level records `c/storage/served/<owner>/<level>`, health token `storage_step_deferred` | no extraction step waits for a served run (SIMP4-4) |
-| `storage.UpgradeFloor.Requires`, `storage.ErrUpgradeFloor.Missing`, the `.storage-applied` line `<owner> done <id>`, 05-updater `UpgradeRequirement.steps` | the only floor of the extraction is books' `Version` floor (SIMP4-4) |
+| `storage.Grant`, `storage.GrantMode`, `storage.Spec.Grants`, `storage.ErrGrantNotOwned`, `module.ProblemGrant` | the claim-ledger field `grants`, metric `mediacore_storage_grant_ops_total`, `storage_grants.golden`. Only a cutover's delete reaches another owner's range (R4-1). Round 3's `Exclusive`, `GrantReadWrite`, the legacy-migration grant and `ErrGrantConflict`/`ErrGrantNotSerialized`/`ErrGrantMissing` are not deferred: they are deleted |
+| `storage.Served`, `storage.Migration.RequiresServed` | the per-level records `c/storage/served/<owner>/<level>`, health token `storage_step_deferred`. No extraction step waits for a served run (SIMP4-4) |
+| `storage.UpgradeFloor.Requires`, `storage.ErrUpgradeFloor.Missing` | the `.storage-applied` line `<owner> done <id>`, and 05-updater's deferred requirement members (listed there, not here). The only floor of the extraction is books' `Version` floor (SIMP4-4) |
+| `datamigrate.Online`, `datamigrate.DataMigration.Writes`, `storage.ReadAdapter`, `storage.Spec.ReadAdapters` | the `Online` precondition-only `StepWriter` rule, an `Online` migration's `Barrier` hold and restart, the kernel-registered kinds `core.storage.migrate` and `<module>.datamigrate.<name>` with their synthesised definition, 05-tasks' dispatch exemption for those kinds (5T.3.12, 5T.4 step 0), tests `TestModuleOnlineMigrationRunsAsModuleKind` (the one name, run over a test module fixture, not hello; COR5-17), `TestOnlineMigrationYieldsPastTimeout`, `TestOnlineCopyNeverOverwritesOwnerWrite`, 05-tasks' `TestModuleOnlineMigration_OwnerWritesSurvive` and 06's `TestOnlineDataMigrationIsModuleKind`. No S0–S10 consumer (SIMP5-7). `datamigrate.DataMigration.RewritesInPlace` is **not** deferred: the storage-efficiency release B, a `BootBlocking` re-encoding of keys inside its own `Source`, needs it |
 
 ## 5S.4 Lifecycle
 
 Boot order is [06](06-app-sdk.md) §6.5.1's one phase table (R2-8); where this list and 06 differ, 06
 wins. This list names storage's own steps and the 06 phase each belongs to. **Write rule:** steps 1–5
 write nothing; the first store write of a boot is the fresh-install batch or the checkpoint, both at
-step 6 (06 P4a; DATA4-21).
+step 6 (06 P4a; DATA4-21); storage's last bookkeeping write of a boot is the served-ledger commit at step 14b (06 Run
+step (3b), R5-5).
 
 ```
 06 P−1  updater.Boot (05-updater): may restore .prev before anything below runs; its Pending result
@@ -1392,28 +1457,33 @@ kernel.Open(storage)                                                   06 P2 —
                                                                        fail → boot error
   2 pebble.Open without a format version (os.OpenRoot on the DB's parent directory, which need not be
     under the state directory, DATA2-19); read level stamps, the sidecars, legacy projection, marker,
-    store generation and the DB directory's identity, the foreign-open identity, the served ledger's
-    last record (§5S.3.7)
+    store generation and the DB directory's identity, the foreign-open identity and the sidecar's full
+    stat, the served ledger's last record and owed entries, c/storage/boot and the lineage file
+    <state_dir>/storage.boot.json (§5S.3.7); compute the lineage verdict
   3 guard: any owner's store level > build level → LevelTooNewError; the store short of a declared
     UpgradeFloor version → ErrUpgradeFloor                             fail → boot error, nothing written
   4 validate specs: keyspaces, claims (overlap, CheckedWrites ⇒ Serialized, orphans vs
     c/storage/claims/), legacy stores (each supplied constructor names a subsystem in the build and an
     owner module that holds the families; the legacy/native choice vs the ledger's backends →
-    ErrLegacyStoreMissing), migration DAG (unordered owners), data migrations (Online ⇒ Serialized
-    Source, name grammar)                                              conflict → boot error (all listed)
+    ErrLegacyStoreMissing), migration DAG (unordered owners), data migrations (name grammar),
+    Seed only with Additive                                            conflict → boot error (all listed)
   5 install marker (decided here, written at step 6):
       empty store → FRESH INSTALL planned
       non-empty, marker absent → verify [c/, c0) and [m/, m0) empty (read only); choose the install_id:
         the one a restore boot hands over (05-backup step 8, DATA3-12), else that of an open
-        checkpoint record of this store generation (DATA4-16), else a new one
+        checkpoint record of this store generation (DATA4-16), else — when the lineage file records
+        this db_path — the file's install_id (an in-place restore of this install by an older build,
+        e.g. of a pre-S0 archive, keeps its lineage, so 05-backup re-applies the journal tail before
+        the hooks; DATA5-13), else a new one
       marker present → nothing
                                                                        06 P4a
   6 empty store → FRESH INSTALL (DATA2-28, DATA3-21): ONE batch writes c/storage/install,
       c/storage/epoch, every owner's stamp at the build's supported level, an applied record for every
-      registered versioned step, `done` for every registered data migration and the claim ledger; the
-      sidecars follow. A crash before that batch leaves an empty store and the next boot starts over;
-      no checkpoint. (No app row is seeded here: books' counters treat an absent counter as HEAD's
-      seed, §5S.9.3, DATA4-10.)
+      registered versioned step except Seed steps, `done` for every registered data migration and the
+      claim ledger; the sidecars follow. A crash before that batch leaves an empty store and the next
+      boot starts over; no checkpoint. Seed steps then run in P4b (step 8) as ordinary steps (COR5-8).
+      (No kernel seeding exists: books' counters treat an absent counter as HEAD's seed, §5S.9.3,
+      DATA4-10; an owner's initial rows come from its Seed steps.)
     otherwise evaluate RequiresSelfServed read-only; a ratchet, a step or data migration that will RUN,
       or the marker → take the attempt's checkpoint, or reuse it (§5S.3.12); the marker (with step 5's
       install_id) is the first write after it
@@ -1421,11 +1491,11 @@ kernel.Open(storage)                                                   06 P2 —
   7 ratchet to the pinned Pebble format
                                                                        06 P4b
   8 run the DAG (§5S.3.5): books legacy steps 1..LegacyCap first, on books' own claims, then versioned
-    steps (books' conversion of HEAD's init-phase key migrations among them, §5S.9.3) and BootBlocking
-    data migrations (in process, tasks.ForEach); deferrals (status listener up, 05-health; ExtendStart
+    steps (books' conversion of HEAD's init-phase key migrations among them, §5S.9.3; a fresh install's
+    Seed steps) and BootBlocking data migrations (in process, tasks.ForEach); deferrals (status listener up, 05-health; ExtendStart
     per step)                                                          fail → boot error; checkpoint open
-  9 write c/storage/claims/<owner> (backends), the served ledger's last record (with this build's
-    duties), the foreign-open identity, the store generation; rewrite .storage-levels and
+  9 write c/storage/claims/<owner> (backends), the served ledger's owed entries (never its last record,
+    R5-5), the pending foreign-open identity of the sidecar this boot rewrote, the store generation; rewrite .storage-levels and
     .storage-applied; clear the books marker; write completed_at on the attempt's checkpoint when
     every step that ran finished
                                                                        06 P4c
@@ -1434,26 +1504,32 @@ kernel.Open(storage)                                                   06 P2 —
                                                                        06 P4d
  11 every-boot reconcilers, in 06's fixed order, each a function of its owning package over its
     handles and stores, no service built yet (DATA2-24, COR3-2):
-      (a) secrets.Open (the keyring only: no import, no derive-key retirement, which P5 decides), then
-          05-config's AttachOverrides over its store — for ABO books' legacy config store, inside which
-          ABO's settings load, settings-encryption init and key-regeneration guard run over the one DB
-          handle (R4-6): DB overrides become visible, so (b) finds a backup directory an admin set in
-          Settings
+      (a) in this order (COR5-2): the config store's legacy Open (config.LegacyOpener; for ABO books'
+          legacy config store runs ABO's key-regeneration guard and settings-encryption init, and
+          S2b–S3 also the settings load, over the one DB handle, R4-6) → secrets.Open(…,
+          OverrideStore.Secrets()) (keyring, k0-legacy capture, the R4-2 roll-forward re-import of
+          config secrets — its only store writes besides c/secrets/meta; no derive-key retirement,
+          which P5 decides) → Store.SetSecrets → Store.Attach (Load, read only): DB overrides become
+          visible, so (b) finds a backup directory an admin set in Settings
       (b) revocation journal (05-backup §5B.3.6): locate it from the effective core.backup.dir (moving
           it first when its recorded location differs); check its header's install_id against
           c/storage/install (a mismatch sets it aside and starts a new journal, DATA4-15); read the
           store's head before any append; classify the boot by store generation (DATA4-7); re-apply the
           verified tail the store lacks through auth's and rbac's stores (the one stored format); only
-          then append the gap and restore lines, each with its head update (SEC4-5)
+          then append the gap and restore lines, each with its head update (SEC4-5); the gap line's
+          batch deletes the served ledger's owed journal entry
       (c) post-restore hooks (05-backup §5B.3.4 step h) on a restore boot as P0a decides it, or on a
           boot that finds a replaced store (another store generation with no staged restore), in the
           order auth, rbac, audit
-      (d) auth.BootWrites (05-authn §5): the _system principal, the one-shot expiry stamp on legacy API
-          keys and the verified-email reconcile, written through auth's store (for ABO, books' legacy
-          rows; DATA3-18, DATA4-10, DATA4-12)
+      (d) auth.BootWrites (05-authn §5), from S4 r2: the _system principal, the revoke-after-rollback of
+          sign-ins created before the owed auth entry's detected time (its batch deletes the entry),
+          the one-shot expiry stamp on legacy API keys and the verified-email reconcile, written through
+          auth's store (for ABO, books' legacy rows; DATA3-18, DATA4-10, DATA4-12); until S4 r2 books'
+          start hook runs HEAD's ReconcileVerifiedEmails (§5S.9.3, COR5-7)
       (e) compat usage records buffered in P0 (09 §9.2.9)
-    There is no mirror rebuild, no verification rebuild and no tasks reconcile (R3-1; 05-tasks rebuilds
-    stale run records inside Executor.Run)
+    There is no mirror rebuild, no verification rebuild and no tasks reconcile (R3-1; from S5 05-tasks
+    rebuilds stale run records inside Executor.Run through tasks.Recoverer; until S5 books' start hook
+    runs HEAD's ReconcileOpsV3WithV2 before it builds its ops registry, §5S.9.3, COR5-7)
                                                                        06 P6
  12 issue handles to started modules (module.StorageHandles); a module constructor writes nothing
     (books' remaining HEAD init-phase writers have the homes of §5S.9.3)
@@ -1462,7 +1538,13 @@ kernel.Open(storage)                                                   06 P2 —
                                                                        06 §6.5.2
  14 Run start step (3a): derived version/generation check, Load, c/storage/derived/<module>/<name>;
     the build runs enqueued where needed (their run records, COR4-16). Run step 5 (task executor):
-    queued builds and Online data migrations start; index reconciler component after module hooks
+    queued builds start; index reconciler component after module hooks
+ 14b Run step (3b), the served-ledger commit (06 §6.5.2; R5-5, SEC5-5): one batch writes
+    c/storage/served/<owner>/last for every owner with this binary's ID and duties, the foreign-open
+    identity (promoting the pending one) and c/storage/boot {n = max(store n, file n) + 1, new
+    nonce}; after it commits, <state_dir>/storage.boot.json is rewritten. Every consumer of the
+    previous record has committed by now (P4d steps 2, 4 and 5, Run (3a)); a boot that fails earlier
+    leaves last, the identity and the lineage untouched
  15 after readiness: self-served record (first_ready ends the upgrade attempt; confirmed_at);
     checkpoint consumption (§5S.3.12)
 App.Run ends → executor drained (05-tasks) → handles invalidated → gate drain (core.storage.close_timeout)
@@ -1471,7 +1553,11 @@ App.Run ends → executor drained (05-tasks) → handles invalidated → gate dr
 
 Until 09 S2b the kernel runs without `storage` (06 §6.5.1 "Stages"): books opens its store and runs its
 own migrations as HEAD does, and only 09 S0's guard writes `c/storage/install`, the served ledger, the
-foreign-open identity and the two sidecars, with the encodings of §5S.3.3 and §5S.3.7.
+foreign-open identity and the two sidecars, with the encodings of §5S.3.3 and §5S.3.7; the guard follows
+the same rule — `owed` at open, `last` only once the books store has finished its startup — and writes no
+boot lineage, which starts at S2b. From S2b to S4 r1 books' start hook (06 §6.5.2 step (2)) also runs the
+every-boot repairs HEAD ran at open whose core homes land later: `ReconcileOpsV3WithV2` before books
+builds its ops registry until S5, and `ReconcileVerifiedEmails` until S4 r2 (§5S.9.3, COR5-7).
 
 A disabled module (G1) still has its claims validated and recorded in the claim ledger and its keyspace
 reserved; the legacy stores the app supplies from its handles are built anyway, so a core service never
@@ -1487,7 +1573,8 @@ them wait (§5S.3.5).
 | Store level below the build's, or books marker present | neither: the build's pending level step runs before any service starts; a build without it has a lower supported level and is refused by the row above | A half-converted store must never serve (DATA-20). |
 | Store short of a declared `UpgradeFloor` (version or `Requires`) | closed (`ErrUpgradeFloor`, names the release to install first and the missing steps), before the checkpoint; the same check refuses the binary before it is applied (`CheckReader` `upgrade_floor`, updater `StoreState`) | The code its pending steps need is gone; failing half-way, or applying a build the next boot refuses, would be worse (R2-4, DATA2-2, DATA3-10, OPS3-7). |
 | Level step (books' physical raise, a cutover) whose `RequiresSelfServed` does not hold | neither: deferred, boot continues, health `storage_step_pending` | A one-way step must not run on an unconfirmed or too-young build (OPS2-2). |
-| Foreign open detected (sidecar identity changed) | open (logged; every level's served run restarts; the previous boot's duties count as none) | An older binary served the store; clocks that measure "served since" and duties that must hold continuously restart (DATA2-9). |
+| Foreign open detected (sidecar identity or stat changed, sidecar missing, or a behind lineage) | open (logged; the previous boot's duties count as none, so every duty consumer falls back, `TestServedDutiesFallBack`) | An older binary served the store, or its content is older than the last core boot's; duties that must hold continuously restart (DATA2-9, SEC5-5, SIMP5-12). |
+| A boot fails after step 9 and before its served-ledger commit (Run step (3b)) | open: `last` and the lineage stay as they were, `owed` keeps every entry no consumer cleared; the next boot's consumers fall back again, idempotently | The rollback evidence must survive a failed roll-forward boot, the common case (COR5-3, DATA5-6, R5-5). |
 | A sidecar unreadable or missing at open | open (rewrite from stamps and bookkeeping) + error log | Stamps and bookkeeping are authoritative; kept from `pebble_store.go:651-660`. Before open (`CheckReader`, `StoreState`) the same condition is closed (`sidecar_unreadable`). |
 | Level-step batch commit returns an error | closed (step fails); sidecars rewritten from stamps first | A failed raise must not block rollback (OPS-26b). |
 | Claim conflict, cross-owner overlap without `Except`, orphan claimed without `TakesOver`, keyspace collision, `CheckedWrites` without `Serialized`, zero-valued `MigrationCompat`/`Mode`/`Parallelism`, migration cycle or unordered owner | closed (boot) | Ownership ambiguity is a data-corruption risk; registration time is the cheapest place to catch it. |
@@ -1507,7 +1594,7 @@ them wait (§5S.3.5).
 | Unknown `Breaking` step on disk | closed (`ErrKeyspaceTooNew`) | Secondary to the level check. |
 | Unknown `Additive` step on disk | open + warning | G5: previous release keeps working. |
 | BootBlocking data migration fails `Verify` | closed (boot), state `failed`, held list kept | Same as B6a "stop states". |
-| Online data migration fails | open (app serves through the read adapters); task `failed`; health `degraded` | Old and new rows are both readable while it is incomplete. |
+| Online data migration fails (deferred with the mode, §5S.3.14) | open (app serves through the read adapters); task `failed`; health `degraded` | Old and new rows are both readable while it is incomplete. |
 | Cutover crashes mid-way | resume from its persisted phase; nothing is deleted before `raised` | A delete ahead of the raise would let an older build open a half-deleted family (§5S.3.13). |
 | Full-text index open fails | open (`Degraded`; callers fall back) | Kept from `search/register.go:38-60`. |
 | Index dirty mark fails | closed (the whole entity batch fails) | It is in the same batch; partial commit impossible. |
@@ -1538,8 +1625,8 @@ them wait (§5S.3.5).
   cutover's fold included) and the census do so; `mediacore_storage_snapshot_oldest_seconds` alarms on violations.
 - Data migrations and index rebuilds are bounded worker pools sized by a declared `tasks.Parallelism`
   over **disjoint key ranges** from a persisted plan; nothing is shared between shards except counters
-  (atomics). An `Online` migration over a `Serialized` range commits per item with preconditions, so
-  it never overwrites a concurrent owner write (DATA-13).
+  (atomics). (Deferred with the mode, §5S.3.14.) An `Online` migration over a `Serialized` range commits
+  per item with preconditions, so it never overwrites a concurrent owner write (DATA-13).
 - Batch size: `Commit` refuses batches over `core.storage.max_batch_bytes` (default 256 MiB) with
   `ErrBatchTooLarge`, so a runaway writer cannot stall the WAL.
 - Tests use `testing/synctest` for snapshot-age and lease-drain timing, and `vfs.NewCrashableMem`
@@ -1615,8 +1702,10 @@ interface books' legacy implementation serves it through (DATA-2). 04, [05-tasks
 instead of restating (SIMP4-7, COR4-22, DATA4-20: the stage column below is the one copy; 09 decides a
 stage by editing it). Counts are from `keyfamilies.go:37-345`.
 
-The table is **the same at every stage of the extraction** (R3-1, R4-1): books holds every family in the
-mode shown, no claim changes owner or mode, nothing is copied, and **no core subsystem holds a handle on
+The table's families, owners, modes and `Serialized` flags are **the same at every stage of the
+extraction** (R3-1, R4-1); a `CheckedWrites` flag applies from the stage written beside it, the stage that
+converts the row's last blind writer (R5-3, COR5-1). Books holds every family in the mode shown, no claim
+changes owner or mode, nothing is copied, and **no core subsystem holds a handle on
 any of these families**: books' own store code reads and writes them as the legacy implementation of the
 named store interface, from the stage shown (09's) until that family's cutover (§5S.3.13). "Sole writer"
 means that from that stage every runtime write of the family goes through books' legacy store package,
@@ -1630,42 +1719,51 @@ carve-outs in ABO's claim set.
 |---|---|---|---|---|---|
 | 1 | `u:` + `idx:user:` | 1 | books RW, Serialized | identity store (S4), sole writer | legacy `User` rows and their index rows; native-only user fields (restriction detail, reset-required) are extension records, and every restriction is also expressed in a field older builds read (05-authn §11) |
 | 2 | `role:` + `idx:role:name:` | 1 | books RW, Serialized | `rbac.Store` (S4), sole writer | the role row holds legacy atoms only; namespaced permissions are Widening extension records, never extra strings in the row: HEAD's worker confinement is a "nothing else" test that an extra string defeats (SEC4-3); stale → suspended until an admin re-confirms (05-rbac) |
-| 3 | `apikey:` + `idx:apikey:` | 1 | books RW, Serialized | identity store (S4), sole writer | namespaced scopes are Widening extension records; the row always carries explicit, non-empty legacy scopes no wider than the native value (empty = all role permissions in older builds, `auth.go:405-408`; 05-authn §4.4) |
+| 3 | `apikey:` + `idx:apikey:` | 1 | books RW, Serialized | identity store (S4), sole writer | namespaced scopes are Widening extension records; the row always carries an explicit, non-empty legacy scope list no wider than the native value (empty = all role permissions in older builds, `auth.go:405-408`): a key with no admitted atom carries a scope that grants nothing on an older build, never an empty list, and a row that has or had an extension record is never read as `LegacyFullScope` (R5-6, DATA5-5, SEC5-1; 05-authn §4.4); the record's fingerprint covers the restriction and grant fields only, never `LastUsedAt`/`LastUsedIP`/`UseCount`, which HEAD rewrites on every use (`internal/database/pebble_store_auth.go:1284-1302`; DATA5-2, SEC5-12); a key an older build revoked reads revoked on roll-forward (monotone, R5-6) |
 | 4a | `invite:` + `idx:invite:username:` | 1 | books RW, Serialized (DATA4-9) | identity store (S4), sole writer | legacy invites read by presented token and consumed with `Expect` + `Delete` (one of two concurrent accepts wins); deleted on accept, expiry or restore; never written or re-owned — a user merge deletes the source's open legacy invites (05-authn); new invites are hash-only standalone records, void on an older build (`internal/database/store.go:1004-1012`, DATA2-8) |
 | 4b | `inviteallow:` | 1 | books RW, Serialized | identity store (S4), sole writer | — |
 | 5 | `oauthid:` + `idx:oauth:` | 1 | books RW, Serialized | identity store (S4), sole writer | — |
 | 6 | `sess:` + `idx:sess:user:` | 1 | books RW, Serialized (DATA4-9) | identity store (S4), sole writer | read and deleted (`Expect` + `Delete`) on upgrade-on-use, expiry or restore, never written (SEC-19); new sessions are hashed standalone records: a rollback costs one sign-in (05-authn §11) |
-| 7 | exact keys `setting:config_blob` (Serialized, CheckedWrites) and the four legacy secret rows `setting:openai_api_key`, `setting:google_books_api_key`, `setting:hardcover_api_token`, `setting:basic_auth_password` (Serialized, CheckedWrites) | — | books RW (inside row 16; same-owner exact-key claims) | `config.OverrideStore` (S2b reads, S3 writes); books' legacy config store also runs ABO's settings load, settings-encryption init and key-regeneration guard over the one DB handle (R4-6) | keys with no legacy name are standalone records in books' extension family; a secret the new build writes is stored encrypted in core's `c/secrets/` and **every** plaintext copy — the legacy row and the `config.yaml` copy — is replaced in the same step by an unguessable, never-matching sentinel, never emptied, so after a rollback the older build's gate refuses every credential until the operator re-enters it (R4-2, SEC4-1, DATA4-1, DATA4-3; 05-config); `CheckedWrites` makes a blind write by any other books path (e.g. HEAD's internal-flag route writing any `setting:` key, `internal/server/handlers/operations/handler.go:378-397`) fail, and that route refuses these keys from S3 (DATA4-4); nothing deletes the blob during the extraction (05-config C4, §1.12.2; DATA3-3) |
+| 7 | exact keys `setting:config_blob` (Serialized; CheckedWrites from S3) and the four legacy secret rows `setting:openai_api_key`, `setting:google_books_api_key`, `setting:hardcover_api_token`, `setting:basic_auth_password` (Serialized; CheckedWrites from S3) | — | books RW (inside row 16; same-owner exact-key claims) | `config.OverrideStore` (S2b reads, S3 writes); books' legacy config store also runs ABO's settings load, settings-encryption init and key-regeneration guard over the one DB handle (R4-6) | keys with no legacy name are standalone records in books' extension family; a secret the new build writes is stored encrypted in core's `c/secrets/` and **every** plaintext copy — the legacy row and the `config.yaml` copy — is replaced in the same step by an unguessable, never-matching sentinel, never emptied, so after a rollback the older build's gate refuses every credential until the operator re-enters it (R4-2, SEC4-1, DATA4-1, DATA4-3; 05-config); `CheckedWrites` makes a blind write by any other books path (e.g. HEAD's internal-flag route writing any `setting:` key, `internal/server/handlers/operations/handler.go:378-397`) fail, and that route refuses these keys from S3 (DATA4-4). `CheckedWrites` starts at **S3** (R5-3, COR5-1, DATA5-11): from S2b until the S3 façade HEAD's own blind writers are these rows' writers — `saveRawBlob` and `SaveConfigToDatabase`'s secret loop (`internal/config/persistence.go:883-885,1989-2006`; the loop only warns on a failed write, so a refused write would silently drop a secret) and the corrupt-secret repair that runs inside the legacy `Open` (`:1233-1262`) — and the S3 PR converts each to `GetForUpdate` + `Expect` + `RetryOnConflict` through books' store; S2b–S3 keep `Serialized` with HEAD's single writer path. HEAD's four encrypted secret rows are read in place, not moved (R5-1). Nothing deletes the blob during the extraction (05-config C4, §1.12.2; DATA3-3) |
 | 8 | exact keys `setting:bootstrap_token_hash`, `setting:bootstrap_token_expires_at` | — | books RW (inside row 16) | none | auth's bootstrap hash is a standalone record of the identity store, regenerated at every start; an older build regenerates its own rows (05-authn §4.1) |
-| 9 | sub-prefix `setting:scheduled_task_last_tick.`; exact keys `setting:library_scan_full_last_run`, `setting:maintenance_window_last_run`, `setting:registry.operations_paused` | — | books RW (inside row 16) | run store (S5, from T0+T1), sole writer | every runtime write goes through books' legacy run store from T0+T1, and books' own scheduler stops ticking then (core runs its definitions), so two schedulers never tick one clock (DATA4-5, 05-tasks); native-only clock fields are extension records whose legacy-dependent fields are Derived (stale → `missed` 0, `gate_closed_at` nil; 05-tasks §5T.6) |
+| 9 | sub-prefix `setting:scheduled_task_last_tick.`; exact keys `setting:library_scan_full_last_run`, `setting:maintenance_window_last_run`, `setting:registry.operations_paused` | — | books RW, Serialized (inside row 16; R5-4: `ClockStore.Advance` and the pause marker are checked at commit, and the clock rows carry extension records) | run store (S5, from T0+T1), sole writer | every runtime write goes through books' legacy run store from T0+T1; books' ticker keeps ticking the 38 definitions through books' `ClockStore` until T7 converts each and deletes its ticker entry in the same PR, so exactly one scheduler ticks each clock and none stops early (`TestOneSchedulerPerKind`; DATA4-5, DATA5-8, 05-tasks §5T.6.2); native-only clock fields are extension records whose legacy-dependent fields are Derived (stale → `missed` 0, `gate_closed_at` nil; 05-tasks §5T.6) |
 | 10 | exact keys `preference:storage_format`, `preference:storage_migration` | — | books RW (inside row 16), written only through `LegacyGuardProjection.Stage` (§5S.3.7, DATA2-22) | none | — |
-| 11 | ops run families: `opv2:act:`, `opv2:op:`, `opv2:state:`, `opv3:run:`, `opv3:prog:`, `opv3:ckpt:`, `op:batch:`, `opv3:sched:` | 8 | books RW | run store (S5, from T0+T1), sole writer | runs stored in place in HEAD's format (the `opv3:` record and its paired `opv2:` rows in one batch), one row per run, never copied; books' residue keeps only code called by its legacy steps and dead code awaiting T8 (DATA4-5); native-only fields are extension records (05-tasks §5T.6) |
+| 11 | ops run families: `opv2:act:`, `opv2:op:`, `opv2:state:`, `opv3:run:`, `opv3:prog:`, `opv3:ckpt:`, `op:batch:`, `opv3:sched:` | 8 | books RW, Serialized (R5-4: `Transition` and `Insert`'s uniqueness are checked at commit by `GetForUpdate`/`Expect`, replacing HEAD's `opsMu`, `internal/database/pebble_store_ops_v3.go:1029-1041`; not `CheckedWrites`, because books' legacy steps 62/65/66 write these rows blind in P4b) | run store (S5, from T0+T1), sole writer | runs stored in place in HEAD's format (the `opv3:` record and its paired `opv2:` rows in one batch), one row per run, never copied; books' residue keeps only code called by its legacy steps and dead code awaiting T8 (DATA4-5); native-only fields are extension records (05-tasks §5T.6) |
 | 12 | v1 `opstate:`, `op_result:`, `opsummary:`, `operation:` | 4 | books RW: live books writers — `opstate:` (`internal/operations/state.go:59-74`), `op_result:` (`CreateOperationResult`, `internal/database/pebble_store_operations.go:438`, 15 call sites, e.g. `internal/server/metadata_ops.go:391`), `opsummary:` (`SaveOperationSummaryLog`, `:256`, e.g. `internal/maintenance/jobs/backfill_book_files.go:197`), `operation:` (`UpdateOperationStatus`, `:138`, `internal/operations/registry/legacy_op_status.go:244`) | `op_result:`, `opsummary:`, `operation:`: the run store's v1 history reader, read only (S5); `opstate:`: none — core never reads it (05-tasks §5T.6, SIMP4-7) | merged into `GET /runs`; AgingOut once 05-tasks' `TestLegacyOpsWriters` ratchet reaches zero writers (DATA-15, DATA2-12) |
 | 13a | `op:completion:`, `op:deprev:` (`Requires` stamps) | 2 | books RW | run store (S5, from T0+T1), sole writer | read and written in place (library-scale, never copied); stamps of subjects with no legacy type are standalone records (05-tasks §5T.6; OPS2-9) |
-| 13 | all other ops families: v1 `operationlog:`; `op:`; `opv2:` and its other 10 children; `opv3:` and its other 15 children | 29 | books RW | run store (S5, from T0+T1): sole writer of the `op:`, `opv2:`, `opv3:` families (queues, indexes, trails, pages, Fixer rows); `operationlog:` read and retention-deleted | written in place by the same implementation as row 11; terminal history deleted only by retention (05-tasks §5T.6) |
-| 14 | `syslog:` | 1 | books RW | journal store (S5) | HEAD's `StandardLogger` writer and pruner stay until the S5 release that starts the journal and are removed in that release (MOD4-5); from then books' legacy journal store reads in place, retention-deletes in chunks and holds the journal's records (05-logging decides their format; no level stamp; DATA3-14 is resolved by R3-1) |
+| 13 | all other ops families: v1 `operationlog:`; `op:`; `opv2:` and its other 10 children; `opv3:` and its other 15 children | 29 | books RW; every `op:`, `opv2:` and `opv3:` family books' run store writes is Serialized (R5-4: the queue and index rows `Insert`/`Transition` write in the run's batch); `operationlog:` not | run store (S5, from T0+T1): sole writer of the `op:`, `opv2:`, `opv3:` families (queues, indexes, trails, pages, Fixer rows); `operationlog:` read and retention-deleted | written in place by the same implementation as row 11; terminal history deleted only by retention (05-tasks §5T.6) |
+| 14 | `syslog:` | 1 | books RW, Serialized (R5-4: the journal store's extension records stage an `Expect` on the row they annotate, 05-logging §5) | journal store (S5) | HEAD's `StandardLogger` writer and pruner stay until the S5 release that starts the journal and are removed in that release (MOD4-5); from then books' legacy journal store reads in place, retention-deletes in chunks and holds the journal's records (05-logging decides their format; no level stamp; DATA3-14 is resolved by R3-1) |
 | 15 | `act:` (+12 children) | 13 | books RW: books' activity feed (05-logging) | none | core does not serve the activity feed (DATA4-20); core audit writes only new rows in its own `c/audit/` |
 | 16 | `setting:` (+`repairs_last_apply_op:`, `repairs_last_plan_op:`), `preference:`, `pref:` (+`pref:_system:` and its 6 children) | 12 | books RW: runtime markers, per-book and per-user state, migration bookkeeping (`preference:db_version`, `preference:migration_<n>`; resolution 7) | only the exact keys and sub-prefix of rows 7 and 9 | they are not config; a broad store would hand library-scale book state to core (DATA-1). HEAD's one-shot API-key expiry flag `setting:system:migration:apikey_expiry_stamp_v1_done` (`internal/server/apikey_expiry_stamp.go:23,40-54`) is read by books' legacy identity store, so `auth.BootWrites` keeps HEAD's one-shot semantics (DATA4-12, 05-authn §5) |
 | 17 | `guestcftoken:` | 1 | books RW: guest tokens stay in ABO (09 S4) | none | — |
 | 18 | `idx:` (remainder) | 1 | books RW | sub-prefix `idx:sidx:dirty:` → `index.DirtySet` (S7) | the full-text dirty set stays in HEAD's format, so both builds drain one set (§5S.3.8) |
-| 19 | everything else, incl. `counter:` and the bare keys `narrator_counter`, `sync_alias_use_seed_cutoff` (exact-key claims) | 180 | books RW; same-owner children `book:hash:`, `book:organizedhash:`, `book:originalhash:`, `library:` Retired; `book:author:`, `book:series:` AgingOut | `import_path:` (Serialized, CheckedWrites) and exact key `counter:import_path` (Serialized) → `library.RootSource` (S7); `aijob:`, `aijob_batch:`, `aijob_payload:` → AI batch-job store (S7), sole writer; `provider_throttle:`, `provider_daily_budget:` → provider gate store (S7), sole writer | import roots: books' scan statistics (`LastScan`, `BookCount`) and library's root edits both read-modify-write one row, so every writer of it commits with an `Expect` — books' scanner, autoscan and filesystem-handler writers become a field-merge `GetForUpdate` + `RetryOnConflict` that updates only the statistics (DATA4-4); books' source writes through its repository layer, so books' in-memory root table stays current; native-only root fields are extension records (05-library); AI: native-only job fields are extension records whose apply state is Derived from the legacy status (a terminal job is never re-staged; 05-ai); provider gates: holds and counters of non-metadata scopes are standalone records (05-metadata) |
+| 19 | everything else, incl. `counter:` and the bare keys `narrator_counter`, `sync_alias_use_seed_cutoff` (exact-key claims) | 180 | books RW; same-owner children `book:hash:`, `book:organizedhash:`, `book:originalhash:`, `library:` Retired; `book:author:`, `book:series:` AgingOut | `import_path:` (Serialized; CheckedWrites from S7, in the PR that converts books' root writers, 09 S7; R5-3, COR5-1) and exact key `counter:import_path` (Serialized) → `library.RootSource` (S7); `aijob:`, `aijob_batch:`, `aijob_payload:` (Serialized, R5-4: `Create` and `Transition` are checked at commit, replacing HEAD's `aijobWriteMu`, `pebble_store_aijobs.go:23,96,123`) → AI batch-job store (S7), sole writer; `provider_throttle:`, `provider_daily_budget:` (not `Serialized`: the gate store commits its own batches under the Registry's mutex, as HEAD's `dailyquota.go:160` lock does, and checks nothing at commit, 05-metadata M2) → provider gate store (S7), sole writer | import roots: books' scan statistics (`LastScan`, `BookCount`) and library's root edits both read-modify-write one row, so from S7 every writer of it commits with an `Expect` (until then HEAD's blind root writers, `pebble_store_importpaths.go:166,199-208`, are its only writers and the row is `Serialized` only) — books' scanner, autoscan and filesystem-handler writers become a field-merge `GetForUpdate` + `RetryOnConflict` that updates only the statistics (DATA4-4); books' source writes through its repository layer, so books' in-memory root table stays current; native-only root fields are extension records (05-library); AI: native-only job fields are extension records whose apply state is Derived from the legacy status (a terminal job is never re-staged; 05-ai); provider gates: holds and counters of non-metadata scopes are standalone records (05-metadata) |
 
 Total: 7 (rows 1–6) + 8 + 4 + 2 + 29 + 1 + 13 + 12 + 1 + 1 + 180 = **258**. The ops group is 43
 families: v1 `operation:`, `operationlog:`, `op_result:`, `opstate:`, `opsummary:` (5), `op:` and 3
 children (4), `opv2:` and 13 children (14), `opv3:` and 19 children (20) = rows 11 (8) + 12 (4) + 13a (2)
 + 13 (29). `met:`, `aijournal:` and `system:census:` are generic-looking but stay books claims served
 through no core store until their owning spec ([05-metrics](05-metrics.md), [05-ai](05-ai.md)) changes
-this table; `system:census:` is a recomputable cache (core's census writes `c/storage/census/`).
+this table; in particular there is no `ai` result-journal store interface: `aijournal:` is written only by
+books' batch-apply handlers inside books' own module task (SIMP5-3 (a), DATA5-15), and the AI job families
+are exactly row 19's `aijob:`, `aijob_batch:`, `aijob_payload:`; `system:census:` is a recomputable cache (core's census writes `c/storage/census/`).
 
 The books claim list is **generated** from `keyfamilies.go` into `internal/books/storage_claims.go`
 (ABO side) by a `go generate` tool that skips the reserved `c/` and `m/` entries and emits every row as
-books' claim in the mode and flags above — the same for every build of the extraction; the legacy store
+books' claim in the mode and flags above — the same for every build of the extraction, except that a
+`CheckedWrites` flag is emitted from its row's stage (R5-3); the legacy store
 constructors are declared beside it by hand on books' `module.Manifest.LegacyStores`. A test checks
 that the generated claims and the supplied legacy stores agree with this table, counting by group rather
 than against a literal 258 (DATA-28), and 09's `TestBooksClaimsGenerated` asserts which legacy stores
 each stage's build supplies. `keyfamilies.go` stays ABO code, and so does every row format: core holds
-no audiobook key name (R1, 03 §3.4), which the ABO-side test `TestCoreHoldsNoBooksKeyName` checks by
-searching the core module's sources for every family prefix of `keyfamilies.go`. The census
+no audiobook key name (R1, 03 §3.4), which the ABO-side test `TestCoreHoldsNoAppKeyNames` (03 R1(c), 04
+§2.1 (h); one name, DATA5-16) checks (MOD5-3): its prefix set is the claim generator's **output** for owner
+`books` — the reserved `c/` and `m/` excluded, so core's own `c/tasks/`, `m/tv/` and `c/storage/install`
+literals pass — read through the exported `KeyFamilies()` (`keyfamilies.go:330`) at the file's current path
+(`internal/database/`, `internal/books/store/` from S2b); a core literal matches a prefix only when the
+character after it is not a space, so Go's `pkg: message` error strings pass (05-library's `"library: …"`
+sentinels, although `library:` is an ABO family, `keyfamilies.go:126`) while `"library:" + id` fails; and a
+reviewed allowlist file replaces the one inline exception (`invite:global`). The census
 **mechanism** moves into core as `storage.Admin.Census`, which partitions by claims + keyspaces:
 `census.go` and `census_families.go` take the family list as input and hold no key name, and so does
 `census_exact.go` except its `book_ver:` special case (`census_exact.go:169,545`), which stays books code
@@ -1720,8 +1818,8 @@ credentials.
 | `census.go`, `census_families.go`, `census_exact.go` | core `storage.Admin.Census` (the mechanism holds no key name); the `book_ver:` special case stays books behind a census hook (DATA2-29) |
 | `migrations.go` runner + `migration_bookkeeping.go` | core DAG runner; books' HEAD-style migrations become `LegacyMigration`s 1..`LegacyCap` over the version-source adapter (non-atomic, idempotent, DATA-8, DATA4-19), run first on books' own claims; every later books step is a `Migration` or `DataMigration`; the legacy steps and the store methods they call (incl. `MigrateOpsV2ToV3`) are deleted only in the **floor release**, which declares books' `UpgradeFloor{Version: LegacyCap, InstallFirst: <stepping-stone release>}` (R2-4, OPS4-5) |
 | identity, ops, config-blob, import-path, AI-job, provider-hold and search-dirty store code (`pebble_store_auth.go`, `pebble_store_ops_v2.go`/`_v3*.go`, `persistence.go`'s blob path, `pebble_store_importpaths.go`, `pebble_store_aijobs.go`, `provider_throttle.go`/`dailyquota.go`, `pebble_store_search_dirty.go`) | **stays in ABO** as books' legacy implementations of the core store interfaces (§5S.3.11), over books' own `LegacyRange` and extension keyspace, keeping HEAD's encodings, with their ratchets; nothing is moved into or re-implemented in core, so there is no second copy of the ops-format code (SIMP4-2) |
-| `ReconcileOpsV3WithV2` boot step (`store.go:1862-1870`) | books' legacy run store, called by 05-tasks inside `Executor.Run` (no P4d step) |
-| HEAD's init-phase writers in `initPebbleStore` (`pebble_store.go:689-786`; DATA4-10): the `library:`→`import_path:` key migration and `counter:library` move (`:722`, `:1060-1105`); counter initialisation (`:727-742`); the journal-clock seed and list-index backfill (`seedJournalClock`, `pebble_store_journal_clock.go:229-300`); the identification-index stamp (`loadIdentIndexState`, `ident_state.go:929-952`); `ReconcileVerifiedEmails` (`:759`); the storage-format stamp (`:766-786`) | each gets a home and books' constructor (P6) writes nothing: the key migration and the list-index backfill become books `Migration`s (`Additive`, P4b); books' counter allocation treats an absent counter as HEAD's seed `1`, so no seeding write exists (an older build seeds its own on open); the journal-clock repair and the identification-index stamp run in books' start hook (06 §6.5.2 step 2), before books serves; `ReconcileVerifiedEmails` becomes an `auth.BootWrites` item (P4d step 4) through the identity store, with `email_source` pinned in `TestLegacyStoreGolden`; the storage-format stamp is the guard's legacy projection (§5S.3.7) |
+| `ReconcileOpsV3WithV2` boot step (`store.go:1862-1870`) | books' legacy run store's `tasks.Recoverer`, called by 05-tasks inside `Executor.Run` from S5 (no P4d step); from S2b until S5 books' start hook (06 §6.5.2 step (2)) runs it before books builds its ops registry, because HEAD runs it before the registry whose boot resume acts on opv3 records (`store.go:1861-1871`) and nothing else would run it between S2b and S5 (COR5-7) |
+| HEAD's init-phase writers in `initPebbleStore` (`pebble_store.go:689-786`; DATA4-10): the `library:`→`import_path:` key migration and `counter:library` move (`:722`, `:1060-1105`); counter initialisation (`:727-742`); the journal-clock seed and list-index backfill (`seedJournalClock`, `pebble_store_journal_clock.go:229-300`); the identification-index stamp (`loadIdentIndexState`, `ident_state.go:929-952`); `ReconcileVerifiedEmails` (`:759`); the storage-format stamp (`:766-786`) | each gets a home and books' constructor (P6) writes nothing: the key migration and the list-index backfill become books `Migration`s (`Additive`, P4b); books' counter allocation treats an absent counter as HEAD's seed `1`, so no seeding write exists (an older build seeds its own on open); the journal-clock repair and the identification-index stamp run in books' start hook (06 §6.5.2 step 2), before books serves; `ReconcileVerifiedEmails` becomes an `auth.BootWrites` item (P4d step 4, from S4 r2) through the identity store's `auth.Reconciler`, with `email_source` pinned in `TestLegacyStoreSuites` — from S2b until S4 r2 books' start hook runs it, since `auth.BootWrites` is absent before S4 and skipped at S4 r1 (COR5-7); the storage-format stamp is the guard's legacy projection (§5S.3.7) |
 | `NewPebbleStore(path)` / `InitializeStore` / `globalStore` | books module constructor `database.NewPebbleStore(h module.StorageHandles)`; `globalStore` deleted |
 | `internal/database` call sites of `p.db.*` (`GatedDB` method set) | a thin ABO adapter `internal/database/legacyrange.go` mapping the used subset (Get/Set/Delete/DeleteRange/NewIter/NewBatch/NewIndexedBatch/NewSnapshot/LogData) onto `storage.LegacyRange`; admin calls (Checkpoint, Compact, Metrics, SSTables) move to core `storage.Admin` users (backup, health, metrics) |
 | ad-hoc identity mutexes (`inviteMu`, `apiKeyMu`, `sessionWriteMu`, `userMergeApplyMu`) | `Serialized` claims + `Expect` preconditions; the user merge's auth half becomes the `auth.Admin.StageUserMerge` participant (DATA-18) |
@@ -1758,24 +1856,30 @@ credentials.
 | `TestSameOwnerNestedClaimsSelectMode` | books' nested pairs boot; the longest match selects the child's mode |
 | `TestClaimOverlapFailsBoot` / `TestClaimCarveOutAccepted` | cross-owner rules, multi-owner conflicts listed together |
 | `TestOrphanedClaimNeedsTakeover` | claim ledger; removed module's claims not silently re-owned |
-| `TestABOClaimsMatchOwnershipTable` | generated books claims (modes, `Serialized`, `CheckedWrites`) and the supplied legacy stores equal §5S.9.1 by group; none touches `m/`, `c/`; the claims are identical for every stage's build |
-| `TestS2bBooksWritesEveryFamily` | the S2b claim set with books writing every family: zero violations in shadow and strict mode |
+| `TestABOClaimsMatchOwnershipTable` | generated books claims (modes, `Serialized`, `CheckedWrites` with its start stage) and the supplied legacy stores equal §5S.9.1 by group; none touches `m/`, `c/`; families, modes and `Serialized` identical for every stage's build; every family listed as served through a store interface that the interface writes under a commit-time precondition or annotates with an extension record is `Serialized` (R5-3, R5-4, DATA5-1) |
+| `TestS2bBooksWritesEveryFamily` | the S2b claim set with books writing every family, a settings save that changes a secret and a scan's import-root statistics write included: zero violations in shadow and strict mode, and the secret persists (COR5-1, DATA5-11) |
 | `TestLegacyFamiliesWrittenOnlyByLegacyStores` (ABO archtest, 09 §9.2.1; instances `TestOpsFamiliesWrittenOnlyByTaskstore`, `TestOnlyLegacyConfigStoreWritesSettingsRows`) | from each row's stage, only books' legacy-store package writes a family §5S.9.1 marks "sole writer" at runtime (books' legacy steps excepted); run in T0+T1's done-check for the run-store rows (DATA4-5) |
-| `TestCoreHoldsNoBooksKeyName` (ABO) | no family prefix of `keyfamilies.go` occurs in the core module's sources (R4-1, 03 R1) |
+| `TestCoreHoldsNoAppKeyNames` (ABO; 03 R1(c)) | no prefix of the claim generator's books output (reserved `c/`, `m/` excluded) occurs as a key literal in the core module's non-test sources; cases: a `"library: …"` error passes, `"library:" + id` fails, `"c/tasks/"` passes, allowlist entries pass (R4-1, MOD5-3, DATA5-16) |
 | `TestCheckedWritesRefusesBlindSet` | a `Set` or `Delete` on a `CheckedWrites` key without an `Expect` fails with `ErrBlindWrite`; with one it commits; a scan-statistics update and a root edit of one import-root row both survive (DATA4-4) |
 | `TestLegacyStoresBuiltFromOwnerHandles` | each `module.Manifest.LegacyStores` constructor receives exactly its owning module's `LegacyRange` and `ext/<store>/` keyspace at P4c, also while the module is disabled; no core subsystem holds a `LegacyRange` |
 | `TestBackendsRecordedInLedger` | the claim ledger records `legacy`/`native` per subsystem and store interface; the census shows it |
 | `TestLegacyStoreSelectionMatchesLedger` | a build containing a subsystem whose legacy/native choice differs from the recorded backend fails with `ErrLegacyStoreMissing`; a build without the subsystem boots; rolling back between two releases that both supply the store boots (DATA4-2) |
-| `TestLegacyStoreGolden` (ABO, per store suite) | HEAD fixtures of every family §5S.9.1 serves decode and re-encode byte-identically through books' legacy implementation (`codec.LegacyJSON`) |
-| `TestExtensionStaleAfterPrevWrite` | a legacy row changed by the previous release's code reads `ExtStale`: Widening fields suspended until `Confirm`, Derived fields at their defaults, Independent fields kept; a routine `Put` keeps the suspension; a deleted row reads `ExtOrphan` and is swept; a volatile field outside the guarded projection does not stale the record (R4-1, DATA4-8, SIMP4-9) |
+| `TestLegacyStoreSuites` (ABO, 09 §9.2.3; the one umbrella name, SIMP5-9) | every owner suite runs against books' legacy implementations with HEAD fixtures; every fixture of every family §5S.9.1 serves decodes and re-encodes byte-identically (`codec.LegacyJSON`); each legacy implementation asserts its optional capabilities (SIMP5-4) |
+| `TestExtensionStaleAfterPrevWrite` | a legacy row whose guarded fields the previous release's code changed reads `ExtStale`: Widening fields suspended until `Confirm`, Derived fields at their defaults, Independent fields kept; a routine `Put` keeps the suspension; a deleted row reads `ExtOrphan` and is swept; a per-request field outside the guarded projection does not stale the record; an `Extension` with a nil `Hash` is refused (R4-1, DATA4-8, SIMP4-9, R5-6) |
+| `TestExtensionWithoutWideningClearsOnPut` | a stale record of a type without a Widening field is never suspended and reads `ExtCurrent` after the next routine `Put` (DATA5-4) |
+| `TestExtensionPutLosesNoConcurrentUpdate` (`synctest`) | two extension-only read-modify-writes of one record over an unchanged row: one commits, the other gets `ErrConflict` (`Put`'s `seen`, DATA5-14) |
+| `TestStaleRestrictionStaysInForce` | a restriction an older build made to a row with an extension record (revoked, disabled) reads restricted on roll-forward, never re-enableable (monotone, R5-6) |
 | `TestNoNativeDataInLegacyRows` | rows books' legacy stores write hold no field or list entry the HEAD build would not write itself; native-only data is only in `m/books/ext/` (SEC4-3) |
 | `TestOneFormat_PrevBuildReadsLegacyStoreWrites` | rows books' legacy stores wrote (a user, a key with namespaced scopes in its extension record, a role, a config value, a run, an import root) are read correctly by the previous release's store code; a key's stored scopes are never empty; runs in `make ci` against `prev` built from `PREV_REF` and cached by tag (OPS4-6) |
 | `TestFirstBootRefusesForeignKeys` | runtime `ErrForeignKeys` |
 | `TestS2bOpensStoreWrittenByS0` | a store with S0's install marker, served ledger and sidecars opens under core storage, ledger history readable (DATA2-6) |
-| `TestFreshInstallStampsLevelsAtomically` | at P4a, an empty store gets marker, store generation, every owner at the build's level, every registered step applied and data migration done, in one batch; `CrashClone` before it leaves an empty store (DATA2-28, DATA3-21) |
+| `TestFreshInstallStampsLevelsAtomically` | at P4a, an empty store gets marker, store generation, every owner at the build's level, every registered non-seed step applied and data migration done, in one batch; `CrashClone` before it leaves an empty store (DATA2-28, DATA3-21) |
+| `TestFreshInstallRunsSeedSteps` | a fresh install runs `Seed` steps in P4b (hello greets with `Seen == 1`); the same step on a store holding its rows changes nothing; `Seed` without `Additive` fails registration (COR5-8) |
 | `TestRestoreBootInheritsInstallID` | a pre-S0 archive restored onto its install gets the pre-swap `install_id`, not a new one (DATA3-12) |
+| `TestInPlacePreS0RestoreReappliesJournal` | an older build's in-place restore of a pre-S0 archive: the marker-less store inherits the lineage file's `install_id`, its lineage reads behind, and 05-backup re-applies the journal tail before the hooks (DATA5-13) |
 | `TestCheckpointInstallIDOnMarkerlessStore` | a crash between the checkpoint and the marker on a marker-less store: the next boot reuses the record and its `install_id`, takes no second checkpoint; a checkpoint of another `install_id` is pruned after `checkpoint_min_age` (DATA4-16) |
 | `TestBooksConstructorWritesNothing` | books' P6 constructor commits no write; HEAD's init-phase writers run at the homes §5S.9.3 gives them (DATA4-10) |
+| `TestS2bBootRepairsOpsAndEmails` | on the first S2b boot a store with a stale opv3 record and an unstamped email row is repaired by books' start hook before books serves; from S5 and S4 r2 the repairs run in `RunStore.Recover` and `auth.BootWrites` (COR5-7) |
 | `TestCheckpointPrecedesEveryWrite` | on an upgrade boot the checkpoint holds no `c/` row written by that boot (marker, ledgers, reconcilers) (R2-8) |
 | `TestPostDAGReconcilerOrder` | reconcilers (a)–(e) run in 06's order after the DAG and handle issue, before any listener; the journal re-apply sees overrides and the keyring (DATA2-24, COR3-2) |
 | `TestBatchAtomicAcrossBoundKeyspaces` | outbox/dirty-mark/participant writes in one commit; `CrashClone` shows all or nothing |
@@ -1815,17 +1919,18 @@ credentials.
 | `TestLegacyProjectionRefusesPreGuardBuild` / `TestLegacyMaxFormatMatchesReleases` | after any level step the projection is `LegacyMaxFormat + 1` and a HEAD-era open refuses with `StorageFormatTooNewError`; the constant matches the release history (OPS2-10) |
 | `TestProjectionKeepsRecordID` **(ABO)** | the projection rewrite keeps the preference record's `ID`; an absent stamp gets one from `counter:preference` (DATA2-22) |
 | `TestReaderCheckMatchesRollbackScript` | `CheckReader` and `storage_format_guard.py` agree on one fixture table: guard-aware and pre-guard `exe`, a store short of the candidate's upgrade floor, a pending restore, an in-flight restore journal, a restore staged by the failing build with and without a started swap, no `restore/` directory (passes), an unrunnable probe or missing sudoers line (refuses, naming it), and a guard-aware `.prev` answering "unknown flag" to `--print-upgrade-floor` (`cannot_determine`) (OPS2-3, OPS3-13, DATA3-6, OPS4-3, OPS4-16) |
-| `TestForeignOpenDetected` / `TestLevelStepNoFalseForeignOpen` | a pre-guard open between two guard-aware boots is detected from the sidecar identity; a crash after a level step's sidecar write is not (DATA3-20) |
-| `TestServedDutiesFallBack` | after a boot without the `journal`, `auth`, `gen` or `usage` duty, or a foreign open, the duty's consumer falls back (coverage gap; sessions revoked after rollback; derived rebuild; window restart) |
-| `TestStoreGenerationBumpsOnSwap` | a directory swap, a copy or an in-place restore changes the store generation; a swap-back returns the original one |
+| `TestForeignOpenDetected` / `TestLevelStepNoFalseForeignOpen` / `TestForeignOpen_InodeReuseDetected` | a pre-guard open between two guard-aware boots is detected from the sidecar's full stat, also when two simulated pre-guard opens end on the recorded inode; a missing sidecar counts; a crash after a level step's sidecar write is not a foreign open (DATA3-20, SEC5-5) |
+| `TestBootLineageVerdicts` | same, behind (an older build's in-place restore of an older archive, a store with no record while the file has one), ahead (the file write lost after the commit) and none, each with the consumers' response; the end-of-boot batch writes `n = max + 1` (SEC5-5, SEC5-6) |
+| `TestFailedBootAfterRollbackKeepsFallbacks` / `TestCrashAfterStep9StillRecordsGap` / `TestCrashAfterStep9RevokesSessions` / `TestDerivedRejectedAfterCrashedRollForward` | rollback boot, roll forward, fail at P4d step 1 (and a crash right after step 9), boot again: `last` was not replaced, `owed` survives, the gap line is appended once, pre-rollback sessions revoked with the first detection time, the stale derived artifact rejected (COR5-3, DATA5-6, R5-5) |
+| `TestSelfServedKeyedByBinaryID` | two API-only binaries of one commit with different code have different binary IDs and separate self-served records; a `RaisesLevel` step on the second is deferred until it is confirmed (FE5-3, R5-7) |
+| `TestServedDutiesFallBack` | after a boot without the `journal`, `auth`, `gen` or `usage` duty, a foreign open or a behind lineage, the duty is owed and its consumer falls back (coverage gap; sessions revoked after rollback; derived rebuild; window restart) and clears its entry in the batch that does it; an entry whose consumer is absent stays |
+| `TestStoreGenerationBumpsOnSwap` | a directory swap, a copy or a relocation changes the store generation; a swap-back returns the original one; an older build's in-place restore does not (the lineage sees it, SEC5-6) |
 | `TestLevelStepDeferredOnUnconfirmedUpdate` | with `Pending` set, or before the build's `confirmed_at`, a `RaisesLevel` step is deferred and health says `storage_step_pending` (OPS2-2) |
 | `TestStartupStepsExtendTimeout` | `ExtendStart` is called once per progressing step and never from a timer (OPS2-17) |
 | `TestDataMigrationResumesExactly` | crash between chunks and a changed CPU count on resume; no item processed twice or skipped |
 | `TestDataMigrationRewritesInPlaceNotRevisited` | own writes not re-stepped after the iterator re-open |
 | `TestDataMigrationShardsDisjoint` (`-race`) | parallel shards never touch the same key |
-| `TestOnlineCopyNeverOverwritesOwnerWrite` | DATA-13 interleaving: owner write during the copy wins |
-| `TestModuleOnlineMigrationRunsAsModuleKind` | a module's `Online` migration runs as `<module>.datamigrate.<name>` with the synthesised definition (Title, `ResumeContinue`, 24 h timeout, `core:system.manage`, `ConcurrencyKey`); a concurrent HTTP-path write to a row under rewrite survives; a concurrent task writer is not blocked; a non-`Serialized` `Source` is refused at registration; `core.storage.migrate` refuses a module owner (COR3-5, COR4-5, COR4-6) |
-| `TestOnlineMigrationYieldsPastTimeout` | a rewrite longer than the timeout yields with `ErrContinueInPlace` at a chunk boundary and resumes from its cursors, never `timed_out` (COR4-6) |
+| (deferred with the `Online` mode) | `TestOnlineCopyNeverOverwritesOwnerWrite`, `TestModuleOnlineMigrationRunsAsModuleKind`, `TestOnlineMigrationYieldsPastTimeout`: listed in §5S.3.14, built with the mode (SIMP5-7, COR5-17) |
 | `TestDryRunMatchesLiveRun` | counts from `--dry-run` equal a live run's; the live directory's SST and MANIFEST file names and sizes are unchanged and no ratchet ran (DATA2-26) |
 | `TestDataMigrationVerifyBlocksBarrier` | later versions cannot run |
 | `TestSnapshotAgeMetricAndRefresh` (`synctest`) | long-pass rule |
@@ -1864,6 +1969,13 @@ credentials.
    another's rollback.
 7. Which families are cut over first, and when, is decided on measured data after the extraction
    (§5S.3.13, 09); nothing in S0–S10 depends on it.
+8. **Reset versus in-place restore (DATA5-13).** A marker-less, non-empty store at the path the lineage
+   file records inherits the install's `install_id` (§5S.4 step 5). An older build's factory reset that the
+   older build then re-populated looks the same to core, which holds no app key name to tell "no books
+   rows" apart (03 R1); it then keeps the old install's journal, whose re-applied revocations can only
+   narrow rows (fail-closed, but they can hit rows whose IDs the reset re-allocated). 05-backup's install
+   check and an app-supplied discriminator are the candidates; until decided, this residual is stated here
+   and in 14.
 
 ## 5S.12 Objections to 03
 
@@ -2043,3 +2155,35 @@ Round 4:
 Integration pass (round 4):
 
 - integration pass (round 4): served ledger gains the `auth` duty (09 §9.2.1 row 2) and `TestServedDutiesFallBack` covers it; `TestLegacyStoreSoleWriter` renamed to 09's umbrella `TestLegacyFamiliesWrittenOnlyByLegacyStores` with its instances; §5S.9.1 labelled an ABO-migration table; ABO key names removed from §5S.3.5/§5S.3.7 rows and open item 2; two books tests marked (ABO); objection 1 (`Exclusive`) removed, settled by 03. Store-interface row and row 2 name `rbac.Store`, `tasks.Stores`, `log.JournalStore` (owner names).
+
+Round 5:
+
+- R5-3 / COR5-1 / DATA5-11 — `CheckedWrites` carries a start stage: row 7 from S3 (HEAD's blind blob, secret and repair writers named, converted in the S3 PR), `import_path:` from S7; D-S2, D-S3, claim comment, generator, `TestS2bBooksWritesEveryFamily` (settings save, scan statistics, shadow `ErrBlindWrite` recorded).
+- R5-4 / DATA5-1 — rows 9, 11, 13 (run-store families), 14, and 19's `aijob*` `Serialized` (`provider_*` not: the gate store commits under its own mutex, an exception to the batch rule); §5S.3.11 rule "precondition or extension record ⇒ Serialized"; `TestABOClaimsMatchOwnershipTable` cross-checks it.
+- R5-5 / COR5-3 / DATA5-6 — served ledger keeps `last` until the served-ledger commit (new step 14b = 06 Run step (3b)); owed duties persisted in `c/storage/served/<owner>/owed` and cleared by each consumer's own batch; consumers idempotent; derived loader rule; failed-boot tests.
+- R5-6 / DATA5-2 / SEC5-12 — guarded projection = security-relevant fields only, no default (`Hash` required), every write path of an annotated row goes through `Put` or touches only unguarded fields; monotone restrictions; row 3 and D-S5 (grants-nothing scope, never `LegacyFullScope` with an extension; DATA5-3, DATA5-5, SEC5-1, SEC5-2 at storage level).
+- R5-7 / FE5-3 — binary ID (`app.BinaryID`) for every `build` field and the self-served record key; `TestSelfServedKeyedByBinaryID`.
+- SEC5-5 — foreign-open identity is the sidecar's full stat; missing sidecar counts; old-format record compared once; boot lineage `c/storage/boot` + `<state_dir>/storage.boot.json`; HEAD's failed sidecar write named as a residual.
+- SEC5-6 — the store-generation row's "older record" sentence corrected; the lineage detects an older build's in-place restore; residual stated.
+- DATA5-7 — a new generation only means the directory changed (relocation included); 05-backup classifies.
+- DATA5-13 — step 5 inherits the lineage file's `install_id` for a marker-less in-place restore; open item 8 records the reset residual.
+- COR5-2 — step 11 (a) order: legacy `Open` → `secrets.Open(…, Secrets())` (with the roll-forward re-import) → `SetSecrets` → `Attach`.
+- COR5-7 — books' start hook runs `ReconcileOpsV3WithV2` until S5 and `ReconcileVerifiedEmails` until S4 r2 (§5S.4, §5S.9.3); `TestS2bBootRepairsOpsAndEmails`.
+- COR5-8 — `Migration.Seed`; fresh install leaves seed steps pending and runs them in P4b; `TestFreshInstallRunsSeedSteps`.
+- COR5-12 / MOD5-10 — store-interface batch rule names its exceptions (`log.JournalStore`, `Prune`, `Recover`).
+- COR5-16 / SIMP5-6 — §5S.3.14 table: first column package-qualified identifiers only, second column "Also deferred (not checked)"; 05-updater's member cited, not re-listed.
+- COR5-17 — one test name, `TestModuleOnlineMigrationRunsAsModuleKind`, over a test module fixture, deferred with the mode.
+- DATA5-4 — only records with a Widening field are suspended (`Extension.Widening`); `TestExtensionWithoutWideningClearsOnPut`.
+- DATA5-8 — row 9 note: books' ticker keeps ticking until T7 converts each definition (`TestOneSchedulerPerKind`).
+- DATA5-14 — `Extension.Put` takes the `seen` record; `TestExtensionPutLosesNoConcurrentUpdate`.
+- DATA5-15 / SIMP5-3 — no `ai` result-journal store; `aijournal:` books-only; one AI family list.
+- DATA5-16 — `legacy_ref.fp` named as the one spelling; `TestCoreHoldsNoAppKeyNames` replaces `TestCoreHoldsNoBooksKeyName`.
+- MOD5-3 — `TestCoreHoldsNoAppKeyNames` reads the generator's output (reserved `c/`, `m/` excluded) via `KeyFamilies()` at its current path, matches only key literals (not `pkg: msg` errors), allowlist file; cases listed.
+- SIMP5-1 — exclusive vs routed models, `legacy+native` ledger value, `storage.Covering`; library's `RootSource` has no native implementation (config entries).
+- SIMP5-2 — `index.Spec.Dirty` is the only door for an app's dirty set; no `LegacyStores.Dirty`.
+- SIMP5-4 — "Legacy capabilities" row: optional interfaces per owner (`tasks.Recoverer`, `config.LegacyOpener`, `auth.LegacySignIns`, …), `storage.ExtConfirmer` and `storage.Covering` defined.
+- SIMP5-7 — `Online` data migrations, `ReadAdapter`, `Spec.ReadAdapters`, `DataMigration.Writes`, the synthesised kinds, 05-tasks' dispatch exemption and their tests deferred (§5S.3.14); D-S8, §5S.3.6, §5S.4, §5S.5, §5S.6 marked; "read-in-place legacy families" remnant deleted. `RewritesInPlace` kept (release B needs it).
+- SIMP5-8 — the store-interface row cites 03 §3.3 as the one list and adds `secrets.LegacyStore`.
+- SIMP5-9 — naming rule `ptest.ISuite` / `TestNative<I>_RoundTrip`; one ABO umbrella `TestLegacyStoreSuites`.
+- SIMP5-12 — failure-table row for a foreign open no longer mentions per-level served runs.
+- SEC5-11 — the hotfix sentence cites 05-authn §11.1 as the single list.

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-library.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: dafe380b-f703-41cb-99d0-2b2ba32f70e5 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -15,7 +15,10 @@ from [03-architecture](03-architecture.md) (`library` is **L4**, R4). Records th
 transfer journal, quarantine records) use [05-storage](05-storage.md) keyspace `c/library/`. Import
 roots persist through the store interface `library.RootSource` (§5L.3.1, R4-1): an app with pre-core
 roots supplies its own implementation over its own rows, so ABO's root data stays where and how HEAD
-stores it and core holds none of its key names or row formats (§5L.10). Modules reach it only through the module-scoped handle `library.Scope`
+stores it and core holds none of its key names or row formats (§5L.10). It is a **routed** store (05-storage
+§5S.3.11, SIMP5-1): library's native roots — the `core.library.roots`/`mappings` config entries, never
+records under `c/library/` — always serve, and an app's `RootSource` additionally serves the roots it
+covers; `RootSource` has no native implementation. Modules reach it only through the module-scoped handle `library.Scope`
 (`module.Deps.Library`, [06](06-app-sdk.md)), which carries the module's owner.
 
 ## 5L.0 Decisions in one table
@@ -172,19 +175,29 @@ type Manager interface {
 }
 
 // RootSource is the store interface for roots an app already kept before core
-// (R4-1; 03 §3.3 "Store interfaces"; 05-storage §5S.3.11). library's native
-// roots are the core.library.roots entries (§5L.7); a module that owns pre-core
-// root rows declares a legacy implementation on module.Manifest.LegacyStores,
+// (R4-1; 03 §3.3 "Store interfaces", model "routed"; 05-storage §5S.3.11).
+// library's native roots are the core.library.roots entries (§5L.7), which
+// always serve; RootSource has NO native implementation, so the whole
+// interface exists only for an app with pre-core roots: a module that owns
+// such rows declares a legacy implementation on module.Manifest.LegacyStores,
 // built at 06 P4c over that module's own handles (storage.LegacyHandles).
 // Every write takes the caller's batch. Fields the app owns in the same row
-// (books: scan statistics) are never written by these methods.
+// (books: scan statistics) are never written by these methods. The legacy-only
+// re-confirmation is the optional storage.ExtConfirmer capability (SIMP5-4),
+// not a member: books' source asserts var _ storage.ExtConfirmer at compile
+// time, with id = string(RootID), and a source without it has nothing to
+// confirm.
 type RootSource interface {
 	// List returns the source's roots, with each root's native-only fields
 	// read from its extension record (05-storage storage.Extension).
 	List(ctx context.Context) ([]SourcedRoot, error)
-	// Accepts reports whether a new root of this spec belongs in the source
-	// (books: its import roots), so the previous build keeps seeing it.
-	Accepts(spec RootSpec) bool
+	// Covers is the routed stores' one predicate (storage.Covering's shape,
+	// SIMP5-1; it stays on this interface because RootSource has no native
+	// implementation). id is RouteKey(role, rootID): the source holds that
+	// root, or would hold a NEW root of that role (rootID "") — books covers
+	// every "import/…" key and its books root — so the previous build keeps
+	// seeing every root it can store. Every other root is a config entry.
+	Covers(id string) bool
 	// Create allocates the legacy ID, writes the legacy row, its index rows and
 	// the extension record in b, and returns the root's ID.
 	Create(ctx context.Context, b *storage.Batch, spec RootSpec) (RootID, error)
@@ -192,9 +205,12 @@ type RootSource interface {
 	// bytes it read (the row's claim is CheckedWrites), plus the extension record.
 	Update(ctx context.Context, b *storage.Batch, spec RootSpec) error
 	Delete(ctx context.Context, b *storage.Batch, id RootID) error
-	// Confirm is the admin re-confirmation of a suspended extension (audited).
-	Confirm(ctx context.Context, b *storage.Batch, id RootID) error
 }
+
+// RouteKey is the record ID a RootSource's Covers receives: "<role>/<root id>",
+// the root ID empty for a root not yet created ("import/"). Role names are the
+// lower-case Role constant names; neither part contains "/" (RootID grammar).
+func RouteKey(r Role, id RootID) string
 
 // SourcedRoot is one root of a RootSource. Field classes of its extension
 // record (05-storage §5S.3.11): ReadShares Widening; the sentinel identity
@@ -203,7 +219,7 @@ type RootSource interface {
 type SourcedRoot struct {
 	Spec      RootSpec
 	Ext       storage.ExtState // ExtCurrent or ExtStale; orphans are swept, never returned
-	Suspended bool             // ReadShares not applied until Confirm; reported in health
+	Suspended bool             // ReadShares not applied until storage.ExtConfirmer.Confirm; reported in health
 }
 
 // Scope is the module-scoped handle (module.Deps.Library, 06 §6.4.4, COR-21).
@@ -267,6 +283,13 @@ var (
 	ErrUnknownRoot     = errors.New("library: unknown root")
 )
 ```
+
+**Error strings and the key-name gate (MOD5-3).** Every sentinel of this package follows Go's
+`pkg: message` form, and `library:` is also an ABO key family (`internal/database/keyfamilies.go:126`,
+"legacy library paths"). The ABO-side `TestCoreHoldsNoAppKeyNames` (03 R1(c), 04 §2.1 (h), 05-storage
+§5S.9.1) matches a family prefix only when the character after it is not a space, so these strings pass,
+while a key literal such as `"library:" + id` would fail; its cases include one of these sentinels. Core
+never builds a `library:` key: ABO's root rows are reached only through books' `RootSource`.
 
 ### 5L.3.2 `RootFS` — the confined filesystem (and the Q4 extension point)
 
@@ -552,7 +575,10 @@ quarantine purge), `core:library.browse` (directory picker; replaces `BrowseDire
    `core.library.roots` / `core.library.mappings` (stored through config's store). A root whose
    extension record is suspended is served without its `ReadShares` and reported (health
    `library_root_extension_suspended`) until an admin re-confirms it through
-   `/api/core/v1/library/roots/{id}/confirm` (`core:library.manage`, interactive, audited).
+   `/api/core/v1/library/roots/{id}/confirm` (`core:library.manage`, interactive, audited), which calls the
+   source's `storage.ExtConfirmer` capability. A new root goes to the `RootSource` when its `Covers`
+   accepts `RouteKey(role, "")`, else to `core.library.roots`; an existing root is updated or deleted where
+   it lives (`Covers(RouteKey(role, id))`), and `List` merges both halves.
 2. Modules declare required roles in their manifest (`module.Manifest.Library: []RoleRequirement`);
    the kernel reports unmet requirements as a setup task in the UI, not a boot failure (a fresh
    install has no roots yet).
@@ -678,7 +704,9 @@ this build changed.
 | `TestScopeCannotActAsAnotherOwner` | a module's `Scope` cannot write another owner's root or quarantine its files |
 | `TestImportRootsStayLegacyFormat` (ABO, books' `RootSource` under `librarytest.RootSourceSuite`) | an import root added, renamed or disabled on this build is an `import_path:` row (with its path index row and an ID from `counter:import_path`) that the previous release's store code lists unchanged; `LastScan`/`BookCount` written by a concurrent scan survive a library edit **and** a library edit survives a concurrent scan's statistics write (both commit with `Expect`, DATA4-4); books' in-memory root table shows the edit without a restart; native-only fields only in books' extension family (R4-1) |
 | `TestRootExtensionStaleAfterPrevWrite` | a root the previous release renamed: `ReadShares` suspended until confirmed, the sentinel back to bootstrap, `Watch`/`Quarantine`/`AppDir`/`MinFree` kept; a root it deleted: the extension record swept (DATA4-8) |
-| `TestNativeRootStore_RoundTrip` | without a `RootSource`, every root and mapping round-trips through `core.library.roots`/`mappings` (SIMP4-3) |
+| `TestNativeRootStore_RoundTrip` | without a `RootSource`, every root and mapping round-trips through `core.library.roots`/`mappings` (SIMP4-3; the owner's name for the config-entry half, which is not a `RootSource`, 05-storage §5S.3.11 naming rule) |
+| `TestRootRouting_CoversDecides` | with books' source: a new import root lands in the source (`Covers("import/")`), a new download root in `core.library.roots`; updates and deletes reach the half that holds the root; `List` merges both; books' source passes the optional `storage.ExtConfirmer` assertion and `librarytest.RootSourceSuite` (SIMP5-1, SIMP5-4) |
+| `TestLibraryErrorsPassKeyNameGate` (ABO, a case of `TestCoreHoldsNoAppKeyNames`) | the `"library: …"` sentinels pass the key-name gate; a `"library:" + id` literal fails it (MOD5-3) |
 
 ## 5L.10 Migration from ABO
 
@@ -786,3 +814,9 @@ Round 4:
 - SIMP4-9 / DATA4-8 — `c/library/rootext/` replaced by extension records with the legacy-field hash and per-field classes (`ReadShares` Widening, sentinel Derived, the rest Independent); orphans swept; "current again on roll-forward" deleted; re-confirm route; `TestRootExtensionStaleAfterPrevWrite`.
 - DATA4-4 — both directions of the `import_path:` lost update closed (`CheckedWrites`; scanner, autoscan and filesystem writers merge fields with `Expect`); books' in-memory root table kept current by writing through books' repository layer.
 - DATA4-2 — the order paragraph: the source is supplied from the release that introduces `library`, so a rollback never switches backends.
+
+Round 5:
+
+- SIMP5-1 — `library.RootSource` stated as a routed store with no native implementation (native half = `core.library.roots`/`mappings` config entries, no `c/library/` root records); `Accepts(spec)` renamed `Covers(id string)` with `library.RouteKey`; routing rule in §5L.4; `TestRootRouting_CoversDecides`.
+- SIMP5-4 — `RootSource.Confirm` removed from the interface; re-confirmation is the optional `storage.ExtConfirmer` capability, asserted by books' source.
+- MOD5-3 — "Error strings and the key-name gate" paragraph: the `library: ` sentinels pass `TestCoreHoldsNoAppKeyNames` (key literals only), `TestLibraryErrorsPassKeyNameGate` case.
