@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/07-ui-shell.md -->
-<!-- version: 1.13.0 -->
+<!-- version: 1.13.1 -->
 <!-- guid: 651865f1-0fad-4e15-8169-ceaf4a573f13 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -59,8 +59,8 @@ semantics (05-realtime); serving under a URL sub-path (§7.15, O7).
 core/web/                       npm workspace root (own package-lock.json; becomes the split repository's npm root web/)
   package.json                  { "private": true, "workspaces": ["packages/*", "../examples/hello/web"] }
   .gitignore                    node_modules/, dist/, *.tsbuildinfo, coverage/, test-results/,
-                                playwright-report/, blob-report/                                         UI-0
-  packages/api-client/          @mediacore/api-client (fetch runtime + generated core client + openapi/core.json)  UI-0
+                                playwright-report/, blob-report/                                         R1
+  packages/api-client/          @mediacore/api-client (fetch runtime + generated core client + openapi/core.json)  R1
   packages/ui-kit/              @mediacore/ui-kit     (theme factory + presentational components)              shell
   packages/shell/               @mediacore/shell      (React shell + createShell + /vite presets + /testing)    shell
     vite/index.mjs              the two build presets of §7.10: unbuilt plain ESM (+ index.d.mts), shipped as-is  shell
@@ -68,12 +68,13 @@ core/web/                       npm workspace root (own package-lock.json; becom
 core/examples/hello/web/        hello's web package ("private": true), built to web/dist (06 §6.12)              shell
 ```
 
-The right-hand column is the release work that creates each member (04 §8.1): UI-0 creates the workspace
+The right-hand column is the release work that creates each member (04 §8.1): release R1's `core/web` PR
+(§7.19 step 2) creates the workspace
 with `@mediacore/api-client` only; `ui-kit`, `shell`, the e2e suite and hello's web package arrive at
 shell adoption (R2 if ready, else R3), when something first consumes them (FE2-4, MOD2-10). Until shell adoption the workspaces
 glob matches only the existing members, and the `../examples/hello/web` entry is added in the shell-adoption PR.
 
-**Ignored outputs (FE7-1, FE8-4).** The UI-0 PR that creates `core/web` adds `core/web/.gitignore`
+**Ignored outputs (FE7-1, FE8-4).** The R1 PR that creates `core/web` (§7.19 step 2) adds `core/web/.gitignore`
 (`node_modules/`, `dist/`, `*.tsbuildinfo`, `coverage/`, `test-results/`, `playwright-report/`,
 `blob-report/`, the last two written by `core/web/e2e`), and the shell-adoption PR adds the same file to
 `core/examples/hello/web/`. Core's other build outputs are covered by `core/.gitignore`, which the R1 PR
@@ -84,7 +85,7 @@ the split repository, where the root `.gitignore` does not. The file travels wit
 Without it every `make web-deps` (an `npm ci` in `core/web` on every build path, §7.3.2) leaves an
 untracked `core/web/node_modules/`, Go's VCS stamping then sets `vcs.modified` on every binary
 (`commit` ends in `+dirty`, 06 §6.4.5), and goreleaser's dirty-tree validation may refuse the release.
-Done-check (UI-0, §7.19 step 2): after `make web-deps && make web-build`, `git status --porcelain` is
+Done-check (R1, §7.19 step 2): after `make web-deps && make web-build`, `git status --porcelain` is
 empty; the dry-run RC asserts the same after the rewritten `pre-build-script`; and after a hello build,
 `make -C core readiness` and a core e2e run the same holds (from shell adoption). 12 SC4 runs its check in a git work
 tree (12 owns how).
@@ -111,7 +112,7 @@ and others @748fd787a), and apps already depend on it (`web/package.json:29`). C
 **Compilation.** `ui-kit` and `shell` are built with `mediacoreLibrary`, which carries the same
 `reactCompilerPreset()` as the app preset (§7.10), because app Babel plugins skip `node_modules` and
 uncompiled shell components would be unmemoized. `api-client` holds no React code and has its own
-minimal Vite library config throughout, so at UI-0, before the shell package exists, it needs no
+minimal Vite library config throughout, so in R1, before the shell package exists, it needs no
 preset (FE8-1). The emitted
 code imports `react/compiler-runtime`, which the `react` peer (≥ 19) provides; `react/compiler-runtime`
 is in the singleton check (§7.3.2).
@@ -124,7 +125,7 @@ The cost of the chosen layout is the dedupe and singleton check below.
 
 **Import boundary (npm twin of R1, FE-16).** An ESLint `no-restricted-imports` rule plus
 `import/no-relative-packages` in `core/web` rejects any specifier that resolves outside `core/web`
-(no `../../web/...`, no `@abo/*`). It runs in `make ci` from UI-0, when `core/web` is created, not
+(no `../../web/...`, no `@abo/*`). It runs in `make ci` from the R1 PR that creates `core/web`, not
 first at split criterion SC8. A second `core/web` ESLint rule pins ui-kit's graph: `@mediacore/ui-kit`
 imports neither `@mediacore/api-client` nor `@mediacore/shell` (FE7-12). Its scope is
 `packages/*/src`: ui-kit's build config may import exactly one shell file, the unbuilt preset
@@ -182,7 +183,7 @@ Shell-classified ABO files that import audiobook code are therefore cut loose **
   `frontend-enabled: true` and `pre-build-script: 'cd web && npm ci && npm run build'`. Once `web/`
   depends on `file:../core/web/packages/api-client`, whose `exports` point at an unbuilt `dist/`, a
   reusable step that installs or builds `web/` itself fails, and for the release callers that makes
-  every RC and production release fail from UI-0. As a precondition of UI-0:
+  every RC and production release fail from the `core/web` PR. As a precondition of that PR:
   - the three CI callers set `run-frontend: false` and drop their frontend half, and ABO-local jobs
     (as `ci.yml:372-383` already has) run the frontend checks after `make web-deps`;
   - both release callers rewrite `pre-build-script` to `sh scripts/ci/build_web.sh deps && cd web &&
@@ -192,7 +193,7 @@ Shell-classified ABO files that import audiobook code are therefore cut loose **
     does. If its frontend half installs or builds `web/`, set `frontend-enabled: false` and state where
     Node comes from for `pre-build-script`, or add a github-common pre-install input in the same PR as
     the ref bump;
-  - UI-0 done-check: a dry-run RC build is green and leaves `git status --porcelain` empty (FE7-1).
+  - the `core/web` PR's done-check: a dry-run RC build is green and leaves `git status --porcelain` empty (FE7-1).
 
   A github-common input that runs `build_web.sh` before install, with the `.github/ghcommon-ref.txt`
   bump in the same PR, is the alternative for the CI callers if the owner prefers to keep the reusable
@@ -205,7 +206,7 @@ Shell-classified ABO files that import audiobook code are therefore cut loose **
   root `.go` file is an input of the image's tagged static build (OPS5-3); its inputs include `core/**`,
   `go.mod`/`go.sum` and `core/go.mod`/`core/go.sum`, both Dockerfiles, `.dockerignore`,
   `scripts/ci/build_web.sh`, `web/**` and every `//go:embed` input (MOD2-16, MOD4-8); Dependabot's npm entry adds `/core/web`. The list is the R1 build checklist in 09; this file owns the mechanism. The Docker
-  frontend-stage change below lands in the UI-0 PR that creates `core/web`, because a `COPY` of
+  frontend-stage change below lands in the R1 PR that creates `core/web`, because a `COPY` of
   `core/web/package.json` fails before that file exists; the R1 PR that creates `core/` changes only the Go stage and
   `.dockerignore` (MOD3-13).
 * **`.dockerignore`** adds `**/node_modules` and `core/web/packages/*/dist`, so `COPY core/web/`
@@ -509,7 +510,7 @@ it), not `/system/tasks` (FE-16).
   sends the token in the request body (`POST /api/core/v1/auth/invites/lookup|accept`,
   `POST /api/core/v1/auth/temp-login/consume`, 05-authn §4.13). A full page load therefore never
   carries the token to the server, an access log, a trace or a `Referer`.
-* **ABO switches link forms in one PR (FE4-2, D10, D12 F2).** R2's identity flip, which moves invite
+* **ABO switches link forms in one PR (FE4-2, D10, D12 (b)).** R2's identity flip, which moves invite
   and temp-login minting to core, also gives the legacy SPA the `/invite` and `/login/temp` routes in
   its unauthenticated **and** authenticated branches: each reads `#token=`, removes it with
   `history.replaceState`, and calls the core routes above (the public branch's guard becomes
@@ -673,7 +674,7 @@ Then, for each module `S` in the server list and the compile-time entry `C = reg
 | `S.ui` ID with no client item | ignored | `descriptor-without-ui` (debug log) |
 
 **Stale-build rule (one rule, one place; FE3-3, OPS3-11, FE4-9).** The rule lives in the API
-runtime's response middleware: ABO's `apiFetch` from R1 until UI-0; from UI-0 `@mediacore/api-client`'s
+runtime's response middleware: ABO's `apiFetch` from R1 until the `core/web` PR (§7.19 step 2); from that PR `@mediacore/api-client`'s
 runtime exports it as `checkBuild(response, { buildId, shell })`, the one signature (FE6-8), which the
 runtime's own middleware and ABO's `apiFetch` (still used for legacy calls until they are native) both
 call, so there is one implementation while the two transports coexist; it is never deleted, so the
@@ -701,7 +702,7 @@ runtime keeps the reasons detected on this page load (`getStaleReasons()`), and 
 new listener at once for each of them; "once" is per listener per reason. So a banner that mounts after
 the page's first stale response (the auth probe, `/auth/status`, `/me`, §7.12) is still notified.
 **The banners.** ABO's reload banner, `web/src/components/StaleBuildBanner.tsx`, mounted above the
-routes, is created in R1 and fed by `apiFetch`'s own rule until UI-0; from UI-0 it subscribes to
+routes, is created in R1 and fed by `apiFetch`'s own rule until the `core/web` PR; from that PR it subscribes to
 `onStaleBuild`, and at shell adoption the shell banner replaces it (09's R1 content assigns it). A detection on a native call
 and one on a legacy call reach whichever banner is mounted. Both options are required, so an omitted `buildId` is a compile error,
 never a silently disabled check. 05-http-api §7 lists it among the runtime's
@@ -711,7 +712,7 @@ baked there would carry that build's own ID, or `undefined`, and every productio
 a permanent reload. So:
 
 - `buildId` is read **once at page load**, from R1, from the served document's
-  `<meta name="mediacore-build">` (`readPageBuildId()` from UI-0, ABO's own read of the same meta
+  `<meta name="mediacore-build">` (`readPageBuildId()` from the `core/web` PR, ABO's own read of the same meta
   before), the very value the server's `X-App-Build` comes from (§7.6.3; §7.12 "load → read build ID";
   FE7-3); a missing meta reads as `""`;
 - `shell` is `true` for the shell's calls and `false` for the pre-shell bundle's; the runtime never
@@ -719,7 +720,7 @@ a permanent reload. So:
 - `createCoreClient({ buildId, shell })` stores both for the runtime's own middleware: `createShell`
   creates its client with `{ buildId: readPageBuildId(), shell: true }`; ABO's pre-shell bundle creates
   one client, `createCoreClient({ buildId: readPageBuildId(), shell: false })` in `web/src/api/core.ts`
-  from UI-0, for the generated operations it calls from R2's first flip (§7.19 step 3); ABO's `apiFetch` calls
+  from the `core/web` PR, for the generated operations it calls from R2's first flip (§7.19 step 3); ABO's `apiFetch` calls
   `checkBuild(response, { buildId: readPageBuildId(), shell: false })` for each legacy response; and a
   module's generated client comes from `createModuleClient<Paths>(coreClient)`, so books' client (from the shell)
   inherits both values.
@@ -970,7 +971,7 @@ changes after construction (§7.14).
 | Phase | `app.Options.UI` | `/` owner | Notes |
 |---|---|---|---|
 | Before ABO adopts the shell build (R1 up to shell adoption) | zero `Bundle` | the books `LegacyMount` with `ServesSPA: true`; gin keeps `NoRoute` SPA serving and CF recovery | from R1 the CSP and `Reporting-Endpoints` headers are written by `httpapi` stage 5 from the mount's per-request `DefaultCSP` (today's computed policy, §7.6.2), not by gin's removed middleware (FE2-1); `httpapi` registers no `/` pattern while a legacy mount owns it, and its `ServesSPA` fallback consults `Router.NonSPA()` before handing a request to gin, so one predicate serves both owners and the probes `/livez/`, `/READYZ` never answer HTML (FE3-13, 05-http-api §4.10); `ui.Handler` is not mounted; `ui_build_id` is `""`; the stale-build rule (§7.5.2) runs in ABO's `apiFetch`, fed by the same build ID (below) |
-| From shell adoption (R2 if ready, else R3; §7.19 step 4) | `UIBundle()`, ABO's adoption of the hello pattern (below) | `ui.Handler`, mounted by the kernel with `Router.SPA` (05-http-api §4.10) | in the same PR: books drops `ServesSPA`; gin's `NoRoute` SPA serving, `setupStaticFiles` and the `static_embed.go` SPA code are deleted (the latter moves to `ui`); ABO passes `app.Options.UIOptions` (`PageMiddleware`: CF recovery from `internal/cfaccess`; `ConnectSrcFrom`: its Access team host; both read pointers books fills in its Start hook; FE3-4, FE4-5), which the kernel merges into `ui.Options`; its unprefixed segments reach `NonSPA` through its mount's `TopSegments` (not `SPAShared`); the stale-build rule keeps running in `@mediacore/api-client`'s runtime (`checkBuild`, there since UI-0), now with `shell: true`, and the shell banner renders it (FE3-3, FE5-8) |
+| From shell adoption (R2 if ready, else R3; §7.19 step 4) | `UIBundle()`, ABO's adoption of the hello pattern (below) | `ui.Handler`, mounted by the kernel with `Router.SPA` (05-http-api §4.10) | in the same PR: books drops `ServesSPA`; gin's `NoRoute` SPA serving, `setupStaticFiles` and the `static_embed.go` SPA code are deleted (the latter moves to `ui`); ABO passes `app.Options.UIOptions` (`PageMiddleware`: CF recovery from `internal/cfaccess`; `ConnectSrcFrom`: its Access team host; both read pointers books fills in its Start hook; FE3-4, FE4-5), which the kernel merges into `ui.Options`; its unprefixed segments reach `NonSPA` through its mount's `TopSegments` (not `SPAShared`); the stale-build rule keeps running in `@mediacore/api-client`'s runtime (`checkBuild`, there since the `core/web` PR), now with `shell: true`, and the shell banner renders it (FE3-3, FE5-8) |
 
 **Basic-gate asset exemption follows the `/` owner (COR4-9).** HEAD's optional Basic gate exempts the
 SPA's static assets (`internal/server/middleware/basicauth.go:40-46`: the `/assets/` prefix,
@@ -979,7 +980,8 @@ moves into the core perimeter (05-http-api), the books mount supplies that rule 
 `LegacyMount.BasicExemptAssets` (05-http-api §8.2) while it owns `/`; from shell adoption the kernel
 passes `ui.BasicExemptAssets` (§7.6.1) as `httpapi.SPAOptions.BasicExemptAssets` when it mounts
 `ui.Handler` with `Router.SPA` (06 §6.5.1 P8, FE5-10), so stage 8's exempt set (05-http-api §4.2) is
-unchanged across the switch (`TestBasicGate_ExemptSetEqualsHEAD`, repeated in the shell-adoption PR).
+unchanged across the switch (`TestBasicGate_ExemptSetGolden`, 05-http-api §12, repeated in the shell-adoption PR); from F8
+the exempt health path is `/health`, which replaces HEAD's two deleted health paths.
 
 **ABO adopts the hello pattern at shell adoption (FE2-10).** `web_embed.go` (`//go:build embed_frontend`)
 defines `func UIBundle() ui.Bundle { return ui.MustFromFS(WebFS, "web/dist") }`, `web_nonembed.go`
@@ -1069,7 +1071,7 @@ and `-X main.date`, which name variables ABO's `main` does not declare (06 §6.4
   legacy mount owns `/`; `X-App-Build` then carries the mount's ID), and the one stale-build rule of
   §7.5.2 compares the header (and that field) with the build ID the page read from its meta, in ABO's
   `apiFetch` from R1 and through the api-client runtime's `checkBuild(response, { buildId, shell })`
-  from UI-0; it is never deleted, so a tab left open across a rollback (a restore plus the previous
+  from the `core/web` PR; it is never deleted, so a tab left open across a rollback (a restore plus the previous
   binary) is still offered a reload (FE3-3, OPS3-11).
 * `"dev"` under `vite serve` and in `make build-api` binaries (no embedded bundle), so `make build-api`
   plus `make web-dev` never shows the check.
@@ -1126,9 +1128,9 @@ The OpenAPI 3.1 documents and the TypeScript client pipeline are owned by
 
 * **`core.json` has one producer (FE-20).** `core/examples/hello`'s `openapi` subcommand writes
   `app.Description.Core` (06 §6.4.5) to `core/openapi/core.json`, and core CI freshness-gates it. The
-  file lives outside `core/web` because that npm workspace is first created at UI-0; UI-0's api-client
-  generator reads it from there (MOD3-4). The hello skeleton lands in R1 (06 §6.4.10), so `core.json`
-  is producible from that PR, before UI-0 needs it; a PR that adds a core route regenerates it in the same PR, and each
+  file lives outside `core/web` because that npm workspace is first created by the `core/web` PR (§7.19
+  step 2); that PR's api-client generator reads it from there (MOD3-4). The hello skeleton lands in R1 (06 §6.4.10), so `core.json`
+  is producible from that PR, before the `core/web` PR needs it; a PR that adds a core route regenerates it in the same PR, and each
   R2 flip's done-check includes "`core.json` contains the flip's native routes" (FE2-9, MOD2-10). Apps do
   not emit `core`: an app's `openapi` subcommand writes only its modules' documents and `manifest.gen.ts`
   files (`manifest.gen.ts` from the shell work, with package `ui`).
@@ -1139,15 +1141,15 @@ The OpenAPI 3.1 documents and the TypeScript client pipeline are owned by
   `Problem` as the error type (05-http-api §3.3), the 401 rule of §7.9, and the one stale-build rule
   of §7.5.2, carried over from ABO's `apiFetch` as the exported `checkBuild(response, { buildId,
   shell })`, and never deleted (FE3-3, FE4-9, FE6-8): ABO's `apiFetch` calls `checkBuild(response,
-  { buildId: readPageBuildId(), shell: false })` from UI-0, and a detection reaches the mounted banner
+  { buildId: readPageBuildId(), shell: false })` from the `core/web` PR, and a detection reaches the mounted banner
   through `onStaleBuild` (FE7-5), which replays earlier detections to a late subscriber (FE8-3); the
   shell's `/modules` fetch adds `checkModules` for case 2 (FE8-2). `createCoreClient({ buildId, shell })` takes the page's meta build ID
   and the caller's `shell` flag, both required (§7.5.2, FE6-1); ABO's pre-shell bundle has one such
-  client in `web/src/api/core.ts` from UI-0. Each generated operation
+  client in `web/src/api/core.ts` from the `core/web` PR. Each generated operation
   whose OpenAPI `x-mediacore-permission` is `public` is marked `skipAuthRedirect`. The shell creates
   one client in `ClientProvider`; `useApi()` returns it.
 * **The generated client arrives before identity moves (FE-12).** `@mediacore/api-client` (runtime,
-  generator, `make generate-api-client` in `core/web`) ships with UI-0 in R1, before R2's first flip,
+  generator, `make generate-api-client` in `core/web`) ships with the `core/web` PR in R1, before R2's first flip,
   consumed by ABO through `file:`. Each R2 flip then switches its UI calls straight to generated
   operations instead of rewriting `api.ts` calls twice.
 * **Module clients are directories until the module is a package (FE-28).** ABO's books client is
@@ -1188,7 +1190,7 @@ The OpenAPI 3.1 documents and the TypeScript client pipeline are owned by
   to the target, and a dev server opened at a LAN address (phone testing) is not a trustworthy origin,
   so the browser sends no `Sec-Fetch-Site` and `Origin` ≠ `Host` would refuse every POST; the preset's
   proxy therefore also rewrites `Origin` to the target origin, in dev only (§7.10, FE3-19). ABO's cookie
-  name is whatever 05-authn decides; web sessions reset at R2 (D12 F2), so the name is free to change
+  name is whatever 05-authn decides; web sessions reset at R2 (D12 (b)), so the name is free to change
   there.
 * **The 401 rule (FE-7).** The runtime's `onUnauthorized` (auth state reset, navigate to
   `/login?return=<safe path>`; `safeReturn` moves to the shell) runs only for a 401 whose problem
@@ -1254,14 +1256,15 @@ The shell side:
   tab that shows a run: a keyed stream that tab opens itself for that run (counted in the same
   per-user bucket) or `GET /api/core/v1/tasks/runs/{id}/log` over REST, so a chatty log topic neither
   reaches every tab nor evicts the resumable window (05-realtime open item 2).
-* **When the UI moves to the native stream (FE-10, FE2-3, D10).** In R2's events flip the legacy SPA's
-  realtime code (`eventSourceManager` and the operations stream) is rewritten onto
-  `/api/core/v1/events` and the native topics, and in the same window the Activity page moves to the
-  native task routes and the generated core client, and the books operations routes it called are
-  deleted (06 §6.4.4); REST and stream move to the native vocabulary together, so one store
-  never mixes native runs with legacy `op.*` frames (FE3-6). The flip deletes the three legacy stream
-  paths (`/api/events`, `/api/v1/operations/events`, `/api/v3/ops/events`) and every projection; there
-  is no bridge and no legacy framing. With shell adoption the shell's realtime client of this section
+* **When the UI moves to the native routes and stream (FE-10, FE2-3, D10).** In R2's tasks flip the
+  Activity page moves to the native task routes and the generated core client and polls
+  `GET /api/core/v1/tasks/runs` for updates, and the books operations routes it called, `/api/v3/ops/*`
+  and the two operation streams (`/api/v1/operations/events`, `/api/v3/ops/events`) are deleted in that
+  PR (06 §6.4.4); between the two flips the page reads no stream, so one store never mixes native runs
+  with legacy `op.*` frames (FE3-6). In R2's events flip the legacy SPA's realtime code
+  (`eventSourceManager`) is rewritten onto `/api/core/v1/events` and the native topics, the Activity page
+  takes its live updates from it instead of polling, and the flip deletes `/api/events`; there is no
+  bridge, no projection and no legacy framing. With shell adoption the shell's realtime client of this section
   replaces that code. `opsgen`'s `ops.ts` stays only while a books importer of its enums remains (§7.8). The
   hooks are `useTopic<T>(topic, onEvent, {key})` and `useResync` everywhere (05-realtime §11 uses the
   same signature).
@@ -1271,7 +1274,7 @@ The shell side:
   `permission_revoked` goes through the auth rule of §7.9.1. The
   shutdown backdrop and reconnect counter (`App.tsx:215-241`) move to the shell, driven by
   `core.stream.closed.v1` with `reason: "shutdown"`, which the hub sends to every subscriber
-  (05-realtime §5.4), so non-admin users see it too.
+  (05-realtime §5 item 6), so non-admin users see it too.
 
 ## 7.10 Build preset and code splitting
 
@@ -1288,7 +1291,7 @@ any package is built:
   for apps. ui-kit's `vite.config.ts` imports it as `@mediacore/shell/vite` (the one shell file its
   build may import, §7.3.1) and shell's imports `./vite/index.mjs`, both resolving to source.
   `api-client` has no React code and uses its own minimal library config throughout, including
-  UI-0, before the shell package exists.
+  release R1, before the shell package exists.
 
 Their options (FE6-2):
 
@@ -1362,11 +1365,11 @@ first, and the core-web import rule (§7.3.1) proves the cut (FE-16).
 | `pages/UserMerge.tsx` | books `userPageExtensions` row action | account merge stays in ABO (`internal/usermerge`; auth exposes only the `StageUserMerge` participant, 05-authn §3.1), so it is books UI (FE3-18; O3 closed) |
 | `utils/operationPolling.ts` | books, `modules/books/legacy/operationPolling.ts`, unchanged, still on `ops.ts` | it imports `../services/api` and `../generated/ops` (`operationPolling.ts:6-7` @748fd787a), both ABO-only, so it cannot enter `core/web`; its books importers keep legacy calls after shell adoption (`Library.tsx:55`, `ITunesImport.tsx:56`). The shell's Activity page, `OperationsIndicator` and `TaskTrackerProvider` stop importing it and get their own state helpers over the generated `TaskRunView` states (FE5-6) |
 | `utils/followOperation.ts`, `utils/trackedOperations.ts` | books, beside `operationPolling` | their callers are books: `followOperation` is called by `services/api.ts:13,1838` (the legacy remainder, `modules/books/legacyApi.ts`) and `OperationTrackerProvider.tsx:24-26,328`'s merge/combine/purge path, `trackedOperations` (its `TrackedKind` is `merge`/`combine`/`purge`) only by that provider (`OperationTrackerProvider.tsx:45`), which is the books provider of the row below (FE5-6) |
-| `pages/ActivityLog.tsx` (3,320 LOC) + `stores/useOperationsStore.ts`, `operationGrouping.ts`, `components/layout/OperationsIndicator.tsx` | shell `/activity` (tasks pane over `/api/core/v1/tasks`) | audiobook op labels/colours become books `taskKinds`; the book feed, the `versionApi` undo preflight and `PendingFileOpsBanner` (`ActivityLog.tsx:7,60`) become a books `activityPanes` entry; in R2's events flip `useOperationsStore`'s `* as api` import (`useOperationsStore.ts:7`) is rewired to the generated core client against native routes, and REST and stream move to the native vocabulary together (§7.9.2, FE2-3, FE3-6); at shell adoption the page moves into the shell |
+| `pages/ActivityLog.tsx` (3,320 LOC) + `stores/useOperationsStore.ts`, `operationGrouping.ts`, `components/layout/OperationsIndicator.tsx` | shell `/activity` (tasks pane over `/api/core/v1/tasks`) | audiobook op labels/colours become books `taskKinds`; the book feed, the `versionApi` undo preflight and `PendingFileOpsBanner` (`ActivityLog.tsx:7,60`) become a books `activityPanes` entry; in R2's tasks flip `useOperationsStore`'s `* as api` import (`useOperationsStore.ts:7`) is rewired to the generated core client against native routes, polling them, and in the events flip it takes live updates from the native stream (§7.9.2, FE2-3, FE3-6); at shell adoption the page moves into the shell |
 | `pages/System.tsx` (+ `components/system` Storage, Quota, SystemInfo) | shell `/system` | `ChapterConsolidationCard`, `ManualFixesCard` → books `widgets` (placement `system`); calls the native routes of R2's backup-health-metrics flip (`/system`, `/backup`, `/update`, `/health`, FE2-25) |
 | `components/system/MaintenanceTab.tsx` | split (FE8-6) | the maintenance-window and registered-task controls → shell `/system`, over the native tasks routes; the hash, AcoustID, chapter and duplicate jobs (`getAcoustIDStats`, `backfillFileHashes`, `backfillMetadataHashes`, `findMetadataHashDuplicates`, `scanDuplicateFiles`, … through `import * as api`, `MaintenanceTab.tsx:36` @748fd787a) → a books `widgets` entry (placement `system`), which keeps its legacy calls after shell adoption |
 | `components/system/ThrottlePanel.tsx` | books `widgets` entry (placement `system`) (FE8-6) | provider throttles have no native core route; it calls `getProviderThrottles`/`startThrottleReset`, imports ABO's `useHasPermission` (`:21`) and its `THROTTLE_RESET_PERMISSION` constant (`:24`) is replaced by books' manifest permission (§7.9.1) |
-| `pages/Settings.tsx` | shell `/settings` frame | the two-step factory-reset dialog (`Settings.tsx:223-225,992-1014` @748fd787a, calling `api.factoryReset`, `services/api.ts:3260-3261`) calls HEAD's gin `POST /api/v1/system/factory-reset` in R1, which stages the reset with HEAD's confirmation (06 §6.4.6); R2's identity flip deletes that route and rewires the dialog, and later the shell's, to the native `POST /api/core/v1/system/factory-reset` (05-http-api §5) with the one reset request, `storage.ResetRequest` (05-storage §5S.3.15 owns it; R9-6): `{kind, confirm: "RESET", delete_library_files?, library_root?, library_file_count?}`. It sets `delete_library_files` only when the operator ticks "also delete library files"; the server then answers 422 `library_files_confirm_required`, staging nothing, whenever `library_root` or `library_file_count` is absent or does not match its fresh preflight count, so the dialog's first request draws that 422, shows the problem body's `library_root` and `library_file_count`, and resends them only after the operator confirms that root and count; a count that changed meanwhile draws the 422 again with the new values (05-rbac §6.2, A-17, 06 §6.4.6); generic tabs (Security, API Keys, Plugins → Integrations, AI backends, Scheduled tasks, Performance, Temp Login, System Info) in shell; Library, iTunes Import, Metadata, Dedup, Paths, OpenLibraryDumps, BlockedHashes, Embedding → books `settingsPanels`; Deluge → generic adapter-instance form rendered by `<SchemaForm>` (§7.4.5); needs R2's settings schema/`KeyState` API (`/api/core/v1/settings`, `/settings/schema`, FE3-11) and the integrations flip's instance store (FE2-25) |
+| `pages/Settings.tsx` | shell `/settings` frame | the two-step factory-reset dialog (`Settings.tsx:223-225,992-1014` @748fd787a, calling `api.factoryReset`, `services/api.ts:3260-3261`) is hidden in release R1, whose storage PR deletes HEAD's gin `POST /api/v1/system/factory-reset` and `POST /api/v1/system/reset` (a reset is then the offline `storage reset`, 05-storage §5S.3.15; the R1 release note says so; 06 §6.4.6); R2's identity flip shows it again and wires the dialog, and later the shell's, to the native `POST /api/core/v1/system/factory-reset` (05-http-api §5) with the one reset request, `storage.ResetRequest` (05-storage §5S.3.15 owns it; R9-6): `{kind, confirm: "RESET", delete_library_files?, library_root?, library_file_count?}`. It sets `delete_library_files` only when the operator ticks "also delete library files"; the server then answers 422 `library_files_confirm_required`, staging nothing, whenever `library_root` or `library_file_count` is absent or does not match its fresh preflight count, so the dialog's first request draws that 422, shows the problem body's `library_root` and `library_file_count`, and resends them only after the operator confirms that root and count; a count that changed meanwhile draws the 422 again with the new values (05-rbac §6.2, A-17, 06 §6.4.6); generic tabs (Security, API Keys, Plugins → Integrations, AI backends, Scheduled tasks, Performance, Temp Login, System Info) in shell; Library, iTunes Import, Metadata, Dedup, Paths, OpenLibraryDumps, BlockedHashes, Embedding → books `settingsPanels`; Deluge → generic adapter-instance form rendered by `<SchemaForm>` (§7.4.5); needs R2's settings schema/`KeyState` API (`/api/core/v1/settings`, `/settings/schema`, FE3-11) and the integrations flip's instance store (FE2-25) |
 | `pages/Dashboard.tsx` | shell `/` home | library counts and scan trigger → books widget (placement `home`) |
 | `pages/Diagnostics.tsx` | shell `/system/diagnostics` frame | AI-dedup diagnostics → books widget |
 | `pages/FileBrowser.tsx` | books page `/books/files` | uses ui-kit `ServerFileBrowser`, passing the generated core browse call (`core:library.browse`, 05-library) as its `browse` prop and books' scan include/exclude calls as `include`/`exclude` |
@@ -1380,10 +1383,10 @@ first, and the core-web import rule (§7.3.1) proves the cut (FE-16).
 | hooks `useAsyncAction`, `useKeyboardShortcuts`, `useDebouncedSearch`, `useRowSelection` | ui-kit | `useUnsavedChangesBlocker` deleted at shell adoption: the react-router 8 data router provides `useBlocker`. `useKeyboardShortcuts` hard-codes "g l" → `/library` (`useKeyboardShortcuts.ts:14-19,75` @748fd787a), a books route that becomes `/books/library`; it takes its shortcut table from the shell instead, built from shell routes plus each nav entry's `goKey` (§7.4.2, FE8-5) |
 | `utils/apiFetch.ts`, `apiResponse.ts`, `permissionError.ts`, `apiKeyExpiry.ts`, `safeReturn.ts`, `settingLocks.ts` | api-client runtime / shell | |
 | `services/eventSourceManager.ts` | rewritten onto `/api/core/v1/events` in R2's events flip, then replaced by the shell realtime client at shell adoption (§7.9.2) | |
-| `services/api.ts` (8,747 LOC) | split: auth/users/operations/system/settings → generated core client (the client lands with UI-0; each R2 flip switches its calls); books routes → generated books client in `modules/books/api/`; hand-written calls to books' `/api/v1` gin routes remain in `modules/books/legacyApi.ts` and shrink route-group by route-group as books rewrites them | |
+| `services/api.ts` (8,747 LOC) | split: auth/users/operations/system/settings → generated core client (the client lands with R1's `core/web` PR; each R2 flip switches its calls); books routes → generated books client in `modules/books/api/`; hand-written calls to books' `/api/v1` gin routes remain in `modules/books/legacyApi.ts` and shrink route-group by route-group as books rewrites them | |
 | `services/activityApi.ts` (256), `collectionApi.ts` (193), `fileOpsApi.ts` (29), `playlistApi.ts` (126), `readingApi.ts` (63), `versionApi.ts` (212) | books: generated books client where the route is native, else `modules/books/legacyApi.ts` (FE-28) | none is shell code |
 | `theme.ts` | ui-kit `createMediaTheme` + books `themeExtend` (signal palette) | |
-| `generated/ops.ts`, `types/generated/*` | replaced by OpenAPI-generated types | `ops.ts` and `opsgen` stay until the last `ops.ts` importer is native (end of §7.19 step 6; the Activity page stops importing it in R2's events flip, books pages through `operationPolling` later; FE3-6, FE4-7) |
+| `generated/ops.ts`, `types/generated/*` | replaced by OpenAPI-generated types | `ops.ts` and `opsgen` stay until the last `ops.ts` importer is native (end of §7.19 step 6; the Activity page stops importing it in R2's tasks flip, books pages through `operationPolling` later; FE3-6, FE4-7) |
 | all other pages/components (Library, BookDetail, Authors, Series, Works, Collections, Playlists, TrashedVersions, review workspace, …) | `modules/books/` | URLs move to `/books/...`; old paths and `ABS_REDIRECTS` (`web/src/utils/absRedirects.ts:17-25`) may become books' optional static client redirects, the Go `UIDescriptor.LegacyRedirects` (exported through `manifest.gen.ts`, FE3-17; no counter and nothing on the server), filled in the step-5 release if books keeps them, including the pages the shell absorbs: `/dashboard → /` (today's home, `App.tsx:256-258`), `/files → /books/files`, `/diagnostics → /system/diagnostics`, `/operations → /activity`, `/maintenance → /system` (FE2-16) |
 
 ## 7.12 Lifecycle
@@ -1500,7 +1503,7 @@ two are merged together. In-repo, apps use `file:` dependencies; there is no roo
 | ESLint permission-literal rule (`no-restricted-syntax`) | ABO web `make ci` | no string literal in a permission position (`usePermission`/`useAction`/`hasPermission` argument, `permission`/`*_PERMISSION` property or constant, API-key scope list) unless from `manifest.permissions` or the generated client (FE-11, FE2-17) |
 | `reservedSegments.test.ts` | shell + `core/ui` | shell route table equals `ui.ReservedSegments()`; no `/logout` page |
 | `TestReservedSegmentsDisjointFromNonSPA` | kernel (06 §6.10; the one test of the P8 check, FE3-9) | a `TopSegments` entry that is a shell segment fails boot with `ProblemSPASegmentCollision`; a `SPAShared` shell segment (`login`) passes (FE2-7, FE3-1) |
-| `TestOldLinkFormsNotServed` | ABO books routes + `httpapi` | from R2's identity flip `GET /auth/temp-login?token=` answers 404 (the route is deleted), an old `/invite/<token>` link opens no invite, and an invite or temp-login token minted before the flip is refused by core (the identity cutover step deleted it); the access log and span show the redacted path (SEC2-6, FE3-5, D12 F2) |
+| `TestOldLinkFormsNotServed` | ABO books routes + `httpapi` | from R2's identity flip `GET /auth/temp-login?token=` answers 404 (the route is deleted), an old `/invite/<token>` link opens no invite, and an invite or temp-login token minted before the flip is refused by core (the identity cutover step deleted it); the access log and span show the redacted path (SEC2-6, FE3-5, D12 (b)) |
 | `TestTempLoginLink_FragmentEndToEnd` | ABO e2e, R2 identity-flip done-check, repeated at shell adoption | admin reset → `/login/temp#token=` link → the SPA's `/login/temp` route (legacy SPA, later the shell) consumes the fragment, removes it with `history.replaceState` → logged in (FE3-5) |
 | `TestInviteLink_FragmentEndToEnd` | ABO e2e, R2 identity-flip done-check (09 and 05-authn §10 cite it), repeated at shell adoption | an invite created on the build in which core auth decides requests mints `/invite#token=`; opened signed out, it shows the invite page and accepting it signs the invitee in; opened signed in, it shows the invite page, not `NotFound`; the fragment is removed with `history.replaceState` (FE4-2, FE5-4) |
 | `theme.contrast.test.ts` | ui-kit | contrast in both schemes |
@@ -1509,7 +1512,7 @@ two are merged together. In-repo, apps use `file:` dependencies; there is no roo
 | `check-singletons.mjs` | core/web CI | one copy of each peer singleton and of `react/compiler-runtime` |
 | `presets.test.mjs` | core/web CI | FE8-1: from a clean `core/web` (no `dist/`), `api-client`, `ui-kit` and `shell` build in the §7.3.2 order with no prior step; every package config loads its preset from source; `shell/dist` contains the `MEDIACORE_CORE_VERSION` literal; `mediacoreLibrary` writes no HTML and takes no `appId` |
 | `shortcuts.test.tsx` | shell | FE8-5: "g s" goes to `/settings`, a module nav entry's `goKey` goes to its page (books' `'l'` → `/books/library`), and a second entry with a used key is dropped with a warning; ui-kit's `useKeyboardShortcuts` names no route |
-| ESLint import boundary | core/web `make ci` from UI-0 | no specifier outside `core/web` (FE-16) |
+| ESLint import boundary | core/web `make ci` from R1's `core/web` PR | no specifier outside `core/web` (FE-16) |
 | bundle check | core/web e2e and ABO e2e | `/login` with an empty cache fetches no page chunk; entry and `mui` size budgets (FE-18) |
 | `TestHandler_AssetsImmutable`, `_IndexNoStore` (incl. `GET /index.html`: `no-store`, full CSP, through `PageMiddleware`, FE4-11), `_CSPPolicyVerbatim`, `_CSPHotSwap`, `_API404JSON`, `_Placeholder`, `_ServesRootPublicFile` (a `dist/` root file such as `/favicon.svg` is served with `no-cache`, FE3-14) | `core/ui`, Go | server semantics |
 | `TestHandler_NonSPASegments` (incl. case, `//`, trailing-slash variants, `/health/`, `/HEALTH`, `/metrics/`, `/livez/`, with the `Router.NonSPA()` predicate), `TestHandler_NonGETRefused`, `TestHandler_MissingAssetIs404`, `TestHandler_PageMiddlewareOnlyOnIndex` | `core/ui` | FE-3, FE2-6 |
@@ -1517,10 +1520,10 @@ two are merged together. In-repo, apps use `file:` dependencies; there is no roo
 | `TestBundle_MissingMeta` | `core/ui` | fail-closed for shell bundles; a legacy-style `index.html` with the build meta but no theme meta is refused (FE7-7), and so is one without the `mediacore-app` meta (FE8-7) |
 | `TestUIAppIDMismatch` | kernel (06 §6.10) | an embedded bundle whose `mediacore-app` meta differs from `app.Options.AppID` fails P8 with `ProblemUIAppIDMismatch`; an equal one boots (FE8-7) |
 | `createShell.meta.test.tsx` | shell, vitest | FE7-8: a `ShellConfig.app.id` that differs from the `mediacore-app` meta gives the blocking page and mounts nothing; a server `app.id` that differs reports `app-id-mismatch`; without the theme meta the shell uses `storageKey('shell','themeMode')` and `'dark'`; the preset refuses an `appId` or `themeStorageKey` outside its pattern; without the `mediacore-app` meta the shell mounts with `config.app.id` and logs one warning; `renderInShell({ appId, themeStorageKey, defaultMode })` sets the keys a test reads (FE8-7) |
-| `git status` after build | UI-0 done-check and the dry-run RC (§7.19 step 2) | FE7-1: after `make web-deps && make web-build`, and after the release callers' rewritten `pre-build-script`, `git status --porcelain` is empty; from shell adoption also after a hello build, `make -C core readiness` and a core e2e run (`core/.gitignore`, FE8-4) |
+| `git status` after build | R1 done-check and the dry-run RC (§7.19 step 2) | FE7-1: after `make web-deps && make web-build`, and after the release callers' rewritten `pre-build-script`, `git status --porcelain` is empty; from shell adoption also after a hello build, `make -C core readiness` and a core e2e run (`core/.gitignore`, FE8-4) |
 | API-only boot | ABO shell-adoption done-check | `make build-api && ./audiobook-organizer serve` answers `/` with the placeholder (FE2-10) |
 | `TestHandler_OutsideRouteChain` | `core/ui` + `httpapi` | no rate limit or permission stage on SPA responses; listed in the infra set (FE-25) |
-| `TestBasicExemptAssets_EqualsHEAD` | `core/ui` | `ui.BasicExemptAssets` accepts exactly HEAD's `basicauth.go:40-46` set; with the kernel's P8 wiring, `TestBasicGate_ExemptSetEqualsHEAD` passes in the shell-adoption PR (FE5-10) |
+| `TestBasicExemptAssets_EqualsHEAD` | `core/ui` | `ui.BasicExemptAssets` accepts exactly HEAD's `basicauth.go:40-46` set; with the kernel's P8 wiring, `TestBasicGate_ExemptSetGolden` passes in the shell-adoption PR (FE5-10) |
 | `legacyStorageKeys.test.tsx` | ABO web | every one of the eight literal keys (seven through `legacyStorageKeys`, typed by `LegacyShellKey`, so a misspelt name is a compile error, FE6-6; `app-theme-mode` through the preset's theme meta, FE6-2) is read and written in place by the shell or ui-kit (a table layout and a dismissed banner saved before shell adoption are kept after it) (FE5-5) |
 | e2e `shell.spec.ts` | `core/web/e2e`, Playwright (chromium, webkit) against `examples/hello` built with `-tags embed_frontend` | login, merged nav, version-mismatch hiding, core-version mismatch page, disabled module absent after restart (G1 UI half), stale-build banner |
 | e2e `tabs.spec.ts` | same, served over plain HTTP/1.1 on a **non-loopback** address (the runner's LAN interface, or a hostname resolving to it), so `isSecureContext` is false | six tabs all load and receive realtime over one stream, through the heartbeat election (FE-9, FE2-2) |
@@ -1537,24 +1540,25 @@ and e2e; steps 4 and 5 ship in one release, and the SPA is served by the books l
 step 4 (FE-1, FE-2, SIMP-25, FE5-13). Nothing old is kept for a previous build (D10): a link form, a
 route or a client call changes in the PR that changes its server side.
 
-1. **react-router 7 → 8 inside ABO (UI-0, R1)**, still the declarative `<BrowserRouter>`: an import
+1. **react-router 7 → 8 inside ABO (R1)**, still the declarative `<BrowserRouter>`: an import
    swap in the 122 files (52 source, 70 test) plus the chunk regex at `vite.config.ts:81-82`. A PR
    series that precedes everything below; 13's exception for `react-router-dom` ends here, before
    `createShell`. Done when `! grep -rq react-router-dom web/package.json web/src web/tests
    web/vite.config.ts` (FE2-19).
-2. **Create `core/web` (UI-0, R1)** with `@mediacore/api-client` (runtime and generator) only, the
+2. **Create `core/web` (R1, the `core/web` PR)** with `@mediacore/api-client` (runtime and generator) only, the
    `make web-deps` entry point and every build site of §7.3.2, the `.dockerignore` lines,
    `core/web/.gitignore` (§7.3.1), the lockstep check and the import-boundary rule. `ui-kit` and `shell`
    are not created here (04 §8.1 and 09 name the same work; FE2-4). Done when, besides the dry-run RC,
    `git status --porcelain` is empty after `make web-deps && make web-build` (FE7-1).
-3. **Generated core client consumed by ABO via `file:`, switched flip by flip (R2).** From UI-0 the
+3. **Generated core client consumed by ABO via `file:`, switched flip by flip (R2).** From step 2 the
    client is generated from the `core.json` that the hello skeleton emits into
    `core/openapi/core.json` (§7.8). Each R2 flip PR switches the `api.ts` sections whose routes it
    replaces straight to generated operations and deletes the replaced gin routes in the same PR: the
    config flip the settings calls; the identity flip the auth, users, keys and roles calls, ABO's five
-   legacy permission constants, the factory-reset dialog (native route, two-step count confirmation)
-   and the fragment-form `/invite` and `/login/temp` routes (§7.4.3, §7.9.1, FE4-2); the events flip
-   the realtime code and the Activity page, REST and stream together (§7.9.2, FE3-6); the
+   legacy permission constants, the factory-reset dialog (native route, two-step count confirmation;
+   hidden in release R1) and the fragment-form `/invite` and `/login/temp` routes (§7.4.3, §7.9.1,
+   FE4-2); the tasks flip the Activity page's REST calls, polling until the events flip, which switches
+   the realtime code and gives the page live updates (§7.9.2, FE3-6); the
    integrations and backup-health-metrics flips their pages' calls. No step keeps a legacy-path call
    for a route its flip deleted.
 4. **Shell adoption (R2 if ready, else R3), one PR series.** Create `@mediacore/ui-kit` and
@@ -1576,7 +1580,7 @@ route or a client call changes in the PR that changes its server side.
    `app.Options.UI`, because `ui.FromFS` refuses a bundle without the preset's metas and `MustFromFS`
    would otherwise panic on every `embed_frontend` build (FE7-7); the image job of that PR boots the
    embedded bundle; books drops `ServesSPA` and gin's SPA serving and its `/api/v1/csp-report` handler
-   are deleted in the same PR. Preconditions: UI-0 and every R2 flip whose native routes the shell
+   are deleted in the same PR. Preconditions: steps 1–2 and every R2 flip whose native routes the shell
    pages call (§7.5.1, FE2-25). Done when, among the e2e checks, `make build-api &&
    ./audiobook-organizer serve` answers `/` with the placeholder (FE2-10).
 5. **Server manifest and intersection on** (§7.5); ABO URLs move to `/books/...` (§7.11). Steps 4 and
@@ -1815,4 +1819,4 @@ Round 11:
 - VER11-3 (R11-3) — §7.9 "When the UI moves to the native stream": only `/api/v3/ops/*` is served by task aliases; no `/api/v1/operations*` route is an alias, every one stays a books gin route on core's tasks client.
 - R11-5 note (R10-9 justification) — §7.6.3 `embed_frontend` paragraph: ABO's `static_embed.go` and its recovery test import more than `embed`; no GOOS constraint, as stated.
 
-- D10–D12 revision (2026-11-04): no `ui_route` and no C9: `ui.Options.Redirects`/`OnRedirectUse`, the kernel's redirect recorder and `TestHandler_RecordsLegacyRedirectUse` deleted; `UIDescriptor.LegacyRedirects` are optional static client redirects only (§7.11, §7.19 step 5). §7.19 rewritten by release (steps 1–2 in R1, step 3 with each R2 flip, steps 4–5 in R2 or R3). §7.4.3 and §7.9.1: link forms switch in R2's identity flip together with the legacy SPA (fragment readers in the same PR); HEAD's one-time tokens are deleted by the identity step (D12 F2), so the `/invite/{token}` and `/auth/temp-login` 302s, `InviteLinkPath`, the reader-ahead rule and `invite` in `SPAShared` are gone; the `/api/v1/auth/me` alias, `no_legacy_atom` and the `/api/v1/csp-report` alias deleted. §7.9.2: the legacy SPA moves to `/api/core/v1/events` and the native task routes in R2's events flip; legacy streams, projections and the books bus bridge deleted. Rollback-motivated rules restated for restore-based rollback; R-test rows replaced by an e2e; link-form tests renamed (`TestOldLinkFormsNotServed`, `TestInviteLink_FragmentEndToEnd`, `TestTempLoginLink_FragmentEndToEnd`); `StaleReason` `pre-s0-server` renamed `pre-r1-server`; every stage reference re-keyed to R1, an R2 flip or shell adoption.
+- D10–D12 revision (2026-11-04): no `ui_route` and no C9: `ui.Options.Redirects`/`OnRedirectUse`, the kernel's redirect recorder and `TestHandler_RecordsLegacyRedirectUse` deleted; `UIDescriptor.LegacyRedirects` are optional static client redirects only (§7.11, §7.19 step 5). §7.19 rewritten by release (steps 1–2 in R1, step 3 with each R2 flip, steps 4–5 in R2 or R3). §7.4.3 and §7.9.1: link forms switch in R2's identity flip together with the legacy SPA (fragment readers in the same PR); HEAD's one-time tokens are deleted by the identity step (D12 F2), so the `/invite/{token}` and `/auth/temp-login` 302s, `InviteLinkPath`, the reader-ahead rule and `invite` in `SPAShared` are gone; the `/api/v1/auth/me` alias, `no_legacy_atom` and the `/api/v1/csp-report` alias deleted. §7.9.2: the legacy SPA moves to `/api/core/v1/events` and the native task routes in R2's events flip; legacy streams, projections and the books bus bridge deleted. Rollback-motivated rules restated for restore-based rollback; R-test rows replaced by an e2e; link-form tests renamed (`TestOldLinkFormsNotServed`, `TestInviteLink_FragmentEndToEnd`, `TestTempLoginLink_FragmentEndToEnd`); `StaleReason` `pre-s0-server` renamed `pre-r1-server`; every stage reference re-keyed to R1, an R2 flip or shell adoption. Consistency pass: the Activity page and task routes move in F5 (tasks flip), polling until F6's stream; release R1 hides the reset control (offline `storage reset` only); UI-0 re-keyed to release R1's `core/web` PR; `TestBasicGate_ExemptSetGolden`, 05-realtime §5 item 6 and D12 (a)–(d) citations.
