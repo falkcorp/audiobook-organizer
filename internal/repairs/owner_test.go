@@ -1,7 +1,7 @@
 // file: internal/repairs/owner_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 9d4e2b71-6c38-4a05-8f1e-3b7a5c0d2e96
-// last-edited: 2026-11-03
+// last-edited: 2026-11-04
 
 package repairs
 
@@ -131,6 +131,11 @@ func TestRunPlan_GuardWithdrawsOwnerApply(t *testing.T) {
 			require.False(t, r.OwnerApplicable)
 			require.Equal(t, SkipITunes, r.Skipped)
 			require.Contains(t, r.SkipReason, "not owner-applicable")
+			require.NotEmpty(t, r.Holds, "the guard's hold is listed")
+			last := r.Holds[len(r.Holds)-1]
+			require.NotEmpty(t, last.Kind)
+			require.Contains(t, r.SkipReason, last.Why)
+			require.False(t, last.OwnerOK, "a guard hold is never the owner's to resolve")
 		}
 	}
 }

@@ -1,7 +1,7 @@
 // file: web/src/components/review/repairs/RepairsDetailsView.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b556cac-7a63-4f88-901b-ecfe5f1bdb62
-// last-edited: 2026-10-08
+// last-edited: 2026-11-04
 
 /**
  * Details: one card per repairs row with everything known about it -- the
@@ -368,6 +368,30 @@ function DetailsCard({
           </Typography>
         )}
       </Box>
+      {(row.holds?.length ?? 0) > 1 && (
+        // The skip reason names only the first hold; a row held by several
+        // (a mixed-shelf hold the owner may resolve with a hard one behind
+        // it) shows here which one keeps it from the owner's Apply.
+        <Box sx={{ mt: 1 }} data-testid={`repairs-row-holds-${row.row_id}`}>
+          <Typography variant="overline">{`Holds (${row.holds!.length})`}</Typography>
+          <Box component="ul" sx={{ m: 0, pl: 2 }}>
+            {row.holds!.map((h, i) => (
+              <Box component="li" key={`${h.kind}-${i}`} sx={{ wordBreak: 'break-word' }}>
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  color={h.owner_ok ? 'default' : 'warning'}
+                  label={h.owner_ok ? 'owner may resolve' : 'hard'}
+                  sx={{ mr: 1 }}
+                />
+                <Typography variant="body2" component="span">
+                  {h.kind}: {h.why}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+        </Box>
+      )}
       {(row.evidence?.length ?? 0) > 0 && (
         <Box sx={{ mt: 1 }}>
           <Typography variant="overline">Evidence</Typography>

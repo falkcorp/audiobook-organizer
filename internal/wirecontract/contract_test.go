@@ -1,7 +1,7 @@
 // file: internal/wirecontract/contract_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 8e3a6b14-0c5d-4f72-9a81-d2b7e4c6f039
-// last-edited: 2026-10-22
+// last-edited: 2026-11-04
 
 // Package wirecontract pins the JSON the generated TypeScript types describe
 // (07-F1). For each type tygo generates (tygo.yaml) it marshals a fully
@@ -172,7 +172,7 @@ func TestWireGoldens(t *testing.T) {
 // wireTypes is every Go struct tygo generates (tygo.yaml), by reflection.
 // TestWireTypesMatchGeneratedInterfaces ties it to the generated TypeScript.
 var wireTypes = []reflect.Type{
-	reflect.TypeFor[repairs.Row](), reflect.TypeFor[repairs.RowMember](),
+	reflect.TypeFor[repairs.Row](), reflect.TypeFor[repairs.RowMember](), reflect.TypeFor[repairs.RowHold](),
 	reflect.TypeFor[repairs.RowsPage](), reflect.TypeFor[repairs.RowResult](),
 	reflect.TypeFor[repairs.ApplyResult](), reflect.TypeFor[repairs.PlanParams](),
 	reflect.TypeFor[repairs.PlanResult](),

@@ -242,6 +242,15 @@ export interface Row {
   skipped?: string;
   skip_reason?: string;
   /**
+   * Holds optionally lists every reason the row is held back, in the order
+   * the fixer found them; the first is the row's Skipped. Skipped names
+   * only one, so a row held by several (a mixed-shelf hold the owner may
+   * resolve, and behind it one he may not) shows here which one keeps it
+   * from the owner. Display only: no apply path reads it, and it is not
+   * part of Fingerprint.
+   */
+  holds?: RowHold[];
+  /**
    * RetryLater marks a skip (Skipped set) that is transient: a condition
    * outside the row that clears on its own, such as an index not built yet,
    * not anything about the row itself. A re-plan returning such a row is
@@ -299,6 +308,21 @@ export interface Row {
    * it.
    */
   state?: unknown;
+}
+/**
+ * RowHold is one reason a Row is held back, for display (Row.Holds).
+ */
+export interface RowHold {
+  /**
+   * Kind is a skip kind (the values Row.Skipped takes).
+   */
+  kind: string;
+  why: string;
+  /**
+   * OwnerOK: the owner's own Apply on the row may resolve this hold. A row
+   * is owner-applicable only while every one of its holds is.
+   */
+  owner_ok: boolean;
 }
 /**
  * RowMember is one book of a Row, for display.

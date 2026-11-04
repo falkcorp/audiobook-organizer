@@ -1,7 +1,7 @@
 // file: internal/repairs/engine.go
-// version: 1.25.1
+// version: 1.26.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
-// last-edited: 2026-11-03
+// last-edited: 2026-11-04
 
 package repairs
 
@@ -142,8 +142,10 @@ func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps
 			// the owner's Apply with the guard's reason.
 			rows[i].OwnerApplicable, rows[i].OwnerApplyReason = false, ""
 			rows[i].SkipReason += "; not owner-applicable: " + why
+			rows[i].Holds = append(rows[i].Holds, RowHold{Kind: kind, Why: why})
 		default:
 			rows[i].Skipped, rows[i].SkipReason = kind, why
+			rows[i].Holds = append(rows[i].Holds, RowHold{Kind: kind, Why: why})
 		}
 		return nil
 	}, registry.RunItemsOptions{

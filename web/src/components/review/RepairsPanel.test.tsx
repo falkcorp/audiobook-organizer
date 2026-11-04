@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.25.0
+// version: 1.26.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-11-03
+// last-edited: 2026-11-04
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
@@ -1000,6 +1000,10 @@ describe('RepairsPanel — view modes', () => {
       { book_id: 'F1', title: 'Title F1', role: 'fragment', files: 1, missing_files: 1 },
     ],
     evidence: ['e1', 'e2', 'e3', 'e4'],
+    holds: [
+      { kind: 'skipped_mixed_shelf', why: 'files on two shelves', owner_ok: true },
+      { kind: 'skipped_unclear_work', why: '"Knightfall" repeats a title', owner_ok: false },
+    ],
   });
   const V2 = row('v2', { reason: 'same fix', current: { series: 'Series S' }, proposed: {}, book_ids: ['Q'] });
   const V3 = row('v3', { reason: 'other fix', book_ids: ['R'] });
@@ -1058,6 +1062,15 @@ describe('RepairsPanel — view modes', () => {
     expect(await screen.findByTestId('repairs-grouped')).toBeInTheDocument();
     expect(screen.getByText(/Set Rows per page to 500 to group more/)).toBeInTheDocument();
     expect(screen.queryByTestId('repairs-compact')).not.toBeInTheDocument();
+  });
+
+  it('details: a row with several holds lists each, hard ones marked', async () => {
+    renderPanel('two-column');
+    const holds = await screen.findByTestId('repairs-row-holds-v1');
+    expect(holds).toHaveTextContent('Holds (2)');
+    expect(holds).toHaveTextContent('owner may resolveskipped_mixed_shelf: files on two shelves');
+    expect(holds).toHaveTextContent('hardskipped_unclear_work: "Knightfall" repeats a title');
+    expect(screen.queryByTestId('repairs-row-holds-v2')).not.toBeInTheDocument();
   });
 
   it('compact: the chevron opens the full reason and the evidence', async () => {
