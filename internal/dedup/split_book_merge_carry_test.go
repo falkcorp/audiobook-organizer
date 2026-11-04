@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge_carry_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: e52db43b-d7f1-4be6-947a-639edb4e616c
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package dedup
 
@@ -29,7 +29,7 @@ func carryBook(t *testing.T, s *database.PebbleStore, title, path string, track 
 	t.Helper()
 	b, err := s.CreateBook(&database.Book{Title: title, FilePath: path})
 	require.NoError(t, err)
-	f := &database.BookFile{BookID: b.ID, FilePath: path, Duration: 300, FileSize: 1 << 20, TrackNumber: track, DiscNumber: 1}
+	f := &database.BookFile{BookID: b.ID, FilePath: path, Duration: database.Secs(300), FileSize: 1 << 20, TrackNumber: track, DiscNumber: 1}
 	require.NoError(t, s.CreateBookFile(f))
 	return b.ID, f.ID
 }

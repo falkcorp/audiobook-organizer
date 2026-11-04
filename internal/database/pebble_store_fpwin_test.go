@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_fpwin_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 67f3605a-acce-4382-9555-a1a26ed37eb0
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package database
 
@@ -342,7 +342,7 @@ func TestFpwin_Cascade_UpdateDoesNotTouchWindows(t *testing.T) {
 
 	f, err := env.store.GetBookFileByID(bookID, id)
 	require.NoError(t, err)
-	f.Duration = 1234
+	f.Duration = Secs(1234)
 	require.NoError(t, env.store.UpdateBookFile(id, f))
 
 	got, err := env.reopen(t).GetFingerprintWindows(FileWindowRef(id))

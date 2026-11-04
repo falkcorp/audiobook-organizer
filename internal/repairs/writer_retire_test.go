@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_retire_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: d4146810-528b-4b28-ab80-cf4d4aa0bdf1
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 package repairs
 
@@ -37,7 +37,7 @@ func newRetireFx(t *testing.T) *retireFx {
 	require.NoError(t, err)
 	fx := &retireFx{st: st, holder: holder, shell: shell}
 	for i, p := range []string{"/lib/syn/shell/01.mp3", "/lib/syn/shell/02.mp3"} {
-		row := &database.BookFile{BookID: shell.ID, FilePath: p, FileHash: "h" + string(rune('a'+i)), TrackNumber: i + 1, Duration: 10, FileSize: 100}
+		row := &database.BookFile{BookID: shell.ID, FilePath: p, FileHash: "h" + string(rune('a'+i)), TrackNumber: i + 1, Duration: database.Secs(10), FileSize: 100}
 		require.NoError(t, st.CreateBookFile(row))
 		fx.rows = append(fx.rows, row)
 	}

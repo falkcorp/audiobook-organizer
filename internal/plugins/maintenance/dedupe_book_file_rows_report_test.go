@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_report_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e3b8c71-2d94-4f0a-a6c7-91b4e2d0f358
-// last-edited: 2026-09-12
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -175,7 +175,7 @@ func TestDedupeBookFileRows_ReportOmitsBooksWithNoDuplicates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateBook: %v", err)
 		}
-		if err := s.CreateBookFile(&database.BookFile{BookID: bk.ID, FilePath: "/lib/clean/" + bk.ID + ".m4b", Duration: 60}); err != nil {
+		if err := s.CreateBookFile(&database.BookFile{BookID: bk.ID, FilePath: "/lib/clean/" + bk.ID + ".m4b", Duration: database.Secs(60)}); err != nil {
 			t.Fatalf("CreateBookFile: %v", err)
 		}
 		clean[bk.ID] = true
@@ -204,7 +204,7 @@ func TestDedupeBookFileRows_ReportFlagsFingerprintOnRedundantRow(t *testing.T) {
 		}
 		for _, fp := range fps {
 			if err := s.CreateBookFile(&database.BookFile{
-				BookID: bk.ID, FilePath: "/lib/fp/" + title + ".m4b", Duration: 60, AcoustIDFingerprint: fp,
+				BookID: bk.ID, FilePath: "/lib/fp/" + title + ".m4b", Duration: database.Secs(60), AcoustIDFingerprint: fp,
 			}); err != nil {
 				t.Fatalf("CreateBookFile: %v", err)
 			}

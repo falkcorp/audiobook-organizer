@@ -1,7 +1,7 @@
 // file: internal/database/book_own_folder_test.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: f45fb918-35b5-4c10-871a-1cd0b11c8805
-// last-edited: 2026-10-19
+// last-edited: 2026-11-04
 
 package database
 
@@ -22,27 +22,27 @@ func ownFolderIDs(files []BookFile) []string {
 
 func TestIsBookFileCopy(t *testing.T) {
 	base := BookFile{FilePath: "/lib/A/Book/01.mp3", OriginalFilename: "01 Book.mp3",
-		FileHash: "h1", FileSize: 1000, Duration: 600}
+		FileHash: "h1", FileSize: 1000, Duration: Secs(600)}
 	cases := []struct {
 		name string
 		b    BookFile
 		want bool
 	}{
-		{"same non-empty hash", BookFile{FilePath: "/x/other.mp3", FileHash: "h1", FileSize: 1000, Duration: 600}, true},
+		{"same non-empty hash", BookFile{FilePath: "/x/other.mp3", FileHash: "h1", FileSize: 1000, Duration: Secs(600)}, true},
 		{"same hash, size and duration unknown", BookFile{FilePath: "/x/other.mp3", FileHash: "h1"}, true},
 		// Legacy 1 MB-prefix hashes collide across distinct tracks.
-		{"same legacy hash, different size", BookFile{FilePath: "/x/other.mp3", FileHash: "h1", FileSize: 5, Duration: 600}, false},
+		{"same legacy hash, different size", BookFile{FilePath: "/x/other.mp3", FileHash: "h1", FileSize: 5, Duration: Secs(600)}, false},
 		// Durations from different measurement sources drift; they never
 		// veto a hash match with agreeing sizes.
-		{"same hash and size, durations 2 s apart", BookFile{FilePath: "/x/other.mp3", FileHash: "h1", FileSize: 1000, Duration: 602}, true},
-		{"empty hashes never match", BookFile{FilePath: "/x/other.mp3", FileSize: 1000, Duration: 600}, false},
-		{"same base name, size, duration", BookFile{FilePath: "/x/01.mp3", FileHash: "h2", FileSize: 1000, Duration: 600}, true},
-		{"original filename matches base name", BookFile{FilePath: "/x/01 Book.mp3", FileHash: "h2", FileSize: 1000, Duration: 600}, true},
-		{"duration 1 s apart", BookFile{FilePath: "/x/01.mp3", FileHash: "h2", FileSize: 1000, Duration: 601}, true},
-		{"duration 1 s apart the other way", BookFile{FilePath: "/x/01.mp3", FileHash: "h2", FileSize: 1000, Duration: 599}, true},
-		{"duration 2 s apart", BookFile{FilePath: "/x/01.mp3", FileHash: "h2", FileSize: 1000, Duration: 602}, false},
-		{"same name, different size", BookFile{FilePath: "/x/01.mp3", FileHash: "h2", FileSize: 1001, Duration: 600}, false},
-		{"same size and duration, different name", BookFile{FilePath: "/x/02.mp3", FileHash: "h2", FileSize: 1000, Duration: 600}, false},
+		{"same hash and size, durations 2 s apart", BookFile{FilePath: "/x/other.mp3", FileHash: "h1", FileSize: 1000, Duration: Secs(602)}, true},
+		{"empty hashes never match", BookFile{FilePath: "/x/other.mp3", FileSize: 1000, Duration: Secs(600)}, false},
+		{"same base name, size, duration", BookFile{FilePath: "/x/01.mp3", FileHash: "h2", FileSize: 1000, Duration: Secs(600)}, true},
+		{"original filename matches base name", BookFile{FilePath: "/x/01 Book.mp3", FileHash: "h2", FileSize: 1000, Duration: Secs(600)}, true},
+		{"duration 1 s apart", BookFile{FilePath: "/x/01.mp3", FileHash: "h2", FileSize: 1000, Duration: Secs(601)}, true},
+		{"duration 1 s apart the other way", BookFile{FilePath: "/x/01.mp3", FileHash: "h2", FileSize: 1000, Duration: Secs(599)}, true},
+		{"duration 2 s apart", BookFile{FilePath: "/x/01.mp3", FileHash: "h2", FileSize: 1000, Duration: Secs(602)}, false},
+		{"same name, different size", BookFile{FilePath: "/x/01.mp3", FileHash: "h2", FileSize: 1001, Duration: Secs(600)}, false},
+		{"same size and duration, different name", BookFile{FilePath: "/x/02.mp3", FileHash: "h2", FileSize: 1000, Duration: Secs(600)}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -59,10 +59,10 @@ func TestIsBookFileCopy(t *testing.T) {
 
 func TestSplitOwnFolderFiles(t *testing.T) {
 	rows := []BookFile{
-		{ID: "own", FilePath: "/lib/A/Book/01.m4b", FileHash: "h1", FileSize: 100, Duration: 60},
-		{ID: "cd2", FilePath: "/lib/A/Book/CD2/02.m4b", FileHash: "h2", FileSize: 200, Duration: 70},
-		{ID: "itunes-copy", FilePath: "/srv/books/itunes/A/Book/01.m4b", FileHash: "h1", FileSize: 100, Duration: 60},
-		{ID: "moved", FilePath: "/lib/A/Loser/03.m4b", FileHash: "h3", FileSize: 300, Duration: 80},
+		{ID: "own", FilePath: "/lib/A/Book/01.m4b", FileHash: "h1", FileSize: 100, Duration: Secs(60)},
+		{ID: "cd2", FilePath: "/lib/A/Book/CD2/02.m4b", FileHash: "h2", FileSize: 200, Duration: Secs(70)},
+		{ID: "itunes-copy", FilePath: "/srv/books/itunes/A/Book/01.m4b", FileHash: "h1", FileSize: 100, Duration: Secs(60)},
+		{ID: "moved", FilePath: "/lib/A/Loser/03.m4b", FileHash: "h3", FileSize: 300, Duration: Secs(80)},
 	}
 
 	t.Run("directory path: own folder recursive, only copies excluded", func(t *testing.T) {
@@ -139,10 +139,10 @@ func TestRecomputeBookAggregates_SkipsOnlyOutOfFolderCopies(t *testing.T) {
 
 	t.Run("hash-equal copies in two folders count once", func(t *testing.T) {
 		d, sz := recomputeDuration(t, store, "/lib/A/Hash", []BookFile{
-			{FilePath: "/lib/A/Hash/01.mp3", FileHash: "hA", FileSize: 10, Duration: 600},
-			{FilePath: "/lib/A/Hash/02.mp3", FileHash: "hB", FileSize: 20, Duration: 400},
-			{FilePath: "/srv/books/itunes/A/Hash/Track 1.mp3", FileHash: "hA", FileSize: 10, Duration: 600},
-			{FilePath: "/srv/old/Hash/second.mp3", FileHash: "hB", FileSize: 20, Duration: 400},
+			{FilePath: "/lib/A/Hash/01.mp3", FileHash: "hA", FileSize: 10, Duration: Secs(600)},
+			{FilePath: "/lib/A/Hash/02.mp3", FileHash: "hB", FileSize: 20, Duration: Secs(400)},
+			{FilePath: "/srv/books/itunes/A/Hash/Track 1.mp3", FileHash: "hA", FileSize: 10, Duration: Secs(600)},
+			{FilePath: "/srv/old/Hash/second.mp3", FileHash: "hB", FileSize: 20, Duration: Secs(400)},
 		})
 		assert.Equal(t, 1000, d)
 		assert.Equal(t, int64(30), sz)
@@ -150,25 +150,25 @@ func TestRecomputeBookAggregates_SkipsOnlyOutOfFolderCopies(t *testing.T) {
 
 	t.Run("name + size + duration copy counts once", func(t *testing.T) {
 		d, _ := recomputeDuration(t, store, "/lib/A/Name", []BookFile{
-			{FilePath: "/lib/A/Name/01.mp3", FileHash: "n1", FileSize: 1000, Duration: 600},
-			{FilePath: "/srv/old/Name/01.mp3", FileHash: "n2", FileSize: 1000, Duration: 601},
+			{FilePath: "/lib/A/Name/01.mp3", FileHash: "n1", FileSize: 1000, Duration: Secs(600)},
+			{FilePath: "/srv/old/Name/01.mp3", FileHash: "n2", FileSize: 1000, Duration: Secs(601)},
 		})
 		assert.Equal(t, 600, d, "the 601 s copy is within 1 s of the own row: counted once")
 	})
 
 	t.Run("same name, different size counts twice", func(t *testing.T) {
 		d, _ := recomputeDuration(t, store, "/lib/A/Size", []BookFile{
-			{FilePath: "/lib/A/Size/01.mp3", FileHash: "s1", FileSize: 1000, Duration: 600},
-			{FilePath: "/srv/old/Size/01.mp3", FileHash: "s2", FileSize: 1001, Duration: 600},
+			{FilePath: "/lib/A/Size/01.mp3", FileHash: "s1", FileSize: 1000, Duration: Secs(600)},
+			{FilePath: "/srv/old/Size/01.mp3", FileHash: "s2", FileSize: 1001, Duration: Secs(600)},
 		})
 		assert.Equal(t, 1200, d)
 	})
 
 	t.Run("merged book: a moved non-copy row keeps its runtime", func(t *testing.T) {
 		d, sz := recomputeDuration(t, store, "/lib/A/Winner", []BookFile{
-			{FilePath: "/lib/A/Winner/t1.m4b", FileHash: "w1", FileSize: 500, Duration: 50},
-			{FilePath: "/lib/A/Loser/t1.m4b", FileHash: "l1", FileSize: 1000, Duration: 100},
-			{FilePath: "/lib/A/Loser/t2.m4b", FileHash: "l2", FileSize: 2000, Duration: 200},
+			{FilePath: "/lib/A/Winner/t1.m4b", FileHash: "w1", FileSize: 500, Duration: Secs(50)},
+			{FilePath: "/lib/A/Loser/t1.m4b", FileHash: "l1", FileSize: 1000, Duration: Secs(100)},
+			{FilePath: "/lib/A/Loser/t2.m4b", FileHash: "l2", FileSize: 2000, Duration: Secs(200)},
 		})
 		assert.Equal(t, 350, d)
 		assert.Equal(t, int64(3500), sz)
@@ -176,8 +176,8 @@ func TestRecomputeBookAggregates_SkipsOnlyOutOfFolderCopies(t *testing.T) {
 
 	t.Run("no own-folder rows: every row counts", func(t *testing.T) {
 		d, _ := recomputeDuration(t, store, "/lib/A/Elsewhere", []BookFile{
-			{FilePath: "/srv/old/X/01.mp3", FileHash: "x1", FileSize: 1000, Duration: 100},
-			{FilePath: "/srv/old/Y/01.mp3", FileHash: "x1", FileSize: 1000, Duration: 200},
+			{FilePath: "/srv/old/X/01.mp3", FileHash: "x1", FileSize: 1000, Duration: Secs(100)},
+			{FilePath: "/srv/old/Y/01.mp3", FileHash: "x1", FileSize: 1000, Duration: Secs(200)},
 		})
 		assert.Equal(t, 300, d, "hash-equal rows, but none in the own folder: no basis to call either a copy")
 	})

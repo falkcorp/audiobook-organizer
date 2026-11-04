@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfile_modify_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0c8e5b31-7a92-4d6f-b3e4-9f1a2c6d8e57
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package database
 
@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // fn sees the row as currently stored, not a caller's earlier read: a change
@@ -58,7 +60,7 @@ func TestModifyBookFile_PathChangeRewritesIndex(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, byNew)
 	require.Equal(t, f.ID, byNew.ID)
-	require.Equal(t, 100.0, float64(byNew.Duration))
+	require.Equal(t, 100.0, float64(durtest.Sec(byNew.Duration)))
 	byOld, err := s.GetBookFileByPath("/lib/T/01.mp3")
 	require.NoError(t, err)
 	require.Nil(t, byOld, "stale path index left behind")
@@ -107,7 +109,7 @@ func TestModifyBookFileDeferAggregates_DoesNotRecomputeUntilTheCallerDoes(t *tes
 	const n = 5
 	ids := make([]string, n)
 	for i := range ids {
-		f := &BookFile{BookID: b.ID, FilePath: fmt.Sprintf("/lib/Gotham/The Long Halloween/%02d.mp3", i+1), Format: "mp3", Duration: 100, FileSize: 1000}
+		f := &BookFile{BookID: b.ID, FilePath: fmt.Sprintf("/lib/Gotham/The Long Halloween/%02d.mp3", i+1), Format: "mp3", Duration: Secs(100), FileSize: 1000}
 		require.NoError(t, s.CreateBookFile(f))
 		ids[i] = f.ID
 	}
@@ -193,22 +195,22 @@ func TestModifyBookFile_NormalisesAMillisecondDurationToSeconds(t *testing.T) {
 			s := setupTestPebbleStore(t)
 			b, err := s.CreateBook(&Book{Title: "Batman: Year One", FilePath: "/lib/Gotham/Batman Year One"})
 			require.NoError(t, err)
-			f := &BookFile{BookID: b.ID, FilePath: "/lib/Gotham/Batman Year One/01.m4b", Format: "m4b", Duration: 3600, FileSize: 40_000_000}
+			f := &BookFile{BookID: b.ID, FilePath: "/lib/Gotham/Batman Year One/01.m4b", Format: "m4b", Duration: Secs(3600), FileSize: 40_000_000}
 			require.NoError(t, s.CreateBookFile(f))
 
-			row, err := modify(s, b.ID, f.ID, func(r *BookFile) error { r.Duration = 3_600_000; return nil })
+			row, err := modify(s, b.ID, f.ID, func(r *BookFile) error { r.Duration = Secs(3_600_000); return nil })
 			require.NoError(t, err)
-			require.Equal(t, 3600, row.Duration, "the returned row is what was stored")
+			require.Equal(t, 3600, durtest.Sec(row.Duration), "the returned row is what was stored")
 			got, err := s.GetBookFileByID(b.ID, f.ID)
 			require.NoError(t, err)
-			require.Equal(t, 3600, got.Duration, "a millisecond duration must be stored as seconds")
+			require.Equal(t, 3600, durtest.Sec(got.Duration), "a millisecond duration must be stored as seconds")
 
 			// A value that is already seconds is never divided again.
 			_, err = modify(s, b.ID, f.ID, func(r *BookFile) error { r.Title = "Batman: Year One, Chapter 1"; return nil })
 			require.NoError(t, err)
 			got, err = s.GetBookFileByID(b.ID, f.ID)
 			require.NoError(t, err)
-			require.Equal(t, 3600, got.Duration)
+			require.Equal(t, 3600, durtest.Sec(got.Duration))
 		})
 	}
 }

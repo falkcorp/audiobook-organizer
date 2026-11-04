@@ -1,7 +1,7 @@
 // file: internal/database/batch_upsert_aggregates_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9d41f6b2-70e8-4c35-b1a7-38f0c92e64d5
-// last-edited: 2026-08-24
+// last-edited: 2026-11-04
 
 package database
 
@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database/aggtest"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // These three delegate to internal/database/aggtest, which owns the real
@@ -52,7 +53,7 @@ func sumStoredFileAggregates(t *testing.T, store Store, bookID string) (int, int
 	var dur int
 	var size int64
 	for _, f := range files {
-		dur += f.Duration
+		dur += durtest.Sec(f.Duration)
 		size += f.FileSize
 	}
 	return dur, size
@@ -103,7 +104,7 @@ func TestBatchUpsertBookFilesRecomputesAggregatesOncePerBook(t *testing.T) {
 			BookID:      bookA,
 			FilePath:    "/lib/batch/a/track" + string(rune('1'+i)) + ".m4b",
 			TrackNumber: i + 1,
-			Duration:    600 + i,
+			Duration:    Secs(600 + i),
 			FileSize:    int64(20_000_000 + i),
 		})
 	}
@@ -112,7 +113,7 @@ func TestBatchUpsertBookFilesRecomputesAggregatesOncePerBook(t *testing.T) {
 			BookID:      bookB,
 			FilePath:    "/lib/batch/b/track" + string(rune('1'+i)) + ".m4b",
 			TrackNumber: i + 1,
-			Duration:    900 + i,
+			Duration:    Secs(900 + i),
 			FileSize:    int64(30_000_000 + i),
 		})
 	}
@@ -185,7 +186,7 @@ func TestDeletingEveryFileKeepsTheBookDuration(t *testing.T) {
 	require.NoError(t, store.CreateBookFile(&BookFile{
 		BookID:   book.ID,
 		FilePath: "/lib/loses/track1.m4b",
-		Duration: 1234,
+		Duration: Secs(1234),
 		FileSize: 5_000_000,
 	}))
 
@@ -236,7 +237,7 @@ func TestBatchUpsertBookFilesAttributesTheAffectedBookNotTheRequestedOne(t *test
 	require.NoError(t, store.CreateBookFile(&BookFile{
 		BookID:   owner.ID,
 		FilePath: sharedPath,
-		Duration: 100,
+		Duration: Secs(100),
 		FileSize: 1_000_000,
 	}))
 
@@ -247,7 +248,7 @@ func TestBatchUpsertBookFilesAttributesTheAffectedBookNotTheRequestedOne(t *test
 	require.NoError(t, store.BatchUpsertBookFiles([]*BookFile{{
 		BookID:   other.ID,
 		FilePath: sharedPath,
-		Duration: 250,
+		Duration: Secs(250),
 		FileSize: 2_000_000,
 	}}))
 
@@ -258,7 +259,7 @@ func TestBatchUpsertBookFilesAttributesTheAffectedBookNotTheRequestedOne(t *test
 	ownerBook, err := store.GetBookByID(owner.ID)
 	require.NoError(t, err)
 	require.NotNil(t, ownerBook.Duration)
-	require.Equal(t, ownerFiles[0].Duration, *ownerBook.Duration,
+	require.Equal(t, durtest.Sec(ownerFiles[0].Duration), *ownerBook.Duration,
 		"the book that actually owns the row must be the one recomputed")
 
 	// `other` never owned a row, so it must not have been recomputed at all.
@@ -297,7 +298,7 @@ func TestBatchUpsertBookFilesMultiRowRetargetStrict(t *testing.T) {
 	require.NoError(t, store.CreateBookFile(&BookFile{
 		BookID:   owner.ID,
 		FilePath: ownedPath,
-		Duration: 100,
+		Duration: Secs(100),
 		FileSize: 1_000_000,
 	}))
 
@@ -307,8 +308,8 @@ func TestBatchUpsertBookFilesMultiRowRetargetStrict(t *testing.T) {
 	// Row 2 is a genuinely new row for `owner`. Both resolve to one book, so
 	// one recompute must cover them.
 	require.NoError(t, store.BatchUpsertBookFiles([]*BookFile{
-		{BookID: other.ID, FilePath: ownedPath, Duration: 250, FileSize: 2_000_000},
-		{BookID: owner.ID, FilePath: "/lib/own/t2.m4b", Duration: 300, FileSize: 3_000_000},
+		{BookID: other.ID, FilePath: ownedPath, Duration: Secs(250), FileSize: 2_000_000},
+		{BookID: owner.ID, FilePath: "/lib/own/t2.m4b", Duration: Secs(300), FileSize: 3_000_000},
 	}))
 
 	require.Equal(t, 1, countAggregateInvocations(readLogs(), owner.ID),
@@ -356,7 +357,7 @@ func TestBatchUpsertBookFilesAggregateLogInstrumentIsLive(t *testing.T) {
 	require.NoError(t, store.BatchUpsertBookFiles([]*BookFile{{
 		BookID:   book.ID,
 		FilePath: "/lib/instr/t1.m4b",
-		Duration: 600,
+		Duration: Secs(600),
 		FileSize: 6_000_000,
 	}}))
 	require.Equal(t, 1, countAggregateInvocations(readLogs(), book.ID))

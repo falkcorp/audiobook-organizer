@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_safety_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 17b88502-dcdd-4723-9e9b-a13d2548dac6
-// last-edited: 2026-10-11
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -26,6 +26,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 )
 
@@ -111,7 +112,7 @@ func TestRelinkPreFixImports_AdoptKeepsConcurrentRowEdit(t *testing.T) {
 
 	is := &pfrInterleaveStore{IngestStore: f.s, hook: func() {
 		_, merr := f.s.ModifyBookFile(book, f.rowIDs["r3a"], func(r *database.BookFile) error {
-			r.TrackNumber, r.Duration = 7, 4242
+			r.TrackNumber, r.Duration = 7, database.Secs(4242)
 			return nil
 		})
 		require.NoError(t, merr)
@@ -121,7 +122,7 @@ func TestRelinkPreFixImports_AdoptKeepsConcurrentRowEdit(t *testing.T) {
 	require.Equal(t, v.ID, row.VersionID)
 	require.Equal(t, "precomputed-hash", row.FileHash)
 	require.Equal(t, 7, row.TrackNumber, "concurrent TrackNumber write was reverted by the adopt write")
-	require.Equal(t, 4242, row.Duration, "concurrent Duration write was reverted by the adopt write")
+	require.Equal(t, 4242, durtest.Sec(row.Duration), "concurrent Duration write was reverted by the adopt write")
 }
 
 // R3b: the row is repointed inside the window (with another field). The

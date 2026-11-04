@@ -1,7 +1,7 @@
 // file: internal/metafetch/transcription_runtime_gate_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5b0c1e7e-39f4-4d0e-9a53-6c1d2f8a4b17
-// last-edited: 2026-10-29
+// last-edited: 2026-11-04
 
 package metafetch
 
@@ -143,10 +143,10 @@ func stepByID(c MetadataCandidate, id string) *ScoreStep {
 
 // The breakdown and the candidate flag, end to end, for each verdict.
 func TestSearch_TranscriptionRuntimeGate_Breakdown(t *testing.T) {
-	tenHourBook := []database.BookFile{{ID: "f1", BookID: "b1", FileSize: 288_000_000, Duration: 10 * hour}}
+	tenHourBook := []database.BookFile{{ID: "f1", BookID: "b1", FileSize: 288_000_000, Duration: database.Secs(10 * hour)}}
 	// The 2-file, 0 KB, one-file-measured case from the owner's report.
 	partialZeroSize := []database.BookFile{
-		{ID: "f1", BookID: "b1", Duration: 7*hour + 46*60},
+		{ID: "f1", BookID: "b1", Duration: database.Secs(7*hour + 46*60)},
 		{ID: "f2", BookID: "b1"},
 	}
 
@@ -205,7 +205,7 @@ func TestSearch_TranscriptionMatchedAnswerGetsRuntimeLookup(t *testing.T) {
 		}
 	}}
 	audnexus := &fakeProvider{id: metadata.SourceIDAudnexus, name: "Audnexus (Audible)"}
-	files := []database.BookFile{{ID: "f1", BookID: "b1", FileSize: 288_000_000, Duration: 10 * hour}}
+	files := []database.BookFile{{ID: "f1", BookID: "b1", FileSize: 288_000_000, Duration: database.Secs(10 * hour)}}
 	svc := fanoutHarnessFiles(t, &database.Book{ID: "b1", Title: "Year One", TranscribedTitle: &heard}, files, audible, audnexus)
 	var mu sync.Mutex
 	var asked []string
@@ -293,7 +293,7 @@ func TestFetchMetadataForBook_TranscriptionOnlyMatchNeedsRuntime(t *testing.T) {
 			book.Title = tt.bookTitle
 			book.TranscribedTitle = new(heard)
 			svc.db.(*database.MockStore).GetBookFilesFunc = func(id string) ([]database.BookFile, error) {
-				return []database.BookFile{{ID: "f1", BookID: id, FilePath: "/lib/a/a.m4b", FileSize: 288_000_000, Duration: tenH}}, nil
+				return []database.BookFile{{ID: "f1", BookID: id, FilePath: "/lib/a/a.m4b", FileSize: 288_000_000, Duration: database.Secs(tenH)}}, nil
 			}
 			svc.overrideSources = []metadata.MetadataSource{fakeSource{
 				name:    "Audible",

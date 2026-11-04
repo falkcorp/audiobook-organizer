@@ -1,7 +1,7 @@
 // file: internal/database/signal_coverage_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 23717253-07aa-46c2-8759-470f05fa4c74
-// last-edited: 2026-09-12
+// last-edited: 2026-11-04
 
 package database
 
@@ -28,7 +28,7 @@ func TestCountBookFileSignals_ShardedMatchesSequential(t *testing.T) {
 			ID:       fmt.Sprintf("f%d", i),
 			FileHash: map[bool]string{true: "h"}[i%2 == 0],
 			Missing:  i%5 == 0,
-			Duration: i % 3,
+			Duration: Secs(i % 3),
 		}
 	}
 	at := func(i int) *BookFile { return &rows[i] }

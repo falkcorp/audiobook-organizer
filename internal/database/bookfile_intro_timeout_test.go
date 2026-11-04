@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_intro_timeout_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 3a7d1f58-c2e6-4b09-8d41-6f0b9e2a7c35
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package database
 
@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // strike is one timeout strike. Each run is answered by its own worker unless a
@@ -427,7 +429,7 @@ func TestRecordIntroTimeout_KeepsAConcurrentWritersFields(t *testing.T) {
 	}
 	// Another writer changes an unrelated field, then a strike lands: both stay.
 	row := reread(t, s, f)
-	row.Duration = 4321
+	row.Duration = Secs(4321)
 	if err := s.UpdateBookFile(f.ID, row); err != nil {
 		t.Fatal(err)
 	}
@@ -435,8 +437,8 @@ func TestRecordIntroTimeout_KeepsAConcurrentWritersFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := reread(t, s, f)
-	if got.Duration != 4321 || got.IntroTimeouts != 2 || got.IntroTimeoutRunID != "run-2" {
-		t.Errorf("duration=%d strikes=%d run=%q", got.Duration, got.IntroTimeouts, got.IntroTimeoutRunID)
+	if durtest.Sec(got.Duration) != 4321 || got.IntroTimeouts != 2 || got.IntroTimeoutRunID != "run-2" {
+		t.Errorf("duration=%d strikes=%d run=%q", durtest.Sec(got.Duration), got.IntroTimeouts, got.IntroTimeoutRunID)
 	}
 }
 

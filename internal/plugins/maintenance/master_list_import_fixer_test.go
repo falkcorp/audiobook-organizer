@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/master_list_import_fixer_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 91c3d7e5-0a48-4b6f-8e12-d5f7a3b9c640
-// last-edited: 2026-10-23
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -111,7 +111,7 @@ func (l *mlLab) book(key string, b mlBook) string {
 	require.NoError(l.t, err)
 	if b.minutes > 0 {
 		require.NoError(l.t, l.store.CreateBookFile(&database.BookFile{BookID: created.ID, FilePath: "/lib/" + key + "/01.m4b",
-			Format: "m4b", Duration: b.minutes * 60}))
+			Format: "m4b", Duration: database.Secs(b.minutes * 60)}))
 	}
 	l.ids[key] = created.ID
 	return created.ID

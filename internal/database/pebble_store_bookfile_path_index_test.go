@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfile_path_index_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 77b0ad96-dd9c-4c25-80da-e5dda6de5d36
-// last-edited: 2026-09-14
+// last-edited: 2026-11-04
 
 package database
 
@@ -74,7 +74,7 @@ func TestPathIndex_InPlaceUpdateOfOwnerKeepsEntry(t *testing.T) {
 	f := seedPatchFile(t, s)
 
 	upd := *f
-	upd.Duration = 999
+	upd.Duration = Secs(999)
 	require.NoError(t, s.UpdateBookFile(f.ID, &upd))
 
 	got, err := s.GetBookFileByPath(f.FilePath)

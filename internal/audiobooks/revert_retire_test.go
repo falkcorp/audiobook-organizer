@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_retire_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7cdf45d6-39e8-4d1b-9e70-6ed21b7ada58
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 package audiobooks
 
@@ -39,8 +39,8 @@ func newRetireRevertFx(t *testing.T) *retireRevertFx {
 	require.NoError(t, err)
 	fx := &retireRevertFx{st: st, holder: holder, shell: shell}
 	for i, r := range []database.BookFile{
-		{FilePath: "/lib/syn/shell/01.mp3", FileHash: "hash-a", TrackNumber: 1, Duration: 60, FileSize: 600, ITunesPersistentID: "PID-SYN-A"},
-		{FilePath: "/lib/syn/shell/02.mp3", FileHash: "hash-b", TrackNumber: 2, Duration: 70, FileSize: 700},
+		{FilePath: "/lib/syn/shell/01.mp3", FileHash: "hash-a", TrackNumber: 1, Duration: database.Secs(60), FileSize: 600, ITunesPersistentID: "PID-SYN-A"},
+		{FilePath: "/lib/syn/shell/02.mp3", FileHash: "hash-b", TrackNumber: 2, Duration: database.Secs(70), FileSize: 700},
 	} {
 		row := r
 		row.BookID = shell.ID

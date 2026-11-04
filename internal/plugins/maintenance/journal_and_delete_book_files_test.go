@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/journal_and_delete_book_files_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9a4d6c1e-2b57-4f0a-8c3e-7e1d5b9a0f42
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // ledgerStore is a MockStore whose operation-change writes land in a map keyed
@@ -33,8 +34,8 @@ func ledgerStore(deleteResult func(refs []database.BookFileRef) ([]database.Book
 
 func gothamRows(bookID string) []database.BookFile {
 	return []database.BookFile{
-		{ID: "01BATMANFILE0001", BookID: bookID, FilePath: "/lib/Gotham/Year-One/01.m4b", FileHash: "gotham-hash-1", Duration: 100},
-		{ID: "01BATMANFILE0002", BookID: bookID, FilePath: "/lib/Gotham/Year-One/02.m4b", FileHash: "gotham-hash-2", Duration: 200},
+		{ID: "01BATMANFILE0001", BookID: bookID, FilePath: "/lib/Gotham/Year-One/01.m4b", FileHash: "gotham-hash-1", Duration: database.Secs(100)},
+		{ID: "01BATMANFILE0002", BookID: bookID, FilePath: "/lib/Gotham/Year-One/02.m4b", FileHash: "gotham-hash-2", Duration: database.Secs(200)},
 	}
 }
 
@@ -90,7 +91,7 @@ func TestJournalAndDeleteBookFiles_KeepsItsRowsWhenOnlyTheFsyncFailed(t *testing
 func TestJournalAndDeleteBookFiles_JournalsTheBytesActuallyDeleted(t *testing.T) {
 	rows := gothamRows("book-1")
 	changed := rows[1]
-	changed.FileHash, changed.Duration = "gotham-hash-rewritten", 250
+	changed.FileHash, changed.Duration = "gotham-hash-rewritten", database.Secs(250)
 	store, ledger := ledgerStore(func(refs []database.BookFileRef) ([]database.BookFile, error) {
 		require.Equal(t, []database.BookFileRef{{BookID: "book-1", FileID: rows[0].ID}, {BookID: "book-1", FileID: rows[1].ID}}, refs,
 			"each row is named under the book it was judged under")
@@ -110,7 +111,7 @@ func TestJournalAndDeleteBookFiles_JournalsTheBytesActuallyDeleted(t *testing.T)
 			assert.Equal(t, "gotham-hash-1", got.FileHash)
 		case rows[1].ID:
 			assert.Equal(t, "gotham-hash-rewritten", got.FileHash, "the pre-image is the row as deleted")
-			assert.Equal(t, 250, got.Duration)
+			assert.Equal(t, 250, durtest.Sec(got.Duration))
 		default:
 			t.Errorf("unexpected journal row for %s", got.ID)
 		}

@@ -1,7 +1,7 @@
 // file: internal/metabatch/usable_candidate_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2be72b85-1d35-4b20-a84d-8612dec97417
-// last-edited: 2026-10-29
+// last-edited: 2026-11-04
 
 package metabatch
 
@@ -42,8 +42,8 @@ func TestCandidateRefusal_TranscriptionRuntimeLive(t *testing.T) {
 	}
 	entry := &database.MetadataCandidateCache{Candidates: []json.RawMessage{raw}}
 
-	fragment := filesStore{"b1": {{ID: "f1", BookID: "b1", FileSize: 28_800_000, Duration: 1800}}} // 30 min of a 10 h book
-	whole := filesStore{"b1": {{ID: "f1", BookID: "b1", FileSize: 288_000_000, Duration: 36000}}}
+	fragment := filesStore{"b1": {{ID: "f1", BookID: "b1", FileSize: 28_800_000, Duration: database.Secs(1800)}}} // 30 min of a 10 h book
+	whole := filesStore{"b1": {{ID: "f1", BookID: "b1", FileSize: 288_000_000, Duration: database.Secs(36000)}}}
 
 	if why := CandidateRefusal(metafetch.RejectedSet{}, book, nil, &cand, RuntimeLoaderFor(fragment, book)); why != "transcription_runtime_unverified" {
 		t.Errorf("fragment book: refusal %q, want transcription_runtime_unverified", why)

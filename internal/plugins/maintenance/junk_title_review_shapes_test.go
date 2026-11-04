@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_review_shapes_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 5d2e8a1c-47b3-4c90-9e6f-3a1b7c0d8e24
-// last-edited: 2026-10-25
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -191,7 +191,7 @@ func TestBookRuntimeSec(t *testing.T) {
 	f := func(secs ...int) []database.BookFile {
 		var out []database.BookFile
 		for _, s := range secs {
-			out = append(out, database.BookFile{Duration: s})
+			out = append(out, database.BookFile{Duration: database.Secs(s)})
 		}
 		return out
 	}

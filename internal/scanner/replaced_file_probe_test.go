@@ -1,7 +1,7 @@
 // file: internal/scanner/replaced_file_probe_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1d7c4a92-5e63-4b8f-b0a2-9c3e6f1d8b57
-// last-edited: 2026-09-13
+// last-edited: 2026-11-04
 
 package scanner
 
@@ -14,6 +14,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // writeSilentMP3 writes a real mp3 of the given length and bitrate.
@@ -52,7 +53,7 @@ func seedOwnedRowWithAudioData(t *testing.T, store *database.PebbleStore, path s
 		t.Fatalf("GetBookFileByPath after first scan: row=%v err=%v", row, err)
 	}
 	intro, status := "This is the old recording.", "ok"
-	row.Duration = duration
+	row.Duration = database.Secs(duration)
 	row.AcoustIDFingerprint = []byte{1, 2, 3, 4}
 	row.IntroTranscription = &intro
 	row.TranscribeStatus = &status
@@ -123,8 +124,8 @@ func TestCreateBookFilesForBook_SamePathReplacement(t *testing.T) {
 			t.Errorf("the old recording's fingerprint/transcript survived a replacement: fp=%v intro=%v status=%v",
 				after.AcoustIDFingerprint, after.IntroTranscription, after.TranscribeStatus)
 		}
-		if after.Duration < 8 || after.Duration > 10 {
-			t.Errorf("Duration = %d, want the replacement's probed ~9s", after.Duration)
+		if durtest.Sec(after.Duration) < 8 || durtest.Sec(after.Duration) > 10 {
+			t.Errorf("Duration = %d, want the replacement's probed ~9s", durtest.Sec(after.Duration))
 		}
 	})
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/batch_delete_rows_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6c1f9b2e-7a04-4d38-95e6-1b8d3f0a2c57
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -65,7 +66,7 @@ func seedSalvageBook(t *testing.T, s *database.PebbleStore, title, path string) 
 	donor := &database.BookFile{
 		BookID:   bk.ID,
 		FilePath: path,
-		Duration: 3600,
+		Duration: database.Secs(3600),
 		FileSize: 58000000,
 	}
 	if err := s.CreateBookFile(donor); err != nil {
@@ -130,9 +131,9 @@ func TestDedupeBookFileRows_FailedSalvageLeavesDonorsIntact(t *testing.T) {
 	for i := range left {
 		if left[i].ID == failDonor {
 			foundDonor = true
-			if left[i].Duration != 3600 {
+			if durtest.Sec(left[i].Duration) != 3600 {
 				t.Fatalf("donor duration = %d, want 3600 — the only surviving copy was damaged",
-					left[i].Duration)
+					durtest.Sec(left[i].Duration))
 			}
 		}
 	}
@@ -151,9 +152,9 @@ func TestDedupeBookFileRows_FailedSalvageLeavesDonorsIntact(t *testing.T) {
 		t.Fatalf("control book has %d rows, want 1 — one failing group aborted unrelated work",
 			len(okLeft))
 	}
-	if okLeft[0].Duration != 3600 || len(okLeft[0].AcoustIDFingerprint) == 0 {
+	if durtest.Sec(okLeft[0].Duration) != 3600 || len(okLeft[0].AcoustIDFingerprint) == 0 {
 		t.Fatalf("control keeper lost salvaged evidence: duration=%d fingerprint_len=%d, "+
-			"want 3600 and non-empty", okLeft[0].Duration, len(okLeft[0].AcoustIDFingerprint))
+			"want 3600 and non-empty", durtest.Sec(okLeft[0].Duration), len(okLeft[0].AcoustIDFingerprint))
 	}
 }
 

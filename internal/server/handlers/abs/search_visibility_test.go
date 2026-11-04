@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/search_visibility_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 18fe3a64-0852-45a6-a04b-e847d0ab2d21
-// last-edited: 2026-09-19
+// last-edited: 2026-11-04
 
 package abs_test
 
@@ -175,9 +175,9 @@ func TestItemPath_ComesFromAPresentTrack(t *testing.T) {
 	stale := filepath.Join(v.root, "Other", "Wrong Book", "01.mp3") // never created
 	v.add("01PATH0000000000000000000P", "Pathy", true, "organized",
 		database.BookFile{ID: "f1", BookID: "01PATH0000000000000000000P", FilePath: stale, TrackNumber: 1,
-			Missing: true, Duration: 300, FileSize: 2048, Format: "mp3"},
+			Missing: true, Duration: database.Secs(300), FileSize: 2048, Format: "mp3"},
 		database.BookFile{ID: "f2", BookID: "01PATH0000000000000000000P", FilePath: present, TrackNumber: 2,
-			Duration: 300, FileSize: 2048, Format: "mp3"},
+			Duration: database.Secs(300), FileSize: 2048, Format: "mp3"},
 	)
 	syncID, err := v.lib.MintOrGetSyncID("01PATH0000000000000000000P")
 	if err != nil {
@@ -399,7 +399,7 @@ func TestSessionLocalAll_EndOfBookPositionIsNotRefusedByRoundedDurations(t *test
 		var files []database.BookFile
 		for i := range 60 {
 			files = append(files, database.BookFile{ID: fmt.Sprintf("f%02d", i), BookID: "01SIXTY000000000000000000S",
-				FilePath: fmt.Sprintf("/nonexistent/%02d.mp3", i), TrackNumber: i + 1, Duration: 599, FileSize: 1000, Format: "mp3"})
+				FilePath: fmt.Sprintf("/nonexistent/%02d.mp3", i), TrackNumber: i + 1, Duration: database.Secs(599), FileSize: 1000, Format: "mp3"})
 		}
 		v.add("01SIXTY000000000000000000S", "Sixty", true, "organized", files...)
 		sync, _ := v.lib.MintOrGetSyncID("01SIXTY000000000000000000S")
@@ -415,8 +415,8 @@ func TestSessionLocalAll_EndOfBookPositionIsNotRefusedByRoundedDurations(t *test
 	t.Run("unknown file duration", func(t *testing.T) {
 		v := newVisFixture(t)
 		v.add("01UNKNOWN0000000000000000U", "Unknown", true, "organized",
-			database.BookFile{ID: "u1f", BookID: "01UNKNOWN0000000000000000U", FilePath: "/nonexistent/a.mp3", TrackNumber: 1, Duration: 600, FileSize: 1, Format: "mp3"},
-			database.BookFile{ID: "u2f", BookID: "01UNKNOWN0000000000000000U", FilePath: "/nonexistent/b.mp3", TrackNumber: 2, Duration: 0, FileSize: 1, Format: "mp3"})
+			database.BookFile{ID: "u1f", BookID: "01UNKNOWN0000000000000000U", FilePath: "/nonexistent/a.mp3", TrackNumber: 1, Duration: database.Secs(600), FileSize: 1, Format: "mp3"},
+			database.BookFile{ID: "u2f", BookID: "01UNKNOWN0000000000000000U", FilePath: "/nonexistent/b.mp3", TrackNumber: 2, FileSize: 1, Format: "mp3"})
 		sync, _ := v.lib.MintOrGetSyncID("01UNKNOWN0000000000000000U")
 		post(t, v, sync, 5000)
 		pos, _ := v.lib.GetUserPosition("u1", "01UNKNOWN0000000000000000U")
@@ -430,7 +430,7 @@ func TestSessionLocalAll_EndOfBookPositionIsNotRefusedByRoundedDurations(t *test
 	t.Run("absurd position still refused", func(t *testing.T) {
 		v := newVisFixture(t)
 		v.add("01ABSURD00000000000000000A", "Absurd", true, "organized",
-			database.BookFile{ID: "a1", BookID: "01ABSURD00000000000000000A", FilePath: "/nonexistent/x.mp3", TrackNumber: 1, Duration: 1000, FileSize: 1, Format: "mp3"})
+			database.BookFile{ID: "a1", BookID: "01ABSURD00000000000000000A", FilePath: "/nonexistent/x.mp3", TrackNumber: 1, Duration: database.Secs(1000), FileSize: 1, Format: "mp3"})
 		sync, _ := v.lib.MintOrGetSyncID("01ABSURD00000000000000000A")
 		post(t, v, sync, 5000)
 		if pos, _ := v.lib.GetUserPosition("u1", "01ABSURD00000000000000000A"); pos != nil {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_evidence_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 0b7c1d4e-93a6-4f21-8d5a-2e6f7a9c3b18
-// last-edited: 2026-10-25
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -388,7 +388,7 @@ func (l *evLib) add(b evBook) string {
 	for i, f := range b.files {
 		bf := &database.BookFile{BookID: created.ID, FilePath: f, Format: "mp3"}
 		if i < len(b.fileDurations) {
-			bf.Duration = b.fileDurations[i]
+			bf.Duration = database.Secs(b.fileDurations[i])
 		}
 		require.NoError(l.t, st.CreateBookFile(bf))
 	}

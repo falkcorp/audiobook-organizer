@@ -1,7 +1,7 @@
 // file: internal/scanner/same_book_replacement_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4f0b7c2e-81d3-4a96-b5e7-2c9d0a6f3e18
-// last-edited: 2026-10-11
+// last-edited: 2026-11-04
 
 package scanner
 
@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // hashCounter counts ComputeFileHash calls.
@@ -60,7 +61,7 @@ func seedSameBookRow(t *testing.T, store *database.PebbleStore, path string, con
 		t.Fatalf("GetBookFileByPath after first scan: row=%v err=%v", row, err)
 	}
 	intro, status := "This is the old recording.", "ok"
-	row.Duration = 120
+	row.Duration = database.Secs(120)
 	row.Codec = "mp3"
 	row.BitrateKbps = 64
 	row.TrackNumber = 3
@@ -163,8 +164,8 @@ func TestCreateBookFilesForBook_SameBookReplacementRefreshesRow(t *testing.T) {
 				t.Errorf("old recording's fingerprint/transcript survived a replacement: fp=%v intro=%v status=%v",
 					after.AcoustIDFingerprint, after.IntroTranscription, after.TranscribeStatus)
 			}
-			if after.Duration == 120 || after.BitrateKbps == 64 {
-				t.Errorf("old stream info survived: duration=%d bitrate=%d", after.Duration, after.BitrateKbps)
+			if durtest.Sec(after.Duration) == 120 || after.BitrateKbps == 64 {
+				t.Errorf("old stream info survived: duration=%d bitrate=%d", durtest.Sec(after.Duration), after.BitrateKbps)
 			}
 			if after.TrackNumber != 3 || after.DiscNumber != 2 {
 				t.Errorf("placement wiped: track=%d disc=%d, want 3/2", after.TrackNumber, after.DiscNumber)
@@ -215,9 +216,9 @@ func TestCreateBookFilesForBook_SameBookUnchangedDoesNotHash(t *testing.T) {
 			if n := counter.hashes.Load(); n != 0 {
 				t.Errorf("ComputeFileHash calls = %d on an unchanged file, want 0", n)
 			}
-			if after.FileHash != first.FileHash || !hasAudioDerived(after) || after.Duration != 120 {
+			if after.FileHash != first.FileHash || !hasAudioDerived(after) || durtest.Sec(after.Duration) != 120 {
 				t.Errorf("unchanged file's row changed: hash %q->%q audio=%v duration=%d",
-					first.FileHash, after.FileHash, hasAudioDerived(after), after.Duration)
+					first.FileHash, after.FileHash, hasAudioDerived(after), durtest.Sec(after.Duration))
 			}
 		})
 	}
@@ -247,9 +248,9 @@ func TestCreateBookFilesForBook_SameBookMtimeOnlyKeepsDerivedData(t *testing.T) 
 	if after.FileHash != first.FileHash {
 		t.Errorf("FileHash changed on an mtime-only change: %q -> %q", first.FileHash, after.FileHash)
 	}
-	if !hasAudioDerived(after) || after.Duration != 120 || after.Codec != "mp3" || after.BitrateKbps != 64 {
+	if !hasAudioDerived(after) || durtest.Sec(after.Duration) != 120 || after.Codec != "mp3" || after.BitrateKbps != 64 {
 		t.Errorf("mtime-only change invalidated derived data: audio=%v duration=%d codec=%q bitrate=%d",
-			hasAudioDerived(after), after.Duration, after.Codec, after.BitrateKbps)
+			hasAudioDerived(after), durtest.Sec(after.Duration), after.Codec, after.BitrateKbps)
 	}
 	if !after.UpdatedAt.Equal(first.UpdatedAt) {
 		t.Errorf("row rewritten on an mtime-only change: UpdatedAt %v -> %v", first.UpdatedAt, after.UpdatedAt)

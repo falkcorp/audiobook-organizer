@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge_integrity_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5f81c3d2-9e4a-4b67-a0d8-2c7e9b13f456
-// last-edited: 2026-10-21
+// last-edited: 2026-11-04
 
 package dedup
 
@@ -56,9 +56,9 @@ func TestMergeSplitBookCluster_KeepWriteDoesNotRevertConcurrentColumns(t *testin
 	m, mu := statefulBookMock(rows)
 	m.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
 		if bookID == srcID {
-			return []database.BookFile{{ID: "f1", BookID: srcID, Duration: 100}}, nil
+			return []database.BookFile{{ID: "f1", BookID: srcID, Duration: database.Secs(100)}}, nil
 		}
-		return []database.BookFile{{ID: "f1", BookID: keepID, Duration: 100}, {ID: "f0", BookID: keepID, Duration: 200}}, nil
+		return []database.BookFile{{ID: "f1", BookID: keepID, Duration: database.Secs(100)}, {ID: "f0", BookID: keepID, Duration: database.Secs(200)}}, nil
 	}
 	m.MoveBookFilesToBookFunc = func(_ []string, _, target string) error {
 		mu.Lock()
@@ -116,7 +116,7 @@ func TestMergeSplitBookCluster_ReassignsExternalIDsAndIsUndoable(t *testing.T) {
 	_, err = store.CreateBook(&database.Book{ID: srcID, Title: "Keep Part 2", Format: "mp3", FilePath: "/tmp/split/s"})
 	require.NoError(t, err)
 	fileID := ulid.Make().String()
-	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: fileID, BookID: srcID, FilePath: "/tmp/split/s/02.mp3", Format: "mp3", Duration: 60, TrackNumber: 2}))
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: fileID, BookID: srcID, FilePath: "/tmp/split/s/02.mp3", Format: "mp3", Duration: database.Secs(60), TrackNumber: 2}))
 	require.NoError(t, store.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: pid, BookID: srcID}))
 
 	res, err := mergeSplitBookCluster(store, keepID, []string{srcID}, "Keep (Complete)")

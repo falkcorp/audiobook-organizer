@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/chapter_groups_test.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 24b634b3-fd8d-4f7f-8809-0843e63141c8
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package jobs
 
@@ -114,7 +114,7 @@ func chSeedGroup(t *testing.T, s *database.PebbleStore, dir, title string, n, du
 	for i := n; i >= 1; i-- {
 		path := dir + "/" + []string{"", "01", "02", "03", "04", "05"}[i] + " - " + title + ".mp3"
 		b := ddMustBook(t, s, &database.Book{Title: []string{"", "01", "02", "03", "04", "05"}[i] + " - " + title, FilePath: path, Duration: new(dur)})
-		ddMustFile(t, s, &database.BookFile{BookID: b.ID, FilePath: path, Duration: dur})
+		ddMustFile(t, s, &database.BookFile{BookID: b.ID, FilePath: path, Duration: database.Secs(dur)})
 		out[i-1] = b
 	}
 	return out
@@ -157,7 +157,7 @@ func chSeedBare(t *testing.T, s *database.PebbleStore, dir, name string, n int) 
 	for i := n; i >= 1; i-- {
 		path := fmt.Sprintf("%s/%s - %d.mp3", dir, name, i)
 		b := ddMustBook(t, s, &database.Book{Title: fmt.Sprint(i), FilePath: path, Duration: new(1200), AuthorID: &author})
-		ddMustFile(t, s, &database.BookFile{BookID: b.ID, FilePath: path, Duration: 1200})
+		ddMustFile(t, s, &database.BookFile{BookID: b.ID, FilePath: path, Duration: database.Secs(1200)})
 		out[i-1] = b
 	}
 	return out
@@ -220,7 +220,7 @@ func TestChapterGroups_BareNumberTitlesScanAndMerge(t *testing.T) {
 func TestMergeChapterGroups_MultiFileMemberBlocks(t *testing.T) {
 	s := ddRealStore(t)
 	books := chSeedGroup(t, s, "/lib/A/Tale", "Tale", 2, 300)
-	ddMustFile(t, s, &database.BookFile{BookID: books[1].ID, FilePath: "/lib/A/Tale/02b - Tale.mp3", Duration: 300})
+	ddMustFile(t, s, &database.BookFile{BookID: books[1].ID, FilePath: "/lib/A/Tale/02b - Tale.mp3", Duration: database.Secs(300)})
 	res := chRun(t, &mergeChapterGroupsJob{}, s, `{"dry_run":true}`, true)
 	if len(res.Groups) != 1 || res.Groups[0].Status != "blocked" || !strings.Contains(strings.Join(res.Groups[0].Blockers, ";"), "has 2 files") {
 		t.Fatalf("multi-file member not blocked: %+v", res.Groups)
@@ -401,7 +401,7 @@ func TestMergeChapterGroups_MergesExactlyTheReviewedSet(t *testing.T) {
 
 	// After review: a new chapter lands in Tale, and a Saga member changes.
 	late := ddMustBook(t, s, &database.Book{Title: "03 - Tale", FilePath: "/lib/A/Tale/03 - Tale.mp3", Duration: new(300)})
-	ddMustFile(t, s, &database.BookFile{BookID: late.ID, FilePath: "/lib/A/Tale/03 - Tale.mp3", Duration: 300})
+	ddMustFile(t, s, &database.BookFile{BookID: late.ID, FilePath: "/lib/A/Tale/03 - Tale.mp3", Duration: database.Secs(300)})
 	if _, err := s.ModifyBook(saga[1].ID, func(b *database.Book) error { b.Title = "02 - Saga (edited)"; return nil }); err != nil {
 		t.Fatalf("ModifyBook: %v", err)
 	}
@@ -537,7 +537,7 @@ func TestMergeChapterGroups_ApplyRefusesLowAndBlockedSelections(t *testing.T) {
 			dur, fileDur = new(300), 300
 		}
 		b := ddMustBook(t, s, &database.Book{Title: fmt.Sprintf("%02d - Tale", i), FilePath: path, Duration: dur})
-		ddMustFile(t, s, &database.BookFile{BookID: b.ID, FilePath: path, Duration: fileDur})
+		ddMustFile(t, s, &database.BookFile{BookID: b.ID, FilePath: path, Duration: database.Secs(fileDur)})
 		low = append([]*database.Book{b}, low...)
 	}
 	preview := chRun(t, &mergeChapterGroupsJob{}, s, `{"dry_run":true}`, true)
@@ -589,7 +589,7 @@ func TestMergeChapterGroups_SubsetOfBlockedGroupIsRefused(t *testing.T) {
 			path := fmt.Sprintf("%s/%s%s", dir, n, exts[i])
 			a := authors[i]
 			b := ddMustBook(t, s, &database.Book{Title: n, FilePath: path, Duration: new(1500), AuthorID: &a})
-			ddMustFile(t, s, &database.BookFile{BookID: b.ID, FilePath: path, Duration: 1500})
+			ddMustFile(t, s, &database.BookFile{BookID: b.ID, FilePath: path, Duration: database.Secs(1500)})
 			ids = append(ids, b.ID)
 		}
 		return ids
@@ -643,7 +643,7 @@ func TestMergeChapterGroups_LateSiblingIsSeenUnderTheLock(t *testing.T) {
 	sel := chSelectionFor(t, s, ids)
 	chapterPrecheckTestHook = func() {
 		late := ddMustBook(t, s, &database.Book{Title: "01 - Tale", FilePath: "/lib/L/Tale/01 - Tale.m4a", Duration: new(300)})
-		ddMustFile(t, s, &database.BookFile{BookID: late.ID, FilePath: "/lib/L/Tale/01 - Tale.m4a", Duration: 300})
+		ddMustFile(t, s, &database.BookFile{BookID: late.ID, FilePath: "/lib/L/Tale/01 - Tale.m4a", Duration: database.Secs(300)})
 	}
 	t.Cleanup(func() { chapterPrecheckTestHook = nil })
 	res := chApply(t, s, sel)

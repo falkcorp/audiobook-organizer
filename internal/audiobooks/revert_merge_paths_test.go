@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_paths_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8e1f3a27-6c94-4b05-a2d8-0f7b5c19e364
-// last-edited: 2026-10-18
+// last-edited: 2026-11-04
 
 package audiobooks
 
@@ -39,11 +39,11 @@ func seedCombineFixture(t *testing.T, store database.Store) combineFixture {
 	require.NoError(t, err)
 	_, err = store.CreateBook(&database.Book{ID: f.b, Title: "Part B", Format: "mp3", FilePath: "/tmp/revert-paths/b"})
 	require.NoError(t, err)
-	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: ulid.Make().String(), BookID: f.keep, FilePath: "/tmp/revert-paths/keep/01.mp3", Format: "mp3", TrackNumber: 1, Duration: 60}))
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: ulid.Make().String(), BookID: f.keep, FilePath: "/tmp/revert-paths/keep/01.mp3", Format: "mp3", TrackNumber: 1, Duration: database.Secs(60)}))
 	for i, p := range []string{"/tmp/revert-paths/a/02.mp3", "/tmp/revert-paths/a/03.mp3"} {
-		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: ulid.Make().String(), BookID: f.a, FilePath: p, Format: "mp3", DiscNumber: 2, TrackNumber: i + 7, Duration: 60}))
+		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: ulid.Make().String(), BookID: f.a, FilePath: p, Format: "mp3", DiscNumber: 2, TrackNumber: i + 7, Duration: database.Secs(60)}))
 	}
-	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: ulid.Make().String(), BookID: f.b, FilePath: "/tmp/revert-paths/b/04.mp3", Format: "mp3", TrackNumber: 4, Duration: 60}))
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: ulid.Make().String(), BookID: f.b, FilePath: "/tmp/revert-paths/b/04.mp3", Format: "mp3", TrackNumber: 4, Duration: database.Secs(60)}))
 	require.NoError(t, store.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: f.pid, BookID: f.a}))
 	return f
 }

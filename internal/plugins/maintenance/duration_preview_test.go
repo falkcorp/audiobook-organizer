@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_preview_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a7d92f1-6c38-4b25-9e07-1d84f5b3ce62
-// last-edited: 2026-09-21
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -44,9 +44,9 @@ func (c *capturingReporter) last() string {
 func TestDurationBackfill_DryRunReportsWithheldBooks(t *testing.T) {
 	var segWrites, bookWrites int
 	segs := []database.BookFile{
-		{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: 50, AcoustIDFingerprintDurationSec: 1800.0},
-		{ID: "s2", BookID: "b1", FilePath: "/nonexistent/02.m4b", Duration: 50},
-		{ID: "s3", BookID: "b1", FilePath: "", Duration: 0},
+		{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: database.Secs(50), AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "s2", BookID: "b1", FilePath: "/nonexistent/02.m4b", Duration: database.Secs(50)},
+		{ID: "s3", BookID: "b1", FilePath: ""},
 	}
 	store := bookWithSegs(t, segs, &segWrites, &bookWrites)
 	rep := &capturingReporter{}
@@ -80,8 +80,8 @@ func TestDurationBackfill_ExampleNamesUnresolvedSegments(t *testing.T) {
 	// unresolved — the shape of the reported "Fog of War" book, whose phantom
 	// row also carried no duration.
 	segs := []database.BookFile{
-		{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: 50, AcoustIDFingerprintDurationSec: 1800.0},
-		{ID: "s2", BookID: "b1", FilePath: "/nonexistent/02.m4b", Duration: 0},
+		{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: database.Secs(50), AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "s2", BookID: "b1", FilePath: "/nonexistent/02.m4b"},
 	}
 	store := bookWithSegs(t, segs, &segWrites, &bookWrites)
 	rep := &capturingReporter{}

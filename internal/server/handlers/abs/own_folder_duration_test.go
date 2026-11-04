@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/own_folder_duration_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 351283f9-d5b7-4792-be3b-be7929a7d86a
-// last-edited: 2026-09-25
+// last-edited: 2026-11-04
 
 package abs_test
 
@@ -25,7 +25,7 @@ func addOwnFolderBook(v *visFixture) {
 	dur := 9999
 	row := func(id, path, hash string, track, sec int) database.BookFile {
 		return database.BookFile{ID: id, BookID: ownFolderBookID, FilePath: path, TrackNumber: track,
-			Duration: sec, FileSize: 1000, FileHash: hash, Format: "m4b"}
+			Duration: database.Secs(sec), FileSize: 1000, FileHash: hash, Format: "m4b"}
 	}
 	v.lib.addBook(&database.Book{ID: ownFolderBookID, Title: "Own Folder", FilePath: "/srv/lib/Author/Own Folder",
 		IsPrimaryVersion: &primary, LibraryState: &state, CreatedAt: &now, UpdatedAt: &now, Duration: &dur},

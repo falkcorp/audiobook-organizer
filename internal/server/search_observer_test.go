@@ -1,7 +1,7 @@
 // file: internal/server/search_observer_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d7e3b1a4-6f28-4c95-b0a7-8e2f5c1d9a36
-// last-edited: 2026-10-13
+// last-edited: 2026-11-04
 
 package server
 
@@ -183,7 +183,7 @@ func TestSearchObserver_RecomputeAggregatesQueuesTheBookOnce(t *testing.T) {
 	srv.indexQueue = make(chan indexRequest, 64)
 	t.Cleanup(srv.closeIndexQueue)
 
-	must(t, store.CreateBookFile(&database.BookFile{ID: "agg-1", BookID: bookID, FilePath: "/lib/agg.m4b", Format: "m4b", Duration: 600}))
+	must(t, store.CreateBookFile(&database.BookFile{ID: "agg-1", BookID: bookID, FilePath: "/lib/agg.m4b", Format: "m4b", Duration: database.Secs(600)}))
 	if got := len(srv.indexQueue); got != 1 {
 		t.Fatalf("a recompute that wrote left %d requests on the queue, want exactly 1", got)
 	}
@@ -373,14 +373,14 @@ func TestSearchObserver_BookFileEditReachesTheIndexQueue(t *testing.T) {
 	srv, store := newObserverServer(t)
 	const bookID = "filed-book"
 	must(t, createBook(store, bookID, "Filed Title"))
-	must(t, store.CreateBookFile(&database.BookFile{ID: "file-1", BookID: bookID, FilePath: "/lib/filed-book.m4b", Format: "m4b", Duration: 100}))
+	must(t, store.CreateBookFile(&database.BookFile{ID: "file-1", BookID: bookID, FilePath: "/lib/filed-book.m4b", Format: "m4b", Duration: database.Secs(100)}))
 	before, err := store.GetBookByID(bookID)
 	must(t, err)
 
 	srv.indexQueue = make(chan indexRequest, 64)
 	t.Cleanup(srv.closeIndexQueue)
 
-	_, err = store.ModifyBookFile(bookID, "file-1", func(f *database.BookFile) error { f.Duration = 7200; return nil })
+	_, err = store.ModifyBookFile(bookID, "file-1", func(f *database.BookFile) error { f.Duration = database.Secs(7200); return nil })
 	must(t, err)
 	after, err := store.GetBookByID(bookID)
 	must(t, err)

@@ -1,13 +1,15 @@
 // file: internal/database/bookfile_intro_store_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5d2f8b13-a7e4-4c90-96b1-e3c07a4d5f28
-// last-edited: 2026-10-23
+// last-edited: 2026-11-04
 
 package database
 
 import (
 	"testing"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 func newIntroStoreFixture(t *testing.T) (*PebbleStore, *BookFile) {
@@ -21,7 +23,7 @@ func newIntroStoreFixture(t *testing.T) (*PebbleStore, *BookFile) {
 	if err != nil {
 		t.Fatalf("CreateBook: %v", err)
 	}
-	f := &BookFile{BookID: book.ID, FilePath: "/lib/Intro Store/01.m4b", Format: "m4b", Duration: 1800, FileHash: "hash-a"}
+	f := &BookFile{BookID: book.ID, FilePath: "/lib/Intro Store/01.m4b", Format: "m4b", Duration: Secs(1800), FileHash: "hash-a"}
 	if err := s.CreateBookFile(f); err != nil {
 		t.Fatalf("CreateBookFile: %v", err)
 	}
@@ -186,7 +188,7 @@ func TestClearBookFileIntro_ByRunID(t *testing.T) {
 		got.TranscribeStatus != nil || got.IntroTranscribedAt != nil || got.TranscribedTitle != nil {
 		t.Fatalf("clear left residue: %+v", got)
 	}
-	if got.FileHash != "hash-a" || got.Duration != 1800 {
+	if got.FileHash != "hash-a" || durtest.Sec(got.Duration) != 1800 {
 		t.Fatalf("clear touched unrelated fields: %+v", got)
 	}
 	// Second clear: nothing names the run any more.

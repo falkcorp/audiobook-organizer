@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_fixer_test.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: 9d4c7a2e-1b6f-4e83-a5d0-8f2b3c6e9a17
-// last-edited: 2026-11-03
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -449,7 +449,7 @@ func fbUnitLib(shelves, authors []string, title string, paths []string, dur int)
 	}
 	var rows []database.BookFileCore
 	for i, p := range paths {
-		rows = append(rows, database.BookFileCore{ID: fmt.Sprint(i), BookID: "b", FilePath: p, Duration: dur})
+		rows = append(rows, database.BookFileCore{ID: fmt.Sprint(i), BookID: "b", FilePath: p, Duration: database.Secs(dur)})
 	}
 	lib.add(database.BookCore{ID: "b", Title: title}, rows)
 	lib.finish()
@@ -572,7 +572,7 @@ func TestFolderBooksFixer_FlatWholeBooks(t *testing.T) {
 		if i < 3 {
 			d = 4 * 3600
 		}
-		rows = append(rows, database.BookFileCore{ID: fmt.Sprint(i), BookID: "b", FilePath: p, Duration: d})
+		rows = append(rows, database.BookFileCore{ID: fmt.Sprint(i), BookID: "b", FilePath: p, Duration: database.Secs(d)})
 	}
 	lib.add(database.BookCore{ID: "b", Title: "The Dark Knight"}, rows)
 	lib.finish()
@@ -589,7 +589,7 @@ func fbMixedLib(major, minor []string, held map[string]bool) *fbLib {
 	lib.authorNorm[fbNorm("Bruce Wayne")] = true
 	var rows []database.BookFileCore
 	for i, p := range append(append([]string{}, major...), minor...) {
-		rows = append(rows, database.BookFileCore{ID: fmt.Sprint(i), BookID: "b", FilePath: p, Duration: 11 * 3600})
+		rows = append(rows, database.BookFileCore{ID: fmt.Sprint(i), BookID: "b", FilePath: p, Duration: database.Secs(11 * 3600)})
 	}
 	lib.add(database.BookCore{ID: "b", Title: "Bruce Wayne"}, rows)
 	n := 0
@@ -598,7 +598,7 @@ func fbMixedLib(major, minor []string, held map[string]bool) *fbLib {
 			n++
 			id := fmt.Sprint("proper", n)
 			lib.add(database.BookCore{ID: id, Title: filepath.Base(p)},
-				[]database.BookFileCore{{ID: id + "-f", BookID: id, FilePath: p, Duration: 11 * 3600}})
+				[]database.BookFileCore{{ID: id + "-f", BookID: id, FilePath: p, Duration: database.Secs(11 * 3600)}})
 		}
 	}
 	lib.finish()
@@ -708,7 +708,7 @@ func TestFolderBooksFixer_ChapterBooksAreNotProperBooks(t *testing.T) {
 		id := fmt.Sprintf("ch%d", i)
 		d := 3700
 		lib.add(database.BookCore{ID: id, Title: filepath.Base(p), Duration: &d},
-			[]database.BookFileCore{{ID: id + "-0", BookID: id, FilePath: p, Duration: d}})
+			[]database.BookFileCore{{ID: id + "-0", BookID: id, FilePath: p, Duration: database.Secs(d)}})
 	}
 	lib.finish()
 	ev := lib.evaluate("b")

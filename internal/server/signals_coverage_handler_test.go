@@ -1,7 +1,7 @@
 // file: internal/server/signals_coverage_handler_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9dc1c17f-e225-48b7-a3c4-79f0246d7c9c
-// last-edited: 2026-09-19
+// last-edited: 2026-11-04
 
 package server
 
@@ -24,7 +24,7 @@ func TestHandleGetSignalCoverage_CountsCoreRows(t *testing.T) {
 
 	failed := time.Now()
 	cores := []database.BookFileCore{
-		{ID: "f1", FileHash: "h1", Duration: 60, AcoustIDFingerprintDurationSec: 60, RawTags: map[string]string{"title": "x"}},
+		{ID: "f1", FileHash: "h1", Duration: database.Secs(60), AcoustIDFingerprintDurationSec: 60, RawTags: map[string]string{"title": "x"}},
 		{ID: "f2", FileHash: "h2", Missing: true},
 		{ID: "f3", FingerprintFailedAt: &failed},
 		{ID: "f4", Missing: true, SkipScan: true},

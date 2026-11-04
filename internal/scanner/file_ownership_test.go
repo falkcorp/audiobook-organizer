@@ -1,7 +1,7 @@
 // file: internal/scanner/file_ownership_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 6c2a43e1-d6ec-4eae-8570-41c987062ce6
-// last-edited: 2026-10-29
+// last-edited: 2026-11-04
 
 package scanner
 
@@ -423,7 +423,7 @@ func TestProcessBooksParallel_OwnershipSkipTouchesNothingOfTheOwner(t *testing.T
 	rows, err := f.store.GetBookFiles(f.parent.ID)
 	require.NoError(t, err)
 	for _, r := range rows {
-		r.Duration = 600
+		r.Duration = database.Secs(600)
 		require.NoError(t, f.store.UpdateBookFile(r.ID, &r))
 	}
 	require.NoError(t, f.store.MarkNeedsRescan(f.parent.ID))

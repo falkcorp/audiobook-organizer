@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_aggregates_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-06-10
+// last-edited: 2026-11-04
 
 package database
 
@@ -34,7 +34,7 @@ func addFile(t *testing.T, store Store, bookID, path string, duration int, size 
 	f := &BookFile{
 		BookID:   bookID,
 		FilePath: path,
-		Duration: duration,
+		Duration: Secs(duration),
 		FileSize: size,
 		Format:   "m4b",
 	}
@@ -70,7 +70,7 @@ func TestRecomputeBookAggregates_ThreeFiles(t *testing.T) {
 	f3, err := store.GetBookFileByID(bookID, fid3)
 	require.NoError(t, err)
 	require.NotNil(t, f3)
-	f3.Duration = 1800
+	f3.Duration = Secs(1800)
 	f3.FileSize = 20_000_000
 	err = store.UpdateBookFile(fid3, f3)
 	require.NoError(t, err)
@@ -165,7 +165,7 @@ func TestRecomputeBookAggregates_HookOnUpdate(t *testing.T) {
 	// Update the file's duration via UpdateBookFile.
 	bf, err := store.GetBookFileByID(bookID, fid)
 	require.NoError(t, err)
-	bf.Duration = 7200
+	bf.Duration = Secs(7200)
 	require.NoError(t, store.UpdateBookFile(fid, bf))
 
 	// Book should reflect the new duration.

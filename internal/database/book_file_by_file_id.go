@@ -1,12 +1,11 @@
 // file: internal/database/book_file_by_file_id.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9d734fc6-325a-44cd-99e3-ac55ee626ce8
-// last-edited: 2026-10-13
+// last-edited: 2026-11-04
 
 package database
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -60,7 +59,7 @@ func (s *PebbleStore) GetBookFileByFileID(fileID string) (*BookFile, error) {
 	}
 	defer closer.Close()
 	var f BookFile
-	if err := json.Unmarshal(val, &f); err != nil {
+	if err := unmarshalBookFile(val, &f); err != nil {
 		return nil, fmt.Errorf("GetBookFileByFileID: decode %s: %w", primaryKey, err)
 	}
 	if f.ID != fileID {

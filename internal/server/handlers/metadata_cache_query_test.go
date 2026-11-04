@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.17.6
+// version: 1.17.7
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 package handlers
 
@@ -86,7 +86,7 @@ func goldenReviewStore(t testing.TB) (*database.PebbleStore, *metafetch.Service)
 				BookID:      id,
 				FilePath:    fmt.Sprintf("%s/part%02d.m4b", path, f),
 				TrackNumber: f + 1,
-				Duration:    dur,
+				Duration:    database.Secs(dur),
 			}))
 		}
 		fetched := old.Add(time.Duration(i) * time.Hour)

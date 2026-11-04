@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.27.1
+// version: 1.27.2
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-10-19
+// last-edited: 2026-11-04
 
 package abs_test
 
@@ -1139,7 +1139,7 @@ func seedOracleLibrary(t *testing.T) *oracleSeed {
 		ID: "f-m4b", BookID: single.ID, FilePath: m4b, Format: "QuickTime / MOV", Codec: "aac",
 		// The oracle reports 9975.480544; BookFile.Duration is an int, so 9975 is the
 		// closest the schema can hold. See todo.d/20260812-bookfile-duration-integer-seconds.
-		Duration: 9975, FileSize: singleFileSize,
+		Duration: database.Secs(9975), FileSize: singleFileSize,
 		BitrateKbps: 96, SampleRateHz: 22050, Channels: 1,
 		RawTags: map[string]string{
 			"album": "The Odyssey", "artist": "Homer", "date": "800BC",
@@ -1183,7 +1183,7 @@ func seedOracleLibrary(t *testing.T) *oracleSeed {
 			// the oracle's 1386.057143 necessarily becomes 1386. That truncation is a
 			// real production limitation, not a test artifact -- see the bounded
 			// duration allowances at the assertion sites.
-			Duration: int(math.Round(ot.Duration)),
+			Duration: database.Secs(int(math.Round(ot.Duration))),
 			FileSize: ot.Size,
 			// TrackNumber feeds trackNumFromFilename; trackNumFromMeta is derived from
 			// RawTags, so track 6's missing "track" tag yields null there on its own.

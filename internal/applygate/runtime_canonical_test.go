@@ -1,7 +1,7 @@
 // file: internal/applygate/runtime_canonical_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: ab7beb30-e82f-4592-8e09-9527424f2aed
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package applygate
 
@@ -20,7 +20,7 @@ func chapters(n, sec, known int) []database.BookFile {
 	for i := range out {
 		out[i] = database.BookFile{ID: "f" + itoa(i), BookID: "b"}
 		if i < known {
-			out[i].Duration = sec
+			out[i].Duration = database.Secs(sec)
 		}
 	}
 	return out
@@ -157,14 +157,14 @@ func sweepShapes() []sweepShape {
 	for d := 1; d <= 2; d++ {
 		for i := 1; i <= 10; i++ {
 			discs = append(discs, database.BookFile{ID: fmt.Sprint(d, i), FilePath: fmt.Sprintf("/lib/x/CD%d/%02d.mp3", d, i),
-				OriginalFilename: fmt.Sprintf("%02d.mp3", i), FileSize: int64(d*1_000_000 + i), Duration: 1800, Missing: d == 2})
+				OriginalFilename: fmt.Sprintf("%02d.mp3", i), FileSize: int64(d*1_000_000 + i), Duration: database.Secs(1800), Missing: d == 2})
 		}
 	}
 	for i := range 20 {
 		cbr = append(cbr, database.BookFile{ID: fmt.Sprint(i), FilePath: fmt.Sprintf("/lib/x/Part %02d.mp3", i),
-			OriginalFilename: fmt.Sprintf("Part %02d.mp3", i), FileSize: 28_800_000, Duration: 1800, Missing: i >= 10})
+			OriginalFilename: fmt.Sprintf("Part %02d.mp3", i), FileSize: 28_800_000, Duration: database.Secs(1800), Missing: i >= 10})
 		oneMissing = append(oneMissing, database.BookFile{ID: fmt.Sprint(i), FilePath: fmt.Sprintf("/lib/x/%02d.mp3", i),
-			FileSize: int64(1_000_000 + i), Duration: 1800, Missing: i == 19})
+			FileSize: int64(1_000_000 + i), Duration: database.Secs(1800), Missing: i == 19})
 	}
 	out = append(out,
 		sweepShape{"disc folders sharing base names, CD2 missing", discs, 36000},

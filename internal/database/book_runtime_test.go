@@ -1,7 +1,7 @@
 // file: internal/database/book_runtime_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 295552ed-1de2-49e3-9bf6-7cb94a4ad6eb
-// last-edited: 2026-10-19
+// last-edited: 2026-11-04
 
 package database
 
@@ -15,7 +15,7 @@ import (
 func rows(durs ...int) []BookFile {
 	out := make([]BookFile, len(durs))
 	for i, d := range durs {
-		out[i] = BookFile{ID: string(rune('a' + i)), Duration: d}
+		out[i] = BookFile{ID: string(rune('a' + i)), Duration: Secs(d)}
 	}
 	return out
 }
@@ -32,21 +32,21 @@ func TestComputeBookRuntime(t *testing.T) {
 	d := func(v int) *int { return &v }
 	thirtyKnown := rows(repeat(30, 1200)...)
 	twoOfThirty := rows(append(repeat(2, 1200), repeat(28, 0)...)...)
-	withMissing := append(rows(34401), BookFile{ID: "old", Duration: 34401, Missing: true})
+	withMissing := append(rows(34401), BookFile{ID: "old", Duration: Secs(34401), Missing: true})
 	withMissing[0].FileHash, withMissing[0].FileSize = "c0ffee", 500_000_000
 	withMissing[1].FileHash, withMissing[1].FileSize = "c0ffee", 500_000_000
-	sizeOnly := append(rows(34401), BookFile{ID: "old", Duration: 34401, Missing: true})
+	sizeOnly := append(rows(34401), BookFile{ID: "old", Duration: Secs(34401), Missing: true})
 	sizeOnly[0].FileSize, sizeOnly[1].FileSize = 500_000_000, 500_000_000
 	// Reviewer probe: a 45 s intro on disk, 20 × 30 min chapters missing.
 	introAndMissing := rows(45)
 	for i := range 20 {
-		introAndMissing = append(introAndMissing, BookFile{ID: "m", FilePath: "/old/" + string(rune('a'+i)) + ".mp3", Duration: 1800, Missing: true})
+		introAndMissing = append(introAndMissing, BookFile{ID: "m", FilePath: "/old/" + string(rune('a'+i)) + ".mp3", Duration: Secs(1800), Missing: true})
 	}
 	renamedRepoint := []BookFile{
-		{ID: "new", FilePath: "/lib/Book - 01.mp3", OriginalFileHash: "h1", FileHash: "h1-tagged", Duration: 1200, FileSize: 101},
-		{ID: "old", FilePath: "/in/01 Chapter.mp3", FileHash: "h1", Duration: 1200, FileSize: 100, Missing: true},
+		{ID: "new", FilePath: "/lib/Book - 01.mp3", OriginalFileHash: "h1", FileHash: "h1-tagged", Duration: Secs(1200), FileSize: 101},
+		{ID: "old", FilePath: "/in/01 Chapter.mp3", FileHash: "h1", Duration: Secs(1200), FileSize: 100, Missing: true},
 	}
-	allMissing := []BookFile{{ID: "x", Duration: 600, Missing: true}, {ID: "y", Duration: 900, Missing: true}}
+	allMissing := []BookFile{{ID: "x", Duration: Secs(600), Missing: true}, {ID: "y", Duration: Secs(900), Missing: true}}
 	fpOnly := []BookFile{{ID: "fp", AcoustIDFingerprintDurationSec: 1799.6}}
 
 	for _, c := range []struct {
@@ -67,17 +67,17 @@ func TestComputeBookRuntime(t *testing.T) {
 		{"equal size alone does not prove a copy", nil, sizeOnly, 68802, "complete", true},
 		{"repoint duplicate matched by pre-organize hash is not double counted", nil, renamedRepoint, 1200, "complete", true},
 		{"missing chapters with no present copy are counted: a 10h book, never a 45s one", nil, introAndMissing, 36045, "complete", true},
-		{"unidentifiable missing row is counted, not assumed a duplicate", nil, append(rows(1200), BookFile{ID: "x", Duration: 1200, Missing: true}), 2400, "complete", true},
+		{"unidentifiable missing row is counted, not assumed a duplicate", nil, append(rows(1200), BookFile{ID: "x", Duration: Secs(1200), Missing: true}), 2400, "complete", true},
 		{"missing row with no duration makes the runtime partial", nil, append(rows(1200), BookFile{ID: "x", Missing: true}), 1200, "partial", false},
 		{"disc 2 sharing disc 1's base names is not a duplicate", nil, discs(), 36000, "complete", true},
 		{"equal-size CBR parts are not duplicates of each other", nil, equalSizeParts(), 36000, "complete", true},
 		{"same hash but different duration is not a duplicate", nil, []BookFile{
-			{ID: "p", FileHash: "h", Duration: 1800}, {ID: "m", FileHash: "h", Duration: 600, Missing: true}}, 2400, "complete", true},
+			{ID: "p", FileHash: "h", Duration: Secs(1800)}, {ID: "m", FileHash: "h", Duration: Secs(600), Missing: true}}, 2400, "complete", true},
 		{"original filename plus size is a duplicate", nil, []BookFile{
-			{ID: "p", OriginalFilename: "01.mp3", FileSize: 10, Duration: 1800}, {ID: "m", OriginalFilename: "01.mp3", FileSize: 10, Duration: 1800, Missing: true}}, 1800, "complete", true},
+			{ID: "p", OriginalFilename: "01.mp3", FileSize: 10, Duration: Secs(1800)}, {ID: "m", OriginalFilename: "01.mp3", FileSize: 10, Duration: Secs(1800), Missing: true}}, 1800, "complete", true},
 		{"all rows missing: runtime from the missing rows", nil, allMissing, 1500, "complete", true},
 		{"fingerprint duration is a whole-file fallback", nil, fpOnly, 1800, "complete", true},
-		{"millisecond row is normalized", nil, []BookFile{{ID: "ms", Duration: 3_600_000, FileSize: 57_600_000}}, 3600, "complete", true},
+		{"millisecond row is normalized", nil, []BookFile{{ID: "ms", Duration: Secs(3_600_000), FileSize: 57_600_000}}, 3600, "complete", true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rt := ComputeBookRuntime(c.book, c.files)
@@ -154,7 +154,7 @@ func TestRecomputeBookAggregates_MissingChapterNeverLowersDuration(t *testing.T)
 		files = append(files, &BookFile{
 			ID: fmt.Sprintf("f%02d", i), BookID: b.ID,
 			FilePath: fmt.Sprintf("/lib/Chaptered/%02d.mp3", i),
-			Duration: 1800, FileSize: int64(40_000_000 + i),
+			Duration: Secs(1800), FileSize: int64(40_000_000 + i),
 		})
 	}
 	if err := store.BatchUpsertBookFiles(files); err != nil {
@@ -186,7 +186,7 @@ func discs() []BookFile {
 	for d := 1; d <= 2; d++ {
 		for i := 1; i <= 10; i++ {
 			out = append(out, BookFile{ID: fmt.Sprint(d, i), FilePath: fmt.Sprintf("/lib/x/CD%d/%02d.mp3", d, i),
-				OriginalFilename: fmt.Sprintf("%02d.mp3", i), FileSize: int64(d*1_000_000 + i), Duration: 1800, Missing: d == 2})
+				OriginalFilename: fmt.Sprintf("%02d.mp3", i), FileSize: int64(d*1_000_000 + i), Duration: Secs(1800), Missing: d == 2})
 		}
 	}
 	return out
@@ -198,7 +198,7 @@ func equalSizeParts() []BookFile {
 	var out []BookFile
 	for i := range 20 {
 		out = append(out, BookFile{ID: fmt.Sprint(i), FilePath: fmt.Sprintf("/lib/x/Part %02d.mp3", i),
-			OriginalFilename: fmt.Sprintf("Part %02d.mp3", i), FileSize: 28_800_000, Duration: 1800, Missing: i >= 10})
+			OriginalFilename: fmt.Sprintf("Part %02d.mp3", i), FileSize: 28_800_000, Duration: Secs(1800), Missing: i >= 10})
 	}
 	return out
 }
@@ -207,7 +207,7 @@ func equalSizeParts() []BookFile {
 func sizedRows(sizes []int64, durs []int) []BookFile {
 	out := make([]BookFile, len(sizes))
 	for i := range sizes {
-		out[i] = BookFile{ID: fmt.Sprintf("f%d", i), FileSize: sizes[i], Duration: durs[i]}
+		out[i] = BookFile{ID: fmt.Sprintf("f%d", i), FileSize: sizes[i], Duration: Secs(durs[i])}
 	}
 	return out
 }
@@ -294,7 +294,7 @@ func TestBookRuntimeEstimateThroughTheStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	files := []*BookFile{
-		{ID: "e1", BookID: b.ID, FilePath: "/lib/Estimate Probe/01.mp3", Duration: 480, FileSize: 4_000_000},
+		{ID: "e1", BookID: b.ID, FilePath: "/lib/Estimate Probe/01.mp3", Duration: Secs(480), FileSize: 4_000_000},
 		{ID: "e2", BookID: b.ID, FilePath: "/lib/Estimate Probe/02.mp3", FileSize: 4_000_000},
 	}
 	if err := store.BatchUpsertBookFiles(files); err != nil {
@@ -313,7 +313,7 @@ func TestBookRuntimeEstimateThroughTheStore(t *testing.T) {
 // embedded in every file; only the 25 s intro file is measured, so the
 // measured bytes-per-second (28000) is 3.5x the book's real one.
 func coverArtIntroBook() []BookFile {
-	files := []BookFile{{ID: "intro", FileSize: 25*8000 + 500_000, Duration: 25}}
+	files := []BookFile{{ID: "intro", FileSize: 25*8000 + 500_000, Duration: Secs(25)}}
 	for i := range 20 {
 		files = append(files, BookFile{ID: fmt.Sprintf("ch%02d", i), FileSize: 1800*8000 + 500_000})
 	}
@@ -324,8 +324,8 @@ func coverArtIntroBook() []BookFile {
 // parts at 32 kbps; 10 h in all. The measured rate is 4x the rest.
 func mixedEncodeBook() []BookFile {
 	files := []BookFile{
-		{ID: "p0", FileSize: 1800 * 16000, Duration: 1800},
-		{ID: "p1", FileSize: 1800 * 16000, Duration: 1800},
+		{ID: "p0", FileSize: 1800 * 16000, Duration: Secs(1800)},
+		{ID: "p1", FileSize: 1800 * 16000, Duration: Secs(1800)},
 	}
 	for i := range 18 {
 		files = append(files, BookFile{ID: fmt.Sprintf("q%02d", i), FileSize: 1800 * 4000})
@@ -383,7 +383,7 @@ func TestBookRuntimeEstimateSaturates(t *testing.T) {
 // sparse (2000 B/s = 16 kbps) that est x3 exceeds TotalBytes / 1000.
 func TestBookRuntimeUpperBoundFactorDominatesForSparseSample(t *testing.T) {
 	rt := ComputeBookRuntime(nil, []BookFile{
-		{ID: "a", FileSize: 2_000_000, Duration: 1000},
+		{ID: "a", FileSize: 2_000_000, Duration: Secs(1000)},
 		{ID: "b", FileSize: 2_000_000},
 	})
 	est, _ := rt.EstimatedSeconds()

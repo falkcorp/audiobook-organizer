@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_regressions_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 2d9b7f41-6e05-4c38-a1f2-8b3c5e9d0a74
-// last-edited: 2026-10-25
+// last-edited: 2026-11-04
 
 package audiobooks
 
@@ -408,7 +408,7 @@ func seedCrashFixture(t *testing.T, store *database.PebbleStore) crashFixture {
 		require.NoError(t, err)
 	}
 	for i, p := range []string{"/tmp/crash/a/01.mp3", "/tmp/crash/a/02.mp3"} {
-		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: ulid.Make().String(), BookID: f.a, FilePath: p, Format: "mp3", TrackNumber: i + 1, Duration: 60}))
+		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: ulid.Make().String(), BookID: f.a, FilePath: p, Format: "mp3", TrackNumber: i + 1, Duration: database.Secs(60)}))
 	}
 	require.NoError(t, store.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: f.pid, BookID: f.a}))
 	// An explicit state: the restore rule for a retired row reads a nil state

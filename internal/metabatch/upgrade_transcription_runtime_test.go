@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade_transcription_runtime_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c6a9e14-7d52-4b38-a1f6-93e2b5d80c47
-// last-edited: 2026-10-29
+// last-edited: 2026-11-04
 
 package metabatch
 
@@ -36,7 +36,7 @@ func TestUpgrade_TranscriptionConfirmationNeedsLiveRuntime(t *testing.T) {
 			f := syntheticRankFixture()
 			f.book.TranscribedTitle = new(syntheticTitle)
 			f.store.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
-				return []database.BookFile{{ID: "f1", BookID: bookID, FilePath: f.book.FilePath, FileSize: 288_000_000, Duration: tenHours}}, nil
+				return []database.BookFile{{ID: "f1", BookID: bookID, FilePath: f.book.FilePath, FileSize: 288_000_000, Duration: database.Secs(tenHours)}}, nil
 			}
 			c := syntheticCandidate("Audible", 0.87) // above the 0.85 audio floor, under 0.90
 			c.DurationSec = tt.candSec

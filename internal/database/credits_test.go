@@ -1,7 +1,7 @@
 // file: internal/database/credits_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: a5a7e839-5ad1-49ad-8401-9428121f66e7
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package database
 
@@ -626,7 +626,7 @@ func TestRecomputeBookAggregates_ProducesOneReindexNotification(t *testing.T) {
 	rec := &reindexRecorder{}
 	s.SetChangeObserver(rec)
 
-	if err := s.CreateBookFile(&BookFile{ID: "agg-file-1", BookID: b.ID, FilePath: "/tmp/credits-aggregates.m4b", Format: "m4b", Duration: 3600}); err != nil {
+	if err := s.CreateBookFile(&BookFile{ID: "agg-file-1", BookID: b.ID, FilePath: "/tmp/credits-aggregates.m4b", Format: "m4b", Duration: Secs(3600)}); err != nil {
 		t.Fatal(err)
 	}
 	row, _ := s.GetBookByID(b.ID)

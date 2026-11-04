@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_crossfolder_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5bb37ed8-73c4-429c-8168-cc4e2fb52f0e
-// last-edited: 2026-09-26
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -223,7 +223,7 @@ func cfSeedBook(t *testing.T, s *database.PebbleStore, title, path string) strin
 
 func cfSeedRow(t *testing.T, s *database.PebbleStore, bookID, path string, size int64, dur int, hash string) string {
 	t.Helper()
-	f := &database.BookFile{BookID: bookID, FilePath: path, FileSize: size, Duration: dur, FileHash: hash}
+	f := &database.BookFile{BookID: bookID, FilePath: path, FileSize: size, Duration: database.Secs(dur), FileHash: hash}
 	if err := s.CreateBookFile(f); err != nil {
 		t.Fatalf("CreateBookFile: %v", err)
 	}

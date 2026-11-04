@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_recompute_once_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1459a1bf-2291-48b5-9eaa-be04214b421c
-// last-edited: 2026-09-19
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -32,7 +32,7 @@ func seedTrackBook(t *testing.T, s *database.PebbleStore, n int, path func(i int
 	for i := range n {
 		paths[i] = path(i)
 		if err := s.CreateBookFile(&database.BookFile{
-			BookID: book.ID, FilePath: paths[i], FileSize: 1_000_000, Duration: 60,
+			BookID: book.ID, FilePath: paths[i], FileSize: 1_000_000, Duration: database.Secs(60),
 		}); err != nil {
 			t.Fatalf("CreateBookFile: %v", err)
 		}

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rebuild_gold_labels_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 2b8e5f14-6a37-4c92-9d05-3f7a8b1c6e40
-// last-edited: 2026-10-15
+// last-edited: 2026-11-04
 
 // Tests for the dedup.rebuild-gold-labels op against a real PebbleStore +
 // EmbeddingStore: dry-run diff reporting (changed/unchanged/unlabelable),
@@ -33,7 +33,7 @@ func createBookStubAudio(t *testing.T, pebble *database.PebbleStore, title strin
 		BookID:   created.ID,
 		FilePath: "/audio/" + title + ".m4b",
 		FileSize: 32, // < 256 KiB stub floor
-		Duration: 0,  // no positive duration
+		// no positive duration
 	}); err != nil {
 		t.Fatalf("CreateBookFile %q: %v", title, err)
 	}

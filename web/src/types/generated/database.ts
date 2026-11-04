@@ -312,6 +312,9 @@ export interface BookFileCore {
   raw_tags?: { [key: string]: string};
   format?: string;
   codec?: string;
+  /**
+   * Duration: see BookFile.Duration (nil = not measured, stored value > 0).
+   */
   duration?: number /* int */;
   file_size?: number /* int64 */;
   bitrate_kbps?: number /* int */;

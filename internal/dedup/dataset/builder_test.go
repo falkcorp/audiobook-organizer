@@ -1,7 +1,7 @@
 // file: internal/dedup/dataset/builder_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: b3e7f2a1-9c45-4d80-8e62-5f1a3d6c7b90
-// last-edited: 2026-09-19
+// last-edited: 2026-11-04
 
 package dataset
 
@@ -81,8 +81,8 @@ func TestBuildExampleNormalizesDurationRatio(t *testing.T) {
 		fs := &fakeStore{
 			books: map[string]*database.Book{"a": bkA, "b": bkB},
 			files: map[string][]database.BookFile{
-				"a": {{BookID: "a", FilePath: "/lib/x/a.m4b", FileSize: size, Duration: 20810840}},
-				"b": {{BookID: "b", FilePath: "/lib/x/b.m4b", FileSize: size, Duration: 20810}},
+				"a": {{BookID: "a", FilePath: "/lib/x/a.m4b", FileSize: size, Duration: database.Secs(20810840)}},
+				"b": {{BookID: "b", FilePath: "/lib/x/b.m4b", FileSize: size, Duration: database.Secs(20810)}},
 			},
 		}
 		cand := database.DedupCandidate{ID: 30, EntityAID: "a", EntityBID: "b", Layer: "exact"}
@@ -111,8 +111,8 @@ func TestBuildExampleNormalizesDurationRatio(t *testing.T) {
 		fs := &fakeStore{
 			books: map[string]*database.Book{"a": bkA, "b": bkB},
 			files: map[string][]database.BookFile{
-				"a": {{BookID: "a", FilePath: "/lib/x/part.m4b", FileSize: sizeA, Duration: 300}},
-				"b": {{BookID: "b", FilePath: "/lib/x/whole.m4b", FileSize: sizeB, Duration: 20000}},
+				"a": {{BookID: "a", FilePath: "/lib/x/part.m4b", FileSize: sizeA, Duration: database.Secs(300)}},
+				"b": {{BookID: "b", FilePath: "/lib/x/whole.m4b", FileSize: sizeB, Duration: database.Secs(20000)}},
 			},
 		}
 		cand := database.DedupCandidate{ID: 31, EntityAID: "a", EntityBID: "b", Layer: "exact"}
@@ -138,9 +138,9 @@ func TestBuildFeaturesMixedCorruptFiles(t *testing.T) {
 	// Three files, each a 1h/64 kbps part; the middle one holds an ms-scale value.
 	size := sizeForKbps(3600, 64) // 28_800_000 bytes
 	files := []database.BookFile{
-		{BookID: "x", FilePath: "/lib/x/p1.m4b", FileSize: size, Duration: 3600},
-		{BookID: "x", FilePath: "/lib/x/p2.m4b", FileSize: size, Duration: 3600000}, // ms-scale
-		{BookID: "x", FilePath: "/lib/x/p3.m4b", FileSize: size, Duration: 3600},
+		{BookID: "x", FilePath: "/lib/x/p1.m4b", FileSize: size, Duration: database.Secs(3600)},
+		{BookID: "x", FilePath: "/lib/x/p2.m4b", FileSize: size, Duration: database.Secs(3600000)}, // ms-scale
+		{BookID: "x", FilePath: "/lib/x/p3.m4b", FileSize: size, Duration: database.Secs(3600)},
 	}
 	f := buildFeatures(&database.Book{ID: "x", Title: "Mixed"}, files)
 	if f.TotalDurationSec != 3*3600 {
@@ -154,8 +154,8 @@ func TestBuildExample_PartVsWholeFeatures(t *testing.T) {
 	fs := &fakeStore{
 		books: map[string]*database.Book{"whole": whole, "part": part},
 		files: map[string][]database.BookFile{
-			"whole": {{BookID: "whole", FilePath: "/lib/Crafter/whole.m4b", Duration: 36000}},
-			"part":  {{BookID: "part", FilePath: "/lib/Crafter/part-1.m4b", Duration: 1200}},
+			"whole": {{BookID: "whole", FilePath: "/lib/Crafter/whole.m4b", Duration: database.Secs(36000)}},
+			"part":  {{BookID: "part", FilePath: "/lib/Crafter/part-1.m4b", Duration: database.Secs(1200)}},
 		},
 	}
 	cand := database.DedupCandidate{ID: 7, EntityAID: "whole", EntityBID: "part", Layer: "exact"}
@@ -203,8 +203,8 @@ func TestBuildExample_RecordingIDSharing(t *testing.T) {
 	fs := &fakeStore{
 		books: map[string]*database.Book{"a": bkA, "b": bkB},
 		files: map[string][]database.BookFile{
-			"a": {{BookID: "a", FilePath: "/x/a.m4b", Duration: 3600, AcoustIDOnlineRecordingID: "mbid-123"}},
-			"b": {{BookID: "b", FilePath: "/y/b.m4b", Duration: 3600, AcoustIDOnlineRecordingID: "mbid-123"}},
+			"a": {{BookID: "a", FilePath: "/x/a.m4b", Duration: database.Secs(3600), AcoustIDOnlineRecordingID: "mbid-123"}},
+			"b": {{BookID: "b", FilePath: "/y/b.m4b", Duration: database.Secs(3600), AcoustIDOnlineRecordingID: "mbid-123"}},
 		},
 	}
 	cand := database.DedupCandidate{ID: 1, EntityAID: "a", EntityBID: "b", Layer: "lsh"}
@@ -358,8 +358,8 @@ func TestBuildExample_FolderRelation_Ancestor(t *testing.T) {
 	fs := &fakeStore{
 		books: map[string]*database.Book{"a": bkA, "b": bkB},
 		files: map[string][]database.BookFile{
-			"a": {{BookID: "a", FilePath: "/lib/Series/whole.m4b", Duration: 36000}},
-			"b": {{BookID: "b", FilePath: "/lib/Series/Part1/part.m4b", Duration: 3600}},
+			"a": {{BookID: "a", FilePath: "/lib/Series/whole.m4b", Duration: database.Secs(36000)}},
+			"b": {{BookID: "b", FilePath: "/lib/Series/Part1/part.m4b", Duration: database.Secs(3600)}},
 		},
 	}
 	cand := database.DedupCandidate{ID: 2, EntityAID: "a", EntityBID: "b", Layer: "lsh"}
@@ -380,8 +380,8 @@ func TestBuildExample_FolderRelation_BAncestorOfA(t *testing.T) {
 	fs := &fakeStore{
 		books: map[string]*database.Book{"a": bkA, "b": bkB},
 		files: map[string][]database.BookFile{
-			"a": {{BookID: "a", FilePath: "/lib/Series/Part1/part.m4b", Duration: 3600}},
-			"b": {{BookID: "b", FilePath: "/lib/Series/whole.m4b", Duration: 36000}},
+			"a": {{BookID: "a", FilePath: "/lib/Series/Part1/part.m4b", Duration: database.Secs(3600)}},
+			"b": {{BookID: "b", FilePath: "/lib/Series/whole.m4b", Duration: database.Secs(36000)}},
 		},
 	}
 	cand := database.DedupCandidate{ID: 3, EntityAID: "a", EntityBID: "b", Layer: "lsh"}
@@ -402,8 +402,8 @@ func TestBuildExample_FolderRelation_Unrelated(t *testing.T) {
 	fs := &fakeStore{
 		books: map[string]*database.Book{"a": bkA, "b": bkB},
 		files: map[string][]database.BookFile{
-			"a": {{BookID: "a", FilePath: "/lib/AuthorOne/book.m4b", Duration: 3600}},
-			"b": {{BookID: "b", FilePath: "/lib/AuthorTwo/book.m4b", Duration: 3600}},
+			"a": {{BookID: "a", FilePath: "/lib/AuthorOne/book.m4b", Duration: database.Secs(3600)}},
+			"b": {{BookID: "b", FilePath: "/lib/AuthorTwo/book.m4b", Duration: database.Secs(3600)}},
 		},
 	}
 	cand := database.DedupCandidate{ID: 4, EntityAID: "a", EntityBID: "b", Layer: "lsh"}
@@ -425,8 +425,8 @@ func TestBuildExample_FolderRelation_PrefixNotAncestor(t *testing.T) {
 	fs := &fakeStore{
 		books: map[string]*database.Book{"a": bkA, "b": bkB},
 		files: map[string][]database.BookFile{
-			"a": {{BookID: "a", FilePath: "/lib/Series/book.m4b", Duration: 3600}},
-			"b": {{BookID: "b", FilePath: "/lib/Series-Extra/book.m4b", Duration: 3600}},
+			"a": {{BookID: "a", FilePath: "/lib/Series/book.m4b", Duration: database.Secs(3600)}},
+			"b": {{BookID: "b", FilePath: "/lib/Series-Extra/book.m4b", Duration: database.Secs(3600)}},
 		},
 	}
 	cand := database.DedupCandidate{ID: 5, EntityAID: "a", EntityBID: "b", Layer: "lsh"}
@@ -448,8 +448,8 @@ func TestBuildExample_FolderRelation_SiblingParts(t *testing.T) {
 	fs := &fakeStore{
 		books: map[string]*database.Book{"a": bkA, "b": bkB},
 		files: map[string][]database.BookFile{
-			"a": {{BookID: "a", FilePath: "/lib/Book/Part 1/a.m4b", Duration: 3600}},
-			"b": {{BookID: "b", FilePath: "/lib/Book/Part 2/b.m4b", Duration: 3600}},
+			"a": {{BookID: "a", FilePath: "/lib/Book/Part 1/a.m4b", Duration: database.Secs(3600)}},
+			"b": {{BookID: "b", FilePath: "/lib/Book/Part 2/b.m4b", Duration: database.Secs(3600)}},
 		},
 	}
 	cand := database.DedupCandidate{ID: 6, EntityAID: "a", EntityBID: "b", Layer: "lsh"}

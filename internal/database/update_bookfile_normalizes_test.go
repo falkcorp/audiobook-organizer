@@ -1,11 +1,15 @@
 // file: internal/database/update_bookfile_normalizes_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 1ba802ee-d7e8-478f-a5e3-a82dbef6ac2c
-// last-edited: 2026-10-03
+// last-edited: 2026-11-04
 
 package database
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
+)
 
 // 🔴 UpdateBookFile was the LAST write path that did not normalise Duration to the
 // stored standard (seconds). CreateBookFile, UpsertBookFile and BatchUpsertBookFiles
@@ -28,13 +32,13 @@ func TestUpdateBookFile_NormalizesMillisecondDurationToSeconds(t *testing.T) {
 	}
 	// 1,048,000 bytes at 1,048,000 "seconds" implies 8 bits/sec — impossible. Read as
 	// milliseconds it is 1,048s ≈ 8 kbps, an ordinary spoken-word MP3.
-	f := &BookFile{BookID: book.ID, FilePath: "/lib/Unit Book/01.mp3", Duration: 1048, FileSize: 1048000}
+	f := &BookFile{BookID: book.ID, FilePath: "/lib/Unit Book/01.mp3", Duration: Secs(1048), FileSize: 1048000}
 	if err := s.CreateBookFile(f); err != nil {
 		t.Fatalf("CreateBookFile: %v", err)
 	}
 
 	// Now push a millisecond value through UPDATE, the path that used to accept it.
-	f.Duration = 1048000
+	f.Duration = Secs(1048000)
 	if err := s.UpdateBookFile(f.ID, f); err != nil {
 		t.Fatalf("UpdateBookFile: %v", err)
 	}
@@ -46,9 +50,9 @@ func TestUpdateBookFile_NormalizesMillisecondDurationToSeconds(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(got))
 	}
-	if got[0].Duration != 1048 {
+	if durtest.Sec(got[0].Duration) != 1048 {
 		t.Fatalf("stored duration = %d, want 1048 — UpdateBookFile must normalise "+
-			"milliseconds to seconds like every other write path", got[0].Duration)
+			"milliseconds to seconds like every other write path", durtest.Sec(got[0].Duration))
 	}
 }
 
@@ -67,7 +71,7 @@ func TestUpdateBookFile_LeavesPlausibleDurationsAlone(t *testing.T) {
 		t.Fatalf("CreateBook: %v", err)
 	}
 	// 3600s at 58MB ≈ 129 kbps — an ordinary audiobook.
-	f := &BookFile{BookID: book.ID, FilePath: "/lib/Sane Book/01.m4b", Duration: 3600, FileSize: 58_000_000}
+	f := &BookFile{BookID: book.ID, FilePath: "/lib/Sane Book/01.m4b", Duration: Secs(3600), FileSize: 58_000_000}
 	if err := s.CreateBookFile(f); err != nil {
 		t.Fatalf("CreateBookFile: %v", err)
 	}
@@ -77,9 +81,9 @@ func TestUpdateBookFile_LeavesPlausibleDurationsAlone(t *testing.T) {
 		t.Fatalf("UpdateBookFile: %v", err)
 	}
 	got, _ := s.GetBookFiles(book.ID)
-	if got[0].Duration != 3600 {
+	if durtest.Sec(got[0].Duration) != 3600 {
 		t.Fatalf("duration = %d, want 3600 untouched — the guard must not fire on good data",
-			got[0].Duration)
+			durtest.Sec(got[0].Duration))
 	}
 }
 
@@ -98,12 +102,12 @@ func TestUpdateBookFile_NormalizationIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBook: %v", err)
 	}
-	f := &BookFile{BookID: book.ID, FilePath: "/lib/Idem Book/01.mp3", Duration: 1048, FileSize: 1048000}
+	f := &BookFile{BookID: book.ID, FilePath: "/lib/Idem Book/01.mp3", Duration: Secs(1048), FileSize: 1048000}
 	if err := s.CreateBookFile(f); err != nil {
 		t.Fatalf("CreateBookFile: %v", err)
 	}
 
-	f.Duration = 1048000 // ms
+	f.Duration = Secs(1048000) // ms
 	if err := s.UpdateBookFile(f.ID, f); err != nil {
 		t.Fatalf("UpdateBookFile #1: %v", err)
 	}
@@ -114,9 +118,9 @@ func TestUpdateBookFile_NormalizationIsIdempotent(t *testing.T) {
 		t.Fatalf("UpdateBookFile #2: %v", err)
 	}
 	after2, _ := s.GetBookFiles(book.ID)
-	if after2[0].Duration != 1048 {
+	if durtest.Sec(after2[0].Duration) != 1048 {
 		t.Fatalf("duration = %d after a second update, want 1048 — the conversion "+
-			"must not compound", after2[0].Duration)
+			"must not compound", durtest.Sec(after2[0].Duration))
 	}
 }
 
@@ -136,20 +140,20 @@ func TestUpdateBookFile_NormalizationPreservesFingerprint(t *testing.T) {
 	}
 	f := &BookFile{
 		BookID: book.ID, FilePath: "/lib/FP Book/01.mp3",
-		Duration: 1048, FileSize: 1048000,
+		Duration: Secs(1048), FileSize: 1048000,
 		AcoustIDFingerprint: []byte{0x01, 0x02, 0x03, 0x04},
 	}
 	if err := s.CreateBookFile(f); err != nil {
 		t.Fatalf("CreateBookFile: %v", err)
 	}
 
-	f.Duration = 1048000
+	f.Duration = Secs(1048000)
 	if err := s.UpdateBookFile(f.ID, f); err != nil {
 		t.Fatalf("UpdateBookFile: %v", err)
 	}
 	got, _ := s.GetBookFiles(book.ID)
-	if got[0].Duration != 1048 {
-		t.Fatalf("duration = %d, want 1048", got[0].Duration)
+	if durtest.Sec(got[0].Duration) != 1048 {
+		t.Fatalf("duration = %d, want 1048", durtest.Sec(got[0].Duration))
 	}
 	if len(got[0].AcoustIDFingerprint) != 4 {
 		t.Fatalf("fingerprint lost during a normalising update: %v", got[0].AcoustIDFingerprint)

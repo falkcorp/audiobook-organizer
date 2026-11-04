@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/mine_gold_labels_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: c5a71e38-9b20-4d64-8f12-3e6a9c7b2d05
-// last-edited: 2026-09-02
+// last-edited: 2026-11-04
 
 // End-to-end test for the dedup.mine-gold-labels op against a real PebbleStore +
 // EmbeddingStore: a candidate whose two books share a file hash is labeled
@@ -29,7 +29,7 @@ func createBookWithHashedFile(t *testing.T, pebble *database.PebbleStore, title,
 		FilePath: "/audio/" + title + ".m4b",
 		FileHash: fileHash,
 		FileSize: 5 << 20,
-		Duration: 3600,
+		Duration: database.Secs(3600),
 	}); err != nil {
 		t.Fatalf("CreateBookFile %q: %v", title, err)
 	}

@@ -1,7 +1,7 @@
 // file: internal/organizer/listener_identity_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 237f021f-dc2b-4f70-98e1-5a6cd60ed033
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 package organizer
 
@@ -51,7 +51,7 @@ func newListenerFixture(t *testing.T) *listenerFixture {
 		IsPrimaryVersion: &primary, LibraryState: &imported,
 	})
 	require.NoError(t, err)
-	require.NoError(t, store.CreateBookFile(&database.BookFile{BookID: book.ID, FilePath: srcPath, Format: "m4b", Duration: 3600}))
+	require.NoError(t, store.CreateBookFile(&database.BookFile{BookID: book.ID, FilePath: srcPath, Format: "m4b", Duration: database.Secs(3600)}))
 	files, err := store.GetBookFiles(book.ID)
 	require.NoError(t, err)
 	require.Len(t, files, 1)

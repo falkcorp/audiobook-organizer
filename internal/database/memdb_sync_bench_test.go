@@ -1,7 +1,7 @@
 // file: internal/database/memdb_sync_bench_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0e7c4a92-6d15-4b83-a9f0-2c58e1d76b34
-// last-edited: 2026-09-02
+// last-edited: 2026-11-04
 
 package database
 
@@ -39,7 +39,7 @@ func BenchmarkParallelUpdateBook(b *testing.B) {
 		// AcoustID fingerprints run tens of KB per file.
 		fp := []byte(strings.Repeat("AQADtEmSJEmSJEcOHzh8", 1500)) // ~30KB
 		for j := range 8 {
-			if err := store.CreateBookFile(&BookFile{BookID: bk.ID, FilePath: fmt.Sprintf("/b/%02d/f%d.mp3", i, j), Duration: 60, AcoustIDFingerprint: fp}); err != nil {
+			if err := store.CreateBookFile(&BookFile{BookID: bk.ID, FilePath: fmt.Sprintf("/b/%02d/f%d.mp3", i, j), Duration: Secs(60), AcoustIDFingerprint: fp}); err != nil {
 				b.Fatalf("CreateBookFile: %v", err)
 			}
 		}

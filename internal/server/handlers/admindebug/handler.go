@@ -1,7 +1,7 @@
 // file: internal/server/handlers/admindebug/handler.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 64d11bf2-1597-4007-b152-e2803366a922
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 // Package admindebug is the admin-only debug API for one-off record fixes:
 // read a book or book_file row in full, find what references a path, and edit
@@ -182,6 +182,9 @@ var bookFileSpec = &entitySpec{
 	},
 	localPaths:  map[string]bool{"file_path": true, "deluge_original_path": true},
 	itunesOwned: map[string]bool{"itunes_path": true},
+	// duration is *int on the row (nil = not measured); the API keeps showing
+	// and accepting 0 for it. See entitySpec.zeroIsUnset.
+	zeroIsUnset: map[string]bool{"duration": true},
 }
 
 func specFor(entity string) (*entitySpec, any) {

@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_rescan_preserve_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 65fa9323-39c2-4f89-a480-e74c18c02036
-// last-edited: 2026-10-23
+// last-edited: 2026-11-04
 
 package database
 
@@ -299,7 +299,7 @@ func TestUpdateBookFile_IntentionalClearsLand(t *testing.T) {
 	row.TranscribeError = nil
 	row.FingerprintFailedAt = nil
 	row.FingerprintFailureReason = nil
-	row.Duration = 0
+	row.Duration = nil
 	row.AcoustIDFingerprint = nil // memdb-stripped: must be restored
 	row.IntroTranscription = nil  // memdb-stripped: must be restored
 	if err := s.UpdateBookFile(row.ID, &row); err != nil {
@@ -318,7 +318,7 @@ func TestUpdateBookFile_IntentionalClearsLand(t *testing.T) {
 		"TranscribeError":          got.TranscribeError == nil,
 		"FingerprintFailedAt":      got.FingerprintFailedAt == nil,
 		"FingerprintFailureReason": got.FingerprintFailureReason == nil,
-		"Duration":                 got.Duration == 0,
+		"Duration":                 got.Duration == nil,
 	} {
 		if !cleared {
 			t.Errorf("UpdateBookFile did not apply the intentional clear of %s", name)

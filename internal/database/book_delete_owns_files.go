@@ -1,7 +1,7 @@
 // file: internal/database/book_delete_owns_files.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 8ffda8a0-e303-4a65-9f2f-71ab98e1b796
-// last-edited: 2026-10-29
+// last-edited: 2026-11-04
 
 package database
 
@@ -765,7 +765,7 @@ func (p *PebbleStore) bookFileIDStateAt(id string) (live *BookFile, raw, at []by
 			defer closer.Close()
 			raw = append([]byte(nil), val...)
 			var f BookFile
-			if uerr := json.Unmarshal(raw, &f); uerr != nil {
+			if uerr := unmarshalBookFile(raw, &f); uerr != nil {
 				return nil, nil, nil, false, fmt.Errorf("decode book_file %s: %w", pk, uerr)
 			}
 			return &f, raw, pk, false, nil

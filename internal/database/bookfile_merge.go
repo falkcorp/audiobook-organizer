@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_merge.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 0f6bdcdf-d13a-46a8-90f7-5d62bbccd3a8
 // last-edited: 2026-11-04
 
@@ -366,6 +366,9 @@ func mergeBookFileFromStored(incoming, stored *BookFile, mode bookFileWriteMode,
 	}
 	frozen := originalHashFrozen(stored)
 	incomingHadPrint := len(incoming.AcoustIDFingerprint) > 0
+	// Whether the incoming row measured the duration itself, before the loop
+	// restores the stored one into it; the audio-changed reset below needs it.
+	incomingMeasured := incoming.Duration != nil
 	in := reflect.ValueOf(incoming).Elem()
 	st := reflect.ValueOf(stored).Elem()
 	for i, rule := range bookFileRulesByIndex {
@@ -396,6 +399,22 @@ func mergeBookFileFromStored(incoming, stored *BookFile, mode bookFileWriteMode,
 		if f := in.Field(i); f.IsZero() {
 			f.Set(st.Field(i))
 		}
+	}
+	// Scan is derivedNone, so the loop above kept the stored duration stage on
+	// the incoming row: restored it into a bare Scan (the scanner's rows carry
+	// none), or left a read-modify-write caller's copy of it in place. When the
+	// audio changed, Duration was dropped with the other derivedAudio fields, so
+	// a stored DurationOK (Done after a measurement, or failed attempts) would
+	// describe a file that is gone: the replacement would read as measured with
+	// no value, or as already failed. Reset the stage when it is the stored one.
+	//
+	// Two things it keeps. A DurationOK that differs from the stored one is the
+	// caller's own record about the new file. And a stored Done that sits beside
+	// a Duration the incoming row measured is still true of the new file, so it
+	// stays; a stored failure never is, nor is a Done with nothing measured.
+	if v.audioChanged && incoming.Scan.DurationOK == stored.Scan.DurationOK &&
+		(!incomingMeasured || !stored.Scan.DurationOK.Done) {
+		incoming.Scan.DurationOK = StageStatus{}
 	}
 	// The whole-file print and its encoding version are ONE unit: the version
 	// must describe the bytes actually written. Per-field preservation could

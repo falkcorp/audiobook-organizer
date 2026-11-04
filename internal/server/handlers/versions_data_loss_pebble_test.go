@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions_data_loss_pebble_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5c0e2a7d-9b41-4f6e-8a3c-1d7f4b2e6a95
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package handlers_test
 
@@ -114,7 +114,7 @@ func TestSplitVersion_AggregatesSurviveThePathWrites(t *testing.T) {
 	src := mustCreateBook(t, store, &database.Book{Title: "Source", FilePath: "/lib/Src", Format: "mp3", Duration: &dur, FileSize: &size})
 	var ids []string
 	for _, p := range []string{"/lib/Src/a/01.mp3", "/lib/Src/a/02.mp3", "/lib/Src/b/03.mp3"} {
-		f := &database.BookFile{BookID: src.ID, FilePath: p, Format: "mp3", Duration: 100, FileSize: 10}
+		f := &database.BookFile{BookID: src.ID, FilePath: p, Format: "mp3", Duration: database.Secs(100), FileSize: 10}
 		if err := store.CreateBookFile(f); err != nil {
 			t.Fatal(err)
 		}

@@ -1,13 +1,12 @@
 // file: internal/database/memdb_sync.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000005
-// last-edited: 2026-10-13
+// last-edited: 2026-11-04
 
 package database
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -595,7 +594,7 @@ func (p *PebbleStore) loadBookFilesForBookID(bookID string) ([]BookFile, error) 
 			return nil
 		}
 		var bf BookFile
-		if err := json.Unmarshal(value, &bf); err == nil {
+		if err := unmarshalBookFile(value, &bf); err == nil {
 			out = append(out, bf)
 		}
 		return nil

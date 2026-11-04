@@ -1,18 +1,22 @@
 // file: internal/database/book_file_duration_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ee8a4990-c4f8-4bcd-89f1-80ce6d3ca3ca
 // last-edited: 2026-11-04
 
 package database
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
+)
 
 // TestDurationAccessorsAgreeAcrossBookFileAndCore pins the two spellings of the
 // duration accessors together so they cannot drift apart.
 func TestDurationAccessorsAgreeAcrossBookFileAndCore(t *testing.T) {
 	for _, d := range []int{-5, 0, 1, 27000} {
-		f := BookFile{Duration: d}
-		c := BookFileCore{Duration: d}
+		f := BookFile{Duration: Secs(d)}
+		c := BookFileCore{Duration: Secs(d)}
 		fs, fk := f.DurationSec()
 		cs, ck := c.DurationSec()
 		if fs != cs || fk != ck {
@@ -41,7 +45,7 @@ func TestSetMeasuredDurationAndResetAgree(t *testing.T) {
 		if f.SetMeasuredDuration(bad) == nil || c.SetMeasuredDuration(bad) == nil {
 			t.Fatalf("sec=%d must be rejected", bad)
 		}
-		if f.Duration != 0 || c.Duration != 0 {
+		if f.Duration != nil || c.Duration != nil {
 			t.Fatalf("rejected set must not write")
 		}
 	}
@@ -51,8 +55,8 @@ func TestSetMeasuredDurationAndResetAgree(t *testing.T) {
 	if err := c.SetMeasuredDuration(90); err != nil {
 		t.Fatal(err)
 	}
-	if f.Duration != 90 || c.Duration != 90 || f.DurationState() != DurationKnown {
-		t.Fatalf("set failed: %d %d", f.Duration, c.Duration)
+	if durtest.Sec(f.Duration) != 90 || durtest.Sec(c.Duration) != 90 || f.DurationState() != DurationKnown {
+		t.Fatalf("set failed: %d %d", durtest.Sec(f.Duration), durtest.Sec(c.Duration))
 	}
 	f.ResetDuration()
 	c.ResetDuration()

@@ -1,7 +1,7 @@
 // file: internal/database/batch_create_bookfiles_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5c81f0a3-6b47-4d29-9e15-7a3f82c6b04d
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package database
 
@@ -38,7 +38,7 @@ func TestBatchCreateBookFilesRecomputesOncePerBook(t *testing.T) {
 		files = append(files, &BookFile{
 			BookID:      bookA.ID,
 			FilePath:    "/lib/bc/a/t" + string(rune('1'+i)) + ".m4b",
-			Duration:    600 + i,
+			Duration:    Secs(600 + i),
 			FileSize:    int64(1_000_000 + i),
 			TrackNumber: i + 1,
 		})
@@ -47,7 +47,7 @@ func TestBatchCreateBookFilesRecomputesOncePerBook(t *testing.T) {
 		files = append(files, &BookFile{
 			BookID:      bookB.ID,
 			FilePath:    "/lib/bc/b/t" + string(rune('1'+i)) + ".m4b",
-			Duration:    900 + i,
+			Duration:    Secs(900 + i),
 			FileSize:    int64(2_000_000 + i),
 			TrackNumber: i + 1,
 		})
@@ -102,14 +102,14 @@ func TestBatchCreateBookFilesAlwaysCreates(t *testing.T) {
 	require.NoError(t, store.CreateBookFile(&BookFile{
 		BookID:   book.ID,
 		FilePath: samePath,
-		Duration: 100,
+		Duration: Secs(100),
 		FileSize: 1_000,
 	}))
 
 	require.NoError(t, store.BatchCreateBookFiles([]*BookFile{{
 		BookID:   book.ID,
 		FilePath: samePath,
-		Duration: 250,
+		Duration: Secs(250),
 		FileSize: 2_000,
 	}}))
 
@@ -136,8 +136,8 @@ func TestBatchCreateBookFilesRejectsDuplicatePIDInOneBatch(t *testing.T) {
 	require.NoError(t, err)
 
 	err = store.BatchCreateBookFiles([]*BookFile{
-		{BookID: book.ID, FilePath: "/lib/dp/t1.m4b", ITunesPersistentID: "PID-SAME", Duration: 100, FileSize: 1_000},
-		{BookID: book.ID, FilePath: "/lib/dp/t2.m4b", ITunesPersistentID: "PID-SAME", Duration: 200, FileSize: 2_000},
+		{BookID: book.ID, FilePath: "/lib/dp/t1.m4b", ITunesPersistentID: "PID-SAME", Duration: Secs(100), FileSize: 1_000},
+		{BookID: book.ID, FilePath: "/lib/dp/t2.m4b", ITunesPersistentID: "PID-SAME", Duration: Secs(200), FileSize: 2_000},
 	})
 	require.Error(t, err, "two rows sharing an iTunes PID in one batch must be refused")
 	require.Contains(t, err.Error(), "PID-SAME")
@@ -179,7 +179,7 @@ func TestBatchCreateBookFilesRefusalDoesNotStripAPriorPIDOwner(t *testing.T) {
 	priorRow := &BookFile{
 		BookID: priorBook.ID, FilePath: "/lib/prior/a.m4b",
 		ITunesPersistentID: "PID-MOVE", ITunesPath: "/itunes/a.m4b",
-		Duration: 300, FileSize: 3_000,
+		Duration: Secs(300), FileSize: 3_000,
 	}
 	require.NoError(t, store.CreateBookFile(priorRow))
 
@@ -194,10 +194,10 @@ func TestBatchCreateBookFilesRefusalDoesNotStripAPriorPIDOwner(t *testing.T) {
 	err = store.BatchCreateBookFiles([]*BookFile{
 		// Row 1 transfers PID-MOVE off priorRow — this is the work that used to
 		// commit on its own.
-		{BookID: newBook.ID, FilePath: "/lib/taker/t1.m4b", ITunesPersistentID: "PID-MOVE", Duration: 100, FileSize: 1_000},
+		{BookID: newBook.ID, FilePath: "/lib/taker/t1.m4b", ITunesPersistentID: "PID-MOVE", Duration: Secs(100), FileSize: 1_000},
 		// Rows 2 and 3 collide, aborting the batch AFTER that transfer.
-		{BookID: newBook.ID, FilePath: "/lib/taker/t2.m4b", ITunesPersistentID: "PID-DUP", Duration: 100, FileSize: 1_000},
-		{BookID: newBook.ID, FilePath: "/lib/taker/t3.m4b", ITunesPersistentID: "PID-DUP", Duration: 100, FileSize: 1_000},
+		{BookID: newBook.ID, FilePath: "/lib/taker/t2.m4b", ITunesPersistentID: "PID-DUP", Duration: Secs(100), FileSize: 1_000},
+		{BookID: newBook.ID, FilePath: "/lib/taker/t3.m4b", ITunesPersistentID: "PID-DUP", Duration: Secs(100), FileSize: 1_000},
 	})
 	require.Error(t, err, "the duplicate PID-DUP rows must be refused")
 	require.Contains(t, err.Error(), "PID-DUP")
@@ -240,7 +240,7 @@ func TestBatchCreateBookFilesTransfersAPIDOnSuccess(t *testing.T) {
 	priorRow := &BookFile{
 		BookID: priorBook.ID, FilePath: "/lib/p2/a.m4b",
 		ITunesPersistentID: "PID-OK", ITunesPath: "/itunes/a.m4b",
-		Duration: 300, FileSize: 3_000,
+		Duration: Secs(300), FileSize: 3_000,
 	}
 	require.NoError(t, store.CreateBookFile(priorRow))
 
@@ -248,7 +248,7 @@ func TestBatchCreateBookFilesTransfersAPIDOnSuccess(t *testing.T) {
 	require.NoError(t, err)
 	taker := &BookFile{
 		BookID: newBook.ID, FilePath: "/lib/t2/t1.m4b",
-		ITunesPersistentID: "PID-OK", Duration: 100, FileSize: 1_000,
+		ITunesPersistentID: "PID-OK", Duration: Secs(100), FileSize: 1_000,
 	}
 	require.NoError(t, store.BatchCreateBookFiles([]*BookFile{taker}))
 
@@ -310,7 +310,7 @@ func TestBatchCreateBookFilesRefusalLeavesPriorPIDOwnerIntact(t *testing.T) {
 	require.NoError(t, err)
 	owned := &BookFile{
 		BookID: bystander.ID, FilePath: "/lib/by/t1.m4b",
-		ITunesPersistentID: sharedPID, Duration: 100, FileSize: 1_000,
+		ITunesPersistentID: sharedPID, Duration: Secs(100), FileSize: 1_000,
 	}
 	require.NoError(t, store.CreateBookFile(owned))
 
@@ -322,8 +322,8 @@ func TestBatchCreateBookFilesRefusalLeavesPriorPIDOwnerIntact(t *testing.T) {
 	// Two rows sharing the PID: refused. Row 0 would previously have transferred
 	// the PID off the bystander and COMMITTED that before row 1 was rejected.
 	err = store.BatchCreateBookFiles([]*BookFile{
-		{BookID: target.ID, FilePath: "/lib/tg/t1.m4b", ITunesPersistentID: sharedPID, Duration: 200, FileSize: 2_000},
-		{BookID: target.ID, FilePath: "/lib/tg/t2.m4b", ITunesPersistentID: sharedPID, Duration: 300, FileSize: 3_000},
+		{BookID: target.ID, FilePath: "/lib/tg/t1.m4b", ITunesPersistentID: sharedPID, Duration: Secs(200), FileSize: 2_000},
+		{BookID: target.ID, FilePath: "/lib/tg/t2.m4b", ITunesPersistentID: sharedPID, Duration: Secs(300), FileSize: 3_000},
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), sharedPID)
@@ -360,7 +360,7 @@ func TestBatchCreateBookFilesTransfersPIDAtomically(t *testing.T) {
 	require.NoError(t, err)
 	oldRow := &BookFile{
 		BookID: from.ID, FilePath: "/lib/fr/t1.m4b",
-		ITunesPersistentID: movingPID, Duration: 100, FileSize: 1_000,
+		ITunesPersistentID: movingPID, Duration: Secs(100), FileSize: 1_000,
 	}
 	require.NoError(t, store.CreateBookFile(oldRow))
 
@@ -370,7 +370,7 @@ func TestBatchCreateBookFilesTransfersPIDAtomically(t *testing.T) {
 	readLogs := captureAggregateLogs(t)
 
 	require.NoError(t, store.BatchCreateBookFiles([]*BookFile{
-		{BookID: to.ID, FilePath: "/lib/to/t1.m4b", ITunesPersistentID: movingPID, Duration: 200, FileSize: 2_000},
+		{BookID: to.ID, FilePath: "/lib/to/t1.m4b", ITunesPersistentID: movingPID, Duration: Secs(200), FileSize: 2_000},
 	}))
 
 	// The PID now resolves to the new row, exactly once.
@@ -410,8 +410,8 @@ func TestBatchCreateBookFilesRefusesEmptyBookID(t *testing.T) {
 	require.NoError(t, err)
 
 	err = store.BatchCreateBookFiles([]*BookFile{
-		{BookID: book.ID, FilePath: "/lib/hr/t1.m4b", Duration: 100, FileSize: 1_000},
-		{BookID: "", FilePath: "/lib/hr/orphan.m4b", Duration: 200, FileSize: 2_000},
+		{BookID: book.ID, FilePath: "/lib/hr/t1.m4b", Duration: Secs(100), FileSize: 1_000},
+		{BookID: "", FilePath: "/lib/hr/orphan.m4b", Duration: Secs(200), FileSize: 2_000},
 	})
 	require.Error(t, err, "a row with no BookID must be refused, not silently orphaned")
 	require.Contains(t, err.Error(), "empty BookID")

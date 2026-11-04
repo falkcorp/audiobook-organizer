@@ -1,7 +1,7 @@
 // file: internal/database/book_files_with_hash_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 5d27b9e0-8c14-4f6a-a3d1-0e9f72b6c845
-// last-edited: 2026-10-03
+// last-edited: 2026-11-04
 
 package database
 
@@ -70,7 +70,7 @@ func TestBookFilesWithHash_MatchesBruteForceAcrossWrites(t *testing.T) {
 		return b.ID
 	}
 	newRow := func(book, path, h, orig string) *BookFile {
-		f := &BookFile{BookID: book, FilePath: path, FileHash: h, OriginalFileHash: orig, Duration: 600}
+		f := &BookFile{BookID: book, FilePath: path, FileHash: h, OriginalFileHash: orig, Duration: Secs(600)}
 		require.NoError(t, s.CreateBookFile(f))
 		return f
 	}

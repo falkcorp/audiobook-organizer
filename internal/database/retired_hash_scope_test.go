@@ -1,7 +1,7 @@
 // file: internal/database/retired_hash_scope_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4eaca36f-4f66-43fd-8c64-10b5f3a30043
-// last-edited: 2026-10-29
+// last-edited: 2026-11-04
 
 package database
 
@@ -260,7 +260,7 @@ func TestRetiredBookFilesWithHash_BatchUpsertOfARetiredRow(t *testing.T) {
 	// Same row, same hashes: nothing the index holds changes.
 	genBefore := fx.ps.retiredHash.gen.Load()
 	require.NoError(t, fx.ps.BatchUpsertBookFiles([]*BookFile{
-		{ID: kept.ID, BookID: fx.holder.ID, FilePath: kept.FilePath, Duration: 321}}))
+		{ID: kept.ID, BookID: fx.holder.ID, FilePath: kept.FilePath, Duration: Secs(321)}}))
 	require.Equal(t, genBefore, fx.ps.retiredHash.gen.Load(), "a duration-only rewrite of a retired row does not invalidate the index")
 	retired, _, err = fx.ps.RetiredBookFilesWithHash("h-kept")
 	require.NoError(t, err)
@@ -291,7 +291,7 @@ func TestRetiredHashRelevantChange(t *testing.T) {
 		want         bool
 	}{
 		"live row, live rewrite":       {&live, same(func(b *BookFile) { b.Retired = false; b.BookID = "shell"; b.VersionID = ""; b.FileHash = "h2" }), false},
-		"retired, duration only":       {&retired, same(func(b *BookFile) { b.Duration = 9 }), false},
+		"retired, duration only":       {&retired, same(func(b *BookFile) { b.Duration = Secs(9) }), false},
 		"retired, file hash":           {&retired, same(func(b *BookFile) { b.FileHash = "h2" }), true},
 		"retired, original hash":       {&retired, same(func(b *BookFile) { b.OriginalFileHash = "o2" }), true},
 		"retired, version":             {&retired, same(func(b *BookFile) { b.VersionID = "v2" }), true},

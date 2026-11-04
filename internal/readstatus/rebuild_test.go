@@ -1,7 +1,7 @@
 // file: internal/readstatus/rebuild_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8b2d6f4a-3c19-4e57-a6d0-f1e9c7b5a382
-// last-edited: 2026-10-18
+// last-edited: 2026-11-04
 
 package readstatus
 
@@ -28,7 +28,7 @@ func corruptStateStore(t *testing.T) *database.PebbleStore {
 		t.Fatal(err)
 	}
 	for i, seg := range []string{"s1", "s2", "s3"} {
-		if err := store.CreateBookFile(&database.BookFile{ID: seg, BookID: "b1", FilePath: "/tmp/" + seg, TrackNumber: i + 1, Duration: 600}); err != nil {
+		if err := store.CreateBookFile(&database.BookFile{ID: seg, BookID: "b1", FilePath: "/tmp/" + seg, TrackNumber: i + 1, Duration: database.Secs(600)}); err != nil {
 			t.Fatal(err)
 		}
 	}

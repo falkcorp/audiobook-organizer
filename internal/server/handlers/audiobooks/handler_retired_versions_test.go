@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_retired_versions_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f0b9d52-6c1e-4a87-b2d4-9e5a17c80f36
-// last-edited: 2026-10-23
+// last-edited: 2026-11-04
 
 // Tests for the retired-versions read endpoint and the restore stub (501). The store is the
 // generated AudiobooksStore mock wrapped in an in-memory fake that adds the
@@ -136,9 +136,9 @@ func newRetiredFixture() *fakeRetiredStore {
 		},
 		rows: map[string][]database.BookFile{
 			"h1": {
-				{ID: "f1", BookID: "h1", FilePath: "/lib/shell/01.m4b", Retired: true, VersionID: "v-new", FileSize: 100, Duration: 60, TrackNumber: 1},
-				{ID: "f2", BookID: "h1", FilePath: "/lib/shell/02.m4b", Retired: true, VersionID: "v-new", FileSize: 200, Duration: 90, TrackNumber: 2, Missing: true},
-				{ID: "f3", BookID: "h1", FilePath: "/lib/old/01.m4b", Retired: true, VersionID: "v-old", FileSize: 50, Duration: 30},
+				{ID: "f1", BookID: "h1", FilePath: "/lib/shell/01.m4b", Retired: true, VersionID: "v-new", FileSize: 100, Duration: database.Secs(60), TrackNumber: 1},
+				{ID: "f2", BookID: "h1", FilePath: "/lib/shell/02.m4b", Retired: true, VersionID: "v-new", FileSize: 200, Duration: database.Secs(90), TrackNumber: 2, Missing: true},
+				{ID: "f3", BookID: "h1", FilePath: "/lib/old/01.m4b", Retired: true, VersionID: "v-old", FileSize: 50, Duration: database.Secs(30)},
 				{ID: "f4", BookID: "h1", FilePath: "/lib/purged/01.m4b", Retired: true, VersionID: "v-gone", FileSize: 5},
 				{ID: "f5", BookID: "h1", FilePath: "/lib/live2/01.m4b", Retired: true, VersionID: "v-live", FileSize: 5},
 			},

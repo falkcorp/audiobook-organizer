@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/window_backfill_remote_only_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 609372fb-2803-46d8-a413-c4263e5f71be
-// last-edited: 2026-09-20
+// last-edited: 2026-11-04
 
 package acoustid
 
@@ -77,7 +77,7 @@ func (e *wbEnv) addOutside(name string) string {
 	require.NoError(e.t, os.WriteFile(path, []byte("audio:"+name), 0o644))
 	b, err := e.store.CreateBook(&database.Book{Title: "Outside " + name, FilePath: dir})
 	require.NoError(e.t, err)
-	f := &database.BookFile{BookID: b.ID, FilePath: path, Format: "m4b", Duration: 3600}
+	f := &database.BookFile{BookID: b.ID, FilePath: path, Format: "m4b", Duration: database.Secs(3600)}
 	require.NoError(e.t, e.store.CreateBookFile(f))
 	return f.ID
 }
@@ -1070,7 +1070,7 @@ func (e *wbEnv) addUnderBooksParent(name string) string {
 	require.NoError(e.t, os.WriteFile(path, []byte("audio:"+name), 0o644))
 	b, err := e.store.CreateBook(&database.Book{Title: "Parent " + name, FilePath: dir})
 	require.NoError(e.t, err)
-	f := &database.BookFile{BookID: b.ID, FilePath: path, Format: "m4b", Duration: 3600}
+	f := &database.BookFile{BookID: b.ID, FilePath: path, Format: "m4b", Duration: database.Secs(3600)}
 	require.NoError(e.t, e.store.CreateBookFile(f))
 	return f.ID
 }

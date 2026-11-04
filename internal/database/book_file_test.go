@@ -1,7 +1,7 @@
 // file: internal/database/book_file_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: b7c8d9e0-f1a2-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package database
 
@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // newTestStoreWithBook creates a temp SQLiteStore, runs all migrations (so that
@@ -54,7 +56,7 @@ func TestCreateBookFile(t *testing.T) {
 		Title:              "The Lion, the Witch and the Wardrobe",
 		Format:             "m4b",
 		Codec:              "aac",
-		Duration:           3600,
+		Duration:           Secs(3600),
 		FileSize:           104857600,
 		BitrateKbps:        64,
 		SampleRateHz:       44100,
@@ -89,7 +91,7 @@ func TestCreateBookFile(t *testing.T) {
 	assert.Equal(t, "The Lion, the Witch and the Wardrobe", got.Title)
 	assert.Equal(t, "m4b", got.Format)
 	assert.Equal(t, "aac", got.Codec)
-	assert.Equal(t, 3600, got.Duration)
+	assert.Equal(t, 3600, durtest.Sec(got.Duration))
 	assert.Equal(t, int64(104857600), got.FileSize)
 	assert.Equal(t, 64, got.BitrateKbps)
 	assert.Equal(t, 44100, got.SampleRateHz)
@@ -216,7 +218,7 @@ func TestUpdateBookFile(t *testing.T) {
 		BookID:      bookID,
 		FilePath:    "/books/update_test.m4b",
 		TrackNumber: 1,
-		Duration:    1000,
+		Duration:    Secs(1000),
 		Missing:     false,
 	}
 	require.NoError(t, store.CreateBookFile(f))
@@ -224,7 +226,7 @@ func TestUpdateBookFile(t *testing.T) {
 
 	// Modify fields.
 	f.TrackNumber = 5
-	f.Duration = 9999
+	f.Duration = Secs(9999)
 	f.Title = "Updated Title"
 	f.Format = "mp3"
 	f.Missing = true
@@ -238,7 +240,7 @@ func TestUpdateBookFile(t *testing.T) {
 	require.NotNil(t, got)
 
 	assert.Equal(t, 5, got.TrackNumber)
-	assert.Equal(t, 9999, got.Duration)
+	assert.Equal(t, 9999, durtest.Sec(got.Duration))
 	assert.Equal(t, "Updated Title", got.Title)
 	assert.Equal(t, "mp3", got.Format)
 	assert.True(t, got.Missing)
@@ -350,7 +352,7 @@ func TestUpsertBookFile_MatchByPath(t *testing.T) {
 		BookID:      bookID,
 		FilePath:    path,
 		TrackNumber: 1,
-		Duration:    500,
+		Duration:    Secs(500),
 	}
 	require.NoError(t, store.CreateBookFile(f))
 	originalID := f.ID
@@ -360,7 +362,7 @@ func TestUpsertBookFile_MatchByPath(t *testing.T) {
 		BookID:      bookID,
 		FilePath:    path,
 		TrackNumber: 3,
-		Duration:    600,
+		Duration:    Secs(600),
 	}
 	err := store.UpsertBookFile(updated)
 	require.NoError(t, err)
@@ -371,7 +373,7 @@ func TestUpsertBookFile_MatchByPath(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Equal(t, originalID, got.ID)
 	assert.Equal(t, 3, got.TrackNumber)
-	assert.Equal(t, 600, got.Duration)
+	assert.Equal(t, 600, durtest.Sec(got.Duration))
 
 	all, err := store.GetBookFiles(bookID)
 	require.NoError(t, err)

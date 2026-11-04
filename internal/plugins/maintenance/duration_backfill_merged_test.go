@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_merged_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 9b41e7c3-2d58-4a06-bf19-6e35c0d7a284
-// last-edited: 2026-10-13
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // bookWithSegs builds a one-book store whose segments are the given rows, and
@@ -66,7 +67,7 @@ func TestDurationBackfill_CorrectsMillisecondSegment(t *testing.T) {
 		ID: "s1", BookID: "b1",
 		FilePath: "/lib/B/01.m4b",
 		FileSize: bytesForBitrate(3600, 64),
-		Duration: 3600000, // milliseconds, never divided
+		Duration: database.Secs(3600000), // milliseconds, never divided
 	}}
 	store := bookWithSegs(t, segs, &segWrites, &bookWrites)
 
@@ -74,7 +75,7 @@ func TestDurationBackfill_CorrectsMillisecondSegment(t *testing.T) {
 	store.UpdateBookFilesFunc = func(_ context.Context, files []*database.BookFile, after func(int, bool)) (int, error) {
 		for i := range files {
 			segWrites++
-			got = files[i].Duration
+			got = durtest.Sec(files[i].Duration)
 			if after != nil {
 				after(i, true)
 			}
@@ -100,8 +101,8 @@ func TestDurationBackfill_CorrectsMillisecondSegment(t *testing.T) {
 func TestDurationBackfill_EmptyPathSegmentIsUnresolved(t *testing.T) {
 	var segWrites, bookWrites int
 	segs := []database.BookFile{
-		{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: 50, AcoustIDFingerprintDurationSec: 1800.0},
-		{ID: "s2", BookID: "b1", FilePath: "", Duration: 0}, // no path: unresolved
+		{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: database.Secs(50), AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "s2", BookID: "b1", FilePath: ""}, // no path: unresolved
 	}
 	store := bookWithSegs(t, segs, &segWrites, &bookWrites)
 
@@ -124,8 +125,8 @@ func TestDurationBackfill_EmptyPathSegmentIsUnresolved(t *testing.T) {
 func TestDurationBackfill_CompleteBookIsWritten(t *testing.T) {
 	var segWrites, bookWrites int
 	segs := []database.BookFile{
-		{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: 50, AcoustIDFingerprintDurationSec: 1800.0},
-		{ID: "s2", BookID: "b1", FilePath: "/lib/B/02.m4b", Duration: 60, AcoustIDFingerprintDurationSec: 1200.0},
+		{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: database.Secs(50), AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "s2", BookID: "b1", FilePath: "/lib/B/02.m4b", Duration: database.Secs(60), AcoustIDFingerprintDurationSec: 1200.0},
 	}
 	store := bookWithSegs(t, segs, &segWrites, &bookWrites)
 
@@ -146,7 +147,7 @@ func TestDurationBackfill_CompleteBookIsWritten(t *testing.T) {
 // 0 under a correct book total is still corrected (the ABS "duration 0" case).
 func TestDurationBackfill_BookIDsReadsOnlyThoseBooks(t *testing.T) {
 	var segWrites, bookWrites int
-	segs := []database.BookFile{{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 120.0}}
+	segs := []database.BookFile{{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", AcoustIDFingerprintDurationSec: 120.0}}
 	store := bookWithSegs(t, segs, &segWrites, &bookWrites)
 	store.GetAllBooksFullFromFunc = nil
 	store.GetAllBooksFunc = func(int, int) ([]database.Book, error) {
@@ -205,8 +206,8 @@ func TestDurationBackfill_ZeroRowsFillsOnlyZeroRows(t *testing.T) {
 	var segWrites, bookWrites int
 	var written []string
 	segs := []database.BookFile{
-		{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
-		{ID: "s2", BookID: "b1", FilePath: "/lib/B/02.m4b", Duration: 50, AcoustIDFingerprintDurationSec: 1200.0},
+		{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "s2", BookID: "b1", FilePath: "/lib/B/02.m4b", Duration: database.Secs(50), AcoustIDFingerprintDurationSec: 1200.0},
 	}
 	store := zeroRowsStore(t, segs, true, "organized", &segWrites, &bookWrites)
 	store.UpdateBookFilesFunc = func(_ context.Context, files []*database.BookFile, after func(int, bool)) (int, error) {
@@ -246,12 +247,12 @@ func captureRowWrites(store *database.MockStore) *[]string {
 func TestDurationBackfill_ZeroRowsFillsCountedRowsOnly(t *testing.T) {
 	var segWrites, bookWrites int
 	segs := []database.BookFile{
-		{ID: "own1", BookID: "b1", FilePath: "/lib/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
-		{ID: "own2", BookID: "b1", FilePath: "/lib/B/CD2/02.m4b", FileHash: "h2", FileSize: 200, Duration: 0, AcoustIDFingerprintDurationSec: 1200.0},
-		{ID: "own3", BookID: "b1", FilePath: "/lib/B/03.m4b", FileHash: "h3", FileSize: 300, Duration: 900, AcoustIDFingerprintDurationSec: 900.0},
-		{ID: "copy-old", BookID: "b1", FilePath: "/srv/old/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
-		{ID: "copy-itunes", BookID: "b1", FilePath: "/srv/books/itunes/A/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: 0, AcoustIDFingerprintDurationSec: 1200.0},
-		{ID: "moved", BookID: "b1", FilePath: "/lib/Loser/04.m4b", FileHash: "h4", FileSize: 400, Duration: 0, AcoustIDFingerprintDurationSec: 600.0},
+		{ID: "own1", BookID: "b1", FilePath: "/lib/B/01.m4b", FileHash: "h1", FileSize: 100, AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "own2", BookID: "b1", FilePath: "/lib/B/CD2/02.m4b", FileHash: "h2", FileSize: 200, AcoustIDFingerprintDurationSec: 1200.0},
+		{ID: "own3", BookID: "b1", FilePath: "/lib/B/03.m4b", FileHash: "h3", FileSize: 300, Duration: database.Secs(900), AcoustIDFingerprintDurationSec: 900.0},
+		{ID: "copy-old", BookID: "b1", FilePath: "/srv/old/B/01.m4b", FileHash: "h1", FileSize: 100, AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "copy-itunes", BookID: "b1", FilePath: "/srv/books/itunes/A/B/02.m4b", FileHash: "h2", FileSize: 200, AcoustIDFingerprintDurationSec: 1200.0},
+		{ID: "moved", BookID: "b1", FilePath: "/lib/Loser/04.m4b", FileHash: "h4", FileSize: 400, AcoustIDFingerprintDurationSec: 600.0},
 	}
 	store := zeroRowsStore(t, segs, true, "organized", &segWrites, &bookWrites)
 	written := captureRowWrites(store)
@@ -269,9 +270,9 @@ func TestDurationBackfill_ZeroRowsFillsCountedRowsOnly(t *testing.T) {
 func TestDurationBackfill_ZeroRowsKeepsOwnRowOverMeasuredITunesTwin(t *testing.T) {
 	var segWrites, bookWrites int
 	segs := []database.BookFile{
-		{ID: "own1", BookID: "b1", FilePath: "/lib/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
-		{ID: "own2", BookID: "b1", FilePath: "/lib/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: 0, AcoustIDFingerprintDurationSec: 1200.0},
-		{ID: "itunes1", BookID: "b1", FilePath: "/srv/books/itunes/A/B/01 Track.m4b", FileHash: "h1", FileSize: 100, Duration: 1800, AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "own1", BookID: "b1", FilePath: "/lib/B/01.m4b", FileHash: "h1", FileSize: 100, AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "own2", BookID: "b1", FilePath: "/lib/B/02.m4b", FileHash: "h2", FileSize: 200, AcoustIDFingerprintDurationSec: 1200.0},
+		{ID: "itunes1", BookID: "b1", FilePath: "/srv/books/itunes/A/B/01 Track.m4b", FileHash: "h1", FileSize: 100, Duration: database.Secs(1800), AcoustIDFingerprintDurationSec: 1800.0},
 	}
 	store := zeroRowsStore(t, segs, true, "organized", &segWrites, &bookWrites)
 	written := captureRowWrites(store)
@@ -289,9 +290,9 @@ func TestDurationBackfill_ZeroRowsKeepsOwnRowOverMeasuredITunesTwin(t *testing.T
 func TestDurationBackfill_ZeroRowsKeepsNonITunesRowOutsideOwnFolder(t *testing.T) {
 	var segWrites, bookWrites int
 	segs := []database.BookFile{
-		{ID: "own1", BookID: "b1", FilePath: "/lib/B/01.m4b", FileHash: "h1", FileSize: 100, Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
-		{ID: "itunes2", BookID: "b1", FilePath: "/srv/books/itunes/A/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: 1200, AcoustIDFingerprintDurationSec: 1200.0},
-		{ID: "old2", BookID: "b1", FilePath: "/srv/old/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: 0, AcoustIDFingerprintDurationSec: 1200.0},
+		{ID: "own1", BookID: "b1", FilePath: "/lib/B/01.m4b", FileHash: "h1", FileSize: 100, AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "itunes2", BookID: "b1", FilePath: "/srv/books/itunes/A/B/02.m4b", FileHash: "h2", FileSize: 200, Duration: database.Secs(1200), AcoustIDFingerprintDurationSec: 1200.0},
+		{ID: "old2", BookID: "b1", FilePath: "/srv/old/B/02.m4b", FileHash: "h2", FileSize: 200, AcoustIDFingerprintDurationSec: 1200.0},
 	}
 	store := zeroRowsStore(t, segs, true, "organized", &segWrites, &bookWrites)
 	written := captureRowWrites(store)
@@ -306,8 +307,8 @@ func TestDurationBackfill_ZeroRowsKeepsNonITunesRowOutsideOwnFolder(t *testing.T
 func TestDurationBackfill_ZeroRowsSkipsBookWithNoOwnFolderRows(t *testing.T) {
 	var segWrites, bookWrites int
 	segs := []database.BookFile{
-		{ID: "s1", BookID: "b1", FilePath: "/srv/old/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
-		{ID: "s2", BookID: "b1", FilePath: "/srv/older/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "s1", BookID: "b1", FilePath: "/srv/old/B/01.m4b", AcoustIDFingerprintDurationSec: 1800.0},
+		{ID: "s2", BookID: "b1", FilePath: "/srv/older/B/01.m4b", AcoustIDFingerprintDurationSec: 1800.0},
 	}
 	runZeroRows(t, zeroRowsStore(t, segs, true, "organized", &segWrites, &bookWrites))
 	if segWrites != 0 || bookWrites != 0 {
@@ -320,12 +321,12 @@ func TestDurationBackfill_ZeroRowsSkipsBookWithNoOwnFolderRows(t *testing.T) {
 func TestDurationBackfill_ZeroRowsNeverWritesITunesFolder(t *testing.T) {
 	for name, segs := range map[string][]database.BookFile{
 		"itunes only": {
-			{ID: "i1", BookID: "b1", FilePath: "/srv/books/itunes/A/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
-			{ID: "i2", BookID: "b1", FilePath: "/srv/books/itunes/A/B/02.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1200.0},
+			{ID: "i1", BookID: "b1", FilePath: "/srv/books/itunes/A/B/01.m4b", AcoustIDFingerprintDurationSec: 1800.0},
+			{ID: "i2", BookID: "b1", FilePath: "/srv/books/itunes/A/B/02.m4b", AcoustIDFingerprintDurationSec: 1200.0},
 		},
 		"itunes own folder with a stray": {
-			{ID: "i1", BookID: "b1", FilePath: "/srv/books/itunes/A/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
-			{ID: "s1", BookID: "b1", FilePath: "/srv/old/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0},
+			{ID: "i1", BookID: "b1", FilePath: "/srv/books/itunes/A/B/01.m4b", AcoustIDFingerprintDurationSec: 1800.0},
+			{ID: "s1", BookID: "b1", FilePath: "/srv/old/B/01.m4b", AcoustIDFingerprintDurationSec: 1800.0},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -342,7 +343,7 @@ func TestDurationBackfill_ZeroRowsNeverWritesITunesFolder(t *testing.T) {
 // A book ABS does not list (not primary) is out of scope.
 func TestDurationBackfill_ZeroRowsIgnoresHiddenBooks(t *testing.T) {
 	var segWrites, bookWrites int
-	segs := []database.BookFile{{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0}}
+	segs := []database.BookFile{{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", AcoustIDFingerprintDurationSec: 1800.0}}
 	runZeroRows(t, zeroRowsStore(t, segs, false, "organized", &segWrites, &bookWrites))
 	if segWrites != 0 {
 		t.Errorf("non-primary book must not be touched: segment writes=%d", segWrites)
@@ -358,12 +359,12 @@ func TestDurationBackfill_ZeroRowsIgnoresHiddenBooks(t *testing.T) {
 func TestDurationBackfill_ZeroRowsSkipsSameFolderCopies(t *testing.T) {
 	var segWrites, bookWrites int
 	segs := []database.BookFile{
-		{ID: "01", BookID: "b1", FilePath: "/lib/B/B - 01.m4a", FileSize: 50_000_000, Duration: 3600, AcoustIDFingerprintDurationSec: 3600.0},
-		{ID: "01c", BookID: "b1", FilePath: "/lib/B/B - 01_copy1.m4a", FileSize: 50_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 3600.0},
-		{ID: "02", BookID: "b1", FilePath: "/lib/B/B - 02.m4a", FileSize: 60_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 4000.0},
-		{ID: "02c", BookID: "b1", FilePath: "/lib/B/B - 02_copy1.m4a", FileSize: 60_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 4000.0},
-		{ID: "03", BookID: "b1", FilePath: "/lib/B/B - 03.m4a", FileSize: 40_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 2000.0},
-		{ID: "03x", BookID: "b1", FilePath: "/lib/B/B - 03_copy1.m4a", FileSize: 38_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 1900.0},
+		{ID: "01", BookID: "b1", FilePath: "/lib/B/B - 01.m4a", FileSize: 50_000_000, Duration: database.Secs(3600), AcoustIDFingerprintDurationSec: 3600.0},
+		{ID: "01c", BookID: "b1", FilePath: "/lib/B/B - 01_copy1.m4a", FileSize: 50_000_000, AcoustIDFingerprintDurationSec: 3600.0},
+		{ID: "02", BookID: "b1", FilePath: "/lib/B/B - 02.m4a", FileSize: 60_000_000, AcoustIDFingerprintDurationSec: 4000.0},
+		{ID: "02c", BookID: "b1", FilePath: "/lib/B/B - 02_copy1.m4a", FileSize: 60_000_000, AcoustIDFingerprintDurationSec: 4000.0},
+		{ID: "03", BookID: "b1", FilePath: "/lib/B/B - 03.m4a", FileSize: 40_000_000, AcoustIDFingerprintDurationSec: 2000.0},
+		{ID: "03x", BookID: "b1", FilePath: "/lib/B/B - 03_copy1.m4a", FileSize: 38_000_000, AcoustIDFingerprintDurationSec: 1900.0},
 	}
 	store := zeroRowsStore(t, segs, true, "organized", &segWrites, &bookWrites)
 	written := captureRowWrites(store)
@@ -381,11 +382,11 @@ func TestDurationBackfill_ZeroRowsSkipsSameFolderCopies(t *testing.T) {
 func TestDurationBackfill_NormalModeMeasuresCountedRowsOnly(t *testing.T) {
 	var segWrites, bookWrites int
 	segs := []database.BookFile{
-		{ID: "01", BookID: "b1", FilePath: "/lib/B/B - 01.m4a", FileSize: 50_000_000, Duration: 3600, AcoustIDFingerprintDurationSec: 3600.0},
-		{ID: "01c", BookID: "b1", FilePath: "/lib/B/B - 01_copy1.m4a", FileSize: 50_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 3600.0},
-		{ID: "02", BookID: "b1", FilePath: "/lib/B/B - 02.m4a", FileSize: 60_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 4000.0},
-		{ID: "02c", BookID: "b1", FilePath: "/lib/B/B - 02_copy1.m4a", FileSize: 60_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 4000.0},
-		{ID: "03x", BookID: "b1", FilePath: "/lib/B/B - 03_copy1.m4a", FileSize: 38_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 1900.0},
+		{ID: "01", BookID: "b1", FilePath: "/lib/B/B - 01.m4a", FileSize: 50_000_000, Duration: database.Secs(3600), AcoustIDFingerprintDurationSec: 3600.0},
+		{ID: "01c", BookID: "b1", FilePath: "/lib/B/B - 01_copy1.m4a", FileSize: 50_000_000, AcoustIDFingerprintDurationSec: 3600.0},
+		{ID: "02", BookID: "b1", FilePath: "/lib/B/B - 02.m4a", FileSize: 60_000_000, AcoustIDFingerprintDurationSec: 4000.0},
+		{ID: "02c", BookID: "b1", FilePath: "/lib/B/B - 02_copy1.m4a", FileSize: 60_000_000, AcoustIDFingerprintDurationSec: 4000.0},
+		{ID: "03x", BookID: "b1", FilePath: "/lib/B/B - 03_copy1.m4a", FileSize: 38_000_000, AcoustIDFingerprintDurationSec: 1900.0},
 	}
 	store := bookWithSegs(t, segs, &segWrites, &bookWrites)
 	book := database.Book{ID: "b1", Title: "B", FilePath: "/lib/B", Duration: new(15500)}
@@ -426,7 +427,7 @@ func TestDurationBackfill_ZeroRowsScopeIsExactlyWhatABSLists(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var segWrites, bookWrites int
-			segs := []database.BookFile{{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", Duration: 0, AcoustIDFingerprintDurationSec: 1800.0}}
+			segs := []database.BookFile{{ID: "s1", BookID: "b1", FilePath: "/lib/B/01.m4b", AcoustIDFingerprintDurationSec: 1800.0}}
 			store := bookWithSegs(t, segs, &segWrites, &bookWrites)
 			state := "organized"
 			book := database.Book{ID: "b1", Title: "B", FilePath: "/lib/B", Duration: new(3000),

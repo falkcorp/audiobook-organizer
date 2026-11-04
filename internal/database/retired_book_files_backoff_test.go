@@ -1,7 +1,7 @@
 // file: internal/database/retired_book_files_backoff_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c1eafd0a-58c3-4033-89f4-dc8c02517083
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 package database
 
@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // versionStripeProbe stands in for the backoff sleep between whole-batch
@@ -85,9 +87,9 @@ func (p *versionStripeProbe) require(t *testing.T, writer string) {
 func TestRetiredWriters_BackoffRunsWithoutTheVersionStripe(t *testing.T) {
 	t.Run("RetireBookFiles", func(t *testing.T) {
 		fx := newRetiredFixture(t)
-		row := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/Backoff/Retire/01.m4b", FileHash: "gotham-hash-old", Duration: 100})
+		row := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/Backoff/Retire/01.m4b", FileHash: "gotham-hash-old", Duration: Secs(100)})
 		injectBeforeCommit(t, 1, func(int) {
-			strayWriteByPath(t, fx.ps, row.FilePath, func(r *BookFile) { r.Duration = 250 })
+			strayWriteByPath(t, fx.ps, row.FilePath, func(r *BookFile) { r.Duration = Secs(250) })
 		})
 		probe := probeVersionStripeDuringBackoff(t, fx.ps, fx.version.ID, nil)
 
@@ -99,7 +101,7 @@ func TestRetiredWriters_BackoffRunsWithoutTheVersionStripe(t *testing.T) {
 		require.NotNil(t, got)
 		require.True(t, got.Retired)
 		require.Equal(t, fx.version.ID, got.VersionID)
-		require.Equal(t, 250, got.Duration, "the write that refused the first round is kept")
+		require.Equal(t, 250, durtest.Sec(got.Duration), "the write that refused the first round is kept")
 		require.Equal(t, fx.holder.ID+":"+row.ID, indexOwner(t, fx.ps, "book_file_hash:gotham-hash-old"))
 	})
 
@@ -153,11 +155,11 @@ func TestRetiredWriters_BackoffRunsWithoutTheVersionStripe(t *testing.T) {
 // a holder that no longer owns the version.
 func TestRetireBookFiles_RechecksTheVersionAfterTheBackoff(t *testing.T) {
 	fx := newRetiredFixture(t)
-	row := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/Backoff/Recheck/01.m4b", FileHash: "gotham-hash-old", Duration: 100})
+	row := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/Backoff/Recheck/01.m4b", FileHash: "gotham-hash-old", Duration: Secs(100)})
 	otherHolder, err := fx.ps.CreateBook(&Book{Title: "Batman: Hush", FilePath: "/lib/Gotham/Backoff/Hush"})
 	require.NoError(t, err)
 	injectBeforeCommit(t, 1, func(int) {
-		strayWriteByPath(t, fx.ps, row.FilePath, func(r *BookFile) { r.Duration = 250 })
+		strayWriteByPath(t, fx.ps, row.FilePath, func(r *BookFile) { r.Duration = Secs(250) })
 	})
 	var rehomeErr error
 	probe := probeVersionStripeDuringBackoff(t, fx.ps, fx.version.ID, func() {

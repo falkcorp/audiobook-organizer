@@ -1,14 +1,13 @@
 // file: internal/database/pebble_store_bookfile_acoustid_repair.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0e5b7a3c-91d4-4f28-b6a0-7c2d9e1f4a85
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 package database
 
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -168,7 +167,7 @@ func rowStoresAcoustIDSeg(raw []byte, seg string) (bool, error) {
 		return false, nil
 	}
 	var f BookFile
-	if err := json.Unmarshal(raw, &f); err != nil {
+	if err := unmarshalBookFile(raw, &f); err != nil {
 		return false, err
 	}
 	return bookFileHoldsSeg(&f, seg), nil

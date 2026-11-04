@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/bookfile_batch_write_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 6c1d80fe-4a52-47b3-9d8e-0b2f5a9c7314
-// last-edited: 2026-10-14
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -40,7 +40,7 @@ func seedBatchBook(t *testing.T, s *database.PebbleStore, n int, path func(i int
 	}
 	for i := range n {
 		if err := s.CreateBookFile(&database.BookFile{
-			BookID: book.ID, FilePath: path(i), FileSize: size, Duration: 60, Missing: missing,
+			BookID: book.ID, FilePath: path(i), FileSize: size, Duration: database.Secs(60), Missing: missing,
 		}); err != nil {
 			t.Fatalf("CreateBookFile: %v", err)
 		}
@@ -108,7 +108,7 @@ func TestRecoverMissingFiles_RecomputesBookOnce(t *testing.T) {
 		require.NoError(t, s.CreateBookFile(&database.BookFile{
 			BookID:   book.ID,
 			FilePath: filepath.Join(root, "Author", "Book", fmt.Sprintf("gone%02d.mp3", i)),
-			FileSize: int64(size), Duration: 60,
+			FileSize: int64(size), Duration: database.Secs(60),
 		}))
 	}
 

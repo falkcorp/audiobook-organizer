@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_parallel_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7f21c6ad-95be-4c30-8d02-5b3a1e6f4c99
-// last-edited: 2026-10-03
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -18,6 +18,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // concurrentReporter is deliberately NOT the package's shared fakeReporter: that
@@ -80,7 +81,7 @@ func seedDupBooks(t *testing.T, s *database.PebbleStore, books, copies int) []st
 			f := &database.BookFile{
 				BookID:   bk.ID,
 				FilePath: path,
-				Duration: 3600,
+				Duration: database.Secs(3600),
 				FileSize: 58000000, // ~129 kbps at 3600s — a plausible real bitrate
 			}
 			if err := s.CreateBookFile(f); err != nil {
@@ -144,8 +145,8 @@ func TestDedupeBookFileRows_ParallelApplyCollapsesEveryBook(t *testing.T) {
 		}
 		// The survivor must still carry its data — a parallel worker must not have
 		// blanked it while collapsing a neighbouring book.
-		if files[0].Duration != 3600 {
-			t.Fatalf("book %d: surviving duration = %d, want 3600", i, files[0].Duration)
+		if durtest.Sec(files[0].Duration) != 3600 {
+			t.Fatalf("book %d: surviving duration = %d, want 3600", i, durtest.Sec(files[0].Duration))
 		}
 	}
 
@@ -370,9 +371,9 @@ func TestDedupeBookFileRows_ApplyJournalsEveryDeletedRow(t *testing.T) {
 			if row.FilePath != wantPath {
 				t.Fatalf("journal row %s: FilePath %q, want %q", c.ID, row.FilePath, wantPath)
 			}
-			if row.Duration != 3600 || row.FileSize != 58000000 {
+			if durtest.Sec(row.Duration) != 3600 || row.FileSize != 58000000 {
 				t.Fatalf("journal row %s: Duration/FileSize = %d/%d, want 3600/58000000",
-					c.ID, row.Duration, row.FileSize)
+					c.ID, durtest.Sec(row.Duration), row.FileSize)
 			}
 			if c.FieldName != row.ID {
 				t.Fatalf("journal row %s: FieldName %q must name the deleted row id %q",

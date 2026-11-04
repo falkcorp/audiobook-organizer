@@ -1,7 +1,7 @@
 // file: internal/scanner/book_file_duration_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e1a9c7d-2b84-4f36-a0d9-8c3f6e2b1a47
-// last-edited: 2026-09-25
+// last-edited: 2026-11-04
 
 package scanner
 
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // A single-file book's row takes the duration and codec ProcessFile already
@@ -49,7 +50,7 @@ func TestSingleFileBookRowCarriesTheDurationTheScanAlreadyRead(t *testing.T) {
 	rows, err := store.GetBookFiles(book.ID)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	require.Equal(t, 41234, rows[0].Duration)
+	require.Equal(t, 41234, durtest.Sec(rows[0].Duration))
 	require.Equal(t, "AAC", rows[0].Codec)
 }
 
@@ -81,7 +82,7 @@ func TestSingleFileBookRowRejectsAnEstimatedScanDuration(t *testing.T) {
 	rows, err := store.GetBookFiles(book.ID)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	require.Equal(t, 0, rows[0].Duration)
+	require.Nil(t, rows[0].Duration)
 }
 
 // A multi-file book's segments have no duration in hand when the rows are built
@@ -119,7 +120,7 @@ func TestMultiFileBookRowsAreProbedPerSegment(t *testing.T) {
 	require.Len(t, rows, 2)
 	got := map[string]int{}
 	for _, r := range rows {
-		got[r.FilePath] = r.Duration
+		got[r.FilePath] = durtest.Sec(r.Duration)
 	}
 	require.Equal(t, map[string]int{seg1: 700, seg2: 800}, got)
 	require.ElementsMatch(t, []string{seg1, seg2}, probed)

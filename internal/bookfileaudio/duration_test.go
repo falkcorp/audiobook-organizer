@@ -1,7 +1,7 @@
 // file: internal/bookfileaudio/duration_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c0f4a8e-6b1d-4e52-9a77-2d5e8f1b9c04
-// last-edited: 2026-09-25
+// last-edited: 2026-11-04
 
 package bookfileaudio
 
@@ -12,6 +12,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // fakeProbe records the paths it was asked for and returns a fixed result.
@@ -39,7 +40,7 @@ func TestEnsureDuration_Precedence(t *testing.T) {
 	}{
 		{
 			name:       "row already has a duration: untouched, no probe",
-			row:        database.BookFile{FilePath: "/a.m4b", Duration: 42},
+			row:        database.BookFile{FilePath: "/a.m4b", Duration: database.Secs(42)},
 			known:      Known{SingleFileBook: true, BookDurationSec: 999},
 			probe:      fakeProbe{info: &mediainfo.MediaInfo{Duration: 7}},
 			wantDur:    42,
@@ -124,8 +125,8 @@ func TestEnsureDuration_Precedence(t *testing.T) {
 			if got != tc.wantSource {
 				t.Errorf("source = %v, want %v", got, tc.wantSource)
 			}
-			if row.Duration != tc.wantDur {
-				t.Errorf("Duration = %d, want %d", row.Duration, tc.wantDur)
+			if durtest.Sec(row.Duration) != tc.wantDur {
+				t.Errorf("Duration = %d, want %d", durtest.Sec(row.Duration), tc.wantDur)
 			}
 			if row.Codec != tc.wantCodec {
 				t.Errorf("Codec = %q, want %q", row.Codec, tc.wantCodec)
@@ -152,8 +153,8 @@ func TestEnsureDuration_ProbeTimeoutLeavesZero(t *testing.T) {
 	t.Cleanup(func() { probeTimeout = prev })
 
 	row := database.BookFile{FilePath: "/hang.m4b"}
-	if got := EnsureDuration(&row, Known{}, nil); got != SourceNone || row.Duration != 0 {
-		t.Fatalf("got source %v duration %d, want none/0", got, row.Duration)
+	if got := EnsureDuration(&row, Known{}, nil); got != SourceNone || row.Duration != nil {
+		t.Fatalf("got source %v duration %d, want none/0", got, durtest.Sec(row.Duration))
 	}
 }
 

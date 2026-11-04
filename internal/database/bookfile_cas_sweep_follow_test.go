@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_cas_sweep_follow_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3c8e1b52-94d7-4a6f-b0e1-7d2a5c9f4e18
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package database
 
@@ -34,7 +34,7 @@ func TestCAS_SweepBookFileSegDrop_SweepsARowWhoseBookDisagreesWithItsKeyInPlace(
 	}
 	ordinary := &BookFile{
 		ID: "01HUSH0000000000000000000Q", BookID: second.ID, FilePath: "/lib/Gotham/Year-One/01.m4b",
-		FileHash: "gotham-hash-year-one", Duration: 100, AcoustIDSeg0: "AQADtAcSRV",
+		FileHash: "gotham-hash-year-one", Duration: Secs(100), AcoustIDSeg0: "AQADtAcSRV",
 	}
 	writeLegacyBookFileRow(t, s, ordinary)
 	other := "book-gotham-elsewhere"
@@ -232,7 +232,7 @@ func TestCAS_SweepChunk_RestagesOnlyTheRowsThatChanged(t *testing.T) {
 	for i := 0; i < rows; i++ {
 		row := &BookFile{
 			ID: "01HUSH00000000000000000R" + string(rune('A'+i)), BookID: book.ID,
-			FilePath: "/lib/Gotham/Hush/r" + string(rune('A'+i)) + ".m4b", Duration: 100,
+			FilePath: "/lib/Gotham/Hush/r" + string(rune('A'+i)) + ".m4b", Duration: Secs(100),
 		}
 		writeLegacyBookFileRow(t, s, row)
 		_, raw, rerr := s.readBookFileRowAt(bookFileKey(book.ID, row.ID))

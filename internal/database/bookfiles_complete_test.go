@@ -1,7 +1,7 @@
 // file: internal/database/bookfiles_complete_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4acc5892-228f-48a8-8d76-a53a58f7c9c9
-// last-edited: 2026-10-06
+// last-edited: 2026-11-04
 
 package database
 
@@ -24,7 +24,7 @@ func TestGetAllBookFilesCoreComplete_RefusesShortMemdbAndFallsThrough(t *testing
 	require.True(t, ok)
 	b, err := store.CreateBook(&Book{Title: "Complete Files", FilePath: "/lib/complete-files"})
 	require.NoError(t, err)
-	bf := &BookFile{BookID: b.ID, FilePath: "/lib/complete-files/01.mp3", FileSize: 1234, Duration: 60}
+	bf := &BookFile{BookID: b.ID, FilePath: "/lib/complete-files/01.mp3", FileSize: 1234, Duration: Secs(60)}
 	require.NoError(t, store.CreateBookFile(bf))
 	p.WaitForWarmup()
 	require.True(t, p.IsMemReady())

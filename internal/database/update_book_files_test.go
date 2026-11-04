@@ -1,7 +1,7 @@
 // file: internal/database/update_book_files_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b98e5f12-df7c-4238-b237-e32604a7d218
-// last-edited: 2026-09-19
+// last-edited: 2026-11-04
 
 package database
 
@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database/aggtest"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 func seedUpdateBookFilesBook(t *testing.T, s *PebbleStore, n int) (string, []*BookFile) {
@@ -27,7 +28,7 @@ func seedUpdateBookFilesBook(t *testing.T, s *PebbleStore, n int) (string, []*Bo
 			FilePath:    fmt.Sprintf("/lib/many/part%03d.mp3", i),
 			TrackNumber: i + 1,
 			FileSize:    2_000_000,
-			Duration:    50,
+			Duration:    Secs(50),
 		}
 		require.NoError(t, s.CreateBookFile(f))
 		rows = append(rows, f)
@@ -42,7 +43,7 @@ func TestUpdateBookFiles_RecomputesOncePerBook(t *testing.T) {
 	const n = 25
 	bookID, rows := seedUpdateBookFilesBook(t, s, n)
 	for _, r := range rows {
-		r.Duration = 100
+		r.Duration = Secs(100)
 	}
 
 	logs := aggtest.Capture(t)
@@ -69,7 +70,7 @@ func TestUpdateBookFiles_CancelStopsBetweenRowsAndRecomputesWritten(t *testing.T
 	const n, stopAfter = 10, 4
 	bookID, rows := seedUpdateBookFilesBook(t, s, n)
 	for _, r := range rows {
-		r.Duration = 100
+		r.Duration = Secs(100)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -88,7 +89,7 @@ func TestUpdateBookFiles_CancelStopsBetweenRowsAndRecomputesWritten(t *testing.T
 	require.NoError(t, err)
 	changed := 0
 	for _, f := range files {
-		if f.Duration == 100 {
+		if durtest.Sec(f.Duration) == 100 {
 			changed++
 		}
 	}
@@ -107,12 +108,12 @@ func TestUpdateBookFiles_CancelStopsBetweenRowsAndRecomputesWritten(t *testing.T
 func TestSingleRowWrite_DurabilityUnknownStillRecomputes(t *testing.T) {
 	cases := map[string]func(s *PebbleStore, f BookFile) error{
 		"UpdateBookFile": func(s *PebbleStore, f BookFile) error {
-			f.Duration = 300
+			f.Duration = Secs(300)
 			return s.UpdateBookFile(f.ID, &f)
 		},
 		"ModifyBookFile": func(s *PebbleStore, f BookFile) error {
 			_, err := s.ModifyBookFile(f.BookID, f.ID, func(cur *BookFile) error {
-				cur.Duration = 300
+				cur.Duration = Secs(300)
 				return nil
 			})
 			return err
@@ -146,7 +147,7 @@ func TestUpdateBookFiles_DeletedMiddleRowFailsAlone(t *testing.T) {
 	bookID, rows := seedUpdateBookFilesBook(t, s, n)
 	require.NoError(t, s.DeleteBookFile(rows[gone].ID))
 	for _, r := range rows {
-		r.Duration = 100
+		r.Duration = Secs(100)
 	}
 
 	logs := aggtest.Capture(t)
@@ -164,7 +165,7 @@ func TestUpdateBookFiles_DeletedMiddleRowFailsAlone(t *testing.T) {
 	require.Len(t, files, n-1, "the deleted row must not be resurrected")
 	for _, f := range files {
 		require.NotEqual(t, rows[gone].ID, f.ID)
-		require.Equal(t, 100, f.Duration)
+		require.Equal(t, 100, durtest.Sec(f.Duration))
 	}
 	book, err := s.GetBookByID(bookID)
 	require.NoError(t, err)

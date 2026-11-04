@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/build_folder_book_files_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: b1896d34-1538-4a3f-a3f0-469871f9ca8c
-// last-edited: 2026-10-15
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // fbSpyStore counts the op's only write method, so the dry-run test can assert
@@ -112,9 +113,9 @@ func TestBuildFolderBookFiles_BuildsRowsWithDurationsInNaturalOrder(t *testing.T
 	want := map[string][2]int{"1.mp3": {1, 100}, "2.mp3": {2, 200}, "10.mp3": {3, 300}}
 	for _, row := range rows {
 		w := want[filepath.Base(row.FilePath)]
-		if row.TrackNumber != w[0] || row.Duration != w[1] || row.FileSize <= 0 {
+		if row.TrackNumber != w[0] || durtest.Sec(row.Duration) != w[1] || row.FileSize <= 0 {
 			t.Errorf("%s: track=%d dur=%d size=%d, want track=%d dur=%d size>0",
-				filepath.Base(row.FilePath), row.TrackNumber, row.Duration, row.FileSize, w[0], w[1])
+				filepath.Base(row.FilePath), row.TrackNumber, durtest.Sec(row.Duration), row.FileSize, w[0], w[1])
 		}
 	}
 	got, err := s.GetBookByID(b.ID)
@@ -136,7 +137,7 @@ func TestBuildFolderBookFiles_SkipsFilesAnotherLiveBookOwns(t *testing.T) {
 		t.Fatal(err)
 	}
 	owned := filepath.Join(dir, "02.mp3")
-	if err := s.CreateBookFile(&database.BookFile{BookID: owner.ID, FilePath: owned, Duration: 200}); err != nil {
+	if err := s.CreateBookFile(&database.BookFile{BookID: owner.ID, FilePath: owned, Duration: database.Secs(200)}); err != nil {
 		t.Fatal(err)
 	}
 

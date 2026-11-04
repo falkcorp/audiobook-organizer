@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transcribe_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9b4e1c73-d2a6-4f58-8e10-b7c35a9d2e64
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -268,7 +268,7 @@ func (fx *introFx) file(bookID, name string, track int, hash string, absent bool
 			fx.t.Fatal(err)
 		}
 	}
-	f := &database.BookFile{BookID: bookID, FilePath: path, Format: "m4b", Duration: 600, TrackNumber: track, FileHash: hash}
+	f := &database.BookFile{BookID: bookID, FilePath: path, Format: "m4b", Duration: database.Secs(600), TrackNumber: track, FileHash: hash}
 	if err := fx.s.CreateBookFile(f); err != nil {
 		fx.t.Fatal(err)
 	}

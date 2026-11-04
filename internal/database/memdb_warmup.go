@@ -1,7 +1,7 @@
 // file: internal/database/memdb_warmup.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000004
-// last-edited: 2026-10-11
+// last-edited: 2026-11-04
 
 package database
 
@@ -273,7 +273,7 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 			return false, nil
 		}
 		var bf BookFile
-		if err := json.Unmarshal(val, &bf); err != nil {
+		if err := unmarshalBookFile(val, &bf); err != nil {
 			lose(memTableBookFiles, key, "undecodable row", err)
 			return false, nil
 		}

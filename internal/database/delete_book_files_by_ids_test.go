@@ -1,7 +1,7 @@
 // file: internal/database/delete_book_files_by_ids_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4e7a1c92-3d58-4b6f-9a0e-2c8f5b1d7e43
-// last-edited: 2026-10-26
+// last-edited: 2026-11-04
 
 package database
 
@@ -64,7 +64,7 @@ func seedBookWithFiles(t *testing.T, s *PebbleStore, title string, durations []i
 		f := &BookFile{
 			BookID:   bk.ID,
 			FilePath: fmt.Sprintf("/lib/%s/track%02d.m4b", bk.ID, i),
-			Duration: d,
+			Duration: Secs(d),
 			FileSize: int64(d) * 16000,
 		}
 		if err := s.CreateBookFile(f); err != nil {
@@ -257,7 +257,7 @@ func TestDeleteBookFilesByIDs_RemovesSecondaryIndexes(t *testing.T) {
 	f := &BookFile{
 		BookID:             bk.ID,
 		FilePath:           "/lib/index/track01.m4b",
-		Duration:           600,
+		Duration:           Secs(600),
 		FileSize:           9600000,
 		ITunesPersistentID: "DEADBEEF12345678",
 		FileHash:           "sha256:indexhash",

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler_test.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 6d8011eb-bed6-430b-959e-2a2b0738ffbc
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 // Tests for the dedup-domain handlers. The embedding store is exercised through
 // a REAL pebble-backed *database.EmbeddingStore (it is a concrete db type the
@@ -537,7 +537,7 @@ func TestBulkLinkDedupCandidates_SamePathPairRefused(t *testing.T) {
 	d.store.EXPECT().GetBookByID(nA).Return(&database.Book{ID: nA, FilePath: "/lib/A/book.m4b"}, nil).Maybe()
 	d.store.EXPECT().GetBookByID(nB).Return(&database.Book{ID: nB, FilePath: "/lib/B/book.m4b"}, nil).Maybe()
 	d.store.EXPECT().GetBookFiles(mock.Anything).
-		Return([]database.BookFile{{FilePath: "/lib/a.m4b", FileSize: 5 << 20, Duration: 3600}}, nil).Maybe()
+		Return([]database.BookFile{{FilePath: "/lib/a.m4b", FileSize: 5 << 20, Duration: database.Secs(3600)}}, nil).Maybe()
 	d.engine.EXPECT().ScorePairsForBook(mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, nil).Maybe()
 

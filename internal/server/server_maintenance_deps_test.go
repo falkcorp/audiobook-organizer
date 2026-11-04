@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps_test.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 9c1e4f6a-2b7d-4a3e-8f5c-6d1a9b2e4c7f
-// last-edited: 2026-10-29
+// last-edited: 2026-11-04
 
 // Package server tests for TASK-23 (MATCH-6/BUG-3/QUAL-3): ApplyTranscriptionCandidate
 // must verify the identity of the re-read cached candidate against the
@@ -30,7 +30,7 @@ const fixtureTenHourSec = 36000
 // 288 MB, so the size and duration agree and are read as seconds).
 func fixtureTenHourFile(bookID string) database.BookFile {
 	return database.BookFile{ID: bookID + "-f1", BookID: bookID, FilePath: "/library/Fixture/book.m4b",
-		FileSize: 288_000_000, Duration: fixtureTenHourSec}
+		FileSize: 288_000_000, Duration: database.Secs(fixtureTenHourSec)}
 }
 
 // newTOCTOUCacheStore builds a MockStore whose GetMetadataCacheFunc returns

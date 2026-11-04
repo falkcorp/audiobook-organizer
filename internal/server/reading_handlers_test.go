@@ -1,6 +1,6 @@
 // file: internal/server/reading_handlers_test.go
-// version: 1.4.0
-// last-edited: 2026-10-06
+// version: 1.4.1
+// last-edited: 2026-11-04
 // guid: 4f9a2c1d-5b8e-4f70-a7d6-2e8c0f1b9a57
 
 package server
@@ -43,7 +43,7 @@ func setupReadingTestServer(t *testing.T) *Server {
 	for i, segID := range []string{"s1", "s2", "s3"} {
 		_ = store.CreateBookFile(&database.BookFile{
 			ID: segID, BookID: "b1", FilePath: "/tmp/" + segID,
-			TrackNumber: i + 1, Duration: 600,
+			TrackNumber: i + 1, Duration: database.Secs(600),
 		})
 	}
 	return srv

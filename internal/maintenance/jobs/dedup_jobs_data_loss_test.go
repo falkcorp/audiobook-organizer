@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_jobs_data_loss_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5e2b8c47-91d3-4f60-a7c8-2d4e6f1a9b30
-// last-edited: 2026-10-17
+// last-edited: 2026-11-04
 
 package jobs
 
@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // Regression tests for the dedup-books and fix-version-groups data-loss
@@ -240,7 +241,7 @@ func TestFixVersionGroups_AuthorDirRepointsRowsInPlace(t *testing.T) {
 	// path, which no longer exists, and records the size of the moved file.
 	old := ddMustFile(t, s, &database.BookFile{
 		BookID: book.ID, FilePath: filepath.Join(authorDir, "01.mp3"),
-		ITunesPersistentID: "PID-KEEP", Duration: 3600, FileSize: int64(len(ddAudioBytes)),
+		ITunesPersistentID: "PID-KEEP", Duration: database.Secs(3600), FileSize: int64(len(ddAudioBytes)),
 	})
 
 	j := &fixVersionGroupsJob{}
@@ -267,7 +268,7 @@ func TestFixVersionGroups_AuthorDirRepointsRowsInPlace(t *testing.T) {
 	if f.FilePath != filepath.Join(wantDir, "01.mp3") {
 		t.Errorf("row path = %q, want it repointed into the book's folder", f.FilePath)
 	}
-	if f.ITunesPersistentID != "PID-KEEP" || f.Duration != 3600 {
-		t.Errorf("per-file fields lost: pid=%q duration=%d", f.ITunesPersistentID, f.Duration)
+	if f.ITunesPersistentID != "PID-KEEP" || durtest.Sec(f.Duration) != 3600 {
+		t.Errorf("per-file fields lost: pid=%q duration=%d", f.ITunesPersistentID, durtest.Sec(f.Duration))
 	}
 }

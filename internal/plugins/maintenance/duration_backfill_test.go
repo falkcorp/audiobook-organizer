@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_test.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: 4a7d1e92-8c63-4f50-a1b8-3e6c9d2f5a04
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 func mustReextractParams(t *testing.T, dryRun bool, limit int) json.RawMessage {
@@ -202,8 +203,8 @@ func TestDurationReextract_MultiFileMissingSegmentsSkipped(t *testing.T) {
 		},
 		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
 			return []database.BookFile{
-				{ID: "s1", BookID: "bm", FilePath: "/nonexistent/01.mp3", Duration: 50},
-				{ID: "s2", BookID: "bm", FilePath: "/nonexistent/02.mp3", Duration: 50},
+				{ID: "s1", BookID: "bm", FilePath: "/nonexistent/01.mp3", Duration: database.Secs(50)},
+				{ID: "s2", BookID: "bm", FilePath: "/nonexistent/02.mp3", Duration: database.Secs(50)},
 			}, nil
 		},
 		UpdateBookFunc:     func(_ string, b *database.Book) (*database.Book, error) { writes++; return b, nil },
@@ -240,9 +241,9 @@ func TestDurationReextract_FingerprintDurationFirst(t *testing.T) {
 		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
 			return []database.BookFile{
 				// Stored Duration wildly wrong (the estimate bug); fingerprint says 1800s.
-				{ID: "s1", BookID: "bf", FilePath: "/nonexistent/01.mp3", Duration: 50, AcoustIDFingerprintDurationSec: 1800.0},
+				{ID: "s1", BookID: "bf", FilePath: "/nonexistent/01.mp3", Duration: database.Secs(50), AcoustIDFingerprintDurationSec: 1800.0},
 				// Stored Duration already within tolerance of the fingerprint value.
-				{ID: "s2", BookID: "bf", FilePath: "/nonexistent/02.mp3", Duration: 1801, AcoustIDFingerprintDurationSec: 1800.0},
+				{ID: "s2", BookID: "bf", FilePath: "/nonexistent/02.mp3", Duration: database.Secs(1801), AcoustIDFingerprintDurationSec: 1800.0},
 			}, nil
 		},
 		UpdateBookFileFunc: func(_ string, f *database.BookFile) error {
@@ -260,8 +261,8 @@ func TestDurationReextract_FingerprintDurationFirst(t *testing.T) {
 	if written[0].ID != "s1" {
 		t.Errorf("expected segment s1 to be corrected, got %q", written[0].ID)
 	}
-	if written[0].Duration != 1800 {
-		t.Errorf("corrected segment Duration = %d, want 1800 (rounded fingerprint)", written[0].Duration)
+	if durtest.Sec(written[0].Duration) != 1800 {
+		t.Errorf("corrected segment Duration = %d, want 1800 (rounded fingerprint)", durtest.Sec(written[0].Duration))
 	}
 }
 
@@ -297,9 +298,9 @@ func TestDurationReextract_MixedFingerprintAndFfprobe(t *testing.T) {
 		},
 		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
 			return []database.BookFile{
-				{ID: "s1", BookID: "bm", FilePath: "/nonexistent/01.mp3", Duration: 50, AcoustIDFingerprintDurationSec: 1800.0},
+				{ID: "s1", BookID: "bm", FilePath: "/nonexistent/01.mp3", Duration: database.Secs(50), AcoustIDFingerprintDurationSec: 1800.0},
 				// iTunes segment, no fingerprint -> ffprobe -> missing file -> unresolved
-				{ID: "s2", BookID: "bm", FilePath: "/nonexistent/02.mp3", Duration: 50, ITunesPersistentID: itunesPID},
+				{ID: "s2", BookID: "bm", FilePath: "/nonexistent/02.mp3", Duration: database.Secs(50), ITunesPersistentID: itunesPID},
 			}, nil
 		},
 		UpdateBookFileFunc: func(_ string, _ *database.BookFile) error { segWrites++; return nil },
@@ -360,7 +361,7 @@ func TestDurationReextract_ParallelWorkers_AllBooksProcessed(t *testing.T) {
 		},
 		GetBookFilesFunc: func(id string) ([]database.BookFile, error) {
 			return []database.BookFile{
-				{ID: id + "-s1", BookID: id, FilePath: "/nonexistent/01.mp3", Duration: 50, AcoustIDFingerprintDurationSec: 3600.0},
+				{ID: id + "-s1", BookID: id, FilePath: "/nonexistent/01.mp3", Duration: database.Secs(50), AcoustIDFingerprintDurationSec: 3600.0},
 			}, nil
 		},
 		UpdateBookFileFunc: func(_ string, f *database.BookFile) error {
@@ -392,7 +393,7 @@ func TestProcessBookForReextractMode_StoredDuration_NonITunes(t *testing.T) {
 		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
 			return []database.BookFile{
 				// no fingerprint, no iTunes PID, stored Duration=1800, file absent
-				{ID: "s1", FilePath: "/nonexistent/01.mp3", Duration: 1800},
+				{ID: "s1", FilePath: "/nonexistent/01.mp3", Duration: database.Secs(1800)},
 			}, nil
 		},
 	}
@@ -422,7 +423,7 @@ func TestProcessBookForReextractMode_StoredDuration_ITunes(t *testing.T) {
 	store := &database.MockStore{
 		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
 			return []database.BookFile{
-				{ID: "s1", FilePath: "/nonexistent/01.mp3", Duration: 1800, ITunesPersistentID: pid},
+				{ID: "s1", FilePath: "/nonexistent/01.mp3", Duration: database.Secs(1800), ITunesPersistentID: pid},
 			}, nil
 		},
 	}
@@ -449,7 +450,7 @@ func TestProcessBookForReextractMode_StoredDuration_BookITunesLinked(t *testing.
 		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
 			return []database.BookFile{
 				// segment has no iTunes PID, but the BOOK is iTunes-linked
-				{ID: "s1", FilePath: "/nonexistent/01.mp3", Duration: 1800},
+				{ID: "s1", FilePath: "/nonexistent/01.mp3", Duration: database.Secs(1800)},
 			}, nil
 		},
 	}
@@ -482,8 +483,8 @@ func TestDurationReextract_FingerprintIdempotent(t *testing.T) {
 		},
 		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
 			return []database.BookFile{
-				{ID: "s1", BookID: "bi", FilePath: "/nonexistent/01.mp3", Duration: 1800, AcoustIDFingerprintDurationSec: 1800.0},
-				{ID: "s2", BookID: "bi", FilePath: "/nonexistent/02.mp3", Duration: 1800, AcoustIDFingerprintDurationSec: 1800.0},
+				{ID: "s1", BookID: "bi", FilePath: "/nonexistent/01.mp3", Duration: database.Secs(1800), AcoustIDFingerprintDurationSec: 1800.0},
+				{ID: "s2", BookID: "bi", FilePath: "/nonexistent/02.mp3", Duration: database.Secs(1800), AcoustIDFingerprintDurationSec: 1800.0},
 			}, nil
 		},
 		UpdateBookFileFunc: func(_ string, _ *database.BookFile) error { writes++; return nil },
@@ -609,7 +610,7 @@ func driftedBookStore() (*database.MockStore, *[]string) {
 		},
 		GetBookFilesFunc: func(id string) ([]database.BookFile, error) {
 			return []database.BookFile{
-				{ID: id + "-s1", BookID: id, FilePath: "/nonexistent/01.mp3", Duration: 50, AcoustIDFingerprintDurationSec: 3600.0},
+				{ID: id + "-s1", BookID: id, FilePath: "/nonexistent/01.mp3", Duration: database.Secs(50), AcoustIDFingerprintDurationSec: 3600.0},
 			}, nil
 		},
 		UpdateBookFileFunc: func(_ string, f *database.BookFile) error {

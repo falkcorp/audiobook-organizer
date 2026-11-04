@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_slots_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 971a9404-c6e2-4b74-9aa9-4ba77e70ac10
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 package maintenance
 
@@ -21,8 +21,8 @@ import (
 func TestDurationBackfill_NormalModeSkipsVersionSlotRows(t *testing.T) {
 	var segWrites, bookWrites int
 	segs := []database.BookFile{
-		{ID: "01", BookID: "b1", FilePath: "/srv/library/Gotham/Batman Hush/01.m4a", FileSize: 50_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 3600.0},
-		{ID: "alt", BookID: "b1", VersionID: "v-alt", FilePath: "/srv/library/Gotham/Batman Hush/.versions/v-alt/01.m4a", FileSize: 51_000_000, Duration: 0, AcoustIDFingerprintDurationSec: 3700.0},
+		{ID: "01", BookID: "b1", FilePath: "/srv/library/Gotham/Batman Hush/01.m4a", FileSize: 50_000_000, AcoustIDFingerprintDurationSec: 3600.0},
+		{ID: "alt", BookID: "b1", VersionID: "v-alt", FilePath: "/srv/library/Gotham/Batman Hush/.versions/v-alt/01.m4a", FileSize: 51_000_000, AcoustIDFingerprintDurationSec: 3700.0},
 	}
 	store := bookWithSegs(t, segs, &segWrites, &bookWrites)
 	book := database.Book{ID: "b1", Title: "Batman: Hush", FilePath: "/srv/library/Gotham/Batman Hush", Duration: new(3000)}

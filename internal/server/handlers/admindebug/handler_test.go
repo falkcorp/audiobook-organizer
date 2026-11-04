@@ -1,7 +1,7 @@
 // file: internal/server/handlers/admindebug/handler_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 553f618b-e6c3-4b54-ad05-30f3d39136b9
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 package admindebug
 
@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -63,8 +64,8 @@ func newFixture(t *testing.T) *fixture {
 
 	book, err := store.CreateBook(&database.Book{Title: "Long Book", FilePath: "/srv/library/Author/Long Book"})
 	require.NoError(t, err)
-	known := &database.BookFile{BookID: book.ID, FilePath: "/srv/library/Author/Long Book/01.m4b", Duration: 1000}
-	broken := &database.BookFile{BookID: book.ID, FilePath: "/srv/library/Author/Long Book/02.m4b", Duration: 0}
+	known := &database.BookFile{BookID: book.ID, FilePath: "/srv/library/Author/Long Book/01.m4b", Duration: database.Secs(1000)}
+	broken := &database.BookFile{BookID: book.ID, FilePath: "/srv/library/Author/Long Book/02.m4b"}
 	require.NoError(t, store.CreateBookFile(known))
 	require.NoError(t, store.CreateBookFile(broken))
 	require.NoError(t, store.RecomputeBookAggregates(book.ID))
@@ -109,7 +110,7 @@ func (fx *fixture) fileDuration(t *testing.T, f *database.BookFile) int {
 	got, err := fx.store.GetBookFileByID(f.BookID, f.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	return got.Duration
+	return durtest.Sec(got.Duration)
 }
 
 func (fx *fixture) bookDuration(t *testing.T) int {
@@ -148,7 +149,7 @@ func TestPatchBookFile_PreviewWritesNothing(t *testing.T) {
 
 	after, err := fx.store.GetBookFileByID(fx.book.ID, fx.broken.ID)
 	require.NoError(t, err)
-	require.Equal(t, 0, after.Duration, "preview wrote the row")
+	require.Nil(t, after.Duration, "preview wrote the row")
 	require.True(t, before.UpdatedAt.Equal(after.UpdatedAt), "preview touched updated_at")
 	require.Equal(t, bookBefore, fx.bookDuration(t), "preview changed the book aggregate")
 	require.Zero(t, fx.editCount(t), "preview saved an undo image")
@@ -201,7 +202,7 @@ func TestPatchBookFile_ApplyRecomputesBookAndAudits(t *testing.T) {
 func TestPatchBookFile_StoreNormalisesAMillisecondDuration(t *testing.T) {
 	fx := newFixture(t)
 	r := fx.router(admin)
-	file := &database.BookFile{BookID: fx.book.ID, FilePath: "/lib/Gotham/Long Book/03.m4b", Duration: 1800, FileSize: 40_000_000}
+	file := &database.BookFile{BookID: fx.book.ID, FilePath: "/lib/Gotham/Long Book/03.m4b", Duration: database.Secs(1800), FileSize: 40_000_000}
 	require.NoError(t, fx.store.CreateBookFile(file))
 
 	w, out := do(t, r, http.MethodPatch, "/api/v1/admin/debug/book-files/"+file.ID+"?apply=true", `{"duration":3600000}`)
@@ -237,7 +238,7 @@ func TestUndo_RefusedAfterLaterChangeUnlessForced(t *testing.T) {
 
 	// Someone else changes the same field afterwards.
 	_, err := fx.store.ModifyBookFile(fx.book.ID, fx.broken.ID, func(f *database.BookFile) error {
-		f.Duration = 50000
+		f.Duration = database.Secs(50000)
 		return nil
 	})
 	require.NoError(t, err)
@@ -251,6 +252,35 @@ func TestUndo_RefusedAfterLaterChangeUnlessForced(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	require.Equal(t, true, out["forced"])
 	require.Equal(t, 0, fx.fileDuration(t, fx.broken))
+}
+
+// book_file.duration is a *int (nil = not measured). This API keeps showing and
+// accepting 0 for it: a PATCH of 0 clears the measurement and is stored as nil,
+// never as a pointer to 0, and an unmeasured file diffs from 0, not null.
+func TestPatchBookFile_ZeroDurationMeansNotMeasured(t *testing.T) {
+	fx := newFixture(t)
+	r := fx.router(admin)
+
+	w, out := do(t, r, http.MethodPatch, "/api/v1/admin/debug/book-files/"+fx.known.ID+"?apply=true", `{"duration":0}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	d := out["diff"].([]any)[0].(map[string]any)
+	require.EqualValues(t, 1000, d["before"])
+	require.EqualValues(t, 0, d["after"])
+	editID, _ := out["edit_id"].(string)
+	require.NotEmpty(t, editID)
+	row, err := fx.store.GetBookFileByID(fx.book.ID, fx.known.ID)
+	require.NoError(t, err)
+	require.Nil(t, row.Duration, "a PATCH of 0 must store not-measured, not a pointer to 0")
+
+	// Already unmeasured: 0 is no change, not a null -> 0 edit.
+	w, out = do(t, r, http.MethodPatch, "/api/v1/admin/debug/book-files/"+fx.broken.ID+"?apply=true", `{"duration":0}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Equal(t, true, out["no_change"])
+
+	// Undoing the first edit puts the measurement back.
+	w, _ = do(t, r, http.MethodPost, "/api/v1/admin/debug/edits/"+editID+"/undo", "")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Equal(t, 1000, fx.fileDuration(t, fx.known))
 }
 
 func TestPatch_RejectsUnknownAndIdentityFields(t *testing.T) {
@@ -336,7 +366,7 @@ func TestRegister_ReadGateOpensReadsOnly(t *testing.T) {
 func TestITunesGuard(t *testing.T) {
 	fx := newFixture(t)
 	r := fx.router(admin)
-	it := &database.BookFile{BookID: fx.book.ID, FilePath: "/srv/books/itunes/Author/Book/01.m4b", Duration: 0}
+	it := &database.BookFile{BookID: fx.book.ID, FilePath: "/srv/books/itunes/Author/Book/01.m4b"}
 	require.NoError(t, fx.store.CreateBookFile(it))
 
 	// A non-path field of a row under the frozen iTunes tree is editable.
@@ -402,7 +432,7 @@ func TestGetBook_ListsRetiredRowsFlagged(t *testing.T) {
 	fx := newFixture(t)
 	shell, err := fx.store.CreateBook(&database.Book{Title: "The Dark Knight Returns", FilePath: "/lib/Gotham/Bruce Wayne/The Dark Knight Returns"})
 	require.NoError(t, err)
-	retiredRow := &database.BookFile{BookID: shell.ID, FilePath: "/lib/Gotham/Bruce Wayne/The Dark Knight Returns/01.m4b", FileHash: "h-ret", Duration: 50}
+	retiredRow := &database.BookFile{BookID: shell.ID, FilePath: "/lib/Gotham/Bruce Wayne/The Dark Knight Returns/01.m4b", FileHash: "h-ret", Duration: database.Secs(50)}
 	require.NoError(t, fx.store.CreateBookFile(retiredRow))
 	ver, err := fx.store.CreateBookVersion(&database.BookVersion{
 		BookID: fx.book.ID, Status: database.BookVersionStatusRetired, Format: "m4b", Source: "retired_book",
