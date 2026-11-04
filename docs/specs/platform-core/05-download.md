@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-download.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 513fb395-c640-4bb6-b76c-d9fe80b3224e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -54,19 +54,21 @@ before `acquire`, their only consumer, exists to validate them. Phase 2 adds `Ad
 
 ### Deferred-build members
 
-The phase-2 members of this built package (the §1 table's phase-2 row). None is in the 09 S7 build; each is
-absent per `archtest.DeferredMembersAbsent` (03 §3.4), matched package-qualified so that `audit.Event` or
-`events.Watch…` never match `download.Event` or `download.Watch`, and the PR that builds a member deletes its row
-(SIMP4-1, COR4-19). This covers the grab pipeline the 09 S7 done-check wants absent.
+The phase-2 members of this built package (the §1 table's phase-2 row). None is in the 09 S7 build. The first
+column holds only package-qualified Go identifiers (so that `audit.Event` or `events.Watch…` never match
+`download.Event` or `download.Watch`), each absent from non-test files under `core/` per
+`archtest.DeferredMembersAbsent` (03 §3.4); topics, task kinds and keys are in the second column and are not checked
+(03 §3.4 grammar, SIMP5-6). The PR that builds a member deletes its row (SIMP4-1, COR4-19). This covers the grab
+pipeline the 09 S7 done-check wants absent.
 
-| Member | Lands with | Contract |
-|---|---|---|
-| `download.Adder`, `download.Remover`, `download.Categorizer`, `download.Pauser`, `download.SeedLimiter` | `acquire` (phase 2) | §3 optional capabilities |
-| `download.Caps.Add`, `.ClientFetchesURL`, `.CreateCategory`, `.Tags`, `.Pause`, `.SeedGoals`, `.RemoveWithData`, `.PostImportCategory`, `.Priority`; `download.SeedGoalCaps` | `acquire` | §3 `Caps` comment (appended fields, SIMP3-4) |
-| `download.GrabRequest`, `download.ResolvedGrab`, `download.GrabID`, `download.AddResult`, `download.Source`, `download.Priority`, `download.SeedGoal`, `download.RemoveOptions`, `download.Selection`, `download.RecordFunc`, `download.ImportOutcome` | `acquire` | §3 grab types, §4.3 |
-| `download.Pool.Grab`, `download.Pool.Remove`, `download.Pool.MarkImported`, `download.Pool.Refresh`, `download.Pool.Tracked`, `download.Tracked`, `download.TrackedFilter` | `acquire` | §3, §4.3, §4.5 |
-| `download.Watch`, `module.Registrar.DownloadWatch` | `acquire` | §3 `Watch` |
-| `download.Event`, `download.EventKind`, topic `core.download.item.transitioned.v1`, task kind `core.download.poll`, keys `core.download.schedules.poll`, `core.download.removed_after`, `core.download.warning_to_failed`, `core.download.pending_recovery`, `core.download.snapshot_retention` | `acquire` | §3 topic table, §4.5, §7 |
+| Member | Also deferred (not checked) | Lands with | Contract |
+|---|---|---|---|
+| `download.Adder`, `download.Remover`, `download.Categorizer`, `download.Pauser`, `download.SeedLimiter` | — | `acquire` (phase 2) | §3 optional capabilities |
+| `download.Caps.Add`, `download.Caps.ClientFetchesURL`, `download.Caps.CreateCategory`, `download.Caps.Tags`, `download.Caps.Pause`, `download.Caps.SeedGoals`, `download.Caps.RemoveWithData`, `download.Caps.PostImportCategory`, `download.Caps.Priority`, `download.SeedGoalCaps` | — | `acquire` | §3 `Caps` comment (appended fields, SIMP3-4) |
+| `download.GrabRequest`, `download.ResolvedGrab`, `download.GrabID`, `download.AddResult`, `download.Source`, `download.Priority`, `download.SeedGoal`, `download.RemoveOptions`, `download.Selection`, `download.RecordFunc`, `download.ImportOutcome` | — | `acquire` | §3 grab types, §4.3 |
+| `download.Pool.Grab`, `download.Pool.Remove`, `download.Pool.MarkImported`, `download.Pool.Refresh`, `download.Pool.Tracked`, `download.Tracked`, `download.TrackedFilter` | — | `acquire` | §3, §4.3, §4.5 |
+| `download.Watch`, `module.Registrar.DownloadWatch` | — | `acquire` | §3 `Watch` |
+| `download.Event`, `download.EventKind` | topic `core.download.item.transitioned.v1`; task kind `core.download.poll`; keys `core.download.schedules.poll`, `core.download.removed_after`, `core.download.warning_to_failed`, `core.download.pending_recovery`, `core.download.snapshot_retention` | `acquire` | §3 topic table, §4.5, §7 |
 
 Out of scope: release selection and the decision engine (10), indexers ([05-indexer](05-indexer.md)), file
 import operations (hardlink/copy/move, [05-library](05-library.md)).
@@ -403,8 +405,10 @@ a Durable topic; COR2-17).
 
 ### 4.1 Instances and adapters
 
-Instances are `download/<id>` records in the one instance registry (05-metadata §M1, SIMP-4; stored by the
-native store, or for ABO's Deluge by the app's legacy store, R4-1); secrets are
+Instances are `download/<id>` records in the one instance registry (05-metadata §M1, SIMP-4; routed per record:
+ABO's Deluge by the app's legacy store, which covers only the singleton ID `download/deluge`, and every other
+instance by the native store, R4-1, SIMP5-1). A natively stored instance (a second client) does not exist for an
+older build: after a rollback it does nothing (05-metadata M1.4 native store, OPS5-12). Secrets are
 `integrations.download.<id>.<field>` (05-config §2.3 grammar). Secret fields per adapter: Deluge `password`;
 qBittorrent `username`, `password`; Transmission `username`, `password`; SABnzbd `api_key`; NZBGet
 `username`, `password`. Every adapter declares `Meta.Egress = EgressConfigured`: a client on the LAN (the
@@ -643,7 +647,7 @@ client with a scriptable clock-driven state machine (`Advance(id, State)`), capa
 |---|---|
 | `internal/deluge/client.go` | `core/integrations/download/deluge` adapter (`core.deluge`); RPC/auth code reused; every method gains ctx; `http.Client` from `env.HTTP` (5-minute timeout becomes per-op limits) |
 | `deluge.GetClient()` global, `ResetGlobalClientForTest`, `SetGlobalClientForTest` | deleted; `Pool.Lease` |
-| `DelugeWebURL/Password`, `download_client.torrent.deluge` | the **legacy-backed** instance `download/deluge` (05-metadata M1.4 step 2a, M1.10; R4-1): its URL and settings stay in the config blob, served in place by books' legacy instance store (ABO code; no core adapter and no grant) until the integrations cutover, which is outside the extraction; nothing is copied into `c/integrations/instances/`, so the current build and any older build read the same values. The password moves to `secrets` as `integrations.download.deluge.password` the first time this build writes it, and in that batch books' store replaces the blob value, and every other plaintext copy, with the never-matching sentinel (05-config §2.2, R4-2) — not a blank, which an older build would replace with Deluge's factory-default password (`internal/deluge/integration.go:27-67` @748fd787a). After a rollback the older build's Deluge login therefore fails until the operator re-enters the password there (stated in the release note); a value re-entered that way is re-imported on roll-forward. `Local` is native-only: books' store keeps it in its extension family, granted once, at S7, only when the host is an IP-literal loopback or private address, bound to that host, and suspended until an admin confirms it (`Registry.Confirm`) if an older build changes the instance (05-metadata M1.10 egress trust, M1.4 step 2a; SEC3-5). Env-authoritative behaviour is preserved as an **in-memory operator overlay** on the effective instance while an operator value is set — never written to the blob, the extension record or `c/secrets/`, so removing the env value restores the stored password as HEAD does (env names permanent, 05-metadata M1.4 step 2, SIMP2-5) |
+| `DelugeWebURL/Password`, `download_client.torrent.deluge` | the **legacy-backed** instance `download/deluge` (05-metadata M1.4 step 2a, M1.10; R4-1): its URL and settings stay in the config blob, served in place by books' legacy instance store (ABO code; no core adapter and no grant) until the integrations cutover, which is outside the extraction; nothing is copied into `c/integrations/instances/`, so the current build and any older build read the same values. The password moves to `secrets` as `integrations.download.deluge.password` the first time this build writes it, and in that batch books' store replaces the blob value, and every other plaintext copy, with the never-matching sentinel (05-config §2.2, R4-2) — not a blank, which an older build would replace with Deluge's factory-default password (`internal/deluge/integration.go:27-67` @748fd787a). After a rollback the older build's Deluge login therefore fails until the operator re-enters the password there (stated in the release note); a value re-entered that way is re-imported on roll-forward. `Local` is native-only: books' store keeps it in its extension family. The S7 upgrade grants none: when the host is an IP-literal loopback or private address, the S7 books migration records it as a pending candidate bound to that URL origin, and the instance cannot reach it until an admin accepts it (`Registry.Confirm`, audited; release note); an older build's change of the instance suspends a granted `Local` until an admin confirms it again (05-metadata M1.10 egress trust, M1.4 step 2a; SEC3-5, DATA5-9). The Deluge password is plaintext in the blob at HEAD, so it moves as described above; it is not one of the secrets HEAD already encrypts, which stay in place (R5-1(b), 05-metadata M1.4 step 2a). Env-authoritative behaviour is preserved as an **in-memory operator overlay** on the effective instance while an operator value is set — never written to the blob, the extension record or `c/secrets/`, so removing the env value restores the stored password as HEAD does (env names permanent, 05-metadata M1.4 step 2, SIMP2-5) |
 | `deluge_move_enabled`, `deluge_discovery_label`, `deluge_discovery_enabled` | `modules.books.download.*` settings (they are ABO behaviour, not client config) |
 | `BookVersion.TorrentHash`, `BookFile.DelugeHash` | **phase 1: unchanged** — no books row rewrite; books builds `download.ItemRef{Instance: download/deluge, ID: ItemID(hash)}` at the call site. Storing `ItemRef` is the phase-2 books migration (§1 table), with its own stage entry when it ships (SIMP2-7) |
 | `NotifyDelugeAfterOrganize/AfterVersionSwap/MoveStorage(ToDir)` | books code calling `Pool.Relocate` (reached as `module.Deps.Downloads`, COR-1) for every `ItemRef` of the book's active versions, behind `Caps.Relocate` |
@@ -750,3 +754,12 @@ Round 4 (`docs/plans/platform-core/reviews/spec-round-4-dispositions.md`):
   defence in depth in acquire (10).
 - COR4-15 — the durable topic is `core.download.item.transitioned.v1` (03 topic grammar).
 - SIMP4-1 / COR4-19 — `Deferred-build members` heading in §1 listing the phase-2 members package-qualified.
+
+Round 5 (`docs/plans/platform-core/reviews/spec-round-5-dispositions.md`):
+
+- SIMP5-6 — §1 `Deferred-build members` table: every `Caps` field package-qualified; topic, task kind and keys moved
+  to an unchecked column.
+- SIMP5-1 — §4.1: instances routed per record (legacy store covers only `download/deluge`; the rest native).
+- DATA5-9 — §10 Deluge row: the upgrade grants no `Local`; a pending candidate an admin accepts.
+- R5-1(b) — §10 Deluge row: the plaintext Deluge password still moves; the HEAD-encrypted secrets stay in place.
+- OPS5-12 — §4.1: a natively stored download client does nothing after a rollback.

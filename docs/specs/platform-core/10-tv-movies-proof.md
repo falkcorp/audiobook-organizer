@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/10-tv-movies-proof.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: e9ed438b-6097-4a4d-8b51-d2eacaca8221 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -151,7 +151,7 @@ predicate that depends on the clock or on hot-reloadable config.
 
 | Capability | Core package (spec) | How `tv` uses it |
 |---|---|---|
-| Persisted core state | `auth`, `rbac`, `tasks`, `integrations`, `providerhttp` (and `ai`, unused) | No module of the TV app sets `Manifest.LegacyStores` (06 §6.4.2): it has no pre-core data, so every core service uses its **native store** under `c/<subsystem>/` — users, keys and identities ([05-authn](05-authn.md)), roles ([05-rbac](05-rbac.md)), runs, queues, clocks and stamps ([05-tasks](05-tasks.md)), integration instances (download clients, indexers, notification channels: `NativeInstanceStore`, [05-metadata](05-metadata.md) M1.4), provider holds and daily quotas (`NativeGateStore`, M2.4), notification rules (`NativeRuleStore`, [05-notify](05-notify.md) §3) and AI batch jobs (`NativeJobStore`, [05-ai](05-ai.md) §4; TV/Movies consume no AI). No legacy key name, row format, extension family or storage grant exists in this app (R4-1, SIMP4-3). |
+| Persisted core state | `auth`, `rbac`, `tasks`, `integrations`, `providerhttp` (and `ai`, unused) | No module of the TV app sets `Manifest.LegacyStores` (06 §6.4.2): it has no pre-core data, so every core service of 03 §3.3's "Store interfaces" table uses its **native store** under `c/<subsystem>/`, alone — for an exclusive store because no legacy one replaces it, and for a routed store (instances, gates, rules; 05-metadata M1.1, SIMP5-1) because no legacy store covers any record, so the native store serves every one and no legacy capability (`storage.Covering`, `storage.ExtConfirmer`, 05-storage §5S.3.11) is ever consulted: users, keys and identities ([05-authn](05-authn.md)), roles ([05-rbac](05-rbac.md)), runs, queues, clocks and stamps ([05-tasks](05-tasks.md)), integration instances (download clients, indexers, notification channels: `NativeInstanceStore`, [05-metadata](05-metadata.md) M1.4), provider holds and daily quotas (`NativeGateStore`, M2.4), notification rules (`NativeRuleStore`, [05-notify](05-notify.md) §3) and AI batch jobs (`NativeJobStore`, [05-ai](05-ai.md) §4; TV/Movies consume no AI). No legacy key name, row format, extension family or storage grant exists in this app (R4-1, SIMP4-3). |
 | Storage keyspace | `storage` ([05-storage](05-storage.md)) | `Deps.Storage` hands the module `Keyspace("m/tv/")`; writes outside it are refused (R8). Scans are `codec.Typed[Series].All` (`iter.Seq2[Series, error]`). Integer IDs from `Keyspace.Sequence("series").Next` (§10.4 G10). |
 | Tasks | `tasks` ([05-tasks](05-tasks.md)) | Module task kinds: `tv.metadata.refresh` (every 12 h like Sonarr, `raw/16 §1.1` notes, on `tasks.ScheduleFromConfig("modules.tv.metadata.schedules.refresh")`, default `{enabled: true, every: 12h}`, §10.5.7; `tasks.Fixed(4, "metadata provider rate limits")`), `tv.search.missing`, `tv.search.series`, `tv.search.episodes`, `tv.disk.rescan` (`tasks.CPU()`; per-series partition), `tv.recent.search` (aired in last 14 days or 1 day ahead, `raw/16 §1.3`). RSS sync is a **core** `acquire` task and download polling a **core** `integrations/download` task (§10.5.4); neither is the module's. The import of a completed download **is** the module's: kind `tv.acquire.import`, built by `acquire.ImportTask` and registered by `tv` (§10.5.4, COR2-11), so its writes run under `tv`'s own `Effects`. Every `RunItems` declares parallelism (R7). Any cadence a `tv.*` or `movies.*` kind gets is a declared module schedule key of this shape (R2-7); in this proof only `tv.metadata.refresh` has one (SIMP3-9). |
 | RSS sync & search | `acquire` + `integrations/indexer` | The module registers an `acquire.MediaType[tv.Target]` (§10.5.3), reaching the service as `module.Deps.Acquire` (06, COR-1): Newznab categories (TV 5000 family + anime 5070, `raw/16 §4.2`) and RSS type `TypeTV`, a release parser, a mapper release → series/episodes, its search-criteria builder (`t=tvsearch` + `tvdbid/tmdbid/imdbid`, `season`/`ep`; daily `season=<yyyy>&ep=<MM>/<dd>`; anime `q=<title>+<abs>`, `raw/16 §1.2, §4.2`), and its own specs (§10.5.3 table). |
@@ -551,6 +551,9 @@ type MediaType[T Target] struct {
 	Importer    Importer[T]
 	Research    func(ctx context.Context, refs []entity.Ref) error // G14
 	Search      SearchBuilder[T]
+	// DefaultProfiles are this module's seed profiles, written once by acquire
+	// at its start (§10.5.4 step 3; COR5-8), never by a module migration.
+	DefaultProfiles []QualityProfile
 }
 
 type SearchBuilder[T Target] interface {
@@ -701,8 +704,17 @@ unavailable monitored movie in the pending store on every sync until `core.acqui
    `ix/tracked-by-grab/<grabID>`, `ix/tracked-by-ref/<module>/<kind>/<id>/<tdID>` (live tracked downloads per
    entity, COR-7), `history/<ulid>`, `ix/history-by-ref/<module>/<kind>/<id>/<ulid>`, `blocklist/<ulid>`,
    `ix/blocklist-by-ref/<module>/<kind>/<id>/<ulid>`, `ix/blocklist-by-hash/<hash>`,
-   `ix/import-retry/<due:be64-unix>/<tdID>` (ImportPending TDs awaiting a retry). Seed data (default
-   profiles per module) is the module's migration, not acquire's.
+   `ix/import-retry/<due:be64-unix>/<tdID>` (ImportPending TDs awaiting a retry), `seeded/<module>`. **Seed data
+   (COR5-8).** Default profiles per module are seed data the module declares (`MediaType.DefaultProfiles`) and
+   acquire writes, not a migration: a module's migration may write only its own keyspace (R8), never
+   `c/acquire/`, and the fresh-install stamp records every non-seed versioned step as applied without running it
+   (05-storage §5S.4 step 6), which on a TV or Movies app — always a fresh install — would leave no profiles. When
+   acquire starts (06 §6.5.2 start order: after registration, before listeners), it writes, in one batch per module,
+   the declared defaults and the `seeded/<module>` marker for every registered module that has defaults and no
+   marker; a module with a marker is never seeded again, so an admin's deletion of a default profile is kept. A
+   fresh install and a module enabled later both get their defaults. A module's own seed data in `m/<module>/` is
+   a seed step of its migrations (`storage.Migration{Seed: true}`, `Additive`, 05-storage §5S.3.5), which the
+   fresh-install stamp leaves pending so that it runs in P4b.
 4. **Tasks** (03 §3.6 kinds; every schedule is a declared key registered through `tasks.ScheduleFromConfig`,
    R2-7):
 
@@ -897,6 +909,7 @@ Per-App registry (R5). Label values are bounded enums or configured names.
 | `TestMinimumAvailabilityAtQueryTime` | availability passing overnight and a delay change need no index rewrite; user search bypasses it (COR-6) |
 | `TestRSSFeedPerModule` | TV and Movies sharing an indexer each get their own RSS type and cursor (COR-25) |
 | `TestVocabularyRegisterIdempotent` | equal content twice is fine; different content fails boot |
+| `TestFreshInstallSeedsDefaultProfiles` | a fresh store booted with the toy media type of `coretest/acquiretest` has its `DefaultProfiles` and the `seeded/<module>` marker after boot; a second boot writes nothing; a deleted default stays deleted; a module enabled on an existing store is seeded at its first start (COR5-8) |
 | `TestRefsAcrossModules` | `tv` and `movies` refs in one keyspace never collide |
 | `TestQueueViewFiltersByModule` | caller without `movies:view` sees no movie items |
 | `TestSpecPanicFailsClosed` / `TestDuplicateCategoryClaimFailsBoot` | |
@@ -1046,3 +1059,12 @@ Round 4 (`docs/plans/platform-core/reviews/spec-round-4-dispositions.md`):
   `Grabbing → Downloading → ImportPending`/`ImportBlocked` in one transition (transition table, test
   `TestCompletedOnGrabbingAppliesInOneTransition`).
 - COR4-15 — download's durable topic renamed `core.download.item.transitioned.v1` throughout.
+
+Round 5 (`docs/plans/platform-core/reviews/spec-round-5-dispositions.md`):
+
+- COR5-8 — §10.5.4 step 3: default profiles are seed data (`MediaType.DefaultProfiles`) written once per module by
+  acquire at its start with a `seeded/<module>` marker, because a module migration cannot write `c/acquire/` (R8)
+  and the fresh-install stamp skips non-seed steps; a module's own `m/<module>/` seed data is a
+  `Migration{Seed: true}` step; `TestFreshInstallSeedsDefaultProfiles`.
+- SIMP5-1 / SIMP5-4 / SIMP5-8 — §10.1.2 "Persisted core state": cites 03 §3.3's one store list; routed stores serve
+  every record natively for an app without legacy stores, and no legacy capability is consulted.

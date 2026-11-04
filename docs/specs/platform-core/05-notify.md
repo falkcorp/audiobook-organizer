@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-notify.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 785812fd-5ddd-4540-be24-d061c0127788 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -40,15 +40,17 @@ Out of scope: transactional mail that is not a notification (invites, password r
 
 ### Deferred-build members
 
-The right-hand column of the v1 table, as identifiers of this built package. None is in the 09 S7 build; each is
-absent per `archtest.DeferredMembersAbsent` (03 §3.4), and the PR that builds a member deletes its row (SIMP4-1):
+The right-hand column of the v1 table. None is in the 09 S7 build. The first column holds only package-qualified Go
+identifiers, each absent from non-test files under `core/` per `archtest.DeferredMembersAbsent` (03 §3.4); adapter
+IDs, routes and keys are in the second column and are not checked (03 §3.4 grammar, SIMP5-6). The PR that builds a
+member deletes its row (SIMP4-1):
 
-| Member | Lands with | Contract |
-|---|---|---|
-| adapter `core.inbox` and its read routes | a second app or the owner's request | in-app inbox and the UI bell (07) |
-| `notify.Target.Recipient`, `notify.Subscription` | per-user subscriptions | per-user routing filtered by the recipient's permissions at delivery |
-| `integrations.InstanceConfig.Owner`, key `core.notify.personal_channels` (default `false`) | personal channels | user-owned instances (removed from v1 by SIMP-10) |
-| `notify.Template` | templating | per-instance/per-topic templates and the ntfy, Gotify, Apprise and `custom` presets |
+| Member | Also deferred (not checked) | Lands with | Contract |
+|---|---|---|---|
+| | adapter `core.inbox` and its read routes | a second app or the owner's request | in-app inbox and the UI bell (07) |
+| `notify.Target.Recipient`, `notify.Subscription` | — | per-user subscriptions | per-user routing filtered by the recipient's permissions at delivery |
+| `integrations.InstanceConfig.Owner` | key `core.notify.personal_channels` (default `false`) | personal channels | user-owned instances (removed from v1 by SIMP-10) |
+| `notify.Template` | the ntfy, Gotify, Apprise and `custom` presets | templating | per-instance/per-topic templates |
 
 ## 2. Current state at HEAD
 
@@ -177,15 +179,20 @@ func (s *Service) DeleteRule(ctx context.Context, id string) error
 func (s *Service) Rules(ctx context.Context) iter.Seq2[Rule, error]
 
 // RuleStore persists Rules (R4-1). SDK surface, frozen by the API-stability
-// gate. Core ships NativeRuleStore over c/notify/rules/<id>
-// (codec.JSON[notify.Rule](1); lands with notify at 09 S7, SIMP4-3); an app
-// whose routing predates core passes a legacy implementation as
-// Manifest.LegacyStores.NotifyRules (06). The Service sends a rule to the
-// legacy store when it Covers the rule's ID, else to the native store. A
-// legacy store refuses a rule its format cannot express with
-// ErrRuleNotExpressible (422).
+// gate, holding only the native contract (SIMP5-4). Core ships
+// NativeRuleStore over c/notify/rules/<id> (codec.JSON[notify.Rule](1); lands
+// with notify at 09 S7, SIMP4-3); an app whose routing predates core passes a
+// legacy implementation as Manifest.LegacyStores.NotifyRules (06). Store
+// model: ROUTED per record (05-metadata M1.1, SIMP5-1): both stores serve at
+// once, and the Service sends a rule to the legacy store when that store
+// covers the rule's ID, else to the native store. Coverage is the optional
+// storage.Covering capability (Covers(id) with id = Rule.ID; 05-storage
+// §5S.3.11 "Legacy capabilities"), detected by type assertion at P4c and
+// asserted at compile time by the legacy store; a store without it covers
+// every rule, so the native store implements none, and the capability goes
+// with the legacy store at the integrations cutover. A legacy store refuses a
+// rule its format cannot express with ErrRuleNotExpressible (422).
 type RuleStore interface {
-	Covers(id string) bool
 	Load(ctx context.Context) ([]Rule, error)
 	Put(ctx context.Context, b *storage.Batch, r Rule) error
 	Delete(ctx context.Context, b *storage.Batch, id string) error
@@ -272,7 +279,7 @@ delays another. Each `Send` runs under its own timeout derived from a detached, 
 ## 7. Config keys
 
 Channel instances are records in the one instance registry (05-metadata M1, SIMP-4), not config keys: native
-rows, or legacy-backed webhooks served by the app's legacy instance store (§10, R4-1); secrets are
+rows, or legacy-backed webhooks served by the app's legacy instance store, routed per record (§10, R4-1, SIMP5-1); secrets are
 `integrations.notify.<id>.<field>` (05-config §2.3 grammar). Rules are data in a `RuleStore` (§3): native rules in
 `c/notify/rules/<id>`; for ABO, the one legacy-backed rule `legacy-webhooks` is served by books' legacy rule store
 from the legacy webhook event list (§10).
@@ -310,8 +317,11 @@ of 05-metadata M1.3; rules need `core:integrations.manage` plus each named topic
 `TestWebhook_PrivateURLNeedsLocal`, `TestEmail_ReusesMailTLSRules` (the `internal/mail` tests move with it),
 `TestDeliver_EntryOlderThanMaxAgeDeadLettered` (synctest; the rollback case of OPS2-20),
 `TestNativeRuleStore_RoundTrip` (SIMP4-3), `TestRules_LegacyCoveredIDGoesToLegacyStore` (with a fake legacy
-`RuleStore`; R4-1), `TestPutRule_NotExpressibleRefused` (422). Store conformance: `notifytest.RuleStoreSuite(t,
-factory)` (public, in `coretest`) runs against `NativeRuleStore`, and an app runs it against its legacy store; books'
+`RuleStore` implementing `storage.Covering`: a covered ID goes only to it, every other rule only to
+`c/notify/rules/`; R4-1, SIMP5-1), `TestRules_NativeStoreCoversAll` (a store without `storage.Covering` is sent every
+rule; SIMP5-4), `TestPutRule_NotExpressibleRefused` (422). Store conformance: `notifytest.RuleStoreSuite(t,
+factory)` (public test-support package `integrations/notify/notifytest`, 03 §3.3, MOD5-6) runs against
+`NativeRuleStore`, and an app runs it against its legacy store; books'
 own tests of its stores, with HEAD fixtures, cover the legacy webhook format: a Delete blanks its list entry so
 later IDs are unchanged and HEAD's parser sees the remaining URLs, and the `legacy-webhooks` rule reads and writes
 the legacy event list and refuses a topic outside the twelve-name mapping (§10).
@@ -324,8 +334,8 @@ Fakes: `coretest.FakeNotifier` (records `Send` calls; scriptable classes) and `c
 | ABO | Becomes |
 |---|---|
 | `internal/mail` (`Sender`, `SMTPSender`, `Message`) | `core/integrations/notify/mail` (public `mail.Sender` stays the primitive for transactional mail); `core.email` channel wraps it |
-| `smtp_*` keys | no stored form at HEAD (environment only, 05-metadata M1.10): operator-set `smtp_*` values are the in-memory overlay that yields the effective `notify/email` instance (`Stored=false`) while set, never persisted (05-metadata M1.4 step 2, SIMP2-5); a `notify/email` saved through the API is a native row (password in `secrets` as `integrations.notify.email.password`) that older builds never read — they keep reading the environment. Invites keep their own `mail.Sender` (05-authn): before S7 it is built from the legacy SMTP settings as today; from S7 the kernel builds it from the effective `notify/email` settings, so SMTP is configured once (an S7-or-later change that 05-authn records; SIMP2-4) |
-| `internal/plugins/webhook` + `config.Plugins["webhook"]` | at 09 S7 (with the instance registry; SIMP2-4) the webhook plugin is replaced by **legacy-backed** `notify/webhook-<n>` instances, served in place from `plugins.webhook` by books' legacy instance store (ABO code; no core adapter and no grant) until the integrations cutover (05-metadata M1.4 step 2a, M1.10; R4-1). `n` is the 1-based position in the comma-separated `urls` list, empty entries counted: books' store blanks the entry on a Delete and appends on a create, so under this build positions — and with them instance IDs and rule references — never shift, and HEAD's parser, which skips empty entries (`internal/plugins/webhook/plugin.go:48-53` @748fd787a), sees exactly the remaining URLs. `legacy_headers` is on for every legacy-backed webhook. The legacy `secret`, `plugins.webhook.enabled` and `events` are family-level (`Shared`): the secret moves to `secrets` on this build's first write, staged under each instance's name, and books' store replaces the blob value with the never-matching sentinel (05-config §2.2, R4-2), so after a rollback the older build signs with the sentinel and receivers reject its deliveries until the operator re-enters the secret there (stated in the release note); `events` is the stored form of the one legacy-backed global `Rule` `legacy-webhooks`, served by **books' legacy `RuleStore`** (`Manifest.LegacyStores.NotifyRules`), which targets every legacy-backed webhook and whose topics are the books topics of the mapping row below (`all` or empty = HEAD's default list, `plugin.go:146-159`); a `PutRule` on it accepts only those twelve topics and `MinSeverity` info (422 `ErrRuleNotExpressible` otherwise; other routing uses native rules). `Local` follows 05-metadata M1.10: granted once, IP-literal private hosts only, bound to the URL's origin, kept in books' extension family. If an older build reorders or edits the list after a rollback, the legacy-field hash no longer matches: that position's `Local` is suspended until an admin confirms it (`Registry.Confirm`), and its `secrets` copy is used only while the URL origin equals the one it was written for (05-metadata M1.4 step 2a) |
+| `smtp_*` keys | no stored form at HEAD (environment only, 05-metadata M1.10): operator-set `smtp_*` values are the in-memory overlay that yields the effective `notify/email` instance (`Stored=false`) while set, never persisted (05-metadata M1.4 step 2, SIMP2-5); a `notify/email` saved through the API is a native row (password in `secrets` as `integrations.notify.email.password`) that older builds never read — they keep reading the environment. Like every native instance and native rule, it does nothing after a rollback, and events during the rollback are never delivered to it; only deliveries already pending in `c/outbox/` are sent on roll-forward, if fresher than `core.notify.max_age` (§4 step 3; 05-metadata M1.4 native store; OPS5-12). Invites keep their own `mail.Sender` (05-authn): before S7 it is built from the legacy SMTP settings as today; from S7 the kernel builds it from the effective `notify/email` settings, so SMTP is configured once (an S7-or-later change that 05-authn records; SIMP2-4) |
+| `internal/plugins/webhook` + `config.Plugins["webhook"]` | at 09 S7 (with the instance registry; SIMP2-4) the webhook plugin is replaced by **legacy-backed** `notify/webhook-<n>` instances, served in place from `plugins.webhook` by books' legacy instance store (ABO code; no core adapter and no grant) until the integrations cutover (05-metadata M1.4 step 2a, M1.10; R4-1). `n` is the 1-based position in the comma-separated `urls` list, empty entries counted: books' store blanks the entry on a Delete and appends on a create, so under this build positions — and with them instance IDs and rule references — never shift, and HEAD's parser, which skips empty entries (`internal/plugins/webhook/plugin.go:48-53` @748fd787a), sees exactly the remaining URLs. `legacy_headers` is on for every legacy-backed webhook. The legacy `secret`, `plugins.webhook.enabled` and `events` are family-level (`Shared`): the secret moves to `secrets` on this build's first write, staged under each instance's name, and books' store replaces the blob value with the never-matching sentinel (05-config §2.2, R4-2), so after a rollback the older build signs with the sentinel and receivers reject its deliveries until the operator re-enters the secret there (stated in the release note); `events` is the stored form of the one legacy-backed global `Rule` `legacy-webhooks`, served by **books' legacy `RuleStore`** (`Manifest.LegacyStores.NotifyRules`), which targets every legacy-backed webhook and whose topics are the books topics of the mapping row below (`all` or empty = HEAD's default list, `plugin.go:146-159`); a `PutRule` on it accepts only those twelve topics and `MinSeverity` info (422 `ErrRuleNotExpressible` otherwise; other routing uses native rules). `Local` follows 05-metadata M1.10: the S7 upgrade grants none; a webhook whose host is an IP-literal private address is offered once as a pending `Local` candidate bound to the URL's origin, kept in books' extension family, which an admin accepts with `Registry.Confirm` (DATA5-9). If an older build reorders or edits the list after a rollback, the legacy-field hash no longer matches: that position's `Local` is suspended until an admin confirms it (`Registry.Confirm`), and its `secrets` copy is used only while the URL origin equals the one it was written for (05-metadata M1.4 step 2a) |
 | plugin event types (`internal/plugin/events.go:18-31`) | books event topics declared notifiable in the events catalog: `book.imported`→`books.book.imported.v1`, `book.deleted`→`books.book.deleted.v1`, `metadata.applied`→`books.metadata.applied.v1`, `tags.written`→`books.tags.written.v1`, `file.organized`→`books.file.organized.v1`, `dedup.detected`→`books.dedup.detected.v1`, `dedup.merged`→`books.dedup.merged.v1`, `cover.changed`→`books.cover.changed.v1`, `read_status.changed`→`books.read-status.changed.v1`, `scan.completed`→`books.scan.completed.v1`, `book.quarantined`→`books.book.quarantined.v1`, `book.unquarantined`→`books.book.unquarantined.v1` (the last two exist at HEAD but are not in the webhook's default list, `internal/plugins/webhook/plugin.go:146-159`); books publishes through `Deps.Notify.Publish` in the same batch as the change (COR2-3) |
 | `plugin.Notifier`, plugin `EventBus` (for notifications) | `plugin.Notifier` deleted (N4). The plugin `EventBus` keeps feeding the webhook plugin until S7 (S6 moves only the operations bus, SIMP3-10); at S7 the webhook plugin and its subscriptions go, and books publishes its 12 event types through `Deps.Notify` instead. `internal/plugin` itself is deleted at **S7**, in the same stage, once its last importer is rewired (18 non-test, non-mock files import it at HEAD, `git grep -l '/internal/plugin"' -- '*.go'` @748fd787a), gated by 04's stage-visibility gate (04 §2.1, §8.3; 09 S7). The notify-only bus role is `core/events` (05-events) |
 | `mailSenderOverride` test seam (`internal/server/server.go:424`) | `coretest.MailRecorder` injected as the email instance |
@@ -418,3 +428,15 @@ Round 4 (`docs/plans/platform-core/reviews/spec-round-4-dispositions.md`):
 - COR4-15 — the durable delivery topic is `core.notify.delivery.requested.v1` (03 topic grammar).
 - SIMP4-1 — `Deferred-build members` heading in §1 (inbox, subscriptions, personal channels, templating).
 - SIMP4-3 — the native rule store's key and codec stated (§3); `TestNativeRuleStore_RoundTrip`.
+
+Round 5 (`docs/plans/platform-core/reviews/spec-round-5-dispositions.md`):
+
+- SIMP5-1 — §3, §7: `RuleStore` declared a routed store (both stores serve; per-rule routing by the legacy store's
+  coverage of `Rule.ID`), matching 05-metadata M1.1.
+- SIMP5-4 — §3: `Covers` removed from the frozen `RuleStore`; coverage is the optional `storage.Covering`
+  capability (absent = covers every rule); `TestRules_NativeStoreCoversAll`.
+- SIMP5-6 — §1 `Deferred-build members` table: identifier column only; `core.inbox`, the key and the presets in an
+  unchecked column.
+- MOD5-6 — §9: `notifytest` is the public test-support package `integrations/notify/notifytest`.
+- DATA5-9 — §10 webhook row: no `Local` granted by the upgrade; pending candidate confirmed by an admin.
+- OPS5-12 — §10 SMTP row: native instances and rules do nothing after a rollback; events meanwhile are not delivered.
