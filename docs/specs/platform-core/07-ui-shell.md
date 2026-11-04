@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/07-ui-shell.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.9.0 -->
 <!-- guid: 651865f1-0fad-4e15-8169-ceaf4a573f13 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -58,10 +58,12 @@ semantics (05-realtime); serving under a URL sub-path (§7.15, O7).
 ```
 core/web/                       npm workspace root (own package-lock.json; becomes the split repository's npm root web/)
   package.json                  { "private": true, "workspaces": ["packages/*", "../examples/hello/web"] }
-  .gitignore                    node_modules/, dist/, *.tsbuildinfo, coverage/, test-results/            UI-0
+  .gitignore                    node_modules/, dist/, *.tsbuildinfo, coverage/, test-results/,
+                                playwright-report/, blob-report/                                         UI-0
   packages/api-client/          @mediacore/api-client (fetch runtime + generated core client + openapi/core.json)  UI-0
   packages/ui-kit/              @mediacore/ui-kit     (theme factory + presentational components)              S9
-  packages/shell/               @mediacore/shell      (React shell + createShell + /vite preset + /testing)     S9
+  packages/shell/               @mediacore/shell      (React shell + createShell + /vite presets + /testing)    S9
+    vite/index.mjs              the two build presets of §7.10: unbuilt plain ESM (+ index.d.mts), shipped as-is  S9
   e2e/                          Playwright suite against the hello example binary                               S9
 core/examples/hello/web/        hello's web package ("private": true), built to web/dist (06 §6.12)              S9
 ```
@@ -71,19 +73,28 @@ with `@mediacore/api-client` only; `ui-kit`, `shell`, the e2e suite and hello's 
 shell adoption (S9), when something first consumes them (FE2-4, MOD2-10). Until S9 the workspaces
 glob matches only the existing members, and the `../examples/hello/web` entry is added in the S9 PR.
 
-**Ignored outputs (FE7-1).** The UI-0 PR that creates `core/web` adds `core/web/.gitignore`
-(`node_modules/`, `dist/`, `*.tsbuildinfo`, `coverage/`, `test-results/`), and the S9 PR adds the same
-file to `core/examples/hello/web/`. The file travels with `core/web` into the split repository's `web/`
+**Ignored outputs (FE7-1, FE8-4).** The UI-0 PR that creates `core/web` adds `core/web/.gitignore`
+(`node_modules/`, `dist/`, `*.tsbuildinfo`, `coverage/`, `test-results/`, `playwright-report/`,
+`blob-report/`, the last two written by `core/web/e2e`), and the S9 PR adds the same file to
+`core/examples/hello/web/`. Core's other build outputs are covered by `core/.gitignore`, which the S0 PR
+that creates `core/` adds: `/.ci/readiness/` (12's `readiness` output), `/bin/` (the hello binary, built
+with `-o bin/hello`, 06 §6.12.5), `**/playwright-report/` and `**/blob-report/`. Both files travel into
+the split repository, where the root `.gitignore` does not. The file travels with `core/web` into the split repository's `web/`
 (12), so the root `.gitignore`, which has no `node_modules` pattern at `748fd787a`, is not enough.
 Without it every `make web-deps` (an `npm ci` in `core/web` on every build path, §7.3.2) leaves an
 untracked `core/web/node_modules/`, Go's VCS stamping then sets `vcs.modified` on every binary
 (`commit` ends in `+dirty`, 06 §6.4.5), and goreleaser's dirty-tree validation may refuse the release.
 Done-check (UI-0, §7.19 step 2): after `make web-deps && make web-build`, `git status --porcelain` is
-empty; the dry-run RC asserts the same after the rewritten `pre-build-script`.
+empty; the dry-run RC asserts the same after the rewritten `pre-build-script`; and after a hello build,
+`make -C core readiness` and a core e2e run the same holds (S9). 12 SC4 runs its check in a git work
+tree (12 owns how).
 
 **Exports.** Every package builds to `dist/` (JS by Vite library mode, `.d.ts` by TS 7
 `tsc --emitDeclarationOnly`). Its `exports` map has two conditions: `"development": "./src/index.ts"`
-and `"default"` pointing at `dist/`. The preset adds `development` to Vite's `resolve.conditions`
+and `"default"` pointing at `dist/`. The one exception is the shell's `"./vite": "./vite/index.mjs"`:
+Vite loads a `vite.config.ts` through Node's module resolution, not its own `resolve.conditions`, so the
+presets must load before anything is built. They are an **unbuilt** plain-ESM file with a hand-written
+`index.d.mts`, outside `dist/`, listed in `files` and shipped as-is (FE8-1). The preset adds `development` to Vite's `resolve.conditions`
 under `vite serve` and vitest only, so `make web-dev` and unit tests read shell sources (an edit is
 visible without rebuilding `core/web`), while every production build and every published install
 resolves `dist/`. A production build therefore consumes what a split app downloads (FE-13).
@@ -97,8 +108,11 @@ and others @748fd787a), and apps already depend on it (`web/package.json:29`). C
 (FE-26), so a module may use any icon package; the shell's and ui-kit's own icons come from the
 `@mui/icons-material` peer. 13 §13.4 lists it as a peer of ui-kit and shell.
 
-**Compilation.** Packages are built with the same `reactCompilerPreset()` as apps (§7.10), because app
-Babel plugins skip `node_modules` and uncompiled shell components would be unmemoized. The emitted
+**Compilation.** `ui-kit` and `shell` are built with `mediacoreLibrary`, which carries the same
+`reactCompilerPreset()` as the app preset (§7.10), because app Babel plugins skip `node_modules` and
+uncompiled shell components would be unmemoized. `api-client` holds no React code and has its own
+minimal Vite library config at every stage, so at UI-0, before the shell package exists, it needs no
+preset (FE8-1). The emitted
 code imports `react/compiler-runtime`, which the `react` peer (≥ 19) provides; `react/compiler-runtime`
 is in the singleton check (§7.3.2).
 
@@ -112,9 +126,11 @@ The cost of the chosen layout is the dedupe and singleton check below.
 `import/no-relative-packages` in `core/web` rejects any specifier that resolves outside `core/web`
 (no `../../web/...`, no `@abo/*`). It runs in `make ci` from UI-0, when `core/web` is created, not
 first at split criterion SC8. A second `core/web` ESLint rule pins ui-kit's graph: `@mediacore/ui-kit`
-imports neither `@mediacore/api-client` nor `@mediacore/shell` (FE7-12). ui-kit stays presentational;
-a ui-kit component that needs data or a shell service takes it as a prop (§7.11), so the build order
-of §7.3.2 holds whichever of api-client and ui-kit builds first.
+imports neither `@mediacore/api-client` nor `@mediacore/shell` (FE7-12). Its scope is
+`packages/*/src`: ui-kit's build config may import exactly one shell file, the unbuilt preset
+`@mediacore/shell/vite`, which needs no build (FE8-1). ui-kit stays presentational; a ui-kit component
+that needs data or a shell service takes it as a prop or declares its own structural type (§7.11), so
+api-client and ui-kit build independently of each other.
 Shell-classified ABO files that import audiobook code are therefore cut loose **before** they move
 (§7.11, §7.19).
 
@@ -132,8 +148,12 @@ Shell-classified ABO files that import audiobook code are therefore cut loose **
   `node:26-alpine`, which has no `bash`; MOD2-16): `npm ci` in `core/web`, then the core packages built
   **in dependency order with an explicit list**, `npm run build -w @mediacore/api-client
   -w @mediacore/ui-kit -w @mediacore/shell` (npm runs `-w` in the order given; `--workspaces` runs
-  them in glob order, which builds `shell` before the `ui-kit` it imports, FE2-14, MOD2-17); this is
-  the one order list, and 12's pack and publish commands cite it rather than restate it (FE7-12), then
+  them in glob order, which builds `shell` before the `ui-kit` it imports, FE2-14, MOD2-17). The order
+  is set by the packages' code only: `shell`'s library build and declaration pass resolve
+  `@mediacore/ui-kit` and `@mediacore/api-client` through their `dist/`, so those two build first. No
+  package's build config imports a `dist/`, because the presets are source (§7.3.1, §7.10), so the order
+  has no step zero and `shell` does not import its own unbuilt output (FE8-1); `presets.test.mjs`
+  (§7.18) builds the three from a clean `core/web` in this order. This is the one order list, and 12's pack and publish commands cite it rather than restate it (FE7-12), then
   `npm ci` in `web/`. It builds nothing in `web/` and generates no UI build ID: `npm run build` in
   `web/` stamps that itself on every path (§7.6.3, R5-7); the script only leaves a caller's `BUILD_ID`
   in the environment. Until S9 the list is `-w @mediacore/api-client` alone (§7.3.1). Hello's web
@@ -312,6 +332,12 @@ export interface NavContribution<M extends ModuleManifest> {
   // the rules of hooks. The shell calls it inside a dedicated <NavBadge>
   // component per entry, so the React Compiler and rules-of-hooks accept it.
   useBadge?: () => number | undefined;
+  // One lowercase letter: the chord "g <goKey>" navigates to this entry. The
+  // shell builds ui-kit's useKeyboardShortcuts table from its own routes
+  // ("g s" -> /settings) plus these, so no ui-kit hook names a module route
+  // (books' library entry sets 'l', HEAD's "g l"; FE8-5). A key the shell or
+  // an earlier module (ID order) already uses is dropped with a console warning.
+  goKey?: string;
   children?: readonly NavContribution<M>[];
 }
 
@@ -540,8 +566,11 @@ export interface RenderInShellOptions {
   auth?: Partial<AuthState> | 'anonymous'; // default: an authenticated user
   permissions?: readonly Permission[];    // the user's effective permissions
   serverModules?: ModulesResponse;        // the /modules payload; default: every module enabled
-  realtime?: FakeRealtime;                // push topics/resync in tests
+  realtime?: FakeRealtime;                // push topics, stream resets and closes in tests
   client?: Partial<import('@mediacore/api-client').Client>; // stubbed operations
+  appId?: string;                         // default 'test'; the app ID storageKey() and the theme key use (FE8-7)
+  themeStorageKey?: string;               // default `${appId}.shell.themeMode`
+  defaultMode?: 'light' | 'dark';         // default 'dark'
 }
 
 export function renderInShell(ui: React.ReactElement, opts?: RenderInShellOptions): RenderResult & {
@@ -549,17 +578,20 @@ export function renderInShell(ui: React.ReactElement, opts?: RenderInShellOption
   realtime: FakeRealtime;
 };
 
+// The control vocabulary is 05-realtime §4.2's (FE8-9).
 export interface FakeRealtime {
   emit<T>(topic: string, data: T, key?: string): void;
-  resync(): void;
-  close(reason: 'shutdown' | 'credential' | 'error'): void;
+  reset(reason: 'restart' | 'gap' | 'overflow'): void;   // a core.stream.reset.v1 frame
+  close(reason: 'shutdown' | 'credential_revoked' | 'permission_revoked'): void; // core.stream.closed.v1
+  fail(status?: number): void;                            // a transport error, not a control frame
 }
 ```
 
 Built on `createMemoryRouter` (a data router, so `useBlocker` works in tests) plus fake
-`ClientProvider`/`AuthProvider`/`RealtimeProvider`. jsdom has no preset metas, so it sets the theme key
-(`storageKey('shell','themeMode')`), the default mode (`'dark'`) and the app ID explicitly (§7.7,
-FE7-8). ABO's `renderWithProviders` is rewritten onto
+`ClientProvider`/`AuthProvider`/`RealtimeProvider`. jsdom has no preset metas, so it sets the app ID (`appId`, default `'test'`), the theme key
+(`themeStorageKey`, default `storageKey('shell','themeMode')`) and the default mode (`defaultMode`,
+default `'dark'`) explicitly from those options (§7.7, FE7-8, FE8-7); ABO's tests that read `abo.*` keys
+pass `appId: 'abo'`. ABO's `renderWithProviders` is rewritten onto
 it in the shell-adoption PR series (§7.19 step 4), **after** ABO's `AuthContext`, `ToastProvider` and
 `OperationTrackerProvider` have moved into the shell: before that, a component under test would read
 ABO's own contexts and find no provider, and ABO still uses `useUnsavedChangesBlocker`, not
@@ -628,7 +660,7 @@ a real ID there while this field is `""` (FE7-13).
 `disabled_modules` is present only for callers holding `core:admin`. A disabled module is absent from
 `modules` (G1: no nav entry).
 
-### 7.5.2 Algorithm (runs once after login and on every reconnect `resync`)
+### 7.5.2 Algorithm (runs once after login, on every `core.stream.reset.v1` and after every reconnect that could not resume)
 
 First, the shell compares its own compile-time core version `C.core` (the version of the
 `@mediacore/shell` package, `import.meta.env.MEDIACORE_CORE_VERSION`, which names the shell, not the
@@ -661,22 +693,33 @@ runtime's response middleware: ABO's `apiFetch` from 09 S0 to UI-0; from UI-0 `@
 runtime exports it as `checkBuild(response, { buildId, shell })`, the one signature (FE6-8), which the
 runtime's own middleware and ABO's `apiFetch` (still used for legacy calls until they are native) both
 call, so there is one implementation while the two transports coexist; it is never deleted, so the
-pre-shell bundle and the shell bundle run the same code. Its contract (FE7-5):
+pre-shell bundle and the shell bundle run the same code. Its contract (FE7-5; 05-http-api §7 is the
+owner text, and the check is split by what it reads, FE8-2 option (b)):
 
 ```ts
 // @mediacore/api-client
 export type StaleReason = 'header-mismatch' | 'legacy-spa' | 'pre-s0-server'; // cases 1, 2, 3 below
 export function readPageBuildId(): string; // the only reader of <meta name="mediacore-build">; "" when absent
-export function checkBuild(response: Response, opts: { buildId: string; shell: boolean }): StaleReason | null;
-export function onStaleBuild(listener: (reason: StaleReason) => void): () => void; // returns unsubscribe
+export function checkBuild(response: Response, opts: { buildId: string; shell: boolean }): StaleReason | null; // headers only: cases 1, 3
+export function checkModules(body: ModulesResponse, response: Response, opts: { buildId: string; shell: boolean }): StaleReason | null; // case 2
+export function onStaleBuild(listener: (reason: StaleReason) => void): () => void; // replays detected reasons; returns unsubscribe
+export function getStaleReasons(): readonly StaleReason[]; // reasons detected on this page load
 export function createCoreClient(opts: { buildId: string; shell: boolean }): Client; // both required
 export function createModuleClient<Paths>(core: Client): ModuleClient<Paths>;   // inherits buildId and shell
 ```
 
-`checkBuild` returns the case it detected, or `null`, and notifies every `onStaleBuild` listener once
-per page load per reason, whichever transport saw the response. The shell banner (S9+) and ABO's
-pre-shell banner (S0–S8) both subscribe, so a detection on a native call and one on a legacy call reach
-whichever banner is mounted. Both options are required, so an omitted `buildId` is a compile error,
+`checkBuild` is synchronous and reads only headers, so it decides cases 1 and 3 and never consumes a
+body; it does not special-case `/modules`. Case 2 needs `app.ui_build_id` from the `/modules` JSON
+body, so the shell's own `/api/core/v1/modules` fetch calls `checkModules` with the body it has parsed
+anyway (FE8-2). Each returns the case it detected, or `null`, and notifies the `onStaleBuild`
+listeners, whichever transport saw the response. **Detections replay on subscribe (FE8-3).** The
+runtime keeps the reasons detected on this page load (`getStaleReasons()`), and `onStaleBuild` calls a
+new listener at once for each of them; "once" is per listener per reason. So a banner that mounts after
+the page's first stale response (the auth probe, `/auth/status`, `/me`, §7.12) is still notified.
+**The banners.** ABO's reload banner, `web/src/components/StaleBuildBanner.tsx`, mounted above the
+routes, is created in 09 S0 and fed by `apiFetch`'s own rule until UI-0; from UI-0 it subscribes to
+`onStaleBuild`, and at S9 the shell banner replaces it (09 S0 assigns it). A detection on a native call
+and one on a legacy call reach whichever banner is mounted. Both options are required, so an omitted `buildId` is a compile error,
 never a silently disabled check. 05-http-api §7 lists it among the runtime's
 middleware. Both inputs are **runtime values passed by the caller**, never a define read inside the
 library (FE6-1): the api-client is built to `dist/` in library mode before the app (§7.3.1), so a define
@@ -702,8 +745,8 @@ offers a reload, when:
 
 1. the response carries `X-App-Build`, the header is neither `""` nor `"dev"` (05-http-api stage 5:
    "unknown", never a mismatch, FE5-9), and the value differs from `buildId`; or
-2. the caller is the shell (`shell: true`; the pre-shell bundle passes `false`, FE5-8), the response is
-   `/api/core/v1/modules`,
+2. (`checkModules`) the caller is the shell (`shell: true`; the pre-shell bundle passes `false`, FE5-8),
+   the parsed `/api/core/v1/modules` body's
    `app.ui_build_id` is `""` and `X-App-Build` is non-empty and not `"dev"`: the server serves a legacy
    SPA at `/` (an S9 tab after a rollback to S8). A pre-shell bundle seeing that is the legacy SPA
    itself, and a reload would load the same bundle; or
@@ -751,13 +794,15 @@ package ui
 type Bundle struct {
 	fsys    fs.FS  // rooted at the dist directory
 	buildID string // from <meta name="mediacore-build" content="..."> in index.html (the UI build ID, §7.6.3; never the binary's identity, R5-7)
+	appID   string // from <meta name="mediacore-app" content="...">, written by the app preset (§7.10, FE8-7)
 	index   []byte
 	scripts []string // CSP hash sources of inline <script> blocks in index.html
 }
 
-// FromFS roots fsys at dir, reads index.html, extracts the build ID and the
-// sha256 hashes of inline scripts. It fails if index.html, the build meta
-// or the theme meta is missing: the build meta <meta name="mediacore-build">
+// FromFS roots fsys at dir, reads index.html, extracts the build ID, the
+// app ID and the sha256 hashes of inline scripts. It fails if index.html,
+// the build meta, the app meta or the theme meta is missing (the app meta
+// is the preset's, like the theme meta; FE8-7): the build meta <meta name="mediacore-build">
 // is written by every npm build, ABO's pre-shell vite.config.ts included
 // from S0, so it cannot mark a shell bundle; the theme meta
 // <meta name="mediacore-theme"> is written only by the shell preset (§7.7),
@@ -773,6 +818,14 @@ func MustFromFS(fsys fs.FS, dir string) Bundle
 
 func (b Bundle) IsZero() bool
 func (b Bundle) BuildID() string
+
+// AppID is the bundle's mediacore-app meta. In P8 the kernel refuses a
+// non-zero Bundle whose AppID differs from app.Options.AppID
+// (module.ProblemUIAppIDMismatch), so the server guarantees the one
+// app-ID namespace and createShell's own check is defence in depth. It
+// compares app IDs, never build IDs: FE4-1's "no boot-time build-ID check"
+// stands (FE8-7).
+func (b Bundle) AppID() string
 
 // AppOptions are the app's own contributions to the Handler the kernel
 // builds. The app passes them as app.Options.UIOptions (06 §6.4.5), a
@@ -1060,7 +1113,9 @@ export function themeBootScript(storageKey: string, defaultMode: 'light' | 'dark
   the key and the default mode from that meta; neither is a `createShell` option. Defaults: the key
   `storageKey('shell', 'themeMode')` (`<appId>.shell.themeMode`) and `'dark'`. Without the theme meta
   (jsdom under `renderInShell`, a hand-written `index.html`), `createShell` uses the same defaults, and
-  `@mediacore/shell/testing` sets them explicitly (FE7-8). The preset validates `themeStorageKey`
+  `@mediacore/shell/testing` sets them explicitly (FE7-8). Without the `mediacore-app` meta,
+  `createShell` uses `config.app.id` and logs a console warning; a production bundle cannot hit this,
+  because `ui.FromFS` refuses a bundle without the preset's metas (FE8-7). The preset validates `themeStorageKey`
   against `^[A-Za-z0-9._:-]{1,128}$`, else it fails the config, because the key lands in a
   space-separated `content` attribute and an inline script literal. ABO passes
   `themeStorageKey: 'app-theme-mode', defaultMode: 'dark'`, HEAD's hard-coded pair
@@ -1093,14 +1148,15 @@ The OpenAPI 3.1 documents and the TypeScript client pipeline are owned by
   emit `core`: an app's `openapi` subcommand writes only its modules' documents and `manifest.gen.ts`
   files (`manifest.gen.ts` from S9, with package `ui`).
 * `@mediacore/api-client` = types generated from `core.json` for every `/api/core/v1` route +
-  `createCoreClient()`, whose middleware carries today's `apiFetch` semantics: own deadline
+  `createCoreClient({ buildId, shell })`, whose middleware carries today's `apiFetch` semantics: own deadline
   (`ApiTimeoutError`), SSO login-page bounce detection (`ApiAuthRedirectError`,
   `web/src/utils/apiFetch.ts:51`), `credentials: 'include'`, `X-Request-ID` surfacing, RFC 9457
   `Problem` as the error type (05-http-api §3.3), the 401 rule of §7.9, and the one stale-build rule
   of §7.5.2, carried over from ABO's `apiFetch` as the exported `checkBuild(response, { buildId,
   shell })`, and never deleted (FE3-3, FE4-9, FE6-8): ABO's `apiFetch` calls `checkBuild(response,
   { buildId: readPageBuildId(), shell: false })` from UI-0, and a detection reaches the mounted banner
-  through `onStaleBuild` (FE7-5). `createCoreClient({ buildId, shell })` takes the page's meta build ID
+  through `onStaleBuild` (FE7-5), which replays earlier detections to a late subscriber (FE8-3); the
+  shell's `/modules` fetch adds `checkModules` for case 2 (FE8-2). `createCoreClient({ buildId, shell })` takes the page's meta build ID
   and the caller's `shell` flag, both required (§7.5.2, FE6-1); ABO's pre-shell bundle has one such
   client in `web/src/api/core.ts` from UI-0. Each generated operation
   whose OpenAPI `x-mediacore-permission` is `public` is marked `skipAuthRedirect`. The shell creates
@@ -1119,10 +1175,10 @@ The OpenAPI 3.1 documents and the TypeScript client pipeline are owned by
   names. `make generate-api-client` failing is a CI failure; there is no fallback generator.
 * Freshness gates (`make generate-api-client`, `make openapi-check`) follow 05-http-api; tygo is
   deleted once its routes are native. `opsgen` (raw/13 §8) generates the legacy `ops.ts` enums. They
-  have more than one consumer: `useOperationsStore` and `services/api.ts:14-15,590`, and
-  `utils/operationPolling.ts:7` with its 16 non-test importers, among them books pages that keep
-  legacy calls after S9 (`Library.tsx`, the review lanes, `ITunesImport.tsx`, `stagedMetadataApply.ts`,
-  `MaintenanceTab.tsx`, `ThrottlePanel.tsx`) (@748fd787a). So `opsgen` and its freshness gate stay
+  are imported by `services/api.ts` (`:14-15,590`) and `utils/operationPolling.ts:7`, which has 5
+  non-test importers (`OperationsIndicator`, `ITunesImport`, `ActivityLog`, `Library`,
+  `useOperationsStore`; @748fd787a); every other user reaches `ops.ts` through `services/api` (FE8-6).
+  `opsgen` retires when both are gone. So `opsgen` and its freshness gate stay
   until the last `ops.ts` importer is native, which is the end of §7.19 step 6, not S9; 05-http-api §7
   and 04's `opsgen` row state the same rule. Its input, `internal/operations/state` (HEAD's v2 table,
   v3 constants and transition machine), stays in ABO beside books' task store (R6-2): core's executor
@@ -1238,55 +1294,80 @@ The shell side:
   (SEC3-9). The hooks
   are `useTopic<T>(topic, onEvent, {key})` and `useResync` everywhere (05-realtime §11 uses the same
   signature).
-* **Resync and shutdown.** A `resync` frame calls every `useResync` handler and re-runs §7.5.2. The
+* **Resync and shutdown.** On `core.stream.reset.v1` (any reason: `restart`, `gap`, `overflow`) and
+  after a reconnect that could not resume, the shell calls every `useResync` handler and re-runs §7.5.2
+  (05-realtime §4.8 item 6; FE8-9). The native stream has no `resync` frame; stream C's legacy
+  `event: resync` is not the shell's. A `core.stream.closed.v1` with `credential_revoked` or
+  `permission_revoked` goes through the auth rule of §7.9.1. The
   shutdown backdrop and reconnect counter (`App.tsx:215-241`) move to the shell, driven by
   `core.stream.closed.v1` with `reason: "shutdown"`, which the hub sends to every subscriber
   (05-realtime §5.4), so non-admin users see it too.
 
 ## 7.10 Build preset and code splitting
 
-`@mediacore/shell/vite` exports `mediacore(options)` returning the Vite plugin list and config every
-app and every core package uses, so the subtle choices documented in `web/vite.config.ts` live in one
-place. Its options (FE6-2):
+`@mediacore/shell/vite` exports two presets, so the subtle choices documented in `web/vite.config.ts`
+live in one place (FE8-1). The file is `packages/shell/vite/index.mjs`, unbuilt plain ESM with a
+hand-written `index.d.mts`, shipped as-is outside `dist/` (§7.3.1), so every config can load it before
+any package is built:
+
+* **`mediacore(options)`, the app preset**: the HTML metas (build ID, `mediacore-app`, theme), the theme
+  boot script, the `appId`, the app-mode define and the dev proxy. Apps and hello's web package use it.
+* **`mediacoreLibrary({ name })`, the library preset** for `ui-kit` and `shell`: the React Compiler,
+  `dedupe`, `resolve.conditions` and Vite library mode, and for `shell` only the library-mode
+  `MEDIACORE_CORE_VERSION`. It writes no HTML and needs no `appId`, because 03 §3.6 reserves app IDs
+  for apps. ui-kit's `vite.config.ts` imports it as `@mediacore/shell/vite` (the one shell file its
+  build may import, §7.3.1) and shell's imports `./vite/index.mjs`, both resolving to source.
+  `api-client` has no React code and uses its own minimal library config at every stage, including
+  UI-0, before the shell package exists.
+
+Their options (FE6-2):
 
 ```ts
 export interface MediacoreOptions {
-  appId: string;                       // the app's ID, 03 §3.6's [a-z][a-z0-9]{1,15}; written to <meta name="mediacore-app">
+  appId: string;                       // the app's ID, 03 §3.6's ^[a-z][a-z0-9]{1,15}$; written to <meta name="mediacore-app">
   themeStorageKey?: string;            // default `${appId}.shell.themeMode`; ^[A-Za-z0-9._:-]{1,128}$
   defaultMode?: 'light' | 'dark';      // default 'dark'
 }
 export function mediacore(options: MediacoreOptions): import('vite').UserConfig;
+
+export interface MediacoreLibraryOptions {
+  name: '@mediacore/ui-kit' | '@mediacore/shell'; // the package being built; 'shell' adds the core-version define
+}
+export function mediacoreLibrary(options: MediacoreLibraryOptions): import('vite').UserConfig;
 ```
 
 ABO calls `mediacore({ appId: 'abo', themeStorageKey: 'app-theme-mode', defaultMode: 'dark' })`. The
-preset fails the config when `appId` does not match `[a-z][a-z0-9]{1,15}` (03 §3.6) or
+preset fails the config when `appId` does not match `^[a-z][a-z0-9]{1,15}$` (03 §3.6, anchored, FE8-7) or
 `themeStorageKey` does not match `^[A-Za-z0-9._:-]{1,128}$` (FE7-8). **One app-ID source (FE7-8).** The
-preset writes `<meta name="mediacore-app" content="<appId>">`; `createShell` refuses to mount (a console
-error and a blocking page) when `config.app.id` differs from it, and reports the `ui-diagnostics` kind
+preset writes `<meta name="mediacore-app" content="<appId>">`; `ui.FromFS` requires it and the kernel
+refuses at P8 a bundle whose meta differs from `app.Options.AppID` (§7.6.1, FE8-7); `createShell`
+refuses to mount (a console error and a blocking page) when `config.app.id` differs from it, uses
+`config.app.id` with a console warning when it is missing (§7.7), and reports the `ui-diagnostics` kind
 `app-id-mismatch` to admins when it differs from the server's `app.id` in `/api/core/v1/modules`, so
 `storageKey()` preferences, the theme key and `BroadcastChannel('<appId>.realtime')` share one namespace.
-The preset:
+What the presets set ("both" unless marked):
 
 * `@vitejs/plugin-react` + `@rolldown/plugin-babel` with `reactCompilerPreset()` (not via `react()`'s
-  `babel` option, which is a silent no-op under rolldown, `web/vite.config.ts:14-21`); the same preset
-  builds the core packages in library mode (§7.3.1);
+  `babel` option, which is a silent no-op under rolldown, `web/vite.config.ts:14-21`); `mediacoreLibrary`
+  builds `ui-kit` and `shell` in library mode with the same compiler preset (§7.3.1);
 * `resolve.dedupe` for every peer singleton and `react/compiler-runtime` (§7.3.2);
 * `resolve.conditions` gains `development` under `vite serve` and vitest only (§7.3.1);
-* `codeSplitting.groups`: `mui` and `vendor` (react, react-dom, react-is, scheduler, react-router), as
+* app preset only: `codeSplitting.groups`: `mui` and `vendor` (react, react-dom, react-is, scheduler, react-router), as
   today. There is **no** `mediacore` group (FE-18): rolldown places every module matching a group in
   that chunk regardless of dynamic imports, so a group would pull the shell's lazy pages (Activity,
   Users, System, Settings) into one eagerly loaded chunk, and a `node_modules/@mediacore` test matches
   nothing in-repo (`file:` symlinks resolve to real paths) but everything after the split. Shell and
   module pages are `lazy`, and library-mode builds preserve those dynamic imports as separate chunks;
 * `define`: `MEDIACORE_CORE_VERSION` only, the shell package's version, in both modes (FE7-4): in
-  library mode from the package's own `package.json`, and in app mode (`vite serve`, vitest, app builds)
+  library mode by `mediacoreLibrary({ name: '@mediacore/shell' })` from the package's own `package.json`
+  (`presets.test.mjs` asserts the literal in `shell/dist`, FE8-1), and in app mode (`vite serve`, vitest, app builds)
   from the resolved `@mediacore/shell/package.json` `version`, which `check_core_version.py` pins to
   `version.Version` (§7.5.2, §7.5.3). There is no `MEDIACORE_BUILD_ID` or `MEDIACORE_SHELL`
   define: the UI build ID the preset evaluates once under `vite build` by the rule of §7.6.3 (`"dev"`
   under `vite serve`) goes only into the `mediacore-build` meta, and `shell` is passed by the caller of
   `checkBuild` (§7.5.2). No `core/web` package reads any `import.meta.env.MEDIACORE_*` value except
   `MEDIACORE_CORE_VERSION` (FE6-1, FE6-8);
-* dev server proxy for `/api` to the Go server, which rewrites both `Host` (`changeOrigin`) and
+* app preset only: dev server proxy for `/api` to the Go server, which rewrites both `Host` (`changeOrigin`) and
   `Origin` to the target origin, dev only, so a dev server opened at a LAN address passes the
   cross-origin stage (FE3-19); the build-ID meta tag; the `mediacore-app` meta (FE7-8); the
   `mediacore-theme` meta and the theme boot script, both from `themeStorageKey` and `defaultMode` (§7.7,
@@ -1312,18 +1393,21 @@ first, and the core-web import rule (§7.3.1) proves the cut (FE-16).
 | `utils/operationPolling.ts` | books, `modules/books/legacy/operationPolling.ts`, unchanged, still on `ops.ts` | it imports `../services/api` and `../generated/ops` (`operationPolling.ts:6-7` @748fd787a), both ABO-only, so it cannot enter `core/web`; its books importers keep legacy calls after S9 (`Library.tsx:55`, `ITunesImport.tsx:56`). The shell's Activity page, `OperationsIndicator` and `TaskTrackerProvider` stop importing it and get their own state helpers over the generated `TaskRunView` states (FE5-6) |
 | `utils/followOperation.ts`, `utils/trackedOperations.ts` | books, beside `operationPolling` | their callers are books: `followOperation` is called by `services/api.ts:13,1838` (the legacy remainder, `modules/books/legacyApi.ts`) and `OperationTrackerProvider.tsx:24-26,328`'s merge/combine/purge path, `trackedOperations` (its `TrackedKind` is `merge`/`combine`/`purge`) only by that provider (`OperationTrackerProvider.tsx:45`), which is the books provider of the row below (FE5-6) |
 | `pages/ActivityLog.tsx` (3,320 LOC) + `stores/useOperationsStore.ts`, `operationGrouping.ts`, `components/layout/OperationsIndicator.tsx` | shell `/activity` (tasks pane over `/api/core/v1/tasks`) | audiobook op labels/colours become books `taskKinds`; the book feed, the `versionApi` undo preflight and `PendingFileOpsBanner` (`ActivityLog.tsx:7,60`) become a books `activityPanes` entry; from S5 to S9 `useOperationsStore`'s `* as api` import (`useOperationsStore.ts:7`) keeps its hand-written legacy-path calls and `opsgen`'s enums; at S9 it is rewired to the generated core client against native routes and moves to native REST and stream together (§7.9.2, FE2-3, FE3-6) |
-| `pages/System.tsx` (+ `components/system` Storage, Quota, SystemInfo, Maintenance, ThrottlePanel) | shell `/system` | `ChapterConsolidationCard`, `ManualFixesCard` → books `widgets` (placement `system`); calls the S8 native routes (`/system`, `/backup`, `/update`, `/health`, FE2-25) |
+| `pages/System.tsx` (+ `components/system` Storage, Quota, SystemInfo) | shell `/system` | `ChapterConsolidationCard`, `ManualFixesCard` → books `widgets` (placement `system`); calls the S8 native routes (`/system`, `/backup`, `/update`, `/health`, FE2-25) |
+| `components/system/MaintenanceTab.tsx` | split (FE8-6) | the maintenance-window and registered-task controls → shell `/system`, over the native tasks routes; the hash, AcoustID, chapter and duplicate jobs (`getAcoustIDStats`, `backfillFileHashes`, `backfillMetadataHashes`, `findMetadataHashDuplicates`, `scanDuplicateFiles`, … through `import * as api`, `MaintenanceTab.tsx:36` @748fd787a) → a books `widgets` entry (placement `system`), which keeps its legacy calls after S9 |
+| `components/system/ThrottlePanel.tsx` | books `widgets` entry (placement `system`) (FE8-6) | provider throttles have no native core route; it calls `getProviderThrottles`/`startThrottleReset`, imports ABO's `useHasPermission` (`:21`) and its `THROTTLE_RESET_PERMISSION` constant (`:24`) is replaced by books' manifest permission (§7.9.1) |
 | `pages/Settings.tsx` | shell `/settings` frame | generic tabs (Security, API Keys, Plugins → Integrations, AI backends, Scheduled tasks, Performance, Temp Login, System Info) in shell; Library, iTunes Import, Metadata, Dedup, Paths, OpenLibraryDumps, BlockedHashes, Embedding → books `settingsPanels`; Deluge → generic adapter-instance form rendered by `<SchemaForm>` (§7.4.5); needs the S4 settings schema/`KeyState` API (`/api/core/v1/settings`, `/settings/schema`, FE3-11) and the S7 instance store (FE2-25) |
 | `pages/Dashboard.tsx` | shell `/` home | library counts and scan trigger → books widget (placement `home`) |
 | `pages/Diagnostics.tsx` | shell `/system/diagnostics` frame | AI-dedup diagnostics → books widget |
-| `pages/FileBrowser.tsx` | books page `/books/files` | uses ui-kit `ServerFileBrowser`, passing the generated core browse call (`core:library.browse`, 05-library) as its `browse` prop |
+| `pages/FileBrowser.tsx` | books page `/books/files` | uses ui-kit `ServerFileBrowser`, passing the generated core browse call (`core:library.browse`, 05-library) as its `browse` prop and books' scan include/exclude calls as `include`/`exclude` |
 | `components/wizard/WelcomeWizard.tsx` (989 LOC) | shell first-run frame + books `setup` | the wizard gate `config.root_dir \|\| config.setup_complete` (`App.tsx:87-89`) becomes books' `setup.isRequired` |
 | `contexts/AuthContext.tsx`, `components/toast/ToastProvider.tsx`, `stores/useAppStore.ts` | shell | `AuthContext`'s `* as api` import (`AuthContext.tsx:16`) is rewired to the generated core client before the move |
 | `lib/storageKeys.ts` (19 keys, 13 of them audiobook-specific, `storageKeys.ts:7-29` @748fd787a) | split (FE4-4, FE5-5) | the books keys (`itunes_import_settings`, the `library*`, `metadata-review-*` and `dedup-*` keys) move to `web/src/modules/books/storageKeys.ts` with their literal values; the six keys of shell- and ui-kit-bound files (`app-theme-mode`, `activity-source-prefs`, `activity-ops-pinned`, the `table_config` prefix of `ConfigurableTable.tsx:104,129`, `dismissed_announcements` of `AnnouncementBanner.tsx:23,33`, `welcome_wizard_completed` of `WelcomeWizard.tsx:295` and `App.tsx:93,97`) and the two literal keys of shell-bound files (`ops-indicator-collapse-v1`, `OperationsIndicator.tsx:105`; `settings.showAdvanced`, `useAdvancedSettings.ts:28`) stay ABO literals, `app-theme-mode` passed to the preset as `themeStorageKey` and the other seven through `createShell({ legacyStorageKeys })` (§7.4.2, §7.7, §7.10, FE6-2), so no audiobook key name enters `core/web` (R1), no preference resets at S9 and none is lost after a rollback to S8 |
 | `components/operations/OperationTrackerProvider.tsx` | shell `TaskTrackerProvider` (follow a run app-wide) + books provider for merge/combine/purge locks | |
 | `components/layout/{MainLayout,TopBar,UserMenu,sidebarSelection}.tsx`, `Sidebar.tsx` minus its arrays | shell | `ReviewBanner` and `usePendingFileOps` (`MainLayout.tsx:9-10,25`) become books `banners`; `librarySubItems`/`menuItems` (`Sidebar.tsx:53-100`) become books `nav` (with children) plus shell entries; the Review badge becomes `useBadge: useReviewCount` where `const useReviewCount = () => useReviewStore(s => s.count)` (FE-22) |
-| `components/common/*` (ConfigurableTable, ServerFileBrowser, PathLinks, BulkConfirmDialog, FilterTagBar), `ErrorBoundary`, `KeyboardShortcutsDialog`, `AnnouncementBanner` | ui-kit (presentational) / shell (stateful) | two `common` files are not presentational at HEAD and are cut before they move (FE7-12): `ServerFileBrowser` calls `api.browseFilesystem` (`ServerFileBrowser.tsx:37,97` @748fd787a) and takes `browse: (path: string) => Promise<BrowseResult>` instead, which the shell and books fill with the generated core call; `PathLinks` imports `getConfig` and the shell-bound `useToast` (`PathLinks.tsx:22-23`) and takes `aliases` and `onCopied` props instead. ui-kit then imports neither `@mediacore/api-client` nor `@mediacore/shell` (the ESLint rule of §7.3.1) |
-| hooks `useAsyncAction`, `useKeyboardShortcuts`, `useDebouncedSearch`, `useRowSelection` | ui-kit | `useUnsavedChangesBlocker` deleted at shell adoption: the react-router 8 data router provides `useBlocker` |
+| `components/common/*` (ConfigurableTable, ServerFileBrowser, BulkConfirmDialog, FilterTagBar), `ErrorBoundary`, `KeyboardShortcutsDialog`, `AnnouncementBanner` | ui-kit (presentational) / shell (stateful) | `ServerFileBrowser` is not presentational at HEAD and is cut before it moves (FE7-12, FE8-5): it calls `api.browseFilesystem`, `api.includeFilesystemPath` and `api.excludeFilesystemPath` (`ServerFileBrowser.tsx:37,97,176,182` @748fd787a) and types its state with `api.FileSystemItem`/`api.FilesystemBrowseResult` (`:74,77`); it takes `{ browse, include?, exclude? }` props instead (without `include`/`exclude` the context menu hides), and ui-kit declares its own `BrowseEntry`/`BrowseResult` types, structurally assignable from the generated core types, because even a type import from `@mediacore/api-client` would break the rule. ui-kit then imports neither `@mediacore/api-client` nor `@mediacore/shell` (the ESLint rule of §7.3.1) |
+| `components/common/PathLinks.tsx` with `utils/pathAliases.ts` and `utils/formatPath.ts` | books, `web/src/modules/books/components/` (FE8-5) | books UI: it imports `renderPath` (`pathAliases.ts`, which imports `PathAlias` from `services/api`) and `PathVar` (`formatPath.ts`, which imports `getConfig` and derives the books `libroot`/`books` variables) (`PathLinks.tsx:20-21` @748fd787a), and its only consumers are books review components (`FolderFilesChip`, `BookInfoPanel`, the `*Spine` components) |
+| hooks `useAsyncAction`, `useKeyboardShortcuts`, `useDebouncedSearch`, `useRowSelection` | ui-kit | `useUnsavedChangesBlocker` deleted at shell adoption: the react-router 8 data router provides `useBlocker`. `useKeyboardShortcuts` hard-codes "g l" → `/library` (`useKeyboardShortcuts.ts:14-19,75` @748fd787a), a books route that becomes `/books/library`; it takes its shortcut table from the shell instead, built from shell routes plus each nav entry's `goKey` (§7.4.2, FE8-5) |
 | `utils/apiFetch.ts`, `apiResponse.ts`, `permissionError.ts`, `apiKeyExpiry.ts`, `safeReturn.ts`, `settingLocks.ts` | api-client runtime / shell | |
 | `services/eventSourceManager.ts` | replaced by the shell realtime client at shell adoption (§7.9.2) | |
 | `services/api.ts` (8,747 LOC) | split: auth/users/operations/system/settings → generated core client (from the UI stage before 09 S4); books routes → generated books client in `modules/books/api/`; hand-written calls to `/api/v1` remain in `modules/books/legacyApi.ts` during the compatibility window and shrink route-group by route-group | |
@@ -1336,16 +1420,17 @@ first, and the core-web import rule (§7.3.1) proves the cut (FE-16).
 
 Browser: load → read build ID → `GET /api/core/v1/auth/status` → (login) → `GET /api/core/v1/me`
 → `GET /api/core/v1/modules` → core-version check and intersect (§7.5.2) → module `setup.isRequired`
-checks → build router → realtime leader election and stream (§7.9.2) → render. On `resync` or
-reconnect: re-fetch `me` and `modules`, re-intersect; a module that disappeared (disabled and
+checks → build router → realtime leader election and stream (§7.9.2) → render. On `core.stream.reset.v1`
+or a reconnect that could not resume: re-fetch `me` and `modules` (calling `checkModules`), re-intersect; a module that disappeared (disabled and
 restarted) unmounts and its routes show `NotFound`.
 
 Server: `UIBundle()` runs in the app's `main` before `app.New`; only its `embed_frontend` variant
-calls `ui.MustFromFS`, so a malformed shell bundle (no `index.html`, no UI-build meta, no theme meta,
-FE7-7) fails boot exactly when the tag is set, and an API-only build passes the zero `Bundle` and serves the placeholder
+calls `ui.MustFromFS`, so a malformed shell bundle (no `index.html`, no UI-build meta, no app meta, no
+theme meta, FE7-7, FE8-7) fails boot exactly when the tag is set, and an API-only build passes the zero `Bundle` and serves the placeholder
 (FE2-10). The kernel mounts `ui.Handler` in P8, with `app.Options.UIOptions` merged into its
-options, unless a legacy mount owns `/` (06 §6.5.1, FE3-4). There is no boot-time build-ID check:
-the served bundle is the only source of the UI build ID (§7.6.3, FE4-1), and the binary's identity is
+options, unless a legacy mount owns `/` (06 §6.5.1, FE3-4). In P8 the kernel also refuses a bundle whose `mediacore-app`
+meta differs from `app.Options.AppID` (`ProblemUIAppIDMismatch`, FE8-7). There is no boot-time build-ID
+check: the served bundle is the only source of the UI build ID (§7.6.3, FE4-1), and the binary's identity is
 `app.BinaryID`, a separate value (R5-7).
 
 ## 7.13 Error semantics
@@ -1365,9 +1450,11 @@ the served bundle is the only source of the UI build ID (§7.6.3, FE4-1), and th
 | 503 `auth_unavailable` | keep session, retry banner, no logout | "cannot check" is not "logged out" |
 | SSO bounce (`ApiAuthRedirectError`) | full reload | proxy must handle it |
 | Realtime 401 / 429 / 503 / redirect | 401 rule; wait `Retry-After`; SSO reload; status chip throughout | the fetch-based reader sees the status (FE-8) |
-| Realtime disconnected | reconnect with backoff and `Last-Event-ID`; `resync` if the server cannot resume | resume is lossless within the hub's window |
-| Missing/invalid `index.html`, build meta or theme meta in an embedded shell bundle (a legacy-style `index.html` with the build meta only is not a shell bundle, FE7-7) | boot fails (fail-closed) | a broken UI must not ship silently |
+| Realtime disconnected | reconnect with backoff and `Last-Event-ID`; if the server cannot resume, or sends `core.stream.reset.v1`, every `useResync` handler runs and §7.5.2 re-runs | resume is lossless within the hub's window |
+| Missing/invalid `index.html`, build meta, app meta or theme meta in an embedded shell bundle (a legacy-style `index.html` with the build meta only is not a shell bundle, FE7-7) | boot fails (fail-closed) | a broken UI must not ship silently |
+| Embedded bundle's `mediacore-app` meta differs from `app.Options.AppID` | boot fails at P8 (`ProblemUIAppIDMismatch`) | the server guarantees one app-ID namespace (FE8-7) |
 | `ShellConfig.app.id` differs from the preset's `mediacore-app` meta | blocking page, console error, no module mounted; a difference from the server's `app.id` is the admin diagnostic `app-id-mismatch` | one app-ID namespace for every `storageKey()` and the theme key (FE7-8) |
+| No `mediacore-app` meta (jsdom, a hand-written `index.html`) | `createShell` uses `config.app.id`, console warning | production bundles always carry it (`ui.FromFS`; FE8-7) |
 | Unmatched `/api/...`, NonSPA segment, non-GET/HEAD | 404 problem+json, never `index.html` | API and compat clients must not parse HTML (today's `spa_fallback.go` rule) |
 | Diagnostics or CSP report endpoint rate-limited | client drops the report (fail-open) | reporting must not affect use |
 
@@ -1427,14 +1514,14 @@ two are merged together. In-repo, apps use `file:` dependencies; there is no roo
 | Test | Where | Proves |
 |---|---|---|
 | `intersect.test.ts` (one case per §7.5.2 row, incl. the core-version row and every slot) | shell, vitest | G3, FE-15, FE-16; under vitest the core-version row reads a defined `MEDIACORE_CORE_VERSION` (the app-mode define, FE7-4) |
-| `buildId.test.ts` | api-client runtime (`checkBuild(response, { buildId, shell })`) + ABO `apiFetch` + shell | the §7.5.2 rule, with `buildId` and `shell` passed by the caller, never read from a define (FE6-1, FE6-8): header mismatch, legacy-SPA server (`ui_build_id` `""` with a non-dev header, shell build) and a header-less 2xx/4xx carrying `Reporting-Endpoints: csp=…` offer a reload; a header-less 502 without it does not; a real `buildId` against a `dev` or `""` header is not offered one (FE5-9); a pre-shell bundle (`shell: false`) seeing `ui_build_id: ""` is not offered one (FE5-8); skipped for a `""` or `"dev"` `buildId`; `apiFetch` and the runtime call the one `checkBuild`; the build ID is read from the page's meta; the ID rule: a non-empty `BUILD_ID` wins, an empty `BUILD_ID` falls through to the git or timestamp rule, a `BUILD_ID` outside `^[A-Za-z0-9._-]{1,64}$` fails `vite build` (FE6-7), and so does `BUILD_ID=dev` in any case (FE7-6), a clean checkout (`git status --porcelain --untracked-files=no` empty; an untracked file does not count, FE7-1) gives `<short sha>-<commit time>`, two dirty builds of one commit get different IDs (FE3-2, FE3-3, FE4-3, FE4-9, FE5-2); `checkBuild` returns the detected `StaleReason` or `null`, a stale response on a native call and one on a legacy call each notify the same `onStaleBuild` listener, once per page load per reason, and `readPageBuildId()` is the only meta reader (FE7-5) |
+| `buildId.test.ts` | api-client runtime (`checkBuild(response, { buildId, shell })`, `checkModules`) + ABO `apiFetch` + shell | the §7.5.2 rule, with `buildId` and `shell` passed by the caller, never read from a define (FE6-1, FE6-8): header mismatch, legacy-SPA server (`ui_build_id` `""` with a non-dev header, shell build) and a header-less 2xx/4xx carrying `Reporting-Endpoints: csp=…` offer a reload; a header-less 502 without it does not; a real `buildId` against a `dev` or `""` header is not offered one (FE5-9); a pre-shell bundle (`shell: false`) seeing `ui_build_id: ""` is not offered one (FE5-8); skipped for a `""` or `"dev"` `buildId`; `apiFetch` and the runtime call the one `checkBuild`; the build ID is read from the page's meta; the ID rule: a non-empty `BUILD_ID` wins, an empty `BUILD_ID` falls through to the git or timestamp rule, a `BUILD_ID` outside `^[A-Za-z0-9._-]{1,64}$` fails `vite build` (FE6-7), and so does `BUILD_ID=dev` in any case (FE7-6), a clean checkout (`git status --porcelain --untracked-files=no` empty; an untracked file does not count, FE7-1) gives `<short sha>-<commit time>`, two dirty builds of one commit get different IDs (FE3-2, FE3-3, FE4-3, FE4-9, FE5-2); `checkBuild` returns the detected `StaleReason` or `null`, a stale response on a native call and one on a legacy call each notify the same `onStaleBuild` listener, once per page load per reason, and `readPageBuildId()` is the only meta reader (FE7-5); the case-2 path (`checkModules`) detects `legacy-spa` without consuming the body its caller reads, and `checkBuild` never reads a body (FE8-2); a listener that subscribes after a stale response is still notified, once, and `getStaleReasons()` lists the reason (FE8-3) |
 | e2e `stale-build.spec.ts` | `core/web/e2e` and ABO e2e against a production `dist/` build (not vitest, which resolves `src`), and in the PR image job against the Docker image | FE6-1: with the server's `X-App-Build` equal to the page's meta, no reload is offered; with it different, the reload is offered; so the value the api-client's `dist/` uses is the page's, not one baked at the library build |
 | `TestBuildID_HeaderEqualsEmbeddedMeta` | 06 §6.10; PR image job | `X-App-Build` equals the embedded meta for a `make build` binary, a Docker image (with and without `BUILD_ID`), a goreleaser artefact and a bare `npm run build` + `go build -tags embed_frontend`, and that meta is neither `""` nor `dev`; no build path links an ID (FE3-2, FE4-1, FE5-1) |
 | R-test row "S9 tab, roll back to S8, reload offered" | 09 §9.10 | an open S9 shell tab is offered a reload by the stale-build rule after a rollback to S8 (FE3-3, OPS3-11) |
 | `defineModule.types.test.ts` (`// @ts-expect-error` on undeclared IDs in every slot) | shell, typecheck | compile-time descriptor safety |
 | `nav.permissions.test.tsx` | shell | hidden nav for missing permission; `useBadge` called inside `<NavBadge>` |
 | `auth.flow.test.tsx` | shell | session-ending 401 redirects; 401 on login/setup/bootstrap shows the error in place; 503 `auth_unavailable` keeps the session; SSO bounce reload |
-| `realtime.resume.test.ts` | shell | resume after a scheduled reconnect replays from the last ID; `Retry-After` honoured; 401 routed through the auth rule; an opaque redirect is an `ApiAuthRedirectError` (05-realtime §4.8) |
+| `realtime.resume.test.ts` | shell | resume after a scheduled reconnect replays from the last ID; `Retry-After` honoured; 401 routed through the auth rule; an opaque redirect is an `ApiAuthRedirectError` (05-realtime §4.8); a `core.stream.reset.v1` (`FakeRealtime.reset`) and an unresumable reconnect run every `useResync` handler and re-run §7.5.2; `close('credential_revoked')` goes through the auth rule (FE8-9) |
 | `realtime.leader.test.ts` | shell (fake `navigator.locks` + `BroadcastChannel`, a run with `navigator.locks` undefined, and a run with both undefined) | one stream for several tabs; leader handover; heartbeat election without Web Locks (takeover after 3 missed beats); leadership released on `pagehide`/`freeze`; the leader's set excludes `core.task.log-appended.v1`; with neither API, one stream per visible tab, closed when hidden (FE2-2, FE2-21, FE3-15) |
 | `schemaForm.test.tsx` | shell | every widget row of §7.4.5, locked and restart-required states, secret never echoed |
 | ESLint permission-literal rule (`no-restricted-syntax`) | ABO web `make ci` | no string literal in a permission position (`usePermission`/`useAction`/`hasPermission` argument, `permission`/`*_PERMISSION` property or constant, API-key scope list) unless from `manifest.permissions` or the generated client (FE-11, FE2-17) |
@@ -1449,15 +1536,18 @@ two are merged together. In-repo, apps use `file:` dependencies; there is no roo
 | e2e `theme-boot.spec.ts` | ABO e2e, S9 | FE6-2: with `app-theme-mode` = `light` stored, `data-mui-color-scheme` is `light` before the first script module runs, and `createShell` reads the same key and default mode from the `mediacore-theme` meta; the built `index.html` has exactly one inline script (ABO's hand-written one is deleted, FE7-9) |
 | `runtime.errors.test.ts` | api-client | envelope decoding, timeout, bounce detection, `skipAuthRedirect` from `x-mediacore-permission: public` |
 | `check-singletons.mjs` | core/web CI | one copy of each peer singleton and of `react/compiler-runtime` |
+| `presets.test.mjs` | core/web CI | FE8-1: from a clean `core/web` (no `dist/`), `api-client`, `ui-kit` and `shell` build in the §7.3.2 order with no prior step; every package config loads its preset from source; `shell/dist` contains the `MEDIACORE_CORE_VERSION` literal; `mediacoreLibrary` writes no HTML and takes no `appId` |
+| `shortcuts.test.tsx` | shell | FE8-5: "g s" goes to `/settings`, a module nav entry's `goKey` goes to its page (books' `'l'` → `/books/library`), and a second entry with a used key is dropped with a warning; ui-kit's `useKeyboardShortcuts` names no route |
 | ESLint import boundary | core/web `make ci` from UI-0 | no specifier outside `core/web` (FE-16) |
 | bundle check | core/web e2e and ABO e2e | `/login` with an empty cache fetches no page chunk; entry and `mui` size budgets (FE-18) |
 | `TestHandler_AssetsImmutable`, `_IndexNoStore` (incl. `GET /index.html`: `no-store`, full CSP, through `PageMiddleware`, FE4-11), `_CSPPolicyVerbatim`, `_CSPHotSwap`, `_API404JSON`, `_Placeholder`, `_ServesRootPublicFile` (a `dist/` root file such as `/favicon.svg` is served with `no-cache`, FE3-14) | `core/ui`, Go | server semantics |
 | `TestHandler_NonSPASegments` (incl. case, `//`, trailing-slash variants, `/health/`, `/HEALTH`, `/metrics/`, `/livez/`, with the `Router.NonSPA()` predicate), `TestHandler_NonGETRefused`, `TestHandler_MissingAssetIs404`, `TestHandler_PageMiddlewareOnlyOnIndex` | `core/ui` | FE-3, FE2-6 |
 | port of `static_embed_recovery_test.go` | ABO, booted through `app.New` with `app.Options.UIOptions` (not a hand-built `ui.Handler`) | CF recovery still runs on page loads only, and the Access team host is in `connect-src` of the shell's policy (FE3-4); a page load during boot, before books' Start hook fills the pointers, serves `index.html` with no panic (FE4-5) |
 | `TestHandler_RecordsLegacyRedirectUse` | `core/ui` + kernel | a full page load of a `LegacyRedirects` `From` path calls `OnRedirectUse` once with that pattern; an API call, an asset or a shell path does not; with no `LegacyRedirects` nothing is registered (FE4-5, FE4-8) |
-| `TestBundle_MissingMeta` | `core/ui` | fail-closed for shell bundles; a legacy-style `index.html` with the build meta but no theme meta is refused (FE7-7) |
-| `createShell.meta.test.tsx` | shell, vitest | FE7-8: a `ShellConfig.app.id` that differs from the `mediacore-app` meta gives the blocking page and mounts nothing; a server `app.id` that differs reports `app-id-mismatch`; without the theme meta the shell uses `storageKey('shell','themeMode')` and `'dark'`; the preset refuses an `appId` or `themeStorageKey` outside its pattern |
-| `git status` after build | UI-0 done-check and the dry-run RC (§7.19 step 2) | FE7-1: after `make web-deps && make web-build`, and after the release callers' rewritten `pre-build-script`, `git status --porcelain` is empty |
+| `TestBundle_MissingMeta` | `core/ui` | fail-closed for shell bundles; a legacy-style `index.html` with the build meta but no theme meta is refused (FE7-7), and so is one without the `mediacore-app` meta (FE8-7) |
+| `TestUIAppIDMismatch` | kernel (06 §6.10) | an embedded bundle whose `mediacore-app` meta differs from `app.Options.AppID` fails P8 with `ProblemUIAppIDMismatch`; an equal one boots (FE8-7) |
+| `createShell.meta.test.tsx` | shell, vitest | FE7-8: a `ShellConfig.app.id` that differs from the `mediacore-app` meta gives the blocking page and mounts nothing; a server `app.id` that differs reports `app-id-mismatch`; without the theme meta the shell uses `storageKey('shell','themeMode')` and `'dark'`; the preset refuses an `appId` or `themeStorageKey` outside its pattern; without the `mediacore-app` meta the shell mounts with `config.app.id` and logs one warning; `renderInShell({ appId, themeStorageKey, defaultMode })` sets the keys a test reads (FE8-7) |
+| `git status` after build | UI-0 done-check and the dry-run RC (§7.19 step 2) | FE7-1: after `make web-deps && make web-build`, and after the release callers' rewritten `pre-build-script`, `git status --porcelain` is empty; from S9 also after a hello build, `make -C core readiness` and a core e2e run (`core/.gitignore`, FE8-4) |
 | API-only boot | ABO S9 done-check | `make build-api && ./audiobook-organizer serve` answers `/` with the placeholder (FE2-10) |
 | `TestHandler_OutsideRouteChain` | `core/ui` + `httpapi` | no rate limit or permission stage on SPA responses; listed in the infra set (FE-25) |
 | `TestBasicExemptAssets_EqualsHEAD` | `core/ui` | `ui.BasicExemptAssets` accepts exactly HEAD's `basicauth.go:40-46` set; with the kernel's P8 wiring, `TestBasicGate_ExemptSetEqualsHEAD` passes in the S9 PR (FE5-10) |
@@ -1502,7 +1592,10 @@ the SPA served by the books legacy mount until step 4 (FE-1, FE-2, SIMP-25, FE5-
    runs and is CSP-hashed (FE7-9); the
    stale-build rule keeps running in the api-client runtime (§7.5.2, §7.6.3); ABO adopts the
    `UIBundle()` pattern and `main.go` passes it to `app.Options.UI` together with `app.Options.UIOptions`
-   (FE3-4); books drops `ServesSPA` and gin's SPA serving is deleted in the same PR; invite links switch
+   (FE3-4). **Order inside the series (FE8-8):** ABO's `vite.config.ts` adopts `mediacore(…)` in the same
+   PR as, or a PR before, the one that passes `UIBundle()` to `app.Options.UI`, because `ui.FromFS`
+   refuses a bundle without the preset's metas and `MustFromFS` would otherwise panic on every
+   `embed_frontend` build (FE7-7); the image job of that PR boots the embedded bundle; books drops `ServesSPA` and gin's SPA serving is deleted in the same PR; invite links switch
    to the fragment form and books' legacy `/invite/{token}` 302 starts, beside the `/auth/temp-login`
    302 that has served since S4, both manifest routes (§7.4.3, §7.6.3, FE4-2). Preconditions: UI-0 and the S4–S8 native routes the
    shell pages call (§7.5.1, FE2-25). Done when, among the e2e checks, `make build-api &&
@@ -1708,3 +1801,16 @@ Round 7 (2026-11-04), findings applied to this file:
 - FE7-12 — ui-kit imports neither api-client nor shell (ESLint rule, §7.3.1); `ServerFileBrowser` takes `browse`, `PathLinks` takes `aliases` and `onCopied` (§7.11); §7.3.2's build order is the one list, cited by 12.
 - FE7-13 — §7.5.1 contrasts `/modules`' `ui_build_id` with `--version-json`'s.
 - MOD7-6 — §7.6.3: hello's `web/dist` is on core's own list only, checked by `make -C core ci` with its own tolerance and no Dockerfile cross-check.
+
+Round 8 (2026-11-04), findings applied to this file:
+
+- FE8-1 — §7.10: two presets in `@mediacore/shell/vite`, an unbuilt plain-ESM file (`vite/index.mjs` + `index.d.mts`) loadable before any build: `mediacore(options)` for apps (HTML metas, boot script, `appId`, app-mode define, proxy) and `mediacoreLibrary({ name })` for `ui-kit` and `shell` (no HTML, no `appId`; shell's library-mode `MEDIACORE_CORE_VERSION`); `api-client` keeps its own minimal config from UI-0; §7.3.1 exports, compilation and ESLint scope (`packages/*/src`; ui-kit's config may import only the preset); §7.3.2 build order explained by package code only, no step zero; `presets.test.mjs`.
+- FE8-2 — §7.5.2, §7.8, §7.12: `checkBuild` stays synchronous and header-only (cases 1, 3); `checkModules(body, response, opts)` decides case 2 from the parsed `/modules` body (option (b), 05-http-api §7 the owner text); `buildId.test.ts` case.
+- FE8-3 — §7.5.2: `getStaleReasons()` and replay on subscribe ("once" per listener per reason); ABO's `StaleBuildBanner` (09 S0, `onStaleBuild` from UI-0, replaced at S9); late-subscriber test.
+- FE8-4 — §7.3.1: `core/web/.gitignore` gains `playwright-report/` and `blob-report/`; `core/.gitignore` (S0) covers `/.ci/readiness/`, `/bin/`, Playwright outputs; done-check and `git status` test row extended.
+- FE8-5 — §7.11: `PathLinks` (with `pathAliases`/`formatPath`) moves to books; `ServerFileBrowser` takes `{ browse, include?, exclude? }` and declares its own `BrowseEntry`/`BrowseResult`; `useKeyboardShortcuts` takes its table from the shell, built from shell routes and the new `NavContribution.goKey` (§7.4.2); `shortcuts.test.tsx`.
+- FE8-6 — §7.11: `MaintenanceTab` split (window and task controls → shell; hash, AcoustID, chapter, duplicate jobs → a books widget), `ThrottlePanel` → a books widget; §7.8: `ops.ts` is imported by `services/api.ts` and `operationPolling.ts` (5 non-test importers), the "16" and the page list dropped.
+- FE8-7 — §7.4.4 `RenderInShellOptions.appId`/`themeStorageKey`/`defaultMode`; §7.7 and §7.13: missing `mediacore-app` meta → `config.app.id` plus a warning; §7.6.1 `FromFS` requires the app meta, `Bundle.AppID()`, P8 `ProblemUIAppIDMismatch` (06); anchored `^[a-z][a-z0-9]{1,15}$`; tests.
+- FE8-8 — §7.19 step 4: ABO's `vite.config.ts` adopts `mediacore(…)` in the same PR as, or before, the one that passes `UIBundle()` to `app.Options.UI`; that PR's image job boots the bundle.
+- FE8-9 — §7.4.4 `FakeRealtime.reset/close/fail` with 05-realtime §4.2's reasons; §7.5.2 heading, §7.9.2, §7.12, §7.13: `core.stream.reset.v1` and an unresumable reconnect run `useResync`, no `resync` frame; `realtime.resume.test.ts` case.
+- FE8-10 — §7.8: `createCoreClient({ buildId, shell })`, no no-argument form.
