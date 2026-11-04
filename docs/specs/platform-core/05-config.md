@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.12.1 -->
+<!-- version: 1.12.2 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -440,8 +440,10 @@ type OverrideStore interface {
 
 // Committer is implemented by the kernel (core's core/internal/configstore). Commit opens ONE storage batch and
 // stages into it: OverrideStore.Stage for c.Set and c.Unset, secrets.(*Store).Stage for each of c.Secrets (a
-// secret with a legacy copy is written in place, a native one to c/secrets/, §2.3), and the audit record
-// core.settings.update (05-rbac §7.1: section and changed key names, never secret values; actor = Override.By).
+// secret with a legacy copy is written in place, a native one to c/secrets/, §2.3), and, from 09 S4, when audit
+// lands, the audit record core.settings.update (05-rbac §7.1: section and changed key names, never secret values;
+// actor = Override.By). At S3 there is no audit package yet: the committer logs the same fields (section, changed
+// key names, actor; never a value) at INFO after the commit and stages no audit record.
 // When the store (or any store that staged into the batch) has legacy.WriteLock, it builds and commits the batch
 // inside storage.CommitLocked(ctx, b, d, stage, locks...) with its SettingsLocks: the []storage.Lock the kernel
 // resolved at 06 P4c by calling WriteLocks with legacy.LockConfigSettings and handed it with the store. The
@@ -1151,7 +1153,7 @@ handles are issued to services and before any listener opens. Config's boot writ
    key reaches the running perimeter without a restart at S2 **and** S2b, as at HEAD (COR3-1, COR4-2).
 9. Runtime (from S3): `Apply` = authorize (permission, then protection) → decode candidate per touched section →
    `Validate` → write the boot record if boot keys changed → `Committer.Commit` (one batch: `OverrideStore.Stage`,
-   staged secrets (legacy copies in place, native ones in `c/secrets/`), audit; for a legacy store, inside its
+   staged secrets (legacy copies in place, native ones in `c/secrets/`), audit from S4 (at S3 a log line, §1.3.3); for a legacy store, inside its
    `CommitLocked` hold with the store's post-commit step, §1.3.3) → publish snapshots for live keys (atomic swap) → bump
    generation → `AfterCommit` hooks → wake `OnChange` subscribers. If `Commit` fails after the boot record was
    written, the previous boot record is restored before `Apply` returns (boot keys are restart-class, so nothing
@@ -1673,7 +1675,8 @@ binary's default explicitly and never removes the field, SEC7-2; converted keys 
 never absorbs default or operator-layer values it did not hold; (2) the native store's `c/config/` sets and deletes
 for keys without a legacy name (routing store); (3) the staged secret writes: every secret with a legacy copy in
 place (a plaintext one as its blob field, in the same render, an encrypted one as its row), a native one as its
-`c/secrets/` record (below); (4) the audit record. The
+`c/secrets/` record (below); (4) from 09 S4 the `core.settings.update` audit record (at S3, before `audit` lands, the
+committer logs the change instead and stages no record, §1.3.3). The
 books store binds its own claim to the batch (participant binding, 05-storage D-S10). Concurrent renders retry
 on conflict (§1.6).
 
@@ -2010,8 +2013,10 @@ before the cutover declares both owners, so every older build refuses a store a 
   checkpoint keeps a plaintext copy; the gap-fill file's three keys are removed in the same boot. A swap set-aside
   inside `core.storage.swap.keep_previous` (a restore's `.mediacore-restore/<id>/previous/` and `failed/`, a reset's
   `<state_dir>/restore/<id>/previous/` and its beside-itself destinations) is a full pre-H2 store outside the DB
-  directory, so H2 refuses to start while one exists (`ErrCutoverResidue`, naming the paths) unless the operator
-  passes the cutover's sweep flag, which removes them in the cutover boot first (DATA10-6). Recovery from a failed
+  directory, so while one exists H2 is deferred, as 05-storage §5S.3.13 item 3 owns (health `storage_step_pending`
+  naming the paths, `ErrCutoverResidue` in the log, never a boot failure), until the kernel's sweep after
+  `keep_previous` removes them or the operator sets `core.storage.cutover.sweep_set_asides`, with which the cutover
+  boot deletes them first (DATA10-6). Recovery from a failed
   H2 is then the pre-cutover archive, the floor's restore point. Archives taken before H2 still hold every
   plaintext secret and the encrypted rows in ABO's cipher, and H2 cannot reach them. Its done-check says so plainly
   and is a test, not a live-key read: `TestH2_NoPlaintextSecretOnDisk` plants a canary secret **before** a fixture
@@ -2914,3 +2919,8 @@ Round 10:
 - OPS10-11 — §2.4: `set-install-id` lands at 09 S3 (the dangling "§9.4 row 17" citation).
 - Header — 03 reference v1.14.0.
 - integration pass (round 10): §1.12.5 quotes 09 §9.13's H1–H3 release notes verbatim (R-H) and the H2 bullet cites them instead of declining to restate; `SecretsStore.Write` and the §1.5 not-locked row wrap `storage.ErrNotLocked` (R-B). Already as requested: kept-name `secrets.(*Store)` `Put`/`Delete` commit through `CommitLocked` with `Options.SettingsLocks`; the post-commit hook is `storage.OnCommitted`. Not renamed: `config.Handle.AfterCommit` is config's own subscriber hook, not storage's post-commit hook, which the LEAD decision names.
+
+Plan-phase consistency:
+
+- PC-4 — §1.12.5 H2: a swap set-aside defers H2 (05-storage §5S.3.13 item 3) instead of "refuses to start".
+- PC-17 — §1.3.3 `Committer`, §1.4 step 9 and §1.12.2 "Writing": at S3 the committer logs the change (section, key names, actor) and stages no audit record; from S4, when `audit` lands, it stages `core.settings.update`.

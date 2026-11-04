@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/12-repo-split.md -->
-<!-- version: 1.11.1 -->
+<!-- version: 1.11.2 -->
 <!-- guid: eb47baa1-640b-4c96-96cc-f6b2bdeaa57e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -527,9 +527,11 @@ desired behaviour for `@mediacore/*` too (a core major is a planned migration, n
 
 Co-developing core and an app: either a **temporary** `go mod edit -replace
 github.com/falkcorp/mediacore=../mediacore` that CI rejects (SC7-style check in every app repo), or a
-local, uncommitted `go.work` (`go work init . ../mediacore`). A **committed** `go.work` is banned; a
-local one is allowed because core's `go.mod` carries the genproto exclude, which applies to every
-workspace that has core as a member (03 §3.2 item 1).
+local, uncommitted `go.work` (`go work init . ../mediacore`), but only once §12.8.2 step 10 has changed ABO
+`CLAUDE.md`'s `go.work` guidance, which forbids `go work init` in a checkout until then (CLAUDE.md wins over this
+file; until that step the `replace` route is the one to use). A **committed** `go.work` is banned; a local one can
+then be allowed because core's `go.mod` carries the genproto exclude, which applies to every workspace that has
+core as a member (03 §3.2 item 1).
 
 ## 12.7 Cross-repo CI
 
@@ -693,8 +695,10 @@ Precondition: T and SC1–SC10 hold, recorded in `split-readiness.md`.
    generates the unrelated-path smoke module with a plain `require … vX.Y.Z` and no `replace`, and builds
    it against the proxy (or with `GOPRIVATE`).
 9. **Unfreeze.** All core changes now go to `falkcorp/mediacore`; ABO picks them up through Dependabot.
-10. **Docs**: ABO `CLAUDE.md` (including its `go.work` guidance), `AGENTS.md`, and this spec's README get
-    a pointer to the new repo.
+10. **Docs**: ABO `CLAUDE.md`, `AGENTS.md`, and this spec's README get a pointer to the new repo, and
+    `CLAUDE.md`'s `go.work` guidance is rewritten for the post-split layout: from this step the local,
+    uncommitted `go work init . ../mediacore` of §12.6 is allowed; before it, `go work init` stays forbidden
+    in a checkout (03 §3.2 item 1).
 
 ## 12.9 Rollback of the split
 
@@ -837,7 +841,7 @@ Round 9 (dispositions in `docs/plans/platform-core/reviews/spec-round-9-disposit
 - R9-10 (MOD9-4) — §12.8.1: the path file lists every pre-move path `==>` its `core/` path **before** the `core/` line (filter-repo applies directives in file order; Z10); rename chains mapped transitively; an origin path re-created after its move fails `history_paths.py` and is mapped by a `--commit-callback`; the dry run asserts on the rewritten clone that each moved file's `git log --follow` reaches its pre-move first commit (also cutover step 3); the stale `internal/metrics/metrics.go` example replaced by `internal/telemetry/telemetry.go`. Optional item (f), lowering `-M90%`, not taken: MOD9-5's check reports a file below the threshold instead.
 - R9-10 (MOD9-3) — SC2 and §12.3.11: `TestCoreImportsOnlyCore` and `TestCoreHoldsNoAppKeyNames` read the tag union; core's `ci` target gains `vet-darwin` and `vet-integration` (root `make ci` the same).
 - MOD9-5 — §12.3.11 and §12.8.1: intermediate commits are built for move PRs by `scripts/ci/check_commits_build.py` in `extraction-gates`, which also reports moved files below the similarity threshold.
-- R9-11 (SEC9-3, DATA9-8) — §12.4.4 "Their real reach": every owner whose rows a cutover rewrites (`books`, plus `core`) is raised; the first cutover lifts `{core, 0}`; H1/H2 delete the pre-cutover checkpoint and old Pebble files by forced compaction; archives keep the old representation, stated in done-checks and the release note (rotate secrets, re-issue keys).
+- R9-11 (SEC9-3, DATA9-8) — §12.4.4 "Their real reach": every owner whose rows a cutover rewrites (`books`, plus `core`) is raised; the first cutover lifts `{core, 0}`; H1/H2 delete the pre-cutover checkpoint and old Pebble files by forced compaction; archives keep the old representation, stated in done-checks and the release note (rotate secrets; the "re-issue keys" clause was dropped by SEC10-7 below: API keys are stored as SHA-256 hashes, so no key re-issue is asked).
 - DATA9-8 — §12.4.4 H2 row: the four HEAD-encrypted rows move into `c/secrets/` with the plaintext ones, as 05-config §1.12.5 decides.
 - R9-5 (SEC9-2, SEC9-7) — §12.4.4 H3 row: only auth-enable precedence moves; a disabling value and every other `BelowStored` flag keep HEAD's precedence.
 - SEC9-8 — §12.4.4 H1 row: non-confined roles and existing keys gain the scopes they held only through `LegacyAmbientScopes`; epochs bumped.
@@ -853,3 +857,8 @@ Round 10 (dispositions in `docs/plans/platform-core/reviews/spec-round-10-dispos
 - DATA10-7 — §12.4.4 "Level": the first cutover that raises `core` lifts `{core, 0}`.
 - R10-11 (DATA10-6) — §12.4.4 "What is deleted": every pre-cutover checkpoint and old Pebble file, not only the attempt's.
 - integration pass (round 10): §12.4.4 quotes 09 §9.13's H1–H3 release notes verbatim (R-H).
+
+Plan-phase consistency:
+
+- PC-5 — history line R9-11: the "re-issue keys" clause marked as dropped by SEC10-7; no key re-issue is asked.
+- PC-10 — §12.6 and §12.8.2 step 10: a local `go.work` is allowed only after step 10 rewrites CLAUDE.md's `go.work` guidance; until then CLAUDE.md forbids `go work init` in a checkout.

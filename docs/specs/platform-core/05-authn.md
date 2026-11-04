@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.12.1 -->
+<!-- version: 1.12.2 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1180,9 +1180,9 @@ The *arr facade's key purpose and `X-Api-Key`/`apikey` extraction are deferred-b
   - **the canonical `<APP>_CORE_AUTH_MODE=required`**, an operator-layer value that locks the key
     (05-config §1.3.7). No build before S4 r1 reads it (r1's gin auth follows the effective key), and
     nothing writes it back into the blob, so after a rollback below S4 r1 auth follows the stored
-    `enable_auth`. The release note says: "To turn authentication on so that it stays on if you roll
-    back, use the settings page; `ABO_CORE_AUTH_MODE` is not read by releases before S4 r1." 09's
-    canonical-only row carries this cost (SEC9-11).
+    `enable_auth`. 09 §9.2.1 row 3, the canonical-only row, carries this cost (SEC9-11) and owns its
+    release-note text, quoted here verbatim: "If you turn authentication on with
+    `ABO_CORE_AUTH_MODE=required`, also turn it on in Settings, so that it stays on after a rollback." (S4)
   An operator value that disables auth keeps its ordinary precedence, so a stale `ENABLE_AUTH=false` left
   in an environment can never turn off auth that the UI turned on. When a `BelowStored` legacy name of a
   key at `ProtectAdmin` or higher is set and differs from the effective value, the boot logs at warn and
@@ -1284,6 +1284,8 @@ page posts the token in a body.
 | `PUT /me/password` (self only: `{current, new}`; no target-user field) | `core:self` | Interactive |
 | `GET /me/sessions`, `DELETE /me/sessions/{publicID}` | `core:self` | `DELETE`: Interactive |
 | `GET/POST /me/api-keys`, `PATCH/DELETE /me/api-keys/{id}` | `core:self` | key may manage only keys it may create (§4.4) |
+| `GET /api-keys` (every user's keys, each with its owner's username: the admin key list behind the legacy `GET /api/v1/auth/api-keys?all=true`, `internal/server/handlers/apikeys.go:258-303` @748fd787a) | `core:users.manage` | — |
+| `GET /api-keys/{id}`, `PATCH /api-keys/{id}`, `DELETE /api-keys/{id}` (any key by ID; the target of the legacy `/api/v1/auth/api-keys/:id` routes) | `core:self` | the key's owner, or a principal holding `core:users.manage` with dominance over the owner (HEAD's rule, `apikeys.go:323,353,402`); writes Interactive as on `/me/api-keys/{id}`; a key may manage only keys it may create (§4.4) |
 | `GET /users`, `GET /users/{id}` | `core:users.view` | — |
 | `POST /users/invites`, `DELETE /users/invites/{id}` | `core:users.manage` | Interactive; invite role via `CanAssign` |
 | `POST /users/{id}/disable`, `…/enable`, `DELETE /users/{id}`, `POST /users/{id}/reset-password`, `PUT /users/{id}/roles` | `core:users.manage` | Interactive; dominance |
@@ -1291,6 +1293,12 @@ page posts the token in a body.
 | `POST /users/{id}/temp-login` | `core:users.manage` | Interactive; dominance |
 | `POST /auth/invites/lookup` `{token}`, `POST /auth/invites/accept` `{token, …}` | Public | `RateAuth` |
 | `POST /auth/temp-login/consume` `{token}` (sets cookie) | Public | `RateAuth` |
+
+**The legacy key list (SEC2-5).** The alias of `GET /api/v1/auth/api-keys` has two targets, `GET /me/api-keys`
+and `GET /api-keys`, with selector `all`: its `Request` (05-http-api §3.1) picks `GET /api-keys` only for
+`all=true` **and** a principal holding `core:users.manage`; any other caller, `all=true` included, gets its own
+list, because HEAD answers a non-admin's `all=true` with the caller's keys (`apikeys.go:265`) rather than 403
+(`TestAlias_ListAllKeysNeedsUsersManage`).
 
 The legacy `PUT /api/v1/auth/me/password` stays **one gin route** of the legacy mount, with and
 without a `user_id` body (COR3-12): one ServeMux pattern cannot be both an alias and a gin route
@@ -1882,9 +1890,10 @@ API keys are SHA-256 hashes of high-entropy tokens already (§11 table), so an a
 key. The done-checks (`TestH1_NoRawTokenOnDisk`, `TestH2_NoPlaintextSecretOnDisk`) plant the canary
 **before** a fixture upgrade, so a retained checkpoint holds it, run the cutover, and scan every file
 under the DB directory and its checkpoint directories. They state plainly that archives taken before the
-cutover, and a swap set-aside made before it (`previous/`, `failed/`, kept for
-`core.storage.swap.keep_previous`, 05-backup), still hold the old representation until deleted or
-expired. 09 §9.13 owns one release-note text per cutover, quoted here verbatim. H1: "Backups made before
+cutover still hold the old representation. No swap set-aside (`previous/`, `failed/`, kept for
+`core.storage.swap.keep_previous`, 05-backup) survives: while one exists, H1 and H2 are deferred until it is
+swept or `core.storage.cutover.sweep_set_asides` lets the cutover boot delete it first (05-storage §5S.3.13
+item 3; 09 §9.13). 09 §9.13 owns one release-note text per cutover, quoted here verbatim. H1: "Backups made before
 this release still contain sign-in tokens. They no longer work against this server, but restoring such a
 backup brings them back until they expire; delete those backups or take new ones." H2: "Backups made
 before this release still contain plaintext third-party secrets. Delete them or take new ones; if the
@@ -2205,3 +2214,9 @@ Round 10:
 - SEC10-6 — §11.2 H3 row: the Basic gate keys keep the rule until their settings cutover, which precedes or ships with H3.
 - SEC10-7 — §11.2: H1 deletes existing sessions, invites and one-time tokens rather than rehashing them; "re-issue API keys" dropped; one release-note text per cutover, owned by 09 §9.13.
 - integration pass (round 10): §3.4 staging bullet, §6 error row and `TestLegacyStagedIdentityWriteOutsideLockRefused`: the not-locked refusal wraps `storage.ErrNotLocked` (R-B); §3.4 and §5: one legacy store instance per App, not per process (COR10-10).
+
+Plan-phase consistency:
+
+- PC-4 — §11.2: no swap set-aside survives H1/H2; the cutover is deferred while one exists (05-storage §5S.3.13 item 3).
+- PC-15 — §4.13: `GET /api-keys` (the admin key list behind legacy `?all=true`) and `GET`/`PATCH`/`DELETE /api-keys/{id}` (owner, or `core:users.manage` with dominance); the legacy list alias selects the admin list only for a `core:users.manage` principal (`TestAlias_ListAllKeysNeedsUsersManage`).
+- PC-19 — §4.11: the `ABO_CORE_AUTH_MODE` release note quotes 09 §9.2.1 row 3's S4 text verbatim.

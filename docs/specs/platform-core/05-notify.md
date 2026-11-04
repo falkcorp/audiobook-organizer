@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-notify.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.12.1 -->
 <!-- guid: 785812fd-5ddd-4540-be24-d061c0127788 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -390,7 +390,7 @@ written, because a new one reads `Local=true` (05-metadata M1.3 `Put`, M1.4 step
 every write passed with auth off: on a legacy-backed webhook the auth-disabled principal passes the check (HEAD's
 auth-off rule, 05-metadata M1.3 `Put`; R10-10, SEC10-3; `TestAuthOff_LegacyBackedIntegrationWritableAsHEAD`). If an older build reorders or edits the list after a rollback, this build reads the list as it now is |
 | plugin event types (`internal/plugin/events.go:18-31`) | books event topics declared notifiable in the events catalog: `book.imported`→`books.book.imported.v1`, `book.deleted`→`books.book.deleted.v1`, `metadata.applied`→`books.metadata.applied.v1`, `tags.written`→`books.tags.written.v1`, `file.organized`→`books.file.organized.v1`, `dedup.detected`→`books.dedup.detected.v1`, `dedup.merged`→`books.dedup.merged.v1`, `cover.changed`→`books.cover.changed.v1`, `read_status.changed`→`books.read-status.changed.v1`, `scan.completed`→`books.scan.completed.v1`, `book.quarantined`→`books.book.quarantined.v1`, `book.unquarantined`→`books.book.unquarantined.v1` (the last two exist at HEAD but are not in the webhook's default list, `internal/plugins/webhook/plugin.go:146-159`); books publishes through `Deps.Notify.Publish` in the same batch as the change (COR2-3) |
-| `plugin.Notifier`, plugin `EventBus` (for notifications) | `plugin.Notifier` deleted (N4). The plugin `EventBus` keeps feeding the webhook plugin until S7 (S6 moves only the operations bus, SIMP3-10); at S7 the webhook plugin and its subscriptions go, and books publishes its 12 event types through `Deps.Notify` instead. `internal/plugin` itself is deleted at **S7**, in the same stage, once its last importer is rewired (18 non-test, non-mock files import it at HEAD, `git grep -l '/internal/plugin"' -- '*.go'` @748fd787a; informative, ADV-11); the deleting PR does not build while any importer remains (04 §8.3 is the informative map; 09 S7). The notify-only bus role is `core/events` (05-events) |
+| `plugin.Notifier`, plugin `EventBus` (for notifications) | `plugin.Notifier` deleted (N4). The plugin `EventBus` keeps feeding the webhook plugin until S7 (S6 moves only the operations bus, SIMP3-10); at S7 the webhook plugin and its subscriptions go, and books publishes its 12 event types through `Deps.Notify` instead. `internal/plugin` itself is deleted at **S7**, in the same stage, once its last importer is rewired (20 non-test files in 10 packages import it at the evidence commit, two of them the generated mocks in `internal/server/handlers/mocks`, which the deleting PR regenerates or deletes; `git grep -l '/internal/plugin"' 748fd787a -- '*.go' | grep -v _test.go`; informative, ADV-11; 09 S7 and 04 §8.3 give the same count); the deleting PR does not build while any importer remains (04 §8.3 is the informative map; 09 S7). The notify-only bus role is `core/events` (05-events) |
 | `mailSenderOverride` test seam (`internal/server/server.go:424`) | `coretest.MailRecorder` injected as the email instance |
 
 ## 11. Open items
@@ -545,3 +545,7 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
   - DATA10-3 — §3 `RuleStore` comment: the rule-set mutex is taken before `CommitLocked`, never in a `stage`; the stage calls no books method that takes a HEAD mutex.
   - R10-10 / SEC10-2 / SEC10-3 — §10 webhook row: `Test` follows `Put`'s ProtectAdmin rule; with auth off, legacy-backed webhooks stay editable as at HEAD.
   - COR10-10 — §3 `RuleStore` comment: one instance per App.
+
+Plan-phase consistency:
+
+- PC-2 — §10: `internal/plugin` importers counted as 09 S7 and 04 §8.3 count them: 20 non-test files in 10 packages, two of them generated mocks.

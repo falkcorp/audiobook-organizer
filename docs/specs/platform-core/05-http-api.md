@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-http-api.md -->
-<!-- version: 1.12.3 -->
+<!-- version: 1.12.4 -->
 <!-- guid: fcd387ab-7a8e-49e2-a4b4-a6901aaee1e3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -755,7 +755,7 @@ side-effect route that needs idempotency adds it then, in its owner.
   the legacy handler multiplexed on a body or query field: `POST /api/v1/auth/api-keys` creates a key
   for the caller, or with `user_id` for another user (`credential_routes.go:93`), so its alias has
   `Targets: [createOwnAPIKey, createUserAPIKey]`, `Selector: [user_id]` and a `Request` that sets the
-  `{id}` path value; `GET /api/v1/auth/api-keys?all=true` selects the admin list the same way. Every
+  `{id}` path value; `GET /api/v1/auth/api-keys?all=true` selects the admin list `GET /api/core/v1/api-keys` (05-authn §4.13) the same way, and only for a principal holding `core:users.manage`, as HEAD falls back to the caller's own list. Every
   remaining legacy field must decode strictly into the chosen target (§3.4). 09 S4 lists, per aliased
   path, its targets and selector field. A legacy path that cannot be mapped without losing meaning is
   not aliased at all: `PUT /api/v1/auth/me/password` — with **and** without `user_id` (with it, it
@@ -1165,7 +1165,7 @@ its exempt set equals HEAD's (`TestBasicGate_ExemptSetEqualsHEAD`), the gate ena
 blob turns stage 8 on also with compose's `BASIC_AUTH_ENABLED=false` in the environment (the
 Basic-gate half of `TestPerimeterHonoursBlobOnlyValues`, OPS5-1), an enabled gate with no password
 refuses (`TestBasicGate_EmptyPasswordRefuses`), and the R-test row keeps the password across a
-rollback (`TestBasicGate_PasswordReadInPlaceAcrossRollback`, OPS5-2).
+rollback (05-config §1.12.2's `TestRollback_BasicGateNeverOpenOnPrev` and `TestRollback_BasicGateClearedStaysClosed`, OPS5-2).
 `TestLegacyRoleReachUnchanged` (every manifest route × the 4 seed roles, 572 routes at `748fd787a`, a count the test generates at the stage's base commit, ADV-11; plus scoped keys, auth-off and a custom-role half
 over random native roles, SEC4-2) belongs to S4 r2, where the engine moves, and stays a permanent CI
 test because the mount is permanent.
@@ -1412,7 +1412,7 @@ inventory of HEAD's series.
 | `TestBasicGate_EmptyPasswordRefuses` | S3 on: with `core.http.basic_gate.enabled` true and the password unset, cleared, empty or unreadable, every non-exempt request → 401 (also `<username>:`), health `basic_gate_no_password`, the startup log names the key; the exempt set still passes; with the stored password empty and `BASIC_AUTH_PASSWORD` set, that value admits, is logged at warn and is never stored (R5-1(c), SEC5-4, DATA5-12, OPS9-7) |
 | `TestFileOnlyLegacyKeysNeverDBStored` | (ABO) `core.http.peer_allowlist` and `core.http.trusted_proxies` set through the settings page or `PUT /api/v1/config` → refused, nothing in the blob or `c/config/`; set in the operator file under `allowed_peer_cidrs` / `tunnel_connector_addrs` or in the environment → effective, and `prev` reads the same value after a rollback (DATA9-6, R9-5) |
 | `TestBasicGate_UsernameCompared` | S3 on: a wrong username with the right password → 401; with `core.http.basic_gate.username` empty and a password set, `:<password>` passes as at HEAD; `BASIC_AUTH_USERNAME` is a `BelowStored` alias (SEC6-9) |
-| `TestBasicGate_PasswordReadInPlaceAcrossRollback` | (R-test cells) Basic password saved on `cur` is HEAD's encrypted row: roll back, `prev`'s gate accepts it and refuses `<username>:`; re-entered on `prev`, roll forward: `cur` accepts the re-entered one; cleared on `prev`, roll forward: 401 for `<username>:` (R5-1(b),(c), OPS5-2, SEC5-4) |
+| `TestRollback_BasicGateNeverOpenOnPrev`, `TestRollback_BasicGateClearedStaysClosed` | (R-test cells; 05-config §1.12.2 owns the cells and their names, OPS5-2) Basic password saved on `cur` is HEAD's encrypted row: roll back, `prev`'s gate accepts it and refuses `<username>:`; changed on `prev`, roll forward: `cur` accepts the changed one; cleared on `prev` with the gate still enabled, roll forward: 401 for `<username>:` (R5-1(b),(c), OPS5-2, SEC5-4) |
 | `TestCSP_DefaultPerOwner` | SPA, legacy `DefaultCSP(r)`, native default; a handler-set CSP is kept (FE-4); the legacy SPA response carries the inline-script hash, the configured Access team host and `Reporting-Endpoints` (FE2-1) |
 | `TestPerimeter_XAppBuildOnEveryResponse` | legacy, native, infra, 404, 405 and 410 responses all carry `X-App-Build` (FE2-5, OPS2-13) |
 | `TestInfra_MetricsRequiresScope` | (native role store) `/metrics` without a credential → 401, with a key lacking `core:metrics.read` → 403; `/livez`, `/readyz` stay Public (SEC2-14) |
@@ -1436,6 +1436,7 @@ inventory of HEAD's series.
 | `TestBind_TagsCompiledAtRegistration` | bad tag → `ErrBadBinding` at boot |
 | `TestDecode_StrictUnknownField` / `TestAlias_UnknownLegacyFieldRefused` | 400 `unknown_field` native; 400 `legacy_field_unsupported` on an alias for a field neither the selector nor the target knows (SEC2-5) |
 | `TestAlias_CreateKeyForOtherUserKeepsTarget` | legacy `POST /api/v1/auth/api-keys {user_id}` reaches `createUserAPIKey` for that user, bounded by the target's roles and dominance; without `user_id`, `createOwnAPIKey` (SEC2-5) |
+| `TestAlias_ListAllKeysNeedsUsersManage` | legacy `GET /api/v1/auth/api-keys?all=true` reaches `GET /api/core/v1/api-keys` (every user's keys) only for a principal holding `core:users.manage`; any other caller, `all=true` included, gets `GET /api/core/v1/me/api-keys`, as HEAD's non-admin `all=true` returns the caller's own list (`internal/server/handlers/apikeys.go:265` @748fd787a; 05-authn §4.13; SEC2-5) |
 | `TestPage_OffsetDefaultHasTotal` / `TestCursor_FilterMismatch` | SIMP-8 |
 | `TestTaskStart_IdempotencyKeyReplaysRunView` | a repeated `Idempotency-Key` on task start → 200, the existing `RunView`, `Idempotent-Replayed: true` (SIMP2-8; store in 05-tasks) |
 | `TestAlias_DeprecationHeadersAndCompatCounter` | headers rendered from the ledger row of `app.Options.CompatLedger` (or core's fragment); `<namespace>_compat_legacy_use_total{surface="http"}` increments (SIMP3-3) |
@@ -1718,3 +1719,8 @@ Final verification:
 
 - FIN12-7 — §3.5 `InstrumentScope` gains `SchemaURL`; §4.2 stage 2 (b): the exact identity the SDK shares on, explicit otelgin duration boundaries, `server.port` by otelgin's `requiredHTTPPort` rule, and the load-bearing scope version and typed values; §12 `TestNoRouteSeriesSharedNoDuplicate` asserts them.
 - FIN12-8 — §12: `TestNoRouteSeriesSharedNoDuplicate` runs from S2 r1.
+
+Plan-phase consistency:
+
+- PC-15 — §4.6: the `all=true` admin list is `GET /api/core/v1/api-keys` (05-authn §4.13), selected only for `core:users.manage`; §12 `TestAlias_ListAllKeysNeedsUsersManage`.
+- PC-16 — §8.1 and §12: the Basic-password rollback cell uses 05-config §1.12.2's names, `TestRollback_BasicGateNeverOpenOnPrev` and `TestRollback_BasicGateClearedStaysClosed`; `TestBasicGate_PasswordReadInPlaceAcrossRollback` retired.

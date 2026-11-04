@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/digests/S2b.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: d75bb966-3b64-4a12-b028-e2d1fad564cf -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -7,7 +7,7 @@
 
 Normative digest of `docs/specs/platform-core/09-abo-on-core.md` §9.4 "S2b" and what it points at (03, 04 §8.1, 05-storage, 05-backup, 05-config, 05-health, 06). No review
 provenance in the body; `[n]` marks a footnote with spec sections and review IDs. Precedence: 03 normative; 09 owns sequencing; the owning 05-*/06 file owns how a mechanism
-works; 04 is a planning list. Counts are informative and regenerated at the stage's base commit [1]. Section 10 lists cross-file conflicts that this digest does not resolve.
+works; 04 is a planning list. Counts are informative and regenerated at the stage's base commit [1]. Section 10 records the cross-file conflicts found while writing it and how the spec resolved them.
 
 ## 1. Goal
 
@@ -42,7 +42,7 @@ works; 04 is a planning list. Counts are informative and regenerated at the stag
 |---|---|---|
 | `internal/database` storage files → `mediacore/storage` + `mediacore/internal/pebble` | L1 | `keyfamilies.go` **stays in ABO** as the claim generator's input; `internal/compactprogress` → `storage`; the Pebble collector → `internal/pebble` (gate: ABO's Open Library store opens through `storage.OpenAuxiliary`); its series keep HEAD's names |
 | `storage/restorejournal` | L0 | record types, kinds and intent of the one swap journal (see S1 digest §4.2; adds `ResetKind`: `ResetStore`, `ResetFactory`; reset fields `delete_library_files`, `delete`, `hook_args`, `hook_paths`, `fresh_rows`) |
-| `core/internal/restoreswap` | L1 | the one journaled directory swap (restore, revert, checkpoint, `KindReset`); imported only by `kernel`; never imported by `storage`; conflict C1 on its imports |
+| `core/internal/restoreswap` | L1 | the one journaled directory swap (restore, revert, checkpoint, `KindReset`); imports only `storage` and its L0 leaves (03 R4); imported only by `kernel`; never imported by `storage` |
 | `mediacore/compat` | L4 | headers, the process-local use counter, `Ledger` from `app.Options.CompatLedger` (nothing is persisted) |
 | `config` grows | L3 | native `OverrideStore` over `c/config/`; `Manifest.LegacyStores.Config`; `config/configtest` (`OverrideStoreSuite`) |
 | `legacy` grows | L5 | `legacy.Stores` (+`Handles`), `ConfigOpener`, `ConfigResetArgs`, `ConfigResetPlan`, `ConfigResetRun`, `ConfigOpenEnv.Reset`, `ConfigOpenEnv.Files` with `StateFiles`, `Maintenance`; `legacy/legacytest` config suite |
@@ -230,12 +230,12 @@ the credentialed smoke scrape passes.
   the owner-recorded ceiling for the first-migration boot.
 - Installing the checkpoint alert snippet that ships with S2b.
 
-## 10. Conflicts left unresolved (do not pick a side without the owner)
+## 10. Conflicts (resolved in the spec)
 
-- C1: 03 R4 and 05-backup say `core/internal/restoreswap` (L1) **imports `storage`** and its L0 leaves; 04 §8.1 S2b says it imports **only the L0 leaves and the standard
-  library, never `storage`**.
-- C2: 03 §3.3 (`legacy` row) and 04 §8.1 describe `legacy.Maintenance.StageFactoryReset(ctx, requestedBy, kind)`; 05-storage §5S.3.11, 06 §6.4.11 and 09 S2b give
-  `StageFactoryReset(ctx, requestedBy, req storage.ResetRequest)`. Section 4.2 quotes the second form.
+- C1 (resolved, 03 owns layers): `core/internal/restoreswap` (L1) imports `storage` and its L0 leaves, never the reverse (03 R4, 05-backup). 04 §8.1 S2b's "never
+  `storage`" is stale; 04 is generated and is corrected at its next regeneration.
+- C2 (resolved, 05-storage owns the request type): `legacy.Maintenance.StageFactoryReset(ctx, requestedBy, req storage.ResetRequest)`, as section 4.2 quotes; 03 §3.3 now
+  says so. 04 §8.1 S2b's `kind` form is stale until its next regeneration.
 
 ## Footnotes
 
@@ -246,3 +246,7 @@ A-3, DATA5-11, R9-1; resets, R7-2, R8-1, SIMP8-1, SIMP8-4, DATA6-6, COR7-1, COR8
 SEC8-5, SEC9-4, R9-6, R9-7, DATA9-3, DATA9-4, DATA9-11, DATA8-12; offline opens, R7-4, R8-2, DATA7-11, DATA8-3, DATA8-4, SEC8-4, R9-9, R11-5; crash matrix, A-8, R9-7, ADV-4,
 COR9-5; claims rollout, 05-storage §5S.9.4, A-3; compat, SIMP3-3, R4-4, A-14, MOD4-11, SIMP2-12; checkpoint, OPS-25, DATA2-18, DATA3-1, OPS3-14; metrics, A-5, OPS6-3;
 `restoreswap` placement, COR7-10, COR8-5, COR8-6, SIMP8-8; staging marker via `app.Offline`, A-10, COR9-6.
+
+Plan-phase consistency:
+
+- PC-8, PC-9 — `restoreswap` imports `storage` and its L0 leaves (03 R4); `StageFactoryReset(ctx, requestedBy, req storage.ResetRequest)`; section 10 resolved; 04 is stale on both until regenerated.

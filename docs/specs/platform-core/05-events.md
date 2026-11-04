@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-events.md -->
-<!-- version: 1.11.1 -->
+<!-- version: 1.11.2 -->
 <!-- guid: 6dbdef8e-e3f3-4088-bdb9-ba37a706165d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -677,7 +677,7 @@ names included), so cardinality is bounded.
 
 | ABO today | Becomes |
 |---|---|
-| `internal/plugin.EventBus` + 12 `EventType`s (`internal/plugin/events.go:18-31`) | `events.Bus` + `books` topics: `books.book.imported.v1`, `books.book.deleted.v1`, `books.metadata.applied.v1`, `books.tags.written.v1`, `books.file.organized.v1`, `books.dedup.detected.v1`, `books.dedup.merged.v1`, `books.cover.changed.v1`, `books.read-status.changed.v1`, `books.scan.completed.v1`, `books.book.quarantined.v1`, `books.book.unquarantined.v1`, each with a typed payload struct replacing `BookID`/`Data map[string]any` and one catalog entry carrying its permission |
+| `internal/plugin.EventBus` + 12 `EventType`s (`internal/plugin/events.go:18-31`) | at 09 S7 (Order below), `events.Bus` + `books` topics: `books.book.imported.v1`, `books.book.deleted.v1`, `books.metadata.applied.v1`, `books.tags.written.v1`, `books.file.organized.v1`, `books.dedup.detected.v1`, `books.dedup.merged.v1`, `books.cover.changed.v1`, `books.read-status.changed.v1`, `books.scan.completed.v1`, `books.book.quarantined.v1`, `books.book.unquarantined.v1`, each with a typed payload struct replacing `BookID`/`Data map[string]any` and one catalog entry carrying its permission |
 | `plugin.EventPublisher` (11 publisher files) | `events.Publish(d.Events, ctx, books.TopicX, id, payload)` through the module's `Deps.Events` |
 | `internal/dedup/lifecycle.go:94` subscriber | `events.On` declared in `books`' `Register` |
 | webhook plugin (`internal/plugins/webhook/plugin.go:79`) | a [05-notify](05-notify.md) webhook channel adapter. `books` emits each of the 12 legacy event types as a notification through `Deps.Notify` (`notify.Publish`, staged in the batch of the state change; its topics carry `Notify` metadata), and the kernel's core consumer `core.notify.deliver` delivers it to the webhook instance; no bus subscriber is involved (COR2-3) |
@@ -690,11 +690,14 @@ and the mirror part of `reporter_db.go` out of opsbridge into `internal/activity
 | `OperationDef.Triggers` (1 dead declaration) | `outbox.ConsumeIntoTask`: `books` stages the durable topic `books.book.relocated.v1` in the same batch that moves a book, and a books consumer starts `books.deluge.path-update` (or the 05-download successor) with the book ID — this makes the relocation follow-up durable for the first time |
 | direct `EnqueueOp` from handlers after a state change | case by case: `outbox.ConsumeIntoTask` where the follow-up is correctness-critical (inventory in [09-abo-on-core](09-abo-on-core.md)) |
 
-Order: (1) land `events`/`outbox` in core; (2) bridge — the plugin `EventBus` becomes a thin adapter
-publishing onto `events.Bus` so publishers move file by file; (3) executor publishes `core.task.*`, the
-realtime hub subscribes, and until the projections land books' bridge subscriber feeds streams A, B
-and C; (4) remove the bridge and `registry.EventHub` once the legacy projections serve the legacy
-streams (09 S6).
+Order (09 owns the stages): (1) land the bus `events` in core (09 S4, where `auth` and `rbac` first
+publish; 04 §8.1) and `outbox` at 09 S6; (2) the executor publishes `core.task.*` from 09 S5 and, until
+the projections land, books' bridge subscriber feeds streams A, B and C; (3) the realtime hub subscribes,
+and the bridge and `registry.EventHub` are removed once the legacy projections serve the legacy streams
+(09 S6); (4) the plugin `EventBus` is **not** bridged onto `events.Bus`: it keeps
+feeding the webhook plugin, unmoved, through S6, and at 09 S7 its publishers move to books' topics
+(`events.Publish`, and `notify.Publish` for the 12 legacy notifications) in the PR that deletes
+`internal/plugin` with the webhook plugin (09 S6 Moves, S7; [05-notify](05-notify.md) §10; SIMP3-10).
 
 ## 5E.14 Open items
 
@@ -796,3 +799,7 @@ Round 10:
 
 - R10-4 / COR10-5 (consistency with 05-tasks and 05-storage) — `Tx.StartRun`: the relay commits under the run locks the kernel resolved for the run store at P4c, never a lock name of its own, and the hold is marked on the relay batch, which the run store checks with `storage.LocksHeld(b)`.
 - integration pass (round 10): `Tx.StartRun` comment: `storage.LocksHeld(b, l)` (two arguments, 05-storage).
+
+Plan-phase consistency:
+
+- PC-1 — 5E.13 Order and first row: the plugin `EventBus` is not bridged onto `events.Bus`; it keeps feeding the webhook plugin through S6 and its publishers move at 09 S7 with `internal/plugin`'s deletion (09 S6, S7; 05-notify §10; SIMP3-10); stages named per step.

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metrics.md -->
-<!-- version: 1.11.3 -->
+<!-- version: 1.11.4 -->
 <!-- guid: 5cdf765d-aec1-4ed7-981a-e2e698afde61 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -422,7 +422,9 @@ at S8, when they move to the private registry. So:
   which the S1 façade's provider and `app.Options.ServedMeterProvider` feed), at S5 (the shared default registry)
   and at S8 (the private registry behind the kernel's mount).
 - **`TestHistogramBucketsPinned`** (HEAD's, `series_contract_test.go:1125-1150`, against
-  `testdata/histogram_buckets.golden`) is part of every stage's series check (S1, S2 r2, S2 r3, S5, S7, S8): the `le`
+  `testdata/histogram_buckets.golden`) is part of every stage's series check, in every release from S1 on (S2's r1, r2
+  and r3 included), and it is named in particular at S1, S2 r2, S2 r3, S5, S7 and S8, the releases that move a pinned
+  instrument's constructor, view or registry: the `le`
   values of the ten pinned histograms, the five OTel ones that only a construction-time view sets
   (`ops.run.duration`, `ops.schedule_lag`, `ai_dispatch.slot_wait`, `ai.request.duration`, `http.server.*`) among
   them, stay HEAD's because ABO passes its table as `MetricViews` from S1 (§3; MOD10-6).
@@ -807,3 +809,7 @@ Round 11:
 Final verification:
 
 - FIN12-7 — §3 "One family, one owner": the recorded identity is (scope name, version, schema URL, instrument name, kind, number type, unit, description); the experiment's load-bearing details (typed attributes, exact scope version, identical description) recorded; bucket advice is not part of the identity; `TestFamilyTaken_SemconvHTTPOneInstrument` covers the full tuple.
+
+Plan-phase consistency:
+
+- PC-13 — §6: `TestHistogramBucketsPinned` is part of every stage's series check in every release from S1 on, S2 r1–r3 included; the stage list names where it matters most.
