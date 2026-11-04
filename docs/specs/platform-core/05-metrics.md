@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metrics.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 5cdf765d-aec1-4ed7-981a-e2e698afde61 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -8,7 +8,7 @@
 Evidence commit `748fd787a` (all `path:line` anchors). Raw inputs:
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md) §4, §9;
 [`raw/15-dependencies.md`](../../plans/platform-core/raw/15-dependencies.md) (OTel v1.47.0, exporter
-v0.69.0, client_golang v1.25.0). Normative: [03-architecture](03-architecture.md) v1.8.0 R4 (`metrics` is in
+v0.69.0, client_golang v1.25.0). Normative: [03-architecture](03-architecture.md) v1.8.1 R4 (`metrics` is in
 **L0** with `entity`, `lifecycle`, `version`, `log`), R5 (no `prometheus.DefaultRegisterer`, no `otel.Set*Provider`
 in core except the opt-in `app.InstallProcessDefaults`; R5 binds core only), §3.6 (`mediacore_<subsystem>_*`; module series `<MetricPrefix>_*` for an app that ships one module
 and `<MetricPrefix>_<moduleID>_*` otherwise (decided by the modules compiled in, not by enablement, §4), `MetricPrefix` = `app.Options.MetricPrefix`; semantic-convention names
@@ -24,7 +24,7 @@ unchanged). The compatibility window is defined once, in
 | M3 | Names: core instruments `mediacore.<subsystem>.<what>` → `mediacore_<subsystem>_<what>[_unit][_total]`. Module instruments use the app's **metric prefix** `app.Options.MetricPrefix` (ABO: `audiobook_organizer`): `<prefix>.<what>` when the app **ships** one module, `<prefix>.<module>.<what>` when it ships two or more. "Ships" means the module list passed to `app.New`, which never changes at run time, so enabling or disabling a module never renames another module's series (SIMP2-13). ABO's books series therefore keep their exact names. The Prometheus translation strategy is **pinned** (`UnderscoreEscapingWithSuffixes`), not left to the exporter's process-global default. OTel semantic-convention instruments (`http.server.*`) keep their standard names. |
 | M4 | Cardinality is a contract: closed attribute-key allow-list per scope, bounded value sets only, no identifiers; SDK per-instrument limit 2000; a series golden per scope. |
 | M5 | `/metrics` is a core route mounted by the kernel through `Router.Infra` with permission `core:metrics.read`, which the chain **enforces** (stages 10–13 run for an `Infra` route whose permission is not Public, SEC2-14), outside response compression. For ABO the kernel mounts it at 09 S8; until then ABO's legacy gin route serves it (from S2 r3 `Provider.Handler()` over the default registry), with HEAD's any-credential check until S4 r2 and `core:metrics.read` enforced by stage 13 from S4 r2 (§6; OPS5-5, SEC5-13). |
-| M6 | **Books metric names are unchanged: no rename and no alias layer for them.** Only series that move into core subsystems (tasks, storage, AI) are renamed to `mediacore_*`; for those, the old names keep working through **gather-time aliases** (no double instrumentation) registered in 09's compat ledger and removed only by a contract PR, plus shipped recording rules for operators who need longer. |
+| M6 | **Books metric names are unchanged: no rename and no alias layer for them.** Only series that move into core subsystems (tasks, storage, AI) are renamed to `mediacore_*`, and the two process gauges that the core Go collector replaces are served by its runtime families (`metrics.RuntimeFamilies()`, §3; OPS6-2); for those, the old names keep working through **gather-time aliases** (no double instrumentation) registered in 09's compat ledger and removed only by a contract PR, plus shipped recording rules for operators who need longer. |
 | M7 | Spans are redacted before export with the logging pipeline's `*log.Redactor` (credential query values, invite paths, userinfo), so `apikey`/`token` values never reach a trace backend (SEC-22). |
 
 ## 1. Purpose & scope
@@ -135,7 +135,8 @@ func (s *Scope) View(instrument string, buckets ...float64) sdkmetric.View // hi
 
 // Legacy aliases for series that moved into a core subsystem. Applied at gather time by Handler: matching
 // families are copied under the old name with label renames, value maps and an optional label filter.
-// No instrument is recorded twice. Never used for module (books) series (M6). An Alias carries no class
+// No instrument is recorded twice. Never used for module (books) series (M6). New must be a mediacore_* family
+// or one of RuntimeFamilies() (OPS6-2); anything else is ErrAliasNotCore. An Alias carries no class
 // and no dates: its gate and removal dates come from its ledger row (09 §9.2.9, SIMP2-12). The aliases name
 // an app's legacy families, so the app supplies them (app.Options.MetricAliases; core holds no ABO name, R1)
 // and their rows are in the app's ledger (app.Options.CompatLedger, SIMP3-3).
@@ -151,11 +152,16 @@ type Alias struct {
 
 func (p *Provider) AddAliases(a ...Alias) error
 
+// RuntimeFamilies returns, as a fresh slice (R5: no exported slice), the families of the Go runtime collector that
+// core owns and that an Alias may target besides mediacore_*: "go_goroutines" and "go_memstats_alloc_bytes". They
+// replace ABO's two process gauges at S8 (§13 item 3). The list grows only by a core PR, never from an app.
+func RuntimeFamilies() []string
+
 var (
 	ErrInstrumentName = errors.New("metrics: instrument name violates naming rules")
 	ErrScopeTaken     = errors.New("metrics: scope already registered")
 	ErrAliasConflict  = errors.New("metrics: alias collides with a live family")
-	ErrAliasNotCore   = errors.New("metrics: alias source is not a core-subsystem family")
+	ErrAliasNotCore   = errors.New("metrics: alias source is neither a core-subsystem nor a core runtime family")
 )
 ```
 
@@ -250,17 +256,36 @@ never drops:
 | S2 r3–S7 | `Options.PromRegisterer` = the default registry (ABO passes `app.Options.PromRegisterer`, 06, in the same release that deletes the façade's exporter); `app.InstallProcessDefaults` points the OTel globals at the App's providers, so the six global-reading ABO packages keep their series | ABO's **legacy gin route** under `MountLegacy`, unchanged in path and compression exclusion, whose handler becomes `Provider.Handler()` (gathering that registry plus the gather-time aliases of core-renamed series, which therefore work from the stage that renames them). Credential check: HEAD's any-credential check until S4 r2; **from S4 r2** the route's legacy manifest entry changes from `AnyAuthenticated` to `core:metrics.read`, so stage 13 enforces it, as 09 §9.2.6 records (OPS5-5, SEC5-13; `TestLegacyMetricsRoute_RequiresScopeFromS4`) | default registry, unchanged |
 | S8 on | the App's private registry (`PromRegisterer` nil; the `app.Options` field is removed, 06) | the kernel: `Router.Infra(core.metrics.path, "core:metrics.read", Provider.Handler())`; the legacy gin route is removed in the same PR | moved to `Provider.Registerer()` in the same PR; `cache.go:99` and `cache_snapshotter.go:24` take `Provider.Gatherer()` |
 
-**Series-name checks (OPS5-6, OPS5-9).** Every check scrapes with a credential that holds `core:metrics.read`
-(HEAD: any credential), lists the family names (comment lines dropped, the label part cut, sorted unique), and
-fails on an empty result: an unauthenticated scrape gets 401 and would compare nothing. The checks follow the
-stages that rename (§13 item 3 "Stage" column):
+**Series-name checks (OPS5-6, OPS5-9, OPS6-3).** This section is the one statement of every stage's series check;
+09 points each stage here. A live scrape lists only the families that have recorded a sample since boot: a
+client_golang `Vec` with no observed label set, an OTel instrument with no data point and the Pebble collector
+without a source export nothing (`internal/telemetry/contract/series_contract_test.go:15-18` @748fd787a). Two boots
+of two builds therefore give different name sets, depending on which code paths ran, and families tied to
+configured integrations never appear on a staging copy whose provider secrets are scrubbed (09 §9.3). So a live
+scrape cannot be the normative check.
 
-| Stage | Done-check |
+**Normative: the seeded contract test.** ABO's series contract test (HEAD's `internal/telemetry/contract`, kept
+in ABO as `internal/telemetrypolicy` from S1, 09 S1) builds the telemetry in its own process, records one sample
+per row of its **seeding table**, scrapes, and compares the family set (family, type, label set) with its golden.
+The PR that renames a family adds the new family's seeding row and the alias's expected family to the golden.
+The stage's done-check is the golden diff that PR shows:
+
+| Stage | Golden diff of the seeded contract test |
 |---|---|
-| S2 r1, S2 r2 | the scrape answers 200 and its name set ⊇ S1's |
-| S2 r3 | the name set equals S2 r2's ∪ the kernel's own `mediacore_*` series now served |
-| S2b (Pebble), S5 (tasks/ops, T0+T1), S7 (AI) | the name set ⊇ the previous stage's, and every family renamed in that stage answers under its new name **and** its alias; the alias's ledger row and the `deploy/` dashboard and rule switch ship in the same PR (§13 item 4) |
-| S8 | name set(S8) = name set(S7) ∪ {`mediacore_build_info` (09 S8; labelled with the binary's version, never the UI bundle's build ID, R5-7), the Go collector's `go_memstats_alloc_bytes` and `go_goroutines` in the private registry, the listed additions of that PR}, every aliased family answers under both names, and the two retired process gauges answer only through their aliases |
+| S1, S2 r1, S2 r2 | empty |
+| S2 r3 | only the kernel's own `mediacore_*` families, now gathered |
+| S2b (Pebble), S5 (tasks/ops, T0+T1), S7 (AI) | only the families renamed in that stage: each new `mediacore_*` family added, and its alias family present under the old name; the alias's ledger row and the `deploy/` dashboard and rule switch ship in the same PR (§13 item 4) |
+| S8 | only `mediacore_build_info` (09 S8; labelled with the binary's version, never the UI bundle's build ID, R5-7) and the listed additions of that PR. The two retired process gauges keep their golden lines, now produced by their aliases over the Go collector's families. Every aliased family is still present |
+
+The Go collector's `go_goroutines` and `go_memstats_alloc_bytes` are not S8 additions: HEAD's `/metrics` serves
+`promhttp.Handler()` over the default registry, which already carries the Go collector
+(`internal/server/server_lifecycle.go:1746-1747` @748fd787a), so every stage's scrape has them (OPS6-2).
+
+**Smoke check: the live scrape.** On each stage's deployment a credentialed scrape (a credential that holds
+`core:metrics.read`; HEAD: any credential) must answer 200 with a non-empty family list (comment lines dropped,
+label part cut, sorted unique; an unauthenticated scrape gets 401 and would compare nothing). That list must
+contain a short fixed set of always-on families: `process_resident_memory_bytes` and `go_goroutines`, plus
+`mediacore_build_info` from S8. It is never compared with another build's scrape.
 
 `health` serves no `/metrics` ([05-health](05-health.md) §5H.11 item 3).
 
@@ -293,7 +318,7 @@ stages that rename (§13 item 3 "Stage" column):
 | Instrument name/unit/view violation | fail-closed at construction (`ErrInstrumentName`) | contract violations caught at boot and in CI |
 | Duplicate scope | fail-closed (`ErrScopeTaken`) | two owners for one name |
 | Alias collides with a live family | fail-closed at `AddAliases` | would corrupt a live series |
-| Alias whose `New` is not a `mediacore_*` family | fail-closed (`ErrAliasNotCore`) | books names are unchanged; aliases exist only for core renames (M6) |
+| Alias whose `New` is neither a `mediacore_*` family nor one of `RuntimeFamilies()` | fail-closed (`ErrAliasNotCore`) | books names are unchanged; aliases exist only for core renames and the core runtime collector (M6, OPS6-2) |
 | Redactor nil while tracing is on | fail-closed (boot) | spans would export credentials |
 | Cardinality limit reached | fail-open (overflow series), test failure in CI | data loss for one instrument only |
 | Gather error in `/metrics` | `promhttp.ContinueOnError`: partial scrape + `promhttp_metric_handler_errors_total` | one bad collector must not blank the scrape |
@@ -359,7 +384,8 @@ with rows in ABO's ledger; core holds none of them (R1).
 | `TestModulePrefix_StableUnderEnablement` | two compiled-in modules, one disabled: the other's prefix is still `<MetricPrefix>.<module>`; series names identical before and after the toggle |
 | `TestTranslationStrategyPinned` | names identical with the global validation scheme set to legacy and to utf8 |
 | `TestGoAndProcessCollectorsPresent` | `go_goroutines`, `process_resident_memory_bytes` in the scrape |
-| `TestAliases_GatherTimeCopy` | old family present with filter, renamed labels and mapped values; no double recording; collision rejected; non-core source rejected |
+| `TestAliases_GatherTimeCopy` | old family present with filter, renamed labels and mapped values; no double recording; collision rejected; a source that is neither `mediacore_*` nor in `RuntimeFamilies()` (e.g. a books family) rejected with `ErrAliasNotCore` |
+| `TestAlias_GoCollectorTargetAccepted` | on the private registry, aliases `audiobook_organizer_process_goroutines` ← `go_goroutines` and `audiobook_organizer_process_memory_alloc_bytes` ← `go_memstats_alloc_bytes` are accepted by `AddAliases` and both old names appear in `Handler()`'s scrape; `RuntimeFamilies()` returns a fresh slice (OPS6-2) |
 | `TestTrace_NoApikeyInSpanAttributes` | in-memory exporter behind the redacting wrapper: request `?apikey=…&token=…` and `/api/core/v1/auth/invites/<t>` → no secret in span name or attributes |
 | `TestHandler_NoDoubleGzip` | `Accept-Encoding: gzip` through the httpapi stack yields one gzip layer |
 | `TestCardinality_OverflowFailsMetricstest` | exceeding the limit is detected |
@@ -367,8 +393,9 @@ with rows in ABO's ledger; core holds none of them (R1).
 | `TestShutdownFlushes` | `testing/synctest` + in-memory exporter: last batch exported |
 | `metricstest.AssertSeries` (per scope) | series golden for each core scope |
 
-ABO keeps its own `internal/telemetry/contract` series test; after the move it scrapes `Provider.Gatherer()` and
-its 74 `audiobook_organizer_*` lines change only where §13 retires or moves a series into core.
+ABO keeps its own series contract test (HEAD's `internal/telemetry/contract`, `internal/telemetrypolicy` from S1);
+after the move it scrapes `Provider.Gatherer()` and its 74 `audiobook_organizer_*` lines change only where §13
+retires or moves a series into core. Its seeded golden is the normative series check of every stage (§6, OPS6-3).
 
 ## 13. Migration from ABO
 
@@ -415,7 +442,7 @@ its 74 `audiobook_organizer_*` lines change only where §13 retires or moves a s
 | `audiobook_organizer_operations_{started,completed,failed,canceled}_total`, `_operation_duration_seconds` (label `type`) | superseded by the tasks family | S5 | yes: one alias per family, `Filter` on `mediacore_tasks_runs_total` by outcome (dashboards and alerts use them) |
 | `audiobook_organizer_op_items_processed`, `_op_items_total` (label `op_id`) | **retired** (forbidden per-run label; progress is served by the tasks API/realtime) | S5 | no alias; kept emitting by the books module's legacy collector for the window under a dated exemption, then deleted |
 | `ai_dispatch_*`, `ai_*` (unprefixed legacy) | `mediacore_ai_dispatch_*`, `mediacore_ai_*` | S7 ([05-ai](05-ai.md)) | yes |
-| `audiobook_organizer_process_memory_alloc_bytes`, `_process_goroutines` | `go_memstats_alloc_bytes`, `go_goroutines` (Go collector) | S8 (private registry with its own Go collector) | yes |
+| `audiobook_organizer_process_memory_alloc_bytes`, `_process_goroutines` | `go_memstats_alloc_bytes`, `go_goroutines` (Go collector; both in `RuntimeFamilies()`, so `AddAliases` accepts them, OPS6-2; present in every scrape since HEAD) | S8 (private registry with its own Go collector) | yes |
 | `http_server_*` (semconv) | unchanged | — | not needed |
 | every other `audiobook_organizer_<x>` (books, search index, catalog, cache, ABS, review, fixer, metadata fetch, …) | **unchanged** | — | none (no rename, no alias layer) |
 
@@ -503,3 +530,8 @@ Round 5:
 - OPS5-9 — §6: every series-name check scrapes with a credential holding `core:metrics.read` and fails on an empty name set.
 - OPS5-14 — §3 `Options.PromRegisterer`, §6 table (new S2 r1–r2 row), §7 step 1, §13 item 1: `PromRegisterer` is set at S2 r3, in the release that deletes the façade's exporter; nil (private, unserved) at S2 r1–r2, whose checks are "200 and ⊇ S1".
 - MOD5-5 (reference) — §3 span redaction uses `log.URLKeys()`.
+
+Round 6:
+
+- OPS6-2 — M6, §3 (`Alias` comment, new `metrics.RuntimeFamilies()`, `ErrAliasNotCore` text), §6, §8 row, §12 `TestAliases_GatherTimeCopy` and new `TestAlias_GoCollectorTargetAccepted`, §13 item 3: an alias may target `mediacore_*` or a core runtime-collector family (`go_goroutines`, `go_memstats_alloc_bytes`), so the S8 process-gauge aliases no longer fail boot; the two `go_*` names are dropped from the S8 additions, present since HEAD.
+- OPS6-3 — §6 "Series-name checks", §12 closing paragraph: the normative per-stage check is the golden diff of ABO's seeded series contract test (`internal/telemetrypolicy`), with each renamed family's seeding row and alias added in the renaming PR; the live credentialed scrape is only a smoke check (200, non-empty, a fixed always-on set).
