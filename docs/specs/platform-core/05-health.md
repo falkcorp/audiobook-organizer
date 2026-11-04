@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.13.1 -->
+<!-- version: 1.13.2 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -196,6 +196,15 @@ Both exist from release R1, where the staged reset ships (staged only offline, b
 reset route arrives at F4; 05-storage §5S.3.15), before this file's `Snapshot` and probes (F8, 5H.10). Until then they
 travel through HEAD's `degraded` token list, through the same fixed-token source it merges today (`getDegraded`,
 `handler.go:258-264`), so R1's release note's promise of a health token holds from R1.
+
+**Restore tokens owned by 05-rbac.** rbac's post-restore hook (from F4, the identity flip; 05-rbac §7.1) raises two
+reasons on a `StatusDegraded` result of `core.backup`, the restore's component: `restore_last_admin_kept` (the
+restore kept the last `core:admin` entry of a demoted account, whose sign-in stays restricted; the authenticated
+`Detail` names the recovery path, an owner-verified reset link or the offline `<app> users reset-password`) and
+`restore_admins_review` (after a restore with no pre-swap store, every `core:admin` holder is listed for review; the
+`Detail` names them, and each clears when an interactive `core:admin` session acknowledges it, audited
+`core.role.review_admin`). The probes and the token-only route show the tokens alone. Until F8 they travel through
+HEAD's `degraded` token list, as the tokens above do.
 
 ### 5H.3.2 Startup steps
 
@@ -782,4 +791,5 @@ Round 10:
   R1 by restore; the 60 s supervisor timeout is sized for R0's HEAD stop), 5H.10 "Landing by release".
   Consistency pass: R2 landings keyed to the flips (readiness core F5, the rest and the alias deletion with their callers F8,
   advisory tokens F3, origin binding F7), the swap token pair and the R1 budget path re-pointed to 05-storage §5S.3.15 and
-  05-config §1.12.1, and `unit-lifecycle` to 09 §9.2.1.
+  05-config §1.12.1, `unit-lifecycle` to 09 §9.2.1, and 05-rbac's restore tokens `restore_last_admin_kept` and
+  `restore_admins_review` listed on `core.backup`.
