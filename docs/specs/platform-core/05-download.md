@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-download.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.12.1 -->
 <!-- guid: 513fb395-c640-4bb6-b76c-d9fe80b3224e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -409,7 +409,8 @@ a Durable topic; COR2-17).
 
 Instances are `download/<id>` records in the one instance registry (05-metadata §M1, SIMP-4), native rows only
 (ABO's Deluge is migrated into `download/deluge` in R2, §10). Secrets are
-`integrations.download.<id>.<field>` (05-config §2.3 grammar). Secret fields per adapter: Deluge `password`;
+`integrations.download.<id>.<field>` (05-config §2.3 grammar). Secret fields per adapter: Deluge `password` (the web UI's) and `daemon_password` (the daemon connection HEAD
+configures under `download_client.torrent.deluge`);
 qBittorrent `username`, `password`; Transmission `username`, `password`; SABnzbd `api_key`; NZBGet
 `username`, `password`. Every adapter declares `Meta.Egress = EgressConfigured`: a client on the LAN (the
 usual case) needs `Local=true`, which only an interactive `core:admin` holder can set (05-metadata M1.3,
@@ -634,8 +635,8 @@ Core, phase 1: `TestPool_ItemsFillsLocalPath`, `TestPool_RelocateGroupsByInstanc
 `TestPool_IntegrationsDisabledNoClientCall` (`core.integrations.disabled`: a fake client sees no request and no
 snapshot changes; R6-7),
 `TestDelugeMigration_InstanceAndPassword` (books' R2 step M6 over a HEAD-written fixture: one native
-`download/deluge` row with HEAD's URL and settings, its password a ref to `integrations.download.deluge.password`
-holding HEAD's value, `Local` bound to the stored URL's origin, and no Deluge field left in the blob; 05-metadata
+`download/deluge` row with HEAD's URL and settings, its passwords refs to `integrations.download.deluge.password` and
+`integrations.download.deluge.daemon_password` holding HEAD's values, `Local` bound to the stored URL's origin, and no Deluge field left in the blob; 05-metadata
 M1.9, M1.10).
 Core, phase 2 (with `acquire`; a sketch until then): `TestGrab_IdempotencyKeyDedupes`, `TestGrab_AmbiguousAddRecoveredByTag`,
 `TestGrab_FallbackOnTransportOnly`, `TestGrab_InvalidNoFallback`, `TestGrab_OwnerAcquireAccepted`,
@@ -661,7 +662,7 @@ client with a scriptable clock-driven state machine (`Advance(id, State)`), capa
 |---|---|
 | `internal/deluge/client.go` | `core/integrations/download/deluge` adapter (`core.deluge`); RPC/auth code reused; every method gains ctx; `http.Client` from `env.HTTP` (5-minute timeout becomes per-op limits) |
 | `deluge.GetClient()` global, `ResetGlobalClientForTest`, `SetGlobalClientForTest` | deleted; `Pool.Lease` |
-| `DelugeWebURL/Password`, `download_client.torrent.deluge` | the **native** instance `download/deluge`, written in R2 by books' cutover step M6 (05-metadata M1.10): its URL and settings into the row, its password moved by the M2 secrets step into `c/secrets/` as `integrations.download.deluge.password` (encrypted under the keyring; plaintext in the blob at HEAD) and referenced from the row, `Local` bound to the stored web URL's origin and `OperatorSecretOrigin` set to it (05-metadata M1.10 "Trust carried over"); the step deletes the Deluge fields from the blob. From then on the native rules apply: a URL change by anyone without the ProtectAdmin check clears the stored password and `Local` (05-metadata M1.3). The env-authoritative behaviour is an **in-memory operator overlay** on the effective instance while an operator value is set, never written to the row or `c/secrets/`, so removing the env value restores the stored password as HEAD does (05-metadata M1.4 step 2, SIMP2-5); every operator value overlays and locks its field (05-config §1.3.5). An env-given Deluge password is served beside the migrated web URL, and is withheld beside one a non-admin sets later (05-metadata M1.4 step 2) |
+| `DelugeWebURL/Password`, `download_client.torrent.deluge` | the **native** instance `download/deluge`, written in R2 by books' cutover step M6 (05-metadata M1.10): its URL and settings into the row, its passwords moved by the M2 secrets step into `c/secrets/` as `integrations.download.deluge.password` (the web password) and `integrations.download.deluge.daemon_password` (`download_client.torrent.deluge.password`; 05-config §1.12.3), encrypted under the keyring (both plaintext in the blob at HEAD) and referenced from the row, `Local` bound to the stored web URL's origin and `OperatorSecretOrigin` set to it (05-metadata M1.10 "Trust carried over"); the step deletes the Deluge fields from the blob. From then on the native rules apply: a URL change by anyone without the ProtectAdmin check clears the stored password and `Local` (05-metadata M1.3). The env-authoritative behaviour is an **in-memory operator overlay** on the effective instance while an operator value is set, never written to the row or `c/secrets/`, so removing the env value restores the stored password as HEAD does (05-metadata M1.4 step 2, SIMP2-5); every operator value overlays and locks its field (05-config §1.3.5). An env-given Deluge password is served beside the migrated web URL, and is withheld beside one a non-admin sets later (05-metadata M1.4 step 2) |
 | `deluge_move_enabled`, `deluge_discovery_label`, `deluge_discovery_enabled` | `modules.books.download.*` settings (they are ABO behaviour, not client config) |
 | `BookVersion.TorrentHash`, `BookFile.DelugeHash` | **phase 1: unchanged** — no books row rewrite; books builds `download.ItemRef{Instance: download/deluge, ID: ItemID(hash)}` at the call site. Storing `ItemRef` is the phase-2 books migration (§1 table), with its own release entry when it ships (SIMP2-7) |
 | `NotifyDelugeAfterOrganize/AfterVersionSwap/MoveStorage(ToDir)` | books code calling `Pool.Relocate` (reached as `module.Deps.Downloads`, COR-1) for every `ItemRef` of the book's active versions, behind `Caps.Relocate` |
@@ -816,5 +817,5 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
   by the secrets step, `Local` and `OperatorSecretOrigin` bound to the stored URL, 05-metadata M1.10), and the
   native rules apply from then on; `BelowStored`, HEAD-reach, auth-off and rollback text removed. The generic
   Deluge routes are deleted in R2, not aliased. `staging-scrub` row text removed; the legacy-store test replaced by
-  `TestDelugeMigration_InstanceAndPassword`. Stage references re-keyed to R2.
+  `TestDelugeMigration_InstanceAndPassword`. Stage references re-keyed to R2. Consistency pass: the Deluge daemon password (`download_client.torrent.deluge.password`) is adopted as its own secret field `daemon_password` at `integrations.download.deluge.daemon_password` (§4.1, §9, §10), the name 05-config's rename table coined.
 
