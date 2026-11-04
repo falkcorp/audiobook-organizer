@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.13.1 -->
+<!-- version: 1.13.2 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -286,6 +286,14 @@ type Options struct {
 	// DefaultDisabledAllowRemote is core.auth.disabled_allow_remote's default
 	// (§4.11; ABO true, SEC4-8); operator layers and overrides still win.
 	DefaultDisabledAllowRemote bool
+	// OIDCCallbackBase is the path prefix of the OIDC/OAuth callback,
+	// GET <OIDCCallbackBase>/{provider}/callback. core/internal/authhttp
+	// passes it to httpapi's Router.CoreFixedGroup (05-http-api §3.5), and
+	// that callback pattern is the one CoreExactPatterns() entry; ABO sets
+	// "/api/v1/auth/oauth", HEAD's path, so no identity provider is
+	// re-registered (§4.13). Empty (hello, new apps): no fixed group; the
+	// callback is GET /api/core/v1/auth/oidc/{provider}/callback on CoreGroup().
+	OIDCCallbackBase string
 }
 
 // Users. Every method that acts on another user takes the actor and enforces
@@ -1026,7 +1034,8 @@ which reads the fragment links, and the first-party callers (the `server-bootstr
 call, `scripts/`) move to these routes in that same PR (03 §3.8; 09). One path is kept: HEAD's OAuth
 callback `/api/v1/auth/oauth/:provider/callback` (`wire_auth_routes.go:44` @748fd787a) is served by core
 from F4 at that exact pattern, `GET /api/v1/auth/oauth/{provider}/callback`, registered by
-`internal/authhttp` as the one core auth route outside `/api/core/v1`, so no identity provider's redirect
+`internal/authhttp` on `Router.CoreFixedGroup(opts.OIDCCallbackBase)` with the base ABO supplies as
+`app.Options.Auth.OIDCCallbackBase` (§3.2), as the one core auth route outside `/api/core/v1`, so no identity provider's redirect
 URI is re-registered (03 §3.8 "Kept contracts"). The F4 PR deletes books' gin handler for it, and the
 pattern is the one core route inside books' `/api/v1/` claim, which 05-http-api §4.9's claim rule must
 admit (`TestOAuthCallback_HEADPathServedByCore`).
@@ -1154,8 +1163,8 @@ the re-apply read the store's head before any line is appended on this boot (SEC
 2. **P4c** builds the `Store`, `core/internal/authstore`, for every app. A store constructor writes
    nothing (DATA4-10).
 3. **P4d, post-DAG reconcilers** (06 §6.5.1 is the order; COR3-2): `secrets.Open` has already run at
-   P4, after the checkpoint and before the migration list; first the override store's `SetSecrets` and
-   `Attach` (`Load`, read-only) (05-config; R3-1, R4-6, COR5-2); then
+   the start of P4b, after the checkpoint and before the migration list; first config's `Store.SetSecrets`
+   and `Store.Attach` (`Load`, read-only) at P4d step 1 (05-config §1.4 step 6; R3-1, R4-6, COR5-2); then
    05-backup's revocation-journal step, whose auth kinds write through auth's Store (the replaced-store
    test and re-apply read the head before this boot appends a `gap` or `restore` line, SEC4-5); then, on
    a boot that applied a restore or found a replaced store, `auth.PostRestore` (§4.14); then
@@ -1860,4 +1869,4 @@ Plan-phase consistency:
 
 D10–D12 revision (2026-11-04):
 
-- the identity cutover lands the hardened design directly in R2 (step M3, flip F4). Rewritten: intro, §3 intro and landing (R1/R2), §3.1–§3.3 comments, §3.4 (native store only; new `auth.Importer` and `ErrImportRejected`), §4.1 (imported `abk_` keys, `auth.Options.ImportedKeyPrefixes`), §4.3, §4.4 (imported keys; the early-fix properties come from `Expect`), §4.6, §4.11 (core precedence for every app with the fail-closed "more restrictive wins" rule for the auth switch and the Basic gate; retired names refuse boot; no auth-off write rule), §4.12, §4.13 (native routes only; fragment links; HEAD's gin identity routes and OAuth callback path change, the callback re-registered at deploy), §4.14 (no older-build cases), §5, §6–§9 rows, §10 (cutover tests, the six early-fix tests ported as property tests onto core auth), §11 (native store; the identity cutover table: sessions, invites and the bootstrap hash reset, `abk_` keys and ABS sessions survive, IDs kept, quarantine, checkpoint deleted after 7 days), §13 G12, objections. Deleted: the legacy store, `legacy` capabilities, lock names and `StoreLocks`, `KeyLegacyState`, `InviteLinkForm`, the cookie-default options, `core.auth.apikey.legacy_prefixes`, the alias, legacy-link and rollback text, and §11.2 (H1–H3). §11.1 unchanged in substance (release keys and its core-era sentences updated). Consistency pass: the OAuth callback keeps HEAD's path, served by core from F4; `core.auth.mode` declares `FailClosed`, the Basic-gate password follows the plain operator lock (§11.1 item 5); `core.auth.oidc.<id>.client_secret`, `core.auth.login.saturated_rate`/`_burst` and the OAuth fold adopted from 05-config; M7 before M2, sealed quarantine, D12 (a)–(d) labels, R1 resets offline-only and 07's fragment tests cited.
+- the identity cutover lands the hardened design directly in R2 (step M3, flip F4). Rewritten: intro, §3 intro and landing (R1/R2), §3.1–§3.3 comments, §3.4 (native store only; new `auth.Importer` and `ErrImportRejected`), §4.1 (imported `abk_` keys, `auth.Options.ImportedKeyPrefixes`), §4.3, §4.4 (imported keys; the early-fix properties come from `Expect`), §4.6, §4.11 (core precedence for every app with the fail-closed "more restrictive wins" rule for the auth switch and the Basic gate; retired names refuse boot; no auth-off write rule), §4.12, §4.13 (native routes only; fragment links; HEAD's gin identity routes and OAuth callback path change, the callback re-registered at deploy), §4.14 (no older-build cases), §5, §6–§9 rows, §10 (cutover tests, the six early-fix tests ported as property tests onto core auth), §11 (native store; the identity cutover table: sessions, invites and the bootstrap hash reset, `abk_` keys and ABS sessions survive, IDs kept, quarantine, checkpoint deleted after 7 days), §13 G12, objections. Deleted: the legacy store, `legacy` capabilities, lock names and `StoreLocks`, `KeyLegacyState`, `InviteLinkForm`, the cookie-default options, `core.auth.apikey.legacy_prefixes`, the alias, legacy-link and rollback text, and §11.2 (H1–H3). §11.1 unchanged in substance (release keys and its core-era sentences updated). Consistency pass: the OAuth callback keeps HEAD's path, served by core from F4; `core.auth.mode` declares `FailClosed`, the Basic-gate password follows the plain operator lock (§11.1 item 5); `core.auth.oidc.<id>.client_secret`, `core.auth.login.saturated_rate`/`_burst` and the OAuth fold adopted from 05-config; M7 before M2, sealed quarantine, D12 (a)–(d) labels, R1 resets offline-only and 07's fragment tests cited. Final consistency sweep: `auth.Options.OIDCCallbackBase` names the callback base handed to `Router.CoreFixedGroup` (§3.2, §4.13), and §5 places `secrets.Open` at the start of P4b and config's `SetSecrets`/`Attach` at P4d step 1.
