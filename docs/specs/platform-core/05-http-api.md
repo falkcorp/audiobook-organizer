@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-http-api.md -->
-<!-- version: 1.3.1 -->
+<!-- version: 1.4.0 -->
 <!-- guid: fcd387ab-7a8e-49e2-a4b4-a6901aaee1e3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -83,10 +83,13 @@ the L0 leaf `core/internal/jsonschemax`, defined by 05-config §1.10.2 (it impor
 `x-mediacore-*` keywords and an **extensible** override table, `type Overrides
 map[reflect.Type]*jsonschema.Schema` with `func For[T any](o Overrides) (*jsonschema.Schema, error)`
 (backed by `ForOptions.TypeSchemas`). Each package contributes the entries for its own types at its
-own layer: `config` adds `config.Duration` and `secrets.Ref`; `httpapi` adds `rbac.Permission` (which
-it already imports), `time.Time` and its page types. `httpapi` therefore needs no `config` import and
-no live config store to reflect a type, so a `coretest` router or the `examples/hello` route test
-builds without one; there is still exactly one reflector. Verified on 2026-11-04 against the Go
+own layer: `jsonschemax.Base` holds `time.Time`; `config` adds `config.Duration` and `secrets.Ref`
+(`config.Overrides`); `httpapi` adds `rbac.Permission` (which it already imports) and its page types,
+and reflects with `jsonschemax.Base.With(config.Overrides).With(its own)` — one composition, so a
+`config.Duration` field renders as `string/duration` in OpenAPI exactly as in the settings schema
+(SIMP3-1). `httpapi` therefore imports the static `config.Overrides` value but needs no live config
+store, so a `coretest` router or the `examples/hello` route test builds without one; there is still
+exactly one reflector. Verified on 2026-11-04 against the Go
 module proxy and the module zip: v0.4.3 is the latest tag (published 2026-04-17, older than the
 14-day release-age rule), MIT licence, one dependency (`github.com/google/go-cmp`), four releases in
 the last 11 months; `TypeSchemas` exists in `jsonschema/infer.go`. **Pinning (MOD2-20).** A Go
@@ -130,17 +133,30 @@ stages (same contrib release train as the current `otelgin v0.72.0`, `go.mod:31`
 ## 3. Go API
 
 Package `github.com/falkcorp/mediacore/httpapi` (layer L6; may import `auth`, `rbac`, `audit`,
-`compat`, `log`, `metrics`, `core/internal/jsonschemax`; neither `config` (SIMP2-3) nor `storage`:
-with the idempotency store deleted (§4.5) `httpapi` keeps no records). Implementation details in
-`core/internal/openapi` and `core/internal/httpmw`.
+`compat`, `config` (for the static `config.Overrides` value only; never a `*config.Store`, SIMP2-3,
+SIMP3-1), `log`, `metrics`, `core/internal/jsonschemax`; not `storage`: with the idempotency store
+deleted (§4.5) `httpapi` keeps no records). Implementation details in `core/internal/openapi` and
+`core/internal/httpmw`. The import direction is `httpapi` → `internal/openapi`, never the reverse:
+`internal/openapi` defines its own operation-description type, which `Router.OpenAPI` fills from
+`RouteInfo` and the reflected schemas, so the two cannot form a cycle (MOD3-4).
 
-**Minimum surface per stage (COR2-9).** `httpapi` lands at 09 S2, before `auth`, `audit` and the
-rest of `rbac` (S4). At S2 it needs only the `rbac` leaf types `Permission`, `Requirement`, `Need`,
-`AllOf`, `AnyOf`, `Public`, `AnyAuthenticated` and `Delegated` (which land with it at S2, 05-rbac
-§3.1), `compat`, `log` and `metrics`. `Deps.Auth`, `Deps.RBAC` and `Deps.Audit` are nil until S4;
-`Build` refuses a native route other than `Public`/infra while they are nil (`ErrNoAuthService`); that holds at S2–S3
-(09 S3 adds no native endpoint: only the legacy mount with `LegacyAuthGin`, infra and the legacy `/`
-owner exist), and stages 12–13 are skipped for the mount (§8.1).
+**Minimum surface per stage (COR2-9, COR3-3, MOD3-4).** `httpapi` lands at 09 S2 with
+`internal/openapi`, `internal/httpmw` and `internal/jsonschemax`, before `compat` (S2b) and before
+`auth`, `audit` and the rest of `rbac` (S4). At S2 it needs only:
+
+- the `rbac` leaf types `Permission`, `Requirement`, `Need`, `AllOf`, `AnyOf`, `Public`,
+  `AnyAuthenticated` and `Delegated` (05-rbac §3.1);
+- the `auth` leaf types `Principal`, `Method` and `MethodSpec` (05-authn §3.1, §3.3), which land at
+  S2 next to rbac's so `In.Principal` and `RouteInfo.AuthMethod` compile and `Registrar.AuthMethod`
+  can record compat methods (06 §6.4.10; SEC3-14);
+- `config.Overrides`, `log` and `metrics`.
+
+`Deps.Compat` is an S2b addition (no alias exists before S4, so nothing at S2 renders a ledger row or
+counts a legacy use), and `Deps.Auth`, `Deps.RBAC` and `Deps.Audit` are S4 additions; struct fields
+added later are additive under the API-stability gate. While the S4 fields are absent, `Build`
+refuses a native route other than `Public`/infra (`ErrNoAuthService`); that holds at S2–S3 (09 S3 adds
+no native endpoint: only the legacy mount with `LegacyAuthGin`, infra and the legacy `/` owner exist),
+and stages 12–13 are skipped for the mount (§8.1).
 
 ### 3.1 Routes and groups
 
@@ -172,7 +188,7 @@ type Route struct {
 	ETag        bool         // opt-in: GET returns ETag from the entity Version, writes honour If-Match (§4.3)
 	Success     int          // success status; 0 = 200 (201 if Resp is Created[T], 204 if NoContent)
 	Deprecated  string       // compat ledger row ID when this native route is itself being retired (§4.6); "" = not deprecated
-	Strict      bool         // reject unknown JSON fields (default true, for native routes and aliases; see §3.4)
+	Lenient     bool         // accept unknown JSON fields; zero value = strict, for native routes and aliases (§3.4, COR3-13)
 }
 
 // Guards are identity requirements beyond the permission.
@@ -193,8 +209,10 @@ const (
 // Lifetimes are not Go data (SIMP2-12). An alias or a deprecated route names
 // its compat ledger row (09 §9.2.9); the row holds the class, gate, shipped
 // release and date and the earliest removal date. The router renders the
-// Deprecation (RFC 9745) and Sunset (RFC 8594) headers from the ledger table
-// embedded in the binary (one //go:embed of the generated ledger table), and
+// Deprecation (RFC 9745) and Sunset (RFC 8594) headers from the ledger the
+// app supplies (app.Options.CompatLedger, ABO: //go:embed of
+// docs/compat-surfaces.md in its root main) merged with core's own fragment
+// (core/compat/core-ledger.md) by compat (SIMP3-3), and
 // Link rel="successor-version" from the target route's pattern. Sunset is
 // ADVISORY: nothing in the router compares it with the clock (OPS-10, SIMP-7).
 // TestCompatLedgerMatchesCode joins every Ledger ID with the ledger.
@@ -220,7 +238,11 @@ func HandleRaw(g *Group, rt Route, doc RawDoc, h http.Handler)
 
 // Alias registers a legacy path for one or more already-registered native
 // routes of g (each target keeps its own handler and permission), stamps
-// deprecation headers from the ledger, and counts its use (§4.6).
+// deprecation headers from the ledger, and counts its use (§4.6). The
+// pattern must lie inside a prefix g's owner claims or, for core, inside a
+// prefix whose ledger row names core as the alias owner (the deliberate
+// core-over-books aliases of 09 S4); otherwise Build fails with
+// ErrAliasOutsideClaim (§4.9, SEC3-8).
 func Alias(g *Group, legacy LegacyPath)
 
 type LegacyPath struct {
@@ -235,7 +257,12 @@ type LegacyPath struct {
 	Request     func(r *http.Request) (target string, err error)
 	Selector    []string        // body/query fields Request consumes; removed before the target decodes strictly
 	LegacyError bool            // render httputil-style {error,code,status} instead of problem+json
-	Shape       func(v any) any // optional: adapt a native response body to the legacy JSON shape
+	// Shape optionally adapts a native response body to the legacy JSON shape.
+	// It is untyped, so OpenAPI documents an alias only as a deprecated entry
+	// with the target's native schema; a client that needs the legacy wire shape
+	// keeps its hand-written calls on the legacy path (07 §7.11; FE3-6). There is
+	// no WithLegacyShape API.
+	Shape       func(v any) any
 }
 
 // Gone registers a retired route: auth and permission still run first, then
@@ -388,13 +415,13 @@ var (
 	ErrBadBinding         = errors.New("httpapi: invalid request binding tags")
 	ErrSchema             = errors.New("httpapi: type cannot be described in OpenAPI")
 	ErrJSONName           = errors.New("httpapi: JSON property name is not snake_case")
-	ErrPublicNotAllowed   = errors.New("httpapi: Public route not on the module's declared public list")
 	ErrLegacyManifest     = errors.New("httpapi: legacy route missing from or inconsistent with the manifest")
 	ErrAliasTarget        = errors.New("httpapi: alias names an unknown target, or several targets without Request")
 	ErrLegacyAuthGin      = errors.New("httpapi: LegacyAuthGin mount not named by app.Options.LegacyAuthGinUntil")
 	ErrOwnAuthMethod      = errors.New("httpapi: OwnAuth route names no compat method registered by its module")
-	ErrShellSegment       = errors.New("httpapi: a shell route segment is also a non-SPA server segment")
 	ErrNoAuthService      = errors.New("httpapi: non-Public native route registered before auth/rbac exist")
+	ErrAliasOutsideClaim  = errors.New("httpapi: alias or legacy route pattern outside its owner's claims")
+	ErrShadow             = errors.New("httpapi: a route of one owner is strictly more specific than a route of another owner over the same paths")
 )
 ```
 
@@ -407,9 +434,10 @@ type Validator interface{ Validate() error }
 ```
 
 Decoding rules: `Content-Type` must be `application/json` (415 otherwise) for `body:"json"`; body is
-read through `http.MaxBytesReader(MaxBody)` (413 `body_too_large`); `Strict` routes use
-`Decoder.DisallowUnknownFields` (400 `unknown_field`) — default true for native routes **and for
-aliases** (SEC2-5). An alias removes its `Selector` fields, then decodes the rest strictly into the
+read through `http.MaxBytesReader(MaxBody)` (413 `body_too_large`); every route not marked `Lenient`
+uses `Decoder.DisallowUnknownFields` (400 `unknown_field`) — the zero value is strict, for native
+routes **and for aliases** (SEC2-5; a Go `bool` cannot default to true, so the field is the opt-out,
+COR3-13). An alias removes its `Selector` fields, then decodes the rest strictly into the
 target's request type; any other legacy field is refused with 400 `legacy_field_unsupported`, never
 silently dropped, because a dropped selector (`user_id`, `all`) retargets the action to the caller.
 A legacy path whose fields cannot all be mapped stays a gin route (or becomes `Gone`), it is never
@@ -449,10 +477,10 @@ type TrustedPeer struct {
 }
 
 type Deps struct {
-	Auth    *auth.Service  // nil at S2–S3 (§3, COR2-9)
-	RBAC    *rbac.Service  // nil at S2–S3
-	Audit   audit.Logger   // nil at S2–S3: stage 7/13 refusals go to the access log (§4.2)
-	Compat  *compat.Ledger // alias registration, embedded ledger dates, mediacore_compat_legacy_use_total (09 §9.2.9)
+	Auth    *auth.Service  // S4 addition (§3, COR2-9, COR3-3)
+	RBAC    *rbac.Service  // S4 addition
+	Audit   audit.Logger   // S4 addition; before it, stage 7/13 refusals go to the access log (§4.2)
+	Compat  *compat.Ledger // S2b addition: alias registration, ledger dates from app.Options.CompatLedger, mediacore_compat_legacy_use_total (09 §9.2.9, SIMP3-3)
 	Log     *slog.Logger
 	Metrics *metrics.Scope // "mediacore.http" (05-metrics)
 }
@@ -463,7 +491,7 @@ func (r *Router) Infra(pattern string, perm rbac.Requirement, h http.Handler) //
 func (r *Router) MountLegacy(m LegacyMount) error       // §8.2
 func (r *Router) SPA(h http.Handler) error              // §4.10; ErrPrefixCollision while a legacy mount ServesSPA
 func (r *Router) NonSPA() func(*http.Request) bool      // §4.10, for ui.Options (FE-3, FE2-6)
-func (r *Router) NonSPASegments() []string              // the first segments behind NonSPA, for the kernel's shell-route check (§4.10, FE2-7)
+func (r *Router) NonSPASegments() []string              // the first segments behind NonSPA: data for the kernel's P8 check ProblemSPASegmentCollision (06 §6.10; §4.10, FE2-7, FE3-9)
 func (r *Router) Claim(owner, prefix string) error      // subtree claim, §4.9
 func (r *Router) Routes() iter.Seq[RouteInfo]           // archtest, OpenAPI, docs
 func (r *Router) Build() (http.Handler, error)          // registers into a fresh ServeMux; errors.Join of all registration errors
@@ -507,11 +535,20 @@ is static and evaluated at P1, before any `MountLegacy` (P6), it carries neither
 kernel validates module IDs against the static owner lists and `ReservedAPINamespaces` at P1 and
 re-checks them against every recorded mount's `TopSegments` at P7, still before listeners open.
 `LegacyMount.SPAShared` lists the top-level segments where the mount's routes share a path with an
-SPA page and which are therefore **not** in `NonSPA` (ABO: `login`, whose ABS route is `POST /login`
-while `GET /login` is the SPA page, as today). `Build` fails with `ErrPrefixCollision` when a legacy
-manifest route outside `/api/` has a first segment that is in neither `ReservedSegments()`,
-`TopSegments` nor `SPAShared`, so a new top-level legacy path cannot silently fall through to
-`index.html`.
+SPA page and which are therefore **not** in `NonSPA`: ABO's is `["login", "invite"]` — `login`, whose
+ABS route is `POST /login` while `GET /login` is the SPA page, as today; `invite`, whose legacy
+`GET /invite/{token}` 302 route (05-authn §4.13) sits under the SPA's `/invite` page (SEC3-16).
+`Build` fails with `ErrPrefixCollision` when a legacy manifest route outside `/api/` has a first
+segment that is in neither `ReservedSegments()`, `TopSegments` nor `SPAShared`, so a new top-level
+legacy path cannot silently fall through to `index.html`.
+
+**`NonSPA` comes from `TopSegments` only (FE3-1, resolution R3-5).** The first segment of a
+`module.Manifest.LegacyPrefixes` entry is a reserved module ID, nothing more: `NonSPA` is the union of
+§4.10's core inputs and every mount's `TopSegments`, and **never** includes a `SPAShared` segment. A
+legacy prefix is non-SPA only for the paths it actually serves, so ABS `POST /login` never makes the
+`/login` page non-SPA, and the P8 shell-segment check passes for a `SPAShared` segment that is also a
+shell route (`login`, `invite`) while it fails for a `TopSegments` one (06 §6.10). 06 and 07 use this
+model.
 
 ### 3.6 Deferred-build members (land with `arrfacade`, 08)
 
@@ -527,9 +564,12 @@ can rely on them, and are **not built** in 09 S2/S4; they land in the PR that ad
 - tests `TestFacadeKey_RefusedOnCoreAndModuleGroups`, `TestFacadeKey_RefusedOnABS` and
   `TestBuild_PrefixCollision_FacadeVsLegacyV3Ops`.
 
-Until then SEC-5 holds trivially: no facade key can be minted (05-authn §3.5). The S7 done-check
-(09) includes `! grep -rn 'FacadeGroup\|PurposeFacade' core --include=*.go`. When the facade lands,
-the additions are additive and pass the API-stability gate.
+Until then SEC-5 holds trivially: no facade key can be minted (05-authn §3.5). Their absence is
+checked by the deferred-members archtest, `archtest.DeferredMembersAbsent` (09 S2), from S2 on rather
+than first at S7 (SIMP3-2): its list is built from the "Deferred-build" headings of this file, 05-authn
+§3.5 and 08 (`FacadeGroup`, `RouteKindFacade`, `PurposeFacade`, the `ProblemFacade*` kinds), and the
+test is deleted in the PR that adds `arrfacade`. When the facade lands, the additions are additive and
+pass the API-stability gate.
 
 ## 4. Behaviour
 
@@ -547,7 +587,9 @@ the additions are additive and pass the API-stability gate.
 
 Reserved module IDs are owned by 03 §3.6. The kernel validates against `module.ReservedIDs()`, the
 union of `httpapi.ReservedSegments()` (`api`, `v<digits>`, `livez`, `readyz`, `metrics`, `health`,
-`auth`, `events`, `assets`, `static`, `ui`, §3.5), `ui.ReservedSegments` (shell routes, 07),
+`auth`, `events`, `assets`, `static`, `ui`, §3.5), `ui.ReservedSegments` (shell routes, 07; a static
+function that lands at S2 with `module`, ahead of the rest of `ui` at S9, so the equality test below
+holds from S2, FE3-8),
 `rbac.ReservedNamespaces()` (`core`, `custom`) and the app's two compat inputs
 (`app.Options.ReservedAPINamespaces`, `LegacyMount.TopSegments`, §3.5); a test asserts that the three
 owner lists together equal 03's row exactly.
@@ -566,12 +608,12 @@ Public infra probes (`/livez`, `/readyz`) stay Public and `RateExempt`:
 | 1 | Request ID: generate ULID, keep a well-formed inbound `X-Request-ID` (`^[A-Za-z0-9._-]{1,64}$`) as `client_request_id`; echo `X-Request-ID` | all | new |
 | 2 | Tracing (`otelhttp`, span name = `r.Pattern`). **Span attributes carry the redacted URL** (SEC-22): `url.path`, `url.query` and `url.full` are written after `log.Redactor` (05-logging) applies its query list `DefaultRedactQuery` (which is ⊇ HEAD's `credentialQueryKeys`, including `code`, `code_verifier`, `refresh_token` and `secret`, `internal/server/middleware/log_redact.go:26-37`; this file does not restate the list, SEC2-18) and its `DefaultPathRules` (the books legacy invite path `/invite/{token}`, SEC2-6). If `otelhttp` cannot be configured to emit only redacted values, stage 2 starts the server span itself with semconv attributes; `TestTrace_NoApikeyInSpanAttributes` decides | all | `tracingMiddleware` incl. invite-path redaction, `internal/server/server.go:1672`, `internal/server/middleware/trace_redact.go` |
 | 3 | Recovery: panic → problem 500 `internal`, stack logged redacted, span marked error, `mediacore_http_panics_total` | all | `RedactingRecovery`, `internal/server/server.go:704` |
-| 4 | Access log (`slog`, the same 05-logging redaction as stage 2, skip streams). Before `audit` exists (09 S2–S3) the stage 7 and stage 13 refusals are written here with the structured attribute `security_event` (SEC2-20) | all | `gin.LoggerWithConfig`, `internal/server/server.go:695` |
-| 5 | Security headers (nosniff, frame, referrer, permissions policy; HSTS only when `r.TLS != nil` or a trusted proxy says https). **CSP on every response (FE-4, FE2-1):** when the handler has not set `Content-Security-Policy` by the time headers are written, stage 5 writes the owner's policy — the SPA handler's from `core/ui`; for the legacy mount, `LegacyMount.DefaultCSP(r)`, a function evaluated **per response** (ABO passes today's `contentSecurityPolicy()`, `csp.go:95-106,129-138`: `script-src 'self'` plus the SHA-256 of `index.html`'s inline theme script, and `connect-src 'self' https://<Access team host>` so `apiFetch` still recognises a Cloudflare Access expiry redirect, `csp.go:34-46`); otherwise `default-src 'none'; frame-ancestors 'self'`. **`Reporting-Endpoints: csp="<owner's report URL>"`** with every CSP (legacy mount: `/api/v1/csp-report`, as `server_middleware.go:109` sets it today; `ui`: `/api/core/v1/ui/csp-report`), so Chromium, which prefers `report-to`, keeps reporting. **`X-App-Build: <build id>`** on every response from 09 S2 — legacy mount, native, infra, 404, 405 and 410 included (FE2-5, OPS2-13); the build ID is the one value `make build` generates (git commit plus build timestamp) and passes to both `go build -ldflags` and the Vite `define`/`<meta name="mediacore-build">`; `""` or `dev` (API-only and dev builds) means "unknown", which clients never treat as a mismatch (07 §7.5.2) | all | `internal/server/server_middleware.go:102-118` |
+| 4 | Access log (`slog`, the same 05-logging redaction as stage 2, skip streams — including HEAD's `SkipPaths` for the two operations streams, `server.go:696`, COR3-6). Before `audit` exists (09 S2–S3) the stage 7 and stage 13 refusals are written here with the structured attribute `security_event` (SEC2-20) | all | `gin.LoggerWithConfig`, `internal/server/server.go:695` |
+| 5 | Security headers (nosniff, frame, referrer, permissions policy; HSTS only when `r.TLS != nil` or a trusted proxy says https). **CSP on every response (FE-4, FE2-1):** when the handler has not set `Content-Security-Policy` by the time headers are written, stage 5 writes the owner's policy — the SPA handler's from `core/ui`; for the legacy mount, `LegacyMount.DefaultCSP(r)`, a function evaluated **per response** (ABO passes today's `contentSecurityPolicy()`, `csp.go:95-106,129-138`: `script-src 'self'` plus the SHA-256 of `index.html`'s inline theme script, and `connect-src 'self' https://<Access team host>` so `apiFetch` still recognises a Cloudflare Access expiry redirect, `csp.go:34-46`); otherwise `default-src 'none'; frame-ancestors 'self'`. **`Reporting-Endpoints: csp="<owner's report URL>"`** with every CSP (legacy mount: `/api/v1/csp-report`, as `server_middleware.go:109` sets it today; `ui`: `/api/core/v1/ui/csp-report`), so Chromium, which prefers `report-to`, keeps reporting. **`X-App-Build: <build id>`** on every response from 09 S2 — legacy mount, native, infra, 404, 405 and 410 included (FE2-5, OPS2-13). **One source, the embedded bundle (FE3-2):** only `build_web.sh` generates the ID, before Vite runs, and Vite embeds it as `<meta name="mediacore-build">` in `index.html`; there is no ldflags value. Stage 5 writes, from S9, `app.Options.UI.BuildID()` (read from the embedded `index.html`), before S9 the mount's `LegacyMount.BuildID` (ABO fills it from its embedded `web/dist/index.html`), otherwise `dev`; so every build path (make, Docker, goreleaser) serves the value its own bundle carries. `""` or `dev` (API-only and dev builds) means "unknown", which clients never treat as a mismatch, and a missing header counts as a mismatch only on a 2xx/4xx response that carries `X-Request-ID` (stage 1), never on a proxy's 5xx without it (07 §7.5.2) | all | `internal/server/server_middleware.go:102-118` |
 | 6 | CORS (explicit allowlist, same-origin always) | all | `internal/server/server_middleware.go:56-97` |
-| 7 | **Cross-origin protection (SEC-10, FE-5):** `net/http.CrossOriginProtection` (stdlib since Go 1.25; the toolchain pin is 1.27) on unsafe methods: refuse when `Sec-Fetch-Site` is present and not `same-origin`/`none`, or, without it, when `Origin` is present and does not match the host; trusted origins = `core.http.cors.allowed_origins`; refusal 403 `cross_origin_rejected`, audited from 09 S4 (before that, access log `security_event`, SEC2-20). **No credential type is exempt** (FE2-23): non-browser clients pass because they send neither `Sec-Fetch-Site` nor `Origin`, not because of the credential they carry; a browser attaches cached HTTP Basic credentials cross-site exactly like cookies, so Basic is never a bypass, and a browser cannot attach `Authorization`/`X-Api-Key` cross-origin without a CORS preflight that stage 6 refuses for unlisted origins. **Host-rewriting proxies:** over plain HTTP browsers send no `Sec-Fetch-Site`, so the `Origin` comparison decides; when the TCP peer is a `TrustedProxies` member, its `X-Forwarded-Host` replaces `r.Host` for that comparison (a proxy that rewrites `Host`, nginx's default, otherwise refuses every UI POST); from any other peer `X-Forwarded-Host` is ignored. Operators behind a proxy that sends neither may list the public origin in `core.http.cors.allowed_origins`; the first refusal raises a health warning naming that key. Applies to the legacy mount too (today's only defence there is `SameSite=Strict`, which is site-scoped and does not stop a sibling app) | all | new (supersedes per-handler checks such as `repairs/handler.go:27-28`) |
+| 7 | **Cross-origin protection (SEC-10, FE-5):** `net/http.CrossOriginProtection` (stdlib since Go 1.25; the toolchain pin is 1.27) on unsafe methods: refuse when `Sec-Fetch-Site` is present and not `same-origin`/`none`, or, without it, when `Origin` is present and does not match the host; trusted origins = `core.http.cors.allowed_origins`; refusal 403 `cross_origin_rejected`, audited from 09 S4 (before that, access log `security_event`, SEC2-20). **No credential type is exempt** (FE2-23): non-browser clients pass because they send neither `Sec-Fetch-Site` nor `Origin`, not because of the credential they carry; a browser attaches cached HTTP Basic credentials cross-site exactly like cookies, so Basic is never a bypass, and a browser cannot attach `Authorization`/`X-Api-Key` cross-origin without a CORS preflight that stage 6 refuses for unlisted origins. **Host-rewriting proxies:** over plain HTTP browsers send no `Sec-Fetch-Site`, so the `Origin` comparison decides; when the TCP peer is a `TrustedProxies` member, its `X-Forwarded-Host` replaces `r.Host` for that comparison (a proxy that rewrites `Host`, nginx's default, otherwise refuses every UI POST); from any other peer `X-Forwarded-Host` is ignored. Operators behind a proxy that sends neither may list the public origin in `core.http.cors.allowed_origins`; the first refusal raises a health warning naming that key. Applies to the legacy mount too (today's only defence there is `SameSite=Strict`, which is site-scoped and does not stop a sibling app). A development proxy that rewrites `Host` (Vite `changeOrigin: true`) must rewrite `Origin` to the target origin as well, or every dev POST over a LAN address is refused (07 §7.10, FE3-19) | all | new (supersedes per-handler checks such as `repairs/handler.go:27-28`) |
 | 8 | Optional perimeter gate (HTTP Basic, off by default). Exempt **per route, never per mount** (SEC-14): Public infra probes and legacy routes with `OwnAuth` (§8.2; accepted only for registered compat methods, SEC2-17); everything else, including the ABS routes that run no compat authenticator, stays behind it, as `basicauth.go:51-70` does | all | `internal/server/middleware/basicauth.go:24` |
-| 9 | Compression (gzip; skipped for `HandleRaw` streams and `/metrics`) | all | `compressionMiddleware`, `internal/server/server.go:725` |
+| 9 | Compression (gzip; skipped for `HandleRaw` streams, `/metrics`, every response whose `Content-Type` is `text/event-stream`, and every legacy route with `LegacyRoute.NoCompress` — HEAD's exclusions `/api/events`, `/metrics`, `/api/v1/auth/accept-invite` and `^/api/v1/operations/v2/[^/]+/logs/download$`, `internal/server/server.go:1590-1606`, whose last entry prevents double-gzipped log files, COR3-6). The compressing writer implements `Unwrap` and `Flush`, so `http.ResponseController` reaches the connection | all | `compressionMiddleware`, `internal/server/server.go:725` |
 | 10 | Per-client rate limit (token bucket per client address from stage 0, `ClientAddrFrom`; class from `Route.RateClass` or `LegacyRoute.RateClass`) | routes | `internal/server/middleware/ratelimit.go:96` |
 | 11 | Body limit (`MaxBody`; for legacy routes an outer cap of `core.http.body.upload_max_bytes`, gin keeps its per-group limits) | routes | `internal/server/middleware/request_size.go:77` |
 | 12 | Authenticate: `auth.Service.Middleware` (05-authn §4.2): binds a principal or records an `auth.Failure`; **stops at the first authenticator that returns anything other than `ErrNoCredential`**; writes no response except 503 `auth_unavailable` (SEC-12) | routes, except `OwnAuth` legacy routes and, before 09 S4, the whole legacy mount (§8.1) | `RequireAuth` step 3–6 + `cfMW` (`raw/10` §2.2) |
@@ -657,9 +699,11 @@ side-effect route that needs idempotency adds it then, in its owner.
   `{id}` path value; `GET /api/v1/auth/api-keys?all=true` selects the admin list the same way. Every
   remaining legacy field must decode strictly into the chosen target (§3.4). 09 S4 lists, per aliased
   path, its targets and selector field. A legacy path that cannot be mapped without losing meaning is
-  not aliased: `PUT /api/v1/auth/me/password` with `user_id` (sets another user's password,
-  `handlers/auth.go:581-616`) stays a gin route that calls the dominance-checked `auth.Service`
-  (05-authn §4.13), and its gin pattern is not deleted at S4.
+  not aliased at all: `PUT /api/v1/auth/me/password` — with **and** without `user_id` (with it, it
+  sets another user's password, `handlers/auth.go:581-616`) — stays one gin route that calls
+  `auth.Service` for both cases, the dominance-checked path for `user_id` (05-authn §4.13), and its
+  gin pattern is not deleted at S4. One ServeMux pattern cannot be both an alias and a gin route
+  (`ErrDuplicateRoute`), and an alias's `Targets` name only native routes (COR3-12).
 - **No clock flips anything.** An alias is replaced by a `Gone` stub only in a contract PR, which
   `TestNoContractBeforeSunset` and the zero-use gate of 09 §9.2.1 allow; the stub is deleted one minor
   release later — the existing `gone()` convention (`internal/server/gone.go:20-32`) kept, with its
@@ -702,7 +746,18 @@ the request ID as `origin_request_id` (05-tasks).
 `Router.Claim(owner, prefix)` records every subtree an owner occupies (core groups, module groups,
 facade groups, and each `module.Manifest.LegacyPrefixes` entry). `Build` fails with
 `ErrPrefixCollision` when two owners claim overlapping prefixes — one rule, no claim kinds and no
-yielding (SIMP-22, as 06 §6.4.2 states it). The two fallbacks are not subtree claims: `/` (the SPA
+yielding (SIMP-22, as 06 §6.4.2 states it).
+
+**Patterns stay inside their owner's claims (SEC3-8).** ServeMux panics only on *conflicting*
+patterns; a strictly more specific one wins silently, so a claim alone does not stop one owner from
+capturing another's requests (an `Alias` at `GET /api/core/v1/auth/oidc/google/callback` would receive
+the OIDC `code` and `state`). `Build` therefore fails with `ErrAliasOutsideClaim` when an `Alias`
+pattern is outside every prefix its registering owner claims — for core: outside every prefix whose
+ledger row (09 §9.2.9) names core as the alias owner — or a legacy manifest route is outside its mount
+owner's `LegacyPrefixes`; and with `ErrShadow` when any route of one owner is strictly more specific
+than a route of another owner over the same path set. The deliberate core-over-books aliases of 09 S4
+(core's auth, users and task routes at their `/api/v1/…` paths) are exactly the ledger rows that name
+core as alias owner, and are therefore exempt. The two fallbacks are not subtree claims: `/` (the SPA
 fallback, §4.10) and the legacy `/api/` redirect handler (item 4), both matched last by `ServeMux`
 specificity.
 
@@ -731,7 +786,11 @@ and an *arr-v3 facade, whose clients call `<base>/api/v3/…` (`raw/16` §5.1). 
   gin's `NoRoute` keeps serving the SPA with every protection it has today (non-SPA segments,
   non-GET/HEAD, case and slash variants, CF service-token recovery on page navigations,
   `spa_fallback.go:58-125`, `cf_recovery.go:36-60`). `Router.SPA` returns `ErrPrefixCollision` in
-  that case and the kernel does not mount `ui.Handler`. When ABO adopts the shell build (07, 09 S9),
+  that case and the kernel does not mount `ui.Handler`. From S2 the legacy `/` fallback consults
+  `Router.NonSPA()` **before** it calls gin, so a path core added to the non-SPA set (S8's `/livez`,
+  `/readyz` and their case or slash variants) gets the router's problem 404 instead of gin's
+  `NoRoute` page while gin's static `nonSPASegments` list still lacks it — one predicate serves both
+  owners (FE3-13). When ABO adopts the shell build (07, 09 S9),
   the same PR drops `ServesSPA`, deletes gin's `NoRoute`/`setupStaticFiles`, and the kernel calls
   `Router.SPA(ui.Handler(...))`. No `/` pattern is reserved by `httpapi` itself.
 - **Place in the chain.** The `/` owner (SPA handler or the legacy `ServesSPA` fallback) runs stages
@@ -753,29 +812,36 @@ and an *arr-v3 facade, whose clients call `<base>/api/v3/…` (`raw/16` §5.1). 
   path space. `LegacyMount.SPAShared` segments are excluded (§3.5). The kernel passes the predicate
   to `ui.Options` (07). Those paths, and any non-GET/HEAD request, get a problem 404 / 405 from the
   router, never `index.html`.
-- **Shell routes and server segments are disjoint (FE2-7).** At P8 the kernel checks
-  `ui.ReservedSegments() ∩ Router.NonSPASegments() = ∅` and fails boot with `ErrShellSegment`
-  otherwise: a shell page whose first segment is a server segment (the shell's former `/logout`
-  against ABO's ABS `logout`) would be reachable only by client-side navigation and answer a typed
-  URL or a refresh with a JSON 404.
+- **Shell routes and server segments are disjoint (FE2-7, FE3-9).** At P8 the kernel checks
+  `ui.ReservedSegments() ∩ Router.NonSPASegments() = ∅` and fails boot with 06's
+  `ProblemSPASegmentCollision` otherwise (one name and one test, 06 §6.10; this file only supplies the
+  data): a shell page whose first segment is a server segment (the shell's former `/logout` against
+  ABO's ABS `logout`) would be reachable only by client-side navigation and answer a typed URL or a
+  refresh with a JSON 404. `SPAShared` segments are not in `NonSPASegments()` (§3.5).
 
 ## 5. Lifecycle
 
 1. `app.New` builds `httpapi.Router` after `auth`, `rbac`, `audit`, `compat` exist (R4 order; at
-   09 S2–S3 only `compat` exists, §3).
+   09 S2 none of them, at S2b–S3 only `compat`, §3).
 2. Core's capability routes are registered on `CoreGroup()` by one package per capability,
    `core/internal/<capability>http` (`authhttp`, `rbachttp`, `audithttp`, `taskhttp`, `eventhttp`,
-   `confighttp`, `backuphttp`, `updaterhttp`, `healthhttp`, `libraryhttp`, and `uihttp` for
-   `ui/diagnostics` and `ui/csp-report`, so `ui` registers nothing on `CoreGroup` itself; layer L6,
+   `confighttp`, `backuphttp`, `updaterhttp`, `healthhttp`, `libraryhttp`, `modulehttp` for
+   `GET /api/core/v1/modules` (the kernel passes it a read-only `ModulesView` — catalog snapshot,
+   `restart_required`, the `ui_build_id` source — so it imports nothing above L6, FE3-16), and
+   `uihttp` for `ui/diagnostics` and `ui/csp-report`, so `ui` registers nothing on `CoreGroup` itself; layer L6,
    imported only by `kernel`, 03 §3.3, COR-18, COR2-19); each module's `Register(r module.Registrar)`
    receives `r.HTTP() *httpapi.Group` and, for ABO, calls `MountLegacy`. Registration only
    **records**; nothing touches the mux.
 3. Kernel calls `Router.Build()`: validates every route (permission present and in catalog, scope
-   namespace rule from 05-rbac §4.9, Public allowlist, binding tags, schema generation, snake_case
-   names, the legacy manifest against the gin engine, `LegacyAuthGin` and `OwnAuth` admission of
-   §8.2, alias targets), validates prefix claims, the `/` owner and the shell-segment check (§4.10),
+   namespace rule from 05-rbac §4.9, binding tags, schema generation, snake_case names, the legacy
+   manifest against the gin engine, `LegacyAuthGin` and `OwnAuth` admission of §8.2, alias targets and
+   claims, cross-owner shadowing), validates prefix claims and the `/` owner,
    registers into a fresh `ServeMux`, assembles the chain, and returns `errors.Join` of every
-   problem. Any error aborts boot **before listeners open** (03 §3.7).
+   problem. Any error aborts boot **before listeners open** (03 §3.7). Public routes have no
+   declaration API: the set of every `Public` route (native, alias, legacy) is a reviewed golden,
+   `TestPublicRoutesGolden`, like `TestOwnAuthRoutesGolden` (COR3-3; v1.3's `ErrPublicNotAllowed`
+   had no list to check against and is deleted). The shell-segment check runs at P8 in the kernel
+   (§4.10).
 4. `App.Run` serves the handler on configured listeners. Shutdown: `http.Server.Shutdown(ctx)` with
    the app's drain deadline; SSE handlers end on `Server.RegisterOnShutdown` + `Hub.Close`
    (05-realtime).
@@ -792,7 +858,8 @@ and an *arr-v3 facade, whose clients call `<base>/api/v3/…` (`raw/16` §5.1). 
 | Legacy route missing from the manifest or without a permission | boot error `ErrLegacyManifest` | closed | R6 over the running table (SEC-13) |
 | `LegacyAuthGin` mount not named by `app.Options.LegacyAuthGinUntil`; `OwnAuth` route naming no compat method its module registered | boot error `ErrLegacyAuthGin` / `ErrOwnAuthMethod` | closed | no module skips stages 8, 12, 13 by self-declaration (SEC2-17) |
 | Alias with an unknown target, or several targets and no `Request` | boot error `ErrAliasTarget` | closed | SEC2-5 |
-| Shell route segment equals a non-SPA server segment | boot error `ErrShellSegment` | closed | FE2-7 |
+| Shell route segment equals a non-SPA server segment | boot error `ProblemSPASegmentCollision` (06) | closed | FE2-7 |
+| Alias or legacy route outside its owner's claims; a cross-owner more specific pattern | boot error `ErrAliasOutsideClaim` / `ErrShadow` | closed | silent capture of another owner's requests (SEC3-8) |
 | Alias request carries a legacy field the target does not know | 400 `legacy_field_unsupported` | closed | a dropped selector retargets the action (SEC2-5) |
 | Mux pattern and gin's own match disagree (escaped segment) | 404 in the legacy shape, gin handler not run | closed | SEC2-22 |
 | Non-Public `Infra` route without the scope (`/metrics`) | 401 / 403 like any route | closed | SEC2-14 |
@@ -837,8 +904,9 @@ types:
   `core.http.openapi.public=true` makes it Public) and emitted at build time by the app binary's
   `openapi` subcommand (06-app-sdk) into `api/openapi/<owner>.json`, committed — **except `core`**:
   apps never emit the core document; `core.json` is emitted only by `core/examples/hello`'s `openapi`
-  subcommand into `core/web/packages/api-client/openapi/core.json` (07 §7.8, 06 `Description.Core`;
-  FE2-24). A freshness gate
+  subcommand, from S2, into `core/openapi/core.json` (outside any npm package, which UI-0 creates
+  later), and UI-0's api-client generator reads it from there (07 §7.8, 06 `Description.Core`;
+  FE2-24, MOD3-4). A freshness gate
   (`make openapi-check`, modelled on `scripts/ci/check_generated_types.sh:1-22`) and the `oasdiff`
   breaking gate (§4.6) run in `make ci`.
 - Legacy gin routes get **no** OpenAPI document (SIMP-27): they have no Go types to reflect, and
@@ -881,8 +949,8 @@ stage, 09 S4 (OPS-11). There is no gin-retirement stage.
 
 | 09 stage | What changes in HTTP | Who authenticates / authorizes the legacy mount | Rollback |
 |---|---|---|---|
-| S2 (H0) | `core/httpapi` exists; ABO's `main` builds `app.New(opts, books.Module())` with `app.Options.LegacyAuthGinUntil: "books"`; `books` calls `MountLegacy(Auth: LegacyAuthGin)` with the whole gin engine; **every manifest route is its own mux pattern**; the perimeter moves to core stages 0–11 and is removed from gin in the same PR (logger, recovery, security headers with `DefaultCSP` = today's per-response `contentSecurityPolicy()` and `Reporting-Endpoints` (FE2-1), CORS, Basic auth with per-route exemption, gzip, tracing, the `/api` rate limiter with per-route `RateClass`); stage 5 emits `X-App-Build` on every response (FE2-5, OPS2-13); cross-origin protection (stage 7) is new, and its refusals go to the access log as `security_event` until `audit` exists at S4 (SEC2-20); the 36 permission-less routes are annotated `AnyAuthenticated` in the manifest (R6 must hold at S2). **Client address (SEC2-19):** stage 0 resolves it and publishes it (`ClientAddrFrom`); ABO's `client_trust.go` stays in ABO until S4, and from S2 its `trustedClientIP` (used by the bootstrap, invite and ABS limiters, `bootstrap_rate_limit.go:207`, `invite_rate_limit.go:405`, `client_trust.go:600`) starts from that value and keeps only its "local peer + verified Access assertion" branch on top; at S4 that branch moves into ABO's `internal/cfaccess` authenticator | gin only (CF binder, `RequireAuth`, `s.perm`, `RequireAdmin`, `credGuard`, `RequireOwner` unchanged); core stages 12–13 off for the mount | revert to the old `main`; storage untouched |
-| S4 | `LegacyAuth` switches to `LegacyAuthCore`, and the same PR removes `LegacyAuthGinUntil` from `app.Options` (an archtest fails if it is still present after S4, SEC2-17): stage 12 binds the core principal and stage 13 enforces each manifest route's `Perm`/`Guards`; inside gin the auth middleware becomes the bridge of §8.3 (it never authenticates; its authorization adapters still enforce through `rbac.Require`); core auth/users/roles/keys/sessions routes go native under `/api/core/v1` and their legacy paths become `Alias`es with targets and selectors (§4.6; more specific than the gin patterns they replace, which are deleted in the same PR), except paths that cannot be mapped (`PUT /api/v1/auth/me/password` with `user_id` stays a gin route calling `auth.Service`, SEC2-5); stage 7 and stage 13 refusals are audited from here | core; gin bridge | 09 S4 rollback (mirrored identity data, 05-rbac §6.3); **the rollback floor is the identity Teach build** (05-authn §11.1, resolution R2-1): once S4 has run, the per-owner level guard refuses any older build |
+| S2 (H0) | `core/httpapi` exists; ABO's `main` builds `app.New(opts, books.Module())` with `app.Options.LegacyAuthGinUntil: "books"`; `books` calls `MountLegacy(Auth: LegacyAuthGin)` with the whole gin engine; **every manifest route is its own mux pattern**; the perimeter moves to core stages 0–11 and is removed from gin in the same PR (logger, recovery, security headers with `DefaultCSP` = today's per-response `contentSecurityPolicy()` and `Reporting-Endpoints` (FE2-1), CORS, Basic auth with per-route exemption, gzip, tracing, the `/api` rate limiter with per-route `RateClass`); stage 5 emits `X-App-Build` on every response (FE2-5, OPS2-13). **Perimeter settings keep their UI-saved values (COR3-1, R3-1):** the perimeter keys (`core.http.basic_gate.*` = `basic_auth_enabled`, `core.http.rate_limit.*` = `enable_rate_limit`/`api_rate_limit_per_minute`, CORS origins, peer allow-list) are read through config's legacy-format adapter over `config_blob` from S2 (05-config), so a value saved only in the UI and a live edit through `PUT /api/v1/config` reach stages 0, 6, 8 and 10 as they do today (`basicauth.go:26` reads it live); done-check `TestPerimeterHonoursBlobOnlyValues`; cross-origin protection (stage 7) is new, and its refusals go to the access log as `security_event` until `audit` exists at S4 (SEC2-20); the 36 permission-less routes are annotated `AnyAuthenticated` in the manifest (R6 must hold at S2). **Client address (SEC2-19):** stage 0 resolves it and publishes it (`ClientAddrFrom`); ABO's `client_trust.go` stays in ABO until S4, and from S2 its `trustedClientIP` (used by the bootstrap, invite and ABS limiters, `bootstrap_rate_limit.go:207`, `invite_rate_limit.go:405`, `client_trust.go:600`) starts from that value and keeps only its "local peer + verified Access assertion" branch on top; at S4 that branch moves into ABO's `internal/cfaccess` authenticator | gin only (CF binder, `RequireAuth`, `s.perm`, `RequireAdmin`, `credGuard`, `RequireOwner` unchanged); core stages 12–13 off for the mount | revert to the old `main`; storage untouched |
+| S4 | `LegacyAuth` switches to `LegacyAuthCore`, and the same PR removes `LegacyAuthGinUntil` from `app.Options` (an archtest fails if it is still present after S4, SEC2-17): stage 12 binds the core principal and stage 13 enforces each manifest route's `Perm`/`Guards`; inside gin the auth middleware becomes the bridge of §8.3 (it never authenticates; its authorization adapters still enforce through `rbac.Require`); core auth/users/roles/keys/sessions routes go native under `/api/core/v1` and their legacy paths become `Alias`es with targets and selectors (§4.6; more specific than the gin patterns they replace, which are deleted in the same PR), except paths that cannot be mapped (`PUT /api/v1/auth/me/password` with `user_id` stays a gin route calling `auth.Service`, SEC2-5); stage 7 and stage 13 refusals are audited from here | core; gin bridge | binary swap. Identity data has one stored format (R3-1; 05-authn §11, 05-rbac §6.3): an older build reads the same `u:`, `role:` and `apikey:` rows, ignores the namespaced scopes, refuses every key and user restricted here, and its browser users sign in once (sessions are core-only). There is no rollback floor for S4 and no identity level step |
 | S5, S6, … | each core subsystem's routes go native in the stage that moves it (tasks S5, events S6, …), legacy paths aliased; at S6 the three legacy event streams stay gin manifest routes (`Perm` `AnyAuthenticated`, `OwnAuth` false) whose handler is the realtime projection obtained through `Registrar.Realtime().Projection` (05-realtime §4.9, COR2-1) | core | per stage |
 | any later | a books route group moves to `/api/books/v1` **only when rewritten for its own reasons** (SIMP-2); its old paths become aliases | core | per group |
 
@@ -908,7 +976,8 @@ type LegacyMount struct {
 	CSPReport  string                // Reporting-Endpoints URL for DefaultCSP (ABO: "/api/v1/csp-report")
 	Redirects  []LegacyRedirect      // the /api/* -> /api/v1/* rule and its exclusions (§4.9 item 4)
 	TopSegments []string             // top-level server paths of the mount (ABO: ping, status, logout, socket.io, public): reserved IDs + NonSPA (03 §3.6)
-	SPAShared  []string              // top-level segments shared with SPA pages, excluded from NonSPA (ABO: "login"; §3.5)
+	SPAShared  []string              // top-level segments shared with SPA pages, excluded from NonSPA (ABO: "login", "invite"; §3.5, SEC3-16)
+	BuildID    string                // stage 5's X-App-Build until S9: the <meta name="mediacore-build"> of the mount's embedded index.html (FE3-2)
 }
 
 type LegacyRoute struct {
@@ -919,6 +988,7 @@ type LegacyRoute struct {
 	OwnAuth         bool             // the route's gin chain runs a compat authenticator (ABSRequireAuth); stages 8 (Basic), 12, 13 skip it (SEC-14)
 	AuthMethod      string           // required iff OwnAuth: the compat method ("books.abs") the owner registered (SEC2-17)
 	RateClass       RateClass        // RateDefault iff the gin chain includes the API rate limiter today, else RateExempt
+	NoCompress      bool             // stage 9 skips it: HEAD's compressionMiddleware exclusions (§4.2 stage 9, COR3-6); TestCompressionExclusionsEqualHEAD
 }
 ```
 
@@ -928,10 +998,20 @@ whole mount) is accepted only while the compile-time `app.Options.LegacyAuthGinU
 mount's owner (ABO sets `"books"` at S2 and removes it in the S4 PR; an archtest fails if the field is
 set after S4), else `ErrLegacyAuthGin`. `OwnAuth: true` (skips stages 8, 12, 13) is accepted only when
 `AuthMethod` names a compat method the same module registered with `Registrar.AuthMethod` (05-authn
-§3.3; the kernel records method declarations from S2, before `auth` exists), else `ErrOwnAuthMethod`;
+§3.3), else `ErrOwnAuthMethod`. `Registrar.AuthMethod` is an S2 member that only records the
+`auth.MethodSpec` leaf value (06 §6.4.10), so admission holds from S2, when ABO's ABS routes are first
+`OwnAuth` for stage 8's Basic exemption, and the method is validated by `auth` once it exists at S4
+(SEC3-14, COR3-3);
 `rbac.Delegated` is accepted only on such routes. The set of `OwnAuth` routes is a reviewed golden
 (`TestOwnAuthRoutesGolden`).
 
+- **Legacy redirect routes (FE3-5).** From S4 the books manifest carries `GET /invite/{token}`
+  (Public, `RateAuth`, under `SPAShared` segment `invite`) and the existing `GET /auth/temp-login`,
+  both answering the 302 of 05-authn §4.13 with `Referrer-Policy: no-referrer`. They are the only
+  implementation for the whole window, including after S9: `ui.Handler` serves `GET /invite` (the
+  page) and the more specific manifest pattern answers `GET /invite/<token>`. Test
+  `TestLegacyInviteRedirect_SPASharedSegment` (`GET /invite` serves the page; `GET /invite/<t>` 302s
+  with `no-referrer`; at S4 and after S9).
 - The manifest is produced inside ABO by extending the existing recording pattern
   (`recordCredRoute`, `internal/server/credential_routes.go:47-58`; `recordAdminRoute`,
   `internal/server/wire_admin_role.go:63-70`) to `s.perm`, the ABS auth middleware and the rate
@@ -982,6 +1062,9 @@ gin route that ever disagreed with its mux pattern would still be checked (SEC2-
 | `internal/server/peer_allowlist.go` | `core/internal/httpmw/peer.go` (stage 0) + `TrustedPeer` (§3.5), at 09 S2 |
 | `internal/server/client_trust.go` | stays in ABO until 09 S4, reading `httpapi.ClientAddrFrom` from S2; at S4 its Access-assertion branch moves into ABO's `internal/cfaccess` and the rest is deleted (SEC2-19) |
 | `internal/server/server_middleware.go:56-118` CORS + headers | stages 5–6 |
+| `internal/server/csp.go` (`contentSecurityPolicy()`, team-host pointer) | stays in ABO until S9 as `LegacyMount.DefaultCSP` (it hashes ABO's embedded `index.html` and reads the deployment's Access host, `csp.go:34-46,95-106,129-138`); at S9 the policy builder (`cspBase`) is `core/ui`'s and the Access host becomes ABO's `ConnectSrcFrom` (FE3-4, FE3-10) |
+| `internal/server/csp_report.go` | `core/internal/uihttp` (`/api/core/v1/ui/csp-report`) at S4; gin's `/api/v1/csp-report` stays the legacy mount's `CSPReport` until S9, then its handler is deleted |
+| `internal/server/static_embed.go` | `core/ui` at S9 |
 | `internal/server/middleware/ratelimit.go`, `request_size.go` | stages 10–11 |
 | `internal/server/middleware/basicauth.go` | stage 8 with per-route exemption |
 | `internal/server/gone.go` | `httpapi.Gone` (native) — legacy stubs stay in gin |
@@ -1028,7 +1111,7 @@ interactive method). Keys that decide who reaches the server or which client add
 | `core.http.rate_limit.burst` | int | `max(per_minute/5, 10)` | yes | none |
 | `core.http.rate_limit.max_clients` | int | 10000 | no | none |
 | `core.http.basic_gate.enabled` | bool | false | yes | admin |
-| `core.http.basic_gate.password` | secret ref | — | yes | admin |
+| `core.http.basic_gate.password` | secret: at S2 the legacy plaintext value (env, file or `config_blob`, read through config's legacy adapter); from S3 a `secrets.Ref`, moved to the encrypted store when this build first writes it (R3-1, 05-config) | — | yes | admin |
 | `core.http.openapi.public` | bool | false | yes | admin |
 | `core.http.read_header_timeout` / `idle_timeout` | duration | 15s / 120s | no | none |
 
@@ -1087,14 +1170,21 @@ route table.
 | `TestSPA_NotRateLimitedAndPublic` | 200 cold-load requests to `/` owner are not 429; `RouteInfo{Kind: SPA}` present (FE-25) |
 | `TestSPA_SingleOwnerOfRoot` | legacy `ServesSPA` + `Router.SPA` → `ErrPrefixCollision` (FE-1) |
 | `TestNonSPA_PredicateCoversClaims` | `/socket.io`, `/API/V1/x`, `POST /library`, `/health/`, `/HEALTH`, `/metrics/`, `/livez/` never reach the SPA handler; `/assets/x.js` and `GET /login` do (FE-3, FE2-6) |
-| `TestKernel_ShellSegmentsDisjointFromNonSPA` | a shell route whose segment is in `NonSPASegments()` → `ErrShellSegment` at boot (FE2-7) |
+| `TestNonSPA_LegacyFallbackConsultsPredicate` | with the legacy mount owning `/`, `/livez/` and `/READYZ` get problem 404, never gin's `NoRoute` page (FE3-13) |
 | `TestMethodNotAllowed_HasAllow` | 405 + `Allow` |
 | `TestBind_TagsCompiledAtRegistration` | bad tag → `ErrBadBinding` at boot |
 | `TestDecode_StrictUnknownField` / `TestAlias_UnknownLegacyFieldRefused` | 400 `unknown_field` native; 400 `legacy_field_unsupported` on an alias for a field neither the selector nor the target knows (SEC2-5) |
 | `TestAlias_CreateKeyForOtherUserKeepsTarget` | legacy `POST /api/v1/auth/api-keys {user_id}` reaches `createUserAPIKey` for that user, bounded by the target's roles and dominance; without `user_id`, `createOwnAPIKey` (SEC2-5) |
 | `TestPage_OffsetDefaultHasTotal` / `TestCursor_FilterMismatch` | SIMP-8 |
 | `TestTaskStart_IdempotencyKeyReplaysRunView` | a repeated `Idempotency-Key` on task start → 200, the existing `RunView`, `Idempotent-Replayed: true` (SIMP2-8; store in 05-tasks) |
-| `TestAlias_DeprecationHeadersAndCompatCounter` | headers rendered from the embedded ledger row; `mediacore_compat_legacy_use_total{surface="http"}` increments |
+| `TestAlias_DeprecationHeadersAndCompatCounter` | headers rendered from the ledger row of `app.Options.CompatLedger` (or core's fragment); `mediacore_compat_legacy_use_total{surface="http"}` increments (SIMP3-3) |
+| `TestAlias_OutsideClaimRefused` / `TestBuild_CrossOwnerShadowRefused` | a module alias at `GET /api/core/v1/auth/oidc/google/callback`, and a legacy route outside its mount's `LegacyPrefixes`, → `ErrAliasOutsideClaim`; one owner's pattern strictly more specific than another's → `ErrShadow`; 09 S4's ledger-listed core aliases pass (SEC3-8) |
+| `TestPublicRoutesGolden` | the reviewed set of every `Public` route, native, alias and legacy (COR3-3) |
+| `TestCompressionExclusionsEqualHEAD` | golden from HEAD's `compressionMiddleware` lists: the four legacy exclusions carry `NoCompress`; `text/event-stream` responses are never gzipped; the log download is gzipped once (COR3-6) |
+| `TestPerimeterHonoursBlobOnlyValues` | S2: Basic gate enabled only in `config_blob` → stage 8 on; rate limit disabled only there → stage 10 off; a runtime edit through `PUT /api/v1/config` applies without restart (COR3-1) |
+| `TestBuildID_HeaderEqualsEmbeddedMeta` | for a `make build` and a Docker build, `X-App-Build` equals the embedded `index.html` meta value (FE3-2) |
+| `TestOpenAPI_UsesConfigOverrides` | a `config.Duration` field renders as `string/duration`, the same schema as in the settings schema (SIMP3-1) |
+| `TestLegacyInviteRedirect_SPASharedSegment` | `GET /invite` serves the page; `GET /invite/<t>` → 302 `/invite#token=<t>` with `Referrer-Policy: no-referrer`; at S4 and after S9 (SEC3-16, FE3-5) |
 | `TestAlias_ServedPastAdvisorySunset` | fake clock past the ledger row's earliest-removal date → still served (OPS-10) |
 | `TestRequestID_GeneratedAndPropagated` | header, problem, slog record, audit record carry the same id |
 | `TestRateLimit_ClientBuckets` | `synctest` time; headers; legacy `RateClass` golden |
@@ -1177,25 +1267,25 @@ Integration pass (cross-cluster requests, 2026-11-04):
 
 Round 2 (2026-11-04), findings applied to this file:
 
-- R2-1 — S4 rollback floor = the identity Teach build (05-authn §11.1); bridge adapters enforce (§8.1, §8.3).
+- R2-1 — S4 rollback floor = the identity Teach build (05-authn §11.1); bridge adapters enforce (§8.1, §8.3). (superseded in round 3 by R3-1: no S4 floor)
 - SIMP2-6 — facade members (`FacadeGroup`, `RouteKind Facade`, stage 13 facade clause, `apiKeyHeader`, facade tests) moved to a deferred-build section (§3.6, §4.2, §4.9, §7, §12).
 - SIMP2-8 — httpapi idempotency store deleted; task start uses `tasks`' store via `Idempotency-Key` → `StartRequest.IdempotencyKey`; stage 14 removed (§3, §4.2, §4.5, §6, §9–§12).
-- SIMP2-12 — `Deprecation{Shipped,Sunset}` deleted; aliases and deprecated routes name a ledger row, headers rendered from the embedded ledger (§3.1, §3.5, §4.6, §12).
-- SIMP2-3 — reflector in `core/internal/jsonschemax` with per-package overrides; `Deps.Config` dropped; no `config` import (§1.1, §3, §3.5, §7).
+- SIMP2-12 — `Deprecation{Shipped,Sunset}` deleted; aliases and deprecated routes name a ledger row, headers rendered from the embedded ledger (§3.1, §3.5, §4.6, §12). (ledger source refined in round 3 by SIMP3-3)
+- SIMP2-3 — reflector in `core/internal/jsonschemax` with per-package overrides; `Deps.Config` dropped; no `config` import (§1.1, §3, §3.5, §7). ("no `config` import" superseded in round 3 by SIMP3-1)
 - SIMP2-1 — the idempotency prune schedule is gone with SIMP2-8 (§4.5).
 - MOD2-20 — "pinned exactly" made real: Dependabot ignore + `check_module_skew.py --pin` (§1.1).
-- COR2-9 — minimum surface at S2 (rbac leaf types; auth/rbac/audit nil until S4; no storage) (§3, §3.5, §5).
+- COR2-9 — minimum surface at S2 (rbac leaf types; auth/rbac/audit nil until S4; no storage) (§3, §3.5, §5). (refined in round 3 by COR3-3 / MOD3-4)
 - COR2-19 — `ReservedSegments` static at P1; compat segments only from `app.Options`; `uihttp` added to the `CoreGroup` rule (§3.5, §5).
 - COR2-1 — legacy event streams are gin manifest routes wrapping realtime projections (§4.1, §8.1).
 - FE2-1 — `DefaultCSP func(*http.Request) string` + `CSPReport`; `Reporting-Endpoints` in stage 5; test extended (§4.2, §8.1, §8.2, §12).
-- FE2-5 / OPS2-13 — stage 5 emits `X-App-Build` on every response from S2; one build-ID source; perimeter golden (§4.2, §8.1, §12).
+- FE2-5 / OPS2-13 — stage 5 emits `X-App-Build` on every response from S2; one build-ID source; perimeter golden (§4.2, §8.1, §12). (ID source refined in round 3 by FE3-2)
 - FE2-6 — `NonSPA` covers infra first segments, `health`, `metrics`, today's eight segments; `/livez` naming (§3.5, §4.1, §4.10, §12).
-- FE2-7 — kernel check `ui.ReservedSegments ∩ NonSPASegments = ∅` (`ErrShellSegment`) (§3.3, §3.5, §4.10, §12).
+- FE2-7 — kernel check `ui.ReservedSegments ∩ NonSPASegments = ∅` (`ErrShellSegment`) (§3.3, §3.5, §4.10, §12). (error name superseded in round 3 by FE3-9: 06's `ProblemSPASegmentCollision`)
 - FE2-11 — `ReservedSegments` per 03 v1.5.0 (`assets`, `static`, `ui`, `livez` added); compat inputs split into `app.Options.ReservedAPINamespaces` and `LegacyMount.TopSegments` (replacing `Segments`; P7 re-check of module IDs); `SPAShared` added (§3.5, §4.1, §8.2).
 - FE2-23 — no credential type exempt from stage 7 (Basic included); `X-Forwarded-Host` from trusted proxies (§4.2, §12).
 - FE2-24 — stale FE-20 and item-6 text closed; `core.json` only from hello; books client is a directory; `RouteInfo.RateClass` (§3.5, §7, §8.4, §13).
 - SEC2-4 — ABS adapter keeps worker confinement via `CheckCredentialFor` (§8.3, §12).
-- SEC2-5 — aliases dispatch by selector (`Targets`, `Request`, `Selector`) and are strict; `me/password` with `user_id` stays gin (§3.1, §3.4, §4.6, §8.1, §12).
+- SEC2-5 — aliases dispatch by selector (`Targets`, `Request`, `Selector`) and are strict; `me/password` with `user_id` stays gin (§3.1, §3.4, §4.6, §8.1, §12). (`me/password` refined in round 3 by COR3-12: one gin route, no alias)
 - SEC2-14 — non-Public `Infra` routes are "routes" (stages 10–13) (§3.5, §4.2, §6, §12).
 - SEC2-16 — CF Access registered through `app.Options.Authenticators` (§8.3).
 - SEC2-17 — `LegacyAuthGin`/`OwnAuth` admission by the kernel (§3.3, §8.1, §8.2, §12); objection 1 to 03 closed (03 v1.5.0 R6 states it).
@@ -1208,3 +1298,27 @@ Round 2 (2026-11-04), findings applied to this file:
 Integration pass (round 2, 2026-11-04):
 
 - integration pass (round 2): Open item 3 resolved: 06 uses `Registrar.HTTP()` and `MountLegacy`; no `Registrar.Route`/`LegacyHandler`.
+
+Round 3 (2026-11-04), findings applied to this file:
+
+- R3-1 — §8.1 S4 rollback: binary swap over one stored identity format; no Teach build, no S4 floor (§8.1).
+- COR3-1 — perimeter settings read through config's legacy adapter over `config_blob` from S2; `TestPerimeterHonoursBlobOnlyValues` (§8.1, §10, §12).
+- COR3-3 / MOD3-4 — S2 surface: `auth` leaf types at S2, `Deps.Compat` at S2b, `Deps.Auth/RBAC/Audit` at S4; `httpapi` → `internal/openapi` only; `ErrPublicNotAllowed` deleted for `TestPublicRoutesGolden`; `core.json` at `core/openapi/core.json`; basic-gate password plaintext until S3 (§3, §3.3, §5, §7, §10, §12).
+- COR3-6 — stage 9 skips `text/event-stream` and `LegacyRoute.NoCompress` routes (HEAD's exclusions); writer has `Unwrap`/`Flush`; operations-stream access-log skips (§4.2, §8.2, §12).
+- COR3-12 — `PUT /api/v1/auth/me/password` is one gin route, no alias (§4.6).
+- COR3-13 — `Route.Strict` inverted to `Lenient` (zero = strict) (§3.1, §3.4).
+- SEC3-8 — aliases and legacy routes confined to their owner's claims; `ErrAliasOutsideClaim`, `ErrShadow`; tests (§3.1, §3.3, §4.9, §6, §12).
+- SEC3-14 — `OwnAuth` admission from S2 through the recording-only S2 `Registrar.AuthMethod` (§3, §8.2).
+- SEC3-16 / FE3-5 — ABO's `SPAShared = ["login", "invite"]`; the legacy invite and temp-login 302s are books manifest routes for the whole window, `ui.Handler` implements none; test (§3.5, §8.2, §12).
+- FE3-1 — `NonSPA` is `TopSegments` only, never `SPAShared`; `LegacyPrefixes` first segments are reserved IDs only (§3.5).
+- FE3-2 — build ID read from the embedded bundle's meta (`LegacyMount.BuildID`, later `ui`); no ldflags; missing-header rule (§4.2, §8.2, §12).
+- FE3-6 — `LegacyPath.Shape` is untyped; aliases documented with the native schema; legacy-shape clients keep hand-written calls; no `WithLegacyShape` (§3.1).
+- FE3-8 — `ui.ReservedSegments` lands at S2 so the reserved-ID equality test holds from S2 (§4.1).
+- FE3-9 — one shell-segment error, 06's `ProblemSPASegmentCollision`; `ErrShellSegment` and its test deleted (§3.3, §3.5, §4.10, §6, §12).
+- FE3-10 — `csp.go` stays in ABO until S9, `csp_report.go` → `internal/uihttp` at S4, `static_embed.go` → `ui` at S9 (§8.4).
+- FE3-13 — the legacy `/` fallback consults `Router.NonSPA()` before gin from S2 (§4.10, §12).
+- FE3-16 — `internal/modulehttp` named, fed a read-only `ModulesView` (§5).
+- FE3-19 — dev proxies rewrite `Origin` with `Host` (§4.2 stage 7).
+- SIMP3-1 — `httpapi` imports the static `config.Overrides`; `time.Time` is in `jsonschemax.Base`; `TestOpenAPI_UsesConfigOverrides` (§1.1, §3, §7, §12).
+- SIMP3-2 — deferred facade members checked by `archtest.DeferredMembersAbsent` from S2 (§3.6).
+- SIMP3-3 — ledger dates from `app.Options.CompatLedger` merged with core's fragment (§3.1, §3.5, §12).

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-realtime.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 9f4f16ae-e4d9-4fd1-a6df-e409e07602ad -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -60,11 +60,15 @@ package realtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/compat"
 	"github.com/falkcorp/mediacore/events"
+	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/rbac"
 )
 
@@ -179,7 +183,10 @@ var (
   §4.3): 401 with one of the session-gone codes, 403, 400, 429/503 with `Retry-After`. A
   fetch-based client sees them (§4.8).
 - Response: `Content-Type: text/event-stream`, `Cache-Control: no-store`,
-  `X-Accel-Buffering: no`; excluded from compression (05-http-api §4.2 stage 9). The first frames
+  `X-Accel-Buffering: no`; excluded from compression: 05-http-api §4.2 stage 9 skips `HandleRaw`
+  streams and every `text/event-stream` response, and the three legacy projection routes also carry
+  `LegacyRoute.NoCompress` (HEAD excludes `/api/events` from gzip, `internal/server/server.go:1590-1606`;
+  COR3-6). The first frames
   are `retry: 3000` and the control frame `core.stream.opened.v1` with the stream's effective topic
   list.
 
@@ -289,14 +296,15 @@ legacy projections consume them.
 | `core.task.run-changed.v1` | 05-tasks | `AnyAuthenticated` + `Visible` = definition `View` | run view with progress, workers, current item; the topic's own `TopicSpec.Redact` = `tasks.RedactRunView`, declared by `tasks`, blanks `RunView.Current` (every worker's current-item label) and any run error text unless the subscriber holds `core:users.view` — the same function runs in the `GET /api/core/v1/tasks/runs[/{id}]` serializer, so REST and stream agree (COR2-2) | stream C `run`, stream B `op.created/updated/current_item/terminal`, stream A `operation.progress/status` |
 | `core.task.log-appended.v1` | 05-tasks | as above | log line | stream A `operation.log`, B `op.log` |
 
+| `core.system.status-changed.v1` | 05-health | `core:system.status` (seeded to `editor`/`viewer`, 05-rbac §4.8) | readiness and maintenance tokens only | stream A `system.status` |
+| `books.book.changed.v1` | books | `books:view` | `{kind: created|updated|deleted, id}`, `Key` = book ID, `Coalesce: 250ms` | stream A `books.changed` (`book_changes.go:18-32`) |
+
 **Successor scope of HEAD's gate (COR2-2).** HEAD withholds run error text and current-item labels
 from callers without `users.manage`, because a label can name a user (`opsv3/events.go:609-616`,
 `view.go:59-64`). The canonical successor is `core:users.view`: 05-rbac §6.1 maps `users.manage` to
 `core:users.manage`, which implies `core:users.view`, and by default only `admin` and holders of
 the `users.manage` expansion hold it. A custom role holding only `core:users.view` already sees the
 user list, so seeing a username inside a label discloses nothing more.
-| `core.system.status-changed.v1` | 05-health | `core:system.status` (seeded to `editor`/`viewer`, 05-rbac §4.8) | readiness and maintenance tokens only | stream A `system.status` |
-| `books.book.changed.v1` | books | `books:view` | `{kind: created|updated|deleted, id}`, `Key` = book ID, `Coalesce: 250ms` | stream A `books.changed` (`book_changes.go:18-32`) |
 
 The shutdown notice is not a topic: every subscriber, whatever its permissions, receives
 `core.stream.closed.v1{reason:"shutdown"}` from `Hub.Close`, and the shell drives its shutdown
@@ -385,7 +393,7 @@ its projections arrive at S6, so one stage needs an explicit feed:
 | Stages | Source of run events | Legacy streams A, B, C | UI (Activity page, `useOperationsStore`) |
 |---|---|---|---|
 | S0–S4 | ABO's operations registry and v3 runner | HEAD's three implementations, unchanged | unchanged |
-| S5 | `core/tasks` publishes `core.task.run-changed.v1` / `core.task.log-appended.v1` on the bus | still HEAD's implementations, fed by a **books-side bridge**: a bus subscriber registered by `books` at S5 translates each core task event into today's `registry.EventHub` publish (stream B), hub A's `Send*` (`operation.*`) and the v3 broker's `run` events (stream C); core never imports ABO, so the bridge lives in `books` | stays on the task **aliases** (legacy REST shape) and the legacy streams, so REST and stream use one vocabulary; S5 done-check: "Activity page shows live progress on S5" |
+| S5 | `core/tasks` publishes `core.task.run-changed.v1` / `core.task.log-appended.v1` on the bus | still HEAD's implementations, fed by a **books-side bridge** (the one form for every file, COR3-9, FE3-12): a bus subscriber on `core.task.*`, registered by `books` with `Registrar.Subscribe` at S5, translates each core task event into today's `registry.EventHub` publish (stream B), hub A's `Send*` (`operation.*`) and the v3 broker's `run` events (stream C); core never imports ABO (R1), so the bridge lives in `books`. **HEAD's per-event filters keep working (SEC3-9):** the bridge forwards only events of kinds that have a `LegacyDefID` (05-tasks §5T.3), under that ID, so HEAD's def-ID filters (`opEventFilter`, `handlers/operations_v2.go:1084-1104`; stream C's re-check, `opsv3/events.go:569-618`) see exactly what they see today — core kinds HEAD's streams show today keep appearing under their legacy IDs, and a kind without a `LegacyDefID` (no older build shows it) is never forwarded; before publishing to stream A, which any authenticated credential reads, it applies `tasks.RedactRunView` with a nil checker (labels and error text blanked) | the Activity page and `useOperationsStore` keep their hand-written calls on the legacy paths and the legacy streams, so REST and stream use one vocabulary (07 §7.11, FE3-6); S5 done-check: "streams A, B and C show live progress on S5" |
 | S6 | the same bus topics | the hub's three projections replace HEAD's implementations; the S5 bridge, `registry.EventHub`, hub A and the v3 broker are deleted in the S6 PR | unchanged (legacy URLs, `MaxLegacy` bucket) |
 | S9 | the same | projections kept for external consumers until their contract PR | native REST and the native stream move **together** (FE-10) |
 
@@ -491,7 +499,8 @@ Legacy projection use is counted by `compat` (`mediacore_compat_legacy_use_total
 | `TestProjection_LazyHandler503UntilServing` | a projection handler obtained in P6 answers 503 before P8 and streams after (COR2-1) |
 | `TestProjection_RejectsUnknownOrNonRealtimeTopic` | |
 | `TestHub_ExcludePattern` | `topic=*&exclude=core.task.log-appended.v1` carries no log lines; a keyed log stream carries one run's lines (FE2-21) |
-| `TestS5Bridge_LegacyStreamsShowCoreRuns` (books, S5 only) | a run started on the core executor at S5 appears on streams A, B and C in today's framing (FE2-3) |
+| `TestS5Bridge_LegacyStreamsShowCoreRuns` (books, S5 only) | a run started on the core executor at S5 appears on streams A, B and C in today's framing, under its `LegacyDefID` (FE2-3, COR3-9) |
+| `TestS5Bridge_RepairsRunHiddenFromViewer` (books, S5 only) | a Repairs run is not shown on stream B to a `library.view` subscriber without `users.manage`, stream C re-checks it, a kind without `LegacyDefID` reaches no stream, and stream A carries the run with its labels blanked (SEC3-9) |
 | `TestLegacyProjection_FramesGolden` (A, B, C) | byte-for-byte legacy framing from one publish, including A's `system.shutdown` |
 | `TestNoGlobals` (archtest) | hub is per-App (R5) |
 
@@ -504,7 +513,7 @@ Legacy projection use is counted by `compat` (`mediacore_compat_legacy_use_total
 | `internal/server/handlers/opsv3/events.go` broker | its algorithm becomes `core/internal/sse`; route becomes projection C |
 | `opaccess.Repairs.ForStream`/`StreamOpen` | the catalog `Visible` of the repairs topics (books) + `auth.Service.Revalidate` |
 | `withUserText` (`opsv3/events.go:609-616`) | `tasks.RedactRunView` as the `TopicSpec.Redact` of `core.task.run-changed.v1` and the same function in the REST run serializer (§4.7) |
-| `web/src/services/eventSourceManager.ts`, `openOperationsSSE` (`api.ts:733-740`), `useOperationsStore` SSE | unchanged until the shell stage (fed by the S5 bridge, then the S6 projections, §4.9); then `@mediacore/shell`'s `useTopic<T>(topic, onEvent, {key})` and `useResync(handler)` (07 §7.4.2, §7.9; one signature, FE2-20) over the fetch-based reader of §4.8, one stream per browser per app |
+| `web/src/services/eventSourceManager.ts`, `openOperationsSSE` (`api.ts:733-740`), `useOperationsStore` SSE | unchanged until the shell stage (fed by the S5 bridge, then the S6 projections, §4.9; the legacy projection routes carry `NoCompress`, §4.1); then `@mediacore/shell`'s `useTopic<T>(topic, onEvent, {key})` and `useResync(handler)` (07 §7.4.2, §7.9; one signature, FE2-20) over the fetch-based reader of §4.8, one stream per browser per app |
 
 ## 12. Open items
 
@@ -553,3 +562,12 @@ Round 2 (2026-11-04), findings applied to this file:
 - FE2-20 — normative manual-redirect detection; one `useTopic<T>(topic, onEvent, {key})` signature (§4.8, §11).
 - FE2-21 — leader subscribes `*` minus `core.task.log-appended.v1` via `exclude=`; per-run keyed log stream or REST (§4.1, §4.8, §10).
 - SIMP2-6 — facade keys referred to as deferred (§6).
+
+Round 3 (2026-11-04), findings applied to this file:
+
+- COR3-6 — the native stream and the three legacy projection routes are never compressed (`text/event-stream` rule and `LegacyRoute.NoCompress`, 05-http-api stage 9) (§4.1, §11).
+- COR3-9 / FE3-12 — the S5 bridge is a books bus subscriber on `core.task.*` registered with `Registrar.Subscribe`, feeding streams A, B and C; S5 done-check names all three (§4.9, §10).
+- COR3-13 — `realtime` import block completed (`errors`, `log/slog`, `compat`, `metrics`) (§3).
+- COR3-15 — the "Successor scope" paragraph moved below the §4.7 table (§4.7).
+- SEC3-9 — the S5 bridge forwards only kinds with a `LegacyDefID`, under that ID, so HEAD's per-event filters apply; never a kind without one; stream A gets `RedactRunView` with a nil checker; `TestS5Bridge_RepairsRunHiddenFromViewer` (§4.9, §10).
+- FE3-6 — the S5–S9 UI keeps its hand-written calls on the legacy paths (§4.9).
