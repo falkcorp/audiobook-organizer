@@ -1,7 +1,7 @@
 // file: web/src/components/review/repairs/RepairsGroupedView.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1b25c3ed-d0f6-4bba-b8d6-48e102e77e18
-// last-edited: 2026-10-22
+// last-edited: 2026-11-05
 
 /**
  * Grouped by fix: the page's rows grouped by class and reason (the same
@@ -18,6 +18,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { CompactRow } from './RepairsCompactView';
 import type { RepairsViewProps } from './RowParts';
+import { trialBlocksApply } from '../lanes/useRepairsLane';
 import {
   changeSummary,
   classLabel,
@@ -60,7 +61,7 @@ function GroupSection({
   const planOnly = fixer?.plan_only === true;
   const planOpId = repairs.planOpId;
   const applyDisabled =
-    repairs.applying || repairs.trial?.phase === 'running' || selectable.length === 0 || !fixer || !planOpId;
+    repairs.applying || trialBlocksApply(repairs.trial) || selectable.length === 0 || !fixer || !planOpId;
 
   const applyGroup = () => {
     if (!fixer || !planOpId || selectable.length === 0) return;

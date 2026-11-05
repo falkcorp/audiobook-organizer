@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.16.0
+// version: 1.17.0
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
 // last-edited: 2026-11-05
 //
@@ -997,6 +997,273 @@ describe('useRepairsLane: the trial is refreshed after an apply', () => {
     await waitFor(() => expect(result.current.applyResult).not.toBeNull());
     expect(result.current.trial).toBeNull();
     expect(api.pollOperationV2).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useRepairsLane: after an apply, the refresh and what the lane keeps', () => {
+  const STARTED = (n: number) => ({
+    operation_id: `apply-${n}`,
+    def_id: 'repairs.apply',
+    fixer_id: 'vg-primary',
+    status: 'queued' as const,
+  });
+
+  /** A trial the test finishes by hand, by plan id. */
+  function deferPolls() {
+    const pending = new Map<string, (o: OperationV2) => void>();
+    const failing = new Map<string, (e: Error) => void>();
+    vi.mocked(api.pollOperationV2).mockImplementation((id: string) =>
+      id.startsWith('plan-') && id !== 'plan-1'
+        ? new Promise<OperationV2>((resolve, reject) => {
+            pending.set(id, resolve);
+            failing.set(id, reject);
+          })
+        : Promise.resolve(op(id, 'completed'))
+    );
+    return {
+      finish: (id: string, o: OperationV2) => act(async () => pending.get(id)!(o)),
+      lose: (id: string, e: Error) => act(async () => failing.get(id)!(e)),
+    };
+  }
+
+  function bulk(n: number, prefix = 'r'): RepairRow[] {
+    return Array.from({ length: n }, (_, i) => row(`${prefix}${i}`));
+  }
+
+  async function renderBulk(planRows: Record<string, number>, first: number) {
+    mockRows(
+      Object.fromEntries(
+        Object.entries(planRows).map(([id, n]) => [id, { applicable: bulk(n), skipped: [] }])
+      )
+    );
+    const hook = renderHook(() => useRepairsLane(toast, true));
+    await waitFor(() => expect(hook.result.current.rows.length).toBeGreaterThan(0));
+    act(() => hook.result.current.setPageSize(25));
+    await waitFor(() => expect(hook.result.current.rows).toHaveLength(Math.min(25, first)));
+    return hook;
+  }
+
+  function applyRows(result: { current: ReturnType<typeof useRepairsLane> }, planOpId: string, rowIds: string[]) {
+    act(() => result.current.dispatch({ lane: 'repairs', type: 'applyRows', fixerId: 'vg-primary', planOpId, rowIds }));
+  }
+
+  it('shows the last completed plan, not an empty lane, when the newest plan failed or was dropped', async () => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([
+      {
+        ...FIXER,
+        // last_plan moved to the refresh at enqueue and the refresh never completed.
+        last_plan: { operation_id: 'plan-2', status: 'failed', queued_at: '2026-09-27T12:00:00Z', error: 'dropped by a restart', after_apply: true },
+        last_completed_plan: FIXER.last_plan,
+      },
+    ]);
+    const { result } = await renderLane();
+    expect(result.current.planOpId).toBe('plan-1');
+    expect(result.current.rows.map((r) => r.row_id)).toEqual(['g1', 'g2']);
+  });
+
+  it('names a refresh the fixer list reaches first as one, so its toast is the refresh toast', async () => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([
+      {
+        ...FIXER,
+        last_plan: { operation_id: 'plan-2', status: 'running', queued_at: '2026-09-27T12:00:00Z', after_apply: true },
+        last_completed_plan: FIXER.last_plan,
+      },
+    ]);
+    const polls = deferPolls();
+    const { result } = await renderLane();
+    await waitFor(() => expect(result.current.trial).toMatchObject({ opId: 'plan-2', phase: 'running', afterApply: true }));
+    expect(result.current.planOpId).toBe('plan-1');
+
+    await polls.finish('plan-2', op('plan-2', 'completed'));
+
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringMatching(/refreshed after the apply/i), 'success'));
+    expect(toast).not.toHaveBeenCalledWith(expect.stringMatching(/Trial finished/), expect.anything());
+  });
+
+  it('keeps the refresh label on a refresh it lost track of', async () => {
+    const { result } = await renderLane();
+    vi.mocked(api.startRepairApply).mockResolvedValue(STARTED(1));
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(applyResult({ replan_op_id: 'plan-2' }));
+    const polls = deferPolls();
+
+    applyRows(result, 'plan-1', ['g1']);
+    await waitFor(() => expect(result.current.trial).toMatchObject({ opId: 'plan-2', afterApply: true }));
+    await polls.lose('plan-2', new Error('network down'));
+
+    await waitFor(() => expect(result.current.trial).toMatchObject({ opId: 'plan-2', phase: 'failed', afterApply: true }));
+    expect(result.current.trial?.message).toMatch(/Lost track of the trial/);
+  });
+
+  describe('two applies in a row', () => {
+    async function twoApplies() {
+      const hook = await renderLane();
+      vi.mocked(api.startRepairApply).mockResolvedValueOnce(STARTED(1)).mockResolvedValueOnce(STARTED(2));
+      vi.mocked(api.getRepairApplyResult)
+        .mockResolvedValueOnce(applyResult({ replan_op_id: 'plan-2' }))
+        .mockResolvedValueOnce(
+          applyResult({ replan_op_id: 'plan-3', rows: [{ row_id: 'g2', outcome: 'applied' }] })
+        );
+      const polls = deferPolls();
+      mockRows({
+        'plan-1': { applicable: APPLICABLE, skipped: SKIPPED },
+        'plan-2': { applicable: [row('g2')], skipped: SKIPPED },
+        'plan-3': { applicable: [], skipped: SKIPPED },
+      });
+      applyRows(hook.result, 'plan-1', ['g1']);
+      await waitFor(() => expect(hook.result.current.trial).toMatchObject({ opId: 'plan-2' }));
+      // The first refresh is still running: the next apply is not held back.
+      await waitFor(() => expect(hook.result.current.applying).toBe(false));
+      applyRows(hook.result, 'plan-1', ['g2']);
+      await waitFor(() => expect(hook.result.current.trial).toMatchObject({ opId: 'plan-3' }));
+      return { ...hook, polls };
+    }
+
+    it('does not announce the older refresh as the answer when it finishes after the newer one started', async () => {
+      const { result, polls } = await twoApplies();
+      toast.mockClear();
+
+      await polls.finish('plan-2', op('plan-2', 'completed'));
+      await waitFor(() => expect(result.current.planOpId).toBe('plan-2'));
+      // The newer refresh is still the one being followed, and said nothing yet.
+      expect(result.current.trial).toMatchObject({ opId: 'plan-3', phase: 'running', afterApply: true });
+      expect(toast).not.toHaveBeenCalledWith(expect.stringMatching(/refreshed after the apply/i), expect.anything());
+
+      await polls.finish('plan-3', op('plan-3', 'completed'));
+      await waitFor(() => expect(result.current.planOpId).toBe('plan-3'));
+      expect(result.current.trial).toBeNull();
+      expect(toast.mock.calls.filter(([m]) => /refreshed after the apply/i.test(m))).toHaveLength(1);
+    });
+
+    it('does not let the older refresh failing replace the state of the newer one', async () => {
+      const { result, polls } = await twoApplies();
+      toast.mockClear();
+
+      await polls.finish('plan-2', op('plan-2', 'failed', 'library read failed'));
+
+      await waitFor(() => expect(toast).toHaveBeenCalledWith('Trial failed: library read failed', 'error'));
+      expect(result.current.trial).toMatchObject({ opId: 'plan-3', phase: 'running', afterApply: true });
+    });
+  });
+
+  it('follows no refresh when the lane went inactive while the apply ran', async () => {
+    const hook = await renderLane();
+    vi.mocked(api.startRepairApply).mockResolvedValue(STARTED(1));
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(applyResult({ replan_op_id: 'plan-2' }));
+    let finishApply!: (o: OperationV2) => void;
+    vi.mocked(api.pollOperationV2).mockImplementation((id: string) =>
+      id === 'apply-1' ? new Promise<OperationV2>((r) => (finishApply = r)) : new Promise<OperationV2>(() => {})
+    );
+
+    applyRows(hook.result, 'plan-1', ['g1']);
+    await waitFor(() => expect(api.pollOperationV2).toHaveBeenCalledWith('apply-1', undefined, expect.any(Number), expect.anything()));
+    hook.rerender({ a: false } as never);
+    await act(async () => finishApply(op('apply-1', 'completed')));
+
+    await waitFor(() => expect(hook.result.current.applyResult).toMatchObject({ replan_op_id: 'plan-2' }));
+    expect(api.pollOperationV2).not.toHaveBeenCalledWith('plan-2', expect.anything(), expect.anything(), expect.anything());
+    expect(hook.result.current.trial).toBeNull();
+  });
+
+  describe('the reviewer\'s place in the list', () => {
+    it('keeps the page offset across the refresh when the shorter list still reaches it', async () => {
+      const { result } = await renderBulk({ 'plan-1': 30, 'plan-2': 28 }, 30);
+      act(() => result.current.setOffset(25));
+      await waitFor(() => expect(result.current.rows).toHaveLength(5));
+      vi.mocked(api.startRepairApply).mockResolvedValue(STARTED(1));
+      vi.mocked(api.getRepairApplyResult).mockResolvedValue(
+        applyResult({ replan_op_id: 'plan-2', rows: [{ row_id: 'r0', outcome: 'applied' }] })
+      );
+      const polls = deferPolls();
+
+      applyRows(result, 'plan-1', ['r0']);
+      await waitFor(() => expect(result.current.trial).toMatchObject({ opId: 'plan-2' }));
+      await polls.finish('plan-2', op('plan-2', 'completed'));
+
+      await waitFor(() => expect(result.current.planOpId).toBe('plan-2'));
+      await waitFor(() => expect(result.current.rows).toHaveLength(3));
+      expect(result.current.offset).toBe(25);
+    });
+
+    it('moves to the last page that has rows when the refreshed list ends before the offset', async () => {
+      const { result } = await renderBulk({ 'plan-1': 80, 'plan-2': 60 }, 80);
+      act(() => result.current.setOffset(75));
+      await waitFor(() => expect(result.current.rows).toHaveLength(5));
+      vi.mocked(api.startRepairApply).mockResolvedValue(STARTED(1));
+      vi.mocked(api.getRepairApplyResult).mockResolvedValue(
+        applyResult({ replan_op_id: 'plan-2', rows: [{ row_id: 'r0', outcome: 'applied' }] })
+      );
+      const polls = deferPolls();
+
+      applyRows(result, 'plan-1', ['r0']);
+      await waitFor(() => expect(result.current.trial).toMatchObject({ opId: 'plan-2' }));
+      await polls.finish('plan-2', op('plan-2', 'completed'));
+
+      await waitFor(() => expect(result.current.planOpId).toBe('plan-2'));
+      await waitFor(() => expect(result.current.offset).toBe(50));
+      await waitFor(() => expect(result.current.rows).toHaveLength(10));
+    });
+
+    it('goes back to the first page when the refreshed list fits on it', async () => {
+      const { result } = await renderBulk({ 'plan-1': 30, 'plan-2': 20 }, 30);
+      act(() => result.current.setOffset(25));
+      await waitFor(() => expect(result.current.rows).toHaveLength(5));
+      vi.mocked(api.startRepairApply).mockResolvedValue(STARTED(1));
+      vi.mocked(api.getRepairApplyResult).mockResolvedValue(
+        applyResult({ replan_op_id: 'plan-2', rows: [{ row_id: 'r0', outcome: 'applied' }] })
+      );
+      const polls = deferPolls();
+
+      applyRows(result, 'plan-1', ['r0']);
+      await waitFor(() => expect(result.current.trial).toMatchObject({ opId: 'plan-2' }));
+      await polls.finish('plan-2', op('plan-2', 'completed'));
+
+      await waitFor(() => expect(result.current.offset).toBe(0));
+      await waitFor(() => expect(result.current.rows).toHaveLength(20));
+    });
+
+    it('still starts at the first page when the reviewer\'s own trial completes', async () => {
+      const { result } = await renderBulk({ 'plan-1': 30, 'plan-3': 30 }, 30);
+      act(() => result.current.setOffset(25));
+      await waitFor(() => expect(result.current.rows).toHaveLength(5));
+      vi.mocked(api.startRepairPlan).mockResolvedValue({
+        operation_id: 'plan-3',
+        def_id: 'repairs.plan',
+        fixer_id: 'vg-primary',
+        status: 'queued',
+      });
+      vi.mocked(api.pollOperationV2).mockResolvedValue(op('plan-3', 'completed'));
+
+      act(() => result.current.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: 'vg-primary' }));
+
+      await waitFor(() => expect(result.current.planOpId).toBe('plan-3'));
+      expect(result.current.offset).toBe(0);
+    });
+
+    it('keeps rows ticked during the refresh, less the rows the apply wrote', async () => {
+      const { result } = await renderLane();
+      mockRows({
+        'plan-1': { applicable: APPLICABLE, skipped: SKIPPED },
+        'plan-2': { applicable: [row('g2')], skipped: SKIPPED },
+      });
+      vi.mocked(api.startRepairApply).mockResolvedValue(STARTED(1));
+      vi.mocked(api.getRepairApplyResult).mockResolvedValue(applyResult({ replan_op_id: 'plan-2' }));
+      const polls = deferPolls();
+
+      applyRows(result, 'plan-1', ['g1']);
+      await waitFor(() => expect(result.current.trial).toMatchObject({ opId: 'plan-2' }));
+      await waitFor(() => expect(result.current.settledRowIds.has('g1')).toBe(true));
+      // Ticked while the refresh runs: g1 was written, g2 was not.
+      act(() => {
+        result.current.toggleRow('g1');
+        result.current.toggleRow('g2');
+      });
+      expect([...result.current.selectedRowIds].sort()).toEqual(['g1', 'g2']);
+
+      await polls.finish('plan-2', op('plan-2', 'completed'));
+
+      await waitFor(() => expect(result.current.planOpId).toBe('plan-2'));
+      expect([...result.current.selectedRowIds]).toEqual(['g2']);
+    });
   });
 });
 

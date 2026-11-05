@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.34.0
+// version: 1.35.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-11-05
 
@@ -61,6 +61,7 @@ import {
   applySeverity,
   summarizeApply,
   summarizeAppliedRows,
+  trialBlocksApply,
   type RepairTrialState,
   type RepairsLane,
 } from './lanes/useRepairsLane';
@@ -593,7 +594,9 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
   const selectedCount = repairs.selectedRowIds.size;
   const applicable = (inClass ? page?.applicable_in_class : undefined) ?? page?.applicable ?? 0;
   const remaining = repairs.remainingApplicable ?? 0;
-  const applyDisabled = repairs.applying || repairs.applyPreparing || running;
+  // Only a trial the reviewer started holds Apply off; the refresh after an apply
+  // does not (trialBlocksApply).
+  const applyDisabled = repairs.applying || repairs.applyPreparing || trialBlocksApply(trial);
 
   // The server marks a fixer the caller may not use and leaves its last runs
   // off; every control below would be refused, so none is offered.
@@ -619,7 +622,8 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
           {trial?.afterApply ? (
             <>
               Refreshing the trial after your apply. The rows below are from before it; the rows it
-              wrote leave the list when the new trial finishes.
+              wrote leave the list when the new trial finishes. You can keep applying rows meanwhile;
+              a row it already wrote is left alone.
             </>
           ) : (
             <>

@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.22.0
+// version: 1.23.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
 // last-edited: 2026-11-05
 
@@ -20,7 +20,22 @@
  * newest COMPLETED plan it has seen per fixer (`knownPlans`) and shows that,
  * with the running or failed trial reported beside it rather than in its place.
  * Rows a reviewer was reading do not vanish because they pressed "Run trial".
- * (After a reload the older plan is gone until the server keeps it too.)
+ * After a reload the server's `last_completed_plan` (moved only when a plan has
+ * stored all its rows) gives the same answer, so a refresh that failed or was
+ * dropped by a restart does not leave the lane with no rows.
+ *
+ * ---------------------------------------------------------------------------
+ * AFTER AN APPLY
+ * ---------------------------------------------------------------------------
+ *
+ * A stored plan never changes, so the rows an apply wrote would stay listed. The
+ * server starts a refresh plan when an apply writes (`replan_op_id`, or
+ * `after_apply` on the plan ref after a reload) and the lane follows it. The
+ * refresh takes minutes on a big library and does NOT block Apply: a row it still
+ * lists was either written (the server refuses it as changed) or is still open.
+ * Only a trial the reviewer started themselves holds Apply off (trialBlocksApply).
+ * The page offset is kept across a refresh and clamped when the shorter list ends
+ * before it.
  *
  * ---------------------------------------------------------------------------
  * APPLY ALWAYS WRITES, AND ASKS ONCE
@@ -324,6 +339,17 @@ export interface RepairTrialState {
   afterApply?: boolean;
 }
 
+/**
+ * Whether a running trial holds Apply off. A trial the reviewer started does: its
+ * rows are about to replace the ones on screen. The refresh the server starts
+ * after an apply does not: it exists because of the reviewer's own apply, takes
+ * minutes on a large library, and an apply from the old rows is checked row by
+ * row against the library anyway.
+ */
+export function trialBlocksApply(trial: RepairTrialState | null | undefined): boolean {
+  return trial?.phase === 'running' && !trial.afterApply;
+}
+
 export interface RepairsLane {
   active: boolean;
 
@@ -409,7 +435,6 @@ export interface RepairsLane {
   settledRowIds: ReadonlySet<string>;
   /** The plan's applicable count less the settled rows (null: no page yet). */
   remainingApplicable: number | null;
-  /** The newest apply result for the plan on screen. */
   /**
    * The selected fixer's latest apply result, for the banner. It outlives the
    * refresh the apply started (the refreshed plan is its `replan_op_id`), and goes
@@ -465,6 +490,25 @@ export function useRepairsLane(
   }, []);
   const [knownPlans, setKnownPlans] = useState<Record<string, KnownPlan>>({});
   const [trials, setTrials] = useState<Record<string, RepairTrialState>>({});
+  // Plans the server started to refresh a trial after an apply. State, because
+  // the render-phase view reset below reads it; the ref mirrors it for the polls.
+  const [refreshPlanIds, setRefreshPlanIds] = useState<ReadonlySet<string>>(() => new Set());
+  const refreshOpsRef = useRef(new Set<string>());
+  const markRefreshPlans = useCallback((ids: readonly string[]) => {
+    const fresh = ids.filter((id) => !refreshOpsRef.current.has(id));
+    if (fresh.length === 0) return;
+    for (const id of fresh) refreshOpsRef.current.add(id);
+    setRefreshPlanIds((prev) => new Set([...prev, ...fresh]));
+  }, []);
+  // The newest trial the lane follows per fixer, so a trial that finishes after a
+  // newer one was started does not announce itself as the answer.
+  const latestTrialRef = useRef<Record<string, string>>({});
+  // followTrial runs from long-lived closures (an apply that finishes minutes
+  // after it started): it reads the current `active`, not the one it was made with.
+  const activeRef = useRef(active);
+  useEffect(() => {
+    activeRef.current = active;
+  }, [active]);
 
   const [filter, setFilterState] = useState<RepairRowsFilter>(seed.filter ?? 'applicable');
   const [rowClass, setRowClassState] = useState<string | null>(seed.rowClass ?? null);
@@ -508,12 +552,34 @@ export function useRepairsLane(
   // Offset and selection belong to one plan of one fixer. Reset them during
   // render when that changes (React's derived-state pattern), not in an effect:
   // an effect would let the rows fetch fire once at the stale offset first.
-  const viewKey = `${selectedFixerId ?? ''}|${planOpId ?? ''}`;
-  const [seenViewKey, setSeenViewKey] = useState(viewKey);
-  if (seenViewKey !== viewKey) {
-    setSeenViewKey(viewKey);
-    setOffset(0);
-    setSelectedRowIds(new Set());
+  //
+  // One exception: the same fixer's plan changing to the refresh an apply started.
+  // That is the same list minus the rows the apply wrote, so the reviewer stays on
+  // their page (the rows effect clamps the offset if the list now ends before it)
+  // and keeps their ticks, less the rows the apply settled, which are leaving it.
+  const [seenView, setSeenView] = useState({ fixerId: selectedFixerId, planOpId });
+  if (seenView.fixerId !== selectedFixerId || seenView.planOpId !== planOpId) {
+    setSeenView({ fixerId: selectedFixerId, planOpId });
+    const previous = seenView.planOpId;
+    const refreshed =
+      seenView.fixerId === selectedFixerId &&
+      previous !== null &&
+      planOpId !== null &&
+      refreshPlanIds.has(planOpId);
+    if (refreshed) {
+      const written = outcomesByPlan[previous] ?? {};
+      setSelectedRowIds((prev) => {
+        const next = new Set<string>();
+        for (const id of prev) {
+          const o = written[id];
+          if (!o || !SETTLED_OUTCOMES.has(o.outcome)) next.add(id);
+        }
+        return next;
+      });
+    } else {
+      setOffset(0);
+      setSelectedRowIds(new Set());
+    }
   }
 
   // ---- fixer list ---------------------------------------------------------
@@ -528,15 +594,25 @@ export function useRepairsLane(
         if (ctrl.signal.aborted) return;
         setFixers(list);
         setFixersLoaded(true);
+        // A refresh the server started is named on its plan ref, so a lane that
+        // reloads after one finished knows to keep the reviewer's page.
+        markRefreshPlans(
+          list.flatMap((f) =>
+            [f.last_plan, f.last_completed_plan].flatMap((r) => (r?.after_apply ? [r.operation_id] : []))
+          )
+        );
         setKnownPlans((prev) => {
           let next = prev;
           for (const f of list) {
-            const lp = f.last_plan;
-            if (lp?.status !== 'completed') continue;
-            next = withNewerPlan(next, f.id, {
-              opId: lp.operation_id,
-              completedAt: lp.completed_at ?? lp.queued_at,
-            });
+            // last_completed_plan is the newest plan that stored all its rows;
+            // last_plan is the newest enqueued and counts only once completed.
+            for (const ref of [f.last_completed_plan, f.last_plan]) {
+              if (ref?.status !== 'completed') continue;
+              next = withNewerPlan(next, f.id, {
+                opId: ref.operation_id,
+                completedAt: ref.completed_at ?? ref.queued_at,
+              });
+            }
           }
           return next;
         });
@@ -547,7 +623,12 @@ export function useRepairsLane(
           const next = { ...prev };
           for (const f of list) {
             const t = next[f.id];
-            if (t && f.last_plan?.operation_id === t.opId && f.last_plan.status === 'completed') {
+            const done =
+              t !== undefined &&
+              [f.last_plan, f.last_completed_plan].some(
+                (r) => r?.operation_id === t.opId && r.status === 'completed'
+              );
+            if (done) {
               delete next[f.id];
               changed = true;
             }
@@ -574,7 +655,7 @@ export function useRepairsLane(
         if (!ctrl.signal.aborted) setFixersLoading(false);
       });
     return () => ctrl.abort();
-  }, [active, fixersNonce, parkFixerSeed]);
+  }, [active, fixersNonce, parkFixerSeed, markRefreshPlans]);
 
   // ---- owner status ------------------------------------------------------
   // Read with the fixer list. A failure leaves it unknown: the button stays,
@@ -599,6 +680,10 @@ export function useRepairsLane(
 
   const followTrial = useCallback(
     (fixerId: string, opId: string, afterApply = false) => {
+      // An inactive lane makes no requests. The next fixer load (on activation)
+      // re-follows a plan the server reports as still running.
+      if (!activeRef.current) return;
+      if (afterApply) markRefreshPlans([opId]);
       if (trialPolls.current.has(opId)) {
         // Already followed (the fixer list saw it in flight first): only say why
         // it runs, so the panel names the refresh.
@@ -611,6 +696,10 @@ export function useRepairsLane(
       }
       const ctrl = new AbortController();
       trialPolls.current.set(opId, ctrl);
+      latestTrialRef.current[fixerId] = opId;
+      // Whether this plan is a refresh is read when the poll ends, not captured:
+      // the fixer list can name it before the apply result does.
+      const isRefresh = () => refreshOpsRef.current.has(opId);
       setTrials((prev) => ({ ...prev, [fixerId]: { opId, phase: 'running', ...(afterApply && { afterApply }) } }));
       api
         .pollOperationV2(opId, undefined, REPAIRS_POLL_INTERVAL_MS, {
@@ -632,16 +721,26 @@ export function useRepairsLane(
               delete next[fixerId];
               return next;
             });
-            toast(
-              afterApply
-                ? 'Trial refreshed after the apply. The rows it wrote are no longer listed.'
-                : 'Trial finished. Its rows are ready to review.',
-              'success'
-            );
+            // A newer trial of this fixer is being followed (a second apply's
+            // refresh): its banner and its own completion speak for the fixer.
+            if (latestTrialRef.current[fixerId] === opId) {
+              toast(
+                isRefresh()
+                  ? 'Trial refreshed after the apply. The rows it wrote are no longer listed.'
+                  : 'Trial finished. Its rows are ready to review.',
+                'success'
+              );
+            }
             setFixersNonce((n) => n + 1);
           } else {
             const message = op.error_message || `The trial ended with status "${op.status}".`;
-            setTrials((prev) => ({ ...prev, [fixerId]: { opId, phase: 'failed', message, ...(afterApply && { afterApply }) } }));
+            // Only the trial the lane still follows is shown as failed: an older
+            // one ending late must not replace the state of a newer one.
+            setTrials((prev) =>
+              prev[fixerId]?.opId === opId
+                ? { ...prev, [fixerId]: { opId, phase: 'failed', message, ...(isRefresh() && { afterApply: true }) } }
+                : prev
+            );
             toast(`Trial failed: ${message}`, 'error');
           }
         })
@@ -658,7 +757,11 @@ export function useRepairsLane(
             return;
           }
           const message = `Lost track of the trial: ${errorMessage(err, 'unknown error')}`;
-          setTrials((prev) => ({ ...prev, [fixerId]: { opId, phase: 'failed', message } }));
+          setTrials((prev) =>
+            prev[fixerId]?.opId === opId
+              ? { ...prev, [fixerId]: { opId, phase: 'failed', message, ...(isRefresh() && { afterApply: true }) } }
+              : prev
+          );
           // If it is still running, the reload's auto-follow picks it back up.
           setFixersNonce((n) => n + 1);
         })
@@ -666,7 +769,7 @@ export function useRepairsLane(
           if (trialPolls.current.get(opId) === ctrl) trialPolls.current.delete(opId);
         });
     },
-    [toast]
+    [markRefreshPlans, toast]
   );
 
   // Follow any trial the server reports as still running -- one started from
@@ -675,7 +778,7 @@ export function useRepairsLane(
     if (!active) return;
     for (const f of fixers) {
       const lp = f.last_plan;
-      if (lp && isInFlight(lp.status)) followTrial(f.id, lp.operation_id);
+      if (lp && isInFlight(lp.status)) followTrial(f.id, lp.operation_id, lp.after_apply === true);
     }
   }, [active, fixers, followTrial]);
 
@@ -738,6 +841,13 @@ export function useRepairsLane(
       )
       .then((p) => {
         if (ctrl.signal.aborted) return;
+        // The list ends before the page the reviewer was on (a refresh dropped the
+        // rows an apply wrote): move to the last page that has rows, or the first.
+        // Without this they would see an empty page of a list that is not empty.
+        if (offset > 0 && p.rows.length === 0 && offset >= p.total) {
+          setOffset(p.total > 0 ? Math.floor((p.total - 1) / pageSize) * pageSize : 0);
+          return;
+        }
         noteRowClasses(p.plan_op_id, p.rows);
         setPage(p);
       })
