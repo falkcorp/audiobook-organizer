@@ -2,5 +2,6 @@
   "fixer_id": "synthetic-FixerID",
   "params": {
     "synthetic": true
-  }
+  },
+  "after_apply_op_id": "synthetic-AfterApplyOpID"
 }
