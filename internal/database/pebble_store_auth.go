@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 package database
 
@@ -567,6 +567,12 @@ var ErrUserProtectedField = errors.New("database: UpdateUser cannot change passw
 // unreadable user row means that cannot be ruled out.
 var ErrUserEmailTaken = errors.New("database: another account already has that email address verified")
 
+// ErrAPIKeyRevoked is returned by SetAPIKeyStatus for a transition to "active"
+// on a key that is revoked: Status "revoked" or a non-nil RevokedAt, whatever
+// the status says. Revocation is terminal (05-authn §11.1 item 3); the row is
+// left as it was.
+var ErrAPIKeyRevoked = errors.New("api key is revoked")
+
 // UpdateUser rewrites a user row's ordinary fields (email, roles, ...). Under
 // userWriteMu it re-reads the stored row and refuses (ErrUserProtectedField) a
 // write whose password hash, algorithm, Status, CredentialEpoch,
@@ -1097,10 +1103,14 @@ func (p *PebbleStore) DeleteRole(id string) error {
 	return b.Commit(pebble.Sync)
 }
 
+// CreateAPIKey writes a new key row and its user and hash index entries. It
+// takes apiKeyMu like every other apikey: writer (see SetAPIKeyStatus).
 func (p *PebbleStore) CreateAPIKey(key *APIKey) (*APIKey, error) {
 	if key == nil || key.UserID == "" {
 		return nil, fmt.Errorf("api key: user_id required")
 	}
+	p.apiKeyMu.Lock()
+	defer p.apiKeyMu.Unlock()
 	if key.ID == "" {
 		id, err := newULID()
 		if err != nil {
@@ -1219,17 +1229,44 @@ func (p *PebbleStore) ListAllAPIKeys() ([]APIKey, error) {
 	return out, unreadable.orNil()
 }
 
+// RevokeAPIKey marks a key revoked. It does not take apiKeyMu itself:
+// SetAPIKeyStatus does, and sync.Mutex is not re-entrant.
 func (p *PebbleStore) RevokeAPIKey(id string) error {
 	return p.SetAPIKeyStatus(id, "revoked", time.Now())
 }
 
+// SetAPIKeyStatus sets a key's status and stamps the matching time.
+//
+// Every apikey: writer takes apiKeyMu; 05-authn §11.1 item 6. The body is a
+// whole-row read-modify-write, the same shape as TouchAPIKeyLastUsed, which
+// every key-authenticated request runs. Before this lock, a revoke that
+// committed between a touch's read and its write was overwritten with the
+// pre-revoke row, so an in-flight request undid its own key's revocation.
+// The writers of the family are CreateAPIKey, SetAPIKeyStatus,
+// SetAPIKeyExpiry, TouchAPIKeyLastUsed and user merge's owner rewrite
+// (ApplyUserMergeOps); each holds apiKeyMu across its read and its write.
+// Lock order: apiKeyMu is never held while taking another store lock.
+//
+// The cost: this write is pebble.Sync, so a revoke holds apiKeyMu across one
+// fsync and touches of any key wait behind it. Revokes are rare.
+//
+// Revocation is terminal (05-authn §11.1 item 3): a transition to "active" on
+// a row whose Status is "revoked" or whose RevokedAt is set returns
+// ErrAPIKeyRevoked and writes nothing, so no caller can re-activate a revoked
+// key by going around the PATCH handler. No transition clears RevokedAt.
 func (p *PebbleStore) SetAPIKeyStatus(id, status string, at time.Time) error {
+	p.apiKeyMu.Lock()
+	defer p.apiKeyMu.Unlock()
+
 	k, err := p.GetAPIKey(id)
 	if err != nil {
 		return err
 	}
 	if k == nil {
 		return nil
+	}
+	if status == "active" && (k.Status == "revoked" || k.RevokedAt != nil) {
+		return ErrAPIKeyRevoked
 	}
 	k.Status = status
 	switch status {
@@ -1251,7 +1288,11 @@ func (p *PebbleStore) SetAPIKeyStatus(id, status string, at time.Time) error {
 // leaving Status (and idx: entries) untouched. Used by the one-time expiry
 // stamp for legacy keys: the key gets a future ExpiresAt instead of being
 // revoked, and the middleware expiry check retires it when that time passes.
+// It takes apiKeyMu like every other apikey: writer (see SetAPIKeyStatus).
 func (p *PebbleStore) SetAPIKeyExpiry(id string, at time.Time) error {
+	p.apiKeyMu.Lock()
+	defer p.apiKeyMu.Unlock()
+
 	k, err := p.GetAPIKey(id)
 	if err != nil {
 		return err

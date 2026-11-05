@@ -1,11 +1,12 @@
 // file: internal/server/handlers/apikeys.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-10-18
+// last-edited: 2026-11-05
 
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -196,17 +197,20 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 		}
 		targetUserID = req.UserID
 	}
+	// Every requested scope must be in the caller's effective set. A nil set
+	// is the empty set for every caller (05-authn §11.1 item 2): a lookup in a
+	// nil map finds nothing, so a caller with no permissions grants no scope.
+	// This used to skip the check when the set was nil, so a key whose
+	// effective set was empty could hand out any scope.
 	callerPermSet := auth.PermissionsFromContext(c.Request.Context())
 	for _, scope := range req.Scopes {
 		if !auth.IsKnown(scope) {
 			httputil.RespondWithBadRequest(c, "unknown scope: "+scope)
 			return
 		}
-		if callerPermSet != nil {
-			if _, has := callerPermSet[auth.Permission(scope)]; !has {
-				httputil.RespondWithForbidden(c, "cannot grant scope you don't have: "+scope)
-				return
-			}
+		if _, has := callerPermSet[auth.Permission(scope)]; !has {
+			httputil.RespondWithForbidden(c, "cannot grant scope you don't have: "+scope)
+			return
 		}
 	}
 	rawToken, hash, err := database.GenerateAPIKeyToken()
@@ -232,6 +236,16 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 	exp, clamped, ok := clampToCallingKey(c, time.Now().Add(time.Duration(days)*24*time.Hour))
 	if !ok {
 		httputil.RespondWithForbidden(c, noClampMessage)
+		return
+	}
+	// An empty scope list means "all of the owner's role permissions"
+	// (middleware intersectPermissions), which a key may never hand out: a
+	// key caller must name the scopes of the key it creates, and the loop
+	// above has held each one to the key's own effective set (05-authn §11.1
+	// item 2). A session caller keeps the empty list. Checked after the clamp
+	// so a key with nothing to clamp to is still refused for that reason.
+	if len(req.Scopes) == 0 && auth.MethodFromContext(c.Request.Context()) == auth.MethodAPIKey {
+		httputil.RespondWithForbidden(c, "an API key must name the scopes of the key it creates")
 		return
 	}
 	key.ExpiresAt = &exp
@@ -354,6 +368,12 @@ func (h *APIKeyHandler) UpdateStatus(c *gin.Context) {
 		httputil.RespondWithForbidden(c, "access denied")
 		return
 	}
+	// Revocation is terminal (05-authn §11.1 item 3): no status change on a
+	// revoked key, whichever field records the revocation.
+	if key.Status == "revoked" || key.RevokedAt != nil {
+		httputil.RespondWithConflict(c, "api key is revoked")
+		return
+	}
 	var req struct {
 		Status string `json:"status" binding:"required"`
 	}
@@ -370,6 +390,12 @@ func (h *APIKeyHandler) UpdateStatus(c *gin.Context) {
 		return
 	}
 	if err := h.store.SetAPIKeyStatus(id, req.Status, time.Now()); err != nil {
+		// A revoke that landed after the read above: the store refuses the
+		// re-activation, and the answer is the same 409.
+		if errors.Is(err, database.ErrAPIKeyRevoked) {
+			httputil.RespondWithConflict(c, "api key is revoked")
+			return
+		}
 		httputil.InternalError(c, "failed to update api key status", err)
 		return
 	}
