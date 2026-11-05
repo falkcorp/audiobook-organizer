@@ -1,5 +1,5 @@
 // file: web/src/components/review/reviewUrl.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b3f6d12-5a90-4c47-b1e8-0d7a2e9c4f35
 // last-edited: 2026-11-05
 
@@ -63,6 +63,12 @@ describe('readReviewUrl', () => {
     expect(readReviewUrl(q('lane=repairs&filter=flag:needs-review.v2')).repairs.filter).toBe(
       'flag:needs-review.v2'
     );
+  });
+
+  it('reads ?group=series for the dupes lane only', () => {
+    expect(readReviewUrl(new URLSearchParams('lane=dupes&group=series')).bySeries).toBe(true);
+    expect(readReviewUrl(new URLSearchParams('lane=dupes&group=other')).bySeries).toBe(false);
+    expect(readReviewUrl(new URLSearchParams('lane=repairs&group=series')).bySeries).toBe(false);
   });
 
   it('falls back to defaults for junk', () => {

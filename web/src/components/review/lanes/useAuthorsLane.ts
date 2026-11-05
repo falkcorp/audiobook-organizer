@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useAuthorsLane.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: c9e4a1d7-5b83-4f26-a0d9-3e7b61f48a25
 // last-edited: 2026-11-05
 
@@ -227,14 +227,18 @@ export interface CandidatesPage {
 export interface AuthorsUrlFilters {
   /**
    * `?author=<id>`: focus the group that author belongs to (as canonical or as a
-   * variant). A seed, read once on the first load and never mirrored back.
+   * variant). A seed, read once on the first load. After that the focus is this
+   * hook's state: the workspace mirrors `focusedAuthorId` into `?author=` (only
+   * once a card was actually chosen, not for the first-row fallback) and applies a
+   * later URL change with `focusAuthor`.
    */
   authorId: string | null;
   /**
    * `?view=series` or `?view=ai`: open the Series or the AI scans sub-view. A
-   * seed like `authorId`, read once (the sub-view is local state afterwards; a
-   * click never writes the URL). The caller passes it only when the URL landed on
-   * this lane, because `view` is also the Duplicates lane's parameter.
+   * seed like `authorId`, read once; the sub-view is hook state afterwards, which
+   * the workspace mirrors into `?view=` (and re-seeds from a later URL change with
+   * `setView`). The caller passes it only when the URL landed on this lane,
+   * because `view` is also the Duplicates lane's parameter.
    */
   view?: string | null;
 }

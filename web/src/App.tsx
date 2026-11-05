@@ -1,7 +1,7 @@
 // file: web/src/App.tsx
-// version: 1.32.0
+// version: 1.33.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-19
+// last-edited: 2026-11-05
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
 import { STORAGE_KEYS } from './lib/storageKeys';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
@@ -36,6 +36,13 @@ const FileBrowser = lazy(() =>
 );
 // The old /dedup surfaces are redirects into /review now.
 const DedupRedirect = lazy(() => import('./pages/DedupRedirect'));
+
+// A redirect that keeps the incoming query string, for a legacy path whose links
+// carry parameters the target page still reads.
+function RedirectKeepingSearch({ to }: { to: string }) {
+  const { search } = useLocation();
+  return <Navigate to={{ pathname: to, search }} replace />;
+}
 const Series = lazy(() => import('./pages/Series').then((m) => ({ default: m.Series })));
 const Authors = lazy(() => import('./pages/Authors').then((m) => ({ default: m.Authors })));
 const Diagnostics = lazy(() =>
@@ -319,8 +326,14 @@ function App() {
                   </ErrorBoundary>
                 }
               />
-              <Route path="/operations" element={<Navigate to="/activity" replace />} />
-              <Route path="/maintenance" element={<Navigate to="/system" replace />} />
+              {/* /operations carries its query across: /operations?op=<id> is a link
+                  to one operation. /maintenance was a Maintenance tab before the
+                  System page grew tabs, so it lands on that tab. */}
+              <Route path="/operations" element={<RedirectKeepingSearch to="/activity" />} />
+              <Route
+                path="/maintenance"
+                element={<Navigate to="/system?tab=maintenance" replace />}
+              />
               {/* One redirect element for all four legacy dedup paths: it maps
                   ?tab= to a Review lane and keeps ?book= and ?band=. */}
               {['/authors/dedup', '/books/dedup', '/dedup', '/dedup/labels'].map((path) => (

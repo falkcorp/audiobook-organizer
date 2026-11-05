@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.urlState.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9a17c3e8-4d52-4f60-b8e1-27d0a5f93c14
 // last-edited: 2026-11-05
 
@@ -133,5 +133,18 @@ describe('Library preset filters in the address bar', () => {
     await waitFor(() => expect(params().get('page')).toBe('1'));
     expect([...params().keys()]).toEqual(['page']);
     expect(screen.getByTestId('loc')).toBeInTheDocument();
+  });
+
+  it('keeps a parameter the page does not own when it rewrites the query', async () => {
+    renderAt('/library?utm_source=newsletter&tag=noir&tag=metadata');
+    await waitFor(() => expect(params().get('page')).toBe('1'));
+    expect(params().get('utm_source')).toBe('newsletter');
+    expect(params().getAll('tag')).toEqual(['noir', 'metadata']);
+  });
+
+  it('?reset=1 is consumed, not carried into the rebuilt query', async () => {
+    renderAt('/library?reset=1');
+    await waitFor(() => expect(params().get('page')).toBe('1'));
+    expect(params().has('reset')).toBe(false);
   });
 });

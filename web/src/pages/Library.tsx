@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.112.0
+// version: 1.113.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-11-05
 
@@ -41,6 +41,7 @@ import { useLibraryScrollKeeper } from '../hooks/useLibraryScrollKeeper';
 import { useLibrarySelection } from '../hooks/useLibrarySelection';
 import { useToast } from '../components/toast/ToastProvider';
 import { describeCombineFailure } from './libraryCombineToast';
+import { keepForeignParams } from './libraryUrl';
 import type { Audiobook } from '../types';
 import { runOrganizeRollback } from './organizeRollback';
 import { SortField, SortOrder } from '../types';
@@ -793,7 +794,10 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       return;
     }
 
+    // Rebuilt from state, except for keys this page does not own: a link that
+    // carries one keeps it (see libraryUrl.ts).
     const params = new URLSearchParams();
+    keepForeignParams(searchParams, params);
 
     if (searchQuery) params.set('search', searchQuery);
     if (filters.author) params.set('author', filters.author);

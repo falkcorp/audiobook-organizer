@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.31.0
+// version: 1.32.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-11-05
 //
@@ -22,7 +22,8 @@
 // THE ADDRESS BAR ALWAYS SAYS WHERE YOU ARE
 //
 // Seeded at mount AND mirrored back (`useUrlStateSync`): `lane`, the dupes
-// `view`/`layer`/compare drawer (`compare`, `ctab`), the authors `view`/`author`,
+// `view`/`layer`/compare drawer (`compare`, `ctab`) and the Clusters By-series list
+// (`group=series`), the authors `view`/`author`,
 // the repairs `fixer`/`filter`/`class`, and the spine `mode`. Copy the address
 // bar and the link lands on the same screen. docs/reference/ui-deep-links.md
 // lists every parameter.
@@ -202,7 +203,8 @@ export function ReviewWorkspace() {
   //
   // `band` and `book` are LIVE (DupesPanel writes them and the lane derives from
   // them); the memo is keyed on their values so a write to any other key leaves
-  // it alone. `layer`, `compare` and `compareTab` are seeds from the mount snapshot.
+  // it alone. `layer`, `compare`, `compareTab` and `bySeries` are seeds from the
+  // mount snapshot.
   const rawBand = searchParams.get('band');
   const bandParam = parseDedupBand(rawBand);
   // A band the lane does not know filters nothing; leave no stale value in the
@@ -219,6 +221,7 @@ export function ReviewWorkspace() {
       layer: urlAtMount.layer,
       compare: urlAtMount.compare,
       compareTab: urlAtMount.compareTab,
+      bySeries: urlAtMount.bySeries,
     }),
     [bandParam, bookParam, urlAtMount],
   );
@@ -297,6 +300,11 @@ export function ReviewWorkspace() {
       layer: dupesOn ? dupes.filters.layer : null,
       compare: compareId === null ? null : String(compareId),
       ctab: compareId === null ? null : COMPARE_TAB_SLUGS[dupes.drawerTab],
+      // The By-series list belongs to the Clusters view; elsewhere it is not shown.
+      group:
+        dupesOn && dupesSubView === 'queue' && viewMode === 'candidates' && dupes.bySeries
+          ? 'series'
+          : null,
       author:
         authorsOn && authors.view === 'authors' && authors.focusedAuthorId !== null
           ? String(authors.focusedAuthorId)
@@ -329,6 +337,7 @@ export function ReviewWorkspace() {
         if (target === 'dupes') {
           if (next.dupesView !== dupesSubView) setDupesSubView(next.dupesView);
           if (next.layer !== dupes.filters.layer) dupes.setFilters({ layer: next.layer });
+          if (next.bySeries !== dupes.bySeries) dupes.setBySeries(next.bySeries);
           if (next.compare !== dupes.drawerCandidateId || next.compareTab !== dupes.drawerTab) {
             dupes.openDrawer(next.compare, next.compareTab);
           }

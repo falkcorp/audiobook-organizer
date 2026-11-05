@@ -1,16 +1,16 @@
 // file: web/src/components/review/AuthorsSubViewSwitch.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a90d6e3-7b15-4c82-9f0a-d38e12b6c574
-// last-edited: 2026-10-13
+// last-edited: 2026-11-05
 
 /**
  * The Authors & series lane's sub-view control: Authors | Series | AI scans. Every
  * sub-view panel renders it at the top of its rail, so the lane keeps one control in
  * one place whichever sub-view is showing.
  *
- * Choosing a sub-view is local state in the lane hook. It never writes `?view=`:
- * the URL is how you ARRIVE at a sub-view, not a running record of the one you
- * are on (the same rule as `?lane=`).
+ * Choosing a sub-view sets the lane hook's `view` state. This component does not
+ * touch the URL itself: ReviewWorkspace mirrors `view` into `?view=` (replacing the
+ * history entry) and, when the URL changes from outside, re-seeds it with `setView`.
  */
 
 import { ToggleButton, ToggleButtonGroup } from '@mui/material';

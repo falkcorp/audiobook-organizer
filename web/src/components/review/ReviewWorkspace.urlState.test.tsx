@@ -55,6 +55,7 @@ function Links() {
       </button>
       <button onClick={() => navigate('/review?lane=authors&view=series')}>link-series</button>
       <button onClick={() => navigate('/review')}>link-bare</button>
+      <button onClick={() => navigate('/review?lane=dupes&mode=candidates')}>link-clusters</button>
       <button onClick={() => navigate('/review?lane=repairs&fixer=nope')}>link-bad-fixer</button>
       <button onClick={() => navigate(-1)}>history-back</button>
     </>
@@ -121,6 +122,7 @@ beforeEach(() => {
   });
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
   vi.mocked(api.getDedupStats).mockResolvedValue({ stats: [] });
+  vi.mocked(api.listDedupCandidateSeries).mockResolvedValue([]);
   serveReviewList({
     results: [],
     total_count: 0,
@@ -371,6 +373,21 @@ describe('dupes lane', () => {
     await waitFor(() => expect(loc()).toBe('/review?lane=dupes&compare=42&ctab=metadata'));
     await user.keyboard('{Escape}');
     await waitFor(() => expect(loc()).toBe('/review?lane=dupes'));
+  });
+
+  it('?group=series seeds the Clusters By-series toggle; the toggle writes it and an external link re-seeds', async () => {
+    const user = userEvent.setup();
+    renderWorkspace('/review?lane=dupes&mode=candidates&group=series');
+    const toggle = await screen.findByLabelText('By series');
+    expect(toggle).toBeChecked();
+    expect(loc()).toBe('/review?lane=dupes&mode=candidates&group=series');
+    await user.click(toggle);
+    await waitFor(() => expect(loc()).toBe('/review?lane=dupes&mode=candidates'));
+    await user.click(screen.getByLabelText('By series'));
+    await waitFor(() => expect(loc()).toBe('/review?lane=dupes&mode=candidates&group=series'));
+    await user.click(screen.getByRole('button', { name: 'link-clusters' }));
+    await waitFor(() => expect(loc()).toBe('/review?lane=dupes&mode=candidates'));
+    expect(screen.getByLabelText('By series')).not.toBeChecked();
   });
 
   it('?view=labels seeds the sub-view, a sub-view click writes it, and an external link re-seeds', async () => {
