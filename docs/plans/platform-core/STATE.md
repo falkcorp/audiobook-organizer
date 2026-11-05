@@ -1,7 +1,7 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.34.0 -->
+<!-- version: 1.35.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # Platform-core planning operation — state
 
@@ -11,6 +11,7 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 |---|---|
 | Spec branch | `docs/platform-core-spec-v2` (merged, deleted worktree); the 258-commit `docs/platform-core-spec` was closed unmerged as #4359 |
 | Spec PR | #4360, rebase-merged into main (last spec commit on main `ac4368bdb`) |
+| Spec revision branch | `docs/platform-core-spec-v3`: the D10–D14 revision and review rounds 13–15, cut from main as a separate PR |
 | Plan branch | `docs/platform-core-plan`, on main after #4360 |
 | Plan PR | (not opened) |
 | plan-op plugin | not installed; following the prompt's §5 manually |
@@ -25,7 +26,8 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 | 3 | Spec review loop | done: 8 rounds of 7 antagonistic lenses, distinct BLOCKERs 20 → 10 → 9 → 6 → 5 → 2 → 1 → 0; every finding dispositioned (`reviews/spec-round-N-dispositions.md`) |
 | 4 | Spec advisor review | done: READY WITH CHANGES; all findings accepted, simplifications adopted (A-1..A-17); then confirmation rounds 9–12 with BLOCKERs 3 → 2 → 1 → 0 |
 | 5 | Spec confidentiality gate + PR + merge | done: gate PASS; #4359 (258 commits) was refused by GitHub (`This branch can't be rebased`), so the same tree was re-cut as 5 logical commits in #4360, re-gated (scrub 0, gitleaks 0) and rebase-merged |
-| 6 | Implementation plan | in progress: 20 cross-file spec conflicts resolved (03, 05-*, 09, 12; 04 regenerated as v1.11.4); `implementation-plan.md` and the workstream index written (153 rows: 120 agent PRs, 33 OWNER checkpoints, 22 waves); briefs being written |
+| 5b | Spec revision for D10–D14 + review | done: every spec file revised (no backward compatibility, one cutover release R2 opened by the F2 foundation PRs); consistency pass; review round 13 (BLOCKER 2 / MAJOR 33 / MINOR 35), round 14 verification (1 / 13 / 19), round 15 re-check (0 / 4 / 7), every finding dispositioned and applied; 04 regenerated (v1.15.0, gates pass); see `reviews/spec-rounds-13-15.md` |
+| 6 | Implementation plan | to rebuild: the plan and the 153 briefs on the plan branch describe the pre-D10 design and are replaced after the spec revision merges |
 | 7 | Plan review loop | pending |
 | 8 | Plan advisor review | pending |
 | 9 | Plan confidentiality gate + PR + merge | pending |
@@ -34,7 +36,8 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 
 - `docs/plans/platform-core/raw/00-index.md` … `16-arr-domain-research.md`
 - `docs/specs/platform-core/` README + 01–15 (34 files, ~41k lines); 03 is normative
-- `docs/plans/platform-core/reviews/`: 12 review rounds, the advisor review, and a dispositions file for each
+- `docs/plans/platform-core/reviews/`: 12 review rounds, the advisor review, and a dispositions file for each; `spec-rounds-13-15.md` summarises rounds 13–15
+- `docs/plans/platform-core/executive-summary.md`: plain-language summary of the revised design
 - `changelog.d/2026-11-04_platform_core_spec.md`; supersede marker on `docs/architecture/2026-09-18-pluggable-media-platform-decision-record.md`
 - `todo.d/2026-11-04_platform_core_followups.md` (out-of-scope defects, incl. the six live security hotfixes of 05-authn §11.1)
 
@@ -64,7 +67,7 @@ None. (The #4359 merge refusal was cleared by re-cutting the branch as #4360.)
 
 ## Next action
 
-Phase 6: write one brief per inventory row in `docs/agent-tasks/platform-core/` (nine writers, disjoint waves), then link them from the index. Open spec gap: the H1–H3 cutovers have no stage tables in 09 §9.13 (and H1's storage layout is undecided), so those briefs are SPEC-GATED.
+Merge the spec revision PR (`docs/platform-core-spec-v3`), then rebuild the implementation plan and briefs for the R0–R3 / F2–F9 design on `docs/platform-core-plan` (phase 6), followed by phases 7–9.
 
 ## Incidents
 
@@ -78,6 +81,6 @@ Phase 6: write one brief per inventory row in `docs/agent-tasks/platform-core/` 
 
 - Subagents use `general-purpose` / `Explore` with explicit model and effort.
 
-COMPLETED: 5 — phases 1–5 (raw data, spec, review loop, advisor review, gate + PR #4360 merged)
-REMAINING: 4 — phase 6 (briefs), phase 7 (plan review), phase 8 (plan advisor), phase 9 (gate + PR #2)
+COMPLETED: 6 — phases 1–5 and 5b (raw data, spec, review loop, advisor review, gate + PR #4360, D10–D14 revision with review rounds 13–15)
+REMAINING: 5 — spec revision PR, phase 6 (plan rebuild), phase 7 (plan review), phase 8 (plan advisor), phase 9 (gate + PR #2)
 BLOCKED: 0
