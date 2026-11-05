@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.78.30 -->
+<!-- version: 10.78.31 -->
 <!-- version: 10.78.24 -->
 <!-- version: 10.78.23 -->
 <!-- version: 10.78.24 -->
@@ -69,7 +70,7 @@ into one of the curated sections below, is a normal direct edit.
         (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
   - [x] **SECURITY (hotfix, early fix 6):** a request with a key can undo that key's revocation (`apiKeyMu` on every `apikey:` writer). Implement 05-authn §11.1 item 6 exactly
         (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
-  - [ ] **SECURITY (hotfix, early fix 5):** the Basic gate accepts an empty password (with the `BASIC_AUTH_PASSWORD` recovery). Implement 05-authn §11.1 item 5 exactly
+  - [x] **SECURITY (hotfix, early fix 5):** the Basic gate accepts an empty password (with the `BASIC_AUTH_PASSWORD` recovery). Implement 05-authn §11.1 item 5 exactly
         (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
 
 - [ ] **AI-SCAN-UNPICKABLE-KEEP-REREAD** A scan result whose keep author cannot be chosen (every author in it is gone) is re-evaluated on each read of the scan instead of being remembered, which costs one author lookup per id per read and no book-count load. Split out of AUTHOR-RECLASSIFY-ROUTE-UNDO: it needs a remembered state stored on the result, not a one-line change.
