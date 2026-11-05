@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.13.3 -->
+<!-- version: 1.13.4 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 05 — Tasks (`core/tasks`)
 
@@ -1702,8 +1702,8 @@ targets in 05-storage, 05-logging, 05-metadata, 05-health and 05-ai:
 | `maintenance.db-optimize` | `core.storage.compact` | `core/storage` ([05-storage](05-storage.md)) | full compaction of the main store (`db.go:65-80`, `db.Compact(nil, 0xff)`), `ConcurrencyKey` `core.storage.exclusive` (5T.3.4); schedule `core.storage.schedules.compact` (HEAD's `db_optimize` task, nightly window). HEAD's same op also compacts books' separate AI-scan and OpenLibrary stores: that half becomes the new books kind `books.maintenance.aux-store-compact`, a nightly-window member with no imported runs |
 | `maintenance.db-census-exact` | `core.storage.census` | `core/storage`, `storage.Admin.Census` (05-storage §5S.9.1) | exact per-family count by claims and keyspaces into `c/storage/census/`; HEAD's `book_ver:` special case stays books code behind the census hook |
 | `maintenance.purge-old-logs` | `core.log.journal.prune` | `core/internal/logjournal` ([05-logging](05-logging.md) §5) | the system-log journal by `core.log.journal.retention_days`; HEAD's other half, `operationlog:` rows, is run-log history that M4 imports, so `core.tasks.prune` covers it |
-| `maintenance.throttle-reset` | `core.integrations.release-holds` | `integrations/providerhttp` ([05-metadata](05-metadata.md) M2); minimal owner registration from F5, full owner at F7 (below) | lists, and in Live releases, the quota, auth and rate-limit holds of every instance (`Registry.ReleaseHold`); `DELETE …/instances/{id}/hold` is its one-instance route |
-| `diagnostics.export` | `core.diagnostics.export` | `health/diagnostics` ([05-health](05-health.md)); minimal owner registration from F5, full owner at F8 (below) | already declared there; `diagnostics.ai-analyze` stays books (05-health) |
+| `maintenance.throttle-reset` | `core.integrations.release-holds` | `integrations/providerhttp` ([05-metadata](05-metadata.md) M2); minimal owner registration created at F2, registered on the executor from F5, full owner at F7 (below) | lists, and in Live releases, the quota, auth and rate-limit holds of every instance (`Registry.ReleaseHold`); `DELETE …/instances/{id}/hold` is its one-instance route |
+| `diagnostics.export` | `core.diagnostics.export` | `health/diagnostics` ([05-health](05-health.md)); minimal owner registration created at F2, registered on the executor from F5, full owner at F8 (below) | already declared there; `diagnostics.ai-analyze` stays books (05-health) |
 | `maintenance.window` | `core.window.nightly` | `core/internal/scheduler` (5T.3.8) | the window run; its members are kinds with `ScheduleConfig.Window = "nightly"` |
 | (the operation-record half of `maintenance.retention-and-hygiene`) | `core.tasks.prune` | `core/tasks`, the executor (5T.6.1, 5T.10) | terminal-run retention by `core.tasks.history_retention` through `RunStore.Prune`; the job's other half, the one-off `book:series:`/`book:author:` dead-prefix sweep, stays the books kind `books.maintenance.retention-and-hygiene`, under which its stored runs are imported |
 
