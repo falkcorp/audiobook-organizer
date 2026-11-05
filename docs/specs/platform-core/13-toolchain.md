@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/13-toolchain.md -->
-<!-- version: 1.12.2 -->
+<!-- version: 1.12.3 -->
 <!-- guid: a1e1b657-1c87-4a3e-8407-43269415455f -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 13 — Toolchain, language idioms, and dependency policy
 
@@ -394,4 +394,6 @@ Round 11:
 
 - D10–D12 revision (2026-11-04): §13.5.1 `otelgin` row rewritten: otelgin leaves ABO's gin engine and `go.mod` in R1, and core's stage 2 records every request (no co-recording, no `HTTPMetricsScope`); `encoding/json` v1 justified by the legacy mount and the fixed ABS contract instead of compatibility windows; stage references re-keyed (the toolchain bump is the first PR of R0, UI-0 is R1 work before the R2 identity flip, the genproto exclude lands with `core/` in R1); release-age "soak" wording replaced by "14 days old" so it is not read as a deployment soak (D11). Consistency pass: the R1 front-end work is cited as 07 §7.19 steps 1–3 and 09 §9.4.1 instead of a separate key, flips carry 03 §3.8's labels, rule R1 is written "03 rule R1", and the round-10 experiment IDs no longer reuse this file's E-numbers.
 
-- Round 13 (2026-11-04): R17/XFILE-6 (§13.4.1 E4 and §13.7: R1's front-end work is 07 §7.19 steps 1–2; step 3 is switched flip by flip in R2).
+- Round 13 (2026-11-04): round-13 ruling R17 (XFILE-6: §13.4.1 E4 and §13.7: R1's front-end work is 07 §7.19 steps 1–2; step 3 is switched flip by flip in R2).
+
+- Round 14 (2026-11-05): V23 (the round-13 history entry names its R-number as a round-13 ruling; checked: no bare round-13 ruling citation in the normative text).
