@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-events.md -->
-<!-- version: 1.12.1 -->
+<!-- version: 1.12.2 -->
 <!-- guid: 6dbdef8e-e3f3-4088-bdb9-ba37a706165d -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 05 — Events (`core/events`) and Outbox (`core/outbox`)
 
@@ -624,8 +624,8 @@ names included), so cardinality is bounded.
 |---|---|
 | `GET /api/core/v1/events/topics` (the catalog: topics, schemas, permissions, channels) | `core:system.view` |
 | `GET /api/core/v1/outbox/consumers` (lag, pending, dead count, intake backlog; disabled modules' consumers listed with their retained backlog) | `core:system.view` |
-| `GET /api/core/v1/outbox/dead`, `POST /dead/{consumer}/{seq}/retry`, `DELETE /dead/{consumer}/{seq}` | `core:system.manage` (audited) |
-| `DELETE /api/core/v1/outbox/consumers/{consumer}/backlog` (explicit purge: advance that consumer's cursors to the head; the only way a disabled module's messages are discarded) | `core:system.manage` + interactive method (audited) |
+| `GET /api/core/v1/outbox/dead`, `POST /dead/{consumer}/{seq}/retry`, `DELETE /dead/{consumer}/{seq}` | `core:system.manage` (audited: `core.outbox.dead_retry`, `core.outbox.dead_discard`; 05-rbac §7.1) |
+| `DELETE /api/core/v1/outbox/consumers/{consumer}/backlog` (explicit purge: advance that consumer's cursors to the head; the only way a disabled module's messages are discarded) | `core:system.manage` + interactive method (audited: `core.outbox.backlog_purge`; 05-rbac §7.1) |
 
 ## 5E.12 Tests
 
@@ -816,3 +816,5 @@ D10–D12 revision (2026-11-04):
 
 Round 13 (2026-11-04): IMPL-10. 5E.13 Order: the bus is live from F4 with `Deps.Events`, `Topics` and `Subscribe`,
 and F6 lands only the outbox and the realtime hub; 5E.9: both config sections are registered dark from F2.
+
+Round 17 (2026-11-05): G21 (§5E.11 names the audit actions of the three audited outbox routes, now in 05-rbac §7.1).

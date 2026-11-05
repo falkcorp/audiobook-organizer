@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.13.6 -->
+<!-- version: 1.13.7 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -123,6 +123,19 @@ const CoreAdmin Permission = "core:admin"
 // Its zero value is invalid; every registration API rejects it (R6).
 type Requirement struct{ /* kind + scopes */ }
 
+// RequirementKind is the kind a Requirement was built with. Need(s) reports
+// KindAllOf with one scope. The zero value KindInvalid is the zero Requirement's.
+type RequirementKind uint8
+
+const (
+	KindInvalid RequirementKind = iota
+	KindPublic
+	KindAuthenticated
+	KindAllOf
+	KindAnyOf
+	KindDelegated
+)
+
 var (
 	Public           Requirement // no principal needed
 	AnyAuthenticated Requirement // a principal holding core:self or any non-Confining scope (§4.10)
@@ -140,6 +153,7 @@ func AnyOf(s ...Permission) Requirement
 func Delegated(reason string) Requirement
 
 func (r Requirement) IsZero() bool
+func (r Requirement) Kind() RequirementKind // so authz, httpapi and tests outside rbac can tell AllOf from AnyOf
 func (r Requirement) Permissions() []Permission
 func (r Requirement) String() string // "books:edit", "public", "authenticated", "all(a,b)"
 ```
@@ -251,7 +265,7 @@ func New(ctx context.Context, opts Options, deps Deps) (*Service, error)
 
 type Deps struct {
 	Store   Store            // core/internal/rbacstore over c/rbac/ (§6.3, R4-1)
-	Compile func(CheckerInput, *Catalog) Checker // injected by the kernel: authz.Compile (COR4-12)
+	Compile func(CompileInput, *Catalog) Checker // injected by the kernel: authz.Compile (COR4-12)
 	Audit   audit.Logger
 	OnChange func(generation uint64) // kernel publishes core.rbac.changed.v1 on the bus; rbac never imports events
 	Revocations journal.RevocationJournal // Append(ctx, b, r) of role.unassigned / role.narrowed / role.deleted into the change's batch b before it commits (§7.1, 05-backup §5B.3.6)
@@ -299,6 +313,15 @@ type CheckerInput struct {
 	Roles       []RoleName
 	Scopes      []Permission // key scopes; nil = role permissions only (sessions)
 	Interactive bool         // auth.Method.Interactive() of the credential (§4.4)
+}
+
+// CompileInput is what Service.Compile hands Deps.Compile: the caller's input
+// plus the named roles' patterns, resolved by Service.Compile from its role
+// cache at the current Generation (unknown role IDs already skipped and
+// counted). authz.Compile never reads the store or the role cache itself.
+type CompileInput struct {
+	CheckerInput
+	RolePatterns []Permission // union of the patterns of every known role in Roles, deduplicated (core:admin included when a role holds it)
 }
 
 // Checker is a compiled, immutable permission set.
@@ -525,7 +548,7 @@ removing today's need to list both atoms. Cross-namespace implication is forbidd
 
 ### 4.4 Effective permissions
 
-`Compile` builds a checker from the union of the roles' patterns: a hash set of concrete scopes
+`Compile` builds a checker from the union of the roles' patterns (`Service.Compile` resolves them into `CompileInput.RolePatterns` before calling `Deps.Compile`; §3.4): a hash set of concrete scopes
 (implication closures precomputed into it), a set of namespace wildcards, a set of action
 wildcards, an `admin` flag, and the `interactive` bit. With key scopes, the checker is the
 intersection (a scope is held iff the roles hold it and the key names it, after implication), and it
@@ -1057,6 +1080,7 @@ is normative; other files use these names.
 | `core.secret.*` | sync | `rotate` |
 | `core.backup.*`, `core.restore.*`, `core.system.*`, `core.update.*`, `core.diagnostics.*` | sync | `backup.create`, `backup.download`, `backup.import`, `restore.stage`, `restore.apply`, `restore.revoke` (05-authn §4.14 counts), `system.factory_reset`, `update.apply`, `update.rollback`, `diagnostics.download` |
 | `core.audit.*` | sync | `export`, `prune` |
+| `core.outbox.*` | sync | `dead_retry`, `dead_discard` (consumer, seq, topic), `backlog_purge` (consumer, messages advanced past) (05-events §5E.11) |
 | `<module>.*` | module-defined, via `audit.Logger` | ABO: `books.user.merge`, `books.guest_token.mint`, `books.guest_token.revoke`, `books.admin_debug.edit`, `books.admin_debug.undo` |
 
 Routine successful reads are **not** audited (that is the access log's job); downloads of
@@ -1271,6 +1295,8 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestChecker_MatchVectors` | runs `testdata/match_vectors.json` (also run by vitest in `@mediacore/shell`) |
 | `TestImplies_ClosureAndCycle` | |
 | `TestCompile_KeyNarrowsRoles` | incl. wildcard role ∩ concrete key |
+| `TestCompile_ResolvesRolePatterns` | `Deps.Compile` receives the union of the known roles' patterns; an unknown role ID is skipped and counted; a role edit bumps `Generation` and the next `Compile` sees the new patterns |
+| `TestRequirement_Kind` | `Public`, `AnyAuthenticated`, `Need`, `AllOf`, `AnyOf`, `Delegated` and the zero value report their kinds |
 | `TestAdmin_IsScopeAndKeyScopingApplies` | admin user's `books:view` key → 403 on `core:admin` route (regression for `RequireAdmin`) |
 | `TestAdminChecks_HonourKeyScopes` | **property test, early fix 4 ported (05-authn §11.1):** for random key scopes and random owners (an admin, an editor, a viewer; imported every-atom keys and `["core:admin"]` included), every `core:admin` check — stage 13 on admin routes, `Can(core:admin)` at every site of §4.6's inventory, the merge actor check — admits iff the owner's roles hold `core:admin` and the key names it; an editor-owned key naming `core:admin` or every atom passes none (SEC-12); the survivor and task-actor checks read the account's roles, never the request's key; a holder of `core:admin` through a custom role passes them (SEC4-11, SEC8-7, SEC9-9) |
 | `TestUserMerge_ScopedAdminKeyRefused` | HEAD's code (early fix 4) then core: an admin's API key scoped to user management passes the route guard of the footprint and merge-journal reads and is refused by the merge actor check (403); it is refused on every merge POST (credential route); the admin's session reads and merges (§4.6, SEC8-7) |
@@ -1593,3 +1619,5 @@ D10–D12 revision (2026-11-04):
 Round 13 (2026-11-04), by round-13 ruling: R1/IMPL-3/IMPL-4 (F2 lands audit, the action table with `core.storage.*`, the fixed core catalog and the config sections), R8 (role rows keep quarantine; identity rows stop, 05-authn §11), R13/IMPL-8 (overlay), R16/XFILE-5 ("Route requirement", `AllOf` for `settings.manage` and `users.manage`; auth-off tightening (d)), R18/SEC-1 and R20/SEC-3, SEC-4, R22 SEC-7, SEC-12, SEC-13, XFILE-12 (d) (in-handler site list). Follow-up: the auth-off evaluation rule (`AllOf` drops `AuthRequired` members for the auth-disabled principal only) replaces tightening (d); `TestAuthOff_SettingsManageKeepsReach`. Follow-up: §7.1 `core.storage.*` adds `cutover_blocker_fix`, `cutover_blocker_delete` and `checkpoint_deleted` (05-storage's names).
 
 Round 14 (2026-11-05): V15 (§6.1: every row's route requirement is `AllOf` all of its native scopes, always; `library.view` and `integrations.manage` rows fixed; `TestAtomTable_Golden` says "all of its row's native scopes"), V27 (§7.1: `core.integration.local_migrated`, M6 only), V23 (bare round-13 ruling citations in §3, §4.11, §6.1 and §12 replaced by their finding IDs; the round-13 history entry names its IDs as round-13 rulings).
+
+Round 17 (2026-11-05): brief-sync gap fixes G18 (§3.4 `CompileInput` with `RolePatterns` resolved by `Service.Compile`; `Deps.Compile` takes it; §4.4 cross-reference; `TestCompile_ResolvesRolePatterns`), G19 (§3.1 `Requirement.Kind()` and `RequirementKind`; `TestRequirement_Kind`), G21 (§7.1 `core.outbox.*` row for 05-events §5E.11's audited routes).

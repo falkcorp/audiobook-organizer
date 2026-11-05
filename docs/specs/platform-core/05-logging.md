@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.8.5 -->
+<!-- version: 1.8.6 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -380,7 +380,8 @@ type Schedules struct { // section core.log.schedules
 }
 ```
 
-- Query: `GET /api/core/v1/system/logs?level=&module=&since=&until=&q=&cursor=`, permission
+- Query: `GET /api/core/v1/system/logs?level=&module=&since=&until=&q=&cursor=&limit=` (`limit` default 50,
+  capped at 1000 as HEAD's route does; a larger value is clamped, not refused), permission
   **`core:system.manage`** — the journal holds file paths, user names and provider error text, and today's
   equivalent route needs `settings.manage`, which only admin holds (`wire_system_routes.go:28,31`). The seed
   roles `editor` and `viewer` do not reach it ([05-rbac](05-rbac.md), SEC-8).
@@ -700,3 +701,5 @@ rollback names the pre-freeze release's binary.
 Round 16 (2026-11-05): plan-gap fixes G13 (§5: confirmed the query route `GET /api/core/v1/system/logs`, the live tail `core.log.recorded.v1` and both permission tests are specified; added that they and the SPA's move land at F5, in the PR that registers M5 and deletes HEAD's route, mounted by an L6 capability-routes package).
 
 Round 16 (2026-11-05): review fixes X3 (§5: the query route, its 403 test and the SPA's move land at F5, replacing HEAD's logs route in the same PR; the live tail through realtime and the event half of `TestJournal_RequiresSystemManage` land at F6, the SPA's log view polling the query route between).
+
+Round 17 (2026-11-05): G20 (§5: the query route takes `limit`, default 50, cap 1000).
