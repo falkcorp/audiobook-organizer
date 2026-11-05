@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-library.md -->
-<!-- version: 1.11.3 -->
+<!-- version: 1.11.4 -->
 <!-- guid: dafe380b-f703-41cb-99d0-2b2ba32f70e5 -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 05 — Library roots and safe filesystem access (`library`)
 
@@ -400,7 +400,9 @@ Transfer algorithm (each step journaled in `c/library/transfer/<id>`):
 | 5 | `Move` across devices: only now remove the source, `SyncDir(src dir)`. |
 | 6 | `Transfer`: the journal row is deleted in its own commit. `TransferIn`: the row is marked `done` (its own commit, after step 5), and its **delete is staged into the caller's batch** `b`, so the caller's rows and the end of the journal commit together. A crash after step 5 but before `b` commits leaves a `done` row and no caller rows: boot recovery never undoes it, and `Scope.PendingTransfers` reports it to the owning module, which re-runs its own write idempotently (an import keyed by its own ID and the destination digest finds the file already in place). A `b` that is discarded instead of committed has the same outcome. |
 
-Boot recovery (`core.library.transfer-recover`, a task triggered once at start through its `Schedule`'s `OnStart()`, 05-tasks):
+Boot recovery (`core.library.transfer-recover`, scheduled by
+`tasks.ScheduleFromConfig("core.library.schedules.transfer_recover").OnStart()`, so it runs once at start and then on
+the key's interval, which finds nothing to do when no transfer was interrupted; 05-tasks):
 each unfinished journal row is completed or rolled back from its last durable step (temp removed; a
 verified destination whose source still exists after a cross-device move gets the source removed only
 if the source digest still matches). `done` rows of `TransferIn` are left for `PendingTransfers`.
@@ -618,6 +620,7 @@ they need an interactive session.
 | `core.library.free_space.default_min_bytes` | int64 | 5 GiB | yes | interactive |
 | `core.library.quarantine.retention` | duration | 0 (keep until purged) | yes | interactive |
 | `core.library.schedules.quarantine_prune` | `tasks.ScheduleConfig` | `{enabled: true, every: 24h}` | yes | none |
+| `core.library.schedules.transfer_recover` | `tasks.ScheduleConfig` | `{enabled: true, every: 24h}` | yes | none |
 
 ABO's HEAD settings and rows that become these entries (`root_dir`, `path_aliases`, `protected_paths`,
 `itunes.path_mappings` and the `import_path:` rows) are converted once by the roots cutover (§5L.10); 05-config
@@ -870,3 +873,5 @@ Round 13 (2026-11-04): IMPL-4, DATA-1 (as ruled), DATA-5 (as ruled), CONFORM-1. 
 active books claim until M6 retires and deletes it; books' per-root record named `rootscan:<root ID>` and stated as
 M6's one write outside its retired claims, excluded by name from the byte-identity test with the roots cutover test
 as its oracle; rollback names the pre-freeze release's binary.
+
+Round 17 (2026-11-05): plan-review gap G22: boot recovery `core.library.transfer-recover` gets the declared schedule key `core.library.schedules.transfer_recover` (`ScheduleConfig` needs one timing field when enabled, so its default is `every: 24h`; `OnStart()` adds the boot run), §5L.3.3 and the key table.
