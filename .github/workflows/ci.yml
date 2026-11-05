@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.34.0
+# version: 3.34.1
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-11-04
+# last-edited: 2026-11-05
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -126,7 +126,7 @@ jobs:
     # v7.0.0, cache v6.1.0, super-linter v8.7.0).
     uses: falkcorp/github-common/.github/workflows/reusable-ci-minimal.yml@8d94ff2c3a745b323088c98659851c82313e5fd0 # main 2026-10-09 (adds run-go-tests)
     with:
-      go-version: '1.27.2'
+      go-version: '1.27.3'
       node-version: '26'
       system-packages: 'libtag1-dev'
       frontend-working-dir: 'web'
@@ -208,7 +208,7 @@ jobs:
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2'
+          go-version: '1.27.3'
           cache: false
 
       # Before the cache restore, in every job that restores it:
@@ -279,7 +279,7 @@ jobs:
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2'
+          go-version: '1.27.3'
           cache: false
 
       # Before the cache restore, in every job that restores it:
@@ -335,7 +335,7 @@ jobs:
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2'
+          go-version: '1.27.3'
           cache: false
 
       # Before the cache restore, in every job that restores it:
@@ -448,7 +448,7 @@ jobs:
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2'
+          go-version: '1.27.3'
           cache: false
 
       # Before the cache restore, in every job that restores it:
@@ -548,7 +548,7 @@ jobs:
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2'
+          go-version: '1.27.3'
           cache: false
 
       # Before the cache restore, in every job that restores it:
@@ -699,7 +699,7 @@ jobs:
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2'
+          go-version: '1.27.3'
           cache: false
 
       # Not the shared `Restore Go cache (manual)` step the other jobs use.
@@ -803,7 +803,7 @@ jobs:
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2'
+          go-version: '1.27.3'
           cache: false
 
       # Before the cache restore, in every job that restores it:
@@ -887,7 +887,7 @@ jobs:
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2'
+          go-version: '1.27.3'
           cache: false
 
       # Before the cache restore, in every job that restores it:

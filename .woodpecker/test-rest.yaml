@@ -1,7 +1,7 @@
 # file: .woodpecker/test-rest.yaml
-# version: 1.10.0
+# version: 1.10.1
 # guid: c84e1b3d-2f9a-4c57-8d06-e3a1b7f5d942
-# last-edited: 2026-10-15
+# last-edited: 2026-11-05
 #
 # `make ci` test-short, part 3 of 3: every other package in `go list ./...`.
 # That includes internal/plugins/maintenance (65-110 s), internal/operations/
@@ -48,7 +48,7 @@ steps:
     # container image; the step runs on the host with the agent's PATH.
     image: bash
     environment:
-      GOTOOLCHAIN: go1.27.2
+      GOTOOLCHAIN: go1.27.3
       # Every pipeline clones into a new random workdir
       # (woodpecker-local-<n>), and without -trimpath Go keys each package's
       # cache entry on its directory: nothing was ever reused and the cache

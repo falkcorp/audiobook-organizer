@@ -1,7 +1,7 @@
 # file: Dockerfile
-# version: 2.7.2
+# version: 2.7.3
 # guid: audiobook-organizer-dockerfile-production
-# last-edited: 2026-10-29
+# last-edited: 2026-11-05
 
 # Multi-stage production Dockerfile for audiobook-organizer
 # Builds React frontend, embeds it into a statically-linked Go binary with
@@ -22,9 +22,9 @@ RUN npm run build
 
 # Stage 2: Build Go application with embedded frontend
 # Uses native platform (no cross-compile) so CGO works without cross-toolchain.
-# SHA pinned 2026-10-09 (golang:1.27.2-alpine manifest-list). Keep in step with
+# SHA pinned 2026-11-05 (golang:1.27.3-alpine manifest-list). Keep in step with
 # the Makefile's GOTOOLCHAIN pin.
-FROM golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS go-builder
+FROM golang:1.27.3-alpine@sha256:dbaa054703263d06c8b49576667418473b6231f8c0fa69dee103207fdb8e3654 AS go-builder
 
 WORKDIR /build
 
