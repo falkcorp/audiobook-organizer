@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.111.0
+// version: 1.112.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-10-26
+// last-edited: 2026-11-05
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -722,7 +722,8 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       parseInt(searchParams.get('limit') || String(DEFAULT_ITEMS_PER_PAGE), 10)
     );
 
-    const urlTag = searchParams.get('tag') || '';
+    // `tag` repeats (`?tag=a&tag=b`): every selected tag is in the URL, not the first.
+    const urlTags = searchParams.getAll('tag').filter(Boolean);
 
     if (urlPage !== page) setPage(urlPage);
     if (urlSearch !== searchQuery) setSearchQuery(urlSearch);
@@ -730,7 +731,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     if (urlOrder !== sortOrder) setSortOrder(urlOrder);
     if (urlView !== viewMode) setViewMode(urlView);
     if (urlLimit !== itemsPerPage) setItemsPerPage(urlLimit);
-    if (urlTag !== (selectedTags[0] || '')) setSelectedTags(urlTag ? [urlTag] : []);
+    if (urlTags.join('\u0000') !== selectedTags.join('\u0000')) setSelectedTags(urlTags);
   }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The query string as of the END of the last commit. Advanced only by the
@@ -814,7 +815,24 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     if (viewMode !== 'grid') params.set('view', viewMode);
     params.set('page', page.toString());
     if (itemsPerPage !== DEFAULT_ITEMS_PER_PAGE) params.set('limit', itemsPerPage.toString());
-    if (selectedTags.length > 0) params.set('tag', selectedTags[0]);
+    for (const tag of selectedTags) params.append('tag', tag);
+    // The preset filters (fingerprints, covers, ISBN, import path, flagged
+    // duplicates). They were read on arrival but never written, so this rebuild
+    // stripped them from the address bar on the first state change -- and
+    // useLibraryFilters re-reads the URL on every change, so the filter itself
+    // went with them.
+    if (filters.hasFileErrors) params.set('has_file_errors', 'true');
+    if (filters.fingerprintStatus) params.set('fingerprint_status', filters.fingerprintStatus);
+    if (filters.coveragePercentMin !== undefined && !Number.isNaN(filters.coveragePercentMin)) {
+      params.set('coverage_percent_min', String(filters.coveragePercentMin));
+    }
+    if (filters.coveragePercentMax !== undefined && !Number.isNaN(filters.coveragePercentMax)) {
+      params.set('coverage_percent_max', String(filters.coveragePercentMax));
+    }
+    if (filters.missingCovers) params.set('missing_covers', 'true');
+    if (filters.inImportPath) params.set('in_import_path', 'true');
+    if (filters.noIsbn) params.set('no_isbn', 'true');
+    if (filters.duplicatesFlagged) params.set('duplicates_flagged', 'true');
 
     // Push a new history entry when page changes so back button works;
     // replace for other changes (search typing, etc.) to avoid history spam.
