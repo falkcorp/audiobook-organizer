@@ -1,6 +1,7 @@
 // file: internal/updater/updater_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
+// last-edited: 2026-11-05
 
 package updater
 
@@ -47,7 +48,7 @@ func TestCheckStable(t *testing.T) {
 
 	// We can't easily override the URL, so test the helper directly
 	// Instead, test via the exported method with a mock server
-	// For now, test the inWindow helper and basic struct behavior
+	// The fake-server tests of the R0 rules are in hotfix_test.go.
 }
 
 func TestCheckStable_NotFound(t *testing.T) {
@@ -89,35 +90,6 @@ func TestDownloadAndReplace_DevelopChannel(t *testing.T) {
 	err := u.DownloadAndReplace(info)
 	if err == nil {
 		t.Error("expected error for develop channel binary download")
-	}
-}
-
-func TestInWindow(t *testing.T) {
-	tests := []struct {
-		name   string
-		hour   int
-		start  int
-		end    int
-		expect bool
-	}{
-		{"in range", 14, 10, 18, true},
-		{"before range", 8, 10, 18, false},
-		{"after range", 20, 10, 18, false},
-		{"at start", 10, 10, 18, true},
-		{"at end", 18, 10, 18, false},
-		{"wrap midnight in", 23, 22, 4, true},
-		{"wrap midnight in early", 2, 22, 4, true},
-		{"wrap midnight out", 12, 22, 4, false},
-		{"same start end", 5, 5, 5, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := inWindow(tt.hour, tt.start, tt.end)
-			if got != tt.expect {
-				t.Errorf("inWindow(%d, %d, %d) = %v, want %v", tt.hour, tt.start, tt.end, got, tt.expect)
-			}
-		})
 	}
 }
 

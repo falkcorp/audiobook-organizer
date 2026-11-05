@@ -1,0 +1,14 @@
+{
+  "file": "internal/updater/testdata/commit_main.json",
+  "version": "1.0.0",
+  "guid": "27ca3c11-0b3b-486e-a4a0-3f21db5cdff5",
+  "last_edited": "2026-11-05",
+  "sha": "f00dfacecafe0123456789abcdef0123456789ab",
+  "html_url": "https://example.invalid/commit/f00dfacecafe",
+  "commit": {
+    "message": "feat: Knightfall\n\nA Death in the Family",
+    "author": {
+      "date": "2026-11-02T00:00:00Z"
+    }
+  }
+}

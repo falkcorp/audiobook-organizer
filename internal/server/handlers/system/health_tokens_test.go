@@ -1,0 +1,177 @@
+// file: internal/server/handlers/system/health_tokens_test.go
+// version: 1.0.0
+// guid: 06a9de9e-cc8c-4b3d-ae81-fafb45892f6f
+// last-edited: 2026-11-05
+
+package system
+
+// Which degraded tokens an unauthenticated caller may see (05-health 5H.3.1,
+// 5H.9). /health is unauthenticated, so its `degraded` list carries only a
+// fixed set; every posture token is reported on the authenticated
+// GET /system/status `degraded` field and on no public endpoint.
+//
+// TestHealth_UnauthenticatedTokenSetGolden is a table of release cells. R0-06
+// created it with the R0 cell; R1-24, F2-10 and F8-04 add their cells (and
+// their tokens to the golden set where 5H.3.1 allows it) without rewriting
+// the test.
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	systemmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system/mocks"
+	"github.com/falkcorp/audiobook-organizer/internal/startup"
+	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+)
+
+// unauthenticatedTokenGolden is the fixed set of 05-health 5H.3.1: the only
+// tokens /health's `degraded` list may ever carry. basic_gate_no_password is
+// R0-05's token, listed now so its merge needs no edit here.
+var unauthenticatedTokenGolden = []string{
+	"memdb_warming",
+	"metrics_disabled",
+	"search_index",
+	"basic_gate_no_password",
+}
+
+// tokenRaise configures one cell's dependencies so that every token the code
+// at that release can raise is raised at once.
+type tokenRaise struct {
+	store       SystemStore
+	getDegraded func() DegradedSource
+}
+
+// tokenCell is one release's row of the golden test.
+type tokenCell struct {
+	name string
+	// raise raises every token the release's handler can raise. It may set
+	// config.AppConfig; the test restores it after each cell.
+	raise func(t *testing.T) tokenRaise
+	// wantPublic are tokens the cell raises that must appear on /health
+	// (each is in the golden set), proving the raise took effect.
+	wantPublic []string
+	// wantAuthenticatedOnly are posture tokens that must appear on
+	// GET /system/status's `degraded` and never on /health.
+	wantAuthenticatedOnly []string
+}
+
+// warmingTokenStore is a SystemStore whose memdb is still warming.
+type warmingTokenStore struct {
+	*systemmocks.MockSystemStore
+}
+
+func (warmingTokenStore) WarmupStatus() (bool, bool, int64) { return false, false, 0 }
+
+var tokenCells = []tokenCell{
+	{
+		name: "R0 (HEAD's handler, the updater hotfix)",
+		raise: func(t *testing.T) tokenRaise {
+			m := systemmocks.NewMockSystemStore(t)
+			m.EXPECT().CountAuthors().Return(1, nil).Maybe()
+			steps := startup.New()
+			_ = steps.Run("InitOTEL", func() error { return errors.New("exporter down") })
+			_ = steps.Run("searchindex", func() error { return errors.New("index missing") })
+			config.AppConfig.AutoUpdate.Enabled = true
+			return tokenRaise{
+				store:       warmingTokenStore{m},
+				getDegraded: func() DegradedSource { return steps },
+			}
+		},
+		wantPublic:            []string{"memdb_warming", "metrics_disabled", "search_index"},
+		wantAuthenticatedOnly: []string{DegradedAutoUpdatePaused},
+	},
+}
+
+// degradedOf serves one GET through handler and returns data.degraded.
+func degradedOf(t *testing.T, path string, handler gin.HandlerFunc) []string {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET(path, handler)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var resp struct {
+		Data struct {
+			Degraded *[]string `json:"degraded"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Data.Degraded, "%s has no degraded field: %s", path, w.Body.String())
+	return *resp.Data.Degraded
+}
+
+func statusHandler(t *testing.T, raised tokenRaise) *Handler {
+	t.Helper()
+	svc := systemmocks.NewMockSystemService(t)
+	svc.EXPECT().CollectSystemStatus(mock.Anything).Return(&sysinfo.SystemStatus{Status: "ok"}, nil).Maybe()
+	return New(
+		func() SystemStore { return raised.store },
+		svc, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		raised.getDegraded,
+	)
+}
+
+func TestHealth_UnauthenticatedTokenSetGolden(t *testing.T) {
+	for _, cell := range tokenCells {
+		t.Run(cell.name, func(t *testing.T) {
+			orig := config.AppConfig
+			t.Cleanup(func() { config.AppConfig = orig })
+
+			raised := cell.raise(t)
+			h := statusHandler(t, raised)
+
+			public := degradedOf(t, "/health", h.HealthCheck)
+			for _, tok := range public {
+				assert.Contains(t, unauthenticatedTokenGolden, tok,
+					"/health carries %q, which is not in the unauthenticated set of 05-health 5H.3.1", tok)
+			}
+			for _, tok := range cell.wantPublic {
+				assert.Contains(t, public, tok, "the cell raised %q but /health does not show it", tok)
+			}
+			for _, tok := range cell.wantAuthenticatedOnly {
+				assert.NotContains(t, unauthenticatedTokenGolden, tok, "posture token %q is in the golden set", tok)
+				assert.NotContains(t, public, tok, "posture token %q reached /health", tok)
+			}
+
+			authenticated := degradedOf(t, "/system/status", h.GetSystemStatus)
+			for _, tok := range cell.wantAuthenticatedOnly {
+				assert.Contains(t, authenticated, tok, "GET /system/status's degraded misses %q", tok)
+			}
+		})
+	}
+}
+
+func TestSystemStatus_AutoUpdatePausedAuthenticatedOnly(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(map[bool]string{true: "auto_update enabled", false: "auto_update disabled"}[enabled], func(t *testing.T) {
+			orig := config.AppConfig
+			t.Cleanup(func() { config.AppConfig = orig })
+			config.AppConfig.AutoUpdate.Enabled = enabled
+
+			m := systemmocks.NewMockSystemStore(t)
+			m.EXPECT().CountAuthors().Return(1, nil).Maybe()
+			h := statusHandler(t, tokenRaise{store: m})
+
+			authenticated := degradedOf(t, "/system/status", h.GetSystemStatus)
+			public := degradedOf(t, "/health", h.HealthCheck)
+
+			if enabled {
+				assert.Equal(t, []string{DegradedAutoUpdatePaused}, authenticated)
+			} else {
+				assert.Empty(t, authenticated)
+			}
+			assert.False(t, slices.Contains(public, DegradedAutoUpdatePaused), "/health must never carry %s", DegradedAutoUpdatePaused)
+			assert.Empty(t, public, "nothing else is raised in this test")
+		})
+	}
+}
