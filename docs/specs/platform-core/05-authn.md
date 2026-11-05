@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.13.3 -->
+<!-- version: 1.13.4 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1052,7 +1052,7 @@ the config cutover, 05-config §1.12.2).
   pass-through with auth off (`internal/server/credential_routes.go:79-82`), so those routes are open
   there. Credential surfaces should not be open to a LAN without auth; R2's release note states the
   change (09), and the identity cutover oracle lists it as an expected difference (05-rbac §12).
-  Books' `s.perm` routes keep HEAD's auth-off reach, except the `settings.manage` ones (05-rbac §4.11).
+  Books' `s.perm` routes keep HEAD's auth-off reach (05-rbac §4.11's auth-off evaluation rule).
 - **Credential metadata needs a user (SEC-3).** The auth-disabled principal has `User == nil`, and HEAD
   answers 401 to these reads when no user is bound (`handlers/apikeys.go:259-264` @748fd787a; with auth
   off HEAD's middleware binds none). So `internal/authhttp` refuses that principal with 401
@@ -2042,4 +2042,4 @@ D10–D12 revision (2026-11-04):
 
 - the identity cutover lands the hardened design directly in R2 (step M3, flip F4). Rewritten: intro, §3 intro and landing (R1/R2), §3.1–§3.3 comments, §3.4 (native store only; new `auth.Importer` and `ErrImportRejected`), §4.1 (imported `abk_` keys, `auth.Options.ImportedKeyPrefixes`), §4.3, §4.4 (imported keys; the early-fix properties come from `Expect`), §4.6, §4.11 (core precedence for every app with the fail-closed "more restrictive wins" rule for the auth switch and the Basic gate; retired names refuse boot; no auth-off write rule), §4.12, §4.13 (native routes only; fragment links; HEAD's gin identity routes and OAuth callback path change, the callback re-registered at deploy), §4.14 (no older-build cases), §5, §6–§9 rows, §10 (cutover tests, the six early-fix tests ported as property tests onto core auth), §11 (native store; the identity cutover table: sessions, invites and the bootstrap hash reset, `abk_` keys and ABS sessions survive, IDs kept, quarantine, checkpoint deleted after 7 days), §13 G12, objections. Deleted: the legacy store, `legacy` capabilities, lock names and `StoreLocks`, `KeyLegacyState`, `InviteLinkForm`, the cookie-default options, `core.auth.apikey.legacy_prefixes`, the alias, legacy-link and rollback text, and §11.2 (H1–H3). §11.1 unchanged in substance (release keys and its core-era sentences updated). Consistency pass: the OAuth callback keeps HEAD's path, served by core from F4; `core.auth.mode` declares `FailClosed`, the Basic-gate password follows the plain operator lock (§11.1 item 5); `core.auth.oidc.<id>.client_secret`, `core.auth.login.saturated_rate`/`_burst` and the OAuth fold adopted from 05-config; M7 before M2, sealed quarantine, D12 (a)–(d) labels, R1 resets offline-only and 07's fragment tests cited. Final consistency sweep: `auth.Options.OIDCCallbackBase` names the callback base handed to `Router.CoreFixedGroup` (§3.2, §4.13), and §5 places `secrets.Open` at the start of P4b and config's `SetSecrets`/`Attach` at P4d step 1.
 
-Round 13 (2026-11-04): R1 (F2 registers `core.auth`), R2/CONFORM-1, R8/D13 (cutover preflight gate, `storage cutover-blockers`, no identity quarantine), D13/DATA-4 (merge refusal, permanent merges), R18/SEC-1 (`auth.Compat`), R19/SEC-2 (`MethodSpec.AppHandoff`, `OIDCAppHandoff`; HEAD start path deleted), R20/SEC-3, R21/SEC-5, R22 SEC-6, SEC-7, SEC-10, SEC-11, CONFORM-12, CONFORM-13, DATA-14.
+Round 13 (2026-11-04): R1 (F2 registers `core.auth`), R2/CONFORM-1, R8/D13 (cutover preflight gate, `storage cutover-blockers`, no identity quarantine), D13/DATA-4 (merge refusal, permanent merges), R18/SEC-1 (`auth.Compat`), R19/SEC-2 (`MethodSpec.AppHandoff`, `OIDCAppHandoff`; HEAD start path deleted), R20/SEC-3, R21/SEC-5, R22 SEC-6, SEC-7, SEC-10, SEC-11, CONFORM-12, CONFORM-13, DATA-14. Follow-up: §4.11 cites 05-rbac §4.11's auth-off evaluation rule (no `settings.manage` exception).
