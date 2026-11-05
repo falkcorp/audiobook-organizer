@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.13.6 -->
+<!-- version: 1.13.7 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -1891,15 +1891,17 @@ var (
    - `Options.ResetBoot` → the keyring header's `install_id` is rewritten to the fresh store's
      `c/storage/install` marker (the reset boot of a factory reset, §1.4; the kernel marks the `KindReset` journal
      `applied` only after this, DATA7-17); otherwise the header's `install_id` is only written when absent (below);
-   - **a dry-run or rehearsal copy never touches the state directory's keyring.** `storage migrate --dry-run` and a
-     `--into` rehearsal copy (05-storage §5S.3.6, §5S.3.12) run M2 on a copy of the store, and M2 seals with a
-     **throwaway keyring**: the kernel gives `Open` a `KeyFile` inside the copy's scratch directory (under
-     `c/storage/scratch/`, mode 0700, the file 0600), `Open` creates it there as in the "keyring absent, no stored
-     records" case, and it is deleted with the scratch directory on completion (an orphan scratch directory, and the
-     throwaway keyring in it, is deleted by 05-storage's checkpoint sweeper 7 days after its mtime). The state
-     directory's `secrets.keyring`, its `install_id` and the `secrets.keyring.exported` record are neither read nor written, so a
-     dry run cannot create the production keyring before the first real R2 boot (the first-run row above and §1.12.2's
-     keyring-export timing stay true).
+   - **the dry run never touches the state directory's keyring.** `storage migrate --dry-run` (05-storage §5S.3.6)
+     runs M2 on a copy of the store, and M2 seals with a **throwaway keyring**: the kernel gives `Open` a `KeyFile`
+     inside the dry run's directory in the scratch area `.mediacore-checkpoints/scratch/` (05-storage §5S.3.12
+     "Scratch copies": mode 0700, the file 0600), `Open` creates it there as in the "keyring absent, no stored
+     records" case, and it is deleted with the dry run's directory when the dry run ends, whatever the outcome (an
+     orphan directory, and the throwaway keyring in it, is deleted by 05-storage's checkpoint sweeper 7 days after its
+     mtime). The state directory's `secrets.keyring`, its `install_id` and the `secrets.keyring.exported` record are
+     neither read nor written, so a dry run cannot create the production keyring before the first real R2 boot (the
+     first-run row above and §1.12.2's keyring-export timing stay true). A `--into` rehearsal copy
+     (05-storage §5S.3.12 "Into an empty path") runs no M2 and gets no throwaway keyring: the rehearsal boots the
+     binary normally in a container, with the copy's own `<dir>.state/`, never the live state directory.
 2. `config.Load` registered `Ephemeral` values for secret keys supplied by env or file.
 3. Runtime: `Get` decrypts on demand (no plaintext cache beyond the call; callers hold `Value` briefly).
    `Put`/`Stage`/`Delete` encrypt with the active data key. No background goroutine and no timer.
@@ -2412,3 +2414,4 @@ corpus's labelled hand-built overlay; the pre-freeze release as the rollback bin
 it stops being needed.
 
 Round 14 (2026-11-05): V5 (§2.4 lifecycle: the dry run's and the `--into` rehearsal's M2 seals with a throwaway keyring inside the scratch directory and never reads or writes the state directory's keyring), V16 (§1.12.2: while `secrets_keyring_not_exported` is raised, the `legacy-file-cleanup` start hook deletes `library.bleve` and skips only `.encryption_key`, as 05-storage §5S.3.8; named a start hook), V23 (checked: no bare round-13 ruling citation in this file).
+Round 15 (2026-11-05): W5 (§2.4 lifecycle: the dry run's throw-away keyring lives in the dry run's directory in `.mediacore-checkpoints/scratch/` (05-storage §5S.3.12 "Scratch copies"), not under `c/storage/scratch/`; only `storage migrate --dry-run` gets it, and a `--into` rehearsal copy runs no M2 and boots the binary normally with the copy's own `<dir>.state/`). W2-W4, W6-W10 checked: this file states none of them.
