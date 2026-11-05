@@ -12,8 +12,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/audioext"
 )
 
 // fakeFFprobe puts a stub "ffprobe" shell script first (and only) on PATH and
@@ -133,4 +138,132 @@ func TestExtract_DurationErr(t *testing.T) {
 			t.Fatalf("an unsupported file must report an error: %+v", info)
 		}
 	})
+}
+
+// Every extension the library treats as audio (audioext.Default()), whether or
+// not inferFromFormat has a codec table for it, gets its duration from ffprobe.
+// .wav, .opus, .aax, .wma, .aac and .mka used to come back as "unsupported
+// format" without ffprobe being run, so good files of those types counted failed
+// probes and went unreadable after three runs.
+func TestExtract_EveryAudioExtensionIsProbed(t *testing.T) {
+	fakeFFprobe(t, "echo 5400.0")
+	for _, ext := range audioext.Default() {
+		t.Run(ext, func(t *testing.T) {
+			info, err := Extract(junkAudio(t, "The Long Halloween"+ext))
+			if err != nil {
+				t.Fatalf("Extract: %v", err)
+			}
+			if info.Duration != 5400 || info.DurationEstimated || info.DurationErr != nil {
+				t.Fatalf("want a measured 5400 s with no error, got %+v", info)
+			}
+		})
+	}
+}
+
+// A known audio extension without a codec table that ffprobe really cannot read
+// is an ordinary failed probe (counted), NOT ErrUnsupportedFormat; no estimate is
+// invented for it.
+func TestExtract_NoCodecTableExtensionFailure(t *testing.T) {
+	fakeFFprobe(t, "exit 1")
+	info, err := Extract(junkAudio(t, "Hush.wav"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Duration != 0 || info.DurationEstimated {
+		t.Fatalf("no bitrate, so no estimate: got %+v", info)
+	}
+	var ee *exec.ExitError
+	if !errors.As(info.DurationErr, &ee) || errors.Is(info.DurationErr, ErrUnsupportedFormat) {
+		t.Fatalf("DurationErr = %v, want the plain exit error", info.DurationErr)
+	}
+}
+
+// An extension that is not audio at all, which ffprobe cannot read either, is
+// ErrUnsupportedFormat with the probe's own error still in the chain; when
+// ffprobe CAN read it the duration is used.
+func TestExtract_NonAudioExtension(t *testing.T) {
+	t.Run("unreadable", func(t *testing.T) {
+		fakeFFprobe(t, "exit 1")
+		info, err := Extract(junkAudio(t, "Notes.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ee *exec.ExitError
+		if !errors.Is(info.DurationErr, ErrUnsupportedFormat) || !errors.As(info.DurationErr, &ee) {
+			t.Fatalf("DurationErr = %v, want ErrUnsupportedFormat wrapping the exit error", info.DurationErr)
+		}
+	})
+	t.Run("readable", func(t *testing.T) {
+		fakeFFprobe(t, "echo 61.0")
+		info, err := Extract(junkAudio(t, "Notes.txt"))
+		if err != nil || info.Duration != 61 || info.DurationErr != nil {
+			t.Fatalf("got %+v, %v", info, err)
+		}
+	})
+}
+
+// statCause: a stat that says the failure was the environment's (a permission
+// problem, a dead mount, a missing file) is wrapped so errors.Is finds it; any
+// other outcome leaves the probe error alone.
+func TestStatCause(t *testing.T) {
+	probeErr := errors.New("ffprobe: exit status 1")
+	pe := func(e error) error { return &fs.PathError{Op: "stat", Path: "/x", Err: e} }
+	cases := []struct {
+		name string
+		serr error
+		want error // nil: probeErr unchanged
+	}{
+		{"stat ok", nil, nil},
+		{"missing", pe(syscall.ENOENT), fs.ErrNotExist},
+		{"permission", pe(syscall.EACCES), fs.ErrPermission},
+		{"not permitted", pe(syscall.EPERM), fs.ErrPermission},
+		{"stale handle", pe(syscall.ESTALE), syscall.ESTALE},
+		{"not connected", pe(syscall.ENOTCONN), syscall.ENOTCONN},
+		{"something else", pe(syscall.EIO), nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := statCause(tc.serr, probeErr)
+			if !errors.Is(got, probeErr) {
+				t.Fatalf("the probe error was lost: %v", got)
+			}
+			if tc.want == nil {
+				if got != probeErr {
+					t.Fatalf("want the probe error unchanged, got %v", got)
+				}
+				return
+			}
+			if !errors.Is(got, tc.want) {
+				t.Fatalf("errors.Is(%v, %v) = false", got, tc.want)
+			}
+		})
+	}
+}
+
+// End to end through the real os.Stat: a file inside a directory this process
+// cannot search fails ffprobe like any other file and stats as EACCES.
+func TestExtract_UnsearchableDirectoryIsPermission(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a non-root POSIX user to make a directory unsearchable")
+	}
+	fakeFFprobe(t, "exit 1")
+	dir := filepath.Join(t.TempDir(), "Arkham")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "Hush.m4b")
+	if err := os.WriteFile(p, make([]byte, 480_000), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	_, err := realDurationSec(p)
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("realDurationSec = %v, want fs.ErrPermission in the chain", err)
+	}
+	if strings.Contains(err.Error(), "no such file") {
+		t.Fatalf("misreported as absent: %v", err)
+	}
 }

@@ -47,9 +47,11 @@ const (
 	// estimate). The row keeps a nil Duration and one more failed attempt in
 	// Scan.DurationOK (see ClassifyProbeError).
 	SourceProbeFailed
-	// SourceProbeUnavailable: the probe could not run (ffprobe not installed,
-	// cancelled) or the file is absent. Says nothing about the file: the row
-	// stays unprobed and no attempt is recorded.
+	// SourceProbeUnavailable: the probe could not run or reach the file (ffprobe
+	// not installed, cancelled, file or directory not readable, a dead mount),
+	// the file is absent, or its extension is not audio at all
+	// (mediainfo.ErrUnsupportedFormat). Says nothing about a file the library
+	// expects to play: the row stays unprobed and no attempt is recorded.
 	SourceProbeUnavailable
 )
 

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
 	"github.com/falkcorp/audiobook-organizer/internal/boundedcall"
@@ -33,13 +34,21 @@ const (
 	// surface timeouts only at the attempt ceiling (a stalled mount must not
 	// flag a good file).
 	FailureTimeout
-	// FailureEnvironment: the probe could not run (ffprobe is not installed, or
-	// the run was cancelled). Says nothing about the file: the row stays
-	// unprobed, no attempt is counted, and a missing tool is warned about once.
+	// FailureEnvironment: the probe could not run, or the file could not be
+	// reached: ffprobe is not installed, the run was cancelled, the file or its
+	// directory is not readable by this process (fs.ErrPermission), or a network
+	// mount went away (ESTALE, ENOTCONN). Says nothing about the file: the row
+	// stays unprobed, no attempt is counted, and the cause is warned about once.
 	FailureEnvironment
 	// FailureAbsent: the file is not there (a stale row). Not counted: the row
 	// stays unprobed, and a repoint fixes it, not a retry.
 	FailureAbsent
+	// FailureUnsupported: the extension is not an audio extension the library
+	// knows (mediainfo.ErrUnsupportedFormat) and the probe could not read it
+	// either. Not counted: the library does not expect to play such a file, so it
+	// must not end up flagged as an unreadable audio file. A KNOWN audio extension
+	// that ffprobe cannot read is FailureFile.
+	FailureUnsupported
 )
 
 // CountsAsAttempt reports whether a failure of this kind is recorded on the row.
@@ -58,6 +67,8 @@ func (k FailureKind) String() string {
 		return "environment"
 	case FailureAbsent:
 		return "absent"
+	case FailureUnsupported:
+		return "unsupported"
 	}
 	return "unknown"
 }
@@ -79,10 +90,13 @@ func ClassifyProbeError(err error) (kind FailureKind, lastError string) {
 	case err == nil:
 		return FailureFile, "probe failed (no detail)"
 	case errors.Is(err, exec.ErrNotFound), errors.Is(err, audioutil.ErrFFprobeNotAvailable),
-		errors.Is(err, context.Canceled):
+		errors.Is(err, context.Canceled),
+		errors.Is(err, fs.ErrPermission), errors.Is(err, syscall.ESTALE), errors.Is(err, syscall.ENOTCONN):
 		return FailureEnvironment, tidyProbeError(err)
 	case errors.Is(err, fs.ErrNotExist):
 		return FailureAbsent, tidyProbeError(err)
+	case errors.Is(err, mediainfo.ErrUnsupportedFormat):
+		return FailureUnsupported, tidyProbeError(err)
 	case errors.Is(err, ErrProbeTimeout), errors.Is(err, boundedcall.ErrTimeout), errors.Is(err, context.DeadlineExceeded):
 		return FailureTimeout, database.DurationProbeTimeoutPrefix + tidyProbeError(err)
 	}
@@ -124,7 +138,7 @@ func ProbeError(info *mediainfo.MediaInfo, err error) error {
 //
 //   - FailureFile / FailureTimeout: bf.RecordDurationProbeFailure; returns
 //     SourceProbeFailed.
-//   - FailureEnvironment / FailureAbsent: nothing is written, the row stays
+//   - FailureEnvironment / FailureAbsent / FailureUnsupported: nothing is written, the row stays
 //     unprobed; returns SourceProbeUnavailable. The first of each cause in the
 //     process is logged at Warn, later ones at Debug.
 //
@@ -153,7 +167,17 @@ func RecordProbeFailure(bf *database.BookFile, path string, err error, log logge
 // a per-file Warn would be tens of thousands of lines.
 var unavailableWarned sync.Map
 
+// warnDemoter is implemented by a logger that sends Warn lines to a quieter
+// level (a dry run's). Its lines must not use up the once-per-cause warning, or
+// the real run that follows in the same process would never warn.
+type warnDemoter interface{ DemotesWarn() bool }
+
 func warnUnavailableOnce(kind FailureKind, log logger.LevelLogger, path, msg string) {
+	if d, ok := log.(warnDemoter); ok && d.DemotesWarn() {
+		log.Warn("book file %s: duration probe could not run (%s): %s; row stays unprobed",
+			logger.SanitizeLogValue(path), kind, logger.SanitizeLogValue(msg))
+		return
+	}
 	if _, seen := unavailableWarned.LoadOrStore(kind, struct{}{}); seen {
 		log.Debug("book file %s: duration probe could not run (%s): %s; row stays unprobed",
 			logger.SanitizeLogValue(path), kind, logger.SanitizeLogValue(msg))
