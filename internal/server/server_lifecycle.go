@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.65.2
+// version: 4.66.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 package server
 
@@ -232,14 +232,32 @@ func (s *Server) startupStepsFor(cfg ServerConfig) *startup.Steps {
 	return steps
 }
 
-// startupDegradedSource is /health's lazy provider for the degraded
-// startup-step tokens: the runner Start stored, or nil before Start. The nil
-// check keeps a nil *startup.Steps from being boxed into a non-nil interface.
+// startupDegradedSource is /health's lazy provider for its fixed degraded
+// tokens, called on every probe: the degraded startup-step tokens of the
+// runner Start stored, plus basic_gate_no_password while the Basic gate is
+// enabled with no effective password. With no runner yet and no gate token it
+// returns nil, so a nil *startup.Steps is never boxed into a non-nil interface.
 func (s *Server) startupDegradedSource() systemhandlers.DegradedSource {
-	if st := s.startupSteps.Load(); st != nil {
-		return st
+	st := s.startupSteps.Load()
+	if st == nil && !servermiddleware.BasicGateNoPassword() {
+		return nil
 	}
-	return nil
+	return healthTokenSource{steps: st}
+}
+
+// healthTokenSource is HEAD's fixed-token source for /health's degraded list:
+// the startup runner's tokens (none while steps is nil) and the Basic gate's
+// basic_gate_no_password (05-health §5H.3.1; 05-authn §11.1 item 5). The gate
+// is read on every call, so saving a password clears the token without a
+// restart. HealthCheck sorts and de-duplicates the merged list.
+type healthTokenSource struct{ steps *startup.Steps }
+
+func (h healthTokenSource) Tokens() []string {
+	tokens := h.steps.Tokens()
+	if servermiddleware.BasicGateNoPassword() {
+		tokens = append(tokens, servermiddleware.BasicGateNoPasswordToken)
+	}
+	return tokens
 }
 
 func (s *Server) Start(cfg ServerConfig) error {
