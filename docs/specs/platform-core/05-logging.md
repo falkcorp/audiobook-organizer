@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.8.3 -->
+<!-- version: 1.8.4 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -400,8 +400,8 @@ type Schedules struct { // section core.log.schedules
 - **When the surface lands (F5).** The query route, the live tail topic `core.log.recorded.v1`, their permission
   tests (`TestJournal_RequiresSystemManage`, `TestJournal_OtherUsersLinesNeedUsersView`) and the SPA's move from
   HEAD's `GET /api/v1/system/logs` land at **F5**, the tasks flip, in the PR that registers M5 and starts
-  `logjournal`, which deletes HEAD's route: after M5 HEAD's `syslog:` family is empty, so no build serves HEAD's
-  route over the native journal or the native route without it. The route is mounted by an L6
+  `logjournal`, which deletes HEAD's route: after M5 HEAD's `syslog:` family is empty, so HEAD's route and the
+  native route switch in one PR. The route is mounted by an L6
   `internal/<capability>http` package (03 §3.5 R4), because `logjournal` (L4) cannot mount routes.
 - **Native store (SIMP4-3).** `core/internal/logjournal` keeps one record per `c/log/journal/<ULID>`
   (versioned JSON of the record: attributes flattened to dotted keys with string, number or bool values),
