@@ -483,6 +483,8 @@ export interface ScanState {
   tagged?: StageStatus;
   /**
    * DurationOK: the file's duration is known (ffprobe header read, no decode).
+   * Done is set with every measured Duration; Attempts and LastError count
+   * failed probes of a present file (see BookFileDurationState).
    */
   duration_ok?: StageStatus;
   /**
