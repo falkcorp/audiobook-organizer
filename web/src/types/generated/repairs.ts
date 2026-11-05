@@ -16,6 +16,14 @@
 export interface PlanParams {
   fixer_id: string;
   params?: unknown;
+  /**
+   * AfterApplyOpID names the repairs.apply run that started this plan to
+   * refresh the trial its writes made stale. It changes nothing about the
+   * plan; it makes the params unique to that apply so the registry's
+   * byte-identical dedupe cannot hand the apply a plan that began before its
+   * writes (and so still lists the rows it just applied).
+   */
+  after_apply_op_id?: string;
 }
 /**
  * PlanResult is the result of repairs.plan: its summary is the stored op result
@@ -166,6 +174,15 @@ export interface ApplyResult {
    */
   follow_up?: string;
   follow_up_error?: string;
+  /**
+   * ReplanOpID is the repairs.plan run this apply started (or found still
+   * queued) so the fixer's trial no longer lists the rows it wrote; the
+   * lane follows it. ReplanError is why none could be started, in which case
+   * the stored trial is stale until someone runs it again. Both are empty
+   * for a dry run and for a run that wrote nothing.
+   */
+  replan_op_id?: string;
+  replan_error?: string;
   aborted?: string;
   /**
    * OwnerRows / OwnerUserID: the owner rows the run was asked for and the

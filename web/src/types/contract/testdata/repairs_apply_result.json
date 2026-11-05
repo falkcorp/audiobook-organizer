@@ -21,6 +21,8 @@
   "standdown_held": true,
   "follow_up": "synthetic-FollowUp",
   "follow_up_error": "synthetic-FollowUpError",
+  "replan_op_id": "synthetic-ReplanOpID",
+  "replan_error": "synthetic-ReplanError",
   "aborted": "synthetic-Aborted",
   "owner_rows": 7,
   "owner_user_id": "synthetic-OwnerUserID",

@@ -1,11 +1,12 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
-// last-edited: 2026-10-29
+// last-edited: 2026-11-05
 
 package maintenance
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,6 +31,10 @@ import (
 // Production hands it a database.Store, so pin that database.Store has the
 // method: an assertion whose method is missing there would fail only in prod.
 var _ repairs.OpReader = database.Store(nil)
+
+// The refresh plan an apply starts is recorded as the fixer's newest plan
+// through the same kind of assertion; pin it on the production store too.
+var _ repairs.LastRunRecorder = database.Store(nil)
 
 func (p *Plugin) repairsPlanDef() sdk.OperationDef {
 	return sdk.OperationDef{
@@ -259,6 +264,14 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 		}
 	}
 	res, runErr := repairs.RunApply(ctx, f, plan, params.PlanOpID, params.RowIDs, dryRun, deps, reporter)
+	// RunApply has returned, so the scan stand-down is released and every row
+	// has settled: a plan started now reads the library as the apply left it.
+	// Before the error return below: a run cut short (cancelled, stand-down
+	// lost) that wrote some rows leaves a stale trial just as a finished one
+	// does.
+	if !dryRun && res != nil {
+		p.replanAfterApply(ctx, f, plan, opID, res, reporter)
+	}
 	// The per-row report is written before any error returns, the lost-lease
 	// abort included, so the operator sees exactly which rows were written.
 	if res != nil {
@@ -282,6 +295,102 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 	_ = reporter.UpdateProgress(len(res.Rows), len(res.Rows), fmt.Sprintf("%s%s rows=%d %v not_in_plan=%d history_rows=%d history_failed=%d",
 		prefix, f.ID(), len(res.Rows), res.ByOutcome, len(res.NotInPlan), res.HistoryRows, res.HistoryFailed))
 	return nil
+}
+
+// replanAfterApply refreshes the trial of the fixer an apply wrote for. A trial
+// is a stored, never-edited plan: the rows endpoint pages it from the plan op
+// that made it, so without a new plan the rows an apply just wrote would keep
+// being listed as if still open. It is a re-plan and not an edit of the stored
+// plan for three reasons: the stored plan is the baseline the apply's
+// fingerprint check compared against (and its summary counts and row index
+// belong to a completed op); a write can change rows it did not name (moving a
+// folder's books shifts its neighbours' fingerprints), which only planning
+// again shows; and a plan is read-only, low priority and serialised by its own
+// ConcurrencyKey, so the cost is one library read per apply that wrote.
+//
+// It does nothing unless the apply wrote (applied or partially_applied rows):
+// a refused or failed row changed nothing the trial reports. It never fails the
+// apply, whose writes are made: res carries the new plan's op id for the lane
+// to follow (ReplanOpID), or why there is none (ReplanError).
+func (p *Plugin) replanAfterApply(ctx context.Context, f repairs.Fixer, plan *repairs.PlanResult,
+	applyOpID string, res *repairs.ApplyResult, reporter sdk.Reporter) {
+	if res.Applied+res.Partial == 0 {
+		return
+	}
+	// The apply may have been cancelled: the refresh must still be enqueued.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	planID, err := p.enqueueRefreshPlan(ctx, f.ID(), plan.Params, applyOpID)
+	if err != nil {
+		res.ReplanError = err.Error()
+		reporter.Logger().Warn("repairs.apply: trial not refreshed; run the trial again to drop the applied rows",
+			"fixer", f.ID(), "err", err)
+		return
+	}
+	res.ReplanOpID = planID
+	// The plan is the fixer's newest from here on, as for a trial started from
+	// the lane, so GET /repairs (this tab after a reload, any other tab) lists
+	// it. Best effort: the id is in the apply result either way.
+	rec, ok := p.deps.OperationQueueStore().(repairs.LastRunRecorder)
+	if !ok {
+		reporter.Logger().Warn("repairs.apply: operation store cannot record the last plan; GET /repairs keeps the old one",
+			"fixer", f.ID(), "plan_op_id", planID)
+		return
+	}
+	if err := rec.SetSetting(repairs.LastPlanKey(f.ID()), planID, "string", false); err != nil {
+		reporter.Logger().Warn("repairs.apply: last plan pointer not recorded",
+			"fixer", f.ID(), "plan_op_id", planID, "err", err)
+	}
+}
+
+// enqueueRefreshPlan starts a repairs.plan of fixerID with the params of the
+// plan the apply used, and returns its op id.
+//
+// A plan of the same fixer and params that is still QUEUED is reused: it has
+// not started, so it will read the library after this apply's writes, and a
+// run of owner-applies queues one refresh, not one each. A RUNNING plan is
+// never reused: it began before the writes and its rows still list them. For
+// the same reason the enqueued params carry the apply's op id
+// (PlanParams.AfterApplyOpID): the registry folds a request into any active op
+// with byte-identical params, running ones included, and that would hand this
+// apply the stale run.
+func (p *Plugin) enqueueRefreshPlan(ctx context.Context, fixerID string, planParams json.RawMessage, applyOpID string) (string, error) {
+	active, err := p.deps.OperationQueueStore().ListActiveOperationsV2()
+	if err != nil {
+		return "", fmt.Errorf("list active operations: %w", err)
+	}
+	for _, op := range active {
+		if op.DefID != repairs.PlanOpID || op.Status != "queued" {
+			continue
+		}
+		var q repairs.PlanParams
+		if json.Unmarshal([]byte(op.Params), &q) == nil && q.FixerID == fixerID && sameRawParams(q.Params, planParams) {
+			return op.ID, nil
+		}
+	}
+	id, err := p.deps.EnqueueOp(ctx, repairs.PlanOpID,
+		repairs.PlanParams{FixerID: fixerID, Params: planParams, AfterApplyOpID: applyOpID})
+	if err != nil {
+		return "", fmt.Errorf("enqueue %s: %w", repairs.PlanOpID, err)
+	}
+	return id, nil
+}
+
+// sameRawParams reports whether two fixer params blobs are the same JSON, an
+// absent blob and a JSON null being the same as no params.
+func sameRawParams(a, b json.RawMessage) bool {
+	norm := func(r json.RawMessage) []byte {
+		r = bytes.TrimSpace(r)
+		if len(r) == 0 || bytes.Equal(r, []byte("null")) {
+			return nil
+		}
+		var buf bytes.Buffer
+		if json.Compact(&buf, r) != nil {
+			return r
+		}
+		return buf.Bytes()
+	}
+	return bytes.Equal(norm(a), norm(b))
 }
 
 // applyOpActor is the user the apply op opID was enqueued for: the actor

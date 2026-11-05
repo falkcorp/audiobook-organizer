@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
-// last-edited: 2026-10-26
+// last-edited: 2026-11-05
 
 // Package repairs serves the Repairs lane of /review (/api/v1/repairs/*):
 // list the fixers, start a plan, page a stored plan's rows, and start an
@@ -275,8 +275,8 @@ func (h *Handler) ListFixers(c *gin.Context) {
 		// Only for a caller who may read the fixer's rows: the pointers name the
 		// plan op whose rows ListPlanRows serves, and their summaries count them.
 		if info.Permitted {
-			info.LastPlan = h.lastRun(c, lastPlanKey(f.ID()))
-			info.LastApply = h.lastRun(c, lastApplyKey(f.ID()))
+			info.LastPlan = h.lastRun(c, repairs.LastPlanKey(f.ID()))
+			info.LastApply = h.lastRun(c, repairs.LastApplyKey(f.ID()))
 		}
 		out = append(out, info)
 	}
@@ -287,9 +287,9 @@ func (h *Handler) ListFixers(c *gin.Context) {
 // under a settings key when they are enqueued, so GET /repairs is two point
 // reads per fixer. (Scanning the op history instead would decode every op
 // row and its result blob on every tab open.) A run started some other way,
-// e.g. POST /operations/v2, is not recorded here.
-func lastPlanKey(fixerID string) string  { return "repairs_last_plan_op:" + fixerID }
-func lastApplyKey(fixerID string) string { return "repairs_last_apply_op:" + fixerID }
+// e.g. POST /operations/v2, is not recorded here; the one exception is the
+// plan an apply op starts to refresh the trial it made stale, which
+// maintenance.runRepairsApply records under the same key (repairs.LastPlanKey).
 
 // lastRun resolves a recorded op id. Best effort: a missing setting or op
 // row leaves it unset.
@@ -372,7 +372,7 @@ func (h *Handler) StartPlan(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "body must be a JSON object of fixer params")
 		return
 	}
-	h.enqueue(c, repairs.PlanOpID, f.ID(), lastPlanKey(f.ID()), repairs.PlanParams{FixerID: f.ID(), Params: params})
+	h.enqueue(c, repairs.PlanOpID, f.ID(), repairs.LastPlanKey(f.ID()), repairs.PlanParams{FixerID: f.ID(), Params: params})
 }
 
 // ListPlanRows implements GET /repairs/:fixer/plan/:op_id/rows
@@ -490,7 +490,7 @@ func (h *Handler) StartApply(c *gin.Context) {
 	if req.DryRun != nil {
 		dry = *req.DryRun
 	}
-	h.enqueue(c, repairs.ApplyOpID, f.ID(), lastApplyKey(f.ID()), repairs.ApplyParams{
+	h.enqueue(c, repairs.ApplyOpID, f.ID(), repairs.LastApplyKey(f.ID()), repairs.ApplyParams{
 		FixerID: f.ID(), PlanOpID: req.PlanOpID, RowIDs: req.RowIDs, DryRun: &dry,
 	})
 }
@@ -584,7 +584,7 @@ func (h *Handler) OwnerApply(c *gin.Context) {
 		return
 	}
 	no := false
-	h.enqueue(c, repairs.ApplyOpID, f.ID(), lastApplyKey(f.ID()), repairs.ApplyParams{
+	h.enqueue(c, repairs.ApplyOpID, f.ID(), repairs.LastApplyKey(f.ID()), repairs.ApplyParams{
 		FixerID: f.ID(), PlanOpID: req.PlanOpID, DryRun: &no,
 		OwnerApplyRowIDs: []string{req.RowID}, OwnerGrant: tok,
 	}, opsregistry.WithActor(user.ID), opsregistry.WithActorAuthMethod(string(method)),

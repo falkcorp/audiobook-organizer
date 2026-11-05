@@ -1,5 +1,5 @@
 // file: internal/repairs/wire.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4c7d2e91-5b0a-4e38-8f16-a93d6b1c0e57
 // last-edited: 2026-11-05
 
@@ -20,6 +20,12 @@ import (
 type PlanParams struct {
 	FixerID string          `json:"fixer_id"`
 	Params  json.RawMessage `json:"params,omitempty"`
+	// AfterApplyOpID names the repairs.apply run that started this plan to
+	// refresh the trial its writes made stale. It changes nothing about the
+	// plan; it makes the params unique to that apply so the registry's
+	// byte-identical dedupe cannot hand the apply a plan that began before its
+	// writes (and so still lists the rows it just applied).
+	AfterApplyOpID string `json:"after_apply_op_id,omitempty"`
 }
 
 // PlanResult is the result of repairs.plan: its summary is the stored op result
@@ -139,7 +145,14 @@ type ApplyResult struct {
 	// any row's outcome: the writes were already made.
 	FollowUp      string `json:"follow_up,omitempty"`
 	FollowUpError string `json:"follow_up_error,omitempty"`
-	Aborted       string `json:"aborted,omitempty"`
+	// ReplanOpID is the repairs.plan run this apply started (or found still
+	// queued) so the fixer's trial no longer lists the rows it wrote; the
+	// lane follows it. ReplanError is why none could be started, in which case
+	// the stored trial is stale until someone runs it again. Both are empty
+	// for a dry run and for a run that wrote nothing.
+	ReplanOpID  string `json:"replan_op_id,omitempty"`
+	ReplanError string `json:"replan_error,omitempty"`
+	Aborted     string `json:"aborted,omitempty"`
 	// OwnerRows / OwnerUserID: the owner rows the run was asked for and the
 	// user whose grant they ran under ("" when refused).
 	OwnerRows   int         `json:"owner_rows,omitempty"`
