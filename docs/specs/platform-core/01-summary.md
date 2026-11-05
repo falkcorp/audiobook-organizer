@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/01-summary.md -->
-<!-- version: 1.9.1 -->
+<!-- version: 1.9.2 -->
 <!-- guid: d2956830-373c-4b12-9504-ccace49f7f6d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -50,16 +50,18 @@ moves platform machinery, not every route.
    runtime with no user-data change, R2 the one cutover, R3 cleanup and the upgrade floor. In R2 the core-service
    families move once, one-way, into native keyspaces through in-binary migrations: books decodes its HEAD rows and
    hands them to core's importers, every ID is kept, and a row that does not decode is quarantined and reported,
-   never dropped (gate G5′). Rollback is an offline restore of the pre-migration checkpoint or an off-host archive,
-   keyring and state files included, plus the previous binary; an older binary refuses a migrated store. A store that
+   never dropped (gate G5′); a user, key or identity row that cannot be converted, or an account merge in progress,
+   stops the upgrade before anything is written until the owner fixes it (D13). Rollback is an offline restore of the
+   pre-migration checkpoint or an off-host archive, keyring and state files included, plus the pre-freeze release (the
+   last production release before R2's first flip); an older binary refuses a migrated store. A store that
    has not run R2 installs R2 before R3 (02 N14).
 4. **Correct by construction.** The boundaries are enforced mechanically (rules R1–R8 in §03): core
    cannot import app code, routes cannot be registered without a permission, library-scale loops
    cannot be written without declaring parallelism, modules cannot write outside their keyspace.
 5. **Current toolchain.** Latest stable Go (go1.27.3) and frontend tooling, modern idioms, stdlib
    over third-party where equivalent (D8, §13).
-6. **Nothing paid.** No paid service, tier or licence fee is required anywhere (D9; the repo's PolyForm
-   Noncommercial licence costs nothing, and relicensing core is an optional reuse decision, 14 Q-A).
+6. **Nothing paid.** No paid service, tier or licence fee is required anywhere (D9). Core is public and licensed
+   Apache-2.0 (D13); ABO keeps its own licence, which also costs nothing (12).
 7. **Don't rule out one binary with several apps** (lowest priority, §11): no process globals in
    core (R5 binds core only; ABO's remaining globals become per-App façades), namespaced everything,
    one shell with merged navigation.
@@ -114,10 +116,11 @@ moves platform machinery, not every route.
 | ***arr facade** | An optional, per-app HTTP adapter exposing an *arr-v3-compatible subset for ecosystem clients (Overseerr/Jellyseerr, Prowlarr, Bazarr) through `core/arrfacade` (deferred-build). |
 | **ABO** | audiobook-organizer, this repository. |
 | **release R0–R3** | The four releases of the extraction (03 §3.8): R0 hotfixes, R1 core runtime, R2 the cutover, R3 cleanup and floor. "Stage" and "wave" are not release keys. |
-| **flip** | The one PR that wires a subsystem in, after its code landed dark on `main` (03 §3.8: F3–F9 inside R2). D12's owner answers are cited as D12 (a)–(d), never with F labels. |
+| **flip** | The one PR that wires a subsystem in, after its code landed dark on `main` (03 §3.8: F3–F9 inside R2, after F2, the dark foundation PRs that build what several flips need). D12's owner answers are cited as D12 (a)–(d), never with F labels. |
+| **pre-freeze release** | The last production release before R2's first flip (F3) merges; once R2 is deployed it is also the `.prev` binary. Hotfixes during the R2 freeze are cut from it, and rollback across R2 restores onto it (03 §3.8). |
 | **importer** | `<pkg>.Importer`: the SDK interface through which an app hands a core subsystem its pre-core records, staged into the caller's batch with every ID kept, or, for an L0 package such as `log`, committed idempotently instead (03 §3.3). |
-| **pre-migration checkpoint** | The copy of the store a boot takes before its first shape-changing write; the rollback path, deleted automatically after 7 days (D12 (d); 05-storage). |
-| **quarantine** | Where a migration step copies a row it cannot decode (`c/storage/quarantine/`), reported in health and never dropped (03 §3.3 `storage`). |
+| **pre-migration checkpoint** | The copy of the store a boot takes before its first shape-changing write, R1's first boot included; the rollback path, deleted automatically 7 days after it stops being needed (D12 (d); 03 §3.7; 05-storage). |
+| **quarantine** | Where a migration step copies a row it cannot decode (`c/storage/quarantine/`), reported in health and never dropped (03 §3.3 `storage`). Identity rows are never quarantined: an unconvertible one stops the upgrade (D13). |
 | **upgrade floor** | The one floor, set in R3: `UpgradeFloor{InstallFirst: R2}`. Boot refuses a store that has not run R2's level step, before any write, with exit 78 and a last log line naming R2 (02 N14). |
 | **split criteria SC1–SC10** | The measurable readiness criteria for moving core to its own repository (§12.3); named `SC` so they never collide with other labels. |
 | **gate G1–G8** | The eight acceptance gates inherited from the 2026-09-18 adversarial review (`02-decision-record.md` §2.4). |
@@ -184,3 +187,5 @@ Advisor (dispositions in `docs/plans/platform-core/reviews/spec-advisor-disposit
 Owner decisions D10–D12:
 
 - D10–D12 revision (2026-11-04): summary names the releases R0–R3; goal 3 rewritten (data migrated forward one-way in R2, quarantine instead of loss, G5′, rollback by offline restore, the R3 floor); non-goals: the family non-goal narrowed to books' domain families, the "hardening during the extraction" non-goal deleted, non-goals for backward compatibility (D10) and soaks (D11) added, the gin non-goal lets routes change; glossary: "legacy package", "hardening cutover", "strangler stage", "floor release" and "stepping-stone release" deleted; "SDK", "legacy claim", "store interface" and "cutover" rewritten; "release R0–R3", "flip", "importer", "pre-migration checkpoint", "quarantine" and "upgrade floor" added. Consistency pass: D12's answers cited as D12 (a)–(d), and the importer entry names the idempotent L0 exception.
+
+Round 13 (2026-11-04): D13 (goal 3: identity rows and unfinished merges stop the upgrade; goal 6: core public under Apache-2.0; quarantine glossary), R1 (flip glossary names F2), R2 (CONFORM-1: goal 3 and the new "pre-freeze release" glossary entry), R4 (CONFORM-2, CONFORM-6: checkpoint glossary).
