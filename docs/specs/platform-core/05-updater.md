@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.13.4 -->
+<!-- version: 1.13.5 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -312,7 +312,7 @@ HEAD, with the hotfix's rules. Steps, each a `rc.Phase`:
 is an R2 build, so the rollback across R2 needs the pre-freeze release's binary at `.prev`
 (05-backup §5B.3.3, "Offline restore — the rollback path"; 05-storage §5S.3.12, row `make rollback-restore`).
 `make rollback-restore RELEASE=<tag>` gets it with `<app> updater fetch-release --version <tag> --out <path>`,
-registered through `app.OfflineCommands` (06 §6.4.5) beside `storage restore-offline`; it is a thin wrapper over
+registered through `app.OfflineCommands` (06 §6.4.5) from the updater flip (F8) beside `storage restore-offline`; it is a thin wrapper over
 `Updater.FetchRelease`. The fetch is apply's steps 2 and 3 applied to the named release and to no other: the asset
 `AssetName` names for that release on the configured source (a release without it is `no_asset`), fetched through
 `providerhttp` and streamed into `<path>.part` in the target's directory, mode 0755, fsynced, capped at
@@ -691,4 +691,4 @@ Round 13 (2026-11-04): CONFORM-1 (pre-freeze release as the pre-R2 `.prev`), CON
 
 Round 14 (2026-11-05): V10 (a "Fetching a named release" paragraph, `Updater.FetchRelease` and its error row and tests, behind `make rollback-restore RELEASE=<tag>`; the rollback paragraph and Database caveat point at it), V23 (no bare round-13 ruling citation was present; `R4` and `R5` here are 03's rules).
 
-Round 15 (2026-11-05): W9 ("Fetching a named release" and the Database caveat compare the fetched binary with the source's levels, the checkpoint's `from_vector` or the archive's levels), W10 ("signed" withdrawn: the fetch has apply's trust level, HTTPS from the configured release source plus apply's checksum check when the source publishes one, which is deferred-build with apply's), W8 (cited: the refusal names the record's `from_release` or the archive's producing release).
+Round 15 (2026-11-05): W9 ("Fetching a named release" and the Database caveat compare the fetched binary with the source's levels, the checkpoint's `from_vector` or the archive's levels), W10 ("signed" withdrawn: the fetch has apply's trust level, HTTPS from the configured release source plus apply's checksum check when the source publishes one, which is deferred-build with apply's), W8 (cited: the refusal names the record's `from_release` or the archive's producing release). Lead fix: `updater fetch-release` lands at F8 (06 §6.4.5).
