@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dryrun_spelling_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f0d6b52-8c1e-4a97-b5d4-71e2a9c04f68
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -46,7 +46,7 @@ func TestDryRunSpellings_ConflictRefusedByEveryOp(t *testing.T) {
 		{"maintenance.repair-transcribe-status", p.runRepairTranscribeStatus},
 		{"maintenance.rewrite-path-prefix", p.runRewritePathPrefix},
 		{"maintenance.series-phantom-repair", p.runSeriesPhantomRepair},
-		{"maintenance.duration-reextract", p.runDurationBackfill},
+		{"maintenance.duration-backfill", p.runDurationBackfill},
 	}
 	for _, op := range ops {
 		for _, body := range []string{`{"dry_run":false,"dryRun":true}`, `{"dry_run":true,"dryRun":false}`} {
