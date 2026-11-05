@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-05-other-plugins-definitions-become-kinds.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: e41a9e17-4a2d-46f5-bee3-76a82f236e8e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -195,7 +195,7 @@ runtime.NumCPU()` → `tasks.CPU()`. The reason is one sentence copied from HEAD
 | `NoWarmupWait` | `false` → `Ready` = the readiness component `books.memdb`; `true` → `Ready` nil | 05-tasks §5T.3.1 `Ready`; `TestDispatch_WaitsForReadySignal` (COR4-8) |
 | `Permissions` | `Perms` by rule R6 | 05-tasks §5T.3.7 |
 | `Writes`, `Reads`, `Preview`, `Capabilities` | `Effects` by rule R7 | 05-tasks §5T.3.4 |
-| `Schedule` (a v2 cron string) | **none**: never evaluated at HEAD (05-tasks §5T.2); dropped and listed for the release note (05-tasks §5T.3.8; 14 Q-C). Schedules are F5-14's | 05-tasks §5T.3.8 |
+| `Schedule` (a v2 cron string) | **none**: never evaluated at HEAD (05-tasks §5T.2); deleted and listed for the release note (05-tasks §5T.3.8; 14 §14.3.2 Q-C, D15); a def that a `TaskDefinition` fires keeps that cadence through F5-14. Schedules are F5-14's | 05-tasks §5T.3.8 |
 | `Triggers` | none in this PR (the one trigger, `book.relocated`, becomes an outbox topic at F6) | 05-tasks §5T.2; 05-events §5E.13 |
 | `Plugin`, `FormerIDs`, `Cancellable`, `ParamsSchema`, `SummarizeQueued`, `Liveness`, `MinCheckpointInterval`, `ProgressFlushInterval`, `Synchronous`, `Isolate`, `RunsAs` | not carried; list each non-zero value per kind in the PR description under "Dropped HEAD fields". `Cancellable` is never read at HEAD (05-tasks §5T.2); `Isolate: true` or `RunsAs: ActorSystem` has 0 hits at `ac4368bdb`: a hit at your base is a STOP | 05-tasks §5T.2, §5T.3.6 |
 | `Requires` | the `Requires` field `core/tasks` landed (grep `Requires` in `core/tasks/*.go`); absent → STOP for that one definition and report | 05-tasks §5T.4 (`waiting_deps`) |
@@ -250,8 +250,8 @@ drift fails). HEAD's existing tests stay unchanged and green.
   `books.deluge.link-backfill`, `books.deluge.path-update`, `books.deluge.protected-paths-sync`.
 - **`deluge.path-update`'s trigger** (`book.relocated`, never published at HEAD, 05-tasks §5T.2) is not
   carried; the outbox topic and its consumer arrive with the events flip F6 (05-events §5E.13).
-- **`deluge.protected-paths-sync`'s `*/30` cron** is not carried (rule R5 `Schedule` row; 14 Q-C). Whether it
-  gets a real schedule is F5-14's, per the owner's Q-C answer.
+- **`deluge.protected-paths-sync`'s `*/30` cron** is not carried (rule R5 `Schedule` row; 14 §14.3.2 Q-C): it stays a
+  manual task with no schedule (D15); its cache refreshes itself on read on its 5-minute TTL.
 - **acoustid** keeps HEAD's `Concurrency` values verbatim (rule R4; the `Label` closure rules of CLAUDE.md
   apply to `tasks.RunItems` too: anything `Label` reads is shared state).
 - **The T5 gate (05-tasks §5T.8.2: "the native shells do not import `pkg/plugin/sdk`").** Go imports are per

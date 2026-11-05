@@ -1,14 +1,14 @@
 [
  {
   "id": "OWNER-01",
-  "title": "Owner decisions before R0 ships and before R1's first core PR: required-check enforcement (Q-I), keep or override the R1 freeze, split-readiness thresholds (Q-G), and the P14 production read",
+  "title": "Owner decisions before R0 ships and before R1's first core PR (recorded 2026-11-05, D15): required-check enforcement (Q-I), the R1 freeze, split-readiness thresholds (Q-G), the P14 production read",
   "release": "OWNER",
   "wave": "W01",
   "tier": "OWNER",
   "depends_on": [],
   "files": [],
-  "spec": "09 §9.2.1 (release gating, R1 freeze), §9.4 R0 Owner, §9.4 R1 Owner, §9.7 P14; 14 §14.3 Q-I, Q-G; 12 §12.10 item 3",
-  "notes": "NOT AGENT WORK. Records the Q-I decision (a ruleset with no bypass actors and merge tooling that never merges with --admin past a required check, or the owner's alternative) before R1-01 merges; P14 is read before R0-05 merges, because a merged R0 commit can auto-promote within 10 RCs (09 §9.1). Is asked to choose GitHub's merge queue (critical-path rows merge first in a wave)."
+  "spec": "02 §2.6 (D15); 09 §9.2.1 (release gating, R1 freeze), §9.4 R0 Owner, §9.4 R1 Owner, §9.7 P14; 14 §14.3.2 Q-I, Q-G; 12 §12.10 item 3",
+  "notes": "NOT AGENT WORK. Recorded 2026-11-05 (D15): Q-I (a), a ruleset on main requiring the named checks with no bypass actors and GitHub's merge queue, /parallel-sweep never admin-merges; R1 freeze kept; Q-G accepted as proposed; P14 Branch A (nothing to do). Remaining owner action: apply the ruleset and enable the merge queue before R1-01 merges."
  },
  {
   "id": "R0-01",
@@ -158,23 +158,22 @@
   ],
   "files": [],
   "spec": "09 §9.4 R0 (Rollback, Owner), §9.3 (R0 tag writes R2's fixture corpus); 09 §9.2.1 (no soaks)",
-  "notes": "NOT AGENT WORK. The R0 tag is kept: F2-12 drives the R0 release binary to write R2's fixture corpus, and TestR0OpensR1Store runs it. R1-35 and R1-01 merge only after this release exists, because R1-35 turns the R1 freeze on."
+  "notes": "NOT AGENT WORK. The R0 tag is kept: F2-12 drives the R0 release binary to write R2's fixture corpus, and TestR0OpensR1Store runs it. R1-35 and R1-01 merge only after this release exists. Last step (D15, advisor S3/S5): right after the R0 release is cut, set the repository variable RELEASE_FREEZE to R1 (gh variable set RELEASE_FREEZE --body R1) and log it in the tracking issue; the R1 freeze takes effect when R1-35's switch merges, and R1-35's post-merge wait clears the runs that predate it."
  },
  {
   "id": "R1-35",
-  "title": "Release-freeze toggle: RELEASE_FREEZE and both if: conditions in prerelease.yml, value per OWNER-01 ('R1' kept, '' overridden), merged only when no prerelease or release-prod run for an earlier commit is queued or running",
+  "title": "Release-freeze switch: prerelease.yml's promote and notice steps read the repository variable RELEASE_FREEZE (D15), with a post-merge wait for earlier release runs",
   "release": "R1",
   "wave": "W04",
   "tier": "T1",
   "depends_on": [
-   "OWNER-01",
    "OWNER-02"
   ],
   "files": [
    ".github/workflows/prerelease.yml"
   ],
-  "spec": "09 §9.2.1 (release gating, the freeze starts with the PR that turns the dispatch off), §9.1; 03 §3.8",
-  "notes": "Tier: one workflow toggle, but its merge timing guards production releases. The mechanism always lands, so the R2 freeze (D12 (a), not overridable) always finds the toggle. Acceptance: gh run list for prerelease.yml and release-prod.yml shows nothing queued or in progress for an earlier commit at merge time."
+  "spec": "02 §2.6 (D15); 09 §9.2.1 (release gating, the freeze is the owner's repository variable), §9.1; 03 §3.8",
+  "notes": "Tier: one workflow edit, but its post-merge wait guards production releases. The mechanism always lands, so the R2 freeze (D12 (a), not overridable) always finds it. The value is never committed: the owner sets vars.RELEASE_FREEZE (R1 at the end of OWNER-02, cleared in OWNER-03, R2 before F3-08, cleared in OWNER-05). Acceptance: after merge, every prerelease.yml run created before the merge has completed and no release-prod.yml run was created after it."
  },
  {
   "id": "R1-01",
@@ -216,7 +215,7 @@
    "core/internal/archtest_layers_test.go"
   ],
   "spec": "03 §3.2 items 1, 4, 6, §3.5.1 items 1-4; 09 §9.4 R1 Content: build and CI, R1's CI classification (core layering gate, genproto-exclude-root, check_module_skew.py, TestCoreHoldsNoAppKeyNames); 09 §9.2.1 (R1 freeze); 13 §13.2.2 guard items 1-4; 12 §12.3.11 (toolchain pin, print-toolchain); 04 §8.1 R1",
-  "notes": "Tier: module mechanics with known ambiguous-import traps and the guard rules of 03 §3.5.1; a wrong guard passes silently. The genproto workspace probe runs only in a throwaway copy outside the repository; nothing runs go work init in a checkout (CLAUDE.md). Registers the reserved families c/ and m/ in keyfamilies.go. The guard's positive control is the synthetic-graph self-test here (03 §3.5.1 item 2). run_gates.py learns the core-job value so ci/gates.txt can carry the core layering gate. Names the two archtest files later rows edit: the third-party allowlist core/archtest/thirdparty_allow.txt and the exported tag-set list core/archtest/tags.go. TestCoreHoldsNoAppKeyNames reads op IDs from internal/server/testdata/op_ids.golden until F5's kind-rename map exists. The freeze toggle is R1-35's; this row does not edit prerelease.yml. 04 keys: R1 create core module (core/go.mod, empty core/go.sum); R1 create mediacore/buildid; R1 create mediacore/storage/keys; R1 create mediacore/archtest; R1 move internal/arch -> mediacore/archtest. Owns gate tests: TestCoreImportsOnlyCore; TestCoreHoldsNoAppKeyNames; genproto-exclude-root; scripts/ci/check_module_skew.py."
+  "notes": "Tier: module mechanics with known ambiguous-import traps and the guard rules of 03 §3.5.1; a wrong guard passes silently. The genproto workspace probe runs only in a throwaway copy outside the repository; nothing runs go work init in a checkout (CLAUDE.md). Registers the reserved families c/ and m/ in keyfamilies.go. The guard's positive control is the synthetic-graph self-test here (03 §3.5.1 item 2). run_gates.py learns the core-job value so ci/gates.txt can carry the core layering gate. Names the two archtest files later rows edit: the third-party allowlist core/archtest/thirdparty_allow.txt and the exported tag-set list core/archtest/tags.go. TestCoreHoldsNoAppKeyNames reads op IDs from internal/server/testdata/op_ids.golden until F5's kind-rename map exists. The freeze toggle is R1-35's; this row does not edit prerelease.yml. Merges only after the owner set RELEASE_FREEZE to R1 (OWNER-02's last step) and after the main ruleset with the merge queue is applied (Q-I, D15). 04 keys: R1 create core module (core/go.mod, empty core/go.sum); R1 create mediacore/buildid; R1 create mediacore/storage/keys; R1 create mediacore/archtest; R1 move internal/arch -> mediacore/archtest. Owns gate tests: TestCoreImportsOnlyCore; TestCoreHoldsNoAppKeyNames; genproto-exclude-root; scripts/ci/check_module_skew.py."
  },
  {
   "id": "R1-02",
@@ -1301,11 +1300,62 @@
   ],
   "files": [],
   "spec": "09 §9.4 R1 (Content: release note, Rollback, Owner), §9.7 P12, §9.2.1 (R1 freeze), §9.3 (R2 lands while R1 is deployed)",
-  "notes": "NOT AGENT WORK. The first R1 boot on the production store takes a checkpoint (deleted after 7 days). Every F2 task merges only after this release: R2's content lands dark while R1 is deployed (09 §9.3). R2 briefs may be executed and their PRs opened earlier; only the merge waits."
+  "notes": "NOT AGENT WORK. The first R1 boot on the production store takes a checkpoint (deleted after 7 days). Every F2 task merges only after this release: R2's content lands dark while R1 is deployed (09 §9.3). R2 briefs may be executed and their PRs opened earlier; only the merge waits. After the R1 release is cut (D15, advisor S3/S5): clear the repository variable RELEASE_FREEZE (gh variable set RELEASE_FREEZE --body '') and log it in the tracking issue; production minors ship as usual until the R2 freeze."
+ },
+ {
+  "id": "R1-31",
+  "title": "R1 close: R1's executive summary and TODO check-offs (docs only, beside the R1 release cut)",
+  "release": "R1",
+  "wave": "W23",
+  "tier": "T0",
+  "depends_on": [
+   "R1-01",
+   "R1-02",
+   "R1-03",
+   "R1-04",
+   "R1-05",
+   "R1-06",
+   "R1-07",
+   "R1-08",
+   "R1-09",
+   "R1-10",
+   "R1-11",
+   "R1-12",
+   "R1-13",
+   "R1-14",
+   "R1-15",
+   "R1-16",
+   "R1-17",
+   "R1-18",
+   "R1-19",
+   "R1-20",
+   "R1-21",
+   "R1-22",
+   "R1-23",
+   "R1-24",
+   "R1-25",
+   "R1-26",
+   "R1-27",
+   "R1-28",
+   "R1-29",
+   "R1-30",
+   "R1-32",
+   "R1-33",
+   "R1-34",
+   "R1-35",
+   "R1-36",
+   "R1-37"
+  ],
+  "files": [
+   "docs/executive-summaries/",
+   "TODO.md"
+  ],
+  "spec": "plan §(n) item 4; docs/process/executive-summaries.md; 09 §9.4 R1 (Content)",
+  "notes": "Tier: one docs PR: a plain-language summary and TODO check-offs. Carries R1's executive summary and TODO check-offs (plan §(n) item 4). The R1 freeze's end is the owner's variable toggle in OWNER-03 (D15)."
  },
  {
   "id": "OWNER-04",
-  "title": "Pre-R2 production reads and the never-run-crons decision: P1, P2, P3, P4, P5, P7, P9 (counts only) and Q-C",
+  "title": "Pre-R2 production reads: P1, P2, P3, P4, P5, P7, P9 (counts only)",
   "release": "OWNER",
   "wave": "W24",
   "tier": "OWNER",
@@ -1313,23 +1363,8 @@
    "OWNER-03"
   ],
   "files": [],
-  "spec": "09 §9.7 P1-P5, P7, P9; 14 §14.3 Q-C; 05-storage §5S.9.2 (census command)",
-  "notes": "NOT AGENT WORK. Runs on the deployed R1 production host, read-only, counts only: P2, P3, P5 and P7 read a restored backup copy through storage restore-offline --into, which R1-25 lands; every consumer (F2-14, F3-07, F5-14) runs after OWNER-03 anyway. P1 sizes F2-14's production-shaped store and lists any (unregistered) prefix before F3; P4 lists env names the rename table must map before F3-07; Q-C decides whether the 15 never-run v2 crons are deleted (05-tasks T7 default) before F5-14."
- },
- {
-  "id": "R1-31",
-  "title": "End the R1 freeze after the R1 release: check-rc-ordinal dispatches again",
-  "release": "R1",
-  "wave": "W24",
-  "tier": "T0",
-  "depends_on": [
-   "OWNER-03"
-  ],
-  "files": [
-   ".github/workflows/prerelease.yml"
-  ],
-  "spec": "09 §9.2.1 (R1 freeze: the R1 release turns it off)",
-  "notes": "Tier: one workflow toggle. Between R1 and F3 production minors ship as usual. Clears RELEASE_FREEZE (R1-35's toggle). A recorded no-op when R1-35 set the value to '' (the R1 freeze was overridden). Carries R1's executive summary and TODO check-offs (plan §(n) item 4)."
+  "spec": "09 §9.7 P1-P5, P7, P9; 05-storage §5S.9.2 (census command)",
+  "notes": "NOT AGENT WORK. Runs on the deployed R1 production host, read-only, counts only: P2, P3, P5 and P7 read a restored backup copy through storage restore-offline --into, which R1-25 lands; every consumer (F2-14, F3-07, F5-14) runs after OWNER-03 anyway. P1 sizes F2-14's production-shaped store and lists any (unregistered) prefix before F3; P4 lists env names the rename table must map before F3-07."
  },
  {
   "id": "F2-07",
@@ -1561,7 +1596,7 @@
    "scripts/tests/test_gen_shared_family_lists.py"
   ],
   "spec": "09 §9.2.1 (extraction-gates: the R2 cutover suite from the F3 PR on), §9.2.3 (shared families, IDs and references), §9.3 (restore drill); 05-storage §5S.3.13 Tests, §5S.10 (TestRollbackRestoreBootsPreviousBuild)",
-  "notes": "Tier: the cross-flip checks every R2 PR runs, the restore drill included. Bites from F3-07, the first build that registers a cutover step. Extends F2-14's production-shaped-store job. Until F3-07 records ci/prefreeze_release.txt the pre-freeze tag resolves to the latest production release. Also boots the pre-freeze binary on a copy of the R0 corpus, writes rows through its API, and runs the suite, the oracles and the drill on that production-shaped result too (advisor R3). Owns gate tests: TestCutoverOnR0Corpus; TestCutoverPreservesIDsAndReferences; TestCutoverLeavesOtherFamiliesByteIdentical; TestRollbackRestoreBootsPreviousBuild (the restore drill)."
+  "notes": "Tier: the cross-flip checks every R2 PR runs, the restore drill included. Bites from F3-07, the first build that registers a cutover step. Extends F2-14's production-shaped-store job. Until F3-07 records ci/prefreeze_release.txt the pre-freeze tag resolves to the latest production release. Also boots the pre-freeze binary on a copy of the R0 corpus, writes rows through its API, and runs the suite, the oracles and the drill on that production-shaped result too (advisor R3). No flip-upgrade test and no previous-main build (D15, advisor S2); M8 is registered once by F3-07 under the fixed ID books.rewrite. Owns gate tests: TestCutoverOnR0Corpus; TestCutoverPreservesIDsAndReferences; TestCutoverLeavesOtherFamiliesByteIdentical; TestRollbackRestoreBootsPreviousBuild (the restore drill)."
  },
  {
   "id": "F2-17",
@@ -1804,16 +1839,16 @@
    "internal/arch/layering_test.go"
   ],
   "spec": "05-config §1.12.2, §1.12.3 (rename table, TestRenameTable_Golden), §1.12.4; 03 §3.8 (M2, M7, M8); 04 §2.4 (internal/books/cutover); 05-storage §5S.3.13; 09 §9.2.3, §9.2.5",
-  "notes": "Tier: a one-way data migration of every setting and secret. Unregistered until F3-07. The rename table drives M2, RetiredConfigNames, the deploy-file check and the R2 release note's rename list. Reserves the step IDs of M2-M6 in internal/books/cutover/stepids.go, which F4-06, F5-15, F5-16, F7-08 and R3-02's UpgradeFloor.Requires take theirs from. Step constructors take the importers directly; Manifest.Cutover and Importers are F3-07's. The restore drill runs with the latest production release through scripts/ci/fetch_prefreeze_binary.sh until F3-07 records the pre-freeze tag. TestConfigCutover_RowsGone's after-M6 clause is F7-08's. HEAD's config code is read from the spec's evidence commit where the base no longer has it (F4-02 moves two of its files first). 04 keys: F3 create internal/books/cutover. Owns gate tests: TestRenameTable_Golden; TestConfigCutover_EffectiveConfigUnchanged (the config oracle); TestConfigCutover_SecretsReadable; TestConfigCutover_KeyGuard; TestConfigCutover_QuarantineNotDrop; TestConfigCutover_GapFillStripped; TestConfigCutover_Idempotent; TestConfigCutover_RestoreDrill; TestConfigCutover_RowsGone."
+  "notes": "Tier: a one-way data migration of every setting and secret. Unregistered until F3-07. The rename table drives M2, RetiredConfigNames, the deploy-file check and the R2 release note's rename list. Reserves the step IDs of M2-M6 in internal/books/cutover/stepids.go, which F4-06, F5-15, F5-16, F7-08 and R3-02's UpgradeFloor.Requires take theirs from. Step constructors take the importers directly; Manifest.Cutover and Importers are F3-07's. The restore drill runs with the latest production release through scripts/ci/fetch_prefreeze_binary.sh until F3-08 records the pre-freeze tag. TestConfigCutover_RowsGone's after-M6 clause is F7-08's. HEAD's config code is read from the spec's evidence commit where the base no longer has it (F4-02 moves two of its files first). 04 keys: F3 create internal/books/cutover. Owns gate tests: TestRenameTable_Golden; TestConfigCutover_EffectiveConfigUnchanged (the config oracle); TestConfigCutover_SecretsReadable; TestConfigCutover_KeyGuard; TestConfigCutover_QuarantineNotDrop; TestConfigCutover_GapFillStripped; TestConfigCutover_Idempotent; TestConfigCutover_RestoreDrill; TestConfigCutover_RowsGone."
  },
  {
   "id": "F3-08",
-  "title": "Start the R2 freeze: RELEASE_FREEZE 'R2' and ci/prefreeze_release.txt, merged only when no prerelease or release-prod run is queued or running and the newest production release equals the recorded tag",
+  "title": "Record the pre-freeze tag in ci/prefreeze_release.txt, merged only after the owner set RELEASE_FREEZE to R2, with no release run in flight and the newest production release equal to the recorded tag",
   "release": "F3",
   "wave": "W31",
   "tier": "T1",
   "depends_on": [
-   "R1-31",
+   "OWNER-03",
    "F2-17",
    "F2-01",
    "F2-02",
@@ -1833,11 +1868,10 @@
    "F2-16"
   ],
   "files": [
-   ".github/workflows/prerelease.yml",
    "ci/prefreeze_release.txt"
   ],
-  "spec": "09 §9.2.1 (the freeze starts before F3 merges), §9.3, D12 (a); 05-storage §5S.3.12 (from_release)",
-  "notes": "Tier: one workflow value and a recorded tag, merged only when no release run is in flight. Every F2 row merges before this one (09 §9.3: F2 lands before the freeze). F3-07 embeds the file and re-checks before merge that the newest production release still equals it."
+  "spec": "02 §2.6 (D15); 09 §9.2.1 (the freeze starts before F3 merges), §9.3, D12 (a); 05-storage §5S.3.12 (from_release)",
+  "notes": "Tier: one recorded tag, merged only after the owner turned the R2 freeze on and with no release run in flight. Every F2 row merges before this one (09 §9.3: F2 lands before the freeze). Precondition: the owner set the repository variable RELEASE_FREEZE to R2 and logged it in the tracking issue (D15). F3-07 embeds the file and re-checks before merge that the newest production release still equals it."
  },
  {
   "id": "F3-07",
@@ -1857,8 +1891,7 @@
    "OWNER-04",
    "F2-16",
    "F3-08",
-   "F2-17",
-   "R1-31"
+   "F2-17"
   ],
   "files": [
    "main.go",
@@ -1892,7 +1925,7 @@
    "internal/books/cutover_suite_test.go"
   ],
   "spec": "09 §9.4 R2 flips table F3, §9.2.1 (freeze from F3's merge; the pre-freeze release), §9.2.5, §9.6 rows 6-8; 03 §3.8 F3; 05-config §1.12.1 item 2, 'Between the config flip and the identity flip'; 05-http-api §8.1 F3 row; 06 §6.4.10 F3",
-  "notes": "Tier: a flip PR carrying a one-way migration and every deploy-file rename. F3-08 starts the freeze and records ci/prefreeze_release.txt; this PR embeds that tag in the cutover build. The names nothing reads (AUDIOBOOK_ROOT_DIR, AO_DIR, AO_DB, OLLAMA_BASE_URL) leave the deploy files. A secret is write-only from here (secrets.Meta). Every PR from here runs the cutover suite in extraction-gates. Embeds F3-08's ci/prefreeze_release.txt. Wires secrets at P4b and Attach at P4d, binds F3-04's sealer, F3-05's password resolver and F3-03's keyring, adds Manifest.Cutover, Importers.Config, Importers.Secrets and Deps.Secrets, the F3 offline commands, and storage's refusal to create a store while a retired database-path name is set; deletes configupdate's ServiceDef (06 §6.11.1 step 4). internal/books/config.go is books' config section (path coined here). Before merge: no unfinished release-prod.yml run, and no unfinished prerelease.yml run for a commit before F3-08's merge commit; otherwise STOP and report. 04 keys: F3 move internal/server/middleware (basicauth.go) -> mediacore/httpapi. Owns gate tests: TestRenameTable_EveryKeyRegistered; TestDeployFilesUseCanonicalNamesOnly (the deploy-files test); TestBasicGate_ExemptSetGolden; TestBasicGate_MoreRestrictiveWins (the compose cell of TestPerimeterHonoursBlobOnlyValues); TestConfigCutover_NoPlaintextSecretOnDisk; TestCutoverRefusedByOlderBuilds. Flip PR: one atomic PR (09 §9.2.1)."
+  "notes": "Tier: a flip PR carrying a one-way migration and every deploy-file rename. F3-08 starts the freeze and records ci/prefreeze_release.txt; this PR embeds that tag in the cutover build. The names nothing reads (AUDIOBOOK_ROOT_DIR, AO_DIR, AO_DB, OLLAMA_BASE_URL) leave the deploy files. A secret is write-only from here (secrets.Meta). Every PR from here runs the cutover suite in extraction-gates. Embeds F3-08's ci/prefreeze_release.txt. Wires secrets at P4b and Attach at P4d, binds F3-04's sealer, F3-05's password resolver and F3-03's keyring, adds Manifest.Cutover, Importers.Config, Importers.Secrets and Deps.Secrets, the F3 offline commands, and storage's refusal to create a store while a retired database-path name is set; deletes configupdate's ServiceDef (06 §6.11.1 step 4). internal/books/config.go is books' config section (path coined here). Before merge: RELEASE_FREEZE still reads R2 and no prerelease.yml or release-prod.yml run is unfinished; otherwise STOP and report. 04 keys: F3 move internal/server/middleware (basicauth.go) -> mediacore/httpapi. Owns gate tests: TestRenameTable_EveryKeyRegistered; TestDeployFilesUseCanonicalNamesOnly (the deploy-files test); TestBasicGate_ExemptSetGolden; TestBasicGate_MoreRestrictiveWins (the compose cell of TestPerimeterHonoursBlobOnlyValues); TestConfigCutover_NoPlaintextSecretOnDisk; TestCutoverRefusedByOlderBuilds. Flip PR: one atomic PR (09 §9.2.1)."
  },
  {
   "id": "F4-04",
@@ -2240,7 +2273,6 @@
    "scripts/ci/short_test_weights.json",
    "web/tests/e2e/",
    "web/eslint.config.mjs",
-   "internal/books/cutover_suite_test.go",
    "internal/books/cutover/stepids.go",
    "core/coretest/harness.go",
    "core/coretest/assert.go"
@@ -2412,7 +2444,7 @@
    "internal/books/testdata/tasklint_exempt.d/F5-05.txt"
   ],
   "spec": "05-tasks §5T.8.2 (T5 row); 05-download §10 (Deluge defs through the client adapter)",
-  "notes": "Tier: 16 definitions across four plugins, each shared body rerouted through its shell (rule 3). Conversion rules 1-4 of 05-tasks §5T.8.2 apply; under rule 3 each shared body reaches its writer and stores only through what its shell hands it (the native shell rc.Writer() and its owner's declared Deps, HEAD's shell an adapter of the same interface over HEAD's writer), so this PR is not a mechanical rewrite. It deletes its own exemption entry file (internal/books/testdata/tasklint_exempt.d/<row>.txt, listing the files it converts) in the same PR and touches no other entry. Deluge kinds are books.deluge.* (05-tasks' rename map). HEAD's Deluge client stays until F7-09 switches it; protected-paths-sync gets no schedule here (F5-14 applies Q-C)."
+  "notes": "Tier: 16 definitions across four plugins, each shared body rerouted through its shell (rule 3). Conversion rules 1-4 of 05-tasks §5T.8.2 apply; under rule 3 each shared body reaches its writer and stores only through what its shell hands it (the native shell rc.Writer() and its owner's declared Deps, HEAD's shell an adapter of the same interface over HEAD's writer), so this PR is not a mechanical rewrite. It deletes its own exemption entry file (internal/books/testdata/tasklint_exempt.d/<row>.txt, listing the files it converts) in the same PR and touches no other entry. Deluge kinds are books.deluge.* (05-tasks' rename map). HEAD's Deluge client stays until F7-09 switches it; protected-paths-sync gets no schedule (Q-C, D15: it stays manual)."
  },
  {
   "id": "F5-06",
@@ -2702,7 +2734,7 @@
  },
  {
   "id": "F5-14",
-  "title": "Conversion group T7, schedules: the 38 TaskDefinitions become ScheduleFromConfig declarations in internal/books, the 15 never-run v2 crons dropped per Q-C, with the schedule oracle and the no-catch-up-storm test",
+  "title": "Conversion group T7, schedules: the 38 TaskDefinitions become ScheduleFromConfig declarations in internal/books, the 15 dead v2 Schedule strings deleted per Q-C (the 14 jobs they duplicate keep their real cadence), with the schedule oracle and the no-catch-up-storm test",
   "release": "F5",
   "wave": "W33",
   "tier": "T3",
@@ -2720,16 +2752,15 @@
    "F5-10",
    "F5-11",
    "F5-12",
-   "F5-13",
-   "OWNER-04"
+   "F5-13"
   ],
   "files": [
    "internal/books/schedules.go",
    "internal/books/schedule_parity_test.go",
    "internal/books/config.go"
   ],
-  "spec": "05-tasks §5T.3.8, §5T.8.2 (T7 row), §5T.9; 04 §2.4 (schedule declarations into internal/books); 14 E16, Q-C",
-  "notes": "Tier: schedule parity over every definition; a stampede is a real outage. books.library.scan and books.library.scan-full each get their own schedule (05-tasks §5T.3.8: one schedule per kind), so no entry is gated. Keys beyond the 16 scheduled.<entry> keys go in books' config section (internal/books/config.go). purge_old_logs' HEAD default is 168 h while core.log.schedules.journal_prune defaults to 24 h: M2's rename table carries HEAD's value, or the difference is reported as a spec gap. Owns gate tests: TestScheduleParity_AllDefinitions (the schedule oracle); TestCutover_NoCatchUpStorm."
+  "spec": "05-tasks §5T.3.8, §5T.8.2 (T7 row), §5T.9; 04 §2.4 (schedule declarations into internal/books); 14 E16, §14.3.2 Q-C; 02 §2.6 (D15)",
+  "notes": "Tier: schedule parity over every definition; a stampede is a real outage. books.library.scan and books.library.scan-full each get their own schedule (05-tasks §5T.3.8: one schedule per kind), so no entry is gated. Keys beyond the 16 scheduled.<entry> keys go in books' config section (internal/books/config.go). purge_old_logs' HEAD default is 168 h while core.log.schedules.journal_prune defaults to 24 h: M2's rename table carries HEAD's value, or the difference is reported as a spec gap. Q-C (D15): 14 of the 15 v2 Schedule strings duplicate a real internal/scheduler TaskDefinition; those jobs keep that cadence through their ScheduleFromConfig declaration and the parity oracle proves it. All 15 strings are deleted. deluge.protected-paths-sync has no TaskDefinition and stays manual; its cache refreshes itself on its 5-minute TTL. Owns gate tests: TestScheduleParity_AllDefinitions (the schedule oracle); TestCutover_NoCatchUpStorm."
  },
  {
   "id": "F5-18",
@@ -2801,7 +2832,6 @@
    "internal/arch/layering_test.go",
    "scripts/ci/short_test_weights.json",
    "internal/serviceregistry/",
-   "internal/books/cutover_suite_test.go",
    "internal/books/cutover/stepids.go",
    "core/internal/loghttp/",
    "internal/books/schedules_registered_test.go"
@@ -3319,7 +3349,6 @@
    ".mockery.yaml",
    "internal/arch/layering_test.go",
    "scripts/ci/short_test_weights.json",
-   "internal/books/cutover_suite_test.go",
    "internal/books/cutover/stepids.go",
    "core/internal/integrationhttp/routes_test.go"
   ],
@@ -3650,22 +3679,7 @@
   ],
   "files": [],
   "spec": "09 §9.4 R2 (Rollback, Owner), §9.3 item 2, §9.6, §9.7 P12; 05-config §2.4 (keyring export); 05-backup §5B.10",
-  "notes": "NOT AGENT WORK. Deploy steps: (0) finish or undo merges, fix or delete blocking identity rows; (1) off-host archive with .encryption_key and the gap-fill config.yaml; (2) optional dry run; (3) env renames on the host's own files; (4) deploy with the measured DEPLOY_READY_TIMEOUT; (5) webhook receivers; (6) reload rules and dashboards; (7) secrets export-keyring; (8) re-send invites. Fixing forward is the default; a rollback restore discards every write since the upgrade and revives revoked credentials. Deploy a tagged RC; Keep dispatches release-prod.yml with --ref <that RC tag>, so the release is the deployed commit. The dry run (storage migrate --dry-run --from-archive on a copy of the production archive) is mandatory."
- },
- {
-  "id": "R2-02",
-  "title": "End the R2 freeze after the R2 release: check-rc-ordinal dispatches again",
-  "release": "R2",
-  "wave": "W41",
-  "tier": "T0",
-  "depends_on": [
-   "OWNER-05"
-  ],
-  "files": [
-   ".github/workflows/prerelease.yml"
-  ],
-  "spec": "09 §9.2.1 (the freeze ends with the R2 release)",
-  "notes": "Tier: one workflow toggle. Clears RELEASE_FREEZE, which F3-08 set to 'R2'."
+  "notes": "NOT AGENT WORK. Deploy steps: (0) finish or undo merges, fix or delete blocking identity rows; (1) off-host archive with .encryption_key and the gap-fill config.yaml; (2) optional dry run; (3) env renames on the host's own files; (4) deploy with the measured DEPLOY_READY_TIMEOUT; (5) webhook receivers; (6) reload rules and dashboards; (7) secrets export-keyring; (8) re-send invites. Fixing forward is the default; a rollback restore discards every write since the upgrade and revives revoked credentials. Deploy a tagged RC; Keep dispatches release-prod.yml with --ref <that RC tag>, so the release is the deployed commit. The dry run (storage migrate --dry-run --from-archive on a copy of the production archive) is mandatory. After the R2 release is cut (D15, advisor S3/S5): clear the repository variable RELEASE_FREEZE and log it in the tracking issue; this ends the R2 freeze (formerly R2-02)."
  },
  {
   "id": "R3-02",

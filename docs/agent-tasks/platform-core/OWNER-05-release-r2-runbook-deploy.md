@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-05-release-r2-runbook-deploy.md -->
-<!-- version: 1.1.5 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 671daa9f-45b1-4ffb-a1ce-a9b0fc7c953c -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -16,7 +16,7 @@
 | Tier | **OWNER**: deploy, production reads, release |
 | Wave | W40 |
 | Depends on | R2-01 (the runbook and the R2 release note; it follows every flip, F8-04 and F9-03) |
-| Unblocks | **R2-02** (ends the R2 freeze after the release) and every R3 task |
+| Unblocks | every R3 task (you end the R2 freeze yourself after the release; D15) |
 | Spec | 09 §9.4 R2 (Rollback, Owner), §9.3 item 2 (the optional dry run), §9.6 (what changes; last column feeds these steps), §9.7 P12; 05-config §2.4 (keyring export); 05-backup §5B.10 |
 
 ## Before you start
@@ -81,7 +81,8 @@ evaluate; health shows no quarantined row.
   included. Never dispatch with `--ref main`. Prepend R2-01's release note to the generated notes, never replacing
   them. The production tag this run creates names the same commit as the RC tag. It is R3's
   `UpgradeFloor.InstallFirst` (R3-02; 09 §9.4 R3). Take a new off-host archive after
-  R2 (09 §9.6 row 19). R2-02 then ends the freeze.
+  R2 (09 §9.6 row 19). Then **end the R2 freeze** (D15, spec 02 §2.6; advisor S3/S5; formerly R2-02):
+  `gh variable set RELEASE_FREEZE --body ''`, check with `gh variable get RELEASE_FREEZE` (empty), and log it.
 - **Roll back:** `make rollback-restore` (09 §9.2.1, §9.4 R2 Rollback): the checkpoint, or the off-host archive with
   its state files, offline, plus the pre-freeze release, which the recipe checks against the source's levels.
   After an R2 hotfix: `make rollback-restore RELEASE=<pre-freeze tag>`. Then repeat every revocation made on R2.
@@ -95,10 +96,10 @@ OWNER-05 recorded <date>
 P12: Branch A | B; step 0: merges <n> finished/undone, blocking rows <n> fixed/deleted
 dry run: done (<n> quarantined, <n> blocking); env names renamed <n>; webhooks switched <n>; keyring exported: yes
 invites re-sent <n>; smoke run: done | skipped; deployed RC <rc tag>, version string matched: yes
-decision: kept (R2 release <tag>, cut from <rc tag>) | rolled back (<reason>)
+decision: kept (R2 release <tag>, cut from <rc tag>; RELEASE_FREEZE cleared on <date>) | rolled back (<reason>)
 ```
 
 ## Done when
 
-R2 is deployed and kept with its production release cut, or rolled back with the reason recorded. The lead then runs
-R2-02 and opens the R3 wave.
+R2 is deployed and kept with its production release cut, or rolled back with the reason recorded. After a keep, the freeze is
+cleared. The lead then opens the R3 wave.

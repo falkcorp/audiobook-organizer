@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-02-required-check-workflows.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 08146005-8663-4d6f-ab5e-f7cc388f67e9 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -14,7 +14,7 @@
 | Spec | 09 §9.2.1 required-checks table; 09 §9.2.10 (35-minute budget, timeout-minutes <= 30); 09 §9.4 R1 CI classification (vet-darwin, vet-integration, check_commits_build.py) |
 | Branch | `agent/platform-core-r1-02-required-check-workflows` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 
@@ -111,12 +111,16 @@ git grep -n 'go:embed' -- '*.go' | grep -c '\.md'                   # expect 0
    and make `vet-integration` loop over `GO_MODULE_DIRS` too; add both to the `ci:` prerequisites (line 789).
    Add `vet-darwin` and `vet-integration` jobs to `ci.yml` (`needs: changes`, `if: needs.changes.outputs.go == 'true'`,
    `timeout-minutes: 15`, `go-version` from the pin, actions pinned to SHAs, run the make targets).
-5. Create `.github/workflows/extraction-gates.yml`: `on: pull_request` (and `merge_group` if Q-I chose a merge
-   queue); a `changes` job (reuse the classifier by calling the same script text: copy the step verbatim and add a
+5. Create `.github/workflows/extraction-gates.yml`: `on: [pull_request, merge_group]` (the owner chose the merge queue, D15); a `changes` job (reuse the classifier by calling the same script text: copy the step verbatim and add a
    comment that `test_ci_classifier.py` checks both copies are identical, and extend that test to assert it); job
    `check-commits-build` (`if: needs.changes.outputs.go == 'true'`, `fetch-depth: 0`, `timeout-minutes: 30`); a final
    job `extraction-gates` (`needs: [changes, check-commits-build]`, `if: always()`) that fails if any needed job
    `failed` or was `cancelled`, so the required check is one stable name.
+5a. **Merge-queue trigger (D15).** Add `merge_group` to the `on:` of `ci.yml` and `e2e.yml`, and add a test to
+   `test_ci_classifier.py`, `test_required_workflows_have_merge_group`, that fails when any workflow under
+   `.github/workflows/` defines a job named in 09 §9.2.1's required-check list without `merge_group` in its `on:`.
+   Later rows that add a required job (R1-01 `core-ci`, R1-04 `docker-image`, R1-28 `unit-lifecycle`) satisfy it.
+   Without the trigger a queued PR waits forever for that check.
 6. `ci/gates.txt`: add `vet-darwin` and `vet-integration` (`check`, `own-job`) and `commits-build`
    (`python3 scripts/ci/check_commits_build.py`, `check`, `own-job`). Extend `scripts/tests/test_run_gates.py`
    per Goal item 6 so `own-job` gates may also run in `extraction-gates.yml`.
@@ -146,7 +150,7 @@ a docs-only test PR (do not merge it) shows them skipped as success, not "expect
 
 The per-module classification of every other `make ci` target (R1-03); `docker-image` (R1-04);
 `unit-lifecycle` (R1-28); the dashboard-reference job (R1-10). Making the checks *required* in the repository
-ruleset is the owner's (Q-I); the PR description lists the check names for OWNER-01's ruleset.
+ruleset and enabling the merge queue are the owner's (Q-I, D15); the PR description lists the check names for OWNER-01's ruleset.
 
 ## Rollback
 
@@ -158,7 +162,7 @@ Revert the PR; no runtime code changes.
 - **Changelog.** Add one headerless fragment under `changelog.d/` (`scriv create`, or by hand); `changelog-check.yml` requires it. Do not edit `CHANGELOG.md`.
 - **Commits.** Conventional commits (`type(scope): summary`). End every commit body with
   `Co-Authored-By: Claude <noreply@anthropic.com>`. 09 names no release or flip trailer (09 §9.2.1: there is no release-gating commit trailer), so add none.
-- **PR and merge.** `git push -u origin <branch>`, `gh pr create`, then after every required check is green on an up-to-date branch `gh pr merge <n> --rebase`. Never squash. Never merge with `--admin` past a required check (14 Q-I as OWNER-01 answered it).
+- **PR and merge.** `git push -u origin <branch>`, `gh pr create`, then after every required check is green, `gh pr merge <n> --rebase` (enqueues it; the merge queue re-tests it on top of `main`, D15). Never squash. Never merge with `--admin` past a required check (14 Q-I as OWNER-01 answered it).
 - **Concurrency (CLAUDE.md).** A loop over a library-scale collection with per-item I/O, hashing or subprocess work uses a bounded worker pool (`errgroup` + `SetLimit`); never unbounded goroutines.
 - **No `go.work`.** Never run `go work init` in a checkout or worktree; the genproto probe runs only in a throwaway copy under `mktemp -d` (03 §3.2 item 1).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.

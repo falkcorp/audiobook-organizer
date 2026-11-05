@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-09-f7-flip-integrations.md -->
-<!-- version: 1.1.7 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 92d3d884-998e-42de-94e1-451dd63836fb -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -54,16 +54,14 @@ Announce the move window one working day ahead, naming every 04 row listed under
 2. **Register M6** in `internal/books/cutover/steps.go`, passing F7-08's constructor this flip's books level constant as
    `RaisesLevel` and its new books level step as the `After` ref (F7-08's constructor takes both from the caller). In
    `internal/books/cutover/stepids.go`, add this flip's books level constant and level-step ID (and core's, when core's
-   level changes) beside the earlier flips' and replace the M8 ID; never edit an earlier flip's constant or ID (F3-06).
+   level changes) beside the earlier flips'; never edit an earlier flip's constant or ID, or the M8 ID (F3-06).
    Then apply the per-flip level mechanism (order M2, stated in
    F3-04 and F3-06): **add** a new level step for each owner whose level this flip raises (books'
    `books.level-<n>`; core's `core.level-<n>` when core's level changes), named for the raised target level, at that
    owner's next contiguous version, numbered immediately before M6 (which runs `After` it); the earlier flips' level
-   steps stay registered unchanged (05-storage §5S.3.5). **Replace** the M8 entry with a newly named one whose step ID
-   names M6 as the last step it compacts after, so exactly one M8 is registered and it runs last; bump the raised
-   owners' declared `Spec.Level` in the same PR. On a store F5-18's `main` migrated, the earlier level steps are
-   applied and the new M8 ignores the previous M8's `done` record and `applied` journal (03 §3.8; 05-storage
-   §5S.3.13; IMPL-13).
+   steps stay registered unchanged (05-storage §5S.3.5). M8 stays as F3-07 registered it, last, and is not renamed or
+   replaced (F3-04 rule 3; D15, advisor S2); bump the raised owners' declared `Spec.Level` in the same PR (03 §3.8;
+   05-storage §5S.3.13).
 3. **Delete** `internal/plugin` with no importer left (04 §8.3), the webhook plugin `internal/plugins/webhook`, and the
    unauthenticated `/api/v1/plugins` mount (05-http-api §8.1 F7 row); books publishes its 12 event types through
    `Deps.Notify` in the same batch as the change (05-notify §10's topic map); deliveries are in core's signed format
@@ -115,9 +113,7 @@ mediacore/integrations/download/deluge`; `F7 move internal/plugins/webhook -> me
   only `<namespace>_ai_*` AI families plus books' `ai.parse_results` (`TestNoHEADAIFamilies`).
 - **I5.** `internal/plugin` is deleted with no importer left; nothing serves `/api/v1/plugins`.
 - **I6.** `TestCutoverRefusedByOlderBuilds` still refuses with the pre-freeze binary on a store migrated through M6;
-  the crash matrix covers M6 and the new M8. A store migrated by F5-18's `main` and booted by this `main` has its
-  levels raised before M6, runs exactly one M8, and F5-18's binary then exits 78 on it (this flip's cell in F2-15's
-  harness).
+  the crash matrix covers M6 before M8.
 - **I7.** Every first-party caller of a deleted route is switched in this PR (SPA, `scripts/`, skills, docs).
 - **I8.** A derived index declared with no hooks, hooks for an undeclared index, or a build kind not named
   `<module>.derived.<name>.build` fails boot; `Load` never runs in `app.New` or `Describe`
@@ -129,7 +125,7 @@ mediacore/integrations/download/deluge`; `F7 move internal/plugins/webhook -> me
 |---|---|
 | wiring (this PR owns them in W37) | `main.go`, `internal/books/module.go`, `internal/books/services.go`, `core/kernel/boot.go`, `core/kernel/kernel.go`, `core/module/manifest.go`, `core/module/registrar.go`, `core/module/deps.go`, `core/app/options.go` |
 | generated | `core/openapi/core.json`, `core/web/packages/api-client/src/generated/` |
-| cutover | `internal/books/cutover/steps.go` (M6, this flip's level step, the new M8), `internal/books/cutover/stepids.go` (add this flip's level constant and level-step ID; replace the M8 ID), `internal/books/cutover_suite_test.go` (this flip's `TestCutoverFlipUpgrade` cell, F2-15's harness), `internal/books/store/` |
+| cutover | `internal/books/cutover/steps.go` (M6 and this flip's level step, before M8), `internal/books/cutover/stepids.go` (add this flip's level constant and level-step ID), `internal/books/store/` |
 | moved or deleted packages | `internal/plugin/`, `internal/plugins/webhook/`, `internal/server/`, `internal/ai/`, `internal/aidispatch/`, `internal/deluge/`, `internal/search/`, `internal/scanner/`, `internal/fileops/`, `internal/pathutil/`, `internal/watcher/`, `internal/metadata/`, `internal/config/` |
 | importers outside those packages (132 files at the plan's base `ac4368bdb`, listed in full below the table) | `cmd/dedup_bench_batch.go`, `cmd/dedup_bench_pass2.go`; files under `internal/aiscan/`, `internal/appdirs/`, `internal/audiobooks/`, `internal/catalog/`, `internal/dedup/`, `internal/fingerprint/workerclient/`, `internal/importer/`, `internal/itunes/`, `internal/itunes/service/`, `internal/maintenance/jobs/`, `internal/merge/`, `internal/metafetch/`, `internal/organizer/`, `internal/playlist/`, `internal/plugins/acoustid/`, `internal/plugins/dedup/`, `internal/plugins/deluge/`, `internal/plugins/maintenance/`, `internal/quarantine/`, `internal/reconcile/`, `internal/remux/`, `internal/sweep/`, `internal/tagger/`, `internal/telemetrypolicy/`, `internal/testutil/`, `internal/transcode/`, `internal/transcribe/`, `internal/versionprimary/`, `internal/versions/` |
 | SPA, deploy files, move bookkeeping | `web/src/`, `deploy/grafana/dashboards/`, `deploy/prometheus/`, `.mockery.yaml`, `internal/arch/layering_test.go`, `scripts/ci/short_test_weights.json` |
@@ -224,10 +220,8 @@ STOP if any dark package or M6 is missing (grep 5), or if grep 2 finds an import
 3. Wire the module members, the kernel boot calls (derived P7 and (3a), the index `Opener`), F7-10's routes and
    books' registrations (Goal 1); ABO's `main` sets `app.Options.Adapters`; delete the listed `ServiceDefs` from
    `internal/books/services.go`; regenerate `core/openapi/core.json` and the client.
-4. Register M6, add this flip's level steps and replace the M8 entry with a newly named one, bumping the raised
-   owners' `Spec.Level` (Goal 2);
-   extend the crash matrix with the new M8 and `TestCutoverRefusedByOlderBuilds`'s cells; add this flip's cell to
-   F2-15's harness.
+4. Register M6 and this flip's level steps before M8 (left unchanged), bumping the raised owners' `Spec.Level`
+   (Goal 2); extend the crash matrix with M6 and `TestCutoverRefusedByOlderBuilds`'s cells.
 5. Move or delete each package of the 04 keys with `git mv` where code moves; re-point every importer; delete
    `internal/plugin` last, once grep 1 is empty; regenerate or delete `internal/server/handlers/mocks` and update
    `.mockery.yaml`.
@@ -262,9 +256,6 @@ app.Options{
 - The dashboard-reference test and `promtool test rules` after the AI renames.
 - `TestABOMetricsGatherNoDuplicate` (unchanged).
 - `TestCutoverRefusedByOlderBuilds` and the R2 cutover suite with M6 registered.
-- `TestCutoverFlipUpgrade`: this flip's cell in F2-15's cutover-suite harness, `internal/books/cutover_suite_test.go`
-  (order M2; the cell shape is F3-04's): a store migrated by F5-18's
-  `main`, booted by this `main`, has its levels raised, runs exactly one M8, and F5-18's binary then exits 78 on it.
 - F3-06's registered-list test, green with M6 registered: the levels are raised to the build's target before the
   first step of each flip, versions are contiguous per owner, and exactly one M8 is registered, last.
 - `TestDerivedIndexHooksAfterRegister` (06 §6.10): `Load` runs at Run start step (3a), after the module's start hooks
@@ -299,7 +290,7 @@ grep -c 'needs stage 13: F4-08' core/internal/integrationhttp/routes_test.go
 (cd core && go test -count=1 -race ./internal/integrationhttp/...)
 
 # Gate tests. Expected: ok
-go test -count=1 -run 'TestBooksIndexRebuiltAtCutover|TestDerivedIndexRebuildTriggers|TestHEADTestConnectionRoutesGone|TestRootsCutover_FromHEADFixture|TestWebhookMigration_InstancesAndRule|TestIntegrationsMigration_EveryInstanceAndID|TestAIJobMigration_EveryJobAndState|TestNoHEADAIFamilies|TestABOMetricsGatherNoDuplicate|TestCutoverRefusedByOlderBuilds|TestDeployReferencedSeriesServed|TestDerivedIndexHooksAfterRegister|TestDepsScoping|TestCoreRoutesReplaceGin|TestCutoverFlipUpgrade' ./...
+go test -count=1 -run 'TestBooksIndexRebuiltAtCutover|TestDerivedIndexRebuildTriggers|TestHEADTestConnectionRoutesGone|TestRootsCutover_FromHEADFixture|TestWebhookMigration_InstancesAndRule|TestIntegrationsMigration_EveryInstanceAndID|TestAIJobMigration_EveryJobAndState|TestNoHEADAIFamilies|TestABOMetricsGatherNoDuplicate|TestCutoverRefusedByOlderBuilds|TestDeployReferencedSeriesServed|TestDerivedIndexHooksAfterRegister|TestDepsScoping|TestCoreRoutesReplaceGin' ./...
 (cd core && go test -count=1 -run 'TestWebhook_JSONBodyGolden|TestWebhook_SignatureWithTimestamp' ./integrations/notify/...)
 
 # Builds, frontend and e2e. Expected: exit 0; green

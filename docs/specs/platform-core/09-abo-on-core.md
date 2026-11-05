@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/09-abo-on-core.md -->
-<!-- version: 1.12.13 -->
+<!-- version: 1.13.0 -->
 <!-- guid: 3c82c917-2fc4-4385-b085-73d143a2374f -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -28,8 +28,8 @@ with no change to user data; **R2** the one-way cutover of every core-service fa
 - **D11, no soaks.** Code lands dark on `main`, one flip PR switches each subsystem on, and every merge passes
   `make ci` and the e2e suite (§9.2.1). The owner's work is decisions, deploys and an optional 1-day smoke run.
 - **D12, the cutover's scope.** (a) R2 is **one** release: automatic promotion pauses from the first R2 flip until
-  R2 ships; a lead extension, which the owner may override, pauses it from R1's first core PR until R1 ships too
-  (§9.2.1). (b) API keys and the Audiobookshelf (ABS) phone apps' sessions survive it; web sessions and one-time
+  R2 ships; a lead extension, which the owner kept (D15), pauses it from R1's first core PR until R1 ships too
+  (§9.2.1; both freezes are the repository variable `vars.RELEASE_FREEZE`). (b) API keys and the Audiobookshelf (ABS) phone apps' sessions survive it; web sessions and one-time
   tokens are reset; task-run and log history are converted; throttle and quota holds, indexes and caches are reset
   or rebuilt. (c) The only frozen external contract is the ABS-compatible API (§9.6). (d) The pre-migration
   checkpoint is deleted automatically 7 days after it stops being needed (§9.2.3).
@@ -103,10 +103,13 @@ release-gating commit trailer or stage record. There are no soaks. After a deplo
 **The release freezes (D12 (a)).** From the merge of R2's first flip PR (F3) until the R2 release, automatic promotion is
 off: `check-rc-ordinal` dispatches no production release (§9.1), so `releases/latest` and the `:latest` image stay on
 the pre-freeze release and no install runs a half-flipped `main`. RCs are still cut, and none is promoted. Unattended
-updates are check-only from R0 on (05-updater). The freeze starts with the PR that turns the dispatch off and ends with
-the R2 release, which turns it on again. Feature PRs keep merging and ship with R2. F2's foundation PRs land dark
-before F3 and are outside the freeze. **R1 freeze (lead extension of D12 (a), IMPL-9; the owner may override
-it).** The same mechanism pauses promotion from R1's first core PR until R1 ships, so no production minor carries part
+updates are check-only from R0 on (05-updater). The freeze is the repository variable `vars.RELEASE_FREEZE`, which
+`prerelease.yml` reads when each run executes, not a value committed to the tree: the owner sets it to `R2` before F3
+merges and clears it with the R2 release, and records each toggle in the tracking issue (D15, advisor S3 and S5). No
+PR toggles it. F3-08 still commits `ci/prefreeze_release.txt`, the pre-freeze tag the cutover build embeds. Feature PRs keep merging and ship with R2. F2's foundation PRs land dark
+before F3 and are outside the freeze. **R1 freeze (lead extension of D12 (a), IMPL-9; kept by the owner,
+D15).** The same variable, set to `R1` by the owner before R1's first core PR merges and cleared with the R1 release,
+pauses promotion from R1's first core PR until R1 ships, so no production minor carries part
 of R1 (its perimeter move, the deleted reset routes, the first checkpoint) without R1's P12 check and release note:
 R1 and R2 each ship as exactly one production release; a defect found during it is fixed the same way, from the last
 production release before R1's first core PR. Between R1 and F3, production minors ship as usual.
@@ -118,7 +121,7 @@ open (exit 78); the owner may decide otherwise for a given defect (§9.11). `Tes
 restore drill (§9.3) run that release's binary.
 
 **Release gating is a list of named required checks (R3-2; OPS4-7, MOD4-8, OPS4-6).** Every PR to `main` passes, on
-an up-to-date branch or through a merge queue (rebase merges otherwise put an untested tree on `main`), these required
+GitHub's merge queue (rebase merges otherwise put an untested tree on `main`; D15), these required
 checks:
 
 | Check | What it runs | Trigger |
@@ -131,9 +134,10 @@ checks:
 | `docker-image` | the PR image job of R1 (build, run with a seeded volume, probe), with layer caching | every PR that touches a non-doc file (OPS5-3) |
 | `core-ci` | `make -C core ci` (`fix-check`, core-mode `exclude-check`, coverage ratchet, `replace-check`, `toolchain-check`, `check_core_version.py`, and core's own `errcheck-ratchet`, `interface-width`, `mocks-check`, `pprof-check` and the `core/web` `web-test`, with their scripts under `core/scripts/ci/`, so the gate an export of `core/` runs is whole; MOD5-15) | every PR that changes `core/**`, `go.mod`, `go.sum` or `.github/workflows/core-ci.yml` (one list; 12 SC4(b) cites it; MOD5-15) |
 
-A release then contains only commits that passed. How the list is enforced — a ruleset with no bypass actors and merge
-tooling that never merges with `--admin` past it, or an alternative — is owner question 14 Q-I (K20). Tests are now
-the main safety, so Q-I matters more than before.
+A release then contains only commits that passed. The list is enforced by a ruleset on `main` with **no bypass actors**
+(`enforce_admins: true`) and **GitHub's merge queue**, whose `merge_group` trigger every required workflow carries; merge
+tooling (`/parallel-sweep`, CLAUDE.md's Quick Fix flow) waits for the checks and never merges with `--admin` (D15, 14 Q-I;
+K20). Tests are now the main safety (D11), so nothing bypasses the queue.
 
 **Rollback (D12).** Rollback is an **offline restore plus the previous binary**. What there is to restore depends on
 the release:
@@ -290,8 +294,8 @@ the keyring), every R2 boot of a pre-R2 store runs:
 | 8 | **M8** | The store rewritten into a fresh directory (full compaction, flush, then a Pebble checkpoint or copy) and swapped in through the journaled swap, the old directory deleted, so no file of the live DB directory, WAL, recycled log and MANIFEST included, holds a HEAD row or a raw token (SEC-5). | 05-storage §5S.3.13 |
 
 M7 and M8 land with F3 and run in every build from then on; each later flip that adds a step raises M7's target in the
-same PR, so a `main` refuses a store that a newer `main` migrated, and registers a new M8, whose step ID names the last
-step it compacts after (03 §3.8; IMPL-13). The runner they use, `storage/datamigrate` and `internal/storagemigrate`
+same PR, so a `main` refuses a store that a newer `main` migrated; M8 keeps one fixed ID, `books.rewrite`, and stays
+last (03 §3.8; D15, advisor S2). The runner they use, `storage/datamigrate` and `internal/storagemigrate`
 over `tasks.ForEach`, lands at F2 (§9.4 R2). M7 runs before M2 because a store that
 stops between M2 and a later level step would hold deleted config and identity rows at level 0, which HEAD's
 `make rollback` guard and the R1 binary would both accept (03 §3.8).
@@ -505,7 +509,7 @@ R1 and R2 freezes, §9.1, §9.2.1). Three rules keep the two from colliding; 14 
 | Release | Ships | Migrations | Rollback | Owner |
 |---|---|---|---|---|
 | **R0** | the hotfixes | none | `make rollback` | P14; deploy; smoke (optional) |
-| **R1** | the core runtime, no user-data change | core's `c/storage/` bookkeeping only, behind the first checkpoint | `make rollback` to R0, nothing lost | 14 Q-I; deploy; smoke (optional) |
+| **R1** | the core runtime, no user-data change | core's `c/storage/` bookkeeping only, behind the first checkpoint | `make rollback` to R0, nothing lost | the R1 freeze variable set (D15); deploy; smoke (optional) |
 | **R2** | the foundation PRs F2, then every core-service family, its UI, the shell if ready | M1, M7, M2–M6, M8 (§9.2.3) | `make rollback-restore` to the pre-freeze release, losing every write since the upgrade | finished merges and a clean preflight (D13); off-host archive; deploy and its external steps; dry run and smoke (optional); keep or roll back |
 | **R3** | cleanup and the floor | none; one start hook deletes `.encryption_key` and `library.bleve` | `make rollback` to R2 | keep the off-host `.encryption_key` with any pre-R2 archive; deploy; smoke (optional) |
 
@@ -586,7 +590,7 @@ the deploy and the optional 1-day smoke run. 04 §8 keys the package moves of ea
 | Migrations | None on user data. The first R1 boot writes core's `c/storage/` bookkeeping (the install marker before any other `c/` key, every owner's level stamp at 0), which HEAD and R0 ignore; on a non-empty store it takes the pre-migration checkpoint first (§9.2.3). |
 | Verification | `make ci` with every required check, under strict claims; e2e; the ABS conformance suite; the perimeter's own tests (05-http-api §12: per-owner CSP header goldens, compression and rate classes) and `TestLegacyManifest_RegistersAsMuxPatterns` on the real engine, ABS on and off; `TestNativePrefixesNotRedirected` and `TestCollidingNamespacesStillRedirect`; `TestVersionJSONFields`; the image job, both runs; the two `unit-lifecycle` cells; `TestBootCrashMatrix` and `TestBootCrashMatrix_ABO`; the restore and reset staging tests of 05-backup §5B.3.4 and 05-storage §5S.3.15; `TestR0OpensR1Store` (05-storage: the R0 binary opens a store the R1 binary wrote and reads every row; deleted in R3); `TestCheckpointAutoDeletedAfterSevenDays` over R1's first-boot checkpoint; every row of the classification table below, `genproto-exclude-root` running its workspace probe in a throwaway copy outside the repository, so nothing runs `go work init` in a checkout (CLAUDE.md); `scripts/tests/test_ci_classifier.py`; `scripts/tests/test_deploy_wait_ready.py` (exit 78 included) and `scripts/tests/test_make_rollback.py` on its fake-ssh harness (`make rollback`, and `make rollback-restore` with a checkpoint and with an archive); `check_embed_context.py` passes on HEAD and fails on a fixture that embeds a `docs/` path. The UI steps: `! grep -rq react-router-dom web/package.json web/src web/tests web/vite.config.ts`; vitest and Playwright green; the image job green with `core/web` present; a dry-run RC build through `prerelease.yml` green, with `git status --porcelain` empty after it. |
 | Rollback | `make rollback` to R0, which loses nothing: R1 changes no user data, and R0 ignores core's `c/storage/` rows (`TestR0OpensR1Store`). It is refused while a swap is in flight (§9.2.1). An offline restore of the R1 checkpoint with R0 also works and discards the writes since. |
-| Owner | Decisions before R1's first core PR: how the required checks are enforced (14 Q-I); the module name is decided (D13, `github.com/falkcorp/mediacore`); whether to keep the R1 freeze (§9.2.1), which the R1 series' first PR turns on and R1's release turns off. P12 before the deploy, because the first R1 boot takes a checkpoint. The deploy. The optional smoke run. |
+| Owner | Decisions before R1's first core PR are recorded (D15): the required checks are enforced by a no-bypass ruleset with the merge queue (14 Q-I), applied before R1's first core PR merges; the module name is decided (D13, `github.com/falkcorp/mediacore`); the R1 freeze is kept (§9.2.1): the owner sets `vars.RELEASE_FREEZE` to `R1` before R1's first core PR merges and clears it with R1's release. P12 before the deploy, because the first R1 boot takes a checkpoint. The deploy. The optional smoke run. |
 
 **R1's CI classification (MOD-8, MOD4-14).** Root `make ci` (`Makefile:785`) and the CI jobs from R1 on:
 
@@ -640,7 +644,7 @@ intermediate `main` boots and passes e2e; the release freeze starts before F3 me
 | **F7** | integrations, AI jobs, provider gates, library roots, notify | M6 | `internal/plugin` deleted; webhook and mail instances native, deliveries in core's webhook format; the AI series renamed with their dashboards and alerts; `integrations/providerhttp` and `integrations/ai` extend the registrations of `core.integrations.release-holds` and `core.ai.batch-poll` |
 | **F8** | backup, the updater move, health, the kernel `/metrics` mount | — | the kernel `/metrics` mount replacing the gin route, with no metric rename (XFILE-1); `health/diagnostics` extends the registration of `core.diagnostics.export`; HEAD's `/api/health` and `/api/v1/health` deleted, every caller of them switched to `/health`, which becomes Basic-exempt in their place (`TestBasicGate_ExemptSetGolden`, 05-http-api §12; 05-health) |
 | **F9** | the shell, if ready (otherwise R3) | — | 07 §7.19 steps 4–5 in one release; gin's SPA serving deleted |
-| — | the last PR of R2 | — | the runbook and the release note; the freeze ends with the release |
+| — | the last PR of R2 | — | the runbook and the release note; the owner clears `vars.RELEASE_FREEZE` with the release (D15) |
 
 ### R3 — Cleanup and the upgrade floor
 
@@ -855,7 +859,7 @@ rollback and cutover properties this file sets:
 | O3 | `.encryption_key`, the gap-fill `config.yaml` and, from R2, `secrets.keyring` live outside the archived DB directory (`settings.go:44-52`, `backup.go:283-428`): an off-host copy must carry them, and a restore on a new host needs them | 05-config §2.4, 05-backup; the runbook |
 | O4 | Env grammar and prefix (`ABO_`) | 05-config §1.3.6 |
 | O8 | Pilot cost before any books route group is rewritten to native `httpapi` (SIMP-2 item 4): measure one group (for example playlists, 10 routes) | owner, when a group is first rewritten |
-| O10 | How the required checks are enforced (R3-2) | owner (14 Q-I) |
+| O10 | How the required checks are enforced (R3-2) | resolved by D15: a no-bypass ruleset with the merge queue (14 Q-I) |
 | O11 | The per-PR CI-time budget (35 min) and the target move-window length (two working days) of §9.2.10 | owner |
 | O12 | The module name, which blocked R1's first core PR | resolved by D13: `github.com/falkcorp/mediacore` (14 Q-H) |
 
@@ -1367,3 +1371,5 @@ Round 16 (2026-11-05): plan-gap fixes G5 (§9.4 R0 content: `auto_update_paused`
 Round 16 (2026-11-05): review fixes X1 (§9.4 F2 row and the §9.2 CI table: `archtest/tasklint` lands at F2, not F5, with its exemption list, which F5 requires empty).
 
 Round 16 (2026-11-05): review fixes X4 (§9.4 R3 content: `UpgradeFloor{InstallFirst: <R2 tag>}`).
+
+Owner answers (2026-11-05): D15 — §9.2.1: the required checks enforced by a no-bypass ruleset with the merge queue (Q-I); both freezes are the repository variable `vars.RELEASE_FREEZE`, toggled by the owner and logged in the tracking issue, the R1 freeze kept (advisor S3, S5); §9.2.3: M8 keeps one fixed ID (advisor S2); §9.4 R1 Owner and the R2 flip table; §9.12 O10 resolved.

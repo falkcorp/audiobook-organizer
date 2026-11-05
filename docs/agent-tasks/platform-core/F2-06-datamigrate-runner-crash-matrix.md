@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-06-datamigrate-runner-crash-matrix.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.2.0 -->
 <!-- guid: c1a6adbc-49de-4dd5-964f-59cfaafb845a -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -103,8 +103,8 @@ Runner rules (each is tested):
    never reused; `Cutover` requires `Source` inside retired claims (as `storage` reports them).
 2. **State** `c/storage/dm/<id>` ∈ {pending, running, verifying, done, failed, held}; `done` is never re-entered. A
    `done` record whose ID this build does not register is history, not an error: the runner neither runs it nor fails
-   on it. Each R2 flip replaces the previous M8 with a newly named one (F3-04's "Flip mechanism"), so a store
-   migrated by an earlier `main` holds such a record.
+   on it. (M8 keeps one fixed ID through R2, D15, so no R2 flip leaves such a record; the rule covers a step a
+   later release retires.)
 3. **Exact resume (DATA-12):** at first start compute the shard plan `{n, boundaries}` from `Parallelism` and the key
    distribution and persist it at `c/storage/dm/<id>/plan` before any shard runs; every resume reuses that plan,
    whatever `runtime.NumCPU()` is now. Shard cursor `c/storage/dm/<id>/shard/<n>` (last key processed) is written in

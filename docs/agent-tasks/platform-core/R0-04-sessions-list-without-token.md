@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R0-04-sessions-list-without-token.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 648e9591-d8d7-4347-a426-28fd4281ad1e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -164,7 +164,7 @@ grep -c 'func sessionHandle' internal/server/handlers/auth.go                   
 make ci; echo "exit $?"                                                             # expect exit 0
 ```
 
-The e2e suite and every required check of 09 §9.2.1 are green on the PR on an up-to-date branch.
+The e2e suite and every required check of 09 §9.2.1 are green on the PR and in the merge queue.
 
 ## Out of scope
 

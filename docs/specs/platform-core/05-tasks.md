@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.13.8 -->
+<!-- version: 1.14.0 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -74,7 +74,8 @@ fingerprint remote-worker *protocol* (stays in `books`, see 5T.3.9).
 | 38 scheduler `TaskDefinition`s (36 enqueue a def; `transcode` enqueues nothing; `batch_poller` calls a func) | `raw/06` §6.1; `internal/scheduler/tasks.go:529,1554` |
 | 24 repairs fixers registered by the maintenance plugin | `internal/plugins/maintenance/plugin.go:53-60` (24 `repairsReg.Register` calls) |
 | v2 `OperationDef.Schedule *string` is never evaluated as a timer (15 defs carry one) | `internal/operations/registry/types.go:171`; `internal/scheduler/tasks.go:1046-1050`; `raw/06` §6.2 |
-| `deluge.protected-paths-sync` declares `*/30 * * * *` and therefore never runs unattended | `raw/06` §6.1 note (d) |
+| 14 of those 15 defs run on a schedule anyway: a scheduler `TaskDefinition` fires each of them, so only their strings are dead; `deluge.protected-paths-sync` is the one no `TaskDefinition` fires | `internal/scheduler/maintenance.go:154` (`taskV2DefIDs`) @498cbe277 |
+| `deluge.protected-paths-sync` declares `*/30 * * * *` and therefore never runs unattended; its cache refreshes itself on read once older than its TTL | `raw/06` §6.1 note (d); `internal/deluge/protected_paths.go:20` |
 | `OperationDef.Cancellable` is persisted but never read by `Cancel` | `types.go:52`; only use `registry.go:900` |
 | `RunItems` zero `Concurrency` is sequential (clamp) | `internal/operations/registry/run_items.go:155-157` |
 | `RunItems` `Label(i,total)` runs inside workers; the pre-work call is unlocked | `run_items.go:45-54,268`; post-work under `progressMu` `run_items.go:281-285` |
@@ -768,9 +769,11 @@ heartbeat it is (COR2-5).
 
 **What replaces v2 cron strings.** They are dead metadata (5T.2). Core has no string-cron field on a
 definition; a cron string exists only as an operator-set `ScheduleConfig.Cron`, which is evaluated.
-Conversion (5T.8.2 group T7) turns each of the 15 declared crons into **no schedule** and lists it
-in the R2 release note, because none of them ever ran unattended: turning any on is a behaviour
-change the owner decides per def (open item 1). The 38 `TaskDefinition`s become
+Conversion (5T.8.2 group T7) deletes all 15 declared strings and lists them in the R2 release note
+(D15, 14 Q-C). 14 of the 15 defs keep running unchanged, because a `TaskDefinition` already fires each
+of them and that definition becomes their `ScheduleFromConfig` below; `deluge.protected-paths-sync`,
+the one def no `TaskDefinition` fires, stays a manual task with no schedule (its cache refreshes on read).
+The 38 `TaskDefinition`s become
 `ScheduleFromConfig` on their target def, with today's interval and enable flag as the key's
 default; `RunOnStart` → `.OnStart()`; `IsEnabled` → the key's `enabled` (or `.When` for gates that
 are not schedule settings); window membership (`maintenanceOrder`, `internal/scheduler/scheduler.go:197-246`)
@@ -1721,7 +1724,7 @@ summary row. The groups are disjoint by definition and sum to HEAD's 233 (34 + 2
 | T4 | the ops that become **core kinds** (table below), each in its owner's package: 4 maintenance-plugin defs and 2 server defs; the conversions of `core.storage.compact` and `core.storage.census` create `core/internal/storagetasks`, dark (the kernel registers its kinds from F5) | 6 defs → 6 core kinds, plus the new `core.tasks.prune` | the owner file's tests |
 | T5 | service-registry plugin defs, per plugin: acoustid 8, dedup 32, metafetch 3, itunes 1, Deluge 4 (through 05-download's client adapter) | 48 | the native shells do not import `pkg/plugin/sdk` (the HEAD shells keep it until F5) |
 | T6 | the maintenance plugin's defs not in T3 or T4, in sub-batches of ≤ 15 by file group | 98 | — |
-| T7 | the server-package defs not in T4 (`internal/server/*_op*.go`) and `scheduler.metadata-upgrade`; the 38 `TaskDefinition`s → `ScheduleFromConfig` declarations on their kinds (5T.3.8); the 15 v2 crons → none (listed in the release note) | 45 + 38 | `TestScheduleParity_AllDefinitions` |
+| T7 | the server-package defs not in T4 (`internal/server/*_op*.go`) and `scheduler.metadata-upgrade`; the 38 `TaskDefinition`s → `ScheduleFromConfig` declarations on their kinds (5T.3.8); the 15 v2 `Schedule` strings deleted (listed in the release note), 14 of their defs scheduled through their `TaskDefinition`'s declaration, `deluge.protected-paths-sync` manual (D15) | 45 + 38 | `TestScheduleParity_AllDefinitions` |
 | **F5 flip** (PC-12-08, with the schedule conversion PC-13-14) | makes ABO's first `Registrar.Tasks` call, so ABO's kernel starts core's executor and scheduler and registers every converted definition on them, and the three core kinds of the minimal owner registrations below; moves every caller of `pkg/plugin/sdk` to `core/tasks` and `module.Registrar` (the package is deleted in R3, 5T.8.1); requires `tasklint`'s exemption list to be empty (5T.8.4); adds books' tasks cutover step M4 with the kind-rename map (5T.8.3); deletes HEAD's engine (5T.8.1: `registry`, `opscatalog`, `maintenance`, `scheduler`, `childop`, `opmode`, `opsmetrics`, the v1 checkpoint helpers, the handlers and HEAD routes of 5T.3.10; not `opsgen`, `ops.ts` or `internal/operations/state`, which go together in R3, 5T.8.1); moves the SPA's Activity page and the first-party callers to the native routes; updates the dashboards and rules whose `def_id` values or series change (5T.11) | every definition | `make ci` and e2e; the parity suites (resume, cancel, shutdown, schedules); the cutover rows of 5T.9; `TestKindRenameMapCoversLedger`; 05-metrics' dashboard-reference test; `tasklint` with an empty exemption list (5T.8.4) |
 
 **HEAD's generic ops: which become core kinds (resolves the T4 gap; SI-21).** `raw/06` §6 classes 24 of
@@ -2115,8 +2118,8 @@ gin's included; no tasks route changes that.
 
 ## 5T.12 Open items
 
-1. Owner decision per def for the 15 never-evaluated v2 crons (notably `deluge.protected-paths-sync`
-   `*/30`): enable as a real schedule, or delete the declaration. Default in this spec: delete.
+1. **Closed (D15, 2026-11-05).** The 15 never-evaluated v2 cron strings are deleted; 14 of their defs keep
+   the cadence of the `TaskDefinition` that fires them, and `deluge.protected-paths-sync` stays manual (5T.3.8).
 2. Should consistency-sensitive readers (reports) be gated against writers of the same resource?
    Today they are not.
 3. `aijobs` (2 durable OpenAI batch types): task shape or separate durable type? Owned by 05-ai.
@@ -2429,3 +2432,5 @@ Round 16 (2026-11-05): plan-gap fixes G1 (5T.4 step 1 and the Core group row: `R
 Round 16 (2026-11-05): review fixes X1 (5T.8.4, the Core group and F5 rows, conversion rule 3: `tasklint` lands at F2 with its exemption list holding every not-yet-converted books task package; each dark conversion PR removes its packages, whose shared bodies reach writer and stores only through their shells; F5 requires the list empty), X2 (5T.4 step 1, Core group row: `tasks` starts when any kind is registered, a module's or core's own, or `c/tasks/` holds runs; core's own kinds register from their owner's flip; `TestNativeStores_RoundTrip` boots with hello), X4 (T4: the storage-kind conversions create `core/internal/storagetasks` dark; T5's gate names the native shells; rule 1 writes `tasks.ReadOnly()`).
 
 Round 16 (2026-11-05): review fixes X4 (5T.8.1 `internal/database` row: `UpgradeFloor{InstallFirst: <R2 tag>}`).
+
+Owner answers (2026-11-05): D15 / 14 Q-C — 5T.2 gains the fact that a `TaskDefinition` fires 14 of the 15 defs carrying a dead `Schedule` string and the protected-path cache's TTL; 5T.3.8 "What replaces v2 cron strings" and the T7 row: the strings are deleted, 14 defs keep their real cadence, `deluge.protected-paths-sync` stays manual; 5T.12 item 1 closed.

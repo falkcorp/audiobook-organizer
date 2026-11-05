@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 85a66690-09c6-401b-8020-a2ec1acc9b74 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -70,9 +70,31 @@ OAuth callback and start addresses stay as they are, so identity providers and A
 ## Review
 
 The revised spec went through three review rounds (13–15). The blocker count went from 2 to 1 to 0, and every
-finding was resolved. Details: `reviews/spec-rounds-13-15.md`. Still open for the owner: three questions in
-14 §14.3 (the never-run cron jobs, the split-readiness thresholds, and how release gating is enforced).
+finding was resolved. Details: `reviews/spec-rounds-13-15.md`. The implementation plan and its task briefs then went
+through three more review rounds and an independent advisor review, and merged.
+
+## Owner decisions recorded 2026-11-05
+
+Every open question is now answered (decision D15 in the spec's decision record):
+
+- **Merging is gated.** A rule on `main` requires the test checks to pass before anything merges, nobody can skip
+  it (not even an admin), and GitHub's merge queue tests waiting changes together so a busy day does not mean hours
+  of re-testing. Automated merge tooling never forces a merge past a failing check. One step is left for you: turn
+  that rule and the merge queue on before the first R1 change merges.
+- **R1 ships as one release.** Automatic production releases pause while R1 is built, as they will for R2.
+- **Release freezes are a switch you flip.** Instead of a code change for every freeze start and end, the freeze is a
+  repository setting you turn on after cutting R0, off after R1, on again before R2's switch-overs and off after R2.
+  That removes one pull request and the freeze edits from three others; each flip is noted in the tracking issue
+  (issue #4382).
+- **Old schedule labels are deleted.** 15 background jobs carried a schedule string that the app never read. 14 of
+  them already run on a real schedule and keep it; the Deluge path sync stays manual, because its cache refreshes
+  itself every few minutes. Nothing about when your jobs run changes.
+- **One unneeded test is dropped.** The plan no longer tests upgrading from one in-progress R2 build to the next:
+  production only ever upgrades from the release before R2 to the finished R2, and that path is still fully tested.
+- **The split-readiness thresholds are accepted as proposed**, and the production check for an empty Basic
+  password found nothing to fix, so the first security fix can ship.
 
 ## Next
 
-Rebuild the implementation plan and the AI task briefs for this design, then review them.
+You apply the `main` rule and the merge queue. Work then starts with the R0 hotfixes (wave 1). The plan now has 133
+tasks; its critical path is still about 82 working days.

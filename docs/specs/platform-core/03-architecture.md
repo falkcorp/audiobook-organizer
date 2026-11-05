@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/03-architecture.md -->
-<!-- version: 1.15.11 -->
+<!-- version: 1.16.0 -->
 <!-- guid: 8af6d935-7143-4d06-8562-b04a18504d81 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -726,15 +726,17 @@ This section is the one definition of the release keys **R0–R3** that every sp
 release's content table (§9.4) and the per-subsystem flip details; the owner files own their migration steps.
 
 **How work lands (D11).** Trunk-based: code lands **dark** on `main`, and each subsystem is wired in **one flip
-PR**. Every merge passes `make ci` and the e2e suite; the named required checks stay (14 Q-I). There are no soaks,
+PR**. Every merge passes `make ci` and the e2e suite; the named required checks are enforced by a no-bypass ruleset
+and the merge queue (D15, 14 Q-I). There are no soaks,
 no soak ledger, no stage marker and no release-gating commit trailer; an optional 1-day smoke run after a deploy
 is the owner's choice. Feature work keeps its move windows (14 K24). From the first R2 flip (F3) until R2 ships,
 automatic promotion and auto-update are paused, so R2 reaches production as **one** cutover release (D12 (a)). A lead
-extension of D12 (a), which the owner may override (IMPL-9), pauses promotion the same way from R1's first core
+extension of D12 (a) (IMPL-9), which the owner kept (D15), pauses promotion the same way from R1's first core
 PR until R1 ships, so R1 and R2 each reach production as exactly one release. **The pre-freeze release** is the last
 production release before F3 merges; it is also the `.prev` binary once R2 is deployed. A hotfix during the R2 freeze
 is cut from it, the restore drill boots its binary, and `TestCutoverRefusedByOlderBuilds` runs it (09 §9.2.1).
-D12's four owner answers are cited as D12 (a)–(d) everywhere, so they never clash with the flip labels F2–F9 below.
+Both freezes are the repository variable `vars.RELEASE_FREEZE`, which the owner sets and clears and `prerelease.yml`
+reads at run time (D15; 09 §9.2.1). D12's four owner answers are cited as D12 (a)–(d) everywhere, so they never clash with the flip labels F2–F9 below.
 
 **Releases.**
 
@@ -776,8 +778,10 @@ registrations when their owners land (05-tasks §5T.8.2).
 
 M7 and M8 land with F3 and run in every build from then on. Each later flip that adds a step raises M7's target
 levels in the same PR, so every build stamps exactly the steps it has applied, and an older `main` refuses a store
-that a newer `main` migrated. M8's step ID names the last step it compacts after, so a flip that adds a step also
-registers a new M8 and a store migrated by an earlier `main` is compacted again (05-storage §5S.3.13; IMPL-13).
+that a newer `main` migrated. M8 has **one fixed step ID**, registered with F3 and kept last as later flips add steps,
+so a flip registers no new M8 (05-storage §5S.3.13; D15, advisor S2). A store migrated by a mid-R2 `main` is not an upgrade
+source any install reaches (the R2 freeze, D12 (a)), so no test upgrades from the previous `main`; a developer store
+between flips is reset from its checkpoint.
 
 **Migration steps (R2, `BootBlocking`, resumable).** They run in the order of this table: **M1, M7, M2, M3, M4,
 M5, M6, M8**. M7 runs before any family row is deleted, so a boot that stops between two steps leaves a store that
@@ -1199,3 +1203,5 @@ Round 15 (2026-11-05): W4 (§3.7 boot diagram and the M3 row: the cutover has st
 Round 16 (2026-11-05): plan-gap fixes G1 (§3.8 flip table: F2 lands `Registrar.Tasks` with `tasks`, whose executor, scheduler and `taskhttp` the kernel starts only when an enabled module registered a kind, so `hello` runs `hello.count` from F2 and ABO starts nothing before F5; F5 makes ABO's first `Registrar.Tasks` call), G6 (§3.3 `internal/...` row: `internal/storagetasks`, L4, holds the storage kinds and their schedule key), G10 (§3.8 F5 row: `pkg/plugin/sdk`'s callers move at F5; the package is deleted in R3), G11 (§3.5.1: the new-path count counts root paths only; Go sub-packages under `internal/books/cutover/` such as `m3/` and `m4legacy/` are allowed), G17 (§3.5.1 item 4: the `unitlifecycle` tag of the fake-migration hook, coined here, vetted by core's `ci`).
 
 Round 16 (2026-11-05): review fixes X1 (§3.3 `archtest` row and §3.8 F2 row: `archtest/tasklint` lands at F2 and runs in CI from then, its exemption list required empty by F5), X2 (§3.8 F2 row: `tasks` starts when any kind is registered, a module's or core's own, or `c/tasks/` holds runs; ABO meets neither before F5), X4 (§3.3 `internal/...` row: `storagetasks` created dark by T4; §3.5.1 item 4: the fake-migration hook runs one-minute steps, each extending the start before it begins; §3.7 and the R3 row: `UpgradeFloor{InstallFirst: <R2 tag>}`, install the R2 release, by its tag, first).
+
+Owner answers (2026-11-05): D15 — §3.8: the required checks enforced by a no-bypass ruleset with the merge queue; the R1 freeze kept by the owner; both freezes are `vars.RELEASE_FREEZE`; M8 has one fixed ID and no per-flip upgrade test (advisor S2).

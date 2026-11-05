@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-18-tasks-flip-engine-deleted.md -->
-<!-- version: 1.1.7 -->
+<!-- version: 1.2.0 -->
 <!-- guid: ec04b9ab-cec9-4e59-bc6b-19f091354077 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -45,8 +45,8 @@ pruner of the system log and is read through its native query route (F5-19's, mo
 1. 09 §9.4 R2 flips table (F5 row), §9.2.1 (merge gate, required checks, "one atomic PR"), §9.2.3 (step order),
    §9.6 rows 2, 13, 17, §9.9.
 2. 03 §3.8 (the F5 row; "each later flip that adds a step raises M7's target in the same PR, … and registers a new
-   M8"), and 05-storage §5S.3.13 (M7, M8 and their step IDs). The way a flip adds level steps (M7) and replaces M8 is
-   fixed in F3-04 and F3-06 (order M2); commit 3 repeats it.
+   M8"), and 05-storage §5S.3.13 (M7, M8 and their step IDs). The way a flip adds level steps (M7) and leaves M8 last
+   and unchanged (D15, advisor S2) is fixed in F3-04 and F3-06 (order M2); commit 3 repeats it.
 3. 05-tasks §5T.8.1 (every row: what each HEAD package becomes), §5T.8.2 (F5 flip row; the three late-owner kinds;
    the kind-rename map), §5T.3.10 (the route table: every "Replaces" route deleted; books' domain routes under
    `/api/v1/operations` stay), §5T.11 (metrics), §5T.9 (the flip's tests).
@@ -104,9 +104,8 @@ nothing outside this list (STOP and report if a commit needs another path).
 | modify | `internal/books/store/` (`storetest` takes the book-typed fakes; the run-row store files leave for `m4legacy`) |
 | create | `internal/books/cutover/m4legacy/` (commit 3) |
 | modify | `internal/books/module.go`, `internal/books/services.go` (commit 2) |
-| modify | `internal/books/cutover/steps.go` (commit 3: M4 and M5, this flip's level step, the new M8) |
-| modify | `internal/books/cutover/stepids.go` (commit 3: add this flip's level constant and level-step ID; replace the M8 ID) |
-| modify | `internal/books/cutover_suite_test.go` (this flip's `TestCutoverFlipUpgrade` cell, F2-15's harness) |
+| modify | `internal/books/cutover/steps.go` (commit 3: M4 and M5 and this flip's level step, before M8) |
+| modify | `internal/books/cutover/stepids.go` (commit 3: add this flip's level constant and level-step ID) |
 | create | `internal/books/schedules_registered_test.go` (name coined here; commit 2: `TestF5_ScheduledKindsRegistered`) |
 | modify | `core/internal/loghttp/` test files (commit 5: delete the `t.Skip("needs stage 13: F4-08")` of F5-19's permission, guard and 401 cells; no other change to the package) |
 | delete | `internal/books/testdata/tasklint_exempt.d/F5-18.txt`; modify `internal/books/tasklint_test.go` (commit 9) |
@@ -148,20 +147,18 @@ nothing outside this list (STOP and report if a commit needs another path).
    nowhere earlier (05-metrics §13 item 1). This adds a core metrics scope: add its `testdata/series.golden`,
    asserted by `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5).
 3. **Cutover steps.** In `internal/books/cutover/stepids.go`, add this flip's books level constant and level-step ID
-   (and core's, when core's level changes) beside F3-06's and F4-08's, and replace the M8 ID; never edit an earlier
-   flip's constant or ID (F3-06). Register M4 and M5 in `internal/books/cutover/steps.go` in 03 §3.8's order (after
+   (and core's, when core's level changes) beside F3-06's and F4-08's; never edit an earlier
+   flip's constant or ID, or the M8 ID (F3-06). Register M4 and M5 in `internal/books/cutover/steps.go` in 03 §3.8's order (after
    M3, before M6 and M8) and pass `Importers.Tasks` and `Importers.Log`, plus this flip's books level constant as
    `RaisesLevel` and its new books level step as the `After` ref: F5-16's and F5-15's constructors take both from the
    caller. Then apply the per-flip level mechanism (order M2,
    stated in F3-04 and F3-06): **add** a new level step in `steps.go` for each owner whose level this flip raises
    (books' `books.level-<n>`; core's `core.level-<n>` when core's level changes), named for the raised target level,
    at that owner's next contiguous version, numbered immediately before M4 (which runs `After` it); the level steps
-   F3-07 and F4-08 registered stay registered unchanged (05-storage §5S.3.5). **Replace** the M8 entry with a newly
-   named one whose step ID names M5 as the last step it compacts after, so exactly one M8 is registered and it runs
-   last; and bump the raised owners' declared `Spec.Level` in the same commit. F3-06's test checks the registered
-   list (levels raised to the build's target before the first step of each flip, versions contiguous per owner, one
-   M8, last). On a store that F4-08's `main` migrated, the earlier level steps are applied and the new M8 ignores the
-   previous M8's `done` record and `applied` journal (03 §3.8; 05-storage §5S.3.13; 09 §9.2.3). Move HEAD's run-row store files (under
+   F3-07 and F4-08 registered stay registered unchanged (05-storage §5S.3.5). M8 stays as F3-07 registered it, last,
+   and is not renamed or replaced (F3-04 rule 3; D15); bump the raised owners' declared `Spec.Level` in the same
+   commit. F3-06's test checks the registered list (levels raised to the build's target before the first step of each
+   flip, versions contiguous per owner, one M8, last; 03 §3.8; 05-storage §5S.3.13; 09 §9.2.3). Move HEAD's run-row store files (under
    `internal/books/store/` since R1-26's rename: `pebble_store_ops_v2.go`, `pebble_store_ops_v3*.go`, `pebble_store_op_rows.go`, `ReconcileOpsV3WithV2`) into
    `internal/books/cutover/m4legacy/` and repoint M4 (05-tasks §5T.8.1, `internal/database` ops storage row;
    04 key `internal/database → internal/books/cutover`). Regenerate the kind-rename map at this commit.
@@ -246,7 +243,6 @@ core.
 | No series read by a dashboard or rule is unserved; the rules' tests pass | `TestDeployReferencedSeriesServed`; `promtool test rules` |
 | No duplicate family on the scrape (the executor's `ops.*` vs. `opsmetrics`) | `TestABOMetricsGatherNoDuplicate` |
 | The `ops` scope's series are the reviewed set (family, type, label set) | `metricstest.AssertSeries` over the scope's `testdata/series.golden` (05-metrics §12) |
-| A store migrated by F4-08's `main` and booted by this `main` has its levels raised before M4, runs exactly one M8, and F4-08's binary then exits 78 on it | `TestCutoverFlipUpgrade`: this flip's cell in F2-15's cutover-suite harness, `internal/books/cutover_suite_test.go` (order M2; the cell shape is F3-04's) |
 | The registered list raises the levels to the build's target before the first step of each flip, its versions are contiguous per owner, and it holds exactly one M8, last | F3-06's registered-list test, green on this build |
 | A module whose `TaskStarts` names a kind of a disabled module still boots, and its start of that kind is refused at runtime (COR3-10; `TaskStarts` lands here, 06 §6.4.10 F5 row) | `TestTaskStarts_DisabledTargetModuleBootsAndRefusesAtRuntime` (05-tasks §5T.9), owned by this row |
 | No gin route remains at a path this flip's native routes replace, and no route lies under `/api/v3/` | extend `TestCoreRoutesReplaceGin` (F4-08's) with the F5 cell (05-http-api §12) |
@@ -261,7 +257,7 @@ core.
 
 ```bash
 go build ./... && go vet ./...                                                                 # exit 0
-go test ./internal/books/... -race -count=1 -run 'TestKindRenameMapCoversLedger|TestSecondModuleNoAudiobookEdit|TestParity_ResumeCancelShutdown|TestScheduleParity_AllDefinitions|TestCutover_|TestCutoverFlipUpgrade' -v | grep -c '^--- FAIL'   # 0
+go test ./internal/books/... -race -count=1 -run 'TestKindRenameMapCoversLedger|TestSecondModuleNoAudiobookEdit|TestParity_ResumeCancelShutdown|TestScheduleParity_AllDefinitions|TestCutover_' -v | grep -c '^--- FAIL'   # 0
 for d in internal/operations/registry internal/operations/childop internal/operations/opmode internal/opsmetrics \
          internal/scheduler internal/opscatalog internal/maintenance/job.go internal/walkresume pkg/ops \
          internal/server/handlers/opsv3 internal/logger/retention.go internal/logger/mocks; do test -e $d && echo "LEFT $d"; done   # no output

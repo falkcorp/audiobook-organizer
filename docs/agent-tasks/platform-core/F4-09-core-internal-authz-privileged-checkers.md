@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-09-core-internal-authz-privileged-checkers.md -->
-<!-- version: 1.0.2 -->
+<!-- version: 1.0.3 -->
 <!-- guid: 99822a5a-94d2-4caa-8a8b-67cdcf901790 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -233,7 +233,7 @@ Revert the PR. Nothing calls `authz` in a running app before F4-08.
   no header.
 - Conventional commits ending with `Co-Authored-By: Claude <noreply@anthropic.com>`. 09 names no release or flip
   trailer: add none.
-- `gh pr merge <n> --rebase` once every required check is green on an up-to-date branch; never squash, never
+- `gh pr merge <n> --rebase` once every required check is green on the PR and in the merge queue; never squash, never
   `--admin`.
 
 ```

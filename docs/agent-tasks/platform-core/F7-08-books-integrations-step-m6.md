@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-08-books-integrations-step-m6.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 32e12309-4e58-4518-9d85-0a690231a661 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -121,7 +121,7 @@ left it) lacks a family M6 drains.
 6. Register crash-point labels for every chunk and extend `TestCutoverCrashAtEveryChunk` and
    `TestBootCrashMatrix_ABO` with M6's cells (09 §9.3: a boot writer extends the matrix in its own PR).
 7. Leave `internal/books/cutover/steps.go` and `internal/books/cutover/stepids.go` untouched (F7-09 registers M6, adds a
-   level step, which raises M7's target (03 §3.8), and replaces the M8 entry). Headers, fragment.
+   level step, which raises M7's target (03 §3.8); M8 stays as registered, last). Headers, fragment.
 
 ## Code contract
 
@@ -201,7 +201,7 @@ make -C core ci
 
 ## Out of scope
 
-- Registering M6, adding a level step (it raises M7's target) and replacing the M8 entry with a newly named one, and
+- Registering M6, adding a level step (it raises M7's target; M8 is untouched, D15), and
   the level constant and IDs in `stepids.go` (F7-09; the mechanism is order M2's, in F3-04 and F3-06).
 - The full `TestBooksIndexRebuiltAtCutover` oracle: the rebuild at the native path and the search answers (F7-09).
 - Wiring the subsystems and deleting HEAD's code (F7-09).

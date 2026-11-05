@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-10-httpapi-corefixedgroup-exact-patterns.md -->
-<!-- version: 1.0.2 -->
+<!-- version: 1.0.3 -->
 <!-- guid: 0398de9d-2bb5-4cdc-bd80-084cd51c0a37 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -167,7 +167,7 @@ Revert the PR. No app registers a fixed-group route before F4-05 and F4-08.
   guid. `changelog.d/` fragments carry no header.
 - Conventional commits ending with `Co-Authored-By: Claude <noreply@anthropic.com>`. 09 names no release or flip
   trailer: add none.
-- `gh pr merge <n> --rebase` once every required check is green on an up-to-date branch; never squash, never
+- `gh pr merge <n> --rebase` once every required check is green on the PR and in the merge queue; never squash, never
   `--admin`.
 
 ```

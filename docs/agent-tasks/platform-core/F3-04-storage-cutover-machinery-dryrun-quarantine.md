@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-04-storage-cutover-machinery-dryrun-quarantine.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.2.1 -->
 <!-- guid: e1287955-3c4d-4b21-b3f5-bebfca0452a8 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -54,13 +54,14 @@ states the **flip mechanism** below, the one rule every R2 flip follows for M7 a
 ## Flip mechanism (order M2, M3; 03 §3.8; 05-storage §5S.3.5, §5S.3.7, §5S.3.13)
 
 03 §3.8: "Each later flip that adds a step raises M7's target levels in the same PR, so every build stamps exactly the
-steps it has applied, and an older `main` refuses a store that a newer `main` migrated. M8's step ID names the last step
-it compacts after, so a flip that adds a step also registers a new M8." The plan implements that one way:
+steps it has applied, and an older `main` refuses a store that a newer `main` migrated." D15 (advisor S2) drops the
+per-flip M8 replacement and its upgrade test: only the final R2 `main` ever migrates a production store (the R2
+freeze and the paused auto-update, D12 (a)), so M8 is registered once and stays last. The plan implements that one way:
 
 1. **IDs.** M7 is made of **level steps**: `Breaking` versioned steps with no writes of their own, whose names encode
    the target level: books' `books.level-<n>` and core's `core.level-<n>` (names coined here; the spec names neither).
-   F3-07 registers the first one of each owner. M8's ID names the step it compacts after:
-   `books.rewrite-after-<step name>` (05-storage §5S.3.13). F3-06 keeps books' IDs in `stepids.go`.
+   F3-07 registers the first one of each owner. M8 has **one** fixed ID for all of R2, `books.rewrite`, which F3-06
+   defines in `stepids.go` beside books' other IDs (05-storage §5S.3.13; D15).
 2. **M7: each flip adds level steps, never removes one.** Versioned steps are numbered 1..n, contiguous per owner, and
    recorded by version number (§5S.3.5 `Migration.Version`; `c/storage/ks/<owner>/applied/<v>`), so a flip must not
    remove an earlier level step. Each flip that adds a cutover step (F3-07 for M2, then F4-08, F5-18, F7-09) also adds
@@ -71,15 +72,13 @@ it compacts after, so a flip that adds a step also registers a new M8." The plan
    writes only stamps, so several in the R2 build are cheap. Each cutover step's `RaisesLevel` equals the books level
    of the level step it runs after (§5S.3.13 "Steps M2–M6": its own stamp is a no-op), read from one constant per
    level; a flip adds its own constant and never edits an earlier flip's.
-3. **M8: each flip replaces it.** The flip registers a new M8 named for its new step and removes the previous one, so
-   exactly one M8 is registered and it runs last. The previous M8's `done` record in `c/storage/dm/` is ignored by the
-   runner (F2-06 rule 2), and its `applied` `KindRewrite` journal is ignored by the new M8 (§5S.3.13 "M8: the
-   rewrite"). So a store migrated by the previous flip's `main` has its levels raised before the new step runs, and is
-   rewritten exactly once more after it (IMPL-13). No runner change: versions stay contiguous (R1-20).
-4. **Proof per flip.** Each flip adds one cell to F2-15's `TestCutoverFlipUpgrade` table (levels raised to the build's
-   target before the flip's first step, exactly one M8, the previous `main`'s binary exits 78), and F3-06's list check
-   runs over the registered list: the levels are raised to the build's target before the first step of each flip,
-   versions are contiguous per owner, and exactly one M8 is registered, last.
+3. **M8: registered once, never replaced.** F3-07 registers M8 last in the list. A later flip inserts its own steps
+   (and their level steps) before M8 and never renames, replaces or removes it, so exactly one M8 is registered and it
+   runs last over everything the final R2 build migrates. No runner change: versions stay contiguous (R1-20). A
+   developer store migrated by a mid-R2 `main` is not upgraded forward; it is reset from its checkpoint.
+4. **Proof per flip.** F3-06's list check runs over the registered list on every flip: the levels are raised to the
+   build's target before the first step of each flip, versions are contiguous per owner, and exactly one M8 is
+   registered, last. No flip builds or boots a previous `main` (F2-15 rule 9).
 
 ## Spec
 
@@ -182,8 +181,8 @@ ls core/storage/level_step.go core/storage/quarantine.go core/storage/preflight.
    `storage.ErrRewriteSwappedBack`, exit 78, nothing staged. A swap-back moves no checkpoint and starts no clock.
    Free space (§5S.3.12): a boot whose list holds M8 adds the store's size once more. **M8's invocation API** (the
    constructor books' M8 definition calls in F3-06) is not named by the spec: this row coins it. Mark it "(name coined
-   here)" in the code comment and the PR description, state its signature in the PR so F3-06 can copy it, and keep
-   its ID rule `books.rewrite-after-<step name>`.
+   here)" in the code comment and the PR description, state its signature in the PR so F3-06 can copy it, and its
+   caller passes the one fixed ID `books.rewrite`.
 6. **Dry run** (`dryrun.go`, `offline_storage.go`): refuse while another process holds the DB lock; open the live
    store **ReadOnly** (no WAL flush, no ratchet, no write); hard-link SSTs and copy WAL, MANIFEST, OPTIONS into a new
    directory of the scratch area `.mediacore-checkpoints/scratch/` (under `core.storage.checkpoint_dir` when set; area
@@ -250,8 +249,8 @@ a fresh install stamps the cutover step applied and runs nothing), `TestDryRunSc
 `TestRaiseCommitErrorRewritesSidecar`, `TestRaiseNeverLowersLevel` (extend if R1-20 has them),
 `TestCutoverRewriteLeavesNoOldFile` (over hello: no file of the old directory remains, the generation is unchanged,
 the attempt's checkpoint restores), `TestRewriteSwapBackMovesNoCheckpoint` (05-backup), the M8 cells of
-`TestCutoverCrashAtEveryChunk` that do not need books (a kill at `swapped`, one swap-back, two consecutive swap-backs,
-a second M8 ignoring the first's `applied` journal), `TestPreflight_RunsOnlyBeforeCutoverStarts` (name coined here: a
+`TestCutoverCrashAtEveryChunk` that do not need books (a kill at `swapped`, one swap-back, two consecutive swap-backs;
+no second-M8 cell, since M8 is registered once, D15), `TestPreflight_RunsOnlyBeforeCutoverStarts` (name coined here: a
 fake pending step whose `Preflight` returns a blocker refuses with exit 78 and writes nothing; the same store with a
 `c/storage/dm/` progress record or a raised level skips the preflight).
 

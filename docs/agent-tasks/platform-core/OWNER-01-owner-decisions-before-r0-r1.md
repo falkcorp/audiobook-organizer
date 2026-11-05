@@ -1,13 +1,13 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-01-owner-decisions-before-r0-r1.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 6d318a46-2f16-444d-9bfc-a89bd7547f51 -->
 <!-- last-edited: 2026-11-05 -->
 
-# OWNER-01 — Owner decisions before R0 ships and before R1's first core PR: required-check enforcement (Q-I), keep or override the R1 freeze, split-readiness thresholds (Q-G), and the P14 production read
+# OWNER-01 — Owner decisions before R0 ships and before R1's first core PR (recorded 2026-11-05, D15): required-check enforcement (Q-I), the R1 freeze, split-readiness thresholds (Q-G), the P14 production read
 
 > **NOT AGENT WORK.** This is an owner checkpoint. No agent may answer, complete, tick or simulate it, and no agent
 > runs the production read below. An agent may only prepare the text the owner reads and, after the owner has
-> recorded the answers, cite them. A task that depends on this row waits for the owner's recorded answer.
+> recorded the answers, cite them.
 
 | Field | Value |
 |---|---|
@@ -16,87 +16,56 @@
 | Tier | **OWNER**: owner decisions and one read-only production read |
 | Wave | W01 (due at once) |
 | Depends on | none |
-| Unblocks | **R0-05** merges only after P14 is recorded; **R1-35** (the release-freeze toggle, merged just before R1's first core PR) only after the freeze decision is recorded, because the answer sets its value; **R1-01** (R1's first core PR, which depends on R1-35) only after Q-I is recorded; R1-06's readiness report uses the Q-G thresholds |
-| Spec | 09 §9.2.1 (release gating; the R1 freeze), §9.4 R0 Owner, §9.4 R1 Owner, §9.7 P14; 14 §14.3 Q-I, Q-G; 12 §12.10 item 3 |
+| Status | **Answers recorded 2026-11-05** (D15, spec 02 §2.6; 14 §14.3.2). One owner action is left: apply the ruleset (step 2) before R1-01 merges. |
+| Unblocks | **R0-05** (P14 recorded: Branch A); **R1-01** once the ruleset with the merge queue is applied; R1-06's readiness report uses the accepted Q-G thresholds |
+| Spec | 02 §2.6 (D15); 09 §9.2.1 (release gating; the R1 freeze), §9.4 R0 Owner, §9.4 R1 Owner, §9.7 P14; 14 §14.3.2 Q-I, Q-G; 12 §12.10 item 3 |
 
-## Why now
-
-- **P14 before R0-05 merges.** Main merges are not CI-gated and `check-rc-ordinal` auto-dispatches a production
-  release at 10 RCs of a base version (09 §9.1), so a merged R0 commit can reach production within 10 RCs. R0-05
-  makes the Basic gate refuse an empty stored password; an install with the gate on and no saved password would be
-  locked out (09 §9.7 P14; 05-authn §11.1 item 5).
-- **Q-I before R1-01, the R1 freeze before R1-35.** From R1 on, tests are the main safety (D11) and every PR passes
-  named required checks (09 §9.2.1); how that is enforced decides how every later wave merges. R1-35 adds the
-  freeze toggle `RELEASE_FREEZE` to `prerelease.yml` in every case, because the R2 freeze (D12 (a), not
-  overridable) needs it later. Your freeze answer only sets its value: `'R1'` if you keep the freeze, `''` if you
-  override it.
-- **Q-G before R1 wires the readiness report** (12 §12.10 item 3: "the owner may tune them before R1 wires the
-  readiness report, not after").
-
-## Owner steps
-
-1. **P14: Basic gate on without a saved password** (09 §9.7 P14). On production, with an admin API key from
-   `server-bootstrap` (never paste the key anywhere):
-
-   ```bash
-   curl -sS -H "Authorization: Bearer <redacted-token>" <abo-url>/api/v1/config \
-     | jq '.data.config | {enabled: .basic_auth_enabled, password_set: ((.basic_auth_password // "") != "")}'
-   ```
-
-   (HEAD masks a set password and returns `""` for an empty one, `internal/config/update_service.go:102-104`.)
-   - **Branch A** (`enabled: false`, or `password_set: true`): nothing to do.
-   - **Branch B** (`enabled: true`, `password_set: false`): save a Basic password in Settings **before** R0 is
-     deployed; or, after R0 is deployed, set `BASIC_AUTH_PASSWORD` and restart (05-authn §11.1 item 5 Recovery).
-2. **Q-I: how the required checks are enforced** (14 §14.3 Q-I). Choose:
-   - **(a)** (recommended) a ruleset or branch protection on `main` that requires the named checks of 09 §9.2.1,
-     with **no bypass actors** (`enforce_admins: true`) and **GitHub's merge queue** (recommended) or strict
-     up-to-date branches, and merge tooling (the `/parallel-sweep` coordinator, CLAUDE.md's Quick Fix flow) that
-     waits for the checks and **never merges with `--admin`** past them; or
-   - **(b)** keep server-side merges ungated, rely on the merge tooling running `make ci` locally before every
-     merge, with `auto-revert.yml` as the backstop; or
-   - your own alternative, stated precisely.
-   Record also whether `/parallel-sweep` may admin-merge (plan §(m) item 1). Under (a) it may not.
-
-   **The plan recommends the merge queue** (plan §(n) item 9; advisor R6). With strict up-to-date branches each PR
-   re-runs the whole CI after every earlier merge in its wave, so a wave of 20 PRs at about 35 minutes of CI each
-   costs at least about 12 hours of serial CI before any rerun (09 §9.2.10 gives the CI budget); a merge queue
-   tests queued PRs together on top of `main` and keeps the same guarantee. R1-02 adds the queue's `merge_group`
-   trigger to the required workflows when you choose it. Whichever you choose, **critical-path rows merge first within a
-   wave**: the lead enqueues (or, without a queue, merges) the wave's critical-path rows (plan §(c)) before its
-   other rows.
-3. **The R1 freeze** (09 §9.2.1 "R1 freeze", a lead extension the owner may override): keep it (automatic promotion
-   paused from R1-35's merge, just before R1's first core PR, until R1 ships, so R1 is exactly one production
-   release) or override it. Either answer is recorded as R1-35's value: **kept** sets `RELEASE_FREEZE: 'R1'`,
-   **overridden** sets `RELEASE_FREEZE: ''` (then R1-31 is a recorded no-op). Overriding does not remove the toggle;
-   the R2 freeze (F3-08) is not yours to override (D12 (a)).
-4. **Q-G: split-readiness thresholds** (14 §14.3 Q-G; 12 §12.10 item 3): accept SC1 (3 consecutive API-stable
-   checkpoints over 6 weeks) and SC5 (coverage 70 % core / 60 % SDK) as proposed, or give new numbers. They are
-   readiness reports, not merge gates.
-5. The module name needs no answer: D13 fixed `github.com/falkcorp/mediacore` (09 §9.4 R1 Owner).
-
-## What to record, and where
-
-One comment on the workstream's tracking issue, counts and choices only (never a token, host, path or config
-value):
+## Recorded answers (2026-11-05)
 
 ```
-OWNER-01 recorded <date>
-P14: Branch A | Branch B (password saved on <date>)
-Q-I: (a) | (b) | alternative: <one sentence>; merge mode: merge queue | strict up-to-date; /parallel-sweep admin-merge: allowed | not allowed
-R1 freeze: kept (R1-35 sets RELEASE_FREEZE: 'R1') | overridden (R1-35 sets RELEASE_FREEZE: '')
-Q-G: accepted | SC1=<n> checkpoints over <w> weeks, SC5=<core %>/<SDK %>
+OWNER-01 recorded 2026-11-05
+P14: Branch A
+Q-I: (a); merge mode: merge queue; /parallel-sweep admin-merge: not allowed
+R1 freeze: kept (the owner sets the repository variable RELEASE_FREEZE to R1 at the end of OWNER-02; D15)
+Q-G: accepted
 ```
 
-If Q-I is (a), the owner (or an agent the owner asks, in a separate task) applies the ruleset before R1-01 merges;
-the ruleset itself is not part of this plan's PRs.
+The owner also decided the questions that sat in later rows (D15): Q-C (F5-14: the 14 jobs that run through a real
+scheduler definition keep their cadence, all 15 dead v2 `Schedule` strings are deleted, `deluge.protected-paths-sync`
+stays manual), advisor S2 (no flip-upgrade test; M8 registered once as `books.rewrite`) and advisor S3 with S5 (the
+freeze is the repository variable `RELEASE_FREEZE`, toggled by the owner; R2-02 folded into OWNER-05).
+
+## What each answer means
+
+1. **P14, Branch A** (09 §9.7 P14): on production the Basic gate is off or a Basic password is saved, so R0-05's
+   refusal of an empty stored password locks nobody out. R0-05 may merge.
+2. **Q-I (a) with the merge queue** (14 §14.3.2 Q-I). Owner action, before R1-01 merges: a ruleset (or branch
+   protection) on `main` that requires the named checks of 09 §9.2.1, with **no bypass actors** (`enforce_admins:
+   true`) and **GitHub's merge queue**. Merge tooling (the `/parallel-sweep` coordinator, CLAUDE.md's Quick Fix flow)
+   waits for the checks and **never merges with `--admin`** past them (plan §(m) item 1). R1-02 adds the queue's
+   `merge_group` trigger to the required workflows. Within a wave the lead enqueues the critical-path rows (plan §(c))
+   first. The ruleset itself is not part of this plan's PRs; the owner applies it, or asks an agent to in a separate
+   task, and logs it in the tracking issue.
+3. **R1 freeze kept** (09 §9.2.1 "R1 freeze"). Since D15 the freeze is the repository variable `RELEASE_FREEZE`, not
+   a committed value: R1-35 adds the switch that reads it; the owner sets it to `R1` at the end of OWNER-02 and
+   clears it in OWNER-03 after the R1 release, so R1 reaches production as exactly one release. The R2 freeze (the
+   owner sets `R2` before F3-08, clears it in OWNER-05) is not overridable (D12 (a)).
+4. **Q-G accepted** (14 §14.3.2 Q-G; 12 §12.10 item 3): SC1 = 3 consecutive API-stable checkpoints over 6 weeks;
+   SC5 = coverage 70 % core / 60 % SDK. They are readiness reports, not merge gates; R1-06 wires them.
+5. The module name needed no answer: D13 fixed `github.com/falkcorp/mediacore` (09 §9.4 R1 Owner).
+
+## Where it is recorded
+
+The block above, as one comment on the workstream's tracking issue (counts and choices only; never a token, host,
+path or config value), plus D15 in spec 02 §2.6.
 
 ## Done when
 
-The tracking-issue comment above exists. The lead then: lets R0-05 merge (P14 recorded); gives R1-35 the recorded
-freeze value; lets R1-01 start its merge gate in the recorded merge mode once R1-35 has merged; passes the Q-G numbers
-to R1-06.
+The tracking-issue comment exists (done) and the owner has logged the applied ruleset with the merge queue. The lead
+then lets R1-01 start its merge gate in merge-queue mode once R1-35 has merged and its post-merge wait has reported,
+and passes the Q-G numbers to R1-06.
 
 ## What agents must not do
 
-Run the P14 command, read production, guess an answer (including R1-35's freeze value), apply a ruleset without the
-owner's recorded choice, or merge R0-05 / R1-35 / R1-01 before this row is recorded.
+Read production, change an answer, set or clear `RELEASE_FREEZE`, apply a ruleset without the owner asking for it in a
+separate task, or merge R1-01 before the ruleset is logged.

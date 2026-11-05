@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-32-log-redactor-and-span-redaction.md -->
-<!-- version: 1.0.5 -->
+<!-- version: 1.0.6 -->
 <!-- guid: 7dce556b-315e-476c-899c-10d184f05c10 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -15,7 +15,7 @@
 | Branch | `agent/platform-core-r1-32-log-redactor-and-span-redaction` |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the
-named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1
+named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 until OWNER-03 cuts R1
 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (touch nothing outside this list without recording it under the PR's
@@ -215,7 +215,7 @@ changes.
 - **Changelog.** Add one headerless fragment under `changelog.d/` (`scriv create`, or by hand); `changelog-check.yml` requires it. Do not edit `CHANGELOG.md`.
 - **Commits.** Conventional commits (`type(scope): summary`). End every commit body with
   `Co-Authored-By: Claude <noreply@anthropic.com>`. 09 names no release or flip trailer (09 §9.2.1: there is no release-gating commit trailer), so add none.
-- **PR and merge.** `git push -u origin <branch>`, `gh pr create`, then after every required check is green on an up-to-date branch `gh pr merge <n> --rebase`. Never squash. Never merge with `--admin` past a required check (14 Q-I as OWNER-01 answered it).
+- **PR and merge.** `git push -u origin <branch>`, `gh pr create`, then after every required check is green, `gh pr merge <n> --rebase` (enqueues it; the merge queue re-tests it on top of `main`, D15). Never squash. Never merge with `--admin` past a required check (14 Q-I as OWNER-01 answered it).
 - **Concurrency (CLAUDE.md).** A loop over a library-scale collection with per-item I/O, hashing or subprocess work uses a bounded worker pool (`errgroup` + `SetLimit`); never unbounded goroutines. The redactor holds no lock and no goroutine.
 - **No `go.work`.** Never run `go work init` in a checkout or worktree (03 §3.2 item 1).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.

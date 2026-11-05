@@ -1,9 +1,9 @@
 <!-- file: docs/agent-tasks/platform-core/F5-14-schedules-oracle-no-catchup-storm.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.2.1 -->
 <!-- guid: 80c882d4-5cd4-40d6-8c6b-e278487a2d3d -->
 <!-- last-edited: 2026-11-05 -->
 
-# F5-14 — Conversion group T7, schedules: the 38 `TaskDefinition`s become `ScheduleFromConfig` declarations in `internal/books`, the 15 never-run v2 crons dropped per Q-C, with the schedule oracle and the no-catch-up-storm test
+# F5-14 — Conversion group T7, schedules: the 38 `TaskDefinition`s become `ScheduleFromConfig` declarations in `internal/books`, the 15 dead v2 `Schedule` strings deleted per Q-C (the 14 jobs they duplicate keep their real cadence), with the schedule oracle and the no-catch-up-storm test
 
 | Field | Value |
 |---|---|
@@ -11,7 +11,7 @@
 | Release / flip | R2, tasks flip F5 (dark conversion PR; the declarations are attached by F5-18) |
 | Wave | W33 |
 | Tier | **T3** (Opus / high): schedule parity over every definition; a wrong default or clock rule is a first-boot stampede of full scans and paid AI calls (14 E16) |
-| Depends on | F2-04 (core scheduler and the schedule-parity harness); F5-01 … F5-13 (every converted kind and its schedule hook); OWNER-04 (the recorded Q-C answer), F5-01, F5-02, F5-03, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13, OWNER-04 |
+| Depends on | F2-04 (core scheduler and the schedule-parity harness); F5-01 … F5-13 (every converted kind and its schedule hook); OWNER-04 (the recorded Q-C answer), F5-01, F5-02, F5-03, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
 
 ## START HERE
@@ -34,8 +34,8 @@ Replace HEAD's 38 scheduler `TaskDefinition`s (`internal/scheduler/tasks.go`) wi
 scheduled kind**, books code in `internal/books/schedules.go`, that the tasks flip F5-18 attaches through the
 conversions' schedule hook (`sched func(tasks.Kind) *tasks.Schedule`, 05-tasks §5T.8.2 conversion rule 4), and prove with the schedule oracle that core's
 scheduler over these declarations behaves as HEAD's scheduler does (05-tasks §5T.3.8 "What replaces v2 cron strings";
-§5T.8.2 T7 row: "the 38 `TaskDefinition`s → `ScheduleFromConfig` declarations on their kinds; the 15 v2 crons →
-none (listed in the release note)"; gate `TestScheduleParity_AllDefinitions`). Nothing is registered; HEAD's
+§5T.8.2 T7 row: the 38 `TaskDefinition`s → `ScheduleFromConfig` declarations on their kinds; the 15 v2 `Schedule`
+strings deleted (listed in the release note), 14 of their defs scheduled through their `TaskDefinition`; gate `TestScheduleParity_AllDefinitions`). Nothing is registered; HEAD's
 scheduler keeps running until F5-18 deletes it ("so no kind ever has two schedulers", §5T.3.8).
 
 ## The full sweep has its own kind
@@ -63,13 +63,13 @@ declares its schedule like any other entry. No entry is gated.
 4. 05-config's rename table rows `scheduled` and `scheduled.<entry>` (16 entries → `modules.books.scheduler.schedules.<entry>`,
    each "a `tasks.ScheduleConfig` by HEAD's own reading of the entry"), `scheduled.db_optimize` (two targets), and
    every row for the HEAD config values the 38 tasks read (intervals, enable flags, run-on-start flags).
-5. 04 §2.4 (schedule declarations go into `internal/books`); 14 E16 and Q-C.
+5. 04 §2.4 (schedule declarations go into `internal/books`); 14 E16 and §14.3.2 Q-C; 02 §2.6 (D15).
 
 ## Base state: re-verify before editing
 
 ```bash
-# Owner input: the recorded Q-C answer (OWNER-04). Missing = STOP.
-#   (where the lead records it: the tracking issue / docs/plans/platform-core/STATE.md; quote it in the PR)
+# Owner input: Q-C is decided (D15, spec 02 §2.6; 14 §14.3.2): delete all 15 strings; the 14 defs a TaskDefinition
+#   fires keep that cadence; deluge.protected-paths-sync stays manual. Quote it in the PR.
 # F2-04 and the conversions (0 hits on any = STOP)
 grep -rn 'func ScheduleFromConfig(key string) \*Schedule' core/tasks/*.go | wc -l              # 1
 grep -rn 'func (s \*Schedule) OnStart() \*Schedule\|func (s \*Schedule) When(' core/tasks/*.go | wc -l   # 2
@@ -84,13 +84,18 @@ test -f internal/books/config.go && echo present                                
 grep -c 'ts.registerTask(TaskDefinition{' internal/scheduler/tasks.go                          # 38
 grep -c '' internal/scheduler/testdata/cadence.golden                                          # 38 (name|interval|daily_at|run_on_start|in_window|window_index|enabled_default)
 grep -n '^var taskV2DefIDs = map\[string\]string{' internal/scheduler/maintenance.go | wc -l   # 1 (36 entries; transcode and batch_poller absent)
-grep -rnE '^\s+Schedule:\s+' internal/plugins internal/server internal/maintenance --include=*.go | grep -v _test | grep -v 'Schedule: *nil' | grep -v 'handlers/opsv3' | wc -l   # 15 (the never-run v2 crons)
+grep -rnE '^\s+Schedule:\s+' internal/plugins internal/server internal/maintenance --include=*.go | grep -v _test | grep -v 'Schedule: *nil' | grep -v 'handlers/opsv3' | wc -l   # 15 (the dead v2 Schedule strings)
 ```
 
 The 15 v2 crons at `ac4368bdb`: `deluge.protected-paths-sync` (`*/30 * * * *`) and the `Schedule:` literals in
 `internal/plugins/maintenance/cleanup.go` (7), `author.go`, `db.go`, `nightly_compact_activity_log.go`,
 `integrity_check.go`, `dedup_ops.go`, `orphan_book_files.go` and `metadata.go`. List each with its def ID and cron
 string in the PR description; that list is the release-note input (05-tasks §5T.3.8; R2-01 assembles the note).
+Q-C (D15): 14 of the 15 defs are fired by one of the 38 `TaskDefinition`s (`taskV2DefIDs`), so they keep running at
+that definition's cadence through its `ScheduleFromConfig` declaration below; the string itself was never evaluated.
+`deluge.protected-paths-sync` is the one def no `TaskDefinition` fires: it stays a manual task with no schedule (its
+cache refreshes itself on read once older than its 5-minute TTL). Mark each of the 15 in the PR table as "scheduled via
+`<task name>`" or "manual".
 
 ## Files
 
@@ -140,7 +145,7 @@ Mapping rules (05-tasks §5T.3.8):
 | `batch_poller` | nothing here: `core.ai.batch-poll`'s minimal owner registration declares `core.ai.schedules.batch_poll` |
 | `db_optimize` | the books half `books.maintenance.aux-store-compact` on `modules.books.scheduler.schedules.db_optimize` (nightly member); the core half `core.storage.compact` (F5-03's kind) uses `core.storage.schedules.compact`, declared at F2 by the kernel's core-section list |
 | `purge_old_logs` | nothing here: `core.log.journal.prune` is scheduled by `core.log.schedules.journal_prune` (05-logging §5; the kind is F5-03's, the key is declared from F2) |
-| a v2 `OperationDef.Schedule` cron (15) | **none**, unless the owner's recorded Q-C answer enables one: then a declaration on its kind with key `modules.books.scheduler.schedules.<name>` (name coined per def, `[a-z][a-z0-9_]*`), default **disabled** unless the answer says otherwise |
+| a v2 `OperationDef.Schedule` string (15) | **none** from the string (Q-C, D15). The 14 defs a `TaskDefinition` fires get their schedule from that task's row above; `deluge.protected-paths-sync` gets none |
 
 Key declaration: each `modules.books.scheduler.schedules.<task name>` must be declared by books with type
 `tasks.ScheduleConfig` (05-tasks §5T.3.8; registration fails otherwise). The 16 `scheduled.<entry>` keys exist
@@ -166,7 +171,7 @@ and then runs the first poll. `library_scan` and `library_scan_full` are two ord
 
 Add (names coined here): `TestScheduleFor_KeysDeclaredAndValid` (every key obeys R2-7 and is declared with type
 `tasks.ScheduleConfig`; no key on two kinds; `ScheduleFor` returns nil for every `core.*` kind),
-`TestScheduleFor_DroppedV2CronsAbsent` (none of the 15 crons yields a schedule unless Q-C enabled it) and
+`TestScheduleFor_DroppedV2CronsAbsent` (no schedule carries any of the 15 cron strings, and `books.deluge.protected-paths-sync` has none; the 14 others are scheduled only through their `TaskDefinition`'s key) and
 `TestScheduleFor_KindListMatchesConversions`: the stub list is the list the conversions register, by name.
 `ScheduledKinds()` equals a golden literal in `schedule_parity_test.go` (one kind per HEAD `TaskDefinition` that fires a
 books kind: `"books." + taskV2DefIDs[name]` by conversion rule R3, `library_scan_full` → `books.library.scan-full`,
@@ -181,12 +186,12 @@ list functions, re-checks that `ScheduledKinds()` is a subset of the kinds it re
 
 ## Steps
 
-1. The base checks; STOP on a mismatch or a missing Q-C answer.
+1. The base checks; STOP on a mismatch.
 2. Write the two spec tests and the three coined tests; watch them fail.
 3. `schedules.go` and the extra keys in `config.go`, entry by entry in `cadence.golden` order; run the parity
    test per entry.
-4. PR description: the 38-row table (task → kind → key → default → window order), the 15 dropped crons (or the
-   ones Q-C enabled), and a disposition count over the 38 tasks that sums to 38 (declared on a books kind,
+4. PR description: the 38-row table (task → kind → key → default → window order), the 15 deleted strings (each
+   "scheduled via `<task name>`" or "manual"), and a disposition count over the 38 tasks that sums to 38 (declared on a books kind,
    `library_scan_full` on `books.library.scan-full` included / deleted (`transcode`) / core-owned key
    (`batch_poller`, `purge_old_logs`, and `db_optimize`'s core half)).
 
@@ -204,7 +209,6 @@ make ci                                                                         
 
 ## STOP conditions
 
-- No recorded Q-C answer.
 - A HEAD config input of a task has no rename-table target in 05-config (the key's default would not reach the
   operator's value after M2).
 - A parity difference that the declaration API cannot express (report the task and the sequence diff).
@@ -230,8 +234,8 @@ nothing reads `ScheduleFor` before F5-18.
 
 ## Planner notes
 
-- 05-download §10 still says `deluge.protected-paths-sync` "gets a real schedule"; 05-tasks §5T.3.8 and 14 Q-C
-  default to deleting the 15 crons. The owner's Q-C answer decides; the brief applies it.
+- Q-C is decided (D15): `deluge.protected-paths-sync` stays manual. If 05-download §10 still says it "gets a real
+  schedule", 05-tasks §5T.3.8 and 14 §14.3.2 Q-C win; report the stale line to the lead.
 - `purge_old_logs`' HEAD default is 168 h while `core.log.schedules.journal_prune` defaults to 24 h (05-logging §5):
   the parity test will show the difference unless M2's rename table carries HEAD's value into the core key; if it
   does not, report it as a spec gap rather than changing either default.

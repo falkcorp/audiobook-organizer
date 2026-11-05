@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/12-repo-split.md -->
-<!-- version: 1.12.3 -->
+<!-- version: 1.13.0 -->
 <!-- guid: eb47baa1-640b-4c96-96cc-f6b2bdeaa57e -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 12 — Repository split: criteria, versioning, release, cutover, rollback
 
@@ -199,7 +199,7 @@ test -z "$(git -C "$TMP/core" status --porcelain)"
 ```
 
 (b) The core workflow (`.github/workflows/core-ci.yml`, job `core-ci`, runs `make -C core ci`,
-§12.3.11) is one of the **named required checks** of the merge requirement (09 §9.2.1, 14 Q-I): root
+§12.3.11) is one of the **named required checks** of the merge requirement (09 §9.2.1, enforced through the merge queue, D15, 14 Q-I): root
 `make ci` is a local target that does not contain core's merge gate (MOD4-8). The workflow triggers on
 every PR; a `changes` classifier job decides whether its inputs changed — one trigger list, 09 §9.2.1's
 (`core/**`, root `go.mod`, root `go.sum`) plus the workflow file (MOD5-15) —
@@ -683,8 +683,8 @@ and after (03 §3.2 item 2), so a rollback is a `replace` line plus a directory,
    `github.com/falkcorp/mediacore`. Versions resolve through the public proxy (no `GOPRIVATE`), npm
    packages go to the npm registry with no read token (§12.5 step 6, §12.6), and Actions minutes are free
    (§12.7). 14 Q-B.
-3. Thresholds in SC1 (3 checkpoints, 6 weeks) and SC5 (70 %/60 %) are proposals; the owner may tune them
-   before R1 wires the readiness report, not after. 14 Q-G.
+3. **Thresholds — decided (D15, Q-G).** SC1 (3 consecutive API-stable checkpoints over 6 weeks) and SC5
+   (coverage 70 % core, 60 % SDK) are accepted as proposed; R1 wires the readiness report with them. 14 Q-G.
 
 (Round 1 closed the former item 4: `examples/hello` is a package in the core module, not a third
 `go.mod`; §12.3 SC3.)
@@ -827,3 +827,5 @@ Plan-phase consistency:
 - D10–D12 revision (2026-11-04): §12.4.4 (hardening cutovers H1–H3) deleted; the hardened design lands directly in R2. `legacy/` removed from SC1's definition, the apidiff filter, its fixture test, the post-split override, SC5's coverage exclusion, §12.4.1 and release step 1; §12.4.2's legacy-member lifetime and the pointer to ABO's compatibility window deleted (no window, D10). SC1 counts checkpoints from R2's and names the store interfaces with their importers. Stage references re-keyed to the releases R0–R3 (S0, S1, S2, S2b → R1; S9's hello web build → the shell's landing, 07 §7.19 step 4). Consistency pass: UI-0 re-keyed to release R1's `core/web` PR (07 §7.19 step 2); the toolchain release-age rule named as 13 §13.6 states it. Final consistency sweep: the `core/web` workspace tests run from release R1's PR that creates `core/web` (07 §7.19 step 2), not from the deleted UI-0 stage.
 
 Round 13 (2026-11-04): D13, D14. §12.10 items 1–2 decided: mediacore is Apache-2.0 and public at `github.com/falkcorp/mediacore`; the moved code is relicensed from PolyForm Noncommercial 1.0.0 in §12.8.2 step 4 (sole copyright holder, no contributor consent), each moved file gaining an SPDX line; ABO keeps PolyForm Noncommercial 1.0.0 and adds `COMMERCIAL.md` (§12.8.2 step 6). The private-repo branches of §12.5 steps 4 and 6, §12.6, §12.7 and §12.8.2 steps 4 and 8 deleted. §12.2's licence row records that no file carries a licence line.
+
+Owner answers (2026-11-05): D15 — §12.10 item 3: Q-G accepted as proposed; §12.3 SC4(b) cites the merge queue.

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-06-core-version-checkpoints-readiness.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.2.1 -->
 <!-- guid: 3f616e9b-4602-4e36-8503-c2d539986fac -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -14,7 +14,7 @@
 | Spec | 12 §12.3 (SC1-SC10 commands), §12.3.11 (readiness target), §12.4.1 (core-checkpoint job), §12.4.3; 09 §9.4 R1 CI classification (check_core_version.py, core-checkpoint) |
 | Branch | `agent/platform-core-r1-06-core-version-checkpoints-readiness` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 
@@ -57,15 +57,15 @@ rows `check_core_version.py` and `core-checkpoint`; 12 §12.3 SC1–SC10 command
    `git diff <newest checkpoint>..HEAD -- core/` is non-empty and `version.Version` > the newest checkpoint, it runs
    `git update-ref refs/core-checkpoints/v0.Y.Z <commit>` and pushes with the explicit refspec; if `core/` changed and
    the constant was not bumped, it records nothing and opens or updates one issue labelled `core-version-bump-needed`.
-   It also runs when `prerelease.yml` auto-promotes an RC (12 §12.4.1; the R1 freeze stops that until R1-31).
+   It also runs when `prerelease.yml` auto-promotes an RC (12 §12.4.1; the R1 freeze stops that until the owner clears `RELEASE_FREEZE` in OWNER-03).
 3. **`make -C core readiness`** (report-only; 12 §12.3.11): `apidiff-gate coverage coredoc-check vulncheck`
    (SC1, SC5's thresholds, SC6, SC9) with their scripts `core/scripts/ci/core_api_gate.py`,
    `core/scripts/ci/core_coverage_by_package.py`, `core/scripts/ci/coredoc_check.py`, and the `core/tools/` modules
    (`tools/apidiff`, `tools/govulncheck`, `tools/staticcheck` pinned like the root's; `check_module_skew.py` compares
    the staticcheck tools modules). It never fails a merge and never writes outside `core/`: a JSON and Markdown
    report with date and commit to `$(READINESS_OUT)` (default `core/.ci/readiness/`, ignored by `core/.gitignore`).
-   Thresholds follow OWNER-01's recorded Q-G answer (row notes); if that answer is missing, use 12 SC5's stated
-   numbers and say so in the PR.
+   Thresholds follow OWNER-01's recorded Q-G answer, accepted as proposed (D15, 14 §14.3.2): SC1 = 3 consecutive
+   API-stable checkpoints over 6 weeks, SC5 = coverage 70 % core / 60 % SDK.
 4. **Root-side SC scripts** (pre-split they need ABO's `web/` or a temp module; 12 §12.3.11): SC3
    `scripts/ci/core_consumer_smoke.py` and SC8 `scripts/ci/web_build_against_tarballs.py`, per 12 §12.3's SC3 and SC8
    commands, run from the nightly job below.
@@ -132,7 +132,7 @@ Revert the PR; nothing at runtime depends on it.
 - **Changelog.** Add one headerless fragment under `changelog.d/` (`scriv create`, or by hand); `changelog-check.yml` requires it. Do not edit `CHANGELOG.md`.
 - **Commits.** Conventional commits (`type(scope): summary`). End every commit body with
   `Co-Authored-By: Claude <noreply@anthropic.com>`. 09 names no release or flip trailer (09 §9.2.1: there is no release-gating commit trailer), so add none.
-- **PR and merge.** `git push -u origin <branch>`, `gh pr create`, then after every required check is green on an up-to-date branch `gh pr merge <n> --rebase`. Never squash. Never merge with `--admin` past a required check (14 Q-I as OWNER-01 answered it).
+- **PR and merge.** `git push -u origin <branch>`, `gh pr create`, then after every required check is green, `gh pr merge <n> --rebase` (enqueues it; the merge queue re-tests it on top of `main`, D15). Never squash. Never merge with `--admin` past a required check (14 Q-I as OWNER-01 answered it).
 - **Concurrency (CLAUDE.md).** A loop over a library-scale collection with per-item I/O, hashing or subprocess work uses a bounded worker pool (`errgroup` + `SetLimit`); never unbounded goroutines.
 - **No `go.work`.** Never run `go work init` in a checkout or worktree; the genproto probe runs only in a throwaway copy under `mktemp -d` (03 §3.2 item 1).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.

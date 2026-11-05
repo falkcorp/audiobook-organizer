@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R0-03-admin-checks-honour-key-scopes.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 876a356e-1741-4b99-8188-3d24d8a0e712 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -164,7 +164,7 @@ grep -c 'APIKeyMayActAsAdmin' internal/server/handlers/user_merge.go            
 make ci; echo "exit $?"                                                                # expect exit 0
 ```
 
-The e2e suite and every required check of 09 §9.2.1 are green on the PR on an up-to-date branch.
+The e2e suite and every required check of 09 §9.2.1 are green on the PR and in the merge queue.
 
 ## Out of scope
 

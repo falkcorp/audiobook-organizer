@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-16-tasks-cutover-step-m4.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 8fcf5409-cd73-4f80-ab41-6d71c96ea327 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -245,7 +245,7 @@ make ci                                                                         
 
 ## Out of scope
 
-Registering M4, adding the flip's level step (which raises M7's target) and replacing M8 (F5-18, 03 §3.8: each flip
+Registering M4, adding the flip's level step (which raises M7's target; M8 stays as F3-07 registered it, last) (F5-18, 03 §3.8: each flip
 that adds a step raises M7's target in the same PR); the level constant and IDs in `stepids.go` (F5-18); moving HEAD's run-row store files into `internal/books/cutover/m4legacy/` (F5-18);
 `TestKindRenameMapCoversLedger`, `TestCutover_CheckpointsResume` and the resume-sweep halves (F5-18, they need
 the registered kinds); `TestCutover_NoCatchUpStorm` (F5-14); M5 (F5-15).
