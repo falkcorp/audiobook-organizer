@@ -1,7 +1,7 @@
 // file: internal/repairs/franchise_guard_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 2b7d4e19-6a3c-4f05-8e91-c4d7a2b6f3e0
-// last-edited: 2026-10-20
+// last-edited: 2026-11-05
 
 package repairs
 
@@ -86,6 +86,7 @@ type testFixer struct{}
 func (testFixer) ID() string          { return "t" }
 func (testFixer) Title() string       { return "t" }
 func (testFixer) Description() string { return "t" }
+func (testFixer) Meta() Meta          { return Meta{} }
 func (testFixer) Plan(context.Context, json.RawMessage, registry.Reporter) ([]Row, error) {
 	return nil, nil
 }

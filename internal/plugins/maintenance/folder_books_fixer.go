@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.27.0
+// version: 2.28.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-11-05
 
@@ -1585,7 +1585,7 @@ var (
 )
 
 func (f *folderBooksFixer) ID() string    { return fbFixerID }
-func (f *folderBooksFixer) Title() string { return "Folder-sized books" }
+func (f *folderBooksFixer) Title() string { return "Break up folder-sized books" }
 func (f *folderBooksFixer) Description() string {
 	return "Books that are really a whole author, series or library folder (an old scan and the 2026-08-26 " +
 		"book-file backfill attached every file in the folder). Apply gives each file no proper book holds a new " +
@@ -1597,6 +1597,15 @@ func (f *folderBooksFixer) Description() string {
 		"then joining that group as a non-primary version) is applied only by the owner's own click on that row. " +
 		"Deep-tier, split, fragmentary, unprobed, unreadable-audio and " +
 		"Doctor Who / Big Finish / Torchwood rows are listed only. Every step is undoable from the apply operation."
+}
+
+// Meta implements repairs.Fixer.
+func (f *folderBooksFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupDuplicates,
+		Rank:    2,
+		Summary: "Turns a \"book\" that is really a whole author or series folder into one book per real title.",
+	}
 }
 
 // ITunesDatabaseOnly: the owner cleared this fixer (2026-10-01) to write the

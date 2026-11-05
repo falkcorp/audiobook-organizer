@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/combined_author_fixer.go
-// version: 1.2.3
+// version: 1.3.0
 // guid: 5c0f4a3e-2b7d-4e61-9a8c-3f1d6b2e7a90
-// last-edited: 2026-10-13
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -178,7 +178,7 @@ func newCombinedAuthorFixer(p *Plugin) *combinedAuthorFixer {
 var _ repairs.Fixer = (*combinedAuthorFixer)(nil)
 
 func (f *combinedAuthorFixer) ID() string    { return combinedAuthorFixerID }
-func (f *combinedAuthorFixer) Title() string { return "Combined author credits" }
+func (f *combinedAuthorFixer) Title() string { return "Split combined author credits" }
 func (f *combinedAuthorFixer) Description() string {
 	return "Books credited to an author record whose name joins several authors (\"J.N. Chaney, Jonathan P. " +
 		"Brazee\"). Where the separate authors are already credited the combined credit is removed and the " +
@@ -192,6 +192,15 @@ func (f *combinedAuthorFixer) Description() string {
 		"books and Doctor Who / Big Finish / Torchwood are listed, not changed. Only author credits are " +
 		"touched; narrator credits stay. The emptied records are left for maintenance.purge-empty-authors. " +
 		"Undo with the apply operation's revert."
+}
+
+// Meta implements repairs.Fixer.
+func (f *combinedAuthorFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupAuthors,
+		Rank:    1,
+		Summary: "Splits one author credit like \"A, B\" into separate authors.",
+	}
 }
 
 // combinedAuthorIndex is every author by letters key and the set of combined

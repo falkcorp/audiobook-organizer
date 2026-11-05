@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_fixer.go
-// version: 1.6.3
+// version: 1.7.0
 // guid: a5cfbf11-cb27-4747-a0e3-d1536081ba52
-// last-edited: 2026-10-26
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -195,7 +195,7 @@ var _ repairs.Fixer = (*relinkPreFixFixer)(nil)
 var pfrLog = logger.New("maintenance")
 
 func (f *relinkPreFixFixer) ID() string    { return relinkPreFixFixerID }
-func (f *relinkPreFixFixer) Title() string { return "Link pre-fix imports to their versions" }
+func (f *relinkPreFixFixer) Title() string { return "Relink old imports to their versions" }
 func (f *relinkPreFixFixer) Description() string {
 	return "Files imported before 2026-10-10 were recorded with a version (where the copy came from and which " +
 		"torrent it belongs to) that no file points at. Apply links each selected file to its own book's version " +
@@ -210,6 +210,15 @@ func (f *relinkPreFixFixer) Description() string {
 		"trial groups them by the first check they fail (missing, then location, format, dates), one group per " +
 		"check with its count, and a row's evidence names any other check it fails; the trial's operation log " +
 		"counts every row each check flags."
+}
+
+// Meta implements repairs.Fixer.
+func (f *relinkPreFixFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupVersions,
+		Rank:    3,
+		Summary: "Links files imported before Oct 10 to their version. After linking, purging that version deletes the file.",
+	}
 }
 
 // pfrStores returns the fixer's two store views.

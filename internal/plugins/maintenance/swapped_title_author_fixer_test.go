@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer_test.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 8223b479-ea79-40ca-a48a-1b7bc0f3bea2
-// last-edited: 2026-10-22
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -1185,7 +1185,7 @@ func TestSwappedTitleAuthorFixer_StaleEmbeddedSeriesIsHeld(t *testing.T) {
 
 	plan, rows := l.plan()
 	require.Equal(t, swapSkipRelinkSeriesFirst, rows["nil-id"].Skipped, rows["nil-id"].SkipReason)
-	require.Contains(t, rows["nil-id"].SkipReason, "stale-series relink")
+	require.Contains(t, rows["nil-id"].SkipReason, "stale series object")
 	require.Equal(t, swapSkipRelinkSeriesFirst, rows["mismatch"].Skipped, rows["mismatch"].SkipReason)
 	require.Contains(t, rows["mismatch"].SkipReason, "a person decides")
 	require.True(t, rows["later"].Applicable(), "%s %s", rows["later"].Skipped, rows["later"].SkipReason)

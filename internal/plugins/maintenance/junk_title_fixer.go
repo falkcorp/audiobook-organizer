@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.23.1
+// version: 1.24.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -150,7 +150,7 @@ func newJunkTitleFixer(p *Plugin) *junkTitleFixer {
 var _ repairs.Fixer = (*junkTitleFixer)(nil)
 
 func (f *junkTitleFixer) ID() string    { return junkTitlesFixerID }
-func (f *junkTitleFixer) Title() string { return "Junk titles" }
+func (f *junkTitleFixer) Title() string { return "Fix junk titles" }
 func (f *junkTitleFixer) Description() string {
 	return "Books titled with a chapter number (\"01\", \"Chapter 12\", \"Disc 2\"), a narrator credit " +
 		"(\"read by narrator\"), a track tag (\"Opening\", \"Intro\"), a placeholder (\"Unknown Title\"), a bare " +
@@ -161,14 +161,23 @@ func (f *junkTitleFixer) Description() string {
 		"trailing author refused or dropped), the series and number (only with a matching recorded series " +
 		"position). A title found anywhere but the stripped one is not proposed for a book that runs under 30 " +
 		"minutes or that the scanner marked suspicious: it is likely one track of a bigger book. " +
-		"A book another book owns a file of is a fragment for the consolidation " +
-		"fixer; one that only looks like a chapter file is listed for a person. A provider's recorded title counts only when " +
+		"A book another book owns a file of is a chapter file, left to \"Merge chapter files into their " +
+		"book\"; one that only looks like a chapter file is listed for a person. A provider's recorded title counts only when " +
 		"it agrees with the title's own evidence or was recorded under the book's author (for a book whose stored " +
 		"author is junk, when it agrees with the path or the transcription). A book whose author holds the " +
-		"title a provider recorded (title and author swapped) is listed for the swapped title/author fixer " +
-		"(maintenance.repair-swapped-title-author), which runs first and fixes both. Writes the title only, never a " +
+		"title a provider recorded (title and author swapped) is listed for \"Fix swapped title and " +
+		"author\", which runs first and fixes both. Writes the title only, never a " +
 		"user-locked one, and locks the title it wrote so a rescan cannot restore the file tag's junk. Undo with the " +
 		"apply operation's revert, which also lifts the lock."
+}
+
+// Meta implements repairs.Fixer.
+func (f *junkTitleFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupTitles,
+		Rank:    2,
+		Summary: "Replaces titles like \"01\", \"Chapter 12\" or \"Unknown Title\" with the real title.",
+	}
 }
 
 // junkIndex is the library-wide state a decision reads besides the book
@@ -926,7 +935,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	}
 	switch skip {
 	case junkSkipFragment:
-		return finish(skip, "fragment — use the consolidation fixer: "+why)
+		return finish(skip, "chapter file — use \""+fragmentFixerTitle+"\": "+why)
 	case junkSkipPossibleFragment:
 		return finish(skip, "possible fragment: "+why)
 	case junkSkipNeedsManual:
@@ -1838,9 +1847,10 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 		if row != nil && row.BookID != "" && row.BookID != b.ID {
 			if row.Retired {
 				// Held only as a retired version: occupied, so the book is not retitled,
-				// but it is not a live book's fragment either, and the consolidation
-				// fixer does not act on retired rows. Needs a person, not that fixer.
-				return junkSkipNeedsManual, fmt.Sprintf("its file %s is held as a retired version of book %s, which the consolidation fixer does not act on", p, row.BookID), nil
+				// but it is not a live book's fragment either, and the chapter-file
+				// fixer (fragmentFixerTitle) does not act on retired rows. Needs a
+				// person, not that fixer.
+				return junkSkipNeedsManual, fmt.Sprintf("its file %s is held as a retired version of book %s, which \"%s\" does not act on", p, row.BookID, fragmentFixerTitle), nil
 			}
 			return junkSkipFragment, fmt.Sprintf("its file %s is also a file of book %s", p, row.BookID), nil
 		}

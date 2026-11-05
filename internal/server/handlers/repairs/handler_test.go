@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler_test.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 8e3f6b21-7c94-4a0d-9b52-2d1a8e5c7f36
 // last-edited: 2026-11-05
 
@@ -31,11 +31,22 @@ import (
 
 func init() { gin.SetMode(gin.TestMode) }
 
-type stubFixer struct{ id string }
+// stubFixer is a fixer with no plan rows. Its group, rank and apiOnly are
+// the repairs.Meta it reports; left zero, it sorts after every real group,
+// alphabetically by id.
+type stubFixer struct {
+	id      string
+	group   repairs.GroupID
+	rank    int
+	apiOnly string
+}
 
 func (f stubFixer) ID() string          { return f.id }
 func (f stubFixer) Title() string       { return "Stub " + f.id }
 func (f stubFixer) Description() string { return "stub fixer" }
+func (f stubFixer) Meta() repairs.Meta {
+	return repairs.Meta{Group: f.group, Rank: f.rank, Summary: "Stub summary of " + f.id, APIOnly: f.apiOnly}
+}
 func (f stubFixer) Plan(context.Context, json.RawMessage, opsregistry.Reporter) ([]repairs.Row, error) {
 	return nil, nil
 }
@@ -181,8 +192,8 @@ func newFakeOps(settings map[string]string) *fakeOps {
 func setup(t *testing.T) (*gin.Engine, *fakeEnqueuer, *fakeOps) {
 	t.Helper()
 	reg := repairs.NewRegistry()
-	require.NoError(t, reg.Register(stubFixer{id: "version-group-primary-repair"}))
-	require.NoError(t, reg.Register(stubFixer{id: "other"}))
+	require.NoError(t, reg.Register(stubFixer{id: "version-group-primary-repair", group: repairs.GroupVersions, rank: 1}))
+	require.NoError(t, reg.Register(stubFixer{id: "other", group: repairs.GroupDuplicates, rank: 1}))
 	enq := &fakeEnqueuer{}
 	queued := time.Date(2026, 9, 27, 11, 0, 0, 0, time.UTC)
 	ops := newFakeOps(map[string]string{
@@ -298,6 +309,59 @@ func TestListFixers_LastCompletedPlanSurvivesANewerQueuedRefresh(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
 	require.NotContains(t, raw.Data.Fixers[0], "last_completed_plan")
 	require.Contains(t, raw.Data.Fixers[1], "last_completed_plan")
+}
+
+// GET /repairs lists the fixers in the lane's display order (group, then rank,
+// then id) and carries what the lane needs to render it: the group id and its
+// header text, the rank, the rail summary and, for a fixer whose plan the lane
+// cannot start, the reason. The lane renders this order as is.
+func TestListFixers_GroupedOrderSummaryAndAPIOnly(t *testing.T) {
+	reg := repairs.NewRegistry()
+	for _, f := range []stubFixer{
+		{id: "harley", group: repairs.GroupImports, rank: 2, apiOnly: "Needs an export file."},
+		{id: "joker", group: repairs.GroupTitles, rank: 2},
+		{id: "bane", group: repairs.GroupDuplicates, rank: 1},
+		{id: "penguin", group: repairs.GroupTitles, rank: 1},
+	} {
+		require.NoError(t, reg.Register(f))
+	}
+	r := gin.New()
+	r.Use(callerWith(&database.User{ID: "u-editor", Username: "editor"}, auth.PermLibraryEditMetadata))
+	r.GET("/api/v1/repairs", New(reg, &fakeEnqueuer{}, newFakeOps(nil)).ListFixers)
+
+	w := do(r, http.MethodGet, "/api/v1/repairs", "")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	got := data[struct {
+		Fixers []FixerInfo `json:"fixers"`
+	}](t, w).Fixers
+	var ids []string
+	for _, f := range got {
+		ids = append(ids, f.ID)
+	}
+	require.Equal(t, []string{"bane", "penguin", "joker", "harley"}, ids)
+
+	require.Equal(t, repairs.GroupDuplicates, got[0].Group)
+	require.Equal(t, "Duplicates & split books", got[0].GroupTitle)
+	require.Equal(t, 1, got[0].Rank)
+	require.Equal(t, "Stub summary of bane", got[0].Summary)
+	require.Equal(t, "stub fixer", got[0].Description, "the long description stays for the header")
+	require.Empty(t, got[0].APIOnlyReason)
+	require.Equal(t, "Titles", got[2].GroupTitle)
+	require.Equal(t, "Imports & one-shot tools", got[3].GroupTitle)
+	require.Equal(t, "Needs an export file.", got[3].APIOnlyReason)
+
+	// The wire names the lane reads.
+	var raw struct {
+		Data struct {
+			Fixers []map[string]any `json:"fixers"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	for _, key := range []string{"summary", "group", "group_title", "rank"} {
+		require.Contains(t, raw.Data.Fixers[0], key)
+	}
+	require.NotContains(t, raw.Data.Fixers[0], "api_only_reason", "omitted when the fixer plans with no params")
+	require.Contains(t, raw.Data.Fixers[3], "api_only_reason")
 }
 
 func TestEnqueue_RecordsLastRunAndReportsDedupe(t *testing.T) {
@@ -554,6 +618,32 @@ func TestListPlanRows_Errors(t *testing.T) {
 	for path, want := range cases {
 		require.Equal(t, want, do(r, http.MethodGet, path, "").Code, path)
 	}
+}
+
+// A fixer the server no longer registers (the owner retired three on
+// 2026-11-05) is refused cleanly on every route, with its stored settings and
+// operations left alone: 404, no operation enqueued, no panic.
+func TestRetiredFixerIDsAreRefusedCleanly(t *testing.T) {
+	r, enq, _ := setup(t)
+	for _, id := range []string{
+		"maintenance.normalize-letter-l-ordinals",
+		"maintenance.relink-stale-series",
+		"dedup.split-books",
+	} {
+		base := "/api/v1/repairs/" + id
+		require.Equal(t, http.StatusNotFound, do(r, http.MethodPost, base+"/plan", "").Code, id)
+		require.Equal(t, http.StatusNotFound, do(r, http.MethodPost, base+"/apply",
+			`{"plan_op_id":"op-plan","row_ids":["x"]}`).Code, id)
+		require.Equal(t, http.StatusNotFound, do(r, http.MethodGet, base+"/plan/op-plan/rows", "").Code, id)
+
+		w := do(r, http.MethodGet, "/api/v1/repairs", "")
+		for _, f := range data[struct {
+			Fixers []FixerInfo `json:"fixers"`
+		}](t, w).Fixers {
+			require.NotEqual(t, id, f.ID)
+		}
+	}
+	require.Empty(t, enq.calls, "a retired id never enqueues an operation")
 }
 
 func TestStartApply(t *testing.T) {

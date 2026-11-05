@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_fixer.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 2c7e5a19-8b43-4f06-9d21-4e8b0c6a3f75
-// last-edited: 2026-10-04
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -54,12 +54,21 @@ func newVGPrimaryFixer(p *Plugin) *vgPrimaryFixer { return &vgPrimaryFixer{p: p}
 var _ repairs.Fixer = (*vgPrimaryFixer)(nil)
 
 func (f *vgPrimaryFixer) ID() string    { return vgPrimaryFixerID }
-func (f *vgPrimaryFixer) Title() string { return "Version-group primary" }
+func (f *vgPrimaryFixer) Title() string { return "Pick the main version of each book" }
 func (f *vgPrimaryFixer) Description() string {
 	return "Groups with no primary copy or more than one. Elects the one copy ABS should list " +
 		"(m4b with chapters > m4b without > metadata > other formats; only an organized copy with all " +
 		"its files under the library root can win), demotes the others, and fills the winner's EMPTY " +
 		"fields from the best-metadata copy. Groups whose better copy is outside the library are held."
+}
+
+// Meta implements repairs.Fixer.
+func (f *vgPrimaryFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupVersions,
+		Rank:    1,
+		Summary: "Chooses the one copy of each book that Audiobookshelf should list.",
+	}
 }
 
 // vgFixerParams are the fixer params (the op's, minus the write switches).

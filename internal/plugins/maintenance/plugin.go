@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.93.2
+// version: 1.93.3
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-10-31
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -57,9 +57,6 @@ func (p *Plugin) Repairs() *repairs.Registry {
 		if err := p.repairsReg.Register(newJunkTitleFixer(p)); err != nil {
 			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 		}
-		if err := p.repairsReg.Register(newLetterLOrdinalFixer(p)); err != nil {
-			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
-		}
 		if err := p.repairsReg.Register(newReparseFolderNamesFixer(p)); err != nil {
 			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 		}
@@ -70,9 +67,6 @@ func (p *Plugin) Repairs() *repairs.Registry {
 			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 		}
 		if err := p.repairsReg.Register(newDuplicateCopiesFixer(p)); err != nil {
-			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
-		}
-		if err := p.repairsReg.Register(newRelinkSeriesFixer(p)); err != nil {
 			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 		}
 		if err := p.repairsReg.Register(newSwappedTitleAuthorFixer(p)); err != nil {
@@ -109,9 +103,6 @@ func (p *Plugin) Repairs() *repairs.Registry {
 			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 		}
 		if err := p.repairsReg.Register(newSeriesPruneFixer(p)); err != nil {
-			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
-		}
-		if err := p.repairsReg.Register(newSplitBooksFixer(p)); err != nil {
 			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 		}
 		if err := p.repairsReg.Register(newReconcileFixer(p)); err != nil {

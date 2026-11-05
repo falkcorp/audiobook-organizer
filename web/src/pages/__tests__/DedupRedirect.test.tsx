@@ -1,7 +1,7 @@
 // file: web/src/pages/__tests__/DedupRedirect.test.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: 91b7d3a5-2c48-4e60-b5f9-0d1e7a8c3624
-// last-edited: 2026-10-15
+// last-edited: 2026-11-05
 
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -41,7 +41,7 @@ describe('DedupRedirect', () => {
     ['series', '/dedup?tab=series', '/review?lane=authors&view=series'],
     ['ai', '/dedup?tab=ai', '/review?lane=authors&view=ai'],
     ['reconcile', '/dedup?tab=reconcile', '/review?lane=repairs&fixer=reconcile.missing-files'],
-    ['split-books', '/dedup?tab=split-books', '/review?lane=repairs&fixer=dedup.split-books'],
+    ['split-books', '/dedup?tab=split-books', '/review?lane=repairs&fixer=fragment-consolidation'],
     ['labels path', '/dedup/labels', '/review?lane=dupes&view=labels'],
   ];
   it.each(rows)('maps %s', async (_n, from, to) => {

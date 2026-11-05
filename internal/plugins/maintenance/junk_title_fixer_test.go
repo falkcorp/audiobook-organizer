@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.18.4
+// version: 1.18.5
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
-// last-edited: 2026-10-25
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -372,7 +372,7 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 	}
 	require.Contains(t, rows["provider-conflict"].SkipReason, `provider_value "Quoxx Barrows"`)
 	require.Contains(t, rows["frag1"].SkipReason, "possible fragment")
-	require.Contains(t, rows["owned"].SkipReason, "fragment — use the consolidation fixer")
+	require.Contains(t, rows["owned"].SkipReason, "chapter file — use \""+fragmentFixerTitle+"\"")
 	require.Contains(t, rows["series98"].SkipReason, `its author "Brosk" is the name of its folder`)
 	require.Contains(t, rows["owner-proposal"].SkipReason, "Torchwood: Plimsoll Weather")
 	require.Contains(t, rows["unabridged"].SkipReason, "format, edition or disc marker")
@@ -613,60 +613,6 @@ func TestJunkTitleFixer_SameProposalTwiceIsAPossibleFragment(t *testing.T) {
 	for _, r := range rows {
 		require.Equal(t, junkSkipPossibleFragment, r.Skipped, r.SkipReason)
 	}
-}
-
-func TestLetterLOrdinalFixer(t *testing.T) {
-	st, err := database.NewPebbleStore(t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = st.Close() })
-	ids := map[string]string{}
-	for _, title := range []string{"l Corinthians", "ll Kings 4", "I Corinthians", "l'Épinglon", "l Timothy"} {
-		b, err := st.CreateBook(&database.Book{Title: title, FilePath: "/lib/Bible/" + title + ".mp3"})
-		require.NoError(t, err)
-		ids[title] = b.ID
-	}
-	require.NoError(t, st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: ids["l Timothy"], Field: "title",
-		OverrideLocked: true, UpdatedAt: time.Now()}))
-	f := newLetterLOrdinalFixer(&Plugin{deps: fakeDeps{store: st}})
-	res, err := repairs.RunPlan(context.Background(), f, nil, repairs.PlanDeps{Guard: st}, &fakeReporter{})
-	require.NoError(t, err)
-	require.Equal(t, 3, res.Total, "only letter-l numbered books are rows")
-	require.Equal(t, 2, res.Applicable)
-	require.Equal(t, 1, res.SkippedByKind[junkSkipUserLocked])
-	byID := map[string]repairs.Row{}
-	for _, r := range res.Rows {
-		byID[r.RowID] = r
-	}
-	require.Equal(t, "1 Corinthians", byID[ids["l Corinthians"]].Proposed["title"])
-	require.Equal(t, "2 Kings 4", byID[ids["ll Kings 4"]].Proposed["title"])
-
-	const opID = "op-letter-l"
-	w := repairs.NewWriter(st, st, f.ID(), "bulk_update", "repairs-").WithJournal(st, st, opID).WithFieldStates(st)
-	out, err := repairs.RunApply(context.Background(), f, res, "plan-1",
-		[]string{ids["l Corinthians"], ids["ll Kings 4"], ids["l Timothy"]}, false,
-		repairs.ApplyDeps{Guard: st, Writer: w, OpID: opID}, &fakeReporter{})
-	require.NoError(t, err)
-	require.Equal(t, 2, out.Applied, "%v", out.ByOutcome)
-	b, err := st.GetBookByID(ids["l Corinthians"])
-	require.NoError(t, err)
-	require.Equal(t, "1 Corinthians", b.Title)
-	b, err = st.GetBookByID(ids["l Timothy"])
-	require.NoError(t, err)
-	require.Equal(t, "l Timothy", b.Title, "a user-locked title is never rewritten")
-	locks, err := database.LoadFieldLocks(st, ids["l Corinthians"])
-	require.NoError(t, err)
-	require.True(t, locks.Locked(database.FieldKeyTitle), "the written title is locked")
-
-	// The op revert puts the title back and lifts the lock.
-	rev, err := audiobooks.NewRevertService(st).RevertOperation(opID)
-	require.NoError(t, err)
-	require.Zero(t, rev.Failed, "revert: %+v", rev)
-	b, err = st.GetBookByID(ids["l Corinthians"])
-	require.NoError(t, err)
-	require.Equal(t, "l Corinthians", b.Title)
-	locks, err = database.LoadFieldLocks(st, ids["l Corinthians"])
-	require.NoError(t, err)
-	require.False(t, locks.Locked(database.FieldKeyTitle))
 }
 
 // planRows plans the fixer over st and returns the rows by book id.

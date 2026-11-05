@@ -1,7 +1,7 @@
 // file: internal/merge/pointer_backfill.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 56e834dc-3c76-4989-9ce4-9db933749d76
-// last-edited: 2026-10-18
+// last-edited: 2026-11-05
 
 package merge
 
@@ -39,7 +39,7 @@ const (
 	// (preview).
 	PointerBackfillWouldWrite = "would_write"
 	// PointerBackfillHasPointer: a live pointer already names the journal (a
-	// chokepoint wrote it, the split-books fixer wrote it, or an earlier
+	// chokepoint wrote it, the split-books fixer (retired 2026-11-05) wrote it, or an earlier
 	// backfill did). Nothing is written.
 	PointerBackfillHasPointer = "has_pointer"
 	// PointerBackfillNotUndoable: the journal is in a state no undo accepts

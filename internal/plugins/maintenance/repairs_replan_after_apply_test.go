@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repairs_replan_after_apply_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5e2a7c91-3b48-4d06-9f1e-84c0a6d2b735
 // last-edited: 2026-11-05
 
@@ -57,6 +57,7 @@ type refreshFixer struct {
 func (*refreshFixer) ID() string          { return refreshFixerID }
 func (*refreshFixer) Title() string       { return "Refresh fixture" }
 func (*refreshFixer) Description() string { return "test" }
+func (*refreshFixer) Meta() repairs.Meta  { return repairs.Meta{} }
 
 func (f *refreshFixer) Plan(_ context.Context, params json.RawMessage, _ registry.Reporter) ([]repairs.Row, error) {
 	f.mu.Lock()

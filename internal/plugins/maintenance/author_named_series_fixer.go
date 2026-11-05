@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_named_series_fixer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 51518f40-1a71-43e8-bb8c-bb056522bedd
-// last-edited: 2026-10-06
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -107,10 +107,8 @@ var (
 	_ repairs.AfterApplier = (*authorNamedSeriesFixer)(nil)
 )
 
-func (f *authorNamedSeriesFixer) ID() string { return authorNamedSeriesFixerID }
-func (f *authorNamedSeriesFixer) Title() string {
-	return "Series named after the author"
-}
+func (f *authorNamedSeriesFixer) ID() string    { return authorNamedSeriesFixerID }
+func (f *authorNamedSeriesFixer) Title() string { return "Remove series named after the author" }
 func (f *authorNamedSeriesFixer) Description() string {
 	return "Books linked to a series whose name is just their author's name (a \"Brandon Sanderson\" series " +
 		"holding Sanderson's books), judged by the same rule the folder parse uses: every book in the series is " +
@@ -119,6 +117,15 @@ func (f *authorNamedSeriesFixer) Description() string {
 		"like this), co-authored books, locked series and books with applied metadata are listed held. Apply " +
 		"removes the series link and position (undoable; the emptied series row is kept for the undo), then " +
 		"starts a metadata candidate fetch for the changed books; nothing is applied."
+}
+
+// Meta implements repairs.Fixer.
+func (f *authorNamedSeriesFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupSeries,
+		Rank:    1,
+		Summary: "Drops a series that is just the author's name.",
+	}
 }
 
 // ansState is what Replan needs from plan time: the series the book was

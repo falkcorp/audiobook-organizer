@@ -1,5 +1,5 @@
 // file: web/tests/e2e/review-dupes-lane.spec.ts
-// version: 2.6.0
+// version: 2.6.1
 // guid: 47849aa3-3814-42c5-81aa-299a39fb5384
 // last-edited: 2026-11-05
 
@@ -458,8 +458,8 @@ async function mockRedirectTargets(page: Page) {
       json({
         fixers: [
           { id: 'dedup.merge-versions', title: 'Merge versions', description: '', last_plan: plan('m') },
-          { id: 'reconcile.missing-files', title: 'Missing files', description: '', last_plan: plan('r') },
-          { id: 'dedup.split-books', title: 'Split books', description: '', last_plan: plan('s') },
+          { id: 'reconcile.missing-files', title: 'Relink missing files to files on disk', description: '', last_plan: plan('r') },
+          { id: 'fragment-consolidation', title: 'Merge chapter files into their book', description: '', last_plan: plan('s') },
         ],
       })
     )
@@ -566,11 +566,11 @@ test.describe('legacy dedup URLs redirect into Review', () => {
     await expect(page.getByTestId('repairs-fixer-reconcile.missing-files')).toHaveClass(/Mui-selected/);
   });
 
-  test('/dedup?tab=split-books preselects the Split books fixer', async ({ page }) => {
+  test('/dedup?tab=split-books preselects the chapter-file fixer (the Split Books fixer is retired)', async ({ page }) => {
     await page.goto('/dedup?tab=split-books');
     await expect(page.getByTestId('repairs-rail')).toBeVisible();
-    await expectFinalUrl(page, '/review?lane=repairs&fixer=dedup.split-books');
-    await expect(page.getByTestId('repairs-fixer-dedup.split-books')).toHaveClass(/Mui-selected/);
+    await expectFinalUrl(page, '/review?lane=repairs&fixer=fragment-consolidation');
+    await expect(page.getByTestId('repairs-fixer-fragment-consolidation')).toHaveClass(/Mui-selected/);
   });
 
   test('/dedup/labels opens the Duplicates lane on Labels', async ({ page }) => {

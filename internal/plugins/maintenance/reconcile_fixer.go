@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reconcile_fixer.go
-// version: 2.9.1
+// version: 2.10.0
 // guid: 4e4de696-418a-4936-9e25-23a68ff19562
-// last-edited: 2026-10-31
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -175,7 +175,7 @@ var (
 )
 
 func (f *reconcileFixer) ID() string    { return reconcileFixerID }
-func (f *reconcileFixer) Title() string { return "Missing files" }
+func (f *reconcileFixer) Title() string { return "Relink missing files to files on disk" }
 func (f *reconcileFixer) Description() string {
 	return "Books whose file has gone missing, from the latest reconcile scan (\"Match missing files\"): each " +
 		"match to an untracked file on disk with its match type and confidence, and the books the scan found " +
@@ -183,6 +183,15 @@ func (f *reconcileFixer) Description() string {
 		"its file, the matched file is still on disk and no other book holds it; iTunes books and iTunes files " +
 		"are skipped. Applying a row points the book, and its file row, at the matched file; nothing moves on " +
 		"disk and no file row is deleted. Reverting the apply operation puts both back."
+}
+
+// Meta implements repairs.Fixer.
+func (f *reconcileFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupFiles,
+		Rank:    2,
+		Summary: "Points books whose file went missing at the matching file the reconcile scan found.",
+	}
 }
 
 // RequiredPermissions implements repairs.PermissionScoped: repointing books

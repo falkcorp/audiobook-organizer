@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/lost_candidates_fixer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0583655e-5bf4-4704-8046-c880bf7522b6
-// last-edited: 2026-10-06
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -75,13 +75,22 @@ func newLostCandidatesFixer(p *Plugin) *lostCandidatesFixer { return &lostCandid
 var _ repairs.Fixer = (*lostCandidatesFixer)(nil)
 
 func (f *lostCandidatesFixer) ID() string    { return lostCandidatesFixerID }
-func (f *lostCandidatesFixer) Title() string { return "Refetch lost metadata candidates" }
+func (f *lostCandidatesFixer) Title() string { return "Refetch lost metadata matches" }
 func (f *lostCandidatesFixer) Description() string {
 	return "Books a metadata search matched whose candidates were later deleted, and which are not applied. " +
 		"Before 2026-10-05 an ASIN/ISBN fill (such as the six-hourly ASIN backfill) deleted them; a title or " +
 		"author-name change still does, so books retitled or relinked by a repair land here too. Apply searches the " +
 		"providers again for each selected book and stores the candidates for review. It never applies metadata " +
 		"and never changes the book."
+}
+
+// Meta implements repairs.Fixer.
+func (f *lostCandidatesFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupMetadata,
+		Rank:    1,
+		Summary: "Searches again for books whose metadata matches were deleted. Never changes the book.",
+	}
 }
 
 // ITunesDatabaseOnly: the fixer writes no book row and no file, only the

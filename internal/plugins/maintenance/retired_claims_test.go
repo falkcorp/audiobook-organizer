@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_claims_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: c41f7a0e-2b95-4d63-8e1a-5f90d3b7a264
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -117,7 +117,7 @@ func TestJunkTitleFixer_FileHeldOnlyByRetiredVersionNeedsAPerson(t *testing.T) {
 	require.True(t, ok, "no plan row for the book")
 	require.Equal(t, junkSkipNeedsManual, r.Skipped, "skip reason: %s", r.SkipReason)
 	require.Contains(t, r.SkipReason, "held as a retired version of book "+holder.ID)
-	require.NotContains(t, r.SkipReason, "use the consolidation fixer")
+	require.NotContains(t, r.SkipReason, "use \""+fragmentFixerTitle+"\"")
 	require.Equal(t, holder.ID, retired.BookID)
 }
 

@@ -1,7 +1,7 @@
 // file: web/src/components/MetadataHistory.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: 8e3a7b2c-5d1f-4a9e-b6c0-2f8d4e7a1b3c
-// last-edited: 2026-10-04
+// last-edited: 2026-11-05
 
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -58,8 +58,8 @@ const FIELD_LABELS: Record<string, string> = {
 /**
  * Change types that record the store's own bookkeeping, not an edit, and that
  * the undo endpoint refuses (409). A "series-object-drop" row is the store
- * dropping a stale embedded series object; it is restored by relinking the
- * series (Repairs, "Stale series objects"), not by undo.
+ * dropping a stale embedded series object; the series is chosen again by hand,
+ * not by undo.
  */
 const NOT_UNDOABLE_CHANGE_TYPES = new Set(['series-object-drop']);
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_ops_planonly_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c4e1a97b-3d62-4b08-a5f9-7e20d8b61c43
-// last-edited: 2026-10-22
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -27,6 +27,7 @@ type previewThatCouldApply struct{ applies atomic.Int32 }
 func (*previewThatCouldApply) ID() string          { return "preview-that-could-apply" }
 func (*previewThatCouldApply) Title() string       { return "Preview" }
 func (*previewThatCouldApply) Description() string { return "test" }
+func (*previewThatCouldApply) Meta() repairs.Meta  { return repairs.Meta{} }
 func (*previewThatCouldApply) PlanOnly() bool      { return true }
 func (*previewThatCouldApply) Plan(context.Context, json.RawMessage, registry.Reporter) ([]repairs.Row, error) {
 	return []repairs.Row{{RowID: "r1", BookIDs: []string{"r1"}, Fingerprint: "f"}}, nil

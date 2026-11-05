@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_prune_fixer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3aa1a5a7-404c-42f9-9a8d-b6213e7b09f2
-// last-edited: 2026-10-11
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -117,11 +117,20 @@ func newSeriesPruneFixer(p *Plugin) *seriesPruneFixer { return &seriesPruneFixer
 var _ repairs.Fixer = (*seriesPruneFixer)(nil)
 
 func (f *seriesPruneFixer) ID() string    { return seriesPruneFixerID }
-func (f *seriesPruneFixer) Title() string { return "Prune series" }
+func (f *seriesPruneFixer) Title() string { return "Merge duplicate series, remove empty ones" }
 func (f *seriesPruneFixer) Description() string {
 	return "Series records that are duplicates of each other, and series that no book belongs to. " +
 		"Applying a duplicate row moves its books to the kept series and removes the empty copies; " +
 		"applying an empty-series row removes the empty series."
+}
+
+// Meta implements repairs.Fixer.
+func (f *seriesPruneFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupSeries,
+		Rank:    3,
+		Summary: "Combines series records that are copies of each other and deletes series with no books.",
+	}
 }
 
 // spState is what Replan needs from plan time: which candidate the row is.

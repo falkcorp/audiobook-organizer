@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.17.0
+// version: 1.17.1
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
 // last-edited: 2026-11-05
 //
@@ -320,6 +320,22 @@ describe('useRepairsLane: loading', () => {
       );
       await waitFor(() => expect(result.current.selectedFixer?.id).toBe('vg-primary'));
     });
+
+    it('reports a seeded id the list does not hold, from the first load and from a later link, until a fixer is picked', async () => {
+      vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER, OTHER]);
+      const { result } = renderHook(() =>
+        useRepairsLane(toast, true, { fixerId: 'dedup.split-books' })
+      );
+      await waitFor(() => expect(result.current.selectedFixer?.id).toBe('vg-primary'));
+      expect(result.current.unlistedFixerId).toBe('dedup.split-books');
+      act(() => result.current.selectFixer('other'));
+      expect(result.current.unlistedFixerId).toBeNull();
+      act(() => result.current.applyUrlSeed({ fixerId: 'maintenance.relink-stale-series' }));
+      expect(result.current.unlistedFixerId).toBe('maintenance.relink-stale-series');
+      // A listed id never raises it.
+      act(() => result.current.applyUrlSeed({ fixerId: 'other' }));
+      expect(result.current.unlistedFixerId).toBeNull();
+    });
   });
 });
 
@@ -457,6 +473,75 @@ describe('useRepairsLane: trials', () => {
     rerender({ a: false });
     expect(signal?.aborted).toBe(true);
     expect(result.current.active).toBe(false);
+  });
+});
+
+describe('useRepairsLane: API-only fixers', () => {
+  const API_ONLY: RepairFixer = {
+    id: 'harley-import',
+    title: 'Import read status from a master list',
+    description: 'Needs a list and a user.',
+    group: 'imports',
+    group_title: 'Imports & one-shot tools',
+    api_only_reason: 'Needs the id of an uploaded list, so the trial can only be started through the API.',
+  };
+
+  it('keeps the server order: the first fixer listed is the one selected, whatever its id', async () => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([
+      { ...FIXER, id: 'zz-first', group: 'duplicates', group_title: 'Duplicates & split books' },
+      { ...FIXER, id: 'aa-second', group: 'titles', group_title: 'Titles' },
+    ]);
+    const { result } = renderHook(() => useRepairsLane(toast, true));
+    await waitFor(() => expect(result.current.selectedFixerId).toBe('zz-first'));
+    expect(result.current.fixers.map((f) => f.id)).toEqual(['zz-first', 'aa-second']);
+  });
+
+  it('refuses a runTrial dispatch for an API-only fixer, says why, and starts nothing', async () => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER, API_ONLY]);
+    const { result } = await renderLane();
+    await waitFor(() => expect(result.current.fixers).toHaveLength(2));
+
+    act(() => result.current.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: 'harley-import' }));
+
+    expect(api.startRepairPlan).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining(API_ONLY.api_only_reason!), 'info');
+    expect(result.current.trial).toBeNull();
+  });
+
+  it('leaves the apply banner of an API-only fixer alone when a trial is refused', async () => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([{ ...API_ONLY, last_plan: FIXER.last_plan }]);
+    const { result } = await renderLane();
+    vi.mocked(api.startRepairApply).mockResolvedValue({
+      operation_id: 'apply-1',
+      def_id: 'repairs.apply',
+      fixer_id: 'harley-import',
+      status: 'queued',
+    });
+    vi.mocked(api.pollOperationV2).mockResolvedValue(op('apply-1', 'completed'));
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(applyResult({ fixer_id: 'harley-import' }));
+    act(() =>
+      result.current.dispatch({ lane: 'repairs', type: 'applyRows', fixerId: 'harley-import', planOpId: 'plan-1', rowIds: ['g1'] })
+    );
+    await waitFor(() => expect(result.current.applyResult).not.toBeNull());
+
+    act(() => result.current.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: 'harley-import' }));
+    expect(api.startRepairPlan).not.toHaveBeenCalled();
+    expect(result.current.applyResult).not.toBeNull();
+  });
+
+  it('still runs a trial for a fixer with no reason, with no params', async () => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER, API_ONLY]);
+    const { result } = await renderLane();
+    await waitFor(() => expect(result.current.fixers).toHaveLength(2));
+    vi.mocked(api.startRepairPlan).mockResolvedValue({
+      operation_id: 'plan-2',
+      def_id: 'repairs.plan',
+      fixer_id: 'vg-primary',
+      status: 'queued',
+    });
+    vi.mocked(api.pollOperationV2).mockResolvedValue(op('plan-2', 'completed'));
+    act(() => result.current.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: 'vg-primary' }));
+    await waitFor(() => expect(api.startRepairPlan).toHaveBeenCalledWith('vg-primary'));
   });
 });
 

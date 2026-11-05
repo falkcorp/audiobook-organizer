@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
-// last-edited: 2026-10-21
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -257,7 +257,7 @@ func newJunkAuthorFixer(p *Plugin) *junkAuthorFixer { return &junkAuthorFixer{p:
 var _ repairs.Fixer = (*junkAuthorFixer)(nil)
 
 func (f *junkAuthorFixer) ID() string    { return junkAuthorFixerID }
-func (f *junkAuthorFixer) Title() string { return "Junk authors" }
+func (f *junkAuthorFixer) Title() string { return "Fix junk authors" }
 func (f *junkAuthorFixer) Description() string {
 	return "Author records that are not people: series names, characters, genres, book titles, " +
 		"placeholders, studios, narrator credits and filename leftovers. Each book is relinked to its " +
@@ -267,6 +267,15 @@ func (f *junkAuthorFixer) Description() string {
 		"held, never removed, and so are collective credits (Various Authors, Anonymous) and names that " +
 		"are junk only because another author's series or title uses them. Names joined by \"_\" are " +
 		"left for Author split. The emptied author record is kept for Purge empty authors."
+}
+
+// Meta implements repairs.Fixer.
+func (f *junkAuthorFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupAuthors,
+		Rank:    2,
+		Summary: "Replaces author credits that are not people (series names, genres, placeholders) with the real author.",
+	}
 }
 
 type junkAuthorParams struct {

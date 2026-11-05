@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
 // last-edited: 2026-11-05
 
@@ -222,8 +222,22 @@ type FixerInfo struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
 	Description string `json:"description"`
-	LastPlan    *OpRef `json:"last_plan,omitempty"`
-	LastApply   *OpRef `json:"last_apply,omitempty"`
+	// Summary is the one-line text the rail shows; Description (with its
+	// safety warnings) is for the fixer's header.
+	Summary string `json:"summary"`
+	// Group is the id of the header the fixer is listed under, and GroupTitle
+	// its text. The list arrives already in display order (group, then
+	// Rank); the lane renders a header wherever Group changes and never
+	// re-sorts. Rank is the fixer's place inside its group.
+	Group      repairs.GroupID `json:"group"`
+	GroupTitle string          `json:"group_title"`
+	Rank       int             `json:"rank"`
+	// APIOnlyReason is set for a fixer whose plan needs params the lane cannot
+	// collect: the lane shows an "API only" badge and a disabled Run trial
+	// button with this text as the explanation (repairs.Meta.APIOnly).
+	APIOnlyReason string `json:"api_only_reason,omitempty"`
+	LastPlan      *OpRef `json:"last_plan,omitempty"`
+	LastApply     *OpRef `json:"last_apply,omitempty"`
 	// LastCompletedPlan is the newest plan that COMPLETED. LastPlan moves when a
 	// plan is enqueued, so a queued, failed or dropped one hides the trial the
 	// reviewer was working from; this one still names it, and the lane keeps
@@ -279,8 +293,11 @@ func (h *Handler) ListFixers(c *gin.Context) {
 	out := make([]FixerInfo, 0, len(fixers))
 	for _, f := range fixers {
 		_, held := h.fixerHeld(c, f)
+		m := f.Meta()
 		info := FixerInfo{ID: f.ID(), Title: f.Title(), Description: f.Description(),
-			PlanOnly: repairs.IsPlanOnly(f), Permitted: held}
+			Summary: m.Summary, Group: m.Group, GroupTitle: repairs.GroupTitle(m.Group), Rank: m.Rank,
+			APIOnlyReason: m.APIOnly,
+			PlanOnly:      repairs.IsPlanOnly(f), Permitted: held}
 		// Only for a caller who may read the fixer's rows: the pointers name the
 		// plan op whose rows ListPlanRows serves, and their summaries count them.
 		if info.Permitted {

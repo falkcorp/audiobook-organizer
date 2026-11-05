@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/audible_read_status_fixer.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 36d6036c-05ce-48d1-9997-a65d6a8b67ce
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -134,10 +134,8 @@ func newAudibleReadStatusFixer(p *Plugin) *audibleReadStatusFixer {
 
 var _ repairs.Fixer = (*audibleReadStatusFixer)(nil)
 
-func (f *audibleReadStatusFixer) ID() string { return audibleReadStatusFixerID }
-func (f *audibleReadStatusFixer) Title() string {
-	return "Audible read status import"
-}
+func (f *audibleReadStatusFixer) ID() string    { return audibleReadStatusFixerID }
+func (f *audibleReadStatusFixer) Title() string { return "Import read status from Audible" }
 func (f *audibleReadStatusFixer) Description() string {
 	return "Applies the read status of an Audible library export to the matched books for one user. Plan params " +
 		"(the POST body): target_user_id (required, never defaulted) and items (the export's items: asin, title, " +
@@ -147,6 +145,16 @@ func (f *audibleReadStatusFixer) Description() string {
 		"unless the book is already finished or has newer local activity; in-progress titles get Audible's " +
 		"position only when the book has no local progress. Never un-finishes anything. Undo with the apply " +
 		"operation's revert, which refuses a book the user has listened to since."
+}
+
+// Meta implements repairs.Fixer.
+func (f *audibleReadStatusFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupImports,
+		Rank:    2,
+		Summary: "Marks one user's books finished or in progress from an Audible export.",
+		APIOnly: "Needs an Audible library export and the user to import it for. The export is a whole file of items, not a setting, so the trial can only be started through the API.",
+	}
 }
 
 // RequiredPermissions implements repairs.PermissionScoped: the plan names any

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.56.4
+// version: 1.56.5
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -73,8 +73,6 @@ type fakeDeps struct {
 	purgeErr error
 	// refreshCtx, when non-nil, records the ctx RunMetadataRefreshScan receives.
 	refreshCtx *context.Context
-	// splitCands backs SplitBookCandidates; nil means no embedding store.
-	splitCands SplitBookCandidateRows
 	// reconcileScan backs LatestReconcileScan; nil means no scan has run.
 	reconcileScan func() (ReconcileScan, error)
 	// vetoes and journals override RetiredVersionGuards; nil means the way the
@@ -111,8 +109,6 @@ func (d fakeDeps) LatestReconcileScan() (ReconcileScan, error) {
 	}
 	return d.reconcileScan()
 }
-
-func (d fakeDeps) SplitBookCandidates() SplitBookCandidateRows { return d.splitCands }
 
 func (d fakeDeps) MergeBooks(opID string, bookIDs []string, primaryID string) (int, error) {
 	return 0, nil

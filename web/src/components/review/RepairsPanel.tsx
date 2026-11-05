@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.35.0
+// version: 1.35.1
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-11-05
 
@@ -24,6 +24,15 @@
  * while it writes. The copy says exactly that and never that anything is
  * blocked.
  *
+ * The rail lists the fixers in the order the server sends them, under one
+ * header per group (`group` / `group_title`): a header is drawn wherever the
+ * group changes and the list is never re-sorted here, so the order lives in one
+ * place (internal/repairs). Each entry shows the title, "Preview only" / "API
+ * only" badges and the one-line `summary`; the long description, with its safety
+ * warnings, is in the header. An API-only fixer (its plan needs params only the
+ * API takes) has a disabled Run trial button with the reason as its tooltip and
+ * in the empty state; its existing plans stay readable and applicable.
+ *
  * The rail is resizable (drag the divider, or focus it and use the arrow keys)
  * and its width is remembered per browser. Fixer descriptions are clamped in
  * the rail and collapsed in the header behind "More"; the expanded state is
@@ -37,21 +46,24 @@
  * (repairs/RepairsGroupedView).
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { Fragment, useCallback, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import {
   Alert,
   AlertTitle,
   Box,
   Button,
+  type ButtonProps,
   Chip,
   CircularProgress,
   LinearProgress,
   List,
   ListItemButton,
+  ListSubheader,
   Stack,
   Tab,
   TablePagination,
   Tabs,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -62,6 +74,7 @@ import {
   summarizeApply,
   summarizeAppliedRows,
   trialBlocksApply,
+  RETIRED_REPAIR_FIXER_IDS,
   type RepairTrialState,
   type RepairsLane,
 } from './lanes/useRepairsLane';
@@ -210,6 +223,66 @@ function RailResizer({ width, onResize }: { width: number; onResize: (w: number,
   );
 }
 
+/** "Preview only" (the fixer has no Apply) and "API only" (its trial cannot be started here). */
+function FixerBadges({ fixer }: { fixer: RepairFixer }) {
+  if (!fixer.plan_only && !fixer.api_only_reason) return null;
+  return (
+    <>
+      {fixer.plan_only && (
+        <Chip
+          size="small"
+          variant="outlined"
+          label="Preview only"
+          data-testid={`repairs-badge-preview-${fixer.id}`}
+        />
+      )}
+      {fixer.api_only_reason && (
+        <Chip
+          size="small"
+          variant="outlined"
+          color="warning"
+          label="API only"
+          data-testid={`repairs-badge-api-only-${fixer.id}`}
+        />
+      )}
+    </>
+  );
+}
+
+type TrialButtonProps = Omit<ButtonProps, 'onClick' | 'disabled' | 'children'> & {
+  fixer: RepairFixer;
+  /** Disables the button (a trial is already running). */
+  disabled?: boolean;
+  onRun: (e: MouseEvent<HTMLButtonElement>) => void;
+  children: ReactNode;
+};
+
+/**
+ * Every control that starts a fixer's trial. For an API-only fixer it is
+ * disabled and says why in a tooltip: a trial started without the params the
+ * API takes can only fail. A disabled button fires no pointer events, so the
+ * tooltip hangs on a focusable wrapper.
+ */
+function TrialButton({ fixer, disabled, onRun, children, ...rest }: TrialButtonProps) {
+  const reason = fixer.api_only_reason;
+  if (reason) {
+    return (
+      <Tooltip title={reason}>
+        <span tabIndex={0} style={{ display: 'inline-block' }} data-testid={`repairs-api-only-hint-${fixer.id}`}>
+          <Button {...rest} disabled>
+            {children}
+          </Button>
+        </span>
+      </Tooltip>
+    );
+  }
+  return (
+    <Button {...rest} disabled={disabled} onClick={onRun}>
+      {children}
+    </Button>
+  );
+}
+
 function FixerRail({ repairs, width }: RepairsPanelProps & { width: number }) {
   const { fixers, selectedFixerId, trials } = repairs;
   return (
@@ -256,50 +329,80 @@ function FixerRail({ repairs, width }: RepairsPanelProps & { width: number }) {
           No repair fixers are registered on this server.
         </Typography>
       )}
+      {repairs.unlistedFixerId && (
+        <Alert severity="info" sx={{ m: 1 }} data-testid="repairs-fixer-unlisted">
+          <code>{repairs.unlistedFixerId}</code>{' '}
+          {RETIRED_REPAIR_FIXER_IDS.has(repairs.unlistedFixerId)
+            ? '(retired) is no longer in the lane. Its past runs stay in the history.'
+            : '(not available) is not a fixer this server lists.'}
+        </Alert>
+      )}
       <List dense disablePadding>
-        {fixers.map((f: RepairFixer) => {
+        {fixers.map((f: RepairFixer, i) => {
           const trial = trials[f.id];
           const running = trial?.phase === 'running';
           const apply = applySummary(f.last_apply);
+          // The server's order is the display order: a header wherever the
+          // group changes, no client-side sort.
+          const header = f.group && f.group !== fixers[i - 1]?.group;
           return (
-            <ListItemButton
-              key={f.id}
-              selected={f.id === selectedFixerId}
-              onClick={() => repairs.selectFixer(f.id)}
-              data-testid={`repairs-fixer-${f.id}`}
-              sx={{ display: 'block', py: 1, borderBottom: 1, borderColor: 'divider' }}
-            >
-              <Typography variant="subtitle2">{f.title}</Typography>
-              <Typography variant="body2" title={f.description} sx={{ color: 'text.secondary', mb: 0.5, ...CLAMP_2 }}>
-                {f.description}
-              </Typography>
-              <Typography variant="caption" component="div" data-testid={`repairs-fixer-plan-${f.id}`}>
-                {f.permitted === false ? "Needs access you don't have" : planSummary(f.last_plan, trial)}
-              </Typography>
-              {apply && (
-                <Typography variant="caption" component="div" sx={{ color: 'text.secondary' }}>
-                  {apply}
-                </Typography>
-              )}
-              {f.permitted !== false && (
-                <Button
-                  size="small"
-                  variant="outlined"
-                  sx={{ mt: 0.5 }}
-                  disabled={running}
-                  data-testid={`repairs-run-trial-${f.id}`}
-                  onClick={(e) => {
-                    // The row is also a button (select); run the trial without
-                    // re-selecting through the bubbling click.
-                    e.stopPropagation();
-                    repairs.selectFixer(f.id);
-                    repairs.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: f.id });
-                  }}
+            <Fragment key={f.id}>
+              {header && (
+                <ListSubheader
+                  component="div"
+                  data-testid={`repairs-group-${f.group}`}
+                  sx={{ lineHeight: '32px', fontWeight: 600, borderBottom: 1, borderColor: 'divider' }}
                 >
-                  {running ? 'Trial running…' : 'Run trial'}
-                </Button>
+                  {f.group_title ?? f.group}
+                </ListSubheader>
               )}
-            </ListItemButton>
+              <ListItemButton
+                selected={f.id === selectedFixerId}
+                onClick={() => repairs.selectFixer(f.id)}
+                data-testid={`repairs-fixer-${f.id}`}
+                sx={{ display: 'block', py: 1, borderBottom: 1, borderColor: 'divider' }}
+              >
+                <Stack direction="row" useFlexGap sx={{ alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+                  <Typography variant="subtitle2">{f.title}</Typography>
+                  <FixerBadges fixer={f} />
+                </Stack>
+                <Typography
+                  variant="body2"
+                  title={f.description}
+                  data-testid={`repairs-fixer-summary-${f.id}`}
+                  sx={{ color: 'text.secondary', mb: 0.5, ...CLAMP_2 }}
+                >
+                  {f.summary || f.description}
+                </Typography>
+                <Typography variant="caption" component="div" data-testid={`repairs-fixer-plan-${f.id}`}>
+                  {f.permitted === false ? "Needs access you don't have" : planSummary(f.last_plan, trial)}
+                </Typography>
+                {apply && (
+                  <Typography variant="caption" component="div" sx={{ color: 'text.secondary' }}>
+                    {apply}
+                  </Typography>
+                )}
+                {f.permitted !== false && (
+                  <TrialButton
+                    fixer={f}
+                    size="small"
+                    variant="outlined"
+                    sx={{ mt: 0.5 }}
+                    disabled={running}
+                    data-testid={`repairs-run-trial-${f.id}`}
+                    onRun={(e) => {
+                      // The row is also a button (select); run the trial without
+                      // re-selecting through the bubbling click.
+                      e.stopPropagation();
+                      repairs.selectFixer(f.id);
+                      repairs.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: f.id });
+                    }}
+                  >
+                    {running ? 'Trial running…' : 'Run trial'}
+                  </TrialButton>
+                )}
+              </ListItemButton>
+            </Fragment>
           );
         })}
       </List>
@@ -355,7 +458,7 @@ function ClassChips({ repairs }: RepairsPanelProps) {
 
 /** Words for the skip kinds fixers report; an unknown kind shows as is. */
 export const SKIP_KIND_LABEL: Record<string, string> = {
-  skipped_fragment: 'Fragment — use the consolidation fixer',
+  skipped_fragment: 'Chapter file — use "Merge chapter files into their book"',
   skipped_possible_fragment: 'Possible fragment (not proven)',
   skipped_needs_manual: 'Needs manual',
   skipped_user_locked: 'User-locked title or author',
@@ -388,9 +491,9 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   skipped_multi_author: 'Several authors — needs a person',
   skipped_implausible_author: 'Provider author is not a plausible name',
   skipped_ambiguous_author: 'Several existing authors match the name',
-  skipped_swapped_title_author: 'Title and author swapped — use the swapped fixer',
+  skipped_swapped_title_author: 'Title and author swapped — use "Fix swapped title and author"',
   skipped_not_swapped: 'No longer swapped',
-  skipped_relink_series_first: 'Stale series object — relink the series first',
+  skipped_relink_series_first: 'Stale series object on the book row — choose its series by hand first',
   skipped_split_refused: 'Splitter will not split the name',
   skipped_implausible_part: 'A part looks like a title or junk',
   skipped_contributor_role: 'Names contributor roles (translator, editor)',
@@ -530,7 +633,8 @@ function SkipKindChips({ repairs }: RepairsPanelProps) {
   );
 }
 
-function FixerHeader({ title, description }: { title: string; description: string }) {
+function FixerHeader({ fixer }: { fixer: RepairFixer }) {
+  const { title, description } = fixer;
   const [open, setOpen] = useState(() => readStored(DESC_OPEN_KEY) === '1');
   const toggle = () => {
     setOpen((o) => {
@@ -544,6 +648,7 @@ function FixerHeader({ title, description }: { title: string; description: strin
         <Typography variant="h6" sx={{ flexShrink: 0 }}>
           {title}
         </Typography>
+        <FixerBadges fixer={fixer} />
         <Typography
           variant="body2"
           data-testid="repairs-fixer-description"
@@ -603,7 +708,7 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
   if (fixer.permitted === false) {
     return (
       <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-        <FixerHeader title={fixer.title} description={fixer.description} />
+        <FixerHeader fixer={fixer} />
         <Alert severity="warning" sx={{ m: 2 }} data-testid="repairs-fixer-forbidden">
           You don't have permission to use this repair. Its trial rows can include other people's
           data, so they are shown only to accounts with the access it needs. Ask an administrator
@@ -615,7 +720,7 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
 
   return (
     <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <FixerHeader title={fixer.title} description={fixer.description} />
+      <FixerHeader fixer={fixer} />
 
       {running && (
         <Alert severity="info" sx={{ m: 2, mb: 0 }} data-testid="repairs-trial-running" icon={<CircularProgress size={18} />}>
@@ -639,9 +744,9 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
           sx={{ m: 2, mb: 0 }}
           data-testid="repairs-trial-failed"
           action={
-            <Button color="inherit" size="small" onClick={runTrial}>
+            <TrialButton fixer={fixer} color="inherit" size="small" onRun={runTrial}>
               Run trial again
-            </Button>
+            </TrialButton>
           }
         >
           {trial.message}
@@ -661,11 +766,13 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
       {!planOpId && !running && (
         <Box sx={{ p: 3 }} data-testid="repairs-no-trial">
           <Typography variant="body2" sx={{ mb: 1 }}>
-            No completed trial for this fixer yet. Run one to see what it would change.
+            {fixer.api_only_reason
+              ? `No completed trial for this fixer yet. ${fixer.api_only_reason}`
+              : 'No completed trial for this fixer yet. Run one to see what it would change.'}
           </Typography>
-          <Button variant="contained" onClick={runTrial}>
+          <TrialButton fixer={fixer} variant="contained" onRun={runTrial}>
             Run trial
-          </Button>
+          </TrialButton>
         </Box>
       )}
 
@@ -793,9 +900,9 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
               data-testid="repairs-apply-result"
               action={
                 <>
-                  <Button color="inherit" size="small" onClick={runTrial} disabled={running}>
+                  <TrialButton fixer={fixer} color="inherit" size="small" onRun={runTrial} disabled={running}>
                     Re-run trial
-                  </Button>
+                  </TrialButton>
                   <Button
                     color="inherit"
                     size="small"
@@ -841,15 +948,16 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
                 data-testid="repairs-rows-error"
                 action={
                   repairs.rowsNeedRerun ? (
-                    <Button
+                    <TrialButton
+                      fixer={fixer}
                       color="inherit"
                       size="small"
-                      onClick={runTrial}
+                      onRun={runTrial}
                       disabled={running}
                       data-testid="repairs-rows-rerun"
                     >
                       Run plan again
-                    </Button>
+                    </TrialButton>
                   ) : (
                     <Button color="inherit" size="small" onClick={repairs.reloadRows}>
                       Retry

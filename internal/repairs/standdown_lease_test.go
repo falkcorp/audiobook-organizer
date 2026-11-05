@@ -1,7 +1,7 @@
 // file: internal/repairs/standdown_lease_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0cc1976b-de55-4933-9769-7d7d9ae3ff38
-// last-edited: 2026-10-01
+// last-edited: 2026-11-05
 
 package repairs
 
@@ -91,6 +91,7 @@ type chainFixer struct {
 func (f *chainFixer) ID() string          { return "chain-trim" }
 func (f *chainFixer) Title() string       { return "Chain trim" }
 func (f *chainFixer) Description() string { return "test fixer" }
+func (f *chainFixer) Meta() Meta          { return Meta{} }
 
 func (f *chainFixer) row(id string) Row {
 	return Row{RowID: id, BookIDs: f.groups[id], Title: id, Reason: "untrimmed", Risk: RiskLow, Fingerprint: "fp:" + id}

@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.207.0
+// version: 2.207.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-11-05
 
@@ -8567,7 +8567,27 @@ export interface RepairOpRef {
 export interface RepairFixer {
   id: string;
   title: string;
+  /** The full text, safety warnings included: shown in the fixer's header. */
   description: string;
+  /** One plain sentence for the rail. Absent (an older server): the rail clamps the description instead. */
+  summary?: string;
+  /**
+   * The header the fixer is listed under (a stable id) and its text. The server
+   * sends the list already in display order (group, then rank), so the lane
+   * draws a header wherever `group` changes and never re-sorts. Absent (an
+   * older server): no headers.
+   */
+  group?: string;
+  group_title?: string;
+  /** Place inside the group, 1 first. Informational: the list order already follows it. */
+  rank?: number;
+  /**
+   * Why the fixer's plan cannot be started from the lane: it needs params (an
+   * export, a list of ids) only the API takes. Set: the lane shows an "API
+   * only" badge and a disabled Run trial button with this text as the
+   * explanation. Its existing plans stay readable and applicable.
+   */
+  api_only_reason?: string;
   last_plan?: RepairOpRef;
   /**
    * The newest plan that COMPLETED. `last_plan` moves when a plan is enqueued, so

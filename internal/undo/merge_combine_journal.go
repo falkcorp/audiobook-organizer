@@ -1,7 +1,7 @@
 // file: internal/undo/merge_combine_journal.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 5e3a9c17-2d84-4f60-b9a1-7c06e4d2f8b3
-// last-edited: 2026-10-18
+// last-edited: 2026-11-05
 
 package undo
 
@@ -16,7 +16,8 @@ import (
 // that keeps its own undo record (merge.CombineJournal), and this row names
 // that record. It is journaled on the merge's keep book (BookID) right after
 // the merge wrote its journal Pending and before the merge's first mutation:
-// by maintenance's dedup.split-books fixer (through its repairs Writer), and by
+// by maintenance's dedup.split-books fixer (through its repairs Writer; the fixer
+// was retired 2026-11-05 and its journals remain), and by
 // every other combine at the chokepoints themselves (merge.Service
 // CombineBooksWithOptions and dedup.MergeSplitBookClusterWithOptions, through
 // merge.RecordJournalPointer), under the caller's operation id or, for a

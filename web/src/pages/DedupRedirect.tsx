@@ -1,7 +1,7 @@
 // file: web/src/pages/DedupRedirect.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5c0d8e41-7a36-4b92-8f1d-3e6a9b2c4d70
-// last-edited: 2026-10-15
+// last-edited: 2026-11-05
 
 import { Navigate, useLocation } from 'react-router-dom';
 
@@ -19,7 +19,9 @@ const TAB_TARGETS: Record<string, string> = {
   series: 'lane=authors&view=series',
   ai: 'lane=authors&view=ai',
   reconcile: 'lane=repairs&fixer=reconcile.missing-files',
-  'split-books': 'lane=repairs&fixer=dedup.split-books',
+  // The Split Books fixer is retired; merging split books is the chapter-file
+  // fixer's job.
+  'split-books': 'lane=repairs&fixer=fragment-consolidation',
 };
 
 // `/dedup` with no `tab` at all: the old default tab was the exact-match list.

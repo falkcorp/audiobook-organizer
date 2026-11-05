@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.237.2
+// version: 1.237.4
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-31
+// last-edited: 2026-11-05
 
 package database
 
@@ -3101,8 +3101,8 @@ func enforceSeriesInvariant(book, old *Book) *Series {
 //     snapshot of this same write keeps.
 //
 // What remains is a stale object (SeriesID nil, or naming another series)
-// that older builds left in the row: the only record of a series, which the
-// stale-series relink fixer reads.
+// that older builds left in the row: the only record of a series. (The
+// stale-series relink fixer that read it was retired 2026-11-05.)
 func seriesObjectLoss(old *Book, kept *Series, newID *int) *Series {
 	if old == nil || old.Series == nil {
 		return nil
@@ -3413,7 +3413,7 @@ type bookWriteOpts struct {
 	// legacySeries writes Book.Series exactly as given, skipping the rule (enforceSeriesInvariant, which every other create and update applies)
 	// that holds the object to SeriesID. It exists so tests can seed the rows
 	// older builds wrote (object kept with SeriesID nil, or naming another
-	// series), which the stale-series relink repairs. Only
+	// series), which the retired stale-series relink fixer repaired. Only
 	// SeedLegacyBookRowForTest sets it (pebble_store_legacy_seed.go).
 	legacySeries bool
 	// legacyTrash writes the trash columns exactly as given, skipping

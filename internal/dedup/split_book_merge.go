@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.22.3
+// version: 1.22.4
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 // Split-book cluster merge — portable across SQLite and Pebble.
 //
@@ -134,7 +134,8 @@ type SplitMergeOptions struct {
 	// follows to the journal itself (merge.RecordJournalPointer), under
 	// OperationID, with the same refusal: no merge runs without a way back.
 	// A caller sets it only to journal that pointer its own way (the
-	// dedup.split-books fixer, through its repairs Writer).
+	// dedup.split-books fixer did, through its repairs Writer, until it was
+	// retired 2026-11-05).
 	OnJournal func(journalID string) error
 	// OperationID is the operation the default OnJournal journals the undo
 	// pointer under: the caller's op, so reverting it undoes every merge it

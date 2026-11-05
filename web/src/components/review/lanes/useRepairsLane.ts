@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.23.0
+// version: 1.23.1
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
 // last-edited: 2026-11-05
 
@@ -70,6 +70,19 @@ function isPlanNeedsRerun(err: unknown): boolean {
   const e = err as { status?: number; data?: { code?: unknown } } | null;
   return e?.status === 409 && e.data?.code === PLAN_NEEDS_RERUN_CODE;
 }
+
+/**
+ * Fixers the server no longer registers (owner decision 2026-11-05: their
+ * trials found nothing to fix, or another fixer covers them). Stored plans,
+ * applies and undo history still name them, and an old link can too; the lane
+ * shows such an id labelled "retired" instead of failing. An id not listed here
+ * and not served is shown as "not available".
+ */
+export const RETIRED_REPAIR_FIXER_IDS: ReadonlySet<string> = new Set([
+  'maintenance.normalize-letter-l-ordinals',
+  'maintenance.relink-stale-series',
+  'dedup.split-books',
+]);
 
 /** Page sizes offered under the rows table. The server caps a page at 500. */
 export const REPAIRS_PAGE_SIZES = [25, 50, 100, 250, 500] as const;
@@ -357,6 +370,13 @@ export interface RepairsLane {
   fixersLoading: boolean;
   /** GET /repairs failed. Distinct from an empty list (no fixers registered). */
   fixersError: string | null;
+  /**
+   * A fixer id a link asked for (?fixer=) that the server does not list: one
+   * retired since the link was made, or a typo. The lane opens the first fixer
+   * instead and shows this id, labelled retired when it is one, until the
+   * reviewer picks a fixer. Null otherwise.
+   */
+  unlistedFixerId: string | null;
   reloadFixers: () => void;
   /**
    * Whether this sign-in may apply owner rows (GET /repairs/owner-status), or
@@ -473,6 +493,7 @@ export function useRepairsLane(
   const [fixersLoaded, setFixersLoaded] = useState(false);
   const [fixersLoading, setFixersLoading] = useState(false);
   const [fixersError, setFixersError] = useState<string | null>(null);
+  const [unlistedFixerId, setUnlistedFixerId] = useState<string | null>(null);
   const [fixersNonce, setFixersNonce] = useState(0);
   const [ownerStatus, setOwnerStatus] = useState<api.RepairOwnerStatus | null>(null);
 
@@ -638,6 +659,7 @@ export function useRepairsLane(
         const seed = fixerSeedRef.current;
         parkFixerSeed(null);
         const seeded = seed && list.some((f) => f.id === seed) ? seed : null;
+        setUnlistedFixerId(seed && !seeded ? seed : null);
         setSelectedFixerId((cur) =>
           seeded ?? (cur && list.some((f) => f.id === cur) ? cur : (list[0]?.id ?? null))
         );
@@ -942,6 +964,7 @@ export function useRepairsLane(
   }, []);
 
   const selectFixer = useCallback((id: string) => {
+    setUnlistedFixerId(null);
     setSelectedFixerId(id);
     setFilterState('applicable');
     setRowClassState(null);
@@ -959,7 +982,10 @@ export function useRepairsLane(
       const id = next.fixerId ?? null;
       if (id) {
         if (!fixersLoaded) parkFixerSeed(id);
-        else if (fixers.some((f) => f.id === id)) setSelectedFixerId(id);
+        else if (fixers.some((f) => f.id === id)) {
+          setUnlistedFixerId(null);
+          setSelectedFixerId(id);
+        } else setUnlistedFixerId(id);
       }
       setFilterState(next.filter ?? 'applicable');
       setRowClassState(next.rowClass ?? null);
@@ -980,6 +1006,16 @@ export function useRepairsLane(
 
   const runTrial = useCallback(
     async (fixerId: string) => {
+      // A fixer whose plan needs params only the API takes cannot be started
+      // from here: the lane sends none, so the trial could only fail. The rail
+      // and the header offer no live control for it; a stray dispatch (a
+      // shortcut, a stale click) is refused here with the reason, before the
+      // previous apply's banner is cleared.
+      const apiOnly = fixers.find((f) => f.id === fixerId)?.api_only_reason;
+      if (apiOnly) {
+        toast(`This repair cannot be started from here. ${apiOnly}`, 'info');
+        return;
+      }
       // Starting another trial ends the previous apply's banner.
       clearApplyResult(fixerId);
       try {
@@ -994,7 +1030,7 @@ export function useRepairsLane(
         toast(`Could not start the trial: ${errorMessage(err, 'unknown error')}`, 'error');
       }
     },
-    [clearApplyResult, followTrial, toast]
+    [clearApplyResult, fixers, followTrial, toast]
   );
 
   /**
@@ -1327,6 +1363,7 @@ export function useRepairsLane(
     fixers,
     fixersLoading,
     fixersError,
+    unlistedFixerId,
     reloadFixers,
     ownerStatus,
     selectedFixerId: selectedFixer ? selectedFixerId : null,

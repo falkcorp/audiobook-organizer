@@ -1,7 +1,7 @@
 // file: internal/repairs/standdown_beats_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9d3f6b21-7a4e-4c58-b1d0-2e8f5c7a3b96
-// last-edited: 2026-10-26
+// last-edited: 2026-11-05
 
 package repairs
 
@@ -112,6 +112,7 @@ type fileGroupFixer struct {
 func (f *fileGroupFixer) ID() string          { return "file-group" }
 func (f *fileGroupFixer) Title() string       { return "File group" }
 func (f *fileGroupFixer) Description() string { return "test fixer" }
+func (f *fileGroupFixer) Meta() Meta          { return Meta{} }
 
 func (f *fileGroupFixer) row() Row {
 	return Row{RowID: "g", BookIDs: append([]string{f.survivor}, f.frags...), Title: "g", Reason: "fragments",
