@@ -1,0 +1,231 @@
+<!-- file: docs/agent-tasks/platform-core/F6-04-outbox-operator-routes-dark.md -->
+<!-- version: 1.0.4 -->
+<!-- guid: 939e1586-1e99-43dd-b555-319f2d5b85cb -->
+<!-- last-edited: 2026-11-05 -->
+
+# F6-04 — Outbox operator routes, dark: `GET /api/core/v1/outbox/dead`, a dead letter's retry and discard, and a consumer's backlog purge, all audited with `core:system.manage`, the purge also interactive
+
+> **SPEC-GATED.** Step 0 below checks one piece of spec text before any code is written. If it is missing, STOP and
+> report; do not invent the names.
+
+| Field | Value |
+|---|---|
+| ID | F6-04 |
+| Release / flip | R2, events flip F6 (dark PR; mounted at F6-03) |
+| Tier | **T2** (Sonnet / high): audited, interactive routes that replay or discard messages; every route, permission and guard is fixed by the spec |
+| Wave | W31 (beside F3-08, F4-07, F5-01, F5-02, F5-03, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13, F5-19, F7-05, F7-06, F9-01; file-disjoint) |
+| Depends on | F6-01 (the outbox and its store), F4-01 (`rbac`), F4-02 (`auth`, the principal and its method), F2-07 (`audit.Logger`) |
+| Owns gate tests | none of 09's gate list; the route tests below (names coined here) |
+| Gate | Plan, then execute autonomously in your own worktree and PR. |
+
+## ⛔ START HERE
+
+```bash
+REPO=<your clone>
+SLUG=platform-core-f6-04-outboxhttp
+git -C "$REPO" fetch origin
+git -C "$REPO" worktree add "$REPO/.worktrees/$SLUG" -b "agent/$SLUG" origin/main
+cd "$REPO/.worktrees/$SLUG"
+git rebase origin/main
+make web-deps
+git rev-parse HEAD       # BASE
+```
+
+Confirm F6-01, F4-01, F4-02 and F2-07 are merged. If not, stop. No `go work init` (CLAUDE.md). Run core commands from
+inside `core/`.
+
+## Step 0 (SPEC-GATE): the audit action names
+
+05-events §5E.11 says these routes are **audited**. 05-rbac §7.1 is the normative action table ("other files use these
+names") and carries the `core.outbox.*` row (write path sync): `dead_retry` and `dead_discard` (consumer, seq, topic),
+and `backlog_purge` (consumer, messages advanced past). The three audit actions are therefore `core.outbox.dead_retry`,
+`core.outbox.dead_discard` and `core.outbox.backlog_purge`.
+
+```bash
+REPO_SPEC=docs/specs/platform-core
+awk '/^### 7.1 /,/^### 7.2 /' "$REPO_SPEC/05-rbac.md" | grep -c '`core.outbox.\*`'      # must be >= 1
+```
+
+- **1 or more** (it is 1 at the spec's current text): check that the row names `dead_retry`, `dead_discard` and
+  `backlog_purge`, use them as `core.outbox.<action>`, and continue with step 1.
+- **0:** STOP. Report: "F6-04 is spec-gated: 05-rbac §7.1 has no `core.outbox.*` row naming the audit actions of the
+  05-events §5E.11 dead-letter retry, dead-letter discard and backlog-purge routes." Write no code.
+
+The `GET` list is a routine read and is not audited (05-rbac §7.1, last paragraph).
+
+## Goal
+
+Create the route package `core/internal/outboxhttp` (package name coined here; 03 §3.3 `internal/<capability>http`
+row; layer L6 by 03 §3.5 R4), registering on `httpapi.Router.CoreGroup()` the six operator routes of 05-events
+§5E.11:
+
+| Route | Permission and guards (05-events §5E.11) |
+|---|---|
+| `GET /api/core/v1/outbox/dead` | `core:system.manage` |
+| `POST /api/core/v1/outbox/dead/{consumer}/{seq}/retry` | `core:system.manage`, audited |
+| `DELETE /api/core/v1/outbox/dead/{consumer}/{seq}` | `core:system.manage`, audited |
+| `DELETE /api/core/v1/outbox/consumers/{consumer}/backlog` | `core:system.manage` + `Guards.Interactive`, audited |
+| `GET /api/core/v1/outbox/consumers` | `core:system.view` (lag, pending, dead count, intake backlog; disabled modules' consumers with their retained backlog) |
+| `GET /api/core/v1/events/topics` | `core:system.view` (the frozen topic catalog) |
+
+Semantics (05-events §5E.5.2): dead letters live at `c/outbox/dead/<consumer>/<topic>/<seq20>` and "stay until an
+operator retries or discards them"; a consumer name is bound to one topic (a second `Handler` with one name on another
+topic is refused, `TestOutbox_DuplicateConsumerNameRefused`), so `{consumer}` plus `{seq}` names one dead letter. A
+retry hands the message back to its consumer for delivery; a discard deletes the dead letter. The purge advances that
+consumer's cursors to the head of its topic; it is "the only way a disabled module's messages are discarded" (§5E.11,
+§5E.5.2 Retention). The `core.outbox` health component stays Degraded while any dead letter exists (§5E.5.2 Retry), so
+a retry or discard of the last one clears it.
+
+**Dark:** nothing mounts the package in ABO. The kernel mounts it at F6-03, which owns `core/kernel/kernel.go` in its
+wave.
+
+**No stage 13 yet.** Route permission and guards (05-http-api §4.2 stage 13) and the bound principal (stage 12) arrive
+at F4-08 (W34), after this row's W31, and `coretest`'s `As`, `WithUser` and `AssertPermission` fail "needs core
+authentication" until then (R1-37). So the permission, guard and 401 cells are tables whose cells call
+`t.Skip("needs stage 13: F4-08")`; F6-03, which mounts the package, un-skips them. The handler logic (semantics,
+audit, no payload in responses) is tested now with a principal built with `authtest`'s helpers and bound to the
+request context with `auth.WithPrincipal`, through an `httpapi.Router` built for the test with `Register`. Add no
+permission or guard check inside a handler: enforcement stays the router's.
+
+## Spec
+
+- 05-events §5E.11 (the route table: copy it), §5E.5.2 (the `c/outbox/` key table, Retry, Retention), §5E.12
+  (`TestOutbox_RetryDeadLetter`, `TestOutbox_DisabledConsumerRetainsUntilReenableOrPurge`, which F6-01 owns at the
+  `outbox` level).
+- 05-http-api §3.1 (`Route`, `Guards.Interactive`, `Handle`, `CoreGroup()`; a zero `Perm` is a registration error),
+  §4.2 stage 13 (permission and guards).
+- 05-rbac §3.5 (`audit.Logger.Record` or `RecordIn`, `audit.Event`), §7.1 (the action table; step 0), §8 ("Sync audit
+  write fails"), §11 (`mediacore_audit_write_errors_total`).
+- 05-events §5E.3.1 (`Catalog`: the frozen topic catalog `GET /events/topics` lists; F4-04).
+- 03 §3.3 (`internal/<capability>http`: imported only by `kernel`), §3.5 R4 (L6).
+
+## Files
+
+| Action | Path |
+|---|---|
+| create | `core/internal/outboxhttp/` (`routes.go`, `routes_test.go`; package `outboxhttp`) |
+| create | one `changelog.d/` fragment (headerless) |
+
+Touch nothing else. If `core/outbox/` or `core/internal/outboxstore/` lacks an operation this package needs, STOP
+(condition 2): F6-01 owns those files.
+
+## Re-verify at BASE
+
+```bash
+ls -d core/internal/outboxhttp 2>/dev/null | wc -l                                  # 0
+grep -rn 'package outbox$' core/outbox/*.go | wc -l                                  # >= 1 (F6-01)
+grep -rn 'package outboxstore' core/internal/outboxstore/*.go | wc -l                # >= 1 (F6-01)
+grep -rn 'c/outbox/dead\|"dead/"' core/internal/outboxstore/ | wc -l                 # >= 1 (the dead-letter rows)
+grep -rniE 'func .*(Dead|Retry|Discard|Purge|Backlog|Consumer)' core/outbox/ core/internal/outboxstore/ | grep -v _test   # the five operations F6-01 exposed; read them
+grep -rn 'type Catalog interface' core/events/ | wc -l                               # 1 (F4-04)
+grep -rn 'func (r \*Router) CoreGroup' core/httpapi/ | wc -l                         # 1 (R1-13)
+grep -rn 'Interactive bool' core/httpapi/ | wc -l                                    # 1
+grep -rn 'func Need' core/rbac/ | wc -l                                              # 1 (F4-01)
+grep -rn 'type Logger interface' core/audit/ | wc -l                                 # 1 (F2-07)
+```
+
+## STOP conditions
+
+1. Step 0 fails.
+2. F6-01's packages expose no way to list dead letters, retry one, discard one, advance a consumer's cursors to the
+   head, or list the consumers' status (the re-verify grep above shows one of the five missing): report which is
+   missing; do not edit `core/outbox/` or `core/internal/outboxstore/`.
+3. A route would register with a zero `Perm`, or the purge without `Guards.Interactive`.
+4. A state-changing route could answer 2xx while its audit record fails to write (`audit.Logger.Record` is
+   fail-closed: 05-rbac §3.5, "the caller must fail the operation"), or a handler would write the audit record before
+   the operation runs.
+5. Anything in ABO's boot imports or mounts `outboxhttp` in this PR.
+
+## Steps
+
+1. Step 0.
+2. Write the tests below first.
+3. Declare in `outboxhttp` the narrow consumer interface the routes call (name coined here: `Operator`), with one
+   method per operation F6-01 exposed (list dead letters with a cursor and limit, retry one, discard one, purge a
+   consumer's backlog, list the consumers' status), so the kernel hands the package F6-01's implementation and nothing wider (03 §3.3: route
+   packages receive interfaces from the kernel, as `modulehttp` receives `ModulesView`).
+4. `func Register(g *httpapi.Group, op Operator, cat events.Catalog, audit audit.Logger)` (name coined here) registers
+   the six routes with `httpapi.Handle` and the `Route` values of the Goal table (`Name`s lowerCamel and unique, e.g.
+   `listDeadLetters`, `retryDeadLetter`, `discardDeadLetter`, `purgeConsumerBacklog`, `listOutboxConsumers`,
+   `listEventTopics`; names coined here). The topics route reads `cat`; the consumers route reads `op`.
+5. Handlers: path values `{consumer}` (a declared consumer name) and `{seq}` (decimal `uint64`; 400 on a bad value);
+   404 problem when the dead letter or the consumer does not exist; on success write the audit record with the route's action
+   (`core.outbox.dead_retry`, `core.outbox.dead_discard`, `core.outbox.backlog_purge`), `Outcome: audit.Success`,
+   `Target` naming the consumer, `Details` the topic and seq (purge: the number of messages advanced past; never the
+   payload: 05-rbac §7.7), and only then answer (retry and discard 204; purge 200 with the number of messages skipped).
+   The write path is "sync" (05-rbac §7.1 `core.outbox.*` row), not "sync (in batch)": the operation commits first and
+   the record is a separate write after it. Never record before the operation. When `Record` fails after the
+   operation committed, answer 500 with a problem body saying the operation was applied but not audited (problem code
+   coined here: `audit_write_failed`); the failure is counted in `mediacore_audit_write_errors_total{path="sync"}`
+   (05-rbac §11) by F2-07's logger. Do not retry or undo the operation.
+6. Headers, the fragment, Acceptance.
+
+## Tests first (names coined here)
+
+Permission, guard and 401 cells: each test is a table whose every cell calls `t.Skip("needs stage 13: F4-08")` in this
+PR (see Goal, "No stage 13 yet"); F6-03 un-skips them when it mounts the package.
+
+- `TestOutboxHTTP_ListDeadNeedsSystemManage`: `core:system.view` only → 403; `core:system.manage` → 200.
+- `TestOutboxHTTP_PurgeNeedsInteractive`: an API-key principal holding `core:system.manage` → refused by the guard; an
+  interactive session → 200.
+- `TestOutboxHTTP_ConsumersAndTopicsNeedSystemView`: no principal → 401; `core:system.view` → 200 on both read routes.
+
+Handler logic, running in this PR (a principal from `authtest`'s helpers bound with `auth.WithPrincipal`):
+
+- `TestOutboxHTTP_ListDeadLetters`: the dead letters of a fixture consumer (consumer, topic, seq, attempts, error
+  token; no payload), paged with a cursor and a bounded limit.
+- `TestOutboxHTTP_RetryRedeliversAndAudits`: a dead letter retried → the consumer receives it again, the dead row is
+  gone, one audit record with action `core.outbox.dead_retry` whose actor is the bound principal.
+- `TestOutboxHTTP_DiscardDeletesAndAudits`: discard → no dead row, no delivery, one audit record with action
+  `core.outbox.dead_discard`; the `core.outbox` health component is no longer Degraded when it was the last dead
+  letter.
+- `TestOutboxHTTP_PurgeAdvancesCursorsAndAudits`: an interactive principal → 200 with the number of messages skipped,
+  the consumer's cursors at the head, a disabled module's retained backlog gone, one audit record with action
+  `core.outbox.backlog_purge`.
+- `TestOutboxHTTP_AuditFailureFailsRequest`: F2-07's `audit.Logger` over a store whose audit write fails, on retry,
+  discard and purge → 500 with the `audit_write_failed` problem saying the operation was applied but not audited,
+  `mediacore_audit_write_errors_total{path="sync"}` up by one, and the operation applied (no record was written
+  before it).
+- `TestOutboxHTTP_UnknownConsumerOrSeq404`: an unknown consumer or seq → 404; a non-decimal seq → 400.
+- `TestOutboxHTTP_ConsumersAndTopicsList`: the consumers view lists a disabled module's consumer with its retained
+  backlog, and lag, pending, dead count and intake backlog as `Operator` returns them; the topics view lists the
+  `events.Catalog` fixture's topics.
+
+## Acceptance
+
+```bash
+(cd core && go vet ./internal/outboxhttp/...)                                       # exit 0
+(cd core && go test -race -count=1 ./internal/outboxhttp/...)                       # ok
+(cd core && go test -count=1 -run 'TestOutboxHTTP_' ./internal/outboxhttp/...)      # PASS
+grep -c 'needs stage 13: F4-08' core/internal/outboxhttp/routes_test.go             # >= 3 (the skipped tables; F6-03 removes them)
+grep -rn 'internal/outboxhttp' --include=*.go . core | grep -v '^core/internal/outboxhttp' | wc -l   # 0 (dark: nothing imports it yet)
+(cd core && go test -count=1 -run 'TestCoreImportsOnlyCore' ./archtest/...)          # ok
+make -C core ci                                                                     # exit 0
+make ci                                                                             # exit 0 (last line: ✅ All CI checks passed!)
+```
+
+## Out of scope
+
+- Mounting the routes, the kernel wiring and the OpenAPI regeneration (F6-03).
+- Any change to the outbox's delivery, retry or retention rules (F6-01).
+
+## Rollback
+
+Revert the PR; nothing imports the package.
+
+## Repo rules
+
+Worktree only; file headers on every new file (fragments headerless); conventional commit ending
+`Co-Authored-By: Claude <noreply@anthropic.com>`, no release or flip trailer (09 §9.2.1 names none);
+`gh pr merge <n> --rebase`, never squash, never `--admin`. The list route pages with a cursor and a bounded limit; no
+handler loops over a whole topic in one request.
+
+```
+feat(core/outboxhttp): dead-letter list, retry, discard and backlog purge routes (dark)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+```
+
+## Planner notes
+
+None.
