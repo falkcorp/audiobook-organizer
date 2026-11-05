@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.13.0
+// version: 1.14.0
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
 // last-edited: 2026-11-05
 //
@@ -77,7 +77,11 @@ const SKIPPED = [row('g3', { skipped: 'skipped_itunes', skip_reason: 'iTunes lib
 /** A rows mock that honours plan, filter, offset and limit. */
 function mockRows(plans: Record<string, { applicable: RepairRow[]; skipped: RepairRow[] }>) {
   vi.mocked(api.getRepairPlanRows).mockImplementation(
-    async (fixerId: string, planOpId: string, q: { filter: RepairRowsFilter; offset: number; limit: number }) => {
+    async (
+      fixerId: string,
+      planOpId: string,
+      q: { filter: RepairRowsFilter; offset: number; limit: number }
+    ) => {
       const plan = plans[planOpId];
       if (!plan) throw Object.assign(new Error('repair plan not found'), { status: 404 });
       const all = q.filter === 'applicable' ? plan.applicable : plan.skipped;
@@ -192,7 +196,10 @@ describe('useRepairsLane: loading', () => {
 
   it('flags a rows failure that only a re-run can cure', async () => {
     vi.mocked(api.getRepairPlanRows).mockRejectedValue(
-      Object.assign(new Error('run the plan again'), { status: 409, data: { code: 'REPAIR_PLAN_NEEDS_RERUN' } })
+      Object.assign(new Error('run the plan again'), {
+        status: 409,
+        data: { code: 'REPAIR_PLAN_NEEDS_RERUN' },
+      })
     );
     const { result } = renderHook(() => useRepairsLane(toast, true));
     await waitFor(() => expect(result.current.rowsError).toBe('run the plan again'));
@@ -213,7 +220,9 @@ describe('useRepairsLane: loading', () => {
       Object.assign(new Error('permission denied: settings.manage'), { status: 403 })
     );
     const { result } = renderHook(() => useRepairsLane(toast, true));
-    await waitFor(() => expect(result.current.rowsError).toBe('permission denied: settings.manage'));
+    await waitFor(() =>
+      expect(result.current.rowsError).toBe('permission denied: settings.manage')
+    );
     expect(result.current.rowsForbidden).toBe(true);
     expect(result.current.rowsNeedRerun).toBe(false);
     expect(result.current.page).toBeNull();
@@ -260,14 +269,55 @@ describe('useRepairsLane: loading', () => {
     it('ignores an unknown id and falls back to the stored fixer', async () => {
       window.localStorage.setItem(REPAIRS_FIXER_STORAGE_KEY, 'other');
       vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER, OTHER]);
-      const { result } = renderHook(() => useRepairsLane(toast, true, { fixerId: 'no.such-fixer' }));
+      const { result } = renderHook(() =>
+        useRepairsLane(toast, true, { fixerId: 'no.such-fixer' })
+      );
       await waitFor(() => expect(result.current.selectedFixer?.id).toBe('other'));
       expect(result.current.selectedFixerId).toBe('other');
     });
 
+    it('a link to a fixer the loaded list does not hold is not parked in the address bar', async () => {
+      vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER, OTHER]);
+      const { result } = renderHook(() => useRepairsLane(toast, true));
+      await waitFor(() => expect(result.current.selectedFixer?.id).toBe('vg-primary'));
+      act(() => result.current.applyUrlSeed({ fixerId: 'no.such-fixer' }));
+      // The screen stays on the fixer it shows, and the address must say so.
+      expect(result.current.selectedFixer?.id).toBe('vg-primary');
+      expect(result.current.urlFixerId).toBe('vg-primary');
+    });
+
+    it('a link to a fixer after the list loaded EMPTY is not parked forever', async () => {
+      vi.mocked(api.listRepairFixers).mockResolvedValue([]);
+      const { result } = renderHook(() => useRepairsLane(toast, true));
+      await waitFor(() => expect(result.current.fixersLoading).toBe(false));
+      expect(vi.mocked(api.listRepairFixers)).toHaveBeenCalledTimes(1);
+      act(() => result.current.applyUrlSeed({ fixerId: 'vg-primary' }));
+      // Nothing will ever consume the seed: there is no fixer on screen, so the
+      // address must not claim one.
+      expect(result.current.selectedFixer).toBeNull();
+      expect(result.current.urlFixerId).toBeNull();
+    });
+
+    it('a link that arrives while the first load is still in flight waits for it', async () => {
+      let resolveList: (l: RepairFixer[]) => void = () => {};
+      vi.mocked(api.listRepairFixers).mockReturnValue(
+        new Promise<RepairFixer[]>((r) => {
+          resolveList = r;
+        })
+      );
+      const { result } = renderHook(() => useRepairsLane(toast, true));
+      act(() => result.current.applyUrlSeed({ fixerId: 'other' }));
+      expect(result.current.urlFixerId).toBe('other');
+      await act(async () => resolveList([FIXER, OTHER]));
+      await waitFor(() => expect(result.current.selectedFixer?.id).toBe('other'));
+      expect(result.current.urlFixerId).toBe('other');
+    });
+
     it('ignores an unknown id and falls back to the first fixer when nothing is stored', async () => {
       vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER, OTHER]);
-      const { result } = renderHook(() => useRepairsLane(toast, true, { fixerId: 'no.such-fixer' }));
+      const { result } = renderHook(() =>
+        useRepairsLane(toast, true, { fixerId: 'no.such-fixer' })
+      );
       await waitFor(() => expect(result.current.selectedFixer?.id).toBe('vg-primary'));
     });
   });
@@ -331,7 +381,9 @@ describe('useRepairsLane: trials', () => {
     let finish!: (o: OperationV2) => void;
     vi.mocked(api.pollOperationV2).mockReturnValue(new Promise((r) => (finish = r)));
 
-    act(() => result.current.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: 'vg-primary' }));
+    act(() =>
+      result.current.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: 'vg-primary' })
+    );
     await waitFor(() => expect(result.current.trial?.phase).toBe('running'));
     expect(api.startRepairPlan).toHaveBeenCalledWith('vg-primary');
     expect(api.pollOperationV2).toHaveBeenCalledWith(
@@ -359,9 +411,15 @@ describe('useRepairsLane: trials', () => {
       status: 'queued',
     });
     vi.mocked(api.pollOperationV2).mockResolvedValue(op('plan-2', 'failed', 'store unavailable'));
-    act(() => result.current.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: 'vg-primary' }));
+    act(() =>
+      result.current.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: 'vg-primary' })
+    );
     await waitFor(() =>
-      expect(result.current.trial).toEqual({ opId: 'plan-2', phase: 'failed', message: 'store unavailable' })
+      expect(result.current.trial).toEqual({
+        opId: 'plan-2',
+        phase: 'failed',
+        message: 'store unavailable',
+      })
     );
     // The completed plan is still the one shown.
     expect(result.current.planOpId).toBe('plan-1');
@@ -370,7 +428,10 @@ describe('useRepairsLane: trials', () => {
 
   it('follows a trial the server reports as already running', async () => {
     vi.mocked(api.listRepairFixers).mockResolvedValue([
-      { ...FIXER, last_plan: { operation_id: 'plan-9', status: 'running', queued_at: '2026-09-27T10:00:00Z' } },
+      {
+        ...FIXER,
+        last_plan: { operation_id: 'plan-9', status: 'running', queued_at: '2026-09-27T10:00:00Z' },
+      },
     ]);
     vi.mocked(api.pollOperationV2).mockReturnValue(new Promise(() => {}));
     const { result } = renderHook(() => useRepairsLane(toast, true));
@@ -381,7 +442,10 @@ describe('useRepairsLane: trials', () => {
 
   it('stops polling when the lane goes inactive', async () => {
     vi.mocked(api.listRepairFixers).mockResolvedValue([
-      { ...FIXER, last_plan: { operation_id: 'plan-9', status: 'running', queued_at: '2026-09-27T10:00:00Z' } },
+      {
+        ...FIXER,
+        last_plan: { operation_id: 'plan-9', status: 'running', queued_at: '2026-09-27T10:00:00Z' },
+      },
     ]);
     vi.mocked(api.pollOperationV2).mockReturnValue(new Promise(() => {}));
     const { result, rerender } = renderHook(({ a }) => useRepairsLane(toast, a), {
@@ -433,10 +497,7 @@ describe('useRepairsLane: selection and apply', () => {
     expect(api.startRepairApply).toHaveBeenCalledWith('vg-primary', 'plan-1', ['g1']);
     expect(result.current.rowOutcomes.get('g1')?.outcome).toBe('applied');
     expect(result.current.selectedRowIds.size).toBe(0);
-    expect(toast).toHaveBeenCalledWith(
-      'Applied 1 · changed since trial 0 · failed 0',
-      'success'
-    );
+    expect(toast).toHaveBeenCalledWith('Applied 1 · changed since trial 0 · failed 0', 'success');
   });
 
   it('drops an apply dispatched for a preview-only fixer: no confirm, no request', async () => {
@@ -453,7 +514,12 @@ describe('useRepairsLane: selection and apply', () => {
       })
     );
     act(() =>
-      result.current.dispatch({ lane: 'repairs', type: 'applyAllApplicable', fixerId: 'vg-primary', planOpId: 'plan-1' })
+      result.current.dispatch({
+        lane: 'repairs',
+        type: 'applyAllApplicable',
+        fixerId: 'vg-primary',
+        planOpId: 'plan-1',
+      })
     );
     // Let any (wrongly) started apply reach the API before asserting it did not.
     await act(async () => {
@@ -473,7 +539,9 @@ describe('useRepairsLane: selection and apply', () => {
       status: 'queued',
     });
     vi.mocked(api.pollOperationV2).mockResolvedValue(op('plan-2', 'completed'));
-    act(() => result.current.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: 'vg-primary' }));
+    act(() =>
+      result.current.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: 'vg-primary' })
+    );
     await waitFor(() => expect(api.startRepairPlan).toHaveBeenCalledTimes(1));
   });
 
@@ -727,7 +795,7 @@ describe('useRepairsLane: selection and apply', () => {
     );
   });
 
-  it('does not re-send rows an earlier apply settled, and keeps both applies\' badges', async () => {
+  it("does not re-send rows an earlier apply settled, and keeps both applies' badges", async () => {
     const { result } = await renderLane();
     stubApply(applyResult({ rows: [{ row_id: 'g1', outcome: 'applied' }] }));
     act(() =>
@@ -747,7 +815,13 @@ describe('useRepairsLane: selection and apply', () => {
     expect([...result.current.selectedRowIds]).toEqual(['g2']);
     act(() => result.current.clearSelection());
 
-    stubApply(applyResult({ rows: [{ row_id: 'g2', outcome: 'failed', error: 'x' }], failed: 1, applied: 0 }));
+    stubApply(
+      applyResult({
+        rows: [{ row_id: 'g2', outcome: 'failed', error: 'x' }],
+        failed: 1,
+        applied: 0,
+      })
+    );
     confirmSpy.mockClear();
     act(() =>
       result.current.dispatch({
@@ -802,7 +876,9 @@ describe('useRepairsLane: naming the rows an apply writes', () => {
 
   it('leaves the book count out when it is unknown, never "(0 books)"', () => {
     const unknown = { rowId: 'r1', title: 'Title r1' };
-    expect(summarizeAppliedRows([unknown, target('b', 2)])).toBe('Applied: "Title r1", "Title b" (2 books).');
+    expect(summarizeAppliedRows([unknown, target('b', 2)])).toBe(
+      'Applied: "Title r1", "Title b" (2 books).'
+    );
     expect(repairApplyConfirmMessage(1, 'Split books', [unknown])).toContain('  - "Title r1"\n');
     expect(summarizeAppliedRows([unknown])).not.toContain('(0 books)');
   });
@@ -924,7 +1000,9 @@ describe('repairOwnerApplyConfirmMessage', () => {
       'creates 4 books from the files no book holds: Arkham Asylum, The Killing Joke'
     );
     expect(msg).toContain('Apply "Alfred Pennyworth" from "Folder books" as the owner?');
-    expect(msg).toContain('creates 4 books from the files no book holds: Arkham Asylum, The Killing Joke.');
+    expect(msg).toContain(
+      'creates 4 books from the files no book holds: Arkham Asylum, The Killing Joke.'
+    );
     expect(msg).toContain('Only database rows change: no file is moved or written');
     expect(msg).toContain("operation's history under your name");
     expect(msg).toContain('reverted from the operation');

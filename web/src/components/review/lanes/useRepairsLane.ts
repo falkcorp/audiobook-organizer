@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.19.0
+// version: 1.20.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
 // last-edited: 2026-11-05
 
@@ -429,6 +429,10 @@ export function useRepairsLane(
 ): RepairsLane {
   const seedFixerId = seed.fixerId ?? null;
   const [fixers, setFixers] = useState<RepairFixer[]>([]);
+  // True once a load has SUCCEEDED, even with an empty list. `fixers.length === 0`
+  // cannot stand in for it: a list that loaded empty will not be fetched again,
+  // so a seed parked on it would never be consumed.
+  const [fixersLoaded, setFixersLoaded] = useState(false);
   const [fixersLoading, setFixersLoading] = useState(false);
   const [fixersError, setFixersError] = useState<string | null>(null);
   const [fixersNonce, setFixersNonce] = useState(0);
@@ -510,6 +514,7 @@ export function useRepairsLane(
       .then((list) => {
         if (ctrl.signal.aborted) return;
         setFixers(list);
+        setFixersLoaded(true);
         setKnownPlans((prev) => {
           let next = prev;
           for (const f of list) {
@@ -808,20 +813,22 @@ export function useRepairsLane(
 
   // A URL change that arrives while the lane is mounted (a link, back/forward).
   // Same landing as the first load gives the seed: an unknown fixer is ignored,
-  // a fixer the list does not hold yet waits for it. Never writes the viewer's
+  // a fixer the list has not loaded yet waits for it. Once a load has succeeded
+  // nothing is parked: a fixer the list does not hold would sit in the address
+  // bar forever with nothing on screen to match it. Never writes the viewer's
   // storage key; that is for the reviewer's own click.
   const applyUrlSeed = useCallback(
     (next: RepairsUrlSeed) => {
       const id = next.fixerId ?? null;
       if (id) {
-        if (fixers.length === 0) parkFixerSeed(id);
+        if (!fixersLoaded) parkFixerSeed(id);
         else if (fixers.some((f) => f.id === id)) setSelectedFixerId(id);
       }
       setFilterState(next.filter ?? 'applicable');
       setRowClassState(next.rowClass ?? null);
       setOffset(0);
     },
-    [fixers, parkFixerSeed]
+    [fixers, fixersLoaded, parkFixerSeed]
   );
 
   // ---- actions ------------------------------------------------------------
