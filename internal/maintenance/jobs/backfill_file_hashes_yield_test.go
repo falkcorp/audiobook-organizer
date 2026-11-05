@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_yield_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a4d1e93-0b7c-4f25-8e38-9d2b5c7a1f40
-// last-edited: 2026-10-26
+// last-edited: 2026-11-05
 
 package jobs_test
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -248,26 +249,63 @@ func TestBackfillFileHashes_NoYieldWhenItCannotContinue(t *testing.T) {
 
 // The margin grows with the slowest chunk: a chunk that takes a while must still
 // finish inside the deadline, so the pause comes earlier the slower chunks are.
-// Here the margin floor is 1ms but a chunk takes 150ms, so with 400ms to the
-// deadline the run pauses after the first chunk.
+//
+// Time is a fake clock the job reads through hbNow, and the context's real
+// deadline is 30 minutes away, so no real duration decides anything and a loaded
+// agent cannot make the deadline arrive before the yield decision. The fake clock
+// starts 400ms before the deadline and each chunk's commit advances it by the
+// chunk's duration. With a margin floor of 1ms:
+//
+//   - a 150ms chunk leaves 250ms, under twice the chunk (300ms): the run pauses
+//     after the first chunk, though the floor alone would have let it go on;
+//   - a 10ms chunk leaves 390ms then 380ms, over twice the chunk (20ms): the run
+//     takes every chunk and finishes.
 func TestBackfillFileHashes_YieldMarginScalesWithTheSlowestChunk(t *testing.T) {
-	defer jobs.SetHashBackfillYieldMargin(time.Millisecond)()
-	defer jobs.SetHashBackfillCommitHook(func(stage string, _ int) error {
-		if stage == "after-commit" {
-			time.Sleep(150 * time.Millisecond)
-		}
-		return nil
-	})()
-	root := hbLibrary(t)
-	h := newHBStore(t, hbMixedLibrary(t, root, 1300)...)
-	const opID = "01YIELDSCALES"
+	for _, tc := range []struct {
+		name      string
+		chunk     time.Duration
+		wantYield bool
+		wantRows  int
+	}{
+		{"slow chunk pauses early", 150 * time.Millisecond, true, jobs.HashBackfillChunkSize},
+		{"fast chunks do not", 10 * time.Millisecond, false, 1300},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer jobs.SetHashBackfillYieldMargin(time.Millisecond)()
+			const opID = "01YIELDSCALES"
+			ctx := yieldCtx(t, opID, 30*time.Minute)
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok)
+			var mu sync.Mutex
+			now := deadline.Add(-400 * time.Millisecond)
+			defer jobs.SetHashBackfillClock(func() time.Time {
+				mu.Lock()
+				defer mu.Unlock()
+				return now
+			})()
+			defer jobs.SetHashBackfillCommitHook(func(stage string, _ int) error {
+				if stage == "after-commit" {
+					mu.Lock()
+					now = now.Add(tc.chunk)
+					mu.Unlock()
+				}
+				return nil
+			})()
+			root := hbLibrary(t)
+			h := newHBStore(t, hbMixedLibrary(t, root, 1300)...)
 
-	_, err := hbRunCtx(t, yieldCtx(t, opID, 400*time.Millisecond), h.store(), true)
+			_, err := hbRunCtx(t, ctx, h.store(), true)
 
-	require.ErrorIs(t, err, maintenance.ErrContinueInPlace, "a run that waited for the deadline would have been cancelled mid-chunk")
-	assert.False(t, errors.Is(err, context.DeadlineExceeded))
-	rows := hbReadReport(t, filepath.Join(root, ".reports", "backfill-file-hashes-"+opID+".tsv"))
-	assert.Len(t, rows, jobs.HashBackfillChunkSize)
+			rows := hbReadReport(t, filepath.Join(root, ".reports", "backfill-file-hashes-"+opID+".tsv"))
+			assert.Len(t, rows, tc.wantRows)
+			if !tc.wantYield {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, maintenance.ErrContinueInPlace, "a run that waited for the deadline would have been cancelled mid-chunk")
+			assert.False(t, errors.Is(err, context.DeadlineExceeded))
+		})
+	}
 }
 
 // The registry only honours a yield for a def that resumes in place, so the job

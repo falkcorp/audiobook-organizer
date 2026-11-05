@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 4.6.0
+// version: 4.6.1
 // guid: a1000014-0000-0000-0000-000000000014
-// last-edited: 2026-10-27
+// last-edited: 2026-11-05
 
 package jobs
 
@@ -1041,6 +1041,14 @@ func (r *hashBackfillRun) recordOutcomes(outs []hbOutcome) error {
 // test can move it.
 var hbYieldMargin = 5 * time.Minute
 
+// hbNow is the clock the yield decision reads: when a chunk began, how long it
+// took (slowestChunk), and how much of the context's deadline is left. A
+// variable so a test can drive those three from one fake clock instead of
+// racing real sleeps against a real deadline, which a loaded CI agent breaks:
+// the deadline then arrives while the first chunk is still hashing and no yield
+// decision is ever made. Nothing else in the job reads it.
+var hbNow = time.Now
+
 // yieldDue reports whether the run should stop here and continue as a fresh
 // attempt of the same operation, and how much of the deadline is left. It is
 // true only when ALL of these hold:
@@ -1069,7 +1077,7 @@ func (r *hashBackfillRun) yieldDue(ctx context.Context, moreRows bool) (left tim
 	if !ok {
 		return 0, false
 	}
-	left = time.Until(dl)
+	left = dl.Sub(hbNow())
 	return left, left < max(hbYieldMargin, 2*r.slowestChunk)
 }
 
@@ -1349,7 +1357,7 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		}
 		end := min(start+hashBackfillChunkSize, len(files))
 		outs := make([]hbOutcome, end-start)
-		chunkBegan := time.Now()
+		chunkBegan := hbNow()
 
 		g, gctx := errgroup.WithContext(ctx)
 		g.SetLimit(run.workers)
@@ -1384,7 +1392,7 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		if rerr := run.commitChunk(start, outs); rerr != nil {
 			return fmt.Errorf("backfill-file-hashes: chunk at row %d (report %s): %w", start, reportPath, rerr)
 		}
-		if took := time.Since(chunkBegan); took > run.slowestChunk {
+		if took := hbNow().Sub(chunkBegan); took > run.slowestChunk {
 			run.slowestChunk = took
 		}
 		// The chunk is on disk. If the run's time budget is nearly spent, stop
