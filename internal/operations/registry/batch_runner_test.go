@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch_runner_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 398171ae-de60-4dbe-9766-d9819c610ace
-// last-edited: 2026-11-03
+// last-edited: 2026-11-04
 
 package registry
 
@@ -706,9 +706,20 @@ func TestLedgerWriteRateBounded(t *testing.T) {
 	if limit := int(elapsed/every) + 2; len(at) > limit {
 		t.Fatalf("%d commits in %s, want at most %d", len(at), elapsed, limit)
 	}
-	for i := 1; i < len(at)-1; i++ { // the final commit is not throttled
-		if gap := at[i].Sub(at[i-1]); gap < every-20*time.Millisecond {
-			t.Fatalf("commits %d and %d are %s apart, closer than %s", i-1, i, gap, every)
+	// The throttle guarantees the spacing of the runner's own clock reads: a
+	// commit is allowed once now-lastCommit >= every, where now is read at the
+	// start of the commit and stored as the batch's Ledger.UpdatedAt. Compare
+	// those stamps, exactly. The wall time at which the fake store is entered
+	// adds a scheduling delay after that read (up to hundreds of ms under -race
+	// on a loaded agent) that differs from commit to commit, so entry times can
+	// legitimately sit closer than the interval (475 ms seen for 500 ms).
+	batches := store.commitCopy()
+	if len(batches) != len(at) {
+		t.Fatalf("%d commit batches but %d entry stamps", len(batches), len(at))
+	}
+	for i := 1; i < len(batches)-1; i++ { // the final commit is not throttled
+		if gap := batches[i].Ledger.UpdatedAt.Sub(batches[i-1].Ledger.UpdatedAt); gap < every {
+			t.Fatalf("commits %d and %d were decided %s apart, closer than %s", i-1, i, gap, every)
 		}
 	}
 	if store.committerCount() != 1 {
