@@ -61,7 +61,7 @@ import {
   ColumnPicker,
   type ColumnDef,
 } from '../components/common/ConfigurableTable';
-import { useDebouncedSearch } from '../hooks/useDebouncedSearch';
+import { useSettledSearch } from '../hooks/useDebouncedSearch';
 import { useUrlStateSync } from '../hooks/useUrlState';
 import { readTableListUrl, tableListUrlOwned, type TableListSpec } from './tableListUrl';
 import * as api from '../services/api';
@@ -462,7 +462,11 @@ export function Series() {
 
   // `urlSeed.search` is already settled on mount: a `?q=` link must fetch once,
   // filtered, not unfiltered first and again when the timer fires.
-  const debouncedSearch = useDebouncedSearch(search, SEARCH_DEBOUNCE_MS, urlSeed.search);
+  const { settled: debouncedSearch, settleNow: settleSearch } = useSettledSearch(
+    search,
+    SEARCH_DEBOUNCE_MS,
+    urlSeed.search
+  );
 
   // A new settled search term starts again from page 0. Done during render
   // rather than in the keystroke handler so the page does not reset (and fetch)
@@ -535,10 +539,13 @@ export function Series() {
   // Mirror search, filter, sort, page and page size into the query string (see
   // tableListUrl.ts). Selection, dialogs and expanded rows are transient and
   // stay out of it.
-  const urlState = { search, filter, sortField, sortDir, page, rowsPerPage };
-  const urlStateRef = useRef({ ...urlState, appliedSearch });
+  // The SETTLED search is what the URL carries: a history write per keystroke is
+  // noise (and past a browser's cap, an error), and the page and the fetch both
+  // follow the settled term anyway.
+  const urlState = { search: appliedSearch, filter, sortField, sortDir, page, rowsPerPage };
+  const urlStateRef = useRef({ ...urlState, typedSearch: search });
   useEffect(() => {
-    urlStateRef.current = { ...urlState, appliedSearch };
+    urlStateRef.current = { ...urlState, typedSearch: search };
   });
   useUrlStateSync(tableListUrlOwned(urlState, SERIES_LIST_SPEC), {
     // A link to another view of this list, or back/forward: set state to match.
@@ -550,11 +557,14 @@ export function Series() {
         setSort(next.sortField, next.sortDir);
       }
       if (next.rowsPerPage !== cur.rowsPerPage) setRowsPerPage(next.rowsPerPage);
-      if (next.search !== cur.search) setSearch(next.search);
-      if (next.search !== cur.appliedSearch) {
-        // The debounced twin has not caught up: its settle resets the page, so
-        // hand it the page to land on and hold the fetch until it has.
+      if (next.search !== cur.typedSearch) setSearch(next.search);
+      if (next.search !== cur.search) {
+        // A new settled term resets the page (see the render-phase block above), so
+        // hand it the page to land on, and settle the term now rather than after
+        // the debounce: the mirror would otherwise write the old term back over
+        // the link while it waited.
         setHeldPage(next.page);
+        settleSearch(next.search);
       } else {
         setPage(next.page);
       }

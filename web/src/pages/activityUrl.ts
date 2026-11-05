@@ -1,5 +1,5 @@
 // file: web/src/pages/activityUrl.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 45954b0f-cd73-4c48-9acd-b356d25b83b2
 // last-edited: 2026-11-05
 //
@@ -29,6 +29,27 @@ import type { UrlValue } from '../hooks/useUrlState';
 
 export const ACTIVITY_DEFAULT_TIERS: readonly string[] = ['audit', 'change', 'digest', 'info'];
 export const ACTIVITY_DEFAULT_PAGE_SIZE = 25;
+/** Every tier the page knows; anything else in `?tiers=` is dropped. */
+export const ACTIVITY_TIERS: readonly string[] = ['audit', 'change', 'debug', 'digest', 'info'];
+export const ACTIVITY_PAGE_SIZES: readonly number[] = [25, 50, 100, 250];
+export const ACTIVITY_LEVELS: readonly string[] = ['debug', 'info', 'warn', 'error'];
+export const ACTIVITY_EVENT_TYPES: readonly string[] = [
+  'book_added',
+  'book_updated',
+  'book_deleted',
+  'book_restored',
+  'tag_written',
+  'metadata_applied',
+  'scan_started',
+  'scan_completed',
+  'organize_started',
+  'organize_completed',
+  'import_started',
+  'import_completed',
+  'maintenance_run',
+  'config_changed',
+  'user_action',
+];
 
 /** The page's filter state, as the URL sees it. */
 export interface ActivityUrlState {
@@ -57,6 +78,20 @@ const positiveInt = (value: string | null, fallback: number): number => {
   return Number.isInteger(n) && n > 0 ? n : fallback;
 };
 
+/** `value` when it is one of `allowed`, else ''. (`''` is "no filter".) */
+const oneOf = (value: string | null, allowed: readonly string[]): string =>
+  allowed.find((a) => a === value) ?? '';
+
+/** A `datetime-local` value (`YYYY-MM-DDTHH:mm[:ss]`) that is a real date, else null. */
+const localDateTime = (value: string | null): string | null => {
+  if (!value || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(value)) return null;
+  return Number.isNaN(new Date(value).getTime()) ? null : value;
+};
+
+/** True when `tiers` is exactly the default set. */
+export const isDefaultTiers = (tiers: ReadonlySet<string>): boolean =>
+  sameSet(tiers, ACTIVITY_DEFAULT_TIERS);
+
 const sameSet = (a: ReadonlySet<string>, b: readonly string[]): boolean =>
   a.size === b.length && b.every((t) => a.has(t));
 
@@ -65,21 +100,24 @@ const sameSet = (a: ReadonlySet<string>, b: readonly string[]): boolean =>
  * window start (it is "now minus 24h" and so differs on every mount).
  */
 export function readActivityUrl(params: URLSearchParams, defaultSince: string): ActivityUrlState {
-  const tiers = csv(params.get('tiers'));
+  const tiers = csv(params.get('tiers')).filter((t) => ACTIVITY_TIERS.includes(t));
   const since = params.get('since');
   return {
     op: params.get('op') || null,
     search: params.get('q') ?? '',
     tiers: new Set(tiers.length > 0 ? tiers : ACTIVITY_DEFAULT_TIERS),
-    typeFilter: params.get('type') ?? '',
-    levelFilter: params.get('level') ?? '',
+    typeFilter: oneOf(params.get('type'), ACTIVITY_EVENT_TYPES),
+    levelFilter: oneOf(params.get('level'), ACTIVITY_LEVELS),
     operationId: params.get('operation') ?? '',
-    sinceFilter: since === null ? defaultSince : since === 'all' ? '' : since,
-    untilFilter: params.get('until') ?? '',
+    // Only `all` means all history. A value that is not a date is not a window.
+    sinceFilter: since === 'all' ? '' : (localDateTime(since) ?? defaultSince),
+    untilFilter: localDateTime(params.get('until')) ?? '',
     hideNoOp: params.get('hide_noop') !== '0',
     tagFilter: csv(params.get('tag')),
     page: positiveInt(params.get('page'), 1),
-    pageSize: positiveInt(params.get('size'), ACTIVITY_DEFAULT_PAGE_SIZE),
+    pageSize: ACTIVITY_PAGE_SIZES.includes(positiveInt(params.get('size'), 0))
+      ? positiveInt(params.get('size'), ACTIVITY_DEFAULT_PAGE_SIZE)
+      : ACTIVITY_DEFAULT_PAGE_SIZE,
   };
 }
 
@@ -91,7 +129,7 @@ export function activityUrlOwned(
   return {
     op: s.op,
     q: s.search,
-    tiers: sameSet(s.tiers, ACTIVITY_DEFAULT_TIERS) ? null : [...s.tiers].sort().join(','),
+    tiers: isDefaultTiers(s.tiers) ? null : [...s.tiers].sort().join(','),
     type: s.typeFilter,
     level: s.levelFilter,
     operation: s.operationId,

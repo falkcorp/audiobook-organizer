@@ -1,9 +1,9 @@
 // file: web/src/hooks/useDebouncedSearch.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3d8b1c47-6e29-4a05-9f73-2c5a8e0b4d16
 // last-edited: 2026-11-05
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 /**
  * The debounced twin of a search box's raw value, for a term that gates a
@@ -36,6 +36,23 @@ import { useEffect, useState } from 'react';
  * @returns the settled term, safe to put in a request
  */
 export function useDebouncedSearch(value: string, delayMs: number, initial = ''): string {
+  return useSettledSearch(value, delayMs, initial).settled;
+}
+
+/**
+ * `useDebouncedSearch` plus a way to settle a term at once.
+ *
+ * A page that mirrors its search into the address bar mirrors the SETTLED term
+ * (a history write per keystroke is both noise and, past a browser's cap, an
+ * error). When the address bar itself changes the search (a pasted link,
+ * back/forward) the new term must be settled immediately, or the mirror would
+ * see the old settled term and write it straight back over the link.
+ */
+export function useSettledSearch(
+  value: string,
+  delayMs: number,
+  initial = ''
+): { settled: string; settleNow: (term: string) => void } {
   const [debounced, setDebounced] = useState(initial);
 
   useEffect(() => {
@@ -52,7 +69,8 @@ export function useDebouncedSearch(value: string, delayMs: number, initial = '')
     return () => clearTimeout(t);
   }, [value, debounced, delayMs]);
 
-  return debounced;
+  const settleNow = useCallback((term: string) => setDebounced(term), []);
+  return { settled: debounced, settleNow };
 }
 
 /**

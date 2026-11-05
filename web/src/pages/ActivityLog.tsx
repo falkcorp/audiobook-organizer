@@ -68,14 +68,18 @@ import { operationDisplayName } from '../components/layout/operationsFormat';
 import TrashCleanupResultPanel from '../components/operations/TrashCleanupResultPanel';
 import { isTrashCleanupDef } from '../utils/trashCleanupResult';
 import { useUrlStateSync } from '../hooks/useUrlState';
+import { useSettledSearch } from '../hooks/useDebouncedSearch';
 import {
   activityFiltersDiffer,
   activityUrlOwned,
   readActivityUrl,
   type ActivityUrlState,
+  ACTIVITY_DEFAULT_TIERS,
+  ACTIVITY_EVENT_TYPES,
+  ACTIVITY_PAGE_SIZES,
+  isDefaultTiers,
 } from './activityUrl';
 
-const PAGE_SIZE_OPTIONS = [25, 50, 100, 250];
 
 // Section keys for the Active Operations panel, declared here rather than
 // derived from the rendered list so "Collapse All" can name every section even
@@ -94,23 +98,6 @@ const OPS_SECTION_KEYS = [
   'interrupted',
 ] as const;
 
-const EVENT_TYPES = [
-  'book_added',
-  'book_updated',
-  'book_deleted',
-  'book_restored',
-  'tag_written',
-  'metadata_applied',
-  'scan_started',
-  'scan_completed',
-  'organize_started',
-  'organize_completed',
-  'import_started',
-  'import_completed',
-  'maintenance_run',
-  'config_changed',
-  'user_action',
-];
 
 const TIER_COLORS: Record<string, string> = {
   audit: '#1976d2',
@@ -164,6 +151,8 @@ const displayTags = (tags?: string[]): string[] =>
 
 /** How far back the feed looks when the user has not chosen a range. */
 const DEFAULT_SINCE_HOURS = 24;
+// How long the typed search must rest before the address bar follows it.
+const URL_SEARCH_SETTLE_MS = 400;
 // Daily digests are one row per UTC day, so 400 covers more than a year.
 const DIGEST_LIMIT = 400;
 
@@ -829,9 +818,17 @@ export default function ActivityLog() {
   // string (see activityUrl.ts for the parameters), so the view on screen can be
   // copied. Defaults are omitted, `replace` keeps history clean, and a URL change
   // this page did not write is applied back to state below.
+  // The URL carries the SETTLED search, not every keystroke: a history write per
+  // keystroke is noise and, past a browser's cap, an error. (The feed itself still
+  // follows the typed text, as it always did.)
+  const { settled: urlSearch, settleNow: settleUrlSearch } = useSettledSearch(
+    search,
+    URL_SEARCH_SETTLE_MS,
+    urlSeed.search
+  );
   const urlState: ActivityUrlState = {
     op: expandedOpId,
-    search,
+    search: urlSearch,
     tiers,
     typeFilter,
     levelFilter,
@@ -843,17 +840,19 @@ export default function ActivityLog() {
     page,
     pageSize,
   };
-  const urlStateRef = useRef(urlState);
+  const urlStateRef = useRef({ ...urlState, typedSearch: search });
   useEffect(() => {
-    urlStateRef.current = urlState;
+    urlStateRef.current = { ...urlState, typedSearch: search };
   });
   useUrlStateSync(activityUrlOwned(urlState, defaultSince), {
     onExternalChange: (params) => {
       const next = readActivityUrl(params, defaultSince);
       const cur = urlStateRef.current;
-      if (activityFiltersDiffer(cur, next)) {
+      if (activityFiltersDiffer({ ...cur, search: cur.typedSearch }, next)) {
         urlNavRef.current = true;
         setSearch(next.search);
+        // Settled at once, or the mirror would write the old term over the link.
+        settleUrlSearch(next.search);
         setTiers(new Set(next.tiers));
         setTypeFilter(next.typeFilter);
         setLevelFilter(next.levelFilter);
@@ -1163,10 +1162,7 @@ export default function ActivityLog() {
 
   const hasActiveFilters =
     search !== '' ||
-    tiers.size !== 3 ||
-    !tiers.has('audit') ||
-    !tiers.has('change') ||
-    !tiers.has('digest') ||
+    !isDefaultTiers(tiers) ||
     typeFilter !== '' ||
     levelFilter !== '' ||
     operationId !== '' ||
@@ -1180,7 +1176,7 @@ export default function ActivityLog() {
 
   // Count active non-search filters (for mobile badge)
   const activeFilterCount = [
-    tiers.size !== 3 || !tiers.has('audit') || !tiers.has('change') || !tiers.has('digest'),
+    !isDefaultTiers(tiers),
     typeFilter !== '',
     levelFilter !== '',
     operationId !== '',
@@ -1192,7 +1188,7 @@ export default function ActivityLog() {
 
   const clearFilters = () => {
     setSearch('');
-    setTiers(new Set(['audit', 'change', 'digest']));
+    setTiers(new Set(ACTIVITY_DEFAULT_TIERS));
     setTypeFilter('');
     setLevelFilter('');
     setOperationId('');
@@ -2826,7 +2822,7 @@ export default function ActivityLog() {
                   fullWidth
                 >
                   <MenuItem value="">All Types</MenuItem>
-                  {EVENT_TYPES.map((t) => (
+                  {ACTIVITY_EVENT_TYPES.map((t) => (
                     <MenuItem key={t} value={t}>
                       {t.replace(/_/g, ' ')}
                     </MenuItem>
@@ -3073,7 +3069,7 @@ export default function ActivityLog() {
                 sx={{ minWidth: 180 }}
               >
                 <MenuItem value="">All Types</MenuItem>
-                {EVENT_TYPES.map((t) => (
+                {ACTIVITY_EVENT_TYPES.map((t) => (
                   <MenuItem key={t} value={t}>
                     {t.replace(/_/g, ' ')}
                   </MenuItem>
@@ -3364,7 +3360,7 @@ export default function ActivityLog() {
             }}
             sx={{ minWidth: 90 }}
           >
-            {PAGE_SIZE_OPTIONS.map((n) => (
+            {ACTIVITY_PAGE_SIZES.map((n) => (
               <MenuItem key={n} value={n}>
                 {n} / page
               </MenuItem>

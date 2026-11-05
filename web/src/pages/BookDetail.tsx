@@ -1,5 +1,5 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.70.0
+// version: 1.71.0
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
 // last-edited: 2026-11-05
 
@@ -42,6 +42,7 @@ import { sanitizeReturn } from '../utils/safeReturn';
 import { describeBlockOutcome, describeDeleteBookError } from '../utils/deleteBookError';
 import { apiFetch } from '../utils/apiFetch';
 import { unwrapData } from '../utils/apiResponse';
+import { parseSnapshotTs } from './bookDetailUrl';
 
 // seriesNumberOf is the series number the edit dialog opens with: the raw
 // position as entered when it parses (it keeps a decimal like 2.5), else the
@@ -184,7 +185,15 @@ export const BookDetail = () => {
     setUrlParam('retired', show && id ? '1' : null);
     if (!show) setLoadedRetired(null);
   };
-  const compareSnapshotTs = searchParams.get('compare');
+  const rawCompare = searchParams.get('compare');
+  // Only a real RFC3339 instant is a snapshot to compare (the server answers 400
+  // to anything else); an invalid `?compare=` is removed from the address bar.
+  const compareSnapshotTs = parseSnapshotTs(rawCompare);
+  useEffect(() => {
+    if (rawCompare !== null && compareSnapshotTs === null) {
+      setUrlParamRef.current('compare', null);
+    }
+  }, [rawCompare, compareSnapshotTs]);
   const setCompareSnapshotTs = (ts: string | null) => setUrlParam('compare', ts);
   const [itunesPidCount, setItunesPidCount] = useState(0);
   const [itunesExternalIDs, setItunesExternalIDs] = useState<api.ExternalIDMapping[]>([]);
@@ -404,7 +413,9 @@ export const BookDetail = () => {
 
   // Load the retired rows while the "Show retired files" switch is on.
   useEffect(() => {
-    if (!id || !showRetiredFiles) return;
+    // Only the Files tab shows retired files: a `?retired=1` link to another tab
+    // must not spend a request on a list nobody can see.
+    if (!id || !showRetiredFiles || activeTab !== 'files') return;
     let cancelled = false;
     api
       .getBookFiles(id, { includeRetired: true, skipDiskCheck: true })
@@ -420,7 +431,7 @@ export const BookDetail = () => {
     return () => {
       cancelled = true;
     };
-  }, [id, showRetiredFiles, filesRefreshKey, toast]);
+  }, [id, showRetiredFiles, activeTab, filesRefreshKey, toast]);
 
   // Reset file/segment state when navigating between books (FE-4).
   useEffect(() => {

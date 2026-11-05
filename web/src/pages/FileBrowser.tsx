@@ -1,5 +1,5 @@
 // file: web/src/pages/FileBrowser.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c1d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 // last-edited: 2026-11-05
 
@@ -13,11 +13,17 @@ import * as api from '../services/api';
 
 export function FileBrowser() {
   const navigate = useNavigate();
-  // The directory on screen is `?path=`: the browser opens there (read once; it
-  // keeps its own location afterwards) and every directory it lands on is written
-  // back, so the address bar can be copied. The root is the default and is omitted.
+  // The directory on screen is `?path=`: the browser opens there, every directory
+  // it lands on is written back (so the address bar can be copied), and a path the
+  // address bar changes under us (a pasted link, back/forward) is opened. The root
+  // is the default and is omitted.
   const [searchParams, setSearchParams] = useSearchParams();
-  const [startPath] = useState(() => searchParams.get('path') || '/');
+  const urlPath = searchParams.get('path') || '/';
+  const [startPath, setStartPath] = useState(urlPath);
+  // The browser owns its location after it mounts, so an outside change is
+  // delivered by mounting it again at the new path (its fetch is the only side
+  // effect, and it is the one fetch the new directory needs anyway).
+  const [browserKey, setBrowserKey] = useState(0);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   // onSelect must keep ONE identity: ServerFileBrowser's directory fetch depends
   // on it, so a new function per render (or per URL change) refetches the folder
@@ -26,7 +32,15 @@ export function FileBrowser() {
   useEffect(() => {
     setParamsRef.current = setSearchParams;
   });
-  const writtenPath = useRef(startPath);
+  const writtenPath = useRef(urlPath);
+  // A path in the URL that we did not write is an outside change.
+  useEffect(() => {
+    if (urlPath === writtenPath.current) return;
+    writtenPath.current = urlPath;
+    setStartPath(urlPath);
+    setSelectedPath(null);
+    setBrowserKey((k) => k + 1);
+  }, [urlPath]);
   const handleSelect = useCallback((path: string, isDir: boolean) => {
     if (!isDir) return;
     setSelectedPath(path);
@@ -84,6 +98,7 @@ export function FileBrowser() {
         </Alert>
       )}
       <ServerFileBrowser
+        key={browserKey}
         initialPath={startPath}
         onSelect={handleSelect}
         showFiles
