@@ -36,7 +36,17 @@
     {
       "kind": "synthetic-Kind",
       "why": "synthetic-Why",
-      "owner_ok": true
+      "owner_ok": true,
+      "file_ids": [
+        "synthetic-FileIDs"
+      ],
+      "action": {
+        "op_id": "synthetic-OpID",
+        "params": {
+          "synthetic-key": "synthetic-Params"
+        },
+        "label": "synthetic-Label"
+      }
     }
   ],
   "retry_later": true,
