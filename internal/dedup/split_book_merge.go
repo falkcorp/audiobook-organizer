@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.22.4
+// version: 1.22.5
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
 // last-edited: 2026-11-05
 
@@ -54,15 +54,10 @@ type SplitBookMergeResult struct {
 	JournalID string `json:"journal_id,omitempty"`
 	// OperationID is the operation the journal's undo pointer
 	// (undo.ChangeTypeMergeCombineJournal) is journaled under when the merge
-	// wrote it itself (no SplitMergeOptions.OnJournal): OperationID, or a
-	// correlation id of its own. POST /operations/:id/revert with it undoes
-	// the merge.
+	// wrote it: SplitMergeOptions.OperationID, or a correlation id of its own.
+	// POST /operations/:id/revert with it undoes the merge.
 	OperationID string   `json:"operation_id,omitempty"`
 	Errors      []string `json:"errors,omitempty"`
-	// NotAttempted are the srcs a SplitMergeOptions.BeforeSource stop left
-	// untouched, in srcIDs order. Nothing was written for them and the
-	// journal does not list them.
-	NotAttempted []string `json:"not_attempted,omitempty"`
 }
 
 // BulkSplitBookMergeItem is the immutable candidate snapshot consumed by the
@@ -116,43 +111,12 @@ type SplitMergeOptions struct {
 	// for the merge; an error refuses the merge with nothing written. The
 	// chapter job re-verifies its reviewed group here.
 	Precheck func() error
-	// AcquireLock, when set, takes the merge lock in place of a bare
-	// merge.LockMergeRMW: it is handed the lock and its release, and returns
-	// nil only with the lock held (repairs.Writer.LockWaiting, which keeps a
-	// scan stand-down lease alive while it waits). An error refuses the merge
-	// with nothing read or written and the lock not held.
-	AcquireLock func(lock, unlock func()) error
-	// OnJournal, when set, is called with the combine journal's id right
-	// after the Pending journal is written and before the first mutation, so
-	// a caller can record where the merge's undo lives before anything
-	// changes. An error refuses the merge: only the journal was written, and
-	// it is rewritten as an empty Applied record naming the refusal (undoing
-	// it restores nothing). Once OnJournal returns nil the merge never
-	// returns an error: every later stop is reported in the result.
-	//
-	// Left nil, the merge journals the pointer POST /operations/:id/revert
-	// follows to the journal itself (merge.RecordJournalPointer), under
-	// OperationID, with the same refusal: no merge runs without a way back.
-	// A caller sets it only to journal that pointer its own way (the
-	// dedup.split-books fixer did, through its repairs Writer, until it was
-	// retired 2026-11-05).
-	OnJournal func(journalID string) error
-	// OperationID is the operation the default OnJournal journals the undo
-	// pointer under: the caller's op, so reverting it undoes every merge it
+	// OperationID is the operation the merge's undo pointer
+	// (POST /operations/:id/revert follows it to the journal) is journaled
+	// under: the caller's op, so reverting it undoes every merge it
 	// made. Empty: a correlation id of its own, returned in
-	// SplitBookMergeResult.OperationID. Unused when OnJournal is set.
+	// SplitBookMergeResult.OperationID.
 	OperationID string
-	// BeforeSource, when set, runs under the merge lock before each src is
-	// absorbed. An error stops the merge there: that src and every later one
-	// are not attempted (Result.NotAttempted, an entry in Errors, dropped
-	// from the journal). The steps that reconcile what was already absorbed
-	// still run -- the keep's duration recompute and the version-group
-	// primary hand-off of a retired primary, without which a group could be
-	// left with no primary -- but the optional ones (play-order stamp, title,
-	// fill-empty) do not: the caller asked the merge to stop writing. The
-	// journal is finalized, and the result is returned with a nil error; the
-	// caller that set the hook holds its own error.
-	BeforeSource func(srcID string) error
 }
 
 // MergeSplitBookClusterWithOptions absorbs every srcID into keepID:
@@ -197,13 +161,7 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 	// same failure class #1930 fixed for merge.Service.MergeBooks, guarded here
 	// with the same lock. It is also the lock merge.Service.UndoCombine takes, so an undo of this
 	// journal cannot interleave with the merge that writes it.
-	if opts.AcquireLock != nil {
-		if err := opts.AcquireLock(merge.LockMergeRMW, merge.UnlockMergeRMW); err != nil {
-			return nil, fmt.Errorf("split-book merge refused: merge lock not taken: %w", err)
-		}
-	} else {
-		merge.LockMergeRMW()
-	}
+	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 
 	if opts.Precheck != nil {
@@ -317,18 +275,10 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 	if err := merge.WriteCombineJournal(store, journal); err != nil {
 		return nil, fmt.Errorf("split-book merge refused: undo journal could not be written: %w", err)
 	}
-	onJournal := opts.OnJournal
-	if onJournal == nil {
-		opID := merge.UndoOperationID(opts.OperationID)
-		onJournal = func(journalID string) error {
-			if _, err := merge.RecordJournalPointerIn(store, opID, keepID, merge.CombineJournalPointerType, journalID); err != nil {
-				return err
-			}
-			result.OperationID = opID
-			return nil
-		}
-	}
-	if err := onJournal(journal.ID); err != nil {
+	// The undo pointer is journaled right after the Pending journal and
+	// before the first mutation, so no merge runs without a way back.
+	opID := merge.UndoOperationID(opts.OperationID)
+	if _, err := merge.RecordJournalPointerIn(store, opID, keepID, merge.CombineJournalPointerType, journal.ID); err != nil {
 		// Nothing was mutated. The journal must not stay Pending listing
 		// srcs: an undo of it would "restore" books this merge never
 		// touched. Rewritten empty, it records the refusal and undoes to
@@ -343,6 +293,7 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 		}
 		return nil, fmt.Errorf("split-book merge refused: %w", err)
 	}
+	result.OperationID = opID
 	// persist re-writes the journal after a step. A failure is recorded: the
 	// merge goes on (its writes are real), but the result says the journal may
 	// be behind. A write that must not happen unjournaled uses
@@ -367,35 +318,10 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 	// Step 1: per src -- move files, reassign external IDs, follow progress,
 	// soft-delete -- persisting the journal after each.
 	kept := make([]string, 0, len(plans))
-	stopped := false
 	for i := range journal.Absorbed {
 		entry := &journal.Absorbed[i]
 		p := plans[i]
 		srcID := entry.BookID
-		if opts.BeforeSource != nil {
-			if err := opts.BeforeSource(srcID); err != nil {
-				stopped = true
-				for _, a := range journal.Absorbed[i:] {
-					result.NotAttempted = append(result.NotAttempted, a.BookID)
-				}
-				msg := fmt.Sprintf("merge stopped before src %s: %v; %d src(s) not attempted, left untouched", srcID, err, len(result.NotAttempted))
-				result.Errors = append(result.Errors, msg)
-				// Nothing was written for srcs i.. on: drop them now, so
-				// neither this journal nor a crash before the finalize
-				// leaves an undo that "restores" books never touched.
-				journal.Absorbed = journal.Absorbed[:i]
-				plans = plans[:i]
-				// A stopped merge never stamps the play order (step 2b
-				// sets order = nil), so the keep's own files are never
-				// renumbered, whichever src it stopped before: an undo
-				// restoring their disc/track numbers would only clobber a
-				// renumbering made since.
-				journal.SurvivorOwnFiles = nil
-				journal.Warnings = append(journal.Warnings, msg)
-				persist()
-				break
-			}
-		}
 		leaveLive := func(msg string) {
 			entry.LeftLive = true
 			result.Errors = append(result.Errors, msg)
@@ -486,7 +412,7 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 
 	// Step 2: recompute keep duration from its file rows -- only when the
 	// merge changed the keep's file set. A merge that absorbed nothing and
-	// moved nothing (stopped before its first src, or every src left live)
+	// moved nothing (every src left live)
 	// must not write the keep's duration.
 	total := 0
 	if len(kept) > 0 || result.FilesMoved > 0 {
@@ -509,9 +435,6 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 	// Step 2b: stamp the play order. Only files the keep now owns are
 	// touched; their previous numbers are already in the journal
 	// (SurvivorOwnFiles and Absorbed[].Files), so UndoCombine restores them.
-	if stopped {
-		order = nil // a stopped merge makes no optional write
-	}
 	if len(order) > 0 {
 		// Journaled before the first stamp: the undo restores the keep's own
 		// numbers only when this marker says a stamp could have run.
@@ -539,7 +462,7 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 	// unless the user locked the keep's title, in which case theirs stands.
 	// Fail closed on an unreadable lock set.
 	applyTitle := false
-	if !stopped && suggestedTitle != "" && suggestedTitle != keep.Title && len(kept) > 0 {
+	if suggestedTitle != "" && suggestedTitle != keep.Title && len(kept) > 0 {
 		locks, lerr := database.LoadFieldLocks(store, keep.ID)
 		switch {
 		case lerr != nil:
@@ -599,7 +522,7 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 
 	// Step 3b: fill-empty metadata onto the keep, planned over the srcs
 	// actually absorbed, journaled BEFORE the write and again after.
-	if !stopped && opts.FillEmpty && len(kept) > 0 {
+	if opts.FillEmpty && len(kept) > 0 {
 		absorbed := make([]*database.Book, 0, len(kept))
 		for _, id := range kept {
 			absorbed = append(absorbed, srcBook[id])

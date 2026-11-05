@@ -2,6 +2,8 @@
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
+<!-- version: 10.78.30 -->
+<!-- version: 10.78.29 -->
 <!-- version: 10.78.24 -->
 <!-- version: 10.78.23 -->
 <!-- version: 10.78.24 -->
@@ -906,7 +908,14 @@ into one of the curated sections below, is a normal direct edit.
       Any name still unreachable after PR2 is dead code: delete it rather than
       keep it baselined.
 
-- [ ] **SPLIT-BOOKS-RESCAN** After the split-books distinct-works veto and the
+- [x] **SPLIT-BOOKS-RESCAN** MOOT 2026-11-05: the `dedup.split-books` Repairs
+      fixer this item was written around was retired on 2026-11-05 (its trial
+      found 0 of 239 clusters applicable; "Merge chapter files into their
+      book" covers them), and the Split Books tab is gone, so there is no
+      Repairs lane or tab left to rebuild or spot-check. The stored candidates
+      still feed the bulk-merge op, whose merge-time recheck already refuses
+      the vetoed clusters. Original text, kept for the record: after the
+      split-books distinct-works veto and the
       merge-time recheck deploy, re-run `dedup.split-book-scan` so the Split
       Books tab and the Repairs lane are rebuilt without the vetoed clusters
       (stored candidates keep their old contents until a scan replaces them;
@@ -2260,8 +2269,12 @@ into one of the curated sections below, is a normal direct edit.
       full Pebble scan for each title-named credit part. A rescan during
       warmup pays that per part.
 
-- [ ] **SERIES-ID-MISMATCH-COUNT** After the series-object drop history PR
-      deploys, run a `maintenance.relink-stale-series` trial on prod and record
+- [x] **SERIES-ID-MISMATCH-COUNT** MOOT 2026-11-05: `maintenance.relink-stale-series`
+      was retired on 2026-11-05 (its trial found 3 rows, none applicable, and
+      the database repairs these rows itself on the next write), so there is
+      no trial left to run. Original text, kept for the record: after the
+      series-object drop history PR deploys, run a `maintenance.relink-stale-series`
+      trial on prod and record
       the library-wide `held-series-id-mismatch` count (`by_class`). The list
       endpoints read memdb, which strips the embedded object, so the only API
       count today is the 52 books the swapped title/author dry run held
@@ -2326,7 +2339,7 @@ into one of the curated sections below, is a normal direct edit.
       `is_primary_version`), which makes the cut slightly worse.
       Callers that need correctness today must read with `1<<30` or field
       by field (`GetMetadataChangeHistory`), as the relink-stale-series fixer
-      does.
+      (retired 2026-11-05) did.
 
       Done means: the function returns rows newest-first across fields before
       applying `limit`, by merging the per-field iterators on `ChangedAt` or
@@ -2468,8 +2481,8 @@ into one of the curated sections below, is a normal direct edit.
       `overrides.series_name = {value: "", locked: true}`, which records an
       override history row and a lock. Any client that sends only the
       top-level key (API, batch) leaves no trace. `maintenance.relink-stale-series`
-      then cannot tell that clear from a lost link (its relink rows are risk
-      review for this reason). PR #3698 is reworking this path in
+      (retired 2026-11-05) could then not tell that clear from a lost link (its
+      relink rows were risk review for this reason). PR #3698 is reworking this path in
       `service_mutation.go`. Done means: a series clear always records a
       history row (field `series`, new value `""`) and a `series_name` lock,
       even when `SeriesID` was already nil, with a test on a stale book.
