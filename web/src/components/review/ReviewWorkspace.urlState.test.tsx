@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.urlState.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: c7a05e2b-19d4-4f83-a6b0-3e8d51f9c274
 // last-edited: 2026-11-05
 
@@ -569,7 +569,6 @@ describe('the address bar and the screen never disagree', () => {
   });
 
   it('holding j writes a few URLs, not one per key repeat, and ends on the right author', async () => {
-    const user = userEvent.setup();
     vi.mocked(reads.fetchAuthorGroups).mockResolvedValue({
       groups: Array.from({ length: 12 }, (_, i) => ({
         canonical: { id: i + 1, name: `Gotham Resident ${i + 1}`, created_at: '' },
@@ -581,10 +580,26 @@ describe('the address bar and the screen never disagree', () => {
     renderWorkspace('/review?lane=authors');
     await screen.findByTestId('author-group-1');
     visited.length = 0;
-    for (let i = 0; i < 10; i++) await user.keyboard('j');
+    // Key repeat: ten keydowns back to back, each committed synchronously (no
+    // userEvent delay between them), so the burst fits one throttle window on
+    // any machine. userEvent with real timers made the burst's length depend
+    // on agent load, and a slow Woodpecker agent spread it over several
+    // windows (8 writes, PR #4385 pipeline 2413).
+    const target = () => document.activeElement ?? document.body;
+    const started = performance.now();
+    for (let i = 0; i < 10; i++) {
+      act(() => {
+        fireEvent.keyDown(target(), { key: 'j', code: 'KeyJ' });
+        fireEvent.keyUp(target(), { key: 'j', code: 'KeyJ' });
+      });
+    }
+    const burstMs = performance.now() - started;
     await waitFor(() => expect(loc()).toBe('/review?lane=authors&author=11'));
-    // Ten focus moves, a leading write and a trailing one (plus at most one more
-    // when the throttle window rolled over mid-burst), never one per move.
-    expect(visited.filter((v) => v.includes('author=')).length).toBeLessThanOrEqual(3);
+    // A leading write and a trailing one, plus one more for each 400 ms
+    // throttle window the burst itself spanned. Never one write per move.
+    const allowed = 2 + Math.floor(burstMs / 400);
+    const writes = visited.filter((v) => v.includes('author=')).length;
+    expect(writes).toBeLessThanOrEqual(allowed);
+    expect(writes).toBeLessThan(10);
   });
 });
