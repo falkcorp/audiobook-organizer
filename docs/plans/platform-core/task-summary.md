@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/task-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 98285867-08c9-4873-8207-d381e15999fc -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -179,9 +179,9 @@ Outside services (download client, metadata providers, AI, webhooks) move onto e
 
 | Task | Kind | What | Why | Wave · needs |
 |---|---|---|---|---|
-| **F7-01** Build the integrations registry | Feature | Adds one registry for integration instances (such as external services), stored in core, with secret binding, origin trust and an importer for old settings. Dark. | Integration settings are scattered today. Without a single registry, secrets and trusted addresses cannot be handled consistently. | W27 · F3-01, F3-03, F2-07 |
-| **F7-04** Build the download client contract | Feature | Adds a core contract for download clients, a Deluge adapter and a connection pool, with a test fake. Dark. | Deluge integration needs a common interface. Without it, the app stays hard-wired to one client's old code. | W28 · F7-01 |
-| **F7-10** Add integration instance routes | Feature | Adds routes to list adapters, manage instances, test unsaved or saved settings, and see health. A stored secret is never sent to a new address when testing. | Admins need to manage integrations. Without the secret rule, a test could leak a saved password to a different server. | W28 · F7-01, F4-01, F4-02 |
+| **F7-01** Build the integrations registry | Feature | Adds one registry for integration instances (such as external services), stored in core, with secret binding, origin trust and an importer for old settings. Dark. | Integration settings are scattered today. Without a single registry, secrets and trusted addresses cannot be handled consistently. | W28 · F3-01, F3-03, F2-07 |
+| **F7-04** Build the download client contract | Feature | Adds a core contract for download clients, a Deluge adapter and a connection pool, with a test fake. Dark. | Deluge integration needs a common interface. Without it, the app stays hard-wired to one client's old code. | W29 · F7-01 |
+| **F7-10** Add integration instance routes | Feature | Adds routes to list adapters, manage instances, test unsaved or saved settings, and see health. A stored secret is never sent to a new address when testing. | Admins need to manage integrations. Without the secret rule, a test could leak a saved password to a different server. | W29 · F7-01, F4-01, F4-02 |
 | **F7-02** Finish provider HTTP gates and quotas | Feature | Completes the shared outbound-HTTP layer with quota and throttle state, a metadata contract, and moves the safe-HTTP package into core. Reads fail closed. Dark. | Outbound lookups need rate limits that persist. If the state cannot be read and it fails open, the app could blow through provider quotas. | W30 · F7-01, F2-11 |
 | **F7-05** Build core notifications | Feature | Adds notification rules, email delivery, and webhooks in core's signed format. Moves the mail package into core. Dark. | Alerts need one delivery path. Without it, old webhook and mail code would stay behind and webhook receivers would not get the new signed format. | W31 · F7-01, F6-01 |
 | **F7-06** Finish the core library manager | Feature | Adds library roots, safe file transfers and renames, a watcher, quarantine, path mapping and a browse route. Dark. | Moving user media is risky. A wrong move can lose files, so this needs careful, tested handling before the app uses it. | W31 · F3-01, F2-05 |
