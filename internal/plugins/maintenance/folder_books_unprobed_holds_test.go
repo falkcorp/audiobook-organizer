@@ -238,7 +238,10 @@ func TestFolderBooksFixer_UnreadableWhyClipsTheError(t *testing.T) {
 	h := fbHold(row, fbSkipUnreadableAudio)
 	require.NotNil(t, h)
 	require.Contains(t, h.Why, "...)")
-	require.Less(t, len(h.Why), 500)
+	// The 1000-character error is cut to fbErrClip runes; the rest of the Why
+	// (path, counts, the lower-bound sentence) stays well under the original.
+	require.NotContains(t, h.Why, strings.Repeat("moov ", 200))
+	require.Less(t, len(h.Why), 800)
 }
 
 // One unmeasured member holds a group whose known files alone already clear the
