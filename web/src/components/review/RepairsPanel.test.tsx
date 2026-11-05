@@ -1,17 +1,17 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.29.0
+// version: 1.29.1
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
 // last-edited: 2026-11-05
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
 
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
-import type { Book, OperationV2, RepairFixer, RepairRow, RepairRowsFilter } from '../../services/api';
+import type { Book, OperationV2, RepairFixer, RepairOpRef, RepairRow, RepairRowsFilter } from '../../services/api';
 import { RepairsPanel, SKIP_KIND_LABEL } from './RepairsPanel';
 import { useRepairsLane } from './lanes/useRepairsLane';
 import type { SpineViewMode } from './spine/viewMode';
@@ -51,7 +51,7 @@ function row(id: string, extra: Partial<RepairRow> = {}): RepairRow {
 const APPLICABLE = [row('g1'), row('g2', { risk: 'review' })];
 const SKIPPED = [
   row('g3', { skipped: 'skipped_itunes', skip_reason: 'Lives in the iTunes library' }),
-  row('g4', { skipped: 'skipped_fragment', skip_reason: 'fragment — use the consolidation fixer: 3 books share the folder' }),
+  row('g4', { skipped: 'skipped_fragment', skip_reason: 'chapter file — use "Merge chapter files into their book": 3 books share the folder' }),
 ];
 
 function skippedByKind(): Record<string, number> {
@@ -403,7 +403,7 @@ describe('RepairsPanel', () => {
     await user.click(screen.getByTestId('repairs-tab-skipped'));
     await screen.findByTestId('repairs-row-g4');
     const fragChip = screen.getByTestId('repairs-skip-kind-skipped_fragment');
-    expect(fragChip).toHaveTextContent('Fragment — use the consolidation fixer (1)');
+    expect(fragChip).toHaveTextContent('Chapter file — use "Merge chapter files into their book" (1)');
     expect(screen.getByTestId('repairs-skip-kind-all')).toHaveTextContent('All skipped (2)');
 
     await user.click(fragChip);
@@ -1084,6 +1084,15 @@ describe('SKIP_KIND_LABEL', () => {
       expect(SKIP_KIND_LABEL[kind]).not.toEqual(kind);
     }
   });
+
+  it('points at the fixers by their lane titles, never by a nickname', () => {
+    expect(SKIP_KIND_LABEL.skipped_fragment).toContain('"Merge chapter files into their book"');
+    expect(SKIP_KIND_LABEL.skipped_swapped_title_author).toContain('"Fix swapped title and author"');
+    expect(SKIP_KIND_LABEL.skipped_relink_series_first).not.toMatch(/relink/i);
+    for (const label of Object.values(SKIP_KIND_LABEL)) {
+      expect(label).not.toMatch(/consolidation fixer|swapped fixer/i);
+    }
+  });
 });
 
 const RAIL_MIN = 200;
@@ -1377,14 +1386,14 @@ describe('RepairsPanel — view modes', () => {
   });
 });
 
-// The split-book fixer (dedup.split-books), which takes over from the old Split
-// Books tab (the tab is retired in 03-PR10): a cluster row marks its suggested
-// keep among its books, and a cluster with an iTunes book is listed as
-// skipped with the reason "iTunes".
-describe('RepairsPanel — split books', () => {
+// A fixer whose rows are clusters of books (the chapter-file fixer): a cluster
+// row marks its suggested keep among its books, and a cluster with an iTunes
+// book is listed as skipped with the reason "iTunes". The Split Books fixer
+// that used to share these rows is retired; its tab now lands here.
+describe('RepairsPanel — cluster rows', () => {
   const SPLIT_FIXER: RepairFixer = {
-    id: 'dedup.split-books',
-    title: 'Split books',
+    id: 'fragment-consolidation',
+    title: 'Merge chapter files into their book',
     description: 'One book stored as several short books, one per chapter file, in one folder.',
     last_plan: {
       operation_id: 'plan-split',
@@ -1434,11 +1443,11 @@ describe('RepairsPanel — split books', () => {
     );
   });
 
-  it('lists the fixer titled Split books and marks the suggested keep among the cluster books', async () => {
+  it('lists the fixer by its title and marks the suggested keep among the cluster books', async () => {
     const user = userEvent.setup();
     renderPanel();
-    const fixer = await screen.findByTestId('repairs-fixer-dedup.split-books');
-    expect(within(fixer).getByText('Split books')).toBeInTheDocument();
+    const fixer = await screen.findByTestId('repairs-fixer-fragment-consolidation');
+    expect(within(fixer).getByText('Merge chapter files into their book')).toBeInTheDocument();
     const r = await screen.findByTestId('repairs-row-split:a');
     await expandRow(user, 'split:a');
     const toggle = within(r).getByTestId('repairs-row-members-split:a');
@@ -1707,5 +1716,220 @@ describe('RepairsPanel — flagged rows', () => {
     // Clicking the active chip goes back to the applicable rows.
     await user.click(screen.getByTestId('repairs-flag-combine_undo_aware'));
     expect(await screen.findByTestId('repairs-row-plain:1')).toBeInTheDocument();
+  });
+});
+
+
+describe('RepairsPanel — groups, summaries and API-only fixers', () => {
+  const PLAN: RepairOpRef = {
+    operation_id: 'plan-gotham',
+    status: 'completed',
+    queued_at: '2026-11-05T10:00:00Z',
+    completed_at: '2026-11-05T10:01:00Z',
+    total: 3,
+    applicable: 2,
+  };
+  const LONG_WARNING = 'Moves every file row of the Batcave books. After linking, purging a version deletes the file from disk.';
+  // The server's display order, deliberately not alphabetical by id or title: the
+  // lane must draw it as it comes.
+  const LIST: RepairFixer[] = [
+    {
+      id: 'zz-batcave-chapters',
+      title: 'Merge Batcave chapter files',
+      description: LONG_WARNING,
+      summary: 'Folds chapter files into the book they belong to.',
+      group: 'duplicates',
+      group_title: 'Duplicates & split books',
+      rank: 1,
+      last_plan: PLAN,
+    },
+    {
+      id: 'aa-arkham-copies',
+      title: 'Merge duplicate Arkham copies',
+      description: 'Keeps the best Arkham copy.',
+      summary: 'Keeps the best of two or more identical copies.',
+      group: 'duplicates',
+      group_title: 'Duplicates & split books',
+      rank: 2,
+    },
+    {
+      id: 'mm-robin-titles',
+      title: 'Fix junk Robin titles',
+      description: 'Replaces junk titles.',
+      summary: 'Replaces titles like "01" with the real title.',
+      group: 'titles',
+      group_title: 'Titles',
+      rank: 1,
+    },
+    {
+      id: 'ff-wayne-versions',
+      title: 'Retire trashed Wayne books',
+      description: 'Preview of the retire step.',
+      summary: 'Moves a trashed duplicate onto its survivor.',
+      group: 'versions',
+      group_title: 'Versions',
+      rank: 1,
+      plan_only: true,
+    },
+    {
+      id: 'bb-joker-import',
+      title: 'Import read status from the Joker export',
+      description: 'Needs the export.',
+      summary: 'Marks one user\'s books finished from an export.',
+      group: 'imports',
+      group_title: 'Imports & one-shot tools',
+      rank: 1,
+      api_only_reason: 'Needs an export file and the user to import it for, so the trial can only be started through the API.',
+    },
+  ];
+
+  beforeEach(() => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue(LIST);
+  });
+
+  it('draws one header per group, in the order the server sent, and never re-sorts the fixers', async () => {
+    renderPanel();
+    await screen.findByTestId('repairs-fixer-zz-batcave-chapters');
+    const rail = screen.getByTestId('repairs-rail');
+    const headers = Array.from(rail.querySelectorAll('[data-testid^="repairs-group-"]'));
+    expect(headers.map((h) => h.textContent)).toEqual([
+      'Duplicates & split books',
+      'Titles',
+      'Versions',
+      'Imports & one-shot tools',
+    ]);
+    const fixerIds = Array.from(rail.querySelectorAll('[data-testid^="repairs-fixer-"]'))
+      .map((e) => e.getAttribute('data-testid')!)
+      .filter((t) => LIST.some((f) => `repairs-fixer-${f.id}` === t));
+    expect(fixerIds).toEqual(LIST.map((f) => `repairs-fixer-${f.id}`));
+
+    // Each header sits directly above the first fixer of its group.
+    const before = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(before(screen.getByTestId('repairs-group-duplicates'), screen.getByTestId('repairs-fixer-zz-batcave-chapters'))).toBe(true);
+    expect(before(screen.getByTestId('repairs-fixer-aa-arkham-copies'), screen.getByTestId('repairs-group-titles'))).toBe(true);
+    expect(before(screen.getByTestId('repairs-group-titles'), screen.getByTestId('repairs-fixer-mm-robin-titles'))).toBe(true);
+    expect(before(screen.getByTestId('repairs-group-imports'), screen.getByTestId('repairs-fixer-bb-joker-import'))).toBe(true);
+  });
+
+  it('draws no headers for a server that sends no groups', async () => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER]);
+    renderPanel();
+    await screen.findByTestId('repairs-fixer-vg-primary');
+    expect(document.querySelector('[data-testid^="repairs-group-"]')).toBeNull();
+    // With no summary the rail falls back to the description.
+    expect(screen.getByTestId('repairs-fixer-summary-vg-primary')).toHaveTextContent(
+      'Crown one primary per version group.'
+    );
+  });
+
+  it('shows the one-line summary in the rail and keeps the long description for the header', async () => {
+    renderPanel();
+    const summary = await screen.findByTestId('repairs-fixer-summary-zz-batcave-chapters');
+    expect(summary).toHaveTextContent('Folds chapter files into the book they belong to.');
+    expect(within(screen.getByTestId('repairs-fixer-zz-batcave-chapters')).queryByText(LONG_WARNING)).toBeNull();
+    // The first fixer is selected and its header carries the whole description.
+    expect(await screen.findByTestId('repairs-fixer-description')).toHaveTextContent(LONG_WARNING);
+  });
+
+  it('badges a preview-only fixer and an API-only fixer, and no other', async () => {
+    renderPanel();
+    await screen.findByTestId('repairs-fixer-zz-batcave-chapters');
+    expect(screen.getByTestId('repairs-badge-preview-ff-wayne-versions')).toHaveTextContent('Preview only');
+    expect(screen.getByTestId('repairs-badge-api-only-bb-joker-import')).toHaveTextContent('API only');
+    expect(screen.queryByTestId('repairs-badge-preview-bb-joker-import')).toBeNull();
+    expect(screen.queryByTestId('repairs-badge-api-only-ff-wayne-versions')).toBeNull();
+    expect(screen.queryByTestId('repairs-badge-api-only-zz-batcave-chapters')).toBeNull();
+    expect(screen.queryByTestId('repairs-badge-preview-zz-batcave-chapters')).toBeNull();
+  });
+
+  it('starts a normal fixer\'s trial with no params', async () => {
+    vi.mocked(api.startRepairPlan).mockResolvedValue({
+      operation_id: 'plan-new',
+      def_id: 'repairs.plan',
+      fixer_id: 'mm-robin-titles',
+      status: 'queued',
+    });
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(await screen.findByTestId('repairs-run-trial-mm-robin-titles'));
+    await waitFor(() => expect(api.startRepairPlan).toHaveBeenCalledTimes(1));
+    expect(api.startRepairPlan).toHaveBeenCalledWith('mm-robin-titles');
+  });
+
+  it('disables Run trial for an API-only fixer, explains why in a tooltip, and starts nothing', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const run = await screen.findByTestId('repairs-run-trial-bb-joker-import');
+    expect(run).toBeDisabled();
+    // A disabled button takes no pointer events; fire the click anyway.
+    fireEvent.click(run);
+    expect(api.startRepairPlan).not.toHaveBeenCalled();
+
+    await user.hover(within(screen.getByTestId('repairs-rail')).getByTestId('repairs-api-only-hint-bb-joker-import'));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      'Needs an export file and the user to import it for, so the trial can only be started through the API.'
+    );
+    // The other fixers' buttons are live.
+    expect(screen.getByTestId('repairs-run-trial-mm-robin-titles')).toBeEnabled();
+  });
+
+  it('says why in the empty state and offers no live Run trial for a selected API-only fixer', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(await screen.findByTestId('repairs-fixer-bb-joker-import'));
+    const empty = await screen.findByTestId('repairs-no-trial');
+    expect(empty).toHaveTextContent('No completed trial for this fixer yet.');
+    expect(empty).toHaveTextContent('so the trial can only be started through the API');
+    expect(within(empty).getByRole('button', { name: 'Run trial' })).toBeDisabled();
+    expect(within(screen.getByTestId('repairs-fixer-header')).getByText('API only')).toBeInTheDocument();
+    fireEvent.click(within(empty).getByRole('button', { name: 'Run trial' }));
+    expect(api.startRepairPlan).not.toHaveBeenCalled();
+  });
+
+  it('keeps the rows of an API-only fixer\'s existing plan readable', async () => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([{ ...LIST[4], last_plan: PLAN }]);
+    renderPanel();
+    expect(await screen.findByTestId('repairs-row-g1')).toBeInTheDocument();
+    expect(screen.queryByTestId('repairs-no-trial')).toBeNull();
+  });
+});
+
+describe('RepairsPanel — a link to a retired fixer', () => {
+  const LIVE: RepairFixer = { id: 'vg-primary', title: 'Fix Gotham version groups', description: 'Fixes groups.' };
+
+  function SeededHarness({ fixerId }: { fixerId: string }) {
+    const repairs = useRepairsLane(toast, true, { fixerId });
+    return <RepairsPanel repairs={repairs} />;
+  }
+
+  function renderSeeded(fixerId: string) {
+    return render(
+      <MemoryRouter>
+        <SeededHarness fixerId={fixerId} />
+      </MemoryRouter>
+    );
+  }
+
+  beforeEach(() => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([LIVE]);
+  });
+
+  it.each(['maintenance.normalize-letter-l-ordinals', 'maintenance.relink-stale-series', 'dedup.split-books'])(
+    'shows %s labelled retired, keeps the list usable and does not crash',
+    async (id) => {
+      renderSeeded(id);
+      const note = await screen.findByTestId('repairs-fixer-unlisted');
+      expect(note).toHaveTextContent(id);
+      expect(note).toHaveTextContent('(retired)');
+      expect(note).toHaveTextContent('past runs stay in the history');
+      expect(screen.getByTestId('repairs-fixer-vg-primary')).toBeInTheDocument();
+    }
+  );
+
+  it('labels an id this server never lists as not available, not retired', async () => {
+    renderSeeded('no.such-fixer');
+    const note = await screen.findByTestId('repairs-fixer-unlisted');
+    expect(note).toHaveTextContent('(not available)');
+    expect(note).not.toHaveTextContent('(retired)');
   });
 });

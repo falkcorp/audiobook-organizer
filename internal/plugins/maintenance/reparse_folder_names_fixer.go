@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reparse_folder_names_fixer.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: ac1c25d1-3594-43f6-9254-90bf2ab0b284
-// last-edited: 2026-10-12
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -70,7 +70,7 @@ var _ repairs.Fixer = (*reparseFolderNamesFixer)(nil)
 
 func (f *reparseFolderNamesFixer) ID() string { return reparseFolderNamesFixerID }
 func (f *reparseFolderNamesFixer) Title() string {
-	return "Folder names re-read by the new title parser"
+	return "Fix titles parsed wrongly from folder names"
 }
 func (f *reparseFolderNamesFixer) Description() string {
 	return "Existing books whose title, author or series came from the old folder parse and that the new title " +
@@ -78,6 +78,15 @@ func (f *reparseFolderNamesFixer) Description() string {
 		"series slot read). One row per field, before and after. Never a value from a tag or an edit, never a " +
 		"locked field. Applies titles and links to existing series rows only; author changes are listed for " +
 		"review and not written. Undo with the apply operation's revert."
+}
+
+// Meta implements repairs.Fixer.
+func (f *reparseFolderNamesFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupTitles,
+		Rank:    3,
+		Summary: "Re-reads titles and series from folder names with the newer parser.",
+	}
 }
 
 // reparseStored is what a book holds now, by name.

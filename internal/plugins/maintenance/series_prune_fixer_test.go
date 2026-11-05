@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_prune_fixer_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 30beca88-5314-4b9d-92de-0c91dc9f4151
-// last-edited: 2026-10-20
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -162,7 +162,7 @@ func TestSeriesPruneFixer_Registered(t *testing.T) {
 	p := &Plugin{deps: fakeDeps{}}
 	fx, ok := p.Repairs().Get(seriesPruneFixerID)
 	require.True(t, ok, "the fixer is registered")
-	assert.Equal(t, "Prune series", fx.Title())
+	assert.Equal(t, "Merge duplicate series, remove empty ones", fx.Title())
 	assert.NotContains(t, fx.Description(), "undo", "a deleted series cannot be brought back; the lane must not promise an undo")
 }
 

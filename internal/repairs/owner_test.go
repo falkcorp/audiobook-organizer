@@ -1,7 +1,7 @@
 // file: internal/repairs/owner_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9d4e2b71-6c38-4a05-8f1e-3b7a5c0d2e96
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package repairs
 
@@ -36,6 +36,7 @@ type ownerFixer struct {
 func (f *ownerFixer) ID() string          { return "owner-fx" }
 func (f *ownerFixer) Title() string       { return "owner" }
 func (f *ownerFixer) Description() string { return "test fixer" }
+func (f *ownerFixer) Meta() Meta          { return Meta{} }
 
 func (f *ownerFixer) row(id string) Row {
 	r := Row{RowID: id, BookIDs: []string{id}, Title: f.s.title(id), Fingerprint: "fp:" + f.s.title(id), Risk: RiskReview}

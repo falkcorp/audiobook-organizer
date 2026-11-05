@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_series_id_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 5a0e7c3d-9b41-4f62-8d17-c2e4a6f19b08
-// last-edited: 2026-10-20
+// last-edited: 2026-11-05
 
 package audiobooks
 
@@ -66,7 +66,8 @@ func TestRevertOperation_SeriesID_EmptyOldValueClearsToNil(t *testing.T) {
 // A restored series_id records a history row: Source operation_revert, the
 // operation id in BatchID, change type undo, and the refs. Without it the
 // newest history still said "set to 9" after the revert cleared the link, and
-// maintenance.relink-stale-series re-proposed the reverted link.
+// the (since retired) maintenance.relink-stale-series fixer re-proposed the
+// reverted link.
 func TestRevertOperation_SeriesID_RecordsHistory(t *testing.T) {
 	s := &ledgerStub{
 		book:    &database.Book{ID: "b1", Title: "T", SeriesID: new(9)},

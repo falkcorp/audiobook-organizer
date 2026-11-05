@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_legacy_seed.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 44f1e74c-758d-4e58-9c04-57e60cd237c6
-// last-edited: 2026-10-26
+// last-edited: 2026-11-05
 
 package database
 
@@ -17,8 +17,8 @@ var ErrLegacySeedOutsideTest = errors.New("SeedLegacyBookRowForTest called outsi
 // SeedLegacyBookRowForTest is ModifyBook for tests that need a book row in a
 // shape this build no longer writes: Book.Series kept while SeriesID is nil,
 // or naming a different series than SeriesID. Older builds left such rows in
-// production, and the stale-series relink (internal/plugins/maintenance,
-// relink_stale_series_fixer.go) exists to repair them. The normal write path
+// production (the stale-series relink fixer that repaired them was retired
+// 2026-11-05). The normal write path
 // now holds Series to SeriesID on every write (enforceSeriesInvariant, shared by CreateBook and the update path), so a test cannot build
 // that state through ModifyBook or UpdateBook any more. The same goes for the
 // trash stamp: every write that trashes a row now stamps it

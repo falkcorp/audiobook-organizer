@@ -1,7 +1,7 @@
 // file: internal/repairs/registry.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 8d4f2a61-0b7c-4e93-a5d8-1c6e9f3b2a70
-// last-edited: 2026-10-22
+// last-edited: 2026-11-05
 
 package repairs
 
@@ -51,7 +51,9 @@ func (r *Registry) Get(id string) (Fixer, bool) {
 	return f, ok
 }
 
-// List returns every fixer, sorted by id.
+// List returns every fixer in the lane's display order: by group (Groups), then
+// by Meta().Rank inside the group, then by id so two fixers that share a rank
+// still list the same way every time.
 func (r *Registry) List() []Fixer {
 	if r == nil {
 		return nil
@@ -62,6 +64,15 @@ func (r *Registry) List() []Fixer {
 	for _, f := range r.fixers {
 		out = append(out, f)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID() < out[j].ID() })
+	sort.Slice(out, func(i, j int) bool {
+		mi, mj := out[i].Meta(), out[j].Meta()
+		if gi, gj := groupIndex(mi.Group), groupIndex(mj.Group); gi != gj {
+			return gi < gj
+		}
+		if mi.Rank != mj.Rank {
+			return mi.Rank < mj.Rank
+		}
+		return out[i].ID() < out[j].ID()
+	})
 	return out
 }

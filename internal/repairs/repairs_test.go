@@ -1,7 +1,7 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.17.6
+// version: 1.17.7
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
-// last-edited: 2026-10-29
+// last-edited: 2026-11-05
 
 package repairs
 
@@ -163,6 +163,7 @@ type trimFixer struct {
 func (f *trimFixer) ID() string          { return "trim-titles" }
 func (f *trimFixer) Title() string       { return "Trim titles" }
 func (f *trimFixer) Description() string { return "test fixer" }
+func (f *trimFixer) Meta() Meta          { return Meta{} }
 
 func (f *trimFixer) rowFor(id string) Row {
 	t := f.s.title(id)

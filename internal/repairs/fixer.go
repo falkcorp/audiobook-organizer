@@ -1,7 +1,7 @@
 // file: internal/repairs/fixer.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3e8b1c52-7a4d-4f19-9c06-5d2e8a7f1b34
-// last-edited: 2026-10-22
+// last-edited: 2026-11-05
 
 // Package repairs is the shared framework behind the Repairs lane of /review:
 // one contract every library fixer implements, and one engine that plans,
@@ -72,10 +72,21 @@ func (r Row) Applicable() bool { return r.Skipped == "" }
 // whose fingerprint matched the stored plan, under the scan stand-down, with
 // the framework guards already passed.
 type Fixer interface {
-	// ID is the stable id used in the URL and in the op params.
+	// ID is the stable id used in the URL and in the op params. It is never
+	// shown to the owner and never renamed: stored op history, per-fixer
+	// settings and ?fixer= links key on it.
 	ID() string
+	// Title is the name the lane shows: "<Verb> <what it fixes>" in plain
+	// language (see Meta). It is fixed text: a state such as "preview only"
+	// is a badge from PlanOnly, never a suffix.
 	Title() string
+	// Description is the full text shown in the fixer's header, safety
+	// warnings included. The rail shows Meta.Summary instead.
 	Description() string
+	// Meta says where the fixer sits in the lane and how the rail describes it.
+	// It is required, not optional, so a fixer cannot be added without a group
+	// and a summary.
+	Meta() Meta
 	// Plan returns every row of the whole-library plan, applicable and
 	// skipped alike, with no cap: the rows endpoint pages them. params are
 	// the fixer's own (the plan op passes them through).
@@ -87,6 +98,90 @@ type Fixer interface {
 	// Apply writes one fresh row, through w only. Returning
 	// ErrChangedSincePlan (wrapped or not) marks the row changed_since_plan.
 	Apply(ctx context.Context, w *Writer, fresh Row) error
+}
+
+// Meta is how the Repairs lane lists a fixer: the group header it sits under,
+// its place inside that group, the one-line summary shown in the rail, and
+// whether its plan can be started from the lane at all.
+type Meta struct {
+	// Group is the id of one of Groups(). The lane lists the groups in that
+	// order, each under its own header.
+	Group GroupID
+	// Rank orders the fixer inside its group, 1 first. It is a fixed number,
+	// not a runtime sort by usage, so the list does not reshuffle after each
+	// trial; it was set from how often each fixer was applied (the 2026-11-05
+	// naming proposal) and is worth re-measuring by hand now and then.
+	Rank int
+	// Summary is one plain sentence for the rail. The long Description, with
+	// its safety warnings, stays in the fixer's header.
+	Summary string
+	// APIOnly, when not empty, says why the fixer's plan needs params the lane
+	// cannot collect (an uploaded export, ids from an outside list). The lane
+	// then shows an "API only" badge and a disabled "Run trial" button with
+	// this text as the explanation, because a trial started with no params
+	// can only fail. Empty: the fixer plans with no params.
+	APIOnly string
+}
+
+// GroupID names one of the lane's group headers.
+type GroupID string
+
+// The lane's groups, in display order (see Groups).
+const (
+	GroupDuplicates GroupID = "duplicates"
+	GroupTitles     GroupID = "titles"
+	GroupAuthors    GroupID = "authors"
+	GroupSeries     GroupID = "series"
+	GroupMetadata   GroupID = "metadata"
+	GroupFiles      GroupID = "files"
+	GroupVersions   GroupID = "versions"
+	GroupImports    GroupID = "imports"
+)
+
+// Group is one header of the Repairs lane.
+type Group struct {
+	ID    GroupID
+	Title string
+}
+
+// groups is the one place the lane's group order lives. It follows how often
+// each group's fixers were applied (owner decision 2026-11-05); the imports
+// and one-shot tools group is always last, because those fixers are run from
+// the API.
+var groups = []Group{
+	{GroupDuplicates, "Duplicates & split books"},
+	{GroupTitles, "Titles"},
+	{GroupAuthors, "Authors"},
+	{GroupSeries, "Series"},
+	{GroupMetadata, "Metadata & tags"},
+	{GroupFiles, "Files & iTunes paths"},
+	{GroupVersions, "Versions"},
+	{GroupImports, "Imports & one-shot tools"},
+}
+
+// Groups returns the lane's groups in display order. The slice is a copy.
+func Groups() []Group { return append([]Group(nil), groups...) }
+
+// groupIndex is the position of a group id in the display order. An id that is
+// not a group sorts after every real one, so a fixer with a missing or
+// mistyped group is listed last instead of being dropped.
+func groupIndex(id GroupID) int {
+	for i, g := range groups {
+		if g.ID == id {
+			return i
+		}
+	}
+	return len(groups)
+}
+
+// GroupTitle is the header text of a group id, or "" when it is not one.
+func GroupTitle(id GroupID) string {
+	for _, g := range groups {
+		if g.ID == id {
+			return g.Title
+		}
+	}
+	return ""
 }
 
 // ApplyScoped is implemented by a fixer that keeps state for the length of

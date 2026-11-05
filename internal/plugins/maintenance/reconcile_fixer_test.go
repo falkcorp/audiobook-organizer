@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reconcile_fixer_test.go
-// version: 2.13.0
+// version: 2.13.1
 // guid: 8f0c7a5e-2b3d-4c61-9e47-a1d5b6c3f902
-// last-edited: 2026-10-15
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -682,7 +682,7 @@ func TestReconcileFixer_RegisteredAsMissingFiles(t *testing.T) {
 	p := &Plugin{deps: fakeDeps{}}
 	fx, ok := p.Repairs().Get(reconcileFixerID)
 	require.True(t, ok)
-	assert.Equal(t, "Missing files", fx.Title())
+	assert.Equal(t, "Relink missing files to files on disk", fx.Title())
 	assert.True(t, strings.Contains(fx.Description(), "nothing moves on disk"))
 	assert.False(t, strings.Contains(fx.Description(), "Reconcile Apply"))
 	_, isNoStandDown := fx.(repairs.NoScanStandDown)

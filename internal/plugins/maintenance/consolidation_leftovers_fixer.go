@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -153,7 +153,7 @@ func newConsolidationLeftoversFixer(p *Plugin) *consolidationLeftoversFixer {
 var _ repairs.Fixer = (*consolidationLeftoversFixer)(nil)
 
 func (f *consolidationLeftoversFixer) ID() string    { return leftoverFixerID }
-func (f *consolidationLeftoversFixer) Title() string { return "Chapter consolidation leftovers" }
+func (f *consolidationLeftoversFixer) Title() string { return "Merge leftover one-chapter books" }
 func (f *consolidationLeftoversFixer) Description() string {
 	return "Live one-chapter books left behind by the 2026-09-06 chapter consolidation: their file rows name paths " +
 		"that are gone from disk (but were never marked missing), and a file of exactly that size now belongs to one " +
@@ -162,6 +162,15 @@ func (f *consolidationLeftoversFixer) Description() string {
 		"and hash disagreements are held; iTunes books and leftovers with no match are listed only. A leftover whose own " +
 		"book path is on disk and owned by exactly one other live, listed book is retired into that book (same-path " +
 		"twin), ahead of any size or hash match. Every step is undoable from the apply operation."
+}
+
+// Meta implements repairs.Fixer.
+func (f *consolidationLeftoversFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupDuplicates,
+		Rank:    3,
+		Summary: "Folds one-chapter books left behind by the September chapter clean-up into their combined book.",
+	}
 }
 
 // leftoverState is what Replan needs from plan time: the combined book, the

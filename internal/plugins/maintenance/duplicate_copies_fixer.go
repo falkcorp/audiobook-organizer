@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.11.2
+// version: 1.12.0
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 // Repairs-lane fixer "duplicate-copies": merge whole copies of one book that
 // live as separate books, so a chapter fragment that matches every copy has a
@@ -438,13 +438,22 @@ func newDuplicateCopiesFixer(p *Plugin) *duplicateCopiesFixer {
 var _ repairs.Fixer = (*duplicateCopiesFixer)(nil)
 
 func (f *duplicateCopiesFixer) ID() string    { return dcFixerID }
-func (f *duplicateCopiesFixer) Title() string { return "Duplicate copies" }
+func (f *duplicateCopiesFixer) Title() string { return "Merge duplicate copies of a book" }
 func (f *duplicateCopiesFixer) Description() string {
 	return "Whole copies of one book stored as separate books (same title and author, 90%+ of the smaller copy's " +
 		"audio hash-identical, no ASIN conflict, no not_dup label). Apply keeps the best copy, repoints its missing " +
 		"rows at a present twin, folds in files it lacks (gated), and retires the other copies into it with listening " +
 		"progress and external ids. iTunes copies are ignored and never written; Doctor Who / Big Finish / Torchwood " +
 		"are listed only. Database only. Every step is undoable from the apply operation."
+}
+
+// Meta implements repairs.Fixer.
+func (f *duplicateCopiesFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupDuplicates,
+		Rank:    5,
+		Summary: "Keeps the best of two or more identical copies and retires the rest.",
+	}
 }
 
 type dcParams struct {

@@ -1,7 +1,7 @@
 <!-- file: docs/system/components.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: f6a7b8c9-d0e1-2345-f012-345678901234 -->
-<!-- last-edited: 2026-10-18 -->
+<!-- last-edited: 2026-11-05 -->
 
 # Component Inventory
 
@@ -36,7 +36,7 @@ This document lists all backend packages in `internal/`, their responsibilities,
 | `itunes` | iTunes XML parser, PID backfill, path translation (W:\ → /mnt/bigdata/books/) | `Parser`, `BackfillExternalIDs`, `HealPaths` |
 | `logger` | Structured slog wrapper with request context | `Logger`, `FromContext` |
 | `logging` | Log-level management and log-line formatting | `LevelSetter` |
-| `maintenance` | Plugin package: all maintenance OperationDefs (scan, organize, transcribe, dedup-triage, reconcile, …) and the Repairs-lane fixers (`*_fixer.go`: duplicate-copies, folder-books, fragment-consolidation, letter-l ordinals, junk authors, junk titles, version-group primary) | `Plugin`, `Plugin.Repairs()`, multiple `*Def()` + `run*()` methods |
+| `maintenance` | Plugin package: all maintenance OperationDefs (scan, organize, transcribe, dedup-triage, reconcile, …) and the Repairs-lane fixers (`*_fixer.go`: duplicate-copies, folder-books, fragment-consolidation, junk authors, junk titles, version-group primary) | `Plugin`, `Plugin.Repairs()`, multiple `*Def()` + `run*()` methods |
 | `matcher` | Fuzzy title/author matching for metadata scoring | `Score`, `NormalizeTitle`, `NormalizeAuthor` |
 | `mediainfo` | `mediainfo` CLI wrapper; extended format/codec metadata | `GetInfo`, `FileInfo` |
 | `merge` | Book merge/consolidation service | `Merger`, `MergeBooks` |

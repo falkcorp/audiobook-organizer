@@ -1,7 +1,7 @@
 // file: internal/repairs/engine_cancel_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: e2567da4-edf5-4121-ae72-9a5d4d295154
-// last-edited: 2026-10-20
+// last-edited: 2026-11-05
 
 package repairs
 
@@ -32,6 +32,7 @@ type partitionFixer struct {
 func (f *partitionFixer) ID() string          { return "partition-retire" }
 func (f *partitionFixer) Title() string       { return "Partition retire" }
 func (f *partitionFixer) Description() string { return "test fixer" }
+func (f *partitionFixer) Meta() Meta          { return Meta{} }
 
 func (f *partitionFixer) row(i int) Row {
 	id := fmt.Sprintf("r%02d", i)

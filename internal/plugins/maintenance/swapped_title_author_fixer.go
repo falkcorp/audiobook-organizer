@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer.go
-// version: 1.8.2
+// version: 1.9.0
 // guid: a80ddfb1-95dc-402f-941a-142b9388bcf0
-// last-edited: 2026-10-20
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -63,11 +63,10 @@ const (
 	// object its SeriesID does not name (SeriesID nil, or another series):
 	// a stale row older builds left. Any write of the row drops that object
 	// (the store's series invariant; the drop is recorded as a series_object
-	// history row), and the stale-series relink reads the live object to
-	// offer the series back, so this fixer does not write the book until the
-	// owner has chosen the series. A row with SeriesID nil is
-	// the relink fixer's (maintenance.relink-stale-series); one whose
-	// SeriesID names another series is not, and a person decides.
+	// history row), so this fixer does not write the book until the owner
+	// has chosen the series. The kind keeps its stored name from when a
+	// relink fixer (retired 2026-11-05) offered the series back; a person
+	// decides which series is right.
 	swapSkipRelinkSeriesFirst = "skipped_relink_series_first"
 )
 
@@ -144,18 +143,27 @@ var (
 )
 
 func (f *swappedTitleAuthorFixer) ID() string    { return swappedFixerID }
-func (f *swappedTitleAuthorFixer) Title() string { return "Swapped title and author" }
+func (f *swappedTitleAuthorFixer) Title() string { return "Fix swapped title and author" }
 func (f *swappedTitleAuthorFixer) Description() string {
 	return "Books whose title is a narrator credit or other junk (\"read by Jack Voraces\") while the author field " +
 		"holds the book's real title, and a metadata provider recorded the real title and author. Sets the title " +
 		"to the provider's title and credits the provider's author (an existing author with that name, or a new " +
 		"one), then locks the title and author so a rescan cannot restore the file tags' swapped values. Run it " +
-		"BEFORE the junk-title fixer (maintenance.repair-junk-titles), which lists these books for this one; a book " +
-		"that fixer already retitled gets its author fixed here, title untouched. A title of one or two words needs " +
+		"BEFORE \"Fix junk titles\", which lists these books for this one; a book " +
+		"that repair already retitled gets its author fixed here, title untouched. A title of one or two words needs " +
 		"a narrator, ASIN, runtime or author folder that matches the provider record. Books with no provider author " +
 		"on record, fragments, multi-author credits the splitter cannot separate (or of three names or more) and " +
 		"user-locked titles or authors are listed, not changed. iTunes books get database fields only; no file is " +
 		"touched. Undo with the apply operation's revert."
+}
+
+// Meta implements repairs.Fixer.
+func (f *swappedTitleAuthorFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupTitles,
+		Rank:    1,
+		Summary: "When the title is a narrator credit and the author field holds the title, sets both from the provider. Run before \"Fix junk titles\".",
+	}
 }
 
 // ITunesDatabaseOnly: the owner cleared this fixer to fix the database rows
@@ -432,8 +440,8 @@ func (f *swappedTitleAuthorFixer) evaluate(idx *junkIndex, aidx *swapAuthorIndex
 	}
 	// A book whose state is only in the pre-migration blob has no rows, so
 	// no provider title here and never the swapped shape; the blob is
-	// migrated by LockFields for the books the junk-title and letter-l
-	// fixers write (which hold an unreadable blob, legacyStateUnreadable).
+	// migrated by LockFields for the books the junk-title
+	// fixer writes (which hold an unreadable blob, legacyStateUnreadable).
 	fetched := swapFetchedValues(states)
 	fetchedTitle, fetchedAuthor := fetched["title"].str, fetched["author_name"].str
 	mode := string(kind)
@@ -573,7 +581,7 @@ func (f *swappedTitleAuthorFixer) evaluate(idx *junkIndex, aidx *swapAuthorIndex
 		}
 		switch skip {
 		case junkSkipFragment:
-			return finish(skip, "fragment — use the consolidation fixer: "+why, true)
+			return finish(skip, "chapter file — use \""+fragmentFixerTitle+"\": "+why, true)
 		case junkSkipPossibleFragment:
 			return finish(skip, "possible fragment: "+why, true)
 		case junkSkipNeedsManual:
@@ -867,9 +875,8 @@ func readOpJournalByBook(store OpsStore, op string) (map[string][]*database.Oper
 // swapStaleSeriesHold holds a book whose stored row embeds a series object
 // its SeriesID does not name: writing the row (the title, or the author id)
 // would drop that object (database enforceSeriesInvariant). The drop is
-// recorded in the book's change history (series_object), but the
-// stale-series relink reads the live object to offer the series back, so the
-// owner chooses the series before this fixer writes the book.
+// recorded in the book's change history (series_object), so the book is held
+// and the owner chooses the series before this fixer writes it.
 func swapStaleSeriesHold(store OpsStore, bookID string) (skip, why string, err error) {
 	book, err := store.GetBookByID(bookID)
 	if err != nil {
@@ -883,7 +890,7 @@ func swapStaleSeriesHold(store OpsStore, bookID string) (skip, why string, err e
 	case book.SeriesID == nil:
 		return swapSkipRelinkSeriesFirst, fmt.Sprintf(
 			"the book row keeps a stale series object (%q, id %d) with no series id; writing the book would drop it -- "+
-				"run the stale-series relink fixer first", emb.Name, emb.ID), nil
+				"a person decides which series is right", emb.Name, emb.ID), nil
 	case *book.SeriesID != emb.ID:
 		return swapSkipRelinkSeriesFirst, fmt.Sprintf(
 			"the book row keeps a series object (%q, id %d) that is not its series id %d; writing the book would drop it -- "+

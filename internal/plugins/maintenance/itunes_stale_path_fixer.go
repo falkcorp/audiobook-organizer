@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_stale_path_fixer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b2165f1-de86-4181-9a6d-4ed73bb98fbc
-// last-edited: 2026-10-09
+// last-edited: 2026-11-05
 
 // Repairs-lane fixer "stale-itunes-path": clear an itunes_path that no iTunes
 // track backs (plan: docs/plans/2026-10-07-stale-itunes-path.md).
@@ -108,7 +108,7 @@ var (
 )
 
 func (f *staleITunesPathFixer) ID() string    { return staleITPFixerID }
-func (f *staleITunesPathFixer) Title() string { return "Stale iTunes paths (no track behind them)" }
+func (f *staleITunesPathFixer) Title() string { return "Clear stale iTunes paths" }
 func (f *staleITunesPathFixer) Description() string {
 	return "Books whose iTunes path (on the book or a file row) names a location no track of either iTunes library has: " +
 		"not the library the app imports from, not the write-back library. Both libraries are read, never written; if " +
@@ -116,6 +116,15 @@ func (f *staleITunesPathFixer) Description() string {
 		"does back, is held. Apply clears only those iTunes path fields, journaled; the operation's revert puts them " +
 		"back. No file and no iTunes library is touched. A cleared book is no longer written back to iTunes, and " +
 		"recompute-itunes-paths or an organize can set the computed path again."
+}
+
+// Meta implements repairs.Fixer.
+func (f *staleITunesPathFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupFiles,
+		Rank:    1,
+		Summary: "Clears iTunes paths that no iTunes track backs. No file or iTunes library is touched.",
+	}
 }
 
 // ---- the libraries --------------------------------------------------------

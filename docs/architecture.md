@@ -1,7 +1,7 @@
 <!-- file: docs/architecture.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 1a9b8c7d-6e5f-4a3b-92c1-d0e9f8a7b6c5 -->
-<!-- last-edited: 2026-10-19 -->
+<!-- last-edited: 2026-11-05 -->
 
 # Architecture
 
@@ -82,7 +82,7 @@ skipped at plan time and refused again at apply time; writes go through a
 `Writer` that records a metadata-history row per changed field and has no
 delete primitive; apply holds the library-scan stand-down. Fixers registered in
 production (`internal/plugins/maintenance/*_fixer.go`): `duplicate-copies`,
-`folder-books`, `fragment-consolidation`, `maintenance.normalize-letter-l-ordinals`,
+`folder-books`, `fragment-consolidation`,
 `maintenance.repair-junk-authors`, `maintenance.repair-junk-titles`,
 `version-group-primary-repair`. Routes: `GET /repairs`, `POST /repairs/:fixer/plan`,
 `GET /repairs/:fixer/plan/:op_id/rows`, `POST /repairs/:fixer/apply`

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/scan_title_revert_fixer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: beeafd36-1bf8-48f8-b62c-bd5e1be4135c
-// last-edited: 2026-10-06
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -113,6 +113,16 @@ func (f *scanTitleRevertFixer) Description() string {
 		"snapshot since then, blank or unchanged titles, and titles edited after the scan. Writes the title only " +
 		"(undoable with the apply operation's revert or \"undo last apply\"), then starts a forced metadata " +
 		"candidate fetch for the changed books; nothing is applied."
+}
+
+// Meta implements repairs.Fixer.
+func (f *scanTitleRevertFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupImports,
+		Rank:    1,
+		Summary: "Puts back titles a library scan overwrote, for a given list of books.",
+		APIOnly: "Needs a list of book ids and the time the scan started. They come from one incident, not from the library, so the trial can only be started through the API.",
+	}
 }
 
 // strParams are the fixer's params.

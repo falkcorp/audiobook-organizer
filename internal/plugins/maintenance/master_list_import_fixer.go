@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/master_list_import_fixer.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4b0c5f4a-6d0a-4f0e-9d8e-3f1f7a9a52c1
-// last-edited: 2026-10-24
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -101,10 +101,8 @@ var (
 	_ repairs.PermissionScoped = (*masterListImportFixer)(nil)
 )
 
-func (f *masterListImportFixer) ID() string { return masterListImportFixerID }
-func (f *masterListImportFixer) Title() string {
-	return "Master list read-status import"
-}
+func (f *masterListImportFixer) ID() string    { return masterListImportFixerID }
+func (f *masterListImportFixer) Title() string { return "Import read status from a master list" }
 func (f *masterListImportFixer) Description() string {
 	return "Imports an uploaded master list (POST /api/v1/master-lists) into one user's read status. Plan params: " +
 		"list_id (the upload's id) and target_user_id (required, never defaulted). Every input row is planned once: " +
@@ -115,6 +113,16 @@ func (f *masterListImportFixer) Description() string {
 		"read-elsewhere record. Classes: matched_high, matched_review, ambiguous, unmatched, read_elsewhere, " +
 		"duplicate_in_list, invalid, and the skipped_* reasons of a matched row. Apply is a dry run unless told " +
 		"otherwise, and every write is journaled and can be undone."
+}
+
+// Meta implements repairs.Fixer.
+func (f *masterListImportFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupImports,
+		Rank:    3,
+		Summary: "Marks one user's books read from an uploaded master list.",
+		APIOnly: "Needs the id of an uploaded master list and the user to import it for. Master lists are uploaded through the API, so the trial can only be started there.",
+	}
 }
 
 // RequiredPermissions implements repairs.PermissionScoped: the plan names any

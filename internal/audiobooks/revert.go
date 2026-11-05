@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.99.0
+// version: 1.99.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-11-03
+// last-edited: 2026-11-05
 
 package audiobooks
 
@@ -46,7 +46,7 @@ type revertServiceStore interface {
 	revertLedgerStore
 	// RecordMetadataChange records the history row of every book column a
 	// revert restores (modifyBook), so readers of a book's history (the
-	// relink-stale-series fixer, the queued-apply check) see the revert.
+	// queued-apply check) see the revert.
 	RecordMetadataChange(record *database.MetadataChangeRecord) error
 	revertSeriesStore
 	revertBookFileStore
@@ -1861,8 +1861,8 @@ const RevertHistorySource = "operation_revert"
 // WHY: a revert used to restore columns with no history row. A series link
 // journaled with an empty old value (junk-author linkSeries, dedup
 // MergeSeries) was reverted to nil while the newest history still said "set
-// to X", so maintenance.relink-stale-series read the history as agreeing and
-// re-proposed the link the owner had just reverted.
+// to X", so the (since retired) maintenance.relink-stale-series fixer read the
+// history as agreeing and re-proposed the link the owner had just reverted.
 //
 // The write has committed when history is recorded; a history failure is
 // logged at Error and does not fail the restore.

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.54.2
+// version: 1.55.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 // Repairs-lane fixer "fragment-consolidation": fold chapter and disc files
 // that an old scan imported as their own books ("fragments") back into the
@@ -459,8 +459,12 @@ var (
 // Big Finish / Torchwood stays guarded.
 func (f *fragmentFixer) ITunesDatabaseOnly() bool { return true }
 
+// fragmentFixerTitle is the lane's name for the fragment fixer. Other fixers'
+// row texts that send the owner to it quote this, so a rename is one edit.
+const fragmentFixerTitle = "Merge chapter files into their book"
+
 func (f *fragmentFixer) ID() string    { return fragFixerID }
-func (f *fragmentFixer) Title() string { return "Chapter fragments" }
+func (f *fragmentFixer) Title() string { return fragmentFixerTitle }
 func (f *fragmentFixer) Description() string {
 	return "Chapter and disc files an old scan imported as separate books. Moved: the parent's row points " +
 		"at a path organize emptied — repoint it at the file's new path and retire the fragment into the parent. " +
@@ -476,6 +480,15 @@ func (f *fragmentFixer) Description() string {
 		"(held when two books match, when a file is absent, empty, short or boilerplate, or over 100 MB without a whole-file match, and skipped when a hash is missing). Fragments iTunes knows about are combined like any other: " +
 		"only database rows change (no file is moved and the iTunes library is never written). Doctor Who / " +
 		"Big Finish / Torchwood are listed for manual action only. Every step is undoable from the apply operation."
+}
+
+// Meta implements repairs.Fixer.
+func (f *fragmentFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupDuplicates,
+		Rank:    1,
+		Summary: "Folds chapter and disc files that were imported as separate books into the book they belong to.",
+	}
 }
 
 // fragParams are the fixer params. BookIDs limits the plan to fragments

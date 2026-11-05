@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_franchise_fixer.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 8c8a3b12-5d98-45d2-9751-c25bf96df34e
-// last-edited: 2026-10-20
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -76,10 +76,8 @@ var (
 	_ repairs.BookTagsOnly = (*tagFranchiseFixer)(nil)
 )
 
-func (f *tagFranchiseFixer) ID() string { return tagFranchiseFixerID }
-func (f *tagFranchiseFixer) Title() string {
-	return "Franchise tags (Doctor Who / Big Finish / Torchwood)"
-}
+func (f *tagFranchiseFixer) ID() string    { return tagFranchiseFixerID }
+func (f *tagFranchiseFixer) Title() string { return "Tag Doctor Who, Big Finish and Torchwood" }
 func (f *tagFranchiseFixer) Description() string {
 	return "Tags every Doctor Who, Big Finish and Torchwood book the shared franchise matcher finds with " +
 		"franchise:<name> and range:<range> (source franchise-matcher:<apply op id>), showing the signals that matched. " +
@@ -88,6 +86,15 @@ func (f *tagFranchiseFixer) Description() string {
 		"folder, a title only the broad rule names, a \"Missy\" credit) are review rows. Writes tags only -- " +
 		"never a file, a book field or the iTunes library -- so iTunes books are tagged too. A book that already " +
 		"carries a different franchise tag is skipped. Undo with the apply operation's revert."
+}
+
+// Meta implements repairs.Fixer.
+func (f *tagFranchiseFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupMetadata,
+		Rank:    2,
+		Summary: "Tags those books so bulk fixes leave them for manual handling.",
+	}
 }
 
 // BookTagsOnly implements repairs.BookTagsOnly: the apply adds book_tag rows

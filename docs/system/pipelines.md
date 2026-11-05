@@ -1,7 +1,7 @@
 <!-- file: docs/system/pipelines.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: b2c3d4e5-f6a7-8901-bcde-f01234567890 -->
-<!-- last-edited: 2026-10-18 -->
+<!-- last-edited: 2026-11-05 -->
 
 # Data Pipelines
 
@@ -112,7 +112,7 @@ sequenceDiagram
     Apply->>Store: ApplyResult per row (applied / would_apply / changed_since_plan / partially_applied / skipped)
 ```
 
-Fixers registered in production: `duplicate-copies`, `folder-books`, `fragment-consolidation`, `maintenance.normalize-letter-l-ordinals`, `maintenance.repair-junk-authors`, `maintenance.repair-junk-titles`, `version-group-primary-repair` (`internal/plugins/maintenance/*_fixer.go`, registered by `Plugin.Repairs()`). An omitted `dry_run` is a preview; only an explicit `false` writes.
+Fixers registered in production: `duplicate-copies`, `folder-books`, `fragment-consolidation`, `maintenance.repair-junk-authors`, `maintenance.repair-junk-titles`, `version-group-primary-repair` (`internal/plugins/maintenance/*_fixer.go`, registered by `Plugin.Repairs()`). An omitted `dry_run` is a preview; only an explicit `false` writes.
 
 ## Fingerprint Pipeline
 

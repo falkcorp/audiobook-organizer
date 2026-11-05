@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.76.0
+// version: 1.76.1
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -591,20 +591,6 @@ func (s *Server) ScanStandDownValid(holderOpID string) bool {
 		return true
 	}
 	return s.opRegistry.ScanStandDownValid(holderOpID)
-}
-
-// SplitBookCandidates implements maintenance.DedupRunners: the split-book
-// candidate rows on the embedding store, as the Split Books routes and the
-// bulk merge op build them, or nil (never a typed nil) when it is not wired.
-func (s *Server) SplitBookCandidates() maintenanceplugin.SplitBookCandidateRows {
-	if s.embeddingStore == nil {
-		return nil
-	}
-	db := s.embeddingStore.PebbleDB()
-	if db == nil {
-		return nil
-	}
-	return dedup.NewSplitBookStore(db)
 }
 
 // DedupTriageExactPending implements maintenance.ServerDeps. It pages all

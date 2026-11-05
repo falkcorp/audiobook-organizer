@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -323,13 +323,8 @@ var (
 	_ repairs.PlanOnly        = (*retiredVersionsFixer)(nil)
 )
 
-func (f *retiredVersionsFixer) ID() string { return retiredVersionsFixerID }
-func (f *retiredVersionsFixer) Title() string {
-	if f.applyOn() {
-		return "Retired versions"
-	}
-	return "Retired versions (preview)"
-}
+func (f *retiredVersionsFixer) ID() string    { return retiredVersionsFixerID }
+func (f *retiredVersionsFixer) Title() string { return "Retire trashed books into their survivor" }
 func (f *retiredVersionsFixer) Description() string {
 	if f.applyOn() {
 		return "Moves the file records of each book in the trash onto the live book it lost to, as a hidden " +
@@ -353,6 +348,15 @@ func (f *retiredVersionsFixer) Description() string {
 		"counts those rows separately. The plan's rule 5 (a content-hash match between the book and its " +
 		"target) is not applied yet. Nothing is written; Apply is switched off (retire_versions_apply_enabled), " +
 		"so this fixer has no Apply control."
+}
+
+// Meta implements repairs.Fixer.
+func (f *retiredVersionsFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupVersions,
+		Rank:    2,
+		Summary: "Moves a trashed duplicate's files onto the book it lost to, as a hidden old version.",
+	}
 }
 
 // NoScanStandDown: while apply is off the preview writes nothing through the

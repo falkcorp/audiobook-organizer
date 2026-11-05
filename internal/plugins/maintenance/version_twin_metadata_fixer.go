@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 2f6c8e14-7b3a-4d59-9e02-c4a1b7d36e85
-// last-edited: 2026-10-20
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -153,7 +153,7 @@ func newVersionTwinFixer(p *Plugin) *versionTwinFixer { return &versionTwinFixer
 var _ repairs.Fixer = (*versionTwinFixer)(nil)
 
 func (f *versionTwinFixer) ID() string    { return versionTwinFixerID }
-func (f *versionTwinFixer) Title() string { return "Copy metadata from a version twin to the primary" }
+func (f *versionTwinFixer) Title() string { return "Copy metadata from another version" }
 func (f *versionTwinFixer) Description() string {
 	return "Version groups whose primary book has no metadata applied while another version of the same book does, or " +
 		"holds fetched candidates. Apply carries an applied twin's record onto the primary through the normal metadata " +
@@ -164,6 +164,15 @@ func (f *versionTwinFixer) Description() string {
 		"edition (runtime, abridgement or narrator), locked fields, iTunes-linked or not-ABS-listed primaries, a " +
 		"different title/author, an ASIN conflict or an ASIN or ISBN a book outside the group carries, a primary whose fetch " +
 		"found nothing, and Doctor Who / Big Finish / Torchwood (the books or the record)."
+}
+
+// Meta implements repairs.Fixer.
+func (f *versionTwinFixer) Meta() repairs.Meta {
+	return repairs.Meta{
+		Group:   repairs.GroupMetadata,
+		Rank:    3,
+		Summary: "Fills the main version's empty metadata from another version of the same book.",
+	}
 }
 
 // ITunesDatabaseOnly: see the type comment. The fixer writes no file and no
