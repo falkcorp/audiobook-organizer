@@ -109,7 +109,14 @@ describe.each([
     renderAt(ui, base, base);
     await screen.findByText(firstRow);
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(last()).toMatchObject({ search: '', filter: 'with_books', sort: 'name', order: 'asc', limit: 25, offset: 0 });
+    expect(last()).toMatchObject({
+      search: '',
+      filter: 'with_books',
+      sort: 'name',
+      order: 'asc',
+      limit: 25,
+      offset: 0,
+    });
     expect(loc()).toBe(base);
   });
 
@@ -155,7 +162,9 @@ describe.each([
     const user = userEvent.setup();
     renderAt(ui, base, base);
     await screen.findByText(firstRow);
-    const header = screen.getAllByRole('button', { name: /books/i }).find((b) => b.className.includes('MuiTableSortLabel'));
+    const header = screen
+      .getAllByRole('button', { name: /books/i })
+      .find((b) => b.className.includes('MuiTableSortLabel'));
     expect(header).toBeTruthy();
     await user.click(header!);
     await waitFor(() => expect(loc()).toBe(`${base}?sort=book_count`));
@@ -163,7 +172,7 @@ describe.each([
     await waitFor(() => expect(loc()).toBe(`${base}?sort=book_count&order=desc`));
   });
 
-  it('a link while on the page re-seeds it, KEEPING the link\'s page, then back restores', async () => {
+  it("a link while on the page re-seeds it, KEEPING the link's page, then back restores", async () => {
     const user = userEvent.setup();
     renderAt(ui, `${base}?q=Joker`, `${base}?q=Penguin&page=4`);
     await screen.findByText(firstRow);

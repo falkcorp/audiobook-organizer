@@ -90,10 +90,9 @@ export function useUrlEnumParam<T extends string>(
   const value = parseEnum(searchParams.get(key), allowed, fallback);
   const set = useCallback(
     (next: T) => {
-      setSearchParams(
-        (prev) => applyOwnedParams(prev, { [key]: next }, { [key]: fallback }),
-        { replace: true }
-      );
+      setSearchParams((prev) => applyOwnedParams(prev, { [key]: next }, { [key]: fallback }), {
+        replace: true,
+      });
     },
     [key, fallback, setSearchParams]
   );

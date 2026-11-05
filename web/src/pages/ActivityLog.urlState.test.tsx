@@ -175,7 +175,7 @@ describe('feed filters', () => {
     await waitFor(() => expect(loc()).toBe('/activity'));
   });
 
-  it('a link to other filters re-seeds the page KEEPING the link\'s page, and back restores', async () => {
+  it("a link to other filters re-seeds the page KEEPING the link's page, and back restores", async () => {
     const user = userEvent.setup();
     renderAt('/activity?q=Joker');
     await waitFor(() => expect(feedMock).toHaveBeenCalledTimes(1));
@@ -231,7 +231,10 @@ describe('open operation', () => {
   it('Copy link on a row puts its address on the clipboard', async () => {
     const user = userEvent.setup();
     const write = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, 'clipboard', { value: { writeText: write }, configurable: true });
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: write },
+      configurable: true,
+    });
     renderAt('/activity?op=done-8');
     const row = (await screen.findByText('Gotham Job 8')).closest('.MuiPaper-root') as HTMLElement;
     await user.click(within(row).getByRole('button', { name: 'Copy link' }));
