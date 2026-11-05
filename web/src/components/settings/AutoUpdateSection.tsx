@@ -1,7 +1,7 @@
 // file: web/src/components/settings/AutoUpdateSection.tsx
-// version: 1.0.3
+// version: 1.1.0
 // guid: f8e2d4c6-b3a1-4f7e-9c2d-5a8b6e3f1d90
-// last-edited: 2026-08-19
+// last-edited: 2026-11-05
 
 import { useState, useEffect } from 'react';
 import {
@@ -35,12 +35,30 @@ interface AutoUpdateSectionProps {
   setSettings: React.Dispatch<React.SetStateAction<SettingsState>>;
 }
 
+/** Release-note sentence of the R0 updater hotfix: unattended runs only check. */
+const AUTO_APPLY_PAUSED_MESSAGE =
+  'Automatic updates now only check for a new release and notify you; apply updates from Settings.';
+
+/** Shown when the running binary is a local build (a git describe suffix). */
+const LOCAL_BUILD_MESSAGE = 'Local build, not compared with releases.';
+
 export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionProps) {
   const [updateInfo, setUpdateInfo] = useState<api.UpdateInfo | null>(null);
   const [checking, setChecking] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // A local build is never compared with releases, so the operator names the
+  // version to apply; the server refuses an unnamed apply on a local build.
+  const [applyVersion, setApplyVersion] = useState('');
+
+  const localBuild = updateInfo?.local_build === true;
+  const namedVersion = applyVersion.trim();
+  const canApply = localBuild ? namedVersion !== '' : updateInfo?.update_available === true;
+  const applyTarget = localBuild ? namedVersion : updateInfo?.latest_version;
+  // The setting asks for automatic apply, which this build pauses. The saved
+  // setting comes back from the server; the switch shows an unsaved change.
+  const autoApplyPaused = settings.autoUpdateEnabled || updateInfo?.auto_apply_paused === true;
 
   useEffect(() => {
     api
@@ -67,7 +85,7 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
     setApplying(true);
     setError(null);
     try {
-      await api.applyUpdate();
+      await api.applyUpdate(localBuild ? namedVersion : undefined);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Update failed');
     } finally {
@@ -94,6 +112,16 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
           >
             Current version: <strong>{updateInfo?.current_version || 'loading...'}</strong>
           </Typography>
+          {autoApplyPaused && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              {AUTO_APPLY_PAUSED_MESSAGE}
+            </Alert>
+          )}
+          {localBuild && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              {LOCAL_BUILD_MESSAGE}
+            </Alert>
+          )}
           {updateInfo?.update_available && (
             <Alert severity="info" sx={{ mb: 2 }}>
               Update available: {updateInfo.latest_version}
@@ -239,6 +267,25 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
           </TextField>
         </Grid>
 
+        {localBuild && (
+          <Grid
+            size={{
+              xs: 12,
+              sm: 6,
+            }}
+          >
+            <TextField
+              fullWidth
+              label="Version to apply"
+              placeholder="v0.0.0"
+              helperText="A local build applies only the release you name."
+              value={applyVersion}
+              onChange={(e) => setApplyVersion(e.target.value)}
+              size="small"
+            />
+          </Grid>
+        )}
+
         <Grid size={12}>
           <Stack
             direction="row"
@@ -251,7 +298,7 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
               {checking ? <CircularProgress size={20} sx={{ mr: 1 }} /> : null}
               Check Now
             </Button>
-            {updateInfo?.update_available && (
+            {canApply && (
               <Button
                 variant="contained"
                 color="warning"
@@ -280,9 +327,8 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
         <DialogTitle>Apply Update</DialogTitle>
         <DialogContent>
           <Typography>
-            This will download and apply the update to version{' '}
-            <strong>{updateInfo?.latest_version}</strong>, then restart the server. The page will be
-            temporarily unavailable.
+            This will download and apply the update to version <strong>{applyTarget}</strong>, then
+            restart the server. The page will be temporarily unavailable.
           </Typography>
         </DialogContent>
         <DialogActions>

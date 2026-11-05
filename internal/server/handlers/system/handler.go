@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.27.1
+// version: 1.28.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -274,6 +274,34 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 	httputil.RespondWithOK(c, resp)
 }
 
+// DegradedAutoUpdatePaused is the posture token GET /system/status's
+// `degraded` field carries while the operator asked for automatic update
+// (auto_update.enabled) and the updater only checks (the R0 hotfix: no
+// unattended apply). It is a posture token, so it is NEVER reported on
+// /health, which is unauthenticated (05-health 5H.3.1); pinned by
+// TestHealth_UnauthenticatedTokenSetGolden.
+const DegradedAutoUpdatePaused = "auto_update_paused"
+
+// systemStatusResponse is GET /system/status's body: the collected status plus
+// `degraded`, the authenticated list of posture tokens. R0 adds the field with
+// one token, auto_update_paused; R1 extends the same field with the other
+// posture tokens (05-health 5H.10).
+type systemStatusResponse struct {
+	*sysinfo.SystemStatus
+	Degraded []string `json:"degraded"`
+}
+
+// authenticatedDegraded returns the posture tokens raised now, sorted. Never
+// nil, so an empty list encodes as [].
+func authenticatedDegraded() []string {
+	degraded := []string{}
+	if config.AppConfig.AutoUpdate.Enabled {
+		degraded = append(degraded, DegradedAutoUpdatePaused)
+	}
+	slices.Sort(degraded)
+	return degraded
+}
+
 // GetSystemStatus implements GET /system/status.
 func (h *Handler) GetSystemStatus(c *gin.Context) {
 	// The recent-operations panel is judged per caller: a Repairs operation the
@@ -300,7 +328,7 @@ func (h *Handler) GetSystemStatus(c *gin.Context) {
 	// BrokenFileCount is now populated by CollectSystemStatus via LibraryStats.BrokenFiles
 	// (cached in the stats:library PebbleDB entry). No per-request scan needed.
 
-	httputil.RespondWithOK(c, status)
+	httputil.RespondWithOK(c, systemStatusResponse{SystemStatus: status, Degraded: authenticatedDegraded()})
 }
 
 // GetSystemAnnouncements implements GET /system/announcements.

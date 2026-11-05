@@ -5873,6 +5873,12 @@ export interface UpdateInfo {
   release_notes?: string;
   published_at?: string;
   last_checked: string;
+  /** The running version carries a git describe suffix: not compared with releases. */
+  local_build: boolean;
+  /** Automatic update is enabled, and this build only checks: apply from Settings. */
+  auto_apply_paused: boolean;
+  /** "local build, not compared" on a local build, else empty. */
+  note: string;
 }
 
 export async function getUpdateStatus(): Promise<UpdateInfo> {
@@ -5893,8 +5899,23 @@ export async function checkForUpdate(): Promise<UpdateInfo> {
   return body.data;
 }
 
-export async function applyUpdate(): Promise<void> {
-  const response = await apiFetch(`${API_BASE}/update/apply`, { method: 'POST' });
+/**
+ * Applies an update and restarts the server. With no version it applies the
+ * release the last check offered; a local build must name the version (a
+ * release tag, "v" optional). The server refuses a release that is not newer
+ * than the running version.
+ */
+export async function applyUpdate(version?: string): Promise<void> {
+  const trimmed = version?.trim();
+  const response = await apiFetch(`${API_BASE}/update/apply`, {
+    method: 'POST',
+    ...(trimmed
+      ? {
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ version: trimmed }),
+        }
+      : {}),
+  });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to apply update');
   }

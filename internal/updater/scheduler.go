@@ -1,7 +1,7 @@
 // file: internal/updater/scheduler.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
-// last-edited: 2026-09-02
+// last-edited: 2026-11-05
 
 package updater
 
@@ -12,14 +12,19 @@ import (
 
 // SchedulerConfig holds the runtime config for the update scheduler.
 type SchedulerConfig struct {
-	Enabled     bool
-	Channel     string
-	CheckMins   int
+	Enabled   bool
+	Channel   string
+	CheckMins int
+	// WindowStart and WindowEnd (hours 0-23) gated the unattended apply, which
+	// R0 removed; the check-only scheduler reads neither (R2 deletes it).
 	WindowStart int // hour 0-23
 	WindowEnd   int // hour 0-23
 }
 
-// Scheduler periodically checks for updates and applies them within a window.
+// Scheduler periodically checks for updates. It never applies one: unattended
+// apply is paused (the R0 hotfix's check-only rule), because the updater has
+// no automatic way back from a bad swap. An update it finds is recorded as the
+// last check, logged, and applied only from Settings.
 type Scheduler struct {
 	updater *Updater
 	ticker  *time.Ticker
@@ -78,41 +83,16 @@ func (s *Scheduler) tick() {
 		return
 	}
 
-	info, err := s.updater.CheckForUpdate(cfg.Channel)
+	// Check only. CheckUnattended records the result (with AutoApplyPaused)
+	// as the last check and logs a newer release at info; nothing is
+	// downloaded, swapped or restarted here.
+	info, err := s.updater.CheckUnattended(cfg.Channel)
 	if err != nil {
-		slog.Warn("Auto-update check failed", "err", err)
+		updateLog.Warn("Auto-update check failed: %v", err)
 		return
 	}
 
 	if !info.UpdateAvailable {
-		slog.Debug("Auto-update check no update available", "currentVersion", info.CurrentVersion, "latestVersion", info.LatestVersion)
-		return
+		updateLog.Debug("Auto-update check: no update available (running %s, latest %s, local build %t)", info.CurrentVersion, info.LatestVersion, info.LocalBuild)
 	}
-
-	slog.Info("Update available", "currentVersion", info.CurrentVersion, "latestVersion", info.LatestVersion, "channel", info.Channel)
-
-	// Check if current hour is within the update window
-	hour := time.Now().Hour()
-	if !inWindow(hour, cfg.WindowStart, cfg.WindowEnd) {
-		slog.Info("Update available but outside update window (%02d:00-%02d:00, current hour %02d)")
-		return
-	}
-
-	slog.Info("Applying update within window...")
-	if err := s.updater.DownloadAndReplace(info); err != nil {
-		slog.Error("Failed to apply update", "err", err)
-		return
-	}
-
-	// This will exit the process; systemd restarts with new binary
-	s.updater.RestartSelf()
-}
-
-// inWindow checks if hour is within [start, end). Handles wrap-around (e.g. 23-4).
-func inWindow(hour, start, end int) bool {
-	if start <= end {
-		return hour >= start && hour < end
-	}
-	// Wraps midnight: e.g. start=23, end=4 means 23,0,1,2,3
-	return hour >= start || hour < end
 }

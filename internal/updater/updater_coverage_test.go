@@ -1,5 +1,7 @@
 // file: internal/updater/updater_coverage_test.go
-// version: 1.0.0
+// version: 1.1.0
+// guid: 3c6f7d36-dd58-41ad-be17-9aba3794ccc8
+// last-edited: 2026-11-05
 
 package updater
 
@@ -209,32 +211,6 @@ func TestCoverage_Scheduler_MinInterval(t *testing.T) {
 		t.Error("ticker should be created even with 0 CheckMins")
 	}
 	s.Stop()
-}
-
-func TestCoverage_InWindow_EdgeCases(t *testing.T) {
-	tests := []struct {
-		name   string
-		hour   int
-		start  int
-		end    int
-		expect bool
-	}{
-		{"exactly at start wrap", 22, 22, 4, true},
-		{"just before end wrap", 3, 22, 4, true},
-		{"at end wrap", 4, 22, 4, false},
-		{"full day range", 12, 0, 24, true},
-		{"zero range", 0, 0, 0, false},
-		{"one hour window in", 3, 3, 4, true},
-		{"one hour window out", 4, 3, 4, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := inWindow(tt.hour, tt.start, tt.end)
-			if got != tt.expect {
-				t.Errorf("inWindow(%d, %d, %d) = %v, want %v", tt.hour, tt.start, tt.end, got, tt.expect)
-			}
-		})
-	}
 }
 
 func TestCoverage_SchedulerConfig_Struct(t *testing.T) {

@@ -1,0 +1,21 @@
+{
+  "file": "internal/updater/testdata/release.json",
+  "version": "1.0.0",
+  "guid": "b1da7e3d-1132-42d2-bc27-8051db49a38c",
+  "last_edited": "2026-11-05",
+  "tag_name": "{{TAG}}",
+  "html_url": "https://example.invalid/releases/{{TAG}}",
+  "body": "The Long Halloween",
+  "prerelease": false,
+  "published_at": "2026-11-01T00:00:00Z",
+  "assets": [
+    {
+      "name": "audiobook-organizer-plan9-386",
+      "browser_download_url": "{{BASE}}/assets/{{TAG}}/audiobook-organizer-plan9-386"
+    },
+    {
+      "name": "{{ASSET_NAME}}",
+      "browser_download_url": "{{BASE}}/assets/{{TAG}}/{{ASSET_NAME}}"
+    }
+  ]
+}

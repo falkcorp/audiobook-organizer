@@ -1,7 +1,7 @@
 // file: internal/server/scheduler_maintenance_window_op.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2a4b6c8d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-08-23
+// last-edited: 2026-11-05
 
 package server
 
@@ -69,30 +69,30 @@ func (s *Server) RegisterMaintenanceWindowOp(reg *opsregistry.Registry) error {
 
 			progress := registryProgressAdapter{r: reporter}
 
-			// Step 1: Auto-update (if enabled and not already completed post-restart)
+			// Step 1: Auto-update check (if enabled and not already run today).
+			// Check only: unattended apply is paused (R0 hotfix, 05-updater
+			// 5U.5), because the updater has no automatic way back from a bad
+			// swap. A newer release is recorded as the updater's last check
+			// (with AutoApplyPaused) and applied only from Settings.
 			if config.AppConfig.AutoUpdate.Enabled {
 				updateDone, _ := store.GetSetting("maintenance_window_update_completed")
 				today := time.Now().Format("2006-01-02")
 				if updateDone == nil || updateDone.Value != today {
-					_ = progress.Log("info", "Running auto-update (step 1)", nil)
+					_ = progress.Log("info", "Running auto-update check (step 1)", nil)
 					// Auto-update is a single bounded step (0/1 → done).
-					_ = reporter.UpdateProgress(0, 1, "Running auto-update... (0/1 0%)")
+					_ = reporter.UpdateProgress(0, 1, "Running auto-update check... (0/1 0%)")
 					_ = store.SetSetting("maintenance_window_update_completed", today, "string", false)
 					if s.updater != nil {
 						channel := config.AppConfig.AutoUpdate.Channel
-						info, checkErr := s.updater.CheckForUpdate(channel)
-						if checkErr != nil {
+						info, checkErr := s.updater.CheckUnattended(channel)
+						switch {
+						case checkErr != nil:
 							_ = progress.Log("warning", fmt.Sprintf("Auto-update check failed: %v", checkErr), nil)
-						} else if info != nil && info.UpdateAvailable {
-							_ = progress.Log("info", fmt.Sprintf("Update available: %s, applying...", info.LatestVersion), nil)
-							if applyErr := s.updater.DownloadAndReplace(info); applyErr != nil {
-								_ = progress.Log("error", fmt.Sprintf("Auto-update apply failed: %v", applyErr), nil)
-							} else {
-								_ = progress.Log("info", "Update applied, server will restart", nil)
-								go s.updater.RestartSelf()
-								return nil // Exit — server restarting
-							}
-						} else {
+						case info.UpdateAvailable:
+							_ = progress.Log("info", fmt.Sprintf("Update available: %s (running %s); apply it from Settings", info.LatestVersion, info.CurrentVersion), nil)
+						case info.LocalBuild:
+							_ = progress.Log("info", "Local build, not compared with releases", nil)
+						default:
 							_ = progress.Log("info", "No update available", nil)
 						}
 					}
