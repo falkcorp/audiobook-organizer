@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R0-01-toolchain-bump-go1-27-3.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 7189c037-92b9-4266-ac53-c6fb370da014 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -218,7 +218,7 @@ make test-fixtures; echo "exit $?"                                    # expect e
 make ci; echo "exit $?"                                               # expect exit 0
 ```
 
-Every required check of 09 §9.2.1 that runs on this PR is green on an up-to-date branch before merge.
+Every required check of 09 §9.2.1 that runs on this PR is green on the PR and in the merge queue before merge.
 
 ## Out of scope
 

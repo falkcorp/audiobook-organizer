@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-02-release-r0-cut-deploy.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.2.0 -->
 <!-- guid: c7905538-b04f-4d81-a543-689838294edc -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -15,7 +15,7 @@
 | Tier | **OWNER**: production release, deploy |
 | Wave | W03 |
 | Depends on | R0-01, R0-02, R0-03, R0-04, R0-05, R0-06 (all merged) |
-| Unblocks | **R1-35** and then **R1-01**, which merge only after this release exists, because R1-35 turns the R1 freeze on (R1-01 depends on R1-35 and does not edit `prerelease.yml`) |
+| Unblocks | **R1-35** and then **R1-01**, which merge only after this release exists and the R1 freeze is set (step 7; R1-01 depends on R1-35 and does not edit `prerelease.yml`) |
 | Spec | 09 §9.4 R0 (Rollback, Owner), §9.3 (the R0 tag writes R2's fixture corpus), §9.2.1 (no soaks) |
 
 ## Why the tag matters
@@ -51,11 +51,21 @@ them. The corpus is regenerated only if R0 is re-cut.
 5. **Optional one-day smoke run** (09 §9.2.1: no soaks; D11). For example: sign in; a scheduled update check shows a
    result and nothing applies itself; a revoked key stays refused; the sessions list shows handles, not tokens.
 6. **Rollback if needed:** `make rollback` (09 §9.4 R0 Rollback): nothing to restore.
+7. **Start the R1 freeze** (D15, spec 02 §2.6; advisor S3/S5; you kept the R1 freeze in OWNER-01). Right after the R0
+   release is cut:
+
+   ```bash
+   gh variable set RELEASE_FREEZE --body R1
+   gh variable get RELEASE_FREEZE        # R1
+   ```
+
+   It takes effect when R1-35's switch merges (the workflow before it does not read the variable); R1-35 then waits
+   for the release runs that predate it. Log it in the tracking issue.
 
 ## What to record, and where
 
 One tracking-issue comment: `OWNER-02 recorded <date>: R0 release <tag>; deployed; smoke run: done | skipped; kept |
-rolled back`. No hosts, paths or tokens.
+rolled back; RELEASE_FREEZE set to R1 on <date>`. No hosts, paths or tokens.
 
 **The R0 tag is for F2-12.** Write the tag exactly as `git tag -l` prints it (for example `v0.230.0`), and add the
 line `R0 tag for F2-12: <tag>` to the same comment. F2-12 commits that tag as `ci/r0_release.txt` and drives that
@@ -65,4 +75,4 @@ comment: F2-12 stops on it.
 ## Done when
 
 The R0 production release exists with its tag kept, it is deployed (or rolled back, with the reason), and the
-comment, with its `R0 tag for F2-12` line, is recorded. The lead then lets R1-35, and after it R1-01, merge.
+comment, with its `R0 tag for F2-12` line and the freeze line, is recorded. The lead then lets R1-35, and after it R1-01, merge.

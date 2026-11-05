@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-06-books-config-cutover-m2-rename-table.md -->
-<!-- version: 1.1.5 -->
+<!-- version: 1.2.0 -->
 <!-- guid: a42617df-0a4d-49ef-a19d-48538878932a -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -42,7 +42,7 @@ Create the books package `internal/books/cutover` (04 §2.4: one of 03 §3.5.1's
 3. **M2** as a books `datamigrate.DataMigration` (`Cutover: true`, `Breaking`, `BootBlocking`): M2a (one batch) and
    M2b (the gap-fill strip), with HEAD's key guard;
 4. books' **M7** half (the level step raising `books`, with the legacy projection) and books' **M8** definition
-   (`books.rewrite-after-<step name>`), on F3-04's machinery;
+   (`books.rewrite`, one fixed ID), on F3-04's machinery;
 5. `internal/books/cutover/stepids.go` (path and names coined here), the one place that **reserves the step IDs of
    M2–M6** (and names books' level steps and holds one constant per books cutover level), as exported constants. F4-06 (M3), F5-16 (M4),
    F5-15 (M5), F7-08 (M6) and R3-02's `UpgradeFloor.Requires` take their IDs from it instead of coining their own;
@@ -51,15 +51,15 @@ Create the books package `internal/books/cutover` (04 §2.4: one of 03 §3.5.1's
    each owner's versions are contiguous, and exactly one M8 is registered, last.
 
 **The flip mechanism** (stated in F3-04's "Flip mechanism"; follow it exactly): level steps (M7) are named by target
-level, `books.level-<n>` and `core.level-<n>`, and M8 by the step it compacts after, `books.rewrite-after-<step name>`.
+level, `books.level-<n>` and `core.level-<n>`, and M8 has one fixed ID, `books.rewrite` (05-storage §5S.3.13; D15).
 Every later flip that adds a step (F4-08, F5-18, F7-09) **adds** a new level step for each owner whose level it raises
 (books; core when core's level changes), at that owner's next contiguous version, numbered immediately before the
 flip's own new migration step, and bumps that owner's declared `Spec.Level` in the same PR; earlier level steps stay
 registered unchanged (05-storage §5S.3.5: versions are 1..n, contiguous per owner, recorded by version number). It
-**replaces** M8 with a newly named one, so exactly one M8 is registered. So the constants here are per level: this row
+inserts its steps before M8 and never renames or replaces it, so exactly one M8 is registered, last. So the constants here are per level: this row
 defines `books.level-<n>` for F3's level `<n>` and one constant for that level (`BooksCutoverLevel`, name coined here,
 that M2's `RaisesLevel` and F3's books level step both read); each later flip adds its own level constant and
-level-step ID beside these and replaces the M8 ID, never editing an earlier level's constant or ID.
+level-step ID beside these, never editing an earlier level's constant or ID, or the M8 ID.
 
 Nothing is registered: F3-07 creates `internal/books/cutover/steps.go`, adds `module.Manifest.Cutover` and
 `module.Importers{Config, Secrets}` (06 §6.4.2, §6.4.10 F3 row) and puts the list in `books.Module()`'s manifest. Do
@@ -182,8 +182,7 @@ checks decide; a zero on an edit target stops the task.
    through F3-04's level step, at books' next contiguous version (books' versioned steps start at `LegacyCap+1`,
    05-storage §5S.3.5), named `books.level-<n>`, staging the
    legacy projection (`.storage-format` = `LegacyMaxFormat + 1` and the marker) through books'
-   `LegacyGuardProjection.Stage`. **Books' M8:** the rewrite on F3-04's engine, ID `books.rewrite-after-<M2's step
-   name>`, built through the M8 invocation API F3-04 coined (copy its signature from F3-04's PR description).
+   `LegacyGuardProjection.Stage`. **Books' M8:** the rewrite on F3-04's engine, ID `books.rewrite` (fixed for all of R2), built through the M8 invocation API F3-04 coined (copy its signature from F3-04's PR description).
    **Step IDs** (`<owner>.<name>`, `<name>` matching `[a-z][a-z0-9-]*`): coin them in `stepids.go` for M2, M3, M4, M5,
    M6 (names coined here), with books' M7 half as `books.level-<n>` per the flip mechanism, each a comment citing its
    03 §3.8 row, and use only these constants in this package. A unit test (name coined here:
@@ -208,7 +207,7 @@ checks decide; a zero on an edit target stops the task.
 func ConfigStep(cfg config.Importer, sec secrets.Importer, opts ConfigStepOptions) datamigrate.DataMigration
 func BooksLevelStep(/* F3-04's level-step inputs: target level, version */) storage.VersionedStep   // books.level-<n>; type per F3-04
 func ValidateCutoverList(/* the registered cutover list */) error            // levels before each flip's first step, versions contiguous, one M8, last
-func RewriteStep(after string) datamigrate.DataMigration                     // books.rewrite-after-<after>
+func RewriteStep() datamigrate.DataMigration                                 // books.rewrite (one fixed ID, D15)
 func RetiredConfigNames() []config.RetiredName
 func CanonicalEnvNames() []string
 ```

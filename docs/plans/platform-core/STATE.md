@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.37.0 -->
+<!-- version: 1.38.1 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -13,7 +13,7 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 | Spec PR | #4360, rebase-merged into main (last spec commit on main `ac4368bdb`) |
 | Spec revision branch | `docs/platform-core-spec-v3`: the D10–D14 revision and review rounds 13–15, cut from main as a separate PR |
 | Plan branch | `docs/platform-core-plan`, on main after #4360 |
-| Plan PR | (not opened) |
+| Plan PR | #4376, rebase-merged into main |
 | plan-op plugin | not installed; following the prompt's §5 manually |
 | Advisor mechanism | no `advisor` tool exists; a single fresh reviewer at max effort (`reviews/spec-advisor-review.md`) |
 
@@ -27,10 +27,11 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 | 4 | Spec advisor review | done: READY WITH CHANGES; all findings accepted, simplifications adopted (A-1..A-17); then confirmation rounds 9–12 with BLOCKERs 3 → 2 → 1 → 0 |
 | 5 | Spec confidentiality gate + PR + merge | done: gate PASS; #4359 (258 commits) was refused by GitHub (`This branch can't be rebased`), so the same tree was re-cut as 5 logical commits in #4360, re-gated (scrub 0, gitleaks 0) and rebase-merged |
 | 5b | Spec revision for D10–D14 + review | done: every spec file revised (no backward compatibility, one cutover release R2 opened by the F2 foundation PRs); consistency pass; review round 13 (BLOCKER 2 / MAJOR 33 / MINOR 35), round 14 verification (1 / 13 / 19), round 15 re-check (0 / 4 / 7), every finding dispositioned and applied; 04 regenerated (v1.15.0, gates pass); see `reviews/spec-rounds-13-15.md`. Plan-gap fixes G1–G17 with review round 16 (0 / 3 / 7, applied); brief-sync gap fixes G18–G21 (05-rbac `CompileInput` and `Requirement.Kind()`, `core.outbox.*` audit actions, the log query's `limit`) and G22 (the library transfer-recovery schedule key); merged as #4368 |
-| 6 | Implementation plan | done: `implementation-plan.md`, 134 tasks (128 agent briefs under `docs/agent-tasks/platform-core/`, 6 owner checkpoints) in 46 waves; `task-summary.md`; `tools/inventory.json` and `tools/check_waves.py` (all six checks pass) |
+| 6 | Implementation plan | done: `implementation-plan.md`, 134 tasks at merge (now 133 after D15, phase 10; 128 agent briefs under `docs/agent-tasks/platform-core/`, 6 owner checkpoints) in 46 waves; `task-summary.md`; `tools/inventory.json` and `tools/check_waves.py` (all six checks pass) |
 | 7 | Plan review loop | done: rounds 1–3, BLOCKERs 4 → 1 → 0 (MAJOR 17 / 12 / 8), every finding applied; see `reviews/plan-rounds-1-3.md` |
 | 8 | Plan advisor review | done: READY WITH CHANGES; accepted changes applied (review before T4 and flip merges, re-priced flips, the shell in R3, production-shaped rehearsal, freeze hotfix procedure, execution rules); two simplifications deferred to the owner |
-| 9 | Plan confidentiality gate + PR + merge | gate PASS (scrub 0, gitleaks 0, manual review of the plan and 25 briefs); PR #4376 |
+| 9 | Plan confidentiality gate + PR + merge | done: gate PASS (scrub 0, gitleaks 0, manual review of the plan and 25 briefs); #4376 rebase-merged |
+| 10 | Owner decisions D15 applied | done in this PR: spec 02 §2.6 and 14 §14.3.2; plan, inventory (133 tasks: R2-02 folded into OWNER-05, R1-31 now R1's executive summary), briefs, task summary and executive summary updated; all six checks pass |
 
 ## Artifacts
 
@@ -61,13 +62,22 @@ Q-H: the core module is `github.com/falkcorp/mediacore`. Q-B: the core repositor
 
 ABO keeps PolyForm Noncommercial 1.0.0 (already its licence) and adds a commercial-licensing notice (`COMMERCIAL.md`, contact through the GitHub repository; no email in the repo). Code moving into mediacore is relicensed to Apache-2.0 at the split (sole copyright holder). Recorded in 12.
 
+## Owner decision D15 (2026-11-05)
+
+Q-I (a): a ruleset on `main` requiring the named checks, no bypass actors, GitHub's merge queue; `/parallel-sweep` never
+admin-merges. R1 freeze kept. Q-G accepted as proposed. Q-C: the 15 v2 `Schedule` strings are deleted; the 14 defs a
+scheduler `TaskDefinition` fires keep that cadence; `deluge.protected-paths-sync` stays manual. P14: Branch A. Advisor
+S2 adopted (no flip-upgrade test; M8 registered once as `books.rewrite`, kept last). Advisor S3 + S5 adopted (the
+freeze is the repository variable `RELEASE_FREEZE`, toggled by the owner in OWNER-02, OWNER-03, before F3-08 and in
+OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
+
 ## Blockers
 
 None. (The #4359 merge refusal was cleared by re-cutting the branch as #4360.)
 
 ## Next action
 
-Merge the plan PR (#4376). Then execution starts at W01 (plan §(n) item 1): OWNER-01 answers Q-I (merge queue recommended), keep or override the R1 freeze, and Q-G; the two deferred simplifications (the per-flip upgrade test, the freeze as a repository variable) are the owner's to decide.
+Owner: apply the `main` ruleset with the required checks, no bypass actors and the merge queue (OWNER-01's one open action), and log it in the tracking issue. W01 proceeds meanwhile: R0-05 is unblocked (P14 Branch A). R1-01 waits for the ruleset, R1-35's merge and `RELEASE_FREEZE` set to `R1` (OWNER-02's last step).
 
 ## Incidents
 
@@ -81,6 +91,6 @@ Merge the plan PR (#4376). Then execution starts at W01 (plan §(n) item 1): OWN
 
 - Subagents use `general-purpose` / `Explore` with explicit model and effort.
 
-COMPLETED: 6 — phases 1–5 and 5b (raw data, spec, review loop, advisor review, gate + PR #4360, D10–D14 revision with review rounds 13–15)
-REMAINING: 5 — spec revision PR, phase 6 (plan rebuild), phase 7 (plan review), phase 8 (plan advisor), phase 9 (gate + PR #2)
+COMPLETED: 10 — phases 1–9 and 5b (raw data, spec, spec review, spec advisor, spec gate + #4360, D10–D14 revision + #4368, plan, plan review, plan advisor, plan gate + #4376) and phase 10 (D15 applied, this PR)
+REMAINING: 1 — the owner applies the main ruleset and merge queue (OWNER-01), then execution from W01
 BLOCKED: 0

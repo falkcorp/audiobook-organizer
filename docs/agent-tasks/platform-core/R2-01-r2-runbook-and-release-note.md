@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R2-01-r2-runbook-and-release-note.md -->
-<!-- version: 1.1.5 -->
+<!-- version: 1.1.6 -->
 <!-- guid: 67640be6-8c43-45e8-8d9e-9a3167774c7e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -88,7 +88,7 @@ present byte-for-byte in the spec file; a missing phrase fails the run):
 | 09 §9.2.6 (auth-off changes) | `"With authentication off, credential, API-key, session, audit and backup` |
 | 05-metadata M1.10 | `**Not carried over** (each is a line of the R2 release note):` |
 | 05-notify §3.1 / §10 (webhook format) | `the R2 release note lists the header and payload change` |
-| 05-tasks §5T.8.2 (crons that never ran, Q-C) | `in the R2 release note, because none of them ever ran unattended` |
+| 05-tasks §5T.3.8 (the deleted v2 `Schedule` strings, Q-C, D15) | `deletes all 15 declared strings and lists them in the R2 release note` |
 | 05-storage §5S.3.12 / §5S.3.13 | the two sentences ending "The R2 release note says so." and "the R2 release note says" |
 | 05-health §5H.3.3 (health version field) | `stated in R2's release note` |
 | 05-backup §5B.3.4 (restore cost, SEC-10) | `the R2 release note says it in one sentence` |

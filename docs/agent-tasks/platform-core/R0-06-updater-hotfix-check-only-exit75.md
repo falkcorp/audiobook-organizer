@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R0-06-updater-hotfix-check-only-exit75.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 4a021d38-30be-4d6b-91b6-83afbdadd066 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -190,7 +190,7 @@ cd web && npm run build && npm test -- --run && cd ..             # exit 0
 make ci; echo "exit $?"                                           # expect exit 0
 ```
 
-The e2e suite and every required check of 09 §9.2.1 are green on the PR on an up-to-date branch (`unit-lifecycle`
+The e2e suite and every required check of 09 §9.2.1 are green on the PR and in the merge queue (`unit-lifecycle`
 does not exist yet in R0).
 
 ## Out of scope

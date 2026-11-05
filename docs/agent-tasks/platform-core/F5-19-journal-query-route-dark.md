@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-19-journal-query-route-dark.md -->
-<!-- version: 1.0.4 -->
+<!-- version: 1.0.5 -->
 <!-- guid: 4142bda4-22ac-4f63-8d52-07a0db51b22d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -261,7 +261,7 @@ PR; nothing imports the package before F5-18.
 - One `changelog.d/` fragment (`scriv create`, or a hand-written Markdown file); no hand edit of `CHANGELOG.md`.
 - Conventional commit `feat(core/log): the journal's query route GET /api/core/v1/system/logs (dark)`; the body ends
   with `Co-Authored-By: Claude <noreply@anthropic.com>`. 09 names no release or flip trailer (09 §9.2.1), so add none.
-- `gh pr create`, then `gh pr merge <n> --rebase` once every required check is green on an up-to-date branch; never
+- `gh pr create`, then `gh pr merge <n> --rebase` once every required check is green on the PR and in the merge queue; never
   squash, never `--admin` past a required check.
 - CLAUDE.md concurrency rules: the handler pages through `Query` with a bounded `Limit` and holds no per-request
   fan-out; the predicate loop is over one page (at most 1000 records), not the journal.

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-15-cutover-suite-harness-restore-drill.md -->
-<!-- version: 1.1.6 -->
+<!-- version: 1.2.0 -->
 <!-- guid: d41c117c-6cdf-49d0-b491-b6dd9fd211bf -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -31,8 +31,8 @@ Write the four gate tests that 09 §9.4 R2 "Verification" runs on every R2 PR th
 the F3 PR on, the R2 cutover suite"), as a harness that works for **whatever cutover steps the build registers**: zero at
 F2 (each test passes with the expected "nothing moved" outcome and says so), M2/M7/M8 from F3-07, one more step per flip
 after that. Plus the generator of the shared-family sub-prefix lists, the fetcher of the pre-freeze release's binary, the
-**flip-upgrade cell table** that each later flip extends (design rule 9), the **pre-freeze-written corpus** stage (design
-rule 10), and the `extraction-gates` job.
+**pre-freeze-written corpus** stage (design rule 10), and the `extraction-gates` job. There is no flip-upgrade test
+(design rule 9; D15, advisor S2).
 
 Production will not upgrade an R0-written store: it runs R0, then R1, then pre-freeze minors, and only then R2, so its
 store already carries what the pre-freeze binary wrote (09 §9.2.1: the rollback target is the pre-freeze release).
@@ -115,25 +115,14 @@ generator's test `scripts/tests/test_gen_shared_family_lists.py`.
    actions pinned to SHAs (copy those the file uses), fetches the pre-freeze binary, runs
    `go test ./internal/books/ -run 'TestCutoverOnR0Corpus|TestCutoverPreservesIDsAndReferences|TestCutoverLeavesOtherFamiliesByteIdentical|TestRollbackRestoreBootsPreviousBuild' -count=1`
    (each with its `r0` and `prefreeze-written` subtests, rule 10)
-   and `python3 scripts/ci/gen_shared_family_lists.py --check`, plus `TestCutoverFlipUpgrade` (rule 9) with
-   `R2_PREVFLIP_BIN` set when the table holds a cell. Add the job to `ci/gates.txt` if R1-02's file lists
+   and `python3 scripts/ci/gen_shared_family_lists.py --check`. The job builds no previous `main` (rule 9). Add the job to `ci/gates.txt` if R1-02's file lists
    `extraction-gates` jobs individually.
-9. **Flip-upgrade cells** (03 §3.8 "Each later flip that adds a step raises M7's target levels … and registers a new M8";
-   05-storage §5S.3.5, §5S.3.13 "M8: the rewrite", IMPL-13; the mechanism is stated in F3-04 and F3-06: each flip adds
-   a level step per raised owner at its next contiguous version and replaces M8). In
-   `cutover_suite_test.go` add `TestCutoverFlipUpgrade` (name coined here) over a table (name coined here,
-   `flipUpgradeCells`) that this row leaves **empty**; each flip from F3-07 on adds exactly one cell naming the commit its
-   previous `main` is built from (for F3-07, the last F2 `main`, which registers no cutover step; from F4-08, the
-   previous flip's merge commit). A cell: the previous flip's `main` (binary path in `R2_PREVFLIP_BIN`, env name coined here; the
-   job builds it from the cell's commit) migrates a corpus copy; this build then boots it and must (a) raise the
-   levels of each owner this flip raises (books; core when core's level changes) to this build's declared `Spec.Level`
-   before the flip's first newly registered step runs, through the flip's new level steps, with the previous build's
-   level steps still applied and unchanged, (b) run exactly one M8
-   (one new `c/storage/dm/` record with this build's M8 ID and exactly one new `KindRewrite` journal), and (c) leave a
-   store on which the previous `main`'s binary exits 78 with nothing written. With an empty table the test logs
-   "no flip-upgrade cell" and passes; its `selftest/` case drives the cell runner with in-process stand-ins for
-   the two builds (the fake step of "TDD" at two levels) to prove each of (a)–(c) fails when broken. Locally the test skips with a message when
-   `R2_PREVFLIP_BIN` is unset; in CI it is required whenever the table holds a cell.
+9. **No flip-upgrade test** (D15, adopting advisor S2). A store migrated by a mid-R2 `main` is never a production
+   upgrade source: production stays on the pre-freeze release through the R2 freeze and the paused auto-update
+   (D12 (a)) and upgrades only from it, which the four tests above and rule 10 cover. So no row builds a previous
+   `main`'s binary, and there is no per-flip upgrade cell. A developer store between flips is reset from its
+   checkpoint. Each flip's level raise and the single M8 are proved by F3-06's registered-list check (levels raised
+   to the build's target before the first step of each flip, versions contiguous per owner, exactly one M8, last).
 10. **Pre-freeze-written corpus.** Add a helper (`prefreezeWrittenCorpus(t)`, name coined here, in
    `cutover_suite_test.go`, built once per test process and cached) that copies F2-12's stage-1 corpus with F2-13's
    overlay to a temp dir, boots the binary at `R2_PREFREEZE_BIN` (rule 6's fetch, so the same tag: the one tag line of
@@ -142,7 +131,7 @@ generator's test `scripts/tests/test_gen_shared_family_lists.py`.
    change through the config route, and one library scan started and waited for to finish (on an import root under the
    temp dir). Authenticate the way F2-12's answer replay does (re-mint a key on the copy; never a recorded secret). Stop
    it cleanly, then record its answers on that copy with F2-12's `scripts/r2corpus/record_r0_answers.py`, written to the
-   temp dir and never over the committed `answers/`. Every one of the four tests, and `TestCutoverFlipUpgrade`'s cells,
+   temp dir and never over the committed `answers/`. Every one of the four tests
    runs as two subtests (names coined here): `r0` on the raw corpus with F2-12's committed answers, and
    `prefreeze-written` on the helper's copy with the answers just recorded. In `prefreeze-written` the four new rows
    count like any other row (IDs kept, references resolve, counts hold), the quarantine report still equals the
@@ -170,7 +159,7 @@ R2_PREFREEZE_BIN="$(bash scripts/ci/fetch_prefreeze_binary.sh "$(gh release list
   go test ./internal/books/ -run 'TestCutoverOnR0Corpus|TestCutoverPreservesIDsAndReferences|TestCutoverLeavesOtherFamiliesByteIdentical|TestRollbackRestoreBootsPreviousBuild' -count=1 -v | grep -c '^--- PASS'   # 4
 R2_PREFREEZE_BIN=<the path above> \
   go test ./internal/books/ -run 'TestCutoverOnR0Corpus|TestCutoverPreservesIDsAndReferences|TestCutoverLeavesOtherFamiliesByteIdentical|TestRollbackRestoreBootsPreviousBuild' -count=1 -v | grep -cE '^ +--- PASS: [A-Za-z]+/prefreeze-written$'   # 4 (rule 10, none skipped)
-go test ./internal/books/ -run 'TestCutoverOnR0Corpus/selftest|TestCutoverFlipUpgrade' -count=1   # ok (negative cases fail as designed; empty cell table logs and passes)
+go test ./internal/books/ -run 'TestCutoverOnR0Corpus/selftest' -count=1   # ok (negative cases fail as designed)
 grep -c 'r2-cutover-suite' .github/workflows/extraction-gates.yml                         # >=1
 make ci                                                                                   # exit 0
 ```

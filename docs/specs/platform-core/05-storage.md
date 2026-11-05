@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-storage.md -->
-<!-- version: 1.13.12 -->
+<!-- version: 1.14.0 -->
 <!-- guid: 940ce8be-6f86-4450-b43a-77bf78827b12 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -1614,9 +1614,7 @@ A kill in phases 1–2 reruns from phase 1 (a partial `.rewrite.tmp/` is removed
 is resumed forward or swapped back by P0a as any swap (machine 1). **M8 derives its phase from the swap
 journal, not from the copy**, whose own state reads `copied`: before phase 3 it reads the `KindRewrite`
 journals of this `db_path` in `restorejournal` **whose step ID is its own** (the intent's and the `staged`
-record's `StepID`, §5S.3.15, which M8 writes when it stages the swap), newest first. A journal staged by another
-M8 (an earlier build's `books.rewrite-after-<step>`, whose journal reads `applied`) is ignored, so a second M8
-never mistakes the first one's finished swap for its own. No journal of its own: M8 runs phase 3. At `swapped`
+record's `StepID`, §5S.3.15, which M8 writes when it stages the swap), newest first. No journal of its own: M8 runs phase 3. At `swapped`
 or `opened`, P0a resumed the swap forward and the store is the copy, so M8 goes straight to phase 4 (deletes
 the set-aside directory the journal names, records `done`, and the journal reads `applied`) and stages no
 second swap. At `swapped_back` the old directory is back and M8 **restarts from phase 1 once**, staging one new
@@ -1627,9 +1625,10 @@ restart), the error and the boot log naming both journals and the way back, `sto
 failing never becomes a loop of whole-store compactions and copies. 05-backup §5B.3.4's `KindRewrite`
 rule (5) matches. A swap-back moves no checkpoint into `restore/<id>/failed/` and starts no clock, so the
 attempt's checkpoint stays the store's rollback (05-backup §5B.3.4 owns that rule). Phase 4 is idempotent. M8 raises nothing and runs after every other step, so it never rewrites a range a
-later step still writes. **Its ID names the last cutover step it follows** (`books.rewrite-after-<step
-name>`), so a build that adds a cutover step registers a new M8, which runs again after it: a store
-migrated by F3's `main` and then booted by F4's is rewritten again after M3 (IMPL-13). The checkpoint still
+later step still writes. **It has one fixed ID**, `books.rewrite`, registered at F3 and kept last as later
+flips add their steps; no flip registers a second M8 (D15, advisor S2). A store migrated by one mid-R2 `main` and
+booted by a later one is therefore not rewritten again; no install reaches that path (the R2 freeze, D12 (a)),
+and a developer store between flips is reset from its checkpoint. The checkpoint still
 holds the old bytes through its own hard links until the sweeper deletes it (§5S.3.12). The canaries
 `TestCutover_NoRawTokenOnDisk` ([05-authn](05-authn.md) §10) and `TestConfigCutover_NoPlaintextSecretOnDisk`
 ([05-config](05-config.md) §1.12.2) plant a session token and a blob secret in an R0-written fixture, run
@@ -1669,8 +1668,7 @@ verifying; a kill after M8's `KindRewrite` journal reached `swapped`, whose next
 the swap forward, has M8 delete the set-aside directory and record `done` without staging a second swap; a
 swap-back of M8's swap, whose next boot reruns M8 from phase 1 and stages exactly one new swap, which completes;
 two consecutive swap-backs of the same M8, whose next boot fails with `ErrRewriteSwappedBack` and exit 78,
-stages nothing and names `storage restore-offline` and `make rollback-restore`; a second M8 registered after a
-first whose journal reads `applied`, which ignores that journal and runs its own phase 3), `TestCutoverQuarantinesUndecodableRows` (a corrupt row in each step's families is quarantined with
+stages nothing and names `storage restore-offline` and `make rollback-restore`), `TestCutoverQuarantinesUndecodableRows` (a corrupt row in each step's families is quarantined with
 its reason, the step completes, health and the listing report it, a sensitive one is flagged),
 `TestCutoverStopsOnUnconvertibleIdentity` (cells: a corrupt `u:`, `apikey:` or `oauthid:` row from the
 overlay; a decodable row that `auth.Importer`'s validation rejects; an API key or OAuth identity whose
@@ -2716,7 +2714,7 @@ credentials.
    `tasks` surface they import (`ForEach` and its executor, dark), the audit store with its
    `core.storage.*` actions, and the runner, so F3's M2 already runs on them (IMPL-2, XFILE-4). Each flip
    PR then lands its subsystem's native store, its importer and its cutover step together (09's flip
-   order), and registers a new M8 after its step (§5S.3.13); the first R2 boot runs the cutover preflight
+   order), and runs before M8, which stays last with its one ID (§5S.3.13); the first R2 boot runs the cutover preflight
    and then the whole list behind the checkpoint (§5S.3.13).
 4. **R3.** Books' legacy steps and the HEAD-format readers go, behind the floor (§5S.3.5); books'
    `legacy-file-cleanup` deletes `.encryption_key` and `library.bleve` (§5S.3.8); the settings blob's
@@ -3259,3 +3257,5 @@ Round 15 (2026-11-05): lead fix (W8: HEAD's store records no app version, verifi
 Round 16 (2026-11-05): plan-gap fixes G6 (§5S.4 "Task kinds": `core.storage.compact`, `core.storage.census` and the schedule key `core.storage.schedules.compact` live in `core/internal/storagetasks`, L4, because `storage` at L1 cannot import `tasks`), G9 (§5S.3.5 `UpgradeFloor`, §5S.3.13, the failure row and `TestUpgradeFloorRefusesBeforeAnyWrite`: `InstallFirst` holds the R2 release's tag, written when R2 is tagged; the refusal's last line is `install <R2 tag> first`), G15 (§5S.4: `core.window.nightly` is `core/tasks`' kind, declared at F2; storage only schedules into it).
 
 Round 16 (2026-11-05): review fixes X4 (§5S.4 "Task kinds": `storagetasks` is created dark by the T4 conversion and its kinds registered from F5; the key `core.storage.schedules.compact` is declared at F2 by the kernel's core-section list, and `storagetasks` only passes it to `ScheduleFromConfig` from F5).
+
+Owner answers (2026-11-05): D15 — §5S.3.13 and its tests: M8 has one fixed ID, `books.rewrite`, registered at F3 and kept last; the "second M8" journal rule and test cell removed (advisor S2); the R2 bullet of the migration lifecycle cites it.

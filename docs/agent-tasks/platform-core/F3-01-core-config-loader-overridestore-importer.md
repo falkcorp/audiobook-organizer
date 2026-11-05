@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-01-core-config-loader-overridestore-importer.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 36955afe-b04c-490f-9996-d4b78e06b11a -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -299,7 +299,7 @@ Revert the PR. Nothing in ABO reads the new engine before F3-07, so a revert cha
   trailer: add none.
 - Move window: list every `old ==> new` path (if any) in the PR description; each commit builds
   (`scripts/ci/check_commits_build.py`).
-- `gh pr merge <n> --rebase` once every required check of 09 §9.2.1 is green on an up-to-date branch; never squash,
+- `gh pr merge <n> --rebase` once every required check of 09 §9.2.1 is green on the PR and in the merge queue; never squash,
   never `--admin`.
 - CLAUDE.md concurrency rules apply to any loop over a library-scale collection.
 

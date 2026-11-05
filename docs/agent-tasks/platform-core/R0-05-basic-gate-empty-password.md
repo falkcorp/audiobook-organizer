@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R0-05-basic-gate-empty-password.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: b4576320-1a96-466d-99a6-04809ffcfeb3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -167,7 +167,7 @@ grep -c 'BasicGateNoPasswordToken = "basic_gate_no_password"' internal/server/mi
 make ci; echo "exit $?"                                                               # expect exit 0
 ```
 
-The e2e suite and every required check of 09 §9.2.1 are green on the PR on an up-to-date branch. **Merge only after
+The e2e suite and every required check of 09 §9.2.1 are green on the PR and in the merge queue. **Merge only after
 OWNER-01 has recorded P14.**
 
 ## Out of scope

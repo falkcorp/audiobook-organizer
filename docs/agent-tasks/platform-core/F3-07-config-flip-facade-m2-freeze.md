@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-07-config-flip-facade-m2-freeze.md -->
-<!-- version: 1.1.7 -->
+<!-- version: 1.2.1 -->
 <!-- guid: cd0ab95d-94fd-4550-8089-03f6d358f1f1 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -11,7 +11,7 @@
 | Release / flip | R2, **the config flip F3** (one atomic PR, 09 §9.2.1) |
 | Tier | **T4** (Opus, xhigh–max): a flip PR carrying a one-way migration and every deploy-file rename |
 | Wave | W32 — the only PR of its wave touching `main.go`, `internal/server/` and books' registration, and the wave's one owner of the kernel and module wiring files (`core/kernel/boot.go`, `kernel.go`, `core/module/manifest.go`, `registrar.go`, `deps.go`, `core/app/offline.go`); it **merges alone** and its siblings rebase after it; runs inside an announced **move window** (`internal/server/middleware/basicauth.go` → core `httpapi`) |
-| Depends on | F3-05, F3-06, F2-05, F2-08, F2-10, F2-11, F2-14, F2-15, OWNER-04, F2-16, F3-08, F2-17, R1-31 |
+| Depends on | F3-05, F3-06, F2-05, F2-08, F2-10, F2-11, F2-14, F2-15, OWNER-04, F2-16, F3-08, F2-17 |
 | Owns gate tests | `TestRenameTable_EveryKeyRegistered`; `TestDeployFilesUseCanonicalNamesOnly` (the deploy-files test); `TestBasicGate_ExemptSetGolden`; `TestBasicGate_MoreRestrictiveWins` (the compose cell of `TestPerimeterHonoursBlobOnlyValues`); `TestConfigCutover_NoPlaintextSecretOnDisk`; `TestCutoverRefusedByOlderBuilds`; `TestAuthSwitch_MoreRestrictiveWins` |
 | Gate | Plan, then execute autonomously. **The R2 freeze is already on (F3-08)**; this PR re-checks the pre-freeze tag immediately before merge. |
 
@@ -28,8 +28,8 @@ make web-deps
 git rev-parse HEAD       # BASE
 ```
 
-Before any edit: every dependency is merged (F3-08 included: `prerelease.yml` reads `RELEASE_FREEZE: 'R2'` and
-`ci/prefreeze_release.txt` exists); OWNER-04's answers are recorded in the tracking issue (P1: no `(unregistered)`
+Before any edit: every dependency is merged (F3-08 included: `ci/prefreeze_release.txt` exists, and the repository variable
+`RELEASE_FREEZE` reads `R2`, which the owner set before F3-08 merged and logged in the tracking issue; D15); OWNER-04's answers are recorded in the tracking issue (P1: no `(unregistered)`
 prefix; P4: the env names actually set on the owner's hosts, each mapped by the rename table). If any is missing,
 stop: this PR may not merge without them. Read F3-01 … F3-06's PR descriptions for the seams and
 coined names they left for this PR.
@@ -64,8 +64,8 @@ Switch configuration and secrets to core in one PR, with every first-party consu
    manifest, and **core's M7 half** (`core.level-<n>`, F3-04's constructor) in the kernel's cutover wiring next to
    books' half, in the same batch order (sidecar first), registered when a manifest declares a cutover; books' and
    core's declared `Spec.Level` become `<n>` in this PR. This is the first application of the flip mechanism (F3-04
-   "Flip mechanism"; F3-06): level steps named by target level, one per owner at this first flip, and M8 named by the
-   step it follows, exactly one. Pass
+   "Flip mechanism"; F3-06): level steps named by target level, one per owner at this first flip, and M8 under its one
+   R2 ID, registered here once and last (later flips insert their steps before it and never replace it). Pass
    `RetiredConfigNames` and `ConfigEnvBindings` (`OPENAI_API_KEY`, `OPENAI_BASE_URL` onto
    `integrations.ai.openai.{api_key, base_url}`) from ABO's `main`.
 4. **Delete `R1Values`** and its type from `core/app/options.go` and ABO's `main`, with an archtest that fails if either
@@ -89,20 +89,18 @@ Switch configuration and secrets to core in one PR, with every first-party consu
    `env_file`), so a default compose install sets no `ABO_CORE_HTTP_BASIC_GATE_ENABLED=false`; `AUDIOBOOK_ROOT_DIR`,
    `AO_DIR`, `AO_DB`, `OLLAMA_BASE_URL` are removed. The repo's agent skills (`.claude/skills/`) and first-party
    `scripts/` that set env names switch in this PR.
-8. **The pre-freeze tag** (09 §9.2.1; 05-storage §5S.3.12 `from_release`): F3-08 turned the R2 freeze on and wrote
-   `ci/prefreeze_release.txt` under its in-flight gate; this PR edits neither `prerelease.yml` nor that file. Embed the
+8. **The pre-freeze tag** (09 §9.2.1; 05-storage §5S.3.12 `from_release`): the owner turned the R2 freeze on (the repository
+   variable, D15) and F3-08 wrote `ci/prefreeze_release.txt`; this PR edits neither `prerelease.yml` nor that file. Embed the
    file in the build (`//go:embed ci/prefreeze_release.txt` in the root `main.go`) and pass it to core as the value the
    checkpoint record carries as `from_release`. The file has `#` comment lines (F3-08's format: a four-line header and
    one comment line); read the single line that is neither blank nor starts with `#` (the one reader rule F2-15's
    fetch script and F3-08 use: `grep -v '^#' ci/prefreeze_release.txt | grep -v '^[[:space:]]*$'`), and pass that tag,
    not the whole file. Immediately before merge, re-check that the newest published production release
-   still equals the file, that no `release-prod.yml` run is unfinished, and that no `prerelease.yml` run created before
-   F3-08's merge is unfinished (Acceptance); if any check fails, a release was or may still be promoted after F3-08,
-   so stop and report to the lead.
+   still equals the file, that `RELEASE_FREEZE` still reads `R2`, and that no `prerelease.yml` or `release-prod.yml` run
+   is unfinished (Acceptance); if any check fails, a release was or may still be promoted after F3-08, so stop and
+   report to the lead.
 9. From this PR every PR runs the R2 cutover suite in `extraction-gates` (F2-15's harness now bites). In
-   `internal/books/cutover_suite_test.go` add this flip's cell to `TestCutoverFlipUpgrade`'s table (F2-15 rule 9: the
-   previous `main` is the last F2 `main`; this build raises books' and core's levels, runs exactly one M8, and the
-   previous binary exits 78 on the result), and the cell that runs F3-06's `ValidateCutoverList` over the registered
+   `internal/books/cutover_suite_test.go` add the cell that runs F3-06's `ValidateCutoverList` over the registered
    list (books' manifest list plus the kernel's core half). Extend `TestBootCrashMatrix_ABO` over M2, both M7 halves and
    M8 and over the keyring and `c/secrets/meta` writes, and core's
    `TestBootCrashMatrix` over hello with the same two secrets writes (09 §9.3: the PR that adds a boot writer extends
@@ -132,7 +130,7 @@ Switch configuration and secrets to core in one PR, with every first-party consu
 | modify | `internal/startup/`, `internal/dedup/unified/config.go`, `internal/books/store/settings.go` |
 | modify | `internal/server/`, `web/src/`, `internal/telemetry/` |
 | modify | `deploy/`, `docker-compose.yml`, `Dockerfile`, `Dockerfile.build-cgo` |
-| modify | `internal/books/cutover_suite_test.go` (this flip's `TestCutoverFlipUpgrade` cell and the cutover-list check cell) |
+| modify | `internal/books/cutover_suite_test.go` (the cutover-list check cell) |
 | modify | `scripts/`, `.claude/skills/` |
 
 This PR is its wave's only owner of the kernel and module wiring files; no sibling of W32 edits them.
@@ -151,11 +149,10 @@ grep -n 'AUDIOBOOK_ROOT_DIR\|DATABASE_PATH' deploy/com.audiobook-organizer.plist
 grep -n 'OLLAMA_BASE_URL\|ALLOWED_PEER_CIDRS\|TUNNEL_CONNECTOR_ADDRS\|LOGIN_SATURATED' deploy/local.conf.example
 grep -rn 'func ConfigStep\|func RetiredConfigNames\|func RewriteStep' internal/books/cutover/ | wc -l   # F3-06's constructors (names may differ: read F3-06's PR)
 grep -rn 'func guardAgainstKeyRegeneration' cmd/root.go | wc -l      # 1 (HEAD line 760); 0 after this PR
-grep -c "RELEASE_FREEZE: 'R2'" .github/workflows/prerelease.yml       # 1 (F3-08 turned the R2 freeze on); this PR leaves the file alone
+gh variable get RELEASE_FREEZE                                         # R2 (the owner's toggle, D15); this PR edits no workflow
 test -s ci/prefreeze_release.txt && echo ok                            # ok (F3-08)
 test "$(bash scripts/ci/fetch_prefreeze_binary.sh --resolve ci/prefreeze_release.txt)" = "$(grep -v '^#' ci/prefreeze_release.txt | grep -v '^[[:space:]]*$')" && echo RESOLVE_OK   # RESOLVE_OK (F2-15's resolver reads the same tag)
 grep -rn 'func ValidateCutoverList' internal/books/cutover/ | wc -l    # 1 (F3-06; name may differ: read F3-06's PR)
-grep -n 'flipUpgradeCells' internal/books/cutover_suite_test.go | wc -l  # >= 1 (F2-15's empty table)
 grep -c 'loadConfigFromDB' cmd/child_mode.go                          # HEAD: >= 1 (line 87); 0 after this PR
 grep -c 'viper' internal/dedup/unified/config.go                      # HEAD: >= 1; 0 after this PR
 grep -rn 'openSecrets(' core/kernel/ | wc -l                          # F3-03's helper exists, not yet called from boot (name may differ: read F3-03's PR)
@@ -171,9 +168,9 @@ grep -rn 'ConfigUpdate\|configupdate' internal/serviceregistry/keys.go internal/
 4. A first-party consumer of a renamed env name or of a deleted route would remain on `main` after this PR.
 5. Any secret value or mask appears in a `GET /api/v1/config` response or a log line.
 6. The newest published production release (`--exclude-drafts`) differs from the tag line of `ci/prefreeze_release.txt`
-   (its single non-`#` line) at merge time, a `release-prod.yml` run is unfinished, a `prerelease.yml` run created
-   before F3-08's merge is unfinished, or `RELEASE_FREEZE` is not `'R2'`: do not merge; report to the lead (F3-08 owns
-   the toggle and the file).
+   (its single non-`#` line) at merge time, a `prerelease.yml` or `release-prod.yml` run is unfinished, or the
+   repository variable `RELEASE_FREEZE` is not `R2`: do not merge; report to the lead (the owner owns the variable,
+   F3-08 the file).
 
 ## Steps (one PR; keep every commit building)
 
@@ -194,7 +191,7 @@ grep -rn 'ConfigUpdate\|configupdate' internal/serviceregistry/keys.go internal/
 6. `/api/v1/config` rewrite and the SPA settings page.
 7. Basic gate into core; delete `basicauth.go` and its use.
 8. Deploy files, skills, scripts; `internal/telemetry` reads the OTLP keys through core config.
-9. Embed `ci/prefreeze_release.txt` in `main.go` and hand core its single non-`#` line (the tag) as `from_release`; add the two cells to
+9. Embed `ci/prefreeze_release.txt` in `main.go` and hand core its single non-`#` line (the tag) as `from_release`; add the cutover-list check cell to
    `internal/books/cutover_suite_test.go`.
 10. Crash matrix extension; run the full cutover suite on the corpus; headers; one `changelog.d/` fragment; R2
     release-note lines left to R2-01 (09 §9.2.9).
@@ -230,7 +227,7 @@ grep -rn 'ConfigUpdate\|configupdate' internal/serviceregistry/keys.go internal/
 - `TestCoreLogConfig_AppliesLive` (name coined here): an `Apply` of `core.log.level`, `core.log.levels` or
   `core.log.redact_keys` takes effect without a restart (`Enabled` changes for the named module; a new redact key is
   redacted in the next record).
-- `TestCutoverFlipUpgrade` (this flip's cell, F2-15 rule 9) and the `ValidateCutoverList` cell over the registered list
+- The `ValidateCutoverList` cell over the registered list
   (levels raised to the build's target before the first step of each flip, versions contiguous per owner, exactly
   one M8, last; F3-06).
 - Also green here: `TestPerimeterHonoursBlobOnlyValues` (the compose cell), `TestAuthOff_ProtectedKeysRefused` (the ABO
@@ -250,15 +247,13 @@ grep -rn 'ConfigUpdate\|configupdate' internal/serviceregistry/keys.go internal/
 ```bash
 go build ./... && go vet ./...                                                   # exit 0
 go test -count=1 ./internal/config/... ./internal/server/... ./internal/books/... ./cmd/...   # ok
-go test -count=1 -run 'TestRenameTable_EveryKeyRegistered|TestDeployFilesUseCanonicalNamesOnly|TestBasicGate_|TestConfigCutover_|TestCutoverRefusedByOlderBuilds|TestBootCrashMatrix_ABO|TestAppConfigRatchet|TestAuthSwitch_MoreRestrictiveWins|TestFactoryReset_StaleEnableAuthFalseKeepsAuthOn|TestCoreLogConfig_AppliesLive|TestCutoverFlipUpgrade' ./...   # PASS
+go test -count=1 -run 'TestRenameTable_EveryKeyRegistered|TestDeployFilesUseCanonicalNamesOnly|TestBasicGate_|TestConfigCutover_|TestCutoverRefusedByOlderBuilds|TestBootCrashMatrix_ABO|TestAppConfigRatchet|TestAuthSwitch_MoreRestrictiveWins|TestFactoryReset_StaleEnableAuthFalseKeepsAuthOn|TestCoreLogConfig_AppliesLive' ./...   # PASS
 grep -rn 'R1Values' --include=*.go . | grep -v _test | wc -l                     # 0
 ls internal/server/middleware/basicauth.go 2>/dev/null | wc -l                  # 0
 grep -rn 'AUDIOBOOK_ROOT_DIR\|AO_DIR\|AO_DB\|OLLAMA_BASE_URL\|DATABASE_PATH\|BASIC_AUTH_' deploy docker-compose.yml Dockerfile Dockerfile.build-cgo .claude/skills scripts | wc -l   # 0
-grep -c "RELEASE_FREEZE: 'R2'" .github/workflows/prerelease.yml                  # 1 (unchanged; F3-08's)
+test "$(gh variable get RELEASE_FREEZE)" = R2 && echo frozen                     # frozen (immediately before merge; else STOP 6)
 test "$(grep -v '^#' ci/prefreeze_release.txt | grep -v '^[[:space:]]*$')" = "$(gh release list --exclude-pre-releases --exclude-drafts --limit 1 --json tagName -q '.[0].tagName')" && echo same   # same (run again immediately before merge; else STOP 6)
-gh run list --workflow release-prod.yml --json status --jq '[.[]|select(.status!="completed")]|length'   # 0 (immediately before merge; else STOP 6)
-M=$(gh pr view <F3-08's PR> --json mergedAt --jq .mergedAt)
-gh run list --workflow prerelease.yml --limit 50 --json status,createdAt --jq "[.[]|select(.createdAt < \"$M\" and .status != \"completed\")]|length"   # 0 (no unfinished run for a commit before F3-08's merge commit; else STOP 6)
+for w in prerelease.yml release-prod.yml; do gh run list --workflow "$w" --limit 50 --json status --jq '[.[]|select(.status!="completed")]|length'; done   # 0 and 0 (immediately before merge; else STOP 6)
 grep -rn 'KeyConfigUpdate' --include=*.go internal/config internal/books | grep -v _test | wc -l   # 0
 grep -c 'viper' internal/dedup/unified/config.go                                 # 0
 (cd web && npm run build && npm test -- --run)                                   # exit 0
@@ -278,7 +273,7 @@ The native settings routes and deleting `/api/v1/config` for `k` and `s` keys (F
 ## Rollback
 
 From this merge, rollback of a deployed build is `make rollback-restore` to the pre-freeze release (09 §9.2.1). On
-`main`, a revert is a decision for the lead; it does not touch the freeze, which is F3-08's toggle.
+`main`, a revert is a decision for the lead; it does not touch the freeze, which is the owner's repository variable (D15).
 
 ## Repo rules
 

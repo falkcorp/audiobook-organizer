@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.12.3 -->
+<!-- version: 1.13.0 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -99,10 +99,11 @@ once, one-way, into native keyspaces in R2), the new decisions N1–N15 with N13
 cutover happens inside the extraction, in R2, with no storage grants), the eight inherited acceptance gates (G5
 replaced by G5′: the store is migrated forward without loss, older builds refuse it, and rollback restores the
 pre-migration copy), the five old open questions, and the owner decisions D10–D13 (no backward compatibility; no
-soaks; the cutover scope; core's name, licence and the cutover's row policy). User decisions D1–D9 are fixed inputs. Owner questions still open (including Q-I, how
-the one release-gating requirement — every PR passes the named required checks, `make ci`'s CI jobs,
-`extraction-gates`, the image job, e2e and `core-ci`, before merge — is enforced), those D13 answered (Q-A, Q-B,
-Q-H), and those decided as adopted recommendations, are in [14-risks-open-questions.md](14-risks-open-questions.md) §14.3.
+soaks; the cutover scope; core's name, licence and the cutover's row policy) and D15 (the required checks enforced by a
+no-bypass ruleset with the merge queue; the R1 freeze kept; the split thresholds; the dead v2 schedule strings; the freeze
+as a repository variable; one M8). User decisions D1–D9 are fixed inputs. No owner question is open: those D13 and D15
+answered (Q-A, Q-B, Q-H; Q-C, Q-G, Q-I), and those decided as adopted recommendations, are in
+[14-risks-open-questions.md](14-risks-open-questions.md) §14.3.
 
 ## Reading order
 
@@ -246,3 +247,5 @@ Owner decisions D10–D12:
 - D10–D12 revision (2026-11-04): status line and design summary rewritten around the releases R0–R3, native ownership with importers, the one-way checkpointed R2 cutover, what survives it (D12 F2), the hardened design in R2 and the one frozen contract (D12 F3); the representation-neutral, lock-parity, otelgin, soak-gate and trailer bullets deleted. Build scope: the per-family cutover row, the cutover-only members row (grants, served-run preconditions) and the post-S10 hardening row deleted; backup encryption and the seed-role merge diff keep a row; the config basis row deleted (05-config no longer defines it). Decisions paragraph: decision 13, N14, N15, G5′ and D10–D12. Reading order item 4 cites 03 §3.8. Consistency pass: D12's answers cited as D12 (a)–(d), UI-0 renamed to R1's first UI steps, and the R1 reset noted as offline-only.
 
 Round 13 (2026-11-04): status line names round 13 and D13; design summary: F2 and the R1 freeze (R1, R3), the pre-freeze release (R2), checkpoint retention (R4) and identity rows stopping the upgrade (D13); Decisions paragraph: D10–D13, Q-A, Q-B and Q-H answered.
+
+Owner answers (2026-11-05): D15 — decisions paragraph: D15 recorded, no owner question open.

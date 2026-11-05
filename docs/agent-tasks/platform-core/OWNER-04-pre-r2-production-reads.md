@@ -1,9 +1,9 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-04-pre-r2-production-reads.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 5dbb01a6-8a15-49e4-a5f1-45022bf2338c -->
 <!-- last-edited: 2026-11-05 -->
 
-# OWNER-04 — Pre-R2 production reads and the never-run-crons decision: P1, P2, P3, P4, P5, P7, P9 (counts only) and Q-C
+# OWNER-04 — Pre-R2 production reads: P1, P2, P3, P4, P5, P7, P9 (counts only)
 
 > **NOT AGENT WORK.** This is an owner checkpoint. No agent reads production, runs these commands, guesses a count,
 > or ticks this row. Agents consume only the counts the owner records.
@@ -15,8 +15,8 @@
 | Tier | **OWNER**: read-only production reads, counts only; one decision |
 | Wave | W24 |
 | Depends on | OWNER-03 (R1 deployed: P2, P3, P5 and P7 read a copy restored with R1-25's `storage restore-offline --into`) |
-| Unblocks | **F2-14** (P1 sizes the production-shaped store), **F3-07** (P1: no unregistered prefix; P4: no unmapped env name), **F5-14** (Q-C) |
-| Spec | 09 §9.7 P1–P5, P7, P9; 14 §14.3 Q-C; 05-storage §5S.9.2 (what migrates, resets or stays) |
+| Unblocks | **F2-14** (P1 sizes the production-shaped store), **F3-07** (P1: no unregistered prefix; P4: no unmapped env name) |
+| Spec | 09 §9.7 P1–P5, P7, P9; 05-storage §5S.9.2 (what migrates, resets or stays) |
 
 ## Rules for every read (09 §9.7)
 
@@ -40,9 +40,8 @@ it), so production is never stopped.
 
 P4 prints env **names**, not values; P5's caller list prints methods and paths only. Paste nothing else.
 
-**Q-C** (14 §14.3 Q-C): the 15 v2 cron strings that never ran (for example `deluge.protected-paths-sync` every
-30 min): **delete the declarations** (the spec default and recommendation; re-add any one later as a real
-schedule), or enable them as real schedules.
+Q-C is no longer part of this row: the owner decided it on 2026-11-05 (D15, spec 02 §2.6; 14 §14.3.2), and F5-14
+applies it.
 
 ## What to record, and where
 
@@ -53,9 +52,8 @@ OWNER-04 recorded <date>
 P1: <prefix>=<keys>/<key bytes>/<value bytes> per family; unregistered prefixes: none | <prefix list>
 P2: custom roles <n>   P3: empty-scope keys <n>   P4: unmapped env names: none | <name list>
 P5: open invites <n>; outside callers: none | <method path list>   P7: ABS <on|off>, abs_sess <n>   P9: webhooks <n>
-Q-C: delete | enable
 ```
 
 ## Done when
 
-The comment exists. F2-14 reads P1; F3-07 waits for P1 and P4 Branch A (or the rename table extended); F5-14 reads Q-C.
+The comment exists. F2-14 reads P1; F3-07 waits for P1 and P4 Branch A (or the rename table extended).

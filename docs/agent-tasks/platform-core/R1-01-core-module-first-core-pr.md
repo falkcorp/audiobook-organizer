@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-01-core-module-first-core-pr.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.2.1 -->
 <!-- guid: c9068651-3412-486f-b5f9-ac087f228837 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -64,18 +64,19 @@ It creates the nested module `core/` (`github.com/falkcorp/mediacore`), wires it
 three dependency-free L0 leaves (`buildid`, `storage/keys`, `archtest`), redesigns ABO's layering guard onto the
 shared engine, adds the module guards (`genproto-exclude-root`, the core-mode exclude check, `check_module_skew.py`,
 the toolchain guard's core rules, `TestCoreImportsOnlyCore`, `TestCoreHoldsNoAppKeyNames`, `archtest.NoInit`) and
-registers the reserved families `c/` and `m/`. **The R1 freeze is not this row's**: R1-35 adds the `RELEASE_FREEZE`
-toggle in `prerelease.yml` and sets it, and it merges before this row (this row depends on it). This row does not edit
+registers the reserved families `c/` and `m/`. **The R1 freeze is not this row's**: R1-35 adds the switch in `prerelease.yml`
+that reads the owner's repository variable `RELEASE_FREEZE` (D15), and it merges before this row (this row depends on
+it). This row does not edit
 `prerelease.yml`. Nothing user-visible changes; ABO's binary behaves exactly as before.
 
 **Preconditions (STOP if any is missing).**
 1. OWNER-02 has cut the R0 production release (`gh release list --exclude-pre-releases --exclude-drafts --limit 3`
    shows it) and
    R0-01 (the toolchain bump) is merged: `grep -n '^export GOTOOLCHAIN' Makefile` shows the bumped pin.
-2. OWNER-01's recorded answers exist in the tracking issue: Q-I (how required checks are enforced) and
-   "keep or override the R1 freeze". R1-35 has applied it either way (value `'R1'` or `''`); nothing here depends on
-   which. R1-35 is merged: `grep -c 'RELEASE_FREEZE' .github/workflows/prerelease.yml` shows 4 (env entry, two
-   `if:`, the notice `echo`).
+2. OWNER-01's answers are recorded (D15: Q-I (a) with the merge queue; R1 freeze kept) and the owner has logged
+   the applied `main` ruleset with the merge queue in the tracking issue. The R1 freeze is on:
+   `gh variable get RELEASE_FREEZE` prints `R1`. R1-35 is merged:
+   `grep -c 'vars.RELEASE_FREEZE' .github/workflows/prerelease.yml` shows 3 (two `if:`, the notice `echo`).
 3. No release is in flight from before R1-35's merge:
    `gh run list --workflow release-prod.yml --json status --jq '[.[]|select(.status!="completed")]|length'` shows 0,
    and no `prerelease.yml` run created before R1-35's merge is unfinished
@@ -229,6 +230,8 @@ grep -n '^ci:' Makefile                                              # expect 78
     (`core/`) and its build guards."). Commits may
     be split by concern; every commit builds both modules.
 
+The workflow carrying `core-ci` triggers on `merge_group` as well as `pull_request` (D15; R1-02's `test_required_workflows_have_merge_group` enforces it).
+
 ## Tests and checks this task owns (write each before its code)
 
 - `TestCoreImportsOnlyCore` (core `archtest`), `TestNoAppRequire`, the engine's synthetic-graph self-test.
@@ -275,7 +278,7 @@ make ci && make -C core ci               # expect exit 0 for both
 
 ## Out of scope
 
-The R1 freeze and the `RELEASE_FREEZE` toggle (R1-35). Every other row of R1's CI classification table (R1-03), `extraction-gates`, `vet-darwin`, `vet-integration`
+The R1 freeze (the owner's `RELEASE_FREEZE` variable) and its switch (R1-35). Every other row of R1's CI classification table (R1-03), `extraction-gates`, `vet-darwin`, `vet-integration`
 (R1-02), the Docker changes (R1-04), any package move beyond `internal/arch`'s engine, `archtest.NoKernelImports`,
 `SDKOnly`, `ModulesIsolated` (they arrive with the packages they guard).
 
@@ -290,7 +293,7 @@ affected by this revert.
 - **Changelog.** Add one headerless fragment under `changelog.d/` (`scriv create`, or by hand); `changelog-check.yml` requires it. Do not edit `CHANGELOG.md`.
 - **Commits.** Conventional commits (`type(scope): summary`). End every commit body with
   `Co-Authored-By: Claude <noreply@anthropic.com>`. 09 names no release or flip trailer (09 §9.2.1: there is no release-gating commit trailer), so add none.
-- **PR and merge.** `git push -u origin <branch>`, `gh pr create`, then after every required check is green on an up-to-date branch `gh pr merge <n> --rebase`. Never squash. Never merge with `--admin` past a required check (14 Q-I as OWNER-01 answered it).
+- **PR and merge.** `git push -u origin <branch>`, `gh pr create`, then after every required check is green, `gh pr merge <n> --rebase` (enqueues it; the merge queue re-tests it on top of `main`, D15). Never squash. Never merge with `--admin` past a required check (14 Q-I as OWNER-01 answered it).
 - **Concurrency (CLAUDE.md).** A loop over a library-scale collection with per-item I/O, hashing or subprocess work uses a bounded worker pool (`errgroup` + `SetLimit`); never unbounded goroutines.
 - **No `go.work`.** Never run `go work init` in a checkout or worktree; the genproto probe runs only in a throwaway copy under `mktemp -d` (03 §3.2 item 1).
 - **Move window (09 §9.2.10).** This task moves or re-homes packages. Before you start, the lead

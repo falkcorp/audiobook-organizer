@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-08-identity-flip-legacyauth-native-routes.md -->
-<!-- version: 1.1.5 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 0ad91c06-04c3-47a1-bdf3-1ab090720204 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -83,14 +83,11 @@ Switch identity to core for ABO in one PR, with every first-party caller (09 §9
    flip raises (books' `books.level-<n>`; core's `core.level-<n>` when core's level changes), named for the raised
    target level, at that owner's next contiguous version, numbered immediately before M3 (which runs `After` it);
    F3-07's level steps stay registered unchanged (05-storage §5S.3.5: versions contiguous per owner, recorded by
-   version number). **Replace** the M8 entry with a newly named one whose step ID names M3 as the step it compacts
-   after, so exactly one M8 is registered and it runs last; bump the raised owners' declared `Spec.Level` in the same
-   commit. F3-06's test checks the registered list: the levels are raised to the build's target before the first step
-   of each flip, versions are contiguous per owner, one M8, last. On a store that F3-07's `main` migrated, F3-07's
-   level steps are applied, and the new M8 ignores the previous M8's `done` record and `applied` journal (03 §3.8;
-   05-storage §5S.3.13). So a store migrated by F3's `main` has its levels raised, runs M3 and is rewritten once more,
-   and F3's `main` refuses it. In `internal/books/cutover/stepids.go` add this flip's level constant and level-step ID
-   beside F3-06's (never editing an earlier level's) and replace the M8 ID. F4-06's M3 constructor takes
+   version number). M8 stays exactly as F3-07 registered it, last: M3 is inserted before it, and M8 is not renamed or
+   replaced (F3-04 rule 3; D15, advisor S2). Bump the raised owners' declared `Spec.Level` in the same commit.
+   F3-06's test checks the registered list: the levels are raised to the build's target before the first step of each
+   flip, versions are contiguous per owner, one M8, last. In `internal/books/cutover/stepids.go` add this flip's level
+   constant and level-step ID beside F3-06's (never editing an earlier level's or the M8 ID). F4-06's M3 constructor takes
    `RaisesLevel` and the `After` level-step ref from its caller: pass this flip's constant and level step here.
 7. **Boot writers move:** HEAD's Start-time identity writers (`seedRolesAndTokens`: `internal/auth/seed.go`'s seed-role
    and `_system` writes, `internal/server/bootstrap.go`'s token, the key-expiry stamp, the read-only key) are deleted;
@@ -130,8 +127,7 @@ Switch identity to core for ABO in one PR, with every first-party caller (09 §9
 | modify / create | `internal/server/` (with `internal/server/legacyauth/` created), `internal/auth/` (emptied and deleted) |
 | modify | `internal/cfaccess/`, `internal/usermerge/` |
 | modify | `internal/books/module.go`, `internal/books/cutover/steps.go` |
-| modify | `internal/books/cutover/stepids.go` (add this flip's level constant and level-step ID; replace the M8 ID) |
-| modify | `internal/books/cutover_suite_test.go` (this flip's `TestCutoverFlipUpgrade` cell) |
+| modify | `internal/books/cutover/stepids.go` (add this flip's level constant and level-step ID) |
 | modify | `core/coretest/harness.go`, `core/coretest/assert.go` (Goal item 12) |
 | modify | `web/src/`, `.claude/skills/server-bootstrap/`, `scripts/` |
 | create | `web/tests/e2e/` (the two fragment-link Playwright specs) |
@@ -146,8 +142,8 @@ This PR is its wave's only owner of the kernel and module wiring files.
 the paragraph after the table, §8.3 (the bridge table), §3.5, §4.9; 05-authn §3.2 (`Options`), §3.3, §4.7, §4.10, §4.13,
 §5, §10 rows named below, §11 (release-note text); 05-rbac §6 (all), §12; 07 §7.19 step 3, §7.4.3, §7.9.1; 06 §6.4.10 F4
 row, §6.5.1 P4d steps 2–4, P7, §6.10 rows named below; 05-backup §5B.3.4 step h, §5B.3.6 (what F4-11's functions do;
-this row calls them), §5B.9 rows named below; 05-events §5E.13 "Order" item (1); 05-storage §5S.3.13 (a level step added and M8
-replaced per flip, `TestCutover_NoRawTokenOnDisk`), §5S.10 (`TestBootCrashMatrix_ABO`); 03 §3.8 (M7 and M8 at each
+this row calls them), §5B.9 rows named below; 05-events §5E.13 "Order" item (1); 05-storage §5S.3.13 (a level step added per flip,
+M8 registered once, `TestCutover_NoRawTokenOnDisk`), §5S.10 (`TestBootCrashMatrix_ABO`); 03 §3.8 (M7 and M8 at each
 flip); 05-http-api §12 rows named below; 05-authn §4.11 (`auth_disabled_remote`); 05-health §5H.3.1 (that token's
 route before F8); 07 §7.4.3, §7.18 (`TestOldLinkFormsNotServed`, the fragment e2e rows, the ESLint rule).
 
@@ -166,7 +162,7 @@ ls core/kernel/restore_reapply.go core/kernel/restore_hooks.go | wc -l          
 ls core/rbac/restore_hook.go core/audit/restore_hook.go | wc -l                  # 2 (F4-11)
 git grep -n 'revocation_journal_' -- core/kernel/boot.go core/kernel/kernel.go | wc -l   # 0 now; >= 1 after
 grep -n 'needs core authentication' core/coretest/*.go | wc -l                  # >= 1 (R1-37's stub); 0 after
-grep -n 'level-\|rewrite-after-' internal/books/cutover/stepids.go               # F3-06's F3 level constant and M8 ID
+grep -n 'level-\|books.rewrite' internal/books/cutover/stepids.go                # F3-06's F3 level constant and M8's fixed ID (unchanged here)
 ls web/tests/e2e/*.spec.ts | wc -l                                               # HEAD > 0 (Playwright specs dir)
 ls -d core/internal/authhttp internal/cfaccess internal/books/rbacreach | wc -l  # 3
 grep -rn 'func Compile\|func AuthDisabled\|func ForSystem' core/internal/authz/ | wc -l   # 3 (F4-09)
@@ -192,9 +188,8 @@ grep -c 'internal/auth$' tools/cmd/sdkguard/internal-deps.txt                   
    `BootWrites`, the `c/backup/` journal spec, stage 7/13 audit; the F4 module members; the offline commands and their `cmd/` wrappers; `app.Options.Auth`,
    `Authenticators`; delete `LegacyAuthGinUntil`; archtest; regenerate `core.json` and the client.
 3. Books: `books.abs` with `AppHandoff`; `Deps.AuthCompat` in the ABS adapters; M3 in `steps.go`; add this flip's
-   level constant, level-step ID and new M8 ID to `stepids.go`, add this flip's level steps, replace the M8 entry with
-   a newly named one and bump the raised owners' declared levels (Goal item 6); this flip's `TestCutoverFlipUpgrade`
-   cell in `internal/books/cutover_suite_test.go`, F2-15's cutover-suite harness (the cell shape is F3-04's).
+   level constant and level-step ID to `stepids.go`, add this flip's level steps before M8 (left unchanged) and bump
+   the raised owners' declared levels (Goal item 6).
 4. Bridge `internal/server/legacyauth`; replace the gin auth chain and the 14 raw `auth.Can` sites; delete `RequireAuth`
    and the gin identity, OAuth and settings (`k`/`s`) routes; move `client_trust.go`'s Access branch.
 5. Delete HEAD's Start-time identity writers and HEAD's merge undo of pre-R2 journals (409 `merge_permanent`).
@@ -230,11 +225,9 @@ grep -c 'internal/auth$' tools/cmd/sdkguard/internal-deps.txt                   
   `TestCompat_ABSLoginHonoursRestrictions`, `TestBootWrites_RunInP4d`, `TestConfining_WorkerKeyRefusedOnPlaylists`,
   `TestAuthOff_BooksGatesAndInHandlerDenial`, `TestAuthOff_SettingsManageKeepsReach`, the core half of
   `TestUserMerge_ScopedAdminKeyRefused`.
-- **Levels and M8 (order M2):** this flip's `TestCutoverFlipUpgrade` cell in `internal/books/cutover_suite_test.go`,
-  F2-15's cutover-suite harness (the cell shape is F3-04's): a store
-  migrated by F3-07's `main` and booted by this `main` has its levels raised to this build's target before M3, runs
-  exactly one M8, and F3-07's binary then exits 78 on it. F3-06's registered-list test (levels raised before the first
-  step of each flip, versions contiguous per owner, one M8, last) stays green on this build.
+- **Levels and M8 (order M2):** F3-06's registered-list test (levels raised before the first step of each flip,
+  versions contiguous per owner, one M8, last) stays green on this build. No previous `main` is built (F2-15 rule 9;
+  D15).
 - **Boot wiring of F4-11's functions** (F4-11 owns the journal and re-apply tests; these prove the wiring):
   - `TestBootCrashMatrix_ABO` (05-storage §5S.10; 06 §6.10): the new cells of Goal item 7; a kill or error at each
     write leaves a store this build boots and finishes.
@@ -305,7 +298,7 @@ go build ./... && go vet ./...                                                  
 go test -count=1 ./internal/server/... ./internal/books/... ./internal/usermerge/... ./internal/cfaccess/...   # ok
 go test -count=1 -run 'TestOAuthCallback_HEADPathServedByCore|TestOAuthStart_HEADPathServedByCore|TestIdentityCutover_|TestCutover_NoRawTokenOnDisk|TestOIDC_AppHandoffMintsABSCode|TestWorkerKey_Confined|TestCutoverRefusedByOlderBuilds|TestBootCrashMatrix_ABO|TestRestoreHooksWriteNativeRows|TestCrashBetweenSwapAndHooksResumesHooks|TestLegacyRoute_SettingsAtomNeverWiderThanSuccessor|TestCoreRoutesReplaceGin|TestOldLinkFormsNotServed|TestAuthOff_AuthModeWriteRefused' ./...   # PASS
 (cd core && go test -count=1 -run 'TestWorkerKey_Confined|TestBootCrashMatrix|TestBootPhaseOrder_NoWriteBeforeCheckpoint|TestStage13_StaleCookieOnPublicRouteIsAnonymous|TestDepsScoping|TestAuthOff_AuthModeWriteRefused|TestPostDAGReconcilerOrder|TestAssertPermission_Hello' ./...)   # PASS
-go test -count=1 -run 'TestCutoverFlipUpgrade|TestHealth_UnauthenticatedTokenSetGolden|TestHealth_RevocationJournalBrokenRaised' ./...   # PASS
+go test -count=1 -run 'TestHealth_UnauthenticatedTokenSetGolden|TestHealth_RevocationJournalBrokenRaised' ./...   # PASS
 grep -n 'needs core authentication' core/coretest/*.go | wc -l                                 # 0
 (cd web && npx eslint src)                                                                      # exit 0 (the permission-literal rule on)
 make sdkguard                                                                                   # exit 0 (closure matches the regenerated list)
