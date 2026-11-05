@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-11-05
 
@@ -66,6 +66,12 @@
 //
 // Idempotent: a re-run finds already-corrected rows within tolerance and skips
 // them.
+//
+// Row grain (mode "unknownRows", duration_backfill_unknown_rows.go): every mode
+// above works per BOOK and so misses the rows nobody measured in a book the
+// modes skip (copies, books ABS does not list). unknownRows walks the book_file
+// rows themselves: a DB-only pass (sibling borrow, fingerprint promotion), then
+// a concurrent ffprobe pass over what is left.
 
 package maintenance
 
@@ -155,6 +161,18 @@ type durationReextractParams struct {
 	ZeroRowsOnly      bool     `json:"zeroRowsOnly"`
 	ZeroRowsOnlySnake bool     `json:"zero_rows_only"`
 	BookIDsSnake      []string `json:"book_ids,omitempty"`
+	// Mode selects the row-grain mode. "" is the book-grain behaviour above;
+	// durationModeUnknownRows ("unknownRows") walks book_file rows instead of
+	// books: see duration_backfill_unknown_rows.go. Any other value is an error,
+	// never a fall back to the book-grain run (encoding/json would accept a
+	// misspelt value without a word, and the book-grain run WRITES).
+	Mode string `json:"mode,omitempty"`
+	// FileIDs narrows an unknownRows run to exactly these book_file rows
+	// (intersected with BookIDs when both are given). Accepted as file_ids too.
+	// Valid only with Mode "unknownRows": without it the key would be silently
+	// ignored and the run would become a whole-library book-grain run.
+	FileIDs      []string `json:"fileIds,omitempty"`
+	FileIDsSnake []string `json:"file_ids,omitempty"`
 }
 
 // durationChangeThresholds: a book is corrected only when the freshly extracted
@@ -364,7 +382,9 @@ func (p *Plugin) durationBackfillDef() sdk.OperationDef {
 			"Never overwrites a real duration with an estimate, and skips books with any unreadable segment. " +
 			"Default dry-run previews counts (incl. fingerprint vs ffprobe split); set dryRun=false to apply. " +
 			"Workers param (default 4) controls ffprobe concurrency — higher = faster ffprobe tail. " +
-			"Set onlyMissingDuration=true to scope the run to books with no known duration.",
+			"Set onlyMissingDuration=true to scope the run to books with no known duration. " +
+			"mode=unknownRows is the row-grain pass: it walks book_file rows in ANY book (copies and books/itunes rows included, read-only on disk) that no one has measured, " +
+			"borrows a duration from a sibling row at the same path, promotes the fingerprint duration, then ffprobes the rest; narrow it with fileIds / bookIds. On demand only.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.duration-backfill",
@@ -716,6 +736,13 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 
 	if dryRun {
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
+	}
+
+	if params.Mode != "" || len(params.FileIDs) > 0 || len(params.FileIDsSnake) > 0 {
+		if err := validateUnknownRowsParams(params); err != nil {
+			return err
+		}
+		return p.runUnknownRowsBackfill(ctx, store, params, dryRun, reporter)
 	}
 
 	totalBooks, countErr := store.CountAllBooks()
