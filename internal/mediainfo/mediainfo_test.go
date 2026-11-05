@@ -1,13 +1,15 @@
 // file: internal/mediainfo/mediainfo_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: a2b3c4d5-e6f7-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-10-12
+// last-edited: 2026-11-04
 
 package mediainfo
 
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1151,11 +1153,16 @@ func TestExtractOGGInfo_WithMetadata(t *testing.T) {
 	}
 }
 
-// realDurationSec must report ok=false (not crash) when ffprobe can't read the
-// file, so callers fall back to a flagged estimate.
+// realDurationSec must return an error (not crash) when ffprobe can't read the
+// file, so callers fall back to a flagged estimate, and the error must say the
+// file is absent so it is not mistaken for a corrupt one.
 func TestRealDurationSec_MissingFile(t *testing.T) {
-	if _, ok := realDurationSec(filepath.Join(t.TempDir(), "nope.m4b")); ok {
-		t.Error("expected ok=false for a non-existent file")
+	_, err := realDurationSec(filepath.Join(t.TempDir(), "nope.m4b"))
+	if err == nil {
+		t.Fatal("expected an error for a non-existent file")
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("errors.Is(err, fs.ErrNotExist) = false for %v", err)
 	}
 }
 
