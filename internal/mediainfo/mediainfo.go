@@ -1,5 +1,5 @@
 // file: internal/mediainfo/mediainfo.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: f1e2d3c4-b5a6-7c8d-9e0f-1a2b3c4d5e6f
 // last-edited: 2026-11-05
 
@@ -21,6 +21,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioext"
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
+	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 )
 
 // MediaInfo holds technical audio file information
@@ -98,8 +99,16 @@ func realDurationSec(filePath string) (int, error) {
 //
 // bookfileaudio.ClassifyProbeError treats all of them as "not the file's fault".
 // Any other stat outcome (success included) leaves err as it was.
+//
+// Only an absolute, already-clean path is stat'ed (pathvalidation's
+// go/path-injection barrier); any other path keeps err as it was. Every book_file
+// path is stored absolute and clean, so this costs no classification.
 func withStatCause(filePath string, err error) error {
-	_, serr := os.Stat(filePath)
+	clean, perr := pathvalidation.CleanAbsolutePath(filePath)
+	if perr != nil {
+		return err
+	}
+	_, serr := os.Stat(clean)
 	return statCause(serr, err)
 }
 
