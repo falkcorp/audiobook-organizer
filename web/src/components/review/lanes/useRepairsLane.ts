@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.21.0
+// version: 1.22.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
 // last-edited: 2026-11-05
 
@@ -410,7 +410,14 @@ export interface RepairsLane {
   /** The plan's applicable count less the settled rows (null: no page yet). */
   remainingApplicable: number | null;
   /** The newest apply result for the plan on screen. */
+  /**
+   * The selected fixer's latest apply result, for the banner. It outlives the
+   * refresh the apply started (the refreshed plan is its `replan_op_id`), and goes
+   * away when dismissed, or when another trial or apply starts.
+   */
   applyResult: RepairApplyResult | null;
+  /** Hides the selected fixer's apply result banner. */
+  dismissApplyResult: () => void;
   /** The rows that apply wrote (outcome "applied"), titles for the banner. */
   appliedRows: readonly RepairApplyTarget[];
   /** Every outcome reported for the plan on screen, across applies. */
@@ -852,8 +859,19 @@ export function useRepairsLane(
   );
 
   // ---- actions ------------------------------------------------------------
+  const clearApplyResult = useCallback((fixerId: string) => {
+    setApplyResults((prev) => {
+      if (!(fixerId in prev)) return prev;
+      const next = { ...prev };
+      delete next[fixerId];
+      return next;
+    });
+  }, []);
+
   const runTrial = useCallback(
     async (fixerId: string) => {
+      // Starting another trial ends the previous apply's banner.
+      clearApplyResult(fixerId);
       try {
         const started = await api.startRepairPlan(fixerId);
         if (started.deduped) {
@@ -866,7 +884,7 @@ export function useRepairsLane(
         toast(`Could not start the trial: ${errorMessage(err, 'unknown error')}`, 'error');
       }
     },
-    [followTrial, toast]
+    [clearApplyResult, followTrial, toast]
   );
 
   /**
@@ -902,6 +920,8 @@ export function useRepairsLane(
       const ctrl = new AbortController();
       applyPolls.current.add(ctrl);
       setApplyingFor(fixerId);
+      // Starting another apply ends the previous one's banner.
+      clearApplyResult(fixerId);
       setApplyErrors((prev) => {
         const next = { ...prev };
         delete next[fixerId];
@@ -1015,7 +1035,7 @@ export function useRepairsLane(
         if (!ctrl.signal.aborted) setApplyingFor((cur) => (cur === fixerId ? null : cur));
       }
     },
-    [followTrial, toast]
+    [clearApplyResult, followTrial, toast]
   );
 
   const fixerTitle = useCallback(
@@ -1171,10 +1191,20 @@ export function useRepairsLane(
     ]
   );
 
+  // The result belongs to the plan it was applied from, and to the plan the
+  // server refreshed it into (replan_op_id): the rows it wrote leave the list
+  // when that plan loads, but what the apply did stays on screen until the owner
+  // dismisses it or starts another trial or apply.
+  const selectedResult = selectedFixerId ? applyResults[selectedFixerId] : undefined;
   const applyResult =
-    selectedFixerId && applyResults[selectedFixerId]?.plan_op_id === planOpId
-      ? applyResults[selectedFixerId]
+    selectedResult &&
+    (selectedResult.plan_op_id === planOpId ||
+      (selectedResult.replan_op_id !== undefined && selectedResult.replan_op_id === planOpId))
+      ? selectedResult
       : null;
+  const dismissApplyResult = useCallback(() => {
+    if (selectedFixerId) clearApplyResult(selectedFixerId);
+  }, [clearApplyResult, selectedFixerId]);
 
   const appliedRows = applyResult && selectedFixerId ? (appliedTargets[selectedFixerId] ?? []) : [];
 
@@ -1226,6 +1256,7 @@ export function useRepairsLane(
     settledRowIds,
     remainingApplicable,
     applyResult,
+    dismissApplyResult,
     appliedRows,
     rowOutcomes,
     dispatch,

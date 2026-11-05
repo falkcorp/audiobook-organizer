@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.18.1
+// version: 1.18.2
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 package database
 
@@ -248,7 +248,7 @@ var keyFamilies = []KeyFamily{
 	{"quick_query_cache:", "quick query result cache", "internal/database/pebble_quick_queries.go"},
 	{"setting:", "settings", "internal/database/settings.go"},
 	{"setting:repairs_last_apply_op:", "last repairs apply op per fixer", "internal/server/handlers/repairs/handler.go"},
-	{"setting:repairs_last_plan_op:", "last repairs plan op per fixer", "internal/server/handlers/repairs/handler.go"},
+	{"setting:repairs_last_plan_op:", "last repairs plan op per fixer (also written by the repairs.apply op's replanAfterApply in internal/plugins/maintenance/repairs_ops.go, for the refresh plan an apply starts)", "internal/server/handlers/repairs/handler.go"},
 	{"stats:", "cached library, transcribe and playback stats", "internal/database/pebble_store.go"},
 	{"system:", "system flags and markers", "internal/database/pebble_store_atpath_index.go"},
 	{"system:backfill:", "backfill completion markers and cursors", "internal/database/pebble_store_atpath_index.go"},
