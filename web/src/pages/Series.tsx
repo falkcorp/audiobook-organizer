@@ -1,7 +1,7 @@
 // file: web/src/pages/Series.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
@@ -54,7 +54,7 @@ import MergeTypeIcon from '@mui/icons-material/MergeType';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import HistoryIcon from '@mui/icons-material/History';
 import UndoIcon from '@mui/icons-material/Undo';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   useConfigurableTable,
   ResizableHeaderCell,
@@ -62,6 +62,8 @@ import {
   type ColumnDef,
 } from '../components/common/ConfigurableTable';
 import { useDebouncedSearch } from '../hooks/useDebouncedSearch';
+import { useUrlStateSync } from '../hooks/useUrlState';
+import { readTableListUrl, tableListUrlOwned, type TableListSpec } from './tableListUrl';
 import * as api from '../services/api';
 import type { SeriesWithCount as SeriesType, Book } from '../services/api';
 
@@ -69,6 +71,14 @@ import type { SeriesWithCount as SeriesType, Book } from '../services/api';
 const SEARCH_DEBOUNCE_MS = 300;
 
 type SeriesFilter = 'with_books' | 'empty' | 'all';
+
+// The address bar (see tableListUrl.ts): search, filter, sort, page and page size.
+const SERIES_LIST_SPEC: TableListSpec = {
+  filters: ['with_books', 'empty', 'all'],
+  defaultFilter: 'with_books',
+  sortKeys: ['name', 'author_name', 'book_count', 'id'],
+  defaultSort: 'name',
+};
 
 interface ExpandedRow {
   books: Book[];
@@ -378,10 +388,14 @@ export function Series() {
   const [loading, setLoading] = useState(true);
   const [loadedOnce, setLoadedOnce] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<SeriesFilter>('with_books');
-  const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(25);
+  const [searchParams] = useSearchParams();
+  // What the address bar says on arrival. Read once: after this the page's own
+  // state is the source of truth and mirrors itself back out (see below).
+  const [urlSeed] = useState(() => readTableListUrl(searchParams, SERIES_LIST_SPEC));
+  const [search, setSearch] = useState(urlSeed.search);
+  const [filter, setFilter] = useState<SeriesFilter>(urlSeed.filter as SeriesFilter);
+  const [page, setPage] = useState(urlSeed.page);
+  const [rowsPerPage, setRowsPerPage] = useState(urlSeed.rowsPerPage);
   // Selection survives page turns, so it stores the series rows themselves: the
   // merge dialog names the selected series and a row on another page is no
   // longer in `seriesList`. The header checkbox acts on the CURRENT PAGE only
@@ -428,6 +442,7 @@ export function Series() {
     sortDir,
     columnWidths,
     handleSort,
+    setSort,
     toggleColumn,
     isColumnVisible,
     startResize,
@@ -435,8 +450,8 @@ export function Series() {
   } = useConfigurableTable<SeriesType>({
     storageKey: 'series',
     columns: seriesColumns,
-    defaultSortField: 'name',
-    defaultSortDir: 'asc',
+    defaultSortField: urlSeed.sortField,
+    defaultSortDir: urlSeed.sortDir,
   });
 
   const addHistory = (entry: Omit<ActionHistoryEntry, 'id' | 'timestamp'>) => {
@@ -445,15 +460,22 @@ export function Series() {
     );
   };
 
-  const debouncedSearch = useDebouncedSearch(search, SEARCH_DEBOUNCE_MS);
+  // `urlSeed.search` is already settled on mount: a `?q=` link must fetch once,
+  // filtered, not unfiltered first and again when the timer fires.
+  const debouncedSearch = useDebouncedSearch(search, SEARCH_DEBOUNCE_MS, urlSeed.search);
 
   // A new settled search term starts again from page 0. Done during render
   // rather than in the keystroke handler so the page does not reset (and fetch)
   // once on the first keystroke and again when the debounce settles.
-  const [appliedSearch, setAppliedSearch] = useState('');
+  const [appliedSearch, setAppliedSearch] = useState(urlSeed.search);
+  // A page a URL named together with a new search: the settle below must land
+  // on it instead of page 0, and nothing is fetched until it has (see the
+  // external-change handler).
+  const [heldPage, setHeldPage] = useState<number | null>(null);
   if (appliedSearch !== debouncedSearch) {
     setAppliedSearch(debouncedSearch);
-    setPage(0);
+    setPage(heldPage ?? 0);
+    setHeldPage(null);
   }
 
   // Only the newest request may write state: a slow response for an old page or
@@ -504,8 +526,40 @@ export function Series() {
   }, [page, rowsPerPage, appliedSearch, filter, sortField, sortDir]);
 
   useEffect(() => {
+    // Held while an address-bar navigation waits for its search to settle.
+    if (heldPage !== null) return;
     fetchSeries();
-  }, [fetchSeries]);
+  }, [fetchSeries, heldPage]);
+
+  // ---- the address bar ------------------------------------------------------
+  // Mirror search, filter, sort, page and page size into the query string (see
+  // tableListUrl.ts). Selection, dialogs and expanded rows are transient and
+  // stay out of it.
+  const urlState = { search, filter, sortField, sortDir, page, rowsPerPage };
+  const urlStateRef = useRef({ ...urlState, appliedSearch });
+  useEffect(() => {
+    urlStateRef.current = { ...urlState, appliedSearch };
+  });
+  useUrlStateSync(tableListUrlOwned(urlState, SERIES_LIST_SPEC), {
+    // A link to another view of this list, or back/forward: set state to match.
+    onExternalChange: (params) => {
+      const next = readTableListUrl(params, SERIES_LIST_SPEC);
+      const cur = urlStateRef.current;
+      if (next.filter !== cur.filter) setFilter(next.filter as SeriesFilter);
+      if (next.sortField !== cur.sortField || next.sortDir !== cur.sortDir) {
+        setSort(next.sortField, next.sortDir);
+      }
+      if (next.rowsPerPage !== cur.rowsPerPage) setRowsPerPage(next.rowsPerPage);
+      if (next.search !== cur.search) setSearch(next.search);
+      if (next.search !== cur.appliedSearch) {
+        // The debounced twin has not caught up: its settle resets the page, so
+        // hand it the page to land on and hold the fetch until it has.
+        setHeldPage(next.page);
+      } else {
+        setPage(next.page);
+      }
+    },
+  });
 
   // Changing the sort starts again from page 0, like a new search or filter.
   const handleSortColumn = (field: string) => {

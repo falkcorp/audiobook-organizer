@@ -1,6 +1,7 @@
 // file: web/src/components/common/ConfigurableTable.tsx
-// version: 1.1.3
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
+// last-edited: 2026-11-05
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -70,6 +71,8 @@ interface UseConfigurableTableResult<T> {
   columnWidths: Record<string, number>;
   /** Handle sort click on a column */
   handleSort: (field: string) => void;
+  /** Set the sort outright (a URL that names one), without toggling */
+  setSort: (field: string, dir: 'asc' | 'desc') => void;
   /** Toggle column visibility */
   toggleColumn: (key: string) => void;
   /** Check if a column is visible */
@@ -140,6 +143,11 @@ export function useConfigurableTable<T>({
       setSortDir('asc');
       return field;
     });
+  }, []);
+
+  const setSort = useCallback((field: string, dir: 'asc' | 'desc') => {
+    setSortField(field);
+    setSortDir(dir);
   }, []);
 
   const toggleColumn = useCallback((key: string) => {
@@ -230,6 +238,7 @@ export function useConfigurableTable<T>({
     sortDir,
     columnWidths: colState.widths,
     handleSort,
+    setSort,
     toggleColumn,
     isColumnVisible,
     startResize,

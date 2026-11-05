@@ -1,7 +1,7 @@
 // file: web/src/hooks/useDebouncedSearch.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3d8b1c47-6e29-4a05-9f73-2c5a8e0b4d16
-// last-edited: 2026-09-01
+// last-edited: 2026-11-05
 
 import { useEffect, useState } from 'react';
 
@@ -30,10 +30,13 @@ import { useEffect, useState } from 'react';
  *
  * @param value the raw, per-keystroke term
  * @param delayMs how long to wait after the last keystroke
+ * @param initial the term that is already settled on mount (a search arrived at
+ *   through a link): without it the twin starts empty and a page that arrives
+ *   with `?q=` first fetches unfiltered, then again once the timer fires
  * @returns the settled term, safe to put in a request
  */
-export function useDebouncedSearch(value: string, delayMs: number): string {
-  const [debounced, setDebounced] = useState('');
+export function useDebouncedSearch(value: string, delayMs: number, initial = ''): string {
+  const [debounced, setDebounced] = useState(initial);
 
   useEffect(() => {
     // An empty box clears its twin in the SAME tick rather than waiting out the
