@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_unprobed_holds_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 406b9bc1-da96-44bc-b198-fc0b48344643
 // last-edited: 2026-11-05
 
@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
+	"os"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -342,6 +344,8 @@ func TestFolderBooksFixer_MeasuringUnknownFilesKeepsAnApplicableRowApplicable(t 
 	require.Equal(t, fbTierShelf, before.Class)
 	require.True(t, before.Applicable(), "skipped=%q holds=%+v", before.Skipped, before.Holds)
 	require.Equal(t, "3", before.Current["unmeasured_majority_shelf_files"])
+	require.Less(t, mustParseHours(t, before.Current["hours"]), float64(fbDeepHours),
+		"the row starts under the deep threshold, or measuring its files proves nothing")
 	for _, k := range []string{fbSkipUnprobed, fbSkipUnreadableAudio} {
 		require.False(t, fbHasHold(&before, k), "%s: %+v", k, before.Holds)
 	}
@@ -551,4 +555,175 @@ func TestFolderBooksFixer_UnknownFilesAreNotLongFlatWorks(t *testing.T) {
 		require.Nil(t, fbFindRow(f.fbPlan(t, fbFixerID, "op-plan"), id),
 			"an unknown duration must not read as a long file")
 	})
+}
+
+// TestFolderBooksFixer_BackfillDeclinedFilesAreNeverOffered seeds an extra unmeasured file beside a normal one and checks the
+// same shape for each way the backfill declines a file the stat can show: the
+// declined file stays named, its Why says what is wrong, it is never in the
+// action; the other file is probed through the action; and the re-plan offers
+// nothing for the declined file.
+func TestFolderBooksFixer_BackfillDeclinedFilesAreNeverOffered(t *testing.T) {
+	cases := []struct {
+		name string
+		// make creates the declined file under f's root and returns its path;
+		// it may call t.Skip.
+		make   func(t *testing.T, f *fragFixture, rel string) string
+		rel    string
+		remedy string
+	}{
+		{"an extension the probe does not read",
+			func(t *testing.T, f *fragFixture, rel string) string { return f.file(t, rel, fbSeedFileSize) },
+			"Alfred Pennyworth/Hush/02.txt", "is not one the duration probe reads"},
+		{"a directory at the row's path",
+			func(t *testing.T, f *fragFixture, rel string) string {
+				p := f.path(rel)
+				require.NoError(t, os.MkdirAll(p, 0o755))
+				return p
+			},
+			"Alfred Pennyworth/Hush/02.mp3", "not a regular file"},
+		{"a file the process cannot open",
+			func(t *testing.T, f *fragFixture, rel string) string {
+				if os.Geteuid() == 0 {
+					t.Skip("root opens a mode-000 file")
+				}
+				p := f.file(t, rel, fbSeedFileSize)
+				require.NoError(t, os.Chmod(p, 0))
+				t.Cleanup(func() { _ = os.Chmod(p, 0o600) })
+				if fh, err := os.Open(p); err == nil {
+					_ = fh.Close()
+					t.Skip("this filesystem ignores file modes")
+				}
+				return p
+			},
+			"Alfred Pennyworth/Hush/02.mp3", "cannot be opened"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			calls := stubUnknownRowsProbe(t)
+			f := newGlobalRootFragFixture(t)
+			lead, _ := f.fbKnownSeed(t)
+			p := c.make(t, f, c.rel)
+			f.row(t, "flat-declined", f.ids["flat"], p, "", fbSeedFileSize, 0, 7)
+			declined := f.rowIDs["flat-declined"]
+			live := f.fbProbeState(t, 1, 0, "", database.DurationUnprobed)
+
+			row := fbFindRow(f.fbPlan(t, fbFixerID, "op-before"), lead)
+			require.NotNil(t, row)
+			h := fbHold(row, fbSkipUnprobed)
+			require.NotNil(t, h, "skipped=%q holds=%+v", row.Skipped, row.Holds)
+			want := []string{declined, live}
+			slices.Sort(want)
+			require.Equal(t, want, h.FileIDs, "both files stay named")
+			require.Contains(t, h.Why, c.remedy)
+			require.Equal(t, []string{live}, actionFileIDs(t, h.Action), "the declined file is not in the action")
+
+			f.runHoldAction(t, h.Action)
+			require.EqualValues(t, 1, calls.Load(), "the declined file is never probed")
+
+			after := fbFindRow(f.fbPlan(t, fbFixerID, "op-after"), lead)
+			require.NotNil(t, after)
+			h = fbHold(after, fbSkipUnprobed)
+			require.NotNil(t, h)
+			require.Equal(t, []string{declined}, h.FileIDs)
+			require.Nil(t, h.Action, "nothing left the backfill would act on: no offer to loop on")
+			require.Contains(t, h.Why, c.remedy)
+		})
+	}
+}
+
+// A stat that fails with anything but "does not exist" leaves the file's size
+// and type unknown: the hold must not offer it (fail closed), however the rest
+// of the row looks.
+func TestFolderBooksFixer_StatFailureIsNotOffered(t *testing.T) {
+	f := newGlobalRootFragFixture(t)
+	_, paths := f.fbKnownSeed(t)
+	denied := paths[2]
+	id := f.fbProbeState(t, 2, 0, "", database.DurationUnprobed)
+	fx := newFolderBooksFixer(f.p)
+	fx.stat = func(p string) (os.FileInfo, error) {
+		if p == denied {
+			return nil, &fs.PathError{Op: "stat", Path: p, Err: fs.ErrPermission}
+		}
+		return os.Stat(p)
+	}
+	rows, err := fx.Plan(context.Background(), nil, &repairsOpReporter{id: "op-plan"})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	h := fbHold(&rows[0], fbSkipUnprobed)
+	require.NotNil(t, h, "%+v", rows[0].Holds)
+	require.Equal(t, []string{id}, h.FileIDs)
+	require.Nil(t, h.Action)
+	require.Contains(t, h.Why, "could not be checked on disk")
+	require.True(t, fbHasHold(&rows[0], fbSkipUnreadable), "the row is also held unreadable: %+v", rows[0].Holds)
+}
+
+// A row with a fingerprint duration is promoted by the backfill without a look
+// at the disk, so a size that no longer matches is no reason to decline it, and
+// the action reaches it.
+func TestFolderBooksFixer_FingerprintDurationRowIsOfferedDespiteASizeMismatch(t *testing.T) {
+	stubUnknownRowsProbe(t)
+	f := newGlobalRootFragFixture(t)
+	lead, _ := f.fbKnownSeed(t)
+	f.fbProbeState(t, 0, 0, "", database.DurationUnprobed)
+	f.fbSetRow(t, "flat", 0, func(bf *database.BookFile) {
+		bf.AcoustIDFingerprintDurationSec = fbUHFine
+		bf.FileSize = fbSeedFileSize + 5
+	})
+	id := f.rowIDs["flat-0"]
+
+	row := fbFindRow(f.fbPlan(t, fbFixerID, "op-before"), lead)
+	require.NotNil(t, row)
+	h := fbHold(row, fbSkipUnprobed)
+	require.NotNil(t, h, "skipped=%q holds=%+v", row.Skipped, row.Holds)
+	require.Equal(t, []string{id}, actionFileIDs(t, h.Action))
+	require.NotContains(t, h.Why, "bytes on disk")
+
+	f.runHoldAction(t, h.Action)
+	after := fbFindRow(f.fbPlan(t, fbFixerID, "op-after"), lead)
+	require.NotNil(t, after)
+	require.False(t, fbHasHold(after, fbSkipUnprobed), "%+v", after.Holds)
+}
+
+// fbUnknownFileOf fails closed on what the fixer could not learn about a file,
+// and the open it makes is the caller's, so these cases need no real file mode
+// (a root run or a filesystem that ignores modes cannot weaken them).
+func TestFbUnknownFileOf_FailsClosedOnStatAndOpen(t *testing.T) {
+	row := func(mut func(*database.BookFileCore)) database.BookFileCore {
+		r := database.BookFileCore{ID: "r", BookID: "b", FilePath: "/lib/Batman/Hush.mp3", FileSize: 10}
+		if mut != nil {
+			mut(&r)
+		}
+		return r
+	}
+	fingerprinted := func(r *database.BookFileCore) { r.AcoustIDFingerprintDurationSec = 30; r.FileSize = 480_000 }
+	opens := func(string) error { return nil }
+	refuses := func(string) error { return fs.ErrPermission }
+	statted := fbFileLook{disk: &unknownRowDisk{Size: 10, Regular: true}}
+	cases := []struct {
+		name string
+		r    database.BookFileCore
+		look fbFileLook
+		open func(string) error
+		acts bool
+		why  string
+	}{
+		{"openable and statted is offered", row(nil), statted, opens, true, ""},
+		{"a failed stat is not offered", row(nil), fbFileLook{statErr: fs.ErrPermission}, opens, false, "could not be checked on disk"},
+		{"a file that will not open is not offered", row(nil), statted, refuses, false, "cannot be opened"},
+		{"a fingerprint duration needs neither the stat", row(fingerprinted), fbFileLook{statErr: fs.ErrPermission}, refuses, true, ""},
+		{"nor the open", row(fingerprinted), statted, refuses, true, ""},
+		{"a declined row keeps its own reason, not the open's", row(func(r *database.BookFileCore) { r.FilePath = "/lib/Batman/Hush.txt" }),
+			statted, refuses, false, "is not one the duration probe reads"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := fbUnknownFileOf(c.r, c.look, c.open)
+			require.Equal(t, c.acts, got.acts)
+			if c.acts {
+				require.Empty(t, got.why)
+				return
+			}
+			require.Contains(t, got.why, c.why)
+		})
+	}
 }

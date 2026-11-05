@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 30470edd-3683-43f8-963e-07e058ba2a3e
 // last-edited: 2026-11-05
 
@@ -14,12 +14,15 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/falkcorp/audiobook-organizer/internal/audioext"
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -171,16 +174,21 @@ type UnknownRowsBookCounts struct {
 	SkippedUnreadable       int    `json:"skipped_unreadable"`
 	SkippedNoPath           int    `json:"skipped_no_path"`
 	SkippedUserExcluded     int    `json:"skipped_user_excluded"`
+	SkippedBadPath          int    `json:"skipped_bad_path"`
+	SkippedNotAudio         int    `json:"skipped_not_audio"`
 }
 
 // UnknownRowsResult is the op result of an unknownRows run.
 //
 // In an apply run, Scanned equals Borrowed + PromotedFromFingerprint +
 // ProbedKnown + ProbeFailed + EnvironmentSkipped + SkippedChanged +
-// SkippedUnreadable + SkippedNoPath + SkippedUserExcluded + WriteErrors (a run
-// that was cancelled has rows that reached none of them). In a dry run it equals
-// Borrowed + PromotedFromFingerprint + WouldProbe + SkippedUnreadable +
-// SkippedNoPath + SkippedUserExcluded (the first two read "would be").
+// SkippedUnreadable + SkippedNoPath + SkippedUserExcluded + SkippedBadPath +
+// SkippedNotAudio + SkippedNotRegular + WriteErrors (a run that was cancelled
+// has rows that reached none of them). In a dry run it equals Borrowed +
+// PromotedFromFingerprint + WouldProbe + SkippedUnreadable + SkippedNoPath +
+// SkippedUserExcluded + SkippedBadPath + SkippedNotAudio (the first two read
+// "would be"; a dry run does not touch the disk, so it cannot see
+// SkippedNotRegular and counts such a row as WouldProbe).
 type UnknownRowsResult struct {
 	DryRun bool `json:"dry_run"`
 	// Scanned is the candidate rows examined: unmeasured rows, present, inside
@@ -197,8 +205,8 @@ type UnknownRowsResult struct {
 	// was recorded on the row.
 	ProbeFailed int `json:"probe_failed"`
 	// EnvironmentSkipped: the probe could not run or the file could not be
-	// reached (ffprobe missing, file absent, permission, stale mount, an
-	// extension that is not audio). Nothing was recorded.
+	// reached (ffprobe missing, file absent, permission, stale mount). Nothing
+	// was recorded.
 	EnvironmentSkipped int `json:"environment_skipped"`
 	// SkippedChanged: the row changed between the walk and the write (moved,
 	// rewritten, marked missing, retired, excluded, measured by someone else),
@@ -220,6 +228,15 @@ type UnknownRowsResult struct {
 	// SkippedUserExcluded: the user excluded the row from scanning (SkipScan). It
 	// is neither probed nor borrowed into.
 	SkippedUserExcluded int `json:"skipped_user_excluded,omitempty"`
+	// SkippedBadPath: the row's path is not absolute and clean
+	// (pathvalidation.CleanAbsolutePath refuses it), so it is never opened.
+	SkippedBadPath int `json:"skipped_bad_path,omitempty"`
+	// SkippedNotAudio: the row needs a probe but its extension is not one the
+	// duration probe reads (audioext.DefaultSet), so no subprocess is started.
+	SkippedNotAudio int `json:"skipped_not_audio,omitempty"`
+	// SkippedNotRegular: the path is on disk but is a directory or another
+	// special file, not a file a probe can read (apply only: it takes a stat).
+	SkippedNotRegular int `json:"skipped_not_regular,omitempty"`
 	// SkippedMissing: rows marked Missing that no mode looks at. Not in Scanned.
 	SkippedMissing int `json:"skipped_missing,omitempty"`
 	// NotFound: fileIds that match no book_file row (a row merged away since the
@@ -245,6 +262,7 @@ type UnknownRowsResult struct {
 type unknownRowsCounters struct {
 	borrowed, promoted, probedKnown, probeFailed atomic.Int64
 	envSkipped, changed, writeErrs               atomic.Int64
+	notRegular                                   atomic.Int64
 	// done counts items finished in the current pass, for the progress label.
 	done atomic.Int64
 	// probes counts ffprobe runs: one per (path, size, hash) group.
@@ -260,11 +278,17 @@ const (
 )
 
 // unknownRowSettled is what the unknownRows mode does with one book_file row,
-// the single rule both the mode's own candidate walk and every caller that
-// offers to start it (the folder-books holds' "Probe these files") read, so an
-// offer can never name a row the run then declines: a hold whose action loops
-// forever is the failure this prevents. The checks run in this order and the
-// first that applies wins.
+// the single rule both the mode's own walk and every caller that offers to start
+// it (the folder-books holds' "Probe these files") read, so an offer names a row
+// only when the run would not decline it for the reasons the row and the file
+// can show (a hold whose action loops forever is the failure this prevents).
+// The checks run in this order and the first that applies wins.
+//
+// What it cannot see is an outcome that depends on the world beyond the file's
+// stat: ffprobe missing, a stale mount, or a file the process cannot open. Those
+// are environment skips of the run, nothing is recorded, and a caller that wants
+// to fail closed on them has to look itself (the folder-books fixer opens the
+// file).
 type unknownRowSettled int
 
 const (
@@ -282,16 +306,52 @@ const (
 	// unknownRowUserExcluded: the user excluded the file from scanning (SkipScan);
 	// it is not probed and not borrowed into.
 	unknownRowUserExcluded
+	// unknownRowBadPath: the path is not absolute and clean, which the probe pass
+	// refuses (pathvalidation.CleanAbsolutePath) before it looks at the file.
+	unknownRowBadPath
+	// unknownRowNotAudio: the extension is not one mediainfo reads, so it returns
+	// ErrUnsupportedFormat without starting a probe. The scanner admits the
+	// configured SupportedExtensions, which can be wider.
+	unknownRowNotAudio
+	// unknownRowNotRegular: the path is on disk but is not a regular file. Decided
+	// only when the caller has looked at the file.
+	unknownRowNotRegular
 	// unknownRowChanged: the file on disk is not the size the row records, so it
 	// is not the file the row describes and a measurement would be about other
-	// bytes. Decided only when the caller knows the on-disk size.
+	// bytes. Decided only when the caller has looked at the file.
 	unknownRowChanged
 )
 
-// unknownRowVerdict classifies r. diskSize is the size of the file at r's path
-// on disk, or 0 when the caller has not looked (the run decides the size at
-// probe time, when it has statted the file).
-func unknownRowVerdict(r database.BookFileCore, diskSize int64) unknownRowSettled {
+// unknownRowDisk is what a caller saw of the file at a row's path: its size and
+// whether it is a regular file. A nil *unknownRowDisk means the caller has not
+// looked (the walk decides nothing from the disk; the probe pass stats each file
+// and asks again with this filled in).
+type unknownRowDisk struct {
+	Size    int64
+	Regular bool
+}
+
+// unknownRowsAudioExts is the set of extensions the duration probe reads: the
+// same set mediainfo.Extract checks (audioext.DefaultSet).
+var unknownRowsAudioExts = audioext.DefaultSet()
+
+// unknownRowPromotable reports whether pass 1 promotes r's fingerprint duration
+// into its row, which it does without looking at the disk, the path or the
+// extension.
+func unknownRowPromotable(r database.BookFileCore) bool {
+	return r.AcoustIDFingerprintDurationSec > 0 &&
+		database.NormalizeDurationSec(r.FileSize, int(math.Round(r.AcoustIDFingerprintDurationSec))) > 0
+}
+
+// unknownRowVerdict classifies r. disk is what the caller saw of the file at r's
+// path, nil when it has not looked.
+//
+// The path, extension and disk checks govern only a row that needs a PROBE: one
+// the walk would borrow a sibling's duration into is acted on whatever its
+// extension (the walk checks the borrow first), and one with a fingerprint
+// duration is promoted without a disk look, so a size mismatch says nothing
+// about it.
+func unknownRowVerdict(r database.BookFileCore, disk *unknownRowDisk) unknownRowSettled {
 	switch {
 	case r.DurationState() == database.DurationKnown:
 		return unknownRowKnown
@@ -303,17 +363,28 @@ func unknownRowVerdict(r database.BookFileCore, diskSize int64) unknownRowSettle
 		return unknownRowNoPath
 	case r.SkipScan:
 		return unknownRowUserExcluded
-	case r.FileSize > 0 && diskSize > 0 && diskSize != r.FileSize:
+	case unknownRowPromotable(r):
+		return unknownRowActs
+	}
+	path, err := pathvalidation.CleanAbsolutePath(r.FilePath)
+	switch {
+	case err != nil:
+		return unknownRowBadPath
+	case !unknownRowsAudioExts[strings.ToLower(filepath.Ext(path))]:
+		return unknownRowNotAudio
+	case disk != nil && !disk.Regular:
+		return unknownRowNotRegular
+	case disk != nil && r.FileSize > 0 && disk.Size > 0 && disk.Size != r.FileSize:
 		return unknownRowChanged
 	}
 	return unknownRowActs
 }
 
 // unknownRowActionable reports whether the unknownRows mode acts on r, given
-// the file's on-disk size (0 when unknown), and when it does not, why and what
-// would settle it, in words a hold can show.
-func unknownRowActionable(r database.BookFileCore, diskSize int64) (ok bool, why string) {
-	switch unknownRowVerdict(r, diskSize) {
+// what the caller saw of the file (nil when it has not looked), and when it does
+// not, why and what would settle it, in words a hold can show.
+func unknownRowActionable(r database.BookFileCore, disk *unknownRowDisk) (ok bool, why string) {
+	switch unknownRowVerdict(r, disk) {
 	case unknownRowActs:
 		return true, ""
 	case unknownRowKnown:
@@ -327,9 +398,18 @@ func unknownRowActionable(r database.BookFileCore, diskSize int64) (ok bool, why
 		return false, "the row has no file path"
 	case unknownRowUserExcluded:
 		return false, "the file is excluded from scanning (skip scan)"
-	default:
+	case unknownRowBadPath:
+		return false, "the row's path is not an absolute, clean path, so the backfill will not open it"
+	case unknownRowNotAudio:
+		return false, fmt.Sprintf("its extension %q is not one the duration probe reads (the scanner admits it through the "+
+			"configured supported extensions, the probe does not)", strings.ToLower(filepath.Ext(r.FilePath)))
+	case unknownRowNotRegular:
+		return false, "the path is not a regular file (a directory or special file): a library scan refreshes the row"
+	case unknownRowChanged:
 		return false, fmt.Sprintf("the file is %d bytes on disk but the row records %d: a library scan refreshes the row",
-			diskSize, r.FileSize)
+			disk.Size, r.FileSize)
+	default:
+		return false, "the backfill leaves this row alone"
 	}
 }
 
@@ -616,7 +696,7 @@ func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsSt
 				continue
 			}
 		}
-		switch unknownRowVerdict(*r, 0) {
+		switch unknownRowVerdict(*r, nil) {
 		case unknownRowKnown:
 			continue
 		case unknownRowMissing:
@@ -676,9 +756,17 @@ func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsSt
 	actionable := 0
 	for _, i := range cand {
 		r := all[i]
-		// The size is checked at probe time (probeGroup), against the file on
-		// disk: no size is known here.
-		verdict := unknownRowVerdict(r, 0)
+		// The disk is looked at in the probe pass (probeGroup), per file: nothing
+		// of it is known here.
+		verdict := unknownRowVerdict(r, nil)
+		// A sibling's duration is borrowed whatever the row's path or extension:
+		// those verdicts are for a row that would need a probe.
+		borrowSec := 0
+		if verdict == unknownRowBadPath || verdict == unknownRowNotAudio {
+			if borrowSec = database.KnownDurationAtPath(donorRows(r.FilePath), r.FileSize, r.FileHash); borrowSec > 0 {
+				verdict = unknownRowActs
+			}
+		}
 		// Settled rows take no action, so they never spend the limit; only a row
 		// that would be borrowed, promoted or probed does.
 		if verdict == unknownRowActs && params.Limit > 0 && actionable >= params.Limit {
@@ -699,19 +787,29 @@ func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsSt
 			res.SkippedUserExcluded++
 			bc.SkippedUserExcluded++
 			continue
+		case unknownRowBadPath:
+			res.SkippedBadPath++
+			bc.SkippedBadPath++
+			continue
+		case unknownRowNotAudio:
+			res.SkippedNotAudio++
+			bc.SkippedNotAudio++
+			continue
 		}
 		actionable++
-		if sec := database.KnownDurationAtPath(donorRows(r.FilePath), r.FileSize, r.FileHash); sec > 0 {
-			pass1 = append(pass1, unknownRowWork{row: r, sec: sec, src: srcBorrow})
+		if borrowSec == 0 {
+			borrowSec = database.KnownDurationAtPath(donorRows(r.FilePath), r.FileSize, r.FileHash)
+		}
+		if borrowSec > 0 {
+			pass1 = append(pass1, unknownRowWork{row: r, sec: borrowSec, src: srcBorrow})
 			bc.Borrowed++
 			continue
 		}
-		if r.AcoustIDFingerprintDurationSec > 0 {
-			if sec := database.NormalizeDurationSec(r.FileSize, int(math.Round(r.AcoustIDFingerprintDurationSec))); sec > 0 {
-				pass1 = append(pass1, unknownRowWork{row: r, sec: sec, src: srcFingerprint})
-				bc.PromotedFromFingerprint++
-				continue
-			}
+		if unknownRowPromotable(r) {
+			sec := database.NormalizeDurationSec(r.FileSize, int(math.Round(r.AcoustIDFingerprintDurationSec)))
+			pass1 = append(pass1, unknownRowWork{row: r, sec: sec, src: srcFingerprint})
+			bc.PromotedFromFingerprint++
+			continue
 		}
 		pass2 = append(pass2, unknownRowWork{row: r, src: srcProbe})
 		bc.WouldProbe++
@@ -770,6 +868,7 @@ func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsSt
 	res.ProbeFailed = int(run.ctr.probeFailed.Load())
 	res.EnvironmentSkipped = int(run.ctr.envSkipped.Load())
 	res.SkippedChanged = int(run.ctr.changed.Load())
+	res.SkippedNotRegular = int(run.ctr.notRegular.Load())
 	res.WriteErrors = int(run.ctr.writeErrs.Load())
 	res.ProbesRun = int(run.ctr.probes.Load())
 	if n := run.warns.suppressed(); n > 0 {
@@ -877,7 +976,9 @@ func (r *unknownRowsRun) skipGroupEnvironment(group []unknownRowWork) {
 // file, and starting an ffprobe process to learn that is the cost this avoids; a
 // file whose size no longer matches the row is not the file the row describes,
 // so a duration measured from it (or a failure recorded against the row) would
-// be about other bytes.
+// be about other bytes; a path that is a directory or special file is left
+// alone and counted under its own reason (SkippedNotRegular). Both of those
+// decisions are unknownRowVerdict's, so the folder-books holds read them too.
 func (r *unknownRowsRun) probeGroup(ctx context.Context, group []unknownRowWork) error {
 	first := group[0]
 	path, pathErr := pathvalidation.CleanAbsolutePath(first.row.FilePath)
@@ -898,18 +999,25 @@ func (r *unknownRowsRun) probeGroup(ctx context.Context, group []unknownRowWork)
 		durLog.Debug("duration-backfill unknownRows: book %s file %s (+%d row(s) at the same path): file is absent; not probed",
 			logger.SanitizeLogValue(first.row.BookID), logger.SanitizeLogValue(first.row.ID), len(group)-1)
 		return nil
-	case statErr != nil || !fi.Mode().IsRegular():
-		msg := "not a regular file"
-		if statErr != nil {
-			msg = statErr.Error()
-		}
+	case statErr != nil:
 		r.skipGroupEnvironment(group)
 		if r.warns.allow() {
 			durLog.Warn("duration-backfill unknownRows: book %s file %s (+%d row(s) at the same path): file cannot be examined: %s; rows left unprobed",
-				logger.SanitizeLogValue(first.row.BookID), logger.SanitizeLogValue(first.row.ID), len(group)-1, logger.SanitizeLogValue(msg))
+				logger.SanitizeLogValue(first.row.BookID), logger.SanitizeLogValue(first.row.ID), len(group)-1, logger.SanitizeLogValue(statErr.Error()))
 		}
 		return nil
-	case unknownRowVerdict(first.row, fi.Size()) == unknownRowChanged:
+	}
+	// The shared verdict, now that the file has been looked at: a path that is
+	// not a regular file, or one whose size is no longer the row's.
+	switch unknownRowVerdict(first.row, &unknownRowDisk{Size: fi.Size(), Regular: fi.Mode().IsRegular()}) {
+	case unknownRowNotRegular:
+		r.ctr.notRegular.Add(int64(len(group)))
+		if r.warns.allow() {
+			durLog.Warn("duration-backfill unknownRows: book %s file %s (+%d row(s) at the same path): not a regular file; rows left unprobed",
+				logger.SanitizeLogValue(first.row.BookID), logger.SanitizeLogValue(first.row.ID), len(group)-1)
+		}
+		return nil
+	case unknownRowChanged:
 		r.ctr.changed.Add(int64(len(group)))
 		if r.warns.allow() {
 			durLog.Warn("duration-backfill unknownRows: book %s file %s (+%d row(s) at the same path): file is %d bytes on disk but the row records %d; not probed",
@@ -1001,10 +1109,10 @@ func finishUnknownRowsDryRun(reporter sdk.Reporter, res UnknownRowsResult, pass1
 
 func unknownRowsSummary(r UnknownRowsResult) string {
 	if r.DryRun {
-		return fmt.Sprintf("DRY RUN unknownRows: scanned=%d would-borrow=%d would-promote-from-fingerprint=%d would-probe=%d skipped-unreadable=%d skipped-no-path=%d skipped-user-excluded=%d skipped-missing=%d not-found=%d (ffprobe is not run in a dry run)",
-			r.Scanned, r.Borrowed, r.PromotedFromFingerprint, r.WouldProbe, r.SkippedUnreadable, r.SkippedNoPath, r.SkippedUserExcluded, r.SkippedMissing, r.NotFound)
+		return fmt.Sprintf("DRY RUN unknownRows: scanned=%d would-borrow=%d would-promote-from-fingerprint=%d would-probe=%d skipped-unreadable=%d skipped-no-path=%d skipped-user-excluded=%d skipped-bad-path=%d skipped-not-audio=%d skipped-missing=%d not-found=%d (ffprobe is not run in a dry run)",
+			r.Scanned, r.Borrowed, r.PromotedFromFingerprint, r.WouldProbe, r.SkippedUnreadable, r.SkippedNoPath, r.SkippedUserExcluded, r.SkippedBadPath, r.SkippedNotAudio, r.SkippedMissing, r.NotFound)
 	}
-	return fmt.Sprintf("unknownRows: scanned=%d borrowed=%d promoted_from_fingerprint=%d probed_known=%d probe_failed=%d environment_skipped=%d skipped_changed=%d skipped_unreadable=%d skipped_no_path=%d skipped_user_excluded=%d skipped_missing=%d not_found=%d write_errors=%d books_recomputed=%d",
+	return fmt.Sprintf("unknownRows: scanned=%d borrowed=%d promoted_from_fingerprint=%d probed_known=%d probe_failed=%d environment_skipped=%d skipped_changed=%d skipped_unreadable=%d skipped_no_path=%d skipped_user_excluded=%d skipped_bad_path=%d skipped_not_audio=%d skipped_not_regular=%d skipped_missing=%d not_found=%d write_errors=%d books_recomputed=%d",
 		r.Scanned, r.Borrowed, r.PromotedFromFingerprint, r.ProbedKnown, r.ProbeFailed, r.EnvironmentSkipped, r.SkippedChanged,
-		r.SkippedUnreadable, r.SkippedNoPath, r.SkippedUserExcluded, r.SkippedMissing, r.NotFound, r.WriteErrors, r.BooksRecomputed)
+		r.SkippedUnreadable, r.SkippedNoPath, r.SkippedUserExcluded, r.SkippedBadPath, r.SkippedNotAudio, r.SkippedNotRegular, r.SkippedMissing, r.NotFound, r.WriteErrors, r.BooksRecomputed)
 }

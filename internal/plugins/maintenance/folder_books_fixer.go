@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.26.0
+// version: 2.27.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-11-05
 
@@ -216,6 +216,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
@@ -239,13 +240,15 @@ const (
 	// fbSkipUnprobed: an orphan group has a file with no measured duration
 	// that no sibling row at its path could lend. Held INSTEAD of
 	// fbSkipFragmentary for that group: a group's length cannot be judged
-	// short while a member of it is unmeasured. The Backfill book durations
-	// op (mode unknownRows) clears it.
+	// short while a member of it is unmeasured. The hold's action starts the
+	// Backfill book durations op (mode unknownRows) on the files that op acts
+	// on; a file it declines stays named, with what settles it.
 	fbSkipUnprobed = "skipped_unprobed"
 	// fbSkipUnreadableAudio: an orphan group has a file whose duration probe
 	// ran and failed (not a timeout: a slow mount is not a bad file), so the
-	// file may be corrupt. Held instead of fbSkipFragmentary, and it wins over
-	// fbSkipUnprobed for a group with both kinds of member.
+	// file may be corrupt. Held instead of fbSkipFragmentary. Members are split
+	// by their own state, so a group with a failed file and a never-probed one
+	// carries BOTH holds (each over its own files).
 	fbSkipUnreadableAudio = "skipped_unreadable_audio"
 	fbSkipITunesID        = "skipped_itunes_id"
 	fbSkipProgress        = "skipped_listening_progress"
@@ -696,19 +699,60 @@ type fbUnknownFile struct {
 	state               database.BookFileDurationState
 	lastErr             string
 	// acts: the Backfill book durations op (mode unknownRows) acts on the row.
-	// When it does not, why says what settles it instead. Both come from
-	// unknownRowActionable, the rule the backfill itself runs, so an action
-	// built from the rows with acts set names nothing the run will decline.
+	// When it does not, why says what settles it instead. The row- and
+	// file-shaped reasons come from unknownRowActionable, the rule the backfill
+	// itself runs; the rest are the fixer failing closed on a file it could not
+	// look at (fbUnknownFileOf). An action built from the rows with acts set
+	// names nothing the run declines for a reason either can see.
 	acts bool
 	why  string
 }
 
-// fbUnknownFileOf describes the unknown row r; diskSize is the size of the file
-// at its path on disk (0 when not known).
-func fbUnknownFileOf(r database.BookFileCore, diskSize int64) fbUnknownFile {
-	acts, why := unknownRowActionable(r, diskSize)
+// fbFileLook is what buildRow saw of an orphan's file: its stat (disk, nil when
+// the stat failed or the row was not statted) and the stat's error.
+type fbFileLook struct {
+	disk    *unknownRowDisk
+	statErr error
+}
+
+// fbUnknownFileOf describes the unknown row r. look is what the stat of its file
+// showed; open is called, and only when everything else says the backfill would
+// act, to learn that the process can open the file: the backfill's probe skips
+// an unopenable file as an environment problem and records nothing, so a row it
+// cannot open would be offered forever. Open only, no read: nothing is decoded.
+// A row the backfill promotes from its fingerprint duration is exempt from the
+// stat and open checks: that pass never opens the file.
+func fbUnknownFileOf(r database.BookFileCore, look fbFileLook, open func(path string) error) fbUnknownFile {
+	acts, why := unknownRowActionable(r, look.disk)
+	switch {
+	case acts && unknownRowPromotable(r):
+		// Pass 1 promotes the fingerprint duration without touching the file, so
+		// neither the stat nor the open decides this row.
+	case acts && look.statErr != nil:
+		// Fail closed: with no stat the size and the file type are unknown too.
+		acts, why = false, fmt.Sprintf("the file could not be checked on disk (%v): the backfill is not offered it", look.statErr)
+	case acts:
+		if err := open(r.FilePath); err != nil {
+			acts, why = false, fmt.Sprintf("the file cannot be opened (%v): fix its permissions, then re-plan", err)
+		}
+	}
 	return fbUnknownFile{rowID: r.ID, bookID: r.BookID, path: r.FilePath,
 		state: r.DurationState(), lastErr: r.Scan.DurationOK.LastError, acts: acts, why: why}
+}
+
+// openable is fbUnknownFileOf's open check: the file at p opens for reading and
+// closes. The path goes through the same absolute-and-clean check the backfill
+// applies before it opens anything.
+func (f *folderBooksFixer) openable(p string) error {
+	clean, err := pathvalidation.CleanAbsolutePath(p)
+	if err != nil {
+		return err
+	}
+	fh, err := os.Open(clean)
+	if err != nil {
+		return err
+	}
+	return fh.Close()
 }
 
 // unreadable: a probe ran on the present file and failed, for a reason other
@@ -1905,9 +1949,8 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	type orphan struct {
 		row                 database.BookFileCore
 		key, lbl, dir, root string
-		// diskSize is the size of the file on disk, 0 when it was not statted
-		// (the unknownRows backfill declines a row whose size differs).
-		diskSize int64
+		// look is what the stat of the orphan's file showed (onDisk).
+		look fbFileLook
 	}
 	var orphans []orphan
 	var adoptCands []fbAdoptCand
@@ -1924,7 +1967,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		groupRoot := lib.groupRoot(p, lead.Shelf, lead.Root)
 		k, lbl, dir := fbGroupKey(p, groupRoot)
 		cls := "orphan"
-		var diskSize int64
+		var look fbFileLook
 		ownID := fbCreatedID(row.RowID, members[0], k)
 		for _, h := range lib.holders[p] {
 			if isMember[h] {
@@ -1998,8 +2041,11 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 				// either way).
 				src[p] = other
 			}
-			if present && fi != nil {
-				diskSize = fi.Size()
+			switch {
+			case err != nil:
+				look.statErr = err
+			case present && fi != nil:
+				look.disk = &unknownRowDisk{Size: fi.Size(), Regular: fi.Mode().IsRegular()}
 			}
 		}
 		// Only a present copy on the row's own folder-books can be stranded:
@@ -2046,7 +2092,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 			missingOrphans++
 			missingPaths = append(missingPaths, p)
 		default:
-			orphans = append(orphans, orphan{row: src[p], key: k, lbl: lbl, dir: dir, root: groupRoot, diskSize: diskSize})
+			orphans = append(orphans, orphan{row: src[p], key: k, lbl: lbl, dir: dir, root: groupRoot, look: look})
 		}
 		// held and held-by-folder fingerprint alike: a sibling row applying
 		// moves a path from one to the other without changing this row.
@@ -2099,7 +2145,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		if sec, ok := lib.rowDuration(o.row); ok {
 			g.Secs += sec
 		} else {
-			unknownIn[o.key] = append(unknownIn[o.key], fbUnknownFileOf(o.row, o.diskSize))
+			unknownIn[o.key] = append(unknownIn[o.key], fbUnknownFileOf(o.row, o.look, f.openable))
 		}
 	}
 	var fragmentary, split, outside, unclear []string
