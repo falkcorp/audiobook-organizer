@@ -70,10 +70,11 @@ func TestMergeAudioChangedResetsDurationOK(t *testing.T) {
 			if name == "scanner bare row" {
 				require.Equal(t, StageStatus{}, in.Scan.FPWindowed, "the windowed fingerprint is audio-derived and went with the audio")
 			} else {
-				// A caller that supplies the stage itself (here a copy of the stored
-				// one) has set it: an upsert restores what is missing, it does not
-				// second-guess what is present.
-				require.Equal(t, StageStatus{Done: true, Attempts: 1, LastError: "window"}, in.Scan.FPWindowed)
+				// A copy of the stored row carries the old file's fingerprint
+				// stage over; with the audio changed it is the old file's record,
+				// not a measurement of the replacement, and is dropped like the
+				// bare row's.
+				require.Equal(t, StageStatus{}, in.Scan.FPWindowed, "a carried-over audio stage is dropped")
 			}
 		})
 	}
@@ -140,4 +141,39 @@ func TestMergeReplaceModeDoesNotJudgeContent(t *testing.T) {
 	in := &BookFile{ID: "f1", BookID: "b1", FileHash: "hash-new"}
 	v := mergeBookFileFromStored(in, storedMeasuredRow(), bookFileWriteReplace, presenceNotScanned)
 	require.False(t, v.audioChanged)
+}
+
+// A fingerprint stage the caller supplies that DIFFERS from the stored one is the
+// caller's own record about the new audio and stays, even with the audio changed;
+// only a stage identical to the stored one is a carried-over copy.
+func TestMergeAudioChangedKeepsCallerOwnFingerprintStage(t *testing.T) {
+	own := StageStatus{Done: true}
+	in := &BookFile{ID: "f1", BookID: "b1", FileHash: "hash-new", Scan: ScanState{FPWindowed: own, FPFull: own}}
+	v := mergeScannerRow(in)
+	require.True(t, v.audioChanged)
+	require.Equal(t, own, in.Scan.FPWindowed)
+	require.Equal(t, own, in.Scan.FPFull, "the stored FPFull is zero, so a supplied one is the caller's own")
+}
+
+// N-e: a Done DurationOK beside no Duration is not a record of anything. It is
+// cleared whatever the write mode, symmetrically with a Duration forcing Done.
+func TestMergeNoDurationClearsDoneDurationStage(t *testing.T) {
+	for name, mode := range map[string]bookFileWriteMode{"upsert": bookFileWriteUpsert, "replace": bookFileWriteReplace} {
+		t.Run(name, func(t *testing.T) {
+			stored := storedMeasuredRow()
+			stored.Duration = nil // stored: Done with nothing measured
+			in := &BookFile{ID: "f1", BookID: "b1", FileHash: "hash-old", Scan: ScanState{DurationOK: StageStatus{Done: true}}}
+			mergeBookFileFromStored(in, stored, mode, presenceSeen)
+			require.Nil(t, in.Duration)
+			require.False(t, in.Scan.DurationOK.Done, "Done beside no Duration reads as measured")
+		})
+	}
+	t.Run("failure record is not touched", func(t *testing.T) {
+		stored := storedMeasuredRow()
+		stored.Duration = nil
+		want := StageStatus{Attempts: 2, LastError: "probe returned 0s"}
+		in := &BookFile{ID: "f1", BookID: "b1", FileHash: "hash-old", Scan: ScanState{DurationOK: want}}
+		mergeBookFileFromStored(in, stored, bookFileWriteUpsert, presenceSeen)
+		require.Equal(t, want, in.Scan.DurationOK)
+	})
 }

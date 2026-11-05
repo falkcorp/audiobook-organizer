@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_merge.go
 // version: 1.9.3
 // guid: 0f6bdcdf-d13a-46a8-90f7-5d62bbccd3a8
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package database
 
@@ -417,20 +417,22 @@ func mergeBookFileFromStored(incoming, stored *BookFile, mode bookFileWriteMode,
 		if v.audioChanged && incoming.Duration == nil && incomingScan.DurationOK.Done {
 			incomingScan.DurationOK = StageStatus{}
 		}
+		// The other audio-derived stages (the fingerprints) are dropped the same
+		// way when the caller merely carried the stored value over: a stage equal
+		// to the stored one, on a row whose audio changed, is a copy of the old
+		// file's record, not a measurement of the new one. (A stage that differs
+		// from the stored one is the caller's own and stays.) DurationOK is NOT
+		// treated this way: a failure record equal to the stored one is
+		// indistinguishable from a replacement that failed in exactly the same
+		// way, and a fresh failure must not be wiped (see restoreScanFields).
+		if v.audioChanged {
+			dropCarriedOverAudioStages(&incomingScan, &stored.Scan)
+		}
 		incoming.Scan = incomingScan
 		restoreScanFields(&incoming.Scan, &stored.Scan, v)
 	}
-	// A Duration and its stage record must agree. Known rows carry
-	// DurationOK{Done:true} and nothing else: attempts and an error beside a
-	// value would be a failure record for a probe that has since succeeded, and
-	// Done=false beside a value would read as "not measured". Both are
-	// reachable: an upsert that carries a Duration but no stage, and a row the
-	// scanner seeded with the stored failure, probed, and whose stored Duration
-	// the merge then kept because the audio did not change. The merge is the one
-	// place every write path passes, so it is where the pair is made consistent.
-	if incoming.Duration != nil {
-		incoming.Scan.DurationOK = StageStatus{Done: true}
-	}
+	// A Duration and its stage record must agree: see normalizeDurationStage.
+	normalizeDurationStage(incoming)
 	// The whole-file print and its encoding version are ONE unit: the version
 	// must describe the bytes actually written. Per-field preservation could
 	// pair restored stored bytes with the caller's version (or the caller's
@@ -509,6 +511,49 @@ func restoreScanFields(incoming, stored *ScanState, v bookFileContentVerdict) {
 		}
 		if f := in.Field(i); f.IsZero() {
 			f.Set(st.Field(i))
+		}
+	}
+}
+
+// normalizeDurationStage makes a row's Duration and its DurationOK record agree.
+// Known rows carry DurationOK{Done:true} and nothing else: attempts and an error
+// beside a value would be a failure record for a probe that has since succeeded.
+// A row with no Duration is not Done: Done beside nil would read as "measured"
+// with nothing measured (a Done record that survived from a row whose Duration
+// has since been dropped). Both are reachable: an upsert that carries a Duration
+// but no stage, a row the scanner seeded with the stored failure, probed, and
+// whose stored Duration the merge then kept because the audio did not change, and
+// a copy of a stored row whose Duration was cleared.
+//
+// It runs wherever a row is written: at the tail of the merge (every path that
+// merges with a stored row) and in the two create paths, which have nothing to
+// merge with. It must run after normalizeBookFileDuration, which can turn a
+// non-positive Duration into nil.
+func normalizeDurationStage(f *BookFile) {
+	if f == nil {
+		return
+	}
+	if f.Duration != nil {
+		f.Scan.DurationOK = StageStatus{Done: true}
+		return
+	}
+	f.Scan.DurationOK.Done = false
+}
+
+// dropCarriedOverAudioStages zeroes, in the Scan a caller supplied, each
+// audio-derived stage other than DurationOK that is identical to the stored
+// row's: on a row whose audio changed it describes the old file. Which stages
+// are audio-derived comes from scanStateFieldClasses.
+func dropCarriedOverAudioStages(incoming, stored *ScanState) {
+	in := reflect.ValueOf(incoming).Elem()
+	st := reflect.ValueOf(stored).Elem()
+	t := in.Type()
+	for i, derived := range scanStateDerivationByIndex {
+		if derived != derivedAudio || t.Field(i).Name == "DurationOK" {
+			continue
+		}
+		if f := in.Field(i); !f.IsZero() && f.Equal(st.Field(i)) {
+			f.SetZero()
 		}
 	}
 }

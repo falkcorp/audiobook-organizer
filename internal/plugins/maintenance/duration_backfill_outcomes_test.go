@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_outcomes_test.go
 // version: 1.0.1
 // guid: de2bb3ee-9054-4ce7-ba91-b3f361468064
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -305,4 +305,28 @@ func TestDurationReextract_UnreadableSegmentIsNotReprobed(t *testing.T) {
 	require.NoError(t, p.runDurationBackfill(context.Background(), applyReextractParams(t), &fakeReporter{}))
 	require.Equal(t, database.DeepScanMaxAttempts+1, runs(), "after ResetDuration the row is probed again")
 	require.Equal(t, 1, onlySegment(t, s, book.ID).Scan.DurationOK.Attempts)
+}
+
+// N-a: a ceiling reached through TIMEOUTS is not settled (a slow disk is not a
+// bad file), so the backfill probes the segment again, and a success measures it
+// and clears the record. Contrast TestDurationReextract_UnreadableSegmentIsNotReprobed,
+// where the ceiling came from real failures and the probe never runs.
+func TestDurationReextract_TimeoutUnreadableSegmentIsReprobed(t *testing.T) {
+	runs := countingStub(t, "echo 30.0") // plausible for the 480 kB fixture
+	s := newRepairPebble(t)
+	book, f := outcomesBook(t, s, "Year One", true)
+	_, err := s.ModifyBookFile(book.ID, f.ID, func(bf *database.BookFile) error {
+		bf.Scan.DurationOK = database.StageStatus{
+			Attempts: database.DeepScanMaxAttempts, LastError: database.DurationProbeTimeoutPrefix + "ffprobe: deadline exceeded"}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, database.DurationUnreadable, onlySegment(t, s, book.ID).DurationState())
+
+	p := New(fakeDeps{store: s})
+	require.NoError(t, p.runDurationBackfill(context.Background(), applyReextractParams(t), &fakeReporter{}))
+	require.Equal(t, 1, runs(), "a timeout-unreadable segment is probed again")
+	seg := onlySegment(t, s, book.ID)
+	require.Equal(t, 30, durtest.Sec(seg.Duration))
+	require.Equal(t, database.StageStatus{Done: true}, seg.Scan.DurationOK)
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
 // version: 2.11.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -257,9 +257,13 @@ func recordSegmentProbeFailures(ctx context.Context, store segmentFailureWriter,
 		f := failed[i]
 		lastErr := f.Scan.DurationOK.LastError
 		// A skipped callback returns the row as read with a nil error, so
-		// whether a write happened is the callback's to say.
+		// whether a write happened is the callback's to say. The callback may
+		// run more than once for one row (a retried read-modify-write), so each
+		// run starts from "not written" rather than inheriting an earlier run's
+		// verdict.
 		wrote := false
 		_, err := store.ModifyBookFileDeferAggregates(f.BookID, f.ID, func(cur *database.BookFile) error {
+			wrote = false
 			if cur.Duration != nil || cur.Missing || cur.FilePath != f.FilePath || cur.FileHash != f.FileHash {
 				return database.ErrSkipBookFileWrite
 			}
@@ -540,10 +544,13 @@ func processBookForReextractMode(
 				// durations measured by the scanner and can be trusted without ffprobe.
 				segDur = fSec
 				res.usedStoredDur = true
-			case f.DurationState() == database.DurationUnreadable:
+			case f.DurationState() == database.DurationUnreadable &&
+				!database.IsDurationTimeoutError(f.Scan.DurationOK.LastError):
 				// At the attempt ceiling: probing it again would only add attempts
 				// past the ceiling (and a stalled mount's worth of wall clock). It
-				// stays unreadable until an explicit ResetDuration. Unresolved, so
+				// stays unreadable until an explicit ResetDuration. A ceiling
+				// reached through TIMEOUTS is not settled (a slow disk is not a
+				// bad file) and falls through to be probed again. Unresolved, so
 				// the book's total is withheld exactly as for any unmeasured
 				// segment; it is not a new read failure, so nothing is recorded.
 				res.unresolved++

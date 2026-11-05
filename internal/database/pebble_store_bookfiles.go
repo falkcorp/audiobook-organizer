@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.52.7
+// version: 1.52.8
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package database
 
@@ -348,6 +348,7 @@ func (s *PebbleStore) createBookFileAttempt(file *BookFile) error {
 	// CONS-18: repair millisecond-valued durations at the write chokepoint so no
 	// ingest path can re-create the ms/seconds corruption (CONS-16).
 	normalizeBookFileDuration(file)
+	normalizeDurationStage(file) // a new row has nothing to merge with, so the pair is made consistent here
 
 	if file.ID == "" {
 		id, err := newULID()
@@ -514,6 +515,7 @@ func (s *PebbleStore) batchCreateBookFilesAttempt(files []*BookFile) (*stagedBoo
 		// CONS-18: repair millisecond-valued durations at the write chokepoint, as
 		// every other ingest path does.
 		normalizeBookFileDuration(file)
+		normalizeDurationStage(file)
 
 		if file.ID == "" {
 			id, err := newULID()
