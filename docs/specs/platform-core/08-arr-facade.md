@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/08-arr-facade.md -->
-<!-- version: 1.8.1 -->
+<!-- version: 1.8.2 -->
 <!-- guid: 6d9b089a-fb08-4087-9ccd-43b9aa4ec555 -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 08 — *arr-v3 facade: `core/arrfacade`
 
@@ -81,7 +81,7 @@ for the facade beyond key management (07), Sonarr/Radarr data import.
 | AF2 | Core owns the **wire DTOs** (camelCase, the foreign API's convention), written from the conformance fixtures when the facade is built (§8.6.2). Apps map domain → DTO. | One place to fix a field name for every app; conformance tests run against core types. |
 | AF3 | Core provides **default providers** for resources that are core data: system status, root folders (from `library`), indexers (instances in the one integration-instance store, written through `integrations.FacadeWriter`), commands (mapped to `tasks`). | Prowlarr push and most pickers then need zero app code. |
 | AF4 | Integer IDs: core provides a persistent **ID map** from `entity.Ref{Module, Kind, ID}` (03 §3.3) to stable `int32` (keyspace `c/arrfacade/<module>/ids/`). | v3 clients require numeric ids and store them; app IDs are opaque strings. |
-| AF5 | Auth is **API key only**, through the core API key store, with `PurposeFacade` keys bound to one module (05-authn §4.4, deferred-build member, §8.0) whose scopes are that module's `Confining` facade scopes (05-rbac). | Clients store one key forever; it must not be a general admin key. |
+| AF5 | Auth is **API key only**, through the core API key store, with `PurposeFacade` keys bound to one module (05-authn §4.4; a deferred-build member, 05-authn §3.5) whose scopes are that module's `Confining` facade scopes (05-rbac). | Clients store one key forever; it must not be a general admin key. |
 | AF6 | Mount at `<url_base>/api/v3` per module. Core **reserves** `/api/v3/` for facades; ABO's `/api/v3/ops` is deleted in R2's tasks flip (F5), when the Activity page moves to the core tasks API, so nothing else of ABO's sits under `/api/v3/`. | §8.4 |
 | AF7 | **No SignalR.** `/signalr/*` is not served. | §8.8.4 |
 
@@ -102,7 +102,7 @@ for the facade beyond key management (07), Sonarr/Radarr data import.
 * Rejected: letting `/api/v3/ops` and a facade share the prefix because no *arr resource is named
   `ops`. Two APIs with different auth, error shapes and permission models under one prefix is a
   standing trap for routing, logging and rate limiting.
-* Middleware: the facade is mounted on `httpapi.Router.FacadeGroup(owner, base)` (05-http-api §4.9, deferred-build member, §8.0) with the **same core chain** as native
+* Middleware: the facade is mounted on `httpapi.Router.FacadeGroup(owner, base)` (05-http-api §4.9; a deferred-build member, 05-http-api §3.6) with the **same core chain** as native
   routes (peer allow-list, recovery, security headers, rate limit, body limit, authenticate,
   authorize) but with facade key extraction (§8.5) instead of session cookies, and v3 error encoding.
 * Path matching: ASP.NET routing in the originals is case-insensitive and clients rely on it (Seerr
@@ -115,7 +115,7 @@ for the facade beyond key management (07), Sonarr/Radarr data import.
 * Key sources, in order: header `X-Api-Key`, query `apikey`, header `Authorization: Bearer <key>`
   (raw/16 §5.1: Seerr sends `apikey`, Prowlarr sends `X-Api-Key`, Bazarr sends `?apikey=`). Session
   cookies are ignored on facade paths. Query-string key extraction is enabled only on facade groups
-  (05-authn §4.2); like the purpose fields below, it is built with this package (§8.0).
+  (05-authn §4.2); like the purpose fields below, it is built with this package (05-authn §3.5).
 * **Facade keys are purpose-bound (SEC-5).** The key must be a core API key with
   `Purpose = PurposeFacade` and `Module = m` (05-authn §4.4, `KeySpec.Purpose`/`Module`, normative
   there), and every scope it holds must be one of `m:arr.read`, `m:arr.request`, `m:arr.indexers`. The
@@ -612,7 +612,7 @@ Apps run the same scenarios against their real provider: `arrfacadetest.Conforma
 
 Closed in 1.1.0: O9 (explicit facade purpose on keys): `KeySpec.Purpose = PurposeFacade` and
 `Module` are normative in 05-authn §4.4, as deferred-build members that land with this package
-(§8.0, SIMP2-6), and the refusal of facade keys off their group is owned by 05-rbac §4.10 and
+(05-authn §3.5, SIMP2-6), and the refusal of facade keys off their group is owned by 05-rbac §4.10 and
 05-http-api §4.2 stage 12 (SEC-5).
 
 ## Review history
@@ -671,3 +671,4 @@ Advisor (2026-11-04), resolutions applied to this file:
   collision rule names a module's mount prefix instead of a legacy prefix; stage references S0–S10, S2/S4
   re-keyed to R0–R3. Consistency pass: the design decisions are numbered AF1–AF7, so they no longer clash with R2's flip labels F3–F9, the `/api/v3/ops` deletion is placed in the tasks flip (F5), and the two foreign-API notes no longer say legacy.
 
+Round 14 (2026-11-05): V28 (the four dangling §8.0 citations in AF5, §8.4, §8.5 and O9 now point at 05-authn §3.5 and 05-http-api §3.6, the deferred-build member tables), V23 (checked: no round-13 ruling number is cited bare in normative text).
