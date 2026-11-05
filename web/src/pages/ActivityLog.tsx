@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.39.1
+// version: 2.40.0
 // guid:b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { describeRevertResult, describeUndoPreflight, isUndoRefused } from '../utils/revertResult';
 import { getUndoPreflight } from '../services/versionApi';
@@ -51,6 +51,7 @@ import DoneAllIcon from '@mui/icons-material/DoneAll';
 import FilterListIcon from '@mui/icons-material/FilterList';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import LinkIcon from '@mui/icons-material/Link';
 import { fetchActivity, fetchActivitySources, compactActivityLog } from '../services/activityApi';
 import CustomCompactDaysField from '../components/activity/CustomCompactDaysField';
 import type { ActivityEntry, SourceCount } from '../services/activityApi';
@@ -66,6 +67,13 @@ import { isInterrupted, isRetryable, isTerminal } from '../utils/operationPollin
 import { operationDisplayName } from '../components/layout/operationsFormat';
 import TrashCleanupResultPanel from '../components/operations/TrashCleanupResultPanel';
 import { isTrashCleanupDef } from '../utils/trashCleanupResult';
+import { useUrlStateSync } from '../hooks/useUrlState';
+import {
+  activityFiltersDiffer,
+  activityUrlOwned,
+  readActivityUrl,
+  type ActivityUrlState,
+} from './activityUrl';
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 250];
 
@@ -203,26 +211,30 @@ export default function ActivityLog() {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
-  // Filters
-  const [search, setSearch] = useState('');
-  const [tiers, setTiers] = useState<Set<string>>(new Set(['audit', 'change', 'digest', 'info']));
-  const [typeFilter, setTypeFilter] = useState('');
-  const [levelFilter, setLevelFilter] = useState('');
-  const [operationId, setOperationId] = useState('');
   // The feed is bounded to the last DEFAULT_SINCE_HOURS by default. Without a
   // window the page asked the server for ALL history on every load and on
   // every poll tick, which is what let one open tab drive an unbounded scan.
   // This is a VISIBLE default, not a silent cap: it is rendered in the "Since"
   // field, it can be edited, and clearing the field restores all-history.
   const [defaultSince] = useState(defaultSinceValue);
-  const [sinceFilter, setSinceFilter] = useState(defaultSince);
-  const [untilFilter, setUntilFilter] = useState('');
+  // What the address bar says on arrival (see activityUrl.ts). Read once: after
+  // this the page's state is the source of truth and mirrors itself back out.
+  const [urlSeed] = useState(() => readActivityUrl(searchParams, defaultSince));
+
+  // Filters
+  const [search, setSearch] = useState(urlSeed.search);
+  const [tiers, setTiers] = useState<Set<string>>(() => new Set(urlSeed.tiers));
+  const [typeFilter, setTypeFilter] = useState(urlSeed.typeFilter);
+  const [levelFilter, setLevelFilter] = useState(urlSeed.levelFilter);
+  const [operationId, setOperationId] = useState(urlSeed.operationId);
+  const [sinceFilter, setSinceFilter] = useState(urlSeed.sinceFilter);
+  const [untilFilter, setUntilFilter] = useState(urlSeed.untilFilter);
   const [excludedSources, setExcludedSources] = useState<Set<string>>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.ACTIVITY_SOURCE_PREFS);
     return saved ? new Set(JSON.parse(saved)) : new Set();
   });
-  const [hideNoOp, setHideNoOp] = useState(true);
-  const [tagFilter, setTagFilter] = useState<string[]>([]);
+  const [hideNoOp, setHideNoOp] = useState(urlSeed.hideNoOp);
+  const [tagFilter, setTagFilter] = useState<string[]>(() => [...urlSeed.tagFilter]);
 
   /** Toggle a single tag in the tag filter. Adds if absent, removes if present. */
   const toggleTagFilter = useCallback((tag: string) => {
@@ -268,7 +280,13 @@ export default function ActivityLog() {
   // and a discard is not a cancel.
   const [discarding, setDiscarding] = useState<Set<string>>(new Set());
   const [finishing, setFinishing] = useState<Set<string>>(new Set());
-  const [expandedOpId, setExpandedOpId] = useState<string | null>(searchParams.get('op'));
+  const [expandedOpId, setExpandedOpId] = useState<string | null>(urlSeed.op);
+  // The op a LINK asked for, until the user moves anything on the operations
+  // panel. While it is set the panel shows that op: its section open, the page
+  // of that section it is on, and its parents unfolded. It is state rather than
+  // a one-time effect because the op may not be in the list yet (the timeline
+  // loads after the page) and a link must work whenever it arrives.
+  const [revealOpId, setRevealOpId] = useState<string | null>(urlSeed.op);
   // pausedByExpand: true when auto-refresh was auto-paused because a row is
   // expanded. Cleared when the row collapses or the user clicks "Follow log".
   const pausedByExpandRef = useRef(false);
@@ -322,8 +340,8 @@ export default function ActivityLog() {
   // The last feed answer was cut off by the server's scan budget: older
   // matches were not searched, so "no more results" is not a fact.
   const [partial, setPartial] = useState(false);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [page, setPage] = useState(urlSeed.page);
+  const [pageSize, setPageSize] = useState(urlSeed.pageSize);
   const [loading, setLoading] = useState(false);
   // Silent background refresh — updates data without destroying the table DOM
   const [refreshing, setRefreshing] = useState(false);
@@ -782,9 +800,19 @@ export default function ActivityLog() {
   // filter or pageSize changes, so one effect keyed on (loadFeed, page)
   // covers both cases with exactly one fetch.
   const prevLoadFeedRef = useRef<typeof loadFeed | null>(null);
+  // Set when the ADDRESS BAR changed the filters (a pasted link, back/forward):
+  // the URL carries its own page, so the "a filter changed, go to page 1" rule
+  // below must not erase it. Consumed by the one effect run that the new
+  // filters cause.
+  const urlNavRef = useRef(false);
   useEffect(() => {
     const filtersChanged = prevLoadFeedRef.current !== null && prevLoadFeedRef.current !== loadFeed;
     prevLoadFeedRef.current = loadFeed;
+    if (filtersChanged && urlNavRef.current) {
+      urlNavRef.current = false;
+      loadFeed(page);
+      return;
+    }
     if (filtersChanged && page !== 1) {
       // Changing a filter resets to page 1. Fetch nothing now: setPage re-runs
       // this effect, and fetching the old page here would be a second query
@@ -795,6 +823,52 @@ export default function ActivityLog() {
     }
     loadFeed(page);
   }, [loadFeed, page]);
+
+  // ---- the address bar ------------------------------------------------------
+  // Mirrors the feed's filters, its page and the open operation into the query
+  // string (see activityUrl.ts for the parameters), so the view on screen can be
+  // copied. Defaults are omitted, `replace` keeps history clean, and a URL change
+  // this page did not write is applied back to state below.
+  const urlState: ActivityUrlState = {
+    op: expandedOpId,
+    search,
+    tiers,
+    typeFilter,
+    levelFilter,
+    operationId,
+    sinceFilter,
+    untilFilter,
+    hideNoOp,
+    tagFilter,
+    page,
+    pageSize,
+  };
+  const urlStateRef = useRef(urlState);
+  useEffect(() => {
+    urlStateRef.current = urlState;
+  });
+  useUrlStateSync(activityUrlOwned(urlState, defaultSince), {
+    onExternalChange: (params) => {
+      const next = readActivityUrl(params, defaultSince);
+      const cur = urlStateRef.current;
+      if (activityFiltersDiffer(cur, next)) {
+        urlNavRef.current = true;
+        setSearch(next.search);
+        setTiers(new Set(next.tiers));
+        setTypeFilter(next.typeFilter);
+        setLevelFilter(next.levelFilter);
+        setOperationId(next.operationId);
+        setSinceFilter(next.sinceFilter);
+        setUntilFilter(next.untilFilter);
+        setHideNoOp(next.hideNoOp);
+        setTagFilter([...next.tagFilter]);
+        setPageSize(next.pageSize);
+      }
+      setPage(next.page);
+      setExpandedOpId(next.op);
+      setRevealOpId(next.op);
+    },
+  });
 
   // Auto-refresh feed — 5s when active ops exist, 30s when idle.
   // Uses silent=true so the table stays in the DOM and scroll position is preserved.
@@ -995,6 +1069,17 @@ export default function ActivityLog() {
       await navigator.clipboard.writeText(lines.join('\n'));
     } catch (err) {
       console.error('Failed to copy op summary', err);
+    }
+  };
+
+  // A link that opens this operation's log panel, on this page.
+  const handleCopyOpLink = async (opId: string) => {
+    const url = `${window.location.origin}/activity?op=${encodeURIComponent(opId)}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setToast('Link copied');
+    } catch (err) {
+      console.error('Failed to copy op link', err);
     }
   };
 
@@ -1872,6 +1957,7 @@ export default function ActivityLog() {
                 variant="text"
                 onClick={() => {
                   // Roll up every section, and every parent that has children.
+                  setRevealOpId(null);
                   setCollapsedSections(new Set(OPS_SECTION_KEYS));
                   setCollapsedParents(
                     new Set(
@@ -1888,6 +1974,7 @@ export default function ActivityLog() {
                 size="small"
                 variant="text"
                 onClick={() => {
+                  setRevealOpId(null);
                   setCollapsedSections(new Set());
                   setCollapsedParents(new Set());
                 }}
@@ -1939,6 +2026,17 @@ export default function ActivityLog() {
                 // Create a map for quick parent lookup
                 const opsById = Object.fromEntries(opRows.map((op) => [op.id, op]));
 
+                // The parents above a linked op (?op=): folded groups on that
+                // path are shown open while the link's op is being revealed.
+                const revealPath = new Set<string>();
+                for (
+                  let up = revealOpId ? opsById[revealOpId] : undefined;
+                  up?.parent_id && opsById[up.parent_id] && !revealPath.has(up.parent_id);
+                  up = opsById[up.parent_id]
+                ) {
+                  revealPath.add(up.parent_id);
+                }
+
                 // Count children per parent
                 const childrenCount: Record<string, number> = {};
                 for (const op of opRows) {
@@ -1965,7 +2063,7 @@ export default function ActivityLog() {
                   let current = op;
                   while (current.parent_id && opsById[current.parent_id]) {
                     const parentId = current.parent_id;
-                    if (collapsedParents.has(parentId)) return true;
+                    if (collapsedParents.has(parentId) && !revealPath.has(parentId)) return true;
                     current = opsById[parentId];
                   }
                   return false;
@@ -2127,13 +2225,15 @@ export default function ActivityLog() {
                   // Everything keyed on the id is suppressed below, and the row
                   // click toggles the group instead of expanding a log panel.
                   const group = op.group;
-                  const toggleCollapsed = () =>
+                  const toggleCollapsed = () => {
+                    setRevealOpId(null);
                     setCollapsedParents((prev) => {
                       const next = new Set(prev);
                       if (next.has(op.id)) next.delete(op.id);
                       else next.add(op.id);
                       return next;
                     });
+                  };
 
                   return (
                     <Paper
@@ -2164,7 +2264,8 @@ export default function ActivityLog() {
                       onClick={() =>
                         group
                           ? toggleCollapsed()
-                          : setExpandedOpId(expandedOpId === op.id ? null : op.id)
+                          : (setRevealOpId(null),
+                            setExpandedOpId(expandedOpId === op.id ? null : op.id))
                       }
                     >
                       <Stack
@@ -2336,6 +2437,20 @@ export default function ActivityLog() {
                                 disabled={discarding.has(op.id)}
                               >
                                 <DeleteSweepIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          {!group && (
+                            <Tooltip title="Copy link to this operation">
+                              <IconButton
+                                size="small"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleCopyOpLink(op.id);
+                                }}
+                                aria-label="Copy link"
+                              >
+                                <LinkIcon fontSize="small" />
                               </IconButton>
                             </Tooltip>
                           )}
@@ -2544,10 +2659,18 @@ export default function ActivityLog() {
                 return sections
                   .filter((s) => s.ops.length > 0)
                   .map((section) => {
-                    const sectionCollapsed = collapsedSections.has(section.key);
+                    // The section holding the op a link named is shown open, on the
+                    // page that has it, until the user touches the panel.
+                    const revealAt = revealOpId
+                      ? section.ops.findIndex((o) => o.id === revealOpId)
+                      : -1;
+                    const sectionCollapsed = revealAt < 0 && collapsedSections.has(section.key);
                     const totalPages = Math.ceil(section.ops.length / OPS_SECTION_PAGE_SIZE);
                     // Clamp here rather than in the setter — see sectionPages.
-                    const page = Math.min(sectionPages[section.key] ?? 1, totalPages);
+                    const page =
+                      revealAt >= 0
+                        ? Math.floor(revealAt / OPS_SECTION_PAGE_SIZE) + 1
+                        : Math.min(sectionPages[section.key] ?? 1, totalPages);
                     const start = (page - 1) * OPS_SECTION_PAGE_SIZE;
                     const pageOps = section.ops.slice(start, start + OPS_SECTION_PAGE_SIZE);
                     return (
@@ -2555,13 +2678,18 @@ export default function ActivityLog() {
                         <Stack
                           direction="row"
                           spacing={0.5}
-                          onClick={() =>
+                          onClick={() => {
+                            // A revealed section was shown open without being in
+                            // collapsedSections; settle that before toggling.
+                            const wasOpen = !sectionCollapsed;
+                            setRevealOpId(null);
                             setCollapsedSections((prev) => {
                               const next = new Set(prev);
-                              if (!next.delete(section.key)) next.add(section.key);
+                              if (wasOpen) next.add(section.key);
+                              else next.delete(section.key);
                               return next;
-                            })
-                          }
+                            });
+                          }}
                           sx={{
                             alignItems: 'center',
                             cursor: 'pointer',
@@ -2600,9 +2728,10 @@ export default function ActivityLog() {
                               <Pagination
                                 count={totalPages}
                                 page={page}
-                                onChange={(_, p) =>
-                                  setSectionPages((prev) => ({ ...prev, [section.key]: p }))
-                                }
+                                onChange={(_, p) => {
+                                  setRevealOpId(null);
+                                  setSectionPages((prev) => ({ ...prev, [section.key]: p }));
+                                }}
                                 color="primary"
                                 size="small"
                               />
