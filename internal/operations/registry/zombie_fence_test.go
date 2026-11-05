@@ -1,7 +1,7 @@
 // file: internal/operations/registry/zombie_fence_test.go
-// version: 1.5.4
+// version: 1.5.5
 // guid: 2bc00ec8-5dde-4047-bac7-1fe9b4d5ba53
-// last-edited: 2026-10-20
+// last-edited: 2026-11-04
 
 package registry_test
 
@@ -720,6 +720,13 @@ type fenceProbeRun struct {
 	fence     chan opswriter.Fence
 	atDone    chan fenceAtDone
 	waitFence bool // return once the fence is revoked, not on ctx.Done
+
+	// Snapshot taken on entry to run, before the fence is handed over (the
+	// channel send publishes it to the receiver). A test goroutine reading the
+	// fence after the handoff reads a later state: under load a short def
+	// Timeout can fire in between.
+	entryRevoked bool  // Fence.Revoked() on entry
+	entryCtxErr  error // ctx.Err() on entry, read AFTER entryRevoked
 }
 
 // fenceAtDone is the fence as the run saw it when it observed the stop.
@@ -734,6 +741,11 @@ func newFenceProbe() *fenceProbeRun {
 
 func (p *fenceProbeRun) run(ctx context.Context, _ json.RawMessage, _ registry.Reporter) error {
 	f := opswriter.FenceFromContext(ctx)
+	// Order matters: on the paths no code of ours initiates (timeout, parent
+	// ctx) the revoke follows the cancel, so a revoke seen here implies ctx is
+	// already done by the time ctx.Err() is read next.
+	p.entryRevoked = f.Revoked()
+	p.entryCtxErr = ctx.Err()
 	p.fence <- f
 	if p.waitFence {
 		for !f.Revoked() {
@@ -766,6 +778,12 @@ func TestFence_RevokedOnEveryStopPath(t *testing.T) {
 		// context. (The deterministic revoke-before-cancel check is
 		// TestCancelPaths_RevokeBeforeCancel in fence_internal_test.go.)
 		ordered bool
+		// deadline: the stop is a clock expiry, not an event the test fires,
+		// so "the fence is fresh" cannot be asserted from the test goroutine
+		// (the expiry may already have happened by then). It is asserted on
+		// the run's entry snapshot instead: the fence may be revoked on entry
+		// only if the run context was already done.
+		deadline bool
 	}
 	cases := []stopCase{
 		{name: "user cancel", ordered: true,
@@ -774,7 +792,7 @@ func TestFence_RevokedOnEveryStopPath(t *testing.T) {
 					t.Fatal(err)
 				}
 			}},
-		{name: "timeout", ordered: false,
+		{name: "timeout", ordered: false, deadline: true,
 			prep: func(d *registry.OperationDef, _ *fenceProbeRun) { d.Timeout = 20 * time.Millisecond },
 			stop: func(*testing.T, *zombieHarness, string) {}},
 		{name: "watchdog kill", ordered: true,
@@ -835,7 +853,20 @@ func TestFence_RevokedOnEveryStopPath(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("run did not start")
 			}
-			if fence.Revoked() || fence.Epoch() == 0 {
+			if tc.deadline {
+				// The expiry runs on the wall clock (context.WithTimeout), so a
+				// loaded machine can fire it before this goroutine is scheduled.
+				// Judge freshness at the instant the run started instead.
+				if p.entryRevoked && p.entryCtxErr == nil {
+					t.Fatalf("fence revoked on run entry while the run context was still live (epoch=%d)", fence.Epoch())
+				}
+				if p.entryCtxErr != nil {
+					t.Logf("deadline expired before the run started (%v); freshness check vacuous this iteration", p.entryCtxErr)
+				}
+				if fence.Epoch() == 0 {
+					t.Fatalf("fresh fence: epoch=0, want an epoch")
+				}
+			} else if fence.Revoked() || fence.Epoch() == 0 {
 				t.Fatalf("fresh fence: revoked=%v epoch=%d, want valid with an epoch", fence.Revoked(), fence.Epoch())
 			}
 			tc.stop(t, h, id)
