@@ -3,9 +3,9 @@ name: server-bootstrap
 description: Initialize server authentication and retrieve API key. SSH to the audiobook-organizer server, restart the service, read the bootstrap token from the .bootstrap-token file (no longer logged in plaintext — pen-test CRIT-1), exchange it for an API key via POST /api/v1/auth/bootstrap, and write the key to .claude/.api-token (shared across worktrees, auto-cleanup after 8 hours). Use when starting fresh or when the API key has expired.
 ---
 <!-- file: .claude/skills/server-bootstrap/SKILL.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: c84a3747-3844-4bce-bf01-ed434f6d1bd2 -->
-<!-- last-edited: 2026-10-21 -->
+<!-- last-edited: 2026-11-05 -->
 
 # Server Bootstrap
 
@@ -150,6 +150,11 @@ owner does it from the web UI while signed in. A key the bootstrap key creates
 can't outlive it, so it also expires within 8 hours. To replace a key, create a
 new one with `POST /api/v1/auth/api-keys` and revoke the old one with
 `DELETE /api/v1/auth/api-keys/:id`; `POST .../:id/rotate` answers 410.
+
+A key that creates a key must name the new key's scopes in the request body
+(for example `"scopes": ["library.view"]`), and they must be a subset of the
+calling key's own. A request with no `scopes`, or an empty list, answers 403
+("an API key must name the scopes of the key it creates") since R0-02.
 
 See [references/bootstrap-api.md](references/bootstrap-api.md) for full API details.
 

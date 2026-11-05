@@ -58,7 +58,12 @@
    "internal/server/handlers/apikeys_earlyfix_test.go",
    "internal/server/middleware/auth.go",
    "internal/server/middleware/absauth.go",
-   "internal/server/middleware/auth_revoked_test.go"
+   "internal/server/middleware/auth_revoked_test.go",
+   "internal/server/handlers/apikeys_expiry_test.go",
+   "internal/server/credential_routes_test.go",
+   "internal/server/wire_apikeys_gone_test.go",
+   ".claude/skills/server-bootstrap/SKILL.md",
+   "docs/agent-tasks/platform-core/seams.d/R0-02.md"
   ],
   "spec": "05-authn §11.1 items 2, 3, 6 and its test table; 09 §9.4 R0 Content (1), Verification; 09 §9.1 (live defects)",
   "notes": "Tier: fix 6 is a lock-scope race on every key-authenticated request, plus two authz rules. Fix 6 is a lock-scope race on every key-authenticated request. Each fix checks off its todo.d/TODO.md SECURITY entry (05-authn §11.1). Owns gate tests: TestLegacyAPIKeyCreate_EmptyEffectiveKeyCannotMint; TestLegacyAPIKey_RevokedNotReactivated (in internal/server/handlers/apikeys_earlyfix_test.go); TestLegacyRevokeRacesTouch_NeverUnrevokes."

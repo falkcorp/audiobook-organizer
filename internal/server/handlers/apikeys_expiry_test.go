@@ -1,7 +1,7 @@
 // file: internal/server/handlers/apikeys_expiry_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4c8e2a17-9b3d-4f61-8a05-d7e2c9b14f38
-// last-edited: 2026-10-18
+// last-edited: 2026-11-05
 
 package handlers_test
 
@@ -95,7 +95,7 @@ func TestAPIKeyCreate_ByAPIKeyClampedToCallingKey(t *testing.T) {
 
 	callerExp := time.Now().Add(8 * time.Hour)
 	callingKey := &database.APIKey{ID: "boot", UserID: "admin-1", ExpiresAt: &callerExp}
-	c, w := newAuthCtx("POST", "/auth/api-keys", map[string]any{"name": "child", "expires_in_days": 365})
+	c, w := newAuthCtx("POST", "/auth/api-keys", map[string]any{"name": "child", "expires_in_days": 365, "scopes": []string{string(auth.PermLibraryView)}})
 	asCaller(c, &database.User{ID: "admin-1"}, auth.MethodAPIKey, callingKey, auth.All()...)
 	handlers.NewAPIKeyHandler(store).Create(c)
 

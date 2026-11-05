@@ -1,7 +1,7 @@
 // file: internal/server/credential_routes_test.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 6d2f9a40-3b75-4e18-9c6a-8f1e0b4d27c3
-// last-edited: 2026-10-28
+// last-edited: 2026-11-05
 
 // Route-table coverage for the credential guard (2026-10-07 security review,
 // "sibling-path gate parity"): every state-changing route in the real router
@@ -231,6 +231,6 @@ func TestCredentialRoutes_CreateKeyCaseVariantUserIDRefused(t *testing.T) {
 		})
 	}
 	// A key may still create a key for its own user.
-	w := f.do(t, f.apiKey, http.MethodPost, "/api/v1/auth/api-keys", map[string]any{"name": "mine"})
+	w := f.do(t, f.apiKey, http.MethodPost, "/api/v1/auth/api-keys", map[string]any{"name": "mine", "scopes": []string{"library.view"}})
 	assert.Equal(t, http.StatusCreated, w.Code, w.Body.String())
 }
