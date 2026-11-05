@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
 // last-edited: 2026-11-05
 
@@ -148,9 +148,84 @@ func (p *Plugin) runRepairsPlan(ctx context.Context, raw json.RawMessage, report
 		}
 		return fmt.Errorf("%s: plan not persisted: %w", repairs.PlanOpID, err)
 	}
+	// The plan is complete (rows and summary stored): it is now the fixer's
+	// newest GOOD trial, which the lane falls back to if a later trial fails or
+	// is dropped. A refresh an apply started also retires the refresh it
+	// replaces, whose rows would otherwise stay in the store for good.
+	p.recordCompletedPlan(f.ID(), opID, params, rows, reporter)
 	_ = reporter.UpdateProgress(res.Total, res.Total, fmt.Sprintf("PLANNED %s — rows=%d applicable=%d skipped=%v",
 		f.ID(), res.Total, res.Applicable, res.SkippedByKind))
 	return nil
+}
+
+// recordCompletedPlan points the fixer's completed-plan pointer at planOpID and
+// prunes the rows of the completed plan it replaced if that one was a refresh an
+// apply started (pruneSupersededRefresh). The new plan may be another refresh or
+// the reviewer's own trial: either way the old refresh is superseded.
+// Best effort throughout: the plan is stored and complete either way.
+func (p *Plugin) recordCompletedPlan(fixerID, planOpID string, params repairs.PlanParams, rows database.OpRowStore, reporter sdk.Reporter) {
+	rec, ok := p.deps.OperationQueueStore().(repairs.LastRunRecorder)
+	if !ok {
+		reporter.Logger().Warn("repairs.plan: operation store cannot record the last completed plan", "fixer", fixerID, "plan_op_id", planOpID)
+		return
+	}
+	key := repairs.LastCompletedPlanKey(fixerID)
+	prev := ""
+	if st, err := rec.GetSetting(key); err == nil && st != nil {
+		prev = st.Value
+	}
+	if err := rec.SetSetting(key, planOpID, "string", false); err != nil {
+		reporter.Logger().Warn("repairs.plan: last completed plan pointer not recorded", "fixer", fixerID, "plan_op_id", planOpID, "err", err)
+		return
+	}
+	if prev == "" || prev == planOpID {
+		return
+	}
+	p.pruneSupersededRefresh(fixerID, prev, params, rows, reporter)
+}
+
+// pruneSupersededRefresh deletes the stored rows of prevID, the completed plan
+// the fixer's pointer named before the refresh now finishing. Every apply that
+// writes stores a full plan row set that nothing else ever prunes, so without
+// this each owner click leaves one behind.
+//
+// Only a plan that was itself an apply's refresh of the same fixer and params as
+// the plan now finishing is deleted: never a trial the reviewer started (it has
+// no after_apply_op_id), never a plan of other params, and never the plan the
+// pointer names (the caller moved it to the new plan first).
+// A plan an apply is still running from is left, so that apply does not lose its
+// rows mid-run; an older tab applying from a pruned plan gets ErrPlanPruned.
+func (p *Plugin) pruneSupersededRefresh(fixerID, prevID string, newParams repairs.PlanParams, rows database.OpRowStore, reporter sdk.Reporter) {
+	queue := p.deps.OperationQueueStore()
+	reader, ok := queue.(repairs.OpReader)
+	if !ok {
+		return
+	}
+	row, err := reader.GetOperationV2(prevID)
+	if err != nil || row == nil || row.DefID != repairs.PlanOpID {
+		return
+	}
+	var prev repairs.PlanParams
+	if json.Unmarshal([]byte(row.Params), &prev) != nil ||
+		prev.FixerID != fixerID || prev.AfterApplyOpID == "" || !sameRawParams(prev.Params, newParams.Params) {
+		return
+	}
+	active, err := queue.ListActiveOperationsV2()
+	if err != nil {
+		reporter.Logger().Warn("repairs.plan: superseded refresh not pruned (active operations unreadable)", "plan_op_id", prevID, "err", err)
+		return
+	}
+	for _, op := range active {
+		var ap repairs.ApplyParams
+		if op.DefID == repairs.ApplyOpID && json.Unmarshal([]byte(op.Params), &ap) == nil && ap.PlanOpID == prevID {
+			return
+		}
+	}
+	if err := repairs.PrunePlan(rows, prevID); err != nil {
+		reporter.Logger().Warn("repairs.plan: superseded refresh not pruned", "plan_op_id", prevID, "err", err)
+		return
+	}
+	reporter.Logger().Info("repairs.plan: pruned the rows of the refresh this one replaced", "fixer", fixerID, "plan_op_id", prevID)
 }
 
 // repairsGuardTags is the tag reader the framework guard reads franchise
@@ -336,6 +411,21 @@ func (p *Plugin) replanAfterApply(ctx context.Context, f repairs.Fixer, plan *re
 		reporter.Logger().Warn("repairs.apply: operation store cannot record the last plan; GET /repairs keeps the old one",
 			"fixer", f.ID(), "plan_op_id", planID)
 		return
+	}
+	// Unless the reviewer has since started a trial with other params: that one
+	// is the newest and the refresh must not hide it. (Its rows stay readable:
+	// the lane shows the completed-plan pointer, which only a finished plan moves.)
+	if cur, err := rec.GetSetting(repairs.LastPlanKey(f.ID())); err == nil && cur != nil && cur.Value != "" {
+		if reader, ok := p.deps.OperationQueueStore().(repairs.OpReader); ok {
+			if row, err := reader.GetOperationV2(cur.Value); err == nil && row != nil {
+				var q repairs.PlanParams
+				if json.Unmarshal([]byte(row.Params), &q) == nil && !sameRawParams(q.Params, plan.Params) {
+					reporter.Logger().Info("repairs.apply: a newer trial with other params is the fixer's last plan; its pointer is left",
+						"fixer", f.ID(), "last_plan_op_id", cur.Value, "refresh_op_id", planID)
+					return
+				}
+			}
+		}
 	}
 	if err := rec.SetSetting(repairs.LastPlanKey(f.ID()), planID, "string", false); err != nil {
 		reporter.Logger().Warn("repairs.apply: last plan pointer not recorded",

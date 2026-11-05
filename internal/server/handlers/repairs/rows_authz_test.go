@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/rows_authz_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b7e2d94-c1a8-4f63-9e0b-3d6a8f1c4e27
-// last-edited: 2026-10-24
+// last-edited: 2026-11-05
 
 package repairs
 
@@ -30,6 +30,9 @@ func rowsAuthzServer(t *testing.T, user *database.User, perms ...auth.Permission
 	ops := newFakeOps(map[string]string{
 		"repairs_last_plan_op:plain":  "op-plain-plan",
 		"repairs_last_plan_op:scoped": "op-scoped-plan",
+		// The completed-plan pointers carry the same op ids and are held back the same way.
+		"repairs_last_completed_plan_op:plain":  "op-plain-plan",
+		"repairs_last_completed_plan_op:scoped": "op-scoped-plan",
 	})
 	ops.addPlan(t, "op-plain-plan", "plain", time.Time{}, planRows(3))
 	ops.addPlan(t, "op-scoped-plan", "scoped", time.Time{}, planRows(3))
@@ -80,9 +83,11 @@ func TestListPlanRows_ViewerIsRefusedAndListFixersHidesLastRuns(t *testing.T) {
 	require.NotContains(t, w.Body.String(), "op-plain-plan")
 	require.NotContains(t, w.Body.String(), "op-scoped-plan")
 	require.NotContains(t, w.Body.String(), "last_plan")
+	require.NotContains(t, w.Body.String(), "last_completed_plan")
 	for id, f := range listFixers(t, r) {
 		require.False(t, f.Permitted, id)
 		require.Nil(t, f.LastPlan, id)
+		require.Nil(t, f.LastCompletedPlan, id)
 		require.Nil(t, f.LastApply, id)
 	}
 }
@@ -107,8 +112,11 @@ func TestListPlanRows_EditorSeesOnlyTheFixersItMayUse(t *testing.T) {
 	require.NotNil(t, got["plain"].LastPlan)
 	require.Equal(t, "op-plain-plan", got["plain"].LastPlan.OperationID)
 	require.Equal(t, 3, *got["plain"].LastPlan.Total)
+	require.NotNil(t, got["plain"].LastCompletedPlan)
+	require.Equal(t, "op-plain-plan", got["plain"].LastCompletedPlan.OperationID)
 	require.False(t, got["scoped"].Permitted)
 	require.Nil(t, got["scoped"].LastPlan)
+	require.Nil(t, got["scoped"].LastCompletedPlan)
 	require.Nil(t, got["scoped"].LastApply)
 	w = do(r, http.MethodGet, "/repairs", "")
 	require.NotContains(t, w.Body.String(), "op-scoped-plan")
@@ -129,6 +137,7 @@ func TestListPlanRows_AdminStillGetsEverything(t *testing.T) {
 	for id, f := range listFixers(t, r) {
 		require.True(t, f.Permitted, id)
 		require.NotNil(t, f.LastPlan, id)
+		require.NotNil(t, f.LastCompletedPlan, id)
 	}
 }
 

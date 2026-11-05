@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/handler_test.go
-// version: 1.8.2
+// version: 1.10.0
 // guid: 8e3f6b21-7c94-4a0d-9b52-2d1a8e5c7f36
-// last-edited: 2026-10-28
+// last-edited: 2026-11-05
 
 package repairs
 
@@ -257,6 +257,49 @@ func TestListFixers_WithLastPlanSummary(t *testing.T) {
 	require.Nil(t, vg.LastApply)
 }
 
+// last_plan moves when a plan is ENQUEUED, so a refresh an apply started (and a
+// failed or dropped one) hides the trial the reviewer was working from;
+// last_completed_plan, moved by the plan op when it has stored all its rows,
+// still names it. after_apply says which plans the server started itself.
+func TestListFixers_LastCompletedPlanSurvivesANewerQueuedRefresh(t *testing.T) {
+	r, _, ops := setup(t)
+	ops.settings["repairs_last_plan_op:version-group-primary-repair"] = "op-refresh"
+	ops.settings["repairs_last_completed_plan_op:version-group-primary-repair"] = "op-plan"
+	ops.rows["op-refresh"] = &database.OperationV2Row{ID: "op-refresh", DefID: repairs.PlanOpID, Status: "queued",
+		QueuedAt: time.Date(2026, 9, 27, 13, 0, 0, 0, time.UTC),
+		Params:   `{"fixer_id":"version-group-primary-repair","after_apply_op_id":"op-apply-1"}`}
+
+	w := do(r, http.MethodGet, "/api/v1/repairs", "")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	got := data[struct {
+		Fixers []FixerInfo `json:"fixers"`
+	}](t, w)
+	vg := got.Fixers[1]
+	require.Equal(t, "version-group-primary-repair", vg.ID)
+	require.Equal(t, "op-refresh", vg.LastPlan.OperationID, "the newest plan is the queued refresh")
+	require.True(t, vg.LastPlan.AfterApply)
+	require.Nil(t, vg.LastPlan.Total, "it has no summary yet")
+	require.NotNil(t, vg.LastCompletedPlan)
+	require.Equal(t, "op-plan", vg.LastCompletedPlan.OperationID, "the trial the reviewer was reading")
+	require.Equal(t, "completed", vg.LastCompletedPlan.Status)
+	require.False(t, vg.LastCompletedPlan.AfterApply, "a plan the reviewer asked for")
+	require.Equal(t, 10, *vg.LastCompletedPlan.Total)
+
+	// A fixer whose completed pointer was never written lists none, and the key
+	// is left off the wire rather than sent null.
+	other := got.Fixers[0]
+	require.Equal(t, "other", other.ID)
+	require.Nil(t, other.LastCompletedPlan)
+	var raw struct {
+		Data struct {
+			Fixers []map[string]json.RawMessage `json:"fixers"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	require.NotContains(t, raw.Data.Fixers[0], "last_completed_plan")
+	require.Contains(t, raw.Data.Fixers[1], "last_completed_plan")
+}
+
 func TestEnqueue_RecordsLastRunAndReportsDedupe(t *testing.T) {
 	r, enq, ops := setup(t)
 	w := do(r, http.MethodPost, "/api/v1/repairs/version-group-primary-repair/apply",
@@ -345,6 +388,26 @@ func TestPlanStoredTheOldWayIsAConflict(t *testing.T) {
 	w = do(r, http.MethodPost, "/api/v1/repairs/version-group-primary-repair/apply", `{"plan_op_id":"op-legacy","row_ids":["r"]}`)
 	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), `"code":"`+PlanNeedsRerunCode+`"`)
+}
+
+// A refresh an apply started retires the refresh before it (repairs.PrunePlan):
+// an old tab still holding the pruned plan's id is told to run the trial again,
+// on the rows route and on apply alike, not shown an empty list or left with an
+// apply that fails later in the op.
+func TestPrunedPlanIsAConflictThatAsksForARerun(t *testing.T) {
+	r, enq, ops := setup(t)
+	require.NoError(t, repairs.PrunePlan(ops, "op-plan"))
+
+	w := do(r, http.MethodGet, "/api/v1/repairs/version-group-primary-repair/plan/op-plan/rows", "")
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "re-run the trial")
+	require.Contains(t, w.Body.String(), `"code":"`+PlanNeedsRerunCode+`"`)
+
+	w = do(r, http.MethodPost, "/api/v1/repairs/version-group-primary-repair/apply",
+		`{"plan_op_id":"op-plan","row_ids":["vg-000"],"dry_run":false}`)
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"code":"`+PlanNeedsRerunCode+`"`)
+	require.Empty(t, enq.calls, "nothing was enqueued for a plan that cannot be read")
 }
 
 // damagePlanRows rewrites the stored rows of plan opID through edit, which is
