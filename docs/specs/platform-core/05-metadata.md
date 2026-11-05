@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.13.5 -->
+<!-- version: 1.13.6 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -562,6 +562,13 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
 | `POST /api/core/v1/integrations/{kind}/test` (unsaved body) and `.../instances/{id}/test` (unsaved body for that instance; a stored secret fills an omitted field only while no destination origin changes, M1.3 `Test`, SEC8-10) | manage |
 | `GET .../instances/{id}/health`; `DELETE .../instances/{id}/hold` (release a hold, as `ThrottleRegistry.ReleaseHold`, `internal/metadata/throttle_registry.go:338`) | read / manage |
 
+**When the routes land, and what they replace.** These `/api/core/v1/integrations/...` routes land at **F7**, the
+integrations flip (03 §3.8), in the PR that registers M6. They replace ABO's integration handlers: the class-`i`
+fields that ABO's gin `GET`/`PUT /api/v1/config` still serves from F4 to F7 (05-config §1.12.1, §1.3.4) and HEAD's
+test-connection handlers (`handleDelugeTestConnection`, `/ai/test-connection`; M1.10 table). F7's PR deletes those
+handlers, with M6, and switches the SPA's integration settings and first-party callers to these routes; no alias
+remains (D10). Before F7 none of these routes is mounted.
+
 ### M1.4 Lifecycle
 
 1. **Register** (kernel, before listeners): descriptors from `app.Options.Adapters` and each module's
@@ -1023,12 +1030,19 @@ A `Put` that changes an instance's secret field releases that instance's `ClassA
 `maintenance.throttle-reset`). It lists every active hold of every scope (`Registry.Holds`, quota, auth and
 rate-limit holds alike) and, in a Live run, releases each through `Registry.ReleaseHold`; a Preview run lists
 them and releases nothing (05-tasks' writer rule). It needs `core:integrations.manage`, declares no schedule, and
-touches only `c/providerhttp/holds/`; quota counters and breaker state are left as they are. `DELETE
+touches only `c/providerhttp/holds/`; quota counters and breaker state are left as they are. Its `TaskSpec`: Shape
+Task, `Effects: tasks.Writes(tasks.Res("core", "providerhttp"))`, `Resume: ResumeDrop`, `Timeout: 1m`,
+`Perms.Start: rbac.Need("core:integrations.manage")`, `Priority: PriorityHigh`, no `Schedule` (HEAD's throttle
+reset's policy, timeout and priority). Its params type `providerhttp.ReleaseHoldsParams` is empty; its result type
+`providerhttp.ReleaseHoldsResult` carries the `Listed` and `Released` counts, and each listed hold (scope, class,
+until, reason) is a line of the run's log. `DELETE
 .../instances/{id}/hold` (M1.3) is its one-instance form, calling the same `ReleaseHold`. The kind is registered on
 core's executor from F5, when the tasks flip deletes HEAD's engine, through the minimal owner registration F2
 creates; `providerhttp` extends that registration with this behaviour when it lands at F7 (03 §3.8 "The three
 late-owner kinds", 05-tasks §5T.8.2; IMPL-5). Until then the kind's final `TaskSpec` runs over
-`providerhttp.InterimHolds`, a one-method interface this package declares, whose books backend (set through
+`providerhttp.InterimHolds`, a one-method interface this package declares,
+`ReleaseHolds(rc *tasks.RC, p ReleaseHoldsParams) (ReleaseHoldsResult, error)`, the kind's `Run` signature, so the
+interim `Run` is the backend's method value, and whose books backend (set through
 `app.Options.InterimBackends`) lists and, in a Live run, releases HEAD's provider holds; F7 deletes the interface,
 the field and the backend.
 
@@ -1599,3 +1613,4 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
   tests. Stage references re-keyed to R2. Consistency pass: M1.4 cites 05-config §1.4 step 7; M1.10 states that M2 leaves the class-`i` blob fields and M6 deletes the blob (lead decision L10); the Deluge daemon password gets its own secret `integrations.download.deluge.daemon_password`; `pcache:` is a plain books family; M2.4 declares the task `core.integrations.release-holds` (HEAD's `maintenance.throttle-reset`, 05-tasks) with its test and migration row; D12's answers cited as D12 (a)–(d). Final consistency sweep: the AI endpoint key-copy test is cited by 05-ai's own name, `TestAIEndpointMigration_AuthRefKeyCopy` (05-ai §9).
 - Round 13 (2026-11-04): IMPL-5 (`core.integrations.release-holds` registered from F5 through F2's minimal owner registration, extended at F7; the interim backend `providerhttp.InterimHolds`).
 - Round 14 (2026-11-05): V23 (checked: no round-13 ruling is cited bare; the bare R4, R5, R7 and R8 left in the text are 03 §3.5's rules), V27 (M1.10 cites 05-rbac §7.1 for `core.integration.local_migrated`, staged in M6's chunk batch).
+- Round 16 (2026-11-05): plan-gap fixes G2 (M2.4: `core.integrations.release-holds`' full `TaskSpec`, `Effects` on `core/providerhttp`, `Resume: ResumeDrop`, `Timeout: 1m`, `Perms.Start`, `PriorityHigh`, no schedule, its params and result types, and `providerhttp.InterimHolds`' one method `ReleaseHolds` with the kind's `Run` signature; 05-tasks §5T.8.2 copies them), G14 (M1.3: the `/api/core/v1/integrations/...` routes land at F7 and replace the class-`i` part of ABO's `/api/v1/config` handlers and HEAD's test-connection handlers, which F7's PR deletes with the SPA switched).

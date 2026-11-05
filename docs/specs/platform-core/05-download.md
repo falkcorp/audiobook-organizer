@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-download.md -->
-<!-- version: 1.12.1 -->
+<!-- version: 1.12.2 -->
 <!-- guid: 513fb395-c640-4bb6-b76c-d9fe80b3224e -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 05 — Download clients (`integrations/download`)
 
@@ -666,7 +666,7 @@ client with a scriptable clock-driven state machine (`Advance(id, State)`), capa
 | `deluge_move_enabled`, `deluge_discovery_label`, `deluge_discovery_enabled` | `modules.books.download.*` settings (they are ABO behaviour, not client config) |
 | `BookVersion.TorrentHash`, `BookFile.DelugeHash` | **phase 1: unchanged** — no books row rewrite; books builds `download.ItemRef{Instance: download/deluge, ID: ItemID(hash)}` at the call site. Storing `ItemRef` is the phase-2 books migration (§1 table), with its own release entry when it ships (SIMP2-7) |
 | `NotifyDelugeAfterOrganize/AfterVersionSwap/MoveStorage(ToDir)` | books code calling `Pool.Relocate` (reached as `module.Deps.Downloads`, COR-1) for every `ItemRef` of the book's active versions, behind `Caps.Relocate` |
-| `deluge.path-update` (triggered by `book.relocated`), `deluge.centralize`, `deluge.link-backfill`, `deluge.protected-paths-sync`, `maintenance.bulk-deluge-import` | books tasks `books.download.*` calling `Pool`; `protected-paths-sync` gets a real schedule (fixes raw/06 note (d)) |
+| `deluge.path-update` (triggered by `book.relocated`), `deluge.centralize`, `deluge.link-backfill`, `deluge.protected-paths-sync`, `maintenance.bulk-deluge-import` | books task kinds named by 05-tasks' kind-rename map (§5T.8.2 rule 4): `books.deluge.path-update`, `books.deluge.centralize`, `books.deluge.link-backfill`, `books.deluge.protected-paths-sync` and `books.maintenance.bulk-deluge-import`, calling `Pool`; `protected-paths-sync` gets a real schedule (fixes raw/06 note (d)) |
 | `ProtectedPathCache`, discovery, import, mark-in-place (`internal/deluge/*.go` minus client) | stay in ABO (audiobook behaviour) using `Pool.Items` (discovery: `ItemFilter{Categories: [<discovery label>]}`) and `Pool.Files` across **all** download instances; no `Watch`, monitor or grab is needed (phase 1 only) |
 | `/api/v1/deluge/*` routes (`internal/server/deluge_integration.go:139`) | books behaviour routes stay on the books gin mount (cross-cutting 2; no reason of their own to rewrite them); generic client routes (test connection, status) become core instance routes in R2 and the old paths are deleted, with the SPA switched in the same release (09; SIMP2-17) |
 | `internal/plugin` `DownloadClient`, `TorrentInfo` | deleted in R2's integrations flip with `internal/plugin` (N4; 04 §8.3) |
@@ -819,3 +819,4 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
   Deluge routes are deleted in R2, not aliased. `staging-scrub` row text removed; the legacy-store test replaced by
   `TestDelugeMigration_InstanceAndPassword`. Stage references re-keyed to R2. Consistency pass: the Deluge daemon password (`download_client.torrent.deluge.password`) is adopted as its own secret field `daemon_password` at `integrations.download.deluge.daemon_password` (§4.1, §9, §10), the name 05-config's rename table coined.
 
+Round 16 (2026-11-05): plan-gap fixes G7 (§10: the Deluge task kinds are `books.deluge.*` and `books.maintenance.bulk-deluge-import`, the names 05-tasks' kind-rename map gives; `books.download.*` withdrawn).

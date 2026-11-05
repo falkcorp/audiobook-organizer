@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.13.6 -->
+<!-- version: 1.13.8 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -170,7 +170,9 @@ section (`auth_disabled_remote`, `config_fail_closed_override`, `config_retired_
 `restore_admins_review`, the factory-reset tokens, and the storage and secrets tokens listed next, among them
 `storage_checkpoint_mode` and `storage_quarantine` with its `orphaned_refs` field), appears **only on authenticated
 endpoints**. From F8 that is `GET /api/core/v1/health` (`core:system.manage`). Before F8 it is a `degraded` field
-that R1 adds to HEAD's authenticated `GET /api/v1/system/status` (`settings.manage`, `wire_system_routes.go:28`).
+on HEAD's authenticated `GET /api/v1/system/status` (`settings.manage`, `wire_system_routes.go:28`). R0 adds that
+field with one token, `auto_update_paused` (the hotfixed updater's check-only mode, 05-updater; never on
+`/health`), and R1 extends it with the posture tokens of this section.
 R1 also splits HEAD's one fixed-token source (`getDegraded`) in two: the tokens of the set above feed `/health`,
 and every token feeds that authenticated field. F2, the foundation PRs that open R2 dark (03 §3.8), lands the
 registry's token route: the readiness core of 5H.10 and its bridge into that split source. So the tokens F3 starts
@@ -471,8 +473,13 @@ layer redacted, so a reader knows the bundle is not raw.
 
 Generation is the core task `core.diagnostics.export`: Shape Task, `ReadOnly`, `Resume: ResumeDrop`,
 `Timeout: 30m`, progress per section (the watchdog lesson of `service.go:155-163`), `Perms.Start:
-core:system.manage`. That is the kind from F8; from F5 to F8 the same kind runs over the interim books backend
-`diagnostics.InterimExport` that ABO's `main` sets in `app.Options.InterimBackends` (5H.10), and F8 deletes both. The zip is written through an `os.Root` opened on
+core:system.manage`, no `Schedule`. Its params type `diagnostics.ExportParams` carries the start request's options
+and the start-time `Viewer`'s actor; its result type `diagnostics.ExportResult` names the zip (`<run-id>.zip`) and
+the manifest's redaction counts. That is the kind from F8; from F5 to F8 the same kind runs over the interim books
+backend `diagnostics.InterimExport` that ABO's `main` sets in `app.Options.InterimBackends` (5H.10), and F8 deletes
+both. The interface's one method is `Export(rc *tasks.RC, p ExportParams) (ExportResult, error)`, the kind's `Run`
+signature, so the interim `Run` is the backend's method value and F8's native body keeps the types (05-tasks
+§5T.8.2). The zip is written through an `os.Root` opened on
 `core.diagnostics.dir` (no path escapes), named `<run-id>.zip`, deleted after
 `core.diagnostics.retention` by the task `core.diagnostics.prune`
 (`Schedule: tasks.ScheduleFromConfig("core.diagnostics.schedules.prune")`, default every 1 h; the key
@@ -691,7 +698,8 @@ replaces it (06; 05-metrics owns the naming rule). HEAD emits none of these seri
 
 | Release | What of `health` exists | Why then |
 |---|---|---|
-| R1 | the flight recorder, rewritten onto a `*slog.Logger` (04 §8.1); `Supervisor` (`ExtendStart` behind `Deps.ExtendStart` and the stateless `app.ExtendStart`; `READY=1`/`STATUS=`/`STOPPING=1` from the kernel); the split of HEAD's fixed-token source and the authenticated `degraded` field of `GET /api/v1/system/status` (5H.3.1) | the flight recorder is a leaf with no ABO import; `internal/sdnotify` moves with the kernel lifecycle and all five importers are rewired then (04); R1's factory-reset and checkpoint tokens are posture tokens, which never reach `/health` (SEC-7) |
+| R0 | nothing of core `health`: HEAD's authenticated `GET /api/v1/system/status` gains a `degraded` field carrying exactly one token, `auto_update_paused`, raised by the hotfixed updater while an operator's automatic apply is paused (05-updater 5U.5); `/health` never shows it (5H.3.1) | the updater hotfix makes unattended apply check-only (09 §9.4 R0), and the token is a posture token, which never reaches `/health` (5H.3.1) |
+| R1 | the flight recorder, rewritten onto a `*slog.Logger` (04 §8.1); `Supervisor` (`ExtendStart` behind `Deps.ExtendStart` and the stateless `app.ExtendStart`; `READY=1`/`STATUS=`/`STOPPING=1` from the kernel); the split of HEAD's fixed-token source, which extends R0's authenticated `degraded` field of `GET /api/v1/system/status` with the posture tokens (5H.3.1); the deploy files' stop timeouts of 5H.4: the unit's `TimeoutStopSec=60`, `docker-compose.yml`'s `stop_grace_period: 60s` with `ABO_CORE_SHUTDOWN_BUDGET=25s`, the plist's `ExitTimeOut` 60 and the documented `docker run --stop-timeout 60` | the flight recorder is a leaf with no ABO import; `internal/sdnotify` moves with the kernel lifecycle and all five importers are rewired then (04); R1's factory-reset and checkpoint tokens are posture tokens, which never reach `/health` (SEC-7) |
 | R2, foundation PRs (F2) | the readiness core, dark: `ComponentID`, `Result`, `Reporter`, `Reporters`, `Registry` (`Register`, `Ready`, `Wait`), with the registry's token route into HEAD's split token source (5H.3.1); **the kernel's own components `core.storage` and `core.secrets`, registered kernel-side with the registry** (they need no module handle: the kernel holds the store and the keyring); the minimal owner registration of `core.diagnostics.export` and its interim backend interface `diagnostics.InterimExport` | F3's cutover raises `storage_quarantine`, `secrets_undecryptable` and `secrets_keyring_not_exported` from its first boot (IMPL-12), so the components that carry them must exist before F3; F2 also lands the tasks executor dark, which waits on `Ready` signals (03 §3.8) |
 | R2, tasks flip (F5) | `Registrar.Health` and `Deps.Health` (the module handles on F2's registry), the component `books.memdb`, and `core.diagnostics.export` registered on core's executor, running over the interim books backend that ABO's `main` sets in `app.Options.InterimBackends` | the tasks executor dispatches on `Ready` signals from its first live release (05-tasks 5T.4 step 2, COR4-8; 06 §6.4.10), and books' warm-up is the one readiness source a module registers |
 | R2, backup-health-metrics flip (F8) | everything else: `Snapshot`, the other components (every core component except `core.storage` and `core.secrets`, which F2 registers), the probes and `/api/core/v1/health`, the `/system/*` routes, the status topic, `Startup` and `Registrar.StartupSteps`, the watchdog ping, diagnostics (5H.3.5's bundle replaces the interim backend of `core.diagnostics.export`, and `app.Options.InterimBackends` is deleted), sysinfo; `/api/health` and `/api/v1/health` deleted, their callers switched in the same PR | 06 §6.4.10 lands `StartupSteps` and `Diagnostics` there, and every core service family moves in R2 |
@@ -851,3 +859,5 @@ Also `storage_checkpoint_mode` and `storage_quarantine`'s `orphaned_refs` field 
 DATA-2; names from 05-storage).
 
 Round 14 (2026-11-05): V13 (the kernel's own components `core.storage` and `core.secrets` register kernel-side with F2's registry, so the tokens F3 raises have a component to ride on; module handles `Registrar.Health` and `Deps.Health` and `books.memdb` stay at F5; 5H.3, 5H.3.1 and the 5H.10 landing table), V23 (checked: no bare round-13 ruling citation in this file).
+
+Round 16 (2026-11-05): plan-gap fixes G2 (5H.3.5: `core.diagnostics.export`'s params and result types and `diagnostics.InterimExport`'s one method `Export` with the kind's `Run` signature; the kind's `TaskSpec` already matched 05-tasks §5T.8.2), G5 (5H.3.1 and a new R0 row of the 5H.10 landing table: R0 adds the authenticated `degraded` field of `GET /api/v1/system/status` with the one token `auto_update_paused`, never on `/health`; R1 extends it with the posture tokens), G16 (5H.10 R1 row: the unit `TimeoutStopSec=60`, compose `stop_grace_period: 60s` with `ABO_CORE_SHUTDOWN_BUDGET=25s` and the plist `ExitTimeOut` 60 named as R1 work; 5H.4 already said so).
