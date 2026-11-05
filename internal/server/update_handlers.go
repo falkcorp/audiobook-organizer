@@ -1,5 +1,5 @@
 // file: internal/server/update_handlers.go
-// version: 2.3.0
+// version: 2.3.1
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-05
 
@@ -25,14 +25,15 @@ const maxApplyBody = 4 << 10
 // operator's setting now: auto_update.enabled asks for automatic apply, which
 // this build pauses (check only). The recorded check may predate a change of
 // the setting, or come from a manual check, so the response never reads it.
-func withLivePause(info *updater.UpdateInfo) *updater.UpdateInfo {
+func withLivePause(info *updater.UpdateInfo, autoUpdate config.AutoUpdateConfig) *updater.UpdateInfo {
 	out := *info
-	out.AutoApplyPaused = config.AppConfig.AutoUpdate.Enabled
+	out.AutoApplyPaused = autoUpdate.Enabled
 	return &out
 }
 
 // getUpdateStatus returns the last update check info.
 func (s *Server) getUpdateStatus(c *gin.Context) {
+	autoUpdate := config.Snapshot().AutoUpdate
 	info := s.updater.LastCheck()
 	if info == nil {
 		// No check yet: the same shape as a check result, so the banner and
@@ -54,27 +55,27 @@ func (s *Server) getUpdateStatus(c *gin.Context) {
 		}{
 			CurrentVersion:  appVersion,
 			LatestVersion:   "",
-			Channel:         config.AppConfig.AutoUpdate.Channel,
+			Channel:         autoUpdate.Channel,
 			UpdateAvailable: false,
 			LastChecked:     nil,
 			LocalBuild:      local,
-			AutoApplyPaused: config.AppConfig.AutoUpdate.Enabled,
+			AutoApplyPaused: autoUpdate.Enabled,
 			Note:            note,
 		})
 		return
 	}
-	httputil.RespondWithOK(c, withLivePause(info))
+	httputil.RespondWithOK(c, withLivePause(info, autoUpdate))
 }
 
 // checkForUpdate triggers an immediate update check and returns the result.
 func (s *Server) checkForUpdate(c *gin.Context) {
-	channel := config.AppConfig.AutoUpdate.Channel
-	info, err := s.updater.CheckForUpdate(channel)
+	autoUpdate := config.Snapshot().AutoUpdate
+	info, err := s.updater.CheckForUpdate(autoUpdate.Channel)
 	if err != nil {
 		httputil.InternalError(c, "failed to check for updates", err)
 		return
 	}
-	httputil.RespondWithOK(c, withLivePause(info))
+	httputil.RespondWithOK(c, withLivePause(info, autoUpdate))
 }
 
 // applyUpdateRequest is the optional body of POST /update/apply. Version names

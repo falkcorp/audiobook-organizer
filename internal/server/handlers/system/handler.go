@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.28.0
+// version: 1.28.1
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-05
 
@@ -295,7 +295,7 @@ type systemStatusResponse struct {
 // nil, so an empty list encodes as [].
 func authenticatedDegraded() []string {
 	degraded := []string{}
-	if config.AppConfig.AutoUpdate.Enabled {
+	if config.Snapshot().AutoUpdate.Enabled {
 		degraded = append(degraded, DegradedAutoUpdatePaused)
 	}
 	slices.Sort(degraded)
