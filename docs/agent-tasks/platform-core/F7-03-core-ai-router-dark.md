@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-03-core-ai-router-dark.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: c070f730-aa7a-4a14-ab1e-da2d1d3bf68d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -74,6 +74,7 @@ Deferred-build (05-ai §1): `ai.Router.Usage`, `ai.UsageQuery`, `ai.MonthlyToken
 | create | `core/integrations/ai/openai/` (adapter `core.openai_compat` over `providerhttp`, `openai-go/v3`) |
 | create | `core/coretest/ai.go` (`coretest.FakeAI`, 05-ai §9 "Fake"; this row owns this one file of `core/coretest/`; F7-02 owns `provider.go`, F2-16 `tasks.go` and `harness.go`, both in W30) |
 | modify | `core/go.mod`, `core/go.sum`, `go.sum` (`github.com/openai/openai-go/v3` into core), `core/archtest/thirdparty_allow.txt` (its allowlist line) |
+| create | `core/archtest/ai_sdk.go` and its `_test.go` self-test (`archtest.NoAISDKOutsideAdapters`; file name coined here) |
 | create | one `changelog.d/` fragment (headerless) |
 
 ## Re-verify before editing (expected results at your base)
@@ -90,6 +91,8 @@ grep -n 'type Registry struct\|func Lease\|type Class uint8' core/integrations/*
 grep -rn 'type Client struct' core/integrations/providerhttp/ | head -2
 # openai-go is a root dependency. Expected: 1 line in go.mod; check core/go.mod after you add it
 grep -n 'openai/openai-go' go.mod
+# The archtest guard does not exist yet. Expected: 0
+ls core/archtest/ai_sdk.go 2>/dev/null | wc -l
 ```
 
 STOP if `ai.Router` already exists, if F7-01's registry is missing, or if `providerhttp.Client` is absent.
@@ -112,6 +115,11 @@ STOP if `ai.Router` already exists, if F7-01's registry is missing, or if `provi
 6. Metrics: the §8 table under the App's namespace; nothing registered in ABO's gather in this PR. This adds the core `ai` metrics scope: add its `testdata/series.golden` under `core/integrations/ai/`, asserted by
    `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5).
 7. Adapter `core.openai_compat` in `core/integrations/ai/openai/` through `providerhttp`, egress policy and `Local`.
+   Then archtest `NoAISDKOutsideAdapters` in `core/archtest/ai_sdk.go`, on R1-01's archtest engine and its loader
+   (successor of HEAD's `internal/aidispatch/guard_test.go`): no core package except `integrations/ai/openai` imports
+   `github.com/openai/openai-go/v3` or any of its subpackages. Its self-test `TestArchtest_NoAISDKOutsideAdapters`
+   (name coined here) in `ai_sdk_test.go` runs it over core's packages (no report) and over a synthetic package
+   outside the adapter that imports `openai-go` (one report).
 8. `aitest.JobStoreSuite`, `aitest.Conformance` (recorded fixtures; live servers behind `MEDIACORE_LIVE_AI=1`),
    `coretest.FakeAI`.
 9. `core/go.mod` gains `github.com/openai/openai-go/v3` (at the root's pinned version) and
@@ -157,7 +165,9 @@ Router: `TestRouter_DefaultDenyEmptyTicks`, `TestRouter_WildcardRejectedOnPut`, 
 `TestAIJobPollVsCancelOneWins`, `TestAIJobApplyVsCancelOneWins`, `TestAIJobSameStateWriteVsCancelOneWins`,
 `TestNativeJobStore_BlindWriteRefused`, `TestRouter_IntegrationsDisabledRefusesEveryEndpoint`;
 `aitest.JobStoreSuite` against `NativeJobStore`. Egress: `TestOpenAICompat_PrivateHostNeedsLocal`. Adapter:
-`aitest.Conformance` against `core.openai_compat`. archtest `NoAISDKOutsideAdapters`.
+`aitest.Conformance` against `core.openai_compat`. archtest `NoAISDKOutsideAdapters`, run by
+`TestArchtest_NoAISDKOutsideAdapters` in `core/archtest/` (name coined here: core's packages pass; a synthetic
+non-adapter package importing `openai-go` is reported).
 Not here: `TestNoHEADAIFamilies` (F7-09, when the rename lands) and the migration tests (F7-08).
 
 ## Acceptance (commands and expected output)

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F9-02-cut-shell-files-into-slots.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: b8dc84ce-aaac-40d9-a6cf-4b8ab601ecf3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -103,8 +103,12 @@ ls web/src/components/layout/
 #  OperationsIndicator -> ../../stores/useOperationsStore, operationGrouping, ../../utils/operationPolling,
 #  ../../services/api, ../../services/versionApi; operationsFormat -> ../../stores/useOperationsStore
 grep -n "^import" web/src/components/layout/*.ts* | grep -v -e "@mui" -e "'react'" -e "react-router" -e "from './"
-# F9-05's moves are in your base (see Goal, "Order with F9-05"). Expected: 0 (the three files have left web/src)
-ls web/src/stores/useOperationsStore.ts web/src/stores/operationGrouping.ts web/src/contexts/AuthContext.tsx 2>/dev/null | wc -l
+# F9-05's moves are in your base (see Goal, "Order with F9-05"). F9-05 keeps a one-line re-export at each old path, so
+# each of the three files holds only an `export … from '@mediacore/shell'` line besides its header comments.
+# Expected: three lines, each "<path> 1 0" (one shell re-export, no other non-comment line)
+for f in web/src/stores/useOperationsStore.ts web/src/stores/operationGrouping.ts web/src/contexts/AuthContext.tsx; do
+  echo "$f $(grep -c "^export .* from '@mediacore/shell';\?\$" "$f") $(grep -v -e '^//' -e '^$' -e "^export .* from '@mediacore/shell';\?\$" "$f" | wc -l)"
+done
 # Nothing of this PR exists yet; F9-05 left only the empty entry file. Expected: 0, then 1
 ls -d web/src/modules/books/layout 2>/dev/null | wc -l
 ls core/web/packages/shell/src/layout/ | wc -l

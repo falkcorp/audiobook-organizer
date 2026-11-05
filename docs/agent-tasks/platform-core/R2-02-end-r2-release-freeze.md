@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R2-02-end-r2-release-freeze.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.5 -->
 <!-- guid: ec2f7009-4e6e-4b0f-8a0b-df22dfc2d023 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -42,7 +42,7 @@ production release (09 §9.2.1). This PR clears it, so promotion is on again. Th
 **Precondition (do not skip).** OWNER-05 has cut the R2 production release. Check:
 
 ```bash
-gh release list --exclude-pre-releases --limit 5
+gh release list --exclude-pre-releases --exclude-drafts --limit 5
 ```
 
 The newest non-prerelease entry must be the R2 release OWNER-05 recorded in the tracking issue. If it is not, STOP

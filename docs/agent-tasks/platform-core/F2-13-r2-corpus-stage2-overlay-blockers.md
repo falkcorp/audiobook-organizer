@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-13-r2-corpus-stage2-overlay-blockers.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 22564994-b4e2-44fd-8ac9-918ced1613a1 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -50,6 +50,8 @@ run states R0 cannot leave at a clean stop).
 python3 -c "import json;m=json.load(open('internal/books/testdata/r2corpus/manifest.json'));print(m['r0_tag'], len(m['stage1']))"   # F2-12's tag and >0 cases, else STOP
 test -d internal/books/testdata/r2corpus/stage1 && echo ok    # "ok"
 test ! -e internal/books/testdata/r2corpus/overlay && test ! -e internal/books/testdata/r2corpus/blockers && echo absent   # "absent"
+python3 -c "import json;m=json.load(open('internal/books/testdata/r2corpus/manifest.json'));print(m['blockers']==[], 'stores' in m, all('store' in e for e in m['stage1']))"   # True True True (F2-12's format), else STOP
+grep -c '^!/internal/books/testdata/r2corpus/\*\*$' .gitignore   # 1 (F2-12's negation block), else STOP
 git show "$(python3 -c "import json;print(json.load(open('internal/books/testdata/r2corpus/manifest.json'))['r0_tag'])")":internal/database/keyfamilies.go | head -5   # the R0 tag has internal/database (it predates R1-26's rename)
 ```
 
@@ -60,7 +62,12 @@ coined here) on every file, because it imports `internal/database`, which no lon
 Python driver `scripts/r2corpus/overlay/build_overlay.py` that checks out the R0 tag in a temporary worktree, copies the
 program in, builds it there, and runs it on a copy of `stage1/`), `internal/books/testdata/r2corpus/overlay/`,
 `internal/books/testdata/r2corpus/blockers/`, `scripts/tests/test_build_overlay.py`. Modify:
-`internal/books/testdata/r2corpus/manifest.json` (append to `overlay`, add `blockers`; never rewrite stage-1 entries).
+`internal/books/testdata/r2corpus/manifest.json` (append to `overlay` and `blockers`, add each new store to `stores`;
+never rewrite stage-1 entries).
+
+F2-12's `.gitignore` negation block already covers `overlay/` and `blockers/` (store files, WAL `*.log`, the index and
+the key file are committed). Check it before committing: `git status --porcelain --ignored
+internal/books/testdata/r2corpus/ | grep -c '^!!'` prints `0`.
 
 The program imports the R0 tag's `internal/database`, which `main` no longer has after R1-26 renames it to
 `internal/books/store`; that is why it is built in a temporary worktree at the tag and guarded by a build constraint.
@@ -69,7 +76,11 @@ With the build constraint, `go build ./...`, `go vet ./...` and every CI tag set
 `scripts/` is inside the root module's package walk (`go list ./scripts/... 2>&1`); if `go list` reports the directory, the
 constraint is what keeps it out. Do not add the tag to any CI job.
 
-## Cases (each one a manifest entry `{case, family, key_prefix, label, expected}`)
+## Cases (each one a manifest entry `{case, family, key_prefix, label, expected, store}`)
+
+`store` is the repo-relative directory of the store that holds the case (F2-12's format). Every store you write is added
+to the manifest's `stores` map with every file under it, its size and its sha256, so F2-12's
+`TestR2Corpus_ManifestMatchesFiles` checks your stores exactly as it checks stage 1's.
 
 Overlay (applied to a copy of stage 1):
 
@@ -111,8 +122,9 @@ that one store holds all and the test expects every row named.
 ## Tests
 
 - `TestR2Corpus_ManifestMatchesFiles` (F2-12's, name coined there, in `internal/books/r2corpus_manifest_test.go`): it
-  reads the manifest, so every `overlay` and `blockers` entry's store must exist for it to pass. Do not edit the Go test
-  file (it is F2-12's); if it does not walk `overlay` and `blockers` yet, STOP and report.
+  walks `stage1`, `overlay` and `blockers`, so every `overlay` and `blockers` entry's `store` must exist and match its
+  `stores` file list (size and sha256 of every file, none missing, none extra) for it to pass. Do not edit the Go test file
+  (it is F2-12's).
 - `scripts/tests/test_build_overlay.py` (name coined here): the driver's case list equals the manifest's overlay and
   blocker labels.
 - A check that `main` does not compile the program: `go list -tags '' ./scripts/r2corpus/overlay/ 2>&1` reports "build
@@ -126,6 +138,7 @@ python3 -m pytest scripts/tests/test_build_overlay.py -q                        
 go list ./scripts/r2corpus/overlay/ 2>&1 | grep -c 'build constraints exclude all Go files' # 1
 python3 -c "import json;m=json.load(open('internal/books/testdata/r2corpus/manifest.json'));print(len(m['overlay'])>0, len(m['blockers'])>0)"   # True True
 go test ./internal/books/ -run TestR2Corpus_ManifestMatchesFiles -count=1                  # ok
+git status --porcelain --ignored internal/books/testdata/r2corpus/ | grep -c '^!!'           # 0
 make ci                                                                                    # exit 0
 ```
 
@@ -142,4 +155,5 @@ Revert the PR (testdata and a tag-guarded program only).
 
 File headers (Go files and the driver; the manifest's `_header` object as in F2-12); conventional commit
 (`test(r2): hand-built overlay and blocker corpus at the R0 tag`) with `Co-Authored-By: Claude <noreply@anthropic.com>`;
-`gh pr merge <n> --rebase`; `changelog.d/` fragment.
+`gh pr merge <n> --rebase`; `changelog.d/` fragment. Never commit with `--no-verify`; the overlay program writes fixture
+values only, so no added line matches the hook's `abk_` pattern.

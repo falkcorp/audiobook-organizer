@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F6-01-core-outbox-relay-dark.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: db05b494-8e19-4d17-b633-9fa4ab8af310 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -62,11 +62,13 @@ durable topic or consumer until F6-03; ABO's executor starts only at F5-18).
 | create | `core/outbox/` |
 | create | `core/internal/outboxstore/` |
 | create | `core/kernel/outbox.go` (the `c/outbox/` spec, the relay definition, the static core consumer list check, retention sweep, the nudge) |
+| create | `core/archtest/outbox_consumers.go` and its `_test.go` self-test (`archtest.OutboxModuleConsumersAreTasks`; file name coined here) |
 
 ## Re-verify at BASE
 
 ```bash
 ls -d core/outbox core/internal/outboxstore 2>/dev/null | wc -l        # 0
+ls core/archtest/outbox_consumers.go 2>/dev/null | wc -l              # 0
 grep -rn 'type TopicSpec struct' core/events/ | wc -l                 # 1 (F4-04)
 grep -rn 'Durable ' core/events/*.go | wc -l                          # >= 1
 grep -rn 'func (e \*Executor) StartIn\|StartIn(' core/internal/executor/ | wc -l    # >= 1 (F2-03)
@@ -80,7 +82,8 @@ grep -rn 'GetForUpdate' core/storage/*.go | wc -l                     # >= 1 (R1
 
 1. `Executor.StartIn` or `WriteRuns` is missing from F2-03's executor (outbox-triggered runs depend on them).
 2. A module consumer could run its handler inside the relay (module consumers are always task runs, 05-events §5E.4
-   "Why module consumers are tasks"): `archtest.OutboxModuleConsumersAreTasks` must flag it.
+   "Why module consumers are tasks"): `archtest.OutboxModuleConsumersAreTasks` must flag it. The guard is this row's,
+   in `core/archtest/outbox_consumers.go`; if it cannot be built there on R1-01's archtest engine, STOP.
 3. Anything is staged, sequenced or delivered in ABO's boot before F6-03.
 4. A change to `core/module/` seems needed: `Manifest.OutboxConsumers`, `Registrar.OutboxHandler` and `Deps.Outbox`
    (06 §6.4.10 F6 row) are added by the flip F6-03, which owns `core/module/` in its wave. Build the outbox so the kernel
@@ -116,7 +119,12 @@ grep -rn 'GetForUpdate' core/storage/*.go | wc -l                     # >= 1 (R1
    `core/kernel/outbox.go` names `core.notify.deliver` from this PR (05-events §5E.5.2 Retention names it; it registers
    with F7-05's notify, and a declared consumer that has never run holds nothing); `core.acquire.download-events` is
    deferred with `acquire` (plan §(j)).
-8. Kernel wiring (dark), metrics (§5E.10), headers, one `changelog.d/` fragment, Acceptance. The metrics add the core
+8. `archtest.OutboxModuleConsumersAreTasks` in `core/archtest/outbox_consumers.go` on R1-01's archtest engine and its
+   loader: no module package (anything outside core's own packages) calls `outbox.Consume`, `ConsumeTx` or
+   `ConsumeRaw` (05-events §5E.4, §5E.5.4). Its self-test in `outbox_consumers_test.go` runs it over a synthetic module
+   package that calls `outbox.Consume` and expects a report, and over one that calls only `ConsumeIntoTask`, expecting
+   none (`TestArchtest_ModuleConsumeFlagged`, 05-events §5E.12).
+9. Kernel wiring (dark), metrics (§5E.10), headers, one `changelog.d/` fragment, Acceptance. The metrics add the core
    `outbox` scope: add its `testdata/series.golden`, asserted by `metricstest.AssertSeries` (R1-10; 05-metrics §5
    item 5).
 
@@ -129,11 +137,16 @@ batch), `TestOutbox_ZombieRelayCannotDoubleSequence`, `TestOutbox_TxHandlerEffec
 `TestOutbox_PerKeyOrderAndHeadOfLine`, `TestOutbox_UnorderedNoHOL`, `TestOutbox_DeadLetterAfterMaxAttempts` (synctest),
 `TestOutbox_RetryDeadLetter`, `TestOutbox_RawSchemaMismatchDeadLetters`, `TestOutbox_IdempotencyKeyStableAcrossRedelivery`,
 `TestOutbox_DuplicateConsumerNameRefused`, `TestOutbox_ConsumeIntoTaskStartsOnce`, `TestOutbox_ConsumeIntoTaskRawWithoutImport`,
-`TestArchtest_ModuleConsumeFlagged`, `TestOutbox_DisabledConsumerRetainsUntilReenableOrPurge`,
+`TestArchtest_ModuleConsumeFlagged` (in `core/archtest/`: a module package calling `Consume` is reported, one calling
+only `ConsumeIntoTask` is not), `TestOutbox_DisabledConsumerRetainsUntilReenableOrPurge`,
 `TestCoreOnlyTopicRetainedUntilAck`, `TestOutbox_WhereAcksUnmatchedWithoutRun`, `TestOutbox_WhereWrongTypeRefused`,
 `TestOutbox_TxStartRunSameBatchAsTransition`, `TestOutbox_ConsumeIntoTaskRequiresMode`,
 `TestRelay_DefinitionRegistersAndDeliversLive`, `TestOutbox_RelayRestartsAfterCancel`,
 `TestOutbox_RelayDisabledDegradedNoLoss`, `TestNoGlobals_EventsOutbox` (the outbox half). Run them on hello and coretest.
+
+`TestOutbox_ConsumerStatusListsDeclaredConsumers` (name coined here): the consumer-status listing F6-04's
+`GET /outbox/consumers` reads returns every declared consumer, a disabled module's among them with its retained
+backlog, and its lag, pending, dead and intake counts match a fixture with known values.
 
 The outbox-triggered task rows of 05-tasks §5T.9 (they prove `Tx.StartRun` through `Executor.StartIn`):
 
@@ -158,6 +171,7 @@ The outbox-triggered task rows of 05-tasks §5T.9 (they prove `Tx.StartRun` thro
 ```bash
 (cd core && go vet ./outbox/... ./internal/outboxstore/... ./kernel/...)                 # exit 0
 (cd core && go test -race -count=1 ./outbox/... ./internal/outboxstore/... ./kernel/...) # ok
+(cd core && go test -count=1 -run 'TestArchtest_ModuleConsumeFlagged|TestCoreImportsOnlyCore' ./archtest/...)   # ok
 (cd core && go test -count=1 -run 'TestOutbox_StageCommitsWithBatch|TestOutbox_RedeliveryAfterCrashBeforeAck' ./...)  # PASS
 make -C core ci                                                                          # exit 0
 make ci                                                                                  # exit 0
@@ -168,9 +182,12 @@ make ci                                                                         
 Books' durable topic `books.book.relocated.v1` and its consumer into `books.deluge.path-update` (F6-03); the module
 members `Manifest.OutboxConsumers`, `Registrar.OutboxHandler`, `Deps.Outbox` and the kernel boot calls (F6-03); notify's
 `core.notify.deliver` consumer (F7-05); the operator routes of 05-events §5E.11 (dead-letter list, retry and discard,
-the backlog purge), which F6-04 builds in `core/internal/outboxhttp/` over this row's `Outbox`. Expose the store
-operations those routes need (list dead letters, retry, discard, advance a consumer's cursors to the head) as methods
-F6-04 can call.
+the backlog purge, the consumer-status read), which F6-04 builds in `core/internal/outboxhttp/` over this row's
+`Outbox`. Expose the store operations those routes need as methods F6-04 can call: list dead letters, retry one,
+discard one, advance a consumer's cursors to the head, and a consumer-status listing (for each declared consumer,
+enabled and disabled: lag, pending, dead count, intake backlog and retained backlog; 05-events §5E.11
+`GET /api/core/v1/outbox/consumers`), read through the same declared-consumer set retention uses. The topic list of
+`GET /api/core/v1/events/topics` is `events.Catalog`'s (F4-04), not this row's.
 
 ## Rollback
 

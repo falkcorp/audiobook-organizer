@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-06-core-library-completed-dark.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.5 -->
 <!-- guid: 3c40ae0e-a05f-40b2-b19d-4fc0f2dca4b2 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-06 |
 | Release | R2, flip label F7 (dark PR) |
 | Tier | **T4** (Opus / xhigh–max): filesystem transfers and renames over user media; a wrong move loses files |
-| Wave | W31 (beside F3-08, F4-07, F5-01, F5-02, F5-03, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13, F5-19, F6-04, F7-05, F9-01; file-disjoint; this row is W31's one owner of `core/go.mod`, `core/go.sum` and `go.sum`). F3-07 is in W29: if it has merged before this PR, rebase and re-run `go mod tidy` in `core/` |
+| Wave | W31 (beside F3-08, F4-07, F5-01, F5-02, F5-03, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13, F5-19, F6-04, F7-05, F9-01; file-disjoint; this row is W31's one owner of `core/go.mod`, `core/go.sum` and `go.sum`). F3-07 is in W32, after this row, and edits none of those three files |
 | Depends on | F3-01 (core config: the roots are `core.library.roots` config entries), F2-05 (`internal/taskhttp` and `coretest` on tasks, as the inventory row lists) |
 | Spec | 05-library §5L.0 (D-L1 … D-L9), §5L.3 (all: §5L.3.1 roots, paths, registry; §5L.3.2 `RootFS`; §5L.3.3 transfers; §5L.3.4 hashing; §5L.3.5 quarantine; §5L.3.6 path mapping; §5L.3.7 watchers; §5L.3.8 ownership and sharing), §5L.4–§5L.8, §5L.9 (tests), §5L.10 (code moves; the roots cutover is F7-08's); 04 §8.1 F7 |
 
@@ -50,8 +50,9 @@ seams) moves from `internal/fileops` into `core/internal/libfs` as a re-implemen
   (`TestRenameNoReplaceNeverClobbers`, `TestTransferCopyPublishIsNoClobber`).
 - **I3. Move order.** A cross-device move removes the source only after destination fsync and verify, at every
   injected crash point (`TestTransferCrossDeviceMoveOrder`); every journal state recovers to done or rolled back
-  (`TestTransferRecoveryFromJournal`). Recovery is the task `core.library.transfer-recover`, started once at boot
-  through its `Schedule`'s `OnStart()`. After a cross-device move it removes a still-present source only if the
+  (`TestTransferRecoveryFromJournal`). Recovery is the task `core.library.transfer-recover`, scheduled by
+  `tasks.ScheduleFromConfig("core.library.schedules.transfer_recover").OnStart()`, so it runs once at start and then on
+  the key's interval (default `{enabled: true, every: 24h}`, 05-library §5L.7). After a cross-device move it removes a still-present source only if the
   source digest still matches the journalled one; a source changed after the copy is kept and the conflict reported
   (05-library §5L.3.3, "Boot recovery").
 - **I4. Fail closed on seeding.** An oracle with `loaded=false` blocks a move and allows a copy
@@ -95,10 +96,13 @@ ls internal/fileops/copy.go internal/fileops/reflink.go internal/fileops/hash.go
 grep -rn 'OnChange\|func .*Entries' core/config/*.go | head -5
 # fsnotify already a root dependency. Expected: 1 line
 grep -n 'fsnotify' go.mod
+# The recovery task's schedule key, declared by F2-04 (05-library §5L.7). Expected: 1
+grep -c 'core.library.schedules.transfer_recover' core/kernel/core_sections.go
 ```
 
-STOP if `library.Manager` already exists, or if core config offers no list-entry and change-notification API for
-`core.library.roots`.
+STOP if `library.Manager` already exists, if core config offers no list-entry and change-notification API for
+`core.library.roots`, or if `core.library.schedules.transfer_recover` is not declared (do not declare it here, and do
+not schedule the recovery task on `core.library.schedules.quarantine_prune` or on an undeclared key).
 
 ## Steps
 
@@ -112,8 +116,11 @@ STOP if `library.Manager` already exists, or if core config offers no list-entry
    `internal/appdirs`.
 5. The transfer engine: modes `Auto` (reflink → hardlink → copy, `Did` reports reality), `Copy`, `Hardlink`, `Reflink`,
    `Symlink`, move; journal in `c/library/transfer/`; `TransferIn` in the caller's batch; `PendingTransfers`.
-   Recovery is the core task kind `core.library.transfer-recover` (05-library §5L.3.3, "Boot recovery"), started once
-   through its `Schedule`'s `OnStart()` (05-tasks). It completes or rolls back each unfinished journal row from its
+   Recovery is the core task kind `core.library.transfer-recover` (05-library §5L.3.3, "Boot recovery"), its
+   `Common.Schedule` set to `tasks.ScheduleFromConfig("core.library.schedules.transfer_recover").OnStart()`: one run at
+   start, then one per the key's interval, which finds nothing to do when no transfer was interrupted (05-tasks). The
+   key is F2-04's declaration in `core/kernel/core_sections.go` (05-library §5L.7 key table); this row only uses it and
+   does not declare it, and no other kind may share it. It completes or rolls back each unfinished journal row from its
    last durable step and removes the temp file. For a verified destination whose source still exists after a
    cross-device move, it removes the source only if the source digest still matches; otherwise it keeps the source
    and reports the conflict. It leaves `done` rows of `TransferIn` for `PendingTransfers`.
@@ -166,8 +173,9 @@ Metrics: `metricstest.AssertSeries` over the `mediacore.library` scope's `testda
 `TestTransferInCommitsWithCallerBatch`, `TestScopeCannotActAsAnotherOwner`, `TestConfigEntryRoots_RoundTrip`,
 `TestLibraryErrorsPassKeyNameGate`. Not here: `TestRootsCutover_FromHEADFixture` (F7-08).
 
-`TestTransferRecoveryFromJournal` gets a cell for the source-digest rule: the recovery task runs once at boot on hello
-and `coretest`, and when the source changed after the copy of a cross-device move, recovery keeps the source and
+`TestTransferRecoveryFromJournal` gets a cell for the source-digest rule: the recovery task, registered with
+`ScheduleFromConfig("core.library.schedules.transfer_recover").OnStart()`, passes F2-04's `ValidateSchedules` and runs
+once at boot on hello and `coretest`, and when the source changed after the copy of a cross-device move, recovery keeps the source and
 reports the conflict instead of removing it.
 
 ## Acceptance (commands and expected output)

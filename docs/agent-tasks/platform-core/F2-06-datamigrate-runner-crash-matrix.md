@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-06-datamigrate-runner-crash-matrix.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: c1a6adbc-49de-4dd5-964f-59cfaafb845a -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -86,7 +86,7 @@ the boot that exercises those rows; see "TDD"). If R1-21 put the writer table in
 
 Do **not** touch `core/storage/` outside `datamigrate/`: the dry run (`core/storage/dryrun.go`), the quarantine record
 (`core/storage/quarantine.go`), the preflight hook (`core/storage/preflight.go`) and the level step are F3-04's
-(W25), which edits `core/kernel/migrate.go` after you. Leave clean seams for them (see "Seams").
+(W27), which edits `core/kernel/migrate.go` after you. Leave clean seams for them (see "Seams").
 
 ## Code contract
 

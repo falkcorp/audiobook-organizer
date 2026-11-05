@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-09-core-config-section-declarations.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 7243a8e0-4333-4d9f-afec-3c56f5b47d24 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -123,7 +123,15 @@ the list is F2-16's (the F2 wiring row). Nothing else.
 - Schedule keys (`core.<subsystem>.schedules.<name>`, type `tasks.ScheduleConfig`) are **not** declared here:
   `core/tasks` does not exist yet (F2-01 depends on this row), so F2-04 adds every one of them to this file. Put a
   `// schedule keys (tasks.ScheduleConfig): F2-04` comment in each owner's section struct that has one. Do not declare
-  a local stand-in type.
+  a local stand-in type. (F2-04's acceptance counts `tasks.ScheduleConfig` with comment lines stripped, so these
+  comments stay.)
+- **The journal's sections.** 05-logging §8 puts the `core.log.journal.*` rows in their own section
+  (`core.log.journal`) and `core.log.schedules.journal_prune` in `core.log.schedules`, apart from `core.log`'s
+  `log.Settings`, and names `logjournal.Settings` and `logjournal.Schedules` as their registered types. Those types do
+  not exist until F5-15, so declare both sections here with kernel struct types carrying the owner table's JSON paths,
+  defaults and reload tags (`core.log.schedules` an empty struct with the F2-04 comment). F5-15 swaps the two
+  declarations to the logjournal types in this same file, so one type is registered per section;
+  `TestCoreSections_EveryOwnerKeyDeclared` compares leaf paths, so it stays green across the swap.
 - **Secret-typed keys.** Two rows are `secrets.Ref`: `core.auth.oidc.<id>.client_secret` (05-authn §8) and
   `core.http.basic_gate.password` (05-http-api §10). `core/secrets` lands at F3-03, which adds them to this file.
   Leave both fields out, list them in a `// secret-typed keys: F3-03` comment above their sections. Do not invent a

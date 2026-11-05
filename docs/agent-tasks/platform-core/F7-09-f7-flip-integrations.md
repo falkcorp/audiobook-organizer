@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-09-f7-flip-integrations.md -->
-<!-- version: 1.1.5 -->
+<!-- version: 1.1.6 -->
 <!-- guid: 92d3d884-998e-42de-94e1-451dd63836fb -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -45,7 +45,9 @@ Announce the move window one working day ahead, naming every 04 row listed under
    (metadata sources, whisper) and its 13 AI capabilities with the capability-ID map.
    **Mount F7-10's instance routes** (`core/internal/integrationhttp`), handing its `HoldReleaser` the
    `providerhttp.Registry`, and regenerate `core/openapi/core.json` and the client under
-   `core/web/packages/api-client/src/generated/`.
+   `core/web/packages/api-client/src/generated/`. Un-skip the permission and 401 cells of `integrationhttp`
+   (`core/internal/integrationhttp/routes_test.go`: delete each `t.Skip("needs stage 13: F4-08")`), which run now that
+   F4-08's stage 13 is live and the package is mounted.
    **Service registry** (06 §6.11.1 step 4): delete from `internal/books/services.go` the `ServiceDefs` of eventbus,
    filesystem, searchindex, the ten AI services, batchpoller and the three metafetch services, their core packages now
    wired by the kernel.
@@ -131,6 +133,7 @@ mediacore/integrations/download/deluge`; `F7 move internal/plugins/webhook -> me
 | moved or deleted packages | `internal/plugin/`, `internal/plugins/webhook/`, `internal/server/`, `internal/ai/`, `internal/aidispatch/`, `internal/deluge/`, `internal/search/`, `internal/scanner/`, `internal/fileops/`, `internal/pathutil/`, `internal/watcher/`, `internal/metadata/`, `internal/config/` |
 | importers outside those packages (132 files at the plan's base `f7ac5b11e`, listed in full below the table) | `cmd/dedup_bench_batch.go`, `cmd/dedup_bench_pass2.go`; files under `internal/aiscan/`, `internal/appdirs/`, `internal/audiobooks/`, `internal/catalog/`, `internal/dedup/`, `internal/fingerprint/workerclient/`, `internal/importer/`, `internal/itunes/`, `internal/itunes/service/`, `internal/maintenance/jobs/`, `internal/merge/`, `internal/metafetch/`, `internal/organizer/`, `internal/playlist/`, `internal/plugins/acoustid/`, `internal/plugins/dedup/`, `internal/plugins/deluge/`, `internal/plugins/maintenance/`, `internal/quarantine/`, `internal/reconcile/`, `internal/remux/`, `internal/sweep/`, `internal/tagger/`, `internal/telemetrypolicy/`, `internal/testutil/`, `internal/transcode/`, `internal/transcribe/`, `internal/versionprimary/`, `internal/versions/` |
 | SPA, deploy files, move bookkeeping | `web/src/`, `deploy/grafana/dashboards/`, `deploy/prometheus/`, `.mockery.yaml`, `internal/arch/layering_test.go`, `scripts/ci/short_test_weights.json` |
+| F7-10's skipped cells | `core/internal/integrationhttp/routes_test.go` (un-skip only: remove the `t.Skip("needs stage 13: F4-08")` calls; no other change) |
 
 The 132 importer files at `f7ac5b11e`, by directory:
 
@@ -201,6 +204,7 @@ ls core/integrations/integrations.go core/integrations/ai/openai/ core/integrati
    core/integrations/notify/webhook/ core/library/transfer.go core/storage/index/ core/storage/derived.go \
    core/internal/integrationhttp/ internal/books/cutover/m6/
 grep -n 'type HoldReleaser interface' core/internal/integrationhttp/*.go        # 1 (F7-10)
+grep -c 'needs stage 13: F4-08' core/internal/integrationhttp/routes_test.go     # >= 2 (F7-10's skipped permission tables)
 grep -n 'func (r \*Registry) ReleaseHold' core/integrations/providerhttp/*.go  # 1 (F7-02)
 grep -n 'Derived ' core/storage/*.go | grep -v _test                           # Spec.Derived (F7-07 or add it here)
 grep -c 'm6' internal/books/cutover/steps.go
@@ -249,7 +253,9 @@ app.Options{
   native path, the degraded search meanwhile and the answers equal to R0's).
 - `TestDerivedIndexRebuildTriggers` (05-storage §5S.10; the kernel's P7 validation and the (3a) enqueue on a version
   change, a `Load` refusal and after a restore).
-- F7-10's `TestIntegrationHTTP_*` route tests run on ABO's mounted routes; a route-level test that HEAD's
+- F7-10's `TestIntegrationHTTP_*` route tests run on ABO's mounted routes, the un-skipped cells of
+  `TestIntegrationHTTP_ReadNeedsIntegrationsRead` and `TestIntegrationHTTP_WritesNeedIntegrationsManage` among them
+  (403 and 401 enforced by stage 13); a route-level test that HEAD's
   `POST /api/v1/deluge/test-connection` and `/api/v1/ai/test-connection` are gone (name coined here:
   `TestHEADTestConnectionRoutesGone`).
 - `TestNoHEADAIFamilies` (05-ai §9).
@@ -287,6 +293,10 @@ promtool test rules deploy/prometheus/alert-rules.test.yml
 
 # Interim backends for holds and poll gone. Expected: 0
 grep -rn 'InterimHolds\|InterimPoll' --include='*.go' core/ internal/ main.go | wc -l
+
+# F7-10's permission cells un-skipped and green. Expected: 0, then ok
+grep -c 'needs stage 13: F4-08' core/internal/integrationhttp/routes_test.go
+(cd core && go test -count=1 -race ./internal/integrationhttp/...)
 
 # Gate tests. Expected: ok
 go test -count=1 -run 'TestBooksIndexRebuiltAtCutover|TestDerivedIndexRebuildTriggers|TestHEADTestConnectionRoutesGone|TestRootsCutover_FromHEADFixture|TestWebhookMigration_InstancesAndRule|TestIntegrationsMigration_EveryInstanceAndID|TestAIJobMigration_EveryJobAndState|TestNoHEADAIFamilies|TestABOMetricsGatherNoDuplicate|TestCutoverRefusedByOlderBuilds|TestDeployReferencedSeriesServed|TestDerivedIndexHooksAfterRegister|TestDepsScoping|TestCoreRoutesReplaceGin|TestCutoverFlipUpgrade' ./...

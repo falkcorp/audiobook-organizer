@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-14-production-shaped-store-boot-time.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 5062c77e-999c-4b26-b5e1-1a0f6f399bdd -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -75,9 +75,16 @@ R0 tag like F2-13's overlay program. Modify: `.github/workflows/extraction-gates
    family to its P1 key count with keys and values of the P1 average sizes (`raw_key_bytes/keys`, `raw_value_bytes/keys`),
    using row templates taken from the stage-1 rows of that family so every generated row decodes as R0 wrote it. A family
    with no stage-1 template is filled with the overlay program's encoding for it if F2-13 has one, else skipped and listed
-   in the output report. The generated store is **never committed**; the job generates it each run.
+   in the output report. The generated store is **never committed**; the job generates it each run. Before copying, the
+   generator checks stage 1's store against `manifest.json`'s `stores` entry for it (every file, size and sha256; exit
+   non-zero on a mismatch, so a store `.gitignore` thinned out is caught here too). After writing, it records the
+   generated store in `<dir>/store_manifest.json` in the same per-file format as F2-12's `stores` (`[{"path", "size",
+   "sha256"}]`, every file except itself; file name coined here). It does not edit `manifest.json`: the shaped store is not committed, so it has no
+   entry there.
 3. Measurement test `TestProductionShapedStore_BootTime` (coined here), skipped unless `R2_SHAPED_STORE` is set: boots the
-   current build in process on a copy of the store, waits for readiness, and writes
+   current build in process on a copy of the store, first runs F2-12's `verifyStoreFiles` helper (same package, in
+   `internal/books/r2corpus_manifest_test.go`; do not edit that file) on the copy against `store_manifest.json` so the
+   boot never runs on a partial store, then waits for readiness, and writes
    `$R2_SHAPED_OUT/boot_time.json` = `{"phases": [{"phase", "step", "seconds"}, ...], "ready_seconds": n}` (format
    coined here): every `kernel_boot_phase_seconds` sample plus the restart-to-ready seconds.
 4. CI jobs (both upload `boot_time.json` as an artifact; both `timeout-minutes: 30`):
@@ -92,7 +99,9 @@ R0 tag like F2-13's overlay program. Modify: `.github/workflows/extraction-gates
 ## Tests
 
 - `scripts/tests/test_gen_production_shaped.py` (name coined here): with a tiny counts file, the generator produces exactly
-  the requested key count per family and the average sizes within 10 %; unknown families are reported, not invented.
+  the requested key count per family and the average sizes within 10 %; unknown families are reported, not invented; a
+  stage-1 store with one file missing or changed against the manifest makes the generator exit non-zero; the
+  `store_manifest.json` it writes lists every file of the generated store.
 - `TestProductionShapedStore_BootTime` itself, run locally on a small generated store.
 
 ## Acceptance
@@ -101,6 +110,7 @@ R0 tag like F2-13's overlay program. Modify: `.github/workflows/extraction-gates
 python3 -m pytest scripts/tests/test_gen_production_shaped.py -q                                   # passed
 SHAPED=$(mktemp -d); OUT=$(mktemp -d)
 python3 scripts/r2corpus/gen_production_shaped.py --counts internal/books/testdata/r2corpus/p1_counts.json --out "$SHAPED" --scale 0.01   # exit 0; report lists every family
+test -f "$SHAPED/store_manifest.json" && echo ok                                                   # ok
 R2_SHAPED_STORE="$SHAPED" R2_SHAPED_OUT="$OUT" go test ./internal/books/ -run TestProductionShapedStore_BootTime -count=1   # ok
 python3 -c "import json,sys;d=json.load(open(sys.argv[1]+'/boot_time.json'));print(any(s['phase']=='P4b' for s in d['phases']))" "$OUT"   # True
 grep -c 'production-shaped-store' .github/workflows/extraction-gates.yml .github/workflows/nightly.yml   # >=1 each

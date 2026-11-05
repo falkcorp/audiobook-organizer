@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-11-maintenance-plugin-subbatch-6-kinds.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 521f82b1-5d33-42ad-bf16-9960d6204c71 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -256,7 +256,7 @@ For every core this PR creates:
    a package variable or a closure it captures (`p.db`, `p.store`, `s.store`, a global store, a dependency reached
    through the receiver). Everything it reads or writes arrives through its arguments: the params, and two env
    fields added to rule R2's env struct, `Writer t6g6Writer` and `Store t6g6Store`. A helper the core calls that
-   touches a store gets a new variant taking the env's `Writer`/`Store` (name coined per helper: `<helper>Via`);
+   touches a store gets a new variant taking the env's `Writer`/`Store` (name coined per helper: `t6g6<Helper>Via`, for example `t6g6WriteBookFileVia`; the group prefix keeps two groups that wrap the same shared helper from both declaring one name);
    the existing helper is not re-signed (rule R2 item 4).
 2. **The typed-writer interface** `t6g6Writer` (name coined here; plan §(l) item 4: a consumer interface declared in
    the converted package, with a fake in its tests) holds exactly the write methods this PR's cores call. Where

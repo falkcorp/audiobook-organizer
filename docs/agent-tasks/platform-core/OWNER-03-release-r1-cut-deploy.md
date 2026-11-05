@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-03-release-r1-cut-deploy.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: dcd841c3-d463-456c-9860-5243f9a1dc22 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -40,7 +40,7 @@ kept 7 days (09 §9.2.3, §9.4 R1 Migrations). A disk without room halts the boo
 3. **Cut the R1 production release** on `main` (`release-prod.yml`, `workflow_dispatch`), by hand. If you kept the
    R1 freeze (OWNER-01), `RELEASE_FREEZE: 'R1'` (R1-35) has kept `check-rc-ordinal` from promoting anything since
    R1-35 merged, just before R1's first core PR. If you overrode it, R1-35 set the value to `''`, and automatic
-   minors may already have shipped part of R1: check `gh release list --exclude-pre-releases --limit 5` first, and
+   minors may already have shipped part of R1: check `gh release list --exclude-pre-releases --exclude-drafts --limit 5` first, and
    cut R1 anyway. **Prepend** the R1 release-note lines,
    never replacing the generated notes. The lines of 09 §9.4 R1 "Content: release note", verbatim:
 

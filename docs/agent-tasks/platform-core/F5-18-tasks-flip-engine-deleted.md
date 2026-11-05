@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-18-tasks-flip-engine-deleted.md -->
-<!-- version: 1.1.5 -->
+<!-- version: 1.1.6 -->
 <!-- guid: ec04b9ab-cec9-4e59-bc6b-19f091354077 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -107,6 +107,8 @@ nothing outside this list (STOP and report if a commit needs another path).
 | modify | `internal/books/cutover/steps.go` (commit 3: M4 and M5, this flip's level step, the new M8) |
 | modify | `internal/books/cutover/stepids.go` (commit 3: add this flip's level constant and level-step ID; replace the M8 ID) |
 | modify | `internal/books/cutover_suite_test.go` (this flip's `TestCutoverFlipUpgrade` cell, F2-15's harness) |
+| create | `internal/books/schedules_registered_test.go` (name coined here; commit 2: `TestF5_ScheduledKindsRegistered`) |
+| modify | `core/internal/loghttp/` test files (commit 5: delete the `t.Skip("needs stage 13: F4-08")` of F5-19's permission, guard and 401 cells; no other change to the package) |
 | delete | `internal/books/testdata/tasklint_exempt.d/F5-18.txt`; modify `internal/books/tasklint_test.go` (commit 9) |
 | delete or move | `internal/operations/` (keeping `internal/operations/state`), `internal/scheduler/`, `internal/opscatalog/`, `internal/maintenance/` (root package; `jobs` keeps its package), `internal/opsmetrics/`, `internal/walkresume/` (commit 4) |
 | modify | `internal/server/`, `pkg/` (`pkg/ops` deleted; `pkg/plugin/sdk` callers moved), `internal/plugins/`, `internal/repairs/`, `internal/serviceregistry/` (commits 1, 4, 5) |
@@ -181,7 +183,10 @@ nothing outside this list (STOP and report if a commit needs another path).
    05-tasks §5T.8.1). Keep `internal/operations/state`, `tools/cmd/opsgen` and `ops.ts`.
 5. **Routes.** Mount `internal/taskhttp` at `/api/core/v1/tasks`; mount F5-19's `core/internal/loghttp` on
    `CoreGroup()` (`loghttp.Deps{Journal: <the native journal store>, OtherUser: <books' registered predicate>}`)
-   and delete HEAD's `GET /api/v1/system/logs` (`internal/server/wire_system_routes.go`, its handler
+   and **un-skip** F5-19's stage-13 cells: its permission, guard and 401 tables were written as
+   `t.Skip("needs stage 13: F4-08")` because no stage 13 ran before F4-08; delete those skips (stage 13 is live from
+   F4-08, W34) and run them through `coretest`'s completed `As`/`AssertPermission` on the mounted route. Then
+   delete HEAD's `GET /api/v1/system/logs` (`internal/server/wire_system_routes.go`, its handler
    `GetSystemLogs` and its tests) in the same commit (05-logging §5; no alias, D10); regenerate
    `core/openapi/core.json` and `core/web/packages/api-client/src/generated/`; delete every HEAD route 05-tasks §5T.3.10's
    "Replaces" column names, `/api/v3/ops/*`, `internal/server/handlers/opsv3`, the v2 operations handlers (`internal/server/handlers/operations*.go`) and the
@@ -234,6 +239,7 @@ core.
 | A second module boots beside books with no books edit (G6/G7, from here on) | `TestSecondModuleNoAudiobookEdit` (in `internal/books`; `coretest.New(t, WithModules(books.Module(…), hello.New()))`) |
 | Resume, cancel and shutdown behave as HEAD's suites say | `TestParity_ResumeCancelShutdown` **(ABO)** |
 | Schedules: HEAD-equivalent, no first-boot storm | `TestScheduleParity_AllDefinitions`, `TestCutover_NoCatchUpStorm` (F5-14's, now over the registered kinds) |
+| F5-14's stub kind list is the list this flip registers | `TestF5_ScheduledKindsRegistered` (name coined here): every kind in `books.ScheduledKinds()` is registered by one of the list functions `r.Tasks(...)` receives (the seven `t6g<k>Kinds`, `t7Kinds`, `jobs.Kinds`, `repairs.Kinds`, the plugins' `Kinds`), and each registered books kind's `Common.Schedule` is the schedule `books.ScheduleFor(k)` returns (nil exactly for the kinds outside the list). F5-14's parity test ran over stubs built from that list; this test is the re-check over the real kinds |
 | Every converted `ResumeContinue` kind resumes from a HEAD checkpoint (`v1` included) or is listed as from-zero once | `TestCutover_CheckpointsResume` **(ABO)** |
 | M4's run import then the first resume sweep acts per policy; an interrupted repairs apply re-applies no marked row | extend `TestCutover_TasksFixtureFromR0` and `TestCutover_RepairsRowsAndMarksImported` (F5-16's) with their registered-kind halves |
 | No HEAD def ID left outside the retired claims | `TestCutover_KindReferencesRewritten` (F5-16's), green on this build |
@@ -248,7 +254,7 @@ core.
 | A `books.*` run waits for `books.memdb` | `TestDispatch_WaitsForReadySignal` |
 | The T5 gate | `go list -deps ./internal/plugins/... | grep -c pkg/plugin/sdk` is 0 |
 | `tasklint` with an empty exemption list (05-tasks §5T.8.2 F5 row gate; §5T.8.4) | `internal/books/tasklint_test.go` requires `internal/books/testdata/tasklint_exempt.d/` empty |
-| The journal's route replaces HEAD's | F5-19's `TestJournal_RequiresSystemManage` and `TestJournal_OtherUsersLinesNeedUsersView`, plus a kernel mount cell (name coined here: `TestF5_SystemLogsRouteMounted`) proving `GET /api/core/v1/system/logs` answers 403 to a `core:system.view`-only principal on the booted ABO and `GET /api/v1/system/logs` answers 404 |
+| The journal's route replaces HEAD's | F5-19's `TestJournal_RequiresSystemManage` and `TestJournal_OtherUsersLinesNeedUsersView` (their stage-13 cells un-skipped here), plus a kernel mount cell (name coined here: `TestF5_SystemLogsRouteMounted`) proving `GET /api/core/v1/system/logs` answers 403 to a `core:system.view`-only principal on the booted ABO and `GET /api/v1/system/logs` answers 404 |
 | Every intermediate `main` boots and passes e2e | `make test-e2e` |
 
 ## Acceptance (commands and expected output)
@@ -268,6 +274,9 @@ ls internal/books/testdata/tasklint_exempt.d/ 2>/dev/null | wc -l               
 go test ./internal/books/ -count=1 -run "$(grep -o '^func Test[A-Za-z0-9_]*' internal/books/tasklint_test.go | sed 's/^func //' | paste -sd'|')"   # ok (no exemption)
 git grep -n '"/system/logs"' -- internal/server/ | wc -l                                       # 0 (HEAD's route deleted)
 git grep -n 'loghttp' -- core/kernel/ | wc -l                                                   # >=1 (mounted)
+git grep -n 'needs stage 13' -- core/internal/loghttp/ | wc -l                                  # 0 (stage-13 cells un-skipped)
+(cd core && go test ./internal/loghttp/ -count=1 -v | grep -c -- '--- SKIP')                    # 0
+go test ./internal/books/ -run 'TestF5_ScheduledKindsRegistered|TestScheduleFor_KindListMatchesConversions' -count=1   # ok
 grep -c '/system/logs' core/openapi/core.json                                                  # >=1 (regenerated)
 promtool test rules deploy/prometheus/alert-rules.test.yml                                      # SUCCESS
 make ci                                                                                         # exit 0

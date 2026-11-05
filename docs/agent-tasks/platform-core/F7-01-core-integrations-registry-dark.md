@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-01-core-integrations-registry-dark.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.4 -->
 <!-- guid: bc446db6-50ca-4aa7-a750-2bcc30316a89 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-01 |
 | Release | R2, flip label F7 (dark PR) |
 | Tier | **T4** (Opus / xhigh–max): instance records with secret binding and origin trust; a wrong rule sends a stored secret to a host the owner never approved |
-| Wave | W27 (beside F2-03, F2-15, F2-17, F3-02, F3-04, F4-02; file-disjoint) |
+| Wave | W28 (beside F2-04, F3-06, F4-11; file-disjoint) |
 | Depends on | F3-01 (core config: `Passthrough` operator values), F3-03 (core secrets: `secrets.Ref`, `secrets.Value`), F2-07 (audit store: `core.integration.*` actions) |
 | Spec | 05-metadata M1 (M1.1 scope, M1.3 Go API, M1.4 lifecycle incl. the native store and the operator overlay of step 2, M1.5 errors, M1.6 concurrency, M1.7 keys, M1.8 metrics, M1.9 tests, M1.10 the migration table this step's importer serves); 03 §3.3 (`integrations` row, "Store interfaces and importers"); 04 §8.1 F7 |
 
@@ -74,6 +74,7 @@ Not in R2's build (M1.3 "Deferred-build members"): `integrations.FacadeWriter`, 
 | create | `core/integrations/importer.go` (`Importer`, `NativeImporter`) |
 | create | `core/integrations/integrationstest/` (`InstanceStoreSuite`, fakes) |
 | create | `core/internal/instancestore/` (the native store's implementation over `storage.Keyspace`) |
+| create | `core/archtest/descriptor_callers.go` and its `_test.go` self-test (`archtest.IntegrationsDescriptorCallers`; file name coined here) |
 | create | one `changelog.d/` fragment (headerless) |
 
 ## Re-verify before editing (expected results at your base)
@@ -89,6 +90,8 @@ grep -rn 'Passthrough' core/config/*.go | head -3
 grep -rn '"core.integration\.' core/audit/*.go | head
 # The fixed core order includes integrations. Expected: "integrations" in the subsystem order list
 grep -rn '"integrations"' core/storage/*.go | head -3
+# The archtest guard does not exist yet. Expected: 0
+ls core/archtest/descriptor_callers.go 2>/dev/null | wc -l
 ```
 
 STOP if `secrets.Ref`/`secrets.Value` or the config passthrough is missing, or if `core/integrations/integrations.go`
@@ -104,7 +107,12 @@ already exists.
    `Put`/`Delete` with the origin rules and the ProtectAdmin checks, `Test` on an unsaved config, health, hot swap
    with lease draining (`TestRegistry_HotSwapDrainsLeases` under `synctest`), a store load failure serving none.
 4. The error taxonomy and `ClassOf` with the done-parent rule (`TestClassOf_Table`); `Error` redacts `Detail`.
-5. archtest `IntegrationsDescriptorCallers`: only kind packages call `NewDescriptor`.
+5. archtest `IntegrationsDescriptorCallers` in `core/archtest/descriptor_callers.go`, on R1-01's archtest engine and its
+   loader: only kind packages (the packages directly under `core/integrations/` that declare a kind's typed
+   constructor, such as `download.Adapter` or `ai.Adapter`; 05-metadata M1.3 `Descriptor` comment) call
+   `integrations.NewDescriptor`; any other caller, an adapter or module package included, is reported. Its self-test
+   in `descriptor_callers_test.go` runs it over a synthetic kind package (no report) and a synthetic adapter package
+   that calls `NewDescriptor` directly (one report).
 6. Metrics: M1.8's families under the App's namespace. This adds the core `integrations` metrics scope: add its `testdata/series.golden` under `core/integrations/`, asserted by
    `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5).
 7. Wire on `hello`/`coretest` only. Headers, fragment, acceptance.
@@ -153,7 +161,9 @@ Metrics: `metricstest.AssertSeries` over the `integrations` scope's `testdata/se
 `TestOperatorSecret_AdapterDefaultURLServed`, `TestOperatorSecret_AdminStoredHostServed`,
 `TestRegistryTest_ChangedURLUsesNoStoredSecret`, `TestImporter_ValidatesAndStagesInCallerBatch`,
 `TestRegistry_BuildDoesNoIO`, `TestClassOf_Table`, `TestError_RedactsDetail`; archtest
-`IntegrationsDescriptorCallers`; `integrationstest.InstanceStoreSuite` against `NativeInstanceStore`.
+`IntegrationsDescriptorCallers` with its self-test `TestArchtest_IntegrationsDescriptorCallers` (name coined here: a
+direct `NewDescriptor` call outside a kind package is reported, a kind package's call is not);
+`integrationstest.InstanceStoreSuite` against `NativeInstanceStore`.
 Not here: `TestFacadeIndexer_LANRefused` (deferred-build) and the `TestIntegrationsMigration_*` set (F7-08).
 
 ## Acceptance (commands and expected output)
@@ -163,7 +173,7 @@ Not here: `TestFacadeIndexer_LANRefused` (deferred-build) and the `TestIntegrati
 (cd core && go test -count=1 -race ./integrations/ ./integrations/integrationstest/... ./internal/instancestore/...)
 
 # No ABO name in core. Expected: ok
-(cd core && go test -count=1 -run 'TestCoreHoldsNoAppKeyNames|TestCoreImportsOnlyCore' ./archtest/...)
+(cd core && go test -count=1 -run 'TestCoreHoldsNoAppKeyNames|TestCoreImportsOnlyCore|TestArchtest_IntegrationsDescriptorCallers' ./archtest/...)
 
 # Deferred members absent. Expected: 0
 grep -rn 'FacadeWriter\|"arrfacade"' core/integrations/*.go | wc -l

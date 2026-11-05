@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R3-02-r3-upgrade-floor-legacy-deletions.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: c967232d-f699-4787-8455-5badc8f3fca6 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -15,8 +15,10 @@
 | Spec | 09 §9.2.2 ("The R3 floor", "Fresh installs"), §9.4 R3; 05-storage §5S.3.5 (`UpgradeFloor`, `ErrUpgradeFloor`, runner rules "Atomicity" and "Upgrade floor"), §5S.4 steps 3 and 6, §5S.9.3, §5S.10; 05-backup §5B.3.4 step 4; 05-tasks §5T.8.1 (the `internal/operations/state` row); 07 §7.8 (opsgen, `ops.ts`, `operationPolling`); 03 §3.7 ("one floor, in R3"), §3.8 R3; 06 §6.4.10 R3, §6.5.1 "Releases" R3 |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. Starts only after OWNER-05 is recorded
-(the R2 release cut and deployed). The R2 production release tag is needed in step 2; take it from the tracking
-issue or `gh release list --exclude-pre-releases --limit 5`. If it cannot be determined, STOP.
+(the R2 release cut and deployed). The R2 production release tag is needed in step 2; take it only from OWNER-05's
+tracking-issue record (its `decision: kept (R2 release <tag>, cut from <rc tag>)` line), never from `gh release list`
+or `main`'s newest RC: a later R2 patch release would otherwise give a different tag from the one R3-04's release note
+names. If the record names no production tag, STOP.
 
 ## START HERE (do this first, exactly)
 
@@ -142,7 +144,9 @@ tests; grep 7's `XPC_SERVICE_NAME` or `RestartPreventExitStatus=78` is absent (t
    (copy them from `internal/books/cutover/stepids.go`, the one place F3-06 reserved M2–M6's IDs, before deleting
    the package, into a small books file such as `internal/books/floor.go`, name coined here, with a comment that the
    steps are deleted and only their IDs remain), `InstallFirst:` the R2 production release tag (the one OWNER-05
-   recorded as cut from its deployed RC tag; if the record names no production tag, STOP). Keep `LegacyCap` defined
+   recorded as cut from its deployed RC tag; if the record names no production tag, STOP), written as a string
+   literal in the declaration (`InstallFirst: "<R2 tag>"`, not through a constant), because R3-04's acceptance greps
+   that literal under `internal/books/` and checks that its release note names the same tag. Keep `LegacyCap` defined
    where it is if books' version adapter still uses it.
 3. **Core storage.** Delete `LegacyMigration`, `Spec.Legacy`, the runner's legacy phase and
    `TestNoNewLegacyMigrations` (05-storage §5S.3.5 "Atomicity"). If grep 8 found no implementation of the

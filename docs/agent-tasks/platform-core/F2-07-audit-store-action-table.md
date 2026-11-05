@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-07-audit-store-action-table.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: dbe44289-51c8-493f-bbe3-5173191430f8 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -109,7 +109,7 @@ Storage layout (§7.2): `rec/<seq:8B big-endian>` → record JSON; `idx/actor/<u
 Action grammar: `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`. `Record`, `RecordIn` and `Emit` refuse an action
 that fails it (`Emit` counts and drops).
 
-The action table: `func CoreActions() []string` (name coined here) returns exactly these 61 actions of §7.1, sorted,
+The action table: `func CoreActions() []string` (name coined here) returns exactly these 64 actions of §7.1, sorted,
 and `TestAuditAction_Grammar` checks every one:
 
 ```text
@@ -129,6 +129,7 @@ core.storage.cutover_step core.storage.quarantine_purge core.storage.cutover_blo
 core.oidc_provider.create core.oidc_provider.update core.oidc_provider.delete
 core.integration.create core.integration.update core.integration.change_url core.integration.write_secret core.integration.delete core.integration.test core.integration.local_migrated
 core.secret.rotate
+core.outbox.dead_retry core.outbox.dead_discard core.outbox.backlog_purge
 core.backup.create core.backup.download core.backup.import
 core.restore.stage core.restore.apply core.restore.revoke
 core.system.factory_reset

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-12-r2-corpus-stage1-r0-written.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: dd68df55-0fe6-4120-9078-f5f927fbe5b4 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -61,6 +61,7 @@ git tag -l | grep -c "^<R0 tag>$"                         # 1, else STOP
 test -d internal/books && echo ok                          # "ok" (R1-15), else STOP
 test ! -e internal/books/testdata/r2corpus && echo absent  # "absent"
 test ! -e scripts/r2corpus && echo absent                  # "absent"
+git check-ignore -v --no-index internal/books/testdata/r2corpus/stage1/audiobooks.pebble/000002.log internal/books/testdata/r2corpus/stage1/state/.encryption_key internal/books/testdata/r2corpus/stage1/library.bleve/x internal/books/testdata/r2corpus/stage1/logs/x.log internal/books/testdata/r2corpus/stage1/x.db   # 5 lines at f7ac5b11e: audiobooks.pebble/, .encryption_key, library.bleve/, logs/, *.db (each one ignored today)
 ls scripts/abs_capture_fixtures.py                         # exists at f7ac5b11e (an existing ABS capture script to learn from)
 grep -n 'db-census' internal/server/handlers/diagnostics.go | head -2   # the census route 09 §9.7 P1 uses (read-only)
 ```
@@ -71,7 +72,32 @@ Create: `scripts/r2corpus/write_r0_corpus.py`, `scripts/r2corpus/record_r0_answe
 `internal/books/testdata/r2corpus/stage1/` (the store directory and its state directory, as the R0 binary leaves them),
 `internal/books/testdata/r2corpus/answers/`, `internal/books/testdata/r2corpus/manifest.json`. Add tests for the scripts
 under `scripts/tests/` (`test_write_r0_corpus.py`, `test_record_r0_answers.py`; names coined here) and the Go manifest
-test `internal/books/r2corpus_manifest_test.go`. Python, not shell (CLAUDE.md rule 4). No other Go change.
+test `internal/books/r2corpus_manifest_test.go`. Modify: `.gitignore` (the negation block below). Python, not shell
+(CLAUDE.md rule 4). No other Go change.
+
+### `.gitignore`: commit the store, not a store-shaped hole
+
+The root `.gitignore` ignores, at any depth, `*.log`, `logs/`, `*.db` (and `-wal`/`-shm`/`-journal`), `*.pebble/` and
+`audiobooks.pebble/`, `*.bleve/` and `library.bleve/`, `.encryption_key`, `.bootstrap-token` and `*.api-token`. Pebble
+names its WAL files `NNNNNN.log`, ABO's default store directory is `audiobooks.pebble` (`cmd/root.go`), and ABO's clean
+close syncs the WAL without flushing the memtable (`internal/database/pebble_store.go`, `closeStore`), so on a corpus this small
+the rows can live only in the WAL. `git add` skips ignored files without an error. Append this block **at the end** of
+`.gitignore` (the last matching pattern wins, so it must follow every pattern above):
+
+```gitignore
+# R2 fixture corpus (F2-12): the R0 binary's store, WAL, index, logs and fixture key are testdata.
+!/internal/books/testdata/r2corpus/**
+/internal/books/testdata/r2corpus/**/.bootstrap-token
+/internal/books/testdata/r2corpus/**/*.api-token
+/internal/books/testdata/r2corpus/**/.claude/
+```
+
+The first line re-includes every file and directory under the corpus (WAL `*.log`, `*.pebble/` and `audiobooks.pebble/`,
+`library.bleve/`, `.encryption_key`, `*.db`); the other three keep the auth-token files ignored. The writer deletes the
+state directory's `.bootstrap-token` after it stops R0 (the token is a one-boot credential; nothing replays it). The block
+covers F2-13's `overlay/` and `blockers/` stores too. Verify before you commit: `git status --porcelain --ignored
+internal/books/testdata/r2corpus/ | grep -c '^!!'` prints `0`, and `git ls-files internal/books/testdata/r2corpus/ | grep -cE
+'\.(log|sst)$'` prints at least 1.
 
 ## What the corpus must contain (coverage contract)
 
@@ -88,8 +114,12 @@ plus the edge values listed. Build the list from §5S.9.1 and §9.2.3 at your ba
 | books (stay in place) | library data from a small fixture audio set (use the repo's existing test fixtures), playlists, reading progress and ABS sessions through the ABS API, so `TestCutoverLeavesOtherFamiliesByteIdentical` has bytes to compare |
 
 `manifest.json` (format coined here): `{"r0_tag", "r0_binary_sha256", "written_at", "stage1": [{"case", "family",
-"step", "how"}], "overlay": [], "answers": [{"name", "file", "what"}]}`. F2-13 appends to `overlay`; never rewrite
-stage 1 entries.
+"step", "how", "store"}], "overlay": [], "blockers": [], "stores": {"<store>": [{"path", "size", "sha256"}]},
+"answers": [{"name", "file", "what"}]}`. `store` is a repo-relative directory (stage 1's is
+`internal/books/testdata/r2corpus/stage1`, holding the store directory and its state directory); every `stage1`,
+`overlay` and `blockers` entry carries one. `stores` maps each such directory to **every** file under it, with its
+size in bytes and its sha256, paths relative to the store directory. F2-13 appends to `overlay` and `blockers` and adds its
+stores to `stores`; never rewrite stage 1 entries.
 
 ## Answers (what `record_r0_answers.py` records, each as a file under `answers/`)
 
@@ -102,6 +132,13 @@ stage 1 entries.
 
 Each answer file records the request that produced it. Answers are recorded by booting R0 **on a copy** of the committed
 store, never on the committed store itself (the committed bytes must stay as written).
+
+**API keys in answer files are a placeholder.** A recorded request or response that carries an API key's secret (the
+`Authorization` or `X-API-Key` header, a mint response's key field) writes the placeholder `<api-key:NAME>` (format coined
+here; `NAME` is the fixture key's fixed name) instead of the value. A replay re-mints the key through R0's API on its copy of
+the store and substitutes it. The installed pre-commit hook rejects any added line matching `abk_[A-Za-z0-9]{16,}`
+(`scripts/setup-git-hooks.sh`); its message suggests `--no-verify`. **Never use `--no-verify`.** If the hook fires, a key
+was not redacted: fix the recorder.
 
 ## Invariants
 
@@ -117,9 +154,15 @@ store, never on the committed store itself (the committed bytes must stay as wri
 
 - `scripts/tests/test_write_r0_corpus.py`: the script's case list covers every step row of the coverage table (static
   check against `manifest.json`); a dry mode lists the API calls without a binary.
-- `scripts/tests/test_record_r0_answers.py`: every answer file named in `manifest.json` exists and parses.
+- `scripts/tests/test_record_r0_answers.py`: every answer file named in `manifest.json` exists and parses, and no answer
+  file matches `abk_[A-Za-z0-9]{16,}` (every key is the placeholder).
 - `TestR2Corpus_ManifestMatchesFiles` (name coined here, Go, `internal/books/r2corpus_manifest_test.go`): every file the
-  manifest names exists; every stage-1 case names a family.
+  manifest names exists; every stage-1 case names a family; it walks **all three** of `stage1`, `overlay` and `blockers`
+  (both empty at this PR) and asserts that each entry's `store` exists and is a key of `stores`; for each store, the files on
+  disk under it equal its file list exactly (none missing, none extra) with matching size and sha256; stage 1's store lists at
+  least one WAL (`*.log`) or SST (`*.sst`) file under its store directory and the `.encryption_key` file. Put the
+  per-store comparison in a helper (`verifyStoreFiles(t, dir, files)`, name coined here) in the same file: F2-14's
+  measurement test, in the same package, calls it on the store it copies.
 
 ## Acceptance
 
@@ -128,6 +171,10 @@ python3 scripts/r2corpus/write_r0_corpus.py --help                         # exi
 python3 -m pytest scripts/tests/test_write_r0_corpus.py scripts/tests/test_record_r0_answers.py -q   # all passed
 python3 -c "import json;m=json.load(open('internal/books/testdata/r2corpus/manifest.json'));print(len(m['stage1'])>0, len(m['answers'])>=4)"   # True True
 go test ./internal/books/ -run TestR2Corpus_ManifestMatchesFiles -count=1   # ok
+git status --porcelain --ignored internal/books/testdata/r2corpus/ | grep -c '^!!'   # 0 (nothing under the corpus is ignored)
+git ls-files internal/books/testdata/r2corpus/ | grep -cE '\.(log|sst)$'      # >=1 (the WAL or an SST is committed)
+git ls-files internal/books/testdata/r2corpus/ | grep -c '/\.encryption_key$' # 1
+grep -rcE 'abk_[A-Za-z0-9]{16,}' internal/books/testdata/r2corpus/answers/ | grep -vc ':0$'   # 0
 du -sh internal/books/testdata/r2corpus/                                    # within the budget stated in the PR body
 make ci                                                                     # exit 0
 ```
@@ -137,6 +184,7 @@ make ci                                                                     # ex
 - No R0 release asset for linux/amd64, or the tag is missing.
 - A family a cutover step moves cannot be written through R0's API: do not write it by hand here; list it for F2-13.
 - A row would need a real credential or a real host name.
+- The pre-commit hook rejects the commit: fix the redaction; never `--no-verify`.
 
 ## Out of scope
 
@@ -149,8 +197,8 @@ Revert the PR (testdata and scripts only).
 
 ## Repo rules
 
-File headers on the scripts and the manifest (JSON cannot carry a comment header: add a `"_header"` object with `file`,
+File headers on the scripts, `.gitignore` (bump its `version` and `last-edited`, keep its guid) and the manifest (JSON cannot carry a comment header: add a `"_header"` object with `file`,
 `version`, `guid`, `last-edited` as the first key, and say so in the PR body); conventional commit
 (`test(r2): R0-written fixture corpus stage 1 and its answers`) with `Co-Authored-By: Claude <noreply@anthropic.com>`;
 `gh pr merge <n> --rebase`; `changelog.d/` fragment. Never commit `.api-token`, `.bootstrap-token` or `.claude/.credentials/`
-(the pre-commit hook blocks them).
+(the pre-commit hook blocks them), and never commit with `--no-verify`.

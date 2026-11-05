@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-01-tasks-public-api-taskstest-kit.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 24217568-a4f2-4955-a65e-13e6cfd7ef35 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -53,7 +53,7 @@ The plan was written at commit `f7ac5b11e`, where `core/` does not exist yet; R1
 base** (fresh `origin/main` after OWNER-03). Any "STOP" condition: stop and report, do not improvise.
 
 ```bash
-# R1 and W22 outputs this PR builds on (each must hit; created by R1-01, R1-09, R1-12, R1-13, R1-20, F2-09, F2-10)
+# R1 and W24 outputs this PR builds on (each must hit; created by R1-01, R1-09, R1-12, R1-13, R1-20, F2-09, F2-10)
 test -f core/go.mod && grep -c '^module github.com/falkcorp/mediacore$' core/go.mod      # expect 1, else STOP
 grep -rln '^package entity$' core/entity/ | wc -l                                         # expect >=1 (entity.Ref), else STOP
 grep -rn 'type Ref struct' core/entity/                                                   # expect 1 hit, else STOP

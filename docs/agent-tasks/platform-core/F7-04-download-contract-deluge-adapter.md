@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-04-download-contract-deluge-adapter.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 8ecb5fb3-8574-4b87-94e6-110557990756 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-04 |
 | Release | R2, flip label F7 (dark PR) |
 | Tier | **T2** (Sonnet / high): one adapter over an existing client and a contract the spec fixes; phase 1 only |
-| Wave | W28 (beside F2-04, F3-06, F4-11, F7-10; file-disjoint) |
+| Wave | W29 (beside F2-05, F2-11, F4-03, F4-06, F5-16, F7-10; file-disjoint) |
 | Depends on | F7-01 (integrations registry: instances, `Env`, `Lease`) |
 | Spec | 05-download §1 (phase-1 build scope; deferred-build members), §3 (Go API, phase-1 members only), §4.1 (instances and adapters), §4.2 (state normalization), §4.4 (path mapping), §4.6 (shutdown), §5–§8, §9 (phase-1 tests), §10 (migration, the `internal/deluge/client.go` row); 03 §3.3 (`integrations/download`); 04 §8.1 F7 |
 

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-10-integrations-instance-routes-dark.md -->
-<!-- version: 1.0.2 -->
+<!-- version: 1.0.5 -->
 <!-- guid: 5632beb8-202d-46fa-8ed4-53a698d32866 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-10 |
 | Release | R2, flip label F7 (dark PR; mounted at F7-09) |
 | Tier | **T3** (Opus / high): instance routes whose test path must never send a stored secret to a new origin |
-| Wave | W28 (beside F2-04, F3-06, F4-11, F7-04; file-disjoint) |
+| Wave | W29 (beside F2-05, F2-11, F4-03, F4-06, F5-16, F7-04; file-disjoint) |
 | Depends on | F7-01 (the integrations `Registry`), F4-01 (`rbac`), F4-02 (`auth`: the principal, its method, ProtectAdmin's interactive check) |
 | Owns gate tests | none of 09's gate list; the route tests below (names coined here) |
 | Spec | 05-metadata M1.3 (`Registry`, the HTTP surface table, "When the routes land, and what they replace"), M1.5 (error semantics: the statuses), M1.10 (the test-connection rows this surface replaces); 05-http-api §3 (`Route`, `Handle`, `CoreGroup`), §8.1 F7 row; 03 §3.3 (`internal/<capability>http`), §3.5 R4 (L6); 05-rbac §7.1 (`core.integration.*`) |
@@ -19,6 +19,14 @@
 ABO keeps its class-`i` `GET`/`PUT /api/v1/config` fields and HEAD's test-connection handlers until F7-09, which mounts
 these routes and deletes those handlers in one PR (05-metadata M1.3 "When the routes land"). Before F7 none of these
 routes is mounted.
+
+**No stage 13 yet.** Route permission (05-http-api §4.2 stage 13) and the bound principal (stage 12) arrive at F4-08
+(W34), after this row's W28, and `coretest`'s `As`, `WithUser` and `AssertPermission` fail "needs core authentication"
+until then (R1-37). So the permission and 401 cells are tables whose cells call `t.Skip("needs stage 13: F4-08")`;
+F7-09, which mounts the package, un-skips them. The handler logic (I1–I5, ProtectAdmin's 403 from `Registry`, audit,
+no secret in responses) is tested now with a principal built with `authtest`'s helpers and bound to the request
+context with `auth.WithPrincipal`, through an `httpapi.Router` built for the test with `Register`. Add no permission
+check inside a handler: enforcement stays the router's.
 
 ## START HERE (do this first, exactly)
 
@@ -116,7 +124,8 @@ grep -rn 'func (r \*Registry) ReleaseHold' core/integrations/providerhttp/ | wc 
 ## Steps
 
 1. Read 05-metadata M1.3 (`Registry`, the HTTP table, "When the routes land"), M1.5 and M2.4 (`ReleaseHold`).
-2. Write the tests below first, with `integrationstest` fakes and `coretest`'s harness on hello.
+2. Write the tests below first, with `integrationstest` fakes, principals bound with `auth.WithPrincipal` (see "No
+   stage 13 yet") and a test `httpapi.Router`.
 3. `hold.go`: the one-method consumer interface the hold route calls, matching providerhttp's method exactly
    (`type HoldReleaser interface { ReleaseHold(ctx context.Context, scope string) error }`, interface name coined here;
    04 §4.6: a consumer declares the narrow interface it calls). The route reads `Registry.Health(ref)`; when its
@@ -130,8 +139,15 @@ grep -rn 'func (r \*Registry) ReleaseHold' core/integrations/providerhttp/ | wc 
 
 ## Tests (write first; names coined here unless marked)
 
+Permission and 401 cells: each test is a table whose every cell calls `t.Skip("needs stage 13: F4-08")` in this PR;
+F7-09 un-skips them when it mounts the package.
+
 - `TestIntegrationHTTP_ReadNeedsIntegrationsRead` and `TestIntegrationHTTP_WritesNeedIntegrationsManage`: every route
-  refuses a principal without its permission (403), including the two test routes and the hold route.
+  refuses a principal without its permission (403) and answers 401 with no principal, including the two test routes
+  and the hold route (a hold-route refusal calls no `ReleaseHold`).
+
+Handler logic, running in this PR (a principal from `authtest`'s helpers bound with `auth.WithPrincipal`):
+
 - `TestIntegrationHTTP_InstanceTestChangedOriginSendsNoStoredSecret`: the route-level twin of F7-01's
   `TestRegistryTest_ChangedURLUsesNoStoredSecret` (spec name): an instance with a stored secret; a body that changes
   the URL origin and omits the secret → the fake server sees no secret; the same body with the origin unchanged → the
@@ -139,10 +155,11 @@ grep -rn 'func (r \*Registry) ReleaseHold' core/integrations/providerhttp/ | wc 
 - `TestIntegrationHTTP_UnscopedTestUsesOnlyBody`: `POST /{kind}/test` with no secret in the body sends none.
 - `TestIntegrationHTTP_NoSecretInResponses`: list, get, put and test responses contain no secret value and no remote
   error text.
-- `TestIntegrationHTTP_StatusesFollowM1_5`: 422, 409 (locked field; version conflict), 403 (non-admin sets `Local`),
+- `TestIntegrationHTTP_StatusesFollowM1_5`: 422, 409 (locked field; version conflict), 403 (a bound non-admin or
+  non-interactive principal sets `Local`: `Registry`'s ProtectAdmin check, not a route guard, so this cell runs now),
   503 (secrets backend down), 404.
 - `TestIntegrationHTTP_HoldReleaseCallsReleaseHold`: an active hold → `ReleaseHold` called once with the hold's scope;
-  no hold → 204, no call; a principal without `core:integrations.manage` → 403, no call.
+  no hold → 204, no call (the 403 cell is in `…WritesNeedIntegrationsManage`).
 - `TestIntegrationHTTP_AuditOncePerAction`: each state-changing route leaves exactly one record of its
   `core.integration.*` action.
 
@@ -151,6 +168,8 @@ grep -rn 'func (r \*Registry) ReleaseHold' core/integrations/providerhttp/ | wc 
 ```bash
 # Package tests with the race detector. Expected: ok
 (cd core && go test -count=1 -race ./internal/integrationhttp/...)
+# The skipped permission tables are in place for F7-09. Expected: >= 2
+grep -c 'needs stage 13: F4-08' core/internal/integrationhttp/routes_test.go
 # Vet. Expected: exit 0
 (cd core && go vet ./internal/integrationhttp/...)
 # Dark: nothing imports it yet. Expected: 0
@@ -187,4 +206,4 @@ Revert the PR; nothing imports the package and nothing is stored.
   (05-metadata M2.4), which F7-02 builds in W30, after this row's W28, and the row does not depend on F7-02. The brief
   declares a one-method consumer interface (`HoldReleaser`) so the route lands dark against a fake; F7-09 must hand it
   providerhttp's registry when it mounts the routes. If the planner prefers the real dependency, the row needs F7-02
-  and moves to W29.
+  and moves to W31.

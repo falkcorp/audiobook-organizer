@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-05-taskhttp-hello-count-coretest.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 47990117-cfa7-4261-af4a-d76cf77ed7da -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -72,7 +72,7 @@ ls internal/server/handlers/opsv3/*.go | grep -vc _test         # 9 non-test fil
 Create only `core/internal/taskhttp/` (with its tests and a `tasks.Client` fake local to the tests) and
 `core/examples/hello/count.go` (+ `core/examples/hello/count_test.go`). Do **not** modify
 `core/examples/hello/module.go`, `core/coretest/`, `core/kernel/`, `core/module/`, `core/openapi/core.json` or the
-generated client: they are F2-16's in W28.
+generated client: they are F2-16's in W30.
 
 ## Routes (05-tasks §5T.3.10; copy paths and permissions exactly)
 

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R3-04-r3-release-note.md -->
-<!-- version: 1.0.2 -->
+<!-- version: 1.0.3 -->
 <!-- guid: 9333a60d-0082-4464-a9b9-c1a2d1cf879b -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -29,10 +29,12 @@ git rebase origin/main
 
 ## Inputs you need before writing
 
-1. **The R2 tag.** `gh release list --exclude-pre-releases --limit 5`: the newest non-prerelease whose notes say R2
-   (or the tag OWNER-05 recorded in the tracking issue). Call it `<R2 tag>` below and write the literal tag everywhere
-   the texts say `<R2 release>` or `<R2 tag>`. If you cannot determine it, STOP and report "R3-04 needs the R2 tag
-   from OWNER-05".
+1. **The R2 tag.** Read it only from OWNER-05's tracking-issue record (its `decision: kept (R2 release <tag>, cut from
+   <rc tag>)` line), the same source R3-02 writes into `UpgradeFloor.InstallFirst`. Never take it from
+   `gh release list` or the newest release: after an R2 patch release that would name a different tag from the one the
+   binary prints in `install <tag> first`. Call it `<R2 tag>` below and write the literal tag everywhere the texts say
+   `<R2 release>` or `<R2 tag>`. If the record names no production tag, STOP and report "R3-04 needs the R2 tag from
+   OWNER-05".
 2. **Whether F9 slipped to R3.** Read R2-01's merged PR description ("F9 decision"). If it records that F9 moved to R3,
    the R3 note carries the shell's page paths (step 5). Otherwise it does not.
 
@@ -110,6 +112,12 @@ grep -c 'The first start of this release deletes the old settings key file `.enc
 grep -c 'launchctl bootout' "$F"; grep -c 'docker compose stop' "$F"; grep -c -- '--db-type' "$F"
 # Exit code named. Expected: >= 1
 grep -c '78' "$F"
+# The note's tag equals R3-02's InstallFirst literal. R3-02 runs beside this row in W44: run this once R3-02 has
+# merged (rebase first); if it has not merged when this PR is otherwise ready, wait for it. Expected: no output
+TAG="$(grep -rhoE 'InstallFirst: *"[^"]+"' internal/books/ | head -1 | sed -E 's/.*"([^"]+)"/\1/')"
+test -n "$TAG" || echo "R3-02 has not merged: no InstallFirst literal"
+grep -q "install $TAG first" "$F" || echo "note does not name $TAG"
+grep -oE 'install [^ `]+ first' "$F" | sort -u | grep -vx "install $TAG first"
 # Gate. Expected last line: ✅ All CI checks passed!
 make ci
 ```

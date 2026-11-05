@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-19-journal-query-route-dark.md -->
-<!-- version: 1.0.2 -->
+<!-- version: 1.0.3 -->
 <!-- guid: 4142bda4-22ac-4f63-8d52-07a0db51b22d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -182,7 +182,7 @@ Spec tests (05-logging §10, names copied exactly), in `permissions_test.go`:
 
 | Test | Proves (this PR's half) |
 |---|---|
-| `TestJournal_RequiresSystemManage` | a `core:system.view`-only principal gets `403` on `GET /api/core/v1/system/logs`; a `core:system.manage` principal gets `200`. Write it as a table with a `// F6-05: the event half (no core.log.recorded.v1 events) is added here` comment where F6-05 adds its rows |
+| `TestJournal_RequiresSystemManage` | runs now: the registered route's `Perm` is `rbac.Need("core:system.manage")`, and a `core:system.manage` principal bound through `authtest` and `auth.WithPrincipal` gets `200`. The stage-13 table (a `core:system.view`-only principal gets `403` on `GET /api/core/v1/system/logs`; no principal gets `401`) is written now and each cell calls `t.Skip("needs stage 13: F4-08")`; F5-18, which mounts the route after F4-08, deletes the skips. Keep a `// F6-05: the event half (no core.log.recorded.v1 events) is added here` comment where F6-05 adds its rows |
 | `TestJournal_OtherUsersLinesNeedUsersView` | over a journal holding imported records (from F5-15's R0-fixture importer path, `logtest` or `logjournal`'s test helper at your base) and new records: a `core:system.manage` principal **without** `core:users.view` gets neither the imported nor the new records the books-style predicate flags, and sees `user_id` blank on the rest; **with** `core:users.view` it gets every record with `user_id` intact |
 
 Coined tests (names coined here), in `routes_test.go`:
@@ -191,13 +191,18 @@ Coined tests (names coined here), in `routes_test.go`:
   recording fake `JournalStore`); `limit` absent → 50, `0` → 50, `5000` → 1000; a bad `since` → 400 and no query.
 - `TestLogRoute_CursorPagesNewestFirst`: over `logjournal`'s native store with 120 records and `limit=50`, three
   pages chained by `next` return all 120 newest first with no duplicate, the last page's `next` is `""`.
-- `TestLogRoute_AuthOffAnswers401`: with auth disabled (the `coretest` or `httpapi` test option for it at your base;
-  if none exists, assert instead that the route's `Perm` is `rbac.Need("core:system.manage")` and that the catalog
-  marks that scope `AuthRequired`, and say so in the PR).
+- `TestLogRoute_AuthOffAnswers401`: runs now: the route's `Perm` is `rbac.Need("core:system.manage")` and the catalog
+  marks that scope `AuthRequired`. Its booted cell (auth disabled, the request answers `401`) is a table cell that
+  calls `t.Skip("needs stage 13: F4-08")`, like the permission table above.
 
-Build principals with `rbactest` and `authtest`'s helpers (grep `^func ` in `core/rbac/rbactest/` and
-`core/auth/authtest/` at your base) and drive the route through a `httpapi.Router` built for the test with
-`Register(router.CoreGroup(), deps)`, so the permission check is the router's, not the handler's.
+**Why the skips.** Stage 12 (binding the principal) and stage 13 (route permission and guards) arrive with the identity
+flip F4-08 (W34), after this row (W31); until then `coretest`'s `As`, `WithUser` and `AssertPermission` fail "needs core
+authentication" (R1-37, completed by F4-08). With no stage 13 running, a request without the permission gets `200`,
+so the `403` and `401` cells cannot pass here. Do **not** add a permission check inside the handler to make them pass
+(enforcement in two places, which F4-08's stage 13 would duplicate): the check is the router's. Test the handler's own
+logic (parameters, paging, the other-user rule) with a principal bound through `authtest`'s helpers and
+`auth.WithPrincipal` on the request context (grep `^func ` in `core/rbac/rbactest/` and `core/auth/authtest/` at your
+base), driving the route through a `httpapi.Router` built for the test with `Register(router.CoreGroup(), deps)`.
 
 Write them first, watch them fail to compile, then implement.
 
@@ -217,6 +222,7 @@ cd core
 go build ./... && go vet ./internal/loghttp/                                       # exit 0
 go test ./internal/loghttp/ -race -count=1                                          # ok
 go test ./internal/loghttp/ -race -count=1 -v -run 'TestJournal_RequiresSystemManage$|TestJournal_OtherUsersLinesNeedUsersView$|TestLogRoute_' | grep -c '^--- PASS'   # 5
+grep -c 't.Skip("needs stage 13: F4-08")' internal/loghttp/permissions_test.go internal/loghttp/routes_test.go | awk -F: '{s+=$2} END {print (s>=1)}'   # 1 (the stage-13 cells, un-skipped by F5-18)
 go list -deps ./internal/loghttp/ | grep -c 'falkcorp/audiobook-organizer'          # 0 (core holds no ABO import)
 grep -rn 'loghttp' --include=*.go kernel/ | wc -l                                   # 0 (unmounted: F5-18 mounts it)
 make ci                                                                            # exit 0 (core's)

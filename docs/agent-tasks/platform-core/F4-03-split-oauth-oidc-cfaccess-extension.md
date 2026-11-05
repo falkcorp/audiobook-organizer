@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-03-split-oauth-oidc-cfaccess-extension.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 6d906762-e7f8-4bbc-b7e3-b7cbceb0b389 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -68,7 +68,7 @@ Confirm F4-02 is merged and the move window is announced. If not, stop.
 `scripts/ci/short_test_weights.json`, and these 25 `internal/oauth` importers (re-pointed, not the whole
 `internal/server/` directory): `internal/server/`: `cf_recovery_test.go`, `invite_guest_access.go`, `invite_guest_access_test.go`, `oauth_app_code_epoch_integration_test.go`, `owner_routes_test.go`, `static_embed_recovery_test.go`, `wire_abs_routes.go`, `wire_oauth.go`; `internal/server/handlers/abs/`: `abs_test.go`, `authorize_apikey_test.go`, `openid.go`, `openid_flow_test.go`, `sliding_session_test.go`; `internal/server/handlers/`: `oauth_login.go`, `oauth_login_deeplink_test.go`; `internal/server/middleware/`: `abs_caller_key_test.go`, `absauth.go`, `absauth_apikey_test.go`, `absauth_nonidentity_test.go`, `absauth_servicetoken_test.go`, `absauth_test.go`, `absauthprobe.go`, `auth_method_test.go`, `cfaccess_verified_test.go`, `cfbounce_test.go`.
 
-At HEAD 29 files import `internal/oauth`; `internal/server/login_ceiling.go` and its test leave with F4-02 (W25), and
+At HEAD 29 files import `internal/oauth`; `internal/server/login_ceiling.go` and its test leave with F4-02 (W27), and
 `cfaccess.go`/`cfbounce.go` move here, so at BASE the importer set is exactly the files above.
 
 ## Re-verify at BASE (HEAD `f7ac5b11e` values shown)

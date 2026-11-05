@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-18-logging-stages-1-and-2.md -->
-<!-- version: 1.1.5 -->
+<!-- version: 1.1.6 -->
 <!-- guid: 0af0f945-e47e-4822-ac2b-f63544c667ad -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -77,10 +77,10 @@ output identical:
    `TestNamespace_CoreScopesUseAppNamespace`) and registers observable instruments that read `Logging.Counters()`:
    `mediacore_log_records_total{level,module}`, `mediacore_log_dropped_total{sink}` and
    `mediacore_log_redactions_total{kind}`. The two journal families of §9 (`_journal_write_errors_total`,
-   `_journal_lag_seconds`) have no `Counters` field yet and are not this row's. Put the bridge beside R1-13's
-   construction of `Logging` in `core/kernel/` (file `core/kernel/logmetrics.go`); it, its test and
-   its golden are in the inventory's list above (R1-16, this wave's sibling, edits only `core/kernel/supervisor.go`
-   there). Add the scope's series golden
+   `_journal_lag_seconds`) have no `Counters` field yet and are not this row's. Put the bridge in `core/kernel/logmetrics.go` and call it from `app.New` (`core/app/app.go`, R1-13's file)
+   right after `Logging` is constructed, on the App's metrics provider; the bridge, its test, its golden and
+   `core/app/app.go` are in the inventory's list above (R1-16, this wave's sibling, edits only
+   `core/kernel/supervisor.go`; no other W16 row touches `core/app/`). Add the scope's series golden
    `core/kernel/testdata/log/series.golden` (family, type, label set), asserted by `metricstest.AssertSeries` (R1-10;
    05-metrics §5 item 5).
 
@@ -97,7 +97,8 @@ output identical:
 - `TestLogLevelFlagApplies`: `--log-level debug` makes debug records reach the handler.
 - `TestLogMetrics_SeriesGolden`: the `mediacore.log` scope's gathered families match
   `core/kernel/testdata/log/series.golden` through `metricstest.AssertSeries`, and a record, a tap drop and a redaction
-  each raise their counter by one (05-logging §9).
+  each raise their counter by one (05-logging §9). One booted cell gathers through the App's served `/metrics`
+  handler (not a direct bridge call) and finds the three `mediacore_log_*` families.
 - Existing: `internal/activity` and `internal/logger` suites unchanged.
 
 ## Dependency check

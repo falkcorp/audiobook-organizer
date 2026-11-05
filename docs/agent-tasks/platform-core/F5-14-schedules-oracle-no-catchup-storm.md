@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-14-schedules-oracle-no-catchup-storm.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 80c882d4-5cd4-40d6-8c6b-e278487a2d3d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -96,7 +96,7 @@ string in the PR description; that list is the release-note input (05-tasks §5T
 
 | Action | Path |
 |---|---|
-| create | `internal/books/schedules.go`: the declarations and `func ScheduleFor(k tasks.Kind) *tasks.Schedule` (name coined here), the hook F5-18 passes to every conversion's list function |
+| create | `internal/books/schedules.go`: the declarations, `func ScheduleFor(k tasks.Kind) *tasks.Schedule` (name coined here), the hook F5-18 passes to every conversion's list function, and `func ScheduledKinds() []tasks.Kind` (name coined here): the sorted list of every books kind `ScheduleFor` returns a schedule for |
 | create | `internal/books/schedule_parity_test.go`: `TestScheduleParity_AllDefinitions` and `TestCutover_NoCatchUpStorm` |
 | modify | `internal/books/config.go`: books' config section gains the `modules.books.scheduler.schedules.<task>` keys beyond the 16 `scheduled.<entry>` keys F3 declared, each typed `tasks.ScheduleConfig` |
 | create | one `changelog.d/` fragment |
@@ -112,6 +112,10 @@ package, `core/`, `main.go`, `internal/books/module.go` or any other `internal/b
 // ScheduleFor returns the schedule of a books kind, or nil. F5-18 passes it as every conversion's
 // sched hook. It never returns a schedule for a core kind (core owners declare their own).
 func ScheduleFor(k tasks.Kind) *tasks.Schedule
+
+// ScheduledKinds lists, sorted, every books kind ScheduleFor returns a non-nil schedule for.
+// The parity test builds its stub kinds from it; F5-18 re-checks it against the real list functions.
+func ScheduledKinds() []tasks.Kind
 
 // one entry per HEAD TaskDefinition that fires a books kind:
 //   tasks.ScheduleFromConfig("modules.books.scheduler.schedules.<task name>")   // key rule R2-7: no hyphens
@@ -153,19 +157,32 @@ STOP and report.
 
 Build both on F2-04's harness (`core/tasks/taskstest/schedule/`): HEAD's side drives `internal/scheduler.NewTaskScheduler`
 with the fake clock and the reachability deps `cadence_golden_test.go` uses; core's side runs F2-04's scheduler over
-`ScheduleFor` and the converted kinds (built from the conversions' list functions with `ScheduleFor` as the hook, in
-`coretest`). `TestCutover_NoCatchUpStorm` imports clocks the way M4 does (F5-16's clock decoders, or a fixture of
+**one stub `tasks.Task` per kind in `ScheduledKinds()`**, each with `Common.Schedule: ScheduleFor(k)` and a `Run` that
+only records the start (built in the test, not from the conversions: the conversions' list functions `t6g<k>Kinds` and
+`t7Kinds` are unexported methods with unexported deps, and this row edits no conversion package). The schedule is the
+only field the parity compares, so a stub carries everything the scheduler reads. `TestCutover_NoCatchUpStorm` imports clocks the way M4 does (F5-16's clock decoders, or a fixture of
 `tasks.Clock` values equal to what M4 writes, `library_scan_full_last_run` as `LastDue` of `books.library.scan-full`)
 and then runs the first poll. `library_scan` and `library_scan_full` are two ordinary parity cases on two kinds.
 
 Add (names coined here): `TestScheduleFor_KeysDeclaredAndValid` (every key obeys R2-7 and is declared with type
-`tasks.ScheduleConfig`; no key on two kinds; `ScheduleFor` returns nil for every `core.*` kind) and
-`TestScheduleFor_DroppedV2CronsAbsent` (none of the 15 crons yields a schedule unless Q-C enabled it).
+`tasks.ScheduleConfig`; no key on two kinds; `ScheduleFor` returns nil for every `core.*` kind),
+`TestScheduleFor_DroppedV2CronsAbsent` (none of the 15 crons yields a schedule unless Q-C enabled it) and
+`TestScheduleFor_KindListMatchesConversions`: the stub list is the list the conversions register, by name.
+`ScheduledKinds()` equals a golden literal in `schedule_parity_test.go` (one kind per HEAD `TaskDefinition` that fires a
+books kind: `"books." + taskV2DefIDs[name]` by conversion rule R3, `library_scan_full` → `books.library.scan-full`,
+`db_optimize` → `books.maintenance.aux-store-compact`; `transcode`, `batch_poller`, `purge_old_logs` and core halves
+absent), and every golden name `books.<id>` is declared by a conversion: exactly one non-test file under
+`internal/plugins/` or `internal/server/` holds either the literal `"books.<id>"` or both a `tasks.Kind("books." +`
+expression and the HEAD ID literal `"<id>"` (a source scan; conversion rule R3 declares each kind as
+`tasks.Kind("books." + <HEAD def ID>)` beside HEAD's ID constant). A conversion that renames or drops a scheduled kind
+fails this test. F5-18, which builds the real kinds from the
+list functions, re-checks that `ScheduledKinds()` is a subset of the kinds it registers and that each registered kind's
+`Common.Schedule` is `ScheduleFor(k)`.
 
 ## Steps
 
 1. The base checks; STOP on a mismatch or a missing Q-C answer.
-2. Write the two spec tests and the two coined tests; watch them fail.
+2. Write the two spec tests and the three coined tests; watch them fail.
 3. `schedules.go` and the extra keys in `config.go`, entry by entry in `cadence.golden` order; run the parity
    test per entry.
 4. PR description: the 38-row table (task → kind → key → default → window order), the 15 dropped crons (or the
@@ -177,7 +194,7 @@ Add (names coined here): `TestScheduleFor_KeysDeclaredAndValid` (every key obeys
 
 ```bash
 go build ./... && go vet ./internal/books/                                       # exit 0
-go test ./internal/books/ -run 'TestScheduleParity_AllDefinitions|TestCutover_NoCatchUpStorm|TestScheduleFor_' -count=1 -v | grep -c '^--- PASS'   # 4
+go test ./internal/books/ -run 'TestScheduleParity_AllDefinitions|TestCutover_NoCatchUpStorm|TestScheduleFor_' -count=1 -v | grep -c '^--- PASS'   # 5
 go test ./internal/books/ -run 'TestScheduleParity_AllDefinitions' -count=1 -v | grep -c 'SKIP'   # 0
 grep -c 'schedules.library_scan_full' internal/books/schedules.go internal/books/config.go | awk -F: '{s+=$2} END {print (s>=1)}'   # 1
 go test ./internal/scheduler/ -count=1 -short                                    # ok (HEAD's scheduler untouched)
@@ -199,7 +216,7 @@ F5-16); core owners' keys (declared at F2; the core kinds are F5-03's and F2's m
 
 ## Idempotency / rollback
 
-If `internal/books/schedules.go` exists and the four tests pass, run the acceptance instead. Rollback = revert;
+If `internal/books/schedules.go` exists and the five tests pass, run the acceptance instead. Rollback = revert;
 nothing reads `ScheduleFor` before F5-18.
 
 ## Repo rules

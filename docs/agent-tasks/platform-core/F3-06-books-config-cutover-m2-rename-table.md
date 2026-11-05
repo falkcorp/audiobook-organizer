@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-06-books-config-cutover-m2-rename-table.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: a42617df-0a4d-49ef-a19d-48538878932a -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -87,7 +87,7 @@ not create `steps.go` and do not touch `core/module/`: your step constructors ta
 | blob codec | `internal/config/persistence.go:359-824` (`migrate*Blob`), `:1088-1129` (one-shots), `:1932-2016` | same |
 | row cipher | `internal/database/settings.go:110-140,189-235` | after R1-26: `internal/books/store/settings.go` |
 | key guard | `cmd/root.go:760` `guardAgainstKeyRegeneration` | same |
-| `invite_config.go`, `bootstrap_key_ttl.go` | `internal/config/` | **moved into core by F4-02** (W25, before this row): read HEAD's copy with `git show 748fd787a:internal/config/<file>` |
+| `invite_config.go`, `bootstrap_key_ttl.go` | `internal/config/` | **moved into core by F4-02** (W27, before this row): read HEAD's copy with `git show 748fd787a:internal/config/<file>` |
 | removed keys | `internal/config/removed_keys.go` | same |
 | `BindEnv` calls | 132 in `config.go`, 9 in `abs_config.go`, 1 in `invite_config.go` (05-config §1.12.3) | same |
 | corpus | — | `internal/books/testdata/r2corpus/` (F2-12 stage 1, F2-13 overlay) |

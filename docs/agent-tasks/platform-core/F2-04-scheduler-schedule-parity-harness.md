@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-04-scheduler-schedule-parity-harness.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 150263db-02f3-457c-9fd5-39a0970861c8 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -92,7 +92,7 @@ your base says and list the difference in the PR body):
 
 ```bash
 grep -nE '^\| `core\.[a-z_.<>]*schedules\.[a-z_]*`( / `core\.[a-z_.]*`)? \| `tasks\.ScheduleConfig`' \
-  docs/specs/platform-core/05-*.md | grep -v '05-indexer' | wc -l        # 11 table rows (12 keys) at the plan's base
+  docs/specs/platform-core/05-*.md | grep -v '05-indexer' | wc -l        # 12 table rows (13 keys) at the plan's base
 ```
 
 | Key | Owner row (default) |
@@ -104,7 +104,8 @@ grep -nE '^\| `core\.[a-z_.<>]*schedules\.[a-z_]*`( / `core\.[a-z_.]*`)? \| `tas
 | `core.diagnostics.schedules.prune` | 05-health §5H.7 (`{enabled: true, every: 1h}`) |
 | `core.integrations.schedules.health` | 05-metadata M1.7 (`{enabled: true, every: 5m}`) |
 | `core.library.schedules.quarantine_prune` | 05-library §5L.7 (`{enabled: true, every: 24h}`) |
-| `core.log.schedules.journal_prune` | 05-logging §8 (`{"enabled":true,"every":"24h"}`) |
+| `core.library.schedules.transfer_recover` | 05-library §5L.7 (`{enabled: true, every: 24h}`); F7-06 registers `core.library.transfer-recover` on it with `ScheduleFromConfig("core.library.schedules.transfer_recover").OnStart()`, so it also runs once at start (05-library §5L.3.3) |
+| `core.log.schedules.journal_prune` | 05-logging §8 (`{"enabled":true,"every":"24h"}`). Declared here in the kernel's `core.log.schedules` section struct (F2-09 declared the section); F5-15 later swaps the declaration to `logjournal.Schedules` (05-logging §5) in the same file, so one type is registered |
 | `core.tasks.schedules.prune` | 05-tasks §5T.10 (`{"enabled": true, "every": "24h"}`) |
 | `core.updater.schedules.check` | 05-updater §5U.8 (`{enabled: true, every: 1h}`) |
 | `core.storage.schedules.compact` | 05-storage §5S.4 "Task kinds" (prose, not a table row: a nightly-window member, DB-persisted, seeded once by M2 from HEAD's `scheduled.db_optimize`). The spec states no default: declare `{enabled: true, window: "nightly"}` (a window member, as §5S.4 says) and record it in the PR body |
@@ -136,7 +137,7 @@ Create:
 
 Modify:
 
-- `core/kernel/core_sections.go` — add the 13 schedule keys of the table above, each a field of type
+- `core/kernel/core_sections.go` — add the 14 schedule keys of the table above, each a field of type
   `tasks.ScheduleConfig` in its owner's section struct with the owner's default and `reload` from its Hot-reload
   column (all "yes"), and the `windows` map field of the `core.tasks` section. Touch no other key F2-09 declared.
 
@@ -169,8 +170,9 @@ Nothing else; in particular not `core/kernel/core_sections_test.go` (F2-09's) or
 ## TDD: tests to write first (names copied from 05-tasks §5T.9)
 
 - `TestCoreSections_ScheduleKeysDeclared` (name coined here, in `core/kernel/core_sections_schedule_test.go`): the
-  set of leaf paths of type `tasks.ScheduleConfig` reflected from the core-section list equals the table's 13 keys
-  exactly, and `core.tasks.windows.nightly.{start,end,enabled}` resolve with defaults 1, 4, true.
+  set of leaf paths of type `tasks.ScheduleConfig` reflected from the core-section list equals the table's 14 keys
+  exactly (`core.library.schedules.transfer_recover` among them), and `core.tasks.windows.nightly.{start,end,enabled}`
+  resolve with defaults 1, 4, true.
 - `TestWindowNightly_DeclaredOnceInTasks` (name coined here): `core.window.nightly` is declared only in
   `core/tasks/window.go` (an AST or `go list` grep over `core/...` finds no second declaration).
 
@@ -206,7 +208,7 @@ cd core
 go build ./... && go vet ./internal/scheduler/... ./tasks/...                        # exit 0
 go test ./internal/scheduler/... ./tasks/taskstest/schedule/... -race -count=1       # all ok
 go test ./kernel/ -run 'TestCoreSections_' -count=1                                 # ok (F2-09's tests still pass beside the new one)
-grep -c 'tasks.ScheduleConfig' kernel/core_sections.go                              # 13
+grep -v '//' kernel/core_sections.go | grep -c 'tasks.ScheduleConfig'              # 14 (F2-09's `// schedule keys (tasks.ScheduleConfig): F2-04` comments excluded)
 grep -rn '"core.window.nightly"' --include='*.go' . | grep -v _test | wc -l         # 1 (tasks/window.go)
 go test ./internal/scheduler/... -run 'TestSchedule_EnqueueAndClockOneBatch|TestSchedule_NoBootStampede|TestSchedule_CoalesceMissed|TestSchedule_DSTSpringForwardFallBack|TestScheduleFromConfig_UndeclaredKeyRefused|TestScheduleFromConfig_ForeignNamespaceRefused|TestScheduleFromConfig_OwnerKeyAccepted|TestScheduleFromConfig_HotReload|TestEvery_RefusedExceptRelay' -race -count=1 -v | grep -c '^--- PASS'   # 9
 grep -rn 'audiobook-organizer\|internal/scheduler"' internal/scheduler/ | wc -l       # 0 (no ABO import)

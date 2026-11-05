@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-15-log-journal-and-step-m5.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.5 -->
 <!-- guid: 2172729c-4a08-45a0-ad75-8cf11d81ee4d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -39,7 +39,10 @@ Land, dark, the core system-log journal of 05-logging §5 and books' cutover ste
    ULIDs from the record time, attributes flattened to dotted keys), the importer over it, the journal `Tap`
    at `core.log.journal.min_level` handing records to `Append` in batches (≤ 256 records or 1 s), and the two
    types the `core.log.journal` and `core.log.schedules` sections name (`Settings` and `Schedules` of 05-logging §5).
-   The sections themselves are registered dark from F2 by F2-09's section list; this PR adds the types.
+   The sections themselves are registered dark from F2 by F2-09's section list (with F2-04's `journal_prune` key);
+   this PR adds the types and **swaps** those declarations in `core/kernel/core_sections.go` to `logjournal.Settings`
+   and `logjournal.Schedules`, so one type is registered (05-logging §8: "`logjournal.Settings` and
+   `logjournal.Schedules` are registered dark from F2").
 3. `core/log/logtest/`: `logtest.JournalStoreSuite` (the exported contract, with its importer cases).
 4. `internal/books/cutover/m5/`: books' BootBlocking cutover step M5, a `datamigrate.DataMigration` that decodes
    `syslog:` rows in chunks and calls `log.Importer.Import`, then deletes the chunk's source rows.
@@ -102,11 +105,12 @@ Spec anchors: 05-logging cites `pebble_store_activity.go:20-37` and `store.go:67
 | create | `core/log/logtest/` (`JournalStoreSuite`) |
 | modify | `core/kernel/logmetrics.go` and `core/kernel/testdata/log/series.golden` (R1-18's bridge: add `mediacore_log_journal_write_errors_total` (counter) and `mediacore_log_journal_lag_seconds` (gauge) from 05-logging §9, read from the journal tap's counters; add their lines to the golden, asserted by `metricstest.AssertSeries`) |
 | create | `core/internal/logjournal/` (`store.go` native store, `importer.go`, `tap.go`, `settings.go` with the `Settings` and `Schedules` types, tests); **not** `prune.go` (F5-03), `tail.go` (F6-05) |
+| modify | `core/kernel/core_sections.go`: the `core.log.journal.*` declaration (F2-09's) and the `core.log.schedules.journal_prune` declaration (F2-04's) now name `logjournal.Settings` and `logjournal.Schedules`; the kernel's own struct types for the two sections are deleted. Touch no other section or key |
 | create | `internal/books/cutover/m5/` (the step, its tests, its fixture glue) |
 | create | one `changelog.d/` fragment |
 
 Do not modify `internal/books/cutover/steps.go` (F5-18 registers M5), `internal/books/cutover/stepids.go` (F3-06's),
-`core/kernel/core_sections.go` (F2-09's), `internal/activity`, `internal/logger`, `internal/database`, `main.go` or any
+`core/kernel/core_sections_test.go` (F2-09's), `core/kernel/core_sections_schedule_test.go` (F2-04's), `internal/activity`, `internal/logger`, `internal/database`, `main.go` or any
 kernel wiring.
 
 ## Code contract
@@ -129,8 +133,11 @@ type Settings struct { // section core.log.journal (05-logging §5)
 type Schedules struct { // section core.log.schedules (05-logging §5)
 	JournalPrune tasks.ScheduleConfig `json:"journal_prune"` // tasks.ScheduleFromConfig("core.log.schedules.journal_prune"), default {"enabled":true,"every":"24h"}
 }
-// F2-09 registered both sections dark; point their declarations at these two types if they name a placeholder
-// (F2-09's section list in core/kernel/core_sections.go is not this row's file: if it must change, STOP and report).
+// F2-09 (and F2-04, for journal_prune) registered both sections dark in core/kernel/core_sections.go with the kernel's
+// own struct types. This PR swaps those declarations to these two types (same paths, JSON tags, defaults and reload
+// tags), so only one Go type is registered per section. F2-09's TestCoreSections_EveryOwnerKeyDeclared and F2-04's
+// TestCoreSections_ScheduleKeysDeclared compare leaf paths by reflection, so both stay green unedited. A field whose
+// path, default or tag differs between the two declarations: the owner table (05-logging §8) wins; report it.
 // Native store, importer and tap constructors: names coined here (e.g. NewStore, NewImporter, StartTap),
 // taking the c/log/ keyspace handle the kernel will pass at F5-18.
 ```
@@ -207,6 +214,8 @@ go build ./... && go vet ./log/... ./internal/logjournal/                       
 go test ./log/... ./internal/logjournal/ -race -count=1                            # ok
 go test ./internal/logjournal/ -run 'TestNativeJournalStore_RoundTrip|TestJournal_BatchAndRetention|TestJournal_PruneScheduleKeyDeclared' -count=1 -v | grep -c '^--- PASS'   # 3
 go list -deps ./log/ | grep -c 'mediacore/storage'                                 # 0 (log stays L0)
+go test ./kernel/ -run 'TestCoreSections_' -count=1                                # ok (F2-09's and F2-04's section tests, unedited)
+grep -cE 'logjournal\.(Settings|Schedules)' kernel/core_sections.go                # >=2 (the swapped declarations)
 make ci                                                                            # exit 0 (core's)
 cd ..
 go test ./internal/books/cutover/m5/ -race -count=1 -run 'TestCutover_SyslogImported|TestM5_' -v | grep -c '^--- PASS'   # 3

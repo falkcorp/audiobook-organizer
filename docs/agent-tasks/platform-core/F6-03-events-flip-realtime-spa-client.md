@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F6-03-events-flip-realtime-spa-client.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: c4bebd8c-0dc9-4e78-a620-116332cca63d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -78,6 +78,7 @@ routes F6-04 built), §5E.13 (table and "Order" item (3)); 05-logging §5 (live 
 | hub A and its callers | `internal/realtime/` (deleted), `internal/server/`, `internal/itunes/service/` |
 | SPA | `web/src/services/eventSourceManager.ts`, `web/src/` |
 | move bookkeeping | `internal/arch/layering_test.go` (`internal/realtime` leaves `layerOf`), `scripts/ci/short_test_weights.json` |
+| F6-04's skipped cells | `core/internal/outboxhttp/routes_test.go` (un-skip only: remove the `t.Skip("needs stage 13: F4-08")` calls; no other change) |
 
 The producer list was computed at the plan's base. F5-18 moves or deletes much of `internal/plugins/` before this PR,
 so re-grep at BASE (below): every non-test file that names the path-update follow-up is this PR's file, wherever F5-18
@@ -100,6 +101,7 @@ grep -rln 'path_update\|path-update' --include=*.go internal/plugins/deluge | wc
 # yours too, any file missing from the table and not deleted by F5-18 is a STOP.
 grep -rli 'path-update\|PathUpdate' --include=*.go internal | grep -v _test | sort    # plan base: 14
 grep -rn 'package outboxhttp' core/internal/outboxhttp/ | wc -l               # >= 1 (F6-04)
+grep -c 'needs stage 13: F4-08' core/internal/outboxhttp/routes_test.go       # >= 3 (F6-04's skipped permission tables)
 grep -rn 'core.log.recorded.v1' core/internal/logjournal/ | wc -l             # >= 1 (F6-05)
 grep -rn 'OutboxConsumers\|OutboxHandler' core/module/ | wc -l               # 0 (this PR adds them)
 ```
@@ -116,8 +118,11 @@ grep -rn 'OutboxConsumers\|OutboxHandler' core/module/ | wc -l               # 0
 
 1. Write the tests below first.
 2. Add the F6 members to `core/module/` (06 §6.4.10 F6 row: `Manifest.OutboxConsumers`, `Registrar.OutboxHandler`,
-   `Deps.Outbox`); wire the relay, the hub (P5), `eventhttp`, F6-04's `outboxhttp` and F6-05's tail topic in
-   `core/kernel/boot.go` and `kernel.go`; regenerate `core/openapi/core.json` and the generated client.
+   `Deps.Outbox`); wire the relay, the hub (P5), `eventhttp`, F6-04's `outboxhttp` (its `Register` takes the outbox's
+   `Operator`, the `events.Catalog` and the `audit.Logger`) and F6-05's tail topic in `core/kernel/boot.go` and
+   `kernel.go`; regenerate `core/openapi/core.json` and the generated client. Un-skip the permission, guard and 401
+   cells of `outboxhttp` (`core/internal/outboxhttp/routes_test.go`: delete each `t.Skip("needs stage 13: F4-08")`),
+   which run now that F4-08's stage 13 is live and the package is mounted.
 3. Books' topic declarations in `books.Module()`'s `Register`; move every hub A publisher to `events.Publish`; book-change
    coalescing via `RealtimeMeta.Coalesce`.
 4. The durable relocation topic and its `ConsumeIntoTask(…, Live())` consumer; declare the consumer in
@@ -142,7 +147,9 @@ grep -rn 'OutboxConsumers\|OutboxHandler' core/module/ | wc -l               # 0
   `opaqueredirect` raises `ApiAuthRedirectError`; reset triggers the resync handlers; closed reconnects; the stream closes
   when the tab is hidden.
 - The event half of `TestJournal_RequiresSystemManage` (F6-05's) and F6-04's route tests now run on ABO's mounted
-  routes and topics.
+  routes and topics, the un-skipped cells of `TestOutboxHTTP_ListDeadNeedsSystemManage`,
+  `TestOutboxHTTP_PurgeNeedsInteractive` and `TestOutboxHTTP_ConsumersAndTopicsNeedSystemView` among them (403, the
+  interactive guard and 401 enforced by stage 13).
 - `TestDisabledModuleOutboxRetained` (06 §6.10, COR-12): a message for a disabled module's declared consumer survives
   `orphan_retention` and another consumer's ack, and is delivered after re-enable (it needs this PR's
   `Manifest.OutboxConsumers`).
@@ -168,7 +175,8 @@ ls -d internal/realtime 2>/dev/null | wc -l                                     
 grep -rn '/api/events' internal web/src scripts .claude/skills | grep -v '/api/core/v1/events' | wc -l   # 0
 grep -rn 'new EventSource(' web/src | grep -v test | wc -l                             # 0 (fetch-based reader)
 (cd web && npm run build && npm test -- --run)                                         # exit 0
-(cd core && go test -race -count=1 ./realtime/... ./outbox/...)                        # ok
+(cd core && go test -race -count=1 ./realtime/... ./outbox/... ./internal/outboxhttp/...)   # ok
+grep -c 'needs stage 13: F4-08' core/internal/outboxhttp/routes_test.go                 # 0 (un-skipped)
 go test -count=1 -run 'TestDisabledModuleOutboxRetained|TestDepsScoping|TestCoreRoutesReplaceGin' ./... ; (cd core && go test -count=1 -run 'TestDisabledModuleOutboxRetained|TestDepsScoping' ./...)   # ok
 make -C core ci                                                                        # exit 0
 make ci                                                                                # exit 0

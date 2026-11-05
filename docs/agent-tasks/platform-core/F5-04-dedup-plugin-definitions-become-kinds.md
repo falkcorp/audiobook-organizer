@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-04-dedup-plugin-definitions-become-kinds.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: f65363ce-a82a-4644-94e3-cbeb03867ead -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -120,8 +120,8 @@ git grep -n 'mediacore/tasks"' -- main.go internal/opscatalog/ | wc -l          
 ```bash
 grep -rn 'OperationDef{' internal/plugins/dedup/*.go | grep -v _test.go | grep -vc 'plugin.go'     # 32, else STOP
 grep -n 'childop\.\|WaitForOp' internal/plugins/dedup/run_all.go internal/plugins/dedup/label_refinement.go | wc -l   # >=2 (the v2 child waits)
-grep -n 'Requires:' internal/plugins/dedup/check_book.go | wc -l                                     # 1
-grep -n 'Batchable: *true' internal/plugins/dedup/check_book.go | wc -l                              # 1
+grep -nE '^\s*Requires:' internal/plugins/dedup/check_book.go | wc -l                                # 1 (anchored: the comment lines at :12 and :71 do not match)
+grep -nE '^\s*Batchable: *true' internal/plugins/dedup/check_book.go | wc -l                         # 1 (anchored: the comment at :79 does not match)
 grep -ln 'mediacore/tasks"' internal/plugins/dedup/*.go | wc -l                                     # 0 (else see Idempotency)
 ```
 
