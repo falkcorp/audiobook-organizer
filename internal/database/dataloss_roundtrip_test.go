@@ -131,7 +131,7 @@ func TestRoundTrip_UpdateBookFile(t *testing.T) {
 	full.Retired = false
 	// The populator gave the row a Duration; a row with a Duration carries
 	// exactly DurationOK{Done:true} and every write path enforces it
-	// (mergeBookFileFromStored), so the sentinel failure record the populator put
+	// (mergeBookFileFromStored, and normalizeDurationStage in the create paths), so the sentinel failure record the populator put
 	// there is not a state the store can hold beside a value.
 	full.Scan.DurationOK = StageStatus{Done: true}
 

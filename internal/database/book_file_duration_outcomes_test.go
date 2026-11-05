@@ -1,7 +1,7 @@
 // file: internal/database/book_file_duration_outcomes_test.go
 // version: 1.0.0
 // guid: e8806232-72f3-4588-84ba-61dc9378c975
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package database
 
@@ -327,6 +327,46 @@ func TestUpsertKnownDurationNeverSitsBesideAFailureRecord(t *testing.T) {
 		require.NoError(t, s.UpdateBookFile(cur.ID, &cur))
 		require.Equal(t, StageStatus{Done: true}, onlyBookFile(t, s, book.ID).Scan.DurationOK)
 	})
+}
+
+// N-d: the two create paths have nothing to merge with, so they make the
+// Duration/DurationOK pair consistent themselves: a value comes with exactly
+// Done:true, no value comes with Done false (a failure record is kept).
+func TestCreateBookFilePathsNormaliseTheDurationStage(t *testing.T) {
+	stale := StageStatus{Attempts: 2, LastError: "exit status 1"}
+	failure := StageStatus{Attempts: 1, LastError: "probe returned 0s"}
+	type tc struct {
+		name string
+		row  BookFile
+		want StageStatus
+	}
+	cases := []tc{
+		{"value beside a stale failure record", BookFile{FilePath: "/lib/A/01.m4b", Duration: Secs(60), Scan: ScanState{DurationOK: stale}}, StageStatus{Done: true}},
+		{"value with no stage", BookFile{FilePath: "/lib/A/02.m4b", Duration: Secs(60)}, StageStatus{Done: true}},
+		{"Done with no value", BookFile{FilePath: "/lib/A/03.m4b", Scan: ScanState{DurationOK: StageStatus{Done: true}}}, StageStatus{}},
+		{"non-positive value is no value", BookFile{FilePath: "/lib/A/04.m4b", Duration: Secs(0), Scan: ScanState{DurationOK: StageStatus{Done: true}}}, StageStatus{}},
+		{"failure record with no value is kept", BookFile{FilePath: "/lib/A/05.m4b", Scan: ScanState{DurationOK: failure}}, failure},
+	}
+	for _, c := range cases {
+		t.Run("CreateBookFile/"+c.name, func(t *testing.T) {
+			s := openRescanStore(t)
+			book, err := s.CreateBook(&Book{Title: "Batman: Hush"})
+			require.NoError(t, err)
+			row := c.row
+			row.BookID = book.ID
+			require.NoError(t, s.CreateBookFile(&row))
+			require.Equal(t, c.want, onlyBookFile(t, s, book.ID).Scan.DurationOK)
+		})
+		t.Run("BatchCreateBookFiles/"+c.name, func(t *testing.T) {
+			s := openRescanStore(t)
+			book, err := s.CreateBook(&Book{Title: "Batman: Hush"})
+			require.NoError(t, err)
+			row := c.row
+			row.BookID = book.ID
+			require.NoError(t, s.BatchCreateBookFiles([]*BookFile{&row}))
+			require.Equal(t, c.want, onlyBookFile(t, s, book.ID).Scan.DurationOK)
+		})
+	}
 }
 
 // N1: every ScanState field is classified in scanStateFieldClasses, the way

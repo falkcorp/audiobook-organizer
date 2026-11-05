@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
 // version: 1.135.5
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package scanner
 
@@ -2893,19 +2893,25 @@ func createBookFilesForBookWithAudio(bookFilePath string, segmentFiles []string,
 		// readable: ABS reports a book's duration as the sum of its rows, so a
 		// 0 here shows the book as "0" in the app. Skipped when:
 		//   - the replaced-file probe above already read this file;
-		//   - the stored row at this path is the same file as far as is known
-		//     (the hashes are not known to differ: equal, or one unknown, which
-		//     the merge does not treat as a change either) and
-		//       - holds a duration, because the merge keeps that stored
-		//         duration anyway, so a probe is wasted work and a failed one
-		//         would leave a failure record beside the kept value; or
-		//       - is at the attempt ceiling (DurationUnreadable), which stays
-		//         there until an explicit ResetDuration instead of being
-		//         re-probed on every scan; the merge restores the stored stage;
+		//   - the stored row at this path holds a duration AND both hashes are
+		//     known and equal: the merge keeps that stored duration, so a probe
+		//     is wasted work and a failed one would leave a failure record beside
+		//     the kept value. An UNKNOWN hash on either side is not enough: the
+		//     merge cannot tell a replaced file from the same one, so the probe
+		//     must run and its value wins (otherwise a wrong stored duration
+		//     becomes permanent once the hash is filled in);
+		//   - the stored row is at the attempt ceiling (DurationUnreadable) and
+		//     the hashes are not known to differ: it stays there until an
+		//     explicit ResetDuration instead of being re-probed on every scan
+		//     (the merge restores the stored stage). A ceiling reached through
+		//     timeouts is re-probed: a slow disk is not a bad file;
 		//   - the file could not be stat'ed (nothing to read).
+		sameKnownBytes := stored != nil && stored.FileHash != "" && bf.FileHash != "" &&
+			stored.FileHash == bf.FileHash
 		sameStored := stored != nil && !hashKnownToDiffer(bf.FileHash, stored.FileHash)
-		storedSettled := sameStored && (stored.DurationState() == database.DurationKnown ||
-			stored.DurationState() == database.DurationUnreadable)
+		storedSettled := (sameKnownBytes && stored.DurationState() == database.DurationKnown) ||
+			(sameStored && stored.DurationState() == database.DurationUnreadable &&
+				!database.IsDurationTimeoutError(stored.Scan.DurationOK.LastError))
 		if statErr == nil && !probedReplaced && !storedSettled {
 			known := bookfileaudio.Known{
 				Info:           knownInfo[filePath],

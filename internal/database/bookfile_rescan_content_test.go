@@ -384,6 +384,20 @@ func TestBatchUpsertScannedBookFiles_ChangedHashNoDurationDropsAudio(t *testing.
 	if len(after.AcoustIDFingerprint) != 0 || after.IntroTranscription != nil || after.Duration != nil || after.TranscribeStatus != nil {
 		t.Error("an unverified content change kept the old file's fingerprint, transcript or duration")
 	}
+	// Literal expectations, written out rather than derived from
+	// scanStateFieldClasses (which expectedScanAfterChange reads), so a wrong
+	// table entry cannot make the test agree with itself: the audio-derived
+	// stages went with the audio, the pipeline stages stayed.
+	if before.Scan.FPWindowed == (StageStatus{}) || before.Scan.FPFull == (StageStatus{}) || before.Scan.Attempts == 0 {
+		t.Fatalf("seed must populate the stages this asserts on: %+v", before.Scan)
+	}
+	if after.Scan.DurationOK != (StageStatus{}) || after.Scan.FPWindowed != (StageStatus{}) || after.Scan.FPFull != (StageStatus{}) {
+		t.Errorf("audio-derived stages must be dropped with the audio: %+v", after.Scan)
+	}
+	if after.Scan.Attempts != before.Scan.Attempts || after.Scan.LastError != before.Scan.LastError ||
+		after.Scan.NeedsDeep != before.Scan.NeedsDeep || after.Scan.HeaderBad != before.Scan.HeaderBad {
+		t.Errorf("pipeline state must survive a content change: before %+v, after %+v", before.Scan, after.Scan)
+	}
 	if after.NeedsRescan == nil || *after.NeedsRescan {
 		t.Error("the merge must not touch NeedsRescan (it is the scan cache's flag)")
 	}
