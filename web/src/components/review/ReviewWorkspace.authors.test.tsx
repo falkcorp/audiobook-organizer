@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.authors.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0b6d94c3-f7a2-4e18-9d05-62c8e1a7b350
-// last-edited: 2026-10-19
+// last-edited: 2026-11-05
 
 /**
  * The Authors & series lane inside the workspace: how it is reached, what the
@@ -138,16 +138,15 @@ describe('Authors & series in the workspace', () => {
     expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(1);
   });
 
-  it('does not write the lane back to the URL', async () => {
+  it('writes the lane to the URL when another lane is opened', async () => {
     const user = userEvent.setup();
     renderWorkspace('/review?lane=authors');
     await screen.findByTestId('authors-panel');
     await user.click(screen.getByTestId('lane-tab-regroup'));
     expect(await screen.findByTestId('regroup-rail')).toBeInTheDocument();
     expect(within(screen.getByTestId('review-workspace')).queryByTestId('authors-panel')).not.toBeInTheDocument();
-    // `?lane=` is how you ARRIVE at a lane, not a record of the one you are on:
-    // moving to another lane leaves the URL exactly as it was.
-    expect(screen.getByTestId('location')).toHaveTextContent('/review?lane=authors');
+    // The address bar says which lane is open, so the link can be copied.
+    expect(screen.getByTestId('location').textContent).toBe('/review?lane=regroup');
   });
 
   it("?author= focuses that author's group, not just the first one", async () => {
@@ -157,7 +156,7 @@ describe('Authors & series in the workspace', () => {
     expect(screen.getByTestId('author-group-1')).not.toHaveAttribute('data-focused');
   });
 
-  it('?lane=authors&view=series opens the Series sub-view once; the Authors sub-view is one click away and nothing is written back', async () => {
+  it('?lane=authors&view=series opens the Series sub-view once; the Authors sub-view is one click away and the URL follows', async () => {
     const user = userEvent.setup();
     renderWorkspace('/review?lane=authors&view=series');
     expect(await screen.findByTestId('series-panel')).toBeInTheDocument();
@@ -169,7 +168,8 @@ describe('Authors & series in the workspace', () => {
     await user.click(screen.getByTestId('authors-subview-authors'));
     expect(await screen.findByRole('heading', { name: 'Author A' })).toBeInTheDocument();
     expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId('location')).toHaveTextContent('/review?lane=authors&view=series');
+    // Back on the default sub-view, `view` leaves the URL.
+    expect(screen.getByTestId('location').textContent).toBe('/review?lane=authors');
   });
 
   it('?view=series is for the authors lane only: it does not open Series when the URL landed on another lane', async () => {

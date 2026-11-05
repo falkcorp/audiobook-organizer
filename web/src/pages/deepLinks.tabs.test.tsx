@@ -132,7 +132,7 @@ describe('/collections tab', () => {
     expect(screen.getByRole('tab', { name: 'Dynamic' })).toHaveAttribute('aria-selected', 'true');
     await waitFor(() => expect(listCollections).toHaveBeenCalled());
     expect(listCollections).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(listCollections).mock.calls[0][0]).toBe('dynamic');
+    expect(vi.mocked(listCollections).mock.calls.at(0)?.[0]).toBe('dynamic');
   });
 
   it('a click writes ?tab= with one fetch', async () => {
@@ -154,7 +154,7 @@ describe('/collections tab', () => {
 describe('/versions tab', () => {
   function stubVersions() {
     const fetchMock = vi.fn(
-      async () =>
+      async (_input: RequestInfo | URL) =>
         new Response(JSON.stringify({ data: { versions: [] } }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },

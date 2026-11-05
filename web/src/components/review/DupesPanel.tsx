@@ -1,7 +1,7 @@
 // file: web/src/components/review/DupesPanel.tsx
-// version: 1.16.0
+// version: 1.17.0
 // guid: 1d6f8a03-7c25-4e91-b840-2a5c9e3b7d14
-// last-edited: 2026-10-13
+// last-edited: 2026-11-05
 //
 // The dupes lane's full surface: filter rail, spine, bulk bar, compare drawer.
 //
@@ -315,8 +315,8 @@ export interface DupesPanelProps {
   /**
    * Which surface of the lane shows: the pair Queue, or the Gold Labels
    * (Labels) / Suspicious sub-views. Owned by the workspace, which seeds it from
-   * `?view=` once and lets the "Manage labels" command set it; never written
-   * back to the URL.
+   * `?view=`, lets the "Manage labels" command set it, and mirrors it back to
+   * `?view=`.
    */
   subView: DupesSubView;
   onSubViewChange: (view: DupesSubView) => void;
@@ -875,6 +875,8 @@ export function DupesPanel({
       <CandidateCompareDrawer
         candidateId={dupes.drawerCandidateId}
         onClose={() => dupes.setDrawerCandidateId(null)}
+        tab={dupes.drawerTab}
+        onTabChange={dupes.setDrawerTab}
       />
 
       <Dialog

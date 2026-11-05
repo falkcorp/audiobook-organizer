@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.26.0
+// version: 1.27.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
-// last-edited: 2026-10-19
+// last-edited: 2026-11-05
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -1230,7 +1230,7 @@ describe('the dupes lane sub-views (Queue | Labels | Suspicious)', () => {
     expect(subView('suspicious')).toHaveTextContent('Suspicious');
   });
 
-  it('?view=labels seeds Labels, and clicking Queue leaves the URL alone', async () => {
+  it('?view=labels seeds Labels, and clicking Queue takes `view` out of the URL', async () => {
     const user = userEvent.setup();
     stubLabelsApi();
     renderWithLocation('/review?lane=dupes&view=labels');
@@ -1242,7 +1242,7 @@ describe('the dupes lane sub-views (Queue | Labels | Suspicious)', () => {
     await user.click(subView('queue'));
 
     expect(await screen.findByTestId('dupes-rail')).toBeInTheDocument();
-    expect(screen.getByTestId('location')).toHaveTextContent('/review?lane=dupes&view=labels');
+    expect(screen.getByTestId('location').textContent).toBe('/review?lane=dupes');
   });
 
   it('ignores ?view= when the URL does not land on the dupes lane', async () => {
@@ -1296,7 +1296,7 @@ describe('the dupes lane sub-views (Queue | Labels | Suspicious)', () => {
 
     expect(await screen.findByTestId('dupes-labels-view')).toBeInTheDocument();
     expect(screen.getByTestId('lane-tab-dupes')).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByTestId('location')).toHaveTextContent('/review?lane=regroup');
+    expect(screen.getByTestId('location').textContent).toBe('/review?lane=dupes&view=labels');
   });
 
   it('keeps the dupes lane silent on Labels, and fetches once when Queue is chosen', async () => {

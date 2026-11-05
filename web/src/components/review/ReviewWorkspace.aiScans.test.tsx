@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.aiScans.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 91d5a7c3-2e68-4f10-b3a4-86c0f5e7d219
-// last-edited: 2026-10-19
+// last-edited: 2026-11-05
 
 /**
  * The AI scans sub-view inside the workspace: how it is reached, the two lane
@@ -96,7 +96,7 @@ afterEach(() => {
 });
 
 describe('reaching AI scans', () => {
-  it('?lane=authors&view=ai opens AI scans, reads the history once and no author or series list, and writes nothing back', async () => {
+  it('?lane=authors&view=ai opens AI scans, reads the history once and no author or series list, and the URL follows', async () => {
     const user = userEvent.setup();
     renderWorkspace('/review?lane=authors&view=ai');
     expect(await screen.findByTestId('ai-scans-panel')).toBeInTheDocument();
@@ -106,10 +106,10 @@ describe('reaching AI scans', () => {
     expect(authorsReads.fetchAuthorGroups).not.toHaveBeenCalled();
     expect(authorsReads.fetchSeriesGroups).not.toHaveBeenCalled();
 
-    // One click to Authors; the URL is how you ARRIVE, not a record.
+    // One click to Authors; `view` leaves the URL with the default sub-view.
     await user.click(screen.getByTestId('authors-subview-authors'));
     await waitFor(() => expect(authorsReads.fetchAuthorGroups).toHaveBeenCalledTimes(1));
-    expect(screen.getByTestId('location')).toHaveTextContent('/review?lane=authors&view=ai');
+    expect(screen.getByTestId('location').textContent).toBe('/review?lane=authors');
   });
 
   it('?view=ai is for the authors lane only: it does not open AI scans when the URL landed on another lane', async () => {

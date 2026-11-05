@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useAuthorsLane.ts
-// version: 1.6.1
+// version: 1.7.0
 // guid: c9e4a1d7-5b83-4f26-a0d9-3e7b61f48a25
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 /**
  * The Authors & series lane's data layer: the Authors sub-view and the Series
@@ -496,9 +496,22 @@ export interface SeriesLane {
 // ---------------------------------------------------------------------------
 
 export interface AuthorsLane {
-  /** Which sub-view is showing. Local state, seeded once from `?view=`. */
+  /** Which sub-view is showing. Local state, seeded from `?view=`, mirrored to it by the workspace. */
   view: AuthorsSubView;
   setView: (v: AuthorsSubView) => void;
+  /**
+   * The author the reviewer focused (a click or j/k), as the id of that group's
+   * canonical author -- what `?author=` holds. Null until something was focused,
+   * NOT the first-row fallback `focusedKey` shows: that is not a choice, and
+   * writing it would put an author in every link.
+   */
+  focusedAuthorId: number | null;
+  /**
+   * Focus the group an author belongs to, as the first load does for `?author=`.
+   * Waits for the groups when they are not loaded yet. For a URL change that
+   * arrives while the lane is mounted (a link, back/forward).
+   */
+  focusAuthor: (id: number) => void;
   /** The Series sub-view's list and choices. */
   series: SeriesLane;
 
@@ -685,6 +698,10 @@ export function useAuthorsLane(
   const [pageState, setPageState] = useState(0);
   const [pageSize, setPageSizeState] = useState<number>(AUTHORS_DEFAULT_PAGE_SIZE);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
+  const focusedAuthorId = useMemo(
+    () => groups.find((g) => g.key === focusedKey)?.canonical.id ?? null,
+    [groups, focusedKey]
+  );
 
   const kindCounts = useMemo(() => {
     const counts: Record<AuthorKindFilter, number> = {
@@ -882,6 +899,22 @@ export function useAuthorsLane(
 
   // ---- loading the groups --------------------------------------------------------
   const seedRef = useRef<number | null>(parseAuthorId(urlFilters.authorId));
+  // The same landing the first load gives `?author=`: every kind shown, the page
+  // the group is on, the group focused. Nothing to do for an id no group holds.
+  const landOnAuthor = useCallback((list: readonly AuthorGroup[], id: number) => {
+    const at = list.find((g) => g.canonical.id === id || g.variants.some((v) => v.id === id));
+    if (!at) return;
+    setFilterState('all');
+    setFocusedKey(at.key);
+    setPageState(Math.floor(list.indexOf(at) / AUTHORS_DEFAULT_PAGE_SIZE));
+  }, []);
+  const focusAuthor = useCallback(
+    (id: number) => {
+      if (groupsRef.current?.load.state === 'ready') landOnAuthor(groupsRef.current.load.value.groups, id);
+      else seedRef.current = id;
+    },
+    [landOnAuthor]
+  );
   useEffect(() => {
     if (!authorsOn) return;
     const ctl = new AbortController();
@@ -917,12 +950,7 @@ export function useAuthorsLane(
         const seed = seedRef.current;
         if (seed !== null) {
           seedRef.current = null;
-          const at = mapped.find((g) => g.canonical.id === seed || g.variants.some((v) => v.id === seed));
-          if (at) {
-            setFilterState('all');
-            setFocusedKey(at.key);
-            setPageState(Math.floor(mapped.indexOf(at) / AUTHORS_DEFAULT_PAGE_SIZE));
-          }
+          landOnAuthor(mapped, seed);
         }
       })
       .catch((e: unknown) => {
@@ -933,7 +961,7 @@ export function useAuthorsLane(
         });
       });
     return () => ctl.abort();
-  }, [authorsOn, groupsKey, commitResult]);
+  }, [authorsOn, groupsKey, commitResult, landOnAuthor]);
 
   // ---- loading the series groups ---------------------------------------------------
   useEffect(() => {
@@ -2362,6 +2390,8 @@ export function useAuthorsLane(
   return {
     view,
     setView,
+    focusedAuthorId,
+    focusAuthor,
     series: seriesLane,
     status,
     error: groupsLoad.state === 'error' ? groupsLoad.message : null,

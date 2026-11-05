@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.30.0
+// version: 1.31.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
-// last-edited: 2026-10-19
+// last-edited: 2026-11-05
 //
 // The unified review workspace: one screen for dedup, metadata apply, the
 // review queue, author and series merges, and library repairs.
@@ -19,11 +19,30 @@
 // inactive -- so the server-side entity filter the link exists to trigger never
 // ran. The lane tests all clicked their way in and never saw it.
 //
-// Seeded once at mount, deliberately NOT mirrored back. A tab click that wrote
-// `?lane=` would make lane state derive from a param the click itself sets, and
-// the lane's gated fetch would fire twice per switch -- the exact defect just
-// removed from DupesPanel. `?lane=` is how you ARRIVE at a lane, not a running
-// record of the one you are on.
+// THE ADDRESS BAR ALWAYS SAYS WHERE YOU ARE
+//
+// Seeded at mount AND mirrored back (`useUrlStateSync`): `lane`, the dupes
+// `view`/`layer`/compare drawer (`compare`, `ctab`), the authors `view`/`author`,
+// the repairs `fixer`/`filter`/`class`, and the spine `mode`. Copy the address
+// bar and the link lands on the same screen. docs/reference/ui-deep-links.md
+// lists every parameter.
+//
+// This used to be seeded once and never written, because a tab click that wrote
+// `?lane=` while lane state ALSO derived from it fetched the lane's data twice
+// per switch -- the defect removed from DupesPanel. The mirror keeps the two
+// from touching: component state is the only thing the page reads, the URL is
+// written from it after the commit, and the only way a URL change gets back into
+// state is `onExternalChange`, which fires for changes the mirror did not make (a
+// link click, back/forward) and is diff-only, so it never resets what the URL
+// already agrees with. The hooks' seeds come from a MOUNT snapshot, not live
+// `searchParams`, so a mirror write cannot change a hook input.
+//
+// `band` and `book` are NOT seeds and are not mirrored here: they are the dupes
+// lane's server-side filters, derived from the URL on every render (the band
+// chips and the banner's Clear write them, in DupesPanel). They stay in the
+// address bar across lane switches so the filter survives a trip to another lane,
+// and while either is present the lane is always written, even `metadata`, since
+// a bare URL carrying `band` would otherwise reopen on the dupes lane.
 //
 // NO LEGACY TOGGLE
 //
@@ -35,6 +54,8 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useUrlStateSync } from '../../hooks/useUrlState';
+import { COMPARE_TAB_SLUGS, parseUrlId, readReviewUrl } from './reviewUrl';
 import {
   Alert,
   AlertTitle,
@@ -64,13 +85,13 @@ import { coverFullSizeUrl } from '../../utils/coverUrl';
 import { CommandBar, type CommandMenu } from './CommandBar';
 import { normalizeViewMode, type SpineViewMode } from './spine/viewMode';
 import { DupesPanel } from './DupesPanel';
-import { parseDupesSubView, useDupesLabels, type DupesSubView } from './lanes/useDupesLabels';
+import { useDupesLabels, type DupesSubView } from './lanes/useDupesLabels';
 import { RegroupPanel } from './RegroupPanel';
 import { RepairsPanel } from './RepairsPanel';
 import { AuthorsPanel } from './AuthorsPanel';
 import { MetadataPanel } from './MetadataPanel';
 import { ReplaceConfirmDialog } from './ReplaceConfirmDialog';
-import { parseDedupLayer, useDupesLane } from './lanes/useDupesLane';
+import { useDupesLane } from './lanes/useDupesLane';
 import { useMetadataLane } from './lanes/useMetadataLane';
 import { useRegroupLane } from './lanes/useRegroupLane';
 import { useRepairsLane } from './lanes/useRepairsLane';
@@ -158,36 +179,19 @@ function exportRowsAsCsv(
   return rows.length;
 }
 
-/**
- * The lane to open on, read from the URL once at mount.
- *
- * `?lane=` is explicit and wins. `?book=` and `?band=` are the dupes lane's own
- * filters, so a link carrying either is a link to that lane even when it does
- * not say so -- which is what makes the deep link from a book's status alert
- * work without every producer having to spell the lane out.
- *
- * An unrecognised `?lane=` falls back rather than throwing: a stale bookmark
- * should land somewhere useful, not on a blank screen.
- */
-function initialLaneFrom(params: URLSearchParams): ReviewLane {
-  const named = params.get('lane');
-  if (named && (LANE_ORDER as string[]).includes(named)) return named as ReviewLane;
-  if (params.get('book') || params.get('band')) return 'dupes';
-  return 'metadata';
-}
-
 export function ReviewWorkspace() {
   const { toast } = useToast();
   const [searchParams] = useSearchParams();
-  // Seeded from the URL, not synced to it -- see the note at the top of the file.
-  const [lane, setLane] = useState<ReviewLane>(() => initialLaneFrom(searchParams));
-  // The dupes lane's sub-view (Queue | Labels | Suspicious), seeded once from
-  // `?view=labels|suspicious` when the URL lands on the dupes lane and never
-  // written back -- same rule as `lane` above. "Manage labels" sets it.
-  const [dupesSubView, setDupesSubView] = useState<DupesSubView>(() =>
-    initialLaneFrom(searchParams) === 'dupes' ? parseDupesSubView(searchParams.get('view')) : 'queue',
-  );
-  const [viewMode, setViewMode] = useState<SpineViewMode>('compact');
+  // What the URL said when the workspace mounted. Every hook below is seeded from
+  // THIS, not from live `searchParams`, so the mirror's own writes can never change
+  // a hook input -- see the note at the top of the file.
+  const [urlAtMount] = useState(() => readReviewUrl(searchParams));
+  const [lane, setLane] = useState<ReviewLane>(() => urlAtMount.lane ?? 'metadata');
+  // The dupes lane's sub-view (Queue | Labels | Suspicious), seeded from
+  // `?view=labels|suspicious` when the URL lands on the dupes lane and mirrored
+  // back to it. "Manage labels" sets it.
+  const [dupesSubView, setDupesSubView] = useState<DupesSubView>(urlAtMount.dupesView);
+  const [viewMode, setViewMode] = useState<SpineViewMode>(urlAtMount.mode);
 
   const metadata = useMetadataLane(toast, lane === 'metadata');
   // Every lane fetches only while it is the visible one, so switching lanes
@@ -196,15 +200,21 @@ export function ReviewWorkspace() {
   // FIRST render. Passing them down beats letting the panel sync them up: an
   // effect-based sync made every ?book= deep link fetch the whole unfiltered
   // set before correcting itself.
+  //
+  // `band` and `book` are LIVE (DupesPanel writes them and the lane derives from
+  // them); the memo is keyed on their values so a write to any other key leaves
+  // it alone. `layer`, `compare` and `compareTab` are seeds from the mount snapshot.
+  const bandParam = searchParams.get('band') as DedupBand | null;
+  const bookParam = searchParams.get('book');
   const dupesUrlFilters = useMemo(
     () => ({
-      band: searchParams.get('band') as DedupBand | null,
-      entityId: searchParams.get('book'),
-      // A seed: the hook reads it on its first render and never mirrors it. An
-      // unknown value becomes null rather than reaching the server.
-      layer: parseDedupLayer(searchParams.get('layer')),
+      band: bandParam,
+      entityId: bookParam,
+      layer: urlAtMount.layer,
+      compare: urlAtMount.compare,
+      compareTab: urlAtMount.compareTab,
     }),
-    [searchParams],
+    [bandParam, bookParam, urlAtMount],
   );
   // The third view position is the dupes lane's Clusters view; the lane makes
   // its two extra fetches only while that is showing.
@@ -243,26 +253,18 @@ export function ReviewWorkspace() {
   const [confirmRefetchStale, setConfirmRefetchStale] = useState(false);
   const regroup = useRegroupLane(toast, lane === 'regroup');
   // Gated like the others: no fixer list, rows or trial polls unless visible.
-  // `?fixer=<id>` preselects a fixer, but only when the URL landed on the
-  // repairs lane (read once at mount by the hook, never written back).
-  const repairs = useRepairsLane(
-    toast,
-    lane === 'repairs',
-    initialLaneFrom(searchParams) === 'repairs' ? searchParams.get('fixer') : null,
-  );
+  // `?fixer=`, `?filter=` and `?class=` seed the lane, but only when the URL
+  // landed on the repairs lane (the snapshot holds nothing otherwise).
+  const repairs = useRepairsLane(toast, lane === 'repairs', urlAtMount.repairs);
   // Authors & series: fetches only while visible, like the others. `?author=` is
-  // a seed (focus that author's group on the first load), read here so the hook
-  // has it on its first render, and never written back. `?view=series` seeds the
-  // lane's sub-view the same way -- but `view` is ALSO the dupes lane's parameter
-  // (labels|suspicious), so it is handed over only when the URL landed on the
-  // authors lane: `?lane=dupes&view=series` is not an instruction to the authors
-  // lane, and a later click on its tab must not inherit it.
+  // a seed (focus that author's group on the first load) and `?view=series|ai`
+  // seeds the lane's sub-view; both are mirrored back. `view` is ALSO the dupes
+  // lane's parameter (labels|suspicious), so the snapshot holds it for this lane
+  // only when the URL landed on the authors lane: `?lane=dupes&view=series` is not
+  // an instruction to the authors lane.
   const authorsUrlFilters = useMemo(
-    () => ({
-      authorId: searchParams.get('author'),
-      view: initialLaneFrom(searchParams) === 'authors' ? searchParams.get('view') : null,
-    }),
-    [searchParams],
+    () => ({ authorId: urlAtMount.authorId, view: urlAtMount.authorsView }),
+    [urlAtMount],
   );
   const authors = useAuthorsLane(toast, lane === 'authors', authorsUrlFilters);
   // The AI scans sub-view's data. Owned here, not by the panel, because the
@@ -270,6 +272,78 @@ export function ReviewWorkspace() {
   // which scan is running). It reads only while that sub-view is the one on
   // screen; `?view=ai` seeds it through `authors.view`, once, like `?view=series`.
   const aiScans = useAIScans(toast, lane === 'authors' && authors.view === 'ai');
+
+  // ---- the address bar --------------------------------------------------------
+  // Each lane's parameters are written only while that lane is showing; the others
+  // are removed, so a repairs link does not carry a stale `view` from the dupes
+  // lane. Defaults are left out (`metadata`, `queue`, `authors`, `applicable`,
+  // `compact`, the first drawer tab) -- except `lane`, see the note at the top.
+  const dupesOn = lane === 'dupes';
+  const authorsOn = lane === 'authors';
+  const repairsOn = lane === 'repairs';
+  const compareId = dupesOn ? dupes.drawerCandidateId : null;
+  const hasDupesFilter = Boolean(bandParam || bookParam);
+  useUrlStateSync(
+    {
+      lane,
+      mode: viewMode,
+      view: dupesOn ? dupesSubView : authorsOn ? authors.view : null,
+      layer: dupesOn ? dupes.filters.layer : null,
+      compare: compareId === null ? null : String(compareId),
+      ctab: compareId === null ? null : COMPARE_TAB_SLUGS[dupes.drawerTab],
+      author:
+        authorsOn && authors.view === 'authors' && authors.focusedAuthorId !== null
+          ? String(authors.focusedAuthorId)
+          : null,
+      fixer: repairsOn ? repairs.selectedFixerId : null,
+      filter: repairsOn ? repairs.filter : null,
+      class: repairsOn ? repairs.rowClass : null,
+    },
+    {
+      defaults: {
+        ...(hasDupesFilter ? {} : { lane: 'metadata' }),
+        mode: 'compact',
+        view: dupesOn ? 'queue' : 'authors',
+        ctab: 'files',
+        filter: 'applicable',
+      },
+      // A URL the workspace did not write: a link to another place in /review, or
+      // back/forward. Move state to match, and only where it DIFFERS -- DupesPanel's
+      // own band/book writes land here too, and re-seeding a lane that already
+      // agrees would reset its offset, filter or focus for nothing.
+      onExternalChange: (params) => {
+        const next = readReviewUrl(params);
+        // A URL naming no lane (a bare /review, or `Clear` on the book banner
+        // when the lane was only implied) is no instruction: stay exactly where
+        // we are.
+        if (next.lane === null) return;
+        const target = next.lane;
+        if (target !== lane) setLane(target);
+        if (next.mode !== viewMode) setViewMode(next.mode);
+        if (target === 'dupes') {
+          if (next.dupesView !== dupesSubView) setDupesSubView(next.dupesView);
+          if (next.layer !== dupes.filters.layer) dupes.setFilters({ layer: next.layer });
+          if (next.compare !== dupes.drawerCandidateId || next.compareTab !== dupes.drawerTab) {
+            dupes.openDrawer(next.compare, next.compareTab);
+          }
+        } else if (target === 'authors') {
+          if (next.authorsView !== authors.view) authors.setView(next.authorsView);
+          const authorId = parseUrlId(next.authorId);
+          if (authorId !== null && authorId !== authors.focusedAuthorId) authors.focusAuthor(authorId);
+        } else if (target === 'repairs') {
+          const seed = next.repairs;
+          const fixerDiffers = Boolean(seed.fixerId) && seed.fixerId !== repairs.selectedFixerId;
+          if (
+            fixerDiffers ||
+            (seed.filter ?? 'applicable') !== repairs.filter ||
+            (seed.rowClass ?? null) !== repairs.rowClass
+          ) {
+            repairs.applyUrlSeed(seed);
+          }
+        }
+      },
+    }
+  );
 
   // From the lane, which counts them from its rows (index mode) or the
   // server's facets (page mode, where it holds only the current page).

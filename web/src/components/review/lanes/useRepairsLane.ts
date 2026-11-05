@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.16.0
+// version: 1.17.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
-// last-edited: 2026-11-03
+// last-edited: 2026-11-05
 
 /**
  * The repairs lane's data layer: fixers, their trials (plans), plan rows, and
@@ -82,6 +82,30 @@ function writeStored(key: string, value: string): void {
     // Storage blocked (private mode, sandboxed frame): the preference is lost,
     // nothing else is.
   }
+}
+
+/**
+ * A URL value as a row filter: a shape the server's rows endpoint accepts
+ * (`applicable`, `skipped`, `owner_applicable`, `skipped:<kind>`, `flag:<name>`),
+ * else null. Anything else would reach the server as a filter it rejects.
+ */
+export function parseRepairRowsFilter(raw: string | null | undefined): RepairRowsFilter | null {
+  if (!raw) return null;
+  if (raw === 'applicable' || raw === 'skipped' || raw === 'owner_applicable') return raw;
+  if (/^skipped:.+/.test(raw)) return raw as RepairRowsFilter;
+  if (/^flag:.+/.test(raw)) return raw as RepairRowsFilter;
+  return null;
+}
+
+/**
+ * What the URL says about this lane (`?fixer=`, `?filter=`, `?class=`). Null or
+ * absent fields mean "nothing said": the fixer then stays the viewer's remembered
+ * one, the filter is `applicable`, the class unset.
+ */
+export interface RepairsUrlSeed {
+  fixerId?: string | null;
+  filter?: RepairRowsFilter | null;
+  rowClass?: string | null;
 }
 
 function initialPageSize(): number {
@@ -309,6 +333,8 @@ export interface RepairsLane {
   /** Row class the page is narrowed to (fixers that classify rows), or null. */
   rowClass: string | null;
   setRowClass: (c: string | null) => void;
+  /** Move the lane to what a new URL says; see the hook. */
+  applyUrlSeed: (seed: RepairsUrlSeed) => void;
   offset: number;
   pageSize: number;
   setOffset: (offset: number) => void;
@@ -366,9 +392,10 @@ export interface RepairsLane {
 }
 
 /**
- * `seedFixerId` is the URL's `?fixer=<id>`: a seed, read once on the first
- * render and never mirrored back to the URL or into the per-viewer storage key
- * (only a reviewer's own click does that). It is held in a ref, not put into
+ * `seed` is what the URL says (see RepairsUrlSeed), read on the first render. The
+ * workspace mirrors the lane's choices back to the URL; none of that reaches the
+ * per-viewer storage key (only a reviewer's own click does that). `seed.fixerId`
+ * is `?fixer=<id>`. It is held in a ref, not put into
  * the selection, and applied once when the fixer list first loads, and only if
  * the server lists that id; an unknown id is ignored, leaving the viewer's
  * remembered fixer (or the first one listed).
@@ -376,8 +403,9 @@ export interface RepairsLane {
 export function useRepairsLane(
   toast: Toast,
   active = true,
-  seedFixerId: string | null = null
+  seed: RepairsUrlSeed = {}
 ): RepairsLane {
+  const seedFixerId = seed.fixerId ?? null;
   const [fixers, setFixers] = useState<RepairFixer[]>([]);
   const [fixersLoading, setFixersLoading] = useState(false);
   const [fixersError, setFixersError] = useState<string | null>(null);
@@ -392,8 +420,8 @@ export function useRepairsLane(
   const [knownPlans, setKnownPlans] = useState<Record<string, KnownPlan>>({});
   const [trials, setTrials] = useState<Record<string, RepairTrialState>>({});
 
-  const [filter, setFilterState] = useState<RepairRowsFilter>('applicable');
-  const [rowClass, setRowClassState] = useState<string | null>(null);
+  const [filter, setFilterState] = useState<RepairRowsFilter>(seed.filter ?? 'applicable');
+  const [rowClass, setRowClassState] = useState<string | null>(seed.rowClass ?? null);
   const [offset, setOffset] = useState(0);
   const [pageSize, setPageSizeState] = useState<number>(initialPageSize);
   const [page, setPage] = useState<RepairRowsPage | null>(null);
@@ -749,6 +777,24 @@ export function useRepairsLane(
     writeStored(REPAIRS_FIXER_STORAGE_KEY, id);
   }, []);
 
+  // A URL change that arrives while the lane is mounted (a link, back/forward).
+  // Same landing as the first load gives the seed: an unknown fixer is ignored,
+  // a fixer the list does not hold yet waits for it. Never writes the viewer's
+  // storage key; that is for the reviewer's own click.
+  const applyUrlSeed = useCallback(
+    (next: RepairsUrlSeed) => {
+      const id = next.fixerId ?? null;
+      if (id) {
+        if (fixers.length === 0) fixerSeedRef.current = id;
+        else if (fixers.some((f) => f.id === id)) setSelectedFixerId(id);
+      }
+      setFilterState(next.filter ?? 'applicable');
+      setRowClassState(next.rowClass ?? null);
+      setOffset(0);
+    },
+    [fixers]
+  );
+
   // ---- actions ------------------------------------------------------------
   const runTrial = useCallback(
     async (fixerId: string) => {
@@ -1085,6 +1131,7 @@ export function useRepairsLane(
     setFilter,
     rowClass,
     setRowClass,
+    applyUrlSeed,
     offset,
     pageSize,
     setOffset,
