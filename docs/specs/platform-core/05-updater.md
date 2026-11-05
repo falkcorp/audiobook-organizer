@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.13.3 -->
+<!-- version: 1.13.4 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -147,7 +147,7 @@ func (u *Updater) Rollback(rc *tasks.RC) error
 // FetchRelease downloads the one release named by version (never "latest", a
 // URL or a path) into dest, as apply's steps 2-3 do (the release source's raw
 // asset, the max_download cap, the --version-json self-test requiring
-// version), and installs nothing: it touches neither <exe> nor <exe>.prev,
+// version; apply's trust level, never a signature), and installs nothing: it touches neither <exe> nor <exe>.prev,
 // opens no store and restarts nothing. It is the fetch behind
 // `make rollback-restore RELEASE=<tag>`, reached offline as
 // `<app> updater fetch-release` (5U.4, "Fetching a named release").
@@ -322,10 +322,13 @@ stopped and reads no store, so the cap is the compiled-in default (512 MiB), not
 not an override: it never renames or replaces `<exe>`, never restarts, never replaces `<exe>.prev` itself, takes no
 arbitrary URL, path or binary (`--version` must be a release tag of the configured source, never `latest`), and the
 "never a downgrade" rule does not apply because the fetched file is not run as the service. The recipe, not this
-command, compares the fetched binary's `--print-storage-levels` with the checkpoint's `from_vector` and installs it
+command, compares the fetched binary's `--print-storage-levels` with the source's levels (05-storage §5S.3.12,
+row `make rollback-restore`: the checkpoint's `from_vector`, or the archive's levels) and installs it
 as `<exe>.prev` only when they are equal (05-backup, as above); a release whose levels differ is refused and the
-existing `.prev` stays. The trust level is apply's: HTTPS from the configured release source (checksums and signed
-manifests are deferred-build, 5U.3). The command exists from R2, the release in which the updater lands, so the
+existing `.prev` stays. The trust level is apply's, no more: HTTPS from the configured release source, plus the
+checksum check apply performs when the source publishes one. It is not a signed release: signed manifests are
+deferred-build (5U.3), and so is apply's checksum check (the archive download and `checksums.txt`, 5U.3), so in
+R2 neither apply nor the fetch checks a checksum, and the fetch gains the check in the PR that builds it for apply. The command exists from R2, the release in which the updater lands, so the
 current binary of the rollback always has it.
 
 **After the restart.** No marker is written and no boot is counted: the new binary boots like any
@@ -351,8 +354,9 @@ Database caveat: a rollback restores the **binary**, not the data. A binary swap
 previous binary still reads the store, which `ReaderCheck` decides: within R0 and R1, and from R3 back to R2. Across
 the R2 cutover the way back is `make rollback-restore`: stop, restore the pre-migration checkpoint or an archive
 offline (with the state files the source holds), reinstall `.prev`, start (05-backup). Before it touches anything
-the recipe compares the checkpoint record's `from_vector` with `.prev --print-storage-levels` and refuses when
-they differ, naming the binary to install, the pre-freeze release: after an R2 hotfix `.prev` is an R2 build, and
+the recipe compares the source's levels (the checkpoint record's `from_vector`, or the archive's levels; 05-storage
+§5S.3.12) with `.prev --print-storage-levels` and refuses when they differ, naming the binary to install, the
+pre-freeze release (the checkpoint record's `from_release`, or the archive's producing release): after an R2 hotfix `.prev` is an R2 build, and
 restoring under it would only migrate the store again (DATA-9). `make rollback-restore RELEASE=<tag>` first puts that
 exact release at `.prev` through "Fetching a named release" above, and the same comparison then runs on what it
 fetched; without `RELEASE` the recipe refuses and names the tag. Everything written after the upgrade is then
@@ -686,3 +690,5 @@ Round 11:
 Round 13 (2026-11-04): CONFORM-1 (pre-freeze release as the pre-R2 `.prev`), CONFORM-2, DATA-8, DATA-9, SEC-10 (Database caveat and "After the restart").
 
 Round 14 (2026-11-05): V10 (a "Fetching a named release" paragraph, `Updater.FetchRelease` and its error row and tests, behind `make rollback-restore RELEASE=<tag>`; the rollback paragraph and Database caveat point at it), V23 (no bare round-13 ruling citation was present; `R4` and `R5` here are 03's rules).
+
+Round 15 (2026-11-05): W9 ("Fetching a named release" and the Database caveat compare the fetched binary with the source's levels, the checkpoint's `from_vector` or the archive's levels), W10 ("signed" withdrawn: the fetch has apply's trust level, HTTPS from the configured release source plus apply's checksum check when the source publishes one, which is deferred-build with apply's), W8 (cited: the refusal names the record's `from_release` or the archive's producing release).
