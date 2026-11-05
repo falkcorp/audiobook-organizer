@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-storage.md -->
-<!-- version: 1.13.11 -->
+<!-- version: 1.13.12 -->
 <!-- guid: 940ce8be-6f86-4450-b43a-77bf78827b12 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -2410,16 +2410,18 @@ reserved; the module itself gets no handle, runs no migrations, and its data is 
 migrations run the next time it is enabled; steps of other owners that declared `After` on them wait
 (§5S.3.5).
 
-**Task kinds (05-tasks 5T.8.2).** From the tasks flip F5, when every HEAD definition becomes native, the package
-`core/internal/storagetasks` declares two core kinds and their schedule key (not `core/storage`: `storage` is L1 and
+**Task kinds (05-tasks 5T.8.2).** The package `core/internal/storagetasks`, created dark by the T4 conversion
+of 05-tasks 5T.8.2, declares two core kinds, which the kernel registers from the tasks flip F5, when every HEAD
+definition becomes native (not `core/storage`: `storage` is L1 and
 cannot import `tasks`, 03 §3.5 R4; `storagetasks` bridges the two, so it is L4, imports `storage` and `tasks`, calls
 only `storage.Admin`, and is wired by the kernel, 03 §3.3), each `tasks.Sequential` ("one store-wide pass") with `ConcurrencyKey`
 `core.storage.exclusive`, the key compaction and backup share (05-tasks 5T.3.4):
 
 - `core.storage.compact`: a full compaction of the main store through `storage.Admin.Compact` over the whole key
   range, HEAD's `maintenance.db-optimize` (`db.go:65-80`, `db.Compact(nil, 0xff)`). Its timing is the schedule
-  key `core.storage.schedules.compact`, a `tasks.ScheduleConfig` in storage's own `core.storage` section (registered
-  dark from F2 with every core section) that `storagetasks` declares and passes to `tasks.ScheduleFromConfig`; a
+  key `core.storage.schedules.compact`, a `tasks.ScheduleConfig` in storage's own `core.storage` section, declared at
+  F2 by the kernel's core-section list (`storage`, at L1, cannot hold a `tasks.ScheduleConfig` field), so M2 at F3
+  writes a registered key; `storagetasks` only passes it to `tasks.ScheduleFromConfig`, from F5; a
   nightly-window member. The window kind `core.window.nightly` is not storage's: `core/tasks` declares it at F2 with
   the scheduler (05-tasks 5T.8.2), and storage only schedules into it through `ScheduleConfig.Window`. Unlike §5S.7's keys it is DB-persisted, as every
   schedule key is, and M2 seeds it once from HEAD's `scheduled.db_optimize` entry (05-config's rename table). The
@@ -3255,3 +3257,5 @@ Round 14 (2026-11-05): V1 (the cutover preflight runs only on a store whose cuto
 Round 15 (2026-11-05): lead fix (W8: HEAD's store records no app version, verified by grep; `from_release` is the embedded pre-freeze tag), W1 (M8 reads only the `KindRewrite` journals whose `StepID` is its own, `Intent.StepID` and `Record.StepID`; another M8's `applied` journal is ignored; one swap-back restarts M8 from phase 1 once, a second consecutive one fails the boot with `storage.ErrRewriteSwappedBack`, exit 78, naming `storage restore-offline` and `make rollback-restore`; machine 1, a failure row, `TestCutoverCrashAtEveryChunk` cells), W4 ("the cutover has started" is books' level at M7's target or any cutover step's `c/storage/dm/` record; the checkpoint clause dropped from §5S.3.13 "When", §5S.4 step 5a and machine 4), W5 (the throw-away keyring is the dry run's only; the `--into` rehearsal boot uses the copy's `<dir>.state/`), W8 (`from_release` is the app version the store records for its last pre-cutover boot, falling back to the embedded pre-freeze tag; on the archive branch the refusal names the archive's producing release; failure row and test cells), W9 (a fetched binary is compared with the source's levels, checkpoint or archive), W10 (the fetch has apply's trust level, not a signed release).
 
 Round 16 (2026-11-05): plan-gap fixes G6 (§5S.4 "Task kinds": `core.storage.compact`, `core.storage.census` and the schedule key `core.storage.schedules.compact` live in `core/internal/storagetasks`, L4, because `storage` at L1 cannot import `tasks`), G9 (§5S.3.5 `UpgradeFloor`, §5S.3.13, the failure row and `TestUpgradeFloorRefusesBeforeAnyWrite`: `InstallFirst` holds the R2 release's tag, written when R2 is tagged; the refusal's last line is `install <R2 tag> first`), G15 (§5S.4: `core.window.nightly` is `core/tasks`' kind, declared at F2; storage only schedules into it).
+
+Round 16 (2026-11-05): review fixes X4 (§5S.4 "Task kinds": `storagetasks` is created dark by the T4 conversion and its kinds registered from F5; the key `core.storage.schedules.compact` is declared at F2 by the kernel's core-section list, and `storagetasks` only passes it to `ScheduleFromConfig` from F5).
