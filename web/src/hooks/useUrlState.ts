@@ -1,5 +1,5 @@
 // file: web/src/hooks/useUrlState.ts
-// version: 2.1.0
+// version: 2.2.0
 // guid: 3f6c1a52-7d94-4e08-b5a1-9c20e8d4f713
 // last-edited: 2026-11-05
 //
@@ -64,16 +64,64 @@
 //   in flight). Without that, a throttled trailing write fires after the click and
 //   puts the old page back.
 // * A write that throws is forgotten again (it leaves `pending`).
-// * A write still waiting on the throttle is flushed when the page unmounts.
+// * A write still waiting on the throttle is flushed BEFORE a navigation starts,
+//   not after it (see FLUSHING BEFORE A NAVIGATION). The unmount flush that used
+//   to be the only safety net cannot do this job: by the time a page unmounts the
+//   address has already moved on, so `liveBase` rightly drops the write, and an
+//   entry that has been pushed over cannot be rewritten. The unmount flush
+//   remains for a mirror that leaves the tree while the address stays put.
 // * `useUrlParamWriter` gives other components the same view of "latest", so a
 //   write from a child does not merge into stale params and revert a mirrored key.
+// * The pathname compared against the rendered one has the router's basename
+//   stripped first: the history object reports the full path, `useLocation` the
+//   path relative to the basename.
 // * Writes are throttled (leading and trailing, `WRITE_THROTTLE_MS`). Browsers
 //   cap history.replaceState (Safari throws a SecurityError past ~100 calls per
 //   30 s) and a held key or a typed search would reach that in seconds. A single
 //   click writes at once; a burst writes the first and the last.
+//
+// FLUSHING BEFORE A NAVIGATION
+//
+// The throttle leaves a window (up to `WRITE_THROTTLE_MS`) in which the page's
+// latest state is not yet in the address bar. Leave the page inside it and the
+// entry you left holds the state from before the burst, so Back lands on a
+// stale page (`?q=1` after you had typed `q=2`).
+//
+// `flushOnNavigate` wraps the router's navigator. Every mirror registers a
+// callback with it, and a push or a traversal (`navigate(-1)`) first runs them
+// all against the CURRENT location, then delegates. That is the only moment the
+// entry being left can still be written. A replace is not flushed: it overwrites
+// the entry being left anyway. `<FlushOnNavigate>` (mounted just inside the
+// router in main.tsx) installs the wrapper and also flushes on `pagehide`, so a
+// reload or a tab close inside the window keeps the last state too.
+//
+// NOT COVERED: the browser's own Back/Forward buttons. By the time `popstate`
+// fires the browser has already switched entries, so `replaceState` would write
+// the entry being ENTERED, not the one being left, and the write is dropped as
+// it must be. That path can lose a trailing write at most `WRITE_THROTTLE_MS`
+// old; the entry then shows the previous burst value. (The Navigation API's
+// `navigate` event fires before a traversal commits, but it is not available in
+// every supported browser, and rewriting history from inside a traversal event
+// is not something to rely on.) Links and `navigate()` calls, which is how pages
+// are left in practice, are covered.
 
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { UNSAFE_NavigationContext, useLocation, useSearchParams } from 'react-router-dom';
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ContextType,
+} from 'react';
+import {
+  UNSAFE_NavigationContext,
+  useLocation,
+  useSearchParams,
+  type Navigator,
+} from 'react-router-dom';
+
+type NavigationValue = ContextType<typeof UNSAFE_NavigationContext>;
 
 /** A value for one owned key: null/undefined/'' means "absent from the URL". */
 export type UrlValue = string | null | undefined;
@@ -151,6 +199,8 @@ interface UrlStore {
   /** The last query string `observe` was given, and what it decided. */
   seen: string | null;
   verdict: Verdict;
+  /** Mirrors' "write what is waiting now" callbacks, run before a navigation. */
+  flushers: Set<() => void>;
 }
 
 /**
@@ -169,7 +219,13 @@ const stores = new WeakMap<object, UrlStore>();
 function storeFor(key: object): UrlStore {
   let store = stores.get(key);
   if (!store) {
-    store = { pending: [], foreign: new Set(), seen: null, verdict: 'external' };
+    store = {
+      pending: [],
+      foreign: new Set(),
+      seen: null,
+      verdict: 'external',
+      flushers: new Set(),
+    };
     stores.set(key, store);
   }
   return store;
@@ -180,12 +236,14 @@ function storeFor(key: object): UrlStore {
  * Ours when it is one we issued (it and everything before it leave `pending`:
  * writes that landed in one batch are superseded, and a stale entry would
  * swallow a real navigation to that same URL later); otherwise external, and
- * whatever we had in flight is moot.
+ * whatever we had in flight is moot. The LAST match is the one that rendered:
+ * a batch that wrote A, B, A commits A, and stopping at the first A would leave
+ * [B, A] behind for `liveBase` to trust.
  */
 function observe(store: UrlStore, search: string): Verdict {
   if (store.seen === search) return store.verdict;
   store.seen = search;
-  const at = store.pending.indexOf(search);
+  const at = store.pending.lastIndexOf(search);
   if (at >= 0) {
     const landed = store.pending.splice(0, at + 1);
     store.verdict = landed.some((p) => store.foreign.has(p)) ? 'foreign' : 'echo';
@@ -227,6 +285,20 @@ interface Where {
 }
 
 /**
+ * `pathname` relative to the router's basename, the way `useLocation` reports it.
+ * The history object's location is the full browser path. A path outside the
+ * basename is returned as it is, so it never equals a rendered pathname.
+ */
+function stripBasename(pathname: string, basename: string | undefined): string {
+  if (!basename || basename === '/') return pathname;
+  const base = (basename.endsWith('/') ? basename.slice(0, -1) : basename).toLowerCase();
+  const lower = pathname.toLowerCase();
+  if (lower === base) return '/';
+  if (!lower.startsWith(`${base}/`)) return pathname;
+  return pathname.slice(base.length) || '/';
+}
+
+/**
  * The query string a write must be merged into, or null when the write must be
  * dropped.
  *
@@ -244,11 +316,11 @@ interface Where {
  * so a write never merges into a stale copy. A router that does not expose its
  * location (a data router) falls back to the latest string this hook issued.
  */
-function liveBase(store: UrlStore, navigator: object, rendered: Where): string | null {
+function liveBase(store: UrlStore, nav: NavigationValue, rendered: Where): string | null {
   const renderedStr = new URLSearchParams(rendered.search).toString();
-  const live = (navigator as { location?: Where }).location;
+  const live = (nav.navigator as { location?: Where }).location;
   if (!live) return store.pending.at(-1) ?? renderedStr;
-  if (live.pathname !== rendered.pathname) return null;
+  if (stripBasename(live.pathname, nav.basename) !== rendered.pathname) return null;
   const liveStr = new URLSearchParams(live.search).toString();
   return liveStr === renderedStr || store.pending.includes(liveStr) ? liveStr : null;
 }
@@ -302,7 +374,7 @@ export function useUrlParamWriter(): (
       store: st,
       nav: n,
     } = latest.current;
-    const base = liveBase(st, n.navigator, { pathname: path, search: rs });
+    const base = liveBase(st, n, { pathname: path, search: rs });
     if (base === null) return;
     const live = new URLSearchParams(base);
     const next = applyOwnedParams(live, typeof patch === 'function' ? patch(live) : patch);
@@ -348,7 +420,7 @@ export function useUrlStateSync(
     onExternalChange,
     setSearchParams,
     owned,
-    navigator: nav.navigator,
+    nav,
   });
   useEffect(() => {
     latest.current = {
@@ -358,7 +430,7 @@ export function useUrlStateSync(
       onExternalChange,
       setSearchParams,
       owned,
-      navigator: nav.navigator,
+      nav,
     };
   });
 
@@ -376,8 +448,9 @@ export function useUrlStateSync(
   const reconciled = useRef(0);
 
   const flush = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
     timer.current = null;
-    const { defaults: d, setSearchParams: set, owned: o, navigator: n } = latest.current;
+    const { defaults: d, setSearchParams: set, owned: o, nav: n } = latest.current;
     const base = liveBase(store, n, {
       pathname: latest.current.pathname,
       search: latest.current.renderedSearch,
@@ -411,18 +484,22 @@ export function useUrlStateSync(
     // navigation the user made.
   }, [ownedKey, reconcile, flush]);
 
-  // A write still waiting on the throttle when the page unmounts is written now,
-  // so the entry the user leaves does not hold a stale query. `flush` drops it if
-  // the address has already moved on (the usual reason a page unmounts), because
-  // by then the write would land on the page that replaced this one.
-  useEffect(
-    () => () => {
-      if (!timer.current) return;
-      clearTimeout(timer.current);
-      flush();
-    },
-    [flush]
-  );
+  // A write still waiting on the throttle is written NOW when a navigation is about
+  // to start (see FLUSHING BEFORE A NAVIGATION), through the callback registered
+  // here, and again if this mirror unmounts with the address unchanged. The
+  // unmount flush is no help for a page that is being LEFT: by cleanup time the
+  // address has moved on, so `flush` finds a different pathname and drops the
+  // write, as it must, because it would land on the page that replaced this one.
+  useEffect(() => {
+    const flushWaiting = () => {
+      if (timer.current) flush();
+    };
+    store.flushers.add(flushWaiting);
+    return () => {
+      store.flushers.delete(flushWaiting);
+      flushWaiting();
+    };
+  }, [flush, store]);
 
   const seen = useRef(search);
   useEffect(() => {
@@ -448,4 +525,38 @@ export function useUrlStateSync(
     latest.current.onExternalChange?.(new URLSearchParams(search));
     setReconcile((n) => n + 1);
   }, [search, store]);
+}
+
+/** Run every mirror's waiting write now, against the location still on screen. */
+export function flushPendingWrites(navigator: object): void {
+  for (const flushWaiting of [...storeFor(navigator).flushers]) flushWaiting();
+}
+
+/**
+ * A navigator that writes the mirrors' waiting trailing writes before it pushes
+ * or traverses history, so the entry being left holds what the page showed.
+ * Hooks under the router must see THIS navigator (it keys the store), which is
+ * what `<FlushOnNavigate>` arranges. Everything else delegates untouched,
+ * including the live `location` the hooks read.
+ */
+export function flushOnNavigate(navigator: Navigator): Navigator {
+  const wrapped: Navigator & { readonly location?: Where } = {
+    get location() {
+      return (navigator as { location?: Where }).location;
+    },
+    createHref: (to) => navigator.createHref(to),
+    encodeLocation: navigator.encodeLocation ? (to) => navigator.encodeLocation!(to) : undefined,
+    go: (delta) => {
+      flushPendingWrites(wrapped);
+      navigator.go(delta);
+    },
+    push: (to, state, opts) => {
+      flushPendingWrites(wrapped);
+      navigator.push(to, state, opts);
+    },
+    // A replace overwrites the entry being left, so a flush first would be lost
+    // work; and the mirrors' own writes are replaces, so it would also recurse.
+    replace: (to, state, opts) => navigator.replace(to, state, opts),
+  };
+  return wrapped;
 }

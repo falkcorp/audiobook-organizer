@@ -1,5 +1,5 @@
 // file: web/src/hooks/useUrlState.test.tsx
-// version: 2.1.0
+// version: 2.2.0
 // guid: 0c5e92d7-48ab-4f36-a1d0-6be7f3092c58
 // last-edited: 2026-11-05
 
@@ -14,8 +14,10 @@ import {
   RouterProvider,
   Routes,
   useNavigate,
+  useSearchParams,
 } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
+import { FlushOnNavigate } from '../components/FlushOnNavigate';
 import {
   applyOwnedParams,
   parseEnum,
@@ -529,5 +531,224 @@ describe('useUrlStateSync: a late write never undoes a navigation', () => {
       replace.mockRestore();
       warn.mockRestore();
     }
+  });
+});
+
+// The throttle leaves up to WRITE_THROTTLE_MS in which the page's latest state is
+// not in the address bar. Leaving the page inside that window used to strand the
+// entry on the pre-burst query: the unmount flush runs after the address has
+// moved, so the live-location guard (rightly) drops it, and a pushed-over entry
+// cannot be rewritten. FlushOnNavigate writes it before the push.
+describe('useUrlStateSync: flushing before a navigation', () => {
+  const here = () => window.location.pathname + window.location.search;
+  const wait = (ms: number) =>
+    act(async () => {
+      await new Promise((r) => setTimeout(r, ms));
+    });
+
+  function SearchPage() {
+    const [q, setQ] = useState(() => new URLSearchParams(window.location.search).get('q') ?? '');
+    const navigate = useNavigate();
+    useUrlStateSync({ q: q || null }, { onExternalChange: (p) => setQ(p.get('q') ?? '') });
+    return (
+      <div>
+        <button onClick={() => setQ('Year One')}>year-one</button>
+        <button onClick={() => setQ('The Long Halloween')}>long-halloween</button>
+        <button onClick={() => navigate(-1)}>navigate-back</button>
+        <Link to="/c">go-c</Link>
+        <Link to="/a?q=Hush">go-hush</Link>
+        <span data-testid="q">{q}</span>
+      </div>
+    );
+  }
+  function GothamPage() {
+    const navigate = useNavigate();
+    return <button onClick={() => navigate(-1)}>back-from-c</button>;
+  }
+  function mountApp(initial: string, flush = true, basename?: string) {
+    window.history.replaceState(null, '', initial);
+    const routes = (
+      <Suspense fallback={<p>loading</p>}>
+        <Routes>
+          <Route path="/a" element={<SearchPage />} />
+          <Route path="/c" element={<GothamPage />} />
+        </Routes>
+      </Suspense>
+    );
+    return render(
+      <BrowserRouter basename={basename}>
+        {flush ? <FlushOnNavigate>{routes}</FlushOnNavigate> : routes}
+      </BrowserRouter>
+    );
+  }
+  // Two changes inside the throttle: the first writes at once, the second waits.
+  async function burst(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByText('year-one'));
+    await user.click(screen.getByText('long-halloween'));
+    expect(here()).toBe('/a?q=Year+One');
+  }
+
+  it('Back after a link taken inside the throttle lands on the latest state, not the pre-burst one', async () => {
+    mountApp('/a');
+    const user = userEvent.setup();
+    await burst(user);
+    await user.click(screen.getByText('go-c'));
+    expect(here()).toBe('/c');
+    await user.click(screen.getByText('back-from-c'));
+    expect(here()).toBe('/a?q=The+Long+Halloween');
+    await waitFor(() => expect(screen.getByTestId('q').textContent).toBe('The Long Halloween'));
+  });
+
+  it('the same holds for the browser history button after a link', async () => {
+    mountApp('/a');
+    const user = userEvent.setup();
+    await burst(user);
+    await user.click(screen.getByText('go-c'));
+    await act(async () => {
+      window.history.back();
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(here()).toBe('/a?q=The+Long+Halloween');
+  });
+
+  it('a link to the same route flushes first, so Back returns to the latest state', async () => {
+    mountApp('/a');
+    const user = userEvent.setup();
+    await burst(user);
+    await user.click(screen.getByText('go-hush'));
+    await waitFor(() => expect(screen.getByTestId('q').textContent).toBe('Hush'));
+    expect(here()).toBe('/a?q=Hush');
+    await act(async () => {
+      window.history.back();
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(here()).toBe('/a?q=The+Long+Halloween');
+  });
+
+  it('navigate(-1) from the page flushes the entry it leaves', async () => {
+    window.history.replaceState(null, '', '/c');
+    window.history.pushState(null, '', '/a');
+    mountApp('/a');
+    window.history.replaceState(null, '', '/a');
+    const user = userEvent.setup();
+    await burst(user);
+    await user.click(screen.getByText('navigate-back'));
+    await wait(50);
+    // The page left is /a; going Forward must show where the user was.
+    await act(async () => {
+      window.history.forward();
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(here()).toBe('/a?q=The+Long+Halloween');
+  });
+
+  it('flushes when the page is hidden (reload, tab close) inside the window', async () => {
+    mountApp('/a');
+    const user = userEvent.setup();
+    await burst(user);
+    window.dispatchEvent(new Event('pagehide'));
+    expect(here()).toBe('/a?q=The+Long+Halloween');
+  });
+
+  it('still never lets a late write undo a navigation to a page that is loading', async () => {
+    window.history.replaceState(null, '', '/a');
+    let resolveB: (m: { default: () => React.ReactElement }) => void = () => {};
+    const PageB = lazy(
+      () =>
+        new Promise<{ default: () => React.ReactElement }>((r) => {
+          resolveB = r;
+        })
+    );
+    function PageA() {
+      return (
+        <div>
+          <SearchPage />
+          <Link to="/b">go-b</Link>
+        </div>
+      );
+    }
+    render(
+      <BrowserRouter>
+        <FlushOnNavigate>
+          <Suspense fallback={<p>loading</p>}>
+            <Routes>
+              <Route path="/a" element={<PageA />} />
+              <Route path="/b" element={<PageB />} />
+            </Routes>
+          </Suspense>
+        </FlushOnNavigate>
+      </BrowserRouter>
+    );
+    const user = userEvent.setup();
+    await burst(user);
+    await user.click(screen.getByText('go-b'));
+    await wait(WRITE_THROTTLE_MS + 200);
+    expect(here()).toBe('/b');
+    await act(async () => {
+      resolveB({ default: () => <p>page-b</p> });
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(here()).toBe('/b');
+    await act(async () => {
+      window.history.back();
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(here()).toBe('/a?q=The+Long+Halloween');
+  });
+
+  it.each([false, true])(
+    'writes under a router basename (flush wrapper %s): the history path includes it, the rendered one does not',
+    async (flush) => {
+      mountApp('/app/a', flush, '/app');
+      const user = userEvent.setup();
+      await burst2(user);
+      await wait(WRITE_THROTTLE_MS + 200);
+      expect(here()).toBe('/app/a?q=The+Long+Halloween');
+    }
+  );
+  async function burst2(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByText('year-one'));
+    await user.click(screen.getByText('long-halloween'));
+  }
+});
+
+describe('observe: a batch that writes the same query twice', () => {
+  const here = () => window.location.pathname + window.location.search;
+
+  function Folder() {
+    const write = useUrlParamWriter();
+    const [sp] = useSearchParams();
+    return (
+      <div>
+        <button
+          onClick={() => {
+            write({ x: 'Robin' });
+            write({ x: 'Batgirl' });
+            write({ x: 'Robin' });
+          }}
+        >
+          three
+        </button>
+        <button onClick={() => write({ y: 'Alfred' })}>write-y</button>
+        <span data-testid="x">{sp.get('x')}</span>
+      </div>
+    );
+  }
+
+  it('leaves no stale entry for the live-location guard to trust', async () => {
+    window.history.replaceState(null, '', '/a');
+    render(
+      <BrowserRouter>
+        <Folder />
+      </BrowserRouter>
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByText('three'));
+    await waitFor(() => expect(screen.getByTestId('x').textContent).toBe('Robin'));
+    // The address moves (Back, a sidebar link) before the router renders it. It is
+    // a query the page once wrote, but one that was superseded, not in flight.
+    window.history.pushState(null, '', '/a?x=Batgirl');
+    await user.click(screen.getByText('write-y'));
+    expect(here()).toBe('/a?x=Batgirl');
   });
 });

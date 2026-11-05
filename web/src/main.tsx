@@ -1,6 +1,6 @@
 // file: web/src/main.tsx
-// version: 2.1.0
-// last-edited: 2026-10-26
+// version: 2.2.0
+// last-edited: 2026-11-05
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 
 import React from 'react';
@@ -13,6 +13,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider } from './components/toast/ToastProvider';
 import { OperationTrackerProvider } from './components/operations/OperationTrackerProvider';
 import { AuthProvider } from './contexts/AuthContext';
+import { FlushOnNavigate } from './components/FlushOnNavigate';
 import { STORAGE_KEYS } from './lib/storageKeys';
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -20,7 +21,8 @@ function AppRoot() {
   const app = (
     <ErrorBoundary>
       <BrowserRouter>
-        {/* The theme is a module constant now, not derived from app state: with
+        <FlushOnNavigate>
+          {/* The theme is a module constant now, not derived from app state: with
             CSS variables, changing mode flips one attribute on <html> rather
             than rebuilding the theme and re-rendering every styled component.
 
@@ -28,22 +30,23 @@ function AppRoot() {
             used, so an existing saved preference carries over without a
             migration step. The matching inline script in index.html applies it
             before React mounts, which is what removes the light-mode flash. */}
-        <ThemeProvider
-          theme={appTheme}
-          defaultMode="dark"
-          modeStorageKey={STORAGE_KEYS.APP_THEME_MODE}
-        >
-          <CssBaseline />
-          <AuthProvider>
-            <ToastProvider>
-              {/* Follows merge/combine/purge operations for the whole app, so
+          <ThemeProvider
+            theme={appTheme}
+            defaultMode="dark"
+            modeStorageKey={STORAGE_KEYS.APP_THEME_MODE}
+          >
+            <CssBaseline />
+            <AuthProvider>
+              <ToastProvider>
+                {/* Follows merge/combine/purge operations for the whole app, so
                   leaving the Library mid-run keeps the outcome toast and the locks. */}
-              <OperationTrackerProvider>
-                <App />
-              </OperationTrackerProvider>
-            </ToastProvider>
-          </AuthProvider>
-        </ThemeProvider>
+                <OperationTrackerProvider>
+                  <App />
+                </OperationTrackerProvider>
+              </ToastProvider>
+            </AuthProvider>
+          </ThemeProvider>
+        </FlushOnNavigate>
       </BrowserRouter>
     </ErrorBoundary>
   );
