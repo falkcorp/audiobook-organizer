@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R0-05-basic-gate-empty-password.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b4576320-1a96-466d-99a6-04809ffcfeb3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -57,6 +57,7 @@ An enabled gate with an empty **username** raises no token and keeps HEAD's beha
 | modify | `internal/server/middleware/basicauth.go` (effective password, refusal, token, warn log) |
 | create | `internal/server/middleware/basicauth_empty_test.go` (package `middleware`) |
 | modify | `internal/server/server_lifecycle.go` (startup log line; health token through `startupDegradedSource`) |
+| create (if needed) | `internal/server/basic_gate_health_token_test.go` (package `server`; the second test, when the adapter is not reachable from package `middleware`) |
 | create | `changelog.d/<date>_r0_basic_gate_empty_password.md` (no header) |
 | tick | the entry "SECURITY (hotfix, early fix 5)" (step 7) |
 
@@ -147,7 +148,7 @@ Table cases, each with `BasicAuthEnabled = true`, `BasicAuthUsername = "admin"`:
 Plus one test in the same file (name coined here), `TestBasicGateNoPassword_TokenOnHealthSource`: with the stored
 password empty and no env, the token is reported; after setting the stored password, it is not. If the
 `server_lifecycle.go` adapter is not reachable from package `middleware`, put this second test in
-`internal/server/` as `basic_gate_health_token_test.go` and list that extra file in the PR (planner note below).
+`internal/server/` as `basic_gate_health_token_test.go` (in the row's file list).
 
 ## Invariants
 
@@ -187,9 +188,3 @@ Revert the commit in a new PR (`make rollback` on a deployed host: R0 writes no 
   `Co-Authored-By: Claude <noreply@anthropic.com>`. No release or flip trailer.
 - `gh pr merge <n> --rebase` after every required check is green **and** P14 is recorded; never squash, never `--admin`.
 - Remove the worktree after merge.
-
-## Planner notes
-
-- The second test may need a file in `internal/server/` (`basic_gate_health_token_test.go`) that the inventory row
-  does not list, because the adapter lives in `server_lifecycle.go`. No other W02 row (R0-03) touches
-  `internal/server/`'s top-level test files, so the wave stays file-disjoint.

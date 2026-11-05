@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-21-journaled-swap-crash-matrix.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0d4840c7-333d-47fc-a23f-cbdf77a2bb4e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -20,6 +20,7 @@
 
 - `core/internal/restoreswap/`
 - `core/kernel/swap.go`
+- `core/kernel/boot.go` (the P0a call only; this row is W12's one owner of the kernel wiring files)
 - `core/coretest/crashmatrix/`
 - `core/examples/hello/crash_test.go`
 
@@ -84,7 +85,8 @@ R1-20 merged: `test -d core/storage/restorejournal && test -f core/kernel/storag
 1. Write the four owned tests (red) and the kit's own self-test (a writer added without a matrix row fails).
 2. `core/internal/restoreswap`: `CreateIntent`, the per-kind apply with `inflight.json` first, the journal records, the
    pre-validation of every target.
-3. `core/kernel/swap.go`: run the swapper at P0a; the reader check against `inflight.json`.
+3. `core/kernel/swap.go`: run the swapper at P0a, called first in `core/kernel/boot.go`'s phase list (before R1-20's
+   P2 open); the reader check against `inflight.json`.
 4. `core/coretest/crashmatrix`: the fault-injection seam over every durable write, rename and fsync of the writer
    table; reboot-and-check loop; the cross-mechanism invariants.
 5. `core/examples/hello/crash_test.go`: `TestBootCrashMatrix` over every kernel writer present.

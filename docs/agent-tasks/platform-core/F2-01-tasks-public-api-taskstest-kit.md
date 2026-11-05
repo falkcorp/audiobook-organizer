@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-01-tasks-public-api-taskstest-kit.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 24217568-a4f2-4955-a65e-13e6cfd7ef35 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,9 +9,9 @@
 |---|---|
 | ID | F2-01 |
 | Release / flip | R2, foundation PRs (F2), **dark** |
-| Wave | W22 |
+| Wave | W23 |
 | Tier | **T3** (Opus / high): the public task API every later definition, the executor, the scheduler, the stores and `datamigrate` are written against; the contract is fixed by the spec, the internals are not |
-| Depends on | OWNER-03 (R1 released and deployed) |
+| Depends on | OWNER-03 (R1 released and deployed), F2-09 (`config.Duration`), F2-10 (`health.ComponentID`) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
 
 ## START HERE
@@ -34,7 +34,7 @@ Create the public package `github.com/falkcorp/mediacore/tasks` (directory `core
 package `core/tasks/taskstest/`, written fresh (not moved from `pkg/ops`) over `tasks.RunState`, carrying amendments
 A1–A7 (05-tasks §5T.0). This PR lands **the public surface only**: types, constructors, sentinels, validation, the
 pure loops `RunItems`, `RunSeq` and `ForEach`, and `taskstest.Conformance`. The executor (F2-03), scheduler (F2-04),
-native stores and importer (F2-02), and HTTP routes (F2-05) are separate PRs that implement the interfaces this PR
+native stores and importer (F2-02), HTTP routes (F2-05) and the kernel wiring (F2-16) are separate PRs that implement the interfaces this PR
 declares. Nothing in ABO imports `core/tasks` in this PR, and nothing registers a kind (05-tasks §5T.8.2 Core group;
 09 §9.4 R2 F2 row: "nothing switches").
 
@@ -53,7 +53,7 @@ The plan was written at commit `f7ac5b11e`, where `core/` does not exist yet; R1
 base** (fresh `origin/main` after OWNER-03). Any "STOP" condition: stop and report, do not improvise.
 
 ```bash
-# R1 outputs this PR builds on (each must hit; created by R1-01, R1-09, R1-12, R1-13, R1-20)
+# R1 and W22 outputs this PR builds on (each must hit; created by R1-01, R1-09, R1-12, R1-13, R1-20, F2-09, F2-10)
 test -f core/go.mod && grep -c '^module github.com/falkcorp/mediacore$' core/go.mod      # expect 1, else STOP
 grep -rln '^package entity$' core/entity/ | wc -l                                         # expect >=1 (entity.Ref), else STOP
 grep -rn 'type Ref struct' core/entity/                                                   # expect 1 hit, else STOP
@@ -61,6 +61,8 @@ grep -rn 'type Requirement ' core/rbac/                                         
 grep -rn 'type Checker interface' core/rbac/                                              # expect 1 hit, else STOP
 grep -rn 'ErrShutdown' core/lifecycle/ | head -3                                          # expect >=1 (re-exported by tasks), else STOP
 grep -rn 'type Batch struct\|type Keyspace interface\|type Keyspace struct' core/storage/ # expect >=2, else STOP
+grep -rn 'type ComponentID ' core/health/                                                  # expect 1 hit (F2-10), else STOP
+grep -rn 'type Duration ' core/config/                                                     # expect 1 hit (F2-09), else STOP
 # This PR's target must not exist yet
 test ! -e core/tasks && echo absent                                                       # expect "absent"; if present: see Idempotency
 # HEAD evidence the amendments cite (counts at f7ac5b11e; regenerate at your base)
@@ -70,17 +72,9 @@ ls pkg/ops/opstest/conformance.go                                               
 grep -n 'func RunItems' internal/operations/registry/run_items.go                         # 1 hit (the loop being re-implemented)
 ```
 
-Whether `health.ComponentID` exists at your base decides one type: `ReadySignal` is `health.ComponentID`
-(05-tasks §5T.3.1, 05-health §5H.3.1). F2-10 lands `health.ComponentID` in the same wave (W22), so it may not
-exist yet:
-
-```bash
-grep -rn 'type ComponentID ' core/health/    # 0 hits is expected in W22
-```
-
-If 0 hits: declare `type ReadySignal string` in `tasks` with the doc comment "= health.ComponentID once F2-10
-lands" and the constant `SignalStorage ReadySignal = "core.storage"`; F2-03 (W24, after both) switches it to
-`type ReadySignal = health.ComponentID`. If 1 hit: use the alias directly. Record which in the PR body.
+`ReadySignal` is `health.ComponentID` and `ScheduleConfig.Every` is `config.Duration`, used directly
+(05-tasks §5T.3.1, §5T.3.8; 05-health §5H.3.1). F2-09 and F2-10 are merged dependencies of this row, so no
+fallback type is declared; a zero-hit grep above stops the task.
 
 ## Files
 
@@ -94,7 +88,7 @@ Create only:
   sentinels), `resume.go` (ResumePolicy, CancelContract and its constructors), `perms.go` (Permissions, Approval),
   `schedule.go` (Schedule, ScheduleFromConfig, ScheduleConfig, Every, MissedPolicy, Window and the builder
   methods), `client.go` (Client, Stager, Executor, StartRequest, RunView, RunState, RunQuery, RunFilter,
-  TimelineQuery, RedactRunView, RunViewRedactor, ErrModeUnset, ErrWriteRunsNested), `stores.go` (Stores, RunStore,
+  TimelineQuery, RedactRunView, ErrModeUnset, ErrWriteRunsNested; **not** `RunViewRedactor`, which is F6-02's), `stores.go` (Stores, RunStore,
   ClockStore, PauseStore, StandDownStore, RunRecord, RunSeqs, Expect, Clock, Pause, StandDown and the store
   sentinels), `doc.go`. Split differently if you prefer; the exported names are fixed.
 - `core/tasks/taskstest/` — `conformance.go` (`Conformance(t, defs ...tasks.Definition)`), plus the fakes the
@@ -129,18 +123,16 @@ Every exported identifier in 05-tasks §5T.3.1–§5T.3.13 is part of this PR, w
 - `ScheduleFromConfig(key)` checks the key **form** only (`<owner>.<subsystem>.schedules.<name>`, owner `core` or
   `modules.<id>`, segments `[a-z][a-z0-9_]{0,47}`); whether the key is declared with type `tasks.ScheduleConfig`
   is checked by the kernel at registration (§5T.3.1, §5T.3.8). Record a malformed key as a constructor problem.
-- `ScheduleConfig` uses `config.Duration` for `Every` (§5T.3.8). F2-09 creates `core/config` in the same wave. If
-  `grep -rn 'type Duration ' core/config/` has 0 hits at your base, declare `Every` as `time.Duration` with JSON
-  string (un)marshalling local to `tasks` and the comment "switch to config.Duration when core/config exists";
-  F2-04 switches it. Record which in the PR body.
+- `ScheduleConfig` uses `config.Duration` for `Every` (§5T.3.8), imported from `core/config` (F2-09). `ReadySignal`
+  is `type ReadySignal = health.ComponentID` with `SignalStorage ReadySignal = "core.storage"` (§5T.3.1), imported
+  from `core/health` (F2-10). No local fallback types.
 - `Stores`, `RunStore`, `ClockStore`, `PauseStore`, `StandDownStore` and their records (`RunRecord`, `RunSeqs`,
   `Expect`, `Clock`, `Pause`, `StandDown`, `RunEvent`, `ItemOutcome`, `LogLine`, `PageQuery`, `PageEntry`, `Chunk`,
   `DebounceBucket`, `Strike`) and the sentinels `ErrRunNotFound`, `ErrRunConflict`, `ErrClockConflict`,
   `ErrRunActive` are **declared** here exactly as §5T.3.13. `tasks.Importer`, `RunData` and `NativeStores` are
   F2-02's (its `core/tasks/importer.go`); do not declare them here.
-- `RunViewRedactor() events.RedactFunc` needs `core/events`, which F4-04 lands in the same wave. If
-  `grep -rn 'type RedactFunc' core/events/` has 0 hits, omit `RunViewRedactor` and say so in the PR body; F4-05 or
-  the F5 flip adds it (planner note below).
+- `RunViewRedactor() events.RedactFunc` (§5T.3.10) is **not** this PR's: its `events.RedactFunc` has its first
+  consumer in the realtime filter, so F6-02 adds it beside `RedactRunView`. This row does not import `core/events`.
 - No package-level mutable state (R5; `TestNoGlobals_Tasks`): the CPU budget, pause gate and ref-lock table are
   executor fields. In this PR `RunItems` reaches them through `rc` via an unexported interface the executor
   implements in F2-03; with a plain `ctx`, `ForEach` is a plain bounded pool.
@@ -161,7 +153,7 @@ In `core/tasks/` (package `tasks_test` unless noted):
 
 - `TestParallelism_ZeroInvalid`, `TestFixed_ClampAndReasonRequired`
 - `TestBatch_ZeroParallelismRefusedAtRegister`: in this PR assert the constructor records the problem
-  (`Definition` carries it); the registration-time failure is the kernel's (F2-05 planner note). Keep the name.
+  (`Definition` carries it); the registration-time refusal is the kernel's (F2-16 wires registration). Keep the name.
 - `TestRunItems_ZeroParallelismFailsBeforeFirstItem` (asserts `*ItemsError` and
   `errors.Is(err, ErrNoParallelism)`)
 - `TestRunItems_CancelStopsDispatch` (`testing/synctest`: cancel while 3 of 8 in flight; no `fn` starts after
@@ -219,9 +211,10 @@ git grep -n 'mediacore/tasks"' -- ':!core/' | wc -l                # 0 (nothing 
 ## Out of scope
 
 The executor, run context implementation, CPU budget, pause gate and ref locks (F2-03); the scheduler (F2-04);
-`NativeStores`, `Importer` implementation, `taskstest.StoresSuite` (F2-02); `taskhttp`, kernel registration,
-`hello.count`, `coretest` (F2-05); `archtest.RunItemsDeclareParallelism` and
-`archtest.ResumeContinueCheckpoints` (see planner notes); any ABO edit; deleting `pkg/ops` (F5-18).
+`NativeStores`, `Importer` implementation, `taskstest.StoresSuite` (F2-02); `taskhttp` and `hello.count`'s TaskSpec
+(F2-05); kernel registration, the start rule and `coretest`'s task cells (F2-16); `RunViewRedactor` (F6-02);
+`tasklint` and the 05-tasks §5T.9 guards' self-tests `archtest.ResumeContinueCheckpoints` and
+`archtest.RunItemsDeclareParallelism` (F2-17); any ABO edit; deleting `pkg/ops` (F5-18).
 
 ## Idempotency / rollback
 
@@ -236,14 +229,3 @@ instead. Rollback = revert the PR: nothing imports `core/tasks` yet, so the reve
   defines no release or flip commit trailer (§9.2.1: "Nothing records a flip").
 - Add a `changelog.d/` fragment (no file header in fragments).
 - CLAUDE.md concurrency rules apply to every loop you write (bounded pool, declared parallelism).
-
-## Planner notes
-
-- `RunViewRedactor` returns `events.RedactFunc`, but `core/events` lands in F4-04 (same wave W22, no dependency
-  edge). If `events` is absent at the base, the function is deferred; no row names who adds it. Suggest F4-05 or the
-  F5 flip (F5-18) adds it.
-- `ReadySignal = health.ComponentID` and `ScheduleConfig.Every config.Duration` name types that F2-10 and F2-09 land
-  in the same wave W22 with no dependency edge to F2-01. This brief uses local fallbacks; F2-03 and F2-04 switch
-  them. A cleaner graph adds F2-09 and F2-10 as dependencies of F2-01 (W22 → W23).
-- 05-tasks §5T.9's "guards" row (`archtest.ResumeContinueCheckpoints`, `archtest.RunItemsDeclareParallelism`
-  self-tests) has no explicit owner among the F2 rows; F5-17 (`tasklint`) is the closest fit.

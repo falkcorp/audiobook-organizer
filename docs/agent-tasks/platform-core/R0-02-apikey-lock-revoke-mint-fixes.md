@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R0-02-apikey-lock-revoke-mint-fixes.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: db4a0394-774e-4f4a-8a93-e57fc75b4bc1 -->
 <!-- last-edited: 2026-11-05 -->
 

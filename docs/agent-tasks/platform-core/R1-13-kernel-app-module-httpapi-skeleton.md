@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-13-kernel-app-module-httpapi-skeleton.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 49cec14b-15f1-4aaa-9773-e49334cd61a5 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-13` |
 | Tier | **T4** (Opus / xhigh): the boot-phase machinery every later writer hangs off; lifecycle and stop order are normative |
-| Release / wave | R1 / W09 |
+| Release / wave | R1 / W10 |
 | Depends on | R1-12, R1-09, R1-07, R1-10 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 06 §6.4.10 R1 row, §6.5.1, §6.5.2, §6.11.1, §6.12 (hello); 03 §3.3 (app, module, kernel); 05-http-api §3, §4.8; 04 §8.1 R1 |
 | Branch | `agent/platform-core-r1-13-kernel-app-module-httpapi-skeleton` |
@@ -20,11 +20,27 @@
 
 - `core/kernel/`
 - `core/app/`
+- `core/app/noglobals_test.go` (create; inside `core/app/`, named so the `TestNoGlobals` scan has a listed home)
 - `core/module/`
 - `core/httpapi/`
 - `core/internal/openapi/`
 - `core/examples/hello/`
 - `core/openapi/core.json`
+
+**The shared wiring files this row creates, by name.** Later rows name these files in their own file lists (plan
+§(d): one owner per wave), so create exactly these paths and keep each one's role:
+
+| File | Holds |
+|---|---|
+| `core/kernel/boot.go` | the boot phases of 06 §6.5.1 and the services build order (R1-20, R1-21, R1-24 and R1-28 add their boot calls here) |
+| `core/kernel/kernel.go` | per-module `Registrar` and `Deps` construction, collision checks, core route mounts |
+| `core/module/manifest.go` | `Manifest` and its R1 fields |
+| `core/module/registrar.go` | `Registrar` and its R1 members |
+| `core/module/deps.go` | `Deps` |
+| `core/app/options.go` | `app.Options` and `R1Values` |
+
+From R2 on a dark row adds only its own `core/kernel/<subsystem>.go` and package files; its stage's wiring row
+(F2-16) or its flip adds the boot calls, members and mounts here.
 
 ## START HERE
 
@@ -65,7 +81,8 @@ later is **absent, not stubbed**, and the kernel phase that consumes it is skipp
   `ResolveStateDir`, `ExtendStart`, `Describe` (`Core`, `OpenAPI`), and the R1 `Options` fields that need no
   storage (`AppID`, `MetricNamespace`, `ServiceName`, `ReservedAPINamespaces`, `DisplayName`, `Version`,
   `EnvPrefix`, `StateDir`, `ConfigFile`, `Args`, `Env`, `LegacyAuthGinUntil`, `R1Values` with type `R1Values`,
-  `Logger`) (06 §6.4.5, §6.4.10). `app.BinaryID` is R1-19's; `OpenOffline`/`OfflineCommands` are R1-24/R1-25's;
+  `Logger`) (06 §6.4.5, §6.4.10). `app.BinaryID` is R1-19's; `OpenOffline`/`OfflineCommands` are R1-25's (R1-24 adds
+  `storage prune-checkpoints` to the list);
   `InstallProcessDefaults` is R1-15's.
 - `httpapi` (L6): routes, groups, `Handle` with a required `rbac.Requirement` (zero rejected), `Build` with
   `ServeMux` pattern conflict detection (05-http-api §3, §4.8), the listener lifecycle, the problem shape; the
@@ -91,8 +108,19 @@ later is **absent, not stubbed**, and the kernel phase that consumes it is skipp
   in a temp dir and diffs).
 - Hello: `TestHelloEndToEnd` for the R1 surface (boot, `GET /api/hello/v1/greeting` 200, clean stop); the parts
   that need storage, tasks or auth are added by the rows that land them.
-- No process-global state in core (03 R5): the core archtest's `TestNoGlobals` if it exists at your base,
-  otherwise a grep in the acceptance block; `signal.NotifyContext` only in `core/examples/hello/cmd/` (a `main`).
+- No process-global state in core (03 R5): **this row owns `TestNoGlobals`** (05-metrics §12: no
+  `prometheus.DefaultRegisterer/DefaultGatherer/MustRegister/Register`, `promhttp.Handler()`,
+  `otel.Set*`/`otel.Get*Provider`/`otel.Tracer`/`otel.Meter` in core, except `otel.SetMeterProvider`,
+  `otel.SetTracerProvider` and `otel.SetTextMapPropagator` inside `app.InstallProcessDefaults`, which R1-15 adds).
+  It is a source scan of every non-test `.go` file under `core/`; write it in `core/app/noglobals_test.go` (file
+  name coined here, in this row's files; this row does not touch `core/archtest/`). Also no `slog.SetDefault` and
+  `signal.NotifyContext` only in `core/examples/hello/cmd/` (a `main`).
+- Kernel metrics: **this row owns `TestKernelFamiliesGathered`** (05-metrics §12, a `kernel` test): one zero-module
+  boot on a fresh Provider; the scrape of that App's `Provider.Handler()` carries every kernel-emitted family that
+  exists at this row, `<namespace>_kernel_boot_phase_seconds`, matching a core golden
+  (`core/kernel/testdata/kernel_families.golden`, name coined here). The storage families
+  `<namespace>_storage_level` and `<namespace>_storage_checkpoint_bytes` do not exist until R1-20; write the golden
+  as a list R1-20 extends.
 - Core guard control: once `app` and `kernel` exist the in-module control becomes `app` → `kernel`
   (03 §3.5.1 item 2, third step). Set it in this PR and say so.
 - Any 06 §6.10 row whose subject this PR lands and that is not listed above: write it too, or list it in the PR as
@@ -115,9 +143,12 @@ git diff --stat origin/main -- . ':!core' | tail -1                       # at t
 ## Steps
 
 1. Write the tests above (red), with `TestOpenAPI_Golden` reading `core/openapi/core.json`.
-2. `core/module`, then `core/internal/openapi` (leaf route-description type), then `core/httpapi` (routes, `Build`,
-   listeners, problem shape), then `core/kernel` (phases that exist, start/stop order, supervisor with the readiness
-   notifier, restart request, shutdown budget), then `core/app` (`New`, `Run`, `Describe`, the R1 `Options` fields).
+2. `core/module` (`manifest.go`, `registrar.go`, `deps.go`, plus `module.go` for the interface and
+   `ReservedIDs`), then `core/internal/openapi` (leaf route-description type), then `core/httpapi` (routes, `Build`,
+   listeners, problem shape), then `core/kernel` (`boot.go`: phases that exist and the services build order;
+   `kernel.go`: per-module construction, collisions, mounts; plus the supervisor with the readiness notifier, the
+   restart request and the shutdown budget), then `core/app` (`options.go` with the R1 `Options` fields; `New`,
+   `Run`, `Describe`).
 3. `core/examples/hello`: module, app `main` (the only `signal.NotifyContext` in core), the greeting route, the OpenAPI
    subcommand; generate and commit `core/openapi/core.json`.
 4. Core layering guard: layers for the new packages (module L7, kernel L8, app and examples L9, httpapi L6,
@@ -140,6 +171,8 @@ Exactly the members named in Goal, with the signatures of 06 §6.4.1–§6.4.7 (
 
 ```bash
 go -C core build ./... && go -C core vet ./... && go -C core test ./... -race -count=1     # expect ok
+go -C core test ./app/ ./kernel/ -run 'TestNoGlobals|TestKernelFamiliesGathered' -count=1 -v | grep -c '^--- PASS'   # expect 2
+ls core/kernel/boot.go core/kernel/kernel.go core/module/manifest.go core/module/registrar.go core/module/deps.go core/app/options.go   # expect all six
 go -C core run ./examples/hello/cmd/hello openapi --out "$(mktemp -d)/core.json" && echo GEN   # expect GEN (exact subcommand per 06 §6.12.5)
 git diff --exit-code -- core/openapi/core.json                                             # expect no diff after regenerating in place
 git grep -n 'slog.SetDefault\|otel.Set\|http.DefaultServeMux\|signal.Notify' -- core ':!core/examples/*/cmd/**' | wc -l   # expect 0
@@ -150,7 +183,7 @@ make ci && make -C core ci                                                      
 ## Out of scope
 
 `MountLegacy`'s behaviour (R1-14); the perimeter (R1-17); the ABO composition root (R1-15); sdnotify (R1-16);
-storage (R1-20); build identity (R1-19); offline opens (R1-24, R1-25).
+storage (R1-20); build identity (R1-19); offline opens (R1-25) and the prune command (R1-24).
 
 ## Rollback
 

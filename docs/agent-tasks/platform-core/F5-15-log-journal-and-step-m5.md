@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-15-log-journal-and-step-m5.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 2172729c-4a08-45a0-ad75-8cf11d81ee4d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F5-15 |
 | Release / flip | R2, tasks flip F5 (dark foundation PR; M5 is registered by F5-18) |
-| Wave | W26 |
+| Wave | W28 |
 | Tier | **T3** (Opus / high): a durable journal store with an idempotent importer and a one-way migration step of every system-log row |
 | Depends on | F2-05 (core tasks surface, transitively F2-01..F2-04); F3-06 (`internal/books/cutover` and the step conventions M2 set) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
@@ -37,15 +37,17 @@ Land, dark, the core system-log journal of 05-logging §5 and books' cutover ste
    `JournalPage` exactly as 05-logging §3 declares them (`log` is L0: they name only `log` and standard types).
 2. `core/internal/logjournal/`: the native store over `c/log/journal/<ULID>` (one versioned JSON record per key,
    ULIDs from the record time, attributes flattened to dotted keys), the importer over it, the journal `Tap`
-   at `core.log.journal.min_level` handing records to `Append` in batches (≤ 256 records or 1 s), and the
-   `core.log.journal` settings section (`Settings` of 05-logging §5).
+   at `core.log.journal.min_level` handing records to `Append` in batches (≤ 256 records or 1 s), and the two
+   types the `core.log.journal` and `core.log.schedules` sections name (`Settings` and `Schedules` of 05-logging §5).
+   The sections themselves are registered dark from F2 by F2-09's section list; this PR adds the types.
 3. `core/log/logtest/`: `logtest.JournalStoreSuite` (the exported contract, with its importer cases).
 4. `internal/books/cutover/m5/`: books' BootBlocking cutover step M5, a `datamigrate.DataMigration` that decodes
    `syslog:` rows in chunks and calls `log.Importer.Import`, then deletes the chunk's source rows.
 
 Nothing is wired: no kernel starts the tap, no step list includes M5, no route serves the journal. The tasks
 flip F5-18 registers M5 in `internal/books/cutover/steps.go`, starts the journal and deletes HEAD's writers
-and pruner (05-logging §11 item 1, R2 part). The prune kind `core.log.journal.prune` is F5-03's.
+and pruner (05-logging §11 item 1, R2 part). The prune kind `core.log.journal.prune` is F5-03's, the query route
+`GET /api/core/v1/system/logs` F5-19's and the live tail `core.log.recorded.v1` F6-05's.
 
 ## Spec to read first (in this order)
 
@@ -78,8 +80,10 @@ test -d internal/books/testdata/r2corpus && echo corpus                         
 grep -rn 'syslog' internal/books/testdata/r2corpus/manifest.json | wc -l                  # >=1 (the corrupt syslog: overlay row, 09 §9.3), else STOP
 # This PR's targets are absent
 test ! -e core/internal/logjournal && test ! -e core/log/journal.go && test ! -e internal/books/cutover/m5 && echo absent   # absent
-# Is the core.log.journal section already registered (F2 registered every core section dark)?
-grep -rn '"core.log.journal"\|core\.log\.journal' core/ --include=*.go | grep -v _test | wc -l   # record: 0 = declare it here; >0 = move/reuse it, never declare twice
+# The core.log.journal and core.log.schedules sections are registered dark from F2 (F2-09's section list); never declare them twice
+grep -rn 'core.log.journal\|core.log.schedules' core/kernel/core_sections.go core/config/ | grep -v _test | wc -l   # >=2 (F2-09), else STOP
+# M5's step ID is reserved by F3-06
+grep -n 'M5\|m5\|syslog' internal/books/cutover/stepids.go | wc -l                     # >=1 (F3-06), else STOP
 # HEAD's source rows (f7ac5b11e)
 grep -n 'key := fmt.Sprintf("syslog:%s:%s", time.Now().Format(time.RFC3339Nano), source)' internal/database/pebble_store_activity.go | wc -l   # 1
 grep -n 'type SystemActivityLog struct' internal/database/store.go | wc -l                # 1 (ID, UserID, Source, Level, Message, CreatedAt)
@@ -95,12 +99,13 @@ Spec anchors: 05-logging cites `pebble_store_activity.go:20-37` and `store.go:67
 |---|---|
 | create | `core/log/journal.go` (the SDK types) and `core/log/journal_test.go` |
 | create | `core/log/logtest/` (`JournalStoreSuite`) |
-| create | `core/internal/logjournal/` (`store.go` native store, `importer.go`, `tap.go`, `settings.go`, tests); **not** `prune.go` (F5-03) |
+| create | `core/internal/logjournal/` (`store.go` native store, `importer.go`, `tap.go`, `settings.go` with the `Settings` and `Schedules` types, tests); **not** `prune.go` (F5-03), `tail.go` (F6-05) |
 | create | `internal/books/cutover/m5/` (the step, its tests, its fixture glue) |
 | create | one `changelog.d/` fragment |
 
-Do not modify `internal/books/cutover/steps.go` (F5-18 registers M5), `internal/activity`, `internal/logger`,
-`internal/database`, `main.go` or any kernel wiring.
+Do not modify `internal/books/cutover/steps.go` (F5-18 registers M5), `internal/books/cutover/stepids.go` (F3-06's),
+`core/kernel/core_sections.go` (F2-09's), `internal/activity`, `internal/logger`, `internal/database`, `main.go` or any
+kernel wiring.
 
 ## Code contract
 
@@ -108,7 +113,8 @@ Do not modify `internal/books/cutover/steps.go` (F5-18 registers M5), `internal/
 `JournalPage` (and `OtherUserPredicate` if R1 did not land it) verbatim, with their doc comments. `JournalStore`
 is the one store interface that commits its own batch (05-logging §3; 05-storage §5S.3.13 "One exception").
 
-`core/internal/logjournal` (L4: it imports `storage`; it will import `tasks` with F5-03's prune kind):
+`core/internal/logjournal` (L4: it imports `storage`; `Schedules` names `tasks.ScheduleConfig`, and F5-03's prune
+kind imports `tasks` too):
 
 ```go
 type Settings struct { // section core.log.journal (05-logging §5)
@@ -117,6 +123,12 @@ type Settings struct { // section core.log.journal (05-logging §5)
 	RetentionDays int    `json:"retention_days" schema:"minimum=0"`
 	QueueSize     int    `json:"queue_size" reload:"restart" schema:"minimum=64"`
 }
+
+type Schedules struct { // section core.log.schedules (05-logging §5)
+	JournalPrune tasks.ScheduleConfig `json:"journal_prune"` // tasks.ScheduleFromConfig("core.log.schedules.journal_prune"), default {"enabled":true,"every":"24h"}
+}
+// F2-09 registered both sections dark; point their declarations at these two types if they name a placeholder
+// (F2-09's section list in core/kernel/core_sections.go is not this row's file: if it must change, STOP and report).
 // Native store, importer and tap constructors: names coined here (e.g. NewStore, NewImporter, StartTap),
 // taking the c/log/ keyspace handle the kernel will pass at F5-18.
 ```
@@ -138,7 +150,7 @@ Rules:
 
 | Field | Value |
 |---|---|
-| `ID` | `books.cutover-m5-syslog` (name coined here; `<owner>.<name>`, `[a-z][a-z0-9-]*`, stable forever) |
+| `ID` | M5's step ID as F3-06 reserved it in `internal/books/cutover/stepids.go` (stable forever; never coin another) |
 | `Owner` | books |
 | `Source` | the retired claim range of `syslog:` |
 | `Parallelism` | `tasks.Fixed(n, "<reason>")` or `tasks.CPU()` over disjoint key-range shards of `syslog:` (by the RFC3339Nano time prefix), chosen and justified in the PR (09 §9.9; CLAUDE.md): the importer commits its own batch per call, so workers own disjoint ranges and never share a row |
@@ -157,6 +169,7 @@ commit in the chunk's batch; the journal records commit in the importer's own ba
 | `logtest.JournalStoreSuite` | `core/log/logtest` | `Append` then `Query` round-trips level, module, subsystem, message, time, attributes; filters and cursors; `Prune` bounded and oldest first; importer cases: importing the same `ImportedRecord`s twice leaves one record each; imported records sort by their own `Time` among native ones |
 | `TestNativeJournalStore_RoundTrip` | `core/internal/logjournal` | the native store over `c/log/journal/` passes the suite |
 | `TestJournal_BatchAndRetention` (batching half; F5-03 adds the prune-task half) | `core/internal/logjournal` | batching bounds (256 records or 1 s); "no `core/log` migration step or level stamp exists" |
+| `TestJournal_PruneScheduleKeyDeclared` | `core/internal/logjournal` | `core.log.schedules.journal_prune` is declared with type `tasks.ScheduleConfig` in `logjournal.Schedules` and accepted by `ScheduleFromConfig` at registration |
 | `TestCutover_SyslogImported` **(ABO)** | `internal/books/cutover/m5` | over the store written by the R0 binary (with the corrupt row of 09 §9.3's labelled overlay): M5 leaves no `syslog:` row, imports one journal record per row with time, level, source as `Subsystem`, message and `user_id`, quarantines the corrupt row, and resumes after a crash at any chunk point without duplicates |
 
 Add (names coined here): `TestM5_CrashMatrixNoDuplicates` (`CrashClone` at every chunk boundary and between
@@ -165,10 +178,11 @@ workers import the same key).
 
 ## Steps
 
-1. Base checks; STOP on any mismatch. Record whether `core.log.journal` is already declared.
+1. Base checks; STOP on any mismatch.
 2. `core/log/journal.go` and `logtest.JournalStoreSuite` (failing against nothing).
 3. The native store and importer; `TestNativeJournalStore_RoundTrip` green.
-4. The tap and `Settings`; `TestJournal_BatchAndRetention`'s batching cases.
+4. The tap, `Settings` and `Schedules`; `TestJournal_BatchAndRetention`'s batching cases (F5-03 adds its prune
+   cases); `TestJournal_PruneScheduleKeyDeclared` (05-logging §10) for the `Schedules` type.
 5. M5 with its tests over the R2 corpus; the crash matrix.
 6. PR description: the record mapping table above, the parallelism choice and reason, counts from the corpus
    (rows read / imported / quarantined).
@@ -179,7 +193,7 @@ workers import the same key).
 cd core
 go build ./... && go vet ./log/... ./internal/logjournal/                          # exit 0
 go test ./log/... ./internal/logjournal/ -race -count=1                            # ok
-go test ./internal/logjournal/ -run 'TestNativeJournalStore_RoundTrip|TestJournal_BatchAndRetention' -count=1 -v | grep -c '^--- PASS'   # 2
+go test ./internal/logjournal/ -run 'TestNativeJournalStore_RoundTrip|TestJournal_BatchAndRetention|TestJournal_PruneScheduleKeyDeclared' -count=1 -v | grep -c '^--- PASS'   # 3
 go list -deps ./log/ | grep -c 'mediacore/storage'                                 # 0 (log stays L0)
 make ci                                                                            # exit 0 (core's)
 cd ..
@@ -199,8 +213,9 @@ make ci                                                                         
 
 `core.log.journal.prune` (F5-03); registering M5, starting the tap, deleting `StandardLogger`'s system-log
 writes, the activity `Writer`'s line parsing and `internal/logger/retention.go` (F5-18); the query route
-`GET /api/core/v1/system/logs`, the live tail topic `core.log.recorded.v1` and their permission tests
-`TestJournal_RequiresSystemManage`, `TestJournal_OtherUsersLinesNeedUsersView` (no row owns them: Planner notes).
+`GET /api/core/v1/system/logs` with `TestJournal_RequiresSystemManage`'s route half and
+`TestJournal_OtherUsersLinesNeedUsersView` (F5-19); the live tail topic `core.log.recorded.v1` and the test's event
+half (F6-05).
 
 ## Idempotency / rollback
 
@@ -220,16 +235,6 @@ nothing is wired, no stored row changes before F5-18.
 
 ## Planner notes
 
-- **No row builds the journal's HTTP surface.** 05-logging §5 specifies `GET /api/core/v1/system/logs`
-  (`core:system.manage`), the live tail topic `core.log.recorded.v1`, the other-user rule
-  (`TestJournal_OtherUsersLinesNeedUsersView`) and `TestJournal_RequiresSystemManage`, and says HEAD's
-  `GET /api/v1/system/logs` "is deleted in R2 together with the SPA's move to the native route". The query
-  route is an L6 `internal/<capability>http` package that `logjournal` (L4) cannot host, and no inventory row
-  lists one. After M5 (registered by F5-18) HEAD's route reads an empty `syslog:` family, so the route, the
-  SPA's move and the two tests should be added to F5-18 or to a new dark row before it.
-- **`core.log.journal` / `core.log.schedules` section ownership**: 09's F2 row registers every core section
-  dark from F2, while 05-logging §5 has `logjournal` declare both. The brief reuses an existing declaration if
-  F2 made one and declares `core.log.journal` here otherwise; `core.log.schedules` is left to F5-03 with the
-  prune kind.
-- The step ID `books.cutover-m5-syslog` is coined here; F3-06's M2 naming at the base should win if it set a
-  pattern (then rename before merging, the ID is stable forever once registered).
+- **`TestJournal_PruneScheduleKeyDeclared`** (05-logging §10) has no owner in the plan's gate table. The row gives
+  F5-15 the `logjournal.Schedules` type the test checks, so this brief writes it here; the gate table should
+  list it under F5-15.

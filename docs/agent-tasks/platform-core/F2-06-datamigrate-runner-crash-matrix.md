@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-06-datamigrate-runner-crash-matrix.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c1a6adbc-49de-4dd5-964f-59cfaafb845a -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F2-06 |
 | Release / flip | R2, foundation PRs (F2), **dark** |
-| Wave | W23 |
+| Wave | W24 |
 | Tier | **T4** (Opus / xhigh–max): the runner every R2 cutover step (M2–M8) runs on; one batch per chunk with the shard cursor, exact resume across CPU-count changes, disjoint shards, and a crash point at every chunk boundary |
 | Depends on | F2-01 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
@@ -33,8 +33,10 @@ Create the public L4 package `github.com/falkcorp/mediacore/storage/datamigrate`
 `DataMigration`, `StepWriter`, `VerifyReport`, `Blocker`, `DerivedBuildSpec`, `DerivedBuildTask`) and its runner
 `github.com/falkcorp/mediacore/internal/storagemigrate`, which runs every pending `BootBlocking` data migration
 **in process at P4b** through `tasks.ForEach` over a persisted shard plan with persisted shard cursors, one batch per
-chunk (the chunk's writes and the shard cursor commit together). Wire the runner into the kernel's P4 DAG in
-`core/kernel/migrate.go` and add the chunk-boundary crash cells to `coretest/crashmatrix` (`chunks.go`). Dark: no
+chunk (the chunk's writes and the shard cursor commit together). Put the kernel side of the runner (the function the
+boot sequence calls at P4b, and the two seams below) in `core/kernel/migrate.go`, and add the chunk-boundary crash
+cells to `coretest/crashmatrix` (`chunks.go`). The **boot call** that invokes it from the boot sequence is F2-16's, the
+F2 wiring row, which owns `core/kernel/boot.go` and `core/kernel/kernel.go` in its wave; this PR edits neither. Dark: no
 app declares a data migration yet; F3's M2 and F4's M3 are the first consumers (05-storage §5S.3.6 first
 paragraph; 09 §9.2.3 "Order", last paragraph).
 
@@ -67,18 +69,21 @@ ls core/kernel/migrate.go 2>/dev/null || echo "migrate.go absent"   # either: cr
 ```
 
 If `core/kernel/migrate.go` already exists (R1-20/R1-23 may have put the versioned-step DAG there), extend it; do not
-replace R1's versioned steps or the legacy steps 1..`LegacyCap`. If `MigrationCompat`, `StepRef` or `Range` is missing
+replace R1's versioned steps or the legacy steps 1..`LegacyCap`. If R1's P4 DAG already lives in `migrate.go` and is
+already called from `boot.go`, adding data migrations to that DAG inside `migrate.go` is allowed; otherwise expose a
+function (name coined here, e.g. `runDataMigrations`) for F2-16 to call, and add no line to `boot.go`. If `MigrationCompat`, `StepRef` or `Range` is missing
 from `core/storage`, STOP: R1's storage surface is incomplete and this PR must not invent it.
 
 ## Files
 
 Create: `core/storage/datamigrate/` (declarations + `StepWriter` + `DerivedBuildTask`), `core/internal/storagemigrate/`
 (runner, plan, cursors, state records, verify, metrics), `core/coretest/crashmatrix/chunks.go`. Create or extend:
-`core/kernel/migrate.go`. Tests beside each.
+`core/kernel/migrate.go`. Tests beside each. Not `core/kernel/boot.go`, `core/kernel/kernel.go` or `core/module/`
+(F2-16).
 
 Do **not** touch `core/storage/` outside `datamigrate/`: the dry run (`core/storage/dryrun.go`), the quarantine record
 (`core/storage/quarantine.go`), the preflight hook (`core/storage/preflight.go`) and the level step are F3-04's
-(W24), which edits `core/kernel/migrate.go` after you. Leave clean seams for them (see "Seams").
+(W25), which edits `core/kernel/migrate.go` after you. Leave clean seams for them (see "Seams").
 
 ## Code contract
 
@@ -154,8 +159,8 @@ before the checkpoint, nil until F3-04. Document both seams in `core/kernel/migr
 
 1. Base-state greps; plan in the PR body (list the boot writers you add and the matrix rows for each).
 2. Tests first (the crash harness first: it is the oracle).
-3. Declarations; runner; kernel P4b wiring (the DAG already holds versioned and legacy steps: data migrations join it
-   in DAG order, after the versioned steps); metrics; seams.
+3. Declarations; runner; the kernel side in `core/kernel/migrate.go` (data migrations join the P4 DAG in DAG order,
+   after the versioned steps; the call from the boot sequence is F2-16's); metrics; seams.
 4. `-race` green; headers; changelog fragment; acceptance.
 
 ## Acceptance
@@ -181,8 +186,9 @@ make ci                                                                         
 
 ## Out of scope
 
-The dry run, quarantine record, preflight and level step (F3-04); any cutover step (F3-06 onward); M8 (F3-04/F3-06);
-`Online` mode; ABO wiring (books declares its first data migration in F3-06).
+The dry run, quarantine record and its writer, preflight and level step (F3-04); the boot call and
+`Manifest.DataMigrations` (F2-16); any cutover step (F3-06 onward); M8 (F3-04/F3-06); `Online` mode; ABO wiring (books
+declares its first data migration in F3-06).
 
 ## Idempotency / rollback
 
@@ -194,12 +200,3 @@ Rollback = revert: no app declares a data migration, so the P4b DAG returns to R
 File headers; conventional commit (`feat(core/storage): datamigrate and the BootBlocking runner (dark)`) with
 `Co-Authored-By: Claude <noreply@anthropic.com>`; `gh pr merge <n> --rebase`; `changelog.d/` fragment. This PR adds
 boot-time durable writers, so it extends the crash matrix in the same PR (09 §9.3).
-
-## Planner notes
-
-- F2-06 and F3-04 both edit `core/kernel/migrate.go` (W23 and W24). F3-04 depends on F2-06, so the order holds. The split
-  of `StepWriter.Quarantine` is: F2-06 builds the runner half (source delete and record staging in the chunk batch through a
-  writer function), F3-04 supplies the writer (record format, sequence, sealing). F3-04's brief stops if `Quarantine` is
-  "missing or a stub"; the runner half here is neither, and F3-04's agent should be told the writer field is its seam.
-- `TestCutoverCrashAtEveryChunk` is a cutover test (05-storage §5S.3.13) whose cells belong to every step; this row owns
-  the harness only, as the inventory says.

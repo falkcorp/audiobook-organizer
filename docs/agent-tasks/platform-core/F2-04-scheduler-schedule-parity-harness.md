@@ -1,17 +1,17 @@
 <!-- file: docs/agent-tasks/platform-core/F2-04-scheduler-schedule-parity-harness.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 150263db-02f3-457c-9fd5-39a0970861c8 -->
 <!-- last-edited: 2026-11-05 -->
 
-# F2-04 — `core/internal/scheduler` written fresh, schedule keys, `core.window.nightly`, and the schedule-parity harness
+# F2-04 — `core/internal/scheduler` written fresh, `core.window.nightly` declared in `core/tasks`, every F2 schedule key and the `core.tasks` config keys, and the schedule-parity harness
 
 | Field | Value |
 |---|---|
 | ID | F2-04 |
 | Release / flip | R2, foundation PRs (F2), **dark** |
-| Wave | W24 |
+| Wave | W26 |
 | Tier | **T3** (Opus / high): a fresh scheduler whose durable clocks must never stampede at first boot nor lose or duplicate a fire; time-zone and DST correctness |
-| Depends on | F2-02 |
+| Depends on | F2-02, F2-09 (`core/config`, `config.Duration` and the kernel's core-section list in `core/kernel/core_sections.go`) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
 
 ## START HERE
@@ -36,8 +36,18 @@ storage batch** (`ClockStore.Advance` + `RunStore.Insert`, inside `WriteRuns`), 
 `ScheduleConfig`), `DailyAt`, 5-field `Cron`, maintenance windows (`core.tasks.windows.<name>`, run as
 `core.window.<name>`, members in `Order`), `OnStart`, `When` gates, `Missed` policies, the first-sight no-stampede
 rule and DST. Add the schedule-parity harness `core/tasks/taskstest/schedule/` that F5-14's
-`TestScheduleParity_AllDefinitions` and `TestCutover_NoCatchUpStorm` drive. Dark: nothing constructs the scheduler
-in ABO before F5 (05-tasks §5T.8.2 Core group).
+`TestScheduleParity_AllDefinitions` and `TestCutover_NoCatchUpStorm` drive.
+
+This row is also the **one owner of `core.window.nightly`** (05-tasks §5T.8.2 T4 table row `maintenance.window`:
+"`core/tasks`, the one owner: declared at F2 with the scheduler"), declared in `core/tasks/window.go`, and of **every
+schedule key typed `tasks.ScheduleConfig` that exists at F2**, plus the `core.tasks.windows.*` keys, all added to the
+kernel's core-section list in `core/kernel/core_sections.go` (F2-09 created that file and declared every section and
+every other key; `core/config` cannot name `tasks.ScheduleConfig` before `core/tasks` exists, and `storage` at L1
+cannot hold one, 05-storage §5S.4). Storage and every other owner only **schedule into** the window through
+`ScheduleConfig.Window`; none declares it.
+
+Dark: nothing constructs the scheduler in ABO before F5 (05-tasks §5T.8.2 Core group); the kernel's start rule that
+constructs it for `hello` is F2-16's. Declaring keys changes no behaviour (05-config §1.12.1).
 
 ## Spec to read first
 
@@ -46,8 +56,12 @@ in ABO before F5 (05-tasks §5T.8.2 Core group).
    (start and stop order), §5T.5 schedule rows, §5T.7 ("One scheduler goroutine"), §5T.10 (the `core.tasks.*`
    keys this package reads).
 2. 05-tasks §5T.8.2 T4 table row `maintenance.window` → `core.window.nightly`, and §5T.9 schedule rows.
-3. 05-config §1.3.1 (`config.Duration`), §1.12.1 "Every core section exists from F2" (the `core.tasks` section is
-   declared by F2-09 in the kernel's core-section list; this PR **reads** its values, it does not declare them).
+3. 05-config §1.3.1 (`config.Duration`, `Define`), §1.3.6 (key grammar, map keys are data), §1.12.1 "Every core
+   section exists from F2" (F2-09 declared the `core.tasks` section and its non-schedule keys; this PR adds the
+   schedule-typed keys and the windows keys to the same list).
+4. 05-storage §5S.4 "Task kinds" (`core.storage.schedules.compact` is declared at F2 by the kernel's core-section
+   list; `storagetasks` only passes it to `ScheduleFromConfig`, from F5).
+5. Each owner's schedule-key row (the table below).
 
 ## Base state: re-verify before editing
 
@@ -57,7 +71,10 @@ grep -rn 'func NativeStores' core/tasks/                # 1 hit (F2-02), else ST
 grep -rn 'func ScheduleFromConfig' core/tasks/          # 1 hit (F2-01), else STOP
 grep -rn 'type Duration ' core/config/                  # 1 hit (F2-09); if 0, STOP (ScheduleConfig needs it)
 grep -n '"core.tasks"' core/kernel/core_sections.go    # >=1 (F2-09 declared the section), else STOP
+grep -n 'schedules\.' core/kernel/core_sections.go | wc -l   # 0 (F2-09 left every schedule key to this row), else STOP
+grep -rn 'type ScheduleConfig struct' core/tasks/       # 1 hit (F2-01), else STOP
 test ! -e core/internal/scheduler && echo absent        # "absent"
+test ! -e core/tasks/window.go && echo absent           # "absent"
 # HEAD scheduler being re-implemented (read only; counts at f7ac5b11e)
 grep -n 'const intervalLastTickPrefix = "scheduled_task_last_tick."' internal/scheduler/interval_clock.go   # 1 hit
 grep -n 'const intervalPollInterval = time.Minute' internal/scheduler/interval_clock.go                   # 1 hit
@@ -68,8 +85,34 @@ grep -n '^func nextDailyAt' internal/scheduler/daily_at.go                      
 `internal/scheduler/cron.go` imports `pkg/ops`; read its grammar (`*`, `a`, `a-b`, `a,b,c`, `*/n`, `a-b/n`; no
 names, no `?`/`L`/`W`/`#`) and re-implement it, copying no ABO import.
 
-If F2-01 used the `time.Duration` fallback for `ScheduleConfig.Every`, switch it to `config.Duration` in this PR
-(allowed edit in `core/tasks/schedule.go`).
+`ScheduleConfig.Every` is already `config.Duration` (F2-01 depends on F2-09); no switch is needed.
+
+**The schedule keys this row declares** (regenerate at your base; a different count means the spec moved: declare what
+your base says and list the difference in the PR body):
+
+```bash
+grep -nE '^\| `core\.[a-z_.<>]*schedules\.[a-z_]*`( / `core\.[a-z_.]*`)? \| `tasks\.ScheduleConfig`' \
+  docs/specs/platform-core/05-*.md | grep -v '05-indexer' | wc -l        # 11 table rows (12 keys) at the plan's base
+```
+
+| Key | Owner row (default) |
+|---|---|
+| `core.ai.schedules.batch_poll` | 05-ai §7 (`{enabled: true, every: 5m}`) |
+| `core.audit.schedules.prune` | 05-rbac §10 (`{enabled: true, every: 24h}`) |
+| `core.auth.schedules.session_prune`, `core.auth.schedules.onetime_prune` | 05-authn §8 (`{enabled: true, every: 1h}`) |
+| `core.backup.schedules.create`, `core.backup.schedules.verify` | 05-backup §5B.7 (`every: 24h`, `every: 168h`) |
+| `core.diagnostics.schedules.prune` | 05-health §5H.7 (`{enabled: true, every: 1h}`) |
+| `core.integrations.schedules.health` | 05-metadata M1.7 (`{enabled: true, every: 5m}`) |
+| `core.library.schedules.quarantine_prune` | 05-library §5L.7 (`{enabled: true, every: 24h}`) |
+| `core.log.schedules.journal_prune` | 05-logging §8 (`{"enabled":true,"every":"24h"}`) |
+| `core.tasks.schedules.prune` | 05-tasks §5T.10 (`{"enabled": true, "every": "24h"}`) |
+| `core.updater.schedules.check` | 05-updater §5U.8 (`{enabled: true, every: 1h}`) |
+| `core.storage.schedules.compact` | 05-storage §5S.4 "Task kinds" (prose, not a table row: a nightly-window member, DB-persisted, seeded once by M2 from HEAD's `scheduled.db_optimize`). The spec states no default: declare `{enabled: true, window: "nightly"}` (a window member, as §5S.4 says) and record it in the PR body |
+
+Not declared here: `core.download.schedules.poll` (phase 2), 05-indexer's keys (non-normative sketch), and
+`core.updater.schedules.apply` (05-updater §5U.8: registered by the release that builds it). The windows keys
+`core.tasks.windows.<name>.{start,end,enabled}` (05-tasks §5T.10: hours and a bool, `nightly` defaults 1 / 4 / true)
+are declared here too, as the one map field `windows` of the `core.tasks` section struct (05-config §1.3.6).
 
 ## Files
 
@@ -84,9 +127,20 @@ Create:
 - `core/tasks/taskstest/schedule/` — the harness: a fake clock and zone, a recorder of enqueues, start-runs,
   window reachability and clock advances, and `Run(t, defs, config, steps)` (name coined here) returning the
   observed sequence, so F5-14 can compare core's sequence with HEAD's.
+- `core/tasks/window.go` — the declaration of the window kind `core.window.nightly` (05-tasks §5T.8.2 T4 table;
+  §5T.3.8 `Window`): the kind name as a constant and the window definition the scheduler runs, with `core/tasks` as
+  its one owner. Exported names coined here (e.g. `const WindowNightly Kind = "core.window.nightly"`); keep them in
+  this one file.
+- `core/kernel/core_sections_schedule_test.go` — `TestCoreSections_ScheduleKeysDeclared` (name coined here).
 - Tests beside them.
 
-Allowed small edit: `core/tasks/schedule.go` (the `config.Duration` switch only). Nothing else.
+Modify:
+
+- `core/kernel/core_sections.go` — add the 13 schedule keys of the table above, each a field of type
+  `tasks.ScheduleConfig` in its owner's section struct with the owner's default and `reload` from its Hot-reload
+  column (all "yes"), and the `windows` map field of the `core.tasks` section. Touch no other key F2-09 declared.
+
+Nothing else; in particular not `core/kernel/core_sections_test.go` (F2-09's) or any boot file (F2-16 wires).
 
 ## Code contract and invariants
 
@@ -113,6 +167,12 @@ Allowed small edit: `core/tasks/schedule.go` (the `config.Duration` switch only)
   created only when the owner of the App wants them (ABO creates none before F5; 05-tasks §5T.11).
 
 ## TDD: tests to write first (names copied from 05-tasks §5T.9)
+
+- `TestCoreSections_ScheduleKeysDeclared` (name coined here, in `core/kernel/core_sections_schedule_test.go`): the
+  set of leaf paths of type `tasks.ScheduleConfig` reflected from the core-section list equals the table's 13 keys
+  exactly, and `core.tasks.windows.nightly.{start,end,enabled}` resolve with defaults 1, 4, true.
+- `TestWindowNightly_DeclaredOnceInTasks` (name coined here): `core.window.nightly` is declared only in
+  `core/tasks/window.go` (an AST or `go list` grep over `core/...` finds no second declaration).
 
 - `TestSchedule_EnqueueAndClockOneBatch` (crash injection between clock advance and enqueue: neither or both)
 - `TestSchedule_NoBootStampede`
@@ -145,6 +205,9 @@ gives them the harness.
 cd core
 go build ./... && go vet ./internal/scheduler/... ./tasks/...                        # exit 0
 go test ./internal/scheduler/... ./tasks/taskstest/schedule/... -race -count=1       # all ok
+go test ./kernel/ -run 'TestCoreSections_' -count=1                                 # ok (F2-09's tests still pass beside the new one)
+grep -c 'tasks.ScheduleConfig' kernel/core_sections.go                              # 13
+grep -rn '"core.window.nightly"' --include='*.go' . | grep -v _test | wc -l         # 1 (tasks/window.go)
 go test ./internal/scheduler/... -run 'TestSchedule_EnqueueAndClockOneBatch|TestSchedule_NoBootStampede|TestSchedule_CoalesceMissed|TestSchedule_DSTSpringForwardFallBack|TestScheduleFromConfig_UndeclaredKeyRefused|TestScheduleFromConfig_ForeignNamespaceRefused|TestScheduleFromConfig_OwnerKeyAccepted|TestScheduleFromConfig_HotReload|TestEvery_RefusedExceptRelay' -race -count=1 -v | grep -c '^--- PASS'   # 9
 grep -rn 'audiobook-organizer\|internal/scheduler"' internal/scheduler/ | wc -l       # 0 (no ABO import)
 cd ..
@@ -155,8 +218,9 @@ make ci                                                                         
 
 ## Out of scope
 
-Declaring the `core.tasks` section or any schedule key (F2-09 and each owner); converting HEAD's 38
-`TaskDefinition`s (F5-14); kernel construction of the scheduler; deleting HEAD's scheduler (F5-18).
+Declaring any section or any non-schedule key (F2-09); the two `secrets.Ref` keys (F3-03); `FailClosed` (F3-02);
+registering any kind on a schedule key (each owner's flip; `storagetasks` from F5); converting HEAD's 38
+`TaskDefinition`s (F5-14); kernel construction and start of the scheduler (F2-16); deleting HEAD's scheduler (F5-18).
 
 ## Idempotency / rollback
 
@@ -169,10 +233,8 @@ File headers; conventional commit (`feat(core/scheduler): fresh scheduler and sc
 
 ## Planner notes
 
-- F2-04 reads the `core.tasks.*` keys and the `core.tasks.windows.*` keys that F2-09 declares, and needs
-  `config.Duration` from F2-09's `core/config`. F2-09 is in W22, so the wave order already satisfies it, but the
-  dependency edge F2-04 → F2-09 is missing from the row.
-- F2-03 and F2-04 are in the same wave (W24) and both may switch a fallback type in `core/tasks/` left by F2-01
-  (`ReadySignal` in F2-03, `ScheduleConfig.Every` in F2-04). The edits are in different files
-  (`definition.go` and `schedule.go` in F2-01's suggested layout), but if F2-01 put both in one file they collide;
-  check the file before starting and rebase after the sibling merges.
+- The inventory groups `core.tasks.windows.*` with the schedule keys, but 05-tasks §5T.10 types them as hours and a
+  bool, not `tasks.ScheduleConfig`. This brief keeps them with this row as the inventory says (the window's one owner)
+  and declares them as the `windows` map field; F2-09's brief leaves them out.
+- `core.storage.schedules.compact` has no owner-table row with a default (05-storage §5S.4 is prose); the brief asks
+  the agent to record the default chosen. 05-storage should state it.

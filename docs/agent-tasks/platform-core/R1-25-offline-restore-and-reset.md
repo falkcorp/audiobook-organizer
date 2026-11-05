@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-25-offline-restore-and-reset.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5c692ae4-468d-4905-b950-4341dd0ae790 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -59,7 +59,9 @@ refusal from R1; 06 §6.4.10 R1 `OpenOffline`, `OfflineCommands`):
    `--archive <file>`, `--into <empty dir>`; restores with the service stopped, in place through the journaled swap
    or into an empty directory inside the scratch area; never boots the app; 05-storage §5S.3.12), `storage reset`
    (stages `KindReset` — `ResetStore` or `ResetFactory` — with the service stopped, applied at the next start;
-   `core/storage/reset.go`, `core/internal/restoreswap/reset.go`), and R1-24's `storage prune-checkpoints`.
+   `core/storage/reset.go`, `core/internal/restoreswap/reset.go`). Wrap every entry of `app.OfflineCommands`
+   generically (06 §6.4.5: "it wraps each entry of `app.OfflineCommands` as a cobra command"), so R1-24, which follows
+   this row and adds `storage prune-checkpoints` to the list in `core/app/offline.go`, needs no `cmd/` edit.
 3. **ABO's restore staged through the swap**: HEAD's live restore (`internal/backup/backup.go:777-870`, which
    extracts over the running store, 09 §9.1) becomes a stage of the one journaled swap (`restorejournal.CreateIntent`,
    R1-21) that takes effect at the next restart, which the service requests by exiting **75** (05-backup §5B.3.4;
@@ -85,8 +87,8 @@ single-file bind mount; `storage.ErrRenameRefused`).
   (06 §6.10): with the service stopped, `storage reset --kind factory --confirm RESET` stages a `ResetFactory`
   (intent in the one slot with `hook_args`, live store and settings blob untouched); a dangerous library root with
   `--delete-library-files` is refused (06 §6.10 row text).
-- `TestSwapSlotExclusive` (06 §6.10), extended to ABO's restore stager and `storage reset`: the inventory names
-  `TestRestoreAndResetBothStaged`, which the spec replaced by `TestSwapSlotExclusive` (see Planner notes).
+- `TestSwapSlotExclusive` (06 §6.10; it replaces `TestRestoreAndResetBothStaged`, 05-backup §5B.3.4) with the ABO
+  stagers: R1-21 lands its core half; this row extends it to ABO's restore stager and `storage reset`.
 - `TestCLISubcommandsUseOfflineOpen` (06 §6.4.6; 05-storage §5S.4).
 - Also: `TestRestoreOffline`, `TestRestoreOfflineIntoEmptyPath`, `TestFactoryResetUnderClaims`,
   `TestCheckpointEscapeKeepsOwedHooks` (05-storage §5S.10) and the updater refusal (a test in `internal/updater`).
@@ -100,7 +102,7 @@ R1-23 and R1-21 merged: `test -d core/internal/restoreswap && git grep -q 'print
 ```bash
 sed -n 45,48p internal/server/wire_system_routes.go       # expect the two reset routes
 grep -n '^func (h \*Handler) ResetSystem\|^func (h \*Handler) FactoryReset' internal/server/handlers/system/handler.go   # expect 463, 538
-grep -n 'func (p \*PebbleStore) Reset(' internal/database/*.go   # HEAD's wipe (pebble_store.go at 748fd787a; locate it at your base)
+grep -n 'func (p \*PebbleStore) Reset(' internal/database/*.go   # HEAD's wipe (pebble_store.go at 748fd787a); R1-23 may have moved it: find it by name at your base and delete it there
 grep -n 'factoryReset\|factory-reset\|resetSystem' web/src/services/api.ts web/src/pages/Settings.tsx | head   # the SPA control and client calls to hide/remove
 grep -n 'os.Exit' internal/backup/*.go internal/updater/updater.go | head   # restore and updater exits (exit 75 rule)
 ```
@@ -164,11 +166,3 @@ rollback (09 §9.2.1).
 - **No `go.work`.** Never run `go work init` in a checkout or worktree; the genproto probe runs only in a throwaway copy under `mktemp -d` (03 §3.2 item 1).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
 
-## Planner notes
-
-- Stale owned-test name: the inventory row (and the plan's gate table) list `TestRestoreAndResetBothStaged`, which
-  the spec replaced with `TestSwapSlotExclusive` (06 §6.10 row: "replaces `TestRestoreAndResetBothStaged`"; 05-backup
-  and 05-storage review history R8-1). The brief uses `TestSwapSlotExclusive`, also owned by R1-21 for the core half;
-  the row and the plan's gate table should name `TestSwapSlotExclusive` (ABO stagers) instead.
-- The row's file `internal/database/pebble_store.go` holds HEAD's whole-store wipe `PebbleStore.Reset`, which this
-  PR deletes; after R1-23 the residue may have moved it. Locate it by name at the base.

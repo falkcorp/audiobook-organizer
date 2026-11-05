@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-22-cut-divided-database-files.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 1143f20d-1bb7-4a87-a829-58a795a47d5c -->
 <!-- last-edited: 2026-11-05 -->
 

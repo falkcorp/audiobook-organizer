@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-03-core-secrets-keyring-offline-commands.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b8fef3e3-a3ab-4134-ba71-0a78a133d3d3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -35,8 +35,9 @@ Build `github.com/falkcorp/mediacore/secrets` (L2) exactly as 05-config Part 2 s
 `Ref`, `Resolver`, `Scope`, `Store` with `Open`/`Get`/`Meta`/`Put`/`Delete`/`Stage`/`StageUnreadable`,
 `Importer`, `Ephemeral`, `All`, `KeyIDsReferenced`, the derive-key API with `RetireUnused`, the keyring file
 format, the record formats, the three offline commands, the health tokens, and core's own L0 copy of ABO's keyed
-mutex. Wire `secrets.Open` into the kernel at the start of 06 P4b (after the checkpoint, before the migration list),
-**dark for ABO**: F3-07 makes it live.
+mutex. Give the kernel its P4b open helper (`core/kernel/secrets.go`), but **do not call it from the boot sequence**:
+F3-07 adds that call for every app, hello included, so this PR needs no dark gate and changes no boot. Declare the
+two `secrets.Ref` keys in the kernel's core-section list.
 
 ## Spec
 
@@ -61,11 +62,21 @@ mutex. Wire `secrets.Open` into the kernel at the start of 06 P4b (after the che
 | create | `core/internal/keyedmutex/` (stdlib-only copy of ABO's `internal/keyedmutex`, with its test) |
 | create | `core/kernel/secrets.go` (P4b open, keyspace `c/secrets/` spec, `ResetBoot`, health reporting on `core.secrets`, the boot-writer row) |
 | create | `core/app/offline_secrets.go` (`secrets export-keyring`, `secrets rotate-derive`, `secrets set-install-id` as `app.Command`s in `OfflineCommands`) |
+| modify | `core/kernel/core_sections.go` (the two `secrets.Ref` keys only: `core.auth.oidc.<id>.client_secret` and `core.http.basic_gate.password`) |
+
+`core/secrets/types.go` exists at BASE (F3-01 created it with `Ref`, `Resolver`, `Write`, `Meta`). Grow the package
+around it; change those four declarations only if 05-config §2.3 differs from them, and say so in the PR.
+`core/kernel/core_sections.go` is also edited by F3-02 (next wave) and F2-04 (later): touch only the two secret keys.
+Not yours: `core/kernel/boot.go`, `core/kernel/kernel.go`, `core/module/` (F3-07 wires the call, `Importers.Secrets`
+and `Deps.Secrets`).
 
 ## Re-verify at BASE
 
 ```bash
-ls -d core/secrets 2>/dev/null | wc -l            # expect 0, or the types-only leaf F3-01's planner note asked for (then extend it)
+ls core/secrets/*.go 2>/dev/null | wc -l          # expect 1 (F3-01's types.go)
+grep -c 'type Ref struct\|type Resolver interface\|type Meta struct\|type Write struct' core/secrets/types.go   # expect 4
+grep -c 'secrets.Ref' core/kernel/core_sections.go   # expect 0 (you add two)
+grep -c 'basic_gate' core/kernel/core_sections.go    # expect >= 1 (F2-09's section)
 ls -d core/internal/keyedmutex 2>/dev/null | wc -l   # expect 0
 grep -c 'func (k \*Mutex) Lock' internal/keyedmutex/keyedmutex.go   # expect 1 (HEAD: line 32; the source to copy)
 grep -c '^import "sync"' internal/keyedmutex/keyedmutex.go          # expect 1 (stdlib only)
@@ -81,9 +92,9 @@ grep -c 'func guardAgainstKeyRegeneration' cmd/root.go              # expect 1 (
 
 ## STOP conditions
 
-1. On this PR's `main`, an ABO boot would create `secrets.keyring`, write `c/secrets/meta` or any `c/secrets/` row.
-   ABO's boot must stay byte-identical until F3-07 (`TestNoStoreWriteBeforeCheckpoint` and the crash matrix
-   `TestBootCrashMatrix_ABO` unchanged). hello may open secrets.
+1. On this PR's `main`, any boot (ABO's or hello's) would create `secrets.keyring`, write `c/secrets/meta` or any
+   `c/secrets/` row. No boot calls `secrets.Open` until F3-07 (`TestNoStoreWriteBeforeCheckpoint` and both crash
+   matrices unchanged). Your tests call `Open` directly.
 2. A secrets write is placed before the P4a checkpoint (06 §6.5.1 write rule).
 3. Anything would read HEAD's `.encryption_key`: only M2 reads it (05-config C17).
 4. You need a file outside the list.
@@ -123,13 +134,19 @@ grep -c 'func guardAgainstKeyRegeneration' cmd/root.go              # expect 1 (
     `retire_after` = now + max(backup retention, longest refresh-token TTL) read from config); `secrets
     set-install-id --install-id <id>` (offline, read-only marker read; refuses an ID that differs from the store's
     `c/storage/install` marker and a missing keyring; rewrites only the header).
-11. **Kernel** (`core/kernel/secrets.go`): register the `c/secrets/` keyspace spec; at the start of P4b call `Open`
-    (after the checkpoint, before the migration list) and hand `Store.Importer()` to the migration list as
-    `module.Importers.Secrets`; raise `secrets_undecryptable` (count of `Meta.Err` records),
-    `secrets_keyring_not_exported` (a key missing from the export record) and `derive_key_retire_blocked` on
-    `core.secrets`; add the boot-writer row and extend core's `TestBootCrashMatrix` over hello with the keyring write
-    and the `c/secrets/meta` write (09 §9.3: a PR that adds a boot writer extends the crash matrix in the same PR).
-12. Headers, one `changelog.d/` fragment, Acceptance.
+11. **Kernel helper** (`core/kernel/secrets.go`): the `c/secrets/` keyspace spec and an unexported P4b helper
+    (name coined here: `openSecrets`) that calls `Open` with the state dir, `AppID`, `ResetBoot` and the two §2.7
+    keys, and returns the store for F3-07 to hand on as `module.Importers.Secrets` and `module.Deps.Secrets`; a
+    health reporter raising `secrets_undecryptable` (count of `Meta.Err` records), `secrets_keyring_not_exported` (a
+    key missing from the export record) and `derive_key_retire_blocked` on `core.secrets`. Unit-test the helper with
+    a scratch state dir. **Do not** call it from `boot.go`, add the boot-writer row or extend `TestBootCrashMatrix`:
+    the boot write starts with F3-07, which adds the call, the boot-writer row and the crash-matrix cells together
+    (09 §9.3: the PR that adds a boot writer extends the crash matrix).
+12. **Secret keys** (`core/kernel/core_sections.go`; 05-config §2.2, §1.12.3 rows `oauth_*_client_secret` and
+    `basic_auth_password`; 05-http-api §10): add `client_secret secrets.Ref` to the `core.auth.oidc.<id>` entry and
+    `password secrets.Ref` to `core.http.basic_gate`, at `ProtectAdmin` (05-config §1.3.7 `FieldSignIn`). No
+    `reload:"boot"` on either (`Register` refuses it). The password is a plain operator-locked key, not `FailClosed`.
+13. Headers, one `changelog.d/` fragment, Acceptance.
 
 ## Code contract (05-config §2.3; copy exactly)
 
@@ -200,15 +217,17 @@ here) for the copy.
 (cd core && go vet ./secrets/... ./internal/keyedmutex/... ./kernel/... ./app/...)       # exit 0
 (cd core && go test -race -count=1 ./secrets/... ./internal/keyedmutex/... ./kernel/... ./app/...)   # ok
 (cd core && go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./internal/keyedmutex)   # one line: github.com/falkcorp/mediacore/internal/keyedmutex
-(cd core && go test -count=1 -run 'TestBootCrashMatrix' ./...)                            # PASS (with the new rows)
+(cd core && go test -count=1 -run 'TestBootCrashMatrix' ./...)                            # PASS, unchanged
 go test -count=1 -run 'TestBootCrashMatrix_ABO' ./...                                      # PASS, unchanged for ABO
+(cd core && grep -rn 'openSecrets(' kernel/ | grep -v _test.go | grep -vc 'func openSecrets')   # 0: no boot call yet
 make -C core ci                                                                            # exit 0
 make ci                                                                                    # exit 0
 ```
 
 ## Out of scope
 
-M2 and HEAD's key file (F3-06); wiring the keyring into ABO's boot and the façade (F3-07); `Committer` staging of
+M2 and HEAD's key file (F3-06); calling `secrets.Open` from the boot sequence, the boot-writer row, the crash-matrix
+cells, `Importers.Secrets`, `Deps.Secrets` and the façade (F3-07); `Committer` staging of
 secret writes is F3-01's and only calls `Stage`; backup's in-use check (F8-01); data-key rotation and prune (deferred,
 §2.11 item 1).
 
@@ -227,11 +246,3 @@ feat(core/secrets): keyring, sealed records, importer, offline keyring commands 
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
-
-## Planner notes
-
-- If F3-01's planner note was acted on and a types-only `core/secrets` leaf exists at BASE, extend it; this row owns the
-  whole `core/secrets/` directory.
-- The dark gate: no row names how the kernel skips `secrets.Open` for ABO before F3-07 while running it for hello. The
-  executing agent must choose a mechanism that is not a state-shape switch (09 §9.2.8) and that F3-07 removes or
-  satisfies by its own edits (`main.go`, `core/app/options.go`).

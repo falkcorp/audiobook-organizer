@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-01-core-backup-dark.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4815a9a9-aae1-479b-9e95-a1d9a80564de -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F8-01 |
 | Release | R2, flip label F8 (dark PR) |
 | Tier | **T4** (Opus / xhigh–max): backup and restore of every core store; a wrong reader or a wrong staging check loses or exposes the whole install |
-| Wave | W25 (beside F2-05, F3-06, F7-01; file-disjoint) |
+| Wave | W26 (beside F2-04, F3-06, F7-04, F7-10; file-disjoint; this row is W26's one owner of `core/go.mod`, `core/go.sum` and `go.sum`) |
 | Depends on | F4-04 (`backup/journal` types), F3-03 (core secrets: the provenance HMAC is keyring-derived) |
 | Spec | 05-backup §5B.0 (B1–B8), §5B.3 (all: §5B.3.1 contents, §5B.3.2 types, §5B.3.3 `mediacore-backup/1`, §5B.3.4 staged restore, §5B.3.5 creation/verification/retention/catalogue, §5B.3.6 revocation journal, §5B.3.7 provenance, §5B.3.8 routes, §5B.3.9 deferred-build), §5B.5–§5B.8, §5B.9 (tests), §5B.10; 05-config §1.12.2 and §2.4 (`--gap-fill`); 05-storage §5S.3.12 (`storage restore-offline`); 04 §8.1 F8 |
 
@@ -57,8 +57,9 @@ Build core `backup` (05-backup), dark:
   (`TestForeignArchiveNeedsFlag`, `TestProvenanceBindsInstallAndEntries`).
 - **I5.** An archive below the build's upgrade floor is refused at staging before extraction
   (`TestRestoreBelowUpgradeFloorRefusedAtStaging`; R3-02 adds R3's floor cell).
-- **I6.** A `legacy-abo/0` archive restored on R2, staged and offline, is migrated by the next boot behind its own
-  checkpoint, with the corpus' per-family counts (`TestLegacyArchiveRestoreThenMigrate`, the gate test this row owns).
+- **I6.** A `legacy-abo/0` archive restored on R2, staged and offline, is staged, extracted and checkpointed behind its
+  own pre-migration checkpoint before the next boot migrates it (the staging half of
+  `TestLegacyArchiveRestoreThenMigrate`; F8-04 owns the test and adds the migration over every registered step).
 - **I7.** Retention never deletes the newest verified archive and runs before the space check
   (`TestRetentionFloors`, `TestRetentionRunsBeforeSpaceCheck`).
 - **I8. Dark.** ABO's backup behaviour and routes are unchanged in this PR.
@@ -148,9 +149,11 @@ type Service interface {
 
 ## Tests (write first; spec names copied exactly, 05-backup §5B.9)
 
-Gate test this row owns: **`TestLegacyArchiveRestoreThenMigrate`** (staged and offline; in ABO's root module against
-the R0 corpus once the cutover steps are registered; until F7-09 registers M6 the test runs the steps registered at
-your base and checks those families; F8-04 runs it on the full list).
+The staging half of **`TestLegacyArchiveRestoreThenMigrate`** (05-backup §5B.9; F8-04 owns the test): a `legacy-abo/0`
+archive of the R0 corpus, staged and offline, passes staging, is extracted, and the pre-migration checkpoint is taken.
+No cutover step is registered at this row's wave (F3-07 registers M2, M7 and M8 at W29; M3–M6 follow at F4-08, F5-18
+and F7-09), so this PR asserts nothing about migrated families. Write it under the spec name in ABO's root module;
+F8-04 extends it to the migrated store with the corpus' per-family counts.
 
 Also in this PR: `TestRestoreNeverWritesLiveStore`, `TestStagedRestoreAppliedBeforeConfigAndStorage`,
 `TestRestoreRejectedKeepsLiveData`, `TestStaleOrForeignIntentRejected`, `TestRestoreRejectsMismatchedDBPath`,
@@ -177,7 +180,7 @@ identity flip; add any §5B.9 test that is not green at your base here and list 
 # Core backup. Expected: ok, no FAIL
 (cd core && go test -count=1 -race ./backup/... ./internal/backuparchive/... ./internal/backuphttp/...)
 
-# The gate test. Expected: ok
+# The staging half of the gate test (F8-04 completes it). Expected: ok
 go test -count=1 -run TestLegacyArchiveRestoreThenMigrate ./...
 
 # Dark: ABO's backup unchanged. Expected: ok
@@ -215,12 +218,3 @@ Revert the PR; nothing in ABO uses it and no stored data is written (dark).
 - Hashing and verification of large archives stream; any per-entry loop over a library-scale collection follows
   CLAUDE.md's concurrency rule.
 
-## Planner notes
-
-- **Gate test timing.** `TestLegacyArchiveRestoreThenMigrate` asserts that a restored `legacy-abo/0` store is migrated
-  by the next boot. At this row's wave (W25) no cutover step is registered yet (F3-07 registers M2, M7 and M8 at
-  W27; M3–M6 follow at F4-08, F5-18, F7-09), so the test can only exercise the staging, extraction and the
-  pre-migration checkpoint here. Either the test's ownership moves to F8-04, where every step is registered, or
-  F8-01 lands it and F8-04 extends it; the plan's gate table names F8-01 alone.
-- **`core/go.mod` in W25.** This row edits `core/go.mod`, `core/go.sum` and root `go.sum`; no other W25 row lists
-  them at the plan's paths, but any W25 row that adds a core dependency would collide.

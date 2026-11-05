@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-04-docker-image-job-embed-check.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4ec57f2c-fd43-44f4-ac1f-57531f066721 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-04` |
 | Tier | **T2** (Sonnet / high): build-context rules (dockerignore patterns, embed inputs) are easy to get subtly wrong |
-| Release / wave | R1 / W10 |
+| Release / wave | R1 / W09 |
 | Depends on | R1-03 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 09 §9.4 R1 Content: build and CI (docker-image job, embed check); 09 §9.1 (Dockerfiles, .dockerignore); 12 §12.3.11 (embed-check) |
 | Branch | `agent/platform-core-r1-04-docker-image-job-embed-check` |
@@ -29,6 +29,7 @@
 - `Makefile`
 - `core/Makefile`
 - `core/scripts/ci/check_embed_outputs.py`
+- `core/scripts/ci/embed_build_outputs.txt` (created empty; hello's UI fills it later)
 - `ci/gates.txt`
 
 ## START HERE
@@ -75,7 +76,7 @@ Make the Docker build know about `core/` and prove it on every PR (09 §9.4 R1 "
    `secrets.keyring`). Trigger: every PR that touches a non-doc file (via the `changes` classifier).
    The level probe (`--print-storage-levels` inside the container) and the build-ID probe (`X-App-Build` equals the
    embedded `<meta name="mediacore-build">`, `TestBuildID_HeaderEqualsEmbeddedMeta`) are **wired here and off**:
-   `image_probe.sh` runs them only when `PROBE_STORAGE_LEVELS=1` / `PROBE_BUILD_ID=1` (names coined here), which
+   `image_probe.sh` runs them only when `PROBE_STORAGE_LEVELS=1` / `PROBE_BUILD_ID=1` (names coined here; R1-23 turns on `PROBE_STORAGE_LEVELS` and R1-19 turns on `PROBE_BUILD_ID`), which
    R1-23 and R1-19 set in `docker-image.yml` when their flags exist.
 
 ## Dependency check
@@ -144,6 +145,7 @@ Script contracts: `scripts/ci/check_embed_context.py` (no arguments; exit 0/1 wi
 python3 -m pytest scripts/tests/test_check_embed_context.py -q          # expect all passed
 python3 scripts/ci/check_embed_context.py                               # expect exit 0 on the tree
 make -C core embed-check                                                # expect exit 0
+test -f core/scripts/ci/embed_build_outputs.txt && ! test -s core/scripts/ci/embed_build_outputs.txt && echo empty   # expect empty
 docker build -t abo-r104 . && docker build -f Dockerfile.build-cgo --output type=local,dest=/tmp/r104 .   # expect both succeed
 make ci && make -C core ci                                              # expect exit 0
 ```
@@ -175,11 +177,3 @@ Revert the PR. The image built from `main` is unchanged in behaviour.
 - **Concurrency (CLAUDE.md).** A loop over a library-scale collection with per-item I/O, hashing or subprocess work uses a bounded worker pool (`errgroup` + `SetLimit`); never unbounded goroutines.
 - **No `go.work`.** Never run `go work init` in a checkout or worktree; the genproto probe runs only in a throwaway copy under `mktemp -d` (03 §3.2 item 1).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
-
-## Planner notes
-
-- Missing file in the row: core's own embed list `core/scripts/ci/embed_build_outputs.txt` (03 §3.2 item 4 and 12
-  §12.3.11 name it; `check_embed_outputs.py` reads it) is created here, empty until hello's UI. Add it to the row.
-- The two probes this job wires but cannot yet run are gated by `PROBE_STORAGE_LEVELS` and `PROBE_BUILD_ID`
-  (names coined here); R1-23 and R1-19 already list `docker-image.yml`, but R1-23 does not depend on R1-04 (it is
-  ordered after it only by wave, W14 after W10). Add R1-04 to R1-23's depends-on.

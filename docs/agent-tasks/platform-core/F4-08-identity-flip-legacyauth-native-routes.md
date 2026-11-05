@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-08-identity-flip-legacyauth-native-routes.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0ad91c06-04c3-47a1-bdf3-1ab090720204 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,9 +10,9 @@
 | ID | F4-08 |
 | Release / flip | R2, **the identity flip F4** (one atomic PR, 09 §9.2.1) |
 | Tier | **T4** (Opus, xhigh–max): the identity flip replaces the auth chain of every gin route |
-| Wave | W31 — the only PR of its wave touching `main.go`, `internal/server/` and books' registration; it **merges alone**; runs inside an announced **move window** |
-| Depends on | F3-07, F4-03, F4-04, F4-05, F4-06, F4-07 |
-| Owns gate tests | `TestOAuthCallback_HEADPathServedByCore`; `TestOAuthStart_HEADPathServedByCore`; `TestIdentityCutover_ABSSurvives` (the ABS conformance suite on the migrated corpus); `TestCutover_NoRawTokenOnDisk` |
+| Wave | W31 — the only PR of its wave touching `main.go`, `internal/server/` and books' registration, and the wave's one owner of the kernel and module wiring files; it **merges alone**; runs inside an announced **move window** |
+| Depends on | F3-07, F4-03, F4-04, F4-05, F4-06, F4-07, F4-09, F4-10 |
+| Owns gate tests | `TestOAuthCallback_HEADPathServedByCore`; `TestOAuthStart_HEADPathServedByCore`; `TestIdentityCutover_ABSSurvives` (the ABS conformance suite on the migrated corpus); `TestCutover_NoRawTokenOnDisk`; `TestOIDC_AppHandoffMintsABSCode`; the route cells of `TestWorkerKey_Confined` |
 | Gate | Plan, then execute autonomously. |
 
 ## ⛔ START HERE
@@ -28,12 +28,23 @@ make web-deps
 git rev-parse HEAD       # BASE
 ```
 
-Confirm every dependency is merged and the move window is announced. Read F4-01 … F4-07's PR descriptions for the seams,
-coined names and deferred test cells they handed to this PR.
+Confirm every dependency is merged and the move window is announced. Read F4-01 … F4-07, F4-09 and F4-10's PR
+descriptions for the seams, coined names and deferred test cells they handed to this PR.
 
 ## Goal
 
 Switch identity to core for ABO in one PR, with every first-party caller (09 §9.2.9, 05-http-api §8.1 F4 row):
+
+0. **Kernel and module wiring** (06 §6.4.10 F4 row, §6.5.1 P4d, P5, P7): inject F4-09's `authz.Compile` as
+   `rbac.Deps.Compile` at P5 (05-rbac §5); build rbac, auth and audit serving; register `backup/journal`'s
+   `StorageSpec` for `c/backup/` (F4-04) and pass the journal as `rbac.Deps.Revocations` and to auth; mount F4-05's route
+   packages (for every app, hello included) and F4-10's `CoreFixedGroup`; P7 seeding, `auth.BootWrites` (P4d step 4),
+   the bus and the stage 7/13 audit. Add the F4 module members to `core/module/` (`Permissions`, `Roles`,
+   `ImportedRoleIDs`, `Topics`, `Subscribe`, `Deps.Auth`, `AuthAdmin`, `AuthCompat`, `Audit`, `Events`), `users
+   reset-password` and `storage cutover-blockers` (F4-06's command) to `core/app/offline.go`'s list with their cobra
+   wrappers under `cmd/`. Regenerate `core/openapi/core.json` and the generated client under
+   `core/web/packages/api-client/src/generated/` for the newly mounted routes; regenerate
+   `tools/cmd/sdkguard/internal-deps.txt` (`go run ./tools/cmd/sdkguard/main.go -update`) once `internal/auth` is gone.
 
 1. **Auth engine for the mount:** `LegacyAuth` switches to `LegacyAuthCore`; delete `app.Options.LegacyAuthGinUntil`
    with an archtest that fails if it is present. Stage 12 binds the core principal; stage 13 enforces each manifest
@@ -55,7 +66,7 @@ Switch identity to core for ABO in one PR, with every first-party caller (09 §9
    registers `MethodSpec{Method: "books.abs", AppHandoff: <books' hand-off over HEAD's code store>}`.
 5. **App options:** `app.Options.Auth` (`ImportedKeyPrefixes: ["abk_"]`, `DefaultDisabledAllowRemote: true`,
    `OIDCCallbackBase`), `app.Options.Authenticators` with `internal/cfaccess`'s `auth.Extension`; `client_trust.go`'s
-   Access-assertion branch moves into that authenticator.
+   Access-assertion branch moves into that authenticator in `internal/cfaccess/`.
 6. **M3 registered** in `internal/books/cutover/steps.go`: M3 after M2, M7's target raised, and a new M8
    `books.rewrite-after-<M3's step name>` (so a store migrated by F3's `main` is rewritten again after M3).
 7. **Boot writers move:** HEAD's Start-time identity writers (`seedRolesAndTokens`: `internal/auth/seed.go`'s seed-role
@@ -73,6 +84,23 @@ Switch identity to core for ABO in one PR, with every first-party caller (09 §9
 11. **04 keys of F4 moved here:** `internal/auth` → core `auth`/`rbac` (delete `internal/auth/` once empty);
     `internal/server`, `internal/server/middleware` → core `auth`; `internal/server/handlers` → core `internal/authhttp`;
     core `audit` serving; `.mockery.yaml` entries of deleted interfaces.
+
+## Files (the row's list)
+
+| Action | Path |
+|---|---|
+| modify | `main.go`, `.mockery.yaml`, `cmd/` |
+| modify | `core/kernel/boot.go`, `core/kernel/kernel.go` |
+| modify | `core/module/manifest.go`, `core/module/registrar.go`, `core/module/deps.go` |
+| modify | `core/app/options.go`, `core/app/offline.go` |
+| regenerate | `core/openapi/core.json`, `core/web/packages/api-client/src/generated/`, `tools/cmd/sdkguard/internal-deps.txt` |
+| modify / create | `internal/server/` (with `internal/server/legacyauth/` created), `internal/auth/` (emptied and deleted) |
+| modify | `internal/cfaccess/`, `internal/usermerge/` |
+| modify | `internal/books/module.go`, `internal/books/cutover/steps.go` |
+| modify | `web/src/`, `.claude/skills/server-bootstrap/`, `scripts/` |
+| modify | `internal/arch/layering_test.go`, `scripts/ci/short_test_weights.json` |
+
+This PR is its wave's only owner of the kernel and module wiring files.
 
 ## Spec
 
@@ -93,6 +121,10 @@ grep -rn 'api/v1/auth' .claude/skills/server-bootstrap scripts | wc -l          
 ls -d internal/server/legacyauth 2>/dev/null | wc -l                             # 0
 grep -c 'cutover/m3\|m3\.' internal/books/cutover/steps.go                       # 0 (F3-07's list holds M2, M7, M8)
 ls -d core/internal/authhttp internal/cfaccess internal/books/rbacreach | wc -l  # 3
+grep -rn 'func Compile\|func AuthDisabled\|func ForSystem' core/internal/authz/ | wc -l   # 3 (F4-09)
+grep -rn 'func (r \*Router) CoreFixedGroup' core/httpapi/ | wc -l                # 1 (F4-10)
+grep -rn 'authz\.Compile' core/kernel/ | wc -l                                   # 0 now; >= 1 after
+grep -c 'internal/auth$' tools/cmd/sdkguard/internal-deps.txt                    # 1 now; 0 after
 ```
 
 ## STOP conditions
@@ -100,21 +132,24 @@ ls -d core/internal/authhttp internal/cfaccess internal/books/rbacreach | wc -l 
 1. `TestIdentityCutover_ReachOracle` (F4-07) shows any difference outside its expected list on the registered path.
 2. The ABS conformance suite fails on the migrated corpus, or an ABS phone-app session issued by the R0 binary stops
    working (the only frozen contract, D12 (c)).
-3. The work needs a path outside the row (Planner notes) and the lead has not amended the row.
+3. The work needs a path outside the Files table above: report before editing it.
 4. A first-party caller of a deleted route remains on `main` after this PR.
 
 ## Steps (one PR; every commit builds)
 
 1. Write the owned gate tests and the deferred cells first (below).
-2. Kernel/app: mount F4-05's routes, start rbac/auth/audit serving, the bus, P7 seeding, `BootWrites`, the `c/backup/`
-   journal spec, stage 7/13 audit; `app.Options.Auth`, `Authenticators`; delete `LegacyAuthGinUntil`; archtest.
+2. Kernel/module/app (Goal item 0): inject `authz.Compile`, mount F4-05's routes on `CoreGroup` and the OIDC paths on
+   `CoreFixedGroup`, start rbac/auth/audit serving, the bus, P7 seeding, `BootWrites`, the `c/backup/` journal spec,
+   stage 7/13 audit; the F4 module members; the offline commands and their `cmd/` wrappers; `app.Options.Auth`,
+   `Authenticators`; delete `LegacyAuthGinUntil`; archtest; regenerate `core.json` and the client.
 3. Books: `books.abs` with `AppHandoff`; `Deps.AuthCompat` in the ABS adapters; M3 and the new M8 in `steps.go`; M7's
    raised target.
 4. Bridge `internal/server/legacyauth`; replace the gin auth chain and the 14 raw `auth.Can` sites; delete `RequireAuth`
    and the gin identity, OAuth and settings (`k`/`s`) routes; move `client_trust.go`'s Access branch.
 5. Delete HEAD's Start-time identity writers and HEAD's merge undo of pre-R2 journals (409 `merge_permanent`).
 6. SPA, skill and scripts on the native routes; reset control back.
-7. Move `internal/auth` per the 04 keys; `.mockery.yaml`; layering and shard weights.
+7. Move `internal/auth` per the 04 keys; `.mockery.yaml`; layering and shard weights; regenerate
+   `tools/cmd/sdkguard/internal-deps.txt` and bump its `# version:` line.
 8. Headers; one `changelog.d/` fragment; Acceptance.
 
 ## Tests first
@@ -130,8 +165,14 @@ ls -d core/internal/authhttp internal/cfaccess internal/books/rbacreach | wc -l 
   same reach.
 - `TestCutover_NoRawTokenOnDisk`: a canary session token and invite token planted by the R0 binary are found in no file
   under the live DB directory (SSTs, WAL, MANIFEST, OPTIONS) after M3 and M8; the retained checkpoint is the exception.
-- Deferred cells finished here: `TestOIDC_AppHandoffMintsABSCode` (redemption at `/auth/openid/callback`, refused after an
-  epoch bump), `TestWorkerKey_Confined` and `TestIdentityCutover_WorkerKeyStaysConfined` (live routes),
+- `TestOIDC_AppHandoffMintsABSCode` (gate test, owned here; 05-authn §10 "ABO, fake IdP, from F4"): with books' real
+  `AppHandoff` over HEAD's code store and a fake IdP, one cell per control of 05-authn §4.7 (F4-05's
+  `TestOIDCHandoff_StartAndCallbackControls` covers the core half: reuse its fixtures), and the redemption: the code
+  redeems once at the ABS route `/auth/openid/callback` and is refused after the user's epoch is bumped.
+- `TestWorkerKey_Confined`'s route cells (F4-01 created the test, F4-09 added the checker cells): an admin-owned key
+  scoped `["books:fingerprint.worker"]`, an `fp-worker` user's key and an `fp-worker` session get 403 on
+  `/api/core/v1/me`, own sessions, `/metrics` and a reading-state route, and 200 on the worker routes.
+- Deferred cells finished here: `TestIdentityCutover_WorkerKeyStaysConfined` (live routes),
   `TestCutoverRefusedWhileMergeInProgress` (undo → 409 `merge_permanent`), `TestCutoverRefusedByOlderBuilds` (the mid-M3
   cell), `TestIdentityCutover_ReachOracle` on the registered path, `TestMetricsScrape_MigratedReach`,
   `TestCompat_ABSLoginHonoursRestrictions`, `TestBootWrites_RunInP4d`, `TestConfining_WorkerKeyRefusedOnPlaylists`,
@@ -150,7 +191,10 @@ ls -d core/internal/authhttp internal/cfaccess internal/books/rbacreach | wc -l 
 ```bash
 go build ./... && go vet ./...                                                                  # exit 0
 go test -count=1 ./internal/server/... ./internal/books/... ./internal/usermerge/... ./internal/cfaccess/...   # ok
-go test -count=1 -run 'TestOAuthCallback_HEADPathServedByCore|TestOAuthStart_HEADPathServedByCore|TestIdentityCutover_|TestCutover_NoRawTokenOnDisk|TestCutoverRefusedByOlderBuilds|TestBootCrashMatrix_ABO' ./...   # PASS
+go test -count=1 -run 'TestOAuthCallback_HEADPathServedByCore|TestOAuthStart_HEADPathServedByCore|TestIdentityCutover_|TestCutover_NoRawTokenOnDisk|TestOIDC_AppHandoffMintsABSCode|TestWorkerKey_Confined|TestCutoverRefusedByOlderBuilds|TestBootCrashMatrix_ABO' ./...   # PASS
+(cd core && go test -count=1 -run 'TestWorkerKey_Confined|TestBootCrashMatrix' ./...)        # PASS
+make sdkguard                                                                                   # exit 0 (closure matches the regenerated list)
+ls -d internal/auth 2>/dev/null | wc -l                                                         # 0
 grep -rn 'LegacyAuthGinUntil' --include=*.go . | grep -v _test | wc -l                         # 0
 grep -rn 'auth\.Can(' --include=*.go internal/server | grep -v _test | grep -v legacyauth | wc -l   # 0
 grep -rn 'api/v1/auth/' .claude/skills/server-bootstrap scripts web/src | grep -v 'api/v1/auth/oauth' | wc -l   # 0
@@ -179,16 +223,3 @@ feat(auth)!: identity flip: core auth for the legacy mount, native identity rout
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
-
-## Planner notes
-
-Paths the spec requires here that the row omits:
-
-- `core/kernel/` (mounting the route packages, P5 services, P7 seeding, `BootWrites`, the `c/backup/` spec, the bus,
-  stage 7/13 audit) and `core/module/` (`Permissions`, `Roles`, `ImportedRoleIDs`, `Topics`, `Subscribe`, `Deps.Auth`,
-  `AuthAdmin`, `AuthCompat`, `Audit`, `Events`; 06 §6.4.10 F4 row) unless earlier rows added them.
-- `internal/cfaccess/` (F4-03 created it; `client_trust.go`'s Access branch moves into it here).
-- `core/app/` beyond `options.go` (`users reset-password` in `OfflineCommands`, 06 §6.4.10 F4 row) and `cmd/` (its cobra
-  wrapper).
-- `web/src/` covers the SPA; the generated client lives under `core/web/` (R1-30) and may need regeneration from
-  `core/openapi/core.json`.

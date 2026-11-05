@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-20-core-storage-engine-dark.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 41b1ca40-2cc3-49e2-aa3c-359bbca50e36 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -22,16 +22,17 @@
 - `core/internal/pebble/`
 - `core/storage/restorejournal/`
 - `core/coretest/store.go`
-- `core/go.mod`
-- `core/go.sum`
+- `core/`: `go.mod`, `go.sum`
 - `go.sum`
 - `internal/database/dbtest/newstore.go`
-- `core/kernel/storage.go`
+- `core/kernel/`: `storage.go`, `boot.go`
+- `core/kernel/testdata/`
+- `core/archtest/thirdparty_allow.txt`
 - `core/examples/hello/storage.go`
 - `internal/compactprogress/`
-- `internal/metafetch/`
-- `internal/plugins/maintenance/`
-- `internal/server/`
+- `internal/metafetch/openlibrary.go`
+- `internal/plugins/maintenance/`: `db.go`, `deps.go`, `title_backfill_test.go`
+- `internal/server/server_maintenance_deps.go`
 - `internal/arch/layering_test.go`
 - `scripts/ci/short_test_weights.json`
 
@@ -70,14 +71,17 @@ opens its own store until R1-23 (row notes). What lands:
 - `core/storage/restorejournal` (L0): the record types of the one swap journal: restore, checkpoint, revert and reset
   kinds, `KindReset` with `ResetStore` and `ResetFactory` (04 §8.1 R1), read by `core/internal/restoreswap` (R1-21)
   and storage's P2.
-- `core/kernel/storage.go`: P2 (open) and P4a (checkpoint) of 06 §6.5.1, for apps whose modules declare storage;
+- `core/kernel/storage.go`: P2 (open) and P4a (checkpoint) of 06 §6.5.1, for apps whose modules declare storage,
+  called from the phase list in `core/kernel/boot.go` (R1-13's file; this row is W11's one owner of the kernel
+  wiring files and adds only the P2 and P4a calls there);
   hello declares its keyspace and one seed migration (`core/examples/hello/storage.go`).
 - `core/coretest/store.go`: the store fixture over `storage` (04 §8.5 R1 row `internal/database/dbtest: newstore.go`
   → "`coretest` store fixture over `storage`"); `internal/database/dbtest/newstore.go` is rewired onto it, its
   other files stay ABO (04 key "R1 move internal/database/dbtest -> mediacore/coretest").
 - `internal/compactprogress` → `core/storage` (04 key; its `step.go` takes a `*slog.Logger` passed in, no package
-  logger, 04 §8.5 R1); its three ABO importer packages (`internal/metafetch`, `internal/plugins/maintenance`,
-  `internal/server`) rewired to the new path.
+  logger, 04 §8.5 R1); its five ABO importer files rewired to the new path: `internal/metafetch/openlibrary.go`,
+  `internal/plugins/maintenance/db.go`, `deps.go`, `title_backfill_test.go` and
+  `internal/server/server_maintenance_deps.go` (at the plan's base; re-grep at yours).
 
 ## Invariants (the data-loss ones are STOP conditions)
 
@@ -125,12 +129,15 @@ grep -n 'internal/compactprogress\|internal/database' scripts/ci/short_test_weig
 1. Write the listed tests (red) in `core/storage`, `core/internal/pebble`, `core/kernel`.
 2. `core/storage/restorejournal` (types only), then `core/internal/pebble` (engine, gate, format pin, sidecar), then
    `core/storage` (DB, keyspaces, batches, claims, migrations runner, guard, Admin, checkpoint, install marker).
-3. `core/kernel/storage.go` (P2, P4a) and hello's keyspace and seed migration; `core/coretest/store.go`.
-4. Move `internal/compactprogress` into `core/storage` with the logger cut; rewire its three importer packages;
+3. `core/kernel/storage.go` (P2, P4a) with its two calls in `core/kernel/boot.go`; hello's keyspace and seed
+   migration; `core/coretest/store.go`. Extend R1-13's `TestKernelFamiliesGathered` golden with
+   `<namespace>_storage_level` and `<namespace>_storage_checkpoint_bytes` (05-metrics §12) if `core/kernel/testdata/`
+   holds it (it is in `core/kernel/testdata/`, which is in this row's files).
+4. Move `internal/compactprogress` into `core/storage` with the logger cut; rewire its five importer files;
    rewire `internal/database/dbtest/newstore.go` onto the coretest fixture; update `layerOf` and shard weights if they
    name the moved package.
 5. `core/go.mod` gains Pebble and its requirements at the root's versions; tidy both modules; allowlist the new
-   third-party paths in `TestCoreImportsOnlyCore`; check `make -C core exclude-check` now applies.
+   third-party paths in `TestCoreImportsOnlyCore` (`core/archtest/thirdparty_allow.txt`); check `make -C core exclude-check` now applies.
 6. Header bumps; fragment `changelog.d/<today>_core_storage_dark.md` (`### Added`: "Internal: the core storage engine,
    not yet used by the app."). Commits by package; every commit builds.
 

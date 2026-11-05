@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-28-unit-lifecycle-ci-job.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b4eed708-389c-43cd-a552-675242dd7363 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -21,8 +21,9 @@
 - `.github/workflows/unit-lifecycle.yml`
 - `scripts/tests/test_unit_lifecycle.py`
 - `scripts/tests/unit_lifecycle/dropin.conf`
-- `core/kernel/fakemigration_hook.go`
+- `core/kernel/`: `fakemigration_hook.go`, `boot.go`, `fakemigration_nohook.go`
 - `ci/gates.txt`
+- `core/archtest/tags.go`
 
 ## START HERE
 
@@ -51,9 +52,11 @@ VM, where systemd is PID 1. It installs the **committed** unit (`deploy/audioboo
 2. **Staged restore:** after a restore is staged (R1-25's offline path or ABO's staging, which exits 75), the service
    comes back by itself (`Restart=on-failure`) and reports ready.
 
-The fake migration is a **test-only** kernel hook (`core/kernel/fakemigration_hook.go`) behind a build tag (name
-coined here: `unitlifecycle`) that adds a boot step sleeping for a configured duration with `ExtendStart` per minute;
-it is compiled only into the binary this job builds (row notes). The job is **outside** the 35-minute budget
+The fake migration is a **test-only** kernel hook (`core/kernel/fakemigration_hook.go`) behind the build tag
+`unitlifecycle` (03 §3.5.1 item 4 names it on the one tag-set list): N one-minute kernel boot steps for the duration
+in `MEDIACORE_FAKE_MIGRATION`, **each calling `ExtendStart` before it starts**, so it exercises 05-health §5H.3.4's
+per-step rule and never extends from a timer. It is compiled into the binary this job builds and into no release
+build. The job is **outside** the 35-minute budget
 (09 §9.2.10).
 
 Triggers (09 §9.2.1, copied exactly): every PR that changes `deploy/**`, `cmd/**`, `main.go`, `internal/backup/**`,
@@ -82,9 +85,15 @@ grep -n 'unit-lifecycle' ci/gates.txt                                           
 
 ## Steps
 
-1. `core/kernel/fakemigration_hook.go` (`//go:build unitlifecycle`): registers a kernel boot step that reads its
-   duration from an environment variable (name coined here: `MEDIACORE_FAKE_MIGRATION`), calls `ExtendStart` every
-   minute, then returns. Without the tag nothing compiles in (assert with `go list -tags '' -f '{{.GoFiles}}' ./kernel`).
+1. `core/kernel/fakemigration_hook.go` (`//go:build unitlifecycle`): reads the duration from
+   `MEDIACORE_FAKE_MIGRATION` (03 §3.5.1 item 4) and returns that many one-minute boot steps, each calling
+   `ExtendStart(step)` immediately before it sleeps its minute (never a ticker or timer goroutine). Its untagged twin
+   `core/kernel/fakemigration_nohook.go` (`//go:build !unitlifecycle`) returns no steps. `core/kernel/boot.go` calls
+   the one function both files define (name coined here: `fakeMigrationSteps()`) where the phase list appends boot
+   steps; this row is W19's one owner of the kernel wiring files. Without the tag no fake step exists (assert with
+   `go list -f '{{.GoFiles}}' ./kernel` listing `fakemigration_nohook.go` and not `fakemigration_hook.go`).
+1a. `core/archtest/tags.go`: add `unitlifecycle` to the exported tag-set list (03 §3.5.1 item 4), so the tag-union
+   tools (`TestCoreImportsOnlyCore`, `TestCoreHoldsNoAppKeyNames`) read the hook file.
 2. `scripts/tests/unit_lifecycle/dropin.conf`: `[Service]` with `ExecStart=` reset and the test binary, the database
    path, `PrivateNetwork=yes`. Nothing else (the point is to test the committed unit's own settings).
 3. `scripts/tests/test_unit_lifecycle.py`: installs the unit and drop-in under `/etc/systemd/system/`, daemon-reloads,
@@ -100,12 +109,16 @@ grep -n 'unit-lifecycle' ci/gates.txt                                           
 
 ## Code contract
 
-Test-only: `core/kernel/fakemigration_hook.go` under the `unitlifecycle` tag; no exported name in the default build.
+Test-only: `core/kernel/fakemigration_hook.go` under the `unitlifecycle` tag and `core/kernel/fakemigration_nohook.go`
+under `!unitlifecycle`, both defining the same unexported `fakeMigrationSteps()`; no exported name in either build.
 
 ## Acceptance
 
 ```bash
 go build ./... && go -C core build -tags unitlifecycle ./kernel/            # expect exit 0
+go -C core vet -tags unitlifecycle ./kernel/                                  # expect exit 0
+grep -c 'unitlifecycle' core/archtest/tags.go                                 # expect >= 1
+go -C core test ./archtest/ -count=1                                          # expect ok (tag-union tools read the hook)
 go -C core list -f '{{.GoFiles}}' ./kernel | grep -c fakemigration          # expect 0 (not in the default build)
 python3 -m pytest scripts/tests/test_unit_lifecycle.py -q                    # expect "skipped" locally without systemd PID 1
 python3 -m pytest scripts/tests/test_run_gates.py -q                         # expect all passed
@@ -133,9 +146,10 @@ Revert the PR.
 - **No `go.work`.** Never run `go work init` in a checkout or worktree; the genproto probe runs only in a throwaway copy under `mktemp -d` (03 §3.2 item 1).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
 
+
 ## Planner notes
 
-- The fake-migration hook needs a build tag (coined here: `unitlifecycle`) that is not on 03 §3.5.1 item 4's one
-  tag-set list, so the tag-union tools (`TestCoreImportsOnlyCore`, `TestCoreHoldsNoAppKeyNames`) and the vets never
-  read that file; only this job compiles it. Either add the tag to the list in 03 §3.5.1 item 4 (and to
-  `archtest`'s exported list) or accept it as a test-only exception; the lead should decide.
+- 03 §3.5.1 item 4 says "core's `ci` target vets `./kernel/` with `-tags unitlifecycle`, so every PR compiles it",
+  but `core/Makefile` is not in this row's files, and W19's other row, R1-30, edits `core/Makefile` (its `web-test`
+  target). Either give the one vet line to R1-30 (its file, same wave) or add `core/Makefile` to R1-28 and move one
+  of the two rows to another wave. Until then this PR proves the tagged build with the acceptance commands only.

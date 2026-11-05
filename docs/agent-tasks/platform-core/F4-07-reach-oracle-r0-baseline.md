@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-07-reach-oracle-r0-baseline.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 67c2453a-bb34-4e9d-aa7d-456a7e6a8d60 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F4-07 |
 | Release / flip | R2, identity flip F4 (dark PR; the test bites from F4-08, which registers M3, and stays as the atom table's regression test) |
 | Tier | **T3** (Opus, high): the oracle proves that no principal gains or loses reach |
-| Wave | W28 |
+| Wave | W30 |
 | Depends on | F4-06, F4-05, F2-12 |
 | Owns gate test | `TestIdentityCutover_ReachOracle` |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
@@ -58,7 +58,8 @@ Confirm F4-06, F4-05 and F2-12 are merged, and that the R0 release tag is the on
 |---|---|
 | create | `internal/books/rbacreach/` (recorded R0 answers: data files only, no `.go` file) |
 | create | `internal/books/reach_oracle_test.go` |
-| create | `scripts/r2corpus/record_r0_reach.py` (with a `scripts/tests/` test only if the row is amended; see Planner notes) |
+| create | `scripts/r2corpus/record_r0_reach.py` |
+| create | `scripts/tests/test_record_r0_reach.py` (pytest; the convention of F2-12's `scripts/tests/test_record_r0_answers.py`) |
 
 ## Re-verify at BASE
 
@@ -70,6 +71,7 @@ grep -rn 'TestAtomTable_Golden' internal/books/ | wc -l                         
 ls -d internal/books/cutover/m3 | wc -l                                                # 1 (F4-06)
 ls -d core/internal/authhttp | wc -l                                                   # 1 (F4-05)
 ls -d internal/books/rbacreach 2>/dev/null | wc -l                                     # 0
+ls scripts/tests/test_record_r0_answers.py scripts/tests/test_record_r0_reach.py 2>/dev/null | wc -l   # 1 (F2-12's; yours is new)
 # the manifest's route count at BASE; record it (05-http-api §8.1: 572 at 748fd787a)
 go test -count=1 -run 'TestLegacyManifest_RegistersAsMuxPatterns' -v ./internal/server/ 2>&1 | grep -c -- '--- PASS'
 ```
@@ -87,7 +89,10 @@ go test -count=1 -run 'TestLegacyManifest_RegistersAsMuxPatterns' -v ./internal/
    each principal's credential (sessions, keys of each scope shape, the custom role, auth off), request every route of
    its router dump with a probe body that reaches the authorization decision, and record `allow`/`deny` per (route,
    principal) plus books task starts; write the result under `internal/books/rbacreach/` with the R0 tag and the route
-   count. Commit the recorded data.
+   count. Commit the recorded data. Write `scripts/tests/test_record_r0_reach.py` first: with a fake R0 binary (a stub
+   HTTP server answering from a fixture router dump, as F2-12's script tests fake theirs) it checks that every route of
+   the dump and every principal of step 2 gets one recorded verdict, that the output names the R0 tag and the route
+   count, that `--check` exits non-zero on a one-cell diff, and that no credential appears in the output.
 2. Write the test's principal table exactly as 05-rbac §12 lists: a session of each seed role; keys scoped
    `["library.view"]`, `["settings.manage"]`, `["users.manage"]`, `["fingerprint.worker"]`, every atom and an empty
    list, each owned by an admin, an editor, a viewer and an `fp-worker` user; an editor-owned every-atom key; a key whose
@@ -119,6 +124,7 @@ and assert the oracle reports it).
 ## Acceptance
 
 ```bash
+python3 -m pytest scripts/tests/test_record_r0_reach.py -q     # all passed
 python3 scripts/r2corpus/record_r0_reach.py --check            # (flag coined here) re-derives the recorded data from the R0 binary; exit 0, no diff
 go test -count=1 -run 'TestIdentityCutover_ReachOracle' -v ./internal/books/ 2>&1 | tail -3   # --- PASS, with the route count printed
 find internal/books/rbacreach -name '*.go' | wc -l              # 0
@@ -138,7 +144,7 @@ Revert the PR; it adds a test and data only.
 
 ## Repo rules
 
-Worktree only; file headers on the script and the test; the recorded data files are generated: give them a header exactly as
+Worktree only; file headers on the script, its pytest and the Go test; the recorded data files are generated: give them a header exactly as
 F2-12's generated corpus files carry one at BASE (follow that convention; do not invent another); fragments headerless; conventional commit ending
 `Co-Authored-By: Claude <noreply@anthropic.com>`, no release or flip trailer; `gh pr merge <n> --rebase`, never squash,
 never `--admin`. Python for the script (CLAUDE.md: Python for anything non-trivial).
@@ -148,9 +154,3 @@ test(books): reach oracle against the R0 binary over the migrated corpus
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
-
-## Planner notes
-
-- `scripts/r2corpus/record_r0_reach.py` has no `scripts/tests/` test in the row; its `--check` mode is the acceptance
-  check instead. Add `scripts/tests/test_record_r0_reach.py` to the row if the lead wants script unit tests, as R1 does
-  for its scripts.

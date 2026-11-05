@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F6-01-core-outbox-relay-dark.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: db05b494-8e19-4d17-b633-9fa4ab8af310 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F6-01 |
 | Release / flip | R2, events flip F6 (dark PR; live at F6-03) |
 | Tier | **T4** (Opus, xhigh–max): durable at-least-once delivery committed in the producer's batch |
-| Wave | W26 |
+| Wave | W28 (beside F2-16, F4-05, F5-15, F6-02, F7-02, F7-03, F7-06, F8-03; file-disjoint) |
 | Depends on | F4-04, F2-05 |
 | Owns gate tests | the outbox stream tests of 05-events: `TestOutbox_StageCommitsWithBatch`, `TestOutbox_RedeliveryAfterCrashBeforeAck` |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
@@ -82,7 +82,9 @@ grep -rn 'GetForUpdate' core/storage/*.go | wc -l                     # >= 1 (R1
 2. A module consumer could run its handler inside the relay (module consumers are always task runs, 05-events §5E.4
    "Why module consumers are tasks"): `archtest.OutboxModuleConsumersAreTasks` must flag it.
 3. Anything is staged, sequenced or delivered in ABO's boot before F6-03.
-4. `OutboxConsumers`/`OutboxHandler`/`Deps.Outbox` need `core/module/` (not in this row): report.
+4. A change to `core/module/` seems needed: `Manifest.OutboxConsumers`, `Registrar.OutboxHandler` and `Deps.Outbox`
+   (06 §6.4.10 F6 row) are added by the flip F6-03, which owns `core/module/` in its wave. Build the outbox so the kernel
+   can read the consumer set through a function F6-03 will call; do not edit `core/module/` here.
 
 ## Steps
 
@@ -110,7 +112,10 @@ grep -rn 'GetForUpdate' core/storage/*.go | wc -l                     # >= 1 (R1
 7. Retention: delete a message when every consumer in its topic's declared-consumer set (all manifests' consumers,
    enabled and disabled, plus the kernel's static core consumer list) has a cursor past it; empty set → keep for
    `orphan_retention`; cursors of consumers in neither set dropped after `orphan_retention` with a metric. New consumer
-   starts at "now" unless `FromBeginning()`. A core consumer not on the static list fails boot.
+   starts at "now" unless `FromBeginning()`. A core consumer not on the static list fails boot. The static list in
+   `core/kernel/outbox.go` names `core.notify.deliver` from this PR (05-events §5E.5.2 Retention names it; it registers
+   with F7-05's notify, and a declared consumer that has never run holds nothing); `core.acquire.download-events` is
+   deferred with `acquire` (plan §(j)).
 8. Kernel wiring (dark), metrics (§5E.10), headers, one `changelog.d/` fragment, Acceptance.
 
 ## Tests first (05-events §5E.12, outbox rows; the gate pair first)
@@ -147,9 +152,12 @@ make ci                                                                         
 
 ## Out of scope
 
-Books' durable topic `books.book.relocated.v1` and its consumer into `books.deluge.path-update` (F6-03); notify's
-`core.notify.deliver` consumer (F7); the outbox purge route if it needs `internal/<capability>http` (05-events §5E.11:
-report if no row owns it).
+Books' durable topic `books.book.relocated.v1` and its consumer into `books.deluge.path-update` (F6-03); the module
+members `Manifest.OutboxConsumers`, `Registrar.OutboxHandler`, `Deps.Outbox` and the kernel boot calls (F6-03); notify's
+`core.notify.deliver` consumer (F7-05); the operator routes of 05-events §5E.11 (dead-letter list, retry and discard,
+the backlog purge), which F6-04 builds in `core/internal/outboxhttp/` over this row's `Outbox`. Expose the store
+operations those routes need (list dead letters, retry, discard, advance a consumer's cursors to the head) as methods
+F6-04 can call.
 
 ## Rollback
 
@@ -168,9 +176,3 @@ feat(core/outbox): same-batch staging, commit-ordered intake, the relay task, co
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
-## Planner notes
-
-- `module.Manifest.OutboxConsumers`, `Registrar.OutboxHandler` and `Deps.Outbox` (06 §6.4.10 F6 row) live in
-  `core/module/`, which neither this row nor F6-03 lists.
-- 05-events §5E.11's operator routes (dead-letter retry/discard, backlog purge, audited) have no route package in any F6
-  row's files.

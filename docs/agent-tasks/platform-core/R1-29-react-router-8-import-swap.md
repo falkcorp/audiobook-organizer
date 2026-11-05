@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-29-react-router-8-import-swap.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: ce2b7186-99af-4660-bb86-0490806511db -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-29` |
 | Tier | **T1** (Sonnet / medium): an import swap over 122 files, checked by one grep |
-| Release / wave | R1 / W12 |
+| Release / wave | R1 / W11 |
 | Depends on | R1-05 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 07 §7.19 step 1; 13 §13.4.1 (exception E4 ends); 09 §9.4 R1 Content: UI |
 | Branch | `agent/platform-core-r1-29-react-router-8-import-swap` |
@@ -170,9 +170,3 @@ Revert the commit; `npm ci --prefix web` restores 7.18.5 from the reverted lockf
 - **Concurrency (CLAUDE.md).** A loop over a library-scale collection with per-item I/O, hashing or subprocess work uses a bounded worker pool (`errgroup` + `SetLimit`); never unbounded goroutines.
 - **No `go.work`.** Never run `go work init` in a checkout or worktree; the genproto probe runs only in a throwaway copy under `mktemp -d` (03 §3.2 item 1).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
-
-## Planner notes
-
-- 07 §7.19 step 1 and 13 §13.4.1 E4 count 122 files (52 source, 70 test) with a `from`-only grep; the gate grep
-  (`grep -rq react-router-dom`) also matches `import()`, `vi.mock()` and one comment, 126 files and 135 occurrences at
-  `f7ac5b11e`. The brief rewrites all of them; no spec change needed, the done-check is the grep.

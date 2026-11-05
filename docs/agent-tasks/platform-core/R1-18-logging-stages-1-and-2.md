@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-18-logging-stages-1-and-2.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0af0f945-e47e-4822-ac2b-f63544c667ad -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-18` |
 | Tier | **T2** (Sonnet / high): small deletions plus a tap; the activity feed must keep its output |
-| Release / wave | R1 / W15 |
+| Release / wave | R1 / W14 |
 | Depends on | R1-15, R1-07 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 05-logging §11 items 1-2, 5; 09 §9.4 R1 Content: runtime, release note (05-logging's log-file and level lines) |
 | Branch | `agent/platform-core-r1-18-logging-stages-1-and-2` |

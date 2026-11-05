@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-17-perimeter-into-core-stages.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 8b504d86-5e95-4fb7-a1c8-ff2de68cf3a7 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | `R1-17` |
 | Tier | **T4** (Opus / xhigh): every request's path (CSP, rate classes, cross-origin, compression) changes owner in one PR |
 | Release / wave | R1 / W16 |
-| Depends on | R1-15, R1-16, R1-12 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
+| Depends on | R1-15, R1-16, R1-12, R1-32 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 05-http-api §4.2 (stages 0-11), §8.1 R1 row, §12; 05-metrics §13 item 3 (http_server_* row); 09 §9.2.7; 09 §9.4 R1 Content: runtime, release note (HTTP-metrics lines) |
 | Branch | `agent/platform-core-r1-17-perimeter-into-core-stages` |
 
@@ -20,22 +20,14 @@
 
 - `core/httpapi/perimeter/`
 - `core/internal/httpmw/`
-- `internal/server/middleware/ratelimit.go`
-- `internal/server/middleware/request_size.go`
-- `internal/server/middleware/log_redact.go`
-- `internal/server/middleware/recovery_redact.go`
-- `internal/server/middleware/trace_redact.go`
-- `internal/server/server_middleware.go`
-- `internal/server/csp.go`
-- `internal/server/client_trust.go`
-- `internal/server/server_lifecycle.go`
+- `internal/server/middleware/`: `ratelimit.go`, `request_size.go`, `log_redact.go`, `recovery_redact.go`, `trace_redact.go`
+- `internal/server/`: `server.go`, `server_middleware.go`, `csp.go`, `client_trust.go`, `server_lifecycle.go`
 - `internal/httputil/`
 - `deploy/grafana/dashboards/`
 - `deploy/prometheus/`
 - `go.mod`
 - `go.sum`
-- `core/go.mod`
-- `core/go.sum`
+- `core/`: `go.mod`, `go.sum`
 
 ## START HERE
 
@@ -89,16 +81,20 @@ permission-less routes carry `AnyAuthenticated` in the manifest (R1-14 recorded 
 - also, for the stages moved: `TestChain_OrderGolden`, `TestRequestID_GeneratedAndPropagated`,
   `TestRateLimit_ClientBuckets`, `TestCSRF_CookieBodilessPOSTFromSiblingOriginRefused`,
   `TestCrossOrigin_TrustedProxyForwardedHost`, `TestClientIP_ZonedConnectorTrusted`, `TestAccessLog_NoInviteToken`,
-  `TestTrace_NoApikeyInSpanAttributes`, `TestHandler_NoDoubleGzip`, `TestStage2_ServerAddressIgnoresHost`.
+  `TestHandler_NoDoubleGzip`, `TestStage2_ServerAddressIgnoresHost` (both 05-metrics §12 cells; this row owns them:
+  one gzip layer through the httpapi stack under `Accept-Encoding: gzip`, and two requests to one route with
+  different `Host` headers give one `server_address` value, `Options.ServiceName`).
+- Not this row's: `TestTrace_NoApikeyInSpanAttributes` is R1-32's (it lands with `log.Redactor`); keep it green
+  once stage 2 records the spans.
 - Unchanged and green: the ABS conformance suite; `TestDeployReferencedSeriesServed` and `TestPromRules_Promtool`.
 
 ## Dependency check
 
-R1-15, R1-16, R1-12 merged: `test -d internal/books && test -d core/internal/sdnotify && test -d core/rbac && echo ok`.
-Stages 2 and 4 redact through `log.Redactor` (05-logging §3: `NewRedactor`, `Logging.Redactor()`):
-`git grep -n 'type Redactor struct' -- core/log` must hit. If it does not, create it in `core/log` exactly per
-05-logging §3 (a file outside this row; record it in the PR) and add the deferred `metrics.Options.Redactor` field
-(R1-10's note).
+R1-15, R1-16, R1-12, R1-32 merged: `test -d internal/books && test -d core/internal/sdnotify && test -d core/rbac && git grep -q 'type Redactor struct' -- core/log && echo ok`.
+Stages 2 and 4 redact through R1-32's `log.Redactor` (05-logging §3: `NewRedactor`, `URL`, `String`; the query list
+`log.DefaultRedactQuery()` and path rules `log.DefaultPathRules()`); the stages hold the one `*log.Redactor` the
+kernel builds and restate no list (05-http-api §4.2 stage 2). If `type Redactor struct` is not in `core/log`, STOP:
+R1-32 has not merged.
 
 ## Re-verify (expected at `f7ac5b11e`)
 
@@ -176,11 +172,3 @@ Revert the PR: the perimeter returns to gin with HEAD's metric names, and the da
   (`go -C core fix ./...`, 04 §2.2).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
 
-## Planner notes
-
-- Missing file in the row: the gin perimeter is installed in `internal/server/server.go` (`router.Use` at :704-706,
-  the `otelgin` tracer at :1668-1673, gzip exclusions at :1603-1605), which is not in R1-17's files (R1-18 lists it,
-  in W15). No same-wave collision (W16's R1-25 does not touch it); add it to the row.
-- Ordering gap: stages 2 and 4 redact through `log.Redactor` (05-logging §3), which no R1 row creates. The brief has
-  R1-17 create it in `core/log` if absent (also outside the row). The lead should assign `log.Redactor` to a row
-  (R1-18 owns `core/log/` in W15 and would be the natural home; then R1-17 depends on R1-18).

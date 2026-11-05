@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-07-audit-store-action-table.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: dbe44289-51c8-493f-bbe3-5173191430f8 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -31,9 +31,12 @@ No `go work init` (CLAUDE.md). Run core tests from inside `core/`.
 
 Create the public package `github.com/falkcorp/mediacore/audit` (`core/audit/`) exactly as 05-rbac §3.5 declares it,
 with the storage layout of §7.2, the volume control of §7.3, the redaction of §7.7 and the normative action table of
-§7.1, and have the kernel build `audit.Store` **before P4b** (05-rbac §5 item 2) in `core/kernel/audit.go`, so F3's
+§7.1, and put the kernel side that builds `audit.Store` **before P4b** (05-rbac §5 item 2) in `core/kernel/audit.go`,
+so F3's
 `core.settings.update` and every cutover step's `core.storage.cutover_step` record have a writer (03 §3.3 `audit` row;
-IMPL-3). Dark: nothing records yet; serving (the query route, auth's records) starts at F4.
+IMPL-3). The **boot call** that invokes `core/kernel/audit.go` from the boot sequence is F2-16's (the F2 wiring row,
+one owner of `core/kernel/boot.go` and `kernel.go` in its wave). Dark: nothing records yet; serving (the query route,
+auth's records) starts at F4.
 
 ## Spec to read first
 
@@ -64,9 +67,8 @@ DATA-19) needs it and this PR must not invent it.
 
 Create: `core/audit/audit.go` (types and interfaces of §3.5), `core/audit/store.go` (`Store`, `New`), `core/audit/actions.go`
 (the action table), `core/audit/redact.go`, `core/audit/async.go`, tests. Create: `core/kernel/audit.go`.
-Modify nothing else (F2-08, F2-09, F2-10 and F4-04 edit other `core/kernel/*.go` files in this wave; touch only
-`core/kernel/audit.go` plus the single call that invokes it from the kernel's boot sequence, and if that call must go
-in a shared kernel file, add exactly one line and say so in the PR body).
+Modify nothing else: F2-08, F2-09, F2-10 and F4-04 edit other `core/kernel/*.go` files in this wave, and the boot
+call is F2-16's. Do not edit `core/kernel/boot.go`, `core/kernel/kernel.go` or any other shared kernel file.
 
 ## Code contract
 
@@ -74,8 +76,8 @@ Copy the Go block of 05-rbac §3.5 verbatim: `Outcome` (`Success`, `Failure`, `D
 `Record`, `Logger` (`Record`, `RecordIn`, `Emit`), `Filter`, `Reader` (`Query`), `New(ctx, opts Options, deps Deps)
 (*Store, error)`, `WithActor`, `ActorFrom`.
 
-`Options` and `Deps` are not spelled out by the spec. Use exactly these fields (names coined here, from §7.3, §10 and
-§11):
+`Options` and `Deps` are not spelled out by the spec. Use exactly these fields (names coined here, from 05-rbac §7.3,
+§10 and §11):
 
 ```go
 type Options struct {
@@ -146,9 +148,11 @@ regardless of key; `Details` capped at `DetailsMaxBytes` of JSON.
 Metrics (§11, under the App's namespace): `audit_records_total{namespace,outcome}`, `audit_dropped_total`,
 `audit_queue_depth`, `audit_write_errors_total{path}`, `audit_pruned_total`.
 
-Kernel (`core/kernel/audit.go`): register the `c/audit/` core keyspace the same way the kernel registers `c/storage/`
-(see the base-state grep), build `audit.New` **after the store opens and before P4b** (05-rbac §5 item 2; 06 §6.5.1),
-keep the `*audit.Store` on the kernel for later phases, start its async writer at Run step 7 and stop it on shutdown.
+Kernel (`core/kernel/audit.go`): the functions the boot sequence will call (names coined here, e.g. `buildAudit`,
+`startAudit`, `stopAudit`): register the `c/audit/` core keyspace the same way the kernel registers `c/storage/` (see
+the base-state grep), build `audit.New` **after the store opens and before P4b** (05-rbac §5 item 2; 06 §6.5.1),
+keep the `*audit.Store` for later phases, start its async writer at Run step 7 and stop it on shutdown. Test them
+directly from `core/kernel/audit_test.go`; F2-16 adds the calls from `boot.go` and `kernel.go`.
 Do **not** register `core.audit.prune` (no task kind is registered before F5; 05-rbac §5 item 7) and do not mount
 `/api/core/v1/audit` (F4-05).
 
@@ -177,7 +181,8 @@ for concurrent use; no package-level mutable state (R5).
 1. Base-state greps; plan in the PR body.
 2. Tests first.
 3. Types, store, action table, redaction, async writer, metrics.
-4. Kernel construction before P4b; start at step 7; stop on shutdown.
+4. The kernel-side functions in `core/kernel/audit.go` (construction before P4b, start at step 7, stop on shutdown),
+   tested directly; no edit to `boot.go` (F2-16 calls them).
 5. Headers; changelog fragment; acceptance.
 
 ## Acceptance
@@ -197,8 +202,8 @@ make ci                                                                         
 
 ## Out of scope
 
-The audit query and export routes (F4-05); auth, rbac and tasks recording their events (their flips); the restore
-hook (F4); `core.audit.prune` (registered with the tasks flip); any ABO edit.
+The boot call (F2-16); the audit query and export routes (F4-05); auth, rbac and tasks recording their events (their
+flips); the restore hook (F4); `core.audit.prune` (registered with the tasks flip); any ABO edit.
 
 ## Idempotency / rollback
 
@@ -212,12 +217,3 @@ File headers on every new file; conventional commit (`feat(core/audit): audit st
 construction adds no boot-time durable write (the store writes only when a caller records), so the crash matrix is
 unchanged; if your implementation writes at boot (for example, a `Sequence` initialisation record), add its row to the
 crash matrix in this PR (09 §9.3 "Boot writers extend the crash matrix").
-
-## Planner notes
-
-- 05-rbac §3.5 names `audit.New(ctx, opts Options, deps Deps)` without defining `Options` or `Deps`; this brief coins
-  their fields from §7.3, §10 and §11. A spec line fixing them would remove the guess.
-- W22 has five rows that each add a `core/kernel/<x>.go` (F2-07 `audit.go`, F2-08 `catalog.go`, F2-09
-  `core_sections.go`, F2-10 `health.go`, F4-04 `events.go`). Each also needs one call from the kernel's boot sequence,
-  which lives in a shared kernel file (R1-13's). Those one-line edits collide on rebase; the inventory lists none of
-  them. Either name the shared boot file in one row and sequence the others behind it, or accept a trivial rebase.

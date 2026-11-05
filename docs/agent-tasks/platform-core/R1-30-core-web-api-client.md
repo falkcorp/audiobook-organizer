@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-30-core-web-api-client.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 646a92e3-e0bd-4a2f-9b2c-edfca1100759 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -19,12 +19,13 @@
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 
 - `core/web/`
-- `web/package.json`
-- `web/package-lock.json`
+- `web/`: `package.json`, `package-lock.json`
 - `web/src/utils/apiFetch.ts`
 - `web/src/components/StaleBuildBanner.tsx`
 - `Dockerfile`
 - `Makefile`
+- `Dockerfile.build-cgo`
+- `CLAUDE.md`
 - `scripts/ci/build_web.sh`
 - `core/Makefile`
 
@@ -66,7 +67,7 @@ by ABO's `web/` through `file:` (07 §7.3.1 layout, §7.3.2; 09 §9.4 R1 "Conten
   stage, in order": manifests + `npm ci` in `core/web`; sources + the ordered build; `web/` manifests + `npm ci`;
   `web/` sources + build; the optional `ARG BUILD_ID` only in the frontend stage. `Dockerfile.build-cgo`'s frontend stage
   (`Dockerfile.build-cgo:14-19`) needs the same four steps, or the cgo build breaks once `web/` depends on `core/web`
-  (07 §7.3.2 "both Docker stages"); that file is not in this row (see Planner notes) and must change in this PR.
+  (07 §7.3.2 "both Docker stages"); it is in this row and changes in this PR.
 - `core/Makefile`: `web-test` runs `npm ci` then vitest in `core/web` (no longer "not applicable", 12 §12.3.11).
 - npm lockstep (12 §12.4.3): `@mediacore/api-client`'s version equals core's `version.Version`; `check_core_version.py`
   (R1-06) enforces it later; record the value here.
@@ -101,7 +102,11 @@ grep -n 'openapi-typescript\|openapi-fetch' docs/specs/platform-core/13-toolchai
 
 1. Tests first. 2. The workspace, the package and its build (`npm run build -w @mediacore/api-client` from
 `core/web`). 3. ABO `web/` consumption and `apiFetch`/banner rewiring. 4. Docker frontend stage. 5. `core/Makefile`
-`web-test`; `.dockerignore` already has the `core/web/packages/*/dist` line (R1-04). 6. Header bumps (JSON files carry
+`web-test`; `.dockerignore` already has the `core/web/packages/*/dist` line (R1-04). 5a. `Dockerfile.build-cgo`'s
+frontend stage gets the same four steps as `Dockerfile`. 5b. `CLAUDE.md`'s worktree recipe (section "Worktree
+Discipline", the block after "After creating a worktree"): replace `npm ci --prefix web` with `make web-deps` and keep
+the comment's point (Playwright comes from the worktree), because a bare `npm ci --prefix web` no longer installs
+`core/web` (07 §7.3.2 lists it among the `npm ci` sites); bump CLAUDE.md's header (version patch, `last-edited`). 6. Header bumps (JSON files carry
 no header; TS/MJS files do); fragment `changelog.d/<today>_core_web_api_client.md` (`### Added`: "Internal: the core
 web workspace with the generated API client."). Commit: `feat(web): core/web workspace with @mediacore/api-client`.
 
@@ -115,7 +120,9 @@ web workspace with the generated API client."). Commit: `feat(web): core/web wor
 make web-deps && make web-build && test -z "$(git status --porcelain)" && echo CLEAN   # expect CLEAN
 npm test --prefix web -- --run && (cd core/web && npm test --workspaces --if-present -- --run)   # expect pass
 make -C core web-test                                                                    # expect pass
-docker build -t abo-r130 .                                                               # expect success
+docker build -t abo-r130 . && docker build -f Dockerfile.build-cgo --output type=local,dest="$(mktemp -d)" .   # expect both succeed
+grep -c 'npm ci --prefix web' CLAUDE.md                                                  # expect 0
+grep -c 'make web-deps' CLAUDE.md                                                        # expect >= 1
 make test-e2e && make ci && make -C core ci                                              # expect exit 0
 ```
 
@@ -142,10 +149,3 @@ Revert the PR; `web/` returns to R1-19's local stale-build rule.
 - **No `go.work`.** Never run `go work init` in a checkout or worktree; the genproto probe runs only in a throwaway copy under `mktemp -d` (03 §3.2 item 1).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
 
-## Planner notes
-
-- Missing file in the row: `Dockerfile.build-cgo` has its own frontend stage (`:14-19`, `npm ci` then build in `web/`)
-  that breaks the moment `web/` depends on `file:../core/web/packages/api-client`; 07 §7.3.2 names both Docker
-  stages. R1-30's files list only `Dockerfile`. W19's other row (R1-28) does not touch it; add it to the row.
-- The generated-client coverage check is coined here (`test:client-coverage`); the plan's gate table already marks the
-  name as coined.

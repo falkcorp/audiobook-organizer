@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-19-build-identity.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9f6947ba-4d93-4c9b-92ad-bc8d3abdecb9 -->
 <!-- last-edited: 2026-11-05 -->
 

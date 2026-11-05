@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-14-production-shaped-store-boot-time.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 5062c77e-999c-4b26-b5e1-1a0f6f399bdd -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -45,7 +45,7 @@ phase total); 14 E1, K10.
 ## Inputs (owner-provided; STOP if missing)
 
 OWNER-04's recorded P1 answer: one JSON object per family `{prefix, keys, raw_key_bytes, raw_value_bytes}` (counts only,
-never values; 09 §9.7). The lead hands it to you. If it lists an `(unregistered)` prefix, include it with its counts and
+never values; 09 §9.7). No file in the repo records it before this PR: the lead hands it to you with this brief. If it lists an `(unregistered)` prefix, include it with its counts and
 name it in the PR body (09 §9.7 P1 branch B: it must be registered before F3).
 
 ## Base state
@@ -62,12 +62,11 @@ test ! -e scripts/r2corpus/gen_production_shaped.py && echo absent     # "absent
 
 ## Files
 
-Create: `scripts/r2corpus/gen_production_shaped.py`, `internal/books/testdata/r2corpus/p1_counts.json`, and the
-measurement test `internal/books/production_shaped_test.go` (name coined here; see planner note). Modify:
-`.github/workflows/extraction-gates.yml` (one new job), `.github/workflows/nightly.yml` (one new job). If the generator needs
-a Go helper to write rows (Python cannot write Pebble), put it under `scripts/r2corpus/shaped/` with the build constraint
-`//go:build r2corpus_shaped` (coined here), built at the R0 tag like F2-13's overlay program, and **do not touch**
-`scripts/r2corpus/overlay/` (F2-13's, same wave).
+Create: `scripts/r2corpus/gen_production_shaped.py`, `internal/books/testdata/r2corpus/p1_counts.json`, the measurement
+test `internal/books/production_shaped_test.go`, the generator's test `scripts/tests/test_gen_production_shaped.py`, and the Go row-writer under `scripts/r2corpus/shaped/` (Python cannot write Pebble rows, and R0's API is
+too slow to reach production counts) with the build constraint `//go:build r2corpus_shaped` (coined here), built at the
+R0 tag like F2-13's overlay program. Modify: `.github/workflows/extraction-gates.yml` (one new job),
+`.github/workflows/nightly.yml` (one new job). **Do not touch** `scripts/r2corpus/overlay/` (F2-13's, same wave).
 
 ## Design (fixed here; deviations need a reason in the PR body)
 
@@ -87,7 +86,8 @@ a Go helper to write rows (Python cannot write Pebble), put it under `scripts/r2
      second list);
    - in `nightly.yml`: job `production-shaped-store`, every night.
    Pin every action to a SHA (CLAUDE.md "GitHub Operations"); copy the SHAs the file already uses.
-5. F2-15 extends the same job to run the cutover suite over `R2_SHAPED_STORE`; leave the env names stable.
+5. F2-15 (which depends on this row) extends the same job to run the cutover suite over `R2_SHAPED_STORE`; leave the job
+   name and the env names stable.
 
 ## Tests
 
@@ -124,12 +124,3 @@ File headers on the script, the test, both workflow files (bump version and `las
 (`_header` object); conventional commit (`ci(r2): production-shaped store and boot-time measurement`) with
 `Co-Authored-By: Claude <noreply@anthropic.com>`; push workflow changes with `git push`, never the contents API (CLAUDE.md);
 `gh pr merge <n> --rebase`; `changelog.d/` fragment.
-
-## Planner notes
-
-- The row's files do not include the measurement test or a Go row-writer; Python cannot write Pebble rows, and R0's API is
-  too slow to reach production counts. The brief adds `internal/books/production_shaped_test.go` and allows a tag-guarded
-  helper under `scripts/r2corpus/shaped/`, kept off F2-13's directory.
-- F2-14 and F2-15 both edit `.github/workflows/extraction-gates.yml` (W23, W24). The order holds, but F2-15 does not list
-  F2-14 as a dependency; add it (F2-15 extends F2-14's job).
-- The P1 counts are an owner answer that no row commits to the repo; the lead must hand them to the agent.

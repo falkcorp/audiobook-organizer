@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-16-sdnotify-into-core-internal.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 16c6bd67-7abe-40f4-ad12-2d2cfbca9f76 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-16` |
 | Tier | **T2** (Sonnet / high): one leaf move whose five importers must all be rewired in one PR |
-| Release / wave | R1 / W15 |
+| Release / wave | R1 / W14 |
 | Depends on | R1-15 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 04 §8.2 (mediacore/internal/sdnotify row), §8.3; 05-health §5H.10 Landing R1 (Supervisor); 06 §6.4.5 |
 | Branch | `agent/platform-core-r1-16-sdnotify-into-core-internal` |
@@ -26,7 +26,9 @@
 - `internal/server/server_lifecycle.go`
 - `internal/database/startup_notify.go`
 - `internal/search/register.go`
-- `internal/operations/registry/subprocess.go`
+- `internal/operations/registry/`: `subprocess.go`, `subprocess_env_internal_test.go`
+- `tools/cmd/sdkguard/internal-deps.txt`
+- `internal/books/module.go`
 - `internal/arch/layering_test.go`
 - `scripts/ci/short_test_weights.json`
 
@@ -102,13 +104,15 @@ grep and apply the table row by row.
 2. `git mv internal/sdnotify/sdnotify.go internal/sdnotify/sdnotify_test.go core/internal/sdnotify/`; update their
    `file:` lines; implement `core/lifecycle/notify.go` and the supervisor's notifier.
 3. Rewire the five importers per the table. `internal/search`: add the injected `func(step string)` to
-   `IndexService` (constructor or field), set by `internal/books`; `internal/database`: `serve` injects
+   `IndexService` (constructor or field), set by `internal/books/module.go` (in the row) with the kernel's
+   `Deps.ExtendStart`; `internal/operations/registry/subprocess_env_internal_test.go` imports `internal/sdnotify` too
+   and is rewired with `subprocess.go`; `internal/database`: `serve` injects
    `app.ExtendStart`. `main.go`: drop the `--print-capabilities` branch and let `app` serve it (keep the flag's output
    byte-identical: it prints `sd_notify`, `sdnotify.go:44`).
 4. `internal/arch/layering_test.go`: delete the `"internal/sdnotify"` key.
 5. `scripts/ci/short_test_weights.json`: no entry names it (check: `grep -c sdnotify scripts/ci/short_test_weights.json` → 0).
 6. `go run ./tools/cmd/sdkguard/main.go -update`, bump that file's version line; the only diff is the removed
-   `internal/sdnotify` line (file outside the row; see Planner notes).
+   `internal/sdnotify` line (the file is in this row's list).
 7. Header bumps; fragment `changelog.d/<today>_sdnotify_core.md` (`### Changed`: "Internal: systemd readiness
    notifications are sent by the core runtime."). Commit:
    `refactor(core): sdnotify into core/internal with every ABO user rewired`. PR lists the `old ==> new` line.
@@ -155,12 +159,8 @@ Revert the PR.
   (`go -C core fix ./...`, 04 §2.2).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
 
+
 ## Planner notes
 
-- Missing files in the row: `internal/operations/registry/subprocess_env_internal_test.go` (imports `internal/sdnotify`;
-  the row lists only `subprocess.go` of that package) and `tools/cmd/sdkguard/internal-deps.txt` (lists
-  `internal/sdnotify` in `pkg/plugin/sdk`'s closure; `make sdkguard` fails until it is regenerated). Neither collides
-  with W15's R1-18 or R1-24. Add both to the row. `internal/books/` (R1-15's) is also edited here to wire the search
-  index's injected `ExtendStart`; it is not in the row's files either.
 - 04 §8.2's count is 4 importer packages; the row title says five (04 §3's row counts `internal/database` as the
   fifth). Both agree once `internal/database` is counted; the brief rewires all five.

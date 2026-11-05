@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-02-config-env-grammar-failclosed-retired.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 8aaa153a-536e-4d8d-9361-4796ae3f6beb -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F3-02 |
 | Release / flip | R2, config flip F3 (dark PR) |
 | Tier | **T3** (Opus, high): precedence and the fail-closed rule decide security controls |
-| Wave | W24 |
+| Wave | W25 |
 | Depends on | F3-01 |
 | Owns gate test | `TestFailClosed_MoreRestrictiveWins` |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
@@ -63,9 +63,13 @@ F3-07, so nothing changes for ABO.
 | create | `core/config/retired.go` (retired names, `RetiredSet`, `RetiredNameError`) |
 | create | `core/app/options_config.go` (`Options.RetiredConfigNames`, `Options.ConfigEnvBindings`, passed to `config.Options`) |
 | create | `core/app/offline_config.go` (`config check`, an `app.Command` in `OfflineCommands`) |
+| modify | `core/kernel/core_sections.go` (add the `FailClosed` option to the two declarations, nothing else) |
+| modify | `core/go.mod`, `core/go.sum` (require `go.yaml.in/yaml/v3` **v3.0.6**, 05-config §1.10.1) |
+| modify | `go.sum` (ABO's module sums for the same version; HEAD's `go.mod` carries `go.yaml.in/yaml/v3 v3.0.5 // indirect`) |
 | create | tests beside each file (`*_test.go`) |
 
-Put the YAML file parser in `precedence.go` or `env.go`; do not add files outside the list.
+Put the YAML file parser in `precedence.go` or `env.go`; do not add files outside the list. `core/kernel/core_sections.go`
+is also edited by F3-03 (an earlier wave) and F2-04 (a later one): touch only the two `FailClosed` options.
 
 ## Re-verify at BASE
 
@@ -75,12 +79,15 @@ grep -rn 'func NewStore' core/config/ | wc -l
 grep -rn 'func (s \*Store) RetiredSet' core/config/ | wc -l
 # your three file names are free (expect 0 each)
 ls core/config/env.go core/config/precedence.go core/config/retired.go 2>/dev/null | wc -l
-# the FailClosed option constructor and the two declarations (see STOP 2)
-grep -rn 'func FailClosed(' core/config/ | wc -l                    # expect 1 (F2-09)
-grep -rn 'FailClosed("core.auth.mode"' core/ | wc -l                 # expect 1
-grep -rn 'FailClosed("core.http.basic_gate.enabled"' core/ | wc -l   # expect 1
-# the YAML library in core's module (see STOP 3)
-grep -c 'go.yaml.in/yaml/v3' core/go.mod                             # expect 1
+# the FailClosed option constructor (F2-09) and the two declarations you add (expect 1, then 0, 0)
+grep -rn 'func FailClosed(' core/config/ | wc -l
+grep -rn 'FailClosed("core.auth.mode"' core/ | wc -l
+grep -rn 'FailClosed("core.http.basic_gate.enabled"' core/ | wc -l
+# both keys are declared in the kernel's core-section list (expect >= 1 each)
+grep -c 'core.auth' core/kernel/core_sections.go
+grep -c 'basic_gate' core/kernel/core_sections.go
+# the YAML library is not yet in core's module (expect 0; this PR adds it)
+grep -c 'go.yaml.in/yaml/v3' core/go.mod
 # OfflineCommands exists from R1 (expect >= 1)
 grep -rn 'func OfflineCommands' core/app/ | wc -l
 # HEAD's hazards these rules close (HEAD f7ac5b11e; informational)
@@ -93,53 +100,58 @@ grep -c 'BindEnv(' internal/config/config.go internal/config/abs_config.go inter
 
 1. F3-01's store has no seam for file and env sources and adding one needs a change to F3-01's types beyond this row's
    files: report.
-2. `func FailClosed(` or either declaration is missing. The declarations belong to the sections F2-09 registered
-   (`core/kernel/core_sections.go` or the owners' packages), which are not in this row's files. Report; do not add
-   them silently.
-3. `go.yaml.in/yaml/v3` is not in `core/go.mod` (05-config §1.10.1 pins **v3.0.6**). `core/go.mod` is not in your
-   files: report.
+2. `func FailClosed(` is missing (F2-09 did not land it), or either key is declared outside
+   `core/kernel/core_sections.go` (the `basic_gate` or `core.auth` greps print 0). Report; do not declare the keys
+   elsewhere.
+3. A `FailClosed(...)` declaration already exists for either key (the second or third grep prints 1): someone else
+   added it; report instead of declaring it twice.
 4. A change makes ABO read an env or file name differently before F3-07 (ABO sets neither new `app.Options` field).
 
 ## Steps
 
 1. Write the tests below first.
-2. **Env names** (§1.3.6): `<EnvPrefix>_` + upper(path) with `.` and `-` → `_`, leading `MODULES_` dropped for
+2. **Dependency and declarations.** In `core/`: `go get go.yaml.in/yaml/v3@v3.0.6 && go mod tidy`; then at the root
+   `go mod tidy` so `go.sum` carries the same version (05-config §1.10.1). In `core/kernel/core_sections.go` add
+   `config.FailClosed("core.auth.mode", json.RawMessage(`"required"`), json.RawMessage(`"disabled"`))` (05-authn §8
+   key table) and `config.FailClosed("core.http.basic_gate.enabled", json.RawMessage("true"), json.RawMessage("false"))`
+   (05-http-api §10) to the two existing section declarations, most restrictive first. Change nothing else there.
+3. **Env names** (§1.3.6): `<EnvPrefix>_` + upper(path) with `.` and `-` → `_`, leading `MODULES_` dropped for
    module paths (`core.log.level` → `ABO_CORE_LOG_LEVEL`; `modules.books.scan.on_startup` →
    `ABO_BOOKS_SCAN_ON_STARTUP`; `integrations.metadata.google-books.api_key` →
    `ABO_INTEGRATIONS_METADATA_GOOGLE_BOOKS_API_KEY`). Two paths with one name → `ErrDuplicate` at `Load`. Exact case
    only. Unknown `<EnvPrefix>_*` → one warning each. A value of `""` is **unset** (no value, no lock). `<NAME>_FILE`
    is read once at `Load`, one trailing newline trimmed; unreadable → boot error. Objects and arrays take JSON.
    Config reads only `Options.Environ`, never `os.Getenv`.
-3. **File** (§1.3.6): a YAML mapping nested by path segments; top-level keys `core`, `modules`, `integrations`; an
+4. **File** (§1.3.6): a YAML mapping nested by path segments; top-level keys `core`, `modules`, `integrations`; an
    unknown top-level key warns; unreadable or unparsable file → boot error; a file that sets
    `core.paths.state_dir` fails boot (§1.7).
-4. **Strict decoding** for env, file and flags: JSON for objects and arrays, a Go duration, `true`/`false`, the key's
+5. **Strict decoding** for env, file and flags: JSON for objects and arrays, a Go duration, `true`/`false`, the key's
    own type. No legacy spellings (`yes`, bare nanoseconds, space-separated lists). Failure names the variable or file
    key. Exception: `OTEL_METRIC_EXPORT_INTERVAL`'s binding keeps the OTel bare-integer-milliseconds decoder.
-5. **Bindings** (§1.3.1 `EnvBinding`, `Options.EnvBindings`): within the env layer the canonical name beats a binding;
+6. **Bindings** (§1.3.1 `EnvBinding`, `Options.EnvBindings`): within the env layer the canonical name beats a binding;
    different values on a `ProtectAdmin`+ key → boot fails naming both; on any other key → canonical wins, warning,
    health `config_binding_conflict`. A binding equal to a canonical name, or bound twice → `ErrDuplicate`.
-6. **Fail-closed** (§1.3.5): for a `FailClosed` key the effective value is the more restrictive (by the declared
+7. **Fail-closed** (§1.3.5): for a `FailClosed` key the effective value is the more restrictive (by the declared
    order) of the operator value and the stored value; with one set, that one. Stored beats a weaker operator value →
    `AttachReport.FailClosed[key] = <operator source>`, one warning, health `config_fail_closed_override` on
    `core.config`, gauge `mediacore_config_fail_closed_overrides`. `Apply` with an operator value set accepts a value
    at least as restrictive (it becomes effective) and an unset, refuses a weaker one with `*LockedError`.
    `KeyState.FailClosed = true`. `Register` refuses `FailClosed` on a non-bool/enum key, a secret key or an order
    missing a value (`ErrInvalid`).
-7. **Retired names** (§1.3.6 table): never read. After `Boot` (core keys) and after `Load` (module and passthrough
+8. **Retired names** (§1.3.6 table): never read. After `Boot` (core keys) and after `Load` (module and passthrough
    keys), before storage opens: a set retired name whose key is `ProtectAdmin`+ (owner and operator included), a
    `secrets.Ref` key, a passthrough path marked `Refuse`, or a file key whose subtree holds one → `*RetiredNameError`
    listing **every** such use with its canonical env name and file path; otherwise ignored, one warning per boot
    naming the canonical name or the drop message, health `config_retired_name_ignored`, gauge
    `mediacore_config_retired_names_set`. A file key spanning several keys is judged by its most protected key.
    `RetiredSet()` lists every use.
-8. **`app.Options`** (`options_config.go`): `RetiredConfigNames []config.RetiredName`, `ConfigEnvBindings
+9. **`app.Options`** (`options_config.go`): `RetiredConfigNames []config.RetiredName`, `ConfigEnvBindings
    []config.EnvName`, copied into `config.Options.Retired` and `.EnvBindings`.
-9. **`config check`** (`offline_config.go`): an `app.Command` that opens no store, reads only the operator layers
+10. **`config check`** (`offline_config.go`): an `app.Command` that opens no store, reads only the operator layers
    (file, env, flags) through the same code as `Boot`/`Load`, prints each retired use with its canonical env name and
    file path and whether it would refuse, and exits non-zero when any would refuse. Register it in
    `OfflineCommands`.
-10. Headers, one `changelog.d/` fragment, Acceptance.
+11. Headers, one `changelog.d/` fragment, Acceptance.
 
 ## Code contract (05-config §1.3.1, §1.3.3; copy exactly)
 
@@ -205,8 +217,8 @@ make ci                                                                         
 ## Out of scope
 
 ABO's rename table and the generated retired list (F3-06); passing them in ABO's `main` (F3-07); the deploy-file test
-(F3-07); storage's refusal to **create** a store while a retired database-path name is set (see Planner notes); the
-Basic gate (F3-05).
+(F3-07); storage's refusal to **create** a store while a retired database-path name is set (F3-07, the kernel's P2 in
+`core/kernel/storage.go`; this PR only makes `RetiredSet()` report the use); the Basic gate (F3-05).
 
 ## Rollback
 
@@ -223,13 +235,3 @@ feat(core/config): env and file grammar, fail-closed keys, retired names, config
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
-
-## Planner notes
-
-- **Unowned kernel refusal.** 05-storage §5S.4 step 1 refuses to create a store while 05-config reports a retired
-  database-path name set (14 K15, E6). It is a `core/kernel` P2 change, and no row's files include the kernel's storage
-  open for it (this row has no `core/kernel/` path). Recommend adding it to F3-07 or to this row.
-- **`FailClosed` declarations.** If F2-09 did not declare `FailClosed` on `core.auth.mode` and
-  `core.http.basic_gate.enabled`, this row cannot without a file outside its list (STOP 2).
-- **YAML dependency.** If no earlier row added `go.yaml.in/yaml/v3` v3.0.6 to `core/go.mod`, this row needs
-  `core/go.mod` and `core/go.sum` (STOP 3).

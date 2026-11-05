@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-02-core-auth-store-service-middleware.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 17675dfd-c1d9-454e-bb6e-545401beffad -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,8 +10,8 @@
 | ID | F4-02 |
 | Release / flip | R2, identity flip F4 (dark PR) |
 | Tier | **T4** (Opus, xhigh–max): the authentication engine, hashed credentials and five ported security properties |
-| Wave | W24 (runs inside an announced **move window**: no other PR of the wave touches the moved files or the shared `layerOf` and shard files) |
-| Depends on | F4-01, F4-04, F3-01 |
+| Wave | W25 (runs inside an announced **move window**: no other PR of the wave touches the moved files, their callers listed below, or the shared `layerOf` and shard files) |
+| Depends on | F4-01, F4-04, F3-01, F4-09 |
 | Owns gate tests | `TestSessions_ListNeverReturnsToken`; `TestAPIKey_EmptyEffectiveKeyCannotMint`; `TestAPIKey_RevokedIsTerminal`; `TestAdminChecks_HonourKeyScopes`; `TestRevokeRacesTouch_NeverUnrevokes` |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
 
@@ -28,7 +28,8 @@ make web-deps
 git rev-parse HEAD       # BASE
 ```
 
-Confirm F4-01, F4-04 and F3-01 are merged and the move window naming the moved files is announced. If not, stop.
+Confirm F4-01, F4-04, F3-01 and F4-09 are merged and the move window naming the moved files and their callers is
+announced. If not, stop.
 
 ## Goal
 
@@ -37,6 +38,10 @@ Complete `github.com/falkcorp/mediacore/auth` on R1's leaf (R1-12: `MethodSpec`,
 it, re-pointing ABO's gin code at core's public API so **ABO's behaviour is unchanged**: the gin auth chain stays HEAD's
 until F4-08.
 
+- **Built on `core/internal/authz`** (F4-09): the auth-disabled principal's checker is `authz.AuthDisabled(catalog)`
+  and the `_system` principal's is `authz.ForSystem(perms)`; `auth` is one of the three packages
+  `archtest.NoSystemPrincipalOutsideKernel` allows to call them (05-rbac §3.4). `auth` reaches the compiled checker of
+  a user or key only through `rbac.Service.Compile`.
 - **Core, new:** `Service` (users, password sign-in, sessions, API keys, bootstrap, `PrincipalFor`,
   `CheckCredentialFor`, `Middleware`, `Revalidate`, `PostRestore`, `BootWrites`), authenticators and `Extension`,
   `Store` and `Importer`, the native `core/internal/authstore` over `c/auth/`, `auth/authtest` (`StoreSuite` with the
@@ -69,8 +74,20 @@ until F4-08.
 | create | `core/auth/authtest/`, `core/auth/password/`, `core/internal/authstore/` |
 | move (delete in ABO, re-point callers) | `internal/server/absauth/password.go`, `internal/server/absauth/throttle.go`, `internal/server/absauth/audit.go`, `internal/server/login_ceiling.go`, `internal/server/bootstrap_rate_limit.go`, `internal/server/invite_rate_limit.go`, `internal/util/email.go`, `internal/config/bootstrap_key_ttl.go`, `internal/config/invite_config.go` |
 | create | `core/audit/auth_types.go` |
+| modify (re-point callers) | `internal/books/store/`: `oauth_identity.go`, `pebble_store_auth.go`, `pebble_store_invite_delivery.go`, `pebble_store_verified_email_backfill.go`, `user_merge.go` |
+| modify (re-point callers) | `internal/cfaccesspolicy/`: `client.go` |
+| modify (re-point callers) | `internal/oauth/`: `oauth.go`, `resolve.go` |
+| modify (re-point callers) | `internal/server/absauth/`: `password_guard_test.go` |
+| modify (re-point callers) | `internal/server/`: `auth_accept_invite.go`, `bootstrap.go`, `bootstrap_rate_key_test.go`, `bootstrap_security_test.go`, `client_trust.go`, `csp.go`, `csp_test.go`, `email_normalize_parity_test.go`, `invite_guest_access.go`, `login_budget_isolation_test.go`, `main_test.go`, `password_writers_algo_test.go`, `peer_allowlist.go`, `peer_allowlist_test.go`, `server.go`, `server_lifecycle.go`, `wire_abs_routes.go`, `wire_auth_routes.go`, `wire_oauth.go` |
+| modify (re-point callers) | `internal/server/handlers/abs/`: `abs_test.go`, `authorize.go`, `handler.go`, `handler_dummy_warm_test.go`, `login.go`, `login_throttle_key_test.go`, `main_test.go`, `me.go`, `openid.go`, `refresh.go` |
+| modify (re-point callers) | `internal/server/handlers/`: `abs_session_revoke.go`, `abs_session_revoke_test.go`, `auth.go`, `auth_dummy_warm_test.go`, `auth_login_timing_test.go`, `auth_password_algo_test.go`, `auth_saturation_test.go`, `auth_test.go`, `invite_delivery.go`, `user.go` |
+| modify (re-point callers) | `internal/server/middleware/`: `absauth.go`, `absauth_test.go` |
+| modify (re-point callers) | `internal/usermerge/`: `footprint.go`, `plan.go` |
 
-The row lists only these ABO files. The callers of the moved symbols must be re-pointed; see STOP 2.
+These 52 caller files are every non-moved file that references a moved symbol at the plan's base (the five
+`internal/books/store/` files are HEAD's `internal/database/` files after R1-26). Re-point each at core's public API in
+this PR; **no forwarding shim** stays in a moved file's old location (04 §2.1: the staying side's references change in
+the same PR).
 
 ## Re-verify at BASE (HEAD `f7ac5b11e` counts shown)
 
@@ -84,7 +101,9 @@ grep -c '^func ' internal/server/invite_rate_limit.go         # HEAD 9
 grep -c '^func ' internal/util/email.go                       # HEAD 2 (NormalizeEmail, SameEmail)
 grep -c '^func ' internal/config/bootstrap_key_ttl.go         # HEAD 1
 grep -c '^func ' internal/config/invite_config.go             # HEAD 15
-grep -rln 'absauth\.HashPassword\|absauth\.VerifyPassword\|util\.NormalizeEmail' --include=*.go . | grep -v _test | wc -l   # HEAD 17 caller files
+grep -rln 'absauth\.HashPassword\|absauth\.VerifyPassword\|util\.NormalizeEmail' --include=*.go . | grep -v _test | wc -l   # HEAD 17 non-test caller files (a subset of the 52 listed)
+ls internal/books/store/oauth_identity.go internal/books/store/pebble_store_auth.go internal/books/store/user_merge.go | wc -l   # expect 3 (R1-26 moved them from internal/database/)
+grep -rn 'func AuthDisabled\|func ForSystem\|func Compile' core/internal/authz/ | wc -l   # expect 3 (F4-09)
 grep -rn 'type MethodSpec struct' core/auth/ | wc -l          # expect 1 (R1-12)
 grep -rn 'func (s \*Service) Compile' core/rbac/ | wc -l      # expect 1 (F4-01)
 grep -rn 'type RevocationJournal interface' core/backup/journal/ | wc -l   # expect 1 (F4-04)
@@ -96,11 +115,8 @@ grep -rn 'TestLegacy' internal/server/handlers/ internal/server/middleware/ inte
 
 1. ABO's behaviour changes before F4-08: every ABO test, the ABS conformance suite (`internal/server/handlers/abs/`,
    `internal/server/absauth/`) and the six `TestLegacy…` tests of R0 stay green **unchanged**.
-2. Re-pointing a moved symbol's caller needs a file outside the row (the 17 caller files at HEAD are spread across
-   `internal/server/`, `internal/server/middleware/`, `internal/server/handlers/` and `internal/usermerge/`, which other
-   rows of nearby waves own). Report the list before editing; the lead amends the row or keeps a one-line forwarding
-   shim in the old file for this PR (a shim is acceptable only if the 04 key's move is then completed by F4-08, which
-   owns `internal/server/`).
+2. Step 8's caller census at BASE names a file that is **not** in the Files table (a caller added since the plan's base):
+   report it before editing; do not add a forwarding shim instead.
 3. A credential or its hash appears in a log, a span, an error body or any `SessionView`.
 4. Core would hold an ABO name (`abk_` is passed by ABO as `Options.ImportedKeyPrefixes`, never hard-coded).
 
@@ -131,7 +147,10 @@ grep -rn 'TestLegacy' internal/server/handlers/ internal/server/middleware/ inte
 7. **Bootstrap** (§4.6), **Compat** (§4.10: the method-bound handle; `VerifyPassword`, `AuthenticateKey`,
    `PrincipalFor`, `CheckCredentialFor`), **auth-off** (§4.11), **epochs** (§4.12), **PostRestore** and **BootWrites**
    (§3.2, §4.14; write nothing in `New` or a constructor).
-8. **Moves:** move each listed HEAD file's code to its core home, re-point its callers at core's public API, keep HEAD's
+8. **Moves:** first take the caller census at BASE: for each moved file, list its exported symbols and grep every
+   `.go` file outside the moved set that references them (`grep -rlw` per symbol with the package qualifier); the union
+   must equal the 52 caller files of the Files table (STOP 2 otherwise; record the census in the PR). Then move each
+   listed HEAD file's code to its core home, re-point every caller at core's public API (no shim), keep HEAD's
    behaviour (limits, timings, hash parameters, error strings the ABS suite checks). Move PR rules apply (description
    lists `old ==> new`; every commit builds; `go fix` on moved files).
 9. Headers, one `changelog.d/` fragment, Acceptance.
@@ -177,7 +196,7 @@ The five gate tests, each a **property test** over random inputs as the spec sta
 (cd core && go test -count=1 -run 'TestSessions_ListNeverReturnsToken|TestAPIKey_EmptyEffectiveKeyCannotMint|TestAPIKey_RevokedIsTerminal|TestAdminChecks_HonourKeyScopes|TestRevokeRacesTouch_NeverUnrevokes' ./...)   # PASS
 go test -count=1 ./internal/server/... ./internal/usermerge/...                         # ok, ABS suite included
 go test -count=1 -run 'TestLegacy' ./...                                                # PASS (R0's six)
-for f in internal/server/absauth/password.go internal/server/absauth/throttle.go internal/server/absauth/audit.go internal/server/login_ceiling.go internal/server/bootstrap_rate_limit.go internal/server/invite_rate_limit.go internal/util/email.go internal/config/bootstrap_key_ttl.go internal/config/invite_config.go; do test -e $f && echo "still present: $f"; done   # no output (or only agreed shims, STOP 2)
+for f in internal/server/absauth/password.go internal/server/absauth/throttle.go internal/server/absauth/audit.go internal/server/login_ceiling.go internal/server/bootstrap_rate_limit.go internal/server/invite_rate_limit.go internal/util/email.go internal/config/bootstrap_key_ttl.go internal/config/invite_config.go; do test -e $f && echo "still present: $f"; done   # no output
 go test -count=1 ./internal/arch/...                                                    # ok
 make -C core ci                                                                         # exit 0
 make ci                                                                                 # exit 0
@@ -185,7 +204,7 @@ make ci                                                                         
 
 ## Out of scope
 
-OIDC and Cloudflare Access (F4-03); the routes (F4-05); the identity cutover M3 (F4-06); replacing the gin auth chain,
+`core/internal/authz` (F4-09); OIDC and Cloudflare Access (F4-03); the routes (F4-05); the identity cutover M3 (F4-06); replacing the gin auth chain,
 `legacyauth` and P7/P4d wiring for ABO (F4-08).
 
 ## Rollback
@@ -204,12 +223,3 @@ feat(core/auth): native identity store, sessions, keys, throttle, bootstrap, sta
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
-
-## Planner notes
-
-- **Callers outside the row.** The moved symbols have 17 non-test caller files at HEAD; several live in
-  `internal/server/` and `internal/usermerge/` paths that F4-03 (W26) and F4-08 (W31) own as whole directories. The row
-  should either list the caller files or allow forwarding shims until F4-08.
-- **Ordering with F3-06.** This row moves `internal/config/invite_config.go` and `bootstrap_key_ttl.go` (W24) before
-  F3-06 (W25) generates the rename table from HEAD's config code; F3-06 must read their `BindEnv` names from the
-  frozen source of `748fd787a`, not from BASE's `internal/config`.

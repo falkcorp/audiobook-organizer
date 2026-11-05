@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-05-one-web-build-entry-point.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: ab971b1f-8614-4ccb-b9ba-e106ed75c3e3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-05` |
 | Tier | **T2** (Sonnet / high): twelve npm ci sites and three reusable-workflow callers; the site list is given |
-| Release / wave | R1 / W11 |
+| Release / wave | R1 / W10 |
 | Depends on | R1-04 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 09 §9.4 R1 Content: build and CI (build_web.sh); 09 §9.1 (the 12 npm ci sites); 07 §7.3.2 |
 | Branch | `agent/platform-core-r1-05-one-web-build-entry-point` |
@@ -29,6 +29,7 @@
 - `.github/workflows/security.yml`
 - `.github/workflows/vulnerability-scan.yml`
 - `.github/workflows/frontend-ci.yml`
+- `.github/workflows/nightly.yml` (07 §7.3.2's third reusable-workflow CI caller, `nightly.yml:31`)
 - `.github/workflows/prerelease.yml`
 - `.github/workflows/release-prod.yml`
 - `.woodpecker/checks-build.yaml`
@@ -64,7 +65,7 @@ breaks (09 §9.4 R1 "Content: build and CI", the `build_web.sh` sentence; 09 §9
   `web-build`, `web-install`, `web-test`, `web-lint`, `web-typecheck` depend on it; `web-dev` depends only on the
   install half.
 - **Every one of the 12 `npm ci` sites of 09 §9.1 calls it** (the script directly where `make` is unavailable),
-  plus the CLAUDE.md worktree recipe (a doc line; CLAUDE.md is out of this row's files, see Planner notes).
+  plus the CLAUDE.md worktree recipe (a doc line; R1-30 changes it to `make web-deps`, not this row).
 - **The reusable-workflow callers** (07 §7.3.2 lists five): the three CI callers `ci.yml:127`
   (`reusable-ci-minimal.yml`, `run-frontend`), `frontend-ci.yml:64` and `nightly.yml:31` (`reusable-ci.yml`) set
   their frontend half off and run it in ABO-local jobs after `make web-deps`; the two release callers
@@ -174,13 +175,3 @@ Revert the PR; every site returns to its own `npm ci`.
 - **Concurrency (CLAUDE.md).** A loop over a library-scale collection with per-item I/O, hashing or subprocess work uses a bounded worker pool (`errgroup` + `SetLimit`); never unbounded goroutines.
 - **No `go.work`.** Never run `go work init` in a checkout or worktree; the genproto probe runs only in a throwaway copy under `mktemp -d` (03 §3.2 item 1).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
-
-## Planner notes
-
-- Missing file in the row: 07 §7.3.2 lists `nightly.yml:31` (`reusable-ci.yml`) among the three CI callers whose
-  frontend half must move to ABO-local jobs; `.github/workflows/nightly.yml` is not in R1-05's files (R1-03 has it,
-  in W09, so no same-wave collision). Add it to R1-05's row.
-- The CLAUDE.md worktree recipe `npm ci --prefix web` is one of the sites 07 §7.3.2 names; CLAUDE.md is outside
-  every row's files. The lead (or the owner) should change that line to `make web-deps` when R1-30 lands.
-- 09 §9.1 cites `Makefile:194` (`web-install`) as an `npm ci` site; at `748fd787a` that target ran `npm install`,
-  and HEAD (`f7ac5b11e`) runs `npm ci` at `Makefile:198`. The list stays 12 sites.

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-06-release-r3-cut-deploy.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 87ccaa3f-5e58-4c9c-8d6f-888ce821b84e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -13,8 +13,8 @@
 | ID | OWNER-06 |
 | Release | R3 (cleanup and the upgrade floor) |
 | Tier | **OWNER**: confirmations, release, deploy |
-| Wave | W41 |
-| Depends on | R3-01, R3-02, R3-03 (all merged) |
+| Wave | W45 |
+| Depends on | R3-01, R3-02, R3-03, R3-04, R3-05 (all merged) |
 | Unblocks | nothing in this plan (the last row) |
 | Spec | 09 §9.4 R3 (Rollback, Owner), §9.2.2 (the R3 floor) |
 
@@ -31,8 +31,9 @@ R2 stops the service at start with `install <R2 release> first` (exit 78).
 1. **Keyring exported**: health does not show `secrets_keyring_not_exported` (OWNER-05 step 7 done).
 2. **`.encryption_key` kept off-host with every pre-R2 archive** you intend to keep; pre-R2 archives without it
    cannot be restored after R3. Delete pre-R2 archives you no longer want (09 §9.6 row 23).
-3. **Cut the R3 production release** (`release-prod.yml`, `workflow_dispatch`) and **prepend** 09 §9.4 R3's
-   release-note lines, verbatim, never replacing the generated notes (replace `<R2 release>` with R2's version):
+3. **Cut the R3 production release** (`release-prod.yml`, `workflow_dispatch`) and **prepend** the R3 release note
+   R3-04 committed (`docs/system/r3-release-note.md`, 09 §9.4 R3's lines verbatim), never replacing the generated
+   notes (replace `<R2 release>` with R2's tag if R3-04 left the placeholder). Its core lines:
 
    > This release needs a database that ran <R2 release>. An older database stops the service at start with the
    > message `install <R2 release> first`: install that release, start it once, then upgrade.
@@ -41,7 +42,8 @@ R2 stops the service at start with `install <R2 release> first` (exit 78).
    > directory. Keep your off-host copy of `.encryption_key` with any backup taken before <R2 release>: restoring
    > such a backup needs it, and needs <R2 release> installed first.
 
-   with the macOS and Docker notes of 09 §9.2.2, which the lead copies from that section.
+   followed by the macOS and Docker notes of 09 §9.2.2 and the removed `--db-type` and SQLite flags, which R3-04's
+   file already carries.
 4. **Deploy** (`make deploy`). R3 changes no data in the store (09 §9.4 R3 Migrations).
 5. **Optional smoke run** (D11): the service starts, the log names the deleted `.encryption_key` as now only
    off-host, sign-in and a scan work.

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R0-06-updater-hotfix-check-only-exit75.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4a021d38-30be-4d6b-91b6-83afbdadd066 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,11 +9,11 @@
 |---|---|
 | ID | R0-06 |
 | Release | R0 (09 §9.4 R0 Content (3)) |
-| Tier | **T3** (Opus / high): a wrong swap strands self-updating installs; several refusal paths must hold together |
+| Tier | **T3** (Opus / high): a wrong swap strands self-updating installs; several refusal paths must hold together; the degraded field is the first posture-token surface |
 | Wave | W01 |
 | Depends on | none |
 | Branch | `fix/r0-06-updater-hotfix` |
-| Owner text | 05-updater §5U.12 (the R0 behaviour, row `RestartSelf`), §5U.11 (test names), §5U.4 (comparison and local-build rule), §5U.5 (policy rows "Unattended apply", "Downgrades"); 09 §9.1 updater row; 09 "Out-of-scope defects found" item 3 |
+| Owner text | 05-updater §5U.12 (the R0 behaviour, row `RestartSelf`), §5U.11 (test names), §5U.4 (comparison and local-build rule), §5U.5 (policy rows "Unattended apply", "Downgrades"); 09 §9.1 updater row; 09 "Out-of-scope defects found" item 3; 05-health §5H.3.1, §5H.9 (the R0 cell of `TestHealth_UnauthenticatedTokenSetGolden`), §5H.10 R0 row |
 
 **Gate:** plan, then execute autonomously in your own worktree and PR. You have design latitude inside HEAD's
 `internal/updater`; the invariants, tests and STOP conditions below are binding.
@@ -56,11 +56,14 @@ maintenance-window check that finds a newer release records it as the updater's 
 and `GET /api/v1/update/status` show it) and logs it at info with both versions. Do not build a notification
 mechanism.
 
-**Where `auto_update_paused` surfaces.** 05-health §5H.3.1 fixes `/health`'s unauthenticated `degraded` list to a
-set that does **not** include `auto_update_paused`, and routes every other token, before F8, to a `degraded` field
-on the authenticated `GET /api/v1/system/status` (`settings.manage`). So in R0: (a) `GET /api/v1/update/status`
-reports the flag, and (b) `GET /api/v1/system/status` gains a `degraded` string list carrying
-`auto_update_paused` while `config.AppConfig.AutoUpdate.Enabled` is true. It must **never** appear in `/health`.
+**Where `auto_update_paused` surfaces** (05-health §5H.3.1 and its §5H.10 R0 row; 05-updater §5U.5 "Unattended
+apply"; 09 §9.4 R0 Content). `/health`'s unauthenticated `degraded` list carries only a fixed set that does **not**
+include `auto_update_paused`. R0 adds a `degraded` field to HEAD's authenticated `GET /api/v1/system/status`
+(`settings.manage`) carrying exactly one token, `auto_update_paused`, while `config.AppConfig.AutoUpdate.Enabled`
+is true; R1-24 later extends that field with the posture tokens (it does not create it). So in R0: (a)
+`GET /api/v1/update/status` reports the flag, and (b) `GET /api/v1/system/status` gains the `degraded` string list.
+It must **never** appear in `/health`. This row creates `TestHealth_UnauthenticatedTokenSetGolden` with its R0 cell;
+R1-24, F2-10 and F8-04 extend it.
 
 ## Files
 
@@ -74,10 +77,12 @@ reports the flag, and (b) `GET /api/v1/system/status` gains a `degraded` string 
 | modify | `internal/server/update_handlers.go` (status fields; apply with an optional named version and the refusals) |
 | modify | `internal/server/handlers/system/handler.go` (`degraded` field on `GET /system/status`) |
 | modify | `web/src/components/settings/AutoUpdateSection.tsx` (banner; local-build note; named-version apply) |
+| modify | `web/src/services/api.ts` (`UpdateInfo` at `:5867` gains the three status fields; `applyUpdate()` at `:5896` takes the optional version) |
+| modify (if needed) | `internal/updater/updater_test.go`, `internal/updater/updater_coverage_test.go` (they construct `Updater` with unexported fields; edit only what a new field or the changed `UpdateAvailable` rule breaks, never an assertion of the R0 rules) |
+| create | `internal/server/scheduler_maintenance_window_update_test.go` (package `server`; the step-1 test) |
+| create | `internal/server/handlers/system/health_tokens_test.go` (package `system`; `TestHealth_UnauthenticatedTokenSetGolden`'s R0 cell and the authenticated-only test) |
 | modify | `go.mod`, `go.sum` (`golang.org/x/mod` becomes a direct requirement; `go mod tidy`) |
 | create | `changelog.d/<date>_r0_updater_hotfix.md` (no header) |
-
-See Planner notes for `web/src/services/api.ts` and the existing updater tests.
 
 ## Re-verify before editing (expected at the base commit; files unchanged since 748fd787a)
 
@@ -141,12 +146,19 @@ asset, with the executable path pointed at a temp directory. Each must fail on t
 | `TestCheck_DescribeSuffixedCurrentNotCompared` | current `v0.223.0-5-gabc1234` or `v0.223.0-dirty`, latest `v0.223.0` or older (and also newer) → no update offered, `LocalBuild` set, note "local build, not compared"; apply with no version refused; apply of a named version allowed. |
 | `TestCheck_ScheduledRunNeverApplies` | A scheduler `tick` with `Enabled: true`, inside the window, and a newer release: the check runs and records `LastCheck`; the fake server sees no asset download; no swap; the exit function is never called; the status reports `AutoApplyPaused`. |
 
-Add (names coined here): `TestMaintenanceWindowStep1_CheckOnly` in `internal/server/` (the op's existing tests are
-`maintenance_window_handlers_test.go` and `maintenance_window_outcome_test.go`; put it in a new
-`internal/server/scheduler_maintenance_window_update_test.go`, see Planner notes),
-proving step 1 never applies; and `TestSystemStatus_AutoUpdatePausedAuthenticatedOnly` in
-`internal/server/handlers/system/` proving the token is on `GET /system/status`'s `degraded` and not on
-`HealthCheck`'s.
+Also, in `internal/server/handlers/system/health_tokens_test.go`:
+
+| Test | Proves |
+|---|---|
+| `TestHealth_UnauthenticatedTokenSetGolden` (05-health §5H.9; this row creates it with its R0 cell) | R0 cell, over HEAD's code: with every token HEAD's handler can raise at your base raised at once (`memdb_warming`, the degraded startup steps `metrics_disabled` and `search_index`, and `auto_update_paused`), every token of `HealthCheck`'s `degraded` list is in the fixed unauthenticated set of 05-health §5H.3.1 (a golden list in the test: `memdb_warming`, `metrics_disabled`, `search_index`, `basic_gate_no_password`) and `auto_update_paused` is not in it; `GetSystemStatus`'s `degraded` field contains `auto_update_paused`. Write the cells as a table so R1-24, F2-10 and F8-04 add theirs without rewriting it. |
+| `TestSystemStatus_AutoUpdatePausedAuthenticatedOnly` (name coined here) | `GET /system/status`'s `degraded` carries `auto_update_paused` exactly while `AutoUpdate.Enabled` is true, and is empty otherwise. |
+
+And (name coined here) `TestMaintenanceWindowStep1_CheckOnly` in the new
+`internal/server/scheduler_maintenance_window_update_test.go` (the op's existing tests are
+`maintenance_window_handlers_test.go` and `maintenance_window_outcome_test.go`), proving step 1 never applies.
+
+`basic_gate_no_password` is R0-05's token (wave W02, after this row); the golden lists it as allowed so R0-05's
+merge needs no edit here.
 
 ## Invariants
 
@@ -169,6 +181,7 @@ STOP conditions: an edit-target grep returns 0 hits; `go mod tidy` changes any r
 go mod tidy && git diff --stat go.mod go.sum                      # only x/mod moves to a direct require
 go build ./...                                                    # exit 0
 go test -race -count=1 ./internal/updater/ -run 'TestApply_RestartExits75|TestApply_SwapAtomicAndPrevKept|TestCheck_SemverNeverDowngrades|TestCheck_DescribeSuffixedCurrentNotCompared|TestCheck_ScheduledRunNeverApplies'   # ok
+go test -race -count=1 ./internal/server/handlers/system/ -run 'TestHealth_UnauthenticatedTokenSetGolden|TestSystemStatus_AutoUpdatePausedAuthenticatedOnly'   # ok
 go test -race -count=1 ./internal/updater/ ./internal/server/ ./internal/server/handlers/system/   # ok
 grep -c 'os.Exit(0)' internal/updater/updater.go                  # expect 0
 grep -c '".old"' internal/updater/updater.go                      # expect 0
@@ -202,19 +215,3 @@ Revert the commit in a new PR; on a host, `make rollback`. R0 writes no new stat
   ending `Co-Authored-By: Claude <noreply@anthropic.com>`. No release or flip trailer.
 - `gh pr merge <n> --rebase` after every required check is green; never squash, never `--admin`.
 - Remove the worktree after merge.
-
-## Planner notes
-
-- **Missing file:** `web/src/services/api.ts` (the `UpdateInfo` interface at `:5867` and `applyUpdate()` at `:5896`,
-  which must take the optional version) must change for the banner and the named-version apply, and is not in the
-  row's file list. No other W01 row touches it.
-- **Existing tests:** `internal/updater/updater_test.go` and `updater_coverage_test.go` construct `Updater` with
-  unexported fields; if a new field or a changed `UpdateAvailable` rule breaks one, it is edited in this PR. They
-  are not in the row's file list.
-- **Extra test file:** `internal/server/scheduler_maintenance_window_update_test.go` for the step-1 test (not in the
-  row's file list; no other W01 row touches `internal/server/` test files of that op).
-- **Token route ahead of R1-24:** this row adds the authenticated `degraded` field on `GET /api/v1/system/status`
-  (carrying only `auto_update_paused`), which 05-health §5H.3.1 says R1 adds; R1-24 ("the split of HEAD's
-  fixed-token source with the authenticated degraded field") then extends that field instead of creating it. 09
-  §9.4 R0 asks for "health is Degraded `auto_update_paused`" while 05-health keeps it off `/health`; this brief
-  reconciles the two by using 05-health's authenticated route.

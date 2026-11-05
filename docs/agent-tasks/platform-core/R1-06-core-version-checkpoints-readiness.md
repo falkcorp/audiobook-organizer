@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-06-core-version-checkpoints-readiness.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3f616e9b-4602-4e36-8503-c2d539986fac -->
 <!-- last-edited: 2026-11-05 -->
 

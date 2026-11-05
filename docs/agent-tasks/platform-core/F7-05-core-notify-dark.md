@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-05-core-notify-dark.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 81c13928-3234-49a7-99a4-49cf3b0519e5 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-05 |
 | Release | R2, flip label F7 (dark PR) |
 | Tier | **T3** (Opus / high): a delivery consumer and a signed webhook format; a wrong signing string lets a captured delivery replay |
-| Wave | W30 (alone). Runs inside an announced **move window** (04 keys `F7 move internal/mail -> mediacore/integrations/notify/mail`, `F7 move internal/mail/mailtest -> mediacore/coretest`) |
+| Wave | W30 (beside F4-07, F5-13, F6-05, F9-02, F9-04, F9-05; file-disjoint). Runs inside an announced **move window** (04 keys `F7 move internal/mail -> mediacore/integrations/notify/mail`, `F7 move internal/mail/mailtest -> mediacore/coretest`) |
 | Depends on | F7-01 (integrations registry: adapters, instances, `Local`, origin binding), F6-01 (core outbox: deliveries staged in the caller's batch and consumed into a task) |
 | Spec | 05-notify §1 (scope; deferred-build members), §3 (Go API: `Notification`, `Notifier`, `Caps`, `Target`, `Adapter`, `Publisher`, `Service` with `Publish`/`For`/`PutRule`/`DeleteRule`/`Rules`/`SendTest`, `Rule`, `RuleStore`/`NativeRuleStore`, `Importer`/`NativeImporter`), §3.1 (the shipped channels `core.email` and `core.webhook`, the fixed body, `X-Mediacore-Delivery`, `X-Mediacore-Signature`, reserved headers), §4–§8, §9 (tests), §10 (migration: `internal/mail`, the `mailSenderOverride` seam); 04 §8.1 F7, §3.1 (`internal/mail`), §3.4 (`mailtest`) |
 
@@ -74,7 +74,7 @@ Announce the move window one working day ahead naming the two 04 rows above.
 | move (`git mv`) + create | `internal/mail/` → `core/integrations/notify/mail/` (plus the `core.email` channel) |
 | create | `core/integrations/notify/notifytest/` |
 | move (`git mv`) | `internal/mail/mailtest/recorder.go` → `core/coretest/mail.go` (`MailRecorder`) |
-| modify | `internal/server/` (re-point `guest_service_tokens.go`, `invite_guest_access.go`, `server.go`, `handlers/invite_delivery.go` and their tests) |
+| modify | the six mail importer files, import lines only: `internal/server/guest_service_tokens.go`, `internal/server/guest_service_tokens_test.go`, `internal/server/handlers/invite_delivery.go`, `internal/server/handlers/invite_delivery_test.go`, `internal/server/invite_guest_access.go`, `internal/server/server.go`; touch no other file under `internal/server/` |
 | modify | `internal/arch/layering_test.go` (`internal/mail`, `internal/mail/mailtest` keys removed), `scripts/ci/short_test_weights.json` (only if it names them) |
 | create | one `changelog.d/` fragment (headerless) |
 
@@ -91,8 +91,11 @@ M=github.com/falkcorp/audiobook-organizer
 ls internal/mail internal/mail/mailtest
 grep -rl --include='*.go' "\"$M/internal/mail\"" . | grep -v '^./internal/mail/'
 grep -rl --include='*.go' "\"$M/internal/mail/mailtest\"" . | grep -v '^./internal/mail/'
-# 2. F6-01's outbox. Expected: ConsumeIntoTask and OutboxConsumers
-grep -rn 'func ConsumeIntoTask\|OutboxConsumers' core/outbox/*.go | head -3
+# 2. F6-01's outbox. Expected: >= 1 (ConsumeIntoTask, Consume/ConsumeTx for core consumers)
+grep -rn 'func ConsumeIntoTask\|func ConsumeTx\|func Consume\b' core/outbox/*.go | wc -l
+#    core.notify.deliver is a core consumer on the kernel's static list (05-events §5E.5.2 Retention), put there by
+#    F6-01; Manifest.OutboxConsumers is the flip F6-03's module member (W34) and is not used here. Expected: 1
+grep -rn '"core.notify.deliver"' core/kernel/outbox.go | wc -l
 # 3. F7-01's registry. Expected: Registry and NewDescriptor
 grep -n 'type Registry struct\|func NewDescriptor' core/integrations/*.go
 # 4. HEAD's webhook format still served by the plugin (stays until F7-09). Expected: X-Audiobook-Signature-256
@@ -101,7 +104,8 @@ grep -rn 'X-Audiobook-Signature-256' --include='*.go' internal/plugins/webhook/ 
 ls core/integrations/notify 2>/dev/null | wc -l
 ```
 
-STOP if grep 1 finds an importer outside `internal/server/`, if F6-01's outbox or F7-01's registry is missing, or if
+STOP if grep 1 finds an importer other than those six files (plus the `layerOf` key in
+`internal/arch/layering_test.go`; at the plan's base there are exactly six), if F6-01's outbox or F7-01's registry is missing, or if
 `core/integrations/notify` exists.
 
 ## Steps

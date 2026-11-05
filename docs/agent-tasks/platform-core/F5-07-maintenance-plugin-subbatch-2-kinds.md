@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-07-maintenance-plugin-subbatch-2-kinds.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 03bc2cfa-33d7-4275-bb2a-96baefde7560 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,9 +9,9 @@
 |---|---|
 | ID | F5-07 |
 | Release / flip | R2, tasks flip F5 (dark conversion PR) |
-| Wave | W26 |
-| Tier | **T1** (Sonnet / medium): up to 15 definitions of one file group, converted under fixed rules with conformance tests |
-| Depends on | F2-05 (`taskhttp`, `hello.count`, `coretest` on tasks; transitively F2-01..F2-04) |
+| Wave | W29 |
+| Tier | **T2** (Sonnet / high): up to 15 definitions of one file group, each shared body rerouted through its shell (05-tasks conversion rule 3), with conformance tests |
+| Depends on | F2-05 (`taskhttp`, `hello.count`; transitively F2-01..F2-04), F2-16 (`Registrar.Tasks`, `coretest`'s task cells), F2-17 (`tasklint` and this row's exemption entry file) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
 
 ## START HERE
@@ -40,12 +40,14 @@ dark"; T6 row: "the maintenance plugin's defs not in T3 or T4, in sub-batches of
 
 This is one of seven sibling PRs (F5-06 … F5-12) that run **in parallel in the same wave** over disjoint
 file groups of `internal/plugins/maintenance` (CLAUDE.md "Parallel Subagent Coordination"; a
-`/parallel-sweep` candidate). You may touch **only** the files in the Files table. Anything else in the
+`/parallel-sweep` candidate), each deleting only its own `tasklint` exemption entry file. You may touch **only**
+the files in the Files table. Anything else in the
 package, `plugin.go` above all, belongs to a sibling or to the flip.
 
 ## Spec to read first
 
-1. 05-tasks §5T.8.2 (the T6 row, the opening paragraph's three body rules, the kind-rename map rules 1–6).
+1. 05-tasks §5T.8.2 (the T6 row, the opening paragraph's three body changes, conversion rules 1–4, the kind-rename
+   map rules 1–6) and §5T.8.4 (`tasklint`'s rules and the dark-conversion ratchet).
 2. 05-tasks §5T.3.1 (`Common`, `TaskSpec`, `Task`), §5T.3.2 (`Parallelism`, `RunItems`), §5T.3.3 (`RC`),
    §5T.3.4 (`Effects`, `Key`), §5T.3.6 (`ResumePolicy`, checkpoints), §5T.3.7 (permissions, mode contract).
 3. 05-rbac §6 (the atom table, "Route requirement" column).
@@ -86,7 +88,11 @@ grep -rn 'func Fixed(n int, reason string) Parallelism\|func Sequential(reason s
 grep -rn 'func RunItems\[T any\](rc \*RC' core/tasks/*.go | wc -l                         # 1
 grep -rn 'func (rc \*RC) Mode() Mode\|func (rc \*RC) Checkpoint(v any) error\|func (rc \*RC) Restore(v any) (bool, error)' core/tasks/*.go | wc -l   # 3
 grep -rn 'func Conformance(' core/tasks/taskstest/*.go | wc -l                             # 1 (F2-01)
-test -f core/coretest/tasks.go && echo present                                            # present (F2-05)
+test -f core/coretest/tasks.go && echo present                                            # present (F2-16: coretest's task cells)
+grep -c 'Tasks(' core/module/registrar.go                                                 # >=1 (F2-16: Registrar.Tasks)
+test -d core/archtest/tasklint && test -f internal/books/tasklint_test.go && echo tasklint   # tasklint (F2-17)
+test -f internal/books/testdata/tasklint_exempt.d/F5-07.txt && echo entry                 # entry (F2-17 created it), else STOP
+grep -v '^#' internal/books/testdata/tasklint_exempt.d/F5-07.txt | grep -v '^$' | grep -vxF -e internal/plugins/maintenance/backfill.go -e internal/plugins/maintenance/book_atpath_index.go -e internal/plugins/maintenance/book_hash_index_repair.go -e internal/plugins/maintenance/book_shape_report.go -e internal/plugins/maintenance/bookfile_acoustid_index_repair.go -e internal/plugins/maintenance/booksig_recovery_audit.go -e internal/plugins/maintenance/booksig_sidecar_migrate.go -e internal/plugins/maintenance/build_folder_book_files.go -e internal/plugins/maintenance/chapters_backfill.go | wc -l   # 0 (the entry names only this row's 9 files)
 ```
 
 A grep that misses only because of formatting (a wrapped signature, an extra space) is not a STOP: grep the bare
@@ -122,9 +128,10 @@ disjoint) before any sibling starts.
 
 ## The conversion rules (every definition this PR converts)
 
-05-tasks §5T.8.2 fixes three body rules and the naming rule; the rest of this section is this plan's
-mechanical mapping of HEAD's fields onto the spec's `tasks.Common` (05-tasks §5T.3.1), with the source of
-each line. Apply it the same way to every definition; never improvise a field.
+05-tasks §5T.8.2 fixes the three body changes (`rc.Mode()`, `rc.Checkpoint`, the returned result), conversion
+rules 1–4 (here R7, R2, R10 and R9) and the naming rule (R3); R4 is its parallelism rule. R5, R6 and R8 are this
+plan's mechanical mapping of HEAD's fields onto the spec's `tasks.Common` (05-tasks §5T.3.1), with the source of
+each line. Apply every rule the same way to every definition; never improvise a field.
 
 **R1, dark (05-tasks §5T.8.2).** The converted definition compiles, is exercised by
 `taskstest.Conformance`, and is **not registered anywhere in production**: HEAD's v2 definition keeps its ID,
@@ -132,8 +139,9 @@ its registration and its behaviour, and the production build still runs HEAD's e
 `internal/server` wiring, `internal/opscatalog` or any `Register`/`RegisterOp` call changes in this PR. The
 tasks flip F5-18 registers the native kinds and deletes HEAD's definitions.
 
-**R2, shared core, two shells (plan rule, name coined here).** So that one body serves both engines during
-the dark window and HEAD's behaviour is the oracle:
+**R2, shared core, two shells (05-tasks §5T.8.2 conversion rule 2; helper names coined here).** One body serves
+both engines during the dark window, so the parity suites test the code production runs and HEAD's behaviour is
+the oracle. Rule R10 adds two fields to the env below (`Writer`, `Store`) and is part of this rule:
 
 1. Move the body of HEAD's `Run` func into an unexported function in the **same file**, named
    `<runFuncName>Core` (name coined here), that takes `ctx context.Context`, the decoded params struct, and a
@@ -204,23 +212,27 @@ Read the table from the books atom-table package the identity flip landed (`grep
 internal/` at your base; 0 hits = STOP). Never set `StartableByViewers` in a conversion. `Perms.Approve`
 is set only where `Approval` is (Fixers, F5-02).
 
-**R7, effects (plan rule, coined here; 05-tasks gives no rule for HEAD's empty `Writes`).** HEAD's write
-set is table-level and optional ("Empty Writes = declares nothing = the gate skips this op",
-`internal/operations/registry/types.go`); core requires `Effects` (05-tasks §5T.3.1). Map with
-`res(s) = tasks.Res("books", s)` for HEAD's resource strings (`books`, `book_files`, `authors`, `series`,
-`review_items`, `embeddings`, `operations`, `catalog`, `fingerprint_index`):
+**R7, effects (05-tasks §5T.8.2 conversion rule 1; §5T.3.4).** HEAD's write set is table-level and optional
+("Empty Writes = declares nothing = the gate skips this op", `internal/operations/registry/types.go`); core
+requires `Effects` (05-tasks §5T.3.1). Map with `res(s) = tasks.Res("books", s)` for HEAD's resource strings
+(`books`, `book_files`, `authors`, `series`, `review_items`, `embeddings`, `operations`, `catalog`,
+`fingerprint_index`):
 
 | HEAD | Native `Effects` | PR description list |
 |---|---|---|
 | `Writes` non-empty | `tasks.Writes(res(w)...)`, plus `.AlsoReads(res(r)...)` for `Reads` | — |
-| `Writes` empty, `Preview` non-zero | `tasks.Writes(res("books"))` (+ `AlsoReads`) | "Write set widened from HEAD's undeclared" |
-| `Writes` empty, `Preview` zero, no `library.write`/`files.write`/`db.migrate` capability | `tasks.ReadOnly(res(r)...)` | "Declared ReadOnly" |
-| `Writes` empty, `Preview` zero, a write capability | `tasks.Writes(res("books"))`, and the native shell returns an error when `rc.Mode() != tasks.ModeLive` ("<kind>: preview not supported; start with mode live"), because HEAD requires an explicit live mode for such an op (`internal/operations/registry/preview.go`, `PreviewSpec` comment) | "Live-only writer" |
+| `Writes` empty, the body writes | `tasks.Writes(res(x)...)` for every books resource the shared core **and every function it calls** writes, found by reading them (05-tasks conversion rule 1). Rule R10 makes this a reading of the core's `t6g2Writer` calls: `ModifyBook` → `books`; `ModifyBookFile`, `RepointBookFile` → `book_files`; `ModifyBookAuthors` → `authors`; any other method → the resource of the HEAD store method it wraps | "Writes found": per definition, each resource and the call that writes it |
+| `Writes` empty, the body writes nothing | `tasks.ReadOnly()`, with no declared reads | "Declared ReadOnly" |
 
-**R9, the schedule hook (plan rule, coined here).** `tasks.Definition` is opaque and `Common.Schedule` is set
+A definition HEAD runs only in an explicit live mode (`Writes` empty, `Preview` zero, a `library.write`/
+`files.write`/`db.migrate` capability; `internal/operations/registry/preview.go`, `PreviewSpec` comment) keeps that
+behaviour (rule 3): its native shell returns an error when `rc.Mode() != tasks.ModeLive` ("<kind>: preview not
+supported; start with mode live"). List those under "Live-only writer".
+
+**R9, the schedule hook (05-tasks §5T.8.2 conversion rule 4; list-function names coined here).** `tasks.Definition` is opaque and `Common.Schedule` is set
 at construction (05-tasks §5T.3.1, §5T.3.8), while the 38 schedules are declared later, in
 `internal/books/schedules.go` (F5-14), and attached by the flip. So every list function this PR adds takes
-`sched func(tasks.Kind) *tasks.Schedule` and sets `Common.Schedule: sched(<kind>)` on every kind it builds
+its owner-declared dependencies (rule R10) and `sched func(tasks.Kind) *tasks.Schedule` and sets `Common.Schedule: sched(<kind>)` on every kind it builds
 (a nil `sched` means no schedule; tests pass nil). No conversion declares a schedule itself.
 
 **R8, tests (05-tasks §5T.8.2 "Gate" column; §5T.9 last row).** One new test file per PR (name in the
@@ -229,17 +241,62 @@ them, plus one table test that asserts each kind's name, `Title`, `Resume`, para
 `Effects` against the HEAD definition it came from (built from HEAD's `xxxDef()` in the same test, so a
 drift fails). HEAD's existing tests stay unchanged and green.
 
+**R10, writer and stores only through the shell (05-tasks §5T.8.2 conversion rule 3; §5T.8.4 "The
+dark-conversion ratchet"; plan §(l) items 4 and 5).** A dark conversion keeps HEAD's behaviour, and the shared
+core reaches its writer and its stores **only through what its shell hands it**. That is what lets `tasklint`'s
+`writer-bypass` and `store-capture` pass over the converted files once this PR deletes its exemption entry file.
+For every core this PR creates:
+
+1. **No captured store.** The core reads no store, database handle, HEAD writer or service from a receiver field,
+   a package variable or a closure it captures (`p.db`, `p.store`, `s.store`, a global store, a dependency reached
+   through the receiver). Everything it reads or writes arrives through its arguments: the params, and two env
+   fields added to rule R2's env struct, `Writer t6g2Writer` and `Store t6g2Store`. A helper the core calls that
+   touches a store gets a new variant taking the env's `Writer`/`Store` (name coined per helper: `<helper>Via`);
+   the existing helper is not re-signed (rule R2 item 4).
+2. **The typed-writer interface** `t6g2Writer` (name coined here; plan §(l) item 4: a consumer interface declared in
+   the converted package, with a fake in its tests) holds exactly the write methods this PR's cores call. Where
+   HEAD's body already wrote through `pkg/ops.Writer`, copy those methods with their signatures (`ModifyBook`,
+   `ModifyBookFile`, `RepointBookFile`, `ModifyBookAuthors`, `Effect`); a write HEAD's body made directly on a store
+   becomes a method with the name and signature of the HEAD store method it calls. One interface per package for
+   this PR; methods are only added, never re-signed.
+3. **The store interface** `t6g2Store` (name coined here) holds exactly the **read** methods the cores call, with
+   HEAD's signatures. A method that writes is never on it.
+4. **The native shell** sets `env.Writer = deps.NewWriter(rc.Writer())` and `env.Store = deps.Store`, where
+   `deps` is the owner-declared dependency value this PR's list function takes (rule R9; 05-tasks §5T.8.4
+   `store-capture`: "through `tasks.Writer` (`rc.Writer()`) or the dependencies its owner declared for it"), with
+   fields `Store t6g2Store` and `NewWriter func(tasks.Writer) t6g2Writer`. Nothing passes it in production before
+   F5-18, which wires `internal/books/writer` behind `NewWriter` (plan §(l) item 4); tests pass a recording fake.
+5. **HEAD's shell** sets `env.Writer` to an adapter of the same interface over HEAD's writer (name coined here:
+   `head` + the interface name): each method calls exactly what HEAD's body called, in the same order with the same
+   arguments (the reporter's v3 writer where HEAD used one, else the HEAD store method), and `env.Store` to the
+   store HEAD's body read. HEAD's existing tests, unchanged and green, prove the adapter kept HEAD's behaviour.
+6. The other body changes stay the three of 05-tasks §5T.8.2. Rule R10 changes where a write is reached from,
+   never what is written or in which order.
+
+STOP and report (never an allow directive, a `//nolint`, or a line added to any entry file) if a HEAD write cannot
+be expressed as an interface method without changing what HEAD writes or its order; if `tasklint` still reports
+`writer-bypass` or `store-capture` in a file this PR converts; or if it reports one in a file this row does not
+own (that file is another row's; name it in the report).
+
+**The exemption entry (05-tasks §5T.8.4; plan §(l) item 5).** F2-17 created
+`internal/books/testdata/tasklint_exempt.d/F5-07.txt`, listing the books files this row converts. `tasklint`
+reads the directory as one union whose ratchet only shrinks (a PR that adds a file or a line fails). This PR
+deletes **that file only**, in the same PR as the conversion, and touches no other entry file: its same-wave
+siblings delete their own.
+
 ## Files
 
 | Action | Path |
 |---|---|
 | modify | each file of your group (shared core + v2 shell + native shell per definition, rule R2) |
-| create | `internal/plugins/maintenance/kinds_t6_g2.go` (name coined here): `func (p *Plugin) t6g2Kinds(sched func(tasks.Kind) *tasks.Schedule) []tasks.Definition` returning every native kind of this group, in file order, each with `Schedule: sched(kind)` (rule R9). Nothing calls it in production; F5-18 does |
-| create | `internal/plugins/maintenance/kinds_t6_g2_test.go` (name coined here): rule R8's conformance and field-parity tests |
+| create | `internal/plugins/maintenance/kinds_t6_g2.go` (name coined here): `func (p *Plugin) t6g2Kinds(deps t6g2Deps, sched func(tasks.Kind) *tasks.Schedule) []tasks.Definition` returning every native kind of this group, in file order, each with `Schedule: sched(kind)` (rule R9), and the group's `t6g2Writer`, `t6g2Store` and `t6g2Deps` (rule R10). Nothing calls it in production; F5-18 does |
+| create | `internal/plugins/maintenance/kinds_t6_g2_test.go` (name coined here): rule R8's conformance and field-parity tests and rule R10's shell test, with the recording fakes of `t6g2Writer` and `t6g2Store` |
+| delete | `internal/books/testdata/tasklint_exempt.d/F5-07.txt` (this row's exemption entry file; rule R10) |
 | create | one `changelog.d/` fragment |
 
 Do **not** modify `plugin.go`, any `*_fixer.go`, `repairs_ops.go`, `db.go`, `db_census_exact.go`,
-`throttle_reset.go`, any other group's file, `internal/server`, `internal/opscatalog` or `main.go`.
+`throttle_reset.go`, any other group's file, any other file under `internal/books/testdata/tasklint_exempt.d/`,
+`internal/server`, `internal/opscatalog` or `main.go`.
 Package-level helper types shared across groups are forbidden (they would collide with siblings): every new
 identifier carries this group's file or `t6g2` prefix.
 
@@ -256,14 +313,24 @@ type <runFunc>Env struct {                 // only the fields the body uses (rul
 	SaveCheckpoint func(v any) error         // only if HEAD checkpoints
 	LoadCheckpoint func(v any) (bool, error) // only if HEAD restores
 	Items          func(n int, fn func(ctx context.Context, i int) error) error // only if HEAD loops via RunItems
+	Writer         t6g2Writer // rule R10: the only write path
+	Store          t6g2Store  // rule R10: the only read path
+}
+
+// once per group, in kinds_t6_g2.go (rule R10; names coined here)
+type t6g2Writer interface{ /* exactly the write methods the group's cores call */ }
+type t6g2Store interface{ /* exactly the read methods the group's cores call */ }
+type t6g2Deps struct {
+	Store     t6g2Store
+	NewWriter func(tasks.Writer) t6g2Writer // F5-18: internal/books/writer over rc.Writer()
 }
 
 func (p *Plugin) <runFunc>Core(ctx context.Context, params <Params>, env <runFunc>Env) (<Result>, error)
 
-func (p *Plugin) <name>Kind(sched *tasks.Schedule) tasks.Definition {   // Common.Schedule = sched (rule R9)
+func (p *Plugin) <name>Kind(deps t6g2Deps, sched *tasks.Schedule) tasks.Definition {   // Common.Schedule = sched (rule R9)
 	return tasks.Task(<name>Kind, tasks.TaskSpec[<NativeParams>, <Result>]{
 		Common: tasks.Common{ /* rules R5–R7 */ },
-		Run: func(rc *tasks.RC, in <NativeParams>) (<Result>, error) { /* rule R2 item 3 */ },
+		Run: func(rc *tasks.RC, in <NativeParams>) (<Result>, error) { /* rule R2 item 3; env.Writer = deps.NewWriter(rc.Writer()), env.Store = deps.Store (R10) */ },
 	})
 }
 ```
@@ -275,14 +342,18 @@ wrap or rename it.
 
 ## TDD: tests to write first
 
-In `kinds_t6_g2_test.go` (both names coined here):
+In `kinds_t6_g2_test.go` (all three names coined here):
 
-- `TestT6G2Kinds_Conformance`: `taskstest.Conformance(t, (&Plugin{}).t6g2Kinds(nil)...)` (05-tasks §5T.9
+- `TestT6G2Kinds_Conformance`: `taskstest.Conformance(t, (&Plugin{}).t6g2Kinds(fakeT6G2Deps(t), nil)...)` (05-tasks §5T.9
   last row; build the `Plugin` the way the package's existing tests build one).
 - `TestT6G2Kinds_MatchHEADDefs`: a table over every converted definition: the native kind equals
   `"books." + HEAD's ID`, `Title` equals HEAD's `DisplayName`, the resume policy maps by rule R5, the
   parallelism string is `fixed(n): …` / `sequential: …` / `cpu` per rule R4, and the `Effects` class is
   rule R7's row. Build HEAD's def with its existing `xxxDef()` method in the same test.
+- `TestT6G2Kinds_WritesThroughShell`: for every kind of the group whose `Effects` declare writes, one `ModeLive`
+  run on a `taskstest` fake `RC` with `fakeT6G2Deps(t)` shows `NewWriter` called with that run's `rc.Writer()`, and
+  every write the run makes reaching the recording `t6g2Writer` (rule R10). `fakeT6G2Deps` is a test helper in the
+  same file (name coined here).
 
 Write them first, watch them fail to compile, then convert.
 
@@ -292,11 +363,13 @@ Write them first, watch them fail to compile, then convert.
 2. For each definition, in file order: apply rule R2 (core + v2 shell, HEAD tests still green), then add the
    native shell with rules R3–R7. Run `go test ./internal/plugins/maintenance/ -run '<that def's existing
    tests>' -count=1` after each file.
-3. Create `kinds_t6_g2.go` and the two tests.
-4. Fill the PR description: the `old ID ==> books.<ID>` list, and rule R5/R7's lists ("Dropped HEAD
+3. Create `kinds_t6_g2.go` and the three tests.
+4. `git rm internal/books/testdata/tasklint_exempt.d/F5-07.txt`, then run the acceptance block's `tasklint` line: it
+   must pass with this group's files no longer exempt (rule R10's STOP if not).
+5. Fill the PR description: the `old ID ==> books.<ID>` list, and rule R5/R7's lists ("Dropped HEAD
    fields", "Write set widened from HEAD's undeclared", "Declared ReadOnly", "Live-only writer"), each with
-   counts. Exact counts: `converted: 13/13`.
-5. Run the acceptance block; open the PR.
+   counts, and "exemption entry deleted: internal/books/testdata/tasklint_exempt.d/F5-07.txt". Exact counts: `converted: 13/13`.
+6. Run the acceptance block; open the PR.
 
 ## Acceptance (commands and expected output)
 
@@ -304,18 +377,22 @@ Write them first, watch them fail to compile, then convert.
 go build ./...                                                                  # exit 0
 go vet ./internal/plugins/maintenance/                                          # exit 0
 go test ./internal/plugins/maintenance/ -count=1 -short                         # ok
-go test ./internal/plugins/maintenance/ -run 'TestT6G2Kinds_' -count=1 -v | grep -c '^--- PASS'   # 2
+go test ./internal/plugins/maintenance/ -run 'TestT6G2Kinds_' -count=1 -v | grep -c '^--- PASS'   # 3
 grep -c 'books\.maintenance\.' internal/plugins/maintenance/kinds_t6_g2.go internal/plugins/maintenance/backfill.go internal/plugins/maintenance/book_atpath_index.go internal/plugins/maintenance/book_hash_index_repair.go internal/plugins/maintenance/book_shape_report.go internal/plugins/maintenance/bookfile_acoustid_index_repair.go internal/plugins/maintenance/booksig_recovery_audit.go internal/plugins/maintenance/booksig_sidecar_migrate.go internal/plugins/maintenance/build_folder_book_files.go internal/plugins/maintenance/chapters_backfill.go | awk -F: '{s+=$2} END {print (s>=13)}'   # 1
-git diff --name-only origin/main | grep -v '^changelog.d/' | sort                 # exactly your group's files + the two new files
+git diff --name-only origin/main | grep -v '^changelog.d/' | sort                 # exactly your group's files + the two new files + the deleted entry file
+test ! -e internal/books/testdata/tasklint_exempt.d/F5-07.txt && echo deleted       # deleted
+git diff --name-only --diff-filter=D origin/main -- internal/books/testdata/tasklint_exempt.d/   # internal/books/testdata/tasklint_exempt.d/F5-07.txt (only)
+git diff --name-only --diff-filter=AMR origin/main -- internal/books/testdata/tasklint_exempt.d/ | wc -l   # 0
+go test ./internal/books/ -count=1 -run "$(grep -o '^func Test[A-Za-z0-9_]*' internal/books/tasklint_test.go | sed 's/^func //' | paste -sd'|')"   # ok (tasklint over the union; your files no longer exempt)
 git diff --name-only origin/main | grep -c 'plugin.go\|_fixer.go\|repairs_ops.go\|^main.go\|internal/server/\|internal/opscatalog/'   # 0
 git grep -n 'mediacore/tasks"' -- main.go internal/opscatalog/ | wc -l          # 0 (still dark)
 make ci                                                                         # exit 0
 ```
 
-`make ci` includes the oplint/tasklint gate. If `tasklint` (landed by F5-17) reports a finding inside a
-native shell you wrote, fix the shell; if it reports `writer-bypass` or `store-in-deps` on the **shared core**
-(HEAD's body, unchanged), STOP and report: whether converted bodies must move behind `tasks.Writer` in the
-dark PRs is not settled by the spec (Planner notes).
+`make ci` runs `tasklint` (F2-17) over core and books' task packages. With this row's entry file deleted, a
+`writer-bypass` or `store-capture` finding in one of your files is a failure: fix it by rule R10, never with an
+allow directive or an entry line (the ratchet fails a PR that adds one). A finding in another row's file is rule
+R10's STOP.
 
 ## Out of scope
 
@@ -347,22 +424,3 @@ production reads the native kinds.
   `BLOCKED: <n> — <list>` (CLAUDE.md).
 
 Commit message: `refactor(maintenance): T6 group 2 definitions get native books kinds (dark)`.
-
-## Planner notes
-
-- **Effects for HEAD's undeclared write sets (rule R7) is a plan rule, not spec text.** 05-tasks requires
-  `Effects` but gives no mapping for HEAD's empty `Writes`, which most maintenance definitions have. The rule
-  keeps HEAD's preview semantics; its "widened" rows serialize those kinds against other `books/books`
-  writers once registered (a dispatch change F5-18 ships). The review loop should confirm or replace it
-  before W26 dispatches.
-- **The shared-core / two-shells pattern (rule R2) is a plan rule.** The spec says the converted
-  definitions run "in the parity suites against HEAD's behaviour, while the production build still runs
-  HEAD's engine" but not how one body serves both; R2 avoids a second copy of each body during the dark
-  window.
-- **tasklint vs. dark conversions.** F5-17 lands tasklint (W24) before this wave; its `writer-bypass` and
-  `store-in-deps` rules, re-rooted on `tasks`, would flag every converted body that writes through
-  `internal/database` directly. 05-tasks §5T.8.2 lists only three body changes, so the brief STOPs rather
-  than adding allow directives.
-- **Group boundaries are this brief's computation at `f7ac5b11e`** (inventory placeholder `<file-group-2>`);
-  the row's files should read: `internal/plugins/maintenance/backfill.go`, `internal/plugins/maintenance/book_atpath_index.go`, `internal/plugins/maintenance/book_hash_index_repair.go`, `internal/plugins/maintenance/book_shape_report.go`, `internal/plugins/maintenance/bookfile_acoustid_index_repair.go`, `internal/plugins/maintenance/booksig_recovery_audit.go`, `internal/plugins/maintenance/booksig_sidecar_migrate.go`, `internal/plugins/maintenance/build_folder_book_files.go`, `internal/plugins/maintenance/chapters_backfill.go`, plus
-  the two new files.

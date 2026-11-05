@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-04-events-bus-catalog-backup-journal.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 927dc665-9438-462c-a5d9-a0e41b62bdb3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -39,7 +39,9 @@ Confirm in the tracking issue that OWNER-03 recorded the R1 release and deploy. 
 2. Create `github.com/falkcorp/mediacore/backup/journal` (L4; imports `entity`, `storage`, `storage/restorejournal`
    only): `Kind` and its constants, `Revocation`, `Head`, `ServedBoot`, `RevocationJournal`, `RestoreKind`,
    `RestoreContext`, `RestoreHook`, the file-backed journal implementation and `StorageSpec` (the `c/backup/` spec the
-   kernel registers from the identity flip), so `auth` and `rbac` (F4-01, F4-02) can import them without a cycle.
+   kernel registers from the identity flip), so `auth` and `rbac` (F4-01, F4-02) can import them without a cycle. The
+   file-backed implementation and `StorageSpec` are this row's, not F8-01's: F4-01's `rbac.Deps.Revocations` is this
+   package's `RevocationJournal`, and F4-08 registers the `c/backup/` spec at boot.
 3. `core/kernel/events.go`: build one `Bus` per App and validate the catalog at registration, **dark**: no module
    registers a topic or subscription before F4-08, and the kernel opens the bus only when F4-08 wires it.
 
@@ -189,10 +191,3 @@ feat(core/events): topic catalog and bus; backup/journal revocation types (dark)
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
-
-## Planner notes
-
-- The row title and 04 §8.1 name only the journal **types**, but 05-backup §5B.3.2 puts the file-backed implementation
-  and `StorageSpec` in the same package, and `auth`/`rbac` need a working `RevocationJournal` from the identity flip
-  (06 §6.4.10 F4 row). This brief includes them; if the lead prefers them at F8-01, F4-01/F4-02 need a fake and F4-08
-  a real one from somewhere.

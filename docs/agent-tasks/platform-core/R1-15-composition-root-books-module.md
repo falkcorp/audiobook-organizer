@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-15-composition-root-books-module.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 3f22576e-6cf0-4db5-afca-5c9f763dca9c -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-15` |
 | Tier | **T4** (Opus / xhigh): ABO's process entry point changes; listeners, stop order and process-global installs move together |
-| Release / wave | R1 / W13 |
+| Release / wave | R1 / W12 |
 | Depends on | R1-13, R1-14, R1-10, R1-09, R1-07 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 06 §6.11.1, §6.4.10 R1 (app.Options R1 fields, R1Values), §6.5.2 (stop order); 05-health §5H.4 (core.shutdown.budget); 05-metrics §13 items 1-2; 05-logging §11 items 1, 4; 05-config §1.12.1 (R1Values); 05-rbac §4.9, §6.1 (atom table is books code); 04 §2.4 (internal/books); 09 §9.4 R1 Content: runtime |
 | Branch | `agent/platform-core-r1-15-composition-root-books-module` |
@@ -21,6 +21,8 @@
 - `main.go`
 - `cmd/root.go`
 - `internal/books/`
+- `core/app/`
+- `core/coretest/metrics.go`
 - `internal/server/server.go`
 - `internal/server/server_lifecycle.go`
 - `internal/telemetry/telemetry.go`
@@ -29,6 +31,7 @@
 - `internal/metrics/`
 - `internal/operations/registry/register.go`
 - `internal/updater/register.go`
+- `internal/telemetrypolicy/series_contract_test.go` (moved there by R1-10 from `internal/telemetry/contract/`)
 - `internal/arch/layering_test.go`
 
 ## START HERE
@@ -67,7 +70,8 @@ In the same PR, because they move together (row notes; 05-metrics §13 items 1�
   `core.shutdown.budget` = 25 s (8 s in a container when unset; 05-health §5H.4), below the unit's new stop
   timeouts (R1-27) and `KillMode=mixed`. `app.Options.R1Values`: ABO's `main` reads its effective config at boot
   (UI-saved blob values included) and passes the listener and perimeter values, which the kernel calls once at
-  06 §6.5.2 start step 7 (05-config §1.12.1; 05-http-api §8.1 R1).
+  06 §6.5.2 start step 7 (05-config §1.12.1; 05-http-api §8.1 R1). Leave `R1Values.ShutdownBudget` at 0 (core's
+  default); R1-33 reads `ABO_CORE_SHUTDOWN_BUDGET` into it and sets the compose and plist stop timeouts.
 - **Process-global installs move to core**: `app.InstallProcessDefaults` (the logger, the OTel error handler, the
   meter and tracer providers and the propagator; 05-logging §3, §11 item 4) and the App's private registry as the
   served one: ABO's client_golang families (`internal/metrics`, the five `operations_*` families and the two
@@ -95,9 +99,26 @@ R1-18's, not this PR's.
   books' atom-table entry, built with no catalog.
 - `TestOnlyCompositionRootImportsModule` (06 §6.10): no package other than `.`, `cmd`, `internal/books` imports
   `mediacore/module` or `mediacore/app` (also the ABO guard's assertion from R1-01).
-- Series unchanged: `internal/telemetrypolicy`'s contract test now scrapes the **served** `Provider.Handler()`
-  (`TestContractScrapesServedHandler`, 05-metrics §12 paragraph) and its golden does not change;
-  `TestDeployReferencedSeriesServed` stays green.
+- Series unchanged: `internal/telemetrypolicy`'s contract test (`series_contract_test.go`) now scrapes the
+  **served** `Provider.Handler()` and its golden does not change; `TestDeployReferencedSeriesServed` stays green.
+  **This row owns three 05-metrics §6/§12 tests** (spec names copied exactly):
+  - `TestContractScrapesServedHandler` (in `internal/telemetrypolicy/series_contract_test.go`): the handler the
+    contract test scrapes is the one the legacy gin `/metrics` route serves (the kernel's `Router.Infra` mount
+    from F8).
+  - `TestABOMetricsGatherNoDuplicate` (in `internal/books/`; this row creates it, F2-03 extends it): the kernel
+    Provider together with ABO's real recorders on it (`app.InstallProcessDefaults`, ABO's legacy client_golang
+    families registered through `Registerer()`, `opsmetrics.Default()` while the package exists, books'
+    recorders); drive one legacy HTTP request on a sampled route through the production gin engine and, while ABO
+    records any, one AI call through a fake endpoint; `Gatherer().Gather()` returns **no error** and no family has
+    two owners (05-metrics §6). The task-run and core-route legs arrive with F2-03.
+  - `TestFamilyTaken_ThroughGlobalProvider` (05-metrics §12; in `core/app/`'s tests, next to
+    `InstallProcessDefaults`): after `app.InstallProcessDefaults`, an instrument created through
+    `otel.GetMeterProvider()` in another scope with a name a core `Scope` instrument holds → `ErrFamilyTaken`, a
+    no-op instrument, boot fails during boot and `metrics_family_taken` is raised after it; the identical
+    instrument created twice in one scope is one instrument.
+
+  05-metrics §6 builds these Providers through `coretest.MetricsProvider` (06 §6.4.8). No earlier row adds it: create
+  it in `core/coretest/metrics.go` (this row's file) and build the Providers through it.
 - Behaviour: the full Go suite, e2e and the ABS conformance suite pass unchanged; a `SIGTERM` stops within the
   budget in 06 §6.5.2's order (a kernel test with fake hooks records the order).
 
@@ -120,7 +141,10 @@ test ! -e internal/books && echo NEW                                   # expect 
 
 ## Steps
 
-1. Tests first (red): the three owned tests, the stop-order kernel test, `TestOnlyCompositionRootImportsModule`.
+1. Tests first (red): the six owned tests (`TestBooksMinCoreVersion`, `TestAtomTable_Golden`,
+   `TestManifest_SPermRoutesCarryAtomRequirement`, `TestABOMetricsGatherNoDuplicate`,
+   `TestFamilyTaken_ThroughGlobalProvider`, `TestContractScrapesServedHandler`), the stop-order kernel test,
+   `TestOnlyCompositionRootImportsModule`.
 2. `internal/books`: `Module(store)`, manifest (R1 fields), `Register` building `*server.Server` and calling
    `MountLegacy`; the atom table; explicit construction replacing the two `init()` registrations; add
    `"internal/books": 6` to `layerOf`.
@@ -148,6 +172,9 @@ test ! -e internal/books && echo NEW                                   # expect 
 ```bash
 go test ./internal/books/ -run 'TestBooksMinCoreVersion|TestAtomTable_Golden|TestOnlyCompositionRootImportsModule' -count=1 -v   # expect PASS
 go test ./internal/books/ -run TestManifest_SPermRoutesCarryAtomRequirement -count=1 -v    # expect PASS
+go test ./internal/books/ -run TestABOMetricsGatherNoDuplicate -count=1 -v            # expect PASS
+go test ./internal/telemetrypolicy/ -run TestContractScrapesServedHandler -count=1 -v  # expect PASS
+go -C core test ./app/ -run TestFamilyTaken_ThroughGlobalProvider -count=1 -v          # expect PASS
 go test ./internal/telemetrypolicy/ -count=1                                         # expect ok, golden unchanged
 git grep -n 'otel.Set\|prometheus.MustRegister\|DefaultRegisterer' -- internal/telemetry internal/metrics | grep -v _test | wc -l   # expect 0
 make build-api && ./audiobook-organizer serve --help >/dev/null && echo BOOTS_HELP     # expect BOOTS_HELP
@@ -175,12 +202,9 @@ Revert the PR (one PR, so `main` and `internal/books` go back together). No stor
 - **No `go.work`.** Never run `go work init` in a checkout or worktree; the genproto probe runs only in a throwaway copy under `mktemp -d` (03 §3.2 item 1).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
 
+
 ## Planner notes
 
-- Missing file in the row: making the served handler the App's `Provider.Handler()` requires
-  `internal/telemetrypolicy`'s contract test to scrape that handler (`TestContractScrapesServedHandler`,
-  05-metrics §6, §12); `internal/telemetrypolicy/` is not in R1-15's files. R1-15 is alone in W13, so no collision;
-  add it to the row.
 - 05-logging §11 item 1 is split between this row (`app.InstallProcessDefaults`, with item 4) and R1-18 (the
   deletions, the activity tap, file output). The inventory cites item 1 for both rows; the brief draws the line
   explicitly so the two PRs do not both claim the second `slog.SetDefault`.

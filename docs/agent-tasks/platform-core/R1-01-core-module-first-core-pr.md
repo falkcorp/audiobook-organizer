@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-01-core-module-first-core-pr.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c9068651-3412-486f-b5f9-ac087f228837 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -42,6 +42,7 @@
 - `.github/dependabot.yml`
 - `.github/workflows/prerelease.yml`
 - `ci/gates.txt`
+- `scripts/ci/run_gates.py`
 
 ## START HERE
 
@@ -158,12 +159,17 @@ grep -n '^ci:' Makefile                                              # expect 78
      `archtest.Layering(t, archtest.LayerSpec{...})` (03 §3.5.1 item 3; the field set of `LayerSpec` is yours: module
      path, `layerOf`, `allowed`, mapping of foreign prefixes, ratio floor, in-module control edge, tag sets). Also
      `TestCoreImportsOnlyCore` and `TestNoAppRequire` in `core/archtest` (03 R1(a)(b); the allowlist of third-party
-     paths is empty today and lives in one file). The engine's self-test on a synthetic graph (I7) is in
-     `core/archtest`. The tag-set list is one exported value (03 §3.5.1 item 4: default, `bench`, `integration`,
-     `pprof`, `race`, `native_taglib`, `embed_frontend fts5 native_taglib`, `GOOS=darwin CGO_ENABLED=0` with
-     `embed_frontend`, and `GOOS=windows` for `./cmd/mtls-bridge` only).
+     paths is empty today and lives in one file, `core/archtest/thirdparty_allow.txt`, which R1-10 and R1-12 extend
+     with their pinned modules). The engine's self-test on a synthetic graph (I7) is in
+     `core/archtest`. The tag-set list is one exported value in its own file, `core/archtest/tags.go` (03 §3.5.1 item 4: default,
+     `bench`, `integration`, `pprof`, `race`, `native_taglib`, `embed_frontend fts5 native_taglib`,
+     `GOOS=darwin CGO_ENABLED=0` with `embed_frontend`, and `GOOS=windows` for `./cmd/mtls-bridge` only); R1-28 adds
+     the `unitlifecycle` tag there.
 4. **Core guard.** `core/internal/archtest_layers_test.go` (03 §3.5.1 item 2): `archtest.Layering` with 03 R4's
-   layer table and its own ratio floor; control per I7.
+   **whole** layer table (every package R4 names, L0 to L9, deferred packages included, the sub-package rule, the
+   test-support packages, and the `internal/<capability>http` pattern at L6), its own `layerOf` and its own ratio
+   floor; control per I7. Because the table is complete from this PR, a later row that creates a core package R4
+   names edits no shared guard file.
 5. **ABO guard redesign** (`internal/arch/layering_test.go`, I6): keep `layerOf` and `allowed`; replace the
    floor and the control; the loader keeps `github.com/falkcorp/mediacore/` imports and the classifier maps them;
    add the classifier positive control and the `module`/`app` import assertion. The in-module control edge
@@ -208,7 +214,7 @@ grep -n '^ci:' Makefile                                              # expect 78
     `.github/dependabot.yml`: the gomod entry gets `directories: ["/", "/core"]` under the existing
     `multi-ecosystem-group: dependencies` (03 §3.2 item 6). `ci/gates.txt`: register `genproto-exclude-root`,
     `module-skew` and the core layering gate with job `core-job`; add `"core-job"` to `JOBS` in
-    `scripts/ci/run_gates.py` (not in the row's file list; see Planner notes). R1-02 extends
+    `scripts/ci/run_gates.py` (its `JOBS` set is `{"own-job", "go-suite"}` at the plan's base). R1-02 extends
     `test_run_gates.py` to validate `core-job` rows.
 12. **The R1 freeze** (09 §9.2.1). In `.github/workflows/prerelease.yml`: add to the workflow-level `env:` block
 
@@ -218,7 +224,7 @@ grep -n '^ci:' Makefile                                              # expect 78
       RELEASE_FREEZE: 'R1'
     ```
 
-    (variable name coined here), change the "Promote to the next minor release" step's condition to
+    (the plan's one name for the toggle; R1-31, F3-07 and R2-02 use exactly `RELEASE_FREEZE`), change the "Promote to the next minor release" step's condition to
     `if: steps.rc.outputs.at_threshold == 'true' && env.RELEASE_FREEZE == ''`, and add right after it a step
     "Report the release freeze" with
     `if: steps.rc.outputs.at_threshold == 'true' && env.RELEASE_FREEZE != ''` that runs
@@ -300,15 +306,3 @@ R1-31's one-line change is the rollback for it.
   Apply in the same PR the `go fix` modernizers core's `fix-check` requires in the moved files
   (`go -C core fix ./...`, 04 §2.2).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
-
-## Planner notes
-
-- Missing file in the row: `scripts/ci/run_gates.py` must learn the `core-job` job value (its `JOBS` set is
-  `{"own-job", "go-suite"}` at `f7ac5b11e`) before `ci/gates.txt` can carry the core layering gate, which 09's R1
-  classification table registers with `core-job`. Add it to R1-01's files; R1-02 (which owns
-  `scripts/tests/test_run_gates.py`) then validates `core-job` rows. No same-wave collision (R1-01 is alone in W04).
-- The freeze toggle's form is coined here (`RELEASE_FREEZE` in `prerelease.yml`'s workflow `env:`); R1-31, F3-07
-  and R2-02 must use the same name.
-- `TestCoreHoldsNoAppKeyNames` reads op IDs "from the source side of books' kind-rename map" (03 R1(c)), which
-  does not exist until F5; the brief uses `internal/server/testdata/op_ids.golden` (04 §2.1 (h) names it) until
-  then. A 03/04 line saying so would remove the ambiguity.

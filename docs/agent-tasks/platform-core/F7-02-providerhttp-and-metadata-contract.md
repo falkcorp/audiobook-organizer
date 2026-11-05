@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-02-providerhttp-and-metadata-contract.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 691c2fbf-fba4-4b6d-b8ca-dad283253f2b -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-02 |
 | Release | R2, flip label F7 (dark PR) |
 | Tier | **T3** (Opus / high): quota and throttle state with fail-closed reads; the egress guard is the SSRF boundary for every adapter |
-| Wave | W28 (beside F4-07, F5-13, F7-07, F9-02; file-disjoint). Runs inside an announced **move window** (04 key `F7 move internal/security/safehttp -> mediacore/integrations/providerhttp`) |
+| Wave | W28 (beside F2-16, F4-05, F5-15, F6-01, F6-02, F7-03, F7-06, F8-03; file-disjoint). Runs inside an announced **move window** (04 key `F7 move internal/security/safehttp -> mediacore/integrations/providerhttp`) |
 | Depends on | F7-01 (integrations registry: `Ref`, `Gate`, `Hold`, `Limits`, `Class`), F2-11 (F2's minimal `providerhttp` with `providerhttp.InterimHolds` and the `core.integrations.release-holds` registration) |
 | Spec | 05-metadata M2 (M2.1–M2.11: `Registry`, `GateStore`/`NativeGateStore`, `Client`, `Policy`, holds, breaker with probe lease, token bucket, daily quota with tiers and zone, egress guard, retry, redaction, `Classify`, the four HEAD defects it removes), M3 (M3.3 Go API: `Provider`, `Lookup`, `Caps`, `Adapter`, `Result`, `Chain`, `Cache`, `Cached`; M3.9 tests); 04 §8.1 F7, §3.4 (`internal/security/safehttp` row); 05-tasks §5T.8.2 (`core.integrations.release-holds` stays on its interim body until F7-09) |
 
@@ -73,9 +73,9 @@ Announce the move window one working day ahead naming the 04 row for `internal/s
 | create | `core/integrations/providerhttp/providerhttptest/` |
 | create | `core/integrations/metadata/` |
 | move (`git mv`) | `internal/security/safehttp/` → `core/integrations/providerhttp/` (as the egress dialer file(s)) |
-| modify | `internal/covers/` (`covers.go` import), `internal/metadata/` (`cover.go` import) |
+| modify | `internal/covers/covers.go` and `internal/metadata/cover.go` (the import line only: the two safehttp importers at the plan's base; touch no other file of either package) |
 | modify | `internal/arch/layering_test.go` (`internal/security/safehttp` key removed), `scripts/ci/short_test_weights.json` (only if it names the package) |
-| create (not in the row; see Planner notes) | `core/coretest/` files for `FakeProvider` and `ProviderHTTP` |
+| create | `core/coretest/provider.go` (`coretest.FakeProvider[Q, R]`, `coretest.ProviderHTTP(t)`; M3.9 puts both in `coretest`; this row owns this one file of `core/coretest/` in W28, F7-03 owns `ai.go`, F2-16 `tasks.go` and `harness.go`) |
 | create | one `changelog.d/` fragment (headerless) |
 
 ## Re-verify before editing (expected results at your base)
@@ -98,7 +98,8 @@ grep -n 'type Hold struct\|type Gate interface\|type Limits struct\|type Class u
 grep -n '"internal/security/safehttp"' internal/arch/layering_test.go
 ```
 
-STOP if grep 1 finds an importer other than the two named, if `providerhttp.Registry` already exists, or if F7-01's
+STOP if grep 1 finds an importer other than the two named (plan base: exactly `internal/covers/covers.go` and
+`internal/metadata/cover.go`, plus the `layerOf` key in `internal/arch/layering_test.go`), if `providerhttp.Registry` already exists, or if F7-01's
 types are missing.
 
 ## Steps
@@ -112,8 +113,8 @@ types are missing.
    says so, with the globals removed.
 5. `NativeGateStore` over `c/providerhttp/` with `Expect` where a counter is read-modify-written.
 6. The native release-holds body (Preview/Live) beside F2-11's interim body; F7-09 switches the registration.
-7. `providerhttptest.GateStoreSuite`; `integrations/metadata`'s chain and cache; `coretest.FakeProvider`,
-   `coretest.ProviderHTTP`.
+7. `providerhttptest.GateStoreSuite`; `integrations/metadata`'s chain and cache; `coretest.FakeProvider` and
+   `coretest.ProviderHTTP` in `core/coretest/provider.go` only.
 8. Layering key, headers, fragment, acceptance.
 
 ## Code contract (05-metadata M2.3 and M3.3, verbatim excerpts; copy the rest from the spec)
@@ -202,7 +203,3 @@ Revert the PR: safehttp returns to `internal/security/safehttp`; nothing else in
   of the PR must build.
 - `Chain`'s fan-out is bounded (`TestChain_FanOutBounded`); never unbounded goroutines (CLAUDE.md).
 
-## Planner notes
-
-- **`core/coretest/` not in the row.** M3.9 places `coretest.FakeProvider[Q, R]` and `coretest.ProviderHTTP(t)` in
-  `coretest`. No other W28 row lists `core/coretest/`; add the two files to the row.

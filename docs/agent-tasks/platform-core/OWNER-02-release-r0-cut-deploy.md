@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-02-release-r0-cut-deploy.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c7905538-b04f-4d81-a543-689838294edc -->
 <!-- last-edited: 2026-11-05 -->
 

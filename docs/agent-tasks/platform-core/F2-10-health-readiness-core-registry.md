@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-10-health-readiness-core-registry.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 4019705c-90f7-4596-b9ca-155678fda298 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -32,12 +32,14 @@ No `go work init` (CLAUDE.md).
 Grow `github.com/falkcorp/mediacore/health` (R1 holds only the flight recorder there) with the **readiness core** of
 05-health §5H.3.1: `Status`, `ComponentID`, `Result`, `Check`, `Registry` (`Register`, `Ready`, `Live`, `Wait`; plus
 `Snapshot` only as far as `Ready` needs it internally), `Reporter`, `Reporters`, `ErrNotOwned`. The kernel builds one
-`Registry` per App and registers its own components **`core.storage`** and **`core.secrets`** kernel-side
-(`core/kernel/health.go`), so the tokens F3 raises (`storage_quarantine` with its `orphaned_refs` field on
+`Registry` per App and registers its own components **`core.storage`** and **`core.secrets`** kernel-side; this PR
+writes that kernel side in `core/kernel/health.go`, and the **boot call** that invokes it is F2-16's (the F2 wiring row
+owns `core/kernel/boot.go` and `kernel.go`), so the tokens F3 raises (`storage_quarantine` with its `orphaned_refs` field on
 `core.storage`; `secrets_undecryptable` and `secrets_keyring_not_exported` on `core.secrets`) have components to ride on
-from F3's first boot (IMPL-12). Bridge the registry's tokens into HEAD's **authenticated** token source (the split R1
-made, 05-health §5H.3.1 "The unauthenticated token set, and the route before F8") in
-`internal/server/handlers/system/handler.go`. No module handle (`Registrar.Health`, `Deps.Health`) lands before F5;
+from F3's first boot (IMPL-12). Bridge the registry's tokens into HEAD's **authenticated** token source over R1-24's token
+path (the split R1 made, 05-health §5H.3.1 "The unauthenticated token set, and the route before F8") in
+`internal/server/handlers/system/handler.go`, and extend R0-06's `TestHealth_UnauthenticatedTokenSetGolden` (in
+`internal/server/handlers/system/health_tokens_test.go`) with the F2 cells. No module handle (`Registrar.Health`, `Deps.Health`) lands before F5;
 probes, `/livez`, `/readyz`, `/api/core/v1/health` and the other components land at F8 (05-health §5H.10).
 
 ## Spec to read first
@@ -55,22 +57,25 @@ grep -rn 'type ComponentID ' core/health/ | wc -l                    # 0 (this P
 test ! -e core/health/registry.go && echo absent                     # "absent"
 grep -n 'type DegradedSource interface' internal/server/handlers/system/handler.go   # 1 hit at f7ac5b11e (HEAD's source)
 grep -n 'getDegraded' internal/server/handlers/system/handler.go | wc -l             # 6 at f7ac5b11e; R1 splits it (count changes)
-# R1's split: how core-raised posture tokens (storage_checkpoint_*, factory_reset_*) reach the authenticated field
-grep -rn 'storage_checkpoint_open' core/ internal/server/ | grep -v _test | head -5   # must show the R1 path, else STOP
+# R1-24's split: how core-raised posture tokens (storage_checkpoint_*, factory_reset_*) reach the authenticated field
+grep -rn 'storage_checkpoint_open' core/ internal/server/ | grep -v _test | head -5   # must show the R1-24 path, else STOP
+grep -c 'func TestHealth_UnauthenticatedTokenSetGolden' internal/server/handlers/system/health_tokens_test.go   # 1 (R0-06), else STOP
 ```
 
 **STOP rule for the bridge.** 05-health says R1 split HEAD's `getDegraded` source in two and that core's R1 posture
 tokens (`storage_checkpoint_open`, `factory_reset_failed`, …) already travel to the authenticated `degraded` field of
-`GET /api/v1/system/status`. Find that path with the last grep. The registry's tokens must use **the same path**. If no
+`GET /api/v1/system/status`; R1-24 built that path (the kernel's token source, injected by `internal/books/module.go`).
+Find it with the `storage_checkpoint_open` grep. The registry's tokens must use **the same path**. If no
 such path exists at your base (core tokens do not reach the handler), STOP and report: this PR must not invent a new
 app-level member (06 §6.4.10: no `app` member at F2).
 
 ## Files
 
-Create: `core/health/registry.go`, `core/health/registry_test.go`, `core/health/reporter.go`, `core/kernel/health.go`.
-Modify: `internal/server/handlers/system/handler.go` (the bridge only). Tests for the bridge go in a new
-`internal/server/handlers/system/health_registry_tokens_test.go` (name coined here; see planner note). One call from the
-kernel's boot sequence into `core/kernel/health.go` (one line; say so in the PR body).
+Create: `core/health/registry.go`, `core/health/registry_test.go`, `core/health/reporter.go`, `core/kernel/health.go`
+(+ its test `core/kernel/health_test.go`).
+Modify: `internal/server/handlers/system/handler.go` (the bridge only) and
+`internal/server/handlers/system/health_tokens_test.go` (R0-06's table: add the F2 cells; R1-24's cells stay). No boot
+file: the call from the kernel's boot sequence into `core/kernel/health.go` is F2-16's.
 
 ## Code contract
 
@@ -94,7 +99,8 @@ Kernel (`core/kernel/health.go`), values chosen here because the spec states onl
 | `core.storage` | `Critical: true`, `Readiness: true`, `Probe`: a cheap engine ping on the kernel's open store (05-health §5H.10: replaces `CountAuthors`) | the probe's result at `Register` |
 | `core.secrets` | `Critical: false`, `Readiness: false`, `Probe: nil` (push-only) | `Result{Status: StatusUp, At: now}`; the kernel keeps the `Reporter` for F3-03's `secrets` to raise its tokens |
 
-The kernel keeps both `Reporter`s and the `*health.Registry` on its struct for later phases (the executor's `Ready` wait,
+The kernel-side function (name coined here, e.g. `buildHealth(store) (*health.Registry, kernelReporters, error)`) returns
+the `*health.Registry` and both `Reporter`s; F2-16 calls it at boot and keeps them on the kernel for later phases (the executor's `Ready` wait,
 F3's storage and secrets tokens). It exposes nothing on `app.App`.
 
 Bridge (`handler.go`): through the R1 path found above, every component whose current `Result.Reason` is non-empty
@@ -110,12 +116,13 @@ unauthenticated `degraded` list (none of the registry's tokens before F8 is in t
 - `TestRegistry_RegisterDuplicateRefused`, `TestRegistry_ReadyTokens`, `TestRegistry_ReasonGrammar` (names coined here):
   duplicate ID → error; `Ready` lists `"<component>:<reason>"` for a Readiness component that is Down or Unknown; a
   `Reason` outside `[a-z0-9_]{1,40}` is refused (or clamped to a fixed token; pick one, document it).
-- `TestKernel_RegistersStorageAndSecretsComponents` (name coined here): a zero-module kernel boot has exactly
-  `core.storage` (Up after the ping) and `core.secrets` (Up) in its registry.
-- `TestHealth_UnauthenticatedTokenSetGolden` (05-health §5H.9): if it exists at your base, add a cell: raise
-  `storage_quarantine` on `core.storage` and `secrets_keyring_not_exported` on `core.secrets`; both appear on the
-  authenticated `GET /api/v1/system/status` field and on no public endpoint (`/health`). If it does not exist, write this
-  cell as `TestRegistryTokens_AuthenticatedOnly` (name coined here) in the new test file.
+- `TestKernel_RegistersStorageAndSecretsComponents` (name coined here, in `core/kernel/health_test.go`): the kernel-side
+  function over an in-memory store returns a registry with exactly `core.storage` (Up after the ping) and
+  `core.secrets` (Up). F2-16 adds the boot-path assertion.
+- `TestHealth_UnauthenticatedTokenSetGolden` (05-health §5H.9; R0-06 created it, R1-24 added its cells): add the F2
+  cells to its table: raise `storage_quarantine` on `core.storage` and `secrets_undecryptable` and
+  `secrets_keyring_not_exported` on `core.secrets`; all three appear on the authenticated `GET /api/v1/system/status`
+  field and none on `/health`'s unauthenticated `degraded` list.
 - `TestNoGlobals_Health` (05-health §5H.9): extend to `registry.go`/`reporter.go` if the test exists; else add it for
   `core/health`.
 
@@ -135,14 +142,14 @@ go test ./health/... ./kernel/... -race -count=1                                
 go test ./health/ -run TestRegistry_Wait_UnblocksOnUp -race -count=1 -v | grep -c '^--- PASS'   # 1
 cd ..
 go test ./internal/server/handlers/system/... -count=1                             # ok
-go test ./internal/server/handlers/system/ -run 'TestHealth_UnauthenticatedTokenSetGolden|TestRegistryTokens_AuthenticatedOnly' -count=1 -v | grep -c '^--- PASS'   # >=1
+go test ./internal/server/handlers/system/ -run 'TestHealth_UnauthenticatedTokenSetGolden' -count=1 -v | grep -c '^--- PASS: TestHealth_UnauthenticatedTokenSetGolden'   # 1
 make -C core ci                                                                    # exit 0
 make ci                                                                            # exit 0
 ```
 
 ## Out of scope
 
-Probes and the probe loop, `Snapshot` over HTTP, `/livez`, `/readyz`, `/api/core/v1/health`, other core components,
+The boot call (F2-16); probes and the probe loop, `Snapshot` over HTTP, `/livez`, `/readyz`, `/api/core/v1/health`, other core components,
 `Startup`, the watchdog ping, diagnostics (F8); `Registrar.Health`/`Deps.Health` and `books.memdb` (F5); raising any token
 (F3 onward).
 
@@ -160,13 +167,5 @@ also edited by R0-06, R1-11 and R1-24; rebase on the latest `main` before you st
 
 ## Planner notes
 
-- The bridge depends on an R1 mechanism that carries core-raised posture tokens to ABO's authenticated field (05-health
-  §5H.3.1, §5H.10 R1 row). No spec text names it, and 06 §6.4.10 gives F2 no `app` member, so the brief points the agent
-  at R1-24's implementation and STOPs if none exists. A spec line naming that path would remove the conditional.
-- The row's files list `handler.go` but no test file in `internal/server/handlers/system/`; the brief adds
-  `health_registry_tokens_test.go` when `TestHealth_UnauthenticatedTokenSetGolden` does not exist yet.
-- `TestHealth_UnauthenticatedTokenSetGolden` runs "in R1 and F2–F7" (05-health §5H.9) but no R1 row in the inventory owns
-  it.
 - The component settings for `core.storage` and `core.secrets` (Critical, Readiness, initial result) are chosen in this
   brief; the spec states only that both exist from F2.
-- Shared kernel boot file: see F2-07's planner note.

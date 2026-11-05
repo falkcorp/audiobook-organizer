@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-09-f7-flip-integrations.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 92d3d884-998e-42de-94e1-451dd63836fb -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,13 +10,14 @@
 | ID | F7-09 |
 | Release | R2, flip F7 (the flip PR) |
 | Tier | **T4** (Opus / xhigh–max): every flip PR is T4; this one moves about fifteen packages and carries M6 |
-| Wave | W34 (alone: the only PR of its wave touching `main.go`, `internal/server/` and books' registration). Runs inside an announced **move window** |
-| Depends on | F6-03, F7-02, F7-03, F7-04, F7-05, F7-06, F7-07, F7-08 |
+| Wave | W35 (alone: the only PR of its wave; it owns `main.go`, `internal/server/`, books' registration and the kernel and module wiring files in W35). Runs inside an announced **move window** |
+| Depends on | F6-03, F7-02, F7-03, F7-04, F7-05, F7-06, F7-07, F7-08, F7-10 |
+| Owns gate tests | `TestBooksIndexRebuiltAtCutover` (the search oracle; F7-08 landed its dark half) |
 | Spec | 09 §9.4 R2 flips table row F7, §9.6 rows 5, 15 and 16, §9.2.3 (M6), §9.2.7 (the AI renames); 03 §3.8 F7; 05-notify §10; 05-ai §8, §10; 05-library §5L.10; 05-metadata M1.10, M2.10, M3.10; 05-download §10; 05-storage §5S.3.8; 05-metrics §13 item 3; 05-tasks §5T.8.2 (the late-owner kinds `core.integrations.release-holds` and `core.ai.batch-poll`); 05-http-api §8.1 (F7 row: `/api/v1/plugins` deleted); 04 §8.1 F7, §8.3 (the `internal/plugin` deletion gate); 06 §6.4.10 F7 row |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. **One atomic PR** (09 §9.2.1): it wires the
 subsystems, registers M6, deletes what they replace and switches every first-party caller in the same PR. It merges
-alone in W34. The R2 freeze is on: do not touch `.github/workflows/prerelease.yml`.
+alone in W35. The R2 freeze is on: do not touch `.github/workflows/prerelease.yml`.
 
 ## START HERE (do this first, exactly)
 
@@ -33,11 +34,21 @@ Announce the move window one working day ahead, naming every 04 row listed under
 
 ## Goal (09 §9.4 R2 flips table, row F7; 06 §6.4.10 F7 row)
 
-1. **Wire** in the kernel and books: `Manifest.Requires`, `Manifest.Library`; `Registrar.Adapter`,
-   `Registrar.AICapability`, `Registrar.DerivedIndex`; `Deps.Storage.Indexes`, `Deps.Storage.Derived`, `Deps.Library`,
-   `Deps.HTTP`, `Deps.Integrations`, `Deps.Downloads`, `Deps.AI`, `Deps.Notify`; `app.Options.Adapters` in ABO's `main`
-   (`deluge.Descriptor()`, `notifymail.Descriptor()`, `webhook.Descriptor()`, the `core.openai_compat` adapter); books'
-   adapters `books.<id>` (metadata sources, whisper) and its 13 AI capabilities with the capability-ID map.
+1. **Wire** in the kernel and books: add the F7 members to `core/module/manifest.go`, `registrar.go` and `deps.go`
+   (`Manifest.Requires`, `Manifest.Library`; `Registrar.Adapter`, `Registrar.AICapability`, `Registrar.DerivedIndex`;
+   `Deps.Storage.Indexes`, `Deps.Storage.Derived`, `Deps.Library`, `Deps.HTTP`, `Deps.Integrations`, `Deps.Downloads`,
+   `Deps.AI`, `Deps.Notify`) and their boot calls in `core/kernel/boot.go` and `kernel.go`: the derived-index P7
+   validation (06 `ProblemDerivedIndex`) and the version/generation check, `Load` and the rebuild enqueue at Run start
+   step (3a) over F7-07's `storage.Derived`/`DerivedIndex` types (05-storage §5S.3.9 "When the hooks run"); the
+   `storage/index` `Opener` into `StorageHandles`; `app.Options.Adapters` in ABO's `main` (`deluge.Descriptor()`,
+   `notifymail.Descriptor()`, `webhook.Descriptor()`, the `core.openai_compat` adapter); books' adapters `books.<id>`
+   (metadata sources, whisper) and its 13 AI capabilities with the capability-ID map.
+   **Mount F7-10's instance routes** (`core/internal/integrationhttp`), handing its `HoldReleaser` the
+   `providerhttp.Registry`, and regenerate `core/openapi/core.json` and the client under
+   `core/web/packages/api-client/src/generated/`.
+   **Service registry** (06 §6.11.1 step 4): delete from `internal/books/services.go` the `ServiceDefs` of eventbus,
+   filesystem, searchindex, the ten AI services, batchpoller and the three metafetch services, their core packages now
+   wired by the kernel.
 2. **Register M6** in `internal/books/cutover/steps.go`, raise M7's target in the same PR and register a new M8 whose
    step ID names M6 as the last step it compacts after (03 §3.8; IMPL-13).
 3. **Delete** `internal/plugin` with no importer left (04 §8.3), the webhook plugin `internal/plugins/webhook`, and the
@@ -61,7 +72,10 @@ Announce the move window one working day ahead, naming every 04 row listed under
 8. **Late-owner kinds** (05-tasks §5T.8.2): `integrations/providerhttp` and `integrations/ai` extend the registrations of
    `core.integrations.release-holds` and `core.ai.batch-poll` with their native bodies; `providerhttp.InterimHolds`,
    `ai.InterimPoll`, books' two interim backends and `InterimBackends`' holds and poll fields deleted (06 §6.4.10).
-9. **Config**: the class-i `/api/v1/config` handlers deleted as the instance routes replace them.
+9. **Config**: the class-`i` `/api/v1/config` handlers and HEAD's test-connection handlers
+   (`handleDelugeTestConnection`, `/ai/test-connection`) deleted in this PR, as F7-10's instance routes replace them
+   (05-metadata M1.3 "When the routes land"); the SPA's integration settings and first-party callers switched to
+   `/api/core/v1/integrations/...`; no alias (D10).
 
 04 keys this PR moves: `F7 move internal/ai/aijobs -> mediacore/integrations/ai`; `F7 move internal/aidispatch ->
 mediacore/integrations/ai`; `F7 move internal/config -> mediacore/integrations/ai`; `F7 move internal/metadata ->
@@ -75,8 +89,9 @@ mediacore/integrations/download/deluge`; `F7 move internal/plugins/webhook -> me
 
 ## Invariants
 
-- **I1.** The search oracle `TestBooksIndexRebuiltAtCutover` passes end to end (rebuild at the native path, answers
-  equal R0's).
+- **I1.** The search oracle `TestBooksIndexRebuiltAtCutover`, owned here, passes end to end: F7-08's dark half (the
+  dirty set dropped, `library.bleve` untouched) plus the full rebuild at the native path, search served degraded
+  meanwhile, and the corpus' answers equal the R0 binary's (05-storage §5S.10).
 - **I2.** The webhook delivery test (`TestWebhook_JSONBodyGolden`, `TestWebhook_SignatureWithTimestamp`) and
   `TestWebhookMigration_SecretByValue` pass: a receiver keeps its secret and verifies core's signature.
 - **I3.** `TestRootsCutover_FromHEADFixture`, `TestIntegrationsMigration_EveryInstanceAndID`,
@@ -89,17 +104,59 @@ mediacore/integrations/download/deluge`; `F7 move internal/plugins/webhook -> me
 - **I6.** `TestCutoverRefusedByOlderBuilds` still refuses with the pre-freeze binary on a store migrated through M6;
   the crash matrix covers M6 and the new M8.
 - **I7.** Every first-party caller of a deleted route is switched in this PR (SPA, `scripts/`, skills, docs).
+- **I8.** A derived index declared with no hooks, hooks for an undeclared index, or a build kind not named
+  `<module>.derived.<name>.build` fails boot; `Load` never runs in `app.New` or `Describe`
+  (`TestDerivedIndexRebuildTriggers`).
 
 ## Files
 
-As the row lists: `main.go`, `internal/books/module.go`, `internal/books/cutover/steps.go`, `internal/books/store/`,
-`internal/plugin/`, `internal/plugins/webhook/`, `internal/server/`, `internal/ai/`, `internal/aidispatch/`,
-`internal/deluge/`, `internal/search/`, `internal/scanner/`, `internal/fileops/`, `internal/pathutil/`,
-`internal/watcher/`, `internal/metadata/`, `internal/config/`, `core/app/options.go`, `web/src/`,
-`deploy/grafana/dashboards/`, `deploy/prometheus/`, `.mockery.yaml`, `internal/arch/layering_test.go`,
-`scripts/ci/short_test_weights.json`, and one `changelog.d/` fragment. **Plus the importers outside those paths that
-the re-verify block finds** (see Planner notes): the PR does not build while any importer of a moved or deleted
-package remains (04 §8.3).
+| Group | Paths |
+|---|---|
+| wiring (this PR owns them in W35) | `main.go`, `internal/books/module.go`, `internal/books/services.go`, `core/kernel/boot.go`, `core/kernel/kernel.go`, `core/module/manifest.go`, `core/module/registrar.go`, `core/module/deps.go`, `core/app/options.go` |
+| generated | `core/openapi/core.json`, `core/web/packages/api-client/src/generated/` |
+| cutover | `internal/books/cutover/steps.go`, `internal/books/store/` |
+| moved or deleted packages | `internal/plugin/`, `internal/plugins/webhook/`, `internal/server/`, `internal/ai/`, `internal/aidispatch/`, `internal/deluge/`, `internal/search/`, `internal/scanner/`, `internal/fileops/`, `internal/pathutil/`, `internal/watcher/`, `internal/metadata/`, `internal/config/` |
+| importers outside those packages (132 files at the plan's base `f7ac5b11e`, listed in full below the table) | `cmd/dedup_bench_batch.go`, `cmd/dedup_bench_pass2.go`; files under `internal/aiscan/`, `internal/appdirs/`, `internal/audiobooks/`, `internal/catalog/`, `internal/dedup/`, `internal/fingerprint/workerclient/`, `internal/importer/`, `internal/itunes/`, `internal/itunes/service/`, `internal/maintenance/jobs/`, `internal/merge/`, `internal/metafetch/`, `internal/organizer/`, `internal/playlist/`, `internal/plugins/acoustid/`, `internal/plugins/dedup/`, `internal/plugins/deluge/`, `internal/plugins/maintenance/`, `internal/quarantine/`, `internal/reconcile/`, `internal/remux/`, `internal/sweep/`, `internal/tagger/`, `internal/telemetrypolicy/`, `internal/testutil/`, `internal/transcode/`, `internal/transcribe/`, `internal/versionprimary/`, `internal/versions/` |
+| SPA, deploy files, move bookkeeping | `web/src/`, `deploy/grafana/dashboards/`, `deploy/prometheus/`, `.mockery.yaml`, `internal/arch/layering_test.go`, `scripts/ci/short_test_weights.json` |
+
+The 132 importer files at `f7ac5b11e`, by directory:
+
+```
+cmd/: dedup_bench_batch.go dedup_bench_pass2.go
+internal/aiscan/: pipeline.go pipeline_review2_test.go pipeline_review_test.go
+internal/appdirs/: appdirs.go appdirs_test.go database_dir_test.go
+internal/audiobooks/: filter_date.go service_mutation.go service_query.go service_query_search_whole_test.go service_single.go
+internal/catalog/: harvest_test.go
+internal/dedup/: apply_verdicts_stale_test.go embed_async_gate_test.go embed_concurrency_test.go embed_model_cutover_test.go engine.go engine_primary_gate_test.go engine_test.go hydrate_chromem_test.go lifecycle.go
+internal/fingerprint/workerclient/: config.go gate.go worker.go
+internal/importer/: service.go
+internal/itunes/: import.go
+internal/itunes/service/: importer.go service.go validate.go
+internal/maintenance/jobs/: app_dir_guard_test.go backfill_file_hashes.go bulk_deluge_import.go cleanup_empty_folders.go cleanup_organize_mess.go relink_missing_to_itunes.go relink_report.go
+internal/merge/: itunes_guard.go service.go
+internal/metafetch/: apply_timings.go batch_verdict_test.go browse_search.go cache_no_source_answered_test.go candidate_fallback_test.go catalog_stage_test.go chain_throttle.go export_limits_test.go helpers.go provider_limits_test.go reliability_test.go search_fanout.go search_fanout_pcache_test.go search_fanout_probe_test.go search_fanout_test.go search_title_variants_test.go service_files.go service_search.go service_writeback.go service_writeback_forcedwrite_test.go service_writeback_realfile_test.go source_chain_walk.go source_chain_walk_test.go write_file_tags_verify_test.go writeback_backup_ctx_test.go writeback_protected_test.go
+internal/organizer/: folder_scope.go inplace_collision.go inplace_multifile.go organizer.go preview.go service.go
+internal/playlist/: evaluator.go evaluator_tag_terms_test.go evaluator_viewer_states_test.go
+internal/plugins/acoustid/: window_backfill.go worker_hub.go worker_hub_calibration_roots_test.go
+internal/plugins/dedup/: embed_scan_test.go
+internal/plugins/deluge/: centralization.go centralization_test.go link_backfill.go link_backfill_budget_test.go link_backfill_test.go path_update_preview_test.go plugin.go plugin_test.go protected_paths_sync_test.go register.go
+internal/plugins/maintenance/: app_dir_guard_test.go cover_ops.go file_provenance_capture.go folder_books_fixer.go itunes_clone_into_library.go itunes_clone_into_library_test.go itunes_regroup.go library_state_repair.go recover_missing_files.go relink_pre_fix_imports_fixer.go repoint_missing_to_folder_audio.go repoint_unrecorded_renames.go rewrite_path_prefix.go throttle_reset.go throttle_reset_test.go
+internal/quarantine/: register.go service.go service_test.go
+internal/reconcile/: app_dir_guard_test.go itunes_heal.go reconcile.go
+internal/remux/: app_dir_guard_test.go remux.go transcode.go
+internal/sweep/: app_dir_guard_test.go backup_cleanup.go backup_cleanup_test.go temp_cleanup.go temp_cleanup_test.go
+internal/tagger/: safe_write_verify_test.go verify.go
+internal/telemetrypolicy/: series_contract_test.go
+internal/testutil/: integration.go
+internal/transcode/: app_dir_guard_test.go transcode.go transcode_coverage_test.go
+internal/transcribe/: canary_cooldown_probe_test.go dispatcher.go inflight.go workerfault_requeue_test.go
+internal/versionprimary/: signals.go
+internal/versions/: ingest.go serve_guard.go
+```
+
+Plus one `changelog.d/` fragment. The importer list was computed at the plan's base; F5-18 and F6-03 run earlier and
+may have moved or removed some (F5-18 deletes `internal/plugins/`). Grep 2 below decides: every importer of a moved
+or deleted package at your base is this PR's file, and the PR does not build while any remains (04 §8.3).
 
 ## Re-verify before editing (expected results at your base)
 
@@ -128,7 +185,11 @@ grep -rn '"/metadata/providers/throttles\|"/ai/test-connection\|"/ai/capabilitie
   --include='*.go' internal/server/wire_*.go | grep -v _test
 # 5. The dark packages and the M6 step. Expected: each present; M6 not yet in steps.go
 ls core/integrations/integrations.go core/integrations/ai/openai/ core/integrations/download/deluge/ \
-   core/integrations/notify/webhook/ core/library/transfer.go core/storage/index/ internal/books/cutover/m6/
+   core/integrations/notify/webhook/ core/library/transfer.go core/storage/index/ core/storage/derived.go \
+   core/internal/integrationhttp/ internal/books/cutover/m6/
+grep -n 'type HoldReleaser interface' core/internal/integrationhttp/*.go        # 1 (F7-10)
+grep -n 'func (r \*Registry) ReleaseHold' core/integrations/providerhttp/*.go  # 1 (F7-02)
+grep -n 'Derived ' core/storage/*.go | grep -v _test                           # Spec.Derived (F7-07 or add it here)
 grep -c 'm6' internal/books/cutover/steps.go
 # 6. The interim late-owner backends to delete. Expected: InterimHolds, InterimPoll in core and ABO's main
 grep -rn 'InterimHolds\|InterimPoll' --include='*.go' core/ internal/ main.go | grep -v _test
@@ -139,16 +200,21 @@ STOP if any dark package or M6 is missing (grep 5), or if grep 2 finds an import
 
 ## Steps
 
-1. Run the re-verify block; paste grep 1 and 2 into the PR description as the importer checklist.
+1. Run the re-verify block; paste grep 1 and 2 into the PR description as the importer checklist. If
+   `storage.Spec` still has no `Derived []DerivedIndex` field (F7-07's planner note), add it here in the file that
+   declares `Spec` and name the file in the PR.
 2. Write or extend the tests first (below).
-3. Wire the kernel handles and books' registrations (Goal 1); ABO's `main` sets `app.Options.Adapters`.
+3. Wire the module members, the kernel boot calls (derived P7 and (3a), the index `Opener`), F7-10's routes and
+   books' registrations (Goal 1); ABO's `main` sets `app.Options.Adapters`; delete the listed `ServiceDefs` from
+   `internal/books/services.go`; regenerate `core/openapi/core.json` and the client.
 4. Register M6, raise M7's target, register the new M8 (Goal 2); extend the crash matrix with the new M8 and
    `TestCutoverRefusedByOlderBuilds`'s cells.
 5. Move or delete each package of the 04 keys with `git mv` where code moves; re-point every importer; delete
    `internal/plugin` last, once grep 1 is empty; regenerate or delete `internal/server/handlers/mocks` and update
    `.mockery.yaml`.
 6. AI renames with the dashboards and rules (Goal 4); `promtool test rules`.
-7. Switch the SPA and first-party scripts off every deleted route (Goals 4, 5, 6, 9).
+7. Switch the SPA and first-party scripts off every deleted route (Goals 4, 5, 6, 9), the integration settings and
+   test buttons onto F7-10's routes.
 8. Delete the interim late-owner backends (Goal 8).
 9. Layering keys, shard weights, headers, fragment; `go build ./... && (cd core && go build ./...)`; acceptance.
 
@@ -164,7 +230,13 @@ app.Options{
 
 ## Tests (write first; spec names copied exactly)
 
-- `TestBooksIndexRebuiltAtCutover` end to end (extend F7-08's test to the rebuild and the answers).
+- `TestBooksIndexRebuiltAtCutover` end to end (this row owns it: extend F7-08's dark half with the rebuild at the
+  native path, the degraded search meanwhile and the answers equal to R0's).
+- `TestDerivedIndexRebuildTriggers` (05-storage §5S.10; the kernel's P7 validation and the (3a) enqueue on a version
+  change, a `Load` refusal and after a restore).
+- F7-10's `TestIntegrationHTTP_*` route tests run on ABO's mounted routes; a route-level test that HEAD's
+  `POST /api/v1/deluge/test-connection` and `/api/v1/ai/test-connection` are gone (name coined here:
+  `TestHEADTestConnectionRoutesGone`).
 - `TestNoHEADAIFamilies` (05-ai §9).
 - The dashboard-reference test and `promtool test rules` after the AI renames.
 - `TestABOMetricsGatherNoDuplicate` (unchanged).
@@ -189,7 +261,7 @@ promtool test rules deploy/prometheus/alert-rules.test.yml
 grep -rn 'InterimHolds\|InterimPoll' --include='*.go' core/ internal/ main.go | wc -l
 
 # Gate tests. Expected: ok
-go test -count=1 -run 'TestBooksIndexRebuiltAtCutover|TestRootsCutover_FromHEADFixture|TestWebhookMigration_InstancesAndRule|TestIntegrationsMigration_EveryInstanceAndID|TestAIJobMigration_EveryJobAndState|TestNoHEADAIFamilies|TestABOMetricsGatherNoDuplicate|TestCutoverRefusedByOlderBuilds|TestDeployReferencedSeriesServed' ./...
+go test -count=1 -run 'TestBooksIndexRebuiltAtCutover|TestDerivedIndexRebuildTriggers|TestHEADTestConnectionRoutesGone|TestRootsCutover_FromHEADFixture|TestWebhookMigration_InstancesAndRule|TestIntegrationsMigration_EveryInstanceAndID|TestAIJobMigration_EveryJobAndState|TestNoHEADAIFamilies|TestABOMetricsGatherNoDuplicate|TestCutoverRefusedByOlderBuilds|TestDeployReferencedSeriesServed' ./...
 (cd core && go test -count=1 -run 'TestWebhook_JSONBodyGolden|TestWebhook_SignatureWithTimestamp' ./integrations/notify/...)
 
 # Builds, frontend and e2e. Expected: exit 0; green
@@ -223,17 +295,3 @@ Before R2 ships: revert the PR (atomic). After R2 ships: `make rollback-restore`
   never squash; never `--admin` past a required check. No release or flip trailer.
 - Push workflow changes, if any, with `git push`.
 
-## Planner notes
-
-- **Importers outside the row's files.** At the evidence checkout the packages this flip moves or deletes are imported
-  from paths the row does not list: `internal/plugin` from `internal/dedup`, `internal/itunes/service` and
-  `internal/quarantine` (the event publishers that must switch to `Deps.Notify`); `internal/aidispatch` from
-  `internal/dedup`, `internal/transcribe` and `internal/telemetry/contract`; `internal/ai/aijobs` from `internal/dedup`;
-  `internal/deluge` from `internal/maintenance/jobs` and `internal/plugins/deluge`; `internal/search` from
-  `internal/audiobooks` and `internal/playlist`; `internal/metadata/providerhttp` and `dailyquota` from
-  `internal/metafetch` and `internal/catalog`; and `internal/fileops`/`internal/pathutil` from about 25 packages (only
-  the callers of the moved symbols change). The flip is alone in W34, so adding them collides with nothing, but the
-  row's file list understates the PR. Some of these importers may have moved or gone by F7's base (F5-18 and F6-03 run
-  earlier); grep 2 decides.
-- **Integrations HTTP surface.** This flip deletes the class-i `/api/v1/config` handlers "as the instance routes replace
-  them"; no row builds those instance routes (see F7-01's Planner notes).

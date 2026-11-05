@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-03-split-oauth-oidc-cfaccess-extension.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6d906762-e7f8-4bbc-b7e3-b7cbceb0b389 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F4-03 |
 | Release / flip | R2, identity flip F4 (dark PR: ABO's gin chain and routes keep HEAD's behaviour until F4-08) |
 | Tier | **T3** (Opus, high): an OIDC move with the native-app hand-off and an owner-proof extension |
-| Wave | W26 (runs inside an announced **move window**: no other PR of the wave touches `internal/oauth/`, `internal/server/`, `internal/auth/owner.go`, `go.mod`, `core/go.mod` or the shared `layerOf` and shard files) |
+| Wave | W27 (runs inside an announced **move window**: no other PR of the wave touches `internal/oauth/`, the `internal/server/` files listed below, `internal/auth/owner.go`, `go.mod`, `core/go.mod` or the shared `layerOf` and shard files) |
 | Depends on | F4-02 |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
 
@@ -63,15 +63,19 @@ Confirm F4-02 is merged and the move window is announced. If not, stop.
 
 `core/auth/oidc/`, `core/go.mod`, `core/go.sum`, `go.mod`, `go.sum`, `internal/oauth/` (deleted),
 `internal/cfaccess/` (created), `internal/server/middleware/cfaccess.go`, `internal/server/middleware/cfbounce.go`,
-`internal/server/middleware/owner_guard.go`, `internal/auth/owner.go` (each moved), `internal/server/` (importers),
+`internal/server/middleware/owner_guard.go`, `internal/auth/owner.go` (each moved),
 `internal/arch/layering_test.go` (`internal/cfaccess` enters `layerOf`; `internal/oauth` leaves it),
-`scripts/ci/short_test_weights.json`.
+`scripts/ci/short_test_weights.json`, and these 25 `internal/oauth` importers (re-pointed, not the whole
+`internal/server/` directory): `internal/server/`: `cf_recovery_test.go`, `invite_guest_access.go`, `invite_guest_access_test.go`, `oauth_app_code_epoch_integration_test.go`, `owner_routes_test.go`, `static_embed_recovery_test.go`, `wire_abs_routes.go`, `wire_oauth.go`; `internal/server/handlers/abs/`: `abs_test.go`, `authorize_apikey_test.go`, `openid.go`, `openid_flow_test.go`, `sliding_session_test.go`; `internal/server/handlers/`: `oauth_login.go`, `oauth_login_deeplink_test.go`; `internal/server/middleware/`: `abs_caller_key_test.go`, `absauth.go`, `absauth_apikey_test.go`, `absauth_nonidentity_test.go`, `absauth_servicetoken_test.go`, `absauth_test.go`, `absauthprobe.go`, `auth_method_test.go`, `cfaccess_verified_test.go`, `cfbounce_test.go`.
+
+At HEAD 29 files import `internal/oauth`; `internal/server/login_ceiling.go` and its test leave with F4-02 (W25), and
+`cfaccess.go`/`cfbounce.go` move here, so at BASE the importer set is exactly the files above.
 
 ## Re-verify at BASE (HEAD `f7ac5b11e` values shown)
 
 ```bash
 ls internal/oauth/                                         # HEAD: cfaccess.go oauth.go oauth_test.go providers.go resolve.go resolve_test.go resolve_verified_email_test.go state.go
-grep -rln '"github.com/falkcorp/audiobook-organizer/internal/oauth"' --include=*.go . | grep -v '^./internal/oauth' | wc -l   # HEAD 29 files, all under internal/server/
+grep -rln '"github.com/falkcorp/audiobook-organizer/internal/oauth"' --include=*.go . | grep -v '^./internal/oauth' | wc -l   # HEAD 29 files, all under internal/server/; BASE 27 (F4-02 moved login_ceiling.go and its test)
 grep -rln '"github.com/falkcorp/audiobook-organizer/internal/oauth"' --include=*.go . | grep -v '^./internal/oauth' | grep -vc '^./internal/server/'   # HEAD 0 (else STOP 1)
 ls internal/server/middleware/cfaccess.go internal/server/middleware/cfbounce.go internal/server/middleware/owner_guard.go internal/auth/owner.go | wc -l   # 4
 grep -c 'CFAssertionVerifier' internal/server/middleware/absauth.go    # >= 1
@@ -84,7 +88,8 @@ ls -d internal/cfaccess 2>/dev/null | wc -l                             # 0
 
 ## STOP conditions
 
-1. An importer of `internal/oauth` outside `internal/server/` (the row's file set): report.
+1. An importer of `internal/oauth` at BASE that is not in the Files list above (a new file since the plan's base, or
+   one outside `internal/server/`): report before editing it.
 2. A cycle `internal/server` → `internal/cfaccess` → `internal/server` (04 §2.4): keep the four CF route files in
    `internal/server`; `internal/config`'s update service takes the owner-proof check and the access-email reader as one
    injected interface. If that needs an `internal/config` edit, report (the row does not list `internal/config/`).
@@ -112,7 +117,7 @@ ls -d internal/cfaccess 2>/dev/null | wc -l                             # 0
 (`oauth_test.go`, `resolve_test.go`, `resolve_verified_email_test.go`, the middleware CF tests, `owner_test.go`) pass in
 their new homes; `TestOIDC_StateCarriesAppHandoffFields` (name coined here: a state minted with `redirect_uri` and an S256
 `code_challenge` round-trips both fields, a tampered state is refused, a state older than 10 min is refused).
-`TestOIDC_AppHandoffMintsABSCode` is F4-05's (it needs the routes).
+`TestOIDC_AppHandoffMintsABSCode` is F4-08's (it needs the routes mounted and the ABS redemption).
 
 ## Invariants
 
@@ -135,7 +140,7 @@ make ci                                                                         
 
 ## Out of scope
 
-The core OIDC routes and `TestOIDC_AppHandoffMintsABSCode` (F4-05); registering the extension and deleting the gin
+The core OIDC routes (F4-05); `TestOIDC_AppHandoffMintsABSCode` (F4-08); registering the extension and deleting the gin
 binder and HEAD's OAuth routes (F4-08).
 
 ## Rollback

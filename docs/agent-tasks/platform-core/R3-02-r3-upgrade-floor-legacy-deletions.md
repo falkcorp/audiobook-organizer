@@ -1,16 +1,16 @@
 <!-- file: docs/agent-tasks/platform-core/R3-02-r3-upgrade-floor-legacy-deletions.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: c967232d-f699-4787-8455-5badc8f3fca6 -->
 <!-- last-edited: 2026-11-05 -->
 
-# R3-02 — The R3 floor: UpgradeFloor{InstallFirst: R2}, books' legacy steps and HEAD-format readers deleted, internal/books/cutover and TestR0OpensR1Store deleted, and together opsgen, ops.ts and internal/operations/state
+# R3-02 — The R3 floor: UpgradeFloor{InstallFirst: <R2 tag>}, books' legacy steps 1..66 and the code only they call, the HEAD-format readers, internal/books/cutover and TestR0OpensR1Store deleted, and together tools/cmd/opsgen, web/src/generated/ops.ts and internal/operations/state
 
 | Field | Value |
 |---|---|
 | ID | R3-02 |
 | Release | R3 |
 | Tier | **T4** (Opus / xhigh–max): the upgrade floor refuses stores at boot and at restore staging; a wrong floor either bricks a valid store or lets an unmigrated one boot with its readers deleted |
-| Wave | W39 (beside R2-02; file-disjoint) |
+| Wave | W42 (beside R2-02, R3-04; file-disjoint) |
 | Depends on | OWNER-05 (R2 released and deployed) |
 | Spec | 09 §9.2.2 ("The R3 floor", "Fresh installs"), §9.4 R3; 05-storage §5S.3.5 (`UpgradeFloor`, `ErrUpgradeFloor`, runner rules "Atomicity" and "Upgrade floor"), §5S.4 steps 3 and 6, §5S.9.3, §5S.10; 05-backup §5B.3.4 step 4; 05-tasks §5T.8.1 (the `internal/operations/state` row); 07 §7.8 (opsgen, `ops.ts`, `operationPolling`); 03 §3.7 ("one floor, in R3"), §3.8 R3; 06 §6.4.10 R3, §6.5.1 "Releases" R3 |
 
@@ -34,8 +34,9 @@ R3 deletes the code that only a pre-R2 store needs and declares books' one upgra
 R2 is refused before anything reads it with deleted code (09 §9.2.2; 05-storage §5S.3.5):
 
 1. Books' manifest declares
-   `UpgradeFloor{Owner: "books", Version: LegacyCap, Requires: <the step refs of M2, M3, M4, M5, M6>, InstallFirst: <R2 release>}`
-   (05-storage §5S.3.5, the one floor).
+   `UpgradeFloor{Owner: "books", Version: LegacyCap, Requires: <the step refs of M2, M3, M4, M5, M6>, InstallFirst: <R2 tag>}`
+   (05-storage §5S.3.5, the one floor; `InstallFirst` holds the R2 release's tag, written into books' declaration when
+   R2 is tagged; 09 §9.2.2).
 2. Delete books' legacy steps 1..`LegacyCap` (66 at `748fd787a`) and every store method only they call (including
    `MigrateOpsV2ToV3`), the HEAD-format readers (the read-only decoders books kept for its cutover steps), the
    whole of `internal/books/cutover` (M2–M6, the M7 and M8 step definitions, `m4legacy`), and `TestR0OpensR1Store`
@@ -53,7 +54,8 @@ R3 runs no migration step and changes no stored data (09 §9.4 R3 "Migrations");
 
 - **I-floor-1.** A non-empty store whose books applied version is below `LegacyCap`, or on which any of M2–M6 is not
   done, is refused at storage lifecycle step 3 (05-storage §5S.4), **before** the checkpoint and before any write:
-  `ErrUpgradeFloor`, exit **78**, last stderr line exactly `install <R2 release> first`. The store directory is
+  `ErrUpgradeFloor`, exit **78**, last stderr line exactly `install <R2 tag> first` (the R2 release's tag, e.g. the tag
+  OWNER-05 cut). The store directory is
   byte-identical afterwards.
 - **I-floor-2.** An empty store (fresh install, first boot after a factory reset) is exempt; its fresh-install
   batch records books' 1..`LegacyCap` as applied and every step ID named in `UpgradeFloor.Requires` (M2–M6) as
@@ -83,7 +85,8 @@ R3 runs no migration step and changes no stored data (09 §9.4 R3 "Migrations");
 | modify | `core/storage/` (delete `LegacyMigration`, `Spec.Legacy`, the legacy phase, `TestNoNewLegacyMigrations`; ensure the fresh-install batch records `Requires` step IDs) |
 | modify | `scripts/deploy-wait-ready.sh` (only if its exit-78 message differs from I-floor-4) |
 | modify | `internal/arch/layering_test.go`, `scripts/ci/short_test_weights.json` (drop deleted packages) |
-| modify (not in the row; see Planner notes) | `Makefile` (`generate-ops`, `ops-check` and `ops-check` in `ci:`), `.github/workflows/ci.yml` (the `make ops-check` step and the `web/src/generated/*` classifier case comment), `.github/workflows/extraction-gates.yml` (the R2 cutover-suite and restore-drill jobs), the web files that import `generated/ops` (at the evidence checkout `web/src/services/api.ts`, `web/src/utils/operationPolling.ts` and two tests; at your base possibly under `web/src/modules/books/legacy/`) |
+| modify | `Makefile` (`generate-ops`, `ops-check` and `ops-check` in `ci:`), `.github/workflows/ci.yml` (the `make ops-check` step and the `web/src/generated/*` classifier case comment), `.github/workflows/extraction-gates.yml` (the R2 cutover-suite and restore-drill jobs) |
+| modify | the books web files that import `generated/ops`: `web/src/modules/books/legacy/` (`operationPolling.ts` and its tests, 07 §7.11) and `web/src/modules/books/legacyApi.ts` (the legacy remainder of `services/api.ts`). If F9 slipped to R3 and has not merged before this PR, these are still `web/src/utils/operationPolling.ts` and `web/src/services/api.ts`: edit them there instead and say so in the PR |
 | create | one `changelog.d/` fragment (headerless) |
 
 ## Re-verify before editing (expected results at your base)
@@ -134,9 +137,9 @@ tests; grep 7's `XPC_SERVICE_NAME` or `RestartPreventExitStatus=78` is absent (t
 1. **Write the tests first** (section below) against the R2 corpus fixtures; they fail until step 2.
 2. **Declare the floor** in books' manifest (`Manifest.Storage.UpgradeFloor`, 06 §6.4.10 R3):
    `Owner: "books"`, `Version: LegacyCap`, `Requires:` the `StepRef`s of M2, M3, M4, M5 and M6 **as constants**
-   (copy their IDs from `internal/books/cutover` before deleting it, into a small books file such as
-   `internal/books/floor.go`, name coined here, with a comment that the steps are deleted and only their IDs
-   remain), `InstallFirst:` the R2 production release tag. Keep `LegacyCap` defined where it is if books' version
+   (copy them from `internal/books/cutover/stepids.go`, the one place F3-06 reserved M2–M6's IDs, before deleting
+   the package, into a small books file such as `internal/books/floor.go`, name coined here, with a comment that the
+   steps are deleted and only their IDs remain), `InstallFirst:` the R2 production release tag. Keep `LegacyCap` defined where it is if books' version
    adapter still uses it.
 3. **Core storage.** Delete `LegacyMigration`, `Spec.Legacy`, the runner's legacy phase and
    `TestNoNewLegacyMigrations` (05-storage §5S.3.5 "Atomicity"). If grep 8 found no implementation of the
@@ -172,7 +175,7 @@ type UpgradeFloor struct {
 	Owner        Owner
 	Version      int       // the minimum applied version
 	Requires     []StepRef // data migrations that must be done (R3: books' cutover steps, §5S.3.13)
-	InstallFirst string    // the release to install first ("R2"), named in the refusal
+	InstallFirst string    // the tag of the release to install first (the R2 release's tag), named in the refusal
 }
 
 type ErrUpgradeFloor struct {
@@ -189,7 +192,7 @@ The refusal's last stderr line is `install ` + `InstallFirst` + ` first`; the pr
 
 | Test | Where | Proves |
 |---|---|---|
-| `TestPreR2StoreRefusedByR3` | `internal/books/` | R3 refuses an R1 store (the R0-written corpus of `internal/books/testdata/r2corpus/` booted through R1's shape) and an R2 store whose cutover did not finish (a copy with M7 applied and M4 not done), before any write: exit 78, last line `install <R2 release> first`, store byte-identical (I-floor-1) |
+| `TestPreR2StoreRefusedByR3` | `internal/books/` | R3 refuses an R1 store (the R0-written corpus of `internal/books/testdata/r2corpus/` booted through R1's shape) and an R2 store whose cutover did not finish (a copy with M7 applied and M4 not done), before any write: exit 78, last line `install <R2 tag> first`, store byte-identical (I-floor-1) |
 | `TestRestoreBelowUpgradeFloorRefusedAtStaging` | `internal/books/` (the books manifest drives core staging) | an archive below the floor is refused before extraction; a failed host-loss restore leaves no fresh store (I-floor-3) |
 | `TestFreshInstallPostFloorBootsTwice` | `internal/books/` | a build with books' floor that registers none of M2–M6 creates a store and boots it a second time without `ErrUpgradeFloor`; the same after a factory reset (I-floor-2) |
 | `TestUpgradeFloorRefusesBeforeAnyWrite` | `core/storage/` (if not already present from R1) | version floor and `Requires` refusal, byte-identical store |
@@ -219,7 +222,7 @@ go build ./... && (cd core && go build ./...)
 go test -count=1 -run 'TestPreR2StoreRefusedByR3|TestRestoreBelowUpgradeFloorRefusedAtStaging|TestFreshInstallPostFloorBootsTwice' ./internal/books/...
 (cd core && go test -count=1 -run 'TestUpgradeFloorRefusesBeforeAnyWrite|TestPrintUpgradeFloor' ./storage/...)
 
-# The binary prints its floor. Expected: one line naming books, LegacyCap, M2..M6 and the R2 release
+# The binary prints its floor. Expected: one line naming books, LegacyCap, M2..M6 and the R2 tag
 make build-api && ./audiobook-organizer --print-upgrade-floor
 
 # Crash matrix (ABO) still green without the cutover scenarios. Expected: ok
@@ -239,7 +242,7 @@ make -C core ci
 ## Out of scope
 
 - R3-01's deletions and R3-03's `legacy-file-cleanup` start hook.
-- The R3 release note (no row owns it; see R3-01's Planner notes).
+- The R3 release note (R3-04).
 - Any change to the level guard, the level stamps or M7's targets (R3 raises nothing, 09 §9.2.2).
 - `ci/prefreeze_release.txt` and `scripts/ci/fetch_prefreeze_binary.sh` (leave them).
 
@@ -258,13 +261,3 @@ to R2 needs no restore (09 §9.4 R3 "Rollback"). A store an R3 build refused was
   PR removes writers (the legacy steps, the cutover) and must leave `TestBootCrashMatrixCoversEveryWriter` green.
 - CLAUDE.md concurrency rules apply to any loop you touch over library-scale collections (none expected here).
 
-## Planner notes
-
-- **Files missing from the row:** `Makefile` (`generate-ops`, `ops-check`, `ci:`), `.github/workflows/ci.yml` (the
-  `make ops-check` step), `.github/workflows/extraction-gates.yml` (the cutover-suite and restore-drill jobs that
-  run deleted code), and the `web/src/` files that import `generated/ops` (07 §7.8 makes moving `operationPolling`
-  part of this PR). None collides with R2-02 (`prerelease.yml` only) in W39; R3-01 (W40) also edits `Makefile` and
-  `ci.yml` but in a later wave.
-- **`InstallFirst` value.** 05-storage writes `InstallFirst: "R2"` and the last line `install R2 first`; 09 §9.2.2
-  and §9.4 R3 write `install <R2 release> first`. This brief uses the R2 production release tag so the message names
-  an installable release; the review loop should confirm.

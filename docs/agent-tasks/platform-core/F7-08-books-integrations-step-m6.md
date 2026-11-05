@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-08-books-integrations-step-m6.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 32e12309-4e58-4518-9d85-0a690231a661 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-08 |
 | Release | R2, flip label F7 (dark PR: the step is built and tested, **unregistered** until F7-09) |
 | Tier | **T4** (Opus / xhigh–max): a one-way migration of instances, jobs, rules and roots; a dropped row or a changed ID is permanent after M7 |
-| Wave | W31 (beside F4-08; file-disjoint; F4-08 merges first and this PR rebases after it) |
+| Wave | W31 (beside F4-08, F5-14; file-disjoint; F4-08 merges first and this PR rebases after it) |
 | Depends on | F7-01 (`integrations.Importer`), F7-03 (`ai.Importer`), F7-05 (`notify.Importer`), F7-06 (`library` roots as config entries), F7-07 (`storage/index` and the native dirty set), F3-06 (`internal/books/cutover` with its step shape, the rename table and M2's residual blob), F2-13 (the R2 corpus overlay) |
 | Spec | 05-metadata M1.10 (the migration table, trust carried over, not carried over), M2.10 (holds and quotas dropped); 05-ai §10 (endpoints, `ai/openai`, `auth_ref` key copy, `aijob*` rows, the capability-ID map); 05-notify §10 (webhook instances, rule `webhooks`, the HMAC secret by value, the topic map); 05-library §5L.10 ("The roots cutover", IDs kept, `rootscan:` records, "M6's write outside its retired claims"); 05-download §10 (the Deluge instance); 05-storage §5S.3.6 (`DataMigration`), §5S.3.8 (dirty set dropped, index rebuilt), §5S.3.13 (the cutover step contract, quarantine), §5S.9.1 (families and claims M6 drains), §5S.3.16 (crash matrix cells); 03 §3.8 M6; 09 §9.2.3 (row 7 of the order table) |
 
@@ -125,21 +125,28 @@ left it) lacks a family M6 drains.
 ## Code contract
 
 Uses 05-storage §5S.3.6's `DataMigration` (copy the field set; a cutover step sets `Cutover`, `Compat: Breaking`,
-`Mode: BootBlocking`, `Parallelism`, `Source`, `Step`, and `Sensitive` for the secret-bearing prefixes). Step ID:
-`books.<name>` per `DataMigration.ID`'s grammar; use the ID F3-06's step list reserves for M6 if it reserves one,
-else `books.cutover-m6` (name coined here), and record it for R3-02's `UpgradeFloor.Requires`.
+`Mode: BootBlocking`, `Parallelism`, `Source`, `Step`, and `Sensitive` for the secret-bearing prefixes). Step ID: the
+M6 constant F3-06 reserved in `internal/books/cutover/stepids.go` (the one place M2–M6's IDs live; R3-02's
+`UpgradeFloor.Requires` reads the same constant). Never coin another ID; if `stepids.go` has no M6 constant, STOP.
 
 ## Tests (write first; spec names copied exactly)
 
 Gate tests this row owns:
 
-- **`TestBooksIndexRebuiltAtCutover`** (05-storage §5S.10, the search oracle): the first R2 boot drops
-  `idx:sidx:dirty:`, queues the full rebuild of books' index at its native path, serves search degraded meanwhile,
-  leaves `library.bleve` untouched, and after the rebuild the corpus' search answers equal the R0 binary's.
 - **`TestRootsCutover_FromHEADFixture`** (05-library §5L.9).
 - **`TestWebhookMigration_InstancesAndRule`** (05-notify §9).
 - **`TestIntegrationsMigration_EveryInstanceAndID`** (05-metadata M1.9).
 - **`TestAIJobMigration_EveryJobAndState`** (05-ai §9).
+
+The dark half of **`TestBooksIndexRebuiltAtCutover`** (05-storage §5S.10, the search oracle; F7-09 owns the test and
+adds the rebuild at the native path and the search-answer comparison, because books' index moves onto
+`storage/index` only there): here, M6 drops `idx:sidx:dirty:` and leaves `library.bleve` untouched. Write it in
+`internal/books/cutover/m6/` under the spec name, with the two assertions this PR can prove; F7-09 extends it.
+
+The after-M6 clause of **`TestConfigCutover_RowsGone`** (05-config §1.12.2 test table; F3-06 owns the test in
+`internal/books/cutover/`): after M6 no `setting:config_blob` remains, and every key range outside the listed keys is
+byte-identical. Add it in `internal/books/cutover/m6/` as a test of the same spec name (a second package may declare
+it; `go test -run TestConfigCutover_RowsGone ./internal/books/...` runs both halves); do not edit F3-06's file.
 
 Also from the same spec sections: `TestIntegrationsMigration_SecretsByRef`, `TestIntegrationsMigration_TrustCarried`,
 `TestIntegrationsMigration_UnreadableSecretReEnter`, `TestIntegrationsMigration_HEADRowsGone`,
@@ -157,8 +164,12 @@ migrated through the registered steps (M2–M5), with M7's target raised in the 
 # The step's tests. Expected: ok, no FAIL
 go test -count=1 -race ./internal/books/cutover/m6/...
 
-# The five gate tests. Expected: ok
-go test -count=1 -run 'TestBooksIndexRebuiltAtCutover|TestRootsCutover_FromHEADFixture|TestWebhookMigration_InstancesAndRule|TestIntegrationsMigration_EveryInstanceAndID|TestAIJobMigration_EveryJobAndState' ./internal/books/...
+# The four gate tests, the oracle's dark half and RowsGone's after-M6 clause. Expected: ok
+go test -count=1 -run 'TestRootsCutover_FromHEADFixture|TestWebhookMigration_InstancesAndRule|TestIntegrationsMigration_EveryInstanceAndID|TestAIJobMigration_EveryJobAndState|TestBooksIndexRebuiltAtCutover|TestConfigCutover_RowsGone' ./internal/books/...
+
+# M6's step ID comes from stepids.go. Expected: >= 1, and 0 string-literal step IDs in m6/
+grep -rn 'stepids\.\|cutover\.StepM6\|M6' internal/books/cutover/m6/*.go | grep -v _test | head -3
+grep -rn '"books\.cutover' internal/books/cutover/m6/ | wc -l
 
 # Crash cells. Expected: ok
 go test -count=1 -run 'TestCutoverCrashAtEveryChunk|TestBootCrashMatrix_ABO' ./internal/books/...
@@ -177,6 +188,7 @@ make -C core ci
 ## Out of scope
 
 - Registering M6, raising M7's target, a new M8 (F7-09).
+- The full `TestBooksIndexRebuiltAtCutover` oracle: the rebuild at the native path and the search answers (F7-09).
 - Wiring the subsystems and deleting HEAD's code (F7-09).
 - The download `ItemRef` books migration (phase 2, 05-download §1).
 
@@ -193,12 +205,3 @@ Revert the PR; the step was never registered, so no store ran it.
 - 09 §9.9 and CLAUDE.md: a library-scale cutover step is a `DataMigration` with its own `tasks.Parallelism` over
   disjoint key ranges; no unbounded goroutines; partition chunks so two workers never touch the same row.
 
-## Planner notes
-
-- **Search oracle timing.** `TestBooksIndexRebuiltAtCutover` asserts the full rebuild of books' index at its native
-  path and the search answers afterwards. Books' index moves onto `storage/index` only in F7-09 (04 keys
-  `F7 move internal/search -> mediacore/internal/bleveindex` and `-> mediacore/storage/index`), so in this dark PR the
-  test can prove only the dirty-set drop and that `library.bleve` is untouched. Either the oracle's ownership moves to
-  F7-09 or F7-08 lands the first half and F7-09 extends it; the plan's gate table names F7-08 alone.
-- **Step ID for the R3 floor.** R3-02's `UpgradeFloor.Requires` needs M2–M6's step IDs; the inventory fixes none. This
-  brief takes the ID from F3-06's step list if it reserves one.

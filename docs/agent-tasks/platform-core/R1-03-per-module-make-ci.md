@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-03-per-module-make-ci.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b539aa28-9ed9-4fa5-a48b-a088e5c9fd48 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-03` |
 | Tier | **T2** (Sonnet / high): many targets and baselines; a move must not silently re-baseline a ratchet |
-| Release / wave | R1 / W09 |
+| Release / wave | R1 / W08 |
 | Depends on | R1-02 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 09 §9.4 R1's CI classification (every row); 12 §12.3.11 (core ci target); 03 §3.2 item 4 |
 | Branch | `agent/platform-core-r1-03-per-module-make-ci` |

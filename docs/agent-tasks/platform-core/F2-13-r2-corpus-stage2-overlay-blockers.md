@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-13-r2-corpus-stage2-overlay-blockers.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 22564994-b4e2-44fd-8ac9-918ced1613a1 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -59,8 +59,11 @@ Create: `scripts/r2corpus/overlay/` (the Go program, guarded by the build constr
 coined here) on every file, because it imports `internal/database`, which no longer exists on `main` after R1-26; plus a
 Python driver `scripts/r2corpus/overlay/build_overlay.py` that checks out the R0 tag in a temporary worktree, copies the
 program in, builds it there, and runs it on a copy of `stage1/`), `internal/books/testdata/r2corpus/overlay/`,
-`internal/books/testdata/r2corpus/blockers/`. Modify: `internal/books/testdata/r2corpus/manifest.json` (append to
-`overlay`, add `blockers`; never rewrite stage-1 entries).
+`internal/books/testdata/r2corpus/blockers/`, `scripts/tests/test_build_overlay.py`. Modify:
+`internal/books/testdata/r2corpus/manifest.json` (append to `overlay`, add `blockers`; never rewrite stage-1 entries).
+
+The program imports the R0 tag's `internal/database`, which `main` no longer has after R1-26 renames it to
+`internal/books/store`; that is why it is built in a temporary worktree at the tag and guarded by a build constraint.
 
 With the build constraint, `go build ./...`, `go vet ./...` and every CI tag set on `main` skip the program. Check that
 `scripts/` is inside the root module's package walk (`go list ./scripts/... 2>&1`); if `go list` reports the directory, the
@@ -102,8 +105,9 @@ that one store holds all and the test expects every row named.
 
 ## Tests
 
-- `TestR2Corpus_ManifestMatchesFiles` (F2-12's, name coined there): extend so every `overlay` and `blockers` entry's store
-  exists.
+- `TestR2Corpus_ManifestMatchesFiles` (F2-12's, name coined there, in `internal/books/r2corpus_manifest_test.go`): it
+  reads the manifest, so every `overlay` and `blockers` entry's store must exist for it to pass. Do not edit the Go test
+  file (it is F2-12's); if it does not walk `overlay` and `blockers` yet, STOP and report.
 - `scripts/tests/test_build_overlay.py` (name coined here): the driver's case list equals the manifest's overlay and
   blocker labels.
 - A check that `main` does not compile the program: `go list -tags '' ./scripts/r2corpus/overlay/ 2>&1` reports "build
@@ -134,11 +138,3 @@ Revert the PR (testdata and a tag-guarded program only).
 File headers (Go files and the driver; the manifest's `_header` object as in F2-12); conventional commit
 (`test(r2): hand-built overlay and blocker corpus at the R0 tag`) with `Co-Authored-By: Claude <noreply@anthropic.com>`;
 `gh pr merge <n> --rebase`; `changelog.d/` fragment.
-
-## Planner notes
-
-- F2-12 and F2-13 both edit `internal/books/testdata/r2corpus/manifest.json`; they are in different waves (W22, W23) with
-  the dependency edge, so no collision.
-- The program must import the R0 tag's `internal/database`, which `main` no longer has after R1-26 renames it to
-  `internal/books/store`; the brief uses a build constraint and a temporary worktree at the tag. The row's file list has no
-  test for the driver; the brief adds `scripts/tests/test_build_overlay.py`.

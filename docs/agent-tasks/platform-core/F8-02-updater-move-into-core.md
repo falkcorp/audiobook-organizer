@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-02-updater-move-into-core.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: dd9d9131-a311-46ff-ac6c-d78aac9f8d12 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,8 +10,8 @@
 | ID | F8-02 |
 | Release | R2, flip label F8 (dark PR) |
 | Tier | **T3** (Opus / high): a move of the R0 updater with an offline fetch; the fetch decides which binary a rollback across R2 installs |
-| Wave | W29 (beside F5-14; file-disjoint). Runs inside an announced **move window** (09 §9.2.10) |
-| Depends on | F2-05 (see Planner notes: the spec's `Deps` also need F7-05's `notify.Service`) |
+| Wave | W32 (alone; file-disjoint). Runs inside an announced **move window** (09 §9.2.10) |
+| Depends on | F2-05 (tasks), F7-05 (`notify.Service`), F7-02 (`providerhttp.Client`), F4-04 (`events.Bus`), F2-10 (the `health` registry): the four types 05-updater §5U.3's `Deps` names |
 | Spec | 05-updater §5U.3 (Go API), §5U.4 (Check, Apply, "Fetching a named release", rollback), §5U.10 (routes), §5U.11 (tests), §5U.12 (migration, "R2 done-check"); 05-storage §5S.3.12 (row `make rollback-restore`); 09 §9.2.1 ("After an R2 hotfix"); 04 §8.1 F8; 06 §6.4.5 (`app.OfflineCommands`) |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. **Dark:** no route is mounted, the
@@ -83,7 +83,7 @@ grep -rn -E 'func (TestApply_RestartExits75|TestApply_SwapAtomicAndPrevKept|Test
 # 5. make rollback-restore exists from R1-27 and has no RELEASE branch yet. Expected: target found; RELEASE 0 hits in it
 grep -n '^rollback-restore:' Makefile
 sed -n '/^rollback-restore:/,/^$/p' Makefile | grep -c 'RELEASE'
-# 6. The Deps types exist in core. Expected: >=1 hit each (see Planner notes for notify)
+# 6. The Deps types exist in core (F7-02, F2-10, F4-04, F7-05). Expected: >=1 hit each
 grep -rn 'type Client struct' core/integrations/providerhttp/ ; grep -rn 'type Registry struct' core/health/
 grep -rn 'type Bus struct' core/events/ ; grep -rn 'type Service struct' core/integrations/notify/ 2>/dev/null
 # 7. Offline command registration point. Expected: app.OfflineCommands and Command found
@@ -91,7 +91,8 @@ grep -rn 'func OfflineCommands\|OfflineCommands' core/app/*.go | head -5
 ```
 
 STOP and report if grep 4 misses any R0 test, if grep 5 shows `rollback-restore` absent (R1-27 owns it), or if grep 6
-finds no `notify.Service` (see Planner notes; you may land `Deps.Notify` only once it exists).
+misses any of the four `Deps` types (each dependency is merged before this wave, so a miss means a dependency changed
+its API).
 
 ## Steps
 
@@ -234,12 +235,3 @@ data is written (dark; `c/updater/seen` is written only once F8-04 wires the che
   (09 §9.2.10). No release or flip trailer (09 §9.2.1).
 - Move window announced; feature PRs touching `internal/updater` are held until this merges.
 
-## Planner notes
-
-- **Missing dependency.** 05-updater §5U.3's `Deps` names `*notify.Service` (the check task stages
-  `core.update.found.v1` through it) and `*providerhttp.Client`, `*health.Registry`, `*events.Bus`. `notify.Service`
-  lands with F7-05 (W30), after this row's wave (W29); F7-02 (`providerhttp` completed), F4-04 (`events`) and
-  F2-10 (`health` registry) are earlier but not declared. The row should depend on F7-05 (and list F7-02, F4-04,
-  F2-10), which moves it to W31 or later; otherwise `Deps.Notify` cannot compile here.
-- **`internal/updater/` is also in F8-04's files** (the deletions). That is sequential (F8-04 depends on F8-02), not a
-  same-wave collision.

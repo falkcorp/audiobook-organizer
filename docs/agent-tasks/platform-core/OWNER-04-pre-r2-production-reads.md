@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-04-pre-r2-production-reads.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5dbb01a6-8a15-49e4-a5f1-45022bf2338c -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -13,17 +13,18 @@
 | ID | OWNER-04 |
 | Release | owner checkpoint (inputs to R2) |
 | Tier | **OWNER**: read-only production reads, counts only; one decision |
-| Wave | W04 |
-| Depends on | OWNER-02 (R0 deployed) |
+| Wave | W22 |
+| Depends on | OWNER-03 (R1 deployed: P2, P3, P5 and P7 read a copy restored with R1-25's `storage restore-offline --into`) |
 | Unblocks | **F2-14** (P1 sizes the production-shaped store), **F3-07** (P1: no unregistered prefix; P4: no unmapped env name), **F5-14** (Q-C) |
 | Spec | 09 §9.7 P1–P5, P7, P9; 14 §14.3 Q-C; 05-storage §5S.9.2 (what migrates, resets or stays) |
 
 ## Rules for every read (09 §9.7)
 
-Run on the deployed R0 or R1 production host, read-only. **Paste counts only, never values.** Never print `sess:` or
+Run on the deployed R1 production host, read-only. **Paste counts only, never values.** Never print `sess:` or
 secret values; count keys only. `<abo-url>`, `<redacted-token>` (an admin API key from `server-bootstrap`),
 `<unit>`, `<scratch>` and `<db>` are placeholders. Offline commands run on a **restored backup copy** under
-`<scratch>`, so production is never stopped.
+`<scratch>`, restored with R1's `audiobook-organizer storage restore-offline --into <scratch>` (09 §9.7; R1-25 lands
+it), so production is never stopped.
 
 ## Owner steps
 
@@ -58,11 +59,3 @@ Q-C: delete | enable
 ## Done when
 
 The comment exists. F2-14 reads P1; F3-07 waits for P1 and P4 Branch A (or the rename table extended); F5-14 reads Q-C.
-
-## Planner notes
-
-- P2, P3, P5 (invites) and P7 (`abs_sess:` count) run `diagnostics query --raw --db <scratch>/…` on a restored
-  backup copy, and 09 §9.7 restores it with `storage restore-offline --into`, which does not exist until R1
-  (R1-25); `grep -rn 'restore-offline' cmd internal` finds nothing at HEAD. On an R0-only host the owner needs
-  another way to get a scratch copy, or these four reads wait for the R1 deploy. Every consumer (F2-14, F3-07,
-  F5-14) runs after OWNER-03 anyway, so making this row depend on OWNER-03 would cost no time.

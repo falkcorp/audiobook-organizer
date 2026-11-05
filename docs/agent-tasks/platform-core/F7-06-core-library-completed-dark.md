@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-06-core-library-completed-dark.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3c40ae0e-a05f-40b2-b19d-4fc0f2dca4b2 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-06 |
 | Release | R2, flip label F7 (dark PR) |
 | Tier | **T4** (Opus / xhigh–max): filesystem transfers and renames over user media; a wrong move loses files |
-| Wave | W27 (beside F3-07, F4-05, F5-03, F9-01; file-disjoint; F3-07 merges first and this PR rebases after it) |
+| Wave | W28 (beside F2-16, F4-05, F5-15, F6-01, F6-02, F7-02, F7-03, F8-03; file-disjoint; this row is W28's one owner of `core/go.mod`, `core/go.sum` and `go.sum`). F3-07 is in W29: if it has merged before this PR, rebase and re-run `go mod tidy` in `core/` |
 | Depends on | F3-01 (core config: the roots are `core.library.roots` config entries), F2-05 (`internal/taskhttp` and `coretest` on tasks, as the inventory row lists) |
 | Spec | 05-library §5L.0 (D-L1 … D-L9), §5L.3 (all: §5L.3.1 roots, paths, registry; §5L.3.2 `RootFS`; §5L.3.3 transfers; §5L.3.4 hashing; §5L.3.5 quarantine; §5L.3.6 path mapping; §5L.3.7 watchers; §5L.3.8 ownership and sharing), §5L.4–§5L.8, §5L.9 (tests), §5L.10 (code moves; the roots cutover is F7-08's); 04 §8.1 F7 |
 
@@ -193,8 +193,3 @@ and test stores).
   (hashing, verify) runs on a bounded pool, never unbounded goroutines.
 - `core/go.mod` changes run `make -C core replace-check toolchain-check`.
 
-## Planner notes
-
-- **`core/go.mod` in W27.** This row edits `core/go.mod`/`go.sum`; no other W27 row lists them, but F3-07 (same wave,
-  merging first) may add a core dependency through the config flip. The rebase after F3-07 must re-run
-  `go mod tidy` in `core/`.

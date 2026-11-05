@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R2-02-end-r2-release-freeze.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: ec2f7009-4e6e-4b0f-8a0b-df22dfc2d023 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | R2-02 |
 | Release | R2 (closing PR) |
 | Tier | **T0** (Haiku / low): one workflow toggle; a grep proves it |
-| Wave | W39 (beside R3-02; the two are file-disjoint) |
+| Wave | W42 (beside R3-02, R3-04; the three are file-disjoint) |
 | Depends on | OWNER-05 (the owner has cut the R2 production release) |
 | Spec | 09 §9.2.1 ("The release freezes": the freeze ends with the R2 release, which turns the dispatch on again) |
 | Branch | `agent/platform-core-r2-02-end-r2-freeze` |
@@ -31,7 +31,7 @@ git rebase origin/main
 ## Goal
 
 End the R2 freeze. The freeze toggle is the workflow-level variable `RELEASE_FREEZE` in
-`.github/workflows/prerelease.yml` (name coined in R1-01's brief): R1-01 added it with `'R1'`, R1-31 cleared it,
+`.github/workflows/prerelease.yml` (the plan's name, plan §(l) item 3): R1-01 added it with `'R1'`, R1-31 cleared it,
 F3-07 set it to `'R2'` when R2's first flip merged. While it is non-empty, `check-rc-ordinal` dispatches no
 production release (09 §9.2.1). This PR clears it, so promotion is on again. This is one line.
 
@@ -126,8 +126,3 @@ Revert the commit: the variable returns to `'R2'` and promotion stops again. No 
 - 09 names no release or flip trailer (09 §9.2.1); add none.
 - Push workflow changes with `git push`, never through the MCP contents API (CLAUDE.md).
 
-## Planner notes
-
-- **Toggle name.** The spec fixes no toggle form (09 §9.2.1). R1-01's and R1-31's briefs coin `RELEASE_FREEZE` and say
-  F3-07 sets it to `'R2'`; F3-07's brief describes the freeze (its step 9) without naming the variable. F3-07 must set
-  `RELEASE_FREEZE: 'R2'` for this T0 brief to apply as written.

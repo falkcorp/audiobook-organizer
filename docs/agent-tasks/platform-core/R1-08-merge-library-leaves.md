@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-08-merge-library-leaves.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d3c5d254-34a3-4d4e-94c4-d6566a7c0634 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -24,18 +24,21 @@
 - `internal/libroot/`
 - `internal/boundedcall/`
 - `internal/diskstats/`
-- `internal/util/path.go`
-- `internal/util/perms.go`
-- `internal/audiobooks/`
-- `internal/backup/`
-- `internal/covers/`
-- `internal/deluge/`
-- `internal/maintenance/jobs/`
-- `internal/organizer/`
-- `internal/plugins/maintenance/`
-- `internal/reconcile/`
-- `internal/repairs/`
-- `internal/server/`
+- `internal/util/`: `path.go`, `perms.go`, `path_test.go`, `util_coverage_test.go`
+- `internal/maintenance/jobs/`: `backfill_file_hashes.go`, `backfill_file_hashes_missing_test.go`, `bulk_deluge_import.go`, `relink_missing_to_itunes.go`
+- `internal/backup/backup.go`
+- `internal/covers/covers.go`
+- `internal/deluge/import.go`
+- `internal/fileops/`: `safe_operations.go`, `service.go`
+- `internal/reconcile/reconcile.go`
+- `internal/server/`: `covers.go`, `openlibrary_service.go`, `diskstats.go`, `itl_paths.go`
+- `internal/audiobooks/service_single.go`
+- `internal/organizer/collision.go`
+- `internal/server/handlers/audiobooks/`: `handler.go`, `handler_files.go`
+- `internal/server/handlers/`: `filesystem.go`, `itunes.go`
+- `internal/server/handlers/system/handler.go`
+- `internal/plugins/maintenance/`: `file_provenance_export.go`, `consolidation_leftovers_fixer.go`, `report_path.go`, `reports_prune.go`, `duration_backfill.go`, `retired_versions_fixer.go`, `tag_backfill.go`
+- `internal/repairs/guards.go`
 - `internal/arch/layering_test.go`
 - `scripts/ci/short_test_weights.json`
 
@@ -89,7 +92,7 @@ git grep -l -E "\"$M/internal/(security/safepath|security/pathvalidation|libroot
 git grep -l -E '\butil\.(SafeJoin|WithinRoot|DirMode|FileMode|SecretFileMode)\b' -- '*.go' | wc -l
 #   expect 6 files: internal/libroot/libroot.go, internal/libroot/libroot_test.go and 4 under internal/maintenance/jobs
 git grep -l -E "\"$M/internal/security/safepath\"" -- internal/fileops | wc -l
-#   expect 2: internal/fileops imports safepath and is NOT in this row's file list (see Planner notes); you edit it anyway
+#   expect 2: internal/fileops/safe_operations.go and service.go import safepath (both in the row)
 grep -n -E '"internal/(boundedcall|diskstats|libroot|security/pathvalidation|security/safepath)"' internal/arch/layering_test.go | wc -l
 #   expect 5 layerOf keys (plus any table entry R1-01 kept for them)
 grep -c -E 'internal/(security|libroot|boundedcall|diskstats)' scripts/ci/short_test_weights.json tools/cmd/sdkguard/internal-deps.txt
@@ -212,13 +215,3 @@ Revert the commit. No stored data changes.
   Apply in the same PR the `go fix` modernizers core's `fix-check` requires in the moved files
   (`go -C core fix ./...`, 04 §2.2).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
-
-## Planner notes
-
-- Missing file in the row: `internal/fileops/` imports `internal/security/safepath` in 2 files at `f7ac5b11e`, so it
-  must be rewritten in this PR or the build breaks; it is not in the row's file list. No same-wave collision
-  (W10's other task, R1-04, does not touch it). Add `internal/fileops/` to the row.
-- `internal/libroot`, `internal/security/pathvalidation` (its external test) and `internal/maintenance/jobs` (4 files
-  use `util.SafeJoin`/`util.DirMode`) are covered by the row's directory entries; `internal/util/` itself is
-  covered by the `internal/util/path.go`/`perms.go` entries only, while the brief also edits
-  `internal/util/util_coverage_test.go` (moving `TestCoverage_PermConstants`). Add that file to the row.

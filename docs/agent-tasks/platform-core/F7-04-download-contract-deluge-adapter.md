@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-04-download-contract-deluge-adapter.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 8ecb5fb3-8574-4b87-94e6-110557990756 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-04 |
 | Release | R2, flip label F7 (dark PR) |
 | Tier | **T2** (Sonnet / high): one adapter over an existing client and a contract the spec fixes; phase 1 only |
-| Wave | W26 (with eighteen other dark PRs; file-disjoint) |
+| Wave | W26 (beside F2-04, F3-06, F7-10, F8-01; file-disjoint) |
 | Depends on | F7-01 (integrations registry: instances, `Env`, `Lease`) |
 | Spec | 05-download §1 (phase-1 build scope; deferred-build members), §3 (Go API, phase-1 members only), §4.1 (instances and adapters), §4.2 (state normalization), §4.4 (path mapping), §4.6 (shutdown), §5–§8, §9 (phase-1 tests), §10 (migration, the `internal/deluge/client.go` row); 03 §3.3 (`integrations/download`); 04 §8.1 F7 |
 
@@ -50,7 +50,7 @@ Nothing of phase 2 is built: no `Adder`, `Remover`, `Categorizer`, `Pauser`, `Se
 |---|---|
 | create | `core/integrations/download/` (`download.go` types, `pool.go`, `paths.go`, tests) |
 | create | `core/integrations/download/deluge/` (`client.go` ported, `adapter.go` with `Descriptor()`, tests with recorded fixtures) |
-| create (not in the row; see Planner notes) | `core/coretest/download.go` (`DownloadConformance`, `FakeDownloadClient`) |
+| create | `core/coretest/download.go` (`DownloadConformance`, `FakeDownloadClient`; 05-download §9 puts both in `coretest`; this row owns this one file of `core/coretest/` in W26) |
 | create | one `changelog.d/` fragment (headerless) |
 
 ## Re-verify before editing (expected results at your base)
@@ -157,10 +157,3 @@ Revert the PR; nothing in ABO uses it.
   `Co-Authored-By: Claude <noreply@anthropic.com>`; `gh pr merge <n> --rebase`; never squash; never `--admin`.
 - `Pool.Items` across instances and `Relocate` grouped by instance: if you fan out per instance, bound it (CLAUDE.md).
 
-## Planner notes
-
-- **`core/coretest/` not in the row.** 05-download §9 places `DownloadConformance` and `FakeDownloadClient` in
-  `coretest`; the row lists only the two download packages. In W26, F7-03 needs `core/coretest/` too (for
-  `coretest.FakeAI`); both add separate files (`download.go`, `ai.go`), so the directory is shared but the files are
-  disjoint. The wave check treats a listed directory as colliding with everything below it, so list the files, not the
-  directory.

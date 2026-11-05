@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R0-04-sessions-list-without-token.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 648e9591-d8d7-4347-a426-28fd4281ad1e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -183,10 +183,3 @@ Revert the commit in a new PR. No stored data changes.
   `Co-Authored-By: Claude <noreply@anthropic.com>`. No release or flip trailer.
 - `gh pr merge <n> --rebase` after every required check is green; never squash, never `--admin`.
 - Remove the worktree after merge.
-
-## Planner notes
-
-- The inventory lists `internal/server/wire_auth_routes.go` as an edited file. The handle can ride the existing
-  `:id` parameter, which keeps `credential_routes_test.go`'s reviewed key `DELETE /api/v1/auth/sessions/:id`
-  unchanged, so that file gets a comment only. Renaming the parameter to `:handle` would also require editing
-  `internal/server/credential_routes_test.go`, which is not in the row's file list.

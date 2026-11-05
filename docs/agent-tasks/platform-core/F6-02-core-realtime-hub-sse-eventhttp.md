@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F6-02-core-realtime-hub-sse-eventhttp.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 246f9170-1d0e-4e5e-b734-1c29f5e86e69 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,9 +10,9 @@
 | ID | F6-02 |
 | Release / flip | R2, events flip F6 (dark PR; live at F6-03) |
 | Tier | **T3** (Opus, high): permission-filtered, resumable streams |
-| Wave | W26 |
-| Depends on | F4-04, F2-05 |
-| Owns gate tests | the hub stream tests of 05-realtime: `TestHub_ResumeFromLastEventID`, `TestHub_PerEventPermissionFilter`, `TestHub_RefusalsAreStatusesBeforeStream` |
+| Wave | W28 (beside F2-16, F4-05, F5-15, F6-01, F7-02, F7-03, F7-06, F8-03; file-disjoint) |
+| Depends on | F4-04, F2-05, F4-01 (`rbac.Checker`), F4-02 (`auth.Service.Revalidate`) |
+| Owns gate tests | the hub stream tests of 05-realtime: `TestHub_ResumeFromLastEventID`, `TestHub_PerEventPermissionFilter`, `TestHub_RefusalsAreStatusesBeforeStream`; `TestRunView_CurrentRedactedWithoutUsersView` (05-tasks) |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
 
 ## ⛔ START HERE
@@ -28,7 +28,7 @@ make web-deps
 git rev-parse HEAD       # BASE
 ```
 
-Confirm F4-04, F2-05 **and F4-02** (see Planner notes) are merged. If not, stop.
+Confirm F4-04, F2-05, F4-01 and F4-02 are merged. If not, stop.
 
 ## Goal
 
@@ -36,8 +36,11 @@ Create `github.com/falkcorp/mediacore/realtime` (L6; imports `auth`, `events`, `
 `core/internal/sse`, and the route package `core/internal/eventhttp` registering `GET /api/core/v1/events` on
 `CoreGroup` with `Perm: rbac.AnyAuthenticated` and `HandleRaw`, exactly as 05-realtime §3–§10 specify. The broker
 algorithm comes from HEAD's opsv3 broker (`internal/server/handlers/opsv3/events.go`: the `bootNonce-seq` id scheme, the
-ring, overflow reset, buckets, send-time filtering). Dark: the kernel creates the hub in P5 and `eventhttp` mounts the
-route only when F6-03 wires it for ABO (hello may run it).
+ring, overflow reset, buckets, send-time filtering). Also add `tasks.RunViewRedactor()` in
+`core/tasks/runview_redactor.go`, the `events.RedactFunc` form of `tasks.RedactRunView` that the
+`core.task.run-changed.v1` catalog entry names (05-tasks §5T.3.10, the `RunViewRedactor` block; 05-events §5E.3.1). Dark:
+the kernel wiring (P5 hub creation, mounting `eventhttp`) is the flip F6-03's, which owns `core/kernel/boot.go` and
+`kernel.go` in its wave; tests run the hub on hello and `coretest` only.
 
 ## Spec
 
@@ -53,18 +56,25 @@ route only when F6-03 wires it for ABO (hello may run it).
 - 05-events §5E.3.1 (`RedactFunc`, `RealtimeMeta.Coalesce`; `Realtime` never on a `Durable` topic), §5E.13.
 - 05-http-api §4.2 stage 9 (compression skips `HandleRaw` and `text/event-stream`), §5 item 4 (SSE handlers end on
   `Server.RegisterOnShutdown` + `Hub.Close`).
+- 05-tasks §5T.3.10, the `RedactRunView` and `RunViewRedactor` declarations next to `RunView` (decode the payload as `RunView`,
+  redact, re-encode; an undecodable payload is returned blanked to `"{}"`), and its test row
+  `TestRunView_CurrentRedactedWithoutUsersView` (§5T.9; COR2-2, COR3-13).
 - 04 §8.1 F6 row (`realtime`, `internal/sse`, `internal/eventhttp`).
 
 ## Files
 
-`core/realtime/`, `core/internal/sse/`, `core/internal/eventhttp/` (all created).
+`core/realtime/`, `core/internal/sse/`, `core/internal/eventhttp/`, `core/tasks/runview_redactor.go` (all created).
+`TestRunView_CurrentRedactedWithoutUsersView` lives in `core/realtime/` (it drives the stream path through the hub);
+add no other file under `core/tasks/`.
 
 ## Re-verify at BASE
 
 ```bash
 ls -d core/realtime core/internal/sse core/internal/eventhttp 2>/dev/null | wc -l     # 0
 grep -rn 'type Catalog interface' core/events/ | wc -l                                # 1 (F4-04)
-grep -rn 'func (s \*Service) Revalidate' core/auth/ | wc -l                           # 1 (F4-02; see Planner notes)
+grep -rn 'func (s \*Service) Revalidate' core/auth/ | wc -l                           # 1 (F4-02)
+grep -rn 'func RedactRunView' core/tasks/ | wc -l                                     # 1 (F2-01)
+ls core/tasks/runview_redactor.go 2>/dev/null | wc -l                                 # 0
 grep -rn 'HandleRaw' core/httpapi/ | wc -l                                            # >= 1 (R1-13)
 grep -rn 'func OnRaw' core/events/ | wc -l                                            # 1
 # HEAD's broker you port (HEAD f7ac5b11e)
@@ -75,7 +85,7 @@ grep -c 'withUserText' internal/server/handlers/opsv3/events.go                 
 
 ## STOP conditions
 
-1. `auth.Service.Revalidate` does not exist (F4-02 not merged): the hub needs it (Planner notes).
+1. `auth.Service.Revalidate` (F4-02) or `tasks.RedactRunView` (F2-01) does not exist: the hub and the redactor need them.
 2. A refusal would be written as a stream frame instead of a status before the stream.
 3. A subscriber could receive an event its checker does not satisfy, including on replay.
 4. ABO would serve the route before F6-03.
@@ -93,7 +103,11 @@ grep -c 'withUserText' internal/server/handlers/opsv3/events.go                 
 4. `internal/eventhttp`: parse the query (`topic`, `exclude`, `key`, `last_event_id` and the `Last-Event-ID` header),
    expand wildcards over topics the principal may see now, refuse an explicit forbidden topic with 403
    `topic_not_permitted`, unknown topic 400, caps 503/429 with `Retry-After`, all before any `text/event-stream` byte.
-5. No per-module handle and no legacy projection (D10). Headers, one `changelog.d/` fragment, Acceptance.
+5. `core/tasks/runview_redactor.go`: `func RunViewRedactor() events.RedactFunc`, a thin adapter over the existing
+   `RedactRunView` (one redaction, never a second copy of its rule); `TestRunView_CurrentRedactedWithoutUsersView`
+   proves the same `RunView` comes out of the REST serializer path (`RedactRunView`) and the stream path (the adapter
+   through this hub) with `Current` blanked without `core:users.view` and kept with it.
+6. No per-module handle and no legacy projection (D10). Headers, one `changelog.d/` fragment, Acceptance.
 
 ## Tests first (05-realtime §10)
 
@@ -102,7 +116,8 @@ then `TestHub_ResumeAfterScheduledReconnect`, `TestHub_NativeFramesUnnamed`, `Te
 `TestHub_ResetOnGap`, `TestHub_SlowSubscriberDoesNotBlockPublisher` (synctest), `TestHub_ReplayIsFilteredLikeLive`,
 `TestHub_StreamClosesOnCredentialRevoke`, `TestHub_RevalidateOnHeartbeat`, `TestHub_PermissionRevokedDropsTopic`,
 `TestHub_CapsGlobalAndBucket`, `TestHub_CoalesceLatestPerKey` (synctest, 250 ms), `TestHub_WriteDeadlineDisconnects`,
-`TestHub_FilterPanicIsContained`, `TestHub_ShutdownClosesStreams`, `TestHub_ExcludePattern`, `TestNoGlobals` (realtime).
+`TestHub_FilterPanicIsContained`, `TestHub_ShutdownClosesStreams`, `TestHub_ExcludePattern`, `TestNoGlobals` (realtime),
+`TestRunView_CurrentRedactedWithoutUsersView` (05-tasks; gate).
 `TestHub_TaskTopicVisibleWithoutTasksView` and `TestRunRedaction_SameOnStreamAndREST` need the executor's
 `core.task.*` topics live (F5-18): write them against a fixture topic with the same `Visible`/`Redact` shape and leave a
 note for F6-03 to run them on the real topics.
@@ -117,16 +132,17 @@ note for F6-03 to run them on the real topics.
 ## Acceptance
 
 ```bash
-(cd core && go vet ./realtime/... ./internal/sse/... ./internal/eventhttp/...)                 # exit 0
-(cd core && go test -race -count=1 ./realtime/... ./internal/sse/... ./internal/eventhttp/...) # ok
-(cd core && go test -count=1 -run 'TestHub_ResumeFromLastEventID|TestHub_PerEventPermissionFilter|TestHub_RefusalsAreStatusesBeforeStream' ./...)   # PASS
+(cd core && go vet ./realtime/... ./internal/sse/... ./internal/eventhttp/... ./tasks/...)      # exit 0
+(cd core && go test -race -count=1 ./realtime/... ./internal/sse/... ./internal/eventhttp/... ./tasks/...) # ok
+(cd core && go test -count=1 -run 'TestHub_ResumeFromLastEventID|TestHub_PerEventPermissionFilter|TestHub_RefusalsAreStatusesBeforeStream|TestRunView_CurrentRedactedWithoutUsersView' ./...)   # PASS
 make -C core ci                                                                                # exit 0
 make ci                                                                                        # exit 0
 ```
 
 ## Out of scope
 
-Deleting hub A and `/api/events`, books' topics, the SPA client (F6-03); `@mediacore/shell`'s client (F9).
+The kernel wiring (P5 hub creation, mounting `eventhttp`), deleting hub A and `/api/events`, books' topics, the SPA
+client (all F6-03); the journal's live tail `core.log.recorded.v1` (F6-05); `@mediacore/shell`'s client (F9).
 
 ## Rollback
 
@@ -144,10 +160,3 @@ feat(core/realtime): permission-filtered resumable SSE hub and /api/core/v1/even
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
-## Planner notes
-
-- **Missing dependency F4-02** (and F4-01). `realtime.Deps.Auth` is `*auth.Service` (for `Revalidate`) and filtering
-  uses `rbac.Checker`; the row lists only F4-04 and F2-05. F4-02 merges in W24, before this row's W26, so the wave order
-  holds, but the dependency is undeclared.
-- Kernel wiring (P5 hub creation, mounting `eventhttp`) is in no row's files (`core/kernel/` is absent from F6-02 and
-  F6-03).

@@ -1,15 +1,15 @@
 <!-- file: docs/agent-tasks/platform-core/F2-03-executor-parity-suites.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f8fddedf-5163-4b6b-a6b2-d8e1133ec889 -->
 <!-- last-edited: 2026-11-05 -->
 
-# F2-03 — `core/internal/executor` written fresh, the resume/cancel/shutdown parity suites, and `TestABOMetricsGatherNoDuplicate`
+# F2-03 — `core/internal/executor` written fresh, the resume/cancel/shutdown parity suites, and the executor cell of `TestABOMetricsGatherNoDuplicate`
 
 | Field | Value |
 |---|---|
 | ID | F2-03 |
 | Release / flip | R2, foundation PRs (F2), **dark** |
-| Wave | W24 |
+| Wave | W25 |
 | Tier | **T4** (Opus / xhigh–max): a fresh executor over every definition shape with dispatch gates, fencing, cancellation, resume, stand-down, the chunk ledger and the CPU budget; correctness is concurrency correctness |
 | Depends on | F2-02 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
@@ -35,7 +35,8 @@ move, of HEAD's `internal/operations/registry` engine, against `tasks.RunStore` 
 grace and fence revocation, pause, stand-down with persisted markers, the Batch/Fixer runner with the chunk ledger,
 `rc.Await` (re-implemented `childop`), the CPU budget and ref-lock table behind `RunItems`/`ForEach`, `WriteRuns`,
 and the task-run instruments (the successor of `internal/opsmetrics`, 05-tasks §5T.11). Add the parity kit under
-`core/tasks/taskstest/parity/` and ABO's `TestABOMetricsGatherNoDuplicate`.
+`core/tasks/taskstest/parity/` and extend ABO's `TestABOMetricsGatherNoDuplicate`, which R1-15 created (05-metrics §12:
+it exists from R1), with the executor's cell.
 
 **Dark in ABO, and this is the invariant that can break production:** ABO's App constructs no executor and creates
 no `<namespace>.ops` instrument before F5 (05-tasks §5T.11 "One owner per family"; 05-metrics §13 item 1).
@@ -63,7 +64,7 @@ grep -rn 'func StoresSuite' core/tasks/taskstest/                # 1 hit, else S
 grep -rn 'type Executor interface' core/tasks/                   # 1 hit (F2-01), else STOP
 grep -rn 'func (r \*Registry) Wait' core/health/                 # 1 hit (F2-10), else STOP
 test ! -e core/internal/executor && echo absent                  # "absent"
-grep -rln --include='*.go' 'TestABOMetricsGatherNoDuplicate' . | head   # 0 hits at f7ac5b11e; see "Metrics test" below
+grep -rln --include='*.go' 'func TestABOMetricsGatherNoDuplicate' . | grep -v '^./core/'   # exactly 1 path (R1-15's; expected internal/books/metrics_gather_test.go), else STOP
 # HEAD engine being re-implemented (still present until F5; counts at f7ac5b11e)
 ls internal/operations/registry/*.go | grep -vc _test            # 35 non-test files at f7ac5b11e (spec cites 30 at 748fd787a; regenerate)
 grep -n 'New(store, slog.Default(), 8, hub)' internal/operations/registry/register.go   # 1 hit: HEAD's 8-worker default
@@ -76,12 +77,11 @@ grep -c '^func Test' internal/operations/registry/shutdown_drain_test.go interna
 grep -n 'zombies' internal/opsmetrics/opsmetrics.go | head -2   # the attribute-less ops.zombies gauge (line 18 at f7ac5b11e)
 ```
 
-If `ReadySignal` in `core/tasks` is still the string fallback F2-01 may have used, switch it to
-`type ReadySignal = health.ComponentID` in this PR (one-line change in `core/tasks/`, allowed here).
+`tasks.ReadySignal` is already `health.ComponentID` (F2-01 depends on F2-10); no switch is needed here.
 
-**Metrics test.** 05-metrics §12 says `TestABOMetricsGatherNoDuplicate` exists "from R1". If the grep above finds it
-in the root module, **extend** that test (add the cell below) and do not create `internal/books/metrics_gather_test.go`;
-otherwise create it at that path. Record which in the PR body.
+**Metrics test.** R1-15 created `TestABOMetricsGatherNoDuplicate` in R1 (05-metrics §12). This PR **extends** it in the
+file the grep above prints (expected `internal/books/metrics_gather_test.go`); it never creates a second copy. If the
+grep prints 0 paths or more than 1, STOP and report.
 
 ## Files
 
@@ -93,9 +93,11 @@ Create:
   `core.tasks.*` values of §5T.10, the `tasks.Stores`, the `health.Registry`, the metrics scope, `OnTerminal` and an
   `InstrumentsOff bool`, all coined here).
 - `core/tasks/taskstest/parity/` — the parity kit (case tables + runner) and `TestParity_ResumeCancelShutdown`.
-- `internal/books/metrics_gather_test.go` — only if the test does not exist yet (above).
+Modify:
 
-May modify: `core/tasks/` only for the `ReadySignal` switch and for unexported hooks `RunItems`/`ForEach` need to
+- `internal/books/metrics_gather_test.go` (or the path the grep printed) — add the executor cell below.
+
+May modify: `core/tasks/` only for unexported hooks `RunItems`/`ForEach` need to
 reach the executor through an RC-derived ctx (F2-01 left an unexported interface for this). Nothing else in
 `core/tasks`. Do not touch `core/kernel/`, `internal/operations/**`, `internal/opsmetrics/**`.
 
@@ -147,8 +149,9 @@ All concurrency tests use `testing/synctest` where the spec says so and run unde
 Tests whose subject is not the executor stay with their owners: `TestStart_DryRunFieldRefused400`,
 `TestApprove_RequiresVerifiedMethodAndPermission`, `TestStart_IdempotencyKeyHeaderReplays`,
 `TestStart_ConcurrentSameIdempotencyKeyOneRun`, `TestRunView_CurrentRedactedWithoutUsersView`, `TestTimelineLogDiscard`
-(F2-05, HTTP); the `TestSchedule*` rows (F2-04); `TestOutboxTriggered_*` (F6); `TestCoreRun_NeverCallsModuleWriter`
-(archtest, F5-17).
+(F2-05, HTTP; `TestRunView_CurrentRedactedWithoutUsersView` is F6-02's); the `TestSchedule*` rows (F2-04);
+`TestOutboxTriggered_*` (F6); `TestCoreRun_NeverCallsModuleWriter` (archtest over core's own kinds, F5-03);
+`TestDisabledModuleWithRunsBoots` (the kernel's held-runs boot, F2-16).
 
 **Parity kit** (`core/tasks/taskstest/parity/`): port HEAD's resume, cancel and shutdown suites (the 15 files and 68
 `Test` functions listed in the base-state greps at f7ac5b11e; regenerate the count) as **behaviour oracles**: for each HEAD test,
@@ -156,14 +159,14 @@ one case `{name, HEAD file:func, setup, action, expected outcome}` where the exp
 asserts, expressed in `tasks.RunState` and `ItemsResult` terms. `TestParity_ResumeCancelShutdown` runs every case on
 core's executor with test definitions shaped like HEAD's test defs. A HEAD case that has no core equivalent (a v1
 status bridge, a v2-only row shape) is listed in the kit's `excluded.go` with its reason; the list may only shrink.
-F5's conversion groups re-run the same cases over the converted definitions.
+F5-18 re-runs `TestParity_ResumeCancelShutdown` over the converted definitions at the flip.
 
-**ABO metrics cell** (in `TestABOMetricsGatherNoDuplicate`): build the kernel Provider through
-`coretest.MetricsProvider` with ABO's `MetricNamespace`, register ABO's real recorders (`app.InstallProcessDefaults`,
-the client_golang families through `Registerer()`, `opsmetrics.Default()`, books' recorders), drive one HEAD task run,
-one legacy HTTP request and one core-route request; assert `Gatherer().Gather()` returns no error and no family has
-two owners (05-metrics §12). Add an explicit assertion that no `ops` family in the gather came from
-`core/internal/executor` (ABO builds none).
+**ABO metrics cell** (added to R1-15's `TestABOMetricsGatherNoDuplicate`; keep its existing cells unchanged): over the
+App the test already builds (ABO's `MetricNamespace`, ABO's real recorders, one HEAD task run, one legacy HTTP request and
+one core-route request, 05-metrics §12), add an executor sub-case: build a second, standalone executor on a separate
+`coretest.MetricsProvider` with `InstrumentsOff: false` and assert its 18 families gather there without error, then assert
+that ABO's gather still returns no error, that no family has two owners, and that no `ops` family in ABO's gather came
+from `core/internal/executor` (ABO builds none before F5; 05-metrics §13 item 1).
 
 ## Steps
 
@@ -202,8 +205,9 @@ make ci                                                                         
 
 ## Out of scope
 
-Kernel construction and start of the executor (see F2-05's planner notes); `taskhttp`; the scheduler; the outbox
-relay; converting any ABO definition; deleting HEAD's engine (F5-18).
+Kernel construction and start of the executor, the start rule (F2-16); `taskhttp` (F2-05); the scheduler (F2-04);
+the outbox relay (F6); converting any ABO definition; re-running the parity kit over converted definitions and deleting
+HEAD's engine (F5-18).
 
 ## Idempotency / rollback
 
@@ -215,11 +219,3 @@ the PR; nothing in ABO or the kernel imports the executor yet.
 File headers; conventional commit (`feat(core/executor): fresh task executor and parity kit (dark)`) with
 `Co-Authored-By: Claude <noreply@anthropic.com>`; `gh pr merge <n> --rebase`; `changelog.d/` fragment; CLAUDE.md
 concurrency rules (this package is where they are enforced for every app).
-
-## Planner notes
-
-- 05-metrics §12 says `TestABOMetricsGatherNoDuplicate` exists from R1, but no R1 row owns it; the inventory has F2-03
-  create it. The brief tells the agent to extend it if an R1 PR already added it.
-- `TestParity_ResumeCancelShutdown` is marked (ABO) in 05-tasks §5T.9 and compares converted definitions, which do
-  not exist until F5's conversion groups. At F2 the kit runs over test definitions shaped like HEAD's; the inventory
-  row does not name which later row re-runs it over converted definitions (F5-18's gate lists the parity suites).

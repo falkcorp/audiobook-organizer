@@ -1,9 +1,9 @@
 <!-- file: docs/agent-tasks/platform-core/F2-12-r2-corpus-stage1-r0-written.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: dd68df55-0fe6-4120-9078-f5f927fbe5b4 -->
 <!-- last-edited: 2026-11-05 -->
 
-# F2-12 — R2 fixture corpus, stage 1: a committed script drives the R0 release binary through its API over a seeded store, and the R0 binary records the answers
+# F2-12 — R2 fixture corpus, stage 1: a committed script drives the R0 release binary through its API over a seeded store, and the R0 binary records the answers (effective config, schedules, search, ABS responses; reach is F4-07's)
 
 | Field | Value |
 |---|---|
@@ -35,7 +35,8 @@ script boots the R0 binary on that store and records **its answers** (effective 
 responses) as testdata. Every later R2 PR migrates this corpus and compares against these answers.
 
 Not this PR: the hand-built overlay for cases R0's API cannot write (F2-13), the production-shaped store (F2-14), the
-cutover-suite harness (F2-15), the reach oracle (F4-07, `scripts/r2corpus/record_r0_reach.py`; see planner note).
+cutover-suite harness (F2-15), the reach oracle (F4-07, `scripts/r2corpus/record_r0_reach.py`, which records reach over
+this corpus).
 
 ## Spec to read first
 
@@ -47,7 +48,8 @@ fixture); 05-rbac §12 `TestIdentityCutover_ReachOracle` (reach is F4-07's); 14 
 
 ## Inputs (owner-provided; STOP if missing)
 
-- The **R0 tag** that OWNER-02 cut and kept. `git tag -l` must list it; the lead gives you its name.
+- The **R0 tag** that OWNER-02 cut and kept. `git tag -l` must list it. The tag name and its release asset are owner
+  facts from OWNER-02 that no file in the repo records: the lead hands them to you with this brief.
 - The R0 release binary for linux/amd64, fetched from that tag's GitHub release (`gh release download <tag> --pattern
   '*linux*amd64*'`), checked with `./audiobook-organizer --version` (and `--version-json` if R0 has it). If the release has
   no such asset, STOP: building at the tag is not the same binary (09 §9.3 says "the R0 release binary").
@@ -68,8 +70,8 @@ grep -n 'db-census' internal/server/handlers/diagnostics.go | head -2   # the ce
 Create: `scripts/r2corpus/write_r0_corpus.py`, `scripts/r2corpus/record_r0_answers.py`,
 `internal/books/testdata/r2corpus/stage1/` (the store directory and its state directory, as the R0 binary leaves them),
 `internal/books/testdata/r2corpus/answers/`, `internal/books/testdata/r2corpus/manifest.json`. Add tests for the scripts
-under `scripts/tests/` (`test_write_r0_corpus.py`, `test_record_r0_answers.py`; names coined here; see planner note).
-Python, not shell (CLAUDE.md rule 4). No Go change.
+under `scripts/tests/` (`test_write_r0_corpus.py`, `test_record_r0_answers.py`; names coined here) and the Go manifest
+test `internal/books/r2corpus_manifest_test.go`. Python, not shell (CLAUDE.md rule 4). No other Go change.
 
 ## What the corpus must contain (coverage contract)
 
@@ -117,7 +119,7 @@ store, never on the committed store itself (the committed bytes must stay as wri
   check against `manifest.json`); a dry mode lists the API calls without a binary.
 - `scripts/tests/test_record_r0_answers.py`: every answer file named in `manifest.json` exists and parses.
 - `TestR2Corpus_ManifestMatchesFiles` (name coined here, Go, `internal/books/r2corpus_manifest_test.go`): every file the
-  manifest names exists; every stage-1 case names a family. (Add the Go file to the PR; see planner note.)
+  manifest names exists; every stage-1 case names a family.
 
 ## Acceptance
 
@@ -152,12 +154,3 @@ File headers on the scripts and the manifest (JSON cannot carry a comment header
 (`test(r2): R0-written fixture corpus stage 1 and its answers`) with `Co-Authored-By: Claude <noreply@anthropic.com>`;
 `gh pr merge <n> --rebase`; `changelog.d/` fragment. Never commit `.api-token`, `.bootstrap-token` or `.claude/.credentials/`
 (the pre-commit hook blocks them).
-
-## Planner notes
-
-- The row title lists "reach" among the answers, but F4-07 owns `scripts/r2corpus/record_r0_reach.py` and the reach oracle;
-  this brief leaves reach to F4-07. One of the two rows should drop it.
-- The row's files list no tests for the two scripts or the manifest. The brief adds `scripts/tests/test_write_r0_corpus.py`,
-  `scripts/tests/test_record_r0_answers.py` and `internal/books/r2corpus_manifest_test.go`.
-- The R0 tag name and the release asset are owner facts (OWNER-02) that no row records in the repo; the lead must hand them
-  to the agent.

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-03-release-r1-cut-deploy.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: dcd841c3-d463-456c-9860-5243f9a1dc22 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -14,8 +14,8 @@
 | Release | R1 |
 | Tier | **OWNER**: production read, release, deploy |
 | Wave | W21 |
-| Depends on | R1-01 … R1-30 (all merged) |
-| Unblocks | **R1-31** (ends the R1 freeze after this release) and **every F2 task's merge**: R2's content lands dark while R1 is deployed (09 §9.3). F2 PRs may be opened earlier; only their merge waits. |
+| Depends on | R1-01 … R1-30, R1-32, R1-33, R1-34 (all merged; every R1 task but R1-31) |
+| Unblocks | **R1-31** (ends the R1 freeze after this release), **OWNER-04** (its reads need the deployed R1) and **every F2 task's merge**: R2's content lands dark while R1 is deployed (09 §9.3). F2 PRs may be opened earlier; only their merge waits. |
 | Spec | 09 §9.4 R1 (Content: release note, Rollback, Owner), §9.7 P12, §9.2.1 (the R1 freeze), §9.3 |
 
 ## Why P12 first
@@ -25,7 +25,7 @@ kept 7 days (09 §9.2.3, §9.4 R1 Migrations). A disk without room halts the boo
 
 ## Owner steps
 
-1. **Check the content.** R1-01 … R1-30 are merged and R1's verification passed (09 §9.4 R1 Verification; plan
+1. **Check the content.** R1-01 … R1-30 and R1-32 … R1-34 are merged and R1's verification passed (09 §9.4 R1 Verification; plan
    §(b) R1 row), including `TestR0OpensR1Store`, both image-job runs and both `unit-lifecycle` cells.
 2. **P12: disk headroom** (09 §9.7 P12), on the production host:
 

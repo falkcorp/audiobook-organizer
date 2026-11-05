@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-03-core-ai-router-dark.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: c070f730-aa7a-4a14-ab1e-da2d1d3bf68d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,8 +10,8 @@
 | ID | F7-03 |
 | Release | R2, flip label F7 (dark PR) |
 | Tier | **T4** (Opus / xhigh–max): the AI router and durable batch jobs, with secret origin rules; a race between poll, apply and cancel applies a batch twice or never |
-| Wave | W26 (with eighteen other dark PRs; file-disjoint) |
-| Depends on | F7-01 (integrations registry), F2-11 (F2's minimal `core/integrations/ai` package with `ai.InterimPoll` and the `core.ai.batch-poll` registration) |
+| Wave | W30 (beside F4-07, F5-13, F6-05, F7-05; file-disjoint) |
+| Depends on | F7-01 (integrations registry), F2-11 (F2's minimal `core/integrations/ai` package with `ai.InterimPoll` and the `core.ai.batch-poll` registration), F7-06 (both rows edit `core/go.mod`) |
 | Spec | 05-ai §1 (scope; deferred-build members), §3 (Go API), §4 (lifecycle: catalog, router, batch jobs, the native store), §5 (errors), §6 (concurrency), §7 (keys), §8 (metrics), §9 (tests), §10 (migration: the router algorithm, the capability-ID map is books'); 05-metrics §13 item 3 (AI rows); 04 §8.1 F7, §8.5 F7 (the `dispatch.go` cuts); 05-tasks §5T.8.2 (`core.ai.batch-poll`) |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. **Dark:** ABO's `internal/aidispatch`,
@@ -60,8 +60,9 @@ Deferred-build (05-ai §1): `ai.Router.Usage`, `ai.UsageQuery`, `ai.MonthlyToken
   `-race`); no blind write (`TestNativeJobStore_BlindWriteRefused`).
 - **I5.** `core.integrations.disabled` refuses every endpoint, stores no job, and the poll still advances its clock
   (`TestRouter_IntegrationsDisabledRefusesEveryEndpoint`).
-- **I6.** Only the adapter package imports `openai-go` (archtest, see Planner notes for its path); a private host
-  needs `Local` (`TestOpenAICompat_PrivateHostNeedsLocal`).
+- **I6.** Only the adapter package `integrations/ai/openai` imports `openai-go` (archtest `NoAISDKOutsideAdapters`,
+  05-ai §9: "only `integrations/ai/openai` may import `openai-go`"); a private host needs `Local`
+  (`TestOpenAICompat_PrivateHostNeedsLocal`).
 - **I7. Dark.** ABO's gather and AI behaviour are unchanged in this PR.
 
 ## Files
@@ -71,7 +72,8 @@ Deferred-build (05-ai §1): `ai.Router.Usage`, `ai.UsageQuery`, `ai.MonthlyToken
 | modify / grow | `core/integrations/ai/` (catalog, router, batch, job store, importer, metrics, the `core.ai.batch-poll` native body) |
 | create | `core/integrations/ai/aitest/` (`JobStoreSuite`, `Conformance`) |
 | create | `core/integrations/ai/openai/` (adapter `core.openai_compat` over `providerhttp`, `openai-go/v3`) |
-| create (not in the row; see Planner notes) | `coretest.FakeAI` (05-ai §9 "Fake") in `core/coretest/` |
+| create | `core/coretest/ai.go` (`coretest.FakeAI`, 05-ai §9 "Fake"; this row owns this one file of `core/coretest/`; F7-02 owns `provider.go`, F2-16 `tasks.go` and `harness.go`, both in W28) |
+| modify | `core/go.mod`, `core/go.sum`, `go.sum` (`github.com/openai/openai-go/v3` into core), `core/archtest/thirdparty_allow.txt` (its allowlist line) |
 | create | one `changelog.d/` fragment (headerless) |
 
 ## Re-verify before editing (expected results at your base)
@@ -111,7 +113,10 @@ STOP if `ai.Router` already exists, if F7-01's registry is missing, or if `provi
 7. Adapter `core.openai_compat` in `core/integrations/ai/openai/` through `providerhttp`, egress policy and `Local`.
 8. `aitest.JobStoreSuite`, `aitest.Conformance` (recorded fixtures; live servers behind `MEDIACORE_LIVE_AI=1`),
    `coretest.FakeAI`.
-9. `core/go.mod` gains `openai-go/v3` if needed (`make -C core replace-check`). Headers, fragment, acceptance.
+9. `core/go.mod` gains `github.com/openai/openai-go/v3` (at the root's pinned version) and
+   `core/archtest/thirdparty_allow.txt` its allowlist line; both files, `core/go.sum` and `go.sum` are in this row's
+   files. F7-06 is a dependency, so it has merged: rebase, then make only the `require` addition and `go mod tidy` in
+   `core/`. Headers, fragment, acceptance.
 
 ## Code contract (05-ai §3, verbatim excerpts; copy the rest from the spec)
 
@@ -188,13 +193,3 @@ Revert the PR; nothing in ABO uses it and no stored data is written.
   `Co-Authored-By: Claude <noreply@anthropic.com>`; `gh pr merge <n> --rebase`; never squash; never `--admin`.
 - Concurrency (CLAUDE.md): the router's per-endpoint slots are the bound; batch result application iterates
   library-scale results through a bounded pool inside the apply task, never unbounded goroutines.
-
-## Planner notes
-
-- **Adapter package path.** The row and 04 §8.1 name `core/integrations/ai/openai/` (`mediacore/integrations/ai/openai`);
-  05-ai §9's archtest `NoAISDKOutsideAdapters` says "only `integrations/ai/openaicompat` may import `openai-go`". The
-  brief follows the row and 04; the archtest's allowed path must name the same package. The review loop should pick
-  one name.
-- **`coretest.FakeAI`** (05-ai §9 "Fake") lives under `core/coretest/`, which the row does not list. F2-05
-  (`core/coretest/tasks.go`, W25) and F7-05 (`core/coretest/mail.go`, W30) touch the same directory in other waves;
-  in W26 no other row lists `core/coretest/`.

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-03-core-health-completed-dark.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d5d73704-a330-44d0-8759-af83c06c3893 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F8-03 |
 | Release | R2, flip label F8 (dark PR) |
 | Tier | **T3** (Opus / high): probes and the startup supervisor; unauthenticated probes must never leak a token outside the golden set |
-| Wave | W24 (with nine other dark PRs; file-disjoint) |
+| Wave | W28 (beside F2-16, F4-05, F5-15, F6-01, F6-02, F7-02, F7-03, F7-06; file-disjoint; this row is W28's one owner of `core/kernel/health.go`) |
 | Depends on | F2-10 (readiness core), F2-11 (`diagnostics` minimal owner registration and `InterimExport`), F4-04 (the `events` bus, for the status topic) |
 | Spec | 05-health §5H.3 (all of it: §5H.3.1 registry, §5H.3.2 startup steps, §5H.3.3 probes and HTTP, §5H.3.4 supervisor signals, §5H.3.5 diagnostics bundle, §5H.3.6 sysinfo), §5H.4 (stop budget), §5H.5–§5H.8, §5H.9 (tests), §5H.10 ("Landing by release", row F8); 06 §6.4.10 (F8 row: `Registrar.StartupSteps`, `Registrar.Diagnostics`); 04 §8.1 F8 |
 
@@ -33,8 +33,9 @@ git rebase origin/main
 Complete core `health` beyond F2's readiness core (05-health §5H.10, row F8: "everything else"): `Snapshot` and
 `ComponentState`, the remaining core components, `GET /livez` and `GET /readyz` (exact `Router.Infra` patterns),
 `GET /api/core/v1/health`, `GET /api/core/v1/system/info`, `GET /api/core/v1/system/status`, the diagnostics routes,
-the health status topic on the bus, `Startup` with `StepClass`/`StartupStep` and `Registrar.StartupSteps`, the
-systemd watchdog ping from the liveness heartbeat, `health/sysinfo` (a re-implementation of HEAD's host parts, not a
+the health status topic on the bus, `Startup` with `StepClass`/`StartupStep` (the module member
+`Registrar.StartupSteps` and `Registrar.Diagnostics` are the flip F8-04's, which owns `core/module/` in its wave), the
+heartbeat and the systemd watchdog ping (start functions in `core/kernel/health.go`, called by F8-04), `health/sysinfo` (a re-implementation of HEAD's host parts, not a
 move), and the diagnostics bundle (`Section`, `Writer`, `WriteJSONL`, `Viewer`, `Contributor`) that will replace
 `diagnostics.InterimExport` at F8-04.
 
@@ -65,7 +66,8 @@ move), and the diagnostics bundle (`Section`, `Writer`, `WriteJSONL`, `Viewer`, 
 | create | `core/health/sysinfo/` (`Info`, `Memory`, `RootSpace`, `Collect`) |
 | create | `core/health/diagnostics/bundle.go` (the bundle, `Section`, `Writer`, `WriteJSONL`, `Viewer`, `Contributor`) |
 | create | `core/internal/healthhttp/` (`/api/core/v1/health`, `/api/core/v1/system/info`, `/api/core/v1/system/status`, `/api/core/v1/diagnostics/{run}`) |
-| modify (not in the row; see Planner notes) | `core/module/` (`Registrar.StartupSteps`, `Registrar.Diagnostics` per 06 §6.4.3/§6.4.10) and the kernel file that starts the heartbeat and watchdog (`core/kernel/health.go`, F2-10's) |
+| modify | `core/kernel/health.go` (F2-10's file): the kernel functions that start the heartbeat and the watchdog ping and register the remaining core components. Nothing calls them from `core/kernel/boot.go` in this PR: the call is F8-04's (it owns `boot.go` in W36), so ABO's boot is unchanged; tests call them directly |
+| (not this row) | `core/module/` (`Registrar.StartupSteps`, `Registrar.Diagnostics`, 06 §6.4.10 F8 row) and ABO's mounts: F8-04 |
 | create | tests beside each; one `changelog.d/` fragment (headerless) |
 
 ## Re-verify before editing (expected results at your base)
@@ -96,12 +98,15 @@ STOP if `Registry.Snapshot` already exists (someone landed part of this), if `co
 2. Write the tests of §5H.9 first (next section).
 3. Implement §5H.3.1's remaining members (`Snapshot`, `Live`, `ComponentState`, check scheduling with
    `Interval`/`Timeout`, panic and timeout becoming Down).
-4. §5H.3.2 `Startup` and `Registrar.StartupSteps` (core rows: store, metrics, secure state dir, key guard, secrets,
-   config load/validate, registration gates, http; books' `searchindex` becomes a books Degraded step at F8-04).
+4. §5H.3.2 `Startup` (core rows: store, metrics, secure state dir, key guard, secrets, config load/validate,
+   registration gates, http; books' `searchindex` becomes a books Degraded step at F8-04). Shape `Startup` so F8-04's
+   `Registrar.StartupSteps` can hand module rows to it without changing it.
 5. §5H.3.3 probes and routes; `/livez` and `/readyz` as `Router.Infra` exact patterns; the authenticated routes with
    their permissions (`core:system.manage`, `core:system.status`; diagnostics download with `Guards.Interactive` and
    the actor-or-admin rule, audited as `core.diagnostics.download`).
-6. §5H.3.4 watchdog: `WATCHDOG=1` on the same heartbeat as `/livez`; `STOPPING=1` at shutdown start.
+6. §5H.3.4 watchdog: `WATCHDOG=1` on the same heartbeat as `/livez`; `STOPPING=1` at shutdown start; both in
+   functions of `core/kernel/health.go` that F8-04 calls from `boot.go` (05-health §5H.10 F8 row lands the watchdog
+   ping with the flip). Do not edit `boot.go`.
 7. §5H.3.5 diagnostics bundle: core sections and module `Contributor`s, typed and pattern redaction, `os.Root`
    confinement, run expiry (410).
 8. §5H.3.6 sysinfo: host memory, uptime, runtime, root space for `[]library.Root`; no library counts (those stay
@@ -159,9 +164,7 @@ func Collect(ctx context.Context, roots []library.Root) Info
 ## Tests (write first; spec names copied exactly, 05-health §5H.9)
 
 `TestReadyz_CriticalDownIs503_LivezStays200`, `TestProbes_VariantsAreNotSPA`, `TestReadyz_FlipsBeforeHTTPDrain`,
-`TestProbes_BodyHasOnlyTokens`, `TestHealth_UnauthenticatedTokenSetGolden` (this row owns it: in this dark PR it
-asserts against HEAD's `/health` and `GET /api/v1/system/status` with every token of §5H.3.1 raised at once; F8-04
-re-points it at books' `/health`, `/readyz` and `GET /api/core/v1/health`), `TestCheck_PanicAndTimeoutBecomeDown`,
+`TestProbes_BodyHasOnlyTokens`, `TestCheck_PanicAndTimeoutBecomeDown`,
 `TestRegistry_Wait_UnblocksOnUp`, `TestStartup_UnknownStepRefused` (and the `archtest.StartupSteps` self-test),
 `TestHeartbeat_StallFailsLivezAndStopsWatchdog`, `TestStopBudget_PhasesNeverExceedTotal`,
 `TestDiagnostics_SecretsNeverSerialised`, `TestDiagnostics_PatternRedaction`, `TestDiagnostics_ViewerFiltersSections`,
@@ -175,7 +178,8 @@ re-points it at books' `/health`, `/readyz` and `GET /api/core/v1/health`), `Tes
 # Core health tests. Expected: ok, no FAIL
 (cd core && go test -count=1 -race ./health/... ./internal/healthhttp/...)
 
-# The gate test this row owns. Expected: ok
+# TestHealth_UnauthenticatedTokenSetGolden exists from R0-06 (extended by R1-24 and F2-10); this row adds no cell
+# (F8-04 adds the F8 cells) and must keep it green. Expected: ok
 go test -count=1 -run TestHealth_UnauthenticatedTokenSetGolden ./...
 
 # Dark: HEAD's health routes unchanged. Expected: ok
@@ -196,6 +200,8 @@ make -C core ci
   `app.Options.InterimBackends` (F8-04).
 - `internal/sysinfo`'s library parts and `RecentOperations` (they stay books').
 - The kernel `/metrics` mount (F8-04).
+- `Registrar.StartupSteps`, `Registrar.Diagnostics` and their kernel calls (F8-04).
+- `TestHealth_UnauthenticatedTokenSetGolden`'s cells: R0-06 owns the test; F8-04 adds the F8 cells.
 
 ## Rollback
 
@@ -210,10 +216,3 @@ Revert the PR. Nothing in ABO used it; no stored data.
 - The diagnostics export walks library-scale data through module `Contributor`s: any per-item loop you add follows
   CLAUDE.md's concurrency rule (bounded worker pool); keep streaming through `WriteJSONL`.
 
-## Planner notes
-
-- **Files missing from the row.** The title includes `Registrar.StartupSteps` (and §5H.3.5 needs
-  `Registrar.Diagnostics`, 06 §6.4.10 F8 row), which live in `core/module/`; starting the heartbeat and watchdog
-  needs the kernel's health wiring (`core/kernel/health.go`, F2-10's file). Neither is in the row's files; other
-  W24 rows (F3-02 … F3-05, F4-02, F5-17, F2-03, F2-04, F2-15) should be checked for `core/module/` and
-  `core/kernel/` edits before this wave runs.

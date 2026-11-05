@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-06-books-config-cutover-m2-rename-table.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: a42617df-0a4d-49ef-a19d-48538878932a -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F3-06 |
 | Release / flip | R2, config flip F3 (dark PR: built and tested, **unregistered** until F3-07) |
 | Tier | **T4** (Opus, xhigh–max): a one-way migration of every setting and secret |
-| Wave | W25 |
+| Wave | W26 |
 | Depends on | F3-01, F3-02, F3-03, F3-04, F2-13, F2-15 |
 | Owns gate tests | `TestRenameTable_Golden`; `TestConfigCutover_EffectiveConfigUnchanged` (the config oracle); `TestConfigCutover_SecretsReadable`; `TestConfigCutover_KeyGuard`; `TestConfigCutover_QuarantineNotDrop`; `TestConfigCutover_GapFillStripped`; `TestConfigCutover_Idempotent`; `TestConfigCutover_RestoreDrill`; `TestConfigCutover_RowsGone` |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
@@ -42,10 +42,14 @@ Create the books package `internal/books/cutover` (04 §2.4: one of 03 §3.5.1's
 3. **M2** as a books `datamigrate.DataMigration` (`Cutover: true`, `Breaking`, `BootBlocking`): M2a (one batch) and
    M2b (the gap-fill strip), with HEAD's key guard;
 4. books' **M7** half (the level step raising `books`, with the legacy projection) and books' **M8** definition
-   (`books.rewrite-after-<step name>`), on F3-04's machinery.
+   (`books.rewrite-after-<step name>`), on F3-04's machinery;
+5. `internal/books/cutover/stepids.go` (path and names coined here), the one place that **reserves the step IDs of
+   M2–M6** (and names M7's books half), as exported string constants. F4-06 (M3), F5-16 (M4), F5-15 (M5), F7-08 (M6)
+   and R3-02's `UpgradeFloor.Requires` take their IDs from it instead of coining their own.
 
-Nothing is registered: F3-07 creates `internal/books/cutover/steps.go` and puts the list in `books.Module()`'s
-manifest. Do not create `steps.go`.
+Nothing is registered: F3-07 creates `internal/books/cutover/steps.go`, adds `module.Manifest.Cutover` and
+`module.Importers{Config, Secrets}` (06 §6.4.2, §6.4.10 F3 row) and puts the list in `books.Module()`'s manifest. Do
+not create `steps.go` and do not touch `core/module/`: your step constructors take the importers directly.
 
 ## Spec
 
@@ -69,6 +73,7 @@ manifest. Do not create `steps.go`.
 | blob codec | `internal/config/persistence.go:359-824` (`migrate*Blob`), `:1088-1129` (one-shots), `:1932-2016` | same |
 | row cipher | `internal/database/settings.go:110-140,189-235` | after R1-26: `internal/books/store/settings.go` |
 | key guard | `cmd/root.go:760` `guardAgainstKeyRegeneration` | same |
+| `invite_config.go`, `bootstrap_key_ttl.go` | `internal/config/` | **moved into core by F4-02** (W25, before this row): read HEAD's copy with `git show 748fd787a:internal/config/<file>` |
 | removed keys | `internal/config/removed_keys.go` | same |
 | `BindEnv` calls | 132 in `config.go`, 9 in `abs_config.go`, 1 in `invite_config.go` (05-config §1.12.3) | same |
 | corpus | — | `internal/books/testdata/r2corpus/` (F2-12 stage 1, F2-13 overlay) |
@@ -78,7 +83,7 @@ manifest. Do not create `steps.go`.
 
 | Action | Path |
 |---|---|
-| create | `internal/books/cutover/` (package; the generator; the frozen HEAD files; M2; books' M7 and M8 definitions; tests; `testdata/rename_table.golden`) |
+| create | `internal/books/cutover/` (package; the generator; the frozen HEAD files; M2; books' M7 and M8 definitions; `stepids.go`; tests; `testdata/rename_table.golden`) |
 | modify | `internal/arch/layering_test.go` (add `internal/books/cutover` to `layerOf` at its computed layer) |
 
 ## Re-verify at BASE
@@ -88,7 +93,8 @@ ls -d internal/books/cutover 2>/dev/null | wc -l                                
 grep -c '^type Config struct' internal/config/config.go                            # expect 1
 grep -c 'BindEnv(' internal/config/config.go                                       # expect 132
 grep -c 'BindEnv(' internal/config/abs_config.go                                   # expect 9
-grep -c 'BindEnv(' internal/config/invite_config.go                                # expect 1
+ls internal/config/invite_config.go internal/config/bootstrap_key_ttl.go 2>/dev/null | wc -l   # expect 0 (F4-02 moved them)
+git show 748fd787a:internal/config/invite_config.go | grep -c 'BindEnv('            # expect 1 (read the frozen source here)
 grep -rhoE 'func migrate[A-Za-z]+Blob' internal/ | sort -u | wc -l             # HEAD: 11 (persistence.go 9, ai_endpoints.go 1, log_retention.go 1; R1-07 moves log_retention.go). Freeze every transform the decode path calls at BASE (HEAD persistence.go:976-1129)
 grep -c 'func guardAgainstKeyRegeneration' cmd/root.go                             # expect 1
 grep -rn 'func DecryptValue' internal/books/store/settings.go | wc -l             # expect 1 (after R1-26)
@@ -110,12 +116,14 @@ checks decide; a zero on an edit target stops the task.
 2. Counts in the golden differ from 05-config's (134 `k`, 11 `s`, 9 `i`, 16 `o`, 3 `x`; 173 top-level rows, two with two
    targets) and the difference is not explained by a HEAD change since `748fd787a`: stop and report.
 3. A config oracle cell disagrees with the R0 binary's answer.
-4. Any registration of M2, M7 or M8 in `books.Module()`, or a `steps.go` file.
+4. Any registration of M2, M7 or M8 in `books.Module()`, a `steps.go` file, or an edit under `core/module/`.
 
 ## Steps
 
 1. **Freeze HEAD.** Copy into this package, as unexported code: HEAD's `Config` struct and its sub-structs from BASE's
-   `internal/config/config.go`, the decode of `LoadConfigFromDatabase` with the ten `migrate*Blob` read transforms and
+   `internal/config/config.go` (wherever BASE no longer has a HEAD file, F4-02's two moved config files among them,
+   read it from the spec's evidence commit with `git show 748fd787a:<path>` so the generator still sees all 142
+   `BindEnv` names), the decode of `LoadConfigFromDatabase` with the ten `migrate*Blob` read transforms and
    the three marker-guarded one-shots (`persistence.go:359-824,1088-1129`), the gap-fill read
    (`persistence.go:42-104,150-178`), the row cipher's decrypt half and HEAD's key search order (the state directory,
    then `<root_dir>/.appdata/`; `settings.go:110-140`), and the guard (`cmd/root.go:726-783` at `748fd787a`; line 760 at
@@ -157,8 +165,11 @@ checks decide; a zero on an edit target stops the task.
 6. **Books' M7 half:** a `Breaking` versioned step with no writes of its own raising `books` through F3-04's level
    step, staging the legacy projection (`.storage-format` = `LegacyMaxFormat + 1` and the marker) through books'
    `LegacyGuardProjection.Stage`. **Books' M8:** the rewrite on F3-04's engine, ID `books.rewrite-after-<M2's step
-   name>`. Step IDs (`<owner>.<name>`, `<name>` matching `[a-z][a-z0-9-]*`) are not fixed by the spec: coin them and
-   mark them in the code.
+   name>`, built through the M8 invocation API F3-04 coined (copy its signature from F3-04's PR description).
+   **Step IDs** (`<owner>.<name>`, `<name>` matching `[a-z][a-z0-9-]*`) are not fixed by the spec: coin them in
+   `stepids.go` for M2, M3, M4, M5, M6 and books' M7 half (names coined here), each a comment citing its 03 §3.8 row,
+   and use only these constants in this package. A unit test (name coined here: `TestStepIDs_UniqueAndWellFormed`)
+   checks uniqueness and the grammar.
 7. **Layering:** add `internal/books/cutover` to `layerOf` in `internal/arch/layering_test.go` at its computed layer.
 8. Run every test against the corpus: stage 1 (R0-written) and the overlay's config cases (a corrupt encrypted row, a
    blob field no row names, a value R0's validation refuses), driving M2 directly through F2-15's harness (not through
@@ -186,8 +197,9 @@ operator layers equals `Convert` of R0's effective stored value from R0's own `G
 with canonical operator values set they win, except a `FailClosed` key keeps the stricter value),
 `TestConfigCutover_SecretsReadable`, `TestConfigCutover_KeyGuard`, `TestConfigCutover_QuarantineNotDrop`,
 `TestConfigCutover_GapFillStripped`, `TestConfigCutover_Idempotent` (with the crash matrix over M2a and M2b),
-`TestConfigCutover_RestoreDrill`, `TestConfigCutover_RowsGone` (its "after M6" clause is asserted from F7; here: the
-four rows gone, the blob holds only class-`i` fields with no moved field and no class-`i` secret, every key range
+`TestConfigCutover_RestoreDrill` (run with the latest production release through F2-15's
+`scripts/ci/fetch_prefreeze_binary.sh` until F3-07 records the pre-freeze tag in `ci/prefreeze_release.txt`),
+`TestConfigCutover_RowsGone` (its "after M6" clause is F7-08's, which extends this test; here: the four rows gone, the blob holds only class-`i` fields with no moved field and no class-`i` secret, every key range
 outside the listed keys byte-identical). `TestRenameTable_EveryKeyRegistered` is F3-07's.
 
 ## Invariants
@@ -212,8 +224,8 @@ make ci                                                                         
 
 ## Out of scope
 
-Registration, the façade, deleting HEAD's loader, the deploy files and `TestRenameTable_EveryKeyRegistered`,
-`TestConfigCutover_NoPlaintextSecretOnDisk` (F3-07); M6 (F7-08); R3's deletion of the frozen copy.
+Registration, `Manifest.Cutover` and `Importers`, the façade, deleting HEAD's loader, the deploy files and `TestRenameTable_EveryKeyRegistered`,
+`TestConfigCutover_NoPlaintextSecretOnDisk` (F3-07); M6 and `TestConfigCutover_RowsGone`'s after-M6 clause (F7-08); R3's deletion of the frozen copy.
 
 ## Rollback
 
@@ -231,16 +243,3 @@ feat(books/cutover): generated rename table, frozen HEAD codec and cipher, M2, b
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
-
-## Planner notes
-
-- **`module.Manifest.Cutover` and `module.Importers{Config, Secrets}`** (06 §6.4.2 and §6.4.10 F3 row) are in no row's
-  files (`core/module/` appears in none of F3-01 … F3-07). This row builds step constructors that take the importers
-  directly; F3-07 or a core row must add the manifest member.
-- **Restore drill before the pre-freeze tag exists.** `TestConfigCutover_RestoreDrill` needs the pre-freeze release's
-  binary, which F3-07 records in `ci/prefreeze_release.txt`. Until then, run it with the latest production release
-  through F2-15's `scripts/ci/fetch_prefreeze_binary.sh`.
-- **`TestConfigCutover_RowsGone`** has an "after M6" clause that cannot pass before F7-08; F7-08 should extend it.
-- **Moved sources.** F4-02 (W24, before this row's W25) moves `internal/config/invite_config.go` and
-  `internal/config/bootstrap_key_ttl.go` into core. Freeze HEAD's config code from `git show 748fd787a:<path>` (the
-  spec's evidence commit) wherever BASE no longer has the file, so the generator still sees all 142 `BindEnv` names.

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-02-required-check-workflows.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 08146005-8663-4d6f-ab5e-f7cc388f67e9 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -81,7 +81,7 @@ CI budget; 09 §9.4 R1 CI classification rows `vet-darwin`, `vet-integration`, `
 ## Dependency check
 
 R1-01 merged: `test -f core/go.mod && test -f .github/workflows/core-ci.yml && grep -q core-job scripts/ci/run_gates.py && echo ok`.
-If `run_gates.py` has no `core-job`, STOP and report (R1-01's planner note).
+If `run_gates.py` has no `core-job`, STOP and report: R1-01 owns that change.
 
 ## Re-verify (expected at `f7ac5b11e`, plus R1-01's changes)
 

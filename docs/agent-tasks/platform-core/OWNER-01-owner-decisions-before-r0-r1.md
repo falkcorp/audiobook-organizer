@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-01-owner-decisions-before-r0-r1.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6d318a46-2f16-444d-9bfc-a89bd7547f51 -->
 <!-- last-edited: 2026-11-05 -->
 

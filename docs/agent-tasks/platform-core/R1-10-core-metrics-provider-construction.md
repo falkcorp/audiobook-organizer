@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-10-core-metrics-provider-construction.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 1308b2a6-0800-4e0a-99b8-026da89fd137 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-10` |
 | Tier | **T3** (Opus / high): provider construction moves while every served series must keep its meaning; the test gates every later rename |
-| Release / wave | R1 / W06 |
+| Release / wave | R1 / W07 |
 | Depends on | R1-02 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 05-metrics §13 item 1, §6, §12 (TestDeployReferencedSeriesServed, TestPromRules_Promtool); 09 §9.2.7; 09 §9.2.1 (extraction-gates: the dashboard-reference test); 04 §2.4 (internal/telemetrypolicy) |
 | Branch | `agent/platform-core-r1-10-core-metrics-provider-construction` |
@@ -19,15 +19,15 @@
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 
 - `core/metrics/`
-- `core/go.mod`
-- `core/go.sum`
+- `core/`: `go.mod`, `go.sum`
 - `go.sum`
-- `internal/telemetry/telemetry.go`
-- `internal/telemetry/endpoint.go`
-- `internal/telemetry/resource.go`
+- `go.mod`
+- `Makefile`
+- `internal/telemetry/`: `telemetry.go`, `endpoint.go`, `resource.go`, `ratchet_test.go`
 - `internal/telemetry/contract/`
 - `internal/telemetrypolicy/`
-- `internal/telemetry/ratchet_test.go`
+- `.github/dependabot.yml`
+- `core/archtest/thirdparty_allow.txt`
 - `.github/workflows/extraction-gates.yml`
 - `internal/arch/layering_test.go`
 - `scripts/ci/short_test_weights.json`
@@ -68,9 +68,11 @@ series keeps its name, labels and meaning in this PR.
 `ErrFamilyTaken`; the exporter construction exactly as 05-metrics §3 states (`prometheus.WithRegisterer(reg)`,
 `WithoutScopeInfo()`, `WithTranslationStrategy(otlptranslator.UnderscoreEscapingWithSuffixes)`, plus the Go and
 process collectors on the private registry), the one-owner-per-family wrapper of §3, the instrument rules of §3.
-**Minimum-surface rule (04 §8 intro):** `Options.Redactor *log.Redactor` needs a `log.Redactor` that does not exist
-yet (`core/log` arrives in R1-07, after this task, and 05-logging's `Redactor` later); land `Options` without that
-field and add it in the PR that creates `log.Redactor`. Say so in a doc comment. No other §3 member may be dropped.
+**Minimum-surface rule (04 §8 intro):** `Options.Redactor *log.Redactor` needs 05-logging §3's `log.Redactor`,
+which R1-32 creates (wave W08, after this task; it also adds the field to `Options`, the redacting span exporter
+and `TestTrace_NoApikeyInSpanAttributes`). Declare `Options`, `OTLPMetrics` and `OTLPTracing` in their own file,
+`core/metrics/options.go` (R1-32's row names that file), without the `Redactor` field and with a doc comment saying
+R1-32 adds it. No other §3 member may be dropped.
 
 ## Invariants and the tests that prove them
 
@@ -81,10 +83,10 @@ field and add it in the PR that creates `log.Redactor`. Say so in a doc comment.
   namespaces (`TestModuleNamespace_SingleAndMulti`, `TestModuleNamespace_StableUnderEnablement`); translation
   pinned (`TestTranslationStrategyPinned`); bad OTLP endpoint degrades (`TestOTLPBadEndpointDegrades`); flush on
   shutdown (`TestShutdownFlushes`). All names are 05-metrics §12's; write them in `core/metrics` first. Tests that
-  need pieces landing later (`TestNoGlobals` needs archtest's R5 check; `TestFamilyTaken_ThroughGlobalProvider` needs
-  `app.InstallProcessDefaults`; `TestStage2_*`, `TestHandler_NoDoubleGzip` need `httpapi`;
-  `TestTrace_NoApikeyInSpanAttributes` needs the Redactor; `TestKernelFamiliesGathered` needs the kernel) land with
-  those pieces; list them in the PR as deferred, with the row that brings each.
+  need pieces landing later are owned by the rows that bring them, not by this row: `TestNoGlobals` and
+  `TestKernelFamiliesGathered` by R1-13, `TestFamilyTaken_ThroughGlobalProvider` (and `TestContractScrapesServedHandler`)
+  by R1-15, `TestStage2_ServerAddressIgnoresHost` and `TestHandler_NoDoubleGzip` by R1-17,
+  `TestTrace_NoApikeyInSpanAttributes` by R1-32. Do not write them here.
 - ABO's served series do not change: HEAD's `TestSeriesContract`, `TestDeclaredFamiliesInGolden`,
   `TestReservedAISeries`, `TestAIFamiliesOnScrape` (moved into `internal/telemetrypolicy`) pass unchanged against
   their goldens; `internal/telemetry/ratchet_test.go`'s client_golang ratchet stays at its baseline.
@@ -122,10 +124,12 @@ grep -n '"internal/telemetry/contract"\|"internal/telemetry"' internal/arch/laye
    not a verbatim move) the provider, exporter wiring, endpoint validation and resource with namespace and scope as
    options. Core's `go.mod` gains the OTel, client_golang and `otlptranslator` requirements at **the same versions
    as the root** (`check_module_skew.py` must pass); run root `go mod tidy` in the same PR (03 §3.2 item 4). Add the
-   third-party paths to `TestCoreImportsOnlyCore`'s one allowlist file. Pin
+   third-party paths to `TestCoreImportsOnlyCore`'s one allowlist file (`core/archtest/thirdparty_allow.txt`). Pin
    `go.opentelemetry.io/otel/exporters/prometheus` at the version 13 §13.5.2 names (v0.69.0; it is the root's
    version too): add `--pin go.opentelemetry.io/otel/exporters/prometheus@v0.69.0` to root `make ci`'s
-   `check_module_skew.py` call and a Dependabot `ignore` for it (files outside the row; see Planner notes).
+   `check_module_skew.py` call (`Makefile`), a Dependabot `ignore` for it (`.github/dependabot.yml`) and its path to
+   the third-party allowlist `core/archtest/thirdparty_allow.txt`; root `go.mod` and `go.sum` change only as
+   `go mod tidy` requires.
 2. ABO façade: `internal/telemetry`'s `telemetry.go`, `endpoint.go`, `resource.go` build their provider through
    `metrics.New` and keep doing the global installs (ABO-side) exactly as today, so every caller and series is
    unchanged. `attr.go`, `views.go`, `meter.go`, `SetVersion`/`Version`, `config.go` stay ABO (05-metrics §13 item 1).
@@ -152,6 +156,7 @@ go test ./internal/telemetry/... ./internal/telemetrypolicy/ -count=1   # expect
 go test ./internal/telemetrypolicy/ -run TestDeployReferencedSeriesServed -count=1 -v   # expect PASS
 promtool --version && go test ./internal/opsmetrics/ -run TestPromRules_Promtool -count=1 -v   # expect PASS, not SKIP
 python3 scripts/ci/check_module_skew.py                     # expect exit 0
+grep -l 'go.opentelemetry.io/otel/exporters/prometheus' core/archtest/thirdparty_allow.txt .github/dependabot.yml Makefile | wc -l   # expect 3
 git grep -n 'otel.Set\|prometheus.DefaultRegisterer\|MustRegister' -- core | wc -l   # expect 0 (03 R5)
 make ci && make -C core ci                                  # expect exit 0
 ```
@@ -191,18 +196,3 @@ Revert the PR; the façade returns to building its own provider. No stored data 
   Apply in the same PR the `go fix` modernizers core's `fix-check` requires in the moved files
   (`go -C core fix ./...`, 04 §2.2).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
-
-## Planner notes
-
-- Ordering gap: 05-metrics §3 gives `metrics.Options` a `Redactor *log.Redactor` field and says `metrics` imports
-  `core/log`, but this row (W06) runs before R1-07 creates `core/log` (W07) and no R1 row creates `log.Redactor`
-  (05-logging's redactor type). The brief lands `Options` without that field under 04 §8's minimum-surface rule;
-  the row that creates `log.Redactor` must add it (and `TestTrace_NoApikeyInSpanAttributes`). The lead should name
-  that row; none of R1's rows lists it.
-- Several 05-metrics §12 core tests depend on later R1 pieces (`TestNoGlobals`, `TestFamilyTaken_ThroughGlobalProvider`,
-  `TestStage2_ServerAddressIgnoresHost`, `TestHandler_NoDoubleGzip`, `TestKernelFamiliesGathered`); the brief defers
-  each to the row that brings its dependency (R1-13, R1-15, R1-17). No row's inventory entry names them as owned.
-- Missing files in the row: `go.opentelemetry.io/otel/exporters/prometheus` is the second module 13 §13.5.2 pins
-  (Dependabot `ignore` plus `check_module_skew.py --pin`); its first core requirement lands here, so this PR must
-  also edit the `--pin` call in `Makefile`, `.github/dependabot.yml` and `TestCoreImportsOnlyCore`'s allowlist, and
-  root `go.mod` (tidy coupling). R1-10 is alone in W06, so there is no collision; add the files to the row.

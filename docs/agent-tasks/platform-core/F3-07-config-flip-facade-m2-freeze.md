@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-07-config-flip-facade-m2-freeze.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: cd0ab95d-94fd-4550-8089-03f6d358f1f1 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,8 +10,8 @@
 | ID | F3-07 |
 | Release / flip | R2, **the config flip F3** (one atomic PR, 09 §9.2.1) |
 | Tier | **T4** (Opus, xhigh–max): a flip PR carrying a one-way migration and every deploy-file rename |
-| Wave | W27 — the only PR of its wave touching `main.go`, `internal/server/` and books' registration; it **merges alone** and its siblings rebase after it; runs inside an announced **move window** (`internal/server/middleware/basicauth.go` → core `httpapi`) |
-| Depends on | F3-05, F3-06, F2-05, F2-08, F2-10, F2-11, F2-14, F2-15, **OWNER-04** (NOT AGENT WORK: its recorded P1 and P4 answers are inputs) |
+| Wave | W29 — the only PR of its wave touching `main.go`, `internal/server/` and books' registration, and the wave's one owner of the kernel and module wiring files (`core/kernel/boot.go`, `kernel.go`, `core/module/manifest.go`, `registrar.go`, `deps.go`, `core/app/offline.go`); it **merges alone** and its siblings rebase after it; runs inside an announced **move window** (`internal/server/middleware/basicauth.go` → core `httpapi`) |
+| Depends on | F3-05, F3-06, F2-05, F2-08, F2-10, F2-11, F2-14, F2-15, **OWNER-04** (NOT AGENT WORK: its recorded P1 and P4 answers are inputs), F2-16 |
 | Owns gate tests | `TestRenameTable_EveryKeyRegistered`; `TestDeployFilesUseCanonicalNamesOnly` (the deploy-files test); `TestBasicGate_ExemptSetGolden`; `TestBasicGate_MoreRestrictiveWins` (the compose cell of `TestPerimeterHonoursBlobOnlyValues`); `TestConfigCutover_NoPlaintextSecretOnDisk`; `TestCutoverRefusedByOlderBuilds` |
 | Gate | Plan, then execute autonomously. **The R2 freeze starts with this PR's merge.** |
 
@@ -37,13 +37,24 @@ coined names they left for this PR.
 
 Switch configuration and secrets to core in one PR, with every first-party consumer in the same PR (09 §9.2.9):
 
-1. **Wire** core config (DB layer attached at P4d) and secrets (`secrets.Open` at P4b) for ABO; remove every dark gate
-   F3-01 … F3-05 left; bind the keyring as the quarantine sealer and the Basic gate's password resolver.
+1. **Wire** core config (DB layer attached at P4d step 1) and secrets for every app, hello included: add the boot call
+   of F3-03's P4b helper (`secrets.Open` at the start of P4b, after the checkpoint; no boot called it before this PR),
+   its boot-writer row (06 §6.5.1) and its crash-matrix cells; remove any dark gate F3-01 left; bind F3-03's keyring as
+   F3-04's quarantine sealer seam and as F3-05's Basic-gate password resolver seam. Add to `core/module/`
+   `Manifest.Cutover`, `Importers.Config`, `Importers.Secrets` and `Deps.Secrets` (06 §6.4.2, §6.4.10 F3 row); add the
+   F3 offline commands to `core/app/offline.go`'s list and their cobra wrappers under `cmd/`; and in
+   `core/kernel/storage.go` (the kernel's P2) storage's refusal to **create** a store while 05-config reports a
+   retired database-path name set (05-storage §5S.4 step 1; 14 K15, E6; `Store.RetiredSet()` from F3-02).
 2. **Façade** (05-config §1.12.1 item 2): ABO's `internal/config` keeps its exported surface and becomes a per-App
    `Facade` value over core handles; `AppConfig` is a projection rebuilt on every core generation change through the
    rename table; `Mutate` becomes one `Store.Apply`. viper, `configFromViper`, `LoadConfigFromDatabase`,
    `SaveConfigToDatabase`, `SaveConfigToFile`, `UpdateService` and the masks leave ABO's boot and write paths; HEAD's
-   settings load, encryption init and key guard leave `serve` (05-config C17). Add `TestAppConfigRatchet`.
+   settings load, encryption init and key guard leave `serve` (05-config C17), and `cmd/child_mode.go`'s
+   `loadConfigFromDB`, `internal/startup/`'s `loadConfigFromDB` step and `internal/dedup/unified/config.go`'s direct
+   viper read go with them; `internal/books/store/settings.go` loses the masks (05-config §2.10 item 2). Books' own
+   config section is declared in `internal/books/config.go` (path coined here). Delete `configupdate`'s `ServiceDef`
+   (`internal/config/register.go` and its entry in `internal/books/services.go`' list; 06 §6.11.1 step 4, §6.11.2 row
+   `configupdate`). Delete the `KeyConfigUpdate` constant in `internal/serviceregistry/keys.go`. Add `TestAppConfigRatchet`.
 3. **Register** M2, books' M7 and M8 (F3-06) in a new `internal/books/cutover/steps.go`, in `books.Module()`'s
    manifest; pass `RetiredConfigNames` and `ConfigEnvBindings` (`OPENAI_API_KEY`, `OPENAI_BASE_URL` onto
    `integrations.ai.openai.{api_key, base_url}`) from ABO's `main`.
@@ -68,11 +79,14 @@ Switch configuration and secrets to core in one PR, with every first-party consu
    `env_file`), so a default compose install sets no `ABO_CORE_HTTP_BASIC_GATE_ENABLED=false`; `AUDIOBOOK_ROOT_DIR`,
    `AO_DIR`, `AO_DB`, `OLLAMA_BASE_URL` are removed. The repo's agent skills (`.claude/skills/`) and first-party
    `scripts/` that set env names switch in this PR.
-8. **The R2 freeze** (09 §9.2.1): `.github/workflows/prerelease.yml`'s `check-rc-ordinal` dispatches no production
-   release from this merge on; `ci/prefreeze_release.txt` records the pre-freeze tag (the last production release before
+8. **The R2 freeze** (09 §9.2.1): in `.github/workflows/prerelease.yml` set the workflow `env:` entry to
+   `RELEASE_FREEZE: 'R2'` (the toggle R1-01 coined and R1-31 set to `''`; change only that value), so
+   `check-rc-ordinal` dispatches no production release from this merge on; `ci/prefreeze_release.txt` records the pre-freeze tag (the last production release before
    this merge), which the cutover build embeds as the checkpoint record's `from_release`; RCs are still cut.
 9. From this PR every PR runs the R2 cutover suite in `extraction-gates` (F2-15's harness now bites); extend
-   `TestBootCrashMatrix_ABO` over M2, M7 and M8.
+   `TestBootCrashMatrix_ABO` over M2, M7 and M8 and over the keyring and `c/secrets/meta` writes, and core's
+   `TestBootCrashMatrix` over hello with the same two secrets writes (09 §9.3: the PR that adds a boot writer extends
+   the crash matrix).
 
 ## Spec
 
@@ -84,10 +98,23 @@ Switch configuration and secrets to core in one PR, with every first-party consu
 
 ## Files (the row's list)
 
-`main.go`, `cmd/root.go`, `internal/config/`, `internal/books/module.go`, `internal/books/cutover/steps.go` (create),
-`core/app/options.go`, `internal/server/`, `web/src/`, `deploy/`, `docker-compose.yml`, `Dockerfile`,
-`Dockerfile.build-cgo`, `.github/workflows/prerelease.yml`, `ci/prefreeze_release.txt` (create), `internal/telemetry/`,
-`scripts/`, `.claude/skills/`. See Planner notes for paths the work needs that the row omits.
+| Action | Path |
+|---|---|
+| modify | `main.go`, `cmd/` (`root.go`, `child_mode.go`, the offline-command wrappers) |
+| modify | `internal/config/` (the façade; `register.go` loses `configupdate`) |
+| modify | `internal/books/module.go`, `internal/books/services.go` |
+| modify | `internal/serviceregistry/keys.go` (delete the `KeyConfigUpdate` constant) |
+| create | `internal/books/config.go` (books' config section; path coined here), `internal/books/cutover/steps.go` |
+| modify | `core/app/options.go`, `core/app/offline.go` |
+| modify | `core/kernel/boot.go`, `core/kernel/kernel.go`, `core/kernel/storage.go` |
+| modify | `core/module/manifest.go`, `core/module/registrar.go`, `core/module/deps.go` |
+| modify | `internal/startup/`, `internal/dedup/unified/config.go`, `internal/books/store/settings.go` |
+| modify | `internal/server/`, `web/src/`, `internal/telemetry/` |
+| modify | `deploy/`, `docker-compose.yml`, `Dockerfile`, `Dockerfile.build-cgo` |
+| modify | `.github/workflows/prerelease.yml`; create `ci/prefreeze_release.txt` |
+| modify | `scripts/`, `.claude/skills/` |
+
+This PR is its wave's only owner of the kernel and module wiring files; no sibling of W29 edits them.
 
 ## Re-verify at BASE (record every count; regenerate expected values at BASE)
 
@@ -104,6 +131,11 @@ grep -n 'OLLAMA_BASE_URL\|ALLOWED_PEER_CIDRS\|TUNNEL_CONNECTOR_ADDRS\|LOGIN_SATU
 grep -n 'check-rc-ordinal' .github/workflows/prerelease.yml          # HEAD: job at line 59, script call at line 92
 grep -rn 'func ConfigStep\|func RetiredConfigNames\|func RewriteStep' internal/books/cutover/ | wc -l   # F3-06's constructors (names may differ: read F3-06's PR)
 grep -rn 'func guardAgainstKeyRegeneration' cmd/root.go | wc -l      # 1 (HEAD line 760); 0 after this PR
+grep -c "RELEASE_FREEZE: ''" .github/workflows/prerelease.yml         # 1 (R1-31 turned the R1 freeze off)
+grep -c 'loadConfigFromDB' cmd/child_mode.go                          # HEAD: >= 1 (line 87); 0 after this PR
+grep -c 'viper' internal/dedup/unified/config.go                      # HEAD: >= 1; 0 after this PR
+grep -rn 'openSecrets(' core/kernel/ | wc -l                          # F3-03's helper exists, not yet called from boot (name may differ: read F3-03's PR)
+grep -rn 'ConfigUpdate\|configupdate' internal/serviceregistry/keys.go internal/config/register.go | wc -l   # >= 2 now; 0 after this PR
 ```
 
 ## STOP conditions
@@ -111,18 +143,21 @@ grep -rn 'func guardAgainstKeyRegeneration' cmd/root.go | wc -l      # 1 (HEAD l
 1. OWNER-04's P1 shows an `(unregistered)` prefix, or P4 shows a set env name the rename table does not map: stop and
    report to the lead (05-config §1.12.3 step 4 makes an unmapped name a generator defect).
 2. The config oracle (`TestConfigCutover_EffectiveConfigUnchanged`) or any M2 test regresses on the registered path.
-3. The work needs a path outside the row's list and the lead has not amended the row (Planner notes name the likely
-   ones): report before editing it.
+3. The work needs a path outside the row's list: report before editing it.
 4. A first-party consumer of a renamed env name or of a deleted route would remain on `main` after this PR.
 5. Any secret value or mask appears in a `GET /api/v1/config` response or a log line.
 
 ## Steps (one PR; keep every commit building)
 
 1. Write the owned gate tests first (below).
-2. Kernel and app wiring: secrets live at P4b, config DB layer attached at P4d step 1, quarantine sealer and Basic-gate
-   resolver bound to the keyring, health tokens surfacing on F2-10's route; remove the dark gates.
+2. Kernel, module and app wiring: the P4b `secrets.Open` call with its boot-writer row, config DB layer attached at P4d
+   step 1, the quarantine sealer and Basic-gate resolver seams bound to the keyring, health tokens surfacing on F2-10's
+   route, `Manifest.Cutover`, `Importers.{Config,Secrets}`, `Deps.Secrets`, the F3 offline commands and storage's
+   retired-name refusal in `core/kernel/storage.go`; remove any dark gate.
 3. Façade in `internal/config`, `TestAppConfigRatchet`; delete the loader, viper, `UpdateService`, masks and echo
-   detection from boot and write paths; `cmd/root.go` loses the settings load, encryption init and key guard.
+   detection from boot and write paths (`cmd/root.go`, `cmd/child_mode.go`, `internal/startup/`,
+   `internal/dedup/unified/config.go`, `internal/books/store/settings.go`); `cmd/root.go` loses the settings load,
+   encryption init and key guard; books' section in `internal/books/config.go`; delete `configupdate`'s `ServiceDef`.
 4. `steps.go` + `books.Module()` manifest: the cutover list M2 (with M7 before it and M8 after it, the order of 03 §3.8);
    ABO's `main` passes `RetiredConfigNames`, `ConfigEnvBindings` and the flags through `FromFlagSet`'s rule (`--dir`,
    `--db`, `--playlists`, `--log-level`, `--config` and the other shipped flags onto canonical paths).
@@ -130,7 +165,8 @@ grep -rn 'func guardAgainstKeyRegeneration' cmd/root.go | wc -l      # 1 (HEAD l
 6. `/api/v1/config` rewrite and the SPA settings page.
 7. Basic gate into core; delete `basicauth.go` and its use.
 8. Deploy files, skills, scripts; `internal/telemetry` reads the OTLP keys through core config.
-9. Freeze on in `prerelease.yml`; create `ci/prefreeze_release.txt` with the tag; embed it in the build.
+9. Freeze on in `prerelease.yml` (`RELEASE_FREEZE: 'R2'`); create `ci/prefreeze_release.txt` with the tag; embed it in
+   the build.
 10. Crash matrix extension; run the full cutover suite on the corpus; headers; one `changelog.d/` fragment; R2
     release-note lines left to R2-01 (09 §9.2.9).
 
@@ -151,6 +187,8 @@ grep -rn 'func guardAgainstKeyRegeneration' cmd/root.go | wc -l      # 1 (HEAD l
 - `TestConfigCutover_NoPlaintextSecretOnDisk`: a canary secret planted in every HEAD form before the upgrade appears in
   no file under the live DB directory, the state directory or the gap-fill file after M2 and M8 (and, from F7, M6); the
   retained checkpoint is the one exception.
+- `TestRetiredDatabasePathRefusesStoreCreate` (name coined here): with a retired database-path name set
+  (`DATABASE_PATH` or HEAD's flat file key), the kernel's P2 refuses to create a store and nothing is written (14 K15).
 - `TestCutoverRefusedByOlderBuilds`: R0's binary and the pre-freeze release's binary each refuse an R2 store and a store
   killed after M7, exit 78, nothing written (F4-08 adds the mid-M3 cell).
 - Also green here: `TestPerimeterHonoursBlobOnlyValues` (the compose cell), `TestAuthOff_ProtectedKeysRefused` (the ABO
@@ -175,6 +213,9 @@ grep -rn 'R1Values' --include=*.go . | grep -v _test | wc -l                    
 ls internal/server/middleware/basicauth.go 2>/dev/null | wc -l                  # 0
 grep -rn 'AUDIOBOOK_ROOT_DIR\|AO_DIR\|AO_DB\|OLLAMA_BASE_URL\|DATABASE_PATH\|BASIC_AUTH_' deploy docker-compose.yml Dockerfile Dockerfile.build-cgo .claude/skills scripts | wc -l   # 0
 test -s ci/prefreeze_release.txt && echo ok                                      # ok
+grep -c "RELEASE_FREEZE: 'R2'" .github/workflows/prerelease.yml                  # 1
+grep -rn 'KeyConfigUpdate' --include=*.go internal/config internal/books | grep -v _test | wc -l   # 0
+grep -c 'viper' internal/dedup/unified/config.go                                 # 0
 (cd web && npm run build && npm test -- --run)                                   # exit 0
 make -C core ci                                                                  # exit 0
 make ci                                                                          # exit 0
@@ -207,16 +248,3 @@ feat(config)!: config flip: core config and secrets live, M2/M7/M8 registered, c
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
-
-## Planner notes
-
-Paths the spec requires in this PR that the row does not list (decide before dispatch):
-
-- `core/kernel/` (secrets at P4b, `Attach` at P4d, the sealer binding, removing the dark gates, storage's refusal to
-  create a store while a retired database-path name is set, 05-storage §5S.4 step 1).
-- `core/module/` (`Manifest.Cutover`, `Importers.Config`, `Importers.Secrets`; 06 §6.4.10 F3 row), unless an earlier
-  row added them.
-- `cmd/` beyond `cmd/root.go` (`cmd/child_mode.go` calls `LoadConfigFromDatabase`; the cobra wrappers of the new
-  offline commands for `TestCLIExposesCoreOfflineCommands`).
-- `internal/startup/` (its `loadConfigFromDB` step), `internal/dedup/unified/config.go` (reads viper directly,
-  05-config §1.2), and `internal/books/store/settings.go` (the masks deleted at F3, 05-config §2.10 item 2).

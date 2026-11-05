@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-14-mount-legacy-manifest-redirect.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 48b212d2-c9e7-4980-9fb5-ec04de724c03 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-14` |
 | Tier | **T3** (Opus / high): the ServeMux collision rule over 572 real routes, ABS on and off |
-| Release / wave | R1 / W12 |
+| Release / wave | R1 / W11 |
 | Depends on | R1-13 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 05-http-api §4.8 (collision rule), §8.1 R1 row, §8.2; 09 §9.2.4; 09 §9.4 R1 Content: endpoints |
 | Branch | `agent/platform-core-r1-14-mount-legacy-manifest-redirect` |

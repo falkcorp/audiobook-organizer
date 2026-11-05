@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F9-01-shell-packages-dark.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 1cd3e2f0-6d5d-4edb-b717-11340b83d272 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F9-01 |
 | Release | R2, flip label F9 (dark PR; F9 ships in R2 if ready, else in R3 unchanged) |
 | Tier | **T3** (Opus / high): new packages with a build-time preset and a fail-closed bundle loader; the CSP policy and the stale-build rule are security and availability contracts |
-| Wave | W27 (beside F3-07, F4-05, F5-03, F7-06; file-disjoint; F3-07 merges first and this PR rebases after it) |
+| Wave | W29 (beside F3-07, F5-01 … F5-12, F5-19, F6-04, F7-07; file-disjoint; F3-07 merges first and this PR rebases after it) |
 | Depends on | R1-30 (`core/web` workspace with `@mediacore/api-client`), F6-02 (core realtime hub: the shell's realtime client targets `/api/core/v1/events`) |
 | Spec | 07 §7.3 (layout, exports, peers, compilation, import boundary, §7.3.2 build sites, §7.3.3 versions), §7.4 (extension API: `defineModule`, `ShellConfig`, slots, §7.4.3 shell routes, §7.4.4 `/testing`, §7.4.5 schema forms), §7.5 (server manifest and intersection), §7.6 (Go `ui`: §7.6.1 API, §7.6.2 CSP, §7.6.3 mounting), §7.7 theming, §7.9 auth and realtime client, §7.10 build preset, §7.18 tests, §7.19 step 4; 06 §6.4.10 ("Shell" row), §6.12.5 (hello's `main.go` and `ui_embed.go`); 04 §8.1 F9 |
 
@@ -68,10 +68,11 @@ npm ci --prefix web           # CLAUDE.md: Playwright from the worktree
 | create | `core/web/packages/ui-kit/` |
 | create | `core/web/packages/shell/` (including `vite/index.mjs`, `vite/index.d.mts`, `src/testing/`) |
 | modify | `core/web/package.json`, `core/web/package-lock.json` |
-| create | `core/examples/hello/web/` (with `.gitignore`), `core/examples/hello/ui_embed.go` (and `ui_nonembed.go` beside it) |
+| create | `core/examples/hello/web/` (with `.gitignore`), `core/examples/hello/ui_embed.go` and its untagged twin `core/examples/hello/ui_nonembed.go` |
 | create / modify | `core/ui/handler.go`, `core/ui/bundle.go` (and the CSP policy builder file beside them, if separate) |
 | modify | `core/scripts/ci/embed_build_outputs.txt` |
-| modify (not in the row; see Planner notes) | `core/examples/hello/cmd/hello/main.go` (pass `UI: hello.UIBundle()`), `core/examples/hello/ui_nonembed.go`, `core/web/e2e/` (the shell's Playwright suite of §7.18) |
+| modify | `core/examples/hello/cmd/hello/main.go` (pass `UI: hello.UIBundle()`, 06 §6.12.5) |
+| create | `core/web/e2e/` (the shell's Playwright suite, 07 §7.3.1 and §7.18) |
 | create | one `changelog.d/` fragment (headerless) |
 
 ## Re-verify before editing (expected results at your base)
@@ -192,8 +193,3 @@ Revert the PR; ABO never imported the packages.
 - Conventional commit, for example `feat(shell): ui-kit, shell and hello web package (dark)`, ending with
   `Co-Authored-By: Claude <noreply@anthropic.com>`; `gh pr merge <n> --rebase`; never squash; never `--admin`.
 
-## Planner notes
-
-- **Files missing from the row:** `core/examples/hello/cmd/hello/main.go` (passes `UI: hello.UIBundle()`, 06 §6.12.5),
-  `core/examples/hello/ui_nonembed.go` (the untagged twin), and `core/web/e2e/` (the shell's Playwright suite 07 §7.3.1
-  and §7.18 place there, which arrives "at shell adoption"). None collides with another W27 row at the plan's paths.

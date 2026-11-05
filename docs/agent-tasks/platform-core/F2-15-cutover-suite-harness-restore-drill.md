@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-15-cutover-suite-harness-restore-drill.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d41c117c-6cdf-49d0-b491-b6dd9fd211bf -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,9 +9,9 @@
 |---|---|
 | ID | F2-15 |
 | Release / flip | R2, foundation PRs (F2); tests, scripts and CI only |
-| Wave | W24 |
+| Wave | W25 |
 | Tier | **T3** (Opus / high): the cross-flip checks every R2 PR runs, the restore drill included; they must pass vacuously at F2 and bite from F3-07, the first build that registers a cutover step |
-| Depends on | F2-13, F2-06 |
+| Depends on | F2-13, F2-06, F2-14 (this row extends its `production-shaped-store` job) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
 
 ## START HERE
@@ -54,7 +54,7 @@ shared families", "Tests"), §5S.9.1 (the family table, rows 1–9 and 18, and t
 python3 -c "import json;m=json.load(open('internal/books/testdata/r2corpus/manifest.json'));print(len(m['stage1'])>0,len(m['overlay'])>0,len(m['blockers'])>0)"   # True True True (F2-12, F2-13), else STOP
 grep -rn 'type DataMigration struct' core/storage/datamigrate/   # 1 hit (F2-06), else STOP
 git ls-files | grep -E '(^|/)keyfamilies\.go$'                    # 1 path (internal/database/ at f7ac5b11e; internal/books/store/ after R1-26)
-grep -n 'production-shaped-store' .github/workflows/extraction-gates.yml   # F2-14's job, if merged (see planner note)
+grep -c 'production-shaped-store' .github/workflows/extraction-gates.yml  # >=1 (F2-14's job), else STOP
 grep -n 'rollback-restore' Makefile | head -3                     # >=1 (R1-27's recipe), else STOP
 grep -rn 'restore-offline' core/app/ | head -2                    # >=1 (R1-25's offline restore), else STOP
 test ! -e internal/books/cutover_suite_test.go && echo absent     # "absent"
@@ -65,8 +65,8 @@ test ! -e internal/books/cutover_suite_test.go && echo absent     # "absent"
 Create: `internal/books/cutover_suite_test.go`, `internal/books/restore_drill_test.go`, `scripts/ci/gen_shared_family_lists.py`,
 `internal/books/testdata/shared_families.golden`, `scripts/ci/fetch_prefreeze_binary.sh`. Modify:
 `.github/workflows/extraction-gates.yml` (add job `r2-cutover-suite`, name coined here; extend F2-14's
-`production-shaped-store` job to run the same suite with `R2_SHAPED_STORE`). Add a test for the generator:
-`scripts/tests/test_gen_shared_family_lists.py` (name coined here; see planner note).
+`production-shaped-store` job to run the same suite with `R2_SHAPED_STORE`; keep its name and env names). Create the
+generator's test `scripts/tests/test_gen_shared_family_lists.py`.
 
 ## Design rules
 
@@ -87,8 +87,8 @@ Create: `internal/books/cutover_suite_test.go`, `internal/books/restore_drill_te
    fails on a diff (the golden is generated, never hand-edited).
 6. **Pre-freeze binary.** `fetch_prefreeze_binary.sh <tag>` downloads that tag's linux/amd64 release asset into a cache dir
    and prints its path (under 20 lines; CLAUDE.md rule 4). The tag comes from `ci/prefreeze_release.txt` when that file exists
-   (F3-07 creates it); before F3-07, from the latest non-prerelease GitHub release
-   (`gh release list --exclude-pre-releases --limit 1`). The drill test reads the path from `R2_PREFREEZE_BIN` and skips with
+   (F3-07 creates it); until F3-07 records it, the pre-freeze tag resolves to the latest production release, which is
+   what 09 §9.2.1 defines it to be until F3 merges (`gh release list --exclude-pre-releases --limit 1`). The drill test reads the path from `R2_PREFREEZE_BIN` and skips with
    a message when unset locally; in CI it is required.
 7. **Restore drill.** Boot the build under test on a corpus copy (which takes the pre-migration checkpoint when any step runs);
    write one marker row after the upgrade; stop; restore the checkpoint offline with the build's `storage restore-offline
@@ -144,11 +144,3 @@ File headers on every new file, both workflow edits and the golden (as a leading
 else a `.golden.header` note in the PR body; the generator writes the header); conventional commit
 (`test(r2): cutover-suite harness and restore drill in extraction-gates`) with `Co-Authored-By: Claude <noreply@anthropic.com>`;
 `git push` for workflow changes (CLAUDE.md); `gh pr merge <n> --rebase`; `changelog.d/` fragment.
-
-## Planner notes
-
-- Missing dependency: this brief extends F2-14's `production-shaped-store` job in `extraction-gates.yml`, and both rows edit
-  that file; add F2-14 to F2-15's depends-on (F2-14 is W23, so the wave order already holds).
-- The row's files lack a test for `gen_shared_family_lists.py`; the brief adds `scripts/tests/test_gen_shared_family_lists.py`.
-- `ci/prefreeze_release.txt` is F3-07's file; before F3-07 the brief resolves the pre-freeze tag from the latest production
-  release, which is what 09 §9.2.1 defines it to be until F3 merges.

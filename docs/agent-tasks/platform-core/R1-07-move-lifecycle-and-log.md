@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-07-move-lifecycle-and-log.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 10fc0787-73a0-42ba-9753-7796bb4c7ace -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-07` |
 | Tier | **T1** (Sonnet / medium): import-path rewrite of two leaf packages and their importers; every commit must build |
-| Release / wave | R1 / W07 |
+| Release / wave | R1 / W06 |
 | Depends on | R1-02 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 04 §8.1 R1, §8.2 (mediacore/lifecycle, mediacore/log rows), §2.2 (mechanical rewrites); 09 §9.2.10 (move window); 09 §9.4 R1 Content: runtime |
 | Branch | `agent/platform-core-r1-07-move-lifecycle-and-log` |
@@ -22,21 +22,31 @@
 - `core/log/`
 - `internal/lifecycle/`
 - `internal/logging/`
-- `internal/config/log_retention.go`
-- `internal/aiscan/`
-- `internal/operations/registry/`
-- `internal/scheduler/`
-- `internal/dedup/`
-- `internal/httputil/`
-- `internal/importer/`
-- `internal/metabatch/`
-- `internal/metafetch/`
-- `internal/plugins/dedup/`
-- `internal/plugins/maintenance/`
-- `internal/scanner/`
-- `internal/server/`
+- `internal/config/`: `config.go`, `log_retention.go`, `log_retention_test.go`, `persistence.go`
+- `internal/aiscan/`: `pipeline.go`, `pipeline_review3_test.go`, `pipeline_review_test.go`
+- `internal/dedup/`: `auto_resolve.go`, `book_runtime.go`, `drain_stale.go`, `engine.go`
+- `internal/httputil/respond.go`
+- `internal/importer/service.go`
+- `internal/metabatch/upgrade.go`
+- `internal/metafetch/`: `book_runtime.go`, `file_pipeline.go`, `service.go`
+- `internal/operations/registry/registry.go`
+- `internal/plugins/dedup/`: `build_candidate_index.go`, `check_book.go`, `emb_reencode.go`, `embed_async.go`, `lsh_index_build.go`, `register.go`
+- `internal/plugins/maintenance/`: `activity_filter_index_backfill.go`, `cleanup.go`, `compact_activity_log.go`, `deps.go`, `intro_transcribe.go`, `optimize.go`, `recompact_activity_digests.go`
+- `internal/scanner/`: `chapter_consolidation.go`, `oversized_dir.go`, `scanner.go`, `shattered_coalesce.go`
+- `internal/scheduler/`: `batch_poller_ctx_test.go`, `purge_old_logs_task_test.go`, `scheduler.go`, `tasks.go`
+- `internal/server/`: `ai_scan_apply_op.go`, `batch_apply_one.go`, `batch_apply_refusal.go`, `csp_report.go`, `duplicates_helpers.go`, `duplicates_ops.go`, `entities_ops.go`, `library_ai_parse_op.go`, `library_core_ops.go`, `metadata_bulk_fetch_log.go`, `metadata_ops.go`, `series_rename_ops.go`, `server_maintenance_deps.go`, `server_search.go`
+- `internal/server/handlers/ai.go`
+- `internal/server/handlers/dedup/manual_candidates.go`
+- `internal/server/handlers/operations/`: `handler.go`, `pause.go`
+- `internal/server/middleware/`: `cfbounce.go`, `log_redact.go`, `trace_redact.go`
+- `tools/cmd/sdkguard/internal-deps.txt`
 - `internal/arch/layering_test.go`
 - `scripts/ci/short_test_weights.json`
+
+The 56 importer files above (beside `log_retention.go` and `log_retention_test.go`) import `internal/lifecycle` or
+`internal/logging`, or name a retention identifier outside `internal/config`, at the plan's base `f7ac5b11e` (no code changed between it and HEAD). Two more files in `internal/config` (`config.go` at `:2786`
+and `persistence.go` at `:1095`) name a retention identifier and change in this PR; both are in the list (step 4).
+Any further importer your base's `git grep` finds is your file too.
 
 ## START HERE
 
@@ -65,7 +75,9 @@ Move two leaf packages into core, import paths only (04 §8.1 R1, §8.2 rows `me
 What stays in `internal/config/log_retention.go`: `normalizeLogRetentionDays`, `logRetentionZeroMigratedKey`
 (an ABO setting key, which `TestCoreHoldsNoAppKeyNames` would reject in core) and `migrateLogRetentionBlob`
 (04 §8.6, same row). No behaviour change. Every ABO importer imports the new `log` package under the alias
-`logging`, so no call site changes except the three retention names.
+`logging`, so no call site changes except the three retention names. The alias is the plan's rule for every ABO
+file from this PR on: R1-18 and later log work keep `logging "github.com/falkcorp/mediacore/log"`, and nothing
+collides with the standard library `log`.
 
 ## Dependency check
 
@@ -147,7 +159,7 @@ The importer counts are the work list. If they differ at your base, use the `git
 7. `make sdkguard` reads `tools/cmd/sdkguard/internal-deps.txt`, which lists `internal/lifecycle` in
    `pkg/plugin/sdk`'s closure; after the move it is no longer an ABO path. Run
    `go run ./tools/cmd/sdkguard/main.go -update`, bump that file's `# version:` line, and confirm the only
-   diff is the removed `internal/lifecycle` line (see Planner notes).
+   diff is the removed `internal/lifecycle` line (the file is in this row's list).
 8. Shard weights: `scripts/ci/short_test_weights.json` has no entry for either package (re-verify), so it is
    unchanged; run `python3 scripts/ci/short_test_shards.py --check` and expect exit 0.
 9. Core guard control (03 §3.5.1 item 2, "once core has leaves"): this PR creates no in-core import edge
@@ -214,14 +226,3 @@ Revert the commit (the moves revert with it). No stored data changes.
   Apply in the same PR the `go fix` modernizers core's `fix-check` requires in the moved files
   (`go -C core fix ./...`, 04 §2.2).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
-
-## Planner notes
-
-- Missing file in the row: `tools/cmd/sdkguard/internal-deps.txt` lists `internal/lifecycle` in `pkg/plugin/sdk`'s
-  closure, and `make sdkguard` (part of `make ci`) fails in both directions, so this PR must regenerate it. The same
-  applies to every R1 move of a package in that closure: `internal/util` (R1-08, only if the whole package leaves),
-  `internal/sdnotify` (R1-16), `internal/metrics` (R1-23), `internal/database` (R1-26, which already lists `tools/`).
-  No same-wave collision results (each of those rows is alone with that file in its wave), but the file should be
-  added to R1-07's, R1-16's and R1-23's rows.
-- The brief imports `mediacore/log` under the alias `logging` in every ABO file, so call sites keep `logging.X` and
-  nothing collides with the standard library `log`. 04 does not fix the alias; R1-18 and later log work should keep it.

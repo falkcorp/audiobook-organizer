@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-01-maintenance-jobs-become-task-kinds.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4851e004-a6e4-42d7-97a5-b7407fc8b8a3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,9 +9,9 @@
 |---|---|
 | ID | F5-01 |
 | Release / flip | R2, tasks flip F5 (dark conversion PR) |
-| Wave | W26 |
-| Tier | **T2** (Sonnet / high): 34 jobs converted through one native shell under fixed rules, with conformance tests |
-| Depends on | F2-05 (transitively F2-01..F2-04) |
+| Wave | W29 |
+| Tier | **T3** (Opus / high): 34 jobs converted through one native shell, each job body rerouted to reach its writer and stores only through what the shell hands it (05-tasks conversion rule 3), with conformance tests |
+| Depends on | F2-05 (transitively F2-01..F2-04), F2-16 (`Registrar.Tasks`, `coretest`'s task cells), F2-17 (`tasklint` and this row's exemption entry file) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
 
 ## START HERE
@@ -39,11 +39,14 @@ Give each of the 34 `maintenance.MaintenanceJob`s registered by `internal/mainte
 (`internal/server/maintenance_job_op.go`) keeps registering and running the jobs until the tasks flip F5-18.
 
 Because every job already has the shared-core shape (`Run` takes `dryRun bool` and returns `error`), this PR
-needs **one** native shell for all 34, not 34 refactors; only the three jobs that write v1 checkpoints change.
+needs **one** native shell for all 34, not 34 refactors. Job files change only for the three v1 checkpointers and
+for any job that reaches a store other than its `store` argument (rule R10). It deletes its own `tasklint`
+exemption entry file, `internal/books/testdata/tasklint_exempt.d/F5-01.txt`, in the same PR.
 
 ## Spec to read first
 
-1. 05-tasks §5T.8.2 (T2 row; body rules: `rc.Mode()`, `rc.Checkpoint`, return the result), §5T.8.1
+1. 05-tasks §5T.8.2 (T2 row; body changes: `rc.Mode()`, `rc.Checkpoint`, return the result; conversion rules
+   1–4), §5T.8.4 (`tasklint`'s `writer-bypass`/`store-capture` and the dark-conversion ratchet), §5T.8.1
    (`internal/maintenance` row: "jobs → books Task kinds (group T2); the package is deleted by the flip";
    `internal/operations` row: the v1 checkpoint helpers, 11 books call sites, "replaced by `rc.Checkpoint` in
    each caller's conversion PR").
@@ -65,7 +68,11 @@ grep -rn 'func Fixed(n int, reason string) Parallelism\|func Sequential(reason s
 grep -rn 'func RunItems\[T any\](rc \*RC' core/tasks/*.go | wc -l                         # 1
 grep -rn 'func (rc \*RC) Mode() Mode\|func (rc \*RC) Checkpoint(v any) error\|func (rc \*RC) Restore(v any) (bool, error)' core/tasks/*.go | wc -l   # 3
 grep -rn 'func Conformance(' core/tasks/taskstest/*.go | wc -l                             # 1 (F2-01)
-test -f core/coretest/tasks.go && echo present                                            # present (F2-05)
+test -f core/coretest/tasks.go && echo present                                            # present (F2-16: coretest's task cells)
+grep -c 'Tasks(' core/module/registrar.go                                                 # >=1 (F2-16: Registrar.Tasks)
+test -d core/archtest/tasklint && test -f internal/books/tasklint_test.go && echo tasklint   # tasklint (F2-17)
+test -f internal/books/testdata/tasklint_exempt.d/F5-01.txt && echo entry                 # entry (F2-17 created it), else STOP
+grep -v '^#' internal/books/testdata/tasklint_exempt.d/F5-01.txt | grep -v '^$' | grep -v '^internal/maintenance/jobs/' | wc -l   # 0 (the entry names only files under internal/maintenance/jobs/)
 ```
 
 A grep that misses only because of formatting (a wrapped signature, an extra space) is not a STOP: grep the bare
@@ -113,9 +120,17 @@ type Store interface{ /* exactly maintenance.JobStore's methods, copied */ }
 var _ Store = maintenance.JobStore(nil)   // compile-time: same method set
 var _ maintenance.JobStore = Store(nil)
 
+// KindDeps is what the owner (books, from F5-18) declares for the kinds (rule R10; 05-tasks §5T.8.4
+// store-capture). Name coined here.
+type KindDeps struct {
+	// NewStore returns the job's store view for one run: its write methods go through w (F5-18:
+	// internal/books/writer over rc.Writer()), its read methods to the books store.
+	NewStore func(w tasks.Writer) Store
+}
+
 // Kinds returns one native kind per registered job, in maintenance.All() order. Nothing calls it in
 // production; F5-18 does. Name coined here.
-func Kinds(store func() Store, sched func(tasks.Kind) *tasks.Schedule) []tasks.Definition   // Schedule: sched(kind), rule R9
+func Kinds(deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) []tasks.Definition   // Schedule: sched(kind), rule R9
 
 // one kind per job:
 //   tasks.Task(tasks.Kind("books.maintenance."+job.ID()), tasks.TaskSpec[json.RawMessage, json.RawMessage]{
@@ -131,7 +146,7 @@ The native `Run`:
 2. Builds ctx from `rc.Context()` with `maintenance.WithOperationID(ctx, string(rc.RunID()))`,
    `maintenance.WithRawParams(ctx, raw)`, a result setter that captures the value, and the checkpointer of
    step 4.
-3. Calls `job.Run(ctx, store(), progress, rc.Mode() == tasks.ModePreview)` with `progress` an in-file
+3. Calls `job.Run(ctx, deps.NewStore(rc.Writer()), progress, rc.Mode() == tasks.ModePreview)` with `progress` an in-file
    `maintenance.ProgressReporter` (and `ProgressSeeder`) over `rc.Progress()`/`rc.Log()` (name coined here:
    `rcProgress`).
 4. **Checkpoints.** The three jobs that call `operations.SaveCheckpoint`/`LoadCheckpoint` switch to an
@@ -151,9 +166,10 @@ touches; a job's own internal loops are unchanged (rule R4 applies only to the l
 
 ## The conversion rules (every definition this PR converts)
 
-05-tasks §5T.8.2 fixes three body rules and the naming rule; the rest of this section is this plan's
-mechanical mapping of HEAD's fields onto the spec's `tasks.Common` (05-tasks §5T.3.1), with the source of
-each line. Apply it the same way to every definition; never improvise a field.
+05-tasks §5T.8.2 fixes the three body changes (`rc.Mode()`, `rc.Checkpoint`, the returned result), conversion
+rules 1–4 (here R7, R2, R10 and R9) and the naming rule (R3); R4 is its parallelism rule. R5, R6 and R8 are this
+plan's mechanical mapping of HEAD's fields onto the spec's `tasks.Common` (05-tasks §5T.3.1), with the source of
+each line. Apply every rule the same way to every definition; never improvise a field.
 
 **R1, dark (05-tasks §5T.8.2).** The converted definition compiles, is exercised by
 `taskstest.Conformance`, and is **not registered anywhere in production**: HEAD's v2 definition keeps its ID,
@@ -161,8 +177,10 @@ its registration and its behaviour, and the production build still runs HEAD's e
 `internal/server` wiring, `internal/opscatalog` or any `Register`/`RegisterOp` call changes in this PR. The
 tasks flip F5-18 registers the native kinds and deletes HEAD's definitions.
 
-**R2, shared core, two shells (plan rule, name coined here).** So that one body serves both engines during
-the dark window and HEAD's behaviour is the oracle:
+**R2, shared core, two shells (05-tasks §5T.8.2 conversion rule 2; helper names coined here).** One body serves
+both engines during the dark window, so the parity suites test the code production runs and HEAD's behaviour is
+the oracle. For the jobs, the shared body is each job's existing `Run` and the two shells are HEAD's wrapper and
+`kinds.go` (see "The native shell" above); rule R10 says what each shell hands it. The general form:
 
 1. Move the body of HEAD's `Run` func into an unexported function in the **same file**, named
    `<runFuncName>Core` (name coined here), that takes `ctx context.Context`, the decoded params struct, and a
@@ -233,23 +251,27 @@ Read the table from the books atom-table package the identity flip landed (`grep
 internal/` at your base; 0 hits = STOP). Never set `StartableByViewers` in a conversion. `Perms.Approve`
 is set only where `Approval` is (Fixers, F5-02).
 
-**R7, effects (plan rule, coined here; 05-tasks gives no rule for HEAD's empty `Writes`).** HEAD's write
-set is table-level and optional ("Empty Writes = declares nothing = the gate skips this op",
-`internal/operations/registry/types.go`); core requires `Effects` (05-tasks §5T.3.1). Map with
-`res(s) = tasks.Res("books", s)` for HEAD's resource strings (`books`, `book_files`, `authors`, `series`,
-`review_items`, `embeddings`, `operations`, `catalog`, `fingerprint_index`):
+**R7, effects (05-tasks §5T.8.2 conversion rule 1; §5T.3.4).** HEAD's write set is table-level and optional
+("Empty Writes = declares nothing = the gate skips this op", `internal/operations/registry/types.go`); core
+requires `Effects` (05-tasks §5T.3.1). Map with `res(s) = tasks.Res("books", s)` for HEAD's resource strings
+(`books`, `book_files`, `authors`, `series`, `review_items`, `embeddings`, `operations`, `catalog`,
+`fingerprint_index`):
 
 | HEAD | Native `Effects` | PR description list |
 |---|---|---|
 | `Writes` non-empty | `tasks.Writes(res(w)...)`, plus `.AlsoReads(res(r)...)` for `Reads` | — |
-| `Writes` empty, `Preview` non-zero | `tasks.Writes(res("books"))` (+ `AlsoReads`) | "Write set widened from HEAD's undeclared" |
-| `Writes` empty, `Preview` zero, no `library.write`/`files.write`/`db.migrate` capability | `tasks.ReadOnly(res(r)...)` | "Declared ReadOnly" |
-| `Writes` empty, `Preview` zero, a write capability | `tasks.Writes(res("books"))`, and the native shell returns an error when `rc.Mode() != tasks.ModeLive` ("<kind>: preview not supported; start with mode live"), because HEAD requires an explicit live mode for such an op (`internal/operations/registry/preview.go`, `PreviewSpec` comment) | "Live-only writer" |
+| `Writes` empty, the body writes | `tasks.Writes(res(x)...)` for every books resource the shared core **and every function it calls** writes, found by reading them (05-tasks conversion rule 1). For a job this is a reading of the write methods it calls on its `store` argument (rule R10), each mapped to the books resource that `JobStore` method writes | "Writes found": per definition, each resource and the call that writes it |
+| `Writes` empty, the body writes nothing | `tasks.ReadOnly()`, with no declared reads | "Declared ReadOnly" |
 
-**R9, the schedule hook (plan rule, coined here).** `tasks.Definition` is opaque and `Common.Schedule` is set
+A definition HEAD runs only in an explicit live mode (`Writes` empty, `Preview` zero, a `library.write`/
+`files.write`/`db.migrate` capability; `internal/operations/registry/preview.go`, `PreviewSpec` comment) keeps that
+behaviour (rule 3): its native shell returns an error when `rc.Mode() != tasks.ModeLive` ("<kind>: preview not
+supported; start with mode live"). List those under "Live-only writer".
+
+**R9, the schedule hook (05-tasks §5T.8.2 conversion rule 4; list-function names coined here).** `tasks.Definition` is opaque and `Common.Schedule` is set
 at construction (05-tasks §5T.3.1, §5T.3.8), while the 38 schedules are declared later, in
 `internal/books/schedules.go` (F5-14), and attached by the flip. So every list function this PR adds takes
-`sched func(tasks.Kind) *tasks.Schedule` and sets `Common.Schedule: sched(<kind>)` on every kind it builds
+its owner-declared dependencies (rule R10) and `sched func(tasks.Kind) *tasks.Schedule` and sets `Common.Schedule: sched(<kind>)` on every kind it builds
 (a nil `sched` means no schedule; tests pass nil). No conversion declares a schedule itself.
 
 **R8, tests (05-tasks §5T.8.2 "Gate" column; §5T.9 last row).** One new test file per PR (name in the
@@ -258,20 +280,55 @@ them, plus one table test that asserts each kind's name, `Title`, `Resume`, para
 `Effects` against the HEAD definition it came from (built from HEAD's `xxxDef()` in the same test, so a
 drift fails). HEAD's existing tests stay unchanged and green.
 
+**R10, writer and stores only through the shell (05-tasks §5T.8.2 conversion rule 3; §5T.8.4 "The
+dark-conversion ratchet"; plan §(l) items 4 and 5).** A dark conversion keeps HEAD's behaviour, and the shared
+body reaches its writer and its stores **only through what its shell hands it**. For the 34 jobs the shared body
+is each job's existing `Run(ctx, store, reporter, dryRun)`, and what a shell hands it is the `store` argument:
+
+1. **The native shell** hands each run `deps.NewStore(rc.Writer())`: a `Store` whose writes go through the run's
+   `tasks.Writer` and whose reads go to the store the owner declared (05-tasks §5T.8.4 `store-capture`: "through
+   `tasks.Writer` (`rc.Writer()`) or the dependencies its owner declared for it"). Nothing passes `KindDeps` in
+   production before F5-18, which implements `NewStore` over `internal/books/writer`; tests pass a recording fake.
+2. **HEAD's shell** (`internal/server/maintenance_job_op.go`, unchanged) keeps handing HEAD's store, which is the
+   adapter of the same interface over HEAD's writer (the `var _` lines above prove the method sets are equal).
+3. **No other store.** A job whose body reads or writes any store other than its `store` argument (a package
+   variable, a value captured at registration, a store reached through `maintenance` helpers) is rerouted to the
+   argument, without changing what it writes or in which order. Find them with
+   `grep -n 'Store\b\|store\.' internal/maintenance/jobs/*.go | grep -v _test` and by reading each job's `Run` and
+   the functions it calls; list every rerouted job in the PR description. A helper that captures a store gets a
+   new variant taking the `store` argument (name coined per helper: `<helper>Via`); the existing helper is not
+   re-signed.
+4. The other body changes stay the three of 05-tasks §5T.8.2 (here: `dryRun` from `rc.Mode()`, the checkpointer of
+   step 4, the captured result).
+
+STOP and report (never an allow directive, a `//nolint`, or a line added to any entry file) if a job's write cannot
+reach the store argument without changing what HEAD writes or its order; if `tasklint` still reports
+`writer-bypass` or `store-capture` in `internal/maintenance/jobs` after rule R10; or if it reports one in a file
+this row does not own (that file is another row's; name it in the report).
+
+**The exemption entry (05-tasks §5T.8.4; plan §(l) item 5).** F2-17 created
+`internal/books/testdata/tasklint_exempt.d/F5-01.txt`, listing the books files this row converts. `tasklint`
+reads the directory as one union whose ratchet only shrinks (a PR that adds a file or a line fails). This PR
+deletes **that file only**, in the same PR as the conversion, and touches no other entry file: its same-wave
+siblings delete their own.
+
 ## Files
 
 | Action | Path |
 |---|---|
 | create | `internal/maintenance/jobs/kinds.go`, `internal/maintenance/jobs/kinds_test.go` (names coined here) |
+| modify | any other job file only where rule R10 item 3 reroutes a store it reaches outside its `store` argument (each listed in the PR description) |
+| delete | `internal/books/testdata/tasklint_exempt.d/F5-01.txt` (this row's exemption entry file; rule R10) |
 | modify | `internal/maintenance/jobs/backfill_file_hashes.go`, `recompute_book_aggregates.go`, `retention_and_hygiene.go` (the checkpointer switch only) |
 | create | one `changelog.d/` fragment |
 
-Do not modify `internal/maintenance` (the root package), `internal/server/maintenance_job_op.go`, any other
-job's file, `internal/opscatalog` or `main.go`.
+Do not modify `internal/maintenance` (the root package), `internal/server/maintenance_job_op.go`, any job file
+rule R10 does not require, any other file under `internal/books/testdata/tasklint_exempt.d/`, `internal/opscatalog`
+or `main.go`.
 
 ## TDD: tests to write first (names coined here)
 
-- `TestJobKinds_Conformance`: `taskstest.Conformance(t, jobs.Kinds(fakeStore, nil)...)` over all 34.
+- `TestJobKinds_Conformance`: `taskstest.Conformance(t, jobs.Kinds(fakeKindDeps(t), nil)...)` over all 34.
 - `TestJobKinds_MatchHEADWrapper`: for every `maintenance.All()` job, kind = `books.maintenance.` + ID,
   `Title`, `Resume`, `Timeout`, the `Effects` class (ReadOnly exactly for the jobs whose advertised dry-run
   default is false and that hold no write capability) and `Perms.Start` match what HEAD's wrapper declares.
@@ -279,12 +336,16 @@ job's file, `internal/opscatalog` or `main.go`.
   under `ModeLive`; a `dry_run` key in params is refused.
 - `TestJobKinds_CheckpointerFromRC`: for each of the three checkpointing jobs, a checkpoint written by the v1
   helper's struct round-trips through the native checkpointer (HEAD's bytes decode).
+- `TestJobKinds_StoreFromRCWriter`: for each kind, one `ModeLive` run on a `taskstest` fake `RC` shows
+  `NewStore` called with that run's `rc.Writer()` and the job receiving exactly that store (rule R10).
 
 ## Steps
 
 1. Base checks; STOP on a mismatch (34 jobs, the three checkpoint files).
-2. Write the four tests; then `kinds.go`; then the three checkpointer switches.
-3. PR description: the `maintenance.<id> ==> books.maintenance.<id>` list (34 lines), rule R5/R7 lists with
+2. Write the five tests; then `kinds.go`; then the three checkpointer switches; then rule R10 item 3's reroutes.
+3. `git rm internal/books/testdata/tasklint_exempt.d/F5-01.txt`, then run the acceptance block's `tasklint` line: it
+   must pass with the package no longer exempt (rule R10's STOP if not).
+4. PR description: the rerouted jobs (rule R10 item 3), the deleted entry file, the `maintenance.<id> ==> books.maintenance.<id>` list (34 lines), rule R5/R7 lists with
    counts, `converted: 34/34`.
 
 ## Acceptance (commands and expected output)
@@ -293,18 +354,25 @@ job's file, `internal/opscatalog` or `main.go`.
 go build ./...                                                                   # exit 0
 go vet ./internal/maintenance/...                                                # exit 0
 go test ./internal/maintenance/... -count=1 -short                               # ok
-go test ./internal/maintenance/jobs/ -run 'TestJobKinds_' -count=1 -v | grep -c '^--- PASS'   # 4
+go test ./internal/maintenance/jobs/ -run 'TestJobKinds_' -count=1 -v | grep -c '^--- PASS'   # 5
 go test ./internal/server/ -run 'Maintenance' -count=1 -short                    # ok (HEAD's wrapper unchanged)
 grep -c 'operations.SaveCheckpoint\|operations.LoadCheckpoint' internal/maintenance/jobs/backfill_file_hashes.go internal/maintenance/jobs/recompute_book_aggregates.go internal/maintenance/jobs/retention_and_hygiene.go | awk -F: '{s+=$2} END {print (s>0)}'   # 1 (the v2 fallback stays until F5-18)
 git grep -n 'mediacore/tasks"' -- main.go internal/opscatalog/ internal/server/ | wc -l   # 0
+test ! -e internal/books/testdata/tasklint_exempt.d/F5-01.txt && echo deleted       # deleted
+git diff --name-only --diff-filter=D origin/main -- internal/books/testdata/tasklint_exempt.d/   # internal/books/testdata/tasklint_exempt.d/F5-01.txt (only)
+git diff --name-only --diff-filter=AMR origin/main -- internal/books/testdata/tasklint_exempt.d/ | wc -l   # 0
+go test ./internal/books/ -count=1 -run "$(grep -o '^func Test[A-Za-z0-9_]*' internal/books/tasklint_test.go | sed 's/^func //' | paste -sd'|')"   # ok (tasklint over the union; the package no longer exempt)
 make ci                                                                          # exit 0
 ```
 
 ## Out of scope
 
-Registration and deleting `internal/maintenance` and the wrapper (F5-18); the jobs' schedules (F5-14); the
+Registration and deleting `internal/maintenance` and the wrapper (F5-18); HEAD's wrapper's activity-summary
+entry, which the native shell does not reproduce (F5-18 decides it with books' activity subscriber, 05-events
+§5E.13); the jobs' schedules (F5-14); the
 `books.maintenance.retention-and-hygiene` / `core.tasks.prune` split, whose core half is F5-03 (05-tasks
-§5T.8.2 T4 table: the job keeps its books kind; its operation-record half becomes `core.tasks.prune`).
+§5T.8.2 T4 table: the job keeps its books kind and its dead-prefix sweep; its operation-record half becomes
+`core.tasks.prune`, and F5-18 drops that half from the job when `core.tasks.prune` registers).
 
 ## Idempotency / rollback
 
@@ -328,16 +396,3 @@ If `internal/maintenance/jobs/kinds.go` exists and its tests pass, run the accep
   `BLOCKED: <n> — <list>` (CLAUDE.md).
 
 Commit message: `refactor(maintenance): native books Task kinds for the 34 maintenance jobs (dark)`.
-
-## Planner notes
-
-- The single generic shell is possible because HEAD's `MaintenanceJob.Run` already takes `dryRun`; HEAD's
-  wrapper also writes an activity summary and per-item operation results keyed by the op ID. The per-item
-  results are the jobs' own store writes (kept, keyed by `rc.RunID()`, which M4 keeps equal to HEAD's op
-  ID); the wrapper's activity-summary entry is engine-side and is not reproduced by the shell. F5-18 decides
-  whether books' activity subscriber covers it (05-events §5E.13).
-- `retention_and_hygiene` is also half of 05-tasks' T4 split (`core.tasks.prune`, F5-03): the books kind keeps
-  the dead-prefix sweep; F5-18 must drop the operation-record half from the job when `core.tasks.prune` is
-  registered, or the two prune the same history.
-- Rule R7's ReadOnly/widened classification for jobs is the plan rule (spec text covers only "ReadOnly for
-  the read-only jobs").

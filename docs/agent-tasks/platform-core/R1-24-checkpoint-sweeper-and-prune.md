@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-24-checkpoint-sweeper-and-prune.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 88124076-5269-41e3-875c-b216bc9ff445 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,9 +9,9 @@
 |---|---|
 | ID | `R1-24` |
 | Tier | **T3** (Opus / high): a sweeper that deletes checkpoints; the retention rule decides what a rollback can restore |
-| Release / wave | R1 / W15 |
-| Depends on | R1-23 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
-| Spec | 05-storage §5S.3.12, §5S.4 step 15; 05-health §5H.3.1, §5H.10 Landing R1; 09 §9.2.3 (the checkpoint and its 7 days); 06 §6.4.10 R1 (OfflineCommands) |
+| Release / wave | R1 / W17 |
+| Depends on | R1-23, R1-25 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
+| Spec | 05-storage §5S.3.12, §5S.4 step 15; 05-health §5H.3.1, §5H.9, §5H.10 Landing R1 and R1 row; 09 §9.2.3 (the checkpoint and its 7 days); 06 §6.4.10 R1 (OfflineCommands) |
 | Branch | `agent/platform-core-r1-24-checkpoint-sweeper-and-prune` |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
@@ -19,9 +19,10 @@
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 
 - `core/storage/checkpoint_sweep.go`
-- `core/kernel/sweeper.go`
-- `core/app/offline_prune.go`
-- `internal/server/handlers/system/handler.go`
+- `core/kernel/`: `sweeper.go`, `boot.go`
+- `core/app/`: `offline_prune.go`, `offline.go`
+- `internal/server/handlers/system/`: `handler.go`, `health_tokens_test.go`
+- `internal/books/module.go`
 
 ## START HERE
 
@@ -43,7 +44,8 @@ sign-in tokens included, so R1 must also ship what deletes it (09 §9.2.3; 09 §
 05-storage §5S.3.12 "Retention", §5S.4 step 15; CONFORM-6):
 
 1. **The checkpoint sweeper** (`core/storage/checkpoint_sweep.go`, run by a kernel lifecycle component
-   `core/kernel/sweeper.go`): at 05-storage §5S.4 step 15 of every boot (after readiness) and then **hourly** while
+   `core/kernel/sweeper.go`, registered in `core/kernel/boot.go`; this row is W17's one owner of the kernel wiring
+   files): at 05-storage §5S.4 step 15 of every boot (after readiness) and then **hourly** while
    serving, it scans `.mediacore-checkpoints/`, its scratch area and every `restore/<id>/failed/`, writes each record's
    `delete_after` exactly per 05-storage §5S.3.12's "Retention" row (completed: `completed_at + 7 days`; open: kept
    while it is still the rollback of the live store, then `now + 7 days`; swapped back: from the swap-back), and
@@ -51,19 +53,22 @@ sign-in tokens included, so R1 must also ship what deletes it (09 §9.2.3; 09 §
    then `.migration-checkpoint` when it names it. Each deletion is logged (audited from F2). The period is fixed; no
    setting lengthens it. Scratch copies are deleted 7 days after their mtime.
 2. **`storage prune-checkpoints`** as an `app.OfflineCommands` command (06 §6.4.10 R1: present from R1;
-   `core/app/offline_prune.go`): deletes eligible checkpoints sooner, with the service stopped, through the same
-   delete order. ABO's cobra tree exposes `app.OfflineCommands` in R1-25 (which owns `cmd/`); do not edit `cmd/`
-   here (R1-18 edits `cmd/root.go` in this wave).
+   implemented in `core/app/offline_prune.go`): deletes eligible checkpoints sooner, with the service stopped,
+   through the same delete order. Add it to the `OfflineCommands` list R1-25 created in `core/app/offline.go`;
+   R1-25 already exposes that list through ABO's cobra tree, so `cmd/` needs no edit here.
 3. **Health tokens on the authenticated route only** (05-health §5H.3.1 "The unauthenticated token set"): while any
    checkpoint exists health reports `storage_checkpoint_retained` with its `delete_after`; an open scratch copy
    raises `storage_checkpoint_open` with its age; `<namespace>_storage_checkpoint_bytes` reports the size
-   (05-storage §5S.8). Before F8 these travel a new `degraded` field of HEAD's **authenticated**
-   `GET /api/v1/system/status` (`settings.manage`, `wire_system_routes.go:28`), never `/health`.
+   (05-storage §5S.8). Before F8 these travel the `degraded` field of HEAD's **authenticated**
+   `GET /api/v1/system/status` (`settings.manage`, `wire_system_routes.go:28`), never `/health`. **R0-06 created
+   that field** with its one token `auto_update_paused` (05-health §5H.10 R0 row); this row extends it with the
+   posture tokens and does not create it.
 4. **Split HEAD's fixed-token source** (`internal/server/handlers/system/handler.go:222-275` builds `/health`'s
    `degraded` list) into the unauthenticated set (`memdb_warming`, failed `Degraded` startup-step tokens
    `metrics_disabled`/`search_index`, `basic_gate_no_password`) and the authenticated rest, pinned by
    `TestHealth_UnauthenticatedTokenSetGolden` (05-health §5H.9) (05-health §5H.10 Landing R1: "the split of HEAD's
-   fixed-token source and the authenticated `degraded` field of `GET /api/v1/system/status`").
+   fixed-token source and the authenticated `degraded` field of `GET /api/v1/system/status`"). The authenticated
+   field is fed by an injected func: `internal/books/module.go` hands the kernel's token source to the handler.
 
 ## Tests this task owns (spec names)
 
@@ -72,15 +77,21 @@ sign-in tokens included, so R1 must also ship what deletes it (09 §9.2.3; 09 §
 - `TestPruneCheckpoints` (05-storage §5S.3.12).
 - Also 05-storage §5S.10: `TestOpenCheckpointKeptWhileRollback`, `TestOrphanedOpenCheckpointDeletedAfterSevenDays`,
   `TestPartialCheckpointSwept`, `TestDryRunScratchModeAndSweep` (the sweep half).
-- `TestHealth_UnauthenticatedTokenSetGolden` (05-health §5H.9): `/health`'s `degraded` list carries only the fixed
-  set; `storage_checkpoint_retained` appears only in `/api/v1/system/status`'s `degraded`.
+- `TestHealth_UnauthenticatedTokenSetGolden` (05-health §5H.9; created by R0-06 in
+  `internal/server/handlers/system/health_tokens_test.go` with its R0 cell): add the R1 cells against HEAD's
+  `/health` and `GET /api/v1/system/status`: with every token raised at once, `/health`'s `degraded` list carries only
+  the fixed set; `storage_checkpoint_retained` and `storage_checkpoint_open` appear only in
+  `/api/v1/system/status`'s `degraded`, beside R0's `auto_update_paused`. Do not rewrite the R0 cell.
 - A crash between record delete and directory delete leaves garbage the next sweep removes (crash-matrix row for
   this writer: add it to R1-21's kit through `TestBootCrashMatrix`/`_ABO`, 09 §9.3).
 
 ## Dependency check
 
 R1-23 merged (the kernel opens the store and takes the first-boot checkpoint):
-`git grep -q 'print-storage-levels' -- main.go cmd core && echo ok`.
+`git grep -q 'print-storage-levels' -- main.go cmd core && echo ok`. R1-25 merged (`OfflineCommands` exists):
+`git grep -q 'func OfflineCommands' -- core/app/offline.go && echo ok`. R0-06's field and golden exist:
+`grep -c 'auto_update_paused' internal/server/handlers/system/handler.go internal/server/handlers/system/health_tokens_test.go`
+(expect ≥ 1 each). Any of these missing: STOP.
 
 ## Re-verify (expected at `f7ac5b11e`)
 
@@ -93,9 +104,12 @@ sed -n 28p internal/server/wire_system_routes.go                                
 
 1. Tests first (red) with a fake clock in `core/storage` and `core/kernel`; the golden for the unauthenticated set.
 2. `core/storage/checkpoint_sweep.go` (record-first delete order, `delete_after` rules), `core/kernel/sweeper.go`
-   (step 15 and hourly), `core/app/offline_prune.go` (the offline command).
-3. Split the fixed-token source in `internal/server/handlers/system/handler.go`; add the authenticated `degraded`
-   field to `GetSystemStatus` (`handler.go:278`), fed by an injected func the kernel's tokens back.
+   (step 15 and hourly) with its registration in `core/kernel/boot.go`, `core/app/offline_prune.go` (the offline
+   command) and its entry in `core/app/offline.go`'s `OfflineCommands`.
+3. Split the fixed-token source in `internal/server/handlers/system/handler.go`; extend R0-06's authenticated
+   `degraded` field of `GetSystemStatus` (`handler.go:278` at the plan's base) with the posture tokens, fed by an
+   injected func the kernel's tokens back; wire it in `internal/books/module.go`; add the R1 cells to
+   `health_tokens_test.go`.
 4. Crash-matrix row for the sweeper's deletes (R1-21's kit).
 5. Header bumps; fragment with the release-note line above. Commit:
    `feat(storage): checkpoint sweeper, prune-checkpoints and authenticated storage tokens`.
@@ -114,7 +128,8 @@ sed -n 28p internal/server/wire_system_routes.go                                
 
 ```bash
 go -C core test ./storage/ ./kernel/ ./app/ -run 'Checkpoint|Prune|Sweep' -count=1 -v      # expect PASS incl. TestCheckpointAutoDeletedAfterSevenDays, TestPruneCheckpoints
-go test ./internal/server/handlers/system/ -run 'Health|Status' -count=1                  # expect ok, TestHealth_UnauthenticatedTokenSetGolden PASS
+go test ./internal/server/handlers/system/ -run 'Health|Status' -count=1                  # expect ok, TestHealth_UnauthenticatedTokenSetGolden PASS (R0 and R1 cells)
+make build-api && ./audiobook-organizer storage --help | grep -c prune-checkpoints          # expect 1
 make ci && make -C core ci                                                                  # expect exit 0
 ```
 
@@ -142,12 +157,3 @@ not revert it without the owner.
 - **No `go.work`.** Never run `go work init` in a checkout or worktree; the genproto probe runs only in a throwaway copy under `mktemp -d` (03 §3.2 item 1).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
 
-## Planner notes
-
-- Missing files in the row: the golden test `TestHealth_UnauthenticatedTokenSetGolden` and the `degraded` field's
-  test need a test file in `internal/server/handlers/system/` (the row lists only `handler.go`), and the field's
-  value must be injected from the kernel's token source into the handler (wiring in `internal/books/`). Neither
-  collides inside W15 (R1-16 edits other `internal/books/` files; check at merge). Add
-  `internal/server/handlers/system/` test files and the `internal/books/` wiring file to the row.
-- `storage prune-checkpoints` reaches ABO's CLI only through `app.OfflineCommands`, which R1-25 wires into `cmd/`;
-  until R1-25 merges the command exists in core but not on ABO's command line. Both land before OWNER-03 cuts R1.

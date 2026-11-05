@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-18-tasks-flip-engine-deleted.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: ec04b9ab-cec9-4e59-bc6b-19f091354077 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,9 +9,9 @@
 |---|---|
 | ID | F5-18 |
 | Release / flip | R2, **flip F5** (tasks and the log journal); one atomic PR (09 §9.2.1) |
-| Wave | W32 (merges alone; its siblings rebase after it) |
+| Wave | W33 (merges alone; its siblings rebase after it) |
 | Tier | **T4** (Opus / xhigh–max): the flip deletes HEAD's engine and moves every definition, schedule, route, metric family and system-log writer at once; every intermediate `main` must boot and pass e2e |
-| Depends on | F4-08 (the identity flip), F5-01 … F5-17 (every dark F5 PR) |
+| Depends on | F4-08 (the identity flip); F5-01 … F5-16 and F5-19 (every dark F5 PR); F2-16 (the kernel's task start rule, `Registrar.Tasks`); F2-17 (`tasklint` and its exemption directory) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR; inside an announced move window (09 §9.2.10); the plan is reviewed before code |
 
 ## START HERE
@@ -35,8 +35,9 @@ The R2 freeze is on (F3-07); this PR ships in R2, not in a production minor.
 The tasks flip of 03 §3.8 and 09 §9.4 (R2 flips table, F5 row): after this PR ABO runs every task on core's
 executor and scheduler, HEAD's engine and task routes are gone, the first R2 boot imports HEAD's runs and
 system log (M4, M5), the Activity page reads core's task routes, the ops metric families carry core's names
-and labels with every dashboard and rule moved in the same PR, and the log journal is the only writer and
-pruner of the system log. Not deleted here: `tools/cmd/opsgen`, `web/src/generated/ops.ts` and
+and labels with every dashboard and rule moved in the same PR, the log journal is the only writer and
+pruner of the system log and is read through its native query route (F5-19's, mounted here, replacing HEAD's
+`GET /api/v1/system/logs` in the same PR), and `tasklint`'s exemption directory is empty. Not deleted here: `tools/cmd/opsgen`, `web/src/generated/ops.ts` and
 `internal/operations/state` (one R3 PR, R3-02; 05-tasks §5T.8.1).
 
 ## Spec to read first (this PR's contract; read all of it)
@@ -51,7 +52,9 @@ pruner of the system log. Not deleted here: `tools/cmd/opsgen`, `web/src/generat
 4. 05-metrics §13 items 1 and 3 (the `ops_*` rows, the `operations_*`/`operation_*`/`op_*` deletions one by one,
    `ops.abandoned_calls`), §6 (`TestDeployReferencedSeriesServed`, `TestABOMetricsGatherNoDuplicate`).
 5. 05-logging §11 item 1 (R2 part: delete the activity `Writer`'s line parsing and its tap, `StandardLogger`'s
-   system-log writes, `internal/logger/retention.go`), §5.
+   system-log writes, `internal/logger/retention.go`), §5 (the query route, its auth-off tightening and the SPA's
+   move land here: "HEAD's route and the native route switch in one PR"); 05-tasks §5T.8.4 (`tasklint`: "the F5 flip requires the list to be empty") and §5T.8.2 conversion rules 1–4
+   (what the flip folds: the HEAD shells deleted, each shared body into its native shell).
 6. 05-events §5E.13 (the activity mirror becomes a books subscriber on `core.task.log-appended.v1` in
    `internal/activity`, keeping HEAD's bounded queue and counted drops); 05-realtime §11 (the two operation
    streams deleted at F5).
@@ -73,15 +76,12 @@ for f in internal/maintenance/jobs/kinds.go internal/repairs/kinds.go internal/p
 ls internal/plugins/maintenance/kinds_t6_g*.go | wc -l                                                # 7
 test -d internal/books/cutover/m4 && test -d internal/books/cutover/m5 && test -d internal/books/cutover/kindrename && echo steps   # steps
 test -d core/internal/logjournal && test -d core/internal/storagetasks && echo core-kinds              # core-kinds (F5-15, F5-03)
-test -d core/archtest/tasklint && test ! -e tools/cmd/oplint && echo tasklint                         # tasklint (F5-17)
+test -d core/archtest/tasklint && test ! -e tools/cmd/oplint && test -f internal/books/tasklint_test.go && echo tasklint   # tasklint (F2-17)
+ls internal/books/testdata/tasklint_exempt.d/                                                         # F5-18.txt only (every conversion row deleted its own entry)
+test -d core/internal/loghttp && echo loghttp                                                          # loghttp (F5-19)
+grep -rn '"books.library.scan-full"' internal/server/*.go | grep -v _test | wc -l                     # >=1 (F5-13)
 grep -rn 'InterimHolds\|InterimPoll\|InterimExport' core/ --include=*.go | grep -v _test | wc -l      # >=3 (F2's minimal owner registrations)
 grep -rn 'InterimBackends' core/app/options.go | wc -l                                                # 0 or >=1: record (this PR adds the field if F2 did not)
-# The open gaps the dark PRs reported (each must be RESOLVED at your base, else STOP)
-#  1. library_scan_full's declaration (F5-14 Step 0 / F5-16): its parity case is no longer skipped
-go test ./internal/books/ -run TestScheduleParity_AllDefinitions -count=1 -v | grep -c 'SKIP.*SPEC-GATED'   # 0
-#  2. tasklint's rule set over core (F5-17 Step 0): tasklint runs in make ci
-#  3. the journal's query route and SPA move (F5-15 Planner notes): a row has built GET /api/core/v1/system/logs
-grep -rn '/api/core/v1/system/logs\|"system/logs"' core/internal/ --include=*.go | grep -v _test | wc -l   # >=1
 # HEAD's engine is still present (this PR deletes it)
 for d in internal/operations/registry internal/operations/childop internal/operations/opmode internal/opsmetrics \
          internal/scheduler internal/opscatalog internal/maintenance internal/walkresume internal/server/handlers/opsv3; do test -d $d || echo "GONE $d"; done   # no output
@@ -95,14 +95,20 @@ for d in internal/operations/registry internal/operations/childop internal/opera
    `writer.go`, `evidence.go`, `history.go`, `intent.go`, `evidence_journal.go`) over `tasks.Writer`; run fencing
    (`fence.go`: `ErrFenced`, `WithFence`, `FenceFromContext`) → public `tasks` if F2 did not already provide it.
    Point the narrow interfaces the conversions declared (plan §(l) item 4; F5-01's `jobs.Store`, the repairs shell's
-   writer) at the shared contract. `BulkMetadataFetchParams` → `internal/server`. Book-typed fakes of
+   writer) at the shared contract; every conversion's owner-declared dependency value (05-tasks §5T.8.2 conversion
+   rule 3: `jobs.KindDeps`, `repairs.KindDeps`, the plugins' `KindDeps`, the `t6g<k>Deps`, `t7Deps`) gets
+   `NewWriter`/`NewStore` over `internal/books/writer` and books' stores. `BulkMetadataFetchParams` → `internal/server`. Book-typed fakes of
    `pkg/ops/opstest` → `internal/books/store/storetest`.
 2. **Registration.** In `internal/books/module.go`: `r.Resources(...)` for every resource kind the conversions use
    (`books`, `book_files`, `authors`, `series`, `review_items`, `embeddings`, `operations`, `catalog`,
    `fingerprint_index`, `aux_stores`); `r.Lanes(...)` (HEAD's `LaneMac` as a books lane); `r.ChangeSink(...)`
    (books' operation-change journal); `r.Health(...)` with `books.memdb`; `r.Tasks(...)` with every list function
    (`jobs.Kinds`, `repairs.Kinds`, the seven `t6g<k>Kinds`, the plugins' `Kinds`, `t7Kinds`, the books half of
-   `db_optimize`), each passed `books.ScheduleFor` as its schedule hook; `Manifest.TaskLedger` and `TaskStarts`.
+   `db_optimize`), each passed its dependency value (above) and `books.ScheduleFor` as its schedule hook (conversion
+   rule 4); `Manifest.TaskLedger` and `TaskStarts`; `r.LogOtherUserData(...)` with books' predicate over
+   `activity.NamesOthersUserLog` (05-logging §5, the journal route's other-user rule). The kernel and module wiring
+   files (`core/kernel/boot.go`, `kernel.go`, `core/module/manifest.go`, `registrar.go`, `deps.go`) and
+   `internal/books/services.go` take the boot calls, members and mounts (this PR is their one owner in W33).
    The kernel registers the core kinds (`core.storage.*`, `core.log.journal.prune`, `core.window.nightly`,
    `core.tasks.prune`) and, from `app.Options.InterimBackends` set by `main.go`, the three late-owner kinds over
    the books backends (`providerhttp.InterimHolds`, `ai.InterimPoll`, `diagnostics.InterimExport`; 05-tasks §5T.8.2).
@@ -110,8 +116,8 @@ for d in internal/operations/registry internal/operations/childop internal/opera
    nowhere earlier (05-metrics §13 item 1).
 3. **Cutover steps.** Register M4 and M5 in `internal/books/cutover/steps.go` in 03 §3.8's order (after M3, before
    M6 and M8), pass `Importers.Tasks` and `Importers.Log`, raise M7's target, and register the new M8 whose step ID
-   names M5 as the last step it compacts after (03 §3.8; 09 §9.2.3). Move HEAD's run-row store files
-   (`pebble_store_ops_v2.go`, `pebble_store_ops_v3*.go`, `pebble_store_op_rows.go`, `ReconcileOpsV3WithV2`) into
+   names M5 as the last step it compacts after (03 §3.8; 09 §9.2.3). Move HEAD's run-row store files (under
+   `internal/books/store/` since R1-26's rename: `pebble_store_ops_v2.go`, `pebble_store_ops_v3*.go`, `pebble_store_op_rows.go`, `ReconcileOpsV3WithV2`) into
    `internal/books/cutover/m4legacy/` and repoint M4 (05-tasks §5T.8.1, `internal/database` ops storage row;
    04 key `internal/database → internal/books/cutover`). Regenerate the kind-rename map at this commit.
 4. **Delete HEAD's engine** (05-tasks §5T.8.1, §5T.8.2 F5 row): `internal/operations/registry` (with
@@ -123,12 +129,18 @@ for d in internal/operations/registry internal/operations/childop internal/opera
    `internal/maintenance` (root package; the jobs keep their package), `internal/walkresume`, `pkg/ops`
    (successor `core/tasks`), the root test-only `internal/plugins` lint, `internal/logger/mocks`,
    `internal/server/legacy_backfill_op.go`, every HEAD v2 definition the conversions shadowed (their v2 shells;
-   the shared cores fold into the native shells), `maintenance_job_op.go`, `repairs.plan`/`repairs.apply`,
+   each shared core folds into its native shell, conversion rule 2), `maintenance_job_op.go` (whose
+   activity-summary entry is not reproduced unless books' activity subscriber covers it; decide it here and say
+   which in the PR), `repairs.plan`/`repairs.apply`,
    `scheduler_maintenance_window_op.go`, `diagnostics_ops.go`'s v2 def, `addOpRegistrar` and the
    `serviceregistry` op wiring. Re-sign `repairs.Fixer` without the v2 reporter. Every caller of
    `pkg/plugin/sdk` moves to `core/tasks` + `module.Registrar` (the package itself and `sdkguard` go in R3,
    05-tasks §5T.8.1). Keep `internal/operations/state`, `tools/cmd/opsgen` and `ops.ts`.
-5. **Routes.** Mount `internal/taskhttp` at `/api/core/v1/tasks`; delete every HEAD route 05-tasks §5T.3.10's
+5. **Routes.** Mount `internal/taskhttp` at `/api/core/v1/tasks`; mount F5-19's `core/internal/loghttp` on
+   `CoreGroup()` (`loghttp.Deps{Journal: <the native journal store>, OtherUser: <books' registered predicate>}`)
+   and delete HEAD's `GET /api/v1/system/logs` (`internal/server/wire_system_routes.go`, its handler
+   `GetSystemLogs` and its tests) in the same commit (05-logging §5; no alias, D10); regenerate
+   `core/openapi/core.json` and `core/web/packages/api-client/src/generated/`; delete every HEAD route 05-tasks §5T.3.10's
    "Replaces" column names, `/api/v3/ops/*`, `internal/server/handlers/opsv3`, the v2 operations handlers (`internal/server/handlers/operations*.go`) and the
    scheduler task routes (05-tasks §5T.8.1 names `internal/server/handlers/scheduler`; that directory does not exist
    at `f7ac5b11e`, so find the `/api/v1/tasks` handlers with `git grep -n '"/tasks' internal/server/`), and the two streams `/api/v1/operations/events` and `/api/v3/ops/events`
@@ -136,8 +148,8 @@ for d in internal/operations/registry internal/operations/childop internal/opera
    read runs through `Deps.Tasks`. No alias, no `Deprecation` header (D10).
 6. **SPA and callers.** The Activity page, `useOperationsStore` and MaintenanceTab on the generated tasks client,
    polling `GET /api/core/v1/tasks/runs` until F6; `api.ts`, `operationPolling.ts` and its users off `ops.ts`; the
-   first-party scripts and agent skills that called a deleted route (05-tasks §5T.3.10; 07). The system-log page on
-   the journal's route (Base state gap 3).
+   first-party scripts and agent skills that called a deleted route (05-tasks §5T.3.10; 07). The SPA's system-log
+   view on `GET /api/core/v1/system/logs` through the generated client, polling until F6 (05-logging §5).
 7. **Metrics** (05-metrics §13 item 3): the executor's `ops_*` families with core's labels (`def_id` = native kinds,
    `plugin` → `module`); `operations_*`, `operation_*`, `op_*` deleted; every row of 05-metrics' one-by-one table
    applied to `deploy/grafana/dashboards/*.json`, `deploy/prometheus/*.yml` and `alert-rules.test.yml`
@@ -147,7 +159,13 @@ for d in internal/operations/registry internal/operations/childop internal/opera
    the activity `Writer`'s line parsing (`internal/activity/writer.go`) and its tap, and `internal/logger/retention.go`.
    `core.log.journal.prune` is the only pruner; `operationlog:` history is pruned by `core.tasks.prune`. Drop the
    operation-record half from `books.maintenance.retention-and-hygiene` (it is `core.tasks.prune`'s now).
-9. **Bookkeeping.** `internal/arch/layering_test.go` (`layerOf` entries for created, moved and deleted packages),
+9. **The exemption directory empty** (05-tasks §5T.8.4; plan §(l) item 5). Delete
+   `internal/books/testdata/tasklint_exempt.d/F5-18.txt` (the files whose HEAD definitions this PR deletes, T4's
+   among them) and switch the ratchet in `internal/books/tasklint_test.go` to require the directory empty: any
+   entry file present from here on fails `make ci`. `tasklint` then runs over every books task package with no
+   exemption; rule 1's widened write sets start gating dispatch (an R2 release-note line).
+10. **Bookkeeping.** `tools/cmd/sdkguard/internal-deps.txt` (regenerated: every `pkg/plugin/sdk` caller moved),
+   `internal/arch/layering_test.go` (`layerOf` entries for created, moved and deleted packages),
    `scripts/ci/short_test_weights.json`, `.mockery.yaml` (mocks of deleted interfaces), `tygo.yaml` (types of
    deleted packages), `internal/sysinfo` (`OperationReadCheck` onto `Deps.Tasks`).
 
@@ -181,6 +199,8 @@ core.
 | Unknown kinds after the cutover are dropped, not fatal | `TestUnknownKindRun_DroppedAtResume` (core's), with an imported tombstoned run |
 | A `books.*` run waits for `books.memdb` | `TestDispatch_WaitsForReadySignal` |
 | The T5 gate | `go list -deps ./internal/plugins/... | grep -c pkg/plugin/sdk` is 0 |
+| `tasklint` with an empty exemption list (05-tasks §5T.8.2 F5 row gate; §5T.8.4) | `internal/books/tasklint_test.go` requires `internal/books/testdata/tasklint_exempt.d/` empty |
+| The journal's route replaces HEAD's | F5-19's `TestJournal_RequiresSystemManage` and `TestJournal_OtherUsersLinesNeedUsersView`, plus a kernel mount cell (name coined here: `TestF5_SystemLogsRouteMounted`) proving `GET /api/core/v1/system/logs` answers 403 to a `core:system.view`-only principal on the booted ABO and `GET /api/v1/system/logs` answers 404 |
 | Every intermediate `main` boots and passes e2e | `make test-e2e` |
 
 ## Acceptance (commands and expected output)
@@ -196,6 +216,11 @@ git grep -n '/api/v3/ops\|/api/v1/operations/events\|/api/v1/operations/v2\|/api
 git grep -n 'generated/ops' -- web/src/ | grep -v 'generated/ops.ts:' | wc -l                 # 0 (no SPA importer left)
 git grep -n 'audiobook_organizer_operations_\|audiobook_organizer_operation_\|audiobook_organizer_op_' -- deploy/ | wc -l   # 0
 go list -deps ./internal/plugins/... | grep -c 'pkg/plugin/sdk'                                 # 0
+ls internal/books/testdata/tasklint_exempt.d/ 2>/dev/null | wc -l                               # 0 (the directory is empty or gone)
+go test ./internal/books/ -count=1 -run "$(grep -o '^func Test[A-Za-z0-9_]*' internal/books/tasklint_test.go | sed 's/^func //' | paste -sd'|')"   # ok (no exemption)
+git grep -n '"/system/logs"' -- internal/server/ | wc -l                                       # 0 (HEAD's route deleted)
+git grep -n 'loghttp' -- core/kernel/ | wc -l                                                   # >=1 (mounted)
+grep -c '/system/logs' core/openapi/core.json                                                  # >=1 (regenerated)
 promtool test rules deploy/prometheus/alert-rules.test.yml                                      # SUCCESS
 make ci                                                                                         # exit 0
 make -C core ci                                                                                 # exit 0
@@ -204,7 +229,11 @@ make test-e2e                                                                   
 
 ## STOP conditions
 
-- Any Base-state gap unresolved (the full-sweep declaration; tasklint's rules; the journal's route).
+- A Base-state line fails (a dark F5 PR missing, an exemption entry file other than `F5-18.txt` present, F5-19's
+  package absent).
+- `tasklint` reports a finding once the directory is empty: fix the definition by 05-tasks conversion rule 3 if this
+  PR's fold caused it; if the finding is in a converted package's unchanged code, STOP and report which row's
+  conversion left it.
 - A converted kind fails registration (`app.New` fails closed): report the problem list, do not patch the kind here
   beyond the registration call.
 - `TestKindRenameMapCoversLedger` finds an unmapped ledger line or two IDs on one kind.
@@ -238,14 +267,3 @@ binary (`make rollback-restore`; 05-tasks §5T.8.3; 09 §9.4 R2 Rollback); runs 
 
 ## Planner notes
 
-- **Three gaps from the dark rows block this flip until resolved** (Base state): `library_scan_full`'s declaration
-  (F5-14, F5-16), tasklint's rule set over core (F5-17, SPEC-GATED), and the journal's query route and the SPA's move
-  to it (F5-15's notes: no row builds `GET /api/core/v1/system/logs`, yet after M5 HEAD's route reads nothing).
-- **`pkg/plugin/sdk`**: 04's F5 key moves it to `mediacore/tasks`, 05-tasks §5T.8.1 deletes it in R3; the brief
-  repoints every caller here and leaves the package to R3 (with `sdkguard`, 09 §9.4 R1 CI classification).
-- **The conversions' plan rules land here**: the shared cores fold into the native shells, the `sched` hooks receive
-  `books.ScheduleFor`, rule R7's widened write sets start gating dispatch (a behaviour change to call out in the R2
-  note), and HEAD's maintenance-job wrapper's activity-summary entry is not reproduced unless books' activity
-  subscriber covers it.
-- The row's files do not list `internal/database/` (the run-row store files move out of it to `m4legacy`),
-  `internal/activity/` is listed; add `internal/database/` and `internal/serviceregistry/`.

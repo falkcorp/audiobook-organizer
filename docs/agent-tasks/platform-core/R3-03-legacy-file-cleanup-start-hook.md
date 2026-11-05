@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R3-03-legacy-file-cleanup-start-hook.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: b76a7b67-773f-4425-8bf4-d8294b15c6cb -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | R3-03 |
 | Release | R3 |
 | Tier | **T3** (Opus / high): a boot-time deletion of a secret file with a skip rule; deleting the key while it is the only copy loses every pre-R2 archive's secrets |
-| Wave | W40 (beside R3-01; file-disjoint at the listed paths, see Planner notes) |
+| Wave | W44 (beside R3-01; file-disjoint: this row owns `internal/books/module.go` in W44, R3-01 owns `internal/books/services.go`) |
 | Depends on | R3-02 |
 | Spec | 05-storage §5S.3.8 (the `legacy-file-cleanup` paragraph), §5S.3.16 (the crash matrix kit), §5S.10 (`TestLegacyFileCleanup`); 06 §6.5.1 writer table row "Run 2 (R3+)", §6.5.1 "Releases" R3, §6.5.2 start order step (2); 05-config §1.12.2 ("HEAD's key"), §2.4 (state-file table, row `encryption_key`); 09 §9.4 R3 "Content", "Verification"; 03 §3.8 R3 |
 
@@ -63,8 +63,8 @@ R3 runs no migration step; these two deletions are the only stored data R3 chang
 |---|---|
 | create | `internal/books/legacy_file_cleanup.go` |
 | create | `internal/books/legacy_file_cleanup_test.go` |
-| create or modify | the books crash-matrix scenario for this hook (the row lists `core/coretest/crashmatrix/legacyfiles.go`; see Planner notes before using that path) |
-| modify (not in the row; see Planner notes) | the books file that registers start hooks (`internal/books/module.go` at the paths the plan uses), to register the step |
+| modify | `internal/books/crash_matrix_test.go` (R1-23's file, beside `TestBootCrashMatrix_ABO`): the "R3 legacy-file-cleanup" scenario. It names ABO's files and books' labels, so it lives in ABO's instance, never in core's app-neutral kit (05-storage §5S.3.16; `TestCoreHoldsNoAppKeyNames`); `core/` is untouched |
+| modify | `internal/books/module.go` (register the start-hook step) |
 | create | one `changelog.d/` fragment (headerless) |
 
 ## Re-verify before editing (expected results at your base)
@@ -83,15 +83,18 @@ grep -rn '"secrets_keyring_not_exported"' --include='*.go' core/
 # 4. How books registers a start hook today. Expected: >=1 hit in internal/books
 grep -rn 'r\.Hook(\|\.Hook(' --include='*.go' internal/books/ | head
 
-# 5. The ABO crash-matrix instance and its writer registry. Expected: 1 definition each
+# 5. The ABO crash-matrix instance and its writer registry. Expected: 1 definition each;
+#    TestBootCrashMatrix_ABO in internal/books/crash_matrix_test.go (R1-23)
 grep -rn 'func TestBootCrashMatrix_ABO\|func TestBootCrashMatrixCoversEveryWriter' --include='*.go' . core/
+grep -c 'func TestBootCrashMatrix_ABO' internal/books/crash_matrix_test.go      # 1
 
 # 6. HEAD's index path at your base (the directory name the hook deletes). Expected: >=1 hit naming library.bleve
 grep -rn 'library\.bleve' --include='*.go' internal/ | head
 ```
 
 STOP and report if grep 1 or 3 returns nothing, if grep 2 finds no public handle a module can use for labelled
-state-FS deletions (do not reach into `core/internal`), or if grep 5 finds no ABO crash-matrix instance.
+state-FS deletions (do not reach into `core/internal`), or if grep 5 finds no ABO crash-matrix instance in
+`internal/books/crash_matrix_test.go` (the row's file must follow where it is).
 
 ## Steps
 
@@ -108,11 +111,11 @@ state-FS deletions (do not reach into `core/internal`), or if grep 5 finds no AB
    the labelled FS; HEAD's index sibling markers that live beside it (the mapping and rebuilding markers, 05-storage
    §5S.3.8) go with it if they sit outside the directory.
 6. Register the two crash labels with the crash matrix and add the scenario "R3 legacy-file-cleanup" to
-   `TestBootCrashMatrix_ABO`'s scenarios (05-storage §5S.3.16 lists it), with fixtures: both files present, key only,
-   index only, neither, and the keyring token raised.
+   `TestBootCrashMatrix_ABO`'s scenarios in `internal/books/crash_matrix_test.go` (05-storage §5S.3.16 lists it), with
+   fixtures: both files present, key only, index only, neither, and the keyring token raised.
 7. Log lines (INFO): one per deletion; on the key deletion, the sentence that the off-host `.encryption_key` taken
    before R2 is now the only copy; on a skip, that the key was kept because the keyring has not been exported.
-8. Register the step in books' module. Run the acceptance block. Bump headers. Add a `changelog.d/` fragment.
+8. Register the step in `internal/books/module.go`. Run the acceptance block. Bump headers. Add a `changelog.d/` fragment.
 
 ## Code contract
 
@@ -152,7 +155,7 @@ make ci
 
 - The floor and the deletions of R3-02; R3-01's package deletions.
 - Exporting the keyring or touching `secrets.keyring` (owner step, OWNER-06).
-- The R3 release note.
+- The R3 release note (R3-04).
 
 ## Rollback
 
@@ -167,13 +170,3 @@ the owner before R2, OWNER-05 step 1 and OWNER-06) is the recovery, and R2 reads
   `Co-Authored-By: Claude <noreply@anthropic.com>`; `gh pr merge <n> --rebase`; never squash; never `--admin`.
 - A boot-time durable write extends the crash matrix in the same PR (09 §9.3): this PR does.
 
-## Planner notes
-
-- **Crash-matrix file location.** The row lists `core/coretest/crashmatrix/legacyfiles.go`. The kit in core is
-  app-neutral (05-storage §5S.3.16; `TestCoreHoldsNoAppKeyNames`), and this scenario names ABO's files and books'
-  labels, so it belongs to ABO's instance `TestBootCrashMatrix_ABO` (R1-23's file), not to the core kit. Unless the
-  kit genuinely needs a generic "delete labelled state files" helper, put the scenario beside
-  `TestBootCrashMatrix_ABO` and leave `core/` untouched.
-- **Registration file missing from the row.** Registering the start hook edits books' module file
-  (`internal/books/module.go`), which the row does not list. R3-01 in the same wave does not list it either; if
-  R3-01 ends up editing books' wiring (see its Planner notes on `serviceregistry`), the two collide.

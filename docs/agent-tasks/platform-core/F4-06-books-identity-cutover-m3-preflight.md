@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-06-books-identity-cutover-m3-preflight.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f0c9fb51-61bc-4527-b59b-90c09a73f0ed -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F4-06 |
 | Release / flip | R2, identity flip F4 (dark PR: built and tested, **unregistered** until F4-08) |
 | Tier | **T4** (Opus, xhigh–max): a one-way migration of every identity, with the stop-the-upgrade preflight |
-| Wave | W26 |
+| Wave | W27 |
 | Depends on | F4-02, F4-01, F3-04, F3-06, F2-13 |
 | Owns gate tests | `TestCutoverStopsOnUnconvertibleIdentity`; `TestCutoverRefusedWhileMergeInProgress` (the preflight's refusal corpus); `TestIdentityCutover_FixtureFromR0`; `TestIdentityCutover_Resumable`; `TestIdentityCutover_RolesAndKeyScopes`; `TestIdentityCutover_WorkerKeyStaysConfined` |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
@@ -63,7 +63,7 @@ it is never quarantined. Do not register M3: F4-08 adds it to `internal/books/cu
 
 | Action | Path |
 |---|---|
-| create | `internal/books/cutover/m3/` (the step, decoders of HEAD's identity rows, the mapping, Verify, tests) |
+| create | `internal/books/cutover/m3/` (the step, decoders of HEAD's identity rows, the mapping, Verify, tests; a Go sub-package of `internal/books/cutover`, which 03 §3.5.1 allows: its new-path count counts root paths only) |
 | create | `internal/books/cutover/preflight.go` (the step's `Preflight`, `FixBlocker`, `DeleteBlocker` wiring in package `cutover`) |
 | create | `core/app/offline_cutover_blockers.go` (`storage cutover-blockers`) |
 | create | `internal/books/testdata/r2corpus/m3/` (expected answers and cell fixtures for the M3 tests) |
@@ -73,6 +73,7 @@ it is never quarantined. Do not register M3: F4-08 adds it to `internal/books/cu
 ```bash
 ls -d internal/books/cutover | wc -l                                                # 1 (F3-06)
 ls internal/books/cutover/preflight.go internal/books/cutover/m3 2>/dev/null | wc -l   # 0
+grep -c 'M3\|Identity' internal/books/cutover/stepids.go                           # >= 1: F3-06 reserved M3's step ID (use it)
 grep -rn 'type Importer interface' core/auth/ core/rbac/ | wc -l                    # 2 (F4-02, F4-01)
 grep -rn 'Preflight ' core/storage/datamigrate/*.go | wc -l                         # >= 1
 grep -rn 'ErrCutoverBlocked' core/storage/ | wc -l                                  # >= 1 (F3-04)
@@ -86,8 +87,7 @@ ls internal/usermerge/journal.go | wc -l                                        
 
 ## STOP conditions
 
-1. A sub-package `internal/books/cutover/m3` conflicts with 04 §2.4's count of five new root paths (see Planner notes):
-   if the lead wants the step as files of `internal/books/cutover`, place them there instead and record it.
+1. `internal/books/cutover/stepids.go` reserves no M3 step ID: report; do not coin a second one.
 2. Any identity row would be quarantined, dropped or imported without its user (D13).
 3. The preflight writes anything, or runs on a store whose cutover has started.
 4. `cutover-blockers fix|delete` would open a store whose cutover has started, run a migration step, or act on a key the
@@ -106,7 +106,8 @@ ls internal/usermerge/journal.go | wc -l                                        
    role rows deleted (P7 recreates them); other roles → `custom.<slug>` through `rbac.Importer`, users' role lists
    rewritten in the same step; an unknown atom grants nothing and is reported; a role whose every atom is unknown is
    quarantined (sealed) with the role-list entries naming it.
-4. **The step**: per chunk, in one batch, import (`auth.Importer`, `rbac.Importer`), delete the HEAD rows consumed, the
+4. **The step** (its ID is the M3 constant from F3-06's `internal/books/cutover/stepids.go`; do not edit that file):
+   per chunk, in one batch, import (`auth.Importer`, `rbac.Importer`), delete the HEAD rows consumed, the
    cursor; sessions, invites and the bootstrap hash deleted by rule; outside `Source`, delete HEAD's one-shot expiry flag
    and rewrite each kept `usermerge:journal:` once with every `invite:<token>` key image replaced by the token's SHA-256;
    `Sensitive` = `u:`, `idx:user:email:`, `apikey:`, `oauthid:`; an importer refusal of an identity row fails the chunk
@@ -156,7 +157,7 @@ go vet ./internal/books/cutover/...                                             
 go test -race -count=1 ./internal/books/cutover/...                                       # ok
 go test -count=1 -run 'TestCutoverStopsOnUnconvertibleIdentity|TestCutoverRefusedWhileMergeInProgress|TestIdentityCutover_' ./internal/books/...   # PASS
 (cd core && go test -race -count=1 ./app/...)                                             # ok
-grep -c 'cutover/m3' internal/books/module.go                                            # 0: not registered (steps.go arrives with F3-07 in W27)
+grep -c 'cutover/m3' internal/books/module.go                                            # 0: not registered (F4-08 adds M3 to steps.go)
 make -C core ci                                                                           # exit 0
 make ci                                                                                   # exit 0
 ```
@@ -181,10 +182,3 @@ feat(books/cutover): identity step M3 with the read-only preflight and cutover-b
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
-
-## Planner notes
-
-- **`internal/books/cutover/m3/` is a Go sub-package**, which 04 §2.4 does not count among the five new root-module paths
-  of 03 §3.5.1 ("the frozen copy … is files of this package, not a sub-package, so the count stays 03's"). Either 04's
-  count changes or M3 lives in files of `internal/books/cutover` (which then collides with F5-15/F5-16 in W26 only if
-  they also edit that directory's files). The same applies to F5-18's `internal/books/cutover/m4legacy/`.

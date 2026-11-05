@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-04-storage-cutover-machinery-dryrun-quarantine.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e1287955-3c4d-4b21-b3f5-bebfca0452a8 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F3-04 |
 | Release / flip | R2, config flip F3 (dark PR) |
 | Tier | **T4** (Opus, xhigh–max): the level step, quarantine and dry run guard every one-way step |
-| Wave | W24 |
+| Wave | W25 |
 | Depends on | F2-06 |
 | Owns gate tests | `TestDryRunMatchesLiveRun`, `TestQuarantineCommands` |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
@@ -117,9 +117,10 @@ ls core/storage/level_step.go core/storage/quarantine.go core/storage/preflight.
 3. **Quarantine** (`quarantine.go`): `QuarantineRecord` exactly as below; key `c/storage/quarantine/<step-id>/<n>`,
    `n` from the keyspace's `quarantine` `Sequence`; a row under one of the step's `Sensitive` prefixes is sealed as the
    secret record `core.storage.quarantine.row-<n>` through the sealer and the record names it in `Secret` with an
-   empty `Value`. The sealer is F3-03's `secrets.Importer` (05-config §2.3 hands it to storage's quarantine sealing);
-   `storage` (L1) cannot import `secrets` (L2), so the runner holds it, and any storage-side seam is a one-method
-   interface (name coined here). Health `storage_quarantine` (warning; count per step, `sensitive`,
+   empty `Value`. The sealer is a **seam**: a one-method interface (name coined here) that F3-03's `secrets.Importer`
+   satisfies and that **F3-07 binds** at boot (05-config §2.3 hands it to storage's quarantine sealing). `storage`
+   (L1) cannot import `secrets` (L2), so the runner holds the seam. F3-03 has merged in an earlier wave but is not a
+   dependency of this row: test with a fake sealer, and do not import `core/secrets` from `core/storage`. Health `storage_quarantine` (warning; count per step, `sensitive`,
    `orphaned_refs`), carried only on authenticated routes; `mediacore_storage_quarantine_rows{step, sensitive}`.
 4. **Preflight** (`preflight.go`, `kernel/migrate.go`): before the headroom check and the checkpoint (06 §6.5.1 P4 (a),
    §5S.4 step 5a), if and only if the cutover **has not started** (books' level is below M7's target **and** no cutover
@@ -137,9 +138,10 @@ ls core/storage/level_step.go core/storage/quarantine.go core/storage/preflight.
    `KindRewrite` journals **whose `StepID` is this M8's own**, newest first: none → phase 3; `swapped`/`opened` → phase
    4 without a second swap; `swapped_back` → restart from phase 1 once; the two newest both `swapped_back` →
    `storage.ErrRewriteSwappedBack`, exit 78, nothing staged. A swap-back moves no checkpoint and starts no clock.
-   Free space (§5S.3.12): a boot whose list holds M8 adds the store's size once more. The API by which books' M8
-   definition (F3-06) invokes this engine is not named by the spec: coin it (mark it "(name coined here)" in the code
-   comment and the PR) and keep its ID rule `books.rewrite-after-<step name>`.
+   Free space (§5S.3.12): a boot whose list holds M8 adds the store's size once more. **M8's invocation API** (the
+   constructor books' M8 definition calls in F3-06) is not named by the spec: this row coins it. Mark it "(name coined
+   here)" in the code comment and the PR description, state its signature in the PR so F3-06 can copy it, and keep
+   its ID rule `books.rewrite-after-<step name>`.
 6. **Dry run** (`dryrun.go`, `offline_storage.go`): refuse while another process holds the DB lock; open the live
    store **ReadOnly** (no WAL flush, no ratchet, no write); hard-link SSTs and copy WAL, MANIFEST, OPTIONS into a new
    directory of the scratch area `.mediacore-checkpoints/scratch/` (under `core.storage.checkpoint_dir` when set; area
@@ -240,10 +242,6 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 
 ## Planner notes
 
-- **Same-wave secrets.** Quarantine sealing and `quarantine export` need F3-03's keyring, which runs in the same wave;
-  this brief uses a seam and fakes, and F3-07 wires the real sealer. Consider listing F3-03 as a dependency if the
-  lead prefers real-keyring tests here.
 - **Runner and journal files.** If F2-06 did not build `StepWriter.Quarantine` with sealing in the chunk batch, or
   R1-20 did not land `KindRewrite` and `StepID` in `core/storage/restorejournal/`, this row needs
   `core/storage/datamigrate/`, `core/internal/storagemigrate/` or `core/storage/restorejournal/` (STOP 1, STOP 2).
-- **M8's invocation API** is not named by the spec; F3-04 coins it and F3-06 consumes it.

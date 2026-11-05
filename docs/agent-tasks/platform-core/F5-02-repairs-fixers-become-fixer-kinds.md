@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-02-repairs-fixers-become-fixer-kinds.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: bbc45161-5107-41fe-8e3e-77b95ed3dadb -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,9 +9,9 @@
 |---|---|
 | ID | F5-02 |
 | Release / flip | R2, tasks flip F5 (dark conversion PR) |
-| Wave | W26 |
-| Tier | **T3** (Opus / high): Fixer semantics (plan rows, re-evaluation at apply, applied-row marks, guards) must stay exact, and M4 imports HEAD's stored rows and marks into the shape this PR defines |
-| Depends on | F2-05 (transitively F2-01..F2-04) |
+| Wave | W29 |
+| Tier | **T3** (Opus / high): Fixer semantics (plan rows, re-evaluation at apply, applied-row marks, guards) must stay exact while 25 fixers reroute their stores through repairs' shell (05-tasks conversion rule 3), and M4 imports HEAD's stored rows and marks into the shape this PR defines |
+| Depends on | F2-05 (transitively F2-01..F2-04), F2-16 (`Registrar.Tasks`, `coretest`'s task cells), F2-17 (`tasklint` and this row's exemption entry file) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
 
 ## START HERE
@@ -40,6 +40,11 @@ the 2 defs `repairs.plan`/`repairs.apply` removed"; gate "Fixer conformance suit
 `repairs.apply` v2 definitions keep running until the tasks flip F5-18, which deletes them; they get **no**
 native kind (map rule 2 sends their stored runs to the per-fixer kinds).
 
+Under 05-tasks §5T.8.2 conversion rule 3 each fixer's body reaches its writer and its stores **only through what
+repairs' shell hands it**, so this PR also edits the 25 fixer files in `internal/plugins/maintenance` (the T6 groups
+exclude them) to take their stores from the shell instead of capturing them (rule 3 below), and deletes its own
+`tasklint` exemption entry file, `internal/books/testdata/tasklint_exempt.d/F5-02.txt`, in the same PR.
+
 ## Spec to read first (in this order)
 
 1. 05-tasks §5T.3.1 (`FixerSpec`, `Fixer`; `Source`, `Row`, `Guard` "keep their v3 meaning
@@ -54,7 +59,10 @@ native kind (map rule 2 sends their stored runs to the per-fixer kinds).
    an imported `awaiting_decision` plan run keeps its rows).
 4. 05-tasks §5T.9 rows `TestFixer_PlanRefAgeAndRowsOnly`, `TestFixerMarksLandDuringQuiesce`,
    `TestCutover_RepairsRowsAndMarksImported` (the last is F5-16's and consumes this PR's row shape).
-5. 05-rbac §6 (atom table). Plan §(l) item 4 (narrow writer interface in the converted package).
+5. 05-rbac §6 (atom table). Plan §(l) items 4 (narrow writer interface in the converted package) and 5 (the
+   exemption directory).
+6. 05-tasks §5T.8.2 conversion rules 1–4 and §5T.8.4 (`tasklint`: `writer-bypass`, `store-capture`, the
+   dark-conversion ratchet).
 
 ## Base state: re-verify before editing
 
@@ -78,6 +86,13 @@ grep -n 'PlanOpID  = "repairs.plan"\|ApplyOpID = "repairs.apply"' internal/repai
 grep -n 'const defaultApplyConcurrency = 4' internal/repairs/engine.go | wc -l    # 1 (apply parallelism, rule 4 below)
 grep -n 'type Row struct' internal/repairs/wire.go | wc -l                         # 1 (HEAD's stored row shape)
 grep -rln 'mediacore/tasks"' internal/repairs/ | wc -l                             # 0
+ls internal/plugins/maintenance/*_fixer.go | wc -l                                 # 25 (the fixer files this row edits)
+grep -c 'f\.p\.deps\.' internal/plugins/maintenance/*_fixer.go | awk -F: '$2>0' | wc -l   # record: the fixers that reach the plugin's deps (rule 3)
+# F2-16 / F2-17 outputs (0 hits on any = STOP)
+test -f core/coretest/tasks.go && echo present                                     # present (F2-16: coretest's task cells)
+test -d core/archtest/tasklint && test -f internal/books/tasklint_test.go && echo tasklint   # tasklint (F2-17)
+test -f internal/books/testdata/tasklint_exempt.d/F5-02.txt && echo entry          # entry (F2-17 created it), else STOP
+grep -v '^#' internal/books/testdata/tasklint_exempt.d/F5-02.txt | grep -v '^$' | grep -v '^internal/repairs/' | grep -v '^internal/plugins/maintenance/[a-z0-9_]*_fixer\.go$' | wc -l   # 0 (the entry names only this row's files)
 ```
 
 So HEAD registers **25 fixers through 24 call sites** at `f7ac5b11e` (23 single calls plus one loop over
@@ -95,12 +110,16 @@ the maintenance plugin's `Repairs()` registry the way that package's tests do an
 | create | `internal/repairs/kinds.go` (name coined here): the generic native shell |
 | create | `internal/repairs/kinds_test.go` (name coined here): conformance and parity tests |
 | create | `internal/repairs/rcreporter.go` (name coined here): the in-package `registry.Reporter` over `*tasks.RC`/`*tasks.ItemRC` that `Fixer.Plan`/`Replan` need until F5-18 re-signs them |
+| create | `internal/repairs/stores.go` (name coined here): `FixerStores`, `WithStores`, `StoresFrom` (rule 3) |
+| modify | `internal/repairs/engine.go` (HEAD's `RunPlan`/`RunApply` put HEAD's stores on ctx, rule 3) and, only where rule 3 needs it, other `internal/repairs` files (no exported signature changes) |
+| modify | the 25 fixer files `internal/plugins/maintenance/*_fixer.go` listed in the row (rule 3 only) |
+| delete | `internal/books/testdata/tasklint_exempt.d/F5-02.txt` (this row's exemption entry file) |
 | create | one `changelog.d/` fragment |
 
-Do **not** modify any fixer (`internal/plugins/maintenance/*_fixer.go`), `internal/plugins/maintenance/plugin.go`,
-`repairs_ops.go`, the existing `internal/repairs` files' exported API, `internal/server`, `internal/opscatalog`
-or `main.go`. Because the shell is generic over `repairs.Fixer`, no file of the T6 siblings (F5-06 … F5-12)
-in `internal/plugins/maintenance` is touched.
+Do **not** modify `internal/plugins/maintenance/plugin.go`, `repairs_ops.go`, any non-fixer file of
+`internal/plugins/maintenance` (the T6 siblings F5-06 … F5-12 own them in the same wave), any other file under
+`internal/books/testdata/tasklint_exempt.d/`, the exported API of `internal/repairs` or of `repairs.Fixer`,
+`internal/server`, `internal/opscatalog` or `main.go`.
 
 ## Code contract
 
@@ -112,7 +131,10 @@ const KindPrefix = "books.repairs."
 
 // KindDeps is what the native shell needs that HEAD's repairs.plan/apply defs get from the
 // maintenance plugin: the same values as PlanDeps/ApplyDeps (engine.go), minus the v2 reporter.
-type KindDeps struct { /* the fields of PlanDeps and ApplyDeps that are not engine plumbing */ }
+type KindDeps struct {
+	/* the fields of PlanDeps and ApplyDeps that are not engine plumbing */
+	Stores FixerStores // rule 3: the stores the native shell hands every fixer call
+}
 
 // Kinds returns one tasks.Fixer definition per fixer, in the order given. Nothing calls it in
 // production; F5-18 passes plugin.Repairs()'s fixers.
@@ -143,6 +165,27 @@ run in `ModePreview` (map rule 2). Where the plan and apply values differ (resum
 the native kind takes the **apply** value and the PR description lists the plan values that do not carry, as
 05-tasks gives one `Common` per kind.
 
+**Rule 3, stores and writer only through the shell (05-tasks §5T.8.2 conversion rule 3; §5T.8.4).** At HEAD the
+fixers capture their stores at construction (`f.p.deps.OpsStore()`, `f.p.deps.UserReadStateStore()` and siblings
+on the maintenance plugin), which `tasklint`'s `store-capture` rejects once `F5-02.txt` is gone. So:
+
+1. `internal/repairs/stores.go` declares `FixerStores` (name coined here): an interface with exactly the
+   store-returning methods the 25 fixers call on `f.p.deps` (same names and result types; one method per store),
+   and `WithStores(ctx, FixerStores) context.Context` / `StoresFrom(ctx) (FixerStores, bool)` (names coined here).
+2. Both shells hand it: the native shell puts `KindDeps.Stores` on the ctx of every `Plan`, `Replan` and `Apply`
+   call; HEAD's `RunPlan`/`RunApply` put an adapter over the maintenance plugin's deps on it (the adapter of the
+   same interface over HEAD's stores; it returns exactly what `f.p.deps` returns today).
+3. Each fixer replaces every `f.p.deps.<Store>()` call with `StoresFrom(ctx)` (a missing value is an error, never a
+   fallback to `f.p.deps`). A fixer helper without a ctx gets a new variant taking the stores (name coined per
+   helper: `<helper>Via`); the existing helper is not re-signed. Non-store deps (`EnqueueOp` and the like) are
+   not stores and stay.
+4. Writes: a fixer writes a module entity only through the `*repairs.Writer` its `Apply` is handed. In the native
+   path every `repairs.Writer` write runs inside the run's `tasks.Writer` (`w.Do`, 05-tasks §5T.3.5) with a
+   `Resource` inside the kind's `Effects.Writes`; in HEAD's path it is unchanged. A fixer that writes outside the
+   `*repairs.Writer` is rerouted through the existing `repairs.Writer` method for that write; if none exists, STOP.
+5. Nothing else in a fixer changes: plan rows, replan, guards and apply logic stay byte-for-byte; HEAD's fixer
+   tests stay green unchanged.
+
 `rcreporter.go`: a `registry.Reporter` over `rc`/`ic` (progress, log, `IsCanceled` from the context,
 `Checkpoint` → `rc.Checkpoint` with HEAD's `ApplyCheckpoint` struct) so `Fixer.Plan`/`Replan` can be called
 unchanged. It is books code that disappears when F5-18 removes the v2 reporter from `repairs.Fixer`.
@@ -164,6 +207,9 @@ unchanged. It is books code that disappears when F5-18 removes the v2 reporter f
    `coretest` and asserts the refusal).
 6. **Stored-row compatibility.** `Load` decodes a payload written by HEAD's `database.OpRowStore` for a
    `repairs.plan` run byte-for-byte (fixture: the bytes HEAD's own `planstore_test.go` writes).
+7. **Stores and writer through the shell (rule 3).** No fixer reaches a store except through `StoresFrom(ctx)` or
+   a module entity except through the `*repairs.Writer` it is handed; `tasklint` passes over the 25 fixer files
+   and `internal/repairs` with `F5-02.txt` deleted.
 
 ## TDD: tests to write first (names coined here, in `kinds_test.go`)
 
@@ -177,6 +223,9 @@ unchanged. It is books code that disappears when F5-18 removes the v2 reporter f
 - `TestRepairsKinds_GuardsAndPartitions` (invariant 4, `-race`).
 - `TestRepairsKinds_ApplyNeedsPlanRef` (invariant 5).
 - `TestRepairsKinds_LoadsHEADRowBytes` (invariant 6).
+- `TestRepairsKinds_FixersUseShellStores` (invariant 7): every fixer's native plan and apply on a fake
+  `KindDeps.Stores` reads only from the fake (the plugin's deps are a value whose store methods fail the test),
+  and HEAD's `RunPlan` on the same fixture still yields HEAD's rows.
 
 ## Steps
 
@@ -184,10 +233,14 @@ unchanged. It is books code that disappears when F5-18 removes the v2 reporter f
    `partitionRows`) and `repairs_ops.go` end to end before writing.
 2. Write the tests; then `rcreporter.go`; then `kinds.go`, reusing `engine.go`'s unexported helpers (same
    package) rather than copying them.
-3. If an invariant cannot hold without changing a fixer or an exported `repairs` signature, STOP and report
-   which fixer and why: this PR does not edit fixers.
-4. PR description: one `fixer ID ==> books.repairs.<ID>` line per fixer; the plan-only `Common` values that
-   do not carry; `converted: <n>/<n>` with n the registry's count.
+3. `stores.go`, then rule 3 in `engine.go` and in each fixer file, one fixer at a time, running that fixer's
+   existing tests after each.
+4. If an invariant cannot hold without changing a fixer's behaviour or an exported `repairs` signature, STOP and
+   report which fixer and why: this PR changes only where a fixer reaches its stores.
+5. `git rm internal/books/testdata/tasklint_exempt.d/F5-02.txt`, then run the acceptance block's `tasklint` line.
+6. PR description: one `fixer ID ==> books.repairs.<ID>` line per fixer; the plan-only `Common` values that
+   do not carry; the fixers rule 3 edited, with the store calls rerouted; the deleted entry file;
+   `converted: <n>/<n>` with n the registry's count.
 
 ## Acceptance (commands and expected output)
 
@@ -195,8 +248,13 @@ unchanged. It is books code that disappears when F5-18 removes the v2 reporter f
 go build ./...                                                                   # exit 0
 go vet ./internal/repairs/                                                       # exit 0
 go test ./internal/repairs/ ./internal/plugins/maintenance/ -count=1 -short -race   # ok x2 (HEAD's fixer tests unchanged)
-go test ./internal/repairs/ -run 'TestRepairsKinds_' -count=1 -race -v | grep -c '^--- PASS'   # 8
-git diff --name-only origin/main | grep -v '^changelog.d/' | sort                 # exactly the three new internal/repairs files
+go test ./internal/repairs/ -run 'TestRepairsKinds_' -count=1 -race -v | grep -c '^--- PASS'   # 9
+git diff --name-only origin/main | grep -v '^changelog.d/' | grep -v '^internal/repairs/' | grep -v '^internal/plugins/maintenance/[a-z0-9_]*_fixer\.go$' | grep -v '^internal/books/testdata/tasklint_exempt.d/F5-02.txt$' | wc -l   # 0
+grep -c 'f\.p\.deps\.\(OpsStore\|UserReadStateStore\)()' internal/plugins/maintenance/*_fixer.go | awk -F: '{s+=$2} END {print s}'   # 0 (rule 3; extend the pattern to every store method FixerStores declares)
+test ! -e internal/books/testdata/tasklint_exempt.d/F5-02.txt && echo deleted       # deleted
+git diff --name-only --diff-filter=D origin/main -- internal/books/testdata/tasklint_exempt.d/   # internal/books/testdata/tasklint_exempt.d/F5-02.txt (only)
+git diff --name-only --diff-filter=AMR origin/main -- internal/books/testdata/tasklint_exempt.d/ | wc -l   # 0
+go test ./internal/books/ -count=1 -run "$(grep -o '^func Test[A-Za-z0-9_]*' internal/books/tasklint_test.go | sed 's/^func //' | paste -sd'|')"   # ok (tasklint over the union; this row's files no longer exempt)
 git grep -n 'mediacore/tasks"' -- main.go internal/opscatalog/ internal/plugins/ | wc -l   # 0
 make ci                                                                          # exit 0
 ```
@@ -205,8 +263,10 @@ make ci                                                                         
 
 - The registry's fixer count is not 25 and no fixer was added or removed since `f7ac5b11e`.
 - `core/tasks` lacks `FixerSpec.Load`, `Writer.MarkRowApplied` or `ErrChangedSincePlan`.
-- An invariant needs a fixer edit (step 3).
-- tasklint (F5-17) flags the unchanged fixer bodies (`writer-bypass`): report; do not add allow directives.
+- An invariant needs a fixer behaviour change (step 4).
+- A fixer writes a module entity outside `*repairs.Writer` and no `repairs.Writer` method covers that write.
+- `tasklint` (F2-17) still reports `writer-bypass` or `store-capture` in this row's files after rule 3, or reports
+  one in a file this row does not own: report it; never an allow directive or a line added to any entry file.
 
 ## Out of scope
 
@@ -226,8 +286,8 @@ If `internal/repairs/kinds.go` exists and its tests pass, run the acceptance ins
 - Conventional commit `refactor(repairs): native books.repairs.* Fixer kinds over every repairs fixer (dark)`, body
   ending `Co-Authored-By: Claude <noreply@anthropic.com>`; 09 names no release or flip trailer.
 - `gh pr merge <n> --rebase`, never squash, never `--admin` past a required check.
-- CLAUDE.md concurrency: the apply pool keeps HEAD's bounded count and disjoint partitions; the shell adds
-  no unbounded fan-out.
+- CLAUDE.md concurrency: the apply pool keeps HEAD's bounded count and disjoint partitions (the "must not
+  double-merge" rule: `PartitionBy` keeps any two workers off one book); the shell adds no unbounded fan-out.
 - Report with exact counts and the COMPLETED / REMAINING / BLOCKED lines.
 
 ## Planner notes
@@ -235,13 +295,3 @@ If `internal/repairs/kinds.go` exists and its tests pass, run the acceptance ins
 - **Count:** HEAD registers 25 fixers through 24 `repairsReg.Register` call sites (one call is inside a
   loop over two fixers), at `f7ac5b11e` and at `748fd787a`; 05-tasks §5T.2 and §5T.8.2 say "24 fixers". The
   brief uses the registry's count; the spec's figure should read 25 (or "24 call sites").
-
-- The inventory lists only `internal/repairs/`. That holds because this brief converts the fixers through one
-  generic shell over `repairs.Fixer` rather than editing the `*_fixer.go` files in
-  `internal/plugins/maintenance`; if the lead prefers per-fixer native code, the row must add those files and
-  the F5-06 … F5-12 file groups must keep excluding them (they do).
-- 05-tasks gives one `Common` per kind, but HEAD's plan and apply definitions differ in resume policy,
-  timeout, priority and key; the brief takes the apply values and lists the rest. The review loop should
-  confirm (the M4 state table imports plan runs as `ModePreview` runs of the same kind).
-- `repairs.apply`'s `Writes` is `ResSeries` only at HEAD; the native kinds declare `books/books` too because
-  every fixer writes books rows. This widens the dispatch gate once F5-18 registers them.

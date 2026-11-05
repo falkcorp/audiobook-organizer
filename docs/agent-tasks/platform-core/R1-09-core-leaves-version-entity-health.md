@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-09-core-leaves-version-entity-health.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f08cce47-0814-4819-8567-482be7830fb4 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,8 +9,8 @@
 |---|---|
 | ID | `R1-09` |
 | Tier | **T1** (Sonnet / medium): small new leaves and one constructor rewrite |
-| Release / wave | R1 / W08 |
-| Depends on | R1-02 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
+| Release / wave | R1 / W09 |
+| Depends on | R1-02, R1-07 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 04 §8.1 R1, §8.2 (mediacore/health row), §8.5 R1 (flight.go logger cut); 03 §3.3 (version, entity, coretest); 05-health §5H.10 Landing R1; 12 §12.4.3 (Version 0.1.0) |
 | Branch | `agent/platform-core-r1-09-core-leaves-version-entity-health` |
 
@@ -23,7 +23,8 @@
 - `core/coretest/`
 - `core/health/`
 - `internal/diag/flight/`
-- `internal/server/`
+- `internal/server/`: `flight_recorder.go`, `flight_recorder_test.go`, `server.go`
+- `internal/server/handlers/`: `diagnostics_traces.go`, `diagnostics_traces_test.go`
 - `internal/arch/layering_test.go`
 - `scripts/ci/short_test_weights.json`
 
@@ -60,8 +61,8 @@ behaviour difference: the recorder's log lines go to the logger ABO passes inste
 ## Dependency check
 
 R1-02 merged (`test -f .github/workflows/extraction-gates.yml`) **and R1-07 merged** (`test -d core/log`): this
-PR's `health` imports `log` (step 4). If either is missing, STOP. (R1-07 is not in the row's depends-on list; see
-Planner notes.)
+PR's `health` imports `log` (step 4), the first in-core edge of the core guard's positive control. If either is
+missing, STOP.
 
 ## Re-verify (expected at `f7ac5b11e`)
 
@@ -225,11 +226,3 @@ Revert the commit. No stored data changes.
   Apply in the same PR the `go fix` modernizers core's `fix-check` requires in the moved files
   (`go -C core fix ./...`, 04 §2.2).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
-
-## Planner notes
-
-- Missing dependency: the brief makes `core/health` import `core/log` (the first real in-core edge the core guard's
-  positive control needs, 03 §3.5.1 item 2, and HEAD's line sanitizing, which `internal/logger` applied), and
-  `core/log` is created by R1-07. The row lists only R1-02. The wave order (R1-07 in W07, R1-09 in W08) already
-  satisfies it; add R1-07 to the row's depends-on.
-- `coretest`'s log-capture API is not named by the spec; the brief coins `coretest.LogCapture`/`NewLogCapture`.

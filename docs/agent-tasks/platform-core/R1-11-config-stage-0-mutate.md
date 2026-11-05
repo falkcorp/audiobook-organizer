@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-11-config-stage-0-mutate.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d00a5d7b-4968-462d-afd6-f66e1d7f40e9 -->
 <!-- last-edited: 2026-11-05 -->
 

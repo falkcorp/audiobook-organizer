@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-31-end-r1-freeze.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f6be479f-8c49-424f-8d3e-ef33dbe233e8 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -36,7 +36,7 @@ Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 it
 ## Goal
 
 End the R1 freeze. R1-01 turned automatic promotion off by setting the workflow-level variable
-`RELEASE_FREEZE` (name coined in R1-01's brief) in `.github/workflows/prerelease.yml`, so the
+`RELEASE_FREEZE` (the plan's one toggle name: R1-01 sets it to `'R1'`, this row clears it, F3-07 sets `'R2'`, R2-02 clears it) in `.github/workflows/prerelease.yml`, so the
 `check-rc-ordinal` job dispatches no production release. The R1 release turns it on again (09 §9.2.1:
 "the R1 series' first PR turns it on and R1's release turns it off"; 09 §9.4 R1 Owner row). Between R1 and
 F3, production minors ship as usual (09 §9.2.1). This is one line.
@@ -116,9 +116,3 @@ Revert the commit: the variable returns to `'R1'` and promotion stops again.
 - **Concurrency (CLAUDE.md).** A loop over a library-scale collection with per-item I/O, hashing or subprocess work uses a bounded worker pool (`errgroup` + `SetLimit`); never unbounded goroutines.
 - **No `go.work`.** Never run `go work init` in a checkout or worktree; the genproto probe runs only in a throwaway copy under `mktemp -d` (03 §3.2 item 1).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
-
-## Planner notes
-
-- The freeze toggle's form is not fixed by the spec (09 §9.2.1 says only that `check-rc-ordinal` dispatches no
-  production release). R1-01's brief coins the workflow-level variable `RELEASE_FREEZE` in
-  `.github/workflows/prerelease.yml`; this brief, F3-07 (sets `'R2'`) and R2-02 (clears it) must use the same name.

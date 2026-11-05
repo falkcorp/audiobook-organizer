@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-27-deploy-and-rollback-tooling.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e981aa06-b2f6-4fd5-91ce-9cc3d994ad37 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -68,8 +68,9 @@ Deploy and rollback tooling that R1 and R2 need, tested against a fake host (09 
    `--archive <file> --accept-loss`); reinstall `.prev`; start; wait with `deploy-wait-ready.sh`. Its `RELEASE=`
    branch (`updater fetch-release`) arrives with F8-02: here, `RELEASE=` set → refuse with "needs F8's updater
    fetch-release". `make rollback` and `make rollback-restore` share **one** in-flight probe (no override).
-5. **README compose notes**: the `/config` volume preparation (09 §9.4 R1), and `docs/system/deploy-and-gpu-ops.md`
-   gains the sudoers lines the new ssh reads need.
+5. **README compose notes**: the `/config` volume preparation (09 §9.4 R1) and the documented
+   `docker run --stop-timeout 60` line (05-health §5H.4: the container's stop timeout must exceed the 25 s budget);
+   `docs/system/deploy-and-gpu-ops.md` gains the sudoers lines the new ssh reads need.
 
 ## Tests this task owns (spec names)
 
@@ -114,15 +115,16 @@ python3 -m pytest scripts/tests/test_deploy_wait_ready.py scripts/tests/test_mak
 bash -n scripts/deploy-wait-ready.sh && shellcheck scripts/deploy-wait-ready.sh                     # expect clean (shellcheck if installed)
 systemd-analyze verify deploy/audiobook-organizer.service 2>&1 | grep -v 'Command .* is not executable' ; true   # expect no unknown-key error
 grep -c 'DEPLOY_READY_TIMEOUT' Makefile Makefile.local.example                                      # expect >= 1 each
+grep -c -- '--stop-timeout 60' README.md                                                           # expect >= 1
 make ci                                                                                              # expect exit 0
 ```
 
 ## Out of scope
 
-The `RELEASE=` branch of `rollback-restore` (F8-02); the `unit-lifecycle` CI job (R1-28); the same 05-health §5H.4 paragraph's `stop_grace_period: 60s` and
-`ABO_CORE_SHUTDOWN_BUDGET=25s` in `docker-compose.yml`, `ExitTimeOut` 60 in the launchd plist and the documented
-`docker run --stop-timeout 60`: their files are in no R1 row (see Planner notes); do not edit them here unless the lead
-adds them to this row.
+The `RELEASE=` branch of `rollback-restore` (F8-02); the `unit-lifecycle` CI job (R1-28); the same 05-health §5H.4
+paragraph's `stop_grace_period: 60s` with `ABO_CORE_SHUTDOWN_BUDGET=25s` in `docker-compose.yml`, `ExitTimeOut` 60 in
+the launchd plist and ABO reading `ABO_CORE_SHUTDOWN_BUDGET`: those are R1-33's. This row owns the unit's
+`TimeoutStopSec=60` and `KillMode=mixed` and the README's `docker run --stop-timeout 60` line.
 
 ## Rollback
 
@@ -139,12 +141,3 @@ Revert the PR. The unit change needs `systemctl daemon-reload` on the owner's ho
 - **No `go.work`.** Never run `go work init` in a checkout or worktree; the genproto probe runs only in a throwaway copy under `mktemp -d` (03 §3.2 item 1).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
 
-## Planner notes
-
-- Unassigned R1 work: 05-health §5H.4 says R1 ships, besides the unit's `TimeoutStopSec=60`, `stop_grace_period: 60s`
-  with `ABO_CORE_SHUTDOWN_BUDGET=25s` in `docker-compose.yml`, `ExitTimeOut` 60 in
-  `deploy/com.audiobook-organizer.plist`, and a documented `docker run --stop-timeout 60`. No R1 row lists
-  `docker-compose.yml` or the plist. R1-27 is the natural owner (it already edits the unit and the README); add both
-  files to its row, or the 8 s container default stays in force under compose after R1.
-- `ABO_CORE_SHUTDOWN_BUDGET` must also be read by ABO in R1 and handed through `app.Options.R1Values` (05-health §5H.4;
-  05-config §1.12.1); R1-15 builds `R1Values` and should carry it.

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-12-sdk-leaf-types.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 399ee337-063e-4053-bb5f-a69a8711c119 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-12` |
 | Tier | **T2** (Sonnet / high): dependency-free leaf types whose names other packages bind to |
-| Release / wave | R1 / W05 |
+| Release / wave | R1 / W06 |
 | Depends on | R1-01 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 06 §6.4.10 (R1 row and the rbac/auth leaf paragraph); 05-rbac §3.1; 04 §8.1 R1 |
 | Branch | `agent/platform-core-r1-12-sdk-leaf-types` |
@@ -22,6 +22,12 @@
 - `core/auth/`
 - `core/ui/`
 - `core/internal/jsonschemax/`
+- `core/`: `go.mod`, `go.sum`
+- `go.mod`
+- `go.sum`
+- `Makefile`
+- `.github/dependabot.yml`
+- `core/archtest/thirdparty_allow.txt`
 
 ## START HERE
 
@@ -47,7 +53,7 @@ implementation, no middleware. Nothing in ABO changes.
 |---|---|
 | `core/rbac` (L4; leaf part) | `Permission` with `ParsePermission`, `ParsePattern`, `Namespace`, `Action`, `IsWildcard`; `CoreAdmin`; `Requirement` (zero value invalid) with `IsZero`, `Permissions`, `String`; `Public`, `AnyAuthenticated`; `Need`, `AllOf`, `AnyOf`, `Delegated`; `LegacyAtom(atom)` and `LegacyCheck(atom, readSide)` as values that **only carry the atom** (04 §8.1 R1; their evaluation lands at F4); the `Checker` interface (`Has`, `Satisfies`, `Confined`, `Concrete`); `RoleName` and the three seed-role constants `RoleAdmin`, `RoleEditor`, `RoleViewer` (05-rbac §3.1 and §3.2 text at the `RoleName` declaration). |
 | `core/auth` (L4; leaf part) | `UserID`, `UserStatus` (and its constants), `User`, `Method` (with `Interactive`, `MayChangeCredentials` and the core method constants), `Assurance`, `Principal`, `MethodSpec`, plus `WithPrincipal`/`PrincipalFrom` (05-authn §3: the type block at lines ~100–200 and `MethodSpec` at ~496). 06 §6.4.10 lists the leaf as `MethodSpec`, `Principal`, `User`, `UserID`, `UserStatus`, `Assurance`; 04 §8.1 adds `Method`; take both lists' union. |
-| `core/ui` (L6; leaf part, one file) | `ReservedSegments() []string`, `ModuleManifest`, `UIIDs` (07 §7.6 code block around line 875: exactly those three; `WriteManifestTS` and the rest of `ui` land with the shell work, so **not** here); **no `Redirect`**: 04 §8.1 R1 still names `ui.Redirect`, but 07 deleted it with D13's "no old-URL redirects" (07 review history, round 13), so it is not created. |
+| `core/ui` (L6; leaf part, one file) | `ReservedSegments() []string`, `ModuleManifest`, `UIIDs` (07 §7.6 code block around line 875: exactly those three; `WriteManifestTS` and the rest of `ui` land with the shell work, so **not** here); **no `Redirect`**: 07 deleted it with D13's "no old-URL redirects", and 04 §8.1 R1 no longer names it, so it is not created. |
 | `core/internal/jsonschemax` (L0) | `Overrides` with `With`, `For[T]`, `Base()` (05-config §1.10.2 code block, around line 956): `Base()` is the only owner of `time.Time`; both are functions returning fresh maps (03 R5). |
 
 Copy every signature and doc comment from the spec text exactly; where a type's full definition references a member
@@ -88,7 +94,8 @@ test ! -e core/rbac && test ! -e core/auth && test ! -e core/ui && echo NEW     
    `go mod tidy` (03 §3.2 item 4: the root carries the result in the same PR); `check_module_skew.py` must pass. Add
    the pin `--pin github.com/google/jsonschema-go@v0.4.3` to the `check_module_skew.py` call in root `make ci` and a
    Dependabot `ignore` for that module (13 §13.5.2 "Dependencies that must not float"). Add the module to
-   `TestCoreImportsOnlyCore`'s allowlist file. These files are outside the row's list (see Planner notes). R1-02, in the same wave, also edits `Makefile`: merge this PR after R1-02 and rebase onto it before editing `Makefile`.
+   `TestCoreImportsOnlyCore`'s allowlist file (`core/archtest/thirdparty_allow.txt`). All of these files are in the
+   row; R1-02 (which also edits `Makefile`) merged in W05, so rebase onto it before editing `Makefile`.
 4. Core layering guard: give the four packages their layers (rbac L4, auth L4, ui L6, internal/jsonschemax L0).
 5. Header bumps; fragment `changelog.d/<today>_sdk_leaf_types.md` (`### Added`: "Internal: core SDK leaf types for
    permissions, identity, UI manifests and the JSON Schema reflector."). Commit:
@@ -128,15 +135,9 @@ Revert the PR.
 - **No `go.work`.** Never run `go work init` in a checkout or worktree; the genproto probe runs only in a throwaway copy under `mktemp -d` (03 §3.2 item 1).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
 
+
 ## Planner notes
 
-- Missing files in the row: `internal/jsonschemax` brings core's first pinned third-party module
-  (`github.com/google/jsonschema-go` v0.4.3, 13 §13.5.2), so the PR must also change `core/go.mod`, `core/go.sum`,
-  root `go.mod`/`go.sum` (tidy coupling, 03 §3.2 item 4), the `check_module_skew.py --pin` call in `Makefile` and a
-  Dependabot `ignore` in `.github/dependabot.yml`, plus `TestCoreImportsOnlyCore`'s allowlist. None is in the row.
-  W05's other rows (R1-02 edits `Makefile`!) collide on `Makefile`: R1-02 adds `vet-darwin` there. Either move the
-  pin wiring to R1-02/R1-03 or serialize R1-12 after R1-02.
 - `rbac.LegacyAtom`/`LegacyCheck` have no signature in 05-rbac's main text (only 04 §8.1's `LegacyAtom(atom)`,
-  `LegacyCheck(atom, readSide)` and review-history lines); the brief takes 04's parameter lists. `ui.Redirect` is
-  named in 04 §8.1 R1, but 07 removed it in round 13 (D13: no old-URL redirects); 04 §8.1's mention is stale and
-  should be deleted. The brief does not create it.
+  `LegacyCheck(atom, readSide)` and review-history lines); the brief takes 04's parameter lists. A 05-rbac §3.1
+  line stating both signatures would remove the inference.

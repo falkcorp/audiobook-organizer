@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-05-core-identity-settings-routes.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: cbdb5377-2585-4a6d-bc8d-b935127d7e1e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -8,11 +8,11 @@
 | Field | Value |
 |---|---|
 | ID | F4-05 |
-| Release / flip | R2, identity flip F4 (dark PR: the routes are built and mounted on hello; ABO mounts them at F4-08) |
+| Release / flip | R2, identity flip F4 (dark PR: the routes are built and tested over test routers; the kernel mounts them, for hello and ABO, at F4-08) |
 | Tier | **T3** (Opus, high): credential routes with interactive and owner guards |
-| Wave | W27 (F3-07 is in this wave and merges first, alone; rebase after it) |
-| Depends on | F4-02, F4-01, F4-03, F3-01 |
-| Owns gate test | `TestOIDC_AppHandoffMintsABSCode` |
+| Wave | W28 (F2-16 is this wave's one owner of the kernel and module wiring files: edit none of them) |
+| Depends on | F4-02, F4-01, F4-03, F3-01, F4-10 |
+| Finishes | F2-05's skipped permission cells, `TestApprove_RequiresVerifiedMethodAndPermission` among them |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
 
 ## ⛔ START HERE
@@ -28,12 +28,13 @@ make web-deps
 git rev-parse HEAD       # BASE
 ```
 
-Confirm F4-02, F4-01, F4-03 and F3-01 are merged. If not, stop.
+Confirm F4-02, F4-01, F4-03, F3-01 and F4-10 are merged. If not, stop.
 
 ## Goal
 
 Create the L6 route packages, each imported only by `kernel` (03 §3.3), registering on `Router.CoreGroup()`
-(`/api/core/v1`) except the two OIDC paths on `Router.CoreFixedGroup(opts.OIDCCallbackBase)`:
+(`/api/core/v1`) except the two OIDC paths on `Router.CoreFixedGroup(opts.OIDCCallbackBase)` (F4-10 built it, with
+`CoreExactPatterns()` and `Build`'s refusal of a fixed-group route outside the declared list):
 
 | Package | Routes (spec) |
 |---|---|
@@ -45,7 +46,8 @@ Create the L6 route packages, each imported only by `kernel` (03 §3.3), registe
 | `core/internal/modulehttp` | `GET /api/core/v1/modules` over the kernel's read-only `ModulesView` (05-http-api §5 item 2) |
 | `core/internal/uihttp` | `ui/diagnostics` and `ui/csp-report` (05-http-api §5 item 2) |
 
-Dark for ABO: nothing here is mounted in ABO's router before F4-08.
+Dark: no kernel mounts these packages before F4-08 (which mounts them for every app); this PR tests each package over
+its own test router. It also finishes F2-05's task-route permission cells, which waited for core authentication.
 
 ## Spec
 
@@ -69,15 +71,18 @@ Dark for ABO: nothing here is mounted in ABO's router before F4-08.
 ## Files
 
 `core/internal/authhttp/`, `core/internal/uihttp/`, `core/internal/modulehttp/`, `core/internal/storagehttp/`,
-`core/internal/confighttp/`, `core/internal/rbachttp/`, `core/internal/audithttp/` (all created).
+`core/internal/confighttp/`, `core/internal/rbachttp/`, `core/internal/audithttp/` (all created). Also `core/internal/taskhttp/`: finishing F2-05's
+cells edits its `_test.go` files only. Not yours:
+`core/kernel/`, `core/module/` (F2-16 this wave, F4-08 later).
 
 ## Re-verify at BASE
 
 ```bash
 ls -d core/internal/authhttp core/internal/uihttp core/internal/modulehttp core/internal/storagehttp core/internal/confighttp core/internal/rbachttp core/internal/audithttp 2>/dev/null | wc -l   # 0
 grep -rn 'func (r \*Router) CoreGroup' core/httpapi/ | wc -l          # 1 (R1-13)
-grep -rn 'func (r \*Router) CoreFixedGroup' core/httpapi/ | wc -l     # 1 (see STOP 1)
-grep -rn 'func CoreExactPatterns' core/httpapi/ | wc -l               # 1 (see STOP 1)
+grep -rn 'func (r \*Router) CoreFixedGroup' core/httpapi/ | wc -l     # 1 (F4-10)
+grep -rn 'CoreExactPatterns' core/httpapi/corefixed.go | wc -l        # >= 1 (F4-10)
+grep -rln 'needs core auth (F4-05)' core/internal/taskhttp/ | wc -l   # >= 1: F2-05's skipped cells you finish
 grep -rn 'type ResetRequest struct' core/storage/ | wc -l             # 1 (R1-25)
 grep -rn 'func (s \*Store) Apply' core/config/ | wc -l                # 1 (F3-01)
 grep -rn 'func (s \*Service) Middleware' core/auth/ | wc -l           # 1 (F4-02)
@@ -88,10 +93,10 @@ grep -c 'oauth' internal/server/wire_auth_routes.go                   # >= 1 (ca
 
 ## STOP conditions
 
-1. `Router.CoreFixedGroup` or `CoreExactPatterns()` is missing in `core/httpapi` at BASE: they belong to `httpapi`
-   (05-http-api §3.5), which this row does not list. Report.
+1. `Router.CoreFixedGroup` or `CoreExactPatterns` is missing in `core/httpapi` at BASE (F4-10 not merged): stop; do
+   not add them here.
 2. Any route carries a one-time token in its path, or returns a token, hash or mask in a body.
-3. A route would be mounted in ABO's router before F4-08.
+3. A route would be mounted by the kernel (for any app) before F4-08, or this PR edits `core/kernel/` or `core/module/`.
 
 ## Steps
 
@@ -106,18 +111,26 @@ grep -c 'oauth' internal/server/wire_auth_routes.go                   # >= 1 (ca
 5. `storagehttp`: the reset route with the storagehttp-local `Stager` interface (never `*storage.Admin`) and the 422
    rules; the kernel passes its staging function.
 6. `modulehttp`, `uihttp`: as 05-http-api §5 item 2.
-7. Mount them for hello in the kernel's tests (the kernel's real mount for ABO is F4-08's).
-8. Headers, one `changelog.d/` fragment, Acceptance.
+7. Test each package over a test `httpapi.Router` built in its own `_test.go` (with `CoreGroup` and, for `authhttp`,
+   `CoreFixedGroup` at a fixture base), with core's real chain and a `coretest` auth fixture. The kernel mount is
+   F4-08's.
+8. **F2-05's cells** (05-tasks §5T.9 approval row; 05-rbac §12): in `core/internal/taskhttp/`'s tests, remove each
+   `t.Skip("needs core auth (F4-05)")` and make the session and key cells of
+   `TestApprove_RequiresVerifiedMethodAndPermission` and the per-route permission cells run over core `auth` (session,
+   CF Access-shaped interactive extension, module method refused, key naming the scope, key implying it via
+   `core:admin` refused, delegated session, forwarded header). Change no production file of `taskhttp`.
+9. Headers, one `changelog.d/` fragment, Acceptance.
 
 ## Tests first
 
-- `TestOIDC_AppHandoffMintsABSCode` (gate test; 05-authn §10): one cell per control of §4.7's hand-off — both
-  `redirect_uri` (or `callback`) and `code_challenge` present → the callback calls `AppHandoff.Mint`, redirects to the app
-  scheme with the code and the app's state, and no web session record exists; only one of them → ordinary web sign-in;
-  an unlisted, prefix-extended or userinfo-bearing `redirect_uri` → inline 400 with no `Location` header;
-  `code_challenge_method` `plain` or missing → 400; the code redeems once at the ABS route `/auth/openid/callback` and is
-  refused after the user's epoch is bumped. Here `AppHandoff` is a test double with HEAD's allowlist; the redemption cell
-  needs books' real hand-off and ABS route (F4-08; see Planner notes).
+- `TestOIDCHandoff_StartAndCallbackControls` (name coined here; the core half of 05-authn §4.7's hand-off, with a test
+  double `AppHandoff` holding HEAD's allowlist): both `redirect_uri` (or `callback`) and `code_challenge` present → the
+  callback calls `AppHandoff.Mint`, redirects to the app scheme with the code and the app's state, and no web session
+  record exists; only one of them → ordinary web sign-in; an unlisted, prefix-extended or userinfo-bearing
+  `redirect_uri` → inline 400 with no `Location` header; `code_challenge_method` `plain` or missing → 400.
+  `TestOIDC_AppHandoffMintsABSCode` itself, with the redemption at the ABS route `/auth/openid/callback` and the refusal
+  after an epoch bump, is F4-08's.
+- `TestApprove_RequiresVerifiedMethodAndPermission` and F2-05's per-route permission cells (step 8), un-skipped.
 - `TestAuthOff_CredentialMetadataNeedsUser`, `TestInviteLink_FragmentEndToEnd` / `TestTempLoginLink_FragmentEndToEnd`
   (the server half), `TestUsersManage_CannotTempLoginAdmin` / `TestUsersManage_CannotResetDominatingUser`,
   `TestInviteAcceptRechecksCanAssign`, `TestFactoryResetCoreRouteRecordsHookArgs`,
@@ -138,7 +151,10 @@ grep -c 'oauth' internal/server/wire_auth_routes.go                   # >= 1 (ca
 ```bash
 (cd core && go vet ./internal/authhttp/... ./internal/uihttp/... ./internal/modulehttp/... ./internal/storagehttp/... ./internal/confighttp/... ./internal/rbachttp/... ./internal/audithttp/...)   # exit 0
 (cd core && go test -race -count=1 ./internal/... ./kernel/...)                         # ok
-(cd core && go test -count=1 -run 'TestOIDC_AppHandoffMintsABSCode' ./...)              # PASS (core cells)
+(cd core && go test -count=1 -run 'TestOIDCHandoff_StartAndCallbackControls' ./internal/authhttp/...)   # PASS
+(cd core && go test -count=1 -v -run 'TestApprove_RequiresVerifiedMethodAndPermission' ./internal/taskhttp/... | grep -c SKIP)   # 0
+grep -rn 'needs core auth (F4-05)' core/internal/taskhttp/ | wc -l                     # 0
+git diff --stat origin/main -- core/kernel core/module | tail -1                        # empty: no kernel or module edit
 (cd core && go list -f '{{.ImportPath}} {{join .Imports " "}}' ./... | grep -E ' [^ ]*internal/(auth|ui|module|storage|config|rbac|audit)http( |$)' | awk '{print $1}' | grep -v '/kernel$')   # no output: only kernel imports them
 make -C core ci                                                                         # exit 0
 make ci                                                                                 # exit 0
@@ -146,8 +162,9 @@ make ci                                                                         
 
 ## Out of scope
 
-Mounting for ABO, deleting the gin identity and settings routes, the SPA, the `server-bootstrap` skill and `scripts/`,
-books' real `AppHandoff` (F4-08).
+Mounting in the kernel (every app), deleting the gin identity and settings routes, the SPA, the `server-bootstrap`
+skill and `scripts/`, books' real `AppHandoff` and `TestOIDC_AppHandoffMintsABSCode` (F4-08); `CoreFixedGroup` and
+`CoreExactPatterns` (F4-10).
 
 ## Rollback
 
@@ -156,20 +173,11 @@ Revert the PR; ABO mounts none of it.
 ## Repo rules
 
 Worktree only; file headers (fragments headerless); conventional commit ending
-`Co-Authored-By: Claude <noreply@anthropic.com>`, no release or flip trailer; `gh pr merge <n> --rebase` after F3-07 has
-merged and you have rebased; never squash, never `--admin`.
+`Co-Authored-By: Claude <noreply@anthropic.com>`, no release or flip trailer; `gh pr merge <n> --rebase`, never squash,
+never `--admin`.
 
 ```
 feat(core): native identity, role, audit, settings, reset, module and ui routes (dark)
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
-
-## Planner notes
-
-- **`TestOIDC_AppHandoffMintsABSCode` is an ABO test** (05-authn §10 marks it "ABO, fake IdP, from F4"): its redemption
-  cell needs books' `OIDCAppHandoff` over HEAD's code store and the ABS `/auth/openid/callback` route, which only F4-08
-  wires. This row owns the core cells; F4-08 should own or finish the ABO cells.
-- **`CoreFixedGroup` / `CoreExactPatterns`** are `core/httpapi` members "from F4" (05-http-api §3.5); no row's file list
-  includes `core/httpapi/` at F4 (STOP 1).
-- **Kernel mounting** of these packages is in no row's files (`core/kernel/` is absent from F4-05 and F4-08).

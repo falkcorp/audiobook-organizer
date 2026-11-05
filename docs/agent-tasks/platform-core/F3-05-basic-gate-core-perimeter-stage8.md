@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-05-basic-gate-core-perimeter-stage8.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 178fe6db-0b0b-4bd3-b26b-8306e5d130de -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -63,8 +63,10 @@ grep -rn 'BasicExemptAssets' core/httpapi/ | wc -l
 grep -rn 'BasicExempt ' core/httpapi/ | wc -l
 grep -rn 'OwnAuth' core/httpapi/ | wc -l
 grep -rn 'TestChain_OrderGolden' core/httpapi/ | wc -l
-# the section declarations (F2-09) and the FailClosed declaration (expect 1 each)
-grep -rn '"core.http.basic_gate' core/ | wc -l          # >= 3 key paths
+# the section declarations (F2-09; expect >= 1)
+grep -rn 'basic_gate' core/kernel/core_sections.go | wc -l
+# the FailClosed declaration lands with F3-02 in a later wave, the password's secrets.Ref with F3-03 in this wave
+# (expect 0 here; the stage reads only the effective values, so neither is needed)
 grep -rn 'FailClosed("core.http.basic_gate.enabled"' core/ | wc -l
 # HEAD's gate you port (HEAD f7ac5b11e; R0-05 has since added the empty-password refusal)
 grep -c 'func BasicAuth()' internal/server/middleware/basicauth.go              # expect 1
@@ -86,8 +88,10 @@ ls core/httpapi/basicgate.go 2>/dev/null | wc -l                                
 1. Write the tests below first.
 2. Implement stage 8 as an `http.Handler` wrapper constructed from: a reader of the effective
    `core.http.basic_gate.enabled` (core config resolves the fail-closed value; stage 8 only reads it), the effective
-   `core.http.basic_gate.username`, a resolver for `core.http.basic_gate.password` (a `secrets.Ref`, or a one-method
-   seam if `core/secrets` is not merged at BASE: F3-03 runs in the same wave), and the route facts the router already
+   `core.http.basic_gate.username`, a **password resolver seam** for `core.http.basic_gate.password` (a one-method
+   interface, name coined here, returning the password or an error; F3-07's binding maps `secrets.ErrNotSet` and
+   `secrets.ErrKeyUnavailable` onto it; do not import `core/secrets` beyond F3-01's `types.go`, since F3-03 builds the
+   rest in this same wave), which **F3-07 binds** to F3-03's keyring, and the route facts the router already
    holds for the matched pattern (`Public` infra probe, `OwnAuth`, `BasicExempt`) plus the `/` owner's
    `BasicExemptAssets` predicate.
 3. **Exempt set, exactly HEAD's** (`basicauth.go:34,40-46,69` at HEAD): Public infra probes (`/livez`, `/readyz`);
@@ -165,8 +169,3 @@ feat(core/httpapi): stage 8 Basic gate with HEAD's exempt set and no-password re
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
-
-## Planner notes
-
-- The password resolver needs `secrets` (F3-03), which runs in the same wave; this brief allows a one-method seam that
-  F3-07 binds to the keyring.

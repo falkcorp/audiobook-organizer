@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-01-core-config-loader-overridestore-importer.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 36955afe-b04c-490f-9996-d4b78e06b11a -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -80,13 +80,15 @@ HEAD of the plan branch (`f7ac5b11e`) has no `core/` directory; the spec's ancho
 |---|---|
 | modify / create | `core/config/` (store, handles, apply, keystate, importer, boot record, `resolve_state_dir.go`, schema output; file names are yours) |
 | create | `core/config/configtest/` (`OverrideStoreSuite`, fixture sections) |
+| create | `core/secrets/types.go` (the types-only leaf of `secrets` that config imports: `Ref`, `Resolver`, `Write`, `Meta`; no keyring, no store code) |
 | create | `core/internal/configstore/` (the native `OverrideStore` over `c/config/` and the kernel's `Committer`) |
 | create / modify | `core/kernel/config.go` (P0 `Boot`, P3 `Load`, P4c store build, P4d step 1 `Attach`; dark for ABO, see Invariants) |
-| modify | `internal/config/` (only `state_dir.go` re-pointed, see step 6; nothing else changes behaviour) |
+| modify | `internal/config/` (only `state_dir.go` re-pointed, see step 7; nothing else changes behaviour) |
 | modify (only if a test demands it) | `internal/arch/layering_test.go`, `scripts/ci/short_test_weights.json` |
 
-Not yours: `core/config/env.go`, `core/config/precedence.go`, `core/config/retired.go` (F3-02, next wave), anything
-under `core/secrets/` (F3-03), `core/app/` (F3-02, F3-07).
+Not yours: `core/config/env.go`, `core/config/precedence.go`, `core/config/retired.go` (F3-02, a later wave), every
+`core/secrets/` file other than `types.go` (F3-03, next wave; it grows the package around your types), `core/app/`
+(F3-02, F3-07).
 
 ## Re-verify at BASE (stop on a zero-hit edit target or a moved count)
 
@@ -103,7 +105,7 @@ grep -c '^func EnsureSecureStateDir\|^func SecureStateDir' internal/config/state
 grep -c 'ABK_STATE_DIR' internal/config/state_dir.go   # expect >= 1 (HEAD: line 25)
 # where R1 put the pre-boot state-dir resolver (expect exactly 1 definition in core/)
 grep -rn 'func ResolveStateDir' core/ | wc -l
-# config may import secrets types (05-config §1.3): does core/secrets exist yet? (see STOP 1)
+# core/secrets does not exist yet: this PR creates its types-only leaf (expect 0)
 ls -d core/secrets 2>/dev/null | wc -l
 ```
 
@@ -113,10 +115,8 @@ stop.
 
 ## STOP conditions
 
-1. **`core/secrets` does not exist at BASE** and F2-09 left no `secrets.Ref` stand-in. 05-config §1.3 makes `config`
-   import `secrets` (`secrets.Ref`, `secrets.Resolver`, `secrets.Write`, `secrets.Meta`), but this row's file list has
-   no `core/secrets/` path and F3-03 (which creates it) depends on this row. Stop and report; do not create
-   `core/secrets/` here unless the lead amends the row (see Planner notes).
+1. **`core/secrets/` already exists at BASE** (the last re-verify grep prints 1). Then someone else created the
+   package; stop and report instead of overwriting it.
 2. Any change you make alters ABO's boot or write path before F3-07: ABO must still load, save and protect settings
    through `internal/config` exactly as at BASE (its whole test suite green, no test edited to pass).
 3. A store write before the checkpoint, or any write from `Attach` (`TestNoStoreWriteBeforeCheckpoint`).
@@ -125,39 +125,44 @@ stop.
 ## Steps
 
 1. Run the re-verify block. Write the test files of "Tests first" (they fail).
-2. **Registry and handles** (§1.3.2): `Registry` (unexported method, kernel-only implementation), `Register[T]`,
+2. **Secrets types leaf** (05-config §1.3 imports list, §2.3): create `core/secrets/types.go` holding only the types
+   config names: `Ref`, the `Resolver` interface, `Write` and `Meta`, copied field for field and signature for
+   signature from 05-config §2.3. No constructor, no keyring, no storage import beyond what those declarations need.
+   F3-03 adds the rest of the package (`Open`, `Store`, `Importer`, the keyring) around this file without changing
+   it. `secrets.Ref`'s reflector override stays config's contribution (05-config C10, §1.10.2).
+3. **Registry and handles** (§1.3.2): `Registry` (unexported method, kernel-only implementation), `Register[T]`,
    `Handle[T]` with `Path`, `Get` (one atomic load, an immutable deep-decoded snapshot), `Pending`, `Generation`,
    `OnChange` (one goroutine per subscription, one-slot coalescing mailbox, `stop()` idempotent and waits),
    `AfterCommit` (synchronous after commit, error reported as `*PostCommitError`, never a veto). Registration after
    `Load` returns `ErrSealed`.
-3. **Store** (§1.3.3): `NewStore(Options)`, `Boot`, `Load`, `Importer`, `SetSecrets`, `Attach`, `Apply`, `Lookup`,
+4. **Store** (§1.3.3): `NewStore(Options)`, `Boot`, `Load`, `Importer`, `SetSecrets`, `Attach`, `Apply`, `Lookup`,
    `Keys`, `PassthroughValues`, `Schema`, `Generation`, `Close`, `ConfigFileHasSecrets`, `RedactedConfigFile`, and
    `RetiredSet` returning nil until F3-02 fills it. Merge order defaults → file → env → flags → DB overrides (boot
    record instead of DB overrides for `ReloadBoot` keys). **Operator lock** (§1.3.5): a key any operator layer
    supplies is locked; its stored row is ignored at `Attach` (kept, listed in `AttachReport.Ignored`, logged once per
    boot) and `Apply` refuses it with `*LockedError{By}`. `ProtectOperator` keys are never read from or written to the
    DB layer or the boot record.
-4. **Apply** (§1.4 step 8, §1.3.7): authorize (section permission, then protection: `ProtectAdmin` =
+5. **Apply** (§1.4 step 8, §1.3.7): authorize (section permission, then protection: `ProtectAdmin` =
    `Actor.Can("core:admin") && Actor.Interactive`; `ProtectOwner` adds `Actor.Owner` once an owner is set) → decode
    the candidate per touched section → `Validate` → write the boot record if boot keys changed → `Committer.Commit`
    (one batch: `OverrideStore.Stage`, staged secret writes, the `core.settings.update` audit record) → publish live
    keys → bump generation → `AfterCommit` → wake `OnChange`. A value equal to the default is staged as an unset. On a
    `Commit` failure nothing is published and the previous boot record is restored. One store mutex serialises `Apply`.
-5. **Native store and committer** (`core/internal/configstore`): one row per explicitly set key under `c/config/`;
+6. **Native store and committer** (`core/internal/configstore`): one row per explicitly set key under `c/config/`;
    `Load` is read-only; `Stage` reads with `GetForUpdate`; the committer retries with `storage.RetryOnConflict`, a
    fresh batch per attempt. **Importer** (§1.3.3): `Stage(b, p, v, by)` validates against `p`'s schema and stages the
    row into the caller's batch only; refusals exactly as the contract below. Build `configtest.OverrideStoreSuite`
    and run it over the native store (`TestNativeOverrideStore_RoundTrip`).
-6. **State directory** (§1.7, `ResolveStateDir`): implement the pure function `config.ResolveStateDir(explicit, def,
+7. **State directory** (§1.7, `ResolveStateDir`): implement the pure function `config.ResolveStateDir(explicit, def,
    dbPath, mkdir)` with HEAD's three-step rule (`EnsureSecureStateDir`, `internal/config/state_dir.go:118-155` at HEAD). If the R1 resolver
    found by the re-verify grep lives in `core/kernel/`, make it a one-line delegate to `config.ResolveStateDir`; if it
    lives in a file outside your list, leave it and assert in `TestStateDirFallbackMatchesHEAD` that both functions
    agree on every row (record this in the PR). Re-point ABO's `internal/config/state_dir.go` resolution onto
    `config.ResolveStateDir` only if its own `state_dir_test.go` passes unchanged; otherwise leave ABO's file alone.
-7. **Kernel wiring** (`core/kernel/config.go`): P0 `NewStore` + core sections + `Boot`; P3 module sections + `Load`;
+8. **Kernel wiring** (`core/kernel/config.go`): P0 `NewStore` + core sections + `Boot`; P3 module sections + `Load`;
    P4c build the native store; P4d step 1 `SetSecrets` (when a resolver exists) then `Attach`. Dark for ABO
    (Invariants).
-8. Bump the header of every touched file; add one `changelog.d/` fragment (no header). Run Acceptance.
+9. Bump the header of every touched file; add one `changelog.d/` fragment (no header). Run Acceptance.
 
 ## Code contract (copy exactly; 05-config §1.3.2, §1.3.3)
 
@@ -220,7 +225,7 @@ unparsable → renamed `.bad`, health `config_boot_record_quarantined`. Metrics 
 `TestApply_RefusesLocked` / `_Protected` / `_Forbidden` / `_UnknownKey` / `_Invalid`),
 `TestApply_SettingsManageCannotChangeAdminKeys`, `TestAuthOff_ProtectedKeysRefused` (the hello half; the ABO half
 lands with F3-07), `TestApply_RestartKeyNotPublished`, `TestApply_CommitFailureNothingPublished`,
-`TestApply_SecretAndOverrideOneBatch` (needs `secrets.Write`, STOP 1), `TestOwnerTrustRootKeysAreOwnerProtected`,
+`TestApply_SecretAndOverrideOneBatch` (uses `secrets.Write` from step 2's leaf with a test resolver), `TestOwnerTrustRootKeysAreOwnerProtected`,
 `TestBoot_ModuleEnablementFromBootRecord`, `TestBootRecord_AtomicAndQuarantine`,
 `TestAttach_QuarantineInvalidSection`, `TestOnChange_CoalescesUnderSynctest`,
 `TestAfterCommit_ErrorReportedNotRolledBack`, `TestNoStoreWriteBeforeCheckpoint` (the config half),
@@ -262,7 +267,7 @@ git diff --stat origin/main -- internal/config | tail -1   # only state_dir.go (
 
 ## Out of scope
 
-The env and file grammar, `FailClosed`, retired names, `config check` (F3-02); secrets (F3-03); the façade,
+The env and file grammar, `FailClosed`, retired names, `config check` and `TestPrecedence_Matrix` (F3-02); secrets beyond `types.go` (F3-03); the façade,
 `/api/v1/config`, deleting viper or `UpdateService` (F3-07); the settings routes (F4-05); M2 (F3-06).
 
 ## Rollback
@@ -304,12 +309,5 @@ gh pr merge <number> --rebase
 
 ## Planner notes
 
-- **Inverted dependency on `core/secrets`.** 05-config §1.3 has `config` import `secrets` (`Ref`, `Resolver`,
-  `Write`, `Meta`), and F2-09 declares secret keys, but `core/secrets/` is created only by F3-03, which depends on this
-  row. Either F2-09 or this row needs a leaf file of `secrets` types (for example `core/secrets/ref.go`, types only),
-  or F3-03's types land first. This brief stops (STOP 1) rather than create a path outside its row.
-- **Split with F3-02.** The row title says "locks" and F3-02's says "the operator lock". This brief gives F3-01 the
-  lock mechanism over the layers it parses (flags, boot record) and F3-02 the env and file layers plus `FailClosed`.
-  `TestPrecedence_Matrix` needs env and file values, so it is F3-02's.
-- **The R1 state-dir resolver** may live in a `core/app/` file outside this row; step 6 then proves equality by test
+- **The R1 state-dir resolver** may live in a `core/app/` file outside this row; step 7 then proves equality by test
   instead of delegating.

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R2-01-r2-runbook-and-release-note.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 67640be6-8c43-45e8-8d9e-9a3167774c7e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | R2-01 |
 | Release | R2 (closing PR) |
 | Tier | **T2** (Sonnet / high): a runbook and a generated release note; well specified, many sources |
-| Wave | W37 |
+| Wave | W40 |
 | Depends on | F8-04, F9-03 (if F9 slips to R3, this PR drops F9-03 from its dependencies and the shell's paths from the note; see "F9 decision" below) |
 | Spec | 09 §9.2.9 (renames and the release note), §9.4 R2 ("Content", "Rollback", "Owner": deploy steps 0–8 and the smoke run), §9.2.1 (rollback by restore, what a restore costs), §9.2.3 ("A long first boot", the checkpoint's 7 days), §9.3 ("Boot time"), §9.6 (the changed-in-R2 table and the kept contract); 05-authn §11 (identity text); 05-config §1.12.2 ("Release note (R2, config and secrets)"), §1.12.3 (the rename table); 05-tasks §5T.8.2 (the kind-rename map); 05-http-api §8.1 (deleted routes per flip); 05-metrics §13 (metric renames) |
 

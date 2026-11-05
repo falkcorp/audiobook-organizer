@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-01-core-integrations-registry-dark.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: bc446db6-50ca-4aa7-a750-2bcc30316a89 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-01 |
 | Release | R2, flip label F7 (dark PR) |
 | Tier | **T4** (Opus / xhigh–max): instance records with secret binding and origin trust; a wrong rule sends a stored secret to a host the owner never approved |
-| Wave | W25 (beside F2-05, F3-06, F8-01; file-disjoint) |
+| Wave | W25 (beside F2-03, F2-15, F3-02, F3-04, F4-02; file-disjoint) |
 | Depends on | F3-01 (core config: `Passthrough` operator values), F3-03 (core secrets: `secrets.Ref`, `secrets.Value`), F2-07 (audit store: `core.integration.*` actions) |
 | Spec | 05-metadata M1 (M1.1 scope, M1.3 Go API, M1.4 lifecycle incl. the native store and the operator overlay of step 2, M1.5 errors, M1.6 concurrency, M1.7 keys, M1.8 metrics, M1.9 tests, M1.10 the migration table this step's importer serves); 03 §3.3 (`integrations` row, "Store interfaces and importers"); 04 §8.1 F7 |
 
@@ -177,7 +177,9 @@ make -C core ci
 - The kind packages (`ai`, `download`, `notify`, `metadata`, `providerhttp` completion: F7-02 … F7-05).
 - Books' M6 step (F7-08) and any ABO wiring (F7-09).
 - The facade writer and `Tags` (deferred-build).
-- The HTTP surface of M1.3 (see Planner notes).
+- The HTTP surface of M1.3 (the adapters list, the `{kind}/instances` routes, the two test routes, health and
+  `DELETE …/hold`): F7-10 builds it in `core/internal/integrationhttp/` over this row's `Registry`, and F7-09 mounts
+  it. Keep `Registry`'s methods exactly as M1.3 declares them so F7-10 needs nothing more.
 
 ## Rollback
 
@@ -190,11 +192,3 @@ Revert the PR; nothing in ABO uses it and no stored data is written.
   `Co-Authored-By: Claude <noreply@anthropic.com>`; `gh pr merge <n> --rebase`; never squash; never `--admin`.
 - `Registry` state is per `App` (R5): no package-level mutable state.
 
-## Planner notes
-
-- **No row builds the integrations HTTP surface.** M1.3's route table (`GET /api/core/v1/integrations/adapters`,
-  `…/{kind}/instances[/{id}]`, `…/test`, `…/health`, `DELETE …/hold`) is mounted by core `httpapi`, and 09 §9.6 row 1
-  lists "the generic integration routes" among R2's changes; F7-09's notes delete the class-i `/api/v1/config`
-  handlers "as the instance routes replace them". No inventory row lists a `core/internal/*http` package for
-  integrations (every other subsystem has one). Either this row gains `core/internal/integrationhttp/` (name coined
-  here) or a new dark F7 row is needed before F7-09.

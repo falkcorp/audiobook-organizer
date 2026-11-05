@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-14-schedules-oracle-no-catchup-storm.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 80c882d4-5cd4-40d6-8c6b-e278487a2d3d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,10 +9,10 @@
 |---|---|
 | ID | F5-14 |
 | Release / flip | R2, tasks flip F5 (dark conversion PR; the declarations are attached by F5-18) |
-| Wave | W29 |
+| Wave | W31 |
 | Tier | **T3** (Opus / high): schedule parity over every definition; a wrong default or clock rule is a first-boot stampede of full scans and paid AI calls (14 E16) |
 | Depends on | F2-04 (core scheduler and the schedule-parity harness); F5-01 … F5-13 (every converted kind and its schedule hook); OWNER-04 (the recorded Q-C answer) |
-| Gate | Plan, then execute autonomously in a worktree with its own PR. **SPEC-GATED on one entry** (Step 0) |
+| Gate | Plan, then execute autonomously in a worktree with its own PR |
 
 ## START HERE
 
@@ -32,37 +32,29 @@ Do **not** run `go work init` (CLAUDE.md). `core/` is the nested module `github.
 
 Replace HEAD's 38 scheduler `TaskDefinition`s (`internal/scheduler/tasks.go`) with **one schedule declaration per
 scheduled kind**, books code in `internal/books/schedules.go`, that the tasks flip F5-18 attaches through the
-conversions' schedule hook (`sched func(tasks.Kind) *tasks.Schedule`), and prove with the schedule oracle that core's
+conversions' schedule hook (`sched func(tasks.Kind) *tasks.Schedule`, 05-tasks §5T.8.2 conversion rule 4), and prove with the schedule oracle that core's
 scheduler over these declarations behaves as HEAD's scheduler does (05-tasks §5T.3.8 "What replaces v2 cron strings";
 §5T.8.2 T7 row: "the 38 `TaskDefinition`s → `ScheduleFromConfig` declarations on their kinds; the 15 v2 crons →
 none (listed in the release note)"; gate `TestScheduleParity_AllDefinitions`). Nothing is registered; HEAD's
 scheduler keeps running until F5-18 deletes it ("so no kind ever has two schedulers", §5T.3.8).
 
-## Step 0 — SPEC-GATED entry (run first)
+## The full sweep has its own kind
 
-`taskV2DefIDs` maps both `library_scan` and `library_scan_full` to `library.scan`, so two `TaskDefinition`s (two
-cadences, two keys — 05-tasks names `modules.books.scheduler.schedules.library_scan_full` itself — and two HEAD
-clocks) fire one kind `books.library.scan`, which can carry one `Common.Schedule` and has one durable clock
-(§5T.3.8 "One clock per scheduled kind"). The spec does not say how the full sweep is declared. Check whether
-it has been resolved since this brief was written:
-
-```bash
-grep -n 'library_scan_full' docs/specs/platform-core/05-tasks.md | grep -v 'schedules.library_scan_full"\|full_sweep.go\|"modules.books.scheduler.schedules.library_scan_full"' | wc -l
-grep -n 'full sweep\|full-sweep' docs/specs/platform-core/05-tasks.md | grep -i 'kind' | wc -l
-```
-
-If either finds a sentence that names the full sweep's kind (or a rule for two schedules on one kind), follow it.
-Otherwise **declare the other 37 entries, leave `library_scan_full` undeclared, keep its parity case as an expected
-`t.Skip` naming this gap, and STOP before merging**: report "SPEC-GATED: 05-tasks §5T.3.8/§5T.8.2 give no
-declaration for `library_scan_full` (two TaskDefinitions → one kind)". The same gap stops F5-16's clock import
-for that pair. Do not invent a kind and do not merge the two cadences.
+`taskV2DefIDs` maps both `library_scan` and `library_scan_full` to `library.scan`. 05-tasks §5T.8.2 (the paragraph
+after the kind-rename map's rule 6) resolves the pair: "`library_scan_full` … maps to `books.library.scan-full`, a
+new books kind with no HEAD definition of its own (T7), so its clock (`library_scan_full_last_run`) and its
+`scheduled.library_scan_full` entry reach that kind and not `books.library.scan`. **One schedule per kind
+stands:** `books.library.scan` carries `library_scan`'s schedule and `books.library.scan-full` carries the full
+sweep's (`modules.books.scheduler.schedules.library_scan_full`)". F5-13 defines `books.library.scan-full`; this PR
+declares its schedule like any other entry. No entry is gated.
 
 ## Spec to read first (in this order)
 
 1. 05-tasks §5T.3.8 whole (the `Schedule` API, the key rule R2-7, "One mechanism, one key rule", "What replaces
    v2 cron strings", "Durable clock", "First boot after the cutover"), §5T.3.1 (`Common.Schedule`), §5T.3.7 mode
    contract item 4 (a scheduled writer runs in the mode its `Schedule` declares).
-2. 05-tasks §5T.8.2 T7 row; the T4 table (`db_optimize` → `core.storage.compact` plus
+2. 05-tasks §5T.8.2 T7 row; conversion rule 4 (the schedule-lookup hook); the scheduler-name rule after the
+   kind-rename map (`library_scan_full` → `books.library.scan-full`); the T4 table (`db_optimize` → `core.storage.compact` plus
    `books.maintenance.aux-store-compact`; `purge_old_logs` → `core.log.journal.prune`); "Three core kinds whose
    owners flip after F5" (`batch_poller` → `core.ai.batch-poll`, key `core.ai.schedules.batch_poll`, declared by
    its minimal owner registration).
@@ -82,10 +74,12 @@ for that pair. Do not invent a kind and do not merge the two cadences.
 grep -rn 'func ScheduleFromConfig(key string) \*Schedule' core/tasks/*.go | wc -l              # 1
 grep -rn 'func (s \*Schedule) OnStart() \*Schedule\|func (s \*Schedule) When(' core/tasks/*.go | wc -l   # 2
 ls core/tasks/taskstest/schedule/ | grep -v _test | wc -l                                       # >=1 (F2-04's parity harness)
-grep -rln 'sched func(tasks.Kind) \*tasks.Schedule' internal/ | wc -l                           # >=10 (every conversion's list function, rule R9)
+grep -rln 'sched func(tasks.Kind) \*tasks.Schedule' internal/ | wc -l                           # >=10 (every conversion's list function, conversion rule 4)
+grep -rn '"books.library.scan-full"' internal/server/*.go | grep -v _test | wc -l               # >=1 (F5-13)
 ls internal/books/ | head                                                                        # internal/books exists (F3)
 grep -rn 'modules.books.scheduler.schedules\|scheduler.schedules' internal/books/ --include=*.go | grep -v _test | wc -l   # >=16 (books' declared keys from F3); record the list
 test ! -e internal/books/schedules.go && echo absent                                             # absent
+test -f internal/books/config.go && echo present                                                 # present (books' config section, F3); record its section type
 # HEAD's scheduler (f7ac5b11e)
 grep -c 'ts.registerTask(TaskDefinition{' internal/scheduler/tasks.go                          # 38
 grep -c '' internal/scheduler/testdata/cadence.golden                                          # 38 (name|interval|daily_at|run_on_start|in_window|window_index|enabled_default)
@@ -104,10 +98,11 @@ string in the PR description; that list is the release-note input (05-tasks §5T
 |---|---|
 | create | `internal/books/schedules.go`: the declarations and `func ScheduleFor(k tasks.Kind) *tasks.Schedule` (name coined here), the hook F5-18 passes to every conversion's list function |
 | create | `internal/books/schedule_parity_test.go`: `TestScheduleParity_AllDefinitions` and `TestCutover_NoCatchUpStorm` |
+| modify | `internal/books/config.go`: books' config section gains the `modules.books.scheduler.schedules.<task>` keys beyond the 16 `scheduled.<entry>` keys F3 declared, each typed `tasks.ScheduleConfig` |
 | create | one `changelog.d/` fragment |
 
 Do not modify `internal/scheduler` (HEAD's scheduler stays the oracle until F5-18 deletes it), any conversion
-package, `core/`, `main.go` or `internal/books/module.go`.
+package, `core/`, `main.go`, `internal/books/module.go` or any other `internal/books` file.
 
 ## Code contract
 
@@ -132,22 +127,22 @@ Mapping rules (05-tasks §5T.3.8):
 | HEAD `TaskDefinition` | Declaration |
 |---|---|
 | fires a def through `taskV2DefIDs` | on the kind that def converts to (05-tasks §5T.8.2 rule 1 or 4) |
+| `library_scan_full` | on `books.library.scan-full` (F5-13's kind), key `modules.books.scheduler.schedules.library_scan_full` (05-tasks §5T.8.2 scheduler-name rule); `library_scan` stays on `books.library.scan` |
 | `GetInterval()` default / `DailyAt` / cron | the key's default `ScheduleConfig`: `{enabled: <IsEnabled default>, every: <interval>}`, `daily_at: "HH:MM"`, or `cron`; values exactly as `cadence.golden` records them |
 | `IsEnabled` | the key's `enabled` (a HEAD config flag that M2 renames into the key) or `.When(gate)` for a gate that is not a schedule setting |
 | `RunOnStart` | `.OnStart()` (and the config flag it reads, if any, as the gate HEAD applies) |
 | `RunInMaintenanceWindow` + `maintenanceOrder` index | `Window: "nightly", Order: <index>` in the key's default |
 | `transcode` | deleted: fires nothing (05-tasks §5T.3.8) |
 | `batch_poller` | nothing here: `core.ai.batch-poll`'s minimal owner registration declares `core.ai.schedules.batch_poll` |
-| `db_optimize` | the books half `books.maintenance.aux-store-compact` on `modules.books.scheduler.schedules.db_optimize` (nightly member); the core half's key `core.storage.schedules.compact` is F5-03's |
-| `purge_old_logs` | nothing here: `core.log.journal.prune` is scheduled by `core.log.schedules.journal_prune` (05-logging §5, F5-03) |
+| `db_optimize` | the books half `books.maintenance.aux-store-compact` on `modules.books.scheduler.schedules.db_optimize` (nightly member); the core half `core.storage.compact` (F5-03's kind) uses `core.storage.schedules.compact`, declared at F2 by the kernel's core-section list |
+| `purge_old_logs` | nothing here: `core.log.journal.prune` is scheduled by `core.log.schedules.journal_prune` (05-logging §5; the kind is F5-03's, the key is declared from F2) |
 | a v2 `OperationDef.Schedule` cron (15) | **none**, unless the owner's recorded Q-C answer enables one: then a declaration on its kind with key `modules.books.scheduler.schedules.<name>` (name coined per def, `[a-z][a-z0-9_]*`), default **disabled** unless the answer says otherwise |
 
 Key declaration: each `modules.books.scheduler.schedules.<task name>` must be declared by books with type
 `tasks.ScheduleConfig` (05-tasks §5T.3.8; registration fails otherwise). The 16 `scheduled.<entry>` keys exist
-from F3. For every other task, declare its key in books' config section with the default above, **in the same
-section type F3 created** (find it with the base-state grep). If that requires editing a file outside this row's
-two files, make the edit and list it under Planner notes in the PR; if the section cannot take more keys without
-a config migration, STOP and report.
+from F3. For every other task, declare its key in books' config section in `internal/books/config.go` (the section
+type F3 created there) with the default above. If the section cannot take more keys without a config migration,
+STOP and report.
 
 ## TDD: tests to write first (spec names, copied exactly)
 
@@ -160,8 +155,8 @@ Build both on F2-04's harness (`core/tasks/taskstest/schedule/`): HEAD's side dr
 with the fake clock and the reachability deps `cadence_golden_test.go` uses; core's side runs F2-04's scheduler over
 `ScheduleFor` and the converted kinds (built from the conversions' list functions with `ScheduleFor` as the hook, in
 `coretest`). `TestCutover_NoCatchUpStorm` imports clocks the way M4 does (F5-16's clock decoders, or a fixture of
-`tasks.Clock` values equal to what M4 writes) and then runs the first poll. A parity case for `library_scan_full`
-is `t.Skip("SPEC-GATED: …")` while Step 0's gap stands.
+`tasks.Clock` values equal to what M4 writes, `library_scan_full_last_run` as `LastDue` of `books.library.scan-full`)
+and then runs the first poll. `library_scan` and `library_scan_full` are two ordinary parity cases on two kinds.
 
 Add (names coined here): `TestScheduleFor_KeysDeclaredAndValid` (every key obeys R2-7 and is declared with type
 `tasks.ScheduleConfig`; no key on two kinds; `ScheduleFor` returns nil for every `core.*` kind) and
@@ -169,20 +164,22 @@ Add (names coined here): `TestScheduleFor_KeysDeclaredAndValid` (every key obeys
 
 ## Steps
 
-1. Step 0. Then the base checks; STOP on a mismatch or a missing Q-C answer.
+1. The base checks; STOP on a mismatch or a missing Q-C answer.
 2. Write the two spec tests and the two coined tests; watch them fail.
-3. `schedules.go`, entry by entry in `cadence.golden` order; run the parity test per entry.
+3. `schedules.go` and the extra keys in `config.go`, entry by entry in `cadence.golden` order; run the parity
+   test per entry.
 4. PR description: the 38-row table (task → kind → key → default → window order), the 15 dropped crons (or the
-   ones Q-C enabled), the SPEC-GATED entry, and a disposition count over the 38 tasks that sums to 38
-   (declared on a books kind / deleted (`transcode`) / core-owned key (`batch_poller`, `purge_old_logs`, and
-   `db_optimize`'s core half) / SPEC-GATED (`library_scan_full`)).
+   ones Q-C enabled), and a disposition count over the 38 tasks that sums to 38 (declared on a books kind,
+   `library_scan_full` on `books.library.scan-full` included / deleted (`transcode`) / core-owned key
+   (`batch_poller`, `purge_old_logs`, and `db_optimize`'s core half)).
 
 ## Acceptance (commands and expected output)
 
 ```bash
 go build ./... && go vet ./internal/books/                                       # exit 0
 go test ./internal/books/ -run 'TestScheduleParity_AllDefinitions|TestCutover_NoCatchUpStorm|TestScheduleFor_' -count=1 -v | grep -c '^--- PASS'   # 4
-go test ./internal/books/ -run 'TestScheduleParity_AllDefinitions' -count=1 -v | grep -c 'SKIP.*SPEC-GATED'   # 1 while Step 0's gap stands, else 0
+go test ./internal/books/ -run 'TestScheduleParity_AllDefinitions' -count=1 -v | grep -c 'SKIP'   # 0
+grep -c 'schedules.library_scan_full' internal/books/schedules.go internal/books/config.go | awk -F: '{s+=$2} END {print (s>=1)}'   # 1
 go test ./internal/scheduler/ -count=1 -short                                    # ok (HEAD's scheduler untouched)
 git diff --name-only origin/main | grep -c '^internal/scheduler/\|^core/\|^main.go'   # 0
 make ci                                                                          # exit 0
@@ -190,7 +187,6 @@ make ci                                                                         
 
 ## STOP conditions
 
-- Step 0's gap (merge blocked until the spec names the full sweep's declaration).
 - No recorded Q-C answer.
 - A HEAD config input of a task has no rename-table target in 05-config (the key's default would not reach the
   operator's value after M2).
@@ -199,7 +195,7 @@ make ci                                                                         
 ## Out of scope
 
 Attaching the declarations (F5-18 passes `ScheduleFor`); deleting `internal/scheduler` (F5-18); clock import (M4,
-F5-16); core owners' keys (F5-03, F2's minimal owner registrations).
+F5-16); core owners' keys (declared at F2; the core kinds are F5-03's and F2's minimal owner registrations).
 
 ## Idempotency / rollback
 
@@ -209,7 +205,7 @@ nothing reads `ScheduleFor` before F5-18.
 ## Repo rules
 
 - Never edit `main` or the primary checkout; one worktree per task.
-- File headers on every created file; `changelog.d/` fragment without a header.
+- File headers on every created or modified file (version bumped on `config.go`); `changelog.d/` fragment without a header.
 - Conventional commit `feat(books): schedule declarations for the 38 scheduler tasks, with the schedule oracle (dark)`,
   body ending `Co-Authored-By: Claude <noreply@anthropic.com>`; 09 names no release or flip trailer.
 - `gh pr merge <n> --rebase`, never squash, never `--admin` past a required check.
@@ -217,17 +213,8 @@ nothing reads `ScheduleFor` before F5-18.
 
 ## Planner notes
 
-- **SPEC-GATED entry:** `library_scan` and `library_scan_full` both fire `library.scan`; the spec has one
-  schedule and one clock per kind and names a `library_scan_full` key without a kind for it. Same gap in F5-16.
-- **How the declarations reach the kinds.** `Common.Schedule` is set at construction and `tasks.Definition` is
-  opaque, so a declaration "on its kind" made in `internal/books` needs a hook in every conversion. The conversion
-  briefs (F5-01, F5-04, F5-05, F5-06 … F5-13) add `sched func(tasks.Kind) *tasks.Schedule` to their list functions
-  (their rule R9, a plan rule) so this PR touches only `internal/books`.
-- **Key declarations beyond the 16 `scheduled.<entry>` keys** may need an edit to books' config section file
-  (created by F3), which this row does not list; the lead should add that file to the row or confirm the section
-  can be extended from `schedules.go`.
-- 05-download §10 says `deluge.protected-paths-sync` "gets a real schedule"; 05-tasks §5T.3.8 and 14 Q-C default to
-  deleting the 15 crons. The owner's Q-C answer decides; the brief applies it.
+- 05-download §10 still says `deluge.protected-paths-sync` "gets a real schedule"; 05-tasks §5T.3.8 and 14 Q-C
+  default to deleting the 15 crons. The owner's Q-C answer decides; the brief applies it.
 - `purge_old_logs`' HEAD default is 168 h while `core.log.schedules.journal_prune` defaults to 24 h (05-logging §5):
   the parity test will show the difference unless M2's rename table carries HEAD's value into the core key; if it
   does not, report it as a spec gap rather than changing either default.

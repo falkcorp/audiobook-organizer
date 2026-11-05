@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-23-storage-flip-strict-claims.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 74651b7f-033f-42d7-b873-4ecf3f078896 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,8 +9,8 @@
 |---|---|
 | ID | `R1-23` |
 | Tier | **T4** (Opus / xhigh): the keystone flip: core opens the one store under strict claims for every books family |
-| Release / wave | R1 / W14 |
-| Depends on | R1-15, R1-20, R1-21, R1-22 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
+| Release / wave | R1 / W13 |
+| Depends on | R1-15, R1-20, R1-21, R1-22, R1-04 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 05-storage §5S.3.4 (strict claims, shadow dial), §5S.3.5 (LegacyCap), §5S.3.7, §5S.9.3, §5S.9.4 step 2; 04 §4.5, §8.4 note 1; 09 §9.2.2, §9.2.3 (checkpoint), §9.4 R1 Content: storage; 03 §3.7 |
 | Branch | `agent/platform-core-r1-23-storage-flip-strict-claims` |
 
@@ -24,14 +24,13 @@
 - `internal/metrics/`
 - `main.go`
 - `cmd/root.go`
-- `internal/books/module.go`
-- `internal/books/claims.go`
+- `internal/books/`: `module.go`, `claims.go`, `crash_matrix_test.go`
 - `internal/server/server_lifecycle.go`
 - `internal/startup/`
-- `.github/workflows/extraction-gates.yml`
-- `.github/workflows/docker-image.yml`
+- `.github/workflows/`: `extraction-gates.yml`, `docker-image.yml`
 - `core/Makefile`
 - `scripts/storage_format_guard.py`
+- `tools/cmd/sdkguard/internal-deps.txt`
 - `internal/arch/layering_test.go`
 - `scripts/ci/short_test_weights.json`
 
@@ -94,7 +93,8 @@ The keystone storage flip (09 §9.4 R1 "Content: storage"; 05-storage §5S.3.4, 
 - `TestR0OpensR1Store` (05-storage; 09 §9.10): the R0 binary opens a store the R1 binary wrote and reads every row;
   deleted in R3.
 - `TestBootCrashMatrix_ABO` (05-storage §5S.10; 09 §9.4 R1): the R1-21 kit over books' full boot, books' writers
-  included; runs in `extraction-gates` (add the job, `timeout-minutes` ≤ 30).
+  included, in `internal/books/crash_matrix_test.go` (file name coined here; R3-03 later adds `legacy-file-cleanup`'s
+  scenario beside it); runs in `extraction-gates` (add the job, `timeout-minutes` ≤ 30).
 - `TestNoNewLegacyMigrations` (09 §9.2.2): the legacy track is pinned at `LegacyCap`.
 - `make ci` under strict claims (05-storage §5S.9.4 step 2): the whole root suite runs with the strict mode, and a
   test asserts the mode in force is `strict`.
@@ -107,7 +107,7 @@ The keystone storage flip (09 §9.4 R1 "Content: storage"; 05-storage §5S.3.4, 
 
 R1-15, R1-20, R1-21, R1-22 merged:
 `test -d internal/books && test -d core/storage && test -d core/internal/restoreswap && test -f internal/database/pebble_store_open.go && echo ok`.
-Also R1-04 (the image job; not in the row's depends-on, see Planner notes): `test -f .github/workflows/docker-image.yml`.
+And R1-04 merged (the image job whose storage-levels probe this row turns on): `test -f .github/workflows/docker-image.yml && echo ok`.
 
 ## Re-verify (expected at `f7ac5b11e`, plus the predecessors)
 
@@ -189,13 +189,8 @@ restores ABO's own open.
   (`go -C core fix ./...`, 04 §2.2).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
 
+
 ## Planner notes
 
-- Missing dependency: this row edits `.github/workflows/docker-image.yml` (created by R1-04) and turns on the
-  storage-levels probe R1-04 wired, but R1-04 is not in its depends-on (R1-04 is in W10, so the wave order already
-  holds). Add R1-04.
-- Missing file in the row: `tools/cmd/sdkguard/internal-deps.txt` lists `internal/metrics` (and `internal/database`)
-  in `pkg/plugin/sdk`'s closure; moving the Pebble collector and the engine files changes the closure, so the PR must
-  regenerate it. R1-23 is alone in W14; add `tools/cmd/sdkguard/internal-deps.txt` to the row.
 - The row lists `core/Makefile` for the core coverage ratchet floor "from the storage move" (09 §9.4 R1); the brief
   sets it here, as R1-03's brief defers it.

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-02-tasks-native-stores-importer.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c6364d76-4e03-4695-8c99-5d7af9d23802 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F2-02 |
 | Release / flip | R2, foundation PRs (F2), **dark** |
-| Wave | W23 |
+| Wave | W24 |
 | Tier | **T3** (Opus / high): durable stores with commit-time preconditions and an exactly-once importer, proven by a conformance suite; the key layout and invariants are fixed, the internals are not |
 | Depends on | F2-01 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
@@ -78,8 +78,9 @@ Create:
 - `core/internal/taskstore/` — key layout and staging over `storage` (all `c/tasks/` keys of §5T.6.1, index
   maintenance, the Serialized guard keys).
 - `core/tasks/importer.go` — `type Importer interface`, `RunData`, and the importer constructor.
-- `core/tasks/native.go` — `func NativeStores(ks storage.Keyspace) Stores` (see planner note: this file is not in
-  the inventory row, but the spec fixes `NativeStores` in package `tasks`).
+- `core/tasks/native.go` — `func NativeStores(ks storage.Keyspace) Stores` and `NativeImporter`. The spec fixes
+  `NativeStores` in package `tasks` (05-tasks §5T.3.13); keeping it in its own file of package `tasks`, over an
+  `internal/taskstore` that does not import `tasks`, avoids an import cycle.
 - `core/tasks/taskstest/storesuite.go` — `func StoresSuite(t *testing.T, newStores func(*testing.T) tasks.Stores)`
   plus the importer cases (see below for how the suite gets an importer).
 - Tests: `core/internal/taskstore/*_test.go`, `core/tasks/native_test.go`.
@@ -150,7 +151,8 @@ message. State this in the suite's doc comment.
 Also, in `core/tasks/native_test.go`:
 
 - `TestNativeStores_RoundTrip` — every `RunStore`, `ClockStore`, `PauseStore`, `StandDownStore` method over
-  `c/tasks/` (the `hello.count` half of the spec row is F2-05's), and `StoresSuite(t, …NativeStores…)` over core's
+  `c/tasks/` (the spec row's `hello.count` half needs hello to register the kind on a `coretest` App, which is
+  F2-16's wiring; F2-16 adds that cell), and `StoresSuite(t, …NativeStores…)` over core's
   in-memory storage.
 - `TestPerRunSeq_NoReissueAfterCrash` (`CrashClone` between row write and commit).
 
@@ -180,8 +182,8 @@ git grep -n 'mediacore/tasks"' -- ':!core/' | wc -l                             
 
 ## Out of scope
 
-The executor and `WriteRuns` (F2-03); the scheduler (F2-04); kernel construction at P4c and `module.Importers`
-wiring (the F5 flip); books' M4 (F5-16); any ABO file.
+The executor and `WriteRuns` (F2-03); the scheduler (F2-04); the kernel's start rule and boot wiring of the stores
+(F2-16); `module.Importers` wiring for a cutover step (the F5 flip); books' M4 (F5-16); any ABO file.
 
 ## Idempotency / rollback
 
@@ -193,12 +195,3 @@ If `func NativeStores` exists in `core/tasks/`, run the acceptance instead. Roll
 File headers on every new file; conventional commit (`feat(core/tasks): native stores, importer and StoresSuite (dark)`)
 with `Co-Authored-By: Claude <noreply@anthropic.com>`; `gh pr merge <n> --rebase`; a `changelog.d/` fragment; CLAUDE.md
 concurrency rules. No 09 commit trailer exists.
-
-## Planner notes
-
-- The inventory row lists `core/internal/taskstore/`, `core/tasks/taskstest/storesuite.go` and
-  `core/tasks/importer.go`, but the spec fixes `tasks.NativeStores` in package `tasks` (05-tasks §5T.3.13). A typed
-  `NativeStores` in `tasks` that calls an `internal/taskstore` importing `tasks` is an import cycle, so this brief
-  adds `core/tasks/native.go` and the cycle rule above. Add `core/tasks/native.go` to the row's files.
-- The importer's constructor is not named by the spec; this brief coins `NativeImporter`. F5-16 (M4) and the F5
-  flip consume it.

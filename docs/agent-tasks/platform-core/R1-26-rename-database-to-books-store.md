@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-26-rename-database-to-books-store.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 320631e7-248c-44f9-9695-42e3a066fa6e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | `R1-26` |
 | Tier | **T2** (Sonnet / high): about 850 call sites, import paths only, every commit builds |
 | Release / wave | R1 / W18 |
-| Depends on | R1-23, R1-24, R1-25 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
+| Depends on | R1-23, R1-25 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 04 §2.4 (internal/books/store), §4, §1 headline 1; 09 §9.2.10 (move window, about 850 engine call sites) |
 | Branch | `agent/platform-core-r1-26-rename-database-to-books-store` |
 
@@ -21,11 +21,13 @@
 - `internal/`
 - `cmd/`
 - `main.go`
-- `tools/`
 - `.mockery.yaml`
 - `tygo.yaml`
+- `tools/`
 - `ci/gates.txt`
 - `scripts/ci/`
+- `web/src/types/generated/database.ts`
+- `scripts/deadcode-ratchet.py`
 
 ## START HERE
 
@@ -63,7 +65,7 @@ imports of each other (aliased the same way).
 
 ## Dependency check
 
-R1-23, R1-24, R1-25 merged (the engine has left; the residue is final for R1):
+R1-23 and R1-25 merged (the engine has left; the residue is final for R1; R1-24 touches no `internal/database` file):
 `git grep -q 'func (h \*Handler) FactoryReset' -- internal/server/handlers/system || echo RESET_GONE` prints
 `RESET_GONE`, and `test -d core/storage && echo ok`.
 
@@ -110,7 +112,7 @@ grep -c 'internal/database' internal/arch/layering_test.go   # the layerOf keys 
    package) would now import itself: `go build` reports it; remove that import.
 3. Non-Go references: `.mockery.yaml` (`dir:` and the package path; regenerate nothing: the mocks moved verbatim),
    `tygo.yaml` (`path:` and the "Source of truth" comment; then `make generate-types` and commit the regenerated
-   `web/src/types/generated/database.ts` header, a file outside the row; see Planner notes), `ci/gates.txt`
+   `web/src/types/generated/database.ts` header, in the row), `ci/gates.txt`
    (`store-width`, `store-references` commands and baselines), `tools/cmd/sdkguard/main.go` (`allowedRoots`) and
    `go run ./tools/cmd/sdkguard/main.go -update`, `scripts/ci/*.json` weight and timing keys and the two shard
    scripts, `scripts/deadcode-ratchet.py` (`TEST_HELPER_DIRS`: `dbtest` → `storetest`), `internal/arch/layering_test.go`
@@ -171,16 +173,3 @@ Revert the commit (a pure rename).
   (`go -C core fix ./...`, 04 §2.2).
 - **Status honesty.** The PR description ends with `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`, `BLOCKED: <n> — <list>` over this brief's numbered steps.
 
-## Planner notes
-
-- Missing file in the row: `tygo.yaml`'s frontmatter names `internal/database/…` as the source of truth, and
-  `types-check` compares the regenerated `web/src/types/generated/database.ts` with the committed one, so the PR must
-  commit that regenerated file; `web/` is not in R1-26's files. No same-wave collision (W18's R1-27 does not touch
-  `web/`); add it to the row.
-- 04 does not say whether importers re-qualify as `store.` or keep `database.`; the brief keeps every qualifier by
-  importing the new path under the old name (`database "…/internal/books/store"`), because a qualifier rename over
-  about 2,500 importer files collides with the many local variables named `store`. If the lead wants `store.`
-  qualifiers, that is a separate, larger PR.
-- Also outside the row: `scripts/deadcode-ratchet.py` (its `TEST_HELPER_DIRS` names `dbtest`, line 68) and
-  `scripts/*.py` other than `scripts/ci/`; the row lists only `scripts/ci/`. R1-27 (same wave) edits
-  `scripts/deploy-wait-ready.sh` and `scripts/tests/`, not these, so no collision; add the file to the row.

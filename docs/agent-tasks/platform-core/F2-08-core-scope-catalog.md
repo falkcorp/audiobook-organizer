@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-08-core-scope-catalog.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4cc96c6b-103a-4ffe-91ed-1c8cfd0c4973 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -63,8 +63,8 @@ table below and not dropped by the spec, STOP and report it.
 ## Files
 
 Create `core/rbac/catalog.go`, `core/rbac/catalog_test.go`, `core/kernel/catalog.go`, and `core/kernel/catalog_test.go`
-(the kernel half of the gate; see planner note). Modify nothing else, except one call from the kernel's boot sequence
-into `core/kernel/catalog.go` (one line in R1's kernel boot file; say so in the PR body).
+(the kernel half of the gate). Modify nothing else. The **boot call** into `core/kernel/catalog.go` is F2-16's (the F2
+wiring row owns `core/kernel/boot.go` and `kernel.go`); do not edit either.
 
 ## Code contract
 
@@ -77,10 +77,13 @@ namespace; the implication closure is acyclic (`ErrImpliesCycle`, 05-rbac §3.4 
 not); a `Confining` scope implies nothing and is implied by nothing. `Freeze`, seed merge and module declarations are
 F4-01's (`Service`); do not add them.
 
+`NewCatalog` is the constructor F4-01's `Freeze` wraps (F4-01 adds seed merge and module declarations on top of it).
+
 In `core/rbac/catalog.go`: `func CoreScopes() []PermissionSpec` (name coined here) returns exactly the 19 specs below, as
 a fresh slice on every call (no package-level mutable state, R5). In `core/kernel/catalog.go` the kernel declares them,
-whichever subsystem is wired: it builds `rbac.NewCatalog(rbac.CoreScopes()...)` once at boot, keeps the `*rbac.Catalog`, and fails boot
-on an error. If the base-state grep shows `httpapi.Build` already validates route requirements against a catalog,
+whichever subsystem is wired: a function (name coined here, e.g. `declareCoreCatalog() (*rbac.Catalog, error)`) builds
+`rbac.NewCatalog(rbac.CoreScopes()...)`; F2-16 calls it once at boot, keeps the `*rbac.Catalog` and fails boot on an
+error. If the base-state grep shows `httpapi.Build` already validates route requirements against a catalog,
 pass this one; if it does not, leave `Build` unchanged (enforcement lands at F4).
 
 The fixed list (05-rbac §6.1 "New permissions with no atom", the atom table's core scopes, §4.8, 05-library §5L.3):
@@ -123,10 +126,11 @@ exist). `Title` and `Description`: one short line each, written from the scope's
   `core:roles.view`, `core:settings.manage`, `core:tasks.manage`, `core:system.view`, `core:system.manage`,
   `core:library.manage`, `core:library.browse`, `core:admin`) and by the `editor`/`viewer` seeds is in it; and it holds
   no other `core:` scope.
-- `TestKernel_DeclaresCoreScopesWithNoSubsystemWired` (name coined here) in `core/kernel/catalog_test.go`: a kernel booted
-  with **no optional core subsystem wired** (the zero-module boot R1's kernel tests use) holds a catalog whose `core`
-  namespace equals `rbac.CoreScopes()` exactly. Together the two tests are the spec's "a kernel with no optional core
-  subsystem wired declares every `core:*` scope".
+- `TestKernel_DeclaresCoreScopesWithNoSubsystemWired` (name coined here) in `core/kernel/catalog_test.go`: the kernel's
+  declaration function, called with **no optional core subsystem wired**, returns a catalog whose `core` namespace
+  equals `rbac.CoreScopes()` exactly. Together the two tests are the spec's "a kernel with no optional core subsystem
+  wired declares every `core:*` scope"; F2-16 adds the boot-path assertion once it calls the function from the boot
+  sequence.
 - In `core/rbac/catalog_test.go` (names coined here): `TestCatalog_RejectsDuplicate`, `TestCatalog_RejectsForeignImplies`,
   `TestCatalog_RejectsImpliesCycle`, `TestCatalog_ExpandPattern` (`core:users.*` expands to `core:users.manage` and
   `core:users.view`), `TestCatalog_LookupAndNamespace`.
@@ -135,7 +139,7 @@ exist). `Title` and `Description`: one short line each, written from the scope's
 
 1. Base-state greps (including the regenerated scope list); plan in the PR body.
 2. Tests first.
-3. `catalog.go` types, `NewCatalog` and `CoreScopes()`; kernel construction.
+3. `catalog.go` types, `NewCatalog` and `CoreScopes()`; the kernel-side declaration function (no boot-file edit).
 4. Headers; changelog fragment; acceptance.
 
 ## Acceptance
@@ -155,8 +159,8 @@ make ci                                                                         
 
 ## Out of scope
 
-`rbac.Service`, `Freeze`, seed merge, `rbac.Store` and module declarations (F4-01); enforcement (F4); books' atom table
-(R1-15 owns `TestAtomTable_Golden`); any ABO edit.
+The boot call (F2-16); `rbac.Service`, `Freeze`, seed merge, `rbac.Store` and module declarations (F4-01); enforcement
+(F4); books' atom table (R1-15 owns `TestAtomTable_Golden`); any ABO edit.
 
 ## Idempotency / rollback
 
@@ -167,13 +171,3 @@ the catalog before F4.
 
 File headers; conventional commit (`feat(core/rbac): fixed core scope catalog declared by the kernel (dark)`) with
 `Co-Authored-By: Claude <noreply@anthropic.com>`; `gh pr merge <n> --rebase`; `changelog.d/` fragment.
-
-## Planner notes
-
-- `TestCoreCatalog_FixedFromF2`'s subject is "a kernel with no optional core subsystem wired" (05-rbac §12), but the row
-  puts it in `core/rbac/catalog_test.go`, and `core/rbac` cannot import `core/kernel`. The brief keeps the named test in
-  `core/rbac` over `rbac.CoreScopes()` (F4-01's brief greps for it there) and adds the kernel half as a coined test in
-  `core/kernel/catalog_test.go`; add that file to the row.
-- 05-rbac does not give titles, descriptions, or a constructor for `Catalog`; the brief coins `NewCatalog` and asks for
-  one-line titles. `Freeze` (F4-01) will wrap or replace `NewCatalog`; F4-01's brief should say which.
-- Shared kernel boot file: see F2-07's planner note (five W22 rows each add one call).

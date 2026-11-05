@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-04-f8-flip-backup-health-metrics.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9c425807-35e2-4fe7-9289-5de6f5478ebe -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,8 +10,9 @@
 | ID | F8-04 |
 | Release | R2, flip F8 (the flip PR) |
 | Tier | **T4** (Opus / xhigh–max): every flip PR is T4; this one changes the `/health` callers, the Basic-gate exempt set, the metrics mount and the backup owner |
-| Wave | W35 (alone: the only PR of its wave touching `main.go`, `internal/server/` and books' registration). Runs inside an announced **move window** |
+| Wave | W36 (alone: the only PR of its wave; it owns `main.go`, `internal/server/`, books' registration and the kernel and module wiring files in W36). Runs inside an announced **move window** |
 | Depends on | F7-09, F8-01, F8-02, F8-03 |
+| Owns gate tests | the dashboard-reference test over the kernel `/metrics` mount (extension of `TestDeployReferencedSeriesServed`); `TestLegacyArchiveRestoreThenMigrate` (F8-01 landed its staging half) |
 | Spec | 09 §9.4 R2 flips table row F8, §9.6 rows 3 and 19, §9.2.7 (F8 moves the mount only), §9.2.9 (one PR per rename, every caller); 03 §3.8 F8; 05-backup §5B.10, B1, B7; 05-updater §5U.10, §5U.12; 05-health §5H.3.3, §5H.10 (row F8); 05-metrics §6, §12, §13; 05-http-api §8.1 (F8 row), §12; 06 §6.4.10 (F8 row); 04 §8.1 F8 |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. **One atomic PR** (09 §9.2.1): it wires
@@ -33,6 +34,14 @@ Announce the move window one working day ahead naming the 04 rows below (09 §9.
 
 ## Goal (09 §9.4 R2 flips table, row F8; 06 §6.4.10 F8 row)
 
+0. **Module members and kernel wiring** (06 §6.4.10 F8 row): add `Registrar.StartupSteps`, `Registrar.Diagnostics`,
+   `Registrar.Backup` and `Deps.Backup` to `core/module/registrar.go`, `deps.go` and `manifest.go`; in
+   `core/kernel/boot.go` and `kernel.go` call F8-03's start functions in `core/kernel/health.go` (heartbeat, watchdog
+   ping, the remaining core components), build backup and the wired updater, and mount the backup, updater, health and
+   diagnostics routes; add `updater fetch-release` to the offline commands in `core/app/offline.go` (05-updater §5U.4);
+   regenerate `core/openapi/core.json` and the client under `core/web/packages/api-client/src/generated/`. **Service
+   registry** (06 §6.11.1 step 4): delete from `internal/books/services.go` the `ServiceDefs` of updater,
+   updatescheduler, system, dashboard and metricsstore.
 1. **Backup.** The kernel builds core `backup` (F8-01); `Registrar.Backup` and `Deps.Backup` live; the
    `/api/core/v1/backups*` routes mounted; HEAD's `/api/v1/backup/*` gin routes deleted with the SPA switched;
    `internal/backup` moved/deleted per 04 (`F8 move internal/backup -> mediacore/backup`); the organizer's
@@ -64,8 +73,8 @@ Announce the move window one working day ahead naming the 04 rows below (09 §9.
 - **I1.** After merge, nothing in the repository requests `/api/health` or `/api/v1/health` (code, scripts, CI,
   e2e, skills, docs), and both paths answer 404.
 - **I2.** `/health` keeps ABO's shape and its `ready` field; its unauthenticated body carries only the golden token
-  set (`TestHealth_UnauthenticatedTokenSetGolden`, now against books' `/health`, `/readyz` and
-  `GET /api/core/v1/health`).
+  set (`TestHealth_UnauthenticatedTokenSetGolden`, R0-06's test, gains its F8 cells here: books' `/health`, `/readyz`
+  and `GET /api/core/v1/health`).
 - **I3.** The Basic gate exempts `/health` in place of the two deleted paths and nothing else changes in its exempt
   set (`TestBasicGate_ExemptSetGolden`).
 - **I4.** `/metrics` serves the same series names as before the PR; every series a shipped dashboard or rule names
@@ -73,23 +82,29 @@ Announce the move window one working day ahead naming the 04 rows below (09 §9.
   returns no error and no duplicate family (`TestABOMetricsGatherNoDuplicate`).
 - **I5.** R0's updater behaviour holds through the wired core updater (`TestABOUpdaterSourceMatchesHEAD`,
   `TestApply_RawAssetNoBackup`, R0's tests re-pointed).
-- **I6.** `TestLegacyArchiveRestoreThenMigrate` passes on the full step list.
+- **I6.** `TestLegacyArchiveRestoreThenMigrate`, owned here, passes on the full step list: F8-01's staging half plus
+  the next boot migrating the restored `legacy-abo/0` store through every registered cutover step, with the corpus'
+  per-family counts.
 - **I7.** `unit-lifecycle` passes (this PR changes `main.go`, `internal/backup/**`, `internal/updater/**`).
 
 ## Files
 
 | Action | Path |
 |---|---|
-| modify | `main.go`, `cmd/root.go`, `internal/books/module.go`, `core/app/options.go` |
+| modify | wiring this PR owns in W36: `main.go`, `cmd/root.go`, `internal/books/module.go`, `internal/books/services.go`, `core/app/options.go`, `core/app/offline.go`, `core/kernel/boot.go`, `core/kernel/kernel.go`, `core/module/manifest.go`, `core/module/registrar.go`, `core/module/deps.go` |
+| regenerate | `core/openapi/core.json`, `core/web/packages/api-client/src/generated/` |
 | modify / delete | `internal/server/` (backup, update, health, metrics routes and handlers; Basic exempt set; tests) |
 | delete / move | `internal/backup/`, `internal/updater/`, `internal/startup/`, `internal/sysinfo/` (host parts), `internal/diagnostics/` (zip machinery) |
 | modify | `internal/organizer/` (auto-backup through `Deps.Backup.Ensure`) |
 | create | `core/kernel/metrics_mount.go` |
 | modify | `Dockerfile` (verify `HEALTHCHECK` stays on `/health`), `scripts/deploy-wait-ready.sh` (verify `/health`), `deploy/` (dashboards and rules only if a mount label changes; none expected) |
-| modify | `web/src/` (backup, updater, health callers; `App.tsx`'s health poll) |
-| modify | `internal/arch/layering_test.go`, `scripts/ci/short_test_weights.json` |
-| modify (not in the row; see Planner notes) | `web/tests/e2e/` (health mocks), `.github/workflows/binary-smoke.yml`, the `scripts/` callers of `/api/health` other than `deploy-wait-ready.sh`, `docs/developer-guide.md`, `docs/system/deploy-and-gpu-ops.md`, `.mockery.yaml` if a mocked interface moves |
+| modify | `web/src/` (backup, updater, health callers; `App.tsx`'s health poll and `App.health.test.tsx`) |
+| modify | every other first-party `/api/health` or `/api/v1/health` caller at the plan's base (09 §9.2.9): `internal/activity/writer_test.go`; `web/tests/e2e/book-detail.spec.ts`, `files-history.spec.ts`, `import-paths.spec.ts`, `metadata-provenance.spec.ts`, `utils/setup-modes.spec.ts`, `utils/test-helpers.ts`; `.github/workflows/binary-smoke.yml`; `scripts/TEST-README.md`, `scripts/api_examples.sh`, `scripts/e2e_test.sh`, `scripts/record_demo.js`, `scripts/run_demo_recording.sh`, `scripts/test-api-endpoints.py`; `docs/developer-guide.md`, `docs/system/deploy-and-gpu-ops.md`; `.claude/skills/deploy/SKILL.md` |
+| modify | `internal/arch/layering_test.go`, `scripts/ci/short_test_weights.json`; `.mockery.yaml` only if a mocked interface moves (then name it in the PR) |
 | create | one `changelog.d/` fragment (headerless) |
+
+Re-grep at your base (grep 1): any further caller is this PR's file too. Dated incident records under
+`docs/diagnostics/` describe history, not requests, and are left as written.
 
 ## Re-verify before editing (expected results at your base)
 
@@ -100,9 +115,16 @@ Evidence counts are from HEAD `f7ac5b11e`; regenerate them at your base and reco
 #    [evidence: web/src/App.tsx:165 and App.health.test.tsx; 7 web/tests/e2e files; .github/workflows/binary-smoke.yml:85;
 #     scripts/run_demo_recording.sh, test-api-endpoints.py, api_examples.sh, e2e_test.sh, record_demo.js, TEST-README.md;
 #     docs/developer-guide.md, docs/system/deploy-and-gpu-ops.md; internal/server tests and static_nonembed.go;
-#     internal/server/middleware/basicauth.go:34 (deleted by F3-07 at your base)]
+#     internal/server/middleware/basicauth.go:34 (deleted by F3-07 at your base); internal/activity/writer_test.go;
+#     .claude/skills/deploy/SKILL.md]
 grep -rn -I -e '/api/health' -e '/api/v1/health' . \
-  | grep -v -E '^./(docs/specs|docs/plans|docs/archive|docs/agent-tasks|node_modules)|CHANGELOG|^./TODO.md|changelog.d/'
+  | grep -v -E '^./(docs/specs|docs/plans|docs/archive|docs/agent-tasks|docs/diagnostics|node_modules|web/node_modules)|CHANGELOG|^./TODO.md|changelog.d/'
+# 1b. Module members this PR adds. Expected: 0
+grep -rn 'StartupSteps\|func (r \*Registrar) Diagnostics\|func (r \*Registrar) Backup' core/module/ | wc -l
+# 1c. F8-03's start functions, not yet called from boot.go (read their names in health.go first and grep boot.go
+#     for each). Expected: >= 1 functions, and no call of them in boot.go
+grep -rn '^func ' core/kernel/health.go | wc -l
+grep -rn 'Heartbeat\|Watchdog' core/kernel/boot.go | wc -l
 
 # 2. The gin routes this PR deletes. [evidence: wire_system_routes.go:59-66 backup; server_lifecycle.go:2102-2104 update;
 #    server_lifecycle.go:1746 /metrics; the three /health routes near server_lifecycle.go:1749-1755]
@@ -135,7 +157,8 @@ caller in a repository path you cannot change in this PR (report it; do not leav
 4. Wire the updater (`app.Options.Updater` in `main.go` from F8-02's ABO options constructor), mount its routes,
    delete `internal/updater` (scheduler, registration), the maintenance-window step 1 and its setting, and
    `/api/v1/update/*`; switch the SPA (`SettingsGeneral.tsx` at the evidence commit).
-5. Wire health: kernel probes and routes; books' `/health` from the registry; `Registrar.StartupSteps` with books'
+5. Wire health: call F8-03's start functions from `boot.go`; kernel probes and routes; books' `/health` from the
+   registry; `Registrar.StartupSteps` with books'
    steps (searchindex Degraded); `books.memdb` already pushes (F5); delete `/api/health` and `/api/v1/health`; move
    `BasicExempt` to `/health`; switch every caller of grep 1; re-implement sysinfo host parts on `health/sysinfo`,
    keeping books' dashboard parts; books `Contributor` sections for diagnostics; delete `InterimExport`, books'
@@ -143,7 +166,9 @@ caller in a repository path you cannot change in this PR (report it; do not leav
 6. Metrics: `core/kernel/metrics_mount.go` mounts `/metrics` from the App's Provider with
    `core:metrics.read`; delete the gin `/metrics` route; keep every series name; extend the dashboard-reference
    test to scrape the kernel mount.
-7. Update `internal/arch/layering_test.go` (deleted and moved packages), shard weights, `.mockery.yaml` if needed.
+7. Delete the five `ServiceDefs` from `internal/books/services.go`; add `updater fetch-release` to
+   `core/app/offline.go`; regenerate `core/openapi/core.json` and the client; update `internal/arch/layering_test.go`
+   (deleted and moved packages), shard weights, `.mockery.yaml` if needed.
 8. `go build ./... && (cd core && go build ./...)`, then the acceptance block. Bump headers. Fragment.
 
 ## Code contract
@@ -164,12 +189,14 @@ opts.Updater = &updater.Options{
 ## Tests (write first; spec names copied exactly)
 
 - `TestBasicGate_ExemptSetGolden`: golden updated so `/health` replaces `/api/health` and `/api/v1/health`.
-- `TestHealth_UnauthenticatedTokenSetGolden`: re-pointed at books' `/health`, `/readyz` and `GET /api/core/v1/health`.
+- `TestHealth_UnauthenticatedTokenSetGolden` (R0-06's test): its F8 cells added, books' `/health`, `/readyz` and
+  `GET /api/core/v1/health`.
 - The dashboard-reference test over the kernel `/metrics` mount (extension of `TestDeployReferencedSeriesServed`;
   this row owns the extension), with `promtool test rules`.
 - `TestABOMetricsGatherNoDuplicate` (unchanged; must stay green).
 - `TestABOUpdaterSourceMatchesHEAD`, `TestApply_RawAssetNoBackup` through the wired options.
-- `TestLegacyArchiveRestoreThenMigrate` on the full step list.
+- `TestLegacyArchiveRestoreThenMigrate` (owned here): extend F8-01's staging half to the migrated store on the full
+  step list.
 - `TestDeletedHealthPaths404` (name coined here): `GET /api/health` and `GET /api/v1/health` answer 404 through the
   full router; `GET /health` answers ABO's shape.
 
@@ -178,7 +205,7 @@ opts.Updater = &updater.Options{
 ```bash
 # No caller of the deleted paths. Expected: 0
 grep -rn -I -e '/api/health' -e '/api/v1/health' . \
-  | grep -v -E '^./(docs/specs|docs/plans|docs/archive|docs/agent-tasks|node_modules)|CHANGELOG|^./TODO.md|changelog.d/' | wc -l
+  | grep -v -E '^./(docs/specs|docs/plans|docs/archive|docs/agent-tasks|docs/diagnostics|node_modules|web/node_modules)|CHANGELOG|^./TODO.md|changelog.d/' | wc -l
 
 # Interim backends gone. Expected: 0
 grep -rn 'InterimExport\|InterimBackends' --include='*.go' core/ internal/ main.go | wc -l
@@ -231,8 +258,7 @@ Before R2 ships: revert the PR (it is atomic). After R2 ships: R2's rollback, `m
 
 ## Planner notes
 
-- **Callers outside the row's files.** At the evidence checkout `/api/health` or `/api/v1/health` is requested from
-  `web/tests/e2e/` (seven files; the row lists only `web/src/`), `.github/workflows/binary-smoke.yml`, five
-  `scripts/` files other than `deploy-wait-ready.sh` and their README, and two docs. 09 §9.2.9 requires every
-  first-party caller to change in this PR, so these paths belong in the row's files. As the flip is alone in W35,
-  adding them creates no collision.
+- **One caller file outside the row, by choice.** At the plan's HEAD a dated incident record,
+  `docs/diagnostics/2026-08-24-scan-adds-no-new-books-root-cause.md`, names `/api/health`. The brief treats it as
+  history, not a first-party caller (09 §9.2.9), and excludes `docs/diagnostics/` from the caller grep; if the planner
+  reads 09 §9.2.9 as covering it, add it to the row.
