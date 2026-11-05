@@ -103,11 +103,7 @@ func TestInferFromFormat(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			info := &MediaInfo{}
 			info.Format = tt.expectedFormat
-			result, err := inferFromFormat(tt.filename, info)
-
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			result := inferFromFormat(tt.filename, info)
 
 			if result.Codec != tt.expectedCodec {
 				t.Errorf("expected codec %s, got %s", tt.expectedCodec, result.Codec)
@@ -124,12 +120,16 @@ func TestInferFromFormat(t *testing.T) {
 	}
 }
 
-func TestInferFromFormat_UnsupportedExtension(t *testing.T) {
-	info := &MediaInfo{}
-	_, err := inferFromFormat("test.wav", info)
-
-	if err == nil {
-		t.Error("expected error for unsupported extension")
+// An extension with no codec table is no longer refused: it gets an info with an
+// empty Codec (and no bitrate to estimate from), and its duration is whatever
+// the probe says. The per-extension probe behaviour is in duration_err_test.go.
+func TestInferFromFormat_NoCodecTableExtension(t *testing.T) {
+	info := inferFromFormat("test.wav", &MediaInfo{})
+	if info == nil {
+		t.Fatal("inferFromFormat returned nil for an extension without a codec table")
+	}
+	if info.Codec != "" || info.Bitrate != 0 {
+		t.Fatalf("no codec table: Codec and Bitrate must stay unset, got %+v", info)
 	}
 }
 
@@ -745,11 +745,7 @@ func TestInferFromFormat_CaseInsensitivity(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.filename, func(t *testing.T) {
 			info := &MediaInfo{}
-			result, err := inferFromFormat(tt.filename, info)
-
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			result := inferFromFormat(tt.filename, info)
 
 			if result.Codec != tt.codec {
 				t.Errorf("expected codec %s, got %s", tt.codec, result.Codec)
@@ -1174,10 +1170,7 @@ func TestInferFromFormat_FlagsEstimatedDuration(t *testing.T) {
 	if err := os.WriteFile(p, bytes.Repeat([]byte{0}, 200_000), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	info, err := inferFromFormat(p, &MediaInfo{})
-	if err != nil {
-		t.Fatalf("inferFromFormat: %v", err)
-	}
+	info := inferFromFormat(p, &MediaInfo{})
 	if info.Duration <= 0 {
 		t.Fatalf("expected an estimated duration > 0, got %d", info.Duration)
 	}

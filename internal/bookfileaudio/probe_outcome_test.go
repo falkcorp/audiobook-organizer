@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
@@ -65,6 +66,12 @@ func TestClassifyProbeError(t *testing.T) {
 		{"ffprobe not installed", fmt.Errorf("ffprobe /x: %w", exec.ErrNotFound), FailureEnvironment, "", false},
 		{"ffprobe sentinel", audioutil.ErrFFprobeNotAvailable, FailureEnvironment, "", false},
 		{"cancelled run", fmt.Errorf("probe: %w", context.Canceled), FailureEnvironment, "", false},
+		{"permission denied", fmt.Errorf("%w: %w", fs.ErrPermission, exitErr), FailureEnvironment, "", false},
+		{"stat says EACCES", fmt.Errorf("%w: %w", &fs.PathError{Op: "stat", Path: "/x", Err: syscall.EACCES}, exitErr), FailureEnvironment, "", false},
+		{"stale NFS handle", fmt.Errorf("%w: %w", syscall.ESTALE, exitErr), FailureEnvironment, "", false},
+		{"transport endpoint not connected", fmt.Errorf("%w: %w", syscall.ENOTCONN, exitErr), FailureEnvironment, "", false},
+		{"unsupported extension and exit error", fmt.Errorf("%w: .txt: %w", mediainfo.ErrUnsupportedFormat, exitErr), FailureUnsupported, "", false},
+		{"unsupported extension but ffprobe missing", fmt.Errorf("%w: .txt: %w", mediainfo.ErrUnsupportedFormat, exec.ErrNotFound), FailureEnvironment, "", false},
 		{"file absent", fmt.Errorf("failed to open file: %w", fs.ErrNotExist), FailureAbsent, "", false},
 		{"absent AND exit error (stat added ErrNotExist)", fmt.Errorf("%w: %w", fs.ErrNotExist, exitErr), FailureAbsent, "", false},
 		{"exit error", fmt.Errorf("ffprobe /x: %w", exitErr), FailureFile, "ffprobe /x: exit status 1", true},
@@ -333,5 +340,31 @@ func TestRecordProbeFailure_NilArgs(t *testing.T) {
 	row := database.BookFile{}
 	if RecordProbeFailure(&row, "/x", nil, nil) != SourceNone || row.Scan.DurationOK.Attempts != 0 {
 		t.Error("nil error must write nothing")
+	}
+}
+
+// demotingLog is a logger whose Warn goes to Debug, as the repoint dry run's
+// does. Its lines must not use up the once-per-cause warning: the real run that
+// follows in the same process would otherwise never warn about a missing ffprobe.
+type demotingLog struct{ *recLog }
+
+func (d demotingLog) Warn(m string, a ...any) { d.recLog.Debug(m, a...) }
+func (demotingLog) DemotesWarn() bool         { return true }
+
+func TestRecordProbeFailure_DemotedWarningDoesNotUseUpTheOnce(t *testing.T) {
+	resetWarned(t)
+	missing := fmt.Errorf("ffprobe /x: %w", exec.ErrNotFound)
+	quiet := &recLog{}
+	for i := 0; i < 3; i++ {
+		RecordProbeFailure(&database.BookFile{}, "/x", missing, demotingLog{quiet})
+	}
+	if quiet.warnCount() != 0 {
+		t.Fatalf("a demoted logger must never Warn, got %d", quiet.warnCount())
+	}
+	loud := &recLog{}
+	RecordProbeFailure(&database.BookFile{}, "/x", missing, loud)
+	RecordProbeFailure(&database.BookFile{}, "/x", missing, loud)
+	if loud.warnCount() != 1 {
+		t.Fatalf("the first non-demoted failure must warn exactly once, got %d", loud.warnCount())
 	}
 }
