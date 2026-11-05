@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-indexer.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.9.1 -->
 <!-- guid: 5e2d5cda-5f98-4db2-87b1-b4c8d6519ec7 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -10,8 +10,8 @@ Evidence commit `748fd787a`. Raw inputs: [`raw/16-arr-domain-research.md`](../..
 Builds on [05-metadata](05-metadata.md) §M1 (instances, health, egress trust, taxonomy) and §M2 (`providerhttp`).
 
 > **Design sketch (non-normative; A-15).** The whole file is deferred-build and not in the ABO extraction plan
-> (cross-cutting resolution 1, SIMP-1): ABO consumes no indexer, and [09](09-abo-on-core.md) S7 does not create the
-> package. The SDK freezes none of it: `integrations/indexer` is designed and settled with `acquire` when the first
+> (cross-cutting resolution 1, SIMP-1): ABO consumes no indexer, and [09](09-abo-on-core.md)'s R2 integrations flip does not create
+> the package. The SDK freezes none of it: `integrations/indexer` is designed and settled with `acquire` when the first
 > TV/Movies app starts ([10](10-tv-movies-proof.md)). It is kept at proof depth to show that the frozen contracts it
 > stands on (05-metadata M1 instances, M2 `providerhttp`) fit an indexer.
 
@@ -274,8 +274,8 @@ Core-shipped adapters: `core.newznab` and `core.torznab` — one implementation,
 redacted by providerhttp. Phase: built with `acquire` (phase 2 of [05-download](05-download.md) §1; deferred-build);
 ABO does not need indexers to run on core, and an audiobook search (`CatAudiobook`, `TypeBook`/`TypeSearch`) is
 possible later without contract change. Instances are records in the one instance registry (05-metadata M1,
-SIMP-4), always in core's `NativeInstanceStore`: no app has pre-core indexer instances, so no legacy store covers
-them (R4-1); their `query`/`grab` quota counters are in `NativeGateStore` (05-metadata M2.4). The API key is the
+SIMP-4), in core's `NativeInstanceStore`, the one instance store (R4-1); no app has pre-core indexer instances to
+migrate; their `query`/`grab` quota counters are in `NativeGateStore` (05-metadata M2.4). The API key is the
 secret `integrations.indexer.<id>.api_key` (05-config §2.3 grammar).
 
 ### 3.1 Prowlarr interop through the *arr facade
@@ -285,7 +285,7 @@ which translates onto core's instance API. The contract core must offer the faca
 
 | Prowlarr call (raw/16 §5.2) | Facade translation onto core |
 |---|---|
-| `GET /api/v3/indexer/schema` | `GET /api/core/v1/integrations/adapters?kind=indexer` → *arr `{implementation: "Newznab"\|"Torznab", configContract, fields[]}`; field names `baseUrl`, `apiPath`, `apiKey`, `categories`, `animeCategories` (→ `ExtraCategories["anime"]` for a TV app; omitted by Movies), `minimumSeeders`, `seedCriteria.seedRatio/seedTime/seasonPackSeedTime` are a **fixed alias table** in the facade, not core field names |
+| `GET /api/v3/indexer/schema` | `GET /api/core/v1/integrations/adapters?kind=indexer` → *arr `{implementation: "Newznab"\|"Torznab", configContract, fields[]}`; field names `baseUrl`, `apiPath`, `apiKey`, `categories`, `animeCategories` (→ `ExtraCategories["anime"]` for a TV app; omitted by Movies), `minimumSeeders`, `seedCriteria.seedRatio/seedTime/seasonPackSeedTime` are a **fixed mapping table** in the facade, not core field names |
 | `POST /api/v3/indexer` (`?forceSave=true` retry on 400) | `FacadeWriter.Put` (forces `Origin=arrfacade`, `Local=false`), tag `managed-by:prowlarr`; `forceSave` skips the connectivity test, never schema or URL validation |
 | `GET/PUT/DELETE /api/v3/indexer/{id}` | facade keeps a stable integer id ↔ `InstanceID` map in its own keyspace; PUT/DELETE map to `FacadeWriter.Put`/`Delete` (only `Origin=arrfacade` instances) |
 | `POST /api/v3/indexer/test` | `FacadeWriter.Test` (unsaved; class and status only, no body); response header `X-Application-Version` set by the facade |
@@ -304,14 +304,14 @@ talks to each pushed indexer as an ordinary `core.newznab`/`core.torznab` instan
 special code path.
 
 **Deferred-build members this section depends on** (SIMP2-6; deferral applies to features inside built
-packages as well as to packages, 03 §3.4). None of them is built in 09's S2, S4 or S7; all land with `arrfacade`
+packages as well as to packages, 03 §3.4). None of them is built in 09's R1 or R2; all land with `arrfacade`
 ([08](08-arr-facade.md)) together with this package:
 
-| Member | Package (built stage) | Owning spec |
+| Member | Package (built in) | Owning spec |
 |---|---|---|
-| `integrations.FacadeWriter`, `Registry.FacadeWriter`, `Origin "arrfacade"` | `integrations` (S7) | [05-metadata](05-metadata.md) M1.3 |
-| `KeySpec.Purpose`/`Module`, `PurposeFacade`, `X-Api-Key`/`apikey` query-key extraction | `auth` (S4) | [05-authn](05-authn.md) |
-| `Router.FacadeGroup`, `RouteKind Facade`, the stage-13 facade refusal | `httpapi` (S2) | [05-http-api](05-http-api.md) |
+| `integrations.FacadeWriter`, `Registry.FacadeWriter`, `Origin "arrfacade"` | `integrations` (R2) | [05-metadata](05-metadata.md) M1.3 |
+| `KeySpec.Purpose`/`Module`, `PurposeFacade`, `X-Api-Key`/`apikey` query-key extraction | `auth` (R2) | [05-authn](05-authn.md) |
+| `Router.FacadeGroup`, `RouteKind Facade`, the stage-13 facade refusal | `httpapi` (R1) | [05-http-api](05-http-api.md) |
 
 Until they land, no facade-confined key can be minted, so SEC-5's refusal holds trivially.
 
@@ -353,7 +353,7 @@ fixtures when built:
 | HTTP 429 / rate vocabulary | `ClassRateLimited` | hold ≥15m (Retry-After honoured, clamped) | M2 rule. |
 | Malformed XML / not RSS | `ClassBadOutput` | closed for that indexer; does not count against breaker | Likely a proxy/login page; surfaced in health. |
 | `Plan` finds no usable param | `ClassUnsupported` | skip that indexer, outcome recorded | Sonarr skips such searches (raw/16 §4.2). |
-| `core.integrations.disabled` true (a staging copy, R6-7; 05-metadata M1.4) | `ClassRefusedLocal` (`ErrDisabled` from `Lease`) | closed for every indexer: no search, RSS page or fetch is sent, no RSS cursor moves. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances (acquire's `core.acquire.rss-sync` run included). Indexer instances are native rows (§3), which `staging-scrub` does not clear (09 §9.3, R8-3): only S7+ binaries read them, and every such staging boot carries the switch and runs with `--network none` (R7-6, A-12) | A copy of a production store must never query or download from production indexers (OPS6-4, SEC7-6); schedules must still fire there (DATA5-8). |
+| `core.integrations.disabled` true (a restored copy, R6-7; 05-metadata M1.4) | `ClassRefusedLocal` (`ErrDisabled` from `Lease`) | closed for every indexer: no search, RSS page or fetch is sent, no RSS cursor moves. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances (acquire's `core.acquire.rss-sync` run included). The optional owner rehearsal on a restored archive sets the switch and runs with `--network none` (09; R7-6, A-12) | A copy of a production store must never query or download from production indexers (OPS6-4, SEC7-6); schedules must still fire there (DATA5-8). |
 | Every eligible indexer failed | closed: `ErrNoIndexerAnswered` (joined) | — | "No results" must be distinguishable from "nobody answered". |
 | Caps refresh fails with cached caps present | open (stale caps used) | — | A transient caps failure must not stop searching. |
 | Fetched file exceeds size cap / not a torrent or NZB | `ClassBadOutput` | closed | Never hand garbage to a download client. |
@@ -414,8 +414,8 @@ round-trip tests live with 08.
 
 ## 10. Migration from ABO
 
-Nothing to migrate: ABO has no indexer code (§2). The package is new. No legacy integration-bound key exists for
-it, so no operator value reaches an indexer instance and 05-metadata M1.4 step 2's operator-secret rule (SEC7-3)
+Nothing to migrate: ABO has no indexer code (§2). The package is new. No HEAD config key exists for it, so no operator
+value reaches an indexer instance and 05-metadata M1.4 step 2's operator-secret rule (SEC7-3)
 has no case here; it applies unchanged to any operator value added later. ABO may later register an audiobook
 search criteria → `Query` mapping (`TypeBook` with `author`/`title`, categories `CatAudiobook`) when an
 acquisition feature is planned for it; that is a books-module decision, not part of the extraction.
@@ -489,3 +489,8 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
 - A-15 / ADV-S9 — header: the whole file is a design sketch (non-normative) the SDK does not freeze, kept to show the frozen M1/M2 contracts fit.
 - A-12 / ADV-S6 — §5 `core.integrations.disabled` row: `staging-scrub` and `--network none` replace the scrub/firewall wording.
 - A-5 / ADV-S4 — §8: names under `app.Options.MetricNamespace`.
+
+- D10–D12 revision (2026-11-04): stage references (S2, S4, S7) re-keyed to R1/R2; the "no legacy store covers
+  them" and `staging-scrub` wording removed (one native instance store; the optional rehearsal sets
+  `core.integrations.disabled`). The design sketch is otherwise unchanged. Consistency pass: the *arr field-name table is called a mapping table.
+

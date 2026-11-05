@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-library.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.11.3 -->
 <!-- guid: dafe380b-f703-41cb-99d0-2b2ba32f70e5 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -13,16 +13,13 @@ mapping, safe moves/copies, hashing, quarantine, disk checks, import observation
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md). Names and rules are
 from [03-architecture](03-architecture.md) (`library` is **L4**, R4). Records this package owns (the
 transfer journal, quarantine records) use [05-storage](05-storage.md) keyspace `c/library/`. Library's
-native roots are the `core.library.roots`/`mappings` config entries, never records under `c/library/`, and
-they always serve. An app with pre-core roots adds them through **`legacy.LibraryRootSource`**, implemented over its
-own rows, so ABO's root data stays where and how HEAD stores it and core holds none of its key names or row
-formats (§5L.10, R4-1). The root source has no native implementation, so it is **legacy-only as a whole**:
-it lives in package `legacy`, outside the API promise (03 §3.3, 05-storage §5S.3.11; R6-3, SIMP6-3 option
-(b)), and the public `library` package names no legacy identifier. A native implementation of the interface
-over the config entries was rejected: it would be a second write path for the `core.library.roots` setting beside
-`config.Store`, bypassing the setting's protection, audit and change notification. A later native root store
-would add a `library` interface additively. Modules reach roots only through the module-scoped handle `library.Scope`
-(`module.Deps.Library`, [06](06-app-sdk.md)), which carries the module's owner.
+roots are the `core.library.roots`/`mappings` config entries, never records under `c/library/`, and every root
+is one of them: there is no second root source and no app-supplied root store. ABO's HEAD roots (the books root in
+the settings blob and the `import_path:` rows) are migrated into those entries once, by the R2 cutover step M6
+(§5L.10). A separate native root store was rejected: it would be a second write path for the `core.library.roots`
+setting beside `config.Store`, bypassing the setting's protection, audit and change notification. Modules reach
+roots only through the module-scoped handle `library.Scope` (`module.Deps.Library`, [06](06-app-sdk.md)), which
+carries the module's owner.
 
 ## 5L.0 Decisions in one table
 
@@ -35,7 +32,7 @@ Decision IDs carry a `D-L` prefix so they never read as 03's layers L0–L9 (the
 | D-L2 | All file access under a root goes through a `RootFS` backed by **`os.Root`** (Go 1.24+; Go 1.25 added `Rename`, `Link`, `Symlink`, `MkdirAll`, `RemoveAll`), so `..` and symlinks cannot escape. Operations `os.Root` cannot express (no-clobber rename, cross-root link/rename, reflink) use `*at` syscalls on directory descriptors opened *through* the root. |
 | D-L3 | **One** transfer engine (move / copy / hardlink / reflink / symlink / auto-fallback) that never clobbers, fsyncs file and directory, verifies, journals for crash recovery, checks free space first, and refuses to move or delete a file a download client is still seeding (fail-closed when that is unknown). It replaces three no-clobber renames, six byte copies and four reflinks ABO has had. |
 | D-L4 | **Path mapping** (download-client / remote-worker path ↔ `library.Path`) is a core service keyed by source, separator-boundary longest-prefix, byte-exact (no Unicode folding). |
-| D-L5 | A **sentinel file** proves a root is the right, mounted volume before any destructive action; the existing "has non-dot content" heuristic becomes the bootstrap for legacy roots only. |
+| D-L5 | A **sentinel file** proves a root is the right, mounted volume before any destructive action; the existing "has non-dot content" heuristic becomes the bootstrap for roots migrated from ABO only (§5L.10). |
 | D-L6 | Watchers (fsnotify) are core, per root, debounced, with **overflow → rescan** and **watch-limit exhaustion → polling** instead of silent loss. |
 | D-L7 | Quarantine is a core *primitive* (move into the root's quarantine area + record + release); the decision of what to quarantine stays in modules. |
 | D-L8 | Root paths of different owners never overlap; download roots are core-owned and shared read/move-out with every module that has the download capability; this is the multi-app rule. |
@@ -135,8 +132,8 @@ type SentinelMode uint8
 const (
 	SentinelInvalid  SentinelMode = iota
 	SentinelRequired  // new roots: .mediacore/root.json must exist and name this install and root ID
-	SentinelBootstrap // legacy-served roots: created when the heuristic passes; a present sentinel must
-	                  // match, an absent one leaves the decision to the heuristic (§5L.10)
+	SentinelBootstrap // roots migrated from ABO (§5L.10): created when the heuristic passes; a present
+	                  // sentinel must match, an absent one leaves the decision to the heuristic
 )
 
 // Path is the only way modules name a file. JSON: {"root":"books-library","rel":"Author/Title/01.m4b"}.
@@ -236,17 +233,9 @@ type Usage struct{ Total, Avail uint64 } // Avail = Bavail (diskstats_unix.go:13
 type Options struct {
 	Keyspace storage.Keyspace   // c/library/: the transfer journal and quarantine records
 	Config   *config.Store      // core.library.roots / mappings: read, and written through Apply like any setting (§5L.4)
-	Oracles  []ProtectionOracle // the download adapters' seeding oracles and the static protected-path list (05-download)
-	// LegacySource is the app's legacy root source: the value the kernel built
-	// from the legacy.Stores.Roots constructor (a legacy.LibraryRootSource),
-	// nil when no module supplies one. It is typed any because library may not
-	// name a legacy type and no SDK interface exists for it (03 §3.3, R7-7): New
-	// asserts it against library's unexported mirror and returns
-	// storage.ErrLegacyStoreType on a mismatch, which fails the boot, never a
-	// silent skip. Inert (nil) after the roots' cutover; it stays in v1.
-	LegacySource any
-	Logger       *slog.Logger
-	Metrics      *metrics.Scope // core scope "mediacore.library"
+	Oracles  []ProtectionOracle // the download adapters' seeding oracles and the static list core.library.protected_paths (§5L.7)
+	Logger   *slog.Logger
+	Metrics  *metrics.Scope // core scope "mediacore.library"
 }
 
 // New builds the Manager. It reads nothing from the store and starts no
@@ -261,89 +250,20 @@ var (
 	ErrNotMounted      = errors.New("library: root sentinel missing or mismatched (not mounted, or the wrong volume)")
 	ErrRootOverlap     = errors.New("library: root overlaps a root of another owner")
 	ErrUnknownRoot     = errors.New("library: unknown root")
-	// ErrRootFieldFixed: a change to a field the root's stored form has no
-	// place for (a legacy-served root's Watch, Sentinel, Quarantine, AppDir or
-	// MinFree, §5L.10); nothing is staged.
-	ErrRootFieldFixed  = errors.New("library: the root's stored form fixes this field")
 )
 ```
 
-**The legacy root source (R6-3, SIMP6-3, SIMP6-5, R7-7).** An app's pre-core roots come in through
-`legacy.LibraryRootSource`, supplied as the `legacy.Stores.Roots` constructor on `module.Manifest.LegacyStores`
-and built at 06 P4c over that module's own handles (`legacy.Handles`). The kernel passes the built source
-to `library.New` as `Options.LegacySource any`; `library` names it only through an **unexported** interface
-of its own with the same method set, asserts it at construction and fails the boot with
-`storage.ErrLegacyStoreType` on a mismatch. The mirror test is 03 §3.3's (COR7-2, SIMP7-1): library's
-`export_test.go` (`package library`) only exports a test alias of the mirror and of its route-key helper,
-and `legacy_mirror_test.go` in `package library_test`, which may import `legacy`, asserts in both directions
-that the mirror and `legacy.LibraryRootSource` are mutually assignable and compares `legacy.LibraryCoverID`
-with library's own route key for every role on a table. Every write takes the caller's batch. Fields the
-app owns in the same row (books: scan statistics) are never written by these methods.
-
-**No root takes read shares during the extraction (SIMP7-2, SIMP8-5).** A share names a second module that
-may read a root, and no S0–S10 app has two modules: ABO ships one (03 R3), the TV and Movies proofs are
-single-module apps, and `examples/hello` reads no one else's roots. `RootSpec` therefore has no
-`ReadShares` field; it, its read clause and its refusal on a legacy-served root (whose row has no place for
-shares) land together with the first app that shares a root (§5L.13). A legacy-served root keeps nothing
-beside its legacy row (A-2).
-
-```go
-package legacy
-
-// LibraryRootSource adds an app's pre-core roots beside library's config-entry
-// roots (routed per root by Covers; 05-storage §5S.3.11). It has no native
-// implementation, so the whole interface is legacy-only (SIMP6-3); the name
-// carries its former package's name (03 §3.3 naming rule, SIMP7-8).
-type LibraryRootSource interface {
-	// List returns the source's roots; each field the legacy row has no place
-	// for carries the source's fixed value (§5L.10).
-	List(ctx context.Context) ([]library.RootSpec, error)
-	// Covers is the routing predicate (Covering's shape, a member here because
-	// the interface is legacy-only). id is LibraryCoverID(role, rootID): the
-	// source holds that root, or would hold a NEW root of that role (rootID
-	// "") — books covers every "import/…" ID and its books root — so the
-	// previous build keeps seeing every root it can store. Every other root is
-	// a config entry.
-	Covers(id string) bool
-	// Create allocates the legacy ID, writes the legacy row and its index rows
-	// in b, and returns the root's ID; a spec whose fixed fields differ from the
-	// source's values is refused with library.ErrRootFieldFixed. Books
-	// allocates the ID as HEAD does, through nextID under counterMu with its
-	// own Sync commit, on the one books store instance its CreateImportPath
-	// callers also use (05-storage §5S.3.11 "One instance per family"), so two
-	// roots never receive one ID (R9-1, DATA9-2).
-	Create(ctx context.Context, b *storage.Batch, spec library.RootSpec) (library.RootID, error)
-	// Update rewrites only library's fields of the row, with an Expect on the
-	// bytes it read (a voluntary compare-and-set in the row's Serialized claim;
-	// storage enforces none, A-3). The source offers no legacy.WriteLock: HEAD
-	// guards these rows with no mutex, and from S7 every writer of the row
-	// compare-and-sets (§5L.10), which is what makes the Expect sound
-	// (05-storage §5S.3.2, R9-1). A change to a fixed field is refused with
-	// library.ErrRootFieldFixed, nothing staged.
-	Update(ctx context.Context, b *storage.Batch, spec library.RootSpec) error
-	// Delete deletes the row and its index rows.
-	Delete(ctx context.Context, b *storage.Batch, id library.RootID) error
-}
-
-// LibraryCoverID is the record ID a LibraryRootSource's Covers receives:
-// "<role>/<root id>", the root ID empty for a root not yet created
-// ("import/"). Role names are the lower-case Role constant names; neither
-// part contains "/" (RootID grammar). One name per package for this helper:
-// IntegrationsCoverID, ProviderHTTPCoverID, LibraryCoverID (SIMP6-5).
-func LibraryCoverID(r library.Role, id library.RootID) string
-```
-
-Conformance:
-`legacytest.LibraryRootSourceSuite` (05-storage §5S.3.11; the suite name follows the
-`legacytest.<Pkg><Interface>Suite` rule, SIMP7-8), which runs the `Covers` cases;
-core runs it against a fixture source, ABO against books' source with HEAD fixtures.
+**No root takes read shares (SIMP7-2, SIMP8-5).** A share names a second module that may read a root, and no app
+of R0–R3 has two modules: ABO ships one (03 §3.4), the TV and Movies proofs are single-module apps, and
+`examples/hello` reads no one else's roots. `RootSpec` therefore has no `ReadShares` field; it and its read clause
+land together with the first app that shares a root (§5L.13).
 
 **Error strings and the key-name gate (MOD5-3).** Every sentinel of this package follows Go's
 `pkg: message` form, and `library:` is also an ABO key family (`internal/database/keyfamilies.go:126`,
-"legacy library paths"). The ABO-side `TestCoreHoldsNoAppKeyNames` (03 R1(c), 04 §2.1 (h), 05-storage
+"legacy library paths"). The ABO-side `TestCoreHoldsNoAppKeyNames` (03 rule R1(c), 04 §2.1 (h), 05-storage
 §5S.9.1) matches a family prefix only when the character after it is not a space, so these strings pass,
 while a key literal such as `"library:" + id` would fail; its cases include one of these sentinels. Core
-never builds a `library:` key: ABO's root rows are reached only through books' `legacy.LibraryRootSource`.
+never builds a `library:` key: the only code that reads ABO's root rows is books' R2 cutover step (§5L.10).
 
 ### 5L.3.2 `RootFS` — the confined filesystem (and the Q4 extension point)
 
@@ -619,23 +539,20 @@ reconciles watched roots whenever the registry changes, without a restart (kept 
 
 Permissions declared by core (names per 03 §3.6): `core:library.manage` (roots, mappings,
 quarantine purge), `core:library.browse` (directory picker; replaces `BrowseDirectory`'s allow-list,
-`fileops/service.go:46-118`, with "inside a registered root or a path an admin is registering").
+`fileops/service.go:46-118`, with "inside a registered root or a path an admin is registering"). Both are in the full
+`core:*` scope catalog that F2, the foundation PRs, declares with their class and flags (05-rbac §5), so M3's atom
+table can write them and `httpapi.Build` can validate them from F4, although `library` is wired only at F7 (IMPL-4).
 
 ## 5L.4 Lifecycle
 
-1. After storage migrations the kernel loads the roots and mappings from their stored forms (R4-1,
-   §5L.10): the roots of the app's `legacy.LibraryRootSource`, if one is supplied (for ABO, books' import roots and
-   its library root, each with the source's fixed values for the fields its row has no place for), and every
-   other root and mapping from `core.library.roots` / `core.library.mappings` (stored through config's
-   store). A new root goes to the source when its `Covers`
-   accepts `LibraryCoverID(role, "")`, else to `core.library.roots` (written through `config.Store`); an
-   existing root is updated or deleted where it lives (`Covers(LibraryCoverID(role, id))`), and the root
-   list merges both. The `backends` ledger records `legacy+native` while a source is supplied, else `native`
-   (05-storage §5S.3.11).
+1. After storage migrations (on the first R2 boot, after the roots cutover step M6, §5L.10) the kernel loads
+   the roots, the mappings and the static protected paths from `core.library.roots`, `core.library.mappings` and
+   `core.library.protected_paths`, stored through config's store like every setting. A new or changed root is
+   written through `config.Store.Apply`, so it takes the setting's protection, audit and change notification.
 2. Modules declare required roles in their manifest (`module.Manifest.Library: []RoleRequirement`);
    the kernel reports unmet requirements as a setup task in the UI, not a boot failure (a fresh
    install has no roots yet).
-3. Each root: resolve path, overlap check, sentinel check (`SentinelBootstrap` may create it),
+3. Each root: resolve path, overlap check, sentinel check (a migrated root's `SentinelBootstrap` may create it),
    `os.OpenRoot`. A root that fails is **disabled** (health `critical`, transfers refused), the
    app still boots.
 4. The kernel builds one `library.Scope` per enabled module (owner bound in) for `module.Deps.Library`.
@@ -668,8 +585,8 @@ quarantine purge), `core:library.browse` (directory picker; replaces `BrowseDire
 
 - `Manager`, `Root`, `RootFS` (local), `PathMapper` are goroutine-safe; `File` is not.
 - Transfers take a striped per-path lock on **both** `src` and `dst` (`core/internal/keyedmutex`, a
-  core-internal copy of ABO's package that 04 §8.1 adds at S3; ABO keeps its own `internal/keyedmutex`,
-  and core never imports it, R1, COR2-16), acquired in sorted order to avoid deadlock; two workers can
+  core-internal copy of ABO's package that 04 §8.1 adds; ABO keeps its own `internal/keyedmutex`,
+  and core never imports it, 03 rule R1, COR2-16), acquired in sorted order to avoid deadlock; two workers can
   never race on one destination name (the stat-then-create race documented at `reflink.go:29-35`
   cannot occur because creation is `O_EXCL`/`link` anyway, the lock removes wasted work).
 - Library-scale work (hash backfills, rescans) runs only as `tasks` with declared
@@ -691,6 +608,7 @@ they need an interactive session.
 |---|---|---|---|---|
 | `core.library.roots` | list of `RootSpec` (DB-backed) | empty | yes (supervisor reconcile) | admin |
 | `core.library.mappings` | list of `Mapping` (DB-backed) | empty | yes | interactive |
+| `core.library.protected_paths` | list of absolute paths (DB-backed): files under them are never moved or deleted, a static `ProtectionOracle` beside the download adapters' (§5L.3.3) | empty | yes | admin |
 | `core.library.transfer.workers` | int | 4 | yes | none |
 | `core.library.hash.max_bytes_per_sec` | int64 | 0 (unlimited) | yes | none |
 | `core.library.hash.workers_per_device` | int | `min(4, NumCPU)` | yes | none |
@@ -701,15 +619,9 @@ they need an interactive session.
 | `core.library.quarantine.retention` | duration | 0 (keep until purged) | yes | interactive |
 | `core.library.schedules.quarantine_prune` | `tasks.ScheduleConfig` | `{enabled: true, every: 24h}` | yes | none |
 
-ABO compatibility (09 owns aliases): `root_dir` → root `books-library`; `import_path:` rows →
-`import-<id>` roots; `protected_paths` → `RoleExternal` roots or oracle entries;
-`enable_disk_quota`/`disk_quota_percent` → `MinFree` of the books root;
-`itunes.path_mappings` → mappings with `Source: "itunes"`; `path_aliases` → `RootSpec.Aliases`. These
-keys and rows are **read and written in place**, in their legacy format, never copied, by books' own
-code — the config keys through books' legacy config store (05-config), the import-root rows through
-books' `legacy.LibraryRootSource` (R4-1, §5L.10): `core.library.roots` and `core.library.mappings` hold only entries
-with no legacy home, so the previous release still sees every library root, import root and mapping
-this build changed.
+ABO's HEAD settings and rows that become these entries (`root_dir`, `path_aliases`, `protected_paths`,
+`itunes.path_mappings` and the `import_path:` rows) are converted once by the roots cutover (§5L.10); 05-config
+§1.12.3's rename table lists each HEAD name. There is no alias: from R2 the only names are the ones above.
 
 ## 5L.8 Metrics
 
@@ -729,7 +641,7 @@ this build changed.
 `root` cardinality = number of configured roots (operator-bounded, tens).
 
 Names are shown with the default namespace `mediacore`; core takes the namespace as an `app.Options` value
-and ABO passes its own (A-5, 05-metrics), so no ABO series is renamed.
+and ABO passes its own (05-metrics).
 
 ## 5L.9 Tests
 
@@ -745,7 +657,7 @@ and ABO passes its own (A-5, 05-metrics), so no ABO series is renamed.
 | `TestMoveRefusedWhenSeedingUnknown` | oracle `loaded=false` blocks Move, allows copy |
 | `TestTransferChecksFreeSpaceFirst` | nothing written when below the floor |
 | `TestSentinelBlocksDestructiveOps` | unmounted (empty) root: reads ok, remove/move-out refused |
-| `TestSentinelBootstrapLegacyRoot` | heuristic pass creates sentinel; later empty mount refused |
+| `TestSentinelBootstrapMigratedRoot` | a migrated root: the heuristic passes and the sentinel is created; a later empty mount, or one whose sentinel names another root or install, refuses destructive ops |
 | `TestRootOverlapAcrossOwnersRefused` | path nesting, symlinked alias, bind mount (device+inode) |
 | `TestDownloadRootSharedMoveOutOnly` | two modules move out; neither writes in |
 | `TestPathMapperLongestPrefixBoundary` | `/dl` vs `/dl-old`, Windows remote, file URL, Fold |
@@ -758,11 +670,8 @@ and ABO passes its own (A-5, 05-metrics), so no ABO series is renamed.
 | `TestDisabledModuleRootsInert` | G1 |
 | `TestTransferInCommitsWithCallerBatch` | `TransferIn` + caller rows land in one commit; `CrashClone` before the commit leaves a `done` row reported by `PendingTransfers`, never undone |
 | `TestScopeCannotActAsAnotherOwner` | a module's `Scope` cannot write another owner's root or quarantine its files |
-| `TestImportRootsStayLegacyFormat` (ABO, books' `legacy.LibraryRootSource` under `legacytest.LibraryRootSourceSuite`) | an import root added, renamed or disabled on this build is an `import_path:` row (with its path index row and an ID from `counter:import_path`) that the previous release's store code lists unchanged; a root created through the source and one created concurrently through books' `CreateImportPath` get distinct IDs (one shared store instance, R9-1, DATA9-2); `LastScan`/`BookCount` written by a concurrent scan survive a library edit **and** a library edit survives a concurrent scan's statistics write (both stage `Expect` voluntarily, DATA4-4, A-3); books' in-memory root table shows the edit without a restart; a change to a fixed field is refused with `ErrRootFieldFixed`, and nothing is written outside books' claims (A-2) |
-| `TestLegacyRootSentinelBootstrap` | a legacy-served root: the heuristic passes and the sentinel is created; a later mount whose sentinel names another root or install refuses destructive ops; a root whose path the previous release changed is decided by the heuristic until its new volume gets a sentinel; nothing is stored beside the `import_path:` row (A-2) |
-| `TestLibraryNewRejectsWrongLegacySource` | `library.New` with an `Options.LegacySource` that does not satisfy library's mirror returns `storage.ErrLegacyStoreType`; nil means no source (R7-7, SIMP7-4) |
-| `TestConfigEntryRoots_RoundTrip` | without a root source, every root and mapping round-trips through `core.library.roots`/`mappings` (SIMP4-3, SIMP7-8: the native roots are config entries, not a store) |
-| `TestRootRouting_CoversDecides` | with books' source: a new import root lands in the source (`Covers("import/")`), a new download root in `core.library.roots`; updates and deletes reach the half that holds the root; the root list merges both; books' source passes `legacytest.LibraryRootSourceSuite`; library's mirror test (`legacy_mirror_test.go` in `package library_test`: both-way assignability and the `LibraryCoverID` table) passes (SIMP5-1, SIMP5-4, SIMP6-3, SIMP6-5, SIMP7-1) |
+| `TestConfigEntryRoots_RoundTrip` | every root, mapping and protected path round-trips through `core.library.roots`/`mappings`/`protected_paths`, and a change made through `config.Store.Apply` reaches the registry without a restart (SIMP4-3, SIMP7-8: the roots are config entries, not a store) |
+| `TestRootsCutover_FromHEADFixture` (ABO, on the R0-written fixture corpus of 05-config §1.12.2) | after M6: the books root and every import root are `core.library.roots` entries with the IDs of §5L.10 (`books-library`, `import-<n>` for HEAD ID `n`), paths, names, roles and `Watch` as the table says; `path_aliases`, `itunes.path_mappings` and `protected_paths` are the matching entries; books' per-root record `rootscan:<root ID>` holds `Enabled`, `CreatedAt`, `LastScan` and `BookCount` byte-for-byte; no `import_path:` row, path index row or `counter:import_path` remains; an iTunes mapping whose local prefix is under no root and a nested import root are reported, the first quarantined; re-running the step changes nothing; a crash at each point of the crash matrix leaves either the HEAD rows or the finished entries (14 E1, E2) |
 | `TestLibraryErrorsPassKeyNameGate` (ABO, a case of `TestCoreHoldsNoAppKeyNames`) | the `"library: …"` sentinels pass the key-name gate; a `"library:" + id` literal fails it (MOD5-3) |
 
 ## 5L.10 Migration from ABO
@@ -781,31 +690,49 @@ and ABO passes its own (A-5, 05-metrics), so no ABO series is renamed.
 | `internal/diskstats` | `Root.Usage` (moved into core as an internal package) |
 | `deluge.ProtectedPathCache` | a `ProtectionOracle` implemented by the Deluge adapter (05-download); static `protected_paths` → `RoleExternal` roots |
 | `itunes.path_mappings`, `WHISPER_PATH_MAP`, fingerprint worker wire format | `PathMapper` sources `itunes`, `worker:whisper`, `worker:fingerprint` |
-| `ImportPathStore` methods minus `CountBooksByPathPrefix` (`internal/database/pebble_store_importpaths.go`; 04's `database.Store` split table: `ImportPathStore` → `library`) | **stay in ABO** as books' legacy implementation of `legacy.LibraryRootSource` (R4-1, SIMP4-2, SIMP6-3), over books' own `import_path:<id>` + `import_path:path:<path>` rows and the ID counter `counter:import_path` (`pebble_store_importpaths.go:138-185` allocates through `nextID("import_path")`, under HEAD's `counterMu` around its own commit, on the one books store instance that every allocator shares, 05-storage §5S.3.11 and §5S.9.3; 05-storage §5S.9.1 row 19: the rows and the counter `Serialized`, no blind-write check, A-3, R9-1). It writes HEAD's `ImportPath` JSON (`internal/database/store.go:596-604`) with `codec.LegacyJSON` through books' repository layer, so books' in-memory `import_paths` table (`pebble_store_importpaths.go:21-26`, `memdb_schema.go:19`) stays current; it writes only library's fields, with an `Expect` on the bytes it read, and the path index row in the same batch. Books' own writers of the same row — the scanner (`internal/scanner/service.go:677`), autoscan (`internal/server/folder_autoscan_op.go:147`) and the filesystem handlers (`internal/server/handlers/filesystem.go:247,319`), which today write back the whole struct read earlier (`pebble_store_importpaths.go:187-231`) — become a field-merge `GetForUpdate` + `RetryOnConflict` that updates only `LastScan`/`BookCount` (DATA4-4). `Enabled` stays books' scan switch, which library shows as a registered root with watching off |
-| `pending_file_op:` (`file_io_pool.go:31`) | stays a books family with its books writer: it is books' per-book file I/O job pool (tag and metadata writes), not a transfer journal, so nothing is drained or moved. Core transfers journal only in the core-only `c/library/transfer/`, which no older build reads: a rollback right after a crash mid-transfer leaves that one transfer's recovery to the next boot of this build (R3-1) |
+| `ImportPathStore` methods minus `CountBooksByPathPrefix` (`internal/database/pebble_store_importpaths.go`; 04's `database.Store` split table: `ImportPathStore` → `library`) | deleted at F7, the integrations flip: the roots cutover (below) turns every `import_path:` row into a `core.library.roots` entry, and books' scanner, autoscan and filesystem handlers (`internal/scanner/service.go:677`, `internal/server/folder_autoscan_op.go:147`, `internal/server/handlers/filesystem.go:247,319`) read roots through `library.Scope` and write `LastScan`/`BookCount` into books' own per-root record `rootscan:<root ID>` |
+| `pending_file_op:` (`file_io_pool.go:31`) | stays a books family with its books writer: it is books' per-book file I/O job pool (tag and metadata writes), not a transfer journal, so nothing is drained or moved. Core transfers journal only in `c/library/transfer/` |
 | `filehash.BookFileHash` | stays books (identity algorithm), reads through `RootFS` |
 
-**Stored data (R3-1, R4-1).** During the extraction a root keeps one stored format, written by books'
-code. ABO's books root (`root_dir`, its quota keys and `path_aliases`) is a config value read and
-written in place by books' legacy config store (05-config C4); books' `legacy.LibraryRootSource` lists it beside the
-import roots (read-only there: its path changes only through config). A legacy-served root keeps exactly
-HEAD's fields and **nothing beside them** (A-2): there is no record that an older build could leave stale. A
-field `RootSpec` has that the legacy form has no place for is **fixed** by the source — books: `Watch`
-= `WatchAuto` while HEAD's `Enabled` is set and `WatchOff` otherwise, `Sentinel` = `SentinelBootstrap`,
-`Quarantine` = `.failed`, `AppDir` = `.mediacore`, `MinFree` = 0 (HEAD has no floor) — and a change to one is
-refused with `ErrRootFieldFixed`. The sentinel of a legacy-served root therefore stays in bootstrap mode: it
-is created when HEAD's heuristic passes, a present sentinel must name this install and root, and an absent
-one leaves the decision to the heuristic, which is HEAD's behaviour (`libroot.go:25-59`) and no regression;
-`SentinelRequired` for these roots, and editable values for the fixed fields, come with the roots' cutover.
-A root with no legacy home at all
-(download and external roots, another module's roots) is a `core.library.roots` entry. Moving ABO's
-roots to a native keyspace is a later cutover (05-storage §5S.3.13), not part of the extraction.
+**The roots cutover (R2, migration step M6).** ABO's roots move once, one-way, into the config entries. The
+step is books code (03 rule R1: core holds no ABO key name), one of the BootBlocking steps of the R2 migration list
+(05-storage §5S.3.13 owns the step contract: behind the pre-migration checkpoint, resumable, one batch, rollback by
+restoring the checkpoint). It runs in the integrations step M6, after the config and secrets step M2 (05-config
+§1.12.2), which hands it the blob fields its rename table marks for M6 and leaves them in the blob, an active books
+claim until M6 retires it; M6 deletes the blob row once its parts have read it (05-config §1.12.2). In one batch it
+reads HEAD's rows, writes the entries through `config.Importer` (05-config §1.3.3) and deletes the rows:
 
-Order: introduce `library` with books' `legacy.LibraryRootSource` supplied on books' manifest from the same release
-(no behaviour change; there is no grant, so a rollback between releases that both supply it never
-trips `ErrLegacyStoreMissing`, DATA4-2), move writers one subsystem at a time behind the same tests
-(organizer, versions, quarantine, deluge import, iTunes transfer), then delete `fileops` copy/reflink
-and the three renames.
+| HEAD source | Becomes |
+|---|---|
+| blob `root_dir` (non-empty), with `path_aliases` | entry `books-library`: `Path` = `root_dir`, `Role` library, `Owner` books, `Aliases` = `path_aliases`, `Watch` off (HEAD watches import paths only, `internal/watcher/supervisor.go:73`), `Sentinel` bootstrap, `Quarantine` `.failed`, `AppDir` `.mediacore`, `MinFree` 0 (HEAD has no floor) |
+| row `import_path:<n>` (`ID, Path, Name, Enabled, CreatedAt, LastScan, BookCount`, `internal/database/store.go:596-604`), its index row `import_path:path:<path>` and the counter `counter:import_path` | entry `import-<n>`: `Path`, `Name`, `Role` import, `Owner` books, `Watch` auto when `Enabled` else off (whether books acts on the events stays books' `modules.books.scan.auto_scan_enabled`), `Sentinel` bootstrap, library's defaults for the rest; `Enabled`, `CreatedAt`, `LastScan` and `BookCount` go to books' own per-root record `rootscan:<root ID>` (a new books family, name coined here), because they are books' scan state, not library's. Rows, index rows and counter are deleted |
+| blob `itunes.path_mappings` (`From`, `To`) | `core.library.mappings` entries `{Source: "itunes", Remote: From, Local: Resolve(To)}`, `Fold` for a Windows-form `From` (HEAD's `normalizeWindowsPrefix`, `internal/config/config.go:62-90`) |
+| blob `protected_paths` | `core.library.protected_paths` |
+
+**IDs are kept (14 E2).** HEAD's import-path ID `n` and the root ID `import-<n>` map to each other by one pure function
+in books, so no books row and no client that names `n` is rewritten; a root created after R2 gets an `import-<n>` ID
+with `n` above every migrated one. **Nothing is dropped silently:** an iTunes mapping whose `To` is under no root
+is quarantined with its raw value (05-storage's quarantine record, reported in health) and the step goes on; a
+root nested inside another root of the same owner (an import path inside `root_dir`) is registered as §5L.3.8's
+same-owner rule requires (excluded from the outer root's walks) and
+reported, the decision to keep it staying with the owner (§5L.12 item 1); a row that does not decode is quarantined. Rollback is
+the offline restore of the pre-migration checkpoint with the pre-freeze release's binary (05-storage; 09 §9.2.1);
+after the level step M7 no older build opens the store.
+
+**M6's write outside its retired claims (DATA-5).** The `rootscan:` rows are the one family this part of M6 writes
+that is not a retired claim it drains. 05-storage §5S.9.1 lists it in its "rewritten in place by" column with M6,
+`TestCutoverLeavesOtherFamiliesByteIdentical` excludes exactly that family, and `TestRootsCutover_FromHEADFixture`
+is its before/after oracle (each `rootscan:` row equals the HEAD row's four fields).
+
+A migrated root has no sentinel yet, so it keeps `SentinelBootstrap`: the sentinel is created when HEAD's heuristic
+passes, a present sentinel must name this install and root, and an absent one leaves the decision to the heuristic,
+which is HEAD's behaviour (`libroot.go:25-59`). An admin can switch the entry to `SentinelRequired` once the
+sentinel exists. A root created after R2 starts as `SentinelRequired`.
+
+Order: `library` lands dark on `main` beside HEAD's code; the R2 integrations flip F7 (09) wires it, ships M6 and
+deletes `ImportPathStore`; the writers then move onto `Transfer` one subsystem at a time behind the same tests
+(organizer, versions, quarantine, deluge import, iTunes transfer), and `fileops` copy/reflink and the three renames
+are deleted.
 
 ## 5L.11 Q4 — one storage-root abstraction or per-module drivers?
 
@@ -820,8 +747,9 @@ driver exists, `library` ships only the local one and modules cannot register dr
 
 ## 5L.12 Open items
 
-1. Whether any production import path lies inside `root_dir` (same owner nesting must then be
-   declared at migration). The migration reports overlaps instead of failing; owner decides.
+1. Whether any production import path lies inside `root_dir` (same-owner nesting must then be
+   declared). The R2 roots cutover (§5L.10) registers such a root and reports the overlap instead of failing;
+   the owner decides.
 2. Symlink organize strategy: `os.Root.Symlink` does not validate targets; this spec restricts
    targets to `library.Path`s. Confirm no production install relies on links pointing outside roots.
 3. Network-filesystem detection for `WatchAuto` uses statfs magic numbers on Linux; darwin and
@@ -830,15 +758,14 @@ driver exists, `library` ships only the local one and modules cannot register dr
 
 ## 5L.13 Deferred-build members
 
-Read shares have no S0–S10 consumer: a share names a second module and no S0–S10 app has two (SIMP7-2,
-SIMP8-5; 03 §3.4). They land with **the first app with two modules that shares a root**, additively,
-together with the refusal of shares on a legacy-served root (whose row has no place for them). The first
-column holds package-qualified Go identifiers and the second everything else; the table is planning
+Read shares have no consumer in R0–R3: a share names a second module and no app of those releases has two
+(SIMP7-2, SIMP8-5; 03 §3.4). They land with **the first app with two modules that shares a root**, additively. The
+first column holds package-qualified Go identifiers and the second everything else; the table is planning
 information, which nothing checks in CI (A-4), and the PR that builds a member deletes its entry.
 
 | Member | Also deferred (not checked) |
 |---|---|
-| `library.RootSpec.ReadShares` | the read clause "owner + `ReadShares`" (§5L.3.8); the field in the `core.library.roots` entries; the sentinel and both refusals of shares on a legacy-served root (in library and in the source) with their test and `legacytest.LibraryRootSourceSuite` case |
+| `library.RootSpec.ReadShares` | the read clause "owner + `ReadShares`" (§5L.3.8); the field in the `core.library.roots` entries |
 
 ## 5L.14 Objections to 03
 
@@ -924,3 +851,22 @@ Round 9 (`docs/plans/platform-core/reviews/spec-round-9-*.md`, dispositions bind
 
 - DATA9-2 (R9-1) — `LibraryRootSource.Create` and §5L.10: the `counter:import_path` ID comes from HEAD's `nextID` under `counterMu` on the one shared books store instance, so the source and books' `CreateImportPath` callers never issue one ID twice; `TestImportRootsStayLegacyFormat` gains the concurrent-create case.
 - R9-1 — `Update`'s comment: the source offers no `legacy.WriteLock`; its voluntary `Expect` is sound because HEAD guards the row with no mutex and every writer compare-and-sets from S7.
+- D10–D12 revision (2026-11-04): no legacy root source. Deleted `legacy.LibraryRootSource`, `legacy.LibraryCoverID`,
+  `library.Options.LegacySource`, `ErrRootFieldFixed`, the `Covers` routing, the `backends` ledger line, the
+  legacy-served-root rules and their tests (`TestImportRootsStayLegacyFormat`, `TestLegacyRootSentinelBootstrap`,
+  `TestLibraryNewRejectsWrongLegacySource`, `TestRootRouting_CoversDecides`) and the legacy refusals in §5L.13.
+  Rewritten: header (every root is a config entry), D-L5, §5L.4 step 1, §5L.7 (new key
+  `core.library.protected_paths`; ABO's names converted once, no aliases), §5L.10 (new "The roots cutover (R2,
+  migration step M6)": books root, import roots with IDs `import-<n>` kept by a pure function, books' per-root
+  record for scan state, iTunes mappings, protected paths, quarantine instead of silent loss, sentinel bootstrap
+  for migrated roots), §5L.12 item 1; `enable_disk_quota`/`disk_quota_percent` no longer map to `MinFree` (they stay
+  display-only books keys, 05-config §1.12.3). Added `TestRootsCutover_FromHEADFixture`; renamed
+  `TestSentinelBootstrapLegacyRoot` to `TestSentinelBootstrapMigratedRoot`.
+  Consistency pass: 03's rules cited as "03 rule R1", the one-module claim re-pointed to 03 §3.4, the risk ID as 14 E2,
+  and the roots cutover and `ImportPathStore` deletion keyed to the integrations flip F7. Final consistency sweep: the cutover test's hazard citation reads 14 E1, E2.
+
+Round 13 (2026-11-04): IMPL-4, DATA-1 (as ruled), DATA-5 (as ruled), CONFORM-1. `core:library.manage` and
+`core:library.browse` stated as part of the full `core:*` catalog declared at F2 (§5L.3.8); the blob stays an
+active books claim until M6 retires and deletes it; books' per-root record named `rootscan:<root ID>` and stated as
+M6's one write outside its retired claims, excluded by name from the byte-identity test with the roots cutover test
+as its oracle; rollback names the pre-freeze release's binary.

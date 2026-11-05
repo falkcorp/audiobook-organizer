@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.7.1 -->
+<!-- version: 1.8.2 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -22,9 +22,9 @@ mechanics: [05-config](05-config.md).
 |---|---|
 | L1 | `log/slog` is the only logging API in core. Core hands out `*slog.Logger` values; there is no core `Logger` interface. ABO's printf-style `logger.Logger` (with progress, change recording and cancellation folded in) is not carried into core; it survives in ABO as a books-module shim over core handles (§11). |
 | L2 | One handler pipeline per `App`; per-module child loggers carry `module=<id>` (and optionally `subsystem=<name>`); levels are settable per module (and per module.subsystem) at runtime. |
-| L3 | Core never calls `slog.SetDefault`, `log.SetOutput`, `otel.SetLogger`, `otel.SetErrorHandler`, `otel.SetMeterProvider`, `otel.SetTracerProvider` or `otel.SetTextMapPropagator`. `app.InstallProcessDefaults` is the single opt-in helper that does all of them, with this App's pipeline and telemetry providers, for an app that wants it (ABO does, from S2 r3, the release that deletes its façade's installs and sets `PromRegisterer`; MOD4-3, OPS5-14). |
+| L3 | Core never calls `slog.SetDefault`, `log.SetOutput`, `otel.SetLogger`, `otel.SetErrorHandler`, `otel.SetMeterProvider`, `otel.SetTracerProvider` or `otel.SetTextMapPropagator`. `app.InstallProcessDefaults` is the single opt-in helper that does all of them, with this App's pipeline and telemetry providers, for an app that wants it (ABO does from R1, the release that deletes its façade's installs; MOD4-3, OPS5-14). |
 | L4 | Redaction is in the pipeline, once, before fan-out: type-based (`secrets.Value`, `LogValuer`), key-based (deny-list), URL-based (userinfo and credential query params) and **path-based** (one-time tokens in URL paths, including core's own invite route). The same `*log.Redactor` redacts trace span attributes ([05-metrics](05-metrics.md) §3, SEC-22). |
-| L5 | The **system log journal** (persisted operational records ≥ info, queryable, retained N days) is core and is readable only with `core:system.manage`. It persists through a store interface, `log.JournalStore` (R4-1): core's native store keeps records in `c/log/journal/`; an app with legacy system-log rows supplies its own store, written in its code over its keys (ABO's from S5). The **domain activity feed** stays in the app module. Security events go to core `audit`; task run logs to core `tasks`. |
+| L5 | The **system log journal** (persisted operational records ≥ info, queryable, retained N days) is core and is readable only with `core:system.manage`. It persists through a store interface, `log.JournalStore` (R4-1), whose one implementation is core's native store over `c/log/journal/`; an app with pre-core system-log rows imports them once, in its own cutover step, through `log.Importer` (ABO: books' M5 in R2, §5). The **domain activity feed** stays in the app module. Security events go to core `audit`; task run logs to core `tasks`. |
 | L6 | The `go-logr/logr` adapter stays, but only as the value-dropping OTel SDK sink inside `app.InstallProcessDefaults`; `logr` is never imported by other core packages. |
 
 ## 1. Purpose & scope
@@ -185,17 +185,32 @@ type OtherUserPredicate func(rec Record, viewer string) bool
 
 // JournalStore persists the system log journal (R4-1). It is SDK, frozen by the API-stability gate, and
 // names only log types, so log (L0) imports nothing for it. It is the stated exception to "every write method
-// takes the caller's *storage.Batch" (06 LegacyStores, 05-storage "Store interfaces"; COR5-12, MOD5-10): it is
-// append-only, each call commits its own batch, and it never joins a multi-owner commit. Core's native store (core/internal/logjournal)
-// keeps records in c/log/journal/<ULID>; an app with legacy system-log rows supplies its own through its
-// module's Manifest.LegacyStores.Logs (06), written in the app's code over the app's keys (§5). logtest.JournalStoreSuite is the
-// contract every store runs (§10). Records reaching a store are already redacted.
+// takes the caller's *storage.Batch" (05-storage "Store interfaces"; COR5-12, MOD5-10): it is append-only,
+// each call commits its own batch, and it never joins a multi-owner commit. Its one implementation is core's
+// native store (core/internal/logjournal), which keeps records in c/log/journal/<ULID>; no app supplies a
+// store (D10). logtest.JournalStoreSuite is its contract (§10). Records reaching a store are already redacted.
 type JournalStore interface {
 	Append(ctx context.Context, recs []Record) error              // one durable batch per call
 	Query(ctx context.Context, q JournalQuery) (JournalPage, error) // newest first
 	// Prune deletes up to limit records older than before, oldest first, in one bounded batch; more reports
 	// whether older records remain (the prune task calls it until more is false or its budget ends).
 	Prune(ctx context.Context, before time.Time, limit int) (deleted int, more bool, err error)
+}
+
+// Importer is the native journal's one-time import path for an app's pre-core system-log rows (§5; 03 §3.3
+// "Store interfaces"). The kernel builds it over the native store and hands it to the owning app's cutover
+// step in module.Importers (06 §6.4.2). Unlike the other importers it does not stage into the caller's batch
+// (the one exception 03 §3.3's importer rule allows): log is L0 and cannot name a storage type, the same
+// reason JournalStore commits its own batches. Instead
+// Import is idempotent: each record's key is derived from its Time and SourceID, so a step that resumes after
+// a crash between an import and its source deletes rewrites the same keys and imports nothing twice.
+type Importer interface {
+	Import(ctx context.Context, recs []ImportedRecord) error // one durable batch per call
+}
+
+type ImportedRecord struct {
+	Record
+	SourceID string // the app's stable ID of the source row (ABO: its syslog: key)
 }
 
 type JournalQuery struct {
@@ -240,8 +255,8 @@ type PathRule struct {
 // DefaultPathRules covers core's own token-bearing routes: any "invite"/"invites" segment followed by
 // another segment, at any position, after percent-decoding and dot-walk checks — ABO's RedactInvitePath
 // algorithm (internal/logging/redact_path.go:99-120) moved into core. It covers the core route
-// /api/core/v1/auth/invites/{token} (05-authn), the books legacy invite routes, and the legacy
-// /invite/{token} page, which is served in path form from S4 to S9 (FE4-2, 05-authn, 07).
+// /api/core/v1/auth/invites/{token} (05-authn), and HEAD's books invite routes and /invite/{token}
+// page for as long as they exist (the R2 identity flip deletes them; FE4-2, 05-authn, 07).
 // Fragment-form links (/invite#token=, /login/temp#token=) never reach the server.
 func DefaultPathRules() []PathRule // [invite]
 
@@ -301,7 +316,7 @@ opens. The invite shape needs no module rule: it is a default (SEC-21).
 //   otel.SetTextMapPropagator(a.metrics.Propagator())          //   binds to this App's providers (MOD4-3)
 // restore() puts the previous values back (tests). Calling it for a second App in the same process
 // returns ErrProcessDefaultsTaken: only one App may own the process defaults. It never touches the Prometheus
-// default registry: which registry the App's exporter registers on is metrics.Options.PromRegisterer (05-metrics §6).
+// default registry (05-metrics §6).
 func InstallProcessDefaults(a *App) (restore func(), err error)
 ```
 
@@ -319,8 +334,8 @@ forward the SDK's raw values — the reason the sink exists. `logr` remains in t
    `module.Deps.Log` ([06-app-sdk](06-app-sdk.md)). The metrics provider receives `Logging.Redactor()`
    ([05-metrics](05-metrics.md) §7).
 2. Before storage opens, logs go only to the primary output. After storage and tasks are up, the kernel starts
-   the journal tap (`core/internal/logjournal`, §5) over the app's `JournalStore`, or the native store for an
-   app without one — records logged before that are not journaled.
+   the journal tap (`core/internal/logjournal`, §5) over the native `JournalStore` — records logged before that
+   are not journaled. An app's cutover step that imports pre-core rows (§5) runs earlier, in P4.
 3. The kernel subscribes to the `core.log` handle (`OnChange`): `level`, `levels`, `add_source` and
    `redact_keys` apply live; format/output/file need a restart. `logjournal` subscribes to its own
    `core.log.journal` handle: `min_level` and `retention_days` apply live, and `tasks` re-reads the schedule key
@@ -335,9 +350,9 @@ ABO's "activity log" is four things sharing one store and one page; the platform
 
 | Today | Evidence | Goes to | Why |
 |---|---|---|---|
-| "system" rows derived by parsing slog text lines; `syslog:` rows from `StandardLogger` | `internal/activity/writer.go:149-215`; `pebble_store_activity.go:20-37` | **core `log` journal** (`core/internal/logjournal` over a `JournalStore`: native `c/log/journal/`, or ABO's own store over its system-log rows) | Operational, app-neutral, and needed by every app (Sonarr/Radarr ship the same thing as System → Events). Structured `Record`s replace text parsing. |
+| "system" rows derived by parsing slog text lines; `syslog:` rows from `StandardLogger` | `internal/activity/writer.go:149-215`; `pebble_store_activity.go:20-37` | **core `log` journal** (`core/internal/logjournal` over the native `c/log/journal/`; HEAD's `syslog:` rows imported once by books' M5) | Operational, app-neutral, and needed by every app (Sonarr/Radarr ship the same thing as System → Events). Structured `Record`s replace text parsing. |
 | "audit"-typed rows (guest tokens, email displaced, user merge, admin edits) | `raw/10` §6, `internal/activity/user_data.go:38-52` | **core `audit`** (new rows only; existing `act:` rows stay books, 05-storage §5S.9.1) | Security trail; 05-rbac. |
-| Operation logs (`operationlog:`) | `logger/retention.go:28-31` | **core `tasks`** run log | Belongs to the run; 05-tasks. |
+| Operation logs (`operationlog:`) | `logger/retention.go:28-31` | **core `tasks`** run log (imported as run log pages by books' tasks cutover, 05-tasks §5T.8.3) | Belongs to the run; 05-tasks. |
 | Book-scoped change history, tiers, daily digests, compaction, undo links (`act:` families, 2.5k LOC non-test) | `raw/12` §8, `raw/05-storage.md` rows 55–63 | **books module** (ABO) | Domain feed. The TV/Movies analogue is entity history inside `acquire` (`raw/16` "Implications" row 12) — a different shape — so the §3.4 promotion rule (two real consumers of one shape) is not met. |
 
 The shell's Activity page ([07-ui-shell](07-ui-shell.md)) composes core panes (tasks; the system log for holders
@@ -376,49 +391,36 @@ type Schedules struct { // section core.log.schedules
   owner-declared with type `tasks.ScheduleConfig` and default `{"enabled":true,"every":"24h"}`
   (R2-7; 05-config §1.6; [05-tasks](05-tasks.md)); there is no bespoke timer and no duration-typed interval key.
 - Auth-off reach: `core:system.manage` is `AuthRequired` ([05-rbac](05-rbac.md)), so with auth off the query
-  route, the live tail and the legacy `/api/v1/system/logs` alias answer 401. Today they are open with auth off,
-  because `s.perm` passes everything in that mode (`internal/server/wire_admin_role.go:18-22`,
-  `wire_system_routes.go:31`). This is a **deliberate tightening**: the journal holds file paths, user names and
-  provider error text, and with auth off any peer that reaches the port would read them. It is recorded in
-  09 §9.2.6 as an exception to the auth-off reach invariant, and the alias is excluded from the auth-off half of
-  `TestLegacyRoleReachUnchanged` (SEC2-21).
-- **Native store (apps without legacy system-log rows; SIMP4-3).** `core/internal/logjournal` keeps one record
-  per `c/log/journal/<ULID>` (versioned JSON of the record: attributes flattened to dotted keys with string,
-  number or bool values), ULIDs from the record time, so `Query` and `Prune`
-  are prefix scans and range deletes. `hello`, `coretest` and every new app use it; it lands with `logjournal`
-  at 09 S5 (`logjournal` imports `tasks`).
-- **ABO's store (R4-1).** Core holds no ABO row shape and no storage grant for the journal. The books module
-  supplies its own `JournalStore` through `Manifest.LegacyStores.Logs` (06), ABO code in the ABO repo over ABO's system
-  log family (05-storage §5S.9.1; `internal/database/pebble_store_activity.go:20-37`), passed in at
-  S5 when `logjournal` lands. Its contract:
-  - `Append` writes each record as a row of exactly HEAD's shape (`internal/database/store.go:675-682`: user ID,
-    source, level, message, time), which every older build reads as its own system log: `source` holds the
-    record's subsystem, or its module when it has none, as HEAD's writers name their source, and `user_id` holds
-    the record's `user_id` attribute. What HEAD's shape cannot hold (the other attributes, trace and span IDs) is
-    **not persisted** by ABO's store through S10: books' legacy stores keep HEAD's representation and there is no
-    books extension family (A-2). The live tail and the primary output still carry the whole record; only the
-    journal's ABO copy is HEAD-shaped, exactly as HEAD's own rows are, so nothing regresses. A native store keeps
-    every field.
-  - `Query` returns each row as a `Record` with HEAD's fields (`Module` holds the row's `source`; `Attrs` holds
-    `user_id` when the row has one); the `Module` filter matches `source`.
-  - `Prune` deletes aged rows in bounded chunks, as HEAD does (`pebble_store_activity.go:428-434`), by
-    `core.log.journal.retention_days`, under HEAD's single-writer discipline for the family (one writer and one
-    pruner, below); no storage-enforced write check applies to the legacy rows (A-3).
-  - `logtest.JournalStoreSuite` with HEAD fixtures is its test (`TestJournal_ReadsLegacySyslog` moves there).
-  There is no copy, no `core/log` migration step and no level step (DATA3-14, resolved by R3-1). In the S5
-  release that starts the journal, ABO's own writers and pruner of those rows are removed (§11), so each row
-  has one writer and one pruner. **Rollback:** an older build reads every journal record written by S5 or later
-  as its own system-log row and prunes it itself; rows it writes during a rollback are served after
-  roll-forward, so the journal adds no rollback cost. One consequence comes from the same S5 release removing the
-  activity `Writer`'s line parsing (§11): from S5 no `system` entries are added to the books activity feed, so
-  after a rollback the older build's Activity page shows none for the time spent on S5 or later, while its
-  system-log route still shows them. 09 §9.2.1 row 6 lists it (OPS5-12); after roll-forward the journal serves the
-  whole period.
+  route and the live tail answer 401. HEAD's `GET /api/v1/system/logs` is open with auth off, because `s.perm`
+  passes everything in that mode (`internal/server/wire_admin_role.go:18-22`, `wire_system_routes.go:31`).
+  This is a **deliberate tightening**: the journal holds file paths, user names and provider error text, and
+  with auth off any peer that reaches the port would read them. It is one of the auth-off tightenings the R2
+  release note lists (05-rbac §4.11). HEAD's route is deleted in R2 together with the SPA's move to the native
+  route (no alias, D10).
+- **Native store (SIMP4-3).** `core/internal/logjournal` keeps one record per `c/log/journal/<ULID>`
+  (versioned JSON of the record: attributes flattened to dotted keys with string, number or bool values),
+  ULIDs from the record time, so `Query` and `Prune` are prefix scans and range deletes. Every app, `hello` and
+  `coretest` use it; it lands with `logjournal` in R2's flip F5 (`logjournal` imports `tasks`). Core holds no ABO row
+  shape and no storage grant for the journal (R4-1).
+- **ABO's rows: imported once (M5; D10, D12 (b)).** HEAD's system-log rows (`syslog:<RFC3339Nano>:<source>`,
+  `internal/database/pebble_store_activity.go:20-37`; user ID, source, level, message, time,
+  `internal/database/store.go:675-682`) are history that R2 keeps. Books' BootBlocking step M5 of the R2
+  migration list (03 §3.8; [09](09-abo-on-core.md) §9.4), carried by the tasks flip F5, decodes them in chunks
+  (books code in `internal/books/cutover`) and calls `log.Importer.Import`
+  with one `ImportedRecord` per row: `Time`, `Level` and `Message` as stored, `Module` `books`, `Subsystem`
+  the row's `source` (HEAD's writers name their subsystem there), `Attrs` the row's `user_id` when it has one,
+  `SourceID` the row's key. It then deletes the chunk's source rows; a crash in between re-imports the same
+  keys (idempotent, §3). A row that does not decode is quarantined and reported, never dropped (05-storage
+  §5S.3.13). M5 runs behind the pre-migration checkpoint; rollback is the offline restore of that checkpoint
+  plus the pre-freeze release's binary (the last production release before F3 merged, `.prev` after R2
+  deploys; 09). In the same release ABO's own writers and pruner of those rows are deleted (§11), so the
+  journal has one writer and one pruner, and the activity `Writer`'s line parsing goes too: from R2 no
+  `system` entries are added to the books activity feed; the journal serves them.
 - User data in system log lines: HEAD serves the system activity log to `settings.manage` but
   drops lines that name another user's data, and blanks their user ID, unless the caller also holds
   `users.manage` (`activity.NamesOthersUserLog`, `internal/server/handlers/system/handler.go:444-458`). The query
-  route and the live tail keep that rule for legacy and native records alike: a record the books-registered
-  predicate (`log.OtherUserPredicate`, §3) classifies as naming another user's data (registered next to its `PathRule`s, [06](06-app-sdk.md); for ABO's HEAD-shaped rows it classifies by source and message, as HEAD's `activity.NamesOthersUserLog(source, message)` does, `internal/activity/user_data.go:258-260`)
+  route and the live tail keep that rule for imported and new records alike: a record the books-registered
+  predicate (`log.OtherUserPredicate`, §3) classifies as naming another user's data (registered next to its `PathRule`s, [06](06-app-sdk.md); for an imported record it classifies by subsystem and message, as HEAD's `activity.NamesOthersUserLog(source, message)` does, `internal/activity/user_data.go:258-260`)
   is returned only to principals that also hold `core:users.view`, the read-side successor of that gate
   ([05-rbac](05-rbac.md) §6.1); otherwise it is omitted and `user_id` is blanked.
 
@@ -462,14 +464,18 @@ swapped atomically when `redact_keys` changes). `Close` cancels and drains with 
 | `core.log.redact_keys` | []string (added to defaults; defaults cannot be removed) | `[]` | yes | none |
 | `core.log.journal.enabled` | bool | `true` | no | none |
 | `core.log.journal.min_level` | enum | `info` | yes | none |
-| `core.log.journal.retention_days` | int (0 = keep) | `90` (ABO `log_retention_days`, window alias with a `Convert`: legacy `0` means the default 90 and a negative value means keep, `internal/config/config.go:1479-1488`, so they map to `90` and `0`) | yes | none |
+| `core.log.journal.retention_days` | int (0 = keep) | `90` (M2 converts ABO's `log_retention_days` once: HEAD's `0` means the default 90 and a negative value means keep, `internal/config/config.go:1479-1488`, so they become `90` and `0`) | yes | none |
 | `core.log.schedules.journal_prune` | `tasks.ScheduleConfig` | `{"enabled":true,"every":"24h"}` | yes (re-read every poll) | none |
 | `core.log.journal.queue_size` | int | `4096` | no | none |
 
 The `core.log.*` rows except `core.log.journal.*` and `core.log.schedules.*` belong to the `core.log` section
 (`log.Settings`); the `core.log.journal.*` rows to `logjournal.Settings` and `core.log.schedules.journal_prune`
 to `logjournal.Schedules` (§5). All are operational
-dials (09 §9.2.8): none changes persisted state shape.
+dials (09 §9.2.8): none changes persisted state shape. `logjournal.Settings` and `logjournal.Schedules` are
+registered dark from F2, the foundation PRs ([09](09-abo-on-core.md) §9.4), as every core section is: F2 lands
+those two settings types in `core/internal/logjournal` and the kernel registers them, so the config cutover M2
+(F3) converts `log_retention_days` into a registered `core.log.journal.retention_days` (IMPL-1); the journal, its
+store and `core.log.journal.prune` serve from F5.
 
 ## 9. Metrics
 
@@ -492,7 +498,7 @@ These are recorded by a kernel-side bridge (`log` cannot import `metrics`, R4): 
 | `TestDefaultLists_FreshCopies` | appending to or editing the slice one call of `DefaultPathRules()`, `DefaultRedactKeys()`, `DefaultRedactQuery()` or `URLKeys()` returns leaves the next call's result and every `Redactor` unchanged |
 | `TestModuleLevels_Live` | `SetLevels` changes `Enabled` for `books` and `books.scanner` without new loggers |
 | `TestRedact_DefaultKeys` / `_NestedGroups` / `_URLUserinfoAndQuery` / `_SecretsValue` | values replaced; `secrets.Value` prints `[REDACTED]` in text and JSON |
-| `TestRedact_CoreInvitePath` | `/api/core/v1/auth/invites/<token>` and the legacy shell link `/invite/<token>` under `path`, `url.path`, inside a full URL and percent-encoded → token absent in text, JSON, journal record and realtime tail record |
+| `TestRedact_CoreInvitePath` | `/api/core/v1/auth/invites/<token>` and HEAD's path-form link `/invite/<token>` under `path`, `url.path`, inside a full URL and percent-encoded → token absent in text, JSON, journal record and realtime tail record |
 | `TestRedactQuery_SupersetOfHEAD` | every key of HEAD's `credentialQueryKeys` (fixture copy) is in `DefaultRedactQuery()`; `?code=…&code_verifier=…&refresh_token=…&SECRET=…` → all values redacted |
 | `TestRedact_TempLoginTokenQuery` | `/api/core/v1/auth/temp-login?token=<t>` → `token=[REDACTED]` |
 | `TestRedact_PathRuleFailsClosed` | over-long / over-escaped / dot-walked invite paths → `/[REDACTED]` (ABO fixtures ported) |
@@ -504,9 +510,10 @@ These are recorded by a kernel-side bridge (`log` cannot import `metrics`, R4): 
 | `TestLevelTraceRendering` | `TRACE` label; trace gated below debug |
 | `TestInstallProcessDefaults_RestoreAndExclusive` | after install, `otel.GetMeterProvider()`, `otel.GetTracerProvider()` and `otel.GetTextMapPropagator()` return the App's, an instrument created through the global appears in the App's scrape, and `slog.Default()` logs through the pipeline; restore puts all seven back; second install errors; OTel sink drops values |
 | `TestJournal_BatchAndRetention` | batching bounds; the prune task calls `JournalStore.Prune` until `more` is false, by `retention_days`; no `core/log` migration step or level stamp exists |
-| `logtest.JournalStoreSuite` (exported contract) | run by the native store and by every app store (ABO's with HEAD fixtures): `Append` then `Query` round-trips level, module, message, time and attributes; filters and cursors; `Prune` bounded and oldest first; an app store declares which fields its row shape holds and round-trips exactly those (ABO's: time, level, source as `Module`, message, `user_id`; A-2) |
+| `logtest.JournalStoreSuite` (exported contract) | run over the native store: `Append` then `Query` round-trips level, module, subsystem, message, time and attributes; filters and cursors; `Prune` bounded and oldest first; its importer cases: importing the same `ImportedRecord`s twice leaves one record each, and imported records sort by their own `Time` among native ones (one suite per interface and its importer, 03 §3.3) |
+| `TestCutover_SyslogImported` (ABO) | over a store written by the R0 binary (the corrupt row from 09 §9.3's labelled hand-built overlay, which R0's API cannot write), M5 leaves no `syslog:` row, imports one journal record per row with time, level, source as `Subsystem`, message and `user_id`, quarantines the corrupt row, and resumes after a crash at any chunk point without duplicates |
 | `TestNativeJournalStore_RoundTrip` | the native store over `c/log/journal/` passes the suite (SIMP4-3) |
-| `TestJournal_OtherUsersLinesNeedUsersView` | a `core:system.manage` principal without `core:users.view` gets neither legacy nor native records the books predicate flags, and sees `user_id` blank; with `core:users.view` it gets both (HEAD fixture) |
+| `TestJournal_OtherUsersLinesNeedUsersView` | a `core:system.manage` principal without `core:users.view` gets neither imported nor new records the books predicate flags, and sees `user_id` blank; with `core:users.view` it gets both (imported records from the R0 fixture) |
 | `TestJournal_PruneScheduleKeyDeclared` | `core.log.schedules.journal_prune` is declared with type `tasks.ScheduleConfig` in `logjournal.Schedules` and accepted by `ScheduleFromConfig` at registration |
 | `TestJournal_RequiresSystemManage` | `core:system.view`-only principal gets 403 on the query route and no `core.log.recorded.v1` events |
 | `TestRotatingFile_RotatesAndCaps` | size rotation, `max_files` respected, `os.Root` confinement |
@@ -517,7 +524,7 @@ R5 binds core only (SIMP-3). ABO's logger keeps working as a books-module shim o
 call sites to injected loggers is an optional ratchet, not an extraction stage.
 
 1. **Stage 1, split by when the journal exists (required; no call-site churn; MOD4-5).**
-   - **At 09 S2 r3** ABO's `main` calls `app.InstallProcessDefaults`. All 1,460 direct `slog.*` calls, 33
+   - **In R1** (09 §9.4; the composition-root work) ABO's `main` calls `app.InstallProcessDefaults`. All 1,460 direct `slog.*` calls, 33
      `slog.Default()` uses, and the 210 package-level `logger.New` vars (which log through `slog.Default()`,
      `logger.go:107`) now reach the App pipeline, including its redaction. Delete `setupFileLogging`
      (`cmd/root.go:698-723`), the second `slog.SetDefault` and `log.SetOutput(aw)` (`server.go:1134-1155`) —
@@ -525,19 +532,20 @@ call sites to injected loggers is an optional ratchet, not an extraction stage.
      a books `Logging.Tap` at info that renders each record with a `slog.TextHandler` into it, so its line parsing
      and its `system` entries are unchanged; ABO's `StandardLogger` keeps writing system-log rows and HEAD's
      pruner (`internal/logger/retention.go:41`, which stays in ABO's façade, MOD4-6) keeps pruning them, because
-     the journal that replaces them does not exist before S5. ABO's compat file output: `core.log.output=file`,
+     the journal that replaces them does not exist before R2. ABO's file output: `core.log.output=file`,
      `core.log.file.path` set by the books module's defaults to keep a file under the state dir (path change
      release-noted; the old cwd-relative path is not reproduced).
-   - **In the 09 S5 release that starts `logjournal`** (with ABO's `JournalStore`, §5) ABO deletes, in the same
-     release: the activity `Writer`'s line parsing (`internal/activity/writer.go:149-215`) and its tap,
-     `StandardLogger`'s system-log writes, and `internal/logger/retention.go` (HEAD's pruner of `syslog:` and
-     `operationlog:` rows). The journal becomes the only writer and its prune task the only pruner of the system
-     log; `operationlog:` pruning moves to `tasks`' run-log pruning in that release ([05-tasks](05-tasks.md)).
-     The done-check "the journal query returns ABO records" belongs to that S5 release (09 §9.4.1).
+   - **In R2, which starts `logjournal`** over the native store and imports HEAD's rows (M5, §5), ABO deletes,
+     in the same release: the activity `Writer`'s line parsing (`internal/activity/writer.go:149-215`) and its
+     tap, `StandardLogger`'s system-log writes, and `internal/logger/retention.go` (HEAD's pruner of `syslog:`
+     and `operationlog:` rows). The journal becomes the only writer and `core.log.journal.prune` the only pruner
+     of the system log; the `operationlog:` rows become run log pages and are pruned by `core.tasks.prune`
+     ([05-tasks](05-tasks.md) §5T.8.2). The check "the journal query returns ABO's imported and new records"
+     belongs to R2 (09 §9.4).
 2. **Stage 2 (required; small) — shim.** `internal/logger` becomes the books-side shim
    `logger.FromSlog(*slog.Logger) Logger` (printf methods format then log with `subsystem` as an **attribute**, so
    per-subsystem levels work; progress/changes/cancel delegate to the `tasks` run handle where one exists, tied to
-   09 S5). `internal/logging` context helpers become `log.WithAttrs`; `OpContext` becomes task-run attrs set by
+   the R2 tasks flip). `internal/logging` context helpers become `log.WithAttrs`; `OpContext` becomes task-run attrs set by
    `tasks`; `Sanitize`/`SanitizeErr` are deleted (handler escaping); `RedactInvitePath` moves into core as the
    default invite `PathRule` (§3), so no books hook is needed for it.
 3. **Optional ratchet — injection.** The existing ratchet is re-pointed and kept from stage 1: it counts
@@ -546,7 +554,7 @@ call sites to injected loggers is an optional ratchet, not an extraction stage.
    `InstallProcessDefaults` stays only for third-party libraries that log via the default. Listed in the 11 §11.5
    checklist with the config façade removal (prerequisite only for multi-module binaries).
 4. `internal/telemetry/sdklog.go` and `errorhandler.go` stay in ABO's thin `internal/telemetry` façade, which
-   installs them, until ABO calls `app.InstallProcessDefaults` at S2 r3; they then move into `app`. At S2 r3 that
+   installs them, until ABO calls `app.InstallProcessDefaults` in R1; they then move into `app`. In R1 that
    helper
    takes over **every** install the façade did — the logger, the error handler, the meter and tracer providers
    and the propagator (§3) — and the façade's install code, including `InitOTEL`'s automatic install
@@ -556,8 +564,9 @@ call sites to injected loggers is an optional ratchet, not an extraction stage.
    (it hands the test a `*slog.Logger`) and never `slog.SetDefault`, so core tests stay parallel-safe (03 R5,
    MOD3-3, MOD4-12).
 6. `log_level` / `--log-level` map to `core.log.level`, which now actually sets the handler level (today it
-   does not, §2). `log_retention_days` maps to `core.log.journal.retention_days` (alias, 05-config §1.12.3) with
-   the `Convert` of §8, because ABO's `0` means "default" and the core key's `0` means "keep".
+   does not, §2). `log_retention_days` is converted once into `core.log.journal.retention_days` by the config
+   cutover (M2, 05-config's rename table) with the mapping of §8, because ABO's `0` means "default" and the core
+   key's `0` means "keep"; there is no alias (D10).
 
 ## 12. Open items
 
@@ -568,7 +577,11 @@ call sites to injected loggers is an optional ratchet, not an extraction stage.
 
 ## Objections to 03
 
-None open. Both earlier items are resolved by 03 v1.3.0: §3.3's `log` row names the journal and
+None open. `log.Importer` is idempotent instead of staging into the caller's batch, because `log` is L0 and
+imports no storage type (R4); 03 §3.3's importer rule states this exception, and keys derived from each
+record's time and source ID give books' M5 the same exactly-once result (§3).
+
+Earlier items: both are resolved by 03 v1.3.0: §3.3's `log` row names the journal and
 `internal/logjournal`, and R4's bridge rule places `logjournal` at L4 (COR-19).
 
 ## Out-of-scope defects found
@@ -655,3 +668,23 @@ Advisor:
 - A-3 (ADV-S2) — §5 `Prune`: no storage-enforced write check on the legacy rows; HEAD's one-writer, one-pruner discipline (R7-3's conditional delete deleted with the extension).
 - Header — 03 reference v1.11.1.
 - integration pass (advisor): 09 §9.2.1 row 6 cited; journal rows on ABO confirmed HEAD-shaped with no extension family.
+
+D10–D12 revision (2026-11-04):
+
+- Owner decisions D10 (no backward compatibility), D11 (no soaks) and D12 (b) (log history kept, converted)
+  applied. L5, §3 `JournalStore`, §4 step 2 and §5: the journal has one implementation, the native store;
+  ABO's own `JournalStore` over HEAD's `syslog:` rows (`Manifest.LegacyStores.Logs`, the HEAD-shaped
+  `Append`/`Query`/`Prune`, its rollback paragraph) is deleted. New `log.Importer` and
+  `ImportedRecord`: books' R2 step M5 imports HEAD's rows once, idempotently, and deletes them; undecodable
+  rows are quarantined.
+- §5 auth-off: the alias of `/api/v1/system/logs` and its exclusion from the reach gate are deleted; HEAD's
+  route goes in R2 and the tightening is a release-note line.
+- §8: `retention_days` is converted once by M2, not aliased. §10: the suite runs over the native store only;
+  importer cases and `TestCutover_SyslogImported` added. §11: stages re-keyed to R1/R2; the
+  `log_retention_days` alias replaced by the one-time conversion. L3 and §3: `PromRegisterer` mention removed;
+  the invite path rule's S4–S9 window removed. Consistency pass: the `log.Importer` objection settled (03 §3.3
+  states the idempotent-importer exception) and D12's answers cited as D12 (a)–(d).
+
+Round 13 (2026-11-04): IMPL-1, IMPL-8, CONFORM-1. §8: `logjournal`'s two sections are registered dark from F2 so
+M2 at F3 writes a registered key; §10: the corrupt `syslog:` row comes from the fixture's hand-built overlay; §5:
+rollback names the pre-freeze release's binary.
