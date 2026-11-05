@@ -135,17 +135,30 @@ export function useUrlEnumParam<T extends string>(
 interface UrlStore {
   /** Query strings issued, oldest first, not yet seen rendered. */
   pending: string[];
+  /** The subset of `pending` that came from `useUrlParamWriter`, not from a mirror. */
+  foreign: Set<string>;
   /** The last query string `observe` was given, and what it decided. */
   seen: string | null;
-  verdict: 'echo' | 'external';
+  verdict: Verdict;
 }
+
+/**
+ * What a newly rendered query string is:
+ * - `echo`: a write a mirror made; nothing to do.
+ * - `foreign`: a write a child made through `useUrlParamWriter`; the mirror owns
+ *   keys the child did not touch, but the write can still have left the address
+ *   bar saying something the screen does not (clearing `book` from a link that
+ *   only implied its lane), so the mirror reconciles once.
+ * - `external`: not ours at all.
+ */
+type Verdict = 'echo' | 'foreign' | 'external';
 
 const stores = new WeakMap<object, UrlStore>();
 
 function storeFor(key: object): UrlStore {
   let store = stores.get(key);
   if (!store) {
-    store = { pending: [], seen: null, verdict: 'external' };
+    store = { pending: [], foreign: new Set(), seen: null, verdict: 'external' };
     stores.set(key, store);
   }
   return store;
@@ -158,15 +171,17 @@ function storeFor(key: object): UrlStore {
  * swallow a real navigation to that same URL later); otherwise external, and
  * whatever we had in flight is moot.
  */
-function observe(store: UrlStore, search: string): 'echo' | 'external' {
+function observe(store: UrlStore, search: string): Verdict {
   if (store.seen === search) return store.verdict;
   store.seen = search;
   const at = store.pending.indexOf(search);
   if (at >= 0) {
-    store.pending.splice(0, at + 1);
-    store.verdict = 'echo';
+    const landed = store.pending.splice(0, at + 1);
+    store.verdict = landed.some((p) => store.foreign.has(p)) ? 'foreign' : 'echo';
+    landed.forEach((p) => store.foreign.delete(p));
   } else {
     store.pending = [];
+    store.foreign.clear();
     store.verdict = 'external';
   }
   return store.verdict;
@@ -219,6 +234,7 @@ export function useUrlParamWriter(): (patch: Readonly<Record<string, UrlValue>>)
     const nextStr = next.toString();
     if (nextStr === (st.pending.at(-1) ?? rendered.toString())) return;
     st.pending.push(nextStr);
+    st.foreign.add(nextStr);
     safeSet(set, next);
   }, []);
 }
@@ -316,7 +332,12 @@ export function useUrlStateSync(
   useEffect(() => {
     if (search === seen.current) return;
     seen.current = search;
-    if (observe(store, search) === 'echo') return;
+    const verdict = observe(store, search);
+    if (verdict === 'echo') return;
+    if (verdict === 'foreign') {
+      setReconcile((n) => n + 1);
+      return;
+    }
     // A URL we did not write: any write still waiting on the throttle was made
     // against the old URL and must not land on top of this one.
     if (timer.current) {

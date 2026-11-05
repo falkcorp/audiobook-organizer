@@ -1,9 +1,9 @@
 // file: web/src/pages/CollectionDetail.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: c80c9391-2049-4abe-bedf-926fc3e9d2ed
 // last-edited: 2026-11-05
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -135,21 +135,28 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
   const [searchParams, setSearchParams] = useSearchParams();
   const urlPage = Number(searchParams.get('page'));
   const page = Number.isInteger(urlPage) && urlPage > 1 ? urlPage - 1 : 0;
-  const setPage = (p: number) =>
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        if (p > 0) next.set('page', String(p + 1));
-        else next.delete('page');
-        return next;
-      },
-      { replace: true }
-    );
+  const setPage = useCallback(
+    (p: number) =>
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (p > 0) next.set('page', String(p + 1));
+          else next.delete('page');
+          return next;
+        },
+        { replace: true }
+      ),
+    [setSearchParams]
+  );
 
   const members = storedMembers(collection);
   // A shrinking list (remove, re-evaluate) must not leave the table on a page that no longer exists.
   const lastPage = Math.max(0, Math.ceil(members.length / PAGE_SIZE) - 1);
   const safePage = Math.min(page, lastPage);
+  // The page on screen is the clamped one, so the address bar says that one.
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage, setPage]);
   const pageIds = members.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
   const pageKey = pageIds.join(',');
 

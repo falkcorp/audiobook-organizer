@@ -1,5 +1,5 @@
 // file: web/src/components/review/reviewUrl.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b3f6d12-5a90-4c47-b1e8-0d7a2e9c4f35
 // last-edited: 2026-11-05
 
@@ -13,8 +13,8 @@ describe('laneNamedBy', () => {
     expect(laneNamedBy(q('lane=repairs'))).toBe('repairs');
     expect(laneNamedBy(q('lane=nope'))).toBeNull();
     expect(laneNamedBy(q('book=b1'))).toBe('dupes');
-    expect(laneNamedBy(q('band=high'))).toBe('dupes');
-    expect(laneNamedBy(q('lane=metadata&band=high'))).toBe('metadata');
+    expect(laneNamedBy(q('band=HIGH'))).toBe('dupes');
+    expect(laneNamedBy(q('lane=metadata&band=HIGH'))).toBe('metadata');
     expect(laneNamedBy(q(''))).toBeNull();
   });
 });
@@ -49,6 +49,20 @@ describe('readReviewUrl', () => {
       rowClass: 'robin',
     });
     expect(readReviewUrl(q('lane=repairs&filter=junk')).repairs.filter).toBeNull();
+  });
+
+  it('holds a band to the known values and a class or filter suffix to a sane token', () => {
+    expect(laneNamedBy(q('band=nonsense'))).toBeNull();
+    expect(laneNamedBy(q('band=HIGH'))).toBe('dupes');
+    const long = 'x'.repeat(65);
+    for (const bad of ['has space', 'a/b', '%3Cscript%3E', long, '-lead', '']) {
+      const r = readReviewUrl(q(`lane=repairs&class=${bad}&filter=skipped:${bad}`)).repairs;
+      expect(r.rowClass, bad).toBeNull();
+      expect(r.filter, bad).toBeNull();
+    }
+    expect(readReviewUrl(q('lane=repairs&filter=flag:needs-review.v2')).repairs.filter).toBe(
+      'flag:needs-review.v2'
+    );
   });
 
   it('falls back to defaults for junk', () => {

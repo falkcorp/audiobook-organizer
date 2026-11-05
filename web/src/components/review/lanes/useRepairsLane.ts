@@ -92,9 +92,24 @@ function writeStored(key: string, value: string): void {
 export function parseRepairRowsFilter(raw: string | null | undefined): RepairRowsFilter | null {
   if (!raw) return null;
   if (raw === 'applicable' || raw === 'skipped' || raw === 'owner_applicable') return raw;
-  if (/^skipped:.+/.test(raw)) return raw as RepairRowsFilter;
-  if (/^flag:.+/.test(raw)) return raw as RepairRowsFilter;
+  // A kind or flag name is a short identifier. The server owns the list of real
+  // ones, so the URL is only held to a sane shape: it must not carry arbitrary
+  // text (or an unbounded amount of it) into a request.
+  const named = /^(skipped|flag):(.*)$/.exec(raw);
+  if (named && isRepairToken(named[2])) return raw as RepairRowsFilter;
   return null;
+}
+
+const REPAIR_TOKEN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+
+/** An identifier-shaped value: non-empty, a plain charset, at most 64 characters. */
+export function isRepairToken(raw: string | null | undefined): raw is string {
+  return typeof raw === 'string' && REPAIR_TOKEN.test(raw);
+}
+
+/** A URL value as a row class, else null. */
+export function parseRepairRowClass(raw: string | null | undefined): string | null {
+  return isRepairToken(raw) ? raw : null;
 }
 
 /**

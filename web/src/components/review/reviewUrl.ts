@@ -14,9 +14,9 @@
 import { LANE_ORDER } from './lanes';
 import type { ReviewLane } from './reviewActions';
 import { parseDupesSubView, type DupesSubView } from './lanes/useDupesLabels';
-import { parseDedupLayer } from './lanes/useDupesLane';
+import { parseDedupBand, parseDedupLayer } from './lanes/useDupesLane';
 import { parseAuthorsSubView, type AuthorsSubView } from './lanes/useAuthorsLane';
-import { parseRepairRowsFilter, type RepairsUrlSeed } from './lanes/useRepairsLane';
+import { parseRepairRowClass, parseRepairRowsFilter, type RepairsUrlSeed } from './lanes/useRepairsLane';
 import { normalizeViewMode, type SpineViewMode } from './spine/viewMode';
 import type { DedupLayer } from './lanes/useDupesLane';
 
@@ -45,7 +45,7 @@ export function parseUrlId(raw: string | null | undefined): number | null {
 export function laneNamedBy(params: URLSearchParams): ReviewLane | null {
   const named = params.get('lane');
   if (named && (LANE_ORDER as string[]).includes(named)) return named as ReviewLane;
-  if (params.get('book') || params.get('band')) return 'dupes';
+  if (params.get('book') || parseDedupBand(params.get('band'))) return 'dupes';
   return null;
 }
 
@@ -85,7 +85,7 @@ export function readReviewUrl(params: URLSearchParams): ReviewUrlState {
         ? {
             fixerId: params.get('fixer'),
             filter: parseRepairRowsFilter(params.get('filter')),
-            rowClass: params.get('class'),
+            rowClass: parseRepairRowClass(params.get('class')),
           }
         : {},
   };

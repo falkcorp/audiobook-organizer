@@ -52,9 +52,9 @@
 // this project exists to remove. The safety net is git until Phase 7 deletes the
 // old surfaces, which is gated on docs/port-inventory.md.
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useUrlStateSync } from '../../hooks/useUrlState';
+import { useUrlParamWriter, useUrlStateSync } from '../../hooks/useUrlState';
 import { COMPARE_TAB_SLUGS, parseUrlId, readReviewUrl } from './reviewUrl';
 import {
   Alert,
@@ -78,7 +78,6 @@ import ViewListIcon from '@mui/icons-material/ViewList';
 import ViewColumnIcon from '@mui/icons-material/ViewColumn';
 import FormatListNumberedIcon from '@mui/icons-material/FormatListNumbered';
 import * as api from '../../services/api';
-import type { DedupBand } from '../../services/api';
 import { useToast } from '../toast/ToastProvider';
 import { CoverLightbox } from '../CoverLightbox';
 import { coverFullSizeUrl } from '../../utils/coverUrl';
@@ -91,7 +90,7 @@ import { RepairsPanel } from './RepairsPanel';
 import { AuthorsPanel } from './AuthorsPanel';
 import { MetadataPanel } from './MetadataPanel';
 import { ReplaceConfirmDialog } from './ReplaceConfirmDialog';
-import { useDupesLane } from './lanes/useDupesLane';
+import { parseDedupBand, useDupesLane } from './lanes/useDupesLane';
 import { useMetadataLane } from './lanes/useMetadataLane';
 import { useRegroupLane } from './lanes/useRegroupLane';
 import { useRepairsLane } from './lanes/useRepairsLane';
@@ -204,7 +203,14 @@ export function ReviewWorkspace() {
   // `band` and `book` are LIVE (DupesPanel writes them and the lane derives from
   // them); the memo is keyed on their values so a write to any other key leaves
   // it alone. `layer`, `compare` and `compareTab` are seeds from the mount snapshot.
-  const bandParam = searchParams.get('band') as DedupBand | null;
+  const rawBand = searchParams.get('band');
+  const bandParam = parseDedupBand(rawBand);
+  // A band the lane does not know filters nothing; leave no stale value in the
+  // address bar claiming it does.
+  const writeUrlParams = useUrlParamWriter();
+  useEffect(() => {
+    if (rawBand !== null && bandParam === null) writeUrlParams({ band: null });
+  }, [rawBand, bandParam, writeUrlParams]);
   const bookParam = searchParams.get('book');
   const dupesUrlFilters = useMemo(
     () => ({

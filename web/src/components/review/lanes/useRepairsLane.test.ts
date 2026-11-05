@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.12.0
+// version: 1.13.0
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
 // last-edited: 2026-11-05
 //
@@ -238,14 +238,14 @@ describe('useRepairsLane: loading', () => {
     window.localStorage.setItem(REPAIRS_FIXER_STORAGE_KEY, 'other');
     vi.mocked(api.listRepairFixers).mockResolvedValue([
       FIXER,
-      { id: 'other', title: 'Other', description: '' },
+      { id: 'other', title: 'Riddler Cleanup', description: '' },
     ]);
     const { result } = renderHook(() => useRepairsLane(toast, true));
     await waitFor(() => expect(result.current.selectedFixerId).toBe('other'));
   });
 
   describe('?fixer= seed', () => {
-    const OTHER = { id: 'other', title: 'Other', description: '' };
+    const OTHER = { id: 'other', title: 'Riddler Cleanup', description: '' };
     const THIRD = { id: 'third', title: 'Third', description: '' };
 
     it('preselects the seeded fixer over the one the viewer had open', async () => {
@@ -274,7 +274,7 @@ describe('useRepairsLane: loading', () => {
 });
 
 describe('useRepairsLane: URL seed for the row filter and class', () => {
-  const OTHER = { id: 'other', title: 'Other', description: '' };
+  const OTHER = { id: 'other', title: 'Riddler Cleanup', description: '' };
 
   it('starts on the seeded filter and class', async () => {
     vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER, OTHER]);

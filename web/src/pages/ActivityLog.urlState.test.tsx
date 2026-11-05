@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.urlState.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d41f7a3-26c9-4b05-9e1a-d3b70c58f6e2
 // last-edited: 2026-11-05
 
@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
 import ActivityLog from './ActivityLog';
@@ -87,6 +87,12 @@ const renderAt = (entry: string) =>
 
 const loc = () => screen.getByTestId('location').textContent;
 const lastFilter = () => feedMock.mock.calls.at(-1)?.[0];
+// Let every effect and the mirror's trailing write finish before a request count
+// is read: a duplicate request caused by the URL echo arrives after the change.
+const settle = () =>
+  act(async () => {
+    await new Promise((r) => setTimeout(r, 700));
+  });
 
 // Distinct kinds so the grouping fold leaves ten independent rows (see the
 // pagination tests in ActivityLog.test.tsx).
@@ -142,8 +148,31 @@ describe('feed filters', () => {
     expect(f?.exclude_tags).toBeUndefined();
     expect(f?.since).toMatch(/^2026-10-01T/);
     // Nothing rewrote it, and a key the page does not own survived.
+    await settle();
     expect(loc()).toBe(link);
     expect(feedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a since that is not a date is the default window, not all history', async () => {
+    renderAt('/activity?since=garbage&size=7&type=nope&level=loud&tiers=junk');
+    await waitFor(() => expect(feedMock).toHaveBeenCalledTimes(1));
+    const f = lastFilter();
+    expect(f?.since).toBeDefined();
+    expect(f).toMatchObject({ limit: 25 });
+    expect(f?.type).toBeUndefined();
+    expect(f?.level).toBeUndefined();
+    expect(f?.exclude_tiers).toBe('debug,digest');
+  });
+
+  it('Clear filters goes back to the real default tiers, so the URL carries no tiers', async () => {
+    const user = userEvent.setup();
+    renderAt('/activity?tiers=audit&q=Joker&hide_noop=0');
+    await waitFor(() => expect(feedMock).toHaveBeenCalledTimes(1));
+    await user.click(screen.getAllByRole('button', { name: /clear filters/i })[0]);
+    await waitFor(() => expect(loc()).toBe('/activity'));
+    // `info` is part of the default set: dropping it would write ?tiers=audit,change,digest.
+    await settle();
+    expect(loc()).toBe('/activity');
   });
 
   it('since=all means no lower bound, and survives a round trip', async () => {
@@ -160,6 +189,10 @@ describe('feed filters', () => {
     await user.click(screen.getByText('✓ hide no-op'));
     await waitFor(() => expect(loc()).toBe('/activity?keep=1&hide_noop=0'));
     expect(screen.getByTestId('nav-type').textContent).toBe('REPLACE');
+    await settle();
+    // One request for the click (the page reset and the filter change share it).
+    expect(feedMock).toHaveBeenCalledTimes(2);
+    expect(lastFilter()).toMatchObject({ offset: 0 });
     await user.click(screen.getByText('show no-op'));
     await waitFor(() => expect(loc()).toBe('/activity?keep=1'));
   });
@@ -170,6 +203,8 @@ describe('feed filters', () => {
     await waitFor(() => expect(feedMock).toHaveBeenCalledTimes(1));
     const box = screen.getAllByPlaceholderText('Search summaries...')[0];
     await user.type(box, 'Ra');
+    // The address bar follows the SETTLED search, not each keystroke.
+    expect(loc()).toBe('/activity');
     await waitFor(() => expect(loc()).toBe('/activity?q=Ra'));
     await user.clear(box);
     await waitFor(() => expect(loc()).toBe('/activity'));
@@ -185,12 +220,17 @@ describe('feed filters', () => {
     // Filters and page changed together: the "filter changed, go to page 1" rule
     // must not erase the page the link carried.
     expect(lastFilter()).toMatchObject({ search: 'Penguin', limit: 50, offset: 100 });
+    await settle();
     expect(loc()).toBe('/activity?q=Penguin&page=3&size=50');
+    // ONE request for the whole link (filters, page size and page together).
+    expect(feedMock).toHaveBeenCalledTimes(1);
     feedMock.mockClear();
     await user.click(screen.getByText('history-back'));
     await waitFor(() => expect(feedMock).toHaveBeenCalled());
     expect(lastFilter()).toMatchObject({ search: 'Joker', limit: 25, offset: 0 });
+    await settle();
     expect(loc()).toBe('/activity?q=Joker');
+    expect(feedMock).toHaveBeenCalledTimes(1);
   });
 });
 

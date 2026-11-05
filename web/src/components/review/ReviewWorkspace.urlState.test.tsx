@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.urlState.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: c7a05e2b-19d4-4f83-a6b0-3e8d51f9c274
 // last-edited: 2026-11-05
 
@@ -13,7 +13,8 @@
  * main workspace test is a hotspot every lane edits.
  */
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { useEffect } from 'react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -28,9 +29,15 @@ import * as reads from './lanes/authorsReads';
 vi.mock('../../services/api');
 vi.mock('./lanes/authorsReads');
 
+// Every location the page rendered, in order: how many URLs a gesture wrote.
+const visited: string[] = [];
+
 function Probe() {
   const location = useLocation();
   const type = useNavigationType();
+  useEffect(() => {
+    visited.push(`${location.pathname}${location.search}`);
+  }, [location]);
   return (
     <>
       <div data-testid="location">{`${location.pathname}${location.search}`}</div>
@@ -47,6 +54,8 @@ function Links() {
         link-repairs
       </button>
       <button onClick={() => navigate('/review?lane=authors&view=series')}>link-series</button>
+      <button onClick={() => navigate('/review')}>link-bare</button>
+      <button onClick={() => navigate('/review?lane=repairs&fixer=nope')}>link-bad-fixer</button>
       <button onClick={() => navigate(-1)}>history-back</button>
     </>
   );
@@ -65,6 +74,12 @@ function renderWorkspace(entry: string) {
 }
 
 const loc = () => screen.getByTestId('location').textContent;
+// Let every effect and the mirror's trailing write finish before a fetch count is
+// read: a duplicate fetch caused by the URL echo arrives after the click, not with it.
+const settle = () =>
+  act(async () => {
+    await new Promise((r) => setTimeout(r, 600));
+  });
 // The metadata lane with no rows renders an empty state, not the spine, so the
 // selected lane tab is the readiness signal.
 const metadataReady = () =>
@@ -172,17 +187,23 @@ describe('lane', () => {
     await metadataReady();
     await user.click(screen.getByTestId('lane-tab-repairs'));
     await screen.findByTestId('repairs-panel');
-    await waitFor(() => expect(api.listRepairFixers).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(loc()).toBe('/review?lane=repairs'));
+    await settle();
+    expect(api.listRepairFixers).toHaveBeenCalledTimes(1);
     await user.click(screen.getByTestId('lane-tab-authors'));
     await screen.findByTestId('authors-panel');
-    await waitFor(() => expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(loc()).toBe('/review?lane=authors'));
+    await settle();
+    expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(1);
     await user.click(screen.getByTestId('lane-tab-dupes'));
     await screen.findByTestId('dupes-rail');
+    await waitFor(() => expect(loc()).toBe('/review?lane=dupes'));
+    await settle();
     // The authors lane reads its own (author) candidates through the same call.
     const bookQueueReads = () =>
       vi.mocked(api.getDedupCandidates).mock.calls.filter((c) => c[0]?.entity_type !== 'author');
-    await waitFor(() => expect(bookQueueReads()).toHaveLength(1));
-    // Nothing refetched on the way past.
+    expect(bookQueueReads()).toHaveLength(1);
+    // Nothing refetched on the way past, and the URL echoes did not refetch either.
     expect(api.listRepairFixers).toHaveBeenCalledTimes(1);
     expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(1);
   });
@@ -218,6 +239,7 @@ describe('repairs lane', () => {
       )
     );
     // Exactly one rows read for the seeded view: no applicable-then-skipped flicker.
+    await settle();
     expect(api.getRepairPlanRows).toHaveBeenCalledTimes(1);
     expect(loc()).toBe('/review?lane=repairs&fixer=fx-b&filter=skipped&class=robin');
   });
@@ -292,11 +314,18 @@ describe('dupes lane', () => {
     expect(vi.mocked(api.getDedupCandidates).mock.calls[0][0]).toMatchObject({
       layer: 'embedding',
     });
+    await settle();
+    expect(api.getDedupCandidates).toHaveBeenCalledTimes(1);
     expect(loc()).toBe('/review?lane=dupes&layer=embedding');
     await user.click(screen.getByTestId('layer-chip-llm'));
     await waitFor(() => expect(loc()).toBe('/review?lane=dupes&layer=llm'));
+    await settle();
+    // One read for the click, none for the URL echo.
+    expect(api.getDedupCandidates).toHaveBeenCalledTimes(2);
     await user.click(screen.getByTestId('layer-chip-all'));
     await waitFor(() => expect(loc()).toBe('/review?lane=dupes'));
+    await settle();
+    expect(api.getDedupCandidates).toHaveBeenCalledTimes(3);
   });
 
   it("a band chip click writes ?band and leaves another lane's focus alone", async () => {
@@ -324,6 +353,9 @@ describe('dupes lane', () => {
       expect(screen.queryByTestId('dupes-deeplink-banner')).not.toBeInTheDocument()
     );
     expect(screen.getByTestId('dupes-rail')).toBeInTheDocument();
+    // The screen is on dupes, so the address bar says so (it must not read a bare
+    // /review, which would open the metadata lane).
+    await waitFor(() => expect(loc()).toBe('/review?lane=dupes'));
   });
 
   it('?compare opens the compare drawer on ?ctab; a tab click and closing it write the URL', async () => {
@@ -395,5 +427,70 @@ describe('authors lane', () => {
     await user.keyboard('j');
     await waitFor(() => expect(loc()).toBe('/review?lane=authors&author=2'));
     expect(screen.getByTestId('author-group-2')).toHaveAttribute('data-focused', 'true');
+  });
+});
+
+describe('the address bar and the screen never disagree', () => {
+  it('a bare /review link while on repairs leaves the screen there and says so in the URL', async () => {
+    const user = userEvent.setup();
+    renderWorkspace('/review?lane=repairs&fixer=fx-a');
+    await screen.findByTestId('repairs-fixer-fx-a');
+    await user.click(screen.getByText('link-bare'));
+    await waitFor(() => expect(loc()).toBe('/review?lane=repairs&fixer=fx-a'));
+    expect(screen.getByTestId('lane-tab-repairs')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('an unknown fixer in a link is not left in the address bar', async () => {
+    const user = userEvent.setup();
+    renderWorkspace('/review?lane=repairs&fixer=fx-a');
+    await screen.findByTestId('repairs-fixer-fx-a');
+    await user.click(screen.getByText('link-bad-fixer'));
+    await waitFor(() => expect(loc()).toBe('/review?lane=repairs&fixer=fx-a'));
+  });
+
+  it('an unknown ?band= is removed, and a known one is kept', async () => {
+    const { unmount } = renderWorkspace('/review?lane=dupes&band=NONSENSE');
+    await screen.findByTestId('dupes-rail');
+    await waitFor(() => expect(loc()).toBe('/review?lane=dupes'));
+    unmount();
+    renderWorkspace('/review?lane=dupes&band=HIGH');
+    await screen.findByTestId('dupes-rail');
+    await settle();
+    expect(loc()).toBe('/review?lane=dupes&band=HIGH');
+  });
+
+  it('a band click straight after a layer click does not revert the layer', async () => {
+    const user = userEvent.setup();
+    renderWorkspace('/review?lane=dupes');
+    await screen.findByTestId('dupes-rail');
+    await user.click(screen.getByTestId('layer-chip-llm'));
+    await user.click(screen.getByTestId('band-chip-HIGH'));
+    await waitFor(() => expect(loc()).toBe('/review?lane=dupes&layer=llm&band=HIGH'));
+    await settle();
+    expect(loc()).toBe('/review?lane=dupes&layer=llm&band=HIGH');
+    expect(screen.getByTestId('layer-chip-llm')).toBeInTheDocument();
+    // The layer is still applied: one read for the seed, one for the layer.
+    const last = vi.mocked(api.getDedupCandidates).mock.calls.at(-1)?.[0];
+    expect(last).toMatchObject({ layer: 'llm', band: 'HIGH' });
+  });
+
+  it('holding j writes a few URLs, not one per key repeat, and ends on the right author', async () => {
+    const user = userEvent.setup();
+    vi.mocked(reads.fetchAuthorGroups).mockResolvedValue({
+      groups: Array.from({ length: 12 }, (_, i) => ({
+        canonical: { id: i + 1, name: `Gotham Resident ${i + 1}`, created_at: '' },
+        variants: [{ id: 100 + i, name: `G. Resident ${i + 1}`, created_at: '' }],
+        book_count: 2,
+      })),
+      needsRefresh: false,
+    });
+    renderWorkspace('/review?lane=authors');
+    await screen.findByTestId('author-group-1');
+    visited.length = 0;
+    for (let i = 0; i < 10; i++) await user.keyboard('j');
+    await waitFor(() => expect(loc()).toBe('/review?lane=authors&author=11'));
+    // Ten focus moves, a leading write and a trailing one (plus at most one more
+    // when the throttle window rolled over mid-burst), never one per move.
+    expect(visited.filter((v) => v.includes('author=')).length).toBeLessThanOrEqual(3);
   });
 });
