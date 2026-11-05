@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-08-merge-library-leaves.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: d3c5d254-34a3-4d4e-94c4-d6566a7c0634 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-08` |
 | Tier | **T1** (Sonnet / medium): six leaves into one package with identifier renames; still mechanical |
-| Release / wave | R1 / W10 |
+| Release / wave | R1 / W11 |
 | Depends on | R1-07 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 04 §8.1 R1, §8.2 (mediacore/library row); 05-library §5L.10; 09 §9.2.10 |
 | Branch | `agent/platform-core-r1-08-merge-library-leaves` |

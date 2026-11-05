@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-09-core-leaves-version-entity-health.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: f08cce47-0814-4819-8567-482be7830fb4 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-09` |
 | Tier | **T1** (Sonnet / medium): small new leaves and one constructor rewrite |
-| Release / wave | R1 / W09 |
+| Release / wave | R1 / W10 |
 | Depends on | R1-02, R1-07 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 04 §8.1 R1, §8.2 (mediacore/health row), §8.5 R1 (flight.go logger cut); 03 §3.3 (version, entity, coretest); 05-health §5H.10 Landing R1; 12 §12.4.3 (Version 0.1.0) |
 | Branch | `agent/platform-core-r1-09-core-leaves-version-entity-health` |

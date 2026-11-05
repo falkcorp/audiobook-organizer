@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-20-core-storage-engine-dark.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.5 -->
 <!-- guid: 41b1ca40-2cc3-49e2-aa3c-359bbca50e36 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-20` |
 | Tier | **T4** (Opus / xhigh): the store engine, level stamps and the checkpoint: a wrong write order loses data |
-| Release / wave | R1 / W11 |
+| Release / wave | R1 / W13 |
 | Depends on | R1-13 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 05-storage §5S.3.3-§5S.3.7, §5S.3.12, §5S.3.15 (the `restorejournal` declarations, lines `Intent` to `Record` only), §5S.9.4 step 1; 06 §6.5.1 P2, P4a; 04 §8.1 R1, §8.5 R1 (dbtest newstore.go, compactprogress step.go); 09 §9.2.2 |
 | Branch | `agent/platform-core-r1-20-core-storage-engine-dark` |
@@ -28,6 +28,7 @@
 - `core/kernel/`: `storage.go`, `boot.go`
 - `core/kernel/testdata/`
 - `core/archtest/thirdparty_allow.txt`
+- `core/archtest/batch_by_value.go` (create: `archtest.NoBatchByValue`)
 - `core/examples/hello/storage.go`
 - `internal/compactprogress/`
 - `internal/metafetch/openlibrary.go`
@@ -76,7 +77,7 @@ opens its own store until R1-23 (row notes). What lands:
   `StepID` and STOPs if either is missing, so they land here, not there. Read by `core/internal/restoreswap` (R1-21)
   and storage's P2.
 - `core/kernel/storage.go`: P2 (open) and P4a (checkpoint) of 06 §6.5.1, for apps whose modules declare storage,
-  called from the phase list in `core/kernel/boot.go` (R1-13's file; this row is W11's one owner of the kernel
+  called from the phase list in `core/kernel/boot.go` (R1-13's file; this row is W13's one owner of the kernel
   wiring files and adds only the P2 and P4a calls there);
   hello declares its keyspace and one seed migration (`core/examples/hello/storage.go`).
 - `core/coretest/store.go`: the store fixture over `storage` (04 §8.5 R1 row `internal/database/dbtest: newstore.go`
@@ -115,8 +116,8 @@ opens its own store until R1-23 (row notes). What lands:
   holds).
 - Batch by value: `Batch` embeds the `noCopy` marker (05-storage §5S.3.2) so `go vet`'s copylocks flags a value copy,
   and `archtest.NoBatchByValue` (COR2-12: no core API or spec Go block takes or holds a `storage.Batch` by value)
-  rejects one. `core/archtest/` is not in this row's files, so write the check as a test in `core/storage/` over the
-  archtest engine's loader; if the engine needs a new exported helper, record it under the PR's "Scope notes".
+  rejects one. Create `archtest.NoBatchByValue` in `core/archtest/batch_by_value.go` (this row's file) on R1-01's
+  archtest engine and its loader, and call it from a test in `core/storage/` over core's packages.
 - Deps scoping, first cell: `TestDepsScoping` (06 §6.10) starts here with the storage cell, a write outside
   `m/hello/` through hello's `Deps` is refused. F4-08, F6-03 and F7-09 each extend it with the cells of their stage
   (publish or notify outside the catalog, a secret outside `modules.hello.`, `StartRequest.Actor` overwritten,

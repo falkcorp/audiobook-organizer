@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-03-core-health-completed-dark.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.3 -->
 <!-- guid: d5d73704-a330-44d0-8759-af83c06c3893 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F8-03 |
 | Release | R2, flip label F8 (dark PR) |
 | Tier | **T3** (Opus / high): probes and the startup supervisor; unauthenticated probes must never leak a token outside the golden set |
-| Wave | W30 (beside F2-16, F4-05, F5-15, F6-01, F6-02, F7-02, F8-01; file-disjoint; this row is W28's one owner of `core/kernel/health.go`) |
+| Wave | W30 (beside F2-16, F4-05, F5-15, F6-01, F6-02, F7-02, F8-01; file-disjoint; this row is W30's one owner of `core/kernel/health.go`) |
 | Depends on | F2-10 (readiness core), F2-11 (`diagnostics` minimal owner registration and `InterimExport`), F4-04 (the `events` bus, for the status topic) |
 | Spec | 05-health §5H.3 (all of it: §5H.3.1 registry, §5H.3.2 startup steps, §5H.3.3 probes and HTTP, §5H.3.4 supervisor signals, §5H.3.5 diagnostics bundle, §5H.3.6 sysinfo), §5H.4 (stop budget), §5H.5–§5H.8, §5H.9 (tests), §5H.10 ("Landing by release", row F8); 06 §6.4.10 (F8 row: `Registrar.StartupSteps`, `Registrar.Diagnostics`); 04 §8.1 F8 |
 
@@ -66,9 +66,9 @@ move), and the diagnostics bundle (`Section`, `Writer`, `WriteJSONL`, `Viewer`, 
 | create | `core/health/sysinfo/` (`Info`, `Memory`, `RootSpace`, `Collect`) |
 | create | `core/health/diagnostics/bundle.go` (the bundle, `Section`, `Writer`, `WriteJSONL`, `Viewer`, `Contributor`) |
 | create | `core/internal/healthhttp/` (`/api/core/v1/health`, `/api/core/v1/system/info`, `/api/core/v1/system/status`, `/api/core/v1/diagnostics/{run}`) |
-| modify | `core/kernel/health.go` (F2-10's file): the kernel functions that start the heartbeat and the watchdog ping and register the remaining core components. Nothing calls them from `core/kernel/boot.go` in this PR: the call is F8-04's (it owns `boot.go` in W36), so ABO's boot is unchanged; tests call them directly |
+| modify | `core/kernel/health.go` (F2-10's file): the kernel functions that start the heartbeat and the watchdog ping and register the remaining core components. Nothing calls them from `core/kernel/boot.go` in this PR: the call is F8-04's (it owns `boot.go` in W38), so ABO's boot is unchanged; tests call them directly |
 | (not this row) | `core/module/` (`Registrar.StartupSteps`, `Registrar.Diagnostics`, 06 §6.4.10 F8 row) and ABO's mounts: F8-04 |
-| create | tests beside each; one `changelog.d/` fragment (headerless) |
+| create | tests beside each (with `core/health/testdata/series.golden`); one `changelog.d/` fragment (headerless) |
 
 ## Re-verify before editing (expected results at your base)
 
@@ -112,7 +112,10 @@ STOP if `Registry.Snapshot` already exists (someone landed part of this), if `co
 8. §5H.3.6 sysinfo: host memory, uptime, runtime, root space for `[]library.Root`; no library counts (those stay
    books').
 9. Register the status topic in the events catalog with its permission.
-10. Wire it on `hello` and `coretest` only (dark in ABO). Headers, fragment, acceptance.
+10. §5H.8 metrics (`mediacore_health_*`, `mediacore_diagnostics_*`, `mediacore_shutdown_phase_seconds`, with §5H.8's
+    labels and `reason` as a closed token set per component). They add the core `health` metrics scope: add its
+    `testdata/series.golden` under `core/health/`, asserted by `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5).
+11. Wire it on `hello` and `coretest` only (dark in ABO). Headers, fragment, acceptance.
 
 ## Code contract (05-health §5H.3, verbatim excerpts; copy the rest from the spec)
 
@@ -171,6 +174,9 @@ func Collect(ctx context.Context, roots []library.Root) Info
 `TestDiagnostics_DownloadOtherActor404`, `TestDiagnostics_NarrowKeyOfActor403`, `TestDiagnostics_DemotedActor403`,
 `TestStartup_ExtendPerStepNeverTimer`, `TestStopBudget_ContainerDefault8s`, `TestDiagnostics_PathsConfinedToRoot`,
 `TestNoGlobals_Health`. Use `testing/synctest` where §5H.9 says synctest.
+
+`TestHealthSeries_Golden` (name coined here): `metricstest.AssertSeries` over the `health` scope's provider against
+`core/health/testdata/series.golden` (05-metrics §12): every §5H.8 family with its type and label set.
 
 ## Acceptance (commands and expected output)
 

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-27-deploy-and-rollback-tooling.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: e981aa06-b2f6-4fd5-91ce-9cc3d994ad37 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-27` |
 | Tier | **T2** (Sonnet / high): shell and Python tooling against a fake host; well specified |
-| Release / wave | R1 / W18 |
+| Release / wave | R1 / W20 |
 | Depends on | R1-25, R1-19 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 09 §9.4 R1 Content: deploy tooling; 09 §9.2.1 (rollback, rollback-restore); 05-storage §5S.3.12 (make rollback-restore); 05-health §5H.4 (stop timeouts, KillMode=mixed) |
 | Branch | `agent/platform-core-r1-27-deploy-and-rollback-tooling` |

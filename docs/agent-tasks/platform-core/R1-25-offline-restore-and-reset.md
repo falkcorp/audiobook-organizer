@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-25-offline-restore-and-reset.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 5c692ae4-468d-4905-b950-4341dd0ae790 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-25` |
 | Tier | **T4** (Opus / xhigh): destructive offline restore and reset paths; every target pre-validated |
-| Release / wave | R1 / W16 |
+| Release / wave | R1 / W18 |
 | Depends on | R1-23, R1-21 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 05-storage §5S.3.12 (restore-offline), §5S.3.15 (KindReset, offline only in R1); 05-backup §5B.3.4; 05-updater §5U.12 (swap-slot refusal from R1); 06 §6.4.10 R1 (OpenOffline, OfflineCommands); 09 §9.4 R1 Content: storage, release note |
 | Branch | `agent/platform-core-r1-25-offline-restore-and-reset` |
@@ -85,7 +85,7 @@ single-file bind mount; `storage.ErrRenameRefused`).
 
 ## Tests this task owns (spec names)
 
-- `TestInflightBeforeFirstRename` (05-backup §5B.3.10 table): the in-flight file exists before the first rename; a
+- `TestInflightBeforeFirstRename` (05-backup §5B.9 table): the in-flight file exists before the first rename; a
   kill between the renames makes the in-flight probe refuse `.prev` and the next boot resume or swap back.
 - `TestOfflineResetStagesIntent` (05-storage §5S.3.15) and its R1 done-check twin `TestFactoryResetOffline_R1`
   (06 §6.10): with the service stopped, `storage reset --kind factory --confirm RESET` stages a `ResetFactory`

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-19-build-identity.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 9f6947ba-4d93-4c9b-92ad-bc8d3abdecb9 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-19` |
 | Tier | **T2** (Sonnet / high): server and SPA halves of one build-ID rule; both are given exactly |
-| Release / wave | R1 / W17 |
+| Release / wave | R1 / W19 |
 | Depends on | R1-17, R1-29, R1-04 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 09 §9.4 R1 Content: endpoints and build identity; 07 §7.6.3; 05-health §5H.3.3; 09 Out-of-scope defects item 5 |
 | Branch | `agent/platform-core-r1-19-build-identity` |

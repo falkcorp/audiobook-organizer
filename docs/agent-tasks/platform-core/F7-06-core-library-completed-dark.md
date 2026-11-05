@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-06-core-library-completed-dark.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 3c40ae0e-a05f-40b2-b19d-4fc0f2dca4b2 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-06 |
 | Release | R2, flip label F7 (dark PR) |
 | Tier | **T4** (Opus / xhigh–max): filesystem transfers and renames over user media; a wrong move loses files |
-| Wave | W31 (beside F3-08, F4-07, F5-01, F5-02, F5-03, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13, F5-19, F6-04, F7-05, F9-01; file-disjoint; this row is W28's one owner of `core/go.mod`, `core/go.sum` and `go.sum`). F3-07 is in W29: if it has merged before this PR, rebase and re-run `go mod tidy` in `core/` |
+| Wave | W31 (beside F3-08, F4-07, F5-01, F5-02, F5-03, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13, F5-19, F6-04, F7-05, F9-01; file-disjoint; this row is W31's one owner of `core/go.mod`, `core/go.sum` and `go.sum`). F3-07 is in W29: if it has merged before this PR, rebase and re-run `go mod tidy` in `core/` |
 | Depends on | F3-01 (core config: the roots are `core.library.roots` config entries), F2-05 (`internal/taskhttp` and `coretest` on tasks, as the inventory row lists) |
 | Spec | 05-library §5L.0 (D-L1 … D-L9), §5L.3 (all: §5L.3.1 roots, paths, registry; §5L.3.2 `RootFS`; §5L.3.3 transfers; §5L.3.4 hashing; §5L.3.5 quarantine; §5L.3.6 path mapping; §5L.3.7 watchers; §5L.3.8 ownership and sharing), §5L.4–§5L.8, §5L.9 (tests), §5L.10 (code moves; the roots cutover is F7-08's); 04 §8.1 F7 |
 
@@ -121,7 +121,9 @@ STOP if `library.Manager` already exists, or if core config offers no list-entry
    sentinel and the bootstrap heuristic of HEAD's `libroot.Mounted`.
 7. Roots as config entries with live apply (`TestConfigEntryRoots_RoundTrip`).
 8. The browse route in `core/internal/libraryhttp`, `core:library.browse`, allow-list = the caller's readable roots.
-9. Wire on `hello`/`coretest`, including the registration of `core.library.transfer-recover`. Headers, fragment,
+9. Metrics: the §5L.8 table. This adds the core `mediacore.library` metrics scope: add its `testdata/series.golden` under `core/library/`, asserted by
+   `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5).
+10. Wire on `hello`/`coretest`, including the registration of `core.library.transfer-recover`. Headers, fragment,
    acceptance.
 
 ## Code contract (05-library §5L.3, verbatim excerpts; copy the rest from the spec)
@@ -151,6 +153,8 @@ var ErrReflinkUnsupported = errors.New("library: reflink not supported on this f
 ```
 
 ## Tests (write first; spec names copied exactly, 05-library §5L.9)
+
+Metrics: `metricstest.AssertSeries` over the `mediacore.library` scope's `testdata/series.golden` (05-metrics §12).
 
 `TestRootFSRefusesDotDotAndSymlinkEscape`, `TestRenameNoReplaceNeverClobbers`, `TestTransferCopyPublishIsNoClobber`,
 `TestTransferCrossDeviceMoveOrder`, `TestTransferRecoveryFromJournal`, `TestTransferPermPolicyHasNoDefault`,

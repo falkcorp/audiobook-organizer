@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-33-stop-settings-outside-unit.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: b2d0c031-dfd0-4ae2-b924-b3c0f628deee -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-33` |
 | Tier | **T1** (Sonnet / medium): two deploy-file values and one value handed through R1Values |
-| Release / wave | R1 / W15 |
+| Release / wave | R1 / W17 |
 | Depends on | R1-15 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 05-health §5H.4 ("The budget must fit the supervisor's stop timeout"), §5H.10 R1 row; 05-config §1.12.1 (`R1Values`, field `ShutdownBudget`) |
 | Branch | `agent/platform-core-r1-33-stop-settings-outside-unit` |

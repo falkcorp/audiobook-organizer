@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-31-end-r1-freeze.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.4 -->
 <!-- guid: f6be479f-8c49-424f-8d3e-ef33dbe233e8 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-31` |
 | Tier | **T0** (Haiku / low): one workflow toggle |
-| Release / wave | R1 / W22 |
+| Release / wave | R1 / W24 |
 | Depends on | OWNER-03 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 09 §9.2.1 (R1 freeze: the R1 release turns it off) |
 | Branch | `agent/platform-core-r1-31-end-r1-freeze` |
@@ -42,10 +42,10 @@ End the R1 freeze. R1-35 turned automatic promotion off by setting the workflow-
 F3, production minors ship as usual (09 §9.2.1). This is one line. **If the owner overrode the R1 freeze, R1-35 already left the value at `''`: this row is then a recorded no-op** (see the Re-verify and Steps below).
 
 **Precondition (do not skip).** OWNER-03 has cut the R1 production release. This PR merges only after that
-release exists (09 §9.2.1; plan §(d) W22: "the freeze-off PR merges only after its release is cut"). Check:
+release exists (09 §9.2.1; plan §(d) W24: "the freeze-off PR merges only after its release is cut"). Check:
 
 ```bash
-gh release list --exclude-pre-releases --limit 5
+gh release list --exclude-pre-releases --exclude-drafts --limit 5   # a draft is not a cut release
 ```
 
 The newest non-prerelease entry must be the R1 release OWNER-03 recorded in the tracking issue. If it is

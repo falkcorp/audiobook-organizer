@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-08-identity-flip-legacyauth-native-routes.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 0ad91c06-04c3-47a1-bdf3-1ab090720204 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -30,7 +30,7 @@ git rev-parse HEAD       # BASE
 
 Confirm every dependency is merged and the move window is announced. Read F4-01 … F4-07 and F4-09 … F4-11's PR
 descriptions for the seams, coined names and deferred test cells they handed to this PR (F4-11's names its two boot
-functions; F2-07's names the audit restore hook it deferred to F4).
+functions, its health tokens and the rbac and audit restore hooks it built).
 
 ## Goal
 
@@ -44,9 +44,13 @@ Switch identity to core for ABO in one PR, with every first-party caller (09 §9
    two kernel functions from boot, in that order and after the keyring opened at P4b — the step 2 re-apply (install
    check, replaced-store rule, chain verification, gap and `restore` lines, `c/backup/served_boot`,
    `backup.location.json`, from the effective `core.backup.dir`) and the step 3 restore-hook runner — then step 4's
-   `auth.BootWrites`. Register every restore hook with F4-11's runner: auth's `PostRestore` (F4-02), rbac's (F4-01)
-   and the audit hook F2-07 deferred to F4. F4-11 builds both functions and the journal format; this row only calls
-   and registers them. Add the F4 module members to `core/module/` (`Permissions`, `Roles`,
+   `auth.BootWrites`. Register every restore hook with F4-11's runner: auth's `PostRestore` (F4-02), and rbac's and
+   audit's (F4-11). F4-11 builds both functions, the journal format and those two hook bodies; this row only calls and
+   registers them. **Health tokens:** register F4-11's `revocation_journal_unwritable`, `revocation_journal_broken`,
+   `revocation_journal_reset` and `revocation_journal_colocated` on the kernel-side health component on F2-10's
+   registry (05-health §5H.3.1 names `core.backup` for the colocation token), on authenticated endpoints only: before
+   F8 that is the authenticated `degraded` field of HEAD's `GET /api/v1/system/status`, never `/health`
+   (05-backup §5B.8; 05-health §5H.3.1). Add the F4 module members to `core/module/` (`Permissions`, `Roles`,
    `ImportedRoleIDs`, `Topics`, `Subscribe`, `Deps.Auth`, `AuthAdmin`, `AuthCompat`, `Audit`, `Events`), `users
    reset-password` and `storage cutover-blockers` (F4-06's command) to `core/app/offline.go`'s list with their cobra
    wrappers under `cmd/`. Regenerate `core/openapi/core.json` and the generated client under
@@ -85,7 +89,9 @@ Switch identity to core for ABO in one PR, with every first-party caller (09 §9
    of each flip, versions are contiguous per owner, one M8, last. On a store that F3-07's `main` migrated, F3-07's
    level steps are applied, and the new M8 ignores the previous M8's `done` record and `applied` journal (03 §3.8;
    05-storage §5S.3.13). So a store migrated by F3's `main` has its levels raised, runs M3 and is rewritten once more,
-   and F3's `main` refuses it.
+   and F3's `main` refuses it. In `internal/books/cutover/stepids.go` add this flip's level constant and level-step ID
+   beside F3-06's (never editing an earlier level's) and replace the M8 ID. F4-06's M3 constructor takes
+   `RaisesLevel` and the `After` level-step ref from its caller: pass this flip's constant and level step here.
 7. **Boot writers move:** HEAD's Start-time identity writers (`seedRolesAndTokens`: `internal/auth/seed.go`'s seed-role
    and `_system` writes, `internal/server/bootstrap.go`'s token, the key-expiry stamp, the read-only key) are deleted;
    P7 seeding and `auth.BootWrites` (P4d step 4) take over. Extend `TestBootCrashMatrix_ABO` with a cell at every
@@ -103,11 +109,14 @@ Switch identity to core for ABO in one PR, with every first-party caller (09 §9
     generated `@mediacore/api-client` (07 §7.19 step 3); the `server-bootstrap` skill's `POST /api/v1/auth/bootstrap` and
     every `scripts/` caller on the native routes. The ESLint permission-literal rule (07 §7.18, `no-restricted-syntax`:
     no string literal in a permission position unless it comes from `manifest.permissions` or the generated client)
-    lands with the SPA's switch to the generated client; it belongs in `web/eslint.config.mjs`, which is not in this
-    row's list (STOP 3: report it before editing).
+    lands with the SPA's switch to the generated client, in `web/eslint.config.mjs` (in this row's list).
 11. **04 keys of F4 moved here:** `internal/auth` → core `auth`/`rbac` (delete `internal/auth/` once empty);
     `internal/server`, `internal/server/middleware` → core `auth`; `internal/server/handlers` → core `internal/authhttp`;
     core `audit` serving; `.mockery.yaml` entries of deleted interfaces.
+12. **coretest's authentication half** (06 §6.4.8): complete R1-37's `WithUser`, `As`, `Anonymous` and
+    `AssertPermission` over core auth's principal at stage 13, in `core/coretest/harness.go` and `assert.go`, keeping
+    R1-37's exact signatures: `WithUser` seeds a principal holding exactly its permissions, `As` returns a `Client` whose
+    requests reach stage 13 as that principal, and R1-37's "needs core authentication" failure path is deleted.
 
 ## Files (the row's list)
 
@@ -121,9 +130,13 @@ Switch identity to core for ABO in one PR, with every first-party caller (09 §9
 | modify / create | `internal/server/` (with `internal/server/legacyauth/` created), `internal/auth/` (emptied and deleted) |
 | modify | `internal/cfaccess/`, `internal/usermerge/` |
 | modify | `internal/books/module.go`, `internal/books/cutover/steps.go` |
+| modify | `internal/books/cutover/stepids.go` (add this flip's level constant and level-step ID; replace the M8 ID) |
+| modify | `internal/books/cutover_suite_test.go` (this flip's `TestCutoverFlipUpgrade` cell) |
+| modify | `core/coretest/harness.go`, `core/coretest/assert.go` (Goal item 12) |
 | modify | `web/src/`, `.claude/skills/server-bootstrap/`, `scripts/` |
 | create | `web/tests/e2e/` (the two fragment-link Playwright specs) |
 | modify | `internal/arch/layering_test.go`, `scripts/ci/short_test_weights.json` |
+| modify | `web/eslint.config.mjs` (the permission-literal rule, Goal item 10) |
 
 This PR is its wave's only owner of the kernel and module wiring files.
 
@@ -150,6 +163,10 @@ grep -rn 'api/v1/auth' .claude/skills/server-bootstrap scripts | wc -l          
 ls -d internal/server/legacyauth 2>/dev/null | wc -l                             # 0
 grep -c 'cutover/m3\|m3\.' internal/books/cutover/steps.go                       # 0 (F3-07's list holds M2, M7, M8)
 ls core/kernel/restore_reapply.go core/kernel/restore_hooks.go | wc -l            # 2 (F4-11)
+ls core/rbac/restore_hook.go core/audit/restore_hook.go | wc -l                  # 2 (F4-11)
+git grep -n 'revocation_journal_' -- core/kernel/boot.go core/kernel/kernel.go | wc -l   # 0 now; >= 1 after
+grep -n 'needs core authentication' core/coretest/*.go | wc -l                  # >= 1 (R1-37's stub); 0 after
+grep -n 'level-\|rewrite-after-' internal/books/cutover/stepids.go               # F3-06's F3 level constant and M8 ID
 ls web/tests/e2e/*.spec.ts | wc -l                                               # HEAD > 0 (Playwright specs dir)
 ls -d core/internal/authhttp internal/cfaccess internal/books/rbacreach | wc -l  # 3
 grep -rn 'func Compile\|func AuthDisabled\|func ForSystem' core/internal/authz/ | wc -l   # 3 (F4-09)
@@ -171,17 +188,19 @@ grep -c 'internal/auth$' tools/cmd/sdkguard/internal-deps.txt                   
 1. Write the owned gate tests and the deferred cells first (below).
 2. Kernel/module/app (Goal item 0): inject `authz.Compile`, mount F4-05's routes on `CoreGroup` and the OIDC paths on
    `CoreFixedGroup`, start rbac/auth/audit serving, the bus, P7 seeding, F4-11's P4d step 2 and step 3 functions with
-   the auth, rbac and audit restore hooks registered, `BootWrites`, the `c/backup/` journal spec, stage 7/13 audit; the F4 module members; the offline commands and their `cmd/` wrappers; `app.Options.Auth`,
+   the auth, rbac and audit restore hooks registered, F4-11's `revocation_journal_*` tokens on the health registry,
+   `BootWrites`, the `c/backup/` journal spec, stage 7/13 audit; the F4 module members; the offline commands and their `cmd/` wrappers; `app.Options.Auth`,
    `Authenticators`; delete `LegacyAuthGinUntil`; archtest; regenerate `core.json` and the client.
 3. Books: `books.abs` with `AppHandoff`; `Deps.AuthCompat` in the ABS adapters; M3 in `steps.go`; add this flip's
-   level steps, replace the M8 entry with a newly named one and bump the raised owners' declared levels (Goal item 6); this flip's cell in
-   F2-15's cutover-suite harness (the cell shape is F3-04's).
+   level constant, level-step ID and new M8 ID to `stepids.go`, add this flip's level steps, replace the M8 entry with
+   a newly named one and bump the raised owners' declared levels (Goal item 6); this flip's `TestCutoverFlipUpgrade`
+   cell in `internal/books/cutover_suite_test.go`, F2-15's cutover-suite harness (the cell shape is F3-04's).
 4. Bridge `internal/server/legacyauth`; replace the gin auth chain and the 14 raw `auth.Can` sites; delete `RequireAuth`
    and the gin identity, OAuth and settings (`k`/`s`) routes; move `client_trust.go`'s Access branch.
 5. Delete HEAD's Start-time identity writers and HEAD's merge undo of pre-R2 journals (409 `merge_permanent`).
 6. SPA, skill and scripts on the native routes; reset control back; the two fragment-link Playwright specs under
    `web/tests/e2e/`.
-7. Move `internal/auth` per the 04 keys; `.mockery.yaml`; layering and shard weights; regenerate
+7. coretest's authentication half (Goal item 12). Move `internal/auth` per the 04 keys; `.mockery.yaml`; layering and shard weights; regenerate
    `tools/cmd/sdkguard/internal-deps.txt` and bump its `# version:` line.
 8. Headers; one `changelog.d/` fragment; Acceptance.
 
@@ -211,7 +230,8 @@ grep -c 'internal/auth$' tools/cmd/sdkguard/internal-deps.txt                   
   `TestCompat_ABSLoginHonoursRestrictions`, `TestBootWrites_RunInP4d`, `TestConfining_WorkerKeyRefusedOnPlaylists`,
   `TestAuthOff_BooksGatesAndInHandlerDenial`, `TestAuthOff_SettingsManageKeepsReach`, the core half of
   `TestUserMerge_ScopedAdminKeyRefused`.
-- **Levels and M8 (order M2):** this flip's cell in F2-15's cutover-suite harness (the cell shape is F3-04's): a store
+- **Levels and M8 (order M2):** this flip's `TestCutoverFlipUpgrade` cell in `internal/books/cutover_suite_test.go`,
+  F2-15's cutover-suite harness (the cell shape is F3-04's): a store
   migrated by F3-07's `main` and booted by this `main` has its levels raised to this build's target before M3, runs
   exactly one M8, and F3-07's binary then exits 78 on it. F3-06's registered-list test (levels raised before the first
   step of each flip, versions contiguous per owner, one M8, last) stays green on this build.
@@ -225,6 +245,20 @@ grep -c 'internal/auth$' tools/cmd/sdkguard/internal-deps.txt                   
     native stores; after a restart the re-revoked key, a restored session and a restored invite stay refused.
   - `TestCrashBetweenSwapAndHooksResumesHooks` (05-backup §5B.9): a crash at P2, P4a, P4b and each P4d step after step
     g leaves a restore boot whose hooks run once to completion, and the in-flight probe refuses until `applied`.
+  - `TestPostDAGReconcilerOrder`'s real-boot cell (05-storage §5S.10; F4-11 owns the dark cell): on the booted App the
+    reconcilers run in 06's order after the DAG, before any listener, and the journal re-apply sees the overrides and
+    the keyring.
+- **Health tokens** (05-health §5H.3.1, §5H.9; 05-backup §5B.8):
+  - `TestHealth_UnauthenticatedTokenSetGolden`'s F4 cell: the four `revocation_journal_*` tokens are in its
+    "never on `/health`" set; raised at once, none appears on `/health`.
+  - A booted cell (name coined here: `TestHealth_RevocationJournalBrokenRaised`): a journal whose chain is broken
+    before boot raises `revocation_journal_broken` (degraded) on the authenticated `degraded` field of
+    `GET /api/v1/system/status`, and not on `/health`.
+- **coretest** (06 §6.4.8): `TestAssertPermission_Hello`'s authenticated cells (R1-37 coined the test): over hello, a
+  route with a real permission answers 403 to a user lacking it and neither 401 nor 403 to a user holding exactly it;
+  `As` no longer fails with R1-37's "needs core authentication" message.
+- **ESLint permission-literal rule** (07 §7.18): `web/eslint.config.mjs`'s `no-restricted-syntax` selector passes over
+  `web/src/` after the switch, and fails on a fixture passing a string literal to `usePermission`.
 - **Routes** (05-http-api §12):
   - `TestStage13_StaleCookieOnPublicRouteIsAnonymous`: a stale cookie on a Public route is cleared and the request
     proceeds anonymous.
@@ -270,7 +304,10 @@ grep -c 'internal/auth$' tools/cmd/sdkguard/internal-deps.txt                   
 go build ./... && go vet ./...                                                                  # exit 0
 go test -count=1 ./internal/server/... ./internal/books/... ./internal/usermerge/... ./internal/cfaccess/...   # ok
 go test -count=1 -run 'TestOAuthCallback_HEADPathServedByCore|TestOAuthStart_HEADPathServedByCore|TestIdentityCutover_|TestCutover_NoRawTokenOnDisk|TestOIDC_AppHandoffMintsABSCode|TestWorkerKey_Confined|TestCutoverRefusedByOlderBuilds|TestBootCrashMatrix_ABO|TestRestoreHooksWriteNativeRows|TestCrashBetweenSwapAndHooksResumesHooks|TestLegacyRoute_SettingsAtomNeverWiderThanSuccessor|TestCoreRoutesReplaceGin|TestOldLinkFormsNotServed|TestAuthOff_AuthModeWriteRefused' ./...   # PASS
-(cd core && go test -count=1 -run 'TestWorkerKey_Confined|TestBootCrashMatrix|TestBootPhaseOrder_NoWriteBeforeCheckpoint|TestStage13_StaleCookieOnPublicRouteIsAnonymous|TestDepsScoping|TestAuthOff_AuthModeWriteRefused' ./...)   # PASS
+(cd core && go test -count=1 -run 'TestWorkerKey_Confined|TestBootCrashMatrix|TestBootPhaseOrder_NoWriteBeforeCheckpoint|TestStage13_StaleCookieOnPublicRouteIsAnonymous|TestDepsScoping|TestAuthOff_AuthModeWriteRefused|TestPostDAGReconcilerOrder|TestAssertPermission_Hello' ./...)   # PASS
+go test -count=1 -run 'TestCutoverFlipUpgrade|TestHealth_UnauthenticatedTokenSetGolden|TestHealth_RevocationJournalBrokenRaised' ./...   # PASS
+grep -n 'needs core authentication' core/coretest/*.go | wc -l                                 # 0
+(cd web && npx eslint src)                                                                      # exit 0 (the permission-literal rule on)
 make sdkguard                                                                                   # exit 0 (closure matches the regenerated list)
 ls -d internal/auth 2>/dev/null | wc -l                                                         # 0
 grep -rn 'LegacyAuthGinUntil' --include=*.go . | grep -v _test | wc -l                         # 0

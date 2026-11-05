@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-36-core-log-logging-pipeline.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: 151713b2-8479-41b2-9b1c-2a47c6953d88 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -36,6 +36,9 @@ list without recording it under the PR's "Scope notes"):
   `internal/server/handlers/ai.go`, `internal/server/handlers/dedup/manual_candidates.go`,
   `internal/server/handlers/operations/{handler,pause}.go`
 - `internal/server/opcontext.go` and `internal/server/opcontext_test.go` (create)
+- `internal/logger/ctx.go` and `internal/logger/ctx_test.go` (create: the books-side `InfoCtx`/`WarnCtx`/`ErrorCtx`/
+  `DebugCtx` helpers step 6 moves the callers onto; `internal/logger/` is otherwise R1-18's, and these two files are
+  this row's)
 
 Record every ABO path above under the PR's "Scope notes".
 
@@ -292,8 +295,24 @@ over this row's files.
 6. **Stage 2 deletions (05-logging §11 item 2).** Delete `core/log/sanitize.go`, `sanitize_test.go`, `structured.go`,
    `structured_test.go`, `opcontext.go` and `integration_test.go` (it tests only `WithOp`/`Info`). Then rewrite every
    caller found by the re-verify greps, mechanically:
-   - `logging.Info(ctx, ` → `slog.InfoContext(ctx, `, and the same for `Warn`, `Error`, `Debug`. Add `"log/slog"` to
-     the file's imports.
+   - First create `internal/logger/ctx.go` with `InfoCtx`, `WarnCtx`, `ErrorCtx` and `DebugCtx`, each
+     `func(ctx context.Context, msg string, args ...any)` (names fixed by the plan). Each logs through the existing books
+     logger path (the `slog.Default()` route `logToStdout` uses, with the package's `sanitizeLogLine` barrier on the
+     message and string values, as HEAD's `logging.Info` sanitised them) and appends
+     `corelog.AttrsFrom(ctx)` (import `corelog "github.com/falkcorp/mediacore/log"`). The file sits inside
+     `TestGuard_NoDirectSlogCalls`'s permanent exempt prefix `internal/logger/` (HEAD
+     `internal/logger/slog_guard_test.go`), so its own `slog` calls are allowed.
+   - `logging.Info(ctx, ` → `logger.InfoCtx(ctx, `, and the same for `Warn`→`WarnCtx`, `Error`→`ErrorCtx`,
+     `Debug`→`DebugCtx`. Add the `internal/logger` import where the file lacks it. Do **not** rewrite to package-level
+     `slog.InfoContext` and the like: HEAD's `TestGuard_NoDirectSlogCalls` fails any non-test file under `internal/` or
+     `cmd/` that calls a package-level `slog.Info/Warn/Error/Debug`, a `*Context` variant or `slog.Default` beyond its
+     entry in `internal/logger/slog_guard_ratchet_test.go`. Several of the 43 files (for example
+     `internal/server/metadata_ops.go` and `internal/scanner/scanner.go`) have no entry at all, and the ratchet's
+     ceilings (`slogRatchetFileCeiling = 268`, `slogRatchetCallCeiling = 1485` at HEAD) may only go down (05-logging §2
+     "Ratchet", §11 item 3). Never add an entry or raise a ceiling.
+   - Add `internal/logger/ctx_test.go` with `TestCtxHelpers_AppendAttrsFrom` (name coined here): each of the four
+     helpers, called with a `ctx` carrying `corelog.WithAttrs(ctx, slog.String("k", "v"))` and a CR/LF in the message,
+     writes one record holding `k=v` with the control characters escaped.
    - `logging.Sanitize(x)` → `x`; `logging.SanitizeErr(err)` → `err`. The stdlib text and JSON handlers quote control
      characters, and the `internal/logger` printf methods (`pauseLog.Warn(...)` in
      `internal/server/handlers/operations/pause.go`) still sanitise their own line until R1-18's shim.
@@ -310,8 +329,10 @@ over this row's files.
    - Keep the import alias `logging "github.com/falkcorp/mediacore/log"` wherever the file still uses another
      `core/log` name; remove the import where nothing is left.
    Note for reviewers: between this merge and R1-15's `app.InstallProcessDefaults`, `slog.Default()` is still HEAD's
-   text handler, which does not read `AttrsFrom`, so the three `internal/server` files' op attrs are absent from those
-   logs until R1-15 merges. No production release falls in that window while the R1 freeze is on (09 §9.2.1).
+   text handler, which does not read `AttrsFrom`. The step 6 helpers append `corelog.AttrsFrom(ctx)` themselves, so
+   the three `internal/server` files' op attrs still reach those logs; a record that bypasses the helpers lacks them
+   until R1-15 merges. Do not rely on the R1 freeze to cover that window: if OWNER-01 overrode the R1 freeze (09
+   §9.2.1; R1-35 then sets `''`), a production minor in this window logs without those op attrs. Record that in the PR.
 7. **`core/health/flight.go`:** replace `corelog.Sanitize(fmt.Sprintf(format, args...))` with
    `fmt.Sprintf(format, args...)` in `logf`, and remove the `corelog` import if nothing else uses it. The handler's
    escaping now covers it (05-logging §3, `TestHandler_EscapesControlChars`). Leave the rest of the file unchanged.
@@ -328,6 +349,8 @@ go -C core vet ./log/... ./health/...                                           
 go -C core test -race -count=1 ./log/... ./health/...                                        # expect ok x2
 go -C core test -count=1 -run 'TestModuleLevels_Live|TestHandler_EscapesControlChars|TestContextAttrs_AndTraceIDs|TestTwoAppsIsolated|TestLevelTraceRendering|TestRotatingFile_RotatesAndCaps' -v ./log/ | grep -c '^--- PASS'   # expect 6
 go test -count=1 -run TestOpContextAttrsResolvedAtLogTime ./internal/server/                 # expect ok
+go test -count=1 -run 'TestGuard_NoDirectSlogCalls|TestCtxHelpers_AppendAttrsFrom' ./internal/logger/   # expect ok
+git diff --exit-code origin/main -- internal/logger/slog_guard_ratchet_test.go               # expect exit 0 (ratchet unchanged)
 git grep -n 'func Sanitize\|func SanitizeErr\|type OpContext\|func WithOp\|func OpFromContext' -- core/log | wc -l   # expect 0
 git grep -n '^func \(Info\|Warn\|Error\|Debug\)(' -- core/log | wc -l                        # expect 0
 git grep -n 'logging\.\(Sanitize\|SanitizeErr\|WithOp\|OpContext\|OpFromContext\|Info\|Warn\|Error\|Debug\)\b' -- '*.go' | wc -l   # expect 0
@@ -341,8 +364,10 @@ make ci                                                                         
 ## STOP conditions
 
 - A predecessor's output is missing (Dependency check).
-- The pipeline needs an import outside I8 (for example `metrics` for the counters: the kernel's bridge reads
-  `Counters()` instead, 05-logging §9).
+- The pipeline needs an import outside I8 (for example `metrics` for the counters: R1-18's `mediacore.log` scope
+  bridge reads `Counters()` instead, 05-logging §9).
+- `TestGuard_NoDirectSlogCalls` fails after the rewrite. Move the offending call onto the step 6 helpers; never add a
+  ratchet entry or raise a ceiling. If a call cannot move, report it.
 - R1-32's `Redactor` lacks a method the redact stage needs (`Attr` is the one the pipeline calls). Do not add a second
   redaction type; report it.
 - A required CodeQL or log-injection check fails on the `Sanitize` removal. The spec deletes it on purpose
@@ -353,8 +378,8 @@ make ci                                                                         
 
 Kernel construction of `Logging`, `Deps.Log`, `app.InstallProcessDefaults` (R1-13, R1-15). The books tap, the file
 output selection and the `internal/logger` shim (R1-18). Live config re-application (F3-07). The journal, its store,
-importer (F5-15). The metrics bridge over `Counters()` (the kernel row that adds the
-`mediacore.log` scope). `RedactInvitePath`, `Redactor` and the default lists (R1-32). `internal/logger`'s
+importer (F5-15). The metrics bridge over `Counters()` (R1-18, which adds the
+`mediacore.log` scope and its series golden, 05-logging §9). `RedactInvitePath`, `Redactor` and the default lists (R1-32). `internal/logger`'s
 `SanitizeLogValue` (a different package; R1-18's shim).
 
 ## Rollback

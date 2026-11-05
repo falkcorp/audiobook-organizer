@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-18-logging-stages-1-and-2.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.5 -->
 <!-- guid: 0af0f945-e47e-4822-ac2b-f63544c667ad -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-18` |
 | Tier | **T2** (Sonnet / high): small deletions plus a tap; the activity feed must keep its output |
-| Release / wave | R1 / W14 |
+| Release / wave | R1 / W16 |
 | Depends on | R1-15, R1-07, R1-36 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 05-logging §11 items 1-2, 5; 09 §9.4 R1 Content: runtime, release note (05-logging's log-file and level lines) |
 | Branch | `agent/platform-core-r1-18-logging-stages-1-and-2` |
@@ -21,7 +21,12 @@
 - `cmd/root.go`
 - `internal/server/server.go`
 - `internal/activity/`
-- `internal/logger/`
+- `internal/logger/` (it includes `internal/logger/ctx.go` and `ctx_test.go`, which R1-36 created: keep the
+  `InfoCtx`/`WarnCtx`/`ErrorCtx`/`DebugCtx` helpers working through the shim, and leave
+  `internal/logger/slog_guard_ratchet_test.go`'s ceilings as they are or lower). R1-36's helpers append
+  `corelog.AttrsFrom(ctx)` themselves because HEAD's default handler does not; once `slog.Default()` is the App
+  pipeline (R1-15), its handler appends them too, so make the helpers stop appending (no doubled attrs) and extend
+  `TestCtxHelpers_AppendAttrsFrom` with a cell proving each attr appears once
 - `core/log/`
 - `internal/books/logging.go`
 
@@ -67,6 +72,17 @@ output identical:
    (R1-09), never `slog.SetDefault`.
 6. `log_level`/`--log-level` set the handler level (05-logging §11 item 6: "today it does not, §2"): pass it to the
    App's logging options so it now takes effect; release-note it.
+7. **The `mediacore.log` metrics scope (05-logging §9).** `log` cannot import `metrics` (03 R4), so the bridge is
+   kernel-side: it holds the core `*metrics.Scope` `mediacore.log` (the app's namespace applies, 05-metrics
+   `TestNamespace_CoreScopesUseAppNamespace`) and registers observable instruments that read `Logging.Counters()`:
+   `mediacore_log_records_total{level,module}`, `mediacore_log_dropped_total{sink}` and
+   `mediacore_log_redactions_total{kind}`. The two journal families of §9 (`_journal_write_errors_total`,
+   `_journal_lag_seconds`) have no `Counters` field yet and are not this row's. Put the bridge beside R1-13's
+   construction of `Logging` in `core/kernel/` (file `core/kernel/logmetrics.go`); it, its test and
+   its golden are in the inventory's list above (R1-16, this wave's sibling, edits only `core/kernel/supervisor.go`
+   there). Add the scope's series golden
+   `core/kernel/testdata/log/series.golden` (family, type, label set), asserted by `metricstest.AssertSeries` (R1-10;
+   05-metrics §5 item 5).
 
 ## Tests (write first; names coined here unless marked)
 
@@ -79,6 +95,9 @@ output identical:
 - `TestShim_SubsystemIsAttribute`: `logger.FromSlog(l).Info("x %d", 1)` emits message `x 1` with
   `subsystem=<name>` as an attribute; a per-subsystem level filters it.
 - `TestLogLevelFlagApplies`: `--log-level debug` makes debug records reach the handler.
+- `TestLogMetrics_SeriesGolden`: the `mediacore.log` scope's gathered families match
+  `core/kernel/testdata/log/series.golden` through `metricstest.AssertSeries`, and a record, a tap drop and a redaction
+  each raise their counter by one (05-logging §9).
 - Existing: `internal/activity` and `internal/logger` suites unchanged.
 
 ## Dependency check
@@ -102,7 +121,7 @@ R1-11 changed `cmd/root.go:650` only; R1-15 changed `cmd/root.go`'s `serve` wiri
 1. Tests first. 2. The deletions (item 1) and the tap (item 2) in one commit, so the feed never loses records
 between commits. 3. The books file-output defaults (in `internal/books/logging.go`, passed where `cmd/root.go`'s
 `serve` builds `app.Options`; do not edit `main.go`, which R1-16 edits in this wave). 4. The shim. 5. The log-level fix.
-6. Header bumps; fragment `changelog.d/<today>_logging_r1.md` with 05-logging's R1 release-note lines: the log
+6. The `mediacore.log` bridge and its golden (item 7). 7. Header bumps; fragment `changelog.d/<today>_logging_r1.md` with 05-logging's R1 release-note lines: the log
 file's new location under the state directory, and that `log_level`/`--log-level` now set the level. Commit(s):
 `refactor(logging): remove the second default logger and file setup; activity tap`,
 `feat(books): core file output defaults`, `refactor(logger): books shim over slog`.
@@ -118,6 +137,8 @@ git grep -n 'setupFileLogging\|log.SetOutput' -- cmd internal | grep -v _test | 
 git grep -n 'slog.SetDefault' -- cmd internal | grep -v _test | wc -l                     # expect 0 (the only install is core's InstallProcessDefaults)
 go test ./internal/activity/ ./internal/logger/... ./internal/books/ ./cmd/ -count=1      # expect ok
 go -C core test ./log/ -count=1                                                            # expect ok
+go -C core test -count=1 -run TestLogMetrics_SeriesGolden ./kernel/                        # expect ok
+go test -count=1 -run TestGuard_NoDirectSlogCalls ./internal/logger/                       # expect ok
 make test-e2e                                                                              # expect green (Activity page shows system entries)
 make ci && make -C core ci                                                                 # expect exit 0
 ```

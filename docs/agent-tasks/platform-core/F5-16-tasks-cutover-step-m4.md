@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-16-tasks-cutover-step-m4.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 8fcf5409-cd73-4f80-ab41-6d71c96ea327 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -97,7 +97,8 @@ match. The op-ID ledger is unchanged since `748fd787a`.
 | create | `internal/books/testdata/r2corpus/m4/`: M4's expected answers over the corpus (counts, ID lists, the renamed activity rows), and any M4-specific overlay case the corpus manifest does not already list |
 | create | one `changelog.d/` fragment |
 
-Do not modify `internal/books/cutover/steps.go` (F5-18 registers M4), `internal/database` (M4 imports its HEAD
+Do not modify `internal/books/cutover/steps.go` (F5-18 registers M4), `internal/books/cutover/stepids.go` (F3-06's;
+F5-18 adds its level constant there), `internal/database` (M4 imports its HEAD
 readers; F5-18 moves the run-row store files into `internal/books/cutover/m4legacy/`), `internal/scheduler`,
 `internal/opscatalog`, `core/`, `main.go`.
 
@@ -185,6 +186,17 @@ explicit `tasks.Parallelism` each and workers over **disjoint** key ranges:
 
 Say in a comment, per step, why its partition can never let two workers write one row.
 
+## Level from the caller (order M2; F3-04 "Flip mechanism" item 2)
+
+Every M4 `DataMigration` is `Breaking`, so each needs `RaisesLevel > 0` (05-storage §5S.3.6), and the block must run
+`After` the level step of the flip that registers it. Neither exists yet: F5-18 adds its books level constant and
+level-step ID to `internal/books/cutover/stepids.go` and its level step to `steps.go`. So M4's exported constructor
+(name coined here, for example `m4.New(imp tasks.Importer, raisesLevel int, after []storage.StepRef)
+[]datamigrate.DataMigration`) takes `RaisesLevel` and the `After` level-step ref from its caller. Every step it returns
+gets that `RaisesLevel`. The first step runs `After` the passed ref, and each later step runs `After` the one before it.
+F5-18 passes its own constant and level step. This row reads no level constant and adds none. The tests pass F3's level
+as the fixture: the books level constant and level-step ID F3-06 put in `stepids.go`.
+
 ## Open spec gaps you must not paper over (STOP and report if hit)
 
 - A HEAD row family the corpus holds that 05-storage §5S.9.1 does not list as imported, rewritten or deleted.
@@ -233,8 +245,8 @@ make ci                                                                         
 
 ## Out of scope
 
-Registering M4 and raising M7's target (F5-18, 03 §3.8: each flip that adds a step raises M7's target in the
-same PR); moving HEAD's run-row store files into `internal/books/cutover/m4legacy/` (F5-18);
+Registering M4, adding the flip's level step (which raises M7's target) and replacing M8 (F5-18, 03 §3.8: each flip
+that adds a step raises M7's target in the same PR); the level constant and IDs in `stepids.go` (F5-18); moving HEAD's run-row store files into `internal/books/cutover/m4legacy/` (F5-18);
 `TestKindRenameMapCoversLedger`, `TestCutover_CheckpointsResume` and the resume-sweep halves (F5-18, they need
 the registered kinds); `TestCutover_NoCatchUpStorm` (F5-14); M5 (F5-15).
 

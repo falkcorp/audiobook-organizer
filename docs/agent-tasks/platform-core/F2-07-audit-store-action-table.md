@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-07-audit-store-action-table.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: dbe44289-51c8-493f-bbe3-5173191430f8 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -179,8 +179,8 @@ for concurrent use; no package-level mutable state (R5).
   `core/audit/testdata/series.golden`.
 
 `TestAudit_RestoreCopiesForwardRecords` and `TestAudit_CopyForwardThenWriteNoOverwrite` need audit's restore hook,
-which is not this PR's: the hook is registered with F4-11's restore-hook runner (the P4d step 3 kernel function), and
-F4-08 wires it at the identity flip; the two tests go with it.
+which is not this PR's: F4-11 writes the hook body (`core/audit/restore_hook.go`) and its restore-hook runner (the P4d
+step 3 kernel function), F4-08 wires it at the identity flip, and F4-11 owns the two tests.
 
 ## Steps
 
@@ -209,7 +209,7 @@ make ci                                                                         
 ## Out of scope
 
 The boot call (F2-16); the audit query and export routes (F4-05); auth, rbac and tasks recording their events (their
-flips); audit's restore hook (registered with F4-11's restore-hook runner, wired by F4-08); `core.audit.prune` (registered with the tasks flip); any ABO edit.
+flips); audit's restore hook and its two tests (F4-11 writes them; F4-08 wires the hook); `core.audit.prune` (registered with the tasks flip); any ABO edit.
 
 ## Idempotency / rollback
 

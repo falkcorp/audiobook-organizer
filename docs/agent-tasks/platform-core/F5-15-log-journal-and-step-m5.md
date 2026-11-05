@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-15-log-journal-and-step-m5.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 2172729c-4a08-45a0-ad75-8cf11d81ee4d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -97,8 +97,10 @@ Spec anchors: 05-logging cites `pebble_store_activity.go:20-37` and `store.go:67
 
 | Action | Path |
 |---|---|
-| create | `core/log/journal.go` (the SDK types) and `core/log/journal_test.go` |
+| create | `core/log/journal.go` (the SDK types) |
+| create | `core/log/journal_test.go` (tests beside the SDK types; inventory row F5-15) |
 | create | `core/log/logtest/` (`JournalStoreSuite`) |
+| modify | `core/kernel/logmetrics.go` and `core/kernel/testdata/log/series.golden` (R1-18's bridge: add `mediacore_log_journal_write_errors_total` (counter) and `mediacore_log_journal_lag_seconds` (gauge) from 05-logging §9, read from the journal tap's counters; add their lines to the golden, asserted by `metricstest.AssertSeries`) |
 | create | `core/internal/logjournal/` (`store.go` native store, `importer.go`, `tap.go`, `settings.go` with the `Settings` and `Schedules` types, tests); **not** `prune.go` (F5-03), `tail.go` (F6-05) |
 | create | `internal/books/cutover/m5/` (the step, its tests, its fixture glue) |
 | create | one `changelog.d/` fragment |
@@ -155,8 +157,18 @@ Rules:
 | `Source` | the retired claim range of `syslog:` |
 | `Parallelism` | `tasks.Fixed(n, "<reason>")` or `tasks.CPU()` over disjoint key-range shards of `syslog:` (by the RFC3339Nano time prefix), chosen and justified in the PR (09 §9.9; CLAUDE.md): the importer commits its own batch per call, so workers own disjoint ranges and never share a row |
 | `Mode`, `Compat`, `Cutover` | BootBlocking, Breaking, `Cutover: true` (05-storage §5S.3.13) |
+| `RaisesLevel` | the books level the caller passes (see below); never a constant read here |
+| `After` | the level-step ref the caller passes (see below) |
 | `Step` | per chunk: decode each row's JSON as HEAD's `SystemActivityLog`; build `ImportedRecord{Record{Time: CreatedAt, Level: <HEAD level string → slog.Level>, Module: "books", Subsystem: Source, Message: Message, Attrs: user_id when non-empty}, SourceID: <the row's key>}`; `Importer.Import` the chunk; then `StepWriter.Delete` each imported source key; a row that does not decode (or a level string HEAD never wrote) → `StepWriter.Quarantine(key, raw, reason)` |
 | `Verify` | imported + quarantined = rows read; no `syslog:` key left |
+
+**Level from the caller** (order M2; F3-04 "Flip mechanism" item 2). M5 is `Breaking`, so it needs `RaisesLevel > 0`
+(05-storage §5S.3.6), and it must run `After` the level step of the flip that registers it. Neither exists yet: F5-18
+adds its books level constant and level-step ID to `stepids.go` and its level step to `steps.go`. So M5's exported
+constructor (name coined here, for example `m5.New(imp log.Importer, raisesLevel int, after []storage.StepRef)`) takes
+`RaisesLevel` and the `After` level-step ref from its caller. F5-18 passes its own constant and level step. This row
+reads no level constant and adds none. The tests pass F3's level as the fixture: the books level constant and
+level-step ID F3-06 put in `stepids.go`.
 
 Ordering inside a chunk: import first, delete second. A crash between them re-imports the same keys (idempotent)
 and then deletes; a crash after the delete commit leaves nothing to redo. The deletes and the shard cursor

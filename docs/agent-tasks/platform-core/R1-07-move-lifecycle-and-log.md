@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-07-move-lifecycle-and-log.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 10fc0787-73a0-42ba-9753-7796bb4c7ace -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-07` |
 | Tier | **T1** (Sonnet / medium): import-path rewrite of two leaf packages and their importers; every commit must build |
-| Release / wave | R1 / W06 |
+| Release / wave | R1 / W07 |
 | Depends on | R1-02 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 04 §8.1 R1, §8.2 (mediacore/lifecycle, mediacore/log rows), §2.2 (mechanical rewrites); 09 §9.2.10 (move window); 09 §9.4 R1 Content: runtime |
 | Branch | `agent/platform-core-r1-07-move-lifecycle-and-log` |

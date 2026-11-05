@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-26-rename-database-to-books-store.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 320631e7-248c-44f9-9695-42e3a066fa6e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-26` |
 | Tier | **T2** (Sonnet / high): about 850 call sites, import paths only, every commit builds |
-| Release / wave | R1 / W18 |
+| Release / wave | R1 / W20 |
 | Depends on | R1-23, R1-25 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 04 §2.4 (internal/books/store), §4, §1 headline 1; 09 §9.2.10 (move window, about 850 engine call sites) |
 | Branch | `agent/platform-core-r1-26-rename-database-to-books-store` |

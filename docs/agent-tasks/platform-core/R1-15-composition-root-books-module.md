@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-15-composition-root-books-module.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.5 -->
 <!-- guid: 3f22576e-6cf0-4db5-afca-5c9f763dca9c -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-15` |
 | Tier | **T4** (Opus / xhigh): ABO's process entry point changes; listeners, stop order and process-global installs move together |
-| Release / wave | R1 / W12 |
+| Release / wave | R1 / W14 |
 | Depends on | R1-13, R1-14, R1-10, R1-09, R1-07 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 06 §6.11.1, §6.4.10 R1 (app.Options R1 fields, R1Values), §6.5.2 (stop order); 05-health §5H.4 (core.shutdown.budget); 05-metrics §13 items 1-2; 05-logging §11 items 1, 4; 05-config §1.12.1 (R1Values); 05-rbac §4.9, §6.1 (atom table is books code); 04 §2.4 (internal/books); 09 §9.4 R1 Content: runtime |
 | Branch | `agent/platform-core-r1-15-composition-root-books-module` |

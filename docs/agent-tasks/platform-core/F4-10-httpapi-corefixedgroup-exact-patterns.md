@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-10-httpapi-corefixedgroup-exact-patterns.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: 0398de9d-2bb5-4cdc-bd80-084cd51c0a37 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -181,4 +181,4 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 - **`Build`'s file is not in the row.** The refusal and the two-pattern exemption are `Build` and claim-check rules
   (05-http-api §3.5, §4.9), and `Build` lives in an R1-13 file of `core/httpapi/` (name chosen by R1-13). The row lists
   only `corefixed.go` and its test, so this brief allows two one-line calls in that file (STOP 2). The row should list
-  the file; no other W22 row touches `core/httpapi/`.
+  the file; no other W24 row touches `core/httpapi/`.

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-01-core-rbac-store-service-seeds.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 59c67fbd-15a4-478a-a671-a3cd8a9542d5 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -191,7 +191,8 @@ make ci                                                                         
 ## Out of scope
 
 `core/internal/authz`, the compiled checker and its tests (F4-09); `auth` (F4-02); the role routes (F4-05); books' atom table data and the identity cutover (F4-06); the reach oracle
-(F4-07); the kernel wiring that makes rbac live for ABO (F4-08); the operator seed diff (deferred).
+(F4-07); rbac's restore hook, `core/rbac/restore_hook.go` (05-rbac §7.1 "Restore hooks"; F4-11 writes it); the kernel
+wiring that makes rbac live for ABO (F4-08); the operator seed diff (deferred).
 
 ## Rollback
 

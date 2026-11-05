@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-12-sdk-leaf-types.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 399ee337-063e-4053-bb5f-a69a8711c119 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-12` |
 | Tier | **T2** (Sonnet / high): dependency-free leaf types whose names other packages bind to |
-| Release / wave | R1 / W06 |
+| Release / wave | R1 / W07 |
 | Depends on | R1-01 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 06 §6.4.10 (R1 row and the rbac/auth leaf paragraph); 05-rbac §3.1; 04 §8.1 R1 |
 | Branch | `agent/platform-core-r1-12-sdk-leaf-types` |
@@ -95,7 +95,7 @@ test ! -e core/rbac && test ! -e core/auth && test ! -e core/ui && echo NEW     
    the pin `--pin github.com/google/jsonschema-go@v0.4.3` to the `check_module_skew.py` call in root `make ci` and a
    Dependabot `ignore` for that module (13 §13.5.2 "Dependencies that must not float"). Add the module to
    `TestCoreImportsOnlyCore`'s allowlist file (`core/archtest/thirdparty_allow.txt`). All of these files are in the
-   row; R1-02 (which also edits `Makefile`) merged in W05, so rebase onto it before editing `Makefile`.
+   row; R1-02 (which also edits `Makefile`) merged in W06, so rebase onto it before editing `Makefile`.
 4. Core layering guard: give the four packages their layers (rbac L4, auth L4, ui L6, internal/jsonschemax L0).
 5. Header bumps; fragment `changelog.d/<today>_sdk_leaf_types.md` (`### Added`: "Internal: core SDK leaf types for
    permissions, identity, UI manifests and the JSON Schema reflector."). Commit:

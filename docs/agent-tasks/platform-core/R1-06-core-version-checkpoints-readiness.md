@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-06-core-version-checkpoints-readiness.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 3f616e9b-4602-4e36-8503-c2d539986fac -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-06` |
 | Tier | **T2** (Sonnet / high): report-only scripts over fixed commands; no runtime code |
-| Release / wave | R1 / W20 |
+| Release / wave | R1 / W22 |
 | Depends on | R1-05, R1-13, R1-30 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 12 §12.3 (SC1-SC10 commands), §12.3.11 (readiness target), §12.4.1 (core-checkpoint job), §12.4.3; 09 §9.4 R1 CI classification (check_core_version.py, core-checkpoint) |
 | Branch | `agent/platform-core-r1-06-core-version-checkpoints-readiness` |

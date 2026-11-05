@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-29-react-router-8-import-swap.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: ce2b7186-99af-4660-bb86-0490806511db -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-29` |
 | Tier | **T1** (Sonnet / medium): an import swap over 122 files, checked by one grep |
-| Release / wave | R1 / W11 |
+| Release / wave | R1 / W12 |
 | Depends on | R1-05 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 07 §7.19 step 1; 13 §13.4.1 (exception E4 ends); 09 §9.4 R1 Content: UI |
 | Branch | `agent/platform-core-r1-29-react-router-8-import-swap` |

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-28-unit-lifecycle-ci-job.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.3 -->
 <!-- guid: b4eed708-389c-43cd-a552-675242dd7363 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-28` |
 | Tier | **T2** (Sonnet / high): systemd drop-ins on a runner VM; the checks themselves are small |
-| Release / wave | R1 / W19 |
+| Release / wave | R1 / W21 |
 | Depends on | R1-27, R1-25 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 09 §9.2.1 (unit-lifecycle row and triggers); 09 §9.4 R1 Verification; 09 §9.10 |
 | Branch | `agent/platform-core-r1-28-unit-lifecycle-ci-job` |
@@ -90,7 +90,7 @@ grep -n 'unit-lifecycle' ci/gates.txt                                           
    `ExtendStart(step)` immediately before it sleeps its minute (never a ticker or timer goroutine). Its untagged twin
    `core/kernel/fakemigration_nohook.go` (`//go:build !unitlifecycle`) returns no steps. `core/kernel/boot.go` calls
    the one function both files define (name coined here: `fakeMigrationSteps()`) where the phase list appends boot
-   steps; this row is W19's one owner of the kernel wiring files. Without the tag no fake step exists (assert with
+   steps; this row is W21's one owner of the kernel wiring files. Without the tag no fake step exists (assert with
    `go list -f '{{.GoFiles}}' ./kernel` listing `fakemigration_nohook.go` and not `fakemigration_hook.go`).
 1a. `core/archtest/tags.go`: add `unitlifecycle` to the exported tag-set list (03 §3.5.1 item 4), so the tag-union
    tools (`TestCoreImportsOnlyCore`, `TestCoreHoldsNoAppKeyNames`) read the hook file.
@@ -150,6 +150,6 @@ Revert the PR.
 ## Planner notes
 
 - 03 §3.5.1 item 4 says "core's `ci` target vets `./kernel/` with `-tags unitlifecycle`, so every PR compiles it",
-  but `core/Makefile` is not in this row's files, and W19's other row, R1-30, edits `core/Makefile` (its `web-test`
+  but `core/Makefile` is not in this row's files, and W21's other row, R1-30, edits `core/Makefile` (its `web-test`
   target). Either give the one vet line to R1-30 (its file, same wave) or add `core/Makefile` to R1-28 and move one
   of the two rows to another wave. Until then this PR proves the tagged build with the acceptance commands only.

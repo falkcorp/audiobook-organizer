@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-05-one-web-build-entry-point.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: ab971b1f-8614-4ccb-b9ba-e106ed75c3e3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-05` |
 | Tier | **T2** (Sonnet / high): twelve npm ci sites and three reusable-workflow callers; the site list is given |
-| Release / wave | R1 / W10 |
+| Release / wave | R1 / W11 |
 | Depends on | R1-04 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 09 §9.4 R1 Content: build and CI (build_web.sh); 09 §9.1 (the 12 npm ci sites); 07 §7.3.2 |
 | Branch | `agent/platform-core-r1-05-one-web-build-entry-point` |

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-17-perimeter-into-core-stages.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 8b504d86-5e95-4fb7-a1c8-ff2de68cf3a7 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-17` |
 | Tier | **T4** (Opus / xhigh): every request's path (CSP, rate classes, cross-origin, compression) changes owner in one PR |
-| Release / wave | R1 / W16 |
+| Release / wave | R1 / W18 |
 | Depends on | R1-15, R1-16, R1-12, R1-32 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 05-http-api §4.2 (stages 0-11), §8.1 R1 row, §12; 05-metrics §13 item 3 (http_server_* row); 09 §9.2.7; 09 §9.4 R1 Content: runtime, release note (HTTP-metrics lines) |
 | Branch | `agent/platform-core-r1-17-perimeter-into-core-stages` |

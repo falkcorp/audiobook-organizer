@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-06-books-identity-cutover-m3-preflight.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: f0c9fb51-61bc-4527-b59b-90c09a73f0ed -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -33,11 +33,16 @@ Confirm F4-02, F4-01, F3-04, F3-06, F2-13 and F2-15 are merged. If not, stop.
 ## Goal
 
 Build books' identity cutover step M3 (03 §3.8; 05-authn §11; 05-rbac §6.3) as a books `datamigrate.DataMigration`
-(`Cutover: true`, `Breaking`, `BootBlocking`, `After` M2, `Parallelism: tasks.Sequential("tens to hundreds of identity
+(`Cutover: true`, `Breaking`, `BootBlocking`, `After` the level step its flip registers (and M2), `Parallelism: tasks.Sequential("tens to hundreds of identity
 rows")`), with its `Preflight`, `FixBlocker` and `DeleteBlocker`, and the core offline command
 `<app> storage cutover-blockers list [--out <file>] | fix <key> --from <file> | delete <key> --confirm`. Owner decision
 D13: an identity row that cannot be converted, or an account merge in progress, **stops the upgrade** before any write;
 it is never quarantined. Do not register M3: F4-08 adds it to `internal/books/cutover/steps.go`.
+
+The level it raises comes from its flip (F3-04 "Flip mechanism"; F3-06): M3's constructor takes `RaisesLevel` and the
+`After` level-step ref from its caller, so F4-08 passes the level constant and level step it adds to
+`internal/books/cutover/stepids.go`. This row defines no level constant; its tests pass F3's level
+(`BooksCutoverLevel`) and F3's books level step as a fixture.
 
 ## Spec
 
@@ -109,7 +114,8 @@ ls internal/usermerge/journal.go | wc -l                                        
    role rows deleted (P7 recreates them); other roles → `custom.<slug>` through `rbac.Importer`, users' role lists
    rewritten in the same step; an unknown atom grants nothing and is reported; a role whose every atom is unknown is
    quarantined (sealed) with the role-list entries naming it.
-4. **The step** (its ID is the M3 constant from F3-06's `internal/books/cutover/stepids.go`; do not edit that file):
+4. **The step** (its ID is the M3 constant from F3-06's `internal/books/cutover/stepids.go`; do not edit that file;
+   `RaisesLevel` and the `After` level-step ref are constructor parameters, above):
    per chunk, in one batch, import (`auth.Importer`, `rbac.Importer`), delete the HEAD rows consumed, the
    cursor; sessions, invites and the bootstrap hash deleted by rule; outside `Source`, delete HEAD's one-shot expiry flag
    and rewrite each kept `usermerge:journal:` once with every `invite:<token>` key image replaced by the token's SHA-256;
@@ -148,6 +154,7 @@ skips the preflight on the next boot and reports no key), `TestIdentityCutover_R
 `TestIdentityCutover_WorkerKeyStaysConfined` (here: the imported worker key's checker is `Confined()` with no
 `core:self`, `core:metrics.read` or `books:reading`, and satisfies only the worker routes' manifest requirements; the
 live-route cell lands with F4-08), `TestUnknownAtom_ReportedNotGranted`, the M3 cells of `TestCutoverCrashAtEveryChunk`.
+Each runs M3 built with F3's level as the fixture `RaisesLevel` and F3's books level step as its `After` ref.
 
 ## Invariants
 

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-09-f7-flip-integrations.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.5 -->
 <!-- guid: 92d3d884-998e-42de-94e1-451dd63836fb -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,14 +10,14 @@
 | ID | F7-09 |
 | Release | R2, flip F7 (the flip PR) |
 | Tier | **T4** (Opus / xhigh–max): every flip PR is T4; this one moves about fifteen packages and carries M6 |
-| Wave | W37 (alone: the only PR of its wave; it owns `main.go`, `internal/server/`, books' registration and the kernel and module wiring files in W35). Runs inside an announced **move window** |
+| Wave | W37 (alone: the only PR of its wave; it owns `main.go`, `internal/server/`, books' registration and the kernel and module wiring files in W37). Runs inside an announced **move window** |
 | Depends on | F6-03, F7-02, F7-03, F7-04, F7-05, F7-06, F7-07, F7-08, F7-10 |
 | Owns gate tests | `TestBooksIndexRebuiltAtCutover` (the search oracle; F7-08 landed its dark half) |
 | Spec | 09 §9.4 R2 flips table row F7, §9.6 rows 5, 15 and 16, §9.2.3 (M6), §9.2.7 (the AI renames); 03 §3.8 F7; 05-notify §10; 05-ai §8, §10; 05-library §5L.10; 05-metadata M1.10, M2.10, M3.10; 05-download §10; 05-storage §5S.3.8; 05-metrics §13 item 3; 05-tasks §5T.8.2 (the late-owner kinds `core.integrations.release-holds` and `core.ai.batch-poll`); 05-http-api §8.1 (F7 row: `/api/v1/plugins` deleted); 04 §8.1 F7, §8.3 (the `internal/plugin` deletion gate); 06 §6.4.10 F7 row |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. **One atomic PR** (09 §9.2.1): it wires the
 subsystems, registers M6, deletes what they replace and switches every first-party caller in the same PR. It merges
-alone in W35. The R2 freeze is on: do not touch `.github/workflows/prerelease.yml`.
+alone in W37. The R2 freeze is on: do not touch `.github/workflows/prerelease.yml`.
 
 ## START HERE (do this first, exactly)
 
@@ -49,7 +49,11 @@ Announce the move window one working day ahead, naming every 04 row listed under
    **Service registry** (06 §6.11.1 step 4): delete from `internal/books/services.go` the `ServiceDefs` of eventbus,
    filesystem, searchindex, the ten AI services, batchpoller and the three metafetch services, their core packages now
    wired by the kernel.
-2. **Register M6** in `internal/books/cutover/steps.go` and apply the per-flip level mechanism (order M2, stated in
+2. **Register M6** in `internal/books/cutover/steps.go`, passing F7-08's constructor this flip's books level constant as
+   `RaisesLevel` and its new books level step as the `After` ref (F7-08's constructor takes both from the caller). In
+   `internal/books/cutover/stepids.go`, add this flip's books level constant and level-step ID (and core's, when core's
+   level changes) beside the earlier flips' and replace the M8 ID; never edit an earlier flip's constant or ID (F3-06).
+   Then apply the per-flip level mechanism (order M2, stated in
    F3-04 and F3-06): **add** a new level step for each owner whose level this flip raises (books'
    `books.level-<n>`; core's `core.level-<n>` when core's level changes), named for the raised target level, at that
    owner's next contiguous version, numbered immediately before M6 (which runs `After` it); the earlier flips' level
@@ -121,9 +125,9 @@ mediacore/integrations/download/deluge`; `F7 move internal/plugins/webhook -> me
 
 | Group | Paths |
 |---|---|
-| wiring (this PR owns them in W35) | `main.go`, `internal/books/module.go`, `internal/books/services.go`, `core/kernel/boot.go`, `core/kernel/kernel.go`, `core/module/manifest.go`, `core/module/registrar.go`, `core/module/deps.go`, `core/app/options.go` |
+| wiring (this PR owns them in W37) | `main.go`, `internal/books/module.go`, `internal/books/services.go`, `core/kernel/boot.go`, `core/kernel/kernel.go`, `core/module/manifest.go`, `core/module/registrar.go`, `core/module/deps.go`, `core/app/options.go` |
 | generated | `core/openapi/core.json`, `core/web/packages/api-client/src/generated/` |
-| cutover | `internal/books/cutover/steps.go`, `internal/books/store/` |
+| cutover | `internal/books/cutover/steps.go` (M6, this flip's level step, the new M8), `internal/books/cutover/stepids.go` (add this flip's level constant and level-step ID; replace the M8 ID), `internal/books/cutover_suite_test.go` (this flip's `TestCutoverFlipUpgrade` cell, F2-15's harness), `internal/books/store/` |
 | moved or deleted packages | `internal/plugin/`, `internal/plugins/webhook/`, `internal/server/`, `internal/ai/`, `internal/aidispatch/`, `internal/deluge/`, `internal/search/`, `internal/scanner/`, `internal/fileops/`, `internal/pathutil/`, `internal/watcher/`, `internal/metadata/`, `internal/config/` |
 | importers outside those packages (132 files at the plan's base `f7ac5b11e`, listed in full below the table) | `cmd/dedup_bench_batch.go`, `cmd/dedup_bench_pass2.go`; files under `internal/aiscan/`, `internal/appdirs/`, `internal/audiobooks/`, `internal/catalog/`, `internal/dedup/`, `internal/fingerprint/workerclient/`, `internal/importer/`, `internal/itunes/`, `internal/itunes/service/`, `internal/maintenance/jobs/`, `internal/merge/`, `internal/metafetch/`, `internal/organizer/`, `internal/playlist/`, `internal/plugins/acoustid/`, `internal/plugins/dedup/`, `internal/plugins/deluge/`, `internal/plugins/maintenance/`, `internal/quarantine/`, `internal/reconcile/`, `internal/remux/`, `internal/sweep/`, `internal/tagger/`, `internal/telemetrypolicy/`, `internal/testutil/`, `internal/transcode/`, `internal/transcribe/`, `internal/versionprimary/`, `internal/versions/` |
 | SPA, deploy files, move bookkeeping | `web/src/`, `deploy/grafana/dashboards/`, `deploy/prometheus/`, `.mockery.yaml`, `internal/arch/layering_test.go`, `scripts/ci/short_test_weights.json` |
@@ -252,7 +256,8 @@ app.Options{
 - The dashboard-reference test and `promtool test rules` after the AI renames.
 - `TestABOMetricsGatherNoDuplicate` (unchanged).
 - `TestCutoverRefusedByOlderBuilds` and the R2 cutover suite with M6 registered.
-- This flip's cell in F2-15's cutover-suite harness (order M2; the cell shape is F3-04's): a store migrated by F5-18's
+- `TestCutoverFlipUpgrade`: this flip's cell in F2-15's cutover-suite harness, `internal/books/cutover_suite_test.go`
+  (order M2; the cell shape is F3-04's): a store migrated by F5-18's
   `main`, booted by this `main`, has its levels raised, runs exactly one M8, and F5-18's binary then exits 78 on it.
 - F3-06's registered-list test, green with M6 registered: the levels are raised to the build's target before the
   first step of each flip, versions are contiguous per owner, and exactly one M8 is registered, last.
@@ -284,7 +289,7 @@ promtool test rules deploy/prometheus/alert-rules.test.yml
 grep -rn 'InterimHolds\|InterimPoll' --include='*.go' core/ internal/ main.go | wc -l
 
 # Gate tests. Expected: ok
-go test -count=1 -run 'TestBooksIndexRebuiltAtCutover|TestDerivedIndexRebuildTriggers|TestHEADTestConnectionRoutesGone|TestRootsCutover_FromHEADFixture|TestWebhookMigration_InstancesAndRule|TestIntegrationsMigration_EveryInstanceAndID|TestAIJobMigration_EveryJobAndState|TestNoHEADAIFamilies|TestABOMetricsGatherNoDuplicate|TestCutoverRefusedByOlderBuilds|TestDeployReferencedSeriesServed|TestDerivedIndexHooksAfterRegister|TestDepsScoping|TestCoreRoutesReplaceGin' ./...
+go test -count=1 -run 'TestBooksIndexRebuiltAtCutover|TestDerivedIndexRebuildTriggers|TestHEADTestConnectionRoutesGone|TestRootsCutover_FromHEADFixture|TestWebhookMigration_InstancesAndRule|TestIntegrationsMigration_EveryInstanceAndID|TestAIJobMigration_EveryJobAndState|TestNoHEADAIFamilies|TestABOMetricsGatherNoDuplicate|TestCutoverRefusedByOlderBuilds|TestDeployReferencedSeriesServed|TestDerivedIndexHooksAfterRegister|TestDepsScoping|TestCoreRoutesReplaceGin|TestCutoverFlipUpgrade' ./...
 (cd core && go test -count=1 -run 'TestWebhook_JSONBodyGolden|TestWebhook_SignatureWithTimestamp' ./integrations/notify/...)
 
 # Builds, frontend and e2e. Expected: exit 0; green

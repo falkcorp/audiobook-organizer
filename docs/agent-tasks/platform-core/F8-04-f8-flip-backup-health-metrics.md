@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-04-f8-flip-backup-health-metrics.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 9c425807-35e2-4fe7-9289-5de6f5478ebe -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F8-04 |
 | Release | R2, flip F8 (the flip PR) |
 | Tier | **T4** (Opus / xhigh–max): every flip PR is T4; this one changes the `/health` callers, the Basic-gate exempt set, the metrics mount and the backup owner |
-| Wave | W38 (alone: the only PR of its wave; it owns `main.go`, `internal/server/`, books' registration and the kernel and module wiring files in W36). Runs inside an announced **move window** |
+| Wave | W38 (alone: the only PR of its wave; it owns `main.go`, `internal/server/`, books' registration and the kernel and module wiring files in W38). Runs inside an announced **move window** |
 | Depends on | F7-09, F8-01, F8-02, F8-03 |
 | Owns gate tests | the dashboard-reference test over the kernel `/metrics` mount (extension of `TestDeployReferencedSeriesServed`); `TestLegacyArchiveRestoreThenMigrate` (F8-01 landed its staging half) |
 | Spec | 09 §9.4 R2 flips table row F8, §9.6 rows 3 and 19, §9.2.7 (F8 moves the mount only), §9.2.9 (one PR per rename, every caller); 03 §3.8 F8; 05-backup §5B.10, B1, B7; 05-updater §5U.10, §5U.12; 05-health §5H.3.3, §5H.10 (row F8); 05-metrics §6, §12, §13; 05-http-api §8.1 (F8 row), §12; 06 §6.4.10 (F8 row); 04 §8.1 F8 |
@@ -95,7 +95,7 @@ Announce the move window one working day ahead naming the 04 rows below (09 §9.
 
 | Action | Path |
 |---|---|
-| modify | wiring this PR owns in W36: `main.go`, `cmd/root.go`, `internal/books/module.go`, `internal/books/services.go`, `core/app/options.go`, `core/app/offline.go`, `core/kernel/boot.go`, `core/kernel/kernel.go`, `core/module/manifest.go`, `core/module/registrar.go`, `core/module/deps.go` |
+| modify | wiring this PR owns in W38: `main.go`, `cmd/root.go`, `internal/books/module.go`, `internal/books/services.go`, `core/app/options.go`, `core/app/offline.go`, `core/kernel/boot.go`, `core/kernel/kernel.go`, `core/module/manifest.go`, `core/module/registrar.go`, `core/module/deps.go` |
 | regenerate | `core/openapi/core.json`, `core/web/packages/api-client/src/generated/` |
 | modify / delete | `internal/server/` (backup, update, health, metrics routes and handlers; Basic exempt set; tests) |
 | delete / move | `internal/backup/`, `internal/updater/`, `internal/startup/`, `internal/sysinfo/` (host parts), `internal/diagnostics/` (zip machinery) |

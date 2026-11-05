@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-11-config-stage-0-mutate.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: d00a5d7b-4968-462d-afd6-f66e1d7f40e9 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-11` |
 | Tier | **T1** (Sonnet / medium): eight assignments and one AST test |
-| Release / wave | R1 / W05 |
+| Release / wave | R1 / W06 |
 | Depends on | R1-01 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 05-config §1.2, §1.12.1 item 1; 09 §9.4.1 (05-config stage 0) |
 | Branch | `agent/platform-core-r1-11-config-stage-0-mutate` |

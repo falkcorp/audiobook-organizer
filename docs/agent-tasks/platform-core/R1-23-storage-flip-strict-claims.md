@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-23-storage-flip-strict-claims.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 74651b7f-033f-42d7-b873-4ecf3f078896 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-23` |
 | Tier | **T4** (Opus / xhigh): the keystone flip: core opens the one store under strict claims for every books family |
-| Release / wave | R1 / W13 |
+| Release / wave | R1 / W15 |
 | Depends on | R1-15, R1-20, R1-21, R1-22, R1-04 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 05-storage §5S.3.4 (strict claims, shadow dial), §5S.3.5 (LegacyCap), §5S.3.7, §5S.9.3, §5S.9.4 step 2; 04 §4.5, §8.4 note 1; 09 §9.2.2, §9.2.3 (checkpoint), §9.4 R1 Content: storage; 03 §3.7 |
 | Branch | `agent/platform-core-r1-23-storage-flip-strict-claims` |

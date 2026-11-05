@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-02-required-check-workflows.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 08146005-8663-4d6f-ab5e-f7cc388f67e9 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-02` |
 | Tier | **T2** (Sonnet / high): workflow and classifier logic with skip-as-success semantics; no runtime code |
-| Release / wave | R1 / W05 |
+| Release / wave | R1 / W06 |
 | Depends on | R1-01 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 09 §9.2.1 required-checks table; 09 §9.2.10 (35-minute budget, timeout-minutes <= 30); 09 §9.4 R1 CI classification (vet-darwin, vet-integration, check_commits_build.py) |
 | Branch | `agent/platform-core-r1-02-required-check-workflows` |

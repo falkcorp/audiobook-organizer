@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F6-03-events-flip-realtime-spa-client.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: c4bebd8c-0dc9-4e78-a620-116332cca63d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -72,7 +72,7 @@ routes F6-04 built), §5E.13 (table and "Order" item (3)); 05-logging §5 (live 
 
 | Group | Paths |
 |---|---|
-| wiring (this PR owns them in W34) | `main.go`, `internal/books/module.go`, `core/kernel/boot.go`, `core/kernel/kernel.go`, `core/module/manifest.go`, `core/module/registrar.go`, `core/module/deps.go` |
+| wiring (this PR owns them in W36) | `main.go`, `internal/books/module.go`, `core/kernel/boot.go`, `core/kernel/kernel.go`, `core/module/manifest.go`, `core/module/registrar.go`, `core/module/deps.go` |
 | generated | `core/openapi/core.json`, `core/web/packages/api-client/src/generated/` |
 | book-moving producers and the consumer kind (plan base `f7ac5b11e`) | `internal/organizer/inplace_multifile.go`, `internal/organizer/pipeline.go`, `internal/audiobooks/revert.go`, `internal/undo/current.go`, `internal/undo/engine.go`, `internal/undo/restorable.go`, `internal/plugins/deluge/path_update.go`, `internal/plugins/deluge/plugin.go`, `internal/plugins/maintenance/folder_books_fixer.go`, `internal/plugins/maintenance/fragment_consolidation_fixer.go`, `internal/plugins/maintenance/fs_regroup_xml.go`, `internal/plugins/maintenance/reconcile_fixer.go`, `internal/plugins/maintenance/retire_into.go`, `internal/books/store/change_type_class.go` |
 | hub A and its callers | `internal/realtime/` (deleted), `internal/server/`, `internal/itunes/service/` |

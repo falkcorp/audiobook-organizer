@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-21-journaled-swap-crash-matrix.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 0d4840c7-333d-47fc-a23f-cbdf77a2bb4e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-21` |
 | Tier | **T4** (Opus / xhigh): a durable swap over the live store; a wrong step order loses the database |
-| Release / wave | R1 / W12 |
+| Release / wave | R1 / W14 |
 | Depends on | R1-20 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 05-storage §5S.3.7, §5S.3.15, §5S.3.16; 05-backup §5B.3.4; 06 §6.4.8, §6.5.1 (writer table, P0a); 09 §9.3 (boot writers extend the crash matrix); 03 §3.3 storage/restorejournal |
 | Branch | `agent/platform-core-r1-21-journaled-swap-crash-matrix` |
@@ -20,7 +20,7 @@
 
 - `core/internal/restoreswap/`
 - `core/kernel/swap.go`
-- `core/kernel/boot.go` (the P0a call only; this row is W12's one owner of the kernel wiring files)
+- `core/kernel/boot.go` (the P0a call only; this row is W14's one owner of the kernel wiring files)
 - `core/coretest/crashmatrix/`
 - `core/examples/hello/crash_test.go`
 

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-08-books-integrations-step-m6.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 32e12309-4e58-4518-9d85-0a690231a661 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -120,8 +120,8 @@ left it) lacks a family M6 drains.
 5. Dry-run mode: per kind, the instances, IDs, carried trust and every row it would quarantine (05-metadata M1.10).
 6. Register crash-point labels for every chunk and extend `TestCutoverCrashAtEveryChunk` and
    `TestBootCrashMatrix_ABO` with M6's cells (09 §9.3: a boot writer extends the matrix in its own PR).
-7. Leave `internal/books/cutover/steps.go` untouched (F7-09 registers M6 and replaces the M7 and M8 entries). Headers,
-   fragment.
+7. Leave `internal/books/cutover/steps.go` and `internal/books/cutover/stepids.go` untouched (F7-09 registers M6, adds a
+   level step, which raises M7's target (03 §3.8), and replaces the M8 entry). Headers, fragment.
 
 ## Code contract
 
@@ -129,6 +129,14 @@ Uses 05-storage §5S.3.6's `DataMigration` (copy the field set; a cutover step s
 `Mode: BootBlocking`, `Parallelism`, `Source`, `Step`, and `Sensitive` for the secret-bearing prefixes). Step ID: the
 M6 constant F3-06 reserved in `internal/books/cutover/stepids.go` (the one place M2–M6's IDs live; R3-02's
 `UpgradeFloor.Requires` reads the same constant). Never coin another ID; if `stepids.go` has no M6 constant, STOP.
+
+**Level from the caller** (order M2; F3-04 "Flip mechanism" item 2). M6 is `Breaking`, so it needs `RaisesLevel > 0`
+(05-storage §5S.3.6), and it must run `After` the level step of the flip that registers it. Neither exists yet: F7-09
+adds its books level constant and level-step ID to `stepids.go` and its level step to `steps.go`. So the step's
+exported constructor (name coined here, for example `m6.New(<the four importers>, raisesLevel int, after []storage.StepRef)`)
+takes `RaisesLevel` and the `After` level-step ref from its caller. F7-09 passes its own constant and level step. This
+row reads no level constant and adds none. Its tests pass F3's level as the fixture: the books level constant and
+level-step ID F3-06 put in `stepids.go`.
 
 ## Tests (write first; spec names copied exactly)
 
@@ -161,8 +169,8 @@ migrated through the cutover steps registered at your base (M2, and M3 once F4-0
 registered only by F5-18, which is not among this row's dependencies: when F5-18 has not merged, run the M4 and M5
 constructors (F5-16, F5-15) directly through `storagemigrate` before M6, and the M3 constructor (F4-06) the same way
 if F4-08 has not merged. A constructor whose package is not on your base either is skipped: M6's inputs (the
-residual blob, the `aijob*` rows, the webhook settings and the roots) need only M2. M7's target is raised in the test
-fixture.
+residual blob, the `aijob*` rows, the webhook settings and the roots) need only M2. The tests construct M6 with F3's
+level and level step as the fixture (see "Level from the caller").
 
 ## Acceptance (commands and expected output)
 
@@ -193,8 +201,8 @@ make -C core ci
 
 ## Out of scope
 
-- Registering M6 and replacing the M7 and M8 entries with newly named ones (F7-09; the mechanism is order M2's, in
-  F3-04 and F3-06).
+- Registering M6, adding a level step (it raises M7's target) and replacing the M8 entry with a newly named one, and
+  the level constant and IDs in `stepids.go` (F7-09; the mechanism is order M2's, in F3-04 and F3-06).
 - The full `TestBooksIndexRebuiltAtCutover` oracle: the rebuild at the native path and the search answers (F7-09).
 - Wiring the subsystems and deleting HEAD's code (F7-09).
 - The download `ItemRef` books migration (phase 2, 05-download §1).

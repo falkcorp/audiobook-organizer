@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-02-updater-move-into-core.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: dd9d9131-a311-46ff-ac6c-d78aac9f8d12 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -12,7 +12,7 @@
 | Tier | **T3** (Opus / high): a move of the R0 updater with an offline fetch; the fetch decides which binary a rollback across R2 installs |
 | Wave | W33 (alone; file-disjoint). Runs inside an announced **move window** (09 §9.2.10) |
 | Depends on | F2-05 (tasks), F7-05 (`notify.Service`), F7-02 (`providerhttp.Client`), F4-04 (`events.Bus`), F2-10 (the `health` registry): the four types 05-updater §5U.3's `Deps` names |
-| Spec | 05-updater §5U.3 (Go API), §5U.4 (Check, Apply, "Fetching a named release", rollback), §5U.10 (routes), §5U.11 (tests), §5U.12 (migration, "R2 done-check"); 05-storage §5S.3.12 (row `make rollback-restore`); 09 §9.2.1 ("After an R2 hotfix"); 04 §8.1 F8; 06 §6.4.5 (`app.OfflineCommands`) |
+| Spec | 05-updater §5U.3 (Go API), §5U.4 (Check, Apply, "Fetching a named release", rollback), §5U.9 (metrics), §5U.10 (routes), §5U.11 (tests), §5U.12 (migration, "R2 done-check"); 05-storage §5S.3.12 (row `make rollback-restore`); 09 §9.2.1 ("After an R2 hotfix"); 04 §8.1 F8; 06 §6.4.5 (`app.OfflineCommands`) |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. **Dark:** no route is mounted, the
 gin `/api/v1/update/*` handlers keep serving HEAD's R0 behaviour, nothing in ABO's `main` passes
@@ -124,7 +124,12 @@ its API).
    otherwise and keep the existing `.prev`. Without `RELEASE`, when `.prev`'s levels differ, refuse and print the tag
    to pass (from the checkpoint's `from_release` or the archive's producing release). Extend
    `scripts/tests/test_make_rollback.py` (R1-27's test) with the `RELEASE=` cells.
-10. Layering, shard weights, headers, `changelog.d/` fragment; acceptance.
+10. Metrics (05-updater §5U.9): `mediacore_updater_checks_total`, `mediacore_updater_update_available`,
+   `mediacore_updater_apply_total`, `mediacore_updater_rollbacks_total` and `mediacore_updater_download_bytes_total`,
+   with §5U.9's labels and closed `outcome` values, on the core `updater` metrics scope (namespace from
+   `app.Options.MetricNamespace`). This adds that scope: add its `testdata/series.golden` under `core/updater/`,
+   asserted by `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5).
+11. Layering, shard weights, headers, `changelog.d/` fragment; acceptance.
 
 ## Code contract (05-updater §5U.3, verbatim excerpts)
 
@@ -173,6 +178,9 @@ All of 05-updater §5U.11 in `core/updater` and `core/updater/github`, among the
 `TestPolicy_NilOptionsNoRoutesNoTasks`, `TestConfig_ModeIsProtectAdmin`, `TestApply_OnlyPathIsManualTask`,
 `TestNoGlobals_Updater`.
 
+`TestUpdaterSeries_Golden` (name coined here): `metricstest.AssertSeries` over the `updater` scope's provider against
+`core/updater/testdata/series.golden` (05-metrics §12): the five §5U.9 families with their types and label sets.
+
 In ABO's root module: `TestABOUpdaterSourceMatchesHEAD` (05-updater §5U.12): build the `updater.Options` ABO's
 `main` will pass (put the constructor in an ABO package, for example `internal/updater`, so F8-04 only wires it) and
 assert HEAD's API path for the repository, HEAD's raw asset name for each GOOS/GOARCH of `.goreleaser.yml`'s build
@@ -188,7 +196,7 @@ coined).
 # Gate tests. Expected: ok, no FAIL
 (cd core && go test -count=1 ./updater/... ./internal/updaterhttp/...)
 go test -count=1 -run 'TestABOUpdaterSourceMatchesHEAD' ./internal/updater/...
-(cd core && go test -count=1 -run 'TestApply_RawAssetNoBackup|TestFetchRelease_NamedReleaseOnly' ./updater/...)
+(cd core && go test -count=1 -run 'TestApply_RawAssetNoBackup|TestFetchRelease_NamedReleaseOnly|TestUpdaterSeries_Golden' ./updater/...)
 
 # R0's five tests now live in core. Expected: 5
 grep -rh -o -E 'func (TestApply_RestartExits75|TestApply_SwapAtomicAndPrevKept|TestCheck_SemverNeverDowngrades|TestCheck_DescribeSuffixedCurrentNotCompared|TestCheck_ScheduledRunNeverApplies)\(' core/updater/ | sort -u | wc -l

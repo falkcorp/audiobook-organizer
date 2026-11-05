@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-35-release-freeze-toggle.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: bf19256e-7fc8-4e37-8626-fe90279aff33 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -63,7 +63,7 @@ RCs (09 §9.1). The freeze stops that dispatch: RCs are still cut, none is promo
 2. OWNER-02 cut the R0 production release:
 
    ```bash
-   gh release list --exclude-pre-releases --limit 3
+   gh release list --exclude-pre-releases --exclude-drafts --limit 3
    ```
 
    The newest non-prerelease entry is the R0 release OWNER-02 recorded in the tracking issue. If not, STOP and report
@@ -143,14 +143,18 @@ If a count differs, STOP and report what you found. Do not improvise another tog
      this PR. Wait for those runs to finish (`gh run watch <id>` on each, or re-run the two commands every 5 minutes),
      then repeat this step from the top.
    - The third prints a number above `0`: `git rebase origin/main`, push, wait for the checks, repeat this step.
-7. **After the merge,** record the merge time and check that no production release started from an earlier run:
+7. **After the merge,** record the merge time, wait until every `prerelease.yml` run created before it has completed
+   (a run that started before the merge dispatches `release-prod.yml` only at its end), then check that no production
+   release started from an earlier run:
 
    ```bash
-   gh pr view <n> --json mergedAt --jq .mergedAt
+   M=$(gh pr view <n> --json mergedAt --jq .mergedAt)
+   gh run list --workflow prerelease.yml --limit 50 --json status,createdAt \
+     --jq "[.[] | select(.createdAt < \"$M\" and .status != \"completed\")] | length"   # repeat every 5 minutes until 0
    gh run list --workflow release-prod.yml --limit 5 --json createdAt,status,headSha,event
    ```
 
-   Expected: no `release-prod.yml` run whose `createdAt` is later than `mergedAt`. If there is one, STOP: do not cancel
+   Expected, once the first command prints `0`: no `release-prod.yml` run whose `createdAt` is later than `mergedAt`. If there is one, STOP: do not cancel
    it yourself. Post in the tracking issue at once: "a production release run started after R1-35 merged", with its
    run ID, for the lead and the owner. Then report the merge commit SHA and the `<VALUE>` in the tracking issue so
    R1-01 can start.
@@ -177,8 +181,8 @@ git diff --stat origin/main -- .github/workflows/                               
 make ci                                                                                     # expect exit 0 and "All CI checks passed"
 ```
 
-The two `gh run list` commands of step 6 print `0` at merge time, and step 7 finds no `release-prod.yml` run created
-after the merge.
+The two `gh run list` commands of step 6 print `0` at merge time, and step 7, once every earlier `prerelease.yml` run
+has completed, finds no `release-prod.yml` run created after the merge.
 
 ## STOP conditions
 
@@ -196,14 +200,6 @@ promoting or cancelling any release or run (OWNER work).
 
 Revert the commit: `check-rc-ordinal` dispatches as before. If the R1 freeze must end early, R1-31's one-line change
 (`RELEASE_FREEZE: ''`) is the rollback for the value; keep the mechanism, because F3-08 needs it.
-
-## Planner notes
-
-- The YAML is R1-01 step 12's, with the comment's owner line updated to the current rows (R1-35 and F3-08 instead
-  of R1-01 and F3-07).
-- After this row, `grep -c RELEASE_FREEZE .github/workflows/prerelease.yml` is **4**, not 3: the notice step's
-  `echo` also names the variable. R1-31's and R2-02's re-verify sections say "exactly 3 lines" and would STOP
-  wrongly. Their expected counts should be 4 (env entry, the two `if:` lines, the `echo`).
 
 ## Repo rules (every PR of this workstream)
 

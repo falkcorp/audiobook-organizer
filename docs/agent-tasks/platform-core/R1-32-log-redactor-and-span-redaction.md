@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-32-log-redactor-and-span-redaction.md -->
-<!-- version: 1.0.3 -->
+<!-- version: 1.0.4 -->
 <!-- guid: 7dce556b-315e-476c-899c-10d184f05c10 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-32` |
 | Tier | **T3** (Opus / high): the one redactor every log line, span and perimeter stage goes through; a gap leaks a credential |
-| Release / wave | R1 / W08 |
+| Release / wave | R1 / W09 |
 | Depends on | R1-07, R1-10 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 05-logging §3 (Redactor, NewRedactor and its defaults), §6 (fail-open on a panicking value), §10 (redaction tests); 05-metrics §3 (Options.Redactor, span redaction), §8 failure table ("Redactor nil while tracing is on"), §11, §12; 05-http-api §4.2 stages 2 and 4 |
 | Branch | `agent/platform-core-r1-32-log-redactor-and-span-redaction` |

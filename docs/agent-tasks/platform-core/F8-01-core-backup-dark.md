@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-01-core-backup-dark.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 4815a9a9-aae1-479b-9e95-a1d9a80564de -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F8-01 |
 | Release | R2, flip label F8 (dark PR) |
 | Tier | **T4** (Opus / xhigh–max): backup and restore of every core store; a wrong reader or a wrong staging check loses or exposes the whole install |
-| Wave | W30 (beside F2-16, F4-05, F5-15, F6-01, F6-02, F7-02, F8-03; file-disjoint; this row is W26's one owner of `core/go.mod`, `core/go.sum` and `go.sum`) |
+| Wave | W30 (beside F2-16, F4-05, F5-15, F6-01, F6-02, F7-02, F8-03; file-disjoint; this row is W30's one owner of `core/go.mod`, `core/go.sum` and `go.sum`) |
 | Depends on | F4-04 (`backup/journal` types), F3-03 (core secrets: the provenance HMAC is keyring-derived), F4-11 |
 | Spec | 05-backup §5B.0 (B1–B8), §5B.3 (all: §5B.3.1 contents, §5B.3.2 types, §5B.3.3 `mediacore-backup/1`, §5B.3.4 staged restore, §5B.3.5 creation/verification/retention/catalogue, §5B.3.6 revocation journal, §5B.3.7 provenance, §5B.3.8 routes, §5B.3.9 deferred-build), §5B.5–§5B.8, §5B.9 (tests), §5B.10; 05-config §1.12.2 and §2.4 (`--gap-fill`); 05-storage §5S.3.12 (`storage restore-offline`); 04 §8.1 F8 |
 

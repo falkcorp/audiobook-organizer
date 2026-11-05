@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-04-docker-image-job-embed-check.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 4ec57f2c-fd43-44f4-ac1f-57531f066721 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-04` |
 | Tier | **T2** (Sonnet / high): build-context rules (dockerignore patterns, embed inputs) are easy to get subtly wrong |
-| Release / wave | R1 / W09 |
+| Release / wave | R1 / W10 |
 | Depends on | R1-03 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 09 §9.4 R1 Content: build and CI (docker-image job, embed check); 09 §9.1 (Dockerfiles, .dockerignore); 12 §12.3.11 (embed-check) |
 | Branch | `agent/platform-core-r1-04-docker-image-job-embed-check` |

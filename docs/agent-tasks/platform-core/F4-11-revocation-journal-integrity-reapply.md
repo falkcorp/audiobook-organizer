@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-11-revocation-journal-integrity-reapply.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: 9ad8da00-7eab-4236-a8f3-a0c03568e674 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -72,7 +72,7 @@ functions until F4-08 wires them into boot.
    `revocation_journal_broken` (degraded), `revocation_journal_reset`, and `info` `revocation_journal_colocated` (the
    journal's filesystem device equals the store's). They appear only on authenticated endpoints (05-health §5H.3.1).
    This row computes them and returns them from the two functions and from the journal component; F4-08 registers them
-   on the kernel-side health component.
+   on the kernel-side health component (F2-10's registry).
 
 ## Spec
 
@@ -87,7 +87,7 @@ functions until F4-08 wires them into boot.
   `TestPostDAGReconcilerOrder`; "Offline open" item 4 (offline revoking writes append; the offline open re-applies
   nothing).
 - 05-config §2.3 (`Store.DeriveKey`, `ActiveDeriveID`, `DeriveKeyFor`, `ErrKeyUnavailable`).
-- 05-authn §4.14 (auth's restore fallback and `needs_confirmation`), 05-rbac §7.1 (rbac's hook).
+- 05-authn §4.14 (auth's restore fallback and `needs_confirmation`), 05-rbac §7.1 (rbac's and audit's hooks), §12 (`TestAudit_RestoreCopiesForwardRecords`, `TestAudit_CopyForwardThenWriteNoOverwrite`).
 - SEC-16 (05-backup §5B.3.6 opening sentence; §5B.3.7).
 
 ## Files
@@ -176,17 +176,14 @@ git grep -n 'type ServedBoot struct\|type RestoreContext struct' -- core/backup/
 git grep -n 'func StorageSpec' -- core/backup/journal | wc -l                         # expect 1 (F4-04)
 git grep -n 'func (s \*Store) DeriveKeyFor\|func (s \*Store) ActiveDeriveID' -- core/secrets | wc -l   # expect 2 (F3-03)
 git grep -n 'func PostRestore' -- core/auth | wc -l                                   # expect >= 1 (F4-02)
-git grep -n 'restore' -- core/audit | wc -l                                           # expect >= 1 (F2-07's deferred audit restore hook)
+ls core/rbac/restore_hook.go core/audit/restore_hook.go 2>/dev/null | wc -l           # expect 0 (this row creates both)
 git grep -n 'reapplyRevocations\|runRestoreHooks' -- core/kernel | wc -l              # expect 0
 git grep -n 'backup.location.json' -- core | wc -l                                    # expect 0 outside comments (this row writes the file)
 (cd core && go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./backup/journal | grep -c secrets)   # expect 0
 ```
 
-If F4-02 has no `PostRestore`, STOP: the runner has nothing to call for auth. rbac's hook (05-rbac §7.1) and audit's
-hook (F2-07 defers it to this runner) have no builder at the plan base: check
-`git grep -n -i 'func.*Restore' -- core/rbac core/audit`. For each owner with no function, keep its typed slot in the
-registry (order auth, rbac, audit), make the runner skip an empty slot, and record it in the PR. Do not write those
-hook bodies here.
+If F4-02 has no `PostRestore`, STOP: the runner has nothing to call for auth. rbac's and audit's hook bodies
+(05-rbac §7.1 "Restore hooks") are this row's: step 6 writes both.
 
 ## STOP conditions
 
@@ -215,7 +212,9 @@ hook bodies here.
    records, `hooks_done`, the `marker_written` batch, the location file, `applied`, `inflight.json` removed.
 6. `core/rbac/restore_hook.go` and `core/audit/restore_hook.go`: each builds that component's `journal.RestoreHook`
    function (05-rbac §7.1 "Restore hooks"; 05-backup §5B.3.6): rbac re-applies `role.unassigned`, `role.narrowed` and `role.deleted` through `rbac.Store`
-   (05-rbac §7.1); audit's hook is the body F2-07 deferred to this row's runner.
+   (05-rbac §7.1), taking the most restrictive of the restored and pre-swap state when `rc.Previous` is set; audit's
+   hook copies forward every pre-swap record above `rc.AuditHighWater`, calling `Sequence.AdvancePast` before the
+   copy, then appends the journal and restore records (05-rbac §7.1 "audit's hook"). F2-07 left this body to this row.
    Both are dark: step 5's registry runs them, nothing wires them until F4-08.
 7. Headers, one `changelog.d/` fragment, Acceptance.
 
@@ -256,7 +255,12 @@ functions over a store and state directory built in the test.
 - `TestBootReapply_ChainBreakFailsClosed` (05-backup §5B.9; this row owns it) — a broken chain
   with the store's head below the journal's end sets every key `needs_confirmation` and bumps every epoch.
 - `TestJournalReapplyWithUISetBackupDir` (05-backup §5B.9, the third name of the row above; this row owns it) — the
-  same with the directory set through the Settings UI's write path.
+  same with the value written to the stored settings layer, as the Settings write path stores it (no route and no
+  booted App: F4-05's routes land later).
+- `TestAudit_RestoreCopiesForwardRecords` (05-rbac §12) — records above the manifest's audit high-water mark survive a
+  restore (SEC-17), driven through `core/audit/restore_hook.go` with a pre-swap store built in the test.
+- `TestAudit_CopyForwardThenWriteNoOverwrite` (05-rbac §12) — after a restore with copied records, the next records
+  get fresh `seq`s and no copied record or index row changes (SEC2-12).
 - `TestJournalChainSurvivesKidRotation` (name coined here) — lines written under `d1` then `d2` verify as one chain;
   a retired `kid` named by a retained line makes verification report the line, not panic.
 - `TestLocationFileModeAndAtomicity` (name coined here) — the journal is 0600; a crash between the temp file and the
@@ -269,9 +273,9 @@ Not this row's (F4-08 owns them): `TestBootPhaseOrder_NoWriteBeforeCheckpoint`, 
 ## Acceptance
 
 ```bash
-(cd core && go vet ./backup/... ./kernel/...)                                                     # exit 0
-(cd core && go test -race -count=1 ./backup/journal/... ./kernel/...)                             # ok
-(cd core && go test -count=1 -run 'TestPostRestoreReappliesRevocations|TestJournalReapplyVerifiesWithKeyring|TestJournalReapplyUsesOverriddenBackupDir|TestRevocationJournal_TruncationDetected|TestJournalOfOtherInstallNotReplayed|TestRevocationStagesJournalHead|TestOfflineRevocationJournaled|TestReplacedStoreRunsHooks|TestRestoreBootWritesMarkersAfterHooks|TestPostDAGReconcilerOrder|TestCommittedHeadAnchorDetectsInPlaceCopy' -v ./backup/journal/... ./kernel/... | grep -c '^--- PASS')   # expect 11
+(cd core && go vet ./backup/... ./kernel/... ./rbac/... ./audit/...)                              # exit 0
+(cd core && go test -race -count=1 ./backup/journal/... ./kernel/... ./rbac/... ./audit/...)      # ok
+(cd core && go test -count=1 -run 'TestPostRestoreReappliesRevocations|TestJournalReapplyVerifiesWithKeyring|TestJournalReapplyUsesOverriddenBackupDir|TestRevocationJournal_TruncationDetected|TestJournalOfOtherInstallNotReplayed|TestRevocationStagesJournalHead|TestOfflineRevocationJournaled|TestReplacedStoreRunsHooks|TestRestoreBootWritesMarkersAfterHooks|TestPostDAGReconcilerOrder|TestCommittedHeadAnchorDetectsInPlaceCopy|TestBootReapply_ChainBreakFailsClosed|TestJournalReapplyWithUISetBackupDir|TestJournalChainSurvivesKidRotation|TestLocationFileModeAndAtomicity|TestAudit_RestoreCopiesForwardRecords|TestAudit_CopyForwardThenWriteNoOverwrite' -v ./backup/journal/... ./kernel/... ./rbac/... ./audit/... | grep -c '^--- PASS')   # expect 17
 (cd core && go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./backup/journal | sort)
 #   expected: only github.com/falkcorp/mediacore/{backup/journal,entity,storage,storage/restorejournal} and what storage imports
 git grep -n 'reapplyRevocations\|runRestoreHooks' -- core/kernel/boot.go core/kernel/kernel.go | wc -l   # expect 0 (dark: F4-08 wires them)
@@ -283,17 +287,12 @@ make ci                                                                         
 
 Wiring the functions into boot, registering `journal.StorageSpec()` and the health component, declaring
 `core.backup.dir`, and the crash-matrix cells (F4-08). Archive creation and `Create`'s own `served_boot` and
-`JournalSeq` writes, the restore staging and routes (F8-01). Auth's and rbac's hook bodies (F4-02, F4-01). Retention
+`JournalSeq` writes, the restore staging and routes (F8-01). Auth's hook body, `PostRestore` (F4-02). Retention
 pruning of the journal (05-backup §5B.3.6 "Retention", with backup's catalogue, F8-01).
 
 ## Rollback
 
 Revert the PR; nothing calls the new code until F4-08.
-
-## Planner notes
-
-- The health tokens need a kernel-side component on F2-10's registry. This row has no kernel health file in its list,
-  so it returns the tokens and F4-08 registers them; F4-08's brief should say so.
 
 ## Repo rules
 

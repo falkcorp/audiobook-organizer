@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-17-oplint-becomes-core-tasklint.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: cf14f86a-65b9-449c-a52b-9c60ce53a8ff -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -28,7 +28,7 @@ npm ci --prefix web                     # or: make web-deps, once R1-05 has merg
 
 Do **not** run `go work init` (CLAUDE.md). `core/` is the nested module `github.com/falkcorp/mediacore`. This is a
 move PR: announce the move window for `tools/cmd/oplint` at least one working day ahead in the tracking issue
-(09 §9.2.10); no other PR of W25 touches `Makefile`, `internal/arch/layering_test.go` or
+(09 §9.2.10); no other PR of W27 touches `Makefile`, `internal/arch/layering_test.go` or
 `scripts/ci/short_test_weights.json`.
 
 ## What the spec fixes

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-18-tasks-flip-engine-deleted.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.5 -->
 <!-- guid: ec04b9ab-cec9-4e59-bc6b-19f091354077 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -88,6 +88,35 @@ for d in internal/operations/registry internal/operations/childop internal/opera
          internal/scheduler internal/opscatalog internal/maintenance internal/walkresume internal/server/handlers/opsv3; do test -d $d || echo "GONE $d"; done   # no output
 ```
 
+## Files
+
+The inventory row's files, by action. Every path is touched by the commit named in "Ordered commits" below; touch
+nothing outside this list (STOP and report if a commit needs another path).
+
+| Action | Path |
+|---|---|
+| modify | `main.go` (sets `app.Options.InterimBackends`), `core/app/options.go` (adds the field if F2 did not) |
+| modify | `core/kernel/boot.go`, `core/kernel/kernel.go`, `core/module/manifest.go`, `core/module/registrar.go`, `core/module/deps.go` (commit 2: boot calls, members, mounts; this PR is their one owner in W35) |
+| modify | `core/tasks/` (run fencing made public, only if F2 did not provide it; commit 1) |
+| regenerate | `core/openapi/core.json`, `core/web/packages/api-client/src/generated/` (commit 5) |
+| create | `internal/books/contract/` (commit 1) |
+| create (rename) | `internal/books/writer/` from `internal/operations/opswriter` (commit 1) |
+| modify | `internal/books/store/` (`storetest` takes the book-typed fakes; the run-row store files leave for `m4legacy`) |
+| create | `internal/books/cutover/m4legacy/` (commit 3) |
+| modify | `internal/books/module.go`, `internal/books/services.go` (commit 2) |
+| modify | `internal/books/cutover/steps.go` (commit 3: M4 and M5, this flip's level step, the new M8) |
+| modify | `internal/books/cutover/stepids.go` (commit 3: add this flip's level constant and level-step ID; replace the M8 ID) |
+| modify | `internal/books/cutover_suite_test.go` (this flip's `TestCutoverFlipUpgrade` cell, F2-15's harness) |
+| delete | `internal/books/testdata/tasklint_exempt.d/F5-18.txt`; modify `internal/books/tasklint_test.go` (commit 9) |
+| delete or move | `internal/operations/` (keeping `internal/operations/state`), `internal/scheduler/`, `internal/opscatalog/`, `internal/maintenance/` (root package; `jobs` keeps its package), `internal/opsmetrics/`, `internal/walkresume/` (commit 4) |
+| modify | `internal/server/`, `pkg/` (`pkg/ops` deleted; `pkg/plugin/sdk` callers moved), `internal/plugins/`, `internal/repairs/`, `internal/serviceregistry/` (commits 1, 4, 5) |
+| modify | `internal/activity/`, `internal/logger/` (commit 8; `internal/logger/mocks` deleted in commit 4) |
+| modify | `internal/sysinfo/` (commit 10) |
+| modify | `web/src/` (commit 6) |
+| modify | `deploy/grafana/dashboards/`, `deploy/prometheus/` (commit 7) |
+| modify | `tools/cmd/sdkguard/internal-deps.txt`, `internal/arch/layering_test.go`, `scripts/ci/short_test_weights.json`, `.mockery.yaml`, `tygo.yaml` (commit 10) |
+| create | one `changelog.d/` fragment (headerless) |
+
 ## Ordered commits (one PR; every commit builds and passes its package tests — `scripts/ci/check_commits_build.py`)
 
 1. **Contracts first.** Create `internal/books/contract` (04 §2.4: `selection.go`, `types.go` from
@@ -109,15 +138,19 @@ for d in internal/operations/registry internal/operations/childop internal/opera
    rule 4); `Manifest.TaskLedger` and `TaskStarts`; `r.LogOtherUserData(...)` with books' predicate over
    `activity.NamesOthersUserLog` (05-logging §5, the journal route's other-user rule). The kernel and module wiring
    files (`core/kernel/boot.go`, `kernel.go`, `core/module/manifest.go`, `registrar.go`, `deps.go`) and
-   `internal/books/services.go` take the boot calls, members and mounts (this PR is their one owner in W33).
+   `internal/books/services.go` take the boot calls, members and mounts (this PR is their one owner in W35).
    The kernel registers the core kinds (`core.storage.*`, `core.log.journal.prune`, `core.window.nightly`,
    `core.tasks.prune`) and, from `app.Options.InterimBackends` set by `main.go`, the three late-owner kinds over
    the books backends (`providerhttp.InterimHolds`, `ai.InterimPoll`, `diagnostics.InterimExport`; 05-tasks §5T.8.2).
    Start the executor and scheduler in ABO's kernel (P6, 06 §6.5.1); create the `<ns>.ops` instruments here and
    nowhere earlier (05-metrics §13 item 1). This adds a core metrics scope: add its `testdata/series.golden`,
    asserted by `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5).
-3. **Cutover steps.** Register M4 and M5 in `internal/books/cutover/steps.go` in 03 §3.8's order (after M3, before
-   M6 and M8) and pass `Importers.Tasks` and `Importers.Log`. Then apply the per-flip level mechanism (order M2,
+3. **Cutover steps.** In `internal/books/cutover/stepids.go`, add this flip's books level constant and level-step ID
+   (and core's, when core's level changes) beside F3-06's and F4-08's, and replace the M8 ID; never edit an earlier
+   flip's constant or ID (F3-06). Register M4 and M5 in `internal/books/cutover/steps.go` in 03 §3.8's order (after
+   M3, before M6 and M8) and pass `Importers.Tasks` and `Importers.Log`, plus this flip's books level constant as
+   `RaisesLevel` and its new books level step as the `After` ref: F5-16's and F5-15's constructors take both from the
+   caller. Then apply the per-flip level mechanism (order M2,
    stated in F3-04 and F3-06): **add** a new level step in `steps.go` for each owner whose level this flip raises
    (books' `books.level-<n>`; core's `core.level-<n>` when core's level changes), named for the raised target level,
    at that owner's next contiguous version, numbered immediately before M4 (which runs `After` it); the level steps
@@ -207,7 +240,7 @@ core.
 | No series read by a dashboard or rule is unserved; the rules' tests pass | `TestDeployReferencedSeriesServed`; `promtool test rules` |
 | No duplicate family on the scrape (the executor's `ops.*` vs. `opsmetrics`) | `TestABOMetricsGatherNoDuplicate` |
 | The `ops` scope's series are the reviewed set (family, type, label set) | `metricstest.AssertSeries` over the scope's `testdata/series.golden` (05-metrics §12) |
-| A store migrated by F4-08's `main` and booted by this `main` has its levels raised before M4, runs exactly one M8, and F4-08's binary then exits 78 on it | this flip's cell in F2-15's cutover-suite harness (order M2; the cell shape is F3-04's) |
+| A store migrated by F4-08's `main` and booted by this `main` has its levels raised before M4, runs exactly one M8, and F4-08's binary then exits 78 on it | `TestCutoverFlipUpgrade`: this flip's cell in F2-15's cutover-suite harness, `internal/books/cutover_suite_test.go` (order M2; the cell shape is F3-04's) |
 | The registered list raises the levels to the build's target before the first step of each flip, its versions are contiguous per owner, and it holds exactly one M8, last | F3-06's registered-list test, green on this build |
 | A module whose `TaskStarts` names a kind of a disabled module still boots, and its start of that kind is refused at runtime (COR3-10; `TaskStarts` lands here, 06 §6.4.10 F5 row) | `TestTaskStarts_DisabledTargetModuleBootsAndRefusesAtRuntime` (05-tasks §5T.9), owned by this row |
 | No gin route remains at a path this flip's native routes replace, and no route lies under `/api/v3/` | extend `TestCoreRoutesReplaceGin` (F4-08's) with the F5 cell (05-http-api §12) |
@@ -222,7 +255,7 @@ core.
 
 ```bash
 go build ./... && go vet ./...                                                                 # exit 0
-go test ./internal/books/... -race -count=1 -run 'TestKindRenameMapCoversLedger|TestSecondModuleNoAudiobookEdit|TestParity_ResumeCancelShutdown|TestScheduleParity_AllDefinitions|TestCutover_' -v | grep -c '^--- FAIL'   # 0
+go test ./internal/books/... -race -count=1 -run 'TestKindRenameMapCoversLedger|TestSecondModuleNoAudiobookEdit|TestParity_ResumeCancelShutdown|TestScheduleParity_AllDefinitions|TestCutover_|TestCutoverFlipUpgrade' -v | grep -c '^--- FAIL'   # 0
 for d in internal/operations/registry internal/operations/childop internal/operations/opmode internal/opsmetrics \
          internal/scheduler internal/opscatalog internal/maintenance/job.go internal/walkresume pkg/ops \
          internal/server/handlers/opsv3 internal/logger/retention.go internal/logger/mocks; do test -e $d && echo "LEFT $d"; done   # no output

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-16-sdnotify-into-core-internal.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 16c6bd67-7abe-40f4-ad12-2d2cfbca9f76 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-16` |
 | Tier | **T2** (Sonnet / high): one leaf move whose five importers must all be rewired in one PR |
-| Release / wave | R1 / W14 |
+| Release / wave | R1 / W16 |
 | Depends on | R1-15 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 04 §8.2 (mediacore/internal/sdnotify row), §8.3; 05-health §5H.10 Landing R1 (Supervisor); 06 §6.4.5 |
 | Branch | `agent/platform-core-r1-16-sdnotify-into-core-internal` |

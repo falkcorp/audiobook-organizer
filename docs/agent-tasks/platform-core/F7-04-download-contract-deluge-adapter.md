@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-04-download-contract-deluge-adapter.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 8ecb5fb3-8574-4b87-94e6-110557990756 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -50,7 +50,7 @@ Nothing of phase 2 is built: no `Adder`, `Remover`, `Categorizer`, `Pauser`, `Se
 |---|---|
 | create | `core/integrations/download/` (`download.go` types, `pool.go`, `paths.go`, tests) |
 | create | `core/integrations/download/deluge/` (`client.go` ported, `adapter.go` with `Descriptor()`, tests with recorded fixtures) |
-| create | `core/coretest/download.go` (`DownloadConformance`, `FakeDownloadClient`; 05-download §9 puts both in `coretest`; this row owns this one file of `core/coretest/` in W26) |
+| create | `core/coretest/download.go` (`DownloadConformance`, `FakeDownloadClient`; 05-download §9 puts both in `coretest`; this row owns this one file of `core/coretest/` in W28) |
 | create | one `changelog.d/` fragment (headerless) |
 
 ## Re-verify before editing (expected results at your base)
@@ -87,9 +87,12 @@ HEAD; report it).
    implement `FileLister` and `Relocator`; **do not** port `RemoveTorrent` or an add method; egress through
    `env.HTTP`, a private host only with `Local` (`TestDeluge_PrivateHostNeedsLocal`).
 5. `core.integrations.disabled`: no client call, no snapshot change (`TestPool_IntegrationsDisabledNoClientCall`).
-6. `coretest.DownloadConformance` (phase-1 cases: items/state golden table, status, files, relocate, auth failure and
+6. Metrics: only the phase-1 (unmarked) families of 05-download §8 under the App's namespace; no phase-2 family.
+   This adds the core `download` metrics scope: add its `testdata/series.golden` under `core/integrations/download/`, asserted by
+   `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5).
+7. `coretest.DownloadConformance` (phase-1 cases: items/state golden table, status, files, relocate, auth failure and
    re-login, unknown state) and `coretest.FakeDownloadClient` (`Advance(id, State)`, capability toggles, faults).
-7. Headers, fragment, acceptance.
+8. Headers, fragment, acceptance.
 
 ## Code contract (05-download §3, verbatim excerpts; copy every phase-1 member from the spec)
 
@@ -116,6 +119,7 @@ const (
 
 `TestPool_ItemsFillsLocalPath`, `TestPool_RelocateGroupsByInstance`, `TestPaths_UnmappedRelocateRefused`,
 `TestPaths_WindowsRemote`, `TestDeluge_PrivateHostNeedsLocal`, `TestPool_IntegrationsDisabledNoClientCall`;
+`metricstest.AssertSeries` over the `download` scope's `testdata/series.golden` (05-metrics §12);
 `coretest.DownloadConformance` run against `core.deluge` with recorded fixtures (live mode behind
 `MEDIACORE_LIVE_DOWNLOAD=1`). Not here: `TestDelugeMigration_InstanceAndPassword` (books' M6, F7-08) and every phase-2
 test.

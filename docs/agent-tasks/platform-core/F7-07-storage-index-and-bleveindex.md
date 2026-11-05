@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-07-storage-index-and-bleveindex.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: be316d76-1be5-4eb1-a49b-5c4e28885509 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-07 |
 | Release | R2, flip label F7 (dark PR) |
 | Tier | **T3** (Opus / high): an index contract with generations; a falsely accepted warm-start artifact serves stale search and dedup answers |
-| Wave | W32 (beside F3-07, F6-05; file-disjoint; this row is W29's one owner of `core/go.mod`, `core/go.sum` and `go.sum`) |
+| Wave | W32 (beside F3-07, F6-05; file-disjoint; this row is W32's one owner of `core/go.mod`, `core/go.sum` and `go.sum`) |
 | Depends on | F2-05 (core tasks: the full rebuild is a `tasks` definition with a declared `tasks.Parallelism`) |
 | Spec | 05-storage §5S.3.8 (package `storage/index`, `core/internal/bleveindex`, the dirty set at `c/index/<module>/<name>/dirty/<id>`, the reconciler, the rebuild, backups through bleve's `CopyTo`), §5S.3.9 (`Generation`, `Derived`, `DerivedIndex`, `DerivedHooks`, why a generation and not a count), §5S.10 (the index and derived tests); 03 §3.3 (`storage/index`); 06 §6.4.10 F7 row (`Storage.Indexes`, `Storage.Derived`, `Registrar.DerivedIndex`); 06 §6.5.2 start step (3a); 04 §8.1 F7 |
 

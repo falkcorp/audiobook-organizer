@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-24-checkpoint-sweeper-and-prune.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 88124076-5269-41e3-875c-b216bc9ff445 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-24` |
 | Tier | **T3** (Opus / high): a sweeper that deletes checkpoints; the retention rule decides what a rollback can restore |
-| Release / wave | R1 / W17 |
+| Release / wave | R1 / W19 |
 | Depends on | R1-23, R1-25 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 05-storage §5S.3.12 (Modes, SEC-9), §5S.4 step 15, §5S.10 (`TestCheckpointModes`, sweep half; error row for a loosened mode); 05-health §5H.3.1, §5H.9, §5H.10 Landing R1 and R1 row; 09 §9.2.3 (the checkpoint and its 7 days); 06 §6.4.10 R1 (OfflineCommands) |
 | Branch | `agent/platform-core-r1-24-checkpoint-sweeper-and-prune` |
@@ -44,7 +44,7 @@ sign-in tokens included, so R1 must also ship what deletes it (09 §9.2.3; 09 §
 05-storage §5S.3.12 "Retention", §5S.4 step 15; CONFORM-6):
 
 1. **The checkpoint sweeper** (`core/storage/checkpoint_sweep.go`, run by a kernel lifecycle component
-   `core/kernel/sweeper.go`, registered in `core/kernel/boot.go`; this row is W17's one owner of the kernel wiring
+   `core/kernel/sweeper.go`, registered in `core/kernel/boot.go`; this row is W19's one owner of the kernel wiring
    files): at 05-storage §5S.4 step 15 of every boot (after readiness) and then **hourly** while
    serving, it scans `.mediacore-checkpoints/`, its scratch area and every `restore/<id>/failed/`, writes each record's
    `delete_after` exactly per 05-storage §5S.3.12's "Retention" row (completed: `completed_at + 7 days`; open: kept

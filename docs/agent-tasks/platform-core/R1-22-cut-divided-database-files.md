@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-22-cut-divided-database-files.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 1143f20d-1bb7-4a87-a829-58a795a47d5c -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-22` |
 | Tier | **T2** (Sonnet / high): mechanical file cut with no behaviour change |
-| Release / wave | R1 / W05 |
+| Release / wave | R1 / W06 |
 | Depends on | R1-01 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 04 §4.5 (file-level split), Open items item 5; 05-storage §5S.9.3 |
 | Branch | `agent/platform-core-r1-22-cut-divided-database-files` |

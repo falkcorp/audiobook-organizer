@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-05-core-notify-dark.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 81c13928-3234-49a7-99a4-49cf3b0519e5 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -94,7 +94,7 @@ grep -rl --include='*.go' "\"$M/internal/mail/mailtest\"" . | grep -v '^./intern
 # 2. F6-01's outbox. Expected: >= 1 (ConsumeIntoTask, Consume/ConsumeTx for core consumers)
 grep -rn 'func ConsumeIntoTask\|func ConsumeTx\|func Consume\b' core/outbox/*.go | wc -l
 #    core.notify.deliver is a core consumer on the kernel's static list (05-events §5E.5.2 Retention), put there by
-#    F6-01; Manifest.OutboxConsumers is the flip F6-03's module member (W34) and is not used here. Expected: 1
+#    F6-01; Manifest.OutboxConsumers is the flip F6-03's module member (W36) and is not used here. Expected: 1
 grep -rn '"core.notify.deliver"' core/kernel/outbox.go | wc -l
 # 3. F7-01's registry. Expected: Registry and NewDescriptor
 grep -n 'type Registry struct\|func NewDescriptor' core/integrations/*.go
@@ -120,7 +120,9 @@ STOP if grep 1 finds an importer other than those six files (plus the `layerOf` 
 5. `core.webhook` adapter (fixed body, delivery header, signature, reserved headers, `EgressConfigured`, URL change
    clears `secret` and `token`); `core.email` channel over `mail.Sender` (destination fields `host`/`port`).
 6. `notifytest.RuleStoreSuite`; `coretest.FakeNotifier`, `coretest.WebhookReceiver`.
-7. Layering keys, headers, fragment, acceptance.
+7. Metrics: the §8 table under the App's namespace. This adds the core `notify` metrics scope: add its `testdata/series.golden` under `core/integrations/notify/`, asserted by
+   `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5).
+8. Layering keys, headers, fragment, acceptance.
 
 ## Code contract (05-notify §3, verbatim excerpts; copy the rest from the spec)
 
@@ -154,6 +156,8 @@ headers `X-Mediacore-Delivery: <notification ID>.<instance>` and, with a secret,
 `url` exactly as stored.
 
 ## Tests (write first; spec names copied exactly, 05-notify §9)
+
+Metrics: `metricstest.AssertSeries` over the `notify` scope's `testdata/series.golden` (05-metrics §12).
 
 `TestPublish_SameBatchAsCallerState`, `TestPublish_UndeclaredTopicRejected`,
 `TestPublish_TopicWithoutNotifyMetaRejected`, `TestPublish_OneDeliveryPerTargetInCallerBatch`,

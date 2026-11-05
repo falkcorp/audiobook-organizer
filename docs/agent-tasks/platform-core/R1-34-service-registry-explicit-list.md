@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-34-service-registry-explicit-list.md -->
-<!-- version: 1.0.2 -->
+<!-- version: 1.0.3 -->
 <!-- guid: 27c7bc09-4001-4dfe-a02e-1a93adb8163e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-34` |
 | Tier | **T2** (Sonnet / high): 24 registering files changed the same way in one PR, with no service changed |
-| Release / wave | R1 / W15 |
+| Release / wave | R1 / W17 |
 | Depends on | R1-15 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 06 §6.11.1 steps 2–3, §6.11.2 (the 43 registrants) |
 | Branch | `agent/platform-core-r1-34-service-registry-explicit-list` |

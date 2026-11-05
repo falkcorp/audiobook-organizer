@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-13-kernel-app-module-httpapi-skeleton.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.5 -->
 <!-- guid: 49cec14b-15f1-4aaa-9773-e49334cd61a5 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-13` |
 | Tier | **T4** (Opus / xhigh): the boot-phase machinery every later writer hangs off; lifecycle and stop order are normative |
-| Release / wave | R1 / W10 |
+| Release / wave | R1 / W12 |
 | Depends on | R1-12, R1-09, R1-07, R1-10, R1-36 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 06 §6.4.10 R1 row, §6.5.1, §6.5.2, §6.11.1, §6.12 (hello); 03 §3.3 (app, module, kernel); 05-http-api §3, §4.8; 04 §8.1 R1 |
 | Branch | `agent/platform-core-r1-13-kernel-app-module-httpapi-skeleton` |
@@ -105,7 +105,7 @@ and writes it to `<file>`, defaulting to `core/openapi/core.json` resolved from 
 F9-01 call exactly this command line, so do not rename the flag. The freshness gate is `make openapi-check`
 (05-http-api §4.6): it runs `hello openapi --out <tmp>` and `diff`s the result against the committed
 `core/openapi/core.json`, failing on any difference. The `core-ci` target lives in `core/Makefile`, which is **not** in
-this row's files: record under the PR's "Scope notes" that R1-30 (the owner of `core/Makefile` at this wave) adds the
+this row's files: record under the PR's "Scope notes" that R1-30 (W21, the owner of `core/Makefile` in its wave) adds the
 `openapi-check` target and its place in `make -C core ci`. This row's own check is `TestOpenAPI_Golden` and the
 acceptance below.
 

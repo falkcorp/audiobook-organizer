@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-02-release-r0-cut-deploy.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: c7905538-b04f-4d81-a543-689838294edc -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -15,7 +15,7 @@
 | Tier | **OWNER**: production release, deploy |
 | Wave | W03 |
 | Depends on | R0-01, R0-02, R0-03, R0-04, R0-05, R0-06 (all merged) |
-| Unblocks | **R1-01**, which merges only after this release exists, because R1-01 turns the R1 freeze on |
+| Unblocks | **R1-35** and then **R1-01**, which merge only after this release exists, because R1-35 turns the R1 freeze on (R1-01 depends on R1-35 and does not edit `prerelease.yml`) |
 | Spec | 09 §9.4 R0 (Rollback, Owner), §9.3 (the R0 tag writes R2's fixture corpus), §9.2.1 (no soaks) |
 
 ## Why the tag matters
@@ -60,4 +60,4 @@ rolled back`. No hosts, paths or tokens.
 ## Done when
 
 The R0 production release exists with its tag kept, it is deployed (or rolled back, with the reason), and the
-comment is recorded. The lead then lets R1-01 merge.
+comment is recorded. The lead then lets R1-35, and after it R1-01, merge.

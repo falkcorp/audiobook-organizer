@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-01-core-integrations-registry-dark.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: bc446db6-50ca-4aa7-a750-2bcc30316a89 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -105,7 +105,9 @@ already exists.
    with lease draining (`TestRegistry_HotSwapDrainsLeases` under `synctest`), a store load failure serving none.
 4. The error taxonomy and `ClassOf` with the done-parent rule (`TestClassOf_Table`); `Error` redacts `Detail`.
 5. archtest `IntegrationsDescriptorCallers`: only kind packages call `NewDescriptor`.
-6. Wire on `hello`/`coretest` only. Headers, fragment, acceptance.
+6. Metrics: M1.8's families under the App's namespace. This adds the core `integrations` metrics scope: add its `testdata/series.golden` under `core/integrations/`, asserted by
+   `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5).
+7. Wire on `hello`/`coretest` only. Headers, fragment, acceptance.
 
 ## Code contract (05-metadata M1.3, verbatim excerpts)
 
@@ -135,6 +137,8 @@ func ClassOf(parent context.Context, err error) Class
 ```
 
 ## Tests (write first; spec names copied exactly, 05-metadata M1.9)
+
+Metrics: `metricstest.AssertSeries` over the `integrations` scope's `testdata/series.golden` (05-metrics §12).
 
 `TestRegistry_RejectsForeignAdapterPrefix`, `TestRegistry_UnknownAdapterRowRetained`,
 `TestRegistry_HotSwapDrainsLeases`, `TestRegistry_OverlayNeverPersisted`,

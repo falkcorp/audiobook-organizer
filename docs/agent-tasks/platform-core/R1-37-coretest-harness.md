@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-37-coretest-harness.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.4 -->
 <!-- guid: 8ff510eb-5437-44c5-a272-58a710c5dbc7 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,8 +9,8 @@
 |---|---|
 | ID | `R1-37` |
 | Tier | **T3** (Opus / high): the public test kit every later row tests through; the API-stability gate freezes it |
-| Release / wave | R1 / W14 |
-| Depends on | R1-13, R1-14 (each merged on `main` before you start) |
+| Release / wave | R1 / W15 |
+| Depends on | R1-13, R1-14 (each merged on `main` before you start), R1-15 |
 | Spec | 06 §6.4.8 (`coretest` block: copy it), §6.10 (`TestBootZeroModules`, `TestDisabledModuleInert`, `TestSpecGoBlocksCompile`), §6.4.10 R1 row; 03 §3.5 R6 (every route declares a permission; `archtest.RoutesHavePermissions` over the built router and the legacy manifest); 05-http-api §12 (`archtest.RoutesHavePermissions`, `TestContractGoldens_ValidateAgainstSchema`), §7 (`coretest.ContractGoldens`), §4.10 (the SPA/infra known set) |
 | Branch | `agent/platform-core-r1-37-coretest-harness` |
 
@@ -39,9 +39,9 @@ npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
 Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and
-`go -C core build ./...`. Same wave (W14): R1-15 (`core/coretest/metrics.go`) and R1-21 (`core/coretest/crashmatrix/`)
-add files to the same package; the files are disjoint, but rebase on whichever merges first and keep the package
-compiling.
+`go -C core build ./...`. R1-15 (`core/coretest/metrics.go`) and R1-21 (`core/coretest/crashmatrix/`) add files to
+the same package in W14, the wave before this one, so both are on `main` at your base; keep the package compiling with
+them. This row's W15 sibling, R1-23, touches no `core/coretest/` or `core/archtest/` file.
 
 ## Goal
 
@@ -78,7 +78,9 @@ git grep -n 'PrincipalFrom(' -- core/httpapi | wc -l     # >= 1: the router read
 - If it does not (0 hits): build the members with the exact signatures; `WithUser` records the principal, and `As`
   and `AssertPermission` fail the test with
   `coretest: <member> needs core authentication, which lands at R2's identity flip`. Do not add a seam to
-  `core/httpapi` (not this row's files). Record which case applied in the PR description.
+  `core/httpapi` (not this row's files). Record which case applied in the PR description. F4-08, the identity flip,
+  completes `WithUser`, `As` and `AssertPermission` over core auth's principal at stage 13 (it lists
+  `core/coretest/harness.go` and `assert.go`); keep the signatures exact so its change is only the bodies.
 
 ## Code contract (copy exactly from 06 §6.4.8)
 
@@ -145,6 +147,7 @@ git grep -n 'func (r \*Router) Routes()' -- core/httpapi | wc -l        # expect
 git grep -n 'func (r \*Router) MountLegacy(' -- core/httpapi | wc -l   # expect 1 (R1-14 filled its behaviour)
 test -f internal/server/legacy_manifest.go && echo MANIFEST_OK           # expect MANIFEST_OK (R1-14)
 test -f core/coretest/logcapture.go && echo LOGCAPTURE_OK                # expect LOGCAPTURE_OK (R1-09)
+test -f core/coretest/metrics.go && test -d internal/books && echo R1-15_OK   # expect R1-15_OK (R1-15)
 git grep -n 'func New(t testing.TB' -- core/coretest | wc -l            # expect 0 (this row creates it)
 git grep -n 'RoutesHavePermissions' -- core | wc -l                     # expect 0
 ```
@@ -177,8 +180,8 @@ If a predecessor check fails, STOP and report which output is missing.
 4. `core/archtest/routes_permissions.go`, then `core/coretest/assert.go`: `AssertRoutesHavePermissions`,
    `AssertPermission`, `AssertModuleInert` (R1 cells).
 5. **ABO's half of R6.** Add `internal/books/routes_permissions_test.go` (name coined here): boot ABO's real App
-   (`app.New` with `books.Module(...)` as R1-15 composes it, or with `internal/server`'s engine mounted as R1-14 does if
-   R1-15 has not merged) and run `archtest.RoutesHavePermissions` over its router, so the legacy manifest is checked
+   (`app.New` with `books.Module(...)` as R1-15 composes it; R1-15 is a dependency, so `internal/books/` exists at
+   your base) and run `archtest.RoutesHavePermissions` over its router, so the legacy manifest is checked
    against what is served (03 R6; 05-http-api §8.2). Record the file under "Scope notes".
 6. **`TestSpecGoBlocksCompile`** (06 §6.10): R1-13 boots the extracted R1 hello blocks through `app.New` and says this
    row switches the boot to `coretest.New`. Make that switch in R1-13's test file and record the file under "Scope
@@ -245,8 +248,8 @@ Revert the PR. Tests that later rows wrote against the harness go with it, so re
 - **Files outside the row:** R1-13's `TestSpecGoBlocksCompile` file (step 6, which R1-13 assigns to this row).
 - **Unowned members and cells:** `Harness.Storage()` (`storage.Inspector`) and `Harness.FS()` (`RecordingFS`) have no
   type in any spec section; `WithAdapters` has no owner at F7; `AssertModuleInert`'s `GET /api/core/v1/modules`,
-  `RecordingFS`, outbox and op-ledger cells have no named extender. If R1's router has no principal seam, the
-  authentication half of `As`/`AssertPermission` needs an owner at the identity flip (F4-05 or F4-08).
+  `RecordingFS`, outbox and op-ledger cells have no named extender. The authentication half of `WithUser`, `As` and
+  `AssertPermission`, if R1's router has no principal seam, is F4-08's (see Goal).
 
 ## Repo rules (every PR of this workstream)
 

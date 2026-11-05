@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-10-core-metrics-provider-construction.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 1308b2a6-0800-4e0a-99b8-026da89fd137 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-10` |
 | Tier | **T3** (Opus / high): provider construction moves while every served series must keep its meaning; the test gates every later rename |
-| Release / wave | R1 / W07 |
+| Release / wave | R1 / W08 |
 | Depends on | R1-02 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 05-metrics §13 item 1, §6, §12 (TestDeployReferencedSeriesServed, TestPromRules_Promtool, TestCardinality_OverflowFailsMetricstest, metricstest.AssertSeries), §6 items 3 and 5; 09 §9.2.7; 09 §9.2.1 (extraction-gates: the dashboard-reference test); 04 §2.4 (internal/telemetrypolicy) |
 | Branch | `agent/platform-core-r1-10-core-metrics-provider-construction` |
@@ -69,7 +69,7 @@ series keeps its name, labels and meaning in this PR.
 `WithoutScopeInfo()`, `WithTranslationStrategy(otlptranslator.UnderscoreEscapingWithSuffixes)`, plus the Go and
 process collectors on the private registry), the one-owner-per-family wrapper of §3, the instrument rules of §3.
 **Minimum-surface rule (04 §8 intro):** `Options.Redactor *log.Redactor` needs 05-logging §3's `log.Redactor`,
-which R1-32 creates (wave W08, after this task; it also adds the field to `Options`, the redacting span exporter
+which R1-32 creates (wave W09, after this task; it also adds the field to `Options`, the redacting span exporter
 and `TestTrace_NoApikeyInSpanAttributes`). Declare `Options`, `OTLPMetrics` and `OTLPTracing` in their own file,
 `core/metrics/options.go` (R1-32's row names that file), without the `Redactor` field and with a doc comment saying
 R1-32 adds it. No other §3 member may be dropped.

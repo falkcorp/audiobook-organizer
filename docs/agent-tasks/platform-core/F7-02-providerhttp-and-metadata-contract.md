@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-02-providerhttp-and-metadata-contract.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 691c2fbf-fba4-4b6d-b8ca-dad283253f2b -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -75,7 +75,7 @@ Announce the move window one working day ahead naming the 04 row for `internal/s
 | move (`git mv`) | `internal/security/safehttp/` → `core/integrations/providerhttp/` (as the egress dialer file(s)) |
 | modify | `internal/covers/covers.go` and `internal/metadata/cover.go` (the import line only: the two safehttp importers at the plan's base; touch no other file of either package) |
 | modify | `internal/arch/layering_test.go` (`internal/security/safehttp` key removed), `scripts/ci/short_test_weights.json` (only if it names the package) |
-| create | `core/coretest/provider.go` (`coretest.FakeProvider[Q, R]`, `coretest.ProviderHTTP(t)`; M3.9 puts both in `coretest`; this row owns this one file of `core/coretest/` in W28, F7-03 owns `ai.go`, F2-16 `tasks.go` and `harness.go`) |
+| create | `core/coretest/provider.go` (`coretest.FakeProvider[Q, R]`, `coretest.ProviderHTTP(t)`; M3.9 puts both in `coretest`; this row owns this one file of `core/coretest/` in W30, F7-03 owns `ai.go`, F2-16 `tasks.go` and `harness.go`) |
 | create | one `changelog.d/` fragment (headerless) |
 
 ## Re-verify before editing (expected results at your base)

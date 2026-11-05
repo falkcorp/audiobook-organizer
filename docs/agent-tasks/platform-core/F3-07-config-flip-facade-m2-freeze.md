@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-07-config-flip-facade-m2-freeze.md -->
-<!-- version: 1.1.5 -->
+<!-- version: 1.1.7 -->
 <!-- guid: cd0ab95d-94fd-4550-8089-03f6d358f1f1 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -93,10 +93,12 @@ Switch configuration and secrets to core in one PR, with every first-party consu
    `ci/prefreeze_release.txt` under its in-flight gate; this PR edits neither `prerelease.yml` nor that file. Embed the
    file in the build (`//go:embed ci/prefreeze_release.txt` in the root `main.go`) and pass it to core as the value the
    checkpoint record carries as `from_release`. The file has `#` comment lines (F3-08's format: a four-line header and
-   one comment line); read the single line that is neither blank nor starts with `#`, and pass that tag, not the
-   whole file. Immediately before merge, re-check that the newest production release
-   still equals the file (Acceptance); if it differs, a release was promoted after F3-08, so stop and report to the
-   lead.
+   one comment line); read the single line that is neither blank nor starts with `#` (the one reader rule F2-15's
+   fetch script and F3-08 use: `grep -v '^#' ci/prefreeze_release.txt | grep -v '^[[:space:]]*$'`), and pass that tag,
+   not the whole file. Immediately before merge, re-check that the newest published production release
+   still equals the file, that no `release-prod.yml` run is unfinished, and that no `prerelease.yml` run created before
+   F3-08's merge is unfinished (Acceptance); if any check fails, a release was or may still be promoted after F3-08,
+   so stop and report to the lead.
 9. From this PR every PR runs the R2 cutover suite in `extraction-gates` (F2-15's harness now bites). In
    `internal/books/cutover_suite_test.go` add this flip's cell to `TestCutoverFlipUpgrade`'s table (F2-15 rule 9: the
    previous `main` is the last F2 `main`; this build raises books' and core's levels, runs exactly one M8, and the
@@ -133,7 +135,7 @@ Switch configuration and secrets to core in one PR, with every first-party consu
 | modify | `internal/books/cutover_suite_test.go` (this flip's `TestCutoverFlipUpgrade` cell and the cutover-list check cell) |
 | modify | `scripts/`, `.claude/skills/` |
 
-This PR is its wave's only owner of the kernel and module wiring files; no sibling of W29 edits them.
+This PR is its wave's only owner of the kernel and module wiring files; no sibling of W32 edits them.
 
 ## Re-verify at BASE (record every count; regenerate expected values at BASE)
 
@@ -151,6 +153,7 @@ grep -rn 'func ConfigStep\|func RetiredConfigNames\|func RewriteStep' internal/b
 grep -rn 'func guardAgainstKeyRegeneration' cmd/root.go | wc -l      # 1 (HEAD line 760); 0 after this PR
 grep -c "RELEASE_FREEZE: 'R2'" .github/workflows/prerelease.yml       # 1 (F3-08 turned the R2 freeze on); this PR leaves the file alone
 test -s ci/prefreeze_release.txt && echo ok                            # ok (F3-08)
+test "$(bash scripts/ci/fetch_prefreeze_binary.sh --resolve ci/prefreeze_release.txt)" = "$(grep -v '^#' ci/prefreeze_release.txt | grep -v '^[[:space:]]*$')" && echo RESOLVE_OK   # RESOLVE_OK (F2-15's resolver reads the same tag)
 grep -rn 'func ValidateCutoverList' internal/books/cutover/ | wc -l    # 1 (F3-06; name may differ: read F3-06's PR)
 grep -n 'flipUpgradeCells' internal/books/cutover_suite_test.go | wc -l  # >= 1 (F2-15's empty table)
 grep -c 'loadConfigFromDB' cmd/child_mode.go                          # HEAD: >= 1 (line 87); 0 after this PR
@@ -167,8 +170,10 @@ grep -rn 'ConfigUpdate\|configupdate' internal/serviceregistry/keys.go internal/
 3. The work needs a path outside the row's list: report before editing it.
 4. A first-party consumer of a renamed env name or of a deleted route would remain on `main` after this PR.
 5. Any secret value or mask appears in a `GET /api/v1/config` response or a log line.
-6. The newest production release differs from the tag line of `ci/prefreeze_release.txt` (its single non-`#` line) at merge time, or `RELEASE_FREEZE` is not
-   `'R2'`: do not merge; report to the lead (F3-08 owns the toggle and the file).
+6. The newest published production release (`--exclude-drafts`) differs from the tag line of `ci/prefreeze_release.txt`
+   (its single non-`#` line) at merge time, a `release-prod.yml` run is unfinished, a `prerelease.yml` run created
+   before F3-08's merge is unfinished, or `RELEASE_FREEZE` is not `'R2'`: do not merge; report to the lead (F3-08 owns
+   the toggle and the file).
 
 ## Steps (one PR; keep every commit building)
 
@@ -250,7 +255,10 @@ grep -rn 'R1Values' --include=*.go . | grep -v _test | wc -l                    
 ls internal/server/middleware/basicauth.go 2>/dev/null | wc -l                  # 0
 grep -rn 'AUDIOBOOK_ROOT_DIR\|AO_DIR\|AO_DB\|OLLAMA_BASE_URL\|DATABASE_PATH\|BASIC_AUTH_' deploy docker-compose.yml Dockerfile Dockerfile.build-cgo .claude/skills scripts | wc -l   # 0
 grep -c "RELEASE_FREEZE: 'R2'" .github/workflows/prerelease.yml                  # 1 (unchanged; F3-08's)
-test "$(grep -v '^#' ci/prefreeze_release.txt | grep -v '^$')" = "$(gh release list --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName')" && echo same   # same (run again immediately before merge; else STOP 6)
+test "$(grep -v '^#' ci/prefreeze_release.txt | grep -v '^[[:space:]]*$')" = "$(gh release list --exclude-pre-releases --exclude-drafts --limit 1 --json tagName -q '.[0].tagName')" && echo same   # same (run again immediately before merge; else STOP 6)
+gh run list --workflow release-prod.yml --json status --jq '[.[]|select(.status!="completed")]|length'   # 0 (immediately before merge; else STOP 6)
+M=$(gh pr view <F3-08's PR> --json mergedAt --jq .mergedAt)
+gh run list --workflow prerelease.yml --limit 50 --json status,createdAt --jq "[.[]|select(.createdAt < \"$M\" and .status != \"completed\")]|length"   # 0 (no unfinished run for a commit before F3-08's merge commit; else STOP 6)
 grep -rn 'KeyConfigUpdate' --include=*.go internal/config internal/books | grep -v _test | wc -l   # 0
 grep -c 'viper' internal/dedup/unified/config.go                                 # 0
 (cd web && npm run build && npm test -- --run)                                   # exit 0

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-15-cutover-suite-harness-restore-drill.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: d41c117c-6cdf-49d0-b491-b6dd9fd211bf -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -88,7 +88,16 @@ generator's test `scripts/tests/test_gen_shared_family_lists.py`.
 6. **Pre-freeze binary.** `fetch_prefreeze_binary.sh <tag>` downloads that tag's linux/amd64 release asset into a cache dir
    and prints its path (under 20 lines; CLAUDE.md rule 4). The tag comes from `ci/prefreeze_release.txt` when that file exists
    (F3-08 creates it when it turns the R2 freeze on, before F3-07 merges); until F3-08 records it, the pre-freeze tag
-   resolves to the latest production release, which is what 09 §9.2.1 defines it to be until F3 merges (`gh release list --exclude-pre-releases --limit 1`). The drill test reads the path from `R2_PREFREEZE_BIN` and skips with
+   resolves to the latest published production release, which is what 09 §9.2.1 defines it to be until F3 merges
+   (`gh release list --exclude-pre-releases --exclude-drafts --limit 1`; `release-prod.yml` can leave a draft, which
+   cannot be fetched). **The file's reader rule** (one rule, shared with F3-07 and F3-08): F3-08 writes a four-line `#`
+   header, a `#` comment and one tag line, so the tag is the single line that is neither blank nor starts with `#`:
+   `grep -v '^#' ci/prefreeze_release.txt | grep -v '^[[:space:]]*$'`. Never `cat` the file. Give the script a
+   `--resolve <file>` mode (name coined here) that prints exactly that line and exits non-zero unless there is exactly
+   one; the CI job and F3-07/F3-08's re-verify lines call it. In `restore_drill_test.go` add
+   `TestPrefreezeTagResolver` (name coined here): it writes a fixture to `t.TempDir()` in F3-08's exact shape (the four
+   header lines, the `#` comment, a blank line, `v0.1.0`) and expects `--resolve` to print `v0.1.0`; a fixture with no tag
+   line, and one with two, must fail. The drill test reads the path from `R2_PREFREEZE_BIN` and skips with
    a message when unset locally; in CI it is required.
 7. **Restore drill.** Boot the build under test on a corpus copy (which takes the pre-migration checkpoint when any step runs);
    write one marker row after the upgrade; stop; restore the checkpoint offline with the build's `storage restore-offline
@@ -132,7 +141,8 @@ Keep that fake step and its negative cases in the test file, behind a subtest na
 ```bash
 python3 scripts/ci/gen_shared_family_lists.py --check                                    # exit 0, no diff
 python3 -m pytest scripts/tests/test_gen_shared_family_lists.py -q                        # passed
-R2_PREFREEZE_BIN="$(bash scripts/ci/fetch_prefreeze_binary.sh "$(gh release list --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName')")" \
+go test ./internal/books/ -run TestPrefreezeTagResolver -count=1                         # ok (header fixture resolves to its tag)
+R2_PREFREEZE_BIN="$(bash scripts/ci/fetch_prefreeze_binary.sh "$(gh release list --exclude-pre-releases --exclude-drafts --limit 1 --json tagName -q '.[0].tagName')")" \
   go test ./internal/books/ -run 'TestCutoverOnR0Corpus|TestCutoverPreservesIDsAndReferences|TestCutoverLeavesOtherFamiliesByteIdentical|TestRollbackRestoreBootsPreviousBuild' -count=1 -v | grep -c '^--- PASS'   # 4
 go test ./internal/books/ -run 'TestCutoverOnR0Corpus/selftest|TestCutoverFlipUpgrade' -count=1   # ok (negative cases fail as designed; empty cell table logs and passes)
 grep -c 'r2-cutover-suite' .github/workflows/extraction-gates.yml                         # >=1

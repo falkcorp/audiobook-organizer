@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-08-start-r2-release-freeze.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 359f047e-e7d4-4d0b-942d-47cb2c7363b7 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -80,12 +80,14 @@ already exists, STOP and report what you found. Do not add a second toggle.
 1. **Read the pre-freeze tag.**
 
    ```bash
-   TAG="$(gh release list --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName')"
+   TAG="$(gh release list --exclude-pre-releases --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName')"
    echo "$TAG"
    ```
 
    Expected: one tag of the form `v<major>.<minor>.<patch>` (for example `v0.230.0`), matching
-   `^v[0-9]+\.[0-9]+\.[0-9]+$`. If it is empty or has another shape, STOP and report it.
+   `^v[0-9]+\.[0-9]+\.[0-9]+$`. If it is empty or has another shape, STOP and report it. `--exclude-drafts` matters:
+   `release-prod.yml` has a `create-draft` input, and a draft release cannot be fetched by the restore drill or
+   `make rollback-restore`.
 2. **Create `ci/prefreeze_release.txt`** with exactly these six lines, `<TAG>` replaced by the value of step 1, and a
    trailing newline:
 
@@ -98,7 +100,15 @@ already exists, STOP and report what you found. Do not add a second toggle.
    <TAG>
    ```
 
-   The file has exactly one line that is neither blank nor starts with `#`, and that line is the tag.
+   The file has exactly one line that is neither blank nor starts with `#`, and that line is the tag. That is the one
+   reader rule every consumer uses (F2-15's fetch script, F3-07's embed):
+   `grep -v '^#' ci/prefreeze_release.txt | grep -v '^[[:space:]]*$'`. Prove the CI job resolves it:
+
+   ```bash
+   test "$(bash scripts/ci/fetch_prefreeze_binary.sh --resolve ci/prefreeze_release.txt)" = "$TAG" && echo RESOLVE_OK   # expect RESOLVE_OK (F2-15's resolver)
+   ```
+
+   If it does not print `RESOLVE_OK`, STOP and report: the script is F2-15's and is not in this row's files.
 3. **Turn the freeze on.** In `.github/workflows/prerelease.yml`, replace the one line
 
    ```yaml
@@ -124,8 +134,8 @@ already exists, STOP and report what you found. Do not add a second toggle.
      --jq '[.[] | select(.status != "completed")] | length'        # expect 0
    gh run list --workflow release-prod.yml --limit 50 --json status,headSha \
      --jq '[.[] | select(.status != "completed")] | length'        # expect 0
-   test "$(gh release list --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName')" = \
-        "$(grep -v '^#' ci/prefreeze_release.txt | grep -v '^$')" && echo TAG_OK   # expect TAG_OK
+   test "$(gh release list --exclude-pre-releases --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName')" = \
+        "$(grep -v '^#' ci/prefreeze_release.txt | grep -v '^[[:space:]]*$')" && echo TAG_OK   # expect TAG_OK
    git fetch origin && git rev-list --count HEAD..origin/main     # expect 0 (branch is up to date)
    ```
 
@@ -139,15 +149,19 @@ already exists, STOP and report what you found. Do not add a second toggle.
      the new tag (amend or add a commit), push, wait for the checks, and repeat this step.
    - The last command prints a number above `0`: `git rebase origin/main`, push, wait for the checks, repeat this
      step.
-7. **After the merge,** check that no production release started after it:
+7. **After the merge,** record the merge time and wait until every `prerelease.yml` run created before it has
+   completed: a sibling's run that started before this merge has no freeze in its own workflow file and dispatches
+   `release-prod.yml` only at its end, minutes later. Then check that no production release started after the merge:
 
    ```bash
-   gh pr view <n> --json mergedAt --jq .mergedAt
+   M=$(gh pr view <n> --json mergedAt --jq .mergedAt)
+   gh run list --workflow prerelease.yml --limit 50 --json status,createdAt \
+     --jq "[.[] | select(.createdAt < \"$M\" and .status != \"completed\")] | length"   # repeat every 5 minutes until 0
    gh run list --workflow release-prod.yml --limit 5 --json createdAt,status,headSha,event
-   gh release list --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName'   # expect the tag in ci/prefreeze_release.txt
+   gh release list --exclude-pre-releases --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName'   # expect the tag in ci/prefreeze_release.txt
    ```
 
-   Expected: no `release-prod.yml` run whose `createdAt` is later than `mergedAt`, and the newest production release is
+   Expected, once the first command prints `0`: no `release-prod.yml` run whose `createdAt` is later than `mergedAt`, and the newest production release is
    still the recorded tag. If either fails, STOP: do not cancel or delete anything yourself. Post in the tracking issue
    at once, with the run ID or the new tag, for the lead and the owner (F3-07 must not merge until they decide). Then
    record the merge commit SHA and the pre-freeze tag in the tracking issue so F3-07 can start.
@@ -169,20 +183,22 @@ grep -c "^  RELEASE_FREEZE: ''$" .github/workflows/prerelease.yml               
 grep -c "RELEASE_FREEZE" .github/workflows/prerelease.yml                                   # expect 4
 grep -c "if: steps.rc.outputs.at_threshold == 'true' && env.RELEASE_FREEZE == ''$" .github/workflows/prerelease.yml   # expect 1
 python3 -c "import yaml;yaml.safe_load(open('.github/workflows/prerelease.yml'))" && echo YAML_OK   # expect YAML_OK
-grep -v '^#' ci/prefreeze_release.txt | grep -v '^$' | wc -l                                 # expect 1
-grep -v '^#' ci/prefreeze_release.txt | grep -v '^$' | grep -cE '^v[0-9]+\.[0-9]+\.[0-9]+$'  # expect 1
+grep -v '^#' ci/prefreeze_release.txt | grep -v '^[[:space:]]*$' | wc -l                     # expect 1
+grep -v '^#' ci/prefreeze_release.txt | grep -v '^[[:space:]]*$' | grep -cE '^v[0-9]+\.[0-9]+\.[0-9]+$'  # expect 1
 head -1 ci/prefreeze_release.txt                                                            # expect "# file: ci/prefreeze_release.txt"
 git diff --stat origin/main -- .github/ ci/                                                 # expect 2 files changed (prerelease.yml, prefreeze_release.txt)
 make ci                                                                                     # expect exit 0 and "All CI checks passed"
 ```
 
-At merge time step 6's two `gh run list` commands print `0` and its tag check prints `TAG_OK`; step 7 finds no
-`release-prod.yml` run created after the merge.
+Step 2's resolver check prints `RESOLVE_OK`. At merge time step 6's two `gh run list` commands print `0` and its tag
+check prints `TAG_OK`; step 7, once every earlier `prerelease.yml` run has completed, finds no `release-prod.yml` run
+created after the merge.
 
 ## STOP conditions
 
 - A dependency is not merged, or R1-31 did not leave the value `''` (Preconditions, Re-verify).
 - Step 1's tag is empty or not `v<major>.<minor>.<patch>`.
+- Step 2's resolver check does not print `RESOLVE_OK`.
 - Step 7 finds a production release run created after the merge, or a newer production release.
 
 ## Out of scope
@@ -197,14 +213,6 @@ At merge time step 6's two `gh run list` commands print `0` and its tag check pr
 
 Before F3-07 merges: revert the commit (the value returns to `''`, the file goes). After F3-07 merges, the freeze must
 stay on until R2 ships (D12 (a)); a revert is a decision for the lead.
-
-## Planner notes
-
-- `ci/prefreeze_release.txt` gets the repo's four-line `#` header (like `ci/gates.txt`), so it is not a bare tag. F3-07's
-  embed must read the only non-blank line that does not start with `#`, not the whole file. F3-07's brief says only
-  "embed it"; it should name this rule.
-- R2-02's re-verify expects "exactly 3" `RELEASE_FREEZE` lines; the count R1-35 produces is 4 (the notice step's `echo`
-  names the variable too).
 
 ## Repo rules (every PR of this workstream)
 

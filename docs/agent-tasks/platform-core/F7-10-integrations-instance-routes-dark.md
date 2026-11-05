@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-10-integrations-instance-routes-dark.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: 5632beb8-202d-46fa-8ed4-53a698d32866 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -184,7 +184,7 @@ Revert the PR; nothing imports the package and nothing is stored.
 ## Planner notes
 
 - **The hold route's backend lands later.** `DELETE …/instances/{id}/hold` calls `providerhttp.Registry.ReleaseHold`
-  (05-metadata M2.4), which F7-02 builds in W28, after this row's W26, and the row does not depend on F7-02. The brief
+  (05-metadata M2.4), which F7-02 builds in W30, after this row's W28, and the row does not depend on F7-02. The brief
   declares a one-method consumer interface (`HoldReleaser`) so the route lands dark against a fake; F7-09 must hand it
   providerhttp's registry when it mounts the routes. If the planner prefers the real dependency, the row needs F7-02
   and moves to W29.

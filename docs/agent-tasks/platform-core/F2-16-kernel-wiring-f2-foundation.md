@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-16-kernel-wiring-f2-foundation.md -->
-<!-- version: 1.0.3 -->
+<!-- version: 1.0.4 -->
 <!-- guid: ee4d77ac-3711-47b9-9be9-7b78297d36f2 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -27,9 +27,9 @@ npm ci --prefix web                     # or: make web-deps, once R1-05 has merg
 ```
 
 Do **not** run `go work init` (CLAUDE.md). `core/` is the nested module `github.com/falkcorp/mediacore`; run its tests
-from inside `core/`. This row is **the one owner of the kernel and module wiring files in W28** (`core/kernel/boot.go`,
+from inside `core/`. This row is **the one owner of the kernel and module wiring files in W30** (`core/kernel/boot.go`,
 `core/kernel/kernel.go`, `core/module/manifest.go`, `core/module/registrar.go`), of `core/coretest/tasks.go` and
-`harness.go`, and of the regenerated `core/openapi/core.json` and client; no other W28 PR touches them.
+`harness.go`, and of the regenerated `core/openapi/core.json` and client; no other W30 PR touches them.
 
 ## Goal
 

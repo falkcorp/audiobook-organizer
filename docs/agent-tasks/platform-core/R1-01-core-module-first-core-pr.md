@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-01-core-module-first-core-pr.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.3 -->
 <!-- guid: c9068651-3412-486f-b5f9-ac087f228837 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -8,8 +8,8 @@
 | Field | Value |
 |---|---|
 | ID | `R1-01` |
-| Tier | **T3** (Opus / high): module mechanics with known ambiguous-import traps and the guard rules of 03 §3 |
-| Release / wave | R1 / W04 |
+| Tier | **T3** (Opus / high): module mechanics with known ambiguous-import traps and the guard rules of 03 §3.5.1 |
+| Release / wave | R1 / W05 |
 | Depends on | R0-01, OWNER-01, OWNER-02, R1-35 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 03 §3.2 items 1, 4, 6, §3.5.1 items 1-4; 09 §9.4 R1 Content: build and CI, R1's CI classification (core layering gate, genproto-exclude-root, check_module_skew.py, TestCoreHoldsNoAppKeyNames); 13 §13.2.2 guard items 1-4; 12 §12.3.11 (toolchain pin, print-toolchain); 04 §8.1 R1 |
 | Branch | `agent/platform-core-r1-01-core-module-first-core-pr` |
@@ -69,11 +69,19 @@ toggle in `prerelease.yml` and sets it, and it merges before this row (this row 
 `prerelease.yml`. Nothing user-visible changes; ABO's binary behaves exactly as before.
 
 **Preconditions (STOP if any is missing).**
-1. OWNER-02 has cut the R0 production release (`gh release list --exclude-pre-releases --limit 3` shows it) and
+1. OWNER-02 has cut the R0 production release (`gh release list --exclude-pre-releases --exclude-drafts --limit 3`
+   shows it) and
    R0-01 (the toolchain bump) is merged: `grep -n '^export GOTOOLCHAIN' Makefile` shows the bumped pin.
 2. OWNER-01's recorded answers exist in the tracking issue: Q-I (how required checks are enforced) and
    "keep or override the R1 freeze". R1-35 has applied it either way (value `'R1'` or `''`); nothing here depends on
-   which. R1-35 is merged: `grep -c 'RELEASE_FREEZE' .github/workflows/prerelease.yml` shows 3.
+   which. R1-35 is merged: `grep -c 'RELEASE_FREEZE' .github/workflows/prerelease.yml` shows 4 (env entry, two
+   `if:`, the notice `echo`).
+3. No release is in flight from before R1-35's merge:
+   `gh run list --workflow release-prod.yml --json status --jq '[.[]|select(.status!="completed")]|length'` shows 0,
+   and no `prerelease.yml` run created before R1-35's merge is unfinished
+   (`M=$(gh pr view <R1-35's PR> --json mergedAt --jq .mergedAt)`, then
+   `gh run list --workflow prerelease.yml --limit 50 --json status,createdAt --jq "[.[]|select(.createdAt < \"$M\" and .status != \"completed\")]|length"`
+   shows 0). Otherwise STOP and report.
 
 ## Invariants (each one has a test or check below)
 

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-03-core-ai-router-dark.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: c070f730-aa7a-4a14-ab1e-da2d1d3bf68d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -72,7 +72,7 @@ Deferred-build (05-ai §1): `ai.Router.Usage`, `ai.UsageQuery`, `ai.MonthlyToken
 | modify / grow | `core/integrations/ai/` (catalog, router, batch, job store, importer, metrics, the `core.ai.batch-poll` native body) |
 | create | `core/integrations/ai/aitest/` (`JobStoreSuite`, `Conformance`) |
 | create | `core/integrations/ai/openai/` (adapter `core.openai_compat` over `providerhttp`, `openai-go/v3`) |
-| create | `core/coretest/ai.go` (`coretest.FakeAI`, 05-ai §9 "Fake"; this row owns this one file of `core/coretest/`; F7-02 owns `provider.go`, F2-16 `tasks.go` and `harness.go`, both in W28) |
+| create | `core/coretest/ai.go` (`coretest.FakeAI`, 05-ai §9 "Fake"; this row owns this one file of `core/coretest/`; F7-02 owns `provider.go`, F2-16 `tasks.go` and `harness.go`, both in W30) |
 | modify | `core/go.mod`, `core/go.sum`, `go.sum` (`github.com/openai/openai-go/v3` into core), `core/archtest/thirdparty_allow.txt` (its allowlist line) |
 | create | one `changelog.d/` fragment (headerless) |
 
@@ -109,7 +109,8 @@ STOP if `ai.Router` already exists, if F7-01's registry is missing, or if `provi
    with absent-expectation; `BatchApplyTask` registering one apply kind per batch capability; orphan reconcile by tag;
    the native body of `core.ai.batch-poll` (F2-11's registration extended; the interim body stays wired in ABO until
    F7-09).
-6. Metrics: the §8 table under the App's namespace; nothing registered in ABO's gather in this PR.
+6. Metrics: the §8 table under the App's namespace; nothing registered in ABO's gather in this PR. This adds the core `ai` metrics scope: add its `testdata/series.golden` under `core/integrations/ai/`, asserted by
+   `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5).
 7. Adapter `core.openai_compat` in `core/integrations/ai/openai/` through `providerhttp`, egress policy and `Local`.
 8. `aitest.JobStoreSuite`, `aitest.Conformance` (recorded fixtures; live servers behind `MEDIACORE_LIVE_AI=1`),
    `coretest.FakeAI`.
@@ -140,6 +141,8 @@ func (r *Registrar) AICapability(spec ai.CapabilitySpec) ai.Capability // zero h
 ```
 
 ## Tests (write first; spec names copied exactly, 05-ai §9)
+
+Metrics: `metricstest.AssertSeries` over the `ai` scope's `testdata/series.golden` (05-metrics §12).
 
 Router: `TestRouter_DefaultDenyEmptyTicks`, `TestRouter_WildcardRejectedOnPut`, `TestRouter_PrioritySpillToFreeSlot`,
 `TestRouter_FailoverTable`, `TestRouter_EmbedFailoverSameModelOnly`, `TestRouter_EmbedRequiresPinnedModel`,

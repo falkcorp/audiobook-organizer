@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-30-core-web-api-client.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 646a92e3-e0bd-4a2f-9b2c-edfca1100759 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | `R1-30` |
 | Tier | **T2** (Sonnet / high): a new npm workspace and build order across every build site |
-| Release / wave | R1 / W19 |
+| Release / wave | R1 / W21 |
 | Depends on | R1-19, R1-13, R1-05 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 07 §7.19 steps 2-3, §7.3.1, §7.3.2; 09 §9.4 R1 Content: UI, Verification (UI steps); 12 §12.4.3 (npm lockstep) |
 | Branch | `agent/platform-core-r1-30-core-web-api-client` |
