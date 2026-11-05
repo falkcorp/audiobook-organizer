@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-05-release-r2-runbook-deploy.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.5 -->
 <!-- guid: 671daa9f-45b1-4ffb-a1ce-a9b0fc7c953c -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -14,15 +14,18 @@
 | ID | OWNER-05 |
 | Release | R2 (the one-way cutover) |
 | Tier | **OWNER**: deploy, production reads, release |
-| Wave | W43 |
+| Wave | W40 |
 | Depends on | R2-01 (the runbook and the R2 release note; it follows every flip, F8-04 and F9-03) |
 | Unblocks | **R2-02** (ends the R2 freeze after the release) and every R3 task |
 | Spec | 09 §9.4 R2 (Rollback, Owner), §9.3 item 2 (the optional dry run), §9.6 (what changes; last column feeds these steps), §9.7 P12; 05-config §2.4 (keyring export); 05-backup §5B.10 |
 
 ## Before you start
 
-- D12 (a)–(d) are answered; what is left to you is whether to run the optional dry run and smoke run and, within the
-  smoke day, whether to keep R2 or roll back (09 §9.4 R2 Owner).
+- D12 (a)–(d) are answered; what is left to you is whether to run the optional smoke run and, within the smoke day,
+  whether to keep R2 or roll back (09 §9.4 R2 Owner).
+- **The dry run (step 2) is mandatory for this plan.** 09 §9.3 item 2 calls it optional; the plan makes it a required
+  step (advisor R3(b)) because it is the only rehearsal of the cutover on production's own data. It takes minutes, not
+  a soak, so D11 (no soaks) stands.
 - **Fixing forward is the default.** A rollback restore discards every write since the upgrade (imports, edits, phone
   progress) and **revives every credential revoked, user disabled or password changed on R2**; after a rollback,
   repeat those revocations (09 §9.2.1 "What a restore costs"; §9.6 row 25).
@@ -37,15 +40,17 @@
    identity row refuses the upgrade (§9.6 row 24).
 1. **Off-host archive.** Take an archive, verify it, and copy it off the host **together with `.encryption_key` and
    `<db parent>/config.yaml`**.
-2. **Optional dry run** (09 §9.3 item 2), with the R2 binary on that archive, on the production host or any
-   linux/amd64 machine:
+2. **Dry run, mandatory** (09 §9.3 item 2; required by this plan), with the R2 binary on that archive, on the
+   production host or any linux/amd64 machine:
    `audiobook-organizer storage migrate --dry-run --from-archive <archive>`: it reports per-step counts,
    quarantined rows and durations and writes nothing to the live store. To also boot the result:
    `storage restore-offline --archive <file> --into <dir>`, `<dir>` a new directory inside
    `.mediacore-checkpoints/scratch/`, booted in a container with `--network none` and
    `core.integrations.disabled=true`, reached through `docker exec`. The copy holds production data, plaintext
    secrets and session tokens: delete it afterwards (the checkpoint sweeper removes it 7 days after its mtime
-   otherwise).
+   otherwise). The boot of the copy stays optional; the `--dry-run` command does not. If the dry run fails, reports a
+   blocking identity row or an unfinished merge, or quarantines a row you cannot explain, do not go on to step 3:
+   fix it (step 0) and run the dry run again, or record the reason and stop.
 3. **Env renames.** Rename the env names that the host's own unit drop-ins, compose `.env` and plist set, per the
    rename table (OWNER-04's P4 list). A still-set retired protected or secret name refuses boot and names its
    successor.
@@ -88,7 +93,7 @@ One tracking-issue comment, no hosts, paths, secrets or values:
 ```
 OWNER-05 recorded <date>
 P12: Branch A | B; step 0: merges <n> finished/undone, blocking rows <n> fixed/deleted
-dry run: done (<n> quarantined) | skipped; env names renamed <n>; webhooks switched <n>; keyring exported: yes
+dry run: done (<n> quarantined, <n> blocking); env names renamed <n>; webhooks switched <n>; keyring exported: yes
 invites re-sent <n>; smoke run: done | skipped; deployed RC <rc tag>, version string matched: yes
 decision: kept (R2 release <tag>, cut from <rc tag>) | rolled back (<reason>)
 ```

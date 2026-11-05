@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-01-tasks-public-api-taskstest-kit.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 24217568-a4f2-4955-a65e-13e6cfd7ef35 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -49,7 +49,7 @@ declares. Nothing in ABO imports `core/tasks` in this PR, and nothing registers 
 
 ## Base state: re-verify before editing
 
-The plan was written at commit `f7ac5b11e`, where `core/` does not exist yet; R1 creates it. Run these at **your
+The plan was written at commit `ac4368bdb`, where `core/` does not exist yet; R1 creates it. Run these at **your
 base** (fresh `origin/main` after OWNER-03). Any "STOP" condition: stop and report, do not improvise.
 
 ```bash
@@ -65,7 +65,7 @@ grep -rn 'type ComponentID ' core/health/                                       
 grep -rn 'type Duration ' core/config/                                                     # expect 1 hit (F2-09), else STOP
 # This PR's target must not exist yet
 test ! -e core/tasks && echo absent                                                       # expect "absent"; if present: see Idempotency
-# HEAD evidence the amendments cite (counts at f7ac5b11e; regenerate at your base)
+# HEAD evidence the amendments cite (counts at ac4368bdb; regenerate at your base)
 grep -n 'concCPU concKind = iota' pkg/ops/batch.go                                        # 1 hit (A1)
 grep -n 'const MaxNetworkWorkers = 64' pkg/ops/batch.go                                   # 1 hit (MaxFixed's source)
 ls pkg/ops/opstest/conformance.go                                                         # exists (Conformance's source)

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-01-core-config-loader-overridestore-importer.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 36955afe-b04c-490f-9996-d4b78e06b11a -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -61,7 +61,7 @@ layers plug in without changing this PR's types: here the operator layers you pa
 
 ## State at HEAD and at BASE
 
-HEAD of the plan branch (`f7ac5b11e`) has no `core/` directory; the spec's anchors are at `748fd787a` and
+HEAD of the plan branch (`ac4368bdb`) has no `core/` directory; the spec's anchors are at `748fd787a` and
 `internal/config` is unchanged between them. At BASE, R1 and F2 have created:
 
 | Path | Created by | What you rely on |
@@ -100,7 +100,7 @@ grep -rn 'type Section\[' core/config/ | wc -l
 ls core/kernel/core_sections.go | wc -l
 # the audit action table carries core.settings.update (expect >= 1)
 grep -rn 'core.settings.update' core/audit/ | wc -l
-# HEAD's state-dir rule you must equal (expect 1 each; anchors at HEAD f7ac5b11e)
+# HEAD's state-dir rule you must equal (expect 1 each; anchors at HEAD ac4368bdb)
 grep -c '^func EnsureSecureStateDir\|^func SecureStateDir' internal/config/state_dir.go   # expect 2 (HEAD: lines 70, 133)
 grep -c 'ABK_STATE_DIR' internal/config/state_dir.go   # expect >= 1 (HEAD: line 25)
 # where R1 put the pre-boot state-dir resolver (expect exactly 1 definition in core/)

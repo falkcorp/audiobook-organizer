@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R0-05-basic-gate-empty-password.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: b4576320-1a96-466d-99a6-04809ffcfeb3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | R0-05 |
 | Release | R0 (09 §9.4 R0 Content (1), Owner (P14)); a live security hotfix in HEAD's code |
-| Tier | **T2** (Sonnet / high): a fail-closed change that can lock an install out; the recovery path must be exact |
+| Tier | **T4** (Opus / xhigh–max): a fail-closed change that can lock an install out; the recovery path must be exact |
 | Wave | W02 |
 | Depends on | OWNER-01 (its P14 production read). The PR may be opened at once; **it merges only after OWNER-01 has recorded P14** in the tracking issue |
 | Branch | `fix/r0-05-basic-gate-empty-password` |

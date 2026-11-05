@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-14-schedules-oracle-no-catchup-storm.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 80c882d4-5cd4-40d6-8c6b-e278487a2d3d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -80,14 +80,14 @@ ls internal/books/ | head                                                       
 grep -rn 'modules.books.scheduler.schedules\|scheduler.schedules' internal/books/ --include=*.go | grep -v _test | wc -l   # >=16 (books' declared keys from F3); record the list
 test ! -e internal/books/schedules.go && echo absent                                             # absent
 test -f internal/books/config.go && echo present                                                 # present (books' config section, F3); record its section type
-# HEAD's scheduler (f7ac5b11e)
+# HEAD's scheduler (ac4368bdb)
 grep -c 'ts.registerTask(TaskDefinition{' internal/scheduler/tasks.go                          # 38
 grep -c '' internal/scheduler/testdata/cadence.golden                                          # 38 (name|interval|daily_at|run_on_start|in_window|window_index|enabled_default)
 grep -n '^var taskV2DefIDs = map\[string\]string{' internal/scheduler/maintenance.go | wc -l   # 1 (36 entries; transcode and batch_poller absent)
 grep -rnE '^\s+Schedule:\s+' internal/plugins internal/server internal/maintenance --include=*.go | grep -v _test | grep -v 'Schedule: *nil' | grep -v 'handlers/opsv3' | wc -l   # 15 (the never-run v2 crons)
 ```
 
-The 15 v2 crons at `f7ac5b11e`: `deluge.protected-paths-sync` (`*/30 * * * *`) and the `Schedule:` literals in
+The 15 v2 crons at `ac4368bdb`: `deluge.protected-paths-sync` (`*/30 * * * *`) and the `Schedule:` literals in
 `internal/plugins/maintenance/cleanup.go` (7), `author.go`, `db.go`, `nightly_compact_activity_log.go`,
 `integrity_check.go`, `dedup_ops.go`, `orphan_book_files.go` and `metadata.go`. List each with its def ID and cron
 string in the PR description; that list is the release-note input (05-tasks §5T.3.8; R2-01 assembles the note).

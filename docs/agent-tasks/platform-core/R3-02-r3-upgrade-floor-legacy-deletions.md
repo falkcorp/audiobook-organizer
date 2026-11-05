@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R3-02-r3-upgrade-floor-legacy-deletions.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.5 -->
 <!-- guid: c967232d-f699-4787-8455-5badc8f3fca6 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | R3-02 |
 | Release | R3 |
 | Tier | **T4** (Opus / xhigh–max): the upgrade floor refuses stores at boot and at restore staging; a wrong floor either bricks a valid store or lets an unmigrated one boot with its readers deleted |
-| Wave | W44 (beside R2-02, R3-04; file-disjoint) |
+| Wave | W41 (beside F9-05, R2-02; file-disjoint) |
 | Depends on | OWNER-05 (R2 released and deployed) |
 | Spec | 09 §9.2.2 ("The R3 floor", "Fresh installs"), §9.4 R3; 05-storage §5S.3.5 (`UpgradeFloor`, `ErrUpgradeFloor`, runner rules "Atomicity" and "Upgrade floor"), §5S.4 steps 3 and 6, §5S.9.3, §5S.10; 05-backup §5B.3.4 step 4; 05-tasks §5T.8.1 (the `internal/operations/state` row); 07 §7.8 (opsgen, `ops.ts`, `operationPolling`); 03 §3.7 ("one floor, in R3"), §3.8 R3; 06 §6.4.10 R3, §6.5.1 "Releases" R3 |
 

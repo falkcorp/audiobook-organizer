@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-01-core-rbac-store-service-seeds.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 59c67fbd-15a4-478a-a671-a3cd8a9542d5 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -78,7 +78,7 @@ grep -rn 'core.role.create\|core.role.update_seed' core/audit/ | wc -l      # ex
 grep -rn 'type RevocationJournal interface' core/backup/journal/ | wc -l    # expect 1 (F4-04)
 ls -d core/internal/authz 2>/dev/null | wc -l                               # expect 0 (F4-09 creates it after you)
 ls core/rbac/store.go core/rbac/service.go core/rbac/seeds.go 2>/dev/null | wc -l   # expect 0
-# HEAD's rules you port (HEAD f7ac5b11e)
+# HEAD's rules you port (HEAD ac4368bdb)
 grep -n 'func ' internal/auth/seed.go | head -5                             # HEAD seed rewrite (seed.go:80-129)
 sed -n 265,298p internal/server/middleware/auth.go | grep -c 'worker'      # >= 1: HEAD's workerOnly confinement
 ```

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-29-react-router-8-import-swap.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: ce2b7186-99af-4660-bb86-0490806511db -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -35,7 +35,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -57,7 +57,7 @@ Done when (the gate test this task owns, 09 §9.4 R1 Verification "The UI steps"
 R1-05 (one web build entry point) is merged: `test -f scripts/ci/build_web.sh && echo ok` prints `ok`.
 If not, STOP.
 
-## Re-verify (counts at `f7ac5b11e`)
+## Re-verify (counts at `ac4368bdb`)
 
 ```bash
 grep -n '"react-router' web/package.json
@@ -69,7 +69,7 @@ git grep -c 'react-router-dom' -- web/src web/tests | awk -F: '{s+=$2} END {prin
 git grep -n '"react-router-dom"' -- web/src web/tests | wc -l
 #   expect 0 (every occurrence uses single quotes or is a comment)
 grep -n 'react-router-dom' web/vite.config.ts
-#   expect 1 line (83 at f7ac5b11e; 07 cites 81-82 at 748fd787a): the vendor chunk regex
+#   expect 1 line (83 at ac4368bdb; 07 cites 81-82 at 748fd787a): the vendor chunk regex
 grep -c '"node_modules/react-router-dom"' web/package-lock.json
 #   expect 1
 ```

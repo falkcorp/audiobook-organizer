@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-05-basic-gate-core-perimeter-stage8.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 178fe6db-0b0b-4bd3-b26b-8306e5d130de -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -68,7 +68,7 @@ grep -rn 'basic_gate' core/kernel/core_sections.go | wc -l
 # the FailClosed declaration lands with F3-02 in a later wave, the password's secrets.Ref with F3-03 in this wave
 # (expect 0 here; the stage reads only the effective values, so neither is needed)
 grep -rn 'FailClosed("core.http.basic_gate.enabled"' core/ | wc -l
-# HEAD's gate you port (HEAD f7ac5b11e; R0-05 has since added the empty-password refusal)
+# HEAD's gate you port (HEAD ac4368bdb; R0-05 has since added the empty-password refusal)
 grep -c 'func BasicAuth()' internal/server/middleware/basicauth.go              # expect 1
 grep -c '"/api/health" || path == "/api/v1/health"' internal/server/middleware/basicauth.go   # expect 1
 grep -c 'subtle.ConstantTimeCompare' internal/server/middleware/basicauth.go    # expect 2

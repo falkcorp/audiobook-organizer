@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R3-04-r3-release-note.md -->
-<!-- version: 1.0.3 -->
+<!-- version: 1.0.6 -->
 <!-- guid: 9333a60d-0082-4464-a9b9-c1a2d1cf879b -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,12 +10,21 @@
 | ID | R3-04 |
 | Release | R3 |
 | Tier | **T1** (Sonnet / medium): a release note from texts the spec fixes; one new Markdown file |
-| Wave | W44 (beside R2-02, R3-02; file-disjoint) |
-| Depends on | OWNER-05 (the R2 release is cut and deployed, so its tag is known) |
-| Spec | 09 §9.4 R3 ("Content": the release-note text, verbatim), §9.2.2 ("The R3 floor": exit 78, launchd's 60 s sleep, the macOS and Docker notes, the host-loss procedure), §9.6 row 21 (the shell's paths, only if F9 slipped to R3); 06 §6.11.1 step 6 (the no-op flags deleted) |
+| Wave | W45 (beside no other row; file-disjoint) |
+| Depends on | OWNER-05 (the R2 release is cut and deployed, so its tag is known), R3-01, R3-02, R3-03, R3-05, F9-03 |
+| Spec | 09 §9.4 R3 ("Content": the release-note text, verbatim), §9.2.2 ("The R3 floor": exit 78, launchd's 60 s sleep, the macOS and Docker notes, the host-loss procedure), §9.6 row 21 (the shell's paths; F9 ships in R3 by default); 06 §6.11.1 step 6 (the no-op flags deleted) |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. This PR writes one file. OWNER-06 prepends
-its body to the generated R3 release notes when it cuts R3 (CLAUDE.md: prepend, never replace).
+**Gate:** plan, then execute autonomously in a worktree with its own PR. This PR writes the R3 release note, which
+OWNER-06 prepends to the generated R3 release notes when it cuts R3 (CLAUDE.md: prepend, never replace), and carries
+R3's executive summary and TODO check-offs (CLAUDE.md "Post-Task Hygiene"; plan §(n) item 4).
+
+**The shell ships in R3.** F9 ships in R3 by default (plan §(n); 09 lets F9 slip to R3): F9-03 merges after OWNER-05
+cuts R2, outside the freeze, and R2-01's note leaves the shell out. So this note always carries the new page
+addresses (step 5).
+
+**Merge order.** Write the note as soon as the R2 tag is known, but merge this PR last among R3's agent rows: only
+after R3-01, R3-02, R3-03, R3-05 and F9-01 … F9-05 have merged, so that the executive summary and the check-offs cover
+all of R3 (rebase first and redo the check-offs). Until then keep it open and say so in the PR description.
 
 ## START HERE (do this first, exactly)
 
@@ -35,8 +44,11 @@ git rebase origin/main
    binary prints in `install <tag> first`. Call it `<R2 tag>` below and write the literal tag everywhere the texts say
    `<R2 release>` or `<R2 tag>`. If the record names no production tag, STOP and report "R3-04 needs the R2 tag from
    OWNER-05".
-2. **Whether F9 slipped to R3.** Read R2-01's merged PR description ("F9 decision"). If it records that F9 moved to R3,
-   the R3 note carries the shell's page paths (step 5). Otherwise it does not.
+2. **The shell's page paths.** The new paths and the absorbed pages come from 07 §7.11 (the row "all other
+   pages/components": URLs move to `/books/...`, and `/dashboard → /`, `/files → /books/files`, `/diagnostics →
+   /system/diagnostics`, `/operations → /activity`, `/maintenance → /system`) and from F9-03's
+   `seams.d/F9-03.md` or merged PR description, which records the full former → new path table. F9-03 merges before
+   this PR (merge order above); if its table and 07 §7.11 disagree, STOP and report the rows.
 
 ## File
 
@@ -44,6 +56,8 @@ git rebase origin/main
 |---|---|
 | create | `docs/system/r3-release-note.md` (file name coined by the plan, plan §(l) item 14) |
 | create | one `changelog.d/` fragment (headerless) |
+| create | `docs/executive-summaries/<today>-r3-cleanup-executive-summary.md` (4-line header; outside the inventory's file list, like the fragment: plan §(n) item 4) |
+| modify | `TODO.md` (check-offs only; outside the inventory's file list for the same reason) |
 
 Touch nothing else.
 
@@ -93,9 +107,17 @@ STOP if any of the three spec greps returns 0 (the spec text moved: report it, d
    removed (they had no effect since PebbleDB became the only backend). A service definition or script that still
    passes either flag fails to start with `unknown flag`: remove the flag." (This sentence is coined here: 09 §9.4 R3
    lists the deletion but fixes no text; 06 §6.11.1 step 6 deletes them; D10 keeps no shim.)
-   **Only if F9 slipped to R3:** add `## New page addresses` with 09 §9.6 row 21's rule (no old-URL redirect; a former
-   bookmark opens the not-found page) and the path table F9-03's PR description recorded (former → new path).
-6. One `changelog.d/` fragment; acceptance.
+   Then `## New page addresses` (the shell, F9): 09 §9.6 row 21's rule in plain sentences (no old-URL redirect; a
+   former bookmark opens the not-found page; update your bookmarks), then the path table from input 2 (former → new
+   path), and one sentence that seven interface preferences (theme excepted) reset once with this release (07 §7.11,
+   the `lib/storageKeys.ts` row: "listed in that release's note").
+6. **R3's executive summary and TODO check-offs.** One dated
+   `docs/executive-summaries/<today>-r3-cleanup-executive-summary.md` (name pattern from
+   `docs/process/executive-summaries.md`; plain language: the upgrade floor and what to install first, the old key
+   file and search index deleted, the removed flags, the new page addresses), and every `TODO.md` entry an R3 or F9
+   row finished checked off by hand (grep `TODO.md` for each row's ID and title; CLAUDE.md: assembly may already have
+   folded a fragment in).
+7. One `changelog.d/` fragment; acceptance.
 
 ## Acceptance (commands and expected output)
 
@@ -112,6 +134,10 @@ grep -c 'The first start of this release deletes the old settings key file `.enc
 grep -c 'launchctl bootout' "$F"; grep -c 'docker compose stop' "$F"; grep -c -- '--db-type' "$F"
 # Exit code named. Expected: >= 1
 grep -c '78' "$F"
+# The shell's addresses. Expected: >= 1 each
+grep -c '^## New page addresses' "$F"; grep -c '/books/' "$F"
+# R3's executive summary. Expected: 1
+ls docs/executive-summaries/ | grep -c -- '-r3-cleanup-executive-summary\.md$'
 # The note's tag equals R3-02's InstallFirst literal. R3-02 runs beside this row in W44: run this once R3-02 has
 # merged (rebase first); if it has not merged when this PR is otherwise ready, wait for it. Expected: no output
 TAG="$(grep -rhoE 'InstallFirst: *"[^"]+"' internal/books/ | head -1 | sed -E 's/.*"([^"]+)"/\1/')"
@@ -127,6 +153,7 @@ make ci
 - Cutting the release and prepending the note (OWNER-06).
 - Any code change (R3-01, R3-02, R3-03, R3-05).
 - The R2 release note (R2-01).
+- Executive summaries for R1 and R2 (R1-31, R2-01).
 
 ## Rollback
 

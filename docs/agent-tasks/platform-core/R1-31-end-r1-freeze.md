@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-31-end-r1-freeze.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.6 -->
 <!-- guid: f6be479f-8c49-424f-8d3e-ef33dbe233e8 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -20,6 +20,10 @@
 
 - `.github/workflows/prerelease.yml`
 
+Also, outside the inventory's file list like the `changelog.d/` fragment (plan §(n) item 4: R1's closing row carries
+them, so no R1 task PR edits them and siblings in a wave never collide): R1's executive summary
+`docs/executive-summaries/<today>-r1-core-runtime-executive-summary.md` (create) and `TODO.md` (check-offs only).
+
 ## START HERE
 
 ```bash
@@ -31,7 +35,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -61,7 +65,7 @@ Expected: exactly 4 lines: the `env:` entry, the promote step's
 `if: steps.rc.outputs.at_threshold == 'true' && env.RELEASE_FREEZE == ''`, the notice step's
 `if: steps.rc.outputs.at_threshold == 'true' && env.RELEASE_FREEZE != ''` and the notice step's `echo` (it names the variable too). The `env:` entry is `  RELEASE_FREEZE: 'R1'` when the owner kept the R1 freeze, and `  RELEASE_FREEZE: ''` when the owner overrode it (R1-35 always adds all four lines). If the count is not 4, or the `env:` value is neither of those two, STOP and report what you found.
 
-**Recorded no-op.** If the `env:` value is already `''`, do not open a PR. Record in the tracking issue "R1-31: no-op, the R1 freeze was overridden and R1-35 left `RELEASE_FREEZE: ''`", and report the row done with 0 files changed. Steps 1-4 and the acceptance below apply only when the value is `'R1'`.
+**Recorded no-op.** If the `env:` value is already `''`, the workflow edit is a no-op. Record in the tracking issue "R1-31: no-op, the R1 freeze was overridden and R1-35 left `RELEASE_FREEZE: ''`". Steps 1-3 and the `RELEASE_FREEZE` acceptance lines apply only when the value is `'R1'`; steps 4-5 (R1's executive summary and TODO check-offs) apply either way, so the PR is then opened with only those files and the fragment, and `prerelease.yml` is not touched.
 
 ## Steps
 
@@ -80,8 +84,19 @@ Expected: exactly 4 lines: the `env:` entry, the promote step's
    Keep the comment block above it unchanged. Change nothing else in the file (the two `if:` lines stay).
 2. Bump the file header: `# version:` patch +1, `# last-edited:` today.
 3. Add a headerless fragment `changelog.d/<today>_end_r1_freeze.md` with one line under a `### Changed`
-   heading: `- Automatic minor-release promotion is on again after the R1 release (the R1 freeze ends).`
-4. Commit: `ci(release): end the R1 freeze after the R1 release` with the trailer of the repo rules.
+   heading: `- Automatic minor-release promotion is on again after the R1 release (the R1 freeze ends).` (In the
+   no-op case, instead: `- R1 executive summary and TODO check-offs.`)
+4. **R1's executive summary** (CLAUDE.md "Post-Task Hygiene"; plan §(n) item 4). Create
+   `docs/executive-summaries/<today>-r1-core-runtime-executive-summary.md` with the 4-line header, following the
+   name pattern and rules of `docs/process/executive-summaries.md`. Plain language, no file paths or function names:
+   what R1 changed for the user and why (the core runtime underneath, with no change to stored data; the first
+   checkpoint; the R1 release note's user-visible lines, which OWNER-03 prepended to the R1 release), and that
+   automatic promotion is on again. Take the user-visible facts from the R1 release's notes
+   (`gh release view <R1 tag>`), not from memory.
+5. **TODO check-offs.** For every R1 row (R1-01 … R1-37) and the R0 rows, grep `TODO.md` for its ID and title and
+   check off each open entry it finished, by hand (CLAUDE.md: the daily assembly may already have folded a
+   `todo.d` fragment in, so grep `TODO.md`, not `todo.d/`). Do not add new entries.
+6. Commit: `ci(release): end the R1 freeze after the R1 release` (no-op case: `docs(release): R1 executive summary and TODO check-offs`) with the trailer of the repo rules.
 
 ## Code contract
 
@@ -94,14 +109,16 @@ grep -c "RELEASE_FREEZE: ''" .github/workflows/prerelease.yml          # expect 
 grep -c "RELEASE_FREEZE: 'R1'" .github/workflows/prerelease.yml        # expect 0
 grep -c "env.RELEASE_FREEZE == ''" .github/workflows/prerelease.yml    # expect 1
 python3 -c "import yaml,sys;yaml.safe_load(open('.github/workflows/prerelease.yml'))" && echo YAML_OK   # expect YAML_OK
-git diff --stat origin/main -- .github/workflows/prerelease.yml        # expect 1 file changed
+git diff --stat origin/main -- .github/workflows/prerelease.yml        # expect 1 file changed (0 in the no-op case)
+ls docs/executive-summaries/ | grep -c -- '-r1-core-runtime-executive-summary\.md$'   # expect 1
+git diff origin/main -- TODO.md | grep -c '^+.*\[x\]'                   # expect >= 1 (R1 entries checked off)
 make ci                                                                # expect exit 0 and "All CI checks passed"
 ```
 
 ## Out of scope
 
 The R2 freeze (F3-08 sets the variable to `'R2'`; R2-02 clears it). Adding the toggle (R1-35). Any other workflow. The release
-itself (OWNER-03).
+itself (OWNER-03). R2's and R3's executive summaries (R2-01, R3-04).
 
 ## Rollback
 

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-17-oplint-becomes-core-tasklint.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.5 -->
 <!-- guid: cf14f86a-65b9-449c-a52b-9c60ce53a8ff -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -68,7 +68,7 @@ move PR: announce the move window for `tools/cmd/oplint` at least one working da
 
 ## Base state: re-verify before editing
 
-Counts at the plan's base `f7ac5b11e`; regenerate at your base and STOP on a zero-hit edit target.
+Counts at the plan's base `ac4368bdb`; regenerate at your base and STOP on a zero-hit edit target.
 
 ```bash
 grep -c 'archtest/tasklint' docs/specs/platform-core/05-tasks.md                      # >=1 (§5T.8.4 exists), else STOP
@@ -89,7 +89,7 @@ grep -c '"tools/cmd/oplint"' scripts/ci/fixture_weights.json                    
 test -d core/tasks && echo tasks                                                      # tasks (F2-01)
 test -d core/archtest && echo archtest                                                # archtest (R1-01)
 test ! -e core/archtest/tasklint && test ! -e internal/books/testdata/tasklint_exempt.d && echo absent   # absent; else see Idempotency
-git grep -lE 'OperationDef\{' -- '*.go' ':!*_test.go' ':!tools/' | wc -l              # 182 at f7ac5b11e (HEAD's v2 definition files; input to the entry files)
+git grep -lE 'OperationDef\{' -- '*.go' ':!*_test.go' ':!tools/' | wc -l              # 182 at ac4368bdb (HEAD's v2 definition files; input to the entry files)
 ls internal/arch/resume_restart_guard_test.go                                         # exists (successor: archtest.ResumeContinueCheckpoints)
 ls internal/plugins/runitems_concurrency_lint_test.go                                 # exists (successor: archtest.RunItemsDeclareParallelism)
 ```

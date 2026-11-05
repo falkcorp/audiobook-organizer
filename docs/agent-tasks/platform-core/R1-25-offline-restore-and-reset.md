@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-25-offline-restore-and-reset.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.5 -->
 <!-- guid: 5c692ae4-468d-4905-b950-4341dd0ae790 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -42,7 +42,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -137,7 +137,7 @@ single-file bind mount; `storage.ErrRenameRefused`).
 
 R1-23 and R1-21 merged: `test -d core/internal/restoreswap && git grep -q 'print-storage-levels' -- main.go cmd core && echo ok`.
 
-## Re-verify (expected at `f7ac5b11e`)
+## Re-verify (expected at `ac4368bdb`)
 
 ```bash
 sed -n 45,48p internal/server/wire_system_routes.go       # expect the two reset routes

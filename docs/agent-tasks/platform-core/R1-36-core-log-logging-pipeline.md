@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-36-core-log-logging-pipeline.md -->
-<!-- version: 1.0.2 -->
+<!-- version: 1.0.3 -->
 <!-- guid: 151713b2-8479-41b2-9b1c-2a47c6953d88 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -25,7 +25,7 @@ list without recording it under the PR's "Scope notes"):
   `structured_test.go`, `opcontext.go` and `integration_test.go`)
 - `core/health/flight.go` (modify: re-point R1-09's `Sanitize` call)
 - `core/internal/archtest_layers_test.go` (modify: the in-module control for the deleted health -> log edge)
-- The 43 ABO files that step 6 rewrites (measured at `f7ac5b11e`):
+- The 43 ABO files that step 6 rewrites (measured at `ac4368bdb`):
   `internal/dedup/{auto_resolve,book_runtime,drain_stale,engine}.go`, `internal/httputil/respond.go`,
   `internal/importer/service.go`, `internal/metabatch/upgrade.go`,
   `internal/metafetch/{book_runtime,file_pipeline,service}.go`,
@@ -55,7 +55,7 @@ npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 
 Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and
 `go -C core build ./...`. The spec anchors at `748fd787a`; caller counts below were measured at the planning base
-`f7ac5b11e` with `internal/logging` (R1-07 moves it to `core/log` and keeps the import alias `logging`).
+`ac4368bdb` with `internal/logging` (R1-07 moves it to `core/log` and keeps the import alias `logging`).
 
 ## Goal
 
@@ -240,8 +240,8 @@ git grep -n 'type Logging struct\|func WithAttrs(\|type RotatingFile struct' -- 
 git grep -n 'LevelTrace' -- core/log | wc -l       # expect 0
 M=github.com/falkcorp/audiobook-organizer
 git grep -l 'logging\.\(Sanitize\|SanitizeErr\|WithOp\|OpContext\|OpFromContext\|Info\|Warn\|Error\|Debug\)\b' -- '*.go' ':!core/log' | wc -l   # expect 43 (the ABO list above; fewer if a later row already rewrote some)
-git grep -n 'logging\.\(Info\|Warn\|Error\|Debug\)(' -- '*.go' ':!core/log' | wc -l     # expect 231 at f7ac5b11e
-git grep -n 'logging\.Sanitize(\|logging\.SanitizeErr(' -- '*.go' ':!core/log' | wc -l  # expect 15 (8 Sanitize, 7 SanitizeErr) at f7ac5b11e
+git grep -n 'logging\.\(Info\|Warn\|Error\|Debug\)(' -- '*.go' ':!core/log' | wc -l     # expect 231 at ac4368bdb
+git grep -n 'logging\.Sanitize(\|logging\.SanitizeErr(' -- '*.go' ':!core/log' | wc -l  # expect 15 (8 Sanitize, 7 SanitizeErr) at ac4368bdb
 git grep -l 'logging\.OpContext\|logging\.WithOp(' -- '*.go' ':!core/log'               # expect internal/server/{duplicates_ops,library_core_ops,metadata_ops}.go
 (cd core && go list -m go.opentelemetry.io/otel/trace)                                 # expect one module line with a version (R1-10's otel requirements)
 grep -c 'go.opentelemetry.io/otel/trace' core/archtest/thirdparty_allow.txt             # expect 1

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F6-02-core-realtime-hub-sse-eventhttp.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 246f9170-1d0e-4e5e-b734-1c29f5e86e69 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -77,7 +77,7 @@ grep -rn 'func RedactRunView' core/tasks/ | wc -l                               
 ls core/tasks/runview_redactor.go 2>/dev/null | wc -l                                 # 0
 grep -rn 'HandleRaw' core/httpapi/ | wc -l                                            # >= 1 (R1-13)
 grep -rn 'func OnRaw' core/events/ | wc -l                                            # 1
-# HEAD's broker you port (HEAD f7ac5b11e)
+# HEAD's broker you port (HEAD ac4368bdb)
 ls internal/server/handlers/opsv3/events.go | wc -l                                   # 1
 grep -c 'bootNonce\|nonce' internal/server/handlers/opsv3/events.go                  # >= 1
 grep -c 'withUserText' internal/server/handlers/opsv3/events.go                      # >= 1 (HEAD :615)

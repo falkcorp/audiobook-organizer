@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-16-tasks-cutover-step-m4.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 8fcf5409-cd73-4f80-ab41-6d71c96ea327 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -68,7 +68,7 @@ grep -n 'M4\|m4' internal/books/cutover/stepids.go | wc -l                      
 test -f internal/books/testdata/r2corpus/manifest.json && echo manifest                      # manifest
 grep -c 'opv2\|opv3\|operation:\|act:' internal/books/testdata/r2corpus/manifest.json        # >=1 (ops and activity rows in the corpus), else STOP
 test ! -e internal/books/cutover/m4 && test ! -e internal/books/cutover/kindrename && echo absent   # absent
-# HEAD's sources (f7ac5b11e; spec anchors are 748fd787a, see the note below)
+# HEAD's sources (ac4368bdb; spec anchors are 748fd787a, see the note below)
 grep -n 'func (p \*PebbleStore) ReconcileOpsV3WithV2' internal/database/pebble_store_ops_v3_reconcile.go | wc -l   # 1
 grep -n 'ReconcileOpsV3WithV2(context.Background())' internal/database/store.go | wc -l     # 1 (HEAD's every-boot call, store.go:1868)
 grep -c '' internal/server/testdata/op_ids.golden                                            # 288 lines (incl. comments)
@@ -84,7 +84,7 @@ grep -n 'details\["def_id"\] = r.defID' internal/operations/registry/reporter_db
 grep -n '"opv2:row:"\|"opv2:rowix:"\|"opv3:mark:"\|"opv3:rowmark:"' internal/database/keyfamilies.go | wc -l   # 4
 ```
 
-Spec anchors at `748fd787a` that moved at `f7ac5b11e`: `store.go:1860-1870` is 1862-1868; `full_sweep.go:81,117`
+Spec anchors at `748fd787a` that moved at `ac4368bdb`: `store.go:1860-1870` is 1862-1868; `full_sweep.go:81,117`
 are the uses of the constant at line 37; `reporter_db.go:848-870` holds `details["def_id"]` at 851. The others
 match. The op-ID ledger is unchanged since `748fd787a`.
 

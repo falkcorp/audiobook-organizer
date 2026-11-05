@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R2-01-r2-runbook-and-release-note.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.5 -->
 <!-- guid: 67640be6-8c43-45e8-8d9e-9a3167774c7e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,12 +10,17 @@
 | ID | R2-01 |
 | Release | R2 (closing PR) |
 | Tier | **T2** (Sonnet / high): a runbook and a generated release note; well specified, many sources |
-| Wave | W42 |
-| Depends on | F8-04, F9-03 (if F9 slips to R3, this PR drops F9-03 from its dependencies and the shell's paths from the note; see "F9 decision" below) |
+| Wave | W39 |
+| Depends on | F8-04 |
 | Spec | 09 §9.2.9 (renames and the release note), §9.4 R2 ("Content", "Rollback", "Owner": deploy steps 0–8 and the smoke run), §9.2.1 (rollback by restore, what a restore costs), §9.2.3 ("A long first boot", the checkpoint's 7 days), §9.3 ("Boot time"), §9.6 (the changed-in-R2 table and the kept contract); 05-authn §11 (identity text); 05-config §1.12.2 ("Release note (R2, config and secrets)"), §1.12.3 (the rename table); 05-tasks §5T.8.2 (the kind-rename map); 05-http-api §8.1 (deleted routes per flip); 05-metrics §13 (metric renames) |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. This is the last PR before OWNER-05 cuts R2.
-It carries **only** the runbook and the release note (09 §9.2.9: no consumer waits for it).
+It carries the runbook and the release note (09 §9.2.9: no consumer waits for it), plus R2's executive summary and
+TODO check-offs (plan §(n) item 4), and nothing else.
+
+**The shell is not in R2.** F9 ships in R3 by default (plan §(n); 09 lets F9 slip to R3): F9-03 merges after
+OWNER-05 cuts R2, outside the freeze. This PR does not wait for F9-03, and neither the runbook nor the R2 note
+mentions the shell or 09 §9.6 row 21; R3-04's note carries them.
 
 ## START HERE (do this first, exactly)
 
@@ -33,20 +38,20 @@ git rebase origin/main
    with its exact command; the binary deployed is a **tagged RC**, and "Keep" cuts the R2 production release from that
    RC tag, so the release is the deployed commit: order M4), the rollback (`make rollback-restore`, its checkpoint and archive branches and the
    `RELEASE=<pre-freeze tag>` branch after an R2 hotfix, 09 §9.2.1), what a restore costs (every write since the
-   upgrade and every revocation made on R2; fixing forward is the default), and the optional one-day smoke run
+   upgrade and every revocation made on R2; fixing forward is the default), the **freeze hotfix** procedure (plan
+   §(n) item 10; step 2 below) and the tag `make rollback-restore RELEASE=` names after one, and the optional one-day smoke run
    (09 §9.4 R2 "Owner": sign in; an ABS phone app keeps its session and syncs; a scan and a scheduled task run
    once with no catch-up storm; a webhook reaches its receiver; the scrape answers and alerts evaluate; health
    shows no quarantined row). `docs/system/runbooks.md` links to it from its Deploy section.
 2. A **release-note assembler** `scripts/release/assemble_r2_notes.py` that writes the R2 release note from the
    five sources 09 §9.2.9 names, quoting each owner's text verbatim, and its test
-   `scripts/tests/test_assemble_r2_notes.py`.
-
-## F9 decision (first step)
-
-Check whether F9-03 has merged: `git log --oneline origin/main | grep -i -E 'F9 flip|shell flip' | head -3`.
-If it has, the note includes 09 §9.6 row 21 (the shell's paths, no old-URL redirect, D13). If it has not, record
-in the PR description that F9 moves to R3 unchanged (plan §(l) item 7), omit row 21 and the shell's paths, and do
-not wait for F9-03.
+   `scripts/tests/test_assemble_r2_notes.py`. The note leaves out 09 §9.6 row 21 (the shell's paths), which is R3's.
+3. **R2's executive summary and TODO check-offs** (CLAUDE.md "Post-Task Hygiene"; plan §(n) item 4): one dated
+   `docs/executive-summaries/<today>-r2-cutover-executive-summary.md` (name pattern from
+   `docs/process/executive-summaries.md`; plain language: what changed for the user in R2 and why, the one-way
+   cutover, fixing forward, what a rollback costs), and every `TODO.md` entry that an R2 row finished checked off by
+   hand (grep `TODO.md` for each R2 row's ID and title; CLAUDE.md: assembly may already have folded a fragment in).
+   No R2 task PR made these edits, so siblings in a wave never collided on them.
 
 ## Files
 
@@ -57,6 +62,8 @@ not wait for F9-03.
 | create | `scripts/release/assemble_r2_notes.py` (header in `#` comments) |
 | create | `scripts/tests/test_assemble_r2_notes.py` |
 | create | one `changelog.d/` fragment (headerless) |
+| create | `docs/executive-summaries/<today>-r2-cutover-executive-summary.md` (4-line header; outside the inventory's file list, like the fragment: plan §(n) item 4) |
+| modify | `TODO.md` (check-offs only; outside the inventory's file list for the same reason) |
 
 ## Inputs the assembler reads (locate each at your base)
 
@@ -93,8 +100,14 @@ phrase (the spec is final for this phase; do not paraphrase).
 ## Re-verify before editing (expected results at your base)
 
 ```bash
-# Both flips merged. Expected: F8-04 found; F9-03 found or recorded as slipped (above)
+# The last R2 flip merged. Expected: F8-04 found (F9-03 is R3's and is not waited for)
 git log --oneline origin/main | grep -i -E 'F8 flip|backup.*health.*metrics' | head -3
+
+# The pre-freeze tag the R2 build embeds. Expected: exactly one tag line (F3-08's file, F2-15's resolver)
+bash scripts/ci/fetch_prefreeze_binary.sh --resolve ci/prefreeze_release.txt
+
+# The executive-summary rules. Expected: the file exists
+ls docs/process/executive-summaries.md
 
 # The runbook files. Expected: runbooks.md exists; r2-cutover-runbook.md does not
 ls docs/system/runbooks.md; ls docs/system/r2-cutover-runbook.md 2>&1 | grep -c 'No such file'
@@ -111,10 +124,11 @@ committed (the runbook's `DEPLOY_READY_TIMEOUT` and Docker `start_period` come f
 
 ## Steps
 
-1. F9 decision (above).
+1. Confirm the inputs above.
 2. Write the runbook. Sections, in order:
    - **Before the deploy** (step 0): finish or undo every account merge in progress on the pre-freeze release; run
-     `audiobook-organizer storage migrate --dry-run --from-archive <archive>` (optional, step 2) and fix or delete
+     `audiobook-organizer storage migrate --dry-run --from-archive <archive>` (step 2; **mandatory** in this plan,
+     OWNER-05: if it fails or reports a blocking row, do not deploy) and fix or delete
      each blocking identity row with `storage cutover-blockers list|fix|delete` (09 §9.2.3), including the warning
      that `list --out` writes credential hashes to a 0600 file to delete after the fix.
    - **Archive** (step 1): take an archive, verify it, copy it off the host with `.encryption_key` and
@@ -140,28 +154,40 @@ committed (the runbook's `DEPLOY_READY_TIMEOUT` and Docker `start_period` come f
      `RELEASE=<pre-freeze tag>` branch after an R2 hotfix, the refusal while a swap is in flight, the failed-journal
      exception that runs the previous binary's `storage restore-offline --checkpoint`), with the cost paragraph of
      09 §9.2.1 and the list of revocations to repeat (SEC-10). State plainly that fixing forward is the default.
+   - **Freeze hotfix** (09 §9.2.1 "The pre-freeze release"; plan §(n) item 10): a production defect found between
+     F3-08's merge and the R2 release is fixed by default in a release cut from the pre-freeze release plus the fix,
+     never from the R1 tag (the owner may decide otherwise for a given defect, 09 §9.11). Owner: branch from the tag
+     in `ci/prefreeze_release.txt` (its one tag line), apply the fix, cut the production release from that branch and
+     deploy it as usual. Then one agent PR on `main` replaces the tag line of `ci/prefreeze_release.txt` with the
+     hotfix tag (header version bumped) and re-runs the restore drill (`TestRollbackRestoreBootsPreviousBuild`) and
+     `TestCutoverRefusedByOlderBuilds` against the hotfix binary; the R2 build then embeds the hotfix tag as the
+     checkpoint record's `from_release`. **Which tag `make rollback-restore RELEASE=` names afterwards:** the tag in
+     `ci/prefreeze_release.txt` at the R2 commit you deployed, which equals the checkpoint record's `from_release`
+     and is the tag the recipe names when it refuses; after a freeze hotfix that is the hotfix tag, never the
+     original pre-freeze tag. The same tag is the one to name after a hotfix on R2 itself (09 §9.2.1 "After an R2
+     hotfix").
    - **Checkpoint**: deleted 7 days after it stops being needed; `storage prune-checkpoints` deletes it earlier.
    No hostnames, IPs or user names: use `<server>`, `<abo-url>` placeholders as `runbooks.md` does.
 3. Write the assembler (`python3`, standard library only):
-   - `--out <file>` (required), `--repo <path>` (default: the repository root), `--include-shell/--no-include-shell`
-     (default from the F9 decision, passed explicitly by the owner).
+   - `--out <file>` (required), `--repo <path>` (default: the repository root). No shell option: the shell is R3's.
    - Sections in this order: summary; what you must do (09 §9.6's last column, deploy steps); changed in R2 (each
-     9.6 row); the kept contract (09 §9.6 "The kept contract", verbatim); renamed config keys and env names (table
+     9.6 row except row 21, the shell's paths, which R3-04's note carries); the kept contract (09 §9.6 "The kept contract", verbatim); renamed config keys and env names (table
      from source 1); renamed task kinds (table from source 2); deleted routes and their successors (source 3);
      renamed metrics (source 4); owner texts (verbatim, each with its owner file and section).
    - Deterministic output: the same inputs give byte-identical output; tables sorted by old name.
    - A missing source or phrase is a non-zero exit with a message naming it.
 4. Write the test (`pytest`, fixtures under `tmp_path`): a minimal fake repo with each source and each phrase;
    asserts section order, verbatim quotes, sorted tables, determinism (two runs equal), exit 1 on a missing phrase,
-   and that `--no-include-shell` omits row 21. Name the tests as you like; mark coined names in comments.
+   and that row 21 and the shell's paths never appear. Name the tests as you like; mark coined names in comments.
 5. Run the assembler on the real repository into a temporary file and attach the output to the PR description
    (not committed; OWNER-05 runs it when cutting R2).
-6. Headers, `changelog.d/` fragment, acceptance.
+6. R2's executive summary and the `TODO.md` check-offs (Goal 3).
+7. Headers, `changelog.d/` fragment, acceptance.
 
 ## Code contract
 
 ```text
-python3 scripts/release/assemble_r2_notes.py --out <file> [--repo <path>] [--include-shell | --no-include-shell]
+python3 scripts/release/assemble_r2_notes.py --out <file> [--repo <path>]
 exit 0: note written; exit 1: a source or verbatim phrase missing (message names it); exit 2: bad arguments
 ```
 
@@ -187,6 +213,13 @@ for s in 0 1 2 3 4 5 6 7 8; do grep -q "Step $s" docs/system/r2-cutover-runbook.
 # Runbooks index links it. Expected: 1
 grep -c 'r2-cutover-runbook.md' docs/system/runbooks.md
 
+# The freeze-hotfix section and the rollback tag. Expected: >=1 each
+grep -c 'Freeze hotfix' docs/system/r2-cutover-runbook.md
+grep -c 'from_release' docs/system/r2-cutover-runbook.md
+
+# R2's executive summary. Expected: 1
+ls docs/executive-summaries/ | grep -c -- '-r2-cutover-executive-summary\.md$'
+
 # Confidentiality. Expected: SCRUB-style check finds no IP, host or user name you added (review the diff by eye)
 git diff origin/main -- docs/system/ | grep -E -c '([0-9]{1,3}\.){3}[0-9]{1,3}'   # expected: 0
 
@@ -198,7 +231,7 @@ make ci
 
 - Cutting R2, the dry run, the deploy, the smoke run (OWNER-05).
 - Changing any route, key, kind or metric: every rename and its consumers landed in its own flip PR (09 §9.2.9).
-- The R3 release note.
+- The R3 release note, and the shell's paths (R3-04).
 - Editing `docs/compat-surfaces.md` (09 §9.2.9: left as it is).
 
 ## Rollback

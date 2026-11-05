@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-04-events-bus-catalog-backup-journal.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 927dc665-9438-462c-a5d9-a0e41b62bdb3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -78,7 +78,7 @@ grep -rn 'func For\[' core/internal/jsonschemax/ | wc -l                  # expe
 grep -rn 'type Ref struct' core/entity/ | wc -l                           # expect 1 (R1-09)
 grep -rn 'type Record struct' core/storage/restorejournal/ | wc -l        # expect 1 (R1-20)
 grep -rn 'Serialized' core/storage/*.go | wc -l                           # expect >= 1 (storage.Spec)
-# HEAD's buses this replaces later (HEAD f7ac5b11e; informational)
+# HEAD's buses this replaces later (HEAD ac4368bdb; informational)
 grep -c 'type EventType' internal/plugin/events.go                        # expect 1
 ls internal/realtime/events.go | wc -l                                    # expect 1
 ```

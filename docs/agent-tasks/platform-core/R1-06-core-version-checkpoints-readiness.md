@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-06-core-version-checkpoints-readiness.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 3f616e9b-4602-4e36-8503-c2d539986fac -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -40,7 +40,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 

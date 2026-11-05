@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-35-release-freeze-toggle.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: bf19256e-7fc8-4e37-8626-fe90279aff33 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -35,7 +35,7 @@ npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
 Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1). Line numbers below were read
-at the planning base `f7ac5b11e` (HEAD of the plan checkout has the same `prerelease.yml`, header `version: 3.3.1`).
+at the planning base `ac4368bdb` (HEAD of the plan checkout has the same `prerelease.yml`, header `version: 3.3.1`).
 Re-run every grep at your base before editing.
 
 ## Goal
@@ -75,7 +75,7 @@ In the steps below, `<VALUE>` is `'R1'` for **kept** and `''` for **overridden**
 
 ```bash
 grep -c "RELEASE_FREEZE" .github/workflows/prerelease.yml                                  # expect 0
-grep -n "^env:$" .github/workflows/prerelease.yml                                          # expect 1 line (28 at f7ac5b11e)
+grep -n "^env:$" .github/workflows/prerelease.yml                                          # expect 1 line (28 at ac4368bdb)
 grep -n "GHCOMMON_SCRIPTS_DIR: " .github/workflows/prerelease.yml                          # expect 1 line (29), the only env: entry
 grep -n "      - name: Promote to the next minor release" .github/workflows/prerelease.yml # expect 1 line (105)
 grep -n "        if: steps.rc.outputs.at_threshold == 'true'$" .github/workflows/prerelease.yml   # expect 1 line (106)

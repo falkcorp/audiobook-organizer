@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-03-generic-ops-become-core-kinds.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 2f5272da-4bda-4339-a93b-a8c82404a125 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -116,7 +116,7 @@ test ! -e core/internal/storagetasks && echo absent                             
 # F2-16 / F2-17
 test -f core/coretest/tasks.go && echo present                                            # present (F2-16: coretest's task cells)
 test -d core/archtest/tasklint && echo tasklint                                           # tasklint (F2-17)
-# HEAD's sources (f7ac5b11e)
+# HEAD's sources (ac4368bdb)
 grep -n 'ID: *"maintenance.db-optimize"' internal/plugins/maintenance/db.go | wc -l       # 1
 grep -n 'func runDBOptimizeSteps' internal/plugins/maintenance/db.go | wc -l              # 1
 grep -n 'dbCensusExactOpID' internal/plugins/maintenance/db_census_exact.go | wc -l       # >=1

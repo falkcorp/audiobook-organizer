@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-15-composition-root-books-module.md -->
-<!-- version: 1.1.5 -->
+<!-- version: 1.1.6 -->
 <!-- guid: 3f22576e-6cf0-4db5-afca-5c9f763dca9c -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -45,7 +45,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -139,7 +139,7 @@ R1-18's, not this PR's.
 R1-13, R1-14, R1-10, R1-09, R1-07 merged:
 `test -f core/httpapi/legacy.go && test -d core/kernel && test -d core/metrics && echo ok`.
 
-## Re-verify (expected at `f7ac5b11e`; R1-11 and R1-18 do not touch these lines)
+## Re-verify (expected at `ac4368bdb`; R1-11 and R1-18 do not touch these lines)
 
 ```bash
 sed -n 8,20p main.go                                                   # expect imports of cmd, internal/database, operations/registry, sdnotify, server
@@ -147,7 +147,7 @@ grep -n '^func init()' internal/operations/registry/register.go internal/updater
 grep -n 'otel.SetTracerProvider\|otel.SetMeterProvider' internal/telemetry/telemetry.go        # expect :287 :461
 grep -n 'otel.SetErrorHandler' internal/telemetry/errorhandler.go; grep -n 'otel.SetLogger' internal/telemetry/sdklog.go   # expect :121 and :39
 grep -rn 'sync.Once' internal/metrics/*.go | grep -v _test | head -3   # the Register once-guard to delete
-grep -rn 's\.perm(' internal/server/*.go | wc -l                       # 421 at f7ac5b11e: every one resolves through the atom table
+grep -rn 's\.perm(' internal/server/*.go | wc -l                       # 421 at ac4368bdb: every one resolves through the atom table
 test ! -e internal/books && echo NEW                                   # expect NEW
 ```
 

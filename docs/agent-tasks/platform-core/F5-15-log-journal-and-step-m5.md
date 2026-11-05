@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-15-log-journal-and-step-m5.md -->
-<!-- version: 1.1.5 -->
+<!-- version: 1.1.6 -->
 <!-- guid: 2172729c-4a08-45a0-ad75-8cf11d81ee4d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -87,14 +87,14 @@ test ! -e core/internal/logjournal && test ! -e core/log/journal.go && test ! -e
 grep -rn 'core.log.journal\|core.log.schedules' core/kernel/core_sections.go core/config/ | grep -v _test | wc -l   # >=2 (F2-09), else STOP
 # M5's step ID is reserved by F3-06
 grep -n 'M5\|m5\|syslog' internal/books/cutover/stepids.go | wc -l                     # >=1 (F3-06), else STOP
-# HEAD's source rows (f7ac5b11e)
+# HEAD's source rows (ac4368bdb)
 grep -n 'key := fmt.Sprintf("syslog:%s:%s", time.Now().Format(time.RFC3339Nano), source)' internal/database/pebble_store_activity.go | wc -l   # 1
 grep -n 'type SystemActivityLog struct' internal/database/store.go | wc -l                # 1 (ID, UserID, Source, Level, Message, CreatedAt)
 grep -n '"syslog:"' internal/database/keyfamilies.go | wc -l                              # 1
 ```
 
 Spec anchors: 05-logging cites `pebble_store_activity.go:20-37` and `store.go:675-682` at `748fd787a`; at
-`f7ac5b11e` they are lines 21 (the key format) and 675-682 (the struct), unchanged.
+`ac4368bdb` they are lines 21 (the key format) and 675-682 (the struct), unchanged.
 
 ## Files
 

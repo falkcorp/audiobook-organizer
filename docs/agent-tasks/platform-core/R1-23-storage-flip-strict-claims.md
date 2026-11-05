@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-23-storage-flip-strict-claims.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 74651b7f-033f-42d7-b873-4ecf3f078896 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -45,7 +45,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -109,14 +109,14 @@ R1-15, R1-20, R1-21, R1-22 merged:
 `test -d internal/books && test -d core/storage && test -d core/internal/restoreswap && test -f internal/database/pebble_store_open.go && echo ok`.
 And R1-04 merged (the image job whose storage-levels probe this row turns on): `test -f .github/workflows/docker-image.yml && echo ok`.
 
-## Re-verify (expected at `f7ac5b11e`, plus the predecessors)
+## Re-verify (expected at `ac4368bdb`, plus the predecessors)
 
 ```bash
 ls internal/database/pebble_store_open.go internal/database/store_init.go internal/database/migrations_runner.go   # R1-22's cut files
-grep -c '^\s*Version: *[0-9]' internal/database/migrations.go          # expect 66 at f7ac5b11e (last at line 504: Version: 66); LegacyCap = 66 unless a step landed since
+grep -c '^\s*Version: *[0-9]' internal/database/migrations.go          # expect 66 at ac4368bdb (last at line 504: Version: 66); LegacyCap = 66 unless a step landed since
 ls internal/metrics/pebble_collector.go internal/startup/steps.go       # expect both
 grep -n 'internal/metrics' tools/cmd/sdkguard/internal-deps.txt         # expect 1 (regenerate after the move)
-grep -n 'print-storage-format' Makefile                               # expect make rollback's guard (Makefile:904 at f7ac5b11e; 09 cites :892-917)
+grep -n 'print-storage-format' Makefile                               # expect make rollback's guard (Makefile:904 at ac4368bdb; 09 cites :892-917)
 ```
 
 ## Steps

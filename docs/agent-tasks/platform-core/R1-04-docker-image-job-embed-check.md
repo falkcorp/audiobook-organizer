@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-04-docker-image-job-embed-check.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 4ec57f2c-fd43-44f4-ac1f-57531f066721 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -43,7 +43,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -51,7 +51,7 @@ Make the Docker build know about `core/` and prove it on every PR (09 §9.4 R1 "
 09 §9.1 facts on both Dockerfiles and `.dockerignore`; 03 §3.2 item 4 "Docker"; 12 §12.3.11 `embed-check`):
 
 1. **Both Dockerfiles** copy `core/go.mod core/go.sum ./core/` beside `go.mod go.sum` before
-   `go mod download && go mod verify` (`Dockerfile:54-55`, `Dockerfile.build-cgo:52-53` at `f7ac5b11e`, same as
+   `go mod download && go mod verify` (`Dockerfile:54-55`, `Dockerfile.build-cgo:52-53` at `ac4368bdb`, same as
    `748fd787a`). The empty committed `core/go.sum` (R1-01) makes the literal `COPY` always succeed.
 2. **`.dockerignore`** adds `**/node_modules`, `core/web/packages/*/dist` and `core/examples/*/web/node_modules`
    and keeps every existing exclusion, `docs` (`:11`) and root `*.md` (`:30`) included (09 §9.4 R1; R4-4).
@@ -83,7 +83,7 @@ Make the Docker build know about `core/` and prove it on every PR (09 §9.4 R1 "
 
 R1-03 merged (`test -f core/.errcheck-baseline && echo ok`). Otherwise STOP.
 
-## Re-verify (expected at `f7ac5b11e`)
+## Re-verify (expected at `ac4368bdb`)
 
 ```bash
 grep -n '^COPY go.mod go.sum ./' Dockerfile Dockerfile.build-cgo       # expect Dockerfile:54, Dockerfile.build-cgo:52

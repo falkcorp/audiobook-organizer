@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-17-perimeter-into-core-stages.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 8b504d86-5e95-4fb7-a1c8-ff2de68cf3a7 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -40,7 +40,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -75,7 +75,7 @@ permission-less routes carry `AnyAuthenticated` in the manifest (R1-14 recorded 
 - `TestPerimeterHonoursBlobOnlyValues` (a perimeter value saved only in the config blob takes effect at boot)
 - `TestCSP_DefaultPerOwner` (per-owner CSP header goldens)
 - `TestCompressionExclusionsEqualHEAD` (HEAD's exclusions: `/api/events`, `/metrics`, `/api/v1/auth/accept-invite`
-  and `^/api/v1/operations/v2/[^/]+/logs/download$`, `internal/server/server.go:1603-1605` at `f7ac5b11e`, plus every
+  and `^/api/v1/operations/v2/[^/]+/logs/download$`, `internal/server/server.go:1603-1605` at `ac4368bdb`, plus every
   `text/event-stream` response and `HandleRaw` streams)
 - `TestPerimeter_XAppBuildOnEveryResponse`
 - also, for the stages moved: `TestChain_OrderGolden`, `TestRequestID_GeneratedAndPropagated`,
@@ -96,7 +96,7 @@ Stages 2 and 4 redact through R1-32's `log.Redactor` (05-logging §3: `NewRedact
 kernel builds and restate no list (05-http-api §4.2 stage 2). If `type Redactor struct` is not in `core/log`, STOP:
 R1-32 has not merged.
 
-## Re-verify (expected at `f7ac5b11e`)
+## Re-verify (expected at `ac4368bdb`)
 
 ```bash
 grep -n 'otelgin' go.mod internal/server/server.go | head                         # expect go.mod:31 and server.go:59,727,1668-1673

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-13-kernel-app-module-httpapi-skeleton.md -->
-<!-- version: 1.1.5 -->
+<!-- version: 1.1.7 -->
 <!-- guid: 49cec14b-15f1-4aaa-9773-e49334cd61a5 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -54,7 +54,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -124,9 +124,17 @@ acceptance below.
   reported together), `TestWorkerPolicies` (`DegradeOnExit` versus `StopAppOnExit`, panic recovery) and
   `TestRegistrarContextCancelled` (late calls are recorded; `r.Context()` is cancelled with `app.New`'s ctx).
 - `TestSpecGoBlocksCompile` (06 §6.10, COR-16) for the R1 blocks: every Go block of 06 marked as part of the hello
-  example that exists at this row is extracted, compiled against core in CI and booted through `app.New` (a
-  manifest-level refusal fails the test, not only a compile error). R1-37 builds `coretest.New` and switches the boot
-  to it; each later row that grows hello extends this test with its blocks.
+  example that exists at this row is compiled against core in CI and booted through `app.New` (a manifest-level
+  refusal fails the test, not only a compile error). **The test reads a committed snapshot, never the spec.** The
+  blocks live as files under `core/examples/hello/testdata/specblocks/` (directory name coined here), one `.go.txt`
+  file per block plus `blocks.json` (name coined here) recording each block's spec file, heading and sha256. A
+  committed script, `core/examples/hello/testdata/specblocks/regen.py` (name coined here; Python, CLAUDE.md rule 4),
+  takes the spec file's path as an argument, extracts the marked blocks and rewrites the snapshot; `--check` exits
+  non-zero when the snapshot differs from the spec. The test copies the snapshot into a temp module and builds and
+  boots it; it opens nothing outside `core/`, so a spec-only edit cannot break `core-ci`, and the test survives the
+  repo split. `--check` is not wired into any required check (a spec edit refreshes the snapshot in its own PR).
+  R1-37 builds `coretest.New` and switches the boot to it; each later row that grows hello re-runs `regen.py` and
+  commits the refreshed snapshot with its blocks.
 - IDs: `TestReservedIDsIncludeLegacyTopSegments`, `TestReservedSegmentsDisjointFromNonSPA`.
 - Routes: `TestHandle_RejectsZeroPermission`, `TestHandle_RejectsForeignScope`, `TestBuild_PatternConflictIsError`,
   `TestBuild_PrefixCollision_FacadeVsFacade`, `TestBuild_RejectsCamelCaseJSON`, `TestProblem_ShapeGolden`,
@@ -201,7 +209,8 @@ git diff --stat origin/main -- . ':!core' | tail -1                       # at t
    restart request and the shutdown budget), then `core/app` (`options.go` with the R1 `Options` fields; `New`,
    `Run`, `Describe`).
 3. `core/examples/hello`: module, app `main` (the only `signal.NotifyContext` in core), the greeting route, the OpenAPI
-   subcommand; generate and commit `core/openapi/core.json`.
+   subcommand; generate and commit `core/openapi/core.json`. Write `testdata/specblocks/regen.py`, run it on
+   `docs/specs/platform-core/06-app-sdk.md` and commit the snapshot.
 4. Core layering guard (`core/internal/archtest_layers_test.go`): the layer table is complete from R1-01 and needs
    no change for the new packages; set the in-module control to `app` → `kernel` and nothing else in the file.
 5. Header bumps; fragment `changelog.d/<today>_core_kernel_app.md` (`### Added`: "Internal: the core runtime
@@ -226,6 +235,8 @@ go -C core test ./app/ ./kernel/ -run 'TestNoGlobals|TestKernelFamiliesGathered'
 ls core/kernel/boot.go core/kernel/kernel.go core/module/manifest.go core/module/registrar.go core/module/deps.go core/app/options.go   # expect all six
 T=$(mktemp -d); go -C core run ./examples/hello/cmd/hello openapi --out "$T/core.json" && diff "$T/core.json" core/openapi/core.json && echo FRESH   # expect FRESH (diff exits non-zero on a stale core.json)
 git grep -n 'slog.SetDefault\|otel.Set\|http.DefaultServeMux\|signal.Notify' -- core ':!core/examples/*/cmd/**' ':!*_test.go' | wc -l   # expect 0 (test files hold the literals the scans look for)
+python3 core/examples/hello/testdata/specblocks/regen.py --check docs/specs/platform-core/06-app-sdk.md && echo SNAPSHOT_FRESH   # expect SNAPSHOT_FRESH
+grep -rn 'docs/specs' core --include='*.go' | wc -l                                        # expect 0 (no Go code in core reads the spec)
 git diff --name-only origin/main | grep -v '^core/' | grep -v '^changelog.d/' | wc -l      # expect 0
 make ci && make -C core ci                                                                 # expect exit 0
 ```

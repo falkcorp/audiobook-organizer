@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-19-build-identity.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 9f6947ba-4d93-4c9b-92ad-bc8d3abdecb9 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -42,7 +42,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -61,7 +61,7 @@ identity"; 07 §7.6.3 "One UI build ID, one source"; 05-health §5H.3.3; 09 "Out
 - `X-App-Build` (emitted by stage 5 since R1-17) carries the UI build ID read from the embedded bundle's meta tag;
   no Go link step receives it (09 §9.4 R1).
 - `.goreleaser.yml`: delete the dead `-X main.commit={{.Commit}}` and `-X main.date={{.Date}}` (lines 33–34 at
-  `f7ac5b11e`); keep `-X main.version`.
+  `ac4368bdb`); keep `-X main.version`.
 - Deploy post-check: the `deploy` template in `Makefile.local.example` reads the running version with
   `ssh $(DEPLOY_HOST) $(DEPLOY_BIN) --version-json` and compares its `version` field, never `/health` or an HTTP
   route (HEAD's post-check calls `/api/v1/system/version`, which no route serves: `Makefile.local.example:103`;
@@ -95,7 +95,7 @@ identity"; 07 §7.6.3 "One UI build ID, one source"; 05-health §5H.3.3; 09 "Out
 
 R1-17, R1-29, R1-04 merged: `test -d core/httpapi/perimeter && ! grep -q react-router-dom web/package.json && test -f .github/workflows/docker-image.yml && echo ok`.
 
-## Re-verify (expected at `f7ac5b11e`)
+## Re-verify (expected at `ac4368bdb`)
 
 ```bash
 sed -n 30,34p .goreleaser.yml                     # expect ldflags with -X main.version / main.commit / main.date

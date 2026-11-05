@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-02-required-check-workflows.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 08146005-8663-4d6f-ab5e-f7cc388f67e9 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -38,7 +38,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -57,7 +57,7 @@ CI budget; 09 §9.4 R1 CI classification rows `vet-darwin`, `vet-integration`, `
    item 4) and `go vet -tags integration ./...`, each for `.` and `core`. Root Makefile targets `vet-darwin`
    (new) and `vet-integration` (exists, `Makefile:370`, root only today) loop over `GO_MODULE_DIRS`; both join
    root `make ci`; both are registered in `ci/gates.txt` (09 §9.4 R1 classification).
-3. **The `changes` classifier** (`ci.yml` job `changes`, lines 49–99 at `f7ac5b11e`): every path-skipped job skips
+3. **The `changes` classifier** (`ci.yml` job `changes`, lines 49–99 at `ac4368bdb`): every path-skipped job skips
    through a job-level `if:` on its outputs, so a skip reports success instead of leaving the check "expected";
    the classifier sets `go=true` **before** its docs glob for every Markdown file a Go test or `//go:embed`
    reads (09 §9.2.1 `ci.yml` row, OPS5-4). `core/**` already falls to `go=true` (the `*)` case); keep it so.
@@ -71,7 +71,7 @@ CI budget; 09 §9.4 R1 CI classification rows `vet-darwin`, `vet-integration`, `
    and asserts the outputs for: a docs-only PR (`go=false web=false`); `web/src/x.tsx` (`web=true`); a `core/`
    file (`go=true`); `web/src/generated/ops.ts` (`go=true web=true`); and for **every** Markdown path a Go test
    or `//go:embed` reads (found by scanning `*_test.go` for `os.ReadFile`/`os.Open` of a `.md` literal and
-   `//go:embed` patterns matching `*.md`), `go=true`. At `f7ac5b11e` that list is empty (no Go file embeds or
+   `//go:embed` patterns matching `*.md`), `go=true`. At `ac4368bdb` that list is empty (no Go file embeds or
    reads a `.md` file); the test must still fail on a fixture that adds one without a classifier case.
 6. **`scripts/tests/test_run_gates.py`**: validate the `core-job` job value R1-01 added: every `core-job` gate's
    command runs inside `make -C core ci` or `.github/workflows/core-ci.yml` (mirror of the existing
@@ -83,7 +83,7 @@ CI budget; 09 §9.4 R1 CI classification rows `vet-darwin`, `vet-integration`, `
 R1-01 merged: `test -f core/go.mod && test -f .github/workflows/core-ci.yml && grep -q core-job scripts/ci/run_gates.py && echo ok`.
 If `run_gates.py` has no `core-job`, STOP and report: R1-01 owns that change.
 
-## Re-verify (expected at `f7ac5b11e`, plus R1-01's changes)
+## Re-verify (expected at `ac4368bdb`, plus R1-01's changes)
 
 ```bash
 grep -n '^  changes:' .github/workflows/ci.yml                     # expect 49
@@ -106,7 +106,7 @@ git grep -n 'go:embed' -- '*.go' | grep -c '\.md'                   # expect 0
 3. Edit the classifier in `ci.yml`: add a commented block of `go=true` cases placed **before** the
    `web/*|docs/*|*.md|...` line, empty today except a comment that `test_ci_classifier.py` enforces it. Do not
    change the other cases. Make every job that has `needs: changes` skip through a job-level `if:` (it already
-   does at `f7ac5b11e`; add the same to any job you add).
+   does at `ac4368bdb`; add the same to any job you add).
 4. Add `vet-darwin` to root `Makefile` (`for d in $(GO_MODULE_DIRS); do (cd $$d && GOOS=darwin CGO_ENABLED=0 go vet ./...); done`)
    and make `vet-integration` loop over `GO_MODULE_DIRS` too; add both to the `ci:` prerequisites (line 789).
    Add `vet-darwin` and `vet-integration` jobs to `ci.yml` (`needs: changes`, `if: needs.changes.outputs.go == 'true'`,

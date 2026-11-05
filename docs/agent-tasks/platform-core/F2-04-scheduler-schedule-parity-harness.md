@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-04-scheduler-schedule-parity-harness.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 150263db-02f3-457c-9fd5-39a0970861c8 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -75,7 +75,7 @@ grep -n 'schedules\.' core/kernel/core_sections.go | wc -l   # 0 (F2-09 left eve
 grep -rn 'type ScheduleConfig struct' core/tasks/       # 1 hit (F2-01), else STOP
 test ! -e core/internal/scheduler && echo absent        # "absent"
 test ! -e core/tasks/window.go && echo absent           # "absent"
-# HEAD scheduler being re-implemented (read only; counts at f7ac5b11e)
+# HEAD scheduler being re-implemented (read only; counts at ac4368bdb)
 grep -n 'const intervalLastTickPrefix = "scheduled_task_last_tick."' internal/scheduler/interval_clock.go   # 1 hit
 grep -n 'const intervalPollInterval = time.Minute' internal/scheduler/interval_clock.go                   # 1 hit
 grep -n '^func ParseCron' internal/scheduler/cron.go                                                       # 1 hit

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F6-03-events-flip-realtime-spa-client.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.5 -->
 <!-- guid: c4bebd8c-0dc9-4e78-a620-116332cca63d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -74,7 +74,7 @@ routes F6-04 built), §5E.13 (table and "Order" item (3)); 05-logging §5 (live 
 |---|---|
 | wiring (this PR owns them in W36) | `main.go`, `internal/books/module.go`, `core/kernel/boot.go`, `core/kernel/kernel.go`, `core/module/manifest.go`, `core/module/registrar.go`, `core/module/deps.go` |
 | generated | `core/openapi/core.json`, `core/web/packages/api-client/src/generated/` |
-| book-moving producers and the consumer kind (plan base `f7ac5b11e`) | `internal/organizer/inplace_multifile.go`, `internal/organizer/pipeline.go`, `internal/audiobooks/revert.go`, `internal/undo/current.go`, `internal/undo/engine.go`, `internal/undo/restorable.go`, `internal/plugins/deluge/path_update.go`, `internal/plugins/deluge/plugin.go`, `internal/plugins/maintenance/folder_books_fixer.go`, `internal/plugins/maintenance/fragment_consolidation_fixer.go`, `internal/plugins/maintenance/fs_regroup_xml.go`, `internal/plugins/maintenance/reconcile_fixer.go`, `internal/plugins/maintenance/retire_into.go`, `internal/books/store/change_type_class.go` |
+| book-moving producers and the consumer kind (plan base `ac4368bdb`) | `internal/organizer/inplace_multifile.go`, `internal/organizer/pipeline.go`, `internal/audiobooks/revert.go`, `internal/undo/current.go`, `internal/undo/engine.go`, `internal/undo/restorable.go`, `internal/plugins/deluge/path_update.go`, `internal/plugins/deluge/plugin.go`, `internal/plugins/maintenance/folder_books_fixer.go`, `internal/plugins/maintenance/fragment_consolidation_fixer.go`, `internal/plugins/maintenance/fs_regroup_xml.go`, `internal/plugins/maintenance/reconcile_fixer.go`, `internal/plugins/maintenance/retire_into.go`, `internal/books/store/change_type_class.go` |
 | hub A and its callers | `internal/realtime/` (deleted), `internal/server/`, `internal/itunes/service/` |
 | SPA | `web/src/services/eventSourceManager.ts`, `web/src/` |
 | move bookkeeping | `internal/arch/layering_test.go` (`internal/realtime` leaves `layerOf`), `scripts/ci/short_test_weights.json` |
@@ -84,7 +84,7 @@ The producer list was computed at the plan's base. F5-18 moves or deletes much o
 so re-grep at BASE (below): every non-test file that names the path-update follow-up is this PR's file, wherever F5-18
 put it.
 
-## Re-verify at BASE (HEAD `f7ac5b11e` values shown)
+## Re-verify at BASE (HEAD `ac4368bdb` values shown)
 
 ```bash
 ls internal/realtime/                                                         # HEAD: book_changes.go book_changes_test.go events.go events_test.go
@@ -96,7 +96,7 @@ grep -rn 'tasks/runs' web/src --include=*.ts --include=*.tsx | wc -l          # 
 grep -rn 'func NewHub' core/realtime/ | wc -l                                 # 1 (F6-02)
 grep -rn 'func ConsumeIntoTask\[' core/outbox/ | wc -l                        # 1 (F6-01)
 grep -rln 'path_update\|path-update' --include=*.go internal/plugins/deluge | wc -l   # >= 1 (the books.deluge.path-update kind)
-# The producer set: every non-test file naming the path-update follow-up. Plan base f7ac5b11e: 14 files (the table above,
+# The producer set: every non-test file naming the path-update follow-up. Plan base ac4368bdb: 14 files (the table above,
 # with change_type_class.go then at internal/database/). Your base: the same set wherever F5-18 moved it; any extra file is
 # yours too, any file missing from the table and not deleted by F5-18 is a STOP.
 grep -rli 'path-update\|PathUpdate' --include=*.go internal | grep -v _test | sort    # plan base: 14

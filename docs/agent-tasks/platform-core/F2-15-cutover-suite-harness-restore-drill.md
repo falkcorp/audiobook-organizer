@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-15-cutover-suite-harness-restore-drill.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.6 -->
 <!-- guid: d41c117c-6cdf-49d0-b491-b6dd9fd211bf -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -31,7 +31,12 @@ Write the four gate tests that 09 §9.4 R2 "Verification" runs on every R2 PR th
 the F3 PR on, the R2 cutover suite"), as a harness that works for **whatever cutover steps the build registers**: zero at
 F2 (each test passes with the expected "nothing moved" outcome and says so), M2/M7/M8 from F3-07, one more step per flip
 after that. Plus the generator of the shared-family sub-prefix lists, the fetcher of the pre-freeze release's binary, the
-**flip-upgrade cell table** that each later flip extends (design rule 9), and the `extraction-gates` job.
+**flip-upgrade cell table** that each later flip extends (design rule 9), the **pre-freeze-written corpus** stage (design
+rule 10), and the `extraction-gates` job.
+
+Production will not upgrade an R0-written store: it runs R0, then R1, then pre-freeze minors, and only then R2, so its
+store already carries what the pre-freeze binary wrote (09 §9.2.1: the rollback target is the pre-freeze release).
+Rule 10 makes every test below run on both the raw R0 corpus and a copy the pre-freeze binary has booted and written to.
 
 | Test (names fixed by 05-storage §5S.3.13 and §5S.10) | Proves |
 |---|---|
@@ -53,7 +58,7 @@ shared families", "Tests"), §5S.9.1 (the family table, rows 1–9 and 18, and t
 ```bash
 python3 -c "import json;m=json.load(open('internal/books/testdata/r2corpus/manifest.json'));print(len(m['stage1'])>0,len(m['overlay'])>0,len(m['blockers'])>0)"   # True True True (F2-12, F2-13), else STOP
 grep -rn 'type DataMigration struct' core/storage/datamigrate/   # 1 hit (F2-06), else STOP
-git ls-files | grep -E '(^|/)keyfamilies\.go$'                    # 1 path (internal/database/ at f7ac5b11e; internal/books/store/ after R1-26)
+git ls-files | grep -E '(^|/)keyfamilies\.go$'                    # 1 path (internal/database/ at ac4368bdb; internal/books/store/ after R1-26)
 grep -c 'production-shaped-store' .github/workflows/extraction-gates.yml  # >=1 (F2-14's job), else STOP
 grep -n 'rollback-restore' Makefile | head -3                     # >=1 (R1-27's recipe), else STOP
 grep -rn 'restore-offline' core/app/ | head -2                    # >=1 (R1-25's offline restore), else STOP
@@ -109,6 +114,7 @@ generator's test `scripts/tests/test_gen_shared_family_lists.py`.
 8. **CI job** `r2-cutover-suite`: every PR that touches a non-doc file (the `extraction-gates` trigger), `timeout-minutes: 30`,
    actions pinned to SHAs (copy those the file uses), fetches the pre-freeze binary, runs
    `go test ./internal/books/ -run 'TestCutoverOnR0Corpus|TestCutoverPreservesIDsAndReferences|TestCutoverLeavesOtherFamiliesByteIdentical|TestRollbackRestoreBootsPreviousBuild' -count=1`
+   (each with its `r0` and `prefreeze-written` subtests, rule 10)
    and `python3 scripts/ci/gen_shared_family_lists.py --check`, plus `TestCutoverFlipUpgrade` (rule 9) with
    `R2_PREVFLIP_BIN` set when the table holds a cell. Add the job to `ci/gates.txt` if R1-02's file lists
    `extraction-gates` jobs individually.
@@ -128,13 +134,31 @@ generator's test `scripts/tests/test_gen_shared_family_lists.py`.
    "no flip-upgrade cell" and passes; its `selftest/` case drives the cell runner with in-process stand-ins for
    the two builds (the fake step of "TDD" at two levels) to prove each of (a)–(c) fails when broken. Locally the test skips with a message when
    `R2_PREVFLIP_BIN` is unset; in CI it is required whenever the table holds a cell.
+10. **Pre-freeze-written corpus.** Add a helper (`prefreezeWrittenCorpus(t)`, name coined here, in
+   `cutover_suite_test.go`, built once per test process and cached) that copies F2-12's stage-1 corpus with F2-13's
+   overlay to a temp dir, boots the binary at `R2_PREFREEZE_BIN` (rule 6's fetch, so the same tag: the one tag line of
+   `ci/prefreeze_release.txt` once F3-08 records it, and until then the newest production release, the same fallback
+   as the drill) on that copy, and writes a few rows **only through its API**: one user, one API key, one setting
+   change through the config route, and one library scan started and waited for to finish (on an import root under the
+   temp dir). Authenticate the way F2-12's answer replay does (re-mint a key on the copy; never a recorded secret). Stop
+   it cleanly, then record its answers on that copy with F2-12's `scripts/r2corpus/record_r0_answers.py`, written to the
+   temp dir and never over the committed `answers/`. Every one of the four tests, and `TestCutoverFlipUpgrade`'s cells,
+   runs as two subtests (names coined here): `r0` on the raw corpus with F2-12's committed answers, and
+   `prefreeze-written` on the helper's copy with the answers just recorded. In `prefreeze-written` the four new rows
+   count like any other row (IDs kept, references resolve, counts hold), the quarantine report still equals the
+   overlay's cases, and the drill's pre-freeze boot after restore must show the four rows and give the re-recorded
+   answers. Export the helper's result for the owners' oracles (config F3-06, reach F4-07, schedule F5-14, search F7),
+   which take a corpus directory and an answers directory from the harness, so each runs on both corpora. Locally the
+   `prefreeze-written` subtests skip with a message when `R2_PREFREEZE_BIN` is unset; in CI they are required.
 
 ## TDD
 
 Write the four tests first against the F2 build (they must pass with zero steps), then a temporary local cutover step in
 the test file only (a `t.Helper` test module with one `Cutover` step that moves one overlay family through a fake importer),
 proving each test fails when that step drops a row, changes an ID, touches a byte outside its source, or breaks the drill.
-Keep that fake step and its negative cases in the test file, behind a subtest name `selftest/` (coined here).
+Keep that fake step and its negative cases in the test file, behind a subtest name `selftest/` (coined here). Run the
+negative cases on the `prefreeze-written` copy as well, and add one that fails when the fake step drops a row the
+pre-freeze binary wrote (rule 10).
 
 ## Acceptance
 
@@ -144,6 +168,8 @@ python3 -m pytest scripts/tests/test_gen_shared_family_lists.py -q              
 go test ./internal/books/ -run TestPrefreezeTagResolver -count=1                         # ok (header fixture resolves to its tag)
 R2_PREFREEZE_BIN="$(bash scripts/ci/fetch_prefreeze_binary.sh "$(gh release list --exclude-pre-releases --exclude-drafts --limit 1 --json tagName -q '.[0].tagName')")" \
   go test ./internal/books/ -run 'TestCutoverOnR0Corpus|TestCutoverPreservesIDsAndReferences|TestCutoverLeavesOtherFamiliesByteIdentical|TestRollbackRestoreBootsPreviousBuild' -count=1 -v | grep -c '^--- PASS'   # 4
+R2_PREFREEZE_BIN=<the path above> \
+  go test ./internal/books/ -run 'TestCutoverOnR0Corpus|TestCutoverPreservesIDsAndReferences|TestCutoverLeavesOtherFamiliesByteIdentical|TestRollbackRestoreBootsPreviousBuild' -count=1 -v | grep -cE '^ +--- PASS: [A-Za-z]+/prefreeze-written$'   # 4 (rule 10, none skipped)
 go test ./internal/books/ -run 'TestCutoverOnR0Corpus/selftest|TestCutoverFlipUpgrade' -count=1   # ok (negative cases fail as designed; empty cell table logs and passes)
 grep -c 'r2-cutover-suite' .github/workflows/extraction-gates.yml                         # >=1
 make ci                                                                                   # exit 0
@@ -152,6 +178,8 @@ make ci                                                                         
 ## STOP conditions
 
 - The pre-freeze release has no linux/amd64 asset.
+- The pre-freeze binary's API cannot create one of rule 10's four rows (a user, an API key, a setting change, a scan):
+  report which; do not write it into the store directly.
 - `keyfamilies.go` and the corpus scan disagree (a prefix in the corpus that no list classifies): report the prefix; do not add
   it to the golden by hand.
 - A test can only pass at F2 by hard-coding "no steps": the harness must enumerate steps, not special-case F2.

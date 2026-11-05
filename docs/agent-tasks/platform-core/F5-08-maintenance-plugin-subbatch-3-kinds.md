@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-08-maintenance-plugin-subbatch-3-kinds.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 26c5544d-6788-482b-adb2-4c76975dc4ef -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -53,7 +53,7 @@ package, `plugin.go` above all, belongs to a sibling or to the flip.
 3. 05-rbac §6 (the atom table, "Route requirement" column).
 4. CLAUDE.md "Concurrency" and "Parallel Subagent Coordination".
 
-## Your file group (computed at `f7ac5b11e`; regenerate at your base)
+## Your file group (computed at `ac4368bdb`; regenerate at your base)
 
 The seven groups partition the **98** T6 definitions of 05-tasks §5T.8.2 (every `sdk.OperationDef{`
 literal in `internal/plugins/maintenance/*.go` except `plugin.go`'s list literal, `repairs_ops.go`'s two
@@ -203,7 +203,7 @@ runtime.NumCPU()` → `tasks.CPU()`. The reason is one sentence copied from HEAD
 | `Writes`, `Reads`, `Preview`, `Capabilities` | `Effects` by rule R7 | 05-tasks §5T.3.4 |
 | `Schedule` (a v2 cron string) | **none**: never evaluated at HEAD (05-tasks §5T.2); dropped and listed for the release note (05-tasks §5T.3.8; 14 Q-C). Schedules are F5-14's | 05-tasks §5T.3.8 |
 | `Triggers` | none in this PR (the one trigger, `book.relocated`, becomes an outbox topic at F6) | 05-tasks §5T.2; 05-events §5E.13 |
-| `Plugin`, `FormerIDs`, `Cancellable`, `ParamsSchema`, `SummarizeQueued`, `Liveness`, `MinCheckpointInterval`, `ProgressFlushInterval`, `Synchronous`, `Isolate`, `RunsAs` | not carried; list each non-zero value per kind in the PR description under "Dropped HEAD fields". `Cancellable` is never read at HEAD (05-tasks §5T.2); `Isolate: true` or `RunsAs: ActorSystem` has 0 hits at `f7ac5b11e`: a hit at your base is a STOP | 05-tasks §5T.2, §5T.3.6 |
+| `Plugin`, `FormerIDs`, `Cancellable`, `ParamsSchema`, `SummarizeQueued`, `Liveness`, `MinCheckpointInterval`, `ProgressFlushInterval`, `Synchronous`, `Isolate`, `RunsAs` | not carried; list each non-zero value per kind in the PR description under "Dropped HEAD fields". `Cancellable` is never read at HEAD (05-tasks §5T.2); `Isolate: true` or `RunsAs: ActorSystem` has 0 hits at `ac4368bdb`: a hit at your base is a STOP | 05-tasks §5T.2, §5T.3.6 |
 | `Requires` | the `Requires` field `core/tasks` landed (grep `Requires` in `core/tasks/*.go`); absent → STOP for that one definition and report | 05-tasks §5T.4 (`waiting_deps`) |
 | `Phases` | `rc.Phase(name)` around the same code | 05-tasks §5T.3.3 |
 

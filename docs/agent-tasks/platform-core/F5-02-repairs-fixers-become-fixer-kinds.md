@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-02-repairs-fixers-become-fixer-kinds.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: bbc45161-5107-41fe-8e3e-77b95ed3dadb -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -31,7 +31,7 @@ Do **not** run `go work init` in the worktree (CLAUDE.md). `core/` is the nested
 
 ## Goal
 
-Every one of the fixers (25 at `f7ac5b11e`; the spec says 24, see Base state) that `internal/plugins/maintenance`'s `Repairs()` registry holds becomes a native
+Every one of the fixers (25 at `ac4368bdb`; the spec says 24, see Base state) that `internal/plugins/maintenance`'s `Repairs()` registry holds becomes a native
 `tasks.Fixer` kind named `books.repairs.<fixer ID>` (the fixer's `ID()` verbatim), landing **dark**: built by
 one generic native shell in `internal/repairs` over the existing `repairs.Fixer` interface, exercised by the
 Fixer conformance suite and by parity tests against HEAD's `RunPlan`/`RunApply`, and registered nowhere in
@@ -73,7 +73,7 @@ grep -rn 'type FixerSpec\[P, C any\] struct' core/tasks/*.go | wc -l            
 grep -rn 'MarkRowApplied\|RowApplied' core/tasks/*.go | grep -v _test | wc -l                          # >=2
 grep -rn 'ErrChangedSincePlan' core/tasks/*.go | wc -l                                                 # >=1
 grep -rn 'func Conformance(' core/tasks/taskstest/*.go | wc -l                                         # 1
-# HEAD's framework (counts at f7ac5b11e)
+# HEAD's framework (counts at ac4368bdb)
 grep -n 'repairsReg.Register(' internal/plugins/maintenance/plugin.go | wc -l     # 24 call sites
 grep -c 'Register(new' internal/plugins/maintenance/plugin.go                     # 23 single registrations
 grep -n 'range \[\]repairs.Fixer{newVGPrimaryFixer(p), newFragmentFixer(p)}' internal/plugins/maintenance/plugin.go | wc -l   # 1 loop over 2 more fixers
@@ -95,13 +95,13 @@ test -f internal/books/testdata/tasklint_exempt.d/F5-02.txt && echo entry       
 grep -v '^#' internal/books/testdata/tasklint_exempt.d/F5-02.txt | grep -v '^$' | grep -v '^internal/repairs/' | grep -v '^internal/plugins/maintenance/[a-z0-9_]*_fixer\.go$' | wc -l   # 0 (the entry names only this row's files)
 ```
 
-So HEAD registers **25 fixers through 24 call sites** at `f7ac5b11e` (23 single calls plus one loop over
+So HEAD registers **25 fixers through 24 call sites** at `ac4368bdb` (23 single calls plus one loop over
 `newVGPrimaryFixer` and `newFragmentFixer`); 05-tasks §5T.8.2 and §5T.2 say "24", counting the call sites
 (the same at `748fd787a`). The done-check is the registry's count at your base (05-tasks §5T.8.2: "Each
 group's done-check uses the count generated at its own base commit"): write the first test so it builds
 the maintenance plugin's `Repairs()` registry the way that package's tests do and asserts the count is 25
 (or what your base registers: if it is neither 25 nor explained by a fixer added or removed since
-`f7ac5b11e`, STOP and report).
+`ac4368bdb`, STOP and report).
 
 ## Files
 
@@ -213,7 +213,7 @@ unchanged. It is books code that disappears when F5-18 removes the v2 reporter f
 
 ## TDD: tests to write first (names coined here, in `kinds_test.go`)
 
-- `TestRepairsKinds_Count`: one kind per registered fixer (25 at `f7ac5b11e`), names `books.repairs.<ID>`, all distinct, all accepted by `tasks.ParseKind`.
+- `TestRepairsKinds_Count`: one kind per registered fixer (25 at `ac4368bdb`), names `books.repairs.<ID>`, all distinct, all accepted by `tasks.ParseKind`.
 - `TestRepairsKinds_Conformance`: `taskstest.Conformance(t, repairs.Kinds(fixers, deps)...)` (the Fixer
   conformance suite of 05-tasks §5T.8.2's T3 gate).
 - `TestRepairsKinds_PlanRowsMatchRunPlan` (invariant 1), table over every fixer on the fixtures their
@@ -261,7 +261,7 @@ make ci                                                                         
 
 ## STOP conditions
 
-- The registry's fixer count is not 25 and no fixer was added or removed since `f7ac5b11e`.
+- The registry's fixer count is not 25 and no fixer was added or removed since `ac4368bdb`.
 - `core/tasks` lacks `FixerSpec.Load`, `Writer.MarkRowApplied` or `ErrChangedSincePlan`.
 - An invariant needs a fixer behaviour change (step 4).
 - A fixer writes a module entity outside `*repairs.Writer` and no `repairs.Writer` method covers that write.
@@ -293,5 +293,5 @@ If `internal/repairs/kinds.go` exists and its tests pass, run the acceptance ins
 ## Planner notes
 
 - **Count:** HEAD registers 25 fixers through 24 `repairsReg.Register` call sites (one call is inside a
-  loop over two fixers), at `f7ac5b11e` and at `748fd787a`; 05-tasks §5T.2 and §5T.8.2 say "24 fixers". The
+  loop over two fixers), at `ac4368bdb` and at `748fd787a`; 05-tasks §5T.2 and §5T.8.2 say "24 fixers". The
   brief uses the registry's count; the spec's figure should read 25 (or "24 call sites").

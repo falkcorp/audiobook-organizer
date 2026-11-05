@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-07-storage-index-and-bleveindex.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: be316d76-1be5-4eb1-a49b-5c4e28885509 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -78,7 +78,7 @@ git rebase origin/main
 
 ```bash
 # HEAD's bleve code to generalise. [the spec cites bleve_index.go:104 for bookMappingVersion and :68 for the scorch
-#  callback; at both 748fd787a and HEAD f7ac5b11e the const is at :167 and the callback at :69; register.go:42-60 open-failure path;
+#  callback; at both 748fd787a and HEAD ac4368bdb the const is at :167 and the callback at :69; register.go:42-60 open-failure path;
 #  the dirty set in internal/database/pebble_store_search_dirty.go:39 (its R1 path may differ)]
 grep -n 'bookMappingVersion\|RegistryAsyncErrorCallbacks' internal/search/bleve_index.go
 grep -rn 'sidx:dirty' --include='*.go' internal/ core/ | grep -v _test | head -3

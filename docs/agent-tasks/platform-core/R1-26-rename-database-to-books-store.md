@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-26-rename-database-to-books-store.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 320631e7-248c-44f9-9695-42e3a066fa6e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -40,7 +40,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -69,12 +69,12 @@ R1-23 and R1-25 merged (the engine has left; the residue is final for R1; R1-24 
 `git grep -q 'func (h \*Handler) FactoryReset' -- internal/server/handlers/system || echo RESET_GONE` prints
 `RESET_GONE`, and `test -d core/storage && echo ok`.
 
-## Re-verify (counts at `f7ac5b11e`; R1-23 lowers them)
+## Re-verify (counts at `ac4368bdb`; R1-23 lowers them)
 
 ```bash
 M=github.com/falkcorp/audiobook-organizer
 for p in internal/database internal/database/dbtest internal/database/aggtest internal/database/mocks; do echo "$p $(git grep -l "\"$M/$p\"" -- '*.go' | wc -l)"; done
-#   expect at f7ac5b11e: 2513, 31, 9, 114 files (record the counts at your base in the PR)
+#   expect at ac4368bdb: 2513, 31, 9, 114 files (record the counts at your base in the PR)
 grep -n 'internal/database' .mockery.yaml tygo.yaml ci/gates.txt tools/cmd/sdkguard/main.go
 #   expect .mockery.yaml:14,19; tygo.yaml:28,37; ci/gates.txt:27,28 (store-width, store-references); sdkguard main.go:79
 grep -ln 'internal/database' scripts/ci/*.py scripts/ci/*.json scripts/*.py

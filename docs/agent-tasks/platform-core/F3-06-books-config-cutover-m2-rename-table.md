@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-06-books-config-cutover-m2-rename-table.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.5 -->
 <!-- guid: a42617df-0a4d-49ef-a19d-48538878932a -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -81,7 +81,7 @@ not create `steps.go` and do not touch `core/module/`: your step constructors ta
 
 ## State at HEAD and at BASE
 
-| Thing | HEAD (`f7ac5b11e`) | At BASE |
+| Thing | HEAD (`ac4368bdb`) | At BASE |
 |---|---|---|
 | HEAD's `Config` struct | `internal/config/config.go:1048-1912` (anchor at `748fd787a`; `internal/config` unchanged at HEAD) | same file, unchanged until F3-07 |
 | blob codec | `internal/config/persistence.go:359-824` (`migrate*Blob`), `:1088-1129` (one-shots), `:1932-2016` | same |

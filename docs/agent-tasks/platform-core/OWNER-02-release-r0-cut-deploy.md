@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-02-release-r0-cut-deploy.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: c7905538-b04f-4d81-a543-689838294edc -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -57,7 +57,12 @@ them. The corpus is regenerated only if R0 is re-cut.
 One tracking-issue comment: `OWNER-02 recorded <date>: R0 release <tag>; deployed; smoke run: done | skipped; kept |
 rolled back`. No hosts, paths or tokens.
 
+**The R0 tag is for F2-12.** Write the tag exactly as `git tag -l` prints it (for example `v0.230.0`), and add the
+line `R0 tag for F2-12: <tag>` to the same comment. F2-12 commits that tag as `ci/r0_release.txt` and drives that
+tag's linux/amd64 release asset; no other place records it. If the release has no linux/amd64 asset, say so in the
+comment: F2-12 stops on it.
+
 ## Done when
 
 The R0 production release exists with its tag kept, it is deployed (or rolled back, with the reason), and the
-comment is recorded. The lead then lets R1-35, and after it R1-01, merge.
+comment, with its `R0 tag for F2-12` line, is recorded. The lead then lets R1-35, and after it R1-01, merge.

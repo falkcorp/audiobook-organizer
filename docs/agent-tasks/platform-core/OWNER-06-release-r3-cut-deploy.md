@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-06-release-r3-cut-deploy.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 87ccaa3f-5e58-4c9c-8d6f-888ce821b84e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -13,8 +13,8 @@
 | ID | OWNER-06 |
 | Release | R3 (cleanup and the upgrade floor) |
 | Tier | **OWNER**: confirmations, release, deploy |
-| Wave | W47 |
-| Depends on | R3-01, R3-02, R3-03, R3-04, R3-05 (all merged) |
+| Wave | W46 |
+| Depends on | R3-01, R3-02, R3-03, R3-04, R3-05 (all merged), F9-03 |
 | Unblocks | nothing in this plan (the last row) |
 | Spec | 09 §9.4 R3 (Rollback, Owner), §9.2.2 (the R3 floor) |
 

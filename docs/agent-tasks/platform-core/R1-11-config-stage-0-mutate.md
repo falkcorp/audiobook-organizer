@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-11-config-stage-0-mutate.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: d00a5d7b-4968-462d-afd6-f66e1d7f40e9 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -35,7 +35,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -53,7 +53,7 @@ The spec counts 8 assignments (05-config §1.2, at `748fd787a`). The brief regen
 
 R1-01 merged: `test -f core/go.mod && echo ok` prints `ok`. Otherwise STOP.
 
-## Re-verify (the work list; expected at `f7ac5b11e`)
+## Re-verify (the work list; expected at `ac4368bdb`)
 
 ```bash
 git grep -n -E 'config\.AppConfig(\.[A-Za-z0-9_]+)*\s*(=|\+=|-=|\+\+|--)[^=]' -- '*.go' ':!internal/config/**' ':!*_test.go'
@@ -78,7 +78,7 @@ and report it (a new write landed; the lead decides whether this PR takes it). I
 already converted: skip that step.
 
 ```bash
-grep -n '^func Mutate(fn func(\*Config))' internal/config/config.go     # expect 1 hit (2011 at f7ac5b11e)
+grep -n '^func Mutate(fn func(\*Config))' internal/config/config.go     # expect 1 hit (2011 at ac4368bdb)
 grep -n 'foldLegacy' internal/server/handlers/scheduler_admin.go        # expect 4 hits: 151 (comment), 168 (field), 269, 451-452
 ```
 
@@ -223,7 +223,7 @@ Revert the commit. No stored data changes.
 ## Planner notes
 
 - 05-config §1.2 says the 8 bypassing writes sit in "5 non-test files"; its own anchors name 4 files, and HEAD
-  (`f7ac5b11e`) has the same 8 writes in 4 files. The brief uses the regenerated list.
+  (`ac4368bdb`) has the same 8 writes in 4 files. The brief uses the regenerated list.
 - Outside this row's scope but the same defect class: about 30 non-test sites hand `&config.AppConfig` (or a
   field address, e.g. `scheduler_admin.go:209-210,302`, `server.go:982`, `wire_handlers.go:691`) to code that can
   write through the pointer without the lock, which `TestNoDirectAppConfigWrites` cannot see. The brief fixes the

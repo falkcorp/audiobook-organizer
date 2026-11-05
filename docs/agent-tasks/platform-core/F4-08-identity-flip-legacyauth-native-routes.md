@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-08-identity-flip-legacyauth-native-routes.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.5 -->
 <!-- guid: 0ad91c06-04c3-47a1-bdf3-1ab090720204 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -151,7 +151,7 @@ replaced per flip, `TestCutover_NoRawTokenOnDisk`), §5S.10 (`TestBootCrashMatri
 flip); 05-http-api §12 rows named below; 05-authn §4.11 (`auth_disabled_remote`); 05-health §5H.3.1 (that token's
 route before F8); 07 §7.4.3, §7.18 (`TestOldLinkFormsNotServed`, the fragment e2e rows, the ESLint rule).
 
-## Re-verify at BASE (HEAD `f7ac5b11e` values shown; regenerate at BASE)
+## Re-verify at BASE (HEAD `ac4368bdb` values shown; regenerate at BASE)
 
 ```bash
 grep -rn 'LegacyAuthGinUntil' --include=*.go . | grep -v _test | wc -l          # > 0; 0 after (outside the archtest)

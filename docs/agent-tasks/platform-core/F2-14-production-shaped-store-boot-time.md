@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-14-production-shaped-store-boot-time.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 5062c77e-999c-4b26-b5e1-1a0f6f399bdd -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -55,7 +55,7 @@ test -f internal/books/testdata/r2corpus/manifest.json && echo ok      # "ok" (F
 test -f .github/workflows/extraction-gates.yml && echo ok              # "ok" (R1-02), else STOP
 grep -c 'timeout-minutes' .github/workflows/extraction-gates.yml       # >=1 (each job has one)
 test -f .github/workflows/unit-lifecycle.yml && echo ok                # "ok" (R1-28): its `on:` paths are the triggers to copy
-grep -n "cron: '0 4 \* \* \*'" .github/workflows/nightly.yml           # 1 hit at f7ac5b11e (nightly schedule)
+grep -n "cron: '0 4 \* \* \*'" .github/workflows/nightly.yml           # 1 hit at ac4368bdb (nightly schedule)
 grep -rn 'kernel_boot_phase_seconds' core/kernel/ | head -2            # >=1 (R1-13), else STOP
 test ! -e scripts/r2corpus/gen_production_shaped.py && echo absent     # "absent"
 ```

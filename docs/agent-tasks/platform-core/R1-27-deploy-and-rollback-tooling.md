@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-27-deploy-and-rollback-tooling.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.5 -->
 <!-- guid: e981aa06-b2f6-4fd5-91ce-9cc3d994ad37 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -8,7 +8,7 @@
 | Field | Value |
 |---|---|
 | ID | `R1-27` |
-| Tier | **T2** (Sonnet / high): shell and Python tooling against a fake host; well specified |
+| Tier | **T3** (Opus / high): shell and Python tooling against a fake host; well specified |
 | Release / wave | R1 / W20 |
 | Depends on | R1-25, R1-19 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 09 §9.4 R1 Content: deploy tooling; 09 §9.2.1 (rollback, rollback-restore); 05-storage §5S.3.12 (make rollback-restore); 05-health §5H.4 (stop timeouts, KillMode=mixed) |
@@ -39,7 +39,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -49,7 +49,7 @@ Deploy and rollback tooling that R1 and R2 need, tested against a fake host (09 
 
 1. **`DEPLOY_READY_TIMEOUT`** in `Makefile` (`rollback`) and `Makefile.local.example` (`deploy`), default 300 s,
    counted from when the unit leaves `activating` (it replaces the literal `300` at `Makefile:920` and
-   `Makefile.local.example:100,127`, `f7ac5b11e`).
+   `Makefile.local.example:100,127`, `ac4368bdb`).
 2. **`scripts/deploy-wait-ready.sh BASE_URL TIMEOUT [SSH_HOST UNIT]`**: with `SSH_HOST`, polls the unit over ssh
    (`systemctl show -p ActiveState,SubState,NRestarts,ExecMainStatus <unit>`): `activating` counts as progress (the
    timeout starts when it leaves `activating`), `failed`, `inactive` or a rising `NRestarts` fails at once, and
@@ -91,7 +91,7 @@ flag this row's recipe calls: `git grep -n -e '--accept-loss' -- core/app cmd | 
 it is missing, STOP and report it: the fake-host test below passes against its own stub whether or not the real command
 accepts the flag, so only this grep catches the gap before the R2 rollback drill.
 
-## Re-verify (expected at `f7ac5b11e`)
+## Re-verify (expected at `ac4368bdb`)
 
 ```bash
 sed -n 8p scripts/deploy-wait-ready.sh          # expect: # Usage: deploy-wait-ready.sh BASE_URL [TIMEOUT_SECONDS]   (default 300)

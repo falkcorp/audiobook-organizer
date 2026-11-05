@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-01-core-module-first-core-pr.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: c9068651-3412-486f-b5f9-ac087f228837 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -55,7 +55,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -123,7 +123,7 @@ grep -n '^export GOTOOLCHAIN' Makefile        # expect the R0-01 pin (go1.27.3 p
 test ! -e core && echo NO_CORE_YET              # expect NO_CORE_YET
 ```
 
-## Re-verify (expected at `f7ac5b11e`)
+## Re-verify (expected at `ac4368bdb`)
 
 ```bash
 grep -n '^go \|^toolchain\|^ignore\|^exclude\|^replace' go.mod      # expect: 3:go 1.27.0 and 166:ignore ./web only
@@ -132,7 +132,7 @@ grep -n 'minModulePackages = 150\|positiveControlEdge = edge' internal/arch/laye
 grep -n '^func loadGraph\|^func computeLayers\|^func familyLayer' internal/arch/layering_test.go   # expect 339, 564, 549
 grep -n '^func KeyFamilies' internal/database/keyfamilies.go         # expect 330
 grep -c '"c/\|"m/' internal/database/keyfamilies.go                  # expect 0 (no reserved family yet)
-grep -n 'directory: /$' .github/dependabot.yml                       # expect the gomod entry (line 60 at f7ac5b11e; 03 cites 59-60)
+grep -n 'directory: /$' .github/dependabot.yml                       # expect the gomod entry (line 60 at ac4368bdb; 03 cites 59-60)
 grep -n 'JOBS = ' scripts/ci/run_gates.py                            # expect: JOBS = {"own-job", "go-suite"}
 wc -l internal/server/testdata/op_ids.golden                          # expect 288 lines (header + op IDs)
 grep -n '^ci:' Makefile                                              # expect 789 (09 cites :785 at 748fd787a)

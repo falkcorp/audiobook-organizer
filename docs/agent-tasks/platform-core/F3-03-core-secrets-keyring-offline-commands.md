@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-03-core-secrets-keyring-offline-commands.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: b8fef3e3-a3ab-4134-ba71-0a78a133d3d3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -85,7 +85,7 @@ grep -rn 'core.secrets' core/kernel/health.go | wc -l                # expect >=
 grep -rn 'func OpenOffline' core/kernel/ | wc -l                     # expect 1 (R1-25)
 grep -rn 'func OfflineCommands' core/app/ | wc -l                    # expect 1
 grep -rn 'Checkpoint\|checkpoint' core/kernel/migrate.go | wc -l     # expect >= 1 (F2-06/R1-23: the P4a checkpoint precedes P4b)
-# HEAD's cipher and guard that M2 (F3-06) freezes; you do NOT read them (HEAD f7ac5b11e; after R1-26 the database
+# HEAD's cipher and guard that M2 (F3-06) freezes; you do NOT read them (HEAD ac4368bdb; after R1-26 the database
 # residue lives at internal/books/store/)
 grep -rn 'func DecryptValue\|func EncryptValue' internal/database/settings.go internal/books/store/settings.go 2>/dev/null | wc -l   # expect 2
 grep -c 'func guardAgainstKeyRegeneration' cmd/root.go              # expect 1 (HEAD: line 760)

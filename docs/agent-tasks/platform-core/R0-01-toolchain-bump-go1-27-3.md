@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R0-01-toolchain-bump-go1-27-3.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 7189c037-92b9-4266-ac53-c6fb370da014 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | R0-01 |
 | Release | R0 (the first PR of R0; 09 §9.4 R0 Content (2); 13 §13.2.2) |
-| Tier | **T0** (Haiku / low): a mechanical edit of the guarded pin copies, proved by the guard script `scripts/check_toolchain_versions.py` |
+| Tier | **T1** (Sonnet / medium): a mechanical edit of the guarded pin copies, proved by the guard script `scripts/check_toolchain_versions.py` |
 | Wave | W01 |
 | Depends on | none |
 | Branch | `toolchain/go1.27.3` |

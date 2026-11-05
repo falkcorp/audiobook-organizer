@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-10-health-readiness-core-registry.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 4019705c-90f7-4596-b9ca-155678fda298 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -55,8 +55,8 @@ health.ComponentID`, default `{core.storage}`), §5T.4 step 2; 06 §6.4.10 F2 ro
 ls core/health/*.go                                                  # R1-09's flight recorder files, else STOP
 grep -rn 'type ComponentID ' core/health/ | wc -l                    # 0 (this PR adds it); 1 = applied
 test ! -e core/health/registry.go && echo absent                     # "absent"
-grep -n 'type DegradedSource interface' internal/server/handlers/system/handler.go   # 1 hit at f7ac5b11e (HEAD's source)
-grep -n 'getDegraded' internal/server/handlers/system/handler.go | wc -l             # 6 at f7ac5b11e; R1 splits it (count changes)
+grep -n 'type DegradedSource interface' internal/server/handlers/system/handler.go   # 1 hit at ac4368bdb (HEAD's source)
+grep -n 'getDegraded' internal/server/handlers/system/handler.go | wc -l             # 6 at ac4368bdb; R1 splits it (count changes)
 # R1-24's split: how core-raised posture tokens (storage_checkpoint_*, factory_reset_*) reach the authenticated field
 grep -rn 'storage_checkpoint_open' core/ internal/server/ | grep -v _test | head -5   # must show the R1-24 path, else STOP
 grep -c 'func TestHealth_UnauthenticatedTokenSetGolden' internal/server/handlers/system/health_tokens_test.go   # 1 (R0-06), else STOP

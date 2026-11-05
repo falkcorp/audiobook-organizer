@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-05-one-web-build-entry-point.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: ab971b1f-8614-4ccb-b9ba-e106ed75c3e3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -47,7 +47,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -79,7 +79,7 @@ breaks (09 §9.4 R1 "Content: build and CI", the `build_web.sh` sentence; 09 §9
 ## Verification step first (BLOCKED to the lead if it cannot be done)
 
 Before editing the release callers, read `reusable-release.yml` of `falkcorp/github-common` at the SHA in
-`.github/ghcommon-ref.txt` (`861d4e83ccf918c9354a2d5f5685068f655cdf58` at `f7ac5b11e`) and record in the PR
+`.github/ghcommon-ref.txt` (`861d4e83ccf918c9354a2d5f5685068f655cdf58` at `ac4368bdb`) and record in the PR
 description what `frontend-enabled` does (07 §7.3.2; 09 §9.4 R1). If its frontend half installs or builds `web/`
 itself, set `frontend-enabled: false` in both callers and state in the PR where Node comes from for
 `pre-build-script` (or, if the owner prefers, a github-common pre-install input with the ref bump in the same PR).
@@ -93,7 +93,7 @@ gh api repos/falkcorp/github-common/contents/.github/workflows/reusable-release.
 
 R1-04 merged: `test -f .github/workflows/docker-image.yml && echo ok`.
 
-## Re-verify (the 12 sites; expected at `f7ac5b11e`)
+## Re-verify (the 12 sites; expected at `ac4368bdb`)
 
 ```bash
 git grep -n 'npm ci' -- Dockerfile Dockerfile.build-cgo .github/workflows .woodpecker scripts/ci_remote.py Makefile

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-14-mount-legacy-manifest-redirect.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 48b212d2-c9e7-4980-9fb5-ec04de724c03 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -36,7 +36,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -60,7 +60,7 @@ endpoints"; 03 R6):
    `rbac.AnyAuthenticated` for the permission-less authenticated routes (36 at `748fd787a`; 05-http-api §8.1 R1:
    "R6 must hold from R1"), `rbac.Public` for the public ones. Count routes at your base (572 at `748fd787a`), ABS on
    and off.
-3. **The redirect exclusion**: HEAD's redirect (`internal/server/server_lifecycle.go:1790-1822` at `f7ac5b11e`,
+3. **The redirect exclusion**: HEAD's redirect (`internal/server/server_lifecycle.go:1790-1822` at `ac4368bdb`,
    the same lines 09 §9.1 cites at `748fd787a`) additionally excludes
    `^/api/(core|[a-z][a-z0-9]{1,15})/v[0-9]+(/|$)` (09 §9.2.4; 09 §9.4 R1). Every existing exclusion stays.
 
@@ -96,7 +96,7 @@ endpoints"; 03 R6):
 
 R1-13 merged: `test -d core/httpapi && test -f core/openapi/core.json && echo ok`.
 
-## Re-verify (expected at `f7ac5b11e`)
+## Re-verify (expected at `ac4368bdb`)
 
 ```bash
 sed -n 1790,1791p internal/server/server_lifecycle.go       # expect the "Redirect /api/* to /api/v1/*" comment and s.router.Use(

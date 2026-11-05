@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-18-tasks-flip-engine-deleted.md -->
-<!-- version: 1.1.6 -->
+<!-- version: 1.1.7 -->
 <!-- guid: ec04b9ab-cec9-4e59-bc6b-19f091354077 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -191,7 +191,7 @@ nothing outside this list (STOP and report if a commit needs another path).
    `core/openapi/core.json` and `core/web/packages/api-client/src/generated/`; delete every HEAD route 05-tasks §5T.3.10's
    "Replaces" column names, `/api/v3/ops/*`, `internal/server/handlers/opsv3`, the v2 operations handlers (`internal/server/handlers/operations*.go`) and the
    scheduler task routes (05-tasks §5T.8.1 names `internal/server/handlers/scheduler`; that directory does not exist
-   at `f7ac5b11e`, so find the `/api/v1/tasks` handlers with `git grep -n '"/tasks' internal/server/`), and the two streams `/api/v1/operations/events` and `/api/v3/ops/events`
+   at `ac4368bdb`, so find the `/api/v1/tasks` handlers with `git grep -n '"/tasks' internal/server/`), and the two streams `/api/v1/operations/events` and `/api/v3/ops/events`
    (05-realtime §11). Books' domain routes under `/api/v1/operations` (`stale`, `clear-stale`, … §5T.3.10) stay and
    read runs through `Deps.Tasks`. No alias, no `Deprecation` header (D10).
 6. **SPA and callers.** The Activity page, `useOperationsStore` and MaintenanceTab on the generated tasks client,

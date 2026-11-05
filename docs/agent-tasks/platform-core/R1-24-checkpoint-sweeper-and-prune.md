@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-24-checkpoint-sweeper-and-prune.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.5 -->
 <!-- guid: 88124076-5269-41e3-875c-b216bc9ff445 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -35,7 +35,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -102,7 +102,7 @@ R1-23 merged (the kernel opens the store and takes the first-boot checkpoint):
 `grep -c 'auto_update_paused' internal/server/handlers/system/handler.go internal/server/handlers/system/health_tokens_test.go`
 (expect ≥ 1 each). Any of these missing: STOP.
 
-## Re-verify (expected at `f7ac5b11e`)
+## Re-verify (expected at `ac4368bdb`)
 
 ```bash
 sed -n 222,275p internal/server/handlers/system/handler.go | grep -c 'degraded\|Degraded'   # expect >= 1: HEAD's fixed-token list

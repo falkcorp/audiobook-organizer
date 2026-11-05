@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-33-stop-settings-outside-unit.md -->
-<!-- version: 1.0.2 -->
+<!-- version: 1.0.3 -->
 <!-- guid: b2d0c031-dfd0-4ae2-b924-b3c0f628deee -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -38,7 +38,7 @@ npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
 Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1). Line numbers below were read at
-the planning base `f7ac5b11e` (no code changed between it and HEAD). Re-run every grep at your base before editing.
+the planning base `ac4368bdb` (no code changed between it and HEAD). Re-run every grep at your base before editing.
 
 ## Goal
 

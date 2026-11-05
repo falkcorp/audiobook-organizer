@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-22-cut-divided-database-files.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 1143f20d-1bb7-4a87-a829-58a795a47d5c -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -36,7 +36,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -46,7 +46,7 @@ items" item 5: "each needs a mechanical 'cut' PR before its move PR so that the 
 whole declarations, byte for byte, between files of the same package. No identifier, signature, comment or
 behaviour changes; the package compiles to the same thing.
 
-| from | declarations (anchors at `f7ac5b11e`, equal to 04's at `748fd787a`) | to (new file, names fixed here) |
+| from | declarations (anchors at `ac4368bdb`, equal to 04's at `748fd787a`) | to (new file, names fixed here) |
 |---|---|---|
 | `pebble_store.go` (6,767 lines) | lines 547–1044: from `// NewPebbleStore creates a new PebbleDB store` through the closing brace of `newULID`, i.e. `NewPebbleStore`, `NewPebbleStoreInMemory`, `newPebbleStore`, `pebbleOpenMode` and its constants, `openPebbleChecked`, `initPebbleStore`, `pebbleCloseLog`, `closingContext`, `Close`, `closeStore`, `Checkpoint`, `DB`, `nextID`, `orderedULIDSource` with `newOrderedULIDSource` and `next`, `orderedULIDs`, `newULID` (04 §4.5: `:548-1060` → `internal/pebble`) | `pebble_store_open.go` |
 | `store.go` (1,897 lines) | lines 1807–1897: `globalStore`, `globalStoreMu`, `GetGlobalStore`, `SetGlobalStore`, `InitializeStore`, `opsV3Reconciler`, `CloseStore` (04 §4.5: `InitializeStore` → the kernel's open; `globalStore`/`GetGlobalStore` deleted later) | `store_init.go` |
@@ -61,7 +61,7 @@ in `migrations.go` (books' version-source adapter, 04 §4.5); the `migrations` l
 
 R1-01 merged: `test -f core/go.mod && echo ok`. Otherwise STOP.
 
-## Re-verify (expected at `f7ac5b11e`)
+## Re-verify (expected at `ac4368bdb`)
 
 ```bash
 cd internal/database

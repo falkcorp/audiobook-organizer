@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R2-02-end-r2-release-freeze.md -->
-<!-- version: 1.1.5 -->
+<!-- version: 1.1.6 -->
 <!-- guid: ec2f7009-4e6e-4b0f-8a0b-df22dfc2d023 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | R2-02 |
 | Release | R2 (closing PR) |
 | Tier | **T0** (Haiku / low): one workflow toggle; a grep proves it |
-| Wave | W44 (beside R3-02, R3-04; the three are file-disjoint) |
+| Wave | W41 (beside F9-05, R3-02; the three are file-disjoint) |
 | Depends on | OWNER-05 (the owner has cut the R2 production release) |
 | Spec | 09 §9.2.1 ("The release freezes": the freeze ends with the R2 release, which turns the dispatch on again) |
 | Branch | `agent/platform-core-r2-02-end-r2-freeze` |

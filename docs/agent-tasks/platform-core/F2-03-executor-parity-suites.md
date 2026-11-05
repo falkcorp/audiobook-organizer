@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-03-executor-parity-suites.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: f8fddedf-5163-4b6b-a6b2-d8e1133ec889 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -65,16 +65,16 @@ grep -rn 'type Executor interface' core/tasks/                   # 1 hit (F2-01)
 grep -rn 'func (r \*Registry) Wait' core/health/                 # 1 hit (F2-10), else STOP
 test ! -e core/internal/executor && echo absent                  # "absent"
 grep -rln --include='*.go' 'func TestABOMetricsGatherNoDuplicate' . | grep -v '^./core/'   # exactly 1 path (R1-15's; expected internal/books/metrics_gather_test.go), else STOP
-# HEAD engine being re-implemented (still present until F5; counts at f7ac5b11e)
-ls internal/operations/registry/*.go | grep -vc _test            # 35 non-test files at f7ac5b11e (spec cites 30 at 748fd787a; regenerate)
+# HEAD engine being re-implemented (still present until F5; counts at ac4368bdb)
+ls internal/operations/registry/*.go | grep -vc _test            # 35 non-test files at ac4368bdb (spec cites 30 at 748fd787a; regenerate)
 grep -n 'New(store, slog.Default(), 8, hub)' internal/operations/registry/register.go   # 1 hit: HEAD's 8-worker default
 grep -c '^func Test' internal/operations/registry/resume_test.go internal/operations/registry/resume_shutdown_roundtrip_test.go internal/operations/registry/resume_supersede_test.go internal/operations/registry/run_items_resume_test.go internal/operations/registry/fixer_resume_real_writer_test.go
-#   11, 4, 8, 9, 1 at f7ac5b11e (resume oracles)
+#   11, 4, 8, 9, 1 at ac4368bdb (resume oracles)
 grep -c '^func Test' internal/operations/registry/cancel_persisted_test.go internal/operations/registry/cancel_requeue_race_test.go internal/operations/registry/cancel_row_cas_test.go
 #   3, 1, 14 (cancel oracles)
 grep -c '^func Test' internal/operations/registry/shutdown_drain_test.go internal/operations/registry/shutdown_cause_test.go internal/operations/registry/shutdown_race_test.go internal/operations/registry/shutdown_terminal_status_test.go internal/operations/registry/shutdown_stub_handle_test.go internal/operations/registry/dispatch_shutdown_race_test.go internal/operations/registry/sweeptick_shutdown_race_test.go
 #   1, 1, 1, 3, 2, 7, 2 (shutdown oracles)
-grep -n 'zombies' internal/opsmetrics/opsmetrics.go | head -2   # the attribute-less ops.zombies gauge (line 18 at f7ac5b11e)
+grep -n 'zombies' internal/opsmetrics/opsmetrics.go | head -2   # the attribute-less ops.zombies gauge (line 18 at ac4368bdb)
 ```
 
 `tasks.ReadySignal` is already `health.ComponentID` (F2-01 depends on F2-10); no switch is needed here.
@@ -154,7 +154,7 @@ Tests whose subject is not the executor stay with their owners: `TestStart_DryRu
 `TestDisabledModuleWithRunsBoots` (the kernel's held-runs boot, F2-16).
 
 **Parity kit** (`core/tasks/taskstest/parity/`): port HEAD's resume, cancel and shutdown suites (the 15 files and 68
-`Test` functions listed in the base-state greps at f7ac5b11e; regenerate the count) as **behaviour oracles**: for each HEAD test,
+`Test` functions listed in the base-state greps at ac4368bdb; regenerate the count) as **behaviour oracles**: for each HEAD test,
 one case `{name, HEAD file:func, setup, action, expected outcome}` where the expected outcome is what HEAD's test
 asserts, expressed in `tasks.RunState` and `ItemsResult` terms. `TestParity_ResumeCancelShutdown` runs every case on
 core's executor with test definitions shaped like HEAD's test defs. A HEAD case that has no core equivalent (a v1

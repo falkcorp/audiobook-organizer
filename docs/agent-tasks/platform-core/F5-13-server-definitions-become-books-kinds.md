@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-13-server-definitions-become-books-kinds.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 5ddc5a9e-9799-4f31-ba15-61c981edd016 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -50,7 +50,7 @@ becomes its own kind with its own schedule). HEAD's definitions keep running unt
    `internal/server/server_maintenance_deps.go` moves to `rc.Await`).
 3. 05-tasks §5T.3.1–§5T.3.7; 05-rbac §6.
 
-## The definitions (at `f7ac5b11e`; regenerate at your base)
+## The definitions (at `ac4368bdb`; regenerate at your base)
 
 | File | HEAD def IDs to convert |
 |---|---|
@@ -122,7 +122,7 @@ git grep -n 'mediacore/tasks"' -- main.go internal/opscatalog/ | wc -l          
 ```
 
 ```bash
-grep -rn 'OperationDef{' internal/server/*.go | grep -v _test.go | wc -l          # 47 at f7ac5b11e (informative; the python below is the count that decides)
+grep -rn 'OperationDef{' internal/server/*.go | grep -v _test.go | wc -l          # 47 at ac4368bdb (informative; the python below is the count that decides)
 python3 - <<'EOF'                                                                  # the authoritative count at your base: prints 45
 import re,glob
 skip={'diagnostics_ops.go','scheduler_maintenance_window_op.go','legacy_backfill_op.go','maintenance_job_op.go'}
@@ -214,7 +214,7 @@ runtime.NumCPU()` → `tasks.CPU()`. The reason is one sentence copied from HEAD
 | `Writes`, `Reads`, `Preview`, `Capabilities` | `Effects` by rule R7 | 05-tasks §5T.3.4 |
 | `Schedule` (a v2 cron string) | **none**: never evaluated at HEAD (05-tasks §5T.2); dropped and listed for the release note (05-tasks §5T.3.8; 14 Q-C). Schedules are F5-14's | 05-tasks §5T.3.8 |
 | `Triggers` | none in this PR (the one trigger, `book.relocated`, becomes an outbox topic at F6) | 05-tasks §5T.2; 05-events §5E.13 |
-| `Plugin`, `FormerIDs`, `Cancellable`, `ParamsSchema`, `SummarizeQueued`, `Liveness`, `MinCheckpointInterval`, `ProgressFlushInterval`, `Synchronous`, `Isolate`, `RunsAs` | not carried; list each non-zero value per kind in the PR description under "Dropped HEAD fields". `Cancellable` is never read at HEAD (05-tasks §5T.2); `Isolate: true` or `RunsAs: ActorSystem` has 0 hits at `f7ac5b11e`: a hit at your base is a STOP | 05-tasks §5T.2, §5T.3.6 |
+| `Plugin`, `FormerIDs`, `Cancellable`, `ParamsSchema`, `SummarizeQueued`, `Liveness`, `MinCheckpointInterval`, `ProgressFlushInterval`, `Synchronous`, `Isolate`, `RunsAs` | not carried; list each non-zero value per kind in the PR description under "Dropped HEAD fields". `Cancellable` is never read at HEAD (05-tasks §5T.2); `Isolate: true` or `RunsAs: ActorSystem` has 0 hits at `ac4368bdb`: a hit at your base is a STOP | 05-tasks §5T.2, §5T.3.6 |
 | `Requires` | the `Requires` field `core/tasks` landed (grep `Requires` in `core/tasks/*.go`); absent → STOP for that one definition and report | 05-tasks §5T.4 (`waiting_deps`) |
 | `Phases` | `rc.Phase(name)` around the same code | 05-tasks §5T.3.3 |
 

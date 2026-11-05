@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-04-f8-flip-backup-health-metrics.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.5 -->
 <!-- guid: 9c425807-35e2-4fe7-9289-5de6f5478ebe -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -112,7 +112,7 @@ Re-grep at your base (grep 1): any further caller is this PR's file too. Dated i
 
 ## Re-verify before editing (expected results at your base)
 
-Evidence counts are from HEAD `f7ac5b11e`; regenerate them at your base and record both in the PR.
+Evidence counts are from HEAD `ac4368bdb`; regenerate them at your base and record both in the PR.
 
 ```bash
 # 1. Every caller of the two deleted paths, outside the spec/plan/archive docs.

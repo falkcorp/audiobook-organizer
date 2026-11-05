@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-10-integrations-instance-routes-dark.md -->
-<!-- version: 1.0.5 -->
+<!-- version: 1.0.6 -->
 <!-- guid: 5632beb8-202d-46fa-8ed4-53a698d32866 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -105,7 +105,7 @@ grep -n 'Hold ' core/integrations/integrations.go
 # httpapi's core group and guards (R1-13). Expected: 1 and >= 1
 grep -rn 'func (r \*Router) CoreGroup' core/httpapi/ | wc -l
 grep -rn 'func Handle\[' core/httpapi/ | wc -l
-# HEAD's handlers this surface replaces at F7-09 (plan base f7ac5b11e; not edited here). Expected: 1 and 1
+# HEAD's handlers this surface replaces at F7-09 (plan base ac4368bdb; not edited here). Expected: 1 and 1
 grep -c 'func (s \*Server) handleDelugeTestConnection' internal/server/deluge_integration.go
 grep -c '"/ai/test-connection"' internal/server/wire_media_routes.go
 # Whether providerhttp's ReleaseHold has landed (F7-02, a later wave). Expected at this row's base: 0

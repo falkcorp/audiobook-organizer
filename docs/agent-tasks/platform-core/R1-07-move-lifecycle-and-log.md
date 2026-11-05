@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-07-move-lifecycle-and-log.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 10fc0787-73a0-42ba-9753-7796bb4c7ace -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -44,7 +44,7 @@
 - `scripts/ci/short_test_weights.json`
 
 The 56 importer files above (beside `log_retention.go` and `log_retention_test.go`) import `internal/lifecycle` or
-`internal/logging`, or name a retention identifier outside `internal/config`, at the plan's base `f7ac5b11e` (no code changed between it and HEAD). Two more files in `internal/config` (`config.go` at `:2786`
+`internal/logging`, or name a retention identifier outside `internal/config`, at the plan's base `ac4368bdb` (no code changed between it and HEAD). Two more files in `internal/config` (`config.go` at `:2786`
 and `persistence.go` at `:1095`) name a retention identifier and change in this PR; both are in the list (step 4).
 Any further importer your base's `git grep` finds is your file too.
 
@@ -59,7 +59,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -84,7 +84,7 @@ collides with the standard library `log`.
 R1-02 merged: `test -f .github/workflows/extraction-gates.yml && test -f core/go.mod && echo ok` prints `ok`.
 Otherwise STOP.
 
-## Re-verify (expected at `f7ac5b11e`)
+## Re-verify (expected at `ac4368bdb`)
 
 ```bash
 M=github.com/falkcorp/audiobook-organizer
@@ -98,7 +98,7 @@ git grep -n 'DefaultLogRetentionDays\|LogRetentionKeepForever\|ResolveLogRetenti
 #   internal/scheduler/purge_old_logs_task_test.go:37; comments at config.go:1483,1486,1487,3967,
 #   internal/scheduler/tasks.go:1600 and internal/plugins/maintenance/deps.go:926
 grep -n '"internal/lifecycle"\|"internal/logging"' internal/arch/layering_test.go
-#   expect the layerOf keys (85 and 90 at f7ac5b11e) and one table entry (520); R1-01 redesigned the file, so
+#   expect the layerOf keys (85 and 90 at ac4368bdb) and one table entry (520); R1-01 redesigned the file, so
 #   line numbers differ at your base, but each key must still appear
 grep -c 'internal/lifecycle' tools/cmd/sdkguard/internal-deps.txt     # expect 1 (see step 7)
 grep -c '"internal/lifecycle"\|"internal/logging"' scripts/ci/short_test_weights.json   # expect 0: no weight entry to move
@@ -120,7 +120,7 @@ The importer counts are the work list. If they differ at your base, use the `git
    sed -i 's/^package logging$/package log/' core/log/*.go
    ```
 
-   Every moved file imports only the standard library (checked at `f7ac5b11e`). Set each moved file's
+   Every moved file imports only the standard library (checked at `ac4368bdb`). Set each moved file's
    `// file:` line to its new path (`core/lifecycle/...`, `core/log/...`), bump its patch version and
    `last-edited`, keep its `guid`.
 2. Split the retention names into core: create `core/log/retention.go` (new header, `package log`) holding
@@ -153,7 +153,7 @@ The importer counts are the work list. If they differ at your base, use the `git
    Run `go mod tidy` at the root and `go -C core mod tidy`; both must leave `go.mod`/`go.sum` unchanged (core's
    two packages import only the standard library). If either changes, STOP and report.
 6. `internal/arch/layering_test.go`: delete the `"internal/lifecycle"` and `"internal/logging"` keys from
-   `layerOf` and from any other table in the file that lists them (one entry per key at `f7ac5b11e`: line 520's
+   `layerOf` and from any other table in the file that lists them (one entry per key at `ac4368bdb`: line 520's
    map). Add nothing: imports of `github.com/falkcorp/mediacore/...` are classified by R1-01's mapping (core L0
    → −1). Bump the header.
 7. `make sdkguard` reads `tools/cmd/sdkguard/internal-deps.txt`, which lists `internal/lifecycle` in

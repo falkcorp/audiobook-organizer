@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-09-core-config-section-declarations.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 7243a8e0-4333-4d9f-afec-3c56f5b47d24 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -60,7 +60,7 @@ grep -rn 'jsonschemax' core/internal/ | head -2                   # >=1 (R1-12's
 grep -rn 'type Ref struct' core/secrets/ 2>/dev/null | wc -l       # 0 expected (secrets land at F3-03): see "Secret-typed keys"
 ```
 
-The owners' key tables, with their row counts at the plan commit (`f7ac5b11e`). Re-count at your base with the
+The owners' key tables, with their row counts at the plan commit (`ac4368bdb`). Re-count at your base with the
 command after the table; a different count means the spec moved: transcribe what your base says.
 
 | Owner spec, section | Top-level sections (rows) |
@@ -88,7 +88,7 @@ command after the table; a different count means the spec moved: transcribe what
 
 ```bash
 # re-count one table, e.g. 05-tasks §5T.10 (repeat per row above with its heading)
-awk '/^## 5T.10 Config keys/{f=1;next} /^#{2,3} /{f=0} f' docs/specs/platform-core/05-tasks.md | grep -c '^| `core\.'   # 18 at f7ac5b11e (17 keys + 1 rule row)
+awk '/^## 5T.10 Config keys/{f=1;next} /^#{2,3} /{f=0} f' docs/specs/platform-core/05-tasks.md | grep -c '^| `core\.'   # 18 at ac4368bdb (17 keys + 1 rule row)
 ```
 
 Not declared: 05-indexer (the whole file is a non-normative design sketch, deferred-build), the "(phase 2)" rows of

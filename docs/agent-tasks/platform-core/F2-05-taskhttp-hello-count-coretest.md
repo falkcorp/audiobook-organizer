@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-05-taskhttp-hello-count-coretest.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 47990117-cfa7-4261-af4a-d76cf77ed7da -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -64,7 +64,7 @@ test -d core/examples/hello && test -d core/coretest && echo ok # "ok" (R1-13, R
 test ! -e core/internal/taskhttp && echo absent                # "absent"; if present see Idempotency
 test ! -e core/examples/hello/count.go && echo absent          # "absent"
 grep -rn 'Registrar' core/module/registrar.go | grep -c 'Tasks('   # 0 (Registrar.Tasks is F2-16's), else STOP and report
-ls internal/server/handlers/opsv3/*.go | grep -vc _test         # 9 non-test files at f7ac5b11e (read-only reference)
+ls internal/server/handlers/opsv3/*.go | grep -vc _test         # 9 non-test files at ac4368bdb (read-only reference)
 ```
 
 ## Files

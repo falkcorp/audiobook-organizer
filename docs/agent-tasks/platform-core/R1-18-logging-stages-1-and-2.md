@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-18-logging-stages-1-and-2.md -->
-<!-- version: 1.1.6 -->
+<!-- version: 1.1.7 -->
 <!-- guid: 0af0f945-e47e-4822-ac2b-f63544c667ad -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -41,7 +41,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -54,8 +54,8 @@ R1-15 already calls `app.InstallProcessDefaults`, so every `slog.*` call and eve
 output identical:
 
 1. **Stage 1 deletions (05-logging §11 item 1), nothing else:** `setupFileLogging` (`cmd/root.go:698-723` at
-   `f7ac5b11e`, and its three call sites `:108,201,260`), the second `slog.SetDefault` and `log.SetOutput(aw)`
-   (`internal/server/server.go:1130-1155` at `f7ac5b11e`; 05-logging cites `server.go:1134-1155` at `748fd787a`).
+   `ac4368bdb`, and its three call sites `:108,201,260`), the second `slog.SetDefault` and `log.SetOutput(aw)`
+   (`internal/server/server.go:1130-1155` at `ac4368bdb`; 05-logging cites `server.go:1134-1155` at `748fd787a`).
 2. **The activity `Writer` keeps its input** through R1-36's `Logging.Tap`, consumed by a books tap at info that renders each record with a
    `slog.TextHandler` into it (`internal/books/logging.go`), so its line parsing and its `system` entries are
    unchanged; ABO's `StandardLogger` keeps writing system-log rows and HEAD's pruner
@@ -105,7 +105,7 @@ output identical:
 
 R1-15, R1-07 and R1-36 merged: `test -d internal/books && test -d core/log && git grep -q 'InstallProcessDefaults' -- core/app && git grep -q 'func (l \*Logging) Tap(' -- core/log && echo ok`. If the last grep finds nothing, STOP: R1-36's output is missing; do not write it here.
 
-## Re-verify (expected at `f7ac5b11e`)
+## Re-verify (expected at `ac4368bdb`)
 
 ```bash
 grep -n 'func setupFileLogging\|setupFileLogging()' cmd/root.go       # expect 698 and call sites 108, 201, 260

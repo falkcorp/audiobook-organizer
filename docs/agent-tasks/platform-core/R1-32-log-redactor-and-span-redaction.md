@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-32-log-redactor-and-span-redaction.md -->
-<!-- version: 1.0.4 -->
+<!-- version: 1.0.5 -->
 <!-- guid: 7dce556b-315e-476c-899c-10d184f05c10 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -44,7 +44,7 @@ npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
 Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...`
-and `go -C core build ./...`. Line numbers below were read at the planning base `f7ac5b11e` (no code changed between
+and `go -C core build ./...`. Line numbers below were read at the planning base `ac4368bdb` (no code changed between
 it and HEAD); the spec's anchors are at `748fd787a`. Re-run every grep at your base before editing.
 
 ## Goal

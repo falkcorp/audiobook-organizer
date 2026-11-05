@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-16-sdnotify-into-core-internal.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 16c6bd67-7abe-40f4-ad12-2d2cfbca9f76 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -43,7 +43,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -55,7 +55,7 @@ root module (04 §8.2 row `mediacore/internal/sdnotify`, §8.3 rows for `interna
 
 old ==> new: `internal/sdnotify` ==> `github.com/falkcorp/mediacore/internal/sdnotify` (core-internal).
 
-| ABO importer (anchor at `f7ac5b11e`) | becomes (04 §8.3) |
+| ABO importer (anchor at `ac4368bdb`) | becomes (04 §8.3) |
 |---|---|
 | `.` — `main.go:53` `fmt.Println(sdnotify.Capability)` (`--print-capabilities` fast exit) | handled by `app` (the fast exit moves into core's `app`; ABO's `main` no longer prints it itself) |
 | `internal/server` — `server_lifecycle.go:340,343` (`Ready`, `Status`) and `:552,555` (`Stopping`, `Status`) | deleted: the kernel supervisor sends them (R1-13's `kernel.ReadinessNotifier`, implemented here over `core/internal/sdnotify` in `core/kernel/supervisor.go`) |
@@ -79,7 +79,7 @@ old ==> new: `internal/sdnotify` ==> `github.com/falkcorp/mediacore/internal/sdn
 
 R1-15 merged: `test -d internal/books && echo ok`.
 
-## Re-verify (expected at `f7ac5b11e`)
+## Re-verify (expected at `ac4368bdb`)
 
 ```bash
 M=github.com/falkcorp/audiobook-organizer

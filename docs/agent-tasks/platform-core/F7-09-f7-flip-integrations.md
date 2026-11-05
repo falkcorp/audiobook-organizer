@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-09-f7-flip-integrations.md -->
-<!-- version: 1.1.6 -->
+<!-- version: 1.1.7 -->
 <!-- guid: 92d3d884-998e-42de-94e1-451dd63836fb -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -131,11 +131,11 @@ mediacore/integrations/download/deluge`; `F7 move internal/plugins/webhook -> me
 | generated | `core/openapi/core.json`, `core/web/packages/api-client/src/generated/` |
 | cutover | `internal/books/cutover/steps.go` (M6, this flip's level step, the new M8), `internal/books/cutover/stepids.go` (add this flip's level constant and level-step ID; replace the M8 ID), `internal/books/cutover_suite_test.go` (this flip's `TestCutoverFlipUpgrade` cell, F2-15's harness), `internal/books/store/` |
 | moved or deleted packages | `internal/plugin/`, `internal/plugins/webhook/`, `internal/server/`, `internal/ai/`, `internal/aidispatch/`, `internal/deluge/`, `internal/search/`, `internal/scanner/`, `internal/fileops/`, `internal/pathutil/`, `internal/watcher/`, `internal/metadata/`, `internal/config/` |
-| importers outside those packages (132 files at the plan's base `f7ac5b11e`, listed in full below the table) | `cmd/dedup_bench_batch.go`, `cmd/dedup_bench_pass2.go`; files under `internal/aiscan/`, `internal/appdirs/`, `internal/audiobooks/`, `internal/catalog/`, `internal/dedup/`, `internal/fingerprint/workerclient/`, `internal/importer/`, `internal/itunes/`, `internal/itunes/service/`, `internal/maintenance/jobs/`, `internal/merge/`, `internal/metafetch/`, `internal/organizer/`, `internal/playlist/`, `internal/plugins/acoustid/`, `internal/plugins/dedup/`, `internal/plugins/deluge/`, `internal/plugins/maintenance/`, `internal/quarantine/`, `internal/reconcile/`, `internal/remux/`, `internal/sweep/`, `internal/tagger/`, `internal/telemetrypolicy/`, `internal/testutil/`, `internal/transcode/`, `internal/transcribe/`, `internal/versionprimary/`, `internal/versions/` |
+| importers outside those packages (132 files at the plan's base `ac4368bdb`, listed in full below the table) | `cmd/dedup_bench_batch.go`, `cmd/dedup_bench_pass2.go`; files under `internal/aiscan/`, `internal/appdirs/`, `internal/audiobooks/`, `internal/catalog/`, `internal/dedup/`, `internal/fingerprint/workerclient/`, `internal/importer/`, `internal/itunes/`, `internal/itunes/service/`, `internal/maintenance/jobs/`, `internal/merge/`, `internal/metafetch/`, `internal/organizer/`, `internal/playlist/`, `internal/plugins/acoustid/`, `internal/plugins/dedup/`, `internal/plugins/deluge/`, `internal/plugins/maintenance/`, `internal/quarantine/`, `internal/reconcile/`, `internal/remux/`, `internal/sweep/`, `internal/tagger/`, `internal/telemetrypolicy/`, `internal/testutil/`, `internal/transcode/`, `internal/transcribe/`, `internal/versionprimary/`, `internal/versions/` |
 | SPA, deploy files, move bookkeeping | `web/src/`, `deploy/grafana/dashboards/`, `deploy/prometheus/`, `.mockery.yaml`, `internal/arch/layering_test.go`, `scripts/ci/short_test_weights.json` |
 | F7-10's skipped cells | `core/internal/integrationhttp/routes_test.go` (un-skip only: remove the `t.Skip("needs stage 13: F4-08")` calls; no other change) |
 
-The 132 importer files at `f7ac5b11e`, by directory:
+The 132 importer files at `ac4368bdb`, by directory:
 
 ```
 cmd/: dedup_bench_batch.go dedup_bench_pass2.go
@@ -176,7 +176,7 @@ or deleted package at your base is this PR's file, and the PR does not build whi
 
 ## Re-verify before editing (expected results at your base)
 
-Evidence counts are at HEAD `f7ac5b11e`; regenerate them and record both in the PR.
+Evidence counts are at HEAD `ac4368bdb`; regenerate them and record both in the PR.
 
 ```bash
 M=github.com/falkcorp/audiobook-organizer

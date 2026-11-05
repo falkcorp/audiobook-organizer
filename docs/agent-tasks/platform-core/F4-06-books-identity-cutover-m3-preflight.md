@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-06-books-identity-cutover-m3-preflight.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: f0c9fb51-61bc-4527-b59b-90c09a73f0ed -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -87,7 +87,7 @@ ls internal/books/testdata/r2corpus/blockers | wc -l                            
 ls -d internal/books/testdata/r2corpus/blockers/*identity-corrupt-apikey* internal/books/testdata/r2corpus/blockers/*identity-corrupt-oauthid* | wc -l   # 2 (F2-13's two R0-written cells)
 grep -n 'OfflineCommands' core/app/offline.go | head -1                             # the list you append to
 grep -rn 'TestAtomTable_Golden' internal/books/ | wc -l                             # 1 (R1-15: books' atom table)
-# HEAD's identity rows and predicates (HEAD f7ac5b11e; after R1-26 the database residue is internal/books/store/)
+# HEAD's identity rows and predicates (HEAD ac4368bdb; after R1-26 the database residue is internal/books/store/)
 grep -c 'func UserIsActive' internal/auth/user_active.go                            # 1
 grep -rn 'func.*Stamp\|apikey_expiry' internal/server/apikey_expiry_stamp.go | wc -l   # >= 1 (the one-shot stamp, :86)
 ls internal/usermerge/journal.go | wc -l                                            # 1

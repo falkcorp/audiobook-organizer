@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-01-owner-decisions-before-r0-r1.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 6d318a46-2f16-444d-9bfc-a89bd7547f51 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -49,13 +49,21 @@
      deployed; or, after R0 is deployed, set `BASIC_AUTH_PASSWORD` and restart (05-authn §11.1 item 5 Recovery).
 2. **Q-I: how the required checks are enforced** (14 §14.3 Q-I). Choose:
    - **(a)** (recommended) a ruleset or branch protection on `main` that requires the named checks of 09 §9.2.1,
-     with **no bypass actors** (`enforce_admins: true`) and strict up-to-date branches or a merge queue, and merge
-     tooling (the `/parallel-sweep` coordinator, CLAUDE.md's Quick Fix flow) that waits for the checks and **never
-     merges with `--admin`** past them; or
+     with **no bypass actors** (`enforce_admins: true`) and **GitHub's merge queue** (recommended) or strict
+     up-to-date branches, and merge tooling (the `/parallel-sweep` coordinator, CLAUDE.md's Quick Fix flow) that
+     waits for the checks and **never merges with `--admin`** past them; or
    - **(b)** keep server-side merges ungated, rely on the merge tooling running `make ci` locally before every
      merge, with `auto-revert.yml` as the backstop; or
    - your own alternative, stated precisely.
    Record also whether `/parallel-sweep` may admin-merge (plan §(m) item 1). Under (a) it may not.
+
+   **The plan recommends the merge queue** (plan §(n) item 9; advisor R6). With strict up-to-date branches each PR
+   re-runs the whole CI after every earlier merge in its wave, so a wave of 20 PRs at about 35 minutes of CI each
+   costs at least about 12 hours of serial CI before any rerun (09 §9.2.10 gives the CI budget); a merge queue
+   tests queued PRs together on top of `main` and keeps the same guarantee. R1-02 adds the queue's `merge_group`
+   trigger to the required workflows when you choose it. Whichever you choose, **critical-path rows merge first within a
+   wave**: the lead enqueues (or, without a queue, merges) the wave's critical-path rows (plan §(c)) before its
+   other rows.
 3. **The R1 freeze** (09 §9.2.1 "R1 freeze", a lead extension the owner may override): keep it (automatic promotion
    paused from R1-35's merge, just before R1's first core PR, until R1 ships, so R1 is exactly one production
    release) or override it. Either answer is recorded as R1-35's value: **kept** sets `RELEASE_FREEZE: 'R1'`,
@@ -74,7 +82,7 @@ value):
 ```
 OWNER-01 recorded <date>
 P14: Branch A | Branch B (password saved on <date>)
-Q-I: (a) | (b) | alternative: <one sentence>; /parallel-sweep admin-merge: allowed | not allowed
+Q-I: (a) | (b) | alternative: <one sentence>; merge mode: merge queue | strict up-to-date; /parallel-sweep admin-merge: allowed | not allowed
 R1 freeze: kept (R1-35 sets RELEASE_FREEZE: 'R1') | overridden (R1-35 sets RELEASE_FREEZE: '')
 Q-G: accepted | SC1=<n> checkpoints over <w> weeks, SC5=<core %>/<SDK %>
 ```

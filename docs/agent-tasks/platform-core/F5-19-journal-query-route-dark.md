@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-19-journal-query-route-dark.md -->
-<!-- version: 1.0.3 -->
+<!-- version: 1.0.4 -->
 <!-- guid: 4142bda4-22ac-4f63-8d52-07a0db51b22d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -77,7 +77,7 @@ ls rbac/rbactest/*.go auth/authtest/*.go | wc -l                                
 test ! -e internal/loghttp && echo absent                                                # absent
 grep -rn 'system/logs' --include=*.go . | grep -v _test | wc -l                           # 0
 cd ..
-# HEAD's route and its rule (f7ac5b11e): read them, do not edit them
+# HEAD's route and its rule (ac4368bdb): read them, do not edit them
 grep -n 'protected.GET("/system/logs", s.perm(auth.PermSettingsManage), systemH.GetSystemLogs)' internal/server/wire_system_routes.go | wc -l   # 1
 grep -n 'func (h \*Handler) GetSystemLogs(c \*gin.Context)' internal/server/handlers/system/handler.go | wc -l   # 1
 grep -n 'func NamesOthersUserLog(source, message string) bool' internal/activity/user_data.go | wc -l           # 1

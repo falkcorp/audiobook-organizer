@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-02-core-auth-store-service-middleware.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 17675dfd-c1d9-454e-bb6e-545401beffad -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -90,7 +90,7 @@ These 52 caller files are every non-moved file that references a moved symbol at
 this PR; **no forwarding shim** stays in a moved file's old location (04 §2.1: the staying side's references change in
 the same PR).
 
-## Re-verify at BASE (HEAD `f7ac5b11e` counts shown)
+## Re-verify at BASE (HEAD `ac4368bdb` counts shown)
 
 ```bash
 grep -c '^func ' internal/server/absauth/password.go          # HEAD 11 (HashPassword :131, VerifyPassword :165)

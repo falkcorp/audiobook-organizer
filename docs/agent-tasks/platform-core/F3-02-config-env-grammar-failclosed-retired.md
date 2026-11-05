@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-02-config-env-grammar-failclosed-retired.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 8aaa153a-536e-4d8d-9361-4796ae3f6beb -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -90,7 +90,7 @@ grep -c 'basic_gate' core/kernel/core_sections.go
 grep -c 'go.yaml.in/yaml/v3' core/go.mod
 # OfflineCommands exists from R1 (expect >= 1)
 grep -rn 'func OfflineCommands' core/app/ | wc -l
-# HEAD's hazards these rules close (HEAD f7ac5b11e; informational)
+# HEAD's hazards these rules close (HEAD ac4368bdb; informational)
 grep -c 'BindEnv(' internal/config/config.go internal/config/abs_config.go internal/config/invite_config.go
 ```
 

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R0-03-admin-checks-honour-key-scopes.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 876a356e-1741-4b99-8188-3d24d8a0e712 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | R0-03 |
 | Release | R0 (09 §9.4 R0 Content (1)); a live security hotfix in HEAD's code |
-| Tier | **T2** (Sonnet / high): one rule at four call sites; an authorization change, well specified |
+| Tier | **T3** (Opus / high): one rule at four call sites; an authorization change, well specified |
 | Wave | W02 |
 | Depends on | R0-02 (both edit `internal/server/middleware/auth.go`; start from a base that contains R0-02's merge) |
 | Branch | `fix/r0-03-admin-key-scopes` |

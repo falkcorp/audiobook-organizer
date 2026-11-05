@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-08-merge-library-leaves.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: d3c5d254-34a3-4d4e-94c4-d6566a7c0634 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -53,7 +53,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -71,7 +71,7 @@ by moving their files verbatim and rewriting importers (04 §8.1 R1: "`library` 
 | `internal/util` (part) ==> `mediacore/library` | `path.go` (`SafeJoin`, `WithinRoot`), `perms.go` (`DirMode`, `FileMode`, `SecretFileMode`), `path_test.go`, and `TestCoverage_PermConstants` from `util_coverage_test.go` |
 
 `internal/util` keeps every other file. No behaviour change; the merged package needs no identifier rename:
-the top-level names of the six sources are disjoint at `f7ac5b11e` (checked: `Join`, `Validate`, `SafePath`;
+the top-level names of the six sources are disjoint at `ac4368bdb` (checked: `Join`, `Validate`, `SafePath`;
 `SecureJoin`, `SecureJoinResolved`, `CleanAbsolutePath`, `SanitizeFilename`, `IsDangerousRoot`, `Err*`;
 `Mounted`, `ReportPathNotify`, `EnsureDirWritable`, `OwnedByCurrentUser`, `ReportDirName`; `Call`,
 `ErrTimeout`; `Stats`; `SafeJoin`, `WithinRoot`, `DirMode`, `FileMode`, `SecretFileMode`; no unexported or
@@ -82,7 +82,7 @@ name: a rename is then a lead decision.
 
 R1-07 merged: `test -d core/lifecycle && test -d core/log && echo ok` prints `ok`. Otherwise STOP.
 
-## Re-verify (expected at `f7ac5b11e`)
+## Re-verify (expected at `ac4368bdb`)
 
 ```bash
 M=github.com/falkcorp/audiobook-organizer
@@ -99,7 +99,7 @@ grep -c -E 'internal/(security|libroot|boundedcall|diskstats)' scripts/ci/short_
 #   expect 0 and 0: no weight entry, not in the SDK closure
 ```
 
-The union of the two `git grep -l` lists (32 files at `f7ac5b11e`, of which 4 are files that move) is the work
+The union of the two `git grep -l` lists (32 files at `ac4368bdb`, of which 4 are files that move) is the work
 list. If it differs at your base, use the output at your base.
 
 ## Steps (one commit that builds)
@@ -118,13 +118,13 @@ list. If it differs at your base, use the output at your base.
    sed -i 's/^package pathvalidation_test$/package library_test/' core/library/pathvalidation_test.go
    ```
 
-   If `core/library/` would receive two files of the same name, STOP (none at `f7ac5b11e`).
+   If `core/library/` would receive two files of the same name, STOP (none at `ac4368bdb`).
 2. Inside `core/library/`: in `libroot.go` and `libroot_test.go` drop the qualifier `util.` (now the same
    package) and the import of `internal/util`; in `pathvalidation_test.go` replace the import of
    `internal/security/pathvalidation` with `"github.com/falkcorp/mediacore/library"` and every `pathvalidation.`
-   qualifier (28 at `f7ac5b11e`) with `library.`.
+   qualifier (28 at `ac4368bdb`) with `library.`.
 3. Move `TestCoverage_PermConstants` (the "Coverage for perms.go" block, `internal/util/util_coverage_test.go`
-   lines 65–77 at `f7ac5b11e`) into a new `core/library/perms_test.go` (`package library`, imports `testing`).
+   lines 65–77 at `ac4368bdb`) into a new `core/library/perms_test.go` (`package library`, imports `testing`).
 4. Rewrite every importer in the work list (outside `core/library/`) with this script, then `gofmt -w` them:
 
    ```bash

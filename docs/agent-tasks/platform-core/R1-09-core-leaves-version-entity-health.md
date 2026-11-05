@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-09-core-leaves-version-entity-health.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: f08cce47-0814-4819-8567-482be7830fb4 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -40,7 +40,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -65,7 +65,7 @@ R1-02 merged (`test -f .github/workflows/extraction-gates.yml`) **and R1-07 merg
 PR's `health` imports `log` (step 4), the first in-core edge of the core guard's positive control. If either is
 missing, STOP.
 
-## Re-verify (expected at `f7ac5b11e`)
+## Re-verify (expected at `ac4368bdb`)
 
 ```bash
 M=github.com/falkcorp/audiobook-organizer
@@ -75,7 +75,7 @@ git grep -l "\"$M/internal/diag/flight\"" -- '*.go'       # expect 5: internal/s
 git grep -n "diagflight \"$M/internal/diag/flight\"" -- '*.go' | wc -l   # expect 5 (all aliased diagflight)
 grep -n 'flightLog' internal/diag/flight/flight.go | wc -l             # expect 13: the var (108), dropf (203), 11 call sites
 grep -n '"github.com/falkcorp/audiobook-organizer/internal/logger"' internal/diag/flight/flight.go   # expect 1 (61)
-grep -n '"internal/diag/flight"' internal/arch/layering_test.go         # expect 1 layerOf key (164 at f7ac5b11e)
+grep -n '"internal/diag/flight"' internal/arch/layering_test.go         # expect 1 layerOf key (164 at ac4368bdb)
 grep -n 'internal/diag/flight' scripts/ci/short_test_weights.json | wc -l   # expect 0
 ls core/version core/entity core/coretest core/health 2>&1 | grep -c 'No such file'   # expect 4
 ```
@@ -148,7 +148,7 @@ ls core/version core/entity core/coretest core/health 2>&1 | grep -c 'No such fi
      row adds no other `core/log` caller. While the `Sanitize` call exists it is the core guard's first real
      in-core edge, `health → log` (03 §3.5.1 item 2, "once core has leaves").
    - replace each `flightLog.Info(` with `r.logf(slog.LevelInfo, ` and each `flightLog.Warn(` with
-     `r.logf(slog.LevelWarn, ` (11 call sites; every one is inside a `*Recorder` method at `f7ac5b11e`).
+     `r.logf(slog.LevelWarn, ` (11 call sites; every one is inside a `*Recorder` method at `ac4368bdb`).
 
    The tests' own `r.dropf = func(...)` overrides (`flight_test.go:416,457`) keep working unchanged.
 5. **Core guard control.** In core's layering guard (created by R1-01 under `core/internal/`; find it with

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-34-service-registry-explicit-list.md -->
-<!-- version: 1.0.3 -->
+<!-- version: 1.0.4 -->
 <!-- guid: 27c7bc09-4001-4dfe-a02e-1a93adb8163e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -60,7 +60,7 @@ npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
 Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1). Line numbers and counts below
-were read at the planning base `f7ac5b11e` (no code changed between it and HEAD). Re-run every grep at your base.
+were read at the planning base `ac4368bdb` (no code changed between it and HEAD). Re-run every grep at your base.
 
 ## Goal (06 §6.11.1 step 3, verbatim in substance)
 
@@ -136,11 +136,11 @@ R1-15 merged: `test -d internal/books && echo ok` prints `ok`. Otherwise STOP.
 
 ```bash
 git grep -ln 'serviceregistry.Register(' -- '*.go' | grep -v '^internal/serviceregistry/' | grep -v _test.go | wc -l
-#   expect 24 at f7ac5b11e; R1-15 replaced the init() registrations of internal/operations/registry/register.go and
+#   expect 24 at ac4368bdb; R1-15 replaced the init() registrations of internal/operations/registry/register.go and
 #   internal/updater/register.go with explicit construction in internal/books, so expect 22 at your base. Convert
 #   whatever registers at your base; if either of those two files still registers, convert it too.
 git grep -n 'serviceregistry.Register(' -- '*.go' | grep -v '^internal/serviceregistry/' | grep -v _test.go | wc -l
-#   expect 43 calls at f7ac5b11e (06 §6.11.2's count), fewer by the defs R1-15 removed
+#   expect 43 calls at ac4368bdb (06 §6.11.2's count), fewer by the defs R1-15 removed
 git grep -n 'ResetForTest()' -- '*.go' | grep -v '^internal/serviceregistry/'           # expect 2 hits, both internal/plugin/register_test.go
 git grep -n 'IncludeAll()\|IncludeGroup(' -- '*.go' | grep -v '^internal/serviceregistry/'   # expect 2 hits, internal/server/server.go:818 (chained) and :825
 git grep -n 'serviceregistry.NewContainer()' -- '*.go' | grep -v '^internal/serviceregistry/' | wc -l   # expect 19 call sites

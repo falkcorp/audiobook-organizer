@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F9-02-cut-shell-files-into-slots.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.5 -->
 <!-- guid: b8dc84ce-aaac-40d9-a6cf-4b8ab601ecf3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -8,9 +8,9 @@
 | Field | Value |
 |---|---|
 | ID | F9-02 |
-| Release | R2, flip label F9 (dark PR; R2 if the shell is ready, else R3) |
+| Release | R3 (dark; merges after OWNER-05), flip label F9; the shell ships in R3 by default (plan §(l) item 7) |
 | Tier | **T3** (Opus / high): a cut of shell-classified files into slots; the import boundary must prove the cut and the SPA must render the same |
-| Wave | W40 (beside F9-04; file-disjoint) |
+| Wave | W42 (beside F9-04, R3-05; file-disjoint) |
 | Depends on | F9-01, F8-04 (F4-08 through F8-04 edit the `web/src/` layout files this row moves), F9-05 (see Goal) |
 | Spec | 07 §7.11 (the classification table, rows `components/layout/{MainLayout,TopBar,UserMenu,sidebarSelection}.tsx, Sidebar.tsx minus its arrays` and `pages/ActivityLog.tsx … components/layout/OperationsIndicator.tsx`), §7.3.1 (import boundary), §7.4.2 (slot contributions: `nav`, `banners`, `topBarItems`, `activityPanes`, `taskKinds`), §7.19 step 4 ("cut the audiobook imports out of the shell-classified files into books slots and move them into `core/web`") |
 

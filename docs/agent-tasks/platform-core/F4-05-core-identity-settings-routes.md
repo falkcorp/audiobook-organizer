@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-05-core-identity-settings-routes.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: cbdb5377-2585-4a6d-bc8d-b935127d7e1e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -90,7 +90,7 @@ grep -rn 'type ResetRequest struct' core/storage/ | wc -l             # 1 (R1-25
 grep -rn 'func (s \*Store) Apply' core/config/ | wc -l                # 1 (F3-01)
 grep -rn 'func (s \*Service) Middleware' core/auth/ | wc -l           # 1 (F4-02)
 grep -rn 'package oidc' core/auth/oidc/ | wc -l                       # >= 1 (F4-03)
-# HEAD's routes these replace at F4-08 (HEAD f7ac5b11e; informational)
+# HEAD's routes these replace at F4-08 (HEAD ac4368bdb; informational)
 grep -c 'oauth' internal/server/wire_auth_routes.go                   # >= 1 (callback route at :44 @748fd787a)
 ```
 

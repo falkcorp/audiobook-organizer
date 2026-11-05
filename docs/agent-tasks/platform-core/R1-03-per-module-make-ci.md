@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-03-per-module-make-ci.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: b539aa28-9ed9-4fa5-a48b-a088e5c9fd48 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -47,7 +47,7 @@ git rebase origin/main
 npm ci --prefix web        # CLAUDE.md: Playwright and vitest from this worktree
 ```
 
-Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `f7ac5b11e`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
+Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 item 1): verify with `go build ./...` and `go -C core build ./...` (once `core/` exists). Line numbers below were read at the planning base `ac4368bdb`; the spec's anchors are at `748fd787a`. Where they differ the brief says so. Re-run every grep at your base before editing; a count that differs only because a listed predecessor merged is expected, and the brief says what to do with it.
 
 ## Goal
 
@@ -84,7 +84,7 @@ Rows owned elsewhere (do not touch): core layering gate, `exclude-check`, `genpr
 
 R1-02 merged: `test -f .github/workflows/extraction-gates.yml && grep -q '^vet-darwin:' Makefile && echo ok`.
 
-## Re-verify (expected at `f7ac5b11e`)
+## Re-verify (expected at `ac4368bdb`)
 
 ```bash
 grep -n '^ci:' Makefile        # expect 789 (09 cites :785): mocks-check staticcheck oplint sdkguard ops-check types-check bench-check pprof-check fmt-check test-all-short coverage-check-short lint-errcheck-ratchet lint-deadcode-ratchet

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-12-r2-corpus-stage1-r0-written.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.4 -->
 <!-- guid: dd68df55-0fe6-4120-9078-f5f927fbe5b4 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -48,8 +48,10 @@ fixture); 05-rbac §12 `TestIdentityCutover_ReachOracle` (reach is F4-07's); 14 
 
 ## Inputs (owner-provided; STOP if missing)
 
-- The **R0 tag** that OWNER-02 cut and kept. `git tag -l` must list it. The tag name and its release asset are owner
-  facts from OWNER-02 that no file in the repo records: the lead hands them to you with this brief.
+- The **R0 tag** that OWNER-02 cut and kept. OWNER-02 records it in the tracking issue as the line
+  `R0 tag for F2-12: <tag>`; read it from there (`gh issue view <tracking issue> --comments`). If that line is missing,
+  STOP and report. `git tag -l` must list the tag. This PR commits it as `ci/r0_release.txt` (below), so from this PR
+  on the repo records it and no later row needs it handed over.
 - The R0 release binary for linux/amd64, fetched from that tag's GitHub release (`gh release download <tag> --pattern
   '*linux*amd64*'`), checked with `./audiobook-organizer --version` (and `--version-json` if R0 has it). If the release has
   no such asset, STOP: building at the tag is not the same binary (09 §9.3 says "the R0 release binary").
@@ -57,12 +59,14 @@ fixture); 05-rbac §12 `TestIdentityCutover_ReachOracle` (reach is F4-07's); 14 
 ## Base state
 
 ```bash
-git tag -l | grep -c "^<R0 tag>$"                         # 1, else STOP
+R0_TAG=<the tag from OWNER-02's tracking-issue line>
+git tag -l | grep -c "^$R0_TAG$"                          # 1, else STOP
+test ! -e ci/r0_release.txt && echo absent                 # "absent" (created here)
 test -d internal/books && echo ok                          # "ok" (R1-15), else STOP
 test ! -e internal/books/testdata/r2corpus && echo absent  # "absent"
 test ! -e scripts/r2corpus && echo absent                  # "absent"
-git check-ignore -v --no-index internal/books/testdata/r2corpus/stage1/audiobooks.pebble/000002.log internal/books/testdata/r2corpus/stage1/state/.encryption_key internal/books/testdata/r2corpus/stage1/library.bleve/x internal/books/testdata/r2corpus/stage1/logs/x.log internal/books/testdata/r2corpus/stage1/x.db   # 5 lines at f7ac5b11e: audiobooks.pebble/, .encryption_key, library.bleve/, logs/, *.db (each one ignored today)
-ls scripts/abs_capture_fixtures.py                         # exists at f7ac5b11e (an existing ABS capture script to learn from)
+git check-ignore -v --no-index internal/books/testdata/r2corpus/stage1/audiobooks.pebble/000002.log internal/books/testdata/r2corpus/stage1/state/.encryption_key internal/books/testdata/r2corpus/stage1/library.bleve/x internal/books/testdata/r2corpus/stage1/logs/x.log internal/books/testdata/r2corpus/stage1/x.db   # 5 lines at ac4368bdb: audiobooks.pebble/, .encryption_key, library.bleve/, logs/, *.db (each one ignored today)
+ls scripts/abs_capture_fixtures.py                         # exists at ac4368bdb (an existing ABS capture script to learn from)
 grep -n 'db-census' internal/server/handlers/diagnostics.go | head -2   # the census route 09 §9.7 P1 uses (read-only)
 ```
 
@@ -70,10 +74,31 @@ grep -n 'db-census' internal/server/handlers/diagnostics.go | head -2   # the ce
 
 Create: `scripts/r2corpus/write_r0_corpus.py`, `scripts/r2corpus/record_r0_answers.py`,
 `internal/books/testdata/r2corpus/stage1/` (the store directory and its state directory, as the R0 binary leaves them),
-`internal/books/testdata/r2corpus/answers/`, `internal/books/testdata/r2corpus/manifest.json`. Add tests for the scripts
+`internal/books/testdata/r2corpus/answers/`, `internal/books/testdata/r2corpus/manifest.json`, `ci/r0_release.txt`
+(the R0 tag; format below). Add tests for the scripts
 under `scripts/tests/` (`test_write_r0_corpus.py`, `test_record_r0_answers.py`; names coined here) and the Go manifest
 test `internal/books/r2corpus_manifest_test.go`. Modify: `.gitignore` (the negation block below). Python, not shell
 (CLAUDE.md rule 4). No other Go change.
+
+### `ci/r0_release.txt`: the R0 tag, in the repo
+
+Create it with exactly these six lines, `<TAG>` replaced by OWNER-02's tag, and a trailing newline (the same shape
+as F3-08's `ci/prefreeze_release.txt`):
+
+```text
+# file: ci/r0_release.txt
+# version: 1.0.0
+# guid: <fresh guid from python3 -c 'import uuid;print(uuid.uuid4())'>
+# last-edited: <today, YYYY-MM-DD>
+# The R0 release (09 §9.3 item 1): the tag whose release binary wrote R2's fixture corpus. One tag line; lines starting with '#' are comments.
+<TAG>
+```
+
+The reader rule is the one F3-08's file uses: the tag is the single line that is neither blank nor starts with `#`
+(`grep -v '^#' ci/r0_release.txt | grep -v '^[[:space:]]*$'`); never `cat` the file. Both scripts read the tag from
+this file by default (a `--tag` override is for a re-cut only), fail unless exactly one tag line is present, and
+download that tag's asset. `manifest.json`'s `r0_tag` is that tag. If R0 is ever re-cut, the regenerating PR updates
+this file in the same commit as the corpus.
 
 ### `.gitignore`: commit the store, not a store-shaped hole
 
@@ -160,7 +185,8 @@ was not redacted: fix the recorder.
   manifest names exists; every stage-1 case names a family; it walks **all three** of `stage1`, `overlay` and `blockers`
   (both empty at this PR) and asserts that each entry's `store` exists and is a key of `stores`; for each store, the files on
   disk under it equal its file list exactly (none missing, none extra) with matching size and sha256; stage 1's store lists at
-  least one WAL (`*.log`) or SST (`*.sst`) file under its store directory and the `.encryption_key` file. Put the
+  least one WAL (`*.log`) or SST (`*.sst`) file under its store directory and the `.encryption_key` file; the manifest's
+  `r0_tag` equals the one tag line of `ci/r0_release.txt` (same reader rule). Put the
   per-store comparison in a helper (`verifyStoreFiles(t, dir, files)`, name coined here) in the same file: F2-14's
   measurement test, in the same package, calls it on the store it copies.
 
@@ -174,6 +200,7 @@ go test ./internal/books/ -run TestR2Corpus_ManifestMatchesFiles -count=1   # ok
 git status --porcelain --ignored internal/books/testdata/r2corpus/ | grep -c '^!!'   # 0 (nothing under the corpus is ignored)
 git ls-files internal/books/testdata/r2corpus/ | grep -cE '\.(log|sst)$'      # >=1 (the WAL or an SST is committed)
 git ls-files internal/books/testdata/r2corpus/ | grep -c '/\.encryption_key$' # 1
+grep -v '^#' ci/r0_release.txt | grep -v '^[[:space:]]*$' | grep -cE '^v[0-9]+\.[0-9]+\.[0-9]+$'   # 1 (the R0 tag)
 grep -rcE 'abk_[A-Za-z0-9]{16,}' internal/books/testdata/r2corpus/answers/ | grep -vc ':0$'   # 0
 du -sh internal/books/testdata/r2corpus/                                    # within the budget stated in the PR body
 make ci                                                                     # exit 0
@@ -181,7 +208,7 @@ make ci                                                                     # ex
 
 ## STOP conditions
 
-- No R0 release asset for linux/amd64, or the tag is missing.
+- No R0 release asset for linux/amd64, the tag is missing, or OWNER-02's tracking-issue line naming it is missing.
 - A family a cutover step moves cannot be written through R0's API: do not write it by hand here; list it for F2-13.
 - A row would need a real credential or a real host name.
 - The pre-commit hook rejects the commit: fix the redaction; never `--no-verify`.
@@ -197,7 +224,7 @@ Revert the PR (testdata and scripts only).
 
 ## Repo rules
 
-File headers on the scripts, `.gitignore` (bump its `version` and `last-edited`, keep its guid) and the manifest (JSON cannot carry a comment header: add a `"_header"` object with `file`,
+File headers on the scripts, `ci/r0_release.txt` (the `#` header above), `.gitignore` (bump its `version` and `last-edited`, keep its guid) and the manifest (JSON cannot carry a comment header: add a `"_header"` object with `file`,
 `version`, `guid`, `last-edited` as the first key, and say so in the PR body); conventional commit
 (`test(r2): R0-written fixture corpus stage 1 and its answers`) with `Co-Authored-By: Claude <noreply@anthropic.com>`;
 `gh pr merge <n> --rebase`; `changelog.d/` fragment. Never commit `.api-token`, `.bootstrap-token` or `.claude/.credentials/`

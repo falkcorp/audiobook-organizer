@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F9-03-f9-flip-shell-adoption.md -->
-<!-- version: 1.1.5 -->
+<!-- version: 1.1.8 -->
 <!-- guid: b0913d46-08c4-4812-bdf9-48c9be6bf2e7 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -8,15 +8,16 @@
 | Field | Value |
 |---|---|
 | ID | F9-03 |
-| Release | R2 if ready, else R3 unchanged (09 §9.3; plan §(l) item 7) |
+| Release | R3 by default: merges after OWNER-05 cuts R2, outside the freeze (09 §9.3; plan §(l) item 7) |
 | Tier | **T4** (Opus / xhigh–max): every flip PR is T4; this one changes every page path and the owner of `/` |
-| Wave | W41 (alone: the only PR of its wave; it owns `main.go`, `internal/server/`, books' registration and `core/kernel/kernel.go` in W41). Runs inside an announced **move window** (04 key `F9 move internal/server -> mediacore/ui`) |
-| Depends on | F8-04, F9-02, F9-04, F9-05 |
+| Wave | W44 (alone: the only PR of its wave; it owns `main.go`, `internal/server/`, books' registration and `core/kernel/kernel.go` in W41). Runs inside an announced **move window** (04 key `F9 move internal/server -> mediacore/ui`) |
+| Depends on | F8-04, F9-02, F9-04, F9-05, OWNER-05 |
 | Spec | 07 §7.19 steps 4–5 (one release; the order inside the series), §7.11, §7.6.3 (ownership of `/`, the Basic-gate asset exemption, ABO adopts the hello pattern, route-chain placement, `embed_frontend` semantics), §7.5 (server manifest and intersection), §7.9.2 (realtime client), §7.10 (preset), §7.18; 09 §9.4 R2 flips table row F9, §9.6 row 21; 05-http-api §8.1 (F9 row), §4.10; 03 §3.8 F9; 06 §6.4.10 ("Shell" row: `Options.UI`, `Options.UIOptions`, `Description.UIManifests`), §6.10 (`TestABOManifestBootsWithShell`) |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. **One atomic PR** (09 §9.2.1). It merges
-alone in W41. If F8-04 has merged and this PR is not ready when R2-01 is due, F9 moves to R3 unchanged (R2-01 records
-it); then this PR merges after OWNER-05 and before OWNER-06, and its rollback is `make rollback` to R2.
+alone in W42. **F9 ships in R3 by default** (plan §(n); 09 lets F9 slip to R3): this PR merges only after OWNER-05 has
+cut and deployed R2, outside the R2 freeze, and before OWNER-06 cuts R3. Its rollback is `make rollback` to R2, never a
+restore. R2-01's runbook and release note leave the shell out; R3-04's note lists the new paths.
 
 ## START HERE (do this first, exactly)
 
@@ -90,6 +91,9 @@ npm ci --prefix web
 ## Re-verify before editing (expected results at your base)
 
 ```bash
+# R2 is out. Expected: OWNER-05's tracking-issue record says "decision: kept (R2 release <tag>, ...)"; and the newest
+# production release is that tag. If R2 is not cut, or it was rolled back, STOP: this PR waits.
+gh release list --exclude-pre-releases --exclude-drafts --limit 1
 # Root embed files. Expected: web_embed.go (embed_frontend) and web_nonembed.go defining WebFS
 grep -n 'go:build\|WebFS' web_embed.go web_nonembed.go
 # main.go hands the FS to the server. Expected: 1 hit [evidence: main.go:34]
@@ -116,7 +120,8 @@ the FS over.
 
 ## Steps
 
-1. Write the tests first (below); record the old→new page-path table (07 §7.11 last row) in the PR description.
+1. Write the tests first (below); record the old→new page-path table (07 §7.11 last row) in the PR description and
+   in `docs/agent-tasks/platform-core/seams.d/F9-03.md` (plan §(n) item 5), where R3-04 reads it for the R3 note.
 2. Commit 1: `vite.config.ts` on `mediacore(…)`, the inline theme script deleted.
 3. Commit 2: `web/src/modules/books/` (the cut rows' contributions are already there), every importer re-pointed and
    every re-export file deleted, `main.tsx` on `createShell` with the data router, `useUnsavedChangesBlocker` deleted, `renderInShell`, the shell realtime client, the Activity page in the
@@ -196,12 +201,12 @@ The `docker-image` required check must boot the embedded bundle on this PR.
 
 - 07 §7.19 step 6 (the remaining `api.ts` sections), deleting `ops.ts`/opsgen (R3-02).
 - Any server route change other than the SPA owner and `csp-report`.
-- The release note's path list (R2-01 assembles it from 09 §9.6 row 21).
+- The release note's path list (R3-04 writes it into the R3 note from 09 §9.6 row 21, 07 §7.11 and this PR's table).
 
 ## Rollback
 
-Before its release ships: revert the PR. In R2: R2's `make rollback-restore`. If F9 shipped in R3: `make rollback` to
-R2 (09 §9.4 F9 row; plan §(b)).
+Before R3 ships: revert the PR. After R3 ships: `make rollback` to R2 (09 §9.4 F9 row; plan §(b)), never a
+restore.
 
 ## Repo rules
 
