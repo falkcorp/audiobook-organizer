@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.8.4 -->
+<!-- version: 1.8.5 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -397,11 +397,13 @@ type Schedules struct { // section core.log.schedules
   with auth off any peer that reaches the port would read them. It is one of the auth-off tightenings the R2
   release note lists (05-rbac §4.11). HEAD's route is deleted in R2 together with the SPA's move to the native
   route (no alias, D10).
-- **When the surface lands (F5).** The query route, the live tail topic `core.log.recorded.v1`, their permission
-  tests (`TestJournal_RequiresSystemManage`, `TestJournal_OtherUsersLinesNeedUsersView`) and the SPA's move from
+- **When the surface lands (F5, F6).** The query route, its permission tests (the route half of
+  `TestJournal_RequiresSystemManage`, and `TestJournal_OtherUsersLinesNeedUsersView`) and the SPA's move from
   HEAD's `GET /api/v1/system/logs` land at **F5**, the tasks flip, in the PR that registers M5 and starts
   `logjournal`, which deletes HEAD's route: after M5 HEAD's `syslog:` family is empty, so HEAD's route and the
-  native route switch in one PR. The route is mounted by an L6
+  native route switch in one PR. The live tail, delivery of `core.log.recorded.v1` through realtime's permission
+  filter, and the event half of `TestJournal_RequiresSystemManage` land at **F6** with realtime (05-realtime);
+  from F5 to F6 the SPA's log view polls the query route. The route is mounted by an L6
   `internal/<capability>http` package (03 §3.5 R4), because `logjournal` (L4) cannot mount routes.
 - **Native store (SIMP4-3).** `core/internal/logjournal` keeps one record per `c/log/journal/<ULID>`
   (versioned JSON of the record: attributes flattened to dotted keys with string, number or bool values),
@@ -521,7 +523,7 @@ These are recorded by a kernel-side bridge (`log` cannot import `metrics`, R4): 
 | `TestNativeJournalStore_RoundTrip` | the native store over `c/log/journal/` passes the suite (SIMP4-3) |
 | `TestJournal_OtherUsersLinesNeedUsersView` | a `core:system.manage` principal without `core:users.view` gets neither imported nor new records the books predicate flags, and sees `user_id` blank; with `core:users.view` it gets both (imported records from the R0 fixture) |
 | `TestJournal_PruneScheduleKeyDeclared` | `core.log.schedules.journal_prune` is declared with type `tasks.ScheduleConfig` in `logjournal.Schedules` and accepted by `ScheduleFromConfig` at registration |
-| `TestJournal_RequiresSystemManage` | `core:system.view`-only principal gets 403 on the query route and no `core.log.recorded.v1` events |
+| `TestJournal_RequiresSystemManage` | `core:system.view`-only principal gets 403 on the query route (from F5) and no `core.log.recorded.v1` events (from F6, with realtime) |
 | `TestRotatingFile_RotatesAndCaps` | size rotation, `max_files` respected, `os.Root` confinement |
 
 ## 11. Migration from ABO
@@ -696,3 +698,5 @@ M2 at F3 writes a registered key; §10: the corrupt `syslog:` row comes from the
 rollback names the pre-freeze release's binary.
 
 Round 16 (2026-11-05): plan-gap fixes G13 (§5: confirmed the query route `GET /api/core/v1/system/logs`, the live tail `core.log.recorded.v1` and both permission tests are specified; added that they and the SPA's move land at F5, in the PR that registers M5 and deletes HEAD's route, mounted by an L6 capability-routes package).
+
+Round 16 (2026-11-05): review fixes X3 (§5: the query route, its 403 test and the SPA's move land at F5, replacing HEAD's logs route in the same PR; the live tail through realtime and the event half of `TestJournal_RequiresSystemManage` land at F6, the SPA's log view polling the query route between).

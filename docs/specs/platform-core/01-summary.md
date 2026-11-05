@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/01-summary.md -->
-<!-- version: 1.9.3 -->
+<!-- version: 1.9.4 -->
 <!-- guid: d2956830-373c-4b12-9504-ccace49f7f6d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -121,7 +121,7 @@ moves platform machinery, not every route.
 | **importer** | `<pkg>.Importer`: the SDK interface through which an app hands a core subsystem its pre-core records, staged into the caller's batch with every ID kept, or, for an L0 package such as `log`, committed idempotently instead (03 §3.3). |
 | **pre-migration checkpoint** | The copy of the store a boot takes before its first shape-changing write, R1's first boot included; the rollback path, deleted automatically 7 days after it stops being needed (D12 (d); 03 §3.7; 05-storage). |
 | **quarantine** | Where a migration step copies a row it cannot decode (`c/storage/quarantine/`), reported in health and never dropped (03 §3.3 `storage`). Identity rows are never quarantined: an unconvertible one stops the upgrade (D13). |
-| **upgrade floor** | The one floor, set in R3: `UpgradeFloor{InstallFirst: R2}`. Boot refuses a store that has not run R2's level step, before any write, with exit 78 and a last log line naming R2 (02 N14). |
+| **upgrade floor** | The one floor, set in R3: `UpgradeFloor{InstallFirst: <R2 tag>}`, the R2 release's tag. Boot refuses a store that has not run R2's level step, before any write, with exit 78 and the last log line `install <R2 tag> first`: install the R2 release, by its tag, first (02 N14). |
 | **split criteria SC1–SC10** | The measurable readiness criteria for moving core to its own repository (§12.3); named `SC` so they never collide with other labels. |
 | **gate G1–G8** | The eight acceptance gates inherited from the 2026-09-18 adversarial review (`02-decision-record.md` §2.4). |
 | **R1–R8** | The mechanically enforced dependency/registration rules in `03-architecture.md` §3.5. |
@@ -189,3 +189,5 @@ Owner decisions D10–D12:
 - D10–D12 revision (2026-11-04): summary names the releases R0–R3; goal 3 rewritten (data migrated forward one-way in R2, quarantine instead of loss, G5′, rollback by offline restore, the R3 floor); non-goals: the family non-goal narrowed to books' domain families, the "hardening during the extraction" non-goal deleted, non-goals for backward compatibility (D10) and soaks (D11) added, the gin non-goal lets routes change; glossary: "legacy package", "hardening cutover", "strangler stage", "floor release" and "stepping-stone release" deleted; "SDK", "legacy claim", "store interface" and "cutover" rewritten; "release R0–R3", "flip", "importer", "pre-migration checkpoint", "quarantine" and "upgrade floor" added. Consistency pass: D12's answers cited as D12 (a)–(d), and the importer entry names the idempotent L0 exception.
 
 Round 13 (2026-11-04): D13 (goal 3: identity rows and unfinished merges stop the upgrade; goal 6: core public under Apache-2.0; quarantine glossary), R1 (flip glossary names F2), R2 (CONFORM-1: goal 3 and the new "pre-freeze release" glossary entry), R4 (CONFORM-2, CONFORM-6: checkpoint glossary).
+
+Round 16 (2026-11-05): review fixes X4 (glossary "upgrade floor": `InstallFirst: <R2 tag>` and the refusal `install <R2 tag> first`).
