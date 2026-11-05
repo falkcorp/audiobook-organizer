@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: e7051b93-6c28-4a0f-9d34-b8f2a61c05de
-// last-edited: 2026-10-21
+// last-edited: 2026-11-05
 
 package middleware
 
@@ -455,6 +455,11 @@ func (r *ABSIdentityResolver) ResolveAPIKey(c *gin.Context) (*ABSIdentity, *ABSA
 	}
 	if key == nil {
 		return nil, absErr(http.StatusUnauthorized, "apikey-invalid", "invalid API key", ABSModeAPIKey)
+	}
+	// A set RevokedAt is a revocation whatever Status says (05-authn §11.1
+	// item 3), the same rule as the /api/v1 key path.
+	if key.RevokedAt != nil {
+		return nil, absErr(http.StatusUnauthorized, "apikey-revoked", "API key has been revoked", ABSModeAPIKey)
 	}
 	switch key.Status {
 	case "revoked":

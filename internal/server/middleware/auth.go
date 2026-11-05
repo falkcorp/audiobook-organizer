@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 package middleware
 
@@ -332,7 +332,10 @@ func handleAPIKeyAuth(c *gin.Context, store authKeyStore, rawToken string) {
 		c.Abort()
 		return
 	}
-	if key.Status == "revoked" {
+	// A set RevokedAt is a revocation whatever Status says (05-authn §11.1
+	// item 3). Checked before TouchAPIKeyLastUsed, so a revoked key's request
+	// writes nothing.
+	if key.Status == "revoked" || key.RevokedAt != nil {
 		httputil.RespondWithUnauthorized(c, "API key has been revoked")
 		c.Abort()
 		return
