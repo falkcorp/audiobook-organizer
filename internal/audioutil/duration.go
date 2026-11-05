@@ -1,7 +1,7 @@
 // file: internal/audioutil/duration.go
-// version: 1.2.3
+// version: 1.3.0
 // guid: 03399668-0f87-4d27-b118-8315b574ef23
-// last-edited: 2026-10-12
+// last-edited: 2026-11-04
 
 // Package audioutil holds small, dependency-free helpers shared by the audio
 // processing packages (internal/mediainfo, internal/fingerprint,
@@ -122,6 +122,14 @@ func probeDurationFFprobe(ctx context.Context, ffprobePath, filePath string) (fl
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {
+		// A command killed by its context exits with "signal: killed", which
+		// says nothing about WHY. Wrap the context error as well so a caller
+		// can tell a timeout (errors.Is(err, context.DeadlineExceeded)) from a
+		// file ffprobe could not read; a stalled mount must not read as a bad
+		// file. A missing binary still satisfies errors.Is(err, exec.ErrNotFound).
+		if cerr := ctx.Err(); cerr != nil {
+			return 0, fmt.Errorf("ffprobe %s: %w: %w", filePath, cerr, err)
+		}
 		return 0, fmt.Errorf("ffprobe %s: %w", filePath, err)
 	}
 	secs, err := strconv.ParseFloat(strings.TrimSpace(stdout.String()), 64)

@@ -1,7 +1,7 @@
 // file: internal/database/scan_state.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 4a846cd3-3757-482a-b4df-71e02cb47292
-// last-edited: 2026-10-19
+// last-edited: 2026-11-04
 
 package database
 
@@ -61,15 +61,19 @@ type ScanState struct {
 
 	// The file stages of the identification pipeline
 	// (docs/architecture/identification-pipeline.md, Part II), one
-	// StageStatus each. Nothing writes or reads them yet: they are the shape
-	// the per-stage writers move to in a follow-up, which also retires the
-	// single Attempts/LastError pair above. Added with omitzero like every
+	// StageStatus each. Only DurationOK is written so far (BookFile's
+	// SetMeasuredDuration, RecordDurationProbeFailure and ResetDuration); the
+	// others are the shape the per-stage writers move to in a follow-up, which
+	// also retires the single Attempts/LastError pair above. Added with
+	// omitzero like every
 	// other field here, so a row that never ran a stage serializes exactly as
 	// it did before they existed.
 
 	// Tagged: the tag header was read.
 	Tagged StageStatus `json:"tagged,omitzero"`
 	// DurationOK: the file's duration is known (ffprobe header read, no decode).
+	// Done is set with every measured Duration; Attempts and LastError count
+	// failed probes of a present file (see BookFileDurationState).
 	DurationOK StageStatus `json:"duration_ok,omitzero"`
 	// FPWindowed: the windowed fingerprint exists.
 	FPWindowed StageStatus `json:"fp_windowed,omitzero"`

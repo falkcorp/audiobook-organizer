@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_merge.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 0f6bdcdf-d13a-46a8-90f7-5d62bbccd3a8
 // last-edited: 2026-11-04
 
@@ -400,6 +400,18 @@ func mergeBookFileFromStored(incoming, stored *BookFile, mode bookFileWriteMode,
 			f.Set(st.Field(i))
 		}
 	}
+	// The loop above restores Scan only when the incoming one is wholly zero, so
+	// a row that sets one stage (the duration probe's DurationOK) would replace
+	// the stored NeedsDeep, HashStale, Attempts and every other stage with
+	// zeros. Restore it field by field instead: a zero sub-field is "not
+	// provided", exactly as a zero top-level field is. A stage the incoming row
+	// does set wins whole, so a caller that carries the stored attempt count
+	// forward and adds one (RecordDurationProbeFailure) accumulates; the merge
+	// never sums attempts itself, because a fresh failure is indistinguishable
+	// here from a read-modify-write copy that merely carries the stored one.
+	if upsert {
+		restoreZeroScanFields(&incoming.Scan, &stored.Scan)
+	}
 	// Scan is derivedNone, so the loop above kept the stored duration stage on
 	// the incoming row: restored it into a bare Scan (the scanner's rows carry
 	// none), or left a read-modify-write caller's copy of it in place. When the
@@ -429,4 +441,17 @@ func mergeBookFileFromStored(incoming, stored *BookFile, mode bookFileWriteMode,
 		incoming.Missing = false
 	}
 	return v
+}
+
+// restoreZeroScanFields copies every ScanState field that is zero in incoming
+// from stored. It walks the struct by reflection so a stage added to ScanState
+// later is covered without touching this function.
+func restoreZeroScanFields(incoming, stored *ScanState) {
+	in := reflect.ValueOf(incoming).Elem()
+	st := reflect.ValueOf(stored).Elem()
+	for i := 0; i < in.NumField(); i++ {
+		if f := in.Field(i); f.IsZero() {
+			f.Set(st.Field(i))
+		}
+	}
 }

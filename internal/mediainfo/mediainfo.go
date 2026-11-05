@@ -1,13 +1,16 @@
 // file: internal/mediainfo/mediainfo.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: f1e2d3c4-b5a6-7c8d-9e0f-1a2b3c4d5e6f
-// last-edited: 2026-10-12
+// last-edited: 2026-11-04
 
 package mediainfo
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,26 +36,54 @@ type MediaInfo struct {
 	// unreliable (esp. for m4b/AAC where the assumed bitrate is a default) and
 	// must NOT be trusted by dedup duration-matching or metadata scoring.
 	DurationEstimated bool
+	// DurationErr is why Duration is not a value read from the audio stream: nil
+	// when it was, non-nil when the stream read failed, whether Duration is then
+	// 0 or only an estimate (DurationEstimated). It keeps the underlying error
+	// chain, so errors.Is(DurationErr, exec.ErrNotFound) means ffprobe is not
+	// installed, errors.Is(DurationErr, fs.ErrNotExist) that the file is gone,
+	// and errors.Is(DurationErr, context.DeadlineExceeded) that the probe timed
+	// out. bookfileaudio classifies those; a missing tool or file is not a
+	// verdict on the file. A MediaInfo built outside this package (a test
+	// literal) leaves it nil.
+	DurationErr error `json:"-"`
 }
 
 // ffprobeDurationTimeout bounds the per-file ffprobe call. ffprobe only reads the
-// container header, so this is generous even for large audiobooks.
-const ffprobeDurationTimeout = 20 * time.Second
+// container header, so this is generous even for large audiobooks. A variable
+// only so a test can exercise the timeout path.
+var ffprobeDurationTimeout = 20 * time.Second
 
 // realDurationSec reads the TRUE container duration via ffprobe (the stream's own
-// duration, not a filesize estimate). Returns ok=false when ffprobe is missing or
-// the file has no parseable duration, so the caller can fall back to a flagged
-// estimate. ffprobe is resolved from PATH via the shared audioutil.ProbeDurationSeconds
-// (also used by internal/fingerprint and internal/transcode — see TODO item 20 / AP-3b).
-func realDurationSec(filePath string) (int, bool) {
+// duration, not a filesize estimate). It returns an error when ffprobe is
+// missing or fails, the file is absent, the probe times out, or the file has no
+// usable duration, so the caller can fall back to a flagged estimate AND record
+// why. The error chain is the one audioutil.ProbeDurationSeconds returns (see
+// MediaInfo.DurationErr for what can be asked of it), with fs.ErrNotExist added
+// when the file is not there: ffprobe and mediainfo report a missing input as an
+// ordinary failed run, indistinguishable from a corrupt file. ffprobe is
+// resolved from PATH via the shared audioutil.ProbeDurationSeconds (also used by
+// internal/fingerprint and internal/transcode — see TODO item 20 / AP-3b).
+func realDurationSec(filePath string) (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), ffprobeDurationTimeout)
 	defer cancel()
 	secs, err := audioutil.ProbeDurationSeconds(ctx, "", filePath)
-	if err != nil || secs <= 0 {
-		return 0, false // ffprobe missing, failed, or unparseable — caller estimates
+	if err != nil {
+		if _, serr := os.Stat(filePath); errors.Is(serr, fs.ErrNotExist) {
+			err = fmt.Errorf("%w: %w", fs.ErrNotExist, err)
+		}
+		return 0, err
 	}
-	return int(secs + 0.5), true
+	// secs > 0 is false for NaN as well; a sub-half-second file rounds to 0.
+	if !(secs > 0) || math.IsInf(secs, 0) || int(secs+0.5) <= 0 {
+		return 0, errZeroDuration
+	}
+	return int(secs + 0.5), nil
 }
+
+// errZeroDuration is the error for a probe that ran and reported no usable
+// length. Its text is stored as a book_file's DurationOK.LastError, so it is
+// short and says what happened.
+var errZeroDuration = errors.New("probe returned 0s")
 
 // Extract reads media information from an audio file.
 // It opens the file, reads the tags, and calls BuildFromTag internally.
@@ -105,7 +136,9 @@ func BuildFromTag(m tag.Metadata, filePath string, fileSize int64) *MediaInfo {
 		// already know the size, so we call it and accept it may re-stat the file.
 		result, err := inferFromFormat(filePath, info)
 		if err != nil {
-			// Return a best-effort struct rather than nil
+			// Return a best-effort struct rather than nil. Its Duration is 0
+			// and DurationErr says why (an unsupported container).
+			info.DurationErr = err
 			info.Quality = generateQualityString(info)
 			return info
 		}
@@ -117,13 +150,16 @@ func BuildFromTag(m tag.Metadata, filePath string, fileSize int64) *MediaInfo {
 	// fileSize ÷ bitrate ESTIMATE — which for m4b/AAC uses a default bitrate and
 	// is routinely ~2× off — and we FLAG it so dedup/matching can distrust it.
 	if info.Duration == 0 {
-		if d, ok := realDurationSec(filePath); ok {
+		if d, err := realDurationSec(filePath); err == nil {
 			info.Duration = d
-		} else if info.Bitrate > 0 && fileSize > 0 {
-			bytesPerSec := (info.Bitrate * 1000) / 8
-			if bytesPerSec > 0 {
-				info.Duration = int(fileSize) / bytesPerSec
-				info.DurationEstimated = true
+		} else {
+			info.DurationErr = err
+			if info.Bitrate > 0 && fileSize > 0 {
+				bytesPerSec := (info.Bitrate * 1000) / 8
+				if bytesPerSec > 0 {
+					info.Duration = int(fileSize) / bytesPerSec
+					info.DurationEstimated = true
+				}
 			}
 		}
 	}
@@ -290,12 +326,15 @@ func inferFromFormat(filePath string, info *MediaInfo) (*MediaInfo, error) {
 
 	// Real duration first (ffprobe); estimate only as a flagged fallback.
 	if info.Duration == 0 {
-		if d, ok := realDurationSec(filePath); ok {
+		if d, err := realDurationSec(filePath); err == nil {
 			info.Duration = d
-		} else if info.Bitrate > 0 {
-			info.Duration = estimateDurationFromFile(filePath, info.Bitrate)
-			if info.Duration > 0 {
-				info.DurationEstimated = true
+		} else {
+			info.DurationErr = err
+			if info.Bitrate > 0 {
+				info.Duration = estimateDurationFromFile(filePath, info.Bitrate)
+				if info.Duration > 0 {
+					info.DurationEstimated = true
+				}
 			}
 		}
 	}
