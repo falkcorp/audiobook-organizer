@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
 <!-- version: 1.13.5 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 05 — Config and secrets (`core/config`, `core/secrets`)
 

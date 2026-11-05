@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.13.4 -->
+<!-- version: 1.13.5 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 05 — Health (`core/health`): liveness, readiness, components, diagnostics, sysinfo
 
@@ -167,17 +167,21 @@ set, pinned by `TestHealth_UnauthenticatedTokenSetGolden` (5H.9):
 Every other token, which includes every auth, config, backup, restore, storage and secrets posture token in this
 section (`auth_disabled_remote`, `config_fail_closed_override`, `config_retired_name_ignored`,
 `revocation_journal_colocated`, the revocation-journal and archive tokens, `restore_last_admin_kept`,
-`restore_admins_review`, the factory-reset tokens and those listed next), appears **only on authenticated
+`restore_admins_review`, the factory-reset tokens, and the storage and secrets tokens listed next, among them
+`storage_checkpoint_mode` and `storage_quarantine` with its `orphaned_refs` field), appears **only on authenticated
 endpoints**. From F8 that is `GET /api/core/v1/health` (`core:system.manage`). Before F8 it is a `degraded` field
 that R1 adds to HEAD's authenticated `GET /api/v1/system/status` (`settings.manage`, `wire_system_routes.go:28`).
 R1 also splits HEAD's one fixed-token source (`getDegraded`) in two: the tokens of the set above feed `/health`,
 and every token feeds that authenticated field. F2, the foundation PRs that open R2 dark (03 §3.8), lands the
 registry's token route: the readiness core of 5H.10 and its bridge into that split source. So the tokens F3 starts
-raising surface from F3's first boot: `storage_quarantine` on `core.storage` (05-storage §5S.3.13; its
-authenticated `Detail` names each dangling reference a quarantined parent leaves, DATA-2), and
+raising surface from F3's first boot: `storage_quarantine` on `core.storage` (05-storage §5S.3.13), whose
+`orphaned_refs` field counts, per referencing books family, the books rows that reference a quarantined parent
+(`VerifyReport.OrphanedRefs`; DATA-2) and, like the token, appears only on authenticated endpoints, and
 `secrets_undecryptable` and `secrets_keyring_not_exported` on `core.secrets` (05-config §1.12.2, §2.4). Storage's
-checkpoint tokens `storage_checkpoint_open` and `storage_checkpoint_retained` (05-storage §5S.3.12) exist from R1,
-with the checkpoint sweeper, and travel the same authenticated route until F8.
+checkpoint tokens `storage_checkpoint_open`, `storage_checkpoint_retained` and `storage_checkpoint_mode` (a
+checkpoint directory or file is group- or world-accessible, and the token names it; SEC-9) (05-storage §5S.3.12)
+exist from R1, with the checkpoint sweeper, and travel the same authenticated route until F8. None of them is in
+the unauthenticated set.
 
 **Advisory tokens owned by other files.** Health has three statuses, so a token another file calls `warn` is a
 `Reason` on a `StatusDegraded` result (readiness unaffected: Degraded passes it), and one it calls `info` is a
@@ -841,3 +845,5 @@ readiness core and the registry's token route so F3's `storage_quarantine`, `sec
 `core.diagnostics.export` gets F2's minimal owner registration and is registered at F5, running until F8 over the
 interim books backend `diagnostics.InterimExport` set through `app.Options.InterimBackends`, which F8 deletes
 (names from 05-tasks §5T.8.2).
+Also `storage_checkpoint_mode` and `storage_quarantine`'s `orphaned_refs` field listed as authenticated-only (SEC-9,
+DATA-2; names from 05-storage).
