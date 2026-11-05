@@ -1,7 +1,7 @@
 // file: internal/transcribe/canary_regate_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2f7b1c84-6d39-4e05-8a1b-93c0d5e7f126
-// last-edited: 2026-10-27
+// last-edited: 2026-11-04
 
 package transcribe
 
@@ -474,12 +474,14 @@ func TestChangedHands_TheNextDispatchKeysADroppedPortByTheIdItReportsAndAsksItTh
 	markCanaryFailed(oldKey)
 	markCanaryFailed(robinKey)
 	markEndpointFailure(w0)
-	after(t, 80*time.Millisecond, func() {
+	c := &urlCanary{fail: map[string]bool{w1: true}}
+	// The id changes after the dispatch's gate has frozen w0 under its old weak
+	// identity (afterFirstGate), not at a time measured from the start of the test.
+	opts := afterFirstGate(t, p, c.fn, func() {
 		h.setMachineID(w0, newID)
 		clearCooldown(w0)
 	})
-	c := &urlCanary{fail: map[string]bool{w1: true}}
-	if _, err := dispatchOn(testCtx(t), h.eps, nil, p.send, c.fn, 8); err == nil {
+	if _, err := dispatchWithOpts(testCtx(t), p, opts, 8); err == nil {
 		t.Fatalf("dispatch 1: robin failed the clip on its only port, want an error")
 	}
 	if slices.Contains(c.askedPorts(), w0) {
