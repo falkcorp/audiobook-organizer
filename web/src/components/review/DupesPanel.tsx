@@ -1,5 +1,5 @@
 // file: web/src/components/review/DupesPanel.tsx
-// version: 1.17.0
+// version: 1.18.0
 // guid: 1d6f8a03-7c25-4e91-b840-2a5c9e3b7d14
 // last-edited: 2026-11-05
 //
@@ -12,6 +12,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link as RouterLink, useSearchParams } from 'react-router-dom';
+import { useUrlParamWriter } from '../../hooks/useUrlState';
 import {
   Alert,
   Box,
@@ -343,7 +344,10 @@ export function DupesPanel({
   onSubViewChange,
   labels,
 }: DupesPanelProps) {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
+  // Writes `band` and `book` into the LATEST query string (see useUrlParamWriter), so
+  // a chip click cannot revert a key the workspace's mirror has just written.
+  const writeUrlParams = useUrlParamWriter();
   const bookParam = searchParams.get('book');
 
   // The URL is the source of truth for `book` and `band`, so a deep link from
@@ -492,10 +496,7 @@ export function DupesPanel({
                     color={dupes.filters.band === b ? 'primary' : 'default'}
                     variant={dupes.filters.band === b ? 'filled' : 'outlined'}
                     onClick={() => {
-                      const next = new URLSearchParams(searchParams);
-                      if (dupes.filters.band === b) next.delete('band');
-                      else next.set('band', b);
-                      setSearchParams(next, { replace: true });
+                      writeUrlParams({ band: dupes.filters.band === b ? null : b });
                     }}
                   />
                 ))}
@@ -619,9 +620,7 @@ export function DupesPanel({
                 <Button
                   size="small"
                   onClick={() => {
-                    const next = new URLSearchParams(searchParams);
-                    next.delete('book');
-                    setSearchParams(next, { replace: true });
+                    writeUrlParams({ book: null });
                   }}
                 >
                   Clear

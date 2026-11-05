@@ -163,7 +163,7 @@ describe('lane', () => {
     expect(loc()).toBe('/review?lane=regroup');
     expect(screen.getByTestId('nav-type').textContent).toBe('REPLACE');
     await user.click(screen.getByTestId('lane-tab-metadata'));
-    expect(loc()).toBe('/review');
+    await waitFor(() => expect(loc()).toBe('/review'));
   });
 
   it('a lane switch is still ONE fetch per lane with the mirror running', async () => {
@@ -312,7 +312,7 @@ describe('dupes lane', () => {
     const again = await screen.findByTestId('author-group-2');
     expect(again).toHaveAttribute('data-focused', 'true');
     // `band` is not the mirror's to remove.
-    expect(loc()).toBe('/review?lane=authors&band=HIGH&author=2');
+    await waitFor(() => expect(loc()).toBe('/review?lane=authors&band=HIGH&author=2'));
   });
 
   it('Clear on the one-book banner keeps the lane when the lane was only implied by ?book', async () => {
