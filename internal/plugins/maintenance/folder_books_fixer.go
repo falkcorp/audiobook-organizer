@@ -101,7 +101,11 @@
 // between a proper book and orphans (never a second partial book); an orphan
 // group whose title and author already name a live book (review it, never
 // duplicate); a fragmentary group shorter than the chapter-consolidation
-// threshold; a new book needed outside books/itunes/**; a primary folder-book
+// threshold (judged only on groups whose every file has a known duration, after
+// the sibling borrow; a group with an unmeasured file is held skipped_unprobed
+// instead, one whose probe failed skipped_unreadable_audio, each with the
+// book_file ids and a follow-up that starts the duration backfill: unknown is
+// never short, and Plan never probes); a new book needed outside books/itunes/**; a primary folder-book
 // with no heir in its version group; an iTunes persistent id on the
 // folder-book itself or among its external ids; listening progress; Doctor Who
 // / Big Finish / Torchwood (framework guard).
@@ -118,8 +122,8 @@
 // files), a new book for files in the library folder (never
 // an import path; created library_state organized), and a duplicate title that
 // resolves to exactly one live book (a version link, below). Every other hold
-// (deep, root folder, too large, resolved, unclear, split, fragmentary, an
-// iTunes id, progress, no heir, a duplicate no link can resolve) stays hard.
+// (deep, root folder, too large, resolved, unclear, split, fragmentary,
+// unprobed, unreadable audio, an iTunes id, progress, no heir, a duplicate no link can resolve) stays hard.
 // The apply is the ordinary Apply, run only for the owner's own click on the
 // row (repairs.OwnerApplyFor on ctx, plus the plan under the lock still marking
 // it).
@@ -190,6 +194,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -229,9 +234,20 @@ const (
 const (
 	fbSkipDeep        = "skipped_deep"
 	fbSkipFragmentary = "skipped_fragmentary"
-	fbSkipITunesID    = "skipped_itunes_id"
-	fbSkipProgress    = "skipped_listening_progress"
-	fbSkipUnreadable  = "skipped_unreadable"
+	// fbSkipUnprobed: an orphan group has a file with no measured duration
+	// that no sibling row at its path could lend. Held INSTEAD of
+	// fbSkipFragmentary for that group: a group's length cannot be judged
+	// short while a member of it is unmeasured. The Backfill book durations
+	// op (mode unknownRows) clears it.
+	fbSkipUnprobed = "skipped_unprobed"
+	// fbSkipUnreadableAudio: an orphan group has a file whose duration probe
+	// ran and failed (not a timeout: a slow mount is not a bad file), so the
+	// file may be corrupt. Held instead of fbSkipFragmentary, and it wins over
+	// fbSkipUnprobed for a group with both kinds of member.
+	fbSkipUnreadableAudio = "skipped_unreadable_audio"
+	fbSkipITunesID        = "skipped_itunes_id"
+	fbSkipProgress        = "skipped_listening_progress"
+	fbSkipUnreadable      = "skipped_unreadable"
 	// fbSkipNoHeir: a primary folder-book whose version group has no other
 	// member versionprimary could crown.
 	fbSkipNoHeir = "skipped_no_primary_heir"
@@ -283,10 +299,16 @@ const (
 	fbSkipOnlyPresentCopy = "skipped_only_present_copy"
 )
 
+// fbDurationBackfillOpID is the op the unprobed hold's action starts (see
+// durationBackfillDef; a test pins the two together).
+const fbDurationBackfillOpID = "maintenance.duration-backfill"
+
 // Per-row caps (fbSkipTooLarge).
 const (
 	fbMaxNewBooks = 25
 	fbMaxRowFiles = 2000
+	// fbErrClip caps a probe error shown in a hold's Why.
+	fbErrClip = 120
 )
 
 const (
@@ -524,7 +546,7 @@ type fbLib struct {
 	dead map[string][]string
 	// deadRows maps a path to the rows the soft-deleted books hold there: a
 	// trashed book's row at the same path and size is the same file, so its
-	// measured duration is as good as a live book's (rowSecs).
+	// measured duration is as good as a live book's (rowDuration).
 	deadRows map[string][]database.BookFileCore
 	// byPath maps a live book's file_path to the book, rows or none: a book
 	// at a group's folder is that work's book even when it holds no row
@@ -634,16 +656,21 @@ func (lib *fbLib) drop(ids map[string]bool) {
 	}
 }
 
-// rowSecs is r's duration in seconds. A row with no measured duration (0)
-// borrows the known duration of another row at the SAME path with the same
-// size (and the same hash when both have one): a live holder's present row or
-// a soft-deleted book's, since the same file is the same file whatever state
-// its book is in. A row of a different size, or one marked Missing, never
-// lends. Read-only: it changes the seconds the fixer computes, never the
-// stored row.
-func (lib *fbLib) rowSecs(r database.BookFileCore) int {
+// rowDuration is r's duration in seconds and whether it is known. A row with no
+// measured duration borrows the known duration of another row at the SAME path
+// with the same size (and the same hash when both have one): a live holder's
+// present row or a soft-deleted book's, since the same file is the same file
+// whatever state its book is in. A row of a different size, or one marked
+// Missing, never lends. Read-only: it changes the seconds the fixer computes,
+// never the stored row.
+//
+// known == false means nothing measured the file and no sibling could lend:
+// the seconds are UNKNOWN, not 0. A caller must decide what unknown means
+// where it reads them (classify counts it as no evidence, buildRow holds the
+// group); none may add it as 0 or compare it as short.
+func (lib *fbLib) rowDuration(r database.BookFileCore) (sec int, known bool) {
 	if sec, ok := r.DurationSec(); ok {
-		return sec
+		return sec, true
 	}
 	var cands []database.BookFileCore
 	for _, h := range lib.holders[r.FilePath] {
@@ -658,7 +685,74 @@ func (lib *fbLib) rowSecs(r database.BookFileCore) int {
 			cands = append(cands, o)
 		}
 	}
-	return database.KnownDurationAtPath(cands, r.FileSize, r.FileHash)
+	if sec := database.KnownDurationAtPath(cands, r.FileSize, r.FileHash); sec > 0 {
+		return sec, true
+	}
+	return 0, false
+}
+
+// fbUnknownFile is one orphan row whose duration is still unknown after the
+// sibling borrow, with what the probe recorded about it.
+type fbUnknownFile struct {
+	rowID, bookID, path string
+	state               database.BookFileDurationState
+	lastErr             string
+}
+
+func fbUnknownFileOf(r database.BookFileCore) fbUnknownFile {
+	return fbUnknownFile{rowID: r.ID, bookID: r.BookID, path: r.FilePath,
+		state: r.DurationState(), lastErr: r.Scan.DurationOK.LastError}
+}
+
+// unreadable: a probe ran on the present file and failed, for a reason other
+// than a timeout. A timeout never flags a file (a stalled mount must not make
+// a good file look bad), at any attempt count, so a timeout-only row is
+// unprobed here: the backfill probes it again.
+func (u fbUnknownFile) unreadable() bool {
+	return (u.state == database.DurationProbeFailed || u.state == database.DurationUnreadable) &&
+		!database.IsDurationTimeoutError(u.lastErr)
+}
+
+// probeable: the Backfill book durations op (mode unknownRows) acts on the
+// row. It probes Unprobed rows, ProbeFailed rows below the attempt ceiling and
+// Unreadable rows whose last error is a timeout; it leaves a row that
+// failed the ceiling for a real reason alone (an explicit reset is the way
+// back for those).
+func (u fbUnknownFile) probeable() bool {
+	return u.state != database.DurationUnreadable || database.IsDurationTimeoutError(u.lastErr)
+}
+
+// fbClip cuts s to at most n runes, for a probe error shown in a hold's Why.
+func fbClip(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "..."
+	}
+	return s
+}
+
+// fbSortedIDs is ids sorted and de-duplicated; nil when none.
+func fbSortedIDs(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := append([]string(nil), ids...)
+	sort.Strings(out)
+	return slices.Compact(out)
+}
+
+// fbProbeAction is the "Probe these files" follow-up of a hold: it starts the
+// Backfill book durations op in its unknownRows mode (not a dry run) on exactly
+// these book_file rows. Nil when there are none.
+func fbProbeAction(label string, fileIDs []string) *repairs.RowHoldAction {
+	if len(fileIDs) == 0 {
+		return nil
+	}
+	return &repairs.RowHoldAction{
+		OpID:   fbDurationBackfillOpID,
+		Params: map[string]any{"mode": durationModeUnknownRows, "fileIds": fileIDs, "dryRun": false},
+		Label:  label,
+	}
 }
 
 func (lib *fbLib) finish() {
@@ -914,9 +1008,13 @@ type fbEval struct {
 	Author    string // the folder directly under the shelf ("" none)
 	N         int
 	Hours     float64
-	Proper    int
-	Works     int
-	Evidence  []string
+	// Unmeasured counts the rows whose duration is unknown even after the
+	// sibling borrow. Hours leaves them out (a lower bound, not a total), and
+	// classify counts them as no evidence for a long file, never as a short one.
+	Unmeasured int
+	Proper     int
+	Works      int
+	Evidence   []string
 	// BaseTier is classify's verdict on the majority shelf's files, kept when
 	// evaluate then overwrites Tier with fbTierMixedShelf, so a deep-tier row
 	// that is also mixed-shelf is never taken for an applicable one. Equal to
@@ -1044,8 +1142,13 @@ func (lib *fbLib) classify(id string, b database.BookCore, rows []database.BookF
 	var secs int64
 	for _, r := range rows {
 		paths = append(paths, r.FilePath)
-		secs += int64(lib.rowSecs(r))
+		if sec, ok := lib.rowDuration(r); ok {
+			secs += int64(sec)
+		} else {
+			ev.Unmeasured++
+		}
 	}
+	// Hours is the measured length: a lower bound while Unmeasured > 0.
 	ev.Hours = float64(secs) / 3600
 	ev.Root = commonDir(paths)
 	set := make(map[string]bool, len(paths))
@@ -1076,11 +1179,10 @@ func (lib *fbLib) classify(id string, b database.BookCore, rows []database.BookF
 			if !sub {
 				continue
 			}
-			dur := 0
-			if lib.books[h].Duration != nil {
-				dur = *lib.books[h].Duration
-			}
-			if len(hs) >= 2 || dur >= fbProperMinSec {
+			// The book's own aggregate, not a row sum: nil is unknown, and an
+			// unknown single-file book is not evidence of a proper book (it
+			// fails closed: fewer folder-books detected, none invented).
+			if len(hs) >= 2 || (lib.books[h].Duration != nil && *lib.books[h].Duration >= fbProperMinSec) {
 				ev.Proper++
 			}
 		}
@@ -1113,7 +1215,11 @@ func (lib *fbLib) classify(id string, b database.BookCore, rows []database.BookF
 	longStems := map[string]bool{}
 	longFiles := 0
 	for _, r := range rows {
-		if lib.rowSecs(r) < fbProperMinSec {
+		// A file with no known duration is no evidence of a long one: it is
+		// not counted as long, and it is not "short" either (the half-of-rows
+		// test below still counts it among the rows, so unknown can only
+		// withhold the flat-works verdict, never grant it).
+		if sec, ok := lib.rowDuration(r); !ok || sec < fbProperMinSec {
 			continue
 		}
 		_, label, dir := fbGroupKey(r.FilePath, ev.Root)
@@ -1168,6 +1274,8 @@ func (lib *fbLib) classify(id string, b database.BookCore, rows []database.BookF
 		}
 	}
 	addEv(fmt.Sprintf("%.0fh of audio (>= %dh)", ev.Hours, fbDeepHours), deep)
+	addEv(fmt.Sprintf("%d of %d file(s) have no measured duration: the hours and the long-file count cover only the rest",
+		ev.Unmeasured, ev.N), ev.Unmeasured > 0)
 	addEv(fmt.Sprintf("%d other books hold strict subsets of its files", ev.Proper), ev.Proper >= 2)
 	addEv("generic title", generic)
 	addEv(fmt.Sprintf("files are %d works (%d folders)", ev.Works, dirs), multi)
@@ -1433,7 +1541,7 @@ func (f *folderBooksFixer) Description() string {
 		"and whose only holds are ones the owner may resolve (a library-folder file needing a new book, created " +
 		"organized; or a title and author that already name ONE live book or version group, the new book " +
 		"then joining that group as a non-primary version) is applied only by the owner's own click on that row. " +
-		"Deep-tier, split, fragmentary and " +
+		"Deep-tier, split, fragmentary, unprobed, unreadable-audio and " +
 		"Doctor Who / Big Finish / Torchwood rows are listed only. Every step is undoable from the apply operation."
 }
 
@@ -1745,6 +1853,10 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	}
 	row.Current = map[string]string{"tier": lead.Tier, "root": lead.Root, "files": strconv.Itoa(len(set)),
 		"works": strconv.Itoa(lead.Works), "hours": fmt.Sprintf("%.1f", lead.Hours)}
+	if lead.Unmeasured > 0 {
+		// "hours" is then a lower bound; say how many files it leaves out.
+		row.Current["unmeasured_files"] = strconv.Itoa(lead.Unmeasured)
+	}
 
 	// The row's copy of each path: a member's row, a present one first.
 	src := map[string]database.BookFileCore{}
@@ -1949,6 +2061,11 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		authorID = head.AuthorID
 	}
 	gi := map[string]int{}
+	// unknownIn: per group key, the members whose duration is still unknown
+	// after the sibling borrow. A group with any is held (fbSkipUnprobed or
+	// fbSkipUnreadableAudio) and never judged fragmentary: its seconds are a
+	// partial sum, and a partial sum is not a length.
+	unknownIn := map[string][]fbUnknownFile{}
 	for _, o := range orphans {
 		i, ok := gi[o.key]
 		if !ok {
@@ -1959,9 +2076,18 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		}
 		g := &plan.Groups[i]
 		g.Files = append(g.Files, fbNewFile{SrcBook: o.row.BookID, SrcRow: o.row.ID, Path: o.row.FilePath, Track: o.row.TrackNumber})
-		g.Secs += lib.rowSecs(o.row)
+		if sec, ok := lib.rowDuration(o.row); ok {
+			g.Secs += sec
+		} else {
+			unknownIn[o.key] = append(unknownIn[o.key], fbUnknownFileOf(o.row))
+		}
 	}
 	var fragmentary, split, outside, unclear []string
+	// unreadableGroups / unprobedGroups name the held groups; badFiles are the
+	// members behind fbSkipUnreadableAudio, unprobedFiles those behind
+	// fbSkipUnprobed.
+	var unreadableGroups, unprobedGroups []string
+	var badFiles, unprobedFiles []fbUnknownFile
 	// outsideHard counts the outside groups no owner click may create: any
 	// that is not wholly in the library folder (fbInLibrary).
 	outsideHard := 0
@@ -2003,7 +2129,22 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		} else {
 			seenTitle[t] = true
 		}
-		if g.Secs < importChapterSec() {
+		if unk := unknownIn[g.Key]; len(unk) > 0 {
+			// Held instead of judged: unknown is never short.
+			var bad []fbUnknownFile
+			for _, u := range unk {
+				if u.unreadable() {
+					bad = append(bad, u)
+				}
+			}
+			if len(bad) > 0 {
+				unreadableGroups = append(unreadableGroups, name)
+				badFiles = append(badFiles, bad...)
+			} else {
+				unprobedGroups = append(unprobedGroups, name)
+				unprobedFiles = append(unprobedFiles, unk...)
+			}
+		} else if g.Secs < importChapterSec() {
 			fragmentary = append(fragmentary, fmt.Sprintf("%q (%d file(s), %ds)", g.Title, len(g.Files), g.Secs))
 		}
 		for _, nf := range g.Files {
@@ -2212,6 +2353,11 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	block := func(kind, why string, ownerOK bool) {
 		blocks = append(blocks, fbBlock{kind: kind, why: why, ownerOK: ownerOK})
 	}
+	// blockFiles is block for a hold about particular files, with the follow-up
+	// that can clear it (nil when none can).
+	blockFiles := func(kind, why string, fileIDs []string, action *repairs.RowHoldAction) {
+		blocks = append(blocks, fbBlock{kind: kind, why: why, files: fileIDs, action: action})
+	}
 	// The second shelf is the owner's to resolve only on an applicable base
 	// verdict that the majority shelf carries (D2): a deep row, or one with
 	// no 80% majority, stays listed.
@@ -2266,6 +2412,31 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		block(fbSkipDupTitle, fmt.Sprintf("a new book's title and author already name a live book: %s",
 			strings.Join(fbFirst(dup, 5), "; ")), dupSingle)
 	}
+	if len(badFiles) > 0 {
+		var named, retry, ids []string
+		for _, u := range badFiles {
+			named = append(named, fmt.Sprintf("%s (%s)", u.path, fbClip(u.lastErr, fbErrClip)))
+			ids = append(ids, u.rowID)
+			if u.probeable() {
+				retry = append(retry, u.rowID)
+			}
+		}
+		// Only the rows the backfill will act on go in the action: a row that
+		// failed the attempt ceiling is settled there and needs an explicit reset.
+		blockFiles(fbSkipUnreadableAudio, fmt.Sprintf("%d file(s) in %d orphan group(s) failed their duration probe and may be "+
+			"bad audio, so the groups cannot be judged: %s", len(badFiles), len(unreadableGroups),
+			strings.Join(fbFirst(named, 5), "; ")), fbSortedIDs(ids), fbProbeAction("Re-probe these files", fbSortedIDs(retry)))
+	}
+	if len(unprobedFiles) > 0 {
+		var ids, books []string
+		for _, u := range unprobedFiles {
+			ids = append(ids, u.rowID)
+			books = append(books, u.bookID)
+		}
+		blockFiles(fbSkipUnprobed, fmt.Sprintf("%d file(s) have no measured duration; run Backfill book durations (unknown rows) "+
+			"for book(s) %s (orphan group(s) held: %s)", len(unprobedFiles), strings.Join(fbFirst(fbSortedIDs(books), 5), ", "),
+			strings.Join(fbFirst(unprobedGroups, 5), "; ")), fbSortedIDs(ids), fbProbeAction("Probe these files", fbSortedIDs(ids)))
+	}
 	if len(fragmentary) > 0 {
 		block(fbSkipFragmentary, fmt.Sprintf("%d orphan group(s) shorter than the chapter-consolidation threshold would become "+
 			"chapter-sized books: %s", len(fragmentary), strings.Join(fbFirst(fragmentary, 5), "; ")), false)
@@ -2293,7 +2464,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		row.Skipped, row.SkipReason = blocks[0].kind, blocks[0].why
 	}
 	for _, b := range blocks {
-		row.Holds = append(row.Holds, repairs.RowHold{Kind: b.kind, Why: b.why, OwnerOK: b.ownerOK})
+		row.Holds = append(row.Holds, repairs.RowHold{Kind: b.kind, Why: b.why, OwnerOK: b.ownerOK, FileIDs: b.files, Action: b.action})
 	}
 	resolvable := len(blocks) > 0 && fbAllOwnerOK(blocks)
 	if resolvable {
@@ -2315,6 +2486,10 @@ type fbBlock struct {
 	// ownerOK: the owner's own click may resolve it, after reading the row's
 	// preview. Every block not marked so is a hard one that stops the row.
 	ownerOK bool
+	// files and action are set on a hold about particular files (RowHold.FileIDs,
+	// RowHold.Action).
+	files  []string
+	action *repairs.RowHoldAction
 }
 
 func fbAllOwnerOK(blocks []fbBlock) bool {

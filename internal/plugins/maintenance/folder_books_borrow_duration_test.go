@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_borrow_duration_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d3f9a2e-4b18-4c65-8e07-1a5b6c9d2f48
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package maintenance
 
@@ -70,14 +70,14 @@ func (f *fragFixture) fbTrashedDonor(t *testing.T, paths []string, sizeSkew int6
 	require.NoError(t, err)
 }
 
-// fbHeldFragmentary reports whether row carries the fragmentary hold, whether
-// as its Skipped verdict or as any entry of its Holds list.
-func fbHeldFragmentary(row *repairs.Row) bool {
-	if row.Skipped == fbSkipFragmentary {
+// fbHasHold reports whether row carries a hold of kind, whether as its Skipped
+// verdict or as any entry of its Holds list.
+func fbHasHold(row *repairs.Row, kind string) bool {
+	if row.Skipped == kind {
 		return true
 	}
 	for _, h := range row.Holds {
-		if h.Kind == fbSkipFragmentary {
+		if h.Kind == kind {
 			return true
 		}
 	}
@@ -85,16 +85,19 @@ func fbHeldFragmentary(row *repairs.Row) bool {
 }
 
 func TestFolderBooksFixer_BorrowsKnownDuration(t *testing.T) {
+	// held is the hold the unmeasured rows leave when no donor lends: unknown is
+	// never short, so it is skipped_unprobed, not skipped_fragmentary. "" means
+	// the borrow cleared the group (and it is not fragmentary either).
 	cases := []struct {
-		name     string
-		donor    func(f *fragFixture, t *testing.T, paths []string)
-		fragment bool
+		name  string
+		donor func(f *fragFixture, t *testing.T, paths []string)
+		held  string
 	}{
-		{"zero durations and no donor stay fragmentary", func(*fragFixture, *testing.T, []string) {}, true},
-		{"a live book's same-size rows lend", func(f *fragFixture, t *testing.T, p []string) { f.fbLiveDonor(t, p, 0) }, false},
-		{"a trashed book's same-size rows lend", func(f *fragFixture, t *testing.T, p []string) { f.fbTrashedDonor(t, p, 0) }, false},
-		{"a live book's differently-sized rows do not", func(f *fragFixture, t *testing.T, p []string) { f.fbLiveDonor(t, p, 7) }, true},
-		{"a trashed book's differently-sized rows do not", func(f *fragFixture, t *testing.T, p []string) { f.fbTrashedDonor(t, p, 7) }, true},
+		{"zero durations and no donor are held unprobed", func(*fragFixture, *testing.T, []string) {}, fbSkipUnprobed},
+		{"a live book's same-size rows lend", func(f *fragFixture, t *testing.T, p []string) { f.fbLiveDonor(t, p, 0) }, ""},
+		{"a trashed book's same-size rows lend", func(f *fragFixture, t *testing.T, p []string) { f.fbTrashedDonor(t, p, 0) }, ""},
+		{"a live book's differently-sized rows do not", func(f *fragFixture, t *testing.T, p []string) { f.fbLiveDonor(t, p, 7) }, fbSkipUnprobed},
+		{"a trashed book's differently-sized rows do not", func(f *fragFixture, t *testing.T, p []string) { f.fbTrashedDonor(t, p, 7) }, fbSkipUnprobed},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -105,7 +108,9 @@ func TestFolderBooksFixer_BorrowsKnownDuration(t *testing.T) {
 			res := f.fbPlan(t, fbFixerID, "op-plan")
 			row := fbFindRow(res, lead)
 			require.NotNil(t, row, "the lead folder-book is planned")
-			require.Equal(t, c.fragment, fbHeldFragmentary(row), "skipped=%q holds=%+v", row.Skipped, row.Holds)
+			require.Equal(t, c.held == fbSkipUnprobed, fbHasHold(row, fbSkipUnprobed), "skipped=%q holds=%+v", row.Skipped, row.Holds)
+			require.False(t, fbHasHold(row, fbSkipFragmentary), "an unmeasured group is never judged short: %+v", row.Holds)
+			require.False(t, fbHasHold(row, fbSkipUnreadableAudio), "%+v", row.Holds)
 		})
 	}
 }
@@ -121,5 +126,6 @@ func TestFolderBooksFixer_MissingDonorRowDoesNotLend(t *testing.T) {
 	res := f.fbPlan(t, fbFixerID, "op-plan")
 	row := fbFindRow(res, lead)
 	require.NotNil(t, row)
-	require.True(t, fbHeldFragmentary(row), "skipped=%q holds=%+v", row.Skipped, row.Holds)
+	require.True(t, fbHasHold(row, fbSkipUnprobed), "skipped=%q holds=%+v", row.Skipped, row.Holds)
+	require.False(t, fbHasHold(row, fbSkipFragmentary), "holds=%+v", row.Holds)
 }
