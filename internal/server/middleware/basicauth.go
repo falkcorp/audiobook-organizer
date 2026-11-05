@@ -1,21 +1,85 @@
 // file: internal/server/middleware/basicauth.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-20
+// last-edited: 2026-11-05
 
 package middleware
 
 import (
 	"crypto/subtle"
 	"net/http"
+	"os"
 	"reflect"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/gin-gonic/gin"
 )
+
+// BasicGateNoPasswordToken is the /health degraded token raised while the
+// Basic gate is enabled with no effective password (05-health §5H.3.1).
+const BasicGateNoPasswordToken = "basic_gate_no_password"
+
+// BasicGateEnvPasswordWarning is the warn line logged while the gate takes its
+// password from BASIC_AUTH_PASSWORD because the saved one is empty. It names
+// the setting and the variable, never the value.
+const BasicGateEnvPasswordWarning = "Basic authentication: the saved password (basic_auth_password) is empty; using BASIC_AUTH_PASSWORD in memory. Save a password in Settings."
+
+// basicAuthPasswordEnv is the environment variable the gate falls back to when
+// the saved password is empty (05-authn §11.1 item 5, Recovery).
+const basicAuthPasswordEnv = "BASIC_AUTH_PASSWORD"
+
+// basicGateLog carries this file's diagnostics through the log-injection barrier.
+var basicGateLog = logger.New("http")
+
+// basicGateEnvWarnOnce makes the gate log BasicGateEnvPasswordWarning once per
+// process, on the first request that reaches the comparison.
+var basicGateEnvWarnOnce sync.Once
+
+// basicGatePassword returns the password the gate compares against: the stored
+// basic_auth_password, or, when that is empty, BASIC_AUTH_PASSWORD from the
+// environment, in memory only and never written (05-authn §11.1 item 5,
+// Recovery). fromEnv reports the fallback; "" means no password.
+//
+// An env value that is empty or only blanks counts as unset (09 §9.1
+// "Precedence"). The env value is never assigned into config.AppConfig or any
+// store: persisting it would turn a recovery into a saved credential.
+func basicGatePassword() (pass string, fromEnv bool) {
+	if stored := config.AppConfig.BasicAuthPassword; stored != "" {
+		return stored, false
+	}
+	if env := strings.TrimSpace(os.Getenv(basicAuthPasswordEnv)); env != "" {
+		return env, true
+	}
+	return "", false
+}
+
+// BasicGateNoPassword reports whether the gate is enabled with no effective
+// password: then every non-exempt route answers 401 and health shows
+// BasicGateNoPasswordToken.
+func BasicGateNoPassword() bool {
+	if !config.AppConfig.BasicAuthEnabled {
+		return false
+	}
+	pass, _ := basicGatePassword()
+	return pass == ""
+}
+
+// BasicGateUsesEnvPassword reports whether the gate is enabled and takes its
+// password from BASIC_AUTH_PASSWORD because the saved one is empty (the
+// in-memory recovery). The startup log uses it to choose the warn line over
+// the error line.
+func BasicGateUsesEnvPassword() bool {
+	if !config.AppConfig.BasicAuthEnabled {
+		return false
+	}
+	_, fromEnv := basicGatePassword()
+	return fromEnv
+}
 
 // BasicAuth returns a Gin middleware that enforces HTTP Basic Authentication
 // when config.AppConfig.BasicAuthEnabled is true. Health endpoints, static
