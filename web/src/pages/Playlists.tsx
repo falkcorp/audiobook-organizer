@@ -1,8 +1,10 @@
 // file: web/src/pages/Playlists.tsx
-// version: 1.0.3
+// version: 1.1.0
 // guid: 2b0c1d6e-3f4a-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-11-05
 
 import { useCallback, useEffect, useState } from 'react';
+import { useUrlEnumParam } from '../hooks/useUrlState';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -37,10 +39,14 @@ import {
   deletePlaylist,
 } from '../services/playlistApi';
 
+const PLAYLIST_TABS = ['all', 'static', 'smart'] as const;
+type PlaylistTab = (typeof PLAYLIST_TABS)[number];
+
 export default function Playlists() {
   const navigate = useNavigate();
   const [playlists, setPlaylists] = useState<UserPlaylist[]>([]);
-  const [tab, setTab] = useState<'all' | 'static' | 'smart'>('all');
+  // `?tab=static|smart`; All is the default and is left out of the URL.
+  const [tab, setTab] = useUrlEnumParam('tab', PLAYLIST_TABS, 'all');
   const [createOpen, setCreateOpen] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -80,7 +86,7 @@ export default function Playlists() {
 
       <Tabs
         value={tab}
-        onChange={(_, v) => setTab(v)}
+        onChange={(_, v: PlaylistTab) => setTab(v)}
         variant="scrollable"
         scrollButtons="auto"
         allowScrollButtonsMobile

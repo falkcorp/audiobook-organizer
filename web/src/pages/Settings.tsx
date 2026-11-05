@@ -1,10 +1,11 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.67.0
+// version: 1.68.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
+import { applyOwnedParams, parseEnum } from '../hooks/useUrlState';
 import { useUnsavedChangesBlocker } from '../hooks/useUnsavedChangesBlocker';
 import { useSettingsHandlers } from '../hooks/useSettingsHandlers';
 import { useAdvancedSettings } from '../hooks/useAdvancedSettings';
@@ -98,12 +99,16 @@ const TAB_KEYS = [
   'plugins',
   'tools',
   'system',
+  'temp-login',
 ] as const;
+type SettingsTab = (typeof TAB_KEYS)[number];
 
-function tabFromHash(hash: string): number {
-  const key = hash.replace('#', '');
-  const idx = TAB_KEYS.indexOf(key as (typeof TAB_KEYS)[number]);
-  return idx >= 0 ? idx : 0;
+// The tab is `?tab=<slug>`, Library (the default) left out of the URL. The older
+// `#<slug>` form is still READ when there is no `?tab=` (Audiobookshelf links and
+// old bookmarks use it) and is dropped by the first tab click, which rewrites the
+// location without a hash.
+function tabFromLocation(search: URLSearchParams, hash: string): SettingsTab {
+  return parseEnum(search.get('tab') ?? hash.replace('#', ''), TAB_KEYS, 'library');
 }
 
 interface UiMetadataSource {
@@ -159,7 +164,12 @@ export interface SettingsState {
 export function Settings() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [tabValue, setTabValue] = useState(() => tabFromHash(location.hash));
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabValue = TAB_KEYS.indexOf(tabFromLocation(searchParams, location.hash));
+  const setTabValue = (index: number) =>
+    setSearchParams((prev) => applyOwnedParams(prev, { tab: TAB_KEYS[index] }, { tab: 'library' }), {
+      replace: true,
+    });
   const { showAdvanced, setShowAdvanced } = useAdvancedSettings();
   const [browserOpen, setBrowserOpen] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -799,10 +809,7 @@ export function Settings() {
         <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
           <Tabs
             value={tabValue}
-            onChange={(_, newValue) => {
-              setTabValue(newValue);
-              window.history.replaceState(null, '', `#${TAB_KEYS[newValue]}`);
-            }}
+            onChange={(_, newValue: number) => setTabValue(newValue)}
             aria-label="settings tabs"
             variant="scrollable"
             scrollButtons="auto"

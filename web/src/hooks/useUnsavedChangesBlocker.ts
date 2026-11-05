@@ -1,9 +1,19 @@
 // file: web/src/hooks/useUnsavedChangesBlocker.ts
-// version: 1.1.1
+// version: 1.2.0
 // guid: e3f4a5b6-c7d8-9e0f-1a2b-3c4d5e6f7a8b
+// last-edited: 2026-11-05
 
 import { useEffect, useCallback, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+
+/** Whether `url` (as passed to history.pushState/replaceState) is on `pathname`. */
+function isSamePath(url: string, pathname: string): boolean {
+  try {
+    return new URL(url, window.location.href).pathname === pathname;
+  } catch {
+    return false;
+  }
+}
 
 interface Blocker {
   state: 'idle' | 'blocked';
@@ -51,7 +61,11 @@ export function useUnsavedChangesBlocker(shouldBlock: boolean): Blocker {
       unused: string,
       url?: string | URL | null
     ) => {
-      if (url && typeof url === 'string' && url !== location.pathname) {
+      // Leaving the PAGE is what the unsaved-changes warning is for. A write to
+      // the same path (a query string or hash change: the page's own tab or
+      // filter written to the address bar) is not leaving, and blocking it made
+      // every deep-link write on a dirty page raise the "leave this page?" dialog.
+      if (url && typeof url === 'string' && !isSamePath(url, location.pathname)) {
         setPendingPath(url);
         setBlocked(true);
         return; // Block the navigation

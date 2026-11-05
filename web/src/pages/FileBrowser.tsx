@@ -1,9 +1,11 @@
 // file: web/src/pages/FileBrowser.tsx
-// version: 1.0.2
+// version: 1.1.0
 // guid: 2c1d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
+// last-edited: 2026-11-05
 
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { applyOwnedParams } from '../hooks/useUrlState';
 import { Box, Button, Typography, Alert, Stack } from '@mui/material';
 import { Add as AddIcon } from '@mui/icons-material';
 import { ServerFileBrowser } from '../components/common/ServerFileBrowser';
@@ -11,7 +13,31 @@ import * as api from '../services/api';
 
 export function FileBrowser() {
   const navigate = useNavigate();
+  // The directory on screen is `?path=`: the browser opens there (read once; it
+  // keeps its own location afterwards) and every directory it lands on is written
+  // back, so the address bar can be copied. The root is the default and is omitted.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [startPath] = useState(() => searchParams.get('path') || '/');
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  // onSelect must keep ONE identity: ServerFileBrowser's directory fetch depends
+  // on it, so a new function per render (or per URL change) refetches the folder
+  // it just listed. The setter and the last path written live in refs for that.
+  const setParamsRef = useRef(setSearchParams);
+  useEffect(() => {
+    setParamsRef.current = setSearchParams;
+  });
+  const writtenPath = useRef(startPath);
+  const handleSelect = useCallback((path: string, isDir: boolean) => {
+    if (!isDir) return;
+    setSelectedPath(path);
+    // Write only a CHANGE: a write of the same address still re-renders this page,
+    // which would hand the browser a new onSelect and loop.
+    if (path === writtenPath.current) return;
+    writtenPath.current = path;
+    setParamsRef.current((prev) => applyOwnedParams(prev, { path }, { path: '/' }), {
+      replace: true,
+    });
+  }, []);
   const [notice, setNotice] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
 
@@ -58,12 +84,8 @@ export function FileBrowser() {
         </Alert>
       )}
       <ServerFileBrowser
-        initialPath="/"
-        onSelect={(path, isDir) => {
-          if (isDir) {
-            setSelectedPath(path);
-          }
-        }}
+        initialPath={startPath}
+        onSelect={handleSelect}
         showFiles
         allowDirSelect
         allowFileSelect

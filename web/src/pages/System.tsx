@@ -1,9 +1,8 @@
 // file: web/src/pages/System.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7c8d9e0f-1a2b-3c4d-5e6f-7a8b9c0d1e2f
-// last-edited: 2026-04-30
+// last-edited: 2026-11-05
 
-import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Box, Typography, Paper, Tabs, Tab, Button } from '@mui/material';
 import { OpenInNew as OpenInNewIcon } from '@mui/icons-material';
@@ -11,11 +10,16 @@ import { StorageTab } from '../components/system/StorageTab';
 import { SystemInfoTab } from '../components/system/SystemInfoTab';
 import { QuotaTab } from '../components/system/QuotaTab';
 import { MaintenanceTab } from '../components/system/MaintenanceTab';
+import { useUrlEnumParam } from '../hooks/useUrlState';
+
+// The tab is `?tab=<slug>`; System Info is the default and is left out of the URL.
+const SYSTEM_TABS = ['info', 'storage', 'quota', 'maintenance'] as const;
+type SystemTab = (typeof SYSTEM_TABS)[number];
 
 interface TabPanelProps {
   children?: React.ReactNode;
-  index: number;
-  value: number;
+  index: SystemTab;
+  value: SystemTab;
 }
 
 function TabPanel(props: TabPanelProps) {
@@ -35,7 +39,7 @@ function TabPanel(props: TabPanelProps) {
 }
 
 export function System() {
-  const [tabValue, setTabValue] = useState(0);
+  const [tabValue, setTabValue] = useUrlEnumParam('tab', SYSTEM_TABS, 'info');
   const navigate = useNavigate();
 
   return (
@@ -53,13 +57,13 @@ export function System() {
           scrollButtons="auto"
           allowScrollButtonsMobile
         >
-          <Tab label="System Info" />
-          <Tab label="Storage" />
-          <Tab label="Quota" />
-          <Tab label="Maintenance" />
+          <Tab label="System Info" value="info" />
+          <Tab label="Storage" value="storage" />
+          <Tab label="Quota" value="quota" />
+          <Tab label="Maintenance" value="maintenance" />
         </Tabs>
 
-        <TabPanel value={tabValue} index={0}>
+        <TabPanel value={tabValue} index="info">
           <SystemInfoTab />
           <Box sx={{ mt: 2, px: 3, pb: 2 }}>
             <Button
@@ -72,15 +76,15 @@ export function System() {
           </Box>
         </TabPanel>
 
-        <TabPanel value={tabValue} index={1}>
+        <TabPanel value={tabValue} index="storage">
           <StorageTab />
         </TabPanel>
 
-        <TabPanel value={tabValue} index={2}>
+        <TabPanel value={tabValue} index="quota">
           <QuotaTab />
         </TabPanel>
 
-        <TabPanel value={tabValue} index={3}>
+        <TabPanel value={tabValue} index="maintenance">
           <MaintenanceTab />
         </TabPanel>
       </Paper>

@@ -1,9 +1,11 @@
 // file: web/src/pages/Diagnostics.tsx
-// version: 1.11.0
-// last-edited: 2026-10-04
+// version: 1.12.0
+// last-edited: 2026-11-05
 // guid: f2323fc4-b3e7-4298-9ec5-759447cbd643
 
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { applyOwnedParams } from '../hooks/useUrlState';
 import { AIJobsPanel } from '../components/AIJobsPanel';
 import { CacheStatsPanel } from '../components/CacheStatsPanel';
 import {
@@ -91,7 +93,13 @@ const actionLabels: Record<string, string> = {
 };
 
 export function Diagnostics() {
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  // The chosen category is `?category=<id>`, so a link can open the page with it
+  // already picked. An id the page does not list reads as no choice.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const categoryParam = searchParams.get('category');
+  const selectedCategory = categories.some((c) => c.id === categoryParam) ? categoryParam : null;
+  const setSelectedCategory = (id: string) =>
+    setSearchParams((prev) => applyOwnedParams(prev, { category: id }), { replace: true });
   const [description, setDescription] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);

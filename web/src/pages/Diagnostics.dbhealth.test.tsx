@@ -1,10 +1,11 @@
 // file: web/src/pages/Diagnostics.dbhealth.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: f8487a85-3b15-4508-bef2-89cc3d3e84c9
-// last-edited: 2026-10-04
+// last-edited: 2026-11-05
 
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Diagnostics } from './Diagnostics';
 import * as api from '../services/api';
@@ -39,7 +40,11 @@ function health(
 }
 
 async function openCard(user: ReturnType<typeof userEvent.setup>) {
-  render(<Diagnostics />);
+  render(
+    <MemoryRouter>
+      <Diagnostics />
+    </MemoryRouter>
+  );
   await user.click(screen.getByText('Database Health'));
   await screen.findByText('Metadata Cache');
 }
