@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-backup.md -->
-<!-- version: 1.12.5 -->
+<!-- version: 1.12.6 -->
 <!-- guid: 604febb0-a09e-4cf9-99ee-5f3722534da6 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -573,8 +573,8 @@ or a key retired before this rule) verifies as foreign and is restorable only as
 
 **Offline restore — the rollback path (D11).** 05-storage's `<app> storage restore-offline` (§5S.3.12, core
 code from R1) is the one restore that runs with the service **stopped**, and the one `make rollback-restore` uses:
-stop the unit, restore the latest pre-migration checkpoint (`--checkpoint`) or an archive (`--archive <file>
-[--keyring <file>]`) offline with the current binary, reinstall `.prev`, start (09). Before it touches anything,
+stop the unit, restore the latest pre-migration checkpoint (`--checkpoint <name> --accept-loss`) or an archive
+(`--archive <file> [--keyring <file>] --accept-loss`) offline with the current binary, reinstall `.prev`, start (09). Before it touches anything,
 `make rollback-restore` runs `.prev --print-storage-levels` and compares the result with the source's levels.
 The source's levels are the checkpoint record's `from_vector`; for an archive (`ROLLBACK_ARCHIVE`) they are the
 manifest's `Levels` when the archive is `mediacore-backup/1`, and for a `legacy-abo/0` archive (B7: every archive
@@ -582,11 +582,17 @@ made before R2's backup flip, which is the archive this path serves once the che
 which carries no level stamps) the levels read from the extracted store itself, HEAD's legacy level key and its
 `LegacyCap` stamp, as `VerifyOpen` reads them (§5B.3.4 step 4), never manifest stamps (05-storage §5S.3.12, row
 `make rollback-restore`). When the levels differ (after an R2 hotfix `.prev` is an R2 build, not the pre-R2 binary)
-the recipe refuses, printing the source's vector and naming the pre-freeze release (the last production release
-before F3 merged) and its tag, so it never restores a store that `.prev` would migrate again (DATA-9).
+the recipe refuses, printing the source's vector and naming the release to install by its tag, so it never restores
+a store that `.prev` would migrate again (DATA-9): for a checkpoint, the pre-freeze release (the last production
+release before F3 merged) by the record's `from_release`, which is the app version the store recorded for its last
+boot before the cutover, or the pre-freeze tag the cutover build embeds when it recorded none (05-storage
+§5S.3.12 "How"); for an archive, whose checkpoint record may already be deleted, the release that produced it, the
+manifest's `AppVersion` for `mediacore-backup/1` and, for `legacy-abo/0`, the version string the archive carries.
 `make rollback-restore RELEASE=<that tag>` is the way past the refusal and is not an override of the check: it
 first fetches that exact published release beside `.prev` (05-updater §5U.4, "Fetching a named release": the
-release's raw asset, size-capped and self-tested as an apply does), runs the same comparison on the fetched binary,
+release's raw asset, size-capped and self-tested as an apply does; the fetch has apply's trust level, HTTPS from the
+configured release source plus the checksum check apply performs when the source publishes one, and is not a signed
+release), runs the same comparison on the fetched binary,
 and only when its levels equal the source's installs it as `.prev` and goes on; a release whose levels differ is
 refused, the fetched file is deleted and the existing `.prev` is kept. Without `RELEASE` it refuses and names the
 tag; no other binary or path is accepted. It never writes into an open
@@ -766,9 +772,12 @@ moved to `restore/<id>/failed/` and never marked `restore_left`, because the sto
 cutover's open checkpoint is the rollback once M7 has made the store unopenable by older builds (05-storage
 §5S.3.12, "Retention"); and a kill is resumed forward or swapped back by P0a, after which M8 **derives its phase
 from this journal, not from the copy it now runs on**, whose state still reads `copied` (05-storage §5S.3.13, M8):
-when P0a resumed the swap forward (journal `swapped` or `opened`), M8 stages no second swap, deletes the set-aside
-old directory the journal names, records itself `done` and the journal `applied`; when P0a swapped back, M8 starts
-again from its first phase.
+M8 considers only the `KindRewrite` journals whose step ID (`StepID`, written by M8 at staging) is its own, so an
+`applied` journal of an earlier M8 is ignored; when P0a resumed its swap forward (journal `swapped` or `opened`), M8
+stages no second swap, deletes the set-aside old directory the journal names, records itself `done` and the journal
+`applied`; when P0a swapped back, M8 starts again from its first phase **once**, and a second consecutive swap-back
+of the same M8 fails the boot with `storage.ErrRewriteSwappedBack` (exit 78), naming `storage restore-offline` and
+`make rollback-restore`, instead of looping (05-storage §5S.3.13, M8).
 
 Undo: `previous/` is kept for `core.storage.swap.keep_previous` (05-storage §5S.7, a key of the swap that lands in R1; SIMP8-1) and then swept by the kernel after a boot reaches readiness. `RevertLastRestore` (API) and
 `<app> restore --revert` (offline, for an app that no longer boots) stage it through the same mechanism
@@ -1017,7 +1026,7 @@ Phases are 06 §6.5.1's (R2-8).
 | Crash between the swap and the hooks | resumed: `inflight.json` keeps it a restore boot, hooks re-run (idempotent); rollback tooling keeps refusing | Dropping the hooks would serve revoked credentials (DATA3-6). |
 | Swap-back fails | closed (boot halts; journal names every path; offline `restore --revert`) | Manual recovery with exact instructions beats guessing. |
 | Crash during the swap | resume from journal | Each step idempotent. |
-| M8's `KindRewrite` swap fails or is killed between step c and `applied` | closed for the rewrite: swapped back as step x does, with no checkpoint moved, the old directory back in place and the store generation unchanged, and M8 runs again at the next boot; or, after a kill past `swapped`, resumed forward by P0a, and M8 then deletes the old directory and finishes without staging a second swap | The live store is never left half-swapped, no restorable checkpoint is orphaned, and M8 never re-stages a swap into its own occupied slot (05-storage §5S.3.13). |
+| M8's `KindRewrite` swap fails or is killed between step c and `applied` | closed for the rewrite: swapped back as step x does, with no checkpoint moved, the old directory back in place and the store generation unchanged, and M8 runs again once at the next boot (a second consecutive swap-back of the same M8 fails the boot with `ErrRewriteSwappedBack`, exit 78, naming `storage restore-offline` and `make rollback-restore`); or, after a kill past `swapped`, resumed forward by P0a, and M8 then deletes the old directory and finishes without staging a second swap | The live store is never left half-swapped, no restorable checkpoint is orphaned, and M8 never re-stages a swap into its own occupied slot (05-storage §5S.3.13). |
 | Post-restore hook fails | handled by the swap-back row | Resurrecting revoked credentials is a security failure (05-authn §4.14). |
 | A `KindCheckpoint` restore boot's migration DAG fails | closed: no swap-back; the restored checkpoint is kept, the journal reads `failed` with the failing binary's ID, exit non-zero; the recipes keep refusing while `inflight.json` exists, the operator puts the previous binary or a fixed build in place by hand (runbook), and its P0a resumes the journal; the failing binary refuses while the journal is in flight | Swapping back would only bring back the store whose migration failed (DATA7-12); the failing binary resuming its own journal would loop (DATA8-6). |
 | Revocation journal append fails | open (revocation commits; gap recorded; health `degraded`) | Never block a revocation; the gap makes a later restore fail safe (keys need confirmation). |
@@ -1128,9 +1137,9 @@ Health ([05-health](05-health.md)) turns `last_verified` older than 2 × the ver
 | `TestRollbackRestoreThenReupgradeKeepsCoverage` | R2 revokes a key, `make rollback-restore` brings back the pre-migration checkpoint and R1 serves it, then R2 is deployed again: the migration runs, the owed hooks run with boundary 0, the key stays revoked, no other key needs confirmation |
 | `TestLegacyArchiveRestoreThenMigrate` | a `legacy-abo/0` archive restored on R2 (staged and offline) is migrated by the next boot behind its own pre-migration checkpoint, with the same per-family counts as a live migration of the same store (14 E1); a gap-filled field migrates with the file's value when `--gap-fill` is given, and the restore warns without it (DATA-15) |
 | `TestCheckpointEscapeKeepsOwedHooks` | a `KindCheckpoint` restore boot of a served attempt fails its DAG and journals `failed`; the previous binary's `storage restore-offline --checkpoint` finishes it to `applied_offline` with `HooksOwed` and the record's boundary; the next R2 boot reads the store as restored, not replaced, runs the owed hooks and asks no key confirmation (DATA-7) |
-| `TestRollbackRestoreRefusesHotfixPrev` | after an R2 hotfix, `.prev` is the earlier R2 build: `make rollback-restore` refuses before touching anything, naming the checkpoint's `from_vector` and the pre-freeze release's tag, and nothing is restored or re-migrated (DATA-9); re-run with `RELEASE=<that tag>` (a fake source serving the pre-freeze binary) it fetches beside `.prev`, finds the levels equal to `from_vector`, installs it as `.prev` and restores; with `RELEASE` naming a release whose levels differ it refuses and keeps `.prev`; an archive cell checks a `mediacore-backup/1` archive against its manifest `Levels` and a `legacy-abo/0` archive against the levels read from its extracted store, with no manifest stamps involved |
+| `TestRollbackRestoreRefusesHotfixPrev` | after an R2 hotfix, `.prev` is the earlier R2 build: `make rollback-restore` refuses before touching anything, naming the checkpoint's `from_vector` and the pre-freeze release's tag, and nothing is restored or re-migrated (DATA-9); re-run with `RELEASE=<that tag>` (a fake source serving the pre-freeze binary) it fetches beside `.prev`, finds the levels equal to `from_vector`, installs it as `.prev` and restores; with `RELEASE` naming a release whose levels differ it refuses and keeps `.prev`; an archive cell checks a `mediacore-backup/1` archive against its manifest `Levels` and a `legacy-abo/0` archive against the levels read from its extracted store, with no manifest stamps involved, and its refusal names the archive's producing release (manifest `AppVersion`, or the `legacy-abo/0` archive's version string) |
 | `TestStagedLegacyRestoreWithBlockerSwapsBack` | a staged `legacy-abo/0` restore whose archive holds an unconvertible user row (and one with an account merge `applying`) is refused by the preflight on the restore boot: step x swaps back, the report is logged, the journal reads `swapped_back`, no checkpoint, `restore` line or `restore_aborted` is written, `inflight.json` is gone, and the original store boots `degraded` (`restore_failed`, reason `cutover_blocked`) |
-| `TestRewriteSwapBackMovesNoCheckpoint` | a `KindRewrite` swap that fails between step c and `applied` leaves every checkpoint directory under `.mediacore-checkpoints/` (none in `failed/`, none `restore_left`, no `delete_after` written), the open cutover checkpoint stays restorable, and a kill after `swapped` resumes forward with M8 deleting the old directory and no second `ErrSwapPending` |
+| `TestRewriteSwapBackMovesNoCheckpoint` | a `KindRewrite` swap that fails between step c and `applied` leaves every checkpoint directory under `.mediacore-checkpoints/` (none in `failed/`, none `restore_left`, no `delete_after` written), the open cutover checkpoint stays restorable, and a kill after `swapped` resumes forward with M8 deleting the old directory and no second `ErrSwapPending`; a second M8 ignores the first one's `applied` journal; a second consecutive swap-back of the same M8 fails the boot with `ErrRewriteSwappedBack` and stages nothing |
 | `TestOrphanedOpenCheckpointDeletedAfterSevenDays` (`synctest`, with 05-storage) | checkpoints moved to `restore/<id>/failed/` or marked `restore_left` by a swap-back, and an open checkpoint whose store was then restored from an archive, are deleted 7 days later, with `storage_checkpoint_open` raised until then (CONFORM-2, DATA-8) |
 | `TestSwapSlotExclusive` | two concurrent stagers of any kinds (archive, revert, reset), in one process and in two: exactly one creates `restore/pending.json`, the other gets `storage.ErrSwapPending`; staging while a swap is in flight gets it too (R8-1, COR8-6) |
 | `TestStagedRestoreKeepsCoverage` / `TestCheckpointRestoreAppendsNoGap` | an archive restore over an intact journal: no `gap` line for the swap, `Revocations` non-nil, only keys revoked after the archive are revoked, no key needs confirmation; the same for a revert and a `storage restore-offline --checkpoint` (R6-4, DATA6-2) |
@@ -1429,3 +1438,5 @@ Round 10 (`docs/plans/platform-core/reviews/spec-round-10-*.md`, dispositions bi
 Round 13 (2026-11-04): CONFORM-2, CONFORM-6, DATA-6, DATA-7, DATA-8, DATA-9, DATA-11, DATA-12, DATA-15, SEC-10, IMPL-1, SEC-5 (M8's `KindRewrite` accepted as a swap kind: its rules and failure row), SEC-9 (the sweeper's `core.storage.checkpoint_deleted` audit and `storage_checkpoint_mode`) (lead rulings on checkpoint retention, the `make rollback-restore` level check and F2's core sections).
 
 Round 14 (2026-11-05): V2 (a cutover preflight refusal on a restore boot is a step-x failure: swap-back, journal `swapped_back`, health `restore_failed` reason `cutover_blocked`; `TestStagedLegacyRestoreWithBlockerSwapsBack`), V3 (`KindRewrite` rule 5: M8 reads its phase from the journal), V4 (an archive's levels come from the manifest `Levels` or, for `legacy-abo/0`, from the extracted store), V8 (a `KindRewrite` swap-back moves no checkpoint), V9 (a factory reset sets aside no checkpoint), V10 (`make rollback-restore RELEASE=<tag>` and the fetch it cites in 05-updater), V23 (no bare round-13 ruling citation was present; the `(R4)` in the header is 03's layer rule).
+
+Round 15 (2026-11-05): W1 (`KindRewrite` rule (5) and the failure and test rows: M8 reads only journals with its own `StepID`; one swap-back restarts it once, a second consecutive one fails the boot with `storage.ErrRewriteSwappedBack`), W8 (the refusal names the checkpoint record's `from_release`, or on the archive branch the archive's producing release), W10 (the fetch has apply's trust level, not a signed release), W11 (`--accept-loss` on both forms of the rollback path's summary).
