@@ -1,13 +1,13 @@
 <!-- file: docs/plans/platform-core/task-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 98285867-08c9-4873-8207-d381e15999fc -->
 <!-- last-edited: 2026-11-05 -->
 
 # Platform-core: every task in plain language
 
-All 134 tasks of the [implementation plan](implementation-plan.md) (128 for agents, 6 for the owner) in 47 waves, grouped by stage in the order they run. Each has what it builds and why it is needed. The full brief for each task is in [`docs/agent-tasks/platform-core/`](../../agent-tasks/platform-core/README.md).
+All 134 tasks of the [implementation plan](implementation-plan.md) (128 for agents, 6 for the owner) in 46 waves, grouped by stage in the order they run. Each has what it builds and why it is needed. The full brief for each task is in [`docs/agent-tasks/platform-core/`](../../agent-tasks/platform-core/README.md).
 
-Critical path (68.5 working days; 87 if every wave waits for the one before): R0-02 → R0-03 → OWNER-02 → R1-35 → R1-01 → R1-02 → R1-10 → R1-32 → R1-36 → R1-13 → R1-20 → R1-21 → R1-23 → R1-25 → R1-27 → R1-28 → OWNER-03 → F2-09 → F2-01 → F2-06 → F3-04 → F3-06 → F4-06 → F4-07 → F4-08 → F5-18 → F6-03 → F7-09 → F8-04 → F9-05 → F9-02 → F9-03 → R2-01 → OWNER-05 → R3-02 → R3-03 → OWNER-06.
+Critical path (82 working days; 106.5 if every wave waits for the one before): OWNER-01 → R0-05 → OWNER-02 → R1-35 → R1-01 → R1-02 → R1-10 → R1-32 → R1-36 → R1-13 → R1-20 → R1-21 → R1-23 → R1-25 → R1-27 → R1-28 → OWNER-03 → F2-09 → F2-01 → F2-06 → F3-04 → F3-06 → F3-07 → F4-08 → F5-18 → F6-03 → F7-09 → F8-04 → R2-01 → OWNER-05 → F9-05 → F9-02 → F9-03 → R3-04 → OWNER-06.
 
 ## Your decisions and release cuts (6)
 
@@ -15,12 +15,12 @@ Six steps only you can do: decisions before work starts, and cutting, deploying 
 
 | Task | Kind | What | Why | Wave · needs |
 |---|---|---|---|---|
-| **OWNER-01** Owner decisions before first releases | You | You decide how required checks are enforced, whether to keep the freeze on production releases, what split-readiness thresholds to use, and you read production state for one open question. | Merging without these answers risks a bad change auto-promoting to production, or checks that can be bypassed. | W01 · none |
+| **OWNER-01** Owner decisions before first releases **(critical path)** | You | You decide how required checks are enforced, whether to keep the freeze on production releases, what split-readiness thresholds to use, and you read production state for one open question. | Merging without these answers risks a bad change auto-promoting to production, or checks that can be bypassed. | W01 · none |
 | **OWNER-02** Cut and deploy the R0 release **(critical path)** | You | You cut the first production release, keep its tag, deploy it, and optionally watch it for a day. | Later work needs that release binary to build test data, and the next stage must not start before it exists. | W03 · R0-01, R0-02, R0-03, R0-04, R0-05, R0-06 |
 | **OWNER-03** Cut and deploy the R1 release **(critical path)** | You | You check disk headroom, cut the R1 release, deploy, and optionally watch it a day. | The first R1 boot takes a store checkpoint, and the next stage cannot merge before this release. | W23 · R1-01, R1-02, R1-03, R1-04, R1-05, R1-06, R1-07, R1-08, R1-09, R1-10, R1-11, R1-12, R1-13, R1-14, R1-15, R1-16, R1-17, R1-18, R1-19, R1-20, R1-21, R1-22, R1-23, R1-24, R1-25, R1-26, R1-27, R1-28, R1-29, R1-30, R1-32, R1-33, R1-34, R1-35, R1-36, R1-37 |
 | **OWNER-04** Pre-R2 production reads and cron decision | You | You run read-only count checks on the production host and decide what to do about crons that never ran. | The numbers size later migration work and decide scope. | W24 · OWNER-03 |
-| **OWNER-05** Run the R2 release procedure **(critical path)** | You | You follow the deploy runbook (backup, env renames, deploy, webhooks, dashboards), decide keep or roll back, then cut R2. | R2 changes production data layout, so each step needs a careful human check. | W43 · R2-01 |
-| **OWNER-06** Cut and deploy the R3 release **(critical path)** | You | You confirm the keyring export and off-host key copies, cut R3, deploy, and optionally smoke test. | R3's first start deletes the old encryption key and search index, so backups must exist first. | W47 · R3-01, R3-02, R3-03, R3-04, R3-05 |
+| **OWNER-05** Run the R2 release procedure **(critical path)** | You | You follow the deploy runbook (backup, env renames, deploy, webhooks, dashboards), decide keep or roll back, then cut R2. | R2 changes production data layout, so each step needs a careful human check. | W40 · R2-01 |
+| **OWNER-06** Cut and deploy the R3 release **(critical path)** | You | You confirm the keyring export and off-host key copies, cut R3, deploy, and optionally smoke test. | R3's first start deletes the old encryption key and search index, so backups must exist first. | W46 · R3-01, R3-02, R3-03, R3-04, R3-05, F9-03 |
 
 ## R0 · Hotfixes (6)
 
@@ -29,11 +29,11 @@ Fixes for six security bugs live in the app today, a Go toolchain bump and an up
 | Task | Kind | What | Why | Wave · needs |
 |---|---|---|---|---|
 | **R0-01** Bump Go toolchain to 1.27.3 everywhere | Plumbing | Updates every place the Go version is pinned (build files, CI, images, docs, Dependabot rules) in one PR, verified by a guard script. | Mismatched pins mean different builds use different compilers, and stale rules keep proposing wrong upgrades. | W01 · none |
-| **R0-02** Fix API key locking and revocation bugs **(critical path)** | Fix | Makes all API-key writes take the proper lock, keeps revoked keys revoked everywhere, and stops a key with no permissions from creating new keys. | Without it there is a race on every key-authenticated request, revoked keys can come back, and an empty-permission key can escalate. | W01 · none |
+| **R0-02** Fix API key locking and revocation bugs | Fix | Makes all API-key writes take the proper lock, keeps revoked keys revoked everywhere, and stops a key with no permissions from creating new keys. | Without it there is a race on every key-authenticated request, revoked keys can come back, and an empty-permission key can escalate. | W01 · none |
 | **R0-04** Hide session tokens in sessions list | Fix | The sessions list stops returning the real login token and instead shows a derived handle, which is also used to revoke a session. | Anyone who can view the list could steal other sessions' tokens. | W01 · none |
 | **R0-06** Make self-updater safe against bad swaps | Fix | Hardens the updater: proper version comparison, refuses releases that are not newer, keeps the previous binary for rollback, and unattended updates only check and report, with a banner in Settings. | A faulty swap can strand self-updating installs, and unattended updates could downgrade or break a running system. | W01 · none |
-| **R0-03** Honor API-key scopes in admin checks **(critical path)** | Fix | Admin-only checks and user-merge actions now respect the scopes on an API key at four places. | A limited-scope key could currently act as an admin. | W02 · R0-02 |
-| **R0-05** Refuse login when stored password is empty | Fix | The basic-auth gate rejects an empty stored password, with an in-memory password recovery option, a health flag and a startup log line. | An empty password would otherwise let anyone in; the recovery path avoids locking owners out. | W02 · OWNER-01 |
+| **R0-03** Honor API-key scopes in admin checks | Fix | Admin-only checks and user-merge actions now respect the scopes on an API key at four places. | A limited-scope key could currently act as an admin. | W02 · R0-02 |
+| **R0-05** Refuse login when stored password is empty **(critical path)** | Fix | The basic-auth gate rejects an empty stored password, with an in-memory password recovery option, a health flag and a startup log line. | An empty password would otherwise let anyone in; the recovery path avoids locking owners out. | W02 · OWNER-01 |
 
 ## R1 · Core runtime (37)
 
@@ -116,7 +116,7 @@ Settings move to the engine with new names; secrets move into an encrypted keyri
 | **F3-04** Storage cutover safety machinery **(critical path)** | Migration | Adds the level step, the quarantine record (sealed for secret-bearing data), a read-only preflight, a dry-run mode with scratch area, and quarantine list, export and purge commands. | One-way steps need guardrails. Without quarantine and dry run, bad rows could abort the upgrade or be lost. | W27 · F2-06 |
 | **F3-06** Books config and secrets migration, dark **(critical path)** | Migration | Builds the step that migrates every setting and secret to new names, with a generated rename table, frozen old formats and key guard, plus the later books steps. Not registered yet. | Existing installs must keep their settings and secrets through the rename. Without it, upgrading would lose or garble configuration. | W28 · F3-01, F3-02, F3-03, F3-04, F2-13, F2-15 |
 | **F3-08** Start the R2 release freeze | Plumbing | Turns the freeze on for R2 and records the last production release before it, once no release run is in flight. | R2's switch-overs land on main one by one. Production must never get a half-converted build, and the cutover needs to know which release to roll back to. | W31 · R1-31, F2-17, F2-01, F2-02, F2-03, F2-04, F2-05, F2-06, F2-07, F2-08, F2-09, F2-10, F2-11, F2-12, F2-13, F2-14, F2-15, F2-16 |
-| **F3-07** F3 flip: config and secrets go live | Migration | One PR that wires core config and secrets in, registers the migrations, rewrites the config API onto core, moves the Basic gate into core, switches deploy files to the new names and starts the freeze. | This is the moment the new config system takes over. Without it, all the dark work stays unused. | W32 · F3-05, F3-06, F2-05, F2-08, F2-10, F2-11, F2-14, F2-15, OWNER-04, F2-16, F3-08, F2-17, R1-31 |
+| **F3-07** F3 flip: config and secrets go live **(critical path)** | Migration | One PR that wires core config and secrets in, registers the migrations, rewrites the config API onto core, moves the Basic gate into core, switches deploy files to the new names and starts the freeze. | This is the moment the new config system takes over. Without it, all the dark work stays unused. | W32 · F3-05, F3-06, F2-05, F2-08, F2-10, F2-11, F2-14, F2-15, OWNER-04, F2-16, F3-08, F2-17, R1-31 |
 
 ## R2 part 3 · Logins and API keys (11)
 
@@ -131,9 +131,9 @@ Users, sessions, API keys and OAuth move to the engine's auth layer. API keys an
 | **F4-02** Core authentication, dark | Feature | Builds the auth store, sessions and one-time tokens (hashed), new API keys that still accept old ones, throttling, bootstrap and password handling, plus five ported early-fix property tests. | Moves login security into core with stronger storage. Without it, sessions and keys stay in the old, weaker code. | W27 · F4-01, F4-04, F3-01, F4-09 |
 | **F4-11** Keep revocations revoked after a restore | Fix | Makes the revocation log tamper-evident (signed, chained lines tied to this install). At boot after a restore, it replays the log and runs the restore hooks. | Without it, restoring a backup would bring back every key, user and role revoked since the backup was taken, and anyone could edit the log unnoticed. | W28 · F4-04, F3-03, F4-02, F2-07 |
 | **F4-03** Split OAuth and Cloudflare Access | Cleanup | Moves OIDC and OAuth into core and puts Cloudflare Access into its own app package as an auth extension. | Generic login belongs in core while Cloudflare specifics are app-only. Without the split, core would depend on app code. | W29 · F4-02 |
-| **F4-06** Books identity migration, dark **(critical path)** | Migration | Builds the step that moves users, OAuth identities, invites, keys and roles into core with all IDs kept, plus a read-only preflight, a blockers list/fix/delete command and rewritten merge journals. | Identity is the riskiest data to migrate. Without it, users and keys would be lost or bad rows would break the upgrade. | W29 · F4-02, F4-01, F3-04, F3-06, F2-13, F2-15 |
+| **F4-06** Books identity migration, dark | Migration | Builds the step that moves users, OAuth identities, invites, keys and roles into core with all IDs kept, plus a read-only preflight, a blockers list/fix/delete command and rewritten merge journals. | Identity is the riskiest data to migrate. Without it, users and keys would be lost or bad rows would break the upgrade. | W29 · F4-02, F4-01, F3-04, F3-06, F2-13, F2-15 |
 | **F4-05** Identity and settings routes, dark | Feature | Adds native routes for auth, users, keys, roles, sessions, audit, OIDC login, UI, modules, factory reset and settings. | The UI and clients need these endpoints in core. Without them, the old routes cannot be retired. | W30 · F4-02, F4-01, F4-03, F3-01, F4-10 |
-| **F4-07** Access reach comparison test **(critical path)** | Test | Computes allow and deny for every route, role, scoped key and auth-off case on the old binary and on the migrated corpus, and compares them. | Proves nobody gains or loses access in the migration. Without it, a silent permission change could slip through. | W31 · F4-06, F4-05, F2-12, F2-15 |
+| **F4-07** Access reach comparison test | Test | Computes allow and deny for every route, role, scoped key and auth-off case on the old binary and on the migrated corpus, and compares them. | Proves nobody gains or loses access in the migration. Without it, a silent permission change could slip through. | W31 · F4-06, F4-05, F2-12, F2-15 |
 | **F4-08** F4 flip: identity goes live **(critical path)** | Migration | One PR that removes the legacy auth path, swaps in core authentication and routes, serves OAuth from core, registers the identity migration, turns on the events bus and adds the identity UI and reset control. | This is the moment core takes over identity. Without it, the dark identity work stays unused. | W34 · F3-07, F4-03, F4-04, F4-05, F4-06, F4-07, F4-09, F4-10, F4-11 |
 
 ## R2 part 4 · Background jobs (18)
@@ -201,17 +201,17 @@ Backup, the updater and the one-command rollback move onto the engine.
 | **F8-02** Move the updater into core | Plumbing | Moves the updater into core, parameterised by release source, with an offline fetch and a rollback target in the Makefile. | Core needs a reusable updater. A rollback path to the pre-freeze release is the safety net if the upgrade goes wrong. | W33 · F2-05, F7-05, F7-02, F4-04, F2-10 |
 | **F8-04** Switch to core backup, health and metrics **(critical path)** | Migration | In one PR, wires core backup and the updater, replaces the old health paths with /health everywhere, mounts /metrics from the kernel and removes the interim export. | This is the cutover. Old health URLs are deleted, so any caller left on them would break. First backups written in the new format. | W38 · F7-09, F8-01, F8-02, F8-03 |
 
-## R2 part 8 · Metrics and dashboards (5)
+## The new UI shell (ships in R3) (5)
 
-Metrics get their new names; dashboards and alert rules change in the same PR.
+The web app moves onto the engine's shared UI frame. Its first part lands during R2; the switch-over and the rest merge after R2 is released, so R3 carries it.
 
 | Task | Kind | What | Why | Wave · needs |
 |---|---|---|---|---|
 | **F9-01** Build the shared UI shell packages | Feature | Creates the shared UI kit and shell packages, a sample app package, and core's UI serving code. Dark. | The audiobook UI needs to run inside a reusable shell. Without these packages, there is nothing to move the UI onto. | W31 · R1-30, F6-02 |
-| **F9-05** Move providers, stores and shared components **(critical path)** | Cleanup | Moves auth, toasts, app state, common components and the Activity page into the shell, with books supplying task labels. Dark. | Shell pieces still live in the app. Until moved, the shell cannot run on its own. | W39 · F9-01, F8-04 |
-| **F9-02** Move layout code into the shell **(critical path)** | Cleanup | Cuts the audiobook-specific imports out of the layout files into books slots and moves the layout into core's web code. Dark. | The layout mixes shell and audiobook code. It has to be separated before the shell can own it. | W40 · F9-01, F8-04, F9-05 |
-| **F9-04** Move shell pages out of the app | Cleanup | Moves shared pages (login, setup, users, system, settings, dashboard and more) into the shell, with their audiobook parts becoming books widgets. Dark. | These pages belong to the platform, not the audiobook app. They must all move before the entry point can switch to the shell. | W40 · F9-01, F8-04, F9-05 |
-| **F9-03** Switch the UI to the shell **(critical path)** | Migration | In one PR, boots the app through the shell, uses the shell's realtime client, drops the old SPA serving, and moves all audiobook URLs under /books/. | This is the UI cutover. Every page path changes, with no redirects from old URLs, so bookmarks break and the release note lists the new paths. | W41 · F8-04, F9-02, F9-04, F9-05 |
+| **F9-05** Move providers, stores and shared components **(critical path)** | Cleanup | Moves auth, toasts, app state, common components and the Activity page into the shell, with books supplying task labels. Dark. | Shell pieces still live in the app. Until moved, the shell cannot run on its own. | W41 · F9-01, F8-04, OWNER-05 |
+| **F9-02** Move layout code into the shell **(critical path)** | Cleanup | Cuts the audiobook-specific imports out of the layout files into books slots and moves the layout into core's web code. Dark. | The layout mixes shell and audiobook code. It has to be separated before the shell can own it. | W42 · F9-01, F8-04, F9-05 |
+| **F9-04** Move shell pages out of the app | Cleanup | Moves shared pages (login, setup, users, system, settings, dashboard and more) into the shell, with their audiobook parts becoming books widgets. Dark. | These pages belong to the platform, not the audiobook app. They must all move before the entry point can switch to the shell. | W42 · F9-01, F8-04, F9-05 |
+| **F9-03** Switch the UI to the shell **(critical path)** | Migration | In one PR, boots the app through the shell, uses the shell's realtime client, drops the old SPA serving, and moves all audiobook URLs under /books/. | This is the UI cutover. Every page path changes, with no redirects from old URLs, so bookmarks break and the release note lists the new paths. | W44 · F8-04, F9-02, F9-04, F9-05, OWNER-05 |
 
 ## R2 · Ship the cutover (2)
 
@@ -219,8 +219,8 @@ The runbook and release note, then the release itself.
 
 | Task | Kind | What | Why | Wave · needs |
 |---|---|---|---|---|
-| **R2-01** Write the R2 runbook and release note **(critical path)** | Docs | Writes the operator runbook (deploy, rollback, smoke run) and assembles the R2 release note from the rename tables, deleted routes and metric renames. | Operators need clear steps and a full list of breaking changes. Without them, upgrading is guesswork. | W42 · F8-04, F9-03 |
-| **R2-02** End the R2 release freeze | Plumbing | Clears the release freeze flag so the release-candidate checks run again. | Left on, the freeze would block later releases. | W44 · OWNER-05 |
+| **R2-01** Write the R2 runbook and release note **(critical path)** | Docs | Writes the operator runbook (deploy, rollback, smoke run) and assembles the R2 release note from the rename tables, deleted routes and metric renames. | Operators need clear steps and a full list of breaking changes. Without them, upgrading is guesswork. | W39 · F8-04 |
+| **R2-02** End the R2 release freeze | Plumbing | Clears the release freeze flag so the release-candidate checks run again. | Left on, the freeze would block later releases. | W41 · OWNER-05 |
 
 ## R3 · Cleanup (5)
 
@@ -228,8 +228,8 @@ Delete the old code paths and refuse to start on a database that never went thro
 
 | Task | Kind | What | Why | Wave · needs |
 |---|---|---|---|---|
-| **R3-02** Set the R3 upgrade floor **(critical path)** | Migration | Makes the app refuse to start on a pre-R2 store, telling the operator to install R2 first, and deletes the old migration steps and legacy readers along with the old operations code. | This frees the code from carrying every old migration. Without the refusal, an old store could be opened by code that no longer understands it. | W44 · OWNER-05 |
-| **R3-04** Write the R3 release note | Docs | Writes the release note covering the upgrade floor, encryption key deletion, search index deletion and removed database flags. | Users must know they have to install R2 first and what is deleted. Missing notes could cause failed upgrades or surprise data loss. | W44 · OWNER-05 |
-| **R3-05** Replace remaining service registry clusters | Cleanup | Replaces the last registry clusters (work, audiobook, organize, quarantine, scan, merge, import, batch, iTunes) with plain constructors and moves server setup into start hooks. | The registry cannot be deleted until it is empty. Until then, hidden global lookups remain. | W45 · OWNER-05 |
-| **R3-01** Delete unused packages | Cleanup | Removes the service registry, the old plugin SDK, the no-op database flags and dead file and writeback packages, and merges the models package into dedup. | Dead code makes the code harder to read and invites mistakes. They are only safe to remove once nothing calls them. | W46 · OWNER-05, R3-05 |
-| **R3-03** Delete leftover legacy files at boot **(critical path)** | Fix | Adds a startup step that deletes the old encryption key file and old search index, skipping the key if secrets have not been exported. Each deletion is crash-safe. | A leftover secret key file is a security risk. Deleting it too early would lock users out of their secrets. | W46 · R3-02 |
+| **R3-02** Set the R3 upgrade floor | Migration | Makes the app refuse to start on a pre-R2 store, telling the operator to install R2 first, and deletes the old migration steps and legacy readers along with the old operations code. | This frees the code from carrying every old migration. Without the refusal, an old store could be opened by code that no longer understands it. | W41 · OWNER-05 |
+| **R3-05** Replace remaining service registry clusters | Cleanup | Replaces the last registry clusters (work, audiobook, organize, quarantine, scan, merge, import, batch, iTunes) with plain constructors and moves server setup into start hooks. | The registry cannot be deleted until it is empty. Until then, hidden global lookups remain. | W42 · OWNER-05 |
+| **R3-01** Delete unused packages | Cleanup | Removes the service registry, the old plugin SDK, the no-op database flags and dead file and writeback packages, and merges the models package into dedup. | Dead code makes the code harder to read and invites mistakes. They are only safe to remove once nothing calls them. | W43 · OWNER-05, R3-05 |
+| **R3-03** Delete leftover legacy files at boot | Fix | Adds a startup step that deletes the old encryption key file and old search index, skipping the key if secrets have not been exported. Each deletion is crash-safe. | A leftover secret key file is a security risk. Deleting it too early would lock users out of their secrets. | W43 · R3-02 |
+| **R3-04** Write the R3 release note **(critical path)** | Docs | Writes the release note covering the upgrade floor, encryption key deletion, search index deletion and removed database flags. | Users must know they have to install R2 first and what is deleted. Missing notes could cause failed upgrades or surprise data loss. | W45 · OWNER-05, R3-01, R3-02, R3-03, R3-05, F9-03 |
