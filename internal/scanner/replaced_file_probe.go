@@ -1,11 +1,12 @@
 // file: internal/scanner/replaced_file_probe.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 6b2e9f41-8c37-4d05-a9e1-3f7d2c5b8a64
 // last-edited: 2026-11-04
 
 package scanner
 
 import (
+	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
@@ -23,17 +24,25 @@ import (
 // digest), so one probe per such file is cheap.
 //
 // When the probe yields no trustworthy duration (ffprobe missing or failing,
-// or only a filesize estimate), bf keeps Duration zero and the merge drops the
+// or only a filesize estimate), bf keeps a nil Duration and the merge drops the
 // audio-derived fields: unverified data about a file that did change is not
 // kept. That outcome is logged at Warn (sampled) and counted in the scan
 // summary, because with ffprobe missing it happens to every replaced file and
 // silently discards fingerprints and transcripts the backfills must rebuild.
+//
+// The outcome is also written to bf.Scan.DurationOK, classified like every
+// other probe writer (bookfileaudio.RecordProbeFailure): a failed read of the
+// present file is an attempt on the replacement's own record, which starts at
+// zero because the bytes are new; a missing ffprobe or absent file is not.
+// bf.Scan carries only that stage, and the upsert merge restores the stored
+// row's other stages around it.
 func probeReplacedFileAudio(bf *database.BookFile, filePath string, scanLog logger.Logger) {
 	mi, err := mediainfo.Extract(filePath)
 	if err != nil || mi == nil {
 		warnSampled(&replacedProbeNoAudioCount, scanLog,
 			"replaced-file probe failed for %s: %v (its fingerprint and transcript are dropped; the scan summary counts these)",
 			logger.SanitizeLogValue(filePath), err)
+		bookfileaudio.RecordProbeFailure(bf, filePath, bookfileaudio.ProbeError(mi, err), scanLog)
 		return
 	}
 	if mi.Codec != "" {
@@ -47,6 +56,28 @@ func probeReplacedFileAudio(bf *database.BookFile, filePath string, scanLog logg
 	warnSampled(&replacedProbeNoAudioCount, scanLog,
 		"replaced-file probe of %s gave no real duration (estimated=%v; is ffprobe installed?): its fingerprint and transcript are dropped",
 		logger.SanitizeLogValue(filePath), mi.DurationEstimated)
+	bookfileaudio.RecordProbeFailure(bf, filePath, bookfileaudio.ProbeError(mi, nil), scanLog)
+}
+
+// seedDurationStage carries the stored row's duration stage onto bf, a row about
+// to be probed again for a file with the SAME bytes, so a failed probe adds one
+// attempt to the stored count instead of starting over at one. The upsert merge
+// never sums attempts (a fresh failure is indistinguishable there from a copy
+// that merely carries the stored count), so without this a file that keeps
+// failing never reaches database.DeepScanMaxAttempts through a rescan.
+//
+// A stored hash that differs from bf's is a replaced file: its old record
+// describes other bytes, so bf starts at zero (the merge resets the stored
+// stage when the audio changed). An unknown hash on either side is not
+// "changed" (judgeBookFileContent), so it seeds.
+func seedDurationStage(bf, stored *database.BookFile) {
+	if bf == nil || stored == nil {
+		return
+	}
+	if bf.FileHash != "" && stored.FileHash != "" && bf.FileHash != stored.FileHash {
+		return
+	}
+	bf.Scan.DurationOK = stored.Scan.DurationOK
 }
 
 // storedBookFileAt is the stored LIVE row that owns filePath, the row the

@@ -1,0 +1,3 @@
+### Changed
+
+- A failed duration probe is now recorded on the file instead of being swallowed. A file that ffprobe reads and cannot give a length for (an error, 0 s, unparseable output, a timeout, or only a size-based estimate) gets one counted attempt with the reason, and reads as "probe failed" after one and "unreadable" after three, while its duration stays unset. A missing ffprobe or a file that is not there counts for nothing and the file stays "not probed". Every place that measures a duration records it: new-row creation, the scanner's replaced-file check, and the duration re-extract op. A successful measurement marks the duration stage done, and a rescan that sets only the duration stage no longer wipes the file's other scan stages.

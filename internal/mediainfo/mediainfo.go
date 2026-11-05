@@ -1,5 +1,5 @@
 // file: internal/mediainfo/mediainfo.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: f1e2d3c4-b5a6-7c8d-9e0f-1a2b3c4d5e6f
 // last-edited: 2026-11-04
 
@@ -68,8 +68,13 @@ func realDurationSec(filePath string) (int, error) {
 	defer cancel()
 	secs, err := audioutil.ProbeDurationSeconds(ctx, "", filePath)
 	if err != nil {
-		if _, serr := os.Stat(filePath); errors.Is(serr, fs.ErrNotExist) {
-			err = fmt.Errorf("%w: %w", fs.ErrNotExist, err)
+		// Not after a timeout: a stalled mount is what timed out, the stat
+		// would block on it just as ffprobe did, and a timeout is never
+		// "absent".
+		if ctx.Err() == nil {
+			if _, serr := os.Stat(filePath); errors.Is(serr, fs.ErrNotExist) {
+				err = fmt.Errorf("%w: %w", fs.ErrNotExist, err)
+			}
 		}
 		return 0, err
 	}

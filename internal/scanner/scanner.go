@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.135.4
+// version: 1.135.5
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-11-04
 
@@ -2906,6 +2906,9 @@ func createBookFilesForBookWithAudio(bookFilePath string, segmentFiles []string,
 			if dbBook.Duration != nil {
 				known.BookDurationSec = *dbBook.Duration
 			}
+			// Same bytes as a stored row at this path: carry its duration stage
+			// so a failed probe counts toward the attempt ceiling.
+			seedDurationStage(bf, stored)
 			bookfileaudio.EnsureDuration(bf, known, scanLog)
 		}
 
