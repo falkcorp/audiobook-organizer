@@ -1,5 +1,5 @@
 // file: internal/updater/updater.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
 // last-edited: 2026-11-05
 
@@ -63,6 +63,14 @@ var (
 // (Makefile VERSION) appends to a tag when the build is not exactly that tag:
 // -<commits since tag>-g<abbreviated hash>, optionally followed by -dirty.
 var describeSuffix = regexp.MustCompile(`-[0-9]+-g[0-9a-f]+(-dirty)?$`)
+
+// releaseTagPattern is the only shape a tag may have when it is put into a
+// release-lookup URL: "v", three numeric parts, and optional pre-release and
+// build parts drawn from [0-9A-Za-z.-]. normalizeTag already requires a valid
+// semantic version, which implies this; the match is repeated at the request
+// site so the URL is visibly built from a value that cannot hold "/", "?",
+// "#", "%" or "..".
+var releaseTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
 
 // UpdateInfo holds the result of an update check.
 type UpdateInfo struct {
@@ -633,7 +641,7 @@ func (u *Updater) findAssetURL(info *UpdateInfo) (string, error) {
 		return "", errDevelopApply
 	}
 	tag, ok := normalizeTag(info.LatestVersion)
-	if !ok {
+	if !ok || !releaseTagPattern.MatchString(tag) || strings.Contains(tag, "..") {
 		return "", ErrInvalidVersion
 	}
 
