@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-backup.md -->
-<!-- version: 1.12.3 -->
+<!-- version: 1.12.4 -->
 <!-- guid: 604febb0-a09e-4cf9-99ee-5f3722534da6 -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 05 — Backup and restore (`backup`)
 
@@ -26,7 +26,7 @@ which release each step ships in.
 - **The journaled swap** (the one intent slot, P0a's swap and resumption, step x's swap-back, step h's
   bookkeeping up to `applied` and the removal of `inflight.json`, the `KindCheckpoint` swap of 05-storage's
   `storage restore-offline --checkpoint`, and the `KindReset` swap of 05-storage's factory reset, §5S.3.15) is core
-  code from **R1**, `core/internal/restoreswap`, held and run by the kernel at P0a (06) and from its reset
+  code from **R1** (M8's `KindRewrite` swap of 05-storage §5S.3.13 runs on the same code from F3, where M8 lands), `core/internal/restoreswap`, held and run by the kernel at P0a (06) and from its reset
   staging. `restoreswap` is **L1** and imports `storage` and its L0 leaves; `storage` never imports it, and
   `storage.Admin` has no swap or staging method, so there is no cycle (COR8-5). The swap journal's record
   types (`restorejournal.Record` and the step names) live in the L0 leaf `storage/restorejournal` (05-storage
@@ -455,9 +455,10 @@ type RevocationJournal interface {
 }
 
 // RestoreKind is the hooks' view of a swap. The swap's own kind is
-// restorejournal.Kind ("archive", "revert", "checkpoint", "reset"; KindReset,
-// 05-storage §5S.3.15), the intent's "kind" field; a reset runs no restore
-// hook, so RestoreKind has no reset value (R8-1).
+// restorejournal.Kind ("archive", "revert", "checkpoint", "reset", "rewrite";
+// KindReset and KindRewrite, 05-storage §5S.3.15 and §5S.3.13), the intent's
+// "kind" field; a reset and M8's rewrite run no restore hook, so RestoreKind
+// has no reset or rewrite value (R8-1; §5B.3.4 "M8's store rewrite").
 type RestoreKind uint8
 const (
 	RestoreKindInvalid RestoreKind = iota
@@ -735,6 +736,22 @@ the former reset-supersedes-restore rule and its test are deleted:
 
 **A factory reset is `KindReset` of this swap (R8-1, SIMP8-1).** Its intent is `restore/pending.json` with `kind: "reset"`, created in the same slot by the same atomic create (step 8), so a reset and a restore exclude each other by the slot alone. It is rejected by step a's one rule only while its `pending.json` exists; its in-flight file `restore/<id>/inflight.json` is created by renaming the intent **before** the first target moves, and from then on the reset is never rejected but resumed forward by any core build (R9-6, R9-7, DATA9-4); its set-aside renames are journaled in `restore/<id>/journal.json` with the reset's step names, and the in-flight file is deleted at `hook_done` instead of `applied`; the tokens are `restore_pending`/`restore_inflight`, with no override (step 9). It differs from a restore in three places, all specified in 05-storage §5S.3.15: every target is pre-validated at staging and set aside beside itself, on its own filesystem; a failed set-aside always moves back what it moved **before** it journals `rejected`, booting the untouched store; and there are no restore hooks, because the next boot is a fresh install, while HEAD's in-request side effects run in the app's post-reset hook after the journal reads `applied`, are not undoable, and never fail boot. The hook's arguments carry the library `RootDir` only when the intent's `delete_library_files` is set: the native route sets it only on request and only after the client confirmed the preflight's root and count (`storage.ResetRequest`, 05-storage §5S.3.15; A-17, R9-6); HEAD's reset routes are deleted in R2.
 
+**M8's store rewrite is `KindRewrite` of this swap (05-storage §5S.3.13, §5S.3.16 machine 1; SEC-5).** Cutover
+step M8 copies the compacted store into a fresh directory and swaps it in with kind `restorejournal.KindRewrite`,
+which this section accepts as a swap kind under these rules: (1) it takes the one intent slot like every kind,
+so it fails with `storage.ErrSwapPending` while another intent or swap exists, and its in-flight file exists
+before its first rename (step b); (2) it runs **in process** during M8, not at P0a: storage closes, steps c–e set
+the old directory aside, move the copy into place and rewrite the sidecars, and the store reopens at `db_path`
+(`swapped --> opened`); step a's staleness rule and step b's archive re-check do not apply, and there is no step
+f, because derived artifacts stay accepted; (3) it **keeps the store generation**: the kernel rewrites
+`c/storage/epoch` with the new directory identity and the same `epoch`, so the attempt's checkpoint stays
+restorable and §5B.3.6 reads the result as the same store (no `restore` line, no hooks, no `served_boot` or
+`backup.location.json` write; `RestoreKind` has no rewrite value); (4) the set-aside old directory is **deleted at
+once**, never kept as `previous/` for `core.storage.swap.keep_previous`, so `RevertLastRestore` and
+`restore --revert` cannot undo it, and the journal then reaches `applied` with M8 `done` (`opened --> applied`);
+(5) a failure from step c to that point swaps back as step x does, and a kill is resumed forward or swapped back
+by P0a, after which M8 runs again (05-storage §5S.3.13).
+
 Undo: `previous/` is kept for `core.storage.swap.keep_previous` (05-storage §5S.7, a key of the swap that lands in R1; SIMP8-1) and then swept by the kernel after a boot reaches readiness. `RevertLastRestore` (API) and
 `<app> restore --revert` (offline, for an app that no longer boots) stage it through the same mechanism
 with kind `KindRevert`. 05-storage's offline `storage restore-offline --checkpoint` uses the same swap with kind
@@ -761,8 +778,10 @@ checkpoint sweeper 7 days after it stops being needed (05-storage §5S.3.12): a 
 completion; an open checkpoint is kept while the live store is still at its pre-migration levels, because it is
 the rollback, and its 7-day clock starts once the store has completed a migration or been restored by any path
 (a checkpoint, an archive, a swap-back that moved it to `restore/<id>/failed/`, or one marked `restore_left`).
-The sweeper walks `restore/<id>/failed/` too, and health raises `storage_checkpoint_open` while any checkpoint
-waits. The sweeper and `storage prune-checkpoints` exist from R1, whose first boot on a non-empty store takes a
+The sweeper walks `restore/<id>/failed/` too, audits each deletion as `core.storage.checkpoint_deleted` (from F2,
+when the audit store exists), and health raises `storage_checkpoint_open` while any checkpoint waits and
+`storage_checkpoint_mode` when a checkpoint directory or file is group- or world-accessible (05-storage
+§5S.3.12; SEC-9). The sweeper and `storage prune-checkpoints` exist from R1, whose first boot on a non-empty store takes a
 checkpoint, and R1's release note says so (CONFORM-6).
 
 ### 5B.3.5 Creation, verification, retention, catalogue
@@ -980,6 +999,7 @@ Phases are 06 §6.5.1's (R2-8).
 | Crash between the swap and the hooks | resumed: `inflight.json` keeps it a restore boot, hooks re-run (idempotent); rollback tooling keeps refusing | Dropping the hooks would serve revoked credentials (DATA3-6). |
 | Swap-back fails | closed (boot halts; journal names every path; offline `restore --revert`) | Manual recovery with exact instructions beats guessing. |
 | Crash during the swap | resume from journal | Each step idempotent. |
+| M8's `KindRewrite` swap fails or is killed between step c and `applied` | closed for the rewrite: swapped back as step x does (or resumed forward by P0a after a kill), the old directory back in place, the store generation unchanged; M8 runs again at the next boot | The live store is never left half-swapped, and no restorable checkpoint is orphaned (05-storage §5S.3.13). |
 | Post-restore hook fails | handled by the swap-back row | Resurrecting revoked credentials is a security failure (05-authn §4.14). |
 | A `KindCheckpoint` restore boot's migration DAG fails | closed: no swap-back; the restored checkpoint is kept, the journal reads `failed` with the failing binary's ID, exit non-zero; the recipes keep refusing while `inflight.json` exists, the operator puts the previous binary or a fixed build in place by hand (runbook), and its P0a resumes the journal; the failing binary refuses while the journal is in flight | Swapping back would only bring back the store whose migration failed (DATA7-12); the failing binary resuming its own journal would loop (DATA8-6). |
 | Revocation journal append fails | open (revocation commits; gap recorded; health `degraded`) | Never block a revocation; the gap makes a later restore fail safe (keys need confirmation). |
@@ -1386,4 +1406,4 @@ Round 10 (`docs/plans/platform-core/reviews/spec-round-10-*.md`, dispositions bi
   `TestRestoreOfflineBringsBackKeyringAndStateFiles`, `TestRollbackRestoreThenReupgradeKeepsCoverage` and
   `TestLegacyArchiveRestoreThenMigrate` added. Consistency pass (lead decisions L9, L11, L15): `CheckReader`, `inflight-checkpoint.json`, `--print-restore-journal`, the `KindCheckpoint` probe exception, `Record.Build`, `ErrRestorePending` and `k0-legacy` are gone (a `failed` checkpoint journal is resumed by a binary the operator puts in place, a `legacy-abo/0` archive's rows are decrypted by M2 with `.encryption_key`), step 9 follows 05-storage's in-flight-only probe, `secrets.Open` is cited at 05-storage §5S.4 step 8, `create_backups` maps to `modules.books.tags.create_backups`, offline revoking writes are journaled (`TestOfflineRevocationJournaled`), and D12's answers are cited as D12 (a)–(d). Final consistency sweep: the previous binary's `storage restore-offline --checkpoint` is the one recipe admitted while a `failed` checkpoint journal holds `inflight.json` (steps 9 and x, rule (3), test row), and `secrets.Open` is placed at the start of P4b.
 
-Round 13 (2026-11-04): CONFORM-2, CONFORM-6, DATA-6, DATA-7, DATA-8, DATA-9, DATA-11, DATA-12, DATA-15, SEC-10, IMPL-1 (lead rulings on checkpoint retention, the `make rollback-restore` level check and F2's core sections).
+Round 13 (2026-11-04): CONFORM-2, CONFORM-6, DATA-6, DATA-7, DATA-8, DATA-9, DATA-11, DATA-12, DATA-15, SEC-10, IMPL-1, SEC-5 (M8's `KindRewrite` accepted as a swap kind: its rules and failure row), SEC-9 (the sweeper's `core.storage.checkpoint_deleted` audit and `storage_checkpoint_mode`) (lead rulings on checkpoint retention, the `make rollback-restore` level check and F2's core sections).
