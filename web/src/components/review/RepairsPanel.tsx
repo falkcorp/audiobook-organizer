@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.33.0
+// version: 1.34.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-11-05
 
@@ -788,9 +788,19 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
               sx={{ mx: 2 }}
               data-testid="repairs-apply-result"
               action={
-                <Button color="inherit" size="small" onClick={runTrial} disabled={running}>
-                  Re-run trial
-                </Button>
+                <>
+                  <Button color="inherit" size="small" onClick={runTrial} disabled={running}>
+                    Re-run trial
+                  </Button>
+                  <Button
+                    color="inherit"
+                    size="small"
+                    onClick={repairs.dismissApplyResult}
+                    data-testid="repairs-apply-result-dismiss"
+                  >
+                    Dismiss
+                  </Button>
+                </>
               }
             >
               <AlertTitle>{repairs.applyResult.dry_run ? 'Preview' : 'Apply finished'}</AlertTitle>

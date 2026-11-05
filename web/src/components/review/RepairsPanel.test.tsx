@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.27.0
+// version: 1.28.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
 // last-edited: 2026-11-05
 //
@@ -219,6 +219,37 @@ describe('RepairsPanel', () => {
     expect(banner).toHaveTextContent(/Refreshing the trial after your apply/);
     expect(screen.getByTestId('repairs-fixer-plan-vg-primary')).toHaveTextContent(/Refreshing after apply/);
     expect(screen.getByTestId('repairs-apply-selected')).toBeDisabled();
+  });
+
+  it('keeps the Apply finished banner after the refreshed trial loads, and Dismiss hides it', async () => {
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(
+      repairsApplyResult({
+        fixer_id: 'vg-primary',
+        plan_op_id: 'plan-1',
+        dry_run: false,
+        requested: 1,
+        by_outcome: { applied: 1 },
+        applied: 1,
+        changed_since_plan: 0,
+        partially_applied: 0,
+        failed: 0,
+        standdown_held: true,
+        replan_op_id: 'plan-2',
+        rows: [{ row_id: 'g2', outcome: 'applied' }],
+      })
+    );
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-g2');
+    await user.click(screen.getByRole('checkbox', { name: 'Select Title g2' }));
+    await user.click(screen.getByTestId('repairs-apply-selected'));
+
+    // The refresh finished at once (pollOperationV2 resolves completed) and the
+    // lane is on plan-2, yet the banner is still there.
+    await waitFor(() => expect(api.getRepairPlanRows).toHaveBeenCalledWith('vg-primary', 'plan-2', expect.anything(), expect.anything()));
+    expect(await screen.findByTestId('repairs-apply-result')).toHaveTextContent(/Applied 1/);
+    await user.click(screen.getByTestId('repairs-apply-result-dismiss'));
+    expect(screen.queryByTestId('repairs-apply-result')).not.toBeInTheDocument();
   });
 
   it('shows a retry_later row as Retry later and the banner as a warning with a hint', async () => {

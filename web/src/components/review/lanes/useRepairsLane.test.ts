@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.15.0
+// version: 1.16.0
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
 // last-edited: 2026-11-05
 //
@@ -902,6 +902,60 @@ describe('useRepairsLane: the trial is refreshed after an apply', () => {
     );
     expect(result.current.trial).toBeNull();
     expect(toast).toHaveBeenCalledWith(expect.stringMatching(/refreshed after the apply/i), 'success');
+  });
+
+  it('keeps the apply result banner after the refreshed plan loads, until it is dismissed or another trial or apply starts', async () => {
+    const { result } = await renderLane();
+    mockRows({
+      'plan-1': { applicable: APPLICABLE, skipped: SKIPPED },
+      'plan-2': { applicable: [row('g2')], skipped: SKIPPED },
+    });
+    vi.mocked(api.startRepairApply).mockResolvedValue(STARTED);
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(applyResult({ replan_op_id: 'plan-2' }));
+    vi.mocked(api.pollOperationV2).mockResolvedValue(op('apply-1', 'completed'));
+
+    dispatchApply(result);
+
+    // The refresh completes at once: the lane has moved to plan-2 and its rows.
+    await waitFor(() => expect(result.current.planOpId).toBe('plan-2'));
+    await waitFor(() => expect(result.current.rows.map((r) => r.row_id)).toEqual(['g2']));
+    expect(result.current.trial).toBeNull();
+    // What the apply did is still on screen, with the rows it named.
+    expect(result.current.applyResult).toMatchObject({ plan_op_id: 'plan-1', replan_op_id: 'plan-2' });
+    expect(result.current.appliedRows).toHaveLength(1);
+
+    // Dismissing hides it.
+    act(() => result.current.dismissApplyResult());
+    expect(result.current.applyResult).toBeNull();
+
+    // Another trial ends it too.
+    vi.mocked(api.startRepairApply).mockResolvedValue({ ...STARTED, operation_id: 'apply-2' });
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(
+      applyResult({ plan_op_id: 'plan-2', replan_op_id: 'plan-3' })
+    );
+    vi.mocked(api.pollOperationV2).mockImplementation((id: string) =>
+      id === 'plan-3' ? new Promise<OperationV2>(() => {}) : Promise.resolve(op(id, 'completed'))
+    );
+    act(() =>
+      result.current.dispatch({
+        lane: 'repairs',
+        type: 'applyRows',
+        fixerId: 'vg-primary',
+        planOpId: 'plan-2',
+        rowIds: ['g2'],
+      })
+    );
+    await waitFor(() => expect(result.current.applyResult).toMatchObject({ replan_op_id: 'plan-3' }));
+
+    vi.mocked(api.startRepairPlan).mockResolvedValue({
+      operation_id: 'plan-4',
+      def_id: 'repairs.plan',
+      fixer_id: 'vg-primary',
+      status: 'queued',
+    });
+    vi.mocked(api.pollOperationV2).mockReturnValue(new Promise(() => {}));
+    act(() => result.current.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: 'vg-primary' }));
+    await waitFor(() => expect(result.current.applyResult).toBeNull());
   });
 
   it('keeps the old rows and says so when the refreshed trial fails', async () => {
