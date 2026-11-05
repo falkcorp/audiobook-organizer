@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.28 -->
+<!-- version: 10.78.29 -->
 <!-- version: 10.78.24 -->
 <!-- version: 10.78.23 -->
 <!-- version: 10.78.24 -->
@@ -51,7 +51,7 @@ into one of the curated sections below, is a normal direct edit.
         `errors.Join` (`raw/06-tasks-ops.md` §2).
   - [ ] **SECURITY (hotfix, early fix 1):** session tokens exposed by `GET /api/v1/auth/sessions`. Implement 05-authn §11.1 item 1 exactly
         (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
-  - [ ] **SECURITY (hotfix, early fix 2):** a scoped API key can mint an unscoped key (including the nil/empty caller set). Implement 05-authn §11.1 item 2 exactly
+  - [x] **SECURITY (hotfix, early fix 2):** a scoped API key can mint an unscoped key (including the nil/empty caller set). Implement 05-authn §11.1 item 2 exactly
         (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
   - [ ] **SECURITY (hotfix, early fix 4):** `RequireAdmin` and the role-name checks ignore API-key scopes (including `adminRole`, `handlers/user.go` and `mergeActor`). Implement 05-authn §11.1 item 4 exactly
         (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
@@ -65,9 +65,9 @@ into one of the curated sections below, is a normal direct edit.
   - [ ] 8 writes to `config.AppConfig` bypass `Mutate`; in `serve` the log file stops receiving output
         after `NewServer`; `log_level` is never applied to the handler (`05-config.md`, `05-logging.md`).
   - [ ] The shipped systemd unit sets `AUDIOBOOK_ROOT_DIR`, which nothing reads (`09-abo-on-core.md`).
-  - [ ] **SECURITY (hotfix, early fix 3):** a revoked API key can be re-activated (web and ABS key paths). Implement 05-authn §11.1 item 3 exactly
+  - [x] **SECURITY (hotfix, early fix 3):** a revoked API key can be re-activated (web and ABS key paths). Implement 05-authn §11.1 item 3 exactly
         (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
-  - [ ] **SECURITY (hotfix, early fix 6):** a request with a key can undo that key's revocation (`apiKeyMu` on every `apikey:` writer). Implement 05-authn §11.1 item 6 exactly
+  - [x] **SECURITY (hotfix, early fix 6):** a request with a key can undo that key's revocation (`apiKeyMu` on every `apikey:` writer). Implement 05-authn §11.1 item 6 exactly
         (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
   - [ ] **SECURITY (hotfix, early fix 5):** the Basic gate accepts an empty password (with the `BASIC_AUTH_PASSWORD` recovery). Implement 05-authn §11.1 item 5 exactly
         (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
