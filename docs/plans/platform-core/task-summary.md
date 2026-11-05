@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/task-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 98285867-08c9-4873-8207-d381e15999fc -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -63,7 +63,7 @@ The engine becomes its own module inside this repo and starts running the app: s
 | **R1-15** New composition root built on core | Migration | The app's main now starts through core, with the books module, atom table, legacy mount, shutdown budget and process defaults. | This is the switch where the app actually runs on core; startup, shutdown and listeners all move together. | W14 · R1-13, R1-14, R1-10, R1-09, R1-07 |
 | **R1-21** Journaled database swap and crash tests **(critical path)** | Feature | Adds a crash-safe, journaled swap of the live store run at startup, plus a kit and tests that crash at every step. | A wrong step order during restore could lose the database. | W14 · R1-20 |
 | **R1-23** Flip storage to core's single store **(critical path)** | Migration | Core opens the one Pebble store and the app reaches its data only through strict claims, with a first-boot checkpoint. | This is the keystone move; without it the app and core would keep separate stores. | W15 · R1-15, R1-20, R1-21, R1-22, R1-04 |
-| **R1-37** Build the engine's test harness | Test | Builds the shared test kit every later task tests through: boot the app with chosen modules and users, call its routes, and check permissions and that disabled modules stay inert. | Dozens of later tests need a running app to test against. Without a defined kit, each agent would improvise one and the tests would drift. | W15 · R1-13, R1-14 |
+| **R1-37** Build the engine's test harness | Test | Builds the shared test kit every later task tests through: boot the app with chosen modules and users, call its routes, and check permissions and that disabled modules stay inert. | Dozens of later tests need a running app to test against. Without a defined kit, each agent would improvise one and the tests would drift. | W15 · R1-13, R1-14, R1-15 |
 | **R1-16** Move sdnotify into core | Migration | Relocates the systemd notify package into core and rewires all five app users in one PR. | Go's internal rule breaks the build if any user is missed. | W16 · R1-15 |
 | **R1-18** Unify logging setup in core | Cleanup | Removes the duplicate logging defaults and file setup, feeding the activity log through a tap and adding a logger shim. | Two competing logging setups cause confusion; the activity feed must keep working. | W16 · R1-15, R1-07, R1-36 |
 | **R1-33** Set stop timeouts for shutdown budget | Plumbing | Sets container and launchd stop timeouts to 60s and has the app read the 25s shutdown budget. | Without them containers get killed after core's short 8s default mid-shutdown. | W17 · R1-15 |
