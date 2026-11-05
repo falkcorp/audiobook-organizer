@@ -1,0 +1,1 @@
+- Fixed a flaky `TestFence_RevokedOnEveryStopPath/timeout`: the test checked the fence was unrevoked from the test goroutine after the 20ms wall-clock timeout could already have fired on a loaded runner. Freshness is now judged on a snapshot the run takes on entry, so the check no longer races the timer; production fence code is unchanged.
