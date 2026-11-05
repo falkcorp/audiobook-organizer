@@ -1,7 +1,7 @@
 // file: internal/mediainfo/duration_err_test.go
 // version: 1.0.0
 // guid: f887e2cd-a3a0-4243-8bbd-b87a475f4f35
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package mediainfo
 
@@ -178,28 +178,82 @@ func TestExtract_NoCodecTableExtensionFailure(t *testing.T) {
 	}
 }
 
-// An extension that is not audio at all, which ffprobe cannot read either, is
-// ErrUnsupportedFormat with the probe's own error still in the chain; when
-// ffprobe CAN read it the duration is used.
-func TestExtract_NonAudioExtension(t *testing.T) {
-	t.Run("unreadable", func(t *testing.T) {
-		fakeFFprobe(t, "exit 1")
-		info, err := Extract(junkAudio(t, "Notes.txt"))
+// countingProbes puts a stub ffprobe on PATH that counts its runs (the mediainfo
+// fallback is disabled; every probe, mediainfo's included, goes through
+// realDurationSec, which the refused paths never reach), so "no probe was
+// started" is observable. runs() is the number of ffprobe invocations.
+func countingProbes(t *testing.T) (runs func() int) {
+	t.Helper()
+	dir := t.TempDir()
+	counter := filepath.Join(t.TempDir(), "runs")
+	if err := os.WriteFile(counter, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\necho run >> '" + counter + "'\necho 61.0\n"
+	if err := os.WriteFile(filepath.Join(dir, "ffprobe"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":/bin:/usr/bin")
+	t.Setenv("ABK_DISABLE_MEDIAINFO", "1")
+	return func() int {
+		b, err := os.ReadFile(counter)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var ee *exec.ExitError
-		if !errors.Is(info.DurationErr, ErrUnsupportedFormat) || !errors.As(info.DurationErr, &ee) {
-			t.Fatalf("DurationErr = %v, want ErrUnsupportedFormat wrapping the exit error", info.DurationErr)
-		}
-	})
-	t.Run("readable", func(t *testing.T) {
-		fakeFFprobe(t, "echo 61.0")
-		info, err := Extract(junkAudio(t, "Notes.txt"))
-		if err != nil || info.Duration != 61 || info.DurationErr != nil {
+		return strings.Count(string(b), "run")
+	}
+}
+
+// A path that is not an audio file is an ErrUnsupportedFormat error and starts
+// NO subprocess (GetAudiobookTags hands Extract a book's directory on every
+// request; mediainfo would walk the whole tree). A real audio extension still
+// gets its probe.
+func TestExtract_NonAudioPathsAreRefusedWithoutAProbe(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Cover.jpg"), make([]byte, 4096), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"directory": dir,
+		"cover.jpg": filepath.Join(dir, "Cover.jpg"),
+		"notes.txt": junkAudio(t, "Notes.txt"),
+	}
+	for name, path := range cases {
+		t.Run(name, func(t *testing.T) {
+			runs := countingProbes(t)
+			info, err := Extract(path)
+			if !errors.Is(err, ErrUnsupportedFormat) || info != nil {
+				t.Fatalf("got %+v, %v; want nil and ErrUnsupportedFormat", info, err)
+			}
+			if n := runs(); n != 0 {
+				t.Fatalf("%d ffprobe run(s) for %s", n, name)
+			}
+		})
+	}
+	t.Run("audio extension is probed", func(t *testing.T) {
+		runs := countingProbes(t)
+		info, err := Extract(junkAudio(t, "Hush.wav"))
+		if err != nil || info.Duration != 61 {
 			t.Fatalf("got %+v, %v", info, err)
 		}
+		if runs() == 0 {
+			t.Fatal("a .wav must be probed")
+		}
 	})
+}
+
+// BuildFromTag on a tag type it has no table for and a non-audio path returns a
+// best-effort info carrying ErrUnsupportedFormat on DurationErr, no probe.
+func TestInferFromFormat_NonAudioStartsNoProbe(t *testing.T) {
+	runs := countingProbes(t)
+	for _, name := range []string{"Cover.jpg", "Notes.txt", "README"} {
+		if info, err := inferFromFormat(filepath.Join(t.TempDir(), name), &MediaInfo{}); !errors.Is(err, ErrUnsupportedFormat) || info != nil {
+			t.Fatalf("%s: got %+v, %v", name, info, err)
+		}
+	}
+	if n := runs(); n != 0 {
+		t.Fatalf("%d probe subprocess(es) started", n)
+	}
 }
 
 // statCause: a stat that says the failure was the environment's (a permission
