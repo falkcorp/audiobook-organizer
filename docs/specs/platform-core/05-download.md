@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-download.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.12.1 -->
 <!-- guid: 513fb395-c640-4bb6-b76c-d9fe80b3224e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -36,7 +36,7 @@ tracked-download records and the import hand-off; it calls `Pool.Grab`, consumes
 and runs no poller and no recovery of its own.
 
 **Build scope (SIMP-12, cross-cutting resolution 1).** Phase 1 is what ABO uses today and is the only part
-the ABO extraction plan ([09](09-abo-on-core.md) S7) builds:
+R2's integrations flip ([09](09-abo-on-core.md)) builds:
 
 | Pool feature | Phase | Consumer |
 |---|---|---|
@@ -57,7 +57,7 @@ before `acquire`, their only consumer, exists to validate them. Phase 2 adds `Ad
 
 > **Design sketch (non-normative; A-15).** The SDK freezes none of these members.
 
-The phase-2 members of this built package (the §1 table's phase-2 row). None is in the 09 S7 build. The first
+The phase-2 members of this built package (the §1 table's phase-2 row). None is in the R2 build. The first
 column holds package-qualified Go identifiers; topics, task kinds and keys are in the second column (SIMP5-6). The
 PR that builds a member deletes its row (SIMP4-1, COR4-19).
 
@@ -407,19 +407,18 @@ a Durable topic; COR2-17).
 
 ### 4.1 Instances and adapters
 
-Instances are `download/<id>` records in the one instance registry (05-metadata §M1, SIMP-4; routed per record:
-ABO's Deluge by the app's legacy store, which covers only the singleton ID `download/deluge`, and every other
-instance by the native store, R4-1, SIMP5-1). A natively stored instance (a second client) does not exist for an
-older build: after a rollback it does nothing (05-metadata M1.4 native store, OPS5-12). Secrets are
-`integrations.download.<id>.<field>` (05-config §2.3 grammar). Secret fields per adapter: Deluge `password`;
+Instances are `download/<id>` records in the one instance registry (05-metadata §M1, SIMP-4), native rows only
+(ABO's Deluge is migrated into `download/deluge` in R2, §10). Secrets are
+`integrations.download.<id>.<field>` (05-config §2.3 grammar). Secret fields per adapter: Deluge `password` (the web UI's) and `daemon_password` (the daemon connection HEAD
+configures under `download_client.torrent.deluge`);
 qBittorrent `username`, `password`; Transmission `username`, `password`; SABnzbd `api_key`; NZBGet
 `username`, `password`. Every adapter declares `Meta.Egress = EgressConfigured`: a client on the LAN (the
 usual case) needs `Local=true`, which only an interactive `core:admin` holder can set (05-metadata M1.3,
 SEC2-7), or its host listed in `core.integrations.egress.lan_allow`; a URL change clears the stored password
-(SEC-15). ABO's legacy-backed `download/deluge` stores no `Local`: its configured host keeps HEAD's reach, and its
-URL only an admin changes, through `Put` or a `Test` body, or, with authentication off, any writer, as at HEAD
-(05-metadata M1.3, M1.4 step 2a, A-2; R10-10). Adapters log in lazily on first call and re-login once on an auth error with the
-generation guard of `internal/deluge/client.go:198-221` (concurrent callers log in once).
+(SEC-15). The migrated `download/deluge` carries `Local` bound to its stored web URL's origin (05-metadata
+M1.10), so a LAN Deluge keeps working; a later URL change follows the native rule. Adapters log in lazily on first
+call and re-login once on an auth error with the generation guard of `internal/deluge/client.go:198-221`
+(concurrent callers log in once).
 
 | Adapter | Wire (raw/16 §4.6) | Health probe | Phase |
 |---|---|---|---|
@@ -576,7 +575,7 @@ in-flight batches first.
 | Unknown client state value | `StateWarning`, counted | Never guess `Completed`. |
 | Optional capability absent (`FileLister`, `Relocator`; phase 2: `Adder`, `Remover`, …) | `ClassUnsupported` | Caller decides (e.g. ABO skips move_storage, as today when disabled; `Pool.Grab` tries the next instance). |
 | Snapshot/outbox batch write fails | closed: transition retried next poll | Same-batch rule: no event without state, no state without event. |
-| `core.integrations.disabled` true (a staging copy, R6-7; 05-metadata M1.4) | closed: `Lease` gives `ErrDisabled`, so `Items`, `Files` and `Relocate` fail and the poll leaves every snapshot untouched (as for an outage); phase 2: `Pool.Grab` stores nothing. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances (the phase-2 `core.download.schedules.poll` run included). At every stage, `staging-scrub` (09 §9.3, A-12) also clears every legacy integration URL (the Deluge web URL included), so an older build booted on the copy, which ignores the switch, has no client to call (R7-6); native client rows are not cleared, because only S7+ binaries read them and every such staging boot carries the switch (R8-3) | A copy of a production store must never move, add or remove items in a production client (OPS6-4, SEC7-6); schedules must still fire there (DATA5-8). |
+| `core.integrations.disabled` true (a restored copy, R6-7; 05-metadata M1.4) | closed: `Lease` gives `ErrDisabled`, so `Items`, `Files` and `Relocate` fail and the poll leaves every snapshot untouched (as for an outage); phase 2: `Pool.Grab` stores nothing. A schedule that fires against a disabled integration fails closed, but its run is enqueued and its clock advances (the phase-2 `core.download.schedules.poll` run included). The optional owner rehearsal on a restored archive sets the switch and runs with `--network none` (09) | A copy of a production store must never move, add or remove items in a production client (OPS6-4, SEC7-6); schedules must still fire there (DATA5-8). |
 | Relocate after organize fails (ABO "follow the book") | open for the organize (already succeeded), error recorded on the item and surfaced in health | Today it is a log line only (`integration.go:131-135`); the design keeps "best effort" but makes it visible. |
 
 ## 6. Concurrency contract
@@ -584,7 +583,7 @@ in-flight batches first.
 Adapters are goroutine-safe (login guarded; RPC ids atomic as `client.go:48`). Every method takes ctx; there
 is no `context.Background()` path in core (HEAD's no-ctx methods, `client.go:193-195`, are not carried).
 Phase 2: poll fan-out is bounded (§4.5). Grab is serialized per `IdempotencyKey` with core's own internal
-keyed mutex, `core/internal/keyedmutex` (a core-internal copy added at S3 by 04 §9; ABO's
+keyed mutex, `core/internal/keyedmutex` (a core-internal copy, added by 04 §9; ABO's
 `internal/keyedmutex` stays in ABO, 03 §3.2.1, and core cannot import it, R1; COR2-16). Serializing grabs
 **across** keys for the same entity is the owner's job: `acquire`'s per-entity grab lock is the executor's
 ref-lock table (10 §10.5.6, 05-tasks §5T.3.4). Monitor writes per instance are sequential
@@ -635,10 +634,10 @@ Core, phase 1: `TestPool_ItemsFillsLocalPath`, `TestPool_RelocateGroupsByInstanc
 `TestPaths_UnmappedRelocateRefused`, `TestPaths_WindowsRemote`, `TestDeluge_PrivateHostNeedsLocal`,
 `TestPool_IntegrationsDisabledNoClientCall` (`core.integrations.disabled`: a fake client sees no request and no
 snapshot changes; R6-7),
-`TestDelugeInstance_LegacyBackedReadInPlace` (05-metadata M1.4 step 2a, with a fake legacy instance store covering
-`download/deluge`: it is read from and written through that store, its password in place in the blob; no
-`c/integrations/instances/download/deluge` row and no `c/secrets/` record is written; its private configured host
-is dialled; R4-1, A-2).
+`TestDelugeMigration_InstanceAndPassword` (books' R2 step M6 over a HEAD-written fixture: one native
+`download/deluge` row with HEAD's URL and settings, its passwords refs to `integrations.download.deluge.password` and
+`integrations.download.deluge.daemon_password` holding HEAD's values, `Local` bound to the stored URL's origin, and no Deluge field left in the blob; 05-metadata
+M1.9, M1.10).
 Core, phase 2 (with `acquire`; a sketch until then): `TestGrab_IdempotencyKeyDedupes`, `TestGrab_AmbiguousAddRecoveredByTag`,
 `TestGrab_FallbackOnTransportOnly`, `TestGrab_InvalidNoFallback`, `TestGrab_OwnerAcquireAccepted`,
 `TestGrab_RecordFuncInSameBatch`, `TestGrab_AddedEventStaged`, `TestPool_SelectionPriorityRoundRobin`,
@@ -663,14 +662,14 @@ client with a scriptable clock-driven state machine (`Advance(id, State)`), capa
 |---|---|
 | `internal/deluge/client.go` | `core/integrations/download/deluge` adapter (`core.deluge`); RPC/auth code reused; every method gains ctx; `http.Client` from `env.HTTP` (5-minute timeout becomes per-op limits) |
 | `deluge.GetClient()` global, `ResetGlobalClientForTest`, `SetGlobalClientForTest` | deleted; `Pool.Lease` |
-| `DelugeWebURL/Password`, `download_client.torrent.deluge` | the **legacy-backed** instance `download/deluge` (05-metadata M1.4 step 2a, M1.10; R4-1): its URL, settings and password stay in the config blob, in HEAD's representation, served in place by books' legacy instance store (ABO code; no core adapter and no grant) until the integrations cutover, which is outside the extraction; nothing is copied into `c/integrations/instances/` or `c/secrets/`, so the current build and any older build read the same values. The password stays plaintext where HEAD keeps it and is read and written in place under the name `integrations.download.deluge.password` (A-2; 05-config §2.2); encrypting it is the post-S10 secrets cutover. Its web URL keeps HEAD's reach for a LAN client, with no upgrade step or confirmation, and keeps HEAD's writers: changing it needs the ProtectAdmin check, and so does a `Test` whose body changes it (05-metadata M1.3 `Put` and `Test`, M1.4 step 2a, M1.10; R10-10, SEC10-2); with authentication off it stays editable in Settings as at HEAD, where every write passed (HEAD's auth-off rule, 05-metadata M1.3 `Put`; R10-10, SEC10-3). Env-authoritative behaviour is preserved as an **in-memory operator overlay** on the effective instance while an operator value is set — never written to the blob or `c/secrets/`, so removing the env value restores the stored password as HEAD does (env names permanent, 05-metadata M1.4 step 2, SIMP2-5). Which Deluge env names overlay and lock, and which only fill an unstored field, follows HEAD per name under the one precedence rule (05-config §1.12.4 `BelowStored`, 05-metadata M1.4 step 2; SEC6-5). An env-given Deluge password is served as at HEAD, beside whatever web URL the blob holds (`internal/config/config.go:2249-2250` @748fd787a), which only an admin can change (05-metadata M1.4 step 2 "Legacy-backed instances keep HEAD's behaviour"; A-2; `TestLegacyBacked_OperatorSecretServedAsHEAD`) |
+| `DelugeWebURL/Password`, `download_client.torrent.deluge` | the **native** instance `download/deluge`, written in R2 by books' cutover step M6 (05-metadata M1.10): its URL and settings into the row, its passwords moved by the M2 secrets step into `c/secrets/` as `integrations.download.deluge.password` (the web password) and `integrations.download.deluge.daemon_password` (`download_client.torrent.deluge.password`; 05-config §1.12.3), encrypted under the keyring (both plaintext in the blob at HEAD) and referenced from the row, `Local` bound to the stored web URL's origin and `OperatorSecretOrigin` set to it (05-metadata M1.10 "Trust carried over"); the step deletes the Deluge fields from the blob. From then on the native rules apply: a URL change by anyone without the ProtectAdmin check clears the stored password and `Local` (05-metadata M1.3). The env-authoritative behaviour is an **in-memory operator overlay** on the effective instance while an operator value is set, never written to the row or `c/secrets/`, so removing the env value restores the stored password as HEAD does (05-metadata M1.4 step 2, SIMP2-5); every operator value overlays and locks its field (05-config §1.3.5). An env-given Deluge password is served beside the migrated web URL, and is withheld beside one a non-admin sets later (05-metadata M1.4 step 2) |
 | `deluge_move_enabled`, `deluge_discovery_label`, `deluge_discovery_enabled` | `modules.books.download.*` settings (they are ABO behaviour, not client config) |
-| `BookVersion.TorrentHash`, `BookFile.DelugeHash` | **phase 1: unchanged** — no books row rewrite; books builds `download.ItemRef{Instance: download/deluge, ID: ItemID(hash)}` at the call site. Storing `ItemRef` is the phase-2 books migration (§1 table), with its own stage entry when it ships (SIMP2-7) |
+| `BookVersion.TorrentHash`, `BookFile.DelugeHash` | **phase 1: unchanged** — no books row rewrite; books builds `download.ItemRef{Instance: download/deluge, ID: ItemID(hash)}` at the call site. Storing `ItemRef` is the phase-2 books migration (§1 table), with its own release entry when it ships (SIMP2-7) |
 | `NotifyDelugeAfterOrganize/AfterVersionSwap/MoveStorage(ToDir)` | books code calling `Pool.Relocate` (reached as `module.Deps.Downloads`, COR-1) for every `ItemRef` of the book's active versions, behind `Caps.Relocate` |
 | `deluge.path-update` (triggered by `book.relocated`), `deluge.centralize`, `deluge.link-backfill`, `deluge.protected-paths-sync`, `maintenance.bulk-deluge-import` | books tasks `books.download.*` calling `Pool`; `protected-paths-sync` gets a real schedule (fixes raw/06 note (d)) |
 | `ProtectedPathCache`, discovery, import, mark-in-place (`internal/deluge/*.go` minus client) | stay in ABO (audiobook behaviour) using `Pool.Items` (discovery: `ItemFilter{Categories: [<discovery label>]}`) and `Pool.Files` across **all** download instances; no `Watch`, monitor or grab is needed (phase 1 only) |
-| `/api/v1/deluge/*` routes (`internal/server/deluge_integration.go:139`) | books behaviour routes stay on the books legacy mount (cross-cutting 2; no reason of their own to rewrite them); generic client routes (test connection, status) become core instance routes with aliases (09 S7; SIMP2-17) |
-| `internal/plugin` `DownloadClient`, `TorrentInfo` | deleted at 09 S7 with `internal/plugin` (N4; 04 §8.3) |
+| `/api/v1/deluge/*` routes (`internal/server/deluge_integration.go:139`) | books behaviour routes stay on the books gin mount (cross-cutting 2; no reason of their own to rewrite them); generic client routes (test connection, status) become core instance routes in R2 and the old paths are deleted, with the SPA switched in the same release (09; SIMP2-17) |
+| `internal/plugin` `DownloadClient`, `TorrentInfo` | deleted in R2's integrations flip with `internal/plugin` (N4; 04 §8.3) |
 
 ## 11. Open items
 
@@ -812,3 +811,11 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
 - integration pass (advisor): `acquire` cited as 10's design sketch (non-normative).
 - Round 10:
   - R10-10 / SEC10-2 / SEC10-3 — instance paragraph and §10 Deluge row: a `Test` that changes the web URL needs ProtectAdmin as `Put` does; with auth off, the legacy-backed Deluge instance stays editable as at HEAD (05-metadata M1.3).
+
+- D10–D12 revision (2026-11-04): §4.1 and §10: ABO's Deluge is no longer a legacy-backed instance served from
+  the blob; books' R2 cutover step migrates it to a native `download/deluge` row (password moved to `c/secrets/`
+  by the secrets step, `Local` and `OperatorSecretOrigin` bound to the stored URL, 05-metadata M1.10), and the
+  native rules apply from then on; `BelowStored`, HEAD-reach, auth-off and rollback text removed. The generic
+  Deluge routes are deleted in R2, not aliased. `staging-scrub` row text removed; the legacy-store test replaced by
+  `TestDelugeMigration_InstanceAndPassword`. Stage references re-keyed to R2. Consistency pass: the Deluge daemon password (`download_client.torrent.deluge.password`) is adopted as its own secret field `daemon_password` at `integrations.download.deluge.daemon_password` (§4.1, §9, §10), the name 05-config's rename table coined.
+

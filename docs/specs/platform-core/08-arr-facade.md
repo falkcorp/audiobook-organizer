@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/08-arr-facade.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.2 -->
 <!-- guid: 6d9b089a-fb08-4087-9ccd-43b9aa4ec555 -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 08 — *arr-v3 facade: `core/arrfacade`
 
@@ -9,7 +9,7 @@
 SDK and the API-stability gate freeze none of it: no type, route, key purpose, scope, config key,
 metric or test named here. The build that creates `arrfacade` with the first TV/Movies app writes the
 normative contract, using this sketch and its fixtures as input; until then the words "must" and
-"required" below describe the sketch's intent, not an obligation on any S0–S10 build. D5's proof depth
+"required" below describe the sketch's intent, not an obligation on any R0–R3 build. D5's proof depth
 is carried by 10, which shows that the frozen contracts fit TV and Movies.
 
 Evidence commit: `748fd787a`. Raw data: [`raw/16-arr-domain-research.md`](../../plans/platform-core/raw/16-arr-domain-research.md)
@@ -21,16 +21,16 @@ apps implement it per resource; there is **no** commitment to Sonarr/Radarr pari
 database, or to endpoints no named client uses (N3).
 
 **Build status: deferred-build** (03 §3.3, cross-cutting resolution 1, SIMP-1). This file is a design
-sketch at proof depth (D5). No S0–S10 stage (09 §9.3) builds `arrfacade`; it is built with the first TV/Movies
+sketch at proof depth (D5). No release of the extraction (R0–R3, 09) builds `arrfacade`; it is built with the first TV/Movies
 app. During the extraction only one thing exists: core's reservation of `/api/v3/` (05-http-api
 §4.1). ABO's conformance engine moves to core (`httpapi/conformance`) **when `arrfacade` is built**;
-until then it stays `internal/syncapi/conformance` in ABO, as 04 records, because during S0–S10 it has
+until then it stays `internal/syncapi/conformance` in ABO, as 04 records, because during the extraction it has
 one consumer (SIMP2-9). The `module` hooks the facade needs (`Registrar.ArrFacade`, the facade problem
 kinds) are deferred-build members of 06 §6.4.9.
 
 **Deferred-build members of built packages (SIMP2-6).** Deferral applies to features inside built
 packages as well as to packages (03 §3.4). Everything below exists only for this facade, has no ABO
-consumer, and is therefore **not** built in S2/S4; each owning file keeps its sketch under its
+consumer, and is therefore **not** built in R1 or R2; each owning file keeps its sketch under its
 `Deferred-build members` heading (03 §3.4), and it lands additively in the build that creates
 `arrfacade`. The table below is a reader's index of those entries:
 
@@ -77,13 +77,13 @@ for the facade beyond key management (07), Sonarr/Radarr data import.
 
 | # | Decision | Why |
 |---|---|---|
-| F1 | The facade is a **per-module** HTTP surface served by core, backed by an app-implemented `Provider` whose resources are **optional interface fields**; a nil field means the endpoints are not served. Required fields are derived from the clients the provider declares, and checked at boot. | D2 "extension point, not parity": the contract grows only with real client needs; incomplete client support fails at boot, not in front of a user. |
-| F2 | Core owns the **wire DTOs** (camelCase, the foreign API's convention), written from the conformance fixtures when the facade is built (§8.6.2). Apps map domain → DTO. | One place to fix a field name for every app; conformance tests run against core types. |
-| F3 | Core provides **default providers** for resources that are core data: system status, root folders (from `library`), indexers (instances in the one integration-instance store, written through `integrations.FacadeWriter`), commands (mapped to `tasks`). | Prowlarr push and most pickers then need zero app code. |
-| F4 | Integer IDs: core provides a persistent **ID map** from `entity.Ref{Module, Kind, ID}` (03 §3.3) to stable `int32` (keyspace `c/arrfacade/<module>/ids/`). | v3 clients require numeric ids and store them; app IDs are opaque strings. |
-| F5 | Auth is **API key only**, through the core API key store, with `PurposeFacade` keys bound to one module (05-authn §4.4, deferred-build member, §8.0) whose scopes are that module's `Confining` facade scopes (05-rbac). | Clients store one key forever; it must not be a general admin key. |
-| F6 | Mount at `<url_base>/api/v3` per module. Core **reserves** `/api/v3/` for facades; ABO's `/api/v3/ops` becomes a legacy alias of the core tasks API for the compatibility window and cannot coexist with a facade on the same base. | §8.4 |
-| F7 | **No SignalR.** `/signalr/*` is not served. | §8.8.4 |
+| AF1 | The facade is a **per-module** HTTP surface served by core, backed by an app-implemented `Provider` whose resources are **optional interface fields**; a nil field means the endpoints are not served. Required fields are derived from the clients the provider declares, and checked at boot. | D2 "extension point, not parity": the contract grows only with real client needs; incomplete client support fails at boot, not in front of a user. |
+| AF2 | Core owns the **wire DTOs** (camelCase, the foreign API's convention), written from the conformance fixtures when the facade is built (§8.6.2). Apps map domain → DTO. | One place to fix a field name for every app; conformance tests run against core types. |
+| AF3 | Core provides **default providers** for resources that are core data: system status, root folders (from `library`), indexers (instances in the one integration-instance store, written through `integrations.FacadeWriter`), commands (mapped to `tasks`). | Prowlarr push and most pickers then need zero app code. |
+| AF4 | Integer IDs: core provides a persistent **ID map** from `entity.Ref{Module, Kind, ID}` (03 §3.3) to stable `int32` (keyspace `c/arrfacade/<module>/ids/`). | v3 clients require numeric ids and store them; app IDs are opaque strings. |
+| AF5 | Auth is **API key only**, through the core API key store, with `PurposeFacade` keys bound to one module (05-authn §4.4; a deferred-build member, 05-authn §3.5) whose scopes are that module's `Confining` facade scopes (05-rbac). | Clients store one key forever; it must not be a general admin key. |
+| AF6 | Mount at `<url_base>/api/v3` per module. Core **reserves** `/api/v3/` for facades; ABO's `/api/v3/ops` is deleted in R2's tasks flip (F5), when the Activity page moves to the core tasks API, so nothing else of ABO's sits under `/api/v3/`. | §8.4 |
+| AF7 | **No SignalR.** `/signalr/*` is not served. | §8.8.4 |
 
 ## 8.4 Mount point and the `/api/v3/ops` collision
 
@@ -92,18 +92,17 @@ for the facade beyond key management (07), Sonarr/Radarr data import.
   setting and the named clients accept a base URL with a path, so a non-empty base is a normal
   client configuration.
 * The kernel (06 P7, after config has loaded) fails boot with `ProblemFacadeURLBaseCollision` when two enabled facades
-  resolve to the same base, or when a facade prefix overlaps any module's declared legacy prefix or a
-  core route. This is the multi-app rule too (11): `/tv/api/v3` and `/movies/api/v3`.
+  resolve to the same base, or when a facade prefix overlaps any module's declared mount prefix
+  (05-http-api §8.2) or a core route. This is the multi-app rule too (11): `/tv/api/v3` and `/movies/api/v3`.
 * **ABO**: ABO registers no provider (Readarr, the only book-shaped *arr, is retired — raw/16 §6). Its
-  `/api/v3/ops/*` routes are re-pointed at the core tasks API (`/api/core/v1/tasks/...`, 05-tasks) and
-  kept as a declared legacy prefix of the `books` module for the two-minor-release window (02 §2.5 Q5,
-  09), then answer 410 and are deleted. No in-repo client uses them (§8.2). If ABO ever registered a
-  provider with an empty base during the window, boot fails — the collision is detected, never
-  resolved by path precedence.
+  `/api/v3/ops/*` routes are deleted in R2's tasks flip (F5): the SPA's Activity page moves to the core tasks API
+  (`/api/core/v1/tasks/...`, 05-tasks) in the same release, and no other in-repo client uses them (§8.2). No
+  alias, 410 window or redirect remains (D10). Were ABO ever to register a provider, the collision rule above
+  would still apply to its gin-mount prefixes.
 * Rejected: letting `/api/v3/ops` and a facade share the prefix because no *arr resource is named
   `ops`. Two APIs with different auth, error shapes and permission models under one prefix is a
   standing trap for routing, logging and rate limiting.
-* Middleware: the facade is mounted on `httpapi.Router.FacadeGroup(owner, base)` (05-http-api §4.9, deferred-build member, §8.0) with the **same core chain** as native
+* Middleware: the facade is mounted on `httpapi.Router.FacadeGroup(owner, base)` (05-http-api §4.9; a deferred-build member, 05-http-api §3.6) with the **same core chain** as native
   routes (peer allow-list, recovery, security headers, rate limit, body limit, authenticate,
   authorize) but with facade key extraction (§8.5) instead of session cookies, and v3 error encoding.
 * Path matching: ASP.NET routing in the originals is case-insensitive and clients rely on it (Seerr
@@ -116,7 +115,7 @@ for the facade beyond key management (07), Sonarr/Radarr data import.
 * Key sources, in order: header `X-Api-Key`, query `apikey`, header `Authorization: Bearer <key>`
   (raw/16 §5.1: Seerr sends `apikey`, Prowlarr sends `X-Api-Key`, Bazarr sends `?apikey=`). Session
   cookies are ignored on facade paths. Query-string key extraction is enabled only on facade groups
-  (05-authn §4.2); like the purpose fields below, it is built with this package (§8.0).
+  (05-authn §4.2); like the purpose fields below, it is built with this package (05-authn §3.5).
 * **Facade keys are purpose-bound (SEC-5).** The key must be a core API key with
   `Purpose = PurposeFacade` and `Module = m` (05-authn §4.4, `KeySpec.Purpose`/`Module`, normative
   there), and every scope it holds must be one of `m:arr.read`, `m:arr.request`, `m:arr.indexers`. The
@@ -363,7 +362,7 @@ keeps only their `int32` ↔ `integrations.Ref` mapping in `IDMap`. `AppInfo` ca
 D5 limits TV/Movies to proof depth and the facade is deferred-build, so this file does not carry Go
 wire DTOs (SIMP-24). **The sketch's reference is the conformance fixtures of §8.14**, which hold every field
 each named client reads, transcribed with provenance; raw/16 §5.2 is the field-level source. Core
-still owns the DTOs when the facade is built (F2): they are written then, from the fixtures, in
+still owns the DTOs when the facade is built (AF2): they are written then, from the fixtures, in
 package `arrfacade`. The resources and the fields that matter for behaviour:
 
 | Resource | Required fields (raw/16 §5.2 "Fields required") | Notes |
@@ -373,7 +372,7 @@ package `arrfacade`. The resources and the fields that matter for behaviour:
 | `RootFolder` | `id`, `path`, `accessible`, `freeSpace`, `totalSpace`, `unmappedFolders` (always empty) | from `LibraryRootFolders` |
 | `Series` (+ `AddSeries.addOptions`) | `id`, `title`, `sortTitle`, `year`, `path`, `tvdbId`, `seriesType`, `qualityProfileId`, `monitored`, `seasonFolder`, `seasons[]` (number, monitored, statistics), `tags`, `images`, `ended`, `rootFolderPath` | Seerr PUTs back the whole object it read, so unknown fields must round-trip or be ignored |
 | `Episode`, `EpisodeFile` | episode: `id`, `seriesId`, `seasonNumber`, `episodeNumber`, `title`, `monitored`, `hasFile`, `episodeFileId`, optional embedded file; file: `id`, `path`, `size`, `quality`, `mediaInfo`, `languages` | Bazarr reads files and media info for subtitle search |
-| `Movie` (+ `AddMovie`, legacy `profileId`) | `id`, `title`, `sortTitle`, `titleSlug`, `year`, `path`, `tmdbId`, `qualityProfileId`, `minimumAvailability`, `monitored`, `hasFile`, `movieFile`, `tags`, `images`, `rootFolderPath` | |
+| `Movie` (+ `AddMovie`, the older `profileId`) | `id`, `title`, `sortTitle`, `titleSlug`, `year`, `path`, `tmdbId`, `qualityProfileId`, `minimumAvailability`, `monitored`, `hasFile`, `movieFile`, `tags`, `images`, `rootFolderPath` | |
 | `QueueItem` (in `Page`) | `id`, `title`, `size`, `sizeleft`, `status`, `trackedDownloadStatus`, `trackedDownloadState`, `downloadId`, `protocol`, `downloadClient`, `indexer`, `episodeId`/`seriesId`/`movieId` | backed by `acquire` tracked downloads when built (O8) |
 | `Command` | `id`, `name`, `status` (`queued`/`started`/`completed`/`failed`/`aborted`), `queued`, `started`, `ended` | from `TaskCommands` |
 | `HistoryRecord` | `id`, `eventType`, `sourceTitle`, `episodeId`/`movieId`, `date`, `data` | shape vs `Page` is O3 |
@@ -443,7 +442,7 @@ these names for the provider's flavour (checked at boot).
 | Path | Client | Decision |
 |---|---|---|
 | `/signalr/messages` (WebSocket, `access_token`) | Bazarr | not served (§8.8.4) |
-| unversioned `/api/system/status` | Bazarr legacy-v2 fallback | not served: only v3 exists |
+| unversioned `/api/system/status` | Bazarr's v2 fallback | not served: only v3 exists |
 | anything else in Sonarr/Radarr v3 | — | not served; counted in `mediacore_arrfacade_unserved_total` so real demand is visible |
 
 ## 8.8 Wire conventions
@@ -504,7 +503,7 @@ from core `events` topics to SignalR messages inside `arrfacade`, not a core rea
 | Error path | Behaviour | Why |
 |---|---|---|
 | Provider incomplete for a declared client | fail-closed at boot | a half-working Seerr integration fails in front of users |
-| URL-base collision (with another facade, legacy prefix, core route) | fail-closed at boot | §8.4 |
+| URL-base collision (with another facade, a module's mount prefix, a core route) | fail-closed at boot | §8.4 |
 | Key missing/invalid/expired/wrong purpose/wrong module | 401, audited as denial | facade keys are single-purpose |
 | Permission missing | 403, audited | R6 |
 | Nil provider field / unknown path | 404, counted as unserved | contract grows on evidence |
@@ -582,7 +581,7 @@ rule requires; until then it stays in ABO (04, SIMP2-9).
 | `TestCaseInsensitivePaths` | `/qualityProfile`, `/episodeFile`, trailing slash, `ApiKey` query name |
 | `TestAuth_*` | each key source; admin key refused; general key with extra scopes refused; wrong module refused (the refusal off the facade group is tested by the chain's owners, §8.5) |
 | `TestProviderValidation_*` | each missing-resource combination fails boot with `ProblemFacadeIncomplete` |
-| `TestURLBaseCollision` | with a legacy `/api/v3/ops` prefix and with two facades |
+| `TestURLBaseCollision` | with a module's mount prefix under `/api/v3/` and with two facades |
 | `TestIDMapStableConcurrent` | `synctest` + parallel `Assign` |
 | `TestErrorShapes` | §8.8.2 table |
 
@@ -592,9 +591,9 @@ Apps run the same scenarios against their real provider: `arrfacadetest.Conforma
 
 | Today | Becomes |
 |---|---|
-| `/api/v3/ops/*` (12 routes, `internal/server/wire_ops_v3_routes.go`, `internal/server/handlers/opsv3/`) | core tasks API `/api/core/v1/tasks/...` (05-tasks); `/api/v3/ops/` stays as a declared `books` legacy prefix for the compatibility window (09), then 410, then removed |
-| `/api/*` redirect exclusion for `/api/v3/` (`server_lifecycle.go:1801-1803`) | removed with the legacy prefix; core reserves `/api/v3/` for facades |
-| `internal/syncapi/conformance` | unchanged during S0–S10 (04); moves to core `httpapi/conformance` when `arrfacade` is built, then shared by ABO's ABS surface and the facade (SIMP2-9) |
+| `/api/v3/ops/*` (12 routes, `internal/server/wire_ops_v3_routes.go`, `internal/server/handlers/opsv3/`) | core tasks API `/api/core/v1/tasks/...` (05-tasks); `/api/v3/ops/` is deleted in R2's tasks flip (F5), with the SPA switched in the same release (09) |
+| `/api/*` redirect exclusion for `/api/v3/` (`server_lifecycle.go:1801-1803`) | removed with `/api/v3/ops/` in R2; core reserves `/api/v3/` for facades |
+| `internal/syncapi/conformance` | unchanged during R0–R3 (04); moves to core `httpapi/conformance` when `arrfacade` is built, then shared by ABO's ABS surface and the facade (SIMP2-9) |
 | query redaction list (`internal/server/server.go:695-704`) | core redaction (05-logging) with `apikey`, `access_token` added |
 | ABS compatibility surface | stays in ABO (an app's compatibility surface, raw/10 G15); its identity already resolves to core users — the same principle the facade follows |
 
@@ -613,7 +612,7 @@ Apps run the same scenarios against their real provider: `arrfacadetest.Conforma
 
 Closed in 1.1.0: O9 (explicit facade purpose on keys): `KeySpec.Purpose = PurposeFacade` and
 `Module` are normative in 05-authn §4.4, as deferred-build members that land with this package
-(§8.0, SIMP2-6), and the refusal of facade keys off their group is owned by 05-rbac §4.10 and
+(05-authn §3.5, SIMP2-6), and the refusal of facade keys off their group is owned by 05-rbac §4.10 and
 05-http-api §4.2 stage 12 (SEC-5).
 
 ## Review history
@@ -666,3 +665,10 @@ Advisor (2026-11-04), resolutions applied to this file:
 - A-15 / ADV-S9 — labelled "design sketch (non-normative)": the SDK and the API-stability gate freeze none of it; the build that creates `arrfacade` writes the contract; §8.6.2 fixtures are the sketch's reference.
 - A-4 / ADV-S3 — §8.0: the `archtest.DeferredMembersAbsent` paragraph and the column grammar removed; the deferred-members table stays a reader's index.
 - A-5 / ADV-S4 — §8.13: facade series named under `app.Options.MetricNamespace`.
+
+- D10–D12 revision (2026-11-04): `/api/v3/ops` is no longer a legacy alias of the tasks API for a compatibility
+  window: it is deleted in R2's tasks flip with the SPA switched in the same release (F6, §8.4, §8.15); the
+  collision rule names a module's mount prefix instead of a legacy prefix; stage references S0–S10, S2/S4
+  re-keyed to R0–R3. Consistency pass: the design decisions are numbered AF1–AF7, so they no longer clash with R2's flip labels F3–F9, the `/api/v3/ops` deletion is placed in the tasks flip (F5), and the two foreign-API notes no longer say legacy.
+
+Round 14 (2026-11-05): V28 (the four dangling §8.0 citations in AF5, §8.4, §8.5 and O9 now point at 05-authn §3.5 and 05-http-api §3.6, the deferred-build member tables), V23 (checked: no round-13 ruling number is cited bare in normative text).
