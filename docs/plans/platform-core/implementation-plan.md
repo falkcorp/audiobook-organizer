@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/implementation-plan.md -->
-<!-- version: 2.1.0 -->
+<!-- version: 2.1.1 -->
 <!-- guid: e0650f4a-4aec-4453-a256-aed84bf5ef1c -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -24,7 +24,7 @@ with its wave, tier, dependencies, files and spec sections. The same rows exist 
 writers.
 
 **Size: 129 rows: 123 agent tasks, each one PR, and 6 owner checkpoints (NOT AGENT WORK),
-in 43 waves.**
+in 45 waves.**
 
 ---
 
@@ -102,17 +102,17 @@ for a flip PR**; an owner release checkpoint (cut, deploy) takes 1 day, the opti
 owner turns a checkpoint around the day it is reached. R2's briefs may be executed and their PRs opened
 during R1; only the merge waits for OWNER-03.
 
-**The critical path** (28 sequential agent PRs and 4 release checkpoints):
+**The critical path** (30 sequential agent PRs and 4 release checkpoints):
 
-R0-02 (T3, 1.5) → R0-03 (T2, 1) → OWNER-02 (OWNER, 1) → R1-01 (T3, 1.5) → R1-02 (T2, 1) → R1-10 (T3, 1.5) → R1-13 (T4, 2.5) → R1-20 (T4, 2.5) → R1-21 (T4, 2.5) → R1-23 (T4, 2.5) → R1-25 (T4, 2.5) → R1-27 (T2, 1) → R1-28 (T2, 1) → OWNER-03 (OWNER, 1) → F2-09 (T2, 1) → F2-01 (T3, 1.5) → F2-06 (T4, 2.5) → F3-04 (T4, 2.5) → F3-06 (T4, 2.5) → F4-06 (T4, 2.5) → F4-07 (T3, 1.5) → F4-08 (flip, 3) → F5-18 (flip, 3) → F6-03 (flip, 3) → F7-09 (flip, 3) → F8-04 (flip, 3) → F9-03 (flip, 3) → R2-01 (T2, 1) → OWNER-05 (OWNER, 1) → R3-02 (T4, 2.5) → R3-03 (T3, 1.5) → OWNER-06 (OWNER, 1)
+R0-02 (T3, 1.5) → R0-03 (T2, 1) → OWNER-02 (OWNER, 1) → R1-01 (T3, 1.5) → R1-02 (T2, 1) → R1-10 (T3, 1.5) → R1-13 (T4, 2.5) → R1-20 (T4, 2.5) → R1-21 (T4, 2.5) → R1-23 (T4, 2.5) → R1-25 (T4, 2.5) → R1-27 (T2, 1) → R1-28 (T2, 1) → OWNER-03 (OWNER, 1) → F2-09 (T2, 1) → F2-01 (T3, 1.5) → F2-06 (T4, 2.5) → F3-04 (T4, 2.5) → F3-06 (T4, 2.5) → F4-06 (T4, 2.5) → F4-07 (T3, 1.5) → F4-08 (flip, 3) → F5-18 (flip, 3) → F6-03 (flip, 3) → F7-09 (flip, 3) → F8-04 (flip, 3) → F9-05 (T3, 1.5) → F9-02 (T3, 1.5) → F9-03 (flip, 3) → R2-01 (T2, 1) → OWNER-05 (OWNER, 1) → R3-02 (T4, 2.5) → R3-03 (T3, 1.5) → OWNER-06 (OWNER, 1)
 
 | Scenario | Working days |
 |---|---|
-| Base rates, dependencies only (pipelined execution) | **62** (about 12 weeks) |
-| Base rates, with the four optional smoke days | 66 |
+| Base rates, dependencies only (pipelined execution) | **65** (about 13 weeks) |
+| Base rates, with the four optional smoke days | 69 |
 | Shell (F9) slips to R3 and runs beside R3-02 | 59 |
-| Every T3, T4 and flip PR takes 1.5× its base rate | 88.25 |
-| Waves run strictly in lockstep (§(d), each wave as long as its longest PR) | 80 |
+| Every T3, T4 and flip PR takes 1.5× its base rate | 92.75 |
+| Waves run strictly in lockstep (§(d), each wave as long as its longest PR) | 84 |
 
 R0 and R1 take 23 of these days: R1's storage chain R1-20 → R1-21 → R1-23 → R1-25 is 10 of them,
 and the deploy tooling and `unit-lifecycle` close R1. In R2 the path starts with F2-09 → F2-01 (the tasks API
@@ -135,7 +135,7 @@ A wave is a set of tasks that run at the same time. Every task in a wave has all
 in an earlier wave, and no two tasks in a wave touch the same file, where a path ending in `/` is a whole
 directory and collides with every path below it. Both properties are checked mechanically by a script
 over the JSON inventory, whose checks are numbered as the table cites them: (1) the row schema and the ID
-scheme, (2) every dependency in an earlier wave, (3) pairwise file disjointness of the 326 same-wave
+scheme, (2) every dependency in an earlier wave, (3) pairwise file disjointness of the 309 same-wave
 task pairs, (4) the 04 coverage of §(h), (5) the gate ownership of §(e), (6) real paths. The last run passed all six. The waves were
 computed by list scheduling in dependency order with critical-path priority, so a task joins the earliest
 wave after its dependencies whose members it does not collide with.
@@ -202,26 +202,28 @@ What makes the plan safe beyond the per-wave rule:
 | W21 | OWNER | OWNER-03 | 1.0 | owner checkpoint OWNER-03: no files, NOT AGENT WORK; it gates the tasks that depend on it. |
 | W22 | OWNER, R1, F2, F4 | OWNER-04, R1-31, F2-07, F2-08, F2-09, F2-10, F2-12, F4-04, F4-10 | 1.5 | owner checkpoint OWNER-04: no files, NOT AGENT WORK; it gates the tasks that depend on it; 8 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); the R2 PRs here land dark (no route, schedule or stored row changes before their flip); the freeze-off PR merges only after its release is cut. |
 | W23 | F2, F3, F4 | F2-01, F2-13, F2-14, F3-01, F4-01 | 2.5 | 5 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F3-01 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
-| W24 | F2, F3, F4 | F2-02, F2-06, F2-17, F3-03, F3-05, F4-09 | 2.5 | 6 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F2-17 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
-| W25 | F2, F3, F4, F7 | F2-03, F2-15, F3-02, F3-04, F4-02, F7-01 | 2.5 | 6 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F4-02 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
+| W24 | F2, F3, F4 | F2-02, F2-06, F3-03, F3-05, F4-09 | 2.5 | 5 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
+| W25 | F2, F3, F4, F7 | F2-03, F2-15, F2-17, F3-02, F3-04, F4-02, F7-01 | 2.5 | 7 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F2-17, F4-02 run inside an announced move window: no other PR in the wave touches the packages they move or rewire or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
 | W26 | F2, F3, F7, F8 | F2-04, F3-06, F7-04, F7-10, F8-01 | 2.5 | 5 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
 | W27 | F2, F4, F5 | F2-05, F2-11, F4-03, F4-06, F5-16 | 2.5 | 5 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F4-03 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
-| W28 | F2, F4, F5, F6, F7, F8 | F2-16, F4-05, F5-15, F6-01, F6-02, F7-02, F7-03, F7-06, F8-03 | 2.5 | 9 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F7-02 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip); F2-16 is the wave's one owner of the kernel and module wiring files. |
+| W28 | F2, F4, F5, F6, F7, F8 | F2-16, F4-05, F5-15, F6-01, F6-02, F7-02, F7-06, F8-03 | 2.5 | 8 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F7-02 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip); F2-16 is the wave's one owner of the kernel and module wiring files. |
 | W29 | F3, F5, F6, F7, F9 | F3-07, F5-01, F5-02, F5-03, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-19, F6-04, F7-07, F9-01 | 3.0 | 17 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F3-07 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F3-07, F5-03 run inside an announced move window: no other PR in the wave touches the packages they move or rewire or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip); F3-07's merge starts the R2 freeze; F5-01, F5-02, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12 each delete only their own exemption entry file; F3-07 is the wave's one owner of the kernel and module wiring files. |
-| W30 | F4, F5, F6, F7, F9 | F4-07, F5-13, F6-05, F7-05, F9-02, F9-04, F9-05 | 1.5 | 7 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F7-05 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip); F5-13 each delete only their own exemption entry file. |
+| W30 | F4, F5, F6, F7 | F4-07, F5-13, F6-05, F7-03, F7-05 | 2.5 | 5 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F7-05 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip); F5-13 each delete only their own exemption entry file. |
 | W31 | F4, F5, F7 | F4-08, F5-14, F7-08 | 3.0 | 3 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F4-08 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F4-08 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip); F4-08 is the wave's one owner of the kernel and module wiring files. |
 | W32 | F8 | F8-02 | 1.5 | every dependency merged in an earlier wave (check 2); F8-02 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
 | W33 | F5 | F5-18 | 3.0 | every dependency merged in an earlier wave (check 2); F5-18 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F5-18 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; F5-18 is the wave's one owner of the kernel and module wiring files. |
 | W34 | F6 | F6-03 | 3.0 | every dependency merged in an earlier wave (check 2); F6-03 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F6-03 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; F6-03 is the wave's one owner of the kernel and module wiring files. |
 | W35 | F7 | F7-09 | 3.0 | every dependency merged in an earlier wave (check 2); F7-09 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F7-09 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; F7-09 is the wave's one owner of the kernel and module wiring files. |
 | W36 | F8 | F8-04 | 3.0 | every dependency merged in an earlier wave (check 2); F8-04 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F8-04 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; F8-04 is the wave's one owner of the kernel and module wiring files. |
-| W37 | F9 | F9-03 | 3.0 | every dependency merged in an earlier wave (check 2); F9-03 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F9-03 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; F9-03 is the wave's one owner of the kernel and module wiring files. |
-| W38 | R2 | R2-01 | 1.0 | every dependency merged in an earlier wave (check 2). |
-| W39 | OWNER | OWNER-05 | 1.0 | owner checkpoint OWNER-05: no files, NOT AGENT WORK; it gates the tasks that depend on it. |
-| W40 | R2, R3 | R2-02, R3-02, R3-04 | 2.5 | 3 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); the freeze-off PR merges only after its release is cut. |
-| W41 | R3 | R3-05 | 1.5 | every dependency merged in an earlier wave (check 2). |
-| W42 | R3 | R3-01, R3-03 | 1.5 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2). |
-| W43 | OWNER | OWNER-06 | 1.0 | owner checkpoint OWNER-06: no files, NOT AGENT WORK; it gates the tasks that depend on it. |
+| W37 | F9 | F9-05 | 1.5 | every dependency merged in an earlier wave (check 2); the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
+| W38 | F9 | F9-02, F9-04 | 1.5 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
+| W39 | F9 | F9-03 | 3.0 | every dependency merged in an earlier wave (check 2); F9-03 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F9-03 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; F9-03 is the wave's one owner of the kernel and module wiring files. |
+| W40 | R2 | R2-01 | 1.0 | every dependency merged in an earlier wave (check 2). |
+| W41 | OWNER | OWNER-05 | 1.0 | owner checkpoint OWNER-05: no files, NOT AGENT WORK; it gates the tasks that depend on it. |
+| W42 | R2, R3 | R2-02, R3-02, R3-04 | 2.5 | 3 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); the freeze-off PR merges only after its release is cut. |
+| W43 | R3 | R3-05 | 1.5 | every dependency merged in an earlier wave (check 2). |
+| W44 | R3 | R3-01, R3-03 | 1.5 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2). |
+| W45 | OWNER | OWNER-06 | 1.0 | owner checkpoint OWNER-06: no files, NOT AGENT WORK; it gates the tasks that depend on it. |
 
 ---
 
@@ -422,7 +424,7 @@ From 14 §14.1 and §14.1.1; each row names the tasks that carry the mitigation.
 | Risk (14) | Plan mitigation |
 |---|---|
 | K20 — gates that gate nothing: merges and RCs were not CI-gated, a production minor auto-promoted every 10 RCs | OWNER-01 settles Q-I before R1-01; R1-02, R1-03, R1-04 build the named required checks; R1-01 and F3-07 turn the freezes on and R1-31, R2-02 turn them off only after the release; no merge with `--admin` past a required check. `/parallel-sweep`'s admin-merge on green is incompatible with Q-I's recommended ruleset and is used only in the mode OWNER-01 approves |
-| E14 — R2's blast radius, one release changing every core service | R1 carries the runtime half; every R2 subsystem lands dark first and its flip is one PR that only wires, deletes and switches callers; each flip is the only PR of its wave touching `main.go`, `internal/server/` and books' registration (waves W29, W31, W33, W34, W35, W36, W37) |
+| E14 — R2's blast radius, one release changing every core service | R1 carries the runtime half; every R2 subsystem lands dark first and its flip is one PR that only wires, deletes and switches callers; each flip is the only PR of its wave touching `main.go`, `internal/server/` and books' registration (waves W29, W31, W33, W34, W35, W36, W39) |
 | E1, E18 — a one-way migration loses data, with no previous-build oracle | F2-12 has the R0 binary write the corpus and record the answers; F2-13 the labelled overlay; F2-14 the production-shaped store; F2-15 the per-family, ID, reference and byte-identity checks and the restore drill; F2-06 the crash matrix at every chunk; F3-04 the dry run |
 | E3 — the shared `idx:` and `setting:` families split wrongly | F2-15's sub-prefix lists generated from `keyfamilies.go` and the census, with the byte-identity check on every R2 PR |
 | E4, E10 — secrets lost or plaintext copies left behind | F3-06 keeps HEAD's key guard and quarantines an undecryptable row; F3-03 the keyring export; F3-07 the no-plaintext canary; R1-24 the 7-day sweeper; OWNER-05 steps 1 and 7 |
