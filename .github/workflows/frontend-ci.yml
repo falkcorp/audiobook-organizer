@@ -1,7 +1,7 @@
 # file: .github/workflows/frontend-ci.yml
-# version: 2.16.2
+# version: 2.17.0
 # guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
-# last-edited: 2026-10-27
+# last-edited: 2026-11-04
 
 name: Frontend CI
 
@@ -61,7 +61,7 @@ jobs:
     name: Frontend Build and Test
     needs: frontend-config
     if: needs.frontend-config.outputs.has-frontend == 'true'
-    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@08df4f4216dceb4c548bf0a4989ba36d1c775d2d # main 2026-10-27 (github-common#381: Playwright browsers installed as the runner user; #380 deps bump)
+    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@8e4eeeb8ae4f3543f17e595f794989a91707ecb6 # main 2026-11-04 (github-common#385: free-runner-disk input; also brings in the gha-ci-workflow-helpers frontend-run exit-code fix)
     with:
       go-version: '1.27.2'
       node-version: ${{ needs.frontend-config.outputs.node-version }}
@@ -76,10 +76,13 @@ jobs:
       # The reusable workflow's E2E step stays off: it runs the same Playwright
       # suite and config as this repo's own E2E workflow (e2e.yml: chromium on
       # every PR that touches web/ or Go, chromium+webkit nightly), so here it
-      # would only add ~20 min per run. Also, the pinned reusable-ci still calls
-      # gha-ci-workflow-helpers at 4b5f4d45, whose frontend-run reports a failed
-      # npm script as a pass, so this step could not gate anything anyway.
+      # would only add ~20 min per run.
       skip-e2e-tests: true
+      # Go CI linked -race test binaries into a full runner disk on 2026-11-04
+      # ("final link failed: No space left on device"). This removes the
+      # preinstalled toolchains nothing here uses before the Go cache is
+      # restored, matching scripts/ci/free_runner_disk.sh in ci.yml.
+      free-runner-disk: true
     secrets: inherit
 
   # Fail-closed gate (CI-06). The `frontend` job's `if:` above depends on an
