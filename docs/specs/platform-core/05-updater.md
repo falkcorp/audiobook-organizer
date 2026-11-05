@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.13.2 -->
+<!-- version: 1.13.3 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 05 — Updater (`core/updater`)
 
@@ -144,6 +144,14 @@ func (u *Updater) Apply(rc *tasks.RC, version string) error
 // Rollback is called only from the core.updater.rollback task body: it runs
 // the reader check on <exe>.prev, swaps it back and requests a graceful restart.
 func (u *Updater) Rollback(rc *tasks.RC) error
+// FetchRelease downloads the one release named by version (never "latest", a
+// URL or a path) into dest, as apply's steps 2-3 do (the release source's raw
+// asset, the max_download cap, the --version-json self-test requiring
+// version), and installs nothing: it touches neither <exe> nor <exe>.prev,
+// opens no store and restarts nothing. It is the fetch behind
+// `make rollback-restore RELEASE=<tag>`, reached offline as
+// `<app> updater fetch-release` (5U.4, "Fetching a named release").
+func (u *Updater) FetchRelease(ctx context.Context, version, dest string) error
 
 // Deps are core services, injected by the kernel.
 type Deps struct {
@@ -300,6 +308,26 @@ HEAD, with the hotfix's rules. Steps, each a `rc.Phase`:
    committed unit's `Restart=on-failure`, `deploy/audiobook-organizer.service:111`, restarts it; `0`
    needs `Restart=always`). HEAD exits 0 (`updater.go:329-334`).
 
+**Fetching a named release (the pre-freeze binary of the rollback across R2).** After an R2 hotfix `<exe>.prev`
+is an R2 build, so the rollback across R2 needs the pre-freeze release's binary at `.prev`
+(05-backup §5B.3.3, "Offline restore — the rollback path"; 05-storage §5S.3.12, row `make rollback-restore`).
+`make rollback-restore RELEASE=<tag>` gets it with `<app> updater fetch-release --version <tag> --out <path>`,
+registered through `app.OfflineCommands` (06 §6.4.5) beside `storage restore-offline`; it is a thin wrapper over
+`Updater.FetchRelease`. The fetch is apply's steps 2 and 3 applied to the named release and to no other: the asset
+`AssetName` names for that release on the configured source (a release without it is `no_asset`), fetched through
+`providerhttp` and streamed into `<path>.part` in the target's directory, mode 0755, fsynced, capped at
+`core.updater.max_download`, then self-tested with `--version-json` (`app == AppID`, `version == <tag>`); a
+failed fetch or self-test deletes the partial file, and success renames it to `<path>`. It runs with the service
+stopped and reads no store, so the cap is the compiled-in default (512 MiB), not the setting. It is not an apply and
+not an override: it never renames or replaces `<exe>`, never restarts, never replaces `<exe>.prev` itself, takes no
+arbitrary URL, path or binary (`--version` must be a release tag of the configured source, never `latest`), and the
+"never a downgrade" rule does not apply because the fetched file is not run as the service. The recipe, not this
+command, compares the fetched binary's `--print-storage-levels` with the checkpoint's `from_vector` and installs it
+as `<exe>.prev` only when they are equal (05-backup, as above); a release whose levels differ is refused and the
+existing `.prev` stays. The trust level is apply's: HTTPS from the configured release source (checksums and signed
+manifests are deferred-build, 5U.3). The command exists from R2, the release in which the updater lands, so the
+current binary of the rollback always has it.
+
 **After the restart.** No marker is written and no boot is counted: the new binary boots like any
 deployed binary, and a store refusal at boot (exit 78) needs the operator. A binary whose release carries
 migrations takes the mandatory pre-migration checkpoint at its first boot (05-storage), so an update applied
@@ -309,7 +337,7 @@ migration or is restored (D12 (d), 05-storage §5S.3.12; CONFORM-2, DATA-8), so 
 misbehaves, the admin rolls back by hand: task `core.updater.rollback` (`POST .../rollback`, `core:admin`,
 credential guard, `ConcurrencyKey: core.updater`) runs `ReaderCheck(core.storage.path, <exe>.prev)` first and
 refuses with its reason (a `.prev` older than a level the store reached cannot serve it: from R2 on, the pre-R2
-`.prev` (the pre-freeze release) refuses every migrated store, and the message names `make rollback-restore`, 05-backup), and otherwise
+`.prev` (the pre-freeze release) refuses every migrated store, and the message names `make rollback-restore`, 05-backup, which after an R2 hotfix takes `RELEASE=<tag>`, below), and otherwise
 renames `<exe>` → `<exe>.rolled-back` (the name `make rollback` gives the binary it replaces, `Makefile:912`),
 `<exe>.prev` → `<exe>`, fsyncs and restarts through `Restarter`; `make rollback` makes the same decision from the
 operator's machine. `<exe>.prev` is kept until the next apply or deploy replaces it.
@@ -325,7 +353,9 @@ the R2 cutover the way back is `make rollback-restore`: stop, restore the pre-mi
 offline (with the state files the source holds), reinstall `.prev`, start (05-backup). Before it touches anything
 the recipe compares the checkpoint record's `from_vector` with `.prev --print-storage-levels` and refuses when
 they differ, naming the binary to install, the pre-freeze release: after an R2 hotfix `.prev` is an R2 build, and
-restoring under it would only migrate the store again (DATA-9). Everything written after the upgrade is then
+restoring under it would only migrate the store again (DATA-9). `make rollback-restore RELEASE=<tag>` first puts that
+exact release at `.prev` through "Fetching a named release" above, and the same comparison then runs on what it
+fetched; without `RELEASE` the recipe refuses and names the tag. Everything written after the upgrade is then
 lost, and every credential R2 revoked (a key, a disabled user, a changed password) is live again on the pre-R2
 binary until R2 is redeployed; the runbook warns of both (SEC-10), so nothing restores automatically. The built updater takes no backup of its own, as HEAD's
 does not (the pre-update backup is deferred-build, 5U.3). Persistence: one key, `c/updater/seen` (the last notified
@@ -375,6 +405,7 @@ archives, `checksums.txt` and signing are read only by deferred-build members (5
 | Download fails, or the body exceeds `core.updater.max_download` | closed: abort, delete `<exe>.new`, metric `apply_total{outcome="download_failed"}`, WARN | never run a truncated binary; HEAD also deletes `.new` on a failed write (`updater.go:260-264`) |
 | Self-test fails | closed: delete `<exe>.new`, abort | catches wrong arch, corrupt build, wrong app |
 | Rename fails | closed: restore `<exe>` from `<exe>.prev` if the first rename happened; abort | atomic swap or nothing |
+| Fetch of a named release fails (the tag has no asset: `no_asset`; the download fails or exceeds the cap; the self-test reports another app or version) | closed: the partial file is deleted, `<exe>` and `<exe>.prev` are untouched, the command exits non-zero and `make rollback-restore` refuses before it restores anything | the rollback across R2 must never run with a binary that was not the named release (05-backup) |
 | Executable directory not writable | closed for apply/rollback (`binary_not_writable`); open for check (Degraded, banner) | OPS2-4: say so instead of failing at the swap |
 | A swap staged (`restore/pending.json`: a restore, or a factory reset, `KindReset`) or in flight (a `restore/<id>/inflight.json`, which every kind creates before its first rename and keeps until its terminal step, an offline restore's journal included; R9-7) | closed: apply and rollback refused (`restore_pending`, `restore_inflight`, the message naming the kind); no override and no exception | a swap would discard the restore (DATA3-6), reject the audited reset or leave a half-done set-aside to a binary that cannot finish it (R7-2, R8-1); the rollback across R2 is `make rollback-restore`, which reinstalls `.prev` itself and does not go through the updater (05-storage §5S.3.12) |
 | `ReaderCheck` cannot determine the answer (`cannot_determine`) | closed: apply and rollback refused | fail-closed, as `make rollback` (09) |
@@ -454,6 +485,8 @@ The `/api/v1/update/*` paths are deleted in R2; the SPA switches to these routes
 | `TestApply_SwapAtomicAndPrevKept` (slot name `.prev`), `TestApply_RestartExits75` (fake `Restarter`: exit mode uses `core.lifecycle.restart_exit_code`) | swap, restart |
 | `TestRollback_ReaderRefusesPrev` (fake `.prev` reporting a lower level → refused with `level_newer` naming `make rollback-restore`, running binary kept), `TestRollback_SwapsPrevBack` (the replaced binary is kept as `<exe>.rolled-back`, `make rollback`'s name) | manual rollback (OPS-6) |
 | `TestApply_BinaryDirNotWritableRefusedAndDegraded` (read-only temp directory) | OPS2-4 |
+| `TestFetchRelease_NamedReleaseOnly` (fake source serving the named tag's raw asset and a newer one: `FetchRelease` writes only the named tag's binary to `dest`, mode 0755, through `<dest>.part`; `<exe>` and `<exe>.prev` are byte-identical afterwards, no store is opened and nothing is restarted; `latest`, a URL and a path are refused) | the fetch behind `make rollback-restore RELEASE=<tag>` |
+| `TestFetchRelease_FailureLeavesNothing` (a tag with no asset → `no_asset`; an oversize body; a binary whose `--version-json` reports another version: each deletes `<dest>.part` and leaves `dest` absent and `.prev` unchanged) | closed fetch |
 | `TestApply_RefusedWhileResetPending` (a staged `restore/pending.json` of kind `reset`: refused with `restore_pending`, the message naming the kind; then its journal at `set_aside_started` before any target has moved, at `set_aside`, and again at `applied` without `hook_done`, each with its `restore/<id>/inflight.json`: refused with `restore_inflight`; a restore journal at `rechecked` whose `pending.json` was just renamed to `inflight.json`, before `previous_moved`: refused with `restore_inflight`, never `restore_pending` (R9-7, DATA9-3); apply and manual rollback refused, nothing downloaded or swapped; no `reset_*` token exists), `TestApply_RefusedWhileOfflineRestoreInFlight` (a `KindCheckpoint` journal the offline restore left at `swapped`, with its `inflight.json`: apply and manual rollback refused with `restore_inflight`) | R7-2, R8-1, OPS7-11, R9-7 |
 | `TestCheck_NotifiesOncePerVersionAcrossRestart` | COR2-3 |
 | `TestPolicy_NilOptionsNoRoutesNoTasks` | absence |
@@ -651,3 +684,5 @@ Round 11:
   Stage references re-keyed (S0 hotfix → R0, S8 move → R2, S2b swap → R1). Consistency pass: `ReaderCheck` is bound to 05-storage §5S.3.7's guard decision (level sidecar against `--print-storage-levels`, the swap-slot probe) instead of the deleted `CheckReader`, and the `KindCheckpoint` exception with `--print-restore-journal` and `inflight-checkpoint.json` is gone (the rollback across R2 is `make rollback-restore`), with `TestApply_CheckpointJournalAdmitsCandidate` replaced by `TestApply_RefusedWhileOfflineRestoreInFlight`.
 
 Round 13 (2026-11-04): CONFORM-1 (pre-freeze release as the pre-R2 `.prev`), CONFORM-2, DATA-8, DATA-9, SEC-10 (Database caveat and "After the restart").
+
+Round 14 (2026-11-05): V10 (a "Fetching a named release" paragraph, `Updater.FetchRelease` and its error row and tests, behind `make rollback-restore RELEASE=<tag>`; the rollback paragraph and Database caveat point at it), V23 (no bare round-13 ruling citation was present; `R4` and `R5` here are 03's rules).
