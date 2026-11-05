@@ -1,15 +1,17 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.12.1 -->
+<!-- version: 1.12.2 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
 <!-- last-edited: 2026-11-04 -->
 
 # mediacore — platform-core design spec
 
 **Status:** draft. Twelve review rounds, the advisor review and a plan-phase consistency pass are dispositioned and
-applied (`docs/plans/platform-core/reviews/`, `spec-*-dispositions.md`). The owner decisions **D10–D12**
+applied (`docs/plans/platform-core/reviews/`, `spec-*-dispositions.md`), and round 13 is applied on top. The owner decisions **D10–D13**
 (2026-11-04; 02 §2.6) then removed backward compatibility and soaks: they override every earlier resolution that
 kept a compatibility window, an alias, HEAD's stored representation, binary-swap rollback past a migration, or a
-soak gate, and the files were revised to match. The resolutions that do not depend on compatibility (R2-n…R11-n,
+soak gate, and the files were revised to match; D13 then fixed core's module path, public repository and Apache-2.0
+licence, made an unconvertible identity row or an unfinished account merge stop the upgrade, and removed old-URL
+redirects from the UI shell. The resolutions that do not depend on compatibility (R2-n…R11-n,
 A-1…A-17, FIN12-n) stay binding.
 
 The design, in brief:
@@ -17,16 +19,18 @@ The design, in brief:
 - **Four releases** (03 §3.8): **R0** hotfixes (the six early security fixes, the toolchain bump, the updater
   hotfix); **R1** the core runtime with no user-data change (nested module, composition root, perimeter, logging,
   core storage with strict claims, the one journaled swap, the first UI steps: react-router 8 and the api-client); **R2** the one-way cutover of every core-service
-  family plus the UI work; **R3** cleanup and the one upgrade floor. Code lands dark on `main`, each subsystem is
-  wired in one flip PR, and every merge passes `make ci` and e2e; there are no soaks, and auto-promotion pauses
-  from the first R2 flip until R2 ships (D11, D12 (a); D12's answers are cited as (a)–(d)).
+  family plus the UI work, opened by F2, the dark foundation PRs; **R3** cleanup and the one upgrade floor. Code lands
+  dark on `main`, each subsystem is wired in one flip PR, and every merge passes `make ci` and e2e; there are no
+  soaks, and auto-promotion pauses from the first R2 flip until R2 ships, and by a lead extension during R1's PR
+  series too (D11, D12 (a); D12's answers are cited as (a)–(d)).
 - **Core services own their state natively** (03 §3.3 "Store interfaces and importers"): each persists in its own
   `c/<subsystem>/` keyspace. In R2 books' migration steps decode ABO's HEAD rows and hand them to each subsystem's
   importer, so core still holds no audiobook key name; books' own domain families stay in place.
 - **One-way, checkpointed migration** (03 §3.7, §3.8): the boot takes the pre-migration checkpoint after a disk
-  headroom check, runs M1–M8, quarantines rows it cannot decode, and raises the levels so older binaries refuse the
-  store. Rollback is an offline restore of the checkpoint or an off-host archive (keyring and state files included)
-  plus the previous binary; the checkpoint is deleted after 7 days (D12 (d)).
+  headroom check, runs M1–M8, quarantines rows it cannot decode (an unconvertible identity row stops the upgrade
+  instead, D13), and raises the levels so older binaries refuse the store. Rollback is an offline restore of the
+  checkpoint or an off-host archive (keyring and state files included) plus the pre-freeze release; every checkpoint
+  is deleted 7 days after it stops being needed (D12 (d)).
 - **What survives R2** (D12 (b)): API keys and the Audiobookshelf phone apps' sessions; task-run and log history,
   converted. Web sessions and one-time tokens are reset; throttle holds, indexes and caches are rebuilt.
 - **The hardened design lands directly in R2:** hashed sessions and one-time tokens, `mck_` keys, native scopes,
@@ -94,11 +98,11 @@ kept / changed / dropped (decision 13: books' domain families stay in place, and
 once, one-way, into native keyspaces in R2), the new decisions N1–N15 with N13 deleted (N14: one upgrade floor, in R3; N15: the
 cutover happens inside the extraction, in R2, with no storage grants), the eight inherited acceptance gates (G5
 replaced by G5′: the store is migrated forward without loss, older builds refuse it, and rollback restores the
-pre-migration copy), the five old open questions, and the owner decisions D10–D12 (no backward compatibility; no
-soaks; the cutover scope). User decisions D1–D9 are fixed inputs. Owner questions still open (including Q-I, how
+pre-migration copy), the five old open questions, and the owner decisions D10–D13 (no backward compatibility; no
+soaks; the cutover scope; core's name, licence and the cutover's row policy). User decisions D1–D9 are fixed inputs. Owner questions still open (including Q-I, how
 the one release-gating requirement — every PR passes the named required checks, `make ci`'s CI jobs,
-`extraction-gates`, the image job, e2e and `core-ci`, before merge — is enforced, and Q-H, the module name), and
-those decided as adopted recommendations, are in [14-risks-open-questions.md](14-risks-open-questions.md) §14.3.
+`extraction-gates`, the image job, e2e and `core-ci`, before merge — is enforced), those D13 answered (Q-A, Q-B,
+Q-H), and those decided as adopted recommendations, are in [14-risks-open-questions.md](14-risks-open-questions.md) §14.3.
 
 ## Reading order
 
@@ -240,3 +244,5 @@ Final verification:
 Owner decisions D10–D12:
 
 - D10–D12 revision (2026-11-04): status line and design summary rewritten around the releases R0–R3, native ownership with importers, the one-way checkpointed R2 cutover, what survives it (D12 F2), the hardened design in R2 and the one frozen contract (D12 F3); the representation-neutral, lock-parity, otelgin, soak-gate and trailer bullets deleted. Build scope: the per-family cutover row, the cutover-only members row (grants, served-run preconditions) and the post-S10 hardening row deleted; backup encryption and the seed-role merge diff keep a row; the config basis row deleted (05-config no longer defines it). Decisions paragraph: decision 13, N14, N15, G5′ and D10–D12. Reading order item 4 cites 03 §3.8. Consistency pass: D12's answers cited as D12 (a)–(d), UI-0 renamed to R1's first UI steps, and the R1 reset noted as offline-only.
+
+Round 13 (2026-11-04): status line names round 13 and D13; design summary: F2 and the R1 freeze (R1, R3), the pre-freeze release (R2), checkpoint retention (R4) and identity rows stopping the upgrade (D13); Decisions paragraph: D10–D13, Q-A, Q-B and Q-H answered.
