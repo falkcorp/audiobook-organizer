@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-backup.md -->
-<!-- version: 1.12.7 -->
+<!-- version: 1.12.8 -->
 <!-- guid: 604febb0-a09e-4cf9-99ee-5f3722534da6 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -627,7 +627,7 @@ boot without hooks that records them as owed (§5B.3.4 step h; §5B.3.6 "Restore
 directory (archives, sidecars and the revocation journal) and the keyring export (05-config), then run
 `<app> storage restore-offline --archive <file> --keyring <export> [--foreign]` before the first start, with a build at or
 above the archive's upgrade floor: an archive older than the build's `UpgradeFloor` (R3 declares `InstallFirst:
-R2`) is refused at staging (step 4) naming the release to install first — install that release, restore with it,
+<R2 tag>`) is refused at staging (step 4) naming the release to install first by its tag (`install <R2 tag> first`: install the R2 release, by its tag, first) — install that release, restore with it,
 start it once so it migrates the store, then upgrade (DATA3-9). With the keyring in place and no live store, the
 archive's MAC verifies and the restore is `Own`; otherwise it is foreign and needs `--foreign`. A `legacy-abo/0`
 archive has no install marker; the restore hands the restore boot the revocation journal header's `install_id`
@@ -1439,3 +1439,5 @@ Round 13 (2026-11-04): CONFORM-2, CONFORM-6, DATA-6, DATA-7, DATA-8, DATA-9, DAT
 Round 14 (2026-11-05): V2 (a cutover preflight refusal on a restore boot is a step-x failure: swap-back, journal `swapped_back`, health `restore_failed` reason `cutover_blocked`; `TestStagedLegacyRestoreWithBlockerSwapsBack`), V3 (`KindRewrite` rule 5: M8 reads its phase from the journal), V4 (an archive's levels come from the manifest `Levels` or, for `legacy-abo/0`, from the extracted store), V8 (a `KindRewrite` swap-back moves no checkpoint), V9 (a factory reset sets aside no checkpoint), V10 (`make rollback-restore RELEASE=<tag>` and the fetch it cites in 05-updater), V23 (no bare round-13 ruling citation was present; the `(R4)` in the header is 03's layer rule).
 
 Round 15 (2026-11-05): lead fix (W8: `from_release` is the embedded pre-freeze tag), W1 (`KindRewrite` rule (5) and the failure and test rows: M8 reads only journals with its own `StepID`; one swap-back restarts it once, a second consecutive one fails the boot with `storage.ErrRewriteSwappedBack`), W8 (the refusal names the checkpoint record's `from_release`, or on the archive branch the archive's producing release), W10 (the fetch has apply's trust level, not a signed release), W11 (`--accept-loss` on both forms of the rollback path's summary).
+
+Round 16 (2026-11-05): review fixes X4 (§5B.3.4: the floor is `InstallFirst: <R2 tag>`; the refusal names the R2 release by its tag).
