@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.20.0
+// version: 1.21.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
 // last-edited: 2026-11-05
 
@@ -316,6 +316,12 @@ export interface RepairTrialState {
   opId: string;
   phase: 'running' | 'failed';
   message?: string;
+  /**
+   * The server started this trial itself when an apply finished, to drop the rows
+   * the apply wrote (repairs.apply's `replan_op_id`). The panel says so while it
+   * runs: the rows on screen are from before the apply.
+   */
+  afterApply?: boolean;
 }
 
 export interface RepairsLane {
@@ -585,11 +591,20 @@ export function useRepairsLane(
   const trialPolls = useRef(new Map<string, AbortController>());
 
   const followTrial = useCallback(
-    (fixerId: string, opId: string) => {
-      if (trialPolls.current.has(opId)) return;
+    (fixerId: string, opId: string, afterApply = false) => {
+      if (trialPolls.current.has(opId)) {
+        // Already followed (the fixer list saw it in flight first): only say why
+        // it runs, so the panel names the refresh.
+        if (afterApply) {
+          setTrials((prev) =>
+            prev[fixerId]?.opId === opId ? { ...prev, [fixerId]: { ...prev[fixerId], afterApply } } : prev
+          );
+        }
+        return;
+      }
       const ctrl = new AbortController();
       trialPolls.current.set(opId, ctrl);
-      setTrials((prev) => ({ ...prev, [fixerId]: { opId, phase: 'running' } }));
+      setTrials((prev) => ({ ...prev, [fixerId]: { opId, phase: 'running', ...(afterApply && { afterApply }) } }));
       api
         .pollOperationV2(opId, undefined, REPAIRS_POLL_INTERVAL_MS, {
           signal: ctrl.signal,
@@ -610,11 +625,16 @@ export function useRepairsLane(
               delete next[fixerId];
               return next;
             });
-            toast('Trial finished. Its rows are ready to review.', 'success');
+            toast(
+              afterApply
+                ? 'Trial refreshed after the apply. The rows it wrote are no longer listed.'
+                : 'Trial finished. Its rows are ready to review.',
+              'success'
+            );
             setFixersNonce((n) => n + 1);
           } else {
             const message = op.error_message || `The trial ended with status "${op.status}".`;
-            setTrials((prev) => ({ ...prev, [fixerId]: { opId, phase: 'failed', message } }));
+            setTrials((prev) => ({ ...prev, [fixerId]: { opId, phase: 'failed', message, ...(afterApply && { afterApply }) } }));
             toast(`Trial failed: ${message}`, 'error');
           }
         })
@@ -977,13 +997,25 @@ export function useRepairsLane(
         });
         setSelectedRowIds(new Set());
         toast(summarizeApply(r), applySeverity(r));
+        // The stored trial never changes, so the rows this apply wrote would stay
+        // listed. The server started a fresh trial when it wrote (replan_op_id):
+        // follow it, and the rows switch to its plan -- and refetch -- when it
+        // completes. No id and an error: say so, the owner re-runs the trial.
+        if (r.replan_op_id) {
+          followTrial(fixerId, r.replan_op_id, true);
+        } else if (r.replan_error) {
+          toast(
+            `The trial could not be refreshed automatically (${r.replan_error}). Run the trial again to drop the applied rows.`,
+            'warning'
+          );
+        }
         setFixersNonce((n) => n + 1);
       } finally {
         applyPolls.current.delete(ctrl);
         if (!ctrl.signal.aborted) setApplyingFor((cur) => (cur === fixerId ? null : cur));
       }
     },
-    [toast]
+    [followTrial, toast]
   );
 
   const fixerTitle = useCallback(

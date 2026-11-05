@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.14.0
+// version: 1.15.0
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
 // last-edited: 2026-11-05
 //
@@ -840,6 +840,109 @@ describe('useRepairsLane: selection and apply', () => {
     expect(result.current.rowOutcomes.get('g1')?.outcome).toBe('applied');
     // A failed row stays retryable.
     expect(result.current.settledRowIds.has('g2')).toBe(false);
+  });
+});
+
+describe('useRepairsLane: the trial is refreshed after an apply', () => {
+  const STARTED = {
+    operation_id: 'apply-1',
+    def_id: 'repairs.apply',
+    fixer_id: 'vg-primary',
+    status: 'queued' as const,
+  };
+
+  function dispatchApply(result: { current: ReturnType<typeof useRepairsLane> }) {
+    act(() =>
+      result.current.dispatch({
+        lane: 'repairs',
+        type: 'applyRows',
+        fixerId: 'vg-primary',
+        planOpId: 'plan-1',
+        rowIds: ['g1'],
+      })
+    );
+  }
+
+  it('follows the trial the server started and refetches the rows from it, so the applied row is gone', async () => {
+    const { result } = await renderLane();
+    mockRows({
+      'plan-1': { applicable: APPLICABLE, skipped: SKIPPED },
+      // The fresh trial no longer lists g1: the apply wrote it.
+      'plan-2': { applicable: [row('g2')], skipped: SKIPPED },
+    });
+    vi.mocked(api.startRepairApply).mockResolvedValue(STARTED);
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(applyResult({ replan_op_id: 'plan-2' }));
+    let finishTrial!: (o: OperationV2) => void;
+    vi.mocked(api.pollOperationV2).mockImplementation((id: string) =>
+      id === 'plan-2'
+        ? new Promise<OperationV2>((r) => (finishTrial = r))
+        : Promise.resolve(op(id, 'completed'))
+    );
+    const rowCallsBefore = vi.mocked(api.getRepairPlanRows).mock.calls.length;
+
+    dispatchApply(result);
+
+    // Refresh in progress: the lane follows plan-2 and says it is the post-apply
+    // refresh. The rows on screen are still the old trial's until it finishes.
+    await waitFor(() => expect(result.current.trial).toMatchObject({ opId: 'plan-2', phase: 'running', afterApply: true }));
+    expect(api.pollOperationV2).toHaveBeenCalledWith('plan-2', undefined, expect.any(Number), expect.anything());
+    expect(result.current.planOpId).toBe('plan-1');
+    expect(vi.mocked(api.getRepairPlanRows).mock.calls.slice(rowCallsBefore).map((c) => c[1])).not.toContain('plan-2');
+
+    await act(async () => finishTrial(op('plan-2', 'completed')));
+
+    // The rows are refetched from the NEW plan and the applied row is not in them.
+    await waitFor(() => expect(result.current.planOpId).toBe('plan-2'));
+    await waitFor(() => expect(result.current.rows.map((r) => r.row_id)).toEqual(['g2']));
+    expect(api.getRepairPlanRows).toHaveBeenCalledWith(
+      'vg-primary',
+      'plan-2',
+      expect.objectContaining({ filter: 'applicable' }),
+      expect.anything()
+    );
+    expect(result.current.trial).toBeNull();
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/refreshed after the apply/i), 'success');
+  });
+
+  it('keeps the old rows and says so when the refreshed trial fails', async () => {
+    const { result } = await renderLane();
+    vi.mocked(api.startRepairApply).mockResolvedValue(STARTED);
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(applyResult({ replan_op_id: 'plan-2' }));
+    vi.mocked(api.pollOperationV2).mockImplementation(async (id: string) =>
+      id === 'plan-2' ? op('plan-2', 'failed', 'library read failed') : op(id, 'completed')
+    );
+
+    dispatchApply(result);
+
+    await waitFor(() => expect(result.current.trial).toMatchObject({ opId: 'plan-2', phase: 'failed', afterApply: true }));
+    expect(toast).toHaveBeenCalledWith('Trial failed: library read failed', 'error');
+    expect(result.current.planOpId).toBe('plan-1');
+  });
+
+  it('tells the owner to run the trial again when the server could not start the refresh', async () => {
+    const { result } = await renderLane();
+    vi.mocked(api.startRepairApply).mockResolvedValue(STARTED);
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(applyResult({ replan_error: 'queue paused' }));
+    vi.mocked(api.pollOperationV2).mockResolvedValue(op('apply-1', 'completed'));
+
+    dispatchApply(result);
+
+    await waitFor(() => expect(result.current.applyResult?.replan_error).toBe('queue paused'));
+    expect(result.current.trial).toBeNull();
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/could not be refreshed automatically \(queue paused\)/), 'warning');
+  });
+
+  it('starts no refresh for an apply the server did not refresh (a preview, or nothing written)', async () => {
+    const { result } = await renderLane();
+    vi.mocked(api.startRepairApply).mockResolvedValue(STARTED);
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(applyResult());
+    vi.mocked(api.pollOperationV2).mockResolvedValue(op('apply-1', 'completed'));
+
+    dispatchApply(result);
+
+    await waitFor(() => expect(result.current.applyResult).not.toBeNull());
+    expect(result.current.trial).toBeNull();
+    expect(api.pollOperationV2).toHaveBeenCalledTimes(1);
   });
 });
 

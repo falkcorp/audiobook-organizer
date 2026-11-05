@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.26.0
+// version: 1.27.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
@@ -184,6 +184,41 @@ describe('RepairsPanel', () => {
     );
     expect(screen.queryByTestId('repairs-outcome-g1')).not.toBeInTheDocument();
     expect(screen.getByTestId('repairs-apply-result')).toHaveTextContent(/Re-run trial/);
+  });
+
+  it('says the trial is refreshing after an apply, and keeps Apply off until it finishes', async () => {
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(
+      repairsApplyResult({
+        fixer_id: 'vg-primary',
+        plan_op_id: 'plan-1',
+        dry_run: false,
+        requested: 1,
+        by_outcome: { applied: 1 },
+        applied: 1,
+        changed_since_plan: 0,
+        partially_applied: 0,
+        failed: 0,
+        standdown_held: true,
+        replan_op_id: 'plan-2',
+        rows: [{ row_id: 'g2', outcome: 'applied' }],
+      })
+    );
+    // The refreshed trial is still running; the apply itself has completed.
+    vi.mocked(api.pollOperationV2).mockImplementation((id: string) =>
+      id === 'plan-2'
+        ? new Promise<OperationV2>(() => {})
+        : Promise.resolve({ id, status: 'completed', error_message: null } as OperationV2)
+    );
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-g2');
+    await user.click(screen.getByRole('checkbox', { name: 'Select Title g2' }));
+    await user.click(screen.getByTestId('repairs-apply-selected'));
+
+    const banner = await screen.findByTestId('repairs-trial-running');
+    expect(banner).toHaveTextContent(/Refreshing the trial after your apply/);
+    expect(screen.getByTestId('repairs-fixer-plan-vg-primary')).toHaveTextContent(/Refreshing after apply/);
+    expect(screen.getByTestId('repairs-apply-selected')).toBeDisabled();
   });
 
   it('shows a retry_later row as Retry later and the banner as a warning with a hint', async () => {

@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.32.0
+// version: 1.33.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
-// last-edited: 2026-10-24
+// last-edited: 2026-11-05
 
 /**
  * The repairs lane's surface: a rail of fixers and the selected fixer's trial.
@@ -98,7 +98,7 @@ function sumCounts(m: Record<string, number> | undefined): number {
 }
 
 function planSummary(lp: RepairOpRef | undefined, trial: RepairTrialState | undefined): string {
-  if (trial?.phase === 'running') return 'Trial running…';
+  if (trial?.phase === 'running') return trial.afterApply ? 'Refreshing after apply…' : 'Trial running…';
   if (trial?.phase === 'failed') return 'Last trial failed';
   if (!lp) return 'No trial yet';
   if (lp.status === 'completed') {
@@ -616,8 +616,17 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
 
       {running && (
         <Alert severity="info" sx={{ m: 2, mb: 0 }} data-testid="repairs-trial-running" icon={<CircularProgress size={18} />}>
-          Trial running. Rows appear here when it finishes
-          {planOpId ? '; the rows below are from the previous trial.' : '.'}
+          {trial?.afterApply ? (
+            <>
+              Refreshing the trial after your apply. The rows below are from before it; the rows it
+              wrote leave the list when the new trial finishes.
+            </>
+          ) : (
+            <>
+              Trial running. Rows appear here when it finishes
+              {planOpId ? '; the rows below are from the previous trial.' : '.'}
+            </>
+          )}
         </Alert>
       )}
       {trial?.phase === 'failed' && (
@@ -788,6 +797,8 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
               {summarizeApply(repairs.applyResult)}
               {repairs.applyResult.changed_since_plan > 0 &&
                 '. Rows that changed since the trial were left alone; re-run the trial to pick them up.'}
+              {repairs.applyResult.replan_error &&
+                `. The trial could not be refreshed automatically (${repairs.applyResult.replan_error}); re-run it to drop the applied rows.`}
               {(repairs.applyResult.retry_later ?? 0) > 0 &&
                 '. Rows marked "Retry later" could not be checked right now; apply them again in a few minutes.'}
               {(repairs.applyResult.by_outcome.canceled_skipped ?? 0) > 0 &&
