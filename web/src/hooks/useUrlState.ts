@@ -1,5 +1,5 @@
 // file: web/src/hooks/useUrlState.ts
-// version: 2.2.0
+// version: 2.3.0
 // guid: 3f6c1a52-7d94-4e08-b5a1-9c20e8d4f713
 // last-edited: 2026-11-05
 //
@@ -527,36 +527,73 @@ export function useUrlStateSync(
   }, [search, store]);
 }
 
-/** Run every mirror's waiting write now, against the location still on screen. */
+/**
+ * Run every mirror's waiting write now, against the location still on screen. A
+ * flusher that throws is reported and skipped: one broken mirror must not stop
+ * the others, the navigation that triggered this, or the `pagehide` handler.
+ */
 export function flushPendingWrites(navigator: object): void {
-  for (const flushWaiting of [...storeFor(navigator).flushers]) flushWaiting();
+  for (const flushWaiting of [...storeFor(navigator).flushers]) {
+    try {
+      flushWaiting();
+    } catch (err) {
+      console.warn('Could not write a pending address change', err);
+    }
+  }
 }
+
+/**
+ * Write what is waiting, then forget every write still in flight. The flush put
+ * its own query string into `pending`, but the page is about to be left: that
+ * string will never render, and the push or traversal target is by definition
+ * not one of our writes. Left in `pending` it would make a later real
+ * navigation to the same query look like our echo (the page would never be told
+ * about it) and `liveBase` would trust it. This is what `observe` does for any
+ * URL it did not issue.
+ */
+function flushBeforeLeaving(navigator: object): void {
+  flushPendingWrites(navigator);
+  const store = storeFor(navigator);
+  store.pending = [];
+  store.foreign.clear();
+}
+
+const wrappers = new WeakMap<object, Navigator>();
 
 /**
  * A navigator that writes the mirrors' waiting trailing writes before it pushes
  * or traverses history, so the entry being left holds what the page showed.
  * Hooks under the router must see THIS navigator (it keys the store), which is
- * what `<FlushOnNavigate>` arranges. Everything else delegates untouched,
- * including the live `location` the hooks read.
+ * what `<FlushOnNavigate>` arranges. One wrapper per raw navigator, so there is
+ * one store per router however often this is called. Every other member
+ * (`location`, `createURL`, `listen`, `action`, ...) is inherited from the real
+ * navigator, so the live `location` the hooks read is the router's own.
  */
 export function flushOnNavigate(navigator: Navigator): Navigator {
-  const wrapped: Navigator & { readonly location?: Where } = {
-    get location() {
-      return (navigator as { location?: Where }).location;
+  const cached = wrappers.get(navigator);
+  if (cached) return cached;
+  const wrapped: Navigator = Object.create(navigator, {
+    go: {
+      value: (delta: number) => {
+        flushBeforeLeaving(wrapped);
+        navigator.go(delta);
+      },
+      enumerable: true,
     },
-    createHref: (to) => navigator.createHref(to),
-    encodeLocation: navigator.encodeLocation ? (to) => navigator.encodeLocation!(to) : undefined,
-    go: (delta) => {
-      flushPendingWrites(wrapped);
-      navigator.go(delta);
-    },
-    push: (to, state, opts) => {
-      flushPendingWrites(wrapped);
-      navigator.push(to, state, opts);
+    push: {
+      value: (...args: Parameters<Navigator['push']>) => {
+        flushBeforeLeaving(wrapped);
+        navigator.push(...args);
+      },
+      enumerable: true,
     },
     // A replace overwrites the entry being left, so a flush first would be lost
     // work; and the mirrors' own writes are replaces, so it would also recurse.
-    replace: (to, state, opts) => navigator.replace(to, state, opts),
-  };
+    replace: {
+      value: (...args: Parameters<Navigator['replace']>) => navigator.replace(...args),
+      enumerable: true,
+    },
+  });
+  wrappers.set(navigator, wrapped);
   return wrapped;
 }
