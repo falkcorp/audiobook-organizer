@@ -1,7 +1,7 @@
 // file: internal/repairs/planstore_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 3f9c1b7a-6d42-4e08-b5a1-7c20e4d9f813
-// last-edited: 2026-10-27
+// last-edited: 2026-11-05
 
 package repairs
 
@@ -134,7 +134,8 @@ func TestStoredPlan_PageAndSelectReadOnlyWhatTheyReturn(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Rows, 3)
 	require.Equal(t, 1, cr.indexScans)
-	require.Equal(t, []string{PlanRowPrefix + "row-010", PlanRowPrefix + "row-011", PlanRowPrefix + "row-012"}, cr.gotIDs, "a page reads its own rows, not the plan")
+	require.Equal(t, []string{planPrunedMarkerID, PlanRowPrefix + "row-010", PlanRowPrefix + "row-011", PlanRowPrefix + "row-012"}, cr.gotIDs,
+		"a page reads the one pruned-marker key and its own rows, not the plan")
 
 	cr.indexScans, cr.gotIDs = 0, nil
 	sel, err := stored.Select([]string{"row-042", "nope", "row-007", "row-042"})
@@ -256,8 +257,45 @@ func TestStoredPlan_IncompleteRowsFailClosed(t *testing.T) {
 
 // TestPlanNeedsRerun lists exactly the four errors that mean "run the plan
 // again"; a plan that is simply not complete, or another fixer's, is not one.
+// TestPrunePlan_DeletesRowsAndLoadPlanSaysRerun: a pruned plan keeps its op
+// record (the summary a pointer may still name) but not its rows, and anyone
+// still holding its id is told to re-run, not shown an empty or partial plan.
+// Another plan's rows are left alone, and pruning twice is not an error.
+func TestPrunePlan_DeletesRowsAndLoadPlanSaysRerun(t *testing.T) {
+	s := newMemStore()
+	res := planFor(t, s, &noBookIDsFixer{s: s, rows: variedRows(10)})
+	storeSummary(t, s, s, res, "op-old")
+	storeSummary(t, s, s, res, "op-keep")
+
+	require.NoError(t, PrunePlan(s, "op-old"))
+
+	_, err := LoadPlan(s, s, "op-old", res.FixerID)
+	require.ErrorIs(t, err, ErrPlanPruned)
+	require.True(t, PlanNeedsRerun(err))
+	require.Contains(t, err.Error(), "re-run the trial")
+	ids := make([]string, 0, len(res.Rows))
+	for _, r := range res.Rows {
+		ids = append(ids, PlanRowPrefix+r.RowID)
+	}
+	got, err := s.GetOpRows("op-old", ids)
+	require.NoError(t, err)
+	for i, b := range got {
+		require.Nil(t, b, "row %s was deleted", ids[i])
+	}
+
+	kept, err := LoadPlan(s, s, "op-keep", res.FixerID)
+	require.NoError(t, err)
+	page, err := kept.Page("op-keep", FilterAll, "", 0, 100)
+	require.NoError(t, err)
+	require.Len(t, page.Rows, 10, "another plan's rows are untouched")
+
+	require.NoError(t, PrunePlan(s, "op-old"), "pruning twice is a no-op")
+	require.ErrorIs(t, PrunePlan(nil, "op-old"), ErrNoPlanRowStore)
+	require.Error(t, PrunePlan(s, ""))
+}
+
 func TestPlanNeedsRerun(t *testing.T) {
-	for _, err := range []error{ErrPlanLegacyFormat, ErrPlanRowsIncomplete, ErrPlanRowsUnreadable, ErrPlanSummaryUnreadable,
+	for _, err := range []error{ErrPlanLegacyFormat, ErrPlanRowsIncomplete, ErrPlanRowsUnreadable, ErrPlanSummaryUnreadable, ErrPlanPruned,
 		fmt.Errorf("wrapped: %w", ErrPlanRowsUnreadable)} {
 		require.True(t, PlanNeedsRerun(err), err.Error())
 	}
@@ -324,7 +362,7 @@ func TestRunApply_ReadsOnlyTheRowsItIsAskedFor(t *testing.T) {
 	res, err := RunApply(context.Background(), f, stored, "op-plan", []string{"b1", "zz"}, true, deps(s, nil), nopReporter{})
 	require.NoError(t, err)
 	require.Equal(t, []string{"zz"}, res.NotInPlan)
-	require.Equal(t, []string{PlanRowPrefix + "b1", PlanRowPrefix + "zz"}, cr.gotIDs)
+	require.Equal(t, []string{planPrunedMarkerID, PlanRowPrefix + "b1", PlanRowPrefix + "zz"}, cr.gotIDs, "the pruned-marker key, then only the rows asked for")
 	require.Zero(t, cr.indexScans)
 	require.Equal(t, 1, res.ByOutcome[OutcomeWouldApply])
 }

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
 // last-edited: 2026-11-05
 
@@ -211,6 +211,10 @@ type OpRef struct {
 	DryRun    *bool          `json:"dry_run,omitempty"`
 	ByOutcome map[string]int `json:"by_outcome,omitempty"`
 	Error     string         `json:"error,omitempty"`
+	// AfterApply: a plan the server started itself when an apply finished, to
+	// drop the rows the apply wrote (repairs.PlanParams.AfterApplyOpID). The
+	// lane words its progress and its completion toast accordingly.
+	AfterApply bool `json:"after_apply,omitempty"`
 }
 
 // FixerInfo is one entry of GET /repairs.
@@ -220,6 +224,11 @@ type FixerInfo struct {
 	Description string `json:"description"`
 	LastPlan    *OpRef `json:"last_plan,omitempty"`
 	LastApply   *OpRef `json:"last_apply,omitempty"`
+	// LastCompletedPlan is the newest plan that COMPLETED. LastPlan moves when a
+	// plan is enqueued, so a queued, failed or dropped one hides the trial the
+	// reviewer was working from; this one still names it, and the lane keeps
+	// showing its rows (repairs.LastCompletedPlanKey).
+	LastCompletedPlan *OpRef `json:"last_completed_plan,omitempty"`
 	// PlanOnly: the fixer only previews (repairs.PlanOnly). Its apply routes
 	// answer 409 and the lane shows no Apply control for it.
 	PlanOnly bool `json:"plan_only,omitempty"`
@@ -277,6 +286,7 @@ func (h *Handler) ListFixers(c *gin.Context) {
 		if info.Permitted {
 			info.LastPlan = h.lastRun(c, repairs.LastPlanKey(f.ID()))
 			info.LastApply = h.lastRun(c, repairs.LastApplyKey(f.ID()))
+			info.LastCompletedPlan = h.lastRun(c, repairs.LastCompletedPlanKey(f.ID()))
 		}
 		out = append(out, info)
 	}
@@ -290,6 +300,8 @@ func (h *Handler) ListFixers(c *gin.Context) {
 // e.g. POST /operations/v2, is not recorded here; the one exception is the
 // plan an apply op starts to refresh the trial it made stale, which
 // maintenance.runRepairsApply records under the same key (repairs.LastPlanKey).
+// A third pointer, repairs.LastCompletedPlanKey, is written by the plan op when
+// a plan finishes, and GET /repairs returns it as last_completed_plan.
 
 // lastRun resolves a recorded op id. Best effort: a missing setting or op
 // row leaves it unset.
@@ -315,6 +327,14 @@ func opRef(r *database.OperationV2Row, userText func(string) string) *OpRef {
 	ref := &OpRef{OperationID: r.ID, Status: r.Status, QueuedAt: r.QueuedAt, CompletedAt: r.CompletedAt}
 	if r.ErrorMessage != nil {
 		ref.Error = userText(*r.ErrorMessage)
+	}
+	// after_apply comes from the params, not the result, so a refresh that is
+	// still queued or running already says it is one.
+	if r.DefID == repairs.PlanOpID {
+		var pp repairs.PlanParams
+		if json.Unmarshal([]byte(r.Params), &pp) == nil {
+			ref.AfterApply = pp.AfterApplyOpID != ""
+		}
 	}
 	if r.ResultData == nil {
 		return ref

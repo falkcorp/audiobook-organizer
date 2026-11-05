@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8b2a931b-6ce8-4a3d-89ad-38f8bb08e66b
-// last-edited: 2026-10-28
+// last-edited: 2026-11-05
 
 package database
 
@@ -102,6 +102,7 @@ func TestKeyFamilyRanges_ParentExcludesChildren(t *testing.T) {
 		"pref:_system:other":                "pref:_system:",
 		"pref:u1:theme":                     "pref:",
 		"setting:repairs_last_plan_op:fx":   "setting:repairs_last_plan_op:",
+		"setting:repairs_last_completed_plan_op:fx": "setting:repairs_last_completed_plan_op:",
 	}
 	for key, want := range cases {
 		require.Equal(t, want, familyForKey(ranges, []byte(key)), "key %q", key)

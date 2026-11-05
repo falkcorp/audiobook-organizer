@@ -1,7 +1,7 @@
 // file: internal/repairs/planstore.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 8885f927-1097-4448-a36b-4a903c887c6d
-// last-edited: 2026-10-27
+// last-edited: 2026-11-05
 
 package repairs
 
@@ -49,16 +49,23 @@ const PlanRowPrefix = "plan/"
 // beside the operation under PlanRowPrefix.
 const PlanRowStoreV2 = "op_rows.v2"
 
+// PlanPrunedPrefix begins the stored id of the marker PrunePlan leaves.
+const PlanPrunedPrefix = "plan-pruned/"
+
+// planPrunedMarkerID is the one marker row of a pruned plan.
+const planPrunedMarkerID = PlanPrunedPrefix + "marker"
+
 // PlanNeedsRerun reports whether err means the stored plan cannot be read
 // (any of ErrPlanLegacyFormat, ErrPlanRowsIncomplete, ErrPlanRowsUnreadable,
-// ErrPlanSummaryUnreadable)
+// ErrPlanSummaryUnreadable, ErrPlanPruned)
 // and the only remedy is to run the plan again. The HTTP layer answers all of
 // them with one 409 and one code so the lane can offer exactly that.
 func PlanNeedsRerun(err error) bool {
 	return errors.Is(err, ErrPlanLegacyFormat) ||
 		errors.Is(err, ErrPlanRowsIncomplete) ||
 		errors.Is(err, ErrPlanRowsUnreadable) ||
-		errors.Is(err, ErrPlanSummaryUnreadable)
+		errors.Is(err, ErrPlanSummaryUnreadable) ||
+		errors.Is(err, ErrPlanPruned)
 }
 
 // Errors of reading a stored plan's rows.
@@ -78,6 +85,10 @@ var (
 	// value, a time that does not parse) or its stored summary (its result)
 	// does not decode, so nothing about the plan can be trusted.
 	ErrPlanSummaryUnreadable = errors.New("repairs: the stored plan summary cannot be read; run the plan again")
+	// ErrPlanPruned: the plan's rows were deleted on purpose (PrunePlan) because
+	// a newer trial, started by an apply to refresh it, replaced it. A tab that
+	// still shows the old trial is told so rather than that its rows are damaged.
+	ErrPlanPruned = errors.New("repairs: this trial was replaced by a newer one after an apply, and its rows were removed; re-run the trial")
 	// ErrNoPlanRowStore: the store behind the plan operations cannot keep plan rows.
 	ErrNoPlanRowStore = errors.New("repairs: the operation store cannot keep plan rows")
 )
@@ -129,6 +140,37 @@ func SavePlan(rs database.OpRowStore, opID string, p *PlanResult) error {
 // any other kind stored under it stay).
 func ClearPlanRows(rs database.OpRowStore, opID string) error {
 	return rs.ReplaceOpRowsPrefix(opID, PlanRowPrefix, 0, nil)
+}
+
+// PrunePlan deletes the rows of a completed plan whose trial a newer one has
+// replaced, and leaves a marker so LoadPlan answers ErrPlanPruned (a clear
+// "re-run the trial") to anyone still holding its op id. The marker goes first:
+// a failure part-way leaves a plan that is refused but still holds rows, never
+// one that looks intact and is missing them. The plan operation's own record
+// stays; it is the summary a pointer or the activity view may still show.
+func PrunePlan(rs database.OpRowStore, opID string) error {
+	if rs == nil || opID == "" {
+		return fmt.Errorf("repairs: prune plan: %w", ErrNoPlanRowStore)
+	}
+	err := rs.ReplaceOpRowsPrefix(opID, PlanPrunedPrefix, 1, func(int) (database.OpRow, error) {
+		return database.OpRow{ID: planPrunedMarkerID, Data: []byte("1")}, nil
+	})
+	if err != nil {
+		return fmt.Errorf("repairs: prune plan %s: mark: %w", opID, err)
+	}
+	if err := ClearPlanRows(rs, opID); err != nil {
+		return fmt.Errorf("repairs: prune plan %s: %w", opID, err)
+	}
+	return nil
+}
+
+// planPruned reports whether PrunePlan marked the plan.
+func planPruned(rs database.OpRowStore, opID string) (bool, error) {
+	got, err := rs.GetOpRows(opID, []string{planPrunedMarkerID})
+	if err != nil {
+		return false, fmt.Errorf("repairs: read plan %s prune marker: %w", opID, err)
+	}
+	return len(got) == 1 && got[0] != nil, nil
 }
 
 // A row's index entry is "class NUL skip-kind NUL 0|1 NUL flags" (the third

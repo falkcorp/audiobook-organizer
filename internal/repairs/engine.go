@@ -1,7 +1,7 @@
 // file: internal/repairs/engine.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package repairs
 
@@ -283,6 +283,11 @@ func LoadPlan(r OpReader, rs database.OpRowStore, planOpID, fixerID string) (*Pl
 	}
 	if rs == nil {
 		return nil, ErrNoPlanRowStore
+	}
+	if pruned, err := planPruned(rs, planOpID); err != nil {
+		return nil, err
+	} else if pruned {
+		return nil, fmt.Errorf("%w: %s", ErrPlanPruned, planOpID)
 	}
 	plan.stored = &storedRows{rs: rs, opID: planOpID}
 	plan.normalize()
