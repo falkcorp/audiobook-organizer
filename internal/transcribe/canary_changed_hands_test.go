@@ -1,7 +1,7 @@
 // file: internal/transcribe/canary_changed_hands_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 5d0c7e2a-83b1-4f6e-9a47-2c1e6b0d8f35
-// last-edited: 2026-10-28
+// last-edited: 2026-11-04
 
 package transcribe
 
@@ -52,16 +52,87 @@ func requireAllOnPort0AsBat(t *testing.T, p *faultPool, rec *canaryRecorder, res
 	}
 }
 
+// afterFirstGate is poolOptions for a dispatch of p that runs fn once, when the
+// dispatch's first gate has read every port: extraRefusal runs on each port as the
+// gate judges it, which is after every probe has answered and before the dispatch
+// has used the result. fn is therefore ordered after the identities the dispatch
+// froze for its ports and before anything it does with them, and an agent too
+// loaded to start the dispatch on time cannot place it before the gate, as a
+// timer started with the test can. Anything fn starts with after is timed from
+// that moment.
+func afterFirstGate(t *testing.T, p *faultPool, canary canaryFunc, fn func()) poolOptions {
+	t.Helper()
+	opts := p.opts(canary)
+	var once sync.Once
+	opts.extraRefusal = func(gatedEndpoint) string {
+		once.Do(fn)
+		return ""
+	}
+	return opts
+}
+
+// afterProbeNoted runs fn once the dispatch's gate has noted that url answered a
+// probe, which is what clears the mark noteProbeResult(url, false) set before the
+// dispatch (noteCanaryProbes runs after the gate's extraRefusal calls). It is for
+// a test that must act on the canary memory after that note, and it waits for the
+// note itself, not for a time.
+func afterProbeNoted(t *testing.T, url string, fn func()) {
+	t.Helper()
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		close(stop)
+		<-done
+	})
+	go func() {
+		defer close(done)
+		for {
+			canaryFailed.mu.Lock()
+			_, refused := canaryFailed.firstRefused[url]
+			canaryFailed.mu.Unlock()
+			if !refused {
+				fn()
+				return
+			}
+			select {
+			case <-stop:
+				return
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}()
+}
+
+// dispatchRequiringWith is dispatchWithOpts for a dispatch that requires
+// capabilities (the gate then also refuses what does not offer them).
+func dispatchRequiringWith(ctx context.Context, p *faultPool, requires []string, opts poolOptions, n int) (map[string]BatchResult, error) {
+	jobs := make(map[string]string, n)
+	for _, id := range loopers(n, "chap") {
+		jobs[id] = "unused"
+	}
+	return dispatchPool(ctx, p.h.eps, requires, jobs, opts, p.send)
+}
+
 func TestChangedHands_APortTakenOverByAnotherMachineDuringTheWaitIsDroppedNotStoredAsTheOldMachine(t *testing.T) {
 	shortenPacing(t, 10*time.Millisecond, time.Minute)
 	p := rememberedMachine(t, 2)
 	port1 := p.h.eps[1].URL
 	p.h.eps[1].Priority = 0 // port 1 would take the work
 	markEndpointFailure(port1)
-	after(t, 30*time.Millisecond, func() { p.h.setMachineID(port1, catwomanMachine) })
-	after(t, 80*time.Millisecond, func() { clearCooldown(port1) })
 	rec := &canaryRecorder{}
-	res, err := dispatchWith(testCtx(t), p, rec.fn, 8)
+	// The port changes hands only once the dispatch's gate has read it as bat, and
+	// its cooldown ends only after that: both are anchored to the gate (see
+	// afterFirstGate), not to the start of the test, so a loaded agent that is slow
+	// to begin the dispatch cannot run either before the dispatch has seen port 1
+	// as bat (which made port 1 an ordinary healthy worker of another machine, and
+	// took every job).
+	opts := afterFirstGate(t, p, rec.fn, func() {
+		p.h.setMachineID(port1, catwomanMachine)
+		// The cooldown ends strictly after the id changed, in the same goroutine's
+		// sequence: a cooldown that ended first would let the re-probe read bat.
+		after(t, 50*time.Millisecond, func() { clearCooldown(port1) })
+	})
+	res, err := dispatchWithOpts(testCtx(t), p, opts, 8)
 	requireAllOnPort0AsBat(t, p, rec, res, err)
 	// The taken-over port's answer is not what forgets the old machine; port 0's
 	// own answer is, and port 1 is on another machine's memory now.
@@ -76,13 +147,22 @@ func TestChangedHands_APortRefusedDuringTheWaitThenAnsweringWeakIsDroppedNotStor
 	port1 := p.h.eps[1].URL
 	p.h.eps[1].Priority = 0
 	markEndpointFailure(port1)
-	after(t, 30*time.Millisecond, func() {
-		noteProbeResult(port1, false) // the tunnel was down for one probe
-		p.h.setMachineID(port1, "")   // another Mac's mlx worker, missed MACHINE_ID_WAIT_S
-	})
-	after(t, 80*time.Millisecond, func() { clearCooldown(port1) })
 	rec := &canaryRecorder{}
-	res, err := dispatchWith(testCtx(t), p, rec.fn, 8)
+	// The refusal is another dispatch's probe of port 1 landing after this
+	// dispatch's gate has noted its answer (the gate's own note, which comes after
+	// extraRefusal returns, would otherwise wipe it: an answered probe clears the
+	// run of refusals). So the test marks port 1 refused before the dispatch, and
+	// the gate's note of its answer clearing that mark is what says the gate is
+	// over (afterProbeNoted).
+	noteProbeResult(port1, false)
+	opts := afterFirstGate(t, p, rec.fn, func() {
+		afterProbeNoted(t, port1, func() {
+			noteProbeResult(port1, false) // the tunnel was down for one probe
+			p.h.setMachineID(port1, "")   // another Mac's mlx worker, missed MACHINE_ID_WAIT_S
+			after(t, 50*time.Millisecond, func() { clearCooldown(port1) })
+		})
+	})
+	res, err := dispatchWithOpts(testCtx(t), p, opts, 8)
 	requireAllOnPort0AsBat(t, p, rec, res, err)
 	// Nothing says port 1 is not still a port of the machine that failed the
 	// clip, and it has not been heard from as that machine: bat stays remembered.
@@ -101,14 +181,14 @@ func TestChangedHands_APortWhoseOwnReprobeWasRefusedThenAnsweredWeakIsDroppedNot
 	p.h.eps[1].Priority = 0
 	host := strings.TrimPrefix(port1, "http://")
 	markEndpointFailure(port1)
-	after(t, 20*time.Millisecond, func() {
+	rec := &canaryRecorder{}
+	opts := afterFirstGate(t, p, rec.fn, func() {
 		p.h.delayHealth(port1, 10*time.Second) // unreachable: every probe times out
 		p.h.setMachineID(port1, "")
 		clearCooldown(port1)
+		after(t, 400*time.Millisecond, func() { p.h.healthDelay.Delete(host) })
 	})
-	after(t, 400*time.Millisecond, func() { p.h.healthDelay.Delete(host) })
-	rec := &canaryRecorder{}
-	res, err := dispatchOn(testCtx(t), p.h.eps, []string{"gpu"}, p.send, rec.fn, 8)
+	res, err := dispatchRequiringWith(testCtx(t), p, []string{"gpu"}, opts, 8)
 	requireAllOnPort0AsBat(t, p, rec, res, err)
 }
 
@@ -132,10 +212,12 @@ func TestChangedHands_ATimeoutStrikeOfAMachineThatTookOverAPortIsNotStoredAsTheO
 	port1 := p.h.eps[1].URL
 	p.h.eps[1].Priority = 0
 	markEndpointFailure(port1)
-	after(t, 30*time.Millisecond, func() { p.h.setMachineID(port1, catwomanMachine) })
-	after(t, 80*time.Millisecond, func() { clearCooldown(port1) })
 	rec := &canaryRecorder{}
-	res, err := dispatchWith(testCtx(t), p, rec.fn, 8)
+	opts := afterFirstGate(t, p, rec.fn, func() {
+		p.h.setMachineID(port1, catwomanMachine)
+		after(t, 50*time.Millisecond, func() { clearCooldown(port1) })
+	})
+	res, err := dispatchWithOpts(testCtx(t), p, opts, 8)
 	requireAllOnPort0AsBat(t, p, rec, res, err)
 	requireNoStrikes(t, res)
 }
@@ -148,10 +230,12 @@ func TestChangedHands_ALoneEndpointTakenOverDuringTheWaitDefersTheJobsAndSendsNo
 	p := rememberedMachine(t, 1)
 	port0 := p.h.eps[0].URL
 	markEndpointFailure(port0)
-	after(t, 30*time.Millisecond, func() { p.h.setMachineID(port0, catwomanMachine) })
-	after(t, 80*time.Millisecond, func() { clearCooldown(port0) })
 	rec := &canaryRecorder{}
-	res, err := dispatchWith(testCtx(t), p, rec.fn, 8)
+	opts := afterFirstGate(t, p, rec.fn, func() {
+		p.h.setMachineID(port0, catwomanMachine)
+		after(t, 50*time.Millisecond, func() { clearCooldown(port0) })
+	})
+	res, err := dispatchWithOpts(testCtx(t), p, opts, 8)
 	if !errors.Is(err, errPortChangedHands) {
 		t.Fatalf("err = %v, want one that wraps errPortChangedHands", err)
 	}
@@ -210,14 +294,16 @@ func rememberedPorts(key string) (bool, []string) {
 // Port 0 is robin's, and its /health does not answer when the dispatch begins,
 // so it cannot stand in for bat (a stand-in is an endpoint whose health was read)
 // and the dispatch waits for bat; once port 1 is dropped it takes the work.
-func poolWhoseBatPortGainedAnotherMachinesId(t *testing.T) *faultPool {
+//
+// The second result is the takeover: it changes port 1's id and ends its
+// cooldown shortly after. It must run after the start gate (which waits port 0's
+// probe out, healthProbeTimeout) has frozen port 1 as bat, or the dispatch would
+// freeze port 1 under the id it flips to, so the caller passes it to
+// afterFirstGate; a timer started with the test could run before the gate on a
+// loaded -race agent.
+func poolWhoseBatPortGainedAnotherMachinesId(t *testing.T) (*faultPool, func()) {
 	t.Helper()
 	shortenPacing(t, 10*time.Millisecond, time.Minute)
-	// The start gate waits port 0's probe out (healthProbeTimeout), and the id flip
-	// must land after that gate has finished, or the dispatch would freeze port 1
-	// under the id it flips to. The flip and the release are placed a few probe
-	// lengths after it, so a loaded -race agent that is slow to start the gate
-	// cannot reorder them.
 	shortenHealthProbe(t, 250*time.Millisecond)
 	p := machineFaultPool(t, []string{robinMachine, batMachine}, answerWithTranscripts)
 	t.Cleanup(func() {
@@ -232,9 +318,10 @@ func poolWhoseBatPortGainedAnotherMachinesId(t *testing.T) *faultPool {
 	p.h.delayHealth(port0, time.Minute)
 	clearCooldown(port1) // no earlier failure count
 	markEndpointFailure(port1)
-	after(t, 700*time.Millisecond, func() { p.h.setMachineID(port1, catwomanMachine) })
-	after(t, 800*time.Millisecond, func() { clearCooldown(port1) })
-	return p
+	return p, func() {
+		p.h.setMachineID(port1, catwomanMachine)
+		after(t, 100*time.Millisecond, func() { clearCooldown(port1) })
+	}
 }
 
 // requireGainedIdPortDropped is what the dispatch of
@@ -275,9 +362,9 @@ func requireGainedIdPortDropped(t *testing.T, p *faultPool, rec *canaryRecorder,
 }
 
 func TestChangedHands_APortGroupedUnderOneMachineThatGainsAnotherMachinesIdIsDroppedNotAskedTheOldMachinesCanary(t *testing.T) {
-	p := poolWhoseBatPortGainedAnotherMachinesId(t)
+	p, takeOver := poolWhoseBatPortGainedAnotherMachinesId(t)
 	rec := &canaryRecorder{}
-	res, err := dispatchWith(testCtx(t), p, rec.fn, 8)
+	res, err := dispatchWithOpts(testCtx(t), p, afterFirstGate(t, p, rec.fn, takeOver), 8)
 	requireGainedIdPortDropped(t, p, rec, res, err)
 }
 
@@ -285,9 +372,9 @@ func TestChangedHands_APortGroupedUnderOneMachineThatGainsAnotherMachinesIdIsDro
 // that took its port: it used to be recorded as bat failing, with cat's port in
 // bat's list, and cat was never remembered.
 func TestChangedHands_ACanaryTheOldMachineWouldHaveFailedIsNotRecordedAgainstTheMachineThatTookItsPort(t *testing.T) {
-	p := poolWhoseBatPortGainedAnotherMachinesId(t)
+	p, takeOver := poolWhoseBatPortGainedAnotherMachinesId(t)
 	rec := &canaryRecorder{err: errors.New("canary transcript wrong")}
-	res, err := dispatchWith(testCtx(t), p, rec.fn, 8)
+	res, err := dispatchWithOpts(testCtx(t), p, afterFirstGate(t, p, rec.fn, takeOver), 8)
 	requireGainedIdPortDropped(t, p, rec, res, err)
 }
 
@@ -301,10 +388,10 @@ func TestChangedHands_ACanaryTheOldMachineWouldHaveFailedIsNotRecordedAgainstThe
 // (the first dispatch), the second would have been a lone endpoint, which
 // resolves its memory at call time and passes whatever the first dispatch left.
 func TestChangedHands_TheNextDispatchAfterAGainedIdPortWasDroppedKnowsItAsTheNewMachineAndAsksItNothingOfTheOldOne(t *testing.T) {
-	p := poolWhoseBatPortGainedAnotherMachinesId(t)
+	p, takeOver := poolWhoseBatPortGainedAnotherMachinesId(t)
 	port0, port1 := p.h.eps[0].URL, p.h.eps[1].URL
 	rec := &canaryRecorder{err: errors.New("canary transcript wrong")}
-	res1, err1 := dispatchWith(testCtx(t), p, rec.fn, 8)
+	res1, err1 := dispatchWithOpts(testCtx(t), p, afterFirstGate(t, p, rec.fn, takeOver), 8)
 	requireGainedIdPortDropped(t, p, rec, res1, err1)
 	p.h.healthDelay.Delete(strings.TrimPrefix(port0, "http://"))
 	clearCooldown(port0)
@@ -349,13 +436,15 @@ func TestChangedHands_ALoneEndpointWhoseWorkerGainedAnIdIsKeptAndAskedItsOwnCana
 			markCanaryFailed(batKey, port)
 			refuseProbe(port)
 			markEndpointFailure(port)
-			after(t, 30*time.Millisecond, func() { p.h.setMachineID(port, catwomanMachine) })
-			after(t, 80*time.Millisecond, func() { clearCooldown(port) })
 			rec := &canaryRecorder{}
 			if fail {
 				rec.err = errors.New("canary transcript wrong")
 			}
-			res, err := dispatchWith(testCtx(t), p, rec.fn, 4)
+			opts := afterFirstGate(t, p, rec.fn, func() {
+				p.h.setMachineID(port, catwomanMachine)
+				after(t, 50*time.Millisecond, func() { clearCooldown(port) })
+			})
+			res, err := dispatchWithOpts(testCtx(t), p, opts, 4)
 			if rec.count() != 1 {
 				t.Errorf("%d canary clips sent, want 1 to the only endpoint", rec.count())
 			}
@@ -395,18 +484,18 @@ func TestChangedHands_APoolWhoseEveryPortChangedHandsDefersTheJobsAsChangedHands
 	for _, ep := range p.h.eps {
 		markEndpointFailure(ep.URL)
 	}
-	after(t, 30*time.Millisecond, func() {
+	rec := &canaryRecorder{}
+	opts := afterFirstGate(t, p, rec.fn, func() {
 		for _, ep := range p.h.eps {
 			p.h.setMachineID(ep.URL, catwomanMachine)
 		}
+		after(t, 50*time.Millisecond, func() {
+			for _, ep := range p.h.eps {
+				clearCooldown(ep.URL)
+			}
+		})
 	})
-	after(t, 80*time.Millisecond, func() {
-		for _, ep := range p.h.eps {
-			clearCooldown(ep.URL)
-		}
-	})
-	rec := &canaryRecorder{}
-	res, err := dispatchWith(testCtx(t), p, rec.fn, 4)
+	res, err := dispatchWithOpts(testCtx(t), p, opts, 4)
 	if !errors.Is(err, errPortChangedHands) {
 		t.Fatalf("err = %v, want one that wraps errPortChangedHands", err)
 	}
@@ -483,13 +572,13 @@ func TestChangedHands_APoolPortWhoseWorkerGainedAMachineIdDuringTheWaitIsDropped
 	markCanaryFailed(weak1, port1)
 	markEndpointFailure(port0)
 	markEndpointFailure(port1)
-	after(t, 30*time.Millisecond, func() {
+	rec := &canaryRecorder{}
+	opts := afterFirstGate(t, p, rec.fn, func() {
 		p.h.setMachineID(port1, catwomanMachine)
 		clearCooldown(port1)
+		after(t, 50*time.Millisecond, func() { clearCooldown(port0) })
 	})
-	after(t, 80*time.Millisecond, func() { clearCooldown(port0) })
-	rec := &canaryRecorder{}
-	res, err := dispatchWith(testCtx(t), p, rec.fn, 8)
+	res, err := dispatchWithOpts(testCtx(t), p, opts, 8)
 	if err != nil {
 		t.Fatalf("dispatch 1: err = %v, want it to go on with the port that is still the worker it was", err)
 	}
@@ -673,7 +762,12 @@ func (c *perPortCanary) fn(_ context.Context, g gatedEndpoint) error {
 // port 1's worker reports robin's machine id, a machine that is ALSO in this
 // dispatch, on port 0. Robin fails the canary clip on port 0 in this very
 // dispatch (failPort0), so port 1 must not take work as robin or as anyone else.
-func poolWhoseWeakPortLearnsASiblingMachine(t *testing.T, answer func(url, id string) BatchResult) *faultPool {
+//
+// The second result is the event that gives port 1 robin's id and ends the
+// cooldowns shortly after: the caller passes it to afterFirstGate, so it runs
+// after the dispatch's gate has frozen port 1 as a weak worker and not, on a
+// loaded agent, before.
+func poolWhoseWeakPortLearnsASiblingMachine(t *testing.T, answer func(url, id string) BatchResult) (*faultPool, func()) {
 	t.Helper()
 	shortenPacing(t, 10*time.Millisecond, time.Minute)
 	p := machineFaultPool(t, []string{robinMachine, ""}, answer)
@@ -688,21 +782,22 @@ func poolWhoseWeakPortLearnsASiblingMachine(t *testing.T, answer func(url, id st
 	markCanaryFailed(robinKey, port0)
 	markEndpointFailure(port0)
 	markEndpointFailure(port1)
-	after(t, 30*time.Millisecond, func() { p.h.setMachineID(port1, robinMachine) })
-	after(t, 80*time.Millisecond, func() { clearCooldown(port0); clearCooldown(port1) })
-	return p
+	return p, func() {
+		p.h.setMachineID(port1, robinMachine)
+		after(t, 50*time.Millisecond, func() { clearCooldown(port0); clearCooldown(port1) })
+	}
 }
 
 // Port 1 reports robin after the wait, robin is benched on port 0 for failing the
 // clip, and port 1 used to escape the bench (it was grouped under its own weak
 // entry, so robin's bench did not cover it) and take every job as robin.
 func TestChangedHands_AWeakPortThatLearnsAMachineWhoFailsTheCanaryOnItsSiblingPortIsSentNoWork(t *testing.T) {
-	p := poolWhoseWeakPortLearnsASiblingMachine(t, answerWithTranscripts)
+	p, learn := poolWhoseWeakPortLearnsASiblingMachine(t, answerWithTranscripts)
 	port0, port1 := p.h.eps[0].URL, p.h.eps[1].URL
 	c := &perPortCanary{fail: map[string]bool{port0: true}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	res, err := dispatchWith(ctx, p, c.fn, 8)
+	res, err := dispatchWithOpts(ctx, p, afterFirstGate(t, p, c.fn, learn), 8)
 	t.Logf("err = %v, canary asked %v, %d results", err, c.asked, len(res))
 	for id, r := range res {
 		if r.Endpoint == port1 {
@@ -729,7 +824,8 @@ func TestChangedHands_AWeakPortThatLearnsAMachineWhoFailsTheCanaryOnItsSiblingPo
 // writes none.
 func TestChangedHands_AWeakPortThatLearnsAMachineWhoFailsTheCanaryOnItsSiblingPortWritesNoTimeoutStrikes(t *testing.T) {
 	var p *faultPool
-	p = poolWhoseWeakPortLearnsASiblingMachine(t, func(url, id string) BatchResult {
+	var learn func()
+	p, learn = poolWhoseWeakPortLearnsASiblingMachine(t, func(url, id string) BatchResult {
 		if url == p.h.eps[1].URL {
 			return BatchResult{Error: timeoutText}
 		}
@@ -739,7 +835,7 @@ func TestChangedHands_AWeakPortThatLearnsAMachineWhoFailsTheCanaryOnItsSiblingPo
 	c := &perPortCanary{fail: map[string]bool{port0: true}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	res, err := dispatchWith(ctx, p, c.fn, 2)
+	res, err := dispatchWithOpts(ctx, p, afterFirstGate(t, p, c.fn, learn), 2)
 	t.Logf("err = %v, canary asked %v, %d results", err, c.asked, len(res))
 	for id, r := range res {
 		if r.Endpoint == port1 || IsStrikeError(r.Error) || strings.Contains(r.Worker, robinKey) {
@@ -760,7 +856,7 @@ func TestChangedHands_AWeakPortThatLearnsAMachineWhoFailsTheCanaryOnItsSiblingPo
 // dropped at the re-probe the dispatch has one machine, so the condemnation names
 // it once and never the weak identity of port 1, and port 1 is never tried.
 func TestChangedHands_AMachineThatAWeakPortLearnedIsNeverCountedAsASecondMachineForACondemnation(t *testing.T) {
-	p := poolWhoseWeakPortLearnsASiblingMachine(t, func(url, id string) BatchResult {
+	p, learn := poolWhoseWeakPortLearnsASiblingMachine(t, func(url, id string) BatchResult {
 		if id == "chap1" {
 			return BatchResult{Error: timeoutText}
 		}
@@ -772,7 +868,7 @@ func TestChangedHands_AMachineThatAWeakPortLearnedIsNeverCountedAsASecondMachine
 	c := &perPortCanary{}   // robin passes the clip on port 0 here
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	res, err := dispatchWith(ctx, p, c.fn, 4)
+	res, err := dispatchWithOpts(ctx, p, afterFirstGate(t, p, c.fn, learn), 4)
 	t.Logf("err = %v, canary asked %v, %d results", err, c.asked, len(res))
 	for _, s := range p.sendLog() {
 		if s.url == port1 {
@@ -796,7 +892,7 @@ func TestChangedHands_AMachineThatAWeakPortLearnedIsNeverCountedAsASecondMachine
 // hunting for a box that is not on a GPU).
 func TestChangedHands_APoolWithOneUnreachablePortWhoseOtherPortsAllChangedHandsDefersAsChangedHandsNotAsACapabilityRefusal(t *testing.T) {
 	// The start gate waits the dead port's probe out (healthProbeTimeout); the ids
-	// flip a few probe lengths after it, on the same footing as
+	// flip once it has finished (afterFirstGate), as in
 	// poolWhoseBatPortGainedAnotherMachinesId.
 	shortenHealthProbe(t, 250*time.Millisecond)
 	shortenPacing(t, 10*time.Millisecond, time.Minute)
@@ -807,18 +903,18 @@ func TestChangedHands_APoolWithOneUnreachablePortWhoseOtherPortsAllChangedHandsD
 	for _, ep := range live {
 		markEndpointFailure(ep.URL)
 	}
-	after(t, 700*time.Millisecond, func() {
+	rec := &canaryRecorder{}
+	opts := afterFirstGate(t, p, rec.fn, func() {
 		for _, ep := range live {
 			p.h.setMachineID(ep.URL, catwomanMachine)
 		}
+		after(t, 100*time.Millisecond, func() {
+			for _, ep := range live {
+				clearCooldown(ep.URL)
+			}
+		})
 	})
-	after(t, 800*time.Millisecond, func() {
-		for _, ep := range live {
-			clearCooldown(ep.URL)
-		}
-	})
-	rec := &canaryRecorder{}
-	res, err := dispatchOn(testCtx(t), p.h.eps, []string{"gpu"}, p.send, rec.fn, 4)
+	res, err := dispatchRequiringWith(testCtx(t), p, []string{"gpu"}, opts, 4)
 	if !errors.Is(err, errPortChangedHands) {
 		t.Fatalf("err = %v, want one that wraps errPortChangedHands", err)
 	}
