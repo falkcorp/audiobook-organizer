@@ -1,5 +1,5 @@
 // file: internal/bookfileaudio/duration.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 81298124-2825-49f4-b115-ae8aa117cd68
 // last-edited: 2026-11-04
 
@@ -30,7 +30,9 @@ import (
 type Source int
 
 const (
-	// SourceNone: the row still has Duration 0 (no trustworthy value found).
+	// SourceNone: nothing was tried or nothing was found, and nothing was
+	// recorded: no path to probe, or a book duration that normalized to 0. A
+	// probe that ran and failed is SourceProbeFailed or SourceProbeUnavailable.
 	SourceNone Source = iota
 	// SourceAlreadySet: the row arrived with Duration > 0 and was left alone.
 	SourceAlreadySet
@@ -40,6 +42,15 @@ const (
 	SourceBook
 	// SourceProbe: a header read of the file (mediainfo.Extract).
 	SourceProbe
+	// SourceProbeFailed: a probe ran on the present file and gave no real
+	// duration (exit error, 0 s, unparseable output, timeout, or only an
+	// estimate). The row keeps a nil Duration and one more failed attempt in
+	// Scan.DurationOK (see ClassifyProbeError).
+	SourceProbeFailed
+	// SourceProbeUnavailable: the probe could not run (ffprobe not installed,
+	// cancelled) or the file is absent. Says nothing about the file: the row
+	// stays unprobed and no attempt is recorded.
+	SourceProbeUnavailable
 )
 
 // String names the source for logs and test failures.
@@ -53,6 +64,10 @@ func (s Source) String() string {
 		return "book"
 	case SourceProbe:
 		return "probe"
+	case SourceProbeFailed:
+		return "probe-failed"
+	case SourceProbeUnavailable:
+		return "probe-unavailable"
 	default:
 		return "none"
 	}
@@ -86,8 +101,10 @@ type Known struct {
 // and the row keeps Duration 0.
 const ProbeTimeout = 30 * time.Second
 
-// errProbeTimeout is returned by boundedProbe when the probe outlives ProbeTimeout.
-var errProbeTimeout = errors.New("media probe timed out")
+// ErrProbeTimeout is returned by boundedProbe when the probe outlives
+// ProbeTimeout. ClassifyProbeError maps it, like any context deadline, to a
+// timeout attempt.
+var ErrProbeTimeout = errors.New("media probe timed out")
 
 // probe reads a file's media info. A package variable so tests can inject a
 // fake without real audio or ffprobe.
@@ -99,18 +116,29 @@ var probeTimeout = ProbeTimeout
 var defaultLog = logger.New("bookfileaudio")
 
 // EnsureDuration fills bf.Duration (and bf.Codec when empty) before the row is
-// written. The precedence is:
+// written, and records what a probe found out about the file. The precedence is:
 //
-//  1. bf.Duration > 0 already: left alone.
+//  1. bf.Duration already known: left alone.
 //  2. known.Info (the caller already read this file): its duration when real,
-//     otherwise 0. Never followed by 2 or 3.
+//     otherwise a probe failure. Never followed by 2 or 3.
 //  3. known.SingleFileBook with known.BookDurationSec > 0: the book duration,
 //     normalized through database.NormalizeDurationSec like relink_unlinked.
 //  4. A bounded header probe of bf.FilePath.
 //
 // An ESTIMATED duration (mediainfo.MediaInfo.DurationEstimated, a fileSize ÷
-// bitrate guess) is never written as real; the row stays 0, the same rule
-// maintenance.duration-backfill applies.
+// bitrate guess) is never written as real, the same rule
+// maintenance.duration-backfill applies; it counts as a failed attempt carrying
+// the underlying ffprobe error.
+//
+// A measured duration goes through bf.SetMeasuredDuration (Scan.DurationOK
+// Done). A probe that gave none is classified by ClassifyProbeError and applied
+// by RecordProbeFailure: a file failure or timeout is an attempt on the row; a
+// missing ffprobe or absent file leaves the row unprobed, uncounted, warned
+// about once. The returned Source says which happened.
+//
+// Callers that probe a row they already hold a stored copy of, with the same
+// bytes, should first copy the stored Scan.DurationOK onto bf: the merge never
+// sums attempts, so the count only reaches the ceiling if the writer carries it.
 //
 // Only Codec is copied from media info, and only into an empty field. Bitrate,
 // sample rate and channels are NOT: mediainfo fills them with hard-coded
@@ -118,8 +146,8 @@ var defaultLog = logger.New("bookfileaudio")
 // a default written into the row would read as a measurement. The scanner's
 // probeReplacedFileAudio copies the same two fields for the same reason.
 //
-// A probe failure never fails the caller: it is logged at Warn with the path
-// and the row keeps Duration 0. log may be nil.
+// A probe failure never fails the caller: it is logged and recorded as above.
+// log may be nil.
 func EnsureDuration(bf *database.BookFile, known Known, log logger.LevelLogger) Source {
 	if bf == nil {
 		return SourceNone
@@ -137,34 +165,30 @@ func EnsureDuration(bf *database.BookFile, known Known, log logger.LevelLogger) 
 				return SourceCaller
 			}
 		}
-		return SourceNone
+		return RecordProbeFailure(bf, bf.FilePath, ProbeError(known.Info, nil), log)
 	}
 	if known.SingleFileBook && known.BookDurationSec > 0 {
-		if err := bf.SetMeasuredDuration(database.NormalizeDurationSec(bf.FileSize, known.BookDurationSec)); err != nil {
-			// Normalization rounded a tiny millisecond-looking value to 0:
-			// the row stays unprobed, exactly as the old direct store of 0 did.
-			bf.ResetDuration()
-		}
+		// A book duration that normalizes to 0 (a tiny millisecond-looking
+		// value) is rejected and the row stays as it was: unprobed. Nothing is
+		// reset, so a failure already recorded on the row is not erased.
+		_ = bf.SetMeasuredDuration(database.NormalizeDurationSec(bf.FileSize, known.BookDurationSec))
 		return SourceBook
 	}
 	if bf.FilePath == "" {
 		return SourceNone
 	}
 	info, err := boundedProbe(bf.FilePath)
-	if err != nil || info == nil {
-		log.Warn("book file %s: duration probe failed, row keeps duration 0: %v",
-			logger.SanitizeLogValue(bf.FilePath), err)
-		return SourceNone
+	if info != nil {
+		fillCodec(bf, info)
 	}
-	fillCodec(bf, info)
-	if d := realDuration(info); d > 0 {
-		if err := bf.SetMeasuredDuration(d); err == nil {
-			return SourceProbe
+	if err == nil && info != nil {
+		if d := realDuration(info); d > 0 {
+			if serr := bf.SetMeasuredDuration(d); serr == nil {
+				return SourceProbe
+			}
 		}
 	}
-	log.Warn("book file %s: probe gave no real duration (estimated=%v; is ffprobe installed?), row keeps duration 0",
-		logger.SanitizeLogValue(bf.FilePath), info.DurationEstimated)
-	return SourceNone
+	return RecordProbeFailure(bf, bf.FilePath, ProbeError(info, err), log)
 }
 
 // realDuration is info's duration when it was read from the audio stream, 0
@@ -210,6 +234,6 @@ func boundedProbe(path string) (*mediainfo.MediaInfo, error) {
 	case r := <-ch:
 		return r.info, r.err
 	case <-timer.C:
-		return nil, errProbeTimeout
+		return nil, ErrProbeTimeout
 	}
 }

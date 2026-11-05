@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio.go
-// version: 1.7.2
+// version: 1.8.0
 // guid: 5169412c-6469-4f70-9073-b544025dd08e
 // last-edited: 2026-11-04
 
@@ -284,8 +284,9 @@ type rfPlan struct {
 	// file (consolidation with a size change): every field that describes the
 	// old bytes is cleared before the duration is filled.
 	ResetContent bool
-	// Probes holds the header read of each target, keyed by path.
-	Probes map[string]mediainfo.MediaInfo
+	// Probes holds the header read of each target, keyed by path, with what
+	// the read decided about the target's duration (see rfProbe).
+	Probes map[string]rfProbe
 	// ITunesNew maps a repointed, iTunes-linked row ID to the itunes_path
 	// written with it (never ""). ITunesOld holds that row's itunes_path and
 	// persistent ID as planned, so the write can refuse a row an iTunes
@@ -809,7 +810,7 @@ func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 	}
 
 	allMissing := r.MissingRows == r.ActiveRows
-	plan := &rfPlan{Repoints: map[string]string{}, OldPaths: map[string]string{}, Probes: map[string]mediainfo.MediaInfo{},
+	plan := &rfPlan{Repoints: map[string]string{}, OldPaths: map[string]string{}, Probes: map[string]rfProbe{},
 		ITunesNew: map[string]string{}, ITunesOld: map[string]rfITunesLink{}}
 
 	switch {
@@ -936,7 +937,14 @@ func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 		src := bookfileaudio.EnsureDuration(&scratch, bookfileaudio.Known{}, nil)
 		sources[src.String()] = true
 		scratchSec, _ := scratch.DurationSec() // unknown is 0, as before
-		plan.Probes[target] = mediainfo.MediaInfo{Duration: scratchSec, Codec: scratch.Codec}
+		plan.Probes[target] = rfProbe{
+			Info:   mediainfo.MediaInfo{Duration: scratchSec, Codec: scratch.Codec},
+			Source: src,
+			// The failure text the plan-time probe recorded, replayed at apply:
+			// a bare MediaInfo{Duration, Codec} would turn a missing ffprobe
+			// into a counted "0s" attempt.
+			Failure: scratch.Scan.DurationOK.LastError,
+		}
 		r.DurationSec += scratchSec
 	}
 	var srcs []string
@@ -1129,8 +1137,7 @@ func applyRFBook(ctx context.Context, env rfEnv, liveBooks map[string]bool, r rf
 			}
 			rfResetContent(f, target, st.Size())
 		}
-		probe := plan.Probes[target]
-		bookfileaudio.EnsureDuration(f, bookfileaudio.Known{Info: &probe}, nil)
+		rfApplyProbe(f, plan.Probes[target])
 		if want, ok := plan.ITunesNew[id]; ok {
 			// The persistent ID is untouched: the same iTunes track now
 			// points at the new file.
@@ -1153,6 +1160,36 @@ func applyRFBook(ctx context.Context, env rfEnv, liveBooks map[string]bool, r rf
 		return rfOutcomeApplied, "rows written; book aggregate recompute failed"
 	}
 	return rfOutcomeApplied, ""
+}
+
+// rfProbe is the header read of one repoint target, taken once at plan time so
+// the dry run reports the duration the apply will write.
+type rfProbe struct {
+	// Info is the codec and the real duration (0 when none was found).
+	Info mediainfo.MediaInfo
+	// Source is what bookfileaudio.EnsureDuration decided for the target.
+	Source bookfileaudio.Source
+	// Failure is the DurationOK.LastError to record when Source is
+	// SourceProbeFailed.
+	Failure string
+}
+
+// rfApplyProbe puts a plan-time probe's outcome on f. A real duration goes
+// through EnsureDuration as before. Otherwise the codec is filled and the
+// outcome the plan classified is replayed: a failed read of the file counts as
+// an attempt, while one that could not run (no ffprobe, file absent) leaves the
+// row unprobed. The file is not probed again.
+func rfApplyProbe(f *database.BookFile, probe rfProbe) {
+	if probe.Info.Duration > 0 {
+		bookfileaudio.EnsureDuration(f, bookfileaudio.Known{Info: &probe.Info}, nil)
+		return
+	}
+	if f.Codec == "" && probe.Info.Codec != "" {
+		f.Codec = probe.Info.Codec
+	}
+	if probe.Source == bookfileaudio.SourceProbeFailed {
+		f.RecordDurationProbeFailure(probe.Failure)
+	}
 }
 
 // rfResetContent clears every field of f that describes the bytes it USED to

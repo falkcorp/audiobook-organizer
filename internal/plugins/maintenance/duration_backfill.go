@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.10.7
+// version: 2.11.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-11-04
 
@@ -82,6 +82,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/boundedcall"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -202,6 +203,83 @@ func extractWithTimeout(ctx context.Context, filePath string) (*mediainfo.MediaI
 // goes here rather than into the operation log, which carries the counts.
 var durLog = logger.New("maintenance")
 
+// noteSegmentProbeFailure appends to failed a copy of segment f carrying one more
+// failed duration attempt, when err is a failure of the present file (a file
+// failure or a timeout) and f has no known duration. Everything that says
+// nothing about the file (ffprobe not installed, file absent, a cancelled run)
+// and every row that already has a duration is left out: there is nothing to
+// record. The classification is bookfileaudio.ClassifyProbeError, the one every
+// duration writer shares.
+func noteSegmentProbeFailure(failed []database.BookFile, f database.BookFile, err error) []database.BookFile {
+	if _, known := f.DurationSec(); known {
+		return failed
+	}
+	kind, msg := bookfileaudio.ClassifyProbeError(err)
+	if !kind.CountsAsAttempt() {
+		return failed
+	}
+	nf := f
+	nf.RecordDurationProbeFailure(msg)
+	return append(failed, nf)
+}
+
+// segmentFailureWriter is the store surface recordSegmentProbeFailures needs.
+// ModifyBookFileDeferAggregates is not on database.Store (TestStoreFlattenedWidth
+// lets Store only narrow), so the run resolves it with database.AsCapability, as
+// backfill-file-hashes does (hbDeferredStore).
+type segmentFailureWriter interface {
+	ModifyBookFileDeferAggregates(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
+}
+
+// recordSegmentProbeFailures writes the failed attempts collected for one book.
+// Each row is read fresh under its write lock and the attempt is added to the
+// STORED count, so a row that failed on an earlier run accumulates toward the
+// ceiling instead of restarting at one; a row that has meanwhile been measured
+// is skipped.
+//
+// The writes defer the book's aggregate recompute (a book of 1,494 segments on
+// a stalled mount would otherwise recompute 1,494 times over 1,494 rows each,
+// the 2026-09-19 incident) and recompute ONCE after the book's rows, which also
+// raises the one change notification the memdb read path keys on. Liveness is
+// stamped per row and ctx is checked between rows, as the UpdateBookFiles path
+// does. Returns how many rows were written and how many writes failed.
+func recordSegmentProbeFailures(ctx context.Context, store segmentFailureWriter, recompute func(bookID string) error,
+	reporter sdk.Reporter, bookID string, failed []database.BookFile) (written, errs int, firstErr error) {
+	for i := range failed {
+		if err := ctx.Err(); err != nil {
+			return written, errs, err
+		}
+		f := failed[i]
+		lastErr := f.Scan.DurationOK.LastError
+		row, err := store.ModifyBookFileDeferAggregates(f.BookID, f.ID, func(cur *database.BookFile) error {
+			if cur.Duration != nil {
+				return database.ErrSkipBookFileWrite
+			}
+			cur.RecordDurationProbeFailure(lastErr)
+			return nil
+		})
+		registry.TouchLiveness(reporter)
+		switch {
+		case err != nil:
+			errs++
+			if firstErr == nil {
+				firstErr = err
+			}
+		case row != nil:
+			written++
+		}
+	}
+	if written > 0 {
+		if err := recompute(bookID); err != nil {
+			errs++
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return written, errs, firstErr
+}
+
 // readWarnLimit is how many per-file read-error warnings one run logs. A
 // failing disk can make every remaining file unreadable; past this the
 // counts in the summary line carry the rest, and one line says how many
@@ -313,11 +391,19 @@ type bookProcessResult struct {
 	// copies: zero-rows mode, rows that are copies of a counted row
 	// (database.IsBookFileCopy), in or out of the own folder; excluded from
 	// the fill, as they are from every sum.
-	copies        int
-	book          database.Book
-	segs          []database.BookFile // may be nil for virtual single-file books
-	newDur        int
-	changedBFs    []database.BookFile
+	copies     int
+	book       database.Book
+	segs       []database.BookFile // may be nil for virtual single-file books
+	newDur     int
+	changedBFs []database.BookFile
+	// failedBFs are the segments whose probe failed on a present file (a file
+	// failure or timeout, see bookfileaudio.ClassifyProbeError), each a copy
+	// carrying the recorded Scan.DurationOK attempt. They are written whether or
+	// not the book is eligible: a book whose only segment is unreadable is
+	// ineligible, and its failure is exactly what has to be recorded. A segment
+	// that is absent or whose tool is missing is not here (nothing to record),
+	// nor is one that already has a known duration.
+	failedBFs     []database.BookFile
 	eligible      bool
 	usedFfprobe   bool
 	usedStoredDur bool // used stored segment Duration instead of ffprobe (non-iTunes fast path)
@@ -424,6 +510,7 @@ func processBookForReextractMode(
 	var (
 		newDur      int
 		changedBFs  []database.BookFile
+		failedBFs   []database.BookFile
 		skip        bool
 		usedFfprobe bool
 	)
@@ -465,10 +552,12 @@ func processBookForReextractMode(
 					// Record it and keep going: the readable segments still get their
 					// own correct durations, and the incomplete total is withheld.
 					recordReadFailure(&res, f.FilePath, mErr, warns)
+					failedBFs = noteSegmentProbeFailure(failedBFs, f, bookfileaudio.ProbeError(info, mErr))
 					res.unresolved++
 					continue
 				case info.DurationEstimated:
 					res.estimated++
+					failedBFs = noteSegmentProbeFailure(failedBFs, f, bookfileaudio.ProbeError(info, nil))
 					res.unresolved++
 					continue
 				}
@@ -516,6 +605,8 @@ func processBookForReextractMode(
 		}
 		newDur = info.Duration
 	}
+
+	res.failedBFs = failedBFs
 
 	// A book with unresolved segments still yields correct PER-FILE durations
 	// for the segments that resolved, so it stays eligible — but its total is
@@ -798,6 +889,27 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		}
 		estimated += res.estimated
 		msFixedRows += res.msFixed
+		// Probe failures of present files are recorded on their rows whether or
+		// not the book is eligible, and never in a dry run. This precedes the
+		// eligibility check on purpose: an all-failed book is ineligible.
+		if !dryRun && len(res.failedBFs) > 0 {
+			deferred, ok := database.AsCapability[segmentFailureWriter](store)
+			if !ok {
+				writeErrs++
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+					"book %s: the store cannot defer aggregates; %d probe failure(s) not recorded", res.book.ID, len(res.failedBFs)))
+			} else {
+				_, nErr, fErr := recordSegmentProbeFailures(ctx, deferred, store.RecomputeBookAggregates, reporter, res.book.ID, res.failedBFs)
+				if nErr > 0 || fErr != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					writeErrs += nErr
+					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+						"book %s: recording probe failure(s) failed: %v", res.book.ID, fErr))
+				}
+			}
+		}
 		if !res.eligible {
 			continue
 		}

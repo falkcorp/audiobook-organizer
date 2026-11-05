@@ -1,5 +1,5 @@
 // file: internal/bookfileaudio/duration_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3c0f4a8e-6b1d-4e52-9a77-2d5e8f1b9c04
 // last-edited: 2026-11-04
 
@@ -62,7 +62,7 @@ func TestEnsureDuration_Precedence(t *testing.T) {
 			probe:      fakeProbe{info: &mediainfo.MediaInfo{Duration: 7}},
 			wantDur:    0,
 			wantCodec:  "AAC",
-			wantSource: SourceNone,
+			wantSource: SourceProbeFailed,
 		},
 		{
 			name:       "single-file book duration beats probe",
@@ -88,7 +88,7 @@ func TestEnsureDuration_Precedence(t *testing.T) {
 			probe:      fakeProbe{info: &mediainfo.MediaInfo{Duration: 500, DurationEstimated: true, Codec: "AAC"}},
 			wantDur:    0,
 			wantCodec:  "AAC",
-			wantSource: SourceNone,
+			wantSource: SourceProbeFailed,
 			wantProbed: true,
 		},
 		{
@@ -96,7 +96,7 @@ func TestEnsureDuration_Precedence(t *testing.T) {
 			row:        database.BookFile{FilePath: "/a.m4b"},
 			probe:      fakeProbe{err: errors.New("boom")},
 			wantDur:    0,
-			wantSource: SourceNone,
+			wantSource: SourceProbeFailed,
 			wantProbed: true,
 		},
 		{
@@ -141,7 +141,7 @@ func TestEnsureDuration_Precedence(t *testing.T) {
 	}
 }
 
-func TestEnsureDuration_ProbeTimeoutLeavesZero(t *testing.T) {
+func TestEnsureDuration_ProbeTimeoutIsAnAttemptNotAKnownDuration(t *testing.T) {
 	block := make(chan struct{})
 	t.Cleanup(func() { close(block) })
 	t.Cleanup(SetProbeForTesting(func(string) (*mediainfo.MediaInfo, error) {
@@ -153,8 +153,12 @@ func TestEnsureDuration_ProbeTimeoutLeavesZero(t *testing.T) {
 	t.Cleanup(func() { probeTimeout = prev })
 
 	row := database.BookFile{FilePath: "/hang.m4b"}
-	if got := EnsureDuration(&row, Known{}, nil); got != SourceNone || row.Duration != nil {
-		t.Fatalf("got source %v duration %d, want none/0", got, durtest.Sec(row.Duration))
+	if got := EnsureDuration(&row, Known{}, nil); got != SourceProbeFailed || row.Duration != nil {
+		t.Fatalf("got source %v duration %d, want probe-failed/0", got, durtest.Sec(row.Duration))
+	}
+	ok := row.Scan.DurationOK
+	if ok.Attempts != 1 || !database.IsDurationTimeoutError(ok.LastError) {
+		t.Fatalf("DurationOK = %+v, want one attempt with the timeout prefix", ok)
 	}
 }
 
