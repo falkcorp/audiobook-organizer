@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.8.2 -->
+<!-- version: 1.8.3 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 05 — Logging (`core/log`)
 
@@ -397,6 +397,12 @@ type Schedules struct { // section core.log.schedules
   with auth off any peer that reaches the port would read them. It is one of the auth-off tightenings the R2
   release note lists (05-rbac §4.11). HEAD's route is deleted in R2 together with the SPA's move to the native
   route (no alias, D10).
+- **When the surface lands (F5).** The query route, the live tail topic `core.log.recorded.v1`, their permission
+  tests (`TestJournal_RequiresSystemManage`, `TestJournal_OtherUsersLinesNeedUsersView`) and the SPA's move from
+  HEAD's `GET /api/v1/system/logs` land at **F5**, the tasks flip, in the PR that registers M5 and starts
+  `logjournal`, which deletes HEAD's route: after M5 HEAD's `syslog:` family is empty, so no build serves HEAD's
+  route over the native journal or the native route without it. The route is mounted by an L6
+  `internal/<capability>http` package (03 §3.5 R4), because `logjournal` (L4) cannot mount routes.
 - **Native store (SIMP4-3).** `core/internal/logjournal` keeps one record per `c/log/journal/<ULID>`
   (versioned JSON of the record: attributes flattened to dotted keys with string, number or bool values),
   ULIDs from the record time, so `Query` and `Prune` are prefix scans and range deletes. Every app, `hello` and
@@ -688,3 +694,5 @@ D10–D12 revision (2026-11-04):
 Round 13 (2026-11-04): IMPL-1, IMPL-8, CONFORM-1. §8: `logjournal`'s two sections are registered dark from F2 so
 M2 at F3 writes a registered key; §10: the corrupt `syslog:` row comes from the fixture's hand-built overlay; §5:
 rollback names the pre-freeze release's binary.
+
+Round 16 (2026-11-05): plan-gap fixes G13 (§5: confirmed the query route `GET /api/core/v1/system/logs`, the live tail `core.log.recorded.v1` and both permission tests are specified; added that they and the SPA's move land at F5, in the PR that registers M5 and deletes HEAD's route, mounted by an L6 capability-routes package).
