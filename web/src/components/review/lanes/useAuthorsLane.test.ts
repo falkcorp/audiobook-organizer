@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useAuthorsLane.test.ts
-// version: 1.2.1
+// version: 1.2.3
 // guid: a5d29e61-7c04-4b8f-93e2-1f6a80c4b573
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 /**
  * Tests for the Authors lane's data layer.
@@ -1835,7 +1835,8 @@ describe('a series merge that leaves series behind', () => {
     await waitFor(() => expect(result.current.series.status).toBe('populated'));
     act(() => result.current.dispatch(sact.merge('s11-12')));
     await waitFor(() => expect(toast).toHaveBeenCalledWith('"Series A": cancelled', 'error'));
-    expect(result.current.series.groups.map((g) => g.key)).toEqual(['s11-12']);
+    // The toast is raised as the re-read is requested; the list is empty until it lands.
+    await waitFor(() => expect(result.current.series.groups.map((g) => g.key)).toEqual(['s11-12']));
     await waitFor(() => expect(reads.fetchSeriesGroups).toHaveBeenCalledTimes(2));
   });
 });
@@ -1884,7 +1885,9 @@ describe('series merge selected and merge all', () => {
         'error'
       )
     );
-    expect(result.current.series.groups.map((g) => g.key)).toEqual(['s21-22']);
+    // The toast fires as the re-read is requested, not when it lands: until it does the
+    // lane is loading and holds no groups.
+    await waitFor(() => expect(result.current.series.groups.map((g) => g.key)).toEqual(['s21-22']));
     expect(result.current.bulk).toBeNull();
   });
 
