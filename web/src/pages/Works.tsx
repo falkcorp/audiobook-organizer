@@ -1,7 +1,7 @@
 // file: web/src/pages/Works.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4b5c6d7e-8f9a-0b1c-2d3e-4f5a6b7c8d9e
-// last-edited: 2026-09-28
+// last-edited: 2026-11-05
 
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -27,6 +27,8 @@ import {
   type ColumnDef,
 } from '../components/common/ConfigurableTable';
 import { titleSortKey } from '../utils/titleSortKey';
+import { useSearchParams } from 'react-router-dom';
+import { useUrlStateSync } from '../hooks/useUrlState';
 
 const COLUMNS: ColumnDef<api.Work>[] = [
   {
@@ -72,7 +74,20 @@ const COLUMNS: ColumnDef<api.Work>[] = [
   },
 ];
 
+const WORKS_SORT_KEYS = COLUMNS.filter((c) => c.sortable).map((c) => c.key);
+const WORKS_DEFAULT_SORT = 'title';
+
 export function Works() {
+  // The sort on screen is in the address bar (`?sort=<column>&order=desc`; the
+  // default, title ascending, is omitted), so an ordering can be linked.
+  const [searchParams] = useSearchParams();
+  const [urlSeed] = useState(() => {
+    const sort = searchParams.get('sort');
+    return {
+      field: WORKS_SORT_KEYS.find((k) => k === sort) ?? WORKS_DEFAULT_SORT,
+      dir: searchParams.get('order') === 'desc' ? ('desc' as const) : ('asc' as const),
+    };
+  });
   const [works, setWorks] = useState<api.Work[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -84,6 +99,7 @@ export function Works() {
     sortDir,
     columnWidths,
     handleSort,
+    setSort,
     toggleColumn,
     isColumnVisible,
     startResize,
@@ -92,8 +108,25 @@ export function Works() {
   } = useConfigurableTable<api.Work>({
     storageKey: 'works',
     columns: COLUMNS,
-    defaultSortField: 'title',
+    defaultSortField: urlSeed.field,
+    defaultSortDir: urlSeed.dir,
   });
+
+  useUrlStateSync(
+    {
+      sort: sortField === WORKS_DEFAULT_SORT ? null : sortField,
+      order: sortDir === 'desc' ? 'desc' : null,
+    },
+    {
+      onExternalChange: (params) => {
+        const sort = params.get('sort');
+        setSort(
+          WORKS_SORT_KEYS.find((k) => k === sort) ?? WORKS_DEFAULT_SORT,
+          params.get('order') === 'desc' ? 'desc' : 'asc'
+        );
+      },
+    }
+  );
 
   const loadWorks = useCallback(async () => {
     setLoading(true);
