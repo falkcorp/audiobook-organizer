@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.69.1
+// version: 1.70.0
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
-// last-edited: 2026-10-28
+// last-edited: 2026-11-05
 
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -130,16 +130,29 @@ export const BookDetail = () => {
   const activeTab = (
     ['info', 'files'].includes(searchParams.get('tab') || '') ? searchParams.get('tab') : 'info'
   ) as 'info' | 'files';
-  const setActiveTab = (v: 'info' | 'files') => {
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        next.set('tab', v);
-        return next;
-      },
-      { replace: true }
-    );
-  };
+  // Write one query key (null removes it), keep the rest, replace the history entry.
+  const setUrlParam = useCallback(
+    (key: string, value: string | null) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (value === null) next.delete(key);
+          else next.set(key, value);
+          return next;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
+  const setActiveTab = (v: 'info' | 'files') => setUrlParam('tab', v);
+  // react-router rebuilds setSearchParams whenever the query string changes, so an
+  // effect that only needs to WRITE (and must not re-run on every URL change) calls
+  // it through this ref.
+  const setUrlParamRef = useRef(setUrlParam);
+  useEffect(() => {
+    setUrlParamRef.current = setUrlParam;
+  });
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [playlistDialogOpen, setPlaylistDialogOpen] = useState(false);
   const [deleteOptions, setDeleteOptions] = useState({
@@ -160,19 +173,19 @@ export const BookDetail = () => {
   // (which feeds selection, split, move and the hash chain). The switch and the
   // loaded rows are remembered with the book id they belong to, so navigating to
   // another book turns it off without a reset effect.
-  const [retiredShownFor, setRetiredShownFor] = useState<string | null>(null);
   const [loadedRetired, setLoadedRetired] = useState<{
     bookId: string;
     files: api.BookFile[];
   } | null>(null);
-  const showRetiredFiles = !!id && retiredShownFor === id;
+  const showRetiredFiles = !!id && searchParams.get('retired') === '1';
   // null = still loading.
   const retiredFiles = loadedRetired && loadedRetired.bookId === id ? loadedRetired.files : null;
   const handleShowRetiredFilesChange = (show: boolean) => {
-    setRetiredShownFor(show && id ? id : null);
+    setUrlParam('retired', show && id ? '1' : null);
     if (!show) setLoadedRetired(null);
   };
-  const [compareSnapshotTs, setCompareSnapshotTs] = useState<string | null>(null);
+  const compareSnapshotTs = searchParams.get('compare');
+  const setCompareSnapshotTs = (ts: string | null) => setUrlParam('compare', ts);
   const [itunesPidCount, setItunesPidCount] = useState(0);
   const [itunesExternalIDs, setItunesExternalIDs] = useState<api.ExternalIDMapping[]>([]);
   const [linkSearchOpen, setLinkSearchOpen] = useState(false);
@@ -180,7 +193,12 @@ export const BookDetail = () => {
   const [linkSearchResults, setLinkSearchResults] = useState<Book[]>([]);
   const [linkSearchLoading, setLinkSearchLoading] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
+  // Views worth linking live in the address bar: the History dialog
+  // (`?history=1`), the retired-files list (`?retired=1`) and the snapshot being
+  // compared (`?compare=<timestamp>`). Edit, delete, purge and the other action
+  // dialogs are transient and are not.
+  const historyDialogOpen = searchParams.get('history') === '1';
+  const setHistoryDialogOpen = (open: boolean) => setUrlParam('history', open ? '1' : null);
   const [metadataSearchOpen, setMetadataSearchOpen] = useState(false);
   const [segments, setSegments] = useState<BookSegment[]>([]);
   const [segmentsLoaded, setSegmentsLoaded] = useState(false);
@@ -396,7 +414,7 @@ export const BookDetail = () => {
       })
       .catch(() => {
         if (cancelled) return;
-        setRetiredShownFor(null);
+        setUrlParamRef.current('retired', null);
         toast('Failed to load retired files.', 'error');
       });
     return () => {
