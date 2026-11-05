@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.23.0
+// version: 2.24.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 // Repairs-lane fixer "folder-books": retire book rows that are really whole
 // author, series or library folders, and give each file only such a row held a
@@ -2274,15 +2274,19 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		block(fbSkipNeedsNewBook, fmt.Sprintf("%d new book(s) needed for files outside books/itunes/**, where organize could "+
 			"later move a created book: %s", len(outside), strings.Join(fbFirst(outside, 5), "; ")), outsideHard == 0)
 	}
-	// The framework-independent refusals (an iTunes id, listening progress,
-	// no heir) always hold. They are read only while no hard block is there
+	// The framework-independent refusals (an iTunes id, no heir) always hold;
+	// listening progress holds a plain apply but the owner may resolve it. They are read only while no hard block is there
 	// already: their store reads cannot change a row's skip kind (the first
 	// block wins), only whether an owner click may resolve what is left.
 	if fbAllOwnerOK(blocks) {
-		if kind, why := f.refusal(lib, store, members); kind != "" {
-			block(kind, why, false)
-		} else if why := lib.noHeir(members); why != "" {
-			block(fbSkipNoHeir, why, false)
+		kind, why, ownerOK := f.refusal(lib, store, members)
+		if kind != "" {
+			block(kind, why, ownerOK)
+		}
+		if kind == "" || ownerOK {
+			if why := lib.noHeir(members); why != "" {
+				block(fbSkipNoHeir, why, false)
+			}
 		}
 	}
 	if len(blocks) > 0 {
@@ -2463,34 +2467,46 @@ func fbFirst(s []string, n int) []string {
 // book-level ids: retiring such a book would drop its track), or anyone's
 // listening progress on it. Row-level ids are allowed: they stay on the
 // retired book's rows and the merged-track cleanup keeps a file's only track.
-func (f *folderBooksFixer) refusal(lib *fbLib, store OpsStore, members []string) (kind, why string) {
+//
+// Listening progress is owner-resolvable (ownerOK true; owner decision
+// 2026-11-05: "ignore the progress, reset them all to 0"): the owner's apply
+// retires the folder-book with its progress left on it, untouched and
+// recoverable, and the new books start at 0. It never blocks a plain apply.
+// An iTunes id is a hard refusal and wins over progress on any member, so
+// every member is checked before progress is reported.
+func (f *folderBooksFixer) refusal(lib *fbLib, store OpsStore, members []string) (kind, why string, ownerOK bool) {
 	um := f.p.deps.MergeUserStateStore()
+	var withProgress []string
 	for _, m := range members {
 		b := lib.books[m]
 		if b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
-			return fbSkipITunesID, fmt.Sprintf("folder-book %s carries iTunes id %s", m, *b.ITunesPersistentID)
+			return fbSkipITunesID, fmt.Sprintf("folder-book %s carries iTunes id %s", m, *b.ITunesPersistentID), false
 		}
 		exts, err := store.GetExternalIDsForBook(m)
 		if err != nil {
-			return fbSkipUnreadable, fmt.Sprintf("external ids of %s unreadable: %v", m, err)
+			return fbSkipUnreadable, fmt.Sprintf("external ids of %s unreadable: %v", m, err), false
 		}
 		for _, e := range exts {
 			if e.Source == "itunes" && !e.Tombstoned {
-				return fbSkipITunesID, fmt.Sprintf("folder-book %s carries iTunes external id %s", m, e.ExternalID)
+				return fbSkipITunesID, fmt.Sprintf("folder-book %s carries iTunes external id %s", m, e.ExternalID), false
 			}
 		}
 		if um == nil {
-			return fbSkipUnreadable, "user-state store unavailable: cannot tell whether anyone listened to it"
+			return fbSkipUnreadable, "user-state store unavailable: cannot tell whether anyone listened to it", false
 		}
 		has, err := merge.BookHasUserProgress(um, m)
 		if err != nil {
-			return fbSkipUnreadable, fmt.Sprintf("listening progress of %s unreadable: %v", m, err)
+			return fbSkipUnreadable, fmt.Sprintf("listening progress of %s unreadable: %v", m, err), false
 		}
 		if has {
-			return fbSkipProgress, fmt.Sprintf("folder-book %s has listening progress; retire it by hand", m)
+			withProgress = append(withProgress, m)
 		}
 	}
-	return "", ""
+	if len(withProgress) > 0 {
+		return fbSkipProgress, fmt.Sprintf("folder-book(s) %s have listening progress; the owner's apply leaves it on the retired "+
+			"folder-book (kept, not carried) and the new books start at 0", strings.Join(withProgress, ", ")), true
+	}
+	return "", "", false
 }
 
 // fbDropOwn removes from lib the books rowID's own cut-off apply created
