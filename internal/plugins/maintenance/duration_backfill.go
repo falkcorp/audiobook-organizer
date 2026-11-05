@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-11-05
 
@@ -709,7 +709,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	// default has to be the previewing one. Both spellings sent and
 	// disagreeing is an error, never a guess: picking one would silently write
 	// in a run the caller may have meant as a preview.
-	dryRun, err := opmode.ResolveDryRun("maintenance.duration-reextract", params.DryRunSnake, params.DryRun)
+	dryRun, err := opmode.ResolveDryRun("maintenance.duration-backfill", params.DryRunSnake, params.DryRun)
 	if err != nil {
 		return err
 	}
