@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.13.6 -->
+<!-- version: 1.13.8 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -1439,12 +1439,16 @@ phases and steps. Nothing in `tasks` writes before 06's pre-migration checkpoint
    deferred build (SIMP5-7).
 1. **Register** (inside `app.New`, 06 P6–P7): kernel collects module definitions, validates (5T.3.1) and
    upserts def snapshots `c/tasks/def/<kind>`. **Whether `tasks` starts at all.** The kernel builds the executor,
-   the scheduler and `taskhttp`'s routes, registers core's own kinds and runs steps 2–4 only when at least one
-   enabled module registered a kind through `Registrar.Tasks`; otherwise it starts none of them, mounts no task
-   route and creates no `<ns>.ops` instrument (5T.11). `module.Registrar.Tasks` exists from F2 (06 §6.4.10), so
-   `hello`, which registers `hello.count`, starts them from F2 in `coretest` and in its own binary, and coretest's
-   task cells run there; ABO registers no kind before the tasks flip F5, so before F5 ABO's App starts nothing of
-   `tasks`, and its first `Registrar.Tasks` call is in the F5 PR.
+   the scheduler and `taskhttp`'s routes and runs steps 2–4 when any kind is registered, a module's (through
+   `Registrar.Tasks`) or one of core's own, **or** the store holds runs in `c/tasks/` (so a disabled module's held
+   runs are listed, 5T.3.11); otherwise it starts none of them, mounts no task route and creates no `<ns>.ops`
+   instrument (5T.11). The kernel registers each of core's own kinds only from its owner's flip (F5 or later), in
+   every build. `module.Registrar.Tasks` exists from F2 (06 §6.4.10), so `hello`, which registers `hello.count`,
+   starts them from F2 in `coretest` and in its own binary, and coretest's task cells run there, a disabled hello
+   with persisted runs included. In ABO before the tasks flip F5 neither condition holds: ABO registers no kind,
+   the kernel registers none of core's own kinds before their owner's flip, and HEAD's runs live in HEAD's own
+   families until M4 imports them, so before F5 ABO's App starts nothing of `tasks`, and its first
+   `Registrar.Tasks` call is in the F5 PR.
 2. **Start** (`Executor.Run`, the executor step of 06 §6.5.2: after module hooks and workers and after
    `Bus.Open`, so events from the resume sweep reach subscribers): `PauseStore.Get` →
    `StandDownStore.List`: a marker that survived the restart means a holder died mid-work, so the runs
@@ -1668,7 +1672,7 @@ move from HEAD's engine to core's, and the R2 cutover is the one point where its
 | `internal/opsmetrics` | executor metrics (5T.11), a **re-implementation** in `mediacore/internal/executor` (an 04 §8.6 row; `opsmetrics.go` reads HEAD's `state` vocabulary; MOD7-1). The ABO package is deleted by the flip. Its one family core does not emit, `ops.abandoned_calls` (sources `repairs_resolver`, `internal/repairs/guards.go:209`, and `retired_versions_stat`, `internal/plugins/maintenance/retired_versions_fixer.go:240`; `internal/opsmetrics/opsmetrics.go:370-371`), becomes a books observable on a books scope in the flip PR, which repoints both converted callers, so one build never holds two owners of it |
 | `internal/lifecycle` | `core/lifecycle` (03 §3.3, L0) |
 | `internal/server/handlers/opsv3`, the v2 operations handlers and `internal/server/handlers/scheduler` | `mediacore/internal/taskhttp` (05-http-api §5), a **re-implementation** (an 04 §8.6 row; `opsv3/*` read HEAD's `state` vocabulary; MOD7-1). The HEAD routes 5T.3.10's table names are deleted by the flip; books' domain routes under `/api/v1/operations` stay (5T.3.10) |
-| `internal/database` ops storage (`pebble_store_ops_v2.go`, `pebble_store_ops_v3*.go`, `ReconcileOpsV3WithV2`) and HEAD's v1 history reader | the HEAD-format reader of books' tasks cutover step (5T.8.3), in `internal/books/cutover` (03 §3.5.1): it runs `ReconcileOpsV3WithV2` once and decodes the ops families; it is deleted with the other HEAD-format readers in R3 (PC-14-01). The bodies of books' legacy steps 62, 65 and 66 (`pebble_store_plan_legacy.go` included), which only older stores need, stay with books' legacy steps until that same R3 floor (`UpgradeFloor{InstallFirst: R2}`, 05-storage §5S.3.5). Nothing moves into core (R4-1) |
+| `internal/database` ops storage (`pebble_store_ops_v2.go`, `pebble_store_ops_v3*.go`, `ReconcileOpsV3WithV2`) and HEAD's v1 history reader | the HEAD-format reader of books' tasks cutover step (5T.8.3), in `internal/books/cutover` (03 §3.5.1): it runs `ReconcileOpsV3WithV2` once and decodes the ops families; it is deleted with the other HEAD-format readers in R3 (PC-14-01). The bodies of books' legacy steps 62, 65 and 66 (`pebble_store_plan_legacy.go` included), which only older stores need, stay with books' legacy steps until that same R3 floor (`UpgradeFloor{InstallFirst: <R2 tag>}`, 05-storage §5S.3.5). Nothing moves into core (R4-1) |
 
 ### 5T.8.2 Conversion groups, the flip, and the kind-rename map
 
@@ -1687,8 +1691,8 @@ summary row. The groups are disjoint by definition and sum to HEAD's 233 (34 + 2
 **Conversion rules (normative for groups T2–T7).**
 
 1. **Effects from an empty `Writes`.** A HEAD definition with an empty `Writes` converts to `Effects` declaring the books resources its body actually writes, found by reading the body
-   and every function it calls; a body that writes nothing converts to `Effects{}`, which is `ReadOnly()` with no declared reads and meets
-   5T.3.1's `Effects` requirement. The
+   and every function it calls; a body that writes nothing converts to `tasks.ReadOnly()` with no declared reads, which meets 5T.3.1's `Effects`
+   requirement. The
    PR lists, per such definition, the writes it found.
 2. **One body, two shells, during the dark window.** From a conversion PR until the F5 flip, each converted
    definition's body is one function shared by two thin shells: HEAD's v2 definition, still registered on HEAD's
@@ -1696,10 +1700,13 @@ summary row. The groups are disjoint by definition and sum to HEAD's 233 (34 + 2
    `taskstest.Conformance` and the parity suites. Each shell only adapts its engine's arguments (params, mode,
    progress, checkpoint) to the shared body, so the parity suites test the code production runs. The F5 flip
    deletes the HEAD shells and folds each shared body into its native shell.
-3. **HEAD bodies until the flip.** A dark conversion keeps HEAD's body: it does not move a write behind
-   `tasks.Writer` or drop a captured store. A kind's writes move behind `tasks.Writer` in its flip PR (F5, or the
-   owner's flip for a core kind), not before; the only body changes before then are the three named above
-   (`rc.Mode()`, `rc.Checkpoint`, the returned result) where the shared body can take them from either shell.
+3. **HEAD behaviour until the flip.** A dark conversion keeps HEAD's behaviour: the shared body does what
+   HEAD's body did, and production runs it on HEAD's engine until the kind's flip PR (F5, or the owner's flip for a
+   core kind). The shared body reaches its writer and its stores only through what its shell hands it: the native
+   shell `rc.Writer()` and the dependencies its owner declares, HEAD's shell an adapter of the same interface over
+   HEAD's writer. So a converted package passes `tasklint`'s `writer-bypass` and `store-capture` and leaves the
+   exemption list in its conversion PR (5T.8.4); the other body changes are the three named above (`rc.Mode()`,
+   `rc.Checkpoint`, the returned result).
 4. **Schedules through a lookup hook.** Books' list functions (one per converted package, returning its
    `[]tasks.Definition`) take a schedule-lookup hook, `func(tasks.Kind) *tasks.Schedule`, and set each kind's
    `Common.Schedule` from it. Books' schedule declarations (group T7) live in `internal/books`, which passes the
@@ -1708,14 +1715,14 @@ summary row. The groups are disjoint by definition and sum to HEAD's 233 (34 + 2
 
 | Group | Content | Count | Gate |
 |---|---|---|---|
-| Core (PC-12-01…06), in **F2** (the foundation PRs, 09 §9.4) | `core/tasks` (with `Parallelism`, `RunItems`, `ForEach` and `ItemsError`), the executor, the scheduler, `NativeStores`, `Importer`, `taskhttp`, `taskstest`; `module.Registrar.Tasks`; `hello` (with `hello.count`) and `coretest` (with its task cells) run on them; the window kind `core.window.nightly` (below) is declared here, in `core/tasks`, with the scheduler; the `core.tasks` config section (5T.10) and the `core:tasks.*` scopes (5T.3.7) are declared here; the three minimal owner registrations below are created here. The kernel starts the executor, the scheduler and `taskhttp` only when at least one enabled module registered a kind (5T.4 step 1): `hello` does from F2. Dark in ABO: ABO registers no kind before F5, so ABO's kernel starts no executor or scheduler, creates none of their `<ns>.ops` instruments (5T.11) and mounts no `taskhttp` route before F5, and ABO calls only the loop surface, from `internal/storagemigrate` (05-storage) at F3 and F4 | — | `taskstest.StoresSuite` with its importer cases, the core rows of 5T.9 |
+| Core (PC-12-01…06), in **F2** (the foundation PRs, 09 §9.4) | `core/tasks` (with `Parallelism`, `RunItems`, `ForEach` and `ItemsError`), the executor, the scheduler, `NativeStores`, `Importer`, `taskhttp`, `taskstest`; `module.Registrar.Tasks`; `hello` (with `hello.count`) and `coretest` (with its task cells) run on them; the window kind `core.window.nightly` (below) is declared here, in `core/tasks`, with the scheduler; the `core.tasks` config section (5T.10) and the `core:tasks.*` scopes (5T.3.7) are declared here; the three minimal owner registrations below are created here. The kernel starts the executor, the scheduler and `taskhttp` when any kind is registered (a module's or core's own) or `c/tasks/` holds runs (5T.4 step 1): `hello` registers one from F2. `tasklint` (5T.8.4) lands here and runs in CI from F2. Dark in ABO: before F5 ABO registers no kind, the kernel registers none of core's own kinds and `c/tasks/` holds no run, so ABO's kernel starts no executor or scheduler, creates none of their `<ns>.ops` instruments (5T.11) and mounts no `taskhttp` route before F5, and ABO calls only the loop surface, from `internal/storagemigrate` (05-storage) at F3 and F4 | — | `taskstest.StoresSuite` with its importer cases, the core rows of 5T.9 |
 | T2 | the 34 `MaintenanceJob`s (`internal/maintenance/jobs`) → books Task kinds (`Run(ctx, JobStore, ProgressReporter, dryRun)` `internal/maintenance/job.go:498` → `TaskSpec.Run(rc, p)`; `Policy()` → `Common`) | 34 | `taskstest.Conformance` per kind |
 | T3 | 24 repairs fixers → `tasks.Fixer` kinds `books.repairs.<fixer-id>`; the 2 defs `repairs.plan`/`repairs.apply` removed | 24 fixers, 2 defs | Fixer conformance suite |
-| T4 | the ops that become **core kinds** (table below), each in its owner's package: 4 maintenance-plugin defs and 2 server defs | 6 defs → 6 core kinds, plus the new `core.tasks.prune` | the owner file's tests |
-| T5 | service-registry plugin defs, per plugin: acoustid 8, dedup 32, metafetch 3, itunes 1, Deluge 4 (through 05-download's client adapter) | 48 | `pkg/plugin/sdk` unused by them |
+| T4 | the ops that become **core kinds** (table below), each in its owner's package: 4 maintenance-plugin defs and 2 server defs; the conversions of `core.storage.compact` and `core.storage.census` create `core/internal/storagetasks`, dark (the kernel registers its kinds from F5) | 6 defs → 6 core kinds, plus the new `core.tasks.prune` | the owner file's tests |
+| T5 | service-registry plugin defs, per plugin: acoustid 8, dedup 32, metafetch 3, itunes 1, Deluge 4 (through 05-download's client adapter) | 48 | the native shells do not import `pkg/plugin/sdk` (the HEAD shells keep it until F5) |
 | T6 | the maintenance plugin's defs not in T3 or T4, in sub-batches of ≤ 15 by file group | 98 | — |
 | T7 | the server-package defs not in T4 (`internal/server/*_op*.go`) and `scheduler.metadata-upgrade`; the 38 `TaskDefinition`s → `ScheduleFromConfig` declarations on their kinds (5T.3.8); the 15 v2 crons → none (listed in the release note) | 45 + 38 | `TestScheduleParity_AllDefinitions` |
-| **F5 flip** (PC-12-08, with the schedule conversion PC-13-14) | makes ABO's first `Registrar.Tasks` call, so ABO's kernel starts core's executor and scheduler and registers every converted definition on them, and the three core kinds of the minimal owner registrations below; moves every caller of `pkg/plugin/sdk` to `core/tasks` and `module.Registrar` (the package is deleted in R3, 5T.8.1); empties `tasklint`'s exemption list for every kind it registers (5T.8.4); adds books' tasks cutover step M4 with the kind-rename map (5T.8.3); deletes HEAD's engine (5T.8.1: `registry`, `opscatalog`, `maintenance`, `scheduler`, `childop`, `opmode`, `opsmetrics`, the v1 checkpoint helpers, the handlers and HEAD routes of 5T.3.10; not `opsgen`, `ops.ts` or `internal/operations/state`, which go together in R3, 5T.8.1); moves the SPA's Activity page and the first-party callers to the native routes; updates the dashboards and rules whose `def_id` values or series change (5T.11) | every definition | `make ci` and e2e; the parity suites (resume, cancel, shutdown, schedules); the cutover rows of 5T.9; `TestKindRenameMapCoversLedger`; 05-metrics' dashboard-reference test; `tasklint` with an empty exemption list (5T.8.4) |
+| **F5 flip** (PC-12-08, with the schedule conversion PC-13-14) | makes ABO's first `Registrar.Tasks` call, so ABO's kernel starts core's executor and scheduler and registers every converted definition on them, and the three core kinds of the minimal owner registrations below; moves every caller of `pkg/plugin/sdk` to `core/tasks` and `module.Registrar` (the package is deleted in R3, 5T.8.1); requires `tasklint`'s exemption list to be empty (5T.8.4); adds books' tasks cutover step M4 with the kind-rename map (5T.8.3); deletes HEAD's engine (5T.8.1: `registry`, `opscatalog`, `maintenance`, `scheduler`, `childop`, `opmode`, `opsmetrics`, the v1 checkpoint helpers, the handlers and HEAD routes of 5T.3.10; not `opsgen`, `ops.ts` or `internal/operations/state`, which go together in R3, 5T.8.1); moves the SPA's Activity page and the first-party callers to the native routes; updates the dashboards and rules whose `def_id` values or series change (5T.11) | every definition | `make ci` and e2e; the parity suites (resume, cancel, shutdown, schedules); the cutover rows of 5T.9; `TestKindRenameMapCoversLedger`; 05-metrics' dashboard-reference test; `tasklint` with an empty exemption list (5T.8.4) |
 
 **HEAD's generic ops: which become core kinds (resolves the T4 gap; SI-21).** `raw/06` §6 classes 24 of
 HEAD's 233 definitions `generic`. One rule decides each: a definition becomes a **core** kind only if
@@ -1914,13 +1921,14 @@ are lost with every other post-upgrade write.
 
 ### 5T.8.4 `archtest/tasklint` (from `tools/cmd/oplint`)
 
-`tools/cmd/oplint` moves to `core/archtest/tasklint` (04 §6) with its module path a parameter. HEAD's seven rules
+`tools/cmd/oplint` moves to `core/archtest/tasklint` (04 §6) with its module path a parameter. It lands at **F2**,
+with the tasks engine (the Core group of 5T.8.2), with its six rules and its exemption list, and runs in CI from F2. HEAD's seven rules
 are defined over HEAD's v3 registration model (`ops.Bundle`, `Ops(Deps)`, `internal/opscatalog`), which core does
 not have: registration is only through `module.Registrar.Tasks` (5T.3.1). They map onto core's model as follows:
 
 | HEAD rule | `tasklint` rule | Over core's model |
 |---|---|---|
-| `unbundled-def` | `unregistered-kind` | every `TaskSpec`, `BatchSpec` or `FixerSpec` value built in a module package (a `tasks.Task`, `tasks.Batch` or `tasks.Fixer` call) is returned by that module's `Registrar.Tasks` registration, directly or through a list function it passes there; before the F5 flip, when ABO makes no `Registrar.Tasks` call, a books list function (5T.8.2 conversion rule 4) that returns it counts, and F5 passes every such function to `Registrar.Tasks` |
+| `unbundled-def` | `unregistered-kind` | every `TaskSpec`, `BatchSpec` or `FixerSpec` value built in a module package (a `tasks.Task`, `tasks.Batch` or `tasks.Fixer` call) is returned by that module's `Registrar.Tasks` registration, directly or through a list function it passes there; from F2 until the F5 flip, when ABO makes no `Registrar.Tasks` call, a books list function (5T.8.2 conversion rule 4) that returns it counts, and F5 passes every such function to `Registrar.Tasks` |
 | `unregistered-bundle` | — (dropped) | core has no bundles and no catalog: a kind is registered exactly when `Registrar.Tasks` receives it, which `unregistered-kind` already checks |
 | `store-in-deps` | `store-capture` | a definition's `Run` (or `Source`, `Item`, `Finish`, `Candidates`, `Load`, `Evaluate`, `Apply`) captures no store except through `tasks.Writer` (`rc.Writer()`) or the dependencies its owner declared for it |
 | `writer-bypass` | `writer-bypass` | unchanged in meaning: a definition's body writes a module entity only through `tasks.Writer` |
@@ -1930,12 +1938,12 @@ not have: registration is only through `module.Registrar.Tasks` (5T.3.1). They m
 packages, `internal/books/...` and every ABO package whose definitions books' `Registrar.Tasks` call registers,
 as a test in each module (apps run it from their own tests, 03 §3.3 `archtest` row).
 
-**The dark-conversion ratchet.** Dark conversions keep HEAD's bodies until their kind's flip PR (5T.8.2 conversion
-rule 3), so `writer-bypass` and `store-capture` would flag them. Those two rules therefore run as a ratchet: a
-checked-in exemption list names the books packages not yet converted to `tasks.Writer` and to declared
-dependencies, and the list may only shrink (a PR that adds an entry fails). The F5 flip moves the writes of every
-kind it registers behind `tasks.Writer` and empties the list for them; any entry still present fails F5's gate.
-The other four of `tasklint`'s six rules have no exemption list and apply from the PR that lands `tasklint`.
+**The dark-conversion ratchet.** HEAD's not-yet-converted task packages would fail `writer-bypass` and
+`store-capture`, so those two rules run as a ratchet: a checked-in exemption list, created at F2 with every
+not-yet-converted books task package on it, may only shrink (a PR that adds an entry fails). Each dark conversion PR
+(groups T2–T7) removes the packages it converts (5T.8.2 conversion rule 3), and the F5 flip requires the list to be
+empty: any entry still present fails F5's gate. The other four of `tasklint`'s six rules have no exemption list and
+apply from F2.
 
 ## 5T.9 Tests (core must ship)
 
@@ -1986,7 +1994,7 @@ core's. Every row is part of `make ci`; there is no previous-build test and no `
 | `TestFixerMarksLandDuringQuiesce` (`synctest`, a case of `taskstest.StoresSuite`: a Fixer row applies while a stand-down quiesces the run to `stopping`; its mark commits, and on resume that row is skipped) | R7-3, DATA7-3 |
 | `TestTimelineLogDiscard` (`GET /timeline` returns HEAD's rows for a finished-at window with in-flight runs included; `GET /runs/{id}/log` returns the run's lines; `DELETE /runs/{id}` answers 409 for a running run and, for a terminal run, removes every key of the run, and the next resume sweep does not resurrect it) and its **(ABO)** parity case against HEAD's timeline handler on the R0 fixture | FIN12-3 |
 | `TestStandDown_MarkerAtBootDefersQuiescedRun` (a hold's marker survives a crash; the next boot leaves the quiesced run `interrupted_quiesced`, clears the marker and warns; the boot after resumes it) | MOD6-4 |
-| `TestNativeStores_RoundTrip` (every `RunStore`, `ClockStore`, `PauseStore` and `StandDownStore` method over `c/tasks/`; `hello.count` on a zero-module `coretest`) | SIMP4-3 |
+| `TestNativeStores_RoundTrip` (every `RunStore`, `ClockStore`, `PauseStore` and `StandDownStore` method over `c/tasks/`; `hello.count` on a `coretest` App whose only module is `hello`) | SIMP4-3 |
 | `TestParity_ResumeCancelShutdown` **(ABO)** (HEAD's resume, cancel and shutdown suites, ported as behaviour oracles: each case's HEAD outcome is the expected outcome of the converted definition on core's executor) | G1, PC-12-03 |
 | `TestUnknownKindRun_DroppedAtResume` (a non-terminal run of an unregistered, unheld kind → `interrupted_dropped`, reason `unknown_kind`; a terminal one stays listed; boot succeeds) | 5T.5 |
 | the importer cases of `taskstest.StoresSuite` (over `NativeStores`: an imported run keeps its ID, kind, state and `Seq`; a second import of one ID fails with `ErrRunConflict`; `RunData` lands only on an imported run; `CrashClone` at every point of an import batch leaves the chunk wholly imported or wholly not; `RenameKind` rewrites runs, clock, snapshot and stamps and is idempotent) | 5T.3.13 |
@@ -2417,3 +2425,7 @@ for the byte-identity test; the fixture corpus gains its hand-built overlay; rol
 release.
 
 Round 16 (2026-11-05): plan-gap fixes G1 (5T.4 step 1 and the Core group row: `Registrar.Tasks`, `hello.count` and coretest's task cells land at F2; the kernel starts the executor, scheduler and `taskhttp` only when an enabled module registered a kind, so ABO starts nothing before its first call at F5), G2 (5T.8.2: the three interim interfaces' one-method signatures and the three kinds' full `TaskSpec` fields, copied from 05-metadata M2.4, 05-ai §4 and 05-health §5H.3.5), G3 (new 5T.8.4: `tasklint`'s rules over core's model, `unregistered-kind`, `store-capture`, `unregistered-bundle` dropped; where it runs; the `writer-bypass`/`store-capture` exemption ratchet emptied by F5), G4 (rename map rule 4 and the scheduler-name rule: `books.library.scan-full` with its own schedule and clock; `TestCutover_TasksFixtureFromR0` cell), G6 (core-kinds table: the storage kinds live in `core/internal/storagetasks`), G10 (5T.8.1 and the F5 row: `pkg/plugin/sdk` callers move at F5, the package is deleted in R3), G12 (5T.8.2 conversion rules 1–4: `Effects` from an empty `Writes`, one body behind two shells, HEAD bodies until the flip, the schedule-lookup hook), G15 (`core.window.nightly` has one owner, `core/tasks`, declared at F2; members only schedule into it).
+
+Round 16 (2026-11-05): review fixes X1 (5T.8.4, the Core group and F5 rows, conversion rule 3: `tasklint` lands at F2 with its exemption list holding every not-yet-converted books task package; each dark conversion PR removes its packages, whose shared bodies reach writer and stores only through their shells; F5 requires the list empty), X2 (5T.4 step 1, Core group row: `tasks` starts when any kind is registered, a module's or core's own, or `c/tasks/` holds runs; core's own kinds register from their owner's flip; `TestNativeStores_RoundTrip` boots with hello), X4 (T4: the storage-kind conversions create `core/internal/storagetasks` dark; T5's gate names the native shells; rule 1 writes `tasks.ReadOnly()`).
+
+Round 16 (2026-11-05): review fixes X4 (5T.8.1 `internal/database` row: `UpgradeFloor{InstallFirst: <R2 tag>}`).
