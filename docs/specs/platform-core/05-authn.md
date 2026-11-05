@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.13.6 -->
+<!-- version: 1.13.7 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -237,10 +237,14 @@ type Compat interface {
 	AuthenticateKey(ctx context.Context, raw string, client ClientInfo) (*Principal, error)
 	// PrincipalFor builds the principal for a user the surface resolved
 	// itself (an ABS JWT or refresh session, a Cloudflare Access login),
-	// exactly as Service.PrincipalFor does for this method: it refuses a user
-	// that is not active, whose epoch differs from epoch, or that is
-	// SignInRestricted (ErrResetRequired).
-	PrincipalFor(ctx context.Context, u *User, scopes []rbac.Permission, epoch int64) (*Principal, error)
+	// as Service.PrincipalFor does for this method: it refuses a user that is
+	// not active, whose epoch differs from epoch, or that is SignInRestricted
+	// or PasswordResetRequired (ErrResetRequired, the two VerifyPassword
+	// refuses). It goes through core's one Throttle as VerifyPassword does
+	// (§4.9): a call from a throttled source is refused (ErrThrottled) before
+	// any other check, and every refused call counts as one failure for
+	// client's source.
+	PrincipalFor(ctx context.Context, u *User, scopes []rbac.Permission, epoch int64, client ClientInfo) (*Principal, error)
 	// CheckCredentialFor is Service.CheckCredentialFor (§3.2).
 	CheckCredentialFor(p *Principal, perm rbac.Requirement) error
 }
@@ -322,11 +326,15 @@ type Options struct {
 	// OIDCCallbackBase is the path prefix of the OIDC/OAuth callback,
 	// GET <OIDCCallbackBase>/{provider}/callback. core/internal/authhttp
 	// passes it to httpapi's Router.CoreFixedGroup (05-http-api §3.5), and
-	// that callback pattern is the one CoreExactPatterns() entry; ABO sets
+	// that callback pattern is the first CoreExactPatterns() entry; ABO sets
 	// "/api/v1/auth/oauth", HEAD's path, so no identity provider is
-	// re-registered (§4.13). Empty (hello, new apps): no fixed group; the
-	// callback is GET /api/core/v1/auth/oidc/{provider}/callback on CoreGroup().
-	// The start route is always GET /api/core/v1/auth/oidc/{provider}/start.
+	// re-registered (§4.13). The same group serves HEAD's start pattern,
+	// GET <OIDCCallbackBase>/{provider}/start, the second CoreExactPatterns()
+	// entry, with core's one start handler and its AppHandoff rules (§4.7),
+	// because ABS clients start there. Empty (hello, new apps): no fixed
+	// group; the callback is GET /api/core/v1/auth/oidc/{provider}/callback on
+	// CoreGroup(). GET /api/core/v1/auth/oidc/{provider}/start is served in
+	// every case.
 	OIDCCallbackBase string
 }
 
@@ -914,19 +922,26 @@ Core owns it; nothing refers to an app, a module or `users.manage`.
 - Ends in `IssueSession(origin = oidc:<provider>)` → `MethodSession` (interactive), except on the
   native-app hand-off below.
 - Routes: `GET /api/core/v1/auth/providers` (Public), `GET /api/core/v1/auth/oidc/{provider}/start`,
-  and the callback at HEAD's path `GET /api/v1/auth/oauth/{provider}/callback` (Public, `RateAuth`),
+  HEAD's start path `GET /api/v1/auth/oauth/{provider}/start` (Public, `RateAuth`, below), and the
+  callback at HEAD's path `GET /api/v1/auth/oauth/{provider}/callback` (Public, `RateAuth`),
   which core serves from F4, so no identity provider needs its redirect URI re-registered (§4.13; 03
   §3.8 "The frozen contract (D12 (c)) and what stays unchanged because it is cheaper"). The redirect URI is
   `core.auth.oidc.redirect_base_url` plus that path, as at HEAD
-  (`internal/config/config.go:1591-1593` @748fd787a). HEAD's start path
-  `GET /api/v1/auth/oauth/{provider}/start` is deleted at F4 with no alias: HEAD records no native
-  client on it (ABS clients start at `/auth/openid`), and R2's release note says "The web sign-in start
-  address moved to `/api/core/v1/auth/oidc/<provider>/start`; update any bookmark or script that opens
-  the old one" (09).
+  (`internal/config/config.go:1591-1593` @748fd787a).
+- **HEAD's start path is kept at its exact pattern** (SAFETY-11). ABS clients such as AudioBooth start
+  a Google or GitHub sign-in at `GET /api/v1/auth/oauth/{provider}/start`: HEAD builds its deep link
+  for an `ASWebAuthenticationSession` caller (`internal/server/handlers/oauth_login.go:146-149`
+  @748fd787a), and HEAD's `oauth_login_deeplink_test.go` uses `audiobooth://oauth`. D12 (c) freezes the
+  ABS API, so the path stays. From F4 core serves it as the second `CoreExactPatterns()` entry
+  (05-http-api §4.9), on the same `Router.CoreFixedGroup(opts.OIDCCallbackBase)` as the callback (§3.2,
+  §4.13), with the same start handler as `/api/core/v1/auth/oidc/{provider}/start`: both paths take the
+  same parameters and apply the native-app hand-off rules below. It is not an alias (D10): the path does
+  not move, and books' gin handler for it is deleted in the same PR. No release-note line covers it,
+  because nothing changes for its callers. Test: `TestOAuthStart_HEADPathServedByCore` (§10).
 - **Native-app hand-off (SEC-2).** HEAD's start lets a native client sign in through Google or GitHub
   and get an authorization code on its own URL scheme instead of a web session
   (`internal/server/handlers/oauth_login.go:76,149-162,209-235` @748fd787a; the code is redeemed at the
-  frozen ABS route `/auth/openid/callback`, `handlers/abs/openid.go:509-545`). Core's start route keeps
+  frozen ABS route `/auth/openid/callback`, `handlers/abs/openid.go:509-545`). Core's start handler, on both start paths, keeps
   it, through the `MethodSpec.AppHandoff` hook books registers with its `books.abs` method (§3.3):
   - **Start parameters, HEAD's rule.** `redirect_uri` (alias `callback`), `code_challenge`,
     `code_challenge_method` and the app's `state`. With either of `redirect_uri` and `code_challenge`
@@ -986,7 +1001,8 @@ Core owns it; nothing refers to an app, a module or `users.manage`.
   `LOGIN_SATURATED_RATE` / `LOGIN_SATURATED_BURST`, `internal/config/invite_config.go:68-81` @748fd787a).
 - One `auth.Throttle` instance per `Service` (not package state, R5) applied to: password login (web
   login and every compat surface's `Compat.VerifyPassword`, §3.1, sharing one counter set as HEAD's
-  ABS/web throttle did), bootstrap redeem, setup, invite lookup/accept, temp-login consume, OIDC
+  ABS/web throttle did), every compat surface's `Compat.PrincipalFor` (§3.1: a throttled source is
+  refused, and each refused call counts as a failure for its source), bootstrap redeem, setup, invite lookup/accept, temp-login consume, OIDC
   callback.
 - Client address comes from `httpapi` (05-http-api §3.5): trusted proxies are prefixes **or
   zoned addresses**, ABO's `TUNNEL_CONNECTOR_ADDRS` is converted into them by the config cutover, and the client-IP header is
@@ -1018,13 +1034,15 @@ module holds no credential mutation and builds no second auth stack (G15):
   status (`revoked`, `disabled`, `needs_confirmation` refused), expiry, the owner's status and
   `SignInRestricted`, and (once it exists) purpose — not a subset (SEC2-4).
 - **ABS JWTs, refresh sessions and the Cloudflare Access login path** (`login.go:63-69`):
-  `Compat.PrincipalFor(ctx, user, scopes, epoch)`, so status, credential epoch, `SignInRestricted`, role
+  `Compat.PrincipalFor(ctx, user, scopes, epoch, client)`, so status, credential epoch,
+  `SignInRestricted`, `PasswordResetRequired`, core's throttle, role
   resolution and scope intersection are core's — replacing the duplicate role walk
   `absEffectivePermissions` (`middleware/absauth.go:778-800`). A restore-restricted last admin therefore
   gets no ABS session by any path.
 
 `TestCompat_ABSLoginHonoursRestrictions` (§10) runs the password, key and Cloudflare paths against a
 `SignInRestricted` user, a `PasswordResetRequired` user and a `needs_confirmation` key: each is refused.
+A JWT or Cloudflare call from a throttled source is refused as well.
 
 **Confinement on the ABS surface (SEC2-4).** Today the ABS group refuses a worker-only credential
 explicitly (`middleware/absauth.go:629-632`). Stage 13 never runs on `OwnAuth` routes, so after
@@ -1141,15 +1159,17 @@ with `history.replaceState` and posts the token in a body (07 §7.4.3).
 HEAD's gin identity routes (`/api/v1/auth/*` and the identity half of `/api/v1/users*`,
 `internal/server/wire_auth_routes.go`) are deleted in R2's identity flip (F4). The SPA's identity UI,
 which reads the fragment links, and the first-party callers (the `server-bootstrap` skill's bootstrap
-call, `scripts/`) move to these routes in that same PR (03 §3.8; 09). One path is kept: HEAD's OAuth
+call, `scripts/`) move to these routes in that same PR (03 §3.8; 09). Two paths are kept. HEAD's OAuth
 callback `/api/v1/auth/oauth/:provider/callback` (`wire_auth_routes.go:44` @748fd787a) is served by core
 from F4 at that exact pattern, `GET /api/v1/auth/oauth/{provider}/callback`, registered by
 `internal/authhttp` on `Router.CoreFixedGroup(opts.OIDCCallbackBase)` with the base ABO supplies as
-`app.Options.Auth.OIDCCallbackBase` (§3.2), as the one core auth route outside `/api/core/v1`, so no identity provider's redirect
+`app.Options.Auth.OIDCCallbackBase` (§3.2), as one of the two core auth routes outside `/api/core/v1`, so no identity provider's redirect
 URI is re-registered (03 §3.8 "The frozen contract (D12 (c)) and what stays unchanged because it is cheaper"). HEAD's start
-path is not kept (§4.7). The F4 PR deletes books' gin handlers for both, and the
-pattern is the one core route inside books' `/api/v1/` claim, which 05-http-api §4.9's claim rule must
-admit (`TestOAuthCallback_HEADPathServedByCore`).
+path `/api/v1/auth/oauth/:provider/start` is kept the same way, at `GET /api/v1/auth/oauth/{provider}/start`
+on the same fixed group, because ABS clients start there and D12 (c) freezes the ABS API (§4.7). The F4
+PR deletes books' gin handlers for both, and the two patterns are the only core routes inside books'
+`/api/v1/` claim, the two `CoreExactPatterns()` entries that 05-http-api §4.9's claim rule admits
+(`TestOAuthCallback_HEADPathServedByCore`, `TestOAuthStart_HEADPathServedByCore`).
 
 | Method + path | Perm | Guards |
 |---|---|---|
@@ -1157,7 +1177,7 @@ admit (`TestOAuthCallback_HEADPathServedByCore`).
 | `POST /auth/setup` | Public (zero users + token or local, §4.6) | `RateAuth` |
 | `POST /auth/bootstrap` | Public | `RateAuth` |
 | `POST /auth/login` / `POST /auth/logout` | Public / AnyAuthenticated | `RateAuth` |
-| `GET /auth/providers`, `GET /auth/oidc/{provider}/start`; the callback `GET /api/v1/auth/oauth/{provider}/callback` (full path, above) | Public | `RateAuth` |
+| `GET /auth/providers`, `GET /auth/oidc/{provider}/start`; HEAD's start `GET /api/v1/auth/oauth/{provider}/start` and the callback `GET /api/v1/auth/oauth/{provider}/callback` (full paths, above) | Public | `RateAuth` |
 | `GET /me`, `PATCH /me` | `core:self` / `core:self` | user required (§4.11); `PATCH`: Interactive |
 | `PUT /me/password` (self only: `{current, new}`; no target-user field) | `core:self` | user required; Interactive |
 | `GET /me/sessions`, `DELETE /me/sessions/{publicID}` | `core:self` | user required; `DELETE`: Interactive |
@@ -1325,7 +1345,7 @@ applied once by the identity cutover (§11).
 | Compat method that is interactive, may change credentials, verifies owners or is outside `<moduleID>.` | boot error `ErrMethodSpec` | closed | only app-level extensions carry those rights (SEC2-16) |
 | Confined principal on an `OwnAuth` route not naming its scope | ABS 403 (`ErrConfined`) | closed | SEC2-4 |
 | Stored identity record cannot be decoded by the store (unknown status, malformed JSON; `ErrUndecodableRecord`) | the record is treated as restricted (user inactive, key refused) and counted; boot continues | closed | fail closed on damaged data |
-| A HEAD user, API-key or OAuth-identity row the cutover cannot decode, or that `Importer` rejects (`ErrImportRejected`; a key or identity whose user does not exist included) | the upgrade stops before any write: the cutover preflight refuses the boot (`storage.ErrCutoverBlocked`, exit 78) before the checkpoint and M7, with a report naming each row by key and reason, never its value; `<app> storage cutover-blockers` fixes or deletes it (§11); nothing is quarantined | closed | D13: an identity is never imported partly or dropped |
+| A HEAD user, API-key or OAuth-identity row the cutover cannot decode, or that `Importer` rejects (`ErrImportRejected`; a key or identity whose user does not exist included) | the upgrade stops before any write: the cutover preflight refuses the boot (`storage.ErrCutoverBlocked`, exit 78) before the checkpoint and M7 (on a store whose cutover has not started; a resumed cutover relies on M3's own check, §11), with a report naming each row by key and reason, never its value; `<app> storage cutover-blockers` fixes or deletes it (§11); nothing is quarantined | closed | D13: an identity is never imported partly or dropped |
 | A HEAD user-merge journal that is `applying` or `undoing` | the upgrade stops before any write, naming the journal; the owner finishes or undoes the merge on the pre-freeze release first (§11) | closed | D13; the merge's HEAD writes cannot be completed on the native store (DATA-4) |
 | Undo of a merge finished before R2 | refused (409 `merge_permanent`) | closed | D13: finished merges are permanent after R2 |
 | User with `SignInRestricted` | every authenticator refuses: 401 `password_reset_required` | closed | restricted last admin (SEC4-12) |
@@ -1339,7 +1359,7 @@ applied once by the identity cutover (§11).
 | Key create with escalation | 403 `scope_escalation` | closed | |
 | Key create by a key whose effective set is empty (nil caller permission set) | 403 `scope_escalation`, nothing written | closed | the empty set grants nothing to delegate (SEC9-5) |
 | Action on a user the actor does not dominate | 403 `dominance_required` | closed | SEC-4 |
-| A compat surface's password, key or principal call for a `SignInRestricted` or `PasswordResetRequired` user, or a `needs_confirmation` key | refused by `auth.Compat` (`ErrResetRequired`; for the key, the failure stage 12 records), surfaced in the surface's own error shape | closed | SEC-1: no second auth stack outside core's rules |
+| A compat surface's password, key or principal call for a `SignInRestricted` or `PasswordResetRequired` user, a `needs_confirmation` key, or a password or principal call from a throttled source | refused by `auth.Compat` (`ErrResetRequired`; `ErrThrottled` for the throttled source; for the key, the failure stage 12 records), surfaced in the surface's own error shape | closed | SEC-1: no second auth stack outside core's rules |
 | Credential-metadata or audit route with the auth-disabled principal | 401 `authentication_required` | closed | SEC-3; HEAD's `CurrentUser` 401 |
 | Facade key off its facade group, or general key on a facade group (deferred-build, §3.5) | 403 `permission_denied` | closed | SEC-5 |
 | OIDC subject whose email matches an unlinkable account | 409 `email_in_use` | closed | SEC-7 |
@@ -1479,9 +1499,10 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestStage12_ExtensionPermsIgnored` / `TestModuleAuthMethod_CannotBeInteractive` | an authenticator's assertion cannot raise its checker; a module compat method declared interactive or with credential/owner rights → `ErrMethodSpec` (SEC2-16) |
 | `TestConfining_WorkerKeyRefusedOnABS` | `CheckCredentialFor` refuses an `fp-worker` key and a worker ABS login on ABS routes not naming the worker scope (SEC2-4) |
 | `TestInviteLink_FragmentEndToEnd` / `TestTempLoginLink_FragmentEndToEnd` | (in 07 §7.18) a minted invite and a temp-login link are fragment links; the token is absent from the access log and spans; opened signed out and signed in, the SPA removes the fragment and accepts (SEC2-6, FE4-2) |
-| `TestOAuthCallback_HEADPathServedByCore` | (fake IdP, from F4) a sign-in started at `GET /api/core/v1/auth/oidc/{provider}/start` completes at HEAD's callback `GET /api/v1/auth/oauth/{provider}/callback` with the redirect URI HEAD registered; no gin handler serves that path, and HEAD's start path answers 404 (§4.7, §4.13) |
+| `TestOAuthCallback_HEADPathServedByCore` | (fake IdP, from F4) a sign-in started at `GET /api/core/v1/auth/oidc/{provider}/start` completes at HEAD's callback `GET /api/v1/auth/oauth/{provider}/callback` with the redirect URI HEAD registered; no gin handler serves that path (§4.7, §4.13) |
+| `TestOAuthStart_HEADPathServedByCore` | (ABO, fake IdP, from F4; SAFETY-11) HEAD's start `GET /api/v1/auth/oauth/{provider}/start` reaches core's start handler through the whole core chain (`RouteInfo.Owner` `core`, Public, `RateAuth`), no gin handler serves it, and it answers as `GET /api/core/v1/auth/oidc/{provider}/start` does, one cell per `AppHandoff` rule of §4.7: no app fields → an ordinary web sign-in that completes at HEAD's callback; a listed `redirect_uri` (and, in its own cell, `callback`) of `audiobooth://oauth` with an S256 `code_challenge` → the callback calls `AppHandoff.Mint`, redirects to the app scheme with the code and the app's state, and no web session record exists; only one of the two → ordinary web sign-in; an unlisted or prefix-extended `redirect_uri` → inline 400 with no `Location` header; `code_challenge_method` `plain` → 400 |
 | `TestOIDC_AppHandoffMintsABSCode` | (ABO, fake IdP, from F4; SEC-2) one cell per control of §4.7's hand-off: both `redirect_uri` (or `callback`) and `code_challenge` present → the callback calls `AppHandoff.Mint`, redirects to the app scheme with the code and the app's state, and no web session record exists; only one of them → ordinary web sign-in; an unlisted, prefix-extended or userinfo-bearing `redirect_uri` → inline 400 with no `Location` header; `code_challenge_method` `plain` or missing → 400; the code redeems once at the ABS route `/auth/openid/callback` and is refused after the user's epoch is bumped (port of HEAD's `internal/server/oauth_app_code_epoch_integration_test.go`); a `SignInRestricted` user gets no code |
-| `TestCompat_ABSLoginHonoursRestrictions` | (ABO, SEC-1) through `Deps.AuthCompat` only: the ABS password login, an `abk_` key and the Cloudflare Access login path, each against a `SignInRestricted` user, a `PasswordResetRequired` user (password path) and a `needs_confirmation` key → refused; a good password is throttled with web logins and rehashed from bcrypt; books' module holds no `*auth.Service` (archtest) |
+| `TestCompat_ABSLoginHonoursRestrictions` | (ABO, SEC-1) through `Deps.AuthCompat` only: the ABS password login, an ABS JWT, an `abk_` key and the Cloudflare Access login path, each against a `SignInRestricted` user, a `PasswordResetRequired` user (password, JWT and Cloudflare paths) and a `needs_confirmation` key (key path) → refused; a JWT or Cloudflare call from a source whose throttle is spent → refused, and each refused `PrincipalFor` call counts against its source; a good password is throttled with web logins and rehashed from bcrypt; books' module holds no `*auth.Service` (archtest) |
 | `TestAuthOff_CredentialMetadataNeedsUser` | (SEC-3) auth disabled: `GET /me`, `/me/sessions`, `/me/api-keys`, `/api-keys`, `/api-keys/{id}`, `/users/{id}/sessions`, `/users/{id}/api-keys`, `/audit` and `/audit/export` → 401 `authentication_required`, nothing listed |
 | `TestFirstRun_OnlyPublicAndSetupReachable` | zero users: every non-Public route 401 |
 | `TestSetup_RequiresBootstrapToken` / `TestSetup_LoopbackExceptionRefusesForwarded` | loopback peer with a forwarding header, or a trusted-proxy peer, is not local (SEC-30) |
@@ -1586,7 +1607,14 @@ step's dry-run report) and never dropped in silence (05-rbac §6.3); identity ro
 is never quarantined: an account imported without its keys, or keys without their account, is worse than
 a refused upgrade. The gate is the **cutover preflight**: read-only, writing nothing, run before the
 pre-migration checkpoint and before M7, with the free-space headroom check (06 §6.5.1 P4 (a), 05-storage
-§5S.3.13). Its identity part is books' code: it decodes every such row, maps it and runs
+§5S.3.13). It runs only on a store whose cutover has not started: no open checkpoint for this cutover,
+no cutover-step progress record, and levels below the first cutover step (05-storage §5S.3.13, §5S.4
+step 5a). A boot that resumes a started cutover skips it (SAFETY-1): after a crash between M3's user
+chunk and its key chunk the users are already under `c/auth/user/` and gone from `u:`, so the preflight
+would report live keys as orphans. M3 resumes from its chunk marker instead, and its own defensive check
+applies only to rows not yet imported (a key whose user an earlier chunk imported finds that user in the
+native store). 05-storage's `TestCutoverCrashAtEveryChunk` carries the cell: killed between the user and
+key chunks, the next boot completes and reports no key. Its identity part is books' code: it decodes every such row, maps it and runs
 `auth.Importer`'s validation without staging anything. A row that does not decode, a row the importer
 would reject, and a key or identity whose user does not exist refuse the boot (`storage.ErrCutoverBlocked`, exit 78) with a report
 naming each row by key and reason, never its value; `<app> storage migrate --dry-run --from-archive`
@@ -1594,14 +1622,16 @@ reports the same rows before the deploy. Because nothing was written, the pre-fr
 still opens the store. M3 keeps the same check as a defence (a row it cannot import fails the step and
 the boot with the checkpoint open, never a quarantine), but the preflight is the gate. The owner repairs
 each row with the offline tool **`<app> storage cutover-blockers`**, which opens the stopped, unmigrated
-store without running a migration and refuses while the service holds the DB lock: `list` (keys and
-reasons only; `--out <file>` writes the raw rows, mode 0600, for repair), `fix <key> --from <file>`
+store without running a migration and refuses while the service holds the DB lock: `list` (prints keys and
+reasons only), `list --out <file>` (writes the raw row values, mode 0600, because `fix --from` needs
+them, and prints a warning that the file holds credential hashes and should be deleted after the fix), `fix <key> --from <file>`
 (refused unless the preflight would accept the new row) and `delete <key> --confirm` (deleting a user
 deletes its keys, identities and index rows in the same batch and prints the books rows that still name
 it, which the referential pass then reports in health instead of failing, 05-storage §5S.3.13). Each
 write is audited `core.storage.cutover_blocker_fix` or `core.storage.cutover_blocker_delete` (05-storage §5S.3.13 owns the command). `u:`, `idx:user:email:`, `apikey:` and `oauthid:` are M3's
-`Sensitive` prefixes all the same (DATA-14), so a password hash or key hash could only ever be
-held sealed, never raw. Tests: 05-storage's `TestCutoverStopsOnUnconvertibleIdentity` (§10).
+`Sensitive` prefixes all the same (DATA-14), so inside the store a password hash or key hash is only
+ever held sealed, never raw; the one copy outside it is the owner's `list --out` file, written on
+request and with that warning (05-storage §5S.3.13). Tests: 05-storage's `TestCutoverStopsOnUnconvertibleIdentity` (§10).
 
 **Merges at the cutover (D13, DATA-4).** HEAD's merge journals (`usermerge:journal:`, books' family)
 hold every key a merge wrote with its before and after image, and resuming or undoing one writes
@@ -2041,4 +2071,6 @@ D10–D12 revision (2026-11-04):
 
 - the identity cutover lands the hardened design directly in R2 (step M3, flip F4). Rewritten: intro, §3 intro and landing (R1/R2), §3.1–§3.3 comments, §3.4 (native store only; new `auth.Importer` and `ErrImportRejected`), §4.1 (imported `abk_` keys, `auth.Options.ImportedKeyPrefixes`), §4.3, §4.4 (imported keys; the early-fix properties come from `Expect`), §4.6, §4.11 (core precedence for every app with the fail-closed "more restrictive wins" rule for the auth switch and the Basic gate; retired names refuse boot; no auth-off write rule), §4.12, §4.13 (native routes only; fragment links; HEAD's gin identity routes and OAuth callback path change, the callback re-registered at deploy), §4.14 (no older-build cases), §5, §6–§9 rows, §10 (cutover tests, the six early-fix tests ported as property tests onto core auth), §11 (native store; the identity cutover table: sessions, invites and the bootstrap hash reset, `abk_` keys and ABS sessions survive, IDs kept, quarantine, checkpoint deleted after 7 days), §13 G12, objections. Deleted: the legacy store, `legacy` capabilities, lock names and `StoreLocks`, `KeyLegacyState`, `InviteLinkForm`, the cookie-default options, `core.auth.apikey.legacy_prefixes`, the alias, legacy-link and rollback text, and §11.2 (H1–H3). §11.1 unchanged in substance (release keys and its core-era sentences updated). Consistency pass: the OAuth callback keeps HEAD's path, served by core from F4; `core.auth.mode` declares `FailClosed`, the Basic-gate password follows the plain operator lock (§11.1 item 5); `core.auth.oidc.<id>.client_secret`, `core.auth.login.saturated_rate`/`_burst` and the OAuth fold adopted from 05-config; M7 before M2, sealed quarantine, D12 (a)–(d) labels, R1 resets offline-only and 07's fragment tests cited. Final consistency sweep: `auth.Options.OIDCCallbackBase` names the callback base handed to `Router.CoreFixedGroup` (§3.2, §4.13), and §5 places `secrets.Open` at the start of P4b and config's `SetSecrets`/`Attach` at P4d step 1.
 
-Round 13 (2026-11-04): R1 (F2 registers `core.auth`), R2/CONFORM-1, R8/D13 (cutover preflight gate, `storage cutover-blockers`, no identity quarantine; tests are 05-storage's `TestCutoverStopsOnUnconvertibleIdentity` and `TestCutoverRefusedWhileMergeInProgress`), D13/DATA-4 (merge refusal, permanent merges), R18/SEC-1 (`auth.Compat`), R19/SEC-2 (`MethodSpec.AppHandoff`, `OIDCAppHandoff`; HEAD start path deleted), R20/SEC-3, R21/SEC-5, R22 SEC-6, SEC-7, SEC-10, SEC-11, CONFORM-12, CONFORM-13, DATA-14. Follow-up: §4.11 cites 05-rbac §4.11's auth-off evaluation rule (no `settings.manage` exception).
+Round 13 (2026-11-04), by round-13 ruling: R1 (F2 registers `core.auth`), R2/CONFORM-1, R8/D13 (cutover preflight gate, `storage cutover-blockers`, no identity quarantine; tests are 05-storage's `TestCutoverStopsOnUnconvertibleIdentity` and `TestCutoverRefusedWhileMergeInProgress`), D13/DATA-4 (merge refusal, permanent merges), R18/SEC-1 (`auth.Compat`), R19/SEC-2 (`MethodSpec.AppHandoff`, `OIDCAppHandoff`; HEAD start path deleted, reversed in round 14), R20/SEC-3, R21/SEC-5, R22 SEC-6, SEC-7, SEC-10, SEC-11, CONFORM-12, CONFORM-13, DATA-14. Follow-up: §4.11 cites 05-rbac §4.11's auth-off evaluation rule (no `settings.manage` exception).
+
+Round 14 (2026-11-05): V22 (HEAD's OAuth start path `/api/v1/auth/oauth/{provider}/start` kept at its exact pattern as the second `CoreExactPatterns()` entry, served by core's start handler with the `AppHandoff` rules; the "deleted, no alias" text, its release-note line and the 404 test cell removed; `TestOAuthStart_HEADPathServedByCore` added; §3.2, §4.7, §4.13, §10), V1 (the cutover preflight runs only on a store whose cutover has not started; a resumed cutover relies on M3's check over rows not yet imported; §6, §11), V6 (`list` prints keys and reasons, `list --out` writes raw row values with a credential-hash warning; §11), V21 (`Compat.PrincipalFor` refuses `PasswordResetRequired`, takes `ClientInfo` and goes through core's throttle; §3.1, §4.9, §4.10, §6, §10), V23 (the round-13 history entry names its IDs as round-13 rulings).
