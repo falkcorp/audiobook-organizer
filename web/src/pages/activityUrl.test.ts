@@ -75,7 +75,18 @@ describe('activityFiltersDiffer', () => {
   it('ignores the page and the open op, sees every filter', () => {
     const base = read('');
     expect(activityFiltersDiffer(base, read('page=4&op=x'))).toBe(false);
-    for (const qs of ['q=a', 'type=t', 'level=l', 'operation=o', 'since=all', 'until=u', 'hide_noop=0', 'tag=a', 'tiers=audit', 'size=50']) {
+    for (const qs of [
+      'q=a',
+      'type=t',
+      'level=l',
+      'operation=o',
+      'since=all',
+      'until=u',
+      'hide_noop=0',
+      'tag=a',
+      'tiers=audit',
+      'size=50',
+    ]) {
       expect(activityFiltersDiffer(base, read(qs)), qs).toBe(true);
     }
   });

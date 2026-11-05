@@ -8,12 +8,7 @@ import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider, useNavigate } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
-import {
-  applyOwnedParams,
-  parseEnum,
-  useUrlEnumParam,
-  useUrlStateSync,
-} from './useUrlState';
+import { applyOwnedParams, parseEnum, useUrlEnumParam, useUrlStateSync } from './useUrlState';
 
 const TABS = ['info', 'storage', 'quota'] as const;
 

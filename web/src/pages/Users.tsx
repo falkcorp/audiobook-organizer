@@ -1,9 +1,10 @@
 // file: web/src/pages/Users.tsx
-// version: 1.9.1
+// version: 1.10.0
 // guid: 4d2e3f1a-5b6c-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-23
+// last-edited: 2026-11-05
 
 import { useCallback, useEffect, useState, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../utils/apiFetch';
 import GuestPhoneKeys from '../components/GuestPhoneKeys';
 import { describeRequestError, responseErrorMessage, unwrapData } from '../utils/apiResponse';
@@ -140,9 +141,30 @@ export default function Users() {
   const [error, setError] = useState('');
   const [copiedToken, setCopiedToken] = useState('');
   const [emailUser, setEmailUser] = useState<User | null>(null);
-  const [footprintUser, setFootprintUser] = useState<User | null>(null);
+  // The user whose sign-ins-and-data drawer is open lives in the address bar
+  // (`?footprint=<userId>`), so the drawer can be linked to. The id, not the
+  // row, is what the URL holds; the row is looked up in the loaded list, so a
+  // link opens once the list has arrived and an id nobody has opens nothing.
+  // Merge and invite dialogs are transient actions and are not linked.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const footprintId = searchParams.get('footprint');
+  const setFootprintUser = useCallback(
+    (u: User | null) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (u) next.set('footprint', u.id);
+          else next.delete('footprint');
+          return next;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
   const [mergeUser, setMergeUser] = useState<User | null>(null);
   const [mergesRefresh, setMergesRefresh] = useState(0);
+  const footprintUser = footprintId ? (users.find((u) => String(u.id) === footprintId) ?? null) : null;
 
   // Ref for token reset timeout
   const copiedTokenTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);

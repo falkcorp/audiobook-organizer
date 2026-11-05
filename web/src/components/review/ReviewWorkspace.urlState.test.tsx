@@ -15,12 +15,7 @@
 
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import {
-  MemoryRouter,
-  useLocation,
-  useNavigate,
-  useNavigationType,
-} from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
 import { serveReviewList } from '../../test/reviewServer';
@@ -73,8 +68,9 @@ const loc = () => screen.getByTestId('location').textContent;
 // The metadata lane with no rows renders an empty state, not the spine, so the
 // selected lane tab is the readiness signal.
 const metadataReady = () =>
-  waitFor(() => expect(screen.getByTestId('lane-tab-metadata')).toHaveAttribute('aria-selected', 'true'));
-
+  waitFor(() =>
+    expect(screen.getByTestId('lane-tab-metadata')).toHaveAttribute('aria-selected', 'true')
+  );
 
 const plan = (id: string) => ({
   operation_id: `plan-${id}`,
@@ -118,7 +114,13 @@ beforeEach(() => {
     errors: 0,
     stale: 0,
   });
-  vi.mocked(api.getReviewItems).mockResolvedValue({ items: [], count: 0, limit: 500, offset: 0, total: 0 });
+  vi.mocked(api.getReviewItems).mockResolvedValue({
+    items: [],
+    count: 0,
+    limit: 500,
+    offset: 0,
+    total: 0,
+  });
   vi.mocked(api.getReviewCount).mockResolvedValue({
     applying: 0,
     needs_attention: 0,
@@ -287,7 +289,9 @@ describe('dupes lane', () => {
     renderWorkspace('/review?lane=dupes&layer=embedding');
     await screen.findByTestId('dupes-rail');
     await waitFor(() => expect(api.getDedupCandidates).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(api.getDedupCandidates).mock.calls[0][0]).toMatchObject({ layer: 'embedding' });
+    expect(vi.mocked(api.getDedupCandidates).mock.calls[0][0]).toMatchObject({
+      layer: 'embedding',
+    });
     expect(loc()).toBe('/review?lane=dupes&layer=embedding');
     await user.click(screen.getByTestId('layer-chip-llm'));
     await waitFor(() => expect(loc()).toBe('/review?lane=dupes&layer=llm'));
@@ -295,7 +299,7 @@ describe('dupes lane', () => {
     await waitFor(() => expect(loc()).toBe('/review?lane=dupes'));
   });
 
-  it('a band chip click writes ?band and leaves another lane\'s focus alone', async () => {
+  it("a band chip click writes ?band and leaves another lane's focus alone", async () => {
     const user = userEvent.setup();
     renderWorkspace('/review?lane=authors&author=201');
     const card = await screen.findByTestId('author-group-2');
@@ -316,7 +320,9 @@ describe('dupes lane', () => {
     renderWorkspace('/review?book=book-1');
     await screen.findByTestId('dupes-deeplink-banner');
     await user.click(screen.getByRole('button', { name: 'Clear' }));
-    await waitFor(() => expect(screen.queryByTestId('dupes-deeplink-banner')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByTestId('dupes-deeplink-banner')).not.toBeInTheDocument()
+    );
     expect(screen.getByTestId('dupes-rail')).toBeInTheDocument();
   });
 
@@ -324,7 +330,9 @@ describe('dupes lane', () => {
     const user = userEvent.setup();
     renderWorkspace('/review?lane=dupes&compare=42&ctab=breakdown');
     await screen.findByTestId('candidate-compare-drawer');
-    await waitFor(() => expect(api.getDedupCandidateBreakdown).toHaveBeenCalledWith(42, expect.anything()));
+    await waitFor(() =>
+      expect(api.getDedupCandidateBreakdown).toHaveBeenCalledWith(42, expect.anything())
+    );
     expect(screen.getByTestId('drawer-tab-breakdown')).toHaveAttribute('aria-selected', 'true');
     expect(loc()).toBe('/review?lane=dupes&compare=42&ctab=breakdown');
     await user.click(screen.getByTestId('drawer-tab-metadata'));

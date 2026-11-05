@@ -20,8 +20,10 @@ describe('laneNamedBy', () => {
 });
 
 describe('readReviewUrl', () => {
-  it('reads the dupes lane parameters and ignores another lane\'s', () => {
-    const s = readReviewUrl(q('lane=dupes&view=labels&layer=embedding&compare=42&ctab=fingerprint&fixer=x'));
+  it("reads the dupes lane parameters and ignores another lane's", () => {
+    const s = readReviewUrl(
+      q('lane=dupes&view=labels&layer=embedding&compare=42&ctab=fingerprint&fixer=x')
+    );
     expect(s.dupesView).toBe('labels');
     expect(s.layer).toBe('embedding');
     expect(s.compare).toBe(42);
@@ -38,8 +40,14 @@ describe('readReviewUrl', () => {
   });
 
   it('reads the repairs lane parameters and drops an unknown filter', () => {
-    const s = readReviewUrl(q('lane=repairs&fixer=vg-primary&filter=skipped:no_candidate&class=robin'));
-    expect(s.repairs).toEqual({ fixerId: 'vg-primary', filter: 'skipped:no_candidate', rowClass: 'robin' });
+    const s = readReviewUrl(
+      q('lane=repairs&fixer=vg-primary&filter=skipped:no_candidate&class=robin')
+    );
+    expect(s.repairs).toEqual({
+      fixerId: 'vg-primary',
+      filter: 'skipped:no_candidate',
+      rowClass: 'robin',
+    });
     expect(readReviewUrl(q('lane=repairs&filter=junk')).repairs.filter).toBeNull();
   });
 

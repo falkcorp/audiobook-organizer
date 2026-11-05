@@ -66,7 +66,10 @@ vi.mock('../services/api', () => {
     getSoftDeletedBooks: vi.fn().mockResolvedValue({ items: [], count: 0 }),
     getUserColumnConfig: vi.fn().mockResolvedValue(null),
     saveUserColumnConfig: vi.fn().mockResolvedValue(undefined),
-    listAllUserTags: vi.fn().mockResolvedValue([{ tag: 'metadata', count: 3 }, { tag: 'noir', count: 1 }]),
+    listAllUserTags: vi.fn().mockResolvedValue([
+      { tag: 'metadata', count: 3 },
+      { tag: 'noir', count: 1 },
+    ]),
     getSavedFilterPresets: vi.fn().mockResolvedValue([]),
     saveSavedFilterPresets: vi.fn().mockResolvedValue(undefined),
   };
