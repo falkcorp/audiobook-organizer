@@ -1,7 +1,7 @@
 // file: internal/server/wire_apikeys_gone_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2e7b9d04-5c18-4a63-9f2a-b8d1c6e40a57
-// last-edited: 2026-10-18
+// last-edited: 2026-11-05
 
 package server
 
@@ -144,7 +144,7 @@ func TestRetiredAPIKeyRotate_KeyManagementStillWorks(t *testing.T) {
 
 	// A key still mints a replacement for its own user, clamped to its own
 	// expiry (the fixture key lives one hour; the request asks for 365 days).
-	w = f.do(t, f.apiKey, http.MethodPost, "/api/v1/auth/api-keys", map[string]any{"name": "minted by a key", "expires_in_days": 365})
+	w = f.do(t, f.apiKey, http.MethodPost, "/api/v1/auth/api-keys", map[string]any{"name": "minted by a key", "expires_in_days": 365, "scopes": []string{"library.view"}})
 	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
 	var minted struct {
 		Data struct {
