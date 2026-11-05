@@ -238,10 +238,7 @@ func TestFolderBooksFixer_UnreadableWhyClipsTheError(t *testing.T) {
 	h := fbHold(row, fbSkipUnreadableAudio)
 	require.NotNil(t, h)
 	require.Contains(t, h.Why, "...)")
-	// The 1000-character error is cut to fbErrClip runes; the rest of the Why
-	// (path, counts, the lower-bound sentence) stays well under the original.
-	require.NotContains(t, h.Why, strings.Repeat("moov ", 200))
-	require.Less(t, len(h.Why), 800)
+	require.Less(t, len(h.Why), 500)
 }
 
 // One unmeasured member holds a group whose known files alone already clear the
@@ -294,137 +291,69 @@ func TestFolderBooksFixer_RowSaysHowManyFilesTheHoursLeaveOut(t *testing.T) {
 	lead, _ := f.fbKnownSeed(t)
 	row := fbFindRow(f.fbPlan(t, fbFixerID, "op-known"), lead)
 	require.NotNil(t, row)
-	require.NotContains(t, row.Current, "unmeasured_files")
+	require.NotContains(t, row.Current, "unmeasured_majority_shelf_files")
 
 	f.fbProbeState(t, 0, 0, "", database.DurationUnprobed)
 	f.fbProbeState(t, 1, 0, "", database.DurationUnprobed)
 	row = fbFindRow(f.fbPlan(t, fbFixerID, "op-unknown"), lead)
 	require.NotNil(t, row)
-	require.Equal(t, "2", row.Current["unmeasured_files"])
+	require.Equal(t, "2", row.Current["unmeasured_majority_shelf_files"])
 	require.Equal(t, "8.0", row.Current["hours"], "four measured works of two hours each; unknown adds nothing")
 }
 
-// fbHeldSeed is fbKnownSeed plus one proper two-file book per pair of path
-// indexes in pairs. Those paths are held by a proper book (not orphans), and
-// two such books make the lead a shelf folder-book. The donors' rows differ in
-// size from the lead's, so they never lend a duration.
-func (f *fragFixture) fbHeldSeed(t *testing.T, pairs ...[2]int) (lead string, paths []string) {
-	t.Helper()
-	lead, paths = f.fbKnownSeed(t)
-	for n, pr := range pairs {
-		b, err := f.s.CreateBook(&database.Book{Title: fmt.Sprintf("Batman: Volume %d", n+1), FilePath: f.path(fmt.Sprintf("Alfred Pennyworth/Volume %d", n+1))})
-		require.NoError(t, err)
-		for k, i := range pr {
-			f.row(t, fmt.Sprintf("held-%d-%d", n, k), b.ID, paths[i], "", int64(1000+i)+7, fbUHFine, k+1)
-		}
-	}
-	return lead, paths
-}
-
-func fbCountHolds(row *repairs.Row, kind string) (n int) {
-	for _, h := range row.Holds {
-		if h.Kind == kind {
-			n++
-		}
-	}
-	return n
-}
-
-// A folder-book whose measured hours are under the deep threshold but which has
-// unmeasured files is held (they could be the hours that make it deep), even
-// when every file is held by a proper book and no orphan group is involved.
-func TestFolderBooksFixer_UnmeasuredFilesHoldARowWhoseHoursAreALowerBound(t *testing.T) {
-	const bad = "ffprobe: moov atom not found"
-	t.Run("a row with no unmeasured file is unchanged", func(t *testing.T) {
-		f := newGlobalRootFragFixture(t)
-		lead, _ := f.fbHeldSeed(t, [2]int{0, 1}, [2]int{2, 3}, [2]int{4, 5})
-		row := fbFindRow(f.fbPlan(t, fbFixerID, "op-plan"), lead)
-		require.NotNil(t, row)
-		require.Empty(t, row.Skipped, "holds=%+v", row.Holds)
-		require.Empty(t, row.Holds)
-		require.NotContains(t, row.Current, "unmeasured_files")
-	})
-	t.Run("unprobed files hold the row, with the probe action", func(t *testing.T) {
-		f := newGlobalRootFragFixture(t)
-		lead, _ := f.fbHeldSeed(t, [2]int{0, 1}, [2]int{2, 3}, [2]int{4, 5})
-		a := f.fbProbeState(t, 0, 0, "", database.DurationUnprobed)
-		b := f.fbProbeState(t, 5, 0, "", database.DurationUnprobed)
-		row := fbFindRow(f.fbPlan(t, fbFixerID, "op-plan"), lead)
-		require.NotNil(t, row)
-		h := fbHold(row, fbSkipUnprobed)
-		require.NotNil(t, h, "skipped=%q holds=%+v", row.Skipped, row.Holds)
-		require.False(t, h.OwnerOK)
-		require.Equal(t, fbSkipUnprobed, row.Skipped)
-		require.False(t, row.OwnerApplicable)
-		want := []string{a, b}
-		slices.Sort(want)
-		require.Equal(t, want, h.FileIDs)
-		require.Contains(t, h.Why, "2 file(s) have no measured duration; run Backfill book durations (unknown rows)")
-		require.Contains(t, h.Why, "the row's 8.0 measured hours are a lower bound (2 file(s) unmeasured)")
-		require.NotContains(t, h.Why, "orphan group(s) held", "no orphan group is involved")
-		require.NotNil(t, h.Action)
-		require.Equal(t, want, h.Action.Params["fileIds"])
-		require.Equal(t, 1, fbCountHolds(row, fbSkipUnprobed))
-	})
-	t.Run("only files at the attempt ceiling: unreadable, no action", func(t *testing.T) {
-		f := newGlobalRootFragFixture(t)
-		lead, _ := f.fbHeldSeed(t, [2]int{0, 1}, [2]int{2, 3}, [2]int{4, 5})
-		a := f.fbProbeState(t, 1, database.DeepScanMaxAttempts, bad, database.DurationUnreadable)
-		row := fbFindRow(f.fbPlan(t, fbFixerID, "op-plan"), lead)
-		require.NotNil(t, row)
-		h := fbHold(row, fbSkipUnreadableAudio)
-		require.NotNil(t, h, "skipped=%q holds=%+v", row.Skipped, row.Holds)
-		require.False(t, h.OwnerOK)
-		require.Equal(t, []string{a}, h.FileIDs)
-		require.Nil(t, h.Action)
-		require.Contains(t, h.Why, "lower bound")
-		require.False(t, fbHasHold(row, fbSkipUnprobed))
-		require.False(t, row.OwnerApplicable)
-	})
-	t.Run("a mix splits into one hold per kind", func(t *testing.T) {
-		f := newGlobalRootFragFixture(t)
-		lead, _ := f.fbHeldSeed(t, [2]int{0, 1}, [2]int{2, 3}, [2]int{4, 5})
-		dead := f.fbProbeState(t, 0, database.DeepScanMaxAttempts, bad, database.DurationUnreadable)
-		fresh := f.fbProbeState(t, 1, 0, "", database.DurationUnprobed)
-		row := fbFindRow(f.fbPlan(t, fbFixerID, "op-plan"), lead)
-		require.NotNil(t, row)
-		require.Equal(t, []string{dead}, fbHold(row, fbSkipUnreadableAudio).FileIDs)
-		require.Equal(t, []string{fresh}, fbHold(row, fbSkipUnprobed).FileIDs)
-	})
-	t.Run("measured hours that already reach deep add no hold", func(t *testing.T) {
-		f := newGlobalRootFragFixture(t)
-		lead, _ := f.fbHeldSeed(t, [2]int{0, 1}, [2]int{2, 3}, [2]int{4, 5})
-		for i := range 5 {
-			f.fbMeasure(t, i, 17*3600) // 85 h measured
-		}
-		f.fbProbeState(t, 5, 0, "", database.DurationUnprobed)
-		row := fbFindRow(f.fbPlan(t, fbFixerID, "op-plan"), lead)
-		require.NotNil(t, row)
-		require.Equal(t, "85.0", row.Current["hours"])
-		require.Equal(t, "1", row.Current["unmeasured_files"])
-		require.False(t, fbHasHold(row, fbSkipUnprobed), "holds=%+v", row.Holds)
-		require.False(t, fbHasHold(row, fbSkipUnreadableAudio), "holds=%+v", row.Holds)
-	})
-}
-
-// A file that both an orphan group and the row's hours check find is named once,
-// in one hold per kind, and the hold carries the union of the two sources.
-func TestFolderBooksFixer_RowAndGroupHoldsShareOneHoldPerKind(t *testing.T) {
+// Measuring a row's unknown files never moves it between verdicts. classify's
+// deep tier only ever adds to an applicable (shelf or author-copy) verdict, so
+// the 80-hour threshold a freshly measured file can push the hours over changes
+// the evidence readout and nothing else: the row keeps its class, stays
+// applicable, and keeps the fingerprint apply compares. A hold keyed on
+// "unmeasured files + hours below the threshold" would have broken this (it
+// would have held a row that is applied today, and released it only to a deep
+// verdict that does not exist).
+func TestFolderBooksFixer_MeasuringUnknownFilesKeepsAnApplicableRowApplicable(t *testing.T) {
 	f := newGlobalRootFragFixture(t)
-	// Paths 0-3 are held by proper books; 4 and 5 are orphans (two groups).
-	lead, _ := f.fbHeldSeed(t, [2]int{0, 1}, [2]int{2, 3})
-	held := f.fbProbeState(t, 0, 0, "", database.DurationUnprobed)   // row check only
-	orphan := f.fbProbeState(t, 4, 0, "", database.DurationUnprobed) // row check AND its group
-	row := fbFindRow(f.fbPlan(t, fbFixerID, "op-plan"), lead)
-	require.NotNil(t, row)
-	require.Equal(t, 1, fbCountHolds(row, fbSkipUnprobed), "holds=%+v", row.Holds)
-	h := fbHold(row, fbSkipUnprobed)
-	want := []string{held, orphan}
-	slices.Sort(want)
-	require.Equal(t, want, h.FileIDs)
-	require.Contains(t, h.Why, "2 file(s) have no measured duration")
-	require.Contains(t, h.Why, `orphan group(s) held: "Court of Owls" (1 file(s))`)
-	require.Contains(t, h.Why, "lower bound")
-	require.Equal(t, want, h.Action.Params["fileIds"])
-	require.Equal(t, 0, fbCountHolds(row, fbSkipUnreadableAudio))
+	f.seedWolfe(t, fbITunes, "citadel")
+	fb, fb2 := f.ids["fb"], f.ids["fb2"]
+	// The Claw paths are held by a proper book, so they are no orphan group's
+	// members; both folder-books carry their rows (a sibling at the same path
+	// and size would otherwise lend its duration to the other).
+	claw := []int{3, 4, 5}
+	for _, role := range []string{"fb", "fb2"} {
+		for _, i := range claw {
+			f.fbSetRow(t, role, i, func(bf *database.BookFile) { bf.ResetDuration() })
+		}
+	}
+
+	before := f.fbSingleRow(t, "op-unknown")
+	require.Equal(t, fbRowID([]string{min(fb, fb2), max(fb, fb2)}), before.RowID)
+	require.Equal(t, fbTierShelf, before.Class)
+	require.True(t, before.Applicable(), "skipped=%q holds=%+v", before.Skipped, before.Holds)
+	require.Equal(t, "3", before.Current["unmeasured_majority_shelf_files"])
+	for _, k := range []string{fbSkipUnprobed, fbSkipUnreadableAudio} {
+		require.False(t, fbHasHold(&before, k), "%s: %+v", k, before.Holds)
+	}
+
+	// Thirty hours each: the row's measured hours now pass fbDeepHours.
+	const thirtyHours = 30 * 3600
+	for _, role := range []string{"fb", "fb2"} {
+		for _, i := range claw {
+			f.fbSetRow(t, role, i, func(bf *database.BookFile) { require.NoError(t, bf.SetMeasuredDuration(thirtyHours)) })
+		}
+	}
+	after := f.fbSingleRow(t, "op-measured")
+	require.GreaterOrEqual(t, mustParseHours(t, after.Current["hours"]), float64(fbDeepHours),
+		"the measurement must carry the row over the deep threshold or this test proves nothing")
+	require.NotContains(t, after.Current, "unmeasured_majority_shelf_files")
+	require.Equal(t, before.RowID, after.RowID)
+	require.Equal(t, before.Class, after.Class, "deep only adds to an applicable verdict")
+	require.True(t, after.Applicable(), "skipped=%q holds=%+v", after.Skipped, after.Holds)
+	require.Equal(t, before.Fingerprint, after.Fingerprint)
+	require.Equal(t, before.Holds, after.Holds)
+}
+
+func mustParseHours(t *testing.T, s string) float64 {
+	t.Helper()
+	var h float64
+	_, err := fmt.Sscanf(s, "%f", &h)
+	require.NoError(t, err)
+	return h
 }

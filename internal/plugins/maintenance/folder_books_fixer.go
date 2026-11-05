@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.25.0
+// version: 2.25.1
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-11-05
 
@@ -105,9 +105,7 @@
 // the sibling borrow; a group with an unmeasured file is held skipped_unprobed
 // instead, one whose probe failed skipped_unreadable_audio, each with the
 // book_file ids and a follow-up that starts the duration backfill: unknown is
-// never short, and Plan never probes; the same holds apply to the row itself
-// when it has unmeasured files and its measured hours are under the deep
-// threshold, since they are then only a lower bound); a new book needed outside books/itunes/**; a primary folder-book
+// never short, and Plan never probes); a new book needed outside books/itunes/**; a primary folder-book
 // with no heir in its version group; an iTunes persistent id on the
 // folder-book itself or among its external ids; listening progress; Doctor Who
 // / Big Finish / Torchwood (framework guard).
@@ -722,23 +720,6 @@ func (u fbUnknownFile) unreadable() bool {
 // back for those).
 func (u fbUnknownFile) probeable() bool {
 	return u.state != database.DurationUnreadable || database.IsDurationTimeoutError(u.lastErr)
-}
-
-// fbMergeUnknown is a followed by the files of b it does not already hold, by
-// row id: the one list a hold names when two checks found the same file.
-func fbMergeUnknown(a, b []fbUnknownFile) []fbUnknownFile {
-	if len(b) == 0 {
-		return a
-	}
-	seen := make(map[string]bool, len(a)+len(b))
-	out := make([]fbUnknownFile, 0, len(a)+len(b))
-	for _, u := range slices.Concat(a, b) {
-		if !seen[u.rowID] {
-			seen[u.rowID] = true
-			out = append(out, u)
-		}
-	}
-	return out
 }
 
 // fbClip cuts s to at most n runes, for a probe error shown in a hold's Why.
@@ -1873,8 +1854,11 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	row.Current = map[string]string{"tier": lead.Tier, "root": lead.Root, "files": strconv.Itoa(len(set)),
 		"works": strconv.Itoa(lead.Works), "hours": fmt.Sprintf("%.1f", lead.Hours)}
 	if lead.Unmeasured > 0 {
-		// "hours" is then a lower bound; say how many files it leaves out.
-		row.Current["unmeasured_files"] = strconv.Itoa(lead.Unmeasured)
+		// "hours" is then a lower bound over the majority shelf's rows (classify
+		// reads only those); say how many of THOSE rows it leaves out. Display
+		// only: no verdict, hold or fingerprint reads it, and it is not a count
+		// of "files" above, which spans every shelf.
+		row.Current["unmeasured_majority_shelf_files"] = strconv.Itoa(lead.Unmeasured)
 	}
 
 	// The row's copy of each path: a member's row, a present one first.
@@ -2431,76 +2415,30 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		block(fbSkipDupTitle, fmt.Sprintf("a new book's title and author already name a live book: %s",
 			strings.Join(fbFirst(dup, 5), "; ")), dupSingle)
 	}
-	// Row-level check of the hours: a row whose files include unmeasured ones
-	// reads Hours as a lower bound (classify), so an applicable verdict could be
-	// a deep-tier row in disguise (fbDeepHours or more is never applied). When
-	// the measured hours are under the threshold and the verdict is applicable,
-	// the unmeasured files of the row's majority shelf hold the row, split like
-	// the group holds: a failed probe is fbSkipUnreadableAudio, the rest
-	// fbSkipUnprobed. A deep verdict already stands (and a row whose measured
-	// hours reach the threshold is already judged deep), so nothing is added
-	// there. The row's file for a path is src's, the same one the group holds
-	// name, and each kind below is ONE hold over the union of both sources.
-	var rowBad, rowUnprobed []fbUnknownFile
-	if lead.Unmeasured > 0 && lead.Hours < fbDeepHours && fbApplicableTier(lead.BaseTier) {
-		_, major, _ := lib.majorityShelf(lib.files[members[0]])
-		for _, mr := range major {
-			r, ok := src[mr.FilePath]
-			if !ok {
-				continue
-			}
-			if _, known := lib.rowDuration(r); known {
-				continue
-			}
-			if u := fbUnknownFileOf(r); u.unreadable() {
-				rowBad = append(rowBad, u)
-			} else {
-				rowUnprobed = append(rowUnprobed, u)
-			}
-		}
-	}
-	lowerBound := fmt.Sprintf("the row's %.1f measured hours are a lower bound (%d file(s) unmeasured), so a deep-tier row "+
-		"(%dh or more) cannot be ruled out", lead.Hours, lead.Unmeasured, fbDeepHours)
-	if bad := fbMergeUnknown(badFiles, rowBad); len(bad) > 0 {
+	if len(badFiles) > 0 {
 		var named, retry, ids []string
-		for _, u := range bad {
+		for _, u := range badFiles {
 			named = append(named, fmt.Sprintf("%s (%s)", u.path, fbClip(u.lastErr, fbErrClip)))
 			ids = append(ids, u.rowID)
 			if u.probeable() {
 				retry = append(retry, u.rowID)
 			}
 		}
-		why := fmt.Sprintf("%d file(s) failed their duration probe and may be bad audio", len(bad))
-		switch {
-		case len(unreadableGroups) > 0 && len(bad) == len(badFiles):
-			why = fmt.Sprintf("%d file(s) in %d orphan group(s) failed their duration probe and may be bad audio, "+
-				"so the groups cannot be judged", len(bad), len(unreadableGroups))
-		case len(unreadableGroups) > 0:
-			why += fmt.Sprintf(" (%d of them in %d orphan group(s))", len(badFiles), len(unreadableGroups))
-		}
-		why += ": " + strings.Join(fbFirst(named, 5), "; ")
-		if len(rowBad) > 0 {
-			why += "; " + lowerBound
-		}
 		// Only the rows the backfill will act on go in the action: a row that
 		// failed the attempt ceiling is settled there and needs an explicit reset.
-		blockFiles(fbSkipUnreadableAudio, why, fbSortedIDs(ids), fbProbeAction("Re-probe these files", fbSortedIDs(retry)))
+		blockFiles(fbSkipUnreadableAudio, fmt.Sprintf("%d file(s) in %d orphan group(s) failed their duration probe and may be "+
+			"bad audio, so the groups cannot be judged: %s", len(badFiles), len(unreadableGroups),
+			strings.Join(fbFirst(named, 5), "; ")), fbSortedIDs(ids), fbProbeAction("Re-probe these files", fbSortedIDs(retry)))
 	}
-	if unprobed := fbMergeUnknown(unprobedFiles, rowUnprobed); len(unprobed) > 0 {
+	if len(unprobedFiles) > 0 {
 		var ids, books []string
-		for _, u := range unprobed {
+		for _, u := range unprobedFiles {
 			ids = append(ids, u.rowID)
 			books = append(books, u.bookID)
 		}
-		why := fmt.Sprintf("%d file(s) have no measured duration; run Backfill book durations (unknown rows) for book(s) %s",
-			len(unprobed), strings.Join(fbFirst(fbSortedIDs(books), 5), ", "))
-		if len(unprobedGroups) > 0 {
-			why += fmt.Sprintf(" (orphan group(s) held: %s)", strings.Join(fbFirst(unprobedGroups, 5), "; "))
-		}
-		if len(rowUnprobed) > 0 {
-			why += "; " + lowerBound
-		}
-		blockFiles(fbSkipUnprobed, why, fbSortedIDs(ids), fbProbeAction("Probe these files", fbSortedIDs(ids)))
+		blockFiles(fbSkipUnprobed, fmt.Sprintf("%d file(s) have no measured duration; run Backfill book durations (unknown rows) "+
+			"for book(s) %s (orphan group(s) held: %s)", len(unprobedFiles), strings.Join(fbFirst(fbSortedIDs(books), 5), ", "),
+			strings.Join(fbFirst(unprobedGroups, 5), "; ")), fbSortedIDs(ids), fbProbeAction("Probe these files", fbSortedIDs(ids)))
 	}
 	if len(fragmentary) > 0 {
 		block(fbSkipFragmentary, fmt.Sprintf("%d orphan group(s) shorter than the chapter-consolidation threshold would become "+
