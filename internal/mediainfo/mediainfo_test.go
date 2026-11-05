@@ -1,7 +1,7 @@
 // file: internal/mediainfo/mediainfo_test.go
 // version: 1.4.3
 // guid: a2b3c4d5-e6f7-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package mediainfo
 
@@ -103,7 +103,10 @@ func TestInferFromFormat(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			info := &MediaInfo{}
 			info.Format = tt.expectedFormat
-			result := inferFromFormat(tt.filename, info)
+			result, err := inferFromFormat(tt.filename, info)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			if result.Codec != tt.expectedCodec {
 				t.Errorf("expected codec %s, got %s", tt.expectedCodec, result.Codec)
@@ -120,16 +123,22 @@ func TestInferFromFormat(t *testing.T) {
 	}
 }
 
-// An extension with no codec table is no longer refused: it gets an info with an
-// empty Codec (and no bitrate to estimate from), and its duration is whatever
-// the probe says. The per-extension probe behaviour is in duration_err_test.go.
+// An audio extension with no codec table (.wav, ...) is not refused: it gets an
+// info with an empty Codec (and no bitrate to estimate from), and its duration is
+// whatever the probe says. The per-extension probe behaviour is in
+// duration_err_test.go. An extension outside audioext is refused with
+// ErrUnsupportedFormat.
 func TestInferFromFormat_NoCodecTableExtension(t *testing.T) {
-	info := inferFromFormat("test.wav", &MediaInfo{})
-	if info == nil {
-		t.Fatal("inferFromFormat returned nil for an extension without a codec table")
+	fakeFFprobe(t, "exit 1")
+	info, err := inferFromFormat("test.wav", &MediaInfo{})
+	if err != nil || info == nil {
+		t.Fatalf("an audio extension without a codec table must not be refused: %+v, %v", info, err)
 	}
 	if info.Codec != "" || info.Bitrate != 0 {
 		t.Fatalf("no codec table: Codec and Bitrate must stay unset, got %+v", info)
+	}
+	if _, err := inferFromFormat("cover.jpg", &MediaInfo{}); !errors.Is(err, ErrUnsupportedFormat) {
+		t.Fatalf("cover.jpg: err = %v, want ErrUnsupportedFormat", err)
 	}
 }
 
@@ -745,7 +754,10 @@ func TestInferFromFormat_CaseInsensitivity(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.filename, func(t *testing.T) {
 			info := &MediaInfo{}
-			result := inferFromFormat(tt.filename, info)
+			result, err := inferFromFormat(tt.filename, info)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			if result.Codec != tt.codec {
 				t.Errorf("expected codec %s, got %s", tt.codec, result.Codec)
@@ -1170,7 +1182,10 @@ func TestInferFromFormat_FlagsEstimatedDuration(t *testing.T) {
 	if err := os.WriteFile(p, bytes.Repeat([]byte{0}, 200_000), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	info := inferFromFormat(p, &MediaInfo{})
+	info, err := inferFromFormat(p, &MediaInfo{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if info.Duration <= 0 {
 		t.Fatalf("expected an estimated duration > 0, got %d", info.Duration)
 	}

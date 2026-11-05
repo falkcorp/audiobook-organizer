@@ -1,7 +1,7 @@
 // file: internal/mediainfo/mediainfo.go
 // version: 1.6.1
 // guid: f1e2d3c4-b5a6-7c8d-9e0f-1a2b3c4d5e6f
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package mediainfo
 
@@ -122,9 +122,10 @@ func statCause(serr, err error) error {
 // short and says what happened.
 var errZeroDuration = errors.New("probe returned 0s")
 
-// ErrUnsupportedFormat marks a DurationErr for a file whose extension is not an
-// audio extension the library knows (audioext.Default()) and which ffprobe could
-// not read either. It is a statement about the extension, not about a file the
+// ErrUnsupportedFormat is returned (from Extract, or on DurationErr from
+// BuildFromTag) for a path that is not an audio file the library knows: a
+// directory, or an extension outside audioext.Default(). No subprocess is
+// started for it. It is a statement about the path, not about a file the
 // library expects to play, so bookfileaudio does not count it as an attempt.
 // A KNOWN audio extension that ffprobe cannot read is an ordinary failed probe.
 var ErrUnsupportedFormat = errors.New("unsupported format")
@@ -142,14 +143,22 @@ func Extract(filePath string) (*MediaInfo, error) {
 	}
 	defer f.Close()
 
-	m, err := tag.ReadFrom(f)
-	if err != nil {
-		return inferFromFormat(filePath, info), nil
+	// A directory is not a media file. Callers such as GetAudiobookTags hand
+	// Extract a book's directory on every request; without this check the
+	// ffprobe/mediainfo fallbacks below would run (mediainfo walks the whole
+	// tree) just to produce a zero.
+	fi, statErr := f.Stat()
+	if statErr == nil && fi.IsDir() {
+		return nil, fmt.Errorf("%w: %s is a directory", ErrUnsupportedFormat, filePath)
 	}
 
-	fi, err := f.Stat()
+	m, err := tag.ReadFrom(f)
+	if err != nil {
+		return inferFromFormat(filePath, info)
+	}
+
 	var fileSize int64
-	if err == nil {
+	if statErr == nil {
 		fileSize = fi.Size()
 	}
 
@@ -178,7 +187,15 @@ func BuildFromTag(m tag.Metadata, filePath string, fileSize int64) *MediaInfo {
 	default:
 		// Fall back to format inference — inferFromFormat needs a file path but we
 		// already know the size, so we call it and accept it may re-stat the file.
-		return inferFromFormat(filePath, info)
+		result, err := inferFromFormat(filePath, info)
+		if err != nil {
+			// Best-effort struct rather than nil; the error stays visible on
+			// DurationErr so the probe classifier sees "unsupported".
+			info.DurationErr = err
+			info.Quality = generateQualityString(info)
+			return info
+		}
+		return result
 	}
 
 	// The tag library does not expose real duration, so read it from the audio
@@ -323,7 +340,7 @@ func estimateDurationFromFile(filePath string, bitrateKbps int) int {
 	return int(fi.Size()) / bytesPerSec
 }
 
-func inferFromFormat(filePath string, info *MediaInfo) *MediaInfo {
+func inferFromFormat(filePath string, info *MediaInfo) (*MediaInfo, error) {
 	ext := strings.ToLower(filepath.Ext(filePath))
 
 	switch ext {
@@ -357,12 +374,17 @@ func inferFromFormat(filePath string, info *MediaInfo) *MediaInfo {
 		info.Quality = "160kbps Vorbis"
 
 	default:
-		// No codec table for this extension (.wav, .opus, .aax, .wma, .aac,
-		// .mka ... are all in audioext.Default()), but the container is usually
-		// perfectly readable: the duration comes from ffprobe as for any other
-		// file. Codec stays empty, Bitrate stays 0 so there is no estimate to
-		// fall back to. This used to return "unsupported format" without
-		// probing, which made every good file of these types fail its probe.
+		// No codec table for this extension. An extension in audioext
+		// (.wav, .opus, .aax, .wma, .aac, .mka ...) is usually a perfectly
+		// readable container, so its duration comes from ffprobe as for any
+		// other file; Codec stays empty and Bitrate 0, so there is no estimate
+		// to fall back to. (This used to return "unsupported format" without
+		// probing, which made every good file of these types fail its probe.)
+		// Anything else (cover.jpg, notes.txt, a path with no extension) is not
+		// audio: report ErrUnsupportedFormat WITHOUT starting a subprocess.
+		if !audioext.DefaultSet()[ext] {
+			return nil, fmt.Errorf("%w: %q", ErrUnsupportedFormat, ext)
+		}
 	}
 
 	// Real duration first (ffprobe); estimate only as a flagged fallback.
@@ -370,9 +392,6 @@ func inferFromFormat(filePath string, info *MediaInfo) *MediaInfo {
 		if d, err := realDurationSec(filePath); err == nil {
 			info.Duration = d
 		} else {
-			if info.Codec == "" && !audioext.DefaultSet()[ext] {
-				err = fmt.Errorf("%w: %s: %w", ErrUnsupportedFormat, ext, err)
-			}
 			info.DurationErr = err
 			if info.Bitrate > 0 {
 				info.Duration = estimateDurationFromFile(filePath, info.Bitrate)
@@ -383,7 +402,7 @@ func inferFromFormat(filePath string, info *MediaInfo) *MediaInfo {
 		}
 	}
 
-	return info
+	return info, nil
 }
 
 func generateQualityString(info *MediaInfo) string {
