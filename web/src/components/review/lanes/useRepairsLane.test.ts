@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.11.0
+// version: 1.12.0
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
-// last-edited: 2026-11-03
+// last-edited: 2026-11-05
 //
 // The repairs lane's data layer against a mocked API.
 //
@@ -26,6 +26,7 @@ import {
   REPAIRS_FIXER_STORAGE_KEY,
   SETTLED_OUTCOMES,
   applySeverity,
+  parseRepairRowsFilter,
   repairApplyConfirmMessage,
   repairOwnerApplyConfirmMessage,
   summarizeAppliedRows,
@@ -250,7 +251,7 @@ describe('useRepairsLane: loading', () => {
     it('preselects the seeded fixer over the one the viewer had open', async () => {
       window.localStorage.setItem(REPAIRS_FIXER_STORAGE_KEY, 'other');
       vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER, OTHER, THIRD]);
-      const { result } = renderHook(() => useRepairsLane(toast, true, 'third'));
+      const { result } = renderHook(() => useRepairsLane(toast, true, { fixerId: 'third' }));
       await waitFor(() => expect(result.current.selectedFixer?.id).toBe('third'));
       // A seed is never saved as the viewer's own choice.
       expect(window.localStorage.getItem(REPAIRS_FIXER_STORAGE_KEY)).toBe('other');
@@ -259,16 +260,58 @@ describe('useRepairsLane: loading', () => {
     it('ignores an unknown id and falls back to the stored fixer', async () => {
       window.localStorage.setItem(REPAIRS_FIXER_STORAGE_KEY, 'other');
       vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER, OTHER]);
-      const { result } = renderHook(() => useRepairsLane(toast, true, 'no.such-fixer'));
+      const { result } = renderHook(() => useRepairsLane(toast, true, { fixerId: 'no.such-fixer' }));
       await waitFor(() => expect(result.current.selectedFixer?.id).toBe('other'));
       expect(result.current.selectedFixerId).toBe('other');
     });
 
     it('ignores an unknown id and falls back to the first fixer when nothing is stored', async () => {
       vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER, OTHER]);
-      const { result } = renderHook(() => useRepairsLane(toast, true, 'no.such-fixer'));
+      const { result } = renderHook(() => useRepairsLane(toast, true, { fixerId: 'no.such-fixer' }));
       await waitFor(() => expect(result.current.selectedFixer?.id).toBe('vg-primary'));
     });
+  });
+});
+
+describe('useRepairsLane: URL seed for the row filter and class', () => {
+  const OTHER = { id: 'other', title: 'Other', description: '' };
+
+  it('starts on the seeded filter and class', async () => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER, OTHER]);
+    const { result } = renderHook(() =>
+      useRepairsLane(toast, true, {
+        fixerId: 'other',
+        filter: 'skipped:no_candidate',
+        rowClass: 'robin',
+      })
+    );
+    expect(result.current.filter).toBe('skipped:no_candidate');
+    expect(result.current.rowClass).toBe('robin');
+    await waitFor(() => expect(result.current.selectedFixerId).toBe('other'));
+    // Landing the seeded fixer must not reset what the seed set.
+    expect(result.current.filter).toBe('skipped:no_candidate');
+    expect(result.current.rowClass).toBe('robin');
+  });
+
+  it('applyUrlSeed moves a mounted lane to a new URL without touching the stored fixer', async () => {
+    window.localStorage.setItem(REPAIRS_FIXER_STORAGE_KEY, 'vg-primary');
+    vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER, OTHER]);
+    const { result } = renderHook(() => useRepairsLane(toast, true));
+    await waitFor(() => expect(result.current.selectedFixerId).toBe('vg-primary'));
+    act(() => result.current.applyUrlSeed({ fixerId: 'other', filter: 'owner_applicable' }));
+    expect(result.current.selectedFixerId).toBe('other');
+    expect(result.current.filter).toBe('owner_applicable');
+    expect(result.current.rowClass).toBeNull();
+    expect(window.localStorage.getItem(REPAIRS_FIXER_STORAGE_KEY)).toBe('vg-primary');
+  });
+
+  it('parseRepairRowsFilter accepts only the shapes the server takes', () => {
+    expect(parseRepairRowsFilter('applicable')).toBe('applicable');
+    expect(parseRepairRowsFilter('skipped:no_candidate')).toBe('skipped:no_candidate');
+    expect(parseRepairRowsFilter('flag:needs_owner')).toBe('flag:needs_owner');
+    expect(parseRepairRowsFilter('skipped:')).toBeNull();
+    expect(parseRepairRowsFilter('everything')).toBeNull();
+    expect(parseRepairRowsFilter(null)).toBeNull();
   });
 });
 

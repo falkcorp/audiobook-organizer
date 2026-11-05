@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.18.1
+// version: 1.19.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 import {
   startTransition,
@@ -204,6 +204,14 @@ export interface DupesUrlFilters {
    * is ignored and the layer chips never write it back to the URL.
    */
   layer?: DedupLayer | null;
+  /**
+   * `?compare=<candidate id>`: a SEED for the compare drawer, read on the first
+   * render. The workspace mirrors the drawer back to the URL; a later change to
+   * this value is ignored (see `openDrawer` for a URL change that arrives later).
+   */
+  compare?: number | null;
+  /** `?ctab=`: the drawer tab to open on, as an index. Seeds with `compare`. */
+  compareTab?: number | null;
 }
 
 const NO_URL_FILTERS: DupesUrlFilters = { band: null, entityId: null, layer: null };
@@ -299,6 +307,10 @@ export interface DupesLane {
 
   drawerCandidateId: number | null;
   setDrawerCandidateId: (id: number | null) => void;
+  /** The open drawer's tab index; 0 for any candidate it was not chosen for. */
+  drawerTab: number;
+  setDrawerTab: (tab: number) => void;
+  openDrawer: (id: number | null, tab?: number) => void;
   shortcutHelpOpen: boolean;
   setShortcutHelpOpen: (open: boolean) => void;
 
@@ -381,7 +393,27 @@ export function useDupesLane(
   const [page, setPageState] = useState(1);
   const [pageSize, setPageSizeState] = useState(DEFAULT_PAGE_SIZE);
   const [focusedIndexState, setFocusedIndex] = useState(0);
-  const [drawerCandidateId, setDrawerCandidateId] = useState<number | null>(null);
+  const [drawerCandidateId, setDrawerCandidateId] = useState<number | null>(
+    () => urlFilters.compare ?? null
+  );
+  // The drawer's tab belongs to ONE candidate: opening another pair starts on the
+  // first tab again. Held with the id it was chosen for and read back only while
+  // that id is open, so there is no reset to forget (and nothing to clobber a tab
+  // the URL asked for).
+  const [drawerTabChoice, setDrawerTabChoice] = useState<{ id: number | null; tab: number }>(() => ({
+    id: urlFilters.compare ?? null,
+    tab: urlFilters.compareTab ?? 0,
+  }));
+  const drawerTab = drawerTabChoice.id === drawerCandidateId ? drawerTabChoice.tab : 0;
+  const setDrawerTab = useCallback(
+    (tab: number) => setDrawerTabChoice({ id: drawerCandidateId, tab }),
+    [drawerCandidateId]
+  );
+  /** Open (or close, with null) the drawer on a given tab: a URL change arriving while mounted. */
+  const openDrawer = useCallback((id: number | null, tab = 0) => {
+    setDrawerCandidateId(id);
+    setDrawerTabChoice({ id, tab });
+  }, []);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -1524,6 +1556,9 @@ export function useDupesLane(
     setFocusedIndex,
     drawerCandidateId,
     setDrawerCandidateId,
+    drawerTab,
+    setDrawerTab,
+    openDrawer,
     shortcutHelpOpen,
     setShortcutHelpOpen,
     busy,

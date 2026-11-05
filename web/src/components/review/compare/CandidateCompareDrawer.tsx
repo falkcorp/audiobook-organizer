@@ -1,7 +1,7 @@
 // file: web/src/components/review/compare/CandidateCompareDrawer.tsx
-// version: 1.12.0
+// version: 1.13.0
 // guid: a6f7b8c9-d0e1-2345-fabc-af6789012345
-// last-edited: 2026-10-12
+// last-edited: 2026-11-05
 // CandidateCompareDrawer is a right-side Drawer that shows a full side-by-side
 // comparison of the two books in a dedup candidate, plus the score breakdown.
 // It fetches the breakdown data on open via GET /api/v1/dedup/candidates/:id/breakdown.
@@ -59,6 +59,13 @@ interface CandidateCompareDrawerProps {
   onMerged?: (candidateId: number, keepId?: string) => void;
   /** Called after a dismiss action. */
   onDismissed?: (candidateId: number) => void;
+  /**
+   * The active tab, when the owner holds it (so the address bar can say which tab
+   * is open). Omit both props and the drawer keeps its own tab, which resets to the
+   * first one each time a candidate opens.
+   */
+  tab?: number;
+  onTabChange?: (tab: number) => void;
 }
 
 function formatBytes(bytes: number | undefined): string {
@@ -440,13 +447,18 @@ export function CandidateCompareDrawer({
   onClose,
   onMerged,
   onDismissed,
+  tab,
+  onTabChange,
 }: CandidateCompareDrawerProps) {
   const navigate = useNavigate();
   const [data, setData] = useState<DedupCandidateBreakdownResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState(0);
+  const [localTab, setLocalTab] = useState(0);
+  const controlled = tab !== undefined && onTabChange !== undefined;
+  const activeTab = controlled ? tab : localTab;
+  const setActiveTab = controlled ? onTabChange : setLocalTab;
   const [fpData, setFpData] = useState<AcoustIDCompareResponse | null>(null);
   const [fpLoading, setFpLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -468,7 +480,8 @@ export function CandidateCompareDrawer({
     setLoading(true);
     setError(null);
     setData(null);
-    setActiveTab(0);
+    // Controlled: the owner keys the tab to the candidate, so it is already right.
+    setLocalTab(0);
     setFpData(null);
 
     api
