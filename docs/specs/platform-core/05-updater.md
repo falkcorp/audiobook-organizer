@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.13.5 -->
+<!-- version: 1.13.6 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -328,7 +328,7 @@ as `<exe>.prev` only when they are equal (05-backup, as above); a release whose 
 existing `.prev` stays. The trust level is apply's, no more: HTTPS from the configured release source, plus the
 checksum check apply performs when the source publishes one. It is not a signed release: signed manifests are
 deferred-build (5U.3), and so is apply's checksum check (the archive download and `checksums.txt`, 5U.3), so in
-R2 neither apply nor the fetch checks a checksum, and the fetch gains the check in the PR that builds it for apply. The command exists from R2, the release in which the updater lands, so the
+R2 neither apply nor the fetch checks a checksum, and the fetch gains the check in the PR that builds it for apply. The command exists from R2 (its PR is the updater flip, F8, and R2 ships as one release), so the
 current binary of the rollback always has it.
 
 **After the restart.** No marker is written and no boot is counted: the new binary boots like any
