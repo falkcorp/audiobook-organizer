@@ -1,9 +1,10 @@
 // file: web/src/pages/TrashedVersions.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6f4a5b3c-7d8e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-29
+// last-edited: 2026-11-05
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { applyOwnedParams, useUrlEnumParam } from '../hooks/useUrlState';
 import { Link as RouterLink, useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -197,6 +198,9 @@ const CLEANUP_SET_TEXT: Record<TrashCleanupSet, string> = {
     'that cleanup run found in a swap that did not finish. They are in no trash and nothing was moved or deleted; the run does not resume a swap, and lists them again every run until each book is resumed here.',
 };
 
+const VERSION_TABS = ['trash', 'purged', 'swaps'] as const;
+type VersionTab = (typeof VERSION_TABS)[number];
+
 export default function TrashedVersions() {
   // A trash cleanup run's counts link here as ?op=<operation id>&set=kept (or
   // needs_attention): the page then lists only that group's versions, read from
@@ -204,7 +208,12 @@ export default function TrashedVersions() {
   const [searchParams, setSearchParams] = useSearchParams();
   const cleanupOp = searchParams.get('op');
   const cleanupSet = parseCleanupSet(searchParams.get('set'));
-  const [tab, setTab] = useState<'trash' | 'purged' | 'swaps'>(() =>
+  // The tab is `?tab=`. Its default is the tab a cleanup-run link implies (else
+  // Trash), so that link needs no `tab` of its own and picking any other tab is
+  // written explicitly.
+  const [tab, setTab] = useUrlEnumParam(
+    'tab',
+    VERSION_TABS,
     cleanupSet ? cleanupSetTab(cleanupSet) : 'trash'
   );
   // What was read for one (op, set): kept with its key so a stale read for a
@@ -364,11 +373,10 @@ export default function TrashedVersions() {
       ? Math.max(0, new Set(filterIds).size - listed.length)
       : 0;
   const clearFilter = useCallback(() => {
-    const next = new URLSearchParams(searchParams);
-    next.delete('op');
-    next.delete('set');
+    // Pin the tab on screen: its default came from the filter being removed.
+    const next = applyOwnedParams(searchParams, { op: null, set: null, tab }, { tab: 'trash' });
     setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, tab]);
 
   const sorted = sortRows(listed);
 
@@ -395,7 +403,7 @@ export default function TrashedVersions() {
 
       <Tabs
         value={tab}
-        onChange={(_, v) => setTab(v)}
+        onChange={(_, v: VersionTab) => setTab(v)}
         variant="scrollable"
         scrollButtons="auto"
         allowScrollButtonsMobile

@@ -1,5 +1,5 @@
 <!-- file: docs/reference/ui-deep-links.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: B610EF08-9346-47FD-AAA3-C65958E0127C -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -31,19 +31,19 @@ and is updated as each page lands. Status: `done` = shipped in this change,
 | `/fingerprints` | Library with the fingerprints preset | same as `/library` | planned |
 | `/library/:id` | Info / Files & History tab | `tab=info\|files` | existing |
 | `/works` | none | | n/a |
-| `/system` | System Info / Storage / Quota / Maintenance tab | `tab=info\|storage\|quota\|maintenance` | planned |
-| `/settings` | 12 tabs | `tab=<slug>` (legacy `#slug` still read) | planned |
-| `/files` | selected directory | `path` | planned |
+| `/system` | System Info / Storage / Quota / Maintenance tab | `tab=info\|storage\|quota\|maintenance` (info omitted) | done |
+| `/settings` | 12 tabs | `tab=library\|itunes\|metadata\|dedup\|paths\|performance\|security\|api-keys\|plugins\|tools\|system\|temp-login` (library omitted; legacy `#slug` still read) | done |
+| `/files` | directory on screen (opens there; written on every directory) | `path` (root omitted) | done |
 | `/series` | search, with-books/empty/all filter, page, page size | `q filter page size` | planned |
 | `/authors` | search, with-books/zero-books/all filter, page, page size | `q filter page size` | planned |
 | `/authors/:id` | route param | `:id` | existing |
-| `/diagnostics` | selected category | `category` | planned |
+| `/diagnostics` | selected category card | `category=errors\|dedup\|metadata\|general` (any id the page lists) | done |
 | `/activity` | expanded operation, feed filters, page | `op q tiers type level operation since until hide_noop tag page size` | planned (`op` read-only today) |
-| `/playlists` | All / Static / Smart tab | `tab=all\|static\|smart` | planned |
+| `/playlists` | All / Static / Smart tab | `tab=static\|smart` (all omitted) | done |
 | `/playlists/:id` | route param | `:id` | existing |
-| `/collections` | All / type tab | `tab=all\|static\|smart` | planned |
+| `/collections` | All / Static / Dynamic tab | `tab=static\|dynamic` (all omitted) | done |
 | `/collections/:id` | page of members | `page` | planned |
-| `/versions` | Trash / Purged / Swaps tab, trash-run filter | `tab=trash\|purged\|swaps`, `op`, `set` | partly existing (`op`, `set`) |
+| `/versions` | Trash / Purged / Swaps tab, trash-run filter | `tab=trash\|purged\|swaps` (trash omitted; a `set` link implies its tab), `op`, `set` | done (`op`, `set` existing) |
 | `/users` | user whose footprint or merge dialog is open | `footprint=<userId>` `merge=<userId>` | planned |
 | `/review` | lane | `lane=metadata\|dupes\|authors\|regroup\|repairs` | planned (read-only today) |
 | `/review` dupes | sub-view, layer, band, one-book filter | `view=labels\|suspicious`, `layer`, `band`, `book` | band/book existing, rest planned |

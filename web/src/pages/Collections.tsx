@@ -1,9 +1,10 @@
 // file: web/src/pages/Collections.tsx
-// version: 1.1.1
+// version: 1.2.0
 // guid: f3330351-d6f6-4583-a859-a262bcee0c4c
-// last-edited: 2026-10-26
+// last-edited: 2026-11-05
 
 import { useState } from 'react';
+import { useUrlEnumParam } from '../hooks/useUrlState';
 import { useNavigate } from 'react-router-dom';
 import {
   Alert,
@@ -47,9 +48,12 @@ import { type SortChoice, encodeSort, queryError } from '../components/collectio
 
 type TabValue = 'all' | CollectionType;
 
+// `?tab=static|dynamic`; All is the default and is left out of the URL.
+const COLLECTION_TABS: readonly TabValue[] = ['all', 'static', 'dynamic'];
+
 export default function Collections() {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<TabValue>('all');
+  const [tab, setTab] = useUrlEnumParam<TabValue>('tab', COLLECTION_TABS, 'all');
   const { collections, count, loading, refreshing, error, canManage, reload, create, remove } =
     useCollections(tab === 'all' ? undefined : tab);
   const [createOpen, setCreateOpen] = useState(false);

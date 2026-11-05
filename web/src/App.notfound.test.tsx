@@ -1,7 +1,7 @@
 // file: web/src/App.notfound.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d1e8a73-2c94-4b6f-8e07-a3f9c1d4b620
-// last-edited: 2026-10-19
+// last-edited: 2026-11-05
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -20,8 +20,8 @@ vi.mock('./components/settings/APIKeysTab', () => ({
 }));
 
 function LocationProbe() {
-  const { pathname, hash } = useLocation();
-  return <div data-testid="loc">{pathname + hash}</div>;
+  const { pathname, search, hash } = useLocation();
+  return <div data-testid="loc">{pathname + search + hash}</div>;
 }
 
 function renderAt(path: string) {
@@ -84,10 +84,10 @@ describe('signed-in catch-all and Audiobookshelf redirects', () => {
     '/config/api-keys/',
     '/audiobookshelf/config/api-keys',
     '/audiobookshelf/config/api-keys/',
-  ])('%s redirects to /settings#api-keys and opens the API Keys tab', async (path) => {
+  ])('%s redirects to /settings?tab=api-keys and opens the API Keys tab', async (path) => {
     renderAt(path);
     expect(await screen.findByTestId('api-keys-tab-body')).toBeInTheDocument();
-    expect(screen.getByTestId('loc')).toHaveTextContent('/settings#api-keys');
+    expect(screen.getByTestId('loc')).toHaveTextContent('/settings?tab=api-keys');
     expect(screen.getByRole('tab', { name: 'API Keys' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByText('Page not found')).not.toBeInTheDocument();
   });
