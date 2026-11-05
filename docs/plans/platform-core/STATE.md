@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.36.0 -->
+<!-- version: 1.37.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -26,11 +26,11 @@ Evidence commit (HEAD of main at start): `748fd787a6d922c63dfb3bbb09da578a141863
 | 3 | Spec review loop | done: 8 rounds of 7 antagonistic lenses, distinct BLOCKERs 20 → 10 → 9 → 6 → 5 → 2 → 1 → 0; every finding dispositioned (`reviews/spec-round-N-dispositions.md`) |
 | 4 | Spec advisor review | done: READY WITH CHANGES; all findings accepted, simplifications adopted (A-1..A-17); then confirmation rounds 9–12 with BLOCKERs 3 → 2 → 1 → 0 |
 | 5 | Spec confidentiality gate + PR + merge | done: gate PASS; #4359 (258 commits) was refused by GitHub (`This branch can't be rebased`), so the same tree was re-cut as 5 logical commits in #4360, re-gated (scrub 0, gitleaks 0) and rebase-merged |
-| 5b | Spec revision for D10–D14 + review | done: every spec file revised (no backward compatibility, one cutover release R2 opened by the F2 foundation PRs); consistency pass; review round 13 (BLOCKER 2 / MAJOR 33 / MINOR 35), round 14 verification (1 / 13 / 19), round 15 re-check (0 / 4 / 7), every finding dispositioned and applied; 04 regenerated (v1.15.0, gates pass); see `reviews/spec-rounds-13-15.md`. Plan-gap fixes G1–G17 with review round 16 (0 / 3 / 7, applied); brief-sync gap fixes G18–G21 (05-rbac `CompileInput` and `Requirement.Kind()`, `core.outbox.*` audit actions, the log query's `limit`) |
-| 6 | Implementation plan | to rebuild: the plan and the 153 briefs on the plan branch describe the pre-D10 design and are replaced after the spec revision merges |
-| 7 | Plan review loop | pending |
-| 8 | Plan advisor review | pending |
-| 9 | Plan confidentiality gate + PR + merge | pending |
+| 5b | Spec revision for D10–D14 + review | done: every spec file revised (no backward compatibility, one cutover release R2 opened by the F2 foundation PRs); consistency pass; review round 13 (BLOCKER 2 / MAJOR 33 / MINOR 35), round 14 verification (1 / 13 / 19), round 15 re-check (0 / 4 / 7), every finding dispositioned and applied; 04 regenerated (v1.15.0, gates pass); see `reviews/spec-rounds-13-15.md`. Plan-gap fixes G1–G17 with review round 16 (0 / 3 / 7, applied); brief-sync gap fixes G18–G21 (05-rbac `CompileInput` and `Requirement.Kind()`, `core.outbox.*` audit actions, the log query's `limit`) and G22 (the library transfer-recovery schedule key); merged as #4368 |
+| 6 | Implementation plan | done: `implementation-plan.md`, 134 tasks (128 agent briefs under `docs/agent-tasks/platform-core/`, 6 owner checkpoints) in 46 waves; `task-summary.md`; `tools/inventory.json` and `tools/check_waves.py` (all six checks pass) |
+| 7 | Plan review loop | done: rounds 1–3, BLOCKERs 4 → 1 → 0 (MAJOR 17 / 12 / 8), every finding applied; see `reviews/plan-rounds-1-3.md` |
+| 8 | Plan advisor review | done: READY WITH CHANGES; accepted changes applied (review before T4 and flip merges, re-priced flips, the shell in R3, production-shaped rehearsal, freeze hotfix procedure, execution rules); two simplifications deferred to the owner |
+| 9 | Plan confidentiality gate + PR + merge | gate PASS (scrub 0, gitleaks 0, manual review of the plan and 25 briefs); PR #4376 |
 
 ## Artifacts
 
@@ -67,7 +67,7 @@ None. (The #4359 merge refusal was cleared by re-cutting the branch as #4360.)
 
 ## Next action
 
-Merge the spec revision PR (`docs/platform-core-spec-v3`), then rebuild the implementation plan and briefs for the R0–R3 / F2–F9 design on `docs/platform-core-plan` (phase 6), followed by phases 7–9.
+Merge the plan PR (#4376). Then execution starts at W01 (plan §(n) item 1): OWNER-01 answers Q-I (merge queue recommended), keep or override the R1 freeze, and Q-G; the two deferred simplifications (the per-flip upgrade test, the freeze as a repository variable) are the owner's to decide.
 
 ## Incidents
 
