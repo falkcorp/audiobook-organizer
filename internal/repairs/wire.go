@@ -1,7 +1,7 @@
 // file: internal/repairs/wire.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4c7d2e91-5b0a-4e38-8f16-a93d6b1c0e57
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package repairs
 
@@ -260,6 +260,26 @@ type RowHold struct {
 	// OwnerOK: the owner's own Apply on the row may resolve this hold. A row
 	// is owner-applicable only while every one of its holds is.
 	OwnerOK bool `json:"owner_ok"`
+	// FileIDs are the book_file rows the hold is about, when it is about
+	// particular files (folder-books' unprobed and unreadable-audio holds: the
+	// files with no measured duration). Sorted and de-duplicated.
+	FileIDs []string `json:"file_ids,omitempty"`
+	// Action is a follow-up the lane may offer next to the hold: an operation
+	// that can clear it. Nil when none can (a file the probe already gave up
+	// on is not helped by probing it again). Display only, like the rest of
+	// RowHold: nothing starts it but the owner's click.
+	Action *RowHoldAction `json:"action,omitempty"`
+}
+
+// RowHoldAction is an operation a hold offers to clear itself: the lane starts
+// OpID with Params when the owner clicks Label.
+type RowHoldAction struct {
+	// OpID is the operation definition id to start.
+	OpID string `json:"op_id"`
+	// Params are the operation's parameters, as its params JSON object.
+	Params map[string]any `json:"params,omitempty"`
+	// Label is the button text.
+	Label string `json:"label"`
 }
 
 // RowMember is one book of a Row, for display.

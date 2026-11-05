@@ -323,6 +323,37 @@ export interface RowHold {
    * is owner-applicable only while every one of its holds is.
    */
   owner_ok: boolean;
+  /**
+   * FileIDs are the book_file rows the hold is about, when it is about
+   * particular files (folder-books' unprobed and unreadable-audio holds: the
+   * files with no measured duration). Sorted and de-duplicated.
+   */
+  file_ids?: string[];
+  /**
+   * Action is a follow-up the lane may offer next to the hold: an operation
+   * that can clear it. Nil when none can (a file the probe already gave up
+   * on is not helped by probing it again). Display only, like the rest of
+   * RowHold: nothing starts it but the owner's click.
+   */
+  action?: RowHoldAction;
+}
+/**
+ * RowHoldAction is an operation a hold offers to clear itself: the lane starts
+ * OpID with Params when the owner clicks Label.
+ */
+export interface RowHoldAction {
+  /**
+   * OpID is the operation definition id to start.
+   */
+  op_id: string;
+  /**
+   * Params are the operation's parameters, as its params JSON object.
+   */
+  params?: { [key: string]: any};
+  /**
+   * Label is the button text.
+   */
+  label: string;
 }
 /**
  * RowMember is one book of a Row, for display.
