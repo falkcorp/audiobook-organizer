@@ -1,7 +1,7 @@
 // file: internal/server/wire_auth_routes.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-22
+// last-edited: 2026-11-05
 
 package server
 
@@ -58,6 +58,7 @@ func (s *Server) wireAuthRoutes(
 		// user whose email it verifies.
 		s.credRoute(authProtected, http.MethodPatch, "/me", authH.UpdateMe)
 		authProtected.POST("/logout", authH.Logout)
+		// The sessions list returns revoke handles, never session IDs (the ID is the bearer token; 05-authn §11.1 item 1); DELETE /sessions/:id takes a handle.
 		authProtected.GET("/sessions", authH.ListMySessions)
 		authProtected.DELETE("/sessions/:id", authH.RevokeMySession)
 		s.credRoute(authProtected, http.MethodPut, "/me/password", authH.ChangePassword)
