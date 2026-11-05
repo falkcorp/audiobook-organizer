@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_export_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7b3e9d15-4c2a-4f68-a0d1-e5b8c2f4a913
-// last-edited: 2026-10-26
+// last-edited: 2026-11-05
 
 package jobs
 
@@ -27,4 +27,14 @@ func SetHashBackfillYieldMargin(d time.Duration) (restore func()) {
 	prev := hbYieldMargin
 	hbYieldMargin = d
 	return func() { hbYieldMargin = prev }
+}
+
+// SetHashBackfillClock replaces the clock the job's yield decision reads (chunk
+// start, chunk duration, time left to the deadline) and returns a function that
+// restores it. The clock is called only from the goroutine that walks the
+// chunks.
+func SetHashBackfillClock(now func() time.Time) (restore func()) {
+	prev := hbNow
+	hbNow = now
+	return func() { hbNow = prev }
 }
