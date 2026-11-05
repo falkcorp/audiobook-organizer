@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useAuthorsLane.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: c9e4a1d7-5b83-4f26-a0d9-3e7b61f48a25
-// last-edited: 2026-10-30
+// last-edited: 2026-11-04
 
 /**
  * The Authors & series lane's data layer: the Authors sub-view and the Series
@@ -65,7 +65,7 @@
  *     clears its cached list on every write, so re-reading would blank it.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as api from '../../../services/api';
 import type {
   AuthorDedupGroup,
@@ -169,6 +169,19 @@ type Keyed<T> = { key: string; load: Load<T> };
 
 function current<T>(keyed: Keyed<T> | null, key: string): Load<T> {
   return keyed && keyed.key === key ? keyed.load : { state: 'loading' };
+}
+
+/**
+ * Edits to a list that arrived while no read of it had settled (a merge that
+ * finished during a reload, for one). They are kept, in order, and applied to
+ * the list the read brings: dropped, the merged-away rows come back whenever
+ * that read was started before the write committed.
+ *
+ * Every edit must be idempotent -- a read started after the write already
+ * reflects it, and the edit then finds nothing to change.
+ */
+function applyEdits<L>(edits: ReadonlyArray<(list: L) => L>, list: L): L {
+  return edits.reduce((acc, edit) => edit(acc), list);
 }
 
 interface GroupsValue {
@@ -606,11 +619,24 @@ export function useAuthorsLane(
     groupsRef.current = next;
     setGroupsResult(next);
   }, []);
-  /** Edit the list the lane currently holds. Reads the latest, writes the latest. */
+  // The key of the read the lane is waiting on, and the edits that arrived while it was.
+  const groupsKeyRef = useRef(groupsKey);
+  useLayoutEffect(() => {
+    groupsKeyRef.current = groupsKey;
+  }, [groupsKey]);
+  const groupsEditsRef = useRef<Array<(gs: AuthorGroup[]) => AuthorGroup[]>>([]);
+  /**
+   * Edit the list the lane currently holds. Reads the latest, writes the latest.
+   * With no settled list for the current read (a reload is in flight), the edit
+   * is kept and applied to what that read returns.
+   */
   const commitGroups = useCallback(
     (fn: (gs: AuthorGroup[]) => AuthorGroup[]) => {
       const prev = groupsRef.current;
-      if (!prev || prev.load.state !== 'ready') return;
+      if (!prev || prev.load.state !== 'ready' || prev.key !== groupsKeyRef.current) {
+        groupsEditsRef.current.push(fn);
+        return;
+      }
       const next = fn(prev.load.value.groups);
       if (next === prev.load.value.groups) return;
       commitResult({
@@ -715,11 +741,24 @@ export function useAuthorsLane(
     seriesRef.current = next;
     setSeriesResult(next);
   }, []);
-  /** Edit the series list the lane currently holds. Reads the latest, writes the latest. */
+  // As for the groups: the key being read, and the edits that arrived while it was.
+  const seriesKeyRef = useRef(seriesKey);
+  useLayoutEffect(() => {
+    seriesKeyRef.current = seriesKey;
+  }, [seriesKey]);
+  const seriesEditsRef = useRef<Array<(gs: SeriesGroup[]) => SeriesGroup[]>>([]);
+  /**
+   * Edit the series list the lane currently holds. Reads the latest, writes the
+   * latest. With no settled list for the current read (a reload is in flight),
+   * the edit is kept and applied to what that read returns.
+   */
   const commitSeries = useCallback(
     (fn: (gs: SeriesGroup[]) => SeriesGroup[]) => {
       const prev = seriesRef.current;
-      if (!prev || prev.load.state !== 'ready') return;
+      if (!prev || prev.load.state !== 'ready' || prev.key !== seriesKeyRef.current) {
+        seriesEditsRef.current.push(fn);
+        return;
+      }
       const next = fn(prev.load.value.groups);
       if (next === prev.load.value.groups) return;
       commitSeriesResult({
@@ -840,11 +879,15 @@ export function useAuthorsLane(
     fetchAuthorGroups(ctl.signal)
       .then((r) => {
         if (ctl.signal.aborted) return;
-        const mapped = r.groups.map(toAuthorGroup);
+        // Edits made while this read was in flight go on top of what it returned:
+        // it may have been started before they were written.
+        const queued = groupsEditsRef.current.splice(0);
+        const mapped = applyEdits(queued, r.groups.map(toAuthorGroup));
         // Read the latest, now: the lane may have edited its list since the
         // request was sent.
         const prev = groupsRef.current;
-        const held = prev && prev.load.state === 'ready' ? prev.load.value.groups : [];
+        // The list held from the previous read has not seen the queued edits.
+        const held = applyEdits(queued, prev && prev.load.state === 'ready' ? prev.load.value.groups : []);
         if (r.needsRefresh && mapped.length === 0 && held.length > 0) {
           // The server's list is gone -- every author write clears it, including
           // this lane's own -- but the lane holds groups that already reflect
@@ -888,11 +931,16 @@ export function useAuthorsLane(
     fetchSeriesGroups(ctl.signal)
       .then((r) => {
         if (ctl.signal.aborted) return;
-        const mapped = r.groups.map(toSeriesGroup);
+        // Edits made while this read was in flight go on top of what it returned:
+        // it may have been started before they were written.
+        const queued = seriesEditsRef.current.splice(0);
+        const mapped = applyEdits(queued, r.groups.map(toSeriesGroup));
         // The latest, now: the lane may have edited its list since the request
         // was sent.
         const prev = seriesRef.current;
-        const held = prev && prev.load.state === 'ready' ? prev.load.value : null;
+        // The list held from the previous read has not seen the queued edits.
+        const heldValue = prev && prev.load.state === 'ready' ? prev.load.value : null;
+        const held = heldValue && { ...heldValue, groups: applyEdits(queued, heldValue.groups) };
         if (r.needsRefresh && mapped.length === 0 && held && held.groups.length > 0) {
           // As for authors: every series write clears the server's list, including
           // this lane's own, but the lane holds groups that already reflect those

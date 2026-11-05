@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useAuthorsLane.test.ts
-// version: 1.2.3
+// version: 1.3.0
 // guid: a5d29e61-7c04-4b8f-93e2-1f6a80c4b573
 // last-edited: 2026-11-04
 
@@ -668,6 +668,35 @@ describe('leaving the lane or unmounting', () => {
     await waitFor(() => expect(result.current.groups.map((g) => g.key)).toEqual(['2']));
     expect(result.current.pendingKeys.size).toBe(0);
     expect(toast).toHaveBeenCalledWith('Merged author(s) into "Author A" (it finished after you left).', 'success');
+  });
+
+  it('a followed merge that completes while the list is being re-read is applied to the list the read returns', async () => {
+    serve([GROUP_A(), GROUP_B()]);
+    const { result, rerender } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    hangingPoll();
+    act(() => result.current.dispatch(merge(1)));
+    await waitFor(() => expect(api.mergeAuthors).toHaveBeenCalledTimes(1));
+    rerender({ active: false });
+    await waitFor(() => expect(result.current.pendingKeys.size).toBe(0));
+
+    const poll = deferred<api.OperationV2>();
+    vi.mocked(api.pollOperationV2).mockReset();
+    vi.mocked(api.pollOperationV2).mockReturnValue(poll.promise);
+    const read = deferred<Awaited<ReturnType<typeof reads.fetchAuthorGroups>>>();
+    vi.mocked(reads.fetchAuthorGroups).mockReset();
+    vi.mocked(reads.fetchAuthorGroups).mockReturnValueOnce(read.promise);
+    rerender({ active: true });
+    await waitFor(() => expect(reads.fetchAuthorGroups).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.pollOperationV2).toHaveBeenCalledTimes(1));
+    expect(result.current.status).toBe('loading');
+
+    await act(async () => poll.resolve(settled()));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringContaining('finished after you left'), 'success'));
+    // The read was started before the merge committed: it still lists Author A.
+    await act(async () => read.resolve({ groups: [GROUP_A(), GROUP_B()], needsRefresh: false }));
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    expect(result.current.groups.map((g) => g.key)).toEqual(['2']);
   });
 
   it('a bulk merge stops sending requests the moment the lane is left, and clears its progress', async () => {
@@ -2029,6 +2058,89 @@ describe('leaving the lane during a series merge', () => {
     rerender({ active: true });
     await waitFor(() => expect(result.current.series.groups[0]?.series.map((r) => r.id)).toEqual([11, 13]));
     expect(toast).toHaveBeenCalledWith(expect.stringContaining('series merge left series ids [13]'), 'error');
+  });
+
+  describe('a followed merge that settles while the re-read of the list is still in flight', () => {
+    /** Leaves with a merge sent, comes back with the list read held, and returns the gates. */
+    async function returnWithReadHeld() {
+      serveSeries([swire('Series A', [srow(11, 'Series A'), srow(12, 'series a'), srow(13, 'SERIES A')])]);
+      const hook = setup({ view: 'series' });
+      await waitFor(() => expect(hook.result.current.series.status).toBe('populated'));
+      hangingPoll();
+      act(() => hook.result.current.dispatch(sact.merge('s11-12-13')));
+      await waitFor(() => expect(api.mergeSeriesGroup).toHaveBeenCalledTimes(1));
+      hook.rerender({ active: false });
+      await waitFor(() => expect(hook.result.current.pendingKeys.size).toBe(0));
+
+      const poll = deferred<api.OperationV2>();
+      vi.mocked(api.pollOperationV2).mockReset();
+      vi.mocked(api.pollOperationV2).mockReturnValue(poll.promise);
+      const read = deferred<Awaited<ReturnType<typeof reads.fetchSeriesGroups>>>();
+      vi.mocked(reads.fetchSeriesGroups).mockReset();
+      vi.mocked(reads.fetchSeriesGroups).mockReturnValueOnce(read.promise);
+      hook.rerender({ active: true });
+      await waitFor(() => expect(reads.fetchSeriesGroups).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(api.pollOperationV2).toHaveBeenCalledTimes(1));
+      expect(hook.result.current.series.status).toBe('loading');
+      return { ...hook, poll, read };
+    }
+    const preMerge = () => ({
+      groups: [swire('Series A', [srow(11, 'Series A'), srow(12, 'series a'), srow(13, 'SERIES A')])],
+      totalSeries: 3,
+      needsRefresh: false,
+    });
+
+    it('applies the merge to the list the read returns, even when that list is from before the merge', async () => {
+      const { result, poll, read } = await returnWithReadHeld();
+      await act(async () => poll.resolve(settled('failed', 'series merge left series ids [13]: x')));
+      await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringContaining('left series ids [13]'), 'error'));
+      await act(async () => read.resolve(preMerge()));
+      await waitFor(() => expect(result.current.series.status).toBe('populated'));
+      expect(result.current.series.groups[0]?.series.map((r) => r.id)).toEqual([11, 13]);
+    });
+
+    it('a merge that completed whole removes the group from a pre-merge read', async () => {
+      const { result, poll, read } = await returnWithReadHeld();
+      await act(async () => poll.resolve(settled()));
+      await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringContaining('finished after you left'), 'success'));
+      await act(async () => read.resolve(preMerge()));
+      await waitFor(() => expect(result.current.series.status).toBe('empty'));
+      expect(result.current.series.groups).toEqual([]);
+    });
+
+    it('does not apply it twice when the read already reflects it', async () => {
+      const { result, poll, read } = await returnWithReadHeld();
+      await act(async () => poll.resolve(settled('failed', 'series merge left series ids [13]: x')));
+      await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringContaining('left series ids [13]'), 'error'));
+      // The server read started after the merge committed: 12 is already gone.
+      await act(async () =>
+        read.resolve({
+          groups: [swire('Series A', [srow(11, 'Series A'), srow(13, 'SERIES A')])],
+          totalSeries: 2,
+          needsRefresh: false,
+        })
+      );
+      await waitFor(() => expect(result.current.series.status).toBe('populated'));
+      expect(result.current.series.groups[0]?.series.map((r) => r.id)).toEqual([11, 13]);
+    });
+
+    it('keeps the held list, with the merge applied, when the read answers "scan needed" and empty', async () => {
+      const { result, poll, read } = await returnWithReadHeld();
+      await act(async () => poll.resolve(settled('failed', 'series merge left series ids [13]: x')));
+      await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringContaining('left series ids [13]'), 'error'));
+      await act(async () => read.resolve({ groups: [], totalSeries: 0, needsRefresh: true }));
+      await waitFor(() => expect(result.current.series.status).toBe('populated'));
+      expect(result.current.series.stale).toBe(true);
+      expect(result.current.series.groups[0]?.series.map((r) => r.id)).toEqual([11, 13]);
+    });
+
+    it('a read that settled before the merge needs no help: the merge edits the ready list directly', async () => {
+      const { result, poll, read } = await returnWithReadHeld();
+      await act(async () => read.resolve(preMerge()));
+      await waitFor(() => expect(result.current.series.status).toBe('populated'));
+      await act(async () => poll.resolve(settled('failed', 'series merge left series ids [13]: x')));
+      await waitFor(() => expect(result.current.series.groups[0]?.series.map((r) => r.id)).toEqual([11, 13]));
+    });
   });
 
   it('a whole bulk run still queued behind another write is dropped, and the message names every group in it', async () => {
