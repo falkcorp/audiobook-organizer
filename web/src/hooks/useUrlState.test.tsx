@@ -1,5 +1,5 @@
 // file: web/src/hooks/useUrlState.test.tsx
-// version: 2.2.0
+// version: 2.3.0
 // guid: 0c5e92d7-48ab-4f36-a1d0-6be7f3092c58
 // last-edited: 2026-11-05
 
@@ -20,6 +20,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { FlushOnNavigate } from '../components/FlushOnNavigate';
 import {
   applyOwnedParams,
+  flushOnNavigate,
   parseEnum,
   useUrlEnumParam,
   useUrlParamWriter,
@@ -557,13 +558,19 @@ describe('useUrlStateSync: flushing before a navigation', () => {
         <button onClick={() => navigate(-1)}>navigate-back</button>
         <Link to="/c">go-c</Link>
         <Link to="/a?q=Hush">go-hush</Link>
+        <Link to="/a?q=The+Long+Halloween">go-long-halloween</Link>
         <span data-testid="q">{q}</span>
       </div>
     );
   }
   function GothamPage() {
     const navigate = useNavigate();
-    return <button onClick={() => navigate(-1)}>back-from-c</button>;
+    return (
+      <div>
+        <button onClick={() => navigate(-1)}>back-from-c</button>
+        <Link to="/a?q=Hush">to-hush</Link>
+      </div>
+    );
   }
   function mountApp(initial: string, flush = true, basename?: string) {
     window.history.replaceState(null, '', initial);
@@ -640,6 +647,74 @@ describe('useUrlStateSync: flushing before a navigation', () => {
       await new Promise((r) => setTimeout(r, 50));
     });
     expect(here()).toBe('/a?q=The+Long+Halloween');
+  });
+
+  it('the string a flush wrote for a page that was left does not swallow a later real navigation to it', async () => {
+    mountApp('/a');
+    const user = userEvent.setup();
+    await burst(user);
+    // The flush writes q=The Long Halloween for the entry being left; that URL
+    // never renders, because the push to /c replaces it in the same batch.
+    await user.click(screen.getByText('go-c'));
+    await user.click(screen.getByText('to-hush'));
+    await waitFor(() => expect(screen.getByTestId('q').textContent).toBe('Hush'));
+    // Now a real link to that same query: it is external and the page must follow.
+    await user.click(screen.getByText('go-long-halloween'));
+    expect(here()).toBe('/a?q=The+Long+Halloween');
+    await waitFor(() => expect(screen.getByTestId('q').textContent).toBe('The Long Halloween'));
+  });
+
+  it('a broken mirror cannot stop a navigation or the other mirrors', async () => {
+    window.history.replaceState(null, '', '/a');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let armed = false;
+    function Two() {
+      const [a, setA] = useState(0);
+      const [b, setB] = useState(0);
+      useUrlStateSync({
+        a: a ? String(a) : null,
+        get boom() {
+          if (armed) throw new Error('mirror exploded');
+          return null;
+        },
+      });
+      useUrlStateSync({ b: b ? String(b) : null });
+      return (
+        <div>
+          <button onClick={() => setA((v) => v + 1)}>a-up</button>
+          <button onClick={() => setB((v) => v + 1)}>b-up</button>
+          <Link to="/c">go-c</Link>
+        </div>
+      );
+    }
+    try {
+      render(
+        <BrowserRouter>
+          <FlushOnNavigate>
+            <Routes>
+              <Route path="/a" element={<Two />} />
+              <Route path="/c" element={<GothamPage />} />
+            </Routes>
+          </FlushOnNavigate>
+        </BrowserRouter>
+      );
+      const user = userEvent.setup();
+      for (const id of ['a-up', 'a-up', 'b-up', 'b-up']) await user.click(screen.getByText(id));
+      armed = true;
+      await user.click(screen.getByText('go-c'));
+      expect(here()).toBe('/c');
+      expect(warn).toHaveBeenCalledWith(
+        'Could not write a pending address change',
+        expect.any(Error)
+      );
+      armed = false;
+      await user.click(screen.getByText('back-from-c'));
+      // The healthy mirror's waiting write still went out first.
+      expect(new URLSearchParams(window.location.search).get('b')).toBe('2');
+    } finally {
+      armed = false;
+      warn.mockRestore();
+    }
   });
 
   it('flushes when the page is hidden (reload, tab close) inside the window', async () => {
@@ -750,5 +825,42 @@ describe('observe: a batch that writes the same query twice', () => {
     window.history.pushState(null, '', '/a?x=Batgirl');
     await user.click(screen.getByText('write-y'));
     expect(here()).toBe('/a?x=Batgirl');
+  });
+});
+
+describe('flushOnNavigate', () => {
+  function fakeNavigator() {
+    return {
+      location: { pathname: '/a', search: '' },
+      action: 'POP',
+      createURL: (to: unknown) => new URL(String(to), 'http://localhost'),
+      listen: () => () => {},
+      createHref: (to: unknown) => String(to),
+      encodeLocation: (to: unknown) => ({ pathname: String(to), search: '', hash: '' }),
+      go: vi.fn(),
+      push: vi.fn(),
+      replace: vi.fn(),
+    };
+  }
+
+  it('forwards every member of the real navigator, not just the four the router calls', () => {
+    const real = fakeNavigator();
+    const wrapped = flushOnNavigate(real as never) as unknown as typeof real &
+      Record<string, unknown>;
+    expect(Object.keys(real).filter((k) => !(k in wrapped))).toEqual([]);
+    expect(typeof wrapped.createURL).toBe('function');
+    expect(wrapped.location).toBe(real.location);
+    wrapped.push('/c', null, undefined);
+    wrapped.replace('/c', null, undefined);
+    wrapped.go(-1);
+    expect(real.push).toHaveBeenCalledWith('/c', null, undefined);
+    expect(real.replace).toHaveBeenCalledWith('/c', null, undefined);
+    expect(real.go).toHaveBeenCalledWith(-1);
+  });
+
+  it('is one wrapper (and so one store) per navigator', () => {
+    const real = fakeNavigator();
+    expect(flushOnNavigate(real as never)).toBe(flushOnNavigate(real as never));
+    expect(flushOnNavigate(fakeNavigator() as never)).not.toBe(flushOnNavigate(real as never));
   });
 });
