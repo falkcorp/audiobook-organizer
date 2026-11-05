@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7e1c4b9a-52d8-4f36-a0b7-c9d13e6f2a84
 // last-edited: 2026-11-05
 
@@ -90,10 +90,12 @@ func requireAccounted(t *testing.T, r UnknownRowsResult) {
 	t.Helper()
 	var sum int
 	if r.DryRun {
-		sum = r.Borrowed + r.PromotedFromFingerprint + r.WouldProbe + r.SkippedUnreadable + r.SkippedNoPath + r.SkippedUserExcluded
+		sum = r.Borrowed + r.PromotedFromFingerprint + r.WouldProbe + r.SkippedUnreadable + r.SkippedNoPath + r.SkippedUserExcluded +
+			r.SkippedBadPath + r.SkippedNotAudio
 	} else {
 		sum = r.Borrowed + r.PromotedFromFingerprint + r.ProbedKnown + r.ProbeFailed + r.EnvironmentSkipped +
-			r.SkippedChanged + r.SkippedUnreadable + r.SkippedNoPath + r.SkippedUserExcluded + r.WriteErrors
+			r.SkippedChanged + r.SkippedUnreadable + r.SkippedNoPath + r.SkippedUserExcluded +
+			r.SkippedBadPath + r.SkippedNotAudio + r.SkippedNotRegular + r.WriteErrors
 	}
 	require.Equal(t, r.Scanned, sum, "scanned rows are not all accounted for: %+v", r)
 }
