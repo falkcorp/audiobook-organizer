@@ -1,5 +1,5 @@
 // file: web/src/pages/Works.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a1ce53a-f243-45d8-a45c-d3f9897179a4
 // last-edited: 2026-11-05
 
@@ -23,16 +23,16 @@ describe('Works page', () => {
     vi.mocked(api.getWorks).mockResolvedValue([
       {
         id: 'work-1',
-        title: 'The Hobbit',
+        title: 'The Dark Knight Returns',
         author_id: 1,
         series_id: 2,
-        alt_titles: ['There and Back Again'],
+        alt_titles: ['Batman: The Dark Knight'],
       },
     ]);
 
     renderWithProviders(<Works />);
 
-    const row = await screen.findByRole('row', { name: /The Hobbit/i });
+    const row = await screen.findByRole('row', { name: /The Dark Knight Returns/i });
     expect(within(row).getByText('work-1')).toBeVisible();
     expect(within(row).getAllByText('1')).toHaveLength(2);
     expect(within(row).getByText('2')).toBeVisible();
@@ -57,7 +57,7 @@ describe('Works page', () => {
       .mockResolvedValueOnce([
         {
           id: 'work-2',
-          title: 'Dune',
+          title: 'Hush',
           author_id: 3,
         },
       ]);
@@ -71,7 +71,7 @@ describe('Works page', () => {
     await waitFor(() => {
       expect(getWorksMock).toHaveBeenCalledTimes(2);
     });
-    expect(await screen.findByText('Dune')).toBeVisible();
+    expect(await screen.findByText('Hush')).toBeVisible();
   });
 
   describe('sort in the address bar', () => {

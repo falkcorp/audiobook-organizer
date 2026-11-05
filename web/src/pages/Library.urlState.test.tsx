@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.urlState.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a17c3e8-4d52-4f60-b8e1-27d0a5f93c14
 // last-edited: 2026-11-05
 
@@ -38,11 +38,11 @@ vi.mock('../services/api', () => {
       items: [
         {
           id: 'id-1',
-          title: 'Test Book',
+          title: 'Batman: Year One',
           file_path: '/tmp/book.m4b',
           created_at: '2026-01-01T00:00:00Z',
           updated_at: '2026-01-01T00:00:00Z',
-          author_name: 'Author',
+          author_name: 'Bruce Wayne',
         },
       ],
       count: 1,

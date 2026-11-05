@@ -145,6 +145,13 @@ export const DEDUP_LAYERS: readonly DedupLayer[] = [
 ];
 
 /** A URL value as a layer: anything that is not a known layer is null, never passed on. */
+export const DEDUP_BANDS: readonly DedupBand[] = ['CERTAIN', 'HIGH', 'MEDIUM', 'REVIEW'];
+
+/** A URL value as a confidence band, else null. */
+export function parseDedupBand(value: string | null | undefined): DedupBand | null {
+  return DEDUP_BANDS.find((b) => b === value) ?? null;
+}
+
 export function parseDedupLayer(value: string | null | undefined): DedupLayer | null {
   return DEDUP_LAYERS.find((l) => l === value) ?? null;
 }

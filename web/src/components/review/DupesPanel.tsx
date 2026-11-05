@@ -38,7 +38,6 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import type { DedupBand } from '../../services/api';
 import { CandidateCompareDrawer } from './compare/CandidateCompareDrawer';
 import { SelectAllMatchingBanner } from '../common/SelectAllMatchingBanner';
 import { DupesSpine } from './spine/DupesSpine';
@@ -48,6 +47,7 @@ import { dupesLane } from './lanes/dupes';
 import {
   DEDUP_SHORTCUTS,
   PAGE_SIZE_OPTIONS,
+  DEDUP_BANDS,
   DEDUP_LAYERS,
   type DedupLayer,
   type DedupStatusFilter,
@@ -60,7 +60,6 @@ import { buildClusters } from './lanes/dupesClusters';
 import { DupesLabelsView } from './DupesLabelsView';
 import type { DupesLabels, DupesSubView } from './lanes/useDupesLabels';
 
-const BANDS: DedupBand[] = ['CERTAIN', 'HIGH', 'MEDIUM', 'REVIEW'];
 const STATUSES: { value: DedupStatusFilter; label: string }[] = [
   { value: 'pending', label: 'Pending' },
   { value: 'merged', label: 'Merged' },
@@ -487,7 +486,7 @@ export function DupesPanel({
                 Band
               </Typography>
               <Stack direction="row" spacing={0.5} useFlexGap sx={{ flexWrap: 'wrap', mt: 0.5 }}>
-                {BANDS.map((b) => (
+                {DEDUP_BANDS.map((b) => (
                   <Chip
                     key={b}
                     label={b}

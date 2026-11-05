@@ -1,5 +1,5 @@
 // file: web/src/pages/CollectionDetail.urlState.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9dee9243-76c7-4863-8912-e6cd838a796f
 // last-edited: 2026-11-05
 
@@ -86,8 +86,12 @@ describe('collection members page in the URL', () => {
   });
 
   it('clamps a page past the end and reads garbage as the first page', async () => {
-    const first = renderAt('/collections/c1?page=99');
+    const first = renderAt('/collections/c1?page=99&keep=1');
     expect(await screen.findByRole('link', { name: 'Penguin b101' })).toBeInTheDocument();
+    // The screen is on page 3, so the address bar says page 3.
+    await waitFor(() =>
+      expect(screen.getByTestId('where').textContent).toBe('/collections/c1?page=3&keep=1')
+    );
     first.unmount();
     renderAt('/collections/c1?page=abc');
     await waitFor(() =>

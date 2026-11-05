@@ -1,5 +1,5 @@
 // file: web/src/pages/listPages.urlState.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: e3a60d92-81f4-47c5-b2d7-5c19f0a8e473
 // last-edited: 2026-11-05
 
@@ -55,13 +55,34 @@ const renderAt = (ui: React.ReactElement, entry: string, to: string) =>
 
 const loc = () => screen.getByTestId('location').textContent;
 
+// Batman storylines and characters only, unique for any index (the list wraps
+// with a numeric suffix).
+const STORYLINES = [
+  'Year One',
+  'The Long Halloween',
+  'Hush',
+  'A Death in the Family',
+  'Knightfall',
+  'The Killing Joke',
+];
+const CHARACTERS = [
+  'Bruce Wayne',
+  'Selina Kyle',
+  'Alfred Pennyworth',
+  'Harvey Dent',
+  'Barbara Gordon',
+  'Oswald Cobblepot',
+];
+const batName = (list: string[], i: number) =>
+  i < list.length ? list[i] : `${list[i % list.length]} ${Math.floor(i / list.length) + 1}`;
+
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   getSeriesPage.mockImplementation(async (p) => ({
     items: Array.from({ length: 3 }, (_, i) => ({
       id: p.offset + i + 1,
-      name: `Series ${p.offset + i + 1}`,
+      name: batName(STORYLINES, p.offset + i),
       created_at: '',
       book_count: 1,
       file_count: 0,
@@ -72,7 +93,7 @@ beforeEach(() => {
   getAuthorsPage.mockImplementation(async (p) => ({
     items: Array.from({ length: 3 }, (_, i) => ({
       id: p.offset + i + 1,
-      name: `Author ${p.offset + i + 1}`,
+      name: batName(CHARACTERS, p.offset + i),
       created_at: '',
       book_count: 1,
       alias_count: 0,
@@ -89,7 +110,7 @@ describe.each([
     name: 'Series',
     ui: <Series />,
     fetch: getSeriesPage,
-    firstRow: 'Series 1',
+    firstRow: STORYLINES[0],
     zeroFilter: 'empty',
     placeholder: 'Search series...',
   },
@@ -97,7 +118,7 @@ describe.each([
     name: 'Authors',
     ui: <Authors />,
     fetch: getAuthorsPage,
-    firstRow: 'Author 1',
+    firstRow: CHARACTERS[0],
     zeroFilter: 'zero_books',
     placeholder: 'Search authors...',
   },
