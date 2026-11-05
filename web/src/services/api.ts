@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.206.1
+// version: 2.207.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -8536,6 +8536,11 @@ export interface RepairOpRef {
   dry_run?: boolean;
   by_outcome?: Record<string, number>;
   error?: string;
+  /**
+   * A plan the server started itself when an apply finished, to drop the rows the
+   * apply wrote (not one the reviewer asked for).
+   */
+  after_apply?: boolean;
 }
 
 export interface RepairFixer {
@@ -8543,6 +8548,12 @@ export interface RepairFixer {
   title: string;
   description: string;
   last_plan?: RepairOpRef;
+  /**
+   * The newest plan that COMPLETED. `last_plan` moves when a plan is enqueued, so
+   * a queued, failed or dropped one hides the trial the reviewer was working
+   * from; this one still names it.
+   */
+  last_completed_plan?: RepairOpRef;
   last_apply?: RepairOpRef;
   /** The fixer only previews: the server refuses its apply (409) and the lane shows no Apply control. */
   plan_only?: boolean;

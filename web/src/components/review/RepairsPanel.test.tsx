@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.28.0
+// version: 1.29.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
 // last-edited: 2026-11-05
 //
@@ -186,7 +186,7 @@ describe('RepairsPanel', () => {
     expect(screen.getByTestId('repairs-apply-result')).toHaveTextContent(/Re-run trial/);
   });
 
-  it('says the trial is refreshing after an apply, and keeps Apply off until it finishes', async () => {
+  it('says the trial is refreshing after an apply, and leaves Apply on for the next row while it runs', async () => {
     vi.mocked(api.getRepairApplyResult).mockResolvedValue(
       repairsApplyResult({
         fixer_id: 'vg-primary',
@@ -218,7 +218,35 @@ describe('RepairsPanel', () => {
     const banner = await screen.findByTestId('repairs-trial-running');
     expect(banner).toHaveTextContent(/Refreshing the trial after your apply/);
     expect(screen.getByTestId('repairs-fixer-plan-vg-primary')).toHaveTextContent(/Refreshing after apply/);
+
+    // The refresh takes minutes on a big library: the next row is not held back.
+    await user.click(screen.getByRole('checkbox', { name: 'Select Title g1' }));
+    expect(screen.getByTestId('repairs-apply-selected')).toBeEnabled();
+    expect(screen.getByTestId('repairs-apply-all')).toBeEnabled();
+    await user.click(screen.getByTestId('repairs-apply-selected'));
+    await waitFor(() => expect(api.startRepairApply).toHaveBeenCalledTimes(2));
+    expect(api.startRepairApply).toHaveBeenLastCalledWith('vg-primary', 'plan-1', ['g1']);
+  });
+
+  it('keeps Apply off while a trial the reviewer started is running', async () => {
+    vi.mocked(api.startRepairPlan).mockResolvedValue({
+      operation_id: 'plan-manual',
+      def_id: 'repairs.plan',
+      fixer_id: 'vg-primary',
+      status: 'queued',
+    });
+    vi.mocked(api.pollOperationV2).mockReturnValue(new Promise<OperationV2>(() => {}));
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-g2');
+    await user.click(screen.getByRole('checkbox', { name: 'Select Title g2' }));
+    expect(screen.getByTestId('repairs-apply-selected')).toBeEnabled();
+
+    await user.click(screen.getByTestId('repairs-rerun-trial'));
+
+    expect(await screen.findByTestId('repairs-trial-running')).toHaveTextContent(/Trial running/);
     expect(screen.getByTestId('repairs-apply-selected')).toBeDisabled();
+    expect(screen.getByTestId('repairs-apply-all')).toBeDisabled();
   });
 
   it('keeps the Apply finished banner after the refreshed trial loads, and Dismiss hides it', async () => {
@@ -941,6 +969,53 @@ describe('RepairsPanel — owner rows', () => {
     expect(screen.queryByTestId('repairs-owner-apply-own')).not.toBeInTheDocument();
   });
 
+  it('leaves the next row\'s Apply on while the refresh after an owner apply runs', async () => {
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(repairsApplyResult({
+      fixer_id: 'vg-primary',
+      plan_op_id: 'plan-1',
+      dry_run: false,
+      requested: 1,
+      by_outcome: { applied: 1 },
+      applied: 1,
+      changed_since_plan: 0,
+      partially_applied: 0,
+      failed: 0,
+      standdown_held: true,
+      owner_rows: 1,
+      owner_user_id: 'u-owner',
+      replan_op_id: 'plan-2',
+      rows: [{ row_id: 'own', outcome: 'applied' }],
+    }));
+    vi.mocked(api.pollOperationV2).mockImplementation((id: string) =>
+      id === 'plan-2'
+        ? new Promise<OperationV2>(() => {})
+        : Promise.resolve({ id, status: 'completed', error_message: null } as OperationV2)
+    );
+    // A second owner row, so the per-row button has a next row to be enabled on.
+    const OWNER_NEXT = row('own-next', { ...OWNER, row_id: 'own-next', book_ids: ['book-own-next'], title: 'Hush', owner_writes: ['book-own-next'] });
+    const base = vi.mocked(api.getRepairPlanRows).getMockImplementation()!;
+    vi.mocked(api.getRepairPlanRows).mockImplementation(async (...args: Parameters<typeof api.getRepairPlanRows>) => {
+      const page = await base(...args);
+      return page.rows.some((r) => r.row_id === 'own') ? { ...page, rows: [...page.rows, OWNER_NEXT] } : page;
+    });
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-g1');
+    await user.click(screen.getByTestId('repairs-tab-skipped'));
+    await expandRow(user, 'own');
+    await expandRow(user, 'own-next');
+    await user.click(await screen.findByTestId('repairs-owner-apply-own'));
+    expect(await screen.findByTestId('repairs-trial-running')).toHaveTextContent(/Refreshing the trial after your apply/);
+
+    // The next owner row's button (RowParts) is on while the refresh runs.
+    expect(await screen.findByTestId('repairs-owner-apply-own-next')).toBeEnabled();
+
+    // Back on the applicable rows the next apply is available straight away.
+    await user.click(screen.getByTestId('repairs-tab-applicable'));
+    await user.click(await screen.findByRole('checkbox', { name: 'Select Title g1' }));
+    expect(screen.getByTestId('repairs-apply-selected')).toBeEnabled();
+  });
+
   it('sends nothing when the owner confirm is cancelled', async () => {
     const user = userEvent.setup();
     confirmSpy.mockReturnValue(false);
@@ -1252,6 +1327,37 @@ describe('RepairsPanel — view modes', () => {
     // The finished apply clears the selection, as Apply selected does.
     await screen.findByTestId('repairs-apply-result');
     expect(screen.getByTestId('repairs-selected-count')).toHaveTextContent('0 selected');
+  });
+
+  it('grouped: another group\'s Apply group stays on while the refresh after an apply runs', async () => {
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(repairsApplyResult({
+      fixer_id: 'vg-primary',
+      plan_op_id: 'plan-1',
+      dry_run: false,
+      requested: 2,
+      by_outcome: { applied: 2 },
+      applied: 2,
+      changed_since_plan: 0,
+      partially_applied: 0,
+      failed: 0,
+      standdown_held: true,
+      replan_op_id: 'plan-2',
+      rows: [
+        { row_id: 'v1', outcome: 'applied' },
+        { row_id: 'v2', outcome: 'applied' },
+      ],
+    }));
+    vi.mocked(api.pollOperationV2).mockImplementation((id: string) =>
+      id === 'plan-2'
+        ? new Promise<OperationV2>(() => {})
+        : Promise.resolve({ id, status: 'completed', error_message: null } as OperationV2)
+    );
+    const user = userEvent.setup();
+    renderPanel('candidates');
+    await screen.findByTestId('repairs-group-0');
+    await user.click(screen.getByTestId('repairs-group-0-apply'));
+    expect(await screen.findByTestId('repairs-trial-running')).toHaveTextContent(/Refreshing the trial after your apply/);
+    expect(screen.getByTestId('repairs-group-1-apply')).toBeEnabled();
   });
 
   it('grouped: a preview-only fixer has no group checkbox and no Apply group', async () => {

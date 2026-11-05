@@ -1,7 +1,7 @@
 // file: web/src/components/review/repairs/RowParts.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 09def8d7-b23c-49be-80d7-cfdb4a959792
-// last-edited: 2026-11-03
+// last-edited: 2026-11-05
 
 /**
  * Pieces of a repairs row that every view renders the same way: its title
@@ -14,7 +14,7 @@ import { useState } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import { Box, Button, Checkbox, Chip, Link, Stack, Tooltip, Typography } from '@mui/material';
 import type { RepairOutcome, RepairRow, RepairRowResult } from '../../../services/api';
-import type { RepairsLane } from '../lanes/useRepairsLane';
+import { trialBlocksApply, type RepairsLane } from '../lanes/useRepairsLane';
 import { isSelectableRow, memberCounts, rowMembers } from './rowHelpers';
 
 export interface RepairsViewProps {
@@ -204,7 +204,7 @@ export function OwnerApplyCell({ row, repairs }: { row: RepairRow } & RepairsVie
             color="secondary"
             disabled={
               repairs.applying ||
-              repairs.trial?.phase === 'running' ||
+              trialBlocksApply(repairs.trial) ||
               repairs.ownerStatus?.allowed === false
             }
             data-testid={`repairs-owner-apply-${row.row_id}`}
