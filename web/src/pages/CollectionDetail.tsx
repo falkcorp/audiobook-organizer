@@ -1,10 +1,10 @@
 // file: web/src/pages/CollectionDetail.tsx
-// version: 1.3.1
+// version: 1.4.0
 // guid: c80c9391-2049-4abe-bedf-926fc3e9d2ed
-// last-edited: 2026-10-26
+// last-edited: 2026-11-05
 
 import { useEffect, useState } from 'react';
-import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
+import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Box,
@@ -130,7 +130,21 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
   const [addOpen, setAddOpen] = useState(false);
   const [picked, setPicked] = useState<string[]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [page, setPage] = useState(0);
+  // The page of members on screen is the URL's (`?page=`, 1-based, absent for the
+  // first), so a page can be linked. A page past the end is clamped below.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlPage = Number(searchParams.get('page'));
+  const page = Number.isInteger(urlPage) && urlPage > 1 ? urlPage - 1 : 0;
+  const setPage = (p: number) =>
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (p > 0) next.set('page', String(p + 1));
+        else next.delete('page');
+        return next;
+      },
+      { replace: true }
+    );
 
   const members = storedMembers(collection);
   // A shrinking list (remove, re-evaluate) must not leave the table on a page that no longer exists.
