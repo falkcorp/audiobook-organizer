@@ -1,5 +1,5 @@
 // file: web/src/pages/deepLinks.tabs.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 91c3e5a8-0b6d-4f27-8a49-2d7e1f5c3b60
 // last-edited: 2026-11-05
 
@@ -62,6 +62,12 @@ function Linker({ to }: { to: string }) {
   return <button onClick={() => navigate(to)}>link:{to}</button>;
 }
 const loc = () => screen.getByTestId('loc').textContent;
+// Let every effect and the mirror's trailing write finish before a count is read:
+// a duplicate fetch caused by the URL echo arrives after the click, not with it.
+const settle = () =>
+  act(async () => {
+    await new Promise((r) => setTimeout(r, 500));
+  });
 
 beforeEach(() => {
   vi.mocked(listPlaylists).mockResolvedValue({ playlists: [], count: 0 });
@@ -83,8 +89,10 @@ describe('/playlists tab', () => {
     );
     expect(screen.getByRole('tab', { name: 'Smart' })).toHaveAttribute('aria-selected', 'true');
     await waitFor(() => expect(listPlaylists).toHaveBeenCalled());
+    await settle();
     expect(listPlaylists).toHaveBeenCalledTimes(1);
     expect(listPlaylists).toHaveBeenCalledWith('smart');
+    expect(loc()).toBe('/playlists?tab=smart');
   });
 
   it('a click writes ?tab= with one fetch, and back to All leaves the URL bare', async () => {
@@ -98,11 +106,15 @@ describe('/playlists tab', () => {
     );
     await waitFor(() => expect(listPlaylists).toHaveBeenCalledTimes(1));
     await user.click(screen.getByRole('tab', { name: 'Static' }));
-    expect(loc()).toBe('/playlists?tab=static');
-    await waitFor(() => expect(listPlaylists).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(loc()).toBe('/playlists?tab=static'));
+    await settle();
+    // One fetch for the click (2 in all), not one more for the URL echo.
+    expect(listPlaylists).toHaveBeenCalledTimes(2);
     expect(listPlaylists).toHaveBeenLastCalledWith('static');
     await user.click(screen.getByRole('tab', { name: 'All' }));
-    expect(loc()).toBe('/playlists');
+    await waitFor(() => expect(loc()).toBe('/playlists'));
+    await settle();
+    expect(listPlaylists).toHaveBeenCalledTimes(3);
   });
 
   it('a link to another tab while on the page re-seeds it', async () => {
@@ -131,8 +143,10 @@ describe('/collections tab', () => {
     );
     expect(screen.getByRole('tab', { name: 'Dynamic' })).toHaveAttribute('aria-selected', 'true');
     await waitFor(() => expect(listCollections).toHaveBeenCalled());
+    await settle();
     expect(listCollections).toHaveBeenCalledTimes(1);
     expect(vi.mocked(listCollections).mock.calls.at(0)?.[0]).toBe('dynamic');
+    expect(loc()).toBe('/collections?tab=dynamic');
   });
 
   it('a click writes ?tab= with one fetch', async () => {
@@ -146,8 +160,9 @@ describe('/collections tab', () => {
     );
     await waitFor(() => expect(listCollections).toHaveBeenCalledTimes(1));
     await user.click(screen.getByRole('tab', { name: 'Static' }));
-    expect(loc()).toBe('/collections?tab=static');
-    await waitFor(() => expect(listCollections).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(loc()).toBe('/collections?tab=static'));
+    await settle();
+    expect(listCollections).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -237,5 +252,27 @@ describe('/files path', () => {
       await user.click(screen.getByText('open root'));
     });
     expect(loc()).toBe('/files');
+  });
+
+  it('follows a path the address bar changes under it (a link, back/forward)', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <>
+        <FileBrowser />
+        <Probe />
+        <Linker to="/files?path=/audiobooks/arkham" />
+      </>,
+      { initialEntries: ['/files'] }
+    );
+    expect(screen.getByTestId('browser-start').textContent).toBe('/');
+    await user.click(screen.getByText('link:/files?path=/audiobooks/arkham'));
+    await waitFor(() =>
+      expect(screen.getByTestId('browser-start').textContent).toBe('/audiobooks/arkham')
+    );
+    // Our own write is not mistaken for an outside one: the browser is not reopened.
+    await user.click(screen.getByText('open gotham'));
+    await waitFor(() => expect(loc()).toBe('/files?path=%2Faudiobooks%2Fgotham'));
+    await settle();
+    expect(screen.getByTestId('browser-start').textContent).toBe('/audiobooks/arkham');
   });
 });

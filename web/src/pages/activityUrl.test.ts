@@ -1,5 +1,5 @@
 // file: web/src/pages/activityUrl.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b7e90c4-5f13-4d68-b8a2-71e4c0d93a5f
 // last-edited: 2026-11-05
 
@@ -44,20 +44,54 @@ describe('readActivityUrl', () => {
   });
 });
 
+describe('readActivityUrl validation', () => {
+  it('only since=all means all history; garbage is the default window', () => {
+    expect(read('since=garbage').sinceFilter).toBe(DEFAULT_SINCE);
+    expect(read('since=2026-13-45T99%3A99').sinceFilter).toBe(DEFAULT_SINCE);
+    expect(read('since=').sinceFilter).toBe(DEFAULT_SINCE);
+    expect(read('since=all').sinceFilter).toBe('');
+  });
+
+  it('until must be a date', () => {
+    expect(read('until=soon').untilFilter).toBe('');
+    expect(read('until=2026-11-05T10%3A00').untilFilter).toBe('2026-11-05T10:00');
+  });
+
+  it('size must be one of the page-size options', () => {
+    expect(read('size=7').pageSize).toBe(25);
+    expect(read('size=100000').pageSize).toBe(25);
+    expect(read('size=250').pageSize).toBe(250);
+  });
+
+  it('type and level must be values the page offers', () => {
+    expect(read('type=nope').typeFilter).toBe('');
+    expect(read('level=loud').levelFilter).toBe('');
+    expect(read('type=book_added&level=debug')).toMatchObject({
+      typeFilter: 'book_added',
+      levelFilter: 'debug',
+    });
+  });
+
+  it('tiers drops unknown names and falls back to the default when none is left', () => {
+    expect([...read('tiers=garbage').tiers].sort()).toEqual(['audit', 'change', 'digest', 'info']);
+    expect([...read('tiers=audit,garbage').tiers]).toEqual(['audit']);
+  });
+});
+
 describe('activityUrlOwned', () => {
   it('a state read from the URL writes back to the same keys', () => {
     const qs =
-      'op=op-1&q=Joker&tiers=audit%2Cdebug&type=t&level=l&operation=o&since=all&until=u&hide_noop=0&tag=a%2Cb&page=2&size=50';
+      'op=op-1&q=Joker&tiers=audit%2Cdebug&type=scan_started&level=warn&operation=o&since=all&until=2026-11-05T10%3A00&hide_noop=0&tag=a%2Cb&page=2&size=50';
     const owned = activityUrlOwned(read(qs), DEFAULT_SINCE);
     expect(owned).toEqual({
       op: 'op-1',
       q: 'Joker',
       tiers: 'audit,debug',
-      type: 't',
-      level: 'l',
+      type: 'scan_started',
+      level: 'warn',
       operation: 'o',
       since: 'all',
-      until: 'u',
+      until: '2026-11-05T10:00',
       hide_noop: '0',
       tag: 'a,b',
       page: '2',
@@ -77,11 +111,11 @@ describe('activityFiltersDiffer', () => {
     expect(activityFiltersDiffer(base, read('page=4&op=x'))).toBe(false);
     for (const qs of [
       'q=a',
-      'type=t',
-      'level=l',
+      'type=scan_started',
+      'level=error',
       'operation=o',
       'since=all',
-      'until=u',
+      'until=2026-11-05T10%3A00',
       'hide_noop=0',
       'tag=a',
       'tiers=audit',

@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.urlState.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: d2f48a61-7c35-4e90-b1a3-68e0c9d17f52
-// last-edited: 2026-10-23
+// last-edited: 2026-11-05
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -49,9 +49,9 @@ vi.mock('../services/api', async () => {
 
 const mockBook: api.Book = {
   id: 'book-1',
-  title: 'The Great Book',
-  author_name: 'A. Writer',
-  file_path: '/library/the-great-book/the-great-book.m4b',
+  title: 'Batman: Year One',
+  author_name: 'Bruce Wayne',
+  file_path: '/library/year-one/year-one.m4b',
   format: 'm4b',
   codec: 'aac',
   duration: 7500,
@@ -64,7 +64,7 @@ const mockBook: api.Book = {
 const liveFiles: api.BookFile[] = [1, 2].map((n) => ({
   id: `live-${n}`,
   book_id: 'book-1',
-  file_path: `/library/the-great-book/live-${n}.m4b`,
+  file_path: `/library/year-one/live-${n}.m4b`,
   format: 'm4b',
   duration: 600,
   file_size: 1024,
@@ -78,7 +78,7 @@ const liveFiles: api.BookFile[] = [1, 2].map((n) => ({
 const retiredFile: api.BookFile = {
   id: 'retired-1',
   book_id: 'book-1',
-  file_path: '/library/old-shell/retired-1.m4b',
+  file_path: '/library/old-batcave/retired-1.m4b',
   format: 'm4b',
   duration: 300,
   file_size: 2048,
@@ -134,7 +134,7 @@ describe('BookDetail deep links', () => {
   it('?tab=files&retired=1 lands on the Files tab with the retired rows listed', async () => {
     renderAt('/library/book-1?tab=files&retired=1');
     const section = await screen.findByTestId('retired-files-section');
-    expect(within(section).getByText('/library/old-shell/retired-1.m4b')).toBeInTheDocument();
+    expect(within(section).getByText('/library/old-batcave/retired-1.m4b')).toBeInTheDocument();
     expect(loc()).toBe('/library/book-1?tab=files&retired=1');
   });
 
@@ -172,5 +172,21 @@ describe('BookDetail deep links', () => {
     renderAt('/library/book-1?tab=files&compare=2026-03-01T00%3A00%3A00Z');
     await screen.findByTestId('segment-table');
     expect(loc()).toBe('/library/book-1?tab=files&compare=2026-03-01T00%3A00%3A00Z');
+  });
+
+  it('an invalid ?compare= is not used and is removed from the address bar', async () => {
+    renderAt('/library/book-1?tab=files&compare=tomorrow');
+    await screen.findByTestId('segment-table');
+    await waitFor(() => expect(loc()).toBe('/library/book-1?tab=files'));
+    // Nothing reaches the server as a snapshot_ts.
+    expect(vi.mocked(api.getBookTags).mock.calls.every((c) => c[2] === undefined)).toBe(true);
+  });
+
+  it('?retired=1 on a tab that does not show retired files fetches nothing', async () => {
+    renderAt('/library/book-1?retired=1');
+    await screen.findByRole('tab', { name: 'Info' });
+    await waitFor(() => expect(api.getBook).toHaveBeenCalled());
+    const retiredReads = vi.mocked(api.getBookFiles).mock.calls.filter((c) => c[1]?.includeRetired);
+    expect(retiredReads).toHaveLength(0);
   });
 });
