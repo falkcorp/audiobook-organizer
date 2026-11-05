@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-backup.md -->
-<!-- version: 1.12.6 -->
+<!-- version: 1.12.7 -->
 <!-- guid: 604febb0-a09e-4cf9-99ee-5f3722534da6 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -584,8 +584,7 @@ which carries no level stamps) the levels read from the extracted store itself, 
 `make rollback-restore`). When the levels differ (after an R2 hotfix `.prev` is an R2 build, not the pre-R2 binary)
 the recipe refuses, printing the source's vector and naming the release to install by its tag, so it never restores
 a store that `.prev` would migrate again (DATA-9): for a checkpoint, the pre-freeze release (the last production
-release before F3 merged) by the record's `from_release`, which is the app version the store recorded for its last
-boot before the cutover, or the pre-freeze tag the cutover build embeds when it recorded none (05-storage
+release before F3 merged) by the record's `from_release`, the pre-freeze tag the cutover build embeds (05-storage
 §5S.3.12 "How"); for an archive, whose checkpoint record may already be deleted, the release that produced it, the
 manifest's `AppVersion` for `mediacore-backup/1` and, for `legacy-abo/0`, the version string the archive carries.
 `make rollback-restore RELEASE=<that tag>` is the way past the refusal and is not an override of the check: it
@@ -1439,4 +1438,4 @@ Round 13 (2026-11-04): CONFORM-2, CONFORM-6, DATA-6, DATA-7, DATA-8, DATA-9, DAT
 
 Round 14 (2026-11-05): V2 (a cutover preflight refusal on a restore boot is a step-x failure: swap-back, journal `swapped_back`, health `restore_failed` reason `cutover_blocked`; `TestStagedLegacyRestoreWithBlockerSwapsBack`), V3 (`KindRewrite` rule 5: M8 reads its phase from the journal), V4 (an archive's levels come from the manifest `Levels` or, for `legacy-abo/0`, from the extracted store), V8 (a `KindRewrite` swap-back moves no checkpoint), V9 (a factory reset sets aside no checkpoint), V10 (`make rollback-restore RELEASE=<tag>` and the fetch it cites in 05-updater), V23 (no bare round-13 ruling citation was present; the `(R4)` in the header is 03's layer rule).
 
-Round 15 (2026-11-05): W1 (`KindRewrite` rule (5) and the failure and test rows: M8 reads only journals with its own `StepID`; one swap-back restarts it once, a second consecutive one fails the boot with `storage.ErrRewriteSwappedBack`), W8 (the refusal names the checkpoint record's `from_release`, or on the archive branch the archive's producing release), W10 (the fetch has apply's trust level, not a signed release), W11 (`--accept-loss` on both forms of the rollback path's summary).
+Round 15 (2026-11-05): lead fix (W8: `from_release` is the embedded pre-freeze tag), W1 (`KindRewrite` rule (5) and the failure and test rows: M8 reads only journals with its own `StepID`; one swap-back restarts it once, a second consecutive one fails the boot with `storage.ErrRewriteSwappedBack`), W8 (the refusal names the checkpoint record's `from_release`, or on the archive branch the archive's producing release), W10 (the fetch has apply's trust level, not a signed release), W11 (`--accept-loss` on both forms of the rollback path's summary).
