@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 30470edd-3683-43f8-963e-07e058ba2a3e
 // last-edited: 2026-11-05
 
@@ -46,7 +46,10 @@ import (
 // file.
 //
 // Pass 2 runs ffprobe through registry.RunItems with Concurrency set EXPLICITLY
-// (RunItems is sequential unless told otherwise). Outcomes are classified by
+// (RunItems is sequential unless told otherwise). Rows that are the same file
+// (same path, size and hash; an unknown hash groups only with unknown hashes)
+// share ONE probe: a megarow has many rows at one path, and probing each would
+// run ffprobe N times on the same bytes. Counts stay per row. Outcomes are classified by
 // bookfileaudio.ClassifyProbeError, the one classifier every duration writer
 // shares: a file failure or timeout is an attempt on the row, an environment
 // failure (ffprobe missing, file absent, permission, stale mount) records
@@ -155,6 +158,11 @@ type UnknownRowsResult struct {
 	// SkippedUnreadable: Unreadable for a reason other than a timeout.
 	SkippedUnreadable int `json:"skipped_unreadable"`
 
+	// ProbesRun is the ffprobe runs of pass 2 (apply only). It is at most
+	// ProbedKnown + ProbeFailed + EnvironmentSkipped + the rows skipped as
+	// changed after a probe: rows that are the same file (same path, size and
+	// hash) share ONE probe, whose outcome is applied to each of them.
+	ProbesRun int `json:"probes_run,omitempty"`
 	// WouldProbe is the rows pass 2 would probe: a dry run only.
 	WouldProbe int `json:"would_probe,omitempty"`
 	// SkippedNoPath: the row has no file path.
@@ -184,6 +192,8 @@ type unknownRowsCounters struct {
 	envSkipped, changed, writeErrs               atomic.Int64
 	// done counts items finished in the current pass, for the progress label.
 	done atomic.Int64
+	// probes counts ffprobe runs: one per (path, size, hash) group.
+	probes atomic.Int64
 }
 
 type unknownRowSource int
@@ -410,31 +420,6 @@ func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsSt
 		touched unknownRowsBooks
 		warns   = &readWarnLimiter{}
 	)
-	pool := func(items []unknownRowWork, name string, fn func(context.Context, unknownRowWork) error) error {
-		ctr.done.Store(0)
-		total := len(items)
-		return registry.RunItems(ctx, reporter, items, func(ctx context.Context, w unknownRowWork) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			defer func() {
-				ctr.done.Add(1)
-				registry.TouchLiveness(reporter)
-			}()
-			return fn(ctx, w)
-		}, registry.RunItemsOptions{
-			Concurrency: workers, // explicit: RunItems is sequential by default
-			ErrMode:     registry.ErrModeCollect,
-			// Label runs inside the worker goroutines: every counter it reads is atomic.
-			Label: func(i, _ int) string {
-				return fmt.Sprintf("%s %d/%d (measured=%d failed=%d env-skipped=%d changed=%d write-err=%d)",
-					name, ctr.done.Load(), total,
-					ctr.borrowed.Load()+ctr.promoted.Load()+ctr.probedKnown.Load(), ctr.probeFailed.Load(),
-					ctr.envSkipped.Load(), ctr.changed.Load(), ctr.writeErrs.Load())
-			},
-		})
-	}
-
 	// recordWrite counts one write's outcome. counter is bumped only when the
 	// row was written; measured says a Duration was set (its book is recomputed).
 	recordWrite := func(w unknownRowWork, wrote bool, wErr error, counter *atomic.Int64, measured bool) {
@@ -458,7 +443,7 @@ func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsSt
 	// A cancelled run must still bring the aggregates of every row it wrote up
 	// to date, so the recompute runs on every exit path.
 	runErr := func() error {
-		if err := pool(pass1, "borrowing/promoting", func(_ context.Context, w unknownRowWork) error {
+		if err := unknownRowsPool(ctx, reporter, workers, &ctr, pass1, "borrowing/promoting", func(_ context.Context, w unknownRowWork) error {
 			wrote, wErr := writeUnknownRow(deferred, w.row, func(cur *database.BookFile) error {
 				return cur.SetMeasuredDuration(w.sec)
 			})
@@ -471,8 +456,8 @@ func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsSt
 		}); err != nil {
 			return err
 		}
-		return pool(pass2, "probing", func(ctx context.Context, w unknownRowWork) error {
-			return probeUnknownRow(ctx, deferred, w, &ctr, warns, recordWrite)
+		return unknownRowsPool(ctx, reporter, workers, &ctr, groupProbeRows(pass2), "probing", func(ctx context.Context, g []unknownRowWork) error {
+			return probeUnknownRows(ctx, deferred, g, &ctr, warns, recordWrite)
 		})
 	}()
 
@@ -486,6 +471,7 @@ func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsSt
 	res.EnvironmentSkipped = int(ctr.envSkipped.Load())
 	res.SkippedChanged = int(ctr.changed.Load())
 	res.WriteErrors = int(ctr.writeErrs.Load())
+	res.ProbesRun = int(ctr.probes.Load())
 	if n := warns.suppressed(); n > 0 {
 		durLog.Warn("duration-backfill unknownRows: %d further warnings suppressed after the first %d; see the counts in the result", n, readWarnLimit)
 	}
@@ -505,37 +491,104 @@ func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsSt
 	return nil
 }
 
-// probeUnknownRow is pass 2 for one row: a header probe, then the row's outcome.
-func probeUnknownRow(ctx context.Context, store segmentFailureWriter, w unknownRowWork, ctr *unknownRowsCounters,
+// unknownRowsPool runs fn over items through registry.RunItems with the pool
+// size set EXPLICITLY (RunItems is sequential by default). Each item checks ctx
+// first and stamps liveness when done. Label runs inside the worker goroutines,
+// so every counter it reads is atomic.
+func unknownRowsPool[T any](ctx context.Context, reporter sdk.Reporter, workers int, ctr *unknownRowsCounters,
+	items []T, name string, fn func(context.Context, T) error) error {
+	ctr.done.Store(0)
+	total := len(items)
+	return registry.RunItems(ctx, reporter, items, func(ctx context.Context, it T) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		defer func() {
+			ctr.done.Add(1)
+			registry.TouchLiveness(reporter)
+		}()
+		return fn(ctx, it)
+	}, registry.RunItemsOptions{
+		Concurrency: workers,
+		ErrMode:     registry.ErrModeCollect,
+		Label: func(i, _ int) string {
+			return fmt.Sprintf("%s %d/%d (measured=%d failed=%d env-skipped=%d changed=%d write-err=%d probes=%d)",
+				name, ctr.done.Load(), total,
+				ctr.borrowed.Load()+ctr.promoted.Load()+ctr.probedKnown.Load(), ctr.probeFailed.Load(),
+				ctr.envSkipped.Load(), ctr.changed.Load(), ctr.writeErrs.Load(), ctr.probes.Load())
+		},
+	})
+}
+
+// probeGroupKey identifies one file for probing: rows at the same path with the
+// same size and the same hash are the same bytes, so one probe answers for all.
+// An unknown hash ("") is a key of its own: such a row groups only with other
+// unknown-hash rows at that path and size, never with a row whose hash is known,
+// and rows with differing known hashes never share a group.
+type probeGroupKey struct {
+	path string
+	size int64
+	hash string
+}
+
+// groupProbeRows partitions rows by probeGroupKey, in first-seen order.
+func groupProbeRows(rows []unknownRowWork) [][]unknownRowWork {
+	index := map[probeGroupKey]int{}
+	var groups [][]unknownRowWork
+	for _, w := range rows {
+		k := probeGroupKey{w.row.FilePath, w.row.FileSize, w.row.FileHash}
+		i, ok := index[k]
+		if !ok {
+			i = len(groups)
+			index[k] = i
+			groups = append(groups, nil)
+		}
+		groups[i] = append(groups[i], w)
+	}
+	return groups
+}
+
+// probeUnknownRows is pass 2 for one group of rows that are the same file
+// (probeGroupKey): ONE header probe, then the outcome applied to every row. Each
+// row's write has its own precondition (writeUnknownRow), so a row that changed
+// underneath is skipped and its siblings still get the result. Counts stay per
+// row.
+func probeUnknownRows(ctx context.Context, store segmentFailureWriter, group []unknownRowWork, ctr *unknownRowsCounters,
 	warns *readWarnLimiter, recordWrite func(unknownRowWork, bool, error, *atomic.Int64, bool)) error {
-	info, mErr := unknownRowsProbe(ctx, w.row.FilePath)
+	first := group[0]
+	ctr.probes.Add(1)
+	info, mErr := unknownRowsProbe(ctx, first.row.FilePath)
 	if err := ctx.Err(); err != nil {
 		return err // a cancelled probe says nothing about the file
 	}
 	pErr := bookfileaudio.ProbeError(info, mErr)
 	if pErr == nil {
-		sec := database.NormalizeDurationSec(w.row.FileSize, info.Duration)
-		wrote, wErr := writeUnknownRow(store, w.row, func(cur *database.BookFile) error {
-			return cur.SetMeasuredDuration(sec)
-		})
-		recordWrite(w, wrote, wErr, &ctr.probedKnown, true)
+		sec := database.NormalizeDurationSec(first.row.FileSize, info.Duration)
+		for _, w := range group {
+			wrote, wErr := writeUnknownRow(store, w.row, func(cur *database.BookFile) error {
+				return cur.SetMeasuredDuration(sec)
+			})
+			recordWrite(w, wrote, wErr, &ctr.probedKnown, true)
+		}
 		return nil
 	}
 	kind, msg := bookfileaudio.ClassifyProbeError(pErr)
 	if !kind.CountsAsAttempt() {
 		// Says nothing about the file: record nothing.
-		ctr.envSkipped.Add(1)
+		ctr.envSkipped.Add(int64(len(group)))
 		if warns.allow() {
-			durLog.Warn("duration-backfill unknownRows: book %s file %s: probe could not run (%s): %s; row left unprobed",
-				logger.SanitizeLogValue(w.row.BookID), logger.SanitizeLogValue(w.row.ID), kind, logger.SanitizeLogValue(msg))
+			durLog.Warn("duration-backfill unknownRows: book %s file %s (+%d row(s) at the same path): probe could not run (%s): %s; rows left unprobed",
+				logger.SanitizeLogValue(first.row.BookID), logger.SanitizeLogValue(first.row.ID), len(group)-1, kind, logger.SanitizeLogValue(msg))
 		}
 		return nil
 	}
-	wrote, wErr := writeUnknownRow(store, w.row, func(cur *database.BookFile) error {
-		cur.RecordDurationProbeFailure(msg)
-		return nil
-	})
-	recordWrite(w, wrote, wErr, &ctr.probeFailed, false)
+	for _, w := range group {
+		wrote, wErr := writeUnknownRow(store, w.row, func(cur *database.BookFile) error {
+			cur.RecordDurationProbeFailure(msg)
+			return nil
+		})
+		recordWrite(w, wrote, wErr, &ctr.probeFailed, false)
+	}
 	return nil
 }
 

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e1c4b9a-52d8-4f36-a0b7-c9d13e6f2a84
 // last-edited: 2026-11-05
 
@@ -755,4 +755,107 @@ func TestUnknownRows_CancelledRunStillRecomputesWrittenBooks(t *testing.T) {
 func TestUnknownRows_OpIsNotScheduled(t *testing.T) {
 	def := New(fakeDeps{}).durationBackfillDef()
 	require.Nil(t, def.Schedule, "unknownRows is on demand only; the op must carry no schedule")
+}
+
+// urSamePath creates one unknown row per hash at ONE path, each in its own book
+// (the megarow shape: many rows claiming one file).
+func urSamePath(t *testing.T, s *database.PebbleStore, hashes ...string) (rows []database.BookFile) {
+	t.Helper()
+	dir := t.TempDir()
+	shared := filepath.Join(dir, "01.mp3")
+	for i, h := range hashes {
+		b := urBook(t, s, fmt.Sprintf("Batman: Issue %d", i+1), dir)
+		rows = append(rows, urFile(t, s, b.ID, shared, func(f *database.BookFile) { f.FileHash = h }))
+	}
+	return rows
+}
+
+// Rows that are the same file (same path, size, hash) share ONE probe, and the
+// outcome is applied to each of them; counts stay per row.
+func TestUnknownRows_SameFileRowsShareOneProbe(t *testing.T) {
+	t.Run("measured", func(t *testing.T) {
+		runs := countingStub(t, "echo 30.0")
+		s := newRepairPebble(t)
+		rows := urSamePath(t, s, "", "", "")
+		res := urApply(t, s, map[string]any{})
+		require.Equal(t, 1, runs(), "three rows at one path are one file: one ffprobe run")
+		require.Equal(t, 1, res.ProbesRun)
+		require.Equal(t, 3, res.Scanned)
+		require.Equal(t, 3, res.ProbedKnown)
+		requireAccounted(t, res)
+		for _, r := range rows {
+			require.Equal(t, 30, durtest.Sec(urRow(t, s, r.BookID, r.ID).Duration))
+		}
+	})
+	t.Run("failed", func(t *testing.T) {
+		runs := countingStub(t, "exit 1")
+		s := newRepairPebble(t)
+		rows := urSamePath(t, s, "h1", "h1", "h1")
+		res := urApply(t, s, map[string]any{})
+		require.Equal(t, 1, runs())
+		require.Equal(t, 1, res.ProbesRun)
+		require.Equal(t, 3, res.ProbeFailed)
+		requireAccounted(t, res)
+		for _, r := range rows {
+			require.Equal(t, 1, urRow(t, s, r.BookID, r.ID).Scan.DurationOK.Attempts, "each row records the one failure once")
+		}
+	})
+	t.Run("environment", func(t *testing.T) {
+		stubFFprobe(t, "")
+		s := newRepairPebble(t)
+		urSamePath(t, s, "", "")
+		res := urApply(t, s, map[string]any{})
+		require.Equal(t, 1, res.ProbesRun)
+		require.Equal(t, 2, res.EnvironmentSkipped)
+		requireAccounted(t, res)
+	})
+}
+
+// Differing known hashes are never one group, and an unknown hash groups only
+// with unknown hashes.
+func TestUnknownRows_DifferentHashesAreProbedSeparately(t *testing.T) {
+	cases := map[string]struct {
+		hashes []string
+		probes int
+	}{
+		"two known hashes":                 {[]string{"h1", "h1", "h2"}, 2},
+		"unknown never joins a known hash": {[]string{"", "h1", "h1"}, 2},
+		"all different":                    {[]string{"h1", "h2", ""}, 3},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			runs := countingStub(t, "echo 30.0")
+			s := newRepairPebble(t)
+			rows := urSamePath(t, s, tc.hashes...)
+			res := urApply(t, s, map[string]any{})
+			require.Equal(t, tc.probes, runs())
+			require.Equal(t, tc.probes, res.ProbesRun)
+			require.Equal(t, len(rows), res.ProbedKnown, "every row still gets the result")
+			requireAccounted(t, res)
+		})
+	}
+}
+
+// A row that changes while the shared probe runs is skipped; its siblings are
+// still written.
+func TestUnknownRows_ChangedRowInAGroupDoesNotBlockItsSiblings(t *testing.T) {
+	runs := countingStub(t, "echo 30.0")
+	s := newRepairPebble(t)
+	rows := urSamePath(t, s, "h1", "h1", "h1")
+	swapProbe(t, func(ctx context.Context, path string, real func() (*mediainfo.MediaInfo, error)) (*mediainfo.MediaInfo, error) {
+		info, err := real()
+		urModify(t, s, rows[1].BookID, rows[1].ID, func(bf *database.BookFile) { bf.FileHash = "rewritten" })
+		return info, err
+	})
+
+	res := urApply(t, s, map[string]any{})
+
+	require.Equal(t, 1, runs())
+	require.Equal(t, 1, res.ProbesRun)
+	require.Equal(t, 2, res.ProbedKnown)
+	require.Equal(t, 1, res.SkippedChanged)
+	requireAccounted(t, res)
+	require.Equal(t, 30, durtest.Sec(urRow(t, s, rows[0].BookID, rows[0].ID).Duration))
+	require.Nil(t, urRow(t, s, rows[1].BookID, rows[1].ID).Duration, "the changed row is not written")
+	require.Equal(t, 30, durtest.Sec(urRow(t, s, rows[2].BookID, rows[2].ID).Duration))
 }
