@@ -260,11 +260,30 @@ func (h healthTokenSource) Tokens() []string {
 	return tokens
 }
 
+// basicGateNoPasswordStartupError is the startup line for an enabled Basic
+// gate with no password at all. It names the settings, never a value.
+const basicGateNoPasswordStartupError = "Basic authentication is on (basic_auth_enabled) but no password is saved (basic_auth_password): every route except health answers 401. Set BASIC_AUTH_PASSWORD and restart, then save a password in Settings."
+
+// logBasicGateAtStartup names the Basic gate's setting at startup when the
+// gate is enabled with an empty saved password (05-authn §11.1 item 5): at
+// warn when BASIC_AUTH_PASSWORD stands in for it (the in-memory recovery), at
+// error when there is no password at all and the gate refuses every
+// non-exempt route.
+func logBasicGateAtStartup() {
+	switch {
+	case servermiddleware.BasicGateNoPassword():
+		lifecycleLog.Error(basicGateNoPasswordStartupError)
+	case servermiddleware.BasicGateUsesEnvPassword():
+		lifecycleLog.Warn(servermiddleware.BasicGateEnvPasswordWarning)
+	}
+}
+
 func (s *Server) Start(cfg ServerConfig) error {
 	// Every step below runs through the process's startup runner, which
 	// applies the step's class from startup.Table (Fatal returns the error,
 	// Degraded records a /health token and continues).
 	steps := s.startupStepsFor(cfg)
+	logBasicGateAtStartup()
 
 	// Refuse to serve with a hole in the operations registry, before touching
 	// anything else -- nothing below this line should run on a server that is
