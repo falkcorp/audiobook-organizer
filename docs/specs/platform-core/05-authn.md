@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.13.2 -->
+<!-- version: 1.13.3 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -12,7 +12,7 @@ repeated in §13 here), [`raw/09-http-api.md`](../../plans/platform-core/raw/09-
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md).
 Permissions/roles/audit: [05-rbac](05-rbac.md). Route chain: [05-http-api](05-http-api.md) §4.2.
 Secret storage: [05-config](05-config.md) (`core/secrets`). Layers (L0–L9), `entity.Ref` and naming:
-[03-architecture](03-architecture.md). Release keys (R0–R3) and R2's flips (F3–F9) are 03 §3.8's, and 09 owns
+[03-architecture](03-architecture.md). Release keys (R0–R3) and R2's flips (F2–F9) are 03 §3.8's, and 09 owns
 their content: the auth engine lands dark and is switched on by one flip PR inside R2 (flip F4). `auth.Store` is an SDK interface with
 one implementation, core's native store over `c/auth/` (§3.4), which every app uses. An app whose
 identities predate core (ABO) supplies no store of its own: its cutover step decodes its own rows once
@@ -84,7 +84,9 @@ constructor lives in `core/internal/authsys` (not SDK, §3.1).
 **Landing (COR3-3, COR4-11).** The `auth` leaf types `Principal`, `Method`, `MethodSpec`, `Assurance`,
 `User`, `UserID` and `UserStatus` land in release R1 with `httpapi` (05-http-api §3), next to the rbac leaf
 types they name (`rbac.Checker`, `rbac.RoleName`, 05-rbac §3). `Store`, `Importer`, `Service`, the
-authenticators and the native store land dark during R2 and serve from R2's identity flip (F4).
+authenticators and the native store land dark during R2 and serve from R2's identity flip (F4). The
+config section `core.auth` (§8) is registered, dark, by F2, R2's foundation PRs (03 §3.8), so the config
+cutover M2 can write `core.auth.*` keys at F3 before this package serves.
 
 ### 3.1 Identities and principals
 
@@ -212,6 +214,37 @@ type Admin interface {
 	StageUserMerge(ctx context.Context, b *storage.Batch, plan UserMergePlan) error
 }
 
+// Compat is the method-bound handle for an app compatibility surface that
+// authenticates itself (ABO: the ABS API, OwnAuth routes; §4.10, SEC-1). A
+// module receives it as module.Deps.AuthCompat (06 §6.4.4) only when it
+// registered a compat method with Registrar.AuthMethod; every call is bound
+// to that method (the principal's Method is it), and fails ErrMethodSpec if
+// P7 refused the method (§5). It gives no credential, session or user
+// mutation beyond VerifyPassword's transparent rehash. *Service builds one per
+// registered method.
+type Compat interface {
+	// VerifyPassword checks a username and password as core's password
+	// sign-in does: core's one Throttle instance (§4.9, the login surface,
+	// counted with web logins), the hashing semaphore, equal timing for an
+	// unknown user (dummy-hash derivation), status, PasswordResetRequired and
+	// SignInRestricted (ErrResetRequired), and a transparent rehash of a
+	// bcrypt hash. It returns the user, never a hash, and issues no session.
+	VerifyPassword(ctx context.Context, username, password string, client ClientInfo) (*User, error)
+	// AuthenticateKey applies every stage 12 key rule to a raw API key (an
+	// mck_ key or an imported one, §4.1): status (disabled, needs_confirmation
+	// and revoked refused), expiry, the owner's status and SignInRestricted,
+	// last-use tracking, and later purpose (§3.5).
+	AuthenticateKey(ctx context.Context, raw string, client ClientInfo) (*Principal, error)
+	// PrincipalFor builds the principal for a user the surface resolved
+	// itself (an ABS JWT or refresh session, a Cloudflare Access login),
+	// exactly as Service.PrincipalFor does for this method: it refuses a user
+	// that is not active, whose epoch differs from epoch, or that is
+	// SignInRestricted (ErrResetRequired).
+	PrincipalFor(ctx context.Context, u *User, scopes []rbac.Permission, epoch int64) (*Principal, error)
+	// CheckCredentialFor is Service.CheckCredentialFor (§3.2).
+	CheckCredentialFor(p *Principal, perm rbac.Requirement) error
+}
+
 // UserMergePlan is the auth half of an admin user merge; books builds it from
 // its preview (internal/usermerge stays in ABO).
 type UserMergePlan struct {
@@ -293,6 +326,7 @@ type Options struct {
 	// "/api/v1/auth/oauth", HEAD's path, so no identity provider is
 	// re-registered (§4.13). Empty (hello, new apps): no fixed group; the
 	// callback is GET /api/core/v1/auth/oidc/{provider}/callback on CoreGroup().
+	// The start route is always GET /api/core/v1/auth/oidc/{provider}/start.
 	OIDCCallbackBase string
 }
 
@@ -361,8 +395,10 @@ const (
 func (s *Service) RedeemBootstrap(ctx context.Context, token string, client ClientInfo) (*BootstrapResult, error)
 
 // Compatibility surfaces and extensions build principals through this; it
-// applies status, epoch, role resolution and scope intersection exactly like
-// core credentials (G15). m must be a registered method (§3.3).
+// applies status, epoch, SignInRestricted (ErrResetRequired), role resolution
+// and scope intersection exactly like core credentials (G15). m must be a
+// registered method (§3.3). A module reaches it only through its Compat
+// handle (§3.1), never through *Service.
 func (s *Service) PrincipalFor(ctx context.Context, u *User, m Method, scopes []rbac.Permission, epoch int64) (*Principal, error)
 
 // CheckCredentialFor applies, for a surface that authenticates itself (an
@@ -451,6 +487,26 @@ type MethodSpec struct {
 	Interactive          bool
 	MayChangeCredentials bool
 	OwnerVerifier        bool   // the extension may assert AssuranceOwner
+	// AppHandoff is the native-app hand-off of the OIDC callback (§4.7,
+	// SEC-2): set only on a module compat method (ABO: books.abs, whose
+	// openid callback redeems the code), at most one per app; nil on an
+	// extension. The kernel refuses it elsewhere (ErrMethodSpec).
+	AppHandoff OIDCAppHandoff
+}
+
+// OIDCAppHandoff hands a sign-in started by a native app back to that app
+// instead of issuing a web session (HEAD: oauth_login.go appDeepLinkParams
+// and abs.MintAppAuthorizationCode). Books implements it over its own code
+// store.
+type OIDCAppHandoff interface {
+	// Allowed is the exact-match allowlist of app redirect URIs (HEAD's
+	// abs.AppRedirectURIAllowed, the same list the ABS openid route uses).
+	Allowed(redirectURI string) bool
+	// Mint issues a single-use authorization code bound to the app's PKCE
+	// challenge, the user and the user's credential epoch, and returns the
+	// app-scheme location carrying the code and the app's state (HEAD's
+	// MintAppAuthorizationCode and AppRedirectURL).
+	Mint(ctx context.Context, u *User, email, challenge, redirectURI, appState string) (location string, err error)
 }
 
 // Extension is an identity extension, registered app-level and at compile time
@@ -470,7 +526,9 @@ type Extension struct {
 // e.g. ABS) through module.Registrar.AuthMethod(spec) (06 §6.4.3). The kernel
 // refuses it unless Method is "<moduleID>.<name>", Interactive,
 // MayChangeCredentials and OwnerVerifier are all false. The method's name is
-// what an OwnAuth route of the gin mount names (05-http-api §8.2).
+// what an OwnAuth route of the gin mount names (05-http-api §8.2). The module
+// then receives the method-bound Compat handle (§3.1) as Deps.AuthCompat; it
+// never receives *Service.
 
 type Order int // relative position; core's API-key and session authenticators are fixed at 100 and 200
 
@@ -593,13 +651,14 @@ type SessionRecord struct {
 // (ABO: step M3 of R2, §11). core/internal/authstore implements it, and the
 // kernel hands it to the step as part of module.Importers (03 §3.3, 06
 // §6.4.2); authtest.StoreSuite carries its cases (03 §3.3). The step decodes its own rows (core holds no app key name or
-// row format), imports each chunk in the batch that deletes those rows, and
-// quarantines what it cannot decode. Every Import* keeps the record's ID, so
-// app rows that reference a user or a key stay valid, and refuses a record
-// that breaks a Store invariant (an unknown status, a key with no scopes, a
-// key or identity whose user was not imported) with ErrImportRejected, which
-// the step quarantines and reports. There is no Import for sessions or
-// one-time tokens: a cutover deletes them (§11).
+// row format) and imports each chunk in the batch that deletes those rows.
+// Every Import* keeps the record's ID, so app rows that reference a user or
+// a key stay valid, and refuses a record that breaks a Store invariant (an
+// unknown status, a key with no scopes, a key or identity whose user was not
+// imported) with ErrImportRejected. An identity row is never quarantined
+// (D13): a row the step cannot decode or that the importer refuses stops the
+// upgrade: the cutover preflight refuses it before any write (§11). There is no
+// Import for sessions or one-time tokens: a cutover deletes them (§11).
 type Importer interface {
 	// ImportUser stores u with its stored password hash as it is (PHC
 	// argon2id, bcrypt, or "" for an account without a password; §4.5) and
@@ -852,12 +911,37 @@ Core owns it; nothing refers to an app, a module or `users.manage`.
   `ExtraAllowed` hook (`internal/oauth/oauth.go:63-68`); new users get the provider's
   `default_role` (must exist and be assignable without escalation: it may not contain
   `core:admin`, and the key is `ProtectAdmin`).
-- Ends in `IssueSession(origin = oidc:<provider>)` → `MethodSession` (interactive).
-- Routes: `GET /api/core/v1/auth/providers` (Public), `GET …/auth/oidc/{provider}/start`, and the
-  callback at HEAD's path `GET /api/v1/auth/oauth/{provider}/callback` (Public, `RateAuth`), which core
-  serves from F4, so no identity provider needs its redirect URI re-registered (§4.13; 03 §3.8 "Kept
-  contracts"). The redirect URI is `core.auth.oidc.redirect_base_url` plus that path, as at HEAD
-  (`internal/config/config.go:1591-1593` @748fd787a).
+- Ends in `IssueSession(origin = oidc:<provider>)` → `MethodSession` (interactive), except on the
+  native-app hand-off below.
+- Routes: `GET /api/core/v1/auth/providers` (Public), `GET /api/core/v1/auth/oidc/{provider}/start`,
+  and the callback at HEAD's path `GET /api/v1/auth/oauth/{provider}/callback` (Public, `RateAuth`),
+  which core serves from F4, so no identity provider needs its redirect URI re-registered (§4.13; 03
+  §3.8 "The frozen contract (D12 (c)) and what stays unchanged because it is cheaper"). The redirect URI is
+  `core.auth.oidc.redirect_base_url` plus that path, as at HEAD
+  (`internal/config/config.go:1591-1593` @748fd787a). HEAD's start path
+  `GET /api/v1/auth/oauth/{provider}/start` is deleted at F4 with no alias: HEAD records no native
+  client on it (ABS clients start at `/auth/openid`), and R2's release note says "The web sign-in start
+  address moved to `/api/core/v1/auth/oidc/<provider>/start`; update any bookmark or script that opens
+  the old one" (09).
+- **Native-app hand-off (SEC-2).** HEAD's start lets a native client sign in through Google or GitHub
+  and get an authorization code on its own URL scheme instead of a web session
+  (`internal/server/handlers/oauth_login.go:76,149-162,209-235` @748fd787a; the code is redeemed at the
+  frozen ABS route `/auth/openid/callback`, `handlers/abs/openid.go:509-545`). Core's start route keeps
+  it, through the `MethodSpec.AppHandoff` hook books registers with its `books.abs` method (§3.3):
+  - **Start parameters, HEAD's rule.** `redirect_uri` (alias `callback`), `code_challenge`,
+    `code_challenge_method` and the app's `state`. With either of `redirect_uri` and `code_challenge`
+    missing, the request is an ordinary web sign-in. With both present, a `redirect_uri` that
+    `AppHandoff.Allowed` rejects (exact match, no prefix or host rule) is answered **inline** with 400,
+    never by a redirect to it, and a `code_challenge_method` other than `S256` is answered 400 (S256
+    only, no `plain`). The accepted fields travel inside the signed state, so the callback cannot be
+    steered to another target.
+  - **Callback.** When the verified state carries the app fields, core resolves the user exactly as for
+    a web sign-in (linking, admission, status, `SignInRestricted`), then calls `AppHandoff.Mint` **before**
+    any session exists and redirects to the location it returns; it issues no web session on this
+    branch (HEAD: the browser session's cookie jar is discarded). A mint error redirects to the
+    sign-in page with `oauth_code_mint_failed`, as at HEAD. The code is bound to the challenge and the
+    user's credential epoch, so a code minted before a password change or restore does not redeem.
+  - Test: `TestOIDC_AppHandoffMintsABSCode` (§10) pins each control in its own cell.
 
 ### 4.8 Owner assurance and optional identity extensions (G11)
 
@@ -900,8 +984,10 @@ Core owns it; nothing refers to an app, a module or `users.manage`.
   the ceiling is spent, password logins are admitted through one service-wide token bucket,
   `core.auth.login.saturated_rate` and `core.auth.login.saturated_burst` (§8; HEAD's
   `LOGIN_SATURATED_RATE` / `LOGIN_SATURATED_BURST`, `internal/config/invite_config.go:68-81` @748fd787a).
-- One `auth.Throttle` instance per `Service` (not package state, R5) applied to: password login,
-  bootstrap redeem, setup, invite lookup/accept, temp-login consume, OIDC callback.
+- One `auth.Throttle` instance per `Service` (not package state, R5) applied to: password login (web
+  login and every compat surface's `Compat.VerifyPassword`, §3.1, sharing one counter set as HEAD's
+  ABS/web throttle did), bootstrap redeem, setup, invite lookup/accept, temp-login consume, OIDC
+  callback.
 - Client address comes from `httpapi` (05-http-api §3.5): trusted proxies are prefixes **or
   zoned addresses**, ABO's `TUNNEL_CONNECTOR_ADDRS` is converted into them by the config cutover, and the client-IP header is
   believed only from them (SEC-18; zone semantics of `client_trust.go:133-201` kept). Without that
@@ -918,19 +1004,31 @@ App protocol auth stays in the app. ABO's ABS surface keeps its HS256 JWTs, refr
 cutover (§11). Its routes live on books' gin mount and are marked **per route** `OwnAuth` in its manifest (05-http-api
 §8.2, SEC-14), exactly the routes whose gin chain runs `ABSRequireAuth` today; `/ping`, `/status`,
 `/login` and the other ABS paths without it keep core's authentication and the Basic perimeter
-(`basicauth.go:51-70`). Every ABS credential resolves through
-`auth.Service.PrincipalFor(ctx, user, "books.abs", scopes, epoch)`, so status, credential epoch,
-role resolution and scope intersection are core's — replacing the duplicate role walk
-`absEffectivePermissions` (`middleware/absauth.go:778-800`). ABS's use of `abk_` keys calls the core
-API-key authenticator directly, and that direct path applies **every** stage 12 rule — key status
-(`revoked`, `disabled`, `needs_confirmation` refused), expiry, and (once it exists) purpose — not a
-subset (SEC2-4). Method `books.abs` is registered by the books module with
+(`basicauth.go:51-70`). Method `books.abs` is registered by the books module with
 `Registrar.AuthMethod` as non-interactive, `MayChangeCredentials=false` (today's `MethodABS`
-semantics; the kernel refuses anything else, §3.3).
+semantics; the kernel refuses anything else, §3.3), and books reaches core only through the
+method-bound handle `Deps.AuthCompat` (`auth.Compat`, §3.1; SEC-1), never `*auth.Service`, so the
+module holds no credential mutation and builds no second auth stack (G15):
+
+- **Password login** (`handlers/abs/login.go:137,159,228` reads the hash and rehashes itself at HEAD):
+  `Compat.VerifyPassword`, which applies core's throttle, the hashing semaphore, equal timing, status,
+  `PasswordResetRequired`, `SignInRestricted` and the rehash; books then mints its ABS tokens for the
+  returned user and epoch.
+- **`abk_` and `mck_` keys**: `Compat.AuthenticateKey`, which applies **every** stage 12 rule — key
+  status (`revoked`, `disabled`, `needs_confirmation` refused), expiry, the owner's status and
+  `SignInRestricted`, and (once it exists) purpose — not a subset (SEC2-4).
+- **ABS JWTs, refresh sessions and the Cloudflare Access login path** (`login.go:63-69`):
+  `Compat.PrincipalFor(ctx, user, scopes, epoch)`, so status, credential epoch, `SignInRestricted`, role
+  resolution and scope intersection are core's — replacing the duplicate role walk
+  `absEffectivePermissions` (`middleware/absauth.go:778-800`). A restore-restricted last admin therefore
+  gets no ABS session by any path.
+
+`TestCompat_ABSLoginHonoursRestrictions` (§10) runs the password, key and Cloudflare paths against a
+`SignInRestricted` user, a `PasswordResetRequired` user and a `needs_confirmation` key: each is refused.
 
 **Confinement on the ABS surface (SEC2-4).** Today the ABS group refuses a worker-only credential
 explicitly (`middleware/absauth.go:629-632`). Stage 13 never runs on `OwnAuth` routes, so after
-`PrincipalFor` the ABS adapter calls `CheckCredentialFor(p, route.Perm)`, which refuses (ABS JSON
+building the principal the ABS adapter calls `Compat.CheckCredentialFor(p, route.Perm)`, which refuses (ABS JSON
 403) a `Confined()` principal unless the route's manifest `Perm` names one of its scopes
 (05-http-api §8.3). An `fp-worker` key or a worker user's ABS login therefore reaches no ABS route.
 
@@ -954,7 +1052,16 @@ the config cutover, 05-config §1.12.2).
   pass-through with auth off (`internal/server/credential_routes.go:79-82`), so those routes are open
   there. Credential surfaces should not be open to a LAN without auth; R2's release note states the
   change (09), and the identity cutover oracle lists it as an expected difference (05-rbac §12).
-  Books' `s.perm` routes keep HEAD's auth-off reach (05-rbac §4.11).
+  Books' `s.perm` routes keep HEAD's auth-off reach, except the `settings.manage` ones (05-rbac §4.11).
+- **Credential metadata needs a user (SEC-3).** The auth-disabled principal has `User == nil`, and HEAD
+  answers 401 to these reads when no user is bound (`handlers/apikeys.go:259-264` @748fd787a; with auth
+  off HEAD's middleware binds none). So `internal/authhttp` refuses that principal with 401
+  `authentication_required` on every route of §4.13 that lists or reads keys, sessions or the caller's
+  own profile (`/me*`, `/api-keys*`, `/users/{id}/sessions*`, `/users/{id}/api-keys*`), before the
+  handler runs, as credential routes already refuse it; and `core:audit.view` is `AuthRequired`
+  (05-rbac §6.1), so the audit query and export answer 401 too. Key names, scopes, last-use addresses,
+  session addresses and the audit trail therefore stay behind a credential on a remote-reachable
+  auth-off install.
 - `disabled` refuses to start when a listener is bound to a non-loopback address **or** any trusted
   proxy or tunnel connector is configured (a local proxy makes remote callers look local, SEC-30),
   unless `core.auth.disabled_allow_remote=true` (today: a warning only, `server_lifecycle.go:1847`).
@@ -963,15 +1070,18 @@ the config cutover, 05-config §1.12.2).
   always listens on a non-loopback address and every ABO install running with auth off (Basic-only
   behind the compose Basic-gate variables, or LAN-only) would otherwise crash-loop after the upgrade.
   While `disabled` runs remote-reachable, health reports `degraded` (`auth_disabled_remote`) with a
-  banner, as HEAD's warning did (`TestAuthOffDockerBoots`, image job); until R2's health flip (F8) is
-  on `main`, HEAD's degraded token list carries the token (05-health).
+  banner, as HEAD's warning did (`TestAuthOffDockerBoots`, image job). Like every auth posture token of
+  this file (`auth_disabled_remote`, `config_fail_closed_override`, `revocation_journal_broken`), it never
+  appears on the unauthenticated `/health`: before F8 it is carried by the authenticated `degraded`
+  field that R1 adds to HEAD's `GET /api/v1/system/status`, and from F8 by core's authenticated
+  endpoints (05-health §5H.3.1).
 - **Who may switch auth and the Basic gate (SEC4-8, resolution R9-5).** `core.auth.mode` and the Basic
   gate keys `core.http.basic_gate.{enabled, username, password}` follow core's precedence for every
   app, ABO included (05-config §1.3.5): an operator value locks its key. `core.auth.mode` is declared
   `FailClosed` here (§8; 05-config §1.3.1), as 05-http-api declares `core.http.basic_gate.enabled`: when
   an operator value and a stored value of one of these two keys disagree, the more restrictive one wins
   (`required` over `disabled`, the gate on over off) and the disagreement is logged at warn and reported
-  in health (`config_fail_closed_override`; 05-config owns the rule and its token). A stored `required`
+  in health (`config_fail_closed_override`, authenticated endpoints only, 05-health §5H.3.1; 05-config owns the rule and its token). A stored `required`
   therefore survives any operator value, and an operator `ABO_CORE_AUTH_MODE=required` turns auth on
   whatever is stored. The gate's username and password are plain locked keys: an operator value is used
   whatever is stored (§11.1 item 5). The canonical names are 05-config's; ABO's deploy files pass the
@@ -1036,7 +1146,8 @@ callback `/api/v1/auth/oauth/:provider/callback` (`wire_auth_routes.go:44` @748f
 from F4 at that exact pattern, `GET /api/v1/auth/oauth/{provider}/callback`, registered by
 `internal/authhttp` on `Router.CoreFixedGroup(opts.OIDCCallbackBase)` with the base ABO supplies as
 `app.Options.Auth.OIDCCallbackBase` (§3.2), as the one core auth route outside `/api/core/v1`, so no identity provider's redirect
-URI is re-registered (03 §3.8 "Kept contracts"). The F4 PR deletes books' gin handler for it, and the
+URI is re-registered (03 §3.8 "The frozen contract (D12 (c)) and what stays unchanged because it is cheaper"). HEAD's start
+path is not kept (§4.7). The F4 PR deletes books' gin handlers for both, and the
 pattern is the one core route inside books' `/api/v1/` claim, which 05-http-api §4.9's claim rule must
 admit (`TestOAuthCallback_HEADPathServedByCore`).
 
@@ -1047,16 +1158,16 @@ admit (`TestOAuthCallback_HEADPathServedByCore`).
 | `POST /auth/bootstrap` | Public | `RateAuth` |
 | `POST /auth/login` / `POST /auth/logout` | Public / AnyAuthenticated | `RateAuth` |
 | `GET /auth/providers`, `GET /auth/oidc/{provider}/start`; the callback `GET /api/v1/auth/oauth/{provider}/callback` (full path, above) | Public | `RateAuth` |
-| `GET /me`, `PATCH /me` | `core:self` / `core:self` | `PATCH`: Interactive |
-| `PUT /me/password` (self only: `{current, new}`; no target-user field) | `core:self` | Interactive |
-| `GET /me/sessions`, `DELETE /me/sessions/{publicID}` | `core:self` | `DELETE`: Interactive |
-| `GET/POST /me/api-keys`, `PATCH/DELETE /me/api-keys/{id}` | `core:self` | key may manage only keys it may create (§4.4) |
-| `GET /api-keys` (every user's keys, each with its owner's username; HEAD's admin list `GET /api/v1/auth/api-keys?all=true`, `internal/server/handlers/apikeys.go:258-303` @748fd787a) | `core:users.manage` | — |
-| `GET /api-keys/{id}`, `PATCH /api-keys/{id}`, `DELETE /api-keys/{id}` (any key by ID) | `core:self` | the key's owner, or a principal holding `core:users.manage` with dominance over the owner (HEAD's rule, `apikeys.go:323,353,402`); writes Interactive as on `/me/api-keys/{id}`; a key may manage only keys it may create (§4.4) |
+| `GET /me`, `PATCH /me` | `core:self` / `core:self` | user required (§4.11); `PATCH`: Interactive |
+| `PUT /me/password` (self only: `{current, new}`; no target-user field) | `core:self` | user required; Interactive |
+| `GET /me/sessions`, `DELETE /me/sessions/{publicID}` | `core:self` | user required; `DELETE`: Interactive |
+| `GET/POST /me/api-keys`, `PATCH/DELETE /me/api-keys/{id}` | `core:self` | user required; key may manage only keys it may create (§4.4) |
+| `GET /api-keys` (every user's keys, each with its owner's username; HEAD's admin list `GET /api/v1/auth/api-keys?all=true`, `internal/server/handlers/apikeys.go:258-303` @748fd787a) | `core:users.manage` | user required (§4.11, SEC-3) |
+| `GET /api-keys/{id}`, `PATCH /api-keys/{id}`, `DELETE /api-keys/{id}` (any key by ID) | `core:self` | user required; the key's owner, or a principal holding `core:users.manage` with dominance over the owner (HEAD's rule, `apikeys.go:323,353,402`); writes Interactive as on `/me/api-keys/{id}`; a key may manage only keys it may create (§4.4) |
 | `GET /users`, `GET /users/{id}` | `core:users.view` | — |
 | `POST /users/invites`, `DELETE /users/invites/{id}` | `core:users.manage` | Interactive; invite role via `CanAssign` |
 | `POST /users/{id}/disable`, `…/enable`, `DELETE /users/{id}`, `POST /users/{id}/reset-password`, `PUT /users/{id}/roles` | `core:users.manage` | Interactive; dominance |
-| `GET /users/{id}/sessions`, `DELETE …/{publicID}`, `GET/POST /users/{id}/api-keys` | `core:users.manage` | Interactive for writes; dominance |
+| `GET /users/{id}/sessions`, `DELETE …/{publicID}`, `GET/POST /users/{id}/api-keys` | `core:users.manage` | user required (§4.11, SEC-3); Interactive for writes; dominance |
 | `POST /users/{id}/temp-login` | `core:users.manage` | Interactive; dominance |
 | `POST /auth/invites/lookup` `{token}`, `POST /auth/invites/accept` `{token, …}` | Public | `RateAuth` |
 | `POST /auth/temp-login/consume` `{token}` (sets cookie) | Public | `RateAuth` |
@@ -1152,7 +1263,7 @@ the re-apply read the store's head before any line is appended on this boot (SEC
   head anchored, and a journal truncated after the archive's boundary verifies cleanly (SEC4-6;
   05-backup §5B.3.6).
 - Chain break (a missing, edited or unverifiable line) with the head behind: the same fallback, and
-  health reports `revocation_journal_broken`: a store replaced outside a staged restore fails closed
+  health reports `revocation_journal_broken` (authenticated endpoints only, 05-health §5H.3.1): a store replaced outside a staged restore fails closed
   (SEC3-10).
 
 ## 5. Lifecycle
@@ -1173,7 +1284,9 @@ the re-apply read the store's head before any line is appended on this boot (SEC
 4. **P5**: `rbac.Service` first (catalog frozen after module registration), then `auth.New` (loads
    `HasUsers`; writes nothing), then the extensions from `app.Options.Authenticators` (§3.3).
 5. **P7**: the module compat methods recorded in P6 (`Registrar.AuthMethod`) are handed to `auth`,
-   which validates them (`ErrMethodSpec`, §3.3; COR4-13).
+   which validates them (`ErrMethodSpec`, §3.3; COR4-13) and binds each module's `Deps.AuthCompat`
+   handle to its method (§3.1); until then, and for a refused method, the handle's calls fail
+   `ErrMethodSpec`.
 6. `kernel` registers the core auth routes through `internal/authhttp` on `CoreGroup`, and
    `core.auth.sessions.prune` and `core.auth.onetime.prune` on
    `tasks.ScheduleFromConfig("core.auth.schedules.session_prune")` and
@@ -1212,7 +1325,9 @@ applied once by the identity cutover (§11).
 | Compat method that is interactive, may change credentials, verifies owners or is outside `<moduleID>.` | boot error `ErrMethodSpec` | closed | only app-level extensions carry those rights (SEC2-16) |
 | Confined principal on an `OwnAuth` route not naming its scope | ABS 403 (`ErrConfined`) | closed | SEC2-4 |
 | Stored identity record cannot be decoded by the store (unknown status, malformed JSON; `ErrUndecodableRecord`) | the record is treated as restricted (user inactive, key refused) and counted; boot continues | closed | fail closed on damaged data |
-| A HEAD identity row the cutover cannot decode, or that `Importer` rejects (`ErrImportRejected`) | quarantined under `c/storage/quarantine/` with its dependants (API-key and OAuth-identity rows sealed with the keyring, never raw; 05-storage §5S.3.13), reported in health and the dry-run report; the step continues | closed | never dropped in silence (§11) |
+| A HEAD user, API-key or OAuth-identity row the cutover cannot decode, or that `Importer` rejects (`ErrImportRejected`; a key or identity whose user does not exist included) | the upgrade stops before any write: the cutover preflight refuses the boot (exit 78) before the checkpoint and M7, with a report naming each row by key and reason, never its value; `<app> storage cutover-blockers` fixes or deletes it (§11); nothing is quarantined | closed | D13: an identity is never imported partly or dropped |
+| A HEAD user-merge journal that is `applying` or `undoing` | the upgrade stops before any write, naming the journal; the owner finishes or undoes the merge on the pre-freeze release first (§11) | closed | D13; the merge's HEAD writes cannot be completed on the native store (DATA-4) |
+| Undo of a merge finished before R2 | refused (409 `merge_permanent`) | closed | D13: finished merges are permanent after R2 |
 | User with `SignInRestricted` | every authenticator refuses: 401 `password_reset_required` | closed | restricted last admin (SEC4-12) |
 | Invite whose creator no longer may assign its role | `invite_invalid`, audited | closed | SEC3-2 |
 | Replaced store, as 05-backup §5B.3.6 (2) classifies it (content marker, out-of-store journal head), verified tail or not; a relocated store is not replaced and runs no hook | tail re-applied, then the hook with `rc.Revocations == nil`: every session and invite deleted, every active or disabled key `needs_confirmation`, every epoch bumped; a chain break adds health `revocation_journal_broken` | closed | SEC3-10, SEC4-6, SEC5-6, DATA6-4, DATA6-5 |
@@ -1224,6 +1339,8 @@ applied once by the identity cutover (§11).
 | Key create with escalation | 403 `scope_escalation` | closed | |
 | Key create by a key whose effective set is empty (nil caller permission set) | 403 `scope_escalation`, nothing written | closed | the empty set grants nothing to delegate (SEC9-5) |
 | Action on a user the actor does not dominate | 403 `dominance_required` | closed | SEC-4 |
+| A compat surface's password, key or principal call for a `SignInRestricted` or `PasswordResetRequired` user, or a `needs_confirmation` key | refused by `auth.Compat` (`ErrResetRequired`; for the key, the failure stage 12 records), surfaced in the surface's own error shape | closed | SEC-1: no second auth stack outside core's rules |
+| Credential-metadata or audit route with the auth-disabled principal | 401 `authentication_required` | closed | SEC-3; HEAD's `CurrentUser` 401 |
 | Facade key off its facade group, or general key on a facade group (deferred-build, §3.5) | 403 `permission_denied` | closed | SEC-5 |
 | OIDC subject whose email matches an unlinkable account | 409 `email_in_use` | closed | SEC-7 |
 | Remove last `core:admin` holder | 409 `last_admin` | closed | lockout protection |
@@ -1362,7 +1479,10 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestStage12_ExtensionPermsIgnored` / `TestModuleAuthMethod_CannotBeInteractive` | an authenticator's assertion cannot raise its checker; a module compat method declared interactive or with credential/owner rights → `ErrMethodSpec` (SEC2-16) |
 | `TestConfining_WorkerKeyRefusedOnABS` | `CheckCredentialFor` refuses an `fp-worker` key and a worker ABS login on ABS routes not naming the worker scope (SEC2-4) |
 | `TestInviteLink_FragmentEndToEnd` / `TestTempLoginLink_FragmentEndToEnd` | (in 07 §7.18) a minted invite and a temp-login link are fragment links; the token is absent from the access log and spans; opened signed out and signed in, the SPA removes the fragment and accepts (SEC2-6, FE4-2) |
-| `TestOAuthCallback_HEADPathServedByCore` | (fake IdP, from F4) a sign-in started at `GET /api/core/v1/auth/oidc/{provider}/start` completes at HEAD's callback `GET /api/v1/auth/oauth/{provider}/callback` with the redirect URI HEAD registered; no gin handler serves that path (§4.7, §4.13) |
+| `TestOAuthCallback_HEADPathServedByCore` | (fake IdP, from F4) a sign-in started at `GET /api/core/v1/auth/oidc/{provider}/start` completes at HEAD's callback `GET /api/v1/auth/oauth/{provider}/callback` with the redirect URI HEAD registered; no gin handler serves that path, and HEAD's start path answers 404 (§4.7, §4.13) |
+| `TestOIDC_AppHandoffMintsABSCode` | (ABO, fake IdP, from F4; SEC-2) one cell per control of §4.7's hand-off: both `redirect_uri` (or `callback`) and `code_challenge` present → the callback calls `AppHandoff.Mint`, redirects to the app scheme with the code and the app's state, and no web session record exists; only one of them → ordinary web sign-in; an unlisted, prefix-extended or userinfo-bearing `redirect_uri` → inline 400 with no `Location` header; `code_challenge_method` `plain` or missing → 400; the code redeems once at the ABS route `/auth/openid/callback` and is refused after the user's epoch is bumped (port of HEAD's `internal/server/oauth_app_code_epoch_integration_test.go`); a `SignInRestricted` user gets no code |
+| `TestCompat_ABSLoginHonoursRestrictions` | (ABO, SEC-1) through `Deps.AuthCompat` only: the ABS password login, an `abk_` key and the Cloudflare Access login path, each against a `SignInRestricted` user, a `PasswordResetRequired` user (password path) and a `needs_confirmation` key → refused; a good password is throttled with web logins and rehashed from bcrypt; books' module holds no `*auth.Service` (archtest) |
+| `TestAuthOff_CredentialMetadataNeedsUser` | (SEC-3) auth disabled: `GET /me`, `/me/sessions`, `/me/api-keys`, `/api-keys`, `/api-keys/{id}`, `/users/{id}/sessions`, `/users/{id}/api-keys`, `/audit` and `/audit/export` → 401 `authentication_required`, nothing listed |
 | `TestFirstRun_OnlyPublicAndSetupReachable` | zero users: every non-Public route 401 |
 | `TestSetup_RequiresBootstrapToken` / `TestSetup_LoopbackExceptionRefusesForwarded` | loopback peer with a forwarding header, or a trusted-proxy peer, is not local (SEC-30) |
 | `TestBootstrapRedeemedOnce` | `testing/synctest`, 50 concurrent redeems, exactly 1 success |
@@ -1389,13 +1509,14 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestNoGlobals` (archtest) | temp-login state and throttles are instance state (R5) |
 | `TestNativeStore_RoundTrip` / `authtest.StoreSuite` | the native store passes `StoreSuite` (SIMP4-3, R4-1) |
 | `TestInviteRedeemedOnce` / `TestUserMergeDeletesSourceInvites` | `synctest`: two concurrent accepts of one invite, exactly one account; a sent-mark racing an accept does not resurrect the invite; a merge whose source has an open invite succeeds and deletes it (DATA4-9) |
-| `TestIdentityCutover_FixtureFromR0` | (ABO, PC-21-02) over a fixture corpus written **by the R0 binary** (users of every status, password, OAuth-only and blanked-hash accounts, OAuth links, invite allow-list entries, keys of every status and scope shape: empty list, every atom, `["fingerprint.worker"]`, `revoked_at` set, never-expiring; sessions, invites, the bootstrap hash) and over a production-shaped store sized from the P1 counts: after M3, per-family counts and every user, key, identity and role ID equal the source; every reference from books' rows to a user or key ID resolves (14 E2); a password signs in; `EmailVerified` follows `email_source`; statuses, `PasswordResetRequired`, `revoked_at` and the expiry stamp follow §11's table; every session, invite and the bootstrap hash is gone; no HEAD identity row is left; every range outside the moved sub-prefixes of `idx:` is byte-identical (14 E3) |
-| `TestIdentityCutover_QuarantinesUndecodable` | (ABO) an undecodable user, key or identity row is copied under `c/storage/quarantine/` (key and identity rows sealed with the keyring), reported in health and in the dry-run report, never dropped; a key or identity whose user was quarantined is quarantined too; the step completes |
+| `TestIdentityCutover_FixtureFromR0` | (ABO, PC-21-02) over the fixture corpus written **by the R0 binary**, plus its labelled hand-built overlay for what R0's API cannot write (09 §9.3: status edge values `""`, ` Active `, `ACTIVE`, an unknown status on a user and a key, a key with `revoked_at` set and status `active`, a key naming an unknown atom) (users of every status, password, OAuth-only and blanked-hash accounts, OAuth links, invite allow-list entries, keys of every status and scope shape: empty list, every atom, `["fingerprint.worker"]`, `revoked_at` set, never-expiring; sessions, invites, the bootstrap hash) and over a production-shaped store sized from the P1 counts: after M3, per-family counts and every user, key, identity and role ID equal the source; every reference from books' rows to a user or key ID resolves (14 E2); a password signs in; `EmailVerified` follows `email_source`; statuses, `PasswordResetRequired`, `revoked_at` and the expiry stamp follow §11's table; every session, invite and the bootstrap hash is gone; no HEAD identity row is left; every range outside the moved sub-prefixes of `idx:` is byte-identical (14 E3) |
+| `TestIdentityCutover_StopsOnUnconvertibleRow` | (ABO, overlay cases; D13) an undecodable user, key or identity row, a key or identity whose user does not exist, and a row `auth.Importer` rejects: the cutover preflight refuses the R2 boot before the checkpoint and before M7 (exit 78), writing nothing, the report and `storage migrate --dry-run` name each row by key and reason and print no value, the store is byte-identical and the pre-freeze release still opens it; after `storage cutover-blockers fix` or `delete` the next boot completes; a row that reaches M3 anyway fails the step with the checkpoint open, never quarantined; nothing lands under `c/storage/quarantine/` |
+| `TestCutoverUserMergeJournal` | (ABO, overlay cases; D13, DATA-4) a `usermerge:journal:` record `applying` or `undoing` → the R2 boot refuses before any write, naming the journal; a `done` or `undone` journal → the cutover completes, the journal is kept read-only with every `invite:` token in its images replaced by the token's SHA-256, and an undo of it answers 409 `merge_permanent` |
 | `TestIdentityCutover_Resumable` | (ABO, with 05-storage's crash matrix) the boot killed after each chunk commit and inside one: the rerun completes, no record is imported twice and none is lost |
 | `TestIdentityCutover_ABSSurvives` | (ABO) the ABS conformance suite runs on the migrated fixture: an `abs_sess:` refresh session and an ABS JWT issued by the R0 binary keep working; an ABS login by password and by `abk_` key resolves the same user with the same reach (14 E11) |
 | `TestIdentityCutover_WorkerKeyStaysConfined` | (ABO) the remote fingerprint worker's imported `abk_` key reaches `/api/v1/fingerprint/worker/…` and nothing else (`Confined()`, no `core:self`, `core:metrics.read` or `books:reading`); the Prometheus scrape key keeps `/metrics` (05-rbac §6.3) |
 | `TestIdentityCutover_ReachOracle` | (in 05-rbac §12) allow and deny before = after |
-| `TestCutover_NoRawTokenOnDisk` | (ABO, with 05-storage) a canary session token and invite token planted by the R0 binary are found in no file under the live DB directory after M3 and M8's compaction; the retained pre-migration checkpoint is the stated exception, and it is gone after its 7 days (D12 (d)) |
+| `TestCutover_NoRawTokenOnDisk` | (ABO, with 05-storage) a canary session token and invite token planted by the R0 binary are found in no file under the live DB directory — SSTs, WAL, MANIFEST and OPTIONS files included — after M3 and M8's rewrite into a fresh directory (05-storage §5S.3.13); the retained pre-migration checkpoint is the stated exception, and it is gone after its 7 days (D12 (d)) |
 | `TestCutoverRefusedByOlderBuilds` | (in 05-storage, 09) the R0 and R1 binaries refuse a store M7 stamped |
 
 ## 11. Migration from ABO
@@ -1413,7 +1534,7 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `internal/server/auth_temp_login.go`, `auth_accept_invite.go`, `auth_reset_password.go` | core auth routes + one-time tokens; dominance-checked service calls |
 | `internal/server/handlers/{auth,apikeys,oauth_login,user,invite_delivery}.go` | core auth/users routes (§4.13) |
 | the identity methods and rows of `internal/database` (`pebble_store_auth.go`, `apikey_token.go`, `user_merge.go`'s identity half, the verified-email backfill) | read once by books' identity cutover step (below), then deleted with `database.Store` (R2) |
-| `internal/server/absauth/{token,refresh,audit}.go`, `middleware/absauth.go`, `handlers/abs` | stay in ABO `books` (compat surface, per-route `OwnAuth`), calling `PrincipalFor` |
+| `internal/server/absauth/{token,refresh,audit}.go`, `middleware/absauth.go`, `handlers/abs` | stay in ABO `books` (compat surface, per-route `OwnAuth`), calling `Deps.AuthCompat` (§3.1, §4.10) |
 | `internal/cfaccesspolicy`, `internal/cfservicetoken`, guest service tokens | stay in ABO |
 | `internal/mtls`, `cmd/mtls-bridge` | stay in ABO |
 | `internal/security/safehttp` | `core/integrations/providerhttp` (05-metadata); `safepath`, `pathvalidation` → `core/library` (05-library) — not auth |
@@ -1443,8 +1564,8 @@ intermediate representation and no later identity cutover.
 
 | HEAD family | Becomes | Rule |
 |---|---|---|
-| `u:` + the user sub-prefixes of `idx:` (`idx:user:username:`, the e-mail index) | `c/auth/user/` | every user ID and role ID kept (`admin`, `editor`, `viewer`, `fp-worker`; 05-rbac §6.2), `_system` included; `"active"` → `active`, `"inactive"` → `disabled`, any other non-empty status HEAD refuses (`user_active.go`) → `disabled` and reported; `EmailVerified` from `email_source` (HEAD's verified-email reconcile, `internal/database/pebble_store_verified_email_backfill.go:310-330`, applied once here instead of at every open); password hash and `credential_epoch` as stored; a blanked `password_hash` under an algorithm other than `oauth` → `PasswordResetRequired` (`internal/server/absauth/password.go:31-34,165-170`) |
-| `apikey:` + `idx:apikey:` | `c/auth/apikey/` | ID, name, owner, SHA-256 hash, creation, expiry and last use kept, so the `abk_` value keeps verifying (§4.1); `"active"` → `active`, `"inactive"` → `disabled`, `"revoked"` or any row with `revoked_at` set → `revoked` (early fix 3's rule); a non-revoked key with no expiry gets HEAD's one-shot stamp (cutover time plus the default TTL, `internal/server/apikey_expiry_stamp.go:86`), so HEAD's done flag is not carried; scopes from 05-rbac §6.1's table under §6.3's rules, never empty |
+| `u:` + the user sub-prefixes of `idx:` (`idx:user:username:`, the e-mail index) | `c/auth/user/` | every user ID and role ID kept (`admin`, `editor`, `viewer`, `fp-worker`; 05-rbac §6.2), `_system` included; status by HEAD's own predicate `UserIsActive` (`internal/auth/user_active.go:14-23`: trimmed and compared case-insensitively, empty counts as active): active → `active`, anything else → `disabled`, reported by name when it was not `"inactive"` (SEC-11); `EmailVerified` from `email_source` (HEAD's verified-email reconcile, `internal/database/pebble_store_verified_email_backfill.go:310-330`, applied once here instead of at every open); password hash and `credential_epoch` as stored; a blanked `password_hash` under an algorithm other than `oauth` → `PasswordResetRequired` (`internal/server/absauth/password.go:31-34,165-170`) |
+| `apikey:` + `idx:apikey:` | `c/auth/apikey/` | ID, name, owner, SHA-256 hash, creation, expiry and last use kept, so the `abk_` value keeps verifying (§4.1); status trimmed and lower-cased first (SEC-11), then: `revoked` or any row with `revoked_at` set → `revoked` (early fix 3's rule); `inactive` → `disabled`; `""` or `active` → `active` (HEAD admits both, `middleware/auth.go:335-344`); any other value → `disabled` and reported by key ID, so the owner re-enables it deliberately; a non-revoked key with no expiry gets HEAD's one-shot stamp (cutover time plus the default TTL, `internal/server/apikey_expiry_stamp.go:86`), so HEAD's done flag is not carried; scopes from 05-rbac §6.1's table under §6.3's rules, never empty |
 | `oauthid:` + `idx:oauth:user:` | `c/auth/identity/` | `(provider, subject)` and user kept |
 | `inviteallow:` | `c/auth/inviteallow/` | folded e-mail kept; feeds OIDC admission (§4.7) |
 | `role:` | `c/rbac/role/` | 05-rbac §6.3 |
@@ -1452,23 +1573,62 @@ intermediate representation and no later identity cutover.
 | `invite:<raw>` + `idx:invite:username:` | deleted | open invites are re-sent; the release note says so |
 | the bootstrap hash in settings | deleted | `BootWrites` mints a native token at the same boot (§4.6) |
 | temp-login tokens | — | process memory at HEAD; nothing is stored |
-| `abs_sess:` and the ABS JWT secret | unchanged (books') | ABS phone-app sessions and tokens survive; ABS logins resolve through the imported users, whose IDs and epochs are kept (§4.10; 05-config keeps the secret's value) |
+| `abs_sess:` and the ABS JWT secret | unchanged (books') | ABS phone-app sessions and tokens survive; ABS logins resolve through the imported users, whose IDs and epochs are kept (§4.10; 05-config keeps the secret's value, operator-only as at HEAD: `ProtectOperator`, never stored) |
+| `usermerge:journal:` (books') | kept, read-only | see "Merges at the cutover" below |
 
 Only the auth sub-prefixes of the shared `idx:` family move. Their list is generated from
 `keyfamilies.go` and the census, and the step checks that every range outside it is byte-identical
-before and after (14 E3). A row that does not decode, or that `Importer` rejects, is quarantined (copied
-under `c/storage/quarantine/`, API-key and OAuth-identity rows sealed with the keyring rather than kept
-raw, 05-storage §5S.3.13; reported in health and in the step's dry-run report) and never dropped in
-silence; a key or identity whose user was quarantined is quarantined with it.
+before and after (14 E3), except the families 05-storage §5S.9.1 names as rewritten in place by M3
+(the merge journals, below). A **role** row that does not decode, or that `rbac.Importer` rejects, is
+quarantined (copied under `c/storage/quarantine/`, 05-storage §5S.3.13; reported in health and in the
+step's dry-run report) and never dropped in silence (05-rbac §6.3); identity rows are not (next).
+
+**Identity rows stop the upgrade (D13).** A user, API-key or OAuth-identity row (with its `idx:` rows)
+is never quarantined: an account imported without its keys, or keys without their account, is worse than
+a refused upgrade. The gate is the **cutover preflight**: read-only, writing nothing, run before the
+pre-migration checkpoint and before M7, with the free-space headroom check (06 §6.5.1 P4 (a), 05-storage
+§5S.3.13). Its identity part is books' code: it decodes every such row, maps it and runs
+`auth.Importer`'s validation without staging anything. A row that does not decode, a row the importer
+would reject, and a key or identity whose user does not exist refuse the boot (exit 78) with a report
+naming each row by key and reason, never its value; `<app> storage migrate --dry-run --from-archive`
+reports the same rows before the deploy. Because nothing was written, the pre-freeze release (`.prev`)
+still opens the store. M3 keeps the same check as a defence (a row it cannot import fails the step and
+the boot with the checkpoint open, never a quarantine), but the preflight is the gate. The owner repairs
+each row with the offline tool **`<app> storage cutover-blockers`**, which opens the stopped, unmigrated
+store without running a migration and refuses while the service holds the DB lock: `list` (keys and
+reasons only; `--out <file>` writes the raw rows, mode 0600, for repair), `fix <key> --from <file>`
+(refused unless the preflight would accept the new row) and `delete <key> --confirm` (deleting a user
+deletes its keys, identities and index rows in the same batch and prints the books rows that still name
+it, which the referential pass then reports in health instead of failing, 05-storage §5S.3.13). Each
+write is logged at warn with the key. `u:`, `idx:user:email:`, `apikey:` and `oauthid:` are M3's
+`Sensitive` prefixes all the same (DATA-14), so a password hash or key hash could only ever be
+held sealed, never raw. Tests: `TestIdentityCutover_StopsOnUnconvertibleRow` (§10).
+
+**Merges at the cutover (D13, DATA-4).** HEAD's merge journals (`usermerge:journal:`, books' family)
+hold every key a merge wrote with its before and after image, and resuming or undoing one writes
+`apikey:`, `oauthid:`, `invite:` and `u:` keys that M3 retires. So the cutover preflight also refuses
+the boot while any journal is `applying` or `undoing`, naming it: the owner reinstalls the pre-freeze
+release, finishes or undoes the merge there, and deploys R2 again. A finished merge (`done` or `undone`)
+becomes **permanent**: its journal is kept read-only for display, books' undo action answers 409
+`merge_permanent` for it, and the R2 release note says "Account merges finished before this release can
+no longer be undone." `auth.Admin` has no inverse of `StageUserMerge`, so no merge is undone after R2.
+M3 rewrites each kept journal once, in its own chunk, replacing every `invite:<token>` key in its images
+by the token's SHA-256, since the invites themselves are deleted (the table above), so no raw invite token stays in
+the live store. Test: `TestCutoverUserMergeJournal` (§10).
 
 **Around the step.** M7, the level step, commits before M2, so the R0 and R1 binaries refuse the store
-before any HEAD identity row is deleted (05-storage §5S.3.13). After the last step, M8's forced
-compaction of the rewritten ranges removes the raw session and invite tokens from the live DB
-directory's files (`TestCutover_NoRawTokenOnDisk`). The pre-migration checkpoint still holds them, with
-HEAD's rows; it is deleted automatically after 7 days (D12 (d)), or earlier by
-`storage prune-checkpoints`. Rollback within those 7 days is an offline restore of the checkpoint (or
-of the owner's off-host archive, keyring and state files included) plus the R1 binary
-(`make rollback-restore`); everything written since the upgrade is lost (09). The checks are §10's
+before any HEAD identity row is deleted (05-storage §5S.3.13). After the last step, M8 compacts every
+rewritten range, flushes, and rewrites the store into a fresh directory that the journaled swap puts in
+place, deleting the old directory, so no SST, WAL, recycled log or MANIFEST of the live DB directory keeps
+a raw session or invite token (05-storage §5S.3.13; `TestCutover_NoRawTokenOnDisk`). The pre-migration
+checkpoint still holds them, with HEAD's rows; it is deleted automatically 7 days after it stops being
+needed (D12 (d), 05-storage §5S.3.12), or earlier by `storage prune-checkpoints`. Rollback within those
+days is an offline restore of the checkpoint (or of the owner's off-host archive, keyring and state files
+included) plus the pre-freeze release, the last production release before F3 merged (`make
+rollback-restore`, which refuses a `.prev` whose levels differ from the checkpoint's and names the binary
+to install); everything written since the upgrade is lost (09). **That includes every revocation made on
+R2** (SEC-10): a key revoked, a user disabled or a password changed on R2 is live again after the
+rollback, so 09's runbook tells the owner to repeat them on the restored release. The checks are §10's
 `TestIdentityCutover_*` rows and 05-rbac §12's reach oracle. 09 owns the release note; its identity
 text is: "Everyone signs in to the web app again once. API keys keep working, and the Audiobookshelf
 apps stay signed in. Open invites must be sent again. Backups made before this release still contain
@@ -1486,13 +1646,21 @@ and restates nothing, so an entry cannot drift narrower than its item; the `merg
 of early fix 4 (SEC9-14). They are **not** a floor: nothing in release R1 or in R2 depends on them and no
 level step refers to them. The code they patch is HEAD's identity and Basic-gate code, which R2's config
 flip (F3, the Basic gate) and identity flip (F4) delete, so each fix's test is ported onto core as a
-property test (§10: `TestSessions_ListNeverReturnsToken`,
-`TestAPIKey_EmptyEffectiveKeyCannotMint`, `TestAPIKey_RevokedIsTerminal`,
-`TestAdminChecks_HonourKeyScopes`, `TestBasicGate_EmptyPasswordRefuses`,
-`TestRevokeRacesTouch_NeverUnrevokes`) and R2 cannot silently drop a fix (14 E17).
+property test and R2 cannot silently drop a fix (14 E17). Each fix names one HEAD-code test, which R0's
+done-check runs, and the core test that replaces it (CONFORM-13):
+
+| Fix | R0 test (HEAD's code) | Ported core test (§10) |
+|---|---|---|
+| 1 | `TestLegacySessionsList_NoToken` | `TestSessions_ListNeverReturnsToken` |
+| 2 | `TestLegacyAPIKeyCreate_EmptyEffectiveKeyCannotMint` | `TestAPIKey_EmptyEffectiveKeyCannotMint` |
+| 3 | `TestLegacyAPIKey_RevokedNotReactivated` (the PATCH handler, `SetAPIKeyStatus`, and both key-auth paths, web and ABS) | `TestAPIKey_RevokedIsTerminal` |
+| 4 | `TestLegacyRequireAdmin_HonoursKeyScopes` (`RequireAdmin`, `adminRole`, `handlers/user.go:285,453`) and `TestUserMerge_ScopedAdminKeyRefused` (`mergeActor`) | `TestAdminChecks_HonourKeyScopes`, `TestUserMerge_ScopedAdminKeyRefused` |
+| 5 | `TestLegacyBasicGate_EmptyPasswordRefuses` | `TestBasicGate_EmptyPasswordRefuses` (05-http-api) |
+| 6 | `TestLegacyRevokeRacesTouch_NeverUnrevokes` | `TestRevokeRacesTouch_NeverUnrevokes` |
 
 1. **Session tokens exposed by `GET /api/v1/auth/sessions`** — return a view without `id` and with a
-   derived handle for revoke (defect 1 below).
+   derived handle for revoke (defect 1 below; `TestLegacySessionsList_NoToken`: no field of the
+   response equals a live token, and revoke by the derived handle deletes exactly that session).
 2. **A scoped API key can mint an unscoped key** — when the caller is an API key, require non-empty
    scopes ⊆ the key's effective set, and fail closed on a nil or empty caller permission set: the scope
    loop checks `callerPermSet[scope]` only `if callerPermSet != nil`
@@ -1508,7 +1676,7 @@ property test (§10: `TestSessions_ListNeverReturnsToken`,
    `active` for such a row, so no other caller bypasses the handler; **both** key-auth paths refuse a row
    with `revoked_at` set whatever its `status`: the web path (`middleware/auth.go:335-344`) and the ABS
    path (`internal/server/middleware/absauth.go` `ResolveAPIKey`, its own `switch key.Status`) (defect
-   3, SEC4-11).
+   3, SEC4-11; `TestLegacyAPIKey_RevokedNotReactivated` covers the handler, the store and both paths).
 4. **`RequireAdmin` and the role-name checks ignore API-key scopes** — refuse an `api_key` method whose
    non-empty scopes do not include every atom, in `RequireAdmin`, `adminRole` and the three in-handler
    checks `handlers/user.go:285,453` and the user-merge actor check `mergeActor`
@@ -1518,10 +1686,13 @@ property test (§10: `TestSessions_ListNeverReturnsToken`,
    `GET /users/merges` (the merge POSTs are credential routes and refuse it; 05-rbac "Out-of-scope
    defects" item 1, SEC4-11). From R2 the ABO merge handler checks `Can(core:admin)` with key scoping
    (05-rbac §4.6; `TestUserMerge_ScopedAdminKeyRefused`, HEAD's code then core).
+   `TestLegacyRequireAdmin_HonoursKeyScopes`: an admin's key scoped to one atom gets 403 on a
+   `RequireAdmin` route, an `adminRole` route and both `handlers/user.go` sites; an every-atom key passes.
 5. **The Basic gate accepts an empty password** — when `basic_auth_enabled` is true and the expected
    password is empty, HEAD's gate compares two empty strings and admits `<username>:`
    (`internal/server/middleware/basicauth.go:81-87`). Hotfix: every non-exempt route answers 401, health
-   reports `degraded` (`basic_gate_no_password`) and the startup log names the setting
+   reports `degraded` (`basic_gate_no_password`, the one posture token on the unauthenticated list,
+   05-health §5H.3.1) and the startup log names the setting
    (`TestLegacyBasicGate_EmptyPasswordRefuses`, in ABO's current code). It covers a password cleared by
    any means (an operator, HEAD's key-regeneration delete path, a partial reset); core's stage 8
    refuses the same state once it serves the gate, from R2's config flip (F3) (05-http-api §4.2,
@@ -1576,7 +1747,7 @@ The revocation journal is not on this list: its lines are MAC'd with a key from 
 | G11 owner/CF machinery embedded in auth | **Fixed**: `Authenticator`/`OwnerVerifier` extension point; Cloudflare Access verification, owner proof, policy editing and service tokens stay in ABO (`internal/cfaccess`, `internal/cfaccesspolicy`, `internal/cfservicetoken`; §3.3, §4.8) |
 | G12 sessions unhashed (secrets part → 05-config) | **Fixed**: every session/invite/temp-login/bootstrap/key stored as SHA-256 (§4.1, §4.3); ABO's identities move into the native store at R2's identity cutover, which deletes HEAD's raw session and invite rows (§11); config secrets → `core/secrets` (05-config) |
 | G14 rate limit/lockout tied to tunnel topology, in memory | **Fixed + documented**: instance throttle, client address from `httpapi` trusted-proxy config with the connector set migrated, no hard lockout, in-memory by design (§4.9) |
-| G15 two parallel auth stacks | **Fixed**: compat stays in app, resolves via `PrincipalFor` (§4.10) |
+| G15 two parallel auth stacks | **Fixed**: compat stays in app and authenticates only through the method-bound `auth.Compat` handle (`VerifyPassword`, `AuthenticateKey`, `PrincipalFor`, `CheckCredentialFor`; §3.1, §4.10) |
 
 ## Objections to 03
 
@@ -1870,3 +2041,5 @@ Plan-phase consistency:
 D10–D12 revision (2026-11-04):
 
 - the identity cutover lands the hardened design directly in R2 (step M3, flip F4). Rewritten: intro, §3 intro and landing (R1/R2), §3.1–§3.3 comments, §3.4 (native store only; new `auth.Importer` and `ErrImportRejected`), §4.1 (imported `abk_` keys, `auth.Options.ImportedKeyPrefixes`), §4.3, §4.4 (imported keys; the early-fix properties come from `Expect`), §4.6, §4.11 (core precedence for every app with the fail-closed "more restrictive wins" rule for the auth switch and the Basic gate; retired names refuse boot; no auth-off write rule), §4.12, §4.13 (native routes only; fragment links; HEAD's gin identity routes and OAuth callback path change, the callback re-registered at deploy), §4.14 (no older-build cases), §5, §6–§9 rows, §10 (cutover tests, the six early-fix tests ported as property tests onto core auth), §11 (native store; the identity cutover table: sessions, invites and the bootstrap hash reset, `abk_` keys and ABS sessions survive, IDs kept, quarantine, checkpoint deleted after 7 days), §13 G12, objections. Deleted: the legacy store, `legacy` capabilities, lock names and `StoreLocks`, `KeyLegacyState`, `InviteLinkForm`, the cookie-default options, `core.auth.apikey.legacy_prefixes`, the alias, legacy-link and rollback text, and §11.2 (H1–H3). §11.1 unchanged in substance (release keys and its core-era sentences updated). Consistency pass: the OAuth callback keeps HEAD's path, served by core from F4; `core.auth.mode` declares `FailClosed`, the Basic-gate password follows the plain operator lock (§11.1 item 5); `core.auth.oidc.<id>.client_secret`, `core.auth.login.saturated_rate`/`_burst` and the OAuth fold adopted from 05-config; M7 before M2, sealed quarantine, D12 (a)–(d) labels, R1 resets offline-only and 07's fragment tests cited. Final consistency sweep: `auth.Options.OIDCCallbackBase` names the callback base handed to `Router.CoreFixedGroup` (§3.2, §4.13), and §5 places `secrets.Open` at the start of P4b and config's `SetSecrets`/`Attach` at P4d step 1.
+
+Round 13 (2026-11-04): R1 (F2 registers `core.auth`), R2/CONFORM-1, R8/D13 (cutover preflight gate, `storage cutover-blockers`, no identity quarantine), D13/DATA-4 (merge refusal, permanent merges), R18/SEC-1 (`auth.Compat`), R19/SEC-2 (`MethodSpec.AppHandoff`, `OIDCAppHandoff`; HEAD start path deleted), R20/SEC-3, R21/SEC-5, R22 SEC-6, SEC-7, SEC-10, SEC-11, CONFORM-12, CONFORM-13, DATA-14.
