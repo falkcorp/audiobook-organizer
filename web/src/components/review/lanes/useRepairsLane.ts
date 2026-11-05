@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.18.0
+// version: 1.19.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
 // last-edited: 2026-11-05
 
@@ -333,6 +333,13 @@ export interface RepairsLane {
   ownerStatus: api.RepairOwnerStatus | null;
 
   selectedFixerId: string | null;
+  /**
+   * What the address bar should say for `?fixer=`: the selected fixer, or, while a
+   * fixer from the URL is waiting for the list to load, that fixer. Without the
+   * second half the mirror reads `selectedFixerId` (null until the list arrives)
+   * and erases the link's own parameter.
+   */
+  urlFixerId: string | null;
   selectedFixer: RepairFixer | null;
   selectFixer: (id: string) => void;
 
@@ -430,8 +437,15 @@ export function useRepairsLane(
   const [selectedFixerId, setSelectedFixerId] = useState<string | null>(() =>
     readStored(REPAIRS_FIXER_STORAGE_KEY)
   );
-  // The URL's `?fixer=`, consumed by the first successful fixer-list load.
+  // The URL's `?fixer=`, consumed by the first successful fixer-list load. Held in
+  // a ref for the load's callback AND in state, so the address bar can keep
+  // saying `fixer=X` while the list is still loading (see `urlFixerId`).
   const fixerSeedRef = useRef<string | null>(seedFixerId);
+  const [parkedFixerId, setParkedFixerId] = useState<string | null>(seedFixerId);
+  const parkFixerSeed = useCallback((id: string | null) => {
+    fixerSeedRef.current = id;
+    setParkedFixerId(id);
+  }, []);
   const [knownPlans, setKnownPlans] = useState<Record<string, KnownPlan>>({});
   const [trials, setTrials] = useState<Record<string, RepairTrialState>>({});
 
@@ -523,7 +537,7 @@ export function useRepairsLane(
           return changed ? next : prev;
         });
         const seed = fixerSeedRef.current;
-        fixerSeedRef.current = null;
+        parkFixerSeed(null);
         const seeded = seed && list.some((f) => f.id === seed) ? seed : null;
         setSelectedFixerId((cur) =>
           seeded ?? (cur && list.some((f) => f.id === cur) ? cur : (list[0]?.id ?? null))
@@ -542,7 +556,7 @@ export function useRepairsLane(
         if (!ctrl.signal.aborted) setFixersLoading(false);
       });
     return () => ctrl.abort();
-  }, [active, fixersNonce]);
+  }, [active, fixersNonce, parkFixerSeed]);
 
   // ---- owner status ------------------------------------------------------
   // Read with the fixer list. A failure leaves it unknown: the button stays,
@@ -800,14 +814,14 @@ export function useRepairsLane(
     (next: RepairsUrlSeed) => {
       const id = next.fixerId ?? null;
       if (id) {
-        if (fixers.length === 0) fixerSeedRef.current = id;
+        if (fixers.length === 0) parkFixerSeed(id);
         else if (fixers.some((f) => f.id === id)) setSelectedFixerId(id);
       }
       setFilterState(next.filter ?? 'applicable');
       setRowClassState(next.rowClass ?? null);
       setOffset(0);
     },
-    [fixers]
+    [fixers, parkFixerSeed]
   );
 
   // ---- actions ------------------------------------------------------------
@@ -1137,6 +1151,7 @@ export function useRepairsLane(
     reloadFixers,
     ownerStatus,
     selectedFixerId: selectedFixer ? selectedFixerId : null,
+    urlFixerId: parkedFixerId ?? (selectedFixer ? selectedFixerId : null),
     selectedFixer,
     selectFixer,
     planOpId,

@@ -1,5 +1,5 @@
 // file: web/src/hooks/useUrlState.ts
-// version: 2.0.1
+// version: 2.1.0
 // guid: 3f6c1a52-7d94-4e08-b5a1-9c20e8d4f713
 // last-edited: 2026-11-05
 //
@@ -54,9 +54,17 @@
 // WRITING SAFELY
 //
 // * The query string a write is merged into, and compared against to see whether
-//   there is anything to write, is the LATEST one issued (the router commits
-//   location changes in a transition, so the rendered `searchParams` can be a
-//   step behind): a write that is undone before it commits is still written.
+//   there is anything to write, is the LIVE one (the history object's location):
+//   the router commits location changes in a transition, so the rendered
+//   `searchParams` can be a step behind. `pending` is kept only to recognise our
+//   own echoes.
+// * A write is DROPPED when the live pathname is not the rendered one (the page is
+//   on its way out: a link to a lazy page whose chunk is still loading) or the live
+//   query is neither the rendered one nor one we issued (an external navigation is
+//   in flight). Without that, a throttled trailing write fires after the click and
+//   puts the old page back.
+// * A write that throws is forgotten again (it leaves `pending`).
+// * A write still waiting on the throttle is flushed when the page unmounts.
 // * `useUrlParamWriter` gives other components the same view of "latest", so a
 //   write from a child does not merge into stale params and revert a mirrored key.
 // * Writes are throttled (leading and trailing, `WRITE_THROTTLE_MS`). Browsers
@@ -65,10 +73,13 @@
 //   click writes at once; a burst writes the first and the last.
 
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { UNSAFE_NavigationContext, useSearchParams } from 'react-router-dom';
+import { UNSAFE_NavigationContext, useLocation, useSearchParams } from 'react-router-dom';
 
 /** A value for one owned key: null/undefined/'' means "absent from the URL". */
 export type UrlValue = string | null | undefined;
+
+/** Keys to write through `useUrlParamWriter`; null removes one. */
+export type UrlPatch = Readonly<Record<string, UrlValue>>;
 
 /** Minimum gap between two history writes from one mirror (leading + trailing). */
 export const WRITE_THROTTLE_MS = 400;
@@ -187,55 +198,116 @@ function observe(store: UrlStore, search: string): Verdict {
   return store.verdict;
 }
 
-function useUrlStore(): UrlStore {
-  const nav = useContext(UNSAFE_NavigationContext);
-  return storeFor(nav.navigator);
-}
-
 /**
  * history.replaceState can throw (Safari and Firefox rate-limit it): a lost write
  * beats a dead page. BrowserRouter throws synchronously; a data router returns a
- * promise that rejects, so both are caught.
+ * promise that rejects, so both are caught. `onFail` runs for either, so the
+ * caller can forget a URL that never became the address.
  */
-function safeSet(set: ReturnType<typeof useSearchParams>[1], next: URLSearchParams): boolean {
-  const warn = (err: unknown) => console.warn('Could not update the address bar', err);
+function safeSet(
+  set: ReturnType<typeof useSearchParams>[1],
+  next: URLSearchParams,
+  onFail: () => void
+): void {
+  const fail = (err: unknown) => {
+    console.warn('Could not update the address bar', err);
+    onFail();
+  };
   try {
     const result = set(next, { replace: true }) as unknown;
-    if (result instanceof Promise) result.catch(warn);
-    return true;
+    if (result instanceof Promise) result.catch(fail);
   } catch (err) {
-    warn(err);
-    return false;
+    fail(err);
   }
+}
+
+interface Where {
+  pathname: string;
+  search: string;
+}
+
+/**
+ * The query string a write must be merged into, or null when the write must be
+ * dropped.
+ *
+ * The router commits a location change in a transition, so what a component has
+ * RENDERED can trail the address bar: a link to a page whose chunk is still
+ * loading leaves the old page mounted at the old pathname while the address
+ * already says the new one. A write made from the old page then resolves against
+ * the old pathname and puts the old page back. So the LIVE location (the history
+ * object's, which BrowserRouter and MemoryRouter expose) decides:
+ * - a different pathname than the rendered one: the page is on its way out;
+ * - a query string that is neither the rendered one nor one we issued: an
+ *   external navigation is in flight, and what we hold is about to be replaced.
+ * Either way the write is dropped; the reconciling pass after an external change
+ * rewrites whatever the page still needs. Otherwise the live string is the base,
+ * so a write never merges into a stale copy. A router that does not expose its
+ * location (a data router) falls back to the latest string this hook issued.
+ */
+function liveBase(store: UrlStore, navigator: object, rendered: Where): string | null {
+  const renderedStr = new URLSearchParams(rendered.search).toString();
+  const live = (navigator as { location?: Where }).location;
+  if (!live) return store.pending.at(-1) ?? renderedStr;
+  if (live.pathname !== rendered.pathname) return null;
+  const liveStr = new URLSearchParams(live.search).toString();
+  return liveStr === renderedStr || store.pending.includes(liveStr) ? liveStr : null;
+}
+
+/** Record `nextStr` as issued and write it; a write that fails is forgotten again. */
+function issue(
+  store: UrlStore,
+  set: ReturnType<typeof useSearchParams>[1],
+  next: URLSearchParams,
+  foreign: boolean
+): void {
+  const nextStr = next.toString();
+  store.pending.push(nextStr);
+  if (foreign) store.foreign.add(nextStr);
+  safeSet(set, next, () => {
+    const at = store.pending.lastIndexOf(nextStr);
+    if (at >= 0) store.pending.splice(at, 1);
+    if (!store.pending.includes(nextStr)) store.foreign.delete(nextStr);
+  });
 }
 
 /**
  * Write some query keys from a component that does not own the page's mirror
  * (a child panel with its own filter chips). The patch is merged into the LATEST
  * query string, including writes still in flight, so it cannot revert a key the
- * page's `useUrlStateSync` just wrote. A null value removes the key.
+ * page's `useUrlStateSync` just wrote. A null value removes the key. The patch
+ * may be a function of that latest query string, for a write that depends on it
+ * (a toggle: clearing a band only when it is the one the address holds).
  */
-export function useUrlParamWriter(): (patch: Readonly<Record<string, UrlValue>>) => void {
+export function useUrlParamWriter(): (
+  patch: UrlPatch | ((live: URLSearchParams) => UrlPatch)
+) => void {
   const [searchParams, setSearchParams] = useSearchParams();
-  const store = useUrlStore();
+  const { pathname, search: renderedSearch } = useLocation();
+  const nav = useContext(UNSAFE_NavigationContext);
+  const store = storeFor(nav.navigator);
   const search = searchParams.toString();
   // Keep `pending` honest even on a page with no mirror of its own.
   useEffect(() => {
     observe(store, search);
   }, [store, search]);
-  const latest = useRef({ searchParams, setSearchParams, store });
+  const latest = useRef({ pathname, renderedSearch, setSearchParams, store, nav });
   useEffect(() => {
-    latest.current = { searchParams, setSearchParams, store };
+    latest.current = { pathname, renderedSearch, setSearchParams, store, nav };
   });
   return useCallback((patch) => {
-    const { searchParams: rendered, setSearchParams: set, store: st } = latest.current;
-    const base = new URLSearchParams(st.pending.at(-1) ?? rendered.toString());
-    const next = applyOwnedParams(base, patch);
-    const nextStr = next.toString();
-    if (nextStr === (st.pending.at(-1) ?? rendered.toString())) return;
-    st.pending.push(nextStr);
-    st.foreign.add(nextStr);
-    safeSet(set, next);
+    const {
+      pathname: path,
+      renderedSearch: rs,
+      setSearchParams: set,
+      store: st,
+      nav: n,
+    } = latest.current;
+    const base = liveBase(st, n.navigator, { pathname: path, search: rs });
+    if (base === null) return;
+    const live = new URLSearchParams(base);
+    const next = applyOwnedParams(live, typeof patch === 'function' ? patch(live) : patch);
+    if (next.toString() === base) return;
+    issue(st, set, next, true);
   }, []);
 }
 
@@ -262,14 +334,32 @@ export function useUrlStateSync(
   { defaults, onExternalChange }: UseUrlStateSyncOptions = {}
 ): void {
   const [searchParams, setSearchParams] = useSearchParams();
-  const store = useUrlStore();
+  const { pathname, search: renderedSearch } = useLocation();
+  const nav = useContext(UNSAFE_NavigationContext);
+  const store = storeFor(nav.navigator);
   const search = searchParams.toString();
 
   // Latest-value refs, assigned in an effect so render stays pure. They are read
   // only inside the effects and timers below, which run after this one.
-  const latest = useRef({ searchParams, defaults, onExternalChange, setSearchParams, owned });
+  const latest = useRef({
+    pathname,
+    renderedSearch,
+    defaults,
+    onExternalChange,
+    setSearchParams,
+    owned,
+    navigator: nav.navigator,
+  });
   useEffect(() => {
-    latest.current = { searchParams, defaults, onExternalChange, setSearchParams, owned };
+    latest.current = {
+      pathname,
+      renderedSearch,
+      defaults,
+      onExternalChange,
+      setSearchParams,
+      owned,
+      navigator: nav.navigator,
+    };
   });
 
   // A stable key for the owned map: the mirror must run when a VALUE changes, not
@@ -287,14 +377,16 @@ export function useUrlStateSync(
 
   const flush = useCallback(() => {
     timer.current = null;
-    const { searchParams: rendered, defaults: d, setSearchParams: set, owned: o } = latest.current;
-    const base = store.pending.at(-1) ?? rendered.toString();
+    const { defaults: d, setSearchParams: set, owned: o, navigator: n } = latest.current;
+    const base = liveBase(store, n, {
+      pathname: latest.current.pathname,
+      search: latest.current.renderedSearch,
+    });
+    if (base === null) return;
     const next = applyOwnedParams(new URLSearchParams(base), o, d);
-    const nextStr = next.toString();
-    if (nextStr === base) return;
+    if (next.toString() === base) return;
     lastWrite.current = Date.now();
-    store.pending.push(nextStr);
-    safeSet(set, next);
+    issue(store, set, next, false);
   }, [store]);
 
   useEffect(() => {
@@ -319,13 +411,17 @@ export function useUrlStateSync(
     // navigation the user made.
   }, [ownedKey, reconcile, flush]);
 
-  // A write that has not fired when the page goes away is dropped.
+  // A write still waiting on the throttle when the page unmounts is written now,
+  // so the entry the user leaves does not hold a stale query. `flush` drops it if
+  // the address has already moved on (the usual reason a page unmounts), because
+  // by then the write would land on the page that replaced this one.
   useEffect(
     () => () => {
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = null;
+      if (!timer.current) return;
+      clearTimeout(timer.current);
+      flush();
     },
-    []
+    [flush]
   );
 
   const seen = useRef(search);
