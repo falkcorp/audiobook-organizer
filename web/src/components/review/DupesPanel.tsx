@@ -1,5 +1,5 @@
 // file: web/src/components/review/DupesPanel.tsx
-// version: 1.18.0
+// version: 1.19.0
 // guid: 1d6f8a03-7c25-4e91-b840-2a5c9e3b7d14
 // last-edited: 2026-11-05
 //
@@ -495,7 +495,9 @@ export function DupesPanel({
                     color={dupes.filters.band === b ? 'primary' : 'default'}
                     variant={dupes.filters.band === b ? 'filled' : 'outlined'}
                     onClick={() => {
-                      writeUrlParams({ band: dupes.filters.band === b ? null : b });
+                      // Toggled against the latest address, not the band last rendered: two
+                      // clicks inside one commit must not both read the old band.
+                      writeUrlParams((cur) => ({ band: cur.get('band') === b ? null : b }));
                     }}
                   />
                 ))}

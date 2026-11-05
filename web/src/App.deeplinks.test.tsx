@@ -1,5 +1,5 @@
 // file: web/src/App.deeplinks.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: d2b84e61-3a07-4c5f-9e18-7f0a5c3b1d26
 // last-edited: 2026-11-05
 
@@ -115,6 +115,9 @@ describe('legacy paths', () => {
     renderAt('/maintenance');
     expect(await screen.findByTestId('maintenance-tab-body')).toBeInTheDocument();
     expect(screen.getByTestId('loc').textContent).toBe('/system?tab=maintenance');
-    expect(screen.getByRole('tab', { name: 'Maintenance' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'Maintenance' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
   });
 });

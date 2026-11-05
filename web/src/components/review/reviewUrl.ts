@@ -1,5 +1,5 @@
 // file: web/src/components/review/reviewUrl.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e1a7c93-b205-4d68-9f3e-a8d02c6b5174
 // last-edited: 2026-11-05
 //
@@ -16,7 +16,11 @@ import type { ReviewLane } from './reviewActions';
 import { parseDupesSubView, type DupesSubView } from './lanes/useDupesLabels';
 import { parseDedupBand, parseDedupLayer } from './lanes/useDupesLane';
 import { parseAuthorsSubView, type AuthorsSubView } from './lanes/useAuthorsLane';
-import { parseRepairRowClass, parseRepairRowsFilter, type RepairsUrlSeed } from './lanes/useRepairsLane';
+import {
+  parseRepairRowClass,
+  parseRepairRowsFilter,
+  type RepairsUrlSeed,
+} from './lanes/useRepairsLane';
 import { normalizeViewMode, type SpineViewMode } from './spine/viewMode';
 import type { DedupLayer } from './lanes/useDupesLane';
 

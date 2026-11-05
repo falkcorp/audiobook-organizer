@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useAuthorsLane.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: c9e4a1d7-5b83-4f26-a0d9-3e7b61f48a25
 // last-edited: 2026-11-05
 
@@ -511,6 +511,11 @@ export interface AuthorsLane {
    */
   focusedAuthorId: number | null;
   /**
+   * What the address bar should say for `?author=`: the focused author, or, while
+   * the author from the URL is waiting for the groups to load, that author.
+   */
+  urlAuthorId: number | null;
+  /**
    * Focus the group an author belongs to, as the first load does for `?author=`.
    * Waits for the groups when they are not loaded yet. For a URL change that
    * arrives while the lane is mounted (a link, back/forward).
@@ -902,7 +907,14 @@ export function useAuthorsLane(
   }, [active]);
 
   // ---- loading the groups --------------------------------------------------------
+  // The URL's `?author=` waiting for the groups to load: a ref for the load's
+  // callback and state so the address bar keeps saying so meanwhile (`urlAuthorId`).
   const seedRef = useRef<number | null>(parseAuthorId(urlFilters.authorId));
+  const [parkedAuthorId, setParkedAuthorId] = useState<number | null>(seedRef.current);
+  const parkAuthorSeed = useCallback((id: number | null) => {
+    seedRef.current = id;
+    setParkedAuthorId(id);
+  }, []);
   // The same landing the first load gives `?author=`: every kind shown, the page
   // the group is on, the group focused. Nothing to do for an id no group holds.
   const landOnAuthor = useCallback((list: readonly AuthorGroup[], id: number) => {
@@ -915,9 +927,9 @@ export function useAuthorsLane(
   const focusAuthor = useCallback(
     (id: number) => {
       if (groupsRef.current?.load.state === 'ready') landOnAuthor(groupsRef.current.load.value.groups, id);
-      else seedRef.current = id;
+      else parkAuthorSeed(id);
     },
-    [landOnAuthor]
+    [landOnAuthor, parkAuthorSeed]
   );
   useEffect(() => {
     if (!authorsOn) return;
@@ -953,7 +965,7 @@ export function useAuthorsLane(
         });
         const seed = seedRef.current;
         if (seed !== null) {
-          seedRef.current = null;
+          parkAuthorSeed(null);
           landOnAuthor(mapped, seed);
         }
       })
@@ -965,7 +977,7 @@ export function useAuthorsLane(
         });
       });
     return () => ctl.abort();
-  }, [authorsOn, groupsKey, commitResult, landOnAuthor]);
+  }, [authorsOn, groupsKey, commitResult, landOnAuthor, parkAuthorSeed]);
 
   // ---- loading the series groups ---------------------------------------------------
   useEffect(() => {
@@ -2395,6 +2407,7 @@ export function useAuthorsLane(
     view,
     setView,
     focusedAuthorId,
+    urlAuthorId: focusedAuthorId ?? parkedAuthorId,
     focusAuthor,
     series: seriesLane,
     status,

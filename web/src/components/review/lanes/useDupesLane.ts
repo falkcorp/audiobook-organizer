@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.20.0
+// version: 1.21.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
 // last-edited: 2026-11-05
 
@@ -144,7 +144,7 @@ export const DEDUP_LAYERS: readonly DedupLayer[] = [
   'manual',
 ];
 
-/** A URL value as a layer: anything that is not a known layer is null, never passed on. */
+/** The confidence bands, in the order the filter chips show them. */
 export const DEDUP_BANDS: readonly DedupBand[] = ['CERTAIN', 'HIGH', 'MEDIUM', 'REVIEW'];
 
 /** A URL value as a confidence band, else null. */
@@ -152,6 +152,7 @@ export function parseDedupBand(value: string | null | undefined): DedupBand | nu
   return DEDUP_BANDS.find((b) => b === value) ?? null;
 }
 
+/** A URL value as a layer: anything that is not a known layer is null, never passed on. */
 export function parseDedupLayer(value: string | null | undefined): DedupLayer | null {
   return DEDUP_LAYERS.find((l) => l === value) ?? null;
 }
@@ -161,8 +162,8 @@ export interface DupesFilters {
   band: DedupBand | null;
   /**
    * Server-side, and sent to the bulk endpoints too. Seeded from `?layer=` once
-   * (see DupesUrlFilters) and then owned by this hook: clicking a layer chip
-   * does not write the URL.
+   * (see DupesUrlFilters) and then owned by this hook; ReviewWorkspace mirrors it
+   * back into `?layer=`, so a chip click reaches the URL through that mirror.
    */
   layer: DedupLayer | null;
   /** Server-side. */

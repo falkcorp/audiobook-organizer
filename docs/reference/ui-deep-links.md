@@ -1,5 +1,5 @@
 <!-- file: docs/reference/ui-deep-links.md -->
-<!-- version: 2.1.0 -->
+<!-- version: 2.2.0 -->
 <!-- guid: B610EF08-9346-47FD-AAA3-C65958E0127C -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -89,13 +89,25 @@ next to an existing one is counted under `done`; the two legacy redirects
   default. The one thing it leaves alone is a bad value that was already in the
   URL when the page first mounted and that the page never consumes: the mount
   pass does not write, so an unused seed is not erased.
-- **Writes are coalesced and safe.** A write is based on the latest value
-  written, not on the last rendered query, so two writes in one event merge
-  instead of one reverting the other. The mirror writes at most about twice a
-  second (a leading and a trailing write) so holding `j` on the authors lane does
-  not call `history.replaceState` once per key repeat, which browsers rate-limit
-  with a `SecurityError`. The write is wrapped, so a throw is logged as
-  `Could not update the address bar` and the page keeps working.
+- **Writes are coalesced and safe.** A write is merged into the LIVE address (the
+  history object's location), not the last rendered query, so two writes in one
+  event merge instead of one reverting the other. A write is dropped, not
+  delayed, when the live pathname is no longer the page's (a link to a page whose
+  chunk is still loading leaves the old page mounted) or the live query is
+  neither the rendered one nor one the hook wrote (an external navigation is in
+  flight); the reconciling pass after that navigation rewrites whatever the page
+  still needs. The mirror writes at most about twice a second (a leading and a
+  trailing write) so holding `j` on the authors lane does not call
+  `history.replaceState` once per key repeat, which browsers rate-limit with a
+  `SecurityError`; a trailing write still waiting when the page unmounts is
+  flushed if the address is still the page's own. A write that throws is logged
+  as `Could not update the address bar` and forgotten, and the page keeps
+  working. Limit: leaving for another route inside the throttle window cannot
+  amend the entry that was left, so Back can land on the query from the last
+  write that went out.
+- **A link's `fixer=` and `author=` survive the lane's load.** While the list a
+  seed refers to is still loading, the lane reports the seed itself as the value
+  to mirror, so another change on the page does not erase it.
 - **Typed searches are mirrored once settled.** Activity, Series and Authors put
   the debounced search in the URL, not every keystroke, and an outside change of
   the search takes effect at once. Series and Authors also hold the page while a

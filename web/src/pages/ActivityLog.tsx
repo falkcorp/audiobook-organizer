@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.41.0
+// version: 2.42.0
 // guid:b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-11-05
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -80,7 +80,6 @@ import {
   isDefaultTiers,
 } from './activityUrl';
 
-
 // Section keys for the Active Operations panel, declared here rather than
 // derived from the rendered list so "Collapse All" can name every section even
 // when one of them is currently empty and therefore not rendered.
@@ -97,7 +96,6 @@ const OPS_SECTION_KEYS = [
   'canceled',
   'interrupted',
 ] as const;
-
 
 const TIER_COLORS: Record<string, string> = {
   audit: '#1976d2',

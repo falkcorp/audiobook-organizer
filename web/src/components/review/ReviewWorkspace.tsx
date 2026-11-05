@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.32.0
+// version: 1.33.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-11-05
 //
@@ -306,10 +306,12 @@ export function ReviewWorkspace() {
           ? 'series'
           : null,
       author:
-        authorsOn && authors.view === 'authors' && authors.focusedAuthorId !== null
-          ? String(authors.focusedAuthorId)
+        authorsOn && authors.view === 'authors' && authors.urlAuthorId !== null
+          ? String(authors.urlAuthorId)
           : null,
-      fixer: repairsOn ? repairs.selectedFixerId : null,
+      // The lanes report a seed that is still waiting for its list, so the mirror
+      // does not erase the link's own `fixer=` / `author=` while it loads.
+      fixer: repairsOn ? repairs.urlFixerId : null,
       filter: repairsOn ? repairs.filter : null,
       class: repairsOn ? repairs.rowClass : null,
     },

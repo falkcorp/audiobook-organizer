@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.urlState.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: c7a05e2b-19d4-4f83-a6b0-3e8d51f9c274
 // last-edited: 2026-11-05
 
@@ -14,7 +14,7 @@
  */
 
 import { useEffect } from 'react';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -246,6 +246,32 @@ describe('repairs lane', () => {
     expect(loc()).toBe('/review?lane=repairs&fixer=fx-b&filter=skipped&class=robin');
   });
 
+  it('a fixer from the link stays in the address bar while the fixer list is still loading', async () => {
+    const user = userEvent.setup();
+    let release: (v: api.RepairFixer[]) => void = () => {};
+    vi.mocked(api.listRepairFixers).mockReturnValue(
+      new Promise<api.RepairFixer[]>((r) => {
+        release = r;
+      })
+    );
+    renderWorkspace('/review?lane=repairs&fixer=fx-b');
+    await waitFor(() => expect(api.listRepairFixers).toHaveBeenCalled());
+    // Any other owned change makes the mirror write; it must not erase the seed.
+    await user.click(screen.getByRole('button', { name: 'Details' }));
+    await waitFor(() => expect(loc()).toContain('mode=two-column'));
+    await settle();
+    expect(loc()).toBe('/review?lane=repairs&fixer=fx-b&mode=two-column');
+    await act(async () => {
+      release([
+        { id: 'fx-a', title: 'Fixer A', description: '', last_plan: plan('a') },
+        { id: 'fx-b', title: 'Fixer B', description: '', last_plan: plan('b') },
+      ]);
+    });
+    await waitFor(() => expect(api.getRepairPlanRows).toHaveBeenCalled());
+    await settle();
+    expect(loc()).toBe('/review?lane=repairs&fixer=fx-b&mode=two-column');
+  });
+
   it('an unknown filter falls back to applicable and is not sent to the server', async () => {
     renderWorkspace('/review?lane=repairs&fixer=fx-a&filter=bogus');
     await waitFor(() =>
@@ -423,6 +449,45 @@ describe('dupes lane', () => {
   });
 });
 
+describe('authors lane (seed while loading)', () => {
+  it('an author from the link is not erased by a sub-view round trip while the groups are still loading', async () => {
+    const user = userEvent.setup();
+    let release: (v: Awaited<ReturnType<typeof reads.fetchAuthorGroups>>) => void = () => {};
+    vi.mocked(reads.fetchAuthorGroups).mockReturnValue(
+      new Promise((r) => {
+        release = r;
+      })
+    );
+    renderWorkspace('/review?lane=authors&author=2');
+    await waitFor(() => expect(reads.fetchAuthorGroups).toHaveBeenCalled());
+    // Away to Series: `author` leaves the URL by design. Back on Authors the list
+    // still has not loaded, and the link's author must come back with it.
+    await user.click(screen.getByTestId('authors-subview-series'));
+    await waitFor(() => expect(loc()).toBe('/review?lane=authors&view=series'));
+    await user.click(screen.getByTestId('authors-subview-authors'));
+    await waitFor(() => expect(loc()).toBe('/review?lane=authors&author=2'));
+    await act(async () => {
+      release({
+        groups: [
+          {
+            canonical: { id: 1, name: 'Bruce Wayne', created_at: '' },
+            variants: [],
+            book_count: 2,
+          },
+          {
+            canonical: { id: 2, name: 'Selina Kyle', created_at: '' },
+            variants: [],
+            book_count: 4,
+          },
+        ],
+        needsRefresh: false,
+      });
+    });
+    await settle();
+    expect(loc()).toBe('/review?lane=authors&author=2');
+  });
+});
+
 describe('authors lane', () => {
   it('?view=series seeds the sub-view and a link to it while elsewhere re-seeds', async () => {
     const user = userEvent.setup();
@@ -474,6 +539,18 @@ describe('the address bar and the screen never disagree', () => {
     await screen.findByTestId('dupes-rail');
     await settle();
     expect(loc()).toBe('/review?lane=dupes&band=HIGH');
+  });
+
+  it('two clicks on one band chip inside one commit select it and then clear it', async () => {
+    renderWorkspace('/review?lane=dupes');
+    await screen.findByTestId('dupes-rail');
+    // No render between the clicks: the second must read the band the first wrote.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('band-chip-HIGH'));
+      fireEvent.click(screen.getByTestId('band-chip-HIGH'));
+    });
+    await settle();
+    expect(loc()).toBe('/review?lane=dupes');
   });
 
   it('a band click straight after a layer click does not revert the layer', async () => {

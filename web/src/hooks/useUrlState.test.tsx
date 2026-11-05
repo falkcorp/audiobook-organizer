@@ -1,12 +1,20 @@
 // file: web/src/hooks/useUrlState.test.tsx
-// version: 2.0.0
+// version: 2.1.0
 // guid: 0c5e92d7-48ab-4f36-a1d0-6be7f3092c58
 // last-edited: 2026-11-05
 
-import { StrictMode, useState } from 'react';
+import { lazy, StrictMode, Suspense, useState } from 'react';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { BrowserRouter, createMemoryRouter, RouterProvider, useNavigate } from 'react-router-dom';
+import {
+  BrowserRouter,
+  createMemoryRouter,
+  Link,
+  Route,
+  RouterProvider,
+  Routes,
+  useNavigate,
+} from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import {
   applyOwnedParams,
@@ -376,6 +384,149 @@ describe('useUrlStateSync: writing safely', () => {
       expect(screen.getByRole('button').textContent).toBe('inc1');
     } finally {
       replace?.mockRestore();
+      warn.mockRestore();
+    }
+  });
+});
+
+// These run under BrowserRouter on purpose: it applies a location change in a
+// transition, so what a page has rendered can trail the address bar, and the
+// hook's decision to drop a late write depends on reading the live location.
+describe('useUrlStateSync: a late write never undoes a navigation', () => {
+  const here = () => window.location.pathname + window.location.search;
+  const wait = (ms: number) =>
+    act(async () => {
+      await new Promise((r) => setTimeout(r, ms));
+    });
+
+  it('a trailing write does not fire after a link to a page that is still loading', async () => {
+    window.history.replaceState(null, '', '/a');
+    let resolveB: (m: { default: () => React.ReactElement }) => void = () => {};
+    const PageB = lazy(
+      () =>
+        new Promise<{ default: () => React.ReactElement }>((r) => {
+          resolveB = r;
+        })
+    );
+    function PageA() {
+      return (
+        <div>
+          <Counter />
+          <Link to="/b?n=1">go-b</Link>
+        </div>
+      );
+    }
+    render(
+      <BrowserRouter>
+        <Suspense fallback={<p>loading</p>}>
+          <Routes>
+            <Route path="/a" element={<PageA />} />
+            <Route path="/b" element={<PageB />} />
+          </Routes>
+        </Suspense>
+      </BrowserRouter>
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button'));
+    // The second change is waiting on the throttle. Leave the page now.
+    await user.click(screen.getByText('go-b'));
+    // The link carries the same query as the rendered page, so only the pathname
+    // tells the trailing write that this page is on its way out.
+    expect(here()).toBe('/b?n=1');
+    await wait(WRITE_THROTTLE_MS + 200);
+    expect(here()).toBe('/b?n=1');
+    await act(async () => {
+      resolveB({ default: () => <p>page-b</p> });
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(here()).toBe('/b?n=1');
+    expect(screen.getByText('page-b')).toBeInTheDocument();
+  });
+
+  it('a trailing write does not overwrite an external navigation that is still in flight', async () => {
+    window.history.replaceState(null, '', '/a');
+    render(
+      <BrowserRouter>
+        <Counter />
+      </BrowserRouter>
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button'));
+    expect(here()).toBe('/a?n=1');
+    // The address moves (Back, a sidebar link) but the router has not rendered it.
+    window.history.pushState(null, '', '/a?ext=1');
+    await wait(WRITE_THROTTLE_MS + 200);
+    expect(here()).toBe('/a?ext=1');
+  });
+
+  it('a write still waiting on the throttle is flushed when the page unmounts', async () => {
+    window.history.replaceState(null, '', '/a');
+    function Host() {
+      const [show, setShow] = useState(true);
+      return (
+        <div>
+          {show && <Counter />}
+          <button onClick={() => setShow(false)}>hide</button>
+        </div>
+      );
+    }
+    render(
+      <BrowserRouter>
+        <Host />
+      </BrowserRouter>
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByText('inc0'));
+    await user.click(screen.getByText('inc1'));
+    expect(here()).toBe('/a?n=1');
+    await user.click(screen.getByText('hide'));
+    // No waiting: the trailing write went out as the page unmounted.
+    expect(here()).toBe('/a?n=2');
+  });
+
+  it('a write that throws is forgotten, so the same URL arriving later is not taken for an echo', async () => {
+    window.history.replaceState(null, '', '/a');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const external = vi.fn();
+    function FailProbe() {
+      const [n, setN] = useState(0);
+      const navigate = useNavigate();
+      useUrlStateSync(
+        { n: n === 0 ? null : String(n) },
+        {
+          onExternalChange: (p) => {
+            external(p.toString());
+            setN(Number(p.get('n') ?? 0));
+          },
+        }
+      );
+      return (
+        <div>
+          <button onClick={() => setN(1)}>one</button>
+          <button onClick={() => navigate('/a?n=1')}>link-n1</button>
+        </div>
+      );
+    }
+    render(
+      <BrowserRouter>
+        <FailProbe />
+      </BrowserRouter>
+    );
+    const replace = vi.spyOn(window.history, 'replaceState').mockImplementationOnce(() => {
+      throw new DOMException('too many calls', 'SecurityError');
+    });
+    try {
+      const user = userEvent.setup();
+      await user.click(screen.getByText('one'));
+      expect(warn).toHaveBeenCalled();
+      expect(here()).toBe('/a');
+      await user.click(screen.getByText('link-n1'));
+      expect(here()).toBe('/a?n=1');
+      await waitFor(() => expect(external).toHaveBeenCalledWith('n=1'));
+    } finally {
+      replace.mockRestore();
       warn.mockRestore();
     }
   });
