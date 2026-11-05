@@ -71,7 +71,7 @@
           "action": {
             "op_id": "synthetic-OpID",
             "params": {
-              "synthetic-key": "synthetic-Params"
+              "synthetic": true
             },
             "label": "synthetic-Label"
           }

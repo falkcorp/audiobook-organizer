@@ -1,20 +1,23 @@
 // file: internal/plugins/maintenance/folder_books_unprobed_holds_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 406b9bc1-da96-44bc-b198-fc0b48344643
 // last-edited: 2026-11-05
 
 package maintenance
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 
@@ -63,6 +66,16 @@ func (f *fragFixture) fbProbeState(t *testing.T, idx, attempts int, lastErr stri
 		require.Equal(t, lastErr, got.Scan.DurationOK.LastError)
 	}
 	return id
+}
+
+// actionFileIDs is the fileIds a hold's action sends to the backfill, read the
+// way the backfill reads its params.
+func actionFileIDs(t *testing.T, a *repairs.RowHoldAction) []string {
+	t.Helper()
+	require.NotNil(t, a)
+	var p durationReextractParams
+	require.NoError(t, json.Unmarshal(a.Params, &p))
+	return p.FileIDs
 }
 
 func fbHold(row *repairs.Row, kind string) *repairs.RowHold {
@@ -152,7 +165,7 @@ func TestFolderBooksFixer_UnknownDurationIsHeldNotShort(t *testing.T) {
 				return
 			}
 			require.NotNil(t, h.Action)
-			require.Equal(t, []string{rowID}, h.Action.Params["fileIds"])
+			require.Equal(t, []string{rowID}, actionFileIDs(t, h.Action))
 		})
 	}
 }
@@ -182,13 +195,14 @@ func TestFolderBooksFixer_UnprobedHoldActionPayload(t *testing.T) {
 	a := h.Action
 	require.NotNil(t, a)
 	require.Equal(t, "Probe these files", a.Label)
-	require.Equal(t, f.p.durationBackfillDef().ID, a.OpID, "the action must name the real op")
-	require.Equal(t, map[string]any{"mode": "unknownRows", "fileIds": want, "dryRun": false}, a.Params)
+	require.Equal(t, durationBackfillOpID, a.OpID)
+	wantJSON, err := json.Marshal(map[string]any{"mode": "unknownRows", "fileIds": want, "dryRun": false})
+	require.NoError(t, err)
+	require.JSONEq(t, string(wantJSON), string(a.Params))
 
 	// The backfill accepts exactly this payload: strict decode, then its own
 	// parameter validation, and it resolves to a real (not dry) unknownRows run.
-	raw, err := json.Marshal(a.Params)
-	require.NoError(t, err)
+	raw := []byte(a.Params)
 	var p durationReextractParams
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
 	dec.DisallowUnknownFields()
@@ -225,7 +239,7 @@ func TestFolderBooksFixer_UnreadableHoldReprobesOnlyWhatTheBackfillActsOn(t *tes
 	require.Contains(t, h.Why, "2 file(s) in 2 orphan group(s)")
 	require.NotNil(t, h.Action)
 	require.Equal(t, "Re-probe these files", h.Action.Label)
-	require.Equal(t, []string{once}, h.Action.Params["fileIds"])
+	require.Equal(t, []string{once}, actionFileIDs(t, h.Action))
 }
 
 // A long probe error is clipped in the Why.
@@ -246,9 +260,9 @@ func TestFolderBooksFixer_UnreadableWhyClipsTheError(t *testing.T) {
 func TestFolderBooksFixer_OneUnknownMemberHoldsAGroupThatLooksLongEnough(t *testing.T) {
 	f := newGlobalRootFragFixture(t)
 	lead, paths := f.fbKnownSeed(t)
-	extra := f.file(t, "Alfred Pennyworth/Hush/02.mp3", 10)
+	extra := f.file(t, "Alfred Pennyworth/Hush/02.mp3", fbSeedFileSize)
 	require.NotEqual(t, paths[0], extra)
-	f.row(t, "flat-extra", f.ids["flat"], extra, "", 1999, 0, 7)
+	f.row(t, "flat-extra", f.ids["flat"], extra, "", fbSeedFileSize, 0, 7)
 
 	row := fbFindRow(f.fbPlan(t, fbFixerID, "op-plan"), lead)
 	require.NotNil(t, row)
@@ -356,4 +370,185 @@ func mustParseHours(t *testing.T, s string) float64 {
 	_, err := fmt.Sscanf(s, "%f", &h)
 	require.NoError(t, err)
 	return h
+}
+
+// stubUnknownRowsProbe replaces the unknownRows backfill's header probe with one that
+// reports every file as a two-hour work and counts its calls. It restores the
+// real probe when the test ends. The probe is a package variable, so a test
+// that uses it must not run in parallel.
+func stubUnknownRowsProbe(t *testing.T) *atomic.Int64 {
+	t.Helper()
+	var calls atomic.Int64
+	prev := unknownRowsProbe
+	unknownRowsProbe = func(context.Context, string) (*mediainfo.MediaInfo, error) {
+		calls.Add(1)
+		return &mediainfo.MediaInfo{Duration: fbUHFine, Codec: "mp3", Format: "mp3"}, nil
+	}
+	t.Cleanup(func() { unknownRowsProbe = prev })
+	return &calls
+}
+
+// runHoldAction runs a hold's action through the real Backfill book durations op
+// (the params exactly as the Repairs page would send them) and returns it, so a
+// test proves the offer does what it says rather than only that it is shaped
+// right.
+func (f *fragFixture) runHoldAction(t *testing.T, a *repairs.RowHoldAction) {
+	t.Helper()
+	require.NotNil(t, a)
+	require.Equal(t, durationBackfillOpID, a.OpID)
+	require.NoError(t, f.p.runDurationBackfill(context.Background(), a.Params, &urReporter{}))
+}
+
+// The offer closes the loop: Probe these files, run as sent, measures the rows,
+// and the next Plan holds nothing for them. (A hold that names files the
+// backfill declines would be shown forever.)
+func TestFolderBooksFixer_ProbeActionClearsTheHold(t *testing.T) {
+	calls := stubUnknownRowsProbe(t)
+	f := newGlobalRootFragFixture(t)
+	lead, _ := f.fbKnownSeed(t)
+	f.fbProbeState(t, 1, 0, "", database.DurationUnprobed)
+	f.fbProbeState(t, 3, 1, "ffprobe: Invalid data found", database.DurationProbeFailed)
+
+	row := fbFindRow(f.fbPlan(t, fbFixerID, "op-before"), lead)
+	require.NotNil(t, row)
+	unprobed, bad := fbHold(row, fbSkipUnprobed), fbHold(row, fbSkipUnreadableAudio)
+	require.NotNil(t, unprobed)
+	require.NotNil(t, bad)
+
+	f.runHoldAction(t, unprobed.Action)
+	f.runHoldAction(t, bad.Action)
+	require.EqualValues(t, 2, calls.Load(), "exactly the two named files are probed")
+
+	after := fbFindRow(f.fbPlan(t, fbFixerID, "op-after"), lead)
+	require.NotNil(t, after)
+	for _, k := range []string{fbSkipUnprobed, fbSkipUnreadableAudio, fbSkipFragmentary} {
+		require.False(t, fbHasHold(after, k), "%s still held after the probe: %+v", k, after.Holds)
+	}
+	require.NotContains(t, after.Current, "unmeasured_majority_shelf_files")
+}
+
+// A row the backfill declines is never offered to it: it stays in file_ids, is
+// left out of the action, and the Why names what settles it. The row that can be
+// probed beside it still is, and after that run the hold names only the one the
+// backfill cannot touch, with no action.
+func TestFolderBooksFixer_HoldOnlyOffersWhatTheBackfillActsOn(t *testing.T) {
+	cases := []struct {
+		name   string
+		spoil  func(bf *database.BookFile)
+		remedy string
+	}{
+		{"flagged missing although on disk", func(bf *database.BookFile) { bf.Missing = true },
+			"flagged missing although the file is on disk: a library scan refreshes the row"},
+		{"excluded from scanning", func(bf *database.BookFile) { bf.SkipScan = true },
+			"excluded from scanning"},
+		{"size changed since the last scan", func(bf *database.BookFile) { bf.FileSize = fbSeedFileSize + 5 },
+			"the file is 10 bytes on disk but the row records 15: a library scan refreshes the row"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			calls := stubUnknownRowsProbe(t)
+			f := newGlobalRootFragFixture(t)
+			lead, _ := f.fbKnownSeed(t)
+			idle := f.fbProbeState(t, 0, 0, "", database.DurationUnprobed)
+			f.fbSetRow(t, "flat", 0, c.spoil)
+			live := f.fbProbeState(t, 1, 0, "", database.DurationUnprobed)
+
+			row := fbFindRow(f.fbPlan(t, fbFixerID, "op-before"), lead)
+			require.NotNil(t, row)
+			h := fbHold(row, fbSkipUnprobed)
+			require.NotNil(t, h, "skipped=%q holds=%+v", row.Skipped, row.Holds)
+			want := []string{idle, live}
+			slices.Sort(want)
+			require.Equal(t, want, h.FileIDs, "every unmeasured file stays named")
+			require.Contains(t, h.Why, c.remedy)
+			require.Contains(t, h.Why, "the backfill leaves 1 of them alone")
+			require.NotNil(t, h.Action)
+			require.Equal(t, []string{live}, actionFileIDs(t, h.Action), "the action reaches only the file the backfill acts on")
+
+			f.runHoldAction(t, h.Action)
+			require.EqualValues(t, 1, calls.Load())
+
+			after := fbFindRow(f.fbPlan(t, fbFixerID, "op-after"), lead)
+			require.NotNil(t, after)
+			h = fbHold(after, fbSkipUnprobed)
+			require.NotNil(t, h)
+			require.Equal(t, []string{idle}, h.FileIDs)
+			require.Nil(t, h.Action, "nothing left that the backfill would act on: no offer to loop on")
+			require.NotContains(t, h.Why, "run Backfill book durations")
+			require.Contains(t, h.Why, c.remedy)
+		})
+	}
+}
+
+// A group is partitioned per member: one file at the attempt ceiling plus one
+// never-probed file in the SAME group are held under both kinds, and the
+// unprobed file is in the probe action (a group-wide verdict would have hidden
+// it behind the unreadable hold, which probes nothing it does not name).
+func TestFolderBooksFixer_MixedGroupIsHeldPerMember(t *testing.T) {
+	f := newGlobalRootFragFixture(t)
+	lead, _ := f.fbKnownSeed(t)
+	extra := f.file(t, "Alfred Pennyworth/Hush/02.mp3", fbSeedFileSize)
+	f.row(t, "flat-extra", f.ids["flat"], extra, "", fbSeedFileSize, 0, 7)
+	extraID := f.rowIDs["flat-extra"]
+	ceiling := f.fbProbeState(t, 0, database.DeepScanMaxAttempts, "ffprobe: moov atom not found", database.DurationUnreadable)
+
+	row := fbFindRow(f.fbPlan(t, fbFixerID, "op-plan"), lead)
+	require.NotNil(t, row)
+	bad, unprobed := fbHold(row, fbSkipUnreadableAudio), fbHold(row, fbSkipUnprobed)
+	require.NotNil(t, bad, "%+v", row.Holds)
+	require.NotNil(t, unprobed, "%+v", row.Holds)
+	require.Equal(t, []string{ceiling}, bad.FileIDs)
+	require.Equal(t, []string{extraID}, unprobed.FileIDs)
+	require.Contains(t, bad.Why, "1 file(s) in 1 orphan group(s) failed their duration probe")
+	require.Contains(t, unprobed.Why, `"Hush" (2 file(s))`)
+	require.Nil(t, bad.Action, "a file at the ceiling needs an explicit reset first")
+	require.NotNil(t, unprobed.Action)
+	require.Equal(t, []string{extraID}, actionFileIDs(t, unprobed.Action))
+
+	// With a retryable failure instead, both actions exist, each over its own file.
+	f.fbProbeState(t, 0, 1, "ffprobe: Invalid data found", database.DurationProbeFailed)
+	row = fbFindRow(f.fbPlan(t, fbFixerID, "op-plan-2"), lead)
+	require.NotNil(t, row)
+	bad, unprobed = fbHold(row, fbSkipUnreadableAudio), fbHold(row, fbSkipUnprobed)
+	require.NotNil(t, bad)
+	require.NotNil(t, unprobed)
+	require.NotNil(t, bad.Action)
+	require.NotNil(t, unprobed.Action)
+	require.Equal(t, []string{ceiling}, actionFileIDs(t, bad.Action))
+	require.Equal(t, []string{extraID}, actionFileIDs(t, unprobed.Action))
+}
+
+// "Unknown is never a long file" in classify's flat-works test: flat files under
+// distinct stems, none measured, are NOT long works, so the folder is not
+// flagged; the same files measured at three hours each are. (Counting an unknown
+// file as long would flag, and then apply, a folder on no evidence.) Six files:
+// fbMinFiles is five.
+func TestFolderBooksFixer_UnknownFilesAreNotLongFlatWorks(t *testing.T) {
+	const threeHours = 3 * 3600
+	seed := func(t *testing.T, secs int) (*fragFixture, string) {
+		f := newGlobalRootFragFixture(t)
+		_, err := f.s.CreateAuthor("Alfred Pennyworth")
+		require.NoError(t, err)
+		var paths []string
+		for _, n := range []string{"Hush", "Year One", "Knightfall", "The Long Halloween", "Court of Owls", "Zero Year"} {
+			paths = append(paths, f.file(t, fbITunes+"/Alfred Pennyworth/"+n+".mp3", fbSeedFileSize))
+		}
+		return f, f.fbBook(t, "flat", "Alfred Pennyworth", f.path(fbITunes+"/Alfred Pennyworth"), secs, paths...)
+	}
+
+	t.Run("measured at three hours each is flagged", func(t *testing.T) {
+		f, id := seed(t, threeHours)
+		row := fbFindRow(f.fbPlan(t, fbFixerID, "op-plan"), id)
+		require.NotNil(t, row, "long flat works under distinct stems are a folder-book")
+		require.Equal(t, fbTierShelf, row.Class)
+		require.Contains(t, strings.Join(row.Evidence, "|"), "6 flat files of 3h or more under distinct names")
+	})
+	t.Run("unmeasured is not flagged", func(t *testing.T) {
+		f, id := seed(t, threeHours)
+		for i := range 6 {
+			f.fbProbeState(t, i, 0, "", database.DurationUnprobed)
+		}
+		require.Nil(t, fbFindRow(f.fbPlan(t, fbFixerID, "op-plan"), id),
+			"an unknown duration must not read as a long file")
+	})
 }

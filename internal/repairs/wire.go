@@ -1,5 +1,5 @@
 // file: internal/repairs/wire.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4c7d2e91-5b0a-4e38-8f16-a93d6b1c0e57
 // last-edited: 2026-11-05
 
@@ -276,8 +276,9 @@ type RowHold struct {
 type RowHoldAction struct {
 	// OpID is the operation definition id to start.
 	OpID string `json:"op_id"`
-	// Params are the operation's parameters, as its params JSON object.
-	Params map[string]any `json:"params,omitempty"`
+	// Params are the operation's parameters, as its params JSON object, sent
+	// to the op as is (the same shape as PlanParams.Params).
+	Params json.RawMessage `json:"params,omitempty"`
 	// Label is the button text.
 	Label string `json:"label"`
 }

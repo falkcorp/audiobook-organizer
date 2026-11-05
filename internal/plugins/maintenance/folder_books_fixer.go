@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.25.1
+// version: 2.26.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-11-05
 
@@ -102,10 +102,12 @@
 // group whose title and author already name a live book (review it, never
 // duplicate); a fragmentary group shorter than the chapter-consolidation
 // threshold (judged only on groups whose every file has a known duration, after
-// the sibling borrow; a group with an unmeasured file is held skipped_unprobed
-// instead, one whose probe failed skipped_unreadable_audio, each with the
-// book_file ids and a follow-up that starts the duration backfill: unknown is
-// never short, and Plan never probes); a new book needed outside books/itunes/**; a primary folder-book
+// the sibling borrow; a group's unmeasured files are held skipped_unprobed
+// instead, those whose probe failed skipped_unreadable_audio (per member, so one
+// group can be named under both), each with the book_file ids and a follow-up
+// that starts the duration backfill on the files it will act on
+// (unknownRowActionable; the others stay named, with what settles them): unknown
+// is never short, and Plan never probes); a new book needed outside books/itunes/**; a primary folder-book
 // with no heir in its version group; an iTunes persistent id on the
 // folder-book itself or among its external ids; listening progress; Doctor Who
 // / Big Finish / Torchwood (framework guard).
@@ -298,10 +300,6 @@ const (
 	// folder-book's apply creates one).
 	fbSkipOnlyPresentCopy = "skipped_only_present_copy"
 )
-
-// fbDurationBackfillOpID is the op the unprobed hold's action starts (see
-// durationBackfillDef; a test pins the two together).
-const fbDurationBackfillOpID = "maintenance.duration-backfill"
 
 // Per-row caps (fbSkipTooLarge).
 const (
@@ -697,11 +695,20 @@ type fbUnknownFile struct {
 	rowID, bookID, path string
 	state               database.BookFileDurationState
 	lastErr             string
+	// acts: the Backfill book durations op (mode unknownRows) acts on the row.
+	// When it does not, why says what settles it instead. Both come from
+	// unknownRowActionable, the rule the backfill itself runs, so an action
+	// built from the rows with acts set names nothing the run will decline.
+	acts bool
+	why  string
 }
 
-func fbUnknownFileOf(r database.BookFileCore) fbUnknownFile {
+// fbUnknownFileOf describes the unknown row r; diskSize is the size of the file
+// at its path on disk (0 when not known).
+func fbUnknownFileOf(r database.BookFileCore, diskSize int64) fbUnknownFile {
+	acts, why := unknownRowActionable(r, diskSize)
 	return fbUnknownFile{rowID: r.ID, bookID: r.BookID, path: r.FilePath,
-		state: r.DurationState(), lastErr: r.Scan.DurationOK.LastError}
+		state: r.DurationState(), lastErr: r.Scan.DurationOK.LastError, acts: acts, why: why}
 }
 
 // unreadable: a probe ran on the present file and failed, for a reason other
@@ -713,15 +720,6 @@ func (u fbUnknownFile) unreadable() bool {
 		!database.IsDurationTimeoutError(u.lastErr)
 }
 
-// probeable: the Backfill book durations op (mode unknownRows) acts on the
-// row. It probes Unprobed rows, ProbeFailed rows below the attempt ceiling and
-// Unreadable rows whose last error is a timeout; it leaves a row that
-// failed the ceiling for a real reason alone (an explicit reset is the way
-// back for those).
-func (u fbUnknownFile) probeable() bool {
-	return u.state != database.DurationUnreadable || database.IsDurationTimeoutError(u.lastErr)
-}
-
 // fbClip cuts s to at most n runes, for a probe error shown in a hold's Why.
 func fbClip(s string, n int) string {
 	s = strings.TrimSpace(s)
@@ -729,6 +727,16 @@ func fbClip(s string, n int) string {
 		return string(r[:n]) + "..."
 	}
 	return s
+}
+
+// fbNotActedOn is the sentence a hold adds for the files in idle ("path (why)")
+// that the backfill will not act on, so the owner is told the real remedy
+// instead of being offered an action that does nothing for them. "" when none.
+func fbNotActedOn(idle []string) string {
+	if len(idle) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("; the backfill leaves %d of them alone: %s", len(idle), strings.Join(fbFirst(idle, 5), "; "))
 }
 
 // fbSortedIDs is ids sorted and de-duplicated; nil when none.
@@ -748,11 +756,13 @@ func fbProbeAction(label string, fileIDs []string) *repairs.RowHoldAction {
 	if len(fileIDs) == 0 {
 		return nil
 	}
-	return &repairs.RowHoldAction{
-		OpID:   fbDurationBackfillOpID,
-		Params: map[string]any{"mode": durationModeUnknownRows, "fileIds": fileIDs, "dryRun": false},
-		Label:  label,
+	// A fixed shape of strings, a bool and string slices: it cannot fail to
+	// encode, so a failure is a programming error and says so loudly.
+	params, err := json.Marshal(map[string]any{"mode": durationModeUnknownRows, "fileIds": fileIDs, "dryRun": false})
+	if err != nil {
+		panic(fmt.Sprintf("folder-books: encode the probe action's params: %v", err))
 	}
+	return &repairs.RowHoldAction{OpID: durationBackfillOpID, Params: params, Label: label}
 }
 
 func (lib *fbLib) finish() {
@@ -1489,26 +1499,26 @@ func fbShelfPopulated(dir string) error {
 }
 
 // onDisk reports whether p exists, judged from the filesystem (never from a
-// book_file row's Missing flag). Only a clean "does not exist" under a
+// book_file row's Missing flag), with the file's FileInfo when it does. Only a clean "does not exist" under a
 // populated shelf root counts as gone; every other stat error, and an ENOENT
 // under a shelf that cannot be shown to be mounted, comes back as an error so
 // the row is skipped as unreadable instead of guessed at. shelves caches the
 // per-shelf verdict for one row build (one goroutine, so no lock).
-func (f *folderBooksFixer) onDisk(lib *fbLib, p string, shelves map[string]error) (bool, error) {
+func (f *folderBooksFixer) onDisk(lib *fbLib, p string, shelves map[string]error) (fi os.FileInfo, present bool, err error) {
 	stat := f.stat
 	if stat == nil {
 		stat = os.Stat
 	}
-	_, err := stat(p)
+	fi, err = stat(p)
 	if err == nil {
-		return true, nil
+		return fi, true, nil
 	}
 	if !errors.Is(err, fs.ErrNotExist) {
-		return false, err
+		return nil, false, err
 	}
 	shelf := lib.shelfOf(p)
 	if shelf == "" {
-		return false, fmt.Errorf("%w (and %s is under no configured shelf, so an unmounted volume cannot be ruled out)", err, p)
+		return nil, false, fmt.Errorf("%w (and %s is under no configured shelf, so an unmounted volume cannot be ruled out)", err, p)
 	}
 	verdict, seen := shelves[shelf]
 	if !seen {
@@ -1520,9 +1530,9 @@ func (f *folderBooksFixer) onDisk(lib *fbLib, p string, shelves map[string]error
 		shelves[shelf] = verdict
 	}
 	if verdict != nil {
-		return false, fmt.Errorf("%w (shelf root unusable: %v)", err, verdict)
+		return nil, false, fmt.Errorf("%w (shelf root unusable: %v)", err, verdict)
 	}
-	return false, nil
+	return nil, false, nil
 }
 
 var (
@@ -1895,6 +1905,9 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	type orphan struct {
 		row                 database.BookFileCore
 		key, lbl, dir, root string
+		// diskSize is the size of the file on disk, 0 when it was not statted
+		// (the unknownRows backfill declines a row whose size differs).
+		diskSize int64
 	}
 	var orphans []orphan
 	var adoptCands []fbAdoptCand
@@ -1911,6 +1924,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		groupRoot := lib.groupRoot(p, lead.Shelf, lead.Root)
 		k, lbl, dir := fbGroupKey(p, groupRoot)
 		cls := "orphan"
+		var diskSize int64
 		ownID := fbCreatedID(row.RowID, members[0], k)
 		for _, h := range lib.holders[p] {
 			if isMember[h] {
@@ -1972,7 +1986,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		// these paths are statted, inside this row's own build (Plan's
 		// RunItems pool, or Replan's single row).
 		if cls == "orphan" {
-			present, err := f.onDisk(lib, p, shelfVerdict)
+			fi, present, err := f.onDisk(lib, p, shelfVerdict)
 			switch {
 			case err != nil:
 				unreadable = append(unreadable, fmt.Sprintf("%s (%v)", p, err))
@@ -1983,6 +1997,9 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 				// holder's row for it (applyGroup writes the new row present
 				// either way).
 				src[p] = other
+			}
+			if present && fi != nil {
+				diskSize = fi.Size()
 			}
 		}
 		// Only a present copy on the row's own folder-books can be stranded:
@@ -2029,7 +2046,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 			missingOrphans++
 			missingPaths = append(missingPaths, p)
 		default:
-			orphans = append(orphans, orphan{row: src[p], key: k, lbl: lbl, dir: dir, root: groupRoot})
+			orphans = append(orphans, orphan{row: src[p], key: k, lbl: lbl, dir: dir, root: groupRoot, diskSize: diskSize})
 		}
 		// held and held-by-folder fingerprint alike: a sibling row applying
 		// moves a path from one to the other without changing this row.
@@ -2082,7 +2099,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		if sec, ok := lib.rowDuration(o.row); ok {
 			g.Secs += sec
 		} else {
-			unknownIn[o.key] = append(unknownIn[o.key], fbUnknownFileOf(o.row))
+			unknownIn[o.key] = append(unknownIn[o.key], fbUnknownFileOf(o.row, o.diskSize))
 		}
 	}
 	var fragmentary, split, outside, unclear []string
@@ -2133,19 +2150,26 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 			seenTitle[t] = true
 		}
 		if unk := unknownIn[g.Key]; len(unk) > 0 {
-			// Held instead of judged: unknown is never short.
-			var bad []fbUnknownFile
+			// Held instead of judged: unknown is never short. Each member goes
+			// to the hold its OWN state names, so a group with a failed file and
+			// a never-probed one is named under both kinds and the probe action
+			// reaches the unprobed file too (a group-wide verdict would leave it
+			// out of every action).
+			var bad, unprobed []fbUnknownFile
 			for _, u := range unk {
 				if u.unreadable() {
 					bad = append(bad, u)
+				} else {
+					unprobed = append(unprobed, u)
 				}
 			}
 			if len(bad) > 0 {
 				unreadableGroups = append(unreadableGroups, name)
 				badFiles = append(badFiles, bad...)
-			} else {
+			}
+			if len(unprobed) > 0 {
 				unprobedGroups = append(unprobedGroups, name)
-				unprobedFiles = append(unprobedFiles, unk...)
+				unprobedFiles = append(unprobedFiles, unprobed...)
 			}
 		} else if g.Secs < importChapterSec() {
 			fragmentary = append(fragmentary, fmt.Sprintf("%q (%d file(s), %ds)", g.Title, len(g.Files), g.Secs))
@@ -2416,29 +2440,43 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 			strings.Join(fbFirst(dup, 5), "; ")), dupSingle)
 	}
 	if len(badFiles) > 0 {
-		var named, retry, ids []string
+		var named, retry, ids, idle []string
 		for _, u := range badFiles {
 			named = append(named, fmt.Sprintf("%s (%s)", u.path, fbClip(u.lastErr, fbErrClip)))
 			ids = append(ids, u.rowID)
-			if u.probeable() {
+			if u.acts {
 				retry = append(retry, u.rowID)
+			} else {
+				idle = append(idle, fmt.Sprintf("%s (%s)", u.path, u.why))
 			}
 		}
-		// Only the rows the backfill will act on go in the action: a row that
-		// failed the attempt ceiling is settled there and needs an explicit reset.
+		// Only the rows the backfill will act on go in the action (the same rule
+		// the run applies: unknownRowActionable). The others stay in file_ids and
+		// the Why names what settles each: a row at the attempt ceiling needs an
+		// explicit reset, a stale or excluded row a scan or an owner's decision.
 		blockFiles(fbSkipUnreadableAudio, fmt.Sprintf("%d file(s) in %d orphan group(s) failed their duration probe and may be "+
-			"bad audio, so the groups cannot be judged: %s", len(badFiles), len(unreadableGroups),
-			strings.Join(fbFirst(named, 5), "; ")), fbSortedIDs(ids), fbProbeAction("Re-probe these files", fbSortedIDs(retry)))
+			"bad audio, so the groups cannot be judged: %s%s", len(badFiles), len(unreadableGroups),
+			strings.Join(fbFirst(named, 5), "; "), fbNotActedOn(idle)), fbSortedIDs(ids),
+			fbProbeAction("Re-probe these files", fbSortedIDs(retry)))
 	}
 	if len(unprobedFiles) > 0 {
-		var ids, books []string
+		var ids, probe, books, idle []string
 		for _, u := range unprobedFiles {
 			ids = append(ids, u.rowID)
-			books = append(books, u.bookID)
+			if u.acts {
+				probe = append(probe, u.rowID)
+				books = append(books, u.bookID)
+			} else {
+				idle = append(idle, fmt.Sprintf("%s (%s)", u.path, u.why))
+			}
 		}
-		blockFiles(fbSkipUnprobed, fmt.Sprintf("%d file(s) have no measured duration; run Backfill book durations (unknown rows) "+
-			"for book(s) %s (orphan group(s) held: %s)", len(unprobedFiles), strings.Join(fbFirst(fbSortedIDs(books), 5), ", "),
-			strings.Join(fbFirst(unprobedGroups, 5), "; ")), fbSortedIDs(ids), fbProbeAction("Probe these files", fbSortedIDs(ids)))
+		why := fmt.Sprintf("%d file(s) have no measured duration", len(unprobedFiles))
+		if len(probe) > 0 {
+			why += fmt.Sprintf("; run Backfill book durations (unknown rows) for book(s) %s",
+				strings.Join(fbFirst(fbSortedIDs(books), 5), ", "))
+		}
+		why += fmt.Sprintf(" (orphan group(s) held: %s)", strings.Join(fbFirst(unprobedGroups, 5), "; ")) + fbNotActedOn(idle)
+		blockFiles(fbSkipUnprobed, why, fbSortedIDs(ids), fbProbeAction("Probe these files", fbSortedIDs(probe)))
 	}
 	if len(fragmentary) > 0 {
 		block(fbSkipFragmentary, fmt.Sprintf("%d orphan group(s) shorter than the chapter-consolidation threshold would become "+
