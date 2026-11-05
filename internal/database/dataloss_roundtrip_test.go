@@ -1,7 +1,7 @@
 // file: internal/database/dataloss_roundtrip_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e4a5b6c7-8d9e-0f1a-2b3c-roundtrip00001
-// last-edited: 2026-10-23
+// last-edited: 2026-11-05
 
 package database
 
@@ -129,6 +129,11 @@ func TestRoundTrip_UpdateBookFile(t *testing.T) {
 	// Retired is owned by RetireBookFiles (bfStoredOwned): a generic write can
 	// neither set nor clear it, and a retired row is hidden from GetBookFiles.
 	full.Retired = false
+	// The populator gave the row a Duration; a row with a Duration carries
+	// exactly DurationOK{Done:true} and every write path enforces it
+	// (mergeBookFileFromStored), so the sentinel failure record the populator put
+	// there is not a state the store can hold beside a value.
+	full.Scan.DurationOK = StageStatus{Done: true}
 
 	want := &BookFile{}
 	jsonClone(t, full, want)

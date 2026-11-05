@@ -2884,7 +2884,7 @@ func createBookFilesForBookWithAudio(bookFilePath string, segmentFiles []string,
 			stored = storedBookFileAt(filePath, scanLog)
 		}
 		probedReplaced := false
-		if stored != nil && bf.FileHash != "" && stored.FileHash != "" && stored.FileHash != bf.FileHash {
+		if stored != nil && hashKnownToDiffer(bf.FileHash, stored.FileHash) {
 			probeReplacedFileAudio(bf, filePath, scanLog)
 			probedReplaced = true
 		}
@@ -2893,12 +2893,20 @@ func createBookFilesForBookWithAudio(bookFilePath string, segmentFiles []string,
 		// readable: ABS reports a book's duration as the sum of its rows, so a
 		// 0 here shows the book as "0" in the app. Skipped when:
 		//   - the replaced-file probe above already read this file;
-		//   - the stored row at this path holds the SAME bytes and a duration,
-		//     because the merge keeps that stored duration anyway;
+		//   - the stored row at this path is the same file as far as is known
+		//     (the hashes are not known to differ: equal, or one unknown, which
+		//     the merge does not treat as a change either) and
+		//       - holds a duration, because the merge keeps that stored
+		//         duration anyway, so a probe is wasted work and a failed one
+		//         would leave a failure record beside the kept value; or
+		//       - is at the attempt ceiling (DurationUnreadable), which stays
+		//         there until an explicit ResetDuration instead of being
+		//         re-probed on every scan; the merge restores the stored stage;
 		//   - the file could not be stat'ed (nothing to read).
-		sameStoredWithDuration := stored != nil && stored.DurationState() == database.DurationKnown &&
-			bf.FileHash != "" && stored.FileHash == bf.FileHash
-		if statErr == nil && !probedReplaced && !sameStoredWithDuration {
+		sameStored := stored != nil && !hashKnownToDiffer(bf.FileHash, stored.FileHash)
+		storedSettled := sameStored && (stored.DurationState() == database.DurationKnown ||
+			stored.DurationState() == database.DurationUnreadable)
+		if statErr == nil && !probedReplaced && !storedSettled {
 			known := bookfileaudio.Known{
 				Info:           knownInfo[filePath],
 				SingleFileBook: len(segmentFiles) == 1,

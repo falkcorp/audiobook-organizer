@@ -74,10 +74,18 @@ func seedDurationStage(bf, stored *database.BookFile) {
 	if bf == nil || stored == nil {
 		return
 	}
-	if bf.FileHash != "" && stored.FileHash != "" && bf.FileHash != stored.FileHash {
+	if hashKnownToDiffer(bf.FileHash, stored.FileHash) {
 		return
 	}
 	bf.Scan.DurationOK = stored.Scan.DurationOK
+}
+
+// hashKnownToDiffer is true when both hashes are known and unequal: a replaced
+// file. An unknown (empty) hash on either side is never "changed", the same
+// rule database.judgeBookFileContent applies in the merge, so every scanner
+// decision that has to agree with the merge asks it here.
+func hashKnownToDiffer(a, b string) bool {
+	return a != "" && b != "" && a != b
 }
 
 // storedBookFileAt is the stored LIVE row that owns filePath, the row the

@@ -105,6 +105,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -327,6 +328,36 @@ type rfEnv struct {
 	// itunesPathFor maps a library file path to the iTunes location recorded
 	// in itunes_path, or "" when no mapping covers it. nil means no mapping.
 	itunesPathFor func(string) string
+	// dryRun is set by repointMissingToFolderAudio from the op's params. It only
+	// changes how loudly the plan-time probe logs (see planProbeLog).
+	dryRun bool
+	// probeLog receives the plan-time probe's log lines. nil: durLog in a dry
+	// run, bookfileaudio's own logger otherwise. A seam for tests.
+	probeLog logger.LevelLogger
+}
+
+// demotedWarnLog is a logger whose Warn goes to Debug. bookfileaudio checks
+// DemotesWarn so a demoted line does not use up the once-per-cause warning.
+type demotedWarnLog struct{ logger.LevelLogger }
+
+func (d demotedWarnLog) Warn(msg string, args ...any) { d.LevelLogger.Debug(msg, args...) }
+func (demotedWarnLog) DemotesWarn() bool              { return true }
+
+// planProbeLog is the logger for the plan-time header reads. A dry run (the
+// default mode) probes every target of every affected book and a failure is the
+// same line whether or not anything will be written, so it logs at Debug there:
+// a dry run over a library with ffprobe missing or a bad mount would otherwise
+// be one Warn per target. In a real run the plan-time read is the only place
+// the failure is logged (the apply replays it), so it keeps Warn.
+func (env rfEnv) planProbeLog() logger.LevelLogger {
+	base := env.probeLog
+	if base == nil && env.dryRun {
+		base = durLog
+	}
+	if base != nil && env.dryRun {
+		return demotedWarnLog{base}
+	}
+	return base
 }
 
 func (p *Plugin) repointMissingToFolderAudioDef() sdk.OperationDef {
@@ -441,6 +472,7 @@ func repointMissingToFolderAudio(ctx context.Context, env rfEnv, params rfParams
 		return report, fmt.Errorf("%s: %w", rfOpName, err)
 	}
 	report.DryRun = dryRun
+	env.dryRun = dryRun
 	if params.Limit < 0 {
 		return report, fmt.Errorf("%s: limit must be >= 0", rfOpName)
 	}
@@ -933,18 +965,21 @@ func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 	// would otherwise be written as real.
 	sources := map[string]bool{}
 	for _, target := range r.NewPaths {
+		probe := rfProbe{Size: -1}
+		if st, serr := os.Stat(target); serr == nil { // before the read, so a change during it is caught at apply
+			probe.Size, probe.ModTime = st.Size(), st.ModTime()
+		}
 		scratch := database.BookFile{FilePath: target}
-		src := bookfileaudio.EnsureDuration(&scratch, bookfileaudio.Known{}, nil)
+		src := bookfileaudio.EnsureDuration(&scratch, bookfileaudio.Known{}, env.planProbeLog())
 		sources[src.String()] = true
 		scratchSec, _ := scratch.DurationSec() // unknown is 0, as before
-		plan.Probes[target] = rfProbe{
-			Info:   mediainfo.MediaInfo{Duration: scratchSec, Codec: scratch.Codec},
-			Source: src,
-			// The failure text the plan-time probe recorded, replayed at apply:
-			// a bare MediaInfo{Duration, Codec} would turn a missing ffprobe
-			// into a counted "0s" attempt.
-			Failure: scratch.Scan.DurationOK.LastError,
-		}
+		probe.Info = mediainfo.MediaInfo{Duration: scratchSec, Codec: scratch.Codec}
+		probe.Source = src
+		// The failure text the plan-time probe recorded, replayed at apply:
+		// a bare MediaInfo{Duration, Codec} would turn a missing ffprobe
+		// into a counted "0s" attempt.
+		probe.Failure = scratch.Scan.DurationOK.LastError
+		plan.Probes[target] = probe
 		r.DurationSec += scratchSec
 	}
 	var srcs []string
@@ -1089,6 +1124,9 @@ func applyRFBook(ctx context.Context, env rfEnv, liveBooks map[string]bool, r rf
 		if err != nil || !st.Mode().IsRegular() {
 			return rfOutcomeChanged, "target no longer a regular file: " + target
 		}
+		if probe, ok := plan.Probes[target]; ok && !probe.matches(st) {
+			return rfOutcomeChanged, "target changed since the plan's header read: " + target
+		}
 		claim, err := rfPathClaim(env.store, liveBooks, r.BookID, target)
 		if err != nil {
 			return rfOutcomeFailed, "owner re-check: " + err.Error()
@@ -1172,6 +1210,19 @@ type rfProbe struct {
 	// Failure is the DurationOK.LastError to record when Source is
 	// SourceProbeFailed.
 	Failure string
+	// Size and ModTime are the target's stat taken just before the read. The
+	// apply replays this outcome without reading the file again, so it first
+	// checks the file is still the one that was read: a target replaced between
+	// the plan and the write (a re-rip dropped in, a copy still in progress)
+	// gets neither the old duration nor the old failure. Size is -1 when the stat
+	// failed, which no later stat matches.
+	Size    int64
+	ModTime time.Time
+}
+
+// matches reports whether st is the file this probe read.
+func (p rfProbe) matches(st os.FileInfo) bool {
+	return st.Size() == p.Size && st.ModTime().Equal(p.ModTime)
 }
 
 // rfApplyProbe puts a plan-time probe's outcome on f. A real duration goes

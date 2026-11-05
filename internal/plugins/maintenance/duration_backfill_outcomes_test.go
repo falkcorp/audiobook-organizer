@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -149,10 +150,11 @@ func TestDurationReextract_MixedBookRecordsBothOutcomes(t *testing.T) {
 	require.Equal(t, database.DurationProbeFailed, u.DurationState())
 }
 
-// A book whose every segment fails to probe must record them with ONE aggregate
-// recompute, not one per row (the 2026-09-19 O(n^2) incident). Real PebbleStore:
+// A failure record changes nothing an aggregate reads, so a book whose every
+// segment fails to probe is recorded with NO aggregate recompute at all, and
+// certainly not one per row (the 2026-09-19 O(n^2) incident). Real PebbleStore:
 // the per-write recompute lives inside it, so a MockStore could never go red.
-func TestDurationReextract_ManyFailedSegmentsRecomputeAggregatesOnce(t *testing.T) {
+func TestDurationReextract_ManyFailedSegmentsRecomputeNothing(t *testing.T) {
 	stubFFprobe(t, "exit 1")
 	s := newRepairPebble(t)
 	dir := t.TempDir()
@@ -168,8 +170,8 @@ func TestDurationReextract_ManyFailedSegmentsRecomputeAggregatesOnce(t *testing.
 	logs := aggtest.Capture(t) // after setup: only the op's recomputes count
 	require.NoError(t, New(fakeDeps{store: s}).runDurationBackfill(context.Background(), applyReextractParams(t), &fakeReporter{}))
 
-	require.Equal(t, 1, aggtest.CountInvocations(logs(), book.ID),
-		"RecomputeBookAggregates must run once for a %d-segment book of failures", n)
+	require.Equal(t, 0, aggtest.CountInvocations(logs(), book.ID),
+		"recording %d failures must not recompute the book's aggregates", n)
 	files, err := s.GetBookFiles(book.ID)
 	require.NoError(t, err)
 	require.Len(t, files, n)
@@ -177,4 +179,130 @@ func TestDurationReextract_ManyFailedSegmentsRecomputeAggregatesOnce(t *testing.
 		require.Nil(t, f.Duration)
 		require.Equal(t, 1, f.Scan.DurationOK.Attempts, f.FilePath)
 	}
+}
+
+// A mixed book (many failed segments plus measured ones) is recomputed exactly
+// once: by UpdateBookFiles for the measured segments, not again by the failure
+// writes.
+func TestDurationReextract_MixedBookRecomputesOnce(t *testing.T) {
+	stubFFprobe(t, "exit 1")
+	s := newRepairPebble(t)
+	dir := t.TempDir()
+	book, err := s.CreateBook(&database.Book{Title: "Batman: Year Two", FilePath: dir})
+	require.NoError(t, err)
+	const bad = 12
+	for i := 0; i < bad; i++ {
+		path := filepath.Join(dir, fmt.Sprintf("bad%02d.mp3", i))
+		require.NoError(t, os.WriteFile(path, make([]byte, 480_000), 0o600))
+		require.NoError(t, s.CreateBookFile(&database.BookFile{BookID: book.ID, FilePath: path, FileSize: 480_000, TrackNumber: i + 1}))
+	}
+	for i := 0; i < 3; i++ {
+		require.NoError(t, s.CreateBookFile(&database.BookFile{BookID: book.ID, FilePath: filepath.Join(dir, fmt.Sprintf("good%d.mp3", i)),
+			FileSize: 2_000_000, TrackNumber: bad + i + 1, AcoustIDFingerprintDurationSec: 100}))
+	}
+
+	logs := aggtest.Capture(t)
+	require.NoError(t, New(fakeDeps{store: s}).runDurationBackfill(context.Background(), applyReextractParams(t), &fakeReporter{}))
+
+	require.Equal(t, 1, aggtest.CountInvocations(logs(), book.ID), "one recompute for the whole mixed book")
+	files, err := s.GetBookFiles(book.ID)
+	require.NoError(t, err)
+	failed, measured := 0, 0
+	for _, f := range files {
+		switch {
+		case f.Duration != nil:
+			measured++
+			require.Equal(t, database.StageStatus{Done: true}, f.Scan.DurationOK)
+		case f.Scan.DurationOK.Attempts == 1:
+			failed++
+		}
+	}
+	require.Equal(t, 3, measured)
+	require.Equal(t, bad, failed)
+}
+
+// The failure write is conditional on the row still being the one that was
+// probed: measured since, moved, rewritten with other bytes, or marked missing.
+func TestRecordSegmentProbeFailures_SkipsRowsThatChangedUnderneath(t *testing.T) {
+	cases := map[string]struct {
+		change      func(bf *database.BookFile)
+		wantWritten int
+	}{
+		"untouched (control)": {func(*database.BookFile) {}, 1},
+		"measured since":      {func(bf *database.BookFile) { _ = bf.SetMeasuredDuration(30) }, 0},
+		"rewritten bytes":     {func(bf *database.BookFile) { bf.FileHash = "hash-b" }, 0},
+		"marked missing":      {func(bf *database.BookFile) { bf.Missing = true }, 0},
+		"moved":               {func(bf *database.BookFile) { bf.FilePath += ".moved" }, 0},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := newRepairPebble(t)
+			dir := t.TempDir()
+			book, err := s.CreateBook(&database.Book{Title: "Batman: Hush", FilePath: dir})
+			require.NoError(t, err)
+			require.NoError(t, s.CreateBookFile(&database.BookFile{
+				BookID: book.ID, FilePath: filepath.Join(dir, "01.mp3"), FileHash: "hash-a", FileSize: 480_000, TrackNumber: 1}))
+			probed := onlySegment(t, s, book.ID) // what the backfill probed
+			failed := probed
+			failed.RecordDurationProbeFailure("exit status 1")
+
+			cur, err := s.ModifyBookFile(book.ID, probed.ID, func(bf *database.BookFile) error { tc.change(bf); return nil })
+			require.NoError(t, err)
+			require.NotNil(t, cur)
+
+			written, errs, err := recordSegmentProbeFailures(context.Background(), s, &fakeReporter{}, []database.BookFile{failed})
+			require.NoError(t, err)
+			require.Zero(t, errs)
+			require.Equal(t, tc.wantWritten, written)
+			after := onlySegment(t, s, book.ID)
+			if tc.wantWritten == 1 {
+				require.Equal(t, 1, after.Scan.DurationOK.Attempts)
+			} else {
+				require.Zero(t, after.Scan.DurationOK.Attempts, "a failure of a different file must not be recorded on this row")
+			}
+		})
+	}
+}
+
+// countingStub is a stub ffprobe that counts its runs, then does what script says.
+func countingStub(t *testing.T, script string) (runs func() int) {
+	t.Helper()
+	counter := filepath.Join(t.TempDir(), "runs")
+	require.NoError(t, os.WriteFile(counter, nil, 0o600))
+	stubFFprobe(t, "echo run >> '"+counter+"'\n"+script)
+	return func() int {
+		b, err := os.ReadFile(counter)
+		require.NoError(t, err)
+		return strings.Count(string(b), "run")
+	}
+}
+
+// N4: a segment at the attempt ceiling is not probed again and its Attempts
+// does not climb past it, however many runs follow; an explicit ResetDuration
+// puts it back in play.
+func TestDurationReextract_UnreadableSegmentIsNotReprobed(t *testing.T) {
+	runs := countingStub(t, "exit 1")
+	s := newRepairPebble(t)
+	book, f := outcomesBook(t, s, "Year One", true)
+	p := New(fakeDeps{store: s})
+
+	for i := 1; i <= database.DeepScanMaxAttempts; i++ {
+		require.NoError(t, p.runDurationBackfill(context.Background(), applyReextractParams(t), &fakeReporter{}))
+	}
+	require.Equal(t, database.DeepScanMaxAttempts, runs())
+	require.Equal(t, database.DurationUnreadable, onlySegment(t, s, book.ID).DurationState())
+
+	for i := 0; i < 3; i++ {
+		require.NoError(t, p.runDurationBackfill(context.Background(), applyReextractParams(t), &fakeReporter{}))
+	}
+	require.Equal(t, database.DeepScanMaxAttempts, runs(), "an unreadable segment must not be probed again")
+	seg := onlySegment(t, s, book.ID)
+	require.Equal(t, database.DeepScanMaxAttempts, seg.Scan.DurationOK.Attempts, "Attempts climbed past the ceiling")
+	require.Equal(t, database.DurationUnreadable, seg.DurationState())
+
+	_, err := s.ModifyBookFile(book.ID, f.ID, func(bf *database.BookFile) error { bf.ResetDuration(); return nil })
+	require.NoError(t, err)
+	require.NoError(t, p.runDurationBackfill(context.Background(), applyReextractParams(t), &fakeReporter{}))
+	require.Equal(t, database.DeepScanMaxAttempts+1, runs(), "after ResetDuration the row is probed again")
+	require.Equal(t, 1, onlySegment(t, s, book.ID).Scan.DurationOK.Attempts)
 }
