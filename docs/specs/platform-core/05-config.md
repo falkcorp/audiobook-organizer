@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.13.4 -->
+<!-- version: 1.13.5 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1212,8 +1212,9 @@ the override, and for any row the key does not decrypt (a regenerated key, a cor
 quarantined and M2 writes an *unreadable* marker under the secret's name (§2.3), so `Meta.Err` is
 `ErrKeyUnavailable` or `ErrCorrupt`, Settings shows "must be re-entered" and health raises `secrets_undecryptable`
 until the secret is set again (14 E4). M2 leaves the key file untouched: the rollback restore reads it. R3 deletes it,
-at the path §2.4's state-file table resolves, through books' crash-labelled boot step `legacy-state-cleanup`
-(coined here; 06 §6.5.1's writer table labels it), never as an untracked write.
+at the path §2.4's state-file table resolves, through books' crash-labelled boot step `legacy-file-cleanup`
+(03 §3.8, 09; 06 §6.5.1's writer table labels it), which also deletes `library.bleve` and refuses while
+`secrets_keyring_not_exported` is raised, never as an untracked write.
 
 **Operator values at the cutover.** M2 migrates stored values only. A retired HEAD name of a protected or secret key
 has already refused the boot at step 2 or 3 of §1.4, before storage opened, so M2 never runs under a unit that
@@ -1252,7 +1253,9 @@ and a production-shaped store sized from the P1 counts. **Stage 2** is a separat
 for the cases R0's API cannot write, applied to a copy of the stage-1 store by a program built at the R0 tag
 against HEAD's own `internal/database`. Its config cases are exactly: a corrupt encrypted secret row (ciphertext the
 key does not decrypt); a blob field no row names; and a blob value that R0's own validation refuses, which
-`Importer.Stage` must refuse too. Each overlay
+`Importer.Stage` must refuse too. The overlay's identity cases, an unconvertible user, key or identity row and an
+unfinished account-merge journal, belong to M3 and are listed with the cutover preflight that reports them (09
+§9.2.3). Each overlay
 case carries its label in the corpus manifest, and the expected answers are still those of the R0 binary booted on
 the result.
 
@@ -1899,7 +1902,7 @@ stays).
 
 | Label | Resolved path | Read or written by | Releases |
 |---|---|---|---|
-| `encryption_key` | HEAD's `.encryption_key`, searched in HEAD's order: the state directory (§1.7, C15's fallback included), else HEAD's fallback `<root_dir>/.appdata/.encryption_key` (`settings.go:110-140`); books resolves the path (it reads `root_dir` from HEAD's blob with the frozen codec) and declares it to the checkpoint | read by HEAD's code (R0, R1) and by M2 only; never written by core | R0–R2; R3 deletes it at its resolved path through `legacy-state-cleanup` (§1.12.2) |
+| `encryption_key` | HEAD's `.encryption_key`, searched in HEAD's order: the state directory (§1.7, C15's fallback included), else HEAD's fallback `<root_dir>/.appdata/.encryption_key` (`settings.go:110-140`); books resolves the path (it reads `root_dir` from HEAD's blob with the frozen codec) and declares it to the checkpoint | read by HEAD's code (R0, R1) and by M2 only; never written by core | R0–R2; R3 deletes it at its resolved path through `legacy-file-cleanup` (§1.12.2) |
 | `keyring` | `<state_dir>/secrets.keyring` (`Options.KeyFile`) | created and read by `secrets.Open` (step 1) | from R2; the first R2 boot creates it after its checkpoint, so that checkpoint holds none |
 | `gap_fill` | `<db parent>/config.yaml` (`persistence.go:29-38`) | read by M2, stripped by M2b (§1.12.2) | R0–R2; after M2b only an operator `--config` remainder, if any |
 
@@ -2394,5 +2397,6 @@ checkpoint copy deleted (the checkpoint already holds the file); the state-file 
 (§2.4); `--gap-fill` for a migrated pre-R2 archive; the ABS JWT secret and the Cloudflare policy token made
 `ProtectOperator`, class `o`, never stored, with the classifier's signing-key and token patterns; the fixture
 corpus's labelled hand-built overlay; the pre-freeze release as the rollback binary; R3's deletion of
-`.encryption_key` through the crash-labelled `legacy-state-cleanup` step; the checkpoint's deletion 7 days after
+`.encryption_key` through the crash-labelled `legacy-file-cleanup` step (03 and 09's name; it refuses while
+`secrets_keyring_not_exported` is raised); the overlay's identity cases cited to the cutover preflight (09 §9.2.3); the checkpoint's deletion 7 days after
 it stops being needed.
