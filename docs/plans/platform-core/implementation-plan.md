@@ -1,760 +1,726 @@
 <!-- file: docs/plans/platform-core/implementation-plan.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: e0650f4a-4aec-4453-a256-aed84bf5ef1c -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
-# mediacore — implementation plan (Phase 6)
+# mediacore — implementation plan (Phase 6, R0–R3)
 
-**Status:** draft for the plan review loop (Phase 7). **Inputs:** the spec under `docs/specs/platform-core/`
-(03 is normative, 09 owns sequencing and compatibility windows, the 05-* files own their mechanisms, 04 is the
-informative package map), the binding review dispositions in `docs/plans/platform-core/reviews/`
-(`spec-advisor-dispositions.md` A-1…A-17, then rounds 9–12), and the advisor's implementation guidance
-(`spec-advisor-review.md` §G1–§G4). **Evidence commit:** `748fd787a`; every anchor and generated count is
-re-verified at each stage's base commit (§(f)). Briefs cite the stage's normative digest under
-`docs/plans/platform-core/digests/` (ADV-12) and the owning spec section; this plan cites the spec directly.
+**Status:** draft for the plan review loop (Phase 7). It replaces the staged plan (S0–S10, T0–T8, H1–H3),
+which described the design before the owner decisions D10–D14.
 
-The workstream index for agents is [`docs/agent-tasks/platform-core/README.md`](../../agent-tasks/platform-core/README.md).
-§(c) is also kept as a JSON list (one object per row, same fields) for the brief writers.
+**Inputs.** The spec under `docs/specs/platform-core/`: 03 is normative and defines the release keys R0–R3,
+the flip labels F2–F9 and the migration steps M1–M8 (03 §3.8); 09 owns sequencing, verification, rollback
+and the owner's part (09 §9.2–§9.4); the 05-* files own each mechanism; 06 §6.4.10 lands each SDK member;
+07 §7.19 orders the UI work; 12 sets the split criteria; 13 the toolchain bump; 14 the risks; 04 is the
+informative package map keyed by release and flip. The owner decisions are recorded in
+[`STATE.md`](STATE.md) (D10–D14) and summarised in [`executive-summary.md`](executive-summary.md).
+**Evidence commit:** `748fd787a`; every count is informative and every brief regenerates the counts it
+needs at its own base commit (09 §9.3).
 
-**Size:** 153 inventory rows: 120 agent tasks, each one PR, and 33 owner checkpoints that
-no agent may complete.
+The workstream index for agents is
+[`docs/agent-tasks/platform-core/README.md`](../../agent-tasks/platform-core/README.md): one row per task
+with its wave, tier, dependencies, files and spec sections. The same rows exist as JSON for the brief
+writers.
+
+**Size: 115 rows: 109 agent tasks, each one PR, and 6 owner checkpoints (NOT AGENT WORK),
+in 41 waves.**
 
 ---
 
 ## (a) Goal and scope
 
-**Goal.** audiobook-organizer (ABO) becomes *app = core + module `books`* without a flag day (09 §9.0): every
-release ships, deploys and rolls back with `make rollback` by a binary swap, because no step of S0–S10 changes a
-stored format (09 §9.2.3; A-2). After S10 the three hardening cutovers H1–H3 bring the native design's hardening to
-ABO as one-way, floored releases (09 §9.13).
+**Goal.** ABO becomes *app = core + module `books`* in four strictly ordered releases (09 §9.0, §9.3):
+**R0** the hotfixes, **R1** the core runtime with no change to user data, **R2** the one-way cutover of
+every core-service family with its UI, as one production release, and **R3** cleanup and the one upgrade
+floor. The plan optimises for the shortest path to a finished extraction (D11): code lands dark on `main`,
+one flip PR per subsystem switches it on, every merge passes `make ci`, e2e and the named required checks,
+and there are no soaks, only an optional one-day smoke run after each deploy.
+
+**Binding owner decisions.** No backward compatibility (D10): no alias, compat window, `Gone` step, legacy
+store or HEAD-parity golden is built. No soaks (D11). R2 is one release, with automatic promotion paused
+from F3's merge until R2 ships (D12 (a)); API keys and ABS phone sessions survive, web sessions and
+one-time tokens reset, task and log history are converted (D12 (b)); the Audiobookshelf-compatible API is
+the only frozen contract (D12 (c)); every checkpoint is deleted 7 days after it stops being needed
+(D12 (d)). An unconvertible identity row or an unfinished account merge stops the upgrade; there are no
+old-URL redirects; mediacore is `github.com/falkcorp/mediacore`, public, Apache-2.0 (D13). ABO keeps
+PolyForm Noncommercial; moved code is relicensed at the split (D14).
 
 **In scope.**
 
-| Item | Owner of the rules | Waves |
-|---|---|---|
-| The six early fixes | 05-authn §11.1 | W00 |
-| S0 — groundwork, guards, gates, build paths (toolchain bump first) | 09 S0; 13 §13.2.2 | W01, W02 |
-| S1 — core module skeleton, leaf packages, staged restore | 09 S1 | W03 |
-| S2 r1–r3 — composition root, perimeter, logging | 09 S2 | W04–W06 |
-| S2b r1–r2 — core opens the store; books on claims, shadow then strict | 09 S2b | W07 |
-| UI-0 — react-router 8 and the generated client | 09 UI-0; 07 §7.19 steps 1–3 | W08 |
-| S3 — config and secrets | 09 S3; 05-config §1.12 | W09 |
-| S4 r1–r2 — identity | 09 S4; 05-authn; 05-rbac | W10, W11 |
-| S5 — tasks: T0+T1 (flip), T2–T7, T8 in the floor release | 09 S5; 05-tasks §5T.8.2 | W12–W14 |
-| S6 — events, outbox, realtime | 09 S6 | W15 |
-| S7 — integrations, library, search index, notify | 09 S7 | W16 |
-| S8 — backup, updater (moved), health, metrics registry | 09 S8 | W17 |
-| S9 — UI shell | 09 S9; 07 §7.19 steps 4–6 | W18 |
-| Contracts C3–C9 (the Gone step; S10 needs them all) | 09 §9.5 | W19 |
-| S10 — final cleanup | 09 S10 | W20 |
-| H1–H3 — identity, secrets and auth-precedence cutovers | 09 §9.13 | W21 |
-| Owner checkpoints: soaks, production reads, reference-host deploys, W readings, owner actions | 09 §9.2.1 "Soaks and owner checkpoints" | OWNER-01…OWNER-33 |
-
-**Out of scope: the deferred-build items** (spec README "Build scope"; 03 §3.3 Build column; A-15). No task builds
-any of them, and a package built too early is caught by review and by Go's `internal/` rule (A-4):
-
-- `acquire` (quality profiles, custom formats, decision engine, grab decisions, tracked downloads, import hand-off);
-- `integrations/indexer` (Newznab/Torznab);
-- `arrfacade` (only the `/api/v3/` path reservation exists);
-- the download grab/monitor/pending-recovery pipeline and every adapter other than Deluge;
-- the AI usage ledger and monthly cap; the notify inbox, per-user subscriptions, personal channels and templating;
-- facade-only members of built packages: `PurposeFacade`, query-key extraction, `FacadeGroup` and the auth feed token;
-- per-family cutovers of the ABO families core services use to native core keyspaces (the settings blob, the ops
-  families, the integration instances, …) and the members only a cutover can use: storage grants (`Grant`,
-  `GrantMode`), the served-run preconditions, backup encryption and the seed-role merge diff;
-- `Online` data migrations (read adapters, the `<ID>.datamigrate.<name>` kind);
-- the config basis mechanism (`config.Basis`);
-- root read shares (`library.RootSpec.ReadShares`);
-- updater hardening beyond the moved S0 updater: signed manifests, the boot-attempt counter, automatic rollback in
-  boot phase P−1, the unit's binary-layout migration, the real-RC `--updater-check` and R-test cell (d);
-- outside the extraction altogether: TV/Movies (10), multi-app (11), the repo split (12), the
-  storage-efficiency program's `storage_format` 2 track (09 §9.0), and the optional ratchets (the
-  `config.AppConfig` accessor, logger injection, removal of either façade).
-
-**What changed against the advisor's wave table (§G2), which predates rounds 9–12 and the A-* simplifications.**
-
-| Advisor §G2 | This plan | Why |
-|---|---|---|
-| W5f metric renames | none | A-5: ABO keeps its metric names |
-| S3 r2, S4 r3, S5 rE, S7 r2 enforcing releases | none | A-3: HEAD's lock discipline, no `CheckedWrites` on legacy rows |
-| stage-visibility tooling, 04 regeneration | none; a plain `ci/stage.txt` marker | A-4 |
-| S8 updater rebuild, signed RCs | the S0 updater moved into `core/updater` (PC-17-02) | A-6, R10-8 |
-| W's persisted usage gate | dates, release notes and the owner's counter readings (OWNER-23…29) | A-14 |
-| ssh-reachable staging host | offline `staging-restore`/`staging-scrub` and a `--network none` container (PC-02-05) | A-10, A-12 |
-| — | the soak, marker and trailer gate (PC-01-07) and one OWNER row per release | A-9, R9-8, R10-7, R11-4, FIN12-1/2/5/9 |
-| — | the crash-matrix kit at S2b, extended by every later boot writer (PC-07-03, PC-07-05) | A-8, R9-7 |
-| — | `storage.CommitLocked`, `legacy.WriteLock`, one instance per legacy store family (PC-07-01, PC-10-05, PC-12-05, PC-09-04) | R9-1, R10-4, R10-5 |
-| — | the operations routes stay books' gin routes at every stage (PC-12-08) | R10-1, R11-3 |
-| — | one HTTP instrument set; `otelgin` stays on the legacy mount (PC-05-01/02) | R10-3, R11-1 |
-| — | reset staging and offline opens as separate S2b PRs (PC-07-07, PC-07-08) | R7-2, R8-1, R8-2, A-17 |
-| W6 UI-0 in parallel | UI0 lands after S2r3 and soaks beside S2br1 (OWNER-09) | FIN12-5 |
-| W8 S4 r1 → r2 → r3 | S4 r1 (dark) and r2 (flip) only | A-3 removed r3 |
-
----
-
-## (b) Wave plan
-
-The waves follow 09's strict stage order (09 §9.3: S0 → S1 → S2 → S2b → S3 → S4 → S5 → S6 → S7 → S8, then S9 and
-S10), with UI-0 after S2 and before S4. **The soak gate makes the order strict at release level:** check (b) of
-`check_soak.py` refuses any PR whose `Stage-Release:` trailer names a release whose predecessor has no current soak
-row of at least 14 days (09 §9.2.1), so every wave's merges wait for the previous release's OWNER row. Briefs can
-be executed and their PRs opened and made green during that soak; only the merge waits.
-
-**Release order this plan lands** (09 §9.2.1's grammar and order): `S0` → `S1` → `S2r1` → `S2r2` → `S2r3` → `UI0` →
-`S2br1` → `S2br2` → `S3` → `S4r1` → `S4r2` → `S5r1` → `S5r2` → `S5r3` → `S5r4` → `S5r5` → `floor` → `S6` → `S7` →
-`S8` → `S9` → `S10` → `H1` → `H2` → `H3`. `UI0` is off the serial chain: its PR lands after the `S2r3` row and before the
-S2b flip, so the S2b flip's predecessor is still `S2r3` and UI0's 14 days run beside S2br1's (FIN12-5); the `S4r1`
-marker change needs a current `UI0` row (OWNER-09 → PC-10-01). `H2` and `H3` may share one release, `H2H3`.
-
-**Never overlap waves that touch `internal/database` or `internal/server`** (CLAUDE.md). The only waves this plan
-runs at the same time are W00 ∥ W01, W07 ∥ W08 and W08 ∥ W09; in each pair one wave touches neither path (computed
-from §(c)'s files: W00, W02, W03, W04, W05, W07, W09, W10, W11, W12, W13, W15, W16, W17, W18, W19 touch them). The contract wave W19 runs between stage waves, one PR at a
-time; its only task that touches `internal/server` is PC-19-07, which runs after W18 and beside W20, which does not.
-
-| Wave | Stage | Release IDs | Content | Prerequisites | `Stage-Release:` | Flips (marker, dials, options) | Rollback (09 §9.2.1) | Execution mode |
-|---|---|---|---|---|---|---|---|---|
-| W00 | S0 | `S0` | The six early fixes (05-authn §11.1) | none; PC-00-04 waits for OWNER-01 (P14) | `S0 1` | none (no marker exists yet) | binary swap; no row (fixes are not a floor, 05-authn §11.1) | serial, coordinator-driven (security fixes, not a sweep) |
-| W01 | S0 | `S0` | S0 build, module and CI gates (toolchain bump first) | OWNER-01 (Q-H, Q-I) for PC-01-02; may overlap W00 (disjoint files, neither touches `internal/database` or `internal/server` in W01) | `S0 1` | creates `ci/stage.txt` with `shipped_stage: pre-S0`, `release: S0` (PC-01-07) | revert PR (09 §9.4.1) | serial, coordinator-driven |
-| W02 | S0 | `S0` | S0 runtime: store guard, build identity, updater hotfix, deploy and staging tooling, unit-lifecycle | W00 and W01 merged (W00 shares `internal/database` and `internal/server`) | `S0 1` | none; every owner served at level 0; new fast exits | binary swap; S0's only state (`c/storage/install`, served ledger, foreign-open record, open stamp, two sidecars) is ignored by older builds (09 S0 Rollback) | serial, coordinator-driven |
-| W03 | S1 | `S1` | Leaf moves, core metrics construction, config stage 0, staged restore | OWNER-02 (S0 row) | `S1 1` | `release: S1` (PC-03-01) | binary swap; row 10 (staged restores) | serial (move PRs share importer files) |
-| W04 | S2 | `S2r1` | Composition root: collision rule, kernel/app/hello, listeners, books root, S2 oracles, flip | OWNER-03 (S1 row) | `S2 1`; flip `S2 flip` | `shipped_stage: S2r1`, `release: S2r1`; `app.Options.LegacyAuthGinUntil` set; `LegacyConfigStore` bridge on | binary swap; no row | serial, coordinator-driven; flip last |
-| W05 | S2 | `S2r2` | Perimeter into core (Basic gate stays in gin) | OWNER-04 (S2r1 row) | `S2 2`; flip `S2 flip` | `S2r2` | binary swap; row 12 | serial |
-| W06 | S2 | `S2r3` | Logging stages 1-2; telemetry exporter deleted; `PromRegisterer` set | OWNER-05 (S2r2 row) | `S2 3`; flip `S2 flip` | `S2r3`; `app.Options.PromRegisterer` set | binary swap; no row | serial |
-| W07 | S2b | `S2br1`, `S2br2` | Core opens the store: engine, swap, crash matrix, the `internal/database` re-home, flip, compat, reset staging, offline opens, strict claims | OWNER-06 (S2r3 row); PC-07-05 also after PC-08-01; PC-07-09 after OWNER-07 (S2br1 row) | `S2b 1`; flip `S2b flip`; r2 `S2b 2` | `shipped_stage: S2b`, `release: S2br1` (flip, first PR of r1); `release: S2br2` (PC-07-09); dial `core.storage.claims.mode` shadow → strict; `app.Options.LegacyConfigStore` deleted | binary swap; row 1 (factory and store reset); dial back with `core.storage.claims.mode=shadow` | serial, coordinator-driven; flip first; move window for PC-07-04 |
-| W08 | UI-0 | `UI0` | react-router 8, `core/web` with the generated api-client, release pre-build scripts | OWNER-06 (S2r3 row); PC-08-03 also needs OWNER-06's reading of `reusable-release.yml`; runs beside W07 and W09 | `UI-0 1` | `release: UI0` (PC-08-01), landing after `S2r3` and before the S2b flip | binary swap (UI embedded per build) | serial |
-| W09 | S3 | `S3` | Secrets keyring, config oracles, alias tables, write path, Basic gate, flip, deploy files | OWNER-08 (S2br2 row and P4) | `S3 1`; flip `S3 flip` | `shipped_stage: S3`, `release: S3` (flip; lands dark before it) | binary swap; rows 1-3 | serial, coordinator-driven; flip before PC-09-07 |
-| W10 | S4 | `S4r1` | Identity, dark: rbac, audit, events, auth, oidc move, cfaccess, books legacy identity stores, reach oracle | OWNER-10 (S3 row) and OWNER-09 (current UI0 row) | `S4 1` | `release: S4r1` (PC-10-01; S4 r1 is never a marker value) | binary swap; no row (core writes no identity row at r1) | serial, coordinator-driven |
-| W11 | S4 | `S4r2` | Identity flip: native routes, LegacyAuthCore, reset route, identity UI | OWNER-11 (S4r1 row, decode census) | `S4 2`; flip `S4 flip` | `shipped_stage: S4`, `release: S4r2`; `LegacyAuthGinUntil` removed; `legacy.Maintenance` deleted | binary swap; rows 3, 4, 11 | serial |
-| W12 | S5 | `S5r1` | Tasks T0+T1: API, executor, parity suites, scheduler, taskstore, task routes, logjournal, flip | OWNER-12 (S4r2 row) | `S5 1`; flip `S5 flip` | `shipped_stage: S5`, `release: S5r1` (flip; lands dark before it); dial `core.tasks.kinds` | binary swap; rows 5, 6 | serial, coordinator-driven; flip last |
-| W13 | S5 | `S5r2`-`S5r5` | T2-T7 batches in four releases: S5r2 = T2+T3, S5r3 = T4+T5, S5r4 = T6, S5r5 = T7 | S5r2: OWNER-13; S5r3: OWNER-14; S5r4: OWNER-15; S5r5: OWNER-16 | `S5 2` … `S5 5` | `release: S5r2` … `S5r5` (first PR of each; T7's schedule conversion sets `S5r5`) | binary swap; T2's checkpoint moves resume from zero once (row 5) | /parallel-sweep per release where ≥3 disjoint tasks (S5r3's T5 trio; S5r4's six T6 sub-batches after the first); serial otherwise |
-| W14 | floor | `floor` | T8: deletions and books' upgrade floor | OWNER-17 (S5r5 row, P13) | `floor 1` | `release: floor` (never a marker value); `UpgradeFloor{Version: LegacyCap, InstallFirst}` | binary swap to a release at or above the stepping stone; older ones refused (`ErrUpgradeFloor`, exit 78) | serial (one PR) |
-| W15 | S6 | `S6` | Outbox, realtime hub and projections, books publishers, flip | OWNER-18 (floor row) | `S6 1`; flip `S6 flip` | `shipped_stage: S6`, `release: S6` (flip last; live PR by PR before it); dial `core.outbox.relay_enabled` | binary swap; no row (outbox rows left unprocessed) | serial |
-| W16 | S7 | `S7` | Integrations registry, providerhttp, AI, download and notify adapters, library and index, flip | OWNER-19 (S6 row, P9) | `S7 1`; flip `S7 flip` | `shipped_stage: S7`, `release: S7` (flip last); `core.integrations.disabled` on staging boots | binary swap; rows 7, 8 | serial |
-| W17 | S8 | `S8` | Backup, updater moved, health and startup, kernel `/metrics` flip, UI calls | OWNER-20 (S7 row, raw-asset reading) | `S8 1`; flip `S8 flip` | `shipped_stage: S8`, `release: S8` (flip after the live PRs; PC-17-05 follows it); `app.Options.PromRegisterer` removed | binary swap; row 11 (restores of pre-S8 archives); archives restorable by older builds | serial |
-| W18 | S9 | `S9` | Shell packages, the steps 4+5 flip, realtime client, harness | OWNER-21 (S8 row) | `S9 1`; flip `S9 flip` | `shipped_stage: S9`, `release: S9`; `ServesSPA` dropped; `app.Options.UI` set | binary swap; rows 4 (invites), 9 | serial |
-| W19 | contracts | none | Contracts C3-C9, Gone step | each after its OWNER W check (OWNER-23 … OWNER-29) | `none` (plan policy) | ledger rows to `gone` | binary swap; a 410 surface returns on an older build | serial, by date; never concurrent with a wave task that shares a file (matrix §(d)) |
-| W20 | S10 | `S10` | Final deletions; alias code removed | OWNER-22 (S9 row); PC-20-02 after every PC-19 task and one production minor | `S10 1`; flip `S10 flip` | `shipped_stage: S10`, `release: S10` | binary swap; no row | serial |
-| W21 | H1-H3 | `H1`, `H2`, `H3` (or `H2H3`) | Hardening cutovers after S10 | OWNER-30 (S10 row); each H after the previous H row | `H<n> 1`; flip `H<n> flip` | `shipped_stage:` and `release:` set together to the H ID; owner levels raised (books; core for H2, and for H1 if the families move) | one-way: the floor is the cutover release; a revert is admitted only before a production tag contains the flip (09 §9.2.1) | serial |
-
-**Plan decisions the spec leaves open** (each is a choice inside 09's rules, not a new rule):
-
-1. **S5's later releases.** 09 allows one `S5r<n>` per T2–T7 release and fixes neither the count nor the grouping.
-   This plan uses four: `S5r2` = T2 + T3, `S5r3` = T4 + T5, `S5r4` = T6, `S5r5` = T7 (T7's schedule conversion is
-   the PR that changes `release:`, 09 S5). T2–T6 change no behaviour (05-tasks §5T.8.2); T7 does, so it soaks alone.
-   One release per batch would add two soaks (28 days); the owner may choose it at OWNER-13.
-2. **Soak counting.** `soak_record.py` starts `<since>` at the first deploy of a binary at or after the landing
-   commit, and later deploys inside the release do not restart it (09 §9.2.1). Wherever content merges after the PR
-   that moved `release:` (S1, S2br1, UI0, S3, S4r1, S4r2, the later S5 releases, S8, S9, S10 and the H releases in
-   this plan), that late content would get less than 14 days. **This plan's owner rule:** a row is written only once
-   the deploy that carries the release's last PR has served 14 days. The gate does not check this; the stage record
-   does.
-3. **S9 steps 4 and 5 in one PR** (PC-18-02). 07 §7.19 requires one release, and an RC is cut on every push to
-   `main` with auto-promotion every 10 RCs (09 §9.1), so a PR series could ship step 4 without step 5's redirects.
-   The shell packages land before it, unused by ABO (PC-18-01).
-4. **Contract PRs carry `Stage-Release: none`.** They touch only packages of flipped stages, so no stage trailer is
-   required (09 §9.2.1), and 09 names no stage for them; the W owner check (OWNER-23…29) and
-   `TestNoContractBeforeSunset` gate them instead.
-5. **Owner bookkeeping files are created by the owner.** S0 "commits the empty soak ledger" and the health
-   allow-list, but no agent may edit `ci/soak.txt` or `ci/soak_health_allow.txt` (09 §9.2.1). PC-01-07 creates
-   `ci/stage.txt` and the scripts; OWNER-02 creates `ci/soak.txt`, `ci/soak_health_allow.txt` and `ci/prev_ref.txt`
-   in a bookkeeping-only PR, and `check_soak.py` reads a missing ledger as empty.
-6. **Dark versus live.** S3, S4 and S5 land dark behind their flip, and no partial set may go live (advisor G1
-   risk 3): their content PRs add code that nothing mounts or calls until the flip PR wires it. S2b's flip is its
-   first PR and its later PRs are live; S6, S7 and S8 land live PR by PR and flip after them (09 §9.2.1; S8's UI-call
-   PR follows its flip). S2's three releases each end in their own flip.
-
-**Serialized order inside each wave** (computed from depends-on; a step's tasks have disjoint files, §(d)):
-
-| Wave | Serialized order inside the wave (a step's tasks are file-disjoint and may run at once) |
-|---|---|
-| W00 | {PC-00-01, PC-00-03, PC-00-04} → PC-00-02 |
-| W01 | PC-01-01 → PC-01-02 → {PC-01-03, PC-01-04} → {PC-01-05, PC-01-07} → PC-01-06 |
-| W02 | {PC-02-01, PC-02-07} → {PC-02-02, PC-02-04, PC-02-05} → {PC-02-03, PC-02-06} |
-| W03 | PC-03-01 → {PC-03-02, PC-03-03, PC-03-04} → PC-03-05 → PC-03-06 |
-| W04 | {PC-04-01, PC-04-02, PC-04-04, PC-04-06} → {PC-04-03, PC-04-05} → PC-04-07 |
-| W05 | PC-05-01 → PC-05-02 |
-| W06 | PC-06-01 → PC-06-02 |
-| W07 | {PC-07-01, PC-07-02} → PC-07-03 → PC-07-04 → PC-07-05 → PC-07-07 → PC-07-06 → PC-07-08 → PC-07-09 |
-| W08 | PC-08-01 → PC-08-02 → PC-08-03 |
-| W09 | {PC-09-01, PC-09-02} → {PC-09-03, PC-09-05} → PC-09-04 → PC-09-06 → PC-09-07 |
-| W10 | PC-10-01 → PC-10-02 → {PC-10-03, PC-10-05} → {PC-10-04, PC-10-06} |
-| W11 | PC-11-01 → PC-11-04 → PC-11-02 → PC-11-03 |
-| W12 | PC-12-01 → {PC-12-03, PC-12-04, PC-12-05, PC-12-07} → PC-12-02 → PC-12-06 → PC-12-08 |
-| W13 | PC-13-01 → PC-13-02 → PC-13-03 → {PC-13-04, PC-13-05, PC-13-06} → PC-13-07 → {PC-13-08, PC-13-09, PC-13-10, PC-13-11, PC-13-12, PC-13-13} → PC-13-14 → PC-13-15 |
-| W14 | PC-14-01 |
-| W15 | PC-15-01 → PC-15-02 → PC-15-03 → PC-15-04 |
-| W16 | PC-16-01 → PC-16-02 → PC-16-03 → PC-16-04 → PC-16-05 → PC-16-06 |
-| W17 | PC-17-01 → PC-17-02 → PC-17-03 → PC-17-04 → PC-17-05 |
-| W18 | PC-18-01 → PC-18-02 → PC-18-03 → PC-18-04 |
-| W19 | {PC-19-01, PC-19-02, PC-19-03, PC-19-04, PC-19-05, PC-19-06, PC-19-07} |
-| W20 | PC-20-01 → PC-20-02 |
-| W21 | PC-21-01 → PC-21-02 → PC-21-03 → PC-21-04 |
-
----
-
-## (c) Task inventory
-
-Conventions:
-
-- **ID** `PC-<wave>-<nn>` for an agent task, one PR; `OWNER-<nn>` for an owner checkpoint (NOT AGENT WORK).
-- **Tier:** T0 Haiku/low, T1 Sonnet/medium, T2 Sonnet/high, T3 Opus/high, T4 Opus/xhigh–max, each with its reason.
-- **Files:** a path ending in `/` is a whole package directory (a move, a new package, or the importers a move
-  rewires). `internal/plugins/maintenance/<group-k>` is T6's k-th file group, computed file-disjoint at S5r4's base
-  commit. Every PR also adds one `changelog.d/` fragment and, where it closes a tracked item, edits `TODO.md`; these
-  are not listed. A brief re-verifies every path at its base commit (§(f)).
-- **Done-check tests** are the spec's names (mostly 09's "Done when"); "(new test)" means the spec states the
-  property and the brief names the test. Every stage task also keeps the per-stage boot budget and R-test of 09 §9.3
-  and `make ci` green (09 §9.3, R3-2), and every PR that adds a boot-time durable write extends the crash-matrix
-  instance that owns it (09 §9.3; from S2b).
-- **Move PRs are import-path-only** and separate from behaviour PRs (advisor G1 risk 4): PC-03-01, PC-03-02,
-  PC-07-04, PC-08-01, PC-10-03. Each lists its `old ==> new` paths in its description and passes
-  `check_commits_build.py` (09 S0 CI classification).
-
-#### W00 — The six early fixes (05-authn §11.1) (S0, release `S0`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-00-01 | Early fixes 2, 3 and 6: API-key writers under apiKeyMu, revoked keys stay revoked, a scoped key cannot mint a wider key *(Trailer `Stage-Release: S0 1`. One todo.d entry per fix (05-authn §11.1).)* | T3 Opus/high: fix 6 is a lock-scope race on every key-authenticated request; the advisor asks for Opus on it | W00 | — | create: `internal/database/pebble_store_auth_race_test.go`, `internal/server/handlers/apikeys_earlyfix_test.go`<br>modify: `internal/database/pebble_store_auth.go`, `internal/server/handlers/apikeys.go`, `internal/server/middleware/auth.go`, `internal/server/middleware/absauth.go` | 05-authn §11.1 items 2, 3, 6; 05-authn Out-of-scope defects 2-4; 09 S0 Hotfixes; 09 §9.1 | TestLegacyRevokeRacesTouch_NeverUnrevokes; TestLegacyAPIKeyCreate_EmptyEffectiveKeyCannotMint; PATCH status=active on a revoked key answers 409 (new test); both key-auth paths refuse a row with revoked_at set (new test) |
-| PC-00-02 | Early fix 4: RequireAdmin, adminRole, the in-handler role checks and mergeActor honour API-key scopes *(Serialized after PC-00-01 (shares middleware/auth.go).)* | T2 Sonnet/high: four call sites, one rule; well specified, but an authz change | W00 | PC-00-01 | create: `internal/server/middleware/auth_admin_scope_test.go`<br>modify: `internal/server/middleware/auth.go`, `internal/server/handlers/user.go`, `internal/server/handlers/user_merge.go`, `internal/server/wire_master_list_routes.go` | 05-authn §11.1 item 4; 05-rbac Out-of-scope defects 1; 09 S0 Hotfixes | TestUserMerge_ScopedAdminKeyRefused (legacy half); a key without every atom is refused by RequireAdmin (new test) |
-| PC-00-03 | Early fix 1: the sessions list returns a view without the bearer token and revokes by a derived handle | T1 Sonnet/medium: one handler and one route; the handle rule is given | W00 | — | create: `internal/server/handlers/auth_sessions_view_test.go`<br>modify: `internal/server/handlers/auth.go`, `internal/server/wire_auth_routes.go` | 05-authn §11.1 item 1; 05-authn Out-of-scope defects 1 | GET /api/v1/auth/sessions returns no id equal to a session token (new test); DELETE /api/v1/auth/sessions/:handle revokes (new test) |
-| PC-00-04 | Early fix 5: the Basic gate refuses an empty stored password, with the BASIC_AUTH_PASSWORD in-memory recovery *(Do not merge before OWNER-01's P14 reading: a merged commit can auto-promote within 10 RCs (09 §9.1).)* | T2 Sonnet/high: fail-closed change that can lock an install out; recovery path must be exact | W00 | OWNER-01 | create: `internal/server/middleware/basicauth_empty_test.go`<br>modify: `internal/server/middleware/basicauth.go`, `internal/server/handlers/system/handler.go` | 05-authn §11.1 item 5; 09 S0 Hotfixes; 09 §9.7 P14 | TestLegacyBasicGate_EmptyPasswordRefuses; health reports basic_gate_no_password (new test); BASIC_AUTH_PASSWORD applies in memory while the stored password is empty (new test) |
-| OWNER-01 | Pre-S0 owner decisions and production reads: Q-H, Q-I, Q-G; P14, P15, P7, P10 *(Blocks PC-00-04 and PC-01-02.)* | OWNER — no agent may complete it | W00 | — | — (no code; NOT AGENT WORK) | 14 §14.3 Q-G, Q-H, Q-I; 09 §9.7 P7, P10, P14, P15 | Q-H recorded (module path); Q-I decided and the ruleset in place (required checks, no bypass, rebase-only); P14: no install has the Basic gate on without a saved password, or the owner saved one; P15: the unit's journal reaches back more than 14 days; P7 and P10 recorded in the S0 stage record |
-
-#### W01 — S0 build, module and CI gates (toolchain bump first) (S0, release `S0`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-01-01 | Toolchain bump to go1.27.3, every pinned copy together *(The first PR of S0 (09 S0 Toolchain). Trailer `S0 1`.)* | T0 Haiku/low: mechanical edit of 34 guarded copies, 9 prose copies and 3 digests, checked by the guard script | W01 | — | modify: `Makefile`, `.envrc`, `.vscode/settings.json`, `Dockerfile`, `Dockerfile.build-cgo`, `.github/workflows/ci.yml`, `.github/workflows/binary-smoke.yml`, `.github/workflows/codeql.yml`, `.github/workflows/e2e.yml`, `.github/workflows/frontend-ci.yml`, `.github/workflows/nightly.yml`, `.github/workflows/ratchet-lower.yml`, `.github/workflows/security.yml`, `.github/workflows/vulnerability-scan.yml`, `.woodpecker/`, `scripts/ci_remote.py`, `CLAUDE.md`, `agents/go-specialist.md`, `skills/project-context/SKILL.md`, `Makefile.local.example`, `.github/codeql/README.md` | 13 §13.2.2; 09 S0 Toolchain; 09 §9.4.1 row 1 | scripts/check_toolchain_versions.py exits 0; `git grep -n -E '1\.27\.2'` outside docs lists only 13 §13.2.2's not-a-pin rows |
-| PC-01-02 | Nested module skeleton with the L0 leaves buildid and storage/keys, per-module make ci, module-skew and genproto guards, core-ci workflow *(Q-H (module path) must be decided first (OWNER-01). Trailer `S0 1`.)* | T2 Sonnet/high: module mechanics with known ambiguous-import traps (03 §3.2); the leaves are small but normative | W01 | PC-01-01, OWNER-01 | create: `core/go.mod`, `core/go.sum`, `core/Makefile`, `core/buildid/buildid.go`, `core/buildid/buildid_test.go`, `core/storage/keys/keys.go`, `core/storage/keys/keys_test.go`, `core/scripts/ci/check_core_toolchain.py`, `core/.errcheck-baseline`, `core/.interface-width-baseline`, `scripts/ci/check_module_skew.py`, `scripts/tests/test_check_module_skew.py`, `.github/workflows/core-ci.yml`<br>modify: `go.mod`, `Makefile`, `scripts/check_toolchain_versions.py`, `scripts/tests/test_check_toolchain_versions.py`, `.github/dependabot.yml`, `scripts/ci/short_test_shards.py`, `scripts/ci/short_test_weights.json` | 03 §3.2 items 1, 4, 6; 03 §3.3 buildid, storage/keys; 05-storage §5S.3.3; 09 S0 Moves, Module coupling, CI classification table; 13 §13.2.2 items 1-4; 04 §8.1 row S0 | `make -C core exclude-check` and `genproto-exclude-root` pass; the root-mode workspace probe runs only in genproto-exclude-root's throwaway copy in a temp directory outside the repository, and nothing runs `go work init` in a checkout or worktree (CLAUDE.md; 03 §3.2 item 1); check_module_skew.py passes (empty core/go.sum exists); per-module tidy-check passes; buildid and storage/keys unit tests |
-| PC-01-03 | archtest engine in core and the layering guard redesign, with TestCoreImportsOnlyCore and TestCoreHoldsNoAppKeyNames *(Trailer `S0 1`.)* | T3 Opus/high: 03 §3.5.1's guard rules are intricate and a wrong guard passes silently | W01 | PC-01-02 | create: `core/archtest/archtest.go`, `core/archtest/graph.go`, `core/archtest/archtest_test.go`, `core/archtest/coreimports_test.go`, `internal/arch/core_key_names_test.go`<br>modify: `internal/arch/layering_test.go` | 03 §3.5, §3.5.1 items 1-4; 04 §8.4 note 3; 09 S0 Moves; 09 S0 CI table (core layering gate, TestCoreHoldsNoAppKeyNames) | TestCoreImportsOnlyCore (tag union, synthetic-graph self-test); TestCoreHoldsNoAppKeyNames; layering ratio floor and `. -> cmd` positive control |
-| PC-01-04 | Required-check workflows: extraction-gates, compat-rehearsal, vet-darwin, vet-integration, the changes classifier and check_commits_build *(Trailer `S0 1`. extraction-gates runs as parallel jobs, each timeout-minutes <= 30.)* | T2 Sonnet/high: workflow and classifier logic with skip-as-success semantics; no runtime code | W01 | PC-01-02 | create: `.github/workflows/extraction-gates.yml`, `.github/workflows/compat-rehearsal.yml`, `scripts/ci/check_commits_build.py`, `scripts/tests/test_check_commits_build.py`, `scripts/tests/test_ci_classifier.py`, `scripts/ci/ci_time_p50.py`<br>modify: `.github/workflows/ci.yml`, `.github/workflows/prerelease.yml`, `ci/gates.txt`, `Makefile`, `scripts/tests/test_run_gates.py` | 09 §9.2.1 required-checks table; 09 S0 Gates; 09 §9.2.10 CI-time budget; 09 §9.10 R-test | scripts/tests/test_ci_classifier.py; compat-rehearsal runs on a fixture flip PR and skips with success on another; vet-darwin and vet-integration green on a tree with no built web/dist; a darwin-tagged core fixture importing an ABO path fails vet-darwin; check_commits_build.py fails a fixture move PR whose first commit does not build |
-| PC-01-05 | docker-image PR job, Dockerfile module copies, .dockerignore and the embed-context check *(Trailer `S0 1`. Level and build-ID assertions are added by PC-02-01 and PC-02-02, which create the flags.)* | T2 Sonnet/high: build-context rules (moby patterns, COPY --from destinations) are easy to get subtly wrong | W01 | PC-01-04 | create: `.github/workflows/docker-image.yml`, `scripts/ci/check_embed_context.py`, `scripts/ci/embed_build_outputs.txt`, `scripts/tests/test_check_embed_context.py`, `scripts/ci/image_probe.sh`<br>modify: `Dockerfile`, `Dockerfile.build-cgo`, `.dockerignore`, `Makefile`, `README.md` | 09 S0 Docker; 09 §9.1 (Dockerfiles, .dockerignore); 03 §3.2 item 4 | check_embed_context.py passes on HEAD with web/dist listed and fails on a docs/ embed fixture and on a missing go-builder COPY --from destination; the image job builds both Dockerfiles, runs with a seeded volume and reaches ready; the second run on /config asserts .encryption_key beside the database and decryption after recreate |
-| PC-01-06 | Web build entry point scripts/ci/build_web.sh behind make web-deps at every non-release npm ci site; reusable-workflow callers set run-frontend: false *(The two release callers (prerelease.yml, release-prod.yml pre-build-script) are UI-0's (PC-08-03), after the owner reads reusable-release.yml. Trailer `S0 1`.)* | T1 Sonnet/medium: ten one-line site swaps plus three caller changes; the site list is given | W01 | PC-01-05 | create: `scripts/ci/build_web.sh`, `scripts/tests/test_build_web.py`<br>modify: `Makefile`, `Dockerfile`, `Dockerfile.build-cgo`, `.github/workflows/ci.yml`, `.github/workflows/e2e.yml`, `.github/workflows/binary-smoke.yml`, `.github/workflows/security.yml`, `.github/workflows/vulnerability-scan.yml`, `.github/workflows/frontend-ci.yml`, `.github/workflows/nightly.yml`, `.woodpecker/checks-build.yaml`, `scripts/ci_remote.py`, `.github/dependabot.yml`, `CLAUDE.md` | 09 S0 Web build entry points; 09 §9.1 npm ci site list; 07 §7.3.2 | every §9.1 npm ci site except the two release callers calls build_web.sh; the ci.yml classifier sets web=true for core/web/* and build_web.sh; ABO-local frontend jobs call make web-deps |
-| PC-01-07 | Soak, marker and trailer gate: ci/stage.txt, check_soak.py, soak_record.py, commit-msg hook, .gitmessage, PR template and sweep stamp *(Creates ci/stage.txt only. ci/soak.txt, ci/soak_health_allow.txt and ci/prev_ref.txt are owner bookkeeping, created by OWNER-02; check_soak.py treats a missing ledger as empty. Trailer `S0 1`.)* | T3 Opus/high: the program's main release interlock; grammar, ordering, bot table and revert recomputation have many edge cases | W01 | PC-01-04 | create: `ci/stage.txt`, `scripts/ci/check_soak.py`, `scripts/tests/test_check_soak.py`, `scripts/soak_record.py`, `scripts/tests/test_soak_record.py`, `.gitmessage`, `scripts/git-hooks/commit-msg`<br>modify: `scripts/setup-git-hooks.sh`, `.github/PULL_REQUEST_TEMPLATE.md`, `.gitignore`, `.github/workflows/ratchet-lower.yml`, `.github/workflows/extraction-gates.yml`, `.claude/skills/parallel-sweep-impl/SKILL.md`, `docs/superpowers/specs/parallel-sweep.md` | 09 §9.2.1 Soaks, trailer, soak ledger, check_soak.py (a)-(d), bot table, revert rule; 09 S0 Gates; 03 §3.2 item 6; 03 §3.5.1 item 4 | scripts/tests/test_check_soak.py (every case of 09 S0 Done when and §9.10's row); scripts/tests/test_soak_record.py (journal coverage, make rollback restarting <since>, claim record predating <since>); creation of ci/stage.txt (pre-S0, release S0) accepted |
-
-#### W02 — S0 runtime: store guard, build identity, updater hotfix, deploy and staging tooling, unit-lifecycle (S0, release `S0`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-02-01 | Per-owner store guard in internal/database: reserved c/ and m/ families, install marker, served ledger, sidecars, open stamp and the fast exits *(Trailer `S0 1`.)* | T4 Opus/xhigh-max: the first durable boot writers; a wrong write order makes S2b halt with ErrForeignKeys on production stores | W02 | PC-01-02, PC-01-05 | create: `internal/database/storage_guard.go`, `internal/database/storage_guard_test.go`, `internal/database/served_ledger.go`, `internal/database/served_ledger_test.go`, `internal/database/testdata/s0-store/`<br>modify: `internal/database/keyfamilies.go`, `internal/database/pebble_store.go`, `internal/database/storage_format.go`, `main.go`, `scripts/storage_format_guard.py`, `scripts/test_storage_format_guard.py`, `.github/workflows/docker-image.yml` | 09 §9.2.2; 09 S0 Data/keys; 05-storage §5S.3.3, §5S.3.4 rule 4, §5S.3.7; 02 N14 | TestLegacyToleratesNamespacedKeys; TestS0LedgerKeysRoundTrip; `--print-storage-levels` prints every owner at 0 (also inside the container); scripts/test_storage_format_guard.py compat, restore-probe, override, --print-upgrade-floor, empty-floor, missing-sidecar and unreadable .storage-levels cases; the S0-written fixture store is committed for TestS2bOpensStoreWrittenByS0 |
-| PC-02-02 | Build identity: --version-json, /health version, X-App-Build from the embedded meta, boot log lines, native-prefix redirect exclusion, and the SPA's build ID, reload banner and apiFetch rule *(Trailer `S0 1`.)* | T2 Sonnet/high: server and SPA halves of one rule; both are given exactly | W02 | PC-02-01 | create: `stage_embed.go`, `version_json_test.go`, `internal/server/build_header_test.go`, `internal/server/redirect_native_test.go`, `boot_log_test.go`, `web/src/components/StaleBuildBanner.tsx`, `web/src/components/StaleBuildBanner.test.tsx`, `web/src/utils/buildId.ts`, `web/src/utils/buildId.test.ts`<br>modify: `main.go`, `internal/server/server_lifecycle.go`, `internal/server/server_middleware.go`, `internal/server/handlers/system/handler.go`, `.goreleaser.yml`, `.github/workflows/docker-image.yml`, `web/vite.config.ts`, `web/index.html`, `web/src/utils/apiFetch.ts`, `web/src/App.tsx` | 09 S0 Endpoints; 09 S0 Build ID and reload check; 07 §7.6.3; 05-http-api §4.2 stage 5; 09 §9.6 row 20 | TestVersionJSONFields; TestBuildID_HeaderEqualsEmbeddedMeta (image job too); TestBootLogsBinaryID; TestNativePrefixesNotRedirected; TestCollidingNamespacesStillRedirect unchanged; `curl <abo-url>/api/core/v1/ping` returns 404, not 301; buildId.test.ts (BUILD_ID rule, dev reserved) |
-| PC-02-03 | Updater hotfix: exit 75, the .prev slot, semver with local-build detection, level and floor checks before the swap, both unattended paths check-only *(Trailer `S0 1`.)* | T3 Opus/high: a wrong swap strands self-updating installs; several refusal paths must hold together | W02 | PC-02-02 | create: `internal/updater/hotfix_test.go`, `internal/updater/testdata/`<br>modify: `internal/updater/updater.go`, `internal/server/scheduler_maintenance_window_op.go`, `internal/server/handlers/system/handler.go`, `web/src/components/settings/AutoUpdateSection.tsx` | 09 S0 Updater hotfix; 05-updater §5U.4; 09 §9.2.2 (stepping stone); 09 §9.1 updater row | the S0 updater test (fake release server): exit 75, kept .prev, older tag refused, "local build, not compared", levels below the store refused, stepping_stone_required with nothing swapped, neither unattended path applies |
-| PC-02-04 | Deploy and rollback tooling: DEPLOY_READY_TIMEOUT, ssh polling in deploy-wait-ready.sh, deploy-preflight sudoers and floor checks, binary history, soak_record --deployed, fake-ssh harness *(Trailer `S0 1`.)* | T2 Sonnet/high: shell and Python tooling against a fake host; well specified | W02 | PC-02-01, PC-01-07 | create: `scripts/tests/test_deploy_wait_ready.py`, `scripts/tests/test_make_rollback.py`, `scripts/tests/fake_ssh.py`<br>modify: `Makefile`, `Makefile.local.example`, `scripts/deploy-wait-ready.sh`, `scripts/deploy-preflight.sh`, `scripts/tests/test_deploy_preflight.py`, `docs/system/deploy-and-gpu-ops.md` | 09 S0 Deploy; 09 §9.2.2 owner actions; 09 §9.3 boot-time budget | scripts/tests/test_make_rollback.py (S0 -> HEAD, HEAD -> S0, a second rollback cannot pass .prev, deploy-match-unit-type.sh); test_deploy_wait_ready.py covers ExecMainStatus=78; the deploy recipe refuses a fake binary whose floor the store does not meet; the preflight refuses a host without the sudoers lines |
-| PC-02-05 | Staging tools: staging-restore and staging-scrub with the staging marker, provision.sh, secret_fields.txt, the legacy-abo/0 manifest sidecar and boot_budget.py *(Fixtures only; never run against a store an agent did not create (G1 risk 9). Trailer `S0 1`.)* | T3 Opus/high: a destructive path whose only guard is the marker interlock (A-10) | W02 | PC-02-01 | create: `cmd/staging_restore.go`, `cmd/staging_scrub.go`, `cmd/staging_test.go`, `scripts/staging/provision.sh`, `scripts/staging/secret_fields.txt`, `scripts/tests/test_staging_scrub.py`, `scripts/boot_budget.py`, `internal/backup/manifest_sidecar.go`, `internal/backup/manifest_sidecar_test.go`<br>modify: `internal/backup/backup.go`, `cmd/root.go` | 09 §9.3 Staging steps 1-3; 05-backup (legacy-abo/0 manifest); 05-config §2.2; 09 S0 Deploy | scripts/tests/test_staging_scrub.py S0 cases (marker written; unmarked, mismatched and unconfirmed runs refused writing nothing; foreign binary_id refused; pre-S0 archive refused; config.yaml beside the copy refused) |
-| PC-02-06 | unit-lifecycle CI job on the systemd runner VM with S0's long-migration check *(The fake-migration hook is test-only (a build tag or env the brief names). Trailer `S0 1`.)* | T2 Sonnet/high: needs care with systemd drop-ins on a runner; the check itself is small | W02 | PC-02-04 | create: `.github/workflows/unit-lifecycle.yml`, `scripts/tests/test_unit_lifecycle.py`, `scripts/tests/unit_lifecycle/dropin.conf`<br>modify: `ci/gates.txt`, `internal/database/startup_notify.go` | 09 §9.2.1 unit-lifecycle row; 09 S0 Done when (12-minute migration); 09 §9.1 warmup row | in unit-lifecycle, a 12-minute fake migration under the committed unit is not killed and deploy-wait-ready.sh does not report it failed |
-| PC-02-07 | HEAD metric oracles, test first: capture head_series_identity.golden from the HEAD build, commit head_series.golden, TestHEADSeriesStillPresent *(Precedes PC-03-04. Trailer `S0 1`.)* | T2 Sonnet/high: goldens every later stage's series check compares against; captured once from HEAD with fixed seeds | W02 | PC-01-04 | create: `internal/telemetry/contract/testdata/head_series.golden`, `internal/telemetry/contract/testdata/head_series_identity.golden`, `internal/telemetry/contract/head_series_test.go` | 05-metrics §4 Resource row, §6; 09 S0 Done when; 09 §9.2.7 | TestHEADSeriesStillPresent; head_series_identity.golden holds family, type, label names and label values, target_info's resource labels included |
-| OWNER-02 | Release S0: deploy to the reference host, 14-day soak, stage-record ticks, soak row *(S0 owner actions first: the sudoers lines (sidecars, restore probe, read-only journalctl), the deploy recipe copied into Makefile.local, a bookkeeping-only PR creating ci/soak.txt (empty), ci/soak_health_allow.txt (05-health §5H.3.1 tokens) and ci/prev_ref.txt; the S0 stage record's Dockerfile and raw-asset facts from reusable-release.yml; the first CI p50 reading.)* | OWNER — no agent may complete it | W02 | PC-00-01, PC-00-02, PC-00-03, PC-00-04, PC-01-01, PC-01-02, PC-01-03, PC-01-04, PC-01-05, PC-01-06, PC-01-07, PC-02-01, PC-02-02, PC-02-03, PC-02-04, PC-02-05, PC-02-06, PC-02-07 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S0` row written by `scripts/soak_record.py --release S0`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-
-#### W03 — Leaf moves, core metrics construction, config stage 0, staged restore (S1, release `S1`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-03-01 | Move internal/lifecycle to core/lifecycle and internal/logging to core/log (import-path-only) *(First PR of S1: sets `release: S1` (09 §9.2.1). Move window announced (09 §9.2.10). Trailer `S1 1`.)* | T0 Haiku/low: import-path rewrite of two leaf packages and their importers; every commit must build | W03 | OWNER-02 | create: `core/lifecycle/`, `core/log/`<br>modify: `internal/lifecycle/`, `internal/logging/`, `internal/aiscan/`, `internal/operations/registry/`, `internal/scheduler/`, `internal/dedup/`, `internal/httputil/`, `internal/importer/`, `internal/metabatch/`, `internal/metafetch/`, `internal/plugins/dedup/`, `internal/plugins/maintenance/`, `internal/scanner/`, `internal/server/`, `ci/stage.txt` | 04 §8.1 row S1, §8.2 S1 rows; 09 S1 Moves | `go build ./... && (cd core && go build ./...)` with the pinned toolchain; check_commits_build.py green; TestCoreImportsOnlyCore green |
-| PC-03-02 | Merge the library leaves into core/library: safepath, pathvalidation, libroot, boundedcall, diskstats and util path.go/perms.go *(Move window. Trailer `S1 1`.)* | T1 Sonnet/medium: six packages into one may need identifier renames; still mechanical | W03 | PC-03-01 | create: `core/library/`<br>modify: `internal/security/safepath/`, `internal/security/pathvalidation/`, `internal/libroot/`, `internal/boundedcall/`, `internal/diskstats/`, `internal/util/path.go`, `internal/util/perms.go`, `internal/audiobooks/`, `internal/backup/`, `internal/covers/`, `internal/deluge/`, `internal/maintenance/jobs/`, `internal/organizer/`, `internal/plugins/maintenance/`, `internal/reconcile/`, `internal/repairs/`, `internal/server/` | 04 §8.1 row S1, §8.2 mediacore/library row; 05-library §5L.10; 09 S1 Moves | build at every commit; TestCoreHoldsNoAppKeyNames over the moved files |
-| PC-03-03 | Core S1 leaves: version 0.1.0, entity, coretest log capture, the flight recorder rewritten into core/health on a *slog.Logger, check_core_version.py and the core-checkpoint job *(Trailer `S1 1`.)* | T1 Sonnet/medium: small new leaves and one constructor rewrite | W03 | PC-03-01 | create: `core/version/version.go`, `core/entity/entity.go`, `core/coretest/coretest.go`, `core/coretest/logcapture.go`, `core/health/flight.go`, `core/health/flight_test.go`, `core/scripts/ci/check_core_version.py`<br>modify: `internal/diag/flight/`, `core/archtest/coreimports_test.go`, `core/Makefile`, `.github/workflows/release-prod.yml` | 04 §8.1 row S1; 03 §3.3 version, entity, coretest; 09 S1 Moves; 12 §12.4.1; 09 S0 CI table (pprof-check, check_core_version.py, core-checkpoint) | pprof-check per module; core guard positive control names a real edge; check_core_version.py passes |
-| PC-03-04 | core/metrics provider construction with namespace and scope options; the ABO telemetry facade keeps the global installs; internal/telemetrypolicy *(Trailer `S1 1`.)* | T3 Opus/high: series must stay byte-identical while the construction moves (MOD3-3) | W03 | PC-03-01 | create: `core/metrics/provider.go`, `core/metrics/endpoint.go`, `core/metrics/resource.go`, `core/metrics/provider_test.go`, `internal/telemetrypolicy/`<br>modify: `internal/telemetry/telemetry.go`, `internal/telemetry/endpoint.go`, `internal/telemetry/resource.go`, `internal/telemetry/contract/`, `internal/telemetry/ratchet_test.go` | 09 S1 Moves; 05-metrics §6, §13 item 1; 09 §9.2.7 | the seeded series contract test's golden diff against the S0 build is empty; TestHEADSeriesStillPresent; TestHistogramBucketsPinned against histogram_buckets.golden; the credentialed smoke scrape passes |
-| PC-03-05 | 05-config stage 0: the eight bypassing config.AppConfig writes go through Mutate *(Trailer `S1 1`.)* | T1 Sonnet/medium: eight assignments in five files, with a ratchet test | W03 | PC-03-02 | create: `internal/config/direct_writes_test.go`<br>modify: `cmd/root.go`, `internal/metafetch/openlibrary.go`, `internal/server/handlers/scheduler_admin.go`, `internal/server/handlers/system/handler.go` | 05-config §1.2, §1.12.1 stage 0; 09 §9.4.1 row 05-config stage 0 | TestNoDirectAppConfigWrites |
-| PC-03-06 | Staged restore, ABO-local: a restore stages for the next boot and follows 05-backup §5B.3.4 exactly; exit 75 restarts the unit *(Release note: §9.2.1 row 10. Trailer `S1 1`.)* | T4 Opus/xhigh-max: a durable swap over the live store; a wrong step order loses the database | W03 | PC-03-05, PC-02-06 | create: `internal/backup/staged_restore.go`, `internal/backup/restorejournal.go`, `internal/backup/staged_restore_test.go`<br>modify: `internal/backup/backup.go`, `internal/server/handlers/system/handler.go`, `internal/updater/updater.go`, `cmd/root.go`, `Makefile`, `Makefile.local.example`, `scripts/tests/test_unit_lifecycle.py` | 05-backup §5B.3.4; 09 S1 ABO-local fixes, Deploy, Done when; 09 §9.2.1 row 10; 09 §9.2.2 (restore probe, ROLLBACK_IGNORE_RESTORE) | TestInflightBeforeFirstRename; a kill at each rename, then a boot that resumes or swaps back (new tests); restore rehearsal on a fixture copy: stage, boot, store equals the archive; in unit-lifecycle, staging a restore brings the service back without operator action; R-test cell e |
-| OWNER-03 | Release S1: deploy to the reference host, 14-day soak, stage-record ticks, soak row *(Copy the updated deploy recipe into Makefile.local again; the boot-budget A/B on a staging copy (first data point).)* | OWNER — no agent may complete it | W03 | PC-03-01, PC-03-02, PC-03-03, PC-03-04, PC-03-05, PC-03-06 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S1` row written by `scripts/soak_record.py --release S1`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-
-#### W04 — Composition root: collision rule, kernel/app/hello, listeners, books root, S2 oracles, flip (S2, release `S2r1`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-04-01 | Route manifest generator, the ServeMux collision rule and the MountLegacy wrapper, tested against the real gin engine *(Lands first in S2 r1 (advisor G1 risk 1). Trailer `S2 1`.)* | T4 Opus/xhigh-max: the advisor's BLOCKER: without it S2 r1 cannot boot (A-1) | W04 | OWNER-03 | create: `core/httpapi/manifest.go`, `core/httpapi/collision.go`, `core/httpapi/legacy.go`, `core/httpapi/collision_test.go`, `core/httpapi/legacy_test.go`, `core/rbac/requirement.go`, `core/auth/principal.go`, `internal/server/legacy_manifest.go`, `internal/server/legacy_manifest_test.go`<br>modify: `internal/server/server_lifecycle.go` | 05-http-api §4.8, §8.1, §8.2; 09 S2 HTTP; 04 §8.1 S2 (rbac and auth leaf types); 05-rbac §3.1 | TestLegacyManifest_RegistersAsMuxPatterns (real engine, ABS on and off); TestCollisionRule_RefusesUnmergeableSets; TestLegacyMount_GeneralisedPatternAcceptsAnyMember; TestS2Manifest_SPermRoutesCarryLegacyAtom; TestLegacyMount_MuxAndGinAgreeOnEncodedSlash |
-| PC-04-02 | Kernel, app and module skeleton with examples/hello, core.json, the ui reserved segments leaf and the legacy package skeleton *(Core-only files. Trailer `S2 1`.)* | T3 Opus/high: the composition root's shape constrains every later stage | W04 | OWNER-03 | create: `core/module/`, `core/kernel/`, `core/app/`, `core/ui/segments.go`, `core/legacy/`, `core/internal/openapi/`, `core/internal/jsonschemax/`, `core/examples/hello/`, `core/openapi/core.json`, `core/coretest/boot.go`, `core/httpapi/router.go`, `core/httpapi/problem.go`<br>modify: `core/Makefile`, `.github/workflows/core-ci.yml` | 06 §6.4, §6.4.10, §6.5.1, §6.5.2; 03 §3.3 app, module, kernel, legacy, examples/hello; 04 §8.1 row S2; advisor G3 (legacy skeleton and mirror-test template at S2) | coretest boots core with zero modules (G7); hello's openapi subcommand writes core/openapi/core.json and the freshness gate passes |
-| PC-04-03 | Listeners in core/httpapi: TLS, HTTP/2, HTTP/3, port-80 redirect and the peer allow-list, copied verbatim (dark) *(Trailer `S2 1`.)* | T2 Sonnet/high: verbatim move of listener code with its tests; ABO keeps its own until the flip | W04 | PC-04-02 | create: `core/httpapi/listen.go`, `core/httpapi/listen_test.go`, `core/internal/httpmw/peer.go`, `core/internal/httpmw/peer_test.go` | 05-http-api §8.4 (peer_allowlist.go); 09 S2 Moves; 09 §9.11 S2 listener risk | peer_allowlist tests pass in core; an --http3-port smoke test in coretest |
-| PC-04-04 | Inject the start-extension and notify functions so ABO packages below layer 6 never import app (behaviour-neutral) *(Trailer `S2 1`.)* | T1 Sonnet/medium: plumbing a func through three packages with no behaviour change | W04 | OWNER-03 | modify: `internal/database/startup_notify.go`, `internal/search/register.go`, `internal/operations/registry/`, `main.go` | 04 §8.3 (sdnotify users); 04 §8.4 note 3; 05-health §5H.3.4; 09 S2 Moves | existing startup-notify tests unchanged; the guard: only `.`, cmd and internal/books import mediacore/module or mediacore/app |
-| PC-04-05 | Books composition root and the S2 legacy config bridge: internal/books, internal/books/configstore and core/config's loader read half *(Trailer `S2 1`.)* | T3 Opus/high: the first legacy store; precedence and the Changed signal must match HEAD | W04 | PC-04-02, PC-04-04 | create: `internal/books/module.go`, `internal/books/module_test.go`, `internal/books/configstore/store.go`, `internal/books/configstore/store_test.go`, `core/config/`, `core/legacy/config.go`<br>modify: `internal/arch/layering_test.go`, `internal/config/persistence.go` | 09 S2 Moves, Config; 05-config §1.12.2; 06 §6.4.10 S2 row; 04 §2.4, §8.4 note 3 | TestBooksMinCoreVersion; the static half of TestPerimeterHonoursBlobOnlyValues; configstore's Changed fires after PUT /api/v1/config (new test) |
-| PC-04-06 | S2 HEAD oracles, test first: 20 wire goldens, the seeded series golden through the real chain, and ABS conformance cell c *(Trailer `S2 1`.)* | T2 Sonnet/high: goldens recorded against HEAD before the code they guard (advisor G1 risk 6) | W04 | OWNER-03 | create: `internal/wirecontract/s2_goldens_test.go`, `internal/wirecontract/testdata/s2/`<br>modify: `internal/telemetry/contract/testdata/series.golden` | 09 S2 Done when (wire goldens, ABS); 05-metrics §6; 09 §9.3 rollback rehearsal cell c | 20 sampled routes match their goldens with volatile fields normalised; ABS cell c passes against HEAD |
-| PC-04-07 | S2 r1 flip: main.go runs app.New, serve wiring, supervisor stop settings, one state-directory resolver, listeners and sdnotify from core *(Flip: sets `shipped_stage: S2r1`, `release: S2r1`. Trailer `S2 flip`. compat-rehearsal required.)* | T4 Opus/xhigh-max: the process changes owner; stop order, budgets and the state directory must match HEAD | W04 | PC-04-01, PC-04-03, PC-04-05, PC-04-06 | create: `internal/config/state_dir_resolver_test.go`<br>modify: `main.go`, `cmd/root.go`, `internal/server/server_lifecycle.go`, `internal/server/server.go`, `internal/sdnotify/`, `internal/serviceregistry/`, `internal/config/state_dir.go`, `deploy/audiobook-organizer.service`, `docker-compose.yml`, `deploy/com.audiobook-organizer.plist`, `README.md`, `scripts/tests/test_unit_lifecycle.py`, `ci/stage.txt` | 09 S2 Goal, Moves, Lifecycle, Deploy, Done when; 06 §6.5.2; 05-health §5H.4; 05-config §1.7 | main.go has no server.NewServer; no moved service is registered through serviceregistry.Register; TestStateDirFallbackMatchesHEAD and TestStateDir_OneResolverYAMLDBPath (unit and image); in unit-lifecycle, systemctl stop during a running op stamps it interrupted with no SIGKILL; the credentialed smoke scrape passes and the seeded series test shows no removed family; invite and bootstrap limiter tests unchanged |
-| OWNER-04 | Release S2r1: deploy to the reference host, 14-day soak, stage-record ticks, soak row *(Install the updated unit and plist on each host and daemon-reload; P7 branch B's live ABS-client check after the deploy.)* | OWNER — no agent may complete it | W04 | PC-04-07 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S2r1` row written by `scripts/soak_record.py --release S2r1`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-
-#### W05 — Perimeter into core (Basic gate stays in gin) (S2, release `S2r2`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-05-01 | Core perimeter chain (dark): headers, CORS, gzip exclusions, tracing, stage-2 metrics into otelgin's instruments, rate classes, request size and cross-origin protection *(Trailer `S2 2`.)* | T3 Opus/high: every stage must reproduce HEAD's observable behaviour, metrics included | W05 | OWNER-04 | create: `core/internal/httpmw/chain.go`, `core/internal/httpmw/headers.go`, `core/internal/httpmw/cors.go`, `core/internal/httpmw/gzip.go`, `core/internal/httpmw/ratelimit.go`, `core/internal/httpmw/crossorigin.go`, `core/internal/httpmw/metrics.go`, `core/internal/httpmw/buildheader.go`, `core/internal/httpmw/chain_test.go`<br>modify: `core/app/options.go` | 05-http-api §4.2 stages 1-11, §8.1, §9; 09 §9.2.1 row 12; 09 §9.2.7 | perimeter unit tests on hello |
-| PC-05-02 | S2 r2 flip: the perimeter leaves gin; the books mount supplies its CSP, rate classes and compression flags; pre-mount refusals recorded with no http_route *(Flip: `S2r2`. Release note: row 12. Trailer `S2 flip`.)* | T3 Opus/high: an observable change on every request; Opus review of the metric path (R10-3, R11-1) | W05 | PC-05-01 | modify: `internal/server/server.go`, `internal/server/server_middleware.go`, `internal/server/middleware/ratelimit.go`, `internal/server/middleware/request_size.go`, `internal/server/legacy_manifest.go`, `internal/server/client_trust.go`, `internal/telemetry/contract/testdata/series.golden`, `ci/stage.txt` | 09 S2 HTTP, Done when; 05-http-api §8.1; 09 §9.2.1 row 12 | TestCSP_DefaultPerOwner; X-App-Build on every response; the rate-limit class golden; compression exclusions equal HEAD's; the cross-origin test; TestPerimeterHonoursBlobOnlyValues; the seeded golden diff is empty and a pre-mount 429 on a legacy path has no http_route; wire goldens; ABS cell c |
-| OWNER-05 | Release S2r2: deploy to the reference host, 14-day soak, stage-record ticks, soak row *(P7 branch B's live ABS-client check after the deploy.)* | OWNER — no agent may complete it | W05 | PC-05-02 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S2r2` row written by `scripts/soak_record.py --release S2r2`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-
-#### W06 — Logging stages 1-2; telemetry exporter deleted; `PromRegisterer` set (S2, release `S2r3`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-06-01 | 05-logging stages 1-2: app.InstallProcessDefaults, file output, the second SetDefault removed, the books shim over core handles *(Trailer `S2 3`.)* | T2 Sonnet/high: logging behaviour moves owner; the activity parser stays until S5 | W06 | OWNER-05 | create: `core/app/process_defaults.go`, `core/app/process_defaults_test.go`<br>modify: `internal/logger/`, `cmd/root.go`, `main.go` | 05-logging §11 stages 1-2; 09 S2 Logging; 09 §9.4.1 S2 r3 row | a level change applies at runtime (new test); the log file path matches HEAD's |
-| PC-06-02 | S2 r3 flip: the telemetry facade's exporter is deleted, app.Options.PromRegisterer is set, the contract test reads Provider.Handler() *(Flip: `S2r3`. Trailer `S2 flip`.)* | T2 Sonnet/high: one registry switch with a golden check | W06 | PC-06-01 | modify: `internal/telemetry/telemetry.go`, `main.go`, `internal/telemetrypolicy/`, `ci/stage.txt` | 09 S2 Done when (S2 r3); 05-metrics §6; 04 §8.1 S2 (PromRegisterer) | the contract test's golden diff adds only the kernel's own series and renames none; a sampled :id route records gin's template as http_route through otelgin |
-| OWNER-06 | Release S2r3: deploy to the reference host, 14-day soak, stage-record ticks, soak row *(Pre-S2b: P1 key census and P12 disk headroom; decide the mock conversion (04 open item 1); read reusable-release.yml at .github/ghcommon-ref.txt's SHA and record what frontend-enabled does (before UI-0).)* | OWNER — no agent may complete it | W06 | PC-06-02 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S2r3` row written by `scripts/soak_record.py --release S2r3`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-
-#### W07 — Core opens the store: engine, swap, crash matrix, the `internal/database` re-home, flip, compat, reset staging, offline opens, strict claims (S2b, release `S2br1`, `S2br2`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-07-01 | core/storage engine (dark): DB, keyspaces, batches, claims with the persisted violation record, LegacyRange, CommitLocked with lock ranks, the guard, OpenAuxiliary, CheckReader, internal/pebble *(Trailer `S2b 1`.)* | T4 Opus/xhigh-max: the keystone of the extraction; every later lock and boot rule rests on it | W07 | OWNER-06 | create: `core/storage/db.go`, `core/storage/keyspace.go`, `core/storage/batch.go`, `core/storage/claims.go`, `core/storage/legacyrange.go`, `core/storage/commitlocked.go`, `core/storage/guard.go`, `core/storage/checkreader.go`, `core/storage/auxiliary.go`, `core/storage/storage_test.go`, `core/storage/codec/`, `core/internal/pebble/`<br>modify: `core/Makefile` | 05-storage §5S.3.1-§5S.3.7, §5S.3.11; 03 §3.3 storage; 09 §9.9; R10-4/R10-5 as written into 05-storage | storage conformance suite; CommitLocked holds every named lock from staging through commit and runs the post-commit step inside the hold (new tests); core coverage ratchet floor wired in make -C core ci |
-| PC-07-02 | Swap journal and restore swap (dark): storage/restorejournal and core/internal/restoreswap with the P0a resume over ABO's staged intent *(Trailer `S2b 1`.)* | T4 Opus/xhigh-max: a durable multi-state machine with a failure exit at every state | W07 | OWNER-06 | create: `core/storage/restorejournal/`, `core/internal/restoreswap/` | 05-storage §5S.3.7, §5S.3.15, §5S.3.16 state diagrams; 05-backup §5B.3.4; 09 S1 (S2b resumes S1 journal) | TestS2bResumesS1Journal; inflight.json exists before the first rename in every kind (new test) |
-| PC-07-03 | coretest/crashmatrix kit and core's TestBootCrashMatrix over hello, with hello's keyspace and one migration *(Trailer `S2b 1`.)* | T3 Opus/high: fault-injection harness across Pebble vfs and the state directory | W07 | PC-07-01, PC-07-02 | create: `core/coretest/crashmatrix/`, `core/examples/hello/storage.go`, `core/kernel/crashmatrix_test.go`<br>modify: `core/examples/hello/` | 05-storage §5S.3.16; 06 §6.5.1 boot-writer table; 09 S2b Crash matrix | TestBootCrashMatrix (core-ci) |
-| PC-07-04 | Import-path move: internal/database becomes internal/books/store; internal/compactprogress joins core/storage; dbtest/newstore.go joins coretest *(Move window of at most two working days, announced a day ahead. Mock conversion per OWNER-06's decision. Trailer `S2b 1`.)* | T1 Sonnet/medium: repo-wide mechanical rename (about 850 call sites, bench-tagged files included); every commit builds | W07 | PC-07-03 | create: `internal/books/store/`, `core/coretest/newstore.go`<br>modify: `internal/database/`, `internal/compactprogress/`, `cmd/`, `internal/server/`, `internal/`, `.mockery.yaml`, `ci/gates.txt`, `scripts/ci/short_test_weights.json`, `scripts/ci/fixture_weights.json`, `scripts/ci/go_test_timings.json`, `tygo.yaml` | 04 §4.5, §8.1 S2b; 09 S2b Moves; 09 §9.2.10 move windows; 09 S0 CI classification (per-stage checklist) | check_commits_build.py green at every commit; bench-check green; ci/gates.txt store-width and store-references retired with the reason recorded |
-| PC-07-05 | S2b flip: the kernel opens the store; books on generated shadow claims; books' legacy config store over the kernel handle; ABO's crash-matrix instance *(Flip: `shipped_stage: S2b`, `release: S2br1`. Plan decision: until PC-07-07 merges, the two legacy reset handlers refuse with 503, so no build runs HEAD's whole-range PebbleStore.Reset under shadow claims and a live kernel (09 S2b Data/keys). Release note: row 1 lands with PC-07-07. Trailer `S2b flip`.)* | T4 Opus/xhigh-max: the store changes owner on every production boot; HEAD's init-phase writers must keep HEAD's semantics | W07 | PC-07-04, PC-08-01 | create: `internal/books/store/claims_gen.go`, `internal/books/store/claims_test.go`, `internal/books/crashmatrix_abo_test.go`, `internal/books/legacy_families_writers_test.go`<br>modify: `main.go`, `cmd/root.go`, `internal/books/module.go`, `internal/books/configstore/store.go`, `internal/books/store/`, `internal/config/persistence.go`, `internal/metrics/metrics.go`, `internal/updater/updater.go`, `internal/arch/core_key_names_test.go`, `core/app/options.go`, `ci/stage.txt` | 09 S2b Goal, Moves, Data/keys, Crash matrix, Done when; 05-storage §5S.9.1, §5S.9.4; 05-config §1.12.2; 06 §6.5.1 | TestBooksClaimsGenerated; TestS2bOpensStoreWrittenByS0; TestS2bAppConfigFromBlob; runtime half of TestPerimeterHonoursBlobOnlyValues; TestBootCrashMatrix_ABO (S2b scenarios); TestLegacyFamiliesWrittenOnlyByLegacyStores (config); TestFreshInstallPostFloorBootsTwice; TestFreshInstallWritesHEADMarkers; TestFreshInstall_EmbedCoverArtFalseSurvivesRestart; a stale opv3 record and an unstamped email row are repaired on the first S2b boot; the series golden adds only the kernel's storage families; both legacy reset routes answer 503 reset_unavailable until PC-07-07 (new test) |
-| PC-07-06 | compat package and the ledger: headers, the process-local use counter, docs/compat-surfaces.md sections and the embedded copy in internal/books *(Live PR of S2b r1. Trailer `S2b 1`.)* | T2 Sonnet/high: a small package plus ledger-freshness tests | W07 | PC-07-07, PC-08-02 | create: `core/compat/`, `core/compat/core-ledger.md`, `internal/books/compat-surfaces.md`, `internal/books/compat_test.go`<br>modify: `docs/compat-surfaces.md`, `main.go`, `Makefile`, `.github/workflows/extraction-gates.yml` | 09 §9.2.9; 05-http-api §3; 04 §8.1 S2b (compat) | TestCompatLedgerCopyFresh; TestCompatLedgerHoldsOnlyRows; TestCompatLedgerMatchesCode; TestNoContractBeforeSunset; a core-fragment row with a window gate fails (new test) |
-| PC-07-07 | Reset staging: both legacy reset routes stage KindReset of the one swap through legacy.Maintenance; the post-reset hook; the core.storage.swap keys *(Live, state-writing PR of S2b r1; the next PR after the flip, replacing its 503. Release note: row 1. Trailer `S2b 1`.)* | T4 Opus/xhigh-max: destructive, restart-bound and cross-filesystem; many refusal and recovery paths | W07 | PC-07-05 | create: `core/kernel/reset.go`, `core/legacy/maintenance.go`, `core/internal/restoreswap/reset.go`, `internal/books/post_reset_hook.go`, `internal/books/reset_test.go`<br>modify: `internal/books/module.go`, `internal/books/store/pebble_store.go`, `internal/server/handlers/system/handler.go`, `core/coretest/crashmatrix/`, `internal/books/crashmatrix_abo_test.go` | 09 S2b Data/keys (both resets), Done when; 09 §9.2.1 row 1; 05-storage §5S.3.15; Q-J, Q-K in 14 §14.3 | TestFactoryResetUnderClaims; TestFactoryResetPostFloorBoots; TestFactoryResetFromLegacyRoute_S2b; TestSystemResetStagesStoreOnlyReset_S2b; TestFactoryResetRejectedLeavesStoreAndSettings; TestFactoryResetIntent_RejectedAfterInterveningOpen; TestCheckReaderRefusesPendingReset; TestSwapSlotExclusive; TestStageFactoryReset_DangerousRootRefused; TestFactoryResetCrossDeviceTargets; TestFactoryResetSetAsideFailureKeepsStore; TestPostResetHook_RemoveErrorsStillDone; TestFactoryResetReadOnlyRootDirCompletes; TestPostResetHookSkipsKeptPaths; TestFactoryResetNativeAppCompletes; TestFactoryReset_StaleEnableAuthFalseKeepsAuthOn; TestHotfixUpdater_RefusesWhileResetPending; TestRestartRequest_ExitsRestartCode (unit-lifecycle) |
-| PC-07-08 | Offline opens: app.OpenOffline for every ABO write subcommand; seed refused on an empty store; staging marker through app.Offline *(Trailer `S2b 1`.)* | T3 Opus/high: an offline open must never launder a foreign open (R8-2) | W07 | PC-07-06 | create: `core/app/offline.go`, `core/app/offline_test.go`, `cmd/offline_open_test.go`<br>modify: `cmd/`, `cmd/staging_restore.go`, `cmd/staging_scrub.go`, `scripts/tests/test_staging_scrub.py`, `docs/` | 09 S2b Data/keys (Offline opens); 05-storage §5S.4; 06 (app.Offline) | TestOfflineOpenIsNotForeign; TestCLISubcommandsUseOfflineOpen; TestOfflineOpenAfterForeignOpenKeepsEvidence; test_staging_scrub.py S2b cases |
-| PC-07-09 | S2b r2: core.storage.claims.mode=strict by default *(First PR of S2b r2: sets `release: S2br2` (no flip). Dial back: `core.storage.claims.mode=shadow`. Trailer `S2b 2`.)* | T1 Sonnet/medium: a default change behind a soak-gated release marker | W07 | OWNER-07 | modify: `core/storage/claims.go`, `internal/books/module.go`, `ci/stage.txt` | 09 S2b Releases; 05-storage §5S.9.4 rollout 3 | TestS2bBooksWritesEveryFamily in strict mode (scan root update; settings save that changes a secret) |
-| OWNER-07 | Release S2br1: deploy to the reference host, 14-day soak, stage-record ticks, soak row *(The row needs the persisted claim-violation record to hold no entry with last_at at or after <since>.)* | OWNER — no agent may complete it | W07 | PC-07-05, PC-07-06, PC-07-07, PC-07-08 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S2br1` row written by `scripts/soak_record.py --release S2br1`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-| OWNER-08 | Release S2br2: deploy to the reference host, 14-day soak, stage-record ticks, soak row *(Pre-S3: P4 env census over unit, Docker, launchd and compose; decide Q-F and OLLAMA_BASE_URL.)* | OWNER — no agent may complete it | W07 | PC-07-09 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S2br2` row written by `scripts/soak_record.py --release S2br2`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-
-#### W08 — react-router 8, `core/web` with the generated api-client, release pre-build scripts (UI-0, release `UI0`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-08-01 | react-router-dom 7 to react-router 8 in ABO, import swap only *(First PR of UI-0: sets `release: UI0`. Trailer `UI-0 1`.)* | T0 Haiku/low: 122 files of mechanical import changes plus one chunk regex | W08 | OWNER-06 | modify: `web/package.json`, `web/package-lock.json`, `web/src/`, `web/tests/`, `web/vite.config.ts`, `ci/stage.txt` | 07 §7.19 step 1; 09 UI-0 Moves, Done when | `! grep -rq react-router-dom web/package.json web/src web/tests web/vite.config.ts`; vitest and Playwright e2e green |
-| PC-08-02 | core/web workspace with @mediacore/api-client (runtime, checkBuild, generator) consumed by ABO; the Docker frontend stage for core/web *(Trailer `UI-0 1`.)* | T2 Sonnet/high: new workspace wired through every build path; lockstep and import-boundary rules | W08 | PC-08-01, PC-07-01 | create: `core/web/package.json`, `core/web/package-lock.json`, `core/web/.gitignore`, `core/web/packages/api-client/`<br>modify: `Dockerfile`, `Dockerfile.build-cgo`, `scripts/ci/build_web.sh`, `Makefile`, `core/Makefile`, `web/package.json`, `web/package-lock.json`, `web/src/utils/apiFetch.ts`, `web/src/components/StaleBuildBanner.tsx`, `.github/workflows/frontend-ci.yml`, `.github/workflows/e2e.yml` | 07 §7.19 steps 2-3, §7.3, §7.5.2; 09 UI-0 Moves; 09 S0 Docker (frontend stage lands at UI-0) | the generator produces a typed client from core.json in core/web CI; the image job is green with core/web present; `make web-deps && make web-build` leaves `git status --porcelain` empty; the production-dist e2e cell of checkBuild against the image; R-test cells a/b |
-| PC-08-03 | Release callers: both pre-build-scripts call build_web.sh; frontend-enabled settled from the owner's reading of reusable-release.yml *(Blocked until OWNER-06 records what frontend-enabled does. Trailer `UI-0 1`.)* | T1 Sonnet/medium: two workflow edits whose shape depends on a recorded owner reading | W08 | PC-08-02, OWNER-06 | modify: `.github/workflows/prerelease.yml`, `.github/workflows/release-prod.yml`, `.github/ghcommon-ref.txt` | 09 UI-0 Preconditions; 07 §7.3.2; 09 §9.1 release rows | a dry-run RC build through prerelease.yml is green and leaves git status clean |
-| OWNER-09 | Release UI0: deploy to the reference host, 14-day soak, stage-record ticks, soak row *(UI0 soaks beside the next stage release; the S4r1 marker change needs a current UI0 row.)* | OWNER — no agent may complete it | W08 | PC-08-01, PC-08-02, PC-08-03 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `UI0` row written by `scripts/soak_record.py --release UI0`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-
-#### W09 — Secrets keyring, config oracles, alias tables, write path, Basic gate, flip, deploy files (S3, release `S3`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-09-01 | core/secrets native keyring and the offline secrets commands; core/internal/keyedmutex *(Dark. Trailer `S3 1`.)* | T3 Opus/high: key material, AAD and the keyring file location on every install kind | W09 | OWNER-08 | create: `core/secrets/`, `core/internal/keyedmutex/`, `cmd/secrets.go`, `cmd/secrets_test.go`<br>modify: `core/app/offline.go`, `.github/workflows/docker-image.yml` | 05-config §2 (secrets); 09 S3 Moves; 09 §9.6 row 17 (secrets commands); 05-storage §5S.3.15 (set-install-id) | the image job asserts secrets.keyring on /data and on /config and decryption after recreate |
-| PC-09-02 | S3 HEAD oracles, test first: the precedence matrix, the compose effective-config golden, and TestLegacyEnvDecodeMatchesHEAD's generated corpus *(Trailer `S3 1`.)* | T3 Opus/high: the differential tests that guard viper's removal (A-7, advisor G3) | W09 | OWNER-08 | create: `internal/config/legacy_env_decode_test.go`, `internal/config/effective_config_golden_test.go`, `internal/config/testdata/effective/compose.golden`, `scripts/staging/effective_config_diff.py`<br>modify: `.github/workflows/extraction-gates.yml` | 09 S3 Done when; 05-config §1.3.6, §1.12.4; A-7 | TestLegacyEnvDecodeMatchesHEAD (HEAD vs PREV_REF, green before the flip); the compose effective-config golden equals HEAD's |
-| PC-09-03 | Generated legacy alias tables: every BindEnv and AutomaticEnv name, the permanent env list, BelowStored and HEADAuthOffWritable flags, ledger rows *(Trailer `S3 1`.)* | T1 Sonnet/medium: generated tables from HEAD's lists; review is the check | W09 | PC-09-02 | create: `internal/config/aliases_gen.go`, `internal/config/aliases_gen_test.go`, `tools/cmd/genaliases/`<br>modify: `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md` | 05-config §1.12.4, §1.3.1, §1.3.5; 09 §9.2.5 | TestEveryLegacyConfigKeyHasCanonical; TestCompatLedgerMatchesCode with the config and env rows |
-| PC-09-04 | Config write path (dark): OverrideStore writes and Store.Apply through books' legacy store, in place, under configBlobSaveMu with the gap-fill write inside the hold *(Trailer `S3 1`.)* | T4 Opus/xhigh-max: every secret stays where HEAD keeps it; one wrong write strands a rollback | W09 | PC-09-01, PC-09-03 | create: `core/config/apply.go`, `core/config/apply_test.go`, `core/legacy/secrets.go`, `internal/books/configstore/write.go`, `internal/books/configstore/write_test.go`<br>modify: `internal/books/configstore/store.go`, `internal/config/persistence.go`, `internal/server/handlers/system/handler.go`, `scripts/staging/secret_fields.txt` | 05-config §1.12.2, §1.3.7, C16; 09 S3 Mechanism; 09 §9.9; A-3 | TestCoreWritesOnlyHEADGapFillKeys; 05-config's prev-build one-format test with a plaintext and an encrypted secret save; TestSecretClassListMatchesLegacyStore; set-internal-flag refuses a store-interface family (new test) |
-| PC-09-05 | Basic gate as perimeter stage 8 (dark) with HEAD's whole exempt set and the empty-password refusal *(Trailer `S3 1`.)* | T3 Opus/high: an auth surface; the exempt set must equal HEAD's exactly | W09 | PC-09-01 | create: `core/internal/httpmw/basicgate.go`, `core/internal/httpmw/basicgate_test.go`<br>modify: `internal/server/legacy_manifest.go` | 05-http-api §4.2 stage 8, §8.1; 09 S3 Basic gate; R5-1 | TestBasicGate_ExemptSetEqualsHEAD; TestBasicGate_EmptyPasswordRefuses; Basic-gate half of TestPerimeterHonoursBlobOnlyValues |
-| PC-09-06 | S3 flip: ABO's internal/config becomes the Facade over core handles; viper leaves the boot path; the Basic gate leaves gin *(Flip: `S3`. Release notes: rows 1-3. Trailer `S3 flip`.)* | T4 Opus/xhigh-max: the effective config of every install changes owner; fail-closed boot errors on auth spellings | W09 | PC-09-04, PC-09-05 | modify: `internal/config/config.go`, `internal/config/persistence.go`, `internal/config/facade.go`, `cmd/root.go`, `main.go`, `internal/server/middleware/basicauth.go`, `internal/server/server.go`, `ci/stage.txt` | 09 S3 Releases, Mechanism, Done when; 05-config §1.12.1 stage 1, §1.12.2 | TestLegacyEnvDecodeMatchesHEAD; TestComposeEnvKeepsUIBasicGate; the config_legacy_name_shadowed health case; TestAliasConflictOnProtectedKeyRefusesBoot; TestPreS7Facade_IntegrationURLIsProtectAdmin; TestRollback_BasicGateNeverOpenOnPrev; TestRollback_BasicGateClearedStaysClosed; TestRollback_RotatedKeyNotResurrected; the R-test config cells of 09 S3 Done when |
-| PC-09-07 | Deploy files keep only permanent legacy names; compose passes the Basic variables through only when set *(OLLAMA_BASE_URL per OWNER-08's decision. Trailer `S3 1`.)* | T1 Sonnet/medium: four config files and one test | W09 | PC-09-06 | create: `internal/config/deploy_env_names_test.go`<br>modify: `deploy/audiobook-organizer.service`, `deploy/com.audiobook-organizer.plist`, `docker-compose.yml`, `deploy/local.conf.example` | 09 S3 Deploy files; 09 §9.2.5; 14 Q-F | TestShippedDeployEnvNamesArePermanent |
-| OWNER-10 | Release S3: deploy to the reference host, 14-day soak, stage-record ticks, soak row *(Run the effective-config golden on a staging copy with the production unit's env names (diff of names and value hashes only).)* | OWNER — no agent may complete it | W09 | PC-09-01, PC-09-02, PC-09-03, PC-09-04, PC-09-05, PC-09-06, PC-09-07 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S3` row written by `scripts/soak_record.py --release S3`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-
-#### W10 — Identity, dark: rbac, audit, events, auth, oidc move, cfaccess, books legacy identity stores, reach oracle (S4, release `S4r1`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-10-01 | core/rbac, core/audit, core/backup/journal types and the events bus (dark) *(First PR of S4 r1: sets `release: S4r1` (needs the current S3 and UI0 rows). Trailer `S4 1`.)* | T3 Opus/high: the atom mapping and confinement rule decide every legacy route's reach | W10 | OWNER-10, OWNER-09 | create: `core/rbac/`, `core/rbac/rbactest/`, `core/audit/`, `core/backup/journal/`, `core/events/`<br>modify: `ci/stage.txt` | 05-rbac §3, §4, §6.1, §6.3; 04 §8.1 S4; 03 §3.3 audit, backup/journal, events | rbactest.StoreSuite over the native store; Confined() and the LegacyAmbientScopes rule unit tests |
-| PC-10-02 | core/auth (dark): Service, principal resolution, sessions, keys, one-time tokens, bootstrap, throttle, password, PostRestore and BootWrites hooks, native store *(Trailer `S4 1`.)* | T4 Opus/xhigh-max: the identity engine every surface will use; its hooks run on restore boots | W10 | PC-10-01 | create: `core/auth/`, `core/auth/authtest/`, `core/auth/password/`, `core/internal/authstore/` | 05-authn §3, §4, §4.14, §5, §11 (native store); 05-backup B7 | TestNativeStore_RoundTrip (authtest.StoreSuite) |
-| PC-10-03 | Import-path move: internal/oauth becomes core/auth/oidc *(Trailer `S4 1`.)* | T0 Haiku/low: package move with four importers | W10 | PC-10-02 | create: `core/auth/oidc/`<br>modify: `internal/oauth/`, `internal/server/` | 04 §8.2 auth/oidc row; 05-authn §11 table | build at every commit |
-| PC-10-04 | internal/cfaccess: owner proof and CF Access glue as an auth.Extension; client_trust's Access branch moves in *(Trailer `S4 1`.)* | T2 Sonnet/high: a package split with security-relevant glue; gin keeps calling it until r2 | W10 | PC-10-03 | create: `internal/cfaccess/`<br>modify: `internal/auth/owner.go`, `internal/server/middleware/cfaccess.go`, `internal/server/middleware/cfbounce.go`, `internal/server/middleware/owner_guard.go`, `internal/server/client_trust.go`, `internal/arch/layering_test.go` | 05-authn §11 table; 04 §2.4; 05-http-api §8.4 client_trust.go | existing CF Access and owner-guard tests pass from the new package |
-| PC-10-05 | Books legacy identity stores (dark): auth.Store and rbac.Store over HEAD's rows with legacy.WriteLock, CommitLocked and one instance per family; the P4d decode census *(Trailer `S4 1`.)* | T4 Opus/xhigh-max: HEAD's identity locks must span core's commit or early fix 6 reopens (R9-1) | W10 | PC-10-02 | create: `internal/books/store/legacy_auth.go`, `internal/books/store/legacy_rbac.go`, `internal/books/store/legacy_identity_test.go`, `core/legacy/auth.go`, `core/legacy/legacytest/auth.go`<br>modify: `internal/books/module.go`, `internal/books/store/pebble_store_auth.go`, `core/kernel/` | 05-authn §11 (ABO's legacy store), §5; 05-rbac §6; 09 S4 Releases r1, Data/keys; 09 §9.9 | TestLegacyStoreSuites (identity); TestDarkReleaseWritesNoIdentityRow; TestDarkReleaseRecordsJournalGap; on r1 a fresh store has the four seed roles and _system and every restart writes a new bootstrap token file; TestLegacyStoresAreSingletons |
-| PC-10-06 | S4 HEAD oracles, test first: TestLegacyRoleReachUnchanged as a permanent gate, the role-name inventory and the settings-atom check *(Trailer `S4 1`.)* | T3 Opus/high: the generated reach matrix is the strongest guard of S4 (advisor G1 risk 6) | W10 | PC-10-01, PC-10-03 | create: `internal/server/legacy_role_reach_test.go`, `internal/server/role_name_checks_test.go`, `internal/arch/no_role_name_authz_test.go`<br>modify: `.github/workflows/extraction-gates.yml` | 09 S4 Done when; 05-rbac §4.6, §6.2, §6.3; 09 §9.2.6 | TestLegacyRoleReachUnchanged (with its custom-role half; green against gin); TestLegacyRoute_SettingsAtomNeverWiderThanSuccessor; TestRoleNameChecksUseCoreAdmin and TestNoRoleNameAuthz as ratchets |
-| OWNER-11 | Release S4r1: deploy to the reference host, 14-day soak, stage-record ticks, soak row *(The decode census (P1) lists no undecodable row outside the acknowledged branch-B list, which the owner commits in the stage record; P2 custom roles mapped; P3 empty-scope keys counted.)* | OWNER — no agent may complete it | W10 | PC-10-01, PC-10-02, PC-10-03, PC-10-04, PC-10-05, PC-10-06 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S4r1` row written by `scripts/soak_record.py --release S4r1`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-
-#### W11 — Identity flip: native routes, LegacyAuthCore, reset route, identity UI (S4, release `S4r2`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-11-01 | Native identity routes (unmounted until the flip): authhttp, users, roles, api-keys, audit, permissions, settings, modules and uihttp; the alias table with selectors *(Trailer `S4 2`.)* | T3 Opus/high: many routes with legacy-shape aliases and field selectors | W11 | OWNER-11 | create: `core/internal/authhttp/`, `core/internal/rbachttp/`, `core/internal/audithttp/`, `core/internal/confighttp/`, `core/internal/modulehttp/`, `core/internal/uihttp/`<br>modify: `core/openapi/core.json`, `internal/server/handlers/user_merge.go`, `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md` | 09 S4 Endpoints, Alias targets; 05-authn §4.13; 05-rbac §4.7; 05-config §1.3.4; 07 §7.5.1 | TestAlias_UnknownLegacyFieldRefused; TestAlias_CreateKeyForOtherUserKeepsTarget; TestAlias_ListAllKeysNeedsUsersManage; TestMeAlias_LegacyShape; core.json contains the stage's native routes |
-| PC-11-02 | S4 r2 flip: LegacyAuthCore decides every request; native routes and aliases mount; P4d identity steps, P7 seeding and BootWrites start; role-name checks become permission checks; the identity UI switches in the same build *(Flip: `shipped_stage: S4`, `release: S4r2`. Release notes: rows 3, 4, 11. Trailer `S4 flip`.)* | T4 Opus/xhigh-max: the one stage in which the auth engine changes; reach, locks and single-use tokens must hold, and 09 S4 puts the UI switch in the same build | W11 | PC-11-01, PC-11-04 | create: `internal/server/legacyauth/`<br>modify: `internal/server/middleware/auth.go`, `internal/server/server_lifecycle.go`, `internal/server/wire_auth_routes.go`, `internal/server/handlers/`, `internal/server/client_trust.go`, `internal/server/auth_temp_login.go`, `internal/server/apikey_expiry_stamp.go`, `internal/auth/seed.go`, `internal/server/bootstrap.go`, `internal/usermerge/`, `internal/books/module.go`, `core/app/options.go`, `main.go`, `internal/arch/layering_test.go`, `web/src/services/api.ts`, `web/src/hooks/useLibraryPermission.ts`, `web/src/hooks/useCanOrganizeLibrary.ts`, `web/src/hooks/useCollections.ts`, `web/src/components/system/ThrottlePanel.tsx`, `web/src/components/settings/APIKeysTab.tsx`, `web/src/pages/`, `web/eslint.config.js`, `ci/stage.txt` | 09 S4 Releases r2, Moves, Permissions, UI, Done when; 07 §7.19 step 3; 03 §3.5.1 (legacyauth layerOf); 05-config §1.3.3 (audit from S4); 05-http-api §8.3; 05-authn §4.2, §4.6, §4.11; 05-rbac §4.6, §6.3 | TestLegacyRoleReachUnchanged; TestWorkerKey_NoAmbientScopes; TestLegacyRevokeRacesTouch_NeverUnrevokes, TestInviteRedeemedOnce, TestBootstrapRedeemedOnce through core auth and CommitLocked; TestRoleNameChecksUseCoreAdmin; TestNoRoleNameAuthz; TestRollbackR2ToR1Boots; TestAPIKey_StoredScopesNeverEmpty; TestOneFormat_LegacyRowsReadByPrevBuild; TestConfining_WorkerKeyRefusedOnABS; TestUserMerge_ScopedAdminKeyRefused; TestS4_AuthOffDockerBoots; TestLegacyTempLoginLink_EndToEnd; TestLegacyInviteLink_EndToEnd; the crash-matrix staged-restore-with-hooks scenario; audit shows the rehearsal login; a settings change stages a core.settings.update audit record (new test); the ESLint rule fails a string literal passed to usePermission; R-test cells a, b, c and e; the R-test identity cells |
-| PC-11-03 | Core factory-reset route in internal/storagehttp with storage.ResetRequest; both legacy reset paths become its aliases; legacy.Maintenance deleted *(Merges right after the flip in S4 r2; a build between the two keeps S2b's staging path behind the bridge, which is safe. Trailer `S4 2`.)* | T3 Opus/high: destructive route with a confirmation contract (A-17) | W11 | PC-11-02 | create: `core/internal/storagehttp/`<br>modify: `core/legacy/maintenance.go`, `core/module/`, `internal/server/handlers/system/handler.go`, `internal/books/module.go`, `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md` | 09 S4 Moves (r2 reset route); 05-storage (ResetRequest); A-17 | TestFactoryResetCoreRouteRecordsHookArgs; TestFactoryResetAliasKeepsConfirmAndShape; TestFactoryResetNativeRouteKeepsLibraryFilesByDefault |
-| PC-11-04 | Legacy SPA link readers ahead of the flip: the /login/temp route and the /invite#token= reader *(Ships in S4 r2 with the flip. Trailer `S4 2`.)* | T1 Sonnet/medium: two client-side readers that nothing links to until the flip's 302s (reader before writer, 09 §9.2.1) | W11 | PC-11-01 | create: `web/src/routes/LoginTemp.tsx`, `web/src/routes/LoginTemp.test.tsx`, `web/src/routes/AcceptInvite.fragment.test.tsx`<br>modify: `web/src/App.tsx` | 09 S4 Invite and temp-login links; 07 §7.4.3, §7.9.1; 09 §9.2.1 Expand | TestLegacySPA_InviteFragmentReader; the /login/temp route strips the fragment and calls the consume route (new test) |
-| OWNER-12 | Release S4r2: deploy to the reference host, 14-day soak, stage-record ticks, soak row *(P7 branch B's live ABS-client check after the deploy.)* | OWNER — no agent may complete it | W11 | PC-11-01, PC-11-02, PC-11-03, PC-11-04 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S4r2` row written by `scripts/soak_record.py --release S4r2`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-
-#### W12 — Tasks T0+T1: API, executor, parity suites, scheduler, taskstore, task routes, logjournal, flip (S5, release `S5r1`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-12-01 | core/tasks API and tasks.Stores with the native store and taskstest suite; fencing; the readiness core of health *(Trailer `S5 1`.)* | T3 Opus/high: the public task contract every module uses; frozen by the SDK | W12 | OWNER-12 | create: `core/tasks/`, `core/tasks/taskstest/`, `core/internal/taskstore/`, `core/health/ready.go`<br>modify: `internal/operations/opswriter/fence.go`, `internal/operations/progress.go`, `internal/operations/trigger_source.go`, `pkg/ops/` | 05-tasks §5T.3, §5T.6.2, §5T.8.1; 04 §8.1 S5; 05-health (readiness core) | taskstest.StoresSuite over the native store |
-| PC-12-02 | Core executor written fresh over tasks.RunStore and RunState, with rc.Await, RunItems Parallelism, WriteRuns through CommitLocked and HEAD-named instruments *(Trailer `S5 1`.)* | T4 Opus/xhigh-max: fresh code over 233 definitions; cancel, resume and shutdown must match HEAD (advisor G1 risk 7) | W12 | PC-12-01, PC-12-03 | create: `core/internal/executor/` | 05-tasks §5T.3.5, §5T.3.13, §5T.11; 09 S5 Mechanism; 09 §9.9 | PC-12-03's parity suites green on the core executor; TestDispatch_WaitsForReadySignal; TestLedgerCommitAfterTerminalRefused; TestConcurrentTransitionsOfDistinctRunsAllCommit; TestCancelCommitsUnderProgressTicks; TestFixerMarksLandDuringQuiesce |
-| PC-12-03 | Port HEAD's resume, cancel and shutdown suites to run against both engines (test first) *(Trailer `S5 1`.)* | T3 Opus/high: the parity proof of the fresh executor | W12 | PC-12-01 | create: `core/tasks/taskstest/parity/`, `internal/operations/registry/engine_parity_test.go`<br>modify: `pkg/ops/opstest/` | 05-tasks §5T.8.2 T0+T1 gate; advisor G1 risk 7 | HEAD's resume, cancel and shutdown suites green on the v2 engine through the engine-neutral harness; PC-12-02 makes them green on the core executor |
-| PC-12-04 | Core scheduler re-implementation and the schedule-parity oracle TestScheduleParity_AllDefinitions *(Trailer `S5 1`.)* | T3 Opus/high: 38 definitions must keep HEAD's enqueue and clock sequence (OPS8-4) | W12 | PC-12-01 | create: `core/internal/scheduler/`, `internal/scheduler/schedule_parity_test.go`<br>modify: `core/legacy/tasks.go` | 05-tasks §5T.3.8, §5T.8.1 scheduler row; 09 S5 Moves and batches, Done when | TestScheduleParity_AllDefinitions; TestOneSchedulerPerKind |
-| PC-12-05 | internal/books/taskstore: HEAD's ops store code with its dual write, legacy steps 62/65/66 bodies, clock, pause and stand-down stores; internal/books/contract and internal/books/writer *(Trailer `S5 1`.)* | T4 Opus/xhigh-max: the run families' one writer; a skipped legacy step is recorded as applied silently (R5-2) | W12 | PC-12-01 | create: `internal/books/taskstore/`, `internal/books/contract/`, `internal/books/writer/`, `internal/books/legacy_steps_test.go`<br>modify: `internal/books/store/pebble_store_ops_v2.go`, `internal/books/store/pebble_store_ops_v3.go`, `internal/books/store/pebble_store_plan_legacy.go`, `internal/books/store/`, `internal/operations/opswriter/`, `internal/operations/state.go`, `internal/operations/selection.go`, `internal/operations/types.go`, `internal/arch/layering_test.go` | 05-tasks §5T.6.2, §5T.8.1; 09 S5 Mechanism, Data/keys; 04 §2.4, §4.5, §8.4 note 3 | TestLegacyStepPreconditionsResolve; the guard that the residue never imports taskstore; TestOpsFamiliesWrittenOnlyByTaskstore; taskstest.StoresSuite on the legacy store; TestLegacyRunStoreRecovers; TestLegacyRunLockSpansCommit; TestLegacyReplaceRowsTakesNoRunLock; TestLegacyRunTransitionVsCancelOneWins; TestLegacyProgressVsCancelKeepsState; TestStandDown_MarkerAtBootDefersQuiescedRun |
-| PC-12-06 | Task HTTP and aliases (unmounted until the flip), tasklint, storage/datamigrate and the migration runner, hello.count *(Trailer `S5 1`.)* | T2 Sonnet/high: routes and tooling against a fixed contract | W12 | PC-12-02 | create: `core/internal/taskhttp/`, `core/archtest/tasklint/`, `core/storage/datamigrate/`, `core/internal/storagemigrate/`, `core/examples/hello/count.go`, `internal/books/second_module_test.go`<br>modify: `tools/cmd/oplint/`, `core/openapi/core.json`, `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md` | 05-tasks §5T.3.10; 09 S5 Endpoints; 04 §8.1 S5 | TestSecondModuleNoAudiobookEdit; core.json contains the stage's native routes |
-| PC-12-07 | internal/logjournal over syslog with log.JournalStore (wired at the flip); the activity line parser, syslog writes and pruner removed in the same release *(Trailer `S5 1`.)* | T2 Sonnet/high: a moved persistence path with one release coupling | W12 | PC-12-01 | create: `core/internal/logjournal/`, `core/log/logtest/`, `core/log/journal.go`<br>modify: `internal/logger/retention.go`, `internal/logger/` | 05-logging §5, §11; 09 S5 Data/keys; 09 §9.2.1 row 6 | the journal shows ABO records and the Activity system view is unchanged |
-| PC-12-08 | S5 flip (T0+T1): opsbridge wraps every v2 definition; books supplies its task store; the legacy-stream bridge; opsmetrics shrinks to ops.abandoned_calls; operations routes call the tasks client *(Flip: `shipped_stage: S5`, `release: S5r1`. Release notes: rows 5, 6. Trailer `S5 flip`.)* | T4 Opus/xhigh-max: every run of every definition changes engine; metric ownership and stream parity must hold | W12 | PC-12-02, PC-12-03, PC-12-04, PC-12-05, PC-12-06, PC-12-07 | create: `internal/activity/`, `internal/books/stream_bridge.go`, `internal/books/stream_bridge_test.go`, `internal/books/metrics_gather_test.go`<br>modify: `internal/operations/registry/`, `internal/opsmetrics/`, `internal/metrics/metrics.go`, `internal/scheduler/`, `internal/server/`, `internal/books/module.go`, `cmd/root.go`, `ci/stage.txt` | 09 S5 (all rows); 05-tasks §5T.8.2 T0+T1; 05-realtime §4.9; 05-events §5E.13; 05-metrics §13 | TestS5_OperationsComponentStaysBooks; TestS5_OperationsTimelineLogDiscardParity; TestABOMetricsGatherNoDuplicateOrMissing (into extraction-gates); TestHistogramBucketsPinned; the op-ID ledger; TestS5Bridge_LegacyStreamsShowCoreRuns; TestS5Bridge_RepairsRunHiddenFromViewer; the G5 rollback test of 05-tasks §5T.9; the resume rehearsal (kill -9 mid books.acoustid.backfill); opsgen's ops.ts byte-identical; the R-test task cells |
-| OWNER-13 | Release S5r1: deploy to the reference host, 14-day soak, stage-record ticks, soak row *(The staging schedule smoke (every enabled definition of 24 h or less fires within one interval); decide Q-C before T7.)* | OWNER — no agent may complete it | W12 | PC-12-08 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S5r1` row written by `scripts/soak_record.py --release S5r1`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-
-#### W13 — T2-T7 batches in four releases: S5r2 = T2+T3, S5r3 = T4+T5, S5r4 = T6, S5r5 = T7 (S5, release `S5r2`-`S5r5`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-13-01 | T2: the 34 MaintenanceJobs become native books.maintenance tasks; internal/maintenance deleted *(First PR of S5r2: sets `release: S5r2`. Trailer `S5 2`.)* | T1 Sonnet/medium: mechanical signature conversion, one checkpoint move each | W13 | OWNER-13 | modify: `internal/maintenance/`, `internal/maintenance/jobs/`, `internal/server/`, `ci/stage.txt` | 05-tasks §5T.8.2 T2 | TestLegacyOpsWriters at its T2 target; internal/maintenance deleted and the build passes |
-| PC-13-02 | T3: the 24 repairs fixers become tasks.Fixer; repairs.plan/apply removed *(The repairs source keeps calling opsmetrics.RegisterAbandoned until PC-13-12. Trailer `S5 2`.)* | T2 Sonnet/high: fixer semantics (marks during quiesce) need care | W13 | PC-13-01 | modify: `internal/repairs/` | 05-tasks §5T.8.2 T3; 05-metrics §6 | the Fixer conformance suite; TestABOMetricsGatherNoDuplicateOrMissing |
-| PC-13-03 | T4: generic ops become core.* kinds with app.Options.LegacyTaskAliases *(First PR of S5r3: sets `release: S5r3`. Trailer `S5 3`.)* | T2 Sonnet/high: kind renames that must not strand stored rows | W13 | OWNER-14 | modify: `core/app/options.go`, `core/kernel/`, `internal/books/module.go`, `internal/server/`, `ci/stage.txt` | 05-tasks §5T.8.2 T4 and the LegacyTaskAliases paragraph; 06 (ProblemLegacyTaskAlias) | the op-ID ledger green; TestCoreHoldsNoAppKeyNames (no ABO op ID in core) |
-| PC-13-04 | T5a: acoustid, metafetch and Deluge plugin definitions native *(Trailer `S5 3`.)* | T1 Sonnet/medium: 15 definitions, mechanical | W13 | PC-13-03 | modify: `internal/plugins/acoustid/`, `internal/plugins/metafetch/`, `internal/plugins/deluge/` | 05-tasks §5T.8.2 T5; 05-download §10 | the op-ID ledger green; declared Parallelism equals the legacy Concurrency (1:1) |
-| PC-13-05 | T5b: the 32 dedup plugin definitions native *(Trailer `S5 3`.)* | T2 Sonnet/high: the CLAUDE.md concurrency hotspot; Parallelism must map 1:1 | W13 | PC-13-03 | modify: `internal/plugins/dedup/` | 05-tasks §5T.8.2 T5; CLAUDE.md concurrency section | the op-ID ledger green; declared Parallelism equals the legacy Concurrency (1:1) |
-| PC-13-06 | T5c: iTunes definitions native, with the four importer.go v1 checkpoint writers; pkg/plugin/sdk unused *(Trailer `S5 3`.)* | T1 Sonnet/medium: 7 definitions and 4 checkpoint writers | W13 | PC-13-03 | modify: `internal/itunes/`, `internal/itunes/service/`, `pkg/plugin/sdk/` | 05-tasks §5T.8.2 T5 | pkg/plugin/sdk has no importer; TestLegacyOpsWriters at its T5 target |
-| PC-13-07 | T6 sub-batch 1 of 7: maintenance-plugin definitions native (at most 15, one file group) *(First PR of S5r4: sets `release: S5r4`. The 7 file groups are computed at S5r4's base commit and must be file-disjoint. Trailer `S5 4`. /parallel-sweep.)* | T1 Sonnet/medium: at most 15 mechanical conversions in one file group | W13 | OWNER-15 | modify: `internal/plugins/maintenance/<group-1>`, `ci/stage.txt` | 05-tasks §5T.8.2 T6 | the op-ID ledger green; declared Parallelism equals the legacy Concurrency (1:1) |
-| PC-13-08 | T6 sub-batch 2 of 7: maintenance-plugin definitions native (at most 15, one file group) *(The 7 file groups are computed at S5r4's base commit and must be file-disjoint. Trailer `S5 4`. /parallel-sweep.)* | T1 Sonnet/medium: at most 15 mechanical conversions in one file group | W13 | PC-13-07 | modify: `internal/plugins/maintenance/<group-2>` | 05-tasks §5T.8.2 T6 | the op-ID ledger green; declared Parallelism equals the legacy Concurrency (1:1) |
-| PC-13-09 | T6 sub-batch 3 of 7: maintenance-plugin definitions native (at most 15, one file group) *(The 7 file groups are computed at S5r4's base commit and must be file-disjoint. Trailer `S5 4`. /parallel-sweep.)* | T1 Sonnet/medium: at most 15 mechanical conversions in one file group | W13 | PC-13-07 | modify: `internal/plugins/maintenance/<group-3>` | 05-tasks §5T.8.2 T6 | the op-ID ledger green; declared Parallelism equals the legacy Concurrency (1:1) |
-| PC-13-10 | T6 sub-batch 4 of 7: maintenance-plugin definitions native (at most 15, one file group) *(The 7 file groups are computed at S5r4's base commit and must be file-disjoint. Trailer `S5 4`. /parallel-sweep.)* | T1 Sonnet/medium: at most 15 mechanical conversions in one file group | W13 | PC-13-07 | modify: `internal/plugins/maintenance/<group-4>` | 05-tasks §5T.8.2 T6 | the op-ID ledger green; declared Parallelism equals the legacy Concurrency (1:1) |
-| PC-13-11 | T6 sub-batch 5 of 7: maintenance-plugin definitions native (at most 15, one file group) *(The 7 file groups are computed at S5r4's base commit and must be file-disjoint. Trailer `S5 4`. /parallel-sweep.)* | T1 Sonnet/medium: at most 15 mechanical conversions in one file group | W13 | PC-13-07 | modify: `internal/plugins/maintenance/<group-5>` | 05-tasks §5T.8.2 T6 | the op-ID ledger green; declared Parallelism equals the legacy Concurrency (1:1) |
-| PC-13-12 | T6 sub-batch 6 of 7: maintenance-plugin definitions native (at most 15, one file group) *(The 7 file groups are computed at S5r4's base commit and must be file-disjoint. Trailer `S5 4`. /parallel-sweep.)* | T1 Sonnet/medium: at most 15 mechanical conversions in one file group | W13 | PC-13-07 | modify: `internal/plugins/maintenance/<group-6>` | 05-tasks §5T.8.2 T6 | the op-ID ledger green; declared Parallelism equals the legacy Concurrency (1:1) |
-| PC-13-13 | T6 sub-batch 7 of 7: maintenance-plugin definitions native (at most 15, one file group); books' observable takes over ops.abandoned_calls *(The 7 file groups are computed at S5r4's base commit and must be file-disjoint. Trailer `S5 4`. /parallel-sweep.)* | T2 Sonnet/high: moves one metric family's owner in exactly one PR (R10-3) | W13 | PC-13-07, PC-13-02 | modify: `internal/plugins/maintenance/<group-7>`, `internal/opsmetrics/`, `internal/repairs/guards.go`, `internal/plugins/maintenance/retired_versions_fixer.go` | 05-tasks §5T.8.2 T6; 05-tasks §5T.8.1 opsmetrics row; 05-metrics §13 | the op-ID ledger green; declared Parallelism equals the legacy Concurrency (1:1); TestABOMetricsGatherNoDuplicateOrMissing with both source values of ops_abandoned_calls |
-| PC-13-14 | T7a: schedule conversion: the 38 TaskDefinitions become ScheduleFromConfig, each deleting its ticker entry; the 15 never-run v2 crons deleted; internal/scheduler deleted *(The PR that sets `release: S5r5` (09 S5), so compat-rehearsal runs on it. Trailer `S5 5`.)* | T3 Opus/high: every scheduled job changes scheduler; schedule keys move with aliases | W13 | OWNER-16 | modify: `internal/scheduler/`, `internal/books/module.go`, `internal/config/aliases_gen.go`, `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md`, `ci/stage.txt` | 05-tasks §5T.8.2 T7, §5T.3.8; 09 S5 Config; 14 Q-C | TestOneSchedulerPerKind; TestScheduleParity_AllDefinitions; TestABOMetricsGatherNoDuplicateOrMissing (the v3 loop gone); internal/scheduler deleted |
-| PC-13-15 | T7b: server-package ops and scheduler.metadata-upgrade become books task definitions *(Trailer `S5 5`.)* | T2 Sonnet/high: about 49 definitions with v1 checkpoint and cursor writers | W13 | PC-13-14 | modify: `internal/server/`, `internal/server/metadata_ops.go` | 05-tasks §5T.8.2 T7 | TestLegacyOpsWriters at its final target; no `registry.` import outside opsbridge |
-| OWNER-14 | Release S5r2: deploy to the reference host, 14-day soak, stage-record ticks, soak row | OWNER — no agent may complete it | W13 | PC-13-01, PC-13-02 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S5r2` row written by `scripts/soak_record.py --release S5r2`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-| OWNER-15 | Release S5r3: deploy to the reference host, 14-day soak, stage-record ticks, soak row | OWNER — no agent may complete it | W13 | PC-13-03, PC-13-04, PC-13-05, PC-13-06 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S5r3` row written by `scripts/soak_record.py --release S5r3`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-| OWNER-16 | Release S5r4: deploy to the reference host, 14-day soak, stage-record ticks, soak row | OWNER — no agent may complete it | W13 | PC-13-07, PC-13-08, PC-13-09, PC-13-10, PC-13-11, PC-13-12, PC-13-13 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S5r4` row written by `scripts/soak_record.py --release S5r4`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-| OWNER-17 | Release S5r5: deploy to the reference host, 14-day soak, stage-record ticks, soak row *(Run P13 for the floor release's stepping stone.)* | OWNER — no agent may complete it | W13 | PC-13-14, PC-13-15 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S5r5` row written by `scripts/soak_record.py --release S5r5`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-
-#### W14 — T8: deletions and books' upgrade floor (floor, release `floor`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-14-01 | T8, the floor release: delete OperationDef, opsbridge, childop, opsmetrics and the code only legacy steps 62/65/66 call; declare books' UpgradeFloor *(Sets `release: floor` (never a marker value). Release note and Docker last line name the stepping stone. Trailer `floor 1`.)* | T3 Opus/high: the one release that bounds skips; the stepping-stone tag must be right | W14 | OWNER-17 | modify: `internal/operations/registry/`, `internal/operations/childop/`, `internal/opsmetrics/`, `internal/books/store/`, `internal/books/module.go`, `core/storage/`, `internal/plugins/runitems_concurrency_lint_test.go`, `ci/stage.txt` | 05-tasks §5T.8.2 T8; 09 §9.2.2 floor and stepping stone; 02 N14 | no `registry.` import in ABO; TestUpgradeFloor_RefusedBelowLegacyCap; TestStepSteppingStoneValid; TestRestoreBelowUpgradeFloorRefusedAtStaging |
-| OWNER-18 | Release floor: deploy to the reference host, 14-day soak, stage-record ticks, soak row *(P13 before the deploy: the store meets the floor, or install the stepping-stone release first.)* | OWNER — no agent may complete it | W14 | PC-14-01 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `floor` row written by `scripts/soak_record.py --release floor`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-
-#### W15 — Outbox, realtime hub and projections, books publishers, flip (S6, release `S6`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-15-01 | core/outbox (c/outbox/, same-batch, at-least-once) with the relay dial *(Live, state-writing PR. Trailer `S6 1`.)* | T3 Opus/high: durable delivery semantics; the first c/outbox/ writer | W15 | OWNER-18 | create: `core/outbox/`, `core/outbox/outboxtest/`<br>modify: `core/kernel/`, `core/coretest/crashmatrix/` | 05-events §5E (outbox); 09 S6 Data/keys, Switches | outbox conformance tests; the crash matrix extended for the outbox writer |
-| PC-15-02 | core/realtime hub, internal/sse and internal/eventhttp with legacy projections A, B and C *(Trailer `S6 1`.)* | T3 Opus/high: resumable, permission-filtered streams whose legacy framing must be byte-equal | W15 | PC-15-01 | create: `core/realtime/`, `core/internal/sse/`, `core/internal/eventhttp/`<br>modify: `internal/realtime/`, `internal/itunes/service/`, `core/openapi/core.json` | 05-realtime §4, §4.9, §11; 09 S6 Moves, Endpoints | TestProjectionTopicsExistAtStage |
-| PC-15-03 | Books publishers on the bus: the 12 legacy event types, books.book.changed.v1 and the books.system.status-ticked.v1 worker *(Trailer `S6 1`.)* | T2 Sonnet/high: event mapping with a fixed payload | W15 | PC-15-02 | create: `internal/books/status_worker.go`, `internal/books/status_worker_test.go`<br>modify: `internal/operations/registry/bus.go`, `internal/server/server_lifecycle.go`, `internal/books/module.go` | 05-notify §10; 09 S6 Moves | system.status frames byte-shape-equal to S5's |
-| PC-15-04 | S6 flip: books mounts the projections at the legacy stream paths; the S5 bridge, registry.EventHub, hub A and the v3 broker are deleted *(Flip: `S6`. Trailer `S6 flip`.)* | T3 Opus/high: three live streams change server at once | W15 | PC-15-03 | modify: `internal/books/stream_bridge.go`, `internal/server/`, `internal/operations/registry/`, `internal/books/module.go`, `ci/stage.txt` | 09 S6 Endpoints, Done when | grep for text/event-stream lists only the core hub and its projections; legacy-stream goldens per event type; cells a, b, c |
-| OWNER-19 | Release S6: deploy to the reference host, 14-day soak, stage-record ticks, soak row *(P7 branch B's live ABS-client check; P9 webhooks census before S7.)* | OWNER — no agent may complete it | W15 | PC-15-04 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S6` row written by `scripts/soak_record.py --release S6`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-
-#### W16 — Integrations registry, providerhttp, AI, download and notify adapters, library and index, flip (S7, release `S7`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-16-01 | core/integrations registry: routed instance store (native c/integrations/instances/ plus legacy-backed via books' configstore), errors, Test's ProtectAdmin rule *(Live, state-writing PR (c/integrations/instances/). Trailer `S7 1`.)* | T3 Opus/high: a routed store with per-record coverage and HEAD-parity reach | W16 | OWNER-19 | create: `core/integrations/`, `core/integrations/integrationstest/`, `internal/books/configstore/instances.go`, `internal/books/configstore/instances_test.go`<br>modify: `internal/books/module.go` | 05-metadata M1, M1.10; 03 §3.3 two selection models; 09 S7 Data/keys | integrationstest suites on both halves; ErrFieldNotStorable answers 422 (new test) |
-| PC-16-02 | integrations/providerhttp: instance-scoped throttle, quota, breaker and retry with GateStore; safehttp moves in *(Trailer `S7 1`.)* | T3 Opus/high: outbound resilience without package globals | W16 | PC-16-01 | create: `core/integrations/providerhttp/`, `core/integrations/providerhttp/providerhttptest/`<br>modify: `internal/metadata/providerhttp/`, `internal/security/safehttp/`, `internal/metadata/dailyquota/`, `internal/catalog/`, `internal/covers/`, `internal/metafetch/` | 05-metadata M2/M3 (providerhttp); 09 S7 Moves | archtest.TestNoGlobals on the moved code |
-| PC-16-03 | integrations/ai with ai.JobStore and openai; books' AI recorder keeps every ai_* family *(Trailer `S7 1`.)* | T3 Opus/high: metric ownership and job persistence both change path | W16 | PC-16-02 | create: `core/integrations/ai/`, `core/integrations/ai/openai/`, `core/integrations/ai/aitest/`<br>modify: `internal/ai/`, `internal/ai/aijobs/`, `internal/aidispatch/`, `internal/dedup/`, `internal/scanner/`, `internal/transcribe/`, `internal/server/handlers/aibackends/` | 05-ai §8, §10; 09 S7 Moves; 09 §9.2.7 | the series golden adds only <namespace>_ai_* |
-| PC-16-04 | Download and notify adapters: Deluge into integrations/download/deluge; mail and webhook into integrations/notify; notify through the outbox *(Trailer `S7 1`.)* | T3 Opus/high: webhook bytes must stay HEAD's for legacy_headers instances | W16 | PC-16-03 | create: `core/integrations/download/`, `core/integrations/download/deluge/`, `core/integrations/notify/`, `core/integrations/notify/mail/`, `core/integrations/notify/webhook/`, `core/integrations/notify/notifytest/`<br>modify: `internal/deluge/`, `internal/mail/`, `internal/plugins/webhook/`, `internal/server/handlers/` | 05-download §10; 05-notify §7, §10; 09 S7 Notify | download.Client conformance with one implementor; webhook golden byte-equal to S6 for a legacy_headers instance |
-| PC-16-05 | Library and search index: fileops, watcher and pathutil generic parts; legacy.LibraryRootSource; bleveindex and storage/index with DirtySet *(Trailer `S7 1`.)* | T3 Opus/high: derived index data and roots served through legacy stores | W16 | PC-16-04 | create: `core/library/roots.go`, `core/legacy/library.go`, `core/internal/bleveindex/`, `core/storage/index/`<br>modify: `internal/fileops/`, `internal/watcher/`, `internal/pathutil/`, `internal/search/`, `internal/books/store/` | 05-library §5L.10; 05-storage §5S.3.8; 09 S7 Moves, Data/keys | search results for the fixture query set equal S6's |
-| PC-16-06 | S7 flip: internal/plugin deleted; publishers go through Deps.Notify; the root store's field-merge conversion; generic integration routes and aliases *(Flip: `S7`. Release notes: rows 7, 8. Trailer `S7 flip`.)* | T3 Opus/high: deletes a 10-package dependency and changes the settings home | W16 | PC-16-05 | create: `core/internal/integrationshttp/`<br>modify: `internal/plugin/`, `internal/server/plugins_init.go`, `internal/server/`, `internal/scanner/`, `internal/books/module.go`, `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md`, `core/openapi/core.json`, `scripts/tests/test_staging_scrub.py`, `ci/stage.txt` | 09 S7 Moves, Data/keys, Endpoints, Done when | plugin.DownloadClient deleted and the build passes; `test ! -e core/integrations/indexer && test ! -e core/arrfacade && test ! -e core/acquire`; a legacy-backed instance at a private IP literal reaches its destination; non-admin Put, creation and auth_ref changes refused; test_staging_scrub.py S7 cases; TestABOMetricsGatherNoDuplicateOrMissing with books' AI recorder; TestHistogramBucketsPinned; the R-test integration cells |
-| OWNER-20 | Release S7: deploy to the reference host, 14-day soak, stage-record ticks, soak row *(Before S8: read reusable-release.yml and record whether releases publish the raw asset the updater fetches.)* | OWNER — no agent may complete it | W16 | PC-16-06 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S7` row written by `scripts/soak_record.py --release S7`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-
-#### W17 — Backup, updater moved, health and startup, kernel `/metrics` flip, UI calls (S8, release `S8`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-17-01 | core/backup: plaintext archives with provenance, the catalogue, staged restore through the kernel swap, sidecar rewrite on apply *(Live, state-writing PR (catalogue). Trailer `S8 1`.)* | T4 Opus/xhigh-max: every older build must restore every archive; the restore matrix is cross-build | W17 | OWNER-20 | create: `core/backup/`, `core/backup/backuptest/`<br>modify: `internal/backup/`, `internal/appdirs/`, `internal/decisions/`, `internal/organizer/`, `internal/server/handlers/system/`, `core/coretest/crashmatrix/` | 05-backup B1-B7, §5B.3.4, §5B.10; 09 S8 Backup | the restore matrix of 09 S8 Done when; R-test cell e |
-| PC-17-02 | Updater moved into core/updater with HEAD's raw-asset pipeline, parameterised by the release source *(Needs OWNER-20's reading of the raw-asset contract. Trailer `S8 1`.)* | T3 Opus/high: moved, not rebuilt (A-6); the S0 test must pass unchanged | W17 | PC-17-01 | create: `core/updater/`, `core/internal/updaterhttp/`<br>modify: `internal/updater/`, `main.go`, `internal/server/` | 05-updater §5U.4, §5U.11, §5U.12; 09 S8 Updater | TestApply_RawAssetNoBackup; S0's updater test unchanged through the moved code; TestABOUpdaterSourceMatchesHEAD |
-| PC-17-03 | Health and startup: sysinfo host parts, flight-recorder wiring and trace download; /livez and /readyz; internal/startup becomes Registrar.StartupSteps *(Trailer `S8 1`.)* | T3 Opus/high: startup ordering moves into the kernel | W17 | PC-17-02 | create: `core/health/diagnostics/`, `core/internal/healthhttp/`<br>modify: `internal/startup/`, `internal/sysinfo/`, `internal/server/`, `internal/server/spa_fallback.go`, `cmd/root.go`, `internal/books/module.go` | 05-health §5H.10; 09 S8 Moves, Health | internal/startup deleted and the build passes; /livez/ and /READYZ answer 404, not HTML |
-| PC-17-04 | S8 flip: the kernel serves /metrics from the App registry; gin's route and ABO's backup staging deleted; native backup, update, system and health routes with aliases *(Flip: `S8`. Release note: row 11 (pre-S8 archives). Trailer `S8 flip`.)* | T3 Opus/high: the scrape path changes owner; every series name must stay HEAD's | W17 | PC-17-03 | create: `deploy/prometheus/storage-level.rules.yml`<br>modify: `internal/metrics/metrics.go`, `internal/server/server_lifecycle.go`, `core/app/options.go`, `main.go`, `internal/telemetrypolicy/`, `deploy/prometheus/alert-rules.yml`, `deploy/prometheus/alert-rules.test.yml`, `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md`, `core/openapi/core.json`, `ci/stage.txt` | 09 S8 Moves, Metrics, Endpoints, Done when; 05-metrics §6 | the seeded series golden passes (books names equal S7's; http_server_* stay otelgin's; diff adds only build_info); TestHistogramBucketsPinned; the credentialed smoke scrape; promtool test rules deploy/prometheus/alert-rules.test.yml; TestWorkerKey_NoAmbientScopes on /metrics; TestABOMetricsGatherNoDuplicateOrMissing on the private registry; TestContractScrapesServedHandler |
-| PC-17-05 | System, backup and update UI calls move to the generated client *(Trailer `S8 1`.)* | T1 Sonnet/medium: frontend call-site swaps for routes that now exist | W17 | PC-17-04 | modify: `web/src/services/api.ts`, `web/src/components/settings/AutoUpdateSection.tsx`, `web/src/pages/` | 07 §7.19 step 6; 09 S8 Done when (cells a/b) | R-test cells a/b for the moved calls |
-| OWNER-21 | Release S8: deploy to the reference host, 14-day soak, stage-record ticks, soak row | OWNER — no agent may complete it | W17 | PC-17-04, PC-17-05 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S8` row written by `scripts/soak_record.py --release S8`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-
-#### W18 — Shell packages, the steps 4+5 flip, realtime client, harness (S9, release `S9`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-18-01 | @mediacore/ui-kit and @mediacore/shell with /vite and /testing, hello's web package and ui_embed.go, and the rest of the Go ui package (dark for ABO) *(Trailer `S9 1`.)* | T3 Opus/high: the shell contract and the bundle metas that ui.FromFS enforces | W18 | OWNER-21 | create: `core/web/packages/ui-kit/`, `core/web/packages/shell/`, `core/examples/hello/web/`, `core/examples/hello/ui_embed.go`, `core/scripts/ci/embed_build_outputs.txt`, `core/scripts/ci/check_embed_outputs.py`, `core/ui/`<br>modify: `core/web/package.json`, `core/web/package-lock.json`, `core/Makefile` | 07 §7.3-§7.8, §7.19 step 4; 09 S9 Moves | createShell.meta.test.tsx; TestBundle_MissingMeta; G3: the shell rejects an unknown descriptor version |
-| PC-18-02 | S9 flip, steps 4 and 5 in one PR: shell-classified files into core/web, createShell, mediacore() preset, UIBundle(), gin SPA serving deleted, /books/ routes with redirects, fragment invite links *(Flip: `S9`. Release notes: rows 4 (invites), 9. Trailer `S9 flip`.)* | T4 Opus/xhigh-max: one PR so no RC can carry step 4 without step 5's redirects (FE5-13) | W18 | PC-18-01 | create: `web/src/modules/books/`<br>modify: `web/src/main.tsx`, `web/src/App.tsx`, `web/vite.config.ts`, `web/index.html`, `web/src/`, `main.go`, `web_embed.go`, `internal/server/static_embed.go`, `internal/server/spa_fallback.go`, `internal/server/csp.go`, `internal/server/csp_report.go`, `internal/server/legacy_manifest.go`, `internal/books/module.go`, `ci/stage.txt` | 07 §7.19 steps 4-5, §7.4.2, §7.4.3, §7.6.3, §7.11; 09 S9 Moves, UI routes, Done when | App.tsx has no hard-coded module routes; a dummy second contribution renders with no edit to books UI (G6); static_embed_recovery_test.go's port boots through app.New; `make build-api && ./audiobook-organizer serve` answers / with the placeholder; a page load before books' Start serves index.html; TestLegacyInviteRedirect_SPASharedSegment; theme-boot.spec.ts and exactly one inline script; the R-test rows of 09 S9 Done when; cells a, b, c |
-| PC-18-03 | Shell realtime client replaces eventSourceManager and the operations stream; the Activity page moves to native REST and stream together *(Trailer `S9 1`.)* | T2 Sonnet/high: the last first-party user of the legacy streams | W18 | PC-18-02 | modify: `web/src/services/eventSourceManager.ts`, `web/src/stores/useOperationsStore.ts`, `web/src/pages/Activity.tsx`, `web/src/hooks/useUnsavedChangesBlocker.ts` | 07 §7.19 step 4; 09 S9 Moves | an e2e request log shows no first-party request to the legacy streams; the Activity page shows live progress |
-| PC-18-04 | Test harness onto renderInShell, and the remaining api.ts sections whose native routes exist move to generated clients *(Trailer `S9 1`.)* | T1 Sonnet/medium: test-utility rewrite and call-site swaps | W18 | PC-18-03 | modify: `web/src/test/renderWithProviders.tsx`, `web/src/services/api.ts`, `web/src/` | 07 §7.19 steps 4 and 6; 07 §7.4.4 | vitest green with renderInShell |
-| OWNER-22 | Release S9: deploy to the reference host, 14-day soak, stage-record ticks, soak row *(P7 branch B's live ABS-client check after the deploy.)* | OWNER — no agent may complete it | W18 | PC-18-02, PC-18-03, PC-18-04 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks and owner checkpoints; 09 §9.3 boot-time budget and staging; 09 §9.7 | `ci/soak.txt` holds a current `S9` row written by `scripts/soak_record.py --release S9`; the stage record ticks the stage's done-check list; P10 after each deploy and ci/prev_ref.txt updated |
-
-#### W19 — Contracts C3-C9, Gone step (contracts, release none)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-19-01 | Contract C3 (Gone step): config and env aliases: legacy YAML keys refused at boot for one minor; retired env names; secret-class aliases refuse boot *(Trailer `Stage-Release: none` (plan policy; the spec names no stage for contract PRs). Release notes list every removed surface.)* | T1 Sonnet/medium: retires surfaces only; the ledger dates and the owner's readings decide when | W19 | OWNER-23 | modify: `internal/config/aliases_gen.go`, `internal/config/facade.go`, `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md` | 09 §9.5 C3; 09 §9.2.1 Contract step; 09 §9.6 | TestNoContractBeforeSunset; TestCompatLedgerMatchesCode with the rows in state gone; TestAliasHeadersAndShape for the 410 answers |
-| PC-19-02 | Contract C4 (Gone step): identity: legacy atoms on API input answer 400 naming the canonical permission; the auth and users aliases answer 410 *(Trailer `Stage-Release: none` (plan policy; the spec names no stage for contract PRs). Release notes list every removed surface.)* | T1 Sonnet/medium: retires surfaces only; the ledger dates and the owner's readings decide when | W19 | OWNER-24 | modify: `core/internal/authhttp/`, `core/rbac/`, `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md` | 09 §9.5 C4; 09 §9.2.1 Contract step; 09 §9.6 | TestNoContractBeforeSunset; TestCompatLedgerMatchesCode with the rows in state gone; TestAliasHeadersAndShape for the 410 answers |
-| PC-19-03 | Contract C5 (Gone step): tasks: the /api/v3/ops, op-defs and tasks aliases answer 410; task_kind input aliases refused *(Trailer `Stage-Release: none` (plan policy; the spec names no stage for contract PRs). Release notes list every removed surface.)* | T1 Sonnet/medium: retires surfaces only; the ledger dates and the owner's readings decide when | W19 | OWNER-25 | modify: `core/internal/taskhttp/`, `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md` | 09 §9.5 C5; 09 §9.2.1 Contract step; 09 §9.6 | TestNoContractBeforeSunset; TestCompatLedgerMatchesCode with the rows in state gone; TestAliasHeadersAndShape for the 410 answers |
-| PC-19-04 | Contract C6 (Gone step): events: the three legacy streams answer 410 *(Trailer `Stage-Release: none` (plan policy; the spec names no stage for contract PRs). Release notes list every removed surface.)* | T1 Sonnet/medium: retires surfaces only; the ledger dates and the owner's readings decide when | W19 | OWNER-26 | modify: `core/realtime/`, `internal/books/module.go`, `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md` | 09 §9.5 C6; 09 §9.2.1 Contract step; 09 §9.6 | TestNoContractBeforeSunset; TestCompatLedgerMatchesCode with the rows in state gone; TestAliasHeadersAndShape for the 410 answers |
-| PC-19-05 | Contract C7 (Gone step): integrations: the generic /api/v1/{ai,deluge,metadata-sources} aliases answer 410 *(Trailer `Stage-Release: none` (plan policy; the spec names no stage for contract PRs). Release notes list every removed surface.)* | T1 Sonnet/medium: retires surfaces only; the ledger dates and the owner's readings decide when | W19 | OWNER-27 | modify: `core/internal/integrationshttp/`, `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md` | 09 §9.5 C7; 09 §9.2.1 Contract step; 09 §9.6 | TestNoContractBeforeSunset; TestCompatLedgerMatchesCode with the rows in state gone; TestAliasHeadersAndShape for the 410 answers |
-| PC-19-06 | Contract C8 (Gone step): backup, update, system and health aliases answer 410 *(Trailer `Stage-Release: none` (plan policy; the spec names no stage for contract PRs). Release notes list every removed surface.)* | T1 Sonnet/medium: retires surfaces only; the ledger dates and the owner's readings decide when | W19 | OWNER-28 | modify: `core/internal/backuphttp/`, `core/internal/updaterhttp/`, `core/internal/healthhttp/`, `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md` | 09 §9.5 C8; 09 §9.2.1 Contract step; 09 §9.6 | TestNoContractBeforeSunset; TestCompatLedgerMatchesCode with the rows in state gone; TestAliasHeadersAndShape for the 410 answers |
-| PC-19-07 | Contract C9 (Gone step): UI routes: client redirects removed; the legacy invite and temp-login 302s removed at the end of their own windows *(Trailer `Stage-Release: none` (plan policy; the spec names no stage for contract PRs). Release notes list every removed surface.)* | T1 Sonnet/medium: retires surfaces only; the ledger dates and the owner's readings decide when | W19 | OWNER-29 | modify: `web/src/modules/books/redirects.ts`, `internal/books/module.go`, `internal/server/legacy_manifest.go`, `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md` | 09 §9.5 C9; 09 §9.2.1 Contract step; 09 §9.6 | TestNoContractBeforeSunset; TestCompatLedgerMatchesCode with the rows in state gone; TestAliasHeadersAndShape for the 410 answers |
-| OWNER-23 | Contract C3: W's owner check on the reference host (P5 callers, P8 counter readings) | OWNER — no agent may complete it | W19 | OWNER-10 | — (no code; NOT AGENT WORK) | 09 §9.2.1 W (a)-(c); 09 §9.5; 09 §9.7 P5, P8 | two production minors and 30 days since S3 shipped; every production release in the period names the surfaces as deprecated; 14 consecutive days of readings with no use, with process start times, recorded in the contract PR |
-| OWNER-24 | Contract C4: W's owner check on the reference host (P5 callers, P8 counter readings) | OWNER — no agent may complete it | W19 | OWNER-12 | — (no code; NOT AGENT WORK) | 09 §9.2.1 W (a)-(c); 09 §9.5; 09 §9.7 P5, P8 | two production minors and 30 days since S4 r2 shipped; every production release in the period names the surfaces as deprecated; 14 consecutive days of readings with no use, with process start times, recorded in the contract PR |
-| OWNER-25 | Contract C5: W's owner check on the reference host (P5 callers, P8 counter readings) | OWNER — no agent may complete it | W19 | OWNER-13 | — (no code; NOT AGENT WORK) | 09 §9.2.1 W (a)-(c); 09 §9.5; 09 §9.7 P5, P8 | two production minors and 30 days since S5 shipped; every production release in the period names the surfaces as deprecated; 14 consecutive days of readings with no use, with process start times, recorded in the contract PR |
-| OWNER-26 | Contract C6: W's owner check on the reference host (P5 callers, P8 counter readings) | OWNER — no agent may complete it | W19 | OWNER-22 | — (no code; NOT AGENT WORK) | 09 §9.2.1 W (a)-(c); 09 §9.5; 09 §9.7 P5, P8 | two production minors and 30 days since S6 and S9 shipped; every production release in the period names the surfaces as deprecated; 14 consecutive days of readings with no use, with process start times, recorded in the contract PR |
-| OWNER-27 | Contract C7: W's owner check on the reference host (P5 callers, P8 counter readings) | OWNER — no agent may complete it | W19 | OWNER-20 | — (no code; NOT AGENT WORK) | 09 §9.2.1 W (a)-(c); 09 §9.5; 09 §9.7 P5, P8 | two production minors and 30 days since S7 shipped; every production release in the period names the surfaces as deprecated; 14 consecutive days of readings with no use, with process start times, recorded in the contract PR |
-| OWNER-28 | Contract C8: W's owner check on the reference host (P5 callers, P8 counter readings) | OWNER — no agent may complete it | W19 | OWNER-21 | — (no code; NOT AGENT WORK) | 09 §9.2.1 W (a)-(c); 09 §9.5; 09 §9.7 P5, P8 | two production minors and 30 days since S8 shipped; every production release in the period names the surfaces as deprecated; 14 consecutive days of readings with no use, with process start times, recorded in the contract PR |
-| OWNER-29 | Contract C9: W's owner check on the reference host (P5 callers, P8 counter readings) | OWNER — no agent may complete it | W19 | OWNER-22 | — (no code; NOT AGENT WORK) | 09 §9.2.1 W (a)-(c); 09 §9.5; 09 §9.7 P5, P8 | two production minors and 30 days since S9 shipped; every production release in the period names the surfaces as deprecated; 14 consecutive days of readings with no use, with process start times, recorded in the contract PR |
-
-#### W20 — Final deletions; alias code removed (S10, release `S10`)
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-20-01 | S10 flip: delete internal/serviceregistry, pkg/plugin/sdk, --db-type and the SQLite no-op flag *(Flip: `S10`. Trailer `S10 flip`.)* | T1 Sonnet/medium: deletions of code with no remaining user | W20 | OWNER-22 | modify: `internal/serviceregistry/`, `pkg/plugin/sdk/`, `cmd/root.go`, `ci/stage.txt` | 09 S10; 09 §9.6 row 19 | build passes with the packages deleted |
-| PC-20-02 | Delete the alias code of every contract whose Gone minor has passed; close the ledger rows *(Trailer `S10 1`.)* | T2 Sonnet/high: touches every subsystem's alias table; the ledger must end with permanent rows only | W20 | PC-20-01, PC-19-01, PC-19-02, PC-19-03, PC-19-04, PC-19-05, PC-19-06, PC-19-07 | modify: `core/compat/`, `internal/config/aliases_gen.go`, `core/internal/authhttp/`, `core/internal/taskhttp/`, `core/realtime/`, `core/internal/integrationshttp/`, `core/internal/backuphttp/`, `web/src/modules/books/redirects.ts`, `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md` | 09 S10 Done when; 09 §9.5; 09 §9.6 | TestCompatLedgerMatchesCode shows only permanent entries; §9.6 has no row in state aliased except the permanent ones |
-| OWNER-30 | Release S10: deploy, 14-day soak, stage-record ticks (every contract deleted), soak row | OWNER — no agent may complete it | W20 | PC-20-01, PC-20-02 | — (no code; NOT AGENT WORK) | 09 §9.2.1 Soaks; 09 S10 | `ci/soak.txt` holds a current `S10` row |
-
-#### W21 — Hardening cutovers after S10 (H1-H3, release `H1`, `H2`, `H3` (or `H2H3`))
-
-| ID | Title | Tier (why) | Wave | Depends on | Files | Spec | Done-check tests |
-|---|---|---|---|---|---|---|---|
-| PC-21-01 | Hardening-cutover machinery: TestHardeningCutoverRefusedByEveryOlderRelease, the fresh-verified-archive precondition, checkpoint deletion with forced compaction, soak_record's H owner table *(Trailer `H1 1` (it ships in H1's release). Its H owner table can hold H2's and H3's rows now; H1's row waits for PC-21-02's layout decision.)* | T4 Opus/xhigh-max: one-way steps; a gap lets an older build misread a raised store | W21 | OWNER-30 | create: `core/storage/cutover.go`, `core/storage/cutover_test.go`, `internal/books/hardening_refusal_test.go`<br>modify: `scripts/soak_record.py`, `scripts/tests/test_soak_record.py`, `core/storage/guard.go` | 09 §9.13; 05-storage §5S.3.13 item 4, §5S.3.12; 05-config §1.12.5 | TestHardeningCutoverRefusedByEveryOlderRelease (harness); TestH1H2_DeferredWithoutFreshVerifiedArchive; TestH1H2_DeferredWhileSwapSetAsideExists |
-| PC-21-02 | H1 identity cutover: hashed sessions and tokens (existing ones deleted), mck_ keys and native scopes from each key's effective set, roles with native scopes; flip *(BLOCKED for briefing: no stage table yet (09 §9.13: written when the owner schedules the cutover, before its first PR); whether the families move to c/auth/ and c/rbac/ or are rewritten in place is undecided, and that decides the owners H1 raises. Flip trailer `H1 flip`.)* | T4 Opus/xhigh-max: rewrites every identity row once; ambient reach and confinement must carry over exactly | W21 | PC-21-01 | create: `internal/books/store/h1_cutover.go`, `internal/books/store/h1_cutover_test.go`<br>modify: `internal/books/store/legacy_auth.go`, `internal/books/store/legacy_rbac.go`, `core/legacy/auth.go`, `internal/books/module.go`, `ci/stage.txt` | 09 §9.13 H1 row; 05-authn §11.2; 05-rbac §6.3; 14 Q-D | TestH1_NoRawTokenOnDisk; TestH1_AmbientScopesPreserved; TestH1_ConfinedKeyStaysConfined; TestLegacyRoleReachUnchanged on the legacy routes; TestHardeningCutoverRefusedByEveryOlderRelease |
-| PC-21-03 | H2 secrets cutover: plaintext blob secrets and the four encrypted rows move into c/secrets/; gap-fill keys removed; flip *(BLOCKED for briefing until the owner writes H2's stage table (09 §9.13); the content is decided by 05-config §1.12.5, and this plan proposes this task as the flip PR. Flip trailer `H2 flip` (or `H2H3 flip`).)* | T4 Opus/xhigh-max: a one-way move of every third-party secret | W21 | OWNER-31 | create: `internal/books/configstore/h2_cutover.go`, `internal/books/configstore/h2_cutover_test.go`<br>modify: `internal/books/configstore/write.go`, `core/legacy/secrets.go`, `core/secrets/`, `internal/config/aliases_gen.go`, `ci/stage.txt` | 09 §9.13 H2 row; 05-config §1.12.5 H2; 14 Q-E | TestH2_NoPlaintextSecretOnDisk; TestH1H2_DeferredWithoutFreshVerifiedArchive for H2; TestHardeningCutoverRefusedByEveryOlderRelease; TestH1H2_DeferredWhileSwapSetAsideExists for H2 |
-| PC-21-04 | H3 auth-precedence cutover: an enabling operator value wins over a stored false; HEADAuthOffWritable cleared on enable_auth; flip *(BLOCKED for briefing: no stage table yet (09 §9.13), and H3 ships with or after the settings family's cutover, which is deferred-build and has no design. Flip trailer `H3 flip` (or `H2H3 flip`).)* | T3 Opus/high: one precedence rule, but one-way | W21 | OWNER-32 | create: `internal/config/h3_precedence_test.go`<br>modify: `internal/config/aliases_gen.go`, `internal/config/facade.go`, `core/config/`, `ci/stage.txt` | 09 §9.13 H3 row; 05-config §1.12.5 H3; 05-authn §11.2 H3 row | auth enabled through the environment stays on across restarts; TestComposeEnvKeepsUIBasicGate; TestLegacyAuthEnablePrecedenceMatchesHEAD (disabling half); TestHardeningCutoverRefusedByEveryOlderRelease |
-| OWNER-31 | Release H1: fresh verified archive, deploy, soak from the first boot that logs the raised levels, soak row *(Take, verify and copy off-host a fresh archive within core.storage.cutover.archive_max_age before the deploy; One-way: a revert is admitted only before a production tag contains the flip.)* | OWNER — no agent may complete it | W21 | PC-21-01, PC-21-02 | — (no code; NOT AGENT WORK) | 09 §9.13; 09 §9.2.1 Soaks (H releases) | `ci/soak.txt` holds a current `H1` row whose levels raise exactly the owners its §9.13 row names |
-| OWNER-32 | Release H2: fresh verified archive, deploy, soak from the first boot that logs the raised levels, soak row *(Take, verify and copy off-host a fresh archive within core.storage.cutover.archive_max_age before the deploy; One-way: a revert is admitted only before a production tag contains the flip.)* | OWNER — no agent may complete it | W21 | PC-21-03 | — (no code; NOT AGENT WORK) | 09 §9.13; 09 §9.2.1 Soaks (H releases) | `ci/soak.txt` holds a current `H2` row whose levels raise exactly the owners its §9.13 row names |
-| OWNER-33 | Release H3: deploy, soak from the first boot that logs the raised levels, soak row *(One-way: a revert is admitted only before a production tag contains the flip.)* | OWNER — no agent may complete it | W21 | PC-21-04 | — (no code; NOT AGENT WORK) | 09 §9.13; 09 §9.2.1 Soaks (H releases) | `ci/soak.txt` holds a current `H3` row whose levels raise exactly the owners its §9.13 row names |
-
-
----
-
-## (d) Same-file collision matrix and the serialization that resolves it
-
-Computed from §(c)'s files over every pair of tasks that can be open at the same time: tasks of one wave, the
-concurrent pairs W00 ∥ W01, W07 ∥ W08 and W08 ∥ W09, and W19 against every wave from W10. A directory token collides
-with every path below it. **Every colliding pair outside W19 is ordered by depends-on** (84 pairs, 0
-unordered); the right-hand column is that order. Two cross-wave orderings follow from it: UI-0's first PR (PC-08-01)
-merges before the S2b flip (PC-07-05), and the `Makefile`/`core/Makefile` edits run PC-07-01 → PC-08-02 → PC-07-06.
-
-| Wave(s) | Shared file or directory | Tasks that touch it | Resolution (order enforced by depends-on) |
+| Release / flip | What ships | Spec | Tasks |
 |---|---|---|---|
-| W00 | `internal/server/middleware/auth.go` | PC-00-01, PC-00-02 | PC-00-01 → PC-00-02 |
-| W01 | `Makefile` | PC-01-01, PC-01-02, PC-01-04, PC-01-05, PC-01-06 | PC-01-01 → PC-01-02 → PC-01-04 → PC-01-05 → PC-01-06 |
-| W01 | `.github/workflows/ci.yml` | PC-01-01, PC-01-04, PC-01-06 | PC-01-01 → PC-01-04 → PC-01-06 |
-| W01 | `Dockerfile` | PC-01-01, PC-01-05, PC-01-06 | PC-01-01 → PC-01-05 → PC-01-06 |
-| W01 | `Dockerfile.build-cgo` | PC-01-01, PC-01-05, PC-01-06 | PC-01-01 → PC-01-05 → PC-01-06 |
-| W01 | `.github/dependabot.yml` | PC-01-02, PC-01-06 | PC-01-02 → PC-01-06 |
-| W01 | `.github/workflows/binary-smoke.yml` | PC-01-01, PC-01-06 | PC-01-01 → PC-01-06 |
-| W01 | `.github/workflows/e2e.yml` | PC-01-01, PC-01-06 | PC-01-01 → PC-01-06 |
-| W01 | `.github/workflows/extraction-gates.yml` | PC-01-04, PC-01-07 | PC-01-04 → PC-01-07 |
-| W01 | `.github/workflows/frontend-ci.yml` | PC-01-01, PC-01-06 | PC-01-01 → PC-01-06 |
-| W01 | `.github/workflows/nightly.yml` | PC-01-01, PC-01-06 | PC-01-01 → PC-01-06 |
-| W01 | `.github/workflows/ratchet-lower.yml` | PC-01-01, PC-01-07 | PC-01-01 → PC-01-07 |
-| W01 | `.github/workflows/security.yml` | PC-01-01, PC-01-06 | PC-01-01 → PC-01-06 |
-| W01 | `.github/workflows/vulnerability-scan.yml` | PC-01-01, PC-01-06 | PC-01-01 → PC-01-06 |
-| W01 | `.woodpecker/` | PC-01-01, PC-01-06 | PC-01-01 → PC-01-06 |
-| W01 | `CLAUDE.md` | PC-01-01, PC-01-06 | PC-01-01 → PC-01-06 |
-| W01 | `scripts/ci_remote.py` | PC-01-01, PC-01-06 | PC-01-01 → PC-01-06 |
-| W02 | `.github/workflows/docker-image.yml` | PC-02-01, PC-02-02 | PC-02-01 → PC-02-02 |
-| W02 | `internal/server/handlers/system/handler.go` | PC-02-02, PC-02-03 | PC-02-02 → PC-02-03 |
-| W02 | `main.go` | PC-02-01, PC-02-02 | PC-02-01 → PC-02-02 |
-| W03 | `internal/server/` | PC-03-01, PC-03-02, PC-03-05, PC-03-06 | PC-03-01 → PC-03-02 → PC-03-05 → PC-03-06 |
-| W03 | `cmd/root.go` | PC-03-05, PC-03-06 | PC-03-05 → PC-03-06 |
-| W03 | `internal/backup/` | PC-03-02, PC-03-06 | PC-03-02 → PC-03-06 |
-| W03 | `internal/metafetch/` | PC-03-01, PC-03-05 | PC-03-01 → PC-03-05 |
-| W03 | `internal/plugins/maintenance/` | PC-03-01, PC-03-02 | PC-03-01 → PC-03-02 |
-| W03 | `internal/server/handlers/system/handler.go` | PC-03-05, PC-03-06 | PC-03-05 → PC-03-06 |
-| W04 | `core/legacy/` | PC-04-02, PC-04-05 | PC-04-02 → PC-04-05 |
-| W04 | `internal/server/server_lifecycle.go` | PC-04-01, PC-04-07 | PC-04-01 → PC-04-07 |
-| W04 | `main.go` | PC-04-04, PC-04-07 | PC-04-04 → PC-04-07 |
-| W06 | `main.go` | PC-06-01, PC-06-02 | PC-06-01 → PC-06-02 |
-| W07 | `internal/` | PC-07-04, PC-07-05, PC-07-07, PC-07-06, PC-07-09 | PC-07-04 → PC-07-05 → PC-07-07 → PC-07-06 → PC-07-09 |
-| W07 | `cmd/` | PC-07-04, PC-07-05, PC-07-08 | PC-07-04 → PC-07-05 → PC-07-08 |
-| W07 | `internal/books/module.go` | PC-07-05, PC-07-07, PC-07-09 | PC-07-05 → PC-07-07 → PC-07-09 |
-| W07 | `internal/books/store/` | PC-07-04, PC-07-05, PC-07-07 | PC-07-04 → PC-07-05 → PC-07-07 |
-| W07 | `ci/stage.txt` | PC-07-05, PC-07-09 | PC-07-05 → PC-07-09 |
-| W07 | `core/coretest/crashmatrix/` | PC-07-03, PC-07-07 | PC-07-03 → PC-07-07 |
-| W07 | `core/internal/restoreswap/` | PC-07-02, PC-07-07 | PC-07-02 → PC-07-07 |
-| W07 | `core/storage/claims.go` | PC-07-01, PC-07-09 | PC-07-01 → PC-07-09 |
-| W07 | `docs/` | PC-07-06, PC-07-08 | PC-07-06 → PC-07-08 |
-| W07 | `internal/books/crashmatrix_abo_test.go` | PC-07-05, PC-07-07 | PC-07-05 → PC-07-07 |
-| W07 | `internal/server/` | PC-07-04, PC-07-07 | PC-07-04 → PC-07-07 |
-| W07 | `main.go` | PC-07-05, PC-07-06 | PC-07-05 → PC-07-06 |
-| W07+W08 | `ci/stage.txt` | PC-08-01, PC-07-05, PC-07-09 | PC-08-01 → PC-07-05 → PC-07-09 |
-| W07+W08 | `Makefile` | PC-08-02, PC-07-06 | PC-08-02 → PC-07-06 |
-| W07+W08 | `core/Makefile` | PC-07-01, PC-08-02 | PC-07-01 → PC-08-02 |
-| W08 | `web/package-lock.json` | PC-08-01, PC-08-02 | PC-08-01 → PC-08-02 |
-| W08 | `web/package.json` | PC-08-01, PC-08-02 | PC-08-01 → PC-08-02 |
-| W08 | `web/src/` | PC-08-01, PC-08-02 | PC-08-01 → PC-08-02 |
-| W08+W09 | `ci/stage.txt` | PC-08-01, PC-09-06 | PC-08-01 → PC-09-06 |
-| W09 | `internal/config/persistence.go` | PC-09-04, PC-09-06 | PC-09-04 → PC-09-06 |
-| W10 | `internal/server/` | PC-10-03, PC-10-04, PC-10-06 | PC-10-03 → PC-10-04 → PC-10-06 |
-| W10 | `core/auth/` | PC-10-02, PC-10-03 | PC-10-02 → PC-10-03 |
-| W11 | `internal/server/handlers/` | PC-11-01, PC-11-02, PC-11-03 | PC-11-01 → PC-11-02 → PC-11-03 |
-| W11 | `docs/compat-surfaces.md` | PC-11-01, PC-11-03 | PC-11-01 → PC-11-03 |
-| W11 | `internal/books/compat-surfaces.md` | PC-11-01, PC-11-03 | PC-11-01 → PC-11-03 |
-| W11 | `internal/books/module.go` | PC-11-02, PC-11-03 | PC-11-02 → PC-11-03 |
-| W12 | `core/tasks/` | PC-12-01, PC-12-03 | PC-12-01 → PC-12-03 |
-| W12 | `core/tasks/taskstest/` | PC-12-01, PC-12-03 | PC-12-01 → PC-12-03 |
-| W12 | `internal/operations/opswriter/` | PC-12-01, PC-12-05 | PC-12-01 → PC-12-05 |
-| W12 | `internal/operations/registry/` | PC-12-03, PC-12-08 | PC-12-03 → PC-12-08 |
-| W12 | `internal/scheduler/` | PC-12-04, PC-12-08 | PC-12-04 → PC-12-08 |
-| W12 | `pkg/ops/` | PC-12-01, PC-12-03 | PC-12-01 → PC-12-03 |
-| W13 | `ci/stage.txt` | PC-13-01, PC-13-03, PC-13-07, PC-13-14 | PC-13-01 → PC-13-03 → PC-13-07 → PC-13-14 |
-| W13 | `internal/server/` | PC-13-01, PC-13-03, PC-13-15 | PC-13-01 → PC-13-03 → PC-13-15 |
-| W13 | `internal/books/module.go` | PC-13-03, PC-13-14 | PC-13-03 → PC-13-14 |
-| W13 | `internal/repairs/` | PC-13-02, PC-13-13 | PC-13-02 → PC-13-13 |
-| W15 | `internal/books/module.go` | PC-15-03, PC-15-04 | PC-15-03 → PC-15-04 |
-| W15 | `internal/operations/registry/` | PC-15-03, PC-15-04 | PC-15-03 → PC-15-04 |
-| W15 | `internal/server/` | PC-15-03, PC-15-04 | PC-15-03 → PC-15-04 |
-| W16 | `core/integrations/` | PC-16-01, PC-16-02, PC-16-03, PC-16-04 | PC-16-01 → PC-16-02 → PC-16-03 → PC-16-04 |
-| W16 | `internal/server/` | PC-16-03, PC-16-04, PC-16-06 | PC-16-03 → PC-16-04 → PC-16-06 |
-| W16 | `internal/books/module.go` | PC-16-01, PC-16-06 | PC-16-01 → PC-16-06 |
-| W16 | `internal/scanner/` | PC-16-03, PC-16-06 | PC-16-03 → PC-16-06 |
-| W16 | `internal/server/handlers/` | PC-16-03, PC-16-04 | PC-16-03 → PC-16-04 |
-| W17 | `internal/server/` | PC-17-01, PC-17-02, PC-17-03, PC-17-04 | PC-17-01 → PC-17-02 → PC-17-03 → PC-17-04 |
-| W17 | `main.go` | PC-17-02, PC-17-04 | PC-17-02 → PC-17-04 |
-| W18 | `web/src/` | PC-18-02, PC-18-03, PC-18-04 | PC-18-02 → PC-18-03 → PC-18-04 |
-| W21 | `ci/stage.txt` | PC-21-02, PC-21-03, PC-21-04 | PC-21-02 → PC-21-03 → PC-21-04 |
-| W21 | `internal/config/aliases_gen.go` | PC-21-03, PC-21-04 | PC-21-03 → PC-21-04 |
+| R0 | the six early fixes, the toolchain bump (first PR), the updater hotfix | 09 §9.4 R0; 05-authn §11.1; 13 §13.2.2; 05-updater §5U.12 | R0-01 … R0-06 |
+| R1 | nested module and CI, leaves, composition root, perimeter, logging, core storage with strict claims, the one journaled swap, offline restore and reset, crash matrix, deploy tooling, react-router 8 and the api-client | 09 §9.4 R1; 03 §3.2, §3.8; 07 §7.19 steps 1–2 | R1-01 … R1-31 |
+| R2, F2 | the foundation PRs, dark, and the R2 verification corpus and harness | 09 §9.4 R2 (F2 row), §9.3 | F2-01 … F2-15 |
+| R2, F3 | config and secrets; the Basic gate into core; M2, M7, M8 | 09 §9.4 R2 flips; 05-config §1.12 | F3-01 … F3-07 |
+| R2, F4 | identity, the events bus, the native settings routes; M3 | 05-authn §11; 05-rbac §6 | F4-01 … F4-08 |
+| R2, F5 | tasks and the log journal; conversion groups T2–T7; M4, M5 | 05-tasks §5T.8; 05-logging §11 | F5-01 … F5-18 |
+| R2, F6 | outbox and realtime | 05-events §5E.13; 05-realtime §11 | F6-01 … F6-03 |
+| R2, F7 | integrations, AI jobs, provider gates, library roots, notify; M6 | 05-metadata M1.10; 05-ai §10; 05-notify §10; 05-library §5L.10 | F7-01 … F7-09 |
+| R2, F8 | backup, the updater move, health, the kernel `/metrics` mount | 05-backup §5B.10; 05-updater; 05-health §5H.10; 05-metrics §13 | F8-01 … F8-04 |
+| R2, F9 | the shell (R2 if ready, else R3) | 07 §7.19 steps 4–5 | F9-01 … F9-03 |
+| R2, last PR | the runbook and the R2 release note; then the freeze ends | 09 §9.2.9, §9.4 R2 | R2-01, R2-02 |
+| R3 | deletions, `legacy-file-cleanup`, `UpgradeFloor{InstallFirst: R2}` | 09 §9.4 R3; 09 §9.2.2 | R3-01 … R3-03 |
+| Owner | decisions, production reads, releases and deploys | 09 §9.4 Owner rows; §9.7 | OWNER-01 … OWNER-06 |
 
-**W19 (contracts).** A contract's date is set by its window, not by the wave plan, so contract tasks are not ordered
-against stage tasks by depends-on. Rule: the coordinator dispatches a contract PR only when no open PR touches one of
-its files, and contracts run one at a time. Shared files:
-
-| Contract task | Shares files with | Files |
-|---|---|---|
-| PC-19-01 | PC-11-01, PC-11-03, PC-12-06, PC-13-14, PC-16-06, PC-17-04, PC-19-02, PC-19-03, PC-19-04, PC-19-05, PC-19-06, PC-19-07 | `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md`, `internal/config/aliases_gen.go` |
-| PC-19-02 | PC-12-06, PC-13-14, PC-16-06, PC-17-04, PC-19-03, PC-19-04, PC-19-05, PC-19-06, PC-19-07 | `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md` |
-| PC-19-03 | PC-13-14, PC-16-06, PC-17-04, PC-19-04, PC-19-05, PC-19-06, PC-19-07 | `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md` |
-| PC-19-04 | PC-19-05, PC-19-06, PC-19-07 | `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md`, `internal/books/module.go` |
-| PC-19-05 | PC-17-04, PC-19-06, PC-19-07 | `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md` |
-| PC-19-06 | PC-19-07 | `docs/compat-surfaces.md`, `internal/books/compat-surfaces.md` |
+What is built in no release is listed in §(j).
 
 ---
 
-## (e) Counts and the critical path
+## (b) Releases and flips: entry and exit criteria
 
-**By tier:**
+Every PR of every release passes `make ci`, the e2e suite and, from R1, the named required checks of
+09 §9.2.1 (`ci.yml` jobs mirroring `make ci`, `e2e`, `extraction-gates`, `vet-darwin`, `vet-integration`,
+`unit-lifecycle` on its triggers, `docker-image`, `core-ci`); the tables below add only what is specific to
+the release or flip (09 §9.3). Every PR that adds a boot-time durable write extends the crash matrix in the
+same PR (09 §9.3; `TestBootCrashMatrix` for a kernel writer, `TestBootCrashMatrix_ABO` for a books one).
 
-| Tier | Model / effort | Tasks |
-|---|---|---|
-| T0 | Haiku / low | 4 |
-| T1 | Sonnet / medium | 31 |
-| T2 | Sonnet / high | 26 |
-| T3 | Opus / high | 38 |
-| T4 | Opus / xhigh-max | 21 |
-| OWNER | no agent | 33 |
-| **all** | | **153** (120 agent PRs, 33 owner checkpoints) |
-
-**By wave:**
-
-| Wave | Stage | Agent tasks | Owner checkpoints | Total |
-|---|---|---|---|---|
-| W00 | S0 | 4 | 1 | 5 |
-| W01 | S0 | 7 | 0 | 7 |
-| W02 | S0 | 7 | 1 | 8 |
-| W03 | S1 | 6 | 1 | 7 |
-| W04 | S2 | 7 | 1 | 8 |
-| W05 | S2 | 2 | 1 | 3 |
-| W06 | S2 | 2 | 1 | 3 |
-| W07 | S2b | 9 | 2 | 11 |
-| W08 | UI-0 | 3 | 1 | 4 |
-| W09 | S3 | 7 | 1 | 8 |
-| W10 | S4 | 6 | 1 | 7 |
-| W11 | S4 | 4 | 1 | 5 |
-| W12 | S5 | 8 | 1 | 9 |
-| W13 | S5 | 15 | 4 | 19 |
-| W14 | floor | 1 | 1 | 2 |
-| W15 | S6 | 4 | 1 | 5 |
-| W16 | S7 | 6 | 1 | 7 |
-| W17 | S8 | 5 | 1 | 6 |
-| W18 | S9 | 4 | 1 | 5 |
-| W19 | contracts | 7 | 7 | 14 |
-| W20 | S10 | 2 | 1 | 3 |
-| W21 | H1-H3 | 4 | 3 | 7 |
-
-**Critical path** (the longest dependency chain, weighting each release soak at 14 days and each contract window at
-the days it adds after its stage's soak row):
-
-PC-01-01 → PC-01-02 → PC-01-04 → PC-01-05 → PC-02-01 → PC-02-02 → PC-02-03 → OWNER-02 → PC-03-01 → PC-03-02 → PC-03-05 → PC-03-06 → OWNER-03 → PC-04-02 → PC-04-03 → PC-04-07 → OWNER-04 → PC-05-01 → PC-05-02 → OWNER-05 → PC-06-01 → PC-06-02 → OWNER-06 → PC-07-01 → PC-07-03 → PC-07-04 → PC-07-05 → PC-07-07 → PC-07-06 → PC-07-08 → OWNER-07 → PC-07-09 → OWNER-08 → PC-09-02 → PC-09-03 → PC-09-04 → PC-09-06 → PC-09-07 → OWNER-10 → PC-10-01 → PC-10-02 → PC-10-03 → PC-10-04 → OWNER-11 → PC-11-01 → PC-11-04 → PC-11-02 → PC-11-03 → OWNER-12 → PC-12-01 → PC-12-03 → PC-12-02 → PC-12-06 → PC-12-08 → OWNER-13 → PC-13-01 → PC-13-02 → OWNER-14 → PC-13-03 → PC-13-04 → OWNER-15 → PC-13-07 → PC-13-08 → OWNER-16 → PC-13-14 → PC-13-15 → OWNER-17 → PC-14-01 → OWNER-18 → PC-15-01 → PC-15-02 → PC-15-03 → PC-15-04 → OWNER-19 → PC-16-01 → PC-16-02 → PC-16-03 → PC-16-04 → PC-16-05 → PC-16-06 → OWNER-20 → PC-17-01 → PC-17-02 → PC-17-03 → PC-17-04 → PC-17-05 → OWNER-21 → PC-18-01 → PC-18-02 → PC-18-03 → PC-18-04 → OWNER-22 → OWNER-29 → PC-19-07 → PC-20-02 → OWNER-30 → PC-21-01 → PC-21-02 → OWNER-31 → PC-21-03 → OWNER-32 → PC-21-04 → OWNER-33
-
-**Length: at least 352 days of soak and window time** — 24 serial 14-day soaks (336 days)
-plus C9's window, which needs 30 days after S9 shipped, 16 days beyond S9's row (09 §9.2.1 W (a)) — **plus** one
-production minor for C9's Gone step before PC-20-02, **plus** the time to merge and deploy each release's PRs, which
-under §(b) decision 2 is serial with its soak. UI0 is off the chain (FIN12-5). Shortening levers, all owner
-choices: an `H2H3` release (−14 days); the four-release S5 grouping of §(b) is already the shorter option (one release
-per batch adds 28 days).
+| Release / flip | Entry criteria | Exit criteria (done-check) | Rollback |
+|---|---|---|---|
+| **R0** | R0-01 is the first PR. R0-05 merges only after OWNER-01 has recorded P14. | The six `TestLegacy…` tests and the HEAD half of `TestUserMerge_ScopedAdminKeyRefused` (05-authn §11.1); the R0 updater test (exit 75, kept `.prev`, older tag refused, "local build, not compared", no unattended apply); the pin check; `make ci`; e2e (09 §9.4 R0). OWNER-02 cuts the release and keeps the R0 tag. | `make rollback`: no stored data changes, no checkpoint |
+| **R1** | R0 released (OWNER-02); Q-I decided and the R1 freeze kept or overridden (OWNER-01). R1-01 turns the R1 freeze on. | 09 §9.4 R1 Verification: every required check under strict claims; e2e; the ABS conformance suite; the perimeter tests; `TestLegacyManifest_RegistersAsMuxPatterns` (ABS on and off); `TestNativePrefixesNotRedirected`, `TestCollidingNamespacesStillRedirect`; `TestVersionJSONFields`; both image-job runs; both `unit-lifecycle` cells; `TestBootCrashMatrix`, `TestBootCrashMatrix_ABO`; the restore and reset staging tests; `TestR0OpensR1Store`; `TestCheckpointAutoDeletedAfterSevenDays`; every row of the CI classification table; `test_ci_classifier.py`, `test_deploy_wait_ready.py`, `test_make_rollback.py`; the embed check; the UI greps, vitest, Playwright, the image job with `core/web` and a dry-run RC with a clean tree. OWNER-03 reads P12, cuts R1 and deploys; R1-31 ends the freeze. | `make rollback` to R0, nothing lost; refused while a swap is in flight |
+| **F2** (R2, dark) | R1 released and deployed (OWNER-03): R2's content lands dark while R1 is deployed (09 §9.3). F2's PRs are outside the freeze. | Builds and boots with nothing switched: no route, schedule or stored row changes (09 §9.4.1). `TestABOMetricsGatherNoDuplicate` from here on every PR; `TestCoreCatalog_FixedFromF2`; `taskstest.StoresSuite`; the parity suites; the R0-written corpus, the overlay, the production-shaped store and the cutover-suite harness committed. | as R1 (nothing user-visible changed) |
+| **F3** | Every F2 task merged; F3-01 … F3-06 merged dark; OWNER-04's P1 and P4 recorded (no unmapped env name, no unregistered prefix). | The config oracle and the M2 tests (05-config §1.12.2); `TestRenameTable_Golden`, `TestRenameTable_EveryKeyRegistered`; the deploy-files test; `TestBasicGate_ExemptSetGolden`, `TestBasicGate_EmptyPasswordRefuses`, `TestBasicGate_MoreRestrictiveWins`; `TestFailClosed_MoreRestrictiveWins`; `TestStateDirFallbackMatchesHEAD`; `TestConfigCutover_NoPlaintextSecretOnDisk`; `TestCutoverRefusedByOlderBuilds` with the pre-freeze release's binary; `TestDryRunMatchesLiveRun`; the restore drill; the crash matrix over M2, M7 and M8; the cutover suite in `extraction-gates` green from this PR on. **The R2 freeze starts at its merge.** | `make rollback-restore` to the pre-freeze release (from here on) |
+| **F4** | F3 merged; F4-01 … F4-07 merged dark. | `TestIdentityCutover_ReachOracle` (R0 the baseline); the `TestIdentityCutover_*` rows; the five ported early-fix properties and the core half of `TestUserMerge_ScopedAdminKeyRefused`; `TestWorkerKey_Confined`; `TestCutover_NoRawTokenOnDisk`; `TestCutoverStopsOnUnconvertibleIdentity`, `TestCutoverRefusedWhileMergeInProgress`; `TestCutoverRefusedByOlderBuilds` gains its mid-M3 cell; the OAuth callback and start paths served by core; the ABS suite on the migrated corpus. | as F3 |
+| **F5** | F4 merged; every conversion group T2–T7 merged dark (F5-01 … F5-14); M4, M5 and the journal dark (F5-15, F5-16); `tasklint` (F5-17). | The schedule oracle `TestScheduleParity_AllDefinitions` and `TestCutover_NoCatchUpStorm`; `TestParity_ResumeCancelShutdown`; `TestKindRenameMapCoversLedger` on the F5 build; the dashboard-reference test and `promtool test rules` after the ops renames; `TestABOMetricsGatherNoDuplicate`; G6/G7 (`TestSecondModuleNoAudiobookEdit`). | as F3 |
+| **F6** | F5 merged; outbox and realtime merged dark. | The stream tests (05-events outbox set, 05-realtime hub set); `/api/events` deleted and the SPA on `/api/core/v1/events`; e2e. | as F3 |
+| **F7** | F6 merged; F7-01 … F7-08 merged dark. | The search oracle `TestBooksIndexRebuiltAtCutover`; the webhook delivery test; `TestRootsCutover_FromHEADFixture`; the dashboard-reference test after the AI renames; `internal/plugin` deleted with no importer left. | as F3 |
+| **F8** | F7 merged; F8-01 … F8-03 merged dark. | The dashboard-reference test over the kernel `/metrics` mount (no rename); R0's updater tests re-pointed with unchanged expectations, `TestABOUpdaterSourceMatchesHEAD`, `TestApply_RawAssetNoBackup`; `TestBasicGate_ExemptSetGolden` with `/health` exempt; `TestLegacyArchiveRestoreThenMigrate`; `unit-lifecycle`. | as F3 |
+| **F9** | F8 merged; F9-01 and F9-02 merged dark; 07 §7.19 steps 1–2 done. Not ready: it moves to R3 unchanged. | The shell's checks (07 §7.19 step 4: `make build-api && ./audiobook-organizer serve` answers `/` with the placeholder; `TestABOManifestBootsWithShell`); e2e; the image job boots the embedded bundle. | as F3 (in R3: `make rollback` to R2) |
+| **R2 last PR** | F8 merged (and F9 when it is in R2). | The runbook (deploy, rollback, smoke run) and the release note assembled from the rename table, the kind-rename map, the deleted routes, the metric renames and 09 §9.6, each owner's text verbatim (09 §9.2.9). OWNER-05 deploys and cuts R2; R2-02 ends the freeze. | `make rollback-restore`: checkpoint or off-host archive offline, plus the pre-freeze release; every write since the upgrade is lost |
+| **R3** | R2 released and deployed (OWNER-05). | `make ci`; e2e; the crash matrix over `legacy-file-cleanup`; a pre-R2 store refused at boot with exit 78 (`TestPreR2StoreRefusedByR3`); `TestRestoreBelowUpgradeFloorRefusedAtStaging`; `TestFreshInstallPostFloorBootsTwice`. OWNER-06 deploys. | `make rollback` to R2 |
 
 ---
 
-## (f) Risks, drift and concurrent feature work
+## (c) Critical path and duration
 
-**Risks the plan must handle** (advisor §G1, adapted to the final spec):
+**Assumptions.** Agents run in parallel without limit, bounded only by file disjointness and dependencies
+(§(d)); there are no soaks (D11). One agent PR, from brief to merge on a green required-check set with the
+35-minute CI budget (09 §9.2.10), takes **0.5 working days at T0–T1, 1 at T2, 1.5 at T3, 2.5 at T4 and 3
+for a flip PR**; an owner release checkpoint (cut, deploy) takes 1 day, the optional smoke run 1 more. The
+owner turns a checkpoint around the day it is reached. R2's briefs may be executed and their PRs opened
+during R1; only the merge waits for OWNER-03.
 
-| # | Risk | Handling (tasks) |
-|---|---|---|
-| 1 | The ServeMux collision rule is a precondition of S2 r1 (A-1); its S5 form is that the operations conflict set stays books' (R10-1, R11-3) | PC-04-01 lands first in W04 and its real-engine test gates the flip PC-04-07; PC-12-08 carries `TestS5_OperationsComponentStaysBooks` and `TestLegacyMount_GeneralisedPatternAcceptsAnyMember` runs at every stage |
-| 2 | Owner checkpoints are work no agent can do | 33 OWNER rows, each a blocking dependency of the next wave; their briefs carry a NOT AGENT WORK banner |
-| 3 | Auto-promotion: an RC per push and a production minor per 10 RCs (09 §9.1) | S3–S5 land dark behind their flip; each live PR of S2b and S6–S8 is shippable alone; S9's steps 4–5 are one PR; PC-00-04 waits for P14; Q-I's enforcement, decided at OWNER-01, decides whether a release can hold an unchecked commit (14 K20) |
-| 4 | Rebase merges put every commit on `main` | import-path-only move PRs apart from behaviour PRs (§(c)); `check_commits_build.py` on every PR that renames into `core/` |
-| 5 | Drift over a months-long programme | the drift policy below |
-| 6 | Fresh code without a HEAD oracle | the oracle tasks land before the code they guard: PC-04-06 (wire and series goldens), PC-09-02 (env decoding, effective config), PC-10-06 (role reach), PC-12-03 (resume/cancel/shutdown parity), PC-12-04 (schedule parity); the R-test runs the real previous binary |
-| 7 | The S5 executor is fresh code over every definition | PC-12-03's suites run on both engines; T0+T1 keeps 05-tasks' 1:1 concurrency mapping (`Fixed(n)`, or `Sequential` for zero); any parallelisation is a separate PR under CLAUDE.md's concurrency rules, never part of T0–T7 |
-| 8 | A crash between boot writers leaves mechanisms disagreeing | the crash-matrix kit at S2b (PC-07-03, PC-07-05); every boot-writer PR extends it (PC-07-07, PC-10-05, PC-11-02, PC-15-01, PC-17-01, PC-21-01) |
-| 9 | Destructive paths (scrub, factory reset, restore) | fixtures only, never a store an agent did not create; staging copies of production archives are an owner step (OWNER-03, OWNER-10, OWNER-13) |
-| 10 | CI time grows until feature work stalls | the 35-minute budget, `extraction-gates` as parallel jobs ≤ 30 minutes, cached `prev` builds, the weekly p50 in the stage record (09 §9.2.10; PC-01-04) |
-| 11 | A HEAD lock released before core's commit reopens early fix 6 or a single-use token | `storage.CommitLocked` and lock ranks (PC-07-01), `legacy.WriteLock` and singletons (PC-09-04, PC-10-05, PC-12-05); `TestLegacyRevokeRacesTouch_NeverUnrevokes`, `TestInviteRedeemedOnce`, `TestBootstrapRedeemedOnce` at S4 r2 |
-| 12 | Two emitters of one metric family fail every scrape | otelgin stays HEAD's recorder (PC-05-02); opsmetrics shrinks in the T0+T1 PR (PC-12-08); `ops_abandoned_calls` changes owner in exactly one PR (PC-13-13); `TestABOMetricsGatherNoDuplicateOrMissing` from S5 |
-| 13 | A release's late content ships with too little soak | §(b) decision 2 |
-| 14 | A hardening cutover is one-way | H flips revertible only before a production tag contains them (09 §9.2.1); a fresh verified off-host archive before H1 and H2 (OWNER-31, OWNER-32); PC-21-01 lands the refusal harness first |
-| 15 | The S2b re-home freezes `internal/database` repo-wide | PC-07-04 is one import-path PR inside an announced move window of at most two working days |
-| 16 | A build between two PRs of one release is unsafe or breaks a same-build rule | S2b's flip refuses the legacy resets until PC-07-07 lands; S4 r2's UI switch is inside its flip; S9's steps 4–5 are one PR (§(b), "Spec gaps") |
+**The critical path** (27 sequential agent PRs and 4 release checkpoints):
 
-**Drift policy.** 09 §9.3: every literal count in a done-check is informative, measured at `748fd787a`; the check
-uses the value generated at the stage's base commit, and the stage record holds both.
+R0-02 (T3, 1.5) → R0-03 (T2, 1) → OWNER-02 (OWNER, 1) → R1-01 (T3, 1.5) → R1-02 (T2, 1) → R1-10 (T3, 1.5) → R1-13 (T4, 2.5) → R1-20 (T4, 2.5) → R1-21 (T4, 2.5) → R1-23 (T4, 2.5) → R1-25 (T4, 2.5) → R1-27 (T2, 1) → R1-28 (T2, 1) → OWNER-03 (OWNER, 1) → F2-01 (T3, 1.5) → F2-06 (T4, 2.5) → F3-04 (T4, 2.5) → F3-06 (T4, 2.5) → F4-06 (T4, 2.5) → F4-07 (T3, 1.5) → F4-08 (flip, 3) → F5-18 (flip, 3) → F6-03 (flip, 3) → F7-09 (flip, 3) → F8-04 (flip, 3) → F9-03 (flip, 3) → R2-01 (T2, 1) → OWNER-05 (OWNER, 1) → R3-02 (T4, 2.5) → R3-03 (T3, 1.5) → OWNER-06 (OWNER, 1)
 
-- Each wave starts from a recorded **base commit** (fresh `origin/main` when its first brief is executed). The
-  coordinator regenerates the counts its done-checks name (routes, seed roles, definitions, aliases, importers,
-  stubs, permission-less routes) and records them in `docs/plans/platform-core/stage-ledger/<stage>.md`.
-- Every brief carries **re-verify greps with expected hit counts**, taken at the evidence commit
-  (`git show 748fd787a:<path>`), and the worker reruns them at its own base. A grep with zero hits on an edit target,
-  or a count that moved, stops the task and is reported, never patched around.
-- When an anchor moved but the rule still applies, the brief is amended (new line, same rule) before work starts.
-  When the code no longer matches the spec's assumption, the task is blocked and the spec owner decides.
-- A brief written for one stage is re-verified, not reused, if its wave slips past another wave's merges.
-
-**Concurrent feature work** (09 §9.2.10; A-11). ABO keeps shipping features during the extraction.
-
-- **Move windows.** PC-03-01, PC-03-02, PC-07-04, PC-08-01 and PC-10-03 run inside a window announced in the stage
-  record and the tracking issue at least one working day ahead, naming the 04 rows it freezes and its end; a window
-  lasts no longer than its move series and at most two working days. Feature PRs that touch a frozen package are
-  held; the move PRs merge first.
-- **Rebase onto a move.** A held feature branch fetches `main`, rebases (git follows the renames), rewrites its new
-  imports from the move PR's `old ==> new` list, runs `go build ./... && (cd core && go build ./...)` and `make ci`,
-  and re-applies by hand, with a test, any change it made to a part 04 §8.6 lists as re-implemented.
-- **Trailers.** Feature PRs carry `Stage-Release: none` on every commit (check (d)); whether `none` is true is the
-  author's declaration against 04's rows, checked in review. Feature PRs never edit or regenerate 04 (A-4).
-- **CI budget.** 35 minutes wall-clock per non-doc PR; when exceeded, the remedy is sharding or caching in the same
-  stage. The A-7, A-8 and A-9 checks and the prev-build tests never move to nightly.
-
----
-
-## (g) How to run it
-
-**Per wave, the coordinator:**
-
-1. **Checks the gate.** The predecessor's OWNER row is merged (`ci/soak.txt` has a current row for it) and every
-   OWNER prerequisite in §(b) is ticked in the stage record. `git worktree list` shows no live worktree of an
-   overlapping wave on `internal/database` or `internal/server`, and no open PR shares a file with the wave (§(d)).
-2. **Fixes the base.** Fetches `origin/main`, records the base commit in `docs/plans/platform-core/stage-ledger/<stage>.md`,
-   regenerates the done-check counts, and has each brief's re-verify greps rerun (§(f)).
-3. **Announces any move window** a working day ahead (§(f)).
-4. **Dispatches** the wave's tasks in the serialized order of §(b), one worktree and branch per task off fresh
-   `origin/main` (CLAUDE.md worktree discipline; `npm ci --prefix web` in the worktree, or `make web-deps` once
-   PC-01-06 has merged). Execution mode per §(b): serial waves are coordinator-driven; a step with three or more
-   mechanically similar, file-disjoint tasks runs under `/parallel-sweep`, whose task spec stamps the trailer on every
-   child commit (PC-01-07).
-5. **Merges.** Every commit carries `Stage-Release:` (§(b) table) and `Co-Authored-By: Claude <noreply@anthropic.com>`;
-   the required checks of 09 §9.2.1 are green on an up-to-date branch; the merge is `gh pr merge <n> --rebase`, never
-   squash, never `--admin` past a required check (Q-I). After each merge, open siblings rebase.
-6. **Lands each flip at its place** in §(b)'s serialized order: after the release's dark content (S2 r1–r3, S3,
-   S4 r2, S5 r1, H1–H3) or its live PRs (S6, S7, S8), first for S2b r1 and S10, and before the follow-up PRs §(c)
-   puts after it (S3's deploy files, S4 r2's reset route, S8's UI calls, S9's realtime client and harness). The flip
-   PR and every PR that changes `release:` run `compat-rehearsal`; every flip PR also runs `unit-lifecycle`
-   (09 §9.2.1 required-checks table).
-7. **Prepares the hand-off.** Drafts the release-note lines of 09 §9.2.1's rollback rows that the release introduces
-   (prepended to the generated notes), lists the done-checks for the owner to tick, and records the CI p50 reading.
-8. **Hands off** to the release's OWNER checkpoint and waits for its row. Briefs of the next wave may be executed and
-   their PRs opened meanwhile; nothing merges.
-9. **Reports** with exact counts and the three closing lines `COMPLETED: <n> — <list>`, `REMAINING: <n> — <list>`,
-   `BLOCKED: <n> — <list>`; a subagent silent for more than 10 minutes is surfaced.
-
-**Each OWNER checkpoint** (NOT AGENT WORK): the owner runs the listed production reads and owner actions, deploys
-the release to the reference host, records each deploy with `scripts/soak_record.py --deployed`, lets the deploy
-carrying the release's last PR serve 14 days, ticks the stage record's done-checks (the boot-budget A/B and the
-staging checks included), runs `scripts/soak_record.py --release <id>` from the operator's checkout, and merges the
-bookkeeping-only PR that adds the row. A W checkpoint (OWNER-23…29) records the counter readings and process start
-times of the last 14 days in the contract PR.
-
-**Brief-writing convention** (advisor §G4): each brief cites the digest section, the owning 05 file, the anchors
-re-verified at its base commit with expected counts, the done-check tests it must make green and the tests it must
-not break; provenance (finding IDs) goes in the digest's footnotes, not in the brief.
-
----
-
-## Spec gaps found while planning
-
-**Blocking a brief:**
-
-| Task | Gap |
+| Scenario | Working days |
 |---|---|
-| PC-21-02 (H1) | No stage table: 09 §9.13 gives each H cutover a planning-level row and says its stage table, with its Flip PR row and full done-check list, is written when the owner schedules the cutover, before its first PR. Beyond that, whether the identity families move to `c/auth/`/`c/rbac/` or are rewritten in place is left to 05-authn and 05-rbac ("as 05-authn and 05-rbac decide"); the choice decides whether H1 raises `core` as well as `books`, which `soak_record.py`'s fixed H table must encode (PC-21-01's H1 entry waits for it). 14 Q-D is deferred to H1. |
-| PC-21-03 (H2) | No stage table (as above). Its content is decided (05-config §1.12.5); this plan proposes PC-21-03 as the flip PR and `H2` or `H2H3` as the release, for the owner's stage table to confirm. |
-| PC-21-04 (H3) | No stage table (as above), and H3 "ships with or after the settings family's cutover" (09 §9.13; 05-config §1.12.5), which is deferred-build with no design (spec README "Build scope"). H3 cannot be briefed until the settings cutover is specified or the owner drops the dependency. |
+| Base rates, dependencies only (pipelined execution) | **61** (about 12 weeks) |
+| Base rates, with the four optional smoke days | 65 |
+| Shell (F9) slips to R3 and runs beside R3-02 | 58 |
+| Every T3, T4 and flip PR takes 1.5× its base rate | 87 |
+| Waves run strictly in lockstep (§(d), each wave as long as its longest PR) | 75 |
 
-**Resolved by plan policy, not blocking:** the trailer of contract PRs (§(b) decision 4); who creates the owner
-bookkeeping files (decision 5); S5's release grouping (decision 1); soak counting for releases with content after the
-PR that moved `release:` (decision 2); the injection mechanism of `unit-lifecycle`'s 12-minute fake migration
-(PC-02-06's brief names it); whether UI-0's dry-run RC needs owner approval to dispatch (PC-08-03). Two orderings
-inside a release that 09 leaves open and this plan fixes, so every PR stays shippable alone (advisor G1 risk 3): the
-S2b flip (PC-07-05) makes the two legacy reset routes answer 503 until the reset-staging PR (PC-07-07) follows it,
-because HEAD's whole-range `PebbleStore.Reset` must never run under shadow claims and a live kernel; and the S4 r2
-identity UI switch is inside the flip PR (PC-11-02), because 09 S4's UI row puts it "in the same build" as the native
-routes, while the link readers that nothing yet links to land just before it (PC-11-04).
+R0 and R1 take 23 of these days: R1's storage chain R1-20 → R1-21 → R1-23 → R1-25 is 10 of them,
+and the deploy tooling and `unit-lifecycle` close R1. In R2 the path runs through the dark identity step
+(F3-04 → F3-06 → F4-06 → F4-07) into the serialized flips F4-08 → F5-18 → F6-03 → F7-09 → F8-04 → F9-03,
+each a one-PR atomic change (09 §9.2.1), so R2's length is set by the flip PRs, not by the dark work,
+which almost all fits beside them. The levers that shorten it are pre-staging R2's PRs during R1, splitting the T4 dark
+tasks of F2–F4 further where their files allow, and letting F9 slip to R3.
 
-**Spec edits made during this phase.** A plan-phase consistency pass, recorded in the review history of each edited
-spec file, changed rules this plan relies on, and the inventory follows the edited text: `floor` precedes the S6 flip;
-a flip PR carries `<stage> flip` instead of `<stage> <n>`; no done-check runs `go work init` in a checkout
-(`genproto-exclude-root` probes in a temp-directory copy); the S0 PR captures the HEAD series goldens (PC-02-07);
-S4's bridge is the new ABO package `internal/server/legacyauth`; R-test cell (e) is mandatory at S1, S4 r2 and S8;
-`TestAlias_ListAllKeysNeedsUsersManage`, `TestRollback_BasicGateClearedStaysClosed` and
-`TestH1H2_DeferredWhileSwapSetAsideExists` are named; a swap set-aside defers H1 and H2 instead of failing them.
+---
+
+## (d) Wave plan
+
+A wave is a set of tasks that run at the same time. Every task in a wave has all its dependencies merged
+in an earlier wave, and no two tasks in a wave touch the same file, where a path ending in `/` is a whole
+directory and collides with every path below it. Both properties are checked mechanically by a script
+over the JSON inventory, whose checks are numbered as the table cites them: (1) the row schema and the ID
+scheme, (2) every dependency in an earlier wave, (3) pairwise file disjointness of the 325 same-wave
+task pairs, (4) the 04 coverage of §(h), (5) the gate ownership of §(e). The last run passed all five. The waves were
+computed by list scheduling in dependency order with critical-path priority, so a task joins the earliest
+wave after its dependencies whose members it does not collide with.
+
+What makes the plan safe beyond the per-wave rule:
+
+- **Shared hot files serialize by construction.** Every root-package move, rename or creation lists
+  `internal/arch/layering_test.go` (its `layerOf` entry) and `scripts/ci/short_test_weights.json` (stale
+  weights fail), so no two move PRs share a wave (09 §9.4 R1 CI classification). Every flip lists `main.go`,
+  `internal/server/` and `internal/books/module.go` (most also `core/app/options.go`), so no two flips share a
+  wave and a flip never runs beside a task touching those paths (09 §9.3: the flips share `main.go`, the kernel wiring
+  and `internal/server`).
+- **Move windows.** Every move or rename task (its `04 keys` name a move) runs inside a move window
+  announced at least one working day ahead in the tracking issue, naming the 04 rows it freezes; feature PRs
+  touching them are held; the window lasts at most two working days (09 §9.2.10).
+- **Dark before flip.** Every F2–F9 task except the seven flip PRs lands dark: it changes no behaviour,
+  route, schedule or stored row. A dark PR that moves a package verbatim (F3-01, F4-02, F4-03, F5-17, F7-02,
+  F7-05, F8-02) only re-points its importers; the cutover steps are built unregistered until their flip
+  registers them (05-config §1.12.2 separates "builds" from "ships"). Every intermediate `main` boots and
+  passes e2e.
+- **Releases stay ordered.** R1-01 waits for the R0 release, every F2 task for the R1 release, every R3
+  task for the R2 release (09 §9.3).
+
+| Wave | Releases | Tasks (parallel, file-disjoint) | Longest (days) | Why it is safe |
+|---|---|---|---|---|
+| W01 | OWNER, R0 | OWNER-01, R0-01, R0-02, R0-04, R0-06 | 1.5 | owner checkpoint OWNER-01: no files, NOT AGENT WORK; it gates the tasks that depend on it; 4 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2). |
+| W02 | R0 | R0-03, R0-05 | 1.0 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2). |
+| W03 | OWNER | OWNER-02 | 1.0 | owner checkpoint OWNER-02: no files, NOT AGENT WORK; it gates the tasks that depend on it. |
+| W04 | OWNER, R1 | OWNER-04, R1-01 | 1.5 | owner checkpoint OWNER-04: no files, NOT AGENT WORK; it gates the tasks that depend on it; every dependency merged in an earlier wave (check 2); R1-01 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; R1-01 turns the R1 freeze on. |
+| W05 | R1 | R1-02, R1-11, R1-12, R1-22 | 1.0 | 4 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2). |
+| W06 | R1 | R1-10 | 1.5 | every dependency merged in an earlier wave (check 2); R1-10 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files. |
+| W07 | R1 | R1-07 | 0.5 | every dependency merged in an earlier wave (check 2); R1-07 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files. |
+| W08 | R1 | R1-09 | 0.5 | every dependency merged in an earlier wave (check 2); R1-09 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files. |
+| W09 | R1 | R1-03, R1-13 | 2.5 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2). |
+| W10 | R1 | R1-04, R1-08 | 1.0 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); R1-08 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files. |
+| W11 | R1 | R1-05, R1-20 | 2.5 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); R1-20 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files. |
+| W12 | R1 | R1-14, R1-21, R1-29 | 2.5 | 3 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2). |
+| W13 | R1 | R1-15 | 2.5 | every dependency merged in an earlier wave (check 2). |
+| W14 | R1 | R1-23 | 2.5 | every dependency merged in an earlier wave (check 2); R1-23 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files. |
+| W15 | R1 | R1-16, R1-18, R1-24 | 1.5 | 3 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); R1-16 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files. |
+| W16 | R1 | R1-17, R1-25 | 2.5 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); R1-17 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files. |
+| W17 | R1 | R1-19 | 1.0 | every dependency merged in an earlier wave (check 2). |
+| W18 | R1 | R1-26, R1-27 | 1.0 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); R1-26 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files. |
+| W19 | R1 | R1-28, R1-30 | 1.0 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2). |
+| W20 | R1 | R1-06 | 1.0 | every dependency merged in an earlier wave (check 2). |
+| W21 | OWNER | OWNER-03 | 1.0 | owner checkpoint OWNER-03: no files, NOT AGENT WORK; it gates the tasks that depend on it. |
+| W22 | R1, F2, F4 | R1-31, F2-01, F2-07, F2-08, F2-09, F2-10, F2-12, F4-04 | 1.5 | 8 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); the R2 PRs here land dark (no route, schedule or stored row changes before their flip); the freeze-off PR merges only after its release is cut. |
+| W23 | F2, F3, F4 | F2-02, F2-06, F2-11, F2-13, F2-14, F3-01, F4-01 | 2.5 | 7 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F3-01 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
+| W24 | F2, F3, F4, F5, F8 | F2-03, F2-04, F2-15, F3-02, F3-03, F3-04, F3-05, F4-02, F5-17, F8-03 | 2.5 | 10 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F4-02, F5-17 run inside an announced move window: no other PR in the wave touches the packages they move or rewire or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
+| W25 | F2, F3, F7, F8 | F2-05, F3-06, F7-01, F8-01 | 2.5 | 4 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
+| W26 | F4, F5, F6, F7 | F4-03, F4-06, F5-01, F5-02, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-15, F5-16, F6-01, F6-02, F7-03, F7-04 | 2.5 | 19 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F4-03 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the T6 sub-batches' file groups are computed disjoint at the base commit and run under /parallel-sweep; the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
+| W27 | F3, F4, F5, F7, F9 | F3-07, F4-05, F5-03, F7-06, F9-01 | 3.0 | 5 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F3-07 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F3-07 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip); F3-07's merge starts the R2 freeze. |
+| W28 | F4, F5, F7, F9 | F4-07, F5-13, F7-02, F7-07, F9-02 | 1.5 | 5 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F7-02 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
+| W29 | F5, F8 | F5-14, F8-02 | 1.5 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F8-02 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
+| W30 | F7 | F7-05 | 1.5 | every dependency merged in an earlier wave (check 2); F7-05 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
+| W31 | F4, F7 | F4-08, F7-08 | 3.0 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F4-08 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F4-08 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
+| W32 | F5 | F5-18 | 3.0 | every dependency merged in an earlier wave (check 2); F5-18 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F5-18 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files. |
+| W33 | F6 | F6-03 | 3.0 | every dependency merged in an earlier wave (check 2); F6-03 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F6-03 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files. |
+| W34 | F7 | F7-09 | 3.0 | every dependency merged in an earlier wave (check 2); F7-09 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F7-09 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files. |
+| W35 | F8 | F8-04 | 3.0 | every dependency merged in an earlier wave (check 2); F8-04 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F8-04 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files. |
+| W36 | F9 | F9-03 | 3.0 | every dependency merged in an earlier wave (check 2); F9-03 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F9-03 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files. |
+| W37 | R2 | R2-01 | 1.0 | every dependency merged in an earlier wave (check 2). |
+| W38 | OWNER | OWNER-05 | 1.0 | owner checkpoint OWNER-05: no files, NOT AGENT WORK; it gates the tasks that depend on it. |
+| W39 | R2, R3 | R2-02, R3-02 | 2.5 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); the freeze-off PR merges only after its release is cut. |
+| W40 | R3 | R3-01, R3-03 | 1.5 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2). |
+| W41 | OWNER | OWNER-06 | 1.0 | owner checkpoint OWNER-06: no files, NOT AGENT WORK; it gates the tasks that depend on it. |
+
+---
+
+## (e) Per-flip gates
+
+These are the tests and checks 09 (and the 05-* files it cites) require before a release or flip
+merges. Each is created and owned by exactly one task; later flips extend some of them (the crash matrix,
+`TestCutoverRefusedByOlderBuilds`, the dashboard-reference test, `TestBasicGate_ExemptSetGolden`) in the
+same PR as the change they cover. Unnamed checks in 09 carry the owning 05 file's test names; a name marked
+"(name coined here)" is the plan's. The existing ABS conformance suite (`internal/server/handlers/abs/`,
+`internal/server/absauth/`) runs in every `make ci` and needs no owner; F4-08 adds its run on the migrated
+corpus.
+
+**Required checks from R1 (09 §9.2.1).** `ci.yml` jobs mirroring root `make ci` (R1-03), `e2e`,
+`extraction-gates` (created by R1-02; jobs added by R1-10, R1-23, F2-14 and F2-15), `vet-darwin` and
+`vet-integration` (R1-02), `unit-lifecycle` (R1-28; triggers in 09 §9.2.1), `docker-image` (R1-04) and
+`core-ci` (R1-01, completed by R1-03). From F3-07 every PR runs the R2 cutover suite; its
+production-shaped run executes on `unit-lifecycle`'s triggers and nightly. The crash matrices and the
+cutover suite never move to the nightly run (09 §9.2.10).
+
+| Release / flip | Gate tests and checks | Required by | Owning task |
+|---|---|---|---|
+| R0 (the six early fixes' HEAD-code tests) | `TestLegacySessionsList_NoToken` | 09 §9.4 R0 Verification; 05-authn §11.1 | R0-04 |
+| R0 (the six early fixes' HEAD-code tests) | `TestLegacyAPIKeyCreate_EmptyEffectiveKeyCannotMint` | 09 §9.4 R0 Verification; 05-authn §11.1 | R0-02 |
+| R0 (the six early fixes' HEAD-code tests) | `TestLegacyAPIKey_RevokedNotReactivated` | 09 §9.4 R0 Verification; 05-authn §11.1 | R0-02 |
+| R0 (the six early fixes' HEAD-code tests) | `TestLegacyRequireAdmin_HonoursKeyScopes` | 09 §9.4 R0 Verification; 05-authn §11.1 | R0-03 |
+| R0 (the six early fixes' HEAD-code tests) | `TestUserMerge_ScopedAdminKeyRefused` | 09 §9.4 R0 Verification; 05-authn §11.1 | R0-03 |
+| R0 (the six early fixes' HEAD-code tests) | `TestLegacyBasicGate_EmptyPasswordRefuses` | 09 §9.4 R0 Verification; 05-authn §11.1 | R0-05 |
+| R0 (the six early fixes' HEAD-code tests) | `TestLegacyRevokeRacesTouch_NeverUnrevokes` | 09 §9.4 R0 Verification; 05-authn §11.1 | R0-02 |
+| R0 (the updater test) | the R0 updater test: `TestApply_RestartExits75`, `TestApply_SwapAtomicAndPrevKept`, `TestCheck_SemverNeverDowngrades`, `TestCheck_DescribeSuffixedCurrentNotCompared`, `TestCheck_ScheduledRunNeverApplies` | 09 §9.4 R0 Verification | R0-06 |
+| R0 (13's pin check) | 13's pin check: `scripts/check_toolchain_versions.py` | 09 §9.4.1 row 1 | R0-01 |
+| R1 (the perimeter tests) | `TestStage2_RecordsEveryRequest` | 09 §9.4 R1 Verification; 05-http-api §8.1, §12 | R1-17 |
+| R1 (the perimeter tests) | `TestPerimeterHonoursBlobOnlyValues` | 09 §9.4 R1 Verification; 05-http-api §8.1, §12 | R1-17 |
+| R1 (the perimeter tests) | `TestCSP_DefaultPerOwner` | 09 §9.4 R1 Verification; 05-http-api §8.1, §12 | R1-17 |
+| R1 (the perimeter tests) | `TestCompressionExclusionsEqualHEAD` | 09 §9.4 R1 Verification; 05-http-api §8.1, §12 | R1-17 |
+| R1 (the perimeter tests) | `TestPerimeter_XAppBuildOnEveryResponse` | 09 §9.4 R1 Verification; 05-http-api §8.1, §12 | R1-17 |
+| R1 (manifest and redirects) | `TestLegacyManifest_RegistersAsMuxPatterns` | 09 §9.4 R1 Verification; 09 §9.2.4 | R1-14 |
+| R1 (manifest and redirects) | `TestNativePrefixesNotRedirected` | 09 §9.4 R1 Verification; 09 §9.2.4 | R1-14 |
+| R1 (manifest and redirects) | `TestCollidingNamespacesStillRedirect` | 09 §9.4 R1 Verification; 09 §9.2.4 | R1-14 |
+| R1 (build identity) | `TestVersionJSONFields` | 09 §9.4 R1 Verification | R1-19 |
+| R1 (build identity) | `TestBuildID_HeaderEqualsEmbeddedMeta` | 09 §9.4 R1 Verification | R1-19 |
+| R1 (image job) | the docker-image job, both runs | 09 §9.4 R1 Verification | R1-04 |
+| R1 (unit-lifecycle) | `scripts/tests/test_unit_lifecycle.py` (the two unit-lifecycle cells) | 09 §9.4 R1 Verification; §9.10 | R1-28 |
+| R1 (crash matrices) | `TestBootCrashMatrix` | 09 §9.4 R1 Verification; §9.3; §9.10 | R1-21 |
+| R1 (crash matrices) | `TestBootCrashMatrix_ABO` | 09 §9.4 R1 Verification; §9.3; §9.10 | R1-23 |
+| R1 (restore and reset staging) | the restore and reset staging tests of 05-backup §5B.3.4 and 05-storage §5S.3.15 (`TestInflightBeforeFirstRename`, `TestOfflineResetStagesIntent`, `TestFactoryResetOffline_R1`, `TestRestoreAndResetBothStaged`, `TestCLISubcommandsUseOfflineOpen`) | 09 §9.4 R1 Verification | R1-25 |
+| R1 (restore and reset staging) | the swap's journal crash tests (`TestRestoreCrashAtEveryJournalStep`, `TestInflightPrecedesFirstRename`) | 09 §9.4 R1 Verification | R1-21 |
+| R1 (previous-build and checkpoint) | `TestR0OpensR1Store` | 09 §9.4 R1 Verification; §9.10 | R1-23 |
+| R1 (previous-build and checkpoint) | `TestCheckpointAutoDeletedAfterSevenDays` | 09 §9.4 R1 Verification; §9.10 | R1-24 |
+| R1 (classification and scripts) | every row of R1's CI classification table | 09 §9.4 R1 Verification; §9.10 | R1-03 |
+| R1 (classification and scripts) | genproto-exclude-root | 09 §9.4 R1 Verification; §9.10 | R1-01 |
+| R1 (classification and scripts) | `scripts/tests/test_ci_classifier.py` | 09 §9.4 R1 Verification; §9.10 | R1-02 |
+| R1 (classification and scripts) | `scripts/tests/test_deploy_wait_ready.py` (exit 78 included) | 09 §9.4 R1 Verification; §9.10 | R1-27 |
+| R1 (classification and scripts) | `scripts/tests/test_make_rollback.py` | 09 §9.4 R1 Verification; §9.10 | R1-27 |
+| R1 (classification and scripts) | `scripts/ci/check_embed_context.py` (passes on HEAD, fails on a docs/ embed fixture) | 09 §9.4 R1 Verification; §9.10 | R1-04 |
+| R1 (classification and scripts) | `scripts/ci/check_commits_build.py` | 09 §9.4 R1 Verification; §9.10 | R1-02 |
+| R1 (classification and scripts) | `scripts/ci/short_test_shards.py` (one core shard, stale entries fail) | 09 §9.4 R1 Verification; §9.10 | R1-03 |
+| R1 (classification and scripts) | `scripts/tests/test_run_gates.py` | 09 §9.4 R1 Verification; §9.10 | R1-02 |
+| R1 (classification and scripts) | `scripts/ci/build_web.sh` | 09 §9.4 R1 Verification; §9.10 | R1-05 |
+| R1 (core guards) | `TestCoreImportsOnlyCore` | 09 §9.4 R1 CI classification; §9.4.1 | R1-01 |
+| R1 (core guards) | `TestCoreHoldsNoAppKeyNames` | 09 §9.4 R1 CI classification; §9.4.1 | R1-01 |
+| R1 (core guards) | `TestBooksMinCoreVersion` | 09 §9.4 R1 CI classification; §9.4.1 | R1-15 |
+| R1 (core guards) | `TestNoDirectAppConfigWrites` | 09 §9.4 R1 CI classification; §9.4.1 | R1-11 |
+| R1 (UI steps) | ! grep -rq react-router-dom web/package.json web/src web/tests web/vite.config.ts | 09 §9.4 R1 Verification (UI steps) | R1-29 |
+| R1 (UI steps) | the dry-run RC build through prerelease.yml with git status --porcelain empty | 09 §9.4 R1 Verification (UI steps) | R1-30 |
+| R1 (UI steps) | the image job green with core/web present | 09 §9.4 R1 Verification (UI steps) | R1-30 |
+| R1 (legacy track pinned) | `TestNoNewLegacyMigrations` | 09 §9.2.2 | R1-23 |
+| R1 (strict claims) | make ci under strict claims | 09 §9.4 R1 Verification; 05-storage §5S.9.4 step 2 | R1-23 |
+| R1 (required checks) | vet-darwin | 09 §9.2.1 required-checks table; §9.4 R1 CI classification | R1-02 |
+| R1 (required checks) | vet-integration | 09 §9.2.1 required-checks table; §9.4 R1 CI classification | R1-02 |
+| R1 (required checks) | `scripts/ci/check_module_skew.py` | 09 §9.2.1 required-checks table; §9.4 R1 CI classification | R1-01 |
+| R1 (dashboard-reference test) | `TestDeployReferencedSeriesServed` (the dashboard-reference test) | 09 §9.2.1 extraction-gates; §9.2.7 | R1-10 |
+| R1 (dashboard-reference test) | `TestPromRules_Promtool` | 09 §9.2.1 extraction-gates; §9.2.7 | R1-10 |
+| F2 (foundation) | `TestABOMetricsGatherNoDuplicate` | 09 §9.4.1 (F2 builds and boots with nothing switched); 04 §8.1 F2; 05-tasks §5T.8.2 Core gate | F2-03 |
+| F2 (foundation) | `TestCoreCatalog_FixedFromF2` | 09 §9.4.1 (F2 builds and boots with nothing switched); 04 §8.1 F2; 05-tasks §5T.8.2 Core gate | F2-08 |
+| F2 (foundation) | taskstest.StoresSuite with its importer cases (`TestNativeStores_RoundTrip`) | 09 §9.4.1 (F2 builds and boots with nothing switched); 04 §8.1 F2; 05-tasks §5T.8.2 Core gate | F2-02 |
+| F2 (R2 corpus and harness) | the fixture corpus written by the R0 binary and its answers | 09 §9.3 item 1; §9.4 R2 Verification; §9.10 | F2-12 |
+| F2 (R2 corpus and harness) | the hand-built overlay and the preflight's blocking-row and unfinished-merge corpus | 09 §9.3 item 1; §9.4 R2 Verification; §9.10 | F2-13 |
+| F2 (R2 corpus and harness) | the production-shaped store run and the boot-time measurement | 09 §9.3 item 1; §9.4 R2 Verification; §9.10 | F2-14 |
+| F2 (R2 corpus and harness) | `TestCutoverOnR0Corpus` | 09 §9.3 item 1; §9.4 R2 Verification; §9.10 | F2-15 |
+| F2 (R2 corpus and harness) | `TestCutoverPreservesIDsAndReferences` | 09 §9.3 item 1; §9.4 R2 Verification; §9.10 | F2-15 |
+| F2 (R2 corpus and harness) | `TestCutoverLeavesOtherFamiliesByteIdentical` | 09 §9.3 item 1; §9.4 R2 Verification; §9.10 | F2-15 |
+| F2 (R2 corpus and harness) | `TestRollbackRestoreBootsPreviousBuild` (the restore drill) | 09 §9.3 item 1; §9.4 R2 Verification; §9.10 | F2-15 |
+| F2 (R2 corpus and harness) | `TestCutoverCrashAtEveryChunk` (harness, each step adds its cells) | 09 §9.3 item 1; §9.4 R2 Verification; §9.10 | F2-06 |
+| F2 (parity suites) | `TestParity_ResumeCancelShutdown` (05-tasks' resume, cancel and shutdown parity suites) | 09 §9.4 R2 Verification | F2-03 |
+| F3 (config oracle and M2) | `TestConfigCutover_EffectiveConfigUnchanged` (the config oracle) | 09 §9.4.1 (F3: the config oracle); 05-config §1.12.2 | F3-06 |
+| F3 (config oracle and M2) | `TestRenameTable_Golden` | 09 §9.4.1 (F3: the config oracle); 05-config §1.12.2 | F3-06 |
+| F3 (F3 flip gates) | `TestRenameTable_EveryKeyRegistered` | 09 §9.4 R2 Verification; §9.2.5; §9.10 | F3-07 |
+| F3 (F3 flip gates) | `TestDeployFilesUseCanonicalNamesOnly` (the deploy-files test) | 09 §9.4 R2 Verification; §9.2.5; §9.10 | F3-07 |
+| F3 (F3 flip gates) | `TestBasicGate_ExemptSetGolden` | 09 §9.4 R2 Verification; §9.2.5; §9.10 | F3-07 |
+| F3 (F3 flip gates) | `TestBasicGate_MoreRestrictiveWins` (the compose cell of `TestPerimeterHonoursBlobOnlyValues`) | 09 §9.4 R2 Verification; §9.2.5; §9.10 | F3-07 |
+| F3 (F3 flip gates) | `TestBasicGate_EmptyPasswordRefuses` | 09 §9.4 R2 Verification; §9.2.5; §9.10 | F3-05 |
+| F3 (F3 flip gates) | `TestConfigCutover_NoPlaintextSecretOnDisk` | 09 §9.4 R2 Verification; §9.2.5; §9.10 | F3-07 |
+| F3 (F3 flip gates) | `TestCutoverRefusedByOlderBuilds` | 09 §9.4 R2 Verification; §9.2.5; §9.10 | F3-07 |
+| F3 (F3 flip gates) | `TestDryRunMatchesLiveRun` | 09 §9.4 R2 Verification; §9.2.5; §9.10 | F3-04 |
+| F3 (F3 flip gates) | `TestFailClosed_MoreRestrictiveWins` | 09 §9.4 R2 Verification; §9.2.5; §9.10 | F3-02 |
+| F3 (F3 flip gates) | `TestStateDirFallbackMatchesHEAD` | 09 §9.4 R2 Verification; §9.2.5; §9.10 | F3-01 |
+| F4 (identity) | `TestIdentityCutover_ReachOracle` | 09 §9.4 R2 Verification; §9.4.1 (F4); §9.2.6; 05-authn §11.1 | F4-07 |
+| F4 (identity) | `TestIdentityCutover_ABSSurvives` (the ABS conformance suite on the migrated corpus) | 09 §9.4 R2 Verification; §9.4.1 (F4); §9.2.6; 05-authn §11.1 | F4-08 |
+| F4 (identity) | `TestIdentityCutover_WorkerKeyStaysConfined` | 09 §9.4 R2 Verification; §9.4.1 (F4); §9.2.6; 05-authn §11.1 | F4-06 |
+| F4 (identity) | `TestWorkerKey_Confined` | 09 §9.4 R2 Verification; §9.4.1 (F4); §9.2.6; 05-authn §11.1 | F4-01 |
+| F4 (identity) | `TestCutover_NoRawTokenOnDisk` | 09 §9.4 R2 Verification; §9.4.1 (F4); §9.2.6; 05-authn §11.1 | F4-08 |
+| F4 (identity) | `TestCutoverRefusedWhileMergeInProgress` (the preflight's refusal corpus) | 09 §9.4 R2 Verification; §9.4.1 (F4); §9.2.6; 05-authn §11.1 | F4-06 |
+| F4 (identity) | `TestCutoverStopsOnUnconvertibleIdentity` | 09 §9.4 R2 Verification; §9.4.1 (F4); §9.2.6; 05-authn §11.1 | F4-06 |
+| F4 (identity) | `TestSessions_ListNeverReturnsToken` | 09 §9.4 R2 Verification; §9.4.1 (F4); §9.2.6; 05-authn §11.1 | F4-02 |
+| F4 (identity) | `TestAPIKey_EmptyEffectiveKeyCannotMint` | 09 §9.4 R2 Verification; §9.4.1 (F4); §9.2.6; 05-authn §11.1 | F4-02 |
+| F4 (identity) | `TestAPIKey_RevokedIsTerminal` | 09 §9.4 R2 Verification; §9.4.1 (F4); §9.2.6; 05-authn §11.1 | F4-02 |
+| F4 (identity) | `TestAdminChecks_HonourKeyScopes` | 09 §9.4 R2 Verification; §9.4.1 (F4); §9.2.6; 05-authn §11.1 | F4-02 |
+| F4 (identity) | `TestRevokeRacesTouch_NeverUnrevokes` | 09 §9.4 R2 Verification; §9.4.1 (F4); §9.2.6; 05-authn §11.1 | F4-02 |
+| F5 (tasks) | `TestScheduleParity_AllDefinitions` (the schedule oracle) | 09 §9.4 R2 Verification; §9.4.1 (F5); 05-tasks §5T.8.2 | F5-14 |
+| F5 (tasks) | `TestCutover_NoCatchUpStorm` | 09 §9.4 R2 Verification; §9.4.1 (F5); 05-tasks §5T.8.2 | F5-14 |
+| F5 (tasks) | `TestKindRenameMapCoversLedger` | 09 §9.4 R2 Verification; §9.4.1 (F5); 05-tasks §5T.8.2 | F5-18 |
+| F6 (stream tests) | the outbox stream tests of 05-events (`TestOutbox_StageCommitsWithBatch`, `TestOutbox_RedeliveryAfterCrashBeforeAck`) | 09 §9.4.1 (F6: the stream tests) | F6-01 |
+| F6 (stream tests) | the hub stream tests of 05-realtime (`TestHub_ResumeFromLastEventID`, `TestHub_PerEventPermissionFilter`, `TestHub_RefusalsAreStatusesBeforeStream`) | 09 §9.4.1 (F6: the stream tests) | F6-02 |
+| F7 (integrations) | `TestBooksIndexRebuiltAtCutover` (the search oracle) | 09 §9.4.1 (F7); §9.4 R2 Verification | F7-08 |
+| F7 (integrations) | the webhook delivery test (`TestWebhook_JSONBodyGolden`, `TestWebhook_SignatureWithTimestamp`) | 09 §9.4.1 (F7); §9.4 R2 Verification | F7-05 |
+| F8 (backup, updater, health, metrics) | the dashboard-reference test over the kernel /metrics mount (extension of `TestDeployReferencedSeriesServed`) | 09 §9.4.1 (F8) | F8-04 |
+| F9 (shell) | the shell's checks (make build-api && ./audiobook-organizer serve answers / with the placeholder, and `TestABOManifestBootsWithShell`) | 09 §9.4.1 (F9: the shell's checks); 07 §7.19 step 4 | F9-03 |
+| R2 (step 3) | the generated-client coverage check (name coined here) | 09 §9.4.1 (07 §7.19 step 3) | R1-30 |
+| R3 (floor) | `TestPreR2StoreRefusedByR3` (the exit-78 boot test) | 09 §9.4 R3 Verification; §9.10 | R3-02 |
+| R3 (floor) | `TestRestoreBelowUpgradeFloorRefusedAtStaging` | 09 §9.4 R3 Verification; §9.10 | R3-02 |
+| R3 (floor) | `TestFreshInstallPostFloorBootsTwice` | 09 §9.4 R3 Verification; §9.10 | R3-02 |
+| R3 (floor) | `TestLegacyFileCleanup` (the crash matrix over legacy-file-cleanup's rows) | 09 §9.4 R3 Verification; §9.10 | R3-03 |
+| R1 (atom table and manifest; 05-*) | `TestAtomTable_Golden` | 05-rbac §6.1, §12; 05-http-api §8.1 R1 row | R1-15 |
+| R1 (atom table and manifest; 05-*) | `TestManifest_SPermRoutesCarryAtomRequirement` | 05-rbac §6.1, §12; 05-http-api §8.1 R1 row | R1-15 |
+| R1 (checkpoint prune; 05-*) | `TestPruneCheckpoints` | 05-storage §5S.3.12 | R1-24 |
+| R1 (core version; 05-*) | check_core_version.py | 12 §12.4.1, §12.4.3; 09 §9.4 R1 CI classification | R1-06 |
+| R1 (core version; 05-*) | core-checkpoint (release-prod.yml) | 12 §12.4.1, §12.4.3; 09 §9.4 R1 CI classification | R1-06 |
+| F2 (runner; 05-*) | `TestDataMigrationResumesExactly` | 05-storage §5S.3.6 | F2-06 |
+| F3 (M2 oracle set; 05-*) | `TestConfigCutover_SecretsReadable` | 05-config §1.12.2 (Oracle and tests) | F3-06 |
+| F3 (M2 oracle set; 05-*) | `TestConfigCutover_KeyGuard` | 05-config §1.12.2 (Oracle and tests) | F3-06 |
+| F3 (M2 oracle set; 05-*) | `TestConfigCutover_QuarantineNotDrop` | 05-config §1.12.2 (Oracle and tests) | F3-06 |
+| F3 (M2 oracle set; 05-*) | `TestConfigCutover_GapFillStripped` | 05-config §1.12.2 (Oracle and tests) | F3-06 |
+| F3 (M2 oracle set; 05-*) | `TestConfigCutover_Idempotent` | 05-config §1.12.2 (Oracle and tests) | F3-06 |
+| F3 (M2 oracle set; 05-*) | `TestConfigCutover_RestoreDrill` | 05-config §1.12.2 (Oracle and tests) | F3-06 |
+| F3 (M2 oracle set; 05-*) | `TestConfigCutover_RowsGone` | 05-config §1.12.2 (Oracle and tests) | F3-06 |
+| F3 (quarantine commands; 05-*) | `TestQuarantineCommands` | 05-storage §5S.3.13 | F3-04 |
+| F4 (identity cutover rows; 05-*) | `TestIdentityCutover_FixtureFromR0` | 05-authn §10; 05-rbac §12 | F4-06 |
+| F4 (identity cutover rows; 05-*) | `TestIdentityCutover_Resumable` | 05-authn §10; 05-rbac §12 | F4-06 |
+| F4 (identity cutover rows; 05-*) | `TestIdentityCutover_RolesAndKeyScopes` | 05-authn §10; 05-rbac §12 | F4-06 |
+| F4 (OIDC paths; 05-*) | `TestOIDC_AppHandoffMintsABSCode` | 05-authn §10, §4.13; 05-http-api §8.1 F4 row | F4-05 |
+| F4 (OIDC paths; 05-*) | `TestOAuthCallback_HEADPathServedByCore` | 05-authn §10, §4.13; 05-http-api §8.1 F4 row | F4-08 |
+| F4 (OIDC paths; 05-*) | `TestOAuthStart_HEADPathServedByCore` | 05-authn §10, §4.13; 05-http-api §8.1 F4 row | F4-08 |
+| F5 (tasks cutover rows; 05-*) | `TestCutover_KindReferencesRewritten` | 05-tasks §5T.8.3, §5T.9 | F5-16 |
+| F5 (tasks cutover rows; 05-*) | `TestCutover_RepairsRowsAndMarksImported` | 05-tasks §5T.8.3, §5T.9 | F5-16 |
+| F5 (tasks cutover rows; 05-*) | `TestCutover_TasksFixtureFromR0` | 05-tasks §5T.8.3, §5T.9 | F5-16 |
+| F5 (tasks cutover rows; 05-*) | `TestCutover_SharedSettingFamilyOnlyRunKeysMove` | 05-tasks §5T.8.3, §5T.9 | F5-16 |
+| F5 (journal; 05-*) | `TestCutover_SyslogImported` | 05-logging §5, §11 item 1 | F5-15 |
+| F5 (G6/G7; 05-*) | `TestSecondModuleNoAudiobookEdit` (G6/G7) | 06 §6.10; 04 §8.1 F5 | F5-18 |
+| F7 (M6 migrations; 05-*) | `TestRootsCutover_FromHEADFixture` | 05-library §5L.10; 05-notify §9; 05-metadata M1.10; 05-ai §10 | F7-08 |
+| F7 (M6 migrations; 05-*) | `TestWebhookMigration_InstancesAndRule` | 05-library §5L.10; 05-notify §9; 05-metadata M1.10; 05-ai §10 | F7-08 |
+| F7 (M6 migrations; 05-*) | `TestIntegrationsMigration_EveryInstanceAndID` | 05-library §5L.10; 05-notify §9; 05-metadata M1.10; 05-ai §10 | F7-08 |
+| F7 (M6 migrations; 05-*) | `TestAIJobMigration_EveryJobAndState` | 05-library §5L.10; 05-notify §9; 05-metadata M1.10; 05-ai §10 | F7-08 |
+| F8 (updater move; 05-*) | `TestABOUpdaterSourceMatchesHEAD` | 05-updater §5U.11, §5U.12 (R2 done-check) | F8-02 |
+| F8 (updater move; 05-*) | `TestApply_RawAssetNoBackup` | 05-updater §5U.11, §5U.12 (R2 done-check) | F8-02 |
+| F8 (updater move; 05-*) | `TestFetchRelease_NamedReleaseOnly` | 05-updater §5U.11, §5U.12 (R2 done-check) | F8-02 |
+| F8 (health; 05-*) | `TestHealth_UnauthenticatedTokenSetGolden` | 05-health §5H.3.3 | F8-03 |
+| F8 (backup; 05-*) | `TestLegacyArchiveRestoreThenMigrate` | 05-backup §5B.10; 05-config §1.12.2 | F8-01 |
+
+---
+
+## (f) Owner checkpoints
+
+Owner checkpoints are not agent work: each has a brief with a NOT AGENT WORK banner. They are kept to what
+09's runbook and 12 actually require of the owner.
+
+| ID | Checkpoint | When | Blocks |
+|---|---|---|---|
+| OWNER-01 | Q-I: how the required checks are enforced (a ruleset with no bypass actors, and merge tooling that never merges with `--admin` past a required check, or the owner's alternative); keep or override the R1 freeze; Q-G thresholds (before R1 wires the readiness report); P14 (Basic gate on with no saved password) | before R0-05 merges and before R1-01 | R0-05, R1-01 |
+| OWNER-02 | Cut the R0 production release and keep its tag; deploy; optional smoke run | after R0-01 … R0-06 | R1-01 (which starts the R1 freeze) |
+| OWNER-03 | P12 (disk headroom: the first R1 boot takes a checkpoint); cut R1 with its release-note lines; deploy; optional smoke run | after R1-01 … R1-30 | every F2 task, R1-31 |
+| OWNER-04 | P1 (family counts and bytes; any `(unregistered)` prefix), P2, P3, P4 (env names actually set), P5, P7, P9; Q-C (the 15 never-run v2 crons) | any time after R0 deploys, read-only, counts only | F2-14, F3-07, F5-14 |
+| OWNER-05 | P12; the runbook's deploy steps 0–8 (merges finished and blocking rows fixed; the off-host archive with `.encryption_key` and `config.yaml`; optional dry run; env renames; deploy with the measured `DEPLOY_READY_TIMEOUT`; webhook receivers; reload rules and dashboards; `secrets export-keyring`; re-send invites); optional smoke run; keep or roll back; cut R2 | after R2-01 | R2-02, every R3 task |
+| OWNER-06 | The keyring exported and an off-host `.encryption_key` kept with every pre-R2 archive; cut R3; deploy; optional smoke run | after R3-01 … R3-03 | — |
+
+---
+
+## (g) Top risks and the plan's mitigation
+
+From 14 §14.1 and §14.1.1; each row names the tasks that carry the mitigation.
+
+| Risk (14) | Plan mitigation |
+|---|---|
+| K20 — gates that gate nothing: merges and RCs were not CI-gated, a production minor auto-promoted every 10 RCs | OWNER-01 settles Q-I before R1-01; R1-02, R1-03, R1-04 build the named required checks; R1-01 and F3-07 turn the freezes on and R1-31, R2-02 turn them off only after the release; no merge with `--admin` past a required check. `/parallel-sweep`'s admin-merge on green is incompatible with Q-I's recommended ruleset and is used only in the mode OWNER-01 approves |
+| E14 — R2's blast radius, one release changing every core service | R1 carries the runtime half; every R2 subsystem lands dark first and its flip is one PR that only wires, deletes and switches callers; each flip is the only PR of its wave touching `main.go`, `internal/server/` and books' registration (waves W27, W31, W32, W33, W34, W35, W36) |
+| E1, E18 — a one-way migration loses data, with no previous-build oracle | F2-12 has the R0 binary write the corpus and record the answers; F2-13 the labelled overlay; F2-14 the production-shaped store; F2-15 the per-family, ID, reference and byte-identity checks and the restore drill; F2-06 the crash matrix at every chunk; F3-04 the dry run |
+| E3 — the shared `idx:` and `setting:` families split wrongly | F2-15's sub-prefix lists generated from `keyfamilies.go` and the census, with the byte-identity check on every R2 PR |
+| E4, E10 — secrets lost or plaintext copies left behind | F3-06 keeps HEAD's key guard and quarantines an undecryptable row; F3-03 the keyring export; F3-07 the no-plaintext canary; R1-24 the 7-day sweeper; OWNER-05 steps 1 and 7 |
+| K15, E5, E6 — a renamed env name is ignored, a stale value weakens security, an empty store opens | F3-02 refuses a set retired protected or secret name and applies the fail-closed rule; F3-07's deploy-files test; OWNER-04's P4 before F3; OWNER-05 step 3 |
+| E7 — the first R2 boot is killed partway | `EXTEND_TIMEOUT` per step in F2-06's runner; R1-28's 12-minute cell; F2-14 measures the boot that sets `DEPLOY_READY_TIMEOUT`; every step resumes |
+| E9 — a rollback restore discards writes and revives revoked credentials | R1-27's `make rollback-restore` with its level check, F8-02's `RELEASE=` fetch; R2-01's runbook says fix forward and lists the revocations to repeat |
+| E15, E16 — a half-flipped `main` reaches production; schedules stampede | the freezes; R0-06 makes unattended updates check-only; F5-14's schedule oracle and no-catch-up-storm test |
+| E17 — the six early fixes regress in core auth | R0-02 … R0-05 ship them with their HEAD tests; F4-02 and F3-05 port them as property tests |
+| K11, K14 — R1 breaks the Docker and web builds; dependency skew between modules | R1-04 (the image job), R1-05 (one web build entry point), R1-30 (the Docker frontend stage, a dry-run RC); R1-01's `check_module_skew.py` and Dependabot directories |
+| K24 — feature work collides with the moves | move windows (§(d)); move PRs never share a wave; feature PRs rebase onto a move by its `old ==> new` list (09 §9.2.10) |
+| K1 — the extraction stalls with two half-systems | every release ends shippable; dark-then-flip keeps every `main` booting; R1 lands the runtime and storage before any user data moves |
+
+---
+
+## (h) 04 package-stage keys and the tasks that move them
+
+Every package move, creation, rename, merge and deletion 04 keys to a release or flip (04 §2.4, §3, §8.1,
+§8.2, §11), with the one task that carries it. "grow" marks a core package that a later flip completes;
+"create" with a later key marks the flip where 04 §8.2 counts the package as first existing in full
+(`rbac`, `auth` and `ui` have leaf types from R1). Keys the plan adds beyond 04 §8.2 are 04 §3.6's
+deletions, 04 §2.4's renames, and the file-level moves 04 names in prose (the Basic gate's
+`basicauth.go` at F3, the books-internal moves of F5). One 04 row is excluded:
+`internal/database/mocks`'s deletion belongs to the optional mock conversion, "none; R1–R2 as the owner
+decides" (09 §9.4.1; 04 §4.6 and open item 1); until then R1-26 renames it with the residue.
+
+| 04 stage key | Kind | Package, or source → destination | Task |
+|---|---|---|---|
+| R1 | create | core module (core/go.mod, empty core/go.sum) | R1-01 |
+| R1 | create | `core/openapi/core.json` | R1-13 |
+| R1 | create | `internal/books` (composition root) | R1-15 |
+| R1 | create | `mediacore/app` | R1-13 |
+| R1 | create | `mediacore/archtest` | R1-01 |
+| R1 | create | `mediacore/auth` (leaf types) | R1-12 |
+| R1 | create | `mediacore/buildid` | R1-01 |
+| R1 | create | `mediacore/coretest` | R1-09 |
+| R1 | create | `mediacore/coretest/crashmatrix` | R1-21 |
+| R1 | create | `mediacore/entity` | R1-09 |
+| R1 | create | `mediacore/examples/hello` | R1-13 |
+| R1 | create | `mediacore/health` | R1-09 |
+| R1 | create | `mediacore/httpapi` | R1-13 |
+| R1 | create | `mediacore/internal/httpmw` | R1-17 |
+| R1 | create | `mediacore/internal/jsonschemax` | R1-12 |
+| R1 | create | `mediacore/internal/openapi` | R1-13 |
+| R1 | create | `mediacore/internal/pebble` | R1-20 |
+| R1 | create | `mediacore/internal/restoreswap` | R1-21 |
+| R1 | create | `mediacore/internal/sdnotify` | R1-16 |
+| R1 | create | `mediacore/kernel` | R1-13 |
+| R1 | create | `mediacore/library` | R1-08 |
+| R1 | create | `mediacore/lifecycle` | R1-07 |
+| R1 | create | `mediacore/log` | R1-07 |
+| R1 | create | `mediacore/metrics` | R1-10 |
+| R1 | create | `mediacore/module` | R1-13 |
+| R1 | create | `mediacore/rbac` (leaf types) | R1-12 |
+| R1 | create | `mediacore/storage` | R1-20 |
+| R1 | create | `mediacore/storage/keys` | R1-01 |
+| R1 | create | `mediacore/storage/restorejournal` | R1-20 |
+| R1 | create | `mediacore/ui` (leaf) | R1-12 |
+| R1 | create | `mediacore/version` | R1-09 |
+| R1 | create | npm @mediacore/api-client | R1-30 |
+| R1 | move | `internal/arch` → `mediacore/archtest` | R1-01 |
+| R1 | move | `internal/boundedcall` → `mediacore/library` | R1-08 |
+| R1 | move | `internal/compactprogress` → `mediacore/storage` | R1-20 |
+| R1 | move | `internal/config` → `mediacore/log` | R1-07 |
+| R1 | move | `internal/database` → `mediacore/storage` | R1-23 |
+| R1 | move | `internal/database/dbtest` → `mediacore/coretest` | R1-20 |
+| R1 | move | `internal/diag/flight` → `mediacore/health` | R1-09 |
+| R1 | move | `internal/diskstats` → `mediacore/library` | R1-08 |
+| R1 | move | `internal/httputil` → `mediacore/httpapi` | R1-17 |
+| R1 | move | `internal/libroot` → `mediacore/library` | R1-08 |
+| R1 | move | `internal/lifecycle` → `mediacore/lifecycle` | R1-07 |
+| R1 | move | `internal/logging` → `mediacore/log` | R1-07 |
+| R1 | move | `internal/metrics` → `mediacore/internal/pebble` | R1-23 |
+| R1 | move | `internal/sdnotify` → `mediacore/internal/sdnotify` | R1-16 |
+| R1 | move | `internal/security/pathvalidation` → `mediacore/library` | R1-08 |
+| R1 | move | `internal/security/safepath` → `mediacore/library` | R1-08 |
+| R1 | move | `internal/server` → `mediacore/httpapi` | R1-17 |
+| R1 | move | `internal/server/middleware` → `mediacore/httpapi` | R1-17 |
+| R1 | move | `internal/telemetry` → `mediacore/metrics` | R1-10 |
+| R1 | move | `internal/util` → `mediacore/library` | R1-08 |
+| R1 | rename | `internal/database` → `internal/books/store` | R1-26 |
+| R1 | rename | `internal/database/aggtest` → `internal/books/store/aggtest` | R1-26 |
+| R1 | rename | `internal/database/dbtest` → `internal/books/store/storetest` | R1-26 |
+| R1 | rename | `internal/database/mocks` → `internal/books/store/mocks` | R1-26 |
+| R1 | rename | `internal/telemetry/contract` → `internal/telemetrypolicy` | R1-10 |
+| F2 | create | `mediacore/audit` | F2-07 |
+| F2 | create | `mediacore/config` (section declarations) | F2-09 |
+| F2 | create | `mediacore/health/diagnostics` (minimal) | F2-11 |
+| F2 | create | `mediacore/integrations/ai` (minimal) | F2-11 |
+| F2 | create | `mediacore/integrations/providerhttp` (minimal) | F2-11 |
+| F2 | create | `mediacore/internal/executor` | F2-03 |
+| F2 | create | `mediacore/internal/scheduler` | F2-04 |
+| F2 | create | `mediacore/internal/storagemigrate` | F2-06 |
+| F2 | create | `mediacore/internal/taskhttp` | F2-05 |
+| F2 | create | `mediacore/storage/datamigrate` | F2-06 |
+| F2 | create | `mediacore/tasks` | F2-01 |
+| F2 | create | `mediacore/tasks/taskstest` | F2-01 |
+| F2 | grow | `mediacore/health` (readiness core) | F2-10 |
+| F2 | grow | `mediacore/rbac` (the scope catalog) | F2-08 |
+| F3 | create | `internal/books/cutover` | F3-06 |
+| F3 | create | `mediacore/config/configtest` | F3-01 |
+| F3 | create | `mediacore/internal/keyedmutex` | F3-03 |
+| F3 | create | `mediacore/secrets` | F3-03 |
+| F3 | grow | `mediacore/config` (loader, OverrideStore, Importer) | F3-01 |
+| F3 | move | `internal/config` → `mediacore/config` | F3-01 |
+| F3 | move | `internal/server/middleware` (basicauth.go) → `mediacore/httpapi` | F3-07 |
+| F4 | create | `internal/cfaccess` | F4-03 |
+| F4 | create | `internal/server/legacyauth` | F4-08 |
+| F4 | create | `mediacore/auth` (full package, leaf types since R1) | F4-02 |
+| F4 | create | `mediacore/auth/authtest` | F4-02 |
+| F4 | create | `mediacore/auth/oidc` | F4-03 |
+| F4 | create | `mediacore/auth/password` | F4-02 |
+| F4 | create | `mediacore/backup/journal` | F4-04 |
+| F4 | create | `mediacore/events` | F4-04 |
+| F4 | create | `mediacore/internal/authhttp` | F4-05 |
+| F4 | create | `mediacore/internal/modulehttp` | F4-05 |
+| F4 | create | `mediacore/internal/storagehttp` | F4-05 |
+| F4 | create | `mediacore/internal/uihttp` | F4-05 |
+| F4 | create | `mediacore/rbac` (full package, leaf types since R1) | F4-01 |
+| F4 | create | `mediacore/rbac/rbactest` | F4-01 |
+| F4 | grow | `mediacore/audit` (serving) | F4-08 |
+| F4 | move | `internal/auth` → `mediacore/auth` | F4-08 |
+| F4 | move | `internal/auth` → `mediacore/rbac` | F4-08 |
+| F4 | move | `internal/config` → `mediacore/auth` | F4-02 |
+| F4 | move | `internal/oauth` → `mediacore/auth/oidc` | F4-03 |
+| F4 | move | `internal/server` → `mediacore/auth` | F4-08 |
+| F4 | move | `internal/server/absauth` → `mediacore/audit` | F4-02 |
+| F4 | move | `internal/server/absauth` → `mediacore/auth` | F4-02 |
+| F4 | move | `internal/server/handlers` → `mediacore/internal/authhttp` | F4-08 |
+| F4 | move | `internal/server/middleware` → `mediacore/auth` | F4-08 |
+| F4 | move | `internal/util` → `mediacore/auth` | F4-02 |
+| F5 | create | `internal/books/contract` | F5-18 |
+| F5 | create | `mediacore/archtest/tasklint` | F5-17 |
+| F5 | create | `mediacore/internal/logjournal` | F5-15 |
+| F5 | create | `mediacore/log/logtest` | F5-15 |
+| F5 | move | `internal/database` → `internal/books/cutover` | F5-18 |
+| F5 | move | `internal/maintenance` → `mediacore/tasks` | F5-18 |
+| F5 | move | `internal/operations` → `mediacore/tasks` | F5-18 |
+| F5 | move | `internal/operations/childop` → `mediacore/tasks` | F5-18 |
+| F5 | move | `internal/operations/freshness` → `mediacore/tasks` | F5-18 |
+| F5 | move | `internal/operations/opmode` → `mediacore/tasks` | F5-18 |
+| F5 | move | `internal/operations/opswriter` → `mediacore/tasks` | F5-18 |
+| F5 | move | `internal/operations/registry` → `internal/activity` | F5-18 |
+| F5 | move | `internal/operations/registry` → `internal/books/contract` | F5-18 |
+| F5 | move | `internal/operations/registry` → `mediacore/internal/executor` | F5-18 |
+| F5 | move | `internal/opsmetrics` → `mediacore/internal/executor` | F5-18 |
+| F5 | move | `internal/scheduler` → `internal/books` | F5-18 |
+| F5 | move | `internal/scheduler` → `mediacore/internal/scheduler` | F5-18 |
+| F5 | move | `internal/server` → `internal/books` | F5-18 |
+| F5 | move | `internal/server/handlers` → `mediacore/internal/taskhttp` | F5-18 |
+| F5 | move | `internal/server/handlers/operations` → `mediacore/internal/taskhttp` | F5-18 |
+| F5 | move | `internal/server/handlers/opsv3` → `mediacore/internal/taskhttp` | F5-18 |
+| F5 | move | `internal/walkresume` → `mediacore/tasks` | F5-18 |
+| F5 | move | `pkg/ops` → `mediacore/tasks` | F5-18 |
+| F5 | move | `pkg/ops/opstest` → `mediacore/tasks/taskstest` | F5-18 |
+| F5 | move | `pkg/plugin/sdk` → `mediacore/tasks` | F5-18 |
+| F5 | move | `tools/cmd/oplint` → `mediacore/archtest/tasklint` | F5-17 |
+| F5 | rename | `internal/operations/opswriter` → `internal/books/writer` | F5-18 |
+| F5 | delete | `internal/logger/mocks` | F5-18 |
+| F5 | delete | `internal/maintenance` | F5-18 |
+| F5 | delete | `internal/opscatalog` | F5-18 |
+| F5 | delete | `internal/plugins` | F5-18 |
+| F6 | create | `mediacore/internal/eventhttp` | F6-02 |
+| F6 | create | `mediacore/internal/sse` | F6-02 |
+| F6 | create | `mediacore/outbox` | F6-01 |
+| F6 | create | `mediacore/realtime` | F6-02 |
+| F6 | move | `internal/realtime` → `mediacore/realtime` | F6-03 |
+| F7 | create | `mediacore/integrations` | F7-01 |
+| F7 | create | `mediacore/integrations/ai/aitest` | F7-03 |
+| F7 | create | `mediacore/integrations/ai/openai` | F7-03 |
+| F7 | create | `mediacore/integrations/download` | F7-04 |
+| F7 | create | `mediacore/integrations/download/deluge` | F7-04 |
+| F7 | create | `mediacore/integrations/integrationstest` | F7-01 |
+| F7 | create | `mediacore/integrations/metadata` | F7-02 |
+| F7 | create | `mediacore/integrations/notify` | F7-05 |
+| F7 | create | `mediacore/integrations/notify/mail` | F7-05 |
+| F7 | create | `mediacore/integrations/notify/notifytest` | F7-05 |
+| F7 | create | `mediacore/integrations/notify/webhook` | F7-05 |
+| F7 | create | `mediacore/integrations/providerhttp/providerhttptest` | F7-02 |
+| F7 | create | `mediacore/internal/bleveindex` | F7-07 |
+| F7 | create | `mediacore/storage/index` | F7-07 |
+| F7 | grow | `mediacore/integrations/ai` | F7-03 |
+| F7 | grow | `mediacore/integrations/providerhttp` | F7-02 |
+| F7 | grow | `mediacore/library` | F7-06 |
+| F7 | move | `internal/ai` → `mediacore/integrations/ai/openai` | F7-09 |
+| F7 | move | `internal/ai/aijobs` → `mediacore/integrations/ai` | F7-09 |
+| F7 | move | `internal/aidispatch` → `mediacore/integrations/ai` | F7-09 |
+| F7 | move | `internal/config` → `mediacore/integrations/ai` | F7-09 |
+| F7 | move | `internal/deluge` → `mediacore/integrations/download/deluge` | F7-09 |
+| F7 | move | `internal/fileops` → `mediacore/library` | F7-09 |
+| F7 | move | `internal/mail` → `mediacore/integrations/notify/mail` | F7-05 |
+| F7 | move | `internal/mail/mailtest` → `mediacore/coretest` | F7-05 |
+| F7 | move | `internal/metadata` → `mediacore/integrations/providerhttp` | F7-09 |
+| F7 | move | `internal/metadata/providerhttp` → `mediacore/integrations/providerhttp` | F7-09 |
+| F7 | move | `internal/pathutil` → `mediacore/library` | F7-09 |
+| F7 | move | `internal/plugins/webhook` → `mediacore/integrations/notify/webhook` | F7-09 |
+| F7 | move | `internal/search` → `mediacore/internal/bleveindex` | F7-09 |
+| F7 | move | `internal/search` → `mediacore/storage/index` | F7-09 |
+| F7 | move | `internal/security/safehttp` → `mediacore/integrations/providerhttp` | F7-02 |
+| F7 | move | `internal/server` → `mediacore/storage/index` | F7-09 |
+| F7 | move | `internal/watcher` → `mediacore/library` | F7-09 |
+| F7 | delete | `internal/plugin` | F7-09 |
+| F8 | create | `mediacore/backup` | F8-01 |
+| F8 | create | `mediacore/updater` | F8-02 |
+| F8 | grow | `mediacore/health` | F8-03 |
+| F8 | grow | `mediacore/health/diagnostics` | F8-03 |
+| F8 | move | `internal/backup` → `mediacore/backup` | F8-04 |
+| F8 | move | `internal/server` → `mediacore/health` | F8-04 |
+| F8 | move | `internal/server` → `mediacore/updater` | F8-04 |
+| F8 | move | `internal/server/handlers` → `mediacore/health` | F8-04 |
+| F8 | move | `internal/startup` → `mediacore/kernel` | F8-04 |
+| F8 | move | `internal/sysinfo` → `mediacore/health` | F8-04 |
+| F8 | move | `internal/updater` → `mediacore/updater` | F8-02 |
+| F9 | create | hello web package | F9-01 |
+| F9 | create | `mediacore/ui` (full package, leaf since R1) | F9-01 |
+| F9 | create | npm @mediacore/shell | F9-01 |
+| F9 | create | npm @mediacore/ui-kit | F9-01 |
+| F9 | move | `internal/server` → `mediacore/ui` | F9-03 |
+| R3 | merge | `internal/models` → `internal/dedup/unified` | R3-01 |
+| R3 | delete | `internal/bookfiles` | R3-01 |
+| R3 | delete | `internal/books/cutover` | R3-02 |
+| R3 | delete | `internal/operations/state` | R3-02 |
+| R3 | delete | `internal/serviceregistry` | R3-01 |
+| R3 | delete | `internal/writeback` | R3-01 |
+| R3 | delete | `pkg/plugin/sdk` | R3-01 |
+| R3 | delete | `tools/cmd/opsgen` | R3-02 |
+| R3 | delete | `tools/cmd/sdkguard` | R3-01 |
+| R3 | delete | `web/src/generated/ops.ts` | R3-02 |
+
+---
+
+## (i) How tiers were assigned
+
+| Tier | Model / effort | Rule | Tasks |
+|---|---|---|---|
+| T0 | Haiku / low | a mechanical edit that a checker proves (a pin bump, a workflow toggle) | 3 |
+| T1 | Sonnet / medium | small and fully specified: an import-path move of leaf packages, one handler, a conversion batch under fixed rules | 13 |
+| T2 | Sonnet / high | multi-file and well specified, moderate blast radius: CI and tooling, move PRs with many importers, contracts that already exist | 31 |
+| T3 | Opus / high | fresh core code with intricate contracts, security-sensitive rules, the oracles and corpora | 31 |
+| T4 | Opus / xhigh–max | anything that can lose or expose data or lock users out: durable boot writers, the store engine, the swap, the one-way cutover steps, the perimeter and auth engines, and every flip PR | 31 |
+
+Every agent task carries its one-line reason in the JSON inventory and its brief. A brief may raise its
+tier when its base-commit re-verification finds more than the plan assumed; it never lowers a T4.
+
+---
+
+## (j) What is NOT in this plan
+
+- **Deferred-build items** (spec README "Build scope"; 03 §3.3 Build column): `acquire`,
+  `integrations/indexer`, `arrfacade` (only the `/api/v3/` reservation exists), the download
+  grab/monitor/pending-recovery pipeline and every adapter but Deluge, the AI usage ledger and cap, the
+  notify inbox and per-user channels, the facade-only key and route members, backup encryption, the
+  seed-role merge diff, `Online` data migrations, root read shares, and updater hardening beyond the moved
+  R0 updater (signed manifests, the boot-attempt counter, automatic rollback, the unit's binary layout).
+- **The repo split** (12 §12.8.2): creating `falkcorp/mediacore`, the Apache-2.0 relicensing of moved files,
+  `COMMERCIAL.md`, publishing `v1.0.0` and the npm packages, and the ABO cutover PR. It waits for the
+  trigger T and SC1–SC10 (12 §12.3); this plan only builds the readiness reports (R1-06).
+- **TV/Movies** (10) and **multi-app in one binary** (11).
+- **Optional ratchets** (09 §9.4.1 last row): the `config.AppConfig` accessor and façade removal, logger
+  injection, and the conversion of the 114 + ~22 tests off `internal/database/mocks` (owner's choice,
+  04 open item 1).
+- **Follow-ups after R2 that no release gates:** 07 §7.19 step 6 (the remaining `api.ts` sections as books
+  routes become native); a books route group moving to `/api/books/v1` when rewritten (09 §9.12 O8);
+  moving organizer, versions, quarantine, Deluge import and iTunes transfer onto `library.Transfer`
+  (05-library §5L.10 "Order"); storing `download.ItemRef` (05-download phase 2).
+- **The storage-efficiency program** (`storage_format` 2, its release B), a separate track (09 §9.0).
+- **The per-release normative digests** the spec README's reading order mentions; this rebuild produces
+  the plan and the index only.
+- **Soaks, staging hosts and previous-build rehearsals** (D11); the optional dry run and smoke runs are
+  owner steps inside OWNER-05 and the other release checkpoints.
+
+---
+
+## (k) Conventions
+
+- **IDs** encode the release: `R0-nn`, `R1-nn`, `F2-nn` … `F9-nn` (R2's foundation and flips), `R2-nn` (R2's
+  closing PRs), `R3-nn`, and `OWNER-nn` for owner checkpoints. Within a release, flips carry the highest
+  number of their label (F3-07, F4-08, F5-18, F6-03, F7-09, F8-04, F9-03).
+- **Files** are the main paths a PR creates, modifies or deletes; a path ending in `/` is a whole directory
+  (a move, a new package, or the importers a move rewires). `<file-group-k>` (F5 T6) and
+  `<T7 op-definition files>` are computed file-disjoint by the coordinator at the base commit. Every PR also
+  adds one `changelog.d/` fragment and, where it closes a tracked item, checks it off in `TODO.md`; these
+  line-local edits are not listed and never decide a wave.
+- **Briefs** follow `docs/agent-tasks/README.md` and the shape of the dedup-pipeline-hardening briefs:
+  worktree off fresh `origin/main` with `REPO=<your clone>`, exact files, re-verify greps with expected
+  hit counts, numbered steps, the code contract from the spec, the spec's test names written first,
+  acceptance commands with `make ci`, out-of-scope, rollback, and repo rules (file headers bumped,
+  conventional commits ending `Co-Authored-By: Claude <noreply@anthropic.com>`, `gh pr merge <n> --rebase`,
+  never squash, never `--admin` past a required check). **09 names no release or flip trailer** (09 §9.2.1:
+  nothing records a flip), so commits carry none.
+- **Concurrency** (CLAUDE.md): a library-scale cutover step is a `DataMigration` with its own
+  `tasks.Parallelism` and a bounded worker pool over disjoint key ranges (09 §9.9); conversions keep HEAD's
+  concurrency 1:1 and any change of a definition's parallelism is a separate PR (05-tasks §5T.8.2).
+- **Drift.** Every brief re-verifies its anchors at its base commit with expected counts; a zero-hit grep
+  on an edit target, or a moved count, stops the task and is reported, never patched around; done-check
+  counts are generated at the base commit (09 §9.3).
+
+---
+
+## (l) Plan decisions the spec leaves open
+
+Each is a choice inside 09's rules, recorded so a reviewer can overturn it.
+
+1. **Steps built dark, registered by the flip.** M2, M3, M4/M5 and M6 are built and tested in their own
+   PRs (F3-06, F4-06, F5-15/F5-16, F7-08) and registered by their flip, which "carries the migration step"
+   (09 §9.2.1); 05-config §1.12.2 already distinguishes the PR that builds M2 from the flip that ships it.
+2. **Dark PRs of F3–F8 may merge before F3-07.** They change no behaviour and ship in production minors as
+   F2's PRs do; 09 puts only F3 and later flips inside the freeze. The lead may hold them until F3-07 merges
+   without changing the waves.
+3. **Freeze toggles.** R1-01 turns the R1 freeze on, R1-31 turns it off after the R1 release; F3-07 turns the
+   R2 freeze on and records the pre-freeze tag in `ci/prefreeze_release.txt`; R2-02 turns it off after the R2
+   release (09 §9.2.1 names when, not which PR).
+4. **The books Writer contract.** `internal/books/contract` and `internal/books/writer` are created by the
+   F5 flip, when their sources leave (03 §3.5.1; 04 §2.4; 06 §6.11.1), while 05-tasks lands T2–T7 dark
+   before it. The dark conversions therefore declare the narrow typed-writer interface they call
+   (`ModifyBook` and its siblings) in their own package, a consumer interface as 04 §4.6 keeps them, with a
+   fake in their tests; F5-18 creates the two packages, wires the implementation over `tasks.Writer` and
+   points the converted packages at the shared contract.
+5. **`tasklint` before the flip** (F5-17): HEAD's v3 catalog is empty, so nothing loses its lint.
+6. **One PR per flip label**, F8 and F7 included, because 09's flips table speaks of "the flip PR"; F7 is
+   also one step, M6.
+7. **F9 in R2 by default**, decided at R2-01: if F9-03 has not merged when F8-04 has, F9 moves to R3
+   unchanged and R2-01 drops it.
+8. **Unkeyed 04 rows.** `internal/bookfiles`, `internal/writeback` and the `internal/models` merge go in
+   R3-01; `internal/logger/mocks` goes with `retention.go` in F5-18.
+9. **`make rollback-restore RELEASE=`** lands with `updater fetch-release` in F8-02; R1-27 lands the
+   checkpoint and archive branches.
+10. **Where the R2 corpus lives:** `internal/books/testdata/r2corpus/`, with its scripts under
+    `scripts/r2corpus/`.
+
+---
+
+## (m) Spec gaps and open questions
+
+**No spec gap forced a SPEC-GATED row.** Every task has the normative text its brief needs. Open
+questions the plan carries instead:
+
+| # | Question | Owner | Effect on the plan |
+|---|---|---|---|
+| 1 | Q-I: how the required checks are enforced, and whether `/parallel-sweep` may admin-merge | owner (OWNER-01) | decides the merge mode of every wave from R1-01 |
+| 2 | Q-C: the 15 v2 crons that never ran (delete by default) | owner (OWNER-04) | F5-14's schedule declarations and the release note |
+| 3 | Q-G: the split-readiness thresholds | owner (OWNER-01) | R1-06's report only |
+| 4 | What `frontend-enabled` does in the shared release workflow at `.github/ghcommon-ref.txt`'s SHA | read by R1-05's agent; BLOCKED to the lead if unreadable | R1-05's release callers |
+| 5 | The pre-freeze release tag, known only when F3 merges | F3-07 records it | the restore drill and `TestCutoverRefusedByOlderBuilds` |
+| 6 | The books Writer contract arrives at F5 while T2–T7 land dark before it (03 §3.5.1, 04 §2.4, 06 §6.11.1 against 05-tasks §5T.8.2) | the plan's §(l) item 4; for the review loop to confirm | F5-01 … F5-14, F5-18 |
