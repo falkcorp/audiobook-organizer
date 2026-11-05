@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.13.0
+// version: 2.14.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-11-05
 
@@ -121,7 +121,10 @@ type durationReextractParams struct {
 	DryRun      *bool `json:"dryRun,omitempty"`
 	DryRunSnake *bool `json:"dry_run,omitempty"`
 	// Limit caps the number of books examined in one run (0 = no cap). Useful for
-	// a bounded first pass over a large library.
+	// a bounded first pass over a large library. With mode "unknownRows" it
+	// counts ROWS instead: the rows that would be acted on (borrowed, promoted or
+	// probed). Rows settled without action (unreadable, no path, excluded from
+	// scanning) are always reported and never spend it.
 	Limit int `json:"limit"`
 	// Workers sets the number of concurrent book-processing goroutines (default 4,
 	// clamped 1–16). More workers = more concurrent ffprobe subprocesses, which
@@ -384,7 +387,7 @@ func (p *Plugin) durationBackfillDef() sdk.OperationDef {
 			"Workers param (default 4) controls ffprobe concurrency — higher = faster ffprobe tail. " +
 			"Set onlyMissingDuration=true to scope the run to books with no known duration. " +
 			"mode=unknownRows is the row-grain pass: it walks book_file rows in ANY book (copies and books/itunes rows included, read-only on disk) that no one has measured, " +
-			"borrows a duration from a sibling row at the same path, promotes the fingerprint duration, then ffprobes the rest; narrow it with fileIds / bookIds. On demand only.",
+			"borrows a duration from a sibling row at the same path, promotes the fingerprint duration, then ffprobes the rest (absent files are not probed; rows excluded from scanning are skipped); narrow it with fileIds / bookIds. On demand only.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.duration-backfill",
@@ -739,7 +742,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	}
 
 	if params.Mode != "" || len(params.FileIDs) > 0 || len(params.FileIDsSnake) > 0 {
-		if err := validateUnknownRowsParams(params); err != nil {
+		if err := validateUnknownRowsParams(params, raw); err != nil {
 			return err
 		}
 		return p.runUnknownRowsBackfill(ctx, store, params, dryRun, reporter)
