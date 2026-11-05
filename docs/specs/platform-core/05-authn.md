@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.13.7 -->
+<!-- version: 1.13.8 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -242,8 +242,11 @@ type Compat interface {
 	// or PasswordResetRequired (ErrResetRequired, the two VerifyPassword
 	// refuses). It goes through core's one Throttle as VerifyPassword does
 	// (§4.9): a call from a throttled source is refused (ErrThrottled) before
-	// any other check, and every refused call counts as one failure for
-	// client's source.
+	// any other check, but none of its own refusals (status, epoch,
+	// SignInRestricted, PasswordResetRequired) counts toward the throttle:
+	// the token was verified by the surface, so a refusal is not a credential
+	// guess. Only a failed credential check (a wrong password, an invalid
+	// key) counts, as at HEAD.
 	PrincipalFor(ctx context.Context, u *User, scopes []rbac.Permission, epoch int64, client ClientInfo) (*Principal, error)
 	// CheckCredentialFor is Service.CheckCredentialFor (§3.2).
 	CheckCredentialFor(p *Principal, perm rbac.Requirement) error
@@ -1002,7 +1005,7 @@ Core owns it; nothing refers to an app, a module or `users.manage`.
 - One `auth.Throttle` instance per `Service` (not package state, R5) applied to: password login (web
   login and every compat surface's `Compat.VerifyPassword`, §3.1, sharing one counter set as HEAD's
   ABS/web throttle did), every compat surface's `Compat.PrincipalFor` (§3.1: a throttled source is
-  refused, and each refused call counts as a failure for its source), bootstrap redeem, setup, invite lookup/accept, temp-login consume, OIDC
+  refused, and its refusals record no failure: only failed credential checks, a wrong password or an invalid key, count, as at HEAD, so a phone app polling with a stale token after a restore or a password change cannot lock its own source out), bootstrap redeem, setup, invite lookup/accept, temp-login consume, OIDC
   callback.
 - Client address comes from `httpapi` (05-http-api §3.5): trusted proxies are prefixes **or
   zoned addresses**, ABO's `TUNNEL_CONNECTOR_ADDRS` is converted into them by the config cutover, and the client-IP header is
@@ -1042,7 +1045,8 @@ module holds no credential mutation and builds no second auth stack (G15):
 
 `TestCompat_ABSLoginHonoursRestrictions` (§10) runs the password, key and Cloudflare paths against a
 `SignInRestricted` user, a `PasswordResetRequired` user and a `needs_confirmation` key: each is refused.
-A JWT or Cloudflare call from a throttled source is refused as well.
+A JWT or Cloudflare call from a throttled source is refused as well, but a refused `PrincipalFor` call
+(status, epoch, `SignInRestricted`, `PasswordResetRequired`) records no throttle failure.
 
 **Confinement on the ABS surface (SEC2-4).** Today the ABS group refuses a worker-only credential
 explicitly (`middleware/absauth.go:629-632`). Stage 13 never runs on `OwnAuth` routes, so after
@@ -1502,7 +1506,7 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestOAuthCallback_HEADPathServedByCore` | (fake IdP, from F4) a sign-in started at `GET /api/core/v1/auth/oidc/{provider}/start` completes at HEAD's callback `GET /api/v1/auth/oauth/{provider}/callback` with the redirect URI HEAD registered; no gin handler serves that path (§4.7, §4.13) |
 | `TestOAuthStart_HEADPathServedByCore` | (ABO, fake IdP, from F4; SAFETY-11) HEAD's start `GET /api/v1/auth/oauth/{provider}/start` reaches core's start handler through the whole core chain (`RouteInfo.Owner` `core`, Public, `RateAuth`), no gin handler serves it, and it answers as `GET /api/core/v1/auth/oidc/{provider}/start` does, one cell per `AppHandoff` rule of §4.7: no app fields → an ordinary web sign-in that completes at HEAD's callback; a listed `redirect_uri` (and, in its own cell, `callback`) of `audiobooth://oauth` with an S256 `code_challenge` → the callback calls `AppHandoff.Mint`, redirects to the app scheme with the code and the app's state, and no web session record exists; only one of the two → ordinary web sign-in; an unlisted or prefix-extended `redirect_uri` → inline 400 with no `Location` header; `code_challenge_method` `plain` → 400 |
 | `TestOIDC_AppHandoffMintsABSCode` | (ABO, fake IdP, from F4; SEC-2) one cell per control of §4.7's hand-off: both `redirect_uri` (or `callback`) and `code_challenge` present → the callback calls `AppHandoff.Mint`, redirects to the app scheme with the code and the app's state, and no web session record exists; only one of them → ordinary web sign-in; an unlisted, prefix-extended or userinfo-bearing `redirect_uri` → inline 400 with no `Location` header; `code_challenge_method` `plain` or missing → 400; the code redeems once at the ABS route `/auth/openid/callback` and is refused after the user's epoch is bumped (port of HEAD's `internal/server/oauth_app_code_epoch_integration_test.go`); a `SignInRestricted` user gets no code |
-| `TestCompat_ABSLoginHonoursRestrictions` | (ABO, SEC-1) through `Deps.AuthCompat` only: the ABS password login, an ABS JWT, an `abk_` key and the Cloudflare Access login path, each against a `SignInRestricted` user, a `PasswordResetRequired` user (password, JWT and Cloudflare paths) and a `needs_confirmation` key (key path) → refused; a JWT or Cloudflare call from a source whose throttle is spent → refused, and each refused `PrincipalFor` call counts against its source; a good password is throttled with web logins and rehashed from bcrypt; books' module holds no `*auth.Service` (archtest) |
+| `TestCompat_ABSLoginHonoursRestrictions` | (ABO, SEC-1) through `Deps.AuthCompat` only: the ABS password login, an ABS JWT, an `abk_` key and the Cloudflare Access login path, each against a `SignInRestricted` user, a `PasswordResetRequired` user (password, JWT and Cloudflare paths) and a `needs_confirmation` key (key path) → refused; a JWT or Cloudflare call from a source whose throttle is spent → refused; a refused `PrincipalFor` call records no failure (30 stale-epoch JWT calls from one source, then the same source's password login succeeds, and a wrong password still counts); a good password is throttled with web logins and rehashed from bcrypt; books' module holds no `*auth.Service` (archtest) |
 | `TestAuthOff_CredentialMetadataNeedsUser` | (SEC-3) auth disabled: `GET /me`, `/me/sessions`, `/me/api-keys`, `/api-keys`, `/api-keys/{id}`, `/users/{id}/sessions`, `/users/{id}/api-keys`, `/audit` and `/audit/export` → 401 `authentication_required`, nothing listed |
 | `TestFirstRun_OnlyPublicAndSetupReachable` | zero users: every non-Public route 401 |
 | `TestSetup_RequiresBootstrapToken` / `TestSetup_LoopbackExceptionRefusesForwarded` | loopback peer with a forwarding header, or a trusted-proxy peer, is not local (SEC-30) |
@@ -1607,9 +1611,10 @@ step's dry-run report) and never dropped in silence (05-rbac §6.3); identity ro
 is never quarantined: an account imported without its keys, or keys without their account, is worse than
 a refused upgrade. The gate is the **cutover preflight**: read-only, writing nothing, run before the
 pre-migration checkpoint and before M7, with the free-space headroom check (06 §6.5.1 P4 (a), 05-storage
-§5S.3.13). It runs only on a store whose cutover has not started: no open checkpoint for this cutover,
-no cutover-step progress record, and levels below the first cutover step (05-storage §5S.3.13, §5S.4
-step 5a). A boot that resumes a started cutover skips it (SAFETY-1): after a crash between M3's user
+§5S.3.13). It runs only on a store whose cutover has not started. The cutover has started when books' level has
+reached M7's target or any cutover step has a progress record in `c/storage/dm/`; the preflight runs if
+and only if it has not started, and checkpoint reuse is not part of that condition (05-storage §5S.3.13
+"When", §5S.4 step 5a). A boot that resumes a started cutover skips it (SAFETY-1): after a crash between M3's user
 chunk and its key chunk the users are already under `c/auth/user/` and gone from `u:`, so the preflight
 would report live keys as orphans. M3 resumes from its chunk marker instead, and its own defensive check
 applies only to rows not yet imported (a key whose user an earlier chunk imported finds that user in the
@@ -2074,3 +2079,4 @@ D10–D12 revision (2026-11-04):
 Round 13 (2026-11-04), by round-13 ruling: R1 (F2 registers `core.auth`), R2/CONFORM-1, R8/D13 (cutover preflight gate, `storage cutover-blockers`, no identity quarantine; tests are 05-storage's `TestCutoverStopsOnUnconvertibleIdentity` and `TestCutoverRefusedWhileMergeInProgress`), D13/DATA-4 (merge refusal, permanent merges), R18/SEC-1 (`auth.Compat`), R19/SEC-2 (`MethodSpec.AppHandoff`, `OIDCAppHandoff`; HEAD start path deleted, reversed in round 14), R20/SEC-3, R21/SEC-5, R22 SEC-6, SEC-7, SEC-10, SEC-11, CONFORM-12, CONFORM-13, DATA-14. Follow-up: §4.11 cites 05-rbac §4.11's auth-off evaluation rule (no `settings.manage` exception).
 
 Round 14 (2026-11-05): V22 (HEAD's OAuth start path `/api/v1/auth/oauth/{provider}/start` kept at its exact pattern as the second `CoreExactPatterns()` entry, served by core's start handler with the `AppHandoff` rules; the "deleted, no alias" text, its release-note line and the 404 test cell removed; `TestOAuthStart_HEADPathServedByCore` added; §3.2, §4.7, §4.13, §10), V1 (the cutover preflight runs only on a store whose cutover has not started; a resumed cutover relies on M3's check over rows not yet imported; §6, §11), V6 (`list` prints keys and reasons, `list --out` writes raw row values with a credential-hash warning; §11), V21 (`Compat.PrincipalFor` refuses `PasswordResetRequired`, takes `ClientInfo` and goes through core's throttle; §3.1, §4.9, §4.10, §6, §10), V23 (the round-13 history entry names its IDs as round-13 rulings).
+Round 15 (2026-11-05): W2 (`Compat.PrincipalFor` refuses a call from a throttled source with `ErrThrottled` but records no throttle failure for its own refusals on status, epoch, `SignInRestricted` or `PasswordResetRequired`; only failed credential checks, a wrong password or an invalid key, count, as at HEAD; the `Compat` comment, §4.9, the §4.10 paragraph and the `TestCompat_ABSLoginHonoursRestrictions` cell with 30 stale-epoch JWT calls followed by a successful password login from the same source), W4 (§11: the cutover has started when books' level has reached M7's target or any cutover step has a progress record in `c/storage/dm/`; the preflight runs if and only if it has not started; checkpoint reuse is not part of the condition). W3, W5-W10 checked: this file states none of them.
