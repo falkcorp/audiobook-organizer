@@ -1,6 +1,7 @@
 // file: web/tests/e2e/settings-ai-persistence.spec.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: f1e2d3c4-b5a6-7890-abcd-123456789abc
+// last-edited: 2026-11-05
 
 import { test, expect, type Page } from '@playwright/test';
 import { setupMockApi } from './utils/test-helpers';
@@ -167,14 +168,14 @@ test.describe('AI Backends (TASK-11)', () => {
 });
 
 test.describe('Settings Tab Persistence', () => {
-  test('preserves active tab via URL hash on reload', async ({ page }) => {
+  test('preserves active tab via ?tab= on reload', async ({ page }) => {
     await openSettings(page);
 
     // Click Metadata tab
     await page.getByRole('tab', { name: 'Metadata' }).click();
 
-    // URL should have #metadata hash
-    await expect(page).toHaveURL(/#metadata/);
+    // URL should carry ?tab=metadata (legacy #slug links are still read)
+    await expect(page).toHaveURL(/[?&]tab=metadata(&|$)/);
 
     // Reload
     await page.reload();
