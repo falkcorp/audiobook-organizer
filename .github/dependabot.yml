@@ -1,7 +1,7 @@
 # file: .github/dependabot.yml
-# version: 1.4.0
+# version: 1.4.1
 # guid: 9f416cf7-2df6-4a47-93b9-630339256aec
-# last-edited: 2026-09-22
+# last-edited: 2026-11-05
 
 version: 2
 
@@ -27,11 +27,6 @@ updates:
     multi-ecosystem-group: dependencies
     labels:
       - containers
-    ignore:
-      # Go 1.27 does not compile this repository. Continue accepting patch and
-      # digest updates for 1.26 while blocking incompatible toolchain upgrades.
-      - dependency-name: "golang"
-        versions: [">=1.27"]
 
   # Github Actions
   - package-ecosystem: github-actions
@@ -77,16 +72,6 @@ updates:
       - dependency-name: "*"
         update-types:
           - version-update:semver-major
-      # Hard-pin the build toolchain. vite 8 (rolldown bundler) is incompatible
-      # with this React 18 + MUI v5 + emotion app — it crashed every page with
-      # React error #130 (see CHANGELOG 2026-06-12). These use `versions` ranges
-      # (not update-types) so they ALSO block dependabot SECURITY updates from
-      # jumping the major, which is how the vite 8 bump slipped in originally.
-      # Remove once the rolldown #130 incompatibility is resolved.
-      - dependency-name: "vite"
-        versions: [">=8.0.0"]
-      - dependency-name: "@vitejs/plugin-react"
-        versions: [">=5.0.0"]
       # Hard-pin jsdom. 30.1.0 broke MUI's FocusTrap unmount path: restoring
       # focus throws `nodeToRestore.current.focus is not a function`, which
       # fails every test that opens and closes a Dialog. It turned main red at

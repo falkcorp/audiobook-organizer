@@ -1,7 +1,7 @@
 # file: .woodpecker/test-server-scanner.yaml
-# version: 2.5.0
+# version: 2.5.1
 # guid: 7a2d4e81-0c63-4f9b-b5e2-9d1f3a6c8e27
-# last-edited: 2026-10-15
+# last-edited: 2026-11-05
 #
 # `make ci` test-short, part 2 of 3: internal/server, internal/scanner and
 # internal/server/handlers/abs, each as shard processes
@@ -41,7 +41,7 @@ steps:
     # container image; the step runs on the host with the agent's PATH.
     image: bash
     environment:
-      GOTOOLCHAIN: go1.27.2
+      GOTOOLCHAIN: go1.27.3
       # Every pipeline clones into a new random workdir
       # (woodpecker-local-<n>), and without -trimpath Go keys each package's
       # cache entry on its directory: nothing was ever reused and the cache

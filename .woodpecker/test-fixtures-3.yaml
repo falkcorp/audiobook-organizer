@@ -1,7 +1,7 @@
 # file: .woodpecker/test-fixtures-3.yaml
-# version: 1.0.2
+# version: 1.0.3
 # guid: 13014a42-ab00-4738-8bc3-4e5be21eeb6c
-# last-edited: 2026-10-29
+# last-edited: 2026-11-05
 #
 # Shard 3 of 3 of the tests that -short skips, run WITHOUT -short and with
 # -race: the mirror of ci.yml's fixture-tests job (matrix shard 3/3). The
@@ -58,7 +58,7 @@ steps:
     # container image; the step runs on the host with the agent's PATH.
     image: bash
     environment:
-      GOTOOLCHAIN: go1.27.2
+      GOTOOLCHAIN: go1.27.3
       # Every pipeline clones into a new random workdir
       # (woodpecker-local-<n>), and without -trimpath Go keys each package's
       # cache entry on its directory: nothing was ever reused and the cache
