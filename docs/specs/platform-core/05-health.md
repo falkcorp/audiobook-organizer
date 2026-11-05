@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.13.5 -->
+<!-- version: 1.13.6 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -129,10 +129,10 @@ type ComponentState struct {
 
 `tasks.ReadySignal` is `health.ComponentID`; `Common.Ready` defaults to `{"core.storage"}`; the
 books warm-up becomes component `books.memdb` (Readiness, not Critical) so book-reading tasks wait
-on it exactly as they wait on the store warm-up today ([05-tasks](05-tasks.md) 5T.4): storage registers
-`core.storage` (engine ping), books registers `books.memdb` through `Registrar.Health` and pushes it through
-`Deps.Health`, so HEAD's warm-up gating (D44) has a source from the executor's first release. What lands when is in
-5H.10.
+on it exactly as they wait on the store warm-up today ([05-tasks](05-tasks.md) 5T.4): the kernel registers its own
+components `core.storage` (engine ping) and `core.secrets` kernel-side with the registry at F2, and books registers
+`books.memdb` through `Registrar.Health` and pushes it through `Deps.Health` at F5, so HEAD's warm-up gating (D44) has
+a source from the executor's first release. What lands when is in 5H.10.
 
 Core registers: `core.storage` (open + a cheap engine ping, replacing `CountAuthors`),
 `core.config`, `core.secrets`, `core.tasks` (executor running; Degraded when paused or a zombie cap
@@ -174,10 +174,12 @@ that R1 adds to HEAD's authenticated `GET /api/v1/system/status` (`settings.mana
 R1 also splits HEAD's one fixed-token source (`getDegraded`) in two: the tokens of the set above feed `/health`,
 and every token feeds that authenticated field. F2, the foundation PRs that open R2 dark (03 §3.8), lands the
 registry's token route: the readiness core of 5H.10 and its bridge into that split source. So the tokens F3 starts
-raising surface from F3's first boot: `storage_quarantine` on `core.storage` (05-storage §5S.3.13), whose
+raising surface from F3's first boot, on the kernel's own components, which the kernel registers kernel-side with
+that registry at F2 (no module handle is involved; the handles land at F5, 5H.10): `storage_quarantine` on `core.storage` (05-storage §5S.3.13), whose
 `orphaned_refs` field counts, per referencing books family, the books rows that reference a quarantined parent
 (`VerifyReport.OrphanedRefs`; DATA-2) and, like the token, appears only on authenticated endpoints, and
-`secrets_undecryptable` and `secrets_keyring_not_exported` on `core.secrets` (05-config §1.12.2, §2.4). Storage's
+`secrets_undecryptable` and `secrets_keyring_not_exported` on `core.secrets` (05-config §1.12.2, §2.4). Both components exist from F2, so
+no token waits for a registration. Storage's
 checkpoint tokens `storage_checkpoint_open`, `storage_checkpoint_retained` and `storage_checkpoint_mode` (a
 checkpoint directory or file is group- or world-accessible, and the token names it; SEC-9) (05-storage §5S.3.12)
 exist from R1, with the checkpoint sweeper, and travel the same authenticated route until F8. None of them is in
@@ -690,9 +692,9 @@ replaces it (06; 05-metrics owns the naming rule). HEAD emits none of these seri
 | Release | What of `health` exists | Why then |
 |---|---|---|
 | R1 | the flight recorder, rewritten onto a `*slog.Logger` (04 §8.1); `Supervisor` (`ExtendStart` behind `Deps.ExtendStart` and the stateless `app.ExtendStart`; `READY=1`/`STATUS=`/`STOPPING=1` from the kernel); the split of HEAD's fixed-token source and the authenticated `degraded` field of `GET /api/v1/system/status` (5H.3.1) | the flight recorder is a leaf with no ABO import; `internal/sdnotify` moves with the kernel lifecycle and all five importers are rewired then (04); R1's factory-reset and checkpoint tokens are posture tokens, which never reach `/health` (SEC-7) |
-| R2, foundation PRs (F2) | the readiness core, dark: `ComponentID`, `Result`, `Reporter`, `Reporters`, `Registry` (`Register`, `Ready`, `Wait`), with the registry's token route into HEAD's split token source (5H.3.1); the minimal owner registration of `core.diagnostics.export` and its interim backend interface `diagnostics.InterimExport` | F3's cutover raises `storage_quarantine`, `secrets_undecryptable` and `secrets_keyring_not_exported` from its first boot (IMPL-12), and F2 lands the tasks executor dark, which waits on `Ready` signals (03 §3.8) |
-| R2, tasks flip (F5) | `Registrar.Health` and `Deps.Health`, the components `core.storage` and `books.memdb`, and `core.diagnostics.export` registered on core's executor, running over the interim books backend that ABO's `main` sets in `app.Options.InterimBackends` | the tasks executor dispatches on `Ready` signals from its first live release (05-tasks 5T.4 step 2, COR4-8; 06 §6.4.10) |
-| R2, backup-health-metrics flip (F8) | everything else: `Snapshot`, the other components, the probes and `/api/core/v1/health`, the `/system/*` routes, the status topic, `Startup` and `Registrar.StartupSteps`, the watchdog ping, diagnostics (5H.3.5's bundle replaces the interim backend of `core.diagnostics.export`, and `app.Options.InterimBackends` is deleted), sysinfo; `/api/health` and `/api/v1/health` deleted, their callers switched in the same PR | 06 §6.4.10 lands `StartupSteps` and `Diagnostics` there, and every core service family moves in R2 |
+| R2, foundation PRs (F2) | the readiness core, dark: `ComponentID`, `Result`, `Reporter`, `Reporters`, `Registry` (`Register`, `Ready`, `Wait`), with the registry's token route into HEAD's split token source (5H.3.1); **the kernel's own components `core.storage` and `core.secrets`, registered kernel-side with the registry** (they need no module handle: the kernel holds the store and the keyring); the minimal owner registration of `core.diagnostics.export` and its interim backend interface `diagnostics.InterimExport` | F3's cutover raises `storage_quarantine`, `secrets_undecryptable` and `secrets_keyring_not_exported` from its first boot (IMPL-12), so the components that carry them must exist before F3; F2 also lands the tasks executor dark, which waits on `Ready` signals (03 §3.8) |
+| R2, tasks flip (F5) | `Registrar.Health` and `Deps.Health` (the module handles on F2's registry), the component `books.memdb`, and `core.diagnostics.export` registered on core's executor, running over the interim books backend that ABO's `main` sets in `app.Options.InterimBackends` | the tasks executor dispatches on `Ready` signals from its first live release (05-tasks 5T.4 step 2, COR4-8; 06 §6.4.10), and books' warm-up is the one readiness source a module registers |
+| R2, backup-health-metrics flip (F8) | everything else: `Snapshot`, the other components (every core component except `core.storage` and `core.secrets`, which F2 registers), the probes and `/api/core/v1/health`, the `/system/*` routes, the status topic, `Startup` and `Registrar.StartupSteps`, the watchdog ping, diagnostics (5H.3.5's bundle replaces the interim backend of `core.diagnostics.export`, and `app.Options.InterimBackends` is deleted), sysinfo; `/api/health` and `/api/v1/health` deleted, their callers switched in the same PR | 06 §6.4.10 lands `StartupSteps` and `Diagnostics` there, and every core service family moves in R2 |
 
 ## 5H.11 Open items
 
@@ -847,3 +849,5 @@ interim books backend `diagnostics.InterimExport` set through `app.Options.Inter
 (names from 05-tasks §5T.8.2).
 Also `storage_checkpoint_mode` and `storage_quarantine`'s `orphaned_refs` field listed as authenticated-only (SEC-9,
 DATA-2; names from 05-storage).
+
+Round 14 (2026-11-05): V13 (the kernel's own components `core.storage` and `core.secrets` register kernel-side with F2's registry, so the tokens F3 raises have a component to ride on; module handles `Registrar.Health` and `Deps.Health` and `books.memdb` stay at F5; 5H.3, 5H.3.1 and the 5H.10 landing table), V23 (checked: no bare round-13 ruling citation in this file).
