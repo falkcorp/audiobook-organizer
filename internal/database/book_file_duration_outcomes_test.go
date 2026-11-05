@@ -6,6 +6,7 @@
 package database
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -15,6 +16,8 @@ import (
 
 // TestDurationStateDerivesFromDurationOK walks the attempt count through the
 // ceiling on both BookFile and BookFileCore, which must agree at every step.
+//
+// Pins current behaviour (characterisation test, not a guard for a reported bug).
 func TestDurationStateDerivesFromDurationOK(t *testing.T) {
 	cases := []struct {
 		name string
@@ -42,6 +45,7 @@ func TestDurationStateDerivesFromDurationOK(t *testing.T) {
 	}
 }
 
+// Pins current behaviour (characterisation test, not a guard for a reported bug).
 func TestSetMeasuredDurationMarksStageDoneAndClearsFailures(t *testing.T) {
 	failed := ScanState{NeedsDeep: true, DurationOK: StageStatus{Attempts: 2, LastError: "probe returned 0s"}}
 	f := BookFile{ID: "f1", Scan: failed}
@@ -55,16 +59,36 @@ func TestSetMeasuredDurationMarksStageDoneAndClearsFailures(t *testing.T) {
 	require.Equal(t, DurationKnown, f.DurationState())
 }
 
-func TestSetMeasuredDurationRejectionKeepsFailureRecord(t *testing.T) {
-	rec := StageStatus{Attempts: 1, LastError: "exit status 1"}
-	f := BookFile{Scan: ScanState{DurationOK: rec}}
-	c := BookFileCore{Scan: ScanState{DurationOK: rec}}
-	require.Error(t, f.SetMeasuredDuration(0))
-	require.Error(t, c.SetMeasuredDuration(-3))
-	require.Equal(t, rec, f.Scan.DurationOK)
-	require.Equal(t, rec, c.Scan.DurationOK)
+// A rejected value must change NOTHING: neither a failure record nor a value
+// already measured. The check that fails is the order of writes in
+// SetMeasuredDuration (a stage or pointer written before validation).
+func TestSetMeasuredDurationRejectionChangesNothing(t *testing.T) {
+	rows := map[string]ScanState{
+		"failed row": {NeedsDeep: true, DurationOK: StageStatus{Attempts: 1, LastError: "exit status 1"}},
+		"known row":  {DurationOK: StageStatus{Done: true}},
+		"bare row":   {},
+	}
+	for name, scan := range rows {
+		for _, bad := range []int{0, -3} {
+			t.Run(name, func(t *testing.T) {
+				var dur *int
+				if name == "known row" {
+					dur = Secs(27000)
+				}
+				f := BookFile{Duration: dur, Scan: scan}
+				c := BookFileCore{Duration: dur, Scan: scan}
+				require.Error(t, f.SetMeasuredDuration(bad))
+				require.Error(t, c.SetMeasuredDuration(bad))
+				require.Equal(t, scan, f.Scan, "BookFile.Scan")
+				require.Equal(t, scan, c.Scan, "BookFileCore.Scan")
+				require.Same(t, dur, f.Duration, "BookFile.Duration pointer replaced")
+				require.Same(t, dur, c.Duration, "BookFileCore.Duration pointer replaced")
+			})
+		}
+	}
 }
 
+// Pins current behaviour (characterisation test, not a guard for a reported bug).
 func TestRecordDurationProbeFailureAgreesAcrossBookFileAndCore(t *testing.T) {
 	var f BookFile
 	var c BookFileCore
@@ -86,6 +110,7 @@ func TestRecordDurationProbeFailureAgreesAcrossBookFileAndCore(t *testing.T) {
 	require.False(t, IsDurationTimeoutError("exit status 1"))
 }
 
+// Pins current behaviour (characterisation test, not a guard for a reported bug).
 func TestRecordDurationProbeFailureEmptyMessageStillSaysWhy(t *testing.T) {
 	var f BookFile
 	f.RecordDurationProbeFailure("")
@@ -94,6 +119,8 @@ func TestRecordDurationProbeFailureEmptyMessageStillSaysWhy(t *testing.T) {
 }
 
 // A failed re-probe does not contradict a measurement: a Known row is left alone.
+//
+// Pins current behaviour (characterisation test, not a guard for a reported bug).
 func TestRecordDurationProbeFailureIgnoresKnownRow(t *testing.T) {
 	f := BookFile{Duration: Secs(900), Scan: ScanState{DurationOK: StageStatus{Done: true}}}
 	c := BookFileCore{Duration: Secs(900), Scan: ScanState{DurationOK: StageStatus{Done: true}}}
@@ -104,6 +131,7 @@ func TestRecordDurationProbeFailureIgnoresKnownRow(t *testing.T) {
 	require.Equal(t, 900, durtest.Sec(f.Duration))
 }
 
+// Pins current behaviour (characterisation test, not a guard for a reported bug).
 func TestResetDurationZeroesDurationOK(t *testing.T) {
 	scan := ScanState{NeedsDeep: true, Tagged: StageStatus{Done: true}, DurationOK: StageStatus{Attempts: 3, LastError: "x"}}
 	f := BookFile{Duration: nil, Scan: scan}
@@ -191,4 +219,170 @@ func TestUpsertReplacedFileFailureReplacesOldDurationStage(t *testing.T) {
 	require.Equal(t, StageStatus{Attempts: 1, LastError: "exit status 1"}, after.Scan.DurationOK)
 	require.True(t, after.Scan.NeedsDeep)
 	require.Equal(t, DurationProbeFailed, after.DurationState())
+}
+
+// S1: whether a replacement's DurationOK is "the caller's own record" is decided
+// by whether the caller SET it, not by comparing it with the stored value. A
+// replaced file that fails with exactly the text the old file's record carries
+// is still a fresh first failure of the new bytes.
+func TestUpsertReplacedFileFailureEqualToStoredRecordIsStillFresh(t *testing.T) {
+	s := openRescanStore(t)
+	book, err := s.CreateBook(&Book{Title: "Batman: Year One"})
+	require.NoError(t, err)
+	require.NoError(t, s.CreateBookFile(&BookFile{
+		BookID: book.ID, FilePath: "/lib/Year One/01.m4b", FileHash: "hash-old",
+		Scan: ScanState{DurationOK: StageStatus{Attempts: 1, LastError: "exit status 1"}},
+	}))
+
+	row := &BookFile{BookID: book.ID, FilePath: "/lib/Year One/01.m4b", FileHash: "hash-new"}
+	row.RecordDurationProbeFailure("exit status 1") // identical to the stored record
+	require.Equal(t, StageStatus{Attempts: 1, LastError: "exit status 1"}, row.Scan.DurationOK)
+	require.NoError(t, s.BatchUpsertScannedBookFiles([]ScannedBookFile{{File: row, Present: true}}))
+
+	after := onlyBookFile(t, s, book.ID)
+	require.Equal(t, 1, after.Scan.DurationOK.Attempts, "the replacement's failure was wiped as if it were the old record")
+	require.Equal(t, "exit status 1", after.Scan.DurationOK.LastError)
+	require.Equal(t, DurationProbeFailed, after.DurationState())
+}
+
+// The same replaced file with NO record of its own: the old file's record
+// (failed attempts or a measurement) describes bytes that are gone, and must not
+// be restored onto the replacement.
+func TestUpsertReplacedFileWithoutRecordDropsOldStage(t *testing.T) {
+	for name, old := range map[string]StageStatus{
+		"old failures": {Attempts: 2, LastError: "exit status 1"},
+		"old measured": {Done: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := openRescanStore(t)
+			book, err := s.CreateBook(&Book{Title: "Batman: Hush"})
+			require.NoError(t, err)
+			f := &BookFile{BookID: book.ID, FilePath: "/lib/Hush/01.m4b", FileHash: "hash-old", Scan: ScanState{NeedsDeep: true, DurationOK: old}}
+			if old.Done {
+				f.Duration = Secs(5400)
+			}
+			require.NoError(t, s.CreateBookFile(f))
+
+			row := &BookFile{BookID: book.ID, FilePath: "/lib/Hush/01.m4b", FileHash: "hash-new"}
+			require.NoError(t, s.BatchUpsertScannedBookFiles([]ScannedBookFile{{File: row, Present: true}}))
+
+			after := onlyBookFile(t, s, book.ID)
+			require.Nil(t, after.Duration)
+			require.Equal(t, StageStatus{}, after.Scan.DurationOK)
+			require.Equal(t, DurationUnprobed, after.DurationState())
+			require.True(t, after.Scan.NeedsDeep, "pipeline state is kept across a replacement")
+		})
+	}
+}
+
+// S2: a stored Duration and its stage record never disagree after a write.
+// Path 1: an upsert that carries a Duration but no DurationOK, over a stored row
+// with a failure record. Path 2: the scanner seeded the stored failure onto a
+// bare row, the probe failed again, and the merge kept the STORED Duration
+// because the hash did not change.
+func TestUpsertKnownDurationNeverSitsBesideAFailureRecord(t *testing.T) {
+	stale := StageStatus{Attempts: 2, LastError: "exit status 1"}
+	t.Run("upsert carries a Duration but no stage", func(t *testing.T) {
+		s := openRescanStore(t)
+		book, err := s.CreateBook(&Book{Title: "Batman: The Long Halloween"})
+		require.NoError(t, err)
+		require.NoError(t, s.CreateBookFile(&BookFile{
+			BookID: book.ID, FilePath: "/lib/TLH/01.m4b", FileHash: "hash-a", Scan: ScanState{DurationOK: stale},
+		}))
+		row := &BookFile{BookID: book.ID, FilePath: "/lib/TLH/01.m4b", FileHash: "hash-a", Duration: Secs(5400)}
+		require.NoError(t, s.BatchUpsertScannedBookFiles([]ScannedBookFile{{File: row, Present: true}}))
+
+		after := onlyBookFile(t, s, book.ID)
+		require.Equal(t, DurationKnown, after.DurationState())
+		require.Equal(t, StageStatus{Done: true}, after.Scan.DurationOK, "a value beside a stale failure record")
+	})
+	t.Run("seeded failure, stored Duration kept by the merge", func(t *testing.T) {
+		s := openRescanStore(t)
+		book, err := s.CreateBook(&Book{Title: "Batman: The Dark Knight Returns"})
+		require.NoError(t, err)
+		require.NoError(t, s.CreateBookFile(&BookFile{
+			BookID: book.ID, FilePath: "/lib/DKR/01.m4b", FileHash: "hash-a",
+			Duration: Secs(5400), Scan: ScanState{DurationOK: StageStatus{Done: true}},
+		}))
+		row := &BookFile{BookID: book.ID, FilePath: "/lib/DKR/01.m4b", FileHash: "hash-a"}
+		row.Scan.DurationOK = StageStatus{Done: true}   // seeded from the stored row
+		row.RecordDurationProbeFailure("exit status 1") // the re-probe failed
+		require.Equal(t, 1, row.Scan.DurationOK.Attempts)
+		require.NoError(t, s.BatchUpsertScannedBookFiles([]ScannedBookFile{{File: row, Present: true}}))
+
+		after := onlyBookFile(t, s, book.ID)
+		require.Equal(t, 5400, durtest.Sec(after.Duration), "the stored measurement is kept")
+		require.Equal(t, StageStatus{Done: true}, after.Scan.DurationOK, "the failure record beside the kept value")
+		require.Equal(t, DurationKnown, after.DurationState())
+	})
+	t.Run("full-row replace with a Duration and no stage", func(t *testing.T) {
+		s := openRescanStore(t)
+		book, err := s.CreateBook(&Book{Title: "Batman: Earth One"})
+		require.NoError(t, err)
+		f := &BookFile{BookID: book.ID, FilePath: "/lib/E1/01.m4b", FileHash: "hash-a", Scan: ScanState{DurationOK: stale}}
+		require.NoError(t, s.CreateBookFile(f))
+		cur := onlyBookFile(t, s, book.ID)
+		cur.Duration = Secs(60)
+		cur.Scan.DurationOK = StageStatus{}
+		require.NoError(t, s.UpdateBookFile(cur.ID, &cur))
+		require.Equal(t, StageStatus{Done: true}, onlyBookFile(t, s, book.ID).Scan.DurationOK)
+	})
+}
+
+// N1: every ScanState field is classified in scanStateFieldClasses, the way
+// every BookFile field is in bookFileFieldClasses, so a stage added later must
+// say what invalidates it.
+func TestScanStateFieldClasses_EveryFieldClassified(t *testing.T) {
+	typ := reflect.TypeFor[ScanState]()
+	fields := map[string]bool{}
+	for field := range typ.Fields() {
+		fields[field.Name] = true
+		if _, ok := scanStateFieldClasses[field.Name]; !ok {
+			t.Errorf("ScanState.%s is not classified in scanStateFieldClasses (internal/database/bookfile_merge.go): "+
+				"decide whether a changed file's upsert keeps it (derivedNone), drops it with the bytes (derivedBytes) or with the audio (derivedAudio)", field.Name)
+		}
+	}
+	for name := range scanStateFieldClasses {
+		if !fields[name] {
+			t.Errorf("scanStateFieldClasses names %q, which is not a ScanState field", name)
+		}
+	}
+}
+
+// restoreScanFields drives off the table: a zero incoming field is restored
+// from the stored row unless its derivation fired, and a field the caller set
+// is never replaced.
+func TestRestoreScanFields_FollowsTheClassTable(t *testing.T) {
+	var stored ScanState
+	fillValueNonZero(t, reflect.ValueOf(&stored).Elem(), "ScanState")
+	verdicts := map[string]bookFileContentVerdict{
+		"unchanged":     {},
+		"bytes changed": {bytesChanged: true},
+		"audio changed": {bytesChanged: true, audioChanged: true},
+	}
+	for vname, v := range verdicts {
+		t.Run(vname, func(t *testing.T) {
+			var in ScanState
+			restoreScanFields(&in, &stored, v)
+			got := reflect.ValueOf(in)
+			want := reflect.ValueOf(stored)
+			for i, derived := range scanStateDerivationByIndex {
+				name := got.Type().Field(i).Name
+				dropped := (derived == derivedBytes && v.bytesChanged) || (derived == derivedAudio && v.audioChanged)
+				if dropped {
+					require.True(t, got.Field(i).IsZero(), "%s must not be restored (%s)", name, vname)
+				} else {
+					require.True(t, reflect.DeepEqual(got.Field(i).Interface(), want.Field(i).Interface()), "%s must be restored (%s)", name, vname)
+				}
+			}
+		})
+	}
+	t.Run("a field the caller set is never replaced", func(t *testing.T) {
+		in := ScanState{FPWindowed: StageStatus{Attempts: 1, LastError: "mine"}}
+		restoreScanFields(&in, &stored, bookFileContentVerdict{bytesChanged: true, audioChanged: true})
+		require.Equal(t, StageStatus{Attempts: 1, LastError: "mine"}, in.FPWindowed)
+		in = ScanState{FPWindowed: StageStatus{Attempts: 1, LastError: "mine"}}
+		restoreScanFields(&in, &stored, bookFileContentVerdict{})
+		require.Equal(t, StageStatus{Attempts: 1, LastError: "mine"}, in.FPWindowed)
+	})
 }

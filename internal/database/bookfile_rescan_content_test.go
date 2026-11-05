@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_rescan_content_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 3b8e1f52-6c4d-4a97-9e20-7d5b1c8a4f63
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package database
 
@@ -325,15 +325,8 @@ func expectAfterChange(t *testing.T, before, row, after *BookFile, audioDropped 
 		switch d := bookFileFieldClasses[name].derived; {
 		case d == derivedBytes, d == derivedAudio && audioDropped:
 			want = rv.Field(i).Interface()
-		case name == "Scan" && audioDropped:
-			// Scan is kept, except the duration stage: it described the OLD
-			// file's measurement and is reset with the Duration it belongs to,
-			// unless the row measured a new Duration and the stored stage is Done.
-			kept := before.Scan
-			if row.Duration == nil || !before.Scan.DurationOK.Done {
-				kept.DurationOK = StageStatus{}
-			}
-			want = kept
+		case name == "Scan":
+			want = expectedScanAfterChange(before, row, audioDropped)
 		}
 		if !reflect.DeepEqual(want, av.Field(i).Interface()) {
 			t.Errorf("%s after a changed-hash rescan: got %v, want %v", name, av.Field(i).Interface(), want)
@@ -347,6 +340,29 @@ func expectAfterChange(t *testing.T, before, row, after *BookFile, audioDropped 
 	if after.FileHash != row.FileHash {
 		t.Errorf("FileHash = %q, want the new %q", after.FileHash, row.FileHash)
 	}
+}
+
+// expectedScanAfterChange is the Scan an upsert leaves, by scanStateFieldClasses:
+// a stage whose derivation fired takes the row's value (zero unless supplied),
+// every other stage keeps the stored one, and a Duration that is present always
+// carries DurationOK{Done:true}.
+func expectedScanAfterChange(before, row *BookFile, audioDropped bool) ScanState {
+	want := before.Scan
+	w, r := reflect.ValueOf(&want).Elem(), reflect.ValueOf(row.Scan)
+	for i := range w.NumField() {
+		d := scanStateFieldClasses[w.Type().Field(i).Name]
+		if d == derivedBytes || (d == derivedAudio && audioDropped) {
+			w.Field(i).Set(r.Field(i))
+		}
+	}
+	dur := before.Duration
+	if audioDropped {
+		dur = row.Duration
+	}
+	if dur != nil {
+		want.DurationOK = StageStatus{Done: true}
+	}
+	return want
 }
 
 // Review round 3, item 1: a changed hash with no duration to compare is a file

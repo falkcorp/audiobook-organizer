@@ -234,28 +234,37 @@ type segmentFailureWriter interface {
 // recordSegmentProbeFailures writes the failed attempts collected for one book.
 // Each row is read fresh under its write lock and the attempt is added to the
 // STORED count, so a row that failed on an earlier run accumulates toward the
-// ceiling instead of restarting at one; a row that has meanwhile been measured
-// is skipped.
+// ceiling instead of restarting at one. A row is left alone when it is no longer
+// the row that was probed: it has meanwhile been measured, moved to another
+// path, rewritten with other bytes (a failure of the old file says nothing about
+// the new one), or marked missing.
 //
-// The writes defer the book's aggregate recompute (a book of 1,494 segments on
-// a stalled mount would otherwise recompute 1,494 times over 1,494 rows each,
-// the 2026-09-19 incident) and recompute ONCE after the book's rows, which also
-// raises the one change notification the memdb read path keys on. Liveness is
+// The writes defer the aggregate recompute and run none of their own. A failure
+// record changes nothing an aggregate reads (no Duration, size or count moves),
+// and the per-row memdb upsert the deferred write still does is what keeps the
+// read path current; the book's one recompute comes from UpdateBookFiles for the
+// segments that were measured. (Going through ModifyBookFile instead recomputed
+// the whole book per row: a book of 1,494 segments on a stalled mount recomputes
+// 1,494 times over 1,494 rows each, the 2026-09-19 incident.) Liveness is
 // stamped per row and ctx is checked between rows, as the UpdateBookFiles path
 // does. Returns how many rows were written and how many writes failed.
-func recordSegmentProbeFailures(ctx context.Context, store segmentFailureWriter, recompute func(bookID string) error,
-	reporter sdk.Reporter, bookID string, failed []database.BookFile) (written, errs int, firstErr error) {
+func recordSegmentProbeFailures(ctx context.Context, store segmentFailureWriter, reporter sdk.Reporter,
+	failed []database.BookFile) (written, errs int, firstErr error) {
 	for i := range failed {
 		if err := ctx.Err(); err != nil {
 			return written, errs, err
 		}
 		f := failed[i]
 		lastErr := f.Scan.DurationOK.LastError
-		row, err := store.ModifyBookFileDeferAggregates(f.BookID, f.ID, func(cur *database.BookFile) error {
-			if cur.Duration != nil {
+		// A skipped callback returns the row as read with a nil error, so
+		// whether a write happened is the callback's to say.
+		wrote := false
+		_, err := store.ModifyBookFileDeferAggregates(f.BookID, f.ID, func(cur *database.BookFile) error {
+			if cur.Duration != nil || cur.Missing || cur.FilePath != f.FilePath || cur.FileHash != f.FileHash {
 				return database.ErrSkipBookFileWrite
 			}
 			cur.RecordDurationProbeFailure(lastErr)
+			wrote = true
 			return nil
 		})
 		registry.TouchLiveness(reporter)
@@ -265,16 +274,8 @@ func recordSegmentProbeFailures(ctx context.Context, store segmentFailureWriter,
 			if firstErr == nil {
 				firstErr = err
 			}
-		case row != nil:
+		case wrote:
 			written++
-		}
-	}
-	if written > 0 {
-		if err := recompute(bookID); err != nil {
-			errs++
-			if firstErr == nil {
-				firstErr = err
-			}
 		}
 	}
 	return written, errs, firstErr
@@ -539,6 +540,14 @@ func processBookForReextractMode(
 				// durations measured by the scanner and can be trusted without ffprobe.
 				segDur = fSec
 				res.usedStoredDur = true
+			case f.DurationState() == database.DurationUnreadable:
+				// At the attempt ceiling: probing it again would only add attempts
+				// past the ceiling (and a stalled mount's worth of wall clock). It
+				// stays unreadable until an explicit ResetDuration. Unresolved, so
+				// the book's total is withheld exactly as for any unmeasured
+				// segment; it is not a new read failure, so nothing is recorded.
+				res.unresolved++
+				continue
 			default:
 				usedFfprobe = true
 				info, mErr := extractWithTimeout(ctx, f.FilePath)
@@ -899,7 +908,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 					"book %s: the store cannot defer aggregates; %d probe failure(s) not recorded", res.book.ID, len(res.failedBFs)))
 			} else {
-				_, nErr, fErr := recordSegmentProbeFailures(ctx, deferred, store.RecomputeBookAggregates, reporter, res.book.ID, res.failedBFs)
+				_, nErr, fErr := recordSegmentProbeFailures(ctx, deferred, reporter, res.failedBFs)
 				if nErr > 0 || fErr != nil {
 					if ctx.Err() != nil {
 						return ctx.Err()

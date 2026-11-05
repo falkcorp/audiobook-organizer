@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_merge_duration_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b8e5d73-1c42-4f96-a7d8-93e4f6c2a105
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package database
 
@@ -47,7 +47,8 @@ func TestMergeNilDurationKeepsStoredWhenBytesUnchanged(t *testing.T) {
 // with the other audio-derived fields, and the stored duration stage (a
 // measurement of the old file) is reset with it, whether the incoming row is
 // the scanner's bare row or a read-modify-write copy of the stored one. The
-// other stages keep their stored state.
+// pipeline stages keep their stored state; the audio-derived ones (FPWindowed,
+// FPFull) go with the audio.
 func TestMergeAudioChangedResetsDurationOK(t *testing.T) {
 	cases := map[string]*BookFile{
 		"scanner bare row": {ID: "f1", BookID: "b1", FileHash: "hash-new"},
@@ -66,7 +67,14 @@ func TestMergeAudioChangedResetsDurationOK(t *testing.T) {
 			require.Equal(t, StageStatus{}, in.Scan.DurationOK, "the old file's measurement must not describe the replacement")
 			require.True(t, in.Scan.Tagged.Done, "other stages are kept")
 			require.True(t, in.Scan.NeedsDeep)
-			require.Equal(t, StageStatus{Done: true, Attempts: 1, LastError: "window"}, in.Scan.FPWindowed)
+			if name == "scanner bare row" {
+				require.Equal(t, StageStatus{}, in.Scan.FPWindowed, "the windowed fingerprint is audio-derived and went with the audio")
+			} else {
+				// A caller that supplies the stage itself (here a copy of the stored
+				// one) has set it: an upsert restores what is missing, it does not
+				// second-guess what is present.
+				require.Equal(t, StageStatus{Done: true, Attempts: 1, LastError: "window"}, in.Scan.FPWindowed)
+			}
 		})
 	}
 }
@@ -81,7 +89,7 @@ func TestMergeAudioChangedResetsFailedDurationAttempts(t *testing.T) {
 	v := mergeBookFileFromStored(in, stored, bookFileWriteUpsert, presenceSeen)
 	require.True(t, v.audioChanged)
 	require.Equal(t, 500, durtest.Sec(in.Duration))
-	require.Equal(t, StageStatus{}, in.Scan.DurationOK)
+	require.Equal(t, StageStatus{Done: true}, in.Scan.DurationOK, "the old failures must not ride along with the new value")
 }
 
 // A replacement the incoming row measured keeps a stored Done: Done beside a

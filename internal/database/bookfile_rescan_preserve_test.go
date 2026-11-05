@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_rescan_preserve_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 65fa9323-39c2-4f89-a480-e74c18c02036
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package database
 
@@ -19,6 +19,10 @@ import (
 func fillBookFileNonZero(t *testing.T, bf *BookFile) {
 	t.Helper()
 	fillValueNonZero(t, reflect.ValueOf(bf).Elem(), "BookFile")
+	// The fill set a Duration, and a row with a Duration carries exactly
+	// DurationOK{Done:true} (the merge enforces it); a failure record beside the
+	// value would be rewritten by every write and fail the survival checks.
+	bf.Scan.DurationOK = StageStatus{Done: true}
 }
 
 func fillValueNonZero(t *testing.T, v reflect.Value, path string) {

@@ -368,7 +368,10 @@ func mergeBookFileFromStored(incoming, stored *BookFile, mode bookFileWriteMode,
 	incomingHadPrint := len(incoming.AcoustIDFingerprint) > 0
 	// Whether the incoming row measured the duration itself, before the loop
 	// restores the stored one into it; the audio-changed reset below needs it.
-	incomingMeasured := incoming.Duration != nil
+	// The Scan the caller supplied, before the loop below restores the whole
+	// stored one into a wholly-zero Scan: which stages the caller itself set is
+	// what the field-wise restore needs (restoreScanFields).
+	incomingScan := incoming.Scan
 	in := reflect.ValueOf(incoming).Elem()
 	st := reflect.ValueOf(stored).Elem()
 	for i, rule := range bookFileRulesByIndex {
@@ -403,30 +406,30 @@ func mergeBookFileFromStored(incoming, stored *BookFile, mode bookFileWriteMode,
 	// The loop above restores Scan only when the incoming one is wholly zero, so
 	// a row that sets one stage (the duration probe's DurationOK) would replace
 	// the stored NeedsDeep, HashStale, Attempts and every other stage with
-	// zeros. Restore it field by field instead: a zero sub-field is "not
-	// provided", exactly as a zero top-level field is. A stage the incoming row
-	// does set wins whole, so a caller that carries the stored attempt count
-	// forward and adds one (RecordDurationProbeFailure) accumulates; the merge
-	// never sums attempts itself, because a fresh failure is indistinguishable
-	// here from a read-modify-write copy that merely carries the stored one.
+	// zeros. On an upsert Scan is therefore restored field by field instead
+	// (restoreScanFields), from the Scan the caller supplied.
 	if upsert {
-		restoreZeroScanFields(&incoming.Scan, &stored.Scan)
+		// A Done record with no Duration to describe is no record at all: a
+		// read-modify-write copy of the stored row whose Duration the audio
+		// change dropped. The caller did not measure the replacement, so it
+		// has not "set" the stage. (A failure record, Attempts > 0, is the
+		// caller's own however it compares with the stored one.)
+		if v.audioChanged && incoming.Duration == nil && incomingScan.DurationOK.Done {
+			incomingScan.DurationOK = StageStatus{}
+		}
+		incoming.Scan = incomingScan
+		restoreScanFields(&incoming.Scan, &stored.Scan, v)
 	}
-	// Scan is derivedNone, so the loop above kept the stored duration stage on
-	// the incoming row: restored it into a bare Scan (the scanner's rows carry
-	// none), or left a read-modify-write caller's copy of it in place. When the
-	// audio changed, Duration was dropped with the other derivedAudio fields, so
-	// a stored DurationOK (Done after a measurement, or failed attempts) would
-	// describe a file that is gone: the replacement would read as measured with
-	// no value, or as already failed. Reset the stage when it is the stored one.
-	//
-	// Two things it keeps. A DurationOK that differs from the stored one is the
-	// caller's own record about the new file. And a stored Done that sits beside
-	// a Duration the incoming row measured is still true of the new file, so it
-	// stays; a stored failure never is, nor is a Done with nothing measured.
-	if v.audioChanged && incoming.Scan.DurationOK == stored.Scan.DurationOK &&
-		(!incomingMeasured || !stored.Scan.DurationOK.Done) {
-		incoming.Scan.DurationOK = StageStatus{}
+	// A Duration and its stage record must agree. Known rows carry
+	// DurationOK{Done:true} and nothing else: attempts and an error beside a
+	// value would be a failure record for a probe that has since succeeded, and
+	// Done=false beside a value would read as "not measured". Both are
+	// reachable: an upsert that carries a Duration but no stage, and a row the
+	// scanner seeded with the stored failure, probed, and whose stored Duration
+	// the merge then kept because the audio did not change. The merge is the one
+	// place every write path passes, so it is where the pair is made consistent.
+	if incoming.Duration != nil {
+		incoming.Scan.DurationOK = StageStatus{Done: true}
 	}
 	// The whole-file print and its encoding version are ONE unit: the version
 	// must describe the bytes actually written. Per-field preservation could
@@ -443,13 +446,67 @@ func mergeBookFileFromStored(incoming, stored *BookFile, mode bookFileWriteMode,
 	return v
 }
 
-// restoreZeroScanFields copies every ScanState field that is zero in incoming
-// from stored. It walks the struct by reflection so a stage added to ScanState
-// later is covered without touching this function.
-func restoreZeroScanFields(incoming, stored *ScanState) {
+// scanStateFieldClasses says what each ScanState field is derived from, which
+// decides when restoreScanFields stops restoring it on an upsert that carries
+// different content, exactly as bookFileFieldClasses.derived does for BookFile's
+// own fields. TestScanStateFieldClasses_EveryFieldClassified fails naming any
+// field missing here, so a stage added to ScanState must say what invalidates it.
+//
+//   - derivedNone: pipeline state about the row (what the deep pass still owes,
+//     how often it failed). Kept across any content change.
+//   - derivedBytes: describes the bytes as a whole; dropped when the hash changed.
+//   - derivedAudio: describes the decoded audio (duration, fingerprints); dropped
+//     when the audio changed, as Duration and AcoustIDFingerprint are.
+var scanStateFieldClasses = map[string]bookFileDerivation{
+	"NeedsDeep": derivedNone,
+	"HashStale": derivedNone, // is itself the "bytes changed" marker
+	"HeaderBad": derivedNone,
+	"Attempts":  derivedNone,
+	"LastError": derivedNone,
+	// Tagged is the tag header of the bytes it was read from, so it will want
+	// derivedBytes the day a writer sets it; nothing does yet, and the choice is
+	// made with that writer, not before it.
+	"Tagged":     derivedNone,
+	"DurationOK": derivedAudio,
+	"FPWindowed": derivedAudio,
+	"FPFull":     derivedAudio,
+}
+
+var scanStateDerivationByIndex = func() []bookFileDerivation {
+	t := reflect.TypeFor[ScanState]()
+	out := make([]bookFileDerivation, t.NumField())
+	for i := range out {
+		out[i] = scanStateFieldClasses[t.Field(i).Name] // unclassified: derivedNone, and the test fails
+	}
+	return out
+}()
+
+// restoreScanFields fills the ScanState fields the incoming row did not set
+// from the stored row, on an upsert. A zero sub-field is "not provided",
+// exactly as a zero top-level field is. A field the caller DID set wins whole,
+// so a caller that carries the stored attempt count forward and adds one
+// (RecordDurationProbeFailure) accumulates; the merge never sums attempts
+// itself, because a fresh failure is indistinguishable here from a copy that
+// merely carries the stored count. Whether the caller set the field is read
+// from the row as the caller built it (the incoming argument), never inferred
+// by comparing it with the stored value: a replaced file that fails in exactly
+// the way the old file did is still a fresh record.
+//
+// A field whose derivation fired (derivedBytes on a changed hash, derivedAudio
+// on changed audio) is NOT restored, so the replacement starts that stage clean.
+//
+// The rule that follows from "zero means not provided": an upsert cannot clear
+// a Scan sub-field. A clear that must land goes through UpdateBookFile (the
+// full-row write; ScanState is not restored there) or PatchBookFileFields. A
+// stage added to ScanState needs its row in scanStateFieldClasses, which is what
+// decides how it is invalidated; this function needs no change for it.
+func restoreScanFields(incoming, stored *ScanState, v bookFileContentVerdict) {
 	in := reflect.ValueOf(incoming).Elem()
 	st := reflect.ValueOf(stored).Elem()
-	for i := 0; i < in.NumField(); i++ {
+	for i, derived := range scanStateDerivationByIndex {
+		if (derived == derivedBytes && v.bytesChanged) || (derived == derivedAudio && v.audioChanged) {
+			continue
+		}
 		if f := in.Field(i); f.IsZero() {
 			f.Set(st.Field(i))
 		}
