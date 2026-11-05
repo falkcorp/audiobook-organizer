@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.29 -->
+<!-- version: 10.78.30 -->
 <!-- version: 10.78.24 -->
 <!-- version: 10.78.23 -->
 <!-- version: 10.78.24 -->
@@ -49,7 +49,7 @@ into one of the curated sections below, is a normal direct edit.
         offers "sqlite" (`raw/04-database-store.md` §1, `raw/05-storage.md` §4.2).
   - [ ] `RunItems` doc promises the first error under `ErrModeFail` but parallel mode returns
         `errors.Join` (`raw/06-tasks-ops.md` §2).
-  - [ ] **SECURITY (hotfix, early fix 1):** session tokens exposed by `GET /api/v1/auth/sessions`. Implement 05-authn §11.1 item 1 exactly
+  - [x] **SECURITY (hotfix, early fix 1):** session tokens exposed by `GET /api/v1/auth/sessions`. Implement 05-authn §11.1 item 1 exactly
         (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
   - [x] **SECURITY (hotfix, early fix 2):** a scoped API key can mint an unscoped key (including the nil/empty caller set). Implement 05-authn §11.1 item 2 exactly
         (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.

@@ -1,11 +1,13 @@
 // file: internal/server/handlers/auth.go
-// version: 3.2.1
+// version: 3.3.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 package handlers
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"sort"
@@ -509,7 +511,16 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"message": "logged out"})
 }
 
-// ListMySessions handles GET /auth/sessions.
+// sessionHandle is the revoke handle the sessions list shows instead of the
+// session ID, which is the bearer token (05-authn §11.1 item 1): the first 16
+// hex characters of SHA-256(id). Derived, never stored, never equal to the token.
+func sessionHandle(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// ListMySessions handles GET /auth/sessions. It lists the caller's sessions as
+// views that carry a revoke handle and never the session ID (the bearer token).
 func (h *AuthHandler) ListMySessions(c *gin.Context) {
 	user, ok := servermiddleware.CurrentUser(c)
 	if !ok {
@@ -523,20 +534,36 @@ func (h *AuthHandler) ListMySessions(c *gin.Context) {
 		return
 	}
 	type sessionView struct {
-		database.Session
-		Current bool `json:"current"`
+		Handle    string    `json:"handle"`
+		UserID    string    `json:"user_id"`
+		CreatedAt time.Time `json:"created_at"`
+		ExpiresAt time.Time `json:"expires_at"`
+		IP        string    `json:"ip"`
+		UserAgent string    `json:"user_agent"`
+		Revoked   bool      `json:"revoked"`
+		Origin    string    `json:"origin,omitempty"`
+		Current   bool      `json:"current"`
 	}
 	response := make([]sessionView, 0, len(sessions))
 	for _, s := range sessions {
 		response = append(response, sessionView{
-			Session: s,
-			Current: currentSession != nil && s.ID == currentSession.ID,
+			Handle:    sessionHandle(s.ID),
+			UserID:    s.UserID,
+			CreatedAt: s.CreatedAt,
+			ExpiresAt: s.ExpiresAt,
+			IP:        s.IP,
+			UserAgent: s.UserAgent,
+			Revoked:   s.Revoked,
+			Origin:    s.Origin,
+			Current:   currentSession != nil && s.ID == currentSession.ID,
 		})
 	}
 	httputil.RespondWithOK(c, gin.H{"sessions": response})
 }
 
-// RevokeMySession handles DELETE /auth/sessions/:id.
+// RevokeMySession handles DELETE /auth/sessions/:id, where :id is the handle
+// the sessions list returned (never the session ID). Only the caller's own
+// sessions are searched, so another user's session cannot be addressed.
 func (h *AuthHandler) RevokeMySession(c *gin.Context) {
 	user, ok := servermiddleware.CurrentUser(c)
 	if !ok {
@@ -544,25 +571,32 @@ func (h *AuthHandler) RevokeMySession(c *gin.Context) {
 		return
 	}
 	currentSession, _ := servermiddleware.CurrentSession(c)
-	sessionID := strings.TrimSpace(c.Param("id"))
-	if sessionID == "" {
-		httputil.RespondWithBadRequest(c, "session id required")
+	handle := strings.TrimSpace(c.Param("id"))
+	if handle == "" {
+		httputil.RespondWithBadRequest(c, "session handle required")
 		return
 	}
-	targetSession, err := h.store.GetSession(sessionID)
-	if err != nil || targetSession == nil {
-		httputil.RespondWithNotFound(c, "session", sessionID)
+	sessions, err := h.store.ListUserSessions(user.ID)
+	if err != nil {
+		httputil.RespondWithInternalError(c, "failed to list sessions")
 		return
 	}
-	if targetSession.UserID != user.ID {
-		httputil.RespondWithForbidden(c, "cannot revoke another user's session")
+	var target *database.Session
+	for i := range sessions {
+		if sessionHandle(sessions[i].ID) == handle {
+			target = &sessions[i]
+			break
+		}
+	}
+	if target == nil {
+		httputil.RespondWithNotFound(c, "session", handle)
 		return
 	}
-	if err := h.store.RevokeSession(sessionID); err != nil {
+	if err := h.store.RevokeSession(target.ID); err != nil {
 		httputil.RespondWithInternalError(c, "failed to revoke session")
 		return
 	}
-	if currentSession != nil && currentSession.ID == sessionID {
+	if currentSession != nil && currentSession.ID == target.ID {
 		clearSessionCookie(c)
 	}
 	httputil.RespondWithNoContent(c)
