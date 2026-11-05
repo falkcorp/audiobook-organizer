@@ -1,7 +1,7 @@
 // file: web/tests/e2e/review-authors-lane.spec.ts
-// version: 1.5.1
+// version: 1.6.0
 // guid: 3f9a1d68-2c74-4b05-8e13-a7d06c5b9e42
-// last-edited: 2026-10-16
+// last-edited: 2026-11-05
 
 // End-to-end coverage for the Authors & series lane of /review (Authors and Series
 // sub-views).
@@ -625,13 +625,16 @@ test.describe('Series Dedup', () => {
     await expect(page.getByTestId('series-panel')).toHaveCount(0);
   });
 
-  test('the sub-view control lists Authors, Series then AI scans, and the Series choice is not written to the URL', async ({ page }) => {
+  test('the sub-view control lists Authors, Series then AI scans, and the Series choice is written to the URL', async ({ page }) => {
     await openSeries(page, { url: seriesPath('') });
     await expect(page.getByTestId('authors-panel')).toBeVisible();
     await expect(page.getByRole('group', { name: 'Authors & series sub-view' }).getByRole('button')).toHaveText(['Authors', 'Series', 'AI scans']);
     await page.getByTestId('authors-subview-series').click();
     await expect(page.getByTestId('series-panel')).toBeVisible();
-    expect(new URL(page.url()).search).toBe('?lane=authors');
+    // Deep links: the sub-view is mirrored to the address bar and survives a reload.
+    await expect(page).toHaveURL(/[?&]view=series(&|$)/);
+    await page.reload();
+    await expect(page.getByTestId('series-panel')).toBeVisible();
   });
 
   test('displays the groups: names, author chips, a kept series, and the counts', async ({ page }) => {

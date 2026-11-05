@@ -1,7 +1,7 @@
 // file: web/tests/e2e/review-dupes-lane.spec.ts
-// version: 2.5.0
+// version: 2.6.0
 // guid: 47849aa3-3814-42c5-81aa-299a39fb5384
-// last-edited: 2026-10-15
+// last-edited: 2026-11-05
 
 // End-to-end coverage for the dupes lane of /review.
 //
@@ -267,8 +267,8 @@ test.describe('the dupes lane of /review', () => {
     await expect(page.locator('[data-testid="dupes-row-43"]')).toBeVisible();
     await expect(page.locator('[data-testid="dupes-row-42"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="dupes-total"]')).toContainText('1 candidate match');
-    // Seeded from the URL only: choosing a chip does not write it back.
-    await expect(page).not.toHaveURL(/layer=/);
+    // Deep links: the chosen layer is mirrored to the address bar.
+    await expect(page).toHaveURL(/[?&]layer=acoustid(&|$)/);
   });
 
   test('filtering by CERTAIN band updates the table', async ({ page }) => {
