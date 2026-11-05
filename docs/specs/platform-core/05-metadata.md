@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.13.4 -->
+<!-- version: 1.13.5 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 05 — Metadata providers, `providerhttp`, and the integration-instance base
 
@@ -827,7 +827,7 @@ listed in the step's report.
   so a Deluge, AI endpoint or webhook on the LAN keeps working with no owner step. This is not a widening: at HEAD
   only `settings.manage` holders wrote those fields (seed: `admin` only, `internal/config/protected_fields.go:148`
   @748fd787a), and the grant is bound to the stored origin, so a later URL change by anyone without the ProtectAdmin
-  check resets it (M1.3 `Put`). Each grant is audited as `core.integration.local_migrated`, and the R2 release note
+  check resets it (M1.3 `Put`). Each grant is audited as `core.integration.local_migrated` (05-rbac §7.1; staged in M6's chunk batch), and the R2 release note
   says how to clear it.
 - **`OperatorSecretOrigin`** = the stored destination origins, for the four operator-secret pairs of M1.4 step 2
   (`ai/openai`, `download/deluge`, `metadata/google-books`, `metadata/hardcover`): at HEAD an operator secret was sent
@@ -1598,3 +1598,4 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
   (D12 F2); the throttles route is deleted, not aliased. M1.9 and M2.9 reduced to the native tests plus migration
   tests. Stage references re-keyed to R2. Consistency pass: M1.4 cites 05-config §1.4 step 7; M1.10 states that M2 leaves the class-`i` blob fields and M6 deletes the blob (lead decision L10); the Deluge daemon password gets its own secret `integrations.download.deluge.daemon_password`; `pcache:` is a plain books family; M2.4 declares the task `core.integrations.release-holds` (HEAD's `maintenance.throttle-reset`, 05-tasks) with its test and migration row; D12's answers cited as D12 (a)–(d). Final consistency sweep: the AI endpoint key-copy test is cited by 05-ai's own name, `TestAIEndpointMigration_AuthRefKeyCopy` (05-ai §9).
 - Round 13 (2026-11-04): IMPL-5 (`core.integrations.release-holds` registered from F5 through F2's minimal owner registration, extended at F7; the interim backend `providerhttp.InterimHolds`).
+- Round 14 (2026-11-05): V23 (checked: no round-13 ruling is cited bare; the bare R4, R5, R7 and R8 left in the text are 03 §3.5's rules), V27 (M1.10 cites 05-rbac §7.1 for `core.integration.local_migrated`, staged in M6's chunk batch).
