@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-storage.md -->
-<!-- version: 1.13.5 -->
+<!-- version: 1.13.6 -->
 <!-- guid: 940ce8be-6f86-4450-b43a-77bf78827b12 -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 05 — Storage (`storage`, `storage/index`, `storage/datamigrate`)
 

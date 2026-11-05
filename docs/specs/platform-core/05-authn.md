@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.13.5 -->
+<!-- version: 1.13.6 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 05 — Authentication (`core/auth`)
 

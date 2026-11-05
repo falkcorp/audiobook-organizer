@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/09-abo-on-core.md -->
-<!-- version: 1.12.5 -->
+<!-- version: 1.12.6 -->
 <!-- guid: 3c82c917-2fc4-4385-b085-73d143a2374f -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 09 — ABO on core: releases and the cutover
 

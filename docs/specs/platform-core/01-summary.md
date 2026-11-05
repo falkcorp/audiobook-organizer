@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/01-summary.md -->
-<!-- version: 1.9.2 -->
+<!-- version: 1.9.3 -->
 <!-- guid: d2956830-373c-4b12-9504-ccace49f7f6d -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 01 — Summary, goals, non-goals, glossary
 

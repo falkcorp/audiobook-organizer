@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.12.2 -->
+<!-- version: 1.12.3 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # mediacore — platform-core design spec
 

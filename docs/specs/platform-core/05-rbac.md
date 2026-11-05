@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.13.4 -->
+<!-- version: 1.13.5 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 05 — Authorization (`core/rbac`) and audit (`core/audit`)
 

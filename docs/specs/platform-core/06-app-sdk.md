@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/06-app-sdk.md -->
-<!-- version: 1.13.4 -->
+<!-- version: 1.13.5 -->
 <!-- guid: d581911c-8f90-48bb-a307-5cd6288a9695 -->
-<!-- last-edited: 2026-11-04 -->
+<!-- last-edited: 2026-11-05 -->
 
 # 06 — App SDK: `module`, `kernel`, `app`, `coretest`
 
