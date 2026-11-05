@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-06-books-identity-cutover-m3-preflight.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: f0c9fb51-61bc-4527-b59b-90c09a73f0ed -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,8 +10,8 @@
 | ID | F4-06 |
 | Release / flip | R2, identity flip F4 (dark PR: built and tested, **unregistered** until F4-08) |
 | Tier | **T4** (Opus, xhigh–max): a one-way migration of every identity, with the stop-the-upgrade preflight |
-| Wave | W27 |
-| Depends on | F4-02, F4-01, F3-04, F3-06, F2-13 |
+| Wave | W29 |
+| Depends on | F4-02, F4-01, F3-04, F3-06, F2-13, F2-15 |
 | Owns gate tests | `TestCutoverStopsOnUnconvertibleIdentity`; `TestCutoverRefusedWhileMergeInProgress` (the preflight's refusal corpus); `TestIdentityCutover_FixtureFromR0`; `TestIdentityCutover_Resumable`; `TestIdentityCutover_RolesAndKeyScopes`; `TestIdentityCutover_WorkerKeyStaysConfined` |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
 
@@ -28,7 +28,7 @@ make web-deps
 git rev-parse HEAD       # BASE
 ```
 
-Confirm F4-02, F4-01, F3-04, F3-06 and F2-13 are merged. If not, stop.
+Confirm F4-02, F4-01, F3-04, F3-06, F2-13 and F2-15 are merged. If not, stop.
 
 ## Goal
 
@@ -66,6 +66,7 @@ it is never quarantined. Do not register M3: F4-08 adds it to `internal/books/cu
 | create | `internal/books/cutover/m3/` (the step, decoders of HEAD's identity rows, the mapping, Verify, tests; a Go sub-package of `internal/books/cutover`, which 03 §3.5.1 allows: its new-path count counts root paths only) |
 | create | `internal/books/cutover/preflight.go` (the step's `Preflight`, `FixBlocker`, `DeleteBlocker` wiring in package `cutover`) |
 | create | `core/app/offline_cutover_blockers.go` (`storage cutover-blockers`) |
+| modify | `core/app/offline.go` (append the `storage cutover-blockers` entry to `OfflineCommands`; nothing else) |
 | create | `internal/books/testdata/r2corpus/m3/` (expected answers and cell fixtures for the M3 tests) |
 
 ## Re-verify at BASE
@@ -78,6 +79,8 @@ grep -rn 'type Importer interface' core/auth/ core/rbac/ | wc -l                
 grep -rn 'Preflight ' core/storage/datamigrate/*.go | wc -l                         # >= 1
 grep -rn 'ErrCutoverBlocked' core/storage/ | wc -l                                  # >= 1 (F3-04)
 ls internal/books/testdata/r2corpus/blockers | wc -l                                # >= 1 (F2-13's blocker and unfinished-merge corpus)
+ls -d internal/books/testdata/r2corpus/blockers/*identity-corrupt-apikey* internal/books/testdata/r2corpus/blockers/*identity-corrupt-oauthid* | wc -l   # 2 (F2-13's two R0-written cells)
+grep -n 'OfflineCommands' core/app/offline.go | head -1                             # the list you append to
 grep -rn 'TestAtomTable_Golden' internal/books/ | wc -l                             # 1 (R1-15: books' atom table)
 # HEAD's identity rows and predicates (HEAD f7ac5b11e; after R1-26 the database residue is internal/books/store/)
 grep -c 'func UserIsActive' internal/auth/user_active.go                            # 1
@@ -119,7 +122,8 @@ ls internal/usermerge/journal.go | wc -l                                        
    `usermerge:journal:` record at `applying` or `undoing`; each problem is a `datamigrate.Blocker` (step, key, family,
    reason, fix; never a value). `FixBlocker` stages the operator's repaired value, refused unless it then converts;
    `DeleteBlocker` deletes the row and, for a user, its keys, identities and index rows, returning the IDs.
-6. **`storage cutover-blockers`** (`offline_cutover_blockers.go`): refuses while the service holds the DB lock; opens
+6. **`storage cutover-blockers`** (`offline_cutover_blockers.go`, appended to `OfflineCommands` in `core/app/offline.go`;
+   F4-08 adds its cobra wrapper under `cmd/`): refuses while the service holds the DB lock; opens
    the store without running a step (the explicit exception to `ErrOfflinePendingSteps`) only if the cutover has not
    started; `list` prints keys and reasons; `list --out <file>` also writes raw values (mode 0600, refused if the file
    exists, with the credential-hash warning); `fix`/`delete` act only on a key the current report names, commit one batch
@@ -130,7 +134,9 @@ ls internal/usermerge/journal.go | wc -l                                        
 
 ## Tests first (spec names)
 
-`TestCutoverStopsOnUnconvertibleIdentity` (cells: a corrupt `u:`, `apikey:` or `oauthid:` row; a decodable row the
+`TestCutoverStopsOnUnconvertibleIdentity` (cells: a corrupt `u:`, `apikey:` or `oauthid:` row, each from F2-13's blocker
+corpus (`blocker-identity-corrupt-apikey` and `blocker-identity-corrupt-oauthid` beside the corrupt `u:` cell, all
+written by the R0-tag program; the main overlay quarantines no identity row); a decodable row the
 importer rejects; a key or identity whose user does not exist; each refuses in the preflight with exit 78, a report
 naming key and reason and no value, the store and directory byte-identical, no checkpoint; `fix` with a repaired value
 or `delete` lets the next boot complete, a deleted user's referencing books rows counted in `orphaned_refs`),
@@ -157,7 +163,7 @@ go vet ./internal/books/cutover/...                                             
 go test -race -count=1 ./internal/books/cutover/...                                       # ok
 go test -count=1 -run 'TestCutoverStopsOnUnconvertibleIdentity|TestCutoverRefusedWhileMergeInProgress|TestIdentityCutover_' ./internal/books/...   # PASS
 (cd core && go test -race -count=1 ./app/...)                                             # ok
-grep -c 'cutover/m3' internal/books/module.go                                            # 0: not registered (F4-08 adds M3 to steps.go)
+grep -c 'cutover/m3\|m3\.' internal/books/cutover/steps.go || true                      # 0: not registered (F4-08 adds M3 to steps.go)
 make -C core ci                                                                           # exit 0
 make ci                                                                                   # exit 0
 ```

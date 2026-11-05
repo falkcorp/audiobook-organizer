@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-21-journaled-swap-crash-matrix.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 0d4840c7-333d-47fc-a23f-cbdf77a2bb4e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -14,7 +14,7 @@
 | Spec | 05-storage §5S.3.7, §5S.3.15, §5S.3.16; 05-backup §5B.3.4; 06 §6.4.8, §6.5.1 (writer table, P0a); 09 §9.3 (boot writers extend the crash matrix); 03 §3.3 storage/restorejournal |
 | Branch | `agent/platform-core-r1-21-journaled-swap-crash-matrix` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 
@@ -48,7 +48,9 @@ The **one journaled swap** and the **crash-matrix kit** (05-storage §5S.3.7 rea
   stagers call: temp file + fsync, `link(2)` to `pending.json`, `EEXIST` = `storage.ErrSwapPending`, directory
   fsync) and applies it at boot phase P0a through the in-flight file `inflight.json`, which is created **before the
   first rename** in every kind, with the journal records of 05-backup §5B.3.4 and 05-storage §5S.3.15 (restore,
-  checkpoint, revert and reset kinds). `storage.Admin` carries **no** staging or swap method; the kernel holds the
+  checkpoint, revert and reset kinds; the journal's record types declare a fifth, `KindRewrite`, with `StepID`, which
+  R1-20 lands in `core/storage/restorejournal/` and F3-04's M8 applies in `core/internal/restoreswap/rewrite.go`, so
+  this row's apply path handles the four kinds above and leaves a `KindRewrite` intent to F3-04). `storage.Admin` carries **no** staging or swap method; the kernel holds the
   swapper, stages through it and runs it at P0a (row notes; 04 §8.1 R1, COR7-10, COR8-5).
 - `core/kernel/swap.go`: P0a wiring: the swap runs before the store opens, and the reader check of §5S.3.7 refuses an
   open while `inflight.json` exists except for the admitted recipes of 09 §9.2.1.

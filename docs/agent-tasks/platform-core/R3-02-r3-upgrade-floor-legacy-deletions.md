@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R3-02-r3-upgrade-floor-legacy-deletions.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.3 -->
 <!-- guid: c967232d-f699-4787-8455-5badc8f3fca6 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | R3-02 |
 | Release | R3 |
 | Tier | **T4** (Opus / xhigh–max): the upgrade floor refuses stores at boot and at restore staging; a wrong floor either bricks a valid store or lets an unmigrated one boot with its readers deleted |
-| Wave | W42 (beside R2-02, R3-04; file-disjoint) |
+| Wave | W44 (beside R2-02, R3-04; file-disjoint) |
 | Depends on | OWNER-05 (R2 released and deployed) |
 | Spec | 09 §9.2.2 ("The R3 floor", "Fresh installs"), §9.4 R3; 05-storage §5S.3.5 (`UpgradeFloor`, `ErrUpgradeFloor`, runner rules "Atomicity" and "Upgrade floor"), §5S.4 steps 3 and 6, §5S.9.3, §5S.10; 05-backup §5B.3.4 step 4; 05-tasks §5T.8.1 (the `internal/operations/state` row); 07 §7.8 (opsgen, `ops.ts`, `operationPolling`); 03 §3.7 ("one floor, in R3"), §3.8 R3; 06 §6.4.10 R3, §6.5.1 "Releases" R3 |
 
@@ -36,7 +36,9 @@ R2 is refused before anything reads it with deleted code (09 §9.2.2; 05-storage
 1. Books' manifest declares
    `UpgradeFloor{Owner: "books", Version: LegacyCap, Requires: <the step refs of M2, M3, M4, M5, M6>, InstallFirst: <R2 tag>}`
    (05-storage §5S.3.5, the one floor; `InstallFirst` holds the R2 release's tag, written into books' declaration when
-   R2 is tagged; 09 §9.2.2).
+   R2 is tagged; 09 §9.2.2). That tag is the production release OWNER-05 cut with `release-prod.yml --ref <RC tag>`
+   from the RC tag it deployed, so it names the deployed commit (order M4); read it from OWNER-05's tracking-issue
+   record, not from `main`'s newest RC.
 2. Delete books' legacy steps 1..`LegacyCap` (66 at `748fd787a`) and every store method only they call (including
    `MigrateOpsV2ToV3`), the HEAD-format readers (the read-only decoders books kept for its cutover steps), the
    whole of `internal/books/cutover` (M2–M6, the M7 and M8 step definitions, `m4legacy`), and `TestR0OpensR1Store`
@@ -139,8 +141,9 @@ tests; grep 7's `XPC_SERVICE_NAME` or `RestartPreventExitStatus=78` is absent (t
    `Owner: "books"`, `Version: LegacyCap`, `Requires:` the `StepRef`s of M2, M3, M4, M5 and M6 **as constants**
    (copy them from `internal/books/cutover/stepids.go`, the one place F3-06 reserved M2–M6's IDs, before deleting
    the package, into a small books file such as `internal/books/floor.go`, name coined here, with a comment that the
-   steps are deleted and only their IDs remain), `InstallFirst:` the R2 production release tag. Keep `LegacyCap` defined where it is if books' version
-   adapter still uses it.
+   steps are deleted and only their IDs remain), `InstallFirst:` the R2 production release tag (the one OWNER-05
+   recorded as cut from its deployed RC tag; if the record names no production tag, STOP). Keep `LegacyCap` defined
+   where it is if books' version adapter still uses it.
 3. **Core storage.** Delete `LegacyMigration`, `Spec.Legacy`, the runner's legacy phase and
    `TestNoNewLegacyMigrations` (05-storage §5S.3.5 "Atomicity"). If grep 8 found no implementation of the
    fresh-install rule, add it at §5S.4 step 6: the one fresh-install batch writes a `done` record under
@@ -195,6 +198,7 @@ The refusal's last stderr line is `install ` + `InstallFirst` + ` first`; the pr
 | `TestPreR2StoreRefusedByR3` | `internal/books/` | R3 refuses an R1 store (the R0-written corpus of `internal/books/testdata/r2corpus/` booted through R1's shape) and an R2 store whose cutover did not finish (a copy with M7 applied and M4 not done), before any write: exit 78, last line `install <R2 tag> first`, store byte-identical (I-floor-1) |
 | `TestRestoreBelowUpgradeFloorRefusedAtStaging` | `internal/books/` (the books manifest drives core staging) | an archive below the floor is refused before extraction; a failed host-loss restore leaves no fresh store (I-floor-3) |
 | `TestFreshInstallPostFloorBootsTwice` | `internal/books/` | a build with books' floor that registers none of M2–M6 creates a store and boots it a second time without `ErrUpgradeFloor`; the same after a factory reset (I-floor-2) |
+| `TestFactoryResetPostFloorBoots` | `internal/books/` | (05-storage §5S.3.15 reset tests; DATA7-7) after a factory reset on a post-floor build, the next boot is a fresh install whose one batch records books' 1..`LegacyCap` and every M2–M6 step ID as done, so it passes the floor at that boot and every later one (I-floor-2) |
 | `TestUpgradeFloorRefusesBeforeAnyWrite` | `core/storage/` (if not already present from R1) | version floor and `Requires` refusal, byte-identical store |
 | `TestPrintUpgradeFloor` | `core/storage/` or ABO root (if not already present) | `--print-upgrade-floor` prints books' floor without opening anything (I-floor-5) |
 | `TestFloorLaunchdSleepsBeforeExit78` (name coined here) | where the exit-78 path lives | with `XPC_SERVICE_NAME` set and an injected clock, the refusal sleeps 60 s before exit 78; without it, no sleep (I-floor-4) |
@@ -219,7 +223,7 @@ grep -rn 'UpgradeFloor{' --include='*.go' internal/books/ | grep -v _test.go | w
 go build ./... && (cd core && go build ./...)
 
 # The floor tests. Expected: ok, no FAIL
-go test -count=1 -run 'TestPreR2StoreRefusedByR3|TestRestoreBelowUpgradeFloorRefusedAtStaging|TestFreshInstallPostFloorBootsTwice' ./internal/books/...
+go test -count=1 -run 'TestPreR2StoreRefusedByR3|TestRestoreBelowUpgradeFloorRefusedAtStaging|TestFreshInstallPostFloorBootsTwice|TestFactoryResetPostFloorBoots' ./internal/books/...
 (cd core && go test -count=1 -run 'TestUpgradeFloorRefusesBeforeAnyWrite|TestPrintUpgradeFloor' ./storage/...)
 
 # The binary prints its floor. Expected: one line naming books, LegacyCap, M2..M6 and the R2 tag

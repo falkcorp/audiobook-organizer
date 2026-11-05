@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-09-f7-flip-integrations.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 92d3d884-998e-42de-94e1-451dd63836fb -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-09 |
 | Release | R2, flip F7 (the flip PR) |
 | Tier | **T4** (Opus / xhigh–max): every flip PR is T4; this one moves about fifteen packages and carries M6 |
-| Wave | W35 (alone: the only PR of its wave; it owns `main.go`, `internal/server/`, books' registration and the kernel and module wiring files in W35). Runs inside an announced **move window** |
+| Wave | W37 (alone: the only PR of its wave; it owns `main.go`, `internal/server/`, books' registration and the kernel and module wiring files in W35). Runs inside an announced **move window** |
 | Depends on | F6-03, F7-02, F7-03, F7-04, F7-05, F7-06, F7-07, F7-08, F7-10 |
 | Owns gate tests | `TestBooksIndexRebuiltAtCutover` (the search oracle; F7-08 landed its dark half) |
 | Spec | 09 §9.4 R2 flips table row F7, §9.6 rows 5, 15 and 16, §9.2.3 (M6), §9.2.7 (the AI renames); 03 §3.8 F7; 05-notify §10; 05-ai §8, §10; 05-library §5L.10; 05-metadata M1.10, M2.10, M3.10; 05-download §10; 05-storage §5S.3.8; 05-metrics §13 item 3; 05-tasks §5T.8.2 (the late-owner kinds `core.integrations.release-holds` and `core.ai.batch-poll`); 05-http-api §8.1 (F7 row: `/api/v1/plugins` deleted); 04 §8.1 F7, §8.3 (the `internal/plugin` deletion gate); 06 §6.4.10 F7 row |
@@ -49,8 +49,15 @@ Announce the move window one working day ahead, naming every 04 row listed under
    **Service registry** (06 §6.11.1 step 4): delete from `internal/books/services.go` the `ServiceDefs` of eventbus,
    filesystem, searchindex, the ten AI services, batchpoller and the three metafetch services, their core packages now
    wired by the kernel.
-2. **Register M6** in `internal/books/cutover/steps.go`, raise M7's target in the same PR and register a new M8 whose
-   step ID names M6 as the last step it compacts after (03 §3.8; IMPL-13).
+2. **Register M6** in `internal/books/cutover/steps.go` and apply the per-flip level mechanism (order M2, stated in
+   F3-04 and F3-06): **add** a new level step for each owner whose level this flip raises (books'
+   `books.level-<n>`; core's `core.level-<n>` when core's level changes), named for the raised target level, at that
+   owner's next contiguous version, numbered immediately before M6 (which runs `After` it); the earlier flips' level
+   steps stay registered unchanged (05-storage §5S.3.5). **Replace** the M8 entry with a newly named one whose step ID
+   names M6 as the last step it compacts after, so exactly one M8 is registered and it runs last; bump the raised
+   owners' declared `Spec.Level` in the same PR. On a store F5-18's `main` migrated, the earlier level steps are
+   applied and the new M8 ignores the previous M8's `done` record and `applied` journal (03 §3.8; 05-storage
+   §5S.3.13; IMPL-13).
 3. **Delete** `internal/plugin` with no importer left (04 §8.3), the webhook plugin `internal/plugins/webhook`, and the
    unauthenticated `/api/v1/plugins` mount (05-http-api §8.1 F7 row); books publishes its 12 event types through
    `Deps.Notify` in the same batch as the change (05-notify §10's topic map); deliveries are in core's signed format
@@ -102,7 +109,9 @@ mediacore/integrations/download/deluge`; `F7 move internal/plugins/webhook -> me
   only `<namespace>_ai_*` AI families plus books' `ai.parse_results` (`TestNoHEADAIFamilies`).
 - **I5.** `internal/plugin` is deleted with no importer left; nothing serves `/api/v1/plugins`.
 - **I6.** `TestCutoverRefusedByOlderBuilds` still refuses with the pre-freeze binary on a store migrated through M6;
-  the crash matrix covers M6 and the new M8.
+  the crash matrix covers M6 and the new M8. A store migrated by F5-18's `main` and booted by this `main` has its
+  levels raised before M6, runs exactly one M8, and F5-18's binary then exits 78 on it (this flip's cell in F2-15's
+  harness).
 - **I7.** Every first-party caller of a deleted route is switched in this PR (SPA, `scripts/`, skills, docs).
 - **I8.** A derived index declared with no hooks, hooks for an undeclared index, or a build kind not named
   `<module>.derived.<name>.build` fails boot; `Load` never runs in `app.New` or `Describe`
@@ -207,8 +216,10 @@ STOP if any dark package or M6 is missing (grep 5), or if grep 2 finds an import
 3. Wire the module members, the kernel boot calls (derived P7 and (3a), the index `Opener`), F7-10's routes and
    books' registrations (Goal 1); ABO's `main` sets `app.Options.Adapters`; delete the listed `ServiceDefs` from
    `internal/books/services.go`; regenerate `core/openapi/core.json` and the client.
-4. Register M6, raise M7's target, register the new M8 (Goal 2); extend the crash matrix with the new M8 and
-   `TestCutoverRefusedByOlderBuilds`'s cells.
+4. Register M6, add this flip's level steps and replace the M8 entry with a newly named one, bumping the raised
+   owners' `Spec.Level` (Goal 2);
+   extend the crash matrix with the new M8 and `TestCutoverRefusedByOlderBuilds`'s cells; add this flip's cell to
+   F2-15's harness.
 5. Move or delete each package of the 04 keys with `git mv` where code moves; re-point every importer; delete
    `internal/plugin` last, once grep 1 is empty; regenerate or delete `internal/server/handlers/mocks` and update
    `.mockery.yaml`.
@@ -241,6 +252,18 @@ app.Options{
 - The dashboard-reference test and `promtool test rules` after the AI renames.
 - `TestABOMetricsGatherNoDuplicate` (unchanged).
 - `TestCutoverRefusedByOlderBuilds` and the R2 cutover suite with M6 registered.
+- This flip's cell in F2-15's cutover-suite harness (order M2; the cell shape is F3-04's): a store migrated by F5-18's
+  `main`, booted by this `main`, has its levels raised, runs exactly one M8, and F5-18's binary then exits 78 on it.
+- F3-06's registered-list test, green with M6 registered: the levels are raised to the build's target before the
+  first step of each flip, versions are contiguous per owner, and exactly one M8 is registered, last.
+- `TestDerivedIndexHooksAfterRegister` (06 §6.10): `Load` runs at Run start step (3a), after the module's start hooks
+  and before `Bus.Open`; the rebuild runs as the module's `<ID>.derived.<name>.build` definition with its own Effects,
+  Timeout and Parallelism; a wrong kind name or a declaration without hooks fails boot.
+- Extend `TestDepsScoping` (06 §6.10; R1-20's, grown at F4-08 and F6-03) with the F7 cells: `library.Scope` writes
+  are attributed to the module, and a notify to a topic outside the module's catalog entries is refused through
+  `Deps.Notify`.
+- Extend `TestCoreRoutesReplaceGin` (05-http-api §12; F4-08's) with the F7 cell: no gin route remains at a path F7's
+  native routes replace.
 - `TestInternalPluginDeleted` (name coined here): `go list ./...` contains no `internal/plugin` package and the router
   answers 404 for `GET /api/v1/plugins`.
 
@@ -261,7 +284,7 @@ promtool test rules deploy/prometheus/alert-rules.test.yml
 grep -rn 'InterimHolds\|InterimPoll' --include='*.go' core/ internal/ main.go | wc -l
 
 # Gate tests. Expected: ok
-go test -count=1 -run 'TestBooksIndexRebuiltAtCutover|TestDerivedIndexRebuildTriggers|TestHEADTestConnectionRoutesGone|TestRootsCutover_FromHEADFixture|TestWebhookMigration_InstancesAndRule|TestIntegrationsMigration_EveryInstanceAndID|TestAIJobMigration_EveryJobAndState|TestNoHEADAIFamilies|TestABOMetricsGatherNoDuplicate|TestCutoverRefusedByOlderBuilds|TestDeployReferencedSeriesServed' ./...
+go test -count=1 -run 'TestBooksIndexRebuiltAtCutover|TestDerivedIndexRebuildTriggers|TestHEADTestConnectionRoutesGone|TestRootsCutover_FromHEADFixture|TestWebhookMigration_InstancesAndRule|TestIntegrationsMigration_EveryInstanceAndID|TestAIJobMigration_EveryJobAndState|TestNoHEADAIFamilies|TestABOMetricsGatherNoDuplicate|TestCutoverRefusedByOlderBuilds|TestDeployReferencedSeriesServed|TestDerivedIndexHooksAfterRegister|TestDepsScoping|TestCoreRoutesReplaceGin' ./...
 (cd core && go test -count=1 -run 'TestWebhook_JSONBodyGolden|TestWebhook_SignatureWithTimestamp' ./integrations/notify/...)
 
 # Builds, frontend and e2e. Expected: exit 0; green

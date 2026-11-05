@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-07-audit-store-action-table.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: dbe44289-51c8-493f-bbe3-5173191430f8 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F2-07 |
 | Release / flip | R2, foundation PRs (F2), **dark** |
-| Wave | W22 |
+| Wave | W24 |
 | Tier | **T2** (Sonnet / high): a store with a fixed API and layout, a fixed action table, one async writer; every rule is in the spec |
 | Depends on | OWNER-03 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
@@ -146,7 +146,9 @@ string values with a credential prefix `mcs_`, `mck_`, `mcb_`, `mci_`, `mct_`, `
 regardless of key; `Details` capped at `DetailsMaxBytes` of JSON.
 
 Metrics (§11, under the App's namespace): `audit_records_total{namespace,outcome}`, `audit_dropped_total`,
-`audit_queue_depth`, `audit_write_errors_total{path}`, `audit_pruned_total`.
+`audit_queue_depth`, `audit_write_errors_total{path}`, `audit_pruned_total`. This row adds core's `audit` metrics scope,
+so it adds `core/audit/testdata/series.golden` for that scope, asserted by `metricstest.AssertSeries` (R1-10's
+`core/metrics/metricstest`; 05-metrics §5 item 5).
 
 Kernel (`core/kernel/audit.go`): the functions the boot sequence will call (names coined here, e.g. `buildAudit`,
 `startAudit`, `stopAudit`): register the `c/audit/` core keyspace the same way the kernel registers `c/storage/` (see
@@ -173,8 +175,12 @@ for concurrent use; no package-level mutable state (R5).
 - `TestAudit_QueryFilters` (name coined here) — `Query` by actor, action prefix, outcome, target, `BeforeSeq` cursor,
   newest first.
 
-`TestAudit_RestoreCopiesForwardRecords` and `TestAudit_CopyForwardThenWriteNoOverwrite` need the restore hook
-(`backup/journal`, F4-04) and are not this PR's.
+- `TestAuditSeries_Golden` (name coined here): `metricstest.AssertSeries` over the `audit` scope's provider against
+  `core/audit/testdata/series.golden`.
+
+`TestAudit_RestoreCopiesForwardRecords` and `TestAudit_CopyForwardThenWriteNoOverwrite` need audit's restore hook,
+which is not this PR's: the hook is registered with F4-11's restore-hook runner (the P4d step 3 kernel function), and
+F4-08 wires it at the identity flip; the two tests go with it.
 
 ## Steps
 
@@ -203,7 +209,7 @@ make ci                                                                         
 ## Out of scope
 
 The boot call (F2-16); the audit query and export routes (F4-05); auth, rbac and tasks recording their events (their
-flips); the restore hook (F4); `core.audit.prune` (registered with the tasks flip); any ABO edit.
+flips); audit's restore hook (registered with F4-11's restore-hook runner, wired by F4-08); `core.audit.prune` (registered with the tasks flip); any ABO edit.
 
 ## Idempotency / rollback
 

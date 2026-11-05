@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-12-r2-corpus-stage1-r0-written.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: dd68df55-0fe6-4120-9078-f5f927fbe5b4 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F2-12 |
 | Release / flip | R2, foundation PRs (F2); testdata and scripts only, no product code |
-| Wave | W22 |
+| Wave | W24 |
 | Tier | **T3** (Opus / high): the oracle corpus every R2 PR migrates; its coverage decides what the cutover tests can prove, and it is regenerated only if R0 is re-cut |
 | Depends on | OWNER-03 (and, transitively, OWNER-02: the R0 tag exists and is kept) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |

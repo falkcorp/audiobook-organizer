@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R2-02-end-r2-release-freeze.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.4 -->
 <!-- guid: ec2f7009-4e6e-4b0f-8a0b-df22dfc2d023 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | R2-02 |
 | Release | R2 (closing PR) |
 | Tier | **T0** (Haiku / low): one workflow toggle; a grep proves it |
-| Wave | W42 (beside R3-02, R3-04; the three are file-disjoint) |
+| Wave | W44 (beside R3-02, R3-04; the three are file-disjoint) |
 | Depends on | OWNER-05 (the owner has cut the R2 production release) |
 | Spec | 09 §9.2.1 ("The release freezes": the freeze ends with the R2 release, which turns the dispatch on again) |
 | Branch | `agent/platform-core-r2-02-end-r2-freeze` |
@@ -31,11 +31,13 @@ git rebase origin/main
 ## Goal
 
 End the R2 freeze. The freeze toggle is the workflow-level variable `RELEASE_FREEZE` in
-`.github/workflows/prerelease.yml` (the plan's name, plan §(l) item 3): R1-01 added it with `'R1'`, R1-31 cleared it,
-F3-07 set it to `'R2'` when R2's first flip merged. While it is non-empty, `check-rc-ordinal` dispatches no
+`.github/workflows/prerelease.yml` (the plan's name, plan §(l) item 3). R1-35 always added it, with both `if:`
+conditions; its value was `'R1'` if the owner kept the R1 freeze and `''` if the owner overrode it (OWNER-01). R1-31
+cleared it, or recorded a no-op when it was already `''`. F3-08 set it to `'R2'` before R2's first flip (F3-07)
+merged. While it is non-empty, `check-rc-ordinal` dispatches no
 production release (09 §9.2.1). This PR clears it, so promotion is on again. This is one line.
 
-`ci/prefreeze_release.txt` (written by F3-07) stays: the restore drill and `make rollback-restore` still read it.
+`ci/prefreeze_release.txt` (written by F3-08, embedded by F3-07) stays: the restore drill and `make rollback-restore` still read it.
 
 **Precondition (do not skip).** OWNER-05 has cut the R2 production release. Check:
 
@@ -59,12 +61,12 @@ and report "R2 not released yet"; do not open the PR.
 grep -n "RELEASE_FREEZE" .github/workflows/prerelease.yml
 ```
 
-Expected: exactly 3 lines: the `env:` entry `  RELEASE_FREEZE: 'R2'`, the promote step's
-`if: steps.rc.outputs.at_threshold == 'true' && env.RELEASE_FREEZE == ''`, and the notice step's
-`if: steps.rc.outputs.at_threshold == 'true' && env.RELEASE_FREEZE != ''`.
+Expected: exactly 4 lines: the `env:` entry `  RELEASE_FREEZE: 'R2'`, the promote step's
+`if: steps.rc.outputs.at_threshold == 'true' && env.RELEASE_FREEZE == ''`, the notice step's
+`if: steps.rc.outputs.at_threshold == 'true' && env.RELEASE_FREEZE != ''`, and the notice step's `echo`.
 
-STOP and report what you found if the count is not 3, if the `env:` value is not exactly `'R2'`, or if
-`RELEASE_FREEZE` does not appear at all (then F3-07 used another toggle: report it, do not improvise).
+STOP and report what you found if the count is not 4, if the `env:` value is not exactly `'R2'`, or if
+`RELEASE_FREEZE` does not appear at all (then R1-35 or F3-08 used another toggle: report it, do not improvise).
 
 ## Steps
 
@@ -110,7 +112,7 @@ make ci                                                                # expect 
 
 - `ci/prefreeze_release.txt` (stays).
 - Cutting, tagging or promoting any release (OWNER-05).
-- The R1 freeze (R1-01, R1-31) and any other job or workflow.
+- The R1 freeze (R1-35, R1-31) and any other job or workflow.
 
 ## Rollback
 

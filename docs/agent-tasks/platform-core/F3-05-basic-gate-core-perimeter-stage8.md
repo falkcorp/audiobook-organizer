@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-05-basic-gate-core-perimeter-stage8.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 178fe6db-0b0b-4bd3-b26b-8306e5d130de -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F3-05 |
 | Release / flip | R2, config flip F3 (dark PR) |
 | Tier | **T3** (Opus, high): a security gate changes owner and its exempt set is a reviewed golden |
-| Wave | W24 |
+| Wave | W26 |
 | Depends on | F3-01 |
 | Owns gate test | `TestBasicGate_EmptyPasswordRefuses` |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |

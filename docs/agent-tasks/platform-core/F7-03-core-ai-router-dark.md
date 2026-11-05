@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-03-core-ai-router-dark.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: c070f730-aa7a-4a14-ab1e-da2d1d3bf68d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-03 |
 | Release | R2, flip label F7 (dark PR) |
 | Tier | **T4** (Opus / xhigh–max): the AI router and durable batch jobs, with secret origin rules; a race between poll, apply and cancel applies a batch twice or never |
-| Wave | W30 (beside F4-07, F5-13, F6-05, F7-05; file-disjoint) |
+| Wave | W33 (beside F5-14, F8-02; file-disjoint) |
 | Depends on | F7-01 (integrations registry), F2-11 (F2's minimal `core/integrations/ai` package with `ai.InterimPoll` and the `core.ai.batch-poll` registration), F7-06 (both rows edit `core/go.mod`) |
 | Spec | 05-ai §1 (scope; deferred-build members), §3 (Go API), §4 (lifecycle: catalog, router, batch jobs, the native store), §5 (errors), §6 (concurrency), §7 (keys), §8 (metrics), §9 (tests), §10 (migration: the router algorithm, the capability-ID map is books'); 05-metrics §13 item 3 (AI rows); 04 §8.1 F7, §8.5 F7 (the `dispatch.go` cuts); 05-tasks §5T.8.2 (`core.ai.batch-poll`) |
 

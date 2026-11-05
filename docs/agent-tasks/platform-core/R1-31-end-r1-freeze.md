@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-31-end-r1-freeze.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: f6be479f-8c49-424f-8d3e-ef33dbe233e8 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -35,11 +35,11 @@ Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 it
 
 ## Goal
 
-End the R1 freeze. R1-01 turned automatic promotion off by setting the workflow-level variable
-`RELEASE_FREEZE` (the plan's one toggle name: R1-01 sets it to `'R1'`, this row clears it, F3-07 sets `'R2'`, R2-02 clears it) in `.github/workflows/prerelease.yml`, so the
+End the R1 freeze. R1-35 turned automatic promotion off by setting the workflow-level variable
+`RELEASE_FREEZE` (the plan's one toggle name: R1-35 adds it and sets it to `'R1'` if the owner kept the R1 freeze or to `''` if the owner overrode it, this row clears it, F3-08 sets `'R2'`, R2-02 clears it) in `.github/workflows/prerelease.yml`, so the
 `check-rc-ordinal` job dispatches no production release. The R1 release turns it on again (09 §9.2.1:
 "the R1 series' first PR turns it on and R1's release turns it off"; 09 §9.4 R1 Owner row). Between R1 and
-F3, production minors ship as usual (09 §9.2.1). This is one line.
+F3, production minors ship as usual (09 §9.2.1). This is one line. **If the owner overrode the R1 freeze, R1-35 already left the value at `''`: this row is then a recorded no-op** (see the Re-verify and Steps below).
 
 **Precondition (do not skip).** OWNER-03 has cut the R1 production release. This PR merges only after that
 release exists (09 §9.2.1; plan §(d) W22: "the freeze-off PR merges only after its release is cut"). Check:
@@ -51,16 +51,17 @@ gh release list --exclude-pre-releases --limit 5
 The newest non-prerelease entry must be the R1 release OWNER-03 recorded in the tracking issue. If it is
 not, STOP and report "R1 not released yet"; do not open the PR.
 
-## Re-verify (expected at your base, after R1-01 merged)
+## Re-verify (expected at your base, after R1-35 merged)
 
 ```bash
 grep -n "RELEASE_FREEZE" .github/workflows/prerelease.yml
 ```
 
-Expected: exactly 3 lines: the `env:` entry `  RELEASE_FREEZE: 'R1'`, the promote step's
-`if: steps.rc.outputs.at_threshold == 'true' && env.RELEASE_FREEZE == ''` and the notice step's
-`if: steps.rc.outputs.at_threshold == 'true' && env.RELEASE_FREEZE != ''`. If the `env:` value is not
-exactly `'R1'`, or the count is not 3, STOP and report what you found.
+Expected: exactly 4 lines: the `env:` entry, the promote step's
+`if: steps.rc.outputs.at_threshold == 'true' && env.RELEASE_FREEZE == ''`, the notice step's
+`if: steps.rc.outputs.at_threshold == 'true' && env.RELEASE_FREEZE != ''` and the notice step's `echo` (it names the variable too). The `env:` entry is `  RELEASE_FREEZE: 'R1'` when the owner kept the R1 freeze, and `  RELEASE_FREEZE: ''` when the owner overrode it (R1-35 always adds all four lines). If the count is not 4, or the `env:` value is neither of those two, STOP and report what you found.
+
+**Recorded no-op.** If the `env:` value is already `''`, do not open a PR. Record in the tracking issue "R1-31: no-op, the R1 freeze was overridden and R1-35 left `RELEASE_FREEZE: ''`", and report the row done with 0 files changed. Steps 1-4 and the acceptance below apply only when the value is `'R1'`.
 
 ## Steps
 
@@ -99,7 +100,7 @@ make ci                                                                # expect 
 
 ## Out of scope
 
-The R2 freeze (F3-07 sets the variable to `'R2'`; R2-02 clears it). Any other workflow. The release
+The R2 freeze (F3-08 sets the variable to `'R2'`; R2-02 clears it). Adding the toggle (R1-35). Any other workflow. The release
 itself (OWNER-03).
 
 ## Rollback

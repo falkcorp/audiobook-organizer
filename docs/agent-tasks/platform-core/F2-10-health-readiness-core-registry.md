@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-10-health-readiness-core-registry.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 4019705c-90f7-4596-b9ca-155678fda298 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F2-10 |
 | Release / flip | R2, foundation PRs (F2), **dark** except the token bridge, which carries no token until F3 raises one |
-| Wave | W22 |
+| Wave | W24 |
 | Tier | **T2** (Sonnet / high): a small registry with a fixed API, two kernel-side components, one bridge into an existing ABO token source |
 | Depends on | OWNER-03 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |

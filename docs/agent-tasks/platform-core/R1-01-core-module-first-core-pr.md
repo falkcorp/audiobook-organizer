@@ -1,17 +1,17 @@
 <!-- file: docs/agent-tasks/platform-core/R1-01-core-module-first-core-pr.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: c9068651-3412-486f-b5f9-ac087f228837 -->
 <!-- last-edited: 2026-11-05 -->
 
-# R1-01 — Nested module and the first core PR: core/go.mod with the genproto exclude, empty core/go.sum, core/Makefile pin, the L0 leaves buildid and storage/keys, the archtest engine with TestCoreImportsOnlyCore and TestCoreHoldsNoAppKeyNames, module guards, the R1 freeze turned on
+# R1-01 — Nested module and the first core PR: core/go.mod with the genproto exclude, empty core/go.sum, core/Makefile pin, the L0 leaves buildid and storage/keys, the archtest engine with TestCoreImportsOnlyCore and TestCoreHoldsNoAppKeyNames, module guards
 
 | Field | Value |
 |---|---|
 | ID | `R1-01` |
 | Tier | **T3** (Opus / high): module mechanics with known ambiguous-import traps and the guard rules of 03 §3 |
 | Release / wave | R1 / W04 |
-| Depends on | R0-01, OWNER-01, OWNER-02 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
-| Spec | 03 §3.2 items 1, 4, 6, §3.5.1 items 1-4; 09 §9.4 R1 Content: build and CI, R1's CI classification (core layering gate, genproto-exclude-root, check_module_skew.py, TestCoreHoldsNoAppKeyNames); 09 §9.2.1 (R1 freeze); 13 §13.2.2 guard items 1-4; 12 §12.3.11 (toolchain pin, print-toolchain); 04 §8.1 R1 |
+| Depends on | R0-01, OWNER-01, OWNER-02, R1-35 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
+| Spec | 03 §3.2 items 1, 4, 6, §3.5.1 items 1-4; 09 §9.4 R1 Content: build and CI, R1's CI classification (core layering gate, genproto-exclude-root, check_module_skew.py, TestCoreHoldsNoAppKeyNames); 13 §13.2.2 guard items 1-4; 12 §12.3.11 (toolchain pin, print-toolchain); 04 §8.1 R1 |
 | Branch | `agent/platform-core-r1-01-core-module-first-core-pr` |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base.
@@ -40,9 +40,9 @@
 - `scripts/tests/test_check_toolchain_versions.py`
 - `.github/workflows/core-ci.yml`
 - `.github/dependabot.yml`
-- `.github/workflows/prerelease.yml`
 - `ci/gates.txt`
 - `scripts/ci/run_gates.py`
+- `core/internal/archtest_layers_test.go`
 
 ## START HERE
 
@@ -63,15 +63,17 @@ R1's first core PR (09 §9.4 R1 "Content: build and CI"; 03 §3.2 items 1, 4, 6;
 It creates the nested module `core/` (`github.com/falkcorp/mediacore`), wires it into the root build, lands the
 three dependency-free L0 leaves (`buildid`, `storage/keys`, `archtest`), redesigns ABO's layering guard onto the
 shared engine, adds the module guards (`genproto-exclude-root`, the core-mode exclude check, `check_module_skew.py`,
-the toolchain guard's core rules, `TestCoreImportsOnlyCore`, `TestCoreHoldsNoAppKeyNames`), registers the reserved
-families `c/` and `m/`, and **turns the R1 freeze on** (09 §9.2.1: "the R1 series' first PR turns it on").
-Nothing user-visible changes; ABO's binary behaves exactly as before.
+the toolchain guard's core rules, `TestCoreImportsOnlyCore`, `TestCoreHoldsNoAppKeyNames`, `archtest.NoInit`) and
+registers the reserved families `c/` and `m/`. **The R1 freeze is not this row's**: R1-35 adds the `RELEASE_FREEZE`
+toggle in `prerelease.yml` and sets it, and it merges before this row (this row depends on it). This row does not edit
+`prerelease.yml`. Nothing user-visible changes; ABO's binary behaves exactly as before.
 
 **Preconditions (STOP if any is missing).**
 1. OWNER-02 has cut the R0 production release (`gh release list --exclude-pre-releases --limit 3` shows it) and
    R0-01 (the toolchain bump) is merged: `grep -n '^export GOTOOLCHAIN' Makefile` shows the bumped pin.
 2. OWNER-01's recorded answers exist in the tracking issue: Q-I (how required checks are enforced) and
-   "keep or override the R1 freeze". If the owner overrode the freeze, skip step 12 and say so in the PR.
+   "keep or override the R1 freeze". R1-35 has applied it either way (value `'R1'` or `''`); nothing here depends on
+   which. R1-35 is merged: `grep -c 'RELEASE_FREEZE' .github/workflows/prerelease.yml` shows 3.
 
 ## Invariants (each one has a test or check below)
 
@@ -124,7 +126,6 @@ grep -n '^func KeyFamilies' internal/database/keyfamilies.go         # expect 33
 grep -c '"c/\|"m/' internal/database/keyfamilies.go                  # expect 0 (no reserved family yet)
 grep -n 'directory: /$' .github/dependabot.yml                       # expect the gomod entry (line 60 at f7ac5b11e; 03 cites 59-60)
 grep -n 'JOBS = ' scripts/ci/run_gates.py                            # expect: JOBS = {"own-job", "go-suite"}
-grep -n 'Promote to the next minor release' .github/workflows/prerelease.yml   # expect 1 (the step to gate)
 wc -l internal/server/testdata/op_ids.golden                          # expect 288 lines (header + op IDs)
 grep -n '^ci:' Makefile                                              # expect 789 (09 cites :785 at 748fd787a)
 ```
@@ -169,7 +170,7 @@ grep -n '^ci:' Makefile                                              # expect 78
    **whole** layer table (every package R4 names, L0 to L9, deferred packages included, the sub-package rule, the
    test-support packages, and the `internal/<capability>http` pattern at L6), its own `layerOf` and its own ratio
    floor; control per I7. Because the table is complete from this PR, a later row that creates a core package R4
-   names edits no shared guard file.
+   names edits no shared guard file. This row creates `core/internal/archtest_layers_test.go`; R1-09 and R1-13 list it only to change the in-module positive control (03 §3.5.1 item 2), never the layer table. Add `archtest.NoInit` to `core/archtest` in this step (the engine's second check beside `TestCoreImportsOnlyCore`).
 5. **ABO guard redesign** (`internal/arch/layering_test.go`, I6): keep `layerOf` and `allowed`; replace the
    floor and the control; the loader keeps `github.com/falkcorp/mediacore/` imports and the classifier maps them;
    add the classifier positive control and the `module`/`app` import assertion. The in-module control edge
@@ -216,28 +217,15 @@ grep -n '^ci:' Makefile                                              # expect 78
     `module-skew` and the core layering gate with job `core-job`; add `"core-job"` to `JOBS` in
     `scripts/ci/run_gates.py` (its `JOBS` set is `{"own-job", "go-suite"}` at the plan's base). R1-02 extends
     `test_run_gates.py` to validate `core-job` rows.
-12. **The R1 freeze** (09 §9.2.1). In `.github/workflows/prerelease.yml`: add to the workflow-level `env:` block
-
-    ```yaml
-      # Release freeze (09 §9.2.1). Non-empty: check-rc-ordinal dispatches no production release.
-      # R1-01 sets 'R1' and R1-31 clears it after the R1 release; F3-07 sets 'R2' and R2-02 clears it.
-      RELEASE_FREEZE: 'R1'
-    ```
-
-    (the plan's one name for the toggle; R1-31, F3-07 and R2-02 use exactly `RELEASE_FREEZE`), change the "Promote to the next minor release" step's condition to
-    `if: steps.rc.outputs.at_threshold == 'true' && env.RELEASE_FREEZE == ''`, and add right after it a step
-    "Report the release freeze" with
-    `if: steps.rc.outputs.at_threshold == 'true' && env.RELEASE_FREEZE != ''` that runs
-    `echo "::notice::Release freeze ${RELEASE_FREEZE} is on (09 §9.2.1): not dispatching a production release."`.
-    RCs are still cut; nothing else in the workflow changes.
-13. Header bumps; fragment `changelog.d/<today>_core_module.md` (`### Added`: "Internal: the core module
-    (`core/`) and its build guards; automatic minor releases are paused until the next release (R1)."). Commits may
+12. Header bumps; fragment `changelog.d/<today>_core_module.md` (`### Added`: "Internal: the core module
+    (`core/`) and its build guards."). Commits may
     be split by concern; every commit builds both modules.
 
 ## Tests and checks this task owns (write each before its code)
 
 - `TestCoreImportsOnlyCore` (core `archtest`), `TestNoAppRequire`, the engine's synthetic-graph self-test.
 - `TestCoreHoldsNoAppKeyNames` (root `internal/arch`), with 03 R1(c)'s cases as fixtures.
+- `archtest.NoInit` (core `archtest`): fails on an `init()` function or a package-level mutable variable in a package it is pointed at, and passes on a clean synthetic package (06 §6.10: `archtest.TestNoGlobals`, `archtest.NoInit` over `core/...` and `core/examples/...`; R1-13 owns `TestNoGlobals`). It runs over `core/...` from this PR; the `core/examples/...` scope arrives with R1-13's `hello`.
 - `TestJoinOrderMatchesSegmentOrder` (core `storage/keys`).
 - `genproto-exclude-root` (root `make ci`) and `make -C core exclude-check`.
 - `scripts/ci/check_module_skew.py` with `scripts/tests/test_check_module_skew.py` (cases: no skew passes; one
@@ -264,7 +252,7 @@ go test ./internal/arch/ -count=1        # expect ok (TestLayering, TestCoreHold
 python3 scripts/ci/check_module_skew.py && python3 -m pytest scripts/tests/test_check_module_skew.py scripts/tests/test_check_toolchain_versions.py -q   # expect exit 0, all passed
 python3 scripts/ci/genproto_exclude_root.py   # expect "present; green with it; load-bearing without it (requirer github.com/cockroachdb/errors@v1.14.0)"
 make -C core exclude-check               # expect "not applicable" for the core probe and a clean present/misplaced scan
-grep -c "RELEASE_FREEZE: 'R1'" .github/workflows/prerelease.yml    # expect 1
+git diff --stat origin/main -- .github/workflows/prerelease.yml    # expect empty: this row does not edit the workflow
 make ci && make -C core ci               # expect exit 0 for both
 ```
 
@@ -279,14 +267,14 @@ make ci && make -C core ci               # expect exit 0 for both
 
 ## Out of scope
 
-Every other row of R1's CI classification table (R1-03), `extraction-gates`, `vet-darwin`, `vet-integration`
+The R1 freeze and the `RELEASE_FREEZE` toggle (R1-35). Every other row of R1's CI classification table (R1-03), `extraction-gates`, `vet-darwin`, `vet-integration`
 (R1-02), the Docker changes (R1-04), any package move beyond `internal/arch`'s engine, `archtest.NoKernelImports`,
 `SDKOnly`, `ModulesIsolated` (they arrive with the packages they guard).
 
 ## Rollback
 
-Revert the PR: the module, guards and the freeze go with it; no stored data changes. If only the freeze must go,
-R1-31's one-line change is the rollback for it.
+Revert the PR: the module and guards go with it; no stored data changes. The freeze is R1-35's and is not
+affected by this revert.
 
 ## Repo rules (every PR of this workstream)
 

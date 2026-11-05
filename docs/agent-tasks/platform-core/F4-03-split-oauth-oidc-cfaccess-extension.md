@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-03-split-oauth-oidc-cfaccess-extension.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 6d906762-e7f8-4bbc-b7e3-b7cbceb0b389 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F4-03 |
 | Release / flip | R2, identity flip F4 (dark PR: ABO's gin chain and routes keep HEAD's behaviour until F4-08) |
 | Tier | **T3** (Opus, high): an OIDC move with the native-app hand-off and an owner-proof extension |
-| Wave | W27 (runs inside an announced **move window**: no other PR of the wave touches `internal/oauth/`, the `internal/server/` files listed below, `internal/auth/owner.go`, `go.mod`, `core/go.mod` or the shared `layerOf` and shard files) |
+| Wave | W29 (runs inside an announced **move window**: no other PR of the wave touches `internal/oauth/`, the `internal/server/` files listed below, `internal/auth/owner.go`, `go.mod`, `core/go.mod` or the shared `layerOf` and shard files) |
 | Depends on | F4-02 |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
 

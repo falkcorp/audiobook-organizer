@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F6-04-outbox-operator-routes-dark.md -->
-<!-- version: 1.0.2 -->
+<!-- version: 1.0.3 -->
 <!-- guid: 939e1586-1e99-43dd-b555-319f2d5b85cb -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -13,7 +13,7 @@
 | ID | F6-04 |
 | Release / flip | R2, events flip F6 (dark PR; mounted at F6-03) |
 | Tier | **T2** (Sonnet / high): audited, interactive routes that replay or discard messages; every route, permission and guard is fixed by the spec |
-| Wave | W29 (beside F3-07, F5-01 … F5-12, F5-19, F7-07, F9-01; file-disjoint) |
+| Wave | W31 (beside F3-08, F4-07, F5-01, F5-02, F5-03, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13, F5-19, F7-05, F7-06, F9-01; file-disjoint) |
 | Depends on | F6-01 (the outbox and its store), F4-01 (`rbac`), F4-02 (`auth`, the principal and its method), F2-07 (`audit.Logger`) |
 | Owns gate tests | none of 09's gate list; the route tests below (names coined here) |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |

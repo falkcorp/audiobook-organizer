@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F6-01-core-outbox-relay-dark.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: db05b494-8e19-4d17-b633-9fa4ab8af310 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F6-01 |
 | Release / flip | R2, events flip F6 (dark PR; live at F6-03) |
 | Tier | **T4** (Opus, xhigh–max): durable at-least-once delivery committed in the producer's batch |
-| Wave | W28 (beside F2-16, F4-05, F5-15, F6-02, F7-02, F7-03, F7-06, F8-03; file-disjoint) |
+| Wave | W30 (beside F2-16, F4-05, F5-15, F6-02, F7-02, F8-01, F8-03; file-disjoint) |
 | Depends on | F4-04, F2-05 |
 | Owns gate tests | the outbox stream tests of 05-events: `TestOutbox_StageCommitsWithBatch`, `TestOutbox_RedeliveryAfterCrashBeforeAck` |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
@@ -116,7 +116,9 @@ grep -rn 'GetForUpdate' core/storage/*.go | wc -l                     # >= 1 (R1
    `core/kernel/outbox.go` names `core.notify.deliver` from this PR (05-events §5E.5.2 Retention names it; it registers
    with F7-05's notify, and a declared consumer that has never run holds nothing); `core.acquire.download-events` is
    deferred with `acquire` (plan §(j)).
-8. Kernel wiring (dark), metrics (§5E.10), headers, one `changelog.d/` fragment, Acceptance.
+8. Kernel wiring (dark), metrics (§5E.10), headers, one `changelog.d/` fragment, Acceptance. The metrics add the core
+   `outbox` scope: add its `testdata/series.golden`, asserted by `metricstest.AssertSeries` (R1-10; 05-metrics §5
+   item 5).
 
 ## Tests first (05-events §5E.12, outbox rows; the gate pair first)
 
@@ -132,6 +134,17 @@ batch), `TestOutbox_ZombieRelayCannotDoubleSequence`, `TestOutbox_TxHandlerEffec
 `TestOutbox_TxStartRunSameBatchAsTransition`, `TestOutbox_ConsumeIntoTaskRequiresMode`,
 `TestRelay_DefinitionRegistersAndDeliversLive`, `TestOutbox_RelayRestartsAfterCancel`,
 `TestOutbox_RelayDisabledDegradedNoLoss`, `TestNoGlobals_EventsOutbox` (the outbox half). Run them on hello and coretest.
+
+The outbox-triggered task rows of 05-tasks §5T.9 (they prove `Tx.StartRun` through `Executor.StartIn`):
+
+- `TestOutboxTriggered_StartInSameBatchAsCursor`: a crash between the run's queue row and the consumer's cursor cannot
+  happen, because both commit in one batch.
+- `TestOutboxTriggered_ModeFromConsumerOption`: a `ConsumeIntoTask` without `Live()` or `Preview()` fails
+  registration, and an unset `Tx.StartRun` mode is refused.
+- `TestOutboxTriggered_WritesNoIdemRecord`: an outbox-triggered start writes no idempotency record (the cursor is the
+  dedup).
+
+`metricstest.AssertSeries` over the `outbox` scope's `testdata/series.golden` (05-metrics §12).
 
 ## Invariants
 

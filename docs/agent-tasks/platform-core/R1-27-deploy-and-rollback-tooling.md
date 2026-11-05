@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-27-deploy-and-rollback-tooling.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: e981aa06-b2f6-4fd5-91ce-9cc3d994ad37 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -14,7 +14,7 @@
 | Spec | 09 §9.4 R1 Content: deploy tooling; 09 §9.2.1 (rollback, rollback-restore); 05-storage §5S.3.12 (make rollback-restore); 05-health §5H.4 (stop timeouts, KillMode=mixed) |
 | Branch | `agent/platform-core-r1-27-deploy-and-rollback-tooling` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 
@@ -80,11 +80,16 @@ Deploy and rollback tooling that R1 and R2 need, tested against a fake host (09 
   `ExecMainStatus=78` exits with the named message; no `SSH_HOST` polls the URL only.
 - `scripts/tests/test_make_rollback.py` (09 §9.4 R1 Verification): runs `make rollback` and `make rollback-restore`
   (with a checkpoint and with an archive) against the fake-ssh harness; asserts the refusal on a level mismatch, the
-  refusal while `inflight.json` exists, the command order, and that nothing is swapped before the level check.
+  refusal while `inflight.json` exists, the command order, that nothing is swapped before the level check, and that
+  both restore forms pass `--accept-loss`.
 
 ## Dependency check
 
-R1-25 and R1-19 merged: `test -f core/app/offline.go && test -f core/app/binaryid.go && echo ok`.
+R1-25 and R1-19 merged: `test -f core/app/offline.go && test -f core/app/binaryid.go && echo ok`. R1-25 built the
+flag this row's recipe calls: `git grep -n -e '--accept-loss' -- core/app cmd | head -3` must show it on
+`storage restore-offline` (a completed checkpoint or an archive restore is refused without it, 05-backup §5B.3.4). If
+it is missing, STOP and report it: the fake-host test below passes against its own stub whether or not the real command
+accepts the flag, so only this grep catches the gap before the R2 rollback drill.
 
 ## Re-verify (expected at `f7ac5b11e`)
 

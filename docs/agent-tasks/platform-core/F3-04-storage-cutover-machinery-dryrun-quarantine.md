@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-04-storage-cutover-machinery-dryrun-quarantine.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.3 -->
 <!-- guid: e1287955-3c4d-4b21-b3f5-bebfca0452a8 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F3-04 |
 | Release / flip | R2, config flip F3 (dark PR) |
 | Tier | **T4** (Opus, xhigh–max): the level step, quarantine and dry run guard every one-way step |
-| Wave | W25 |
+| Wave | W27 |
 | Depends on | F2-06 |
 | Owns gate tests | `TestDryRunMatchesLiveRun`, `TestQuarantineCommands` |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
@@ -36,7 +36,8 @@ Build, in core and unregistered, every mechanism the R2 cutover steps run on tha
 built `storage/datamigrate` and `internal/storagemigrate`):
 
 1. the **level step** procedure of 05-storage §5S.3.7 as a reusable `Breaking` versioned step with no writes of its
-   own, with books' legacy projection staged through `LegacyGuardProjection.Stage`, and core's own half of M7;
+   own, with books' legacy projection staged through `LegacyGuardProjection.Stage`, and the constructor of core's own
+   half of M7 (`core.level-<n>`), which F3-07 registers;
 2. the **quarantine record** `storage.QuarantineRecord` under `c/storage/quarantine/<step-id>/<n>`, with sealing of
    rows under a step's `Sensitive` prefixes (never kept raw), the health token and the metric;
 3. the **read-only cutover preflight hook** in the kernel's P4a, run only on a store whose cutover has not started,
@@ -47,7 +48,38 @@ built `storage/datamigrate` and `internal/storagemigrate`):
 5. the offline commands `storage migrate --dry-run [--id <id>] [--from-archive <file>] [--estimate]` with its
    scratch area, and `storage quarantine list | export --out <file> | purge --step <id> --confirm`.
 
-Nothing is registered for ABO here: books' M7 and M8 definitions are F3-06's, registration is F3-07's.
+Nothing is registered for ABO here: books' M7 and M8 definitions are F3-06's, registration is F3-07's. This row also
+states the **flip mechanism** below, the one rule every R2 flip follows for M7 and M8.
+
+## Flip mechanism (order M2, M3; 03 §3.8; 05-storage §5S.3.5, §5S.3.7, §5S.3.13)
+
+03 §3.8: "Each later flip that adds a step raises M7's target levels in the same PR, so every build stamps exactly the
+steps it has applied, and an older `main` refuses a store that a newer `main` migrated. M8's step ID names the last step
+it compacts after, so a flip that adds a step also registers a new M8." The plan implements that one way:
+
+1. **IDs.** M7 is made of **level steps**: `Breaking` versioned steps with no writes of their own, whose names encode
+   the target level: books' `books.level-<n>` and core's `core.level-<n>` (names coined here; the spec names neither).
+   F3-07 registers the first one of each owner. M8's ID names the step it compacts after:
+   `books.rewrite-after-<step name>` (05-storage §5S.3.13). F3-06 keeps books' IDs in `stepids.go`.
+2. **M7: each flip adds level steps, never removes one.** Versioned steps are numbered 1..n, contiguous per owner, and
+   recorded by version number (§5S.3.5 `Migration.Version`; `c/storage/ks/<owner>/applied/<v>`), so a flip must not
+   remove an earlier level step. Each flip that adds a cutover step (F3-07 for M2, then F4-08, F5-18, F7-09) also adds
+   a new level step for each owner whose level it raises (`books`; `core` when core's level changes), named for the new
+   target `<n>`, and bumps that owner's declared `Spec.Level` to `<n>` in the same PR. The new level step takes the
+   owner's next contiguous version, numbered immediately before the flip's own new migration step (which runs `After`
+   it), so it runs before that step deletes anything. Earlier level steps stay registered unchanged. A level step
+   writes only stamps, so several in the R2 build are cheap. Each cutover step's `RaisesLevel` equals the books level
+   of the level step it runs after (§5S.3.13 "Steps M2–M6": its own stamp is a no-op), read from one constant per
+   level; a flip adds its own constant and never edits an earlier flip's.
+3. **M8: each flip replaces it.** The flip registers a new M8 named for its new step and removes the previous one, so
+   exactly one M8 is registered and it runs last. The previous M8's `done` record in `c/storage/dm/` is ignored by the
+   runner (F2-06 rule 2), and its `applied` `KindRewrite` journal is ignored by the new M8 (§5S.3.13 "M8: the
+   rewrite"). So a store migrated by the previous flip's `main` has its levels raised before the new step runs, and is
+   rewritten exactly once more after it (IMPL-13). No runner change: versions stay contiguous (R1-20).
+4. **Proof per flip.** Each flip adds one cell to F2-15's `TestCutoverFlipUpgrade` table (levels raised to the build's
+   target before the flip's first step, exactly one M8, the previous `main`'s binary exits 78), and F3-06's list check
+   runs over the registered list: the levels are raised to the build's target before the first step of each flip,
+   versions are contiguous per owner, and exactly one M8 is registered, last.
 
 ## Spec
 
@@ -77,6 +109,8 @@ Nothing is registered for ABO here: books' M7 and M8 definitions are F3-06's, re
 | create | `core/internal/restoreswap/rewrite.go` (the `KindRewrite` swap and the M8 phase engine) |
 | create | `core/app/offline_storage.go` (`storage migrate --dry-run`, `storage quarantine …`) |
 | modify | `core/kernel/migrate.go` (P4a preflight before the headroom check and checkpoint; M8's in-process swap; exit 78 mapping) |
+| modify | `core/app/offline.go` (append `storage migrate --dry-run` and `storage quarantine …` to `OfflineCommands`' list; nothing else) |
+| modify | `core/coretest/crashmatrix/writers.go` (the boot-writer rows for M7's sidecar and stamp writes and M8's phases) and `core/examples/hello/crash_test.go` (their cells; step 8) |
 | create | tests beside each |
 
 ## Re-verify at BASE
@@ -86,8 +120,9 @@ grep -rn 'type DataMigration struct' core/storage/datamigrate/ | wc -l          
 grep -rn 'Preflight\b\|Preflight ' core/storage/datamigrate/*.go | wc -l       # expect >= 1 (the field)
 grep -rn 'func (w \*StepWriter) Quarantine' core/storage/datamigrate/ | wc -l  # expect 1 (see STOP 1)
 grep -rn 'func (w \*StepWriter) Batch' core/storage/datamigrate/ | wc -l       # expect 1
-grep -rn 'KindRewrite' core/storage/restorejournal/ | wc -l                     # expect >= 1 (R1-20; see STOP 2)
-grep -rn 'StepID' core/storage/restorejournal/ | wc -l                          # expect >= 2 (Intent and Record)
+grep -rn 'KindRewrite' core/storage/restorejournal/ | wc -l                     # expect >= 1 (R1-20, per 05-storage §5S.3.15; see STOP 2)
+grep -rn 'StepID' core/storage/restorejournal/ | wc -l                          # expect >= 2 (Intent and Record; R1-20)
+grep -rn 'func OfflineCommands' core/app/offline.go | wc -l                     # expect 1 (R1-25's list)
 grep -rn 'type LegacyGuardProjection struct' core/storage/ | wc -l             # expect 1 (R1-20)
 grep -rn 'LevelTooNewError' core/storage/ | wc -l                               # expect >= 1
 grep -rn 'func OpenOffline' core/kernel/ | wc -l                                # expect 1 (R1-25)
@@ -113,13 +148,20 @@ ls core/storage/level_step.go core/storage/quarantine.go core/storage/preflight.
    the marker) with fsync, then commit the stamp batch (with `LegacyGuardProjection.Stage` when the projection
    changes) alone, before any chunk; on a commit error rewrite the sidecars from the committed stamps. The marker is
    cleared at §5S.4 step 9 of the boot that leaves no books `Breaking` step pending. Provide a constructor for core's
-   own half of M7 (`core` raised), unregistered.
+   own half of M7 (`core` raised; name `core.level-<n>` per the flip mechanism, target level and version as
+   parameters), unregistered: F3-07 registers it next to books' half. Books' half is built on the same procedure by
+   F3-06.
 3. **Quarantine** (`quarantine.go`): `QuarantineRecord` exactly as below; key `c/storage/quarantine/<step-id>/<n>`,
    `n` from the keyspace's `quarantine` `Sequence`; a row under one of the step's `Sensitive` prefixes is sealed as the
    secret record `core.storage.quarantine.row-<n>` through the sealer and the record names it in `Secret` with an
-   empty `Value`. The sealer is a **seam**: a one-method interface (name coined here) that F3-03's `secrets.Importer`
-   satisfies and that **F3-07 binds** at boot (05-config §2.3 hands it to storage's quarantine sealing). `storage`
-   (L1) cannot import `secrets` (L2), so the runner holds the seam. F3-03 has merged in an earlier wave but is not a
+   empty `Value`. The sealer is a **seam**: a one-method interface in `core/storage` (type name coined here) of the
+   shape of `secrets.Importer.ImportSecret`, `Seal(ctx context.Context, b *Batch, name string, raw []byte) error`,
+   staging the sealed record into the chunk's batch `b` (05-storage §5S.3.13: "in the same batch"); `name` is the
+   `secrets.Name` string `core.storage.quarantine.row-<n>`. `storage` (L1) cannot import `secrets` (L2), so the
+   signature names no `secrets` type; **F3-07 binds** it at boot through an adapter over F3-03's
+   `secrets.Importer.ImportSecret` (05-config §2.3 hands the importer to storage's quarantine sealing). With a nil
+   sealer, quarantining a row under a `Sensitive` prefix fails the step and leaves the source row in place (never kept
+   raw, never dropped), as F2-06's nil writer fails closed. F3-03 has merged in an earlier wave but is not a
    dependency of this row: test with a fake sealer, and do not import `core/secrets` from `core/storage`. Health `storage_quarantine` (warning; count per step, `sensitive`,
    `orphaned_refs`), carried only on authenticated routes; `mediacore_storage_quarantine_rows{step, sensitive}`.
 4. **Preflight** (`preflight.go`, `kernel/migrate.go`): before the headroom check and the checkpoint (06 §6.5.1 P4 (a),
@@ -152,12 +194,20 @@ ls core/storage/level_step.go core/storage/quarantine.go core/storage/preflight.
    blockers first, then per step counts per outcome, held items, would-quarantine keys and reasons, bytes written, the
    first N keys per outcome and duration; delete the scratch whatever the outcome. `--estimate` is the old in-batch
    discard mode, labelled an estimate.
-7. **Quarantine commands** (`offline_storage.go`): `list` (keys, reasons, sizes, never values; read-only open),
+7. **Quarantine commands** (`offline_storage.go`; both command groups appended to `OfflineCommands` in
+   `core/app/offline.go`): `list` (keys, reasons, sizes, never values; read-only open),
    `export --out <file>` (values, sensitive ones decrypted through the unsealer seam, mode 0600, refused if the file
    exists), `purge --step <id> --confirm` (read-write through `kernel.OpenOffline`; deletes one step's records and their
    sealed secrets in one batch; audited `core.storage.quarantine_purge`; health clears when empty).
-8. Extend core's crash matrix over hello with M8's phases and the level step's sidecar and stamp writes; add the
-   boot-writer rows. Headers, one `changelog.d/` fragment, Acceptance.
+8. Extend core's crash matrix over hello with M8's phases and the level step's sidecar and stamp writes: add the
+   boot-writer rows to `core/coretest/crashmatrix/writers.go` and their cells to `core/examples/hello/crash_test.go`.
+   Nothing registers a level step or an M8 before F3-07, so each cell boots hello with a **test-only** level step and
+   a test-only M8 declared in `crash_test.go` (a test module beside hello; no change to
+   `core/examples/hello/module.go`), kills at that writer, reboots, and asserts the resume rule (sidecar before stamp;
+   M8's phase from its own journals). `TestBootCrashMatrixCoversEveryWriter` then finds a cell for each new row. If
+   the kernel cannot register a test-only versioned step or data migration at this base (F2-16 wires
+   `Manifest.DataMigrations`), drive the kernel entry points in `core/kernel/migrate.go` directly, as F2-06's cells do,
+   and say so in the PR. Headers, one `changelog.d/` fragment, Acceptance.
 
 ## Code contract (05-storage §5S.3.13; copy exactly)
 
@@ -188,9 +238,15 @@ the missing two. `Build` holds the binary ID (`app.BinaryID`), never a UI build 
 
 `TestDryRunMatchesLiveRun` (gate: counts from `--dry-run` equal a live run's, the quarantine report included; the live
 directory's SST and MANIFEST file names and sizes unchanged; no ratchet ran), `TestQuarantineCommands` (gate: `list`
-never shows a value; a sensitive row is stored only as a sealed secret record; `export` writes values, sensitive ones
-decrypted, mode 0600; `purge --step --confirm` deletes one step's records and their sealed secrets, audited; health
-clears when empty), `TestDryRunScratchModeAndSweep`, `TestRaiseWritesSidecarBeforeStamp`,
+never shows a value; a sensitive row is stored only as a sealed secret record, staged in the chunk's batch through the
+sealer seam; with a nil sealer a sensitive row fails the step and its source row stays; `export` writes values,
+sensitive ones decrypted, mode 0600; `purge --step --confirm` deletes one step's records and their sealed secrets,
+audited; health clears when empty), `TestP4bOrder_LevelStepBeforeCutover` (06 §6.10, D10, 03 §3.8: over a test-module
+fixture with legacy claims, a cutover step and an importer, P4b runs the versioned steps, then the level step, then the
+cutover step, then the compaction; a kill after the level step leaves a store the older build refuses; a kill or an
+error inside the cutover step resumes from its cursor with no record lost or written twice; an undecodable row lands
+under `c/storage/quarantine/` and in health and the step completes; the cutover step runs with the module disabled;
+a fresh install stamps the cutover step applied and runs nothing), `TestDryRunScratchModeAndSweep`, `TestRaiseWritesSidecarBeforeStamp`,
 `TestRaiseCommitErrorRewritesSidecar`, `TestRaiseNeverLowersLevel` (extend if R1-20 has them),
 `TestCutoverRewriteLeavesNoOldFile` (over hello: no file of the old directory remains, the generation is unchanged,
 the attempt's checkpoint restores), `TestRewriteSwapBackMovesNoCheckpoint` (05-backup), the M8 cells of
@@ -212,8 +268,8 @@ fake pending step whose `Preflight` returns a blocker refuses with exit 78 and w
 ```bash
 (cd core && go vet ./storage/... ./internal/restoreswap/... ./kernel/... ./app/...)               # exit 0
 (cd core && go test -race -count=1 ./storage/... ./internal/restoreswap/... ./kernel/... ./app/...)   # ok
-(cd core && go test -count=1 -run 'TestDryRunMatchesLiveRun|TestQuarantineCommands' ./...)          # PASS
-(cd core && go test -count=1 -run 'TestBootCrashMatrix' ./...)                                      # PASS
+(cd core && go test -count=1 -run 'TestDryRunMatchesLiveRun|TestQuarantineCommands|TestP4bOrder_LevelStepBeforeCutover' ./...)   # PASS
+(cd core && go test -count=1 -run 'TestBootCrashMatrix|TestBootCrashMatrixCoversEveryWriter' ./...)  # PASS (with the new rows)
 go test -count=1 -run 'TestBootCrashMatrix_ABO' ./...                                                # PASS, unchanged
 make -C core ci                                                                                      # exit 0
 make ci                                                                                              # exit 0
@@ -239,9 +295,3 @@ feat(core/storage): level step, sealed quarantine, cutover preflight, KindRewrit
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
-
-## Planner notes
-
-- **Runner and journal files.** If F2-06 did not build `StepWriter.Quarantine` with sealing in the chunk batch, or
-  R1-20 did not land `KindRewrite` and `StepID` in `core/storage/restorejournal/`, this row needs
-  `core/storage/datamigrate/`, `core/internal/storagemigrate/` or `core/storage/restorejournal/` (STOP 1, STOP 2).

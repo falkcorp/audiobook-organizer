@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-06-core-version-checkpoints-readiness.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 3f616e9b-4602-4e36-8503-c2d539986fac -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -14,7 +14,7 @@
 | Spec | 12 §12.3 (SC1-SC10 commands), §12.3.11 (readiness target), §12.4.1 (core-checkpoint job), §12.4.3; 09 §9.4 R1 CI classification (check_core_version.py, core-checkpoint) |
 | Branch | `agent/platform-core-r1-06-core-version-checkpoints-readiness` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-17-oplint-becomes-core-tasklint.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.3 -->
 <!-- guid: cf14f86a-65b9-449c-a52b-9c60ce53a8ff -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F2-17 (the retired F5-17's work, moved to F2) |
 | Release / flip | R2, foundation PRs (F2), **dark** move PR inside an announced move window; no route, schedule or stored row changes |
-| Wave | W25 |
+| Wave | W27 |
 | Tier | **T3** (Opus / high): an analyzer re-rooted on a new module path, with the shrink-only ratchet over every conversion row's entry file |
 | Depends on | F2-01 (`core/tasks` exists, so the analyzer has constructors to recognise) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
@@ -179,7 +179,11 @@ row owns the file and that only that row may delete it). The union is the set of
    over, shrink-only) and §5T.3.2 (accepted parallelism arguments (a), (b), (c); flags `tasks.Parallelism{}`, a zero
    `var`, `Sequential("")`, `Fixed(n, "")`). Self-tests (05-tasks §5T.9 "guards" row): `TestResumeContinueCheckpoints_SelfTest`
    and `TestRunItemsDeclareParallelism_SelfTest` (names coined here) over fixture packages with one passing and one
-   failing case per clause. Core's own call over `core/...` goes in `core/archtest/tasklint/core_test.go` beside
+   failing case per clause. Also the spec-named pair of 05-tasks §5T.9 (the "R7 pass-through" row), beside them:
+   `TestArchtest_PassThroughParallelismAccepted` (a pass-through through a `tasks.Parallelism`-typed field, clause (b),
+   and through a `//mediacore:required` options field, clause (c), is accepted, so core's own
+   `RunItems(rc, o.Parallelism, …)` passes; COR-23) and `TestArchtest_ZeroLiteralFlagged` (a `tasks.Parallelism{}`
+   literal, a zero `var`, `Sequential("")` and `Fixed(n, "")` are flagged). Core's own call over `core/...` goes in `core/archtest/tasklint/core_test.go` beside
    invariant 1. The HEAD tests they succeed stay until F5-18 (they check HEAD's code).
 6. **Test-support only.** No non-test core package imports `archtest/tasklint` (03 R4).
 
@@ -196,7 +200,7 @@ row owns the file and that only that row may delete it). The union is the set of
    `internal/books/tasklint_test.go` (invariants 3 and 4) and make it pass. Self-check: delete one line of an entry
    file whose path has a finding, see `TestTasklint_Books` fail, restore it.
 6. `Makefile`: replace the `oplint` target with `tasklint` (name coined here) running
-   `cd core && go test ./archtest/... -run 'TestTasklint_Core|SelfTest' -count=1` and
+   `cd core && go test ./archtest/... -run 'TestTasklint_Core|SelfTest|TestArchtest_' -count=1` and
    `go test ./internal/books/ -run 'TestTasklint_' -count=1`; put `tasklint` where `oplint` was in `ci:` and in the
    `.PHONY` list.
 7. `internal/arch/layering_test.go`: remove the `"tools/cmd/oplint"` entry. `scripts/ci/fixture_weights.json`: remove

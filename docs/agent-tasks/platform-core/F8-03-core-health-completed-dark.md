@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-03-core-health-completed-dark.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: d5d73704-a330-44d0-8759-af83c06c3893 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F8-03 |
 | Release | R2, flip label F8 (dark PR) |
 | Tier | **T3** (Opus / high): probes and the startup supervisor; unauthenticated probes must never leak a token outside the golden set |
-| Wave | W28 (beside F2-16, F4-05, F5-15, F6-01, F6-02, F7-02, F7-03, F7-06; file-disjoint; this row is W28's one owner of `core/kernel/health.go`) |
+| Wave | W30 (beside F2-16, F4-05, F5-15, F6-01, F6-02, F7-02, F8-01; file-disjoint; this row is W28's one owner of `core/kernel/health.go`) |
 | Depends on | F2-10 (readiness core), F2-11 (`diagnostics` minimal owner registration and `InterimExport`), F4-04 (the `events` bus, for the status topic) |
 | Spec | 05-health §5H.3 (all of it: §5H.3.1 registry, §5H.3.2 startup steps, §5H.3.3 probes and HTTP, §5H.3.4 supervisor signals, §5H.3.5 diagnostics bundle, §5H.3.6 sysinfo), §5H.4 (stop budget), §5H.5–§5H.8, §5H.9 (tests), §5H.10 ("Landing by release", row F8); 06 §6.4.10 (F8 row: `Registrar.StartupSteps`, `Registrar.Diagnostics`); 04 §8.1 F8 |
 

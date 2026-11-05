@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-10-httpapi-corefixedgroup-exact-patterns.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 0398de9d-2bb5-4cdc-bd80-084cd51c0a37 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F4-10 |
 | Release / flip | R2, identity flip F4 (dark PR: no app registers a fixed-group route before F4-05 builds `authhttp` and F4-08 mounts it) |
 | Tier | **T2** (Sonnet, high): two router members and one build-time refusal, with exact patterns the spec fixes |
-| Wave | W22 |
+| Wave | W24 |
 | Depends on | OWNER-03 (NOT AGENT WORK: R1 released and deployed) |
 | Owns gate tests | none of 09's list; `TestCoreExactPatterns_TwoEntries` and the router cells of `TestCoreFixedGroup_OIDCCallback` (05-http-api §12) |
 | Gate | Plan, then execute autonomously in your own worktree and PR. Do not merge with `--admin` past a required check. |

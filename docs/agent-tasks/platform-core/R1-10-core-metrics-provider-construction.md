@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-10-core-metrics-provider-construction.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 1308b2a6-0800-4e0a-99b8-026da89fd137 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -11,10 +11,10 @@
 | Tier | **T3** (Opus / high): provider construction moves while every served series must keep its meaning; the test gates every later rename |
 | Release / wave | R1 / W07 |
 | Depends on | R1-02 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
-| Spec | 05-metrics §13 item 1, §6, §12 (TestDeployReferencedSeriesServed, TestPromRules_Promtool); 09 §9.2.7; 09 §9.2.1 (extraction-gates: the dashboard-reference test); 04 §2.4 (internal/telemetrypolicy) |
+| Spec | 05-metrics §13 item 1, §6, §12 (TestDeployReferencedSeriesServed, TestPromRules_Promtool, TestCardinality_OverflowFailsMetricstest, metricstest.AssertSeries), §6 items 3 and 5; 09 §9.2.7; 09 §9.2.1 (extraction-gates: the dashboard-reference test); 04 §2.4 (internal/telemetrypolicy) |
 | Branch | `agent/platform-core-r1-10-core-metrics-provider-construction` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 
@@ -65,7 +65,7 @@ series keeps its name, labels and meaning in this PR.
 `package metrics` (`core/metrics`, L0): `Options`, `OTLPMetrics`, `OTLPTracing`, `Provider` with `New`,
 `MeterProvider`, `TracerProvider`, `Propagator`, `Registerer`, `Gatherer`, `Handler`, `Shutdown`, `Core`, `Module`;
 `Scope` with `Prefix`, `Meter`, `Tracer`, `Propagator`, `Allowed`, `View`; `ErrInstrumentName`, `ErrScopeTaken`,
-`ErrFamilyTaken`; the exporter construction exactly as 05-metrics §3 states (`prometheus.WithRegisterer(reg)`,
+`ErrFamilyTaken`; and the test kit `core/metrics/metricstest` (below); the exporter construction exactly as 05-metrics §3 states (`prometheus.WithRegisterer(reg)`,
 `WithoutScopeInfo()`, `WithTranslationStrategy(otlptranslator.UnderscoreEscapingWithSuffixes)`, plus the Go and
 process collectors on the private registry), the one-owner-per-family wrapper of §3, the instrument rules of §3.
 **Minimum-surface rule (04 §8 intro):** `Options.Redactor *log.Redactor` needs 05-logging §3's `log.Redactor`,
@@ -87,6 +87,15 @@ R1-32 adds it. No other §3 member may be dropped.
   `TestKernelFamiliesGathered` by R1-13, `TestFamilyTaken_ThroughGlobalProvider` (and `TestContractScrapesServedHandler`)
   by R1-15, `TestStage2_ServerAddressIgnoresHost` and `TestHandler_NoDoubleGzip` by R1-17,
   `TestTrace_NoApikeyInSpanAttributes` by R1-32. Do not write them here.
+- `core/metrics/metricstest` is built here (05-metrics §6 items 3 and 5; the signatures are yours within the spec's
+  names): `AssertSeries`, which compares the family, type and label set a scope's provider gathers with that
+  scope's `testdata/series.golden` and fails with the diff on a mismatch, and the overflow check, which fails when an
+  instrument's series count reaches the SDK per-instrument limit (`core.metrics.cardinality_limit`, default 2000;
+  the SDK's overflow series is the signal). `TestCardinality_OverflowFailsMetricstest` (spec name, 05-metrics §12:
+  exceeding the limit is detected) drives an instrument past a small limit through a fresh `Provider` and asserts
+  the overflow check fails. A self-test of `AssertSeries` (a changed label set is reported; a missing family is
+  reported) lives beside it. Every later row that adds a core metrics scope adds a `testdata/series.golden` for it,
+  asserted by `metricstest.AssertSeries`; this row adds no scope of its own, so it writes no golden.
 - ABO's served series do not change: HEAD's `TestSeriesContract`, `TestDeclaredFamiliesInGolden`,
   `TestReservedAISeries`, `TestAIFamiliesOnScrape` (moved into `internal/telemetrypolicy`) pass unchanged against
   their goldens; `internal/telemetry/ratchet_test.go`'s client_golang ratchet stays at its baseline.

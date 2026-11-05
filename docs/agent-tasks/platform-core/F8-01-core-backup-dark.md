@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-01-core-backup-dark.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 4815a9a9-aae1-479b-9e95-a1d9a80564de -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,8 +10,8 @@
 | ID | F8-01 |
 | Release | R2, flip label F8 (dark PR) |
 | Tier | **T4** (Opus / xhigh–max): backup and restore of every core store; a wrong reader or a wrong staging check loses or exposes the whole install |
-| Wave | W26 (beside F2-04, F3-06, F7-04, F7-10; file-disjoint; this row is W26's one owner of `core/go.mod`, `core/go.sum` and `go.sum`) |
-| Depends on | F4-04 (`backup/journal` types), F3-03 (core secrets: the provenance HMAC is keyring-derived) |
+| Wave | W30 (beside F2-16, F4-05, F5-15, F6-01, F6-02, F7-02, F8-03; file-disjoint; this row is W26's one owner of `core/go.mod`, `core/go.sum` and `go.sum`) |
+| Depends on | F4-04 (`backup/journal` types), F3-03 (core secrets: the provenance HMAC is keyring-derived), F4-11 |
 | Spec | 05-backup §5B.0 (B1–B8), §5B.3 (all: §5B.3.1 contents, §5B.3.2 types, §5B.3.3 `mediacore-backup/1`, §5B.3.4 staged restore, §5B.3.5 creation/verification/retention/catalogue, §5B.3.6 revocation journal, §5B.3.7 provenance, §5B.3.8 routes, §5B.3.9 deferred-build), §5B.5–§5B.8, §5B.9 (tests), §5B.10; 05-config §1.12.2 and §2.4 (`--gap-fill`); 05-storage §5S.3.12 (`storage restore-offline`); 04 §8.1 F8 |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. **Dark:** ABO's `internal/backup` keeps
@@ -36,7 +36,8 @@ Build core `backup` (05-backup), dark:
   `db/`, config file and boot record, module artifacts, optional derived items, with `.sha256` and manifest
   sidecars; **no archive ever holds the keyring**; plaintext only (encryption is deferred-build, B3, §5B.3.9);
 - provenance (B5, §5B.3.7): a keyring-derived HMAC bound to the install; an archive without a valid MAC is foreign;
-- creation with verification (B4), retention with its floors, the catalogue derived from sidecars in the backup
+- creation with verification (B4) — `Create`'s journal writes included: `JournalSeq` and the `c/backup/served_boot` pair
+  read into the manifest before the checkpoint, and the fresh pair written after it (§5B.3.5 step 4) — retention with its floors, the catalogue derived from sidecars in the backup
   directory (B6, §5B.3.5), `Service`, `Runner` and `Ensurer` (§5B.3.2);
 - staged restore (B2, §5B.3.4, steps 1–9 and the kernel-side steps that R1's `core/internal/restoreswap` already
   runs), including step 4's upgrade-floor check from the module manifests;
@@ -74,7 +75,8 @@ Build core `backup` (05-backup), dark:
 | modify | `core/go.mod`, `core/go.sum`, `go.sum` (zstd and tar dependencies if new to core; `make -C core replace-check` stays green) |
 | create | one `changelog.d/` fragment (headerless) |
 
-`core/backup/journal/` exists (F4-04) and is not edited here except to adopt `journal.StorageSpec()` if 05-backup
+`core/backup/journal/` exists (F4-04's types and append, F4-11's authenticated format, `backup.location.json` writer
+and boot re-apply) and is not edited here except to adopt `journal.StorageSpec()` if 05-backup
 says `backup` adopts it at its own flip (that adoption is F8-04's wiring; leave the kernel's registration as is).
 
 ## Re-verify before editing (expected results at your base)
@@ -82,6 +84,8 @@ says `backup` adopts it at its own flip (that adoption is F8-04's wiring; leave 
 ```bash
 # F4-04's journal leaf. Expected: package journal with Revocation, Head, RestoreHook
 grep -n 'type Revocation struct\|type Head struct\|type RestoreHook func' core/backup/journal/*.go
+# F4-11's boot re-apply and hook runner. Expected: both files present
+ls core/kernel/restore_reapply.go core/kernel/restore_hooks.go
 # The R1 swap. Expected: restoreswap and restorejournal present
 ls core/internal/restoreswap/ core/storage/restorejournal/
 # Core secrets (provenance key derivation). Expected: a derive API in core/secrets
@@ -93,7 +97,7 @@ grep -rn '"/backup' --include='*.go' internal/server/ | head -5
 grep -rn 'restore-offline' core/app/*.go | head -3
 ```
 
-STOP if the journal leaf, `restoreswap` or `restore-offline` is absent (earlier rows own them).
+STOP if the journal leaf, F4-11's two kernel files, `restoreswap` or `restore-offline` is absent (earlier rows own them).
 
 ## Steps
 
@@ -105,9 +109,14 @@ STOP if the journal leaf, `restoreswap` or `restore-offline` is absent (earlier 
    not ported, §5B.10).
 4. `core/backup`: format `mediacore-backup/1` (§5B.3.3), creation over `storage.Admin`'s checkpoint (same-device
    rule, `TestCheckpointCrossDeviceRefused`), verification levels, catalogue from sidecars, retention with floors,
-   provenance (§5B.3.7), `Import`, `Download`, `StageRestore` (steps 1–9 of §5B.3.4, the upgrade-floor check from
+   provenance (§5B.3.7), `Create`'s step 4 (read `JournalSeq`, `AuditHighWater` and the `c/backup/served_boot` pair P
+   before the checkpoint; right after it write a fresh pair P′ into the live store with `GetForUpdate` and hand it to
+   F4-11's journal component, the one writer of `backup.location.json`), `Import`, `Download`, `StageRestore` (steps 1–9 of §5B.3.4, the upgrade-floor check from
    `Manifest.Storage.UpgradeFloor` of each module), `CancelRestore`, `Pending`, `RevertLastRestore`, `Delete`,
    `Ensurer.Ensure`.
+   The §5B.8 families add the core `backup` metrics scope: add its `testdata/series.golden` under `core/backup/`,
+   asserted by `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5). If F4-11 already created the scope for
+   its re-apply counter, extend that golden instead.
 5. The tasks `core.backup.create`, `.verify`, `.prune`, `.stage-restore` with one exclusive `Resource` and schedules
    declared through `tasks.ScheduleFromConfig` under `core.backup.*` (B8, `TestBackupTaskExclusive`).
 6. `storage restore-offline --archive <file> [--keyring <file>] [--gap-fill <file>] [--accept-loss]` (05-storage
@@ -151,7 +160,7 @@ type Service interface {
 
 The staging half of **`TestLegacyArchiveRestoreThenMigrate`** (05-backup §5B.9; F8-04 owns the test): a `legacy-abo/0`
 archive of the R0 corpus, staged and offline, passes staging, is extracted, and the pre-migration checkpoint is taken.
-No cutover step is registered at this row's wave (F3-07 registers M2, M7 and M8 at W29; M3–M6 follow at F4-08, F5-18
+No cutover step is registered at this row's wave (F3-07 registers M2, M7 and M8 in a later wave; M3–M6 follow at F4-08, F5-18
 and F7-09), so this PR asserts nothing about migrated families. Write it under the spec name in ABO's root module;
 F8-04 extends it to the migrated store with the corpus' per-family counts.
 
@@ -167,12 +176,16 @@ Also in this PR: `TestRestoreNeverWritesLiveStore`, `TestStagedRestoreAppliedBef
 `TestBackupRoutesPermissions`, `TestBackupDownload_SystemManageOnly403`, `TestManifestMatchesEntries`,
 `TestVerifyOpenCountsKeys`, `TestCheckpointCrossDeviceRefused`, `TestRetentionFloors`,
 `TestRetentionRunsBeforeSpaceCheck`, `TestLegacyABOArchiveRestores`, `TestDerivedItemsGenerationChecked`,
-`TestHostLossRestore`, `TestBackupTaskExclusive`, `TestCreateCancelRemovesPartial`.
+`TestHostLossRestore`, `TestBackupTaskExclusive`, `TestCreateCancelRemovesPartial`,
+`TestInPlaceRestoreOfLastNightsCoreArchive_Replaced` (`Create` writes P′ after its checkpoint, the archive carries P,
+an in-place restore of it reads replaced, and a crash between the store write and the file write reads the same
+store), and `metricstest.AssertSeries` over the `backup` scope's series golden (05-metrics §12).
 
-The journal re-apply and post-restore hook tests of §5B.9 (`TestPostRestoreReappliesRevocations`,
-`TestRestoreHooksWriteNativeRows`, `TestCrashBetweenSwapAndHooksResumesHooks`, the `TestJournalReapply*` set,
-`TestReplacedStoreRunsHooks` and the other P4d tests) belong with the kernel steps P4d 2–3, which exist from the
-identity flip; add any §5B.9 test that is not green at your base here and list in the PR which ones already existed.
+The journal format, the P4d step 2 re-apply, the step 3 hook runner and their §5B.9 tests are F4-11's; F4-08 calls
+them from boot and owns `TestRestoreHooksWriteNativeRows` and `TestCrashBetweenSwapAndHooksResumesHooks`. Do not
+re-implement or re-own any of them. Of the rest of §5B.9, add here any archive-format test (`mediacore-backup/1`,
+`legacy-abo/0`, catalogue, provenance, verification, retention, staging) that is not green at your base, and list in
+the PR which ones already existed.
 
 ## Acceptance (commands and expected output)
 
@@ -202,7 +215,8 @@ P4d durable write, extend `TestBootCrashMatrix` and `TestBootCrashMatrix_ABO` in
 - Mounting routes in ABO, deleting `/api/v1/backup/*`, `internal/backup` and the organizer's auto-backup, the first
   `core.backup.create` writing `mediacore-backup/1` in production (F8-04).
 - Archive encryption, `Rewrap` beyond what §5B.3.9 keeps deferred (deferred-build).
-- The revocation journal's writers (F4) and the R3 floor (R3-02).
+- The revocation journal's writers (F4-01, F4-02), its authenticated format, the boot re-apply and the restore-hook
+  runner (F4-11), and the R3 floor (R3-02).
 
 ## Rollback
 

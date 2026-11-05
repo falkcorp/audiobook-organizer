@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-02-core-auth-store-service-middleware.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 17675dfd-c1d9-454e-bb6e-545401beffad -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F4-02 |
 | Release / flip | R2, identity flip F4 (dark PR) |
 | Tier | **T4** (Opus, xhigh–max): the authentication engine, hashed credentials and five ported security properties |
-| Wave | W25 (runs inside an announced **move window**: no other PR of the wave touches the moved files, their callers listed below, or the shared `layerOf` and shard files) |
+| Wave | W27 (runs inside an announced **move window**: no other PR of the wave touches the moved files, their callers listed below, or the shared `layerOf` and shard files) |
 | Depends on | F4-01, F4-04, F3-01, F4-09 |
 | Owns gate tests | `TestSessions_ListNeverReturnsToken`; `TestAPIKey_EmptyEffectiveKeyCannotMint`; `TestAPIKey_RevokedIsTerminal`; `TestAdminChecks_HonourKeyScopes`; `TestRevokeRacesTouch_NeverUnrevokes` |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
@@ -65,6 +65,7 @@ until F4-08.
 - 05-backup §5B.3.2 (`journal.RevocationJournal`, `RestoreContext`), §5B.3.6.
 - 04 §8.1 F4, §8.5 F4 (the absauth `audit.go` cut), §8.2 (rewired importers of `mediacore/auth`).
 - 06 §6.4.4 (`Deps.Auth`, `AuthAdmin`, `AuthCompat` land at F4), §6.5.1 P4d steps 3–4 (`PostRestore`, `BootWrites`).
+- 05-storage §5S.10 (`TestUserMergeAtomicAcrossOwners`); 05-metrics §5 item 5, §12 (`metricstest.AssertSeries` per scope).
 
 ## Files
 
@@ -146,7 +147,10 @@ grep -rn 'TestLegacy' internal/server/handlers/ internal/server/middleware/ inte
    login ceiling, bootstrap and invite limiters move here keeping HEAD's limits (read from `core.auth.*` keys).
 7. **Bootstrap** (§4.6), **Compat** (§4.10: the method-bound handle; `VerifyPassword`, `AuthenticateKey`,
    `PrincipalFor`, `CheckCredentialFor`), **auth-off** (§4.11), **epochs** (§4.12), **PostRestore** and **BootWrites**
-   (§3.2, §4.14; write nothing in `New` or a constructor).
+   (§3.2, §4.14; write nothing in `New` or a constructor). `PostRestore` is the hook body only: F4-11 builds the P4d
+   step 3 runner that calls it and F4-08 registers it there.
+   **Metrics** (§9): this adds the core `auth` metrics scope (`mediacore.auth`); add its `testdata/series.golden` under
+   `core/auth/`, asserted by `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5).
 8. **Moves:** first take the caller census at BASE: for each moved file, list its exported symbols and grep every
    `.go` file outside the moved set that references them (`grep -rlw` per symbol with the package qualifier); the union
    must equal the 52 caller files of the Files table (STOP 2 otherwise; record the census in the PR). Then move each
@@ -177,7 +181,14 @@ The five gate tests, each a **property test** over random inputs as the spec sta
 `TestRestore_PostArchivePasswordChangeNotReverted` / `TestRevocationCommittedAfterCheckpointReapplied`),
 `TestInviteRedeemedOnce` / `TestUserMergeDeletesSourceInvites`, `TestInviteAcceptRechecksCanAssign`, `TestNoGlobals`
 (auth), `TestNativeStore_RoundTrip` / `authtest.StoreSuite`. Rows needing the HTTP routes (F4-05) or ABO's live mount
-(F4-08) are written there.
+(F4-08) are written there. Also:
+
+- `TestCookie_SiblingAppCookieDoesNotBlockLogin` (05-authn §10): two apps on one host get distinct default cookie
+  names, and a foreign or stale cookie on a Public route yields an anonymous request with the cookie cleared.
+- `TestUserMergeAtomicAcrossOwners` (05-storage §5S.10): books and the native auth participant merge in one batch; an
+  identity row changed after the plan fails the commit with `ErrConflict` (reported as `auth.ErrMergeConflict`); a
+  source user with an open invite merges and the invite is deleted; `CrashClone` at every point.
+- `metricstest.AssertSeries` over the `auth` scope's `testdata/series.golden` (05-metrics §12).
 
 ## Invariants
 
@@ -204,7 +215,8 @@ make ci                                                                         
 
 ## Out of scope
 
-`core/internal/authz` (F4-09); OIDC and Cloudflare Access (F4-03); the routes (F4-05); the identity cutover M3 (F4-06); replacing the gin auth chain,
+`core/internal/authz` (F4-09); OIDC and Cloudflare Access (F4-03); the routes (F4-05); the identity cutover M3 (F4-06);
+the journal format, the P4d step 2 re-apply and the step 3 hook runner (F4-11); replacing the gin auth chain,
 `legacyauth` and P7/P4d wiring for ABO (F4-08).
 
 ## Rollback

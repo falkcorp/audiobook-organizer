@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-06-maintenance-plugin-subbatch-1-kinds.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 8eb7ab03-9e84-4976-811b-014570d304d3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F5-06 |
 | Release / flip | R2, tasks flip F5 (dark conversion PR) |
-| Wave | W29 |
+| Wave | W31 |
 | Tier | **T2** (Sonnet / high): up to 15 definitions of one file group, each shared body rerouted through its shell (05-tasks conversion rule 3), with conformance tests |
 | Depends on | F2-05 (`taskhttp`, `hello.count`; transitively F2-01..F2-04), F2-16 (`Registrar.Tasks`, `coretest`'s task cells), F2-17 (`tasklint` and this row's exemption entry file) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |

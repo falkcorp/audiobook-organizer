@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-02-tasks-native-stores-importer.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: c6364d76-4e03-4695-8c99-5d7af9d23802 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F2-02 |
 | Release / flip | R2, foundation PRs (F2), **dark** |
-| Wave | W24 |
+| Wave | W26 |
 | Tier | **T3** (Opus / high): durable stores with commit-time preconditions and an exactly-once importer, proven by a conformance suite; the key layout and invariants are fixed, the internals are not |
 | Depends on | F2-01 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |

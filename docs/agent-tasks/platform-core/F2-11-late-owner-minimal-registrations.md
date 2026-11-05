@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-11-late-owner-minimal-registrations.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 6c13340d-6da2-494d-bec0-60353aaa03cf -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F2-11 |
 | Release / flip | R2, foundation PRs (F2), **dark** (registered on the executor only from F5, when ABO passes a backend) |
-| Wave | W27 |
+| Wave | W29 |
 | Tier | **T2** (Sonnet / high): three `TaskSpec`s over one-method interfaces, every field stated by 05-tasks §5T.8.2 |
 | Depends on | F2-01, F2-09 (the `core.ai` section), F2-04 (the batch-poll schedule key `core.ai.schedules.batch_poll`) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |

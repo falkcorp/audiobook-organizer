@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R0-02-apikey-lock-revoke-mint-fixes.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: db4a0394-774e-4f4a-8a93-e57fc75b4bc1 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -86,7 +86,7 @@ grep -n 'func (h \*APIKeyHandler) UpdateStatus' internal/server/handlers/apikeys
 grep -n 'if key.Status == "revoked" {' internal/server/middleware/auth.go
 # Fix 3 ABS path: expect 1 hit at 459
 grep -n 'switch key.Status {' internal/server/middleware/absauth.go
-# WithPermissions drops an empty slice: expect "if len(perms) == 0 {" at context.go:143
+# WithPermissions drops an empty slice: expect one match of "if len(perms) == 0 {" in context.go (line 144 at the planning base; match the text, not the line number)
 grep -n 'if len(perms) == 0 {' internal/auth/context.go
 ```
 

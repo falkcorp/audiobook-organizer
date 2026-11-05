@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-05-taskhttp-hello-count-coretest.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 47990117-cfa7-4261-af4a-d76cf77ed7da -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,9 +9,9 @@
 |---|---|
 | ID | F2-05 |
 | Release / flip | R2, foundation PRs (F2), **dark** (nothing mounts the routes or registers the kind in this PR) |
-| Wave | W27 |
+| Wave | W29 |
 | Tier | **T2** (Sonnet / high): routes and a sample task over contracts that F2-01…F2-04 already fixed |
-| Depends on | F2-03, F2-04 |
+| Depends on | F2-03, F2-04, R1-37 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
 
 ## START HERE
@@ -91,7 +91,9 @@ Route tests run over the fake `tasks.Client` and a fake principal resolver (the 
 context carrying a principal and its permissions; no core authentication exists before F4):
 
 - `TestStart_DryRunFieldRefused400`, `TestStart_IdempotencyKeyHeaderReplays` (the replay header and status; the
-  executor half is F2-03's), `TestStart_ConcurrentSameIdempotencyKeyOneRun` (over the fake: one `Start` reaches it),
+  executor half is F2-03's), `TestTaskStart_IdempotencyKeyReplaysRunView` (05-http-api §12: a repeated
+  `Idempotency-Key` on task start answers `200` with the existing `RunView` and `Idempotent-Replayed: true`),
+  `TestStart_ConcurrentSameIdempotencyKeyOneRun` (over the fake: one `Start` reaches it),
   `TestTimelineLogDiscard` (core half; the (ABO) parity case is F5's), `TestHeld_MutationsRefused409` (the HTTP
   half: the fake returns the held sentinel and the route answers `409 tasks.held`).
 - `TestRunView_RedactedOnRESTRoutes` (name coined here): `GET /runs` and `GET /runs/{id}` pass every `RunView`
@@ -111,7 +113,7 @@ context carrying a principal and its permissions; no core authentication exists 
 cd core
 go build ./... && go vet ./internal/taskhttp/... ./examples/hello/...                 # exit 0
 go test ./internal/taskhttp/... ./examples/hello/... -race -count=1                    # all ok
-go test ./internal/taskhttp/ -run 'TestStart_DryRunFieldRefused400|TestStart_IdempotencyKeyHeaderReplays|TestStart_ConcurrentSameIdempotencyKeyOneRun|TestTimelineLogDiscard|TestHeld_MutationsRefused409|TestRunView_RedactedOnRESTRoutes' -race -count=1 -v | grep -c '^--- PASS'   # 6
+go test ./internal/taskhttp/ -run 'TestStart_DryRunFieldRefused400|TestStart_IdempotencyKeyHeaderReplays|TestTaskStart_IdempotencyKeyReplaysRunView|TestStart_ConcurrentSameIdempotencyKeyOneRun|TestTimelineLogDiscard|TestHeld_MutationsRefused409|TestRunView_RedactedOnRESTRoutes' -race -count=1 -v | grep -c '^--- PASS'   # 7
 grep -rn 'taskhttp' kernel/ app/ | wc -l                                               # 0 (nothing mounts it yet)
 grep -rn 'countTask' examples/hello/ | grep -v _test | grep -vc 'count.go'             # 0 (not registered yet)
 git diff --stat origin/main -- openapi/core.json | wc -l                               # 0 (no regeneration here)

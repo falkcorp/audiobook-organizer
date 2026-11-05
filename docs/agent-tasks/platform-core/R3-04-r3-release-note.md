@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R3-04-r3-release-note.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: 9333a60d-0082-4464-a9b9-c1a2d1cf879b -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | R3-04 |
 | Release | R3 |
 | Tier | **T1** (Sonnet / medium): a release note from texts the spec fixes; one new Markdown file |
-| Wave | W42 (beside R2-02, R3-02; file-disjoint) |
+| Wave | W44 (beside R2-02, R3-02; file-disjoint) |
 | Depends on | OWNER-05 (the R2 release is cut and deployed, so its tag is known) |
 | Spec | 09 §9.4 R3 ("Content": the release-note text, verbatim), §9.2.2 ("The R3 floor": exit 78, launchd's 60 s sleep, the macOS and Docker notes, the host-loss procedure), §9.6 row 21 (the shell's paths, only if F9 slipped to R3); 06 §6.11.1 step 6 (the no-op flags deleted) |
 

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-09-core-config-section-declarations.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 7243a8e0-4333-4d9f-afec-3c56f5b47d24 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F2-09 |
 | Release / flip | R2, foundation PRs (F2), **dark** |
-| Wave | W22 |
+| Wave | W24 |
 | Tier | **T2** (Sonnet / high): declarations transcribed from the owners' key tables, plus the small declaration surface of `core/config`; no loader, no store |
 | Depends on | OWNER-03 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |

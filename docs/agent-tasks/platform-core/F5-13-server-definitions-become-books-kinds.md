@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-13-server-definitions-become-books-kinds.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 5ddc5a9e-9799-4f31-ba15-61c981edd016 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F5-13 |
 | Release / flip | R2, tasks flip F5 (dark conversion PR) |
-| Wave | W30 |
+| Wave | W31 |
 | Tier | **T3** (Opus / high): 45 server definitions (44 server-package ones plus `scheduler.metadata-upgrade`), each shared body rerouted through its shell (05-tasks conversion rule 3), plus the new kind `books.library.scan-full` |
 | Depends on | F2-05 (transitively F2-01..F2-04), F2-16 (`Registrar.Tasks`, `coretest`'s task cells), F2-17 (`tasklint` and this row's exemption entry file) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |

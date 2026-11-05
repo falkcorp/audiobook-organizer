@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F9-01-shell-packages-dark.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 1cd3e2f0-6d5d-4edb-b717-11340b83d272 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F9-01 |
 | Release | R2, flip label F9 (dark PR; F9 ships in R2 if ready, else in R3 unchanged) |
 | Tier | **T3** (Opus / high): new packages with a build-time preset and a fail-closed bundle loader; the CSP policy and the stale-build rule are security and availability contracts |
-| Wave | W29 (beside F3-07, F5-01 … F5-12, F5-19, F6-04, F7-07; file-disjoint; F3-07 merges first and this PR rebases after it) |
+| Wave | W31 (beside F3-08, F4-07, F5-01, F5-02, F5-03, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13, F5-19, F6-04, F7-05, F7-06; file-disjoint; F3-07 merges first and this PR rebases after it) |
 | Depends on | R1-30 (`core/web` workspace with `@mediacore/api-client`), F6-02 (core realtime hub: the shell's realtime client targets `/api/core/v1/events`) |
 | Spec | 07 §7.3 (layout, exports, peers, compilation, import boundary, §7.3.2 build sites, §7.3.3 versions), §7.4 (extension API: `defineModule`, `ShellConfig`, slots, §7.4.3 shell routes, §7.4.4 `/testing`, §7.4.5 schema forms), §7.5 (server manifest and intersection), §7.6 (Go `ui`: §7.6.1 API, §7.6.2 CSP, §7.6.3 mounting), §7.7 theming, §7.9 auth and realtime client, §7.10 build preset, §7.18 tests, §7.19 step 4; 06 §6.4.10 ("Shell" row), §6.12.5 (hello's `main.go` and `ui_embed.go`); 04 §8.1 F9 |
 
@@ -43,7 +43,10 @@ npm ci --prefix web           # CLAUDE.md: Playwright from the worktree
    `main.go` passes `UI: hello.UIBundle()`.
 4. The rest of Go `core/ui` (07 §7.6.1): `Bundle`, `FromFS`, `MustFromFS`, `IsZero`, `BuildID`, `AppID`,
    `AppOptions`, `Options`, `Handler`, `BasicExemptAssets`, `WriteManifestTS`, and the CSP policy builder (§7.6.2).
-   `ReservedSegments`, `ModuleManifest` and `UIIDs` exist since R1.
+   `ReservedSegments`, `ModuleManifest` and `UIIDs` exist since R1. `ui.Handler` emits two of 07 §7.16's families,
+   `<namespace>_ui_build_info` (gauge 1, label `build_id`) and `<namespace>_ui_responses_total` (counter, labels
+   `kind` = `asset`/`asset404`/`index`/`nonspa404`/`method404`/`placeholder` and `status`). The other three `_ui_`
+   families belong to F4-05's routes.
 5. `core/web/package.json` workspaces gain `packages/ui-kit`, `packages/shell` and `../examples/hello/web`;
    `core/scripts/ci/embed_build_outputs.txt` lists hello's `web/dist`.
 
@@ -106,7 +109,10 @@ STOP if `core/web/packages/ui-kit` or `shell` already exists, if `core/ui` lacks
 6. hello's web package on the shell, with one route, one nav entry and its settings panel (06 §6.12.4).
 7. Go `core/ui`: `Bundle`, `FromFS`/`MustFromFS` (fail-closed metas), `Handler` (assets immutable, index no-store,
    non-SPA 404 JSON, method refusals, placeholder for a zero bundle), the CSP builder (§7.6.2, hot swap through
-   `core.ui.*`), `BasicExemptAssets` equal to HEAD's set, `WriteManifestTS`.
+   `core.ui.*`), `BasicExemptAssets` equal to HEAD's set, `WriteManifestTS`. `Handler` registers
+   `_ui_build_info` and counts every response in `_ui_responses_total` by `kind` and `status` (07 §7.16). These are
+   in the core `ui` metrics scope: add its `testdata/series.golden` (or extend it, if F4-05's counters created it),
+   asserted by `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5).
 8. hello: `ui_embed.go` / `ui_nonembed.go` and `UI: hello.UIBundle()` in its `main.go`; core's Makefile target
    builds `web/` before `go build -tags embed_frontend -o bin/hello ./examples/hello/cmd/hello`.
 9. `embed_build_outputs.txt`, workspaces, lockfile (`npm install` inside `core/web` only), headers, fragment.
@@ -144,7 +150,9 @@ shell (vitest): `intersect.test.ts`, `buildId.test.ts` (shell half), `defineModu
 `TestHandler_CSPPolicyVerbatim`, `TestHandler_CSPHotSwap`, `TestHandler_API404JSON`, `TestHandler_Placeholder`, `TestHandler_ServesRootPublicFile`,
 `TestHandler_NonSPASegments`, `TestHandler_NonGETRefused`, `TestHandler_MissingAssetIs404`,
 `TestHandler_PageMiddlewareOnlyOnIndex`, `TestBundle_MissingMeta`,
-`TestHandler_OutsideRouteChain`, `TestBasicExemptAssets_EqualsHEAD`. core e2e (Playwright against hello built
+`TestHandler_OutsideRouteChain`, `TestBasicExemptAssets_EqualsHEAD`; `metricstest.AssertSeries` over the `ui` scope's
+`testdata/series.golden`, which proves `_ui_build_info` and `_ui_responses_total` carry exactly 07 §7.16's labels
+(05-metrics §12). core e2e (Playwright against hello built
 with `-tags embed_frontend`): `shell.spec.ts`, `tabs.spec.ts`, `two-apps.spec.ts`, `stale-build.spec.ts` (core
 half), the bundle check.
 

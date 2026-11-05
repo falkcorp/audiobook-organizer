@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-24-checkpoint-sweeper-and-prune.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 88124076-5269-41e3-875c-b216bc9ff445 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -11,10 +11,10 @@
 | Tier | **T3** (Opus / high): a sweeper that deletes checkpoints; the retention rule decides what a rollback can restore |
 | Release / wave | R1 / W17 |
 | Depends on | R1-23, R1-25 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
-| Spec | 05-storage §5S.3.12, §5S.4 step 15; 05-health §5H.3.1, §5H.9, §5H.10 Landing R1 and R1 row; 09 §9.2.3 (the checkpoint and its 7 days); 06 §6.4.10 R1 (OfflineCommands) |
+| Spec | 05-storage §5S.3.12 (Modes, SEC-9), §5S.4 step 15, §5S.10 (`TestCheckpointModes`, sweep half; error row for a loosened mode); 05-health §5H.3.1, §5H.9, §5H.10 Landing R1 and R1 row; 09 §9.2.3 (the checkpoint and its 7 days); 06 §6.4.10 R1 (OfflineCommands) |
 | Branch | `agent/platform-core-r1-24-checkpoint-sweeper-and-prune` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 
@@ -51,14 +51,18 @@ sign-in tokens included, so R1 must also ship what deletes it (09 §9.2.3; 09 §
    while it is still the rollback of the live store, then `now + 7 days`; swapped back: from the swap-back), and
    deletes every checkpoint whose `delete_after` has passed: **the record first**, then `<name>/` with `os.RemoveAll`,
    then `.migration-checkpoint` when it names it. Each deletion is logged (audited from F2). The period is fixed; no
-   setting lengthens it. Scratch copies are deleted 7 days after their mtime.
+   setting lengthens it. Scratch copies are deleted 7 days after their mtime. **Every sweep also checks modes**
+   (05-storage §5S.3.12 "Modes", SEC-9): a checkpoint directory or file that is group- or world-accessible raises the
+   health token `storage_checkpoint_mode` naming it. The sweeper never changes a mode it did not set (05-storage error
+   row). The copy holds plaintext secrets and raw session tokens, so a loosened mode (a restore by hand, a copy) must
+   be reported.
 2. **`storage prune-checkpoints`** as an `app.OfflineCommands` command (06 §6.4.10 R1: present from R1;
    implemented in `core/app/offline_prune.go`): deletes eligible checkpoints sooner, with the service stopped,
    through the same delete order. Add it to the `OfflineCommands` list R1-25 created in `core/app/offline.go`;
    R1-25 already exposes that list through ABO's cobra tree, so `cmd/` needs no edit here.
 3. **Health tokens on the authenticated route only** (05-health §5H.3.1 "The unauthenticated token set"): while any
    checkpoint exists health reports `storage_checkpoint_retained` with its `delete_after`; an open scratch copy
-   raises `storage_checkpoint_open` with its age; `<namespace>_storage_checkpoint_bytes` reports the size
+   raises `storage_checkpoint_open` with its age; a loosened mode raises `storage_checkpoint_mode` (item 1); `<namespace>_storage_checkpoint_bytes` reports the size
    (05-storage §5S.8). Before F8 these travel the `degraded` field of HEAD's **authenticated**
    `GET /api/v1/system/status` (`settings.manage`, `wire_system_routes.go:28`), never `/health`. **R0-06 created
    that field** with its one token `auto_update_paused` (05-health §5H.10 R0 row); this row extends it with the
@@ -75,13 +79,18 @@ sign-in tokens included, so R1 must also ship what deletes it (09 §9.2.3; 09 §
 - `TestCheckpointAutoDeletedAfterSevenDays` (09 §9.4 R1 Verification; over R1's first-boot checkpoint, with a fake
   clock: a completed checkpoint is gone after the first sweep past `completed_at + 7 days` and present before).
 - `TestPruneCheckpoints` (05-storage §5S.3.12).
+- `TestCheckpointModes`, **sweep half** (05-storage §5S.10, SEC-9; R1-20 owns the creation half, 0700 directories and
+  0600 files under a permissive umask): a mode loosened by hand on a checkpoint directory or file raises
+  `storage_checkpoint_mode` at the next sweep, the sweeper leaves that mode as it found it, and a checkpoint with
+  the right modes raises nothing.
 - Also 05-storage §5S.10: `TestOpenCheckpointKeptWhileRollback`, `TestOrphanedOpenCheckpointDeletedAfterSevenDays`,
   `TestPartialCheckpointSwept`, `TestDryRunScratchModeAndSweep` (the sweep half).
 - `TestHealth_UnauthenticatedTokenSetGolden` (05-health §5H.9; created by R0-06 in
   `internal/server/handlers/system/health_tokens_test.go` with its R0 cell): add the R1 cells against HEAD's
   `/health` and `GET /api/v1/system/status`: with every token raised at once, `/health`'s `degraded` list carries only
-  the fixed set; `storage_checkpoint_retained` and `storage_checkpoint_open` appear only in
-  `/api/v1/system/status`'s `degraded`, beside R0's `auto_update_paused`. Do not rewrite the R0 cell.
+  the fixed set; `storage_checkpoint_retained`, `storage_checkpoint_open` and `storage_checkpoint_mode` appear only in
+  `/api/v1/system/status`'s `degraded`, beside R0's `auto_update_paused` (05-health §5H.3.1: the mode token is
+  authenticated-only, never on `/health`). Do not rewrite the R0 cell.
 - A crash between record delete and directory delete leaves garbage the next sweep removes (crash-matrix row for
   this writer: add it to R1-21's kit through `TestBootCrashMatrix`/`_ABO`, 09 §9.3).
 

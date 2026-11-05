@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-20-core-storage-engine-dark.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 41b1ca40-2cc3-49e2-aa3c-359bbca50e36 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -11,10 +11,10 @@
 | Tier | **T4** (Opus / xhigh): the store engine, level stamps and the checkpoint: a wrong write order loses data |
 | Release / wave | R1 / W11 |
 | Depends on | R1-13 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
-| Spec | 05-storage §5S.3.3-§5S.3.7, §5S.3.12, §5S.9.4 step 1; 06 §6.5.1 P2, P4a; 04 §8.1 R1, §8.5 R1 (dbtest newstore.go, compactprogress step.go); 09 §9.2.2 |
+| Spec | 05-storage §5S.3.3-§5S.3.7, §5S.3.12, §5S.3.15 (the `restorejournal` declarations, lines `Intent` to `Record` only), §5S.9.4 step 1; 06 §6.5.1 P2, P4a; 04 §8.1 R1, §8.5 R1 (dbtest newstore.go, compactprogress step.go); 09 §9.2.2 |
 | Branch | `agent/platform-core-r1-20-core-storage-engine-dark` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 
@@ -68,8 +68,12 @@ opens its own store until R1-23 (row notes). What lands:
 - `core/internal/pebble` (L1 internal): the engine open, format pin, sidecar, gate (`GatedDB` successor), from
   HEAD's `pebble_gate.go`/`storage_format.go`/the open path (§5S.9.3 rows 1–2), re-implemented, not moved (R1-23
   re-homes ABO's files).
-- `core/storage/restorejournal` (L0): the record types of the one swap journal: restore, checkpoint, revert and reset
-  kinds, `KindReset` with `ResetStore` and `ResetFactory` (04 §8.1 R1), read by `core/internal/restoreswap` (R1-21)
+- `core/storage/restorejournal` (L0): the record types of the one swap journal, declared exactly as 05-storage
+  §5S.3.15's Go block gives them: `Intent` and `Record` with every field, including `StepID` on both (the staging M8's
+  step ID, so each M8 reads only its own journals), `CreateIntent`, `Target`, and **all five kinds**:
+  `KindArchive`, `KindRevert`, `KindCheckpoint`, `KindReset` and `KindRewrite` (M8's swap, which keeps the store
+  generation), with `ResetKind`, `ResetStore` and `ResetFactory` (04 §8.1 R1). F3-04 builds M8 on `KindRewrite` and
+  `StepID` and STOPs if either is missing, so they land here, not there. Read by `core/internal/restoreswap` (R1-21)
   and storage's P2.
 - `core/kernel/storage.go`: P2 (open) and P4a (checkpoint) of 06 §6.5.1, for apps whose modules declare storage,
   called from the phase list in `core/kernel/boot.go` (R1-13's file; this row is W11's one owner of the kernel
@@ -99,10 +103,30 @@ opens its own store until R1-23 (row notes). What lands:
 - Sequences never reuse after a crash (`TestSequenceNeverReusesAfterCrash`, `TestSequenceAdvancePast`).
 - Migrations: step and bookkeeping atomic, DAG order across owners, a failure halts boot
   (`TestMigrationStepAtomicWithBookkeeping`, `TestMigrationDAGOrdersAcrossOwners`, `TestMigrationFailureHaltsBoot`);
+  versions are 1..n, contiguous per owner, recorded by version number (§5S.3.5 `Migration.Version`). The runner needs
+  no gap rule for R2: each R2 flip adds its level step at the owner's next contiguous version and never removes an
+  earlier one (F3-04 "Flip mechanism");
   a fresh install stamps levels atomically (`TestFreshInstallStampsLevelsAtomically`, `TestFreshInstallRunsSeedSteps`).
 - Guard projection: `TestLegacyProjectionRefusesPreGuardBuild`, `TestProjectionKeepsRecordID`,
-  `TestUnreadableVersionFailsClosed`, `TestOlderBuildAcceptsNewerAdditiveSteps`, `TestBreakingStepRequiresRaisesLevel`.
-- Checkpoint: `TestCheckpointModes`, `TestCheckpointIncludesStateFiles`, `TestCheckpointFreeSpaceRefused`,
+  `TestUnreadableVersionFailsClosed`, `TestOlderBuildAcceptsNewerAdditiveSteps`, `TestBreakingStepRequiresRaisesLevel`,
+  and the two other cells of the same-release-line row (05-storage §5S.10): `TestOlderBuildRefusesNewerBreakingStep`
+  (an older build refuses a store a newer build migrated through a `Breaking` step: `ErrKeyspaceTooNew`) and
+  `TestCompatlessBooksRecordIsBreaking` (a books record with no compat field counts as breaking, so the same refusal
+  holds).
+- Batch by value: `Batch` embeds the `noCopy` marker (05-storage §5S.3.2) so `go vet`'s copylocks flags a value copy,
+  and `archtest.NoBatchByValue` (COR2-12: no core API or spec Go block takes or holds a `storage.Batch` by value)
+  rejects one. `core/archtest/` is not in this row's files, so write the check as a test in `core/storage/` over the
+  archtest engine's loader; if the engine needs a new exported helper, record it under the PR's "Scope notes".
+- Deps scoping, first cell: `TestDepsScoping` (06 §6.10) starts here with the storage cell, a write outside
+  `m/hello/` through hello's `Deps` is refused. F4-08, F6-03 and F7-09 each extend it with the cells of their stage
+  (publish or notify outside the catalog, a secret outside `modules.hello.`, `StartRequest.Actor` overwritten,
+  `library.Scope` attribution, metric names under `MetricNamespace`).
+- Journal records: `TestRestoreJournalKindRewriteRoundTrip` (name coined here): an `Intent` of `KindRewrite` with a
+  `StepID`, and a `Record` carrying `StepID`, survive a JSON round trip with `step_id` set and every other kind's
+  fields unset (`omitempty`), and all five `Kind` constants are distinct strings (05-storage §5S.3.15).
+- Checkpoint: `TestCheckpointModes` (creation half: the directory and its copies are 0700 and 0600 under a permissive
+  umask; the sweep half, a mode loosened by hand raising `storage_checkpoint_mode` at the next sweep, is R1-24's),
+  `TestCheckpointIncludesStateFiles`, `TestCheckpointFreeSpaceRefused`,
   `TestCheckpointSurvivesCrashLoop`, `TestPartialCheckpointSwept` (the sweeper itself is R1-24's).
 - Engine: `TestReadOnlyOpenRefusesWrites`, `TestCloseWaitsForLeases`, `TestJoinOrderMatchesSegmentOrder` (exists).
 - Every test name above is 05-storage §5S.10's; write each first. Rows of §5S.10 whose subject lands later (the swap,
@@ -132,7 +156,9 @@ grep -n 'internal/compactprogress\|internal/database' scripts/ci/short_test_weig
 3. `core/kernel/storage.go` (P2, P4a) with its two calls in `core/kernel/boot.go`; hello's keyspace and seed
    migration; `core/coretest/store.go`. Extend R1-13's `TestKernelFamiliesGathered` golden with
    `<namespace>_storage_level` and `<namespace>_storage_checkpoint_bytes` (05-metrics §12) if `core/kernel/testdata/`
-   holds it (it is in `core/kernel/testdata/`, which is in this row's files).
+   holds it (it is in `core/kernel/testdata/`, which is in this row's files), and the kernel scope's
+   `testdata/series.golden` that R1-13 asserts with `metricstest.AssertSeries` (R1-10): add the two storage families
+   there too.
 4. Move `internal/compactprogress` into `core/storage` with the logger cut; rewire its five importer files;
    rewire `internal/database/dbtest/newstore.go` onto the coretest fixture; update `layerOf` and shard weights if they
    name the moved package.

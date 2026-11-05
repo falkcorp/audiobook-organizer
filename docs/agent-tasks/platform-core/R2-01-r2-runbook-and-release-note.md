@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R2-01-r2-runbook-and-release-note.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 67640be6-8c43-45e8-8d9e-9a3167774c7e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | R2-01 |
 | Release | R2 (closing PR) |
 | Tier | **T2** (Sonnet / high): a runbook and a generated release note; well specified, many sources |
-| Wave | W40 |
+| Wave | W42 |
 | Depends on | F8-04, F9-03 (if F9 slips to R3, this PR drops F9-03 from its dependencies and the shell's paths from the note; see "F9 decision" below) |
 | Spec | 09 §9.2.9 (renames and the release note), §9.4 R2 ("Content", "Rollback", "Owner": deploy steps 0–8 and the smoke run), §9.2.1 (rollback by restore, what a restore costs), §9.2.3 ("A long first boot", the checkpoint's 7 days), §9.3 ("Boot time"), §9.6 (the changed-in-R2 table and the kept contract); 05-authn §11 (identity text); 05-config §1.12.2 ("Release note (R2, config and secrets)"), §1.12.3 (the rename table); 05-tasks §5T.8.2 (the kind-rename map); 05-http-api §8.1 (deleted routes per flip); 05-metrics §13 (metric renames) |
 
@@ -30,7 +30,8 @@ git rebase origin/main
 ## Goal
 
 1. A **runbook** `docs/system/r2-cutover-runbook.md` for the owner: the deploy (09 §9.4 R2 "Owner" steps 0–8, each
-   with its exact command), the rollback (`make rollback-restore`, its checkpoint and archive branches and the
+   with its exact command; the binary deployed is a **tagged RC**, and "Keep" cuts the R2 production release from that
+   RC tag, so the release is the deployed commit: order M4), the rollback (`make rollback-restore`, its checkpoint and archive branches and the
    `RELEASE=<pre-freeze tag>` branch after an R2 hotfix, 09 §9.2.1), what a restore costs (every write since the
    upgrade and every revocation made on R2; fixing forward is the default), and the optional one-day smoke run
    (09 §9.4 R2 "Owner": sign in; an ABS phone app keeps its session and syncs; a scan and a scheduled task run
@@ -120,12 +121,22 @@ committed (the runbook's `DEPLOY_READY_TIMEOUT` and Docker `start_period` come f
      `<db parent>/config.yaml`.
    - **Env renames** (step 3): rename what the host's own unit drop-ins, compose `.env` and plist set, per the
      rename table (generated section, same source as the note); a set retired protected or secret name refuses boot.
-   - **Deploy** (step 4) with `DEPLOY_READY_TIMEOUT` at the measured first-boot time; the Docker `start_period`.
+   - **Deploy** (step 4): deploy a **tagged RC**, the newest `v<X.Y.Z>-rc.<N>` prerelease whose commit contains every
+     R2 PR (this one included); write the tag down, because "Keep" cuts the release from it. Never deploy a local
+     build or a commit without an RC tag. State the expected version string: after the deploy,
+     `audiobook-organizer --version` prints that RC tag's version (`v<X.Y.Z>-rc.<N>`); any other string means a
+     different binary is running, so stop. `DEPLOY_READY_TIMEOUT` at the measured first-boot time; the Docker
+     `start_period`.
    - **External steps**: webhook receivers to core's format (step 5, 09 §9.6 row 5); reload Prometheus rules and
      Grafana dashboards (step 6); `secrets export-keyring` to the off-host location after the first boot (step 7;
      health warns `secrets_keyring_not_exported` until then); re-send open invites (step 8).
    - **Smoke run (optional, one day)**: the six checks of 09 §9.4 R2 "Owner".
-   - **Keep or roll back**: `make rollback-restore` (checkpoint branch, archive branch with `--accept-loss`, the
+   - **Keep or roll back**: **Keep** dispatches the production release from the deployed RC tag,
+     `gh workflow run release-prod.yml --ref <RC tag>` (`workflow_dispatch` accepts a tag ref, and the RC tag's
+     workflow file is `main`'s). The R2 production release is then the deployed commit, and nothing merged after it
+     is included. Record the production tag the run creates. It is R3's `UpgradeFloor.InstallFirst` (R3-02; 09 §9.4
+     R3), and it names the same commit as the RC tag you deployed. Never dispatch with `--ref main`.
+     **Roll back** is `make rollback-restore` (checkpoint branch, archive branch with `--accept-loss`, the
      `RELEASE=<pre-freeze tag>` branch after an R2 hotfix, the refusal while a swap is in flight, the failed-journal
      exception that runs the previous binary's `storage restore-offline --checkpoint`), with the cost paragraph of
      09 §9.2.1 and the list of revocations to repeat (SEC-10). State plainly that fixing forward is the default.

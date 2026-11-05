@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-05-core-notify-dark.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 81c13928-3234-49a7-99a4-49cf3b0519e5 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-05 |
 | Release | R2, flip label F7 (dark PR) |
 | Tier | **T3** (Opus / high): a delivery consumer and a signed webhook format; a wrong signing string lets a captured delivery replay |
-| Wave | W30 (beside F4-07, F5-13, F6-05, F9-02, F9-04, F9-05; file-disjoint). Runs inside an announced **move window** (04 keys `F7 move internal/mail -> mediacore/integrations/notify/mail`, `F7 move internal/mail/mailtest -> mediacore/coretest`) |
+| Wave | W31 (beside F3-08, F4-07, F5-01, F5-02, F5-03, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13, F5-19, F6-04, F7-06, F9-01; file-disjoint). Runs inside an announced **move window** (04 keys `F7 move internal/mail -> mediacore/integrations/notify/mail`, `F7 move internal/mail/mailtest -> mediacore/coretest`) |
 | Depends on | F7-01 (integrations registry: adapters, instances, `Local`, origin binding), F6-01 (core outbox: deliveries staged in the caller's batch and consumed into a task) |
 | Spec | 05-notify §1 (scope; deferred-build members), §3 (Go API: `Notification`, `Notifier`, `Caps`, `Target`, `Adapter`, `Publisher`, `Service` with `Publish`/`For`/`PutRule`/`DeleteRule`/`Rules`/`SendTest`, `Rule`, `RuleStore`/`NativeRuleStore`, `Importer`/`NativeImporter`), §3.1 (the shipped channels `core.email` and `core.webhook`, the fixed body, `X-Mediacore-Delivery`, `X-Mediacore-Signature`, reserved headers), §4–§8, §9 (tests), §10 (migration: `internal/mail`, the `mailSenderOverride` seam); 04 §8.1 F7, §3.1 (`internal/mail`), §3.4 (`mailtest`) |
 
@@ -165,7 +165,9 @@ headers `X-Mediacore-Delivery: <notification ID>.<instance>` and, with a secret,
 `TestWebhook_PrivateURLNeedsLocal`, `TestEmail_ReusesMailTLSRules` (the `internal/mail` tests move with it),
 `TestDeliver_EntryOlderThanMaxAgeDeadLettered` (synctest), `TestNativeRuleStore_RoundTrip`,
 `TestImportRule_ValidatesAndStagesInCallerBatch`, `TestDeliver_IntegrationsDisabledKeepsEntryPending`;
-`notifytest.RuleStoreSuite` against `NativeRuleStore`. Not here: `TestWebhookMigration_InstancesAndRule` and
+`notifytest.RuleStoreSuite` against `NativeRuleStore`; `TestNotifyMetaAloneProducesNoNotification` (05-events §5E.12: a
+`Notify` topic published on the bus only stages nothing for `core.notify.deliver`; the events-side twin of
+`TestNotifyMeta_BusEventSendsNothing`, both in this row). Not here: `TestWebhookMigration_InstancesAndRule` and
 `TestWebhookMigration_SecretByValue` (F7-08).
 
 ## Acceptance (commands and expected output)

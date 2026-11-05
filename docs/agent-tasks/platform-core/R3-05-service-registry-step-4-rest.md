@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R3-05-service-registry-step-4-rest.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: de826053-df6e-496f-99df-94bcc804a0ba -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | R3-05 |
 | Release | R3 |
 | Tier | **T3** (Opus / high): constructors replace the remaining registry clusters and the server construction moves into start hooks; a wrong order builds a service before its dependency or does I/O inside `Register` |
-| Wave | W43 (alone; it owns `internal/books/module.go` and `internal/books/services.go` in W43) |
+| Wave | W45 (alone; it owns `internal/books/module.go` and `internal/books/services.go` in W43) |
 | Depends on | OWNER-05 (R2 released and deployed) |
 | Spec | 06 §6.11.1 step 4 ("constructors replace clusters … The server construction that `Register` does today moves into start hooks here, which is what lets `Describe` run over books"), §6.11.2 (the 43 registrants and their destinations), §6.4.5 (`Describe`: "Register's side-effect rule … is what makes this safe"), §6.4.1 (`Register`'s side-effect rule), §6.5.2 (start order); 09 §9.4 R3 "Content" |
 

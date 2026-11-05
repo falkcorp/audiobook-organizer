@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-10-integrations-instance-routes-dark.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 5632beb8-202d-46fa-8ed4-53a698d32866 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-10 |
 | Release | R2, flip label F7 (dark PR; mounted at F7-09) |
 | Tier | **T3** (Opus / high): instance routes whose test path must never send a stored secret to a new origin |
-| Wave | W26 (beside F2-04, F3-06, F7-04, F8-01; file-disjoint) |
+| Wave | W28 (beside F2-04, F3-06, F4-11, F7-04; file-disjoint) |
 | Depends on | F7-01 (the integrations `Registry`), F4-01 (`rbac`), F4-02 (`auth`: the principal, its method, ProtectAdmin's interactive check) |
 | Owns gate tests | none of 09's gate list; the route tests below (names coined here) |
 | Spec | 05-metadata M1.3 (`Registry`, the HTTP surface table, "When the routes land, and what they replace"), M1.5 (error semantics: the statuses), M1.10 (the test-connection rows this surface replaces); 05-http-api §3 (`Route`, `Handle`, `CoreGroup`), §8.1 F7 row; 03 §3.3 (`internal/<capability>http`), §3.5 R4 (L6); 05-rbac §7.1 (`core.integration.*`) |

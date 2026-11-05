@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-15-log-journal-and-step-m5.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 2172729c-4a08-45a0-ad75-8cf11d81ee4d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,9 +9,9 @@
 |---|---|
 | ID | F5-15 |
 | Release / flip | R2, tasks flip F5 (dark foundation PR; M5 is registered by F5-18) |
-| Wave | W28 |
+| Wave | W30 |
 | Tier | **T3** (Opus / high): a durable journal store with an idempotent importer and a one-way migration step of every system-log row |
-| Depends on | F2-05 (core tasks surface, transitively F2-01..F2-04); F3-06 (`internal/books/cutover` and the step conventions M2 set) |
+| Depends on | F2-05 (core tasks surface, transitively F2-01..F2-04); F3-06 (`internal/books/cutover` and the step conventions M2 set), F3-06 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
 
 ## START HERE
@@ -142,8 +142,8 @@ Rules:
   random part is a hash of `SourceID`), so a re-import after a crash writes the same keys and adds nothing
   (05-logging §3). One durable batch per call.
 - **Tap.** `Logging.Tap("core.log.journal", minLevel, queueSize, fn)` with `fn` batching into `Append` (≤ 256 or
-  1 s); the tap never blocks the logger (drops counted, 05-logging `TestTap_NeverBlocks` already covers the tap
-  mechanism).
+  1 s); the tap never blocks the logger (drops counted; R1-36 owns `TestTap_NeverBlocks`, which covers the tap
+  mechanism, so this row does not).
 - **Records are already redacted** when they reach the store (05-logging §3).
 
 `internal/books/cutover/m5`: a `datamigrate.DataMigration` built from `module.Importers.Log`:

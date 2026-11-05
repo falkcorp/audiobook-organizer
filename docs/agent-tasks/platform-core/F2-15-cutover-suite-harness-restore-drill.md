@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-15-cutover-suite-harness-restore-drill.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.3 -->
 <!-- guid: d41c117c-6cdf-49d0-b491-b6dd9fd211bf -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F2-15 |
 | Release / flip | R2, foundation PRs (F2); tests, scripts and CI only |
-| Wave | W25 |
+| Wave | W27 |
 | Tier | **T3** (Opus / high): the cross-flip checks every R2 PR runs, the restore drill included; they must pass vacuously at F2 and bite from F3-07, the first build that registers a cutover step |
 | Depends on | F2-13, F2-06, F2-14 (this row extends its `production-shaped-store` job) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
@@ -30,12 +30,12 @@ git rebase origin/main
 Write the four gate tests that 09 §9.4 R2 "Verification" runs on every R2 PR through `extraction-gates` (09 §9.2.1: "from
 the F3 PR on, the R2 cutover suite"), as a harness that works for **whatever cutover steps the build registers**: zero at
 F2 (each test passes with the expected "nothing moved" outcome and says so), M2/M7/M8 from F3-07, one more step per flip
-after that. Plus the generator of the shared-family sub-prefix lists, the fetcher of the pre-freeze release's binary, and the
-`extraction-gates` job.
+after that. Plus the generator of the shared-family sub-prefix lists, the fetcher of the pre-freeze release's binary, the
+**flip-upgrade cell table** that each later flip extends (design rule 9), and the `extraction-gates` job.
 
 | Test (names fixed by 05-storage §5S.3.13 and §5S.10) | Proves |
 |---|---|
-| `TestCutoverOnR0Corpus` | on F2-12's R0-written corpus with F2-13's overlay, every registered step completes; per-family counts hold (read = imported + quarantined + deleted-by-rule); the quarantine report equals exactly the overlay's quarantine cases (09 §9.3); 14 E1 |
+| `TestCutoverOnR0Corpus` | on F2-12's R0-written corpus with F2-13's overlay, every registered step completes; per-family counts hold (read = imported + quarantined + deleted-by-rule); the quarantine report equals exactly the overlay's quarantine cases (09 §9.3); 14 E1. The overlay holds no unconvertible identity row (F2-13); the blocker corpus is not run here (F4-06's `TestCutoverStopsOnUnconvertibleIdentity` runs it) |
 | `TestCutoverPreservesIDsAndReferences` | every user, role, key, import-root, instance and run ID is kept; every reference resolves or names a quarantined ID counted in `orphaned_refs` (14 E2; 09 §9.2.3 "IDs and references") |
 | `TestCutoverLeavesOtherFamiliesByteIdentical` | every books key range outside the steps' `Source` and outside 05-storage §5S.9.1's "Rewritten in place by" column is byte-identical before and after (14 E3) |
 | `TestRollbackRestoreBootsPreviousBuild` | the restore drill: after an R2 boot, the checkpoint is restored offline and the **pre-freeze release's** binary boots the result with every pre-R2 row intact and gives the corpus' pre-migration answers; a write made after the upgrade is gone; the same through `ROLLBACK_ARCHIVE` from a `legacy-abo/0` archive (05-storage §5S.10; 09 §9.3 "restore drill") |
@@ -87,8 +87,8 @@ generator's test `scripts/tests/test_gen_shared_family_lists.py`.
    fails on a diff (the golden is generated, never hand-edited).
 6. **Pre-freeze binary.** `fetch_prefreeze_binary.sh <tag>` downloads that tag's linux/amd64 release asset into a cache dir
    and prints its path (under 20 lines; CLAUDE.md rule 4). The tag comes from `ci/prefreeze_release.txt` when that file exists
-   (F3-07 creates it); until F3-07 records it, the pre-freeze tag resolves to the latest production release, which is
-   what 09 §9.2.1 defines it to be until F3 merges (`gh release list --exclude-pre-releases --limit 1`). The drill test reads the path from `R2_PREFREEZE_BIN` and skips with
+   (F3-08 creates it when it turns the R2 freeze on, before F3-07 merges); until F3-08 records it, the pre-freeze tag
+   resolves to the latest production release, which is what 09 §9.2.1 defines it to be until F3 merges (`gh release list --exclude-pre-releases --limit 1`). The drill test reads the path from `R2_PREFREEZE_BIN` and skips with
    a message when unset locally; in CI it is required.
 7. **Restore drill.** Boot the build under test on a corpus copy (which takes the pre-migration checkpoint when any step runs);
    write one marker row after the upgrade; stop; restore the checkpoint offline with the build's `storage restore-offline
@@ -100,8 +100,25 @@ generator's test `scripts/tests/test_gen_shared_family_lists.py`.
 8. **CI job** `r2-cutover-suite`: every PR that touches a non-doc file (the `extraction-gates` trigger), `timeout-minutes: 30`,
    actions pinned to SHAs (copy those the file uses), fetches the pre-freeze binary, runs
    `go test ./internal/books/ -run 'TestCutoverOnR0Corpus|TestCutoverPreservesIDsAndReferences|TestCutoverLeavesOtherFamiliesByteIdentical|TestRollbackRestoreBootsPreviousBuild' -count=1`
-   and `python3 scripts/ci/gen_shared_family_lists.py --check`. Add the job to `ci/gates.txt` if R1-02's file lists
+   and `python3 scripts/ci/gen_shared_family_lists.py --check`, plus `TestCutoverFlipUpgrade` (rule 9) with
+   `R2_PREVFLIP_BIN` set when the table holds a cell. Add the job to `ci/gates.txt` if R1-02's file lists
    `extraction-gates` jobs individually.
+9. **Flip-upgrade cells** (03 §3.8 "Each later flip that adds a step raises M7's target levels … and registers a new M8";
+   05-storage §5S.3.5, §5S.3.13 "M8: the rewrite", IMPL-13; the mechanism is stated in F3-04 and F3-06: each flip adds
+   a level step per raised owner at its next contiguous version and replaces M8). In
+   `cutover_suite_test.go` add `TestCutoverFlipUpgrade` (name coined here) over a table (name coined here,
+   `flipUpgradeCells`) that this row leaves **empty**; each flip from F3-07 on adds exactly one cell naming the commit its
+   previous `main` is built from (for F3-07, the last F2 `main`, which registers no cutover step; from F4-08, the
+   previous flip's merge commit). A cell: the previous flip's `main` (binary path in `R2_PREVFLIP_BIN`, env name coined here; the
+   job builds it from the cell's commit) migrates a corpus copy; this build then boots it and must (a) raise the
+   levels of each owner this flip raises (books; core when core's level changes) to this build's declared `Spec.Level`
+   before the flip's first newly registered step runs, through the flip's new level steps, with the previous build's
+   level steps still applied and unchanged, (b) run exactly one M8
+   (one new `c/storage/dm/` record with this build's M8 ID and exactly one new `KindRewrite` journal), and (c) leave a
+   store on which the previous `main`'s binary exits 78 with nothing written. With an empty table the test logs
+   "no flip-upgrade cell" and passes; its `selftest/` case drives the cell runner with in-process stand-ins for
+   the two builds (the fake step of "TDD" at two levels) to prove each of (a)–(c) fails when broken. Locally the test skips with a message when
+   `R2_PREVFLIP_BIN` is unset; in CI it is required whenever the table holds a cell.
 
 ## TDD
 
@@ -117,7 +134,7 @@ python3 scripts/ci/gen_shared_family_lists.py --check                           
 python3 -m pytest scripts/tests/test_gen_shared_family_lists.py -q                        # passed
 R2_PREFREEZE_BIN="$(bash scripts/ci/fetch_prefreeze_binary.sh "$(gh release list --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName')")" \
   go test ./internal/books/ -run 'TestCutoverOnR0Corpus|TestCutoverPreservesIDsAndReferences|TestCutoverLeavesOtherFamiliesByteIdentical|TestRollbackRestoreBootsPreviousBuild' -count=1 -v | grep -c '^--- PASS'   # 4
-go test ./internal/books/ -run 'TestCutoverOnR0Corpus/selftest' -count=1                  # ok (negative cases fail as designed)
+go test ./internal/books/ -run 'TestCutoverOnR0Corpus/selftest|TestCutoverFlipUpgrade' -count=1   # ok (negative cases fail as designed; empty cell table logs and passes)
 grep -c 'r2-cutover-suite' .github/workflows/extraction-gates.yml                         # >=1
 make ci                                                                                   # exit 0
 ```

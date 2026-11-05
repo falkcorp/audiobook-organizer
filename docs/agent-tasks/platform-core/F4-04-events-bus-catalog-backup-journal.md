@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-04-events-bus-catalog-backup-journal.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 927dc665-9438-462c-a5d9-a0e41b62bdb3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F4-04 |
 | Release / flip | R2, identity flip F4 (dark PR; the bus goes live at F4-08) |
 | Tier | **T3** (Opus, high): a bus and a catalog with permissions; leaf types other packages import |
-| Wave | W22 |
+| Wave | W24 |
 | Depends on | OWNER-03 (NOT AGENT WORK: R1 released and deployed) |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
 
@@ -41,7 +41,10 @@ Confirm in the tracking issue that OWNER-03 recorded the R1 release and deploy. 
    `RestoreContext`, `RestoreHook`, the file-backed journal implementation and `StorageSpec` (the `c/backup/` spec the
    kernel registers from the identity flip), so `auth` and `rbac` (F4-01, F4-02) can import them without a cycle. The
    file-backed implementation and `StorageSpec` are this row's, not F8-01's: F4-01's `rbac.Deps.Revocations` is this
-   package's `RevocationJournal`, and F4-08 registers the `c/backup/` spec at boot.
+   package's `RevocationJournal`, and F4-08 registers the `c/backup/` spec at boot. The journal's authenticated format
+   is **F4-11's**, not this row's: the header fields, the `kid`/`mac` chain behind a derive-key seam, mode 0600, the
+   install check, `backup.location.json` and `c/backup/served_boot` (05-backup §5B.3.6). Build the append semantics
+   below with the line encoding and the file open in one place each, so F4-11 extends them without a second writer.
 3. `core/kernel/events.go`: build one `Bus` per App and validate the catalog at registration, **dark**: no module
    registers a topic or subscription before F4-08, and the kernel opens the bus only when F4-08 wires it.
 
@@ -97,12 +100,14 @@ ls internal/realtime/events.go | wc -l                                    # expe
    (`publish_rejected`) and logged once per topic. Subscription names `<moduleID>.<name>`, unique per bus; frozen when
    `Register` returns; no delivery before `Open`, none after `Close`. Default queue 256, max 65536, `DropNewest`
    unless `DropOldest()`; drops counted in `mediacore_events_dropped_total{topic,subscriber,reason}` with at most one
-   warning per subscriber per minute. `OnRaw` validates the JSON payload against the declared schema; the JSON form is
+   warning per subscriber per minute. The bus families of §5E.10 add the core `events` metrics scope: add its
+   `testdata/series.golden` under `core/events/`, asserted by `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5). `OnRaw` validates the JSON payload against the declared schema; the JSON form is
    encoded once per publish, lazily, only when a raw subscriber exists.
 3. `backup/journal` per §5B.3.2: copy the package block (types, constants, interface, comments' contracts). The file
    implementation appends one fsynced line per `Append` before the caller commits, stages `c/backup/journal_head =
    max(head, r.Seq)` into the caller's batch with `GetForUpdate`, and on error records nothing and lets the caller call
-   `Gap(b, at)`. Seq 0 is the header line, then 1, 2, … without gaps. `StorageSpec` returns the `c/backup/` spec with
+   `Gap(b, at)`. Seq 0 is the header line, then 1, 2, … without gaps; the header's fields and every line's MAC are
+   F4-11's (do not invent a header shape here). `StorageSpec` returns the `c/backup/` spec with
    the two `Serialized` exact keys and the two prefixes above.
 4. `core/kernel/events.go`: construct the bus and the catalog, validate core topics and module topics at P7, `Open` at
    06 §6.5.2's step, `Close` at shutdown, all behind the wiring F4-08 turns on. Register the core topics this file
@@ -151,7 +156,9 @@ type RestoreHook func(ctx context.Context, rc RestoreContext) (counts map[string
 `TestOnRaw_CrossModuleWithoutImport`, `TestOnRaw_DisabledModuleWarns`, `TestNoGlobals_EventsOutbox` (the events half; R5
 AST). For the journal: `TestJournal_AppendBeforeCommitHeadMonotone` and `TestJournal_AppendFailureStagesNothing` (names
 coined here: two revocations committing out of order never move the head backwards; a failed append stages nothing and
-`Gap` records the interval); `TestJournalImportsOnlyAllowed` (name coined here: `go list -deps` allow-list).
+`Gap` records the interval); `TestJournalImportsOnlyAllowed` (name coined here: `go list -deps` allow-list). For the
+bus metrics: `metricstest.AssertSeries` over the `events` scope's `testdata/series.golden` (05-metrics §12). The
+journal's integrity and re-apply tests of 05-backup §5B.9 are F4-11's.
 
 ## Invariants
 
@@ -174,7 +181,8 @@ make ci                                                                         
 ## Out of scope
 
 The outbox (F6-01); the realtime hub (F6-02); module `Registrar.Topics`/`Subscribe` and `Deps.Events` wiring and the
-live bus (F4-08); backup's in-use check and archives (F8-01).
+live bus (F4-08); the journal's authenticated format, `backup.location.json`, `c/backup/served_boot` and the boot
+re-apply (F4-11); backup's in-use check and archives (F8-01).
 
 ## Rollback
 

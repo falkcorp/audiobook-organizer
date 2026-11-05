@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-13-kernel-app-module-httpapi-skeleton.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 49cec14b-15f1-4aaa-9773-e49334cd61a5 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,11 +10,11 @@
 | ID | `R1-13` |
 | Tier | **T4** (Opus / xhigh): the boot-phase machinery every later writer hangs off; lifecycle and stop order are normative |
 | Release / wave | R1 / W10 |
-| Depends on | R1-12, R1-09, R1-07, R1-10 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
+| Depends on | R1-12, R1-09, R1-07, R1-10, R1-36 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 06 §6.4.10 R1 row, §6.5.1, §6.5.2, §6.11.1, §6.12 (hello); 03 §3.3 (app, module, kernel); 05-http-api §3, §4.8; 04 §8.1 R1 |
 | Branch | `agent/platform-core-r1-13-kernel-app-module-httpapi-skeleton` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 
@@ -26,6 +26,7 @@
 - `core/internal/openapi/`
 - `core/examples/hello/`
 - `core/openapi/core.json`
+- `core/internal/archtest_layers_test.go`: control edit only (step 4)
 
 **The shared wiring files this row creates, by name.** Later rows name these files in their own file lists (plan
 §(d): one owner per wave), so create exactly these paths and keep each one's role:
@@ -85,14 +86,28 @@ later is **absent, not stubbed**, and the kernel phase that consumes it is skipp
   `storage prune-checkpoints` to the list);
   `InstallProcessDefaults` is R1-15's.
 - `httpapi` (L6): routes, groups, `Handle` with a required `rbac.Requirement` (zero rejected), `Build` with
-  `ServeMux` pattern conflict detection (05-http-api §3, §4.8), the listener lifecycle, the problem shape; the
-  perimeter stages are R1-17's and `MountLegacy` is R1-14's.
+  `ServeMux` pattern conflict detection (05-http-api §3, §4.8), the listener lifecycle, the problem shape and the
+  legacy error envelope, the `Bind`/`Decode` helpers, `Page`/`Cursor`, the SPA claim (`Router.SPA`,
+  `RouteInfo{Kind: SPA}`) and the `NonSPA` predicate (05-http-api §4.10); the perimeter stages are R1-17's and
+  `MountLegacy` is R1-14's.
 - `internal/openapi`: builds OpenAPI 3.1 from a leaf route-description type; it never imports `httpapi`
   (`httpapi` → `internal/openapi`, 04 §8.1 R1, MOD3-4); schemas through `internal/jsonschemax`.
 - `examples/hello`: module + app + one route `GET /api/hello/v1/greeting`, declared `rbac.Public` and listed in
   `Manifest.PublicRoutes` until core auth exists (row notes; 06 §6.12.2), `MinCoreVersion: "0.1.0"`, and the
-  OpenAPI subcommand that writes `core/openapi/core.json` (06 §6.12; 07 §7.19 step 3 consumes that file). Hello's
+  `openapi` subcommand that writes `core/openapi/core.json` (06 §6.12; 07 §7.19 step 3 consumes that file; the
+  command line is defined below). Hello's
   keyspace and seed migration are R1-20's (`core/examples/hello/storage.go`).
+
+**The `openapi` command (name coined here; 06 §6.12.5 shows a `main` with no argument handling, and 06 and 05-http-api
+say only that hello's `openapi` subcommand writes `core/openapi/core.json`).** `hello openapi [--out <file>]` is reached
+through `app.Options.Args`: it builds `Description.Core` in memory (no I/O besides the write, `TestDescribeInMemoryNoIO`)
+and writes it to `<file>`, defaulting to `core/openapi/core.json` resolved from the module root. R1-30's generator and
+F9-01 call exactly this command line, so do not rename the flag. The freshness gate is `make openapi-check`
+(05-http-api §4.6): it runs `hello openapi --out <tmp>` and `diff`s the result against the committed
+`core/openapi/core.json`, failing on any difference. The `core-ci` target lives in `core/Makefile`, which is **not** in
+this row's files: record under the PR's "Scope notes" that R1-30 (the owner of `core/Makefile` at this wave) adds the
+`openapi-check` target and its place in `make -C core ci`. This row's own check is `TestOpenAPI_Golden` and the
+acceptance below.
 
 ## Invariants and tests (write first; spec names from 06 §6.10 and 05-http-api §12)
 
@@ -100,12 +115,42 @@ later is **absent, not stubbed**, and the kernel phase that consumes it is skipp
   `TestStartOrder`, `TestStartRollbackReverseOrder` (a failing hook stops every started hook in reverse),
   `TestRegistrarClosedAfterRegister`, `TestNewCleansUpCoreGoroutines`, `TestDescribeInMemoryNoIO`,
   `TestRestartRequest_ExitsRestartCode` (exit 75 after the stop order, never `os.Exit(0)`).
+  06 §6.10 pairs and rows of the same subject: `TestStopOrder` (a bus handler and an outbox consumer of hello never
+  observe the module after its Stop hook, instrumented hooks under `synctest`; the bus and outbox halves are asserted
+  over the hooks this row has, the rest by the rows that land them), `TestStopTimeoutAbandons` (a hook that outlives
+  `core.shutdown.budget` is abandoned and the stop order continues; `synctest` timeouts),
+  `TestValidation_<ProblemKind>` (a table, one row per `module.ValidationError` kind this row implements: each
+  validation path fails closed with the right kind) and `TestValidation_AllProblemsJoined` (several problems are
+  reported together), `TestWorkerPolicies` (`DegradeOnExit` versus `StopAppOnExit`, panic recovery) and
+  `TestRegistrarContextCancelled` (late calls are recorded; `r.Context()` is cancelled with `app.New`'s ctx).
+- `TestSpecGoBlocksCompile` (06 §6.10, COR-16) for the R1 blocks: every Go block of 06 marked as part of the hello
+  example that exists at this row is extracted, compiled against core in CI and booted through `app.New` (a
+  manifest-level refusal fails the test, not only a compile error). R1-37 builds `coretest.New` and switches the boot
+  to it; each later row that grows hello extends this test with its blocks.
 - IDs: `TestReservedIDsIncludeLegacyTopSegments`, `TestReservedSegmentsDisjointFromNonSPA`.
 - Routes: `TestHandle_RejectsZeroPermission`, `TestHandle_RejectsForeignScope`, `TestBuild_PatternConflictIsError`,
   `TestBuild_PrefixCollision_FacadeVsFacade`, `TestBuild_RejectsCamelCaseJSON`, `TestProblem_ShapeGolden`,
   `TestUnmatched_APIPathIsProblemNotHTML`, `TestMethodNotAllowed_HasAllow`, `TestDecode_StrictUnknownField`.
-- OpenAPI: `TestOpenAPI_Golden` over hello (the golden is `core/openapi/core.json` itself; a test regenerates it
-  in a temp dir and diffs).
+- Routes, the rest of 05-http-api §12 for the skeleton (each one line, from the spec row):
+  `TestBind_TagsCompiledAtRegistration` (a bad binding tag gives `ErrBadBinding` at boot),
+  `TestPage_OffsetDefaultHasTotal` and `TestCursor_FilterMismatch` (offset paging carries a total by default; a cursor
+  presented with a different filter is refused; SIMP-8), `TestLegacyError_ShapeGolden` (the legacy error envelope
+  byte-for-byte for the router's legacy-prefix 404; its pair `TestProblem_ShapeGolden` is above),
+  `TestUnclean_PathNotRedirectedByMux` (`//ping` is not 301-redirected; the `/` owner decides),
+  `TestSPA_NotRateLimitedAndPublic` (200 cold-load requests to the `/` owner are not 429 and
+  `RouteInfo{Kind: SPA}` is present; the rate limit itself is R1-17's stage, so assert the route's `Kind` and the
+  absence of any rate class on it here), `TestSPA_SingleOwnerOfRoot` (a legacy `ServesSPA` plus `Router.SPA` gives
+  `ErrPrefixCollision`; FE-1), `TestNonSPA_PredicateCoversClaims` (`/socket.io`, `/API/V1/x`, `POST /library`,
+  `/health/`, `/HEALTH`, `/metrics/` and `/livez/` never reach the SPA handler; `/assets/x.js` and `GET /login` do),
+  `TestNonSPA_LegacyFallbackConsultsPredicate` (with the legacy mount owning `/`, `/livez/` and `/READYZ` get problem
+  404, never gin's `NoRoute` page; the legacy half is exercised with a stand-in mount until R1-14, whose
+  `MountLegacy` then re-runs it), `TestStage2_RouteSurvivesRequestClone` (a stage between 2 and the mux that clones the
+  request with `r.WithContext` leaves a native route's `http_route` and span name correct; the perimeter's real stage
+  2 is R1-17's, so this row drives a test-only cloning stage over `Build`'s router and R1-17 repeats the cell over the
+  real chain with a legacy route).
+- OpenAPI: `TestOpenAPI_Golden` over hello (the golden is `core/openapi/core.json` itself; a test runs `hello openapi
+  --out` into a temp dir and diffs it against the committed file, failing on any difference) and
+  `TestOpenAPI_IsValid31` (the generated document validates against the OpenAPI 3.1 meta-schema).
 - Hello: `TestHelloEndToEnd` for the R1 surface (boot, `GET /api/hello/v1/greeting` 200, clean stop); the parts
   that need storage, tasks or auth are added by the rows that land them.
 - No process-global state in core (03 R5): **this row owns `TestNoGlobals`** (05-metrics §12: no
@@ -113,28 +158,34 @@ later is **absent, not stubbed**, and the kernel phase that consumes it is skipp
   `otel.Set*`/`otel.Get*Provider`/`otel.Tracer`/`otel.Meter` in core, except `otel.SetMeterProvider`,
   `otel.SetTracerProvider` and `otel.SetTextMapPropagator` inside `app.InstallProcessDefaults`, which R1-15 adds).
   It is a source scan of every non-test `.go` file under `core/`; write it in `core/app/noglobals_test.go` (file
-  name coined here, in this row's files; this row does not touch `core/archtest/`). Also no `slog.SetDefault` and
+  name coined here, in this row's files; this row does not touch the `core/archtest/` package). Also no `slog.SetDefault` and
   `signal.NotifyContext` only in `core/examples/hello/cmd/` (a `main`).
 - Kernel metrics: **this row owns `TestKernelFamiliesGathered`** (05-metrics §12, a `kernel` test): one zero-module
   boot on a fresh Provider; the scrape of that App's `Provider.Handler()` carries every kernel-emitted family that
   exists at this row, `<namespace>_kernel_boot_phase_seconds`, matching a core golden
   (`core/kernel/testdata/kernel_families.golden`, name coined here). The storage families
   `<namespace>_storage_level` and `<namespace>_storage_checkpoint_bytes` do not exist until R1-20; write the golden
-  as a list R1-20 extends.
+  as a list R1-20 extends. The kernel is a core metrics scope, so also add its `core/kernel/testdata/series.golden`
+  (family, type and label set), asserted by `metricstest.AssertSeries` (built by R1-10; 05-metrics §6 item 5).
 - Core guard control: once `app` and `kernel` exist the in-module control becomes `app` → `kernel`
-  (03 §3.5.1 item 2, third step). Set it in this PR and say so.
+  (03 §3.5.1 item 2, third step; MOD3-8). Set it in this PR and say so. The file is
+  `core/internal/archtest_layers_test.go`, created by R1-01 with the whole layer table; this row edits only the
+  control.
+- The coretest harness (`coretest.New`, `Boot`, the `With...` options, `AssertPermission`, `AssertModuleInert`,
+  `archtest.RoutesHavePermissions`) is **R1-37's**, not this row's; this row's tests boot through `app.New` directly
+  and list no `core/coretest/` file.
 - Any 06 §6.10 row whose subject this PR lands and that is not listed above: write it too, or list it in the PR as
   deferred with the row that brings its dependency.
 
 ## Dependency check
 
-R1-12, R1-09, R1-07, R1-10 merged: `test -d core/rbac && test -d core/health && test -d core/log && test -d core/metrics && echo ok`.
+R1-12, R1-09, R1-07, R1-10, R1-36 merged: `test -d core/rbac && test -d core/health && test -d core/log && test -d core/metrics && test -f core/log/logging.go && echo ok`. `app.New` constructs R1-36's `log.Logging` and passes `Logging.Module(id)` as `Deps.Log`.
 
 ## Re-verify
 
 ```bash
 S=docs/specs/platform-core
-sed -n '/^### 6.5.1/,/^### 6.5.2/p' $S/06-app-sdk.md | grep -c '^| P'    # count the phase rows; your kernel implements the rows whose members exist
+sed -n '/^### 6.5.1/,/^### 6.5.2/p' $S/06-app-sdk.md | grep -c '^| P'    # expect 29 phase rows; your kernel implements the rows whose members exist
 grep -n 'GET /api/hello/v1/greeting' $S/06-app-sdk.md | head -2         # expect the §6.12.2 heading
 test ! -e core/kernel && test ! -e core/app && test ! -e core/openapi/core.json && echo NEW   # expect NEW
 git diff --stat origin/main -- . ':!core' | tail -1                       # at the end of the task: expect no ABO file changed
@@ -151,8 +202,8 @@ git diff --stat origin/main -- . ':!core' | tail -1                       # at t
    `Run`, `Describe`).
 3. `core/examples/hello`: module, app `main` (the only `signal.NotifyContext` in core), the greeting route, the OpenAPI
    subcommand; generate and commit `core/openapi/core.json`.
-4. Core layering guard: layers for the new packages (module L7, kernel L8, app and examples L9, httpapi L6,
-   internal/openapi by its importer rule) and the control `app` → `kernel`.
+4. Core layering guard (`core/internal/archtest_layers_test.go`): the layer table is complete from R1-01 and needs
+   no change for the new packages; set the in-module control to `app` → `kernel` and nothing else in the file.
 5. Header bumps; fragment `changelog.d/<today>_core_kernel_app.md` (`### Added`: "Internal: the core runtime
    skeleton (module, kernel, app, httpapi) and the hello example."). Commit(s) per package; every commit builds.
 
@@ -173,16 +224,15 @@ Exactly the members named in Goal, with the signatures of 06 §6.4.1–§6.4.7 (
 go -C core build ./... && go -C core vet ./... && go -C core test ./... -race -count=1     # expect ok
 go -C core test ./app/ ./kernel/ -run 'TestNoGlobals|TestKernelFamiliesGathered' -count=1 -v | grep -c '^--- PASS'   # expect 2
 ls core/kernel/boot.go core/kernel/kernel.go core/module/manifest.go core/module/registrar.go core/module/deps.go core/app/options.go   # expect all six
-go -C core run ./examples/hello/cmd/hello openapi --out "$(mktemp -d)/core.json" && echo GEN   # expect GEN (exact subcommand per 06 §6.12.5)
-git diff --exit-code -- core/openapi/core.json                                             # expect no diff after regenerating in place
-git grep -n 'slog.SetDefault\|otel.Set\|http.DefaultServeMux\|signal.Notify' -- core ':!core/examples/*/cmd/**' | wc -l   # expect 0
+T=$(mktemp -d); go -C core run ./examples/hello/cmd/hello openapi --out "$T/core.json" && diff "$T/core.json" core/openapi/core.json && echo FRESH   # expect FRESH (diff exits non-zero on a stale core.json)
+git grep -n 'slog.SetDefault\|otel.Set\|http.DefaultServeMux\|signal.Notify' -- core ':!core/examples/*/cmd/**' ':!*_test.go' | wc -l   # expect 0 (test files hold the literals the scans look for)
 git diff --name-only origin/main | grep -v '^core/' | grep -v '^changelog.d/' | wc -l      # expect 0
 make ci && make -C core ci                                                                 # expect exit 0
 ```
 
 ## Out of scope
 
-`MountLegacy`'s behaviour (R1-14); the perimeter (R1-17); the ABO composition root (R1-15); sdnotify (R1-16);
+`MountLegacy`'s behaviour (R1-14); the coretest harness and `archtest.RoutesHavePermissions` (R1-37); the `make openapi-check` target in `core/Makefile` (R1-30); the perimeter (R1-17); the ABO composition root (R1-15); sdnotify (R1-16);
 storage (R1-20); build identity (R1-19); offline opens (R1-25) and the prune command (R1-24).
 
 ## Rollback

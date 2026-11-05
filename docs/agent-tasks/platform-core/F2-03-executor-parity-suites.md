@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-03-executor-parity-suites.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: f8fddedf-5163-4b6b-a6b2-d8e1133ec889 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F2-03 |
 | Release / flip | R2, foundation PRs (F2), **dark** |
-| Wave | W25 |
+| Wave | W27 |
 | Tier | **T4** (Opus / xhigh–max): a fresh executor over every definition shape with dispatch gates, fencing, cancellation, resume, stand-down, the chunk ledger and the CPU budget; correctness is concurrency correctness |
 | Depends on | F2-02 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |

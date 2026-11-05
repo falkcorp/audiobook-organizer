@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-01-core-config-loader-overridestore-importer.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 36955afe-b04c-490f-9996-d4b78e06b11a -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F3-01 |
 | Release / flip | R2, config flip F3 (dark PR; nothing switches until F3-07) |
 | Tier | **T4** (Opus, xhigh–max): the config engine behind every key — layering, locks, validation and the audited write path |
-| Wave | W23 (runs inside an announced **move window**: no other PR of the wave touches `internal/config/`, `internal/arch/layering_test.go` or `scripts/ci/short_test_weights.json`) |
+| Wave | W25 (runs inside an announced **move window**: no other PR of the wave touches `internal/config/`, `internal/arch/layering_test.go` or `scripts/ci/short_test_weights.json`) |
 | Depends on | F2-09, F2-07 |
 | Owns gate test | `TestStateDirFallbackMatchesHEAD` |
 | Gate | Plan, then execute autonomously in your own worktree and PR. Do not merge with `--admin` past a required check. |
@@ -215,6 +215,8 @@ copied field for field from 05-config §1.3.3. `Importer.Stage` refuses an unreg
 and stages nothing for a default value. Boot record: `<state_dir>/config.boot.json`, `{"format":"mediacore-boot/1",
 "gen":N,"values":{…}}`, mode 0600, directory 0700, temp file + fsync + rename through `Options.BootRecordRoot`;
 unparsable → renamed `.bad`, health `config_boot_record_quarantined`. Metrics (§1.8) on scope `mediacore.config`.
+This row adds core's `config` metrics scope, so it adds `core/config/testdata/series.golden` for that scope, asserted by
+`metricstest.AssertSeries` (R1-10's `core/metrics/metricstest`; 05-metrics §5 item 5).
 
 ## Tests first (names are the spec's; 05-config §1.11)
 
@@ -235,6 +237,19 @@ test-only file source), `TestPassthrough_NotOwnedNotWritable`, `TestSchema_Golde
 `TestSchema_SameOverridesAsOpenAPI`, `TestSchema_OverrideSetsDisjoint`, `TestSchema_SecretIsWriteOnly`,
 `TestKeys_NeverContainSecretValues`, `TestSnapshot_ImmutableUnderRace` (`-race`), `TestRegistry_SealedAfterLoad`,
 `TestConfigImportsOnlyAllowed`, `FuzzPatchDecode`.
+
+Also these, whose rows are in 06 §6.10 and 05-config §1.11 (file values through a test-only file source, as above):
+
+- `TestUnknownModuleInConfig_OperatorFails` (06 §6.10, COR-14; 06 §6.6 row): `core.modules.<id>.enabled` naming an
+  unknown module in an operator layer fails closed with `ProblemUnknownModuleInConfig`, the message listing the known IDs.
+- `TestUnknownModuleInConfig_BootRecordWarns` (06 §6.10, COR-14): the same in the UI-written boot record is retained and
+  reported like an unknown override row, health `core.config` degraded, and boot succeeds.
+- `TestPreBootKeyInConfigFileRefused` (06 §6.10): `core.paths.state_dir` in the config file fails P0; the same value by
+  env boots.
+- `TestStateDir_OneResolverYAMLDBPath` (05-config §1.11; 06 §6.10, OPS4-8, OPS5-13): a database path given only in the
+  YAML file plus an uncreatable default resolves the boot record, a restore intent, HEAD's key file and the keyring to
+  that path's directory, as HEAD does; the updater marker's `db_path` is not an input.
+- `TestConfigSeries_Golden` (name coined here): `metricstest.AssertSeries` over the `config` scope.
 
 `TestStateDirFallbackMatchesHEAD` table (§1.11): explicit set or not × default creatable or not × DB path absolute /
 relative / empty: explicit never falls back; uncreatable default → `Dir(core.storage.path)` with the warning;
@@ -258,6 +273,7 @@ later moves → boot error naming both remedies; P0a and `Boot` receive the same
 (cd core && go build ./... && go vet ./config/... ./internal/configstore/... ./kernel/...)   # exit 0, no output
 (cd core && go test -race -count=1 ./config/... ./internal/configstore/... ./kernel/...)     # ok for each package
 (cd core && go test -count=1 -run 'TestStateDirFallbackMatchesHEAD' ./config/...)           # --- PASS
+(cd core && go test -count=1 -run 'TestUnknownModuleInConfig_|TestPreBootKeyInConfigFileRefused|TestStateDir_OneResolverYAMLDBPath|TestConfigSeries_Golden' ./config/... ./kernel/...)   # PASS for each
 go test -count=1 ./internal/config/...       # ok (ABO unchanged; no test edited to pass)
 go test -count=1 ./internal/arch/...         # ok
 make -C core ci                              # exit 0

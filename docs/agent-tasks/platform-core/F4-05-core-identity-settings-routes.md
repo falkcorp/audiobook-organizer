@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-05-core-identity-settings-routes.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.3 -->
 <!-- guid: cbdb5377-2585-4a6d-bc8d-b935127d7e1e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F4-05 |
 | Release / flip | R2, identity flip F4 (dark PR: the routes are built and tested over test routers; the kernel mounts them, for hello and ABO, at F4-08) |
 | Tier | **T3** (Opus, high): credential routes with interactive and owner guards |
-| Wave | W28 (F2-16 is this wave's one owner of the kernel and module wiring files: edit none of them) |
+| Wave | W30 (F2-16 is this wave's one owner of the kernel and module wiring files: edit none of them) |
 | Depends on | F4-02, F4-01, F4-03, F3-01, F4-10 |
 | Finishes | F2-05's skipped permission cells, `TestApprove_RequiresVerifiedMethodAndPermission` among them |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
@@ -43,8 +43,8 @@ Create the L6 route packages, each imported only by `kernel` (03 §3.3), registe
 | `core/internal/audithttp` | the audit query and export (05-rbac §7.6) |
 | `core/internal/confighttp` | `GET /api/core/v1/settings/schema`, `GET /api/core/v1/settings`, `PATCH /api/core/v1/settings` (05-config §1.3.4) |
 | `core/internal/storagehttp` | `POST /api/core/v1/system/factory-reset` with `storagehttp.Stager` (05-storage §5S.3.15; 05-rbac §6.2: `core:admin` + `Guards.Interactive` + `Guards.Owner`) |
-| `core/internal/modulehttp` | `GET /api/core/v1/modules` over the kernel's read-only `ModulesView` (05-http-api §5 item 2) |
-| `core/internal/uihttp` | `ui/diagnostics` and `ui/csp-report` (05-http-api §5 item 2) |
+| `core/internal/modulehttp` | `GET /api/core/v1/modules` over the kernel's read-only `ModulesView` (05-http-api §5 item 2), with `<ns>_ui_manifest_requests_total{outcome}` (07 §7.16); and the served OpenAPI route `GET /api/core/v1/openapi/{owner}.json` (05-http-api §7: perm `rbac.AnyAuthenticated`, Public when `core.http.openapi.public` is true) over a read-only view of the built documents the kernel passes in (host package chosen here: the spec names none) |
+| `core/internal/uihttp` | `ui/diagnostics` and `ui/csp-report` (05-http-api §5 item 2), with `<ns>_ui_diagnostics_total{kind,module}` and `<ns>_ui_csp_reports_total{directive}` (07 §7.16) |
 
 Dark: no kernel mounts these packages before F4-08 (which mounts them for every app); this PR tests each package over
 its own test router. It also finishes F2-05's task-route permission cells, which waited for core authentication.
@@ -63,7 +63,10 @@ its own test router. It also finishes F2-05's task-route permission cells, which
   invalid, 500 storage, 200 with `restart_pending` and `post_commit_error`; `config.Actor` filled from the request's
   auth context: `Interactive` = `auth.Method.MayChangeCredentials()`, `Can` = the checker).
 - 05-storage §5S.3.15 (`storage.ResetRequest`, `Stager.StageReset`, 422 `confirm_required` and
-  `library_files_confirm_required`).
+  `library_files_confirm_required`; the Tests row's `TestResetRequestFlowsUnchanged`, route half).
+- 05-http-api §7 (the served OpenAPI route), §10 (`core.http.openapi.public`), §12 (`TestOpenAPI_UsesConfigOverrides`).
+- 07 §7.16 (the three `_ui_` counters above; `_ui_build_info` and `_ui_responses_total` are F9-01's, on `ui.Handler`);
+  05-metrics §5 item 5, §12 (`metricstest.AssertSeries`).
 - 05-rbac §6.2 (admin-gated routes), §12 (`TestFactoryResetCoreRouteRecordsHookArgs`,
   `TestFactoryResetNativeRouteKeepsLibraryFilesByDefault`, `TestAnyAuthenticated_ModuleOnlyKeyReachesCoreEvents` is
   F6's).
@@ -110,7 +113,9 @@ grep -c 'oauth' internal/server/wire_auth_routes.go                   # >= 1 (ca
 4. `confighttp`: the three settings routes over `config.Store` with `config.Actor` from the request.
 5. `storagehttp`: the reset route with the storagehttp-local `Stager` interface (never `*storage.Admin`) and the 422
    rules; the kernel passes its staging function.
-6. `modulehttp`, `uihttp`: as 05-http-api §5 item 2.
+6. `modulehttp`, `uihttp`: as 05-http-api §5 item 2, plus `modulehttp`'s OpenAPI route (05-http-api §7). The three
+   `_ui_` counters add the core `ui` metrics scope: add its `testdata/series.golden`, asserted by
+   `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5); F9-01 extends that golden with its two families.
 7. Test each package over a test `httpapi.Router` built in its own `_test.go` (with `CoreGroup` and, for `authhttp`,
    `CoreFixedGroup` at a fixture base), with core's real chain and a `coretest` auth fixture. The kernel mount is
    F4-08's.
@@ -138,6 +143,12 @@ grep -c 'oauth' internal/server/wire_auth_routes.go                   # >= 1 (ca
   `TestModuleGroup_IsAuthenticated` over the new packages, `TestBuild_RejectsCamelCaseJSON` over their DTOs, and for the
   settings routes `TestSettingsRoutes_StatusCodes` (name coined here: 400/409/403/422/200 exactly as 05-config §1.3.4,
   secrets never in a body).
+- `TestResetRequestFlowsUnchanged`, the route half (05-storage §5S.3.15; R1-25 owns the offline half): the one
+  `storage.ResetRequest` reaches the stager unchanged from the route.
+- `TestOpenAPI_UsesConfigOverrides` (05-http-api §12): a `config.Duration` field renders as `string/duration` in the
+  served document, the same schema as in the settings schema. With it, cells for the served route: an authenticated
+  caller gets the owner's document, an anonymous one 401 unless `core.http.openapi.public` is true.
+- `metricstest.AssertSeries` over the `ui` scope's `testdata/series.golden` (05-metrics §12).
 
 ## Invariants
 

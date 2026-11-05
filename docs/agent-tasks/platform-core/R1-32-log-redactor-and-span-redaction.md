@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-32-log-redactor-and-span-redaction.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.3 -->
 <!-- guid: 7dce556b-315e-476c-899c-10d184f05c10 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -15,7 +15,7 @@
 | Branch | `agent/platform-core-r1-32-log-redactor-and-span-redaction` |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the
-named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1
+named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1
 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (touch nothing outside this list without recording it under the PR's
@@ -200,7 +200,7 @@ make ci && make -C core ci                                                      
 
 ## Out of scope
 
-Core's `Logging` pipeline, taps, levels and file output (05-logging §3 beyond the redactor; R1-18 and R2);
+Core's `Logging` pipeline, taps, levels and file output (05-logging §3 beyond the redactor; R1-36 builds them, on top of this row's `Redactor`; R1-18 only consumes them);
 `core.log.redact_keys` (core config arrives at F3); moving ABO's `log_redact.go`/`trace_redact.go` into the perimeter
 (R1-17); the journal (F5).
 

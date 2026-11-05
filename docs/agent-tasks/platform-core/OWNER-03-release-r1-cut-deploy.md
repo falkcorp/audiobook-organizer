@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-03-release-r1-cut-deploy.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: dcd841c3-d463-456c-9860-5243f9a1dc22 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -13,8 +13,8 @@
 | ID | OWNER-03 |
 | Release | R1 |
 | Tier | **OWNER**: production read, release, deploy |
-| Wave | W21 |
-| Depends on | R1-01 … R1-30, R1-32, R1-33, R1-34 (all merged; every R1 task but R1-31) |
+| Wave | W23 |
+| Depends on | R1-01 … R1-30, R1-02, R1-03, R1-04, R1-05, R1-06, R1-07, R1-08, R1-09, R1-10, R1-11, R1-12, R1-13, R1-14, R1-15, R1-16, R1-17, R1-18, R1-19, R1-20, R1-21, R1-22, R1-23, R1-24, R1-25, R1-26, R1-27, R1-28, R1-29, R1-30, R1-32, R1-33, R1-34 (all merged; every R1 task but R1-31), R1-35, R1-36, R1-37 |
 | Unblocks | **R1-31** (ends the R1 freeze after this release), **OWNER-04** (its reads need the deployed R1) and **every F2 task's merge**: R2's content lands dark while R1 is deployed (09 §9.3). F2 PRs may be opened earlier; only their merge waits. |
 | Spec | 09 §9.4 R1 (Content: release note, Rollback, Owner), §9.7 P12, §9.2.1 (the R1 freeze), §9.3 |
 
@@ -25,7 +25,7 @@ kept 7 days (09 §9.2.3, §9.4 R1 Migrations). A disk without room halts the boo
 
 ## Owner steps
 
-1. **Check the content.** R1-01 … R1-30 and R1-32 … R1-34 are merged and R1's verification passed (09 §9.4 R1 Verification; plan
+1. **Check the content.** R1-01 … R1-30 and R1-32 … R1-37 are merged and R1's verification passed (09 §9.4 R1 Verification; plan
    §(b) R1 row), including `TestR0OpensR1Store`, both image-job runs and both `unit-lifecycle` cells.
 2. **P12: disk headroom** (09 §9.7 P12), on the production host:
 
@@ -37,8 +37,11 @@ kept 7 days (09 §9.2.3, §9.4 R1 Migrations). A disk without room halts the boo
    - **Branch A:** free space covers the checkpoint, the rewritten ranges and the compaction: deploy. (In R1 the
      checkpoint is the main cost; it is a full copy, so `avail` below the `du` figure is Branch B for certain.)
    - **Branch B:** free space first, or the boot halts before writing.
-3. **Cut the R1 production release** on `main` (`release-prod.yml`, `workflow_dispatch`); the R1 freeze has kept
-   `check-rc-ordinal` from promoting anything since R1-01, so cut it by hand. **Prepend** the R1 release-note lines,
+3. **Cut the R1 production release** on `main` (`release-prod.yml`, `workflow_dispatch`), by hand. If you kept the
+   R1 freeze (OWNER-01), `RELEASE_FREEZE: 'R1'` (R1-35) has kept `check-rc-ordinal` from promoting anything since
+   R1-35 merged, just before R1's first core PR. If you overrode it, R1-35 set the value to `''`, and automatic
+   minors may already have shipped part of R1: check `gh release list --exclude-pre-releases --limit 5` first, and
+   cut R1 anyway. **Prepend** the R1 release-note lines,
    never replacing the generated notes. The lines of 09 §9.4 R1 "Content: release note", verbatim:
 
    > A restore now takes effect at the next restart, which the service performs itself; a container started without
@@ -80,4 +83,5 @@ paths.
 ## Done when
 
 The R1 release is cut and deployed (or rolled back with the reason) and the comment is recorded. The lead then runs
-R1-31 (ends the R1 freeze) and lets the F2 merges proceed.
+R1-31 (ends the R1 freeze; a recorded no-op if the freeze was overridden and the value is already `''`) and lets the F2
+merges proceed.

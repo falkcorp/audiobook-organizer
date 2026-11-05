@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-04-scheduler-schedule-parity-harness.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 150263db-02f3-457c-9fd5-39a0970861c8 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F2-04 |
 | Release / flip | R2, foundation PRs (F2), **dark** |
-| Wave | W26 |
+| Wave | W28 |
 | Tier | **T3** (Opus / high): a fresh scheduler whose durable clocks must never stampede at first boot nor lose or duplicate a fire; time-zone and DST correctness |
 | Depends on | F2-02, F2-09 (`core/config`, `config.Duration` and the kernel's core-section list in `core/kernel/core_sections.go`) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |

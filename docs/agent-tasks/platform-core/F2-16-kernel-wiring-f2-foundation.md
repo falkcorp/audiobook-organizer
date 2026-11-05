@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-16-kernel-wiring-f2-foundation.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.3 -->
 <!-- guid: ee4d77ac-3711-47b9-9be9-7b78297d36f2 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,9 +9,9 @@
 |---|---|
 | ID | F2-16 |
 | Release / flip | R2, foundation PRs (F2), **dark in ABO** (ABO registers no kind and holds no `c/tasks/` run, so nothing of `tasks` starts in ABO); `hello` runs `hello.count` from this PR |
-| Wave | W28 |
+| Wave | W30 |
 | Tier | **T3** (Opus / high): the kernel's start rule for tasks and the boot calls of every F2 subsystem; a wrong rule starts ABO's executor before F5 |
-| Depends on | F2-03 (executor), F2-04 (scheduler, schedule keys), F2-05 (`taskhttp`, `countTask`), F2-06 (data-migration runner), F2-07 (audit), F2-08 (scope catalog), F2-09 (core sections), F2-10 (health registry) |
+| Depends on | F2-03 (executor), F2-04 (scheduler, schedule keys), F2-05 (`taskhttp`, `countTask`), F2-06 (data-migration runner), F2-07 (audit), F2-08 (scope catalog), F2-09 (core sections), F2-10 (health registry), R1-37 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
 
 ## START HERE
@@ -54,8 +54,10 @@ them (plan §(d) "Shared wiring files have one owner per wave"). This PR:
 4. **`hello` registers `hello.count`** (06 §6.12.2–§6.12.3): `TaskLedger: []tasks.Kind{"hello.count"}` in its
    manifest, `r.Resources("name")` and `r.Tasks(countTask(svc))` in `Register`; F2-05 wrote `countTask`.
 5. **`coretest`'s task cells** (06 §6.4.8): `WithRuns`, `Harness.RunTask`, `RunResult` in `core/coretest/tasks.go`, and
-   `AssertModuleInert`'s held-runs cell in `core/coretest/harness.go` ("its persisted runs (see WithRuns) are listed as
-   held and none was dispatched").
+   `AssertModuleInert`'s held-runs cell, extending R1-37's `core/coretest/harness.go` ("its persisted runs (see WithRuns)
+   are listed as held and none was dispatched"). R1-37 built the harness (`New`, `Boot`, the `With…` options,
+   `AssertModuleInert` and the rest of 06 §6.4.8); this row adds only the task members and that one cell, and changes
+   no signature R1-37 published.
 6. **Regenerates** `core/openapi/core.json` and the generated client for the task routes `hello`'s App now mounts.
 
 In ABO before F5 neither start condition holds (ABO registers no kind, the kernel registers none of core's own kinds,
@@ -94,6 +96,7 @@ test ! -e kernel/tasks.go && echo absent                                      # 
 grep -n 'countTask' examples/hello/module.go | wc -l                          # 0
 grep -rn 'func WithRuns' coretest/ | wc -l                                    # 0
 grep -n 'Problem' module/*.go | grep -c 'ProblemTaskLedger'                   # 0 (this row adds it)
+grep -n 'func New(\|func AssertModuleInert(' coretest/harness.go | wc -l      # 2 (R1-37's harness), else STOP
 cd ..
 # ABO side: still no kind and no tasks import
 git grep -n 'mediacore/internal/executor\|mediacore/internal/scheduler\|mediacore/internal/taskhttp' -- ':!core/' | wc -l   # 0
@@ -111,7 +114,9 @@ STOP and report.
 Modify: `core/kernel/boot.go` (the boot calls, in phase order), `core/kernel/kernel.go` (per-module registration
 consumption, the task-route mount, the executor and scheduler in the Run and stop order), `core/module/manifest.go`
 (`TaskLedger`, `DataMigrations`, `ProblemTaskLedger` if the `Problem…` constants live there), `core/module/registrar.go`
-(`Tasks`, `Resources`), `core/examples/hello/module.go`, `core/coretest/harness.go`.
+(`Tasks`, `Resources`), `core/examples/hello/module.go`; extend `core/coretest/harness.go` (R1-37's: the held-runs cell
+of `AssertModuleInert` only), `core/coretest/crashmatrix/writers.go` (the boot-writer rows this PR adds) and
+`core/examples/hello/crash_test.go` (their cells).
 Create: `core/kernel/tasks.go`, `core/kernel/tasks_test.go`, `core/examples/hello/held_runs_test.go`,
 `core/coretest/tasks.go`.
 Regenerate: `core/openapi/core.json` and `core/web/packages/api-client/src/generated/` with the generators R1-13 and
@@ -155,6 +160,9 @@ In `core/examples/hello/held_runs_test.go` (package `hello_test`):
   the three runs are listed held over `GET /api/core/v1/tasks/runs`, none is dispatched; re-enabling hello resumes
   them. The run store holding runs is what starts `tasks` here (no kind is registered while hello is disabled).
 - `AssertModuleInert` with the held-runs cell, called from this test for the disabled hello (06 §6.4.8).
+- `TestHeld_KindsKnownWhileDisabled` (05-tasks §5T.9, COR-13): with hello disabled, its kinds are known from its last
+  definition snapshots (`c/tasks/def/<kind>`) or its manifest's `TaskLedger` (05-tasks §5T.3.11), so its runs list as
+  `held` and are not treated as unknown kinds.
 - `TestHelloCount_RunsOnCoretest` (name coined here): `coretest.New(t, coretest.WithModules(hello.New()))`;
   `h.RunTask(t, "hello.count", hello.CountParams{})` succeeds (the line 06 §6.12.6's `TestHello` holds; see planner
   note), and the `hello.count` half of `TestNativeStores_RoundTrip` (05-tasks §5T.9: "`hello.count` on a `coretest`
@@ -175,7 +183,8 @@ In `core/kernel/tasks_test.go` (names coined here):
   runner invoked at P4b (the boot-path halves of F2-07's, F2-08's and F2-10's kernel tests).
 
 Re-run, unchanged: `TestBootCrashMatrix` (core's, over hello: add the rows for the definition-snapshot upsert and any
-other durable boot write this PR adds, 06 §6.5.1 "Boot writers"; 09 §9.3) and, in the root module,
+other durable boot write this PR adds to `core/coretest/crashmatrix/writers.go` and their cells to
+`core/examples/hello/crash_test.go`, 06 §6.5.1 "Boot writers"; 09 §9.3) and, in the root module,
 `TestABOMetricsGatherNoDuplicate` (ABO builds no executor).
 
 ## Steps
@@ -196,7 +205,7 @@ other durable boot write this PR adds, 06 §6.5.1 "Boot writers"; 09 §9.3) and,
 cd core
 go build ./... && go vet ./kernel/... ./module/... ./coretest/... ./examples/hello/...          # exit 0
 go test ./kernel/... ./module/... ./coretest/... ./examples/hello/... -race -count=1             # all ok
-go test ./examples/hello/ -run 'TestDisabledModuleWithRunsBoots|TestHelloCount_RunsOnCoretest' -race -count=1 -v | grep -c '^--- PASS'   # 2
+go test ./examples/hello/ -run 'TestDisabledModuleWithRunsBoots|TestHelloCount_RunsOnCoretest|TestHeld_KindsKnownWhileDisabled' -race -count=1 -v | grep -c '^--- PASS'   # 3
 go test ./kernel/ -run 'TestKernelTasks_|TestBatch_ZeroParallelismRefusedAtRegister|TestStart_ViewOnlyDefRefusedAtRegister|TestKernelBoot_F2CallsInOrder' -race -count=1   # ok
 go test ./... -run 'TestBootCrashMatrix|TestDisabledModuleInert' -race -count=1                  # ok
 cd ..

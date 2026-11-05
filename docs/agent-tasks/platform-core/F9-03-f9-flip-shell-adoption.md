@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F9-03-f9-flip-shell-adoption.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.3 -->
 <!-- guid: b0913d46-08c4-4812-bdf9-48c9be6bf2e7 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F9-03 |
 | Release | R2 if ready, else R3 unchanged (09 §9.3; plan §(l) item 7) |
 | Tier | **T4** (Opus / xhigh–max): every flip PR is T4; this one changes every page path and the owner of `/` |
-| Wave | W39 (alone: the only PR of its wave; it owns `main.go`, `internal/server/`, books' registration and `core/kernel/kernel.go` in W39). Runs inside an announced **move window** (04 key `F9 move internal/server -> mediacore/ui`) |
+| Wave | W41 (alone: the only PR of its wave; it owns `main.go`, `internal/server/`, books' registration and `core/kernel/kernel.go` in W39). Runs inside an announced **move window** (04 key `F9 move internal/server -> mediacore/ui`) |
 | Depends on | F8-04, F9-02, F9-04, F9-05 |
 | Spec | 07 §7.19 steps 4–5 (one release; the order inside the series), §7.11, §7.6.3 (ownership of `/`, the Basic-gate asset exemption, ABO adopts the hello pattern, route-chain placement, `embed_frontend` semantics), §7.5 (server manifest and intersection), §7.9.2 (realtime client), §7.10 (preset), §7.18; 09 §9.4 R2 flips table row F9, §9.6 row 21; 05-http-api §8.1 (F9 row), §4.10; 03 §3.8 F9; 06 §6.4.10 ("Shell" row: `Options.UI`, `Options.UIOptions`, `Description.UIManifests`), §6.10 (`TestABOManifestBootsWithShell`) |
 
@@ -147,6 +147,11 @@ createShell({ app, modules: [booksModule] }).mount('#root');
 - The shell's done-check: `make build-api && ./audiobook-organizer serve` answers `/` with the placeholder (07 §7.18
   "API-only boot").
 - `TestBasicGate_ExemptSetGolden` (repeated, unchanged set) and `TestBasicExemptAssets_EqualsHEAD`.
+- `TestBasicGate_SPAOptionsExemptAssets` (05-http-api §12; this row owns it): from the shell flip,
+  `Router.SPA(h, SPAOptions{BasicExemptAssets: ui.BasicExemptAssets})` exempts exactly HEAD's asset set on the shell,
+  and `TestBasicGate_ExemptSetGolden` repeated in this PR passes.
+- `TestUIAppIDMismatch` (06 §6.10 and 07 §7.18; this row owns it): a bundle whose `mediacore-app` meta differs from
+  `app.Options.AppID` fails P8 with `ProblemUIAppIDMismatch`; ABO's own bundle, with an equal meta, boots.
 - `TestBuildID_HeaderEqualsEmbeddedMeta` through the image job.
 - The port of `static_embed_recovery_test.go` booted through `app.New` with `app.Options.UIOptions`.
 - e2e: `theme-boot.spec.ts`, `stale-build.spec.ts` (ABO half), `stale-build-rollback.spec.ts`,
@@ -164,7 +169,8 @@ make build-api && (./audiobook-organizer serve & echo $! > /tmp/f9.pid; sleep 5;
   curl -s -o /tmp/root.html -w '%{http_code}\n' localhost:8484/; kill $(cat /tmp/f9.pid)); grep -c -i 'placeholder\|api-only' /tmp/root.html
 
 # Gate tests. Expected: ok
-go test -count=1 -run 'TestABOManifestBootsWithShell|TestBasicGate_ExemptSetGolden' ./...
+go test -count=1 -run 'TestABOManifestBootsWithShell|TestBasicGate_ExemptSetGolden|TestBasicGate_SPAOptionsExemptAssets|TestUIAppIDMismatch' ./...
+(cd core && go test -count=1 -run 'TestUIAppIDMismatch|TestBasicGate_SPAOptionsExemptAssets' ./...)
 (cd core && go test -count=1 -run 'TestBasicExemptAssets_EqualsHEAD|TestHandler_' ./ui/...)
 
 # No gin SPA serving left. Expected: 0

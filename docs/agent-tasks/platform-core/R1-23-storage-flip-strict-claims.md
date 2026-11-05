@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-23-storage-flip-strict-claims.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 74651b7f-033f-42d7-b873-4ecf3f078896 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -14,7 +14,7 @@
 | Spec | 05-storage §5S.3.4 (strict claims, shadow dial), §5S.3.5 (LegacyCap), §5S.3.7, §5S.9.3, §5S.9.4 step 2; 04 §4.5, §8.4 note 1; 09 §9.2.2, §9.2.3 (checkpoint), §9.4 R1 Content: storage; 03 §3.7 |
 | Branch | `agent/platform-core-r1-23-storage-flip-strict-claims` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 

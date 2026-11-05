@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-15-composition-root-books-module.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 3f22576e-6cf0-4db5-afca-5c9f763dca9c -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -14,7 +14,7 @@
 | Spec | 06 §6.11.1, §6.4.10 R1 (app.Options R1 fields, R1Values), §6.5.2 (stop order); 05-health §5H.4 (core.shutdown.budget); 05-metrics §13 items 1-2; 05-logging §11 items 1, 4; 05-config §1.12.1 (R1Values); 05-rbac §4.9, §6.1 (atom table is books code); 04 §2.4 (internal/books); 09 §9.4 R1 Content: runtime |
 | Branch | `agent/platform-core-r1-15-composition-root-books-module` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 
@@ -119,6 +119,18 @@ R1-18's, not this PR's.
 
   05-metrics §6 builds these Providers through `coretest.MetricsProvider` (06 §6.4.8). No earlier row adds it: create
   it in `core/coretest/metrics.go` (this row's file) and build the Providers through it.
+- `TestInstallProcessDefaults_RestoreAndExclusive` (05-logging §10; in `core/app/`'s tests, next to
+  `InstallProcessDefaults`): after install, `otel.GetMeterProvider()`, `otel.GetTracerProvider()` and
+  `otel.GetTextMapPropagator()` return the App's, an instrument created through the global appears in the App's
+  scrape, and `slog.Default()` logs through the pipeline; restore puts all seven back; a second install errors; the
+  OTel sink drops values. R1-36 does not own it: this row builds `app.InstallProcessDefaults`.
+- `TestBooksDisabledInert` (06 §6.10; G1 for the real module): with books disabled in the config, `app.New` boots, books'
+  `Register`, migrations, hooks and workers are never invoked, and the legacy mount is absent. Assert it by booting
+  through `app.New` with a recording books stand-in at the module seam; R1-37's `coretest.AssertModuleInert` is not
+  available at this row.
+- `TestR1AppConfigFromBlob` (06 §6.10; COR4-1, R4-6): in R1 a value set only in the settings blob is effective in
+  `AppConfig` after boot, and a `PUT /api/v1/config` that changes one field leaves every other non-default blob field
+  byte-identical.
 - Behaviour: the full Go suite, e2e and the ABS conformance suite pass unchanged; a `SIGTERM` stops within the
   budget in 06 §6.5.2's order (a kernel test with fake hooks records the order).
 
@@ -143,8 +155,8 @@ test ! -e internal/books && echo NEW                                   # expect 
 
 1. Tests first (red): the six owned tests (`TestBooksMinCoreVersion`, `TestAtomTable_Golden`,
    `TestManifest_SPermRoutesCarryAtomRequirement`, `TestABOMetricsGatherNoDuplicate`,
-   `TestFamilyTaken_ThroughGlobalProvider`, `TestContractScrapesServedHandler`), the stop-order kernel test,
-   `TestOnlyCompositionRootImportsModule`.
+   `TestFamilyTaken_ThroughGlobalProvider`, `TestContractScrapesServedHandler`), `TestBooksDisabledInert`,
+   `TestR1AppConfigFromBlob`, the stop-order kernel test, `TestOnlyCompositionRootImportsModule`.
 2. `internal/books`: `Module(store)`, manifest (R1 fields), `Register` building `*server.Server` and calling
    `MountLegacy`; the atom table; explicit construction replacing the two `init()` registrations; add
    `"internal/books": 6` to `layerOf`.
@@ -170,7 +182,7 @@ test ! -e internal/books && echo NEW                                   # expect 
 ## Acceptance
 
 ```bash
-go test ./internal/books/ -run 'TestBooksMinCoreVersion|TestAtomTable_Golden|TestOnlyCompositionRootImportsModule' -count=1 -v   # expect PASS
+go test ./internal/books/ -run 'TestBooksMinCoreVersion|TestAtomTable_Golden|TestOnlyCompositionRootImportsModule|TestBooksDisabledInert|TestR1AppConfigFromBlob' -count=1 -v   # expect PASS
 go test ./internal/books/ -run TestManifest_SPermRoutesCarryAtomRequirement -count=1 -v    # expect PASS
 go test ./internal/books/ -run TestABOMetricsGatherNoDuplicate -count=1 -v            # expect PASS
 go test ./internal/telemetrypolicy/ -run TestContractScrapesServedHandler -count=1 -v  # expect PASS

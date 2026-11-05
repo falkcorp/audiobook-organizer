@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-06-datamigrate-runner-crash-matrix.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: c1a6adbc-49de-4dd5-964f-59cfaafb845a -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F2-06 |
 | Release / flip | R2, foundation PRs (F2), **dark** |
-| Wave | W24 |
+| Wave | W26 |
 | Tier | **T4** (Opus / xhigh–max): the runner every R2 cutover step (M2–M8) runs on; one batch per chunk with the shard cursor, exact resume across CPU-count changes, disjoint shards, and a crash point at every chunk boundary |
 | Depends on | F2-01 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
@@ -78,8 +78,11 @@ from `core/storage`, STOP: R1's storage surface is incomplete and this PR must n
 
 Create: `core/storage/datamigrate/` (declarations + `StepWriter` + `DerivedBuildTask`), `core/internal/storagemigrate/`
 (runner, plan, cursors, state records, verify, metrics), `core/coretest/crashmatrix/chunks.go`. Create or extend:
-`core/kernel/migrate.go`. Tests beside each. Not `core/kernel/boot.go`, `core/kernel/kernel.go` or `core/module/`
-(F2-16).
+`core/kernel/migrate.go`. Modify: `core/coretest/crashmatrix/writers.go` (the boot-writer table the kit walks: add the
+rows of the three new boot writers) and `core/examples/hello/crash_test.go` (R1-21's `TestBootCrashMatrix` over hello:
+the boot that exercises those rows; see "TDD"). If R1-21 put the writer table in another file of
+`core/coretest/crashmatrix/`, STOP and report rather than editing an unlisted file. Tests beside each. Not
+`core/kernel/boot.go`, `core/kernel/kernel.go` or `core/module/` (F2-16).
 
 Do **not** touch `core/storage/` outside `datamigrate/`: the dry run (`core/storage/dryrun.go`), the quarantine record
 (`core/storage/quarantine.go`), the preflight hook (`core/storage/preflight.go`) and the level step are F3-04's
@@ -98,7 +101,10 @@ Runner rules (each is tested):
    `RaisesLevel > 0` (a `Cutover` step's level is M7's, so `RaisesLevel` may be 0 there); `Parallelism.Validate()`
    must pass (`tasks.ErrNoParallelism` otherwise); `ID` is `<owner>.<name>`, `<name>` `[a-z][a-z0-9-]*`, unique and
    never reused; `Cutover` requires `Source` inside retired claims (as `storage` reports them).
-2. **State** `c/storage/dm/<id>` ∈ {pending, running, verifying, done, failed, held}; `done` is never re-entered.
+2. **State** `c/storage/dm/<id>` ∈ {pending, running, verifying, done, failed, held}; `done` is never re-entered. A
+   `done` record whose ID this build does not register is history, not an error: the runner neither runs it nor fails
+   on it. Each R2 flip replaces the previous M8 with a newly named one (F3-04's "Flip mechanism"), so a store
+   migrated by an earlier `main` holds such a record.
 3. **Exact resume (DATA-12):** at first start compute the shard plan `{n, boundaries}` from `Parallelism` and the key
    distribution and persist it at `c/storage/dm/<id>/plan` before any shard runs; every resume reuses that plan,
    whatever `runtime.NumCPU()` is now. Shard cursor `c/storage/dm/<id>/shard/<n>` (last key processed) is written in
@@ -146,14 +152,27 @@ before the checkpoint, nil until F3-04. Document both seams in `core/kernel/migr
 - `TestDataMigration_ZeroParallelismRefused` (name coined here): `tasks.Parallelism{}` → registration error,
   `errors.Is(err, tasks.ErrNoParallelism)`.
 - `TestDataMigration_OnlineRefused` (name coined here): `Mode: Online` → registration error (deferred-build).
-- `TestDataMigration_ShardsDisjoint` (name coined here, `-race`): a migration with `CPU()` writes every item exactly
-  once; the race detector sees no shared mutable state.
-- `TestDataMigration_VerifyFailureFailsBoot` (name coined here).
+- `TestDataMigrationShardsDisjoint` (05-storage §5S.10, `-race`): parallel shards never touch the same key; a
+  migration with `CPU()` writes every item exactly once and the race detector sees no shared mutable state.
+- `TestDataMigrationVerifyBlocksBarrier` (05-storage §5S.10): a failed `Verify` leaves state `failed`, fails the boot
+  with the checkpoint open, and later `Barrier` versions cannot run.
+- `TestDataMigrationRewritesInPlaceNotRevisited` (05-storage §5S.10): with `RewritesInPlace`, the migration's own
+  writes are not re-stepped after the iterator re-opens (runner rule 5).
+- `TestDataMigration_UnregisteredDoneRecordIgnored` (name coined here): a `done` `c/storage/dm/<id>` record whose ID
+  the build does not register is neither run nor reported as an error (runner rule 2).
 - `TestStepWriter_QuarantineInChunkBatch` (name coined here): with a fake writer, a crash at the chunk commit leaves either
   both the source delete and the record or neither; with a nil writer the step fails and the source row stays.
-- Extend `TestBootCrashMatrix` (core's, R1-21) with the new boot writers this PR adds: the plan record, the shard
-  cursors, the state record (06 §6.5.1 "Boot writers"; 09 §9.3 "Boot writers extend the crash matrix"). Add their rows
-  to the writer table the kit walks.
+- Extend `TestBootCrashMatrix` (core's, R1-21, in `core/examples/hello/crash_test.go`) with the new boot writers this
+  PR adds: the plan record, the shard cursors, the state record (06 §6.5.1 "Boot writers"; 09 §9.3 "Boot writers
+  extend the crash matrix"). Add their rows to the writer table in `core/coretest/crashmatrix/writers.go`. No boot
+  writes them yet: hello declares no data migration, and the boot call and `Manifest.DataMigrations` are F2-16's. So
+  each of the three cells in `crash_test.go` drives the kernel's P4b data-migration entry point in
+  `core/kernel/migrate.go` directly, over a store opened as hello's boot opens it, with the synthetic test migration
+  above: it kills at that writer (`CrashClone`), re-enters through the same entry point, and asserts the resume
+  invariants. `TestBootCrashMatrixCoversEveryWriter` then finds a cell for each new row; it must neither fail on them
+  nor pass vacuously. Say in the PR description that these three cells exercise the entry point rather than a full
+  boot until a manifest declares a data migration (F3-07 registers M2, whose `TestBootCrashMatrix_ABO` cells cover the
+  boot path).
 
 ## Steps
 
@@ -169,8 +188,8 @@ before the checkpoint, nil until F3-04. Document both seams in `core/kernel/migr
 cd core
 go build ./... && go vet ./storage/datamigrate/... ./internal/storagemigrate/... ./kernel/... ./coretest/...   # exit 0
 go test ./storage/datamigrate/... ./internal/storagemigrate/... -race -count=1                                 # ok
-go test ./internal/storagemigrate/... -run 'TestDataMigrationResumesExactly|TestCutoverCrashAtEveryChunk' -race -count=1 -v | grep -c '^--- PASS'   # 2
-go test ./... -run TestBootCrashMatrix -race -count=1                                                          # ok (with the new writer rows)
+go test ./internal/storagemigrate/... -run 'TestDataMigrationResumesExactly|TestCutoverCrashAtEveryChunk|TestDataMigrationShardsDisjoint|TestDataMigrationVerifyBlocksBarrier|TestDataMigrationRewritesInPlaceNotRevisited' -race -count=1 -v | grep -c '^--- PASS'   # 5
+go test ./... -run 'TestBootCrashMatrix|TestBootCrashMatrixCoversEveryWriter' -race -count=1                    # ok (with the new writer rows)
 grep -rn 'Online' internal/storagemigrate/*.go | grep -v _test | grep -vc 'refus\|deferred\|SIMP5-7'            # 0 (no Online execution path)
 cd ..
 go test ./... -run TestBootCrashMatrix_ABO -count=1                                                            # ok (unchanged: ABO declares no data migration yet)

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-17-perimeter-into-core-stages.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 8b504d86-5e95-4fb7-a1c8-ff2de68cf3a7 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -14,7 +14,7 @@
 | Spec | 05-http-api §4.2 (stages 0-11), §8.1 R1 row, §12; 05-metrics §13 item 3 (http_server_* row); 09 §9.2.7; 09 §9.4 R1 Content: runtime, release note (HTTP-metrics lines) |
 | Branch | `agent/platform-core-r1-17-perimeter-into-core-stages` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-01-core-integrations-registry-dark.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: bc446db6-50ca-4aa7-a750-2bcc30316a89 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-01 |
 | Release | R2, flip label F7 (dark PR) |
 | Tier | **T4** (Opus / xhigh–max): instance records with secret binding and origin trust; a wrong rule sends a stored secret to a host the owner never approved |
-| Wave | W25 (beside F2-03, F2-15, F3-02, F3-04, F4-02; file-disjoint) |
+| Wave | W27 (beside F2-03, F2-15, F2-17, F3-02, F3-04, F4-02; file-disjoint) |
 | Depends on | F3-01 (core config: `Passthrough` operator values), F3-03 (core secrets: `secrets.Ref`, `secrets.Value`), F2-07 (audit store: `core.integration.*` actions) |
 | Spec | 05-metadata M1 (M1.1 scope, M1.3 Go API, M1.4 lifecycle incl. the native store and the operator overlay of step 2, M1.5 errors, M1.6 concurrency, M1.7 keys, M1.8 metrics, M1.9 tests, M1.10 the migration table this step's importer serves); 03 §3.3 (`integrations` row, "Store interfaces and importers"); 04 §8.1 F7 |
 

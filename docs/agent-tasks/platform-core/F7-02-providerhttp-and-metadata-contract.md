@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-02-providerhttp-and-metadata-contract.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 691c2fbf-fba4-4b6d-b8ca-dad283253f2b -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-02 |
 | Release | R2, flip label F7 (dark PR) |
 | Tier | **T3** (Opus / high): quota and throttle state with fail-closed reads; the egress guard is the SSRF boundary for every adapter |
-| Wave | W28 (beside F2-16, F4-05, F5-15, F6-01, F6-02, F7-03, F7-06, F8-03; file-disjoint). Runs inside an announced **move window** (04 key `F7 move internal/security/safehttp -> mediacore/integrations/providerhttp`) |
+| Wave | W30 (beside F2-16, F4-05, F5-15, F6-01, F6-02, F8-01, F8-03; file-disjoint). Runs inside an announced **move window** (04 key `F7 move internal/security/safehttp -> mediacore/integrations/providerhttp`) |
 | Depends on | F7-01 (integrations registry: `Ref`, `Gate`, `Hold`, `Limits`, `Class`), F2-11 (F2's minimal `providerhttp` with `providerhttp.InterimHolds` and the `core.integrations.release-holds` registration) |
 | Spec | 05-metadata M2 (M2.1–M2.11: `Registry`, `GateStore`/`NativeGateStore`, `Client`, `Policy`, holds, breaker with probe lease, token bucket, daily quota with tiers and zone, egress guard, retry, redaction, `Classify`, the four HEAD defects it removes), M3 (M3.3 Go API: `Provider`, `Lookup`, `Caps`, `Adapter`, `Result`, `Chain`, `Cache`, `Cached`; M3.9 tests); 04 §8.1 F7, §3.4 (`internal/security/safehttp` row); 05-tasks §5T.8.2 (`core.integrations.release-holds` stays on its interim body until F7-09) |
 

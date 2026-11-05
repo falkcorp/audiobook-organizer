@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-30-core-web-api-client.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 646a92e3-e0bd-4a2f-9b2c-edfca1100759 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -14,7 +14,7 @@
 | Spec | 07 §7.19 steps 2-3, §7.3.1, §7.3.2; 09 §9.4 R1 Content: UI, Verification (UI steps); 12 §12.4.3 (npm lockstep) |
 | Branch | `agent/platform-core-r1-30-core-web-api-client` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 
@@ -68,7 +68,11 @@ by ABO's `web/` through `file:` (07 §7.3.1 layout, §7.3.2; 09 §9.4 R1 "Conten
   `web/` sources + build; the optional `ARG BUILD_ID` only in the frontend stage. `Dockerfile.build-cgo`'s frontend stage
   (`Dockerfile.build-cgo:14-19`) needs the same four steps, or the cgo build breaks once `web/` depends on `core/web`
   (07 §7.3.2 "both Docker stages"); it is in this row and changes in this PR.
-- `core/Makefile`: `web-test` runs `npm ci` then vitest in `core/web` (no longer "not applicable", 12 §12.3.11).
+- `core/Makefile` (this row owns the file at this wave): `web-test` runs `npm ci` then vitest in `core/web` (no longer
+  "not applicable", 12 §12.3.11), and the `openapi-check` target and its place in `make -C core ci` (05-http-api §4.6,
+  modelled on `scripts/ci/check_generated_types.sh:1-22`): it runs R1-13's `hello openapi --out <tmp>` and `diff`s the
+  result against the committed `core/openapi/core.json`, failing on any difference, so a stale `core.json` fails core
+  CI before this row's generator reads it. R1-13 defines the command line and does not edit `core/Makefile`.
 - npm lockstep (12 §12.4.3): `@mediacore/api-client`'s version equals core's `version.Version`; `check_core_version.py`
   (R1-06) enforces it later; record the value here.
 
@@ -82,6 +86,10 @@ by ABO's `web/` through `file:` (07 §7.3.1 layout, §7.3.2; 09 §9.4 R1 "Conten
   `core.json` produces no diff.
 - vitest for the runtime: `checkBuild` triggers `onStaleBuild` on a mismatching `X-App-Build`, never for `dev`;
   `readPageBuildId` reads `<meta name="mediacore-build">` once.
+- `runtime.errors.test.ts` (07 §7.18, api-client): envelope decoding (the problem shape and the legacy error envelope),
+  timeout, bounce detection, and `skipAuthRedirect` taken from `x-mediacore-permission: public`.
+- The `openapi-check` freshness gate (above) fails when `core/openapi/core.json` differs from a fresh `hello openapi`
+  output: prove it once by editing `core.json` in a scratch copy and running `make -C core openapi-check`.
 
 ## Dependency check
 

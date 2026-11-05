@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-01-owner-decisions-before-r0-r1.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 6d318a46-2f16-444d-9bfc-a89bd7547f51 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -16,7 +16,7 @@
 | Tier | **OWNER**: owner decisions and one read-only production read |
 | Wave | W01 (due at once) |
 | Depends on | none |
-| Unblocks | **R0-05** merges only after P14 is recorded; **R1-01** (R1's first core PR, which turns the R1 freeze on) only after Q-I and the freeze decision are recorded; R1-06's readiness report uses the Q-G thresholds |
+| Unblocks | **R0-05** merges only after P14 is recorded; **R1-35** (the release-freeze toggle, merged just before R1's first core PR) only after the freeze decision is recorded, because the answer sets its value; **R1-01** (R1's first core PR, which depends on R1-35) only after Q-I is recorded; R1-06's readiness report uses the Q-G thresholds |
 | Spec | 09 §9.2.1 (release gating; the R1 freeze), §9.4 R0 Owner, §9.4 R1 Owner, §9.7 P14; 14 §14.3 Q-I, Q-G; 12 §12.10 item 3 |
 
 ## Why now
@@ -25,9 +25,11 @@
   release at 10 RCs of a base version (09 §9.1), so a merged R0 commit can reach production within 10 RCs. R0-05
   makes the Basic gate refuse an empty stored password; an install with the gate on and no saved password would be
   locked out (09 §9.7 P14; 05-authn §11.1 item 5).
-- **Q-I and the R1 freeze before R1-01.** From R1 on, tests are the main safety (D11) and every PR passes named
-  required checks (09 §9.2.1); how that is enforced decides how every later wave merges. R1-01 turns the R1 freeze
-  on unless the owner overrides it.
+- **Q-I before R1-01, the R1 freeze before R1-35.** From R1 on, tests are the main safety (D11) and every PR passes
+  named required checks (09 §9.2.1); how that is enforced decides how every later wave merges. R1-35 adds the
+  freeze toggle `RELEASE_FREEZE` to `prerelease.yml` in every case, because the R2 freeze (D12 (a), not
+  overridable) needs it later. Your freeze answer only sets its value: `'R1'` if you keep the freeze, `''` if you
+  override it.
 - **Q-G before R1 wires the readiness report** (12 §12.10 item 3: "the owner may tune them before R1 wires the
   readiness report, not after").
 
@@ -55,7 +57,10 @@
    - your own alternative, stated precisely.
    Record also whether `/parallel-sweep` may admin-merge (plan §(m) item 1). Under (a) it may not.
 3. **The R1 freeze** (09 §9.2.1 "R1 freeze", a lead extension the owner may override): keep it (automatic promotion
-   paused from R1's first core PR until R1 ships, so R1 is exactly one production release) or override it.
+   paused from R1-35's merge, just before R1's first core PR, until R1 ships, so R1 is exactly one production
+   release) or override it. Either answer is recorded as R1-35's value: **kept** sets `RELEASE_FREEZE: 'R1'`,
+   **overridden** sets `RELEASE_FREEZE: ''` (then R1-31 is a recorded no-op). Overriding does not remove the toggle;
+   the R2 freeze (F3-08) is not yours to override (D12 (a)).
 4. **Q-G: split-readiness thresholds** (14 §14.3 Q-G; 12 §12.10 item 3): accept SC1 (3 consecutive API-stable
    checkpoints over 6 weeks) and SC5 (coverage 70 % core / 60 % SDK) as proposed, or give new numbers. They are
    readiness reports, not merge gates.
@@ -70,7 +75,7 @@ value):
 OWNER-01 recorded <date>
 P14: Branch A | Branch B (password saved on <date>)
 Q-I: (a) | (b) | alternative: <one sentence>; /parallel-sweep admin-merge: allowed | not allowed
-R1 freeze: kept | overridden
+R1 freeze: kept (R1-35 sets RELEASE_FREEZE: 'R1') | overridden (R1-35 sets RELEASE_FREEZE: '')
 Q-G: accepted | SC1=<n> checkpoints over <w> weeks, SC5=<core %>/<SDK %>
 ```
 
@@ -79,10 +84,11 @@ the ruleset itself is not part of this plan's PRs.
 
 ## Done when
 
-The tracking-issue comment above exists. The lead then: lets R0-05 merge (P14 recorded); lets R1-01 start its merge
-gate in the recorded merge mode; passes the Q-G numbers to R1-06.
+The tracking-issue comment above exists. The lead then: lets R0-05 merge (P14 recorded); gives R1-35 the recorded
+freeze value; lets R1-01 start its merge gate in the recorded merge mode once R1-35 has merged; passes the Q-G numbers
+to R1-06.
 
 ## What agents must not do
 
-Run the P14 command, read production, guess an answer, apply a ruleset without the owner's recorded choice, or merge
-R0-05 / R1-01 before this row is recorded.
+Run the P14 command, read production, guess an answer (including R1-35's freeze value), apply a ruleset without the
+owner's recorded choice, or merge R0-05 / R1-35 / R1-01 before this row is recorded.

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F6-05-journal-live-tail-dark.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 84230bcc-5f4f-40b5-81f4-6534033c49b6 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F6-05 |
 | Release / flip | R2, events flip F6 (dark PR; live at F6-03) |
 | Tier | **T2** (Sonnet / high): a permission-filtered live topic over the journal; the topic, its permission and its user-data rule are fixed by the spec |
-| Wave | W30 (beside F4-07, F5-13, F7-05, F9-02, F9-04, F9-05; file-disjoint) |
+| Wave | W32 (beside F3-07, F7-07; file-disjoint) |
 | Depends on | F5-15 (`core/internal/logjournal`, the journal `Tap`), F5-19 (`core/internal/loghttp` and the route half of `TestJournal_RequiresSystemManage`), F6-02 (the realtime hub and its permission filter), F4-04 (the `events` catalog and bus) |
 | Owns gate tests | the event half of `TestJournal_RequiresSystemManage` (F5-19 owns the test and its route half) |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-07-reach-oracle-r0-baseline.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 67c2453a-bb34-4e9d-aa7d-456a7e6a8d60 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,8 +10,8 @@
 | ID | F4-07 |
 | Release / flip | R2, identity flip F4 (dark PR; the test bites from F4-08, which registers M3, and stays as the atom table's regression test) |
 | Tier | **T3** (Opus, high): the oracle proves that no principal gains or loses reach |
-| Wave | W30 |
-| Depends on | F4-06, F4-05, F2-12 |
+| Wave | W31 |
+| Depends on | F4-06, F4-05, F2-12, F2-15 |
 | Owns gate test | `TestIdentityCutover_ReachOracle` |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
 
@@ -28,7 +28,7 @@ make web-deps
 git rev-parse HEAD       # BASE
 ```
 
-Confirm F4-06, F4-05 and F2-12 are merged, and that the R0 release tag is the one F2-12 recorded in
+Confirm F4-06, F4-05, F2-12 and F2-15 are merged, and that the R0 release tag is the one F2-12 recorded in
 `internal/books/testdata/r2corpus/manifest.json`. If not, stop.
 
 ## Goal
@@ -69,6 +69,7 @@ ls scripts/r2corpus/write_r0_corpus.py scripts/r2corpus/record_r0_answers.py | w
 grep -rn 'TestLegacyManifest_RegistersAsMuxPatterns' internal/server/ | wc -l          # 1 (R1-14: the manifest)
 grep -rn 'TestAtomTable_Golden' internal/books/ | wc -l                                # 1 (R1-15)
 ls -d internal/books/cutover/m3 | wc -l                                                # 1 (F4-06)
+ls internal/books/cutover_suite_test.go | wc -l                                        # 1 (F2-15's harness, which the test runs M3 through)
 ls -d core/internal/authhttp | wc -l                                                   # 1 (F4-05)
 ls -d internal/books/rbacreach 2>/dev/null | wc -l                                     # 0
 ls scripts/tests/test_record_r0_answers.py scripts/tests/test_record_r0_reach.py 2>/dev/null | wc -l   # 1 (F2-12's; yours is new)

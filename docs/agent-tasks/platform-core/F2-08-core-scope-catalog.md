@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-08-core-scope-catalog.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 4cc96c6b-103a-4ffe-91ed-1c8cfd0c4973 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F2-08 |
 | Release / flip | R2, foundation PRs (F2), **dark** |
-| Wave | W22 |
+| Wave | W24 |
 | Tier | **T2** (Sonnet / high): a closed list with fixed classes and flags, a small catalog type and one gate test; no design left except where marked |
 | Depends on | OWNER-03 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |

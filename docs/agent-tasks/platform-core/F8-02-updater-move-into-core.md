@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-02-updater-move-into-core.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: dd9d9131-a311-46ff-ac6c-d78aac9f8d12 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F8-02 |
 | Release | R2, flip label F8 (dark PR) |
 | Tier | **T3** (Opus / high): a move of the R0 updater with an offline fetch; the fetch decides which binary a rollback across R2 installs |
-| Wave | W32 (alone; file-disjoint). Runs inside an announced **move window** (09 §9.2.10) |
+| Wave | W33 (alone; file-disjoint). Runs inside an announced **move window** (09 §9.2.10) |
 | Depends on | F2-05 (tasks), F7-05 (`notify.Service`), F7-02 (`providerhttp.Client`), F4-04 (`events.Bus`), F2-10 (the `health` registry): the four types 05-updater §5U.3's `Deps` names |
 | Spec | 05-updater §5U.3 (Go API), §5U.4 (Check, Apply, "Fetching a named release", rollback), §5U.10 (routes), §5U.11 (tests), §5U.12 (migration, "R2 done-check"); 05-storage §5S.3.12 (row `make rollback-restore`); 09 §9.2.1 ("After an R2 hotfix"); 04 §8.1 F8; 06 §6.4.5 (`app.OfflineCommands`) |
 

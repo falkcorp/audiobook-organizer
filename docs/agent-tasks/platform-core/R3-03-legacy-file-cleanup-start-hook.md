@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R3-03-legacy-file-cleanup-start-hook.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: b76a7b67-773f-4425-8bf4-d8294b15c6cb -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | R3-03 |
 | Release | R3 |
 | Tier | **T3** (Opus / high): a boot-time deletion of a secret file with a skip rule; deleting the key while it is the only copy loses every pre-R2 archive's secrets |
-| Wave | W44 (beside R3-01; file-disjoint: this row owns `internal/books/module.go` in W44, R3-01 owns `internal/books/services.go`) |
+| Wave | W46 (beside R3-01; file-disjoint: this row owns `internal/books/module.go` in W44, R3-01 owns `internal/books/services.go`) |
 | Depends on | R3-02 |
 | Spec | 05-storage §5S.3.8 (the `legacy-file-cleanup` paragraph), §5S.3.16 (the crash matrix kit), §5S.10 (`TestLegacyFileCleanup`); 06 §6.5.1 writer table row "Run 2 (R3+)", §6.5.1 "Releases" R3, §6.5.2 start order step (2); 05-config §1.12.2 ("HEAD's key"), §2.4 (state-file table, row `encryption_key`); 09 §9.4 R3 "Content", "Verification"; 03 §3.8 R3 |
 

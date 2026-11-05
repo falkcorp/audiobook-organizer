@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F6-03-events-flip-realtime-spa-client.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: c4bebd8c-0dc9-4e78-a620-116332cca63d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F6-03 |
 | Release / flip | R2, **the events flip F6** (one atomic PR, 09 §9.2.1) |
 | Tier | **T4** (Opus, xhigh–max): the events flip moves the SPA's realtime client |
-| Wave | W34 — the only PR of its wave; touches `main.go`, `internal/server/`, books' registration and the kernel and module wiring files; runs inside an announced **move window** (`internal/realtime` → core `realtime`) |
+| Wave | W36 — the only PR of its wave; touches `main.go`, `internal/server/`, books' registration and the kernel and module wiring files; runs inside an announced **move window** (`internal/realtime` → core `realtime`) |
 | Depends on | F5-18, F6-01, F6-02, F6-04 (the outbox operator routes it mounts), F6-05 (the journal's live tail the SPA's log view moves onto) |
 | Gate | Plan, then execute autonomously. |
 
@@ -143,6 +143,13 @@ grep -rn 'OutboxConsumers\|OutboxHandler' core/module/ | wc -l               # 0
   when the tab is hidden.
 - The event half of `TestJournal_RequiresSystemManage` (F6-05's) and F6-04's route tests now run on ABO's mounted
   routes and topics.
+- `TestDisabledModuleOutboxRetained` (06 §6.10, COR-12): a message for a disabled module's declared consumer survives
+  `orphan_retention` and another consumer's ack, and is delivered after re-enable (it needs this PR's
+  `Manifest.OutboxConsumers`).
+- Extend `TestDepsScoping` (06 §6.10; R1-20's, grown at F4-08) with the F6 cell: staging through `Deps.Outbox` to a
+  topic outside the module's catalog entries is refused.
+- Extend `TestCoreRoutesReplaceGin` (05-http-api §12; F4-08's) with the F6 cell: no gin route remains at a path this
+  flip's native routes replace (`/api/events` included).
 - e2e: the Activity page shows a run's live progress without polling; the system-log view shows a new journal line
   without polling.
 
@@ -162,6 +169,7 @@ grep -rn '/api/events' internal web/src scripts .claude/skills | grep -v '/api/c
 grep -rn 'new EventSource(' web/src | grep -v test | wc -l                             # 0 (fetch-based reader)
 (cd web && npm run build && npm test -- --run)                                         # exit 0
 (cd core && go test -race -count=1 ./realtime/... ./outbox/...)                        # ok
+go test -count=1 -run 'TestDisabledModuleOutboxRetained|TestDepsScoping|TestCoreRoutesReplaceGin' ./... ; (cd core && go test -count=1 -run 'TestDisabledModuleOutboxRetained|TestDepsScoping' ./...)   # ok
 make -C core ci                                                                        # exit 0
 make ci                                                                                # exit 0
 make test-e2e                                                                          # exit 0

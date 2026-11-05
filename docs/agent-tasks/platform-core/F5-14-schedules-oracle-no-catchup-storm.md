@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-14-schedules-oracle-no-catchup-storm.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 80c882d4-5cd4-40d6-8c6b-e278487a2d3d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,9 +9,9 @@
 |---|---|
 | ID | F5-14 |
 | Release / flip | R2, tasks flip F5 (dark conversion PR; the declarations are attached by F5-18) |
-| Wave | W31 |
+| Wave | W33 |
 | Tier | **T3** (Opus / high): schedule parity over every definition; a wrong default or clock rule is a first-boot stampede of full scans and paid AI calls (14 E16) |
-| Depends on | F2-04 (core scheduler and the schedule-parity harness); F5-01 … F5-13 (every converted kind and its schedule hook); OWNER-04 (the recorded Q-C answer) |
+| Depends on | F2-04 (core scheduler and the schedule-parity harness); F5-01 … F5-13 (every converted kind and its schedule hook); OWNER-04 (the recorded Q-C answer), F5-01, F5-02, F5-03, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13, OWNER-04 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
 
 ## START HERE

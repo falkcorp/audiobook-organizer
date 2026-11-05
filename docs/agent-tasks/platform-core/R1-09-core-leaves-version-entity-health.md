@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-09-core-leaves-version-entity-health.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: f08cce47-0814-4819-8567-482be7830fb4 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -14,7 +14,7 @@
 | Spec | 04 §8.1 R1, §8.2 (mediacore/health row), §8.5 R1 (flight.go logger cut); 03 §3.3 (version, entity, coretest); 05-health §5H.10 Landing R1; 12 §12.4.3 (Version 0.1.0) |
 | Branch | `agent/platform-core-r1-09-core-leaves-version-entity-health` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 
@@ -27,6 +27,7 @@
 - `internal/server/handlers/`: `diagnostics_traces.go`, `diagnostics_traces_test.go`
 - `internal/arch/layering_test.go`
 - `scripts/ci/short_test_weights.json`
+- `core/internal/archtest_layers_test.go`: control edit only (step 5)
 
 ## START HERE
 
@@ -139,7 +140,12 @@ ls core/version core/entity core/coretest core/health 2>&1 | grep -c 'No such fi
      ```
 
      with the import `corelog "github.com/falkcorp/mediacore/log"`. `Sanitize` keeps HEAD's behaviour:
-     `internal/logger` sanitized every line before printing it. This import is the core guard's first real
+     `internal/logger` sanitized every line before printing it. This is an interim: the target is the log
+     handler's own escaping of control characters (05-logging §3; `TestHandler_EscapesControlChars`), and R1-36,
+     which builds that handler, deletes `Sanitize` and re-points this call (`core/health/flight.go` is in R1-36's
+     files, not this row's). If R1-36 has already merged at your base (`git grep -n 'TestHandler_EscapesControlChars' -- core/log`),
+     do not call `Sanitize` at all: pass `fmt.Sprintf(format, args...)` straight to `r.log.Log`. Either way this
+     row adds no other `core/log` caller. While the `Sanitize` call exists it is the core guard's first real
      in-core edge, `health → log` (03 §3.5.1 item 2, "once core has leaves").
    - replace each `flightLog.Info(` with `r.logf(slog.LevelInfo, ` and each `flightLog.Warn(` with
      `r.logf(slog.LevelWarn, ` (11 call sites; every one is inside a `*Recorder` method at `f7ac5b11e`).
@@ -147,7 +153,9 @@ ls core/version core/entity core/coretest core/health 2>&1 | grep -c 'No such fi
    The tests' own `r.dropf = func(...)` overrides (`flight_test.go:416,457`) keep working unchanged.
 5. **Core guard control.** In core's layering guard (created by R1-01 under `core/internal/`; find it with
    `git grep -ln 'archtest.Layering' -- core`), set the in-module positive control to the edge
-   `health → log` (03 §3.5.1 item 2: the PR that creates the first real edge names it), and give the four new
+   `health → log` (03 §3.5.1 item 2: the PR that creates the first real edge names it; this is the only edit this
+   row makes to the file, and when R1-36 removes the `Sanitize` call it names the replacement edge, the rule of that
+   item; if R1-36 merged first and no `health → log` import exists, name the first real in-core edge your base has), and give the four new
    packages their R4 layers: `version`, `entity`, `log` (L0); `health` (L4); `coretest` is test-support (−1 per
    03 §3.5.1 item 1's explicit mapping). If R1-01's guard has no control slot to set, STOP and report.
 6. **ABO importers.** Rewrite the import path (alias kept) in the five files:

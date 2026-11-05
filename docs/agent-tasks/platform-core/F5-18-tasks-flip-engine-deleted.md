@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-18-tasks-flip-engine-deleted.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.4 -->
 <!-- guid: ec04b9ab-cec9-4e59-bc6b-19f091354077 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,9 +9,9 @@
 |---|---|
 | ID | F5-18 |
 | Release / flip | R2, **flip F5** (tasks and the log journal); one atomic PR (09 §9.2.1) |
-| Wave | W33 (merges alone; its siblings rebase after it) |
+| Wave | W35 (merges alone; its siblings rebase after it) |
 | Tier | **T4** (Opus / xhigh–max): the flip deletes HEAD's engine and moves every definition, schedule, route, metric family and system-log writer at once; every intermediate `main` must boot and pass e2e |
-| Depends on | F4-08 (the identity flip); F5-01 … F5-16 and F5-19 (every dark F5 PR); F2-16 (the kernel's task start rule, `Registrar.Tasks`); F2-17 (`tasklint` and its exemption directory) |
+| Depends on | F4-08 (the identity flip); F5-01 … F5-16 and F5-19 (every dark F5 PR); F2-16 (the kernel's task start rule, `Registrar.Tasks`); F2-17 (`tasklint` and its exemption directory), F5-01, F5-02, F5-03, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13, F5-14, F5-15, F5-16, F2-16, F2-17, F5-19 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR; inside an announced move window (09 §9.2.10); the plan is reviewed before code |
 
 ## START HERE
@@ -28,7 +28,7 @@ npm ci --prefix web                     # or: make web-deps, once R1-05 has merg
 
 Do **not** run `go work init` (CLAUDE.md). Announce the move window for every 04 row this PR moves (list below)
 at least one working day ahead in the tracking issue; feature PRs touching them are held until this merges.
-The R2 freeze is on (F3-07); this PR ships in R2, not in a production minor.
+The R2 freeze is on (F3-08 switched it on before F3-07 merged); this PR ships in R2, not in a production minor.
 
 ## Goal
 
@@ -45,7 +45,8 @@ pruner of the system log and is read through its native query route (F5-19's, mo
 1. 09 §9.4 R2 flips table (F5 row), §9.2.1 (merge gate, required checks, "one atomic PR"), §9.2.3 (step order),
    §9.6 rows 2, 13, 17, §9.9.
 2. 03 §3.8 (the F5 row; "each later flip that adds a step raises M7's target in the same PR, … and registers a new
-   M8").
+   M8"), and 05-storage §5S.3.13 (M7, M8 and their step IDs). The way a flip adds level steps (M7) and replaces M8 is
+   fixed in F3-04 and F3-06 (order M2); commit 3 repeats it.
 3. 05-tasks §5T.8.1 (every row: what each HEAD package becomes), §5T.8.2 (F5 flip row; the three late-owner kinds;
    the kind-rename map), §5T.3.10 (the route table: every "Replaces" route deleted; books' domain routes under
    `/api/v1/operations` stay), §5T.11 (metrics), §5T.9 (the flip's tests).
@@ -113,10 +114,19 @@ for d in internal/operations/registry internal/operations/childop internal/opera
    `core.tasks.prune`) and, from `app.Options.InterimBackends` set by `main.go`, the three late-owner kinds over
    the books backends (`providerhttp.InterimHolds`, `ai.InterimPoll`, `diagnostics.InterimExport`; 05-tasks §5T.8.2).
    Start the executor and scheduler in ABO's kernel (P6, 06 §6.5.1); create the `<ns>.ops` instruments here and
-   nowhere earlier (05-metrics §13 item 1).
+   nowhere earlier (05-metrics §13 item 1). This adds a core metrics scope: add its `testdata/series.golden`,
+   asserted by `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5).
 3. **Cutover steps.** Register M4 and M5 in `internal/books/cutover/steps.go` in 03 §3.8's order (after M3, before
-   M6 and M8), pass `Importers.Tasks` and `Importers.Log`, raise M7's target, and register the new M8 whose step ID
-   names M5 as the last step it compacts after (03 §3.8; 09 §9.2.3). Move HEAD's run-row store files (under
+   M6 and M8) and pass `Importers.Tasks` and `Importers.Log`. Then apply the per-flip level mechanism (order M2,
+   stated in F3-04 and F3-06): **add** a new level step in `steps.go` for each owner whose level this flip raises
+   (books' `books.level-<n>`; core's `core.level-<n>` when core's level changes), named for the raised target level,
+   at that owner's next contiguous version, numbered immediately before M4 (which runs `After` it); the level steps
+   F3-07 and F4-08 registered stay registered unchanged (05-storage §5S.3.5). **Replace** the M8 entry with a newly
+   named one whose step ID names M5 as the last step it compacts after, so exactly one M8 is registered and it runs
+   last; and bump the raised owners' declared `Spec.Level` in the same commit. F3-06's test checks the registered
+   list (levels raised to the build's target before the first step of each flip, versions contiguous per owner, one
+   M8, last). On a store that F4-08's `main` migrated, the earlier level steps are applied and the new M8 ignores the
+   previous M8's `done` record and `applied` journal (03 §3.8; 05-storage §5S.3.13; 09 §9.2.3). Move HEAD's run-row store files (under
    `internal/books/store/` since R1-26's rename: `pebble_store_ops_v2.go`, `pebble_store_ops_v3*.go`, `pebble_store_op_rows.go`, `ReconcileOpsV3WithV2`) into
    `internal/books/cutover/m4legacy/` and repoint M4 (05-tasks §5T.8.1, `internal/database` ops storage row;
    04 key `internal/database → internal/books/cutover`). Regenerate the kind-rename map at this commit.
@@ -196,6 +206,11 @@ core.
 | No HEAD def ID left outside the retired claims | `TestCutover_KindReferencesRewritten` (F5-16's), green on this build |
 | No series read by a dashboard or rule is unserved; the rules' tests pass | `TestDeployReferencedSeriesServed`; `promtool test rules` |
 | No duplicate family on the scrape (the executor's `ops.*` vs. `opsmetrics`) | `TestABOMetricsGatherNoDuplicate` |
+| The `ops` scope's series are the reviewed set (family, type, label set) | `metricstest.AssertSeries` over the scope's `testdata/series.golden` (05-metrics §12) |
+| A store migrated by F4-08's `main` and booted by this `main` has its levels raised before M4, runs exactly one M8, and F4-08's binary then exits 78 on it | this flip's cell in F2-15's cutover-suite harness (order M2; the cell shape is F3-04's) |
+| The registered list raises the levels to the build's target before the first step of each flip, its versions are contiguous per owner, and it holds exactly one M8, last | F3-06's registered-list test, green on this build |
+| A module whose `TaskStarts` names a kind of a disabled module still boots, and its start of that kind is refused at runtime (COR3-10; `TaskStarts` lands here, 06 §6.4.10 F5 row) | `TestTaskStarts_DisabledTargetModuleBootsAndRefusesAtRuntime` (05-tasks §5T.9), owned by this row |
+| No gin route remains at a path this flip's native routes replace, and no route lies under `/api/v3/` | extend `TestCoreRoutesReplaceGin` (F4-08's) with the F5 cell (05-http-api §12) |
 | Unknown kinds after the cutover are dropped, not fatal | `TestUnknownKindRun_DroppedAtResume` (core's), with an imported tombstoned run |
 | A `books.*` run waits for `books.memdb` | `TestDispatch_WaitsForReadySignal` |
 | The T5 gate | `go list -deps ./internal/plugins/... | grep -c pkg/plugin/sdk` is 0 |

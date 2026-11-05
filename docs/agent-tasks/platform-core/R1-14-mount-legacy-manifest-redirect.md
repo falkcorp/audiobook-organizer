@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-14-mount-legacy-manifest-redirect.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 48b212d2-c9e7-4980-9fb5-ec04de724c03 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -14,7 +14,7 @@
 | Spec | 05-http-api §4.8 (collision rule), §8.1 R1 row, §8.2; 09 §9.2.4; 09 §9.4 R1 Content: endpoints |
 | Branch | `agent/platform-core-r1-14-mount-legacy-manifest-redirect` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 
@@ -77,6 +77,20 @@ endpoints"; 03 R6):
   `TestLegacyMount_GeneralisedPatternAcceptsAnyMember`, `TestLegacyMount_MuxAndGinAgreeOnEncodedSlash`,
   `TestLegacyManifest_MatchesGinRoutes`, `TestOwnAuthRoutesGolden`, `TestPublicRoutesGolden` (golden files under
   `internal/server/testdata/`). `TestManifest_SPermRoutesCarryAtomRequirement` is R1-15's (it needs the atom table).
+  `archtest.RoutesHavePermissions` over the legacy manifest is R1-37's (it reads the manifest this row writes); it is
+  not a test of this row.
+- Build-time refusals of the mount (05-http-api §12; each one line from the spec row):
+  `TestOutsideClaim_Refused` (a legacy route outside its mount's `LegacyPrefixes`, for example at
+  `GET /api/core/v1/auth/oidc/google/callback`, gives `ErrOutsideClaim`), `TestBuild_CrossOwnerShadowRefused` (one
+  owner's pattern strictly more specific than another's gives `ErrShadow`; SEC3-8),
+  `TestBuild_PublicNotInManifestRefused` (a module native route with `rbac.Public` that is absent from
+  `Manifest.PublicRoutes` gives `ErrPublicNotAllowed`; its pair `TestPublicRoutesGolden` is above; COR3-3) and
+  `TestLegacyAuthGin_RefusedWithoutOption` (`LegacyAuthGin` without `Options.LegacyAuthGinUntil`, and an `OwnAuth`
+  route without a registered auth method, are boot errors; its pair `TestOwnAuthRoutesGolden` is above; SEC2-17).
+- Kernel-side rules of the mount (06 §6.10; each one line from the spec row): `TestSPAOwner` (a `ServesSPA` legacy
+  mount owns `/` and `ui.Handler` is absent; two owners fail boot; FE-1; `TestSPA_SingleOwnerOfRoot` for `Router.SPA`
+  is R1-13's) and `TestLegacyAuthGinOnlyNamedModule` (`LegacyAuthGin` from a module other than the one named by
+  `Options.LegacyAuthGinUntil` fails boot; SEC2-17; F4-08 deletes the option and this test with it).
 
 ## Dependency check
 

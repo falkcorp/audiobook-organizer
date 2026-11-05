@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-01-maintenance-jobs-become-task-kinds.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 4851e004-a6e4-42d7-97a5-b7407fc8b8a3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F5-01 |
 | Release / flip | R2, tasks flip F5 (dark conversion PR) |
-| Wave | W29 |
+| Wave | W31 |
 | Tier | **T3** (Opus / high): 34 jobs converted through one native shell, each job body rerouted to reach its writer and stores only through what the shell hands it (05-tasks conversion rule 3), with conformance tests |
 | Depends on | F2-05 (transitively F2-01..F2-04), F2-16 (`Registrar.Tasks`, `coretest`'s task cells), F2-17 (`tasklint` and this row's exemption entry file) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F6-02-core-realtime-hub-sse-eventhttp.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 246f9170-1d0e-4e5e-b734-1c29f5e86e69 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F6-02 |
 | Release / flip | R2, events flip F6 (dark PR; live at F6-03) |
 | Tier | **T3** (Opus, high): permission-filtered, resumable streams |
-| Wave | W28 (beside F2-16, F4-05, F5-15, F6-01, F7-02, F7-03, F7-06, F8-03; file-disjoint) |
+| Wave | W30 (beside F2-16, F4-05, F5-15, F6-01, F7-02, F8-01, F8-03; file-disjoint) |
 | Depends on | F4-04, F2-05, F4-01 (`rbac.Checker`), F4-02 (`auth.Service.Revalidate`) |
 | Owns gate tests | the hub stream tests of 05-realtime: `TestHub_ResumeFromLastEventID`, `TestHub_PerEventPermissionFilter`, `TestHub_RefusalsAreStatusesBeforeStream`; `TestRunView_CurrentRedactedWithoutUsersView` (05-tasks) |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
@@ -107,7 +107,9 @@ grep -c 'withUserText' internal/server/handlers/opsv3/events.go                 
    `RedactRunView` (one redaction, never a second copy of its rule); `TestRunView_CurrentRedactedWithoutUsersView`
    proves the same `RunView` comes out of the REST serializer path (`RedactRunView`) and the stream path (the adapter
    through this hub) with `Current` blanked without `core:users.view` and kept with it.
-6. No per-module handle and no legacy projection (D10). Headers, one `changelog.d/` fragment, Acceptance.
+6. No per-module handle and no legacy projection (D10). The hub's metrics (05-realtime §9) add the core `realtime`
+   scope: add its `testdata/series.golden`, asserted by `metricstest.AssertSeries` (R1-10; 05-metrics §5 item 5).
+   Headers, one `changelog.d/` fragment, Acceptance.
 
 ## Tests first (05-realtime §10)
 
@@ -117,7 +119,11 @@ then `TestHub_ResumeAfterScheduledReconnect`, `TestHub_NativeFramesUnnamed`, `Te
 `TestHub_StreamClosesOnCredentialRevoke`, `TestHub_RevalidateOnHeartbeat`, `TestHub_PermissionRevokedDropsTopic`,
 `TestHub_CapsGlobalAndBucket`, `TestHub_CoalesceLatestPerKey` (synctest, 250 ms), `TestHub_WriteDeadlineDisconnects`,
 `TestHub_FilterPanicIsContained`, `TestHub_ShutdownClosesStreams`, `TestHub_ExcludePattern`, `TestNoGlobals` (realtime),
-`TestRunView_CurrentRedactedWithoutUsersView` (05-tasks; gate).
+`TestRunView_CurrentRedactedWithoutUsersView` (05-tasks; gate),
+`TestCatalog_RedactAppliedOnEverySurface` (05-events §5E.12: on `core.task.run-changed.v1`, both the realtime stream
+and `GET /runs` blank `Current` without `core:users.view`; run it on hello and `coretest`, where F2-05's `taskhttp`
+serves `GET /runs`; if the topic is not live there, use the fixture rule below),
+`metricstest.AssertSeries` over the `realtime` scope's `testdata/series.golden` (05-metrics §12).
 `TestHub_TaskTopicVisibleWithoutTasksView` and `TestRunRedaction_SameOnStreamAndREST` need the executor's
 `core.task.*` topics live (F5-18): write them against a fixture topic with the same `Visible`/`Redact` shape and leave a
 note for F6-03 to run them on the real topics.

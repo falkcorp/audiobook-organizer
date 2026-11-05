@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-13-r2-corpus-stage2-overlay-blockers.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 22564994-b4e2-44fd-8ac9-918ced1613a1 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F2-13 |
 | Release / flip | R2, foundation PRs (F2); testdata and a test-only program, no product code |
-| Wave | W23 |
+| Wave | W25 |
 | Tier | **T3** (Opus / high): hand-built corrupt and edge rows, each labelled with its expected cutover outcome; the blocker corpus must make the preflight refuse |
 | Depends on | F2-12 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |
@@ -75,7 +75,7 @@ Overlay (applied to a copy of stage 1):
 
 | Label | What the program writes | Expected cutover outcome |
 |---|---|---|
-| `corrupt-<family>` | one undecodable row in each family M2–M6 decodes (settings blob field, a role, an API key, a run record, a `syslog:` row, an integration field, an import root) | quarantined under `c/storage/quarantine/` with its reason; step completes (05-storage `TestCutoverQuarantinesUndecodableRows`; 05-tasks `TestCutover_UndecodableRowQuarantined`) |
+| `corrupt-<family>` | one undecodable row in each family M2–M6 decodes and quarantines (settings blob field, a role, a run record, a `syslog:` row, an integration field, an import root); **no** user, API-key or OAuth-identity row, because an identity row is never quarantined (05-authn §11 "Identity rows stop the upgrade (D13)"): those cases are in the blocker corpus below | quarantined under `c/storage/quarantine/` with its reason; step completes (05-storage `TestCutoverQuarantinesUndecodableRows`; 05-tasks `TestCutover_UndecodableRowQuarantined`) |
 | `blob-field-unmapped` | a settings-blob field no rename-table row names | reported, per 05-config §1.12.2's rule for it |
 | `role-every-atom` | a custom role holding every atom | imported as `custom.<slug>` without `core:admin` |
 | `role-subset` | a custom role holding a subset of atoms | imported with the union of its rows' scopes |
@@ -89,7 +89,10 @@ Blocker corpus (its own copy of stage 1; must refuse):
 
 | Label | What | Expected |
 |---|---|---|
-| `blocker-identity-<kind>` | a corrupt `u:` row; a decodable user row `auth.Importer` would reject; an API key whose user does not exist; an OAuth identity whose user does not exist | the preflight refuses the boot, exit 78, report names the key and never its value; store and directory byte-identical, no checkpoint (05-storage `TestCutoverStopsOnUnconvertibleIdentity`) |
+| `blocker-identity-corrupt-user` | a corrupt `u:` row | the preflight refuses the boot, exit 78, report names the key and never its value; store and directory byte-identical, no checkpoint (05-storage `TestCutoverStopsOnUnconvertibleIdentity`) |
+| `blocker-identity-corrupt-apikey` | a corrupt `apikey:` row (written by the R0-tag program) | as above (the `apikey:` cell of `TestCutoverStopsOnUnconvertibleIdentity`; F4-06's preflight) |
+| `blocker-identity-corrupt-oauthid` | a corrupt `oauthid:` row (written by the R0-tag program) | as above (the `oauthid:` cell) |
+| `blocker-identity-<kind>` | a decodable user row `auth.Importer` would reject; an API key whose user does not exist; an OAuth identity whose user does not exist | as above |
 | `blocker-merge-<state>` | a `usermerge:journal:` record at `applying`; another at `undoing`; a terminal one as a control | `applying`/`undoing` refuse; the terminal one does not block (05-storage `TestCutoverRefusedWhileMergeInProgress`) |
 
 Write each blocker case so it can be tested alone (one store per case under `blockers/<label>/`) or state in the manifest
@@ -99,7 +102,9 @@ that one store holds all and the test expects every row named.
 
 1. Every overlay row comes from the program built at the R0 tag; nothing is written by `main`'s code.
 2. Every case is labelled in the manifest, and the quarantine report expected by later tests is **exactly** the overlay's
-   quarantine cases (09 §9.3: "the quarantine report (exactly the overlay's quarantine cases)").
+   quarantine cases (09 §9.3: "the quarantine report (exactly the overlay's quarantine cases)"). The overlay holds no
+   identity row a step cannot convert, so F2-15's `TestCutoverOnR0Corpus` still completes once F4-08 registers M3; every
+   such row is a blocker case.
 3. No real credential, host or user name; fixture values only.
 4. Stage 1's committed bytes are untouched.
 

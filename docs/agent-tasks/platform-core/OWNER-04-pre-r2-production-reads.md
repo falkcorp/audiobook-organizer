@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-04-pre-r2-production-reads.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 5dbb01a6-8a15-49e4-a5f1-45022bf2338c -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -13,7 +13,7 @@
 | ID | OWNER-04 |
 | Release | owner checkpoint (inputs to R2) |
 | Tier | **OWNER**: read-only production reads, counts only; one decision |
-| Wave | W22 |
+| Wave | W24 |
 | Depends on | OWNER-03 (R1 deployed: P2, P3, P5 and P7 read a copy restored with R1-25's `storage restore-offline --into`) |
 | Unblocks | **F2-14** (P1 sizes the production-shaped store), **F3-07** (P1: no unregistered prefix; P4: no unmapped env name), **F5-14** (Q-C) |
 | Spec | 09 §9.7 P1–P5, P7, P9; 14 §14.3 Q-C; 05-storage §5S.9.2 (what migrates, resets or stays) |

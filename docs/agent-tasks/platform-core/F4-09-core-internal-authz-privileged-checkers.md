@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-09-core-internal-authz-privileged-checkers.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: 99822a5a-94d2-4caa-8a8b-67cdcf901790 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -14,7 +14,7 @@
 | ID | F4-09 |
 | Release / flip | R2, identity flip F4 (dark PR: nothing calls these functions in a running app before F4-08 injects `authz.Compile` at boot) |
 | Tier | **T3** (Opus, high): the two privileged checkers bypass role resolution, and the compiled checker decides every permission check |
-| Wave | W24 |
+| Wave | W26 |
 | Depends on | F4-01 |
 | Owns gate tests | none of 09's list; owns `archtest.NoSystemPrincipalOutsideKernel` and the checker tests of 05-rbac §12 named below |
 | Gate | Plan, then execute autonomously in your own worktree and PR. Do not merge with `--admin` past a required check. |

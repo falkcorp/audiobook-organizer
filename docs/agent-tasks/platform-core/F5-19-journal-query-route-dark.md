@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-19-journal-query-route-dark.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: 4142bda4-22ac-4f63-8d52-07a0db51b22d -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F5-19 |
 | Release / flip | R2, tasks flip F5 (dark PR; the route is mounted by F5-18) |
-| Wave | W29 |
+| Wave | W31 |
 | Tier | **T2** (Sonnet / high): one permission-checked query route over an existing store, with the other-user rule copied from HEAD; the contract types and both tests are fixed by the spec |
 | Depends on | F5-15 (`log.JournalStore`, `core/internal/logjournal`, `logtest`), F4-01 (core rbac: `rbac.Need`, `rbac.Can`, `rbactest`, the `core:*` scopes), F4-02 (core auth: `auth.PrincipalFrom`, `authtest`) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |

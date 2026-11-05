@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-14-production-shaped-store-boot-time.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 5062c77e-999c-4b26-b5e1-1a0f6f399bdd -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F2-14 |
 | Release / flip | R2, foundation PRs (F2); a generator, one committed count file and CI jobs |
-| Wave | W23 |
+| Wave | W25 |
 | Tier | **T2** (Sonnet / high): a generator at counts the owner measured, plus two CI jobs and one measurement test |
 | Depends on | OWNER-04 (P1 recorded), F2-12 |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |

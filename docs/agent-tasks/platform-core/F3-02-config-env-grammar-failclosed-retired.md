@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-02-config-env-grammar-failclosed-retired.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 8aaa153a-536e-4d8d-9361-4796ae3f6beb -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F3-02 |
 | Release / flip | R2, config flip F3 (dark PR) |
 | Tier | **T3** (Opus, high): precedence and the fail-closed rule decide security controls |
-| Wave | W25 |
+| Wave | W27 |
 | Depends on | F3-01 |
 | Owns gate test | `TestFailClosed_MoreRestrictiveWins` |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |

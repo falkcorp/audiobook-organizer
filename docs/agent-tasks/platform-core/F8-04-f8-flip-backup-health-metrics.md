@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-04-f8-flip-backup-health-metrics.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 9c425807-35e2-4fe7-9289-5de6f5478ebe -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,14 +10,14 @@
 | ID | F8-04 |
 | Release | R2, flip F8 (the flip PR) |
 | Tier | **T4** (Opus / xhigh–max): every flip PR is T4; this one changes the `/health` callers, the Basic-gate exempt set, the metrics mount and the backup owner |
-| Wave | W36 (alone: the only PR of its wave; it owns `main.go`, `internal/server/`, books' registration and the kernel and module wiring files in W36). Runs inside an announced **move window** |
+| Wave | W38 (alone: the only PR of its wave; it owns `main.go`, `internal/server/`, books' registration and the kernel and module wiring files in W36). Runs inside an announced **move window** |
 | Depends on | F7-09, F8-01, F8-02, F8-03 |
 | Owns gate tests | the dashboard-reference test over the kernel `/metrics` mount (extension of `TestDeployReferencedSeriesServed`); `TestLegacyArchiveRestoreThenMigrate` (F8-01 landed its staging half) |
 | Spec | 09 §9.4 R2 flips table row F8, §9.6 rows 3 and 19, §9.2.7 (F8 moves the mount only), §9.2.9 (one PR per rename, every caller); 03 §3.8 F8; 05-backup §5B.10, B1, B7; 05-updater §5U.10, §5U.12; 05-health §5H.3.3, §5H.10 (row F8); 05-metrics §6, §12, §13; 05-http-api §8.1 (F8 row), §12; 06 §6.4.10 (F8 row); 04 §8.1 F8 |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. **One atomic PR** (09 §9.2.1): it wires
 the subsystems, deletes what they replace and switches every first-party caller in the same PR, so the merged `main`
-boots and passes e2e. It merges alone in its wave. The R2 freeze is on (since F3-07): do not touch
+boots and passes e2e. It merges alone in its wave. The R2 freeze is on (since F3-08, which merged before F3-07): do not touch
 `.github/workflows/prerelease.yml`.
 
 ## START HERE (do this first, exactly)
@@ -63,6 +63,9 @@ Announce the move window one working day ahead naming the 04 rows below (09 §9.
    books' backend and `app.Options.InterimBackends` itself are deleted (06 §6.4.10 F8 row).
 4. **Metrics.** The kernel `/metrics` mount (`core/kernel/metrics_mount.go`) replaces the gin `/metrics` route,
    with **no metric rename** (09 §9.2.7; 05-metrics §6); the dashboard-reference test runs over the kernel mount.
+   The mount requires `core:metrics.read` while `/livez` and `/readyz` stay Public (05-http-api §12,
+   `TestInfra_MetricsRequiresScope`). The kernel also emits the `<namespace>_build_info` gauge (label `version`;
+   09 §9.10, "from R2"; one of 05-metrics §6's always-on smoke families). It is a new family, not a rename.
 
 04 keys this PR moves: `F8 move internal/backup -> mediacore/backup`; `F8 move internal/server -> mediacore/updater`;
 `F8 move internal/sysinfo -> mediacore/health`; `F8 move internal/server -> mediacore/health`;
@@ -77,7 +80,8 @@ Announce the move window one working day ahead naming the 04 rows below (09 §9.
   and `GET /api/core/v1/health`).
 - **I3.** The Basic gate exempts `/health` in place of the two deleted paths and nothing else changes in its exempt
   set (`TestBasicGate_ExemptSetGolden`).
-- **I4.** `/metrics` serves the same series names as before the PR; every series a shipped dashboard or rule names
+- **I4.** `/metrics` serves the same series names as before the PR, plus the new `<namespace>_build_info`; every
+  series a shipped dashboard or rule names
   is served (the dashboard-reference test, extension of `TestDeployReferencedSeriesServed`); a plain gather
   returns no error and no duplicate family (`TestABOMetricsGatherNoDuplicate`).
 - **I5.** R0's updater behaviour holds through the wired core updater (`TestABOUpdaterSourceMatchesHEAD`,
@@ -165,7 +169,8 @@ caller in a repository path you cannot change in this PR (report it; do not leav
    backend and `app.Options.InterimBackends`.
 6. Metrics: `core/kernel/metrics_mount.go` mounts `/metrics` from the App's Provider with
    `core:metrics.read`; delete the gin `/metrics` route; keep every series name; extend the dashboard-reference
-   test to scrape the kernel mount.
+   test to scrape the kernel mount. Register the kernel's `<namespace>_build_info` gauge (label `version`, value 1)
+   and add it to `TestKernelFamiliesGathered`'s family list.
 7. Delete the five `ServiceDefs` from `internal/books/services.go`; add `updater fetch-release` to
    `core/app/offline.go`; regenerate `core/openapi/core.json` and the client; update `internal/arch/layering_test.go`
    (deleted and moved packages), shard weights, `.mockery.yaml` if needed.
@@ -197,6 +202,12 @@ opts.Updater = &updater.Options{
 - `TestABOUpdaterSourceMatchesHEAD`, `TestApply_RawAssetNoBackup` through the wired options.
 - `TestLegacyArchiveRestoreThenMigrate` (owned here): extend F8-01's staging half to the migrated store on the full
   step list.
+- `TestInfra_MetricsRequiresScope` (05-http-api §12): on the native role store, `/metrics` without a credential
+  answers 401 and with a key lacking `core:metrics.read` answers 403; `/livez` and `/readyz` stay Public.
+- `TestKernelFamiliesGathered` (05-metrics §12, a `kernel` test): its cell for `<namespace>_build_info`, which the
+  one zero-module `coretest` boot's scrape now carries.
+- Extend `TestCoreRoutesReplaceGin` (05-http-api §12; F4-08's) with the F8 cell: no gin route remains at a path F8's
+  native routes replace (backup, update, health and `/metrics`).
 - `TestDeletedHealthPaths404` (name coined here): `GET /api/health` and `GET /api/v1/health` answer 404 through the
   full router; `GET /health` answers ABO's shape.
 
@@ -214,7 +225,8 @@ grep -rn 'InterimExport\|InterimBackends' --include='*.go' core/ internal/ main.
 ls -d internal/backup internal/updater internal/startup 2>/dev/null
 
 # Gate tests. Expected: ok, no FAIL
-go test -count=1 -run 'TestBasicGate_ExemptSetGolden|TestHealth_UnauthenticatedTokenSetGolden|TestDeployReferencedSeriesServed|TestABOMetricsGatherNoDuplicate|TestABOUpdaterSourceMatchesHEAD|TestLegacyArchiveRestoreThenMigrate|TestDeletedHealthPaths404' ./...
+go test -count=1 -run 'TestBasicGate_ExemptSetGolden|TestHealth_UnauthenticatedTokenSetGolden|TestDeployReferencedSeriesServed|TestABOMetricsGatherNoDuplicate|TestABOUpdaterSourceMatchesHEAD|TestLegacyArchiveRestoreThenMigrate|TestDeletedHealthPaths404|TestInfra_MetricsRequiresScope|TestCoreRoutesReplaceGin' ./...
+(cd core && go test -count=1 -run 'TestKernelFamiliesGathered|TestInfra_MetricsRequiresScope' ./...)
 promtool test rules deploy/prometheus/alert-rules.test.yml
 
 # The binary answers. Expected: /health 200 with "ready"; /api/health 404; /livez 200

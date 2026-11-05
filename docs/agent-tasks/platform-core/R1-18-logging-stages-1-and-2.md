@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-18-logging-stages-1-and-2.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 0af0f945-e47e-4822-ac2b-f63544c667ad -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,11 +10,11 @@
 | ID | `R1-18` |
 | Tier | **T2** (Sonnet / high): small deletions plus a tap; the activity feed must keep its output |
 | Release / wave | R1 / W14 |
-| Depends on | R1-15, R1-07 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
+| Depends on | R1-15, R1-07, R1-36 (each done before you start: a task merged on `main`, an OWNER checkpoint recorded by the owner) |
 | Spec | 05-logging §11 items 1-2, 5; 09 §9.4 R1 Content: runtime, release note (05-logging's log-file and level lines) |
 | Branch | `agent/platform-core-r1-18-logging-stages-1-and-2` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 
@@ -41,21 +41,25 @@ Never run `go work init` in the checkout or the worktree (CLAUDE.md; 03 §3.2 it
 ## Goal
 
 05-logging's R1 stages (05-logging §11 items 1, 2 and 5; 09 §9.4 R1 "Content: runtime", the release note's
-05-logging lines). R1-15 already calls `app.InstallProcessDefaults`, so every `slog.*` call and every
+05-logging lines). **This row builds no logging API:** `log.Logging` (`New`, `Root`/`Module`/`Scope`, `SetLevels`,
+`Level`, `Tap`, `Counters`, `Close`), `WithAttrs`/`AttrsFrom`, `LevelTrace`, `RotatingFile` and the deletion of
+`Sanitize`, `SanitizeErr` and `OpContext` from core `log` are R1-36's, with their seven tests; this row consumes them.
+R1-15 already calls `app.InstallProcessDefaults`, so every `slog.*` call and every
 `logger.New` var reaches the App pipeline. This PR removes what HEAD layered on top and keeps the activity feed's
 output identical:
 
 1. **Stage 1 deletions (05-logging §11 item 1), nothing else:** `setupFileLogging` (`cmd/root.go:698-723` at
    `f7ac5b11e`, and its three call sites `:108,201,260`), the second `slog.SetDefault` and `log.SetOutput(aw)`
    (`internal/server/server.go:1130-1155` at `f7ac5b11e`; 05-logging cites `server.go:1134-1155` at `748fd787a`).
-2. **The activity `Writer` keeps its input** through a books `Logging.Tap` at info that renders each record with a
+2. **The activity `Writer` keeps its input** through R1-36's `Logging.Tap`, consumed by a books tap at info that renders each record with a
    `slog.TextHandler` into it (`internal/books/logging.go`), so its line parsing and its `system` entries are
    unchanged; ABO's `StandardLogger` keeps writing system-log rows and HEAD's pruner
    (`internal/logger/retention.go`) keeps pruning them until R2 (05-logging §11 item 1; row notes).
 3. **File output from core:** `core.log.output=file` and `core.log.file.path` set by the books module's defaults to
    keep a file under the state dir (the old cwd-relative path is not reproduced; release-noted). In R1 there is no
    core config, so these reach the kernel as `app.Options` values ABO's `main` sets (04 §8.1 R1: "no core `config`
-   yet"); implement the file sink in `core/log`.
+   yet"). The file sink is R1-36's `RotatingFile`; this row only selects it through those options and adds nothing to
+   `core/log` beyond what the wiring needs.
 4. **Stage 2, the shim (05-logging §11 item 2):** `internal/logger` becomes the books-side shim
    `logger.FromSlog(*slog.Logger) Logger`: printf methods format, then log with `subsystem` as an **attribute**, so
    per-subsystem levels work. Progress, changes and cancel keep their HEAD behaviour until the tasks flip.
@@ -79,7 +83,7 @@ output identical:
 
 ## Dependency check
 
-R1-15 and R1-07 merged: `test -d internal/books && test -d core/log && git grep -q 'InstallProcessDefaults' -- core/app && echo ok`.
+R1-15, R1-07 and R1-36 merged: `test -d internal/books && test -d core/log && git grep -q 'InstallProcessDefaults' -- core/app && git grep -q 'func (l \*Logging) Tap(' -- core/log && echo ok`. If the last grep finds nothing, STOP: R1-36's output is missing; do not write it here.
 
 ## Re-verify (expected at `f7ac5b11e`)
 
@@ -96,12 +100,12 @@ R1-11 changed `cmd/root.go:650` only; R1-15 changed `cmd/root.go`'s `serve` wiri
 ## Steps
 
 1. Tests first. 2. The deletions (item 1) and the tap (item 2) in one commit, so the feed never loses records
-between commits. 3. File sink in `core/log` and the books defaults (in `internal/books/logging.go`, passed where `cmd/root.go`'s
+between commits. 3. The books file-output defaults (in `internal/books/logging.go`, passed where `cmd/root.go`'s
 `serve` builds `app.Options`; do not edit `main.go`, which R1-16 edits in this wave). 4. The shim. 5. The log-level fix.
 6. Header bumps; fragment `changelog.d/<today>_logging_r1.md` with 05-logging's R1 release-note lines: the log
 file's new location under the state directory, and that `log_level`/`--log-level` now set the level. Commit(s):
 `refactor(logging): remove the second default logger and file setup; activity tap`,
-`feat(log): core file output`, `refactor(logger): books shim over slog`.
+`feat(books): core file output defaults`, `refactor(logger): books shim over slog`.
 
 ## Code contract
 
@@ -120,7 +124,7 @@ make ci && make -C core ci                                                      
 
 ## Out of scope
 
-The journal, M5, deleting the activity `Writer`'s parsing or `StandardLogger`'s system-log writes (R2);
+The logging pipeline itself and the deletion of `Sanitize`, `SanitizeErr` and `OpContext` (R1-36); the journal, M5, deleting the activity `Writer`'s parsing or `StandardLogger`'s system-log writes (R2);
 call-site injection (optional ratchet, 05-logging §11 item 3).
 
 ## Rollback

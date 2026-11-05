@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-08-books-integrations-step-m6.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 32e12309-4e58-4518-9d85-0a690231a661 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-08 |
 | Release | R2, flip label F7 (dark PR: the step is built and tested, **unregistered** until F7-09) |
 | Tier | **T4** (Opus / xhigh–max): a one-way migration of instances, jobs, rules and roots; a dropped row or a changed ID is permanent after M7 |
-| Wave | W31 (beside F4-08, F5-14; file-disjoint; F4-08 merges first and this PR rebases after it) |
+| Wave | W34 (beside F4-08; file-disjoint; F4-08 merges first and this PR rebases after it) |
 | Depends on | F7-01 (`integrations.Importer`), F7-03 (`ai.Importer`), F7-05 (`notify.Importer`), F7-06 (`library` roots as config entries), F7-07 (`storage/index` and the native dirty set), F3-06 (`internal/books/cutover` with its step shape, the rename table and M2's residual blob), F2-13 (the R2 corpus overlay) |
 | Spec | 05-metadata M1.10 (the migration table, trust carried over, not carried over), M2.10 (holds and quotas dropped); 05-ai §10 (endpoints, `ai/openai`, `auth_ref` key copy, `aijob*` rows, the capability-ID map); 05-notify §10 (webhook instances, rule `webhooks`, the HMAC secret by value, the topic map); 05-library §5L.10 ("The roots cutover", IDs kept, `rootscan:` records, "M6's write outside its retired claims"); 05-download §10 (the Deluge instance); 05-storage §5S.3.6 (`DataMigration`), §5S.3.8 (dirty set dropped, index rebuilt), §5S.3.13 (the cutover step contract, quarantine), §5S.9.1 (families and claims M6 drains), §5S.3.16 (crash matrix cells); 03 §3.8 M6; 09 §9.2.3 (row 7 of the order table) |
 
@@ -120,7 +120,8 @@ left it) lacks a family M6 drains.
 5. Dry-run mode: per kind, the instances, IDs, carried trust and every row it would quarantine (05-metadata M1.10).
 6. Register crash-point labels for every chunk and extend `TestCutoverCrashAtEveryChunk` and
    `TestBootCrashMatrix_ABO` with M6's cells (09 §9.3: a boot writer extends the matrix in its own PR).
-7. Leave `internal/books/cutover/steps.go` untouched (F7-09 registers M6 and raises M7's target). Headers, fragment.
+7. Leave `internal/books/cutover/steps.go` untouched (F7-09 registers M6 and replaces the M7 and M8 entries). Headers,
+   fragment.
 
 ## Code contract
 
@@ -156,7 +157,12 @@ Also from the same spec sections: `TestIntegrationsMigration_SecretsByRef`, `Tes
 the corpus' quarantine report (exactly the overlay's cases).
 
 Until F7-09 registers the step, these tests run M6 directly through the `storagemigrate` runner on a store already
-migrated through the registered steps (M2–M5), with M7's target raised in the test fixture.
+migrated through the cutover steps registered at your base (M2, and M3 once F4-08 has merged). M4 and M5 are
+registered only by F5-18, which is not among this row's dependencies: when F5-18 has not merged, run the M4 and M5
+constructors (F5-16, F5-15) directly through `storagemigrate` before M6, and the M3 constructor (F4-06) the same way
+if F4-08 has not merged. A constructor whose package is not on your base either is skipped: M6's inputs (the
+residual blob, the `aijob*` rows, the webhook settings and the roots) need only M2. M7's target is raised in the test
+fixture.
 
 ## Acceptance (commands and expected output)
 
@@ -187,7 +193,8 @@ make -C core ci
 
 ## Out of scope
 
-- Registering M6, raising M7's target, a new M8 (F7-09).
+- Registering M6 and replacing the M7 and M8 entries with newly named ones (F7-09; the mechanism is order M2's, in
+  F3-04 and F3-06).
 - The full `TestBooksIndexRebuiltAtCutover` oracle: the rebuild at the native path and the search answers (F7-09).
 - Wiring the subsystems and deleting HEAD's code (F7-09).
 - The download `ItemRef` books migration (phase 2, 05-download §1).

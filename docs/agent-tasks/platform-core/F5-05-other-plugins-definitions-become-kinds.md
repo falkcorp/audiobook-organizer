@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-05-other-plugins-definitions-become-kinds.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: e41a9e17-4a2d-46f5-bee3-76a82f236e8e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F5-05 |
 | Release / flip | R2, tasks flip F5 (dark conversion PR) |
-| Wave | W29 |
+| Wave | W31 |
 | Tier | **T3** (Opus / high): 16 definitions across four plugins, each shared body rerouted through its shell (05-tasks conversion rule 3) |
 | Depends on | F2-05 (transitively F2-01..F2-04), F2-16 (`Registrar.Tasks`, `coretest`'s task cells), F2-17 (`tasklint` and this row's exemption entry file) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-03-core-secrets-keyring-offline-commands.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: b8fef3e3-a3ab-4134-ba71-0a78a133d3d3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F3-03 |
 | Release / flip | R2, config flip F3 (dark PR) |
 | Tier | **T4** (Opus, xhigh–max): the keyring holds every secret, and `secrets.Open` is a durable boot write |
-| Wave | W24 |
+| Wave | W26 |
 | Depends on | F3-01 |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
 
@@ -61,7 +61,8 @@ two `secrets.Ref` keys in the kernel's core-section list.
 | create | `core/secrets/` (package, tests) |
 | create | `core/internal/keyedmutex/` (stdlib-only copy of ABO's `internal/keyedmutex`, with its test) |
 | create | `core/kernel/secrets.go` (P4b open, keyspace `c/secrets/` spec, `ResetBoot`, health reporting on `core.secrets`, the boot-writer row) |
-| create | `core/app/offline_secrets.go` (`secrets export-keyring`, `secrets rotate-derive`, `secrets set-install-id` as `app.Command`s in `OfflineCommands`) |
+| create | `core/app/offline_secrets.go` (`secrets export-keyring`, `secrets rotate-derive`, `secrets set-install-id` as `app.Command`s) |
+| modify | `core/app/offline.go` (append the three commands to `OfflineCommands`' list; nothing else) |
 | modify | `core/kernel/core_sections.go` (the two `secrets.Ref` keys only: `core.auth.oidc.<id>.client_secret` and `core.http.basic_gate.password`) |
 
 `core/secrets/types.go` exists at BASE (F3-01 created it with `Ref`, `Resolver`, `Write`, `Meta`). Grow the package
@@ -123,11 +124,12 @@ grep -c 'func guardAgainstKeyRegeneration' cmd/root.go              # expect 1 (
    marker; `Meta.Err` for an unreadable marker) → `ErrNotSet`. `Put`/`Stage`/`Delete` serialize per name through
    `core/internal/keyedmutex`; `Stage(b *storage.Batch, w Write)` binds `c/secrets/` to the caller's batch.
 8. **Importer** (`ImportSecret`, `ImportUnreadable`): seals with the active data key, stages into the caller's batch,
-   never commits, create-only (an existing record with other bytes → `storage.ErrImportConflict`). This is also the
-   sealer F3-04's quarantine takes (F3-07 wires it).
+   never commits, create-only (an existing record with other bytes → `storage.ErrImportConflict`). F3-07 binds F3-04's
+   quarantine sealer seam (`Seal(ctx, b, name, raw)`, declared in `core/storage` because `storage` cannot import
+   `secrets`) to `ImportSecret` through a small adapter; nothing here implements that seam.
 9. **Derive keys**: `DeriveKey`, `ActiveDeriveID`, `DeriveKeyFor`, `Scope.DeriveKey(info)` prefixes `info` with the
    scope; `RetireUnused(ctx, inUse)` decides retirement in memory only, never inside `Open`.
-10. **Offline commands** (`offline_secrets.go`): `secrets export-keyring --out <file>` opens **no store** (reads the
+10. **Offline commands** (`offline_secrets.go`, appended to `OfflineCommands` in `core/app/offline.go`): `secrets export-keyring --out <file>` opens **no store** (reads the
     keyring and its header `install_id` from the state dir, refuses a destination looser than 0600, writes
     `<state_dir>/secrets.keyring.exported` with the key IDs and time); `secrets rotate-derive` (through
     `kernel.OpenOffline`, refused while the server holds the store lock; adds `d<n+1>` active, previous `verify` with
@@ -188,7 +190,9 @@ func (s *Store) Close() error
 `Metrics`, `Now`; errors `ErrNotSet`, `ErrKeyUnavailable`, `ErrCorrupt`, `ErrUnbound`, `ErrNotSerializable`,
 `ErrKeyfileInsecure`, `ErrKeyMissing`, `ErrOutOfScope`, `ErrAppIDMismatch`; config keys `core.secrets.key_file`
 (default `secrets.keyring`) and `core.secrets.allow_key_regen` (default `false`), both `ProtectOperator` (§2.7);
-metrics §2.8 on scope `mediacore.secrets`. Imports: stdlib crypto, `storage`, `metrics` only.
+metrics §2.8 on scope `mediacore.secrets`. Imports: stdlib crypto, `storage`, `metrics` only. This row adds core's
+`secrets` metrics scope, so it adds `core/secrets/testdata/series.golden` for that scope, asserted by
+`metricstest.AssertSeries` (R1-10's `core/metrics/metricstest`; 05-metrics §5 item 5).
 
 ## Tests first (05-config §2.9)
 
@@ -201,7 +205,7 @@ metrics §2.8 on scope `mediacore.secrets`. Imports: stdlib crypto, `storage`, `
 check; backup's real one lands at F8), `TestOpen_ResetBootRewritesInstallID`, `TestSetInstallID_RestoresLineageOffline`,
 `TestStage_TakesBatchPointer`; `TestImporterCreateOnly` (05-storage's importer rule, run over `secrets.Importer`);
 the secrets half of 05-config's `TestNoStoreWriteBeforeCheckpoint`; `TestKeyedMutex_SerializesPerKey` (name coined
-here) for the copy.
+here) for the copy; `TestSecretsSeries_Golden` (name coined here: `metricstest.AssertSeries` over the `secrets` scope).
 
 ## Invariants
 

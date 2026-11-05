@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F7-06-core-library-completed-dark.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 3c40ae0e-a05f-40b2-b19d-4fc0f2dca4b2 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F7-06 |
 | Release | R2, flip label F7 (dark PR) |
 | Tier | **T4** (Opus / xhigh–max): filesystem transfers and renames over user media; a wrong move loses files |
-| Wave | W28 (beside F2-16, F4-05, F5-15, F6-01, F6-02, F7-02, F7-03, F8-03; file-disjoint; this row is W28's one owner of `core/go.mod`, `core/go.sum` and `go.sum`). F3-07 is in W29: if it has merged before this PR, rebase and re-run `go mod tidy` in `core/` |
+| Wave | W31 (beside F3-08, F4-07, F5-01, F5-02, F5-03, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13, F5-19, F6-04, F7-05, F9-01; file-disjoint; this row is W28's one owner of `core/go.mod`, `core/go.sum` and `go.sum`). F3-07 is in W29: if it has merged before this PR, rebase and re-run `go mod tidy` in `core/` |
 | Depends on | F3-01 (core config: the roots are `core.library.roots` config entries), F2-05 (`internal/taskhttp` and `coretest` on tasks, as the inventory row lists) |
 | Spec | 05-library §5L.0 (D-L1 … D-L9), §5L.3 (all: §5L.3.1 roots, paths, registry; §5L.3.2 `RootFS`; §5L.3.3 transfers; §5L.3.4 hashing; §5L.3.5 quarantine; §5L.3.6 path mapping; §5L.3.7 watchers; §5L.3.8 ownership and sharing), §5L.4–§5L.8, §5L.9 (tests), §5L.10 (code moves; the roots cutover is F7-08's); 04 §8.1 F7 |
 
@@ -50,7 +50,10 @@ seams) moves from `internal/fileops` into `core/internal/libfs` as a re-implemen
   (`TestRenameNoReplaceNeverClobbers`, `TestTransferCopyPublishIsNoClobber`).
 - **I3. Move order.** A cross-device move removes the source only after destination fsync and verify, at every
   injected crash point (`TestTransferCrossDeviceMoveOrder`); every journal state recovers to done or rolled back
-  (`TestTransferRecoveryFromJournal`).
+  (`TestTransferRecoveryFromJournal`). Recovery is the task `core.library.transfer-recover`, started once at boot
+  through its `Schedule`'s `OnStart()`. After a cross-device move it removes a still-present source only if the
+  source digest still matches the journalled one; a source changed after the copy is kept and the conflict reported
+  (05-library §5L.3.3, "Boot recovery").
 - **I4. Fail closed on seeding.** An oracle with `loaded=false` blocks a move and allows a copy
   (`TestMoveRefusedWhenSeedingUnknown`); free space is checked before any write (`TestTransferChecksFreeSpaceFirst`).
 - **I5. Sentinel.** An unmounted (empty) root allows reads and refuses remove/move-out
@@ -68,7 +71,7 @@ seams) moves from `internal/fileops` into `core/internal/libfs` as a re-implemen
 |---|---|
 | create | `core/library/manager.go` (`Manager`, `Scope`, `Options`, `New`, roots as config entries, sentinel) |
 | create | `core/library/rootfs.go` (`RootFS`, `File`, `WalkOptions`, `Entry`) |
-| create | `core/library/transfer.go` (`TransferMode`, `PermPolicy`, `VerifyLevel`, `TransferOptions`, `NewTransferOptions`, `TransferResult`, `ProtectionOracle`, journal, recovery, `Hash`/`Digest`, quarantine) |
+| create | `core/library/transfer.go` (`TransferMode`, `PermPolicy`, `VerifyLevel`, `TransferOptions`, `NewTransferOptions`, `TransferResult`, `ProtectionOracle`, journal, the `core.library.transfer-recover` recovery task, `Hash`/`Digest`, quarantine) |
 | create | `core/library/watch.go` (watchers, debounce, overflow, polling fallback) |
 | create | `core/internal/libfs/` (copy, reflink per OS, `*at` syscalls, fsync seams) |
 | create | `core/internal/libraryhttp/` (the browse route under `core:library.browse`) |
@@ -108,13 +111,18 @@ STOP if `library.Manager` already exists, or if core config offers no list-entry
 4. `RootFS` over `os.Root`; `Walk` with the skip rules that replace `internal/pathutil/hidden.go` and
    `internal/appdirs`.
 5. The transfer engine: modes `Auto` (reflink → hardlink → copy, `Did` reports reality), `Copy`, `Hardlink`, `Reflink`,
-   `Symlink`, move; journal in `c/library/transfer/`; recovery; `TransferIn` in the caller's batch;
-   `PendingTransfers`.
+   `Symlink`, move; journal in `c/library/transfer/`; `TransferIn` in the caller's batch; `PendingTransfers`.
+   Recovery is the core task kind `core.library.transfer-recover` (05-library §5L.3.3, "Boot recovery"), started once
+   through its `Schedule`'s `OnStart()` (05-tasks). It completes or rolls back each unfinished journal row from its
+   last durable step and removes the temp file. For a verified destination whose source still exists after a
+   cross-device move, it removes the source only if the source digest still matches; otherwise it keeps the source
+   and reports the conflict. It leaves `done` rows of `TransferIn` for `PendingTransfers`.
 6. Hash, quarantine/release (no clobber on release), path mapper, watchers, `Root.Usage` (Bavail), `Mounted` with the
    sentinel and the bootstrap heuristic of HEAD's `libroot.Mounted`.
 7. Roots as config entries with live apply (`TestConfigEntryRoots_RoundTrip`).
 8. The browse route in `core/internal/libraryhttp`, `core:library.browse`, allow-list = the caller's readable roots.
-9. Wire on `hello`/`coretest`. Headers, fragment, acceptance.
+9. Wire on `hello`/`coretest`, including the registration of `core.library.transfer-recover`. Headers, fragment,
+   acceptance.
 
 ## Code contract (05-library §5L.3, verbatim excerpts; copy the rest from the spec)
 
@@ -153,6 +161,10 @@ var ErrReflinkUnsupported = errors.New("library: reflink not supported on this f
 `TestQuarantineReleaseRoundTrip`, `TestHashSameDescriptorSizeAndDigest`, `TestDisabledModuleRootsInert`,
 `TestTransferInCommitsWithCallerBatch`, `TestScopeCannotActAsAnotherOwner`, `TestConfigEntryRoots_RoundTrip`,
 `TestLibraryErrorsPassKeyNameGate`. Not here: `TestRootsCutover_FromHEADFixture` (F7-08).
+
+`TestTransferRecoveryFromJournal` gets a cell for the source-digest rule: the recovery task runs once at boot on hello
+and `coretest`, and when the source changed after the copy of a cross-device move, recovery keeps the source and
+reports the conflict instead of removing it.
 
 ## Acceptance (commands and expected output)
 

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F2-01-tasks-public-api-taskstest-kit.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 24217568-a4f2-4955-a65e-13e6cfd7ef35 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F2-01 |
 | Release / flip | R2, foundation PRs (F2), **dark** |
-| Wave | W23 |
+| Wave | W25 |
 | Tier | **T3** (Opus / high): the public task API every later definition, the executor, the scheduler, the stores and `datamigrate` are written against; the contract is fixed by the spec, the internals are not |
 | Depends on | OWNER-03 (R1 released and deployed), F2-09 (`config.Duration`), F2-10 (`health.ComponentID`) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |

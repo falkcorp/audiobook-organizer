@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F4-01-core-rbac-store-service-seeds.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 59c67fbd-15a4-478a-a671-a3cd8a9542d5 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F4-01 |
 | Release / flip | R2, identity flip F4 (dark PR) |
 | Tier | **T4** (Opus, xhigh–max): the authorization engine and the ambient rule |
-| Wave | W23 |
+| Wave | W25 |
 | Depends on | F2-08, F2-07, F4-04 |
 | Owns gate test | `TestWorkerKey_Confined` |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-25-offline-restore-and-reset.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 5c692ae4-468d-4905-b950-4341dd0ae790 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -14,7 +14,7 @@
 | Spec | 05-storage §5S.3.12 (restore-offline), §5S.3.15 (KindReset, offline only in R1); 05-backup §5B.3.4; 05-updater §5U.12 (swap-slot refusal from R1); 06 §6.4.10 R1 (OpenOffline, OfflineCommands); 09 §9.4 R1 Content: storage, release note |
 | Branch | `agent/platform-core-r1-25-offline-restore-and-reset` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 
@@ -56,7 +56,11 @@ refusal from R1; 06 §6.4.10 R1 `OpenOffline`, `OfflineCommands`):
    **Every ABO CLI write subcommand opens through it** (`TestCLISubcommandsUseOfflineOpen`, which also covers the
    `bench` tag, 05-storage §5S.4).
 2. **`app.OfflineCommands`** wired into ABO's cobra tree (`cmd/`): `storage restore-offline` (`--checkpoint <name>`,
-   `--archive <file>`, `--into <empty dir>`; restores with the service stopped, in place through the journaled swap
+   `--archive <file>`, `--into <empty dir>`, and `--accept-loss`: restoring a completed checkpoint or an archive is
+   refused without it, because everything written after the source was taken is lost, 05-backup §5B.3.4 and
+   05-storage §5S.3.12; a restore of the latest attempt's open checkpoint needs no flag. `--keyring` and `--gap-fill`
+   of the archive form are F8-01's, not this row's. R1-27's `make rollback-restore` calls this flag;
+   restores with the service stopped, in place through the journaled swap
    or into an empty directory inside the scratch area; never boots the app; 05-storage §5S.3.12), `storage reset`
    (stages `KindReset` — `ResetStore` or `ResetFactory` — with the service stopped, applied at the next start;
    `core/storage/reset.go`, `core/internal/restoreswap/reset.go`). Wrap every entry of `app.OfflineCommands`
@@ -90,8 +94,44 @@ single-file bind mount; `storage.ErrRenameRefused`).
 - `TestSwapSlotExclusive` (06 §6.10; it replaces `TestRestoreAndResetBothStaged`, 05-backup §5B.3.4) with the ABO
   stagers: R1-21 lands its core half; this row extends it to ABO's restore stager and `storage reset`.
 - `TestCLISubcommandsUseOfflineOpen` (06 §6.4.6; 05-storage §5S.4).
-- Also: `TestRestoreOffline`, `TestRestoreOfflineIntoEmptyPath`, `TestFactoryResetUnderClaims`,
-  `TestCheckpointEscapeKeepsOwedHooks` (05-storage §5S.10) and the updater refusal (a test in `internal/updater`).
+- Also: `TestRestoreOffline` (with a cell for `--accept-loss`: a completed checkpoint and an archive are refused
+  without it and restored with it; the flag does not change the open checkpoint's behaviour), `TestRestoreOfflineIntoEmptyPath`,
+  `TestFactoryResetUnderClaims`, `TestCheckpointEscapeKeepsOwedHooks` (05-storage §5S.10) and the updater refusal
+  (a test in `internal/updater`).
+- `TestOfflineOpenRules` (05-storage §5S.10; 06 §6.10): `app.OpenOffline` read-write commits and closes cleanly; a
+  read-only open writes nothing; an open with a pending migration or cutover step, an empty store, or a pending or
+  in-flight swap of any kind is refused; an offline revoking write is journaled once a journal exists.
+- The rest of the factory-reset table of 05-storage §5S.3.15 that has an R1 shape (every name is the spec's; each
+  proves what its row says; the three that do not belong here are listed after). Write each first:
+  - `TestStageFactoryReset_DangerousRootRefused`: a dangerous library root with the wipe requested is refused (400)
+    and nothing is staged.
+  - `TestFactoryResetSetAsideFailureKeepsStore`: a rename failure before `set_aside_started` leaves the live store
+    in place and moves any completed target back (DATA8-1, DATA10-4).
+  - `TestFactoryResetCrossDeviceTargets`: the state directory and the Open Library store on other filesystems, or an
+    injected `EXDEV`, are each set aside beside themselves or deleted by the hook (COR8-3).
+  - `TestFactoryResetResumeAfterExpiryCompletes`: a crash after some targets moved, then a boot after `expires_at`
+    and, separately, by another binary, resumes the set-aside to `set_aside` and completes; a rename failure on resume
+    moves back before `rejected` (DATA9-4).
+  - `TestFactoryResetRejectedLeavesStoreAndSettings`: an expired intent, or one staged by another binary, leaves the
+    store and every setting as they were (SEC7-5, DATA7-6).
+  - `TestFactoryResetIntentRejectedAfterRollback`: an older build rejects a staged reset intent at P0a.
+  - `TestRollbackRefusesInflightReset`: the rollback guard refuses an in-flight `KindReset` and passes a pending one,
+    which the older build rejects (OPS8-7).
+  - `TestPostResetHookRerunsUntilDone`: a crash before `Done` reruns the books reset hook at the next boot,
+    idempotently.
+  - `TestPostResetHook_RemoveErrorsStillDone` and `TestFactoryResetReadOnlyRootDirCompletes`: per-entry failures are
+    recorded, `hook_done` is written and `factory_reset_cleanup_incomplete` is reported, so the hook never fails boot
+    (OPS8-5).
+  - `TestPostResetHookSkipsKeptPaths`: an entry that is, or contains, `<db parent>`, the state directory or a
+    set-aside destination is never removed.
+  - `TestFactoryResetWithoutLocationFile`: with no `backup.location.json`, as on R1, the set-aside completes (R10-6).
+  - `TestFactoryResetNativeAppCompletes`: hello leaves no `restore_inflight` after the reset boot; `storage reset
+    --delete-library-files` on an app without a reset hook is refused (422 `ErrResetRequestInvalid`) with nothing
+    staged (COR8-4, COR10-9 (a)).
+  - `TestResetRequestFlowsUnchanged`, the offline half: the one `storage.ResetRequest` reaches `Plan` unchanged from the
+    offline command. The route half is F4-05's.
+  Not this row's: `TestFactoryReset_StaleEnableAuthFalseKeepsAuthOn` (F3-07) and `TestFactoryResetPostFloorBoots`
+  (R3-02).
 
 ## Dependency check
 

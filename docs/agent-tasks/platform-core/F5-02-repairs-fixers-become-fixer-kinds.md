@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-02-repairs-fixers-become-fixer-kinds.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: bbc45161-5107-41fe-8e3e-77b95ed3dadb -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F5-02 |
 | Release / flip | R2, tasks flip F5 (dark conversion PR) |
-| Wave | W29 |
+| Wave | W31 |
 | Tier | **T3** (Opus / high): Fixer semantics (plan rows, re-evaluation at apply, applied-row marks, guards) must stay exact while 25 fixers reroute their stores through repairs' shell (05-tasks conversion rule 3), and M4 imports HEAD's stored rows and marks into the shape this PR defines |
 | Depends on | F2-05 (transitively F2-01..F2-04), F2-16 (`Registrar.Tasks`, `coretest`'s task cells), F2-17 (`tasklint` and this row's exemption entry file) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR |

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/R1-16-sdnotify-into-core-internal.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 16c6bd67-7abe-40f4-ad12-2d2cfbca9f76 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -14,7 +14,7 @@
 | Spec | 04 §8.2 (mediacore/internal/sdnotify row), §8.3; 05-health §5H.10 Landing R1 (Supervisor); 06 §6.4.5 |
 | Branch | `agent/platform-core-r1-16-sdnotify-into-core-internal` |
 
-**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-01 until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
+**Gate:** plan, then execute autonomously in a worktree with its own PR. Every merge passes `make ci`, e2e and the named required checks of 09 §9.2.1 that exist at your base. The R1 freeze is on from R1-35 (unless OWNER-01 overrode it) until OWNER-03 cuts R1 (09 §9.2.1): nothing in this task changes that.
 
 **Files the inventory assigns to this task** (a path ending in `/` is a whole directory; touch nothing outside this list without recording it under the PR's "Scope notes"):
 

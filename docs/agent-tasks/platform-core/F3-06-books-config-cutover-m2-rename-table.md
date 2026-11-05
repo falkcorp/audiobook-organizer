@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F3-06-books-config-cutover-m2-rename-table.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.3 -->
 <!-- guid: a42617df-0a4d-49ef-a19d-48538878932a -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F3-06 |
 | Release / flip | R2, config flip F3 (dark PR: built and tested, **unregistered** until F3-07) |
 | Tier | **T4** (Opus, xhigh–max): a one-way migration of every setting and secret |
-| Wave | W26 |
+| Wave | W28 |
 | Depends on | F3-01, F3-02, F3-03, F3-04, F2-13, F2-15 |
 | Owns gate tests | `TestRenameTable_Golden`; `TestConfigCutover_EffectiveConfigUnchanged` (the config oracle); `TestConfigCutover_SecretsReadable`; `TestConfigCutover_KeyGuard`; `TestConfigCutover_QuarantineNotDrop`; `TestConfigCutover_GapFillStripped`; `TestConfigCutover_Idempotent`; `TestConfigCutover_RestoreDrill`; `TestConfigCutover_RowsGone` |
 | Gate | Plan, then execute autonomously in your own worktree and PR. |
@@ -44,8 +44,22 @@ Create the books package `internal/books/cutover` (04 §2.4: one of 03 §3.5.1's
 4. books' **M7** half (the level step raising `books`, with the legacy projection) and books' **M8** definition
    (`books.rewrite-after-<step name>`), on F3-04's machinery;
 5. `internal/books/cutover/stepids.go` (path and names coined here), the one place that **reserves the step IDs of
-   M2–M6** (and names M7's books half), as exported string constants. F4-06 (M3), F5-16 (M4), F5-15 (M5), F7-08 (M6)
-   and R3-02's `UpgradeFloor.Requires` take their IDs from it instead of coining their own.
+   M2–M6** (and names books' level steps and holds one constant per books cutover level), as exported constants. F4-06 (M3), F5-16 (M4),
+   F5-15 (M5), F7-08 (M6) and R3-02's `UpgradeFloor.Requires` take their IDs from it instead of coining their own;
+6. the **cutover-list check** (order M2): a function (name coined here, `ValidateCutoverList`) that refuses a
+   registered cutover list unless the levels are raised to the build's target before the first step of each flip,
+   each owner's versions are contiguous, and exactly one M8 is registered, last.
+
+**The flip mechanism** (stated in F3-04's "Flip mechanism"; follow it exactly): level steps (M7) are named by target
+level, `books.level-<n>` and `core.level-<n>`, and M8 by the step it compacts after, `books.rewrite-after-<step name>`.
+Every later flip that adds a step (F4-08, F5-18, F7-09) **adds** a new level step for each owner whose level it raises
+(books; core when core's level changes), at that owner's next contiguous version, numbered immediately before the
+flip's own new migration step, and bumps that owner's declared `Spec.Level` in the same PR; earlier level steps stay
+registered unchanged (05-storage §5S.3.5: versions are 1..n, contiguous per owner, recorded by version number). It
+**replaces** M8 with a newly named one, so exactly one M8 is registered. So the constants here are per level: this row
+defines `books.level-<n>` for F3's level `<n>` and one constant for that level (`BooksCutoverLevel`, name coined here,
+that M2's `RaisesLevel` and F3's books level step both read); each later flip adds its own level constant and
+level-step ID beside these and replaces the M8 ID, never editing an earlier level's constant or ID.
 
 Nothing is registered: F3-07 creates `internal/books/cutover/steps.go`, adds `module.Manifest.Cutover` and
 `module.Importers{Config, Secrets}` (06 §6.4.2, §6.4.10 F3 row) and puts the list in `books.Module()`'s manifest. Do
@@ -117,6 +131,8 @@ checks decide; a zero on an edit target stops the task.
    targets) and the difference is not explained by a HEAD change since `748fd787a`: stop and report.
 3. A config oracle cell disagrees with the R0 binary's answer.
 4. Any registration of M2, M7 or M8 in `books.Module()`, a `steps.go` file, or an edit under `core/module/`.
+5. F3-04's level-step constructor cannot take a target level and a version as parameters, so the flip mechanism
+   cannot add a level step by name and version: report it.
 
 ## Steps
 
@@ -142,7 +158,7 @@ checks decide; a zero on an edit target stops the task.
    `app.Options.RetiredConfigNames` (with `Refuse` set for secret and destination passthrough fields, and `Message` from
    `removed_keys.go`), and one returning the canonical env names the deploy files may use.
 5. **M2** (`DataMigration`, owner `books`, `Cutover: true`, `Compat: Breaking`, `Mode: BootBlocking`, `RaisesLevel` =
-   M7's books level, `After` books' M7, `Parallelism: tasks.Sequential("tens of settings rows")`, `Source` = the four
+   M7's books level (`BooksCutoverLevel`), `After` books' M7, `Parallelism: tasks.Sequential("tens of settings rows")`, `Source` = the four
    encrypted rows, `Residual` = the settings blob key, `Sensitive` = the blob and the secret rows):
    - **Guard first:** any of the four rows non-empty and no key file found → fail before M2a, nothing written, naming
      the file, the directories searched and `ABO_CORE_SECRETS_ALLOW_KEY_REGEN`.
@@ -162,14 +178,23 @@ checks decide; a zero on an edit target stops the task.
    - **Verify:** the four rows absent; every moved field absent from the blob; read = imported + quarantined +
      deleted-by-rule; the config oracle on the decoded input (effective config before = after).
    - M2 never touches `.encryption_key`.
-6. **Books' M7 half:** a `Breaking` versioned step with no writes of its own raising `books` through F3-04's level
-   step, staging the legacy projection (`.storage-format` = `LegacyMaxFormat + 1` and the marker) through books'
+6. **Books' M7 half:** a `Breaking` versioned step with no writes of its own raising `books` to `BooksCutoverLevel`
+   through F3-04's level step, at books' next contiguous version (books' versioned steps start at `LegacyCap+1`,
+   05-storage §5S.3.5), named `books.level-<n>`, staging the
+   legacy projection (`.storage-format` = `LegacyMaxFormat + 1` and the marker) through books'
    `LegacyGuardProjection.Stage`. **Books' M8:** the rewrite on F3-04's engine, ID `books.rewrite-after-<M2's step
    name>`, built through the M8 invocation API F3-04 coined (copy its signature from F3-04's PR description).
-   **Step IDs** (`<owner>.<name>`, `<name>` matching `[a-z][a-z0-9-]*`) are not fixed by the spec: coin them in
-   `stepids.go` for M2, M3, M4, M5, M6 and books' M7 half (names coined here), each a comment citing its 03 §3.8 row,
-   and use only these constants in this package. A unit test (name coined here: `TestStepIDs_UniqueAndWellFormed`)
-   checks uniqueness and the grammar.
+   **Step IDs** (`<owner>.<name>`, `<name>` matching `[a-z][a-z0-9-]*`): coin them in `stepids.go` for M2, M3, M4, M5,
+   M6 (names coined here), with books' M7 half as `books.level-<n>` per the flip mechanism, each a comment citing its
+   03 §3.8 row, and use only these constants in this package. A unit test (name coined here:
+   `TestStepIDs_UniqueAndWellFormed`) checks uniqueness and the grammar. **List check:** `ValidateCutoverList` (step 6
+   of the Goal) with `TestCutoverList_LevelsFirstContiguousOneM8Last` (name coined here): over the list built from
+   this row's constructors in 03 §3.8's order (books' level step, a core level step from F3-04's constructor, M2, M8)
+   it passes, and so does a two-flip list (a second books level step at the next version, ordered before a second data
+   step); a list with no level step for an owner whose level the build raises (no core step), a data step ordered
+   before its flip's level step, a gap in an owner's versions, two M8s, or M8 before a data step fails. The step list is registered only in
+   F3-07's `steps.go`, so F3-07 adds the cell that runs the check over the registered list (books' manifest list plus
+   the kernel's core half).
 7. **Layering:** add `internal/books/cutover` to `layerOf` in `internal/arch/layering_test.go` at its computed layer.
 8. Run every test against the corpus: stage 1 (R0-written) and the overlay's config cases (a corrupt encrypted row, a
    blob field no row names, a value R0's validation refuses), driving M2 directly through F2-15's harness (not through
@@ -181,7 +206,8 @@ checks decide; a zero on an edit target stops the task.
 ```go
 // Built by F3-06, registered by F3-07 (names coined here).
 func ConfigStep(cfg config.Importer, sec secrets.Importer, opts ConfigStepOptions) datamigrate.DataMigration
-func BooksLevelStep(/* F3-04's level-step inputs */) storage.VersionedStep   // books' half of M7; type per F3-04
+func BooksLevelStep(/* F3-04's level-step inputs: target level, version */) storage.VersionedStep   // books.level-<n>; type per F3-04
+func ValidateCutoverList(/* the registered cutover list */) error            // levels before each flip's first step, versions contiguous, one M8, last
 func RewriteStep(after string) datamigrate.DataMigration                     // books.rewrite-after-<after>
 func RetiredConfigNames() []config.RetiredName
 func CanonicalEnvNames() []string
@@ -198,7 +224,7 @@ with canonical operator values set they win, except a `FailClosed` key keeps the
 `TestConfigCutover_SecretsReadable`, `TestConfigCutover_KeyGuard`, `TestConfigCutover_QuarantineNotDrop`,
 `TestConfigCutover_GapFillStripped`, `TestConfigCutover_Idempotent` (with the crash matrix over M2a and M2b),
 `TestConfigCutover_RestoreDrill` (run with the latest production release through F2-15's
-`scripts/ci/fetch_prefreeze_binary.sh` until F3-07 records the pre-freeze tag in `ci/prefreeze_release.txt`),
+`scripts/ci/fetch_prefreeze_binary.sh` until F3-08 records the pre-freeze tag in `ci/prefreeze_release.txt`),
 `TestConfigCutover_RowsGone` (its "after M6" clause is F7-08's, which extends this test; here: the four rows gone, the blob holds only class-`i` fields with no moved field and no class-`i` secret, every key range
 outside the listed keys byte-identical). `TestRenameTable_EveryKeyRegistered` is F3-07's.
 
@@ -215,7 +241,7 @@ outside the listed keys byte-identical). `TestRenameTable_EveryKeyRegistered` is
 ```bash
 go vet ./internal/books/cutover/...                                             # exit 0
 go test -race -count=1 ./internal/books/cutover/...                             # ok
-go test -count=1 -run 'TestRenameTable_Golden|TestConfigCutover_' ./internal/books/...   # PASS for each
+go test -count=1 -run 'TestRenameTable_Golden|TestConfigCutover_|TestStepIDs_UniqueAndWellFormed|TestCutoverList_LevelsFirstContiguousOneM8Last' ./internal/books/...   # PASS for each
 go test -count=1 ./internal/arch/...                                            # ok
 grep -rn 'cutover\.' internal/books/module.go | wc -l                           # 0: nothing registered
 ls internal/books/cutover/steps.go 2>/dev/null | wc -l                          # 0

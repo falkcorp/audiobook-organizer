@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F5-16-tasks-cutover-step-m4.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 8fcf5409-cd73-4f80-ab41-6d71c96ea327 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -9,7 +9,7 @@
 |---|---|
 | ID | F5-16 |
 | Release / flip | R2, tasks flip F5 (dark foundation PR; M4 is registered by F5-18) |
-| Wave | W27 |
+| Wave | W29 |
 | Tier | **T4** (Opus / xhigh–max): a one-way migration of every run, clock, marker and stamp, with a rename of every stored definition reference; a wrong row is lost task history or a re-applied repair |
 | Depends on | F2-02 (`tasks.Importer`, `NativeImporter`, `taskstest.StoresSuite`), F3-06 (`internal/books/cutover` and its step conventions), F2-13 (the hand-built overlay of the R2 corpus) |
 | Gate | Plan, then execute autonomously in a worktree with its own PR; the plan is reviewed before code because the step is one-way |

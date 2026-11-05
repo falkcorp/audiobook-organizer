@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F9-04-cut-shell-pages-dark.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: 7e3b5f23-bec9-40f3-bf21-45877bf529e2 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,7 +10,7 @@
 | ID | F9-04 |
 | Release | R2, flip label F9 (dark PR; R2 if the shell is ready, else R3 unchanged) |
 | Tier | **T3** (Opus / high): a cut of shell-classified pages into the shell and books' slots; the import boundary must prove the cut and the SPA must render the same |
-| Wave | W38 (beside F9-02; file-disjoint) |
+| Wave | W40 (beside F9-02; file-disjoint) |
 | Depends on | F9-01 (the `shell` and `ui-kit` packages), F8-04 (F4-08 through F8-04 edit these pages under `web/src/`), F9-05 (the pages import its providers and utils) |
 | Precondition | 07 §7.19 step 4: every R2 flip whose native routes the pages call has merged (enforced by `Depends on`: F8-04) |
 | Spec | 07 §7.11 (the classification table: the `pages/Login.tsx …`, `pages/Users.tsx`, `pages/System.tsx`, `components/system/MaintenanceTab.tsx`, `pages/Settings.tsx`, `pages/Dashboard.tsx`, `pages/Diagnostics.tsx` and `components/wizard/WelcomeWizard.tsx` rows), §7.4.2 (`WidgetContribution`, `SetupContribution`, `UserPageExtensions`, `SettingsPanelContribution`), §7.4.3 (shell routes), §7.9.1 (permission atoms; `/setup` and the first-run gate order), §7.3.1 (import boundary), §7.19 step 4 |
