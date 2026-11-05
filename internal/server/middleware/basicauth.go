@@ -84,7 +84,8 @@ func BasicGateUsesEnvPassword() bool {
 // BasicAuth returns a Gin middleware that enforces HTTP Basic Authentication
 // when config.AppConfig.BasicAuthEnabled is true. Health endpoints, static
 // assets, and Audiobookshelf-compatible routes that enforce ABS token auth in
-// their own handler chain are exempt.
+// their own handler chain are exempt. Every other route answers 401 while the
+// gate has no effective password (basicGatePassword).
 func BasicAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !config.AppConfig.BasicAuthEnabled {
@@ -135,27 +136,45 @@ func BasicAuth() gin.HandlerFunc {
 			return
 		}
 
+		// Fail closed on an enabled gate with no effective password, whatever
+		// the request sends: comparing two empty strings would admit
+		// "<username>:" (05-authn §11.1 item 5). This covers a password cleared
+		// by any means (an operator, the key-regeneration delete path, a
+		// partial reset); BasicGateNoPassword raises the health token for it.
+		expectedPass, fromEnv := basicGatePassword()
+		if expectedPass == "" {
+			refuseBasicAuth(c)
+			return
+		}
+		if fromEnv {
+			basicGateEnvWarnOnce.Do(func() { basicGateLog.Warn(BasicGateEnvPasswordWarning) })
+		}
+
 		user, pass, ok := c.Request.BasicAuth()
 		if !ok {
-			c.Header("WWW-Authenticate", `Basic realm="Audiobook Organizer"`)
-			c.AbortWithStatus(http.StatusUnauthorized)
+			refuseBasicAuth(c)
 			return
 		}
 
 		expectedUser := config.AppConfig.BasicAuthUsername
-		expectedPass := config.AppConfig.BasicAuthPassword
 
 		userMatch := subtle.ConstantTimeCompare([]byte(user), []byte(expectedUser)) == 1
 		passMatch := subtle.ConstantTimeCompare([]byte(pass), []byte(expectedPass)) == 1
 
 		if !userMatch || !passMatch {
-			c.Header("WWW-Authenticate", `Basic realm="Audiobook Organizer"`)
-			c.AbortWithStatus(http.StatusUnauthorized)
+			refuseBasicAuth(c)
 			return
 		}
 
 		c.Next()
 	}
+}
+
+// refuseBasicAuth answers 401 with the gate's Basic challenge. Every refusal of
+// the gate goes through it, so the challenge stays one value.
+func refuseBasicAuth(c *gin.Context) {
+	c.Header("WWW-Authenticate", `Basic realm="Audiobook Organizer"`)
+	c.AbortWithStatus(http.StatusUnauthorized)
 }
 
 // absRequireAuthHandlerName is the name gin reports in c.HandlerNames() for the
