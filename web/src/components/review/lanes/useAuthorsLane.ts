@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useAuthorsLane.ts
-// version: 1.6.0
+// version: 1.6.1
 // guid: c9e4a1d7-5b83-4f26-a0d9-3e7b61f48a25
 // last-edited: 2026-11-04
 
@@ -173,15 +173,24 @@ function current<T>(keyed: Keyed<T> | null, key: string): Load<T> {
 
 /**
  * Edits to a list that arrived while no read of it had settled (a merge that
- * finished during a reload, for one). They are kept, in order, and applied to
- * the list the read brings: dropped, the merged-away rows come back whenever
- * that read was started before the write committed.
- *
- * Every edit must be idempotent -- a read started after the write already
- * reflects it, and the edit then finds nothing to change.
+ * finished during a reload, for one). They are kept, in order, each with a
+ * sequence number; a read records the sequence when it STARTS, and on landing
+ * applies only the edits queued after that. A read started after a write already
+ * reflects it, and applying the edit again would undo a newer server state (a
+ * group a later scan found again, a newer rename). A read started before the
+ * write may not reflect it, which is the case the queue is for.
  */
-function applyEdits<L>(edits: ReadonlyArray<(list: L) => L>, list: L): L {
-  return edits.reduce((acc, edit) => edit(acc), list);
+interface EditQueue<L> {
+  seq: number;
+  edits: Array<{ seq: number; fn: (list: L) => L }>;
+}
+
+function newEditQueue<L>(): EditQueue<L> {
+  return { seq: 0, edits: [] };
+}
+
+function applyEditsSince<L>(edits: EditQueue<L>['edits'], since: number, list: L): L {
+  return edits.reduce((acc, e) => (e.seq > since ? e.fn(acc) : acc), list);
 }
 
 interface GroupsValue {
@@ -624,7 +633,7 @@ export function useAuthorsLane(
   useLayoutEffect(() => {
     groupsKeyRef.current = groupsKey;
   }, [groupsKey]);
-  const groupsEditsRef = useRef<Array<(gs: AuthorGroup[]) => AuthorGroup[]>>([]);
+  const groupsEditsRef = useRef<EditQueue<AuthorGroup[]>>(newEditQueue());
   /**
    * Edit the list the lane currently holds. Reads the latest, writes the latest.
    * With no settled list for the current read (a reload is in flight), the edit
@@ -634,7 +643,7 @@ export function useAuthorsLane(
     (fn: (gs: AuthorGroup[]) => AuthorGroup[]) => {
       const prev = groupsRef.current;
       if (!prev || prev.load.state !== 'ready' || prev.key !== groupsKeyRef.current) {
-        groupsEditsRef.current.push(fn);
+        groupsEditsRef.current.edits.push({ seq: ++groupsEditsRef.current.seq, fn });
         return;
       }
       const next = fn(prev.load.value.groups);
@@ -746,7 +755,7 @@ export function useAuthorsLane(
   useLayoutEffect(() => {
     seriesKeyRef.current = seriesKey;
   }, [seriesKey]);
-  const seriesEditsRef = useRef<Array<(gs: SeriesGroup[]) => SeriesGroup[]>>([]);
+  const seriesEditsRef = useRef<EditQueue<SeriesGroup[]>>(newEditQueue());
   /**
    * Edit the series list the lane currently holds. Reads the latest, writes the
    * latest. With no settled list for the current read (a reload is in flight),
@@ -756,7 +765,7 @@ export function useAuthorsLane(
     (fn: (gs: SeriesGroup[]) => SeriesGroup[]) => {
       const prev = seriesRef.current;
       if (!prev || prev.load.state !== 'ready' || prev.key !== seriesKeyRef.current) {
-        seriesEditsRef.current.push(fn);
+        seriesEditsRef.current.edits.push({ seq: ++seriesEditsRef.current.seq, fn });
         return;
       }
       const next = fn(prev.load.value.groups);
@@ -876,18 +885,20 @@ export function useAuthorsLane(
   useEffect(() => {
     if (!authorsOn) return;
     const ctl = new AbortController();
+    // Edits queued after this point may not be in what the server returns.
+    const startedAt = groupsEditsRef.current.seq;
     fetchAuthorGroups(ctl.signal)
       .then((r) => {
         if (ctl.signal.aborted) return;
-        // Edits made while this read was in flight go on top of what it returned:
-        // it may have been started before they were written.
-        const queued = groupsEditsRef.current.splice(0);
-        const mapped = applyEdits(queued, r.groups.map(toAuthorGroup));
+        // Edits made after this read started go on top of what it returned: it
+        // may have been started before they were written. Earlier ones are in it.
+        const queued = groupsEditsRef.current.edits.splice(0);
+        const mapped = applyEditsSince(queued, startedAt, r.groups.map(toAuthorGroup));
         // Read the latest, now: the lane may have edited its list since the
         // request was sent.
         const prev = groupsRef.current;
-        // The list held from the previous read has not seen the queued edits.
-        const held = applyEdits(queued, prev && prev.load.state === 'ready' ? prev.load.value.groups : []);
+        // The list held from the previous read predates every queued edit.
+        const held = applyEditsSince(queued, 0, prev && prev.load.state === 'ready' ? prev.load.value.groups : []);
         if (r.needsRefresh && mapped.length === 0 && held.length > 0) {
           // The server's list is gone -- every author write clears it, including
           // this lane's own -- but the lane holds groups that already reflect
@@ -928,19 +939,21 @@ export function useAuthorsLane(
   useEffect(() => {
     if (!seriesOn) return;
     const ctl = new AbortController();
+    // Edits queued after this point may not be in what the server returns.
+    const startedAt = seriesEditsRef.current.seq;
     fetchSeriesGroups(ctl.signal)
       .then((r) => {
         if (ctl.signal.aborted) return;
-        // Edits made while this read was in flight go on top of what it returned:
-        // it may have been started before they were written.
-        const queued = seriesEditsRef.current.splice(0);
-        const mapped = applyEdits(queued, r.groups.map(toSeriesGroup));
+        // Edits made after this read started go on top of what it returned: it
+        // may have been started before they were written. Earlier ones are in it.
+        const queued = seriesEditsRef.current.edits.splice(0);
+        const mapped = applyEditsSince(queued, startedAt, r.groups.map(toSeriesGroup));
         // The latest, now: the lane may have edited its list since the request
         // was sent.
         const prev = seriesRef.current;
-        // The list held from the previous read has not seen the queued edits.
+        // The list held from the previous read predates every queued edit.
         const heldValue = prev && prev.load.state === 'ready' ? prev.load.value : null;
-        const held = heldValue && { ...heldValue, groups: applyEdits(queued, heldValue.groups) };
+        const held = heldValue && { ...heldValue, groups: applyEditsSince(queued, 0, heldValue.groups) };
         if (r.needsRefresh && mapped.length === 0 && held && held.groups.length > 0) {
           // As for authors: every series write clears the server's list, including
           // this lane's own, but the lane holds groups that already reflect those

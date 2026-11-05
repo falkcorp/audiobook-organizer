@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useAuthorsLane.test.ts
-// version: 1.3.0
+// version: 1.3.1
 // guid: a5d29e61-7c04-4b8f-93e2-1f6a80c4b573
 // last-edited: 2026-11-04
 
@@ -697,6 +697,34 @@ describe('leaving the lane or unmounting', () => {
     await act(async () => read.resolve({ groups: [GROUP_A(), GROUP_B()], needsRefresh: false }));
     await waitFor(() => expect(result.current.status).toBe('populated'));
     expect(result.current.groups.map((g) => g.key)).toEqual(['2']);
+  });
+
+  it('a followed merge that completes after a failed read is not applied to the retry that starts after it', async () => {
+    serve([GROUP_A(), GROUP_B()]);
+    const { result, rerender } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    hangingPoll();
+    act(() => result.current.dispatch(merge(1)));
+    await waitFor(() => expect(api.mergeAuthors).toHaveBeenCalledTimes(1));
+    rerender({ active: false });
+    await waitFor(() => expect(result.current.pendingKeys.size).toBe(0));
+
+    const poll = deferred<api.OperationV2>();
+    vi.mocked(api.pollOperationV2).mockReset();
+    vi.mocked(api.pollOperationV2).mockReturnValue(poll.promise);
+    vi.mocked(reads.fetchAuthorGroups).mockReset();
+    vi.mocked(reads.fetchAuthorGroups).mockRejectedValueOnce(new Error('boom'));
+    rerender({ active: true });
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    await waitFor(() => expect(api.pollOperationV2).toHaveBeenCalledTimes(1));
+
+    await act(async () => poll.resolve(settled()));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringContaining('finished after you left'), 'success'));
+    // A later scan found duplicates of author 1 again; the retry starts after the merge.
+    vi.mocked(reads.fetchAuthorGroups).mockResolvedValueOnce({ groups: [GROUP_A(), GROUP_B()], needsRefresh: false });
+    act(() => result.current.reload());
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    expect(result.current.groups.map((g) => g.key)).toEqual(['1', '2']);
   });
 
   it('a bulk merge stops sending requests the moment the lane is left, and clears its progress', async () => {
@@ -2108,20 +2136,31 @@ describe('leaving the lane during a series merge', () => {
       expect(result.current.series.groups).toEqual([]);
     });
 
-    it('does not apply it twice when the read already reflects it', async () => {
+    it('does not apply it to a read that started after the merge: a failed read, then a retry that lists the rows again', async () => {
+      const { result, poll, read } = await returnWithReadHeld();
+      await act(async () => read.reject(new Error('boom')));
+      await waitFor(() => expect(result.current.series.status).toBe('error'));
+      await act(async () => poll.resolve(settled('failed', 'series merge left series ids [13]: x')));
+      await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringContaining('left series ids [13]'), 'error'));
+      // The retry starts after the merge committed, so its answer is the server's truth:
+      // a later scan found 12 again, and the old edit must not hide it.
+      vi.mocked(reads.fetchSeriesGroups).mockResolvedValueOnce(preMerge());
+      act(() => result.current.series.reload());
+      await waitFor(() => expect(result.current.series.status).toBe('populated'));
+      expect(result.current.series.groups[0]?.series.map((r) => r.id)).toEqual([11, 12, 13]);
+    });
+
+    it('does not apply it to the read that superseded the one it arrived during', async () => {
       const { result, poll, read } = await returnWithReadHeld();
       await act(async () => poll.resolve(settled('failed', 'series merge left series ids [13]: x')));
       await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringContaining('left series ids [13]'), 'error'));
-      // The server read started after the merge committed: 12 is already gone.
-      await act(async () =>
-        read.resolve({
-          groups: [swire('Series A', [srow(11, 'Series A'), srow(13, 'SERIES A')])],
-          totalSeries: 2,
-          needsRefresh: false,
-        })
-      );
+      // A second read starts after the merge settled; the held one is aborted.
+      vi.mocked(reads.fetchSeriesGroups).mockResolvedValueOnce(preMerge());
+      act(() => result.current.series.reload());
       await waitFor(() => expect(result.current.series.status).toBe('populated'));
-      expect(result.current.series.groups[0]?.series.map((r) => r.id)).toEqual([11, 13]);
+      expect(result.current.series.groups[0]?.series.map((r) => r.id)).toEqual([11, 12, 13]);
+      await act(async () => read.resolve({ groups: [], totalSeries: 0, needsRefresh: false }));
+      expect(result.current.series.groups[0]?.series.map((r) => r.id)).toEqual([11, 12, 13]);
     });
 
     it('keeps the held list, with the merge applied, when the read answers "scan needed" and empty', async () => {
