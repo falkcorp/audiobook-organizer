@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_paths_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8e1f3a27-6c94-4b05-a2d8-0f7b5c19e364
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package audiobooks
 
@@ -192,7 +192,7 @@ func TestCombineBooks_RefusedWhenPointerCannotBeJournaled(t *testing.T) {
 	require.Empty(t, js[0].Absorbed, "the journal names nothing to restore")
 }
 
-// A split-book merge with no OnJournal journals the pointer itself: under the
+// A split-book merge journals its undo pointer itself: under the
 // caller's op id, or one of its own.
 func TestRevert_SplitBookMerge(t *testing.T) {
 	for _, opID := range []string{"", "op-split"} {

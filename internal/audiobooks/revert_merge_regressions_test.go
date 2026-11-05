@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_regressions_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 2d9b7f41-6e05-4c38-a1f2-8b3c5e9d0a74
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package audiobooks
 
@@ -80,21 +80,21 @@ func (s failMoveFor) MoveBookFilesToBook(ids []string, src, dst string) error {
 	return s.PebbleStore.MoveBookFilesToBook(ids, src, dst)
 }
 
+// panicOnMove panics on the first MoveBookFilesToBook: the first mutation a
+// split-book merge makes after it has journaled its undo pointer, so the merge
+// "crashes" with the journal Pending and no book touched.
+type panicOnMove struct{ *database.PebbleStore }
+
+func (panicOnMove) MoveBookFilesToBook([]string, string, string) error { panic("crash") }
+
 // crashSplitMergeAfterPointer runs a split-book merge that journals its
 // pointer under opID and then "crashes" before its first mutation.
-func crashSplitMergeAfterPointer(t *testing.T, store database.Store, f combineFixture, opID string) {
+func crashSplitMergeAfterPointer(t *testing.T, store *database.PebbleStore, f combineFixture, opID string) {
 	t.Helper()
 	panicked := false
 	func() {
 		defer func() { panicked = recover() != nil }()
-		_, _ = dedup.MergeSplitBookClusterWithOptions(store, f.keep, []string{f.a, f.b}, "", dedup.SplitMergeOptions{
-			OnJournal: func(id string) error {
-				if _, err := merge.RecordJournalPointerIn(store, opID, f.keep, merge.CombineJournalPointerType, id); err != nil {
-					return err
-				}
-				panic("crash")
-			},
-		})
+		_, _ = dedup.MergeSplitBookClusterWithOptions(panicOnMove{store}, f.keep, []string{f.a, f.b}, "", dedup.SplitMergeOptions{OperationID: opID})
 	}()
 	require.True(t, panicked)
 	require.Len(t, pointerRows(t, store, opID, undo.ChangeTypeMergeCombineJournal), 1)

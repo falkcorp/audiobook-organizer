@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_recheck_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 8d3f5b21-6a94-4c70-b1e8-2f7a4c9d0e35
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 package dedup
 
@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -192,24 +194,47 @@ func TestMergeSplitBookClusterRechecked_KeepMustBeInTheCluster(t *testing.T) {
 }
 
 // The recheck is the merge's Precheck, so it runs under the merge lock: a row
-// that changes between the call and the lock being taken is still caught.
+// that changes between the call and the lock being taken is still caught. The
+// test holds the lock itself, starts the merge (which must wait for it), lands
+// the concurrent edit and only then lets the merge take the lock.
 func TestMergeSplitBookClusterRechecked_RecheckRunsUnderTheLock(t *testing.T) {
 	r := chapters() // passes when the merge is called
 	writes := 0
-	locked := false
-	opts := SplitMergeOptions{AcquireLock: func(lock, unlock func()) error {
-		lock()
-		locked = true
-		// A concurrent edit lands after the caller's call but before the
-		// first write: the members now read as separate volumes.
-		r.books["b1"].Title, r.books["b2"].Title, r.books["b3"].Title = "Sample Saga Book 1", "Sample Saga Book 2", "Sample Saga Book 3"
-		return nil
-	}}
-	res, err := MergeSplitBookClusterRechecked(recheckMergeMock(r, &writes), chapterIDs, "b1", "Sample Saga", opts)
-	require.True(t, locked)
-	require.Error(t, err)
-	assert.Nil(t, res)
-	assert.True(t, errors.Is(err, ErrSplitBookRefused), "the Precheck wrap keeps errors.Is working: %v", err)
+	merge.LockMergeRMW()
+	locked := true
+	defer func() {
+		if locked {
+			merge.UnlockMergeRMW()
+		}
+	}()
+	type outcome struct {
+		res *SplitBookMergeResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := MergeSplitBookClusterRechecked(recheckMergeMock(r, &writes), chapterIDs, "b1", "Sample Saga", SplitMergeOptions{})
+		done <- outcome{res, err}
+	}()
+	select {
+	case <-done:
+		t.Fatal("the merge ran without waiting for the merge lock")
+	case <-time.After(100 * time.Millisecond):
+	}
+	// A concurrent edit lands after the caller's call but before the first
+	// write: the members now read as separate volumes.
+	r.books["b1"].Title, r.books["b2"].Title, r.books["b3"].Title = "Sample Saga Book 1", "Sample Saga Book 2", "Sample Saga Book 3"
+	merge.UnlockMergeRMW()
+	locked = false
+	var got outcome
+	select {
+	case got = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the merge did not finish after the lock was released")
+	}
+	require.Error(t, got.err)
+	assert.Nil(t, got.res)
+	assert.True(t, errors.Is(got.err, ErrSplitBookRefused), "the Precheck wrap keeps errors.Is working: %v", got.err)
 	assert.Zero(t, writes, "a refusal under the lock writes nothing")
 }
 
