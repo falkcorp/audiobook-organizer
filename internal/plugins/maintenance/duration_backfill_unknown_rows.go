@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 30470edd-3683-43f8-963e-07e058ba2a3e
 // last-edited: 2026-11-05
 
@@ -258,6 +258,80 @@ const (
 	srcFingerprint
 	srcProbe
 )
+
+// unknownRowSettled is what the unknownRows mode does with one book_file row,
+// the single rule both the mode's own candidate walk and every caller that
+// offers to start it (the folder-books holds' "Probe these files") read, so an
+// offer can never name a row the run then declines: a hold whose action loops
+// forever is the failure this prevents. The checks run in this order and the
+// first that applies wins.
+type unknownRowSettled int
+
+const (
+	// unknownRowActs: the mode borrows, promotes or probes the row.
+	unknownRowActs unknownRowSettled = iota
+	// unknownRowKnown: the row has a duration; there is nothing to do.
+	unknownRowKnown
+	// unknownRowMissing: flagged Missing. A library scan, not this mode, settles
+	// whether the file is there.
+	unknownRowMissing
+	// unknownRowUnreadable: at the attempt ceiling for a reason that is not a
+	// timeout; it stays unreadable until an explicit ResetDuration.
+	unknownRowUnreadable
+	unknownRowNoPath
+	// unknownRowUserExcluded: the user excluded the file from scanning (SkipScan);
+	// it is not probed and not borrowed into.
+	unknownRowUserExcluded
+	// unknownRowChanged: the file on disk is not the size the row records, so it
+	// is not the file the row describes and a measurement would be about other
+	// bytes. Decided only when the caller knows the on-disk size.
+	unknownRowChanged
+)
+
+// unknownRowVerdict classifies r. diskSize is the size of the file at r's path
+// on disk, or 0 when the caller has not looked (the run decides the size at
+// probe time, when it has statted the file).
+func unknownRowVerdict(r database.BookFileCore, diskSize int64) unknownRowSettled {
+	switch {
+	case r.DurationState() == database.DurationKnown:
+		return unknownRowKnown
+	case r.Missing:
+		return unknownRowMissing
+	case r.DurationState() == database.DurationUnreadable && !database.IsDurationTimeoutError(r.Scan.DurationOK.LastError):
+		return unknownRowUnreadable
+	case r.FilePath == "":
+		return unknownRowNoPath
+	case r.SkipScan:
+		return unknownRowUserExcluded
+	case r.FileSize > 0 && diskSize > 0 && diskSize != r.FileSize:
+		return unknownRowChanged
+	}
+	return unknownRowActs
+}
+
+// unknownRowActionable reports whether the unknownRows mode acts on r, given
+// the file's on-disk size (0 when unknown), and when it does not, why and what
+// would settle it, in words a hold can show.
+func unknownRowActionable(r database.BookFileCore, diskSize int64) (ok bool, why string) {
+	switch unknownRowVerdict(r, diskSize) {
+	case unknownRowActs:
+		return true, ""
+	case unknownRowKnown:
+		return false, "its duration is already known"
+	case unknownRowMissing:
+		return false, "the row is flagged missing although the file is on disk: a library scan refreshes the row"
+	case unknownRowUnreadable:
+		return false, "its probes failed to the attempt ceiling for a reason that is not a timeout: the row's duration " +
+			"state needs an explicit reset before it is probed again"
+	case unknownRowNoPath:
+		return false, "the row has no file path"
+	case unknownRowUserExcluded:
+		return false, "the file is excluded from scanning (skip scan)"
+	default:
+		return false, fmt.Sprintf("the file is %d bytes on disk but the row records %d: a library scan refreshes the row",
+			diskSize, r.FileSize)
+	}
+}
 
 // unknownRowWork is one row's decided action. sec is the duration to write for
 // srcBorrow / srcFingerprint; a srcProbe row is measured by pass 2.
@@ -542,10 +616,10 @@ func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsSt
 				continue
 			}
 		}
-		switch {
-		case r.DurationState() == database.DurationKnown:
+		switch unknownRowVerdict(*r, 0) {
+		case unknownRowKnown:
 			continue
-		case r.Missing:
+		case unknownRowMissing:
 			res.SkippedMissing++
 			continue
 		}
@@ -602,42 +676,26 @@ func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsSt
 	actionable := 0
 	for _, i := range cand {
 		r := all[i]
-		const (
-			none = iota
-			unreadable
-			noPath
-			userExcluded
-		)
-		settled := none
-		switch {
-		case r.DurationState() == database.DurationUnreadable && !database.IsDurationTimeoutError(r.Scan.DurationOK.LastError):
-			// At the attempt ceiling for a reason that is not a timeout: it
-			// stays unreadable until an explicit ResetDuration.
-			settled = unreadable
-		case r.FilePath == "":
-			settled = noPath
-		case r.SkipScan:
-			// The user excluded this file from scanning: not probed, not
-			// borrowed into.
-			settled = userExcluded
-		}
+		// The size is checked at probe time (probeGroup), against the file on
+		// disk: no size is known here.
+		verdict := unknownRowVerdict(r, 0)
 		// Settled rows take no action, so they never spend the limit; only a row
 		// that would be borrowed, promoted or probed does.
-		if settled == none && params.Limit > 0 && actionable >= params.Limit {
+		if verdict == unknownRowActs && params.Limit > 0 && actionable >= params.Limit {
 			continue
 		}
 		res.Scanned++
 		bc := book(r.BookID)
-		switch settled {
-		case unreadable:
+		switch verdict {
+		case unknownRowUnreadable:
 			res.SkippedUnreadable++
 			bc.SkippedUnreadable++
 			continue
-		case noPath:
+		case unknownRowNoPath:
 			res.SkippedNoPath++
 			bc.SkippedNoPath++
 			continue
-		case userExcluded:
+		case unknownRowUserExcluded:
 			res.SkippedUserExcluded++
 			bc.SkippedUserExcluded++
 			continue
@@ -851,7 +909,7 @@ func (r *unknownRowsRun) probeGroup(ctx context.Context, group []unknownRowWork)
 				logger.SanitizeLogValue(first.row.BookID), logger.SanitizeLogValue(first.row.ID), len(group)-1, logger.SanitizeLogValue(msg))
 		}
 		return nil
-	case first.row.FileSize > 0 && fi.Size() > 0 && fi.Size() != first.row.FileSize:
+	case unknownRowVerdict(first.row, fi.Size()) == unknownRowChanged:
 		r.ctr.changed.Add(int64(len(group)))
 		if r.warns.allow() {
 			durLog.Warn("duration-backfill unknownRows: book %s file %s (+%d row(s) at the same path): file is %d bytes on disk but the row records %d; not probed",

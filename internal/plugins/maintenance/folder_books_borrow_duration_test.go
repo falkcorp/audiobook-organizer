@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_borrow_duration_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7d3f9a2e-4b18-4c65-8e07-1a5b6c9d2f48
 // last-edited: 2026-11-05
 
@@ -15,30 +15,36 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 
+// fbSeedFileSize is the size of every file fbBorrowSeed writes AND the size its
+// rows record: the unknownRows backfill declines a row whose file on disk has a
+// different size, so a row that disagrees with its file is not one a probe
+// action may name.
+const fbSeedFileSize = 10
+
 // fbBorrowSeed builds the Alfred Pennyworth shelf: a folder-book whose six
-// rows (one per Batman storyline folder) carry duration 0 and sizes 1000+i,
-// and returns its id and paths. Six zero-second works read as chapter-sized
-// books, so without a borrowed duration the row is held fragmentary.
+// rows (one per Batman storyline folder) carry duration 0 and the size of the
+// file they describe, and returns its id and paths. Six unmeasured works are
+// held skipped_unprobed until a donor lends a duration or a probe measures them.
 func (f *fragFixture) fbBorrowSeed(t *testing.T) (lead string, paths []string) {
 	t.Helper()
 	_, err := f.s.CreateAuthor("Alfred Pennyworth")
 	require.NoError(t, err)
 	for _, n := range []string{"Hush", "The Long Halloween", "Year One", "Knightfall", "Court of Owls", "Zero Year"} {
-		paths = append(paths, f.file(t, "Alfred Pennyworth/"+n+"/01.mp3", 10))
+		paths = append(paths, f.file(t, "Alfred Pennyworth/"+n+"/01.mp3", fbSeedFileSize))
 	}
 	lead = f.fbBook(t, "flat", "Alfred Pennyworth", f.path("Alfred Pennyworth"), 0, paths...)
 	for i := range paths {
-		f.fbSetRow(t, "flat", i, func(bf *database.BookFile) { bf.FileSize = int64(1000 + i) })
+		f.fbSetRow(t, "flat", i, func(bf *database.BookFile) { bf.FileSize = fbSeedFileSize })
 	}
 	return lead, paths
 }
 
-// fbDonorRows gives book id one row per path, with size 1000+i+sizeSkew and
-// real durations (one hour each).
+// fbDonorRows gives book id one row per path, with the seed files' size plus
+// sizeSkew and real durations (one hour each).
 func (f *fragFixture) fbDonorRows(t *testing.T, role, id string, paths []string, sizeSkew int64) {
 	t.Helper()
 	for i, p := range paths {
-		f.row(t, fmt.Sprintf("%s-%d", role, i), id, p, "", int64(1000+i)+sizeSkew, 3600, i+1)
+		f.row(t, fmt.Sprintf("%s-%d", role, i), id, p, "", fbSeedFileSize+sizeSkew, 3600, i+1)
 	}
 }
 

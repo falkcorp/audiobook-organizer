@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.14.0
+// version: 2.15.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-11-05
 
@@ -359,6 +359,12 @@ func recordReadFailure(res *bookProcessResult, path string, mErr error, warns *r
 		logger.SanitizeLogValue(res.book.ID), logger.SanitizeLogValue(path), logger.SanitizeLogValue(reason))
 }
 
+// durationBackfillOpID is the Backfill book durations op's id: its definition,
+// its concurrency key, its dry-run resolution and every caller that offers to
+// start it (the folder-books holds' "Probe these files" action) name it through
+// this one constant, so a rename cannot leave an action pointing at nothing.
+const durationBackfillOpID = "maintenance.duration-backfill"
+
 func (p *Plugin) durationBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		// The one duration op. It absorbed maintenance.duration-backfill and
@@ -374,7 +380,7 @@ func (p *Plugin) durationBackfillDef() sdk.OperationDef {
 		// different cost class, and Macs-only under the no-decode-on-the-server
 		// rule. It is this op's UPSTREAM: the field it fills is the first source
 		// of truth the segment loop below consults.
-		ID:          "maintenance.duration-backfill",
+		ID:          durationBackfillOpID,
 		Preview:     sdk.PreviewSpec{Params: durationReextractParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
@@ -390,7 +396,7 @@ func (p *Plugin) durationBackfillDef() sdk.OperationDef {
 			"borrows a duration from a sibling row at the same path, promotes the fingerprint duration, then ffprobes the rest (absent files are not probed; rows excluded from scanning are skipped); narrow it with fileIds / bookIds. On demand only.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
-		ConcurrencyKey:  "maintenance.duration-backfill",
+		ConcurrencyKey:  durationBackfillOpID,
 		// Declared write-set (dispatcher Gate 3b). This op rewrites book_file
 		// rows but never declared it, so nothing stopped it running beside
 		// maintenance.dedupe-book-file-rows — which deletes book_file rows and
@@ -712,7 +718,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	// default has to be the previewing one. Both spellings sent and
 	// disagreeing is an error, never a guess: picking one would silently write
 	// in a run the caller may have meant as a preview.
-	dryRun, err := opmode.ResolveDryRun("maintenance.duration-backfill", params.DryRunSnake, params.DryRun)
+	dryRun, err := opmode.ResolveDryRun(durationBackfillOpID, params.DryRunSnake, params.DryRun)
 	if err != nil {
 		return err
 	}

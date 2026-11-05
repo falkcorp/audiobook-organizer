@@ -347,9 +347,10 @@ export interface RowHoldAction {
    */
   op_id: string;
   /**
-   * Params are the operation's parameters, as its params JSON object.
+   * Params are the operation's parameters, as its params JSON object, sent
+   * to the op as is (the same shape as PlanParams.Params).
    */
-  params?: { [key: string]: any};
+  params?: unknown;
   /**
    * Label is the button text.
    */
