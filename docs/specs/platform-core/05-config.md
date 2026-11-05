@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.13.5 -->
+<!-- version: 1.13.6 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -1212,9 +1212,10 @@ the override, and for any row the key does not decrypt (a regenerated key, a cor
 quarantined and M2 writes an *unreadable* marker under the secret's name (§2.3), so `Meta.Err` is
 `ErrKeyUnavailable` or `ErrCorrupt`, Settings shows "must be re-entered" and health raises `secrets_undecryptable`
 until the secret is set again (14 E4). M2 leaves the key file untouched: the rollback restore reads it. R3 deletes it,
-at the path §2.4's state-file table resolves, through books' crash-labelled boot step `legacy-file-cleanup`
-(03 §3.8, 09; 06 §6.5.1's writer table labels it), which also deletes `library.bleve` and refuses while
-`secrets_keyring_not_exported` is raised, never as an untracked write.
+at the path §2.4's state-file table resolves, through books' crash-labelled start hook `legacy-file-cleanup`
+(03 §3.8, 09; 06 §6.5.1's writer table labels it), which also deletes `library.bleve`. While
+`secrets_keyring_not_exported` is raised the hook still deletes `library.bleve` and skips only `.encryption_key`
+(05-storage §5S.3.8 owns this behaviour), and retries the key at the next boot; neither deletion is ever an untracked write.
 
 **Operator values at the cutover.** M2 migrates stored values only. A retired HEAD name of a protected or secret key
 has already refused the boot at step 2 or 3 of §1.4, before storage opened, so M2 never runs under a unit that
@@ -1889,7 +1890,16 @@ var (
      HEAD's own key file is M2's concern, not `Open`'s (§1.12.2);
    - `Options.ResetBoot` → the keyring header's `install_id` is rewritten to the fresh store's
      `c/storage/install` marker (the reset boot of a factory reset, §1.4; the kernel marks the `KindReset` journal
-     `applied` only after this, DATA7-17); otherwise the header's `install_id` is only written when absent (below).
+     `applied` only after this, DATA7-17); otherwise the header's `install_id` is only written when absent (below);
+   - **a dry-run or rehearsal copy never touches the state directory's keyring.** `storage migrate --dry-run` and a
+     `--into` rehearsal copy (05-storage §5S.3.6, §5S.3.12) run M2 on a copy of the store, and M2 seals with a
+     **throwaway keyring**: the kernel gives `Open` a `KeyFile` inside the copy's scratch directory (under
+     `c/storage/scratch/`, mode 0700, the file 0600), `Open` creates it there as in the "keyring absent, no stored
+     records" case, and it is deleted with the scratch directory on completion (an orphan scratch directory, and the
+     throwaway keyring in it, is deleted by 05-storage's checkpoint sweeper 7 days after its mtime). The state
+     directory's `secrets.keyring`, its `install_id` and the `secrets.keyring.exported` record are neither read nor written, so a
+     dry run cannot create the production keyring before the first real R2 boot (the first-run row above and §1.12.2's
+     keyring-export timing stay true).
 2. `config.Load` registered `Ephemeral` values for secret keys supplied by env or file.
 3. Runtime: `Get` decrypts on demand (no plaintext cache beyond the call; callers hold `Value` briefly).
    `Put`/`Stage`/`Delete` encrypt with the active data key. No background goroutine and no timer.
@@ -2400,3 +2410,5 @@ corpus's labelled hand-built overlay; the pre-freeze release as the rollback bin
 `.encryption_key` through the crash-labelled `legacy-file-cleanup` step (03 and 09's name; it refuses while
 `secrets_keyring_not_exported` is raised); the overlay's identity cases cited to the cutover preflight (09 §9.2.3); the checkpoint's deletion 7 days after
 it stops being needed.
+
+Round 14 (2026-11-05): V5 (§2.4 lifecycle: the dry run's and the `--into` rehearsal's M2 seals with a throwaway keyring inside the scratch directory and never reads or writes the state directory's keyring), V16 (§1.12.2: while `secrets_keyring_not_exported` is raised, the `legacy-file-cleanup` start hook deletes `library.bleve` and skips only `.encryption_key`, as 05-storage §5S.3.8; named a start hook), V23 (checked: no bare round-13 ruling citation in this file).
