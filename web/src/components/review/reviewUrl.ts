@@ -1,5 +1,5 @@
 // file: web/src/components/review/reviewUrl.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e1a7c93-b205-4d68-9f3e-a8d02c6b5174
 // last-edited: 2026-11-05
 //
@@ -57,6 +57,8 @@ export interface ReviewUrlState {
   layer: DedupLayer | null;
   compare: number | null;
   compareTab: number;
+  /** `?group=series`: the Clusters view's By-series list. */
+  bySeries: boolean;
   authorsView: AuthorsSubView;
   /** The raw `?author=` (the lane parses it). */
   authorId: string | null;
@@ -78,6 +80,7 @@ export function readReviewUrl(params: URLSearchParams): ReviewUrlState {
     layer: lane === 'dupes' ? parseDedupLayer(params.get('layer')) : null,
     compare: lane === 'dupes' ? parseUrlId(params.get('compare')) : null,
     compareTab: lane === 'dupes' ? compareTabFromSlug(params.get('ctab')) : 0,
+    bySeries: lane === 'dupes' && params.get('group') === 'series',
     authorsView: lane === 'authors' ? parseAuthorsSubView(view) : 'authors',
     authorId: lane === 'authors' ? params.get('author') : null,
     repairs:

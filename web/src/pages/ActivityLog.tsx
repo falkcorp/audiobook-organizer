@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.40.0
+// version: 2.41.0
 // guid:b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-11-05
 import React, { useCallback, useEffect, useRef, useState } from 'react';

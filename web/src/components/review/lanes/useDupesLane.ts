@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.19.0
+// version: 1.20.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
 // last-edited: 2026-11-05
 
@@ -207,8 +207,11 @@ export interface DupesUrlFilters {
   entityId: string | null;
   /**
    * A SEED, unlike the two above: read once, on the hook's first render, to
-   * start the layer filter. It is never mirrored -- a later change to this value
-   * is ignored and the layer chips never write it back to the URL.
+   * start the layer filter. After that the layer is this hook's own state, so a
+   * later change to this value is ignored here. The workspace carries it the rest
+   * of the way: it mirrors the layer into `?layer=` (the chips write the URL
+   * through that mirror) and applies a `?layer=` change that arrives later with
+   * `setFilters({ layer })`.
    */
   layer?: DedupLayer | null;
   /**
@@ -219,6 +222,12 @@ export interface DupesUrlFilters {
   compare?: number | null;
   /** `?ctab=`: the drawer tab to open on, as an index. Seeds with `compare`. */
   compareTab?: number | null;
+  /**
+   * `?group=series`: a SEED for the Clusters view's By-series toggle, read on the
+   * first render. The workspace mirrors the toggle to the URL while the Clusters
+   * view is showing and applies a later URL change with `setBySeries`.
+   */
+  bySeries?: boolean;
 }
 
 const NO_URL_FILTERS: DupesUrlFilters = { band: null, entityId: null, layer: null };
@@ -391,8 +400,9 @@ export function useDupesLane(
   const [stats, setStats] = useState<DedupStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // `layer` is seeded from the URL here, once, and never mirrored: the lazy
-  // initialiser runs on the first render only.
+  // `layer` is seeded from the URL here, once (the lazy initialiser runs on the
+  // first render only). It is hook state from then on; ReviewWorkspace mirrors it
+  // into `?layer=` and applies a later URL change through `setFilters`.
   const [localFilters, setFiltersState] = useState<LocalDupesFilters>(() => ({
     ...INITIAL_FILTERS,
     layer: urlFilters.layer ?? null,
@@ -598,9 +608,10 @@ export function useDupesLane(
 
   const refresh = useCallback(() => setReloadToken((t) => t + 1), []);
 
-  // The Clusters view's By-series toggle is view state, not a filter: it picks
-  // between two lists and is never mirrored to the URL.
-  const [bySeries, setBySeries] = useState(false);
+  // The Clusters view's By-series toggle picks between two lists. It is seeded
+  // from `?group=series` and mirrored back by ReviewWorkspace (only while the
+  // Clusters view is the one showing, since it means nothing elsewhere).
+  const [bySeries, setBySeries] = useState(() => urlFilters.bySeries ?? false);
   const series = useSeriesSummary(active && clusterView && bySeries, reloadToken, toast, refresh);
 
   // -------------------------------------------------------------------------

@@ -1,10 +1,10 @@
 // file: web/src/App.deeplinks.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: d2b84e61-3a07-4c5f-9e18-7f0a5c3b1d26
 // last-edited: 2026-11-05
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { ThemeProvider } from '@mui/material';
@@ -97,5 +97,24 @@ describe('/settings tabs', () => {
     expect(screen.getByTestId('loc').textContent).toBe('/settings?tab=temp-login');
     await user.click(screen.getByRole('tab', { name: 'Library' }));
     expect(screen.getByTestId('loc').textContent).toBe('/settings');
+  });
+});
+
+describe('legacy paths', () => {
+  it('/operations keeps the query string, so ?op= still names the operation', async () => {
+    renderAt('/operations?op=op-123');
+    await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/activity?op=op-123'));
+  });
+
+  it('/operations with no query lands on a bare /activity', async () => {
+    renderAt('/operations');
+    await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/activity'));
+  });
+
+  it('/maintenance lands on the Maintenance tab', async () => {
+    renderAt('/maintenance');
+    expect(await screen.findByTestId('maintenance-tab-body')).toBeInTheDocument();
+    expect(screen.getByTestId('loc').textContent).toBe('/system?tab=maintenance');
+    expect(screen.getByRole('tab', { name: 'Maintenance' })).toHaveAttribute('aria-selected', 'true');
   });
 });

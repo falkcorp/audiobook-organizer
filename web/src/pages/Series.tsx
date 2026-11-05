@@ -1,5 +1,5 @@
 // file: web/src/pages/Series.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
 // last-edited: 2026-11-05
 

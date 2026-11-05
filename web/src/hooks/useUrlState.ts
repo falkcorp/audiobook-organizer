@@ -1,5 +1,5 @@
 // file: web/src/hooks/useUrlState.ts
-// version: 2.0.0
+// version: 2.0.1
 // guid: 3f6c1a52-7d94-4e08-b5a1-9c20e8d4f713
 // last-edited: 2026-11-05
 //
@@ -334,7 +334,12 @@ export function useUrlStateSync(
     seen.current = search;
     const verdict = observe(store, search);
     if (verdict === 'echo') return;
+    // The nonce is the point: a reconciling mirror pass has to run in a LATER
+    // render than the one that saw this URL, after the page's own state setters
+    // have been applied, and it must run even if no state changed. A synchronous
+    // setState in this effect is the only way to schedule that render.
     if (verdict === 'foreign') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setReconcile((n) => n + 1);
       return;
     }

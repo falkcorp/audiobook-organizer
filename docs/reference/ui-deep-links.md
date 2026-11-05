@@ -1,5 +1,5 @@
 <!-- file: docs/reference/ui-deep-links.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 2.1.0 -->
 <!-- guid: B610EF08-9346-47FD-AAA3-C65958E0127C -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -10,11 +10,12 @@ always shows it, and pasting that URL lands on the same place.**
 
 State stays the source of truth inside each page. The shared hook
 `web/src/hooks/useUrlState.ts` mirrors it into the query string with
-`setSearchParams(next, { replace: true })`, keeps keys it does not own, and
-omits values equal to their default (so `/system` and `/system?tab=info` are the
-same place and the bare one is what you see). A URL change that the page did
-not write (a link click on the same route, browser back/forward, an edited
-address) re-seeds the page state from the URL.
+`setSearchParams(next, { replace: true })` and omits values equal to their
+default (so `/system` and `/system?tab=info` are the same place and the bare one
+is what you see). A URL change that the page did not write (a link click on the
+same route, an edited address) re-seeds the page state from the URL, and then
+the hook runs one more mirror pass so that anything the page did not take up is
+corrected in the address bar (see "Behaviour that is easy to get wrong").
 
 The table below is the inventory: every route in `web/src/App.tsx`, the state
 on it that changes what is shown, the query parameter that carries it, and its
@@ -33,57 +34,89 @@ the address, and `page` is always 1-based in a URL.
 | `/library` | preset filters, now written back so another control does not drop them | `has_file_errors fingerprint_status coverage_percent_min coverage_percent_max missing_covers in_import_path no_isbn duplicates_flagged` | done |
 | `/fingerprints` | its own route (Library with the fingerprints preset) | same as `/library` | existing |
 | `/library/:id` | Info / Files & History tab | `tab=info\|files` | existing |
-| `/library/:id` | metadata history dialog, retired-files list, snapshot compare | `history=1`, `retired=1`, `compare=<timestamp>` | done |
+| `/library/:id` | metadata history dialog, retired-files list (fetched only on the Files & History tab), snapshot compare (an RFC 3339 timestamp; anything else is removed) | `history=1`, `retired=1`, `compare=<timestamp>` | done |
 | `/works` | table sort | `sort=<title\|id\|author_id\|series_id\|alt_titles>`, `order=desc` (title ascending omitted) | done |
 | `/system` | System Info / Storage / Quota / Maintenance tab | `tab=info\|storage\|quota\|maintenance` (info omitted) | done |
 | `/settings` | 12 tabs | `tab=library\|itunes\|metadata\|dedup\|paths\|performance\|security\|api-keys\|plugins\|tools\|system\|temp-login` (library omitted; legacy `#slug` still read) | done |
-| `/files` | directory on screen (written on every directory) | `path` (root omitted) | done |
+| `/files` | directory on screen (written on every directory; an outside change of `path` moves the browser) | `path` (root omitted) | done |
 | `/series` | search, with-books/empty/all filter, sort, page, page size | `q filter sort order page size` | done |
 | `/authors` | search, with-books/zero-books/all filter, sort, page, page size | `q filter sort order page size` | done |
 | `/authors/:id` | route param | `:id` | existing |
 | `/diagnostics` | selected category card | `category=errors\|dedup\|metadata\|general` (any id the page lists) | done |
-| `/activity` | expanded operation (opens on the page that holds it), feed filters, page | `op q tiers type level operation since until hide_noop tag page size` | done |
+| `/activity` | expanded operation (opens on the page that holds it), feed filters, page | `op q tiers type level operation since until hide_noop tag page size`; `size` is one of 25, 50, 100, 250; `type` and `level` must be known values; `tiers` is a list of the known tiers | done |
+| `/operations` | redirect to `/activity`, keeping the query string (`?op=` survives) | | existing (query kept: done) |
+| `/maintenance` | redirect to `/system?tab=maintenance` | | existing (target tab: done) |
 | `/playlists` | All / Static / Smart tab | `tab=static\|smart` (all omitted) | done |
 | `/playlists/:id` | route param | `:id` | existing |
 | `/collections` | All / Static / Dynamic tab | `tab=static\|dynamic` (all omitted) | done |
-| `/collections/:id` | page of members | `page` | done |
+| `/collections/:id` | page of members (a page past the end is clamped, and the clamped page is written back) | `page` | done |
 | `/versions` | Trash / Purged / Swaps tab, trash-run filter | `tab=trash\|purged\|swaps` (trash omitted; a `set` link implies its tab), `op`, `set` | done (`op`, `set` existing) |
 | `/users` | user whose sign-ins-and-data panel is open | `footprint=<userId>` | done |
 | `/review` | lane, spine view mode | `lane=metadata\|dupes\|authors\|regroup\|repairs` (metadata omitted), `mode=two-column\|candidates` (compact omitted) | done |
-| `/review` dupes | sub-view, layer, band, one-book filter | `view=labels\|suspicious`, `layer=exact\|acoustid\|embedding\|book_signature\|metadata_hash_match\|llm\|manual`, `band`, `book` | done (`band`, `book` existing) |
+| `/review` dupes | sub-view, layer, band, one-book filter | `view=labels\|suspicious`, `layer=exact\|acoustid\|embedding\|book_signature\|metadata_hash_match\|llm\|manual`, `band=high\|medium\|low` (the dedup band values; others are removed), `book` | done (`band`, `book` existing) |
+| `/review` dupes (Clusters view, `mode=candidates`) | By-series toggle | `group=series` | done |
 | `/review` dupes | pair compare drawer and its tab | `compare=<candidateId>` `ctab=files\|breakdown\|metadata\|fingerprint` | done |
 | `/review` authors | sub-view, focused author | `view=series\|ai`, `author=<id>` | done |
-| `/review` repairs | fixer, trial-row filter, row class | `fixer=<id>`, `filter=applicable\|skipped\|owner_applicable\|skipped:<kind>\|flag:<name>`, `class` | done |
+| `/review` repairs | fixer, trial-row filter, row class | `fixer=<id>`, `filter=applicable\|skipped\|owner_applicable\|skipped:<kind>\|flag:<name>` (the suffix is a short token of letters, digits, `_`, `.`, `-`), `class` (same token rule) | done |
 | `/dedup`, `/dedup/labels`, `/books/dedup`, `/authors/dedup` | redirects to `/review` | keeps `book`, `band` | existing |
 | `/config`, `/config/api-keys`, `/audiobookshelf*` | redirects (Audiobookshelf URLs) | | existing |
 | `/setup`, `/login`, `/invite/:token` | pre-auth, no navigable state | | n/a |
 
-Count: 31 rows: 21 done, 7 existing, 3 n/a. A row that gained a parameter
-next to an existing one is counted under `done`.
+Count: 34 rows: 22 done, 9 existing, 3 n/a. A row that gained a parameter
+next to an existing one is counted under `done`; the two legacy redirects
+(`/operations`, `/maintenance`) are counted under `existing`.
 
 ## Behaviour that is easy to get wrong
 
-- **Writes replace, they do not push.** Every page writes with
-  `setSearchParams(next, { replace: true })`, so clicking through tabs does not
-  fill the history and Back still leaves the page. A link to another view on the
-  same route, or the browser's Back and Forward, re-seeds the page state.
+- **Writes replace, they do not push, except the Library's page change.** Every
+  page writes with `setSearchParams(next, { replace: true })`, so clicking through
+  tabs does not fill the history and Back still leaves the page. The one
+  exception is `/library`: changing its page pushes an entry (older behaviour,
+  kept on purpose) so Back walks the pages; every other Library change replaces.
+  Nothing else gives you back/forward moves between in-page views. A link to
+  another view on the same route re-seeds the page state.
 - **Keys a page does not own are kept.** `?book=` on `/review` survives a lane
-  change, `?keep=1` survives a tab click.
-- **The Review workspace never writes `band` or `book`.** Those belong to the
-  dupes lane's own filters and are read live from the URL.
+  change, `?keep=1` survives a tab click, and an unknown key (`?utm_source=`) on
+  `/library` survives a filter edit: the Library rebuilds its query from state
+  but copies every key outside the list in `web/src/pages/libraryUrl.ts`
+  (`?reset=1` is consumed, not copied).
+- **The address bar and the screen cannot disagree.** After a URL change that
+  the page did not write, the hook runs one reconciling mirror pass. A link the
+  page only partly takes up (a bare `/review` while on Repairs, an unknown
+  `?fixer=`, a `?book=` that was cleared) is rewritten to the state the screen is
+  actually in. An unknown value of a validated parameter (`band`, `compare`,
+  `size`, `type`, `level`, `tiers`, `class`) is removed or falls back to the
+  default. The one thing it leaves alone is a bad value that was already in the
+  URL when the page first mounted and that the page never consumes: the mount
+  pass does not write, so an unused seed is not erased.
+- **Writes are coalesced and safe.** A write is based on the latest value
+  written, not on the last rendered query, so two writes in one event merge
+  instead of one reverting the other. The mirror writes at most about twice a
+  second (a leading and a trailing write) so holding `j` on the authors lane does
+  not call `history.replaceState` once per key repeat, which browsers rate-limit
+  with a `SecurityError`. The write is wrapped, so a throw is logged as
+  `Could not update the address bar` and the page keeps working.
+- **Typed searches are mirrored once settled.** Activity, Series and Authors put
+  the debounced search in the URL, not every keystroke, and an outside change of
+  the search takes effect at once. Series and Authors also hold the page while a
+  URL that changes the search and the page together waits for the debounced
+  search to settle, so a link with both fetches once and lands on the page it
+  names.
+- **The Review workspace never writes `band` or `book` itself.** Those belong to
+  the dupes lane's own filters and are read live from the URL; the panel writes
+  them through the shared writer in `useUrlState.ts`.
 - **Activity `since`.** Omitted for the default window; `since=all` means all
-  history, because an empty value cannot be told from an absent one.
-  `hide_noop=0` means no-op entries are shown (hiding them is the default).
+  history, because an empty value cannot be told from an absent one. Any other
+  value that is not a date falls back to the default window. `hide_noop=0` means
+  no-op entries are shown (hiding them is the default). Clearing the filters
+  restores the real default tier set, which includes `info`.
 - **A stale `?op=`.** An operation outside the window in the link has no row to
   host its log panel, so the link opens the page with no panel and auto-refresh
   stays paused (the page already pauses it while a panel is open).
 - **Library tags are repeated** (`?tag=a&tag=b`), read with `getAll`. The
-  Library writes its whole query string from state, so a parameter it did not
-  write is dropped on the next click: that is why the preset filters had to be
-  added to the writer.
-- **Series and Authors** hold the page while a URL that changes the search and
-  the page together waits for the debounced search to settle, so a link with
-  both fetches once and lands on the page it names.
+  Library writes its whole query string from state, so a parameter it owns but
+  did not write would be dropped on the next click: that is why the preset
+  filters had to be added to the writer.
 
 ## Not linked on purpose
 
@@ -95,31 +128,6 @@ footgun. Also left out:
 - Excluded sources on Activity (a stored preference, not a place), the
   per-section pages of an expanded operation, and the mobile filter drawer.
 - Repairs row `offset` and page size.
+- The Duplicates lane's other Clusters controls (the expanded cluster, selection).
 - Column visibility and widths on every table (stored per browser).
 - Pre-auth pages and the dashboard cards.
-
-## Split points
-
-The work is stacked as commits, one per page group, so each can be its own PR.
-Each commit from the tab pages onward carries its own headerless fragment in
-`changelog.d/`. The first PR is the inventory, the hook and the tab pages: the
-hook is unused on its own, so it travels with its first users. Subjects are the
-stable handle; the short SHAs are from the stack as pushed and change on any
-rebase.
-
-1. `3a2f28111` docs(ui): inventory
-2. `1ac16b0d1` feat(web): useUrlState hooks
-3. `771140ae3` System, Settings, Playlists, Collections, Versions, Diagnostics, Files (fragment `2026-11-05_deep_links_url_state.md`; PR 1 is commits 1 to 3)
-4. `59a3ae964` Review workspace
-5. `0207e03ae` Activity
-6. `0fe8bc878` Series and Authors
-7. `03d7e2b6d` Library preset filters and tags
-8. `1682f8047` Users
-9. `8cde7b1b9` Book detail
-10. `c748dad25` Collection members page
-11. `8fe304c32` Works sort
-
-Commits 4 to 10 depend only on commit 2 and are independent of one another,
-with two notes: commit 8 also reformats `useUrlState.ts` (prettier only), and
-commit 11 uses `setSort` on `useConfigurableTable`, which commit 6 adds, so it
-follows commit 6.
