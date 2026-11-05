@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.13.5 -->
+<!-- version: 1.13.6 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -1770,8 +1770,8 @@ the books backend (D10): F7 for release-holds and the poll, F8 for the export. T
 the poll's clock and the schedule key never change, so no second rename exists; `TestKindRenameMapCoversLedger`
 runs against the F5 build, where the three kinds are registered.
 
-The F5 registration **is** the final spec: each row below is copied from the owner's definition (05-metadata M2,
-05-ai §3, 05-health §5H.3.5), and the owner's flip changes only the `Run` body behind it. Each interim interface's
+The F5 registration **is** the final spec: each row below is copied from the owner's definition (05-metadata M2.4,
+05-ai §4, 05-health §5H.3.5), and the owner's flip changes only the `Run` body behind it. Each interim interface's
 one method has exactly the kind's `TaskSpec.Run` signature over the kind's final params and result types, which the
 owner package declares with the minimal registration at F2, so the interim registration's `Run` is the backend's
 method value and the native body later replaces it with the same types:
@@ -2416,4 +2416,4 @@ imports the Fixer rows and marks by family name; from F2 to F5 ABO's App creates
 for the byte-identity test; the fixture corpus gains its hand-built overlay; rollback names the pre-freeze
 release.
 
-Round 16 (2026-11-05): plan-gap fixes G1 (5T.4 step 1 and the Core group row: `Registrar.Tasks`, `hello.count` and coretest's task cells land at F2; the kernel starts the executor, scheduler and `taskhttp` only when an enabled module registered a kind, so ABO starts nothing before its first call at F5), G2 (5T.8.2: the three interim interfaces' one-method signatures and the three kinds' full `TaskSpec` fields, copied from 05-metadata, 05-ai and 05-health), G3 (new 5T.8.4: `tasklint`'s rules over core's model, `unregistered-kind`, `store-capture`, `unregistered-bundle` dropped; where it runs; the `writer-bypass`/`store-capture` exemption ratchet emptied by F5), G4 (rename map rule 4 and the scheduler-name rule: `books.library.scan-full` with its own schedule and clock; `TestCutover_TasksFixtureFromR0` cell), G6 (core-kinds table: the storage kinds live in `core/internal/storagetasks`), G10 (5T.8.1 and the F5 row: `pkg/plugin/sdk` callers move at F5, the package is deleted in R3), G12 (5T.8.2 conversion rules 1–4: `Effects` from an empty `Writes`, one body behind two shells, HEAD bodies until the flip, the schedule-lookup hook), G15 (`core.window.nightly` has one owner, `core/tasks`, declared at F2; members only schedule into it).
+Round 16 (2026-11-05): plan-gap fixes G1 (5T.4 step 1 and the Core group row: `Registrar.Tasks`, `hello.count` and coretest's task cells land at F2; the kernel starts the executor, scheduler and `taskhttp` only when an enabled module registered a kind, so ABO starts nothing before its first call at F5), G2 (5T.8.2: the three interim interfaces' one-method signatures and the three kinds' full `TaskSpec` fields, copied from 05-metadata M2.4, 05-ai §4 and 05-health §5H.3.5), G3 (new 5T.8.4: `tasklint`'s rules over core's model, `unregistered-kind`, `store-capture`, `unregistered-bundle` dropped; where it runs; the `writer-bypass`/`store-capture` exemption ratchet emptied by F5), G4 (rename map rule 4 and the scheduler-name rule: `books.library.scan-full` with its own schedule and clock; `TestCutover_TasksFixtureFromR0` cell), G6 (core-kinds table: the storage kinds live in `core/internal/storagetasks`), G10 (5T.8.1 and the F5 row: `pkg/plugin/sdk` callers move at F5, the package is deleted in R3), G12 (5T.8.2 conversion rules 1–4: `Effects` from an empty `Writes`, one body behind two shells, HEAD bodies until the flip, the schedule-lookup hook), G15 (`core.window.nightly` has one owner, `core/tasks`, declared at F2; members only schedule into it).
