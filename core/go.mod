@@ -1,7 +1,7 @@
 // file: core/go.mod
-// version: 1.0.0
+// version: 1.0.1
 // guid: 423dec24-3ee4-45a5-a8ca-af9d6bc2b133
-// last-edited: 2026-11-05
+// last-edited: 2026-11-06
 
 module github.com/falkcorp/mediacore
 
@@ -19,3 +19,5 @@ exclude google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1
 ignore ./web
 
 ignore ./examples/hello/web
+
+require github.com/google/jsonschema-go v0.4.3
