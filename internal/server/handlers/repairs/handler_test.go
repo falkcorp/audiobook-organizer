@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler_test.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: 8e3f6b21-7c94-4a0d-9b52-2d1a8e5c7f36
 // last-edited: 2026-11-05
 
@@ -620,15 +620,17 @@ func TestListPlanRows_Errors(t *testing.T) {
 	}
 }
 
-// A fixer the server no longer registers (the owner retired three on
-// 2026-11-05) is refused cleanly on every route, with its stored settings and
-// operations left alone: 404, no operation enqueued, no panic.
-func TestRetiredFixerIDsAreRefusedCleanly(t *testing.T) {
+// An id the server does not register is a 404 on every route, with no
+// operation enqueued and no panic. The three fixers the owner retired on
+// 2026-11-05 are such ids now (nothing here special-cases them), so they are
+// the examples, with one id that never existed beside them.
+func TestUnregisteredFixerIDsAre404OnEveryRoute(t *testing.T) {
 	r, enq, _ := setup(t)
 	for _, id := range []string{
 		"maintenance.normalize-letter-l-ordinals",
 		"maintenance.relink-stale-series",
 		"dedup.split-books",
+		"never-existed",
 	} {
 		base := "/api/v1/repairs/" + id
 		require.Equal(t, http.StatusNotFound, do(r, http.MethodPost, base+"/plan", "").Code, id)
@@ -643,7 +645,7 @@ func TestRetiredFixerIDsAreRefusedCleanly(t *testing.T) {
 			require.NotEqual(t, id, f.ID)
 		}
 	}
-	require.Empty(t, enq.calls, "a retired id never enqueues an operation")
+	require.Empty(t, enq.calls, "an unregistered id never enqueues an operation")
 }
 
 func TestStartApply(t *testing.T) {

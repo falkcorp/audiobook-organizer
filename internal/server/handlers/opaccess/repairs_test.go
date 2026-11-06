@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opaccess/repairs_test.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 7e3a9d15-48bc-4f02-b6a1-0d9c5f8e2b74
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 package opaccess
 
@@ -116,6 +116,48 @@ func TestReader_MayRead(t *testing.T) {
 		got := NewRepairs(reg, noOps, holdsOnly(tc.held...)).For(c).MayRead(tc.row)
 		require.Equal(t, tc.want, got, name)
 	}
+}
+
+// A fixer the owner retired (2026-11-05) is no longer registered, but the
+// operations it ran stay in the history. They keep the scope the fixer had
+// (library.edit_metadata), so an editor can still read and revert them; an id
+// that was never listed stays fail-closed (admin only), as before.
+func TestReader_RetiredFixersKeepTheirScope(t *testing.T) {
+	reg := fixers{"plain": scopedFixer{}} // none of the retired ids is registered
+	view := []auth.Permission{auth.PermLibraryView}
+	edit := []auth.Permission{auth.PermLibraryView, auth.PermLibraryEditMetadata}
+	for _, id := range []string{
+		"maintenance.normalize-letter-l-ordinals",
+		"maintenance.relink-stale-series",
+		"dedup.split-books",
+	} {
+		ops := &opRows{rows: map[string]*database.OperationV2Row{
+			"op-apply": {ID: "op-apply", DefID: repairs.ApplyOpID, Params: `{"fixer_id":"` + id + `"}`},
+		}}
+		apply := &database.OperationV2Row{ID: "op-apply", DefID: repairs.ApplyOpID, Params: `{"fixer_id":"` + id + `"}`}
+		meta := &database.OperationChange{ChangeType: "metadata_update", Source: id}
+		move := &database.OperationChange{ChangeType: undo.ChangeTypeBookFileMove, Source: id}
+		unstamped := &database.OperationChange{ChangeType: "metadata_update", OperationID: "op-apply"}
+
+		c, _ := ctxHolding()
+		editor := NewRepairs(reg, ops, holdsOnly(edit...)).For(c)
+		require.True(t, editor.MayRead(apply), "%s: an editor reads its past apply", id)
+		// A row stamped with an unregistered Source is not scoped to a fixer
+		// (MayUndoChange), so it was readable before and still is.
+		require.True(t, editor.MayReadChange(meta), "%s: an editor reads its history rows", id)
+		require.True(t, editor.MayReadChange(unstamped), "%s: an unstamped row is read through its op", id)
+		require.True(t, editor.MayUndoChange(move), "%s: an editor reverts its file move", id)
+
+		c, _ = ctxHolding()
+		viewer := NewRepairs(reg, ops, holdsOnly(view...)).For(c)
+		require.False(t, viewer.MayRead(apply), "%s: a viewer still may not", id)
+		require.False(t, viewer.MayReadChange(unstamped), "%s: a viewer still may not read an unstamped row through its op", id)
+	}
+
+	c, _ := ctxHolding()
+	require.False(t, NewRepairs(reg, noOps, holdsOnly(edit...)).For(c).MayRead(
+		&database.OperationV2Row{ID: "op", DefID: repairs.ApplyOpID, Params: `{"fixer_id":"maintenance.never-listed"}`}),
+		"an unlisted unregistered id stays admin-only")
 }
 
 // A check the server did not wire, or one with no fixer registry, refuses every

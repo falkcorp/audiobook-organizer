@@ -353,7 +353,7 @@ function FixerRail({ repairs, width }: RepairsPanelProps & { width: number }) {
                   data-testid={`repairs-group-${f.group}`}
                   sx={{ lineHeight: '32px', fontWeight: 600, borderBottom: 1, borderColor: 'divider' }}
                 >
-                  {f.group_title ?? f.group}
+                  {f.group_title || f.group}
                 </ListSubheader>
               )}
               <ListItemButton

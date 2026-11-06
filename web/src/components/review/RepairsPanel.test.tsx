@@ -1892,6 +1892,23 @@ describe('RepairsPanel — groups, summaries and API-only fixers', () => {
     expect(await screen.findByTestId('repairs-row-g1')).toBeInTheDocument();
     expect(screen.queryByTestId('repairs-no-trial')).toBeNull();
   });
+
+  it('still offers Apply for an API-only fixer\'s existing plan, and applies the checked row', async () => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([{ ...LIST[4], last_plan: PLAN }]);
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-g2');
+    // API-only blocks starting a trial, not applying the plan it already has.
+    expect(screen.getAllByTestId('repairs-badge-api-only-bb-joker-import').length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('checkbox', { name: 'Select Title g2' }));
+    const apply = screen.getByTestId('repairs-apply-selected');
+    expect(apply).toBeEnabled();
+    expect(screen.getByTestId('repairs-apply-all')).toBeEnabled();
+
+    await user.click(apply);
+    await waitFor(() => expect(api.startRepairApply).toHaveBeenCalledTimes(1));
+    expect(api.startRepairApply).toHaveBeenCalledWith('bb-joker-import', 'plan-gotham', ['g2']);
+  });
 });
 
 describe('RepairsPanel — a link to a retired fixer', () => {

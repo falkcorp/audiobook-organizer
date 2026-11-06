@@ -1,5 +1,5 @@
 // file: internal/repairs/fixer.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 3e8b1c52-7a4d-4f19-9c06-5d2e8a7f1b34
 // last-edited: 2026-11-05
 
@@ -235,4 +235,27 @@ func RequiredPermissions(f Fixer) []auth.Permission {
 		}
 	}
 	return []auth.Permission{DefaultPermission}
+}
+
+// retiredFixerIDs are fixers this build no longer registers because the owner
+// retired them (2026-11-05: their trials found nothing to fix, or another
+// fixer covers them). None was PermissionScoped, so each was gated by
+// DefaultPermission. Operations they ran stay in the history, and a viewer who
+// could read or revert those runs before the retirement still can: see
+// RetiredFixerPermissions.
+var retiredFixerIDs = map[string]struct{}{
+	"maintenance.normalize-letter-l-ordinals": {},
+	"maintenance.relink-stale-series":         {},
+	"dedup.split-books":                       {},
+}
+
+// RetiredFixerPermissions is the permission set that gated a fixer the build
+// retired, for reading or reverting the operations it left behind. ok is false
+// for any other id: an id that was never registered, or was removed without
+// being listed here, keeps the fail-closed scope of an unknown fixer.
+func RetiredFixerPermissions(id string) (perms []auth.Permission, ok bool) {
+	if _, retired := retiredFixerIDs[id]; !retired {
+		return nil, false
+	}
+	return []auth.Permission{DefaultPermission}, true
 }

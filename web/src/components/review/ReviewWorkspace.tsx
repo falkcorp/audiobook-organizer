@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.33.0
+// version: 1.33.1
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-11-05
 //
@@ -452,6 +452,13 @@ export function ReviewWorkspace() {
 
   const aiScansOpen = lane === 'authors' && authors.view === 'ai';
 
+  // The reconcile scan's matches are reviewed under this fixer, whose title the
+  // server sends. Naming it from the served list (not a copy here) means a
+  // rename cannot leave the palette pointing at a title that is gone. The list
+  // loads when the Repairs lane is first opened; until then the text names the
+  // lane only.
+  const missingFilesFixerTitle = repairs.fixers.find((f) => f.id === 'reconcile.missing-files')?.title;
+
   const menus: CommandMenu[] = useMemo(
     () => [
       {
@@ -571,7 +578,8 @@ export function ReviewWorkspace() {
                 label: 'Match missing files',
                 scope: 'library',
                 description:
-                  'Looks for books whose files have gone missing and matches them to untracked files on disk. Review the matches in Repairs, under Missing files.',
+                  'Looks for books whose files have gone missing and matches them to untracked files on disk. Review the matches in Repairs' +
+                  (missingFilesFixerTitle ? `, under "${missingFilesFixerTitle}".` : '.'),
                 run: startJob('Reconcile scan', api.startReconcileScan),
               },
               {
@@ -857,6 +865,7 @@ export function ReviewWorkspace() {
       lane,
       dupesExportDisabledReason,
       exportDupes,
+      missingFilesFixerTitle,
     ]
   );
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opaccess/repairs.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 5d0e8a47-2b9c-4f63-a1d5-7c4e9b3f2a86
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 // Package opaccess holds the read-access checks the generic operations routes
 // apply to operations whose data is scoped to something narrower than
@@ -577,10 +577,12 @@ func (r *Reader) wired() bool {
 
 // fixerPermitted reports whether the caller holds every permission fixer id
 // requires, asking once per fixer per request. An id this build does not
-// register (a fixer removed or renamed since it ran, or "" for a user-data
-// row that names none) has an unknown scope, so it needs every permission
-// there is (auth.All(), the admin role's set): nothing a fixer could name,
-// such as master-list-import's users.manage, is left out.
+// register and that is not a listed retired fixer (a fixer removed or renamed
+// since it ran, or "" for a user-data row that names none) has an unknown
+// scope, so it needs every permission there is (auth.All(), the admin role's
+// set): nothing a fixer could name, such as master-list-import's users.manage,
+// is left out. A listed retired fixer (repairs.RetiredFixerPermissions) keeps
+// the scope it had, so history and reverts of its runs behave as before.
 func (r *Reader) fixerPermitted(id string) bool {
 	if v, ok := r.verdict[id]; ok {
 		return v
@@ -588,6 +590,10 @@ func (r *Reader) fixerPermitted(id string) bool {
 	var perms []auth.Permission
 	if f, ok := r.a.fixers.Get(id); ok && id != "" {
 		perms = repairs.RequiredPermissions(f)
+	} else if retired, isRetired := repairs.RetiredFixerPermissions(id); isRetired {
+		// A fixer the owner retired: its past runs keep the scope the fixer
+		// had, so those who could read or revert them still can.
+		perms = retired
 	} else {
 		perms = auth.All()
 	}

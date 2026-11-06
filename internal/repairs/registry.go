@@ -1,5 +1,5 @@
 // file: internal/repairs/registry.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8d4f2a61-0b7c-4e93-a5d8-1c6e9f3b2a70
 // last-edited: 2026-11-05
 
@@ -53,7 +53,9 @@ func (r *Registry) Get(id string) (Fixer, bool) {
 
 // List returns every fixer in the lane's display order: by group (Groups), then
 // by Meta().Rank inside the group, then by id so two fixers that share a rank
-// still list the same way every time.
+// still list the same way every time. A group id that is not one of Groups
+// sorts after every real group, and unknown ids sort among themselves by the
+// group string, so each mistyped group stays one contiguous run.
 func (r *Registry) List() []Fixer {
 	if r == nil {
 		return nil
@@ -68,6 +70,10 @@ func (r *Registry) List() []Fixer {
 		mi, mj := out[i].Meta(), out[j].Meta()
 		if gi, gj := groupIndex(mi.Group), groupIndex(mj.Group); gi != gj {
 			return gi < gj
+		} else if gi == len(groups) && mi.Group != mj.Group {
+			// Both groups are unknown: keep each typo's fixers together,
+			// ordered by the group string, so two typos never interleave.
+			return mi.Group < mj.Group
 		}
 		if mi.Rank != mj.Rank {
 			return mi.Rank < mj.Rank
