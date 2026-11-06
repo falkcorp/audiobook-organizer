@@ -142,7 +142,8 @@
    "internal/server/middleware/basicauth.go",
    "internal/server/middleware/basicauth_empty_test.go",
    "internal/server/server_lifecycle.go",
-   "internal/server/basic_gate_health_token_test.go"
+   "internal/server/basic_gate_health_token_test.go",
+   "docs/agent-tasks/platform-core/seams.d/R0-05.md"
   ],
   "spec": "05-authn §11.1 item 5 (Recovery); 05-health §5H.3.1; 09 §9.4 R0 Content (1), Owner (P14); 09 §9.7 P14",
   "notes": "Tier: a fail-closed change that can lock an install out; the recovery path must be exact. The PR may be opened at once; it merges only after OWNER-01 has recorded P14. R0 release-note lines of 09 §9.4 R0. Owns gate tests: TestLegacyBasicGate_EmptyPasswordRefuses."

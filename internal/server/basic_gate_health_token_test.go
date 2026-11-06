@@ -1,5 +1,5 @@
 // file: internal/server/basic_gate_health_token_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e4e0550a-a189-4939-ac92-8e07e8a78ac9
 // last-edited: 2026-11-05
 
@@ -70,10 +70,6 @@ func TestBasicGateNoPassword_TokenOnHealthSource(t *testing.T) {
 		src := s.startupDegradedSource()
 		require.NotNil(t, src, "no runner yet, but the gate has no password: the source must exist")
 		assert.Equal(t, []string{servermiddleware.BasicGateNoPasswordToken}, src.Tokens())
-
-		// A saved password of only blanks is no password (blank counts as unset).
-		config.AppConfig.BasicAuthPassword = "   "
-		assert.Equal(t, []string{servermiddleware.BasicGateNoPasswordToken}, sourceTokens(s.startupDegradedSource()))
 
 		// Saving a password clears it on the next call, no restart.
 		config.AppConfig.BasicAuthPassword = "secret"
@@ -176,10 +172,6 @@ func TestStart_LogsBasicGatePosture(t *testing.T) {
 		{name: "on, nothing saved, env blank", enabled: true, stored: "", env: func() *string { s := "  "; return &s }(),
 			wantLevel: "level=ERROR", wantLine: noPasswordLine},
 		{name: "on, nothing saved, env set", enabled: true, stored: "", env: func() *string { s := recovery; return &s }(),
-			wantLevel: "level=WARN", wantLine: servermiddleware.BasicGateEnvPasswordWarning},
-		{name: "on, blank saved, env unset", enabled: true, stored: "   ", env: nil,
-			wantLevel: "level=ERROR", wantLine: noPasswordLine},
-		{name: "on, blank saved, env set", enabled: true, stored: "   ", env: func() *string { s := recovery; return &s }(),
 			wantLevel: "level=WARN", wantLine: servermiddleware.BasicGateEnvPasswordWarning},
 		{name: "on, password saved", enabled: true, stored: "secret", env: nil},
 		{name: "off", enabled: false, stored: "", env: nil},

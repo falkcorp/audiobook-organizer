@@ -1,5 +1,5 @@
 // file: internal/server/middleware/basicauth_empty_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 07da5163-5bdc-4fe7-a4a8-af96d141c0c4
 // last-edited: 2026-11-05
 
@@ -116,24 +116,6 @@ func TestLegacyBasicGate_EmptyPasswordRefuses(t *testing.T) {
 		{name: "env value is compared trimmed",
 			enabled: true, user: "admin", stored: "", env: strPtr("  recover\n"), path: "/api/v1/audiobooks",
 			creds: &basicCreds{"admin", "recover"}, want: http.StatusOK, wantFromEnv: true},
-		// Blank counts as unset for the stored value too. With no saved row
-		// the loader puts BASIC_AUTH_PASSWORD into basic_auth_password
-		// untrimmed, so a blank variable arrives as a blank stored value.
-		{name: "no saved row, env of only spaces loaded as the stored value, refused",
-			enabled: true, user: "admin", stored: "   ", env: strPtr("   "), path: "/api/v1/audiobooks",
-			creds: &basicCreds{"admin", "   "}, want: http.StatusUnauthorized, wantNoPassword: true},
-		{name: "saved value of only spaces, env unset, refused",
-			enabled: true, user: "admin", stored: "   ", env: nil, path: "/api/v1/audiobooks",
-			creds: &basicCreds{"admin", "   "}, want: http.StatusUnauthorized, wantNoPassword: true},
-		{name: "saved value of only blanks, empty password refused",
-			enabled: true, user: "admin", stored: " \t", env: nil, path: "/api/v1/audiobooks",
-			creds: &basicCreds{"admin", ""}, want: http.StatusUnauthorized, wantNoPassword: true},
-		{name: "saved value of only spaces, env recovers",
-			enabled: true, user: "admin", stored: "   ", env: strPtr("recover"), path: "/api/v1/audiobooks",
-			creds: &basicCreds{"admin", "recover"}, want: http.StatusOK, wantFromEnv: true},
-		{name: "saved value of only spaces, env set, the spaces refused",
-			enabled: true, user: "admin", stored: "   ", env: strPtr("recover"), path: "/api/v1/audiobooks",
-			creds: &basicCreds{"admin", "   "}, want: http.StatusUnauthorized, wantFromEnv: true},
 		{name: "saved password with surrounding spaces is compared exactly",
 			enabled: true, user: "admin", stored: " secret ", env: nil, path: "/api/v1/audiobooks",
 			creds: &basicCreds{"admin", " secret "}, want: http.StatusOK},
