@@ -210,7 +210,7 @@ def build_commit(commit: str, repo: pathlib.Path, scratch: pathlib.Path) -> list
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     ap.add_argument("--base", help="base ref of the PR (default: origin/main, then main)")
     ap.add_argument("--head", default="HEAD", help="head ref of the PR (default: HEAD)")
     args = ap.parse_args(argv)
