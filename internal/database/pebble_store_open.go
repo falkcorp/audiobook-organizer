@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_open.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2b0b5b99-cf7b-48ef-a8d6-5ff58c6d70db
 // last-edited: 2026-11-06
 
@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"strconv"
 	"sync"
 	"time"
@@ -21,6 +20,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	ulid "github.com/oklog/ulid/v2"
 )
+
+// pebbleOpenLog logs through internal/logger, which sanitizes values, rather than
+// calling log/slog directly (TestGuard_NoDirectSlogCalls).
+var pebbleOpenLog = logger.New("database.pebble-open")
 
 // NewPebbleStore creates a new PebbleDB store
 func NewPebbleStore(path string) (*PebbleStore, error) {
@@ -195,7 +198,7 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 		return nil, err
 	}
 
-	slog.Info("PebbleDB opened", "path", path, "format_version", db.FormatMajorVersion())
+	pebbleOpenLog.Info("PebbleDB opened at %s (format version %d)", logger.SanitizeLogValue(path), db.FormatMajorVersion())
 
 	if err := store.migrateImportPathKeys(); err != nil {
 		db.Close()
@@ -279,7 +282,7 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 	store.initMetrics()
 	store.warmupDone = make(chan struct{})
 	if memStore, memErr := NewMemStore(); memErr != nil {
-		slog.Warn("memdb init failed, in-memory queries disabled", "error", memErr)
+		pebbleOpenLog.Warn("memdb init failed, in-memory queries disabled: %s", logger.SanitizeLogValue(memErr.Error()))
 		close(store.warmupDone)
 	} else {
 		warmupCtx, warmupCancel := context.WithCancel(context.Background())
@@ -306,10 +309,10 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 			defer store.endMemWarmupBuffering()
 
 			runWarmupStartHook()
-			slog.Info("memdb warmup starting (async)")
+			pebbleOpenLog.Info("memdb warmup starting (async)")
 			if warmErr := memStore.WarmFromPebble(warmupCtx, store); warmErr != nil {
-				slog.Warn("memdb warmup failed, will stay on Pebble for reads",
-					"error", warmErr, "duration_ms", time.Since(started).Milliseconds())
+				pebbleOpenLog.Warn("memdb warmup failed after %d ms, will stay on Pebble for reads: %s",
+					time.Since(started).Milliseconds(), logger.SanitizeLogValue(warmErr.Error()))
 				return
 			}
 			// Replays the buffered write-throughs into memStore and publishes it in
@@ -317,8 +320,7 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 			if !store.publishWarmMemStore(memStore) {
 				return
 			}
-			slog.Info("memdb warmup published",
-				"duration_ms", time.Since(started).Milliseconds())
+			pebbleOpenLog.Info("memdb warmup published after %d ms", time.Since(started).Milliseconds())
 		}()
 	}
 

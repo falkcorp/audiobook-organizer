@@ -1,7 +1,7 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.35.0
+// version: 1.35.1
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
-// last-edited: 2026-10-28
+// last-edited: 2026-11-06
 
 package logger
 
@@ -11,7 +11,7 @@ package logger
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
 	slogRatchetFileCeiling = 268
-	slogRatchetCallCeiling = 1485
+	slogRatchetCallCeiling = 1471
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -70,10 +70,10 @@ var slogRatchet = map[string]int{
 	"internal/database/memdb_sync.go":                            5,
 	"internal/database/memdb_warmup.go":                          8,
 	"internal/database/metadata_fetch_cache.go":                  1,
-	"internal/database/migrations.go":                            75,
+	"internal/database/migrations.go":                            68,
 	"internal/database/pebble_activity_store.go":                 10,
 	"internal/database/pebble_quick_queries.go":                  12,
-	"internal/database/pebble_store.go":                          16,
+	"internal/database/pebble_store.go":                          11,
 	"internal/database/pebble_store_atpath_index.go":             9,
 	"internal/database/pebble_store_authors.go":                  3,
 	"internal/database/pebble_store_book_aggregates.go":          9,
