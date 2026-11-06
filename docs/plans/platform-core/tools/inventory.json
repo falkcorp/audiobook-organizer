@@ -124,7 +124,8 @@
    "internal/server/middleware/auth_admin_scope_test.go",
    "internal/server/handlers/user.go",
    "internal/server/handlers/user_merge.go",
-   "internal/server/handlers/user_merge_scope_test.go"
+   "internal/server/handlers/user_merge_scope_test.go",
+   "docs/agent-tasks/platform-core/seams.d/R0-03.md"
   ],
   "spec": "05-authn §11.1 item 4; 05-rbac Out-of-scope defects item 1; 09 §9.4 R0",
   "notes": "Tier: one rule at four call sites; an authz change, well specified. Serialized after R0-02 (shares middleware/auth.go). The HEAD-code half of TestUserMerge_ScopedAdminKeyRefused; F4-08 re-points it onto core. Owns gate tests: TestLegacyRequireAdmin_HonoursKeyScopes; TestUserMerge_ScopedAdminKeyRefused."
