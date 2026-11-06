@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/emb_reencode.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 9f4e2a1c-d7b3-4e8f-b5c0-2a1d9e4f7b3c
-// last-edited: 2026-10-18
+// last-edited: 2026-11-06
 
 // Package dedup — op dedup.emb-reencode (T021, SPEC 3 §3).
 //
@@ -32,7 +32,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	logging "github.com/falkcorp/mediacore/log"
 	"log/slog"
 	"time"
 

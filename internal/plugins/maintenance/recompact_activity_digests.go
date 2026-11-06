@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recompact_activity_digests.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8b4f2e61-3d7a-4c95-a0e8-5f1c9d6b2a73
-// last-edited: 2026-10-19
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -12,9 +12,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // RecompactActivityDigestsDefID is the def id of the admin-triggered digest

@@ -1,7 +1,7 @@
 // file: internal/server/library_core_ops.go
-// version: 1.14.2
+// version: 1.14.3
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-10
+// last-edited: 2026-11-06
 
 // library_core_ops registers the scan, organize, and transcode OperationDefs
 // that previously went through the legacy BridgeQueue.
@@ -21,12 +21,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/transcode"
+	logging "github.com/falkcorp/mediacore/log"
 	ulid "github.com/oklog/ulid/v2"
 )
 

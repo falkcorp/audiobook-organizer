@@ -1,7 +1,7 @@
 // file: internal/aiscan/pipeline.go
-// version: 4.12.0
+// version: 4.12.1
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-10-14
+// last-edited: 2026-11-06
 
 package aiscan
 
@@ -18,8 +18,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
-	"github.com/falkcorp/audiobook-organizer/internal/lifecycle"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/mediacore/lifecycle"
 )
 
 var plog = logger.New("aiscan")

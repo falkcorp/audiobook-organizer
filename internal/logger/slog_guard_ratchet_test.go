@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.35.1
+// version: 1.35.2
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-11-06
 
@@ -10,8 +10,8 @@ package logger
 // one-way: the test no longer fails when a count improves, so lowering a
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
-	slogRatchetFileCeiling = 268
-	slogRatchetCallCeiling = 1471
+	slogRatchetFileCeiling = 267
+	slogRatchetCallCeiling = 1467
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -110,7 +110,6 @@ var slogRatchet = map[string]int{
 	"internal/itunes/service/playlist_sync.go":                   2,
 	"internal/itunes/service/validate.go":                        7,
 	"internal/itunes/xml_library.go":                             2,
-	"internal/logging/structured.go":                             4,
 	"internal/maintenance/jobs/abs_backfill_reporter.go":         2,
 	"internal/maintenance/jobs/backfill_book_files.go":           2,
 	"internal/maintenance/jobs/backfill_file_hashes.go":          3,

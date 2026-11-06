@@ -1,7 +1,7 @@
-// file: internal/logging/structured.go
-// version: 1.1.1
+// file: core/log/structured.go
+// version: 1.1.2
 
-package logging
+package log
 
 import (
 	"context"

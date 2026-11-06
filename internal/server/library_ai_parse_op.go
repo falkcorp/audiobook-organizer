@@ -1,7 +1,7 @@
 // file: internal/server/library_ai_parse_op.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 60e01771-b827-4cf4-b3db-0b4b00bc9389
-// last-edited: 2026-10-30
+// last-edited: 2026-11-06
 
 package server
 
@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // libraryAIParseParams carries one queued batch of books to AI-parse.

@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.76.1
+// version: 1.76.2
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-11-05
+// last-edited: 2026-11-06
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -28,7 +28,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
@@ -41,6 +40,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // Verify *Server implements maintenance.ServerDeps at compile time.
@@ -513,7 +513,7 @@ func (s *Server) RootDir() string {
 // LogRetentionDays returns the effective purge window: the configured days,
 // the default (90) for 0, and 0 ("do not purge") for -1.
 func (s *Server) LogRetentionDays() int {
-	return config.ResolveLogRetentionDays(config.AppConfig.LogRetentionDays)
+	return logging.ResolveLogRetentionDays(config.AppConfig.LogRetentionDays)
 }
 
 func (s *Server) AIJournalRetentionDays() int {

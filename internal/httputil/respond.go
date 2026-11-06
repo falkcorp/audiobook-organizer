@@ -1,7 +1,7 @@
 // file: internal/httputil/respond.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-28
+// last-edited: 2026-11-06
 
 // Package httputil provides shared HTTP response helpers for all packages
 // that handle gin HTTP requests (server, middleware, itunes/service, etc).
@@ -14,7 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // RespondWithError sends a standardized error response and logs it.

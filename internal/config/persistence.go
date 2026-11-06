@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.62.0
+// version: 1.62.1
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-10-23
+// last-edited: 2026-11-06
 
 package config
 
@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	logging "github.com/falkcorp/mediacore/log"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
@@ -1092,7 +1093,7 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 					"\"keep logs forever, never purge\" and now means the default. The log purge now deletes "+
 					"system logs and legacy operation logs older than the startup value (default %d days); "+
 					"undo history is not affected. To keep logs forever, set log_retention_days to %d "+
-					"(PUT /api/v1/config)", DefaultLogRetentionDays, LogRetentionKeepForever)
+					"(PUT /api/v1/config)", logging.DefaultLogRetentionDays, logging.LogRetentionKeepForever)
 				blobStr = migrated
 				if saveErr := saveRawBlob(store, migrated); saveErr != nil {
 					persisted = false

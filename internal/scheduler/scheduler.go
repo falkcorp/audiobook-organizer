@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.22.1
+// version: 1.22.2
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-10-30
+// last-edited: 2026-11-06
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -11,7 +11,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/lifecycle"
+	"github.com/falkcorp/mediacore/lifecycle"
 	"log/slog"
 	"slices"
 	"sync"

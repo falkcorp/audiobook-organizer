@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.23.2
+// version: 1.23.3
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
-// last-edited: 2026-10-30
+// last-edited: 2026-11-06
 //
 // Shared, non-HTTP helpers that were extracted from duplicates_handlers.go when
 // the 17 duplicates HTTP handlers moved to internal/server/handlers/duplicates.
@@ -37,10 +37,10 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	logging "github.com/falkcorp/mediacore/log"
 	ulid "github.com/oklog/ulid/v2"
 )
 

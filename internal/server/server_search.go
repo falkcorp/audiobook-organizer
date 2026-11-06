@@ -1,7 +1,7 @@
 // file: internal/server/server_search.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 12815699-f9ea-4788-9af3-2e854d710315
-// last-edited: 2026-10-20
+// last-edited: 2026-11-06
 
 package server
 
@@ -21,10 +21,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 func (s *Server) SearchIndex() *search.BleveIndex {

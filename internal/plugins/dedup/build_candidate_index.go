@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/build_candidate_index.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 87487445-8923-477d-866c-b8153fd7755b
-// last-edited: 2026-08-19
+// last-edited: 2026-11-06
 
 // Package dedup — op dedup.build-candidate-status-index (INIT-2 T4).
 //
@@ -30,7 +30,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	logging "github.com/falkcorp/mediacore/log"
 	"runtime"
 	"sync"
 	"time"

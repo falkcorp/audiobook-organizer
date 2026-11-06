@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
-// last-edited: 2026-10-10
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // optimizeDef returns the OperationDef for maintenance.library-optimize

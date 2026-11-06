@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/compact_activity_log.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 3c8f5a92-6d1b-4e7a-9f04-8b2d6c1e5a37
-// last-edited: 2026-10-19
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // CompactActivityLogDefID is the def id of the user-triggered activity-log

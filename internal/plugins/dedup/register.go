@@ -1,6 +1,6 @@
 // file: internal/plugins/dedup/register.go
-// version: 1.5.0
-// last-edited: 2026-09-28
+// version: 1.5.1
+// last-edited: 2026-11-06
 
 // Service registry registration for the dedup UOS plugin (W5/W7).
 //
@@ -23,9 +23,9 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 func init() {

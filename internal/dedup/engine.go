@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.96.2
+// version: 1.96.3
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-10-31
+// last-edited: 2026-11-06
 
 package dedup
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	logging "github.com/falkcorp/mediacore/log"
 	"log/slog"
 	"path/filepath"
 	"regexp"

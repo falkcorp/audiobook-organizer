@@ -1,7 +1,7 @@
-// file: internal/lifecycle/shutdown.go
-// version: 1.0.0
+// file: core/lifecycle/shutdown.go
+// version: 1.0.1
 // guid: 59608b55-5c49-4ca4-9443-a025758bf746
-// last-edited: 2026-09-19
+// last-edited: 2026-11-06
 
 // Package lifecycle holds process-lifecycle sentinels shared by layers that
 // must not import each other (the operations registry and the subsystems its

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai.go
-// version: 1.15.2
+// version: 1.15.3
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
-// last-edited: 2026-10-19
+// last-edited: 2026-11-06
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
@@ -29,11 +29,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
+	logging "github.com/falkcorp/mediacore/log"
 	"github.com/gin-gonic/gin"
 )
 

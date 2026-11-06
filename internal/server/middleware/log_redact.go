@@ -1,7 +1,7 @@
 // file: internal/server/middleware/log_redact.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: f83a7613-f71d-4a0c-ae37-7f7f3ccf8929
-// last-edited: 2026-10-23
+// last-edited: 2026-11-06
 
 package middleware
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	logging "github.com/falkcorp/mediacore/log"
 	"github.com/gin-gonic/gin"
 )
 

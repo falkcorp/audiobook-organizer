@@ -1,7 +1,7 @@
-// file: internal/logging/integration_test.go
-// version: 1.0.0
+// file: core/log/integration_test.go
+// version: 1.0.1
 
-package logging
+package log
 
 import (
 	"bytes"

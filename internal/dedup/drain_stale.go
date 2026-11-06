@@ -1,7 +1,7 @@
 // file: internal/dedup/drain_stale.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 60d982e2-6836-4327-9ddf-9b55375f39ea
-// last-edited: 2026-10-17
+// last-edited: 2026-11-06
 
 // Package dedup — DrainStaleCandidates (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -46,8 +46,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // drainStaleBatchSize is the page size used when streaming pending exact

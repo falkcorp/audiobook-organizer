@@ -1,7 +1,7 @@
 // file: internal/scheduler/batch_poller_ctx_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: dc0ef604-53fc-4ba4-a9c2-af12432638ef
-// last-edited: 2026-09-19
+// last-edited: 2026-11-06
 
 package scheduler
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/lifecycle"
+	"github.com/falkcorp/mediacore/lifecycle"
 	"github.com/stretchr/testify/require"
 )
 

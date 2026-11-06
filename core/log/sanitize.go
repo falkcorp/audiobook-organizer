@@ -1,9 +1,9 @@
-// file: internal/logging/sanitize.go
-// version: 1.1.0
+// file: core/log/sanitize.go
+// version: 1.1.1
 // guid: 6e2a8b40-1d5f-4c93-b7e8-3a09d6c15f82
-// last-edited: 2026-08-14
+// last-edited: 2026-11-06
 
-package logging
+package log
 
 import "strings"
 

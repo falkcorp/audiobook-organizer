@@ -1,7 +1,7 @@
 // file: internal/scanner/shattered_coalesce.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9b4e2a17-6c08-4d35-8f91-3a7d05c2e6b4
-// last-edited: 2026-09-12
+// last-edited: 2026-11-06
 
 // Package scanner — scan-time prevention of the "shattered book" defect.
 //
@@ -32,7 +32,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/chaptershape"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // coalesceShatteredSiblings merges single-file books that are chapters of one
