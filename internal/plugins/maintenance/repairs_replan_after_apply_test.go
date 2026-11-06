@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repairs_replan_after_apply_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5e2a7c91-3b48-4d06-9f1e-84c0a6d2b735
 // last-edited: 2026-11-05
 
@@ -25,6 +25,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
+
+// The refresh plan an apply starts is recorded as the fixer's newest plan
+// through repairs.LastRunRecorder; pin that the production store satisfies it.
+// Kept in a test file so it does not count against the database.Store
+// reference ratchet (internal/database/store_consumers_test.go).
+var _ repairs.LastRunRecorder = database.Store(nil)
 
 // A trial is a stored, never-edited plan, so an apply that wrote rows leaves
 // them listed (sticky) until a new plan runs. runRepairsApply starts that plan
