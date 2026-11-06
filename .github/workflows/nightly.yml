@@ -44,4 +44,11 @@ jobs:
       force-all: 'true'
       # Same per-test-binary timeout as frontend-ci.yml; see the comment there.
       go-test-timeout: '25m'
+      # Off, as in frontend-ci.yml: e2e.yml is this repo's E2E run (it starts
+      # the server; chromium+webkit nightly). reusable-ci's E2E step starts no
+      # server, so all 710 tests failed at once while its frontend-run helper
+      # exited 0; once github-common fixed that exit code (and the Playwright
+      # browser path), the step spent its whole 30-minute budget on
+      # ERR_CONNECTION_REFUSED (run 42233931710, 2026-11-06).
+      skip-e2e-tests: true
     secrets: inherit
