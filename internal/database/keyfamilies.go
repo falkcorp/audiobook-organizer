@@ -1,5 +1,5 @@
 // file: internal/database/keyfamilies.go
-// version: 1.18.3
+// version: 1.18.4
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
 // last-edited: 2026-11-05
 
@@ -35,6 +35,14 @@ const unregisteredFamily = "(unregistered)"
 // (pactPrimaryKey over actTiers) and book:asin:/book:isbn10:/book:isbn13:
 // (isbnIndexKey). They are real on-disk families and are registered anyway.
 var keyFamilies = []KeyFamily{
+	// ── Core (reserved) ──
+	// Core's keyspaces (c/<subsystem>/) and module keyspaces (m/<module>/),
+	// registered from R1's first core PR so the census reports them by name
+	// (05-storage §5S.3.4). Nothing writes them yet; no books family may nest
+	// under them.
+	{"c/", "reserved: core keyspaces", "core"},
+	{"m/", "reserved: module keyspaces", "core"},
+
 	// ── Activity log (PebbleActivityStore shares the main DB) ──
 	{"act:", "activity log: tier primaries plus op/book/filter indexes", "internal/database/pebble_activity_store.go"},
 	{"act:audit:", "activity primary rows, audit tier", "internal/database/pebble_activity_store.go"},
