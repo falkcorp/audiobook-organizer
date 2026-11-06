@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.38.1 -->
+<!-- version: 1.39.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -71,26 +71,32 @@ S2 adopted (no flip-upgrade test; M8 registered once as `books.rewrite`, kept la
 freeze is the repository variable `RELEASE_FREEZE`, toggled by the owner in OWNER-02, OWNER-03, before F3-08 and in
 OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 
+## Execution
+
+| Wave | Rows | Merged (PR, commit) | Notes |
+|---|---|---|---|
+| W01 | R0-01 | #4385 `98e06bfd2` | toolchain go1.27.3; drift 57 → 58 (a file-header `1.27.2`, not a pin) |
+| W01 | R0-02 | #4388 `3169acbd6` | step-8 STOP: 3 tests asserted the defect; lead approved, 5 paths added to the inventory; bootstrap skill documents the 403 |
+| W01 | R0-04 | #4387 `d27b893b2` | no drift |
+| W01 | R0-06 | #4389 `32c432b12` | CodeQL `go/request-forgery` fixed with a release-tag match at the URL site; the AppConfig read ratchet kept by `config.Snapshot()` |
+| W02 | R0-05 | #4391 `d617240ac` | T4 independent review: 0 BLOCKER, 1 MAJOR (blank saved password trimmed, invisible to P14) reverted to the brief, pinned by two rows; first PR through the merge queue |
+| W02 | R0-03 | #4393 `1df727a55` | step-6 STOP: 2 master-list tests asserted the defect; lead approved, 1 path added to the inventory |
+
+Merge queue: on since 2026-11-05 (repo ruleset `main merge queue`, REBASE, no bypass actors, no required checks yet;
+owner choice). `ci.yml` gains a `merge_group` trigger in #4395; the existing GitHub checks become required before
+R1-01 (owner choice), and R1-02 brings the 09 §9.2.1 named set.
+
+Built ahead, held until OWNER-02 (owner-approved): R1-35 (#4394, draft) and R1-01 (#4397, draft). R1-01 widened its
+file list by `scripts/tests/test_run_gates.py`, `Dockerfile` and `Dockerfile.build-cgo` (lead decision; the image build
+needs `core/go.mod` in context, 03 §3.2).
+
 ## Blockers
 
-None. (The #4359 merge refusal was cleared by re-cutting the branch as #4360.)
+None for agents. R0 is complete (6/6 rows merged).
 
 ## Next action
 
-Owner: apply the `main` ruleset with the required checks, no bypass actors and the merge queue (OWNER-01's one open action), and log it in the tracking issue. W01 proceeds meanwhile: R0-05 is unblocked (P14 Branch A). R1-01 waits for the ruleset, R1-35's merge and `RELEASE_FREEZE` set to `R1` (OWNER-02's last step).
-
-## Incidents
-
-- 2026-11-04: one commit (`b45193d9f`) was pushed while the per-commit gate reported hits, because the gate's exit status was hidden by a pipe. All hits were verified false positives (long identifiers; a header name); nothing confidential was pushed; no history rewrite was needed. The gate now runs under `pipefail`, stages only named paths, and blocks on any hit.
-- 2026-11-04: the shared disk filled up (a 25 GB Go build cache); it was cleared with `go clean -cache` and nothing was lost.
-- 2026-11-04: the plan branch was rebased onto main after #4360 merged (spec trees identical).
-- 2026-11-04: the branch was rebased onto 17 new main commits (no overlap), and in-doc commit references were remapped.
-- Module-layout experiments: an early batch used a reset that did not undo staged renames; those runs were discarded and re-run cleanly (`raw/00-baseline-build.md`).
-
-## Fallbacks in use
-
-- Subagents use `general-purpose` / `Explore` with explicit model and effort.
-
-COMPLETED: 10 — phases 1–9 and 5b (raw data, spec, spec review, spec advisor, spec gate + #4360, D10–D14 revision + #4368, plan, plan review, plan advisor, plan gate + #4376) and phase 10 (D15 applied, this PR)
-REMAINING: 1 — the owner applies the main ruleset and merge queue (OWNER-01), then execution from W01
-BLOCKED: 0
+Owner: OWNER-02. Cut the R0 production release from `main` (prepend the release-note lines of the OWNER-02 brief), deploy,
+optional smoke run, then `gh variable set RELEASE_FREEZE --body R1` and record the R0 tag in the tracking issue. Before
+the deploy: an admin automation key holding only `users.manage` no longer reaches routes behind `RequireAdmin` (R0-03).
+Then R1-35 merges, the required checks go on the ruleset, and R1-01 enters its merge gate.
