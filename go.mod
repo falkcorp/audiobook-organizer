@@ -19,7 +19,7 @@ require (
 	github.com/klauspost/compress v1.20.3
 	github.com/lithammer/fuzzysearch v1.1.8
 	github.com/oklog/ulid/v2 v2.1.2
-	github.com/openai/openai-go/v3 v3.91.0
+	github.com/openai/openai-go/v3 v3.91.1
 	github.com/philippgille/chromem-go v0.7.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
