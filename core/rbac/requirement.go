@@ -46,7 +46,9 @@ const (
 )
 
 var (
-	Public           = Requirement{kind: KindPublic}        // no principal needed
+	//archtest:allow-var spec-mandated value (05-rbac 3.1); a struct, not a map, slice, func or pointer
+	Public = Requirement{kind: KindPublic} // no principal needed
+	//archtest:allow-var spec-mandated value (05-rbac 3.1); a struct, not a map, slice, func or pointer
 	AnyAuthenticated = Requirement{kind: KindAuthenticated} // a principal holding core:self or any non-Confining scope (§4.10)
 )
 
