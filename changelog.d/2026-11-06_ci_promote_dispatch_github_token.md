@@ -1,0 +1,3 @@
+### Fixed
+
+- Releases: the prerelease workflow's "Promote to a minor release when RC count hits 10" step dispatches the Production Release with the workflow's own `GITHUB_TOKEN` (the workflow already grants `actions: write`) instead of `JF_CI_GH_PAT`. That PAT has no Actions permission on this repo, so every promotion since 2026-10-31 failed with HTTP 403 and every prerelease run went red while the RC count kept climbing. A `workflow_dispatch` started by `GITHUB_TOKEN` does start a run; GitHub exempts `workflow_dispatch` and `repository_dispatch` from its no-recursive-runs rule, so the old comment's reason for the PAT was wrong.

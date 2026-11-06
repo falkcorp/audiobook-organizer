@@ -1,7 +1,7 @@
 # file: .github/workflows/prerelease.yml
-# version: 3.3.2
+# version: 3.3.3
 # guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-# last-edited: 2026-11-05
+# last-edited: 2026-11-06
 
 name: Prerelease on Merge
 
@@ -97,24 +97,22 @@ jobs:
       # because the guard runs AFTER the RC tag has already been minted.
       # Dispatching the minor cut is what actually resets the ordinal.
       #
-      # This MUST use JF_CI_GH_PAT. A workflow_dispatch authenticated with the
-      # default GITHUB_TOKEN is silently ignored by GitHub -- a GITHUB_TOKEN run
-      # cannot trigger another workflow run. Falling back to GITHUB_TOKEN would
-      # produce a green step that promotes nothing, so a missing PAT is a hard
-      # failure here rather than a silent no-op.
+      # GITHUB_TOKEN is enough here. Runs started by GITHUB_TOKEN events do not
+      # trigger further workflows, EXCEPT workflow_dispatch and
+      # repository_dispatch, which always start a run (docs.github.com, "Triggering
+      # a workflow from a workflow"). The workflow grants `actions: write` above.
+      # This step used JF_CI_GH_PAT until 2026-11-06, on the belief that a
+      # GITHUB_TOKEN dispatch is dropped; that PAT has no Actions permission on
+      # this repo, so every promotion failed with HTTP 403 from 2026-10-31 on.
       - name: Promote to the next minor release
         # Release freeze (09 §9.2.1; D15): the owner sets the repository variable RELEASE_FREEZE to R1 or R2.
         if: steps.rc.outputs.at_threshold == 'true' && vars.RELEASE_FREEZE == ''
         env:
-          GH_TOKEN: ${{ secrets.JF_CI_GH_PAT }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           RC_COUNT: ${{ steps.rc.outputs.rc_count }}
         run: |
           set -euo pipefail
-          if [[ -z "${GH_TOKEN:-}" ]]; then
-            echo "::error::JF_CI_GH_PAT is unavailable, so the minor-release dispatch would be silently dropped by GitHub. Cut the minor release manually via the Production Release workflow."
-            exit 1
-          fi
 
           # Do not stack dispatches. Between this run and the release landing,
           # every further merge to main mints another RC and re-enters this job;
