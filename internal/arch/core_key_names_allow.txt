@@ -1,0 +1,14 @@
+# file: internal/arch/core_key_names_allow.txt
+# version: 1.0.0
+# guid: 855103aa-fafc-4d20-858b-4d71f2d72c24
+# last-edited: 2026-11-05
+#
+# The one reviewed allowlist of TestCoreHoldsNoAppKeyNames (03 R1(c)):
+# string literals a non-test core/ file may carry although the match rule
+# flags them. One literal per line, matched exactly; blank lines and lines
+# starting with # are ignored. Each entry needs a reason in the line above it.
+#
+# Core auth's invite rate limiter keeps the global bucket key ABO's server
+# uses today (internal/server/invite_rate_limit.go), which begins with the
+# books family prefix "invite:".
+invite:global
