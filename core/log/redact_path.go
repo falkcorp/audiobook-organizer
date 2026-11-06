@@ -1,5 +1,5 @@
 // file: core/log/redact_path.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 03986f4e-57ff-4667-bcfb-da4deb8f283b
 // last-edited: 2026-11-06
 
@@ -14,7 +14,7 @@ import (
 // InviteTokenRedacted replaces an invite token path segment in logs and spans.
 const InviteTokenRedacted = "[REDACTED]"
 
-// inviteTokenPrefixes are the leading path segments (after the root) that are
+// inviteTokenPrefixes returns the leading path segments (after the root) that are
 // immediately followed by an invite token. An invite token is a bearer secret
 // (the public lookup confirms a live one and names its username), so it must
 // not reach the access log, the panic-recovery dump, error logs or a span.
@@ -31,12 +31,14 @@ const InviteTokenRedacted = "[REDACTED]"
 // Revoke and resend now take the invite's non-secret ID, not its token. The
 // segment is still redacted: an older client (or a hand-typed request) can
 // still put a token there, and it is logged before the route answers 404.
-var inviteTokenPrefixes = [][]string{
-	{"invite"},
-	{"api", "auth", "invite"},
-	{"api", "v1", "auth", "invite"},
-	{"api", "users", "invites"},
-	{"api", "v1", "users", "invites"},
+func inviteTokenPrefixes() [][]string {
+	return [][]string{
+		{"invite"},
+		{"api", "auth", "invite"},
+		{"api", "v1", "auth", "invite"},
+		{"api", "users", "invites"},
+		{"api", "v1", "users", "invites"},
+	}
 }
 
 // maxDecodeRounds bounds how many times RedactInvitePath percent-decodes a path
@@ -296,7 +298,7 @@ func nonEmptyPositions(segs []string) []int {
 // most len(prefix) segments per prefix, so a caller can try every start in
 // O(len(segs)) in all.
 func invitePrefixAt(segs []string, nonEmpty []int, k int) (idx int, invitesRoute bool) {
-	for _, prefix := range inviteTokenPrefixes {
+	for _, prefix := range inviteTokenPrefixes() {
 		n := len(prefix)
 		if len(nonEmpty)-k <= n {
 			continue
