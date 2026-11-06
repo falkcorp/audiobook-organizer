@@ -1,7 +1,7 @@
 // file: internal/util/title_sort.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2f6c8a14-5d3b-4e97-b0a2-9e4d1c7f6b58
-// last-edited: 2026-09-29
+// last-edited: 2026-11-05
 
 package util
 
@@ -156,20 +156,4 @@ func TitleSortKey(title string) string {
 		return NormalizeTitle(form)
 	}
 	return NormalizeTitle(title)
-}
-
-// NormalizeLetterLOrdinal rewrites a numbered-book title whose ordinal was
-// spelled with the letter l ("l Corinthians", "ll Kings") to arabic digits
-// ("1 Corinthians", "2 Kings"), keeping the rest of the title as it was. ok is
-// false for every title that does not use the letter-l ordinal, including
-// "I Corinthians" (a correct roman spelling) and "l'Étranger".
-func NormalizeLetterLOrdinal(title string) (string, bool) {
-	n, _, _, letterL, ok := matchNumberedBook(title)
-	if !ok || !letterL {
-		return title, false
-	}
-	m := numberedBookRe.FindStringSubmatchIndex(title)
-	// m[2]:m[3] is the ordinal token; its separator is normalised to one
-	// space before the book name (m[4]).
-	return strings.TrimLeft(title[:m[2]], " \t") + strconv.Itoa(n) + " " + title[m[4]:], true
 }

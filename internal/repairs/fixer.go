@@ -1,5 +1,5 @@
 // file: internal/repairs/fixer.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: 3e8b1c52-7a4d-4f19-9c06-5d2e8a7f1b34
 // last-edited: 2026-11-05
 
@@ -104,7 +104,7 @@ type Fixer interface {
 // its place inside that group, the one-line summary shown in the rail, and
 // whether its plan can be started from the lane at all.
 type Meta struct {
-	// Group is the id of one of Groups(). The lane lists the groups in that
+	// Group is the id of one of the lane's groups (see groups). The lane lists the groups in that
 	// order, each under its own header.
 	Group GroupID
 	// Rank orders the fixer inside its group, 1 first. It is a fixed number,
@@ -126,7 +126,7 @@ type Meta struct {
 // GroupID names one of the lane's group headers.
 type GroupID string
 
-// The lane's groups, in display order (see Groups).
+// The lane's groups, in display order (see groups).
 const (
 	GroupDuplicates GroupID = "duplicates"
 	GroupTitles     GroupID = "titles"
@@ -158,9 +158,6 @@ var groups = []Group{
 	{GroupVersions, "Versions"},
 	{GroupImports, "Imports & one-shot tools"},
 }
-
-// Groups returns the lane's groups in display order. The slice is a copy.
-func Groups() []Group { return append([]Group(nil), groups...) }
 
 // groupIndex is the position of a group id in the display order. An id that is
 // not a group sorts after every real one, so a fixer with a missing or
