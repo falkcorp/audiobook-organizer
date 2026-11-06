@@ -1,7 +1,7 @@
 // file: internal/metafetch/openlibrary.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-10-11
+// last-edited: 2026-11-06
 
 package metafetch
 
@@ -75,7 +75,7 @@ func NewOpenLibraryService() *OpenLibraryService {
 		// Auto-enable if store directory exists on disk
 		if !config.AppConfig.OpenLibraryDumpEnabled {
 			slog.Info("Found existing OL dump store at , auto-enabling OpenLibraryDumpEnabled", "path", storePath)
-			config.AppConfig.OpenLibraryDumpEnabled = true
+			config.Mutate(func(c *config.Config) { c.OpenLibraryDumpEnabled = true })
 		}
 		store, err := openlibrary.NewOLStore(storePath)
 		if err != nil {
