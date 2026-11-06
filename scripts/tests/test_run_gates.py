@@ -1,7 +1,7 @@
 # file: scripts/tests/test_run_gates.py
-# version: 1.2.2
+# version: 1.3.0
 # guid: 5b9d2e74-c1a6-4380-9f2e-d4a7b6c30e18
-# last-edited: 2026-11-05
+# last-edited: 2026-11-06
 """Tests for scripts/ci/run_gates.py and the one-way ratchet rule (07-G4)."""
 
 from __future__ import annotations
@@ -41,6 +41,9 @@ class ManifestTests(unittest.TestCase):
                 "core-layering",
                 "module-skew",
                 "genproto-exclude-root",
+                "vet-darwin",
+                "vet-integration",
+                "commits-build",
             },
         )
 
@@ -171,6 +174,52 @@ class LowerReportTests(unittest.TestCase):
         self.assertIn("broken", text)
 
 
+# `make -s`, `make --no-print-directory`: flags between `make` and the target.
+_MAKE_FLAGS = r"(?:\s+--?[A-Za-z][\w-]*)*"
+
+
+def _live_lines(path: Path) -> str:
+    """A workflow's text without comment lines."""
+    return "\n".join(ln for ln in path.read_text().splitlines() if not ln.lstrip().startswith("#"))
+
+
+def _make_targets(makefile: str) -> dict[str, tuple[list[str], str]]:
+    """{target: (prerequisites, recipe)} for the simple `name: prereqs` rules."""
+    return {
+        tgt: (prereqs.split(), recipe)
+        for tgt, prereqs, recipe in re.findall(
+            r"^([A-Za-z0-9_-]+):([^\n=]*)\n((?:\t[^\n]*\n?)+)", makefile, re.M
+        )
+    }
+
+
+def gate_runs_in(gate, workflows: str, module_dir: str = ".") -> bool:
+    """Does `workflows` (comment-stripped text) execute the gate's command?
+
+    A `make [-C dir] target` command runs when a step runs that target, or runs a
+    target of the same Makefile that lists it as a prerequisite (core's `ci`). A
+    script command runs when a step names the script, or runs a root make target
+    whose recipe does.
+    """
+    root_targets = _make_targets((ROOT / "Makefile").read_text())
+    m = re.fullmatch(r"make (?:-C (\S+) )?([A-Za-z0-9_-]+)", gate.command)
+    if m:
+        mdir, target = m.group(1) or ".", m.group(2)
+        targets = _make_targets((ROOT / mdir / "Makefile").read_text())
+        flag = r"" if mdir == "." else rf"-C {re.escape(mdir)}\s+"
+        invoked = set(re.findall(rf"\bmake\b{_MAKE_FLAGS}\s+{flag}([A-Za-z0-9_-]+)", workflows))
+        if target not in targets:
+            return False
+        return target in invoked or any(target in targets.get(t, ([], ""))[0] for t in invoked)
+    script = re.search(r"scripts/\S+", gate.command)
+    if not script:
+        return gate.command in workflows
+    invoked = set(re.findall(rf"\bmake\b{_MAKE_FLAGS}\s+([A-Za-z0-9_-]+)", workflows))
+    return script.group(0) in workflows or any(
+        script.group(0) in root_targets.get(t, ([], ""))[1] for t in invoked
+    )
+
+
 class CiCoverageTests(unittest.TestCase):
     """Every manifest gate must be executed by CI, and ci.yml names no gates."""
 
@@ -178,8 +227,7 @@ class CiCoverageTests(unittest.TestCase):
         return rg.parse_manifest((ROOT / "ci/gates.txt").read_text())
 
     def _ci_lines(self) -> str:
-        text = (ROOT / ".github/workflows/ci.yml").read_text()
-        return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+        return _live_lines(ROOT / ".github/workflows/ci.yml")
 
     def test_ci_yml_names_no_gates(self):
         ci = self._ci_lines()
@@ -187,17 +235,50 @@ class CiCoverageTests(unittest.TestCase):
         self.assertNotIn("ci/gates.txt", ci)
 
     def test_own_job_gates_run_in_a_ci_job(self):
-        ci = self._ci_lines()
-        makefile = (ROOT / "Makefile").read_text()
-        for g in (g for g in self._gates() if g.job == "own-job"):
-            script = re.search(r"scripts/\S+", g.command).group(0)
-            via_make = any(
-                script in recipe and re.search(rf"make\b[^\n]*\b{re.escape(tgt)}\b", ci)
-                for tgt, recipe in re.findall(
-                    r"^([A-Za-z0-9_-]+):[^\n]*\n((?:\t[^\n]*\n?)+)", makefile, re.M
-                )
+        # An own-job gate runs in a ci.yml job or an extraction-gates.yml job
+        # (09 §9.2.1: extraction-gates, vet-darwin and vet-integration).
+        text = (
+            self._ci_lines() + "\n" + _live_lines(ROOT / ".github/workflows/extraction-gates.yml")
+        )
+        gates = [g for g in self._gates() if g.job == "own-job"]
+        self.assertTrue(gates)
+        for g in gates:
+            self.assertTrue(
+                gate_runs_in(g, text),
+                f"{g.name}: no ci.yml or extraction-gates.yml step runs {g.command!r}",
             )
-            self.assertTrue(script in ci or via_make, f"{g.name}: no ci.yml step runs {script}")
+
+    def test_own_job_gates_of_the_required_checks_are_registered(self):
+        by_name = {g.name: g for g in self._gates()}
+        for name in ("vet-darwin", "vet-integration", "commits-build"):
+            self.assertIn(name, by_name)
+            self.assertEqual(by_name[name].job, "own-job")
+            self.assertEqual(by_name[name].kind, "check")
+        # the check script runs in extraction-gates, not ci.yml
+        self.assertTrue(
+            gate_runs_in(
+                by_name["commits-build"],
+                _live_lines(ROOT / ".github/workflows/extraction-gates.yml"),
+            )
+        )
+
+    def test_core_job_gates_run_in_core_ci(self):
+        # A core-job gate's command runs inside `make -C core ci` or a step of
+        # .github/workflows/core-ci.yml (03 §3.2 item 4; 09 §9.2.1 core-ci row).
+        text = _live_lines(ROOT / ".github/workflows/core-ci.yml")
+        gates = [g for g in self._gates() if g.job == "core-job"]
+        self.assertTrue(gates)
+        for g in gates:
+            self.assertTrue(
+                gate_runs_in(g, text),
+                f"{g.name}: neither `make -C core ci` nor a core-ci.yml step runs {g.command!r}",
+            )
+
+    def test_gate_runs_in_detects_a_gate_nothing_runs(self):
+        ghost = rg.Gate("ghost", "make -C core no-such-target", "-", "check", "-", "core-job")
+        self.assertFalse(gate_runs_in(ghost, _live_lines(ROOT / ".github/workflows/core-ci.yml")))
+        orphan = rg.Gate("orphan", "make vet-darwin", "-", "check", "-", "own-job")
+        self.assertFalse(gate_runs_in(orphan, "run: make vet"))
 
     def test_go_suite_gates_are_tests_that_run_under_short(self):
         for g in (g for g in self._gates() if g.job == "go-suite"):
