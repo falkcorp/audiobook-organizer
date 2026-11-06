@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.35.0
+# version: 3.35.1
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-11-05
+# last-edited: 2026-11-06
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -34,9 +34,16 @@ on:
     types: [checks_requested]
   workflow_dispatch:
 
+# A merge-queue run must never be cancelled by a sibling run. The queue reuses
+# one gh-readonly-queue/main/pr-<n>-<base> ref for an entry, so a second run or
+# a re-run attempt on that ref used to cancel the in-progress one ("Canceling
+# since a higher priority waiting request ... exists"). A cancelled required
+# check reads as failed, and the queue dropped the PR (#4394, 2026-11-06).
+# merge_group runs therefore get a group of their own (run_id) and are never
+# cancelled in progress; PR and push runs keep the per-ref cancel.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'merge_group' && format('merge-group-{0}', github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
 
 permissions:
   contents: read
