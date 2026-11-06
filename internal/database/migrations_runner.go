@@ -1,5 +1,5 @@
 // file: internal/database/migrations_runner.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c1acba7-c650-40dc-abf4-87f9cc8d5b35
 // last-edited: 2026-11-06
 
@@ -7,9 +7,14 @@ package database
 
 import (
 	"fmt"
-	"log/slog"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+// migrationRunnerLog logs through internal/logger, which sanitizes values, rather than
+// calling log/slog directly (TestGuard_NoDirectSlogCalls).
+var migrationRunnerLog = logger.New("database.migrations")
 
 // MigrationFunc represents a migration operation.
 //
@@ -57,7 +62,7 @@ func RunMigrations(store migrationStore) error {
 		return fmt.Errorf("failed to get current version: %w", err)
 	}
 
-	slog.Info("current database version", "version", currentVersion)
+	migrationRunnerLog.Info("current database version: %d", currentVersion)
 
 	// Find migrations to apply
 	pendingMigrations := []Migration{}
@@ -68,11 +73,11 @@ func RunMigrations(store migrationStore) error {
 	}
 
 	if len(pendingMigrations) == 0 {
-		slog.Info("database is up to date", "version", currentVersion)
+		migrationRunnerLog.Info("database is up to date: version %d", currentVersion)
 		return nil
 	}
 
-	slog.Info("applying migrations", "count", len(pendingMigrations))
+	migrationRunnerLog.Info("applying %d migrations", len(pendingMigrations))
 
 	// Apply each migration
 	for _, m := range pendingMigrations {
@@ -86,15 +91,15 @@ func RunMigrations(store migrationStore) error {
 			return fmt.Errorf("failed to check migration record %d: %w", m.Version, err)
 		}
 		if recorded {
-			slog.Info("migration already recorded; advancing version without re-running",
-				"version", m.Version, "description", m.Description)
+			migrationRunnerLog.Info("migration %d already recorded; advancing version without re-running: %s",
+				m.Version, logger.SanitizeLogValue(m.Description))
 			if err := setVersion(store, m.Version); err != nil {
 				return fmt.Errorf("failed to update version to %d: %w", m.Version, err)
 			}
 			continue
 		}
 
-		slog.Info("applying migration", "version", m.Version, "description", m.Description)
+		migrationRunnerLog.Info("applying migration %d: %s", m.Version, logger.SanitizeLogValue(m.Description))
 
 		// Each applied migration is real progress: give it its own start-time
 		// budget so a long run of migrations is not killed by TimeoutStartSec.
@@ -109,10 +114,10 @@ func RunMigrations(store migrationStore) error {
 			return err
 		}
 
-		slog.Info("migration completed", "version", m.Version)
+		migrationRunnerLog.Info("migration %d completed", m.Version)
 	}
 
-	slog.Info("all migrations completed", "version", pendingMigrations[len(pendingMigrations)-1].Version)
+	migrationRunnerLog.Info("all migrations completed: version %d", pendingMigrations[len(pendingMigrations)-1].Version)
 
 	return nil
 }
