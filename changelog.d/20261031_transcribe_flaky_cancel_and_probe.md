@@ -1,3 +1,0 @@
-### Fixed
-
-- Transcribe: a lone whisper endpoint whose op was cancelled between the start gate and the dispatch no longer sends the work on. `dispatchSingle` skipped its remembered-machine canary check when the context was already cancelled and then went on to send, so the dispatch could end with no error (`TestSingle_ACancelDuringTheCooldownWaitReturnsTheCancellation` failed in CI with `err = <nil>`). It now returns the cancellation before asking or sending anything. The test cancels from the gate (`poolOptions.extraRefusal`) instead of 50 ms in, and a new test covers a cancel landing right after the gate.

@@ -7,6 +7,5873 @@
 
 <!-- scriv-insert-here -->
 
+<a id='changelog-v0.223.0'></a>
+## v0.223.0 — 2026-11-06
+
+- Fixed a flaky `TestFence_RevokedOnEveryStopPath/timeout`: the test checked the fence was unrevoked from the test goroutine after the 20ms wall-clock timeout could already have fired on a loaded runner. Freshness is now judged on a snapshot the run takes on entry, so the check no longer races the timer; production fence code is unchanged.
+
+Deleted production functions in `internal/operations`, `operations/freshness`,
+`operations/opmode`, `operations/registry` and `internal/scheduler` that no
+binary could reach, along with the tests that covered only them: the whole
+`PebbleFreshness` implementation (its constructor, methods and key helpers;
+the `OpFreshness` interface stays), `opmode.Preview`,
+`registry.WithRequires` (and the `EnqueueOptions.Requires` field that only it
+set), `dbReporter.droppedLogCount`, and `operations.IsManual`.
+`TaskDefinition.selfScheduled` moved into the scheduler's tests, which use it
+to mirror `TaskScheduler.Start`'s timer branches. Running behavior does not
+change.
+
+The three post-create dedup checks (importer, the scanner/iTunes/manual
+create hook `fireDedupOnImport`, and the post-rename check after a metadata
+apply) now share one helper, `dedup.EnqueueCheckBook`. With
+`dedup.on_import_via_scheduler` on, each enqueues the batchable
+`dedup.check-book` op, so bursts coalesce into one visible, cancellable run.
+Before this, only the importer honored the flag and the other two always
+started a bare goroutine. With the flag off, all three keep their existing
+goroutine paths.
+
+The default stays `false`. `dedup.check-book` requires `book_sig_v1`, and a
+book that never gets a signature (no fpcalc, an undecodable container, no
+current-era prints) is re-bucketed on every batch window with no expiry. So
+with the flag on, its Layer 1 exact-hash check would never run. Flipping the
+default waits on an owner decision about that gap.
+
+The frontend of the old Dedup page is deleted. `/dedup` and `/dedup/labels` have
+redirected into Review since 03-PR10 shipped in v0.222.2, so the page, its nine
+tab components, the Gold Labels page, their 71 unit tests and the two
+`dedup*.spec.ts` Playwright files no longer have a route. Every deleted e2e test
+has an equal or stricter counterpart in `review-authors-lane.spec.ts` or
+`operation-monitoring.spec.ts`. The `api.ts` wrappers whose only callers were
+those files (`getBookDuplicates`, `getBookDedupScanResults`, `scanBookDuplicates`,
+`linkBookDuplicatesAsVersions`, `rejectBookDuplicateGroup`,
+`queueBulkSplitBookMerge`) and their types are removed. The directory
+`web/src/components/dedup/` is gone.
+
+Frontend CI and Nightly Full CI now run Go tests with a 25m per-binary
+timeout instead of Go's 10m default. Both call github-common's
+`reusable-ci.yml`, whose go-test helper passed no `-timeout`, and
+`internal/database` runs 510-600s under `-race` there, so it was hitting the
+default. The workflows now pin github-common at the commit from
+github-common#376, which adds a `go-test-timeout` input (applied as
+`GOFLAGS=-timeout=...`) and raises the Go CI job cap to 60m so the test
+timeout still fires first. 25m matches the Makefile and `ci.yml`.
+
+Release workflows now pin github-common at `1f0d70e` (github-common#374), in
+both `prerelease.yml`/`release-prod.yml` and `.github/ghcommon-ref.txt`. The
+v0.222.2 production release failed in "Create GitHub Release" with "Argument
+list too long", after the release was already published. Its notes were about
+125 KB and were passed to the release action through an env var. Notes now go
+through a file, capped under GitHub's 125,000-character body limit, so the
+CHANGELOG collection and draft cleanup steps that release skipped will run.
+
+New op `identification.advance` (spec 02 PR 14), off by default behind
+`identification_advance_enabled`. It drains the identification dirty set
+(`ident:dirty:`) a page of 256 books at a time and runs each marked book once
+through the existing candidate fetch, with the worker count candidate-fetch
+uses (sum of enabled provider budgets) set explicitly on `RunItems`. A mark is
+cleared by compare-and-delete on its epoch, so a book re-marked while it runs
+stays dirty and is processed again. Writers now mark books: a scan that
+creates a primary book or changes a book's title or author, a successful
+merge (the survivor), the store's retitle chokepoint, and a completed catalog
+harvest that filed new entries or staled old ones (the author's unasked and
+asked-empty primary books). A candidate-cache write never marks. With the flag
+on, a 5-minute `identification_advance` task enqueues the op while the set is
+non-empty, and the 6-hour `candidate_fetch` task only marks its selection and
+logs `safety_net_marked=N` instead of fetching. With the flag off,
+`candidate_fetch` sends exactly the params it did before. The driver records
+the reasons the state index cannot derive (`no_usable_title`, `fragment`,
+`manual_only`, `quota_deferred`) in a new `ident:reason:` family keyed to the
+book's question fingerprint. The op body lives in `internal/identification`
+in the ops-v3 Batch shape and does not import the operations registry; the v2
+adapter is `internal/server/identification_advance_op.go`. `ScanState` gains
+the per-stage `StageStatus` type and four file-stage fields, unused so far.
+
+Operations now have one catalog, `internal/opscatalog` (05-PR7). It holds `All`,
+the list of native ops v3 bundles (empty until the port waves add packages),
+the five service-registry plugins that `internal/plugins/plugins.go` used to
+list (that file is deleted and `internal/server` imports the catalog instead),
+and `Tombstones`, the retired op IDs that moved out of
+`internal/server/op_id_aliases_test.go`. `NewServer` registers the maintenance
+plugin, the adapted v2 registrars and the catalog's bundles through one
+function, in the same order as before.
+
+The server now checks the op-ID ledger when it starts, not only in tests. After
+the container has started (so the plugins have registered their ops), a second
+gate, `opCatalogGate`, validates the whole catalog and resolves every line of
+the embedded `internal/server/testdata/op_ids.golden`. An ID resolves when it is
+a live def or alias, a def or former ID of a plugin's dependency-free
+`OperationDefs()` list, a native bundle def, or a tombstone, so a server with no
+Deluge client still starts. An ID that resolves to none of them stops startup
+with the ID named. The check also refuses a scheduled writer that does not say
+`.Live()` (owner decision D8).
+
+`oplint` is rewritten as a type-aware `go/analysis` analyzer and is now part of
+`make ci`; `make oplint` runs it on `./...` (before, it could not parse its own
+argument). It reports a definition not reachable from its package's bundle, a
+bundle missing from `opscatalog.All`, a store write that bypasses the Writer
+inside `Run`/`Item`/`Apply`/`AfterApply`, `database.Store` in a `Deps` struct or
+captured by a definition, `Sequential("")`, any `ops.Deletes` use for owner
+review, and, as a warning, a definition with no `Help`. It reports nothing on
+the current tree. `TestCatalogLinkedIntoBinary` replaces the old plugin wiring
+test and also covers bundle packages.
+
+- The seven `/api/v1/audiobooks/duplicates` routes that only the old `/dedup`
+  page's Version Groups and Duplicate Scan tabs called now answer `410 Gone`
+  for one release (03-PR12, owner decision D9): `GET /audiobooks/duplicates`,
+  `GET /audiobooks/duplicates/scan-results`, `POST /audiobooks/duplicates/scan`,
+  `POST /audiobooks/duplicates/link` and its alias `/merge`, and
+  `POST /audiobooks/duplicates/reject` and its alias `/dismiss`. The body is
+  `{"error":"gone","message":"this endpoint has been removed; use GET /api/v1/dedup/candidates (the Review page, Duplicates lane) instead"}`.
+  Each stub keeps its old permission guard, so a caller without access still
+  gets 401 or 403.
+- Before retiring them, every caller was checked: no web page, script, tool,
+  runbook or AudioBooth request uses them. `scripts/api_examples.sh` Example 10
+  now lists exact-match candidates from `GET /dedup/candidates`.
+- Removed with them: the five handlers, `AudiobookService.GetDuplicateBooks`
+  and its result type, the `book-duplicates` dedup-cache key, the handler
+  package's `AudiobookService` interface and its mock, and the
+  dismissed-group save helper. Nothing writes the `dedup_dismissed_groups`
+  preference any more; the book-dedup scan and the duplicate-copies fixer still
+  honour the groups already stored there. The store's `GetDuplicateBooks`
+  stays (the `dedup.book-scan` op uses it), and so does that op.
+- The seven paths are removed from `docs/api/openapi.json`.
+
+The playlist M3U export route, `GET /api/v1/playlists/:id/export.m3u`, is retired.
+Nothing in the web app, scripts or the AudioBooth client called it. It now answers
+410 Gone with a message saying it has no replacement, for one release, and its
+handler and tests are deleted. The collection routes and every reading and
+position route are unchanged, and no listening data is touched.
+
+CI: `test-native-taglib` now runs on any `taglib=true` agent (U1 or the new
+local-backend `u0-local` agent on the prod host) instead of U1 only, so it no
+longer waits in the queue while U1 is outside its CI window or scaled down.
+`scripts/ci/cache_env.sh` finds u0-local's `/srv/ci/cache`, and
+`docs/ci/woodpecker.md` §4 documents the agent.
+
+Dropped 01-P81b from the dependency list of the unreachable-functions cleanup brief (01-T2) because the owner excluded 01-P81b on 2026-10-18; the reading and position routes stay. Planning documents only, no code change.
+
+Deleted 27 production functions in `internal/server`, `internal/server/middleware`
+and the `handlers`, `handlers/abs` and `handlers/aibackends` packages that no
+binary could reach. Eleven of them were helpers that only tests called
+(`applyCachedCandidateForBook`, `setSearchIndex`, `pathLocks.setTrace`,
+`SearchIndexDroppedCount`, the `server.PreflightUndoConflicts` re-export, `cacheRefresher.wait`, `Handler.SessionTimeListening`,
+`aibackends.WithAttribution`, `IPRateLimiter.Len` and `SweepCount`, and the
+`NewPlaylistHandler` constructor); they now live in `_test.go` files or the
+tests call the live equivalent, so the server binary no longer carries them.
+`IPRateLimiter.Stop` is gone along with its stop channel: the sweeper already
+ends when its context is cancelled. The `validateAbsolutePath` tests now call
+`pathvalidation.CleanAbsolutePath` directly, which had no tests of its own. The
+duplicated `stringVal`, `intVal`, `decodeRawValue`, `stripChapterFromTitle` and
+`stripSubtitle` copies in `internal/server` were removed with their tests, and
+the `loadMetadataState` wrapper was removed (its two tests call
+`metafetch.LoadStateSnapshot`); the live copies in `internal/audiobooks` and
+`internal/metafetch` are unchanged. Running behavior does not change.
+
+The TypeScript shapes for the Repairs lane (rows, rows page, apply result) are now generated from the Go structs with tygo instead of being copied by hand. A renamed json tag on the Go side fails the new `generated-types` gate and, once regenerated, is a compile error at every frontend use site. The hand copies in `api.ts` are replaced by re-exports under the same names. `BookCore` and `BookFileCore` are generated too, with checked-in contract goldens under `internal/wirecontract/testdata` that a vitest test assigns to the generated types. Regenerate with `make generate-types`; see the developer guide. Fixtures in the Repairs tests now come from `web/src/test/repairsFixtures.ts` because the generated types correctly mark counters the server always sends as required.
+
+Collections backend (07-F5a). The one search syntax now takes rolling relative dates: a sign, a whole number
+and a unit (`d` days, `w` weeks, `m` months, `y` years), for example
+`last_played:>-30d`, `date_added:>-1y` and `last_played:-30d..now`. An offset is
+resolved each time the search runs, so a saved search keeps sliding (a scheduled
+op, `collections.refresh-relative-dynamic`, refreshes the stored members of
+relative-date dynamic collections hourly); an unsigned `30d` is refused with a
+message showing `-30d`, including on a per-user field: creating a dynamic collection or changing its query
+with a query that cannot be parsed or translated answers 400 and stores nothing.
+A date with no time of day names its whole UTC day: `<=2026-03-31` and
+`2026-03-01..2026-03-31` include everything added on 31 March, `>2026-03-31`
+starts after it. `date_added` (alias `added`) and
+`date_modified` (alias `modified`) are new search fields, in the search index
+and on the Library list; `last_played:*` means played at any time. The Library
+list previously treated any `last_played:` value as "has been played" and
+refused `date_added`; both now work. `read_status:unstarted` now finds books the
+user has no listening row for, in the search, in collections and on the Library
+list. A relative-date search is never cached, because its answer changes with
+the clock.
+
+One-time cost at the first start after deploy: adding the two date fields bumps
+the search index mapping version, so the whole search index is rebuilt once.
+While it rebuilds, Library search falls back to the slower substring path and
+the index reports itself as rebuilding until it has caught up.
+
+Adding and removing books on a static collection is now atomic in the store
+(one lock around read, change and write), so two requests racing on the same
+collection no longer lose one of the changes. New routes
+`POST /api/v1/collections/:id/books` (body `{"book_ids": [...]}`, 1 to 500 ids)
+and `DELETE /api/v1/collections/:id/books/:bookId` need the
+`collections.manage` permission. The four Audiobookshelf membership handlers use
+the same store operations; two concurrent adds now both succeed instead of one
+answering 409. The existing collection routes are unchanged.
+
+`/auth/me` and the login response now carry `permissions`, the signed-in user's
+effective permission names, so the web app can show or hide collection controls.
+The web `AuthUser` type has `permissions` (empty when the server does not send
+it). A web search-syntax help entry and `docs/search-syntax.md` describe the
+date terms.
+
+Review fixes: `PUT /api/v1/collections/:id` with `book_ids` now requires `version` (400 when
+missing, 409 with `current_version` when stale). `date_added:(a|b)` alternations
+work. A value list on a per-user field
+(`read_status:(finished|in_progress)`, `last_played:(2026-03-31|2026-01-01)`) now
+means any of the values, as it already did on indexed fields (it used to require all
+of them at once). The hourly refresh runs only when a relative-date dynamic collection
+exists and the search index is open, and ends as a clean no-op when the index is closed.
+
+A Collections page lets you create and manage static and dynamic collections
+from the web app, and the collections you make there appear in Audiobookshelf.
+A static collection is a hand-picked list of books that you add to and remove
+from one action at a time. A dynamic collection is a saved search written in the
+same search syntax as the Library search bar, with an optional sort and limit.
+Preview re-runs the saved search for anyone who can view the collection; it also
+refreshes the stored members the Audiobookshelf app serves, but only as a best
+effort, and if the search index is not ready it quietly shows the previous
+members. Materialize needs the collections.manage permission, tells you when the
+index is not ready, and reports a failed save or a conflict. The query box lists the fields you can use
+with an example each, completes field names as you type, shows a parse error
+before you save, and offers two ready-made examples. A query that uses a
+reading-state field (read_status, progress_pct, last_played) is evaluated as the
+person who created the collection, for everyone, and the page says so. People
+without the collections.manage permission can see collections and their books
+but get no controls to change them.
+
+- `docs/AI-REFERENCE.md` now lists the Review page and its five lanes in place
+  of the old dedup page; the two old port-inventory docs carry a superseded
+  banner. The retirement itself (redirects, the seven `410 Gone` duplicates
+  routes) shipped in earlier fragments.
+
+Every writer of a reader's listening progress now takes the per-book progress lock (`database.LockUserBookState`) that the Audiobookshelf sync, playback session and "mark as" writes already took, so none can land in the middle of another's read-and-write and be written over or erased. Listening progress is never removed this way any more.
+
+- The web player's position updates (`POST /api/v1/audiobooks/:id/position`) write the position and recompute the book's status in one hold of the lock. Before, an update landing while a combine undo put a reader's progress back on a book was erased by the undo's position write, and the status recompute could write back a stale copy over a newer write (a hidden-from-Continue-Listening flag, a status).
+- `readstatus.RecomputeUserBookState` is replaced by `RecomputeUserBookStateLocked`, which the caller calls while it holds the lock; the heartbeat is its only caller. The status repair (`POST /api/v1/audiobooks/:id/status/repair`) holds the lock across its read and its overwrite.
+- The iTunes position sync (`internal/itunes/service` `PositionSync` and `Service.Positions`) is deleted. Nothing in production ever ran it: iTunes is a one-time manual import with no automatic sync. The `itunes` plugin's position-sync operation stays a stub.
+- The iTunes position backfill job (`backfill-itunes-positions`) holds each book's lock from its read of the stored position through its last write.
+- Merging, combining and the version-link move carry a reader's progress from one book to the other while holding both books' locks (new `database.LockUserBookStatePair`, which takes the two in a fixed order). Before, a device sync to the merged-away book during the carry was cleared with that book and lost, and one to the kept book was overwritten by the merged state. The chapter and split-part merges do the same.
+- Combining books, and the other merges that record an undo (sibling moves, split-book and chapter merges, retire-into, carry-before-delete), hold every reader's locks on both books from the moment they record the "before" picture until they record the "after" picture. Before, a device sync to the merged-away book just after the "before" picture was carried to the kept book and then, on undo, restored to neither; and one to the kept book just before the "after" picture was taken for the merge's own write and put back over by the undo.
+- Combining books completes a pending progress repair naming either book before it records the "before" picture instead of after it. This fixes progress loss on undo: the progress the repair carried onto the kept book was missing from the "before" picture, so undoing the combine left it on no book.
+- "Discard progress and purge" holds every reader's lock on the book from its first read through the delete.
+
+A review item whose first apply fails after it may already have changed the library is now held, not handed back to the queue. Before, any failed first run was released to the status it was claimed from (pending, approved, rejected or needs attention), so a version-group apply that had linked some books but not finished, or a duplicate-of merge that stopped part way, came back decidable over a half-changed library, where a reject or a different action could be recorded on top of it. Now each apply function says whether its failure wrote nothing (a new `database.NothingWritten` marker on the error), and only that case is released. Any other failure, including a plain unclassified error and a panic, keeps the item `applying` with its claim held by no process, exactly like a failed re-run: it refuses every other decision as interrupted until you approve it again (the retry skips work already done) or abandon the apply, which moves it to needs attention. Approve answers 409 `REVIEW_APPLY_PARTIAL` with a message pointing at both ways out, and bulk approve by ids reports the item as skipped with that code. A first run refused before any write, such as the iTunes guard (`REVIEW_ITUNES_PROTECTED`) or a refused precondition, is released as before. The regroup apply functions are classified as follows. The multidisc and duplicate-of applies count only a refusal before the merge begins (a bad payload, no canonical book named, the iTunes guard) as nothing written, and treat every other failure of the merge as having written, because the merge writes an undo journal and then moves files and retires books. The version-group apply counts a failure as nothing written until the first member's link write is attempted, and as written after that, apart from a primary hand-off the iTunes guard refused, which writes no flag. The store gains `HoldReviewItemClaim`, a capability method on the review claim interface (not on `database.Store`), which a failed re-run's release now shares. The review page's skipped-holds report files the new code under "no longer pending", and its mid-apply banner says a failed first run lands there too.
+
+- Test: the query-grammar "refuse quickly" test bounds compile-time refusal at 500 ms instead of 50 ms, so a race build on a busy CI runner no longer fails it with nothing wrong; it still catches any regression toward the seconds of matching it guards against.
+
+Five per-book audiobook routes are retired: the alternative-titles routes (`GET`, `POST` and `DELETE /api/v1/audiobooks/:id/alternative-titles`), `GET /api/v1/audiobooks/:id/path-history` and the old `POST /api/v1/audiobooks/:id/rescan` alias. Nothing in the web app, scripts or the AudioBooth client called them. They now answer 410 Gone for one release. Path history is already part of the book changelog (`GET /api/v1/audiobooks/:id/changelog`, which returns at most 50 entries), and `/rescan` was only an alias for `reconcile-files`, which keeps working. Their handlers and tests are deleted, and so are the store methods that only they called (adding, removing and replacing a book's alternative titles). Nothing writes alternative titles any more. Reading them stays, because dedup and the changelog still use stored alternative titles and path history, and deleting a book still cleans up its rows.
+
+Retired the author-catalog read routes (GET `/api/v1/catalog/entries` and `/api/v1/catalog/entries/:id`) and POST `/api/v1/review/replay-approved`. Nothing in the web app, scripts or agent tooling called them. They now answer 410 Gone for one release, with their usual authentication and permission checks still running first, and the handlers and their tests are deleted. The catalog stubs have no replacement. The owner-kept diagnostics (`GET /api/v1/op-defs/:id`, `/ai/capabilities`, `/ai/endpoints/status`, `/tools/:name/status`) are untouched.
+
+The replay stub points callers at `POST /api/v1/review/bulk` with `{"action":"approve","ids":[...]}`, listing the approved items with `GET /api/v1/review/items?status=approved`. Approving an already-approved item again runs its recorded action once `review_apply_enabled` is on, so a decision made while apply was off still executes. The approve note shown while apply is off now says to approve the item again after enabling apply, since replay no longer exists. `CatalogStore.ListEntries`, `CatalogListQuery` and `EditionGroupMembers` were deleted, because the retired route was their only production caller and nothing else reads them. The catalog retirement deleted no other store interface methods and touches no data.
+
+`POST /api/v1/review/bulk` approve no longer stops at the first item whose apply errors with a bare 500 (which left earlier items applied but unreported). It carries on and returns 200 with a `failed` list of `{id, reason}`; failed items keep their status, so resending their id retries them. If an apply succeeds but the `applied` status write then fails (after retries), the item is reported in a separate `applied_unrecorded` list; approving it again records it without re-running the apply. The response sets `apply_disabled: true` when `review_apply_enabled` is off and nothing was applied. The regroup lane's toast names failed items, unrecorded items and an apply-off approve, and the failures stay in the kind's report panel as clickable entries until dismissed.
+
+An apply now claims its item first (a new `applying` status, taken atomically through the `ReviewItemApplyClaimer` capability), so two concurrent approves of the same item apply it once. Reject, approve as `separate`, and approve with apply off or no handler go through the same capability, so none of them can land over a running apply and let a later approve apply a second time; they answer 409 `REVIEW_APPLY_IN_PROGRESS` instead. A claim held by the running server is never taken over. A claim left by a crashed or restarted server is recognised at once (each claim records the claiming process's random instance id) and the next approve of the same action takes it over and re-runs the apply, which skips work already done; until then other decisions answer 409 `REVIEW_APPLY_INTERRUPTED`. Approving or rejecting an item that is already applied answers 409 `REVIEW_ALREADY_APPLIED` (single routes) or lists it under `skipped` with its code (bulk). `GET /api/v1/review/count` adds an `applying` count, and the regroup lane shows held items with a Finish button. The regroup reconcile now deletes a stale hold only if it is still pending when the delete runs.
+
+A re-run of an interrupted apply that fails no longer hands the item back to the queue: the first run may already have changed the library, so the item stays held as interrupted (409 `REVIEW_RERUN_FAILED` on the request, `REVIEW_APPLY_INTERRUPTED` afterwards) until an approve finishes it. When it cannot be finished, or its action has no apply handler, the new `POST /api/v1/review/items/:id/abandon-apply` moves it to a new `needs_attention` status, recording the abandoned action; nothing is undone, and the item can then be approved or rejected after someone checks the library. `GET /api/v1/review/count` adds a `needs_attention` count, and the regroup lane adds an Abandon button to the held-mid-apply list and a needs-attention list with Approve and Reject. Approve, reject and bulk-by-ids accept an optional `if_updated_at` (the `updated_at` the caller rendered) and refuse with 409 `REVIEW_ITEM_CHANGED` when the item changed since; the regroup lane sends it and reloads on that refusal and on an unrecorded apply. A request that loses a race to record an unrecorded apply answers 409 `REVIEW_ALREADY_APPLIED` instead of 500. Review responses no longer carry the apply claim's token or process instance id, and a store refusal with an unrecognised reason answers 409 `REVIEW_CONFLICT` instead of claiming an apply is in progress. `SetReviewItemStatus`, `SetReviewItemDecision` and `DeleteReviewItem` were removed from `database.ReviewStore` (and so from `database.Store`, now 445 methods): every review status write goes through the claim capability and the only delete is the pending-only one. Resetting the store now holds the review lock, so a review write in flight cannot resurrect a record into the wiped store.
+
+Approving a `needs_attention` item with no `action` (an empty body, or `POST /api/v1/review/bulk` by ids) now re-runs the action that was abandoned: abandoning records it as the item's `chosen_action`, where before such an approve ran the payload's recommendation, which may be the action the reviewer had overridden. Approving a `needs_attention` item while `review_apply_enabled` is off now answers 409 `REVIEW_APPLY_DISABLED` instead of moving it to `approved` and erasing the abandoned-action note, since nothing would have run; it can still be rejected, and the regroup lane shows the refusal. A re-run refused by the iTunes guard now answers 409 `REVIEW_RERUN_FAILED` (the item is still held as interrupted), and `REVIEW_ITUNES_PROTECTED` is left meaning a first run that was handed back. A producer upsert of a review item now writes only pending rows, and re-emitting a pending item with an unchanged summary and payload no longer moves its `updated_at`, so open rows stop answering `REVIEW_ITEM_CHANGED` after every regroup run. The regroup reconcile now fails the op, saying the stale-hold purge was skipped, when the store cannot delete holds conditionally, instead of finishing green with `stale-purged=0`.
+
+A `needs_attention` item is now approved only when its chosen action has an apply handler and `review_apply_enabled` is on; otherwise the approve is refused and the abandoned-action note is kept. With apply on but no handler for the action it answers 409 `REVIEW_NO_APPLY_HANDLER` (reject the item instead), and approving as `separate` answers 409 `REVIEW_SEPARATE_NEEDS_ATTENTION` whether apply is on or off, because separate runs nothing and cannot confirm the library is fine after a partial apply. Bulk by ids skips these items with the same codes. `REVIEW_ITUNES_PROTECTED` is documented accurately: the handed-back item returns to the status it was claimed from, not always pending.
+
+Retired six routes that nothing in the app called: GET `/api/v1/audiobooks/:id/cover-history`, POST `/api/v1/audiobooks/:id/cover-history/restore`, GET `/api/v1/audiobooks/:id/similar`, POST `/api/v1/metadata/bulk-apply-preview`, GET `/api/v1/metadata/bulk-apply-preview/:id` and POST `/api/v1/import/collision-preview`. They now answer 410 Gone for one release, and the handlers, their tests and the code only they used are deleted. The owner-kept diagnostics (`/diagnostics/fingerprint-failures`, `/signals/coverage`, `/maintenance/scan-composer-tags/:id`) are untouched.
+
+The 410 message names a replacement where one exists. The similar-books route points at the library search (`GET /api/v1/audiobooks?search=author:...`). The bulk-apply preview start route points first at `POST /api/v1/operations/v2` with `def_id` `metadata.bulk-apply-preview` (it takes `book_ids`, `all_cached` or `operation_id`, like the old route; it needs the scan-trigger permission as well as library view), and also at `POST /api/v1/metadata/batch-apply-candidates` and `POST /api/v1/audiobooks/metadata/batch-apply-cached`, which are dry runs unless the body sends `dry_run:false` and need the edit-metadata permission. The report-reading route's 410 points at `GET /api/v1/operations/v2/:id`, which still carries the summary. The cover-history and collision-preview routes have no replacement; the gaps are filed in `todo.d`.
+
+The dry-run responses of both bulk-apply endpoints no longer carry a `results_url`, since it pointed at the retired report route, and the finished dry-run operation's message no longer tells the reader to fetch it. The summary is still the operation's message (`GET /api/v1/operations/v2/:id`). Also deleted: `covers.ListCoverHistory`, `covers.RestoreCoverFile`, `importer.CheckImportCollisions`, `merge.BookTitle`, `merge.QuickHash`, `merge.CollisionCandidate` and `search.QuoteIfNeeded`. No store methods were removed.
+
+Retired the two merge-journal undo routes, `POST /api/v1/merge/undo/:journal_id` and `POST /api/v1/merge/sibling-undo/:journal_id`. Nothing in the app called them. They now answer 410 Gone for one release, behind their old `library.edit_metadata` guard, and their handlers (`UndoCombine` and `UndoSiblingMove` on the duplicates handler), the handler test and the matching methods on the handler's merge-service interface are deleted. No store methods were deleted: the handlers only reached the merge service, and `merge.Service.UndoCombine` and `UndoSiblingMove` stay because the operation revert calls them. The two read-only journal lists (`GET /api/v1/merge/combine-journal` and `GET /api/v1/merge/sibling-journal`) are kept.
+
+Both stubs name `POST /api/v1/operations/:id/revert` as the replacement. Since #4064 every combine and every sibling move writes an undo pointer under an operation id, so reverting that operation undoes it. The combine response returns the id as `operation_id`, and the kept book's change list (`GET /api/v1/audiobooks/:id/changes`) lists it. A journal written before #4064 gets its pointer from the `backfill-merge-undo-pointers` maintenance job, which must be applied in production (preview first, then `"dry_run": false`) before this change is deployed; until it runs, those older journals have no undo route. The replacement needs `library.organize`, where the retired routes needed `library.edit_metadata`.
+
+Retired the per-book narrator list and update routes (GET and PUT `/api/v1/audiobooks/:id/narrators`) and the author and series tag routes (GET and POST `/api/v1/authors/:id/tags` and `/api/v1/series/:id/tags`). Nothing in the app called them. They now answer 410 Gone for one release, and the handlers and their tests are deleted. The narrator count and work statistics diagnostics are kept.
+
+The narrator stubs point callers at PUT `/api/v1/audiobooks/:id` (narrator credit; GET returns narrators[]). `AddAuthorTag` and `AddSeriesTag` were also deleted from the store, since the retired tag routes were their only callers.
+
+Two provider-throttle reset routes are retired: `DELETE /api/v1/metadata/providers/throttles` (clear every hold) and `DELETE /api/v1/metadata/providers/throttles/:id` (clear one hold). Nothing in the web app, scripts or the AudioBooth client called them. They now answer 410 Gone for one release and name no replacement, because nothing replaces a manual reset: a hold now ends when its timer runs out or when a later successful call to that provider releases it, whatever its kind; in practice that is a single-book metadata lookup, which bypasses holds. `GET /api/v1/metadata/providers/throttles` (the read-only view of what is held) and `GET /api/v1/metadata/fields` are kept by owner decision. The two handlers, the registry's `Clear` and `ClearAll` methods and their tests are deleted. No store methods were deleted: the throttle store methods are still used when a successful call releases a hold. The stubs keep their edit-metadata permission guard, so signed-out callers still get 401 and read-only users 403.
+
+Three operator routes are retired: `POST /api/v1/admin/recompact-digests`, `POST /api/v1/cache/invalidate` and `POST /api/v1/activity/clamp-summaries`. Nothing in the web app, scripts or the AudioBooth client called them. They now answer 410 Gone for one release, behind the same admin or settings permission checks as before, so an unauthenticated caller still gets 401 and a caller without permission 403. Digest recompaction has a replacement: start the "Recompact activity digests" background operation with `POST /api/v1/operations/v2` and `{"def_id":"maintenance.recompact-activity-digests"}`, which the old route only did on your behalf. Flushing the in-memory caches has no replacement and now takes a restart (filed as a TODO item). The clamp route's job, shrinking oversized old activity summaries, already ran to completion in production and the write-time cap remains, so the retroactive clamp pass is deleted. Giving freed activity-database pages back to the disk is kept, as a new background operation, "Vacuum activity database" (`maintenance.vacuum-activity-db`), instead of a route. Started with no parameters it is a preview: it reports the file size, WAL size, page count, free-page count and an estimate of the reclaimable bytes, and writes nothing. With `dry_run=false` it runs the VACUUM, then truncates the WAL, and reports the bytes actually returned. It needs the same permission as the other activity maintenance operations (settings.manage), never runs beside activity compaction or reclaim, and is not scheduled. The preview also reports `free_bytes`, `required_bytes` and `would_refuse`. A live run needs about twice the compacted size (the pages in use, not the file size, since recent pages sit in the write-ahead log) free on the database's disk, plus a margin of 1 GiB or 10 percent, whichever is larger: in WAL mode the rebuilt database passes through the write-ahead log on that same disk until the final truncate returns it, so the peak extra space is roughly twice the compacted size, not one file size. It refuses to start below that, and it first points SQLite's temporary files at the database's own directory (and refuses if it cannot), so the temporary copy cannot fill the root disk the way the 2026-09-09 ANALYZE did. While a live run holds the activity database's single writer, library scans and metadata applies stall and some activity log lines may be dropped, so it refuses to start while the listed scan, import and metadata operations are active (a metadata apply started from the UI during the run will stall until it finishes); ZFS snapshots holding the database's old blocks can push the peak past twice that and make the net reclaim negative, so purge snapshots first; run it in a quiet window. Making activity writes wait without blocking is filed as a TODO item. The route handlers and tests are deleted, along with the code only they reached: the cache flush helpers, the activity service's clamp call and the SQLite store's clamp pass. No `database.Store` methods were removed, because all of this lived on the activity store.
+
+The transcode integration test was broken since the v1 operation queue was deleted, and no CI job built the integration tag, so it had rotted. The end-to-end test now lives in internal/server and runs the real registered library.transcode op through the v2 operations registry (organized and unorganized cases) instead of re-implementing it inline, and the package-level transcode integration test uses generated ffmpeg tone fixtures and BookFile rows. A new `make vet-integration` step in the Woodpecker build checks compile `-tags integration ./...` so these tests cannot rot unnoticed again.
+
+Every way of combining books can now be undone by reverting an operation (`POST /api/v1/operations/:id/revert`), not just through `POST /merge/undo/:journal_id` and `POST /merge/sibling-undo/:journal_id`, which #4060 retires. The merge cores now write an undo pointer to their own journal at the point each journal is written, before the first change. A combine or sibling move whose pointer cannot be written is refused.
+
+- Operations that merge books record that pointer under their own operation id, so reverting the run (Operations page, Revert) undoes every merge it made: merge-chapter-groups, dedup.split-book-bulk-merge, dedup.book-merge, maintenance.merge-same-path-dupes and the iTunes heal duplicate collapse. A merge-chapter-groups run with no id mints one per merge and records it on the group outcome as `undo_operation_id`.
+- Merges that no operation runs get an operation id of their own, one per merge: the manual combine, the split-book candidate merge, the review combine and duplicate-of applies, diagnostics merge_versions, and the dedup engine merges (auto-resolve, cluster merge, bulk-filter, file-hash and LLM auto merges). These ids are not runs, so the Operations page does not list them. `POST /audiobooks/combine` and `POST /dedup/split-book-candidates/:id/merge` return the id as `operation_id`, diagnostics returns it as `sibling_operation_id`, review applies log it, and `GET /audiobooks/:id/changes` lists it on the surviving book for every path.
+- `POST /audiobooks/combine` always returns `operation_id` and `journal_id`. When the combine's last journal write fails, the response carries `journal_pending` (replacing `undo_unavailable`) and says the journal is still pending: it already lists every step, so reverting the operation replays it. Warnings (such as an override that was skipped because its undo could not be journaled) come back in `warnings`, and the Library page's toast shows both.
+- A combine's revert restores only the absorbed books that combine itself retired. A book the combine left live, or never reached because it stopped part way, is not rewritten, so edits made to it since are kept.
+- A combine's revert no longer deletes the file rows the combine created. Each one is moved to the book whose file it is, and a row with no such book left stays on the survivor. Anything a combine's undo leaves as is (such a row, a survivor field changed since, a credit or lock added since, an author it created that no book credits) is now reported on the revert result, in `kept`, counted in `combines_undone_in_part` (not `partially_restored`, whose message is about tags), instead of only in the log. The revert's message, which the Library toast and the Activity log show, lists each one in a combine's wording, and the Library undo toast is a warning then.
+- A combine that stopped part way (an error or a crash) records each step before it runs, so reverting it undoes exactly the steps that ran. A journal written before this change that never completed is refused with that reason.
+- A combine or split-book merge stopped at any of its store writes, just before the write or just after it lands, is undone by reverting its operation: book rows, file owners and numbers, external ids, the absorbed book's reader progress and (for a combine) the override's title, author and lock rows all come back. A stop inside the progress follow can leave a copy of that progress on the survivor; nothing is removed. A journal write that fails before a change now stops the merge instead of going on unrecorded. The soft-delete stamp is minted and journaled before a book goes to the trash, so a crash right after the soft-delete still leaves a revert that recognises the book. A metadata override is journaled (title, narrator, author link and author rows, prior lock rows) before it is written; its revert puts each one back and removes exactly the lock rows the combine added. The progress after-snapshot is persisted before the next step.
+- A combine's revert restores file numbering row by row: it puts disc/track back only on rows the combine actually moved, while they are still on the survivor, and restores the survivor's own rows only when the journal records that a renumber could have run. A combine or split-book merge that stopped before that point, or a book it left live, keeps any renumber made since.
+- A sibling-move revert never removes listening data. When the progress that followed onto a moved sibling has no live book to go back to (its book was purged, or is in the trash and its survivor leads nowhere), it stays on the sibling and the revert lists it in `kept`; the preflight reports it under `content_changed` instead of calling the change safe. No pending repair is created for a purged book. What the sibling undo leaves (a sibling moved on, kept progress) is now reported in `kept` instead of discarded.
+- A combine with no sync follower configured still journals its progress follow (fail closed), and the combine row store no longer has `DeleteBookFile` at all.
+- A new `merge_sibling_journal` revert type puts moved version-group siblings back. A sibling moved to another group since stays where it is and is listed in `kept`; a later merge that moved one into the same group again makes the revert refuse. The revert no longer requires the merge's survivor to still exist. As with `POST /merge/sibling-undo/:journal_id`, the merged books stay in the trash.
+- New maintenance job `backfill-merge-undo-pointers` gives older journals the same pointer, each under a fresh id. It previews by default, reads the undo ledger once outside the merge lock, and records a result for every journal: pointer written (or would be), already has one, or not undoable with the reason. Reverting one of those older combines also puts the kept book's own tracks back to their pre-combine disc/track numbers (the journal predates the marker that tells whether a renumber could have run), so a renumber made since is reverted with it; the job description says so.
+- A combine revert that is cut short (a crash or a kill part-way) can now be re-run to finish it. The undo marks the journal `undo_failed` ("undo started and did not finish") before its first write, so the re-run accepts the rows the first attempt already put back. Before, the journal stayed `applied` and every re-run refused. An undo that finished but could not record itself stays `undo_failed` too. It now writes its own applied record (`merge:combine-undo-applied:<journal id>`) before the journal's status, so running it again only marks the journal undone and replays nothing: a title, lock or author link the user picked again with the combine's own value after the undo is kept. Only when that record could not be written either does the re-run replay the undo, and the replay changes nothing done since except such a re-picked value: a lock row is put back only while it still holds the lock the combine wrote (the journal records it as `field_states_after`; an older journal is compared with the override's value), so a lock set since stays and is reported in `kept`; a lock row a metadata fetch wrote to since keeps its fetched value; the survivor's listening progress put-back is recognised and not repeated (before, a re-run after the user listened took the carried seconds off their listened time a second time), a put-back records that it landed, so a re-run leaves that reader alone and reports nothing for them, listened since or not, instead of calling a complete undo partial; only when that record is missing (a crash right before it, or its write failed) does the re-run say in `kept` that it left the reader's progress as is; and a progress put-back that changes nothing is no longer reported.
+- A crash while a combine undo restores a trashed book no longer leaves its version group's locks held.
+- `POST /audiobooks/combine` for a combine that stopped part-way, after its undo pointer was written, now answers with `code: COMBINE_INCOMPLETE`, `journal_id` and `operation_id`, and says the combine may already have moved files or put books in the trash and which operation to revert (500, or 409 for a refusal). The store error stays in the log. It used to answer a bare "failed to combine books". The error's own text now names the journal and the operation too, so a caller that only wraps or logs it (the regroup apply's item error, a review apply's log line) keeps them.
+- The Library page's Combine toast has an Undo button whenever the server returns an operation id: it reverts that operation. Override warnings now show even when the journal stayed pending. A partial or failed undo offers Retry (a 409 refusal does not), and a combine that stopped part-way offers Undo. Those three toasts also name the operation id, so the revert can still be found once the toast is gone. With no operation id, the toast promises no undo.
+- The nightly purge and "Purge now" check a trashed book for listening progress and delete it in one hold of the merge lock, so a merge revert putting progress back on that book can no longer slip in between and have it deleted. The book is re-read in that same hold, so one restored from the trash after the purge listed it is left alone ("Purge now" answers that it is not in the trash). A sibling revert that finds a loser gone right after putting its progress back now reports an error and keeps the follow open, instead of recording it as undone. That hold of the merge lock is not counted in `merge.MergeLockAcquisitions` (new `merge.LockMergeRMWBookRowsOnly`, for holders that write only book rows the change log records and never a file row), so a purge beside a chapter-fragment repairs apply no longer makes the apply list the whole library again before nearly every row.
+- A split-book merge whose soft-delete reports an error now keeps the trash date it noted, as a combine does. If the soft-delete did land, the revert recognises and restores the book; before, the revert refused as a whole.
+- Reverting a combine's author override keeps a co-author added to the book since, listed after the restored authors, and reports it in `kept`. It takes back only the one author link the override wrote, so the same author credited since in another role (as narrator, or as co-author) is kept and reported the same way; before, every link to that author was dropped.
+- A combine override creates a new author only after its plan is journaled, and journals the author's id before linking it, so an override skipped because its plan could not be journaled leaves no author behind.
+- When a sibling revert leaves listening progress in place because it has nowhere to go, and an earlier attempt failed, the message now says the progress may be on the trashed book itself (or on the copy the purge moved it to) rather than claiming it is on the version it followed.
+- Undoing a combine never deletes an author, including one its override created. When no book credits that author any more, the undo says so in `kept`, and `maintenance.purge-empty-authors` can remove it when run: that job checks every reference first and writes an `author_delete` ledger row naming each author before deleting it (a record, not an automatic undo). An override dropped after its author was created (the journal write or the link failed) leaves the author too, and the combine's `warnings` now say the author override was not applied and name the author. A title or narrator override that could not be written is reported in `warnings` as well. Both used to go only to the log.
+- Undoing a combine puts a reader's progress back on the kept book under the same per-reader lock the Audiobookshelf sync, playback session and read-status writes take, and reads the progress and decides what to write while it holds that lock. A device sync that lands while the undo works on that book is now kept (what the combine brought is taken back off and the listening since stays) instead of being written over. The web player's position updates take that lock too since every listening-state writer was moved under it (same release).
+- The marker that tells a re-run a reader's progress was already put back is keyed by an id minted for each combine's progress move (`follow_id` on each journaled progress entry), not by a timestamp. A second combine of the same two books after an undo could reuse the timestamp, and a marker the first undo failed to remove then made the second undo leave the carried position on the kept book. Journals written before this keep the timestamp key.
+- A progress put-back whose write fails now withdraws its marker even when deleting it fails (the marker is overwritten as not landed). Before, that left a marker that made the re-run skip the reader and count the carried listened time on both books. Only when both writes fail does the marker stay, and the undo's error (shown on the journal) says what a re-run will then do.
+- A combine's override records the lock rows its write left while still holding the lock that write took, so a lock someone set in between is no longer recorded as the combine's (and taken away by its undo). It also reads the lock rows its write replaces under that same hold, so a lock someone set after the combine planned the override is the one its undo puts back, not an older one.
+- Undoing a combine that filled an empty author sets the book's main author from an author credit that is left (a co-author only when no author credit is), never from a narrator, editor or other contributor credit, and leaves it empty when no author credit is left. Before, it took whichever credit came first.
+- The Library toast for a partly undone combine shows the server's message, including what the combine's undo left as it is, and still offers Retry.
+- The revert message lists at most five of the things combine undos left as they are, then "and N more"; `kept` still lists every one.
+
+The Woodpecker `test-fixtures` workflow now runs its fixture packages as three
+sequential shards (`FIXTURE_SHARD=1/3`, `2/3`, `3/3`) in one step instead of
+every package at once. On the slower heavy agents the packages were contended
+(temp-file I/O and CPU) and `internal/plugins/maintenance` timed out at the 25m
+per-package limit with nothing hung; sharding keeps the heavy packages
+(database, maintenance, scanner/server) from all overlapping. The status
+context, the agent, the 25m default timeout and the set of packages tested are
+unchanged. `scripts/ci/run_fixture_shards.sh` runs every shard even if one
+fails, prints per-shard elapsed seconds, exits with the combined status, and
+gives each shard `min(25m, budget - elapsed)` of a 55 min step budget so Go
+times out and dumps before Woodpecker's 60 min repo timeout kills the job.
+`make test-fixtures` takes a new `FIXTURE_TIMEOUT` (default `25m`).
+
+Deleted production functions in `internal/database` that no binary could
+reach, along with the tests that covered only them: the unused Argon2 password
+key-derivation helpers and `GetDecryptedSetting` in `settings.go`,
+`SubstringSearchMatches` (the ranking predicate `SubstringSearchRank` is the
+one the stores call), `GetMigrationHistory`, `InvalidateCachedMetadataFetch`,
+`MetadataCacheChangedSinceOf`, the author and series `EnsureSingleton*Tag`
+helpers and their two narrow store interfaces, two unused memdb indexer types
+(`nullableBoolFieldIndex`, `effectiveIntFieldIndex`), and a handful of small
+helpers (`MetaBool`, `MetaInt`, `SortFileEvents`, `AnyProvisionalCore`,
+`OwnFolderSplit.Spans`, and a no-op LSH index-delete placeholder). Five helpers that only
+tests call (`encodeVectorV0`, `PathWindowRef`, `familyForKey`, `recordMigration`,
+`undecodableMarkerCount`) and the flat `getAllAuthorBookRefCountsPebble` wrapper
+moved into `_test.go` files. The three `CatalogStore` methods the brief listed
+(`GetEntryByProviderID`, `GetRaw`, `CountEntries`) stay: the first has a
+production caller in `internal/catalog`, the other two are still reachable
+from `deadcode`. `JoinCreditNames` / `JoinCreditNamesABS` stay too: they are
+the owner-approved tag write-back join ("A, B and C") that the credit-lists
+plan's write-back PR will call, and `StorageMigrationCheckpointPath` stays
+for its planned writer, the storage cut-over (`make rollback` already reads
+the file). Running behavior does not change.
+
+Deleted production functions in `internal/activity`, `internal/cache`,
+`internal/metrics`, `internal/realtime`, `internal/search`,
+`internal/searchcache`, `internal/serviceregistry`, `internal/syncapi/progress`
+and `internal/versionprimary` that no binary could reach, along with the tests
+that covered only them: `activity.WithTags`, `cache.All`,
+`metrics.IncFilenameParse`, `realtime.GetGlobalHub`,
+`realtime.InitializeEventHub`, `search.ReindexBookByID`,
+`serviceregistry.Groups`, `progress.MergeCombine` and
+`versionprimary.TierName`. `searchcache.Cache.jobHoldsIDs` moved into the
+searchcache tests, which are its only caller, so the job-memory test keeps its
+coverage. `merge.FollowMergeWithStore` was already gone (01-P73).
+
+With its only readers deleted, the `realtime.GlobalHub` variable, its mutex and
+`realtime.SetGlobalHub` were a write-only global, so they and their two call
+sites (server start-up and the integration-test setup) are removed too. The
+server still hands its own hub to every consumer through `Server.hub`.
+
+`metrics.IncFilenameParse` was the only writer of the
+`audiobook_organizer_filename_parse_total` counter, so the counter, its
+`ParseShape*` and `ParseOutcome*` label constants, its row in the `/metrics`
+series contract (`series.golden`) and the three "Filename parse" panels (the row and its two graphs) of the
+overnight Grafana dashboard (dashboard version 2) are removed with it. The
+series never carried a sample in production because nothing incremented it, so
+no panel loses data. `search`'s internal store interface drops `GetBookByID`,
+which only `ReindexBookByID` called. Running behavior does not change.
+
+`docs/archive/openapi.yaml` is deleted (owner approved 2026-10-20). Nothing read it: the repo has no OpenAPI spec, and the contract is the Go DTOs plus `web/src/types/generated/`. It was the last OpenAPI file in the repo, so `FIX_OPENAPI=true` is dropped from `super-linter-pr.env`; it had been kept only because this file still existed.
+
+The repo's own copy of `.github/workflows/scripts/ci_workflow.py` is deleted. No workflow ran it: the Python lint that CI runs is github-common's reusable-ci, which checks out and runs github-common's own `ci_workflow.py`. The local copy had already drifted (it still ran black, while upstream and pre-commit are ruff-only), and editing it changed nothing in CI.
+
+The pre-commit ruff hook moves from v0.14.3 to v0.17.0 (and to the canonical `astral-sh/ruff-pre-commit` URL), so pre-commit and local runs use the same ruff the repo is formatted with.
+
+CI's ruff version comes from the github-common script checkout at the `.github/ghcommon-ref.txt` SHA, now 861d4e83 with ruff 0.17.0.
+
+Fixed the nightly E2E run that has failed on `[webkit] Button loading states
+visual check` and a rare chromium failure in `scan-import-organize.spec.ts`.
+The webkit golden (`scan-button-loading-webkit-linux.png`) still showed the
+uppercase "STARTING SCAN..." label from before the theme dropped
+`textTransform`, so it was never going to match; the darwin goldens had the
+same staleness and are regenerated too. The Library E2E mocks now answer the
+Browse-by-Tag facets request instead of letting it fall through to the real
+server, and the specs that click Select All or a card checkbox right after load
+wait for the tag panel to settle, so the panel mounting can no longer move the
+checkbox out from under the click. Test-only; no application behavior changes.
+
+The `fragment-consolidation` Repairs fixer has a new row class, `hash-copy`: a
+live single-file book of ANY title or file name whose one present file row has
+the same file hash as a present row of exactly one other live multi-file book is
+proposed for retirement into that book (one row per child, so the plan's
+`hash-copy` count is the number of proposals). Until now only books with
+chapter-shaped names or titles were considered, so single-file copies of a
+multi-file book's tracks were never offered. Apply retires the child the way a
+merge does (listening state and positions follow to the parent at the track's
+offset, external ids move, soft-deleted with `merged_into_book_id` set), every
+step journaled and undoable from the apply operation; no `book_file` row is
+deleted and the parent's rows are not written. A child whose hash is carried by
+two or more live multi-file books is listed as `held_ambiguous_parent`; one that
+matches a parent row by name and size where a hash is missing on either side is
+listed as `skipped_no_hash`. Neither is ever applied. Apply re-checks the whole
+library for a second parent under the merge lock and refuses the row if one
+appeared since the plan. Trial: `POST /api/v1/repairs/fragment-consolidation/plan`,
+then `GET /api/v1/repairs/fragment-consolidation/plan/<op_id>/rows?class=hash-copy`.
+
+A hash only retires a book when it can stand as proof. A hash-copy child is held
+(never applied, listed with its reason) as `held_file_absent` when its file or
+the parent row's file is not on disk, `held_degenerate_hash` for a zero-length
+file, the empty-file digest, or two files of different sizes,
+`held_short_or_boilerplate` for a known duration under 60 seconds or an intro,
+credits or sting title, and `skipped_copy_unproven` when both paths name one file or one is a hard link of the other. A held row's id is `held-<kind>:<child>` (the kind's own `held_`/`skipped_` is not repeated). Over
+the sampling threshold, where the stored hash covers only the head, tail and
+size, the two files are compared by whole-file SHA-256 at plan time
+(`held_partial_hash_unproven` when that read fails, `held_partial_hash_mismatch`
+when the bytes differ); the proof is stored with the row and apply re-checks
+both files by stat rather than re-reading them, except on a filesystem with
+whole-second timestamps, where a same-size rewrite can leave the stat unchanged,
+so apply reads both files again under the merge lock and refuses the row if the
+digest differs. `book_ids` now scopes only the
+children, so a scoped plan sees the same parents as a full one, and an iTunes
+copy of the parent that the iTunes-parent rule sets aside no longer counts as a
+second parent at apply.
+
+Every Repairs retire (`fragment-consolidation`, `duplicate-copies`,
+`consolidation-leftovers`) now carries the retired book's own ratings and notes
+(fields the survivor left empty only; the survivor's are never overwritten) and
+its places in static collections and playlists onto the survivor, as the
+listening state already was. Each move is journaled as `user_content_follow`
+and restored by the undo of the apply, which refuses to overwrite a rating,
+collection or playlist edited since. A store that cannot reach collections or
+playlists refuses the retire before its first write rather than carrying part
+of the state. The lists are read afresh for every retire, so a list the owner
+changed since the last one is seen. Ratings revert field by field, so
+reverting one retire never undoes a field another retire filled. Each list
+carry journals a marker row on the survivor (`collection-took` or
+`playlist-took` when the survivor took the retired book's slot,
+`collection-held` or `playlist-held` when the book was only removed because the
+survivor was already listed). Reverting one of several retires into the same
+survivor reads the markers other retires left on it. A survivor that one
+retire borrowed (it was already listed, so the retired book was only removed)
+stays in the list while any retire that put it there is still standing, and
+leaves with the last of them, whichever order the operations are undone in; a
+survivor a later retire borrowed from an earlier one is counted the same way.
+Each carry also records the books right before and after the retired one, and
+the survivor keeps a record for every retire it took part in, including a
+second retire of the same pair after the first was reverted. The revert puts
+the book back by those neighbours: it builds an order graph from the records of
+every retire into the list, walking through the books other retires took out
+(and treating a survivor that took a book's slot as that book), so operations
+undone in any order, including oldest first, put every book back in its exact
+position in every collection and playlist, survivors that are themselves
+retired later included (below). The records of a list are read from one place:
+a new index over the journal, `opchange_by_list:<kind>:<list id>:<op>:<change>`,
+written in the same batch as each collection or playlist carry row (ratings and
+notes are not indexed) and removed only together with its row, so one call (`GetListChanges`) returns every row any retire
+into the list wrote, whichever survivor or retired book it names. There is no
+per-book journal walk and no read cap any more, so no history can need more
+reads than the cap allowed. A carry's index entry is written in the same batch
+as its row, so a row never exists without its entry. The first open of the store
+after this release reads the whole journal once, under its own completion key
+(`system:backfill:opchange_by_list_index_v1_done`), and stages the entry of any
+carry row that lacks one (rows written by a build without the index), in chunks
+of 2,000, logging progress every 50,000 rows and the row count, entries staged
+and duration at the end. The key is written in a separate batch after the last chunk, so a start that
+dies part way repeats the scan, which is idempotent, and a store that has the key
+is never scanned for the index again.
+
+A book is placed by the graph only when both of its neighbours are found in the
+list now and nothing but the survivor (or another survivor's ghost) sits between
+them. The records also have to agree with the list: two books they order must be
+listed in that order, or the owner has rearranged the list since and nothing
+found from the records is trusted. A book that cannot be bounded that way is
+never placed by a guess: the recorded index is used and reported. A record
+without neighbour anchors (from an earlier build of this feature, or damaged) is not restored by
+index any more: the revert refuses that row with a reason, the undo preflight
+shows it as not restorable automatically, and nothing is written.
+
+A survivor can itself be retired into another survivor (the duplicate-copies
+fixer does), and the operations can be undone in any order, the older ones
+first included. A survivor that was listed only because retires stood on it is
+put back by the revert of its own retire only while one of those retires still
+stands; once they have all been reverted it never belonged to the list on its
+own, so it stays out and the revert says so (`books_left_out`, named in `kept`).
+When a book's retire is reverted while the survivor that took its slot has been
+retired out of the list since, the slot is not the survivor's to give back: the
+book goes back beside its neighbours, found through the survivor's stand-in, and
+the revert of the survivor's own retire places it later.
+
+A survivor is in a list on a retire's account from the retire that put it there
+(a "took" marker) until the last retire of that epoch is reverted. A later "took"
+marker ends every earlier epoch, so a standing marker of an earlier epoch (the
+survivor left the list by hand, or a revert removed it and died before stamping
+the marker) no longer counts: its rows have no say over the survivor, in the
+revert, the preflight, and the order graph.
+
+Journal rows are ordered by a store-level sequence that never steps back, not
+by the wall clock. Each row carries `CreatedSeq` (and a row stamped reverted
+carries `RevertedSeq`, never below its own `CreatedSeq`, also for a row born
+reverted): the larger of the wall clock and one past the last stamp. A wall clock
+that steps back (NTP, a restore, a VM resume) between two retires therefore
+cannot reorder the journal, and the undo code orders markers by the sequence,
+falling back to the wall time only for rows written before it existed. The
+stamp is taken under a short lock that is not held across the commit, so
+concurrent writers commit in parallel. To keep the sequence from ever repeating
+after a restart, the store persists a CEILING (`system:journal_clock`): a value
+above every stamp handed out, written with one synced write when the sequence
+reaches it and moved one minute ahead (about one extra write a minute under
+sustained load, none when idle). The next open starts the sequence at the
+ceiling exactly, with no margin and no journal scan, and a clean close lowers the
+ceiling to the last stamp so a normal restart wastes nothing. A crash leaves the
+ceiling at most one minute ahead, which only skips unused numbers. The journal
+is scanned at open only when the ceiling is missing or unreadable (a store from
+before this release, or a damaged key); the scan derives the sequence from the
+rows and rewrites the key, also when the key was unreadable and the journal is
+empty, so a damaged key is repaired once and never stops the store opening.
+
+Lists the owner arranged by hand since the retire are reported, not silently
+rewritten. A survivor found listed somewhere other than the slot the retire gave
+it is left where it was put and the book goes back by the records; the revert
+names it (`kept`: "left where you placed it"). A slot the records cannot confirm
+(a book they do not order sits beside it, or the list was rearranged) is given
+back as recorded and named too. Both count in `lists_edited_by_hand`, and the
+summary says "list position(s) restored beside books arranged by hand since".
+A position placed by the recorded index counts in `restored_by_index`. These
+reports are what the revert says; it does not claim to know the owner's intent,
+and a list the owner never touched is never reported.
+
+Verified by simulation (the real revert code against a model of the journal,
+random histories, "exact" meaning every list ends as it was before the retires):
+140,000 histories (two and three survivors, crashes part way through an
+operation's revert, survivors retired into survivors, undone in any order) all
+exact, none reported, refused or silent. A further 47,000 adversarial histories
+(shared timestamps, a wall clock stepping back, one step back, a row journaled
+before its marker, deep chains with crashes), now run with the sequence fields
+stamped and the wall time left non-monotonic, all exact, none reported, refused
+or silent. A further 14,500 histories in which a survivor marker is left behind
+with no live row of its retire (a crash between the marker and the row, or a row
+voided), over 40,000 orphan markers injected in all, none left unreported: 11,500 exact, and in the 3,000 where the owner also edited
+the lists by hand 1,314 exact, 1,485 reported and 201 refused for manual review;
+0 silent wrong lists. 12,000 histories in which the owner added, removed or reordered list
+entries by hand since the retires: 0 silent wrong lists (final or
+intermediate); 5,716 exact, 5,544 reported (named in `kept`), 740 refused for
+manual review with a reason (nothing written for a refused row).
+
+A row is stamped reverted together with its survivor-side marker, in the same
+batch as the list. A marker stands until its row is restored, so a row that
+failed or was refused leaves it standing for the retry, so the retry is not
+refused and the reverts in between see the truth; and a row stamped with its
+list is never retried against a list a newer retire has changed since. A carry
+needs a store that commits several journal rows in ONE batch
+(`database.ChangeBatchJournal`, which the Pebble store has) and is refused before
+its first write otherwise. All the rows of a carry step (the row and its marker)
+are created in one commit and the index is updated only after it, so a failure
+leaves neither; a refused carry voids its row and its marker in one commit, so a
+failure can no longer leave one of them stale. A resumed retire (the process died after its journal commit and
+before its list write, the owner then listed the survivor by hand, and the
+resumed run journaled a second pair) has two live rows for one retire; only the
+newest speaks for it. If the newest row is not restored in a revert (a commit
+failure or a refusal), the older row is left standing and reported (the revert
+and the undo preflight share the rule), so its record cannot swap a survivor the
+owner listed in that slot out of the list; a retry puts the book back once. The
+end-of-revert stamp of a list's rows is made under that list's lock. A survivor marker that has no
+live row of its retire (an orphan: a crash left the marker without its row, or
+the row was voided) is ignored by the revert, the preflight and the order graph,
+so it can never keep a survivor listed; the revert reports it in
+`orphan_markers` and in `kept`, once per marker. The revert of a collection
+or playlist row requires a store that writes the list and the stamp in one batch
+(`database.CollectionMembershipMarkStore`, `database.UserPlaylistMarkStore`; the
+Pebble store has both) and refuses one that does not. A revert that finds the
+book already listed (the owner put it back by hand while the retire stood) takes
+the survivor out when the row had borrowed it and nothing else stands on it,
+counts it in `survivors_released` and says so in `kept`; otherwise it only
+stamps the marker. Everything that reads a list's journal to decide a list write
+and then makes it holds one lock per list: the reverts of collection and
+playlist rows, and the retire's own marker journaling and list write, so two
+operations undone at once cannot each see the other still standing. The carry's
+`user_content_follow` rows are never removed by journal pruning, like the other
+rows an undo cannot be decided without. Marker rows restore nothing, so the revert
+result counts them in a separate `markers` figure, not in `restored`.
+
+The undo preflight decides a collection or playlist row from the same list
+journal the revert reads, so a row the revert restores exactly is predicted
+restorable. A journal read that fails refuses the row as unreadable
+(`field_unreadable`) and never as restorable; so does a store that cannot read
+the list journal at all, since no prediction can be made without it. Rows that fail the check are
+never filed under `check_failed`, which never counts toward offering Undo.
+
+Fixed the Library page's "Browse by Tag" panel pushing the Select All bar and the book-card checkboxes down (by about 84px at desktop width, more on narrow screens) when the tag counts arrived, which sent a click aimed at Select All onto the panel instead. The panel now stays on screen the whole time and its body has one fixed height in every state: placeholder chips while the first answer loads, the previous tags (dimmed, with a small spinner) while a new filter or search reloads them, and the "No tags in these results." and "Couldn't load tags for these results." messages. Collapsed, it is a single row showing as many tags as fit at the current width, with the rest behind "Show all N"; expanded, it is a fixed-height box that scrolls inside. An answer made only of hidden bookkeeping tags (`dedup:*`, `metadata:source:*`) now shows "No tags in these results." instead of removing the panel. Picking a filter still adds that filter's own chip under the search box, so the page can move by that row when you filter; the tag panel itself no longer moves anything.
+
+Added an admin tool to merge one user account into another, for when the same
+person ended up with two accounts. On the Users page, "Sign-ins & data" shows
+an account's linked sign-ins and how much listening data it holds, and "Merge
+into..." previews the merge (counts, collisions, sign-ins, who holds the owner's
+Cloudflare Access / OAuth identity, refusals) before anything is written. The
+confirm step sends the previewed digest, so a merge only runs against the plan
+the admin read, and the owner's identity moving needs an explicit
+acknowledgement, which is also required when the plan cannot tell whether it
+holds the owner's sign-in (no `owner_email`, or a sign-in with no address). The
+survivor keeps an address the merged-away account had verified, as verified. The
+merge runs as the `maintenance.user-merge` operation, is journaled
+(`usermerge:journal:`), and resumes after a crash by planning the work that is
+left again; that is safe to repeat because each sign-in, API key, book and
+listening-seconds counter is written in a single batch with the index entries
+or the delete that go with it, so a stop never leaves a sum added but its
+source still there. It undoes from the journal without overwriting anything written
+since: a sign-in, API key, playlist, collection, invite or invite email grant
+goes back with only its owner field changed (an API key's use counters, or a
+playlist renamed since, are kept), a book's listening state goes back whole or, if it changed
+since, stays whole with its status index rebuilt; undoing it signs the surviving
+account out when sign-ins or keys move back. Routes: `GET /users/:id/footprint`, `GET /users/merges`,
+`POST /users/:id/merge-into/:target/{preview,apply}` and
+`POST /users/merges/:jid/{resume,undo}`; every POST is a credential route behind
+the owner gate, so no API key or Audiobookshelf token can start one, and the
+operation refuses to write without a single-use grant those routes mint. The
+operation row carries only counts and account ids, never usernames, emails or
+row keys. A
+merged-away account cannot be reactivated (undo the merge instead), and
+`ResolveMergedUser` lets book-merge undo journals and Audible read-status
+reverts that name a merged-away account act on the account that holds its data
+now.
+
+The three file-hash indexes (`GetBookByFileHash`, `GetBookByOriginalHash`,
+`GetBookByOrganizedHash`) are now multi-valued: one key per hash and book
+(`book_hash:`, `book_originalhash:`, `book_organizedhash:`, registered in
+`keyfamilies.go`) instead of one shared `book:hash:<h>` row per hash. A writer
+only ever touches its own keys, so no delete or update can erase another book's
+lookup, which is what the 2026-10-21 purge of combine shells may have done. This
+replaces the compare-and-delete guard the earlier commits of this change added to
+`DeleteBook` and `UpdateBook`,
+which could not fix a row that can only name one of its holders. Readers
+verify every candidate against its own row and choose deterministically: the
+live holder with the smallest id, else the trashed holder with the smallest id.
+`CreateBook`, `UpdateBook` and `DeleteBook` maintain the keys in the same batch
+as the row; `UpdateBook` re-sets the current keys every time, so a missing key
+heals on the next write. New `PebbleStore.BooksByFileHash` lists every holder;
+the delete-time block-hash guard uses it instead of the single answer, which
+would have named the book being deleted and missed the other holder.
+
+`maintenance.book-hash-index-repair` now checks and backfills the new keys:
+preview by default, `dry_run=false` writes every missing key and, when every
+book row decoded, sets the completion sentinel and deletes the retired
+single-valued keys, in that order. Boot enqueues it with `ensure=true` on every
+start (rollback-safe, like the opchange ensure). Until the sentinel is set,
+lookups return the union of the new keys and the legacy key. That is NOT
+complete during the cut-over: the legacy key names one holder per hash and the
+new keys of the others are not written until the first repair after the deploy
+finishes, so a lookup can miss a book in that window. Once the sentinel is set
+and the legacy keys are removed, a pre-change build finds no hash matches at all
+until the next roll-forward boot rewrites its keys. A book row that cannot be decoded keeps the sentinel
+unset and fails the op. After a rollback to a pre-change build and a roll
+forward, the next boot's ensure writes the keys that build did not.
+
+"Merge into one book" no longer runs inside the HTTP request. `POST
+/audiobooks/combine` now answers 202 with the id of the new `dedup.book-combine`
+operation (it answered 200 with the finished result; a breaking change for API
+clients) and the combine runs in the background, sharing `dedup.book-merge`'s
+concurrency key so a combine and a merge on the same books cannot interleave.
+The request is checked first, so a request that cannot succeed fails the call:
+400 for a repeated id or empty `merge_ids`, 404 for a missing book, 409 for a
+soft-deleted or iTunes-protected book (`merge.PreflightCombine`). The combine's
+outcome is the operation result (`GET /operations/:id/result`): `primary_id`,
+`files_moved`, `books_deleted`, `journal_id`, `operation_id` (always set on success; the operation's
+own id: `POST /operations/:id/revert` undoes the combine), `journal_pending`,
+`warnings`, `message`, and on failure `failed`, `error` and, for a combine that
+stopped part-way, `incomplete`. The candidate clean-up after a combine moved
+into the operation. There is no synchronous fallback. In the web UI, merge,
+combine and purge close their dialog at once, show a "running in the background"
+notice with a link to the operation, and report the real outcome when the
+operation ends; a failed merge or combine is never reported as done, and books
+with an operation in flight cannot be submitted again.
+
+A failed `dedup.book-merge` now stores a result too (`failed`, `partial`,
+`error`) so the page can tell a merge that changed nothing from one that stopped
+part-way, and its candidate clean-up covers only the books actually merged.
+
+The purge now refuses to run while any combine-journal row cannot be decoded. A
+combine journal records which trashed books (the absorbed shells) the
+combine's undo still needs; a row that cannot be read cannot say which, so
+skipping it could let the purge delete a book an undo needs. Preview, run, the
+nightly purge, "Purge now" and discard-and-purge all refuse with a message that
+names the unreadable row's key and the operation that lists such rows; the
+reason shows in the purge dialog and toast (`purge refused: ...`). This matches
+how an unreadable auto-merge journal row already behaved. New read-only
+operation `maintenance.combine-journal-check` lists every unreadable
+combine-journal row with its full key and decode error (it fails while any
+exist, so it shows red in the operations list) and modifies nothing. Repair is
+manual: fix or remove the row with the key shown, then purge again. Cost: one
+corrupt row blocks every purge, the nightly one included, until it is repaired.
+The lenient combine-journal listing (the history list and the pointer backfill)
+still skips an unreadable row with a warning.
+
+The book-combine operation (`dedup.book-combine`) now honours its context between the absorbed books. Before, its 1 hour timeout (or a server shutdown) marked the operation timed out while the combine kept running, still holding the merge lock, so the page reported "did not complete" for a combine that went on to finish. The combine now stops before the next absorbed book with the lock released, and stores a failed, incomplete result carrying the undo ids; the page offers Undo, which puts back everything the combine had done. The bulk file move that starts a combine is one write and is not interruptible.
+
+`DELETE /audiobooks/:id?block_hash=true` no longer blocks a file hash that a live
+book still holds. The delete proceeds, the hash is left unblocked, and the
+response carries `warnings` naming the live books (a blocked hash makes the
+scanner skip that book's own file; prod had one blocked hash shared by two live
+books). Holders are found through the book hash index plus the multi-valued
+book_file hash indexes, never a library scan, and a lookup that cannot be
+completed also skips the block and says so. The web delete dialogs no longer
+default "block hash" to on. Known gap: two books whose only hash record is
+`Book.FileHash` with no book_file row are not both visible to the index; only
+its owner is. The hard delete of a book now removes the hash-index rows only while they still name that book (see the hash-index entry).
+
+Restore, "Purge now", "Discard progress and purge" and the single hard delete take the merge lock, which a running combine holds for its whole run, so each of them hung until the combine ended. They now wait at most 3 seconds (`merge.InteractiveMergeLockWait`) and then answer 409 with the stable code `MERGE_BUSY` and the message "a merge or combine is running, try again in a moment"; nothing is changed when they answer it. The Library shows that text. The web app now follows merge, combine and purge operations in one app-level tracker next to the toast provider instead of inside the Library page: leaving the page no longer drops the outcome toast or unlocks the books, and the in-flight operation ids are kept in sessionStorage so a reload resumes following them. Locks are kept per operation id, so tracking the same operation twice cannot release its books early. Following an operation the server no longer knows (404/410) or may not read (401/403) now stops with "Lost track of operation X; see Activity" and releases the books, instead of polling forever. Each poll has a 30 second deadline and a retryable failure says whether it was a timeout, a 5xx or no answer. The combine outcome for an operation with no stored result now offers Undo with the operation id, and a purge that removed none of the books it looked at is shown as a warning, not a success. `POST /audiobooks/batch-operations` is the same: its restores and hard deletes wait once for a running combine, then each of them fails with that message in its own result row.
+
+The iTunes PID integrity audit (`itunes.pid_integrity`, the merge-orphan
+census) no longer files a PID on a live non-primary version as a stale owner
+when that version's group still has a live primary: it is a grouped version and
+counts as healthy. Only a PID on a soft-deleted book, or on a non-primary book
+whose group has no live primary (or no group), is a stale owner. A merge that
+crowns an organized member over a PID-holding survivor therefore no longer
+misfiles the survivor's track as a merge orphan. The audit reads each distinct
+version group once, concurrently, and fails if a group cannot be read.
+
+Fourth review of the purge and merge-busy work. The organizer's same-hash duplicate check and the dedup engine's and exact-hash collector's "another book holds this file" checks used the single-answer lookup, which names the live holder with the smallest id: for the oldest holder (in prod, the protected original) that is the book itself, so the check passed as "not a duplicate". They now list every holder through `database.BooksHoldingFileHash` (the `FileHashHolderLookup` capability, not a `Store` method, fails closed when the store cannot list), skip the book itself, trashed holders and, for the organizer, holders outside the library root, and act on the first remaining one. `GetBookByFileHash` leaves `OrganizerStore`, `dedupBookQueries` and `ExactFileHashStore`; fixtures mint ULIDs in prod creation order and in the reverse order. The iTunes importer's hash-link step lists every holder too and never links a new book into a trashed holder's version group (a group a merge emptied would leave it a non-primary member with no live primary; group redirects are followed only by a restore).
+
+`holdersOfHash` reads the candidate keys, completion sentinel, legacy key and every verifying row from one snapshot, so a lookup that races the end of the boot repair can no longer miss a book that only the legacy key named. `maintenance.book-hash-index-repair` counts stray per-book hash keys (a key whose book row does not hold that hash) as `extra`, and the apply (also the boot ensure) removes them after re-reading the row under the book's lock. `MigrateBookSigToSidecar` holds the book's stripe lock for its whole read-strip-write, so a concurrent `UpdateBook` is not reverted.
+
+Restore, the single hard delete (live and trashed), "Discard progress and purge" and the batch restore and hard delete now take the merge lock with `merge.TryLockMergeRMWWithin(3s)` and KEEP it for the whole action, which runs through new `...Locked` variants (`RestoreFromTrashLocked`, `HardDeleteKeepingUserStateLocked`, `DiscardUserStateThenHardDeleteLocked`, `CarryStateThenHardDeleteLocked`, `HardDeleteWithoutUserStateLocked`, the purge's `purgeNowLocked` and the batch purger's `PurgeTrashedBookLocked`). `WaitMergeIdle` only checked the lock and released it, so a combine that started in the gap still hung the request; it is removed. The hold is counted once per click in `MergeLockAcquisitions`. The hard delete re-reads the book under the lock and chooses the trashed or live path on that row, and the batch hard delete does the same; `POST /audiobooks/batch` (bulk update with `marked_for_deletion=false`) is gated like the other batch restores.
+
+fs-regroup-xml voids a retired shell's journaled soft-delete row after a soft-delete error only when the shell then reads back live; a failed read, a missing row or a trashed shell keeps the row, so a write that landed and then reported an error can still be reverted.
+
+- Dedup exact-file-hash check: a merge winner's trashed loser (or a member of the book's own version group) that shares the book-level hash no longer ends the check, so per-file exact-hash matches are no longer missed on every scan.
+- Batch restore and hard delete release the merge lock with a deferred unlock, so a panic inside one cannot leave the lock held until restart.
+- The unused wrapper forms of the restore, keep-state hard delete and discard-and-purge functions were removed: every caller takes the merge lock itself and calls the `...Locked` form.
+- The book hash index builds its keys by concatenation (CodeQL `go/allocation-size-overflow`); the keys are unchanged.
+
+"Purge soft-deleted" is now an operation (`library.purge-soft-deleted`) instead of
+a synchronous request that ran for over a minute and showed nothing. `DELETE
+/audiobooks/purge-soft-deleted` now answers 202 with the operation id (it
+answered 200 with the result before: a breaking change for API clients); the
+purge runs on a worker pool with progress, logs one summary line, emits an
+activity entry, and stores the full breakdown as the operation result
+(`purged`, `skipped_owns_files`, `kept_undo_possible`, `kept_has_progress`,
+`carried_to_sibling`, `carry_failed`, `failed`, `errors`; id lists are capped at
+200 and `truncated` says so, the counts are exact). `POST
+/audiobooks/purge-soft-deleted/preview` runs the same operation as a dry run
+that classifies every trashed book exactly as the purge would and changes
+nothing; the operation itself is a preview unless `dry_run` is false.
+`GET /audiobooks/soft-deleted` carries `purge_breakdown` (purgeable versus
+blocked, by reason) from the last pass.
+
+A soft-deleted book that is the retired shell of a combine whose undo can still
+run (an applied, undo_failed or fully journaled pending combine journal that
+still stamps the shell) is no longer purged by any path: the bulk purge and the
+nightly purge keep it and count it as `kept_undo_possible`, single "Purge now"
+and "Discard progress and purge" answer 409 `UNDO_POSSIBLE`. Purging such a
+shell used to make the combine un-revertable. Combine journals are never
+expired, so a held shell stays in the trash until its combine is undone. Other
+undo records that need a trashed book (operation-ledger soft-deletes and
+auto-merge losers) hold it too; see the undo-hold coverage entry.
+
+The purge's undo hold is now decided against a fresh view of the combine
+journals. The shell index used to be built once per pass, so a combine that
+journaled while a pass ran did not hold its shell and the purge could delete
+it, making that combine un-revertable (fail-open). Every combine-journal write
+now bumps a generation counter (`merge.CombineJournalGeneration`); the purge's
+per-book decision, made under the merge lock where every journal writer also
+holds it, rebuilds the index when the counter moved, on both the plain delete
+and the carry-listening-state path. A rebuild that cannot read the journals
+keeps the book and reports it as failed with the reason.
+
+A merge may now make database-only changes to an iTunes book it did not select
+(owner decision 2026-10-22). A non-selected iTunes version-group sibling or
+group member is re-homed or demoted by writing its `version_group_id` and
+primary flag only, instead of refusing the whole merge; its file path, tags,
+book_file rows and file are untouched. Books the caller selects are still
+refused when they are in the iTunes library, and a combine (which moves files)
+still refuses iTunes inputs. `PreflightLink` matches: it no longer refuses
+because of a non-selected iTunes copy. The comment citing the removed `itunes.ComputeMergedTrackCleanup` is rewritten: a survivor holding an iTunes persistent ID still keeps the primary flag as a deliberate preference, and the PID integrity audit no longer depends on it (see the PID audit entry).
+
+A book merge no longer fails outright when one of its losers is already in the
+trash. `dedup.book-merge` skips an already-soft-deleted loser, merges the rest,
+and reports each skipped id and its reason in the operation result
+(`GET /operations/:id/result`: `merged`, `skipped`, `no_op`) and in the activity
+line. When every loser is trashed the operation succeeds as a no-op. A soft-deleted survivor is still an error.
+`POST /audiobooks/link` checks, before queueing, what the operation would refuse
+afterwards (a soft-deleted keep book, an iTunes-protected selected book, or a
+soft-deleted loser that already sits in a live participant's version group,
+which the merge admits and iTunes-guards) and answers 409 with the reason
+instead of queueing an operation that fails. A non-selected iTunes version-group
+sibling is not refused (it gets database-only changes, see the iTunes entry),
+so the preflight no longer depends on whether the keep book has a version group.
+
+The purge's undo hold now covers every undo that needs a trashed book's row, not
+only combines. Three kinds hold a soft-deleted book: a combine journal (as
+before); an unreverted, unvoided `book_soft_delete` row in the operation ledger
+(fs-regroup-xml fragments, retire-into and the folder-books retire soft-delete a
+shell and journal it; reverting the operation restores it, and the revert
+refuses "no longer exists" for a purged one, leaving the operation half
+reverted), decided with the revert's own stamp check
+(`undo.CheckSoftDeleteCurrent`); and an open auto-merge journal entry (the loser
+of a `dedup.auto-resolve` merge that `UnmergeAuto` has not reversed, provisional
+entries included), re-read when a new entry is journaled mid-pass. Every
+decision is made under the merge lock. Any record the hold cannot read keeps the
+book and refuses the pass. The ledger lookup uses the per-book index
+(`opchange_by_book:`); until `maintenance.opchange-book-index-rebuild` has built
+and verified it this boot, every purge path (bulk, nightly, single, discard)
+refuses with `ErrUndoLedgerNotReady` instead of scanning the whole ledger once
+per trashed book. Cost: ledger, combine and auto-merge holds last until the undo
+runs (none of those records is pruned), so held shells stay in the trash and
+older fs-regroup shells now show "kept: undo possible".
+
+`UnmergeAuto` checks that the loser (and the winner, when it was modified)
+still exists before it touches any sibling, and refuses with "nothing reverted"
+when the loser was purged; it used to move the siblings first and then stop.
+
+A purge that stops early (cancelled, timed out, or refused) now says so:
+`stopped_early` and `stop_reason` in the result, "STOPPED EARLY" in the summary,
+the result stored for the cancelled or failed operation too, and a final
+progress count that matches the books actually decided.
+
+Undo-hold fixes from the third review of the purge. The combine-journal hold no longer skips an absorbed book the merge marked `left_live`: a retire write that failed can still have landed, and a shell carrying exactly the journal's stamp is the one the undo restores, so the stamp alone decides. fs-regroup-xml now journals a shell's soft-delete row before it soft-deletes the shell, and keeps the shell live (counted as an error) when the row cannot be written, so a trashed shell can no longer exist with no ledger row behind it; a soft-delete that then fails voids the row it wrote. The purge now also holds the winner of an open auto-merge when the entry recorded a pre-merge snapshot of it, because the undo refuses when that row is gone. A purge pass whose by-book ledger index loses its trust part way now stops with a reason (`purge stopped: ...`) instead of failing every remaining book. The batch hard delete (`POST /audiobooks/batch-operations` with `hard_delete`) used to delete a trashed book directly and skip the undo hold; it now goes through the purge's own path, as the single delete does, and a batch service without a wired purge path refuses a trashed book's hard delete.
+
+The Library page now follows the new server behaviour. The "Purge soft-deleted"
+dialog runs a preview first ("N purgeable, M kept, by reason"), starts the purge
+as a background operation, and ends with the full breakdown (purged, kept: owns
+files, kept: undo possible, kept: listening progress, failed, and whether it
+stopped early and why). The trash section shows the purgeable versus kept
+counts. "Merge as versions" now has a keeper picker (radio choice, title, file
+count, full path, "Kept" and "Linked as a version" chips), leaves trashed books
+out of the request and says so, runs the merge operation in the background and
+reports its real outcome when it ends: the failure reason, or which losers were
+skipped and why, instead of "Merged" as soon as the request was queued. "Merge
+into one book" does the same. A deleted book is dropped from the selection. The
+"block this file hash" checkbox is off by default in the Library single and
+bulk delete and on the book page, and the toast names the live books that kept
+the hash from being blocked.
+A failed status poll is not treated as a failed operation: the page says "still
+checking", keeps the books (or the purge) in flight and keeps polling with
+backoff until the operation ends, so the buttons are not re-enabled while the
+server may still be working. A purge that is refused or unreadable shows its
+reason once, in the dialog when it is open and in a toast only when it is not.
+A combine outcome whose result has no `operation_id` says "undo id unavailable"
+and where to look instead of silently dropping Undo; the server always stores
+`operation_id` on a successful combine.
+
+`maintenance.transcribe-book-intros` runs again on a server that may not decode
+audio. A new `remote_extract` mode, on by default when `ALLOW_SERVER_DECODE` is
+unset and a Whisper worker advertises `path_pipeline`, sends each book's source
+path to the worker, which cuts the first 90 seconds from its own NFS mount and
+transcribes it; the server runs no ffmpeg and writes no clip cache, and the
+silence retries (300 s clip, second audio file) go through the worker too.
+`serverdecode.Check` now guards only the local-extraction path. The MLX worker
+(`scripts/whisper_mlx_server.py`) gains `POST /transcribe-path` and
+`/transcribe-path-batch`, driven by the new `WHISPER_PATH_MAP` variable (no
+default), and `/health` reports `path_pipeline`, the mapped prefixes and
+whether each mapped root is readable. A silence retry that fails no longer writes the `[SILENCE]` marker (the book is deferred), a read fault inside ffmpeg is reported as retryable rather than a durable `ffmpeg_error`, and a worker without ffmpeg answers `worker_misconfigured`, which defers the book. The Go client gains
+`transcribe.TranscribeByPathBatch` (same pool, journal and progress as the
+upload path; `dispatchPool` and `allocateJobs` are now generic over the job type) and fails closed with a `TransportError`, deferring the page and writing
+no status, when no endpoint qualifies or a mount is lost. Worker errors map to
+`ffmpeg_error`, `source_file_missing` (only when the server cannot stat the file
+either), a new non-durable `path_unmapped` status with its own
+`stats:transcribe` counter, or the retryable `whisper_error`. See
+`docs/whisper-remote-extract.md` for the mount and `WHISPER_PATH_MAP` setup. A mapped root only counts as readable while it is still a mount point (a soft read-only NFS mount that stays dead is forcibly unmounted, leaving an empty directory), a silence retry that returns a real per-book verdict is classified like any worker error instead of being deferred, and a container refused by the worker's ffmpeg format whitelist is the retryable `container_rejected`, never the durable `ffmpeg_error`.
+
+Fixed: CI `apt-get` steps now go through `scripts/ci/apt_install.sh`, which adds apt retries, 30s network timeouts, a 600s cap per call and up to 3 whole-sequence attempts, so a hung package mirror can no longer stall a job for 34 minutes.
+
+Fixes from the fifth review of the purge and merge work (PR 4140).
+
+- The manual purge is bound to its preview. `PurgeOptions.TrashedBefore` (the `trashed_before` instant a preview returns, RFC 3339 with nanoseconds) limits a real pass to books trashed at or before it, using `marked_for_deletion_at` and, for a row a trash path wrote without one (rows written before every writer stamped), the row's last write; a book with neither is left out. The bound is re-checked on the row re-read under the merge lock, in both the plain and the carry-state path, so a book restored and trashed again after the preview is left alone. The books it left out are reported as `trashed_after_preview` and count as decided. A real pass given neither `TrashedBefore` nor `Unattended` is refused with `ErrPurgePreviewRequired`; the nightly wrapper `PurgeSoftDeletedUnattended` sets `Unattended`. `DELETE /audiobooks/purge-soft-deleted` answers 400 without `trashed_before` (and for a value that is not RFC 3339), and the `library.purge-soft-deleted` op takes `trashed_before` too. The dialog sends the preview's string back unchanged and disables Purge when the preview did not return one.
+- The preview lists what `delete_files` would do: `files_to_delete` (capped), `files_to_delete_count`, `files_kept`, from the same `planPurgeFile` decision `purgeFinish` now uses, so the two cannot disagree. The dialog shows the list when "also delete files" is ticked.
+- The nightly purge (`maintenance.purge-deleted`) returns the error when `RunPurge` refused or stopped early, so the op fails instead of ending successfully having done nothing, and logs `PurgeResult.Summary()` instead of its own shortened line. `RunAutoPurgeSoftDeleted` now returns an error.
+- A combine stopped by its context after the bulk file move no longer leaves absorbed books live with no files: it finishes retiring every book whose files moved, drops books it had not touched from the journal, still recomputes aggregates and hands off left groups, and returns an incomplete-combine error counting both. A context already done before the first write refuses before changing anything.
+- The organizer's every-holder hash check skips a row over the book's own file and no longer refuses a book that is already inside the library for an in-root twin in another version group (the twin is reported through `OnCollision`; a twin at the target path still refuses). The same-group in-root twin still refuses; `todo.d` tracks it.
+- The `book-hash-index-repair` description now says it deletes extra new-family keys and never writes or deletes a book or `book_file` row.
+
+Made the callers of the retired-version read filters retired-aware, the third
+of five stacked changes for retired book versions, and added the locking tests.
+A retired row is a version a live book keeps out of its own file list, so code
+that treats a book file as "owned" or "a candidate" now tells the two apart.
+Dedup (the exact AcoustID, LSH and scan collectors), the iTunes heal, the
+Deluge link backfill and the regroup snapshot skip retired rows. The iTunes
+importer treats a track whose PID only a retired row holds as already in the
+library: it is skipped, no second book is created, and nothing is written onto
+the holder. The iTunes and external-ID backfills map a retired row's PID to its
+holder, a Deluge torrent already held by a retired version is refused with its
+own reason, and the version-group cleanup keeps a duplicate that holds only
+retired rows instead of deleting its file and then failing. The scanner treats
+a file whose only claims are retired rows, and scanned content that matches a
+retired version by hash or segment vote, as known retired content and skips the
+import rather than rescanning or growing the holder; a hash check that cannot
+be answered completely skips the import and retries on the next scan. The
+path-claim checks (regroup, junk-title, consolidation-leftovers, merge, version
+groups, Deluge import, repoint journaling) read the unfiltered path getter so a
+retired row counts as occupying its path. The signal coverage reports leave
+retired rows out of their population, and the database census reports them as
+`retired_version_files`. `ListBookFiles` takes `include_retired`, and the admin
+debug view lists retired rows flagged. The include-retired helpers resolve the
+retired-row reader and fail closed for a store that does not offer it. Nothing
+retires a row yet, so running behavior does not change.
+
+- The retired-versions preview now honours the owner's rejects when it plans a
+  book in the trash (retired-version plan, PR 8 of 9). A reject of a book's
+  `repairs:retired-versions` proposal (the book is the entity) holds that book
+  whatever its target, with `owner_veto_family` `shell_rejected`. A pair veto in
+  `same_work` or `same_copy` between the book and its target holds the row too.
+- A reject keeps holding after the books it names move. Every stored id of a
+  reject is resolved to a path: `decisions.RetiredBookResolver` follows
+  `idx:bv:from:<shell>` to the book that holds the shell's files (a live book is
+  never redirected), and `maintenance.NewOwnerVetoReader` chains it with
+  `merge.ResolveMergeSurvivorPath` until the id stops moving, keeping every book
+  the id went through. `decisions.Vetoes` keeps a reject whose two ends collapsed
+  into one book, with both paths, and `PairVetoed` holds a pair when one end's
+  path took one of the books and the other end's path took the other. So a reject
+  of (A, Y) still holds Y's row after A was retired into, merged into or absorbed
+  by (a combine's sync redirect) Y's target, and the unresolved-name lookup the
+  first version of this PR kept beside the snapshot is gone: the snapshot is the
+  one lookup. A generic `Vetoes.PairVetoed(7, 9)` with 9 merged into 7 now
+  answers true, because the owner said they are not the same.
+- An id that cannot be resolved no longer refuses the whole run or fails open. A
+  shell whose retired versions name two holders that each still hold rows, and a
+  merge chain that loops, are held per id: only the rows whose pair a stored
+  reject touches (or whose own ids are such an id) become the new category
+  `owner_veto_unresolvable`, risk `review`, with every unresolvable id in the
+  row's reason, evidence and `owner_veto_unresolved_ids`, and once in the plan
+  log. The other rows are planned as usual. A definite veto on the same pair
+  still wins. A run is refused only when the rejects cannot be READ (the decisions
+  store or a merge journal failed), as before. When BOTH ends of a stored reject
+  are unresolvable, the rows held are the ones that touch a book the failed
+  resolutions went through; that is best effort, and the log lists the ids.
+- `RetiredBookResolver` ignores a retired version that holds no rows. A retire
+  that was cut off before its batch (or whose rows were put back some other way)
+  can leave one, and it used to make a shell look as if it had two holders.
+- A re-plan of one row no longer re-reads the whole decision log. The Server
+  hands each plan or re-plan its own owner-veto reader (a re-plan must see the
+  books as they are now) over a shared `decisions.RowCache`, which keeps only the
+  raw rows of the last scan and drops them when a record is written (every write
+  of a `decision:` key goes through `Store.commit`, held there by
+  `TestDecisionKeysHaveOneWriter`). What a re-plan still pays: the merge-journal
+  scan for the flag-holder follows, the combine-journal scan, and resolving every
+  stored id (a few reads each, memoised within the reader). A resolved snapshot is
+  deliberately not cached across re-plans: an Apply changes the book and retire
+  state between them, and a stale snapshot would drop a reject.
+- The retired-versions Apply and the revert of a retire now write the decision
+  records. After a row's retire commits, the Apply writes an `applied` record on
+  the shell's subject (`decisions.RecordRetiredApplied`, from
+  `retiredVersionsFixer.recordApplied`); when a revert deletes the retired
+  version a retire made, which it does only once every row is back, it writes an
+  `undone` record (`decisions.RecordRetiredUndone`, from
+  `RevertService.recordRetireUndone`), whichever path reached it: a whole-op
+  revert, a scoped revert, or the combine undo's retire reversal. Both are
+  labels, not vetoes. They need a shell id, a version id and the id of the retire
+  op, and a retry that finds the same (decision, version, op) already on the
+  subject writes nothing, the check and the write under one subject lock
+  (`Store.RecordUnlessSeen`). A failure to write one is logged and never fails the
+  row or the revert. Neither record carries a plan op id or an actor (the Apply
+  and the revert are handed neither), so their source is `auto`.
+- `decisions.ChainResolvers` is removed: the owner-veto reader needs the path of
+  every hop, so it chains with `ChainPathResolvers`, and nothing wanted a chain
+  that returns only the last id.
+
+Added the Apply of the `retired-versions` repair, the seventh of nine stacked
+changes for retired book versions, behind the new setting
+`retire_versions_apply_enabled` (env `RETIRE_VERSIONS_APPLY_ENABLED`, default
+false). With the setting off the fixer stays plan-only and refuses every apply
+with a message naming the setting, exactly as before. With it on, each
+applicable trashed book is re-checked under the merge lock, then its live
+`book_file` rows are re-keyed in one atomic batch as a retired version of the
+book it lost to (nothing is deleted), its external ids move to that book, its
+merged-into link is set, and any retired versions it held move too. Every write
+is journaled first (`repair_plan_record`, `book_version_create`,
+`book_file_retire`, `external_id_reassign`, `book_merged_into`,
+`retired_version_rehome`), in the undo package's own change types and value
+formats, so reverting an Apply from the Operations page undoes it. A retire
+operation that holds a retire row the undo cannot read is refused as a whole
+with a 409 rather than half-undone. Applies are a dry run unless
+explicitly told to write, partition by holder so no two workers touch one book,
+skip a book already retired (a shell only counts once a version naming it
+holds rows, so an empty version is never mistaken for a finished retire), and
+finish a run that was cut off after its rows moved from a fresh plan, which
+lists the book as `retire_tail_pending`. The run reads the series, user and
+combine-journal state once up front, never under the merge lock, and a flag
+flipped off as a run starts is `retry_later`, not `failed`. A trashed book an unreversed combine absorbed is held as retry_later
+until the combine-undo link exists. The plan no longer counts a retired row as
+a live owner of its path, so sibling shells keep stable fingerprints after the
+first one retires.
+
+The purge, hard delete and restore paths now refuse a retire shell, a trashed
+book whose file rows were retired onto another book and whose retired versions
+still hold rows (`database.ErrBookIsRetiredShell`). The nightly auto-purge and
+"Purge now" skip it (new `skipped_retired_shell` count and ids in the purge
+result, also in the auto-purge log line), "Discard progress and purge", the
+single and batch hard delete and `RestoreFromTrash` refuse it (HTTP 409, code
+`RETIRED_SHELL`), and a failed retired-version lookup fails closed. This holds
+until the journaled purge (PR 6) can snapshot a shell, and it keeps a restore
+from bringing back an empty imported book.
+
+The same refusal now guards every other un-trash or delete path for a retire
+shell: `DeleteBook` and `RevertBookToVersion` at the store (fail closed,
+`ErrBookIsRetiredShell`), the metadata revert handler (409), `UnmergeAuto`,
+the soft-delete revert, undo preflight and combine-undo. A book that holds only
+retired versions (no live row) counts as owning files: the purge keeps it,
+"Discard progress and purge" refuses it before any listening state is discarded,
+and a live hard delete refuses it before the hash block or the progress carry. Restoring
+a book that does not exist returns 404.
+
+Undoing an operation now refuses an external-id or merged-into row that would
+put a link back onto a retire shell, unless the same operation retired that
+shell, and the metadata revert and `UnmergeAuto` take the merge lock around the
+store revert. A retire's finish moves only the external ids its journaled plan
+record named, and a retire adopts an empty retired version only when its own
+operation created it.
+
+The duplicate version-group cleanup now checks, under the merge lock and before
+it removes a duplicate's file, that no `book_file` row of any book (retired
+rows included) names that path. A named file stays on disk while the
+duplicate's book row is still removed (new `files_kept_referenced` count); a
+lookup that cannot be answered keeps the duplicate and its file, before any
+listening state is carried (new `path_check_errors` count).
+
+Added the storage model for retired book versions, the first of five stacked
+changes that let the retired-versions fixer retire a trashed duplicate's
+files into the live book instead of leaving them stranded. A `book_file` row
+now has a `Retired` flag and a book version has a `retired` status, with the
+shell it came from and the operation that retired it recorded on the version.
+Retiring re-keys the row under the live book and never deletes it; every
+default `book_file` read, count and aggregate skips retired rows, and the
+generic move and delete primitives refuse them. `RetireBookFiles`,
+`UnretireBookFiles` and `RehomeRetiredVersion` are the only operations that
+create, undo or move one, exposed as capabilities rather than on the `Store`
+interface. Nothing calls them yet, so running behavior does not change.
+
+Made the first set of readers retired-aware, the second of five stacked
+changes for retired book versions, and closed four review gaps in the store
+primitives. The single-identity lookups (`GetBookFileByPath`, `ByPID`,
+`ByAcoustID` and `GetBookBySegmentFileHash`) now answer the live file only; a
+new `GetBookFileByPIDIncludingRetired` returns a retired holder, and
+`BookFilesAtPath`, `BookFilesWithHash` and the ID-only fingerprint lookups
+still return retired rows by design, which the docs now list exactly. The undo
+path-key claim and the revert candidate loops never hand a path key to a
+retired row. `RetireBookFiles`, `UnretireBookFiles` and `RehomeRetiredVersion`
+hold the version stripe and each row's stripe from read to commit, so a
+concurrent fingerprint or transcript write is no longer undone, and
+`UpdateBookVersion` and `DeleteBookVersion` take the version stripe so a stale
+version can no longer point a retired version back at its old holder.
+`CreateBookVersion` refuses a retired version without its provenance and a
+re-home refuses the shell the version was retired out of. The maintenance
+repairs that claim, move or repoint file rows now see retired rows (a retired
+row is refused by name, never moved or repointed), and the iTunes PID audits
+count retired rows apart from live duplicates so a retired row that keeps its
+PID is neither a duplicate nor an orphan. Nothing retires a row yet, so no
+retired row exists for these readers to see on production; the changes that do
+run there are the stripe locks the retire primitives and the version updates
+now take, and the repairs and iTunes audits reading through the new
+retired-inclusive readers.
+
+Fixed the review findings on the retired-version readers before anything can
+retire a row. A retired version's file path is now one rule everywhere: it is a
+claim on that path. The guards in `fs-regroup-xml`, the junk-title fixer, the
+consolidation leftovers walk, `fix-version-groups` and the merge planner's
+virtual-file attach used lookups that cannot see a retired row, so their
+"held by a retired version" checks never fired; they now read through one shared
+helper and refuse the path (the merge planner attaches nothing to a path a
+retired version holds, and plans nothing when the complete path lookup is
+unavailable). The iTunes cross-type audit no longer counts a retired-only PID as
+a live-primary hazard. `rewrite-path-prefix` treats each holder's retired rows
+as their own all-or-nothing unit, so a retired row can no longer block its
+holder's live rows, and its scanned and matched counters are live-only. The
+retired-inclusive readers fail closed when the complete reader is unavailable.
+`BatchUpsertBookFiles` now takes the file stripe of each row it rewrites, so a
+scan's upsert can no longer be undone by a retire committing between the read
+and the write, and retire, un-retire and re-home re-check the index keys they
+decided on under the owner stripes at commit (this narrows that window; it does
+not close it against another writer of the same key). The repoint-book-file-rows
+apply path re-checks for a retired row inside the write, a failed segment-hash
+lookup during the scan's multi-file vote is now counted and logged, and the
+tests that guard these paths now fail without their fixes. Nothing retires a row
+yet, so the retired-row rules cannot fire on production; the changes that do run
+there are that `BatchUpsertBookFiles` now takes a file stripe per row it
+rewrites, the repoint, recover and path-prefix repairs read every row through
+the retired-inclusive reader, and `rewrite-path-prefix` counts only live rows.
+
+Added the retired-versions screens, the last of the stacked changes for retired
+book versions. On a book's Files and History tab a collapsed "Retired versions"
+panel lists the versions of trashed or merged books that were moved onto it,
+with each version's source book, date, file count, size and duration and a list
+of its files in disc and track order. Each version has a Restore button that
+is disabled for now, with the reason as its tooltip: "Restore will be available
+once restores are journaled", or that the original book was purged or is no
+longer in the trash. The button is not shown to a caller without the
+library-organize permission. A restore that is not journaled would drop each
+file's earlier version link and could not be undone, so the restore route
+`POST /audiobooks/:id/retired-versions/:vid/restore` answers 501 Not
+Implemented and changes nothing until journaled restores exist. A "Show retired
+files" switch next to the book's files lists its retired rows read-only below
+the live ones, so they can never be selected, split or moved. The listing route
+is `GET /audiobooks/:id/retired-versions`; each version now reports
+`shell_in_trash` as well as `shell_exists`. The file listing already accepted
+`include_retired=true`; the web client now sends it from the switch.
+
+Added the undo journal for retired book versions, the fifth of nine stacked
+changes. A retire is now journaled in three new change types
+(`book_version_create`, `book_file_retire` and `retired_version_rehome`) with
+a matching revert for each: reverting puts every retired file back on the book
+it came from, with its flag and version id as before, and deletes the retired
+version. Of the index keys only the unique iTunes persistent id key comes back
+exactly as it was; a path or hash key that another live row also carries stays
+with that live row (a live row always wins a shared key), and a key nothing else
+claims goes back to the restored row. The writer gained `RetireVersion` and
+`RehomeRetiredVersion`, which journal first and refuse (voiding the journal)
+rather than half apply. A new `RevertOperationForBooks` reverts one shell of a
+multi-shell operation at a time (it accepts shell ids only, and a scoped run
+keeps its own owed-settle record instead of clearing the whole operation's), and a shell that a purge already deleted is
+recreated from its purge snapshot before its rows are reverted once the purge
+change provides one (until then the revert refuses it by name). Every by-id
+revert of an earlier operation now refuses a file that has since been retired
+(changed since) instead of overwriting it, and the revert and combine-undo
+path and sibling reads count retired rows. Undoing a combine first reverses
+the retires linked to each absorbed shell (the new `merge:combine-retire:` key
+family, one link per shell and retire op, so a shell retired twice is reversed
+newest first) and refuses the whole undo, writing nothing, if any retire cannot
+be reversed; each retire op is read once per link under the merge lock. A
+retire is refused unless its shell is still in the trash, and its link is
+written even when the combine left the shell no files. The revert of a chain
+rehome moves the version back onto an old holder that is in the trash (a new
+`RestoreRetiredVersionHolder` store method) and recreates a purged one from its
+purge snapshot once one exists, and the operation revert lock is now keyed by
+the exact operation id rather than a shared stripe. The preflight of a chain operation (a retire whose version was rehomed in the same operation) judges the retire rows against the holder the rehome's own reversal puts the version back on, as the revert does. A combine undo takes the locks of the retire operations it reverses before it writes anything, so a busy one refuses the undo with the journal untouched. Restoring a trashed book
+decides its library state on its live files, not on retired versions it holds. The retire journal rows are exempt from journal pruning, so an old retire is never mistaken for a reversed one. Nothing retires a row yet, so running behavior does not change. A retry of a combine undo counts what an absorbed shell was given since the combine on every attempt (live rows plus rows a linked retire holds, minus the combine's own journaled rows), so a row the shell gained after a failed attempt and a retire then took still refuses the undo. A whole-operation revert reads the owed group settles a dead scoped run left and folds them in memory, and a scoped run reads the whole operation's pending groups read-only, so a version group is settled instead of left with no primary or two; a run that returns early before its settle moves no record, the scoped records are deleted only after the operation's own record is stored, and a record that cannot be read or decoded is never written over or deleted. The revert of a retire's version deletes it only if its format, source, original path, torrent hash, metadata and retire provenance still read as the retire wrote them, and that compare now runs inside the store's delete under the version lock (`DeleteBookVersionIf`), so an edit cannot land between the check and the delete. `RestoreRetiredVersionHolder` refuses a destination that does not exist at commit time, under the owner lock `DeleteBook` takes.
+
+Fixes from the sixth review of the purge work (PR 4140).
+
+- Every trash writer now stamps `marked_for_deletion_at`: the diagnostics `delete_orphan` fix was the one that did not. The store enforces it too (`enforceTrashStamp` in `createBook` and `updateBookLockedMode`): a book going from live to trashed gets the write time when the caller left the stamp unset or kept the stale one from an earlier trashing, so a restored-then-retrashed book no longer inherits its old trash time and skips the retention window. A distinct stamp a writer chose is kept; a still-trashed row never loses its stamp; restore paths still clear it themselves. `Book.TrashedAt()` reads the stamp, else the row's last write, and the retention filters (Pebble and memdb `ListSoftDeletedBooks`, both `CountSoftDeleted` paths, and the purge) use it, so an unstamped row written by older code is judged by its last change instead of being treated as long overdue. `SeedLegacyBookRowForTest` bypasses the guard to seed such rows.
+- A purge never removes a file a trashed book that stays still names. File removal is deferred until every book is decided (`removeDeferredFiles`), re-runs `planPurgeFile`, and keeps a path any remaining trashed book names or the preview did not list. The preview applies the same rule (`settlePreviewFiles`) so its list and the removal cannot disagree; `files_kept` now also counts those paths.
+- A purge bound to a preview also leaves alone a book the preview showed as kept that has since become purgeable (`not_in_preview`), on the plain and carry-state paths. The server remembers the last four previews in memory (purgeable ids and files, keyed by `trashed_before`); a purge whose preview is not remembered (server restart, more than four newer previews) stops with `ErrPurgePreviewUnknown` and the reason "run the preview again".
+- The preview and purge now list the whole trash and report books inside the retention window as `not_yet_due`, so `attempted` equals the sum of the outcomes. A caller-supplied `TrashedBefore` later than the pass start is clamped to it.
+- A combine stopped by its context no longer writes a journal record per untouched book it drops; the drop is in memory only.
+- `PurgeSoftDeletedBooks` is renamed `PurgeSoftDeletedUnattended` (callers updated) so the name says it skips the preview binding.
+- The web dialog and `purgeSummary.ts` name `not_yet_due` and `not_in_preview`, include them in the decided count, and the files-kept text now says protected and trashed-twin paths are kept too.
+- A comment on the organizer's in-root twin check named the wrong mechanism: `OrganizeBook` never re-lays a file out in place (that is `inPlaceLanding`); the branch is reached only by direct `OrganizeSingleFile` callers and rarely fires in production.
+
+Security: the Audible read-status fixer (`maintenance.audible-read-status`) now needs `users.manage`, the same as the master-list import (owner decision 2026-10-24: admins only). Its plan and apply writes any user's listening state, so an editor can no longer plan, apply, owner-apply or read its plan rows, and a Repairs operation of that fixer is readable only to a caller who holds `users.manage`. A Repairs operation whose fixer this build no longer registers now also asks for `users.manage`, because the removed fixer could have been one of the two read-status imports.
+
+Security: the operations v3 routes no longer show a Repairs run to a caller who may not use its fixer. On `/api/v3/ops`, `repairs.plan` and `repairs.apply` runs the caller may not read are left out of `runs`, `counts` (every grouping, so no count admits a hidden run), `timeline`, `defs` (`last_run` is null) and the `events` stream (each subscriber is filtered on its own permissions, including the replay after a reconnect); `runs/:id` and `runs/:id/rows` answer 403. Cancel is refused to a caller who may not read the run unless that caller started it; approve has no starter exemption and is refused to anyone who may not read the run. The run list is filtered inside the store scan (a new `RunQuery.Keep` predicate, called once per candidate), so the page and `total` are exact in a single pass; the earlier refill loop and the second read of every Repairs run are gone.
+
+Security: the generic start routes (`POST /operations/v2`, `POST /api/v3/ops/runs`, `POST /api/v3/ops/defs/:id/runs`) and the retry route now apply the fixer's own permission check when they start `repairs.plan` or `repairs.apply`. A caller with `settings.manage` but not `users.manage` could previously start the Audible read-status fixer through them. A start with no `fixer_id` answers 400 and an unknown fixer 404.
+
+Security: the activity log no longer shows an operation's rows to a caller who may not read that operation. `GET /activity` leaves out every row of such an operation (the reporter's rows and the engine's own log lines) and counts its total without them; `GET /operations/:id/activity` answers 403, and `POST /operations/activity/merged` drops such members and answers 403 when none is readable. A nightly daily digest is redacted on the returned page: the items that name a hidden operation are dropped from `Details.items`. The digest's `counts`, `original_count` and `tag_counts` aggregates are not redacted. When an operation's record cannot be read, an entry is judged by its own type and `def:` tag (one that names a Repairs definition is hidden) and the failure is logged once per operation.
+
+Security: the dashboard (`GET /dashboard`) filters `recent_operations` through the same check, so a hidden Repairs run is not named, and it no longer serves any operation's `result_data`. It reads a window of the 50 newest operations and keeps the first five readable ones.
+
+Security: `POST /operations/:id/revert` now applies the same read gate as the operation's other routes. A caller who may not read the operation's fixer, or any row of its change journal, is refused 403 before anything is reverted, which covers an operation that was discarded and an operation with no journal rows; a journal row that carries user data (a user-state or user-content follow row) now needs `users.manage` to read, to preflight and to revert, and a caller without it is refused 403 on the preflight and the revert of that operation. The report the revert returns (the merge's kept, superseded, hand-off and settle notes) names users and what they were listening to, so a caller without `users.manage` gets those notes replaced by a count of how many were withheld.
+
+Security: log lines that name a user are no longer served to a caller without `users.manage`. The activity writer tags such a line when it records it, including a line that was folded into a batch (the batch is keyed on the tag, so a line naming a user never shares a batch with one that does not), and every activity read route (`GET /activity`, the per-operation and merged activity routes, the digest and operation-log fallbacks) leaves tagged entries out for a caller without `users.manage` and counts the page without them. The tag is a heuristic over the line's text, so a line that names a user without matching it stays visible. The structured account audit rows (`auth_email_displaced`, `user_merge`, the guest service token rows) are listed by type and withheld on the same routes, and the `actor` of the trash purge and admin debug rows is stripped from the copy a caller without `users.manage` receives.
+
+Security: `GET /system/status` (`settings.manage`) now lists recent operations through the Repairs read check and no longer serves any operation's `result_data`; a custom role with `settings.manage` but not `users.manage` no longer reads the Audible read-status runs there. The dashboard and the status route share `sysinfo.RecentOperations`, which reads the newest 50 operations with `ListRecentOperationsV2` and keeps the first five readable ones.
+
+Fixed: the operations v3 run list asks the store to skip a hidden Repairs run by its index key before the record is loaded (`RunQuery.SkipID`), so a hidden run is not decoded or counted, and a run whose stored record cannot be decoded is skipped and logged (`RunQuery.OnUndecodable`) instead of failing the whole listing with a 500.
+
+Security: `repairs.Writer` refuses to journal a change type that `undo.ClassifyChangeType` does not know (`ErrUnclassifiedChangeType`, which also matches `ErrNotJournaled`), before the lease beat, the journal row and the write. A new type must be declared in `internal/undo` and classified in `changeTypeHoldsUserData` as user data or library data, or listed with the library-data literals (`metadata_update`, `series_merge`, `series_delete`, `book_file_repoint_location`), so a type that carries one user's data cannot reach the journal routes as library history by default. Writers that create `OperationChange` rows directly, without the Writer, are not covered (see the to-do fragment).
+
+Security: a plan result's `params` carries `target_user_id` into `result_data`. The fixers that take it (the Audible read-status import and the master-list import) need `users.manage`, so every generic route that serves that result already requires it; a new test asserts an editor, a viewer and a `settings.manage` role are refused on `/operations/:id/result` and `/operations/v2/:id` and that the admin reads it, and a source-scan test fails the build for a fixer that declares a `target_user_id` param without scoping itself to `users.manage`.
+
+Security: the operation activity routes (`GET /operations/:id/activity`, `POST /operations/activity/merged`) no longer fall back to the operation's op-log lines when the activity log held rows for it and the visibility filter dropped every one; the fallback now runs only for an operation the log holds nothing for, and it applies the same verdict to its own lines (a line of a Repairs definition whose operation has no readable record is withheld).
+
+Security: The Repairs lane no longer shows a plan's rows to anyone who can merely view the library. `GET /repairs/:fixer/plan/:op_id/rows` now needs every permission the fixer requires (the same check the plan, apply and owner-apply routes already made), and answers 403 before reading anything. Plan rows carry other users' data (the master-list import's target and uploader ids, the Audible read-status fixer's reading state), and guests are created with the viewer role, so a guest could read other users' reading history. `GET /repairs` still lists every fixer but leaves the last plan and apply (their operation ids and counts) off a fixer the caller may not use, and marks it `"permitted": false`; the Repairs page shows a "you don't have permission" state for such a fixer and for a 403 on its rows.
+
+Security: the same Repairs data is no longer readable through the generic operations routes. For a `repairs.plan` or `repairs.apply` operation, `GET /operations/:id/result`, `GET /operations/:id/changes` (the change journal, which holds a user's listening state before and after for the Audible read-status fixer), `GET /operations/:id/undo/preflight`, `GET /operations/v2/:id`, `GET /operations/v2/:id/logs/download` and the operation log reader now need every permission the operation's fixer requires and answer 403 otherwise. `GET /operations/timeline` and the `GET /operations/events` stream leave out Repairs operations the caller may not read, and the timeline's counts cover only what the caller sees. The fixer is read from the operation's params, then its result; a Repairs operation that names no fixer is refused to everyone, and one whose fixer this build no longer has is readable only by an admin. Other operations are unchanged.
+
+Security: a Repairs fixer's change-journal rows are now checked row by row, so they stay protected after the operation itself is gone. Discarding an operation deletes its record but keeps its change journal, and the journal is also listed per book. `GET /audiobooks/:id/changes`, `GET /audiobooks/:id/changelog` and `GET /operations/:id/changes` now leave out the rows a caller may not read and keep the rest of the book's history. A row belongs to a Repairs fixer when its source names a registered fixer, or, for a row written before sources were recorded (before 2026-10-03), when its operation is a Repairs operation; such rows need the fixer's permissions.
+
+Security: change-journal rows that hold one user's own data now need the users.manage permission on top of the fixer's permissions, on all of the journal routes above. These are listening state and positions written by the Audible read-status fixer, every user's state carried from a retired book onto its survivor, rating, collection and private playlist carries, and the owner-apply note naming the applying user. An editor who may run fragment-consolidation still runs it and can still undo it, but no longer reads the user state its rows hold. Rows of this kind written before sources were recorded were readable by any viewer and now need users.manage too; the 2026-10-01 and 2026-10-02 consolidation runs left thousands of them. `GET /operations/:id/undo/preflight` answers 403 when any row belongs to a fixer the caller may not use, 500 when an operation record it needs cannot be read, and otherwise reports as before (it names rows, never their values).
+
+Security: `GET /merge/combine-journal` and `GET /merge/sibling-journal` no longer show every user's progress to anyone who can view the library. For a caller without users.manage, each journal is listed without its per-user `progress` and without the warnings or last error that name a user; the rest of the journal is unchanged. The "discard progress and purge" entry in the activity log (`GET /activity`, `GET /operations/:id/activity`, `POST /operations/activity/merged`) likewise no longer carries its per-user progress summary for such callers, as the trash listing already did.
+
+Still open, closed by the follow-up #4151: other users' listening state can still be read below users.manage in four places. The activity log copies the server's own log lines, and some of those name a user with their listening progress. A Repairs operation's log lines, including the owner apply's user id, are served by the activity routes. Undoing a merge returns warnings that name a user who listened since. An editor can plan the Audible read-status fixer against any user and read that user's reading state in the plan rows (#4151 makes the fixer admin-only).
+
+Fixed: the previous change in this fix turned the server's inline permission check into one that writes nothing, which the ops v3 handlers also use, so a denied start or approve on `/api/v3/ops` answered 200 with an empty body. The inline check writes the 401/403 again for those handlers, and the Repairs handler uses a separate check that writes nothing.
+
+Review fixes for the retired-version callers change. Importing a new book no
+longer fails while the in-memory index is still warming up: the retired-content
+hash check answers "none" at once when no retired version exists, and otherwise
+reads the retired versions straight from the database instead of refusing. A
+rescan that reaches a trashed or merged book's old folder (the shell a retired
+version was taken from) by its own path or organizer ID is now skipped as known
+retired content, and never mints a second row for a file a retired row already
+holds. The iTunes and external-ID backfills no longer map a persistent ID to a
+retired holder when a live row carries it. Reverting a repoint hands a path's
+index entry back to a retired owner (unless a live row has the path), so the
+undo journal and the index agree. The collision
+resolver in organize and write-back counts a retired version's row as the
+occupant of a path and, when the occupant is byte-identical, refuses the
+collision instead of quarantining the source or repointing over the retired
+row's index entry, the Deluge import refuses a source whose path a
+retired row holds (and the write guard's importer says so), the scanner locks
+the holder of a retired version whose row is a multi-file book's first segment,
+and a rewrite of a retired version's file keeps that row's hashes and codec
+fields true. Stale comments about the retired-row checks were corrected, the
+single-flight test helper now asserts the call's error, and the AcoustID scan's
+retired guards have their own unit tests. Nothing retires a row yet, so running
+behavior does not change.
+
+Fixed the re-review findings on the retired-version readers. The merge planner's
+virtual-file attach no longer drops a file silently while the in-memory index is
+still warming up: with no retired version in the library it uses the ordinary
+lookup (which is complete then), and with one it stops the combine with an error
+instead of planning an empty attach; `fix-version-groups` and `fs-regroup-xml`
+take the same shortcut instead of refusing every group during warmup. Every
+writer of the single-owner path index (book-file create and delete, the path-key
+claim, the segment and fingerprint wipes, the window cascade) now commits under
+one mutex that retire, un-retire and re-home also hold across their verify and
+commit, which closes the window the previous round only narrowed. A new
+architecture test lists every non-test caller of the retired-filtering getters
+and fails on a new one that nobody reviewed. `tag-backfill` writes bounded
+chunks of whole books so one write no longer holds hundreds of file stripes, and
+`rewrite-path-prefix` runs a holder's live and retired units on one worker so
+two workers never write the same book at once. The batch book-file writers'
+retry restore now deep-copies the caller's rows. A retired version can no
+longer lose or change its `retired_from_book_id` or `retired_at` through
+`UpdateBookVersion`, and a retire into a version without that provenance is
+refused, so the probe that tells the warmup lookups no retired version exists
+cannot go false while one does. The merge planner stops on a failed row read
+instead of planning a second row over a live one, `CombineBooks` settles its
+file lookups before it writes its undo journal so a refusal leaves no Pending
+journal, and an applied multi-row book-file delete whose fsync fails still
+clears the in-memory index.
+
+Nothing retires a row yet, so the retired-version rules themselves cannot fire
+on production. The write-path changes in this entry do run there as soon as it
+merges. Every book-file create, batch upsert, move, delete and path-key claim, and the
+segment and fingerprint wipes, now commits under one process-wide mutex, so those
+writers no longer run in parallel with each other at the commit itself. The
+in-place rewrites (`PatchBookFileFields` and the scan-cache stamp) are not
+covered: they write one row under its book's stripe only. The book-file deletes and the segment and fingerprint
+wipes apply without a sync and fsync the write-ahead log once afterwards, so a
+failed fsync now reports durability unknown instead of a plain error.
+`tag-backfill` writes 32-row chunks of whole books, about eight times as many
+batch writes and log fsyncs as before (roughly 23,000 instead of 3,000 on a
+750,000-row library). `rewrite-path-prefix` groups its work by book, and a
+combine refuses with an error on a store that cannot say whether a retired
+version exists, where it used to proceed.
+
+The combine's planner for a single-file book's own file (`planVirtualFile`) also
+behaves differently on production. With the in-memory index serving it now reads
+the complete list of rows at the path, where it used to read only the one row the
+path index names, and it prefers the target book's own row. A failed read of the
+survivor's file rows now refuses the combine, where it used to be read as "no
+rows".
+
+Fixes from the tenth review of the purge work (PR 4140, continued in PR 4165).
+
+- The library-root check no longer asks whether the root directory is empty. On production the root is never empty while the application runs: the database (`.appdata`), the cover cache and the backups live inside `root_dir`, so "not empty" passed for an unmounted library. `libraryRootReady` now samples the database's own evidence through a narrow capability (`database.LiveBookFileSampler`, not a `Store` method): up to 50 live (not trashed, not retired, one per book) `book_file` paths under the root, read in five runs, each starting at one of the distinct first characters found in the paths under the root (taken in random order, found from the index; folders that share a first character share a start) and wrapping round, are stat-ed with `os.Stat`, and the root is ready only when more than half of them are there. A short answer is the whole population, so it needs no minimum; a library with no live file under the root anywhere is ready (nothing to compare against), but a sample is never taken from a window that happens to hold none while the library has some. A store error, or a store without the capability, refuses. The check gives up after 10 seconds (`rootStatTimeout`) when a stat hangs and refuses, and the pass guard stamps a good check with the time it began, shares one check between workers that find it stale together, and holds no lock while it runs. Cost: a library that has really lost most of its live files (deleted by hand, moved out of the root) is also refused a delete-files purge until they are back or their books are dealt with, because that cannot be told from an unmounted share; each check visits memdb rows only until it has 50 (no copy of the library) and then runs up to 51 concurrent stats. The check is per library, not per window: a library with one share missing can still pass it, which the per-file folder rule below covers.
+- A missing file counts as "already gone" only when the folder it would be in exists. With the folder missing too (nested ZFS datasets mount apart from the root, so the root can look populated and a folder under it still be absent) the file is undecided: a trashed book stays in the trash with a line saying so, and a journal record is kept for as long as the folder is missing, with no pass limit, and reported as ONE aggregate line per pass (a count and an example), not one line per record. Cost: a trashed book whose whole folder has been removed cannot be purged with delete_files until the folder is readable again (a purge without delete_files is not affected), and a record for a file removed together with its folder stays in the journal (one line per pass in the report) until the folder is back or somebody deals with the record.
+- The deferred removal no longer removes a folder while it is still deciding paths. Workers only unlink and forget each record right after its own unlink; the folders a run emptied are removed after every path is decided, in path order. Before, a worker that emptied a folder made a neighbour's already-gone file read as "its folder is missing too", depending on scheduling (the `-race` CI failure in `TestRunPurge_StatFailureOtherThanNotFoundKeepsTheRecord`). Crash-window cost: a crash after the unlinks and before the folder clean-up leaves empty folders behind, and the records of the files it unlinked outlive them: a missing file in an empty folder is undecided, so those records wait for a folder until the owner forgets them (see the round-12 waiting-records note).
+- "Discard progress and purge" checks the library root before it takes the merge lock and its decisions under the lock reuse that answer, so a refusal does not wait for the lock and the lock is not held across a sample or a stat. The hard-delete path and "Purge now" still check under the merge lock, now bounded by the stat timeout.
+- A pass trusts its start-of-pass root check for 15 seconds (`rootGuard`) and then checks again, so a mount lost in the middle of a long pass stops the books after the loss from being decided; before, the check was made once.
+- The replay has its own lock (`replayMu`, held for the whole run) and takes the journal write lock (`pendingMu`) only while it reads the records. Before, it held the journal lock through every stat and unlink, so a single-book purge (which holds the shared side) waited for the whole replay. A test pins both orders: a purge is not blocked by a slow replay, and a replay is blocked while a purge sits between its journal write and its row delete.
+- The replay honours its context: a cancelled run looks at no further path, keeps every record it did not reach and reports how many. The boot replay passes the server's background context, so shutdown stops it and waits for it before the database closes.
+- A single-book purge whose delete fails and whose journal record then cannot be taken back reports both in the error, and logs it; the record outlives a book still in the trash, and the next replay finds that book at the path, keeps the file and clears the record.
+- The purge dialog previews with "also delete files" as currently ticked, and again whenever the box is ticked or cleared, so the preview it asks the owner to confirm is the run it will start (before, ticking the box after the first preview ran a different pass from the one previewed).
+- A missing file whose folder is there but EMPTY is undecided too, not "already gone": a dataset that is not mounted leaves its mount point behind as an empty directory, so a file directly in it read ENOENT with its folder "there". The library root itself is exempt (the root check vouches for it), and so is a folder the running purge is itself unlinking in (the workers register a folder before their first unlink and the emptiness is read before the set is asked, so a neighbour's already-gone file is not caught by the folder a worker has just emptied). Cost: a trashed book whose file was deleted by hand and whose folder was left empty stays in the trash for delete_files purges, with a line saying so, until the folder holds something or is removed (a purge without delete_files is not affected); journal records in such a folder are kept on every pass and reported in the one aggregate line. This is a separate commit so it can be reverted alone.
+
+Fixes from the seventh review of the purge work (PR 4140).
+
+- The deferred file removal of a purge with `delete_files` asks the store about each path at the moment it removes it, instead of working from a trash listing taken once before the loop. A new store read, `BookIDsAtPath` (every row at a path, trashed included, from the same `book_atpath` index as `LiveBookIDsAtPath`, with the same fail-closed rule and the pre-backfill scan fallback), answers "does any book still name this file?". A live book trashed while the loop ran therefore keeps its file. The single-book purge (`DiscardProgressAndPurge`) uses the same read, which also removes its scan of the whole trash.
+- A pass that dies after it deleted rows and tombstones and before it removed their files no longer orphans them. Each purged book's pending removal is written to a `purge_pending_file:<book id>` record before its tombstone goes, cleared once the path is decided, and replayed by the next non-preview pass through the same checks as `removeDeferredFiles` (protected path, library root, book_file row, live book, any book row, still there). The replay runs before the preview refusals, so a resumed op refused with `ErrPurgePreviewUnknown` or `ErrPurgePreviewRequired` still frees what its predecessor left; the refused result reports the files it removed. Only a path the pass's bound preview listed is recorded. A lookup error or a failed `os.Remove` keeps the record for the next pass; a definite keep clears it. Tombstones are not kept longer.
+- A book that was already in the trash when the preview ran and only aged into the retention window since is counted as `not_yet_due`, not as `trashed_after_preview`, so the dialog no longer says it "was put in the trash after the preview". A preview's `trashed_after_preview` (trashed while it ran, or no trash time on record) is named in the preview notes.
+- The failed-removal error line no longer claims the tombstone was preserved. Comments that said `PurgeSoftDeletedUnattended` where they meant "a purge with delete_files" now say so.
+- The retired-versions fixture seeds its unstamped trashed row with `SeedLegacyBookRowForTest`: the store now writes the stored stamp back on any write that leaves a row trashed, so `UpdateBook` can no longer produce that shape.
+
+Fixes from the eighth review of the purge work (PR 4140).
+
+- The replay of file removals an earlier pass left pending runs only for a purge that deletes files (`delete_files`; a resumed op keeps its saved value). A purge run with "also delete files" off never removes a file, whatever the journal holds. The preview reports how many files an earlier pass left waiting (`files_pending_from_earlier_pass`), and the dialog says so when "also delete files" is ticked. A purge reports the files it removed from the journal in their own field (`files_replayed`), not in `files_deleted`, and the result notes name them. The error lines of a replay are labelled "from an earlier pass" and come after the pass's own lines, so a pile of old lines cannot push them out of the capped result.
+- Each journal record now holds the file's inode, size and modification time as the pass saw them. The removal, at the end of the pass or on a replay days later, goes ahead only when the file at the path still matches all of them (an empty directory: its inode). The device number is deliberately not part of it: ZFS and NFS assign it when the filesystem is mounted, so it can change across a reboot, and the likeliest way a pass dies is a reboot, after which every record would have mismatched and been cleared. A file that was replaced or changed since stays, its record is cleared and the pass logs and reports it; a record with no identity is kept the same way.
+- A purge with "also delete files" decides each book's file before it deletes the book. If the stat or a path lookup fails for a reason that may pass (EIO, EACCES on a parent, ESTALE, a store read error), the book stays in the trash, is counted as failed with a line saying so, and the next pass decides it again; before, the row was already gone, so the file was left with nothing naming it and no record. The record of a file's removal is now written before the row delete (and taken back if the delete fails) instead of after it, so a crash at any point leaves the book or the record. A book whose file path was edited while the pass ran stays in the trash for the next pass.
+- On a replay, ENOENT and ENOTDIR (a parent is a regular file) mean the file is gone and the record is cleared. A stat or directory read that fails any other way keeps the record for the next pass with an error line. ELOOP and ENAMETOOLONG, which retrying will not fix, are retried for three passes (the record counts them) and then cleared with a line saying the pass gave up.
+- When the trash has nothing purgeable but an earlier delete-files purge left files waiting, the purge dialog (opened from the toolbar; see the next fragment for the toolbar button) says how many and offers "Finish removing N files", which runs the purge bound to that preview with delete files on and purges no book; before, the delete-files box and the button were hidden, so nothing could drain those records.
+- The all-rows book path lookup (`BookIDsAtPath`) is a separate capability (`database.BookRowPathReader`), not a `Store` method, and the purge fails closed when a store cannot provide it; `Store` stays at its width baseline.
+- The ActivityLog "Collapse All" test now waits for both sections' exit transitions before asserting.
+- The `maintenance.book-atpath-index-verify` op now fails when a soft-deleted book has no `book_atpath` key (`missing_trashed`), not only a live one. `BookIDsAtPath`, which the purge asks before it removes a file, keeps trashed rows, so such a book reads as a free path there and would lose its file while still restorable. The comments and error texts that said this could not happen are corrected.
+- The deferred removal decides its paths with a bounded worker pool (`runtime.NumCPU()`), as the pass's own books are; the paths are distinct, and the lines still come back in path order.
+- The retention-window aging test uses a test clock for the purge's start instead of sleeping 300 ms against a 150 ms margin.
+- A purge sent with a different retention window from its preview's no longer reports books the preview counted as not yet due as "trashed after the preview".
+
+Fixes from the ninth review of the purge work (PR 4140).
+
+- A purge with "also delete files" now refuses to run while the library root is not ready: not configured, missing, not a directory, or (see the round-10 fragment for what "ready" means now) most of the library's own live files cannot be seen. A remote or ZFS mount that is not up yet looks like an empty directory, so every stat read ENOENT and every file read as "already gone", clearing the journal. The check (`libraryRootReady`) is made once before the pass replays the journal, again at each file decision on the single-book paths, and before the deferred removal; when it fails nothing is removed and every pending record is kept. A preview says that a delete-files purge would be refused. A device-number or sentinel-file check was rejected because the device changes across reboots and a sentinel needs setup.
+- The journal is replayed once at boot (`ReplayPendingFileRemovalsOnBoot`, started after the backfills, after the memdb warmup). While the root is not ready it retries every two minutes, eight times, then gives up with an error and keeps every record for the next delete-files purge. A replay reads the journal under the service's pending-journal write lock, and a single-book purge holds the read side from its journal write to its row delete, so a replay cannot read a record in the gap between the two (round 10 narrowed what the write lock covers).
+- The trash listing carries `files_pending_from_earlier_pass` (null when the journal cannot be read), and the toolbar "Purge Deleted" button stays enabled when the trash is empty but files are pending, labelled with how many are left; before, the button was disabled with an empty trash and "Finish removing N files" could not be reached. An unknown count leaves the button enabled.
+- "Purge now" and "Discard progress and purge" on one book decide the file before the delete, refuse with the reason when it cannot be decided (discard refuses before it discards any progress), and write the journal record before the row delete. After the delete the file is planned again against the live rows and identity, so a file another book has since taken over, or that was replaced, stays. A failed lookup or unlink keeps the record; a removed, gone, or definitively kept file clears it.
+- Recording an attempt for an unresolvable path (ELOOP, ENAMETOOLONG) re-reads each record and bumps its attempt count only, so it cannot write back another record's identity or invent a missing one. The pass that finds such a path journals it and counts as the first of three attempts.
+- A held-for-progress book with no live sibling reports "kept, has progress" instead of failed when its file cannot be decided, and the preview matches the run for such books.
+- A trailing-separator path over a regular file (ENOTDIR) is kept and reported as "has a trailing path separator but names a file", not treated as a lookup failure; a transient failure to resolve the path under the library root is a lookup failure, not "outside the root".
+- The merge serialization contract comment now names the purge's journal record write.
+
+Fixed the second and third re-review findings on the retired-version readers.
+When a combine plans a single-file book's file and other books already hold a row
+at that path, it now takes the row of a trashed book first, then the row of the
+one live book holding it, and a row the same combine already moves onto the
+survivor is left to that move (known from the rows the combine holds, not from a
+lookup, so it also holds while the in-memory index is warming up). With two or
+more live holders, or a holder whose book no longer exists, it plans nothing:
+the absorbed book is still retired, but the combine's result and its undo journal
+both say "path held by N live book(s) (M row(s))" and the other books keep their
+rows. Taking another book's row now needs the complete holder list: while the
+index is still warming up after a restart the combine refuses before it writes
+anything ("retry later"), instead of picking whichever single row the fallback
+index names. A holder that cannot be read refuses the combine before it writes
+anything too, rather than failing after its journal. Taking a trashed book's row is noted on the
+journal. Undoing a combine no longer refuses outright when a row it took from
+another book has since lost that book: the undo warns and gives the row to the
+absorbed book whose file it is (the survivor keeps it only when it is the
+survivor's own file), as it already did for a row the combine created. A combine whose rowless
+primary book has the same file path as a row of a book it absorbs no longer stops
+after writing its journal with "file not found". Two merge tests that combined a
+book before the in-memory index finished warming up failed on a loaded runner; the
+test store now waits for the warmup, so no test starts without it.
+
+Fixes from the twelfth review of the purge work (PR 4165): a hung mount no longer leaks threads, and every trashed-book purge checks the library root before the merge lock.
+
+- A library-root check whose stats do not answer within the stat timeout leaves those goroutines blocked in the kernel until the mount answers. They are now counted (`rootStatsHung`), and while any is outstanding no new check starts: the answer is "not ready" at once, with the number of stats still waiting. Before, every refused check left up to 51 more blocked stats (one per sampled file plus the root), so a long outage with the boot replay every two minutes, the nightly purge and a pass that re-checks per book piled up threads toward Go's 10,000-thread limit. A late answer takes itself off the count exactly once; the refusal lasts exactly as long as the hang.
+- A pass whose library root stops being ready after it started now stops with one reason ("purge stopped: the library root is not ready ...") instead of re-asking the library for every remaining book and listing a failure for each. It uses the same stop the lost ledger index uses (`purgeAbortOf`); a book that holds listening state and is reclassified keeps the stop. At most one in-flight book per worker can still fail with the root line before the stop lands.
+- "Purge now" on a trashed book and the batch hard delete of a trashed book check the library root before they take the global merge lock, the way "Discard progress and purge" does, and the purge under the lock reuses that answer: no sample and no stat run while the lock is held, and a refusal does not wait for the lock. The refusal says "nothing deleted". A batch checks once up front, re-checks through the guard (at most every 15 seconds) and, after the first failure, fails the rest of its trashed hard deletes at once with the same error. With delete_files off nothing is checked. A book that moves into the trash between the batch's read and the lock is purged without the up-front check and the purge checks the root itself under the lock (rare, still bounded by the stat timeout); that case, and the "Purge now" case, were "bounded by the stat timeout under the lock" in the round-10 note and are now before the lock.
+- The delete-files setting is read once per single-book purge (`purgeFileMode`, taken before the lock) and carried through the decision, the delete and the removal, so a setting that flips mid-action cannot make them disagree.
+
+Smaller fixes from the twelfth review of the purge work (PR 4165): the library-root sample now starts at first characters that really occur under the root, and the layouts the empty-folder rule cannot catch are written down.
+
+- The library-root sample no longer draws its five start points from a fixed 62-character alphabet. For a library whose folders begin with "G" and "W", every start below "G" landed on the first folder, so about 58 percent of the chunks read the same place and the others were reached by wrapping. The sampler now reads the first characters that really occur under the root from the path index (one seek per distinct character, never a visit of every row), shuffles them and starts each chunk at a different one; a short answer is still the whole population. The test that a sample takes from every folder fails if the starts come from an alphabet again.
+- Documented, not changed: the empty-folder rule (`folderCheck`) does not catch a child dataset that is not mounted while a mounted grandchild shows its mount point as a populated folder, nor a stray file left in a mount point; a file directly in such a folder reads as gone. Telling those apart needs the device a folder lives on (`st_dev`), and device numbers change across reboots and remounts, so it is not stored in the file identity and not compared. The sample check still catches the usual case, a share that is down.
+- The delete-files setting is read once per single-book purge (`purgeFileMode`), which also removes the two reads of it that could disagree when the setting flipped mid-action.
+- Tests added: a Pebble store with the in-memory layer off is "not ready" for the library-root check; `folderCheck` and the emptied-folder set are tested directly (exemption for the folder a run emptied, none for another folder, the root exempt, a nil set); the sampler tests use only `/lib/Gotham` paths and Batman characters.
+
+Fixes from the twelfth review of the purge work (PR 4165): file removals that wait for a missing folder are counted apart, the purge dialog words them truthfully, and the owner can forget their records.
+
+- A removal an earlier pass journaled whose file is gone and whose folder is missing or empty (a share that is not mounted looks exactly like this) is undecidable: nothing removes it while the folder stays like that, and the journal record was counted as "pending, finish removing" although "Finish removing" could never finish it. The journal record now carries `waiting_for_folder`, set by the pass that finds the folder missing or empty and cleared by the pass that finds it again (or that retries the record for another reason). `PendingFileRemovals` returns two counts (`PendingFileCounts`: pending, and waiting for a folder); a path counts as waiting only when every record that names it is marked, so a path whose records disagree stays in the pending count.
+- `GET /audiobooks/soft-deleted` carries `files_waiting_for_folder` next to `files_pending_from_earlier_pass` (each null when the journal cannot be read), and the preview result carries both. `files_pending_from_earlier_pass` no longer includes the waiting group. The purge dialog says the waiting files could not be checked, that neither Purge nor "Finish removing" deletes them, and offers "Review N files to forget" only for them (round 13: the button lists the files before anything is forgotten); "Finish removing" is offered only for the pending count. The "Purge Deleted" button stays enabled while any are waiting and shows how many.
+- New `POST /audiobooks/purge-soft-deleted/forget-waiting-file-records` (`library.delete`, the permission of the purge that deletes files) deletes the records of the paths it is sent (since round 13: only the ones the dialog listed) that are marked as waiting for a folder, and only records: never a file, never a book row. It refuses with 503 when there is no activity log, writes an audit row (`trash_forget_pending_file_records`: actor, counts, and every forgotten path, at most 500), and reports a failed audit write as a warning after the records are gone. The dialog lists the files, asks for confirmation, and shows a refusal as "the records were not forgotten".
+- A crash after a purge unlinked a file but before its journal record was crossed off leaves a record whose file is gone and whose folder is empty. The round-10 note called the leftover empty folder harmless; the record is not: a missing file in an empty folder is undecided, so the record waits for its folder like any other, until the owner forgets it with the new action (covered by `TestForgetWaitingFileRecords_DeletesOnlyWaitingRecordsAndAudits`).
+- The purge dialog's preview check is cancelled on the server when it is replaced, when the dialog closes before its result arrives, and when polling it fails, instead of running on unread (each check walks the whole trash). A check that finished is never cancelled.
+
+Fixes from the thirteenth review of the purge work (PR 4165): the owner now sees which files they are forgetting, and several smaller gaps around that action are closed.
+
+- Forgetting records is no longer blind. New `GET /audiobooks/purge-soft-deleted/waiting-file-records` (`library.delete`) lists the files whose removal waits for a folder (all of their records waiting, the same rule as the count, in path order, at most 500 with the true total). `POST .../forget-waiting-file-records` now takes `{"paths": [...]}` and forgets only those: a path that became waiting after the listing is not in the body and stays, a path that is no longer waiting is counted and skipped, and each remaining path is re-read from the disk just before the forget (the library root must be ready, the file still absent, its folder still missing or empty) so a folder that came back keeps its record and the response says why. 400 for no paths or more than 500. The audit row names every forgotten path, and if the row cannot be written the paths are logged one per line, so nothing is forgotten untraced. The dialog shows the paths, forgets exactly that list, and reports forgotten, no longer waiting and kept (with reasons). Its button and text say files, not records, and a path with an unmarked record next to a marked one is neither listed nor forgotten, so the count on the button is what the action does.
+- Forget waits for a purge at most 10 seconds (and no longer than the request): a purge removing files holds the lock for its whole run and a stat of a hung mount has no timeout, so the request used to hang with it. It now answers 409 `PURGE_BUSY` with nothing changed. Covered by `TestForgetWaitingFileRecords_WaitsForAPurgeOnlyAWhile` and `..._ACancelledRequestStopsWaitingForAPurge`.
+- A forget that lands between the read and the write of a record's waiting mark no longer brings the record back: the mark's read-modify-write and every journal delete now share one lock (`TestSetWaitingForFolder_ADeleteBetweenItsReadAndWriteStaysDeleted`).
+- A preview now reports the library-root check (`library_root`: ready, the reason, and how many stats of an earlier check have never answered), and the dialog says deleting files is refused and why before the owner ticks the box. The hung-stat note says that only those stats returning, or a restart of the server, clears the refusal.
+- "Purge now" and a batch hard delete refused because the library root is not ready now answer a typed `ROOT_NOT_READY` (503 for the single delete, a `code` on the batch result) instead of a generic 500 `DELETE_FAILED`, and the web explains it in plain words.
+- A user with `library.delete` but without `settings.manage` can now cancel their own abandoned preview: the preview operation records who started it, and the new `DELETE /audiobooks/purge-soft-deleted/preview/:id` (`library.delete`) cancels only that user's own preview operation (403 for someone else's, 404 for a real purge or any other operation). Before, every cancel for such a user was a 403 that the dialog swallowed and the preview ran to its end; a refused cancel is now logged. The generic cancel of an operation still needs `settings.manage`.
+
+Fixed a regression in the library-root sample: a single book_file row whose path was exactly the library root with a trailing separator (a directory stored as a file) made the sample come back empty, and an empty sample reads as "no live file under the root", so an unmounted root could be taken as ready and every delete-files purge path (nightly pass, replay, Purge now, batch hard delete, discard) lost its library-level guard. The first-character hop now seeks past that row, and a row that is the root itself is never counted as evidence. The sampler documentation also now says what the starts really are: distinct first characters, so folders that share a first character share a start and a root with a single top-level folder is read as one run.
+
+The metadata circuit breaker now reads time through an injectable clock (defaulting to `time.Now`), and its cooldown tests advance a fake clock instead of sleeping 10-20ms. This fixes the intermittent `TestCircuitBreaker_HalfOpenAfterCooldown` failure under loaded race runs, where the 10ms cooldown could expire before the first `AllowRequest`. Production behavior does not change.
+
+The trash purge (`versions.PurgeVersion`, used by the nightly
+`maintenance.trash-cleanup` op and by `POST /api/v1/audiobooks/:id/versions/:vid/purge-now`)
+never deletes a file a live book still serves. Trashing the ACTIVE version only
+flips its status, so its files stay where the book plays them; 14 days later the
+purge deleted them and left the book pointing at a missing file.
+
+While the book is live, only files inside this version's own `.versions/<id>` slot are
+ever purged. Trashing a version never moves its files, and the player streams a book's rows with no version
+filter (and `Book.FilePath` is often stale), so a file of the version's own book
+that is not inside a slot is still where the book plays it and is always kept.
+Inside a slot, a file is still kept when the book is not itself trashed and it is
+the book's `FilePath` (symlinks resolved, hard links count as the same file) or
+lies in the folder `FilePath` names (the exported `database.BookOwnFolder` rule),
+or is named by a row of the book's active version or of no version.
+
+Another live (non-trashed) book counts too: its `FilePath`, any ancestor folder
+of the file that is a live book's `FilePath` (the walk goes up to the filesystem
+root or the configured library root, whichever comes first, and never through a
+`.versions/` slot), or any non-retired row of it whose version is not trashed or
+purged (alt versions included, because the player streams rows regardless of
+version). Deluge and import folders are shared between books.
+
+If any file of the version is served, nothing is deleted, the version stays in
+the trash, one WARN per version is logged (book id, version id, path count,
+"book still serves this file") and `*versions.BookServesFilesError` is returned;
+purge-now answers 409. If the book, its versions or rows, or another book's rows
+cannot be read the purge fails closed and deletes nothing.
+
+`CleanupTrashedVersions` now returns a `CleanupResult` (purged count plus the kept
+versions); the op logs one WARN per kept version to its own log and its summary
+reads "purged N versions, kept M versions whose files the book still serves".
+
+A book that is itself in the trash (soft-deleted or library state "deleted")
+serves nothing, so its own `FilePath` and rows no longer protect a file; its
+versions purge as before unless ANOTHER live book serves the file, which is still
+checked.
+
+Combined with the retired-version purge guards (the claim-then-unlink purge): the
+served-file check runs in the read-only pass before the version is claimed, ahead
+of the other-owner check. A served file on a trashed version ends the whole purge
+with `BookServesFilesError`: nothing is claimed or unlinked and the version stays
+in the trash, restorable. On a version already `purging` or `purge_failed` a served
+path is kept (reported in `Kept`) and the purge finishes the rest. One
+`versions.CleanupResult` carries `Purged`, `Failed`, `Kept` (served versions, each
+with its paths and the reason), `KeptFiles`, `NeedsAttention` and `CannotTell`; the
+`maintenance.trash-cleanup` result adds `served_kept*` fields and the Activity page
+links the count to the versions it names (`set=served_kept`, Trash tab). A file
+named only by a trashed book, or by a purged version's lingering row, is kept on
+disk and listed under kept files rather than deleted, because the trashed book can
+be restored and wants its audio back.
+
+Fixed the operations event stream (`/api/v3/ops/events`) losing events published
+right after its opening heartbeat. The broker's loop is started by the first
+client and used to subscribe to the registry's event hub from a goroutine that
+ran whenever it was first scheduled, so on a busy machine anything published
+between the heartbeat and that moment was dropped (the hub skips subscribers
+that are not registered yet). The subscription is now made before the first
+client's stream writes its first byte. This also removes the cause of a flaky
+`TestOpsV3_EventStreamLeavesOutWhatTheCallerMayNotRead`.
+
+Fixed the trash purge deleting a file that another row or book still names when the library is reached through a symlinked root. The owner checks (another book_file row, retired rows included, and another book row, trashed ones included) matched the path string exactly, so a row stored under the real path was invisible to a purge that held the symlink spelling of the same file. Both checks now ask every spelling of the path (as given, and absolute with symlinks resolved), the way the served-file check already did; a hit on either keeps the file. A row stored with the symlink spelling is still not found by a purge that only holds the real path.
+
+The served-file guard is rebuilt right after the version is claimed, from the book and rows as the store has them then, so the check made right before each unlink sees a book that came to serve a file while the claim was being written. A rebuild that cannot read leaves the version purging with nothing unlinked and counts the night like any other stuck purge. Purge targets are now deduplicated by the file's folder resolved, so a slot file reached through the symlink and the same file named by a row with the real path count once. The ancestor walk reads the library root through `config.Snapshot()`. The `maintenance.trash-cleanup` op now returns both errors when the purges failed and the result could not be stored, instead of dropping the second.
+
+Fixed: undoing a retired-versions Apply could put a retired shell's external id
+and merged-into link back while its files stayed retired under another book (for
+example after a later Apply re-homed the retired version), leaving a book that
+looked live and owned nothing. The shell's id and link rows are now reverted last,
+and only when every retire row of that shell was restored; otherwise they are
+refused with "dependent change not reverted" and the preflight offers no Undo for
+them. The retired-versions fixer also holds (retry later, nothing written) a shell
+that has a version stuck in a half-finished swap. Corrected two stale comments
+about the retired-shell delete bypass.
+
+- Bumped the frontend dev dependency follow-redirects from 1.16.1 to 1.16.2.
+
+- Trash retention ("older than N days") is now exactly N×24 hours. It used calendar days, so on daylight-saving days the purge, its preview, the trash list and the per-book eligibility check used 23- or 25-hour days; this also turned CI red for every PR on 2026-11-01.
+
+### Added
+
+- The upgrade script can upgrade the coordinator Mac's agent (`mac`) with local commands and a detached relaunch through `run-agent.sh`. It is opt-in, not in the default host list.
+
+- The folder-books repair can now be applied by the owner for a folder-book
+  whose files sit on two shelves (the iTunes folder and the library folder),
+  where every hold on the row is one the owner can decide. The row is still
+  listed as skipped, and a normal apply, a selection or "apply all" never
+  writes it. The owner's own Apply (owner) button creates the missing books,
+  retires the folder-book, moves no file and is recorded in the operation, so
+  it reverts from the operation like any other apply. New books under the
+  library folder start as organized; books on the iTunes shelf keep the
+  folder-book's state.
+- The folder-books plan counts the single-shelf rows that are held back only by
+  checks the owner could resolve, as `single_shelf_owner_resolvable`. It shows
+  as a filter chip in the Repairs panel and is written to the plan's log. These
+  rows are counted, not offered.
+- The owner-apply confirm in the Repairs panel now quotes the row's own
+  explanation of what the click writes, so it reads correctly for every repair
+  that offers an owner apply.
+
+- When the owner applies a folder-book row, a file with no book of its own
+  whose title and author already name exactly one live book (or exactly one
+  version group) is no longer a reason to refuse the row. The new book is added
+  to that group as a non-primary version, and the live book stays the primary.
+  If the live book was in no group, the apply makes one for it and the live book
+  becomes its primary. A normal apply still skips such a file as a duplicate,
+  and its preview now names the book the owner's apply would add it to. Only
+  matches that carry the same author count; two matching books, a book already
+  sitting at the new book's folder, or a match with no author stay held back.
+- Each of those writes is recorded in the operation before it is made, so the
+  operation reverts from the Operations page. The revert puts the live book's
+  group and primary flag back exactly as they were, and refuses, leaving
+  everything as it is, if the live book or the new version was changed since
+  (crowned, moved to another group, or joined by another book).
+- An owner apply that was cut off partway leaves a book behind, hidden or, if
+  it got as far as the last step before retiring the folder-book, already
+  visible. The next apply of the row now finishes that book instead of refusing
+  the row or making a second one, but only when the earlier operation's record
+  says it created exactly that book. A plan made while the visible book exists
+  now treats the row as the apply will see it (the same re-plan the apply does
+  under its lock), so the row stays offered to the owner and is not refused as
+  changed since it was planned. A reverted apply is never finished this way and
+  its files stay "previously resolved". Reverting the earlier operation
+  afterwards does nothing a second time.
+
+#### Platform core design spec (`docs/specs/platform-core/`)
+
+Added the design spec for extracting a shared platform core (`github.com/falkcorp/mediacore`, nested at `core/`
+first) from audiobook-organizer, so that ABO, a TV app and a Movies app can share core packages, an SDK and a
+React shell. The spec covers the architecture and layer rules, a per-package mapping of all 213 packages, one
+subsystem spec per core service, the ABO-on-core stage plan (S0–S10, T0–T8) with rollback costs per stage, the
+UI shell, the optional *arr facade extension point, the TV/Movies contract proof, the repo-split criteria, the
+toolchain, and the risks and owner questions. The raw evidence base it rests on is in
+`docs/plans/platform-core/raw/`, and the eight review rounds with their dispositions are in
+`docs/plans/platform-core/reviews/`. Planning only: no production code changed.
+
+- A repairs plan row now lists every reason it is held back (`holds`), not only
+  the first one, and marks each one with whether the owner's own Apply may
+  resolve it. A mixed-shelf folder-book row always shows the mixed-shelf hold
+  first, which the owner may resolve, so the hold that actually takes the row
+  away from the owner was invisible. Plan 01M6JGS7 offered the owner none of
+  its 18 mixed-shelf rows and nothing said why. A hold added by the framework's
+  guard pass is listed too. The Repairs details view shows the list when a row
+  has more than one hold. The list is for display only: no apply reads it, and
+  it is not part of a row's fingerprint.
+
+- The Activity page now puts its filters, page and open operation in the
+  address bar, and a pasted link opens on the page that holds that operation
+  with its log panel open. An open operation has a "Copy link" button that
+  copies that address. An operation older than the time window in the link is
+  not listed, so its link opens the page without a panel.
+
+- A book's page now puts its metadata history, retired files list and snapshot
+  comparison in the address bar (`?history=1`, `?retired=1`, `?compare=<time>`),
+  so a link opens the book with that panel open.
+
+- A collection's member list now keeps its page in the address bar
+  (`/collections/<id>?page=2`).
+
+- The Review page now puts its whole view in the address bar: the lane, the
+  duplicate lane's view, layer, band, one-book filter, the open pair comparison
+  and its tab, the authors lane's view and focused author, and the Repairs
+  lane's selected fixer, row filter and row class, and the Clusters view's
+  By-series list. Pasting a link opens the same view, and following a link to
+  another place in the page moves the screen there. Changes made on the page
+  replace the address instead of adding history entries. A link the page cannot
+  fully follow is corrected in the address bar. Clicking a lane tab still loads
+  that lane's data once.
+
+- The Series and Authors lists now keep their search, row filter, sort column
+  and direction, page and page size in the address bar, so a link opens the same
+  rows in the same order.
+
+- The System, Settings, Playlists, Collections, Versions, Diagnostics and Files
+  pages now keep their tab, selected category or open folder in the address
+  bar, so you can send someone a link to exactly what you are looking at.
+  `/system?tab=storage`, `/settings?tab=dedup`, `/playlists?tab=smart`,
+  `/collections?tab=dynamic`, `/versions?tab=purged`,
+  `/diagnostics?category=dedup` and `/files?path=...` all open that view when
+  pasted. The first tab of each page is left out of the address, so the plain
+  address still works. Changing a tab replaces the history entry instead of
+  adding one, so Back still leaves the page.
+
+- On the Users page, the "sign-ins and data" panel for a user is now in the
+  address bar (`/users?footprint=<user id>`), so a link opens it directly.
+
+- The Works table now keeps its sort column and direction in the address bar
+  (`/works?sort=id&order=desc`).
+
+- "Backfill book durations" has a row-level mode, `mode=unknownRows`, that measures the files nobody has measured, in any book, copies and `books/itunes` rows included (read-only on disk: the file is only read and the change is a database update). It first lends a file the length of another row at the same path with the same size, then uses the length fingerprinting already stored, and only then runs ffprobe — once per file, even when several rows point at it — several files at a time (`workers`, default 4, at most 16). A file that is absent from disk is not probed at all (no ffprobe process is started for it) and neither is a file whose size on disk no longer matches the row; both leave the row untouched. Files you excluded from scanning are skipped (reported as `skipped_user_excluded`) and are never borrowed into. A file ffprobe cannot read gets a counted attempt; a missing ffprobe, absent file or dropped mount records nothing; a file already at the three-attempt ceiling is left alone unless it got there through timeouts. Each book's totals are recalculated once, and only if a length was set, as soon as the last of its files has been handled rather than at the end of the run. `limit` counts the rows the run would act on, so rows it cannot act on (unreadable, no path, excluded) never use it up. `force`, `onlyMissingDuration` and `skipAgeDays` are refused in this mode because they only mean something to the per-book run. Narrow it with `fileIds` / `bookIds`; the default is a dry run that reports per book what it would borrow, promote and probe without running ffprobe or looking at the disk. It runs on demand only and is on no schedule.
+
+#### Platform core implementation plan and task briefs (`docs/plans/platform-core/`, `docs/agent-tasks/platform-core/`)
+
+The implementation plan for the revised platform-core spec: 134 tasks (128 agent PRs, each with a brief, and 6
+owner checkpoints) in 46 file-disjoint waves across R0 (hotfixes), R1 (core runtime), R2 (dark foundations F2, then
+the flips F3–F8 and the cutover release) and R3 (cleanup, the upgrade floor and the shell). Each brief gives the
+task's tier, dependencies, file list, spec sections, START HERE re-verification, tests written first, STOP
+conditions and acceptance commands. `docs/plans/platform-core/task-summary.md` lists every task in plain language,
+and `docs/plans/platform-core/tools/` holds the machine-readable inventory and the wave checker. Three plan review
+rounds (blockers 4 → 1 → 0) and an independent advisor review are recorded in
+`docs/plans/platform-core/reviews/plan-rounds-1-3.md`. Planning only: no production code changed.
+
+#### `ops.Schedule` is now evaluated by the TaskScheduler, with a cron evaluator
+
+A definition declares its timer once, in `ops.Schedule`, and the existing
+TaskScheduler runs it on the clocks it already has: `Every` on the durable
+interval clock, `DailyAt` on the daily clock, `InMaintenanceWindow` in the
+nightly window order, and the new `Cron` on an in-tree five-field evaluator
+(`internal/scheduler/cron.go`, no new dependency; DST gaps fire at the first
+valid time, repeated hours fire once). The last fire, next fire, last run and
+missed count of each schedule are kept in `opv3:sched:{def_id}`. A scheduled
+writer runs as a Preview unless its schedule says `.Live()`; `ops.Schedule` gains
+`.Preview()` for a job that is deliberately a Preview, and the catalog check
+accepts exactly one of the two. A declared cron that nothing drives is listed as
+"declared, not active" and never fires. A port keeps its cadence because the new
+schedule is seeded from the old task's interval clock. Existing tasks are
+unchanged; `internal/scheduler/testdata/cadence.golden` pins that.
+
+The `audiobook_organizer.ops.schedule_lag` and `schedule_missed` OTel instruments
+are now created and recorded.
+
+Time a schedule's `When` gate was closed is not counted as missed fires,
+including when the process restarts while the gate is closed (the closed state
+is kept in `opv3:sched:{def_id}`); downtime while the gate was open still
+counts. The gate is only known at the moments the process observed it, so a gate
+change made while the process is down is not seen. Window definitions run before
+`library_scan`, which stays last. A definition a legacy task still drives
+reports that task's real next due time. The cron grammar has one parser
+(`ops.ParseCronFields`) that rejects signed numbers such as `+5`, and a
+scheduled writer is recognised by one predicate (`Effects.IsWriter`) in both the
+scheduler and the catalog check.
+
+#### `/api/v3/ops/*`: operations v3 definitions, runs, exact counts, timeline and SSE
+
+New read endpoints for the v3 run model, beside the unchanged `/api/v1/operations*`
+routes: `GET /api/v3/ops/defs` (effects, schedule and next fire, readiness, last
+finished run however long ago it finished (null if 256 or more newer runs
+are still unfinished), params schema), `GET /api/v3/ops/runs` and `/runs/{id}`
+(`progress.chunks` and `progress.workers` included; `state` is always the stored
+state, so a row matches the filter that listed it, and a run whose goroutine
+outlived the abandon grace has `zombie=true` and `display_state=stopping`), `GET /api/v3/ops/runs/{id}/rows`
+(paged failed and skipped items, with `truncated` when the per-run cap dropped
+some), `GET /api/v3/ops/counts?group_by=state|def|outcome` and
+`GET /api/v3/ops/timeline`. Counts and `total` are exact and every count carries
+an `href` whose list has exactly that many rows; a timeline cut short by its scan
+cap says `complete=false`. `GET /api/v3/ops/events` streams `event: run` with a
+heartbeat every 15 seconds, `Last-Event-ID` resume from a bounded ring and an
+`event: resync` for a client too slow to keep up (the registry is never blocked).
+Event ids are `<boot id>-<sequence>`, so an id from before a restart resyncs
+instead of resuming at the wrong place; a run whose terminal event the registry
+feed dropped is still published once it settles; streams end as soon as the
+server starts shutting down; at most 64 streams are open at once (then 503 with `Retry-After`)
+and at most 4 for a signed-in user's browser session plus 4 shared by all of
+that user's API keys (then 429 with `Retry-After`), so a script cannot take the
+session's places and minting keys buys no more streams; a stream
+ends when a write to the client fails.
+
+`POST /api/v3/ops/defs/{id}/runs` (also `POST /api/v3/ops/runs` with the
+definition in the body) needs scan.trigger, as `POST /api/v1/operations/v2`
+does, plus the definition's own permission (settings.manage when it declares
+none), validates params against its JSON Schema before anything
+is queued (400 with field paths), answers 409 with the reason while the
+definition is not ready, and returns 202 `{run_id}` (or `{"batched": true}`
+when a batchable definition added the request to a pending batch). The mode is
+written into params under every mode key the operation's own params type
+decodes, declared on the operation (`OperationDef.Preview` names that type) and
+shown as `preview_keys` in `/defs`: a preview writes `dry_run`/`dryRun` true and
+`apply`/`live` false, a live run the opposite, so an operation that writes only
+when `apply && !dry_run` is never silently a preview on a live run. An omitted
+mode is a preview unless params already state the mode. A mode that
+contradicts a mode key in params, two mode keys that disagree, a mode key the
+operation does not read (a `dry_run` sent to an `apply` operation), or a key that
+differs from a mode key only in case (`APPLY`, which encoding/json would decode
+into `apply`) is a 400. `itunes.clone-into-library` lists its three write kinds
+in `live_one_of`: a preview sets all three false and a live run must name
+exactly one. `maintenance.series-phantom-repair` refuses a live run in report
+mode and `maintenance.opchange-book-index-rebuild` refuses `ensure=true` at
+start instead of queueing a run that writes nothing or fails. A writing
+definition that declares no preview (`has_preview=false`: it ignores every mode
+key, or, like `metadata.batch-apply-cached`, previews only through a different
+operation) is never queued as a "preview": a preview or a request with no mode
+is a 409, and only an explicit `mode: "live"` starts it, with params passed
+through untouched. A read-only definition's params are never touched, so a
+strictly decoded operation is not handed a `dry_run` it does not declare, but a
+mode key in them that contradicts the asked mode is a 400. An operation counts
+as writing when it declares a write capability or the rows it writes
+(`OperationDef.Writes`); six operations that wrote while declaring only read
+capabilities now declare their writes: `itunes.playlist-import`,
+`maintenance.cover-text-read` and `maintenance.file-provenance-export` already
+previewed by default; `deluge.path-update`, `maintenance.regroup-shattered-ai`
+and the full-transcribe path of `maintenance.transcribe-book-intros` now take
+`dry_run` and preview when it is omitted (pass `dry_run: false` to run them for
+real). `maintenance.transcribe-book-intros` and
+`maintenance.repoint-version-primary` also read the `dryRun` spelling, as the
+rest of the operations do. Five operations that declare no writes yet write on
+every run (`acoustid.scan`, `ai.author-scan`, `dedup.split-book-scan`,
+`library.bulk-metadata-fetch` and the paid `diagnostics.ai-analyze`) are
+treated by v3 as writing definitions without a preview: only `mode: "live"`
+starts them, pending an owner decision on whether each gains a preview mode.
+`POST
+.../runs/{id}/cancel` needs being the run's starter, or scan.trigger plus the
+definition's permission; an interrupted or awaiting-decision run is not
+executing, so cancelling it is a 409. `POST
+.../runs/{id}/approve` needs the approver permission and a verified auth method
+(a session, an API token or a verified Cloudflare Access sign-in); a request
+authenticated only by a forwarded header is refused. No
+approval backend exists in the runner yet, so a fully authorised approve answers
+501. Reads need library.view.
+
+The schema check is a small in-tree checker for the keywords a params struct
+produces (no new dependency); a schema using a keyword it cannot check, or a
+supported keyword with a malformed argument, is refused rather than passed, and
+a number too large to compare with a bound is a violation.
+
+#### Emailed invitations and an accept page
+
+The Users page can now email an invitation. **Create invite** takes an optional
+email address and a "Send email" checkbox, and pending invites can be resent
+(at most once a minute per invite, with a per-admin cap). The email carries the
+guest's own invite link and the sign-in steps (including a Cloudflare email-login
+step when the guest access policy sync is configured and the invite's creator is
+an admin). Guests are browser-only for now: the email says that phone app access
+will be added to their account soon. If sending fails, the admin still gets the
+link to hand over.
+
+The link opens a new public page, `/invite/:token`, backed by
+`GET /api/v1/auth/invite/:token`. It shows the username, the expiry and whether the Cloudflare
+email-login step applies (`email_login`), only for a token accept would take. `POST /auth/accept-invite` answers a
+missing, used or expired token, a username taken since the invite was made,
+and an invited address another account already holds verified with one
+identical 400 (the detail is logged), and the lookup answers every one of
+those cases with one identical 404: both run the same store checks, so a link
+holder cannot learn from a working lookup and a refused accept that a username
+or an address has an account. Both routes share a limiter with three layers: per
+client, per token (keys are hashed), and global. The tunnel connectors run
+on other LAN hosts and reach the service from their own private addresses, so
+`CF-Connecting-IP` is believed only from a peer listed in the new
+`TUNNEL_CONNECTOR_ADDRS`, or from a local peer whose request carried a
+verified Cloudflare Access assertion. Every other peer is keyed on its own
+address whatever headers it sends (public IPv6 by /64; a LAN IPv6 peer by
+its full address, since LAN devices share one /64, where LAN IPv6 means ULA,
+link-local, or a global address inside the /64 (or narrower) prefix of a
+global address on one of the server's up, broadcast-capable,
+non-point-to-point interfaces, as on a home network numbered from the ISP's
+/64, read at most every 30 seconds; a wider on-link prefix such as a /48,
+and the prefix of a tunnel or VPN interface, do not count; a direct LAN peer, one
+that is not a connector and sends no Cloudflare markers, also shares an
+aggregate bucket per IPv6 /64 at four times the per-client budget, so one host
+rotating through its /64 is still capped, and tunnel traffic never touches
+that aggregate; a LAN host that sends Cloudflare markers without being a
+listed connector shares a separate aggregate per IPv6 /64 or IPv4 /24 at
+twice the per-client budget, so it cannot rotate addresses or IPv4 aliases
+either; link-local peers count as LAN, and the peer address is parsed
+from the connection with its zone dropped for its rate-limit key, so a zoned
+link-local client is attributed), so forging `Cf-*` headers
+never takes a caller out of per-client limiting. Trust decisions keep the
+zone of an IPv6 link-local address, which is only unique per interface: a
+link-local `TUNNEL_CONNECTOR_ADDRS` entry must carry its zone
+(`fe80::5%eth0`; one without is ignored with a warning naming it), the zone
+is normalised to the interface's name (`fe80::5%2` becomes `fe80::5%eth0`,
+since the peer address always carries the name; the exact name is tried
+first, then the index, then a case-insensitive name, which must be unique;
+a zone that matches more than one name ignoring case and none exactly is
+ignored with a warning, and one that names no interface is ignored with a
+warning and retried every 30 seconds, so an interface that comes up later
+makes the entry trusted without a restart), and it matches only a peer
+arriving on that interface; the invite limiter reads the list on every
+request. A link-local peer counts as
+this host only when the interface its zone names owns the address; that
+check looks up only that interface (any other address takes one
+whole-host lookup), and it is skipped for a listed connector. An
+unlisted connector is one bucket for everyone it relays, and a private peer that sends
+Cloudflare headers without being listed is logged once per address (once
+per /64 for IPv6, so rotation cannot fill it, and once per /64 per interface
+for link-local) at warning level (a bounded set) so a missing entry is visible. A listed connector, or a local
+peer, with no usable header identifies no client: the per-client layer is
+skipped rather than shared, and the per-token and global layers still apply.
+A direct LAN peer counts against the global layer like any other caller;
+all direct LAN traffic also shares one total of half the global limit (50 at
+once, 150 a minute), which keeps the per-client and per-token tables bounded
+(a LAN device can spend that total and lock out other direct callers). All LAN traffic with Cloudflare
+markers from unlisted peers shares a second total of a quarter of the
+global limit (25 at once, 75 a minute), under the global layer, so one LAN host rotating
+across many /64s or /24s cannot drain the global layer for everyone else;
+with `TUNNEL_CONNECTOR_ADDRS` unset that means all tunnel traffic shares it.
+The token is read first; then every layer that applies is reserved together, and a
+refusal from any layer cancels the others, so a refused request spends
+nothing and adds no entry to the per-client or per-token tables (a key seen
+for the first time is recorded only once the request is admitted), and
+concurrent requests from one client can take at most its own burst of global
+slots.
+Bootstrap tells a direct LAN caller from tunnel traffic by the Cloudflare
+markers (any `Cf-*` header or the `CF_Authorization` cookie); with the
+setting unset, a connector request stripped of every one of them would count
+as a direct caller. The accept body is capped at 4 KiB (413
+above it) and must arrive within 5 seconds (408 otherwise; a per-request
+connection read deadline, cleared afterwards). The deadline is set through
+the connection captured before the gzip middleware wraps the response
+writer, and the route is also excluded from gzip, so it holds for browsers
+sending `Accept-Encoding: gzip`; if it still cannot be set, that is logged
+once. When the body did not reach its end (too large, too slow, or a read
+error), the deadline stays in force and, on HTTP/1, the response carries
+`Connection: close`, so a sender that stops mid-body gets its 413 or 408 at
+once and the connection is closed within the deadline. HTTP/2 and HTTP/3
+responses do not carry it: Go's HTTP/2 server would turn it into a GOAWAY
+for every stream on the connection, and those protocols reset just the
+unfinished stream. The body is parsed once for both
+the limiter and the handler. Invite tokens
+are redacted from request logs, trace span attributes (`url.path`) and error
+logs.
+
+Mail goes through a new `internal/mail` SMTP sender: plain SMTP with no AUTH
+and no TLS works only to a loopback relay; any other host must offer STARTTLS
+(or use port 465 for implicit TLS) or the send is refused before `MAIL FROM`,
+with no plaintext fallback; AUTH PLAIN is sent only over TLS or to loopback;
+15-second timeouts; multipart text and HTML with header-injection checks.
+Sending and resending are refused unless both a mail sender and an absolute
+http(s) `PUBLIC_BASE_URL` are configured (resend answers 503
+`PUBLIC_URL_NOT_CONFIGURED` for the latter), and the invite list reports which
+one is missing as `mail_unavailable_reason`.
+
+Settings are environment-only, refused by PUT /config and never returned by
+GET /config: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`,
+`SMTP_FROM`, `PUBLIC_BASE_URL`, `CF_ACCOUNT_ID`, `CF_GUESTS_POLICY_ID`,
+`CF_POLICY_API_TOKEN`, `TUNNEL_CONNECTOR_ADDRS` (comma-separated addresses the
+Cloudflare tunnel connectors reach this service from; list every connector,
+which this deploy does, so tunnel traffic gets per-visitor limits).
+
+Invite tokens are credentials (holding one accepts the invite), so
+`GET /api/v1/users/invites` never returns a token to an API key or any other
+caller that may not change credentials, and returns the token of an invite
+that has an email address only to an active admin. Every pending invite now
+has a non-secret `id` (a domain-separated hash of the token, derived, so
+existing invites have one too), and revoke and resend moved to
+`DELETE /api/v1/users/invites/:id` and `POST /api/v1/users/invites/:id/resend`;
+the token routes are gone. The Users page shows "Hidden" where it gets no
+token. With auth disabled the list shows every token, as before.
+
+#### Accepting an emailed invite sets the email, allows SSO, and can update one Cloudflare policy
+
+When the invitation was emailed to its address, accepting it sets that address
+on the new account. When the invite was also created by an active admin, the
+address may sign in with SSO (a stored grant consulted next to
+`OAUTH_ALLOWED_EMAILS`). With the three `CF_*` settings, the address is also
+appended to one reusable Cloudflare Access policy, keeping every other field.
+The policy update sends only the policy's writable fields, then reads the
+policy back to confirm the address landed (or is gone), retrying from a fresh
+read up to three times; an update that was sent but could not be confirmed is
+reported to the admin rather than dropped. The outcome is shown under
+"Accepted invites"; a Cloudflare failure never fails the accept. A copied link
+binds no email and grants nothing; an emailed invite from a non-admin binds no
+email either (`creator_not_admin`). Both say why. Deactivating the user or
+changing their email removes the grant and, when the sync added it, the policy
+entry.
+
+#### Admins can set or clear another user's email
+
+`PUT /api/v1/users/:id/email` (admin role and `users.manage`) sets or clears a
+user's email from the Users page. An address set this way counts as verified,
+so it is refused when another account already holds it verified, even when it
+is already this user's address (re-setting it would make it verified twice);
+clear it there or merge the accounts first. Changing it removes the old
+address's SSO grant and, when the sync added it, its Cloudflare policy entry.
+
+#### Durable decision log and reject store (internal/decisions)
+
+Added `internal/decisions`, the durable store behind the planned Universal Reject
+feature (PR1 of the plan; no API or UI yet, so nothing user-visible changes).
+It records every approve, reject, apply and undo as a labelled example with an
+evidence snapshot, reason, actor and timestamp; keeps a current verdict per
+proposal under a stable fingerprint (`SubjectKey`, `MaterialHash`); and vetoes a
+rejected proposal and each rejected pair, scoped to the question family it was
+rejected in, so a rescan cannot find it again until the owner un-rejects.
+Lookups already honour a "never merge" family value that vetoes every family,
+but nothing can write one until the override lands in a later PR. Skip,
+approve, apply and undo are labels only and never veto. Reopening a proposal because its data changed
+allows new suggestions but never lifts the veto on the originally rejected
+data, only a human can lift or replace a human reject, and ids are canonicalised
+(whitespace refused, ULIDs upper-cased) so one proposal cannot hide under two
+spellings. Loading the veto set reads one point-in-time snapshot and writers
+serialise per database engine (even through different wrappers of it), so concurrent records cannot be half-seen. Decisions are
+never pruned: a test runs the log, activity, undo-journal, metrics, session,
+journal, soft-delete and stale-candidate prune entry points, a reflection canary
+fails when a new prune, sweep, purge, expiry or cleanup method appears on the
+store types without coverage, and plugin sweeps carry a decision sentinel; a
+backup round trip is pinned too. To make a record, its verdict and its veto rows
+commit together, `*PebbleStore` gains `ApplyRawBatch`, an atomic mixed set and
+delete write, and a `RawSnapshotter` gives a point-in-time raw reader; both are
+small separate interfaces, so `Store` and its mocks do not widen.
+
+#### `retired-versions` — preview of moving trashed books' file records onto the live book they lost to
+
+A read-only fixer in the Repairs lane of /review. It sorts every book in the trash into exactly one category and names the live book it would be retired onto: the end of the book's merged-into chain, or its version group's single primary. Either needs the group to have a live member; a merged-into chain on a book with no live group member is shown as evidence only and is never used as a target. A book the preview would retire is `would_retire`, or `would_retire_same_path` when a file record shares its path with a live book's record (both records are kept). Nothing is written: no book or file record changes, and the fixer has no Apply.
+
+The categories that stay put each have their own count and clickable rows, and the first matching one wins, in this order: `trash_labelled_deleted`, `no_book_files`, `target_ambiguous`, `no_target_files_missing` / `no_target_files_present` (no live target; split by whether any file is still on disk), `owner_vetoed`, `itunes_needs_owner_approval`, `owner_manual_only`, `age_unknown` / `too_recent`, `has_listening_state` / `listening_state_unknown`.
+
+- `owner_vetoed`: the owner rejected joining the book and its target (`same_work` or `same_copy`), read through the decisions store.
+- `itunes_needs_owner_approval`: a file of the book or of its target is under `books/itunes/**`, with symlinks resolved (a library link into that tree counts, and so does a file row whose only iTunes location is its iTunes path). A path whose location cannot be settled (for example a folder that is a symlink to itself) is treated as possibly under that tree and says so in the reason, instead of being cleared on a guess. This replaces the old outcome where a book whose target was under iTunes showed as `would_retire` and was then skipped as `skipped_itunes`.
+- `owner_manual_only`: the book or its target is Doctor Who, Big Finish or Torchwood, by path, series, title, credits, transcribed fields or a `franchise:` tag. The owner applies those by hand. Previously such a row was counted `would_retire` and only then skipped by the Repairs guard, which does not look at trashed books at all.
+- `too_recent` uses the 14-day minimum, a waiting period in which a mistaken delete is likely to be noticed; `{"min_age_days":N}` changes it, and 0 turns the gate off. It says nothing about merge undo.
+- `trash_labelled_deleted` (was `user_deleted`): the book's library state is "deleted". Three code paths write that label, so it cannot be told apart from a deliberate delete and the book is left alone.
+
+A book that a combine journal not yet undone names as absorbed is no longer held in its own category. It is classified like any other book and its row carries `combine_undo_aware`, with an evidence line naming the journal, because the cleanup is meant to be reversible by undoing that combine rather than to skip those books. The plan's log summary counts these rows separately. If the combine journals cannot be read, the plan fails instead of guessing which rows carry the flag. Auto-merge journals are not read yet.
+
+The plan's rule 5, a content-hash match between a book and its target, is not applied yet.
+
+#### Repairs lane — a fixer can be preview-only
+
+A new `PlanOnly` capability marks a fixer that has no Apply. The fixer list reports `plan_only`, the apply and owner-apply routes answer 409 for it, the apply operation refuses it, the engine refuses it again, and the lane shows a "Preview only" notice with no checkboxes, no Apply group and no Apply button. The retired-versions fixer also opts out of the library-scan stand-down, as it writes nothing a scan writes.
+
+#### Repairs lane — filter a plan's rows by a flag
+
+A row can now carry flags, a second dimension next to its class. The plan's rows page reports `by_flag` counts and accepts the filter `flag:<name>`, answered from the stored row index without reading every row. The retired-versions plan sets `combine_undo_aware` this way, and the plan view shows it as a clickable chip ("From a combine that can still be undone") that opens exactly those rows. A flag name must be a single word without commas or whitespace; a plan whose rows carry one the index cannot hold fails instead of storing a count that would not match its rows. The stored row-index entry gained a fourth field for the flags; there is no compatibility with the entry format of the unreleased earlier build, which was never deployed.
+
+#### Abandoned-call gauge
+
+`audiobook_organizer_ops_abandoned_calls{source}` reports calls that gave up waiting on a stuck mount but whose thread has not returned yet, for `repairs_resolver` (the Repairs path resolver) and `retired_versions_stat` (the retired-versions file check). Each series reads 0 from startup, and a value that stays above 0 means a dead mount is holding threads. It is an OpenTelemetry instrument exported through the existing Prometheus endpoint, as the repository's client_golang ratchet requires for new families.
+
+#### `master-list-import` — apply, read-elsewhere records, list retention
+
+PR 2 of the master-list import. The fixer now applies. Apply is a dry run by default and requires `users.manage`; it writes through the Repairs writer, so every change is journaled and undoable, and the framework guards, the scan stand-down and the changed-since-plan re-check all apply. Planning is two passes: the match of PR 1, then a per-row decision that mirrors the Audible import's rules. For a matched row the apply proposes only `user`, `read_status`, `finished_at`, `progress_pct` and `position_sec`:
+
+- `finished` rows (with a finish time) mark the book finished for the target user, manual, at the list's time; a book with no position gets one at its end.
+- `in_progress` rows (with a last-listened time and a position or percent) set the position at the list's time.
+- Never applied, and listed under their own class instead: a row with no status (`skipped_no_status`), `unstarted` or `abandoned` in the list, no usable timestamp or progress, a book already finished locally, newer local activity on the book or a copy of it (`skipped_newer_local`), local progress an in-progress row would overwrite, and a book the user abandoned or set to unstarted by hand. Each class is a clickable filter of the rows.
+
+A row that matches no library book, with no title candidates and no trashed copy carrying its identifier, becomes a `read_elsewhere` row. Applying it stores a record under the new `mlist:elsewhere:` key family (registered in the key-family census), never a book: `GET /api/v1/master-lists/elsewhere` lists the records (admin, `users.manage`, optional `user_id`), and the plan summary counts them. Creating a record is journaled with no book and undone by deleting it; a record is created only if absent, so a second import of the same row (from this list or another) is `skipped_already_recorded`, and a record that appears between plan and apply is kept and reported `changed_since_plan`.
+
+`DELETE /api/v1/master-lists/:id` removes a stored list and its rows (404 for an unknown id; read-elsewhere records made from it stay). Uploads now keep the uploader's newest `master_list_retention` lists (default 10; 0 or a negative value means the default) and prune the rest after the new list is stored; the upload response names the pruned ids and any retention error, and a retention failure never fails the upload. Retention never touches read-elsewhere records.
+
+#### `master-list-import` — preview of importing an uploaded book list's read status
+
+PR 1 of the master-list import. An admin uploads a CSV or JSON list of books (title, authors, ISBN-10, ISBN-13, ASIN, a source and source id such as an iTunes persistent id, runtime, read status, finish and last-listened times) to `POST /api/v1/master-lists`, and the Repairs lane plans it with the new fixer `master-list-import` (params: `list_id` and `target_user_id`, both required; `_local` is refused as for the Audible import). The plan is a preview: nothing is written to any book or to any user's read status, the fixer is `PlanOnly`, and Apply and Replan answer with an error naming PR 2. `maintenance.audible-read-status` is untouched and keeps working; the cut-over to the new fixer is PR 2.
+
+Every input row gets one plan row, in one of these classes, each a clickable filter of the rows: `matched_high` (matched by an identifier to one live book with nothing against it; the only class PR 2 will apply), `matched_review`, `ambiguous`, `unmatched`, `duplicate_in_list` (the row names the same ASIN, ISBN or source id as an earlier row; the earlier row carries the combined status and the match), `invalid` (the row names no book), and `error_unreadable` (a store read the row needed failed; the row is refused rather than guessed).
+
+Matching goes in tiers, each with its own confidence: exact ASIN, exact ISBN (an ISBN-10 is converted to its ISBN-13), source id, then folded title plus author surname with the existing scorer. Title-and-author and swapped-title matches are never `matched_high`. Several candidates are settled by runtime within 10%, otherwise they are `ambiguous`. A trashed book is never a target: an identifier found only on a trashed book is followed to its live survivor (`merge.ResolveMergeSurvivor`, flagged `via_trashed` and held for review), or reported `trashed_only` when no live survivor exists.
+
+Finer reasons are row flags, filterable as `flag:<name>`: `bad_identifier`, `identifier_conflict`, `bad_timestamp`, `future_timestamp`, `bad_status`, `bad_number`, `list_conflict`, `possible_duplicate`, `runtime_mismatch`, `series_mismatch`, `title_mismatch`, `junk_title`, `author_mismatch`, `swapped_title`, `via_trashed`, `trashed_only`, `duplicate_target`. An identifier match whose book's title does not fold to the row's title (a mis-keyed ASIN or a reused ISBN) is `matched_review` with `title_mismatch`, never `matched_high`; a missing title on either side, or a title that is not a title, cannot disagree. A list-side problem (a dropped bad identifier, a time with no zone or in the future), two list rows claiming one book, or a row whose ASIN and ISBN name different books (`identifier_conflict`) holds an identifier match for review.
+
+Row validation: a runtime, percent or position that is `NaN`, `Inf` or out of range is a `bad_number` finding and is not read as a number. ISBN-10 and ISBN-13 checksums are checked, an ISBN-10 is stored with its ISBN-13 form, an ASIN must have the ASIN shape, times must be RFC 3339 with a zone, and each row keeps its line number, source and findings as provenance. Lists are stored durably under the new `mlist:list:` and `mlist:row:` key families (registered in the key-family census); the upload is capped by `upload_body_limit_mb` (10 MB by default) and 50,000 rows, and a refused upload stores nothing.
+
+The upload and listing routes are admin-only (the admin role and the `users.manage` permission, so an API key narrowed to other scopes is refused) and are exact entries in the credential-route classification (an admin API key with that scope may upload; it changes no credential). The fixer itself requires `users.manage` too, so an editor holding only `library.edit_metadata` cannot plan against another user's list.
+
+#### Per-guest Cloudflare service tokens for the phone app (behind `CF_GUEST_SERVICE_TOKENS`, off by default)
+
+A guest who accepts an invitation can now get their **own** Cloudflare Access service token for the Audiobookshelf-compatible phone app, instead of any shared credential. When the flag is on, accepting an emailed invitation from an active admin mints a token named `aorg-guest-<user id>`, adds one rule naming that token id to the non-identity "books" Access policy (`CF_SERVICE_AUTH_POLICY_ID`; the policy never gets `any_valid_service_token`), and returns the client id and secret once in the accept response as `phone_app` (sent with `Cache-Control: no-store`). The accept page shows the key once with the two header names; the invitation lookup gains a `phone_app_token` flag. The store keeps only a SHA-256 hash of the secret, the token id and the guest's user id. Deactivating a guest revokes their token and removes their rule; admins get `GET /api/v1/admin/guest-service-tokens`, `POST /api/v1/admin/guest-service-tokens/:userId/revoke` and a "Phone app keys" panel on the Users page. Every mint and revoke is audit-logged (ids only). `INVITE_EMAIL_SERVICE_TOKEN` (default off) additionally emails the key to the guest's verified address after accept. The server's `CF_POLICY_API_TOKEN` needs one more Cloudflare permission, **Account > Access: Service Tokens > Edit**; without it Cloudflare answers 403 and the feature fails closed with an admin-facing message while the account still works in a browser. The owner's own service tokens (ids starting `90a520fb`, `56ffe232`, `790ef191`) are refused by both Cloudflare clients, and only tokens recorded in this server's store and named `aorg-guest-*` are ever revoked. A failed mint never fails the accept. See `docs/operations/cloudflare-guest-service-tokens.md`.
+
+The Cloudflare clients keep only the HTTP status and Cloudflare's numeric error codes from a failed call, never its free text, so nothing Cloudflare says reaches a log, audit entry, stored record or response. A mint that fails ambiguously (timeout, 5xx, unreadable answer) lists the tokens and deletes any named exactly `aorg-guest-<user id>`. `CF_SERVICE_AUTH_POLICY_ID` must differ from `CF_GUESTS_POLICY_ID`. With the feature off the invite lookup and accept responses are byte-for-byte unchanged (no `phone_app_token` field, no `Cache-Control` change). `GET /api/v1/admin/guest-service-tokens` and the new `GET /api/v1/admin/guest-service-tokens/plan` (a dry run of the books-policy change, readable before the flag is turned on) are credential routes: no API key may call them, and the plan and revoke need the owner once one is set.
+
+#### Retired-version guards on purge, trash, restore and auto-promote
+
+The fourth stacked change for retired book versions. A retired version is one a
+live book keeps out of its own file list. Until now a version with no rows left
+in it could still be trashed, restored or purged, and a trashed book that only
+held retired versions was reported as an ordinary book that owns files. The
+version lifecycle (trash, restore, purge now, the nightly cleanup) now refuses a
+retired version with its own error (`versions.ErrRetiredVersion`), the version
+routes answer 409 for it, and auto-promote never picks one.
+
+Purging trashed books now tells a holder of retired versions apart from a book
+with files of its own. `database.CheckBookOwnsNoFiles` wraps the new
+`database.ErrBookHoldsRetiredVersions` (as well as `ErrBookOwnsFiles`) when every
+row that blocks the delete is retired. The purge, its preview and the carry
+precheck report such a book under the `holds_retired_versions` reason
+(`skipped_holds_retired_versions` and its id list in the result, in the
+summary, in the capped operation result and in the decided count), and the
+hard delete, discard-progress and purge-now routes answer 409 with the
+`HOLDS_RETIRED_VERSIONS` code instead of `OWNS_FILES`. The trash listing's
+breakdown still counts such a book under `owns_files`; it has no separate
+figure yet.
+
+Restoring a trashed holder keeps reading only its live files to decide whether
+it is organized, so a retired version stored outside the library folder does not
+demote it to imported, and its retired versions come back untouched. Restoring a
+trashed book that is the shell of a retired version still holding its files is
+refused with a 409 saying the book stays in the trash and its files are safe,
+instead of bringing back a book with no files. The version restore route also
+answers 409 (not 400) for a retired version. Purging a trashed version (the
+Purge now route and the nightly cleanup) no longer removes a file that any other
+book_file row, retired ones included, still names, nor one that any other book
+names with its own file path, a trashed (restorable) book included, and it stops
+without deleting anything when it cannot tell who names a path or when the store
+cannot answer the all-books lookup at all. Nothing retires a row yet, so
+running behavior does not change.
+
+The web client knows the new refusal. The purge dialog lists a book that holds
+only retired versions as its own kept reason ("hold file rows kept for another
+version of the book (retired versions; the purge never deletes those)") and counts it as decided, and a delete, purge-now or discard
+refusal with the `HOLDS_RETIRED_VERSIONS` code shows a message saying the book
+has file rows kept for another version of the book (retired versions), which
+cannot be moved, instead of the generic error. A file row that lands after the
+purge's pre-check and refuses the final delete is reported under the same
+reason, not as a book that owns files.
+
+#### Version purge: re-checked and locked per file, a stuck purge ends in a state, kept files are reported
+
+A review of the version purge (Purge now and the nightly trash cleanup) found
+that it deleted files it should not have, left versions stuck, and reported
+partial purges as complete.
+
+- Before each file is removed, the purge asks again whether another book_file
+  row (retired ones included) or another book names the path, and it holds the
+  merge lock from the claim until the last file is gone, so a row that lands
+  between the decision and the removal can no longer lose its file. A merge or
+  combine that holds the lock makes Purge now answer 409 with nothing started.
+  The nightly cleanup waits up to ten minutes for the lock, then stops at the
+  first version that could not get it instead of waiting once per version; it
+  does not count that as a failure, reports `stopped_for_merge` in the result
+  and the log, and the next night purges the rest.
+- A version purge now applies the book purge's own file checks
+  (`planPurgePathIn`, one function for both): it never deletes a file under an
+  import path, the iTunes library or a `.failed` folder, nor one outside the
+  library root, and it does nothing at all while the library root does not look
+  mounted (an unmounted library made every file read as already removed).
+  Purge now answers 503 for that.
+- A file that can never be removed (permission, read-only filesystem) ends the
+  version in the new terminal status `purge_failed`, with the file and the
+  reason recorded on the version, instead of leaving it in `purging` and
+  failing every night. Purge now answers 409; the Trash tab shows the failure
+  with a Retry Purge and a Hard Delete. The nightly cleanup reports such a
+  version as needing attention and does not retry it. A transient error keeps
+  the version `purging`, to be retried. A row naming a directory that still
+  holds files is kept and reported, not a failure.
+- Files a purge kept (another row or book names them, a protected path, a
+  folder that still holds files) are recorded on the version (`purge_kept`),
+  and the trash-cleanup operation's log and result say "purged N versions, M of
+  them with files kept (versions ...)" and carry the kept versions, books and
+  paths, and the versions that need attention.
+- A purge whose book is gone still removes the version's `.versions/{id}` slot
+  files, with the same checks, and removing a version's last file removes the
+  slot directory it leaves empty.
+- The Trash and Purged tabs of the version page work: `GET
+  /api/v1/audiobooks/trashed-versions` and `/purged-versions` were called by
+  the page but never registered.
+
+#### Version purge: a retry trusts only what it removed, a vanished root is transient, hard delete refuses a running purge
+
+A second review of the version purge found three ways it could still go wrong,
+and several smaller ones.
+
+- A retried purge used to treat the folder of every path still to be deleted as
+  a folder the earlier attempt had emptied, so a nested folder on an unmounted
+  drive read as legitimately gone. `database.BookVersion` now records
+  `purge_unlinked` (each path actually removed, written after the removal and
+  cleared when the purge finishes). See the third review below for what a retry
+  does with it (it trusts those paths one by one, never their folders).
+- `guard.RootReady()` runs again once the merge lock is held, and a
+  `PurgeDecider.Decide` that cannot resolve the library root (the path vanished,
+  `fs.ErrNotExist`) answers with a transient error instead of a permanent keep,
+  so the version stays `purging` and the next run decides again.
+- `PebbleStore.DeleteBookVersion` refuses a `purging` version
+  (`ErrVersionPurging`); the hard-delete route answers 409 for it.
+- `purgeVersionLocked` re-reads the version after taking the lock, so a version
+  restored or purged between the read and the lock is not purged from a stale
+  copy. Purge now answers 409 "already purged" (`ErrVersionAlreadyPurged`) when
+  the nightly cleanup got there first, instead of saying it was restored.
+- ENOTEMPTY and EEXIST are transient removal errors, not permanent ones.
+  `pruneEmptyDirs` no longer enters a symlink. The import-path lookup failing now keeps the file (`isProtectedPath` fails
+  closed on the deletion paths).
+- The trash cleanup counts consecutive nights it stopped for the merge lock
+  (`MergeStopStreak`, kept in the raw KV store). At
+  `versions.MergeStopEscalateAfter` (3) the operation logs a warning and sets
+  `stopped_for_merge_repeatedly` and `stopped_for_merge_nights` on its result,
+  which the operation panel shows; the operation still completes. The wait is
+  `sync.Mutex.TryLock` based, which can starve under Go's starvation mode; that
+  limit is documented on `BackgroundMergeLockWait`. A failed run now logs the
+  same summary line a successful one does.
+
+#### Version purge: decide before the claim, trust the record path by path, a stuck purge has an exit
+
+A third review found that the retry still trusted whole folders, and that a
+version could be stuck in `purging` with no way out.
+
+- `versions.PurgeVersion` decides EVERY path read-only before it claims the
+  version, and claims only when it is going to unlink something. A trashed
+  version with nothing removable and a path it cannot tell from an unmounted
+  dataset stays `trash` (restorable) and the error is a `*CannotTellError`
+  (`errors.Is` `ErrPurgeCannotTell`); the trash cleanup lists it under the new
+  `CleanupResult.CannotTell` instead of failing the night. Before, the claim came
+  first, so a trashed version whose file and folder were already gone became an
+  unrestorable, undeletable `purging` row.
+- A retry trusts `purge_unlinked` path by path: a recorded path that reads "not
+  there" is gone. Folder seeding is gone entirely: `PurgeGuard.NewDecider` takes
+  no folders, `PurgeDecider.Unlinked` is removed, and the version decider no
+  longer exempts an empty folder, so a never-unlinked neighbour in an unmounted
+  folder is "cannot tell". An unlink that answers "not there" for a path this
+  purge did not unlink is "cannot tell" too and is never recorded; only a real
+  unlink is. Once the record write fails, the purge stops unlinking.
+- The way out: a purging version whose attempts keep ending with a path unsettled
+  and nothing unlinked is counted (`purge_undecided_nights` on the version) and,
+  at `versions.PurgeUndecidedEscalateAfter` (3, the merge-stop streak's count),
+  becomes `purge_failed` with the paths and the reason "cannot tell whether
+  gone", which makes Hard Delete available. An attempt that unlinks something
+  resets the count. The hard-delete route answers 409 for a `purging` version
+  with that explanation; hard-deleting it under the merge lock was not added.
+- `pruneEmptyDirs` requires the slot to resolve to where its name says (no
+  symlinked `.versions` or slot) and the finished purge prunes only inside the
+  library root (`PurgeDecider.InsideRoot`); `PruneEmptyVersionsDir` leaves a
+  symlinked `.versions` alone.
+- `recordMergeStopStreak` logs once that escalation is unavailable when the store
+  has no raw key-value space. Purge now says "deleted" (`ErrVersionDeleted`), not
+  "restored", when the version was hard-deleted under it. `MarkTrashed` and the
+  store refuse to put an `inactive_purged` version back in the trash
+  (`database.ErrVersionPurged`; the trash route answers 409).
+
+#### `maintenance.transcribe-file-intros`: transcribe the opening of every audio file
+
+A new operation transcribes the first 90 seconds of every present `book_file`
+row, not only each book's first file, and stores the result on the file row
+(`IntroTranscription`, the parsed credits, `IntroMeta`, and the done marker
+`IntroSourceHash`). It uses the path-based whisper transport
+(`transcribe.TranscribeByPathBatch`): the server decodes nothing, each file's
+path and a 90 second length go to the worker.
+
+- A live run first checks that some worker advertises the path pipeline
+  (`transcribe.PathPipelineAvailable`) and stops with the per-endpoint reason if
+  none does. The worker's per-file error code decides what is written:
+  `not_found` is `source_file_missing`, `ffmpeg_error` is held until
+  `retry_failed`, `path_unmapped`, `ffmpeg_timeout`, `worker_misconfigured` and
+  `container_rejected` (a lost mount, a stalled share or a broken worker, not a
+  verdict on the file) write nothing and defer, anything else is a retryable
+  `whisper_error`. A job the worker never answered is deferred, not silence.
+- Dry run by default; the preview counts the work by reason and estimates the
+  time (the per-file time is unmeasured for worker-side extraction).
+- Ordinal 0 of every book is sent first, library-wide. Files with the same
+  `FileHash` are sent once and the result is applied to all; an earlier done
+  file with the same hash is copied without a whisper call.
+- Resumable with no checkpoint: a file is done when `IntroSourceHash == FileHash`
+  (on `BookFileCore`, so selection is one memdb pass). A whisper error is
+  retryable; an empty transcript at 90 s is stored as a done file marker. When
+  every endpoint is unreachable (a recognized network failure; a 5xx, decode error
+  or capability refusal is not retried and just defers the batch) the SAME batch is retried five times with a
+  growing wait (1+2+3+4 minutes by default), writing nothing and keeping the
+  progress line alive; if it stays down the run fails and the files stay undone.
+- A stored result is never degraded: silence never replaces a stored transcript
+  (not even under `only_missing=false`), and a failure never touches a row that
+  holds a result or stamps the run id on it, so `clear_run_id` cannot erase a
+  result the run did not write. A forced overwrite is reported as a replacement
+  and is not counted as new coverage. "Already has a result" is one shared
+  definition (`database.IntroResultPresent`) used by selection and the store, and
+  it now also counts a legacy `empty` status. A row that holds a transcript but
+  does not count as done (the book op keeps text under a failure status) is also
+  protected from fill-only overwrites and failure stamps, and a silence sentinel
+  the book op wrote is stamped once (without claiming it for the run) so it is no
+  longer re-sent every run.
+- Fills a book's transcript from its ordinal-0 file only when the book has none,
+  and never from a silent clip. Nothing is ever overwritten under `only_missing`.
+- Refuses to start (and `clear_run_id` refuses to start) while `library.scan`,
+  `library.import`, `library.folder-auto-scan` or `metadata.batch-apply-cached`
+  is queued or running (every op that reaches the scanner's unlocked upsert;
+  `itunes.import` locks the row, so it is not in the set), and re-checks immediately
+  before every batch of writes, holding results until it is clear. The scanner's
+  batch upsert reads a file row without the per-file lock, so a result written
+  during a scan could be erased by it.
+- The op declares no `Writes` on purpose: it runs for days, and
+  the dispatcher's write-set gate would keep `acoustid.backfill` (and every other
+  op declaring `books`/`book_files`) queued for the whole run. Its writes are
+  field-scoped and the shared `book_file` merge keeps the intro group against any
+  whole-row writer.
+- Worker pool sized to the whisper endpoints' own concurrency (capped), bounded by
+  `whisper_max_in_flight`.
+- Rollback is by run id: `clear_run_id=<op id>` (dry run first for the count)
+  clears that run's per-file results and reverts only the book fills that still
+  hold exactly what the run wrote. It writes no undo-ledger rows, and it returns
+  files to untranscribed rather than restoring a transcript a forced re-run
+  (`only_missing=false`) replaced.
+- Counters are kept per file under their own key, `stats:transcribe-files`
+  (coverage at the `book_file` grain), served by
+  `GET /api/v1/maintenance/file-intro-stats`; the book op's `stats:transcribe`
+  is untouched.
+
+Writes go through two new capability methods, `SetBookFileIntro` and
+`ClearBookFileIntro`, that write only the intro group of one row (primary key and
+memdb), so no book aggregate is recomputed per file.
+
+The whisper dispatcher (`transcribe`) now allocates a call's jobs by free
+capacity: one chunk of eight per free slot, round-robin across endpoints of equal
+priority from a rotating start, spilling to a lower priority tier only when the
+higher one is saturated, and skipping an endpoint whose slots are full. Before,
+a small batch always went whole to the first healthy endpoint, and under
+saturation the overflow pass rotates across equal-priority endpoints too.
+
+- Executive-summary appendix listing every question and the answer taken during the 24-hour auto-Recommended window.
+
+- New maintenance operation `maintenance.credits-backfill` fills in and tidies each book's author and narrator credit lists so they agree with the book's single author and narrator fields. It is a dry run unless started with `apply`. It fills an empty author list from the book's author, adds that author at the front when the list leaves them out, numbers list positions 0, 1, 2, and so on, fills an empty narrator list from the narrator field or the stored narrator list (`NarratorsJSON`), and refreshes a stale author snapshot. Anything ambiguous (a missing or merged author record, a combined "A, B" author record, a narrator field that disagrees with the list) is listed for review and not changed. The operation never creates an author. It creates a narrator only for a single unsplit name or a stored list entry, and a name that exists only after splitting a string needs the `narrator_new_from_split` opt-in. iTunes books need the `itunes` opt-in and owner-manual books are held. Each written book is journaled, so the operation can be reverted; the revert refuses a book that changed after the run and restores the authors in the order they were stored in, so the book files under the same author folder as before.
+- The operation holds back books it should not touch. A book whose author field a person has locked is held on the whole author side, and one whose narrator field is locked is held on the narrator side (`held_narrator_user_locked`); the lock is checked again right before each write. Placeholder authors such as "Unknown Author" and junk narrators such as "N/A" are listed for review. A book whose author snapshot names a different credited person than the author field (a rescan moved the author) is listed under `author_id_snapshot_conflict` and not written, and so is a book with an empty author list whose snapshot names a different author. The snapshot is compared by its id, and, when the id is 0 or points at no record, by its name: against the author field's record name when the author list is empty, and against the names of the credited authors other than the author field when it is not.
+- A narrator name is matched to an existing record exactly first, then by its fold key (case, accents, punctuation and spaces: "Renee Montoya" and the record "Renée Montoya", "Jean Paul Valley" and "Jean-Paul Valley"). A name that matches one record is credited under that record's spelling, and only that name is respelled inside the narrator field (the credit that is the name, so "Renee Montoya" is never found inside "Renee Montoya-Sawyer"; where a name appears as whole words in more than one credit, such as "Jean Paul Valley Jr." beside "Jean Paul Valley", only the credit that is the name is respelled), so a "Read by" prefix, a role credit such as "- translator" and a co-narrating author stay as they were. The matching entries of the stored narrator list are respelled in the same write. Both respellings are journaled and the revert restores them, and the written book no longer shows as `narrator_column_differs_junction` in the credit census. The books respelled are listed under the informational classes `narrator_column_respelled` and `narrators_json_respelled`, and a dry run lists the same books. A book whose respelled field would not read back as the record's names, or whose respelled stored list would still match neither the narrator list nor the field, is listed for review under `narrator_spelling_unreconcilable` or `narrator_spelling_json_conflict` instead of having its narrator side written; an author-side write it has is still written. A name that matches two records is listed under `narrator_name_ambiguous`. When several books name one new narrator under spellings of one fold key, the new record takes the most frequent spelling among all the books the run could write, not only the ones a `limit` selects, in a full run, a `limit` run or a `book_ids` run (ties go to a mixed-case spelling, then an accented one, then the lexically smallest). A dry run predicts what the cohorts write, and a `book_ids` run counts spellings over the whole library.
+- A rescan with an unlocked narrator field reads the tag's spelling back into the narrator field, and the field-to-list sync can then create an unaccented duplicate narrator record for the name. The operation does not change the scanner or that sync; the census after a rescan shows it and a re-run of the operation finds the book again.
+- `limit` means the first N eligible books by id, in a dry run as well as an apply, so a dry run with a limit shows exactly what the apply with that limit writes. A book that cannot be read, or whose write fails or is refused, keeps its place in the cohort.
+- The apply holds the library scan down for its whole run, and renews the hold on every book. If the hold is lost the operation reports "scan stand-down lease lost". A write that is refused or fails voids its own journal row, so the revert refuses it and a resume does not see a stranded row. `narrators_created` counts only narrators whose book write landed. The operation and its dry run declare a books write, so they wait for other book-writing operations.
+- The result reports `books_eligible` and `books_to_reidentify`, with the ids under `search_identity_changes`: the books whose author search identity changes and which will spend Google Books quota (1,000 requests a day) at their next metadata run.
+- Every class count in the result clicks through to its book ids. The ids are not capped and run to 150,000 to 300,000 for a full apply (about 5 to 12 MB), so they are stored beside the operation instead of inside its result, and a new route pages them: `GET /api/v1/operations/:id/class-lists/:class?offset=&limit=` (default 100, at most 1,000). The result itself keeps the counts, the before/after samples and a summary of where the lists are. The lists are rows of their own, so storing or clearing them leaves any other row of the operation alone, and each run tags them so lists a later unfinished run wrote are never served under an older result. The route answers 404 for an operation with no stored class lists and 409 `OPERATION_CLASS_LISTS_NEED_RERUN` when the stored lists do not match the result, which a new run fixes. The lists stay until the operation is discarded: nothing removes operation results by age, so every run's lists, limited runs included, keep their 5 to 12 MB until then.
+
+#### Books whose version swap did not finish can be found and resumed
+
+A swap that moved a book's files but could not finish writing the records
+(`versions.ErrSwapIncomplete`, the 500 `VERSION_SWAP_INCOMPLETE`) left the
+versions in `swapping_out` / `swapping_in`, the book with no active version, and
+nothing that listed it. Now:
+
+- `GET /api/v1/audiobooks/swap-incomplete` lists those books (book path, each
+  swapping, active and alt version with its file rows, and what a resume would do
+  or why it would refuse). Version Management has a third tab, "Unfinished swaps",
+  with a Resume button per book.
+- `POST /api/v1/audiobooks/:id/versions/resume-swap` (`library.organize`, under the
+  merge lock like the swap) runs `versions.ResumeVersionSwap`. It classifies every
+  file row by the disk (book folder or its own `.versions/{id}/` slot), finishes the
+  swap when no file needs to move, otherwise moves the files back without replacing
+  anything and makes the leaving version active again, and records the move as a
+  `version_swap_resume` path change. It refuses with 409 `SWAP_RESUME_REFUSED` (reason
+  in the body) for a state it would have to guess at: another active version, a file
+  at both or neither place, a symlink, a file another row names, a size mismatch,
+  more than one swapping version of a kind. 409 `NO_SWAP_TO_RESUME` when the book has
+  no unfinished swap; a failed resume is 500 `VERSION_SWAP_INCOMPLETE` and repeats
+  safely. It also repairs the rarer leftover where only the last status write failed
+  (leaving version `alt`, entering version `swapping_in`).
+- Trashing any version of a book that has a `swapping_*` version is refused with
+  409 `VERSION_SWAPPING` until the swap is resumed (a retried DELETE of the version
+  that already reads `alt` is no longer trashed).
+- The nightly `maintenance.trash-cleanup` lists these books (`swap_incomplete`,
+  `swap_incomplete_version_ids`, `swap_incomplete_book_ids`,
+  `swap_incomplete_file_paths`, `swap_incomplete_books`) with one WARN log line and
+  a link to the new tab. It never resumes a swap, and fails the night only when it
+  could not list them. The listing is a status-taking scan
+  (`database.BookVersionDispositionReader.ListSwappingBookVersions`; there is no
+  status index, like `ListTrashedBookVersions`).
+- The never-called `versions.ResumeVersionSwaps` stub is removed.
+
+- The model's self-reported parse confidence is now read: the summary shows `confidence high N / medium N / low N`, the per-row debug log carries it, and AI-filled fields are recorded in change history with source `scan.ai-parse:<confidence>`. Saves are not gated on it; see `docs/decisions/2026-10-30-ai-parse-confidence.md`.
+
+#### Persisted author to books index
+
+The author book list (`GET /authors/:id/books`) no longer reads the whole library during the roughly two minutes after a restart while the in-memory copy warms up. A new index (`author_books:<author>:<book>` for credit rows, `author_books_legacy:<author>:<book>` for the book's primary author) is kept in step on every book create, update, delete, credit change, author delete and merge, built once on the first boot after this ships, and reconciled on later boots. Merges and deletes still use the full scan.
+
+#### metadata.batch-apply-refusals-reset op
+
+Forgets the remembered refusals so those books are evaluated again. `dry_run` (default true) only counts them; `book_ids` limits the reset to the named books. Design and rejected alternatives: `docs/decisions/2026-10-30-batch-apply-structural-refusal-backoff.md`.
+
+- `maintenance.bookfile-acoustid-index-repair` deletes the orphaned
+  `book_file_acoustid:` keys the old writers left behind: keys whose row is gone,
+  or exists without that segment. Preview by default (`dry_run=false` deletes);
+  each delete is judged again under the single-owner index lock, so a key a retire
+  repointed to a live row is kept. Keys whose row still stores the segment are left
+  for `dedup.bookfile-seg-drop`; malformed values are reported, never deleted.
+  `GetBookFileByAcoustID` stops answering for a deleted key, so run the preview
+  first and read `docs/decisions/2026-10-30-bookfile-acoustid-seg-keys.md`.
+
+- `TestGuard_DryRunParamsAcceptBothSpellings` (a source scan) and
+  `TestOpsV3_DryRunFamilyDecodesBothSpellings` (over the live op registry) fail
+  when an op declares only one spelling of the dry-run flag, or declares either
+  as a plain `bool` whose Go zero value would read as a live run.
+
+- "Finish without resuming", a third decision for an interrupted run that is waiting on one (`interrupted_ask`), next to Retry and Discard. It runs the operation's follow-up step (`Finish`, which is where a fixer's `AfterApply` runs) once over the rows the earlier attempts already applied, then ends the run, without leasing any more work. Before this, declining to resume meant Discard, which deleted the record and left the applied rows without their follow-up. New route `POST /api/v1/operations/v2/:id/finish`, a `can_finish` flag on the operations timeline, a button on the Activity page, `RunRecord.FinishOnly`, the `decide_finish` state event, and `batchConfig.finishOnly` in the batch runner. Only native Batch and Fixer definitions can take it; a v2 definition has no follow-up step to run, so "finish" would be a full Run, which is Retry.
+
+- An architecture guard (`internal/arch`) fails on any non-test file outside
+  `internal/database` that selects `CreateOperationChange(s)`, apart from two
+  named exceptions.
+
+- `*database.PebbleStore` gains `CompareAndDeleteRaw(key, expect)` and the dirty-set marker `MarkDirty(prefix, subjectID)` (value: 8-byte big-endian epoch), both under the same per-entry lock. A v3 Batch run over an `ops.DirtySet` source now starts on the real store and clears only the entries it processed; a subject re-dirtied while its item ran, and a failed item, stay dirty. `MarkIdentDirty` and `ClearIdentDirty` now go through the same two functions.
+
+- Digests now carry exact `tag_counts` (the `action:` and `source:` tags) from compaction, where before only the
+  recompaction maintenance op wrote them, and then only from a sample of at most 500 items.
+
+- New nightly maintenance op `maintenance.reports-prune` removes old per-run TSV reports from `{library root}/.reports`, which `backfill-file-hashes` (about 100 MB per full-library run) and the other report-writing ops grew without bound. It keeps the newest 3 reports per op kind and anything younger than 14 days (`keep_per_kind`, `max_age_days`), only removes regular files named for this op family, never follows a symlink, never touches a `.pending` file or the report of a queued or running operation, and previews unless `dry_run` is false. It logs each removal and reports counts and bytes freed.
+
+- `internal/arch` now has a static guard, `TestResumeRestartDefsCheckpoint`:
+  every `OperationDef` that declares `ResumePolicy: ResumeRestart` must have a
+  `Run` that reaches a `Checkpoint` call, or be listed (with the reason a
+  restart from zero is safe) in an explicit allowlist. A new op can no longer
+  repeat the eight silent restart-from-zero ops fixed in #3223.
+
+- The retired-versions repair now has its own set of reject reasons: the shell is a distinct
+  edition, keep both books, or the wrong book holds these files (on top of the common and repair
+  reasons). Tests pin how a reject of a retired shell behaves in the decision store: it blocks the
+  fixer, a reopen does not release it (a reject with no data hash cannot be reopened at all), only
+  an unreject does, and the "undone" record a revert leaves never blocks or releases anything. The
+  reject route itself is not built yet, so nothing user-visible changes.
+
+- System > Maintenance has a Provider Throttles panel. It lists the metadata
+  providers currently on hold (reason, detail, time left), refreshes on mount,
+  on demand and every 4 hours, and shows an empty state when nothing is held.
+  Each row has Reset now, and there is a Reset all; both start
+  `maintenance.throttle-reset` with `dry_run=false` through the ops-v3 trigger,
+  so the run appears in the operations bell, and stay disabled until it settles.
+  Buttons are disabled for callers without `scan.trigger`.
+
+- New operation `maintenance.throttle-reset` releases metadata provider holds by
+  hand. 01-P81f retired the `DELETE /metadata/providers/throttles` routes, so a
+  quota or auth hold could only end on expiry (up to 24 hours) or on a
+  successful call. The op previews by default: it lists each hold's provider,
+  kind, expiry and reason and releases nothing. With `dry_run=false` it releases
+  them and reports per provider what was dropped. The optional `provider` param
+  scopes it to one provider; naming a provider with no active hold is an error
+  that lists the held ones. The throttle registry gains `ReleaseHold` and
+  `ReleaseAll` for it.
+
+### Changed
+
+- `BookFile` and `BookFileCore` now expose their duration through `DurationSec()`, `DurationState()`, `SetMeasuredDuration()` and `ResetDuration()`, and production code reads and writes it through those accessors instead of the raw `Duration` field. Behaviour is unchanged (a duration is known when it is above zero); this prepares the type change that will distinguish an unmeasured duration from a measured one.
+
+- A file's runtime is now stored as "measured" or "not measured" instead of a
+  number where 0 meant both "never checked" and "checked and found nothing".
+  Internally `book_file.duration` is a pointer: absent means not measured, and a
+  stored value is always more than 0 seconds. Existing rows need no migration,
+  because a 0 was never written to disk, so every file that was never checked
+  now reads as not measured. Nothing a user sees changes yet: totals, holds and
+  the API still treat an unmeasured file as contributing no time, exactly as
+  before. This is the groundwork for telling "not probed yet" apart from
+  "possible bad file" in a later change.
+
+- A failed duration probe is now recorded on the file instead of being swallowed. A file that ffprobe reads and cannot give a length for (an error, 0 s, unparseable output, a timeout, or only a size-based estimate) gets one counted attempt with the reason, and reads as "probe failed" after one and "unreadable" after three, while its duration stays unset. A missing ffprobe, a file that is not there, a file or folder this process may not read, a dropped network mount, or a path that is not an audio file (a folder, a cover image, a text file, which the header read now refuses without starting ffprobe) counts for nothing and the file stays "not probed". Every place that measures a duration records it: new-row creation, the scanner's replaced-file check, the repoint-missing-to-folder-audio op, and the duration re-extract op. A successful measurement marks the duration stage done and clears any earlier failures, and a stored duration never sits beside a failure record.
+- A file at the three-attempt ceiling is no longer probed again by the scanner or the duration re-extract op; it stays "unreadable" until its duration is reset on purpose. A file that reached the ceiling through timeouts only is probed again, since a slow disk says nothing about the file. The scanner also skips probing a file whose stored row already has a duration when both the stored and the scanned content hashes are known and equal; with an unknown hash it probes, and the fresh value wins.
+- A rescan that sets only the duration stage no longer wipes the file's other scan stages. The windowed and full-file fingerprint stages are now cleared when the file's audio changes, as the duration stage is, including when a caller merely copies the old record over. A row's duration stage is made consistent with its duration on every write, including new rows: a value carries exactly "done", and no value is never "done".
+- The repoint op's dry run logs probe failures at debug instead of one warning per target, and its apply refuses a target that changed between the plan and the write.
+
+- The folder-books repair now offers the owner a single-shelf row too, when
+  every reason it is held back is one the owner may resolve (a new book for
+  files in the library folder, or a duplicate title that names exactly one live
+  book). Until now only a row whose files sat on two shelves (mixed-shelf) was
+  the owner's; a row on one shelf stayed listed and was only counted. The row
+  stays skipped for a plain or scheduled apply, and a hard hold (an iTunes id,
+  listening progress, no heir, a deep folder) still keeps it away from the
+  owner. The owner-apply preview now names the row's real class (shelf,
+  author-copy or mixed-shelf). The `single_shelf_owner_resolvable` row flag, its
+  plan count and its Repairs chip label are removed, since the rows it measured
+  are now offered directly.
+
+#### 2026-09-18 pluggable media platform decision record superseded
+
+The 2026-09-18 decision record is marked superseded by `docs/specs/platform-core/02-decision-record.md`, which
+gives a kept/changed/dropped verdict for each of its 13 decisions.
+
+- CI runs on merge-queue commits (`merge_group`), so its checks can be required by the `main` merge queue.
+
+- Folder-books: listening progress on a folder-book no longer blocks the owner's apply (owner decision 2026-11-05: "ignore the progress, reset them all to 0"). A plain apply still refuses such a row; the owner's click retires the folder-book with the progress left on it, untouched and recoverable through the operation's revert, and the new books start at 0. An iTunes id on any member is still a hard hold, checked before progress is reported.
+
+- The `folder-books` Repairs fixer no longer reads a file with no measured duration as a short one. A new-book group with a member still unmeasured after the sibling borrow is held `skipped_unprobed` ("N file(s) have no measured duration; run Backfill book durations (unknown rows) for book(s) ..."), or `skipped_unreadable_audio` when a probe ran and failed (a timeout alone never counts as unreadable), instead of `skipped_fragmentary`; fragmentary is judged only on groups whose files are all measured. Both holds are hard (no owner click), carry the file ids, and offer a "Probe these files" action that starts `maintenance.duration-backfill` with `mode=unknownRows`; Plan itself still probes nothing. A group whose known files already cleared the chapter threshold is now also held while one member is unmeasured. `RowHold` gains optional `file_ids` and `action` (`RowHoldAction.params` is the op's params as raw JSON, like `PlanParams.params`). A group is split per member: a failed file and a never-probed file in the same group are held under both kinds. The action names only the files the backfill will act on, by one shared rule (`unknownRowActionable`) that the backfill's own walk reads too. A file it declines stays in `file_ids` and the hold's Why says what settles it: flagged missing although on disk, excluded from scanning, a size that changed since the last scan (unless the row carries a fingerprint duration, which is promoted whatever the size), failed to the attempt ceiling, a path that is not absolute and clean, an extension the duration probe does not read, a path that is not a regular file, a file that could not be checked on disk, or a file the process cannot open. Each of those is its own counter in the backfill's result (`skipped_bad_path`, `skipped_not_audio`, `skipped_not_regular`, per book as well for the first two), never folded into the environment-skipped count. What the shared rule cannot see is an environment-wide failure (ffprobe missing, a stale mount); the backfill still skips such a file and records nothing, so that hold can be offered again until the environment is fixed. The row's `unmeasured_majority_shelf_files` readout counts the majority shelf's rows the hours leave out.
+
+#### Platform core: owner decisions D15 applied to the plan and task briefs (`docs/plans/platform-core/`, `docs/agent-tasks/platform-core/`)
+
+The owner answered every open planning question on 2026-11-05 (D15). Required checks on `main` are enforced by a
+ruleset with no bypass actors and GitHub's merge queue, and `/parallel-sweep` never admin-merges; the R1 release
+freeze is kept; the split-readiness thresholds are accepted; the 15 unread v2 `Schedule` strings are deleted while
+the 14 jobs they duplicate keep their real schedule. Two advisor simplifications were adopted: the per-flip upgrade
+test is dropped (M8 is registered once, as `books.rewrite`), and the release freeze becomes the `RELEASE_FREEZE`
+repository variable the owner toggles, so R2-02 folds into OWNER-05 and R1-31 becomes R1's executive-summary PR.
+The plan now has 133 tasks (127 agent PRs, 6 owner checkpoints) in 46 waves; the critical path is unchanged at 82
+working days. Planning only: no production code changed.
+
+- Platform-core execution state records R0 (waves W01 and W02) complete: six hotfix rows merged.
+
+#### Platform core design spec revised for a one-cutover extraction (`docs/specs/platform-core/`)
+
+The platform-core spec is revised for the owner's decisions of 2026-11-04 (D10–D14): no backward compatibility, no
+soaks, and a single forward conversion of user data. The staged S0–S10/T0–T8 plan is replaced by four releases:
+R0 (security hotfixes), R1 (core runtime, no data change), R2 (one cutover release, opened by dark foundation PRs and
+moving settings, identity, tasks, events, integrations and backup/updater/health/metrics onto core) and R3 (cleanup
+and the upgrade floor). The spec now defines:
+- the read-only cutover preflight and the `storage cutover-blockers` repair command;
+- the 7-day pre-migration checkpoint and `make rollback-restore`;
+- the kept Audiobookshelf-compatible API, OAuth paths included;
+- the licences: mediacore Apache-2.0, audiobook-organizer PolyForm Noncommercial with a commercial-licensing notice.
+
+Review rounds 13–15 are summarised in `docs/plans/platform-core/reviews/spec-rounds-13-15.md`, and a plain-language
+summary is in `docs/plans/platform-core/executive-summary.md`. Planning only: no production code changed.
+
+- Go toolchain pin moved from go1.27.2 to go1.27.3 in every copy, with re-resolved image digests; two stale Dependabot ignore rules removed.
+
+- Startup and expiry-warning log lines about API keys without an expiry now say to create a replacement key and revoke the old one, instead of telling the operator to rotate it.
+
+#### go fix batch 1 (any, forvar, minmax, errorsastype, reflecttypefor, stringscut, stringscutprefix, stringsbuilder, stditerators, inline) applied to 114 files with no behaviour change
+
+#### go fix batch 2 (rangeint, mapsloop, slicescontains, slicesbackward, stringsseq) applied to 47 files in internal/database with no behaviour change
+
+#### Review latency metric: `view` labels are `page`, `ids_all`, `full`, `gone` and `selection`
+
+`review_index_request_seconds{view}` records every `view=page` request under `view="page"`
+(whatever it answers, a refusal included) and an id list (`ids=all`) under `view="ids_all"`,
+next to `full` (the listing), `gone` (the retired `view=index`) and `selection` (the selection
+check below). `view="index"` is no longer
+written. The overnight dashboard's "Review page p95" panel (the 3s target) reads `view="page"`,
+and its latency, request-rate and slow-request panels include page traffic.
+
+#### Selecting books across chips, and a filter change
+
+When a filter changes, or a chip is left, the lane drops the selected books the new view hides.
+It asks the server with `POST /api/v1/audiobooks/metadata/cache/review/selection` (the page's
+filter in the query string, the selected ids in the body, at most the bulk apply cap of them,
+`422` past it), which answers which of those books the filter lists, which it does not, and
+which it does not hold at all; the lane no longer fetches the whole library's id list twice.
+`bucket=any` is accepted only there; `view=page` refuses it. A Title change drops the selected
+books whose title no longer matches in any chip. Leaving a chip checks the selection against
+the filters the chip had paused. If the check cannot be made the lane says so: outside a chip
+the selection is cleared, inside a chip it is kept but applying it is held until a check
+succeeds, the selection is cleared or the filters change.
+
+#### A split bulk apply is held to the cap as a whole
+
+Select all N matching sends its apply in chunks of 500. Each chunk names its batch
+(`batch_id`, an unguessable random id), the batch total (`batch_total`) and its own position
+(`batch_index`) on `POST .../batch-apply-cached`. The server keeps one ledger entry per user and
+batch id and refuses a chunk when the declared total is over `bulk_apply_max_items`
+(`BULK_APPLY_CAP_EXCEEDED`), when the total changes mid-batch (`BATCH_TOTAL_MISMATCH`), or when
+the chunks add up to more than the declared total (`BATCH_EXCEEDED`; the message says earlier
+chunks were already queued, except on the first chunk, where nothing was). A resent chunk
+(same `batch_index`, same books) is neither counted nor queued again: the server answers
+`202` with the op id of its first send, and the same index with different books is a `422`
+`BATCH_CHUNK_MISMATCH`. A request is validated before it is recorded, so refused requests
+occupy nothing, and a full ledger evicts the least recently touched batch (the user's own
+first) instead of refusing anyone. A user holds at most 16 live batches; the ledger forgets an idle batch after 30
+minutes.
+
+This is an accident guard, not a quota. It enforces the total a cooperating client declares: a
+client that omits `batch_id` or sends a fresh one per request gets only the per-request check,
+and there is no per-user rolling window. A request with no batch id is checked against the cap
+as one request, as before. `batch_id`, `batch_total` and `batch_index` go together, and a
+batched request with no `book_ids` is a `400`.
+
+The selection check now asks about a changed Title over both buckets even when the view leaves a
+chip inside the debounce. A check that cannot be made never drops the selection: it is kept and
+bulk apply stays held, with a message saying how to clear the hold, whether the server refused the
+Title pattern, answered with an error, was busy, or timed out (each check has a 15 second
+deadline). A busy server and a timeout are asked again at most 5 times. While the first snapshot
+after a restart is still building, the endpoint answers `503` `REVIEW_SNAPSHOT_BUILDING` with
+`Retry-After` at once instead of waiting, and the lane keeps asking for up to 5 minutes outside
+that budget; a failed build that is backing off answers `503` `REVIEW_SNAPSHOT_BACKOFF` with the
+remaining wait.
+
+A resent batch chunk must now match the first send in everything the apply does (books, `mode`,
+`write_back` and pins), not only its books, or it is refused with `BATCH_CHUNK_MISMATCH`. A
+batched chunk that repeats a `book_id` is a `400`.
+
+While a selection is being checked against new filters, or its check failed, every command that
+acts on the selected books is held, not only apply and reject: "Write details into audio files",
+"Search again" (button and menu), "Skip selected" and "Reject selected" are disabled with the
+reason, and refuse again if invoked anyway. A snapshot-building wait that was left over from
+another view no longer makes a later visit to the same filters give up at once.
+
+#### go fix batch 2 (rangeint, mapsloop, slicescontains, slicesbackward, stringsseq, embedlit) applied to 52 files in internal/server with no behaviour change
+
+#### go fix batch 2 (rangeint, mapsloop, slicescontains, slicesbackward, stringsseq, embedlit) applied to 77 files in internal/plugins with no behaviour change
+
+#### go fix batch 2 (rangeint, mapsloop, slicescontains, slicesbackward, stringsseq, embedlit) applied to 43 files in the metadata, matching and AI packages with no behaviour change
+
+#### go fix batch 2 (rangeint, mapsloop, slicescontains, slicesbackward, stringsseq, embedlit) applied to 84 files in the scanning, operations, organizing and remaining small packages with no behaviour change
+
+#### go fix newexpr and inline applied to 80 test files, replacing local pointer helpers with new(value) and deleting all 51 helpers, with no behaviour change
+
+#### go fix waitgroupgo and testingcontext applied to 42 files
+
+Background goroutines now start through `sync.WaitGroup.Go` (38 files, 5 of them server code: progress sampling, fingerprint worker leases, repair stand-down, the ABS cache refresher and search backfill), and 4 test files use `t.Context()`. Behaviour is unchanged; the only difference is that a goroutine panic no longer marks its WaitGroup done, which does not matter because such a panic ends the process either way.
+
+#### Python scripts and tests pass the CI Python lint
+
+`ruff format --check` and `ruff check` (ruff 0.17.0) over `scripts` and `tests` now exit 0 with no config changes, new ignores or excludes. 55 files were reformatted and 100 lint findings fixed. Notable behaviour-adjacent changes: two bare `except:` clauses were narrowed (and one dead one in `scripts/rebase-branches.py` replaced by a `None` check), `finish_credential_migration.Refused` is now `RefusedError`, and the FastAPI upload parameters in the Whisper workers use `Annotated[..., File()]`. The final `git stash pop` in `scripts/rebase-branches.py` now runs even if the branch restore is interrupted.
+
+#### The Repairs apply confirm and result banner name the rows
+
+The confirm said only "Apply N repair row(s)". It now lists the rows being
+applied (title and book count, up to ten, then "and N more"), and the "Apply
+finished" banner names the rows that were applied. Apply-all reads its first rows
+in one small request before the confirm. The chapter limit is shared through
+`config.ResolveRepairChapterMaxMin`.
+
+#### Per-file intro results carry their own provenance and survive rescans
+
+`BookFile` gains `IntroSourceHash` (the per-file done marker: a file is done when
+it equals `FileHash`), `IntroRunOpID` (the operation that wrote the result) and
+`IntroMeta` (model, language, clip start and length). The first two are on
+`BookFileCore`; `IntroMeta` is stripped from memdb like `IntroTranscription`.
+Each is classified in `bookFileFieldClasses`, so a library rescan keeps them, and
+a file whose audio changed drops them together with its transcript.
+
+The "rescans wipe the per-file transcription fields" bug in the design review of
+2026-09-13 was already fixed on main by the shared book_file merge
+(`bookfile_merge.go`); this change adds a test that names the whole intro group
+(`TestRescan_KeepsPerFileIntroGroup`, `TestRescan_ReplacedFileDropsPerFileIntroGroup`)
+instead of relying only on the reflection test.
+
+#### Repairs plans store their rows beside the operation, not inside its result
+
+A Repairs plan used to be one operation result holding every row, about 760 bytes each; the retired-versions plan has about 51,000 rows, about 39 MB (measured: 60 sample rows averaged 760 bytes, which is 38.8 MB for 51,000), and every read of the operation decoded all of it. The operation's result is now the plan's summary (counts and the `row_store` marker, a few kilobytes whatever the plan's size) and each row is stored under its own key with a small index entry, so listing a page reads the index and only that page's rows, and an apply reads only the rows it was asked to apply. The rows are deleted with the operation (including by the hollow-operation sweep). A plan made before this change cannot be read in the new form. Migration 66 strips the inline rows from every such plan's result once at startup, keeping the operation record and its summary, so the large results stop being read and written; it touches only Repairs plan operations, a second run changes nothing, two kinds of record are skipped rather than failing the migration, so one corrupt record cannot stop the server from starting: a record that cannot be decoded (bad JSON, a wrong-typed field or a timestamp that does not parse) or that is stored under a key other than its own id is counted as `unreadable_ops` and logged as a warning, and a record with no id at all (a hollow shell) is counted as `hollow_ops` and logged only at debug level; such a record is left exactly as it is; the rows endpoint answers a plan whose stored record cannot be decoded with the same "Run plan again" 409 as any other unreadable plan, while a record with no id is not a plan at all and answers 404; a failure to read a record still stops the migration; the log line reports the plans seen, how many were stripped, and the result bytes before, after and freed (the disk space itself comes back after the database compacts and after old ZFS snapshots of the data directory are purged). The rows endpoint then answers 409 with the code `REPAIR_PLAN_NEEDS_RERUN` for such a plan (also for a plan whose stored rows are incomplete or cannot be decoded: fewer rows than the summary says, an index entry with the wrong number of fields, or a row body that is not valid; likewise a plan whose stored summary does not decode), and the lane shows a "Run plan again" button that starts the trial, not a Retry that would fetch the same 409. The endpoint answers 503 on a server whose store cannot keep plan rows.
+
+#### Repairs path checks cannot hang a run on a dead mount
+
+The symlink resolution behind the iTunes and owner-manual guards is now bounded per path. A path that gets no answer in time counts as unreadable, so its row is skipped rather than cleared; the folder is remembered as unanswered and not tried again; and once too many calls are still stuck (8 for one run, 64 across the process) the resolver stops trying and answers the same way instead of stacking blocked threads. The shared bounded-call helper now lives in its own package so the Repairs framework and the maintenance plugin use one copy.
+
+#### Retired-versions preview — plan-time safety on a slow or hung mount
+
+The on-disk check of files for books with no target is bounded per file, checks for cancelation before every file, and counts a timed-out or non-"not found" answer (permission denied, I/O error) as present while reporting it as `rows_stat_unknown` on the row. A run that accumulates 8 hung checks fails instead of stacking blocked threads, a plan is refused at its start while that many checks from earlier runs are still hung, and fewer than that are logged as a warning. The scan runs on every CPU core and fails rather than guess if the ownership lookup is not ready. At the end it logs how many no-target books had a merged-into chain or a same-path live book that was not used as a target.
+
+#### Repairs guard — each distinct file path is matched once
+
+The owner-manual and iTunes checks matched a book's own `file_path` again when it was also one of its book-file rows, and again for a resolved spelling equal to the path. Each distinct spelling is now resolved and matched once, in first-seen order, so the reasons are unchanged. A benchmark of the owner-manual check over 51,000 synthetic books (ordinary titles, two files, two authors, a narrator and three tags per book, nothing matching a franchise, in-memory reads, real files on disk) measured, on one developer machine, 39 s with one worker and 5.8 s with ten before this, and 28 s and 4.4 s after (about 0.55 ms and 0.09 ms per book). The numbers are noisy and exclude the store reads a real plan adds. The franchise regexes (already compiled once per process, and each book checked once per run) dominate what is left; a literal-keyword prefilter in front of them would be the next saving but changes the shared Doctor Who gate, so it is not part of this change.
+
+#### Hollow-operation sweep removes plan rows by a narrow helper
+
+The sweep deletes a plan operation's rows through a helper that range-deletes only that operation's plan-row and row-index prefixes; the key-use ratchet allows that helper by name and still rejects any range delete that could touch operation records.
+
+A collection whose query uses a per-user field no longer stores a member list:
+the stored list is cleared on every write, ignored on every read, and scrubbed
+for existing collections once at startup (`collection-peruser-purge`). The hourly
+`collections.refresh-relative-dynamic` op skips these collections and no longer
+reports a `blocked` count. Removed with the owner model: the 403
+`COLLECTION_PER_USER_QUERY_OWNER_ONLY` gate, the `adopt_owner` update field, the
+`evaluation_blocked` response fields and 409 `COLLECTION_OWNER_MISSING_PER_USER_QUERY`,
+the startup owner backfill, and the "Take ownership" checkbox and blocked banner on
+the collection page. `created_by_user_id` is attribution only.
+
+A new `internal/libroot` package holds the library-root checks the op shares with
+the consolidation-leftovers fixer: whether the root is mounted, and where a
+report is written (the default report directory is now created with the standard
+`0775` directory mode, and an existing one is refused if it is a symlink or owned
+by someone else, and has world write removed if it has it, for every op that uses
+it). Its mount check no longer counts dot-prefixed entries (the
+`.reports` directory, the wav cache) as library content, so writing a report can
+never make a bare mountpoint look mounted. The consolidation-leftovers fixer now
+also refuses a root that holds only dot-prefixed entries, which it used to
+accept.
+
+`*PebbleStore` gains `ModifyBookFileDeferAggregates`. It is deliberately not a
+`database.Store` method (`TestStoreFlattenedWidth` lets `Store` only narrow, and an
+earlier cut of this change that added it there failed that test at 446 methods
+against the baseline of 445): the backfill declares the one method as its own small
+interface and resolves it with `database.AsCapability`, which sees through the
+server's store decorators. A store that does not offer it still works, with the
+per-row recompute and a warning in the op log. The comment on the `opstate:` key family in `keyfamilies.go` now says the
+`:params` suffix is the live chunk journal of this op, not a legacy key, so a
+cleanup written from that comment cannot delete a journal a run still needs.
+
+#### Executive-summary decisions appendix now covers D21 to D48
+
+The decisions appendix for the 2026-10-25 auto-Recommended window now lists D21 through D48, the owner's 10-26 call not to send the GitHub purge request, and a note that the window ended 2026-10-26 12:53 EDT.
+
+#### October executive summaries combined into one monthly file
+
+The 73 per-day executive summaries and the 25 October decisions appendix are now one
+theme-grouped monthly summary covering 1 to 27 October 2026, as the month-end rule in the
+executive-summary convention requires. It adds three late-October outcomes that had no
+write-up of their own: the retired-versions series, the durable decision log, and the
+resumable-operation yield-and-continue work with the CI fixture split. Links in TODO and a
+task brief were repointed at the monthly file. References to the removed per-day files that
+remain in older CHANGELOG entries now resolve to nothing.
+
+- CI: the Frontend CI workflow pins the reusable workflow at a github-common commit that installs Playwright browsers as the runner user. The reusable E2E step stays skipped, now because it duplicates the repo's own E2E workflow (same suite and config; chromium on PRs, chromium and webkit nightly) and because the pinned helpers still report a failed E2E script as a pass.
+
+- CI: the Frontend CI workflow no longer runs the reusable workflow's E2E step, which could never pass or fail (Playwright browsers installed under root, tests run as the runner user, and the helper exits 0 on failure) and only cost ~20 minutes. The "E2E (chromium)" workflow remains the E2E gate.
+
+- The Woodpecker `test-fixtures` workflow is now three parallel workflows, `test-fixtures-1`, `-2` and `-3` (status contexts `ci/woodpecker/pr/test-fixtures-N`), one shard each with the full 25m per-package timeout. Run back to back on llm1 the shards summed to about 3400-3500 s and the last one (`internal/server`) timed out against the shared 55 min budget. `scripts/ci/run_fixture_shards.sh` is deleted.
+
+#### Whisper dispatcher: a test pins that the canary's probes drop changed ports after the round is read
+
+When every whisper endpoint has faulted in a round, the dispatcher probes again
+the ports whose cooldown came and went and sends the canary clip only to the
+ones that still answer as the machine it knew. A port found answering as another
+machine is dropped from the pool, but not until that round's answers have been
+judged: they came from the pool as it was when they were sent, and a lone job's
+verdict counts machines against it. Two tests now pin this, for a pool that
+loses one port and for one that loses every port (it ends as a changed-hands
+deferral, not an outage). Two test-only hooks report the pool at the end of the
+canary probes and at the top of each pass of the round loop. The health
+registry's test clock documents that its restore functions must run in reverse
+order of the calls.
+
+- Dependency group bump (replaces dependabot #4202): openai-go/v3 3.79.0 → 3.86.0, quic-go 0.64.0 → 0.64.1, zustand ^5.0.16, knip 6.43.0, typescript-eslint ^8.72.0, actions/setup-python 7.1.0, codeql-action, node and alpine image digests.
+
+#### Retired-content hash lookups are cached for the length of a scan
+
+While memdb is not serving and retired versions exist, every hash lookup the
+scanner made re-enumerated every retired version and read each one's rows. A
+library scan (`PerformScan`) now opens `database.BeginRetiredHashScope` once for
+the whole run, across all of its chunks; `ProcessBooksParallel` opens a scope of
+its own for the entry points that do not come through `PerformScan`
+(`ProcessBooks`, the folder auto-scan), and the store counts overlapping scopes
+so the nested ones share the cache. Inside a scope `RetiredBookFilesWithHash`
+reads the retired rows once into a map keyed by hash. A generation counter,
+bumped after every retire, un-retire and rehome and after any rewrite that
+changes a retired row's hashes, holder, version or retired flag, makes the next
+lookup rebuild, so a concurrent change is never answered from a stale map. Only
+the retired side is cached: the live side (a row the scan itself just created)
+is read on every call.
+
+The lookup returns `database.RetiredRowRef` (row, holder and version ids, all the
+scanner reads) in a scope and out of one, so the answer has one shape and the
+cache keeps three ids per hash instead of a decoded row. Building the map now
+scans each holder's rows once, however many retired versions it holds, and
+decodes only the fields it indexes, skipping the raw fingerprint that made a
+row up to 230 KB.
+
+#### The retired-shell check decodes only what it counts
+
+`isRetiredShell` is asked up to three times for each scanned shell. On a Pebble
+store the count now reads one snapshot: the shell's retired versions are listed
+once, and each holder's rows are decoded into just the retired flag and version
+id, not as whole rows with their fingerprints.
+
+- The scanner's ownership skip no longer carries its file list inside an error.
+  `saveBook` and `saveBookToDatabase` now return an `*ownershipSkip` record
+  (owners, reason, and the files to append to the owning book) beside a bare
+  `errFileOwnedByOtherBook`, and `handleOwnershipSkip` takes that record instead
+  of unpacking an error with `errors.As`. Behaviour is unchanged.
+- CodeQL alerts #2022 and #1651 (go/path-injection), dismissed as false
+  positives on 2026-10-28, can be re-opened once this merges.
+
+- The "Transcription match" score boost (up to x2.0 on the title, x1.6 on the
+  author, x1.4 on the narrator, stacking) now applies only when the candidate's
+  runtime is within 10% of the book's complete local runtime. When the book's
+  total runtime is unknown (including a partly measured one), the candidate has
+  no runtime, or the two differ by more than 10%, the boost is withheld (x1.00)
+  and `transcription_boosted` is false, so a withheld match no longer reads as a
+  strong signal. The match search path, the pick-best path and the calibration
+  sweeps share one gate. A transcription-matched Audible answer
+  with no runtime gets the existing one-per-book Audnexus runtime lookup so the
+  comparison can run. That one lookup is made even when the book has no runtime
+  information yet (nothing measured, no sizes): the candidate's runtime is what
+  lets a measured or later-measured book be compared at all.
+- The score breakdown shows a "Transcription match" step at x1.00 with the
+  reason ("the book's total runtime is unknown (only 1 of 2 files measured; file
+  sizes 0 KB)", "the runtimes differ by 20%", ...) and the runtime step beside it.
+- A candidate the audio intro matched but whose runtime did not confirm it now
+  carries `transcription_runtime_check` with a verdict: `fragment`,
+  `runtime_mismatch`, or `runtime_unknown`. A partly measured book is called a
+  fragment or a mismatch only on a bound its files prove (the most the file
+  sizes could hold, or the measured part already running past the candidate);
+  a bitrate guess never decides, and anything unproven stays `runtime_unknown`.
+  The review row shows a warning chip, and the review list has a "Transcription
+  needs runtime check" switch (`transcription_runtime_flagged`) that checks the
+  candidate shown for each book. Both are computed LIVE from the book's files
+  (the same verdict the apply gate gives), not read from the stamp the search
+  left, so a row cached before this change shows its warning too and a row whose
+  book has been measured since loses a stale one. "Transcription matched" does
+  not count a row the live gate refuses. A flagged candidate is kept by the cover
+  filter so review can see it.
+- The apply gate checks the runtime LIVE, against the book's files as they are at
+  apply time, wherever a transcription agreement would lower the score floor or
+  count as confirmation: a candidate cached before this change (no stamp) or on a
+  book whose files changed since is refused with `transcription_runtime_unverified`
+  all the same, by the bulk apply, the upgrade path and the transcription
+  auto-match. An owner review of the shown row can still apply it, but the select-all owner
+  marker (a review of rows nobody looked at) cannot lift this reason. The reason does
+  not count as "no usable candidate", so it never triggers the fallback-source
+  fetch (a different source could not fix a runtime), and it ranks as refused when
+  the merge ranker picks a candidate.
+- The `auto-match-transcribed` op refuses such a book in both the search and the
+  apply, with its own count in the summary ("runtime unverified"), and a dry run
+  reports the same books. Auto-fetch (`FetchMetadataForBook`) no longer applies a
+  candidate the audio intro alone identified when its runtime does not fit; it
+  stays cached for review. The book's own title agreeing with the candidate
+  excuses only an unknown runtime, never a proven fragment or runtime mismatch.
+- The refusal detail now carries the verdict and why (for example
+  "fragment: the files look like a fragment: ..."). A failure to read a book's
+  files while loading its runtime is logged at warn level and treated as an
+  unknown runtime, which refuses.
+
+- Metadata duplicate detection (`GetDuplicateBooksByMetadataCore`, both the Pebble scan path and the in-memory store) now scores its title buckets on a bounded worker pool instead of one core. Buckets are disjoint, each writes only its own result slot, and the slots are merged in first-seen order, so the groups and their order are identical to the serial result. Each title is normalized once per bucket and each pair is scored once through the new `matcher.Prepare` / `matcher.SymmetricScore`, instead of normalizing both sides from scratch for each of two `ScoreMatch` calls. On a synthetic 2,000-item set (20 buckets of 100) the pass went from about 3.1 s to 1.05 s on one core and 0.55 s at two cores, with allocations down from 7.7M to 19K.
+- `matcher.LevenshteinDistance`, `matcher.LevenshteinDistanceCaseSensitive` and the author Jaro-Winkler comparison no longer allocate: they reuse pooled rune and DP buffers (the author phase-3 scan workers hold one scratch each). Results are bit-identical to the previous implementations on random mixed-case, non-ASCII and invalid-UTF-8 input.
+
+- The Dupes panel's text search no longer reads every book in full to find matches.
+  It asks the store for a four-field projection (id, title, file path, author name,
+  joined by the store) via the new `BookBulkReader.ListBookSearchRows`, implemented on
+  `MemStore` and on `PebbleStore` (whose Pebble fallback decodes only those fields).
+  Match behaviour is unchanged; a parity test compares the old and new ID sets over a
+  300-book fixture on both store paths. `DedupStore` now needs that one method in place of
+  `GetAllBooksCore` and `GetAllAuthors`.
+
+#### Fixture-shard weights come from measured CI times, not a hand-edited table
+
+The weights `scripts/ci/fixture_test_packages.py` balances the three `test-fixtures`
+shards by (and decides which packages to split with) were a hand-edited `_WEIGHTS`
+dict whose heaviest entry, `internal/server` at 830 s, was an estimate. They now live
+in `scripts/ci/fixture_weights.json` and are regenerated from real runs.
+
+- `make test-fixtures` prints a `::timing::<unit>=<seconds>` line per package or
+  slice that passed, and writes the same as `fixture-times.json` when
+  `FIXTURE_TIMES_FILE` is set. The GitHub `fixture-tests` job sets it and uploads it
+  as a `fixture-times-N` artifact; Woodpecker has no artifacts, so its step log is
+  the record.
+- `scripts/ci/fixture_shard_weights.py` reads those outputs (or raw step logs) grouped
+  into pipelines with `--sample`, sums a split package's slices, combines samples by
+  `--stat median|max`, and rewrites the sidecar. A package no sample measured keeps
+  its old weight and is listed under `estimated`.
+- Seeded from the shard logs of Woodpecker pipelines 1827, 1828 and 1829 with
+  `--stat max` (all 25 packages measured, none left as an estimate). Result:
+  `internal/undo` and `internal/database` are now split in two, `internal/plugins/maintenance`
+  in two rather than three, and `internal/scanner` and `internal/audiobooks` run whole;
+  the estimated shard loads are 2056/2056/2055 s. Reasoning and rejected alternatives in
+  `docs/decisions/2026-10-30-fixture-shard-weights.md`.
+
+- The memdb book listing no longer copies every matching book to serve a sort that
+  has no index. For created_at, updated_at, year, duration, bitrate, file_size,
+  narrator and the other sort keys that read a field directly, it now ranks the
+  shared read-only rows through a bounded top-(offset+limit) heap and projects only
+  the page. The ABS Recently Added shelf and the Library tab's `sort=addedAt&desc=1`
+  on a 60k-row library drop from about 78.5 MB and 57 ms per call to about 20 KB and
+  3 ms, with no `enabled_sort_indexes` change. Page contents and ordering, ties
+  included, are identical to before. The author and series sorts still copy, because
+  they write the resolved name onto the row.
+
+- `internal/undo` `TestMembershipAdversarial_Suites` runs one seed and a tenth of the histories per suite under `-short` (the CI mode). The full table costs ~660 CPU-seconds under `-race` and pushed the package past its 25 min Woodpecker timeout on shared agents; unflagged runs still walk every seed at full depth.
+
+- Dependencies: gin-contrib/gzip 1.2.9, go-playground/validator 10.30.6,
+  openai-go 3.91.0, grpc 1.85.0 (mimetype 1.4.16 indirect); web: react-router-dom
+  7.18.5, axios 1.21.0, eslint 10.14.0, knip 6.44.1, @rolldown/plugin-babel 0.3.0,
+  @types/node 26.6.6; the node:26-alpine build image digest.
+
+- iTunes heal's transcription layer now reads the intro transcript the intro-transcribe ops already stored (the first file's row, then the book's) and only otherwise sends a 30-second clip to the self-hosted Whisper pool. The in-process `uv run openai-whisper` backend and the paid OpenAI `whisper-1` fallback are removed; a pool outage counts as a transcription failure for that candidate and stores nothing. A stored `[SILENCE]` sentinel is treated as "known silent": the candidate is left unscored with no pool call.
+
+- `make web-install` (and so `make build` and deploys) now installs the
+  frontend's dependencies exactly as the lockfile records them, the same way CI
+  does, instead of re-resolving them. A build can no longer pick up different
+  dependency versions from the ones CI tested. To add or bump a dependency, run
+  `npm install <package>` in `web/` by hand and commit the lockfile, as before.
+
+### Removed
+
+- Operations: the retired op IDs `maintenance.author-dedup-scan` and `maintenance.reconcile-scan` no longer resolve to `dedup.author-scan` and `reconcile.scan`. Their soak showed no use and prod stores no run under either ID. `scheduler.dedup-llm-review` keeps its alias because 20 stored runs still carry it.
+
+#### Unused legacy duplicate-merge code in `internal/dedup` and the dedup maintenance job
+
+Removed the unused legacy duplicate-merge code: `dedup.MergeBooks` and its helpers (`guardKeeperAudioRoute`, `retireMergedLoser`, `bookAudioPaths`, the `TransferITunesMetadataFirstWin` forwarder and `BookMergeResult`), the unused duplicate-author scorers (`areAuthorsDuplicate`, `jaroWinklerBelowThreshold`, `BuildAuthorSeriesMap`, `FindDuplicateAuthorsWithSeries`, and with them the series cross-reference pass inside the author scan), `merge.FollowMergeWithStore`, the unused `CollectEmbedding` and `CollectDuration` collectors, four unused engine methods (`hasKnownShortDuration`, `isPartVsWholeMismatch`, `acoustIDSignaturesConflict`, `bookSignature`) and the `ddMergeDuplicateBook` wrapper in the dedup maintenance job. The live merge path (`internal/merge`) is unchanged and now has tests for its two safety refusals: a file-less keeper while a loser has audio, and a loser sharing audio paths with the keeper.
+
+#### Eleven Settings fields that never did anything
+
+Removed eleven settings that were loaded, saved and shown on the Settings page but never read by any code: `metadata_review_default_view`, `default_user_quota_gb`, `memory_limit_type`, `cache_size`, `memory_limit_percent`, `memory_limit_mb`, `log_format`, `enable_json_logging`, `auth_rate_limit_per_minute`, the top-level `language` (the catalog provider's `catalog.language` is unchanged) and the empty `api_keys` block. The Settings page loses the memory-limit card, the log-format controls, the default user quota and the Default Language box. Sign-in attempts were never limited by `auth_rate_limit_per_minute`; they are limited by fixed per-IP and per-account throttles. An existing config file, stored settings or older settings export that still carries the keys keeps loading: startup logs a removed-setting warning, saving the config scrubs them from `config.yaml`, the settings import drops them, and a config update that sets one is refused with a removal message.
+
+#### qBittorrent and SABnzbd download-client code and settings
+
+Removed unused qBittorrent and SABnzbd client code and settings. The generic download-client package `internal/download` is deleted along with the `download_client.torrent.qbittorrent` and `download_client.usenet` settings, which nothing ever read. The Deluge settings under `download_client.torrent` are kept because three Deluge fallbacks still use them. An existing config file that still contains the removed keys keeps loading, and logs a removed-setting warning for each retired block. Saving the config scrubs the retired blocks (including any stored qBittorrent password or SABnzbd API key), and a config update that sets them is refused with a removal message.
+
+#### Unreachable functions deleted from nine internal packages
+
+Deleted production functions in `internal/config`, `internal/errhandling`,
+`internal/httputil`, `internal/logger`, `internal/policy`,
+`internal/security/pathvalidation`, `internal/security/safepath`,
+`internal/sysinfo` and `internal/util` that no binary could reach, along with
+the tests that covered only them: `errhandling.SkipCounter` (the whole type),
+`logger.OperationLogger` with `ForOperation` and the `OperationStore` and
+`RealtimeHub` interfaces and mocks that existed only for it, `logger.ParseLevel`,
+`httputil.ServeFileWithRangeGin`, `policy.EvaluatePolicyDetailed`,
+`pathvalidation.ValidateRelativePath` and `ErrEmptyPath`, `safepath.MustJoin`,
+`sysinfo.GetMemoryStats` with `MemoryStats` and the per-platform available-memory
+probes, `util.NormalizePath`, `util.CreateFile` and `util.DerefStr`, `DerefInt`
+and `DerefBool`. The config field-class lookup helpers and
+`errhandling.SetLogger` moved into their packages' tests, which still use them
+to guard live code. Running behavior does not change.
+
+- Five more endpoints with no caller in the repo now answer `410 Gone` (they still check sign-in and permissions first, so an unauthorized caller gets 401 or 403, and are removed entirely in a later release). Each names its replacement in the 410 message:
+  - `DELETE /api/v1/books/:id/versions/:vid`, `POST /api/v1/books/:id/versions/:vid/restore` and `POST /api/v1/books/:id/versions/:vid/purge-now`: use the same paths under `/api/v1/audiobooks/:id/versions/...`, which were always the live routes.
+  - `POST /api/v1/itunes/pid-repair`: no replacement. It cleared duplicate iTunes PIDs on database rows only (never the iTunes library); the last census (2026-08-14) found nothing left for it to clear. `GET /itunes/pid-integrity` and the `pid-census --repair` plan preview are unchanged.
+  - `POST /api/v1/auth/api-keys/:id/rotate`: create a new key with `POST /api/v1/auth/api-keys`, then revoke the old one with `DELETE /api/v1/auth/api-keys/:id`. The new key no longer inherits the old key's scopes and lifetime, and the old key no longer gets a one-hour grace window, so create the new key and switch clients over before revoking. An API key still cannot act on another user's keys. Creating, listing, reading, disabling and revoking keys are unchanged.
+- Code that only these routes used is deleted: `itunes.ApplyPIDRepairPlan` (the PID repair apply) and its `UpdateBookFile` dependency, the API-key rotate handler with its lifetime and grace-window helpers, and the handler store's `SetAPIKeyExpiry` method. No database store methods were removed: `SetAPIKeyExpiry` is still used by the one-time key expiry stamp.
+
+#### The hand-maintained OpenAPI file is deleted
+
+`docs/api/openapi.json` is gone (owner decision D45). It drifted from the code (276 `operationId` entries and 300 path-method pairs against about 528 registered routes) and nothing in CI or at runtime read it. The generated TypeScript types cover only the wire structs listed in `tygo.yaml`; handler response types under `internal/server/handlers` are still hand-maintained in `web/src/services/api.ts`. The `api-doc` skill is rewritten around that, and the nonexistent `docs/openapi.yaml` pointer in the developer guide is replaced. `docs/archive/openapi.yaml` is left in place.
+
+#### The SQLite activity backend
+
+The SQLite activity backend is removed (owner decision D11). Pebble, inside the main database, is now the only activity store, which is what production has run on. The last build that can still use SQLite is tagged `activity-sqlite-last`.
+
+- A config file or an `ACTIVITY_BACKEND` environment variable that still says `activity_backend: sqlite` now stops startup with a clear message telling you to remove the setting or set it to `pebble`. Any other value that is not `pebble` or empty is refused the same way. A settings update (`PUT /api/v1/config`) that tries to select `sqlite` is rejected with 400. A stored config saved while SQLite was selectable still loads: the server ignores the stored value and uses `pebble`, as it already did.
+- The old `activity.sqlite` file is left where it is. Nothing reads it or deletes it. Delete it by hand when you no longer need it.
+- The `activity_db_path` and `activity_db_move_on_change` settings, the read-only `activity_db_resolved_path` field in `GET /config`, and the Activity Database section of Settings, Paths are gone. A legacy per-key settings row, a `config.yaml` entry or an `ACTIVITY_DB_PATH` / `ACTIVITY_DB_MOVE_ON_CHANGE` environment variable that still carries either setting loads with a startup warning and the value is ignored; the same keys inside a stored config blob are dropped silently, with no warning. A settings update that carries either one is rejected with 400 and a message saying it was removed.
+- Three SQLite-only maintenance operations are removed: `maintenance.optimize-activity-db` (including its nightly schedule), `maintenance.vacuum-activity-db` and `maintenance.activity-reclaim`. The Pebble-to-SQLite migration that ran at startup is removed with them.
+- The 8 KiB cap on activity summaries used to apply only when SQLite stored them. Pebble now applies it on every write, so a runaway multi-megabyte summary can no longer reach storage.
+- `modernc.org/sqlite` and its dependencies are no longer part of the build.
+
+#### Review > Metadata no longer has a full-index mode, and `review_metadata_server_query` is gone
+
+The Metadata lane always asks the server for one filtered page (`view=page`) plus the chip
+counts, and fetches full rows for the rows on screen with `ids=`. The browser-side path that
+loaded every reviewable row and filtered, counted, grouped and paged them in memory is
+deleted, along with the setting that chose between the two ways, so a Review tab can no
+longer hold the whole library. Select all N matching, the title filter, the provider and
+confidence filters, the runtime, language, transcription and multi-book switches and every
+chip view are answered by the server, as they have been while the setting was on.
+
+`GET /api/v1/audiobooks/metadata/cache/review?view=index` now answers `410 Gone` with a JSON
+body (`code` `VIEW_INDEX_GONE`, `use` `view=page`) and is recorded in
+`review_index_request_seconds` under `view="gone"`, so a client that still sends it shows up
+in the metric. The error text tells an old browser tab to reload the page. `view=page`, `ids=`
+and the default listing keep their shapes; `view=page` rows now carry `owner_rejected` (the
+row's Rejected badge reads it; the page says `owner_rejections_unavailable` when the rejections
+could not be read) and the response and every `ids=all` list carry `bulk_apply_max_items`, so
+the lane learns the apply cap without the settings permission.
+
+The setting `review_metadata_server_query` is removed. A stored config or settings row that
+still contains it loads without error; startup logs that it is ignored, a config-file save
+drops it, and a `PUT /config` carrying it is refused with the removal message like the other
+retired settings.
+
+The precondition for this change (the setting on for a full release) was waived by the owner
+on 2026-10-19 ("Go ahead now"). The setting has been on in production since 2026-10-18 16:05
+with no review errors, 02-PR18 (`941d9521c`) shipped in v0.222.2, and no full release has gone
+out since the setting was turned on.
+
+- `matcher.ScoreMatch`, `matcher.TokenSetRatio` and the unexported `tokenSimilarity`, which the change above left with no production caller (the dead-code ratchet requires deletion). `matcher.SymmetricScore` returns exactly the larger of the two directional `ScoreMatch` scores.
+
+### Fixed
+
+- `POST /api/v1/metadata/bulk-fetch` no longer writes anything. It applied each
+  book's top search candidate with no apply gate (no score floor, sequence
+  guard or identity check). The route now answers `410 Gone` for one release,
+  naming the gated replacements: the `library.bulk-metadata-fetch` operation to
+  fetch candidates and `metadata.batch-apply-cached` to apply them through
+  `applygate`. The handler, its tests, the web client function
+  `bulkFetchMetadata` and the now-unused `Server.updateFetchedMetadataState`,
+  `Service.ApplyMetadataSystemTags` interface entry and
+  `metafetch.KnownBookAuthors` are removed.
+
+- Tests: `wire_metadata_bulk_fetch_gone_test.go` passes the credential epoch to `CreateSessionWithOrigin`. #4329 merged after #4324 added that parameter, so the `internal/server` test package stopped compiling on main.
+
+- CI: the short-test and fixture-test shards remove the runner's unused .NET, Android, GHC and CodeQL toolchains before building, so a race build no longer fails with "no space left on device" from the linker (seen on shard 2/4 of #4330 and #4331).
+
+- `acoustid.lsh-backfill` no longer keeps rewriting book files after the operation is cancelled. The pool only checked for cancellation while handing out work, and picks at random between "cancelled" and "worker free", so rows already handed to a worker, plus a few dispatched after the cancel, still hydrated and re-saved. Each item now checks the context before it touches the library, and a run that skipped items because of a cancel returns the cancel instead of reporting completion.
+- `TestLSHBackfill_CancelMidRun` (flaky under `-race`, seen as "expected updates < total after cancel, got 100/100" on shard 1/4 on 2026-10-31) now asserts a bound the op guarantees, at most the cancel point plus the pool size minus one, instead of a scheduling outcome. A new `TestLSHBackfill_AlreadyCancelledWritesNothing` pins the per-item guard.
+
+- `scripts/ci/update_woodpecker_agents.py` now puts an agent's `no_schedule` back to the value it had before the upgrade instead of always unpausing it, so upgrading U1 outside its CI window no longer turns it back on.
+
+- A folder-book's files on a second shelf are now grouped under that shelf's own
+  author folder when new books are planned, so a plan and the re-plan done at
+  apply time agree about which new books belong to the row.
+
+- Operations: `maintenance.bookfile-acoustid-index-repair` now checkpoints its scan cursor and running counts after each page, so a restart continues at the next page instead of re-judging every key from the first, and its final report still counts the whole run. `maintenance.opchange-book-index-rebuild` keeps its resume cursors in the store and is recorded as store-anchored in the `ResumeRestart` checkpoint guard (`TestResumeRestartDefsCheckpoint`) rather than checkpointing twice.
+
+- A transcription dispatch cancelled while the endpoint gate was probing no longer carries on as if nothing happened. The cut-short probe left a remembered (canary-failed) lone whisper machine unrecognised, so the dispatch sent it every job unasked and returned no error; it now returns the cancellation and sends nothing. This also removes an intermittent failure of `TestSingle_ACancelDuringTheCooldownWaitReturnsTheCancellation` on loaded CI agents.
+
+- Authors and series review: a merge that finished while the list was being reloaded (for example one you came back to after leaving the page) could leave the merged-away rows showing, because the reload returned a list from before the merge. The merge is now applied to whatever the reload returns.
+
+- Tests: two Authors-lane series tests ("merge selected reports the failures, with counts" and "a failure that names no ids keeps the group and re-reads") asserted the groups right after the failure toast. The toast fires when the re-read is requested, not when it lands, so on a loaded CI agent the lane was still loading and held no groups. Both now wait for the re-read. Reproduced deterministically by delaying the re-read by 200 to 300 ms.
+
+- CI: every GitHub job that restores the shared Go cache now frees runner disk
+  first, through one script (`scripts/ci/free_runner_disk.sh`). On 2026-10-31
+  only the race test shards got this. On 2026-11-04 Coverage Floor (#4361) and
+  Errcheck Ratchet (#4362) ran out of disk partway through restoring the
+  ~2.6 GB cache. They failed with no log, because the runner could not write
+  even its own diagnostics.
+
+- Good .wav, .opus, .aax, .wma, .aac and .mka files were never measured by the header read (it refused any extension without a codec table), so they would have counted failed probes and gone "unreadable". They are now measured like every other audio file.
+- Reading a book's tags no longer starts ffprobe and mediainfo for a folder or a non-audio file; the header read returns an error for those instead of a zero.
+
+- E2E: "selection persists across page navigation" now waits for each page of
+  the library to render before leaving it. It clicked page 1 while page 2 was
+  still loading, and on a busy CI runner page 1's rows weren't back in time
+  (#4365, 2026-11-04).
+
+- The folder-books repair no longer holds a folder back as "fragmentary" just because some of its files have no measured length. When another entry for the same file (same place, same size, and the same fingerprint when both have one) already records a real length, the repair uses that length, including when the other entry belongs to a book that is in the trash. Entries marked missing or of a different size are never used. This only changes what the repair works out when it plans; it does not write anything to your library. The scanner shares the same rule for reading a stored length.
+
+- CI: the Frontend Build and Test workflow's Go CI job now frees runner disk before restoring the Go cache. It had run out of space linking `-race` test binaries. The reusable workflow pin moves to falkcorp/github-common@8e4eeeb, which adds the `free-runner-disk` input and also picks up the helpers fix that makes a failed frontend npm script fail the job.
+
+- `TestLedgerWriteRateBounded` no longer flakes on a loaded CI agent. It measured the wall time at which the fake ledger store was entered, which trails the runner's throttle decision by a scheduling delay that varies per commit; it now compares the runner's own commit timestamps (`Ledger.UpdatedAt`), which is what the throttle guarantees, with no tolerance.
+
+- Fixed flaky transcribe `TestChangedHands_*` tests (16 of them, including `TestChangedHands_APortTakenOverByAnotherMachineDuringTheWaitIsDroppedNotStoredAsTheOldMachine`, which failed on a loaded CI agent). They changed a port's machine id and ended its cooldown on wall-clock timers started with the test, so an agent slow to begin the dispatch ran both before the gate read the port; the port then looked like a healthy worker of another machine and took every job. Those events are now anchored to the dispatch's first gate. Test-only change.
+
+- The backfill-file-hashes yield-margin test no longer races a real 400ms deadline against real sleeps: the job's yield decision reads an injectable clock, so a loaded CI agent can no longer make the deadline arrive before the first chunk finishes.
+
+- On pages that keep their state in the address bar, a change made just before
+  following a link no longer rewrites the address afterwards and drags you back
+  to the page you left. The change is also written to the page's history entry
+  before the link is followed, so Back returns to the page as you left it. (The
+  browser's own Back and Forward buttons are the one way out that cannot do
+  this: by the time the browser reports them, the entry being left can no longer
+  be written, so a change made in the last fraction of a second before pressing
+  them may not be in that entry.) A link to the Review page's Repairs fixer or
+  Authors focus also keeps its parameter while the list is still loading, and a
+  Repairs fixer link that names a fixer the list does not hold no longer leaves
+  that fixer in the address bar. These pages also write correctly when the app is
+  served under a sub-path.
+
+- `/operations?op=<id>` now opens that operation on the Activity page. The
+  redirect used to drop the query string and land on a bare `/activity`.
+  `/maintenance` now opens the System page's Maintenance tab instead of System
+  Info.
+- The Library keeps a query parameter it does not manage (for example a tracking
+  parameter on a pasted link) when it rewrites the address after a filter,
+  search or page change.
+
+- The Library's preset filters (files with errors, fingerprint status, cover
+  coverage, missing covers, in the import folder, no ISBN, flagged duplicates)
+  and every selected tag are now written to the address bar. Before, a link with
+  them opened filtered, but the first click on any other control dropped the
+  preset filters, and only the first selected tag survived in the address.
+
+#### A start is no longer answered with an active run of the other mode
+
+`EnqueueOp` folded a start of a scheduled or deduplicated operation into any
+active run of the same definition, without looking at the mode. A live start
+of `maintenance.author-split-scan` while its cron preview was queued got the
+preview run's ID back, so the caller was told its live run had started and
+nothing was written. A definition that declares its preview mode now folds a
+start only into an active run of the same mode, judged by what each body does
+when it runs (an absent or null mode key is the preview default; an operation
+that reads both `dry_run` and `apply` is live only when both say write, or
+either for one that declares so; a body the run itself refuses, such as
+`dry_run` and `dryRun` that disagree, is in no mode and folds only into a
+byte-identical one); otherwise a second run is queued.
+Byte-identical params always fold, so scheduler ticks still fold into one run.
+
+#### The regroup preview no longer counts holds a person already decided
+
+The `maintenance.regroup-shattered-ai` preview counted every detected group as
+a review hold it would write, including groups whose hold a person had
+already approved, rejected or applied, which a live run leaves untouched. It
+now reports those as already decided.
+
+#### The transcription monitor raises an alarm when a relaunch is a preview
+
+Every progress message of a `maintenance.transcribe-book-intros` run
+(transcribe, extract_only or reparse_only) now opens with its mode (`PREVIEW (dry_run, nothing written) — `
+or `LIVE — `). `scripts/transcribe_monitor.py` reads each relaunched run back
+and raises `RELAUNCH_IS_PREVIEW` (an ERROR alert and a banner on stderr) when
+the server queued a preview, instead of relaunching a run that transcribes
+nothing every time the library looks idle; a run that reports no marker is
+`RELAUNCH_UNVERIFIED`, never an all-clear.
+
+#### `TestRunExactCensus_TombstoneFamilyHeartbeatsAndResumes` — no longer flakes on a slow race runner
+
+The test failed on a slow `-race` CI runner after running 218 seconds. It killed
+each rerun of the exact census with a 400 ms deadline measured from the start
+of the rerun, which also pays for the flush, the sub-range bisection, the
+iterator open and the first sub-range's walk and budget wait. When that alone
+outlasted the deadline no rerun ever saved a resume position, and the loop used
+up all 200 attempts without finishing. Each rerun is now killed after it has
+saved five in-family positions, so every rerun advances and the loop is bounded
+by the number of sub-ranges.
+
+The heartbeat check now actually checks something: the read budget is set low
+enough that the pass has to wait on it, the test requires that progress was
+reported while counting the tombstone family, and the gap between heartbeats
+and saves is measured against a 2 second watchdog (40 times the heartbeat).
+Deleting every in-family heartbeat from the census now fails the test. No
+production code changed.
+
+- `GET /api/v1/itunes/pid-integrity` wrote an error response and then carried on and wrote a second JSON body after it, so the response held two documents. The iTunes library ITL path is optional for this census: with none configured it now answers one 200 with the census (`tracks_in_itl` is 0), and a path that is set but invalid answers one 500 and stops.
+
+#### ABS single sign-on: `/auth/openid` no longer crashes AudioBooth; SSO is now a two-hop flow
+
+AudioBooth makes the first `GET /auth/openid` from its own HTTP client, with
+only its Cloudflare service token, and passes the 302 `Location` to
+`ASWebAuthenticationSession`, which crashes on anything but an http(s) URL. We
+answered that request with a redirect straight to `audiobooth://oauth` (an
+`access_denied` error, because the service token names no person), so the app
+crashed on every SSO attempt. Reproduced in production.
+
+`/auth/openid` now requires a verified Cloudflare credential (the app's service
+token; one with no common name does not count), rate-limits per credential, and
+caps each credential's live parked requests (256 for a group service token,
+three for a person; a new one evicts that credential's own oldest). It validates
+`redirect_uri` and PKCE, parks the request under a random single-use id (five
+minute expiry, in a store capped at 1024 entries that, when full, evicts from
+the credential holding the most entries rather than refusing, so a flood only
+evicts itself), and always 302s to
+`https://<origin>/auth/openid/browser?req=<id>&state=<id>&client_id=…&scope=openid&redirect_uri=…`.
+The origin is a configured public URL (`oauth_redirect_base_url`, else
+`--external-url`) reduced to its origin, or else the request's Host, normalised
+(https, lowercase, no `:443`). The extra parameters are there for the official
+Audiobookshelf app, which rebuilds that URL from exactly those four and drops
+the rest; hop 2 accepts the id from `state` when `req` is missing. Errors on
+that hop are a 400 with a plain-text body; an unregistered `redirect_uri` gets
+the exact text `Invalid redirect_uri`, as real Audiobookshelf sends it, and a
+`client_id` over 128 bytes is refused. The new
+`/auth/openid/browser` hop runs in the system browser, where Cloudflare Access
+authenticates the person, and shows a consent page naming the app, its callback
+scheme and the signed-in account. Loading that page mints nothing. Its Allow
+button POSTs back with a CSRF token bound to the request id and the account;
+only that POST consumes the parked request and mints a code bound to the stored
+challenge and `redirect_uri`, redirecting to the app's callback with the code
+and the original `state` (or, when the app sent none, the now-consumed request
+id, which is the state the official app compares against). Deny, a non-allowlisted account, or no verified
+person at all (logged and audited) redirects with `error=access_denied`
+instead. The consent step exists because nothing ties the browser to the
+device that started the flow, so without it anyone who started a sign-in could
+send the link to someone else and have a code minted for them. When the browser's first load
+carries the app's service token instead of a person (iOS 17.4+ sends the app's
+custom headers on that load), the hop redirects to itself once without the
+token, so that Cloudflare authenticates the person. Every browser-hop load logs
+the kind of assertion it received and the names of any `CF_` cookies, so the
+journal shows whether the token was shed. The consent POST's `Origin` check
+compares normalised origins. Dead links and refused confirmations are short
+HTML pages. `/auth/openid/callback` now
+refuses a `redirect_uri` that differs from the one the code was minted for.
+`MintAppAuthorizationCode` takes the `redirect_uri` and refuses any target
+that is not registered.
+
+#### ABS mobile sessions no longer force a logout 30 days after sign-in
+
+Audiobookshelf-compatible clients (AudioBooth, Absorb) were signed out 30 days after login no matter how often they were used. A session's `ExpiresAt` was stamped once at login and nothing moved it, and the access-token TTL equalled the refresh TTL (both 720h), so the session died at the same instant as its access token. The client's 401 arrived with no session left for `POST /auth/refresh` to rescue, and AudioBooth only refreshes after a 401.
+
+- **Sliding expiry.** Every successful refresh (rotate, grace replay and the Cloudflare-identity reuse branch) sets `ExpiresAt = now + ABS_REFRESH_TOKEN_TTL`. Authenticated bearer use does the same, throttled to one write per session per `min(24h, idle TTL/10)`.
+- **New default: 60-day session idle TTL.** `abs_refresh_token_ttl` / `ABS_REFRESH_TOKEN_TTL` now defaults to `1440h`, and the access token stays at `720h`. The access TTL must be shorter than the session TTL. If it is not, `absauth.Load` clamps it to half the session TTL and logs a boot warning; it never refuses to boot.
+- **Optional absolute cap.** The new `abs_session_max_ttl` / `ABS_SESSION_MAX_TTL` (default `0`, off) caps a session's lifetime from login. It is enforced at refresh and on every bearer request, independently of the stored `ExpiresAt`. It is env-authoritative like the other ABS keys and is a protected sign-in setting.
+- **Concurrency.** Every ABS session mutation (create, update, extend, revoke, revoke-all, sweep delete) now shares one write lock, and each re-reads the stored row first. An extension cannot un-rotate a concurrent refresh, and `UpdateABSSession` refuses a write that does not follow the stored row (same generation and token, or exactly the next generation chained to the stored token) with `ErrABSSessionStale`, so two refreshes racing on the same token cannot both win. The Cloudflare-identity branch re-reads and re-checks the row under the lock before it rotates. Revocation is one-way (`UpdateABSSession` refuses a revoked or deleted row with `ErrABSSessionRevoked`, and refresh answers 401 for it), and the expiry sweep re-checks each candidate under the lock, so it cannot delete a session that was just slid. A write also cannot leave a record without its index entries.
+- **Audit reasons.** An expired access token is now logged as `token-expired` instead of `token-invalid`, which had made routine expiry look like an `ABS_JWT_SECRET` change. A session past the cap logs `session-max-lifetime`.
+- **Expired rows kept 7 days.** The sweep keeps expired (not revoked) ABS session rows for 7 days, so a returning client's refresh logs `session-not-live` rather than `refresh-token-unknown`. `GET /api/me/sessions` hides them.
+- **Existing sessions.** Rows already on the server carry `ExpiresAt = login + 30d`, the same instant as their access token, and sliding only moves it on a refresh or a request. A device left unused across that mark would still have been logged out, so at boot `PebbleStore.BackfillABSSessionExpiry` raises every live, non-revoked row to `CreatedAt + idle TTL` (capped when the absolute cap is set). It is idempotent, never lowers an expiry, never revives an expired or revoked row, and does not stamp `LastUsedAt`. Rows that had already expired and been swept cannot be revived, so those devices sign in once more.
+- **Index pruning is locked too.** `GetABSSessionByRefreshHash` now re-checks under the same lock before it deletes a stale refresh-token index entry.
+- **Password changes, resets and deactivation sign phones out.** The user record has a new `CredentialEpoch` (missing reads as 0) and every ABS session is stamped at login with the epoch of the user record the password was verified against. Password and status changes now go through field-scoped store ops (the `database.UserCredentialWriter` capability, resolved through the decorator chain and deliberately not added to `Store`; a handler whose store lacks it refuses the change) that re-read the row under a user write lock, change only their own fields and bump the epoch in the same write: `SetUserPassword` (self-service and admin change; the self-service call is a compare-and-swap on the hash it verified, 409 if it changed), `SetUserStatus` (deactivation and reactivation both bump) and `BumpUserCredentialEpoch` (reset link). Every refresh and bearer request refuses a session whose stamp differs (401, audit reason `credentials-changed`, checked before the active-account check), and the device list hides it. This also kills a session minted with the old password while the change was in flight, which a revoke cannot reach because the session does not exist yet, and a session that survived a failed cleanup across a deactivate/reactivate cycle. Refresh carries the stamp forward and never re-stamps it, and `UpdateABSSession` refuses a write that changes it. A revoke-all still runs after the write as cleanup; its failure is audited and does not fail the request. The reset link is not issued unless the epoch write landed; it signs the phones out and gives the user a way in to choose a new password, but the old password keeps working until they do (compromised-account handling is filed as a TODO for the owner). Cloudflare-mode phones are not signed out for good: a request that carries a Cloudflare Access person identity is authenticated by that identity and never consults the session, and one that carries only the ABS token is refused once (401) and then gets a fresh session at the current epoch from its Cloudflare-identity refresh, because a password change does not apply to a Cloudflare identity. SSO authorization codes carry the epoch they were minted at, and `/auth/openid/callback` refuses (401 `credentials-changed`, checked before the account status, so a code minted before a deactivation is dead rather than suspended) a code minted before a change; this covers codes from both the ABS SSO hops and the web OAuth app deep link. Before, a session that slides with use and has no absolute cap would have outlived all of these. Web sessions have the same gap; it is filed as a TODO.
+- **Whole-row user writes cannot touch credentials.** `PebbleStore.UpdateUser` runs under the same lock, re-reads the row and refuses (`ErrUserProtectedField`) any write that changes the password hash or algorithm, `Status` or `CredentialEpoch`. A stale read-modify-write (a profile edit made as the password changed, a reset that read the row before a deactivation) can no longer put an old password, status or epoch back. Racing password changes each bump, so they end at distinct epochs. The web profile update answers 409 for a stale copy.
+- **The ABS login rehash is conditional.** The bcrypt-to-argon2id rehash now goes through `RehashUserPassword`, which writes only the hash fields onto the freshly read row and only if the stored hash is still the one just verified. Before, it wrote back the login's whole copy of the user, so it could restore the old password over a concurrent change or set a just-deactivated account back to active. `abshandler.ABSUserStore` no longer has `UpdateUser`.
+- **Refresh checks the user before it writes.** `POST /auth/refresh` now loads the user and refuses a missing or locked account before it touches the session, so a locked user's refresh no longer slides the session's expiry.
+- **ABS settings are environment-only.** `PUT /api/v1/config` now refuses, with 400 and the environment variable to set, a change to any of the eight serialized ABS keys (`abs_api_enabled`, `abs_auth_modes`, `abs_access_token_ttl`, `abs_refresh_token_ttl`, `abs_refresh_grace`, `abs_session_max_ttl`, `abs_server_version`, `abs_default_library_id`; `abs_jwt_secret` is never serialized). The boot overlay always replaced them with the environment or default value, so a write through the API was silently lost. They are not added to the config response's `env_locked` list, which names only settings an environment variable is actually forcing; the Settings page has no ABS controls.
+- **A session with no expiry is dead.** `ABSSession.Live` now treats a zero `ExpiresAt` as not live, matching the sweep, which deletes such rows. Before, the two disagreed: the row authenticated forever and was also swept.
+
+#### Exact census saves a finished sub-range before its closing budget wait
+
+`countRange` in `internal/database/census_exact.go` counted a sub-range and then
+made the final read-budget wait before anything saved the resume position. A
+cancel, or a deadline the limiter refused, in that wait threw away every count
+since the last save, and the next run read it again. The saves between
+sub-ranges are throttled to one every 30 seconds, so that was up to about 30
+seconds of reading (around 1.5 GB at the default 50 MB/s). Now the end of each
+finished sub-range is always saved, so a cancel anywhere loses at most the one
+sub-range in progress. The counts were never wrong, only re-read. The last
+pass over a sub-range now saves the sub-range's end first, the way a refresh
+already did. A save at the open end of the key space moves the position to the
+next piece, because a nil resume position means "restart the piece" and would
+have counted it twice.
+
+- `runCatalogHarvest` now takes the throttle registry as a parameter (production passes the process-wide one), so the catalog-harvest tests use a private registry and no longer fail with "provider is throttled; harvest standing down" when an earlier test in the `internal/server` binary left a hold on audible.
+
+#### One ABS phone sign-in no longer locks the user out of the web UI
+
+The ABS sign-in rehashes a bcrypt user's password to argon2id and records
+`PasswordHashAlgo=argon2id`. The web `Login` and `ChangePassword` handlers
+called `bcrypt.CompareHashAndPassword` directly and ignored the algorithm column,
+so after one sign-in from the phone app the user got "invalid credentials" on
+the web and could not change their own password. Both now verify through
+`absauth.VerifyPassword`, the same algorithm-aware verifier the ABS sign-in
+uses, so bcrypt and argon2id hashes both verify and an unknown or `oauth`
+algorithm is denied.
+
+Web password writes now use one hashing policy too: initial setup, password
+change, invite acceptance (both routes) and the generated bootstrap admin all
+call `absauth.HashPassword` and store argon2id. Existing bcrypt rows still
+verify (including rows with an empty algo) and the ABS sign-in still upgrades
+them; the web sign-in does not rehash.
+
+argon2id work is now capped process-wide at the CPU count. Each derivation
+allocates 64 MiB, so a burst of parallel sign-ins no longer allocates that many
+times over.
+
+`TestNoDirectBcrypt` fails if production code in the root package, `internal/`,
+`cmd/`, `pkg/` or `tools/` calls `bcrypt.CompareHashAndPassword` or
+`bcrypt.GenerateFromPassword` outside `absauth/password.go`, including through an
+import alias.
+
+#### Signed-in web UI no longer shows a blank page for unknown URLs, and `/config/api-keys` lands on API Keys
+
+The signed-in route table had no catch-all, so any unknown path rendered an empty
+page inside the normal layout. Going to `/config/api-keys` (the Audiobookshelf web
+client's API-keys URL, which ABS apps and docs link to) looked like broken API-key
+generation. Unknown paths now show a Page not found screen that names the requested
+path and links to the Dashboard and Settings. `/config/api-keys` redirects to
+`/settings#api-keys`, which opens the API Keys tab, and `/config` redirects to
+`/settings`, and the same paths under the `/audiobookshelf` router base are mapped too (`/audiobookshelf` goes to the Dashboard). Other Audiobookshelf paths such as `/config/users` have no equivalent
+here and show the not-found page.
+
+#### A browser holding a Cloudflare Access service-token session is recovered server-side instead of being stuck on the login page, and the AudioBooth SSO hop sheds the poisoned cookie instead of looping
+
+AudioBooth's SSO opens a browser session that shares Safari's cookies and carries the app's service-token headers, so Safari's `CF_Authorization` cookie for the host could be overwritten with a service-token session that names no person (the org runs `strict_service_token_auth=false`). Every later Safari load was then admitted on it: the web UI showed the login page (`/api/v1/auth/me` 401) and SSO hop 2 denied with no-verified-identity, because its `reauth=1` plain 302 cannot shed a cookie. A top-level browser navigation (GET, `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`, no API key) whose assertion verifies as a non-identity token now gets a static no-script bounce page with `Cache-Control: no-store` and the existing hop-2 CSP: it expires a poisoned host-only `CF_Authorization` cookie (a person's cookie is kept) and meta-refreshes to the same URL with a one-shot `cfreset=1` marker, which Cloudflare sends through its identity login. Web UI SPA page routes get this from `CFServiceTokenRecovery` on the SPA fallback; a navigation that still arrives as a service token with the marker gets a static error page linking to `/cdn-cgi/access/logout` instead of looping, and a person arriving with the marker is 302'd to the clean URL. `/auth/openid/browser` (browser-only, so it does not require Sec-Fetch headers; it logs which ones arrived) now bounces load 1 to `reauth=1`, then expires the cookie and bounces to `reauth=2`, then denies (any other `reauth` value denies). API, ABS, static-asset, non-navigation, AppleCoreMedia and API-key requests are never touched, and a service token is never mapped to a user. The ABS auth probe also logs `cf_authorization_len` separately, since `cf_cookie_len` sums every `CF_`-prefixed cookie including `cf_clearance`.
+
+#### Split-books repair no longer proposes merging distinct books as chapters of one work
+
+The split-book detector took a shared author and series plus a run of numbers as
+proof that several books were chapters of one, which is also exactly what the
+volumes of a series look like. The Repairs lane offered to merge them. The
+detector now vetoes a cluster that shows evidence of being several works: two
+or more distinct Book/Vol numbers in titles, subfolder names or file names (V2;
+the number may be digits, an upper-case Roman numeral I-XL or a number word
+One-Ninety-Nine, compounds included, after Book/Bk/Vol); "Stem N: Subtitle" titles with different subtitles (V2b, which now
+also sees "Episode N" and "Section N" titles: only Chapter, Track, Part and Disc
+markers are stripped first); a folder named for
+several works, such as "Books 1-4", a series, collection, omnibus or box set
+(V4); a run of years (V5, reported by `sequentialRun` and vetoed by the
+detector, not rejected by it); copy/dup file
+suffixes (V8); grandparent-shape subfolders that name different things (V9); two
+or more distinct ASINs among the members (V7); and
+any member at or over `repair_chapter_max_min` (V3). `series_sequence` is shown
+as evidence and is not a veto.
+
+`DetectSplitBookCandidates` fails closed, so the scan op, the bulk-merge
+candidates and the `merge-split-books` CLI all lose vetoed clusters.
+`DetectSplitBookCandidatesWithVetoes` returns them with their reasons. A
+vetoed cluster still claims its books, so no later pass re-emits them. The
+cluster's number source is now reported truthfully (`filename`, `subdir` or
+`filename+subdir`), a cluster whose titles are all distinct is named for its
+folder instead of the lexically smallest title, and a number after Book/Vol is
+no longer stripped from the suggested title.
+
+The Repairs fixer lists vetoed clusters as held rows with the veto lines in the
+evidence, and adds the fragment fixer's checks: `skipped_no_files` (a member has
+no file rows), `held_duration_gate` and `held_duration_unknown` (same
+`repair_chapter_max_min` limit, unknown before long), and
+`held_distinct_works`.
+
+Candidates stored by an earlier scan are snapshots, and the bulk-merge op
+(`dedup.split-book-bulk-merge`) and `POST /dedup/split-book-candidates/:id/merge`
+used to merge them as written. Both now go through
+`dedup.MergeSplitBookClusterRechecked`, which re-reads every member and refuses
+(the route answers 409, the op skips the candidate and leaves it stored) unless
+the current rows still pass (the check runs under the merge lock, as the
+merge's `Precheck`, so a row edited just before the merge is judged as it is
+then): no gone or path-less member, a file row on every
+member, no file with an unknown (0) duration or one at or over
+`repair_chapter_max_min`, and no distinct-works veto. The shape the vetoes need
+is inferred from the members' current paths, not from the stored row. A dry run
+of the op reports which candidates the real run would refuse. The unused
+`MergeSplitBookCluster` wrapper was removed (its callers use
+`MergeSplitBookClusterWithOptions` or the rechecked entry point).
+
+#### Author names with part/track/disc markers are no longer treated as people
+
+Author names that end in a part, track or disc marker ("David Copperfield P2
+S3", "Charles Dickens Disc1", "CD2", "D1T05", "S01E02", "Pt.4") or whose last
+word is only digits ("Copperfield 07") are now treated as not a person.
+`personname.HasPartTrackMarker` holds the rule (an edition suffix such as
+"(Unabridged)" is ignored first). Author dedup (`FindDuplicateAuthors`) skips
+such rows instead of grouping them. The junk-author classifier flags the glued
+markers (P, S, Pt, CD, D1T05 and the like) with the new relink-only
+`part_track_marker` rule, so the junk-author fixer proposes moving their books
+to a real author and never deletes the credit. Numeric and spaced markers keep
+the verdicts the classifier already gave them: "Copperfield 07" and "Great
+Expectations Pt 4" stay `number_word` (relink-only), while "Charles Dickens
+Part 2" stays `structural_word`, which can unlink the credit. Real names such
+as "Malcolm X", "Pope John Paul II", "Louis XIV", "50 Cent", "Agent K9" and
+"R2 D2" are untouched; a band that truly ends in a bare number ("Maroon 5") is
+flagged, which is the accepted cost of the owner-approved rule.
+
+Names that are only a part/track/book label ("Book 2 (Unabridged)", "[Track
+003] 2", "Vol. 01", "10 Chapter 10") are also skipped by author dedup
+(`personname.IsLoneMarkerPhrase`). The junk-author classifier is unchanged for
+them: it already flags them as `structural_word` or `author_creation_gate`.
+
+#### Never leave a book without an author when repairing junk author credits
+
+The junk-author repair and `maintenance.author-strip-merge` no longer remove a
+credit that is a book's only author credit (owner decision 2026-10-21). A sole
+junk credit is held (`held_sole_credit` in the repair; `books-held-sole-credit`
+and `rows-held-sole-credit` in the strip-merge summary, which keeps the junk
+record while any book depends on it), and is swapped only when a real author is
+found. Names that are only a part, track or book label ("Book 2 (Unabridged)",
+"Part 2", "Disc 1", "Vol. 01", "[Track 003] 2", "1-02") also get the relink-only
+`label_only` rule, which needs the provider or two independent kinds of
+evidence. `personname.IsLoneMarkerPhrase` now covers ranges, decimals, letter
+labels, prologue/epilogue/introduction words and number-only codes.
+
+Two more places no longer strand a book without an author. Reclassifying an
+author as a narrator falls back to the unknown-author record when no author
+credit would survive, and a failed rollback of an organized copy no longer
+clears the author credits of a book it then cannot delete. The strip-merge
+treats a narrator-only or junk co-credit as no author at all, and labels such
+as "Part 1 of 3", "Book #2" and "Track 1/12" are label-only. HTML entity
+shrapnel such as "&#169" is not read as a label.
+
+- An ISBN-10 whose check digit is `X` is read as an ISBN-10 instead of an ASIN.
+- A generic `isbn` column that disagrees with an `isbn10` or `isbn13` column on the same row is an `identifier_conflict` finding instead of being dropped silently.
+- A JSON list with a wrongly typed field in one row keeps the file: the row carries a `bad_field` finding (or `bad_row` when the row itself is not an object).
+- A row whose ASIN names several editions is settled by its ISBN-13 when that names one of them, and held for review as `identifier_conflict` when the ISBN names a book outside them.
+- The ASIN and ISBN agreement check follows a trashed copy to its live survivor, so an ISBN carried only by a book merged away is no longer invisible to it.
+- A row that matches no library book but has a data problem of its own (a bad identifier, a bad or future finish time, conflicting identifiers) is held as `unmatched` for review instead of becoming a bulk-applicable read-elsewhere record, and the row's reason says why.
+- A list time that is in the future when the apply re-plans is its own skip, `skipped_future_timestamp`, for matched rows and read-elsewhere records alike, and is never copied into a record.
+- A read-elsewhere record is now one per book for a user, not one per identifier: a row whose ASIN, ISBN-13 or named source id (audible, itunes) is already recorded for the user by another list is `skipped_already_recorded`. A `source_id` with no `source` is not matched across lists (two lists' unlabelled "17" are not one book); inside one list it still folds rows, and a row known only by such an id gets its record id from its title and authors.
+- Apply re-reads the target user and book at the write: a removed user, or a book that was trashed or merged after the re-plan, writes nothing and reports `changed_since_plan` (a merged book is held, not followed to its survivor; re-plan to match through the survivor). A book trashed in the gap between that check and the write still gets the state (a trash takes no merge lock; merges and purges do): the row is journaled, so its revert removes it. A dry run for a removed user fails the row instead of saying `would_apply`.
+- Undo preflight now predicts a read-elsewhere record's removal the way the revert performs it, so it no longer reports a record replaced by another list's as safe.
+- `DELETE /api/v1/master-lists/:id` removes a list whose stored metadata no longer decodes.
+- The master-list routes pass through when authentication is disabled (as the rest of the API does) instead of answering 401 to everyone. Any admin holding `users.manage` may delete any stored list: lists are shared admin input and the plan accepts any list id.
+- The master-list design is committed as `docs/design/2026-10-23-master-list-import-design.md`, with a note of where the implementation departs from the draft.
+- The retention that runs after an upload never deletes the list just stored, whatever its upload time compares as (a clock that stepped back).
+- `GET /api/v1/master-lists/elsewhere` pages: `limit` (default 200, at most 1000) and `offset`; the response adds `total`, `limit` and `offset`.
+- The fixer's description of `matched_review` no longer promises a confirm action: those rows are listed for a person and are not applied.
+- Known and tracked separately: until PR #4148 merges, the Repairs plan rows (including this fixer's list titles, authors and the target user's read status) are readable by any `library.view` holder.
+
+#### `maintenance.repair-junk-titles`: rank provider and stripped evidence first, filter announcer prose, strip the book's own series, gate fragments by duration
+
+A review of the fixer's 2026-10-23 plan found 513 of 624 reviewed proposals wrong
+(plus 39 unsure and 72 accepted). The transcription source carried most of the
+error: 261 rejected against 64 accepted. A second review of the first fix found
+ten more problems, fixed here. Nothing is written without the usual review and
+apply; the change is in the plan step.
+
+- Source priority is now the title without its prefix, the metadata candidate,
+  the provider's recorded title, the transcription, the folder or filename, the
+  series and number. The transcription used to come first. `title_prefix_stripped`
+  behaves as before.
+- A transcription loses its series or genre tail before it is judged ("..., Book
+  Two of X", "..., a drowsy Quillfeather tale"). A bare ", Book 9" is kept: it
+  can be part of a real title. The book's own recorded series is stripped too,
+  before or after the title ("X, Series Book 3" and "Series, Book 3, X"), but
+  only for a series the book is recorded in and only when what is left is a
+  title of its own.
+- Evidence agreement (`junkEvidenceAgrees`) no longer lets a comma open a
+  subtitle, drops series tails on both sides, and treats two different explicit
+  book numbers as two books. The transcription probe alone keeps the comma
+  (`junkEvidenceAgreesSeps`), so "X, The Second Tide" still agrees with "X".
+  `titleAgreesWithAny`, which the swapped title/author fixer reads, is unchanged.
+- A transcription is refused when it is an announcer phrase ("an unabridged
+  recording of", "X presents", "you're listening to", a bare "Book 4"), carries a
+  format word, starts in lowercase, or reads as a sentence (pronoun-led opening,
+  a name and a past-tense verb, a trailing full stop, quotation marks).
+- A folder or filename title is refused when it carries a chapter, track, credit
+  or placeholder marker (a roman "Chapter XIII", "Part (16)", "(1 of 5)", "[tag]",
+  a trailing "(2020)"), is a bare section name, or starts or ends with a person.
+  The markers are also looked for in the file name before an author segment was
+  stripped, so a chapter label stored as the author is not stripped into a clean
+  title. A name that is only in the library is stripped from a file name when a
+  "read by" credit follows it and never when a live book holds it as its title;
+  an author row that no other book is credited to (counting co-authors linked
+  through the book_authors table, and leaving out the book being judged) is not
+  an author of the library. A head before " - " that is only a library name must
+  also be shaped like a person.
+- A filename strips the stored author only when it is not itself junk. The
+  stored author and the book's other people go behind a "read by" credit, or
+  without one only when the name has evidence beyond the file name: another book
+  of the library is credited to it, or it is the book's narrator. With no credit
+  and no such evidence the segment is kept (a "Title - Name" stem is exactly
+  what the scanner reads as a title and an author, so stripping the stored author
+  back off it proves nothing). At most one library name goes.
+- `series_and_number` needs a recorded series position equal to the number in
+  the title, a real series name (an "of" inside it is fine), and no disc, track
+  or part word in the title ("CD_01" included).
+- A proposal found anywhere but the stripped title is not made for a book that
+  runs under 30 minutes or whose library state is `suspicious`; it is listed as a
+  possible fragment. The runtime is the book's duration, or the sum of its files
+  when every file has one. A book whose runtime is unknown is listed for a person
+  ("runtime unknown"), not proposed: the gate fails closed.
+- With a junk stored author, a provider title is accepted when it agrees with
+  the path (folder, work folder or the file name's title), the stripped title or
+  the transcription, and otherwise the row is listed for a person. A provider
+  title that only differs from the path's by punctuation keeps the path's
+  spelling. A catalog title that is the stripped or spoken title plus a tagline
+  subtitle is not proposed.
+- The duplicate-title guard compares owners, not only the proposal: a real-author
+  book and a junk-author book proposed the same title are both held when the
+  junk one's owner (provider's or folder's author) can be the same person or is
+  unknown, and one proposal for two different owners stays applicable. A
+  proposal for a real author is held by a live book of the same title under the
+  same rule, so a duplicate author row of the same person, or a book with no
+  author, holds it too. The author a provider recorded names the owner only when
+  the provider's title was not refused.
+- The book's own series is cut off a title only after an explicit separator
+  ("Gorselby Lamps, Brackle Wars, Book 3"). A series that follows the title after a
+  plain space ("Second Quillmoor Book 3" in series "Quillmoor") may be the end of
+  the title, and the book being judged has a junk title, so no live book can say
+  so: the text is left whole and then refused, so the row is listed for a person.
+  Where a separator is there, the book's own transcription or file name spelling
+  the whole title also stops the cut.
+- A narrator counts as evidence for stripping a name from a file name only when
+  it narrates another live book that has a real title and is not itself a live
+  title. The narrator field is filled from the same file name and tags (the AI
+  filename parse, the artist-tag fallback), so on its own it proves nothing.
+- A series named like a disc, side, tape or volume marker is refused as
+  "series and number" whatever separates the word from its number ("CD-2",
+  "Disc-02", "Side A", "Vol.III"), while a series that merely contains one of the
+  words ("Side Effects", "Part-Time Tides") still is a series.
+- The junk-title tests and the comments in the fixer no longer use the titles,
+  authors and library paths of published works that earlier revisions of the
+  fixtures carried, nor the same titles with a word swapped. The replacements
+  are made-up word combinations that keep only the shape a test needs ("Series:
+  Title, Book 2", a bare number, a comma title). Only the names the code itself
+  matches on stay: publisher idents, the Big Finish, Doctor Who and Torchwood
+  owner-manual brands (with invented episode names), and Bible book names.
+
+Checked offline by replaying the 2026-10-23 plan's rows through the new string
+filters (no live library, so the library-author rule had no live-title guard and
+its refusals are an upper bound). The string rules leave every accepted
+transcription, filename and folder row (64 + 3 + 3) as it was; the replay does
+not cover the rules that read the library, and those change the plan: the
+fragment gate, the library-author and own-person strips, and the unified
+duplicate guard can each hold a row the reviewer accepted, and a book with an
+unknown runtime is now listed for a person where it was proposed. Of the 452
+rejected transcription, filename and folder rows, 207 are now refused or cut to
+the reviewer's own better title (115 of 261, 49 of 134, 43 of 57), against 164
+(96, 30, 38) with the first fix. The rest still slip or change to another wrong
+title: 146 of the transcription rows (misheard words and prose that no string
+rule can tell from a title), 85 filename and 14 folder rows. The rows that depend
+on the ranking, the provider's recorded title, the series and the duration cannot
+be replayed from the plan alone; those rules are covered by plan-level tests on
+invented libraries, including the shapes of the accepted provider rows, and the
+recorded-series strip is not measured per row.
+
+#### Review follow-ups for the retired-version guards
+
+Follow-ups from the review of the retired-version guards.
+
+- The nightly trash cleanup (`maintenance.trash-cleanup`) now fails when due purges fail. `versions.CleanupTrashedVersions` returns `(purged, failed int, err error)`, the maintenance deps interface and `Server.CleanupTrashedVersions` carry all three, and `runTrashCleanup` logs the purged and failed counts at Warn and returns the error. Before, a run in which every purge failed (book_files flagged incomplete, a file that could not be removed) ended "completed" with "purged 0 versions". A trash that cannot be listed, a re-read that fails and a legacy-row stamp that cannot be written count as failed too.
+- `PurgeVersion` no longer marks a version purged when a file could not be removed: it returns the error and leaves the version in the new `purging` status (see below), so the next run retries it. A file that is already gone counts as removed, so a version whose file vanished still completes.
+- `PurgeVersion` also keeps a file that another live book names with its own `FilePath` (no book_file row needed), as the book purge does, and fails closed when `LiveBookIDsAtPath` cannot answer. The version's own book naming its file is not another owner.
+- "Purge now" answers 503, not 500, while the path index cannot name every owner of a file (`database.ErrBookFilesAtPathUnavailable`): nothing was deleted and the version is still in the trash.
+- Restoring a trashed book answers 404 only for a book that does not exist (`audiobooks.ErrAudiobookNotFound`); a failed lookup, including the retired-shell check failing closed, answers 500 instead of "audiobook not found".
+- The 409 for a retired shell, and the lifecycle refusal of a retired version, no longer point to "Restore as separate book" (disabled for now, its route answers 501). The shell message says the book stays in the trash, its files are safe under the holder's retired versions, and the separate-book restore is not available yet.
+- A purge claims the version before it removes the first file: `PurgeVersion` writes the new status `purging` (`database.BookVersionStatusPurging`), and `PebbleStore.UpdateBookVersion` enforces it under the version's stripe. A version whose purge failed part way (some files removed, one not) stays `purging` and can no longer be restored: before, it stayed `trash`, and Restore handed back an alt whose rows named deleted files. Restore (and trash) answer 409 for it, naming the cause, whether the version was already `purging` when the request read it or a purge claimed it in between (`database.ErrVersionPurging`). The nightly cleanup and "Purge now" retry a `purging` version at once, with no 14-day window, so it cannot stay stuck; `ListTrashedBookVersions` lists `purging` rows with the trash. The same claim closes the restore-versus-purge race the cleanup used to document: a restore that lands between the re-read and the claim wins (`versions.ErrVersionNotInTrash`: the run skips the version, "Purge now" answers 409) and nothing is deleted. The fingerprint check treats `purging` like `trash`, and the Trash page and the versions panel show it (the page offers "Retry Purge", never Restore).
+- A version whose book no longer exists no longer fails the nightly cleanup forever. `PurgeVersion` now tells "book not found" from a failed read of the book: a read error is returned with its cause and the version is untouched; a book that is gone has nothing on disk to remove (`DeleteBook` refuses while book_file rows exist), so the version is claimed and marked `inactive_purged` with a Warn line. A cleanup run that fails now names EVERY failed version id and wraps every failure, not only the first, so one stuck version cannot hide a new one.
+- Restoring a trashed book answers 409 with "retry" when the version-group lock gave up (`versionprimary.ErrMembershipChanged`), as the split handler does, instead of a 500. The 409 for restoring a retired version no longer says "restore it as a separate book instead".
+
+#### Hard delete (bulk, single and trash purge) no longer moves listening progress off a book it then refuses to delete
+
+`POST /api/v1/audiobooks/batch-operations` with `hard_delete` carried a book's
+users' listening state (progress, finished status, positions, bookmarks) to the
+version Audiobookshelf lists and only then called `DeleteBook`, which refuses a
+book that still owns `book_file` rows (`database.ErrBookOwnsFiles`). The book
+stayed, but its users' state had already been moved off it.
+
+All three hard-delete paths now ask the question `DeleteBook` asks, through one
+shared helper, `database.CheckBookOwnsNoFiles`: before the carry, and again
+under the merge lock the carry and delete run in (`merge.HardDeleteKeepingUserState`
+takes a `precheck` for this). The helper counts retired `book_file` rows too,
+as `DeleteBook` does; a check made with `GetBookFiles` passed a book that held
+only retired rows and `DeleteBook` then refused after the state had moved. A
+book with only retired rows is now refused up front with wording that says those
+rows cannot be moved (it no longer advises moving files that cannot be moved).
+The helper fails closed: a store that cannot list retired rows, or a failed
+read, refuses the delete. The batch path reads the rows through the
+`RetiredBookFileReader` capability, so `batchBookStore` is not widened.
+
+- Batch: a book that owns files is a failed item in the per-item `results`,
+  never a success, and the rest of the batch proceeds.
+- Single delete (`DELETE /api/v1/audiobooks/:id`): passes the same `precheck`,
+  so a refusal under the lock moves nothing and blocks no hash. The no-state
+  branch (nothing to carry) runs the check under the lock too, and no longer
+  blocks a hash for a book that gained a file before the lock.
+- Trash purge (`purgeNow`, the nightly purge, discard-progress-and-purge): the
+  state-carrying purge now makes the same under-lock check, as the discard path
+  already did. Purge's first check (before anything is touched) and both
+  discard-progress-and-purge checks (early and under the lock) use the shared
+  helper too, so a trashed book that holds only retired rows is refused before any
+  tombstone, progress carry or erase, with or without listening state. A book is
+  counted once in the nightly purge report: skipped when refused before the carry,
+  an error when something failed after the state moved. The purge carries the
+  helper's own wording through unchanged (a trashed book that holds only retired
+  rows is told those rows cannot be moved, not to soft-delete a book that is
+  already in the trash), and an early return for a state-moved refusal now
+  refreshes the list cache like the success paths.
+- Discard progress and purge erases every user's progress and then deletes the
+  book. When that delete failed after the erase (a file row landed after both
+  checks), the request used to answer as if nothing changed and wrote no audit
+  row. It now writes the audit row (level `error`, `purged: false`, the counts
+  erased and the failure), refreshes the list cache and answers with its own
+  code, `PROGRESS_DISCARDED_BOOK_KEPT` (409 when the cause was owned files, 500
+  otherwise; `merge.DiscardedBookKeptError`, matching `merge.ErrDiscardedBookKept`
+  and the delete's own cause), saying the progress is gone and the book stayed.
+- A refusal after the state moved (a non-merge writer such as the scanner added
+  a file after the lock check) is reported as its own outcome:
+  `merge.StateMovedBookKeptError` / `STATE_MOVED_BOOK_KEPT`, saying the state
+  moved to the sibling and the book was kept. It is HTTP 409 only when the cause
+  is owned files and 500 for any other failure after the carry (a tombstone write
+  during a purge, for example); the purge reports every failure after the carry
+  this way. It is no longer reported as `OWNS_FILES` "nothing deleted". A refusal
+  by the precheck is a
+  `merge.PrecheckRefusedError`; callers keep matching
+  `merge.ErrCarryPrecheckRefused`, and `merge.PrecheckCause` returns the cause.
+
+Both bulk routes now ask for the permissions the single-book routes ask for, on
+top of the `library.edit_metadata` they are mounted on. What a request does to
+books' place in the library is read from the request the handler has bound and is
+about to run (not by a second parse of the body), so a body with trailing bytes
+or a duplicate key cannot slip past:
+
+- Hard delete (`POST /api/v1/audiobooks/batch-operations`, `action: "delete"`,
+  `hard_delete: true`) needs `library.delete`, as `DELETE /api/v1/audiobooks/:id`
+  does.
+- Soft delete needs `library.delete` too: the `delete` action without
+  `hard_delete`, and an update setting `marked_for_deletion` to true or
+  `library_state` to `deleted`, on `/audiobooks/batch-operations` and on
+  `POST /api/v1/audiobooks/batch`.
+- Restore needs `library.organize`, as the single-book restore does: the
+  `restore` action, and an update setting `marked_for_deletion` to false, on both
+  routes.
+- A list that trashes and restores needs both. Plain metadata edits still need
+  only `library.edit_metadata`.
+- The request's shape is not the whole story: `library_state` set to `organized`
+  (or any live value) on a book that is in the trash takes it out of the trash
+  and looks like any metadata edit. So the handler also hands the service what
+  the caller holds (`batch.TrashGrants`, never read from the body) and the service
+  judges each row after loading it, under the row's write lock, with
+  `database.IsInTrash`: a book that leaves the trash, or has its `library_state`
+  set to a live value while it is in the trash, needs `library.organize`; a book
+  that enters the trash needs `library.delete`. A row the caller may not change
+  fails with a message naming the permission, nothing is written for it, and the
+  rest of the request proceeds. `marked_for_deletion` and `library_state` are the
+  only payload fields that touch the trash. A request with no grants (a nil
+  `Caller`) fails closed: it is judged as a caller holding neither permission, so
+  an update that moves a book into or out of the trash is refused and every other
+  edit is unaffected (an update that sets `marked_for_deletion` to false, which
+  is a restore, is judged the same way). Both HTTP handlers always set the
+  grants and no in-process caller of these two service methods edits trash state;
+  the "delete" and "restore" actions are judged only by the handler.
+
+The routes previously needed only `library.edit_metadata`, so a role with edit but
+not delete could trash, restore or permanently delete books through them. The
+library page now disables "Delete Selected" without `library.delete` and
+"Restore Selected" without `library.organize` (with the reason as a tooltip that
+shows on hover: a disabled button receives no pointer events, so the tooltip
+wraps the button), and shows the server's permission message when a bulk action
+is refused. On a first run (authentication on, no user created yet) the server
+holds every permission, and the page now enables the buttons the same way.
+
+The delete error messages on the library and book pages no longer replace the
+server's wording for a trashed book: a purge or a discard-progress-and-purge
+refused for owned files shows the server's message instead of a sentence telling
+the user to soft-delete a book that is already in the trash, and the new
+`PROGRESS_DISCARDED_BOOK_KEPT` answer is shown as "progress erased, book kept".
+
+A per-viewer collection whose members could not be worked out (search index not
+ready, a query that no longer parses, an unreadable listening-state row) is flagged
+in the native response with `members_unavailable` and `members_unavailable_message`,
+shown as a warning on the collection page, and logged once per kind per minute,
+instead of passing for a collection with no matches. A query that stopped parsing
+counts as per-viewer, so a list it holds is never served on either surface; the
+store itself drops a per-viewer collection's stored list on every create and update
+(this closes the Audiobookshelf rename writing a creator's list back), and the startup
+purge fails closed the same way and keeps going past a row the store refuses. A rename
+or description-only update now answers with the caller's own members. The page no
+longer offers Materialize for a per-user query.
+
+A viewer's listening state is read in one scan per request instead of a point read per
+candidate book per collection, and the 10,000-result window on a per-viewer evaluation
+is gone: a library of any size is evaluated in full. Evaluations are bounded across
+requests, and a failed state read is an error, not an empty history. The
+Audiobookshelf `lastUpdate` of a per-viewer collection is the time of the request.
+
+A per-user term (`read_status`, `progress_pct`, `last_played`) under an `OR` with another
+term, or under a `NOT` over a group, used to be evaluated as an `AND` without a word,
+so a dynamic collection or smart playlist showed far fewer books than its query said.
+Create and update now refuse such a query with a 400 that names the
+`read_status:(finished|in_progress)` spelling, and a stored one reads as
+`members_unavailable` (query-invalid) until it is edited.
+
+A member list is cut to 10,000 books, with the real count in `materialized_total` (a
+collection), `book_ids_total` (a smart playlist) or `totalBooks` (the Audiobookshelf
+collection row, whose `numBooks` stays the served count), so the removal of the
+10,000-result window no longer lets a broad query store, return and expand the whole
+library. A request cancelled while it waits for an evaluation slot is dropped instead
+of queuing behind other evaluations. The evaluation-failure log line no longer carries
+the store's error text, which can name a user and a book. A query that names a per-user
+field anywhere in its text is treated as per-viewer, in the web page as well as on the
+server. The collections list and detail pages say "members unavailable" instead of
+"0 books" when a viewer's members could not be worked out.
+
+A per-user term whose value the matcher cannot evaluate is refused like the boolean
+shapes (`search.CheckPerUserTerms`, which runs the shape check and then
+`search.CheckPerUserValues`): a `read_status` that is not `unstarted`, `in_progress`,
+`finished` or `abandoned` (`read_status:completed` matched nothing and
+`-read_status:completed` matched every book, for every viewer), a comparison or a
+pattern on `read_status`, a `progress_pct` or `last_played` value that does not parse,
+a pattern on any per-user field (`last_played:*` stays), and a field name written with
+capitals. It runs in the evaluator, on collection and smart-playlist create and update,
+and in the library list: `search=` answers 400 `invalid search: ...`, the `filters=` JSON
+the web search box sends answers 400 `invalid filter value: ...` (checked in
+`compileFieldFilterAt`, so the list, a bulk selection and a saved filter agree), and the
+substring fallback used while the index rebuilds checks the query first. A filter cannot
+carry an `OR` or a group, so the web box sends a query with boolean structure (see the whole-send
+paragraph below) whole as `search=` and shows the server's message; `read_status:(finished|in_progress)` works in a filter as
+one term that matches either status. `read_status:finished OR author:kyle` no longer
+answers as an `AND` there either. A stored row refused this way reads as `members_unavailable` with
+the same guidance, and a stored smart playlist drops its cached list so the
+Audiobookshelf surface stops serving it; `NOT NOT (group)` is no longer over-refused, and
+the evaluator checks the query before the index state.
+
+A smart playlist's materialized snapshot is cut at 10,000 books with the real count in
+`materialized_total` and in its description. The playlist page shows `N of TOTAL` from
+`book_ids_total` and a warning for `members_unavailable`. `sort_json` is validated on
+create and on a changed update for collections and smart playlists
+(`playlist.ValidateSortJSON`), and a playlist update checks the query only when it
+changed. Only a failure to read the viewer's own state is withheld from the log; every
+other evaluation failure is logged with its text. The search index query and the
+evaluator take the request context, a cancelled request or refresh is neither a failure
+nor a log line, and the Audiobookshelf collection routes answer 499 for a client that
+went away and 503 on `GET /api/collections/:id` for a collection whose members could not
+be worked out. A per-viewer collection's capped log line no longer carries one viewer's
+match count.
+
+A per-user term must now be spelled in one of the forms the matcher evaluates, and these
+forms, which the old matcher accepted without a word, are refused: `read_status:finished*`,
+`read_status:*finished`, `read_status:finished~`, `read_status:>finished`,
+`progress_pct:50*`, `progress_pct:<inf`, `progress_pct:[* TO 50]` (write `<=50`),
+`progress_pct:!=100`, `progress_pct:==50` and `last_played:2026-01-01*`. An empty list
+(`read_status:()`) and a comparison inside a list (`progress_pct:(>50|<10)`, refused with a
+message that says so) are refused, and a field name is judged with Unicode case folding.
+A background metadata operation whose saved filter holds a per-user term, in its
+search text or in its field filters, is now refused before it resolves, instead of
+dropping the term and targeting the whole library (an operation has no viewer to read
+it for). Text the query parser rejects that writes a per-user term (`read_status:finished OR`)
+answers 400 `invalid search: this search could not be read (...)` rather than a substring
+match that showed no rows.
+
+`tag:` in `search=` is now an exact tag filter. The library search box sends a per-user
+query with a group, `AND` or `OR` whole, `tag:` terms included, and `tag:noir` used to name
+a field the index does not hold, so that list showed no books and no message. The index
+holds a tag as words, so matching it there would have found "hard sci-fi" for `tag:"sci-fi"`
+and every "read" book for `tag:"to-read"` (and, negated, the whole library for a tag that
+is a stop word); instead the `tag:` terms are pulled out of the query and applied as the
+same whole-tag, case-folded match the `tags[]` parameter and the chips use, ANDed with the
+rest. That works where the term is a conjunct of the whole query (the top level, or a group
+that is only ANDed), in the library list, its facets, a select-all, a background
+operation's saved search and a dynamic collection's or smart playlist's stored query.
+A `tag:` term inside an `OR`, an alternation, under `NOT` or `-`, or with `*`, `~` or `^` in
+an unquoted value (a wildcard, a fuzzy marker, a boost, including one after a quoted value:
+`tag:"noir"^2`) answers 400 (`tag: cannot be used inside an OR group ...`) and is refused on
+create and update, and a stored query of that shape reads as `members_unavailable`. The
+web box sends the `tag:` terms that narrow the whole query as `tags[]` as well, so a chip
+stays exact; the chips and Cancel read only those terms (a tag inside `-( )`, `NOT ( )` or
+an `OR` is not shown as on), a tag is compared case-insensitively, removing a chip no longer
+leaves a dangling `AND`, and adding one to a query with a top-level `OR` wraps the query in
+brackets first.
+
+A stored smart playlist whose query does not parse, is empty or has an unusable `sort_json`
+reads as `members_unavailable` like the other refused definitions (no stacked `query:`
+lead-in on the message); a failure that is the server's (an unreadable listening state) is a
+500 with a generic message and a log line, no longer a 400 with its text. Materializing a
+smart playlist answers 400 for a definition problem and 500 otherwise. A static copy made
+from a cut smart playlist reports `book_ids_total` only while it is still the cut list.
+The viewer-state scan and the playlist sort stop for a cancelled request
+(`UserBookStateLister.ListUserBookStates` takes the request context). On the
+Audiobookshelf surface the collection mutation routes answer with the committed change and
+no books when the members cannot be worked out, a 499 after the write means the change was
+kept, and a refused smart playlist is an empty one with no signal.
+
+A query typed in the Library with boolean structure that binds a field term (an `OR`,
+`||` or `|` next to one, a field term inside a group, a `-` or `NOT` before a `tag:` term, a
+`tag:` value that is not one whole name, or a boost after a tag) is now sent to the server whole, with or without a
+per-user field, and the server's message is shown. Structure is read from the terms the box
+cuts the text into: a field's value is never structure, so `title:/^(the|a) /`,
+`title:/hush|knight/`, `description:/(?i)gotham/` and `title:Batman(1989)` stay filters, as
+before. Structure among free words alone (`title:bat NOT robin`, `title:bat Batman (1987)`), and an
+`AND` or `&&` beside a field term (`title:bat AND year`), still split, so the field term keeps its filter matching. A `/regex/` value on an indexed field
+that does reach `search=` (inside an `OR` or a group, or in a collection or smart playlist
+query, parsable or not) is refused with a 400 instead of being read as the words
+between the slashes or falling to a substring match. Before, `Batman -tag:"to-read"` was split into filters and the
+negation was dropped without a word. A stop word or punctuation left next to a tag term
+(`the tag:noir`, `- tag:noir`, `(tag:noir OR)`) is dropped instead of silently emptying the
+result, and the tag chips agree with the server on the boosted and dangling shapes. A search
+that carries a per-user term now filters the matching ids before loading any book: one point
+read per id up to 256 candidates, one scan of the viewer's rows above that, instead of a book
+and a state row per hit. An unreadable state row is judged as an unstarted book (the search
+does not fail for it), a cancelled request stops reading, and a per-user name in capitals
+(`Read_Status:finished`) is still treated as per-user by the cache gate.
+
+The `backfill-file-hashes` maintenance op no longer warns about every file that
+is gone from disk, once per file, on every run. A prod preview found about 515k
+rows with no hash, and every sampled failure was a file missing on the server
+rather than a read error.
+
+A hash attempt that fails with not-found (ENOENT or ENOTDIR) is now its own
+counted outcome, `not_found`, instead of a warning. Nothing is written to the
+database for such a file: no new column, no flag on the row, and `Missing` is
+untouched. Only the first 50 not-found paths go to the operation log. A not-found row is
+skipped only by a resume of the same operation (which reads its report back); a
+new run is a new operation with a new report and checks those files again, so a
+file that has reappeared is hashed then. Every row
+the run reaches that has no hash is written to a per-row TSV report at
+`{root_dir}/.reports/backfill-file-hashes-<op id>.tsv` (bucket, file_id, book_id,
+path, reason; the buckets are `hashed`, `not-found`, `not-found-outside-root`,
+`read-error`, `write-error`, `busy` and `no-path`; a run with no operation id
+gets a timestamped name, so reports are never overwritten), dry runs included.
+The path and reason columns are lossy: tabs, newlines and carriage returns in
+them are replaced by spaces so every row stays one line, so a path with such a
+character does not round-trip exactly. The `file_id` column is the key and is
+never altered. Any other failure, such as permission denied or an I/O error,
+stays a `read_errors` outcome and is retried every run. A not-found outside the
+library root, or with no library root configured, cannot be checked against the
+root's mount, so it is counted apart as `unverified_outside_root`. Rows with an
+empty path are counted as `skipped_no_path`. The result line reports `hashed`,
+`not_found`, `unverified_outside_root`, `read_errors`, `write_errors`, `busy` and
+`skipped_no_path` and names the report; a dry run reports what an apply would do
+without storing any hash (it still writes the report).
+
+A hash is stored only if the row still has no hash and still points at the file
+that was hashed (same path, size and scan mtime), and the check and the write
+happen together through `ModifyBookFile`. A row that was repointed, or whose file
+changed, between the hash and the store gets nothing stored: it is counted as
+`busy`, listed in the report with the reason "row changed since the file was
+hashed, retried next run", and retried by the next run. A row another writer
+hashed in the meantime keeps that hash and is counted as `hashed` with the reason
+"hash already stored". The same conditional store is used when a chunk journal is replayed after a
+restart. `TODO(#4169)`: once the store gains compare-and-swap and a
+`database.ErrBookFileConflict`, map that error to `busy` too.
+
+A stored hash feeds the book's aggregates, so they must be recomputed, but not
+once per file: the job stores each hash through
+`ModifyBookFileDeferAggregates` (the same conditional write as `ModifyBookFile`,
+without its per-row recompute) and then calls `RecomputeBookAggregates` once per
+distinct book per chunk, after the chunk's hashes are stored and before its
+report rows are recorded. A book with N files hashed in the same chunk costs one
+recompute, not N. The journal replay also recomputes the books of rows it finds
+already stored, and the books of a store that failed after it had been applied (an
+fsync failure), so a run killed after its stores and before its recompute still
+ends with correct aggregates. A dry run stores nothing and recomputes nothing.
+
+A recompute that fails does not stop the run. The aggregate is derived data and
+the hashes are stored, so the books that failed are collected, their hashes are
+kept, one aggregated error line is logged through the job's logger for the chunk,
+the chunk's journal is cleared as normal, and the run finishes. The result line
+ends with a warning that names the count and the book ids (the first 50, then a
+count of the rest), for example `WARNING: the aggregates of 1 books could not be
+recomputed after their hashes were stored, so they may be stale until the next
+edit or recompute: books b0`. A failed book is not retried by a resume or a later
+run, because its rows now have a hash.
+
+A run with no journal (no operation id, or no library root configured) has
+nothing to resume a missed recompute from, so it stores each row through
+`ModifyBookFile`, which recomputes the row's book as part of the write, instead of
+batching the recompute per chunk.
+
+A run that is cancelled, killed or restarted part way (for example by a server
+restart) and then resumed now ends with exactly the report and totals an
+uninterrupted run would have. There is no checkpoint index to resume from any
+more: a run always starts at the first row, skips rows that already have a hash
+and rows its report already lists, and starts its counters from the report, so
+the final summary counts the whole operation. A report named after an operation
+id is never truncated, whatever the saved state says, so a kill before the first
+checkpoint, a failed checkpoint save, an unreadable saved state, or a re-queue
+of an operation that had already finished can no longer wipe the earlier rows.
+Rows that were retired between attempts no longer shift the resume point, because
+nothing is resumed by position. Each chunk's rows are held in memory and written
+to the report only after the chunk is journaled and its hashes stored, so a
+chunk cut off half way before that point stores, counts and reports nothing.
+If the saved state shows the operation started before but no earlier report is
+found, the summary says its counts cover only the work done in this run; if the
+saved state cannot be read and no report is found it says the counts may cover
+only part of the operation. Failures to read or save that state are logged as
+warnings instead of being discarded. A report that cannot be read back (a bad
+header, a line that is not a row, an unknown bucket) stops the resume with an
+error instead of guessing; a last row that lacks its newline, or a report with
+CRLF line endings, is accepted. If closing the report fails after the last
+chunk, the op fails and saves no "completed" summary.
+
+Each chunk is also journaled before anything in it is stored: the outcomes that
+store a hash (not the not-found, read-error or no-path rows, which store nothing
+and are simply decided again after a kill; nothing at all in a dry run) are
+written to the operation's own saved state in the database (the
+`opstate:<op id>:params` key, synced to disk), the hashes are stored, the report
+rows are written and fsynced, and only then is the journal deleted. If the
+process is killed anywhere in that sequence, the next run finds the journal and
+replays it: rows the report already lists are skipped, the rest are stored
+(conditionally), counted and listed, and a hash that is already stored is not
+stored (or computed) again. So a kill between storing a chunk's hashes and
+writing its report rows loses nothing. A journal that cannot be read, belongs to
+another operation, or holds an entry that cannot be a row stops the resume with
+an error; a failed journal write stops the run before any hash is stored. That
+key is the shape the retention job's saved-state sweep ties to the operation, so
+a journal an operation never came back for is dropped with it, and
+`ClearState` removes it with the checkpoint; there are no journal files to
+clean up.
+
+The report is treated as untrusted input. It lives in `{root_dir}/.reports`
+inside the library share, which other users may be able to write, so on resume
+its content only ever decides which rows to skip and what to count: nothing read
+from it is hashed, stored or used as a path, and a forged line cannot cause a
+hash write. Each line's bucket must be a known one and its file and book IDs must
+be 1 to 64 characters of letters, digits, `_` and `-` (not ULID-only, because the
+store accepts caller-supplied IDs); anything else stops the resume with an error.
+The report is opened without following symlinks (`O_NOFOLLOW`), and the open
+descriptor is checked before anything is read: it must be a regular file owned by
+the user the server runs as and no larger than 512 MiB (about 4x the expected
+size), lines are read through a 64 KiB bounded reader, and a report that breaks
+any of this stops the resume with an error (a fresh report is vetted before it is
+emptied). A new report file is created with the standard file mode (`util.FileMode`,
+`0664`). A forged line can still make the job
+skip a row it would have hashed, never write one.
+
+The default report directory, `{root_dir}/.reports`, is vetted by `libroot` before
+any op writes to it: it is created with the standard directory mode
+(`util.DirMode`, `0775`) when absent, and when it exists it must be a real
+directory (an `Lstat` check, so a planted symlink is refused and nothing is
+written through it) and owned by the user the server runs as. The one thing the
+check changes is world write: if the directory is owned by that user and others
+can write to it, only that bit is cleared (`0777` becomes `0775`, `0757` becomes
+`0755`) and a warning is logged with the mode it had. Group bits, setgid, the
+sticky bit and POSIX ACLs are left exactly as they were (a `2775` directory stays
+`2775`), so group members keep the access they had. It is refused when it is
+owned by someone else (its mode is not touched), is a symlink or not a directory,
+or when removing world write fails. The check is `Lstat` plus `O_NOFOLLOW` on the
+file, not an `openat` walk, so a swap between the directory check and the file
+open is still possible in principle. **Deploy impact:** none is expected on a
+directory that is not world-writable, which includes a `2775` one with an ACL;
+a world-writable `.reports` is made not world-writable the first time any op that
+writes its report to the default directory runs (mark-missing-files,
+recover-missing-files, merge-same-path-dupes, metadata-cache-reap, the repoint
+ops, book-shape-report, dedupe-book-file-rows, and this one). Nothing has to be
+done by hand before deploying. A report directory behind an explicit report path
+is not vetted.
+
+The op's description now says what the op really does: it names the
+`unverified_outside_root` and `busy` outcomes, the conditional store, and the
+four refusals below.
+
+When a library root is configured, the op refuses to run before hashing
+anything, a dry run included, if any of these holds:
+
+- the root cannot be read;
+- the root is not an absolute path;
+- the root holds nothing but dot-prefixed entries, which is how an unmounted
+  share looks (an unmounted share answers not-found for every path);
+- `{root_dir}/.reports` cannot be created or written.
+
+The mount is also checked again during the run: a chunk that found files absent
+under the root has the root's mount re-checked before its rows are recorded, so a
+share that drops partway through stops the run with an error naming the chunk
+instead of recording the rest of the library as missing. The rows of the chunks
+before it stay in the report.
+
+The mount check is coarse. It rejects an empty or dot-only directory and
+nothing more: it does not prove the share is healthy, and a root that holds any
+non-dot entry passes. A run with no root configured works as before, without a
+report.
+
+- Fixed two flaky reconcile cancel tests,
+  `TestBuildReconcilePreviewCtx_CancelDuringStatPassFailsTheScan` ("stat pool
+  kept starting stats after cancel: 362 of 3000 ran" on a slow `-race` CI
+  runner) and `TestHashFilesConcurrent_CancelStopsStartingHashes`, which had the
+  same shape. The pools were correct (every worker checks `ctx` before it
+  stats or hashes); the tests' heartbeat hooks called `cancel()` outside any
+  lock, so a descheduled canceling goroutine let other workers keep working
+  before the context was canceled at all, and the tests counted those as work
+  started after cancel. The hooks now cancel under a lock and count only beats
+  that began after the cancel returned, and the tests assert that count stays
+  below the pool limit instead of a share of the total.
+- The worker-pool size used by the reconcile scan's stat, hash and shard pools
+  and by the primary election now comes from one helper, `cpuPoolLimit()`,
+  instead of five copies of `max(runtime.NumCPU(), 1)`; the tests read the same
+  value. The limit itself is unchanged.
+
+#### Retired-version readers: the sixth re-review findings
+
+A combine that needs the complete list of the rows holding a file, to decide
+whether it may take another book's row, now refuses before it writes anything
+while the in-memory index is still warming up after a restart. It used to warn
+and go on, which retired the absorbed book without its audio on the survivor, a
+lasting result of a condition that clears within a couple of minutes (the
+ordinary single-holder case included). The refusal is an error that says to retry
+later, and the same combine goes through once the index serves. A combine that
+loses the list while it runs still finishes with a warning, as before. A file held
+by several books, or by a book that no longer exists, is still a warning.
+
+The regroup apply (multi-disc collapse and duplicate-of merge) now reports what
+its combine left undone: a file that could not be attached to the survivor is put
+in the approve response's `note` (bulk approve: `notes`, one entry per item) and
+logged, instead of only reaching the undo journal. A review-apply function adds
+such lines with `database.AddApplyNotice`; the item is still recorded as applied,
+because the combine committed.
+
+The review page now shows that note. A single approve toasts it as a warning, and a
+bulk approve lists each item's note in the kind's report panel until it is
+dismissed. The held-holds lists (applying, needs attention) show it under the list
+after a Finish or an Approve. The same note also carries the existing "apply is
+off, nothing ran" and "finished an interrupted apply" texts, which the page used
+to drop on a single approve. The web client's `approveReviewItem` now returns
+`{item, note}` instead of the item alone.
+
+A file row that fails to write during a combine (a failed move of another book's
+row, a failed create) is now a warning on the combine's result and its undo
+journal, not a log line only, and the journal no longer keeps the "took the row
+from trashed book" note for a row that never moved.
+
+Undoing a combine whose reattached row came from a book that has since been
+purged now gives the row to the absorbed book whose file it is, with a warning,
+instead of leaving it on the survivor, whose duration and track list then
+included audio it never had. A row taken for the survivor's own file stays on the
+survivor.
+
+A combine refused while the library index is still loading now says so where the
+user sees it: the queued manual combine operation now ends completed with a
+recorded `retry_later` outcome (the toast is a warning, "The library is still
+loading; try the combine again shortly", with no Undo, because nothing was
+journaled or changed), and a single review approve answers 503
+`REVIEW_RETRY_LATER` (the hold stays pending; a bulk approve lists it under
+`skipped`). Both carry the reason, which used to reach only the server log behind
+a generic 500. The message
+no longer promises "a minute": it says to try again once the index has finished
+loading, and that a server restart is needed if it never does.
+
+A file row written during a combine whose fsync failed (applied, durability
+unknown) is now treated as attached, like the bulk move already was: the journal
+keeps its record so undo puts the row back, and the result carries a "durability
+unknown" warning instead of "nothing changed". The review page no longer toasts the
+routine "needs no apply step" note of a `separate` approve. A junk-titled book whose
+only file is held by a retired version is now listed as needing a person, not as a
+fragment for the consolidation fixer, which does not act on retired rows.
+
+- One audio clip that sends the Whisper decoder into an endless loop no longer
+  wedges every worker. Each worker (`scripts/whisper_mlx_server.py`) now runs
+  inference in a killable child process with a per-clip limit of
+  `max(60 s, 4 x audio duration)` (`WHISPER_TRANSCRIBE_MIN_TIMEOUT_S`,
+  `WHISPER_TRANSCRIBE_TIMEOUT_FACTOR`). On a timeout the child is killed and
+  restarted and the file gets a per-file `transcribe_timeout` error. Upload
+  handlers are plain `def`, so a busy worker keeps answering `/health`, which
+  now reports `busy_seconds`.
+- The transcribe dispatcher no longer reads its own 600 s timeout as "endpoints
+  unreachable" and re-sends the whole batch to every worker. A worker that is
+  reachable but past its limit is "worker stuck": the batch is split, the parts
+  retried on other workers, results that completed are kept, and a file that
+  leaves workers stuck on its own becomes a per-file `transcribe_timeout`.
+  Both transcribe ops stop after three stuck batches in a row instead of
+  deferring the library one batch at a time.
+- `transcribe_timeout` is counted per book file (and per file hash, so a
+  replaced file starts again). The second strike makes it a permanent per-file
+  result that both `transcribe-book-intros` and `transcribe-file-intros` skip;
+  `retry_failed` re-attempts it. A transcript that lands first is never
+  overwritten. The aggregate stats gain a `transcribe_timeout` count.
+- A strike counts once per file per run, and at most one strike per 12 hours
+  (`IntroTimeoutAt`): both transcribe ops stamp the registry op id as the run
+  id, so one stall seen by the per-book op and then by the per-file op is one
+  strike, not two. A retry round or a worker that stalls on everything cannot
+  walk a healthy file to the limit in one run. The worker-fault judgement is
+  made per HTTP response in the transport, where the denominator is the
+  worker's own batch: a response in which at least two clips timed out or
+  crashed and more than half did (or in which any clip says the worker cannot
+  decode) is a worker fault. Its verdicts are withheld, the worker is benched
+  for the run, and the sound results that came with it are kept. A worker that
+  faulted, for either reason, gets no more work for the rest of the dispatch
+  while an endpoint that has not faulted remains, and every strike it answered
+  in that dispatch (one from an earlier chunk of the faulted request included)
+  is withheld and its job re-sent to the endpoints that have not faulted. A
+  fault made of timeouts, crashes or kills benches every endpoint of that
+  machine (a Mac that swaps is ill on every port it serves), judged across all
+  the responses of the round before any is read; a `worker_misconfigured`
+  fault benches only its own port, and endpoints whose machine is unknown are
+  each their own machine. Once every endpoint is benched, a page of genuine
+  loopers and every machine being sick at once look the same, so each benched
+  machine is first sent a canary clip (`internal/transcribe/canary_clip.wav`:
+  2.2 s of synthesised speech, "Welcome to Gotham City.", 16 kHz mono PCM, made
+  with eSpeak NG by `scripts/make_canary_clip.sh`) through the worker's
+  `/transcribe` route: to every port of the machine that faulted, at most once
+  per machine per dispatch. Each canary first takes the port's request slot,
+  as every real request does, waiting at most one full request's ceiling (a
+  batch of 90 s clips by the worker's reported formula, about 104 min with the
+  defaults), and only then starts its 60 s limit (one clip's floor; the model
+  reload it pays measured about 7 s), so a sound worker busy with another
+  dispatch is not failed for its queue. A machine all of whose faulted ports
+  answer it without an error is decoding, so its timeouts are about the clips:
+  it is asked again and its answers are believed, and the jobs of a fault made
+  of timeouts go back in requests of at most two clips, so each clip reaches
+  its own verdict even when every worker faulted on the same page of looping
+  clips. A machine with a faulted port that does not answer it is sick: none of
+  its strikes in that dispatch count, it is remembered for the life of the
+  process so every later dispatch sends it the canary on every port before
+  giving it any work (one clip instead of a chunk of per-clip deadlines) and
+  forgets it once it answers, and its jobs go to a machine that passed, or,
+  when none did, the dispatch ends as `ErrPoolUnavailable` (the ops wait it
+  out and defer the unanswered files, nothing written for them). A canary that
+  could not get a slot in that time is no verdict: the machine stays benched
+  and is not remembered as sick, and a dispatch left with no machine to believe ends in an
+  error the ops defer on without counting it toward stopping the run. A
+  machine whose fault was mostly `decoder_killed` answers has its kills
+  withheld for the rest of the dispatch even after it passes (a two-second
+  clip cannot show that a decoder survives a long one under memory pressure):
+  each such job goes to another machine, or, with none, is deferred. The same
+  holds for a pool of one endpoint. A
+  worker that cannot decode at all (`worker_misconfigured`) is never sent back
+  the jobs it refused.
+  A dispatch that failed anyway has its timeouts
+  and crashes read as no answer (deferred, no strike) unless the dispatcher
+  itself condemned the file by sending it alone to several workers. A lone job
+  on a worker that is still answering `/health` is no longer blamed on the
+  clip. The per-book op charges a timeout to the file the request actually
+  carried, a retry-1 timeout is neither copied to the next file nor struck, and
+  a silent book whose retry lands on a file that already holds a result takes
+  that result (its real transcript, or the silence sentinel only when the held
+  result is silence) instead of being re-sent forever.
+- A transcript of a file clears that file's strikes (and a `transcribe_timeout`
+  verdict from them) when the bytes match. Strike writes go through
+  `ModifyBookFile` (the per-file lock) and, in the per-book op, are deferred
+  while a library scan is running instead of making the page wait. A book that
+  already has a transcript is no longer relabelled `transcribe_timeout` because
+  its first file holds the verdict, and a book that was never sent is no longer
+  counted as an attempt. A cancelled per-book run discards its page and writes
+  nothing.
+- Long worker requests are supervised by polling the worker's `/health`
+  (`busy_seconds`): an unreachable worker is an outage, a wedged one is "stuck",
+  and the fixed 600 s request timeout is now a backstop derived from the worker's
+  own limits. Stuck and outage are judged across every failing endpoint, not the
+  last one, free jobs go to idle endpoints, and every error path returns the
+  results that settled before it. Both ops apply those partial results and defer
+  only the unanswered files; a book the transport dropped is deferred, not
+  written as `whisper_error`. A worker older than `whisper_mlx_server.py` 1.8.0
+  (no `busy_seconds`) is not polled and keeps the backstop alone.
+- A worker child that cannot start is reported as `worker_misconfigured`
+  (deferred, nothing written, the worker benched for the run) on both
+  transports, and `/health` reports it as `child_start_error` for five minutes
+  (`WHISPER_CHILD_FAULT_TTL_S`) so the capability gate refuses that worker until
+  it recovers. A child that dies while holding a clip is a new per-file
+  `decoder_crashed` code, counted as a strike like a timeout so a clip that
+  deterministically kills the decoder ends as a verdict instead of being re-sent
+  forever. `/health` no longer waits on the upload thread pool and never answers
+  503: a slow filesystem check yields 200 with the busy fields and unreadable
+  roots, and a non-200 health response is not read as a probe.
+- The client sends its request timeout as `X-Whisper-Request-Timeout-S` on both
+  batch endpoints; a worker whose request outlives it stops after the clip in
+  flight and answers the rest at once (`whisper_error: request abandoned`), so
+  an abandoned request no longer keeps a worker busy for the length of the
+  batch. A path batch that hits a start fault answers its remaining clips
+  without waiting on extraction.
+- Both ops report progress while a whisper request is outstanding, the
+  per-book op's silence retry rounds included, so a long but live request is
+  not killed by the progress watchdog. The per-book op
+  stamps liveness only (it no longer writes a progress number that could step
+  the bar backwards), and the ticker stops even if the request panics.
+- Operation logs now record an error attribute as its text; it was written as
+  `{}` because an `error` value has no exported fields. A typed-nil error
+  attribute is written as `<nil>` instead of panicking the logging call.
+- A worker-fault response no longer re-queues its jobs without bound. Each job
+  remembers the workers that faulted on it; after two (or every worker, in a
+  smaller pool) it is deferred with the dispatcher's `worker_fault` code, never
+  struck. A fault from a one-worker pool defers the jobs instead of stopping
+  the run, and a worker that faulted in a dispatch is not asked again in it
+  while a worker that has not faulted remains. When every endpoint is benched, or every
+  worker's decoder is restarting, the dispatcher waits and re-checks every 30 s
+  for up to 6 minutes before reporting the pool unavailable
+  (`ErrPoolUnavailable`); the per-book op stops after five unavailable pages in
+  a row (`errWhisperUnavailable`), and any other page (answered, stuck, or
+  failed some third way) starts the count again. Under `require_gpu` an
+  endpoint whose `/health` cannot be read is waited for the same way, so a pool
+  whose tunnels are all down ends as `ErrPoolUnavailable`: the per-book op
+  counts it toward the five-page stop and the per-file op retries the batch and
+  then stops the run, instead of both deferring every page in under a second.
+- A second `transcribe_timeout` strike only counts when a different machine
+  gave it (`IntroTimeoutWorker`, the machines that struck the file). One sick
+  Mac can no longer make a clip's timeout permanent by itself. A worker is
+  identified by the `machine_id` its `/health` reports (`whisper_mlx_server.py`
+  1.14.0: a hash of `WHISPER_MACHINE_ID`, `/etc/machine-id` or the macOS
+  platform UUID, never the hostname, found on a background thread so `/health`
+  never runs `ioreg` on the event loop; with none of them yet the field is left
+  out and the thread retries every 30 s, and the first id found never changes),
+  stored as `m:<hash>`, a known machine. A worker that does not report one (an MLX worker older than 1.12.0,
+  or the faster-whisper `whisper_server.py`, which does not report it) is
+  identified by a hash of its URL, `u:<hash>`: an unknown machine, since two
+  such ports may be one box. An endpoint whose `/health` could not be read
+  names no machine. A strike from an unknown or unnamed machine can only be a
+  file's first: a later strike counts only when it names a known machine that
+  is not among the known machines already stored, so two ports on one Mac count
+  as one machine once the workers report `machine_id`, and before that their
+  second strike does not count. The first known machine to strike a file
+  struck only by unknown ones is recorded, not counted, because it may be one of
+  them under its new identity; its time starts the 12-hour minimum gap like a
+  counted strike, so a second known machine within that window is too soon. A condemnation by the dispatcher needs a lone
+  clip stuck on two different machines; it counts as two machines, and as a
+  strike even when the same pair condemned the file before, only when it names
+  two distinct known machines. What is stored, and returned in API responses,
+  is that opaque identity, never an endpoint address; a raw endpoint URL
+  stored by a pre-release build is dropped on the file's next strike write. A
+  file that carries a strike is sent to a healthy endpoint on another machine
+  when there is one, even at a lower priority, and to the same machine when
+  there is not; that holds both for ordinary allocation and for the small
+  requests the dispatcher re-sends after a split or a worker fault.
+  Trade-off: on any pool whose routing sends the file to the same machine each
+  time (a pool of one machine, or a night on which every other machine is
+  down), and on any pool in which no worker reports `machine_id` (faster-whisper
+  workers only), a timeout does not become permanent; the clip stays at its
+  strikes and is re-sent each run. Rollout: a worker that starts reporting
+  `machine_id` changes identity once; that first known identity is recorded
+  without a strike, so the upgrade cannot give a file a second strike from the
+  machine that gave the first. A file struck before the upgrade then needs
+  strikes from two different known machines to become permanent.
+- A one-file book whose 300 s clip timed out, or was condemned by the
+  dispatcher (which is what a worker older than the per-clip deadline
+  produces), is deferred rather than sealed as `[SILENCE]`: nothing listened
+  past 90 s. A multi-file book whose 300 s clip got no verdict is not sealed
+  either, at either retry stage; words from the second file are still its
+  answer. Cost: such a book (typically a long music intro) is re-sent on every
+  nightly run until its 300 s clip gets a verdict.
+- New worker codes: `decoder_killed` (the decoder child died from SIGKILL or
+  SIGTERM, or was never reaped) and `request_abandoned` (the request outlived
+  the client's deadline). `request_abandoned` is never a verdict (deferred, no
+  strike, no status). `decoder_killed` is a strike like a timeout: one kill
+  could be the machine's (macOS jetsam, an operator), so it turns permanent
+  only when a second machine also fails on the clip, and a decode that grows
+  until it is killed settles instead of being re-sent forever. A child that
+  crashes by itself is still `decoder_crashed`. The deadline header is rounded up to whole
+  seconds, so the worker never gives up before the client.
+- A first-pass timeout on a first file the per-file op already heard as silence
+  goes on to the 300 s retry instead of deferring the book on every run.
+- `clear_run_id` with a per-book run id also rolls back the book-level
+  `transcribe_timeout` that run stamped when it made a file permanent (only
+  while the book still holds exactly that verdict and no transcript). A book
+  stamped from its first file's permanent verdict without being sent is due
+  again once that file's verdict is gone. The clear summary now counts "book
+  results (transcripts or timeout verdicts)".
+- A liveness probe that cancels a request in the instant after the request
+  already failed (an HTTP 500, say) no longer relabels that failure as a stuck
+  or unreachable worker: the cause is read only when the request's error wraps
+  that cause or is `context.Canceled`.
+
+#### Deployment order
+
+Deploy the Go server **before** updating the Mac workers. A server older than
+this change does not know the new worker codes (`transcribe_timeout`,
+`decoder_crashed`, `decoder_killed`, `request_abandoned`) and stores each as a
+per-file and per-book `whisper_error`: not durable, but wrong. The new server
+reads `request_abandoned` as "no answer" and counts the other three as
+strikes. Old workers keep working against the
+new server: they never send the new codes, and the dispatcher condemns a clip
+that hangs one (deferred at retry 1, see above).
+
+#### Corrections, made before release
+
+- The worker-fault entry above said a faulted worker's jobs are re-queued on
+  other workers; they are re-queued at most until two workers (or every worker)
+  have faulted on them, then deferred.
+- The strike entry said the second strike makes a timeout permanent; it must
+  also come from a different worker.
+- The `decoder_crashed` entry said a clip that deterministically kills the
+  decoder ends as a verdict; it does once it has crashed two different
+  machines. On a one-machine pool it stays at one strike and is re-sent each
+  run, like a timeout.
+- The different-worker entry said a "worker" was an endpoint and that only a
+  single-worker setup never makes a timeout permanent. A worker is a machine
+  (two ports on one box are one), and the price is paid by any pool whose
+  routing sends the file to the same machine; a struck file is now routed to
+  another machine when one is healthy.
+- The worker-fault entry said a faulted worker's jobs are kept off it; that now
+  holds only for `worker_misconfigured`. A fault made of timeouts re-queues its
+  jobs in requests of at most two clips that any worker may take.
+- `decoder_killed` was listed as a worker code that is never a verdict; it is a
+  strike that only a second machine can make permanent (owner decision).
+- An unreachable `require_gpu` pool was not waited for: every endpoint was
+  refused at once as a capability problem. It is now paced and reported as
+  `ErrPoolUnavailable`.
+- The liveness entry said the cause is read only when the request's own error
+  is `context.Canceled`; it is also read when the error wraps the cause.
+- The unavailable-page streak was not strictly "in a row": a stuck page did not
+  reset it. Any page that is not unavailable now does.
+- The progress entry did not cover the per-book op's silence retry rounds,
+  which ran without the liveness tick.
+- The worker-fault entry said only a `worker_misconfigured` worker had its jobs
+  kept off it and that the jobs of a fault made of timeouts could go to any
+  worker. The worker that timed out took them too, and its per-clip timeouts on
+  them were believed, so a sick worker gave first strikes to healthy files (8
+  of 32 on two workers in review; 16 of 32 when one Mac port faulted and its
+  three sibling ports took the re-sent clips). A worker that faulted for any
+  reason now gets no more work in that dispatch while one that has not faulted
+  remains, a timeout fault benches every port of its machine, and its strikes
+  from that dispatch are withheld.
+- The different-machine entry said two server ports on one Mac never count as
+  two machines. That held only once the workers report `machine_id`: two old
+  ports were two machines, a worker's upgrade gave it a new identity that could
+  strike the same file again, and a condemnation by two old ports counted as
+  two machines. Identities that are not `m:` now never give a counted later
+  strike, the first known one after them is recorded only, and a condemnation
+  counts as two machines only with two distinct known ones.
+- The different-machine entry listed the hostname as a `machine_id` source. A
+  worker that fell back to it while its sibling ports read the platform UUID
+  made one Mac two known machines; the hostname is no longer a source, and a
+  worker with no stable source reports no id.
+- Recording the first known machine on a file did not start the minimum gap, so
+  a second known machine an hour later made the file permanent the same night.
+- Once every endpoint had faulted, every one was believed again, so a lone
+  sick Mac (on a night llm1 was out of the pool) gave a page of healthy files
+  first strikes, and both machines sick on two nights could make them
+  permanent. A faulted machine is now believed again only after it answers the
+  canary clip.
+- The canary clip skipped the endpoint's request slot, so a sound worker busy
+  with another page's chunk queued it behind that chunk and failed it, and a
+  page of genuine loopers crowded by concurrent pages ended as
+  `ErrPoolUnavailable` instead of converging. It went to the machine's first
+  port rather than the one that faulted, so one sick worker process could be
+  vouched for by its sound sibling, and a machine whose fault was kills was
+  believed about kills after a canary that cannot detect them. Each dispatch
+  started with no memory of a machine that had failed the canary, so every
+  page or try paid a fresh chunk of per-clip deadlines on it before the run
+  stopped (a cooldown would not have helped: the dispatcher waits one out and
+  then sends the chunk).
+- The routing entry covered only ordinary allocation. The requests re-sent
+  after a split or a worker fault took the first endpoint by priority, the
+  machine that had already struck the file included.
+
+#### `book_file` read-modify-write commits are now compare-and-swap
+
+Every `book_file` writer that read a row and wrote it back (`SetBookFileHash`,
+`ModifyBookFile`, `UpdateBookFile`/`UpsertBookFile`, `PatchBookFileFields`,
+`SetBookFileIntro`/`ClearBookFileIntro`, the scan-cache stamp, the batch
+upsert and create paths, `MoveBookFilesToBook`, and retire/unretire/rehome)
+read the row before taking the owner stripe and committed on a key-exists
+check only. A writer that takes no file stripe (a create claiming an iTunes ID,
+the bulk moves, the deletes, the fingerprint sweeps, the scan-cache stamp) could
+land in that window and be silently reverted, leaving stale secondary-index keys
+(`book_file_hash:`, `book_file_pid:`) behind. (`BatchUpsertBookFiles` now takes
+the file stripes of the rows it rewrites, so it no longer races the single-row
+writers; the compare still covers it against the writers above.) The commit now
+compares the stored bytes with the
+bytes the writer read, under the owner stripe; on a mismatch the writer
+re-reads, re-applies its own change (`ModifyBookFile` re-runs its callback, so
+it may run more than once), and after `maxStageRetries` attempts returns the new
+typed `ErrBookFileConflict` (`*BookFileConflictError`). Index maintenance is
+derived from the freshly read row. `ClearAllAcoustIDFingerprints` and
+`SweepBookFileSegDrop` now commit in chunks under the owner stripes with the same
+compare; a row that keeps changing is left as stored and counted
+(`SweepBookFileSegDropResult.Conflicts`, an error wrapping `ErrBookFileConflict`
+from the fingerprint clear, which then skips the LSH wipe). `dedup.bookfile-seg-drop`
+no longer marks itself done when rows were left unswept, and
+`backfill-file-hashes` files a row whose write the store gave up on after other writers kept changing it (`ErrBookFileConflict`) under the report's `busy` bucket, retried next run, not as a write error.
+
+Follow-up review fixes on the same change:
+
+- The two sweeps now commit 64 rows per chunk (was 256, which could pin most of
+  the 256 owner stripes at once), give each row its own retry budget, follow a row
+  that moved to another book while the sweep ran instead of counting it as busy,
+  and give busy rows one more pass at the end. `ClearAllAcoustIDFingerprints`
+  returns `*BookFileSweepConflictError` (still `ErrBookFileConflict`) when rows
+  are left, and `acoustid.reset-all` then reports `Reset INCOMPLETE`, keeps the LSH
+  index, and tells the operator to run it again instead of failing the op.
+- `DeleteBookFile`, `DeleteBookFilesForBook` and `DeleteBookFilesByIDs` now share
+  one commit that compares each row's stored bytes under the owner stripe (they
+  checked existence at most), so a writer that changed a row's hash or path
+  mid-delete (a bulk move, a PID transfer) no longer leaves index keys pointing at the deleted row. A batch that
+  keeps losing the race gives up after `maxBatchStageRounds` with an error
+  wrapping `ErrBookFileConflict` and deletes nothing.
+- Whole-batch writers (move, retire, unretire, rehome, batch upsert) share a
+  bounded re-stage budget, and `tag-backfill` words a row that kept changing as
+  "next run picks it up" rather than as a deletion.
+- `maintenance.repoint-book-file-rows` journals one row per repoint however many
+  times the callback re-runs, and voids it when the write is refused;
+  `opswriter.Writer.ModifyBookFile` drops a discarded run's diff when a later run
+  skips; `repairs.Writer.RepointBookFile` voids its journal row on
+  `ErrBookFileConflict`.
+- `UpsertBookFile` re-matches its row when a retry finds the PID it matched on has
+  moved to another row, instead of pointing `book_file_pid:` back at the old one.
+- `GetBookFileByID`, `GetBookFileByPath` and `GetBookFileByPID` decode straight
+  from the Pebble buffer again (no copy of the stored row).
+- Removed the dead `ClearITunesPID` and `MarkFileImportedFromDeluge` store
+  methods (no production callers; both were whole-row read-modify-writes).
+
+Second round of review fixes:
+
+- `DeleteBookFilesByIDs` now takes `[]BookFileRef` (book and file id) and returns
+  the rows it deleted. A row that now belongs to another book than the caller
+  judged it under, or that is listed under two books, is refused with the new
+  `ErrBookFileOwnerChanged` (nothing deleted, not retried as busy). The dedupe
+  delete journal rewrites a row whose pre-image differs from the bytes actually
+  deleted, and voids every journal row when the delete deleted nothing.
+- A batch whose rows keep changing past the re-stage budget now refuses the
+  stale rows (`*BookFileRowsRefusedError`) and commits the rest, instead of
+  abandoning the whole batch; the hard backstop at twice the budget still gives
+  up with `ErrBookFileConflict`. Between rounds the batch backs off with jitter
+  and re-reads only the rows that changed.
+- A combine whose absorbed files are busy now answers as a refusal before moving
+  any file (the error wraps `ErrBookFileConflict`) instead of leaving a half-done
+  combine, and `merge.IsRetryLater` now recognises it, so the combine operation
+  ends as "retry later" (`BookCombineOpResult.RetryLater`) rather than failed. (A review approve whose
+  bulk move is busy is held as `REVIEW_APPLY_PARTIAL`; `REVIEW_RETRY_LATER` is the
+  library-index-still-loading case.)
+- A row stored under a key that names another book than its own `BookID` now
+  fails the deletes with the new `ErrBookFileKeyMismatch` instead of reading as
+  vanished and ending as a busy row no retry can clear. The two sweeps rewrite
+  such a row in place, at the key it is stored at, as they always did.
+- A sweep chunk refused over one changed row re-stages only that row.
+- `maintenance.repoint-book-file-rows` voids a repoint's journal row only when
+  its write provably did not happen, the rule `repairs.Writer.RepointBookFile`
+  already follows.
+- The incomplete-reset message of `acoustid.reset-all` no longer tells the
+  operator the rescan was not queued (the reset endpoint queues it either way).
+- `DeleteBookFilesByIDs` commits in chunks of 64 rows, so the stored bytes it holds
+  to compare at a commit stay bounded (about a gigabyte for a 2,000-row call of
+  fingerprinted rows before). Refusals are checked once at the start of the call,
+  not held for its whole length; a later chunk that fails after earlier ones
+  committed returns the rows that are gone together with the error, and the dedupe
+  delete journal keeps those rows' journal and voids only the others.
+
+Third round of review fixes:
+
+- The dedupe and cross-folder row cleanups now report a chunked delete that
+  committed some chunks and then failed as partial: the rows the store reports as
+  deleted are counted as deleted and their books recomputed, the rest are marked
+  failed, and the run summary says so.
+- The combine operation's retry-later message (`COMBINE_RETRY_LATER_MESSAGE`, and
+  the server's matching result message) now says the library is still loading
+  or other writers are changing the files the combine moves, and that no files
+  were moved from the other books, instead of naming only the loading library;
+  the review lane's `REVIEW_RETRY_LATER` toast no longer claims the index is the only cause.
+
+Fourth round of review fixes:
+
+- The combine operation's retry-later message now names the cause that applies
+  instead of both: "The library is still loading; ..." when the library index is
+  loading, "Other writers are changing the files the combine moves; ..." when the
+  bulk move gave up on busy rows. The result carries a new `retry_cause` (`busy` or
+  `loading`) that the web app picks its text by (`COMBINE_RETRY_LATER_LOADING_MESSAGE`
+  and `COMBINE_RETRY_LATER_BUSY_MESSAGE` replace `COMBINE_RETRY_LATER_MESSAGE`).
+- `ClearIntroTimeouts` no longer reports `cleared` when the row was deleted
+  between its read and its commit and nothing was written.
+
+- Discarding a trashed book's listening progress no longer reports "progress was erased and the book was kept" when nothing had been erased; a refused delete with no progress cleared now reports the plain refusal. A refused delete after a stored row was removed (a state row that kept only a progress-reset marker) still reports the erased-and-kept error, so its audit row is written.
+- The nightly purge now refreshes cached book lists after a run whose only effect was moving listening progress to another copy before a refused delete, as "Purge now" already did.
+- Bulk requests without permission information now fail closed for the delete, permanent delete and restore actions as well as for edits: the delete actions need library.delete and a restore of a trashed book needs library.organize. `merge.RestoreFromTrash` takes a judge that runs inside its write on the locked row, so a restore payload that also sets the trash label is judged in both directions. Test fixtures from the review now use Gotham titles and paths.
+- Repaired two test helpers that no longer compiled their fixtures against the current store: a retired version now carries its retire time, and the mock store answers the two newer retired-row lookups.
+- A restore judge now refuses before the book's merge redirect is removed (the judge runs on the row as the write will leave it, then again inside the write), so a refusal on the row as read never touches the redirect (a row that changes between the read and the write is still refused inside the write, and the redirect is then put back, which is now tested). A payload that restores a trashed book and re-labels it "deleted" in one write is refused for every caller instead of leaving the book in the trash by label alone with its merge link cleared, and a book another change trashed mid-edit gets a refusal that says so. A discard whose delete was then refused after it erased only a reset-marker or empty state row now records that in its audit row (`records_cleared`), and the trash page's error text no longer says progress was erased in that case.
+
+- `backfill-file-hashes` can now finish a library too big for one run's 4 hour
+  limit. A prod dry run over 791,451 rows was cancelled at 307,328 by
+  "timeout: run exceeded 4h0m0s" and could never have completed, because a
+  timed-out run is final and a retry is a new operation whose progress report
+  (named after the operation id) starts from row zero. The job now watches its
+  own deadline and, once a chunk is safely on disk and less than 5 minutes (or
+  twice its slowest chunk) of the limit is left, hands itself back with the new
+  `maintenance.ErrContinueInPlace` (`registry.ErrContinueInPlace`). The registry
+  records it as a pause and restarts the same operation under the same id, from
+  its report, with a fresh 4 hour limit. The registry honours the pause only when
+  that attempt reported progress past where it started; a run that returns the
+  sentinel without progress is recorded as failed with a message saying so,
+  instead of being restarted for ever. The limit still kills a
+  stuck run: a deadline that fires is still `timed_out`, a watchdog kill is
+  still `canceled`, and the sentinel is honoured only for an in-process
+  `ResumeRestart` run whose context is still live (anything else is an ordinary
+  failure carrying the error text).
+- The maintenance job wrapper no longer writes an activity "done" summary when a
+  run pauses this way; the summary comes when the operation really ends.
+- A pause that continues in place is no longer announced as an ending: no
+  `op.terminal` event (so the operations bell and the legacy row keep showing the
+  op as running), no "operation finished" log line, and no failure told to
+  dependents. The old attempt's progress writer is now finished before the row is
+  re-queued, so it can no longer overwrite the resumed attempt's progress. The
+  summary is left out only when the registry really restarts the run.
+- A resumed `backfill-file-hashes` attempt now reports the position the earlier
+  attempt stopped at instead of counting from zero, so the progress bar no longer
+  falls back to the start at a pause and `ops.items` does not count the finished
+  rows again. A row counted busy (changed while its file was hashed) is retried by
+  the next operation, not by the next attempt of the same one.
+
+- A copy of a retired multi-file version that is still tagged with the trashed book's organizer ID is now recognised as retired content. Its segments are hashed before the check, so the scan no longer relinks the trashed book onto the copy and gives it live files.
+- The organizer refuses a collision whose byte-identical occupant is a retired version's file, instead of quarantining the live source and marking its row Missing. Nothing moves, and the failure names the retired row.
+- A rename batch containing a collision with a retired occupant is refused as a whole before any sibling file is touched, so a refused batch no longer leaves earlier entries renamed, quarantined or marked Missing.
+- When the scan cannot hash a tagged copy of a trashed book's content (an unreadable segment, or no hash for a single file), it now skips the import with "retired-version check undeterminable" instead of reading the shortfall as "not retired" and relinking the trashed book onto the copy. The files import on a later scan once they can be read.
+- Reverting a repoint no longer hands a path key back to a retired owner while any live row, an iTunes row included, carries the path.
+- `MockStore.HasRetiredVersions` follows the complete reads a test stubs, so a MockStore scanner test can reach the retired-content check.
+- Test fixes: the retired repoint test looks up its row at the right path, the deluge import and lost-update fakes resolve the retired reader, the live-outranks-retired revert test can now fail, a generic path-lookup error stopping a combine is covered again, and a duplicate provenance test is gone.
+
+#### Whisper dispatcher waits out a cooldown before it asks a remembered machine the canary clip
+
+A machine that failed the canary clip in an earlier dispatch is asked it on
+every port before it gets work. When one of its ports was in cooldown, the
+dispatcher benched the machine without asking and without waiting, so with the
+Mac as the only machine the dispatch ended as `ErrPoolUnavailable` at once. The
+book op counts that toward its five-page stop, so six pages in flight could end
+the night's run inside one cooldown (at most five minutes) for a Mac that would
+have passed the canary afterwards. The dispatch now waits the cooldown out,
+bounded by the same pacing allowance as the round loop (`poolPaceMax`, in steps
+of `poolPaceInterval`), then asks every port. A cooldown that ends after the
+allowance is no verdict, like a canary that could not get a request slot, and is
+deferred at once rather than slept through: the dispatch defers the jobs without
+counting toward the ops' stop limits, and it is never `ErrPoolUnavailable` for
+this case. A cancelled op returns the cancellation from the wait. The lone
+endpoint path waits the same way, and its warning reports how long it really
+waited.
+
+When another machine that is out of cooldown and whose `/health` was read can
+take the work, the remembered machine is set aside, not benched for good: if
+that machine then fails its own canary clip and nothing else can work, the
+remembered machine is asked (after its cooldown, within the same allowance)
+before the dispatch concludes anything, so a pool is never reported as "no
+machine answered the canary" about a machine that was never asked. A machine
+another dispatch has already forgotten while this one waited is not asked.
+
+After the wait the machine's ports are probed again before the canary is sent.
+A port that wedged in the meantime is dropped from the dispatch (and, with
+nothing left, the dispatch ends as a stuck pool, not as a sick machine); a port
+whose decoder is restarting or that cannot be reached is waited for like a
+cooldown, then dropped. A port that is probed again is also judged by who
+answers there (see "A port that changes hands while a dispatch waits" below).
+The lone-endpoint path keeps the identities it started with, so a worker that
+begins to report a machine id during the wait does not make the machine being
+waited for look as if another dispatch had forgotten it, and the next
+dispatch's own gate moves the memory.
+
+#### A whisper machine is forgotten as sick only when every port of it has answered
+
+The lone-endpoint path forgot a remembered machine as soon as the one port that
+passed the gate answered the canary clip, although its siblings had been refused
+(wedged, decoder restarting, mount unreadable) and had not been asked. When they
+came back, the pool sent them work with no question asked. The pool path had the
+same hole whenever a sibling was refused. A machine is now forgotten only when
+no endpoint the gate refused, and no unprobed endpoint it kept, is a port of it,
+so it stays remembered until the next dispatch has asked every port. An
+endpoint whose `/health` cannot be read counts as a port of a remembered machine
+only if a probe once reported it as one: on a production pool every endpoint sets
+`require_gpu`, so an unrelated machine's dead tunnel is refused with no machine
+and used to keep every remembered machine remembered for as long as it was down.
+
+#### A failure another dispatch records is not erased by an older answer
+
+Two dispatches asking the same machine could lose an update: one dispatch's pass
+cleared the failure the other had just recorded. Each recorded failure now has
+its own generation, taken from a counter that never repeats, and a pass forgets
+the machine only if no newer failure was recorded since it began to ask. A
+preflight canary that fails is recorded again, so a concurrent clear cannot
+lose it.
+
+#### Whisper canary failures follow a worker that starts to report a machine id
+
+`canaryFailed` is keyed by machine identity. A worker that reported no
+`machine_id` (keyed `u:` plus a hash of its URL) or could not be probed (keyed
+`?` plus the same hash) can start to report one (`m:`) inside the same process,
+with nothing repaired: the worker retries its machine-id lookup every 30 s after
+a first miss. Its old entry named an identity that is never seen again and was
+never removed, and dropping it would have forgotten a machine that had just
+failed the canary. The dispatcher now moves the entry, with the ports known for
+it, to the worker's new identity.
+
+#### The canary memory follows a machine across its ports and identities
+
+Review of the first version found six ways the memory could lose or misplace a
+remembered machine, all fixed here.
+
+A machine is now remembered under a stable key even when a concurrent dispatch
+moves the identity it was recorded under (`u:`/`?` to `m:`, or back). The record
+keeps a url-to-machine map for the last identity a worker reported as a machine
+(`m:`), and the check that a machine was "forgotten while this dispatch waited"
+asks whether any port of it is still remembered, not whether the original key
+is. A weaker identity (no machine id reported, or the probe failed) never takes
+a port from a machine: it only joins an entry of its own, or the entry that
+already remembers its URL. Before, a port that briefly reported no machine id
+could delete itself from the machine's ports, and the machine then looked
+forgotten while it was still failing.
+
+A port that was already down or refused with no machine id at the moment its
+machine failed the canary is recorded as a port of that machine once the url map
+knows it, so it is asked before it takes work, and the machine is not forgotten
+while it is unheard.
+
+A job stuck alone on a wedged machine with a remembered machine set aside now
+asks that machine (after its cooldown, within the pacing allowance) instead of
+ending as "no endpoint is left". The same path already existed for a pool whose
+healthy list was empty; it is now also taken when work could not be placed on
+the endpoints that were healthy.
+
+Smaller fixes on the same path:
+
+- A cancelled op during the re-probe that follows the wait returns the
+  cancellation, not `ErrPoolUnavailable`, on the lone-endpoint path.
+- The canary after the wait is sent with the fresh `/health` the re-probe just
+  read, not the one read before the wait.
+- The wait target is the earliest time at which a remembered machine can be
+  asked: the latest cooldown end over that machine's ports, taken as the
+  minimum over machines. A target past the allowance defers the jobs at once.
+- A stand-in that failed in this dispatch is not waited for.
+- A probed endpoint refused for capability (no GPU, decoder restarting) moves
+  its memory to its new identity like a kept one does.
+- The url-to-machine map and the remembered ports are bounded to the configured
+  endpoints, so a retired URL does not hold a machine remembered for ever.
+
+#### A worker's machine is resolved by its address, once, and used everywhere
+
+Review of the previous change found the dispatcher naming one machine three ways
+inside a single dispatch: the canary memory resolved a worker that missed its
+machine id (`u:`) to the machine its URL last reported, but the sick-machine
+bench, the condemnation limit, the kills held from a machine, the identity
+stored with an answer and a stuck file's condemnation, and the steering of a
+struck file away from a machine each used the raw answer. A machine that timed
+out on one port was benched on its other ports only if they answered with the
+same identity, a lone file stuck on two ports of one machine counted two
+machines, and a condemnation recorded under `u:` was not matched against the
+same machine answering as `m:` later.
+
+The gate now resolves each worker's identity once, from what the probe read and
+what this process knows of the address, and every later use takes that value:
+the canary memory, the sick-machine bench, the condemnation limit (counted again
+by the same identities when ports are dropped), the kills held, the key a lone
+endpoint records its failure under, the identity stored with an answer and with
+a condemnation, and the steering. A stored condemnation or strike that names a
+raw `u:` or `m:` id still matches the endpoint by that id or by the machine it
+resolves to.
+
+#### A worker that cannot report a machine id is never given a machine's memory
+
+A weak identity is bridged to a machine through the address only when the
+worker's `/health` reports `backend` `mlx` (`scripts/whisper_mlx_server.py`, the
+one server that reports a machine id at all and sometimes misses it in its first
+2.5 s). `scripts/whisper_server.py` reports `faster-whisper` and never a machine
+id, so a worker of that kind at the address of a remembered machine is another
+worker, not that machine: it is not asked the machine's canary clip, and its
+address leaves the machine's ports. A refusal now records whether its worker can
+report an id, so a refused worker is judged the same way.
+
+#### A failure on a port that answers as `u:` is the machine's failure
+
+A canary failed by a port that answered as `u:`, whose address last reported a
+machine, was recorded under the weak key alone. The machine's other ports were
+not remembered as sick and were sent a chunk with no canary. The failure is now
+recorded on the machine the address last reported.
+
+#### A configured port that has been down for a day stops holding its machine remembered
+
+A machine that failed the canary stays remembered while one of its ports is down,
+because the port may come back and would be sent work with no canary. A port left
+in the configuration after its tunnel was retired kept the machine remembered for
+ever, and a sound machine was asked a canary clip on every dispatch. A port that
+has refused every probe for 24 hours (counted from the first refusal of the run;
+any answered probe ends the run, and a probe cut short by a cancelled op counts
+for nothing) no longer counts as a port of its machine.
+
+#### Smaller changes in the same area
+
+- An entry of the canary memory whose every address is no longer configured is
+  dropped with them, not kept for as long as the process lives.
+- The helpers only the tests used (`failedCanaryBefore`, `clearCanaryFailed`, the
+  package-level `hasUnheardPort`) moved into a `_test.go` file, and the stray doc
+  comment above `hasUnheardPort` became its method comment.
+- `resolveCanaryKeyLocked` no longer asks the address map first: every address it
+  gives a machine is already one of that machine's ports.
+
+#### A refused port forgets its machine, and an old weak strike steers off every port of its machine
+
+A worker that missed its machine id (`u:`) is taken for the machine its address
+last reported. That link is now ended by a refused probe: a refused address is the
+one moment it can have changed hands (a tunnel that dropped and came back from
+another Mac), so a worker that answers as `u:` afterwards stands for itself and
+is not credited with the old machine's id, strikes or condemnations. The canary
+memory does not depend on the link and still finds a remembered machine through
+its ports, and a port that is refused stays a port of its machine until it has
+been down 24 hours. A URL that changes hands between two probes that both answer
+is not noticed; production runs one server port per Mac, so this is accepted.
+
+A strike stored as `u:` plus the hash of one port, while the machine behind that
+port answered as a weak identity, now steers a file away from every port of that
+machine and not only the one the hash was made from. A wrong match only steers a
+file further away.
+
+The single-Mac tunnel template (`deploy/launchd/com.jdfalk.whisper-tunnel.plist`)
+and `scripts/setup_mac_ai_worker.py` host index 0 both use server port 19848, so
+a Mac on each race for one port. Both files and the Whisper docs now say so; the
+ports are unchanged.
+
+A file struck by a machine is steered away from a port of that machine that
+answers as a weak identity after a refused probe, as it already was away from
+one the link still named. A wrong match only steers a file further away.
+
+#### A port that changes hands while a dispatch waits is not credited to the machine that used to be behind it
+
+A pool probes a port again once a cooldown it was seen in has ended, and uses it
+only if the worker that answers then is the one the dispatch knew when it began.
+That covers the wait for a remembered machine's cooldown, the round loop's wait
+for a port an earlier dispatch put into cooldown, a stand-in whose cooldown ends
+inside the first wait, and a port whose cooldown ends while the dispatch works
+other ports or while its own first probe is in flight. Any difference drops the port from the dispatch like
+a refusal: one machine for another, a machine's port that was refused and now
+answers weakly, a worker that cannot report an id where one could (or the
+reverse), a worker that gained a machine id since it was frozen as `u:`, and a
+port that could not be read when the dispatch began and reads now, since there
+was nothing to compare it with. A port that cannot be read after the wait is not
+used either: after a remembered machine's wait it is waited for like a decoder
+that is restarting, then dropped (the round loop's wait does the same, below).
+
+A dropped port is asked no canary clip, so its answer cannot forget the machine
+that used to be behind it. It is sent no work and given no timeout strike under
+that machine's name, which let one machine make a file permanent on its own. It
+cannot be counted as a second machine toward a condemnation, and it cannot escape
+the bench of the machine it turned out to be. The next dispatch's gate keys it by
+the id it reports, and the canary memory of its address follows it. The identity
+stored with the condemnation of a file by two machines is that of the worker that
+answered at each endpoint. The lone endpoint resolves the memory when it asks,
+after the gate has moved the port to the identity it reports, so it keeps a
+worker that gained its id and stores both identities (the one the dispatch knew
+it by and the machine it reports), so the store can still learn the machine; any
+other difference defers its jobs.
+
+The round loop's wait steps by `poolPaceInterval`, as the wait for a remembered
+machine does, so a cooldown that another dispatch clears early is noticed at once
+and not after the whole cooldown (up to five minutes). Every port seen in a
+cooldown (as the dispatch begins, in each step of a wait, and each time the round
+loop makes its list of ports that can take work) is probed once after that
+cooldown ends, before it takes work or is taken as a stand-in: one `/health` per
+port per cooldown end. A port that
+cannot be read then is kept out of the work and read again at the later steps of
+the wait; it is dropped once the pacing allowance is spent, and while other ports
+keep working it simply stays out.
+
+A pool whose last cooldown ended between the round loop making its list of ports
+and asking how long to wait used to answer `ErrPoolUnavailable` ("every endpoint
+... in cooldown after waiting 6m") having waited for nothing; it now looks again.
+
+A pool left with nothing to send to because its ports changed hands ended as
+"refused by capability requirements", which sends an operator hunting for a box
+that is not on a GPU. It now ends as the lone endpoint does, wrapping
+`errPortChangedHands` (an unrecognised transport error that the ops defer on
+without counting toward stopping the run), when at least one port changed hands
+and every other refusal is a port that is unreachable, or a port that is stuck.
+With stuck ports among them the error names them, but it is not a stuck pool: the
+ports that changed hands are not wedged and the next dispatch's gate keys them,
+so the ops do not count the page toward their stuck streak. A pool of nothing but
+stuck ports is still a stuck pool, a pool of nothing but unreachable ports is
+still `ErrPoolUnavailable`, and a capability refusal the wait itself made beside
+them keeps the error that names it. Only the refusals made since the dispatch
+began are what the error is about: a port the start gate refused for what it
+offers (no GPU) was never part of the pool, so it does not turn a pool emptied by
+ports that changed hands into "refused by capability requirements".
+
+#### A port that identifies no machine is never counted as one, and only a port that reports a machine's id answers for it
+
+A port whose `/health` could not be read when a dispatch began is frozen as `?`
+plus the hash of its URL. It is evidence of no machine, so it is no longer counted
+as one toward the number of machines a condemnation needs, with or without a
+cooldown wait: one box with a readable port and an unreadable one used to be "two
+machines", and a lone file that hung the decoder on both was condemned by "two
+workers". The unreadable port still counts as an endpoint, and a job stuck on it
+is kept off it, but only the machines it left stuck count toward the verdict
+(which names them alone). A pool in which no port could be read knows no machine
+and condemns nothing.
+
+A remembered machine is asked its canary clip, and forgotten, only through a port
+that reports the machine's own id, or one whose address has answered continuously
+since it last reported that id (a worker that lost its id for a moment). A port
+that answers weakly (`u:`) or not at all (`?`) is not part of a machine's group
+merely because the machine's port list names its address: a refused probe ends
+the link of an address to its machine, and the worker that answers there next
+stands for itself. It used to be asked the machine's clip on the machine's behalf
+and, by passing, forgot a machine that had never been asked, so the machine's
+other ports were sent work with no canary. A weak port with no link takes work as
+itself and leaves the machine's failure standing; the machine is still asked on
+any port that reports its id. The cost is that a machine which restarted behind a
+port refused in between takes work on that port, as a worker of its own, until a
+port of it reports its id and is asked.
+
+A lone job that hangs the only known machine is no longer condemned on that
+machine's word while a port whose machine is unknown (a `?` key) has not been
+shown to hang it: that port may be a second machine, so the job is sent to it
+first. A request there that merely outlived its ceiling (the worker was not
+wedged) is no evidence about the file and does not count as having tried it, so
+the outcome does not depend on the order the two ports failed in. If the unknown
+port cannot take the job in this dispatch (it is in cooldown, unreadable,
+benched, or only overran), the job is not condemned and not struck, and the
+dispatch ends as `ErrWorkerStuck`: it counts toward the ops' stuck streak, so a
+pool that keeps hitting this stops the run instead of spinning on the same jobs
+(only when the unknown port was sent the job and its `/health` could not be read
+afterwards is the error a recognised transport failure instead, which the ops
+count as an outage). An unknown port is
+never waited for through a cooldown, since after the wait it could only be
+dropped: the dispatch ends at once and not after the pacing allowance (six
+minutes). Once the job has been stuck on that port too the verdict stands,
+naming only the machines.
+
+A pool whose split parts could be placed on none of the ports that could take
+work ended as a stuck pool when a port's cooldown ended while the second probe
+of the round was in flight; it now looks again and probes that port first.
+
+A job's condemnation keeps the machines it was stuck on alone, dropped or not: a
+port dropped in the middle of a dispatch (it changed hands, or could not be read
+after a wait) still counts toward that job's verdict, while the number of
+machines needed is counted again from the ports that are left and can fall to
+one. This is as it was and is now stated in the code.
+
+A port whose cooldown ended is now probed again before the canary clip is sent to
+it, in both places the clip is sent: the pool-wide canary that runs when every
+port has faulted, and the clip a machine that failed it in an earlier dispatch is
+asked at the start. Until now a port that faulted in an earlier round, was in
+cooldown, and came out of it while a later round ran could be sent the clip
+without a probe, and a tunnel that had come back from another Mac was credited
+(or blamed) under the machine the dispatch had known. A port that changed hands
+is dropped and never asked, one whose `/health` cannot be read is not asked, and
+a pool left with no port ends as the pool emptied. The answers of the round in
+which this is found are still read before the dispatch ends.
+
+A pool left with only ports it does not wait for (a `?` key) in cooldown, after
+a port was dropped in the middle of the dispatch, ends as the pool emptied again
+(a deferral the ops do not count as an outage), as it did before unknown ports
+stopped being waited for, and not as `ErrPoolUnavailable`. The unavailable error
+no longer claims a wait the dispatch did not make; it says how long it slept.
+
+The part-placing wait looks for a port that came out of its cooldown a second
+time, after it finds nothing to wait for, so a cooldown that ends between the two
+looks no longer ends the dispatch as stuck.
+
+Whether a port needs to be probed again no longer depends on a look at its
+cooldown. The pool's health now counts every failure ever marked for an endpoint
+(`aidispatch.Health.FailureGeneration`, which a success never takes back), and
+the dispatch records, for each port, that count and whether it was in a cooldown
+when it last probed it. A port is probed again before it takes work or is sent
+the canary clip when it has failed since, or was in a cooldown then. This
+catches a cooldown that another dispatch starts and ends inside one round (a 30
+second one inside a request of several minutes), which a sample of
+`InCooldown` never sees: such a port is no longer sent the clip, and the next
+round's work, as the machine it answered as before the cooldown.
+
+A pool left with only ports it does not wait for (`?` keys) in cooldown after a
+port was dropped ends as the pool emptied only when a port changed hands. A
+port that wedged during the wait beside a port in a long cooldown is an outage
+of the pool again (`ErrPoolUnavailable`), not a stuck one, and the "all N
+endpoints are stuck" count is of the ports the refusals judged. The ports the
+canary's probes drop are dropped after the round's answers are judged, not
+before.
+
+- `maintenance.credits-backfill` dry runs, cohorts and a single full apply now agree. A book whose only unknown narrator names come from splitting its credit is re-evaluated after the first pass with every name another eligible book credits whole (unsplit) counted as existing, so the dry run lists it as a fill instead of `narrator_new_from_split` and the apply writes it. A split credit never creates a record without `allow`: it only links to a record another book creates. Within a `limit` or `book_ids` cohort that leaves that book out, the split book waits (`narrator_waiting_on_creator`, informational, no `limit` place used) and is written in the cohort that creates the record or a later one. The spelling settle runs to a fixpoint over the creating books that survive it. A split book's own spelling vote can refuse its only creator ("Renee Montoya" against "Renée Montoya" tie and the accent wins, which reads back as the creator's own author): that key is then settled again by its creators' spellings alone, the split book is respelled to the result and checked against it, and both are written in the same run, as the next run would have done; only a key with no creator at all sends its split books back to `narrator_new_from_split`. At apply time the books that create records are written first, and a split book links only to a record whose creating write landed. A split book is filed under `narrator_new_from_split` at plan time only when no book creates the record at all; at apply time it goes back there, unwritten, when its creator's write did not land (it failed, was locked, changed since the plan or was refused). Within a `limit` or `book_ids` cohort a split book instead waits (`narrator_waiting_on_creator`) or is `limit_reached`, and a dependent whose own respelled narrator side is refused goes to its spelling review class. A `book_ids` run plans the whole library and only reports and writes its own books, so the spelling a new narrator record gets is counted over every eligible book exactly as in a full run, and books it names that no longer exist count as gone. The earlier caveats that cohorts differ from one full run no longer apply.
+- The narrator respell lands on the right place. In the stored narrator list only the entry that names the person is respelled, preferring the exact entry over the whole list, so "Jean Paul Valley Jr." beside "Jean Paul Valley" no longer sends the book to review. In the narrator field the credit that is the name is respelled (a credit that carries a role, such as "Harvey Dent - translator", is skipped; a leading "Read by" is only a prefix the cleaner strips), and every credit of the same person is respelled, whatever its case.
+- When two spellings of one new narrator tie on count, the record takes a mixed-case spelling, then an accented one, then the lexically smallest. `narrator_column_respelled` is listed only when the field text actually changed.
+- An apply-time refusal of a narrator spelling no longer drops the book's author write, and the narrator records created for that refused fill are not counted as created.
+- A book whose author id is missing from its join is filed for review under `author_id_duplicate_name_in_join` when a join entry has the same name under another accent ("Renee" and "Renée"), where it was reported as a snapshot conflict.
+- Repair plan rows now live under their own `plan/` row prefix. Storing or clearing a repair plan no longer deletes the operation's class-list rows (`ReplaceOpRows` with an empty prefix removed every row of the operation, so `ReplaceOpRows` is gone and `ReplaceOpRowsPrefix` refuses an empty prefix), and the handler test's in-memory row store enforces the prefix like the real one. Plans stored before this change are in the old row layout and are refused as legacy: re-run the repair to get a new plan (cut over, no backward compatibility).
+- A canceled or failed run no longer drops the books it had parked for a split credit from every class: they are filed under `narrator_new_from_split` as the first pass left them. A `book_ids` run no longer lists an unreadable book outside its ids under `read_error`; the run stays incomplete and `out_of_scope_read_errors` counts them.
+- A narrator record the run created and no written book credits (its creating book's write failed or was refused, or its narrator side was refused after the record existed) is deleted again before the apply ends, while the scan stand-down is still held, so a later run cannot link a split credit to a record nobody else credits. Only records this run made are deleted (not in the starting index, not older than the run) and only when no book links them (the live count `maintenance.purge-empty-narrators` uses); each delete is journaled as a `narrator_delete` row. The result reports every such record as `narrators_created_unused` with `unused_narrator_names`, and says which were deleted (`unused_narrators_deleted`, `deleted_unused_narrator_names`) and which were kept and why (`unused_narrators_kept`). A book that still has an author write names the record in its journal row.
+- `narrator_creates_record` lists the books that create a record; a split book that only links to a record another book creates is no longer listed under it.
+
+- `scripts/ci/fixture_test_packages.py` now computes the fixture-test shard
+  partition under a fixed `GOOS=linux GOARCH=amd64 CGO_ENABLED=1`, so the three
+  `test-fixtures-N` Woodpecker workflows agree on the package list whichever
+  agent (linux/amd64 or darwin/arm64) runs them. Before, OS-specific test files
+  and build tags could shift the greedy assignment so a package ran in no shard
+  or in two. A package assigned to the running shard that this host cannot test
+  now fails the job with a clear message instead of being skipped, and a short
+  hash of the partition input is printed so shard logs can be compared.
+
+#### The trash cleanup's kept and needs-attention counts click through
+
+Review follow-up for the retired-version guards (every count shown to the user must lead to the items it counts).
+
+- Opening a finished `maintenance.trash-cleanup` run on the Activity page now shows what it stored: the count of versions purged with files kept on disk and the count that need attention each link to the Version Management page narrowed to exactly those versions (`/versions?op=<operation id>&set=kept|needs_attention`, which opens the Purged or Trash tab and reads the ids from the run's stored result). The books behind each count link to the book, and the kept file paths are behind a button that carries their count. A run that stopped at a busy merge lock says so in one plain line (nothing failed).
+- The Book ID column of the Version Management page is a link to the book.
+- The purge dialog's "holds retired versions" reason no longer says "retired versions of another book's files"; like the delete refusal it reads "file rows kept for another version of the book (retired versions)".
+
+- `TestPool_TheCanaryDecidesWhichFaultedMachinesAreBelieved` ("canaries = 5,
+  want 6", "canaries = 3, want 4") and `TestPool_ALooperPageThatFaultsEveryEndpointConvergesOnPerClipVerdicts`
+  ("the scenario must fault every endpoint in round 1: 5 of 6") no longer fail
+  intermittently on Linux CI. The whisper endpoint cooldown is process-wide
+  state keyed by URL, a cooldown is 30 seconds per consecutive failure, and the
+  tests' httptest servers were never cleared of it, so a server that was handed
+  a closed server's port started benched. The dispatcher sent that port no work
+  in the first round, so it never faulted in that dispatch and the canary rule
+  (which asks the ports that faulted) did not cover it. `useEndpoints` now clears
+  the cooldown of the URLs it configures at the start of a test and when it
+  ends, and `TestUseEndpoints_ClearsACooldownLeftOnAReusedPort` pins it. No
+  production code changed.
+
+- `maintenance.credits-backfill`: a narrator record an earlier attempt of the same operation created and nothing links (the attempt crashed, or lost the scan stand-down, before the creating write landed) is no longer taken for a record that was always there. A resumed apply finds such records from the operation's own journal (the `created_narrators` of its `credits_backfill` rows, voided ones included, and the new `narrator_create_intent` row written before every create, which closes the crash gap before any `credits_backfill` row names the record), keeps only those not older than the operation's first journal row and with no book link (the live count, fail closed), and treats their names as new: a split credit links to one only after a creating book credits it in this attempt, and one nobody credits is deleted at the end like any other unused record, with a `narrator_delete` row. A create whose intent row cannot be written fails that book instead of making an unjournaled record.
+- `unused_narrators_kept` entries now carry the record id (`name (id N, reason)`).
+- Reverting a `credits-backfill` operation reports its `narrator_delete` and `narrator_create_intent` journal rows under `not_restorable_types`; its book rows are still reverted.
+
+- `opsmetrics.Recorder.Finished` now records `ops.run.duration` before it
+  increments `ops.runs{outcome}`. The two instruments were written count-first,
+  so a reader that saw a run-end in `ops.runs` could still read zero
+  observations in `ops.run.duration` for that run; this made
+  `TestTimeoutCountsAsFailedLegacyAndTimedOutOtel` flake on loaded `-race`
+  runners. Any collection that sees a run end counted now also sees its duration.
+
+- Retired-versions decision records, review follow-ups. A label-only record
+  (applied, undone, approve, skip) no longer empties the shared cache of the
+  owner's rejects, so an apply over many rows reads the decision log once, not
+  once per row; a re-plan of a book that left the trash no longer loads the
+  rejects at all. Finishing the tail of a retire that was cut off after its rows
+  committed now writes the `applied` record the cut-off run missed. A revert
+  writes `undone` only for a retire that actually moved rows into the version,
+  not for a version a cut-off run created and never filled.
+
+- Two deliberately skipped backup-containment tests (`internal/fileops/backup_containment_test.go`, TASK-083) quoted their old failure output verbatim in the skip message, including `--- FAIL:` lines. CI's log scanner annotated those quoted lines as test failures on every full-suite run. The skip messages now paraphrase the measured output without the failure markers.
+
+#### Trashing the active version: the trashed-versions banner says what each cleanup group means, and a book's path is listed once
+
+The Version Management page, narrowed to a trash cleanup run, said every group
+except the kept one "could not purge and does not retry". Only the needs-attention
+group is left alone by the nightly run. The banner now says, per group, what
+happened and whether the run tries again: versions the cleanup could not judge
+(a drive that is down looks the same), versions whose book serves nothing that
+exists on disk (listed every run until the book's path is fixed or the version
+restored), and versions whose book still plays one of their files. The run's
+result also named a book's path once per trashed version, so two trashed versions
+of one book gave the page a repeated list key; each path is now named once.
+
+The 500 that says the switch before trashing the active version could not finish
+no longer says a repeated delete is always refused: it is refused while the
+version is still mid-switch, but a version that had already reached alt can be
+trashed again. A test pins that a failed mark followed by a failed restore of the
+leaving version is reported as an unfinished swap, and another that a move of a
+file onto itself is refused.
+
+- `TestPool_AStrikeASickWorkerAnsweredBeforeItFaultedIsWithheld` failed on Linux CI with "the sick worker decoded 0 clips" (no error, 0.00s) on PR #4216, whose merge tree predated the cooldown resets of bab99ce4f (`useEndpoints`) and ff611d5f6 (`newSplitHarness`): an earlier test had benched a port, the OS gave the closed server's port to this test's sick worker, and round 1 sent it nothing, so the sound worker decoded all 32 files alone. Main already resets every port's cooldown in both harnesses (verified by re-creating the failure with the resets removed and a port pre-benched: same message, then green with them); the test now also checks that both of its ports start out of cooldown and says so if one does not, and its failure message lists the sends.
+
+#### Trashing a book's active version switches the book to another version first
+
+Moving the version a book is playing to the trash used to flip its status and
+nothing else. The book kept playing that version's files, and 14 days later the
+trash cleanup deleted them. `DELETE /api/v1/audiobooks/:id/versions/:vid` on the
+active version now makes another version active first (`versions.RunVersionSwap`:
+the new version's files move up to the book folder, the old version's into its
+`.versions/{id}/` slot, and the book's file path follows), and only then trashes
+the version that left. The version that takes over is the most recently ingested
+`alt` version whose files the swap can safely take (`versions.PickSwapTarget`,
+see below); a trashed, purging, purged or retired version is never chosen. With no such version
+the request is refused with a 409 and code `NO_SWAP_TARGET` that lists why each
+other version was passed over, and nothing is written; if the swap itself fails
+the version is not trashed (500, code `VERSION_SWAP_FAILED`). The response carries
+`swapped_to`, the version that became active. The whole step, for every version
+trashed, now runs under the merge lock (a running merge answers 409 "try again"),
+so two version operations on one book cannot interleave.
+
+A multi-file book whose path is a folder is refused the same way (409
+`NO_SWAP_TARGET`), as is a direct `RunVersionSwap` on it: the swap takes the
+book's folder to be the parent of its path, which for a folder would move the new
+version's files in among other books'.
+
+`RunVersionSwap` now refuses a retired version on either side before it writes
+anything (the leftover tracked as TODO-RETIRED-SWAP-GUARD), and a swap that fails
+before moving any file puts both versions back to the statuses they had instead
+of leaving the book with no active version. `versions.AutoPromoteAlt`, which
+promoted an alt without moving a file, is removed.
+
+The swap only takes a version whose files are in its own `.versions/{id}/` slot,
+and only when the book's own path is the folder those slots belong to. Before it
+writes anything (in the picker, and again at the start of `RunVersionSwap`) it
+refuses, naming the reason in the 409 body: a book path that is empty, relative or
+stale (the active version's files are not in the folder the path names); an
+entering file outside its slot, in the form stored or with symlinks resolved (a
+download folder, another book's folder, a slot that is a symlink); an entering
+file that is a symbolic link; and an entering file that is the same file as one of
+the leaving version's (the same path, the same path through a link, or the same
+inode). Two of these were reproduced as data loss or a stuck book: an alt whose
+row names the active version's file (the swap renamed the only copy into the
+leaving slot, trashed the version, and the purge deleted it), and an alt that is
+a symlink to the active file (the swap failed on its third step and left the book
+`swapping_out`/`swapping_in` with no active version, so every later trash was a
+409). Nothing in production places alt files in their slot today, so most existing
+alt versions will answer 409 `NO_SWAP_TARGET` until a follow-up lets the swap adopt
+files from elsewhere safely (todo.d).
+
+A swap that fails once it has started now puts everything back: the statuses
+(and with them the book's active version) after any failure up to the point the
+files have moved for good, and the files themselves when the third step fails
+(the leaving file is moved back, any entering file that moved goes back to its
+slot, the empty slot folder is removed). After the files have moved,
+a failed database write (a file row, the book's `file_path`, the final statuses)
+is returned as an error and the version is not trashed, instead of being logged
+and ignored; the rows are written with `ModifyBookFile`, which refuses a row that
+no longer names the path the file was moved from. A refusal before the first
+write is a 409 `NO_SWAP_TARGET`, not a 500 `VERSION_SWAP_FAILED`, and a trash
+that fails after the swap went through answers with `swapped_to`.
+
+A file that is missing is refused, not skipped. The first form of the swap treated
+"source missing, destination present" as a move that had already happened, so an
+alt whose own file was gone but whose name matched a stray file in the book folder
+(or in the leaving slot) was "adopted" and the stray file was treated as its audio.
+The move now requires its source to exist and its destination to be free: the
+picker and the preflight refuse with "file X is missing, so there is nothing to
+move" or "something is already there", and the rename itself refuses to replace
+anything (`renameat2` `RENAME_NOREPLACE` on Linux, `renamex_np` `RENAME_EXCL` on
+macOS, a checked rename elsewhere). The preflight also refuses a `.versions`
+folder or a version slot that is a symbolic link or a file, or that resolves
+outside the book's folder, and a book path with a trailing separator ("not a
+file"). Undoing a failed swap puts back exactly the files this call renamed, in
+reverse order, and reports an error (leaving the swap `ErrSwapIncomplete`) when an
+original path has been taken in the meantime instead of overwriting it.
+
+A swap that did not finish can no longer be made worse by retrying. A version in
+`swapping_out` / `swapping_in` cannot be trashed (`MarkTrashed` refuses it; 409
+`VERSION_SWAPPING`), nor swapped again (`ErrSwapRefused`: resuming a swap is not
+implemented). An incomplete swap answers 500 `VERSION_SWAP_INCOMPLETE`, which says
+the versions are stuck mid-swap and need repair and that deleting again will not
+help; it no longer reads as a failure that changed nothing. Finding and repairing
+those books is tracked in `todo.d` (TODO-SWAP-STUCK-RECOVERY).
+
+The trash purge refuses to delete a trashed version's files when none of the files
+the book serves (its `file_path`, the rows of its active version) exists on disk,
+and a `file_path` that is a folder counts only if it holds a regular file outside
+`.versions/`: that state means the guard cannot tell what is served, not that
+nothing is. The version stays in the trash (409 from Purge now). This is its own
+case, `NothingServedError` (`errors.Is` `ErrPurgeNothingServed`), not "cannot
+tell": the nightly cleanup lists it under `NothingServed` with the book's path,
+the operation result has `nothing_served` and `nothing_served_version_ids`,
+`nothing_served_book_ids` and `nothing_served_file_paths`, and the Trash cleanup
+panel says "the book serves nothing that exists on disk" and shows the book path
+to fix, instead of "the files are missing / a drive is down". The version is
+never claimed, so there is no attempt count to escalate; it stays listed every
+night until the book's path is fixed or the version restored.
+
+#### Trash cleanup results name each book and kept file once
+
+A book with two trashed versions in one group of a cleanup run was listed twice
+in the run's stored result, and so were the kept files two versions named. The
+operation page keys those lists by value, so the repeat was a duplicate key. The
+result now names each book id and each kept path once, in the order first met;
+version ids stay one per version, so the counts are unchanged.
+
+- `maintenance.credits-backfill` files the books a canceled apply never reached. An apply that is canceled, or that loses the scan stand-down, used to leave the cohort books it had not yet written in no class, so the result's counts did not add up and a reader could not tell them from books that were never eligible. They are now listed under `canceled_not_written` (informational, in the result and in the class-list paging like every other class): the cohort's books not written when the stop came during the writes, every planned book when it came before the cohort was picked (the planning pass or the split replan). Books that were never scanned stay the difference between `books_listed` and `books_scanned`.
+- `maintenance.credits-backfill` no longer takes a narrator record that a crashed operation left behind for a preexisting one. A record created by an apply that crashed (or lost the stand-down) and was never resumed was still read as "always there" by every later operation, because only the resumed operation's own journal was read, and each `limit` cohort runs under its own operation id; a split book in a later operation could link to it although no creating write ever credited it. An apply now also reads the `narrator_create_intent` and `credits_backfill` rows of every other credits-backfill operation whose status is not `completed` (failed, canceled, interrupted, running, queued, waiting), and treats an unlinked record they name as new: it is created again by a book that credits the name whole, or deleted at the end of the run with a `narrator_delete` row (its new value names the source operation as `source_op=<id>`) if nothing credits it.
+- A record is attributed to another operation only inside that operation's own time window: created between its first journal row (the intent row itself, for an intent) and the naming row plus 30 seconds, and never after the operation's `completed_at` plus 30 seconds. A failed operation's rows are read at every later apply, so without this bound a same-named record made later by something else (the narrator sync for an imported book, say) would have been deleted as a leftover. The same bound applies to the apply's own journal. An operation whose leftovers an apply has settled is marked judged and is not read again until its row changes, so the cost of re-reading old failures does not grow with the history.
+- The leftover search fails closed. An apply refuses to start, writing nothing, when the store cannot list operations, an operation's marker or journal cannot be read, a journal row's id is not a ULID, a `credits_backfill` row does not decode, or the narrator an intent row names cannot be looked up. A row the apply cannot read therefore blocks credits-backfill applies until it is repaired. Remaining gaps: a discarded operation is not listed and a completed operation that was reverted afterwards still reads as completed, so a record only their journals name is not found; the dry run does not predict leftovers.
+
+- Credits backfill: an apply that cannot read another operation's journal row
+  (a row id that is not a ULID, a row that does not decode, an unreadable judged
+  marker) now says how to proceed: discard that operation, and what that costs.
+  The 30-second leftover window now has boundary tests at 29 s and 31 s on the
+  intent row, the created-narrators row and the operation's end, and the code
+  documents what the window covers and misses, why a revert does not clear the
+  judged marker, why a discard needs no clearing, why the leftover delete does
+  not use `require_no_name_match`, and the scale of the operation-history listing.
+
+#### Fixture-test shards no longer die on the 25m `go test` timeout
+
+`test-fixtures-N` (`make test-fixtures`) panicked with `test timed out after
+25m0s` on `internal/server` (pipeline 1823, `TestThrottle_TriggersAfterMaxIPFailures`
+running) and on `internal/plugins/maintenance` (pipeline 1820, `TestFragmentFixer_*`).
+Measured in Woodpecker those two packages took about 1300 s each, against a 1500 s
+timeout, and the shard weights in `scripts/ci/fixture_test_packages.py` were stale
+(`internal/server` listed at 160 s).
+
+- `scripts/ci/fixture_test_packages.py` now weights packages by their measured
+  Woodpecker wall time, and a package whose weight exceeds 600 s is split by test
+  name into several `go test -run '^(...)$'` processes (`internal/plugins/maintenance`
+  3 ways, `internal/server`, `internal/audiobooks` and `internal/scanner` 2 ways).
+  The split is by a hash of the top-level test name, so it does not depend on the
+  host. The balancer puts the parts of one package in different shards (a unit
+  prefers a shard that holds no sibling part), so each shard's estimated load comes
+  out at 2240 s where shards 2 and 3 were near the limit and shard 1 was light.
+- `make test-fixtures` runs the planned processes under a job budget
+  (`FIXTURE_JOBS`, default the CPU count): the slices run in a pool of
+  `min(slices, budget / 2)`, heaviest first, and the whole-package run gets
+  `-p budget - pool`, so the test binaries alive at once stay at or under the
+  budget the single `go test` used to have (parallel `-race` suites have OOM-killed
+  CI steps). `FIXTURE_TIMEOUT` applies to each process. A slice that selects no test,
+  or whose `-run` matches none, fails instead of reporting `ok [no tests to run]`.
+  Each slice logs its test count and a hash of its test names; each child's output
+  goes to a log file as it is produced (`FIXTURE_LOG_DIR`) and is printed when it
+  finishes, or on SIGTERM.
+- `go test -list` parsing (shared with the short-suite sharder in
+  `scripts/ci/go_test_shards.py`) now accepts any Unicode test name, where a name
+  outside `[A-Za-z0-9_]` was silently dropped from every shard, and fails on a
+  single token that looks like a test name but is not a valid one. On a host other
+  than linux, `make test-fixtures` also compares the native test list with a source
+  scan of the linux test files and prints a `::warning::` naming any test that will
+  not run there; it does not fail, because a darwin agent legitimately lacks
+  linux-only tests.
+- The `internal/server` tests were slower than they needed to be. Failed logins for
+  an unknown name ran a full-cost argon2id verification (64 MiB, about 1.6 s under
+  `-race`), and the login throttle slept for real (up to 2 s per failure past the
+  5th). The test binary now hashes at a minimal cost (`absauth.SetHashCostForTest`,
+  called from `internal/server/main_test.go`), and the throttle tests inject a no-op
+  sleep. `TestThrottle_TriggersAfterMaxIPFailures` goes from 40 s to under 0.1 s;
+  tests slower than 10 s in `internal/server` go from 21 (422 s) to 3 (50 s). Every
+  assertion is unchanged. `SetHashCostForTest` panics outside a test binary and
+  after the dummy hash is built, and `internal/arch`'s `TestHashCostSeamStaysInTests`
+  fails if any non-test file in the module, the root `main` package and
+  build-tagged files included, names it.
+
+Follow-up, not done here: the balancer still weights by the CI wall-time medians
+recorded in `_WEIGHTS`; weighting by per-test recorded durations (as
+`go_test_timings.json` does for the short suite) would balance the slices by time
+rather than by test-name hash.
+
+#### Hard deletes: every "does this book own files" check counts retired rows, and a bulk hard delete hands the primary flag on
+
+`DeleteBook` refuses a book that holds any `book_file` row, retired rows
+included, but two clean-up paths asked with the live-only reader and so passed
+a book whose only rows were retired. Version-group clean-up (`reconcile`) and
+the iTunes regroup delete pass now ask `CheckBookOwnsNoFiles`, the question
+`DeleteBook` asks; the regroup run store carries the retired-row reader for it
+(the narrow store it wraps hides that capability).
+
+Both also repeat the check under the merge lock, right before the listening
+state is carried, so a file row that lands in between no longer moves a
+reader's progress to another copy, and (for clean-up) no longer deletes the
+duplicate's audio file first and finds out afterwards that the book cannot be
+deleted: the row delete now comes before the file removal.
+
+The bulk hard delete (`POST /audiobooks/batch-operations`) now shares the single
+delete's steps through `merge.HardDeleteLiveBookLocked`: a deleted primary hands
+its group's flag on (a bulk-deleted primary used to leave the group with none),
+and `book.deleted` is published and the author and series caches are dropped
+for each hard delete that went through.
+
+`DeleteBook`'s own refusal now words a book that holds only retired rows the
+same way as the check that predicts it ("cannot be moved") instead of telling
+the user to move rows that cannot be moved.
+
+Follow-ups from review: when the clean-up carries a reader's progress to the kept
+copy and the store then still refuses the delete, the result now says so
+(`state_carried_book_kept`, plus a write error) instead of reporting that
+nothing was carried; a file that cannot be removed after its book row is gone is
+counted (`file_delete_errors`); and the bulk hard delete clears the audiobook
+list cache.
+
+- **In-place moves wait for the Deluge list instead of calling the file protected.**
+  The rename-source guard (`organizer.SetRenameSourceGuard`) now answers with a
+  verdict (`SourceMovable`, `SourceProtected`, `SourceListNotLoaded`) instead of a
+  bool. While Deluge is configured but its seeding list has not loaded, an in-place
+  re-organize is still refused (fail closed) but is counted under its own outcome,
+  `protected_list_not_loaded`, with the reason "the Deluge seeding list has not
+  loaded yet; try again once it has", instead of `protected_source` ("the file is in
+  a protected location..."). It is a skip, never a failure, and the book moves on the
+  next run once the list has loaded. A path that is protected is still reported as
+  `protected_source` while the list is down. A run logs one Warn with the count of
+  moves held back (the per-book line stays Debug). `RenameFiles` holds a plan back
+  for the same reason with the new `ErrRenameProtectedListNotLoaded` (not
+  `ErrProtectedRenameSource`), logged at Warn at most once a minute. Only an
+  explicit `SourceMovable` clears a source: the zero value of `SourceVerdict` and
+  any verdict the code does not know refuse (outcome `unknown_guard_verdict`,
+  `ErrRenameGuardVerdictUnknown`). With no guard installed (tests, tools) nothing
+  is asked and nothing is refused, as before. The server reads whether the Deluge
+  list has loaded before it runs the protected check, so a refresh that lands in
+  between cannot make a seeding file look movable.
+- **The purge protects at least as much as a fresh look, for both inputs.**
+  `pathutil.UnderProtectedPath` reuses folders resolved up to 5 s ago, and the
+  audiobooks helper reuses an import-path list read up to 5 s ago, so inside that
+  window a protected folder's symlink re-pointed, or an import folder added under
+  the library root, could make the book purge and the version purge protect less
+  than a fresh look. They now resolve the folders afresh
+  (`pathutil.UnderProtectedPathUncached`) and read the import paths straight from
+  the store (`GetAllImportPaths`) in `planPurgePathIn`; a list that cannot be read
+  still holds the file back for a retry. Tag writes, previews and organize keep
+  both caches.
+- **A protected folder that keeps failing to resolve is logged again after an hour**
+  (it was logged once per process and then never), and `RootError.Root` is now always
+  the folder as configured, so a folder that could not be made absolute is cleared
+  from the "already reported" set when it resolves again. Callers still served a
+  cached failed set after the folder has resolved (the purge's fresh look clears
+  it) no longer log it on every call for the rest of the cache window.
+- The `UnderProtectedPath` documentation now says `deluge.ProtectedPathCache` also
+  holds `config.ProtectedPaths`, and that both are still compared as spelled.
+
+- The protected-path check (iTunes library folders, "iTunes Media", import
+  paths, `.failed`) now also tests the symlink-resolved spelling of a path and of
+  each protected folder. Before, a path spelled through a symlink into a
+  protected folder was not protected, so the book purge and the version purge
+  could delete a real iTunes file, and the organizer could move one. A path whose
+  symlinks cannot be resolved is no longer passed as unprotected: tag writes and
+  previews treat it as protected, and a purge never deletes the file: a failure
+  that may pass (permission denied) keeps the book in the trash and asks again
+  on the next pass, while a link cycle will not resolve by retrying, so the book
+  is purged and the file is left where it is with a "book purged, file kept"
+  line. The resolver
+  moved from the merge guard into `internal/pathutil` so the merge guard and the
+  purge, organize and metadata checks share one implementation.
+- Re-organizing a book in place now refuses a file that is in the iTunes tree or
+  a protected folder only through a symlink, and refuses when its symlinks cannot
+  be resolved. The protected folders are resolved once per few seconds rather than
+  per file, and an unresolvable folder is logged once, not per file.
+
+#### Files a purge kept because another book or row named them are removed once nothing names them
+
+When a version is purged, a file that another book_file row or another book (a
+trashed one included) still names stays on disk and is recorded on the version
+(`PurgeKept`). Nothing looked at it again: after the trashed book was hard-deleted,
+or the lingering row went, the file stayed on disk with no owner.
+
+The nightly trash cleanup (`maintenance.trash-cleanup`) now ends with
+`versions.SweepKeptFiles`, which ships **report-only**: while the new setting
+`kept_sweep_apply_enabled` (env `KEPT_SWEEP_APPLY_ENABLED`, off by default) is off
+it makes every decision below but unlinks no file and drops no note, and lists in
+the operation result and summary the files it would remove and the notes it would
+drop (`kept_sweep_report_only`, `kept_sweep_would_remove`, `kept_sweep_would_drop`
+and the matching `*_files` lists with version, book, path and the reason the file
+had been kept; the operation page shows them). The owner reads a night or two of
+that list and flips the switch. Report-only is not read-only for the version
+record: a note the sweep really cannot settle is still counted, and at the third
+night the version moves to `purge_failed` with the unsettled notes in
+`purge_failed` (see below). No file is touched. The setting is read once per run. For each `inactive_purged` version with kept-file notes
+it asks the purge's own per-path decision again (`classifyPurgePath`: served by a
+live book, any other row or book at any spelling of the path, the purge guard for
+import paths, the iTunes library, `.failed`, the library root and a folder that
+holds files, and whether the disk can say the file is gone), so the sweep and the
+purge cannot disagree. A file nothing owns any more is removed and its note
+dropped; a note for a file that is already gone is dropped; everything else is
+left alone. A removal is allowed only while the version's own live book is known to
+serve a file that exists, as the purge requires of a trashed version.
+
+- It fails closed: a read error, a path the disk cannot settle, a library that is
+  not ready, a busy merge lock, a failed removal or a failed record keep the file
+  and the note and are retried next night.
+- The note is dropped after the unlink, never before, and the version is written
+  after each removal. The merge lock is held for each version that has something to
+  remove, as the purge holds it. Emptied version folders are tidied only when no
+  note is left.
+- Versions are partitioned across a bounded worker pool so that two workers never
+  handle the same version or the same file (versions that note one file are one
+  work unit). Versions the same run just purged are not asked twice.
+- The operation result and log report files removed, notes dropped for files
+  already gone, files still owned and files kept on error
+  (`kept_sweep_removed`, `kept_sweep_gone`, `kept_sweep_still_kept`,
+  `kept_sweep_kept_on_error`, with the removed and errored paths). A sweep that
+  cannot list the purged versions fails the night.
+- A note the sweep cannot settle (an owner lookup that errors, a path the disk
+  cannot settle, a failed removal) no longer warns every night for ever. The nights
+  are counted on the version in the purge's own counter
+  (`BookVersion.PurgeUndecidedNights`), at most one a calendar day
+  (`PurgeUndecidedNightOn`, used by the sweep only); after
+  `PurgeUndecidedEscalateAfter` (3) in a row the version moves from
+  `inactive_purged` to `purge_failed`, with the unsettled notes in `purge_failed`.
+  The trashed-versions page then shows it with its files and reasons, Purge now
+  retries it and hard delete drops it. The sweep stops warning about the unsettled
+  notes, but keeps sweeping the other kept notes of a `purge_failed` version every
+  night (report-only lists them as would-remove too); it never escalates it again.
+  Only real "could not settle" counts: not a decision that would only have removed
+  something in report-only mode, not a book that serves nothing on disk (the
+  purge's `ErrPurgeNothingServed`), nor an unready library or a busy merge lock. The store now accepts `inactive_purged` to `purge_failed` for
+  this (and nothing else from `inactive_purged`). The escalation is reported in the
+  result on the night it happens (`kept_sweep_escalated`).
+- **Files are deleted only inside the version's own `.versions/{id}/` folder.** A
+  noted file anywhere else is never removed by the sweep or by a purge retry, whether
+  or not the version's own book still exists (reason
+  `OutsideSlotNeverAutoRemovedReason`). The notes cannot prove nothing wants such a
+  file: the book may be trashed or deleted since, a row can be stored under a spelling
+  no lookup produces, a trashed book's path can be the parent folder, and a re-import
+  can reuse the path before the scan writes its row. Such a file stays on disk and its
+  note stays; it is counted in `kept_sweep_still_kept`, listed every run in
+  `kept_sweep_outside_slot_files` (version, book, path, reason, with
+  `kept_sweep_outside_slot` as the count), written to the run's journal one line per
+  file, and named in the summary. The owner decides those files by hand.
+- Purge now on a `purging` or `purge_failed` version (a retry, including one the
+  sweep escalated) applies the "the book serves nothing that exists on disk" refusal
+  too, which used to hold only for a trashed version, so a retry can no longer
+  delete a file the sweep refused to. It also decides every file named in the
+  version's `PurgeKept` and `PurgeFailed` notes, not only the slot and the rows;
+  before, a note the retry did not find was erased with its file still on disk. Each
+  is removed (only inside the version's own folder), kept (and noted again, with the
+  same only-inside-the-folder rule as above) or left undecided.
+- A `purging` version whose live book serves no file that exists on disk can no
+  longer be stuck for ever (it cannot be restored or hard-deleted while purging, and
+  the refusal above kept it that way). Each refused attempt, the nightly retry or
+  Purge now, is counted like any other stuck attempt, and after three in a row the
+  version becomes `purge_failed` and can be hard-deleted. Nothing is deleted by that;
+  the files it could not decide are listed on it. The night it escalates is filed
+  under "left in the trash, their book serves nothing" and does not fail the
+  operation. The restore and hard-delete refusals for a purging version now say that
+  this is how it ends.
+- The sweep's night count uses the clock the cleanup run started with, not a second
+  reading of the time, so a run that crosses midnight counts one day.
+- The result panel of the trash-cleanup operation now shows the kept-file sweep: the
+  report-only line, the would-remove and would-drop lists (path, version, book, the
+  reason the file was kept) and any version it escalated.
+
+- The retired-versions `applied` and `undone` decision records now say who ran
+  the apply or the revert. An apply records the user who enqueued the apply op
+  and the plan op it applied; a revert records the signed-in user who asked for
+  it, including through the combine undo's retire reversal. Both read as a human
+  decision. An apply or revert no user ran is still recorded as automatic. A
+  retire finished by a later op's tail records the retire op's own user and plan,
+  not the finisher's.
+
+#### A book whose retired versions were all un-retired is no longer treated as a retired shell
+
+The scanner asked "was a retired version ever made from this book" and counted
+the versions. A version that `UnretireBookFiles` emptied stays `Status=retired`
+with no rows (the retire revert deletes it through a check that needs the
+status, and a retire apply adopts an empty retired version of its own op), so
+the book stayed a shell for ever and every scan lookup on it paid the extra
+reads and took the shell branch. `isRetiredShell` now counts the retired rows
+the book's versions still hold (`database.RetiredRowsHeldFor`, the check the
+restore and purge guards already make), so a shell with nothing left to hold is
+an ordinary book again. The now-unused `database.RetiredVersionsFromBook`
+helper is removed.
+
+- Resuming an unfinished version swap no longer gets stuck on a book whose two
+  versions' files share a name. When a swap failed after putting its files back
+  but before restoring the entering version's status, the active version's file at
+  the book's folder was taken for the entering version's, the resume refused
+  ("is at both"), and the book could be neither resumed, trashed nor swapped.
+- A resume no longer moves a file it cannot prove is the version's: a file found
+  where the swap would not have put it must match the row's recorded size or hash,
+  and a row that recorded neither is refused. Every spelling of a path, and the
+  path an undo moves a file to, is checked for another row; each moved file gets a
+  `version_swap_resume_file` path-change record written before the move; a path
+  lookup that cannot be completed is a 500, not a 409 refusal.
+- Resuming a swap that stopped at its status writes (only the entering version left
+  `swapping_in`) now tells Deluge to follow it, and the answer is sent before Deluge
+  is called.
+- The trash cleanup's log no longer reads "0 failed" beside an error when only the
+  list of unfinished swaps could not be read, and the Unfinished swaps confirmation
+  says the server works out what to do again when it is confirmed.
+
+- The `internal/server/handlers/abs` test package now lowers the argon2id
+  password-hash cost in its `TestMain` (the same test-only seam
+  `internal/server` uses), cutting the package from 176.6 s to 53.8 s in the
+  fixture shards. No test asserts on the cost; hashes still verify with the
+  parameters stored in them.
+
+- `GET /activity/sources` counted entries the caller may not read (hidden Repairs runs and other users' data lines), so the source picker disagreed with the activity list. The store's source count now honours the same per-caller exclusion, and a source whose only entries are hidden no longer appears. Counts for a restricted caller are computed per request rather than served from the shared result cache.
+
+- The activity log writer no longer carries an unreachable batching branch in its log-line path; batching goes only through `LogBatch`. No behaviour change.
+
+- Admin-role routes now follow one rule when `EnableAuth=false` instead of all answering 401. Read-only admin introspection (`GET /cache/stats/keys` and the admin debug API's four `GET` routes) opens through `Server.adminRole()`, now in `wire_admin_role.go`. Everything that deletes or rewrites data (`/system/reset`, `/system/factory-reset`, the debug `PATCH` and undo routes, the retired wipe, cache-flush and digest stubs) and the guest service token routes keep `RequireAdmin` and still answer 401, so an unauthenticated caller cannot wipe the store. `RequireAdmin` itself is unchanged. `admindebug.Register` now takes the read gate and returns its routes.
+- Added a guard test: every admin-gated route is recorded when it is wired and must be on a reviewed allowlist, and `RequireAdmin()` may not be wired outside the recording helpers.
+
+- The `ai parse summary` no longer reports a fully-green `N/N book(s) parsed` for a batch where nothing was written. Rows the saver cannot resolve (deleted, merged, files gone) are counted as `N discarded` instead of parsed, named in the operation record, and logged at warn level. Rows whose save errored are no longer also counted as parsed.
+
+- `entities.author-merge` (the Authors view's merge) and `ai.author-scan-apply`
+  (Apply selected in the AI scans sub-view) now stand the library scanner down
+  for the whole merge, the way `dedup.series-merge` already did. A `library.scan`
+  running at the same time rewrites `book_authors` on the rows the merge
+  repoints and could undo the move. Each op takes the stand-down before its first
+  write, renews it once per author, and releases it on every exit. An apply with
+  no operation id, or while the scan will not park, is refused before anything is
+  written. If the lease is lost part way the run stops before the next author,
+  clears the cached author lists, and fails naming the authors it did not reach
+  (the AI apply also leaves the result it was on, and the results after it,
+  unapplied). A preview of an AI scan apply does not take the stand-down.
+
+- The Authors view's "Narrator" reclassify (`POST /authors/:id/reclassify-as-narrator`) is now undoable. It used to delete the author and move its credits inline, with no operation to journal under. The route now checks the author exists, queues the new `entities.author-reclassify` operation and answers 202 with that operation's id. The operation journals every moved credit and the author delete under its own id (`author_reclassify_credits` / `author_reclassify_delete`, the same rows the AI scan apply writes), so reverting it restores the author, its aliases and every credit. It holds the library-scan stand-down for the whole move, renews it before each book and keeps the author if the lease is lost, shares `entities.author-merge`'s concurrency key and needs the same permission as before. The Authors & series lane waits for the operation before it merges or edits the list, and counts a failed operation as a failed reclassification.
+
+#### Authors and Series pages fetch one page at a time (WEB-01, WEB-02)
+
+The Authors and Series pages used to download the whole table (about 17,000 authors with their alias lists) on every visit and after every merge, delete, split and undo, then search, sort and page it in the browser. `GET /authors` and `GET /series` now take `limit`, `offset`, `q`, `filter`, `sort` and `order`, answer with `count` (matches across all pages) and `total` (the whole table), and reject a negative `limit`/`offset`, an unknown `sort`/`filter` or a bad `order` with a 400. Both pages request just the page on screen, driven by the pager, the page size, the debounced search box, the filter and the column sort, and refetch only that page after a change. Selection now persists across pages; the header checkbox selects the current page only. A request with none of the new parameters still returns the whole list, because the Library page's author and series filters read it that way.
+
+#### metadata.batch-apply-cached no longer re-offers books whose refusal cannot change
+
+The cached-metadata batch apply now remembers, per book (`apply_refusal:<book_id>`), when the certainty gate refused it for a structural reason (a duplicated file set, an author missing from the path, a candidate that cannot match the transcribed title, and the other file/path/tag/candidate-based reasons). A later run skips that book, without evaluating it, as long as a fingerprint of everything the gate reads (the cached candidate and its score, the book's tags and path, its file set with sizes and durations, the live authors, the transcribed title) is unchanged. Any change, a new build of the gate, or an owner-review pin re-evaluates the book. Transient refusals (store read failures, unreadable authors, apply failures) are never remembered. The run logs one summary line, "skipped N books with unchanged structural refusals", and the count appears in the final summary.
+
+- Saving a book edit now writes the book row, its author list (book_authors) and
+  its narrator list (book_narrators) in one write under the book's write lock
+  (`ModifyBookCredits`). Before, the two lists were written after the row
+  committed and outside the lock, so a concurrent narrator sync of the same
+  book could have its credits overwritten, or overwrite the edit's, and leave
+  the narrator field and the narrator list on different casts. A list the edit
+  does not change is no longer rewritten at all, so a title-only save cannot
+  re-order credits, and an edit that changes no list writes the row alone, so a
+  corrupt credit list no longer blocks it. A credit write that fails, or a
+  narrator that cannot be resolved or created, now fails the edit instead of
+  returning a warning after a half-saved edit. Other writers (the metadata
+  apply) still write the row and the lists as separate steps.
+- `ModifyBookCredits` stages only the credit lists its callback changed, and
+  bumps the library generation after mirroring them into memdb so a cached
+  author page is not served stale.
+
+- Creating or updating a `BookFile` no longer writes `book_file_acoustid:<segment>`
+  index keys for `AcoustIDSeg0..6` values the stored row does not keep (T020 drops
+  them from the row). Nothing could ever delete such a key afterwards: the delete
+  paths and `dedup.bookfile-seg-drop` find a row's segments in the stored row, so
+  the keys outlived the fingerprint they were written for, and the row itself.
+  The row and its index keys now come from one definition of the stored form, in
+  every writer: create, update, upsert, batch create, PID transfer, the retired-row
+  update, and `MoveBookFilesToBook`, which was the one writer that still kept the
+  legacy segment columns of a moved row. A legacy row that is updated now loses its
+  index keys together with its segments.
+
+- The boot-enqueued full-library walks (`maintenance.external-id-backfill`, `movement-atom-cleanup`, `malformed-m4b-remux`, `malformed-m4b-transcode`) are now resumable. A run too large for its timeout used to end `timed_out` with its done flag unset, and the next boot started again from zero, so a big first run never finished. Each walk now checkpoints a cursor (a sorted file path, or a book ID and then an iTunes XML track index for the external-ID backfill) through the registry's checkpoint, and the three `ResumeRestart` ops stop before their deadline and continue under the same operation with a fresh timeout. The timeouts are unchanged. The transcode stays `ResumeAsk` and resumes from its cursor through an operator Retry. The per-file passes now run on a small fixed worker pool (4, and 2 for the transcode). A protected file skipped before a resume still withholds the done flag.
+
+- `GET /operations/:id/results` no longer serves a legacy (v1) operation row of another type under the candidate-fetch contract: the v1 fallback in `metabatch.ResolveCandidateFetch` is type-gated like the v2 branch, so such an id answers 404 (TODO-CANDIDATE-FETCH-V1-TYPE-CHECK).
+
+- `TestRun_EmptyNeverHarvestedAuthorsCompleteAfterTheWindow` judged "still due" against the wall clock while the runs it checked happened on a fixed 2026-10 test clock, so it started failing on every branch once the default reharvest interval had elapsed on the night of 2026-10-30. The check now uses the runs' own clock.
+
+- A hand-picked metadata apply now claims the repair locks of the fields it changed while it still holds the book's field-state lock, and takes the lock again as the person's when a revert already lifted it. Before, a revert landing between the apply's write and its claim left the person's new value unlocked, so a rescan could overwrite it.
+
+- Re-organizing a book by COPY now carries the listener's Audiobookshelf sync id,
+  per-file download ids, every user's position and book state onto the new primary
+  copy (`Service.CreateOrganizedVersion` calls the new `merge.FollowVersionHandover`
+  after the copy's rows are written and before the original is demoted). A book
+  partway through no longer drops off Continue Listening and the visible copy no
+  longer starts at zero. Positions saved without a sync id (the iTunes position
+  backfill) move too. A failed follow is logged and never fails the organize.
+
+- The Duplicates lane's candidate list (`include_books`) and the candidate comparison drawer now send `author_name` and `series_name` on `book_a` / `book_b`. They returned the bare book record, so every Dupes card, cluster list and comparison panel read an author of `undefined` and showed no author line. The names are resolved by the same `database.ResolveBookNames` the audiobooks endpoints use.
+
+- The Deluge protected-path cache (seeding folders and `protected_paths`) now
+  recognises a path reached through a symlink: a link into a protected folder, a
+  file under a symlinked parent, a dangling link into the folder, and a
+  protected folder configured through a link. Paths are compared as spelled and
+  with symlinks resolved, against the prefixes as spelled and resolved; the
+  prefixes are resolved once per refresh. A path whose links cannot be resolved
+  counts as protected.
+- The frozen iTunes tree (any `books/itunes/` segment, case-insensitive) is now
+  protected by the Deluge cache and by the shared protected-path check
+  (`pathutil.UnderProtectedPath`, used by the purge, organizer, metadata
+  write-back, server middleware and metafetch) whatever the configuration says,
+  including for a link into the tree.
+- The scheduled `deluge.protected-paths-sync` op now actually fetches the
+  torrent save paths (it called `IsProtected("")`, which returns before the
+  cache looks at its TTL) and fails when Deluge is unreachable.
+- The Deluge cache no longer treats a spelled seeding-folder hit as final: a
+  file there that is really in the frozen iTunes tree or under a static prefix
+  is reported static. A candidate with a `..` segment is protected, a prefix
+  that stops resolving keeps its last resolved form, and an unresolvable prefix
+  warns once per refresh interval instead of once per call.
+- The Deluge importer's static-prefix check (configured protected paths and the
+  iTunes library folder) now follows symlinks too.
+
+- After a version swap, Deluge is now told to move the leaving version's torrent into its
+  own `.versions/{id}` folder. It was being sent the `.versions` folder one level too high.
+
+- Ten operations accepted only `dry_run`. Eight silently dropped `dryRun`, so a
+  run started as `{"dryRun":false}` previewed and wrote nothing while looking
+  like a completed repair; the other two (`maintenance.rewrite-path-prefix`,
+  `maintenance.repair-library-state`) refused the unknown key. They now accept both spellings, an omitted flag is still a
+  preview, and a body that states the two with different values is refused with
+  an error naming both. The ops are `dedup.series-dedup`,
+  `maintenance.author-conjunction-repair`, `maintenance.author-duplicate-merge`,
+  `maintenance.auto-match-transcribed`, `maintenance.intro-migrate-single-file`,
+  `maintenance.repair-library-state`, `maintenance.repair-transcribe-status`,
+  `maintenance.rewrite-path-prefix`, `maintenance.series-phantom-repair` and
+  `maintenance.version-group-primary-repair`. `maintenance.duration-reextract`
+  resolves its two spellings through the shared `opmode.ResolveDryRun` instead
+  of its own inline copy.
+
+- The per-file intro transcription op no longer writes its run statistics out of order. Two workers finishing a batch at the same moment could save the older counters last, so the stats page briefly showed numbers going backwards mid-run. Saving a snapshot is now one ordered step.
+
+- `franchise.MatchAll`, which runs on every scanned book and dedup
+  candidate, now skips each rule's regular expression unless one of that
+  rule's literal keywords occurs in the text, and `Detect` no longer runs
+  `MatchAll` twice on a title that only a weak rule names. Results are
+  unchanged (a test compares them against the unfiltered matcher); the
+  matcher is about 50 times faster on a 200-value corpus.
+
+- A full-library per-file intro run no longer probes every Whisper worker's health once per batch of 8 files. The first gate of a dispatch reuses a clean health answer for up to 30 seconds. Any failure marked against a worker discards its cached answer immediately, workers that are unreachable, stuck, unable to start their decoder or missing a mount are never remembered, and the re-checks made after a wait or a cooldown still probe.
+
+- A download ingested into a book whose version swap did not finish (a version left in
+  `swapping_out` / `swapping_in`, so the book has no active version) is now added as an `alt`
+  version, with an Info log naming the stuck swap's version ids. It used to become a second
+  active version, which made the later resume of the swap refuse with `SWAP_RESUME_REFUSED`
+  and left the book needing a hand repair. `ResumeVersionSwap` itself needed no change: it
+  already tolerates an `alt` version.
+
+- `Server.isProtectedPath` and `metafetch.Service.isProtectedPath` now fails closed when the import-path list cannot be
+  read: every path counts as protected until the list reads again (logged at
+  most once a minute). Before, the import paths were silently dropped, so the
+  organizer's rename-source guard answered "movable" for a file under an import
+  folder and an in-place move or `RenameFiles` could take it out of that folder.
+- The metafetch library-copy path now refuses with the protected-list-not-loaded
+  error while the import-path list is unreadable, instead of copying a book that
+  may need no copy (every book outside the library folder reads as protected then).
+- The library-copy decision in metafetch reads the import-path list once and
+  decides the lookup, the sibling checks and the loaded check from that read.
+  Before, a read that failed and a second that succeeded could let a copy be made
+  of a book that was never protected.
+
+- Tracks converted from an iTunes ITL library no longer claim `Bookmarkable: true`. The ITL format has no such flag, so it is now reported as unknown (false) and declared absent in `itunes.SourceFields`, as Bookmark, play count and play date already are.
+
+- Every operation-journal writer now records its rows through
+  `database.RecordOperationChange`, which refuses a change type nobody has
+  classified as user or library data. Before this, only `repairs.Writer` ran
+  that check; the repoint, author strip/merge/relink, fs-regroup, series phantom,
+  author merge, organizer, dedup, narrator and credits-backfill writers called
+  `CreateOperationChange` directly, so a new type they wrote would have been
+  served to every caller as library history. The classification table moved from
+  `internal/undo` into `internal/database` (which `internal/merge` can reach),
+  and `book_file_repoint` plus the organize, narrator, author and series-prune
+  ledger types are now classified (all library data).
+
+- The organizer and series-merge ledger writes that discarded their journal error now log a Warn (operation id, change type) when a row is refused or fails, instead of dropping it silently.
+
+- The Library list's `filters=` route now reads a read_status value written as a
+  bare alternation (`finished|in_progress`) as the union of those statuses, the
+  same as `(finished|in_progress)` and the search box. An unknown status in the
+  alternation is a 400 that names it and lists the valid statuses.
+
+- `TestFragmentFixer_DemoteOnlyFirstOpRevertsToOnePrimaryInEitherOrder` builds one fixture, not two, for each cut point that misses the demote-to-soft-delete window (MAINT-TEST-BUDGET, partial).
+- `TestITunesClone_RollbackFailureKeepsStateOnListedBook` and the other iTunes clone tests use an in-memory store, so the 20-subtest rollback matrix no longer waits on fsync (11 s to 1.6 s).
+- `TestFragmentFixer_HeldRowActionMatrix` runs a held row's first action on the fixture that found the hold instead of rebuilding it.
+
+- `database.MaskSecret` no longer reveals most of a short secret in
+  `GET /api/v1/config`. A secret under 16 characters now masks to exactly
+  `********`; a secret of 16 or more shows only its last 2 characters after
+  `********`. No prefix is ever shown (previously an 8-character password
+  displayed 7 of its 8 characters). The round-trip guards compare against
+  `MaskSecret(stored)`, so a client echoing the masked value back still keeps
+  the stored secret.
+- A masked-looking secret (any run of four or more `*`) sent to
+  `PUT /api/v1/config` is now refused with a 400 telling the operator to
+  re-enter the secret, unless it is exactly the current mask of the stored
+  secret. Older mask shapes from a stale browser tab or exported config are not
+  accepted as an echo, so they can no longer overwrite a stored secret. Settings
+  import skips mask-shaped credentials and lists them.
+
+- Undoing a combine no longer puts back a repair lock whose repair has since
+  been reverted. The lock the merge undo restores for a field (a lock source
+  of `repair:<operation id>`) is checked against the operation's journal; when
+  that operation's lock row was reverted, the lock is lifted instead of
+  re-installed and the undo's warnings (shown on the Activity page) say so.
+  The restore already ran under the book's metadata-state lock, so it cannot
+  interleave with `ClaimRepairLocks` or `repairs.Writer.LockFields`; a test now
+  pins that.
+
+- Loosening a review filter no longer hides rows when "hide multi-book" is on. Groups of books sharing a candidate were counted after the minimum score, runtime, language and transcription filters, so loosening one let a second book join a group and hid the first (nothing listed at minimum score 150, 40 rows at 200). Groups are now counted before those thresholds, so a looser filter always lists a superset.
+
+- The Settings naming-pattern help no longer advertises `{audiobook_release_year}` and `{track_number}`, which the path builder never resolved, and it now lists `{series_prefix}` and the other tokens it does resolve. The list comes from the server (`naming_pattern_tokens` on GET /config, read off the resolver's own map), so it cannot drift again; the pattern fields also warn inline about any brace token the server does not know.
+
+#### Narrator sync fold-matches existing records instead of minting a duplicate
+
+`resolveNarratorCredit` (the book write path that keeps `book_narrators` in step with the Narrator column) now matches a credit name against existing narrator records by fold key (`util.FoldKey`: case, accents, punctuation, spacing) after the exact-name lookup, so a rescan that reads "Renee Montoya" back no longer creates a second record beside "Renée Montoya" and re-credits the book to it. A single fold match is linked and keeps its spelling; several matches go to the exact match, else the record with the most credits, logged at Warn with every candidate id; only an unmatched name creates a record, under the narrator name-index lock so two spellings resolved at once mint one record. Backed by a new `narrator_fold:<fold>:<id>` index kept in `CreateNarrator`/`DeleteNarrator` and reconciled on every boot (write-only-absent, bounded worker pool); readers scan the records until this boot's reconcile finishes. `FoldKey` moved to `internal/util` (the store cannot import `authorjunk`); `authorjunk.FoldKey` delegates to it. `CreateNarrator` itself is still exact-name.
+
+- The boot-time `opchange_by_book` index check (`maintenance.opchange-book-index-rebuild` with `ensure`) no longer has to walk the whole operation-change journal inside one run. The journal is never pruned, so that walk only grew, and past the 60 minute timeout every boot failed and `GetBookChanges` stayed on the slow full scan for good. The verify now saves a cursor, so it finishes across runs: near the deadline it stops at the cursor and the registry continues the same operation (`ErrContinueInPlace`, so the op is now `ResumeRestart`). The index is trusted only after a pass has covered the journal end to end; later boots then check only the rows added since, and a full re-check runs weekly because a row written by a rolled-back binary can sort below the cursor. A rebuild resets the cursor. See `docs/decisions/2026-10-30-opchange-verify-resumable.md`.
+
+- The header operations bell now lists only the newest 15 completed operations, with a "Show all N in Activity" link to the Activity page for the rest. Running and queued operations are never capped.
+
+- `GET /api/v3/ops/counts` no longer answers 500 when a Repairs run record cannot be decoded: the census skips and logs it, and its group gives the run up exactly as the run listing leaves it out.
+- `RunQuery.Total` no longer counts a run record that cannot be decoded when the caller set `OnUndecodable`; the total now agrees with the page.
+
+`ListWaitingDepsOps` no longer decodes every operation row to find the parked
+ones. A new `opv2:wait:` index, staged by `stageOpRow` in the same batch as the
+operation row, lets the dependency scheduler's sweep tick, its per-subject
+re-evaluation and its startup index rebuild read only the rows that are
+waiting on dependencies. That scan was about 7 GB of allocation per 25 minutes
+on the production heap. Like the timeline index it is untrusted at every boot:
+the reads use the full scan until the boot reconcile has built and repaired the
+index, and a read that finds a key for a row that is gone or no longer waiting
+deletes the key and skips it.
+
+- The trash purge no longer deletes a file that another live book reaches through a symlink. The served-file guard compared a link's own path, not what it points at, so a book organized with the symlink strategy could lose the file its link played. It now indexes every other live book's rows and file paths by what they resolve to (link chains and linked folders included), keeps the version when one resolves to a file of the version, and refuses the whole purge when a path cannot be resolved.
+- A trashed or alternate version's `.versions/<id>/` rows are no longer counted in the player timeline, the ABS item view, the stored duration and size of the book, or the duration re-extract op's total. `SplitOwnFolderFiles` sets them aside as `Slots` and keeps them out of the copy matching.
+
+- A stuck purge (including a refusal because the book serves nothing on disk) now counts as at most one unsettled night per calendar day, as the
+  kept-file sweep already did, so clicking "Purge now" repeatedly no longer pushes
+  a purging version to purge_failed early. The purge still runs and records the
+  attempt; it just does not add another night on a day that already counted one.
+
+- `TestCancelPurgePreviewRoute` no longer races the live operation dispatcher: the credential-guard fixture gains an idle-registry variant for route tests that store "queued" rows and assert on them (flaked on Woodpecker pipeline 1832 with a row read as "running").
+
+- `POST /api/v3/ops/runs/:id/cancel` now lets a holder of `settings.manage` cancel a legacy Repairs run that
+  names no fixer. Such a run is readable by nobody, so the cancel was refused with the Repairs 403 even to an
+  admin who did not start it, while the v1 cancel and discard routes (`DELETE /operations/v2/:id` and `/record`,
+  both `settings.manage`) already worked on it. The run stays unreadable; a run that does name a fixer is
+  unchanged.
+
+- A daily digest in the activity feed no longer states totals that include the rows of Repairs runs the caller
+  may not read. The digest's `counts`, `original_count`, `tag_counts` and summary used to cover every row of the
+  day while only its items were redacted, so they said how much a hidden run did. `CompactByDay` now stores each
+  operation's share of those numbers, and a read subtracts the share of every operation the caller may not read.
+  A digest compacted before this change has no shares: its totals are left out for a caller who could be hidden
+  something, with `aggregates_withheld: true`, and the Activity page shows a "counts hidden" chip instead.
+
+- `GET /operations/pause` (and the pause and resume POST answers), `GET /operations/stale` and the operations
+  timeline no longer list Repairs operations (`repairs.plan`, `repairs.apply`) the caller may not read. The pause
+  lists named the definition id of every running Repairs run, and the stale list returned the legacy rows whole.
+  Every overview list now filters through one shared helper, `opaccess.Reader.ReadableOps` (and
+  `ReadableLegacyOps` for the retired v1 table), and a guard test walks the wired `/operations` and `/op-defs`
+  routes and fails on a list route that has no test seeding a hidden Repairs run.
+
+- Factory reset and system reset (`config.ResetToDefaults`) no longer persist zero values for
+  the 131 settings its hand-written literal had left out (`search.result_cache.*`,
+  `fp_parallel_workers`, `fingerprint_length_sec`, `oauth_default_role`, `backup_compression`,
+  `activity_backend`, `telemetry_environment`, the `list_warmer_*` and library-counts cache
+  keys, the ABS auth/TTL keys, every `scheduled.*.interval`, and more). The reset now builds its
+  Config from the same registered viper defaults and the same reads as `InitConfig`, on a
+  private viper with no config file and no environment, so the literal is deleted and a new
+  default reaches the reset by construction.
+
+- `RetireBookFiles`, `UnretireBookFiles` and `RehomeRetiredVersion` no longer hold the book-version lock while they wait between retries. When a retire, un-retire or rehome batch lost a race with another writer it slept (up to 9 waits of 5-100 ms) with the version's lock held, so batch upserts and version edits for that version queued behind the sleep. The lock is now taken per attempt and released before each wait, and each retry re-checks that the version is still a retired version of its holder before writing. Same outcomes, possibly in a different order: a retire whose version was rehomed away during the wait is now refused (`ErrRetiredVersionMismatch`) instead of the rehome queueing behind it.
+
+The retired-versions fixer now journals its retire through `repairs.Writer.RetireVersion` and `RehomeRetiredVersion` instead of its own copy of that code, and a book that an unreversed combine journal names as absorbed (`combine_undo_aware`) is no longer held back at apply. Its retire is written with the combine's journal id (`RetireSpec.CombineJournalID`), so the Writer links it to the combine and undoing the combine finds it. A book named by more than one unreversed combine is still held (`combine_undo_multi_journal`, retry later) because the retire links to one combine only. `RetireSpec` gained `SourceOriginalPath`, `MetadataJSON` and `IngestDate` so the retired version keeps the provenance the fixer records, and `repairs.CheckRetireSupport` refuses a store that cannot retire before the plan record is journaled.
+
+Reverting a retire's version-create row while any row still names the version was already refused by the store (typed `dependent change not reverted`, the version survives, the rest of the operation still reverts); new tests pin that for a partial revert and for a row journaled by another operation.
+
+- The operation revert report no longer decides which notes to hide from a caller without users.manage by looking for the word "user" in the text. Each merge-undo warning now carries the accounts it names, set where the warning is written, and the report withholds a note by that. A note that uses the word "user" for another reason is shown, and a note that names an account without the word is hidden. The JSON served is unchanged.
+
+- The operation revert now reverses the two change types the v3 `ops.Writer` records: `book_file_modify` (one book_file field, restored field by field while it still holds what the Writer wrote, through the store's `ModifyBookFile` compare-and-swap) and `book_authors_modify` (a book's whole credit list, restored exactly, order included, while the list is still the one the Writer wrote). A row whose target changed since is refused and counted in the result's Failed and ChangedSince; the operation's other rows still revert. The preflight predicts the same refusals.
+
+- A rescan no longer relabels a book that is in the trash. A book trashed by its
+  `deleted` library-state label alone (the batch `library_state: "deleted"` path
+  makes these) was marked `suspicious` when its file was under the minimum book
+  size, which took it out of the trash with no restore and no permission check.
+  Every scan-derived library-state write now goes through one rule
+  (`scannerMayChangeLibraryState`), the scan still refreshes the trashed row's
+  file columns, and the scan summary reports how many trashed books it left alone.
+
+#### OR and grouped NOT over per-user terms are evaluated, not refused
+
+A search, dynamic collection or smart playlist that put a per-user term
+(`read_status`, `progress_pct`, `last_played`) under an `OR` with a sibling, or under a
+`NOT` over a group, used to be evaluated as an `AND` (`title:Alpha OR read_status:finished`
+found only Alpha books the viewer had finished) and, since the shape check landed, refused with
+a 400. They are now answered as written for the signed-in viewer: each per-user term becomes an
+index query over the viewer's own state rows (`search.MixedQuery`) and the index evaluates the
+whole expression, so scoring, paging and the match count are unchanged. Plain conjunctions, a
+term negated on its own and one field's alternation keep their existing path. The value checks
+(unknown status, pattern, bad number or date) still apply, and `tag:` under an `OR` is still
+refused. `search.CheckPerUserBoolean` and `search.ErrPerUserBoolean` are removed.
+While the search index is starting up or rebuilding, the text-only fallback cannot evaluate
+such a query and refuses it with a 400 rather than answering it as plain text.
+
+- Substring search (`SearchBooks`, the filtered variants and the scoped
+  fallback) now normalizes the query the same way the stored author name is
+  normalized, so an author is found when the query carries a tab, a non-breaking
+  space or other non-ASCII whitespace. The query as typed is still tried first,
+  so matches only widen. See
+  `docs/decisions/2026-10-30-searchbooks-author-normalization.md`.
+
+- A select-all on a Library view filtered by `read_status`, `progress_pct` or
+  `last_played` now runs the background operation over the books that view showed
+  for the requesting user. The resolver judges those filters (and per-user terms in
+  the search text) against that user's listening rows, the same way the Library
+  list does, instead of refusing them. With no user to judge by (auth off, or an
+  operation row that records no actor) it still refuses and names the filter
+  rather than widening to the whole view. The bulk metadata fetch continuation
+  keeps the original actor so later links of a chain resolve the same selection.
+- The bulk metadata fetch no longer widens to the whole library when a given
+  selection resolves to zero books. A filter that matches nothing (including a
+  per-user filter that matches none of the requesting user's books) now finishes
+  with nothing fetched; only a run that names no filter and no books fetches the
+  whole library. Each user's identical per-user selection now gets its own run
+  instead of being folded into another user's active one.
+
+- `POST /operations/sweep-tombstones` no longer unlinks the file a leftover tombstone names unless the book purge's own checks allow it. `SweepTombstones` used a bare `os.Remove`, so a tombstone whose path a live, trashed or retired book still named, or that lay outside the library root or under a protected (import, iTunes, `.failed`) path, lost that file. It now asks `AudiobookService.TombstoneSweepGuard`, which runs `planPurgePathIn` (protected path, library root, any `book_file` row or live book naming the path, unmounted-folder detection), the all-rows `BookIDsAtPath` lookup (trashed books included) and a comparison of the file on disk with a stamp (inode, size, modification time) the purge recorded when it committed to removing it. Any refusal is logged at Warn, keeps the tombstone, and is counted in the new `refused_files` and `refusals` fields of the sweep result.
+- A purge writes the stamp with the tombstone (`CreateStampedBookTombstone`, same key, same value) only when it has committed to removing the book's file. Tombstones written before this change, and those of a purge without `delete_files`, carry no stamp: their files are kept and the refusal says so. A handler built without `WithTombstoneSweepGuard` refuses every file removal (fail closed).
+
+- `GET /system/logs?operation_id=` returned nothing for every caller: it handed the request to a handler that read the operation id from a route parameter this route does not have. The operation id is now passed as an argument, and the same visibility check as the operation's own log route applies.
+
+- Provider throttle holds no longer expose credentials. A hold's detail comes
+  from the raw provider error, which for a transport failure includes the
+  request URL and its query string (some providers put the API key there).
+  Details are now redacted when recorded (URL userinfo dropped, every query
+  value replaced by `***`, bare `key=`/`token=`/`secret=`-style pairs masked),
+  redacted again when a persisted hold is loaded, and redacted in
+  GET /api/v1/metadata/providers/throttles, so holds saved earlier are scrubbed too.
+- The Google Books API key is now sent in the `X-Goog-Api-Key` request header
+  instead of a `key=` query parameter, so a transport error no longer carries it
+  in the request URL. Errors leaving a chain-built provider source are wrapped
+  in a redacted error (original still reachable through `errors.As`/`errors.Is`,
+  so throttle classification is unchanged), and the search `sources_failed`
+  text is redacted too. URL redaction is stricter: userinfo (even with `/`, `?`,
+  `#` or `@` in the password) becomes `***@`, and the whole query becomes `?***`.
+
+- `GetBooksByTitleInDir`, which the scanner calls once for every newly imported
+  book to find same-title siblings for version linking, no longer walks and
+  JSON-decodes every book row. MemStore now keeps a `(normalized title, parent
+  directory)` index and `PebbleStore.GetBooksByTitleInDir` answers from it once
+  memdb is published, so the lookup costs the number of siblings found instead
+  of the size of the library. The Pebble scan remains as the fallback for the
+  warmup window and for a memdb known to be missing book rows
+  (`ErrMemdbIncomplete`); it now logs, rather than silently skipping, a row it
+  cannot decode. Results are identical to the old scan (soft-deleted,
+  merged-away and non-primary rows are still returned, ID order), except that
+  memdb rows carry the stripped book projection.
+
+- The malformed-M4B transcode pass no longer pre-marks two install-specific file
+  paths as permanently unfixable on every completed run. A file is skipped only
+  when a skip setting was recorded for it by an earlier attempt. The
+  `pebble-inject-skip` tool now takes the file paths on its command line instead
+  of carrying two hashed install-specific keys.
+
+- `transcription_mismatch` refusals now say which leg failed (exact title, substring author, or the shared matcher) and print the transcribed and candidate title/author, in the style of `runtime_mismatch`. `util.MainTranscriptionConfirms` became `util.MainTranscriptionMatch`, returning a structured result; the gate decision is unchanged.
+
+- Web-UI sessions now end when the account's credentials change. A password change, an admin password reset (direct or by reset link), a deactivation and a reactivation each bump `User.CredentialEpoch` in the same write as the change (as for ABS sessions since #4081), and every web session is now stamped with the epoch of the sign-in that created it (`Session.CredentialEpoch`); `RequireAuth` refuses a session whose stamp is not the user's current epoch exactly as it refuses an expired one (the row is revoked and the answer is 401 "session expired"). The open-stream live re-check (`sessionStillStands`) applies the same test. Before this, a web session outlived its owner's password change for its whole lifetime (24 hours, 7 days with "remember me", 30 days for an invite sign-in), and a deactivated account's old session came back to life on reactivation.
+- A sign-in stamps its session with the epoch of the user record it verified the credential against, never a fresh read, so a login that checked the old password and wrote its session after the change is refused on first use. `CreateSession` and `CreateSessionWithOrigin` take that epoch as a new trailing argument (all production callers: login, OAuth, accept-invite, temp-login link, and the invite handler).
+- On a self-service password change the caller's own web session stays signed in: `UserCredentialWriter.SetUserPassword` takes a `keepSessionID` and re-stamps that one session in the same Pebble batch as the password and the epoch bump, so no request can see the new epoch beside the old stamp. It re-stamps only a live session of the same user that was current under the epoch being replaced, so it cannot launder a session the old epoch had already killed. Every other web and ABS session of the account is ended; an admin reset keeps none.
+- After the write, `RevokeStaleWebSessions` marks the user's older web sessions revoked (best effort, logged on failure) so they leave the device list and are swept. It revokes only sessions stamped with an epoch below the one the change produced, so a sign-in that happened after the change is not revoked by a late cleanup.
+- Sessions issued before this change have no stamp and read as epoch 0: they keep working for an account that has never changed credentials, and are refused (one forced sign-in) for an account whose epoch is already above 0.
+- Temp-login and reset-password links now carry the account's credential epoch from the moment they are minted, and are refused (redirect to `/login?error=invalid_or_expired_token`, no cookie) if the account's credentials changed after minting. A reset link is minted from the row its own epoch bump produced, so it stays redeemable; a later password change or a second reset kills it.
+- `RevokeSession` and the `keepSessionID` re-stamp are serialized by a new `sessionWriteMu`, so a concurrent revoke can no longer be overwritten by the re-stamp and resurrect a revoked session.
+
+- A whisper worker port that is handed to another machine while a request is in flight (a tunnel coming back from another Mac during a minutes-long request) is now detected. The liveness poll compares the `machine_id` it already reads from `/health` with the identity the dispatch froze for the port, using the same address-resolved rules as the gate, so a worker that only missed its id and answers as `u:` is not a swap. On a mismatch the request is ended with a new `WorkerSwappedError` (`ErrWorkerSwapped`), which is neither a stuck worker nor an outage: none of the request's answers or strikes are stored (neither under the old machine's name nor the new one's), the endpoint is not benched, the canary memory is untouched, and the jobs go to the other ports. The port is dropped from that dispatch like one that changed hands after a cooldown wait, and the next dispatch's gate keys it by what it reports.
+- The swap check now also covers what the first change left open. The result journal no longer keeps what a swapped send wrote: the entries a send journalled as its chunks completed are removed (`ResultJournal.Invalidate`, `resultjournal.Journal.Invalidate`) when the send ends as `WorkerSwappedError`, so a later run, on any endpoint running the same model, is not served an answer the dispatcher withheld. The lone endpoint pins the machine a worker that gained its machine id may be (the one it learned, or else the first strong id a poll sees for the whole dispatch), and a different strong id is a swap. A successful response on a request with a frozen identity is checked with one more `/health` probe before it is accepted, so a swap after the poll's last probe (and for a worker the poll skips) is caught; a probe that cannot be read is retried (up to three attempts) before anything is concluded. Follow-up filed: have the worker echo `machine_id` in its responses.
+- An unreadable post-response `/health` probe is no longer treated as a swap. A worker that blocks `/health` while it decodes used to have every answer withheld, and the journal entries of its earlier, already verified chunks removed. After the retries, a polled worker whose identity a readable probe confirmed shortly before the response keeps the response; otherwise only that one response is withheld (new `WorkerUnverifiedError` / `ErrAnswerUnverified`) with no strike, no bench, the port kept in the dispatch, the earlier chunks and their journal entries kept, and the withheld jobs re-sent to another endpoint (or deferred). A worker the poll never watches (no `busy_seconds`) keeps its response, logged once per URL. A readable probe that shows another machine is still a swap, handled as before.
+
+- `SetBookFileHash` and `UpdateBookFileHashes` (extract-wav-clips, tag
+  write-back, `book_file_hash_recorder`) skipped the owning book's aggregate
+  recompute on the claim that a hash feeds no aggregate. It does: a missing row
+  whose hash matches a present row is a repoint duplicate dropped from
+  `Book.Duration`, and rows sharing a `file_hash` are copies of which one counts.
+  A hash that paired or un-paired two rows left `Book.Duration` stale until
+  something else recomputed the book. Both writers now recompute the book when
+  a hash they moved equals a sibling row's hash; unrelated hashes (a tag write
+  across a whole book) still cost no recompute. `backfill-file-hashes` is
+  unchanged: it stores through `ModifyBookFileDeferAggregates` and recomputes
+  each book once per chunk.
+
+- Retiring, un-retiring or re-homing a book file now rewrites the owning book id stored in the file's near-duplicate fingerprint index rows (`fpidx:`) in the same batch that re-keys the row, so the index never names the shell a retired row left (or the holder a restored row left). Previously it kept naming the old book until the index was rebuilt. The index build op's write (`PutLSHEntries`) now takes the owner from the file's row under the file's write stripe instead of trusting the book id its caller read earlier.
+
+- Test flake: `TestSearchResultCache_RenamesAreReflected` failed on loaded CI shards with "index queue did not drain within timeout". `drainQueue` had its own 5 s deadline while `drainTB`, which the same fixtures use to seed, allows 60 s; a safe Bleve batch returns only after persistence, which can pass 5 s under `-race` on a busy runner. `drainQueue` now delegates to `drainTB`, and the timeout message reports `indexWorkerBusy`, the queue depth and the oldest in-flight Bleve write. No production code changed: the failure was in the setup wait, before any rename was made, so no stale-after-rename path was involved.
+
+- Two CI-only flakes, `TestApplyMultidisc_RealCombineOfARowlessMemberAtAHeldPathReportsIt`
+  and `TestPreflightUndoConflicts_RetireRowsOnPurgedShell`, failed with "memdb is
+  not serving" on loaded Woodpecker agents. Their fixtures (`newApplyTestStore`,
+  `newRetireStore`) opened a raw `database.NewPebbleStore`, which starts the memdb
+  warmup asynchronously, so the test body could run before memdb published and the
+  production fail-closed ownership lookups (`BookFilesAtPath`, the retire and
+  combine checks) refused. Both fixtures now use `dbtest.NewStore`, which returns
+  only once memdb serves. Production fail-closed behaviour is unchanged.
+- `dbtest.NewStore` now fails the test if warmup finishes without memdb serving
+  (a failed warmup also closes `warmupDone`), and bounds the wait at two minutes,
+  instead of silently handing back a store on its Pebble fallback.
+- Added `database.SetWarmupStartHookForTest`, a test seam that delays the warmup
+  goroutine so the "test runs before memdb serves" window can be reproduced
+  deterministically; regression tests pin both fixtures and `dbtest.NewStore`
+  under a delayed warmup.
+
+- Transcribe: a lone whisper endpoint whose op was cancelled between the start gate and the dispatch no longer sends the work on. `dispatchSingle` skipped its remembered-machine canary check when the context was already cancelled and then went on to send, so the dispatch could end with no error (`TestSingle_ACancelDuringTheCooldownWaitReturnsTheCancellation` failed in CI with `err = <nil>`). It now returns the cancellation before asking or sending anything. The test cancels from the gate (`poolOptions.extraRefusal`) instead of 50 ms in, and a new test covers a cancel landing right after the gate.
+
+- Folder-sized books repair: whether a file is missing is now decided by looking
+  at the disk, not by the library's "missing" flag. The flag goes stale in both
+  directions, so an apply could create a book for a file that was already gone,
+  and could leave a file that is still there hidden on the retired folder row.
+  A file that is gone from disk now stays on the retired folder row and never
+  becomes a book, and a file that is present always gets its own book with the
+  file recorded as present. If a file cannot be checked (a permission error, or
+  its library folder looks unmounted or empty), the row is listed as unreadable
+  and nothing is applied to it. Plans made before this change show as changed
+  since plan and need a re-run.
+
+- The folder-books repair's duplicate-title check now compares core titles: a proposed new book whose title only adds a series suffix ("Title_ Series, Book", "Series - N - Title") to a live book of the same author is skipped as a duplicate, and new books are titled with the core title.
+
+- Folder-sized books repair now finds author folders of whole books stored flat (three or more files of 3 h+ under distinct names) and folder-books whose files span two shelves. A two-shelf row is applicable only when 80% of its files share a shelf and every other file has a proper book; otherwise it is listed as `skipped_mixed_shelf` instead of being silently ignored. Found via an author-folder row of 34 one-file books that hid a book from search.
+
+- A timing test for how often a long operation saves its progress could fail on
+  a busy CI machine: it timed the test's own fake store instead of the moment
+  the operation decided to save. It now records the time as the save starts.
+
+- Web tests: `Library.identMissing.test.tsx` pastes the `ident:missing` query as one
+  input event instead of typing it key by key. Each keystroke re-rendered the whole
+  Library page, and the test hit vitest's 30 s timeout on a loaded CI runner.
+  Locally it drops from about 1.5 s to 0.56 s.
+
+- metafetch tests: the search fan-out harness now clears the process-wide provider
+  throttle registry before and after each test. A hold left by an earlier test
+  failed `TestSearchFanoutProbe_NotFoundASINIsAnswered` and
+  `TestSearch_PartialRuntimeEnrichesRuntimelessASINAnswers` with "provider is
+  throttled", depending on test order.
+
+- A repairs test recorded which rows saw the owner-apply marker in a plain map
+  while the apply step processes rows in parallel, so it could fail under the
+  race detector. The test's recorder now takes a lock.
+
+- Deploys failed at the frontend install step after the November dependency
+  bump: the React build plugin's pinned version did not accept the newer Babel
+  plugin it was paired with. CI did not notice because it installs exactly what
+  the lockfile records, while the deploy re-resolved the dependencies and
+  rejected the pair. The React plugin is now on a version that accepts it, so
+  both install paths agree again.
+
+#### Updater: check-only unattended runs, exit 75, the kept `.prev` slot, semver comparison
+
+Automatic updates now only check for a new release and notify you; apply
+updates from Settings. A locally built binary is not compared with releases.
+
+- A restart after an update exits with status 75, so the committed unit's
+  `Restart=on-failure` brings the service back up (it exited 0 before and the
+  service stayed stopped).
+- The previous binary is kept as `<exe>.prev`, the slot `make rollback` uses,
+  instead of being renamed to `<exe>.old` and deleted.
+- Versions compare with `golang.org/x/mod/semver`. A release that is not newer
+  than the running version is never offered and never applied (any different
+  tag, including an older one, counted as an update before).
+- A running version with a `git describe` suffix (`-<n>-g<hex>` or `-dirty`)
+  is a local build: the check reports "local build, not compared" and offers
+  nothing, and `POST /api/v1/update/apply` refuses it unless the body names the
+  version (`{"version": "<tag>"}`).
+- Neither the scheduled updater nor step 1 of the maintenance window applies an
+  update any more; they record the check and log it. While
+  `auto_update.enabled` is on, `GET /api/v1/update/status` reports
+  `auto_apply_paused`, `GET /api/v1/system/status` gains a `degraded` list
+  carrying `auto_update_paused` (never shown on `/health`), and Settings shows a
+  banner.
+- An apply downloads the release that was checked or named, by its tag, rather
+  than whatever is latest at that moment.
+
+- Repairs lane: rows you apply no longer stay listed ("sticky") until you run
+  the trial again. A trial is a stored plan that is never edited, so an apply
+  that wrote rows left them on screen. When an apply that wrote rows finishes,
+  the server now plans that fixer again with the same settings (the same
+  library read as "Run trial", read-only, low priority, one plan at a time),
+  records it as the fixer's newest trial, and returns its operation id in the
+  apply result as `replan_op_id`. The lane follows it, shows "Refreshing the
+  trial after your apply" while it runs, and switches to the fresh rows when it
+  completes. A preview, or an apply that wrote nothing, starts no refresh. If
+  the refresh cannot be started the result carries `replan_error` and the lane
+  tells you to run the trial again. Back-to-back applies each get a refresh
+  that starts after their own writes, and applies made while a refresh is still
+  queued share it.
+- Repairs lane: the refresh after an apply does not hold Apply off. It takes
+  minutes on a large library, so the next row can be applied straight away
+  (a row the refresh still lists that an apply already wrote is refused as
+  changed since the trial). Only a trial you started yourself keeps Apply
+  disabled while it runs. You stay on your page of the list when the refresh
+  lands (moved back only if the shorter list ends before it), and rows you
+  ticked meanwhile stay ticked, less the ones the apply wrote.
+- Repairs lane: a refresh that fails, or is dropped by a restart, no longer
+  leaves the lane without rows. `GET /repairs` returns `last_completed_plan`,
+  the newest plan that stored all its rows (`repairs_last_completed_plan_op:`
+  setting), beside `last_plan`, and the lane shows it. Plan refs carry
+  `after_apply` for plans the server started itself.
+- Repairs lane: each apply's refresh retires the refresh it replaces. Their
+  stored rows are deleted (only a refresh of the same fixer and settings that
+  no running apply reads from; never a trial you started), so a day of applies
+  does not pile up one full row set per click. A tab still showing a retired
+  refresh and applying from it is told to run the trial again (409
+  `REPAIR_PLAN_NEEDS_RERUN`).
+
+### Security
+
+- Admin-only routes honour API-key limits. An administrator's API key that was
+  limited to some permissions can no longer use the administrator role: the
+  admin debug edits, the master lists, account merging and setting another
+  user's email now refuse it. A key with every permission, a key with no
+  limits, and a signed-in administrator are unchanged.
+
+- A revoked API key can no longer be re-activated; a limited API key can no
+  longer create an unlimited one; a revocation can no longer be undone by a
+  request that was in flight.
+- An API key that creates another key must now name that key's scopes, each
+  one a permission the creating key holds. A key created without scopes would
+  get every permission of its owner's roles, which a limited key must never
+  hand out. Creating a key from a signed-in session is unchanged.
+
+#### SSO auto-linking by email uses only verified addresses
+
+An SSO login is now linked to an existing account by email only when that
+address is proven for the account. Each user records where its email came from
+(`email_source`: `setup`, `admin`, `invite`, `idp`, `self`, or `invite_link`),
+and the store sets it on every write path, ignoring a caller's value. An
+address is proven only when its source is `setup`, `admin`, `invite` or `idp`;
+nothing else on the account counts, so an address typed in through the profile
+(`self`) is never proven, even when the account has an older linked identity
+or invite grant for it. An identity-provider login that confirms the account's
+current address re-stamps it `idp`. The lookup checks this against the user
+rows at the time of the login, and links the identity in the same locked store
+operation, so the holder cannot change in between; the email index is only a
+cache that the lookup corrects. Addresses are compared after Unicode NFKC
+normalization and lowercasing everywhere (keys, uniqueness, the OAuth
+allowlist, guest-access revocation, the Cloudflare policy list), so a
+compatibility spelling such as a Kelvin sign (U+212A) for `k` is the same
+address. NFKC is wider than case folding: fullwidth letters, ligatures (`ﬁ`
+as `fi`), superscripts and circled digits also fold to their plain forms, so
+two addresses a mail server might deliver separately can count as one here
+(the first to be verified blocks the other on a second account). That is
+intended: look-alike spellings must never be two identities.
+
+At every start the store stamps a source on rows written before this field,
+the best one the row's history supports (the creation key outranks an
+admin-sent invite, which outranks an identity): an email index entry written
+by account creation gives `setup`; an invite that created the account gives
+`invite` when an admin sent it, else `invite_link` (older accepts also wrote
+the index entry, which then does not count as `setup`); an identity with that
+email gives `idp`; anything else is `self`. A row with both the creation key
+and an identity is therefore `setup`, not `idp`. Stamping never makes a second
+verified holder: a row whose history points to a trusted source is stamped
+`self` when another account already holds the address verified, or when
+another old row also qualifies with a higher rank. On a tie for the highest
+rank, the row the existing email index entry names keeps it (the account an
+SSO login reached before this update); with no entry naming one of them, all
+tied rows are demoted.
+
+At every start, not only the one that stamps old rows, the server logs one
+warning per address that more than one account holds, or that an admin
+account holds only as typed in. It is computed from the rows as they stand,
+so it repeats until the accounts are merged. It names every account by id,
+marks admins and rows demoted at this start, and says which account holds the
+address verified. It says where SSO logins go: a NEW identity with the address
+links to the verified holder (with none, it creates a separate account and
+takes the address from the typed-in holders), while identities already linked
+to an account keep signing in to it, because the resolver matches provider and
+subject before the email. It says not to clear the verified holder's email,
+not to set the address for the others (refused, or wrong when this person
+signs in to another account through SSO), and to leave the accounts as they
+are until they are merged. Each account appears in one warning. An admin
+that alone holds a typed-in address gets its own text instead: there is
+nothing to merge, so it says setting the address as an admin makes it
+verified when it is the owner's own, and to clear it otherwise; it is
+skipped for addresses no identity provider could carry (`@localhost`, bare
+host names, IP literals, `.local`, `.internal`, `.test` and similar). No
+address is logged.
+
+When an identity-provider-verified login, or the acceptance of an invite an
+admin emailed, finds its address held unproven by other accounts, the verified
+claim wins: in one write the address is cleared from those accounts (they keep
+their accounts), it is recorded as an `auth_email_displaced` audit activity
+entry with the account ids, and accepted invites list them as
+`displaced_user_ids`. A verified holder is never displaced, and an unreadable
+user row refuses the displacement.
+
+At most one account may hold an address verified; that is the only email
+uniqueness rule, compared after normalization. Every path that makes an
+address verified refuses (or, for an SSO login, denies) when another account
+already holds it verified. Addresses typed in through the profile are not
+checked at all: PATCH /auth/me accepts any address, including one another
+account holds verified, and records it unverified, so the profile form cannot
+be used to learn which addresses have accounts. Creating an invite answers
+409 only when another account holds the address verified (admin-only route).
+
+#### Bootstrap token exchange creates nothing without a valid token
+
+`POST /api/v1/auth/bootstrap` found or created the admin account before it
+checked the token. On main an admin was created only when no account with an
+admin role existed at all, whatever its status, and the startup read-only key
+(`write_startup_readonly_key`, on by default) already created one at every
+start when none existed; so the request path created an account only when no
+admin-role account existed and that startup step was off or had failed. The
+requester never received the account's password or a key. The token is now
+checked first (constant-time hash compare; a missing or unreadable stored
+expiry counts as expired), then spent, and only then is the admin found or
+created, all under one lock: a token that cannot be spent creates nothing,
+and a failed admin creation puts the token back so it stays usable. If the
+admin is created but its API key cannot be written, the generated password
+comes back in the error response instead of being lost. Only an active admin is reused; a new one takes the
+first free name of `admin`, `admin-2`, and so on, with no email (the old fixed
+`admin@localhost` collided with the uniqueness rule). Its generated password
+is now 28 base32 symbols from `crypto/rand` (140 bits); the old three-word
+passphrase had about 28 bits. The bootstrap attempt limiter keys on the same
+trusted client address as the invite limiter (public IPv6 by /64), shares one bucket
+for callers whose address cannot be established (including a listed
+connector with no `CF-Connecting-IP`), drops ended windows, caps
+tracked addresses at 10,000 and allows at most 100 attempts an hour across
+all callers, loopback and direct LAN callers included. A direct LAN or
+loopback caller with no Cloudflare markers also keeps its own 5-an-hour
+bucket, keyed on its full address (LAN devices on IPv6 share one /64); every
+address of a direct LAN IPv6 /64 also shares one aggregate window of 20
+attempts an hour, which is what caps a LAN host rotating through its /64.
+Tunnel traffic, including connectors on LAN addresses in the same /64, never
+counts against that window. All direct LAN callers except loopback also share
+one window of 50 attempts an hour (half the global ceiling, as the invite
+direct total is half its global limit), so a LAN host cannot rotate IPv4
+aliases, which have no prefix window, or /64s for fresh windows; loopback is
+left out of that window. A LAN host sending Cloudflare markers without being
+a listed connector has its own 20-an-hour window per IPv6 /64 or IPv4 /24, and
+all such traffic shares one 25-an-hour window, both on top of the global
+ceiling, so it cannot spend the global budget by rotating addresses. Every one
+of these counts against the global ceiling, so a flood that spends it can
+refuse the owner's recovery until the window ends; the bootstrap limiter is in
+memory, so restarting the service clears it.
+
+#### The startup read-only key no longer creates an admin
+
+With `write_startup_readonly_key` on (the default), every start created an
+admin when none existed, with a generated password nobody ever saw; first-run
+setup then refused (an account existed) and bootstrap returned no password.
+The startup key now uses an existing active admin only and is skipped, with a
+log line, when there is none: a fresh install gets no startup read-only key
+until first-run setup or bootstrap has made an admin, and the next start mints
+it.
+
+#### Admins are warned when invited guests have no way through Cloudflare
+
+When the Cloudflare guest-policy sync is not configured (CF_ACCOUNT_ID, CF_GUESTS_POLICY_ID and CF_POLICY_API_TOKEN), an invited guest outside the local network cannot reach the server through Cloudflare whatever the email says. The server now logs a warning at startup, and the Users page shows a warning in the invite dialog and above the pending invites.
+
+#### Content-Security-Policy and Permissions-Policy on every response
+
+The web app was served with no Content-Security-Policy, so any injected script would have run unrestricted. Responses now carry a policy that allows scripts only from the app's own origin plus the one inline pre-paint theme script, allowed by hash (computed at startup from the `index.html` the binary actually serves, so it cannot drift from the build).
+
+Other sources are limited to same-origin (requests may also go to the one host of the configured Cloudflare Access team, `cf_access_team_domain`, so the app can still tell an expired Access session from an outage; nothing is added when it is unset, and no wildcard is ever allowed), with images also allowed from `data:`, `blob:` and `https:` (metadata search shows provider cover URLs), `object-src 'none'`, `base-uri 'none'`, and `frame-ancestors 'self'`.
+
+Styles keep `'unsafe-inline'` because the UI library injects them at runtime. A handler that sets its own policy (the OpenID browser page, the Cloudflare recovery page) keeps it. A `Permissions-Policy` turns off camera, microphone, geolocation, payment and USB. Checked in a real browser against the embedded build: no violations on the app's main routes.
+
+The policy stays enforcing and now also reports: browsers send violations to an unauthenticated `POST /api/v1/csp-report` (via `report-uri`, and `report-to` with a `Reporting-Endpoints` header), which logs one line per violation with the directive, the blocked resource, the page and the source file.
+
+Every reported URL, with or without a scheme, goes through one reduction first: the query and fragment are dropped, secret path forms such as `/invite/<token>` are redacted, and the page the violation happened on is always cut to its first path segment, so a token in it never reaches the log, whatever Host the request carried.
+
+A blocked or source URL on the same site as that reported page (decided against the page's own host, never the request's Host header, which a proxy may rewrite), or a relative or schemeless one, is cut the same way; a third-party URL keeps its redacted path so a blocked script stays identifiable.
+
+"Same site" is compared by host name, ignoring case, a trailing dot and the port (`Books.Example.com.:443` is the same site as `books.example.com`), and when the page has no usable host at all every URL is cut, so a missing page can never make a path survive.
+
+The invite-route redaction matches case-insensitively and ignores empty path segments, so `/INVITE/<token>`, `/Invite/<token>` and `//invite/<token>` are redacted like `/invite/<token>`; the path is also read in its decoded form, so a path whose slashes are percent-encoded (`/api/v1/auth/invite%2F<token>`, `%2f`, and a doubly encoded `%252F`, decoded up to three times) is redacted too, in this log and in every place an invite page's path reaches a log or a span (the request log, panic recovery, the HTTPS redirect, error-response logging, the trace span path, and the Cloudflare service-token recovery middleware's three lines, which `/invite/<token>` reaches as a page navigation).
+
+A guard test fails the build when a log call in the middleware or response packages prints a raw request path outside a redactor. Request-path log lines outside the invite surface (the Audiobookshelf probe and audit records) are unchanged.
+
+The raw path is tried as written and then cleaned; then each of up to three decodings of the whole path is tried cleaned and then as decoded (the uncleaned decoded form matters: a dot segment after the token, `/invite%2F<token>/..`, would otherwise clean the route away before it is recognised); each form is matched anchored at its start, and the first match decides.
+
+Once the invite prefix is found, every remaining non-empty segment up to the query is redacted, not only the next one, so a decoy segment between the prefix and the token (`/invite/%2F/<token>`, `/invite/./<token>`, `/invite%2F%2E%2F<token>`) does not let the token through; the one segment kept is a trailing `resend` on the invites route. A malformed escape (`%zz`) never switches redaction off or makes decoding fail: it is kept literally and the rest is still decoded.
+
+When a path is an invite route only after decoding or cleaning, the logged form is that decoded path with its non-redacted segments re-escaped, so the original spelling is not preserved.
+
+If no form matched but some form has a `.` or `..` segment and some form has a segment equal to `invite` or `invites` (decoded once, ignoring case) followed by a non-empty segment, at any position (`/x/../invite/<token>/..`, `/api/v1/users/q/../invites/<token>/..`, `/api/x/../v1/users/invites/<token>/..`), the path is logged as `/[REDACTED]`, because a walked path cannot be redacted by position; the check is one linear pass over the segments, so a dot walk that splits the invites route cannot slip past a prefix test.
+
+The same happens when the escaping is nested deeper than three rounds and the last form still decodes to something different (`/invite%2525252F<token>`, and `/%2525252569nvite/<token>`, where even the route name is escaped, so no keyword is needed to decide); decoding is not repeated until stable, which would cost quadratic time on a long nested path. Paths that are not invite routes (`/books/invite/<token>`, `/books/../x`) are unchanged.
+
+A `?` inside a path is path text, never a query delimiter: `%3F` decodes to `?` in the parsed request path, so `/invite/%3F<token>` and `/x%3F/../invite/<token>` are redacted like any other invite path rather than cut at the `?` with the rest logged.
+
+The request log strips the request's real query first, writes any `?` left in the path as `%3F` and masks credential query values on the real query only, so `/books%3Fa=1?token=<x>` logs as `/books%3Fa=1?token=REDACTED`; a credential key after a `?` inside the path (`/x/cover%3Ftoken=<x>`) is masked too, and when the request is not available, or the logged path does not end in the request's query, the line is `/[REDACTED]`.
+
+Only inputs that are a raw request target (panic recovery, the HTTPS redirect) cut at the first `?`.
+
+The path comes from an unauthenticated request line, so the work is bounded: a path over 8 KiB is logged as `/[REDACTED]` without being read, a path with no `%` and no "invite" in it is returned at once without any allocation, and for any other every step (cleaning, decoding, the check for an invite segment at any position) is linear in its length; a test counts allocations at two sizes four times apart and requires them equal, which a quadratic version fails.
+
+Values are logged quoted, so a crafted report cannot forge a log line, and truncation never splits a character. A report is capped at 8 KiB and ten violations, and the limits count violations, not requests: a burst of 30 then one every two seconds service-wide, and a burst of 10 then one every ten seconds per visitor (the visitor address, a public IPv6 visitor grouped per /48 so a caller owning a /48 cannot mint a fresh budget per /64).
+
+The service burst is deliberately above the visitor burst, so a visitor that has spent its own budget cannot drain the shared one and leave a real browser's reports unlogged, and a full batch of ten from one browser is logged.
+
+The decision is made under one lock, and if a charge ever refused after its tokens were verified the reports are dropped and the refusal is logged (fail closed; it cannot happen with the single writer today): a batch is logged up to the smaller of what the visitor's budget and the service's budget still hold, both budgets are charged exactly that many, and the rest are dropped and counted.
+
+A visitor with nothing left therefore never moves the service budget, even when many arrive at once (an earlier version reserved from both budgets and cancelled the unused part, which under concurrent requests could lose the refund, so the statements that a refused request spends neither budget and that one caller cannot use up the budget did not hold under load; they hold now, and a concurrent test checks it). Reports over a limit are dropped, counted, and the count is logged with the next one.
+
+#### A direct LAN peer now counts against the bootstrap and invite global rate ceilings
+
+The bootstrap limiter and the public invite limiter exempted a "direct LAN peer" from their global ceiling, so internet traffic spending the ceiling could not lock out an owner on the LAN. Direct only means the TCP peer is on a private address and sent no Cloudflare header; with no host firewall in front of the port, any LAN host or container bridge qualifies, so the exemption handed every such caller request budget that tunnel visitors could not touch. The exemption mechanism is gone (`bootstrapLimiter.allow` no longer takes an exemption flag, `bootstrapClientKey` no longer returns one, and the invite middleware always takes a global slot). A direct peer keeps its own per-address bucket and its LAN aggregates, which now apply on top of the ceiling, and loopback counts too. The invite limiter's 429 now carries `Retry-After: 60`, the same fixed value for every layer so a caller still cannot tell which one refused it. The cost is that a flood spending the ceiling can refuse the owner's recovery until the window ends; the bootstrap limiter is in memory, so restarting the service (the first step of the bootstrap flow) clears it.
+
+#### The shared guest Cloudflare service token is removed
+
+Invitations used to hand every guest the same Cloudflare Access service-token header pair (`CF-Access-Client-Id` and `CF-Access-Client-Secret`) in the invitation email and in the public invite lookup, so anyone holding a live invite link could read a credential that got them past Cloudflare for as long as it lived. It is gone with no compatibility shim. The public invite lookup no longer returns `guest_headers`, the admin invite list no longer returns `guest_headers_configured`, the `INVITE_CF_ACCESS_CLIENT_ID` and `INVITE_CF_ACCESS_CLIENT_SECRET` settings are deleted, and the accept page and the invitation email no longer tell anyone to install custom headers. A guest now gets through Cloudflare by email login: accepting an invitation adds their address to the guest Access policy (`CF_ACCOUNT_ID`, `CF_GUESTS_POLICY_ID`, `CF_POLICY_API_TOKEN`), and the page and email say to sign in to Cloudflare with that address and its one-time code. The public invite lookup carries an `email_login` flag that is true only when accepting will add the address (policy sync configured, the invitation emailed to that address, an active admin as creator), and the page and the email leave the step out otherwise. Guests are browser-only for now: the AudioBooth phone-app steps are gone from the email and the page, replaced by one line saying phone app access will be added to the account soon (per-guest phone-app access is a separate change). An invitation without an email address, such as a copied link, has no way through Cloudflare. A server still carrying either old variable logs a removed-setting warning for each at startup and ignores it; a config update naming one is refused with the removal message. Revoke the old service token in Cloudflare.
+
+#### Login failure throttle now counts each visitor behind the tunnel separately
+
+The web login and the Audiobookshelf-compatible `/login` and `/auth/refresh` throttled failed attempts per peer address. Behind the Cloudflare tunnel the peer is always the connector, so one visitor failing 15 times locked every other visitor out, and a visitor could not be told apart from another. The throttle now keys on the visitor address (`CF-Connecting-IP`, believed only from a configured tunnel connector or a verified Access assertion; a public IPv6 visitor counts per /64). A request from any other peer is still keyed on its own address, so a spoofed header cannot pick a bucket. Session and audit records are unchanged.
+
+The per-visitor budget does nothing against a caller with many addresses, so password login now has aggregate ceilings in front of it: 150 failures per 15 minutes through any one configured tunnel connector, and 500 across the whole service, shared by the web `POST /api/v1/auth/login` and the Audiobookshelf-compatible `POST /login` (IPv6 visitors still count per /64). Only failed (401) attempts and attempts still in flight count.
+
+Refresh failures have a budget of their own. A dead `POST /auth/refresh` token (an expired session, or a server restart that invalidated every refresh token) is counted under a separate key for the same visitor, with the same budget of 15, so a client storming `/auth/refresh` cannot lock the visitor out of either password login (web or Audiobookshelf-compatible) and password typos cannot block token refresh: only `/auth/refresh` reads or charges the refresh key. This matters because a client with a stale token signs in with its password to get a fresh one. A successful login or refresh does not hand failures back to the other budget.
+
+Both logins now share ONE failed-login counter per username. It is keyed on the normalised username the caller SUBMITTED (trimmed, lower-cased, at most 128 bytes), whether or not that user exists, so a guess through either door counts toward the same account and an unknown name is counted and slowed exactly like a real one. A successful login takes back only what it earned: the failures that same visitor made against that same account in the last 15 minutes, at most five of them, at the visitor, connector and service levels and in the per-source budget. It no longer clears the visitor's whole counter, so a caller holding one valid account cannot log in between rounds of guesses at others to reset its budget; failures against any other account stay counted. Mistyping your own password and then getting in still costs nothing.
+
+A failed login no longer reveals, by its response time, whether the username exists. A name with no account, and an account with no password credential (an OAuth-only user, or an unknown algorithm), now spend one argon2id derivation, against a fixed dummy hash built once with the production parameters and under the same concurrency limit as real verifications, before the same failure is charged and the same 401 is answered, on both logins. The dummy hash is built when the handlers are constructed, so the first unknown-name login does not pay for it. One difference remains: an account still stored with a legacy bcrypt hash costs a bcrypt comparison instead of argon2id until its first successful login re-hashes it. A store error while looking the user up on the web login now answers 500 and charges neither the source nor the name, as the Audiobookshelf login already did, so a flapping store cannot lock anyone out; the underlying error is logged (sanitised), since the response deliberately carries none. A web login with the correct password for a disabled account is now answered 403 `account is not active` (the answer the Audiobookshelf door already gave), after the same password verification and before any session is created or counter cleared; before this it answered 200 and signed the disabled account in. A wrong password for a disabled account is the usual 401.
+
+A spent ceiling does not refuse logins, because that would let an anonymous flood lock out every user, the owner included. A request carrying a verified Cloudflare Access identity (a JWT verified against the team keys and AUD, for a verified, allow-listed email) is exempt from the ceilings and keeps its per-visitor and per-account limits. Any other login is delayed before password work, by one second plus half a second per failure already on its account, capped at three seconds, with no lock held while it waits. Whether a saturated login is refused with a 429 is decided by the submitted username before the account is looked up, so a name that exists and one that does not get the same answer: a username that has already failed five times in the window, or a visitor past its own budget, is refused. A refusal counts as a failure while saturated, like a 401: that visitor gets no further attempt until the window ends. Delayed requests are bounded three ways. Per visitor (two at a time, one when the service holds more than 256 of them; a visitor that failed while saturated is refused until the window ends), keyed on the visitor address with a public IPv6 visitor grouped per /48 rather than /64, so a caller owning a /48 cannot mint a fresh visitor per /64. Service-wide by rate: every saturated login that is admitted still costs one argon2id derivation (an unknown name too), so a flood of fresh addresses used to be a free derivation each; a token bucket now admits saturated logins at 2 per second with a burst of 8 (`LOGIN_SATURATED_RATE`, logins per second from 0.01 to 50, so a refused caller never waits more than 100 seconds for one token; and `LOGIN_SATURATED_BURST`, 1 to 200; environment only, an unusable value stops the server starting and the effective values are logged at startup). It is checked in the middleware before any user lookup, so a name that exists and one that does not get the same answer, and a visitor already refused by its own limits spends no token. A login refused for want of a token is answered 429 with a `Retry-After` equal to the time the bucket needs to hold one token (at least 1 second, never more than the window) and is not counted as a failure. A visitor that failed while saturated is answered 429 with a `Retry-After` of the rest of its window (at least 1 second); one whose saturated logins are still in flight is answered 429 "too many simultaneous login attempts" with `Retry-After: 5`. The error for an unusable `LOGIN_SATURATED_RATE` or `LOGIN_SATURATED_BURST` names the setting and the accepted range and no longer echoes the value. And a high hard bound protects goroutines. The earlier promise that a fresh visitor's first attempt is always admitted while the ceilings are spent is therefore withdrawn: it can be refused while the bucket is empty. A login through Cloudflare Access (verified identity) is exempt from the ceilings and the bucket, so Audiobookshelf logins that go through Cloudflare Access are unaffected. Those requests still run the password check; what bounds them is the per-visitor throttle and the allow-listed identity Cloudflare Access vouches for, not the bucket. A visitor's saturated-failure mark expires with the window, and the table no longer holds it against eviction after that. Every login 429 raised by a handler (the per-source budget, the saturated account refusal, the refresh budget) now carries `Retry-After: 60`.
+
+The login body is now read before anything is counted, under a 4 KiB cap and a 5 second read deadline, and handed to the handler from memory: a caller that opens a login and stalls its body is answered 408 and holds neither a ceiling slot nor a place in the handlers, and an oversized body is answered 413. These refusals, and the 429 for too many simultaneous logins, use the error shape of the login they guard: `{"error": "..."}` on the Audiobookshelf `/login` (what its clients parse) and the usual error envelope on the web login. One visitor may also have at most four logins in the handlers at once (a fifth is answered 429 with `Retry-After`), on both logins. A login body over 4 KiB, such as an Audiobookshelf `deviceInfo` of unusual size, is therefore refused.
+
+The cost that remains: while a ceiling is spent, a stranger's guesses at one account can take it past five failures and refuse that account's password login (not its Cloudflare path) until the window ends. Sessions already issued are unaffected and a restart clears the state. `POST /auth/refresh` stays outside the ceilings because it does no password work, and HTTP Basic auth on the API is a separate path that is not throttled here. The per-visitor and per-username tables are bounded at 10,000 entries each, kept in least-recently-written order: entries idle for a whole window are swept on every write, and at the bound the oldest idle entry is dropped in constant time instead of scanning the table. Entries that matter are kept over new ones: a username counter at its refusal threshold, a source at its budget, a visitor with a login in the handlers, and a visitor already refused for the window are evicted only when every entry is like that, so rotating usernames or addresses cannot wash a refusal out of the table, and a login in the handlers never stops the sweep reaching the idle entries behind it.
+
+#### Origin refuses connections from peers outside an allow-list (ALLOWED_PEER_CIDRS)
+
+The service binds every interface, so an exposed port answered anyone who could reach it. A new environment-only setting, `ALLOWED_PEER_CIDRS` (comma-separated CIDRs or bare IPs), names the peers allowed to talk to the origin directly. A request from any other peer gets 403 before routing, on the HTTPS, HTTP/3, plain HTTP and port-80 redirect listeners alike. Loopback and every `TUNNEL_CONNECTOR_ADDRS` address are always allowed, and nothing else is: this host's own LAN address is admitted only if the list covers it, so the list must include the LAN subnet and any scraper or client that calls the service directly. The peer is the socket's address (never a forwarded header). An entry that cannot be parsed (a bad CIDR, or a bare link-local address with no interface zone) stops the service starting rather than being skipped. Left empty the behaviour is unchanged and a startup warning says the origin accepts any peer; the effective list is logged at startup, with a warning for `0.0.0.0/0` or `::/0`. HTTP/3 0-RTT is off and a request that arrives before the handshake completes is answered 425. The plain-HTTP port-80 redirect listener is gated too. HTTP/3 refuses the request, not the QUIC handshake. Loopback is trusted, so a local relay or port forwarder re-exposes the origin to whoever uses it.
+
+#### The pprof debug listener refuses any address that is not loopback
+
+In a `pprof` build, `ABK_PPROF_ADDR` used to accept any address and only logged a warning for an all-interfaces bind, although the profiling endpoints (goroutine dumps, heap profiles, CPU profiles, source paths) have no authentication. The listener now starts only on a loopback address (`127.0.0.1`, `::1`, or `localhost`); a bare port is still pinned to `127.0.0.1`. Any other address, including `0.0.0.0`, `::` and host names other than `localhost`, is refused at startup with an error log saying why, and no listener is started. Use SSH port-forwarding to reach it from another machine. Default builds are unaffected: the listener only exists in a build with the `pprof` tag.
+
+#### Trailing-slash redirects are off, and a missed server route no longer answers with the web app
+
+Gin answered a request that missed a registered route by a trailing slash (`/auth/openid/callback/`) with a 301 or 307 whose `Location` it built from the request path prefixed with the caller-supplied `X-Forwarded-Prefix` header, so a caller could choose part of the redirect target. The service reads that header nowhere else. The redirect was same-origin, so it was a header-controlled path on this host rather than an open redirect to another site, but it was reachable on paths that bypass Cloudflare Access. `RedirectTrailingSlash` is now false on the router (`newBaseRouter`), and so is `RedirectFixedPath`, so such a request gets the ordinary not-found answer. `RedirectFixedPath` was already effectively off here, and a case-only variant such as `/Probe` of `/probe` was never a match either way. Nothing was checked about whether any client relied on the old redirect; the redirect-hardening test runs every registered GET route of the real router (ABS surface enabled) with the other slash form and asserts no 301/307 and no reflected header.
+
+With the redirect gone, those misses land in the not-found handler, which used to serve the web app shell. A server path that missed by a slash, doubled slash, `.`/`..` segment or letter case (`/ping/`, `/Status`, `//auth//openid`) would then have answered `200 text/html` to an Audiobookshelf client. The fallback now answers 404 for the server-side paths (`/api`, `/auth`, `/socket.io`, `/ping`, `/status`, `/logout`, `/health`, `/metrics`, `/public`) in any of those forms, and serves the web app only to GET and HEAD requests. `GET /login` stays the web login page. The normalised path is used only to decide the 404; it is never dispatched into a route.
+
+#### Frontend test dependency: undici 8.12.3
+
+Bumped the transitive `undici` (pulled in only by `jsdom`, a test-only dependency) from 8.10.2 to 8.12.3 to clear Dependabot alert 60 (GHSA-xjj6-f33q-929c, a denial of service from too many content-encodings). It is not part of the built web app, so nothing shipped to users changes.
+
+Dynamic collections are now worked out for the person asking, not for the
+collection's creator. A query on `read_status:`, `progress_pct:` or
+`last_played:` is evaluated against the viewer's own listening state on every
+read, in the native API (list, get, create, update, materialize) and in the
+Audiobookshelf-compatible collection endpoints. Two people looking at the same
+collection can see different members, and no response carries the creator's
+listening state any more. This replaces the owner evaluation (D75): even
+an admin is evaluated as themselves. The per-user filter pass now reads listening
+state over a bounded worker pool instead of one book at a time.
+
+A system evaluation with no viewer matches nothing for a per-user query and never
+falls back to the creator. Previously a missing user was read as an empty
+listening row, which made `read_status:unstarted`, `progress_pct:<50` and negated
+filters match the whole library; the evaluator now returns an empty result.
+Queries with no per-user field behave exactly as before.
+
+- Bump `github.com/go-jose/go-jose/v4` from 4.1.4 to 4.1.6 (Dependabot alert #61, high).
+
+#### Basic authentication refuses an empty saved password
+
+Basic authentication with an empty saved password is refused. If Basic authentication is on without a saved password, save one before upgrading; if you are locked out, set `BASIC_AUTH_PASSWORD` and restart.
+
+With Basic authentication on and no password saved, the gate used to compare
+two empty strings and let in anyone who sent the username with an empty
+password. Now every route except health, static assets and the
+Audiobookshelf routes that check their own token answers 401 while there is
+no password, and `/api/v1/health` lists `basic_gate_no_password` under
+`degraded` so the cause is visible without signing in. The startup log names
+the setting (`basic_auth_enabled`, `basic_auth_password`).
+
+When the saved password is empty, `BASIC_AUTH_PASSWORD` is used instead, in
+memory only: it is never saved, the log says so once at warn without the
+value, and a value that is empty or only spaces counts as unset. A saved
+password still wins over the variable. Saving a password in Settings clears
+the health token without a restart.
+
+The gate also reads its settings once per request, together, so a request
+can no longer race a Settings save.
+
+- The session list no longer shows session tokens; a session is revoked by the handle the list shows.
+
+### Repairs visibility review fixes (PR 4166)
+
+Security: account audit rows and id-only log lines are withheld from a caller without `users.manage`. Rows of type `auth_email_displaced`, `user_merge` and `guest_service_token_*` are hidden from every activity read, and the `actor` of the trash purge and admin debug rows is stripped from the copy such a caller receives (the rows themselves stay). The log-line heuristic now also matches a line that names a user only by id, and the writers use named constants for these types.
+
+Security: the result of an operation that names users (`maintenance.repair-merged-user-state`, `maintenance.user-merge`) needs `users.manage` on `GET /operations/:id/result`, kept in one registry in `internal/server/handlers/opaccess` rather than as a rule per route.
+
+Security: the diagnostics export is narrowed to what its requester may read. Operations they may not read, and log lines that name a user, are left out and listed by count in `operations_withheld.txt`. An export started without a recorded requester is redacted as for a caller with no extra permission.
+
+Security: log lines that name a user are withheld from a caller without `users.manage` on every operation-log surface: the embedded logs of `GET /operations/v2/:id`, `GET /operations/v2/:id/logs`, the log download, `GET /system/logs`, the `op.log` events of `/operations/events` and the activity fallback, as well as `GET /system/activity-log`. One predicate (`activity.NamesOthersUserLog`) decides for the activity reader and the diagnostics export alike. The attributes served with a log line drop any key that names a user (`user`, `email`, `account`, `actor`, `owner`, `listener`, `login`) and any value that names one (`activity.WithoutUserAttrs`). The `op.log` event payload and the diagnostics export carry no attributes, so they needed no change.
+
+Changed: undoing a journal row that carries user data needs `users.manage`, like reading it. An editor who could preflight and revert an operation whose journal holds user-state rows now gets 403 on both; an operation with only library data is unchanged.
+
+Security: both event streams (`/operations/events` and `/api/v3/ops/events`) check the caller's current account roles and status before every event, so a role lowered or an account disabled mid-stream stops the events on the next one instead of at reconnect. Promotions still need a reconnect. `Broker.publish`, which stamped no scope, is removed so a publish must name its run.
+
+Fixed: a read of `?operation_id=` or `?book_id=` on the activity log no longer materializes, decodes and sorts every row of the id when the caller's visibility predicate is set (every handler read). `queryByIndexPrefixExcluding` streams the id's index newest-first, judges each row, and keeps only the requested page, so memory is bounded by the page and the total stays exact. The rows of the one id are still decoded, because the predicate needs the decoded row.
+
+### Repairs visibility re-review fixes (PR 4166)
+
+Security: `GET /metadata/candidate-feedback` blanks `user_id` and `username` on every row that is not the caller's own, unless the caller holds `users.manage`. The rows, the candidates and the verdicts stay, so an editor still sees what was accepted or rejected on which book, but not by whom.
+
+Security: a diagnostics export is served only to a caller who holds what it was narrowed to. The export records, on its own result (`narrowed_to`), the permissions the account it was built for held when the build began, and `GET /diagnostics/export/:operationId/download` requires the caller's own request to hold every one of them. The request's set is meant: an API key's scopes intersected with its account's roles, so a narrowly scoped key of the account that built an admin's export is refused like any other narrow caller, and there is no same-account shortcut. The gate reads the record, not the account's roles as they are now. It fails closed: an op that is not a `diagnostics.export` is a 404, an export whose result has no record (one built before this change; start a new one), or whose account cannot be read back or is not active, is served to nobody.
+
+Security: `POST /operations/v2` and `POST /operations/v2/:id/retry` record the caller as the op's actor, with the auth method and the request's permission set, through the helper the v3 start route and `POST /diagnostics/export` use. An export started through them by an admin was narrowed to nothing before, because it had no requester. The export is capped at the permission set of the request that started it, so a narrowly scoped API key does not get the whole account's reach, and a disabled account holds nothing. When log lines are left out of an export, `logs_withheld.txt` says how many.
+
+Security: an owner grant is redeemed only by the op the Repairs owner-apply handler enqueued. The op row carries a new `OwnerApply` mark that only that handler sets (`registry.WithOwnerApply`), and `repairs.apply` requires it besides the Cloudflare Access sign-in. Recording the actor on the generic start and retry routes put the same actor and `cf_access` method on a generic start made from the owner's own Access session, so a start that carried a grant token in its params (readable from `GET /operations`) could have redeemed it without the same-origin check the handler applies; it now cannot, and neither can a retry.
+
+Security: the test that decides whether a log line names a user now also catches the shapes that carry only an id: `owner=<id>`, `account_id=<id>`, `account: <id>`, `actor=<id>`, `uid=<id>`, `user_ids=[...]`, `users=...`, `survivor_id=<id>`, and a JSON `"...user_id":"<id>"`. The attribute filter that blanks user keys from a log line's attributes reads the same list of key names, so the two cannot drift. The subsystem prefixes it treats as user-data sources now include `abs.`, and the subsystem name is matched without regard to case. The `itunes_playlist_import` log key `owner` is now `owner_user_id`, so it is recognised.
+
+Security: the activity entries served by `GET /activity` and the per-operation reads have their `Details` run through the same attribute filter as an operation's log lines, for a caller without `users.manage`. A number or boolean under a user-naming key (for example a numeric `user_id`) is dropped too; only counts and flags such as `users_cleared` or `owner_only` are kept.
+
+Fix: an open event stream (`/operations/events` and `/api/v3/ops/events`) asks the store about its caller at most once every 5 seconds instead of at every event, and per permission rather than per verdict. A stream used to read the user and role rows several times for every progress event it carried. The cost of the bound is that a role lowered mid-stream is served for up to 5 seconds more. It can still only narrow what the stream carries.
+
+Security: an event stream ends when the credential it was opened on stops standing: the account is disabled or removed, the session is revoked or expired, or the API key it came in on is revoked, deactivated or expired. It used to carry on, filtered by a role that no longer existed, until its client reconnected. The check fails closed, so a store error ends the stream and the client re-authenticates. It runs on the same 5 second bound, and on the heartbeat of `/api/v3/ops/events`.
+
+Fix: an activity read for one operation or one book that has to judge each row (any read that hides Repairs runs or other users' data) decodes at most the scan budget (20,000 rows) plus the page, newest first. An operation with more rows than that is answered from its newest rows; the answer is reported partial (`partial: true`) when the page could not be filled before the budget ran out, and its total is then a lower bound. Before this a viewer could make one request decode an operation's whole transcript. An operation under the budget is answered exactly as before.
+
+Note: undoing a book combine or a sibling move stays under `library.organize`, unlike the undo of a Repairs row that carries one user's listening state, which needs `users.manage`. The combine undo restores the library's structure (the absorbed book and the progress that was folded into the survivor), which `library.organize` governs; gating it like the Repairs rows would take the Library's combine-undo toast away from every editor whenever any user had progress on an absorbed book. The undo report of such an operation is still stripped of other users' rows. The reasoning is recorded on `MayUndoChange` so a later change to the user-data classification makes the choice knowingly.
+
+Security: an activity query is bounded by constants on every path. The per-operation and per-book index reads took a caller's `offset` and `limit` as given and added them to the decode budget, so a huge `offset` made that budget unbounded. `offset` above 100,000 is now refused (`ErrActivityOffsetTooDeep`, a 400 on `GET /activity`) on every path, not only the filter-index one, and `limit` is clamped to 10,000 (the largest page any route asks for). No query decodes more than the scan budget plus 110,001 rows.
+
+Fix: `GET /system/logs` leaves out a log line whose message or details name a user, for a caller without `users.manage`, and its `total` counts only what is served. The earlier note that this route filtered user lines was only true of its `operation_id` branch, which delegates to the operation-log handler; the general branch now applies the same predicate (`sysinfo.CollectSystemLogs` takes a read check, and a nil check serves nothing).
+
+Security: an operation's error text and progress message name a user more often than its logs do ("merge failed: user_id=... could not be moved"), and the row serves them to every `library.view` caller. They are replaced by a fixed notice (`activity.WithheldUserText`) for a caller without `users.manage` when they name another user, on `GET /operations/v2/:id`, the operations timeline, the v3 run read, list and event stream (`error`), and the `operations.json` of a diagnostics export. The text is replaced whole, not scrubbed.
+
+Fix: the Undo control is no longer shown for an operation whose undo preflight answered 403 (the Activity log and the operations bell); the refusal message is still shown.
+
+Test: a source-scan ratchet fails when a result type stored through `ReporterSetResult` or `SetResult` has a `user_id`, `target_user_id` or `owner_user_id` field and is not registered against a definition that is in `ResultUserDataDefs` or the Repairs lane. It reads the static type of the stored value, so a result stored as a map or an interface is not inspected and has to be reviewed by hand.
+
+Security: `GET /operations/:id/result` serves the `zip_path` of a `diagnostics.export` result only to a caller who holds `settings.manage`, the permission the download needs. It used to hand the server-side path of the archive to every `library.view` caller. The check is `opaccess.Reader.ServedResult`; a result it cannot parse is served to nobody, and an unwired check holds nothing.
+
+Security: the current-item label of a running operation is held to the same rule as its error and progress text. The v2 timeline and single read, and the `op.current_item` event on `/operations/events`, show `activity.WithheldUserText` instead of a label that names another user, for a caller without `users.manage`. The event is copied before it is edited, because its payload is shared with every other stream.
+
+Security: `GET /repairs` read the error of a fixer's last plan and last apply run raw into `last_plan.error` and `last_apply.error`, so a Repairs run whose error named a user (an account id) showed it to every caller who may use the fixer. The error now goes through the same rule as the rest of an operation's text: replaced by `activity.WithheldUserText` for a caller without `users.manage`, and withheld when the handler's access check is not wired.
+
+Security: the same rule now covers the other places a stored operation's text reaches a response. A v3 run's worker `item` (the label of the item a worker is on) is read through it on the run read, list, timeline and stream, on a copy of the record's workers. The reconcile scan read (`GET /operations/reconcile/scan/latest`), the start responses of `POST /operations/reconcile` and `POST /operations/reconcile/scan`, and the candidate-fetch results (`GET /operations/:id/results`) read the `message` and `error_message` of the v1-shaped operation through it.
+
+Security: `GET /diagnostics/ai-results/:operationId` and the iTunes import status routes (`GET /itunes/import-status/:id` and its bulk form) took any operation id and served its status and progress message, so a caller of one could read the progress of a Repairs run they may not read. They now answer only for a run of their own def (`diagnostics.ai-analyze`, `itunes.import`); any other id is a 404 (left out of the bulk answer).
+
+Security: the diagnostics download's scope check now runs inside `GET /diagnostics/export/:operationId/download` itself, on the one read of the operation row that the handler serves from, instead of in a middleware that read the row separately. The middleware passed on a store error, a missing row, an export that was not yet completed and one with no result, and a row that changed between its read and the handler's (queued, then completed) was served unchecked. The handler now answers 404 for an operation that is not a `diagnostics.export`, 500 for a store failure while it reads the row, the user count or the account the export was built for, 403 for a caller who does not hold the recorded scope, and 403 for every download when auth is on and no check is wired. The in-progress 202 reads the progress message through the same text rule as every other operation text.
+
+Security: `POST /diagnostics/apply-suggestions` answers only for a completed `diagnostics.ai-analyze` run: another operation's id is a 404, and a run that has not completed is a 409. A store failure while it reads the operation is a 500 on this route and on `GET /diagnostics/ai-results/:operationId`, not a 404.
+
+Security: a `repairs.apply` result is served with `follow_up_error`, `aborted` and each row's `error` read through the user-text rule, for a caller without `users.manage`, by `GET /operations/:id/result` and by the `operations.json` of a diagnostics export. A result that cannot be parsed in that shape is withheld whole. The export used to carry the result raw. The result's `owner_user_id` is also left out, but that does not keep the account's id from that caller: it is the operation's own actor id, which `GET /operations/v2/:id`, the operation list and the export's `operations.json` still serve as `actor_user_id` (and a v3 run as `started_by`). Withholding actor ids is tracked by `TODO-V1SHAPE-OP-ACTOR-ID`.
+
+Security: `GET /api/v3/ops/runs/:id/rows` reads each item's `key` and `error` through the same user-text rule.
+
+Security: the activity handler built without its Repairs access (not wired) used to hide nothing. It now treats every operation as one with no record, which hides the entries whose type or `def:` tag names `repairs.plan` or `repairs.apply`, as it does for a pruned operation.
+
+Fix: an API key or session whose effective permission set is empty is recorded on an operation it starts as an empty set, and the diagnostics export built from it holds nothing. The set was recorded only when it was not empty, which read back as "no set was recorded" and capped the export at the account's roles. `OperationV2Row.ActorPermissions` is stored without `omitempty`, so an empty set is stored as `[]` and a request with none recorded as `null`; only a row written before this change has the key absent, and it reads back as none recorded, as before.
+
+Fix: the diagnostics export is no longer handed from one account to another. Starting an export while another account's identical one is queued or running used to return that run, which is built for and narrowed to its first requester: an admin got a manager's narrowed archive with nothing to say so, and a manager got an admin's run and then a 403. The export's definition now sets `DedupeSameActorOnly`, so a start joins an active export only when the same account holds the same permission set; anyone else gets their own run, which the concurrency key serializes behind the first. Every other operation dedupes as before.
+
+Security: the progress message of `GET /diagnostics/ai-results/:operationId` and of the iTunes import status routes is read through the same user-text rule as every other operation's text. The `operations.json` of a diagnostics export blanks each operation's `actor_permissions`, the credential scope of the account that started it, unless the reader holds `users.manage`.
+
+Note: the diagnostics export's definition id is one constant (`diagnostics.ExportOpID`) shared by its registration, the download route and the result check, so the three cannot drift apart.
+
+Security: the activity entry written when the owner forgets the waiting purge file records (`trash_forget_pending_file_records`) names its actor ("username (ULID)"); a caller without `users.manage` no longer receives that detail (the paths and counts stay).
+
+### Bump vite to 8.3.4 (launch-editor advisories)
+
+Raises the web frontend vite floor from ^8.2.1 to ^8.2.4, fixing the three open Dependabot alerts (1 high, 2 medium) against the launch-editor code bundled in vite 8.2.0-8.2.3. The lockfile resolves vite 8.3.4. Frontend build, type check and the full test suite pass, and npm audit reports 0 vulnerabilities.
+
 <a id='changelog-v0.222.2'></a>
 ## v0.222.2 — 2026-10-16
 
