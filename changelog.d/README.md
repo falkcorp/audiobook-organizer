@@ -1,7 +1,7 @@
 <!-- file: changelog.d/README.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 8d3a1f26-4c7b-4e59-b0a2-6f1d9c8e5a34 -->
-<!-- last-edited: 2026-09-12 -->
+<!-- last-edited: 2026-11-06 -->
 
 # Changelog fragments (`changelog.d/`)
 
@@ -86,7 +86,9 @@ the new stable version.
   `CHANGELOG.md`, grouped by category, and removes the collected fragments.
 - The PR fragment check comes from this repo's `changelog-check.yml` workflow.
   Both the check and the collect step activate for any repo that has this
-  `changelog.d/scriv.ini`.
+  `changelog.d/scriv.ini`. The check passes without a fragment for a
+  Dependabot PR (by PR author), a PR labelled `skip-changelog`, or a title
+  containing `[skip changelog]`.
 - Configuration lives in [`scriv.ini`](scriv.ini); the new-fragment scaffold is
   [`templates/new_fragment.md.j2`](templates/new_fragment.md.j2).
 - GitHub **release notes** stay commit-based; this detailed changelog is the
