@@ -99,16 +99,22 @@ on:
         type: boolean
         default: false
 
+# A merge-queue run gets its own group and is never cancelled: a cancelled
+# required check counts as failed and drops the PR from the queue (same rule
+# as ci.yml, fixed there in #4403).
 concurrency:
-  group: e2e-${{ github.ref }}
-  cancel-in-progress: true
+  group: e2e-${{ github.event_name == 'merge_group' && format('merge-group-{0}', github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
 
 permissions:
   contents: read
 
 jobs:
   e2e:
-    name: E2E (${{ github.event_name == 'pull_request' && 'chromium' || 'chromium + webkit' }})
+    # The merge queue runs the same chromium-only configuration as the PR, so
+    # the required check carries the same name on both and fits the 09 §9.2.10
+    # merge budget; webkit stays on the nightly schedule and on dispatch.
+    name: E2E (${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'chromium' || 'chromium + webkit' }})
     runs-on: ubuntu-latest
     # NON-BLOCKING, deliberately and temporarily. Kept even though the job
     # is nightly-only, so a red nightly does not read as "the pipeline is
@@ -201,7 +207,7 @@ jobs:
           INPUT_PROJECTS: ${{ inputs.projects }}
         run: |
           cd web
-          if [ "$EVENT_NAME" = "pull_request" ] || \
+          if [ "$EVENT_NAME" = "pull_request" ] || [ "$EVENT_NAME" = "merge_group" ] || \
              { [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_PROJECTS" != "chromium+webkit" ]; }; then
             npx playwright install --with-deps chromium
           else
@@ -233,7 +239,7 @@ jobs:
           # --project=webkit" as ONE argument, which Playwright rejects. An
           # array expands correctly AND lints clean.
           case "$EVENT_NAME" in
-            pull_request) PROJECTS=(--project=chromium) ;;
+            pull_request|merge_group) PROJECTS=(--project=chromium) ;;
             workflow_dispatch)
               if [ "$INPUT_PROJECTS" = "chromium+webkit" ]; then
                 PROJECTS=(--project=chromium --project=webkit)
