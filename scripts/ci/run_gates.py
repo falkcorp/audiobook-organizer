@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci/run_gates.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: a3c8e517-4b2d-4f90-8d16-7e5b9c0a2f43
-# last-edited: 2026-10-12
+# last-edited: 2026-11-05
 """Run the CI gates listed in ci/gates.txt, or lower their baselines.
 
 One manifest (ci/gates.txt) names every gate once (07-G4, owner decision D47).
@@ -34,7 +34,9 @@ from pathlib import Path
 
 KINDS = {"ratchet", "ratchet-set", "ratchet-const", "check"}
 GATE_TIMEOUT_S = 1800
-JOBS = {"own-job", "go-suite"}
+# core-job: core-ci.yml runs the gate (the core module's merge gate and the
+# root-side checks that compare core with the root; 03 §3.2 item 4).
+JOBS = {"own-job", "go-suite", "core-job"}
 NOTE_RE = re.compile(r"NOTE \(not a failure\):.*")
 
 

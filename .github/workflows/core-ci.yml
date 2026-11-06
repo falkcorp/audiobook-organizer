@@ -1,0 +1,87 @@
+# file: .github/workflows/core-ci.yml
+# version: 1.0.0
+# guid: 86d3ec85-7629-46f7-9682-c011fb888337
+# last-edited: 2026-11-05
+
+# core's merge gate (09 §9.2.1 core-ci row; 12 SC4). `./...` from the root
+# never reaches the nested core/ module, so core's own `make -C core ci` runs
+# here, plus the root-side checks registered with job core-job in
+# ci/gates.txt: the module-skew check, the genproto exclude root probe, and a
+# root `go build ./...` whenever core/go.mod or core/go.sum changes (tidy
+# coupling, 03 §3.2 item 4: a core-only tidy can leave the root red).
+#
+# Required check (D15, 14 Q-I), so it also runs on the merge queue's
+# merge_group event.
+
+name: Core CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'core/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/core-ci.yml'
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-ci:
+    name: core-ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # The literal is a guarded copy: scripts/check_toolchain_versions.py
+      # (tier 1) and core/scripts/ci/check_core_toolchain.py compare it with
+      # the pin; core/Makefile's GOTOOLCHAIN export selects the toolchain for
+      # every make -C core target either way.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: |
+            go.sum
+            core/go.sum
+
+      - name: Pin
+        run: echo "GOTOOLCHAIN=$(make -s -C core print-toolchain)" >> "$GITHUB_ENV"
+
+      - name: make -C core ci
+        run: make -C core ci
+
+      - name: Module skew (root-side, blocking)
+        run: make module-skew
+
+      - name: Did core/go.mod or core/go.sum change?
+        id: coremod
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          if [ -z "$BASE_SHA" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BASE_SHA" HEAD -- core/go.mod core/go.sum; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Root go build (tidy coupling)
+        if: steps.coremod.outputs.changed == 'true'
+        run: go build ./...
+
+      - name: genproto exclude, root mode
+        run: make genproto-exclude-root
