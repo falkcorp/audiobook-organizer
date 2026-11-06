@@ -137,7 +137,7 @@ jobs:
     # adds the `run-go-tests` input set to false below (07-C3). The same range
     # also moves that workflow's own action pins (checkout v7.0.1, setup-go
     # v7.0.0, cache v6.1.0, super-linter v8.7.0).
-    uses: falkcorp/github-common/.github/workflows/reusable-ci-minimal.yml@8d94ff2c3a745b323088c98659851c82313e5fd0 # main 2026-10-09 (adds run-go-tests)
+    uses: falkcorp/github-common/.github/workflows/reusable-ci-minimal.yml@c8c3576167622932044d0ddac7421968e60b43fa # main 2026-11-06; every github-common pin uses this SHA, move them with .github/ghcommon-ref.txt
     with:
       go-version: '1.27.3'
       node-version: '26'

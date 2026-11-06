@@ -1,7 +1,7 @@
 # file: .github/workflows/security.yml
-# version: 2.9.1
+# version: 2.9.2
 # guid: 7f2a3c1d-4e5f-6g7h-8i9j-0k1l2m3n4o5p
-# last-edited: 2026-11-05
+# last-edited: 2026-11-06
 #
 # Security scanning: advanced CodeQL, dependency review, language audits, and
 # Go/NPM dependency submission for supply chain security. Third-party filesystem
@@ -27,7 +27,7 @@ permissions:
 jobs:
   advanced-security:
     name: Advanced CodeQL Security
-    uses: falkcorp/github-common/.github/workflows/reusable-security.yml@d0c3326b96557c8ea9117c1c196b628e5e028186 # main 2026-07-05 (fixes jdfalk/ghcommon -> falkcorp/github-common stale-ref 400 error)
+    uses: falkcorp/github-common/.github/workflows/reusable-security.yml@c8c3576167622932044d0ddac7421968e60b43fa # main 2026-11-06; every github-common pin uses this SHA, move them with .github/ghcommon-ref.txt
     with:
       languages: '["go", "javascript", "actions"]'
       skip-codeql: false

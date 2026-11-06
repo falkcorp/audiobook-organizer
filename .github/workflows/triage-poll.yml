@@ -1,5 +1,7 @@
 # file: .github/workflows/triage-poll.yml
-# version: 1.1.0
+# version: 1.1.1
+# guid: e0fd72c6-95b4-42e7-8c61-2646b5d41262
+# last-edited: 2026-11-06
 name: Triage poll
 
 
@@ -41,7 +43,7 @@ on:
 
 jobs:
   triage-poll:
-    uses: falkcorp/github-common/.github/workflows/reusable-triage-poll.yml@d0c3326b96557c8ea9117c1c196b628e5e028186 # image pin fix + auto-updater fix
+    uses: falkcorp/github-common/.github/workflows/reusable-triage-poll.yml@c8c3576167622932044d0ddac7421968e60b43fa # main 2026-11-06; every github-common pin uses this SHA, move them with .github/ghcommon-ref.txt
     with:
       mode: ${{ inputs.mode || 'draft-only' }}
       triage_model: o3
