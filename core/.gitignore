@@ -8,3 +8,4 @@
 /bin/
 **/playwright-report/
 **/blob-report/
+__pycache__/
