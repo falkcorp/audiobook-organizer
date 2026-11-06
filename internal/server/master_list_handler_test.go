@@ -1,7 +1,7 @@
 // file: internal/server/master_list_handler_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 2f8b4c61-9d30-4a7e-8c15-6b0e3d9a7f24
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 package server
 
@@ -206,9 +206,10 @@ func TestMasterListUpload_AuthAndRole(t *testing.T) {
 	assert.Len(t, lists, 1, "only the admin key's upload was stored")
 }
 
-// RequireAdmin reads the signed-in user's role, not the credential's scopes, so
-// an admin's API key narrowed to other permissions would pass it alone. The
-// routes also demand users.manage, which a key's scopes can withhold.
+// The routes sit behind adminRole (RequireAdmin with auth on), which refuses an
+// admin's API key whose non-empty scopes leave out any atom (05-authn §11.1
+// item 4): users.manage alone, which the routes also demand, is not enough.
+// A key holding every atom passes.
 func TestMasterListRoutes_APIKeyScopesNarrow(t *testing.T) {
 	f := setupCredGuardServer(t)
 	exp := time.Now().Add(time.Hour)
@@ -250,6 +251,11 @@ func TestMasterListRoutes_APIKeyScopesNarrow(t *testing.T) {
 
 	key := keyWith("users", auth.PermUsersManage)
 	w := f.postMasterList(t, key, bytes.NewBufferString(masterListTestCSV), "text/csv", "")
+	assert.Equal(t, http.StatusForbidden, w.Code, "users.manage alone does not carry the admin role: %s", w.Body.String())
+	assert.Equal(t, http.StatusForbidden, get(key), "users.manage alone: the listing is gated too")
+
+	key = keyWith("every atom", auth.All()...)
+	w = f.postMasterList(t, key, bytes.NewBufferString(masterListTestCSV), "text/csv", "")
 	assert.Equal(t, http.StatusCreated, w.Code, w.Body.String())
 	assert.Equal(t, http.StatusOK, get(key))
 }
@@ -403,8 +409,17 @@ func TestMasterListDeleteAndElsewhere_AdminOnlyAndScoped(t *testing.T) {
 	}
 	assert.Equal(t, []string{up.List.ID}, masterListIDs(t, f), "no refused caller deleted it")
 
-	// users.manage is what the routes demand.
+	// users.manage is what the routes demand, but on an admin's key it does not
+	// carry the admin role adminRole requires: only a key with every atom does
+	// (05-authn §11.1 item 4).
 	w := f.doMasterList(t, http.MethodGet, "/api/v1/master-lists/elsewhere", keyWith(auth.PermUsersManage))
+	assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	raw, hash, err := database.GenerateAPIKeyToken()
+	require.NoError(t, err)
+	_, err = f.store.CreateAPIKey(&database.APIKey{UserID: f.adminID, Name: "every atom", TokenHash: hash, Scopes: auth.All(),
+		Status: "active", CreatedAt: time.Now(), ExpiresAt: &exp})
+	require.NoError(t, err)
+	w = f.doMasterList(t, http.MethodGet, "/api/v1/master-lists/elsewhere", raw)
 	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
 }
 
