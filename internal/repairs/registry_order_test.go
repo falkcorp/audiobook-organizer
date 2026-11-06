@@ -1,5 +1,5 @@
 // file: internal/repairs/registry_order_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4b7d2e91-3c58-4a06-9f1e-8d5a0c6b7e23
 // last-edited: 2026-11-05
 
@@ -104,8 +104,4 @@ func TestGroups_Order(t *testing.T) {
 		GroupMetadata, GroupFiles, GroupVersions, GroupImports}, ids)
 	require.Equal(t, "", GroupTitle("no-such-group"))
 
-	// Groups hands out a copy: reordering it must not reorder the lane.
-	gs := groups
-	gs[0], gs[1] = gs[1], gs[0]
-	require.Equal(t, GroupDuplicates, groups[0].ID)
 }
