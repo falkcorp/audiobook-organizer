@@ -40,16 +40,22 @@ var basicGateLog = logger.New("http")
 // process, on the first request that reaches the comparison.
 var basicGateEnvWarnOnce sync.Once
 
-// basicGatePassword returns the password the gate compares against: the stored
-// basic_auth_password, or, when that is empty, BASIC_AUTH_PASSWORD from the
-// environment, in memory only and never written (05-authn §11.1 item 5,
-// Recovery). fromEnv reports the fallback; "" means no password.
+// basicGatePassword returns the password the gate compares against, given the
+// stored basic_auth_password: the stored value, or, when that is empty,
+// BASIC_AUTH_PASSWORD from the environment, in memory only and never written
+// (05-authn §11.1 item 5, Recovery). fromEnv reports the fallback; "" means no
+// password.
 //
-// An env value that is empty or only blanks counts as unset (09 §9.1
-// "Precedence"). The env value is never assigned into config.AppConfig or any
-// store: persisting it would turn a recovery into a saved credential.
-func basicGatePassword() (pass string, fromEnv bool) {
-	if stored := config.AppConfig.BasicAuthPassword; stored != "" {
+// Blank counts as unset on both sides (09 §9.1 "Precedence"): a stored value
+// of only blanks is no password, so the env recovery applies to it, and an env
+// value that is empty or only blanks is unset. The stored check matters even
+// with no saved row, because the loader then puts BASIC_AUTH_PASSWORD into
+// basic_auth_password untrimmed. A stored password that is not blank is
+// compared exactly as saved; the env value is compared trimmed. The env value
+// is never assigned into config.AppConfig or any store: persisting it would
+// turn a recovery into a saved credential.
+func basicGatePassword(stored string) (pass string, fromEnv bool) {
+	if strings.TrimSpace(stored) != "" {
 		return stored, false
 	}
 	if env := strings.TrimSpace(os.Getenv(basicAuthPasswordEnv)); env != "" {
@@ -58,37 +64,57 @@ func basicGatePassword() (pass string, fromEnv bool) {
 	return "", false
 }
 
+// basicGate is the gate's state for one decision. currentBasicGate reads it
+// from a single config.Snapshot(), under the config read lock, so a request, a
+// /health probe or the startup line never races PUT /config (config.Mutate)
+// and never mixes fields from two different saves.
+type basicGate struct {
+	enabled  bool
+	username string
+	password string // the effective password (basicGatePassword); "" means none
+	fromEnv  bool   // the password is BASIC_AUTH_PASSWORD's (the recovery)
+}
+
+// currentBasicGate reads the gate's settings from one config.Snapshot(). The
+// password and the environment are only consulted while the gate is enabled.
+func currentBasicGate() basicGate {
+	cfg := config.Snapshot()
+	g := basicGate{enabled: cfg.BasicAuthEnabled}
+	if !g.enabled {
+		return g
+	}
+	g.username = cfg.BasicAuthUsername
+	g.password, g.fromEnv = basicGatePassword(cfg.BasicAuthPassword)
+	return g
+}
+
+// noPassword: enabled with no effective password.
+func (g basicGate) noPassword() bool { return g.enabled && g.password == "" }
+
+// usesEnvPassword: enabled, the stored password blank, BASIC_AUTH_PASSWORD set.
+func (g basicGate) usesEnvPassword() bool { return g.enabled && g.fromEnv }
+
 // BasicGateNoPassword reports whether the gate is enabled with no effective
 // password: then every non-exempt route answers 401 and health shows
 // BasicGateNoPasswordToken.
-func BasicGateNoPassword() bool {
-	if !config.AppConfig.BasicAuthEnabled {
-		return false
-	}
-	pass, _ := basicGatePassword()
-	return pass == ""
-}
+func BasicGateNoPassword() bool { return currentBasicGate().noPassword() }
 
 // BasicGateUsesEnvPassword reports whether the gate is enabled and takes its
-// password from BASIC_AUTH_PASSWORD because the saved one is empty (the
-// in-memory recovery). The startup log uses it to choose the warn line over
-// the error line.
-func BasicGateUsesEnvPassword() bool {
-	if !config.AppConfig.BasicAuthEnabled {
-		return false
-	}
-	_, fromEnv := basicGatePassword()
-	return fromEnv
-}
+// password from BASIC_AUTH_PASSWORD because the saved one is empty or blank
+// (the in-memory recovery). The startup log uses it to choose the warn line
+// over the error line.
+func BasicGateUsesEnvPassword() bool { return currentBasicGate().usesEnvPassword() }
 
 // BasicAuth returns a Gin middleware that enforces HTTP Basic Authentication
-// when config.AppConfig.BasicAuthEnabled is true. Health endpoints, static
-// assets, and Audiobookshelf-compatible routes that enforce ABS token auth in
-// their own handler chain are exempt. Every other route answers 401 while the
-// gate has no effective password (basicGatePassword).
+// when basic_auth_enabled is true. Health endpoints, static assets, and
+// Audiobookshelf-compatible routes that enforce ABS token auth in their own
+// handler chain are exempt. Every other route answers 401 while the gate has
+// no effective password (basicGatePassword). Each request reads the gate's
+// settings once, from one config.Snapshot() (currentBasicGate).
 func BasicAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !config.AppConfig.BasicAuthEnabled {
+		gate := currentBasicGate()
+		if !gate.enabled {
 			c.Next()
 			return
 		}
@@ -141,12 +167,11 @@ func BasicAuth() gin.HandlerFunc {
 		// "<username>:" (05-authn §11.1 item 5). This covers a password cleared
 		// by any means (an operator, the key-regeneration delete path, a
 		// partial reset); BasicGateNoPassword raises the health token for it.
-		expectedPass, fromEnv := basicGatePassword()
-		if expectedPass == "" {
+		if gate.noPassword() {
 			refuseBasicAuth(c)
 			return
 		}
-		if fromEnv {
+		if gate.usesEnvPassword() {
 			basicGateEnvWarnOnce.Do(func() { basicGateLog.Warn(BasicGateEnvPasswordWarning) })
 		}
 
@@ -156,10 +181,8 @@ func BasicAuth() gin.HandlerFunc {
 			return
 		}
 
-		expectedUser := config.AppConfig.BasicAuthUsername
-
-		userMatch := subtle.ConstantTimeCompare([]byte(user), []byte(expectedUser)) == 1
-		passMatch := subtle.ConstantTimeCompare([]byte(pass), []byte(expectedPass)) == 1
+		userMatch := subtle.ConstantTimeCompare([]byte(user), []byte(gate.username)) == 1
+		passMatch := subtle.ConstantTimeCompare([]byte(pass), []byte(gate.password)) == 1
 
 		if !userMatch || !passMatch {
 			refuseBasicAuth(c)

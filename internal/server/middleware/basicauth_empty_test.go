@@ -1,5 +1,5 @@
 // file: internal/server/middleware/basicauth_empty_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 07da5163-5bdc-4fe7-a4a8-af96d141c0c4
 // last-edited: 2026-11-05
 
@@ -116,6 +116,30 @@ func TestLegacyBasicGate_EmptyPasswordRefuses(t *testing.T) {
 		{name: "env value is compared trimmed",
 			enabled: true, user: "admin", stored: "", env: strPtr("  recover\n"), path: "/api/v1/audiobooks",
 			creds: &basicCreds{"admin", "recover"}, want: http.StatusOK, wantFromEnv: true},
+		// Blank counts as unset for the stored value too. With no saved row
+		// the loader puts BASIC_AUTH_PASSWORD into basic_auth_password
+		// untrimmed, so a blank variable arrives as a blank stored value.
+		{name: "no saved row, env of only spaces loaded as the stored value, refused",
+			enabled: true, user: "admin", stored: "   ", env: strPtr("   "), path: "/api/v1/audiobooks",
+			creds: &basicCreds{"admin", "   "}, want: http.StatusUnauthorized, wantNoPassword: true},
+		{name: "saved value of only spaces, env unset, refused",
+			enabled: true, user: "admin", stored: "   ", env: nil, path: "/api/v1/audiobooks",
+			creds: &basicCreds{"admin", "   "}, want: http.StatusUnauthorized, wantNoPassword: true},
+		{name: "saved value of only blanks, empty password refused",
+			enabled: true, user: "admin", stored: " \t", env: nil, path: "/api/v1/audiobooks",
+			creds: &basicCreds{"admin", ""}, want: http.StatusUnauthorized, wantNoPassword: true},
+		{name: "saved value of only spaces, env recovers",
+			enabled: true, user: "admin", stored: "   ", env: strPtr("recover"), path: "/api/v1/audiobooks",
+			creds: &basicCreds{"admin", "recover"}, want: http.StatusOK, wantFromEnv: true},
+		{name: "saved value of only spaces, env set, the spaces refused",
+			enabled: true, user: "admin", stored: "   ", env: strPtr("recover"), path: "/api/v1/audiobooks",
+			creds: &basicCreds{"admin", "   "}, want: http.StatusUnauthorized, wantFromEnv: true},
+		{name: "saved password with surrounding spaces is compared exactly",
+			enabled: true, user: "admin", stored: " secret ", env: nil, path: "/api/v1/audiobooks",
+			creds: &basicCreds{"admin", " secret "}, want: http.StatusOK},
+		{name: "saved password with surrounding spaces is not trimmed",
+			enabled: true, user: "admin", stored: " secret ", env: nil, path: "/api/v1/audiobooks",
+			creds: &basicCreds{"admin", "secret"}, want: http.StatusUnauthorized},
 		{name: "env recovery still checks the username",
 			enabled: true, user: "admin", stored: "", env: strPtr("recover"), path: "/api/v1/audiobooks",
 			creds: &basicCreds{"joker", "recover"}, want: http.StatusUnauthorized, wantFromEnv: true},
@@ -253,4 +277,53 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.w.Write(p)
+}
+
+// TestBasicGate_NoRaceWithConfigMutate: the gate, BasicGateNoPassword and
+// BasicGateUsesEnvPassword read their fields from one config.Snapshot(), so
+// they never race a PUT /config, which writes through config.Mutate. Under
+// -race this fails if any of them reads config.AppConfig directly.
+func TestBasicGate_NoRaceWithConfigMutate(t *testing.T) {
+	saveBasicGateConfig(t)
+	config.AppConfig.BasicAuthEnabled = true
+	config.AppConfig.BasicAuthUsername = "admin"
+	config.AppConfig.BasicAuthPassword = "secret"
+	setBasicGateEnv(t, strPtr("recover"))
+
+	r := setupBasicAuthRouter()
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			config.Mutate(func(c *config.Config) {
+				c.BasicAuthEnabled = true
+				c.BasicAuthUsername = "admin"
+				if i%2 == 0 {
+					c.BasicAuthPassword = ""
+				} else {
+					c.BasicAuthPassword = "secret"
+				}
+			})
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks", nil)
+		req.SetBasicAuth("admin", "secret")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK && w.Code != http.StatusUnauthorized {
+			t.Fatalf("GET = %d, want 200 or 401", w.Code)
+		}
+		_ = BasicGateNoPassword()
+		_ = BasicGateUsesEnvPassword()
+	}
+	close(done)
+	wg.Wait()
 }

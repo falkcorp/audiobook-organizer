@@ -233,28 +233,34 @@ func (s *Server) startupStepsFor(cfg ServerConfig) *startup.Steps {
 }
 
 // startupDegradedSource is /health's lazy provider for its fixed degraded
-// tokens, called on every probe: the degraded startup-step tokens of the
+// tokens, called once per probe: the degraded startup-step tokens of the
 // runner Start stored, plus basic_gate_no_password while the Basic gate is
-// enabled with no effective password. With no runner yet and no gate token it
-// returns nil, so a nil *startup.Steps is never boxed into a non-nil interface.
+// enabled with no effective password. The gate is read here, once per probe
+// from one config snapshot, so saving a password clears the token on the next
+// probe without a restart. With no runner yet and no gate token it returns
+// nil, so a nil *startup.Steps is never boxed into a non-nil interface.
 func (s *Server) startupDegradedSource() systemhandlers.DegradedSource {
 	st := s.startupSteps.Load()
-	if st == nil && !servermiddleware.BasicGateNoPassword() {
+	noPassword := servermiddleware.BasicGateNoPassword()
+	if st == nil && !noPassword {
 		return nil
 	}
-	return healthTokenSource{steps: st}
+	return healthTokenSource{steps: st, basicGateNoPassword: noPassword}
 }
 
 // healthTokenSource is HEAD's fixed-token source for /health's degraded list:
 // the startup runner's tokens (none while steps is nil) and the Basic gate's
-// basic_gate_no_password (05-health §5H.3.1; 05-authn §11.1 item 5). The gate
-// is read on every call, so saving a password clears the token without a
-// restart. HealthCheck sorts and de-duplicates the merged list.
-type healthTokenSource struct{ steps *startup.Steps }
+// basic_gate_no_password (05-health §5H.3.1; 05-authn §11.1 item 5), as
+// startupDegradedSource read it for this probe. HealthCheck sorts and
+// de-duplicates the merged list.
+type healthTokenSource struct {
+	steps               *startup.Steps
+	basicGateNoPassword bool
+}
 
 func (h healthTokenSource) Tokens() []string {
 	tokens := h.steps.Tokens()
-	if servermiddleware.BasicGateNoPassword() {
+	if h.basicGateNoPassword {
 		tokens = append(tokens, servermiddleware.BasicGateNoPasswordToken)
 	}
 	return tokens
