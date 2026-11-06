@@ -1,7 +1,7 @@
 // file: internal/arch/layering_test.go
-// version: 1.4.15
+// version: 1.5.0
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
-// last-edited: 2026-11-04
+// last-edited: 2026-11-05
 
 // Package arch holds architecture guard tests. It has no non-test code.
 //
@@ -15,33 +15,61 @@
 //     one-way ratchet: the test fails when a listed edge no longer exists
 //     (delete the entry in the PR that fixes the edge) and when a listed edge
 //     is actually legal (the map cannot become a general whitelist).
+//
+// The engine is core's archtest.Layering (03 §3.5.1 item 3): this file holds
+// only ABO's data (layerOf, allowed, the named table, the overrides, the
+// directory families and the mapping of core imports onto ABO's scale).
 package arch
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"io"
+	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/mediacore/archtest"
 )
 
 const modulePath = "github.com/falkcorp/audiobook-organizer"
 
-// minModulePackages and the positive-control edge below guard the loader: a
-// graph that is empty or missing the best-known edge means the loader is
-// broken, and an empty graph would pass every rule vacuously.
-const minModulePackages = 150
+// corePrefix is the import prefix of the core module (03 §3.2).
+const corePrefix = "github.com/falkcorp/mediacore/"
 
-var positiveControlEdge = edge{"internal/server", "internal/database"}
+// The loader-health floor is a ratio of layerOf (03 §3.5.1 item 1), so moving
+// packages out to core cannot trip it while a broken loader, which returns
+// almost nothing, still does.
+const loaderFloorRatio = 0.8
+
+// minModulePackages is the same floor as a package count, for the other
+// loaders of this package (the hash-cost, opstest and resume-restart guards).
+// It was the literal 150 until the core module arrived; a ratio of layerOf
+// follows packages that move to core instead of tripping on them.
+var minModulePackages = int(math.Ceil(loaderFloorRatio * float64(len(layerOf))))
+
+// inModuleControl is the in-module positive control: the root main package
+// imports cmd (main.go). The CLI stays in ABO (13 §13.5.1), so the edge exists
+// before, during and after the extraction. A PR that removes it names a
+// replacement in-module edge in the same change.
+var inModuleControl = edge{".", "cmd"}
+
+// classifierControl is the classifier positive control (03 §3.5.1 item 1): a
+// root package that imports a core path, which the guard must classify. At
+// R1's first core PR the one root import of core is this guard's own: this
+// package's test files import mediacore/archtest (a test import, so it
+// changes no package's layer). A PR that removes the edge names its
+// replacement in the same change.
+var classifierControl = edge{"internal/arch", corePrefix + "archtest"}
+
+// moduleAppImporters are the only packages that may import mediacore/module
+// or mediacore/app in non-test code: the main package, cmd, and ABO's
+// composition root internal/books (03 §3.5.1 item 1). Below layer 6 a package
+// receives what it needs as funcs or interfaces that internal/books wires.
+var moduleAppImporters = []string{".", "cmd", "internal/books"}
 
 // edge is an import: [0] imports [1], both module-relative ("." is the
-// module-root main package).
-type edge = [2]string
+// module-root main package), or a full path for a core import.
+type edge = archtest.Edge
 
 // layerOf maps every module package, keyed by import path relative to the
 // module, to its layer. Layers: 0 leaf, 1 config, 2 storage, 3 domain,
@@ -334,182 +362,134 @@ func rel(importPath string) (string, bool) {
 	return "", false
 }
 
-// loadGraph returns package -> sorted in-module non-test imports for every
-// package under the module root. It shells out to `go list` so the test needs
-// no dependency beyond the toolchain.
-func loadGraph(t *testing.T, root string) map[string][]string {
-	t.Helper()
-	cmd := exec.Command("go", "list", "-json=ImportPath,Imports", "./...")
-	cmd.Dir = root
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatalf("go list stdout pipe: %v", err)
+// aboSpec is ABO's layering rule as an archtest.LayerSpec.
+func aboSpec(root string) archtest.LayerSpec {
+	return archtest.LayerSpec{
+		ModulePath:     modulePath,
+		Dir:            root,
+		LayerOf:        layerOf,
+		Override:       layerOverride,
+		Named:          namedLayer,
+		Family:         familyLayer,
+		ImportFloor:    3,
+		Allowed:        allowed,
+		ForeignPrefix:  corePrefix,
+		Foreign:        coreLayerOnABOScale,
+		Restricted:     map[string][]string{corePrefix + "module": moduleAppImporters, corePrefix + "app": moduleAppImporters},
+		FloorRatio:     loaderFloorRatio,
+		Control:        inModuleControl,
+		ForeignControl: classifierControl,
+		// The default tag set: the graph layerOf and allowed were built
+		// against. The tag-union tools are TestCoreImportsOnlyCore and
+		// TestCoreHoldsNoAppKeyNames (03 §3.5.1 item 4).
+		TagSets: archtest.DefaultTagSet(),
 	}
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("go list start: %v", err)
-	}
-	graph := map[string][]string{}
-	dec := json.NewDecoder(stdout)
-	for {
-		var p struct {
-			ImportPath string
-			Imports    []string
-		}
-		if err := dec.Decode(&p); err == io.EOF {
-			break
-		} else if err != nil {
-			t.Fatalf("decode go list output: %v", err)
-		}
-		pkg, ok := rel(p.ImportPath)
-		if !ok {
-			continue
-		}
-		deps := []string{}
-		for _, imp := range p.Imports {
-			if d, ok := rel(imp); ok {
-				deps = append(deps, d)
-			}
-		}
-		sort.Strings(deps)
-		graph[pkg] = deps
-	}
-	if err := cmd.Wait(); err != nil {
-		t.Fatalf("go list failed: %v\n%s", err, stderr.String())
-	}
-	return graph
 }
 
 func TestLayering(t *testing.T) {
-	graph := loadGraph(t, repoRoot(t))
+	archtest.Layering(t, aboSpec(repoRoot(t)))
+}
 
-	// Positive control: the loader must see the module.
-	if len(graph) < minModulePackages {
-		t.Fatalf("the loader is broken, not the code: loaded %d module packages, want at least %d",
-			len(graph), minModulePackages)
-	}
-	if !contains(graph[positiveControlEdge[0]], positiveControlEdge[1]) {
-		t.Fatalf("the loader is broken, not the code: edge %s -> %s not found",
-			positiveControlEdge[0], positiveControlEdge[1])
-	}
+// coreABOLayer maps core packages onto ABO's layer scale (0 leaf, 1 config,
+// 2 storage, 3 domain, 4 jobs, 5 transport, 6 entry) by their 03 R4 layer, so
+// core imports keep the domain/transport/entry split instead of hiding
+// wrong-way edges (03 §3.5.1 item 1): core L0-L5 -> -1 (platform, legal from
+// every ABO layer); L6 (httpapi, realtime, arrfacade, ui) -> 5; L7-L9 (module,
+// kernel, app, examples/*) -> 6. Packages with no R4 row are mapped
+// explicitly: coretest, archtest, the <pkg>/<pkg>test suites and storage/* ->
+// -1; shared/... -> 3. A sub-package takes its nearest listed ancestor's
+// mapping; core/internal/... is unreachable from ABO (Go's internal rule).
+var coreABOLayer = map[string]int{
+	// R4 L0-L5
+	"entity": -1, "lifecycle": -1, "version": -1, "buildid": -1, "log": -1, "metrics": -1,
+	"storage": -1, "secrets": -1, "config": -1,
+	"events": -1, "outbox": -1, "tasks": -1, "library": -1, "auth": -1, "rbac": -1, "audit": -1,
+	"integrations": -1, "backup": -1, "updater": -1, "health": -1, "acquire": -1,
+	// test-support (no R4 row)
+	"coretest": -1, "archtest": -1,
+	// shared/... (domain)
+	"shared": 3,
+	// R4 L6
+	"httpapi": 5, "realtime": 5, "arrfacade": 5, "ui": 5,
+	// R4 L7-L9
+	"module": 6, "kernel": 6, "app": 6, "examples": 6,
+}
 
-	var problems []string
-
-	// Every package must have a layer, and every layerOf key must be a real
-	// package (a deleted package must leave the map).
-	for _, pkg := range sortedKeys(graph) {
-		if _, ok := layerOf[pkg]; !ok {
-			problems = append(problems, fmt.Sprintf(
-				"package %q has no entry in layerOf: choose its layer (see docs/architecture/layering.md)", pkg))
+// coreLayerOnABOScale is the archtest Foreign mapping over coreABOLayer.
+func coreLayerOnABOScale(importPath string) (int, bool) {
+	rel, ok := strings.CutPrefix(importPath, corePrefix)
+	if !ok || rel == "" {
+		return 0, false
+	}
+	// <pkg>/<pkg>test conformance suites are test-support.
+	if i := strings.LastIndex(rel, "/"); i > 0 {
+		parent := rel[:i]
+		if rel[i+1:] == parent[strings.LastIndex(parent, "/")+1:]+"test" {
+			return -1, true
 		}
 	}
-	for _, pkg := range sortedLayerKeys() {
-		if _, ok := graph[pkg]; !ok {
-			problems = append(problems, fmt.Sprintf(
-				"layerOf lists %q, which is not a package in the module: remove the entry", pkg))
+	for p := rel; ; {
+		if l, ok := coreABOLayer[p]; ok {
+			return l, true
 		}
-	}
-
-	// layerOf must equal the layer the classification rule computes from the
-	// import graph, except for layerOverride. Without this a PR could clear a
-	// violation by raising the importer's layer.
-	computed := computeLayers(graph)
-	for _, pkg := range sortedKeys(graph) {
-		declared, ok := layerOf[pkg]
-		if !ok {
-			continue // already reported as a missing layerOf entry
+		i := strings.LastIndex(p, "/")
+		if i < 0 {
+			return 0, false
 		}
-		if want := computed[pkg]; declared != want {
-			problems = append(problems, fmt.Sprintf(
-				"layerOf[%q] is %d but the classification rule computes %d: set it to %d, or fix the imports that change the computed layer. "+
-					"A layer change needs an entry in layerOverride with go list evidence",
-				pkg, declared, want, want))
-		}
-	}
-
-	// (a) no edge violates the rule unless listed, and (b) every listed edge
-	// still exists, (c) every listed edge really violates the rule.
-	exists := map[edge]bool{}
-	for _, pkg := range sortedKeys(graph) {
-		from, okFrom := layerOf[pkg]
-		for _, dep := range graph[pkg] {
-			e := edge{pkg, dep}
-			exists[e] = true
-			to, okTo := layerOf[dep]
-			if !okFrom || !okTo {
-				continue // already reported as a missing layerOf entry
-			}
-			if to > from {
-				if _, ok := allowed[e]; !ok {
-					problems = append(problems, fmt.Sprintf(
-						"layering violation: %s (layer %d) imports %s (layer %d); a package may import only its own layer or lower. "+
-							"Fix the import (invert the dependency, pass a function or interface in), or list the edge in allowed with a reason. "+
-							"Do not raise the importer's layer: layerOf must match the computed layer",
-						pkg, from, dep, to))
-				}
-			}
-		}
-	}
-	for _, e := range sortedEdges(allowed) {
-		if !exists[e] {
-			problems = append(problems, fmt.Sprintf(
-				"allowed lists %s -> %s, but that import no longer exists: remove this entry, the edge is fixed", e[0], e[1]))
-			continue
-		}
-		from, okFrom := layerOf[e[0]]
-		to, okTo := layerOf[e[1]]
-		if okFrom && okTo && to <= from {
-			problems = append(problems, fmt.Sprintf(
-				"allowed lists %s -> %s, but that edge is legal (layer %d imports layer %d): remove this entry",
-				e[0], e[1], from, to))
-		}
-	}
-
-	if len(problems) > 0 {
-		t.Errorf("%d layering problem(s):\n  %s", len(problems), strings.Join(problems, "\n  "))
+		p = p[:i]
 	}
 }
 
-func contains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
+// TestLayeringModuleAppImporters checks, on a synthetic graph through the
+// engine, that only ., cmd and internal/books may import mediacore/module or
+// mediacore/app, and that core imports are classified onto ABO's scale.
+func TestLayeringModuleAppImporters(t *testing.T) {
+	spec := aboSpec("")
+	spec.LayerOf = map[string]int{".": 6, "cmd": 6, "internal/books": 6, "internal/plugins/x": 4, "internal/util": 0}
+	spec.Named = map[string]int{".": 6, "internal/util": 0}
+	spec.Override = nil
+	spec.Allowed = nil
+	spec.FloorRatio = 1
+	spec.ForeignControl = edge{"internal/util", corePrefix + "storage/keys"}
+	g := archtest.Graph{
+		Imports: map[string][]string{".": {"cmd"}, "cmd": {"internal/books"}, "internal/books": {"internal/plugins/x"}, "internal/plugins/x": {}, "internal/util": {}},
+		Foreign: map[string][]string{
+			".":                  {corePrefix + "app"},
+			"cmd":                {corePrefix + "app"},
+			"internal/books":     {corePrefix + "module"},
+			"internal/plugins/x": {corePrefix + "module"},
+			"internal/util":      {corePrefix + "storage/keys"},
+		},
+	}
+	problems := archtest.CheckGraph(spec, g)
+	joined := strings.Join(problems, "\n")
+	if !strings.Contains(joined, "internal/plugins/x imports "+corePrefix+"module; only ., cmd, internal/books may import it") {
+		t.Errorf("a layer-4 package importing mediacore/module was not reported:\n%s", joined)
+	}
+	for _, ok := range []string{". imports", "cmd imports", "internal/books imports"} {
+		if strings.Contains(joined, ok+" "+corePrefix) {
+			t.Errorf("an allowed importer of module/app was reported (%s):\n%s", ok, joined)
 		}
 	}
-	return false
-}
-
-func sortedKeys(m map[string][]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+	if !strings.Contains(joined, "internal/plugins/x (layer 4) imports "+corePrefix+"module (mapped layer 6)") {
+		t.Errorf("a wrong-way core import was not checked against the importer's layer:\n%s", joined)
 	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedEdges(m map[edge]string) []edge {
-	keys := make([]edge, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+	if strings.Contains(joined, "internal/util") {
+		t.Errorf("a core L0 import (mapped -1) from a leaf was reported:\n%s", joined)
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i][0] != keys[j][0] {
-			return keys[i][0] < keys[j][0]
+
+	// The mapping itself: R4 rows, sub-packages, test-support and shared.
+	for path, want := range map[string]int{
+		"storage/keys": -1, "auth/oidc": -1, "tasks/taskstest": -1, "coretest/fakes": -1,
+		"httpapi": 5, "module": 6, "examples/hello": 6, "shared/x": 3,
+	} {
+		if got, ok := coreLayerOnABOScale(corePrefix + path); !ok || got != want {
+			t.Errorf("coreLayerOnABOScale(%s) = %d, %v; want %d", path, got, ok, want)
 		}
-		return keys[i][1] < keys[j][1]
-	})
-	return keys
-}
-
-func sortedLayerKeys() []string {
-	keys := make([]string, 0, len(layerOf))
-	for k := range layerOf {
-		keys = append(keys, k)
 	}
-	sort.Strings(keys)
-	return keys
+	if _, ok := coreLayerOnABOScale(corePrefix + "nosuch"); ok {
+		t.Error("an unknown core package was mapped; it must fail as unmapped")
+	}
 }
 
 // namedLayer is the layer table from docs/architecture/layering.md: the
@@ -557,42 +537,4 @@ func familyLayer(pkg string) (int, bool) {
 		return 6, true
 	}
 	return 0, false
-}
-
-// computeLayers applies the classification rule: override, then table name,
-// then directory family, then max(layer of in-module imports) floored at 3,
-// then 0 for a package that imports no module package.
-func computeLayers(graph map[string][]string) map[string]int {
-	out := map[string]int{}
-	var layer func(pkg string) int
-	layer = func(pkg string) int {
-		if l, ok := out[pkg]; ok {
-			return l
-		}
-		var l int
-		if o, ok := layerOverride[pkg]; ok {
-			l = o
-		} else if n, ok := namedLayer[pkg]; ok {
-			l = n
-		} else if f, ok := familyLayer(pkg); ok {
-			l = f
-		} else if deps := graph[pkg]; len(deps) == 0 {
-			l = 0
-		} else {
-			for _, d := range deps {
-				if dl := layer(d); dl > l {
-					l = dl
-				}
-			}
-			if l < 3 {
-				l = 3
-			}
-		}
-		out[pkg] = l
-		return l
-	}
-	for pkg := range graph {
-		layer(pkg)
-	}
-	return out
 }
