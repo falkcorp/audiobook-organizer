@@ -1,7 +1,7 @@
 // file: core/archtest/layering_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 502dfb95-415e-4131-9ce5-df02abad382c
-// last-edited: 2026-11-05
+// last-edited: 2026-11-06
 
 package archtest
 
@@ -280,4 +280,52 @@ func TestNoInitFindings(t *testing.T) {
 	}
 	// Through the loader: test files are not scanned, so the clean package passes.
 	NoInit(t, root, "./clean/...")
+}
+
+// TestNoInitAllowVar: an //archtest:allow-var line with a reason exempts the
+// one struct value it annotates; it never exempts a block, a value without a
+// reason, or a map, slice, func, pointer or chan value (03 R5).
+func TestNoInitAllowVar(t *testing.T) {
+	src := "package p\n\ntype R struct{ k int }\n\n" +
+		"var (\n" +
+		"\t//archtest:allow-var spec-mandated value\n" +
+		"\tAllowed = R{k: 1}\n" +
+		"\tNotAnnotated = R{k: 2}\n" +
+		"\tTrailing = R{k: 3} //archtest:allow-var spec-mandated value\n" +
+		"\t//archtest:allow-var \n" +
+		"\tNoReason = R{k: 4}\n" +
+		")\n\n" +
+		"//archtest:allow-var block docs never count\n" +
+		"var (\n\tInBlock = R{k: 5}\n)\n\n" +
+		"//archtest:allow-var not for maps\n" +
+		"var Table = map[string]int{}\n\n" +
+		"//archtest:allow-var not for slices\n" +
+		"var List []string\n\n" +
+		"//archtest:allow-var not for funcs\n" +
+		"var Hook = func() {}\n\n" +
+		"//archtest:allow-var not for pointers\n" +
+		"var Ptr = &R{}\n\n" +
+		"//archtest:allow-var not for chans\n" +
+		"var Ch = make(chan int)\n"
+	root := writeModule(t, map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.27.0\n",
+		"p/p.go": src,
+	})
+	got, err := NoInitFindings([]string{filepath.Join(root, "p", "p.go")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"NotAnnotated", "NoReason", "InBlock", "Table", "List", "Hook", "Ptr", "Ch"} {
+		if !hasProblem(got, "package-level variable "+name) {
+			t.Errorf("findings miss %s: %v", name, got)
+		}
+	}
+	for _, name := range []string{"Allowed", "Trailing"} {
+		if hasProblem(got, "package-level variable "+name+";") || hasProblem(got, "package-level variable "+name+" ") {
+			t.Errorf("findings flag the allowed %s: %v", name, got)
+		}
+	}
+	if len(got) != 8 {
+		t.Errorf("findings = %d, want 8: %v", len(got), got)
+	}
 }
