@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
 // last-edited: 2026-11-05
 
@@ -31,10 +31,6 @@ import (
 // Production hands it a database.Store, so pin that database.Store has the
 // method: an assertion whose method is missing there would fail only in prod.
 var _ repairs.OpReader = database.Store(nil)
-
-// The refresh plan an apply starts is recorded as the fixer's newest plan
-// through the same kind of assertion; pin it on the production store too.
-var _ repairs.LastRunRecorder = database.Store(nil)
 
 func (p *Plugin) repairsPlanDef() sdk.OperationDef {
 	return sdk.OperationDef{
