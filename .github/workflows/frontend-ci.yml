@@ -1,7 +1,7 @@
 # file: .github/workflows/frontend-ci.yml
-# version: 2.17.1
+# version: 2.17.2
 # guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
-# last-edited: 2026-11-05
+# last-edited: 2026-11-06
 
 name: Frontend CI
 
@@ -61,7 +61,7 @@ jobs:
     name: Frontend Build and Test
     needs: frontend-config
     if: needs.frontend-config.outputs.has-frontend == 'true'
-    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@8e4eeeb8ae4f3543f17e595f794989a91707ecb6 # main 2026-11-04 (github-common#385: free-runner-disk input; also brings in the gha-ci-workflow-helpers frontend-run exit-code fix)
+    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@c8c3576167622932044d0ddac7421968e60b43fa # main 2026-11-06; every github-common pin uses this SHA, move them with .github/ghcommon-ref.txt
     with:
       go-version: '1.27.3'
       node-version: ${{ needs.frontend-config.outputs.node-version }}

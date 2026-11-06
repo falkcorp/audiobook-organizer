@@ -1,5 +1,7 @@
 # file: .github/workflows/hard-burndown.yml
-# version: 1.2.0
+# version: 1.2.1
+# guid: 5354d3d2-6721-49eb-a4e3-3a8d1befe764
+# last-edited: 2026-11-06
 name: Hard burndown (failed-batch retry)
 
 
@@ -46,7 +48,7 @@ on:
 
 jobs:
   burndown:
-    uses: falkcorp/github-common/.github/workflows/reusable-burndown.yml@d0c3326b96557c8ea9117c1c196b628e5e028186 # v1.11.2 + submodules:recursive + triage-poll pin fix
+    uses: falkcorp/github-common/.github/workflows/reusable-burndown.yml@c8c3576167622932044d0ddac7421968e60b43fa # main 2026-11-06; every github-common pin uses this SHA, move them with .github/ghcommon-ref.txt
     with:
       mode: ${{ inputs.mode || 'draft-only' }}
       hub_repo: falkcorp/burndown-tasks
