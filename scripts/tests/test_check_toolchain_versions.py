@@ -1,7 +1,7 @@
 # file: scripts/tests/test_check_toolchain_versions.py
-# version: 1.4.1
+# version: 1.5.0
 # guid: 741ea392-1f28-423c-ae7a-45e56620c26c
-# last-edited: 2026-10-11
+# last-edited: 2026-11-05
 """Tests for scripts/check_toolchain_versions.py (CI-04, CI-03).
 
 The inline shell check this replaced truncated go.mod to major.minor, read only
@@ -51,7 +51,13 @@ COPIES = (
     "go.mod",
     ".github/repository-config.yml",
     "scripts/ci_remote.py",
+    "core/Makefile",
+    "core/go.mod",
+    # A "Not a pin" comment (13 §13.2.2), allowlisted by path and line.
+    "scripts/setup-mockery.sh",
 )
+# A toolchain name built at run time, so this file's source never carries one.
+PIN_LITERAL = "go" + PIN
 
 
 class CheckToolchainVersionsTest(unittest.TestCase):
@@ -305,6 +311,70 @@ class CheckToolchainVersionsTest(unittest.TestCase):
         )
         res = self.run_check()
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+    # --- core module (12 SC10, 13 §13.2.2 items 1, 2, 4) --------------------
+
+    def test_core_makefile_pin_unequal_to_root_fails(self) -> None:
+        self.mutate(
+            "core/Makefile", f"export GOTOOLCHAIN := go{PIN}", f"export GOTOOLCHAIN := go{WRONG_PATCH}"
+        )
+        self.assert_fails(f"::error file=core/Makefile,line=")
+
+    def test_core_makefile_missing_fails(self) -> None:
+        (self.root / "core" / "Makefile").unlink()
+        self.assert_fails("core/Makefile is missing")
+
+    def test_core_gomod_toolchain_directive_fails(self) -> None:
+        self.mutate("core/go.mod", "\ngo 1.27.0\n", f"\ngo 1.27.0\n\ntoolchain go{PIN}\n")
+        self.assert_fails("core/go.mod must not carry a 'toolchain' directive")
+
+    def test_tools_gomod_above_pin_fails(self) -> None:
+        d = self.root / "core" / "tools" / "staticcheck"
+        d.mkdir(parents=True)
+        (d / "go.mod").write_text(f"module x\n\ngo {WRONG_PATCH}\n", encoding="utf-8")
+        self.assert_fails("::error file=core/tools/staticcheck/go.mod")
+
+    def test_toolchain_literal_in_a_script_fails(self) -> None:
+        path = self.root / "scripts" / "ci" / "measure.sh"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"#!/bin/sh\nGOTOOLCHAIN={PIN_LITERAL} go version\n", encoding="utf-8")
+        self.assert_fails("::error file=scripts/ci/measure.sh,line=2::toolchain literal")
+
+    def test_toolchain_literal_in_a_core_script_fails(self) -> None:
+        path = self.root / "core" / "scripts" / "ci" / "x.py"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"PIN = '{PIN_LITERAL}'\n", encoding="utf-8")
+        self.assert_fails("::error file=core/scripts/ci/x.py,line=1::toolchain literal")
+
+    def test_not_a_pin_line_passes_and_other_lines_fail(self) -> None:
+        # setup-mockery.sh carries its allowlisted comment at its listed line.
+        res = self.run_check()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        path = self.root / "scripts" / "setup-mockery.sh"
+        path.write_text(path.read_text(encoding="utf-8") + f"# built with {PIN_LITERAL}\n", encoding="utf-8")
+        self.assert_fails("::error file=scripts/setup-mockery.sh")
+
+    def test_toolchain_literal_in_a_workflow_run_step_fails(self) -> None:
+        path = self.root / ".github" / "workflows" / "zz-run.yml"
+        path.write_text(
+            "jobs:\n  a:\n    steps:\n"
+            f"      # records {PIN_LITERAL} behaviour: a YAML comment, not a run step\n"
+            "      - name: build\n"
+            "        run: |\n"
+            "          echo start\n"
+            f"          GOTOOLCHAIN={PIN_LITERAL} go build ./...\n"
+            "      - run: echo done\n",
+            encoding="utf-8",
+        )
+        res = self.run_check()
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertIn("::error file=.github/workflows/zz-run.yml,line=8::toolchain literal", res.stdout)
+        self.assertNotIn("zz-run.yml,line=4", res.stdout)
+
+    def test_ci_remote_guarded_copy_is_not_a_literal(self) -> None:
+        res = self.run_check()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertNotIn("scripts/ci_remote.py,line=", res.stdout)
 
 
 if __name__ == "__main__":
