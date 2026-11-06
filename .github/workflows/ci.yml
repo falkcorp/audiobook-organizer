@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.34.1
+# version: 3.35.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-11-05
 
@@ -26,6 +26,12 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  # The merge queue (repo ruleset "main merge queue", owner 2026-11-05) tests a
+  # gh-readonly-queue/main/* commit. Changes has no diff range for this event
+  # and fails open, so every job runs on the queued commit. Its checks become
+  # required in the ruleset once a queue run has reported them.
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 concurrency:
