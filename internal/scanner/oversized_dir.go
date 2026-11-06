@@ -1,7 +1,7 @@
 // file: internal/scanner/oversized_dir.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: f7c8efaa-7942-41b9-b42d-5a5bb1e2d51f
-// last-edited: 2026-09-28
+// last-edited: 2026-11-06
 
 package scanner
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"path/filepath"
 
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // subGroupOversizedAlbum handles an album group holding more than

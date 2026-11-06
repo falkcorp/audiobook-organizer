@@ -1,9 +1,9 @@
-// file: internal/logging/sanitize_test.go
-// version: 1.0.0
+// file: core/log/sanitize_test.go
+// version: 1.0.1
 // guid: 9c4f7d21-6b83-4e05-a1d9-2f68b0c37e54
-// last-edited: 2026-08-14
+// last-edited: 2026-11-06
 
-package logging
+package log
 
 import (
 	"context"

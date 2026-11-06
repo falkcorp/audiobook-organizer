@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.176.0
+// version: 1.176.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-30
+// last-edited: 2026-11-06
 
 package config
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/audioext"
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
+	logging "github.com/falkcorp/mediacore/log"
 	"github.com/spf13/viper"
 )
 
@@ -2783,7 +2784,7 @@ func registerConfigDefaults(r defaultRegistrar) {
 	r.SetDefault("operation_timeout_minutes", 30)
 	r.SetDefault("db_census_exact_read_mb_per_sec", DefaultDBCensusExactReadMBPerSec)
 	r.SetDefault("db_census_exact_cooldown_hours", DefaultDBCensusExactCooldownHours)
-	r.SetDefault("log_retention_days", DefaultLogRetentionDays)
+	r.SetDefault("log_retention_days", logging.DefaultLogRetentionDays)
 	// operation_log_retention_days, activity_log_compaction_days and
 	// activity_log_retention_{change,debug}_days have NO viper default on
 	// purpose: each consumer maps 0 (or less) to its effective default

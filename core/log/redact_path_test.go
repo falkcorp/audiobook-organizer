@@ -1,9 +1,9 @@
-// file: internal/logging/redact_path_test.go
-// version: 1.6.0
+// file: core/log/redact_path_test.go
+// version: 1.6.1
 // guid: 232b593d-cfbd-4e4f-9898-8ff6d47e5768
-// last-edited: 2026-10-22
+// last-edited: 2026-11-06
 
-package logging
+package log
 
 import (
 	"strings"

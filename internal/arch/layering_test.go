@@ -1,7 +1,7 @@
 // file: internal/arch/layering_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
-// last-edited: 2026-11-05
+// last-edited: 2026-11-06
 
 // Package arch holds architecture guard tests. It has no non-test code.
 //
@@ -110,12 +110,10 @@ var layerOf = map[string]int{
 	"internal/httputil":                0, // table: leaf
 	"internal/keyedmutex":              0, // computed: imports no module package
 	"internal/libroot":                 3, // computed: max of imports=0, floored at 3
-	"internal/lifecycle":               0, // computed: imports no module package
 	"internal/linkintegrity":           0, // computed: imports no module package
 	"internal/logger":                  0, // table: leaf
 	"internal/logger/logtest":          0, // computed: imports no module package
 	"internal/logger/mocks":            0, // computed: imports no module package
-	"internal/logging":                 0, // table: leaf
 	"internal/mail":                    0, // computed: imports no module package
 	"internal/masterlist":              0, // computed: imports no module package
 	"internal/matcher":                 0, // reclassified from domain: imports only internal/personname
@@ -498,7 +496,7 @@ var namedLayer = map[string]int{
 	// Layer 0 leaf.
 	"internal/util": 0, "internal/pathutil": 0, "internal/personname": 0, "internal/titleutil": 0,
 	"internal/authorname": 0, "internal/audioext": 0, "internal/httputil": 0, "internal/logger": 0,
-	"internal/logging": 0, "internal/metrics": 0, "internal/cache": 0, "internal/models": 0,
+	"internal/metrics": 0, "internal/cache": 0, "internal/models": 0,
 	"internal/seqnum": 0, "internal/querygrammar": 0,
 	// Layer 1 config.
 	"internal/config": 1,

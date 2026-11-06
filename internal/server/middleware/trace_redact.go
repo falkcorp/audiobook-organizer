@@ -1,14 +1,14 @@
 // file: internal/server/middleware/trace_redact.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 93865e8e-5956-4a87-9a7d-ae37fd09a3c2
-// last-edited: 2026-10-19
+// last-edited: 2026-11-06
 
 package middleware
 
 import (
 	"net/url"
 
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	logging "github.com/falkcorp/mediacore/log"
 	"github.com/gin-gonic/gin"
 )
 

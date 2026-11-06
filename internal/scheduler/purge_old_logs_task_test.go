@@ -1,7 +1,7 @@
 // file: internal/scheduler/purge_old_logs_task_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8c4a2f61-3d9e-4b07-a5c2-e1f7b9d03a48
-// last-edited: 2026-10-11
+// last-edited: 2026-11-06
 
 package scheduler
 
@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // log_retention_days was never read by InitConfig, so every install ran with
@@ -34,6 +35,6 @@ func TestPurgeOldLogsTask_ZeroMeansDefaultOnlyNegativeDisables(t *testing.T) {
 	config.AppConfig.LogRetentionDays = 30
 	assert.True(t, task.IsEnabled())
 
-	config.AppConfig.LogRetentionDays = config.LogRetentionKeepForever
+	config.AppConfig.LogRetentionDays = logging.LogRetentionKeepForever
 	assert.False(t, task.IsEnabled(), "-1 keeps logs forever: the task must not run")
 }

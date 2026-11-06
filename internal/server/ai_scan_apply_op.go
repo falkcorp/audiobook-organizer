@@ -1,7 +1,7 @@
 // file: internal/server/ai_scan_apply_op.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2d9f4b80-7a13-4c65-8e0b-5f31a6c92d74
-// last-edited: 2026-10-30
+// last-edited: 2026-11-06
 
 // ai_scan_apply_op registers ai.author-scan-apply: the op behind "Apply selected"
 // in the Authors & series lane's AI scans sub-view. Until 2026-10-13 that button
@@ -23,12 +23,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // scanApplyStore is what applying a result needs: the shared author merge and the

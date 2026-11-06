@@ -1,7 +1,7 @@
 // file: internal/server/metadata_bulk_fetch_log.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: c6c22a1e-80d9-4499-b80a-4a4d4112fa4d
-// last-edited: 2026-10-15
+// last-edited: 2026-11-06
 //
 // Per-book outcome lines and count wording for the bulk metadata fetch
 // (runBulkMetadataFetchAll / runBulkMetadataFetchForBookIDs) op log.
@@ -15,9 +15,9 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // bulkFetchCounts renders the bulk fetch's running outcome counts. "found"

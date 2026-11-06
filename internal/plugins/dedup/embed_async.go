@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/embed_async.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: b1c2d3e4-f5a6-7890-bcde-f01234567890
-// last-edited: 2026-08-19
+// last-edited: 2026-11-06
 
 // T018: embed_async.go is a thin wrapper that delegates to runEmbedScanMode
 // (in embed_scan.go) with async=true.
@@ -15,7 +15,7 @@ package dedup
 import (
 	"context"
 	"encoding/json"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	logging "github.com/falkcorp/mediacore/log"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"

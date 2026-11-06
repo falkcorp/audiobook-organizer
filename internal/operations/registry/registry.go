@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.59.0
+// version: 3.59.1
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-10-26
+// last-edited: 2026-11-06
 
 package registry
 
@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/lifecycle"
+	"github.com/falkcorp/mediacore/lifecycle"
 	"log/slog"
 	"slices"
 	"sort"

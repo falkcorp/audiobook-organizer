@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/lsh_index_build.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: e61b955e-93bf-4ea6-bb1f-7acd30491fdb
-// last-edited: 2026-09-19
+// last-edited: 2026-11-06
 
 package dedup
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	logging "github.com/falkcorp/mediacore/log"
 	"runtime"
 	"sync"
 	"time"

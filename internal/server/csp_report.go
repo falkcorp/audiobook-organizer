@@ -1,7 +1,7 @@
 // file: internal/server/csp_report.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: d896d6d8-b883-482d-8e34-d41a4abd52df
-// last-edited: 2026-10-22
+// last-edited: 2026-11-06
 
 package server
 
@@ -23,8 +23,8 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // Where a browser reports Content-Security-Policy violations (csp.go points

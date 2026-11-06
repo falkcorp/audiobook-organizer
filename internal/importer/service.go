@@ -1,7 +1,7 @@
 // file: internal/importer/service.go
-// version: 1.21.4
+// version: 1.21.5
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
-// last-edited: 2026-10-18
+// last-edited: 2026-11-06
 
 package importer
 
@@ -24,12 +24,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // Store is the slice of the database this service uses: seven methods it calls

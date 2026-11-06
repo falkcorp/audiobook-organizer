@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/pause.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 3f6b0c28-5a17-4e93-b2d4-91e7c05a8b63
-// last-edited: 2026-10-30
+// last-edited: 2026-11-06
 
 package operations
 
@@ -13,9 +13,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
+	logging "github.com/falkcorp/mediacore/log"
 	"github.com/gin-gonic/gin"
 )
 

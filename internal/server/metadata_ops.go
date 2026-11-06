@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.43.1
+// version: 1.43.2
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-10-30
+// last-edited: 2026-11-06
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -40,7 +40,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -51,6 +50,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	logging "github.com/falkcorp/mediacore/log"
 	ulid "github.com/oklog/ulid/v2"
 	"golang.org/x/sync/errgroup"
 )

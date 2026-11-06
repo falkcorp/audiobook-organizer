@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/check_book.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f2e1d0c-b9a8-7654-3210-fedcba987654
-// last-edited: 2026-08-19
+// last-edited: 2026-11-06
 
 // check_book.go implements the dedup.check-book UOS operation (M4).
 //
@@ -26,7 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	logging "github.com/falkcorp/mediacore/log"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"

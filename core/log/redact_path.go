@@ -1,9 +1,9 @@
-// file: internal/logging/redact_path.go
-// version: 1.6.0
+// file: core/log/redact_path.go
+// version: 1.6.1
 // guid: 03986f4e-57ff-4667-bcfb-da4deb8f283b
-// last-edited: 2026-10-22
+// last-edited: 2026-11-06
 
-package logging
+package log
 
 import (
 	"net/url"
@@ -327,7 +327,7 @@ func decodeSegment(s string) string {
 // anyDotSegment reports whether any form has a "." or ".." path segment.
 func anyDotSegment(forms []string) bool {
 	for _, f := range forms {
-		for _, s := range strings.Split(f, "/") {
+		for s := range strings.SplitSeq(f, "/") {
 			if s == "." || s == ".." {
 				return true
 			}
@@ -344,7 +344,7 @@ func anyDotSegment(forms []string) bool {
 func anyInvitePrefix(forms []string) bool {
 	for _, f := range forms {
 		prev := false
-		for _, seg := range strings.Split(f, "/") {
+		for seg := range strings.SplitSeq(f, "/") {
 			if seg == "" {
 				continue
 			}

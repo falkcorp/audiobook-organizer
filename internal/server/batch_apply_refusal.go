@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_refusal.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4b23c08d-8533-4d97-9ea7-f107b4c18796
-// last-edited: 2026-11-04
+// last-edited: 2026-11-06
 //
 // A memory of the structural refusals metadata.batch-apply-cached has already
 // made, so a later run does not re-offer a book whose refusal cannot change.
@@ -24,8 +24,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // applyRefusalKeyPrefix is the key family of the per-book refusal records:

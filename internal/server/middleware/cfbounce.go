@@ -1,7 +1,7 @@
 // file: internal/server/middleware/cfbounce.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3b7e1d52-9c04-4a68-b1f3-5d2a8e60c9b7
-// last-edited: 2026-10-22
+// last-edited: 2026-11-06
 
 package middleware
 
@@ -15,8 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // Service-token browser recovery.

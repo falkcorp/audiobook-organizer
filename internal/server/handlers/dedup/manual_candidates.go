@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/manual_candidates.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: fa18d5e2-e868-4872-866e-cd8bb2b6f9ff
-// last-edited: 2026-09-25
+// last-edited: 2026-11-06
 
 package deduphandler
 
@@ -16,7 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	logging "github.com/falkcorp/mediacore/log"
 	"github.com/gin-gonic/gin"
 )
 

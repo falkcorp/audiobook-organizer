@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.59.0
+// version: 5.59.1
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-10-29
+// last-edited: 2026-11-06
 
 package metafetch
 
@@ -26,11 +26,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/foldernames"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // forwardedStores is what metafetch hands its store to rather than calls

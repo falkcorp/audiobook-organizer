@@ -1,7 +1,7 @@
 // file: internal/config/log_retention_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2e7b4c91-0a6d-4f38-9c15-b8d3e6a0f472
-// last-edited: 2026-10-11
+// last-edited: 2026-11-06
 
 // log_retention_days was never read by InitConfig, so AppConfig carried 0 on
 // every boot and purge_old_logs was disabled everywhere; the first settings
@@ -15,30 +15,18 @@ import (
 	"encoding/json"
 	"testing"
 
+	logging "github.com/falkcorp/mediacore/log"
 	"github.com/spf13/viper"
 )
-
-func TestResolveLogRetentionDays(t *testing.T) {
-	for _, tc := range []struct{ in, want int }{
-		{in: 0, want: DefaultLogRetentionDays},
-		{in: 30, want: 30},
-		{in: LogRetentionKeepForever, want: 0},
-		{in: -7, want: 0},
-	} {
-		if got := ResolveLogRetentionDays(tc.in); got != tc.want {
-			t.Errorf("ResolveLogRetentionDays(%d) = %d, want %d", tc.in, got, tc.want)
-		}
-	}
-}
 
 func TestInitConfigReadsLogRetentionDefault(t *testing.T) {
 	restoreAppConfig(t)
 	viper.Reset()
 	t.Cleanup(viper.Reset)
 	InitConfig()
-	if got := Snapshot().LogRetentionDays; got != DefaultLogRetentionDays {
+	if got := Snapshot().LogRetentionDays; got != logging.DefaultLogRetentionDays {
 		t.Fatalf("LogRetentionDays after InitConfig = %d, want %d (the purge_old_logs task is disabled at 0)",
-			got, DefaultLogRetentionDays)
+			got, logging.DefaultLogRetentionDays)
 	}
 }
 
@@ -49,8 +37,8 @@ func TestValidateNormalizesZeroLogRetention(t *testing.T) {
 	InitConfig()
 	cfg := Snapshot()
 	for _, tc := range []struct{ in, want int }{
-		{in: 0, want: DefaultLogRetentionDays},
-		{in: LogRetentionKeepForever, want: LogRetentionKeepForever},
+		{in: 0, want: logging.DefaultLogRetentionDays},
+		{in: logging.LogRetentionKeepForever, want: logging.LogRetentionKeepForever},
 		{in: 14, want: 14},
 	} {
 		c := cfg
@@ -70,13 +58,13 @@ func TestBlobLogRetentionMigration(t *testing.T) {
 		want        int
 		wantRewrite bool
 	}{
-		{name: "stored 0 is dropped and the default applies", blob: `{"log_retention_days":0}`, want: DefaultLogRetentionDays, wantRewrite: true},
+		{name: "stored 0 is dropped and the default applies", blob: `{"log_retention_days":0}`, want: logging.DefaultLogRetentionDays, wantRewrite: true},
 		{name: "stored value kept", blob: `{"log_retention_days":30}`, want: 30},
-		{name: "keep forever kept", blob: `{"log_retention_days":-1}`, want: LogRetentionKeepForever},
-		{name: "absent key gets the default", blob: `{"root_dir":"/mnt/books"}`, want: DefaultLogRetentionDays},
+		{name: "keep forever kept", blob: `{"log_retention_days":-1}`, want: logging.LogRetentionKeepForever},
+		{name: "absent key gets the default", blob: `{"root_dir":"/mnt/books"}`, want: logging.DefaultLogRetentionDays},
 		// After the marker, the blob is not rewritten again; a 0 that somehow
 		// came back is still normalized in memory on load.
-		{name: "marker set: no rewrite, still normalized", blob: `{"log_retention_days":0}`, markerSet: true, want: DefaultLogRetentionDays},
+		{name: "marker set: no rewrite, still normalized", blob: `{"log_retention_days":0}`, markerSet: true, want: logging.DefaultLogRetentionDays},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

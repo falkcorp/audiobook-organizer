@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.45.0
+// version: 3.45.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-10-26
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -30,12 +30,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/ai/resultjournal"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // introTranscribeOpID is the per-book op's registry id (error prefixes, the

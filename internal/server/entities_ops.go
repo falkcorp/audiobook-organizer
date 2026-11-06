@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
-// last-edited: 2026-10-30
+// last-edited: 2026-11-06
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
 // operations: author-merge and resolve-production-author. Each def is
@@ -24,11 +24,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // authorMergeOpParams holds the parameters for the entities.author-merge op. It is

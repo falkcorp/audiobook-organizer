@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.135.5
+// version: 1.135.6
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-11-05
+// last-edited: 2026-11-06
 
 package scanner
 
@@ -35,7 +35,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/matcher"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -45,6 +44,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // saveBook is the per-book persistence hook used by ProcessBooksParallel.

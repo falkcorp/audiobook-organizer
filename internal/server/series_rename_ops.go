@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: f9b6a9b0-62cc-40eb-8c93-e281b6dce050
-// last-edited: 2026-10-30
+// last-edited: 2026-11-06
 
 // series_rename_ops registers entities.series-rename, the queued operation
 // behind PUT /series/:id/name and PATCH /series/:id. Both endpoints used to
@@ -24,9 +24,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	logging "github.com/falkcorp/mediacore/log"
 	ulid "github.com/oklog/ulid/v2"
 )
 

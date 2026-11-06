@@ -1,7 +1,7 @@
 // file: internal/dedup/book_runtime.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1c5335bc-2f9e-4f1a-829a-f8ed1a96ebc5
-// last-edited: 2026-09-27
+// last-edited: 2026-11-06
 
 package dedup
 
@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // bookRuntimeMemo caches canonical runtimes for ONE call (a candidate

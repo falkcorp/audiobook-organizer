@@ -1,7 +1,7 @@
-// file: internal/logging/structured_test.go
-// version: 1.0.0
+// file: core/log/structured_test.go
+// version: 1.0.1
 
-package logging
+package log
 
 import (
 	"context"

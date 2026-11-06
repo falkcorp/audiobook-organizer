@@ -1,7 +1,7 @@
 // file: internal/metafetch/file_pipeline.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-10-13
+// last-edited: 2026-11-06
 
 // The metadata-apply rename path, expressed entirely in terms of
 // internal/organizer.
@@ -31,8 +31,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // tmpRenameSuffix is appended to the target path to form the intermediate temp

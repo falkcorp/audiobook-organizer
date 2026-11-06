@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.34.0
+// version: 1.34.1
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-10-29
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -20,13 +20,13 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
 	"github.com/falkcorp/audiobook-organizer/internal/transcode"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // --- purge-deleted ---

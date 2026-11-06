@@ -1,7 +1,7 @@
 // file: internal/metafetch/book_runtime.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: ebab5e13-aa16-4d7d-84e0-773a72bc717e
-// last-edited: 2026-10-29
+// last-edited: 2026-11-06
 
 package metafetch
 
@@ -9,7 +9,7 @@ import (
 	"context"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // bookRuntimeSec is the local runtime every candidate-scoring path compares a

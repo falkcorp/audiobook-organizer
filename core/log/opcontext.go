@@ -1,7 +1,7 @@
-// file: internal/logging/opcontext.go
-// version: 1.0.1
+// file: core/log/opcontext.go
+// version: 1.0.2
 
-package logging
+package log
 
 import "context"
 
