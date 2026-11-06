@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repairs_lane_listing_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e1c9a54-2b60-4d83-a5f7-0c8d3b6e9142
 // last-edited: 2026-11-05
 
@@ -87,10 +87,10 @@ func TestRepairsLane_GroupsAreContiguousAndInOrder(t *testing.T) {
 			runs = append(runs, g)
 		}
 	}
-	var want []repairs.GroupID
-	for _, g := range repairs.Groups() {
-		want = append(want, g.ID)
-	}
+	// The display order the owner chose on 2026-11-05: groups by total applies,
+	// imports and one-shot tools last.
+	want := []repairs.GroupID{repairs.GroupDuplicates, repairs.GroupTitles, repairs.GroupAuthors,
+		repairs.GroupSeries, repairs.GroupMetadata, repairs.GroupFiles, repairs.GroupVersions, repairs.GroupImports}
 	require.Equal(t, want, runs)
 	require.Equal(t, repairs.GroupImports, runs[len(runs)-1], "imports and one-shot tools are always last")
 }
@@ -110,15 +110,11 @@ var (
 // follows the naming rule and a one-line summary free of ids.
 func TestRepairsLane_EveryFixerHasGroupRankTitleAndSummary(t *testing.T) {
 	p := &Plugin{deps: fakeDeps{}}
-	known := map[repairs.GroupID]bool{}
-	for _, g := range repairs.Groups() {
-		known[g.ID] = true
-	}
 	ranks := map[repairs.GroupID]map[int]string{}
 	for _, f := range p.Repairs().List() {
 		id, m, title := f.ID(), f.Meta(), f.Title()
 
-		require.True(t, known[m.Group], "%s: group %q is not one of repairs.Groups()", id, m.Group)
+		require.NotEmpty(t, repairs.GroupTitle(m.Group), "%s: group %q is not one of the lane's groups", id, m.Group)
 		require.Positive(t, m.Rank, "%s: rank counts from 1", id)
 		if ranks[m.Group] == nil {
 			ranks[m.Group] = map[int]string{}

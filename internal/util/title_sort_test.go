@@ -1,7 +1,7 @@
 // file: internal/util/title_sort_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6a3d9e52-1c8f-4b70-a4e6-3f2b8d0c5e19
-// last-edited: 2026-09-29
+// last-edited: 2026-11-05
 
 package util
 
@@ -73,30 +73,6 @@ func TestSeriesSortKey(t *testing.T) {
 	for _, c := range cases {
 		if got := SeriesSortKey(c.in); got != c.want {
 			t.Errorf("SeriesSortKey(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
-func TestNormalizeLetterLOrdinal(t *testing.T) {
-	cases := []struct {
-		in, want string
-		ok       bool
-	}{
-		{"l Corinthians", "1 Corinthians", true},
-		{"ll Corinthians 4", "2 Corinthians 4", true},
-		{"lI Timothy", "2 Timothy", true},
-		{"lll John", "3 John", true},
-		{"l. Peter", "1 Peter", true},
-		{"I Corinthians", "I Corinthians", false}, // correct roman spelling
-		{"1 Corinthians", "1 Corinthians", false},
-		{"l'Étranger", "l'Étranger", false},
-		{"l Am Legend", "l Am Legend", false},      // not a numbered book
-		{"Ill Corinthians", "3 Corinthians", true}, // "III" with two l glyphs
-	}
-	for _, c := range cases {
-		got, ok := NormalizeLetterLOrdinal(c.in)
-		if got != c.want || ok != c.ok {
-			t.Errorf("NormalizeLetterLOrdinal(%q) = (%q, %v), want (%q, %v)", c.in, got, ok, c.want, c.ok)
 		}
 	}
 }

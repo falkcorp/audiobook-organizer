@@ -1,5 +1,5 @@
 // file: internal/repairs/registry_order_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4b7d2e91-3c58-4a06-9f1e-8d5a0c6b7e23
 // last-edited: 2026-11-05
 
@@ -62,7 +62,7 @@ func TestRegistryList_OrdersByGroupThenRankThenID(t *testing.T) {
 	require.Equal(t, []string{"alicia", "barbara", "selina", "harvey", "alfred", "bruce"}, got)
 }
 
-// A fixer whose group is empty or not one of Groups() is listed after every
+// A fixer whose group is empty or not one of groups is listed after every
 // real group (alphabetically among its kind), never dropped.
 func TestRegistryList_UnknownGroupSortsLast(t *testing.T) {
 	got := listedIDs(t,
@@ -93,7 +93,7 @@ func TestRegistryList_UnknownGroupsStayContiguousByGroupString(t *testing.T) {
 func TestGroups_Order(t *testing.T) {
 	var ids []GroupID
 	seen := map[GroupID]bool{}
-	for _, g := range Groups() {
+	for _, g := range groups {
 		ids = append(ids, g.ID)
 		require.NotEmpty(t, g.Title, g.ID)
 		require.False(t, seen[g.ID], "group %q listed twice", g.ID)
@@ -105,7 +105,7 @@ func TestGroups_Order(t *testing.T) {
 	require.Equal(t, "", GroupTitle("no-such-group"))
 
 	// Groups hands out a copy: reordering it must not reorder the lane.
-	gs := Groups()
+	gs := groups
 	gs[0], gs[1] = gs[1], gs[0]
-	require.Equal(t, GroupDuplicates, Groups()[0].ID)
+	require.Equal(t, GroupDuplicates, groups[0].ID)
 }
