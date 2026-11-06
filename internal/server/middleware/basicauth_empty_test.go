@@ -1,5 +1,5 @@
 // file: internal/server/middleware/basicauth_empty_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 07da5163-5bdc-4fe7-a4a8-af96d141c0c4
 // last-edited: 2026-11-05
 
@@ -116,6 +116,16 @@ func TestLegacyBasicGate_EmptyPasswordRefuses(t *testing.T) {
 		{name: "env value is compared trimmed",
 			enabled: true, user: "admin", stored: "", env: strPtr("  recover\n"), path: "/api/v1/audiobooks",
 			creds: &basicCreds{"admin", "recover"}, want: http.StatusOK, wantFromEnv: true},
+		// A saved password counts as set when it is not "" (brief step 2): a
+		// blank saved value is a password, compared exactly, and still beats
+		// the env value (row 7). P14 cannot see a blank saved value through
+		// the mask, so trimming it here would lock such an install out unseen.
+		{name: "blank saved password is a password, compared exactly",
+			enabled: true, user: "admin", stored: "   ", env: nil, path: "/api/v1/audiobooks",
+			creds: &basicCreds{"admin", "   "}, want: http.StatusOK},
+		{name: "blank saved password beats env",
+			enabled: true, user: "admin", stored: "   ", env: strPtr("recover"), path: "/api/v1/audiobooks",
+			creds: &basicCreds{"admin", "recover"}, want: http.StatusUnauthorized},
 		{name: "saved password with surrounding spaces is compared exactly",
 			enabled: true, user: "admin", stored: " secret ", env: nil, path: "/api/v1/audiobooks",
 			creds: &basicCreds{"admin", " secret "}, want: http.StatusOK},
