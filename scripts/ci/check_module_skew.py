@@ -91,9 +91,13 @@ def skew(core: dict[str, str], root: dict[str, str], label: str) -> list[str]:
     errors = []
     for path in sorted(core):
         if path not in root:
-            errors.append(f"{label}: {path}@{core[path]} is in core's build list but not the root's (run the root go mod tidy)")
+            errors.append(
+                f"{label}: {path}@{core[path]} is in core's build list but not the root's (run the root go mod tidy)"
+            )
         elif root[path] != core[path]:
-            errors.append(f"{label}: {path} resolves to {core[path]} in core but {root[path]} in the root")
+            errors.append(
+                f"{label}: {path} resolves to {core[path]} in core but {root[path]} in the root"
+            )
     return errors
 
 
@@ -104,11 +108,15 @@ def parse_pin(spec: str) -> tuple[str, str]:
     return path, version
 
 
-def check(root: pathlib.Path, pins: list[tuple[str, str]], lister: Lister = go_list_modules) -> list[str]:
+def check(
+    root: pathlib.Path, pins: list[tuple[str, str]], lister: Lister = go_list_modules
+) -> list[str]:
     errors: list[str] = []
     core_dir = root / "core"
     if not (core_dir / "go.sum").is_file():
-        errors.append("core/go.sum is missing: commit it (empty while core requires nothing, 03 §3.2 item 4)")
+        errors.append(
+            "core/go.sum is missing: commit it (empty while core requires nothing, 03 §3.2 item 4)"
+        )
     core_mods = lister(core_dir)
     root_mods = lister(root)
     core_mods.pop("github.com/falkcorp/mediacore", None)
@@ -117,7 +125,9 @@ def check(root: pathlib.Path, pins: list[tuple[str, str]], lister: Lister = go_l
         for name, mods in (("core", core_mods), ("root", root_mods)):
             got = mods.get(path)
             if got != version:
-                errors.append(f"--pin {path}@{version}: {name} resolves {path} to {got or 'nothing'}")
+                errors.append(
+                    f"--pin {path}@{version}: {name} resolves {path} to {got or 'nothing'}"
+                )
     core_sc, root_sc = core_dir / "tools" / "staticcheck", root / "tools" / "staticcheck"
     if (core_sc / "go.mod").is_file():
         errors += skew(lister(core_sc), lister(root_sc), "staticcheck tools skew")
@@ -129,7 +139,9 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__.splitlines()[0],
         epilog="No --pin is needed while core has no requirements; 13 §13.5.2's two exact pins are passed once core requires them.",
     )
-    parser.add_argument("--root", type=pathlib.Path, default=ROOT, help="repository root (default: this repo)")
+    parser.add_argument(
+        "--root", type=pathlib.Path, default=ROOT, help="repository root (default: this repo)"
+    )
     parser.add_argument(
         "--pin",
         type=parse_pin,

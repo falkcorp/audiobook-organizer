@@ -52,7 +52,9 @@ def check(core: pathlib.Path) -> tuple[list[str], list[str]]:
         return [f"{mk.name} is missing"], notes
     pins = MAKEFILE_PIN_RE.findall(mk.read_text(encoding="utf-8"))
     if len(pins) != 1 or not FULL_VERSION_RE.match(pins[0]):
-        return [f"core/Makefile: expected exactly one 'export GOTOOLCHAIN := goX.Y.Z', found {pins or 'none'}"], notes
+        return [
+            f"core/Makefile: expected exactly one 'export GOTOOLCHAIN := goX.Y.Z', found {pins or 'none'}"
+        ], notes
     pin = pins[0]
     major, minor, patch = (int(x) for x in FULL_VERSION_RE.match(pin).groups())
     notes.append(f"core/Makefile pin go{pin}")
@@ -73,10 +75,15 @@ def check(core: pathlib.Path) -> tuple[list[str], list[str]]:
             errors.append(f"core/{rel}: must not carry a 'toolchain' directive")
         notes.append(f"core/{rel} checked")
 
-    candidates = [core / ".github/workflows/core-ci.yml", core.parent / ".github/workflows/core-ci.yml"]
+    candidates = [
+        core / ".github/workflows/core-ci.yml",
+        core.parent / ".github/workflows/core-ci.yml",
+    ]
     wf = next((c for c in candidates if c.is_file()), None)
     if wf is None:
-        if (core.parent / ".github" / "workflows").is_dir() or (core / ".github" / "workflows").is_dir():
+        if (core.parent / ".github" / "workflows").is_dir() or (
+            core / ".github" / "workflows"
+        ).is_dir():
             errors.append("core-ci.yml is missing beside the other workflows")
         else:
             notes.append("no core-ci.yml in this export (workflow check not applicable)")

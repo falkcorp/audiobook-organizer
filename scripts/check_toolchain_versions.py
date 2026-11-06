@@ -291,7 +291,11 @@ def check_gomod(c: Checker, rel: str, pin: tuple[int, int, int]) -> None:
         vm = GOMOD_VERSION_RE.match(m.group(1))
         line = _line_of(text, m.start())
         if not vm or (int(vm.group(1)), int(vm.group(2))) != pin[:2]:
-            c.error(rel, f"go {m.group(1)} is not on the pin's {pin_minor} line (pin go{pin_full})", line)
+            c.error(
+                rel,
+                f"go {m.group(1)} is not on the pin's {pin_minor} line (pin go{pin_full})",
+                line,
+            )
         elif int(vm.group(3) or 0) > pin[2]:
             c.error(rel, f"go {m.group(1)} requires more than the pin go{pin_full}", line)
     for m in GOMOD_TOOLCHAIN_RE.finditer(text):
@@ -316,7 +320,11 @@ def check_core_makefile(c: Checker, pin_full: str) -> None:
     m = found[0]
     c.info(rel, m.group(1))
     if m.group(1) != pin_full:
-        c.error(rel, f"GOTOOLCHAIN go{m.group(1)} != Makefile pin go{pin_full}", _line_of(text, m.start()))
+        c.error(
+            rel,
+            f"GOTOOLCHAIN go{m.group(1)} != Makefile pin go{pin_full}",
+            _line_of(text, m.start()),
+        )
 
 
 def _run_step_lines(lines: list[str]) -> list[tuple[int, str]]:

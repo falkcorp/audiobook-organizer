@@ -316,9 +316,11 @@ class CheckToolchainVersionsTest(unittest.TestCase):
 
     def test_core_makefile_pin_unequal_to_root_fails(self) -> None:
         self.mutate(
-            "core/Makefile", f"export GOTOOLCHAIN := go{PIN}", f"export GOTOOLCHAIN := go{WRONG_PATCH}"
+            "core/Makefile",
+            f"export GOTOOLCHAIN := go{PIN}",
+            f"export GOTOOLCHAIN := go{WRONG_PATCH}",
         )
-        self.assert_fails(f"::error file=core/Makefile,line=")
+        self.assert_fails("::error file=core/Makefile,line=")
 
     def test_core_makefile_missing_fails(self) -> None:
         (self.root / "core" / "Makefile").unlink()
@@ -351,7 +353,9 @@ class CheckToolchainVersionsTest(unittest.TestCase):
         res = self.run_check()
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         path = self.root / "scripts" / "setup-mockery.sh"
-        path.write_text(path.read_text(encoding="utf-8") + f"# built with {PIN_LITERAL}\n", encoding="utf-8")
+        path.write_text(
+            path.read_text(encoding="utf-8") + f"# built with {PIN_LITERAL}\n", encoding="utf-8"
+        )
         self.assert_fails("::error file=scripts/setup-mockery.sh")
 
     def test_toolchain_literal_in_a_workflow_run_step_fails(self) -> None:
@@ -368,7 +372,9 @@ class CheckToolchainVersionsTest(unittest.TestCase):
         )
         res = self.run_check()
         self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
-        self.assertIn("::error file=.github/workflows/zz-run.yml,line=8::toolchain literal", res.stdout)
+        self.assertIn(
+            "::error file=.github/workflows/zz-run.yml,line=8::toolchain literal", res.stdout
+        )
         self.assertNotIn("zz-run.yml,line=4", res.stdout)
 
     def test_ci_remote_guarded_copy_is_not_a_literal(self) -> None:

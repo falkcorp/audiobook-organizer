@@ -114,7 +114,9 @@ def scan_present(tree: pathlib.Path, owner: pathlib.Path, env: dict[str, str]) -
         raise CheckError(f"missing: {owner} does not carry '{EXCLUDE_LINE}'")
     genproto = [e for e in gomod_excludes(owner, env) if e[0] == GENPROTO]
     if genproto != [(GENPROTO, GENPROTO_VERSION)]:
-        raise CheckError(f"{owner} genproto excludes are {genproto}, want exactly {GENPROTO_VERSION}")
+        raise CheckError(
+            f"{owner} genproto excludes are {genproto}, want exactly {GENPROTO_VERSION}"
+        )
     for gm in find_gomods(tree):
         if gm.resolve() == owner.resolve():
             continue
@@ -164,10 +166,16 @@ def probe(
         raise CheckError(f"{label}: dropexclude failed: {drop.stderr.strip()}")
     graph = run(["go", "mod", "graph"], copy_root, wenv)
     if graph.returncode != 0:
-        raise CheckError(f"{label}: go mod graph failed without the exclude: {graph.stderr.strip()}")
+        raise CheckError(
+            f"{label}: go mod graph failed without the exclude: {graph.stderr.strip()}"
+        )
     target = f"{GENPROTO}@{GENPROTO_VERSION}"
     requirers = sorted(
-        {ln.split()[0] for ln in graph.stdout.splitlines() if len(ln.split()) == 2 and ln.split()[1] == target}
+        {
+            ln.split()[0]
+            for ln in graph.stdout.splitlines()
+            if len(ln.split()) == 2 and ln.split()[1] == target
+        }
     )
     if not requirers:
         return f"{label}: not applicable (the probe's graph does not reach {target})"
