@@ -1,5 +1,5 @@
 # file: Dockerfile.build-cgo
-# version: 1.2.3
+# version: 1.2.4
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 # last-edited: 2026-11-05
 #
@@ -50,6 +50,7 @@ RUN set -ex \
     && make install >/dev/null 2>&1
 
 COPY go.mod go.sum ./
+COPY core/go.mod core/go.sum core/
 RUN go mod download && go mod verify
 
 COPY . .

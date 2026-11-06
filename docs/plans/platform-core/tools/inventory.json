@@ -221,7 +221,10 @@
    ".github/dependabot.yml",
    "scripts/ci/run_gates.py",
    "ci/gates.txt",
-   "core/internal/archtest_layers_test.go"
+   "core/internal/archtest_layers_test.go",
+   "scripts/tests/test_run_gates.py",
+   "Dockerfile",
+   "Dockerfile.build-cgo"
   ],
   "spec": "03 §3.2 items 1, 4, 6, §3.5.1 items 1-4; 09 §9.4 R1 Content: build and CI, R1's CI classification (core layering gate, genproto-exclude-root, check_module_skew.py, TestCoreHoldsNoAppKeyNames); 09 §9.2.1 (R1 freeze); 13 §13.2.2 guard items 1-4; 12 §12.3.11 (toolchain pin, print-toolchain); 04 §8.1 R1",
   "notes": "Tier: module mechanics with known ambiguous-import traps and the guard rules of 03 §3.5.1; a wrong guard passes silently. The genproto workspace probe runs only in a throwaway copy outside the repository; nothing runs go work init in a checkout (CLAUDE.md). Registers the reserved families c/ and m/ in keyfamilies.go. The guard's positive control is the synthetic-graph self-test here (03 §3.5.1 item 2). run_gates.py learns the core-job value so ci/gates.txt can carry the core layering gate. Names the two archtest files later rows edit: the third-party allowlist core/archtest/thirdparty_allow.txt and the exported tag-set list core/archtest/tags.go. TestCoreHoldsNoAppKeyNames reads op IDs from internal/server/testdata/op_ids.golden until F5's kind-rename map exists. The freeze toggle is R1-35's; this row does not edit prerelease.yml. Merges only after the owner set RELEASE_FREEZE to R1 (OWNER-02's last step) and after the main ruleset with the merge queue is applied (Q-I, D15). 04 keys: R1 create core module (core/go.mod, empty core/go.sum); R1 create mediacore/buildid; R1 create mediacore/storage/keys; R1 create mediacore/archtest; R1 move internal/arch -> mediacore/archtest. Owns gate tests: TestCoreImportsOnlyCore; TestCoreHoldsNoAppKeyNames; genproto-exclude-root; scripts/ci/check_module_skew.py."

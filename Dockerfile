@@ -1,5 +1,5 @@
 # file: Dockerfile
-# version: 2.7.3
+# version: 2.7.4
 # guid: audiobook-organizer-dockerfile-production
 # last-edited: 2026-11-05
 
@@ -52,6 +52,7 @@ RUN set -ex \
     && rm -f /tmp/taglib-build/utfcpp.tar.gz /tmp/taglib-build/taglib.tar.gz
 
 COPY go.mod go.sum ./
+COPY core/go.mod core/go.sum core/
 RUN go mod download && go mod verify
 
 COPY . .
