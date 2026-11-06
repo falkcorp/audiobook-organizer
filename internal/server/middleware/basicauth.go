@@ -1,5 +1,5 @@
 // file: internal/server/middleware/basicauth.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-11-05
 
@@ -46,16 +46,15 @@ var basicGateEnvWarnOnce sync.Once
 // (05-authn §11.1 item 5, Recovery). fromEnv reports the fallback; "" means no
 // password.
 //
-// Blank counts as unset on both sides (09 §9.1 "Precedence"): a stored value
-// of only blanks is no password, so the env recovery applies to it, and an env
-// value that is empty or only blanks is unset. The stored check matters even
-// with no saved row, because the loader then puts BASIC_AUTH_PASSWORD into
-// basic_auth_password untrimmed. A stored password that is not blank is
-// compared exactly as saved; the env value is compared trimmed. The env value
-// is never assigned into config.AppConfig or any store: persisting it would
-// turn a recovery into a saved credential.
+// A stored value counts as set when it is not "" and is compared exactly as
+// saved, blanks included: a saved password wins over the env value (HEAD's
+// precedence), and the stored value's semantics are not this fix's to change
+// (05-health §5H.3.1 says "empty"). An env value that is empty or only blanks
+// counts as unset (09 §9.1 "Precedence") and is compared trimmed. The env
+// value is never assigned into config.AppConfig or any store: persisting it
+// would turn a recovery into a saved credential.
 func basicGatePassword(stored string) (pass string, fromEnv bool) {
-	if strings.TrimSpace(stored) != "" {
+	if stored != "" {
 		return stored, false
 	}
 	if env := strings.TrimSpace(os.Getenv(basicAuthPasswordEnv)); env != "" {
@@ -91,7 +90,7 @@ func currentBasicGate() basicGate {
 // noPassword: enabled with no effective password.
 func (g basicGate) noPassword() bool { return g.enabled && g.password == "" }
 
-// usesEnvPassword: enabled, the stored password blank, BASIC_AUTH_PASSWORD set.
+// usesEnvPassword: enabled, the stored password empty, BASIC_AUTH_PASSWORD set.
 func (g basicGate) usesEnvPassword() bool { return g.enabled && g.fromEnv }
 
 // BasicGateNoPassword reports whether the gate is enabled with no effective
@@ -100,8 +99,8 @@ func (g basicGate) usesEnvPassword() bool { return g.enabled && g.fromEnv }
 func BasicGateNoPassword() bool { return currentBasicGate().noPassword() }
 
 // BasicGateUsesEnvPassword reports whether the gate is enabled and takes its
-// password from BASIC_AUTH_PASSWORD because the saved one is empty or blank
-// (the in-memory recovery). The startup log uses it to choose the warn line
+// password from BASIC_AUTH_PASSWORD because the saved one is empty (the
+// in-memory recovery). The startup log uses it to choose the warn line
 // over the error line.
 func BasicGateUsesEnvPassword() bool { return currentBasicGate().usesEnvPassword() }
 
