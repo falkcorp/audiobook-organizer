@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/check_toolchain_versions.py
-# version: 1.3.1
+# version: 1.4.0
 # guid: 983ded55-56c4-4f7e-b15e-a2f724b54016
-# last-edited: 2026-10-11
+# last-edited: 2026-11-05
 """Fail when any Go or Node toolchain copy drifts from its pin (CI-04, CI-03).
 
 Run by ``.github/workflows/test-action-integration.yml`` ("Check version
@@ -34,6 +34,10 @@ would go red on a correct tree.
          ``checks-lint.yaml``; the other files use the alias). Exactly one
          digest-carrying reference must exist, so the check cannot go vacuous.
        - ``scripts/ci_remote.py``   ``GO_TOOLCHAIN = "goX.Y.Z"``
+       - ``core/Makefile``          ``export GOTOOLCHAIN := goX.Y.Z``, the core
+         module's own pin (12 §12.3.11). It must equal the root pin: the parity
+         half of 12 SC10, a root-side rule dropped at the repo split's cutover
+         step 6 (core's own ``make -C core toolchain-check`` keeps the rest).
        - ``.github/workflows/*.yml`` every literal ``go-version:`` (the full
          patch, ``'X.Y.Z'``). This was a floating ``'X.Y'`` until 2026-10-10;
          that let runners move to 1.27.2 on 2026-10-08 while every other path
@@ -42,7 +46,16 @@ would go red on a correct tree.
      ``.github/repository-config.yml`` must equal the pin's ``X.Y`` (it feeds
      the shared reusable workflows' language matrix, which takes a minor).
   3. ``go.mod`` -- the ``go`` directive is a minimum: same ``X.Y`` as the pin,
-     patch <= the pin's patch, and no ``toolchain`` directive at all.
+     patch <= the pin's patch, and no ``toolchain`` directive at all. The same
+     rule holds for ``core/go.mod``, every ``core/tools/*/go.mod`` and every
+     ``tools/*/go.mod`` (13 §13.2.2 item 1).
+
+No pin literal outside the guarded copies (13 §13.2.2 item 4): a ``go1.N.N``
+literal in ``scripts/**``, ``core/scripts/**`` or a workflow ``run:`` step
+fails. Commands read the pin with ``make -s -C core print-toolchain``. The
+tier-1 copy in ``scripts/ci_remote.py`` is a guarded copy, not a literal; the
+comments that record past toolchain behaviour (13 §13.2.2 "Not a pin") are
+allowlisted by path and line in ``NOT_A_PIN``.
 
 Node -- the pin is the single ``versions.node`` entry in
 ``.github/repository-config.yml``; every literal ``node-version:`` in
@@ -95,6 +108,22 @@ FULL_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 GOMOD_VERSION_RE = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+))?$")
 
 REQUIRED_DOCKERFILES = ("Dockerfile", "Dockerfile.build-cgo")
+
+# A toolchain name with a full patch, the shape a pin copy takes. Written so
+# this file's own source never matches it.
+PIN_LITERAL_RE = re.compile(r"\bgo1\.\d+\.\d+\b")
+# 13 §13.2.2 "Not a pin": comments that record past toolchain behaviour, by
+# path and 1-based line. Moving one of these lines means updating its entry.
+NOT_A_PIN: dict[str, frozenset[int]] = {
+    "scripts/check-errcheck-ratchet.sh": frozenset({121}),
+    "scripts/check-interface-width.sh": frozenset({128}),
+    "scripts/setup-mockery.sh": frozenset({11}),
+}
+# Tier-1 guarded copies inside the scanned trees: (path, regex of the line).
+GUARDED_LITERALS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("scripts/ci_remote.py", CI_REMOTE_TOOLCHAIN_RE),
+)
+WORKFLOW_RUN_RE = re.compile(r"^(?P<indent>\s*)(?P<dash>-\s+)?run\s*:\s*(?P<value>.*?)\s*$")
 
 
 class Checker:
@@ -237,6 +266,126 @@ def check_ci_remote(c: Checker, pin_full: str) -> None:
         )
 
 
+def _module_gomods(root: pathlib.Path) -> list[str]:
+    """``tools/*/go.mod`` and ``core/tools/*/go.mod`` (tier 3, 13 §13.2.2 item 1)."""
+    found = []
+    for pattern in ("tools/*/go.mod", "core/tools/*/go.mod"):
+        found += [p.relative_to(root).as_posix() for p in root.glob(pattern) if p.is_file()]
+    return sorted(found)
+
+
+def check_gomod(c: Checker, rel: str, pin: tuple[int, int, int]) -> None:
+    """Tier 3: the ``go`` directive is on the pin's minor, at most its patch,
+    and the file carries no ``toolchain`` directive."""
+    pin_full = f"{pin[0]}.{pin[1]}.{pin[2]}"
+    pin_minor = f"{pin[0]}.{pin[1]}"
+    text = c.read(rel)
+    if text is None:
+        return
+    directives = list(GOMOD_GO_RE.finditer(text))
+    if len(directives) != 1:
+        c.error(rel, f"expected exactly one 'go' directive, found {len(directives)}")
+    else:
+        m = directives[0]
+        c.info(rel, m.group(1))
+        vm = GOMOD_VERSION_RE.match(m.group(1))
+        line = _line_of(text, m.start())
+        if not vm or (int(vm.group(1)), int(vm.group(2))) != pin[:2]:
+            c.error(rel, f"go {m.group(1)} is not on the pin's {pin_minor} line (pin go{pin_full})", line)
+        elif int(vm.group(3) or 0) > pin[2]:
+            c.error(rel, f"go {m.group(1)} requires more than the pin go{pin_full}", line)
+    for m in GOMOD_TOOLCHAIN_RE.finditer(text):
+        c.error(
+            rel,
+            f"{rel} must not carry a 'toolchain' directive; the pin lives in Makefile/.envrc",
+            _line_of(text, m.start()),
+        )
+
+
+def check_core_makefile(c: Checker, pin_full: str) -> None:
+    """Tier 1: ``core/Makefile``'s pin equals the root pin (12 SC10)."""
+    print("--- core/Makefile ---")
+    rel = "core/Makefile"
+    text = c.read(rel)
+    if text is None:
+        return
+    found = list(MAKEFILE_PIN_RE.finditer(text))
+    if len(found) != 1:
+        c.error(rel, f"expected exactly one 'export GOTOOLCHAIN := goX.Y.Z', found {len(found)}")
+        return
+    m = found[0]
+    c.info(rel, m.group(1))
+    if m.group(1) != pin_full:
+        c.error(rel, f"GOTOOLCHAIN go{m.group(1)} != Makefile pin go{pin_full}", _line_of(text, m.start()))
+
+
+def _run_step_lines(lines: list[str]) -> list[tuple[int, str]]:
+    """The (1-based line, text) of every line inside a workflow ``run:`` step:
+    an inline value, or a ``|``/``>`` block (every following line indented
+    deeper than the ``run`` key, blank lines included)."""
+    out: list[tuple[int, str]] = []
+    i = 0
+    while i < len(lines):
+        m = WORKFLOW_RUN_RE.match(lines[i])
+        if not m or lines[i].lstrip().startswith("#"):
+            i += 1
+            continue
+        value = m.group("value")
+        key_indent = len(m.group("indent")) + len(m.group("dash") or "")
+        if value[:1] in ("|", ">"):
+            j = i + 1
+            while j < len(lines):
+                ln = lines[j]
+                if ln.strip() and len(ln) - len(ln.lstrip()) <= key_indent:
+                    break
+                out.append((j + 1, ln))
+                j += 1
+            i = j
+            continue
+        out.append((i + 1, value))
+        i += 1
+    return out
+
+
+def check_no_pin_literals(c: Checker) -> None:
+    """13 §13.2.2 item 4: no ``go1.N.N`` literal outside the guarded copies."""
+    print("--- No toolchain literals in scripts and workflow run: steps ---")
+    root = c.root
+    scanned = 0
+    for base in ("scripts", "core/scripts"):
+        for path in sorted((root / base).rglob("*")) if (root / base).is_dir() else []:
+            if not path.is_file() or "__pycache__" in path.parts:
+                continue
+            rel = path.relative_to(root).as_posix()
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            scanned += 1
+            for lineno, line in enumerate(text.splitlines(), 1):
+                if not PIN_LITERAL_RE.search(line) or lineno in NOT_A_PIN.get(rel, frozenset()):
+                    continue
+                if any(rel == g and rx.match(line) for g, rx in GUARDED_LITERALS):
+                    continue
+                c.error(
+                    rel,
+                    f"toolchain literal {PIN_LITERAL_RE.search(line).group(0)}: read the pin with "
+                    "'make -s -C core print-toolchain' (13 §13.2.2 item 4)",
+                    lineno,
+                )
+    for path in sorted((root / ".github/workflows").glob("*.y*ml")):
+        rel = path.relative_to(root).as_posix()
+        for lineno, line in _run_step_lines(path.read_text(encoding="utf-8").splitlines()):
+            if PIN_LITERAL_RE.search(line) and lineno not in NOT_A_PIN.get(rel, frozenset()):
+                c.error(
+                    rel,
+                    f"toolchain literal {PIN_LITERAL_RE.search(line).group(0)} in a run: step: read the pin with "
+                    "'make -s -C core print-toolchain' (13 §13.2.2 item 4)",
+                    lineno,
+                )
+    c.info("scripts/ and core/scripts/ files scanned", str(scanned))
+
+
 def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
     c = Checker(root)
     print("--- Go toolchain pin (exact X.Y.Z) ---")
@@ -327,30 +476,10 @@ def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
     check_ci_remote(c, pin_full)
 
     print(f"--- Go major.minor ({pin_minor}) and go.mod minimum ---")
-    text = c.read("go.mod")
-    if text is not None:
-        directives = list(GOMOD_GO_RE.finditer(text))
-        if len(directives) != 1:
-            c.error("go.mod", f"expected exactly one 'go' directive, found {len(directives)}")
-        else:
-            m = directives[0]
-            c.info("go.mod", m.group(1))
-            vm = GOMOD_VERSION_RE.match(m.group(1))
-            line = _line_of(text, m.start())
-            if not vm or (int(vm.group(1)), int(vm.group(2))) != pin[:2]:
-                c.error(
-                    "go.mod",
-                    f"go {m.group(1)} is not on the pin's {pin_minor} line (pin go{pin_full})",
-                    line,
-                )
-            elif int(vm.group(3) or 0) > pin[2]:
-                c.error("go.mod", f"go {m.group(1)} requires more than the pin go{pin_full}", line)
-        for m in GOMOD_TOOLCHAIN_RE.finditer(text):
-            c.error(
-                "go.mod",
-                "go.mod must not carry a 'toolchain' directive; the pin lives in Makefile/.envrc",
-                _line_of(text, m.start()),
-            )
+    for rel in ["go.mod", "core/go.mod", *_module_gomods(root)]:
+        check_gomod(c, rel, pin)
+
+    check_core_makefile(c, pin_full)
 
     versions = _repo_config_versions(c)
     cfg = ".github/repository-config.yml"
@@ -421,6 +550,8 @@ def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
             ".github/workflows",
             "no literal go-version found in any workflow; the check would be vacuous",
         )
+
+    check_no_pin_literals(c)
 
     print("--- Node version ---")
     if node_pin is not None:
