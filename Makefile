@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.50.1
+# version: 2.51.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-11-05
 
@@ -41,6 +41,15 @@ LDFLAGS := -X main.version=$(VERSION)
 # the pin that every build path carried from 1.25/1.26 would only document a
 # requirement that no longer exists.
 export GOTOOLCHAIN := go1.27.3
+
+# The Go modules of this repository (03 §3.2 item 4). A nested go.mod ends the
+# `./...` pattern, so `go build ./...` from the root never reaches core/: every
+# target that is genuinely per-module (build, vet, test-short, staticcheck,
+# fmt-check, tidy-check) loops over this list. core/ is the nested module
+# github.com/falkcorp/mediacore, required by the root through `replace => ./core`
+# (never through a go.work: CLAUDE.md). Which other make ci prerequisites and CI
+# jobs become per-module is R1's classification table (09 §9.4), not this list.
+GO_MODULE_DIRS := . core
 
 # Overridable deployment variables (set in Makefile.local or via environment)
 DEPLOY_HOST ?=
@@ -84,6 +93,7 @@ GO_STRIP_LDFLAGS := -s -w
         test test-short test-short-shard test-fixtures test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
         coverage coverage-check coverage-check-short ci \
         vet vet-integration mocks mockery-install mocks-check staticcheck staticcheck-install deadcode-install lint-deadcode-ratchet oplint sdkguard bench-check pprof-check fmt-check \
+        build-modules tidy-check genproto-exclude-root module-skew \
         docker docker-run docker-stop \
         release-dry-run release-snapshot version \
         build-mtls-bridge build-mtls-bridge-windows \
@@ -154,13 +164,24 @@ install: web-install
 build: web-build
 	@echo "🔨 Building $(BINARY) with embedded frontend..."
 	@go build -tags "embed_frontend $(GO_BUILD_TAGS)" $(GO_BUILD_FLAGS) -ldflags="$(GO_LDFLAGS)" -o $(BINARY) .
+	@$(MAKE) --no-print-directory build-modules
 	@echo "✅ Built ./$(BINARY)"
 
 ## build-api: Backend-only build (no frontend, serves placeholder at /)
 build-api:
 	@echo "🔨 Building $(BINARY) (API only)..."
 	@go build -tags "$(GO_BUILD_TAGS)" $(GO_BUILD_FLAGS) -ldflags="$(GO_LDFLAGS)" -o $(BINARY) .
+	@$(MAKE) --no-print-directory build-modules
 	@echo "✅ Built ./$(BINARY)"
+
+## build-modules: `go build ./...` in every Go module except the root, whose
+## binary build/build-api already compile. Core packages the binary does not
+## import (archtest, say) are compiled only here.
+build-modules:
+	@for d in $(filter-out .,$(GO_MODULE_DIRS)); do \
+		echo "🔨 go build ./... in $$d"; \
+		go -C $$d build ./... || exit 1; \
+	done
 
 ## build-bench: Build with bench tooling (dedup-bench experiments)
 build-bench:
@@ -308,6 +329,10 @@ test-fast-short: vet
 test-short: vet
 	@echo "🧪 Running backend tests (-short — slow prop tests skipped, with coverage)..."
 	@go test ./... -short -race -coverprofile=coverage.out -covermode=atomic -timeout 25m
+	@for d in $(filter-out .,$(GO_MODULE_DIRS)); do \
+		echo "🧪 Running short tests in $$d (no coverage: core's floor is its own, 09 §9.4)..."; \
+		go -C $$d test ./... -short -race -timeout 25m || exit 1; \
+	done
 	@echo "✅ Short backend tests passed, coverage profile generated"
 
 ## test-short-shard: Run shard SHARD=k/N of the same short suite as test-short
@@ -360,8 +385,10 @@ test-fixtures:
 ## vet: Run go vet across every package. Catches hand-written mock
 ## drift (the stubStore / PR #234 incident) before tests even compile.
 vet:
-	@echo "🔍 Running go vet..."
-	@go vet ./...
+	@for d in $(GO_MODULE_DIRS); do \
+		echo "🔍 Running go vet in $$d..."; \
+		go -C $$d vet ./... || exit 1; \
+	done
 	@echo "✅ go vet passed"
 
 ## vet-integration: Compile-check every package with the integration build tag
@@ -526,8 +553,10 @@ staticcheck-install:
 # only place it gates a change before merge. It now always builds the pinned
 # binary first and runs that one, never whatever staticcheck is first on PATH.
 staticcheck: staticcheck-install
-	@echo "🔍 Running staticcheck..."
-	@$(STATICCHECK) ./...
+	@for d in $(GO_MODULE_DIRS); do \
+		echo "🔍 Running staticcheck in $$d..."; \
+		(cd $$d && $(STATICCHECK) ./...) || exit 1; \
+	done
 	@echo "✅ staticcheck passed"
 
 ## oplint: Type-aware ops v3 definition lint (tools/cmd/oplint; a gate of make ci)
@@ -617,11 +646,15 @@ pprof-check:
 # hides the very drift it is meant to surface. `gofmt -w` is the stated remedy.
 #
 # web/ is excluded because it holds no Go; the grep also drops any stray vendored
-# path. grep exits 1 when it matches nothing, hence the `|| true` -- without it
-# the recipe dies on a CLEAN tree under make's -e shell.
+# path. core/web/ and core/examples/*/web/ are excluded for the same reason (npm
+# packages ship .go files; 09 §9.4 R1 classification). gofmt walks directories,
+# not modules, so `.` already covers core/; the `sort -u` folds the duplicate
+# names that listing both GO_MODULE_DIRS entries prints. grep exits 1 when it
+# matches nothing, hence the `|| true` -- without it the recipe dies on a CLEAN
+# tree under make's -e shell.
 fmt-check:
 	@echo "🔍 Checking gofmt..."
-	@unformatted=$$(gofmt -l . | grep -v '^web/' || true); \
+	@unformatted=$$(gofmt -l $(GO_MODULE_DIRS) | sed 's|^\./||' | sort -u | grep -Ev '^(web|core/web|core/examples/[^/]+/web)/' || true); \
 	if [ -n "$$unformatted" ]; then \
 		echo "❌ not gofmt-clean:"; \
 		echo "$$unformatted"; \
@@ -630,6 +663,28 @@ fmt-check:
 		exit 1; \
 	fi
 	@echo "✅ gofmt clean"
+
+## tidy-check: `go mod tidy -diff` in every Go module. With `replace => ./core`
+## the root go.mod/go.sum must carry what core's packages need, so a PR that
+## changes core/go.mod carries the root tidy result too (03 §3.2 item 4).
+tidy-check:
+	@for d in $(GO_MODULE_DIRS); do \
+		echo "🔍 go mod tidy -diff in $$d..."; \
+		go -C $$d mod tidy -diff || { echo "❌ $$d: go.mod/go.sum not tidy; run go -C $$d mod tidy"; exit 1; }; \
+	done
+	@echo "✅ go.mod/go.sum tidy in every module"
+
+## genproto-exclude-root: root mode of the genproto exclude check (03 §3.2
+## item 1): no go.mod but core/go.mod carries a genproto exclude, and the root
+## workspace probe is green with the exclude and fails without it. The probe
+## runs in a throwaway copy under a temp dir, never in this checkout.
+genproto-exclude-root:
+	@python3 scripts/ci/genproto_exclude_root.py
+
+## module-skew: blocking root-side check that core and the root resolve every
+## shared module to one version and that core/go.sum exists (03 §3.2 item 6).
+module-skew:
+	@python3 scripts/ci/check_module_skew.py
 
 ## test-all: Run all tests (backend full + frontend)
 test-all: test web-test
@@ -786,7 +841,7 @@ coverage-check-short:
 	echo "✅ Coverage $$coverage% meets floor $$floor%"
 
 ## ci: Fast CI check (short tests — prop tests skipped; use test-nightly for full suite)
-ci: mocks-check staticcheck oplint sdkguard ops-check types-check bench-check pprof-check fmt-check test-all-short coverage-check-short lint-errcheck-ratchet lint-deadcode-ratchet
+ci: mocks-check staticcheck oplint sdkguard ops-check types-check bench-check pprof-check fmt-check tidy-check genproto-exclude-root module-skew test-all-short coverage-check-short lint-errcheck-ratchet lint-deadcode-ratchet
 	@echo "✅ All CI checks passed!"
 
 ## ci-remote: Same gates as `make ci`, sharded across the CI_NODES runner pool
