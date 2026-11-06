@@ -1,5 +1,5 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.18.0 -->
+<!-- version: 1.18.1 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
 <!-- last-edited: 2026-11-06 -->
 
@@ -192,7 +192,7 @@ repo settings in Woodpecker, set the pipeline path to `.woodpecker/`.
 | agent | host | backend | labels | parallel workflows | runs as |
 |---|---|---|---|---|---|
 | U0 | 192.0.2.10 | docker | `host=u0` | 1 | swarm service `woodpecker_woodpecker-agent` |
-| llm1 | 192.0.2.20 (macOS arm64) | local | `host=llm1,heavy=true` | 2 | LaunchDaemon, `UserName` = the CI user |
+| llm1 | 192.0.2.20 (macOS arm64) | local | `host=llm1,heavy=true` | 3 (`WOODPECKER_MAX_WORKFLOWS` in the plist, 2026-11-06) | LaunchDaemon, `UserName` = the CI user |
 | U1 | 192.0.2.35 (Ubuntu amd64) | local | `host=u1,heavy=true,taglib=true` | 6 by day, 1 at night (see below) | systemd `woodpecker-agent.service`, `User=woodpecker` |
 | u0-local | 192.0.2.10 (prod, Ubuntu amd64) | local | `host=u0-local,taglib=true` | 1 | systemd `woodpecker-agent-local.service`, `User=woodpecker` |
 | mac | the owner's Mac (macOS arm64) | local | `host=mac,heavy=true` | 1 | `run-agent.sh` under `env -i`, started by hand (not a launchd job); gRPC goes through an ssh tunnel to U0 because macOS Local Network blocks the agent binary |
@@ -440,7 +440,7 @@ Set these on the repo in the Woodpecker UI:
 
 - **A workflow sits in "pending".** No online agent has matching labels. Check
   the Agents page. U0 runs 1 workflow at a time, U1 runs 6 by day and 1 at
-  night, and llm1 runs 2. A `heavy=true` workflow waits when U1, llm1 and mac
+  night, and llm1 runs 3. A `heavy=true` workflow waits when U1, llm1 and mac
   are all busy, paused or offline. While U1 is paused it is switching slot
   counts, which waits for its running jobs to finish.
 - **The coverage gate fails with "no CI-COVERAGE line".** That test workflow
