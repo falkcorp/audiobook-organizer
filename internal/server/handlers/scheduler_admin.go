@@ -1,7 +1,7 @@
 // file: internal/server/handlers/scheduler_admin.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: c8cffbf7-1356-4211-ad0e-28307563161b
-// last-edited: 2026-10-11
+// last-edited: 2026-11-06
 
 // TODO.md scheduler-config item (was line 4563 as of commit 46628240): the
 // task-scheduler endpoints (list/run/configure tasks) and the
@@ -149,7 +149,8 @@ type taskConfigBinding struct {
 	hints map[string]string
 
 	// foldLegacy normalizes a deprecated config key into the per-task fields
-	// above, and runs once before any caller write is applied.
+	// above, and runs once before any caller write is applied. It runs inside
+	// config.Mutate and writes through c, so it must not take the config lock.
 	//
 	// A binding pointer is only honest if the task's trigger reads that field
 	// ALONE. library_scan's does not: IsEnabled is
@@ -165,7 +166,7 @@ type taskConfigBinding struct {
 	// both per-task fields and clearing the legacy key preserves each getter's
 	// value while making the per-task fields the only thing that decides them.
 	// The caller's write then lands on a field that governs.
-	foldLegacy func()
+	foldLegacy func(c *config.Config)
 }
 
 // accepted lists the body fields this task can actually apply, so the error
@@ -266,13 +267,13 @@ func bindingForTask(name string) (taskConfigBinding, bool) {
 		b := full(&sched.LibraryScan, &maint.LibraryScan)
 		// ...but two of those three are OR'd with the legacy scan_on_startup key
 		// in tasks.go, so they only govern once it is folded away. See foldLegacy.
-		b.foldLegacy = func() {
-			if !config.AppConfig.ScanOnStartup {
+		b.foldLegacy = func(c *config.Config) {
+			if !c.ScanOnStartup {
 				return
 			}
-			sched.LibraryScan.Enabled = true
-			sched.LibraryScan.OnStartup = true
-			config.AppConfig.ScanOnStartup = false
+			c.Scheduled.LibraryScan.Enabled = true
+			c.Scheduled.LibraryScan.OnStartup = true
+			c.ScanOnStartup = false
 		}
 		return b, true
 	case "reconcile_scan":
@@ -448,11 +449,15 @@ func (h *SchedulerHandler) UpdateTaskConfig(c *gin.Context) {
 
 	// Fold before applying, and only once a write is actually going to land, so
 	// a rejected or empty request never rewrites config as a side effect.
-	if len(writes) > 0 && binding.foldLegacy != nil {
-		binding.foldLegacy()
-	}
-	for _, write := range writes {
-		write()
+	if len(writes) > 0 {
+		config.Mutate(func(c *config.Config) {
+			if binding.foldLegacy != nil {
+				binding.foldLegacy(c)
+			}
+			for _, write := range writes {
+				write()
+			}
+		})
 	}
 
 	// Persist to database. A failure here means the change is live in memory but
@@ -530,9 +535,11 @@ func (h *SchedulerHandler) UpdateMaintenanceWindowConfig(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "window_start and window_end must be 0-23")
 		return
 	}
-	config.AppConfig.Maintenance.Enabled = req.Enabled
-	config.AppConfig.Maintenance.WindowStart = req.WindowStart
-	config.AppConfig.Maintenance.WindowEnd = req.WindowEnd
+	config.Mutate(func(c *config.Config) {
+		c.Maintenance.Enabled = req.Enabled
+		c.Maintenance.WindowStart = req.WindowStart
+		c.Maintenance.WindowEnd = req.WindowEnd
+	})
 	if h.store != nil {
 		if err := config.SaveConfigToDatabase(h.store); err != nil {
 			httputil.InternalError(c, "failed to save maintenance window config", err)

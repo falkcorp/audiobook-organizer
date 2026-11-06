@@ -1,7 +1,7 @@
 // file: cmd/root.go
-// version: 1.28.6
+// version: 1.28.7
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-10-19
+// last-edited: 2026-11-06
 
 package cmd
 
@@ -647,7 +647,7 @@ func initConfig() {
 
 	config.InitConfig()
 	if logLevel != "" {
-		config.AppConfig.LogLevel = logLevel
+		config.Mutate(func(c *config.Config) { c.LogLevel = logLevel })
 	}
 	if err := config.AppConfig.Validate(); err != nil {
 		fmt.Printf("Warning: configuration validation failed: %v\n", err)

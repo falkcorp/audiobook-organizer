@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.28.1
+// version: 1.28.2
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-11-05
+// last-edited: 2026-11-06
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -610,8 +610,10 @@ func (h *Handler) FactoryReset(c *gin.Context) {
 
 	// Reset config to defaults, then clear paths so wizard re-shows
 	config.ResetToDefaults()
-	config.AppConfig.RootDir = ""
-	config.AppConfig.SetupComplete = false
+	config.Mutate(func(c *config.Config) {
+		c.RootDir = ""
+		c.SetupComplete = false
+	})
 	if err := config.SaveConfigToDatabase(store); err != nil {
 		slog.Warn("Factory reset failed to persist config", "err", err)
 	}
