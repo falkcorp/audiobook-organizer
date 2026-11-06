@@ -1,7 +1,7 @@
 # file: ci/gates.txt
-# version: 1.4.0
+# version: 1.5.0
 # guid: 6e1b4c7a-2d93-4f58-b0a6-3c8d5e9f1a24
-# last-edited: 2026-11-05
+# last-edited: 2026-11-06
 #
 # The one list of CI gates (07-G4, owner decision D47). Read by scripts/ci/run_gates.py.
 # Columns are TAB-separated:
@@ -16,7 +16,8 @@
 #                  "-" and the bot reports the test's "NOTE ... lower" line in its PR body.
 #   check          pass/fail, no baseline.
 # job: where CI executes the gate (scripts/tests/test_run_gates.py verifies it):
-#   own-job   a ci.yml job runs the command (directly or through a make target);
+#   own-job   a ci.yml or extraction-gates.yml job runs the command (directly or
+#             through a make target);
 #   go-suite  a Go test in the sharded short-race suite runs it (the test exists
 #             and does not skip under -short).
 #   core-job  .github/workflows/core-ci.yml runs it: core's own gates, and the
@@ -35,3 +36,6 @@ generated-types	bash scripts/ci/check_generated_types.sh	-	check	-	own-job
 core-layering	make -C core archtest	-	check	-	core-job
 module-skew	python3 scripts/ci/check_module_skew.py	-	check	-	core-job
 genproto-exclude-root	python3 scripts/ci/genproto_exclude_root.py	-	check	-	core-job
+vet-darwin	make vet-darwin	-	check	-	own-job
+vet-integration	make vet-integration	-	check	-	own-job
+commits-build	python3 scripts/ci/check_commits_build.py	-	check	-	own-job

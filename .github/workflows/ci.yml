@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.35.1
+# version: 3.35.2
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-11-06
 
@@ -102,6 +102,13 @@ jobs:
                 # The contract goldens are marshalled from Go (internal/wirecontract),
                 # whose test must run when only a golden or the TS test changed.
                 web/src/types/contract/*) go=true ;;
+                # A Markdown file (or any docs-glob file) that a Go test or a
+                # //go:embed reads as an input goes HERE, before the docs line
+                # below, as `path/to/file.md) go=true ;;` -- the docs line would
+                # otherwise hide it and a docs-only PR would skip the Go jobs
+                # that read it (09 §9.2.1; OPS5-4). None today.
+                # scripts/tests/test_ci_classifier.py scans the Go sources for
+                # every such file and fails when one has no case here.
                 web/*|docs/*|*.md|changelog.d/*|todo.d/*|.claude/*|agents/*|skills/*) ;;
                 *) go=true ;;
               esac
@@ -537,6 +544,87 @@ jobs:
         run: |
           python3 -m pip install --quiet fastapi httpx pytest python-multipart
           python3 -m pytest scripts/tests/test_whisper_mlx_server.py -v
+
+  # Required checks of 09 §9.2.1 (R1-02): go vet over BOTH modules (root and
+  # core/; ./... from the root never reaches the nested core/ module) for every
+  # (GOOS, tag set) a PR could break that no other job compiles. The job `name:`
+  # is the check name the ruleset requires, so it must not be renamed. Each runs
+  # the make target `make ci` runs, and is registered in ci/gates.txt.
+  #
+  # GOOS=darwin CGO_ENABLED=0 is goreleaser's darwin target, vetted WITHOUT the
+  # embed_frontend tag: web_embed.go's `//go:embed web/dist` fails on a tree with
+  # no built frontend and go vet has no -e, so no placeholder web/dist is ever
+  # created. cgo is off, so it needs no system packages.
+  vet-darwin:
+    name: vet-darwin
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+
+      - name: Free runner disk
+        run: scripts/ci/free_runner_disk.sh
+
+      - name: Restore Go cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+            ${{ runner.os }}-go-
+
+      - name: go vet (darwin, no cgo, no embed_frontend)
+        run: make vet-darwin
+
+  # -tags integration compiles the integration tests no other gate builds. It
+  # keeps cgo on (the Linux default), so the TagLib headers must be installed.
+  vet-integration:
+    name: vet-integration
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+
+      - name: Free runner disk
+        run: scripts/ci/free_runner_disk.sh
+
+      - name: Restore Go cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+            ${{ runner.os }}-go-
+
+      - name: Install system packages
+        run: scripts/ci/apt_install.sh libtag1-dev
+
+      - name: go vet -tags integration
+        run: make vet-integration
 
   # Project-specific: verify mockery mocks are not stale
   mocks-check:

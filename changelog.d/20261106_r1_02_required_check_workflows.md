@@ -1,0 +1,3 @@
+### Added
+
+- CI: `extraction-gates`, `vet-darwin` and `vet-integration` required checks. `extraction-gates` builds every commit of a PR that renames a file into `core/` in both modules (`scripts/ci/check_commits_build.py`) and reports any moved file whose first-commit rename similarity is below 90 %; `vet-darwin` and `vet-integration` run `go vet` over the root and `core` modules. The `make vet-darwin` and `make vet-integration` targets loop over every Go module and join `make ci`. `e2e` now also runs on the merge queue. `scripts/tests/test_ci_classifier.py` checks the changes classifier, that every required-check workflow carries the `merge_group` trigger, and that the workflow shapes hold.

@@ -1,0 +1,173 @@
+# file: .github/workflows/extraction-gates.yml
+# version: 1.0.0
+# guid: 74123ab5-c44c-487d-9487-430de04743aa
+# last-edited: 2026-11-06
+
+# The `extraction-gates` required check (09 §9.2.1; R1-02). Parallel jobs, each
+# with `timeout-minutes` <= 30 (09 §9.2.10), and one terminal job named
+# `extraction-gates` so the ruleset requires a single stable name however many
+# gate jobs later rows add:
+#   check-commits-build   every commit of a PR that renames a file into core/
+#                         builds in both modules, and each moved file is a
+#                         detected rename of >= 90 % similarity (MOD9-5)
+# Later rows add jobs here: R1-10 the dashboard-reference test with promtool,
+# R1-23 TestBootCrashMatrix_ABO, F2-14 and F2-15 the cutover suite. Each one
+# must be listed in the terminal job's `needs`.
+#
+# Trigger: every PR to main that touches a non-doc file, decided by the same
+# `changes` classifier as ci.yml (a skipped job reports success through its
+# job-level `if:`, so a docs-only PR is not left "expected"). It also runs on the
+# merge queue's merge_group event (D15): the required check must report on the
+# queued commit or the queue waits forever.
+
+name: Extraction Gates
+
+on:
+  pull_request:
+    branches: [main, master]
+  merge_group:
+    types: [checks_requested]
+
+# A merge-queue run is never cancelled by a sibling run (the same rule as
+# ci.yml: a cancelled required check reads as failed and the queue drops the
+# PR). PR runs keep the per-ref cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'merge_group' && format('merge-group-{0}', github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # The step below is a verbatim copy of ci.yml's `Classify changed paths`:
+  # scripts/tests/test_ci_classifier.py fails when the two differ, so change
+  # both together. See ci.yml's `changes` job for what go= and web= mean.
+  changes:
+    name: extraction-gates-changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.classify.outputs.go }}
+      web: ${{ steps.classify.outputs.web }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed paths
+        id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          go=true; web=true; range=''
+          case "$EVENT" in
+            pull_request) range="origin/${BASE_REF}...HEAD" ;;
+            push) [[ "$BEFORE" =~ ^0+$ ]] || range="${BEFORE}...${AFTER}" ;;
+          esac
+          if [ -n "$range" ] && files=$(git diff --name-only "$range") && [ -n "$files" ]; then
+            go=false; web=false
+            while IFS= read -r f; do
+              case "$f" in web/*|.github/workflows/*) web=true ;; esac
+              case "$f" in
+                # Generated from Go (tools/cmd/opsgen); the Go job's ops-check
+                # must run when only the generated file changed.
+                web/src/generated/*) go=true ;;
+                # Generated from Go by tygo (tygo.yaml); the Go job's types-check
+                # must run when only a generated type file changed.
+                web/src/types/generated/*) go=true ;;
+                # The contract goldens are marshalled from Go (internal/wirecontract),
+                # whose test must run when only a golden or the TS test changed.
+                web/src/types/contract/*) go=true ;;
+                # A Markdown file (or any docs-glob file) that a Go test or a
+                # //go:embed reads as an input goes HERE, before the docs line
+                # below, as `path/to/file.md) go=true ;;` -- the docs line would
+                # otherwise hide it and a docs-only PR would skip the Go jobs
+                # that read it (09 §9.2.1; OPS5-4). None today.
+                # scripts/tests/test_ci_classifier.py scans the Go sources for
+                # every such file and fails when one has no case here.
+                web/*|docs/*|*.md|changelog.d/*|todo.d/*|.claude/*|agents/*|skills/*) ;;
+                *) go=true ;;
+              esac
+            done <<<"$files"
+          fi
+          echo "go=$go web=$web (${range:-no range: fail open})"
+          { echo "go=$go"; echo "web=$web"; } >> "$GITHUB_OUTPUT"
+
+  # MOD9-5: rebase merges land every commit of a PR on main, where git bisect
+  # and auto-revert see each one, so each must build. The script prints
+  # "no rename into core/: nothing to check" and exits 0 for any other PR.
+  check-commits-build:
+    name: check-commits-build
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+
+      - name: Free runner disk
+        run: scripts/ci/free_runner_disk.sh
+
+      - name: Restore Go cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+            ${{ runner.os }}-go-
+
+      - name: Install system packages
+        run: scripts/ci/apt_install.sh libtag1-dev
+
+      - name: Build every commit of a move PR
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            pull_request) base="origin/${BASE_REF}" ;;
+            merge_group) base="$MERGE_GROUP_BASE" ;;
+            *) echo "event $EVENT has no PR range: nothing to check"; exit 0 ;;
+          esac
+          python3 scripts/ci/check_commits_build.py --base "$base"
+
+  # The one stable required-check name. `always()` so it reports even when a
+  # gate job failed or was skipped by its job-level `if:`: a skipped job is
+  # success, a failed or cancelled one fails this job.
+  extraction-gates:
+    name: extraction-gates
+    needs: [changes, check-commits-build]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every gate job ran or was skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          echo "needs results: ${RESULTS}"
+          for result in $RESULTS; do
+            case "$result" in
+              failure|cancelled) echo "::error::a gate job ${result}"; exit 1 ;;
+            esac
+          done

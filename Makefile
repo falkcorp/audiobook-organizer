@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.51.0
+# version: 2.51.1
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-11-05
+# last-edited: 2026-11-06
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -92,7 +92,7 @@ GO_STRIP_LDFLAGS := -s -w
         web-install web-build web-typecheck web-dev web-test web-lint web-lint-memory \
         test test-short test-short-shard test-fixtures test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
         coverage coverage-check coverage-check-short ci \
-        vet vet-integration mocks mockery-install mocks-check staticcheck staticcheck-install deadcode-install lint-deadcode-ratchet oplint sdkguard bench-check pprof-check fmt-check \
+        vet vet-darwin vet-integration mocks mockery-install mocks-check staticcheck staticcheck-install deadcode-install lint-deadcode-ratchet oplint sdkguard bench-check pprof-check fmt-check \
         build-modules tidy-check genproto-exclude-root module-skew \
         docker docker-run docker-stop \
         release-dry-run release-snapshot version \
@@ -391,12 +391,27 @@ vet:
 	done
 	@echo "✅ go vet passed"
 
-## vet-integration: Compile-check every package with the integration build tag
-## (no ffmpeg needed). No other gate builds -tags integration, so the
-## integration tests rotted unnoticed once (the v1-queue deletion broke one).
+## vet-darwin: go vet every package of both modules for goreleaser's darwin target
+## (GOOS=darwin CGO_ENABLED=0), WITHOUT the embed_frontend tag: web_embed.go's
+## `//go:embed web/dist` fails on a tree with no built frontend and go vet has no
+## -e, so no placeholder web/dist is ever created (03 §3.5.1 item 4; 09 §9.2.1).
+## Catches a file that only compiles on linux, or only with cgo, before a release.
+vet-darwin:
+	@for d in $(GO_MODULE_DIRS); do \
+		echo "🔍 Running GOOS=darwin CGO_ENABLED=0 go vet in $$d..."; \
+		GOOS=darwin CGO_ENABLED=0 go -C $$d vet ./... || exit 1; \
+	done
+	@echo "✅ go vet (darwin, no cgo) passed"
+
+## vet-integration: Compile-check every package of both modules with the
+## integration build tag (no ffmpeg needed). No other gate builds -tags
+## integration, so the integration tests rotted unnoticed once (the v1-queue
+## deletion broke one).
 vet-integration:
-	@echo "🔍 Running go vet -tags integration..."
-	@go vet -tags integration ./...
+	@for d in $(GO_MODULE_DIRS); do \
+		echo "🔍 Running go vet -tags integration in $$d..."; \
+		go -C $$d vet -tags integration ./... || exit 1; \
+	done
 	@echo "✅ go vet -tags integration passed"
 
 ## mutate: Run mutation testing on ONE package (PKG=./internal/scanner/).
@@ -841,7 +856,7 @@ coverage-check-short:
 	echo "✅ Coverage $$coverage% meets floor $$floor%"
 
 ## ci: Fast CI check (short tests — prop tests skipped; use test-nightly for full suite)
-ci: mocks-check staticcheck oplint sdkguard ops-check types-check bench-check pprof-check fmt-check tidy-check genproto-exclude-root module-skew test-all-short coverage-check-short lint-errcheck-ratchet lint-deadcode-ratchet
+ci: mocks-check staticcheck oplint sdkguard ops-check types-check bench-check pprof-check fmt-check tidy-check vet-darwin vet-integration genproto-exclude-root module-skew test-all-short coverage-check-short lint-errcheck-ratchet lint-deadcode-ratchet
 	@echo "✅ All CI checks passed!"
 
 ## ci-remote: Same gates as `make ci`, sharded across the CI_NODES runner pool
