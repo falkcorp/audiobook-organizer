@@ -1,5 +1,5 @@
 // file: internal/server/middleware/auth.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
 // last-edited: 2026-11-05
 
@@ -520,8 +520,44 @@ func RespondPermissionDenied(c *gin.Context, p auth.Permission) {
 	}
 }
 
-// RequireAdmin is a middleware that checks the authenticated user has the "admin" role.
-// Must be used after RequireAuth in the middleware chain.
+// adminKeyScopeRefusal is RequireAdmin's 403 for an admin's API key whose
+// scopes leave out an atom, so logs and clients can tell it from a missing role.
+const adminKeyScopeRefusal = "admin role required: this API key's scopes do not include every permission"
+
+// APIKeyMayActAsAdmin reports whether the request's credential may use the
+// admin role. A request authenticated by an API key whose scopes are non-empty
+// must hold every atom (auth.All()); a key with empty scopes holds all of its
+// owner's role permissions and passes; a request with no key (a session, an
+// SSO sign-in) passes. It fails closed: an api_key request with no key on the
+// context is refused (05-authn §11.1 item 4).
+//
+// A role-name admin check must call this as well: a key scoped to one atom,
+// or to users.manage alone, would otherwise carry its owner's admin role in
+// full. auth.Can(users.manage) is not a substitute, since such a key holds it.
+//
+// A key bound on the context is judged by its scopes whatever method the
+// request records, so a later stage that re-marks the request cannot lift the
+// key's narrowing.
+func APIKeyMayActAsAdmin(c *gin.Context) bool {
+	key, hasKey := CurrentAPIKey(c)
+	if !hasKey {
+		return CurrentAuthMethod(c) != auth.MethodAPIKey
+	}
+	if len(key.Scopes) == 0 {
+		return true
+	}
+	for _, p := range auth.All() {
+		if !slices.Contains(key.Scopes, string(p)) {
+			return false
+		}
+	}
+	return true
+}
+
+// RequireAdmin is a middleware that checks the authenticated user has the
+// "admin" role and that the credential may use it (APIKeyMayActAsAdmin): an
+// admin's API key whose non-empty scopes leave out any atom is refused with
+// 403. Must be used after RequireAuth in the middleware chain.
 func RequireAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user, ok := CurrentUser(c)
@@ -530,11 +566,16 @@ func RequireAdmin() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		if slices.Contains(user.Roles, "admin") {
-			c.Next()
+		if !slices.Contains(user.Roles, "admin") {
+			httputil.RespondWithForbidden(c, "admin role required")
+			c.Abort()
 			return
 		}
-		httputil.RespondWithForbidden(c, "admin role required")
-		c.Abort()
+		if !APIKeyMayActAsAdmin(c) {
+			httputil.RespondWithForbidden(c, adminKeyScopeRefusal)
+			c.Abort()
+			return
+		}
+		c.Next()
 	}
 }

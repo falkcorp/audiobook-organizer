@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user.go
-// version: 1.15.2
+// version: 1.15.3
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-30
+// last-edited: 2026-11-05
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. UserHandler covers user management and invite endpoints.
@@ -267,7 +267,10 @@ func newPendingInviteView(inv *database.Invite, withToken bool) *pendingInviteVi
 //   - an invite with an email address shows its token only to an active
 //     admin: users.manage alone lets a non-admin list invites, and a resend
 //     can deliver an invite that was not emailed yet, so "has an email" is
-//     the test, not "was sent".
+//     the test, not "was sent". The admin test is the role and the
+//     credential's scopes together (05-authn §11.1 item 4); the first rule
+//     already hides every token from an API key, so the scope check is a
+//     second layer here.
 //
 // With auth disabled there is no caller to tell apart and the credential
 // guard is off as well, so every token is shown, as before.
@@ -282,7 +285,7 @@ func (h *UserHandler) inviteTokenVisible(c *gin.Context, inv *database.Invite) b
 		return true
 	}
 	actor, ok := servermiddleware.CurrentUser(c)
-	return ok && actor != nil && actor.Status == "active" && slices.Contains(actor.Roles, adminRole)
+	return ok && actor != nil && actor.Status == "active" && slices.Contains(actor.Roles, adminRole) && servermiddleware.APIKeyMayActAsAdmin(c)
 }
 
 // findInvite resolves an admin route's invite ID to the invite, or nil.
@@ -444,13 +447,15 @@ const adminRole = "admin"
 // sets or ("") clears another user's email. The address counts as verified
 // (EmailSource admin), so SSO sign-ins with it link to this account, which is
 // why the route's users.manage is not enough: the acting user must also hold
-// the admin role, who can already give any address access directly. An
+// the admin role, who can already give any address access directly, through
+// a credential that may use it: an admin's API key whose non-empty scopes
+// leave out any atom is refused (05-authn §11.1 item 4). An
 // address another account has is refused with 409 (the admin can clear it
 // there first). Any invite-granted SSO or Cloudflare access the old address
 // had is revoked, as on a self-service change.
 func (h *UserHandler) SetUserEmail(c *gin.Context) {
 	actor, ok := servermiddleware.CurrentUser(c)
-	if !ok || actor == nil || actor.Status != "active" || !slices.Contains(actor.Roles, adminRole) {
+	if !ok || actor == nil || actor.Status != "active" || !slices.Contains(actor.Roles, adminRole) || !servermiddleware.APIKeyMayActAsAdmin(c) {
 		httputil.RespondWithForbidden(c, "setting another user's email needs the admin role")
 		return
 	}

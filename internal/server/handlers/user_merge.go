@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user_merge.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5e1c7a93-2b48-4d06-8f3a-c91d07e4b256
-// last-edited: 2026-10-23
+// last-edited: 2026-11-05
 
 package handlers
 
@@ -61,10 +61,13 @@ type mergeParams struct {
 
 // mergeActor is the signed-in active admin behind a merge route. users.manage
 // (the route guard) is not enough: a merge moves another account's sign-ins, so
-// the actor must hold the admin role itself, like SetUserEmail.
+// the actor must hold the admin role itself, like SetUserEmail. The role and
+// the credential's scopes decide together: an admin's API key whose non-empty
+// scopes leave out any atom (a key scoped to users.manage passes the route
+// guard) is refused (05-authn §11.1 item 4).
 func (h *UserHandler) mergeActor(c *gin.Context) (id string, ok bool) {
 	actor, has := servermiddleware.CurrentUser(c)
-	if !has || actor == nil || actor.Status != "active" || !slices.Contains(actor.Roles, adminRole) {
+	if !has || actor == nil || actor.Status != "active" || !slices.Contains(actor.Roles, adminRole) || !servermiddleware.APIKeyMayActAsAdmin(c) {
 		httputil.RespondWithForbidden(c, "merging accounts needs the admin role")
 		return "", false
 	}
