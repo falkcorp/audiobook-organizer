@@ -27,7 +27,7 @@ permissions:
 jobs:
   advanced-security:
     name: Advanced CodeQL Security
-    uses: falkcorp/github-common/.github/workflows/reusable-security.yml@c8c3576167622932044d0ddac7421968e60b43fa # main 2026-11-06; every github-common pin uses this SHA, move them with .github/ghcommon-ref.txt
+    uses: falkcorp/github-common/.github/workflows/reusable-security.yml@23ed8a466e5562678fd9eb45f39f0113518f0dd1 # main 2026-11-06; every github-common pin uses this SHA, move them with .github/ghcommon-ref.txt
     with:
       languages: '["go", "javascript", "actions"]'
       skip-codeql: false

@@ -49,7 +49,7 @@ on:
 
 jobs:
   burndown:
-    uses: falkcorp/github-common/.github/workflows/reusable-burndown.yml@c8c3576167622932044d0ddac7421968e60b43fa # main 2026-11-06; every github-common pin uses this SHA, move them with .github/ghcommon-ref.txt
+    uses: falkcorp/github-common/.github/workflows/reusable-burndown.yml@23ed8a466e5562678fd9eb45f39f0113518f0dd1 # main 2026-11-06; every github-common pin uses this SHA, move them with .github/ghcommon-ref.txt
     with:
       # Scheduled runs always use full mode (auto-merge ready PRs).
       # Manual dispatch respects the input selection (default: draft-only for safety).
