@@ -54,7 +54,9 @@ def main() -> int:
     env = g.go_env(core)
     try:
         if any(p == g.GENPROTO for p, _ in g.gomod_excludes(ROOT / "go.mod", env)):
-            raise g.CheckError("misplaced: the root go.mod carries a genproto exclude; it lives only in core/go.mod")
+            raise g.CheckError(
+                "misplaced: the root go.mod carries a genproto exclude; it lives only in core/go.mod"
+            )
         g.scan_present(ROOT, core / "go.mod", env)
         verdicts = ["present", "green with it"]
         with tempfile.TemporaryDirectory(prefix="genproto-root-") as tmp:

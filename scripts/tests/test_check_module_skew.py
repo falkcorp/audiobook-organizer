@@ -18,7 +18,9 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-_spec = importlib.util.spec_from_file_location("check_module_skew", ROOT / "scripts/ci/check_module_skew.py")
+_spec = importlib.util.spec_from_file_location(
+    "check_module_skew", ROOT / "scripts/ci/check_module_skew.py"
+)
 assert _spec and _spec.loader
 cms = importlib.util.module_from_spec(_spec)
 sys.modules["check_module_skew"] = cms
@@ -54,7 +56,9 @@ class ModuleSkewTest(unittest.TestCase):
         self.assertEqual(cms.check(self.root, [], self.lister), [])
 
     def test_skewed_module_fails_naming_it(self) -> None:
-        self.lists[self.root] = ROOT_LIST.replace("golang.org/x/sync v0.18.0", "golang.org/x/sync v0.19.0")
+        self.lists[self.root] = ROOT_LIST.replace(
+            "golang.org/x/sync v0.18.0", "golang.org/x/sync v0.19.0"
+        )
         errors = cms.check(self.root, [], self.lister)
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("golang.org/x/sync", errors[0])
@@ -64,7 +68,9 @@ class ModuleSkewTest(unittest.TestCase):
     def test_module_missing_from_root_fails(self) -> None:
         self.lists[self.root] = ROOT_LIST.replace("golang.org/x/sync v0.18.0\n", "")
         errors = cms.check(self.root, [], self.lister)
-        self.assertTrue(any("golang.org/x/sync" in e and "not the root's" in e for e in errors), errors)
+        self.assertTrue(
+            any("golang.org/x/sync" in e and "not the root's" in e for e in errors), errors
+        )
 
     def test_missing_core_go_sum_fails(self) -> None:
         (self.root / "core" / "go.sum").unlink()
@@ -74,7 +80,9 @@ class ModuleSkewTest(unittest.TestCase):
     def test_violated_pin_fails(self) -> None:
         pin = cms.parse_pin("github.com/cockroachdb/pebble/v2@v2.1.8")
         errors = cms.check(self.root, [pin], self.lister)
-        self.assertTrue(any("--pin github.com/cockroachdb/pebble/v2@v2.1.8" in e for e in errors), errors)
+        self.assertTrue(
+            any("--pin github.com/cockroachdb/pebble/v2@v2.1.8" in e for e in errors), errors
+        )
         held = cms.parse_pin("github.com/cockroachdb/pebble/v2@v2.1.7")
         self.assertEqual(cms.check(self.root, [held], self.lister), [])
 
@@ -87,7 +95,9 @@ class ModuleSkewTest(unittest.TestCase):
         self.lists[sc_core] = "x\nhonnef.co/go/tools v0.7.0\n"
         self.lists[sc_root] = "y\nhonnef.co/go/tools v0.7.1\n"
         errors = cms.check(self.root, [], self.lister)
-        self.assertTrue(any("staticcheck tools skew" in e and "honnef.co/go/tools" in e for e in errors), errors)
+        self.assertTrue(
+            any("staticcheck tools skew" in e and "honnef.co/go/tools" in e for e in errors), errors
+        )
 
     def test_parse_replaced_module(self) -> None:
         mods = cms.parse_list_m("m\na v1 => b v2\nc v1 => ./local\n")
