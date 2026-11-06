@@ -1,7 +1,7 @@
 # file: .github/workflows/prerelease.yml
-# version: 3.3.1
+# version: 3.3.2
 # guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-# last-edited: 2026-10-21
+# last-edited: 2026-11-05
 
 name: Prerelease on Merge
 
@@ -103,7 +103,8 @@ jobs:
       # produce a green step that promotes nothing, so a missing PAT is a hard
       # failure here rather than a silent no-op.
       - name: Promote to the next minor release
-        if: steps.rc.outputs.at_threshold == 'true'
+        # Release freeze (09 §9.2.1; D15): the owner sets the repository variable RELEASE_FREEZE to R1 or R2.
+        if: steps.rc.outputs.at_threshold == 'true' && vars.RELEASE_FREEZE == ''
         env:
           GH_TOKEN: ${{ secrets.JF_CI_GH_PAT }}
           REPO: ${{ github.repository }}
@@ -133,3 +134,7 @@ jobs:
             -f release-type=minor \
             -f create-draft=false
           echo "::notice::Dispatched a minor Production Release to reset the RC ordinal."
+      - name: Report the release freeze
+        if: steps.rc.outputs.at_threshold == 'true' && vars.RELEASE_FREEZE != ''
+        run: |
+          echo "::notice::Release freeze ${{ vars.RELEASE_FREEZE }} is on (09 §9.2.1): not dispatching a production release."
