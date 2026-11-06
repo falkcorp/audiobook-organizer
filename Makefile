@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.51.1
+# version: 2.51.2
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-11-06
 
@@ -697,9 +697,11 @@ genproto-exclude-root:
 	@python3 scripts/ci/genproto_exclude_root.py
 
 ## module-skew: blocking root-side check that core and the root resolve every
-## shared module to one version and that core/go.sum exists (03 §3.2 item 6).
+## shared module to one version, that core/go.sum exists (03 §3.2 item 6) and
+## that each pinned module (13 §13.5.2) holds its exact version in both. A new
+## pin is one more --pin argument, in the PR that makes core require it.
 module-skew:
-	@python3 scripts/ci/check_module_skew.py
+	@python3 scripts/ci/check_module_skew.py --pin github.com/google/jsonschema-go@v0.4.3
 
 ## test-all: Run all tests (backend full + frontend)
 test-all: test web-test
