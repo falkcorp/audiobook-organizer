@@ -1,7 +1,7 @@
-// file: internal/lifecycle/shutdown_test.go
-// version: 1.0.0
+// file: core/lifecycle/shutdown_test.go
+// version: 1.0.1
 // guid: fe14168b-ac13-4a03-a923-b7a48419239e
-// last-edited: 2026-09-19
+// last-edited: 2026-11-06
 
 package lifecycle
 
