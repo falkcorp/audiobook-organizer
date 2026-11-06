@@ -1,6 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.30 -->
 <!-- version: 10.78.31 -->
+<!-- version: 10.78.31 -->
+<!-- version: 10.78.32 -->
 <!-- version: 10.78.24 -->
 <!-- version: 10.78.23 -->
 <!-- version: 10.78.24 -->
@@ -54,7 +55,7 @@ into one of the curated sections below, is a normal direct edit.
         (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
   - [x] **SECURITY (hotfix, early fix 2):** a scoped API key can mint an unscoped key (including the nil/empty caller set). Implement 05-authn §11.1 item 2 exactly
         (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
-  - [ ] **SECURITY (hotfix, early fix 4):** `RequireAdmin` and the role-name checks ignore API-key scopes (including `adminRole`, `handlers/user.go` and `mergeActor`). Implement 05-authn §11.1 item 4 exactly
+  - [x] **SECURITY (hotfix, early fix 4):** `RequireAdmin` and the role-name checks ignore API-key scopes (including `adminRole`, `handlers/user.go` and `mergeActor`). Implement 05-authn §11.1 item 4 exactly
         (`docs/specs/platform-core/05-authn.md`); it is the single list and this entry restates nothing.
   - [ ] **SECURITY:** 3 of the 4 encrypted config secrets are also written in plaintext to a second
         `config.yaml` (see `docs/specs/platform-core/05-config.md`, "Out-of-scope defects found").
