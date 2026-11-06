@@ -1,7 +1,7 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.17.3 -->
+<!-- version: 1.18.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
-<!-- last-edited: 2026-10-30 -->
+<!-- last-edited: 2026-11-06 -->
 
 # Woodpecker CI: install runbook
 
@@ -31,7 +31,7 @@ setting allows. The repo's `allow_pr` setting on the Woodpecker server must
 be on for `pull_request` events to start anything. A push to a branch with no
 PR starts nothing; use `make ci-woodpecker` for that. `test-native-taglib`
 runs on any `taglib=true` agent, U1 or u0-local (2026-10-17), so it no longer
-waits in the queue outside U1's CI window or while U1 is scaled down. `make ci-woodpecker` follows the
+waits in the queue while U1 is busy or restarting between its day and night slot counts. `make ci-woodpecker` follows the
 pull_request pipeline the push starts instead of queueing a second, manual
 one for the same commit.
 
@@ -53,8 +53,8 @@ workflows start together, so the wall time is roughly the slowest of them.
 Third, the seven heavy workflows (`test-database`, `test-server-scanner`,
 `test-rest`, `test-fixtures-1`, `-2`, `-3`, `checks-build`) are labelled `heavy=true`, not
 `host=u1`, so either local-backend agent can take them: U1 and llm1 both carry
-that label (owner decision 2026-10-11, so CI keeps working when U1 is paused at
-night). U1 is the fast host (48 cores; under 55 s per shard), and llm1's 10
+that label (owner decision 2026-10-11, so CI keeps working when U1 is paused or
+busy). U1 is the fast host (48 cores; under 55 s per shard), and llm1's 10
 cores were the slowest (538 s for `test-server-scanner` with 4 shards each), so
 expect llm1 runs to be slower and to compete with Whisper transcription.
 
@@ -193,9 +193,25 @@ repo settings in Woodpecker, set the pipeline path to `.woodpecker/`.
 |---|---|---|---|---|---|
 | U0 | 192.0.2.10 | docker | `host=u0` | 1 | swarm service `woodpecker_woodpecker-agent` |
 | llm1 | 192.0.2.20 (macOS arm64) | local | `host=llm1,heavy=true` | 2 | LaunchDaemon, `UserName` = the CI user |
-| U1 | 192.0.2.35 (Ubuntu amd64) | local | `host=u1,heavy=true,taglib=true` | 1 | systemd `woodpecker-agent.service`, `User=woodpecker` |
+| U1 | 192.0.2.35 (Ubuntu amd64) | local | `host=u1,heavy=true,taglib=true` | 6 by day, 1 at night (see below) | systemd `woodpecker-agent.service`, `User=woodpecker` |
 | u0-local | 192.0.2.10 (prod, Ubuntu amd64) | local | `host=u0-local,taglib=true` | 1 | systemd `woodpecker-agent-local.service`, `User=woodpecker` |
 | mac | the owner's Mac (macOS arm64) | local | `host=mac,heavy=true` | 1 | `run-agent.sh` under `env -i`, started by hand (not a launchd job); gRPC goes through an ssh tunnel to U0 because macOS Local Network blocks the agent binary |
+
+**U1 day and night slots (owner, 2026-11-06).** U1 runs around the clock, with
+6 parallel workflows inside its daytime windows and 1 outside them, so the fans
+stay quiet at night and during the afternoon nap gap. The windows, in the owner's
+local time, are Mon-Fri 09:00-13:00 and 17:00-19:30, and Sat-Sun 09:00-12:00
+and 14:30-19:30. Until 2026-11-06 U1 was paused outside those windows instead.
+`WOODPECKER_MAX_WORKFLOWS` is read only when the agent starts, and a restart
+kills running jobs. So the schedule job on the owner's Mac
+(`~/.local/bin/ci-agent-schedule.py`, launchd `com.jdfalk.ci-agent-schedule`,
+every 5 minutes) handles each switch over several runs. It pauses U1
+(`no_schedule`), waits for its running jobs to finish, rewrites
+`/etc/systemd/system/woodpecker-agent.service.d/max-workflows.conf` and
+restarts the agent, then unpauses it once the API reports the new capacity.
+The switch down to 1 slot starts 15 minutes before each window closes, so a
+running job has time to finish. The job logs to
+`~/.local/state/u1-ci-window.log`.
 
 All agents use `WOODPECKER_SERVER=192.0.2.10:18734` and the same
 `WOODPECKER_AGENT_SECRET` as the server.
@@ -423,8 +439,10 @@ Set these on the repo in the Woodpecker UI:
 ## Troubleshooting
 
 - **A workflow sits in "pending".** No online agent has matching labels. Check
-  the Agents page. U0 and U1 run 1 workflow at a time and llm1 runs 2. A
-  `heavy=true` workflow waits when both U1 and llm1 are paused or offline.
+  the Agents page. U0 runs 1 workflow at a time, U1 runs 6 by day and 1 at
+  night, and llm1 runs 2. A `heavy=true` workflow waits when U1, llm1 and mac
+  are all busy, paused or offline. While U1 is paused it is switching slot
+  counts, which waits for its running jobs to finish.
 - **The coverage gate fails with "no CI-COVERAGE line".** That test workflow
   failed or never ran. Its own log shows why.
 - **Webhooks fail with 403.** The GitHub `hooks` IP list in the WAF rule is
