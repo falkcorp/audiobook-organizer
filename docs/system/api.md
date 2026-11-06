@@ -1,5 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.23.2 -->
+<!-- version: 1.23.3 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-11-05 -->
 
@@ -114,12 +114,12 @@ Library fixers built on `internal/repairs`; the **Repairs** lane of `/review` ca
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/v1/repairs` | List fixers: `{fixers: [{id, title, description, last_plan, last_apply}]}` |
+| `GET` | `/api/v1/repairs` | List fixers as `{fixers: [...]}`, already in display order (group, then `rank`, then id); the lane renders a header wherever `group` changes and never re-sorts. Each entry: `id` (stable, used in the other paths), `title` (display name), `summary` (one line for the list), `description` (long text with the safety warnings), `group` and `group_title` (the header the fixer is listed under), `rank` (its place inside the group), `api_only_reason` (set only for a fixer whose plan needs params the lane cannot collect: the lane shows a disabled Run trial button with this text as its explanation; start the plan through `POST /api/v1/repairs/:fixer/plan` with the params, because a plan with none fails), `plan_only` (true for a fixer that only previews: its apply route answers 409), `permitted` (the caller holds every permission the fixer requires; when false, `last_plan` and `last_apply` are left out), and `last_plan` / `last_apply` (`{operation_id, status, queued_at, completed_at, ...}` with the plan or apply summary counts) |
 | `POST` | `/api/v1/repairs/:fixer/plan` | Enqueue a `repairs.plan` run (a "trial"); 202 with `operation_id`; an identical queued/running request is deduped |
 | `GET` | `/api/v1/repairs/:fixer/plan/:op_id/rows` | Page the stored plan's rows: `?filter=`, `?class=`, `?offset=`, `?limit=` |
 | `POST` | `/api/v1/repairs/:fixer/apply` | Enqueue `repairs.apply` for `{plan_op_id, row_ids, dry_run}`; only an explicit `dry_run: false` writes, omitted means preview |
 
-Registered fixers: `duplicate-copies`, `folder-books`, `fragment-consolidation`, `maintenance.repair-junk-authors`, `maintenance.repair-junk-titles`, `version-group-primary-repair`. Apply re-plans each selected row and refuses one whose fingerprint changed (`changed_since_plan`); rows under `books/itunes/**` or Doctor Who / Big Finish / Torchwood are skipped at plan time and refused at apply time; nothing is deleted through the lane.
+The registered fixers, their titles and their groups are what `GET /api/v1/repairs` returns; that endpoint is the list, so it cannot be out of date (`repairs.Registry` holds them, and `internal/plugins/maintenance/repairs_lane_listing_test.go` pins the order). Fixers removed from the code (`maintenance.normalize-letter-l-ordinals`, `maintenance.relink-stale-series`, `dedup.split-books`) are no longer listed, and their plan, apply and rows routes answer 404; their past operations stay readable at the scope the fixer had (`library.edit_metadata`). Apply re-plans each selected row and refuses one whose fingerprint changed (`changed_since_plan`); rows under `books/itunes/**` or Doctor Who / Big Finish / Torchwood are skipped at plan time and refused at apply time; nothing is deleted through the lane.
 
 ### Operations (v2)
 

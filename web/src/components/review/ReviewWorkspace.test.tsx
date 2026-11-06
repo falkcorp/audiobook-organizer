@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.27.0
+// version: 1.27.1
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
 // last-edited: 2026-11-05
 
@@ -628,6 +628,46 @@ describe('command bar', () => {
     const item = await screen.findByTestId('command-full-rescan');
     expect(item).toHaveTextContent(/every book/i);
     expect(item).not.toHaveTextContent(/library-wide/i);
+  });
+
+  it('names the missing-files fixer by the title the server sends, so a rename cannot leave it stale', async () => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([
+      {
+        id: 'reconcile.missing-files',
+        title: 'Relink Gotham books to their files',
+        description: 'Matches missing files.',
+        summary: 'Matches missing files to files on disk.',
+        group: 'files',
+        group_title: 'Files & iTunes paths',
+        rank: 1,
+      },
+    ]);
+    window.localStorage.setItem('settings.showAdvanced', 'true');
+    const user = userEvent.setup();
+    renderWorkspace(['/review?lane=repairs']);
+    expect(await screen.findByTestId('repairs-panel')).toBeInTheDocument();
+    await waitFor(() => expect(api.listRepairFixers).toHaveBeenCalled());
+
+    await user.click(screen.getByTestId('command-menu-dedup'));
+
+    const item = await screen.findByTestId('command-reconcile');
+    await waitFor(() => expect(item).toHaveTextContent('under "Relink Gotham books to their files"'));
+    expect(item).not.toHaveTextContent(/Missing files/);
+  });
+
+  it('names no fixer title in the missing-files command before the fixer list has loaded', async () => {
+    // The list loads when the Repairs lane is first opened; until then the text
+    // points at Repairs without a title rather than quoting one that may be stale.
+    window.localStorage.setItem('settings.showAdvanced', 'true');
+    const user = userEvent.setup();
+    renderWorkspace();
+    await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
+
+    await user.click(screen.getByTestId('command-menu-dedup'));
+
+    const item = await screen.findByTestId('command-reconcile');
+    expect(item).toHaveTextContent('Review the matches in Repairs.');
+    expect(item).not.toHaveTextContent(/under "/);
   });
 
   it('starts the job behind a command', async () => {

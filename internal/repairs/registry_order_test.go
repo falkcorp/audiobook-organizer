@@ -1,5 +1,5 @@
 // file: internal/repairs/registry_order_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4b7d2e91-3c58-4a06-9f1e-8d5a0c6b7e23
 // last-edited: 2026-11-05
 
@@ -73,6 +73,19 @@ func TestRegistryList_UnknownGroupSortsLast(t *testing.T) {
 	)
 	require.Equal(t, []string{"jim", "oswald", "talia", "edward"}, got,
 		"ungrouped fixers share the last slot and fall back to rank then id (talia rank 0, edward rank 1)")
+}
+
+// Different mistyped groups never interleave: each unknown group is one
+// contiguous run, the runs ordered by the group string, whatever the ranks.
+func TestRegistryList_UnknownGroupsStayContiguousByGroupString(t *testing.T) {
+	got := listedIDs(t,
+		metaFixer{"alfred", Meta{Group: "zz-typo", Rank: 1}},
+		metaFixer{"barbara", Meta{Group: "aa-typo", Rank: 2}},
+		metaFixer{"selina", Meta{Group: "zz-typo", Rank: 3}},
+		metaFixer{"harvey", Meta{Group: "aa-typo", Rank: 4}},
+		metaFixer{"jim", Meta{Group: GroupTitles, Rank: 1}},
+	)
+	require.Equal(t, []string{"jim", "barbara", "harvey", "alfred", "selina"}, got)
 }
 
 // The groups are in the owner's order (2026-11-05), the imports group last, and

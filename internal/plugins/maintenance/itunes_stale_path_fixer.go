@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_stale_path_fixer.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2b2165f1-de86-4181-9a6d-4ed73bb98fbc
 // last-edited: 2026-11-05
 
@@ -372,7 +372,7 @@ func (f *staleITunesPathFixer) Plan(ctx context.Context, raw json.RawMessage, re
 			Concurrency: runtime.NumCPU(),
 			ErrMode:     registry.ErrModeCollect,
 			Label: func(_, total int) string {
-				return fmt.Sprintf("Stale iTunes paths: external ids %d/%d", done.Load(), total)
+				return fmt.Sprintf("%s: external ids %d/%d", f.Title(), done.Load(), total)
 			},
 		})
 		if err != nil && ctx.Err() != nil {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.24.0
+// version: 1.24.1
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-11-05
 
@@ -581,7 +581,7 @@ func (f *junkTitleFixer) Plan(ctx context.Context, _ json.RawMessage, rep regist
 	}, registry.RunItemsOptions{
 		Concurrency: titleRepairWorkers(),
 		ErrMode:     registry.ErrModeCollect,
-		Label:       func(_, total int) string { return fmt.Sprintf("Junk titles %d/%d", done.Load(), total) },
+		Label:       func(_, total int) string { return fmt.Sprintf("%s %d/%d", f.Title(), done.Load(), total) },
 	})
 	if runErr != nil && ctx.Err() != nil {
 		return nil, ctx.Err()
