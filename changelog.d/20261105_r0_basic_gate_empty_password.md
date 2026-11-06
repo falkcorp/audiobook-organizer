@@ -17,3 +17,9 @@ memory only: it is never saved, the log says so once at warn without the
 value, and a value that is empty or only spaces counts as unset. A saved
 password still wins over the variable. Saving a password in Settings clears
 the health token without a restart.
+
+A saved password made only of spaces now counts as no password too, so it is
+refused the same way; `BASIC_AUTH_PASSWORD` recovers such an install. Any
+other saved password is compared exactly as saved. The gate also reads its
+settings once per request, together, so a request can no longer race a
+Settings save.
