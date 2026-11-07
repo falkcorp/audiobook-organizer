@@ -1,7 +1,7 @@
 // file: internal/bookfileaudio/probe_outcome_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ed5ca626-a270-4fc6-a767-04807741441d
-// last-edited: 2026-11-04
+// last-edited: 2026-11-07
 
 package bookfileaudio
 

@@ -1,7 +1,7 @@
 // file: internal/organizer/collision.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 5b1f7c2a-9d34-4e18-8f60-c7a2b4d91e03
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 // Pre-flight collision resolution for RenameFiles.
 //

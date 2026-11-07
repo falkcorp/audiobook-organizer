@@ -1,7 +1,7 @@
 // file: internal/server/itl_paths.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0b8e6f52-4c1d-4e7a-9a63-5d2f8c1e7b40
-// last-edited: 2026-10-18
+// last-edited: 2026-11-07
 //
 // Read-side helpers for the ITL endpoints that remain after iTunes write-back
 // was removed (owner decision 2026-10-07: iTunes is import-only). The ITL is

@@ -1,14 +1,15 @@
-// file: internal/libroot/libroot.go
-// version: 1.6.0
+// file: core/library/libroot.go
+// version: 1.6.1
 // guid: 4d8b2f61-a3c7-4e90-b512-9e6f0c1d7a38
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
-// Package libroot holds the two checks every library-wide maintenance op makes
+// This file holds the two checks every library-wide maintenance op makes
 // against the library root before it trusts what it finds there: that the root
 // is really mounted, and that a per-row report can be written under it. It
-// imports only the standard library and the permission constants in
-// internal/util (a layer-0 leaf), so the maintenance plugin and the legacy
-// maintenance jobs share one copy instead of each keeping their own.
+// imports only the standard library and the permission constants in perms.go,
+// so the maintenance plugin and the legacy maintenance jobs share one copy
+// instead of each keeping their own.
+
 package library
 
 import (
@@ -18,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
 )
 
 // Mounted refuses to proceed when the library root is unset, unreadable or
@@ -75,9 +75,27 @@ const ReportDirName = ".reports"
 //
 // onTightened, when not nil, is called when the default report directory already
 // existed with world write and that bit was removed: it gets the directory and
-// the permission bits it had. libroot imports no module package other than the
-// permission constants in internal/util, so it cannot log; the caller does.
+// the permission bits it had. This package imports no module package, so it
+// cannot log; the caller does.
 func ReportPathNotify(root, explicit, fileName string, onTightened func(dir string, was fs.FileMode)) (string, error) {
+	return reportPathNotify(root, explicit, fileName, onTightened, defaultReportEnv())
+}
+
+// reportEnv is the process state ReportPathNotify reads: how a directory's mode
+// is changed and which user ID owns what this process may trust. It is passed
+// down rather than held in package variables so a test can stand in for another
+// user, or a failing chmod, without mutable global state.
+type reportEnv struct {
+	chmod func(name string, mode os.FileMode) error
+	euid  func() int
+}
+
+// defaultReportEnv returns the real process environment.
+func defaultReportEnv() reportEnv {
+	return reportEnv{chmod: os.Chmod, euid: os.Geteuid}
+}
+
+func reportPathNotify(root, explicit, fileName string, onTightened func(dir string, was fs.FileMode), env reportEnv) (string, error) {
 	path := explicit
 	if path == "" {
 		root = strings.TrimSpace(root)
@@ -94,7 +112,7 @@ func ReportPathNotify(root, explicit, fileName string, onTightened func(dir stri
 	}
 	var err error
 	if explicit == "" {
-		err = ensureReportsDir(filepath.Dir(path), onTightened)
+		err = ensureReportsDir(filepath.Dir(path), onTightened, env)
 	} else {
 		err = EnsureDirWritable(path)
 	}
@@ -121,7 +139,7 @@ func ReportPathNotify(root, explicit, fileName string, onTightened func(dir stri
 // is not a directory, or the chmod fails. There is a small window between this
 // check and the later file open; the open itself refuses a symlink (O_NOFOLLOW)
 // and checks the file's owner.
-func ensureReportsDir(dir string, onTightened func(dir string, was fs.FileMode)) error {
+func ensureReportsDir(dir string, onTightened func(dir string, was fs.FileMode), env reportEnv) error {
 	info, err := os.Lstat(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		if merr := os.Mkdir(dir, DirMode); merr != nil && !errors.Is(merr, fs.ErrExist) {
@@ -137,14 +155,14 @@ func ensureReportsDir(dir string, onTightened func(dir string, was fs.FileMode))
 		return fmt.Errorf("%s is a symlink, not a directory; refusing to write reports through it", dir)
 	case !info.IsDir():
 		return fmt.Errorf("%s is not a directory", dir)
-	case !OwnedByCurrentUser(info):
+	case !ownedByUID(info, env.euid()):
 		return fmt.Errorf("%s is not owned by the user this process runs as; refusing to trust it", dir)
 	}
 	if was := info.Mode().Perm(); was&worldWrite != 0 {
 		// Perm bits plus the setuid, setgid and sticky bits, minus world write.
 		// Dropping the special bits here would be a second change nobody asked for.
 		next := info.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky) &^ worldWrite
-		if cerr := chmodDir(dir, next); cerr != nil {
+		if cerr := env.chmod(dir, next); cerr != nil {
 			return fmt.Errorf("%s is writable by everyone (mode %o) and world write could not be removed: %w", dir, was, cerr)
 		}
 		if onTightened != nil {
@@ -156,9 +174,6 @@ func ensureReportsDir(dir string, onTightened func(dir string, was fs.FileMode))
 
 // worldWrite is the "other" write permission bit.
 const worldWrite fs.FileMode = 0o002
-
-// chmodDir changes a directory's mode; a variable so a test can make it fail.
-var chmodDir = os.Chmod
 
 // EnsureDirWritable creates the directory that will hold path and proves a
 // file can be created in it, by creating and removing a probe file. MkdirAll

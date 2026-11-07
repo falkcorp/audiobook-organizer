@@ -1,7 +1,7 @@
-// file: internal/boundedcall/boundedcall_test.go
-// version: 1.1.0
+// file: core/library/boundedcall_test.go
+// version: 1.1.1
 // guid: 78d82bf9-97a7-496f-90a2-1a1f6f8cffee
-// last-edited: 2026-10-22
+// last-edited: 2026-11-07
 
 package library
 

@@ -1,7 +1,7 @@
 // file: internal/fileops/safe_operations.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: 8f7e6d5c-4b3a-2918-7f6e-5d4c3b2a1908
-// last-edited: 2026-10-12
+// last-edited: 2026-11-07
 
 package fileops
 

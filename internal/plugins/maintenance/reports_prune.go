@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reports_prune.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f0c5b0e-2d57-4a39-9a41-3c8e1f7a52d4
-// last-edited: 2026-10-30
+// last-edited: 2026-11-07
 
 package maintenance
 

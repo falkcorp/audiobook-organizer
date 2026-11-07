@@ -1,9 +1,9 @@
-// file: internal/security/pathvalidation/pathvalidation.go
-// version: 1.2.2
+// file: core/library/pathvalidation.go
+// version: 1.2.3
 // guid: 3a8f5c2b-7d4e-4a19-9f6b-1c0e2d3a5b7c
-// last-edited: 2026-10-18
+// last-edited: 2026-11-07
 
-// Package pathvalidation provides centralized path validation utilities to
+// This file provides centralized path validation utilities to
 // prevent path traversal and injection vulnerabilities. It is the foundation
 // for addressing the 217 path-injection alerts identified in the 2026-05-03
 // security audit (SEC-AUDIT-1).
@@ -19,13 +19,13 @@
 // unit-test, and usable before any disk access occurs. For callers that need
 // symlink-safe joins, use [SecureJoinResolved] which also calls
 // [filepath.EvalSymlinks].
+
 package library
 
 import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -41,10 +41,26 @@ var ErrPathTraversal = errors.New("path traversal detected: path escapes root")
 // where only a relative path is expected.
 var ErrAbsolutePathNotAllowed = errors.New("absolute path not allowed in user-supplied input")
 
-// unsafeFilenameRE matches characters that are illegal or dangerous in
-// filenames on Windows, macOS, or Linux. The set is intentionally conservative:
+// isUnsafeFilenameByte reports whether b is illegal or dangerous in a
+// filename on Windows, macOS, or Linux. The set is intentionally conservative:
 // only printable, non-control, non-reserved characters are allowed.
-var unsafeFilenameRE = regexp.MustCompile(`[<>:"/\\|?*` + "\x00-\x1f\x7f" + `]`)
+func isUnsafeFilenameByte(b byte) bool {
+	return strings.IndexByte(`<>:"/\\|?*`, b) >= 0 || b <= 0x1f || b == 0x7f
+}
+
+// replaceUnsafeFilenameBytes replaces every unsafe byte of name with '_'. The
+// unsafe set is all ASCII, and an ASCII byte never occurs inside a multi-byte
+// UTF-8 sequence, so a byte-wise pass leaves every other rune (and any invalid
+// byte) exactly as it was.
+func replaceUnsafeFilenameBytes(name string) string {
+	out := []byte(name)
+	for i, b := range out {
+		if isUnsafeFilenameByte(b) {
+			out[i] = '_'
+		}
+	}
+	return string(out)
+}
 
 // maxFilenameLen is the maximum byte length allowed for a sanitised filename.
 // FAT32 / VFAT limit is 255 bytes; we use the same limit for safety.
@@ -66,7 +82,7 @@ const maxFilenameLen = 255
 // The result is always a non-empty string safe to use as a filename component.
 func SanitizeFilename(name string) string {
 	// Step 1: replace unsafe characters with underscore
-	safe := unsafeFilenameRE.ReplaceAllString(name, "_")
+	safe := replaceUnsafeFilenameBytes(name)
 
 	// Step 2: remove leading/trailing dots and spaces
 	safe = strings.TrimFunc(safe, func(r rune) bool {
@@ -234,16 +250,18 @@ func isWithinRoot(path, root string) bool {
 // ErrDangerousRoot is returned when a path is a known-dangerous system directory.
 var ErrDangerousRoot = errors.New("path is a protected system directory")
 
-// dangerousRoots lists absolute paths that must never be used as a library root
+// dangerousRoots returns the list of absolute paths that must never be used as a library root
 // or factory-reset target. The list is conservative — it protects system
 // directories on Linux and macOS that, if recursively deleted or overwritten,
 // would render the host unrecoverable.
-var dangerousRoots = []string{
-	"/",
-	"/bin", "/sbin", "/usr", "/lib", "/lib64", "/lib32",
-	"/etc", "/var", "/run", "/sys", "/proc", "/dev",
-	"/boot", "/root", "/home",
-	"/opt", "/srv",
+func dangerousRoots() []string {
+	return []string{
+		"/",
+		"/bin", "/sbin", "/usr", "/lib", "/lib64", "/lib32",
+		"/etc", "/var", "/run", "/sys", "/proc", "/dev",
+		"/boot", "/root", "/home",
+		"/opt", "/srv",
+	}
 }
 
 // IsDangerousRoot reports whether path equals one of the known-dangerous system
@@ -251,5 +269,5 @@ var dangerousRoots = []string{
 // though /home itself is dangerous.
 func IsDangerousRoot(path string) bool {
 	cleaned := filepath.Clean(path)
-	return slices.Contains(dangerousRoots, cleaned)
+	return slices.Contains(dangerousRoots(), cleaned)
 }

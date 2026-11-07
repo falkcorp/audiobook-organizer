@@ -1,7 +1,7 @@
 // file: internal/repairs/guards.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
-// last-edited: 2026-10-22
+// last-edited: 2026-11-07
 
 package repairs
 

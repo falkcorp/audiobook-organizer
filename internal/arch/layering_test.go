@@ -1,5 +1,5 @@
 // file: internal/arch/layering_test.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
 // last-edited: 2026-11-07
 

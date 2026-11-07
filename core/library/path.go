@@ -1,7 +1,7 @@
-// file: internal/util/path.go
-// version: 1.1.0
+// file: core/library/path.go
+// version: 1.1.1
 // guid: 7a3b2c1d-4e5f-6789-abcd-ef0123456789
-// last-edited: 2026-05-01
+// last-edited: 2026-11-07
 
 package library
 

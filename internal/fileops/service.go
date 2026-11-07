@@ -1,7 +1,7 @@
 // file: internal/fileops/service.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-06-17
+// last-edited: 2026-11-07
 
 package fileops
 

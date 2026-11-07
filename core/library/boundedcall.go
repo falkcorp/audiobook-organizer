@@ -1,12 +1,13 @@
-// file: internal/boundedcall/boundedcall.go
-// version: 1.1.0
+// file: core/library/boundedcall.go
+// version: 1.1.1
 // guid: 2593968b-b7d3-4939-9ff5-351fd51fbf7b
-// last-edited: 2026-10-22
+// last-edited: 2026-11-07
 
-// Package boundedcall runs a call that cannot be interrupted (a blocking
+// This file: Call runs a call that cannot be interrupted (a blocking
 // syscall on a stuck mount, a WASM tag parser) with a time bound, abandoning
 // it on timeout and counting the goroutines left behind. It is a leaf package
 // so the maintenance plugin and the repairs framework share one copy.
+
 package library
 
 import (

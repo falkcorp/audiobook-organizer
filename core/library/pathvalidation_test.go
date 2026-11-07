@@ -1,7 +1,7 @@
-// file: internal/security/pathvalidation/pathvalidation_test.go
-// version: 1.1.3
+// file: core/library/pathvalidation_test.go
+// version: 1.1.4
 // guid: 7b3d9f1e-2a6c-4f8d-8e0b-5c4a3b2d1e0f
-// last-edited: 2026-10-18
+// last-edited: 2026-11-07
 
 package library_test
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	pathvalidation "github.com/falkcorp/mediacore/library"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -31,7 +31,7 @@ func TestSanitizeFilename_SafeInput(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.input, func(t *testing.T) {
-			got := pathvalidation.SanitizeFilename(tc.input)
+			got := library.SanitizeFilename(tc.input)
 			if got != tc.want {
 				t.Errorf("SanitizeFilename(%q) = %q, want %q", tc.input, got, tc.want)
 			}
@@ -58,7 +58,7 @@ func TestSanitizeFilename_IllegalChars(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := pathvalidation.SanitizeFilename(tc.input)
+			got := library.SanitizeFilename(tc.input)
 			// Result must not contain any of the unsafe characters.
 			for _, bad := range []string{"/", "\\", ":", "*", "?", "|", "<", ">", "\"", "\x00"} {
 				if strings.Contains(got, bad) {
@@ -82,7 +82,7 @@ func TestSanitizeFilename_LeadingTrailingDotsAndSpaces(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.input, func(t *testing.T) {
-			got := pathvalidation.SanitizeFilename(tc.input)
+			got := library.SanitizeFilename(tc.input)
 			if strings.HasPrefix(got, ".") || strings.HasSuffix(got, ".") {
 				t.Errorf("SanitizeFilename(%q) = %q still has leading/trailing dot", tc.input, got)
 			}
@@ -94,7 +94,7 @@ func TestSanitizeFilename_LeadingTrailingDotsAndSpaces(t *testing.T) {
 }
 
 func TestSanitizeFilename_EmptyInput(t *testing.T) {
-	got := pathvalidation.SanitizeFilename("")
+	got := library.SanitizeFilename("")
 	if got == "" {
 		t.Error("SanitizeFilename(\"\") returned empty string, want non-empty fallback")
 	}
@@ -102,7 +102,7 @@ func TestSanitizeFilename_EmptyInput(t *testing.T) {
 
 func TestSanitizeFilename_LongInput(t *testing.T) {
 	long := strings.Repeat("a", 512)
-	got := pathvalidation.SanitizeFilename(long)
+	got := library.SanitizeFilename(long)
 	if len(got) > 255 {
 		t.Errorf("SanitizeFilename(long) returned %d bytes, want ≤255", len(got))
 	}
@@ -118,7 +118,7 @@ func TestSanitizeFilename_NoDirectorySeparatorsInjected(t *testing.T) {
 		`a\b\c`,
 	}
 	for _, in := range inputs {
-		got := pathvalidation.SanitizeFilename(in)
+		got := library.SanitizeFilename(in)
 		if strings.ContainsAny(got, "/\\") {
 			t.Errorf("SanitizeFilename(%q) = %q still contains separator", in, got)
 		}
@@ -144,7 +144,7 @@ func TestSecureJoin_HappyPath(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(strings.Join(tc.parts, "/"), func(t *testing.T) {
-			got, err := pathvalidation.SecureJoin(root, tc.parts...)
+			got, err := library.SecureJoin(root, tc.parts...)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -168,7 +168,7 @@ func TestSecureJoin_TraversalRejected(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := pathvalidation.SecureJoin(root, tc.parts...)
+			_, err := library.SecureJoin(root, tc.parts...)
 			if err == nil {
 				t.Fatalf("expected error for parts %v, got nil", tc.parts)
 			}
@@ -177,19 +177,19 @@ func TestSecureJoin_TraversalRejected(t *testing.T) {
 }
 
 func TestSecureJoin_AbsolutePartRejected(t *testing.T) {
-	_, err := pathvalidation.SecureJoin("/srv/books", "/etc/passwd")
+	_, err := library.SecureJoin("/srv/books", "/etc/passwd")
 	if err == nil {
 		t.Fatal("expected error for absolute part, got nil")
 	}
-	if !errors.Is(err, pathvalidation.ErrAbsolutePathNotAllowed) {
+	if !errors.Is(err, library.ErrAbsolutePathNotAllowed) {
 		t.Errorf("expected ErrAbsolutePathNotAllowed, got %v", err)
 	}
 }
 
 func TestSecureJoin_RootWithTrailingSlash(t *testing.T) {
 	// A root with a trailing slash must behave the same as one without.
-	got1, err1 := pathvalidation.SecureJoin("/srv/books/", "sub/file.m4b")
-	got2, err2 := pathvalidation.SecureJoin("/srv/books", "sub/file.m4b")
+	got1, err1 := library.SecureJoin("/srv/books/", "sub/file.m4b")
+	got2, err2 := library.SecureJoin("/srv/books", "sub/file.m4b")
 	if err1 != nil || err2 != nil {
 		t.Fatalf("unexpected errors: %v, %v", err1, err2)
 	}
@@ -207,7 +207,7 @@ func TestSecureJoin_RootWithTrailingSlash(t *testing.T) {
 // neither decode it nor reject it.
 func TestSecureJoin_URLEncodedPercent_IsLiteralChar(t *testing.T) {
 	root := "/srv/books"
-	got, err := pathvalidation.SecureJoin(root, "..%2Fetc%2Fpasswd")
+	got, err := library.SecureJoin(root, "..%2Fetc%2Fpasswd")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestSecureJoin_URLEncodedPercent_IsLiteralChar(t *testing.T) {
 }
 
 func TestSecureJoin_RootOnly(t *testing.T) {
-	got, err := pathvalidation.SecureJoin("/srv/books")
+	got, err := library.SecureJoin("/srv/books")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestSecureJoinResolved_Normal(t *testing.T) {
 	dir := t.TempDir()
 	// Path doesn't exist yet — SecureJoinResolved must not error solely because
 	// the path is missing; it should fall back to the static check.
-	got, err := pathvalidation.SecureJoinResolved(dir, "sub", "file.txt")
+	got, err := library.SecureJoinResolved(dir, "sub", "file.txt")
 	if err != nil {
 		if strings.Contains(err.Error(), "traversal") {
 			t.Fatalf("unexpected traversal error for safe path: %v", err)
@@ -274,7 +274,7 @@ func TestSecureJoinResolved_SymlinkEscape(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := pathvalidation.SecureJoinResolved(root, "link")
+	_, err := library.SecureJoinResolved(root, "link")
 	if err == nil {
 		t.Fatal("expected error for symlink that escapes root, got nil")
 	}
@@ -285,7 +285,7 @@ func TestSecureJoinResolved_SymlinkEscape(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestErrors_AreDistinct(t *testing.T) {
-	if pathvalidation.ErrPathTraversal == pathvalidation.ErrAbsolutePathNotAllowed {
+	if library.ErrPathTraversal == library.ErrAbsolutePathNotAllowed {
 		t.Error("ErrPathTraversal and ErrAbsolutePathNotAllowed must be distinct")
 	}
 }
@@ -294,13 +294,13 @@ func TestErrors_WrappedCorrectly(t *testing.T) {
 	// ErrPathTraversal must be detectable via errors.Is from wrapped errors.
 	root := "/srv/books"
 
-	_, err := pathvalidation.SecureJoin(root, "../escape")
-	if !errors.Is(err, pathvalidation.ErrPathTraversal) {
+	_, err := library.SecureJoin(root, "../escape")
+	if !errors.Is(err, library.ErrPathTraversal) {
 		t.Errorf("errors.Is(err, ErrPathTraversal) = false, got: %v", err)
 	}
 
-	_, err = pathvalidation.SecureJoin(root, "/absolute")
-	if !errors.Is(err, pathvalidation.ErrAbsolutePathNotAllowed) {
+	_, err = library.SecureJoin(root, "/absolute")
+	if !errors.Is(err, library.ErrAbsolutePathNotAllowed) {
 		t.Errorf("errors.Is(err, ErrAbsolutePathNotAllowed) = false, got: %v", err)
 	}
 }
@@ -321,7 +321,7 @@ func TestIsDangerousRoot(t *testing.T) {
 		"/dev",
 	}
 	for _, p := range dangerous {
-		if !pathvalidation.IsDangerousRoot(p) {
+		if !library.IsDangerousRoot(p) {
 			t.Errorf("IsDangerousRoot(%q) = false, want true", p)
 		}
 	}
@@ -335,7 +335,7 @@ func TestIsDangerousRoot(t *testing.T) {
 		"/Users/jdfalk/audiobooks",
 	}
 	for _, p := range safe {
-		if pathvalidation.IsDangerousRoot(p) {
+		if library.IsDangerousRoot(p) {
 			t.Errorf("IsDangerousRoot(%q) = true, want false", p)
 		}
 	}
@@ -356,7 +356,7 @@ func TestCleanAbsolutePath_Valid(t *testing.T) {
 		"/var/lib/audiobook-organizer",
 	}
 	for _, p := range cases {
-		got, err := pathvalidation.CleanAbsolutePath(p)
+		got, err := library.CleanAbsolutePath(p)
 		if err != nil {
 			t.Errorf("CleanAbsolutePath(%q) unexpected error: %v", p, err)
 		}
@@ -367,8 +367,8 @@ func TestCleanAbsolutePath_Valid(t *testing.T) {
 }
 
 func TestCleanAbsolutePath_Relative(t *testing.T) {
-	_, err := pathvalidation.CleanAbsolutePath("relative/path/to/file.xml")
-	if !errors.Is(err, pathvalidation.ErrNotAbsolute) {
+	_, err := library.CleanAbsolutePath("relative/path/to/file.xml")
+	if !errors.Is(err, library.ErrNotAbsolute) {
 		t.Fatalf("expected ErrNotAbsolute, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "absolute") {
@@ -382,14 +382,14 @@ func TestCleanAbsolutePath_TraversalSequence(t *testing.T) {
 		"/mnt/books/../../../root/.ssh/authorized_keys",
 	}
 	for _, p := range cases {
-		if _, err := pathvalidation.CleanAbsolutePath(p); !errors.Is(err, pathvalidation.ErrPathTraversal) {
+		if _, err := library.CleanAbsolutePath(p); !errors.Is(err, library.ErrPathTraversal) {
 			t.Errorf("CleanAbsolutePath(%q): expected ErrPathTraversal, got %v", p, err)
 		}
 	}
 }
 
 func TestCleanAbsolutePath_Empty(t *testing.T) {
-	if _, err := pathvalidation.CleanAbsolutePath(""); err == nil {
+	if _, err := library.CleanAbsolutePath(""); err == nil {
 		t.Fatal("expected an error for an empty path")
 	}
 }

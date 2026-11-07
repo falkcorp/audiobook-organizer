@@ -1,7 +1,7 @@
 // file: internal/mediainfo/mediainfo.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: f1e2d3c4-b5a6-7c8d-9e0f-1a2b3c4d5e6f
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 package mediainfo
 

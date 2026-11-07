@@ -1,7 +1,7 @@
-// file: internal/security/safepath/safepath_test.go
-// version: 1.0.1
+// file: core/library/safepath_test.go
+// version: 1.0.2
 // guid: 8a7b6c5d-4e3f-2a1b-9c0d-123456789abc
-// last-edited: 2026-10-18
+// last-edited: 2026-11-07
 package library
 
 import (

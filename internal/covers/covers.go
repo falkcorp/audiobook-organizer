@@ -1,7 +1,7 @@
 // file: internal/covers/covers.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: c3d4e5f6-7890-abcd-ef12-34567890abcd
-// last-edited: 2026-10-12
+// last-edited: 2026-11-07
 //
 // Cover service logic for proxy caching and validation.
 // Business logic extracted from internal/server/covers.go.

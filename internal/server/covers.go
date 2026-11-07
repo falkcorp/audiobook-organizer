@@ -1,7 +1,7 @@
 // file: internal/server/covers.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-05-15
+// last-edited: 2026-11-07
 //
 // HTTP handlers for cover proxy and local cover serving.
 // Business logic extracted to internal/covers.

@@ -1,7 +1,7 @@
 // file: internal/server/diskstats.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-08-29
+// last-edited: 2026-11-07
 
 package server
 
@@ -9,7 +9,7 @@ import "github.com/falkcorp/mediacore/library"
 
 // getDiskStats returns total, free bytes for the given path.
 //
-// The build-tagged syscall implementations moved to internal/diskstats so
+// The build-tagged syscall implementations moved to core/library so
 // internal/backup can run a pre-flight free-space check without importing
 // internal/server. This stays as a thin alias because it is injected as a func
 // value into the system handler (wire_handlers.go), and that seam is worth

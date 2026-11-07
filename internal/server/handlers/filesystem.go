@@ -1,7 +1,7 @@
 // file: internal/server/handlers/filesystem.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: c4d5e6f7-a8b9-0123-cdef-012345678901
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 // Package handlers — FilesystemHandler covers home-directory, filesystem
 // browse, exclusion CRUD, import-path CRUD, and the on-demand single-file
