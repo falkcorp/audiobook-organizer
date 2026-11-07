@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.31 -->
+<!-- version: 10.78.32 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -11,7 +11,7 @@
 <!-- version: 10.78.25 -->
 <!-- version: 10.78.22 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-07 -->
 
 # Project TODO — live items only
 
@@ -23,6 +23,49 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **MEDIAINFO-EXTENSION-SET** `mediainfo.Extract` accepts only `audioext.DefaultSet()` while the
+      scanner admits the configured `SupportedExtensions`; decide whether mediainfo should honour the
+      configured set. Until then a row at a configured extension outside the default set (for example
+      `.mp4`) can never be measured: the unknownRows backfill and the folder-books holds decline it
+      (`skipped_not_audio`) instead of probing it.
+
+- [ ] **TODO-CI-BOT-APP** Finish moving this repo's bot pushes to the org CI bot GitHub App
+      (ruleset 26660812's only bypass; org var `CI_BOT_APP_CLIENT_ID`, org secret
+      `CI_BOT_APP_PRIVATE_KEY`). Plan: `.claude/notes/2026-11-06-github-app-auth-migration.md`.
+  - [ ] Draft PR `ci/bot-app-auth`: `todo-collect`, `auto-revert`, `memory-leak-scan` and
+        `ratchet-lower` mint an app token. todo-collect also gets `persist-credentials: false`,
+        because checkout's extraheader made it push as github-actions[bot] no matter which
+        token was set.
+  - [ ] After the github-common `reusable-release.yml` fix merges, move
+        `.github/ghcommon-ref.txt` and every `falkcorp/github-common/...@<sha>` pin together.
+  - [ ] Verify each with `workflow_dispatch`: the push or PR comes from the app's bot user,
+        and release-prod's collect-changelog lands on main without GH013.
+  - [ ] Then drop this repo's `CI_APP_*` secrets and its `JF_CI_GH_PAT` references
+        (org-wide retirement is tracked in github-common's TODO).
+
+- [ ] **METRICS-DEGRADED-TOKENS** core's `metrics_family_taken` degrade (and the other
+      `Provider.Degraded()` tokens) is never read by ABO, and the instrument call sites
+      discard the creation error (`internal/opsmetrics/opsmetrics.go` `r.duration, _ =` and
+      `r.schedLag, _ =`, `internal/aidispatch/metrics.go` `slotWait, _ =`), so a refused or
+      clashing family is silent. Either surface the Provider's degraded tokens in `/health`
+      or check those errors (R1-10 review MINOR-2).
+
+- [ ] **MODULE-SKEW-PLATFORMS** `scripts/ci/check_module_skew.py` builds core's supplying-module
+      set from `go list -deps -test ./...` unioned over GOOS (linux, darwin, windows) only. It
+      ignores GOARCH (the arm64 RPi servers), CGO_ENABLED and build tags, so a module supplied only
+      under one of those is never compared. Union over the shipped GOOS/GOARCH pairs, both
+      CGO_ENABLED values and the repo's build tags (R1-10 review MINOR-6).
+
+- [ ] **PROMTOOL-MAJOR** The extraction-gates `dashboard-reference` job runs promtool 3.5.0,
+      but the deployed Prometheus is 2.53, so `promtool check/test rules` validates rules under a
+      newer parser than the one that loads them. Pin promtool to the deployed major (2.53.x) or
+      upgrade the deployed Prometheus to 3.x (R1-10 review MINOR-5).
+
+- [ ] **TRACING-INIT-ERROR** `internal/telemetry/telemetry.go` `InitOTEL`: when `initTracing`
+      returns an error (`metrics.New` refused the tracing half's Options), the `err != nil`
+      branch sets `tracingOff` and drops the error, so the start-up summary says tracing is off
+      without the reason. Log it (redacted, through `emit`) (R1-10 review MINOR-7).
 
 - [ ] **Regroup lane: a reload in flight can paint the old kind's rows under the new kind** (`web/src/components/review/lanes/useRegroupLane.ts`). `reload()` has no abort signal and no kind check, only the `reqSeq`/`appliedSeq` check. If a kind-A reload lands after the switch to kind B has issued its request but before B's response arrives, A's rows show under B's heading until B lands. If B fails, they stay under the error banner, because the catch clears rows only for a search-term change. Fix: abort, or check the kind, on landing, and clear on a failed kind change. Add a deferred-promise test for that ordering. Found 2026-11-04 by the Authors-lane race triage. The 4 regroup tests a delay probe tripped were judged probe artifacts from weak waits, not this bug.
 
