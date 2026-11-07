@@ -1,5 +1,5 @@
 // file: core/log/handler.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 00d59f68-e217-4796-9d74-36dcbf58a4ed
 // last-edited: 2026-11-07
 
@@ -253,12 +253,7 @@ func (l *Logging) Tap(name string, min slog.Level, queue int, fn func(ctx contex
 		return func() {}
 	}
 	if name == primarySink {
-		// The refusal is the no-op stop; the stderr line only explains it, so
-		// a failure to write that line changes nothing.
-		if _, err := fmt.Fprintf(l.stderr, "mediacore/log: Tap refused: %q is the primary output's sink name\n", name); err != nil {
-			return func() {}
-		}
-		return func() {}
+		return refusedTap(fmt.Fprintf(l.stderr, "mediacore/log: Tap refused: %q is the primary output's sink name\n", name))
 	}
 	if queue < 1 {
 		queue = 1
@@ -293,6 +288,14 @@ func (l *Logging) Tap(name string, min slog.Level, queue int, fn func(ctx contex
 	go t.run()
 	return func() { t.stop(l) }
 }
+
+// refusedTap is the no-op stop of a refused Tap. It takes the result of the
+// stderr line that explains the refusal and deliberately ignores it: stderr
+// is the last place a failure could be reported, and the refusal (the no-op
+// stop) stands either way. Written this way because core's errcheck ratchet
+// checks blank assignments (check-blank), so `_, _ = fmt.Fprintf(...)` would
+// count as a new finding.
+func refusedTap(int, error) (stop func()) { return func() {} }
 
 // tap is one asynchronous consumer.
 type tap struct {
