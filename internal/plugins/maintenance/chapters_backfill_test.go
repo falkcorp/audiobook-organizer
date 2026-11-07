@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/chapters_backfill_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 8a41c0e6-52b7-4d93-9f18-7c3ea05b61d4
-// last-edited: 2026-10-13
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -125,7 +125,7 @@ func chbfRun(t *testing.T, s *database.PebbleStore, params chaptersBackfillParam
 
 func chbfStore(t *testing.T) *database.PebbleStore {
 	t.Helper()
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

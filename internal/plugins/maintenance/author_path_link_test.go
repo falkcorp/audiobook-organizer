@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_path_link_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 0d4c7f61-2b58-4a39-9c6e-51f0a7d3b284
-// last-edited: 2026-10-20
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -285,7 +285,7 @@ func TestAuthorPathLink_DryRunWritesNothing(t *testing.T) {
 
 func pathLinkPebble(t *testing.T) *database.PebbleStore {
 	t.Helper()
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

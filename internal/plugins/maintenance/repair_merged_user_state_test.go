@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_merged_user_state_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4b8e1d63-7a2f-4c95-8e0d-6f3a9c1b2e57
-// last-edited: 2026-09-26
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -22,7 +22,7 @@ import (
 // id redirects to a live winner: what a pre-fix best-effort merge left.
 func strandedFixture(t *testing.T) (store database.Store, userID, winnerID, loserID string) {
 	t.Helper()
-	s, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "pebble"))
+	s, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "pebble"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	u, err := s.CreateUser("reader", "reader@example.com", "argon2id", "x", []string{"user"}, "active")

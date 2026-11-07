@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transcribe_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 9b4e1c73-d2a6-4f58-8e10-b7c35a9d2e64
-// last-edited: 2026-11-04
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -222,7 +222,7 @@ const goodIntro = "The Example Book by Example Author. Narrated by Example Reade
 
 func newIntroFx(t *testing.T) *introFx {
 	t.Helper()
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

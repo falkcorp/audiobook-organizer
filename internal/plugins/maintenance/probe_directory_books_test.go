@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/probe_directory_books_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4a71c9e6-2b58-4d03-8f19-7c6e0b2a5d84
-// last-edited: 2026-11-04
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -330,7 +330,7 @@ func TestProbeAll_ParallelWritesAreIndexPartitioned(t *testing.T) {
 // series guard just as inert as having no rows at all, defeating the point of
 // probing.
 func TestLinkProbedFolder_WritesMeasuredDurations(t *testing.T) {
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -384,7 +384,7 @@ func TestLinkProbedFolder_WritesMeasuredDurations(t *testing.T) {
 // second set. Re-running the op is expected operationally, and duplicate rows
 // are what maintenance.dedupe-book-file-rows exists to clean up.
 func TestLinkProbedFolder_SkipsAlreadyLinkedBook(t *testing.T) {
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -453,7 +453,7 @@ func TestProbeDirectoryBooks_PhaseReconciles(t *testing.T) {
 // later merge hard-deletes the absorbed rows — so the write path refuses on its
 // own rather than trusting its caller.
 func TestLinkProbedFolder_RefusesSeriesVerdict(t *testing.T) {
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -502,7 +502,7 @@ func TestLinkProbedFolder_RefusesSeriesVerdict(t *testing.T) {
 // probe and apply was never measured and could be another work entirely, so the
 // apply must refuse rather than link it with a duration of zero.
 func TestLinkProbedFolder_RefusesWhenFolderChangedSinceProbing(t *testing.T) {
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

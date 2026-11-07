@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply_nothing_written_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0b7f3e52-9a14-4d68-b3c1-6e2a85d9f470
-// last-edited: 2026-10-18
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -151,7 +151,7 @@ func (s *failingModifyStore) ModifyBook(id string, fn func(*database.Book) error
 
 func newPebbleForApply(t *testing.T) *database.PebbleStore {
 	t.Helper()
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	s.WaitForWarmup()
 	t.Cleanup(func() { _ = s.Close() })

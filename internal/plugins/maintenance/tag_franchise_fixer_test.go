@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_franchise_fixer_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9f3a6c28-1e74-4b5d-8c02-7a6e4d9b1f35
-// last-edited: 2026-10-22
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -30,7 +30,7 @@ type tfLib struct {
 
 func newTFLib(t *testing.T) *tfLib {
 	t.Helper()
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	p := &Plugin{deps: fakeDeps{store: st}, standDownWait: noWait}

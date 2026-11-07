@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_prune_fixer_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 30beca88-5314-4b9d-92de-0c91dc9f4151
-// last-edited: 2026-11-05
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -47,7 +47,7 @@ type spLibrary struct {
 
 func newSPLibrary(t *testing.T) *spLibrary {
 	t.Helper()
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	l := &spLibrary{st: st}

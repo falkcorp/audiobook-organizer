@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_repoint_plan_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7830431a-11dc-4bee-97c0-82047798cb98
-// last-edited: 2026-10-26
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 
 func newPlanStore(t *testing.T, buildAtPath bool) *database.PebbleStore {
 	t.Helper()
-	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatal(err)
 	}

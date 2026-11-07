@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer_test.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: 8223b479-ea79-40ca-a48a-1b7bc0f3bea2
-// last-edited: 2026-11-05
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -58,7 +58,7 @@ type swapBook struct {
 
 func newSwapLib(t *testing.T) *swapLib {
 	t.Helper()
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	l := &swapLib{t: t, store: st, ids: map[string]string{}, holder: map[string]int{}}

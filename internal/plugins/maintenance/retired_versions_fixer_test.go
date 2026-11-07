@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_fixer_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 8fc253d1-c085-4eca-a2f9-52cf09ca04b0
-// last-edited: 2026-10-28
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -36,7 +36,7 @@ type retiredFixture struct {
 
 func newRetiredFixture(t *testing.T) *retiredFixture {
 	t.Helper()
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	// The complete ownership lookup is served from memdb.

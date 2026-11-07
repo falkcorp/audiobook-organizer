@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/review_status_index_repair_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a7d1e93-6c2b-4f58-9e0a-b3c8d5f17a29
-// last-edited: 2026-09-02
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -24,7 +24,7 @@ import (
 // healthy so the repair has something it must NOT touch.
 func newReviewIndexFixture(t *testing.T) (*Plugin, *database.PebbleStore) {
 	t.Helper()
-	store, err := database.NewPebbleStore(t.TempDir())
+	store, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 

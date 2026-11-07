@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_author_fixer_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 3d080ff3-6e67-4d08-a849-8bc0996a8315
-// last-edited: 2026-10-21
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -37,7 +37,7 @@ type junkFixture struct {
 
 func newJunkFixture(t *testing.T) *junkFixture {
 	t.Helper()
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	s.WaitForWarmup()
 	t.Cleanup(func() { _ = s.Close() })

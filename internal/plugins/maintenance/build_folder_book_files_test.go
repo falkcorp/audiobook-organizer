@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/build_folder_book_files_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: b1896d34-1538-4a3f-a3f0-469871f9ca8c
-// last-edited: 2026-11-04
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -36,7 +36,7 @@ func (s *fbSpyStore) BatchCreateBookFiles(files []*database.BookFile) error {
 
 func newFolderBuildStore(t *testing.T) *fbSpyStore {
 	t.Helper()
-	s, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	s, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatal(err)
 	}

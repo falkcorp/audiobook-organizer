@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/master_list_import_fixer_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 91c3d7e5-0a48-4b6f-8e12-d5f7a3b9c640
-// last-edited: 2026-11-04
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -45,7 +45,7 @@ type mlLab struct {
 
 func newMLLab(t *testing.T) *mlLab {
 	t.Helper()
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	u, err := st.CreateUser("listener", "listener@example.invalid", "argon2id", "x", []string{"user"}, "active")

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_id_repair_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: d58e1b7a-3f94-4c26-a0b1-7e6c9f2d4853
-// last-edited: 2026-10-20
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -19,7 +19,7 @@ import (
 
 func newRepairPebble(t *testing.T) *database.PebbleStore {
 	t.Helper()
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

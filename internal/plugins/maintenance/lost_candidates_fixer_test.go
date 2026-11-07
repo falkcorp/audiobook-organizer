@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/lost_candidates_fixer_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: cde35f5b-18f6-420d-bbdf-ba221050c4b8
-// last-edited: 2026-10-22
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -73,7 +73,7 @@ type lcLib struct {
 
 func newLCLib(t *testing.T) *lcLib {
 	t.Helper()
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	d := &lcDeps{store: st, st: st, outcomes: map[string]CandidateFetchOutcome{}, found: map[string]int{}}

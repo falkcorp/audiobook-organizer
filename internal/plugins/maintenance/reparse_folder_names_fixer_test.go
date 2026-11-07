@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reparse_folder_names_fixer_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: f823acd0-485e-4ec1-87a1-49cfedc17554
-// last-edited: 2026-10-06
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -43,7 +43,7 @@ func TestReparseChanges_OnlyFieldsTheOldParseWrote(t *testing.T) {
 // leaves alone a book whose title is not the old parse's, and the framework
 // skips an iTunes-owned path. Apply writes ONLY the approved row ids.
 func TestReparseFolderNamesFixer_PlansAndAppliesByIDsOnly(t *testing.T) {
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	add := func(title, path string) string {
@@ -94,7 +94,7 @@ func TestReparseFolderNamesFixer_PlansAndAppliesByIDsOnly(t *testing.T) {
 // evidence, while a real series beside a junk author row of its name stays a
 // series.
 func TestReparseEvidence_FiltersAuthorJunkSeries(t *testing.T) {
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	sanderson, err := st.CreateAuthor("Brandon Sanderson")

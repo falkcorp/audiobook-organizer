@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.18.5
+// version: 1.18.6
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
-// last-edited: 2026-11-05
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -37,7 +37,7 @@ type junkLib struct {
 
 func newJunkLib(t *testing.T) *junkLib {
 	t.Helper()
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	lib := &junkLib{store: st, ids: map[string]string{}}
@@ -596,7 +596,7 @@ func TestTitleAgreesWithAny(t *testing.T) {
 }
 
 func TestJunkTitleFixer_SameProposalTwiceIsAPossibleFragment(t *testing.T) {
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	author, err := st.CreateAuthor("Some Author")
@@ -643,7 +643,7 @@ func addJunkBook(t *testing.T, st *database.PebbleStore, title string, author *i
 // neither is proposed; agreement still proposes; a weak filename stem is no
 // evidence; a series folder is no evidence.
 func TestJunkTitleFixer_ConflictingEvidenceProposesNeither(t *testing.T) {
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	author := func(name string) *int {
@@ -742,7 +742,7 @@ func TestIsWeakFileStem(t *testing.T) {
 // A folder reached by climbing past a chapter folder, directly under an
 // import root, may be the author: without corroboration it needs a person.
 func TestJunkTitleFixer_ClimbToAFolderUnderARootNeedsCorroboration(t *testing.T) {
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	_, err = st.CreateImportPath("/imports/dl", "dl")
@@ -759,7 +759,7 @@ func TestJunkTitleFixer_ClimbToAFolderUnderARootNeedsCorroboration(t *testing.T)
 // chapter of its author: needs a person. Unpadded numbers side by side in one
 // folder are chapters of one book: a possible fragment.
 func TestJunkTitleFixer_BareNumbers(t *testing.T) {
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	gamble, err := st.CreateAuthor("Perpetua Gamble")
@@ -781,7 +781,7 @@ func TestJunkTitleFixer_BareNumbers(t *testing.T) {
 
 // A weak filename stem with no other evidence is never proposed.
 func TestJunkTitleFixer_WeakStemAloneNeedsManual(t *testing.T) {
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	a, err := st.CreateAuthor("Some Author")
@@ -799,7 +799,7 @@ func TestJunkTitleFixer_WeakStemAloneNeedsManual(t *testing.T) {
 }
 
 func TestJunkTitleFixer_WeakStemStillVetoesDisagreeingEvidence(t *testing.T) {
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	a, err := st.CreateAuthor("Some Author")
@@ -840,7 +840,7 @@ func TestWeakStemVeto(t *testing.T) {
 func TestJunkTitleFixer_DottedWeakStemVetoesDisagreeingCandidate(t *testing.T) {
 	for _, stem := range []string{"The_Blimm_Orchard", "The.Blimm.Orchard", "the-blimm-orchard-64kbps", "The.Blimm.Orchard.64kbps"} {
 		t.Run(stem, func(t *testing.T) {
-			st, err := database.NewPebbleStore(t.TempDir())
+			st, err := database.NewPebbleStoreInMemory(t.TempDir())
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = st.Close() })
 			a, err := st.CreateAuthor("Some Author")

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_capture_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6b40f9d2-7c15-4e83-a09b-2d5e1f847c36
-// last-edited: 2026-08-21
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -29,7 +29,7 @@ func (d provDeps) FileProvenanceStore() database.FileProvenanceStore { return d.
 func newCaptureFixture(t *testing.T, files map[string]string) (*Plugin, *database.PebbleStore, string) {
 	t.Helper()
 
-	store, err := database.NewPebbleStore(t.TempDir())
+	store, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 

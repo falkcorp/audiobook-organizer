@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/batch_delete_rows_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 6c1f9b2e-7a04-4d38-95e6-1b8d3f0a2c57
-// last-edited: 2026-11-04
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -90,7 +90,7 @@ func TestDedupeBookFileRows_FailedSalvageLeavesDonorsIntact(t *testing.T) {
 	if testing.Short() {
 		t.Skip("seeds a real PebbleStore; skipped in -short")
 	}
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestDedupeBookFileRows_BatchedDeleteStillCollapses(t *testing.T) {
 	if testing.Short() {
 		t.Skip("seeds a real PebbleStore; skipped in -short")
 	}
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

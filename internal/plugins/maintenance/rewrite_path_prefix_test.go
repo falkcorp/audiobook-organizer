@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: b036c68e-a6da-48df-806b-b765cda262ef
-// last-edited: 2026-10-23
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -582,7 +582,7 @@ func TestRewritePathPrefix_ApplyAtPathIndexFollows(t *testing.T) {
 	newDir := filepath.Join(root, "new book")
 	makeTree(t, newDir)
 
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 

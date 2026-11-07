@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_replan_after_apply_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 5e2a7c91-3b48-4d06-9f1e-84c0a6d2b735
-// last-edited: 2026-11-05
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -202,7 +202,7 @@ type refreshFixture struct {
 
 func newRefreshFixture(t *testing.T) *refreshFixture {
 	t.Helper()
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	fx := &refreshFixture{t: t, fixer: &refreshFixer{open: map[string]bool{}}, books: map[string]string{}}
