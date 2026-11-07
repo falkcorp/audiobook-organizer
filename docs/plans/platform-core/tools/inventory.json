@@ -563,7 +563,8 @@
    ".woodpecker/checks-build.yaml",
    "scripts/ci_remote.py",
    ".github/dependabot.yml",
-   ".github/workflows/nightly.yml"
+    ".github/workflows/nightly.yml",
+    ".github/workflows/extraction-gates.yml"
   ],
   "spec": "09 §9.4 R1 Content: build and CI (build_web.sh); 09 §9.1 (the 12 npm ci sites); 07 §7.3.2",
   "notes": "Tier: twelve npm ci sites and three reusable-workflow callers; the site list is given. Before editing the release callers, the agent reads reusable-release.yml at the SHA in .github/ghcommon-ref.txt and records what frontend-enabled does in the PR description (09 §9.4 R1); if it cannot read it, the task is BLOCKED to the lead. Owns gate tests: scripts/ci/build_web.sh."

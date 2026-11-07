@@ -1,5 +1,5 @@
 # file: .github/workflows/prerelease.yml
-# version: 3.3.5
+# version: 3.3.6
 # guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 # last-edited: 2026-11-07
 
@@ -37,7 +37,12 @@ jobs:
       prerelease: true
       draft: false
       go-enabled: true
-      frontend-enabled: true
+      # No frontend-enabled, and `frontend` in disabled-languages below: a false
+      # (or absent) *-enabled resolves to "auto", so detection would still run
+      # reusable-release's build-frontend job, which runs its own `npm ci` in web/
+      # (no entry point, so it breaks once web/ needs core/web) and uploads a build
+      # whose files create-release strips from the release assets: the binary embeds
+      # web/dist, built by pre-build-script. disabled-languages is the only "never".
       # docker-enabled/python-enabled are "force ON" switches: false means
       # "auto-detect", not "never". That made "never build this" unexpressible,
       # so prereleases built Docker anyway and ran a Python release pipeline
@@ -46,9 +51,12 @@ jobs:
       # 127, which failed the whole run and skipped Create GitHub Release.
       # disabled-languages is the explicit opt-out (ghcommon #350).
       docker-enabled: false
-      disabled-languages: 'python,docker'
+      disabled-languages: 'python,docker,frontend'
       system-packages: 'libtag1-dev'
-      pre-build-script: 'cd web && npm ci && npm run build'
+      # The one web-dependency entry point (R1-05), then the plain build, which
+      # stamps the UI build ID itself. Node is the runner image's: gha-release-go
+      # (the step that runs this) installs none, exactly as before.
+      pre-build-script: 'sh scripts/ci/build_web.sh deps && cd web && npm run build'
       # Changelog collection pushes as the CI bot app from this repo's main-only
       # `ci-bot` environment, which holds the app key (github-common #391).
       bot-environment: ci-bot

@@ -1,5 +1,5 @@
 # file: .github/dependabot.yml
-# version: 1.4.4
+# version: 1.4.5
 # guid: 9f416cf7-2df6-4a47-93b9-630339256aec
 # last-edited: 2026-11-07
 
@@ -77,8 +77,10 @@ updates:
   # Npm — the manifest lives in /web (root manifests were removed in the
   # "consolidate root npm deps into web" cleanup), so this MUST target /web or
   # none of the ignore rules below apply to the real package.json.
+  # /core/web holds the shared web packages (platform-core 07 §7.3.2; R1-30
+  # creates it). Both trees install through scripts/ci/build_web.sh.
   - package-ecosystem: npm
-    directory: /web
+    directories: ["/web", "/core/web"]
     patterns: ["*"]
     multi-ecosystem-group: dependencies
     labels:
