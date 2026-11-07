@@ -1,5 +1,5 @@
 // file: core/internal/archtest_layers_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
 // last-edited: 2026-11-07
 
@@ -31,7 +31,8 @@ const corePath = "github.com/falkcorp/mediacore"
 // imports them (coreTestSupport).
 //
 // R1-09, R1-36 and R1-13 edit this file only to change the in-module control (03
-// §3.5.1 item 2), never this table.
+// §3.5.1 item 2), never this table; the one exception is R1-13's
+// internal/openapi entry, an R4 package the table missed.
 var coreLayerOf = map[string]int{
 	// L0
 	"entity": 0, "lifecycle": 0, "version": 0, "buildid": 0, "log": 0, "metrics": 0,
@@ -54,6 +55,9 @@ var coreLayerOf = map[string]int{
 	"acquire": 5,
 	// L6 (internal/<capability>http is coreFamily's pattern)
 	"httpapi": 6, "realtime": 6, "arrfacade": 6, "ui": 6, "internal/modulehttp": 6,
+	// internal/openapi implements httpapi's OpenAPI (05-http-api §3, §7): R4
+	// gives an internal package the layer of the public package it implements.
+	"internal/openapi": 6,
 	// L7
 	"module": 7,
 	// L8
@@ -76,8 +80,9 @@ func coreFamily(pkg string) (int, bool) {
 		return 6, true
 	}
 	// A public sub-package takes its nearest named ancestor's layer. internal/*
-	// is not public: an unnamed internal package computes from its imports
-	// (R4: the layer of its highest import), unless the table names it.
+	// is not public: an unnamed internal package is not placed here, so the
+	// engine asks for a table entry (R4: the layer of the public package it
+	// implements, or of its highest import for a bridge).
 	if strings.HasPrefix(pkg, "internal/") {
 		return 0, false
 	}
