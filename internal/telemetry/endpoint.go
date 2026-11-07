@@ -1,14 +1,13 @@
 // file: internal/telemetry/endpoint.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: 6e0f4b1a-52c7-4d83-9a1e-3b7c8d2f5a40
-// last-edited: 2026-10-19
+// last-edited: 2026-11-07
 
 package telemetry
 
 import (
 	"fmt"
 	"net/netip"
-	"regexp"
 	"strconv"
 	"strings"
 )
@@ -57,9 +56,19 @@ func (t otlpTarget) Display() string {
 	return t.Target
 }
 
-// labelRE is one DNS label: 1-63 letters, digits or '-', not starting or
-// ending with '-'.
-var labelRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+// validLabel reports whether label is one DNS label: 1-63 letters, digits or
+// '-', not starting or ending with '-'.
+func validLabel(label string) bool {
+	if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+	for _, c := range []byte(label) {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
 
 // validHost reports whether host is a DNS name (dot-separated labels, no empty
 // label, at most 253 bytes) or an IPv4 address. A dotted or plain run of digits
@@ -70,8 +79,8 @@ func validHost(host string) bool {
 		return false
 	}
 	allNumeric := true
-	for _, label := range strings.Split(host, ".") {
-		if !labelRE.MatchString(label) {
+	for label := range strings.SplitSeq(host, ".") {
+		if !validLabel(label) {
 			return false
 		}
 		for _, c := range label {
