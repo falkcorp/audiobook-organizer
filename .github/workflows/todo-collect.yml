@@ -1,7 +1,7 @@
 # file: .github/workflows/todo-collect.yml
-# version: 1.1.1
+# version: 1.2.0
 # guid: b615828c-4cc4-4c68-bb94-429744870438
-# last-edited: 2026-10-29
+# last-edited: 2026-11-06
 
 # Fold todo.d/ fragments into TODO.md and commit the result to the default
 # branch. Opt-in by presence: every step below is a no-op in a repo without
@@ -9,6 +9,11 @@
 #
 # Unlike the changelog system there is deliberately NO pull-request check —
 # adding a task is optional, not something to enforce on every code PR.
+#
+# The push to the default branch is made by the CI bot GitHub App, not by
+# GITHUB_TOKEN or a personal token: the main-branch ruleset sends every change
+# through the merge queue and lists only that app as a bypass actor, so the
+# direct fast-forward push is rejected (GH013) for anyone else.
 name: Collect TODO Fragments
 
 on:
@@ -30,30 +35,28 @@ jobs:
     name: Assemble TODO.md
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # write, not read: the collect step pushes the assembled TODO.md back to the
-    # default branch. The push normally authenticates with JF_CI_GH_PAT, which is
-    # independent of this token — but without contents: write the documented
-    # GITHUB_TOKEN fallback would be rejected, making it dead code. Matches the
-    # changelog collector in reusable-release.yml.
-    permissions:
-      contents: write
+    # contents: read (the workflow default). The write to the default branch
+    # is made with the CI bot app token minted below, never with this token.
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           submodules: recursive
+          # Do NOT persist GITHUB_TOKEN. A persisted token is written to
+          # .git/config as http.extraheader, and git sends that header in
+          # preference to credentials embedded in a push URL, so the push below
+          # would silently authenticate as github-actions[bot] instead of the
+          # app. The push is made to an explicit URL carrying the app token.
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
-      - name: Collect fragments into TODO.md
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          TODO_PAT: ${{ secrets.JF_CI_GH_PAT }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Assemble TODO.md from fragments
+        id: assemble
         run: |
           set -euo pipefail
 
@@ -74,9 +77,6 @@ jobs:
             exit 0
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
           # The assembler git rm's the fragments it consumes, so the insertion
           # and the removals are staged together.
           python3 scripts/assemble_todo.py
@@ -87,14 +87,70 @@ jobs:
           fi
 
           git add -A TODO.md todo.d
+          echo "pending=true" >> "$GITHUB_OUTPUT"
+
+      # Everything below runs only when there is something to push, so a day
+      # with no fragments never needs the app credentials.
+      - name: Require CI bot app credentials
+        if: steps.assemble.outputs.pending == 'true'
+        env:
+          CLIENT_ID: ${{ vars.CI_BOT_APP_CLIENT_ID }}
+          HAS_KEY: ${{ secrets.CI_BOT_APP_PRIVATE_KEY != '' }}
+        run: |
+          # No fallback to GITHUB_TOKEN or a personal token: either would fail
+          # the ruleset (GH013) later with a far less obvious message.
+          if [ -z "$CLIENT_ID" ] || [ "$HAS_KEY" != "true" ]; then
+            echo "::error::Organization variable CI_BOT_APP_CLIENT_ID and organization secret CI_BOT_APP_PRIVATE_KEY must both be visible to this repository; one or both are empty."
+            exit 1
+          fi
+
+      - name: Mint CI bot app token
+        if: steps.assemble.outputs.pending == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CI_BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Commit and push TODO.md
+        if: steps.assemble.outputs.pending == 'true'
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          bash scripts/ci/set_bot_git_identity.sh "$APP_SLUG"
+
           # [skip ci] stops this docs-only commit from retriggering the full CI.
+          # It is load-bearing now: pushes made with an app token DO start
+          # workflows (only GITHUB_TOKEN pushes are suppressed).
           git commit -m "docs(todo): collect fragments into TODO.md [skip ci]"
 
-          # Prefer the PAT (passes branch protection); fall back to the workflow
-          # token. Push to an explicit authenticated URL so we do not depend on
-          # the checkout's persisted credentials.
-          TOKEN="${TODO_PAT:-$GITHUB_TOKEN}"
-          REMOTE="https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # The app may bypass the merge queue, so verify what is about to be
+          # pushed rather than trusting the assembler. The commit must sit
+          # directly on the default branch tip (a workflow_dispatch from another
+          # branch would otherwise fast-forward that branch's commits into the
+          # default branch) and touch nothing but TODO.md and todo.d/.
+          # origin/<branch> is the tip the checkout fetched; deliberately not
+          # re-fetched, so a main that moves meanwhile is left to the rebase
+          # retry below instead of failing this check.
+          if [ "$(git rev-parse HEAD^)" != "$(git rev-parse "origin/${DEFAULT_BRANCH}")" ]; then
+            echo "::error::Refusing to push: the TODO commit is not directly on origin/${DEFAULT_BRANCH}. Run this workflow from ${DEFAULT_BRANCH}."
+            exit 1
+          fi
+          bad=$(git diff --name-only --no-renames HEAD^ HEAD | grep -vE '^TODO\.md$|^todo\.d/' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Refusing to push: the TODO commit touches files outside TODO.md and todo.d/:"
+            echo "$bad"
+            exit 1
+          fi
+
+          # Push to an explicit URL carrying the app token (checkout persisted
+          # no credentials, so nothing overrides it).
+          REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
           n=0
           until git push "${REMOTE}" "HEAD:${DEFAULT_BRANCH}" || [ "$n" -ge 4 ]; do

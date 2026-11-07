@@ -1,7 +1,7 @@
 # file: .github/workflows/auto-revert.yml
-# version: 1.4.0
+# version: 1.5.0
 # guid: 2f7c4e19-6b83-4a05-9d21-8e5b0a3f7c64
-# last-edited: 2026-09-22
+# last-edited: 2026-11-06
 
 # Restore main to its last known-good commit when the CI gate goes red.
 #
@@ -14,6 +14,10 @@
 # The decision of *what* to revert lives in scripts/auto_revert.py, which is unit
 # tested and mutation tested. This file is only plumbing: gather evidence, call the
 # script, act on its verdict.
+#
+# The revert is pushed by the CI bot GitHub App. The main-branch ruleset routes
+# every change through the merge queue and lists only that app as a bypass actor,
+# so a direct push of the revert from any other identity is rejected (GH013).
 name: Auto-Revert Red Main
 
 on:
@@ -43,8 +47,11 @@ concurrency:
   group: auto-revert-main
   cancel-in-progress: false
 
+# contents: read, not write. The revert is pushed with the CI bot app token
+# minted below; this token only reads, files the bug (issues) and re-runs the
+# gate once (actions).
 permissions:
-  contents: write
+  contents: read
   issues: write
   actions: write
 
@@ -98,6 +105,35 @@ jobs:
           echo "act=true" >> "$GITHUB_OUTPUT"
           echo "::warning::Gate red on attempt $ATTEMPT — this is not a flake."
 
+      # Minted before checkout because checkout takes the token. It also runs on
+      # a dry run, so a dispatch with dry_run=true proves the credentials, the
+      # mint and the checkout; only the push itself waits for a real red main.
+      - name: Require CI bot app credentials
+        if: steps.triage.outputs.act == 'true'
+        env:
+          CLIENT_ID: ${{ vars.CI_BOT_APP_CLIENT_ID }}
+          HAS_KEY: ${{ secrets.CI_BOT_APP_PRIVATE_KEY != '' }}
+        run: |
+          # No fallback to GITHUB_TOKEN or a personal token: neither can push to
+          # main, and a revert that fails late leaves main red with nothing
+          # watching it.
+          if [ -z "$CLIENT_ID" ] || [ "$HAS_KEY" != "true" ]; then
+            echo "::error::Organization variable CI_BOT_APP_CLIENT_ID and organization secret CI_BOT_APP_PRIVATE_KEY must both be visible to this repository; one or both are empty. main cannot be auto-reverted without them."
+            exit 1
+          fi
+
+      - name: Mint CI bot app token
+        if: steps.triage.outputs.act == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CI_BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          # A revert can undo a change to .github/workflows/, and a push that
+          # touches workflow files is refused without this permission.
+          permission-workflows: write
+
       - name: Checkout full history
         if: steps.triage.outputs.act == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -105,7 +141,11 @@ jobs:
           fetch-depth: 0
           ref: main
           submodules: recursive
-          token: ${{ secrets.JF_CI_GH_PAT }}
+          # The app token on purpose: checkout persists it as http.extraheader,
+          # so the `git push origin main` below authenticates as the app. Passing
+          # nothing would persist GITHUB_TOKEN instead and push as
+          # github-actions[bot], which cannot bypass the merge queue.
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Gather commits and gate verdicts
         if: steps.triage.outputs.act == 'true'
@@ -219,6 +259,10 @@ jobs:
           SPAN: ${{ steps.decide.outputs.span }}
           COUNT: ${{ steps.decide.outputs.span_count }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
+          # Only for the identity lookup below; the push uses the credential
+          # checkout persisted.
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
 
@@ -232,8 +276,7 @@ jobs:
             exit 0
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          bash scripts/ci/set_bot_git_identity.sh "$APP_SLUG"
           git checkout -q main
           git reset -q --hard "$FAILING"
 
@@ -257,8 +300,10 @@ jobs:
           REVERT_SHA=$(git rev-parse HEAD)
           echo "revert_sha=$REVERT_SHA" >> "$GITHUB_OUTPUT"
 
-          # Pushed with the PAT on purpose: GITHUB_TOKEN pushes do not trigger
-          # workflows, and an unverified revert is exactly what we must not create.
+          # Pushed as the CI bot app (the credential checkout persisted), which
+          # is the ruleset's bypass actor. An app-token push triggers workflows,
+          # which is wanted here: an unverified revert is exactly what we must
+          # not create. So the commit message must NEVER carry [skip ci].
           git push origin main
           echo "::notice::Reverted $COUNT commit(s); main is now $REVERT_SHA."
 
