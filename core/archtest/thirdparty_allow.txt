@@ -1,5 +1,5 @@
 # file: core/archtest/thirdparty_allow.txt
-# version: 1.0.2
+# version: 1.0.3
 # guid: cb537e35-a463-43d1-b870-3ea941cf278d
 # last-edited: 2026-11-07
 #
@@ -47,3 +47,7 @@ github.com/prometheus/otlptranslator
 # scheme; the OTLP tests decode what their collectors receive.
 github.com/prometheus/common/model
 go.opentelemetry.io/proto/otlp
+# R1-20: storage/codec's Zstd codec (05-storage §5S.3.3: "tag 'z' when
+# compressed (klauspost/compress)"), at the root's version
+# (check_module_skew.py; 13 §13.5.2 keeps it in core).
+github.com/klauspost/compress/zstd
